@@ -12,35 +12,23 @@ import (
 )
 
 const listDesiredTenantAliases = `-- name: ListDesiredTenantAliases :many
+WITH active_access AS (
+    SELECT tca.tenant_id, array_agg(tca.cluster_id ORDER BY tca.cluster_id) AS cluster_ids
+    FROM quartermaster.tenant_cluster_access tca
+    JOIN quartermaster.infrastructure_clusters cluster ON cluster.cluster_id = tca.cluster_id
+    WHERE tca.is_active = true
+      AND tca.subscription_status = 'active'
+      AND tca.access_source <> 'unknown'
+      AND (tca.expires_at IS NULL OR tca.expires_at > NOW())
+      AND cluster.is_active = true
+    GROUP BY tca.tenant_id
+)
 SELECT t.id::text AS tenant_id,
        COALESCE(t.subdomain, '')::text AS subdomain,
-       COALESCE((
-           SELECT array_agg(tca.cluster_id ORDER BY tca.cluster_id)
-           FROM quartermaster.tenant_cluster_access tca
-	       JOIN quartermaster.infrastructure_clusters cluster ON cluster.cluster_id = tca.cluster_id
-           WHERE tca.tenant_id = t.id
-             AND tca.is_active = true
-             AND tca.subscription_status = 'active'
-             AND tca.access_source <> 'unknown'
-             AND (tca.expires_at IS NULL OR tca.expires_at > NOW())
-	         AND cluster.is_active = true
-       ), ARRAY[]::text[])::text[] AS cluster_ids,
-       (
-           t.is_active
-           AND t.custom_subdomain_enabled = true
-           AND EXISTS (
-               SELECT 1
-               FROM quartermaster.tenant_cluster_access tca
-	           JOIN quartermaster.infrastructure_clusters cluster ON cluster.cluster_id = tca.cluster_id
-               WHERE tca.tenant_id = t.id
-                 AND tca.is_active = true
-                 AND tca.subscription_status = 'active'
-                 AND tca.access_source <> 'unknown'
-                 AND (tca.expires_at IS NULL OR tca.expires_at > NOW())
-	             AND cluster.is_active = true
-           )
-       )::boolean AS want
+       COALESCE(access.cluster_ids, ARRAY[]::text[])::text[] AS cluster_ids,
+       (t.is_active AND t.custom_subdomain_enabled = true AND access.tenant_id IS NOT NULL)::boolean AS want
 FROM quartermaster.tenants t
+LEFT JOIN active_access access ON access.tenant_id = t.id
 WHERE t.billing_entitlements_observed_at <> 'epoch'::timestamptz
 `
 

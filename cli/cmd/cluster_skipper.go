@@ -291,6 +291,14 @@ func skipperKnowledgeResetQuery(dryRun bool) string {
 }
 
 func skipperSQLExecutor(ctx context.Context, rc *resolvedCluster, pool *fwssh.Pool) (provisioner.SQLExecutor, provisioner.ConnParams, error) {
+	view, err := rc.Manifest.WithDatabaseDeployment(rc.Manifest.ServiceDatabaseDeployment("skipper"))
+	if err != nil {
+		return nil, provisioner.ConnParams{}, err
+	}
+	if rc.Manifest.DatabaseDeployment != "" && rc.Manifest.DatabaseDeployment != view.DatabaseDeployment {
+		return nil, provisioner.ConnParams{}, fmt.Errorf("skipper is bound to database deployment %s", view.DatabaseDeployment)
+	}
+	rc = rc.withDatabaseManifest(view)
 	pg := rc.Manifest.Infrastructure.Postgres
 	if pg == nil || !pg.Enabled {
 		return nil, provisioner.ConnParams{}, fmt.Errorf("postgres/yugabyte is not enabled in manifest")

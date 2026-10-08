@@ -9,21 +9,21 @@ ORDER BY required_tier_level DESC, cluster_id ASC;
 -- name: ListSubscriptionTierNames :many
 SELECT DISTINCT ON (ts.tenant_id) ts.tenant_id, bt.tier_name,
        CASE WHEN ts.status = 'active' THEN COALESCE(
-           (SELECT seo.value FROM purser.subscription_entitlement_overrides seo
-            WHERE seo.subscription_id = ts.id AND seo.key = 'custom_subdomain_enabled'),
-           (SELECT te.value FROM purser.tier_entitlements te
-            WHERE te.tier_id = bt.id AND te.key = 'custom_subdomain_enabled'),
-           'false'::jsonb
+           subdomain_override.value, subdomain_default.value, 'false'::jsonb
        )::text::boolean ELSE false END AS custom_subdomain_enabled,
        CASE WHEN ts.status = 'active' THEN COALESCE(
-           (SELECT seo.value FROM purser.subscription_entitlement_overrides seo
-            WHERE seo.subscription_id = ts.id AND seo.key = 'custom_domain_enabled'),
-           (SELECT te.value FROM purser.tier_entitlements te
-            WHERE te.tier_id = bt.id AND te.key = 'custom_domain_enabled'),
-           'false'::jsonb
+           domain_override.value, domain_default.value, 'false'::jsonb
        )::text::boolean ELSE false END AS custom_domain_enabled
 FROM purser.tenant_subscriptions ts
 JOIN purser.billing_tiers bt ON bt.id = ts.tier_id
+LEFT JOIN purser.subscription_entitlement_overrides subdomain_override
+  ON subdomain_override.subscription_id = ts.id AND subdomain_override.key = 'custom_subdomain_enabled'
+LEFT JOIN purser.tier_entitlements subdomain_default
+  ON subdomain_default.tier_id = bt.id AND subdomain_default.key = 'custom_subdomain_enabled'
+LEFT JOIN purser.subscription_entitlement_overrides domain_override
+  ON domain_override.subscription_id = ts.id AND domain_override.key = 'custom_domain_enabled'
+LEFT JOIN purser.tier_entitlements domain_default
+  ON domain_default.tier_id = bt.id AND domain_default.key = 'custom_domain_enabled'
 ORDER BY ts.tenant_id, ts.updated_at DESC, ts.created_at DESC, ts.id DESC;
 
 -- name: LoadEffectiveDNSEntitlements :one

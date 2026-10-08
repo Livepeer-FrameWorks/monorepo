@@ -182,3 +182,25 @@ func TestDefaultEdgeManifestPath(t *testing.T) {
 		t.Errorf("with edge.yaml: got %q, want %q", got, edgePath)
 	}
 }
+
+func TestResolveLogTargetsRegionalYugabyte(t *testing.T) {
+	m := regionalSQLManifest()
+	m.Hosts["support"] = inventory.Host{}
+	m.Infrastructure.Postgres.Instances = []inventory.PostgresInstance{{Name: "support", Host: "support"}}
+	targets, err := resolveLogTargets(m, "yugabyte")
+	if err != nil || len(targets) != 2 {
+		t.Fatalf("regional targets = %#v, %v", targets, err)
+	}
+	view, err := m.WithDatabaseDeployment("us-east")
+	if err != nil {
+		t.Fatal(err)
+	}
+	targets, err = resolveLogTargets(view, "yugabyte")
+	if err != nil || len(targets) != 1 || targets[0].HostName != "us" {
+		t.Fatalf("scoped targets = %#v, %v", targets, err)
+	}
+	command, err := buildLogCommand("yugabyte", "native", false, 20)
+	if err != nil || command != "journalctl -u yb-master -u yb-tserver -n 20" {
+		t.Fatalf("Yugabyte logs = %q, %v", command, err)
+	}
+}

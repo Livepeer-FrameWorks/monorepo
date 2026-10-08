@@ -67,7 +67,8 @@ func newClusterPreflightCmd() *cobra.Command {
 				warnUnassignedClusterScopedBunny(cmd.OutOrStdout(), manifest)
 
 				fmt.Fprintln(cmd.OutOrStdout(), "\nInfrastructure connectivity:")
-				if pg := manifest.Infrastructure.Postgres; pg != nil && pg.Enabled {
+				for _, deployment := range manifest.SQLDeployments() {
+					pg := deployment.Config
 					pgHost := resolvePostgresConnectivityHost(pg)
 					if host, ok := manifest.GetHost(pgHost); ok {
 						pgHost = host.ExternalIP

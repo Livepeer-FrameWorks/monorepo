@@ -26,18 +26,19 @@ func (m *Manifest) validatePortCollisions() error {
 		return nil
 	}
 
-	if m.Infrastructure.Postgres != nil && m.Infrastructure.Postgres.Enabled {
-		port := m.Infrastructure.Postgres.EffectivePort()
-		if err := addPort(m.Infrastructure.Postgres.Host, port, "postgres"); err != nil {
+	for _, deployment := range m.SQLDeployments() {
+		pg := deployment.Config
+		port := pg.EffectivePort()
+		if err := addPort(pg.Host, port, "postgres"); err != nil {
 			return err
 		}
-		for _, node := range m.Infrastructure.Postgres.Nodes {
+		for _, node := range pg.Nodes {
 			owner := fmt.Sprintf("postgres-node-%d", node.ID)
 			if err := addPort(node.Host, port, owner); err != nil {
 				return err
 			}
 		}
-		for _, inst := range m.Infrastructure.Postgres.Instances {
+		for _, inst := range pg.Instances {
 			instPort := inst.Port
 			if instPort == 0 {
 				instPort = 5432
@@ -46,7 +47,7 @@ func (m *Manifest) validatePortCollisions() error {
 				return err
 			}
 		}
-		if m.Infrastructure.Postgres.IsYugabyte() {
+		if pg.IsYugabyte() {
 			const (
 				yugabyteMasterRPCPort  = 7100
 				yugabyteMasterWebPort  = 7000
@@ -55,7 +56,7 @@ func (m *Manifest) validatePortCollisions() error {
 				yugabyteYCQLPort       = 9042
 			)
 
-			for _, node := range m.Infrastructure.Postgres.Nodes {
+			for _, node := range pg.Nodes {
 				owner := fmt.Sprintf("yugabyte-node-%d", node.ID)
 				masterRPCPort := node.RpcPort
 				if masterRPCPort == 0 {

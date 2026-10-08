@@ -101,6 +101,11 @@ func runInit(cmd *cobra.Command, rc *resolvedCluster, service string) error {
 
 // initPostgres initializes Postgres databases
 func initPostgres(ctx context.Context, cmd *cobra.Command, rc *resolvedCluster, pool *ssh.Pool) error {
+	if hasUnscopedDatabaseDeployments(rc.Manifest) {
+		return forEachDatabaseDeployment(rc.Manifest, func(view *inventory.Manifest) error {
+			return initPostgres(ctx, cmd, rc.withDatabaseManifest(view), pool)
+		})
+	}
 	manifest := rc.Manifest
 	pg := manifest.Infrastructure.Postgres
 	if pg == nil || !pg.Enabled {
@@ -176,13 +181,9 @@ func postgresInitConfig(rc *resolvedCluster, only map[string]struct{}) (postgres
 	if err != nil {
 		return postgresRoleInit{}, fmt.Errorf("load manifest env_files: %w", err)
 	}
-	var clusterEnvs map[string]map[string]string
-	if pg.IsYugabyte() {
-		envs, clusterEnvErr := rc.ClusterEnvs()
-		if clusterEnvErr != nil {
-			return postgresRoleInit{}, fmt.Errorf("load cluster env_files: %w", clusterEnvErr)
-		}
-		clusterEnvs = envs
+	clusterEnvs, clusterEnvErr := rc.ClusterEnvs()
+	if clusterEnvErr != nil {
+		return postgresRoleInit{}, fmt.Errorf("load cluster env_files: %w", clusterEnvErr)
 	}
 	password, err := resolveYugabytePassword(pg, sharedEnv)
 	if err != nil {
@@ -207,21 +208,13 @@ func postgresInitConfig(rc *resolvedCluster, only map[string]struct{}) (postgres
 		return ok
 	}
 	var dbConfigs []inventory.DatabaseConfig
-	source := pg.Databases
-	if pg.IsYugabyte() {
-		source = expandedYugabyteDatabaseConfigs(pg.Databases, manifest)
-	}
+	source := expandedYugabyteDatabaseConfigs(pg.Databases, manifest)
 	for _, db := range source {
 		if included(db.Name) {
 			dbConfigs = append(dbConfigs, db)
 		}
 	}
-	var databases []map[string]string
-	if pg.IsYugabyte() {
-		databases = yugabyteDatabaseConfigsToMetadata(dbConfigs, manifest, sharedEnv, clusterEnvs, password)
-	} else {
-		databases = databaseConfigsToMetadata(dbConfigs, password, sharedEnv)
-	}
+	databases := yugabyteDatabaseConfigsToMetadata(dbConfigs, manifest, sharedEnv, clusterEnvs, password)
 
 	config := provisioner.ServiceConfig{
 		Version: pg.Version,
@@ -246,12 +239,7 @@ func postgresInitConfig(rc *resolvedCluster, only map[string]struct{}) (postgres
 		return postgresRoleInit{}, err
 	}
 
-	var allSchemaDatabases []provisioner.SchemaDatabase
-	if pg.IsYugabyte() {
-		allSchemaDatabases = yugabyteSchemaDatabases(pg.Databases, manifest)
-	} else {
-		allSchemaDatabases = schemaDatabasesFromConfigs(pg.Databases)
-	}
+	allSchemaDatabases := yugabyteSchemaDatabases(pg.Databases, manifest)
 	schemaDatabases := make([]provisioner.SchemaDatabase, 0, len(allSchemaDatabases))
 	for _, database := range allSchemaDatabases {
 		if included(database.Name) {

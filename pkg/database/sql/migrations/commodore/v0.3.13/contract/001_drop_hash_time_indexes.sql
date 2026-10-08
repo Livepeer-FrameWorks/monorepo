@@ -1,0 +1,16 @@
+DROP INDEX IF EXISTS commodore.idx_commodore_delegated_jwt_replays_expires_at;
+DROP INDEX IF EXISTS commodore.idx_commodore_auth_authz_codes_expires;
+DROP INDEX IF EXISTS commodore.idx_commodore_auth_device_codes_expires;
+DROP INDEX IF EXISTS commodore.idx_commodore_wallet_auth_challenges_expiry;
+DROP INDEX IF EXISTS commodore.idx_commodore_streams_deleting;
+DROP INDEX IF EXISTS commodore.idx_commodore_clips_created;
+DROP INDEX IF EXISTS commodore.idx_commodore_dvr_created;
+DROP INDEX IF EXISTS commodore.idx_commodore_vod_created;
+DROP INDEX IF EXISTS commodore.idx_commodore_creation_intents_pending;
+DROP INDEX IF EXISTS commodore.idx_commodore_creation_intents_ack_pending;
+DROP INDEX IF EXISTS commodore.idx_commodore_invalidation_outbox_pending;
+DROP INDEX IF EXISTS commodore.idx_commodore_service_event_outbox_pending;
+DROP INDEX IF EXISTS commodore.idx_commodore_domain_event_outbox_pending;
+DROP INDEX IF EXISTS commodore.idx_commodore_domain_event_outbox_completed;
+DROP INDEX IF EXISTS commodore.idx_commodore_stream_cleanup_outbox_pending;
+DROP INDEX IF EXISTS commodore.idx_commodore_account_email_outbox_pending;

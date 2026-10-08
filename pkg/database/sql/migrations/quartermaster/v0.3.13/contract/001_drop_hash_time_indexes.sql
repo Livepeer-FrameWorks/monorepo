@@ -1,0 +1,5 @@
+DROP INDEX IF EXISTS quartermaster.idx_quartermaster_delegated_jwt_replays_expires_at;
+DROP INDEX IF EXISTS quartermaster.idx_qm_service_event_outbox_pending;
+DROP INDEX IF EXISTS quartermaster.idx_quartermaster_domain_event_outbox_pending;
+DROP INDEX IF EXISTS quartermaster.idx_quartermaster_domain_event_outbox_completed;
+DROP INDEX IF EXISTS quartermaster.idx_qm_navigator_custom_domain_outbox_pending;

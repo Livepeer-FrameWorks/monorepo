@@ -390,7 +390,7 @@ VERIFY_PREPUSH_JOBS := 3
 VERIFY_PREPUSH_STAGES := verify-yugabyte-contracts+verify-yugabyte-contracts-deps verify-migration-release-state verify-go-build verify-go-lint \
 	verify-sdks+verify-frontend-deps verify-generated-contracts+verify-frontend-deps verify-frontend-build+verify-frontend-deps \
 	verify-frontend-lint+verify-frontend-deps test-frontend-components+verify-frontend-deps verify-compose-profiles verify-feature-registry \
-	verify-pricing-catalog
+	verify-pricing-catalog verify-yugabyte-explain-audit
 verify-prepush:
 	@MAKE='$(MAKE)' $(CURDIR)/scripts/verify-prepush.sh $(VERIFY_PREPUSH_JOBS) $(VERIFY_PREPUSH_STAGES)
 
@@ -1688,6 +1688,31 @@ verify-yugabyte-layout-benchmark:
 	@echo "Benchmarking colocated write_rate_benchmark tables against distributed placement (Docker)..."
 	@FRAMEWORKS_YUGABYTE_BENCHMARK=1 $(CURDIR)/scripts/run-yugabyte-contract-fixture.sh $(CONTRACT_GO_TEST) cli yugabyte/layout-benchmark -tags schema_verify -run '$(YUGABYTE_LAYOUT_BENCHMARK_TESTS)' -count=1 -v -timeout 3600s ./pkg/provisioner/
 
+.PHONY: verify-yugabyte-explain-audit explain-audit-budget test-explainaudit
+# The explain audit seeds every service database with production-shaped volumes, in its declared layout and fully
+# distributed, and runs EXPLAIN (ANALYZE, DIST) for every sqlc and statically resolvable hand-written statement. It
+# fails when a plan gains a large sequential scan, a whole-table sort, read amplification, storage round trips, a
+# per-row subplan or an unbatched nested loop beyond scripts/explainaudit/budget.json. Raw plans, results.json and a
+# ranked report.md land in EXPLAIN_AUDIT_OUT; explain-audit-budget rewrites the budget from a run.
+EXPLAIN_AUDIT_OUT ?= $(CURDIR)/.explain-audit
+verify-yugabyte-explain-audit: test-explainaudit
+	@docker info >/dev/null 2>&1 || { echo "ERROR: verify-yugabyte-explain-audit requires a running Docker daemon"; exit 1; }
+	@$(CURDIR)/scripts/run-yugabyte-contract-fixture.sh bash -c 'cd "$(CURDIR)/scripts/explainaudit" && go run . -out "$(EXPLAIN_AUDIT_OUT)" $(EXPLAIN_AUDIT_ARGS)'
+
+explain-audit-budget:
+	@docker info >/dev/null 2>&1 || { echo "ERROR: explain-audit-budget requires a running Docker daemon"; exit 1; }
+	@$(CURDIR)/scripts/run-yugabyte-contract-fixture.sh bash -c 'cd "$(CURDIR)/scripts/explainaudit" && go run . -out "$(EXPLAIN_AUDIT_OUT)" -write-budget $(EXPLAIN_AUDIT_ARGS)'
+
+test-explainaudit:
+	@cd scripts/explainaudit && go test -count=1 ./...
+
+.PHONY: benchmark-yugabyte-catalog-preload
+benchmark-yugabyte-catalog-preload:
+	@for preload in false true; do \
+		FRAMEWORKS_YUGABYTE_CATALOG_PRELOAD=$$preload $(CURDIR)/scripts/run-yugabyte-contract-fixture.sh \
+		bash -c 'cd "$(CURDIR)/scripts/explainaudit" && go run . -catalog-preload-probe -out "$(EXPLAIN_AUDIT_OUT)"' || exit $$?; \
+	done
+
 verify-schema-yugabyte-selection-contracts:
 	@echo "Verifying Yugabyte schema harness and database selection..."
 	@FRAMEWORKS_SCHEMA_VERIFY_FROM_TAG='$(SCHEMA_VERIFY_FROM_TAG)' $(CONTRACT_GO_TEST) cli yugabyte/schema-selection -tags schema_verify -run '$(SCHEMA_VERIFY_YUGABYTE_STATIC_TESTS)' -count=1 -timeout 1200s ./pkg/provisioner/
@@ -1756,7 +1781,15 @@ verify-yugabyte-quartermaster-contracts: verify-yugabyte-shared-fixture
 	@$(CONTRACT_GO_TEST) api_tenants yugabyte/quartermaster-capabilities -tags schema_verify -run '^($(QUARTERMASTER_CAPABILITIES_REALYB_TESTS))$$' -count=1 -timeout 600s ./internal/grpc/
 	@$(CONTRACT_GO_TEST) api_tenants yugabyte/quartermaster-health-writes -tags schema_verify -run '^($(QUARTERMASTER_HEALTH_WRITES_REALYB_TESTS))$$' -count=1 -timeout 600s ./internal/grpc/
 
-verify-yugabyte-bosun-contracts: verify-yugabyte-shared-fixture
+.PHONY: verify-domain-outbox-engines verify-yugabyte-domain-outbox-contracts
+verify-domain-outbox-engines:
+	@$(CONTRACT_GO_TEST) pkg postgres/domain-event-outbox -tags schema_verify -run '$(DOMAIN_EVENT_OUTBOX_REALPG_TESTS)' -count=1 -timeout 600s ./events/outbox/
+	@$(YUGABYTE_FIXTURE) $(MAKE) --no-print-directory verify-yugabyte-domain-outbox-contracts
+
+verify-yugabyte-domain-outbox-contracts: verify-yugabyte-shared-fixture
+	@$(CONTRACT_GO_TEST) pkg yugabyte/domain-event-outbox -tags schema_verify -run 'TestDomainEventOutbox_RealYugabyte' -count=1 -timeout 600s ./events/outbox/
+
+verify-yugabyte-bosun-contracts: verify-yugabyte-shared-fixture verify-yugabyte-domain-outbox-contracts
 	@$(CONTRACT_GO_TEST) api_webhooks yugabyte/bosun-ledger -tags schema_verify -run '^($(BOSUN_REALYB_TESTS))$$' -count=1 -timeout 1200s ./internal/integration/
 
 verify-yugabyte-periscope-metering-contracts: verify-yugabyte-shared-fixture

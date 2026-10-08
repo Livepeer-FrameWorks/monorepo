@@ -212,7 +212,9 @@ func (r *Relay) publish(ctx context.Context, batch *eventspb.DomainEventBatch) e
 // completed, even while the first is leased by another replica or backing off.
 func (r *Relay) claim(ctx context.Context, token string) ([]claimedRow, error) {
 	t := r.schema + ".domain_event_outbox"
-	query := `UPDATE ` + t + ` AS o
+	// YSQL otherwise scans the aggregate index and sorts the whole pending set.
+	// Keep the outer scan ordered and probe only the first pending row per aggregate.
+	query := `UPDATE /*+ IndexScan(c idx_` + r.schema + `_domain_event_outbox_pending_range) */ ` + t + ` AS o
 SET claimed_at = now(), lease_token = $1::uuid
 WHERE o.event_id IN (
     SELECT c.event_id
@@ -220,12 +222,13 @@ WHERE o.event_id IN (
     WHERE c.completed_at IS NULL
       AND c.next_attempt_at <= now()
       AND (c.claimed_at IS NULL OR c.claimed_at < now() - ($2::bigint * interval '1 millisecond'))
-      AND NOT EXISTS (
-          SELECT 1 FROM ` + t + ` AS p
+      AND c.event_id = (
+          SELECT p.event_id FROM ` + t + ` AS p
           WHERE p.aggregate_type = c.aggregate_type
             AND p.aggregate_id = c.aggregate_id
             AND p.completed_at IS NULL
-            AND (p.enqueued_at, p.event_id) < (c.enqueued_at, c.event_id))
+          ORDER BY p.enqueued_at, p.event_id
+          LIMIT 1)
     ORDER BY c.enqueued_at, c.event_id
     LIMIT $3
     FOR UPDATE SKIP LOCKED)

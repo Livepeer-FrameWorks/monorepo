@@ -36,6 +36,7 @@ yugabyte_master_web_port: 7000
 yugabyte_tserver_rpc_port: 9100
 yugabyte_tserver_web_port: 11000
 yugabyte_ysql_port: 5433
+yugabyte_catalog_preload_additional_tables: null
 yugabyte_ycql_port: 9042
 yugabyte_master_addresses: "{{ yugabyte_node_address }}:{{ yugabyte_master_rpc_port }}"
 

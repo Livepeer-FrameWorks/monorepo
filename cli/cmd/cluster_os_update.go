@@ -203,7 +203,11 @@ func runOSUpdateCheck(cmd *cobra.Command, rc *resolvedCluster, hostsCSV string, 
 
 func runOSUpdateApply(cmd *cobra.Command, rc *resolvedCluster, hostsCSV, mode string, noReboot bool, serial int, continueOnErr bool) error {
 	deadline := 60 * time.Minute
-	if pg := rc.Manifest.Infrastructure.Postgres; pg != nil && pg.Enabled && pg.IsYugabyte() {
+	for _, deployment := range rc.Manifest.SQLDeployments() {
+		pg := deployment.Config
+		if !pg.IsYugabyte() {
+			continue
+		}
 		// Each Yugabyte node may wait for the masters to confirm it can go down and then for its own recovery.
 		deadline += time.Duration(len(pg.Nodes)) * 2 * yugabyteRollRecoveryTimeout
 	}
@@ -224,7 +228,11 @@ func runOSUpdateApply(cmd *cobra.Command, rc *resolvedCluster, hostsCSV, mode st
 		return err
 	}
 	yugabyteNodes := map[string]bool{}
-	if pg := rc.Manifest.Infrastructure.Postgres; pg != nil && pg.Enabled && pg.IsYugabyte() {
+	for _, deployment := range rc.Manifest.SQLDeployments() {
+		pg := deployment.Config
+		if !pg.IsYugabyte() {
+			continue
+		}
 		for _, node := range pg.Nodes {
 			yugabyteNodes[node.Host] = true
 		}
@@ -265,29 +273,50 @@ func runOSUpdateApply(cmd *cobra.Command, rc *resolvedCluster, hostsCSV, mode st
 	// whatever --serial says, and a failure stops the rest.
 	sshPool := fwssh.NewPool(30*time.Second, stringFlag(cmd, "ssh-key").Value)
 	defer sshPool.Close()
-	roll := newYugabyteGate(cmd.OutOrStdout(), rc.Manifest, sshPool)
-	names := make([]string, 0, len(yugabyteTargets))
-	for _, host := range yugabyteTargets {
-		roll.serving[host.Name] = roll.u.ServesYSQL(ctx, host)
-		names = append(names, host.Name)
-	}
-	roll.setOrder(names)
-	fmt.Fprintf(cmd.OutOrStdout(), "Updating %d Yugabyte node(s) one at a time\n", len(names))
-	for _, name := range roll.order {
+	for _, deployment := range rc.Manifest.SQLDeployments() {
+		if !deployment.Config.IsYugabyte() {
+			continue
+		}
+		view, err := rc.Manifest.WithDatabaseDeployment(deployment.Name)
+		if err != nil {
+			return err
+		}
+		var cohort []inventory.Host
 		for _, host := range yugabyteTargets {
-			if host.Name != name {
-				continue
-			}
-			if err := roll.change(ctx, host, func(gate func() error) error {
-				if gateErr := gate(); gateErr != nil {
-					return gateErr
+			for _, node := range deployment.Config.Nodes {
+				if host.Name == node.Host {
+					cohort = append(cohort, host)
 				}
-				return playbook([]inventory.Host{host}, 1)
-			}); err != nil {
-				return err
+			}
+		}
+		if len(cohort) == 0 {
+			continue
+		}
+		roll := newYugabyteGate(cmd.OutOrStdout(), view, sshPool)
+		names := make([]string, 0, len(cohort))
+		for _, host := range cohort {
+			roll.serving[host.Name] = roll.u.ServesYSQL(ctx, host)
+			names = append(names, host.Name)
+		}
+		roll.setOrder(names)
+		fmt.Fprintf(cmd.OutOrStdout(), "Updating %d Yugabyte node(s) one at a time\n", len(names))
+		for _, name := range roll.order {
+			for _, host := range cohort {
+				if host.Name != name {
+					continue
+				}
+				if err := roll.change(ctx, host, func(gate func() error) error {
+					if gateErr := gate(); gateErr != nil {
+						return gateErr
+					}
+					return playbook([]inventory.Host{host}, 1)
+				}); err != nil {
+					return err
+				}
 			}
 		}
 	}
+
 	return nil
 }
 

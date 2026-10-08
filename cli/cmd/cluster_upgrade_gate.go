@@ -44,6 +44,13 @@ func serviceDependsOnClickHouse(deployName string) bool {
 // ledger (the authority), never a detected running version. When a prior release is incomplete, the refusal names the
 // first such release; the target's own postdeploy is excluded (it runs after deploy).
 func checkPostgresMigrationGate(ctx context.Context, rc *resolvedCluster, sshPool *ssh.Pool, manifest *inventory.Manifest, dbName, serviceName, target string) error {
+	if len(manifest.Infrastructure.DatabaseDeployments) > 0 {
+		view, err := manifest.WithDatabaseDeployment(manifest.ServiceDatabaseDeployment(serviceName))
+		if err != nil {
+			return err
+		}
+		manifest = view
+	}
 	pg := manifest.Infrastructure.Postgres
 	if pg == nil || !pg.Enabled {
 		return fmt.Errorf("[gate] %s is database-backed but postgres is not enabled in the manifest; cannot verify its migrations before deploy", serviceName)
@@ -53,10 +60,7 @@ func checkPostgresMigrationGate(ctx context.Context, rc *resolvedCluster, sshPoo
 		return fmt.Errorf("[gate] cannot resolve postgres host from manifest")
 	}
 	password, _ := resolveYugabytePassword(pg, sharedEnvForGate(rc)) //nolint:errcheck // missing yugabyte password is reported by ReadMigrationLedger
-	databases := schemaDatabasesFromConfigs([]inventory.DatabaseConfig{{Name: dbName}})
-	if pg.IsYugabyte() {
-		databases = yugabyteSchemaDatabases([]inventory.DatabaseConfig{{Name: dbName}}, manifest)
-	}
+	databases := yugabyteSchemaDatabases([]inventory.DatabaseConfig{{Name: dbName}}, manifest)
 	// A database the release introduces has no migrations, so the ledger checks
 	// below would pass for it while it does not exist. Its presence with a
 	// baseline is checked first; creating it is the release expand step's job.

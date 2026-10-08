@@ -1,0 +1,53 @@
+# Seeded row counts for tables that stay small in production: catalogs, per-cluster or per-node state, cursors and
+# singletons. Every other table gets -hot-rows (queues, outboxes, events, ledgers, the tables a layout file places
+# distributed) or -default-rows. A sequential scan is reported only for a table with more than 1000 live rows, so a
+# table listed here at or below that is never reported for being scanned.
+# <schema.table> <rows>
+quartermaster.services 30
+quartermaster.infrastructure_clusters 20
+quartermaster.cluster_services 120
+quartermaster.mesh_topology_state 20
+quartermaster.ingress_sites 60
+quartermaster.edge_releases 50
+quartermaster.cluster_release_targets 20
+quartermaster.tls_bundles 60
+quartermaster.infrastructure_nodes 300
+quartermaster.mesh_node_configs 300
+quartermaster.node_fingerprints 300
+quartermaster.service_instances 1500
+quartermaster.service_cluster_assignments 1500
+purser.billing_tiers 10
+purser.tier_entitlements 100
+purser.meter_definitions 20
+purser.tier_pricing_rules 100
+purser.platform_fee_policy 5
+purser.vat_rate_periods 100
+purser.cluster_pricing 50
+purser.cluster_pricing_history 200
+purser.cluster_owners 50
+purser.hd_wallet_state 5
+purser.crypto_scan_cursors 20
+purser.crypto_sweep_relayer_nonces 20
+purser.mollie_balance_cursors 5
+foghorn.node_control_fence_counter 300
+foghorn.node_maintenance 300
+foghorn.node_lifecycle 300
+foghorn.node_update_state 300
+foghorn.node_config_seeds 300
+foghorn.node_admissions 300
+foghorn.cell_storage_identity 5
+foghorn.billing_attribution_cursor 5
+foghorn.active_object_key_backfill_cursor 5
+foghorn.freeze_publication_ledger_cursor 5
+foghorn.thumbnail_claim_counter 5
+foghorn.control_replicas 10
+commodore.media_authority_compiler_state 5
+commodore.media_authority_use_epoch 5
+commodore.media_cell_placement_capabilities 20
+commodore.signing_keys 200
+navigator.internal_ca 5
+navigator.acme_accounts 10
+periscope.billing_cursors 50
+periscope.metering_leases 50
+periscope.metering_sources 200
+skipper.skipper_baselines 50

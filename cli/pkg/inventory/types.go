@@ -8,13 +8,16 @@ import (
 
 // Manifest represents the cluster.yaml configuration
 type Manifest struct {
-	Version    string   `yaml:"version"`
-	Type       string   `yaml:"type"`                  // cluster | edge
-	Profile    string   `yaml:"profile,omitempty"`     // control-plane | regional | analytics-only | edge-gateway
-	Channel    string   `yaml:"channel,omitempty"`     // release channel: "stable" (default), "candidate", "rc" (legacy)
-	RootDomain string   `yaml:"root_domain,omitempty"` // Domain for Caddy TLS and routing
-	EnvFiles   []string `yaml:"env_files,omitempty"`   // shared env files for all services, merged in order
-	HostsFile  string   `yaml:"hosts_file,omitempty"`  // SOPS-encrypted host inventory (IPs + SSH targets)
+	// DatabaseDeployment scopes SQL administration without changing service bindings.
+	DatabaseDeployment string          `yaml:"-"`
+	DatabasePrimary    *PostgresConfig `yaml:"-"`
+	Version            string          `yaml:"version"`
+	Type               string          `yaml:"type"`                  // cluster | edge
+	Profile            string          `yaml:"profile,omitempty"`     // control-plane | regional | analytics-only | edge-gateway
+	Channel            string          `yaml:"channel,omitempty"`     // release channel: "stable" (default), "candidate", "rc" (legacy)
+	RootDomain         string          `yaml:"root_domain,omitempty"` // Domain for Caddy TLS and routing
+	EnvFiles           []string        `yaml:"env_files,omitempty"`   // shared env files for all services, merged in order
+	HostsFile          string          `yaml:"hosts_file,omitempty"`  // SOPS-encrypted host inventory (IPs + SSH targets)
 
 	// BootstrapOverlay is an optional path (relative to the manifest file) to a GitOps
 	// bootstrap overlay (`bootstrap.frameworks.dev/v1alpha1`). Empty = no overlay; the
@@ -218,27 +221,31 @@ type WireGuardPeer struct {
 
 // InfrastructureConfig represents infrastructure services (native installs)
 type InfrastructureConfig struct {
-	Postgres   *PostgresConfig   `yaml:"postgres,omitempty"`
-	Redis      *RedisConfig      `yaml:"redis,omitempty"`
-	Kafka      *KafkaConfig      `yaml:"kafka,omitempty"`
-	ClickHouse *ClickHouseConfig `yaml:"clickhouse,omitempty"`
+	DatabaseDeployments map[string]*PostgresConfig `yaml:"database_deployments,omitempty"`
+	Postgres            *PostgresConfig            `yaml:"postgres,omitempty"`
+	Redis               *RedisConfig               `yaml:"redis,omitempty"`
+	Kafka               *KafkaConfig               `yaml:"kafka,omitempty"`
+	ClickHouse          *ClickHouseConfig          `yaml:"clickhouse,omitempty"`
 }
 
 // PostgresConfig represents Postgres/YugabyteDB configuration
 type PostgresConfig struct {
-	Enabled           bool               `yaml:"enabled"`
-	Engine            string             `yaml:"engine,omitempty"` // "postgres" (default) or "yugabyte"
-	Mode              string             `yaml:"mode"`             // native (only supported mode for infrastructure)
-	Version           string             `yaml:"version"`
-	Host              string             `yaml:"host,omitempty"`  // Single-host (vanilla Postgres)
-	Nodes             []PostgresNode     `yaml:"nodes,omitempty"` // Multi-node (YugabyteDB)
-	Instances         []PostgresInstance `yaml:"instances,omitempty"`
-	Port              int                `yaml:"port"`
-	ReplicationFactor int                `yaml:"replication_factor,omitempty"` // Default: len(Nodes)
-	Databases         []DatabaseConfig   `yaml:"databases,omitempty"`
-	Tuning            map[string]string  `yaml:"tuning,omitempty"`
-	SQLAccess         string             `yaml:"sql_access,omitempty"` // "direct" (default) or "ssh"
-	Password          string             `yaml:"password,omitempty"`
+	CatalogPreloadAdditionalTables *bool              `yaml:"catalog_preload_additional_tables,omitempty"`
+	PlacementCloud                 string             `yaml:"placement_cloud,omitempty"`
+	PlacementRegion                string             `yaml:"placement_region,omitempty"`
+	Enabled                        bool               `yaml:"enabled"`
+	Engine                         string             `yaml:"engine,omitempty"` // "postgres" (default) or "yugabyte"
+	Mode                           string             `yaml:"mode"`             // native (only supported mode for infrastructure)
+	Version                        string             `yaml:"version"`
+	Host                           string             `yaml:"host,omitempty"`  // Single-host (vanilla Postgres)
+	Nodes                          []PostgresNode     `yaml:"nodes,omitempty"` // Multi-node (YugabyteDB)
+	Instances                      []PostgresInstance `yaml:"instances,omitempty"`
+	Port                           int                `yaml:"port"`
+	ReplicationFactor              int                `yaml:"replication_factor,omitempty"` // Default: len(Nodes)
+	Databases                      []DatabaseConfig   `yaml:"databases,omitempty"`
+	Tuning                         map[string]string  `yaml:"tuning,omitempty"`
+	SQLAccess                      string             `yaml:"sql_access,omitempty"` // "direct" (default) or "ssh"
+	Password                       string             `yaml:"password,omitempty"`
 }
 
 // PostgresInstance represents an additional named vanilla PostgreSQL instance.
@@ -256,9 +263,10 @@ type PostgresInstance struct {
 
 // PostgresNode represents a node in a multi-node Postgres/YugabyteDB cluster
 type PostgresNode struct {
-	Host    string `yaml:"host"`               // Host name from Hosts map
-	ID      int    `yaml:"id"`                 // Node ID (1-based)
-	RpcPort int    `yaml:"rpc_port,omitempty"` // yb-master RPC (default 7100)
+	PlacementZone string `yaml:"placement_zone,omitempty"`
+	Host          string `yaml:"host"`               // Host name from Hosts map
+	ID            int    `yaml:"id"`                 // Node ID (1-based)
+	RpcPort       int    `yaml:"rpc_port,omitempty"` // yb-master RPC (default 7100)
 }
 
 // IsYugabyte returns true if this config uses YugabyteDB engine
@@ -575,24 +583,25 @@ type RedisSentinelNode struct {
 
 // ServiceConfig represents a FrameWorks application or interface service
 type ServiceConfig struct {
-	Enabled        bool                  `yaml:"enabled"`
-	Mode           string                `yaml:"mode"` // docker | native
-	Version        string                `yaml:"version"`
-	Image          string                `yaml:"image,omitempty"`      // For docker mode
-	BinaryURL      string                `yaml:"binary_url,omitempty"` // For native mode
-	Deploy         string                `yaml:"deploy,omitempty"`     // Underlying service slug (container/binary name)
-	Cluster        string                `yaml:"cluster,omitempty"`    // Explicit cluster assignment (singular shorthand for Clusters[0])
-	Clusters       []string              `yaml:"clusters,omitempty"`   // Logical cluster assignments for cluster-scoped media services (M:N)
-	Host           string                `yaml:"host,omitempty"`       // Single host
-	Hosts          []string              `yaml:"hosts,omitempty"`      // Multiple hosts (for replicas)
-	Port           int                   `yaml:"port,omitempty"`
-	GRPCPort       int                   `yaml:"grpc_port,omitempty"`
-	Replicas       int                   `yaml:"replicas,omitempty"`
-	EnvFile        string                `yaml:"env_file,omitempty"`
-	DependsOn      []string              `yaml:"depends_on,omitempty"`
-	Public         bool                  `yaml:"public,omitempty"`          // Has public-facing endpoint
-	Config         map[string]string     `yaml:"config,omitempty"`          // Service-specific config
-	UpdateStrategy *UpdateStrategyConfig `yaml:"update_strategy,omitempty"` // Optional cluster apply rollout override
+	DatabaseDeployment string                `yaml:"database_deployment,omitempty"`
+	Enabled            bool                  `yaml:"enabled"`
+	Mode               string                `yaml:"mode"` // docker | native
+	Version            string                `yaml:"version"`
+	Image              string                `yaml:"image,omitempty"`      // For docker mode
+	BinaryURL          string                `yaml:"binary_url,omitempty"` // For native mode
+	Deploy             string                `yaml:"deploy,omitempty"`     // Underlying service slug (container/binary name)
+	Cluster            string                `yaml:"cluster,omitempty"`    // Explicit cluster assignment (singular shorthand for Clusters[0])
+	Clusters           []string              `yaml:"clusters,omitempty"`   // Logical cluster assignments for cluster-scoped media services (M:N)
+	Host               string                `yaml:"host,omitempty"`       // Single host
+	Hosts              []string              `yaml:"hosts,omitempty"`      // Multiple hosts (for replicas)
+	Port               int                   `yaml:"port,omitempty"`
+	GRPCPort           int                   `yaml:"grpc_port,omitempty"`
+	Replicas           int                   `yaml:"replicas,omitempty"`
+	EnvFile            string                `yaml:"env_file,omitempty"`
+	DependsOn          []string              `yaml:"depends_on,omitempty"`
+	Public             bool                  `yaml:"public,omitempty"`          // Has public-facing endpoint
+	Config             map[string]string     `yaml:"config,omitempty"`          // Service-specific config
+	UpdateStrategy     *UpdateStrategyConfig `yaml:"update_strategy,omitempty"` // Optional cluster apply rollout override
 }
 
 type UpdateStrategyConfig struct {

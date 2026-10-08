@@ -267,8 +267,8 @@ func runProvision(cmd *cobra.Command, rc *resolvedCluster, only, version string,
 	}
 
 	onlyServices := stringSliceFlag(cmd, "only-services")
-	targetedProvision := len(onlyServices) > 0
-	if targetedProvision {
+	targetedProvision := len(onlyServices) > 0 || manifest.DatabaseDeployment != ""
+	if len(onlyServices) > 0 {
 		plan, err = filterProvisionPlan(plan, onlyServices)
 		if err != nil {
 			return err
@@ -328,10 +328,10 @@ func runProvision(cmd *cobra.Command, rc *resolvedCluster, only, version string,
 		if err := dryRunContractErr(); err != nil {
 			return fmt.Errorf("service env contract: %w", err)
 		}
-		if len(onlyServices) == 0 {
+		if !targetedProvision {
 			printDryRunRemovedServicePlacementPlan(ctx, cmd, manifest, phase, sharedEnv)
 		}
-		if len(onlyServices) == 0 && phaseConvergesInfrastructure(phase) {
+		if !targetedProvision && phaseConvergesInfrastructure(phase) {
 			mmPool := ssh.NewPool(30*time.Second, stringFlag(cmd, "ssh-key").Value)
 			if mmErr := reconcileStaleKafkaMirrorMakerWorkersOverSSH(ctx, out, manifest, mmPool, true); mmErr != nil {
 				fmt.Fprintf(out, "Removed kafka-mirrormaker worker plan: inconclusive: %v\n\n", mmErr)
@@ -805,12 +805,25 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, rc *resolvedClust
 		return err
 	}
 
-	ybRoll := newYugabyteRoll(ctx, cmd.OutOrStdout(), manifest, sshPool, plan)
-	// Provisioning a Yugabyte node runs the role's init tag, which creates any service database missing under its
-	// canonical name; mid-relayout that name can be free on purpose.
-	if host, ok := ybRoll.servingHost(); ok {
-		if err := refuseDuringYugabyteRelayoutFn(ctx, sshPool, host, manifest.Infrastructure.Postgres); err != nil {
+	ybRolls := map[string]*yugabyteRoll{}
+	defaultRoll := &yugabyteRoll{}
+	defaultRoll.init()
+	for _, deployment := range manifest.SQLDeployments() {
+		if !deployment.Config.IsYugabyte() {
+			continue
+		}
+		view, err := manifest.WithDatabaseDeployment(deployment.Name)
+		if err != nil {
 			return err
+		}
+		roll := newYugabyteRoll(ctx, cmd.OutOrStdout(), view, sshPool, plan)
+		if host, ok := roll.servingHost(); ok {
+			if err := refuseDuringYugabyteRelayoutFn(ctx, sshPool, host, deployment.Config); err != nil {
+				return err
+			}
+		}
+		for _, node := range deployment.Config.Nodes {
+			ybRolls[node.Host] = roll
 		}
 	}
 
@@ -859,7 +872,20 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, rc *resolvedClust
 		// result so a fast sibling failure cannot cancel and masquerade as a
 		// different host's deployment failure. Yugabyte nodes on a running universe
 		// still take turns inside the batch; the roll fixes their order here.
-		ybRoll.beginBatch(batch)
+		seenRolls := map[*yugabyteRoll]bool{}
+		for hostName, roll := range ybRolls {
+			if seenRolls[roll] {
+				continue
+			}
+			seenRolls[roll] = true
+			var cohort []*orchestrator.Task
+			for _, task := range batch {
+				if ybRolls[task.Host] == ybRolls[hostName] {
+					cohort = append(cohort, task)
+				}
+			}
+			roll.beginBatch(cohort)
+		}
 		var g errgroup.Group
 		for _, task := range batch {
 			task := task
@@ -876,6 +902,10 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, rc *resolvedClust
 				taskRD[k] = v
 			}
 
+			ybRoll := defaultRoll
+			if task.Type == "yugabyte" && ybRolls[task.Host] != nil {
+				ybRoll = ybRolls[task.Host]
+			}
 			g.Go(func() error {
 				fmt.Fprintf(cmd.OutOrStdout(), "  Provisioning %s on %s...\n", task.Name, task.Host)
 				stopProgress := startTaskProgressLogger(cmd, task, 15*time.Second)
@@ -1109,7 +1139,12 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, rc *resolvedClust
 		// the Yugabyte batches have run.
 		if shouldInitializePrimaryPostgresAfterBatch(manifest, batch, plan.Batches[batchNum+1:]) {
 			fmt.Fprintln(cmd.OutOrStdout(), "")
-			if err := initPostgres(ctx, cmd, rc, sshPool); err != nil {
+			if err := forEachDatabaseDeployment(manifest, func(view *inventory.Manifest) error {
+				if view.Infrastructure.Postgres.IsYugabyte() {
+					return nil
+				}
+				return initPostgres(ctx, cmd, rc.withDatabaseManifest(view), sshPool)
+			}); err != nil {
 				ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("PostgreSQL initialization failed: %v", err))
 				reportAutomaticRollbackSkipped(cmd.OutOrStdout(), "PostgreSQL initialization failed")
 				return fmt.Errorf("postgres initialization failed: %w", err)
@@ -1122,6 +1157,9 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, rc *resolvedClust
 			fmt.Fprintln(cmd.OutOrStdout(), "")
 			privateerSvc := manifest.Services["privateer"]
 			meshHosts := orchestrator.EffectivePrivateerHostsForManifest(privateerSvc, manifest)
+			if manifest.DatabaseDeployment != "" {
+				meshHosts = manifest.Infrastructure.Postgres.AllHosts()
+			}
 			if err := verifyMeshHealth(ctx, cmd, manifest, sshPool, meshHosts); err != nil {
 				ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("Mesh verification failed: %v", err))
 				fmt.Fprintln(cmd.OutOrStdout(), "  Services depend on mesh DNS for discovery.")
@@ -1140,7 +1178,7 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, rc *resolvedClust
 	// A service-targeted run must not reconcile the rest of the manifest. Cleanup is a
 	// full-phase convergence operation and could otherwise remove an unrelated placement
 	// merely because it was not part of this run's filtered plan.
-	if len(stringSliceFlag(cmd, "only-services")) == 0 {
+	if !targetedProvision {
 		if err := reconcileRemovedServicePlacements(ctx, cmd, manifest, phase, runtimeData, raSession, sshPool); err != nil {
 			return fmt.Errorf("removed service placement reconciliation failed: %w", err)
 		}
@@ -1584,6 +1622,15 @@ func remainingBatchesContainTaskType(batches [][]*orchestrator.Task, taskType st
 }
 
 func shouldInitializePrimaryPostgresAfterBatch(manifest *inventory.Manifest, batch []*orchestrator.Task, remaining [][]*orchestrator.Task) bool {
+	if hasUnscopedDatabaseDeployments(manifest) {
+		for _, deployment := range manifest.SQLDeployments() {
+			if !deployment.Config.IsYugabyte() && batchContainsTaskType(batch, "postgres") && !remainingBatchesContainTaskType(remaining, "postgres") {
+				return true
+			}
+		}
+		return false
+	}
+
 	if manifest == nil || manifest.Infrastructure.Postgres == nil || manifest.Infrastructure.Postgres.IsYugabyte() {
 		return false
 	}
@@ -1591,6 +1638,9 @@ func shouldInitializePrimaryPostgresAfterBatch(manifest *inventory.Manifest, bat
 }
 
 func verifyYugabyteCluster(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, pool *ssh.Pool) error {
+	if hasUnscopedDatabaseDeployments(manifest) {
+		return forEachDatabaseDeployment(manifest, func(view *inventory.Manifest) error { return verifyYugabyteCluster(ctx, cmd, view, pool) })
+	}
 	pg := manifest.Infrastructure.Postgres
 	if pg == nil || !pg.Enabled || !pg.IsYugabyte() || len(pg.Nodes) == 0 {
 		return nil
@@ -1676,6 +1726,11 @@ done
 }
 
 func initializeDeferredYugabyte(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, pool *ssh.Pool, sharedEnv map[string]string, clusterEnvs map[string]map[string]string, targetVersion string) error {
+	if hasUnscopedDatabaseDeployments(manifest) {
+		return forEachDatabaseDeployment(manifest, func(view *inventory.Manifest) error {
+			return initializeDeferredYugabyte(ctx, cmd, view, pool, sharedEnv, clusterEnvs, targetVersion)
+		})
+	}
 	pg := manifest.Infrastructure.Postgres
 	if pg == nil || !pg.Enabled || !pg.IsYugabyte() || len(pg.Nodes) == 0 {
 		return nil
@@ -3037,6 +3092,13 @@ func serviceInstanceShouldBePruned(inst *quartermasterpb.ServiceInstance, desire
 
 // buildTaskConfig creates a ServiceConfig for a task.
 func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runtimeData map[string]any, force bool, manifestDir string, sharedEnv map[string]string, clusterEnvs map[string]map[string]string, releaseRepos []string) (provisioner.ServiceConfig, error) {
+	if task.Type == "yugabyte" || task.Type == "postgres" {
+		view, err := manifest.SQLDeploymentForHost(task.Host)
+		if err != nil {
+			return provisioner.ServiceConfig{}, err
+		}
+		manifest = view
+	}
 	config := provisioner.ServiceConfig{
 		Mode:     "docker",
 		Version:  "stable",
@@ -3193,7 +3255,7 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 						config.Port = manifest.Infrastructure.Postgres.Port
 					}
 					if len(manifest.Infrastructure.Postgres.Databases) > 0 {
-						config.Metadata["databases"] = databaseConfigsToMetadata(manifest.Infrastructure.Postgres.Databases, "", sharedEnv)
+						config.Metadata["databases"] = yugabyteDatabaseConfigsToMetadata(expandedYugabyteDatabaseConfigs(manifest.Infrastructure.Postgres.Databases, manifest), manifest, sharedEnv, clusterEnvs, "")
 					}
 				}
 			}
@@ -3438,6 +3500,19 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 				}
 				config.Metadata["master_addresses"] = pg.MasterAddresses(manifest.MeshAddress)
 				config.Metadata["replication_factor"] = pg.EffectiveReplicationFactor()
+				if pg.CatalogPreloadAdditionalTables != nil {
+					config.Metadata["catalog_preload_additional_tables"] = *pg.CatalogPreloadAdditionalTables
+				}
+				config.Metadata["placement_cloud"] = pg.PlacementCloud
+				config.Metadata["placement_region"] = pg.PlacementRegion
+				for _, node := range pg.Nodes {
+					if node.Host == task.Host {
+						config.Metadata["placement_zone"] = node.PlacementZone
+						if node.RpcPort != 0 {
+							config.Metadata["master_rpc_port"] = node.RpcPort
+						}
+					}
+				}
 				if task.InstanceID != "" {
 					if nodeID, err := strconv.Atoi(task.InstanceID); err == nil {
 						config.Metadata["node_id"] = nodeID
@@ -5330,6 +5405,9 @@ func expandedYugabyteDatabaseConfigs(databases []inventory.DatabaseConfig, manif
 	for _, db := range databases {
 		expanded := clusterScopedDatabaseAliases(db, manifest)
 		if len(expanded) == 0 {
+			if databaseTemplateOwnedElsewhere(db.Name, manifest) {
+				continue
+			}
 			key := databaseConfigKey(db)
 			if _, ok := seen[key]; !ok {
 				items = append(items, db)
@@ -5359,7 +5437,14 @@ func yugabyteSchemaDatabases(databases []inventory.DatabaseConfig, manifest *inv
 		logicalName := strings.TrimSpace(db.Name)
 		expanded := clusterScopedDatabaseAliases(db, manifest)
 		if len(expanded) == 0 {
-			addSchemaDatabase(&items, seen, db.Name, db.Owner, databaseRuntimeRole(db), "", "")
+			if databaseTemplateOwnedElsewhere(db.Name, manifest) {
+				continue
+			}
+			source := yugabyteLogicalDatabaseName(db.Name, manifest)
+			if source == db.Name {
+				source = ""
+			}
+			addSchemaDatabase(&items, seen, db.Name, db.Owner, databaseRuntimeRole(db), source, source)
 			continue
 		}
 		for _, item := range expanded {
@@ -5414,19 +5499,6 @@ func validateClusteredFoghornDatabases(manifest *inventory.Manifest) error {
 	if manifest == nil {
 		return nil
 	}
-	pg := manifest.Infrastructure.Postgres
-	if pg == nil || !pg.Enabled {
-		return nil
-	}
-	declared := map[string]struct{}{}
-	for _, db := range expandedYugabyteDatabaseConfigs(pg.Databases, manifest) {
-		declared[strings.TrimSpace(db.Name)] = struct{}{}
-	}
-	for i := range pg.Instances {
-		for _, db := range pg.Instances[i].Databases {
-			declared[strings.TrimSpace(db.Name)] = struct{}{}
-		}
-	}
 	for serviceID, svc := range manifest.Services {
 		if !svc.Enabled {
 			continue
@@ -5440,6 +5512,22 @@ func validateClusteredFoghornDatabases(manifest *inventory.Manifest) error {
 		alias := strings.ReplaceAll(serviceID, "-", "_")
 		if deploy != "foghorn" || alias == deploy || strings.TrimSpace(svc.Cluster) == "" {
 			continue
+		}
+		view, err := manifest.WithDatabaseDeployment(manifest.ServiceDatabaseDeployment(serviceID))
+		if err != nil {
+			if manifest.Infrastructure.Postgres == nil && len(manifest.Infrastructure.DatabaseDeployments) == 0 {
+				continue
+			}
+			return err
+		}
+		declared := map[string]struct{}{}
+		for _, db := range expandedYugabyteDatabaseConfigs(view.Infrastructure.Postgres.Databases, view) {
+			declared[db.Name] = struct{}{}
+		}
+		for _, inst := range view.Infrastructure.Postgres.Instances {
+			for _, db := range inst.Databases {
+				declared[db.Name] = struct{}{}
+			}
 		}
 		if _, ok := declared[alias]; !ok {
 			return fmt.Errorf("clustered Foghorn %q requires its own per-cell database %q, but it is not declared; each cell needs a separate physical Foghorn database because cell_storage_identity is a singleton. Declare the logical `foghorn` database so it expands per cell, or declare %q explicitly", serviceID, alias, alias)
@@ -5500,6 +5588,9 @@ func clusterScopedDatabaseAliases(db inventory.DatabaseConfig, manifest *invento
 			deploy = serviceID
 		}
 		if deploy != logicalName {
+			continue
+		}
+		if manifest.ServiceDatabaseDeployment(serviceID) != inventory.DatabaseDeploymentName(manifest.DatabaseDeployment) {
 			continue
 		}
 		alias := strings.ReplaceAll(serviceID, "-", "_")
@@ -5986,44 +6077,40 @@ func kafkaTopicsToMetadata(topics []inventory.KafkaTopic) []map[string]any {
 // Returns nil when the manifest has no Postgres or the password is absent so
 // the role var removes any previously managed drop-in.
 func buildAnalyticsNamedCollections(manifest *inventory.Manifest, sharedEnv map[string]string) []map[string]any {
-	pg := manifest.Infrastructure.Postgres
 	password := sharedEnv["ANALYTICS_RO_PASSWORD"]
-	if pg == nil || !pg.Enabled || password == "" {
-		return nil
-	}
-	pgHostName := pg.Host
-	if pg.IsYugabyte() && len(pg.Nodes) > 0 {
-		pgHostName = pg.Nodes[0].Host
-	}
-	// Colocated ClickHouse+Postgres connects over loopback, which the default
-	// pg_hba already allows. Split hosts fall back to the mesh address; that
-	// requires a pg_hba entry for the mesh CIDR.
-	pgAddr := "127.0.0.1"
-	if ch := manifest.Infrastructure.ClickHouse; ch == nil || !ch.HasHost(pgHostName) {
-		pgAddr = manifest.MeshAddress(pgHostName)
-	}
-	if pgAddr == "" {
+	if password == "" {
 		return nil
 	}
 	var collections []map[string]any
 	for _, schema := range []string{"quartermaster", "commodore", "purser"} {
-		for _, db := range pg.Databases {
-			if db.Name != schema {
-				continue
-			}
-			collections = append(collections, map[string]any{
-				"name": schema + "_pg",
-				"settings": map[string]any{
-					"host":     pgAddr,
-					"port":     pg.EffectivePort(),
-					"database": schema,
-					"schema":   schema,
-					"user":     "frameworks_analytics_ro",
-					"password": password,
-				},
-			})
-			break
+		view, err := manifest.WithDatabaseDeployment(manifest.ServiceDatabaseDeployment(schema))
+		if err != nil {
+			continue
 		}
+		task := &orchestrator.Task{Type: schema, ServiceID: schema}
+		inst, db, ok := declaredPostgresDatabaseForService(task, view, map[string]string{"DATABASE_NAME": schema})
+		if !ok {
+			continue
+		}
+		pg := view.Infrastructure.Postgres
+		pgHostName, port := pg.Host, pg.EffectivePort()
+		if inst != nil {
+			pgHostName, port = inst.Host, postgresInstancePort(inst)
+		} else if pg.IsYugabyte() && len(pg.Nodes) > 0 {
+			pgHostName = pg.Nodes[0].Host
+		}
+		// Loopback is valid only when every ClickHouse node shares the SQL host.
+		pgAddr := manifest.MeshAddress(pgHostName)
+		if ch := manifest.Infrastructure.ClickHouse; ch != nil && len(ch.AllHosts()) == 1 && ch.HasHost(pgHostName) {
+			pgAddr = "127.0.0.1"
+		}
+		if pgAddr == "" {
+			continue
+		}
+		collections = append(collections, map[string]any{
+			"name":     schema + "_pg",
+			"settings": map[string]any{"host": pgAddr, "port": port, "database": db.Name, "schema": schema, "user": "frameworks_analytics_ro", "password": password},
+		})
 	}
 	return collections
 }
@@ -6286,6 +6373,13 @@ test -f /etc/privateer/privateer.env && sed 's/=.*/=<redacted>/' /etc/privateer/
 // provisionTask provisions one task on its host. beforeChange, when set, runs right before the provisioner applies a
 // change to the host, and its error aborts the task; a task whose precheck finds nothing to change never calls it.
 func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.Host, pool *ssh.Pool, manifest *inventory.Manifest, force, ignoreValidation bool, runtimeData map[string]any, manifestDir string, sharedEnv map[string]string, clusterEnvs map[string]map[string]string, releaseRepos []string, beforeChange func() error) (*taskProvisionOutcome, error) {
+	if task.Type == "yugabyte" || task.Type == "postgres" {
+		view, err := manifest.SQLDeploymentForHost(task.Host)
+		if err != nil {
+			return nil, err
+		}
+		manifest = view
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -6623,6 +6717,16 @@ func localProxyTrustCIDRs(deployMode string) string {
 // Merge order (later wins): auto-generated → shared env_files → cluster
 // env_files (matched by task.ClusterID) → per-service env_file → inline config.
 func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, runtimeData map[string]any, perServiceEnvFile string, manifestDir string, sharedEnv map[string]string, clusterEnvs map[string]map[string]string, deployMode string) (map[string]string, error) {
+	if manifest.Infrastructure.Postgres != nil || len(manifest.Infrastructure.DatabaseDeployments) > 0 {
+		name := manifest.ServiceDatabaseDeployment(task.ServiceID)
+		view, err := manifest.WithDatabaseDeployment(name)
+		if err != nil && name != inventory.PrimaryDatabaseDeployment {
+			return nil, err
+		}
+		if err == nil {
+			manifest = view
+		}
+	}
 	env := make(map[string]string)
 
 	// Which peer may be believed when it sets X-Forwarded-For. This exists to
@@ -7341,13 +7445,22 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 		if env["DATABASE_NAME"] != "" {
 			dbName = env["DATABASE_NAME"]
 		}
-		env["DATABASE_URL"] = buildDatabaseURL(manifest, env["DATABASE_HOST"], dbPort, dbUser, dbPass, dbName)
+		dsnManifest := manifest
+		if inst, _, ok := declaredPostgresDatabaseForService(task, manifest, env); ok && inst != nil {
+			view := *manifest
+			view.Infrastructure.Postgres = &inventory.PostgresConfig{Engine: "postgres"}
+			dsnManifest = &view
+		}
+		env["DATABASE_URL"] = buildDatabaseURL(dsnManifest, env["DATABASE_HOST"], dbPort, dbUser, dbPass, dbName)
 	}
 
 	// Final per-cell binding check for a clustered Foghorn: the EFFECTIVE database (from DATABASE_URL, or DATABASE_NAME)
 	// must be this cell's own alias. This runs on EVERY deployment path that builds task env (provision, apply, diff,
 	// dry-run), so an explicit DATABASE_URL/DATABASE_NAME — or a fallback to the shared deploy database — that points a
 	// cell at the wrong (or shared) database is refused here, not discovered at boot.
+	if err := validateServiceDatabaseDeploymentEnv(task, manifest, env); err != nil {
+		return nil, err
+	}
 	if err := validateClusteredFoghornEffectiveDB(task, manifest, env); err != nil {
 		return nil, err
 	}
@@ -7925,6 +8038,9 @@ func declaredPostgresPasswordEnvKeys(instancePrefix, dbName, owner string) []str
 // pg.Databases, not an instances[] entry): its host/port come from the Yugabyte nodes, so the caller
 // must not derive them from an instance.
 func declaredPostgresDatabaseForService(task *orchestrator.Task, manifest *inventory.Manifest, env map[string]string) (*inventory.PostgresInstance, inventory.DatabaseConfig, bool) {
+	if manifest.DatabaseDeployment != "" && manifest.ServiceDatabaseDeployment(task.ServiceID) != manifest.DatabaseDeployment {
+		return nil, inventory.DatabaseConfig{}, false
+	}
 	pg := manifest.Infrastructure.Postgres
 	if pg == nil {
 		return nil, inventory.DatabaseConfig{}, false

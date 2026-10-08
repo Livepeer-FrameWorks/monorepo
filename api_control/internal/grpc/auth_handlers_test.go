@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"github.com/yugabyte/pgx/v5/pgconn"
 	"net/url"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -63,7 +64,7 @@ func TestRegister(t *testing.T) {
 	t.Run("existing_user_soft_fails", func(t *testing.T) {
 		s, mock, done := newMockServer(t)
 		defer done()
-		mock.ExpectQuery("SELECT id FROM commodore.users WHERE email").
+		mock.ExpectQuery(regexp.QuoteMeta("SELECT id FROM commodore.users WHERE lower(email::text) = lower($1::text)")).
 			WithArgs("a@b.com").
 			WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("existing-id"))
 		resp, err := s.Register(context.Background(), &commodorepb.RegisterRequest{
@@ -82,7 +83,7 @@ func TestRegister(t *testing.T) {
 	t.Run("concurrent_duplicate_converges_under_pgx", func(t *testing.T) {
 		s, mock, done := newMockServer(t)
 		defer done()
-		mock.ExpectQuery("SELECT id FROM commodore.users WHERE email").
+		mock.ExpectQuery(regexp.QuoteMeta("SELECT id FROM commodore.users WHERE lower(email::text) = lower($1::text)")).
 			WithArgs("new@example.com").
 			WillReturnError(sql.ErrNoRows)
 		mock.ExpectQuery("COUNT").
@@ -109,7 +110,7 @@ func TestRegister(t *testing.T) {
 	t.Run("happy_path_creates_owner", func(t *testing.T) {
 		s, mock, done := newMockServer(t)
 		defer done()
-		mock.ExpectQuery("SELECT id FROM commodore.users WHERE email").
+		mock.ExpectQuery(regexp.QuoteMeta("SELECT id FROM commodore.users WHERE lower(email::text) = lower($1::text)")).
 			WithArgs("new@example.com").
 			WillReturnError(sql.ErrNoRows)
 		mock.ExpectQuery("COUNT").
@@ -256,7 +257,7 @@ func TestResendVerificationQueuesDeliveryWithCooldown(t *testing.T) {
 func TestForgotPasswordPersistsPerAccountCooldown(t *testing.T) {
 	s, mock, done := newMockServer(t)
 	defer done()
-	mock.ExpectQuery("SELECT id FROM commodore.users WHERE email").
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT id FROM commodore.users WHERE lower(email::text) = lower($1::text)")).
 		WithArgs("user@example.com").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("user-1"))
 	mock.ExpectExec("UPDATE commodore.users.*reset_token_expires <=").
@@ -310,7 +311,7 @@ func TestRecoveryTurnstileIsRequiredWhenConfigured(t *testing.T) {
 	wantCode(t, err, codes.PermissionDenied)
 
 	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("x-client-ip", "203.0.113.10"))
-	mock.ExpectQuery("SELECT id FROM commodore.users WHERE email").
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT id FROM commodore.users WHERE lower(email::text) = lower($1::text)")).
 		WithArgs("user@example.com").
 		WillReturnError(sql.ErrNoRows)
 	resp, err := s.ForgotPassword(ctx, &commodorepb.ForgotPasswordRequest{Email: "user@example.com", TurnstileToken: "proof"})

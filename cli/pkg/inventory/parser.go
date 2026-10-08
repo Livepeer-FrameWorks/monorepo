@@ -356,6 +356,9 @@ func (m *Manifest) Validate() error {
 	}
 
 	// Validate host references in infrastructure
+	if err := m.validateDatabaseDeployments(); err != nil {
+		return err
+	}
 	if m.Infrastructure.Postgres != nil && m.Infrastructure.Postgres.Enabled {
 		if err := validateDatabaseRuntimeRoles("postgres", m.Infrastructure.Postgres.Databases); err != nil {
 			return err

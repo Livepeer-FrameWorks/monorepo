@@ -50,10 +50,7 @@ func doctorPostgresMigrations(
 		return result
 	}
 
-	databases := schemaDatabasesFromConfigs(pg.Databases)
-	if pg.IsYugabyte() {
-		databases = yugabyteSchemaDatabases(pg.Databases, manifest)
-	}
+	databases := yugabyteSchemaDatabases(pg.Databases, manifest)
 	if len(databases) == 0 {
 		result.OK = true
 		result.Status = "healthy"

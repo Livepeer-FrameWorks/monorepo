@@ -45,6 +45,17 @@ type priorReleaseGap struct {
 // An interrupt (ctx ending) is reported as such, never as an unfinished release: the reads it cuts short fail as
 // transport errors.
 func enforcePriorReleasesComplete(ctx context.Context, out io.Writer, rc *resolvedCluster, sshPool *ssh.Pool, target string) error {
+	if hasUnscopedDatabaseDeployments(rc.Manifest) {
+		first := true
+		return forEachDatabaseDeployment(rc.Manifest, func(view *inventory.Manifest) error {
+			if !first {
+				view.Infrastructure.ClickHouse = nil
+			}
+			first = false
+			return enforcePriorReleasesComplete(ctx, out, rc.withDatabaseManifest(view), sshPool, target)
+		})
+	}
+
 	manifest := rc.Manifest
 	var gaps []priorReleaseGap
 	fmt.Fprintf(out, "[preflight] checking that every release before %s is complete\n", target)

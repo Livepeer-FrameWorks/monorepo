@@ -49,6 +49,14 @@ Seed operations are idempotent (ON CONFLICT guards).`,
 }
 
 func runSeed(cmd *cobra.Command, rc *resolvedCluster, demo, force bool) error {
+	if hasUnscopedDatabaseDeployments(rc.Manifest) {
+		if demo {
+			return fmt.Errorf("select a database deployment before applying demo seeds")
+		}
+		return forEachDatabaseDeployment(rc.Manifest, func(view *inventory.Manifest) error {
+			return runSeed(cmd, rc.withDatabaseManifest(view), false, force)
+		})
+	}
 	manifest := rc.Manifest
 
 	seedMode := "static"
@@ -105,10 +113,7 @@ func runSeed(cmd *cobra.Command, rc *resolvedCluster, demo, force bool) error {
 			return pwErr
 		}
 
-		databases := pg.Databases
-		if pg.IsYugabyte() {
-			databases = expandedYugabyteDatabaseConfigs(pg.Databases, manifest)
-		}
+		databases := expandedYugabyteDatabaseConfigs(pg.Databases, manifest)
 		var dbNames []string
 		for _, d := range databases {
 			dbNames = append(dbNames, d.Name)

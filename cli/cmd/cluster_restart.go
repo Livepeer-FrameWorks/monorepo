@@ -54,6 +54,14 @@ probes, /health check, etc.) to confirm the service came back healthy.`,
 // the role picks the right systemd unit or compose project without the CLI
 // having to guess frameworks-<service>.
 func runRestart(cmd *cobra.Command, rc *resolvedCluster, serviceName string, validate bool) error {
+	if (serviceName == "yugabyte" || serviceName == "postgres") && hasUnscopedDatabaseDeployments(rc.Manifest) {
+		return forEachDatabaseDeployment(rc.Manifest, func(view *inventory.Manifest) error {
+			if (serviceName == "yugabyte") != view.Infrastructure.Postgres.IsYugabyte() {
+				return nil
+			}
+			return runRestart(cmd, rc.withDatabaseManifest(view), serviceName, validate)
+		})
+	}
 	manifest := rc.Manifest
 	var err error
 

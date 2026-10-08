@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS periscope.idx_periscope_delegated_jwt_replays_expires_at;

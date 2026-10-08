@@ -56,6 +56,12 @@ func startOutboxRealPG(t *testing.T) *sql.DB {
 	if err := dockerpg.WaitReady(db, name); err != nil {
 		t.Fatal(err)
 	}
+	createOutboxSchema(t, db)
+	return db
+}
+
+func createOutboxSchema(t *testing.T, db *sql.DB) {
+	t.Helper()
 	ddl, err := TableDDL(testSchema)
 	if err != nil {
 		t.Fatal(err)
@@ -63,7 +69,6 @@ func startOutboxRealPG(t *testing.T) *sql.DB {
 	if _, err := db.Exec(`CREATE SCHEMA ` + testSchema + `; ` + ddl); err != nil {
 		t.Fatal(err)
 	}
-	return db
 }
 
 // recordingPublisher records every batch it receives. failIDs makes the
@@ -157,7 +162,20 @@ func makeDue(t *testing.T, db *sql.DB) {
 }
 
 func TestDomainEventOutbox_RealPG(t *testing.T) {
-	db := startOutboxRealPG(t)
+	runDomainEventOutbox(t, startOutboxRealPG(t))
+}
+
+func TestDomainEventOutbox_RealYugabyte(t *testing.T) {
+	db, ok := dockerpg.OpenSharedYugabyteBaseline(t, "outbox", "bosun")
+	if !ok {
+		t.Fatal("run make verify-domain-outbox-engines to provide the isolated Yugabyte fixture")
+	}
+	createOutboxSchema(t, db)
+	runDomainEventOutbox(t, db)
+}
+
+func runDomainEventOutbox(t *testing.T, db *sql.DB) {
+	t.Helper()
 	ctx := context.Background()
 	reset := func(t *testing.T) {
 		t.Helper()

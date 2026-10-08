@@ -67,13 +67,29 @@ func digestKeys(digests map[string]string) []string {
 // contractGateDigests returns, for every database with a contract migration pending up to target, its live ledger
 // digest keyed like the backup manifest.
 func contractGateDigests(ctx context.Context, rc *resolvedCluster, sshPool *ssh.Pool, target string) (map[string]string, error) {
+	if hasUnscopedDatabaseDeployments(rc.Manifest) {
+		all := map[string]string{}
+		first := true
+		err := forEachDatabaseDeployment(rc.Manifest, func(view *inventory.Manifest) error {
+			if !first {
+				view.Infrastructure.ClickHouse = nil
+			}
+			first = false
+			items, err := contractGateDigests(ctx, rc.withDatabaseManifest(view), sshPool, target)
+			for key, value := range items {
+				if _, exists := all[key]; exists {
+					return fmt.Errorf("ambiguous backup database %s", key)
+				}
+				all[key] = value
+			}
+			return err
+		})
+		return all, err
+	}
 	manifest := rc.Manifest
 	digests := map[string]string{}
 	if pg := manifest.Infrastructure.Postgres; pg != nil && pg.Enabled {
-		databases := schemaDatabasesFromConfigs(pg.Databases)
-		if pg.IsYugabyte() {
-			databases = yugabyteSchemaDatabases(pg.Databases, manifest)
-		}
+		databases := yugabyteSchemaDatabases(pg.Databases, manifest)
 		if len(databases) > 0 {
 			host, password, err := postgresLedgerAccess(ctx, rc, pg, sshPool)
 			if err != nil {
@@ -251,6 +267,20 @@ func requireDataMigrationBackup(ctx context.Context, cmd *cobra.Command, rc *res
 // serviceDatabaseDigests returns the live ledger digest of every physical database the service owns. A per-cell
 // alias (foghorn-eu) owns its own cell database; otherwise every physical database of the owned logical database.
 func serviceDatabaseDigests(ctx context.Context, rc *resolvedCluster, pool *ssh.Pool, service string) (map[string]string, error) {
+	if hasUnscopedDatabaseDeployments(rc.Manifest) {
+		all := map[string]string{}
+		err := forEachDatabaseDeployment(rc.Manifest, func(view *inventory.Manifest) error {
+			if _, found := rc.Manifest.Services[service]; found && rc.Manifest.ServiceDatabaseDeployment(service) != view.DatabaseDeployment {
+				return nil
+			}
+			items, err := serviceDatabaseDigests(ctx, rc.withDatabaseManifest(view), pool, service)
+			for key, value := range items {
+				all[key] = value
+			}
+			return err
+		})
+		return all, err
+	}
 	manifest := rc.Manifest
 	pg := manifest.Infrastructure.Postgres
 	if pg == nil || !pg.Enabled {
@@ -268,10 +298,7 @@ func serviceDatabaseDigests(ctx context.Context, rc *resolvedCluster, pool *ssh.
 	if !ok {
 		return nil, nil
 	}
-	databases := schemaDatabasesFromConfigs(pg.Databases)
-	if pg.IsYugabyte() {
-		databases = yugabyteSchemaDatabases(pg.Databases, manifest)
-	}
+	databases := yugabyteSchemaDatabases(pg.Databases, manifest)
 	alias := strings.ReplaceAll(service, "-", "_")
 	var names []string
 	for _, db := range databases {

@@ -387,6 +387,19 @@ func classifyUpgradeFirstInstall(state *detect.ServiceState, withinRelease bool,
 }
 
 func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version string, dryRun, skipValidation, yes, noRollback, skipMigrationCheck, skipDataMigrationCheck, withinRelease bool) (upgradeResult, error) {
+	if (serviceName == "yugabyte" || serviceName == "postgres") && hasUnscopedDatabaseDeployments(rc.Manifest) {
+		var combined upgradeResult
+		err := forEachDatabaseDeployment(rc.Manifest, func(view *inventory.Manifest) error {
+			if (serviceName == "yugabyte") != view.Infrastructure.Postgres.IsYugabyte() {
+				return nil
+			}
+			result, err := runUpgrade(cmd, rc.withDatabaseManifest(view), serviceName, version, dryRun, skipValidation, yes, noRollback, skipMigrationCheck, skipDataMigrationCheck, withinRelease)
+			combined.changed = combined.changed || result.changed
+			combined.installed = combined.installed || result.installed
+			return err
+		})
+		return combined, err
+	}
 	var result upgradeResult
 	manifest := rc.Manifest
 	manifestPath := rc.ManifestPath

@@ -146,7 +146,8 @@ func (q *Queries) GetUserEmail(ctx context.Context, arg GetUserEmailParams) (sql
 const getVerificationResendUser = `-- name: GetVerificationResendUser :one
 SELECT id, tenant_id::text AS tenant_id, COALESCE(verified, false)::boolean AS verified, token_expires_at
 FROM commodore.users
-WHERE email = $1
+WHERE lower(email::text) = lower($1::text)
+  AND email IS NOT NULL
 `
 
 type GetVerificationResendUserRow struct {

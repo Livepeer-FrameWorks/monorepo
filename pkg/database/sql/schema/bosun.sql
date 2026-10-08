@@ -92,8 +92,8 @@ CREATE TABLE IF NOT EXISTS bosun.webhook_events (
     CONSTRAINT uq_webhook_events_event_id UNIQUE (event_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_webhook_events_received
-    ON bosun.webhook_events (received_at);
+CREATE INDEX IF NOT EXISTS idx_webhook_events_received_range
+    ON bosun.webhook_events (received_at ASC);
 
 -- One delivery of one event to one endpoint, or a test delivery (kind 'test',
 -- no event). status 'pending' covers the first attempt and every retry;
@@ -139,8 +139,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_webhook_deliveries_endpoint_event
     ON bosun.webhook_deliveries (endpoint_id, event_id)
     WHERE event_id IS NOT NULL;
 
-CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_due
-    ON bosun.webhook_deliveries (next_attempt_at, id)
+CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_due_range
+    ON bosun.webhook_deliveries (next_attempt_at ASC, id)
     WHERE status = 'pending';
 
 CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_leased
@@ -153,8 +153,8 @@ CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_tenant_created
 CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_endpoint_created
     ON bosun.webhook_deliveries (tenant_id, endpoint_id, created_at DESC, id DESC);
 
-CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_test_created
-    ON bosun.webhook_deliveries (created_at)
+CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_test_created_range
+    ON bosun.webhook_deliveries (created_at ASC)
     WHERE kind = 'test';
 
 -- One HTTP attempt of a delivery. status_code is 0 when no response arrived;
@@ -200,12 +200,12 @@ CREATE TABLE IF NOT EXISTS bosun.webhook_notification_outbox (
     CONSTRAINT chk_webhook_notification_outbox_kind CHECK (kind IN ('endpoint_disabled'))
 );
 
-CREATE INDEX IF NOT EXISTS idx_webhook_notification_outbox_pending
-    ON bosun.webhook_notification_outbox (next_attempt_at, id)
+CREATE INDEX IF NOT EXISTS idx_webhook_notification_outbox_pending_range
+    ON bosun.webhook_notification_outbox (next_attempt_at ASC, id)
     WHERE completed_at IS NULL;
 
-CREATE INDEX IF NOT EXISTS idx_webhook_notification_outbox_completed
-    ON bosun.webhook_notification_outbox (completed_at)
+CREATE INDEX IF NOT EXISTS idx_webhook_notification_outbox_completed_range
+    ON bosun.webhook_notification_outbox (completed_at ASC)
     WHERE completed_at IS NOT NULL;
 
 -- Domain event outbox (pkg/events/outbox.TableDDL("bosun")).
@@ -234,16 +234,16 @@ CREATE TABLE IF NOT EXISTS bosun.domain_event_outbox (
     CONSTRAINT chk_bosun_domain_event_outbox_scope_tenant CHECK ((scope = 'tenant') = (tenant_id IS NOT NULL))
 );
 
-CREATE INDEX IF NOT EXISTS idx_bosun_domain_event_outbox_pending
-    ON bosun.domain_event_outbox (enqueued_at, event_id)
+CREATE INDEX IF NOT EXISTS idx_bosun_domain_event_outbox_pending_range
+    ON bosun.domain_event_outbox (enqueued_at ASC, event_id)
     WHERE completed_at IS NULL;
 
 CREATE INDEX IF NOT EXISTS idx_bosun_domain_event_outbox_aggregate
     ON bosun.domain_event_outbox (aggregate_type, aggregate_id, enqueued_at, event_id)
     WHERE completed_at IS NULL;
 
-CREATE INDEX IF NOT EXISTS idx_bosun_domain_event_outbox_completed
-    ON bosun.domain_event_outbox (completed_at)
+CREATE INDEX IF NOT EXISTS idx_bosun_domain_event_outbox_completed_range
+    ON bosun.domain_event_outbox (completed_at ASC)
     WHERE completed_at IS NOT NULL;
 
 -- Schema baseline identity marker. Records that this database was created from the

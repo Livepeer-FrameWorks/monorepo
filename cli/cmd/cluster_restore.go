@@ -83,6 +83,7 @@ them back. Migrations that ran after the backup are listed; re-apply them with '
 	}
 	cmd.Flags().StringVar(&from, "from", "", "Backup directory or s3:// URL (required)")
 	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "Skip the confirmation prompt")
+	cmd.Flags().Bool("leave-stopped", false, "Keep affected services stopped after restore, including on failure, for a database cutover")
 	addSelectionFlags(cmd, &sel)
 	cmd.AddCommand(newClusterRestoreFinishCmd(), newClusterRestoreRollbackCmd())
 	return cmd
@@ -254,7 +255,12 @@ func runRestore(cmd *cobra.Command, rc *resolvedCluster, from string, sel backup
 		fmt.Fprintf(out, "  - replace the rows of %d ClickHouse fact tables (live rows kept in <table>%s); facts written after %s are not in the backup\n",
 			len(m.ClickHouse.Tables), provisioner.RestorePreviousSuffix, m.CreatedAt.Format(time.RFC3339))
 	}
-	fmt.Fprintf(out, "  - stop, then start and validate: %s\n", strings.Join(services, ", "))
+	leaveStopped := boolFlag(cmd, "leave-stopped")
+	if leaveStopped {
+		fmt.Fprintf(out, "  - stop and leave stopped until connection settings are redeployed: %s\n", strings.Join(services, ", "))
+	} else {
+		fmt.Fprintf(out, "  - stop, then start and validate: %s\n", strings.Join(services, ", "))
+	}
 	if !yes && !confirmRestore(out) {
 		fmt.Fprintln(out, "Cancelled")
 		return nil
@@ -301,7 +307,7 @@ func runRestore(cmd *cobra.Command, rc *resolvedCluster, from string, sel backup
 	}
 
 	control := newRestoreServiceControlFn(cmd, rc, sshPool)
-	swapErr := stopSwapStart(ctx, out, control, services, func() error {
+	swapErr := stopSwapWithRestart(ctx, out, control, services, !leaveStopped, func() error {
 		for _, t := range targets {
 			if err := provisioner.SwapRestoredDatabase(ctx, t.runner, t.plan.server, t.db.Name); err != nil {
 				return fmt.Errorf("%s: %w", t.db.Key(), err)
@@ -328,17 +334,27 @@ func runRestore(cmd *cobra.Command, rc *resolvedCluster, from string, sel backup
 
 // stopSwapStart stops the services, runs swap, and starts the services again even when swap failed.
 func stopSwapStart(ctx context.Context, out io.Writer, control serviceControl, services []string, swap func() error) error {
+	return stopSwapWithRestart(ctx, out, control, services, true, swap)
+}
+
+func stopSwapWithRestart(ctx context.Context, out io.Writer, control serviceControl, services []string, restart bool, swap func() error) error {
 	var stopped []string
 	for _, svc := range services {
 		fmt.Fprintf(out, "Stopping %s...\n", svc)
 		// A failed stop may already have stopped some replicas of this service.
 		stopped = append(stopped, svc)
 		if err := control.Stop(ctx, svc); err != nil {
+			if !restart {
+				return fmt.Errorf("stop %s: %w; affected services remain stopped", svc, err)
+			}
 			startErr := startServices(ctx, out, control, stopped)
 			return errors.Join(fmt.Errorf("stop %s: %w", svc, err), startErr)
 		}
 	}
 	swapErr := swap()
+	if !restart {
+		return swapErr
+	}
 	startErr := startServices(ctx, out, control, stopped)
 	return errors.Join(swapErr, startErr)
 }
@@ -419,7 +435,11 @@ func restoreFloorGap(ctx context.Context, rc *resolvedCluster, pool *ssh.Pool, t
 	if t.db.Instance != "" {
 		return nil, nil
 	}
-	pg := rc.Manifest.Infrastructure.Postgres
+	view, scopeErr := rc.Manifest.SQLDeploymentForHost(t.plan.host.Name)
+	if scopeErr != nil {
+		return nil, scopeErr
+	}
+	pg := view.Infrastructure.Postgres
 	source := firstNonEmpty(t.db.Source, t.db.Name)
 	withBaseline, err := provisioner.ServiceDatabasesWithBaseline([]provisioner.SchemaDatabase{{Name: restored, SourceName: source, Schema: source}})
 	if err != nil || len(withBaseline) == 0 {

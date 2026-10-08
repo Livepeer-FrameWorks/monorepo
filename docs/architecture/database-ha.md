@@ -9,8 +9,156 @@ service that talked to the DB. This note records how client ingress works now.
 
 YSQL (port 5433) is served by **every** tserver. Clients never need the master
 _leader_; the tserver they connect to routes to the relevant tablet leaders
-internally. So spreading client connections across all nodes is pure upside, and a
-single node being down must not block ingress.
+internally. Connections use the nodes of the service's selected database
+deployment, and a single node being down must not block ingress. Spreading
+connections across continents introduces remote execution and is not a substitute
+for a regional quorum.
+
+## Independent regional SQL deployments
+
+`infrastructure.postgres` remains the default deployment, named `primary`.
+`infrastructure.database_deployments.<name>` declares another independent SQL
+deployment. A service selects one through `database_deployment`; omission preserves
+the primary binding. The CLI provisions distinct master cohorts and routes schema
+work, backup, restore, diagnostics and rolling operations to the selected deployment.
+An explicit stale `DATABASE_URL` cannot override a service's regional binding.
+
+Each service owns its database. Foghorn aliases also retain separate physical
+databases per cell (`foghorn_eu`, `foghorn_us`, etc.), even when cells share one
+deployment. A physical database name must have exactly one deployment owner.
+Bindings do not copy existing state or replicate it between deployments.
+
+Keep the core control plane and ClickHouse in the EU unless their requirements
+change. US-East cells can use an independent US-East Yugabyte universe. A future
+US-West cell can share that universe with its own database until latency or outage
+requirements justify another local universe. This preserves a service boundary
+that also permits a future PostgreSQL deployment; the current PostgreSQL role is
+standalone and does not implement Patroni or synchronous-replica HA.
+
+Local SQL does not by itself make a cell independent of the EU control plane.
+Admission, authority renewal, identity and configuration dependencies need explicit
+outage behavior too. Operations that still synchronously require EU services retain
+that dependency even when the cell's database is local. Cross-region replication
+also needs an ownership/conflict model; these independent deployments do not make
+one service's data writable in every region.
+
+The Yugabyte role supports one master/tserver node (no HA), or three with RF3 for
+one-node fault tolerance. Two nodes do not retain a majority after losing one.
+Another region is a separate deployment, not another voter appended to the EU
+cohort. Named deployments require explicit cloud, region and actual zone labels.
+Three VMs in one site give host-level redundancy; invented zone labels do not
+protect against a site outage. Site tolerance requires replicas and voters spread
+across sufficient independent sites. Regional databases also need off-site backups
+and a tested recovery procedure: RF3 does not protect against logical deletion or
+loss of the entire region.
+
+An illustrative addition to a complete fleet manifest (declare these hosts and
+their mesh identities first):
+
+```yaml
+infrastructure:
+  # Keep the existing postgres: primary definition here.
+  database_deployments:
+    us-east:
+      enabled: true
+      engine: yugabyte
+      replication_factor: 3
+      placement_cloud: hetzner
+      placement_region: us-east
+      nodes:
+        - { host: yuga-us-1, id: 1, placement_zone: ash-dc1 }
+        - { host: yuga-us-2, id: 2, placement_zone: ash-dc1 }
+        - { host: yuga-us-3, id: 3, placement_zone: ash-dc1 }
+      databases:
+        - { name: foghorn, owner: foghorn }
+services:
+  foghorn-us:
+    enabled: true
+    deploy: foghorn
+    cluster: us
+    host: regional-us-1
+    database_deployment: us-east
+```
+
+The `foghorn` entry is a logical schema template expanded to the aliases bound to
+that deployment. US-West can use the same `database_deployment: us-east`, with its
+own service alias and cluster identity. Existing cell env files supply their
+database credentials; do not put plaintext passwords into this example.
+
+### Moving an existing cell
+
+A binding change alone would point the service at an empty database. Rehearse the
+following maintenance-window cutover with a backup first. Keep two complete fleet
+manifests: the source topology and the desired topology. Both must contain every
+replica of the affected service. Provisioning infrastructure on the destination
+must not deploy its applications yet.
+
+1. Provision the destination using the desired manifest and
+   `cluster provision --only infrastructure --database-deployment us-east`.
+2. Verify destination health, release/schema compatibility, capacity and connectivity
+   from every application replica. Remove stale database host/URL overrides.
+3. Stop the moving service with the source manifest: `cluster stop foghorn-us`.
+   Keep it stopped throughout the final backup and cutover; prevent concurrent
+   deploy/restart automation. Other cells can keep serving.
+4. Take and verify the final backup of `foghorn_us` from the source deployment.
+   The backup's database identity stays the same across the move.
+5. Using the desired manifest, restore that database with
+   `cluster restore --database-deployment us-east --database foghorn_us --from <backup> --leave-stopped`.
+   Restore verifies schema provenance, row counts and cell identity and fences
+   restored media authority before the swap. It leaves writers stopped even if
+   the operation fails.
+6. Provision the affected service with the desired manifest, without the
+   `--database-deployment` flag. Its service binding now renders the new endpoints.
+   Check all replicas' effective endpoints, health, authority recovery, admission,
+   ingest and playback before ending the maintenance window.
+
+Before destination writes begin, rollback can restore the source binding and
+redeploy its services. After any destination writes, the old source copy is stale:
+stop writers and perform a reconciled reverse move instead of switching back to
+it. Keep the old data and verified backup until the cutover is accepted. Do not
+run native `restore-fence complete` to restart old service configurations during
+this connection-setting cutover.
+
+### Catalog preloading
+
+`catalog_preload_additional_tables: true|false` is an optional setting on each
+SQL deployment and renders `ysql_catalog_preload_additional_tables` for Yugabyte.
+Omission retains the role's existing default. Changing it requires a guarded
+rolling tserver restart.
+
+Yugabyte's [catalog-cache tuning guide](https://docs.yugabyte.com/stable/best-practices-operations/ysql-catalog-cache-tuning-guide/)
+describes the tradeoff: bulk preloading can reduce on-demand catalog fetches but
+uses more backend memory and does work at startup or cache refresh. Pooling still
+matters. Measure connection startup plus the first query, warm query latency,
+backend count and memory during both normal operation and reconnect bursts.
+`make benchmark-yugabyte-catalog-preload` compares isolated release-pinned engines
+with the flag off and on; it is a planning/cache probe, not a throughput or WAN
+benchmark. Its allocated-backend-memory measurement is not total process RSS.
+
+The 2026-10-08 isolated local-engine probe (ten fresh connections, Purser admission
+query with an absent tenant) measured these medians:
+
+| Metric                                      | Preload off | Preload on |
+| ------------------------------------------- | ----------- | ---------- |
+| Connection startup                          | 13 ms       | 148 ms     |
+| First query                                 | 148 ms      | 48 ms      |
+| Startup plus first query                    | 162 ms      | 197 ms     |
+| Warm query                                  | 3.1 ms      | 3.2 ms     |
+| Allocated backend memory after both queries | 3.1 MiB     | 32.1 MiB   |
+| First-query catalog reads                   | 355         | 142        |
+
+Keep the default off for this local topology: the first-query saving did not
+offset startup work. This probe does not reproduce the three-node production
+topology or its 638-read observation. A backend farther from its master may gain
+more, but enable the setting there only after measuring the combined cost and
+memory at the intended connection count. Pool prewarming can move startup work
+away from user requests; it does not remove its CPU or memory cost.
+
+Catalog requests travel from the SQL backend to the master/cache, not from the
+application for every catalog read. A US client using EU SQL does not multiply
+638 catalog reads by the transatlantic RTT. US-West using US-East SQL retains
+its client-to-database latency even with preload enabled. A fully local universe
+can still benefit from fewer cold catalog fetches, but its benefit may be smaller.
 
 ## Smart driver, not a single pinned host
 
@@ -70,6 +218,39 @@ query errors and must be retried by the caller (`database.RetryPostgres` /
   rebalancing: a tserver that rejoins or is added receives connections as the pool
   opens new ones, within the lifetime.
 - Caller context deadlines on queries.
+
+## Ordered queries and the real-engine plan gate
+
+A leading timestamp/date index key declares `ASC` or `DESC` explicitly. Yugabyte
+otherwise hashes the first key, which cannot serve an ordered range scan. This
+matters for claims and retention sweeps even when a colocated database keeps its
+hot queue tables distributed. Equality lookups can retain hash distribution.
+Globally ordered range indexes can concentrate writes at the newest key range;
+measure leader load as queues grow and introduce explicit work partitions when
+needed rather than relying on hashing to preserve global ordering.
+
+Index replacement uses a new name in an `expand/*.notx.sql` migration, builds
+concurrently, and checks validity, readiness, target table and key columns in
+postdeploy. Contract drops the old index after the operator's observation window
+and backup gate. During the overlap both indexes consume storage and write work;
+run migrations sequentially within a universe and monitor catalog churn and
+tablet pressure. A fresh baseline contains only the replacements. Shipped
+migrations retain their original checksums.
+
+`make verify-yugabyte-explain-audit` seeds service schemas on the pinned engine in
+both declared and distributed layouts. CI and `verify-prepush` enforce accepted
+plan flags and scan/request budgets; results and raw plans are artifacts. The
+fixture has explicit coverage exceptions, synthetic bindings and queries that
+return no rows, all reported separately. Passing it does not prove every runtime
+SQL branch or production cardinality was exercised. An unexpected EXPLAIN failure
+fails the gate. Accepted flags also include bulk inventory scans and indexed per-candidate or
+per-cell probes. They are not equivalent to unbounded queue scans; changed budgets
+record their reviewed rationale. The shared outbox claim uses a YSQL index hint
+and first-in-aggregate probe to stop in enqueue order. This avoids sorting the
+whole pending set but can use more RPCs at small backlog sizes. PostgreSQL ignores
+the hint and preserves the same claim and locking semantics.
+Budget increases and new coverage exceptions require inspection;
+`make explain-audit-budget` is a review aid, not the normal verification target.
 
 ## Runtime session limits
 

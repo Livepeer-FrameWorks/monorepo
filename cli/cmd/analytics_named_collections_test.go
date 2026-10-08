@@ -86,3 +86,19 @@ func TestBuildAnalyticsNamedCollectionsRequiresPassword(t *testing.T) {
 		t.Fatalf("expected nil when postgres disabled, got %#v", got)
 	}
 }
+
+func TestBuildAnalyticsNamedCollectionsFollowsDatabaseDeployment(t *testing.T) {
+	m := analyticsTestManifest()
+	m.Hosts["us"] = inventory.Host{WireguardIP: "10.66.0.20"}
+	m.Infrastructure.Postgres.Databases = []inventory.DatabaseConfig{{Name: "quartermaster"}}
+	m.Infrastructure.DatabaseDeployments = map[string]*inventory.PostgresConfig{"us-east": {Enabled: true, Host: "us", Port: 5432, Databases: []inventory.DatabaseConfig{{Name: "purser"}}}}
+	m.Services = map[string]inventory.ServiceConfig{"purser": {Enabled: true, DatabaseDeployment: "us-east"}}
+	collections := buildAnalyticsNamedCollections(m, map[string]string{"ANALYTICS_RO_PASSWORD": "secret"})
+	if len(collections) != 2 {
+		t.Fatalf("missing regional collection: %#v", collections)
+	}
+	settings := collections[1]["settings"].(map[string]any)
+	if settings["host"] != "10.66.0.20" || settings["database"] != "purser" {
+		t.Fatalf("wrong regional endpoint: %#v", settings)
+	}
+}

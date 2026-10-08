@@ -12,8 +12,8 @@ CREATE TABLE IF NOT EXISTS purser.delegated_jwt_replays (
     expires_at TIMESTAMPTZ NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-CREATE INDEX IF NOT EXISTS idx_purser_delegated_jwt_replays_expires_at
-    ON purser.delegated_jwt_replays (expires_at);
+CREATE INDEX IF NOT EXISTS idx_purser_delegated_jwt_replays_expires_at_range
+    ON purser.delegated_jwt_replays (expires_at ASC);
 
 -- ============================================================================
 -- EXTENSIONS
@@ -672,8 +672,8 @@ CREATE TABLE IF NOT EXISTS purser.tenant_subscriptions (
     UNIQUE(tenant_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_tenant_subscriptions_pending_due
-    ON purser.tenant_subscriptions(pending_effective_at)
+CREATE INDEX IF NOT EXISTS idx_tenant_subscriptions_pending_due_range
+    ON purser.tenant_subscriptions(pending_effective_at ASC)
     WHERE pending_tier_id IS NOT NULL;
 
 -- ============================================================================
@@ -1248,7 +1248,7 @@ CREATE TABLE IF NOT EXISTS purser.usage_adjustments (
 -- ============================================================================
 
 CREATE INDEX IF NOT EXISTS idx_purser_usage_records_lookup ON purser.usage_records(tenant_id, cluster_id, usage_type);
-CREATE INDEX IF NOT EXISTS idx_purser_usage_records_created_at ON purser.usage_records(created_at);
+CREATE INDEX IF NOT EXISTS idx_purser_usage_records_created_at_range ON purser.usage_records(created_at ASC);
 CREATE INDEX IF NOT EXISTS idx_purser_usage_records_period ON purser.usage_records(tenant_id, period_start, period_end);
 CREATE INDEX IF NOT EXISTS idx_purser_usage_records_granularity_period ON purser.usage_records(tenant_id, granularity, period_start, period_end);
 CREATE INDEX IF NOT EXISTS idx_purser_usage_records_allowance
@@ -1297,7 +1297,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_purser_billing_tiers_default_postpaid ON p
 CREATE INDEX IF NOT EXISTS idx_purser_tenant_subscriptions_tenant ON purser.tenant_subscriptions(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_purser_tenant_subscriptions_tier ON purser.tenant_subscriptions(tier_id);
 CREATE INDEX IF NOT EXISTS idx_purser_tenant_subscriptions_status ON purser.tenant_subscriptions(status);
-CREATE INDEX IF NOT EXISTS idx_purser_tenant_subscriptions_billing_date ON purser.tenant_subscriptions(next_billing_date);
+CREATE INDEX IF NOT EXISTS idx_purser_tenant_subscriptions_billing_date_range ON purser.tenant_subscriptions(next_billing_date ASC);
 
 -- ============================================================================
 -- CLUSTER MARKETPLACE PRICING
@@ -1399,8 +1399,8 @@ CREATE TABLE IF NOT EXISTS purser.stripe_meter_events_outbox (
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_stripe_meter_events_outbox_invoice_line
     ON purser.stripe_meter_events_outbox(invoice_line_item_id, stripe_meter_event_name);
-CREATE INDEX IF NOT EXISTS idx_stripe_meter_events_outbox_pending
-    ON purser.stripe_meter_events_outbox(created_at)
+CREATE INDEX IF NOT EXISTS idx_stripe_meter_events_outbox_pending_range
+    ON purser.stripe_meter_events_outbox(created_at ASC)
     WHERE sent_at IS NULL;
 
 -- Customer invoice notifications are part of invoice finalization, not an
@@ -1426,8 +1426,8 @@ CREATE TABLE IF NOT EXISTS purser.invoice_email_outbox (
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_invoice_email_outbox_notification
     ON purser.invoice_email_outbox(invoice_id, notification_type, reminder_stage);
-CREATE INDEX IF NOT EXISTS idx_invoice_email_outbox_pending
-    ON purser.invoice_email_outbox(next_attempt_at, created_at)
+CREATE INDEX IF NOT EXISTS idx_invoice_email_outbox_pending_range
+    ON purser.invoice_email_outbox(next_attempt_at ASC, created_at)
     WHERE sent_at IS NULL;
 
 -- Effective-dated audit trail of cluster pricing config. Rating reads the row
@@ -1655,7 +1655,7 @@ CREATE TABLE IF NOT EXISTS purser.x402_nonces (
 CREATE INDEX IF NOT EXISTS idx_x402_nonces_tenant ON purser.x402_nonces(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_x402_nonces_payer ON purser.x402_nonces(payer_address, network);
 CREATE INDEX IF NOT EXISTS idx_x402_nonces_pending ON purser.x402_nonces(status, settled_at) WHERE status = 'pending';
-CREATE INDEX IF NOT EXISTS idx_x402_nonces_submitting ON purser.x402_nonces(settled_at) WHERE status = 'submitting';
+CREATE INDEX IF NOT EXISTS idx_x402_nonces_submitting_range ON purser.x402_nonces(settled_at ASC) WHERE status = 'submitting';
 
 -- Immutable x402 v2 offers. A signed EIP-3009 authorization does not carry a
 -- FrameWorks tenant ID, so the quote binds the accepted requirements to the
@@ -1766,8 +1766,8 @@ CREATE TABLE IF NOT EXISTS purser.crypto_accounting_anomalies (
     UNIQUE(kind, reference_type, reference_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_crypto_accounting_anomalies_open
-    ON purser.crypto_accounting_anomalies(last_seen_at, tenant_id)
+CREATE INDEX IF NOT EXISTS idx_crypto_accounting_anomalies_open_range
+    ON purser.crypto_accounting_anomalies(last_seen_at ASC, tenant_id)
     WHERE status = 'open';
 
 CREATE TABLE IF NOT EXISTS purser.x402_rate_limit_windows (
@@ -1779,8 +1779,8 @@ CREATE TABLE IF NOT EXISTS purser.x402_rate_limit_windows (
     PRIMARY KEY(scope, identity_hash, window_started_at)
 );
 
-CREATE INDEX IF NOT EXISTS idx_x402_rate_limit_windows_expiry
-    ON purser.x402_rate_limit_windows(window_started_at);
+CREATE INDEX IF NOT EXISTS idx_x402_rate_limit_windows_expiry_range
+    ON purser.x402_rate_limit_windows(window_started_at ASC);
 
 CREATE TABLE IF NOT EXISTS purser.x402_mutation_results (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1806,8 +1806,8 @@ CREATE TABLE IF NOT EXISTS purser.x402_mutation_results (
     UNIQUE(quote_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_x402_mutation_results_unknown
-    ON purser.x402_mutation_results(claimed_at)
+CREATE INDEX IF NOT EXISTS idx_x402_mutation_results_unknown_range
+    ON purser.x402_mutation_results(claimed_at ASC)
 	WHERE status IN ('claimed', 'completion_pending', 'operator_review');
 
 -- ============================================================================
@@ -2001,7 +2001,7 @@ CREATE INDEX IF NOT EXISTS idx_credit_notes_tenant_issued
     ON purser.credit_notes(tenant_id, issued_at DESC);
 
 CREATE INDEX IF NOT EXISTS idx_simplified_invoices_tenant ON purser.simplified_invoices(tenant_id);
-CREATE INDEX IF NOT EXISTS idx_simplified_invoices_issued ON purser.simplified_invoices(issued_at);
+CREATE INDEX IF NOT EXISTS idx_simplified_invoices_issued_range ON purser.simplified_invoices(issued_at ASC);
 CREATE INDEX IF NOT EXISTS idx_simplified_invoices_reference ON purser.simplified_invoices(reference_type, reference_id);
 CREATE INDEX IF NOT EXISTS idx_crypto_invoices_tenant ON purser.crypto_invoices(tenant_id, issued_at DESC);
 CREATE INDEX IF NOT EXISTS idx_crypto_invoices_reference ON purser.crypto_invoices(reference_type, reference_id);
@@ -2052,7 +2052,7 @@ CREATE TABLE IF NOT EXISTS purser.tenant_balance_rollups (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_tenant_balance_rollups_last_topup ON purser.tenant_balance_rollups(last_topup_at);
+CREATE INDEX IF NOT EXISTS idx_tenant_balance_rollups_last_topup_range ON purser.tenant_balance_rollups(last_topup_at ASC);
 
 -- ============================================================================
 -- MIGRATIONS (idempotent column additions for existing databases)
@@ -2186,8 +2186,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_billing_payment_attempts_seq
     ON purser.billing_payment_attempts(payment_id, attempt_number);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_billing_payment_attempts_idem
     ON purser.billing_payment_attempts(provider, idempotency_key);
-CREATE INDEX IF NOT EXISTS idx_billing_payment_attempts_next_retry
-    ON purser.billing_payment_attempts(next_retry_at, status)
+CREATE INDEX IF NOT EXISTS idx_billing_payment_attempts_next_retry_range
+    ON purser.billing_payment_attempts(next_retry_at ASC, status)
     WHERE next_retry_at IS NOT NULL AND status = 'provider_call_failed';
 CREATE INDEX IF NOT EXISTS idx_billing_payment_attempts_provider_id
     ON purser.billing_payment_attempts(provider, provider_payment_id)
@@ -2324,8 +2324,8 @@ CREATE TABLE IF NOT EXISTS purser.provider_webhook_inbox (
         CHECK (status IN ('pending', 'processing', 'failed', 'processed'))
 );
 
-CREATE INDEX IF NOT EXISTS idx_provider_webhook_inbox_pending
-    ON purser.provider_webhook_inbox(next_attempt_at, created_at)
+CREATE INDEX IF NOT EXISTS idx_provider_webhook_inbox_pending_range
+    ON purser.provider_webhook_inbox(next_attempt_at ASC, created_at)
     WHERE status IN ('pending', 'failed', 'processing');
 
 ALTER TABLE purser.billing_invoices
@@ -3013,8 +3013,8 @@ CREATE TABLE IF NOT EXISTS purser.billing_event_outbox (
     completed_at TIMESTAMPTZ
 );
 
-CREATE INDEX IF NOT EXISTS idx_purser_billing_event_outbox_pending
-    ON purser.billing_event_outbox(created_at)
+CREATE INDEX IF NOT EXISTS idx_purser_billing_event_outbox_pending_range
+    ON purser.billing_event_outbox(created_at ASC)
     WHERE completed_at IS NULL;
 
 CREATE INDEX IF NOT EXISTS idx_purser_billing_event_outbox_tenant
@@ -3053,16 +3053,16 @@ CREATE TABLE IF NOT EXISTS purser.domain_event_outbox (
     CONSTRAINT chk_purser_domain_event_outbox_scope_tenant CHECK ((scope = 'tenant') = (tenant_id IS NOT NULL))
 );
 
-CREATE INDEX IF NOT EXISTS idx_purser_domain_event_outbox_pending
-    ON purser.domain_event_outbox (enqueued_at, event_id)
+CREATE INDEX IF NOT EXISTS idx_purser_domain_event_outbox_pending_range
+    ON purser.domain_event_outbox (enqueued_at ASC, event_id)
     WHERE completed_at IS NULL;
 
 CREATE INDEX IF NOT EXISTS idx_purser_domain_event_outbox_aggregate
     ON purser.domain_event_outbox (aggregate_type, aggregate_id, enqueued_at, event_id)
     WHERE completed_at IS NULL;
 
-CREATE INDEX IF NOT EXISTS idx_purser_domain_event_outbox_completed
-    ON purser.domain_event_outbox (completed_at)
+CREATE INDEX IF NOT EXISTS idx_purser_domain_event_outbox_completed_range
+    ON purser.domain_event_outbox (completed_at ASC)
     WHERE completed_at IS NOT NULL;
 
 -- ============================================================================

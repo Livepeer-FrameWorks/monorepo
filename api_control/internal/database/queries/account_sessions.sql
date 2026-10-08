@@ -39,7 +39,8 @@ SELECT
     updated_at,
     platform_operator
 FROM commodore.users
-WHERE email = $1;
+WHERE lower(email::text) = lower(sqlc.narg(email)::text)
+  AND email IS NOT NULL;
 
 -- name: TouchUserLastLogin :exec
 UPDATE commodore.users
@@ -53,7 +54,8 @@ VALUES ($1, $2, $3, $4);
 -- name: FindUserIDByEmail :one
 SELECT id
 FROM commodore.users
-WHERE email = $1;
+WHERE lower(email::text) = lower(sqlc.narg(email)::text)
+  AND email IS NOT NULL;
 
 -- name: CountUsersForTenant :one
 SELECT COUNT(*)::integer

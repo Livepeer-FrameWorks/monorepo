@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"frameworks/cli/pkg/inventory"
 	"maps"
 	"strings"
 	"time"
@@ -232,6 +233,17 @@ func runBelowFloorGuard(ctx context.Context, rc *resolvedCluster, sshPool *ssh.P
 // create: they do not exist yet, and they are born from the current baseline
 // whose marker folds every below-floor migration.
 func runBelowFloorGuardExcluding(ctx context.Context, rc *resolvedCluster, sshPool *ssh.Pool, excluded map[string]struct{}) error {
+	if hasUnscopedDatabaseDeployments(rc.Manifest) {
+		first := true
+		return forEachDatabaseDeployment(rc.Manifest, func(view *inventory.Manifest) error {
+			if !first {
+				view.Infrastructure.ClickHouse = nil
+			}
+			first = false
+			return runBelowFloorGuardExcluding(ctx, rc.withDatabaseManifest(view), sshPool, excluded)
+		})
+	}
+
 	manifest := rc.Manifest
 
 	if pg := manifest.Infrastructure.Postgres; pg != nil && pg.Enabled {
@@ -243,10 +255,7 @@ func runBelowFloorGuardExcluding(ctx context.Context, rc *resolvedCluster, sshPo
 					pgHost = h
 				}
 			}
-			databases := schemaDatabasesFromConfigs(pg.Databases)
-			if pg.IsYugabyte() {
-				databases = yugabyteSchemaDatabases(pg.Databases, manifest)
-			}
+			databases := yugabyteSchemaDatabases(pg.Databases, manifest)
 			databases = excludeSchemaDatabases(databases, excluded)
 			if len(databases) > 0 {
 				var sharedEnv map[string]string
@@ -295,6 +304,11 @@ func runBelowFloorGuardExcluding(ctx context.Context, rc *resolvedCluster, sshPo
 // names service databases a dry-run would create first; they do not exist yet, so
 // their ledgers are not read.
 func runMigratePostgresBranch(ctx context.Context, cmd *cobra.Command, rc *resolvedCluster, sshPool *ssh.Pool, dryRun bool, phase, target string, plannedDatabases map[string]struct{}, branchesRun, branchesWithItems *[]string) error {
+	if hasUnscopedDatabaseDeployments(rc.Manifest) {
+		return forEachDatabaseDeployment(rc.Manifest, func(view *inventory.Manifest) error {
+			return runMigratePostgresBranch(ctx, cmd, rc.withDatabaseManifest(view), sshPool, dryRun, phase, target, plannedDatabases, branchesRun, branchesWithItems)
+		})
+	}
 	out := cmd.OutOrStdout()
 	manifest := rc.Manifest
 	pg := manifest.Infrastructure.Postgres
@@ -326,7 +340,7 @@ func runMigratePostgresBranch(ctx context.Context, cmd *cobra.Command, rc *resol
 		}
 	}
 
-	databases := schemaDatabasesFromConfigs(pg.Databases)
+	databases := yugabyteSchemaDatabases(pg.Databases, manifest)
 	engine := provisioner.SQLEnginePostgres
 	if pg.IsYugabyte() {
 		databases = yugabyteSchemaDatabases(pg.Databases, manifest)

@@ -108,8 +108,8 @@ CREATE TABLE IF NOT EXISTS skipper.skipper_usage (
 CREATE INDEX IF NOT EXISTS skipper_usage_tenant_created_idx
     ON skipper.skipper_usage (tenant_id, created_at);
 
-CREATE INDEX IF NOT EXISTS skipper_usage_publish_pending_idx
-    ON skipper.skipper_usage (created_at)
+CREATE INDEX IF NOT EXISTS skipper_usage_publish_pending_idx_range
+    ON skipper.skipper_usage (created_at ASC)
     WHERE published_at IS NULL;
 
 CREATE INDEX IF NOT EXISTS skipper_conversations_tenant_user_idx

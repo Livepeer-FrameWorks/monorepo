@@ -229,6 +229,9 @@ func buildLogCommand(deployName, mode string, follow bool, tail int) (string, er
 		return fmt.Sprintf("cd /opt/frameworks/%s && %s", deployName, system.DockerCommand(args)), nil
 	case "native":
 		logCmd := fmt.Sprintf("journalctl -u frameworks-%s", deployName)
+		if deployName == "yugabyte" {
+			logCmd = "journalctl -u yb-master -u yb-tserver"
+		}
 		if tail > 0 {
 			logCmd += fmt.Sprintf(" -n %d", tail)
 		}
@@ -246,8 +249,33 @@ func resolveLogTargets(manifest *inventory.Manifest, serviceName string) ([]logT
 		return nil, fmt.Errorf("manifest is required")
 	}
 
-	if serviceName == "postgres" && manifest.Infrastructure.Postgres != nil && manifest.Infrastructure.Postgres.Enabled {
-		return infrastructureLogTargets(manifest, serviceName, "postgres", manifest.Infrastructure.Postgres.AllHosts())
+	if serviceName == "postgres" || serviceName == "yugabyte" {
+		var targets []logTarget
+		for _, deployment := range manifest.SQLDeployments() {
+			pg := deployment.Config
+			engine := "postgres"
+			if pg.IsYugabyte() {
+				engine = "yugabyte"
+			}
+			if serviceName != engine {
+				continue
+			}
+			hosts := pg.AllHosts()
+			if pg.IsYugabyte() {
+				hosts = nil
+				for _, node := range pg.Nodes {
+					hosts = append(hosts, node.Host)
+				}
+			}
+			selected, err := infrastructureLogTargets(manifest, serviceName, engine, hosts)
+			if err != nil {
+				return nil, err
+			}
+			targets = append(targets, selected...)
+		}
+		if len(targets) > 0 {
+			return targets, nil
+		}
 	}
 	if serviceName == "kafka" && manifest.Infrastructure.Kafka != nil && manifest.Infrastructure.Kafka.Enabled {
 		return infrastructureLogTargets(manifest, serviceName, "kafka", kafkaLogHosts(manifest.Infrastructure.Kafka))

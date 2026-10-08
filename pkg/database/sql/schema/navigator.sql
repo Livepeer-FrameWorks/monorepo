@@ -73,7 +73,7 @@ CREATE TABLE IF NOT EXISTS navigator.tls_bundles (
 ALTER TABLE navigator.tls_bundles
     ADD COLUMN IF NOT EXISTS issuer_ca TEXT NOT NULL DEFAULT 'letsencrypt';
 
-CREATE INDEX IF NOT EXISTS idx_tls_bundles_expires_at ON navigator.tls_bundles(expires_at);
+CREATE INDEX IF NOT EXISTS idx_tls_bundles_expires_at_range ON navigator.tls_bundles(expires_at ASC);
 
 -- Cross-replica ACME issuance lease. The lease is deliberately time-bounded:
 -- a crashed Navigator cannot strand renewal, and no database connection or
@@ -108,7 +108,7 @@ CREATE TABLE IF NOT EXISTS navigator.internal_certificates (
     CONSTRAINT uq_internal_certificates_node_service UNIQUE (node_id, service_type)
 );
 
-CREATE INDEX IF NOT EXISTS idx_internal_certificates_expires_at ON navigator.internal_certificates(expires_at);
+CREATE INDEX IF NOT EXISTS idx_internal_certificates_expires_at_range ON navigator.internal_certificates(expires_at ASC);
 
 -- Tenant alias intent. Quartermaster signals via Navigator.EnsureTenantAlias
 -- on paid tier activation; Navigator persists the row and works the alias
@@ -292,16 +292,16 @@ CREATE TABLE IF NOT EXISTS navigator.domain_event_outbox (
     CONSTRAINT chk_navigator_domain_event_outbox_scope_tenant CHECK ((scope = 'tenant') = (tenant_id IS NOT NULL))
 );
 
-CREATE INDEX IF NOT EXISTS idx_navigator_domain_event_outbox_pending
-    ON navigator.domain_event_outbox (enqueued_at, event_id)
+CREATE INDEX IF NOT EXISTS idx_navigator_domain_event_outbox_pending_range
+    ON navigator.domain_event_outbox (enqueued_at ASC, event_id)
     WHERE completed_at IS NULL;
 
 CREATE INDEX IF NOT EXISTS idx_navigator_domain_event_outbox_aggregate
     ON navigator.domain_event_outbox (aggregate_type, aggregate_id, enqueued_at, event_id)
     WHERE completed_at IS NULL;
 
-CREATE INDEX IF NOT EXISTS idx_navigator_domain_event_outbox_completed
-    ON navigator.domain_event_outbox (completed_at)
+CREATE INDEX IF NOT EXISTS idx_navigator_domain_event_outbox_completed_range
+    ON navigator.domain_event_outbox (completed_at ASC)
     WHERE completed_at IS NOT NULL;
 
 -- Schema baseline identity marker. Records that this database was created from the

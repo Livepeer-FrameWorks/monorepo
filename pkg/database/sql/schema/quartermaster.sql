@@ -12,8 +12,8 @@ CREATE TABLE IF NOT EXISTS quartermaster.delegated_jwt_replays (
     expires_at TIMESTAMPTZ NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-CREATE INDEX IF NOT EXISTS idx_quartermaster_delegated_jwt_replays_expires_at
-    ON quartermaster.delegated_jwt_replays (expires_at);
+CREATE INDEX IF NOT EXISTS idx_quartermaster_delegated_jwt_replays_expires_at_range
+    ON quartermaster.delegated_jwt_replays (expires_at ASC);
 
 -- Durable cross-service release handoffs. Purser records the DNS entitlement
 -- sweep only after every reachable subscription tenant has been materialized;
@@ -947,8 +947,8 @@ CREATE TABLE IF NOT EXISTS quartermaster.service_event_outbox (
     CONSTRAINT chk_qm_service_event_outbox_scope_tenant CHECK (scope = 'platform' OR tenant_id IS NOT NULL)
 );
 
-CREATE INDEX IF NOT EXISTS idx_qm_service_event_outbox_pending
-    ON quartermaster.service_event_outbox(created_at)
+CREATE INDEX IF NOT EXISTS idx_qm_service_event_outbox_pending_range
+    ON quartermaster.service_event_outbox(created_at ASC)
     WHERE completed_at IS NULL;
 
 CREATE INDEX IF NOT EXISTS idx_qm_service_event_outbox_tenant
@@ -985,16 +985,16 @@ CREATE TABLE IF NOT EXISTS quartermaster.domain_event_outbox (
     CONSTRAINT chk_quartermaster_domain_event_outbox_scope_tenant CHECK ((scope = 'tenant') = (tenant_id IS NOT NULL))
 );
 
-CREATE INDEX IF NOT EXISTS idx_quartermaster_domain_event_outbox_pending
-    ON quartermaster.domain_event_outbox (enqueued_at, event_id)
+CREATE INDEX IF NOT EXISTS idx_quartermaster_domain_event_outbox_pending_range
+    ON quartermaster.domain_event_outbox (enqueued_at ASC, event_id)
     WHERE completed_at IS NULL;
 
 CREATE INDEX IF NOT EXISTS idx_quartermaster_domain_event_outbox_aggregate
     ON quartermaster.domain_event_outbox (aggregate_type, aggregate_id, enqueued_at, event_id)
     WHERE completed_at IS NULL;
 
-CREATE INDEX IF NOT EXISTS idx_quartermaster_domain_event_outbox_completed
-    ON quartermaster.domain_event_outbox (completed_at)
+CREATE INDEX IF NOT EXISTS idx_quartermaster_domain_event_outbox_completed_range
+    ON quartermaster.domain_event_outbox (completed_at ASC)
     WHERE completed_at IS NOT NULL;
 
 -- ============================================================================
@@ -1018,8 +1018,8 @@ CREATE TABLE IF NOT EXISTS quartermaster.navigator_custom_domain_outbox (
     completed_at TIMESTAMPTZ
 );
 
-CREATE INDEX IF NOT EXISTS idx_qm_navigator_custom_domain_outbox_pending
-    ON quartermaster.navigator_custom_domain_outbox(created_at)
+CREATE INDEX IF NOT EXISTS idx_qm_navigator_custom_domain_outbox_pending_range
+    ON quartermaster.navigator_custom_domain_outbox(created_at ASC)
     WHERE completed_at IS NULL;
 
 -- ============================================================================
@@ -1230,6 +1230,10 @@ CREATE TABLE IF NOT EXISTS quartermaster.media_capacity_consent_changes (
     PRIMARY KEY (tenant_id, cluster_record_id, idempotency_key),
     UNIQUE (cluster_record_id, revision)
 );
+
+CREATE INDEX IF NOT EXISTS idx_qm_navigator_tenant_alias_outbox_seq
+    ON quartermaster.navigator_tenant_alias_outbox(seq ASC)
+    WHERE completed_at IS NULL;
 
 -- Schema baseline identity marker. Records that this database was created from the
 -- consolidated baseline at this floor, so the migration min-version guard treats

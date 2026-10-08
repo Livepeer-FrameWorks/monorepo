@@ -8,8 +8,8 @@ import (
 	eventoutbox "github.com/Livepeer-FrameWorks/monorepo/pkg/events/outbox"
 )
 
-// The baseline and the v0.3.11 expand migration both contain the shared
-// outbox table definition verbatim, so the relay's queries match both.
+// Baselines include the current shared indexes; shipped migrations retain the
+// table contract consumed by the relay.
 func TestCommodoreDomainEventOutboxDDLMatchesSharedTable(t *testing.T) {
 	ddl, err := eventoutbox.TableDDL(DomainEventSchema)
 	if err != nil {
@@ -20,7 +20,12 @@ func TestCommodoreDomainEventOutboxDDLMatchesSharedTable(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !strings.Contains(string(content), ddl) {
+		want := ddl
+		if strings.HasPrefix(path, "migrations/") {
+			// Shipped DDL keeps the same table contract; later migrations replace its indexes.
+			want = strings.Split(ddl, "\nCREATE INDEX")[0]
+		}
+		if !strings.Contains(string(content), want) {
 			t.Fatalf("%s does not contain outbox.TableDDL(%q) verbatim", path, DomainEventSchema)
 		}
 	}

@@ -224,11 +224,11 @@ CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_type ON foghorn.artifacts(artif
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_status ON foghorn.artifacts(status);
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_storage ON foghorn.artifacts(storage_location);
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_sync ON foghorn.artifacts(sync_status);
-CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_created ON foghorn.artifacts(created_at);
+CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_created_range ON foghorn.artifacts(created_at ASC);
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_request_id ON foghorn.artifacts(request_id);
-CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_frozen ON foghorn.artifacts(frozen_at) WHERE frozen_at IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_dvr_backfill_pending
-    ON foghorn.artifacts(ended_at, artifact_hash)
+CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_frozen_range ON foghorn.artifacts(frozen_at ASC) WHERE frozen_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_dvr_backfill_pending_range
+    ON foghorn.artifacts(ended_at ASC, artifact_hash)
     WHERE artifact_type = 'dvr'
       AND status IN ('completed', 'completed_partial', 'failed', 'ready')
       AND ended_at IS NOT NULL
@@ -237,13 +237,13 @@ CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_dvr_backfill_pending
       AND dvr_chapter_backfill_complete = false;
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_stream_internal ON foghorn.artifacts(stream_internal_name);
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_ingest_generation ON foghorn.artifacts(ingest_generation) WHERE ingest_generation IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_federated_purge_recovery
-    ON foghorn.artifacts(federated_purge_lease_until)
+CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_federated_purge_recovery_range
+    ON foghorn.artifacts(federated_purge_lease_until ASC)
     WHERE federated_pointer = true
       AND status = 'deleted'
       AND federated_purge_token IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_federated_purge_eligibility
-    ON foghorn.artifacts(federated_purge_eligible_at, artifact_hash)
+CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_federated_purge_eligibility_range
+    ON foghorn.artifacts(federated_purge_eligible_at ASC, artifact_hash)
     WHERE federated_pointer = true
       AND status IN ('ready', 'deleted');
 -- Drives the catalog-projection scan. Ordered by catalog_synced_rev (projection age) so the
@@ -438,7 +438,7 @@ ALTER TABLE foghorn.artifacts
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_internal_name ON foghorn.artifacts(internal_name);
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_tenant ON foghorn.artifacts(tenant_id) WHERE tenant_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_user ON foghorn.artifacts(user_id) WHERE user_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_retention ON foghorn.artifacts(retention_until) WHERE retention_until IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_retention_range ON foghorn.artifacts(retention_until ASC) WHERE retention_until IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_storage_cluster ON foghorn.artifacts(storage_cluster_id, sync_status) WHERE storage_cluster_id IS NOT NULL;
 -- Idempotent chapter finalization: at most one chapter-origin artifact
 -- per chapter_id. Retries reuse the existing row via ON CONFLICT.
@@ -553,9 +553,14 @@ CREATE TABLE IF NOT EXISTS foghorn.artifact_node_deletion_watermark (
 -- ============================================================================
 
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifact_nodes_node ON foghorn.artifact_nodes(node_id);
+
+CREATE INDEX IF NOT EXISTS idx_foghorn_artifact_nodes_orphan_expiry
+    ON foghorn.artifact_nodes (last_seen_at ASC)
+    WHERE is_orphaned = true;
+
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifact_nodes_orphaned ON foghorn.artifact_nodes(is_orphaned) WHERE is_orphaned = true;
-CREATE INDEX IF NOT EXISTS idx_foghorn_artifact_nodes_seen ON foghorn.artifact_nodes(last_seen_at);
-CREATE INDEX IF NOT EXISTS idx_foghorn_artifact_nodes_cached ON foghorn.artifact_nodes(cached_at);
+CREATE INDEX IF NOT EXISTS idx_foghorn_artifact_nodes_seen_range ON foghorn.artifact_nodes(last_seen_at ASC);
+CREATE INDEX IF NOT EXISTS idx_foghorn_artifact_nodes_cached_range ON foghorn.artifact_nodes(cached_at ASC);
 -- Peer-fallback resolver filters on (artifact_hash, role='origin',
 -- is_complete=true, is_orphaned=false). Include is_orphaned in the
 -- partial predicate so orphaned-but-not-cleaned rows stay out of the
@@ -795,8 +800,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_foghorn_ingest_sessions_trigger_uuid
     ON foghorn.ingest_sessions(tenant_id, node_id, start_trigger_uuid);
 CREATE INDEX IF NOT EXISTS idx_foghorn_ingest_sessions_stream
     ON foghorn.ingest_sessions(tenant_id, stream_internal_name);
-CREATE INDEX IF NOT EXISTS idx_foghorn_ingest_sessions_pending_projection
-    ON foghorn.ingest_sessions(started_at)
+CREATE INDEX IF NOT EXISTS idx_foghorn_ingest_sessions_pending_projection_range
+    ON foghorn.ingest_sessions(started_at ASC)
     WHERE ended_at IS NULL AND projection_state = 'pending';
 -- Enforce the DVR generation binding in schema (same-tenant, same-stream, existing session)
 -- and one active DVR per generation. Placed after ingest_sessions so the FK target exists.
@@ -829,8 +834,8 @@ CREATE TABLE IF NOT EXISTS foghorn.ingest_close_tombstones (
 );
 CREATE INDEX IF NOT EXISTS idx_foghorn_ingest_close_tombstones_lookup
     ON foghorn.ingest_close_tombstones(tenant_id, node_id, connector_pid, stream_internal_name, close_unix_millis);
-CREATE INDEX IF NOT EXISTS idx_foghorn_ingest_close_tombstones_created
-    ON foghorn.ingest_close_tombstones(created_at);
+CREATE INDEX IF NOT EXISTS idx_foghorn_ingest_close_tombstones_created_range
+    ON foghorn.ingest_close_tombstones(created_at ASC);
 
 -- PUSH_REWRITE executions a node answered to Mist without an accept after forwarding them for
 -- admission. Mist refuses the publisher on that answer and never delivers the execution again, so a
@@ -844,8 +849,8 @@ CREATE TABLE IF NOT EXISTS foghorn.ingest_admission_abandonments (
     created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (node_id, start_trigger_uuid)
 );
-CREATE INDEX IF NOT EXISTS idx_foghorn_ingest_admission_abandonments_created
-    ON foghorn.ingest_admission_abandonments(created_at);
+CREATE INDEX IF NOT EXISTS idx_foghorn_ingest_admission_abandonments_created_range
+    ON foghorn.ingest_admission_abandonments(created_at ASC);
 
 -- Per-stream source fence. The row key matches the Redis/DB comparison domain and
 -- serializes allocations across pooled Yugabyte sessions.
@@ -891,12 +896,12 @@ CREATE TABLE IF NOT EXISTS foghorn.ingest_offline_effects (
     applied_at           TIMESTAMPTZ,
     UNIQUE (tenant_id, stream_internal_name, source_revision)
 );
-CREATE INDEX IF NOT EXISTS idx_foghorn_ingest_offline_effects_pending
-    ON foghorn.ingest_offline_effects(next_attempt_at, id)
+CREATE INDEX IF NOT EXISTS idx_foghorn_ingest_offline_effects_pending_range
+    ON foghorn.ingest_offline_effects(next_attempt_at ASC, id)
     WHERE state = 'pending';
 
-CREATE INDEX IF NOT EXISTS idx_foghorn_ingest_offline_effects_terminal
-    ON foghorn.ingest_offline_effects(updated_at)
+CREATE INDEX IF NOT EXISTS idx_foghorn_ingest_offline_effects_terminal_range
+    ON foghorn.ingest_offline_effects(updated_at ASC)
     WHERE state IN ('applied', 'superseded', 'failed');
 CREATE INDEX IF NOT EXISTS idx_foghorn_ingest_offline_effects_teardown_ack
     ON foghorn.ingest_offline_effects(source_node_id, source_generation)
@@ -969,8 +974,8 @@ CREATE TABLE IF NOT EXISTS foghorn.ingest_admission_effects (
         CHECK (activation_connection_fence >= 0)
 );
 
-CREATE INDEX IF NOT EXISTS idx_foghorn_ingest_admission_effects_pending
-    ON foghorn.ingest_admission_effects(next_attempt_at, id)
+CREATE INDEX IF NOT EXISTS idx_foghorn_ingest_admission_effects_pending_range
+    ON foghorn.ingest_admission_effects(next_attempt_at ASC, id)
     WHERE state IN ('pending', 'pending_v2');
 
 -- Tombstone cleanup proves that no pending admission callback at or below a membership revision can
@@ -981,8 +986,8 @@ CREATE INDEX IF NOT EXISTS idx_foghorn_ingest_admission_effects_pending_fence
 
 -- Terminal rows are retained briefly as diagnostics; this index keeps batched retention cleanup
 -- from scanning the pending working set.
-CREATE INDEX IF NOT EXISTS idx_foghorn_ingest_admission_effects_terminal
-    ON foghorn.ingest_admission_effects(updated_at)
+CREATE INDEX IF NOT EXISTS idx_foghorn_ingest_admission_effects_terminal_range
+    ON foghorn.ingest_admission_effects(updated_at ASC)
     WHERE state IN ('applied', 'superseded', 'applied_v2', 'superseded_v2');
 
 -- Immutable encrypted target-set snapshots keep late runtime finals
@@ -1003,8 +1008,8 @@ CREATE TABLE IF NOT EXISTS foghorn.admission_push_target_revisions (
 );
 CREATE INDEX IF NOT EXISTS idx_foghorn_admission_push_target_revisions_lookup
     ON foghorn.admission_push_target_revisions(tenant_id, source_generation, target_revision);
-CREATE INDEX IF NOT EXISTS idx_foghorn_admission_push_target_revisions_created
-    ON foghorn.admission_push_target_revisions(created_at, id);
+CREATE INDEX IF NOT EXISTS idx_foghorn_admission_push_target_revisions_created_range
+    ON foghorn.admission_push_target_revisions(created_at ASC, id);
 
 -- ============================================================================
 -- NODE OUTPUT CACHING & LOAD BALANCING
@@ -1021,7 +1026,7 @@ CREATE TABLE IF NOT EXISTS foghorn.node_outputs (
     last_updated TIMESTAMP DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_foghorn_node_outputs_updated ON foghorn.node_outputs(last_updated);
+CREATE INDEX IF NOT EXISTS idx_foghorn_node_outputs_updated_range ON foghorn.node_outputs(last_updated ASC);
 
 -- Last complete node configuration sent to Helmsman. Allocation and payload
 -- persistence share one row-locked transaction, so every committed version is
@@ -1065,8 +1070,8 @@ CREATE TABLE IF NOT EXISTS foghorn.node_admission_proof_nonces (
     PRIMARY KEY (public_key_sha256, nonce)
 );
 
-CREATE INDEX IF NOT EXISTS idx_foghorn_node_admission_proof_nonces_expiry
-    ON foghorn.node_admission_proof_nonces(expires_at);
+CREATE INDEX IF NOT EXISTS idx_foghorn_node_admission_proof_nonces_expiry_range
+    ON foghorn.node_admission_proof_nonces(expires_at ASC);
 
 CREATE TABLE IF NOT EXISTS foghorn.push_target_status_outbox (
     id BIGSERIAL PRIMARY KEY,
@@ -1090,8 +1095,8 @@ CREATE TABLE IF NOT EXISTS foghorn.push_target_status_outbox (
         CHECK (reason_code IN ('unspecified', 'connected', 'completed', 'destination_rejected', 'network_error', 'process_error', 'capacity_exhausted', 'configuration_error', 'edge_upgrade_required', 'stopped'))
 );
 
-CREATE INDEX IF NOT EXISTS idx_foghorn_push_target_status_outbox_due
-    ON foghorn.push_target_status_outbox(next_attempt_at, id);
+CREATE INDEX IF NOT EXISTS idx_foghorn_push_target_status_outbox_due_range
+    ON foghorn.push_target_status_outbox(next_attempt_at ASC, id);
 
 -- Latest desired central placement projection for a managed/native stream.
 -- The media decision is local; this outbox makes Commodore's routing column a
@@ -1112,8 +1117,8 @@ CREATE TABLE IF NOT EXISTS foghorn.managed_stream_active_cluster_outbox (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_foghorn_managed_stream_active_cluster_outbox_due
-    ON foghorn.managed_stream_active_cluster_outbox(next_attempt_at, id);
+CREATE INDEX IF NOT EXISTS idx_foghorn_managed_stream_active_cluster_outbox_due_range
+    ON foghorn.managed_stream_active_cluster_outbox(next_attempt_at ASC, id);
 
 -- Latest ConfigSeed apply result accepted from each Helmsman node. Foghorn is
 -- the media-local durability boundary; Navigator delivery may lag control-plane
@@ -1139,8 +1144,8 @@ CREATE TABLE IF NOT EXISTS foghorn.config_seed_apply_ack_outbox (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_foghorn_config_seed_apply_ack_outbox_due
-    ON foghorn.config_seed_apply_ack_outbox(next_attempt_at, id) WHERE pending;
+CREATE INDEX IF NOT EXISTS idx_foghorn_config_seed_apply_ack_outbox_due_range
+    ON foghorn.config_seed_apply_ack_outbox(next_attempt_at ASC, id) WHERE pending;
 
 -- Successful local JWT verifications are media-plane facts. This outbox keeps
 -- signing-key usage durable while Commodore is unavailable, then advances its
@@ -1161,8 +1166,8 @@ CREATE TABLE IF NOT EXISTS foghorn.signing_key_use_outbox (
     UNIQUE (tenant_id, kid)
 );
 
-CREATE INDEX IF NOT EXISTS idx_foghorn_signing_key_use_outbox_due
-    ON foghorn.signing_key_use_outbox(next_attempt_at, id);
+CREATE INDEX IF NOT EXISTS idx_foghorn_signing_key_use_outbox_due_range
+    ON foghorn.signing_key_use_outbox(next_attempt_at ASC, id);
 
 -- ============================================================================
 -- NODE MAINTENANCE MODES
@@ -1194,7 +1199,7 @@ CREATE TABLE IF NOT EXISTS foghorn.node_lifecycle (
     last_updated TIMESTAMP DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_foghorn_node_lifecycle_updated ON foghorn.node_lifecycle(last_updated);
+CREATE INDEX IF NOT EXISTS idx_foghorn_node_lifecycle_updated_range ON foghorn.node_lifecycle(last_updated ASC);
 
 CREATE TABLE IF NOT EXISTS foghorn.node_components (
     node_id VARCHAR(100) NOT NULL,
@@ -1205,7 +1210,7 @@ CREATE TABLE IF NOT EXISTS foghorn.node_components (
 );
 
 CREATE INDEX IF NOT EXISTS idx_foghorn_node_components_component ON foghorn.node_components(component);
-CREATE INDEX IF NOT EXISTS idx_foghorn_node_components_reported ON foghorn.node_components(last_reported_at);
+CREATE INDEX IF NOT EXISTS idx_foghorn_node_components_reported_range ON foghorn.node_components(last_reported_at ASC);
 
 CREATE TABLE IF NOT EXISTS foghorn.node_update_state (
     node_id VARCHAR(100) PRIMARY KEY,
@@ -1249,7 +1254,7 @@ CREATE TABLE IF NOT EXISTS foghorn.staging_cleanup_queue (
     last_error       TEXT,
     backend_id       TEXT                            -- physical backend the object was written to; the worker deletes ONLY on an exact match to the cell's current store and fails closed otherwise (empty/legacy or repoint → retained, never a guessed-store delete). Fresh enqueues attribute it; legacy rows are adopted once at boot.
 );
-CREATE INDEX IF NOT EXISTS idx_foghorn_staging_cleanup_due ON foghorn.staging_cleanup_queue(next_attempt_at);
+CREATE INDEX IF NOT EXISTS idx_foghorn_staging_cleanup_due_range ON foghorn.staging_cleanup_queue(next_attempt_at ASC);
 
 -- Durable keyset cursor for control.ReconcileBillingAttribution: it processes a BOUNDED batch of DISTINCT
 -- (tenant, authoritative-cluster) pairs past the cursor each pass (bounding the external per-tenant resolver
@@ -1288,7 +1293,7 @@ CREATE TABLE IF NOT EXISTS foghorn.freeze_publication_ledger (
     created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     backend_id    TEXT                                -- physical backend the candidate/staging object was written to; carried onto the staging_cleanup_queue row when the reconciler collects an orphan, so the delete routes to (or fails closed on) the recorded store. NULL = legacy.
 );
-CREATE INDEX IF NOT EXISTS idx_foghorn_freeze_pub_ledger_age ON foghorn.freeze_publication_ledger(created_at);
+CREATE INDEX IF NOT EXISTS idx_foghorn_freeze_pub_ledger_age_range ON foghorn.freeze_publication_ledger(created_at ASC);
 
 -- Durable keyset cursor for jobs.reconcileFreezePublicationLedger: it advances by object_key past every
 -- reviewed ledger row each pass (wrapping on a short page), so rows SKIPPED because their attempt is still
@@ -1380,14 +1385,14 @@ CREATE TABLE IF NOT EXISTS foghorn.thumbnail_task_assignment (
 );
 CREATE INDEX IF NOT EXISTS idx_foghorn_thumb_task_resource ON foghorn.thumbnail_task_assignment(asset_key, tenant_id);
 CREATE INDEX IF NOT EXISTS idx_foghorn_thumb_task_recovery ON foghorn.thumbnail_task_assignment(status, expiry);
-CREATE INDEX IF NOT EXISTS idx_foghorn_thumb_recovery_due
-    ON foghorn.thumbnail_task_assignment(recovery_next_attempt_at)
+CREATE INDEX IF NOT EXISTS idx_foghorn_thumb_recovery_due_range
+    ON foghorn.thumbnail_task_assignment(recovery_next_attempt_at ASC)
     WHERE status IN ('assigned', 'uploading', 'verifying', 'publishing');
-CREATE INDEX IF NOT EXISTS idx_foghorn_thumb_unprojected
-    ON foghorn.thumbnail_task_assignment(updated_at)
+CREATE INDEX IF NOT EXISTS idx_foghorn_thumb_unprojected_range
+    ON foghorn.thumbnail_task_assignment(updated_at ASC)
     WHERE status = 'published' AND deterministic_projected_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_foghorn_thumb_reassert_due
-    ON foghorn.thumbnail_task_assignment(deterministic_reassert_at)
+CREATE INDEX IF NOT EXISTS idx_foghorn_thumb_reassert_due_range
+    ON foghorn.thumbnail_task_assignment(deterministic_reassert_at ASC)
     WHERE deterministic_reassert_at IS NOT NULL;
 
 -- One row per file an attempt owns (allowlisted: poster.jpg / sprite.jpg / sprite.vtt). staging_key is the
@@ -1459,7 +1464,7 @@ CREATE TABLE IF NOT EXISTS foghorn.stream_cleanup_obligation (
     cleaned_at           TIMESTAMPTZ                               -- set when the sweep confirmed the bytes gone + control rows dropped
 );
 -- Drainer scan: only pending rows are due for a sweep (cleaned rows persist purely as the tombstone).
-CREATE INDEX IF NOT EXISTS idx_foghorn_stream_cleanup_due ON foghorn.stream_cleanup_obligation(next_attempt_at) WHERE status = 'pending';
+CREATE INDEX IF NOT EXISTS idx_foghorn_stream_cleanup_due_range ON foghorn.stream_cleanup_obligation(next_attempt_at ASC) WHERE status = 'pending';
 
 CREATE TABLE IF NOT EXISTS foghorn.vod_metadata (
     -- ===== IDENTITY =====
@@ -1629,8 +1634,8 @@ CREATE TABLE IF NOT EXISTS foghorn.artifact_event_outbox (
     completed_at TIMESTAMPTZ
 );
 
-CREATE INDEX IF NOT EXISTS idx_foghorn_artifact_event_outbox_pending
-    ON foghorn.artifact_event_outbox(created_at)
+CREATE INDEX IF NOT EXISTS idx_foghorn_artifact_event_outbox_pending_range
+    ON foghorn.artifact_event_outbox(created_at ASC)
     WHERE completed_at IS NULL;
 
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifact_event_outbox_tenant
@@ -1670,16 +1675,16 @@ CREATE TABLE IF NOT EXISTS foghorn.domain_event_outbox (
     CONSTRAINT chk_foghorn_domain_event_outbox_scope_tenant CHECK ((scope = 'tenant') = (tenant_id IS NOT NULL))
 );
 
-CREATE INDEX IF NOT EXISTS idx_foghorn_domain_event_outbox_pending
-    ON foghorn.domain_event_outbox (enqueued_at, event_id)
+CREATE INDEX IF NOT EXISTS idx_foghorn_domain_event_outbox_pending_range
+    ON foghorn.domain_event_outbox (enqueued_at ASC, event_id)
     WHERE completed_at IS NULL;
 
 CREATE INDEX IF NOT EXISTS idx_foghorn_domain_event_outbox_aggregate
     ON foghorn.domain_event_outbox (aggregate_type, aggregate_id, enqueued_at, event_id)
     WHERE completed_at IS NULL;
 
-CREATE INDEX IF NOT EXISTS idx_foghorn_domain_event_outbox_completed
-    ON foghorn.domain_event_outbox (completed_at)
+CREATE INDEX IF NOT EXISTS idx_foghorn_domain_event_outbox_completed_range
+    ON foghorn.domain_event_outbox (completed_at ASC)
     WHERE completed_at IS NOT NULL;
 
 -- Durable command ledger for artifact creation attempts, keyed by the Commodore
@@ -1726,8 +1731,8 @@ CREATE TABLE IF NOT EXISTS foghorn.artifact_creation_commands (
 -- committed/rejected terminal rows (kept for the status read + retained until the
 -- retention horizon) never widen the bounded scan the CreationCommandExpiryJob runs
 -- each minute.
-CREATE INDEX IF NOT EXISTS idx_foghorn_creation_commands_accepted
-    ON foghorn.artifact_creation_commands(updated_at)
+CREATE INDEX IF NOT EXISTS idx_foghorn_creation_commands_accepted_range
+    ON foghorn.artifact_creation_commands(updated_at ASC)
     WHERE status = 'accepted';
 
 -- Retention-GC scan index: consumed terminal ('committed'/'rejected') rows oldest-first by
@@ -1736,8 +1741,8 @@ CREATE INDEX IF NOT EXISTS idx_foghorn_creation_commands_accepted
 -- anchor — never scans the unconsumed rows it must retain, nor degrades with total
 -- historical volume. The window starts at consumption, not the terminal transition, so a
 -- row terminalized long ago but only just consumed survives a full horizon past its ack.
-CREATE INDEX IF NOT EXISTS idx_foghorn_creation_commands_terminal_gc
-    ON foghorn.artifact_creation_commands(consumed_at)
+CREATE INDEX IF NOT EXISTS idx_foghorn_creation_commands_terminal_gc_range
+    ON foghorn.artifact_creation_commands(consumed_at ASC)
     WHERE status IN ('committed', 'rejected') AND consumed_at IS NOT NULL;
 
 -- ============================================================================
@@ -1773,8 +1778,8 @@ CREATE TABLE IF NOT EXISTS foghorn.media_authorities (
 CREATE INDEX IF NOT EXISTS idx_foghorn_media_authorities_refresh
     ON foghorn.media_authorities(refresh_after);
 
-CREATE INDEX IF NOT EXISTS idx_foghorn_media_authorities_expiry
-    ON foghorn.media_authorities(valid_until);
+CREATE INDEX IF NOT EXISTS idx_foghorn_media_authorities_expiry_range
+    ON foghorn.media_authorities(valid_until ASC);
 
 CREATE INDEX IF NOT EXISTS idx_foghorn_media_authorities_inventory
     ON foghorn.media_authorities(authority_kind COLLATE "C" ASC, authority_id COLLATE "C" ASC)
@@ -1934,8 +1939,8 @@ CREATE TABLE IF NOT EXISTS foghorn.media_authority_apply_audit (
 CREATE INDEX IF NOT EXISTS idx_media_authority_apply_audit_authority
     ON foghorn.media_authority_apply_audit(authority_kind, authority_id, observed_at DESC);
 
-CREATE INDEX IF NOT EXISTS idx_media_authority_apply_audit_retention
-    ON foghorn.media_authority_apply_audit(observed_at);
+CREATE INDEX IF NOT EXISTS idx_media_authority_apply_audit_retention_range
+    ON foghorn.media_authority_apply_audit(observed_at ASC);
 
 -- Control-replica liveness ledger. Every Foghorn replica in a cell heartbeats its
 -- own placement capability here; a cell attests schema-2 placement enforcement to
@@ -1953,8 +1958,23 @@ CREATE TABLE IF NOT EXISTS foghorn.control_replicas (
     last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_foghorn_control_replicas_seen
-    ON foghorn.control_replicas(last_seen_at);
+CREATE INDEX IF NOT EXISTS idx_foghorn_control_replicas_seen_range
+    ON foghorn.control_replicas(last_seen_at ASC);
+
+CREATE INDEX IF NOT EXISTS idx_foghorn_dvr_chapters_playback_artifact
+    ON foghorn.dvr_chapters(playback_artifact_hash)
+    WHERE playback_artifact_hash IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_foghorn_ingest_sessions_projected_node
+    ON foghorn.ingest_sessions(node_id ASC, started_at ASC)
+    WHERE ended_at IS NULL AND projection_state = 'active';
+
+CREATE INDEX IF NOT EXISTS idx_foghorn_ingest_sessions_open_trigger
+    ON foghorn.ingest_sessions(node_id, start_trigger_uuid)
+    WHERE ended_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_foghorn_ingest_sessions_stream_lookup
+    ON foghorn.ingest_sessions(stream_internal_name);
 
 -- Schema baseline identity marker. Records that this database was created from the
 -- consolidated baseline at this floor, so the migration min-version guard treats

@@ -168,6 +168,21 @@ func dataMigrationLiveStatus(service, id, introducedIn string, s dbMigrationStat
 // SSH, resolving the physical database(s) the same way the upgrade schema gate does (schemaDatabasesFromConfigs /
 // yugabyteSchemaDatabases), so Yugabyte regional aliases map to the same ledger the gate checks.
 func readProvisionDataMigrationLedgers(ctx context.Context, rc *resolvedCluster, sshPool *ssh.Pool, manifest *inventory.Manifest, dbName string) (map[string]provisioner.DataMigrationLedger, error) {
+	if hasUnscopedDatabaseDeployments(manifest) {
+		all := map[string]provisioner.DataMigrationLedger{}
+		err := forEachDatabaseDeployment(manifest, func(view *inventory.Manifest) error {
+			if !deploymentOwnsLogicalDatabase(view, dbName) {
+				return nil
+			}
+			items, err := readProvisionDataMigrationLedgers(ctx, rc.withDatabaseManifest(view), sshPool, view, dbName)
+			for key, value := range items {
+				all[view.DatabaseDeployment+"/"+key] = value
+			}
+			return err
+		})
+		return all, err
+	}
+
 	pg := manifest.Infrastructure.Postgres
 	if pg == nil || !pg.Enabled {
 		return nil, fmt.Errorf("a data migration is declared but postgres is not enabled in the manifest; cannot verify its state")
@@ -183,6 +198,21 @@ func readProvisionDataMigrationLedgers(ctx context.Context, rc *resolvedCluster,
 // readProvisionBaselineFloors reads the `_schema_baseline` floor of a service's owning database(s), resolving the
 // physical database(s) exactly as the ledger read does so floors and ledgers key off the same names.
 func readProvisionBaselineFloors(ctx context.Context, rc *resolvedCluster, sshPool *ssh.Pool, manifest *inventory.Manifest, dbName string) (map[string]string, error) {
+	if hasUnscopedDatabaseDeployments(manifest) {
+		all := map[string]string{}
+		err := forEachDatabaseDeployment(manifest, func(view *inventory.Manifest) error {
+			if !deploymentOwnsLogicalDatabase(view, dbName) {
+				return nil
+			}
+			items, err := readProvisionBaselineFloors(ctx, rc.withDatabaseManifest(view), sshPool, view, dbName)
+			for key, value := range items {
+				all[view.DatabaseDeployment+"/"+key] = value
+			}
+			return err
+		})
+		return all, err
+	}
+
 	pg := manifest.Infrastructure.Postgres
 	if pg == nil || !pg.Enabled {
 		return nil, fmt.Errorf("a data migration is declared but postgres is not enabled in the manifest; cannot read its baseline provenance")
@@ -197,8 +227,5 @@ func readProvisionBaselineFloors(ctx context.Context, rc *resolvedCluster, sshPo
 // provisionOwningDatabases resolves the physical schema database(s) for a logical database name, matching the upgrade
 // gate's mapping (Yugabyte regional aliases included).
 func provisionOwningDatabases(manifest *inventory.Manifest, pg *inventory.PostgresConfig, dbName string) []provisioner.SchemaDatabase {
-	if pg.IsYugabyte() {
-		return yugabyteSchemaDatabases([]inventory.DatabaseConfig{{Name: dbName}}, manifest)
-	}
-	return schemaDatabasesFromConfigs([]inventory.DatabaseConfig{{Name: dbName}})
+	return yugabyteSchemaDatabases([]inventory.DatabaseConfig{{Name: dbName}}, manifest)
 }

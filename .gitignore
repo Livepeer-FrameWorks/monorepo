@@ -190,3 +190,6 @@ __pycache__/
 
 # Production-shaped stack slots (scripts/stack): generated overlays, certs, Mist builds, logs
 .stack/
+
+# Seeded Yugabyte EXPLAIN audit results
+.explain-audit/

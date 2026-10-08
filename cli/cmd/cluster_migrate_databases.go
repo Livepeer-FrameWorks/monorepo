@@ -29,11 +29,7 @@ var (
 // that have an embedded baseline. Yugabyte regional aliases resolve to their
 // logical baseline and schema.
 func manifestServiceDatabases(manifest *inventory.Manifest, databases []inventory.DatabaseConfig) ([]provisioner.SchemaDatabase, error) {
-	pg := manifest.Infrastructure.Postgres
-	schemaDatabases := schemaDatabasesFromConfigs(databases)
-	if pg != nil && pg.IsYugabyte() {
-		schemaDatabases = yugabyteSchemaDatabases(databases, manifest)
-	}
+	schemaDatabases := yugabyteSchemaDatabases(databases, manifest)
 	return provisioner.ServiceDatabasesWithBaseline(schemaDatabases)
 }
 
@@ -41,6 +37,16 @@ func manifestServiceDatabases(manifest *inventory.Manifest, databases []inventor
 // static release plan, which runs without cluster access; whether each one is
 // missing is decided by the live probe in `release apply` and `cluster migrate`.
 func releasePlanServiceDatabases(manifest *inventory.Manifest) []string {
+	if hasUnscopedDatabaseDeployments(manifest) {
+		var names []string
+		for _, deployment := range manifest.SQLDeployments() {
+			view, _ := manifest.WithDatabaseDeployment(deployment.Name) //nolint:errcheck // SQLDeployments enumerates enabled deployments from this same manifest.
+			for _, name := range releasePlanServiceDatabases(view) {
+				names = append(names, deployment.Name+"/"+name)
+			}
+		}
+		return names
+	}
 	pg := manifest.Infrastructure.Postgres
 	if pg == nil || !pg.Enabled {
 		return nil
@@ -73,6 +79,15 @@ func postgresAdminHost(ctx context.Context, manifest *inventory.Manifest, pg *in
 // migration ledger reads. Populated databases without provenance require an
 // explicit completion opt-in and are verified against a scratch baseline.
 func ensureServiceDatabases(ctx context.Context, cmd *cobra.Command, rc *resolvedCluster, sshPool *ssh.Pool, dryRun, completeInterruptedBaselines bool) ([]provisioner.SchemaDatabase, error) {
+	if hasUnscopedDatabaseDeployments(rc.Manifest) {
+		var all []provisioner.SchemaDatabase
+		err := forEachDatabaseDeployment(rc.Manifest, func(view *inventory.Manifest) error {
+			items, err := ensureServiceDatabases(ctx, cmd, rc.withDatabaseManifest(view), sshPool, dryRun, completeInterruptedBaselines)
+			all = append(all, items...)
+			return err
+		})
+		return all, err
+	}
 	out := cmd.OutOrStdout()
 	manifest := rc.Manifest
 	pg := manifest.Infrastructure.Postgres

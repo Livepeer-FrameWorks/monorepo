@@ -12,8 +12,8 @@ import (
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
-// The baseline and the expand migration both carry the shared outbox table
-// definition verbatim, so the relay's queries match the table on every path.
+// Baselines include the current shared indexes; shipped migrations retain the
+// table contract consumed by the relay.
 func TestDomainEventOutboxDDLIsTheSharedTemplate(t *testing.T) {
 	ddl, err := outbox.TableDDL(Schema)
 	if err != nil {
@@ -27,7 +27,12 @@ func TestDomainEventOutboxDDLIsTheSharedTemplate(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !strings.Contains(string(content), ddl) {
+		want := ddl
+		if strings.HasPrefix(path, "migrations/") {
+			// Shipped DDL keeps the same table contract; later migrations replace its indexes.
+			want = strings.Split(ddl, "\nCREATE INDEX")[0]
+		}
+		if !strings.Contains(string(content), want) {
 			t.Errorf("%s does not contain outbox.TableDDL(%q) verbatim", path, Schema)
 		}
 	}

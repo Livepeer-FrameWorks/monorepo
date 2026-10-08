@@ -21,15 +21,14 @@ SELECT si.instance_id,
        COALESCE(assigned.base_url, '')::text AS assigned_base_url
 FROM quartermaster.service_instances si
 JOIN quartermaster.services s ON si.service_id = s.service_id
-LEFT JOIN LATERAL (
-    SELECT sca.cluster_id, c.base_url
+LEFT JOIN (
+    SELECT DISTINCT ON (sca.service_instance_id)
+           sca.service_instance_id, sca.cluster_id, c.base_url
     FROM quartermaster.service_cluster_assignments sca
     JOIN quartermaster.infrastructure_clusters c ON c.cluster_id = sca.cluster_id
-    WHERE sca.service_instance_id = si.id
-      AND sca.is_active = true
-    ORDER BY sca.cluster_id
-    LIMIT 1
-) assigned ON true
+    WHERE sca.is_active = true
+    ORDER BY sca.service_instance_id, sca.cluster_id
+) assigned ON assigned.service_instance_id = si.id
 WHERE si.status IN ('running', 'starting')
 `
 
@@ -90,15 +89,14 @@ SELECT si.instance_id,
        COALESCE(assigned.base_url, '')::text AS assigned_base_url
 FROM quartermaster.service_instances si
 JOIN quartermaster.services s ON si.service_id = s.service_id
-LEFT JOIN LATERAL (
-    SELECT sca.cluster_id, c.base_url
+LEFT JOIN (
+    SELECT DISTINCT ON (sca.service_instance_id)
+           sca.service_instance_id, sca.cluster_id, c.base_url
     FROM quartermaster.service_cluster_assignments sca
     JOIN quartermaster.infrastructure_clusters c ON c.cluster_id = sca.cluster_id
-    WHERE sca.service_instance_id = si.id
-      AND sca.is_active = true
-    ORDER BY sca.cluster_id
-    LIMIT 1
-) assigned ON true
+    WHERE sca.is_active = true
+    ORDER BY sca.service_instance_id, sca.cluster_id
+) assigned ON assigned.service_instance_id = si.id
 WHERE si.status IN ('running', 'starting')
   AND s.type <> 'edge'
   AND s.type NOT LIKE 'edge-%'

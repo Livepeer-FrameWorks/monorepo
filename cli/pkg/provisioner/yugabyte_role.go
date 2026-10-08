@@ -50,6 +50,7 @@ func yugabyteRoleVars(ctx context.Context, host inventory.Host, config ServiceCo
 		"yugabyte_master_addresses":       masterAddresses,
 		"yugabyte_replication_factor":     rf,
 		"yugabyte_ysql_port":              port,
+		"yugabyte_master_rpc_port":        metaIntOr(config.Metadata, "master_rpc_port", 7100),
 		"yugabyte_placement_cloud":        "frameworks",
 		"yugabyte_placement_region":       "eu",
 		"yugabyte_placement_zone":         fmt.Sprintf("eu-%d", max(nodeID, 1)),
@@ -57,6 +58,14 @@ func yugabyteRoleVars(ctx context.Context, host inventory.Host, config ServiceCo
 		"yugabyte_restart_scope":          yugabyteRestartScope(config.Metadata),
 		"yugabyte_allow_engine_change":    metaBool(config.Metadata, "allow_engine_change", false),
 		"yugabyte_relayout_operator_user": relayoutOperatorUser,
+	}
+	for _, field := range []string{"cloud", "region", "zone"} {
+		if value := metaString(config.Metadata, "placement_"+field); value != "" {
+			vars["yugabyte_placement_"+field] = value
+		}
+	}
+	if enabled, ok := config.Metadata["catalog_preload_additional_tables"].(bool); ok {
+		vars["yugabyte_catalog_preload_additional_tables"] = enabled
 	}
 
 	if dbs, ok := config.Metadata["databases"].([]map[string]string); ok && len(dbs) > 0 {

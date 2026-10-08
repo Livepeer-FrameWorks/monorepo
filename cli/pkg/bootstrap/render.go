@@ -225,14 +225,21 @@ func deriveInfrastructureRegistry(d *Derived, m *inventory.Manifest) {
 		return md
 	}
 
-	if pg := m.Infrastructure.Postgres; pg != nil && pg.Enabled {
+	for _, deployment := range m.SQLDeployments() {
+		pg := deployment.Config
+		prefix := "postgres"
+		if deployment.Name != inventory.PrimaryDatabaseDeployment {
+			prefix += "-" + deployment.Name
+		}
+		metadata := infraMetadata("database", "primary", "")
+		metadata["database_deployment"] = deployment.Name
 		port := pg.EffectivePort()
 		if len(pg.Nodes) > 0 {
 			for _, node := range pg.Nodes {
-				addEntry(fmt.Sprintf("postgres-%d", node.ID), "database", node.Host, port, infraMetadata("database", "primary", ""))
+				addEntry(fmt.Sprintf("%s-%d", prefix, node.ID), "database", node.Host, port, metadata)
 			}
 		} else {
-			addEntry("postgres", "database", pg.Host, port, infraMetadata("database", "primary", ""))
+			addEntry(prefix, "database", pg.Host, port, metadata)
 		}
 		for _, inst := range pg.Instances {
 			instPort := inst.Port

@@ -12,8 +12,8 @@ CREATE TABLE IF NOT EXISTS commodore.delegated_jwt_replays (
     expires_at TIMESTAMPTZ NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-CREATE INDEX IF NOT EXISTS idx_commodore_delegated_jwt_replays_expires_at
-    ON commodore.delegated_jwt_replays (expires_at);
+CREATE INDEX IF NOT EXISTS idx_commodore_delegated_jwt_replays_expires_at_range
+    ON commodore.delegated_jwt_replays (expires_at ASC);
 
 -- ============================================================================
 -- EXTENSIONS
@@ -137,8 +137,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_commodore_auth_authz_codes_hash
     ON commodore.auth_authorization_codes(code_hash);
 CREATE INDEX IF NOT EXISTS idx_commodore_auth_authz_codes_tenant
     ON commodore.auth_authorization_codes(tenant_id);
-CREATE INDEX IF NOT EXISTS idx_commodore_auth_authz_codes_expires
-    ON commodore.auth_authorization_codes(expires_at)
+CREATE INDEX IF NOT EXISTS idx_commodore_auth_authz_codes_expires_range
+    ON commodore.auth_authorization_codes(expires_at ASC)
     WHERE consumed_at IS NULL;
 
 -- Device Authorization Grant state. user_id/tenant_id stay NULL until the
@@ -167,8 +167,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_commodore_auth_device_codes_user_code
 CREATE INDEX IF NOT EXISTS idx_commodore_auth_device_codes_user
     ON commodore.auth_device_codes(user_id)
     WHERE user_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_commodore_auth_device_codes_expires
-    ON commodore.auth_device_codes(expires_at)
+CREATE INDEX IF NOT EXISTS idx_commodore_auth_device_codes_expires_range
+    ON commodore.auth_device_codes(expires_at ASC)
     WHERE status = 'pending';
 
 -- ============================================================================
@@ -193,8 +193,8 @@ CREATE TABLE IF NOT EXISTS commodore.wallet_auth_challenges (
 CREATE INDEX IF NOT EXISTS idx_commodore_wallet_auth_challenges_lookup
     ON commodore.wallet_auth_challenges(wallet_address, message_hash)
     WHERE consumed_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_commodore_wallet_auth_challenges_expiry
-    ON commodore.wallet_auth_challenges(expires_at)
+CREATE INDEX IF NOT EXISTS idx_commodore_wallet_auth_challenges_expiry_range
+    ON commodore.wallet_auth_challenges(expires_at ASC)
     WHERE consumed_at IS NULL;
 
 CREATE TABLE IF NOT EXISTS commodore.wallet_identities (
@@ -337,7 +337,7 @@ CREATE TABLE IF NOT EXISTS commodore.streams (
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW()
 );
-CREATE INDEX IF NOT EXISTS idx_commodore_streams_deleting ON commodore.streams(deleted_at) WHERE deleted_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_commodore_streams_deleting_range ON commodore.streams(deleted_at ASC) WHERE deleted_at IS NOT NULL;
 
 -- Stream authentication keys (multiple keys per stream for rotation)
 CREATE TABLE IF NOT EXISTS commodore.stream_keys (
@@ -661,7 +661,7 @@ CREATE INDEX IF NOT EXISTS idx_commodore_clips_internal ON commodore.clips(inter
 -- portable functional index provides both case-insensitive uniqueness and indexed resolution.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_commodore_clips_playback_ci
     ON commodore.clips((lower(playback_id::text)));
-CREATE INDEX IF NOT EXISTS idx_commodore_clips_created ON commodore.clips(created_at);
+CREATE INDEX IF NOT EXISTS idx_commodore_clips_created_range ON commodore.clips(created_at ASC);
 
 -- DVR recording business registry (metadata only, lifecycle in Foghorn)
 CREATE TABLE IF NOT EXISTS commodore.dvr_recordings (
@@ -746,7 +746,7 @@ CREATE INDEX IF NOT EXISTS idx_commodore_dvr_internal ON commodore.dvr_recording
 -- YugabyteDB cannot index CITEXT directly; playback lookup queries use this same expression.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_commodore_dvr_playback_ci
     ON commodore.dvr_recordings((lower(playback_id::text)));
-CREATE INDEX IF NOT EXISTS idx_commodore_dvr_created ON commodore.dvr_recordings(created_at);
+CREATE INDEX IF NOT EXISTS idx_commodore_dvr_created_range ON commodore.dvr_recordings(created_at ASC);
 
 -- Generate clip hash (deterministic based on stream + timing)
 CREATE OR REPLACE FUNCTION commodore.generate_clip_hash(
@@ -875,7 +875,7 @@ CREATE INDEX IF NOT EXISTS idx_commodore_vod_internal ON commodore.vod_assets(in
 -- YugabyteDB cannot index CITEXT directly; playback lookup queries use this same expression.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_commodore_vod_playback_ci
     ON commodore.vod_assets((lower(playback_id::text)));
-CREATE INDEX IF NOT EXISTS idx_commodore_vod_created ON commodore.vod_assets(created_at);
+CREATE INDEX IF NOT EXISTS idx_commodore_vod_created_range ON commodore.vod_assets(created_at ASC);
 CREATE INDEX IF NOT EXISTS idx_commodore_vod_origin
     ON commodore.vod_assets(origin_type, origin_id)
     WHERE origin_type IS NOT NULL;
@@ -1018,15 +1018,15 @@ CREATE TABLE IF NOT EXISTS commodore.artifact_creation_intents (
 
 -- Sweep scan index: pending intents oldest-first. Partial so committed/aborted
 -- terminal rows (kept as an idempotency ledger) never widen the hot scan.
-CREATE INDEX IF NOT EXISTS idx_commodore_creation_intents_pending
-    ON commodore.artifact_creation_intents(updated_at)
+CREATE INDEX IF NOT EXISTS idx_commodore_creation_intents_pending_range
+    ON commodore.artifact_creation_intents(updated_at ASC)
     WHERE status = 'pending';
 
 -- Ack-drain claim index: outstanding ack obligations ordered by their next-due schedule,
 -- so the drain claims DUE rows (command_ack_next_at past) soonest-first. Partial so it
 -- touches only outstanding obligations, not the terminal rows already acked.
-CREATE INDEX IF NOT EXISTS idx_commodore_creation_intents_ack_pending
-    ON commodore.artifact_creation_intents(command_ack_next_at)
+CREATE INDEX IF NOT EXISTS idx_commodore_creation_intents_ack_pending_range
+    ON commodore.artifact_creation_intents(command_ack_next_at ASC)
     WHERE command_ack_pending = TRUE;
 
 -- Generate VOD hash (includes tenant + user + filename + timestamp for uniqueness)
@@ -1228,8 +1228,8 @@ CREATE TABLE IF NOT EXISTS commodore.playback_policy_invalidation_outbox (
     completed_at TIMESTAMP
 );
 
-CREATE INDEX IF NOT EXISTS idx_commodore_invalidation_outbox_pending
-    ON commodore.playback_policy_invalidation_outbox(next_attempt_at)
+CREATE INDEX IF NOT EXISTS idx_commodore_invalidation_outbox_pending_range
+    ON commodore.playback_policy_invalidation_outbox(next_attempt_at ASC)
     WHERE status = 'pending';
 
 CREATE INDEX IF NOT EXISTS idx_commodore_invalidation_outbox_tenant
@@ -1265,8 +1265,8 @@ CREATE TABLE IF NOT EXISTS commodore.service_event_outbox (
     lease_token  UUID
 );
 
-CREATE INDEX IF NOT EXISTS idx_commodore_service_event_outbox_pending
-    ON commodore.service_event_outbox(created_at)
+CREATE INDEX IF NOT EXISTS idx_commodore_service_event_outbox_pending_range
+    ON commodore.service_event_outbox(created_at ASC)
     WHERE completed_at IS NULL;
 
 CREATE INDEX IF NOT EXISTS idx_commodore_service_event_outbox_tenant
@@ -1304,16 +1304,16 @@ CREATE TABLE IF NOT EXISTS commodore.domain_event_outbox (
     CONSTRAINT chk_commodore_domain_event_outbox_scope_tenant CHECK ((scope = 'tenant') = (tenant_id IS NOT NULL))
 );
 
-CREATE INDEX IF NOT EXISTS idx_commodore_domain_event_outbox_pending
-    ON commodore.domain_event_outbox (enqueued_at, event_id)
+CREATE INDEX IF NOT EXISTS idx_commodore_domain_event_outbox_pending_range
+    ON commodore.domain_event_outbox (enqueued_at ASC, event_id)
     WHERE completed_at IS NULL;
 
 CREATE INDEX IF NOT EXISTS idx_commodore_domain_event_outbox_aggregate
     ON commodore.domain_event_outbox (aggregate_type, aggregate_id, enqueued_at, event_id)
     WHERE completed_at IS NULL;
 
-CREATE INDEX IF NOT EXISTS idx_commodore_domain_event_outbox_completed
-    ON commodore.domain_event_outbox (completed_at)
+CREATE INDEX IF NOT EXISTS idx_commodore_domain_event_outbox_completed_range
+    ON commodore.domain_event_outbox (completed_at ASC)
     WHERE completed_at IS NOT NULL;
 
 -- ============================================================================
@@ -1337,8 +1337,8 @@ CREATE TABLE IF NOT EXISTS commodore.stream_cleanup_outbox (
     lease_token     TEXT,                                   -- fences settlement: the claim stamps a fresh token, every settlement CAS-checks it so a stale worker can't settle a row a peer re-claimed
     thumbnail_cleanup_acked_at TIMESTAMP                    -- durable phase-1 marker: once Foghorn ACKED the thumbnail-cleanup obligation for every owning cell (tombstone held; NOT proof bytes are gone), the worker skips the phase and gives the whole item budget to the child cascade (so a slow thumbnail cell can't starve child cleanup every retry). NULL = not yet acked
 );
-CREATE INDEX IF NOT EXISTS idx_commodore_stream_cleanup_outbox_pending
-    ON commodore.stream_cleanup_outbox(next_attempt_at)
+CREATE INDEX IF NOT EXISTS idx_commodore_stream_cleanup_outbox_pending_range
+    ON commodore.stream_cleanup_outbox(next_attempt_at ASC)
     WHERE status = 'pending';
 
 -- Durable delivery of account emails (email verification). Register and resend write one row in the same
@@ -1361,8 +1361,8 @@ CREATE TABLE IF NOT EXISTS commodore.account_email_outbox (
     CONSTRAINT chk_commodore_account_email_outbox_purpose CHECK (purpose IN ('verification')),
     CONSTRAINT chk_commodore_account_email_outbox_status CHECK (status IN ('pending', 'completed', 'abandoned'))
 );
-CREATE INDEX IF NOT EXISTS idx_commodore_account_email_outbox_pending
-    ON commodore.account_email_outbox(next_attempt_at)
+CREATE INDEX IF NOT EXISTS idx_commodore_account_email_outbox_pending_range
+    ON commodore.account_email_outbox(next_attempt_at ASC)
     WHERE status = 'pending';
 
 -- ============================================================================
@@ -2154,6 +2154,10 @@ WHERE delivery.status = 'rejected'
                 WHEN distribution.last_acknowledged_at > COALESCE(reset.reset_at, '-infinity'::timestamptz)
                 THEN distribution.highest_acknowledged_version ELSE 0 END))
   );
+
+CREATE INDEX IF NOT EXISTS idx_commodore_users_verification_token
+    ON commodore.users(verification_token)
+    WHERE verification_token IS NOT NULL AND verified = false;
 
 -- Schema baseline identity marker. Records that this database was created from the
 -- consolidated baseline at this floor, so the migration min-version guard treats

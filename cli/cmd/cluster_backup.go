@@ -178,13 +178,55 @@ type backupPlan struct {
 // planBackupTargets resolves the selected stores against the manifest: the primary PostgreSQL/YugabyteDB with its
 // per-cell database aliases, every named postgres instance, and the ClickHouse coordinator.
 func planBackupTargets(ctx context.Context, rc *resolvedCluster, pool *ssh.Pool, sel backupSelection) (*backupPlan, error) {
+	if hasUnscopedDatabaseDeployments(rc.Manifest) {
+		if err := validateSQLDatabaseOwnership(rc.Manifest); err != nil {
+			return nil, err
+		}
+		combined := &backupPlan{}
+		first := true
+		err := forEachDatabaseDeployment(rc.Manifest, func(view *inventory.Manifest) error {
+			selection := backupSelection{all: sel.all, clickhouse: first && sel.clickhouse}
+			if !first {
+				view.Infrastructure.ClickHouse = nil
+			}
+			first = false
+			pg := view.Infrastructure.Postgres
+			for _, db := range expandedYugabyteDatabaseConfigs(pg.Databases, view) {
+				if sel.includes("", db.Name) && !sel.all {
+					selection.databases = append(selection.databases, db.Name)
+				}
+			}
+			for _, inst := range pg.Instances {
+				for _, db := range inst.Databases {
+					if sel.includes(inst.Name, db.Name) && !sel.all {
+						selection.databases = append(selection.databases, inst.Name+"/"+db.Name)
+					}
+				}
+			}
+			if !selection.all && !selection.clickhouse && len(selection.databases) == 0 {
+				return nil
+			}
+			part, err := planBackupTargets(ctx, rc.withDatabaseManifest(view), pool, selection)
+			if err != nil {
+				return err
+			}
+			combined.databases = append(combined.databases, part.databases...)
+			if part.clickhouse != nil {
+				combined.clickhouse = part.clickhouse
+			}
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+		return validateBackupPlanSelection(combined, sel)
+	}
 	manifest := rc.Manifest
 	plan := &backupPlan{}
 	if pg := manifest.Infrastructure.Postgres; pg != nil && pg.Enabled {
-		databases := schemaDatabasesFromConfigs(pg.Databases)
+		databases := yugabyteSchemaDatabases(pg.Databases, manifest)
 		engine := backup.EnginePostgres
 		if pg.IsYugabyte() {
-			databases = yugabyteSchemaDatabases(pg.Databases, manifest)
 			engine = backup.EngineYugabyte
 		}
 		var selected []provisioner.SchemaDatabase
@@ -248,6 +290,10 @@ func planBackupTargets(ctx context.Context, rc *resolvedCluster, pool *ssh.Pool,
 			return nil, fmt.Errorf("--clickhouse: the manifest has no enabled ClickHouse with the %s database", clickhouseBackupDatabase)
 		}
 	}
+	return validateBackupPlanSelection(plan, sel)
+}
+
+func validateBackupPlanSelection(plan *backupPlan, sel backupSelection) (*backupPlan, error) {
 	for _, want := range sel.databases {
 		found := false
 		for _, db := range plan.databases {

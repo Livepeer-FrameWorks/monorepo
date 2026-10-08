@@ -259,6 +259,18 @@ func collectClickHouseSnapshot(ctx context.Context, rc *resolvedCluster, pool *s
 }
 
 func postgresSnapshotTargets(rc *resolvedCluster) ([]postgresSnapshotTarget, error) {
+	if hasUnscopedDatabaseDeployments(rc.Manifest) {
+		var all []postgresSnapshotTarget
+		err := forEachDatabaseDeployment(rc.Manifest, func(view *inventory.Manifest) error {
+			items, err := postgresSnapshotTargets(rc.withDatabaseManifest(view))
+			for i := range items {
+				items[i].Name = view.DatabaseDeployment + "-" + items[i].Name
+			}
+			all = append(all, items...)
+			return err
+		})
+		return all, err
+	}
 	manifest := rc.Manifest
 	pg := manifest.Infrastructure.Postgres
 	if pg == nil || !pg.Enabled {

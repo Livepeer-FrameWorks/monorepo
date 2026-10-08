@@ -54,6 +54,9 @@ image="$(resolve_image)" || {
   exit 1
 }
 
+catalog_preload="${FRAMEWORKS_YUGABYTE_CATALOG_PRELOAD:-false}"
+case "$catalog_preload" in true|false) ;; *) echo "ERROR: FRAMEWORKS_YUGABYTE_CATALOG_PRELOAD must be true or false" >&2; exit 2 ;; esac
+
 # Service tests load the baselines the release applies: rendered by the release code path, with each database's layout.
 baselines="$(mktemp -d "${TMPDIR:-/tmp}/frameworks-yugabyte-baselines.XXXXXX")"
 (cd "$repo_root/cli" && go run ./internal/yugabytecontractbaselines -out "$baselines")
@@ -64,9 +67,10 @@ baselines="$(mktemp -d "${TMPDIR:-/tmp}/frameworks-yugabyte-baselines.XXXXXX")"
 # tmpfs pages are only taken as they are written, and the tserver refuses writes once less than 5% of the directory
 # is free, which a 4 GB tmpfs reached.
 docker run -d --name "$container" -P --hostname "$container" \
+  -e "FRAMEWORKS_YUGABYTE_CATALOG_PRELOAD=$catalog_preload" \
   --tmpfs /var/lib/frameworks-yugabyte-contract-data:size=12g \
   "$image" \
-  bash -c 'exec bin/yugabyted start --background=false --ui=false --callhome=false --base_dir=/var/lib/frameworks-yugabyte-contract-data --advertise_address="$(hostname -i)" --tserver_flags=yb_enable_read_committed_isolation=true' \
+  bash -c 'exec bin/yugabyted start --background=false --ui=false --callhome=false --base_dir=/var/lib/frameworks-yugabyte-contract-data --advertise_address="$(hostname -i)" --tserver_flags="yb_enable_read_committed_isolation=true,ysql_catalog_preload_additional_tables=$FRAMEWORKS_YUGABYTE_CATALOG_PRELOAD"' \
   >/dev/null
 container_started=true
 

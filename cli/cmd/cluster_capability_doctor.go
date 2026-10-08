@@ -59,6 +59,9 @@ func doctorPostgresCapabilities(
 	checked := 0
 	for _, serviceName := range serviceNames {
 		svc := manifest.Services[serviceName]
+		if manifest.ServiceDatabaseDeployment(serviceName) != inventory.DatabaseDeploymentName(manifest.DatabaseDeployment) {
+			continue
+		}
 		if !svc.Enabled {
 			continue
 		}

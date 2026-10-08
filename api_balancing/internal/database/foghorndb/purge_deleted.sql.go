@@ -71,7 +71,10 @@ WHERE artifact.artifact_hash = $1
   AND NOT EXISTS (
       SELECT 1 FROM foghorn.dvr_chapters chapter
       WHERE chapter.artifact_hash = artifact.artifact_hash
-         OR chapter.playback_artifact_hash = artifact.artifact_hash
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM foghorn.dvr_chapters chapter
+      WHERE chapter.playback_artifact_hash = artifact.artifact_hash
   )
   AND NOT EXISTS (SELECT 1 FROM foghorn.artifact_nodes node WHERE node.artifact_hash = artifact.artifact_hash AND node.is_orphaned = false)
   AND (
@@ -191,7 +194,10 @@ WHERE artifact.artifact_hash = $3
   AND NOT EXISTS (
       SELECT 1 FROM foghorn.dvr_chapters chapter
       WHERE chapter.artifact_hash = artifact.artifact_hash
-         OR chapter.playback_artifact_hash = artifact.artifact_hash
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM foghorn.dvr_chapters chapter
+      WHERE chapter.playback_artifact_hash = artifact.artifact_hash
   )
   AND NOT EXISTS (SELECT 1 FROM foghorn.artifact_nodes node WHERE node.artifact_hash = artifact.artifact_hash AND node.is_orphaned = false)
 `
@@ -241,7 +247,10 @@ WHERE artifact.artifact_hash = $3
   AND NOT EXISTS (
       SELECT 1 FROM foghorn.dvr_chapters chapter
       WHERE chapter.artifact_hash = artifact.artifact_hash
-         OR chapter.playback_artifact_hash = artifact.artifact_hash
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM foghorn.dvr_chapters chapter
+      WHERE chapter.playback_artifact_hash = artifact.artifact_hash
   )
   AND NOT EXISTS (SELECT 1 FROM foghorn.artifact_nodes node WHERE node.artifact_hash = artifact.artifact_hash AND node.is_orphaned = false)
 `
@@ -518,7 +527,10 @@ WHERE artifact.federated_pointer = true
   AND NOT EXISTS (
       SELECT 1 FROM foghorn.dvr_chapters chapter
       WHERE chapter.artifact_hash = artifact.artifact_hash
-         OR chapter.playback_artifact_hash = artifact.artifact_hash
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM foghorn.dvr_chapters chapter
+      WHERE chapter.playback_artifact_hash = artifact.artifact_hash
   )
   AND NOT EXISTS (
       SELECT 1 FROM foghorn.artifact_nodes node
@@ -590,7 +602,10 @@ WHERE artifact.federated_pointer = true
   AND NOT EXISTS (
       SELECT 1 FROM foghorn.dvr_chapters chapter
       WHERE chapter.artifact_hash = artifact.artifact_hash
-         OR chapter.playback_artifact_hash = artifact.artifact_hash
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM foghorn.dvr_chapters chapter
+      WHERE chapter.playback_artifact_hash = artifact.artifact_hash
   )
   AND NOT EXISTS (SELECT 1 FROM foghorn.artifact_nodes node WHERE node.artifact_hash = artifact.artifact_hash AND node.is_orphaned = false)
 ORDER BY artifact.federated_purge_eligible_at, artifact.artifact_hash
@@ -698,7 +713,10 @@ WHERE artifact.federated_pointer = true
   AND NOT EXISTS (
       SELECT 1 FROM foghorn.dvr_chapters chapter
       WHERE chapter.artifact_hash = artifact.artifact_hash
-         OR chapter.playback_artifact_hash = artifact.artifact_hash
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM foghorn.dvr_chapters chapter
+      WHERE chapter.playback_artifact_hash = artifact.artifact_hash
   )
   AND NOT EXISTS (SELECT 1 FROM foghorn.artifact_nodes node WHERE node.artifact_hash = artifact.artifact_hash AND node.is_orphaned = false)
 ORDER BY artifact.federated_purge_eligible_at, artifact.artifact_hash

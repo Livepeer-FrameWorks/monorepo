@@ -36,6 +36,7 @@ func TestGeneratedQueryCatalogPrepares_RealPG(t *testing.T) {
 	assertTenantAdmissionQueryExecution(t, db)
 	assertTenantAdmissionQueryPlan(t, db)
 	assertMediaAuthorityRefreshTriggers(t, db)
+	assertDNSSweepMatchesTenantEntitlements(t, db)
 
 	ctx := context.Background()
 	t.Run("x402 intent replay is explicit", func(t *testing.T) {
@@ -269,6 +270,55 @@ func TestGeneratedQueryCatalogPrepares_RealYugabyte(t *testing.T) {
 	preparePurserQueryCatalog(t, db)
 	assertTenantAdmissionQueryExecution(t, db)
 	assertMediaAuthorityRefreshTriggers(t, db)
+	assertDNSSweepMatchesTenantEntitlements(t, db)
+}
+
+func assertDNSSweepMatchesTenantEntitlements(t *testing.T, db *sql.DB) {
+	t.Helper()
+	ctx := context.Background()
+	const tier = "93000000-0000-0000-0000-000000000001"
+	const active = "93000000-0000-0000-0000-000000000002"
+	const cancelled = "93000000-0000-0000-0000-000000000003"
+	statements := []string{
+		`INSERT INTO purser.billing_tiers (id, tier_name, display_name, tier_level) VALUES ('` + tier + `', 'dns-sweep', 'DNS sweep', 2)`,
+		`INSERT INTO purser.tier_entitlements (tier_id, key, value) VALUES ('` + tier + `', 'custom_subdomain_enabled', 'true'), ('` + tier + `', 'custom_domain_enabled', 'true')`,
+		`INSERT INTO purser.tenant_subscriptions (tenant_id, tier_id, status, billing_model) VALUES ('` + active + `', '` + tier + `', 'active', 'prepaid'), ('` + cancelled + `', '` + tier + `', 'cancelled', 'prepaid')`,
+		`INSERT INTO purser.subscription_entitlement_overrides (subscription_id, key, value) SELECT id, 'custom_subdomain_enabled', 'false' FROM purser.tenant_subscriptions WHERE tenant_id = '` + active + `'`,
+	}
+	for _, statement := range statements {
+		if _, err := db.ExecContext(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	q := New(db)
+	rows, err := q.ListSubscriptionTierNames(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, row := range rows {
+		tenantID := row.TenantID.String()
+		if tenantID != active && tenantID != cancelled {
+			continue
+		}
+		if seen[tenantID] {
+			t.Fatal("DNS sweep duplicated a tenant")
+		}
+		seen[tenantID] = true
+		point, err := q.LoadEffectiveDNSEntitlements(ctx, tenantID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if row.CustomSubdomainEnabled != point.CustomSubdomainEnabled || row.CustomDomainEnabled != point.CustomDomainEnabled {
+			t.Fatal("sweep and tenant lookup disagree")
+		}
+		if row.CustomSubdomainEnabled || row.CustomDomainEnabled != (tenantID == active) {
+			t.Fatalf("wrong DNS grants: %+v", row)
+		}
+	}
+	if len(seen) != 2 {
+		t.Fatalf("sweep lost a tenant: %v", seen)
+	}
 }
 
 func assertTenantAdmissionQueryExecution(t *testing.T, db *sql.DB) {

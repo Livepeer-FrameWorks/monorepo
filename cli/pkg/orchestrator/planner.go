@@ -226,7 +226,7 @@ func (p *Planner) topologyInfraTaskDeps(serviceID string, svc inventory.ServiceC
 	for _, dep := range topology.InfraDependencies(serviceID) {
 		switch dep.Kind {
 		case topology.InfraDatabase:
-			deps = appendIfInGraph(deps, p.databaseTaskNames(dep)...)
+			deps = appendIfInGraph(deps, p.databaseTaskNamesForDeployment(dep, svc.DatabaseDeployment)...)
 		case topology.InfraClickHouse:
 			deps = appendIfInGraph(deps, p.clickhouseTaskNames()...)
 		case topology.InfraKafka:
@@ -235,7 +235,27 @@ func (p *Planner) topologyInfraTaskDeps(serviceID string, svc inventory.ServiceC
 			deps = appendIfInGraph(deps, p.redisTaskNames(dep, svc, clusterID)...)
 		}
 	}
+	if len(p.manifest.Infrastructure.DatabaseDeployments) > 0 {
+		for _, deployment := range p.manifest.SQLDeployments() {
+			deps = appendIfInGraph(deps, p.databaseTaskNamesForDeployment(topology.InfraDependency{}, deployment.Name)...)
+		}
+	}
 	return deps
+}
+
+func (p *Planner) databaseTaskNamesForDeployment(dep topology.InfraDependency, name string) []string {
+	if name == "" || name == inventory.PrimaryDatabaseDeployment {
+		return p.databaseTaskNames(dep)
+	}
+	view, err := p.manifest.WithDatabaseDeployment(name)
+	if err != nil {
+		return nil
+	}
+	names := NewPlanner(view).databaseTaskNames(dep)
+	for i := range names {
+		names[i] = name + "-" + names[i]
+	}
+	return names
 }
 
 func (p *Planner) databaseTaskNames(dep topology.InfraDependency) []string {
@@ -433,6 +453,17 @@ func (p *Planner) addMeshTasks(graph *DependencyGraph) error {
 	}
 	privateerHosts := EffectivePrivateerHostsForManifest(svc, p.manifest)
 	for _, hostName := range privateerHosts {
+		if p.manifest.DatabaseDeployment != "" {
+			allowed := false
+			for _, host := range p.manifest.Infrastructure.Postgres.AllHosts() {
+				if host == hostName {
+					allowed = true
+				}
+			}
+			if !allowed {
+				continue
+			}
+		}
 		task := NewServiceTask(deploy, "privateer", hostName, hostName, PhaseMesh)
 		task.Name = "privateer-mesh-" + hostName
 		task.ClusterID = p.manifest.HostCluster(hostName)
@@ -475,12 +506,19 @@ func (p *Planner) addInfrastructureTasks(graph *DependencyGraph) error {
 
 	// Add Postgres / YugabyteDB
 	var yugabyteTaskNames []string
-	if pg := p.manifest.Infrastructure.Postgres; pg != nil && pg.Enabled {
+	for _, deployment := range p.manifest.SQLDeployments() {
+		pg := deployment.Config
+		nameTask := func(task *Task) {
+			if deployment.Name != inventory.PrimaryDatabaseDeployment {
+				task.Name = deployment.Name + "-" + task.Name
+			}
+		}
 		if pg.IsYugabyte() && len(pg.Nodes) > 0 {
 			for _, node := range pg.Nodes {
 				task := NewTask("yugabyte", "postgres", strconv.Itoa(node.ID), node.Host, PhaseInfrastructure)
 				task.Name = "yugabyte-node-" + strconv.Itoa(node.ID)
 				task.DependsOn = withMesh(task.DependsOn)
+				nameTask(task)
 				graph.AddTask(task)
 				yugabyteTaskNames = append(yugabyteTaskNames, task.Name)
 				hostDatabaseDeps[node.Host] = append(hostDatabaseDeps[node.Host], task.Name)
@@ -488,15 +526,21 @@ func (p *Planner) addInfrastructureTasks(graph *DependencyGraph) error {
 		} else {
 			task := NewTask("postgres", "postgres", "", pg.Host, PhaseInfrastructure)
 			task.DependsOn = withMesh(task.DependsOn)
+			nameTask(task)
 			graph.AddTask(task)
 			hostDatabaseDeps[pg.Host] = append(hostDatabaseDeps[pg.Host], task.Name)
 		}
 		for _, inst := range pg.Instances {
 			task := NewTask("postgres", "postgres", inst.Name, inst.Host, PhaseInfrastructure)
 			task.DependsOn = withMesh(task.DependsOn)
+			nameTask(task)
 			graph.AddTask(task)
 			hostDatabaseDeps[inst.Host] = append(hostDatabaseDeps[inst.Host], task.Name)
 		}
+	}
+
+	if p.manifest.DatabaseDeployment != "" {
+		return nil
 	}
 
 	// Add Redis. Sentinel-mode instances fan out into N+1 server tasks
@@ -828,6 +872,9 @@ func EffectivePrivateerHostsForManifest(svc inventory.ServiceConfig, manifest *i
 	if manifest == nil {
 		return nil
 	}
+	if manifest.DatabaseDeployment != "" {
+		return manifest.Infrastructure.Postgres.AllHosts()
+	}
 	seen := map[string]struct{}{}
 	for _, hostName := range EffectivePrivateerHosts(svc, manifest.Hosts) {
 		if hostName != "" {
@@ -914,7 +961,11 @@ func EffectiveVMAgentHosts(svc inventory.ServiceConfig, manifest *inventory.Mani
 			seen[name] = struct{}{}
 		}
 	}
-	if pg := manifest.Infrastructure.Postgres; pg != nil && pg.Enabled && pg.IsYugabyte() {
+	for _, deployment := range manifest.SQLDeployments() {
+		pg := deployment.Config
+		if !pg.IsYugabyte() {
+			continue
+		}
 		for _, node := range pg.Nodes {
 			if node.Host != "" {
 				seen[node.Host] = struct{}{}

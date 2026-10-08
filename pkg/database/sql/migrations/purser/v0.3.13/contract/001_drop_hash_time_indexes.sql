@@ -1,0 +1,17 @@
+DROP INDEX IF EXISTS purser.idx_purser_delegated_jwt_replays_expires_at;
+DROP INDEX IF EXISTS purser.idx_tenant_subscriptions_pending_due;
+DROP INDEX IF EXISTS purser.idx_purser_usage_records_created_at;
+DROP INDEX IF EXISTS purser.idx_stripe_meter_events_outbox_pending;
+DROP INDEX IF EXISTS purser.idx_invoice_email_outbox_pending;
+DROP INDEX IF EXISTS purser.idx_x402_nonces_submitting;
+DROP INDEX IF EXISTS purser.idx_crypto_accounting_anomalies_open;
+DROP INDEX IF EXISTS purser.idx_x402_rate_limit_windows_expiry;
+DROP INDEX IF EXISTS purser.idx_x402_mutation_results_unknown;
+DROP INDEX IF EXISTS purser.idx_simplified_invoices_issued;
+DROP INDEX IF EXISTS purser.idx_tenant_balance_rollups_last_topup;
+DROP INDEX IF EXISTS purser.idx_billing_payment_attempts_next_retry;
+DROP INDEX IF EXISTS purser.idx_provider_webhook_inbox_pending;
+DROP INDEX IF EXISTS purser.idx_purser_billing_event_outbox_pending;
+DROP INDEX IF EXISTS purser.idx_purser_domain_event_outbox_pending;
+DROP INDEX IF EXISTS purser.idx_purser_domain_event_outbox_completed;
+DROP INDEX IF EXISTS purser.idx_purser_tenant_subscriptions_billing_date;

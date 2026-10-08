@@ -208,7 +208,8 @@ func buildClusterDriftTargets(manifest *inventory.Manifest) []clusterDriftTarget
 	// reportable per-instance. Deploy names must match provisioner
 	// BaseProvisioner registrations in cli/pkg/provisioner/*.go — Kafka
 	// controllers and Redis instances have distinct names from the family.
-	if pg := manifest.Infrastructure.Postgres; pg != nil && pg.Enabled {
+	for _, deployment := range manifest.SQLDeployments() {
+		pg := deployment.Config
 		deploy := "postgres"
 		if pg.IsYugabyte() {
 			deploy = "yugabyte"

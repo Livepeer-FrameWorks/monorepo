@@ -29,7 +29,7 @@ func validateSchema(schema string) error {
 //
 //   - event_id is the UUIDv7 events.New generated; the relay sends it on every
 //     attempt, so a redelivery after a lost acknowledgment keeps the ID.
-//   - The relay orders an aggregate's rows by (enqueued_at, event_id) and
+//   - The relay orders an aggregate's rows by (enqueued_at ASC, event_id) and
 //     claims a row only when no older row of the same aggregate is incomplete.
 //     enqueued_at is clock_timestamp(), so rows written by one transaction keep
 //     their insert order.
@@ -68,15 +68,15 @@ const tableDDLTemplate = `CREATE TABLE IF NOT EXISTS {schema}.domain_event_outbo
     CONSTRAINT chk_{schema}_domain_event_outbox_scope_tenant CHECK ((scope = 'tenant') = (tenant_id IS NOT NULL))
 );
 
-CREATE INDEX IF NOT EXISTS idx_{schema}_domain_event_outbox_pending
-    ON {schema}.domain_event_outbox (enqueued_at, event_id)
+CREATE INDEX IF NOT EXISTS idx_{schema}_domain_event_outbox_pending_range
+    ON {schema}.domain_event_outbox (enqueued_at ASC, event_id)
     WHERE completed_at IS NULL;
 
 CREATE INDEX IF NOT EXISTS idx_{schema}_domain_event_outbox_aggregate
     ON {schema}.domain_event_outbox (aggregate_type, aggregate_id, enqueued_at, event_id)
     WHERE completed_at IS NULL;
 
-CREATE INDEX IF NOT EXISTS idx_{schema}_domain_event_outbox_completed
-    ON {schema}.domain_event_outbox (completed_at)
+CREATE INDEX IF NOT EXISTS idx_{schema}_domain_event_outbox_completed_range
+    ON {schema}.domain_event_outbox (completed_at ASC)
     WHERE completed_at IS NOT NULL;
 `

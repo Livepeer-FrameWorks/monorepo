@@ -6,6 +6,27 @@ import (
 	"testing"
 )
 
+func TestYugabyteRoleCatalogPreloadIsExplicit(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		vars, err := yugabyteRoleVars(context.Background(), nilHost(), ServiceConfig{
+			Metadata: map[string]any{"catalog_preload_additional_tables": enabled},
+		}, mockPrivateerHelpers())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, ok := vars["yugabyte_catalog_preload_additional_tables"]; !ok || got != enabled {
+			t.Fatalf("explicit catalog preload %v was not rendered: %v", enabled, got)
+		}
+	}
+	vars, err := yugabyteRoleVars(context.Background(), nilHost(), ServiceConfig{}, mockPrivateerHelpers())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := vars["yugabyte_catalog_preload_additional_tables"]; ok {
+		t.Fatal("omitted flag must preserve engine default")
+	}
+}
+
 func TestYugabyteRoleVarsPassesDatabaseOwnerPassword(t *testing.T) {
 	vars, err := yugabyteRoleVars(context.Background(), nilHost(), ServiceConfig{
 		Metadata: map[string]any{

@@ -3,6 +3,7 @@ package grpc
 import (
 	"context"
 	"database/sql"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -58,7 +59,7 @@ func TestLoginChecksPasswordBeforeUnverifiedState(t *testing.T) {
 				sql.NullString{}, sql.NullString{}, "owner", pq.StringArray{"streams:read"},
 				true, false, now, now, false,
 			)
-			mock.ExpectQuery("FROM commodore.users WHERE email = \\$1").
+			mock.ExpectQuery(regexp.QuoteMeta("FROM commodore.users WHERE lower(email::text) = lower($1::text)")).
 				WithArgs("user@example.com").
 				WillReturnRows(rows)
 			// The rejected sign-in is recorded in its own transaction.

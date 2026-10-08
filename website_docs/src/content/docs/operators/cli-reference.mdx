@@ -35,6 +35,12 @@ Run `frameworks config path --kind config` to print the canonical path the CLI i
 
 Note: the manifest-source flags (`--manifest`, `--gitops-dir`, `--github-repo`, `--github-ref`, `--cluster`, `--age-key`, `--github-app-id`, `--github-installation-id`, `--github-private-key`) are persistent on the `frameworks cluster` command group — set on any `cluster *` subcommand. They are not global.
 
+`--database-deployment primary|<name>` selects one SQL deployment for database
+maintenance. Without it, bulk database operations cover all enabled deployments.
+Yugabyte maintenance and seeding require an explicit selection when several
+deployments are enabled. For provisioning, use it with `--only infrastructure`;
+application provisioning uses each service's `database_deployment` binding.
+
 ## Command Catalog
 
 `frameworks commands` prints the Cobra command tree for tools that need to
@@ -982,6 +988,18 @@ frameworks cluster restart bridge --validate
 
 ---
 
+### frameworks cluster stop
+
+Stop every replica of an application service for maintenance. The service remains
+stopped until explicitly restarted or provisioned. Use the complete fleet manifest
+so every writer is included.
+
+```bash
+frameworks cluster stop foghorn-us
+```
+
+---
+
 ### frameworks cluster upgrade
 
 Upgrade services to new versions from GitOps manifests.
@@ -1313,6 +1331,7 @@ stays raised until recovery succeeds. There is no legacy replay fallback.
 - `--database string` - Database to restore (repeatable)
 - `--clickhouse` - The ClickHouse billing facts
 - `--yes` - Skip the confirmation prompt
+- `--leave-stopped` - Keep affected services stopped after the database swap, including on failure, until their connection settings have been redeployed
 
 **Examples:**
 

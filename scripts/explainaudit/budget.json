@@ -1,0 +1,2336 @@
+{
+  "bosun:hw:Claim@declared": {
+    "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION"],
+    "read_requests": 1,
+    "rows_scanned": 1661
+  },
+  "bosun:hw:Claim@distributed": {
+    "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION"],
+    "read_requests": 1,
+    "rows_scanned": 1661
+  },
+  "bosun:hw:ClaimBatch@declared": {
+    "flags": ["MANY_READ_RPCS", "SORT_FEEDS_LIMIT"],
+    "read_requests": 103,
+    "rows_scanned": 1892
+  },
+  "bosun:hw:ClaimBatch@distributed": {
+    "flags": ["MANY_READ_RPCS", "SORT_FEEDS_LIMIT"],
+    "read_requests": 103,
+    "rows_scanned": 1892
+  },
+  "bosun:hw:RotateSecret#2@declared": {
+    "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION"],
+    "read_requests": 1,
+    "rows_scanned": 3160
+  },
+  "bosun:hw:RotateSecret#2@distributed": {
+    "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION"],
+    "read_requests": 1,
+    "rows_scanned": 3160
+  },
+  "bosun:hw:RotateSecret#3@declared": {
+    "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION"],
+    "read_requests": 1,
+    "rows_scanned": 3160
+  },
+  "bosun:hw:RotateSecret#3@distributed": {
+    "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION"],
+    "read_requests": 1,
+    "rows_scanned": 3160
+  },
+  "bosun:hw:claimBatch@declared": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 103,
+    "reason": "Current notification claim added after the handoff audit: 100 row locks plus batched indexed update; 400 rows and 103 RPCs.",
+    "rows_scanned": 400
+  },
+  "bosun:hw:claimBatch@distributed": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 103,
+    "reason": "Current notification claim added after the handoff audit: 100 row locks plus batched indexed update; 400 rows and 103 RPCs.",
+    "rows_scanned": 400
+  },
+  "bosun:hw:dueEndpoints@declared": {
+    "flags": ["CORRELATED_SUBPLAN", "MANY_READ_RPCS"],
+    "read_requests": 140,
+    "rows_scanned": 716
+  },
+  "bosun:hw:dueEndpoints@distributed": {
+    "flags": ["CORRELATED_SUBPLAN", "MANY_READ_RPCS"],
+    "read_requests": 140,
+    "rows_scanned": 716
+  },
+  "bosun:hw:pruneEventCandidates@declared": {
+    "flags": ["NESTED_LOOP_UNBATCHED"],
+    "read_requests": 8,
+    "reason": "Ordered candidate scan switches to indexed anti-join: 3092 rows and 8 RPCs versus 20844 rows and 22 RPCs.",
+    "rows_scanned": 3092
+  },
+  "bosun:hw:pruneEventCandidates@distributed": {
+    "flags": ["NESTED_LOOP_UNBATCHED"],
+    "read_requests": 8,
+    "reason": "Ordered candidate scan switches to indexed anti-join: 3092 rows and 8 RPCs versus 20844 rows and 22 RPCs.",
+    "rows_scanned": 3092
+  },
+  "bosun:shared:PruneCompleted@declared": {
+    "flags": ["SEQ_SCAN_LARGE"],
+    "read_requests": 2,
+    "rows_scanned": 1271
+  },
+  "bosun:shared:PruneCompleted@distributed": {
+    "flags": ["SEQ_SCAN_LARGE"],
+    "read_requests": 2,
+    "rows_scanned": 1271
+  },
+  "bosun:shared:claim@declared": {
+    "flags": ["CORRELATED_SUBPLAN", "MANY_READ_RPCS"],
+    "read_requests": 205,
+    "reason": "Ordered pending index stops at the claim limit; one indexed first-in-aggregate probe per visited candidate preserves aggregate ordering. Removes the whole-pending-set sort, trading more bounded RPCs for fewer scanned rows. Bosun fixture: 2348 rows and 203 RPCs for 100 claims.",
+    "rows_scanned": 2400
+  },
+  "bosun:shared:claim@distributed": {
+    "flags": ["CORRELATED_SUBPLAN", "MANY_READ_RPCS"],
+    "read_requests": 205,
+    "reason": "Ordered pending index stops at the claim limit; one indexed first-in-aggregate probe per visited candidate preserves aggregate ordering. Removes the whole-pending-set sort, trading more bounded RPCs for fewer scanned rows. Bosun fixture: 2348 rows and 203 RPCs for 100 claims.",
+    "rows_scanned": 2400
+  },
+  "commodore:AdoptLegacyMediaAuthorityRefreshInbox@declared": {
+    "flags": ["MANY_READ_RPCS", "SEQ_SCAN_LARGE"],
+    "read_requests": 62,
+    "rows_scanned": 1132
+  },
+  "commodore:AdoptLegacyMediaAuthorityRefreshInbox@distributed": {
+    "flags": ["MANY_READ_RPCS", "SEQ_SCAN_LARGE"],
+    "read_requests": 62,
+    "rows_scanned": 1132
+  },
+  "commodore:ClaimArtifactCreationCommandAcks@declared": {
+    "flags": ["MANY_READ_RPCS", "READ_AMPLIFICATION", "SEQ_SCAN_LARGE", "SLOW", "SORT_LARGE"],
+    "read_requests": 106,
+    "rows_scanned": 10103
+  },
+  "commodore:ClaimArtifactCreationCommandAcks@distributed": {
+    "flags": ["MANY_READ_RPCS", "READ_AMPLIFICATION", "SEQ_SCAN_LARGE", "SORT_LARGE"],
+    "read_requests": 106,
+    "rows_scanned": 10103
+  },
+  "commodore:ClaimArtifactCreationIntents@declared": {
+    "flags": ["MANY_READ_RPCS", "SORT_FEEDS_LIMIT"],
+    "read_requests": 103,
+    "rows_scanned": 1144
+  },
+  "commodore:ClaimArtifactCreationIntents@distributed": {
+    "flags": ["MANY_READ_RPCS", "SORT_FEEDS_LIMIT"],
+    "read_requests": 103,
+    "rows_scanned": 1144
+  },
+  "commodore:ClaimInvalidationBatch@declared": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 104,
+    "rows_scanned": 2262
+  },
+  "commodore:ClaimInvalidationBatch@distributed": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 104,
+    "rows_scanned": 2262
+  },
+  "commodore:ClaimMediaAuthorityDeadlineDelivery@declared": {
+    "flags": ["NESTED_LOOP_UNBATCHED", "CORRELATED_SUBPLAN", "MANY_READ_RPCS"],
+    "read_requests": 872,
+    "reason": "Current v0.3.13 cursor walk differs from the handoff query. Fixture visits 161 due cells via indexed one-row probes, with six claimable heads; loop cost follows visited cells, not retained delivery history. Keep visible as accepted per-cell RPC cost.",
+    "rows_scanned": 937
+  },
+  "commodore:ClaimMediaAuthorityDeadlineDelivery@distributed": {
+    "flags": ["NESTED_LOOP_UNBATCHED", "CORRELATED_SUBPLAN", "MANY_READ_RPCS"],
+    "read_requests": 872,
+    "reason": "Current v0.3.13 cursor walk differs from the handoff query. Fixture visits 161 due cells via indexed one-row probes, with six claimable heads; loop cost follows visited cells, not retained delivery history. Keep visible as accepted per-cell RPC cost.",
+    "rows_scanned": 937
+  },
+  "commodore:ClaimMediaAuthorityObligations@declared": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 69,
+    "rows_scanned": 361
+  },
+  "commodore:ClaimMediaAuthorityObligations@distributed": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 69,
+    "rows_scanned": 361
+  },
+  "commodore:ClaimServiceEventOutboxBatch@declared": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 102,
+    "rows_scanned": 2058
+  },
+  "commodore:ClaimServiceEventOutboxBatch@distributed": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 102,
+    "rows_scanned": 2058
+  },
+  "commodore:ClaimStreamCleanupBatch@declared": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 104,
+    "rows_scanned": 2206
+  },
+  "commodore:ClaimStreamCleanupBatch@distributed": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 104,
+    "rows_scanned": 2206
+  },
+  "commodore:DeleteBootstrapStream@declared": {
+    "flags": ["READ_AMPLIFICATION"],
+    "read_requests": 11,
+    "rows_scanned": 23003
+  },
+  "commodore:DeleteBootstrapStream@distributed": {
+    "flags": ["READ_AMPLIFICATION"],
+    "read_requests": 11,
+    "rows_scanned": 23003
+  },
+  "commodore:DeleteCompletedMediaAuthorityRefreshInbox@declared": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 103,
+    "rows_scanned": 400
+  },
+  "commodore:DeleteCompletedMediaAuthorityRefreshInbox@distributed": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 103,
+    "rows_scanned": 400
+  },
+  "commodore:DeleteExpiredMediaAuthorityDeliveries@declared": {
+    "flags": [
+      "MANY_READ_RPCS",
+      "NESTED_LOOP_UNBATCHED",
+      "READ_AMPLIFICATION",
+      "SEQ_SCAN_LARGE",
+      "SORT_LARGE"
+    ],
+    "read_requests": 112,
+    "rows_scanned": 11711
+  },
+  "commodore:DeleteExpiredMediaAuthorityDeliveries@distributed": {
+    "flags": [
+      "MANY_READ_RPCS",
+      "NESTED_LOOP_UNBATCHED",
+      "READ_AMPLIFICATION",
+      "SEQ_SCAN_LARGE",
+      "SORT_LARGE"
+    ],
+    "read_requests": 112,
+    "rows_scanned": 11711
+  },
+  "commodore:DeleteOrphanedMediaAuthorityVersions@declared": {
+    "flags": [
+      "MANY_READ_RPCS",
+      "NESTED_LOOP_UNBATCHED",
+      "READ_AMPLIFICATION",
+      "SEQ_SCAN_LARGE",
+      "SLOW",
+      "SORT_LARGE"
+    ],
+    "read_requests": 353,
+    "rows_scanned": 11870
+  },
+  "commodore:DeleteOrphanedMediaAuthorityVersions@distributed": {
+    "flags": [
+      "MANY_READ_RPCS",
+      "NESTED_LOOP_UNBATCHED",
+      "READ_AMPLIFICATION",
+      "SEQ_SCAN_LARGE",
+      "SLOW",
+      "SORT_LARGE"
+    ],
+    "read_requests": 353,
+    "rows_scanned": 11870
+  },
+  "commodore:DeleteRetiredMediaAuthorityTargets@declared": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 103,
+    "rows_scanned": 400
+  },
+  "commodore:DeleteRetiredMediaAuthorityTargets@distributed": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 103,
+    "rows_scanned": 400
+  },
+  "commodore:EnqueueMediaAuthorityCorrectionsForCell@declared": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 5,
+    "rows_scanned": 1549
+  },
+  "commodore:EnqueueMediaAuthorityCorrectionsForCell@distributed": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 5,
+    "rows_scanned": 1549
+  },
+  "commodore:FindUserIDByEmail@declared": {
+    "flags": [],
+    "read_requests": 5,
+    "rows_scanned": 10
+  },
+  "commodore:FindUserIDByEmail@distributed": {
+    "flags": [],
+    "read_requests": 5,
+    "rows_scanned": 10
+  },
+  "commodore:GetLoginUserByEmail@declared": {
+    "flags": [],
+    "read_requests": 5,
+    "rows_scanned": 10
+  },
+  "commodore:GetLoginUserByEmail@distributed": {
+    "flags": [],
+    "read_requests": 5,
+    "rows_scanned": 10
+  },
+  "commodore:GetVerificationResendUser@declared": {
+    "flags": [],
+    "read_requests": 5,
+    "rows_scanned": 10
+  },
+  "commodore:GetVerificationResendUser@distributed": {
+    "flags": [],
+    "read_requests": 5,
+    "rows_scanned": 10
+  },
+  "commodore:GetVerificationUser@declared": {
+    "flags": [],
+    "read_requests": 5,
+    "rows_scanned": 10
+  },
+  "commodore:GetVerificationUser@distributed": {
+    "flags": [],
+    "read_requests": 5,
+    "rows_scanned": 10
+  },
+  "commodore:ListAPITokensForward@declared": {
+    "flags": ["SORT_FEEDS_LIMIT"],
+    "read_requests": 2,
+    "rows_scanned": 1600
+  },
+  "commodore:ListAPITokensForward@distributed": {
+    "flags": ["SORT_FEEDS_LIMIT"],
+    "read_requests": 2,
+    "rows_scanned": 1600
+  },
+  "commodore:ListArtifactMediaAuthoritySources@declared": {
+    "flags": ["SORT_LARGE"],
+    "read_requests": 3,
+    "rows_scanned": 2400
+  },
+  "commodore:ListArtifactMediaAuthoritySources@distributed": {
+    "flags": ["SORT_LARGE"],
+    "read_requests": 3,
+    "rows_scanned": 2400
+  },
+  "commodore:ListAuthoritiesAwaitingActivation@declared": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 6,
+    "rows_scanned": 20000
+  },
+  "commodore:ListAuthoritiesAwaitingActivation@distributed": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 6,
+    "rows_scanned": 20000
+  },
+  "commodore:ListCurrentMediaAuthoritiesWithoutRenewal@declared": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE", "SORT_FEEDS_LIMIT"],
+    "read_requests": 13,
+    "rows_scanned": 21545
+  },
+  "commodore:ListCurrentMediaAuthoritiesWithoutRenewal@distributed": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE", "SORT_FEEDS_LIMIT"],
+    "read_requests": 13,
+    "rows_scanned": 21545
+  },
+  "commodore:ListExpiredWarmMediaAuthorityCounts@declared": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 6,
+    "rows_scanned": 1844
+  },
+  "commodore:ListExpiredWarmMediaAuthorityCounts@distributed": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 6,
+    "rows_scanned": 1844
+  },
+  "commodore:ListLegacySchemaTenantsTargetingCell@declared": {
+    "flags": ["READ_AMPLIFICATION"],
+    "read_requests": 3,
+    "rows_scanned": 1501
+  },
+  "commodore:ListLegacySchemaTenantsTargetingCell@distributed": {
+    "flags": ["READ_AMPLIFICATION"],
+    "read_requests": 3,
+    "rows_scanned": 1501
+  },
+  "commodore:ListMediaAuthorityDeliveryCells@declared": {
+    "flags": ["CORRELATED_SUBPLAN", "MANY_READ_RPCS"],
+    "read_requests": 216,
+    "rows_scanned": 215
+  },
+  "commodore:ListMediaAuthorityDeliveryCells@distributed": {
+    "flags": ["CORRELATED_SUBPLAN", "MANY_READ_RPCS"],
+    "read_requests": 216,
+    "rows_scanned": 215
+  },
+  "commodore:ListMediaAuthorityDeliveryStats@declared": {
+    "flags": ["MANY_READ_RPCS", "READ_AMPLIFICATION", "SEQ_SCAN_LARGE", "SLOW"],
+    "read_requests": 275,
+    "rows_scanned": 13665
+  },
+  "commodore:ListMediaAuthorityDeliveryStats@distributed": {
+    "flags": ["MANY_READ_RPCS", "READ_AMPLIFICATION", "SEQ_SCAN_LARGE", "SLOW"],
+    "read_requests": 275,
+    "rows_scanned": 13665
+  },
+  "commodore:RequeueCurrentMediaAuthoritiesForCell@declared": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 10,
+    "rows_scanned": 1561
+  },
+  "commodore:RequeueCurrentMediaAuthoritiesForCell@distributed": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 10,
+    "rows_scanned": 1561
+  },
+  "commodore:ResolveIdentifierCatalog@declared": {
+    "flags": ["READ_AMPLIFICATION"],
+    "read_requests": 13,
+    "rows_scanned": 1600
+  },
+  "commodore:ResolveIdentifierCatalog@distributed": {
+    "flags": ["READ_AMPLIFICATION"],
+    "read_requests": 13,
+    "rows_scanned": 1600
+  },
+  "commodore:SettleExpiredMediaAuthorityDeliveries@declared": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 107,
+    "rows_scanned": 1204
+  },
+  "commodore:SettleExpiredMediaAuthorityDeliveries@distributed": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 107,
+    "rows_scanned": 1207
+  },
+  "commodore:SupersedeExpiredObsoleteMediaAuthorityDeliveries@declared": {
+    "flags": ["NESTED_LOOP_UNBATCHED", "MANY_READ_RPCS"],
+    "read_requests": 204,
+    "reason": "Current v0.3.13 sweep materializes unsettled candidates before matching current authority, avoiding retained delivery history. Indexed candidate locking accounts for the nested loop; 1600 rows and 204 RPCs.",
+    "rows_scanned": 1600
+  },
+  "commodore:SupersedeExpiredObsoleteMediaAuthorityDeliveries@distributed": {
+    "flags": ["NESTED_LOOP_UNBATCHED", "MANY_READ_RPCS"],
+    "read_requests": 204,
+    "reason": "Current v0.3.13 sweep materializes unsettled candidates before matching current authority, avoiding retained delivery history. Indexed candidate locking accounts for the nested loop; 1600 rows and 204 RPCs.",
+    "rows_scanned": 1600
+  },
+  "commodore:hw:listFieldEncryptionQuarantine@declared": {
+    "flags": ["SEQ_SCAN_LARGE", "SORT_LARGE"],
+    "read_requests": 3,
+    "rows_scanned": 3000
+  },
+  "commodore:hw:listFieldEncryptionQuarantine@distributed": {
+    "flags": ["SEQ_SCAN_LARGE", "SORT_LARGE"],
+    "read_requests": 3,
+    "rows_scanned": 3000
+  },
+  "commodore:hw:runDVRPlaybackAuthority@declared": {
+    "flags": [
+      "MANY_READ_RPCS",
+      "NESTED_LOOP_UNBATCHED",
+      "READ_AMPLIFICATION",
+      "SLOW",
+      "SORT_FEEDS_LIMIT"
+    ],
+    "read_requests": 302,
+    "rows_scanned": 1800
+  },
+  "commodore:hw:runDVRPlaybackAuthority@distributed": {
+    "flags": [
+      "MANY_READ_RPCS",
+      "NESTED_LOOP_UNBATCHED",
+      "READ_AMPLIFICATION",
+      "SLOW",
+      "SORT_FEEDS_LIMIT"
+    ],
+    "read_requests": 302,
+    "rows_scanned": 1800
+  },
+  "commodore:hw:verifyDVRPlaybackAuthority@declared": {
+    "flags": ["READ_AMPLIFICATION"],
+    "read_requests": 2,
+    "rows_scanned": 1600
+  },
+  "commodore:hw:verifyDVRPlaybackAuthority@distributed": {
+    "flags": ["READ_AMPLIFICATION"],
+    "read_requests": 2,
+    "rows_scanned": 1600
+  },
+  "commodore:shared:PruneCompleted@declared": {
+    "flags": ["SEQ_SCAN_LARGE"],
+    "read_requests": 2,
+    "rows_scanned": 1278
+  },
+  "commodore:shared:PruneCompleted@distributed": {
+    "flags": ["SEQ_SCAN_LARGE"],
+    "read_requests": 2,
+    "rows_scanned": 1278
+  },
+  "commodore:shared:claim@declared": {
+    "flags": ["CORRELATED_SUBPLAN", "MANY_READ_RPCS"],
+    "read_requests": 205,
+    "reason": "Ordered pending index stops at the claim limit; one indexed first-in-aggregate probe per visited candidate preserves aggregate ordering. Removes the whole-pending-set sort, trading more bounded RPCs for fewer scanned rows. Bosun fixture: 2348 rows and 203 RPCs for 100 claims.",
+    "rows_scanned": 2400
+  },
+  "commodore:shared:claim@distributed": {
+    "flags": ["CORRELATED_SUBPLAN", "MANY_READ_RPCS"],
+    "read_requests": 205,
+    "reason": "Ordered pending index stops at the claim limit; one indexed first-in-aggregate probe per visited candidate preserves aggregate ordering. Removes the whole-pending-set sort, trading more bounded RPCs for fewer scanned rows. Bosun fixture: 2348 rows and 203 RPCs for 100 claims.",
+    "rows_scanned": 2400
+  },
+  "foghorn:ActiveChapterTranscodeJobContext@declared": {
+    "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION"],
+    "read_requests": 8,
+    "rows_scanned": 4410
+  },
+  "foghorn:ActiveChapterTranscodeJobContext@distributed": {
+    "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION"],
+    "read_requests": 8,
+    "rows_scanned": 4410
+  },
+  "foghorn:ActiveLiveProcessConfig@declared": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 1,
+    "rows_scanned": 20000
+  },
+  "foghorn:ActiveLiveProcessConfig@distributed": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 1,
+    "rows_scanned": 20000
+  },
+  "foghorn:ActiveLiveTranscodeJobContext@declared": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 1,
+    "rows_scanned": 20000
+  },
+  "foghorn:ActiveLiveTranscodeJobContext@distributed": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 1,
+    "rows_scanned": 20000
+  },
+  "foghorn:BackfillCatalogRevisions@declared": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 1,
+    "rows_scanned": 20000
+  },
+  "foghorn:BackfillCatalogRevisions@distributed": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 1,
+    "rows_scanned": 20000
+  },
+  "foghorn:BackfillFederatedArtifactLifecycleBatch@declared": {
+    "flags": ["MANY_READ_RPCS", "READ_AMPLIFICATION", "SORT_LARGE"],
+    "read_requests": 110,
+    "rows_scanned": 4298
+  },
+  "foghorn:BackfillFederatedArtifactLifecycleBatch@distributed": {
+    "flags": ["MANY_READ_RPCS", "READ_AMPLIFICATION", "SLOW", "SORT_LARGE"],
+    "read_requests": 110,
+    "rows_scanned": 4298
+  },
+  "foghorn:BackfillFederatedPointerPurgeEligibilityBatch@declared": {
+    "flags": ["MANY_READ_RPCS", "READ_AMPLIFICATION", "SEQ_SCAN_LARGE", "SORT_LARGE"],
+    "read_requests": 109,
+    "rows_scanned": 20200
+  },
+  "foghorn:BackfillFederatedPointerPurgeEligibilityBatch@distributed": {
+    "flags": ["MANY_READ_RPCS", "READ_AMPLIFICATION", "SEQ_SCAN_LARGE", "SORT_LARGE"],
+    "read_requests": 109,
+    "rows_scanned": 20200
+  },
+  "foghorn:BackfillOriginCluster@declared": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 20,
+    "rows_scanned": 20000
+  },
+  "foghorn:BackfillOriginCluster@distributed": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 20,
+    "rows_scanned": 20000
+  },
+  "foghorn:ClaimAdmissionEffects@declared": {
+    "flags": ["MANY_READ_RPCS", "SORT_LARGE"],
+    "read_requests": 105,
+    "rows_scanned": 3722
+  },
+  "foghorn:ClaimAdmissionEffects@distributed": {
+    "flags": ["MANY_READ_RPCS", "SORT_LARGE"],
+    "read_requests": 105,
+    "rows_scanned": 3722
+  },
+  "foghorn:ClaimArtifactEvents@declared": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 102,
+    "rows_scanned": 2106
+  },
+  "foghorn:ClaimArtifactEvents@distributed": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 102,
+    "rows_scanned": 2106
+  },
+  "foghorn:ClaimDueConfigSeedApplyAcks@declared": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 105,
+    "rows_scanned": 8779
+  },
+  "foghorn:ClaimDueConfigSeedApplyAcks@distributed": {
+    "flags": ["MANY_READ_RPCS", "SLOW"],
+    "read_requests": 105,
+    "rows_scanned": 8779
+  },
+  "foghorn:ClaimDueManagedStreamPlacements@declared": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 108,
+    "rows_scanned": 10178
+  },
+  "foghorn:ClaimDueManagedStreamPlacements@distributed": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 108,
+    "rows_scanned": 10178
+  },
+  "foghorn:ClaimDuePushTargetStatuses@declared": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 108,
+    "rows_scanned": 10178
+  },
+  "foghorn:ClaimDuePushTargetStatuses@distributed": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 108,
+    "rows_scanned": 10178
+  },
+  "foghorn:ClaimDueReassertThumbnailAttempts@declared": {
+    "flags": ["MANY_READ_RPCS", "READ_AMPLIFICATION", "SEQ_SCAN_LARGE", "SORT_LARGE"],
+    "read_requests": 117,
+    "rows_scanned": 20200
+  },
+  "foghorn:ClaimDueReassertThumbnailAttempts@distributed": {
+    "flags": ["MANY_READ_RPCS", "READ_AMPLIFICATION", "SEQ_SCAN_LARGE", "SORT_LARGE"],
+    "read_requests": 117,
+    "rows_scanned": 20200
+  },
+  "foghorn:ClaimDueSigningKeyUses@declared": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 108,
+    "rows_scanned": 10178
+  },
+  "foghorn:ClaimDueSigningKeyUses@distributed": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 108,
+    "rows_scanned": 10178
+  },
+  "foghorn:ClaimOfflineEffects@declared": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 103,
+    "rows_scanned": 929
+  },
+  "foghorn:ClaimOfflineEffects@distributed": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 103,
+    "rows_scanned": 929
+  },
+  "foghorn:ClaimStagingCleanupItems@declared": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 108,
+    "rows_scanned": 10270
+  },
+  "foghorn:ClaimStagingCleanupItems@distributed": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 108,
+    "rows_scanned": 10270
+  },
+  "foghorn:ClaimStreamCleanupObligations@declared": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 103,
+    "rows_scanned": 1035
+  },
+  "foghorn:ClaimStreamCleanupObligations@distributed": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 103,
+    "rows_scanned": 1035
+  },
+  "foghorn:ClaimUnprojectedPublishedThumbnailAttempts@declared": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 26,
+    "rows_scanned": 25238
+  },
+  "foghorn:ClaimUnprojectedPublishedThumbnailAttempts@distributed": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 26,
+    "rows_scanned": 25238
+  },
+  "foghorn:CountFederatedPointersWithUnnormalizedPurgeEligibility@declared": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 8,
+    "rows_scanned": 20000
+  },
+  "foghorn:CountFederatedPointersWithUnnormalizedPurgeEligibility@distributed": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 8,
+    "rows_scanned": 20000
+  },
+  "foghorn:CountLegacyFederatedArtifactPointers@declared": {
+    "flags": ["READ_AMPLIFICATION"],
+    "read_requests": 9,
+    "rows_scanned": 4098
+  },
+  "foghorn:CountLegacyFederatedArtifactPointers@distributed": {
+    "flags": ["READ_AMPLIFICATION"],
+    "read_requests": 9,
+    "rows_scanned": 4098
+  },
+  "foghorn:CountStaleUnconsumedCreationCommands@declared": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 1,
+    "rows_scanned": 8618
+  },
+  "foghorn:CountStaleUnconsumedCreationCommands@distributed": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 1,
+    "rows_scanned": 8618
+  },
+  "foghorn:DeleteConsumedCreationCommands@declared": {
+    "flags": ["MANY_READ_RPCS", "SEQ_SCAN_LARGE", "SORT_LARGE"],
+    "read_requests": 105,
+    "rows_scanned": 8818
+  },
+  "foghorn:DeleteConsumedCreationCommands@distributed": {
+    "flags": ["MANY_READ_RPCS", "SEQ_SCAN_LARGE", "SORT_LARGE"],
+    "read_requests": 105,
+    "rows_scanned": 8818
+  },
+  "foghorn:DeleteExpiredNodeAdmissionProofNonces@declared": {
+    "flags": ["SEQ_SCAN_LARGE", "SLOW"],
+    "read_requests": 10,
+    "rows_scanned": 20000
+  },
+  "foghorn:DeleteExpiredNodeAdmissionProofNonces@distributed": {
+    "flags": ["SEQ_SCAN_LARGE", "SLOW"],
+    "read_requests": 10,
+    "rows_scanned": 20000
+  },
+  "foghorn:DeleteFencedFederatedArtifactPointer@declared": {
+    "flags": ["SEQ_SCAN_LARGE"],
+    "read_requests": 1,
+    "rows_scanned": 1
+  },
+  "foghorn:DeleteFencedFederatedArtifactPointer@distributed": {
+    "flags": ["SEQ_SCAN_LARGE"],
+    "read_requests": 1,
+    "rows_scanned": 1
+  },
+  "foghorn:DeletePurgedArtifact@declared": {
+    "flags": ["READ_AMPLIFICATION"],
+    "read_requests": 9,
+    "rows_scanned": 20003
+  },
+  "foghorn:DeletePurgedArtifact@distributed": {
+    "flags": ["READ_AMPLIFICATION"],
+    "read_requests": 9,
+    "rows_scanned": 20003
+  },
+  "foghorn:DeleteStaleOrphanedArtifactNodes@declared": {
+    "flags": ["SLOW"],
+    "read_requests": 18,
+    "rows_scanned": 16858
+  },
+  "foghorn:DeleteStaleOrphanedArtifactNodes@distributed": {
+    "flags": ["SLOW"],
+    "read_requests": 18,
+    "rows_scanned": 16858
+  },
+  "foghorn:ExpireStrandedCreationCommands@declared": {
+    "flags": ["MANY_READ_RPCS", "READ_AMPLIFICATION", "SEQ_SCAN_LARGE", "SLOW", "SORT_LARGE"],
+    "read_requests": 125,
+    "rows_scanned": 28818
+  },
+  "foghorn:ExpireStrandedCreationCommands@distributed": {
+    "flags": ["MANY_READ_RPCS", "READ_AMPLIFICATION", "SEQ_SCAN_LARGE", "SLOW", "SORT_LARGE"],
+    "read_requests": 125,
+    "rows_scanned": 28818
+  },
+  "foghorn:FenceStaleFederatedArtifactPointerForPurge@declared": {
+    "flags": ["SEQ_SCAN_LARGE"],
+    "read_requests": 1,
+    "rows_scanned": 0
+  },
+  "foghorn:FenceStaleFederatedArtifactPointerForPurge@distributed": {
+    "flags": ["SEQ_SCAN_LARGE"],
+    "read_requests": 1,
+    "rows_scanned": 0
+  },
+  "foghorn:FenceTombstonedFederatedArtifactPointerForPurge@declared": {
+    "flags": ["SEQ_SCAN_LARGE"],
+    "read_requests": 1,
+    "rows_scanned": 0
+  },
+  "foghorn:FenceTombstonedFederatedArtifactPointerForPurge@distributed": {
+    "flags": ["SEQ_SCAN_LARGE"],
+    "read_requests": 1,
+    "rows_scanned": 0
+  },
+  "foghorn:GetConfigSeedApplyAckOutboxStats@declared": {
+    "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 3,
+    "rows_scanned": 21479
+  },
+  "foghorn:GetConfigSeedApplyAckOutboxStats@distributed": {
+    "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 3,
+    "rows_scanned": 21479
+  },
+  "foghorn:GetLiveTranscodeAuthContext@declared": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 1,
+    "rows_scanned": 20000
+  },
+  "foghorn:GetLiveTranscodeAuthContext@distributed": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 1,
+    "rows_scanned": 20000
+  },
+  "foghorn:HasMediaAuthorityConfirmationRequired@declared": {
+    "flags": ["READ_AMPLIFICATION"],
+    "read_requests": 7,
+    "rows_scanned": 9037
+  },
+  "foghorn:HasMediaAuthorityConfirmationRequired@distributed": {
+    "flags": ["READ_AMPLIFICATION"],
+    "read_requests": 7,
+    "rows_scanned": 9037
+  },
+  "foghorn:ListActiveClips@declared": {
+    "flags": ["SEQ_SCAN_LARGE"],
+    "read_requests": 16,
+    "rows_scanned": 20000
+  },
+  "foghorn:ListActiveClips@distributed": {
+    "flags": ["SEQ_SCAN_LARGE"],
+    "read_requests": 16,
+    "rows_scanned": 20000
+  },
+  "foghorn:ListActiveIngestSessionClaims@declared": {
+    "flags": ["SEQ_SCAN_LARGE"],
+    "read_requests": 18,
+    "rows_scanned": 20000
+  },
+  "foghorn:ListActiveIngestSessionClaims@distributed": {
+    "flags": ["SEQ_SCAN_LARGE"],
+    "read_requests": 18,
+    "rows_scanned": 20000
+  },
+  "foghorn:ListActivePushTargetActivationsForNodeRequeue@declared": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 2,
+    "rows_scanned": 8599
+  },
+  "foghorn:ListActivePushTargetActivationsForNodeRequeue@distributed": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 2,
+    "rows_scanned": 8599
+  },
+  "foghorn:ListAdminArtifacts@declared": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE", "SORT_LARGE"],
+    "read_requests": 25,
+    "rows_scanned": 30235
+  },
+  "foghorn:ListAdminArtifacts@distributed": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE", "SORT_LARGE"],
+    "read_requests": 25,
+    "rows_scanned": 30235
+  },
+  "foghorn:ListAllNodeArtifacts@declared": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 18,
+    "rows_scanned": 20000
+  },
+  "foghorn:ListAllNodeArtifacts@distributed": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 18,
+    "rows_scanned": 20000
+  },
+  "foghorn:ListAllNodes@declared": {
+    "flags": ["SEQ_SCAN_LARGE"],
+    "read_requests": 3,
+    "rows_scanned": 3000
+  },
+  "foghorn:ListAllNodes@distributed": {
+    "flags": ["SEQ_SCAN_LARGE"],
+    "read_requests": 3,
+    "rows_scanned": 3000
+  },
+  "foghorn:ListArtifactsForCatalogProjection@declared": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE", "SORT_LARGE"],
+    "read_requests": 2,
+    "rows_scanned": 20000
+  },
+  "foghorn:ListArtifactsForCatalogProjection@distributed": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE", "SORT_LARGE"],
+    "read_requests": 2,
+    "rows_scanned": 20000
+  },
+  "foghorn:ListCapacityPendingPushTargetEffectsForRearm@declared": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 19,
+    "rows_scanned": 28599
+  },
+  "foghorn:ListCapacityPendingPushTargetEffectsForRearm@distributed": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 19,
+    "rows_scanned": 28599
+  },
+  "foghorn:ListCollectableMediaAuthorities@declared": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE", "SORT_LARGE"],
+    "read_requests": 15,
+    "rows_scanned": 19750
+  },
+  "foghorn:ListCollectableMediaAuthorities@distributed": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE", "SORT_LARGE"],
+    "read_requests": 15,
+    "rows_scanned": 19750
+  },
+  "foghorn:ListCooledDownRuntimePushTargetEffectsForRearm@declared": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 1,
+    "rows_scanned": 8599
+  },
+  "foghorn:ListCooledDownRuntimePushTargetEffectsForRearm@distributed": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 1,
+    "rows_scanned": 8599
+  },
+  "foghorn:ListDeletedClipNodes@declared": {
+    "flags": ["READ_AMPLIFICATION"],
+    "read_requests": 7,
+    "rows_scanned": 4356
+  },
+  "foghorn:ListDeletedClipNodes@distributed": {
+    "flags": ["READ_AMPLIFICATION"],
+    "read_requests": 7,
+    "rows_scanned": 4356
+  },
+  "foghorn:ListDeletedVODNodes@declared": {
+    "flags": ["READ_AMPLIFICATION"],
+    "read_requests": 7,
+    "rows_scanned": 4356
+  },
+  "foghorn:ListDeletedVODNodes@distributed": {
+    "flags": ["READ_AMPLIFICATION"],
+    "read_requests": 7,
+    "rows_scanned": 4356
+  },
+  "foghorn:ListExpiredArtifacts@declared": {
+    "flags": ["SEQ_SCAN_LARGE"],
+    "read_requests": 1,
+    "rows_scanned": 5179
+  },
+  "foghorn:ListExpiredArtifacts@distributed": {
+    "flags": ["SEQ_SCAN_LARGE"],
+    "read_requests": 1,
+    "rows_scanned": 5179
+  },
+  "foghorn:ListExpiredThumbnailAttemptIDs@declared": {
+    "flags": ["SEQ_SCAN_LARGE"],
+    "read_requests": 1,
+    "rows_scanned": 342
+  },
+  "foghorn:ListExpiredThumbnailAttemptIDs@distributed": {
+    "flags": ["SEQ_SCAN_LARGE"],
+    "read_requests": 1,
+    "rows_scanned": 342
+  },
+  "foghorn:ListFinalizedChaptersMissingDTSH@declared": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 2,
+    "rows_scanned": 11429
+  },
+  "foghorn:ListFinalizedChaptersMissingDTSH@distributed": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 2,
+    "rows_scanned": 11429
+  },
+  "foghorn:ListLegacyAdmissionPushTargetsForEncryption@declared": {
+    "flags": ["MANY_READ_RPCS", "SEQ_SCAN_LARGE", "SORT_FEEDS_LIMIT"],
+    "read_requests": 101,
+    "rows_scanned": 8699
+  },
+  "foghorn:ListLegacyAdmissionPushTargetsForEncryption@distributed": {
+    "flags": ["MANY_READ_RPCS", "SEQ_SCAN_LARGE", "SORT_FEEDS_LIMIT"],
+    "read_requests": 101,
+    "rows_scanned": 8699
+  },
+  "foghorn:ListLocalManagedStreamAuthorities@declared": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 1,
+    "rows_scanned": 14129
+  },
+  "foghorn:ListLocalManagedStreamAuthorities@distributed": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 1,
+    "rows_scanned": 14129
+  },
+  "foghorn:ListNeverProjectedIngestSessions@declared": {
+    "flags": ["SEQ_SCAN_LARGE", "SORT_LARGE"],
+    "read_requests": 6,
+    "rows_scanned": 20000
+  },
+  "foghorn:ListNeverProjectedIngestSessions@distributed": {
+    "flags": ["SEQ_SCAN_LARGE", "SORT_LARGE"],
+    "read_requests": 6,
+    "rows_scanned": 20000
+  },
+  "foghorn:ListNodeFinalizingDVRChapters@declared": {
+    "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION"],
+    "read_requests": 6,
+    "rows_scanned": 4410
+  },
+  "foghorn:ListNodeFinalizingDVRChapters@distributed": {
+    "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION"],
+    "read_requests": 6,
+    "rows_scanned": 4410
+  },
+  "foghorn:ListNodeProjectedIngestSessionsBefore@declared": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 1,
+    "rows_scanned": 20000
+  },
+  "foghorn:ListNodeProjectedIngestSessionsBefore@distributed": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 1,
+    "rows_scanned": 20000
+  },
+  "foghorn:ListOpenIngestSessionsByTrigger@declared": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 1,
+    "rows_scanned": 20000
+  },
+  "foghorn:ListOpenIngestSessionsByTrigger@distributed": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 1,
+    "rows_scanned": 20000
+  },
+  "foghorn:ListOpenProjectedIngestSessions@declared": {
+    "flags": ["SEQ_SCAN_LARGE", "SORT_LARGE"],
+    "read_requests": 13,
+    "rows_scanned": 20000
+  },
+  "foghorn:ListOpenProjectedIngestSessions@distributed": {
+    "flags": ["SEQ_SCAN_LARGE", "SORT_LARGE"],
+    "read_requests": 13,
+    "rows_scanned": 20000
+  },
+  "foghorn:ListPurgeableArtifacts@declared": {
+    "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION"],
+    "read_requests": 8,
+    "rows_scanned": 4368
+  },
+  "foghorn:ListPurgeableArtifacts@distributed": {
+    "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION"],
+    "read_requests": 8,
+    "rows_scanned": 4368
+  },
+  "foghorn:ListPurgeableLocalArtifacts@declared": {
+    "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION"],
+    "read_requests": 6,
+    "rows_scanned": 4356
+  },
+  "foghorn:ListPurgeableLocalArtifacts@distributed": {
+    "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION"],
+    "read_requests": 6,
+    "rows_scanned": 4356
+  },
+  "foghorn:ListRecentProcessingJobs@declared": {
+    "flags": ["SEQ_SCAN_LARGE", "SORT_LARGE"],
+    "read_requests": 9,
+    "rows_scanned": 8633
+  },
+  "foghorn:ListRecentProcessingJobs@distributed": {
+    "flags": ["SEQ_SCAN_LARGE", "SORT_LARGE"],
+    "read_requests": 9,
+    "rows_scanned": 8633
+  },
+  "foghorn:ListRecoverableFederatedArtifactPointerPurges@declared": {
+    "flags": ["SEQ_SCAN_LARGE", "READ_AMPLIFICATION"],
+    "read_requests": 18,
+    "reason": "Split chapter anti-joins use independent lookup indexes; bulk authority scan retained, RPC count reduced to 18.",
+    "rows_scanned": 20359
+  },
+  "foghorn:ListRecoverableFederatedArtifactPointerPurges@distributed": {
+    "flags": ["SEQ_SCAN_LARGE", "READ_AMPLIFICATION"],
+    "read_requests": 18,
+    "reason": "Split chapter anti-joins use independent lookup indexes; bulk authority scan retained, RPC count reduced to 18.",
+    "rows_scanned": 20359
+  },
+  "foghorn:ListStaleFederatedArtifactPointersForPurge@declared": {
+    "flags": ["NESTED_LOOP_UNBATCHED", "SEQ_SCAN_LARGE", "SLOW"],
+    "read_requests": 27,
+    "rows_scanned": 23722
+  },
+  "foghorn:ListStaleFederatedArtifactPointersForPurge@distributed": {
+    "flags": ["NESTED_LOOP_UNBATCHED", "SEQ_SCAN_LARGE", "SLOW"],
+    "read_requests": 27,
+    "rows_scanned": 23722
+  },
+  "foghorn:ListStaleFreezePublicationLedgerRows@declared": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE", "SORT_LARGE"],
+    "read_requests": 5,
+    "rows_scanned": 20000
+  },
+  "foghorn:ListStaleFreezePublicationLedgerRows@distributed": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE", "SORT_LARGE"],
+    "read_requests": 5,
+    "rows_scanned": 20000
+  },
+  "foghorn:ListSupersededThumbnailAttemptIDs@declared": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 4,
+    "rows_scanned": 20000
+  },
+  "foghorn:ListSupersededThumbnailAttemptIDs@distributed": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 4,
+    "rows_scanned": 20000
+  },
+  "foghorn:ListTombstonedFederatedArtifactPointersForPurge@declared": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 13,
+    "rows_scanned": 18309
+  },
+  "foghorn:ListTombstonedFederatedArtifactPointersForPurge@distributed": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 13,
+    "rows_scanned": 18309
+  },
+  "foghorn:ListUnemittedArtifactNodeKeys@declared": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 1,
+    "rows_scanned": 20000
+  },
+  "foghorn:ListUnemittedArtifactNodeKeys@distributed": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 1,
+    "rows_scanned": 20000
+  },
+  "foghorn:MarkFailedArtifactsDeleted@declared": {
+    "flags": ["MANY_READ_RPCS", "SLOW"],
+    "read_requests": 1393,
+    "rows_scanned": 4262
+  },
+  "foghorn:MarkFailedArtifactsDeleted@distributed": {
+    "flags": ["MANY_READ_RPCS", "SLOW"],
+    "read_requests": 1393,
+    "rows_scanned": 4262
+  },
+  "foghorn:OrphanGloballyStaleArtifactNodes@declared": {
+    "flags": ["MANY_READ_RPCS", "SEQ_SCAN_LARGE", "SLOW"],
+    "read_requests": 510,
+    "rows_scanned": 21000
+  },
+  "foghorn:OrphanGloballyStaleArtifactNodes@distributed": {
+    "flags": ["MANY_READ_RPCS", "SEQ_SCAN_LARGE", "SLOW"],
+    "read_requests": 510,
+    "rows_scanned": 21000
+  },
+  "foghorn:PruneMediaAuthorityApplyAudit@declared": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE", "SORT_LARGE"],
+    "read_requests": 21,
+    "rows_scanned": 20100
+  },
+  "foghorn:PruneMediaAuthorityApplyAudit@distributed": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE", "SORT_LARGE"],
+    "read_requests": 21,
+    "rows_scanned": 20100
+  },
+  "foghorn:PurgeAdmissionPushTargetRevisions@declared": {
+    "flags": ["SEQ_SCAN_LARGE", "SLOW", "SORT_LARGE"],
+    "read_requests": 39,
+    "rows_scanned": 41000
+  },
+  "foghorn:PurgeAdmissionPushTargetRevisions@distributed": {
+    "flags": ["SEQ_SCAN_LARGE", "SLOW", "SORT_LARGE"],
+    "read_requests": 39,
+    "rows_scanned": 41000
+  },
+  "foghorn:PurgeExpiredCloseTombstones@declared": {
+    "flags": ["SEQ_SCAN_LARGE", "SLOW"],
+    "read_requests": 20,
+    "rows_scanned": 20000
+  },
+  "foghorn:PurgeExpiredCloseTombstones@distributed": {
+    "flags": ["SEQ_SCAN_LARGE", "SLOW"],
+    "read_requests": 20,
+    "rows_scanned": 20000
+  },
+  "foghorn:PurgeExpiredIngestAdmissionAbandonments@declared": {
+    "flags": ["SEQ_SCAN_LARGE", "SLOW"],
+    "read_requests": 20,
+    "rows_scanned": 20000
+  },
+  "foghorn:PurgeExpiredIngestAdmissionAbandonments@distributed": {
+    "flags": ["SEQ_SCAN_LARGE", "SLOW"],
+    "read_requests": 20,
+    "rows_scanned": 20000
+  },
+  "foghorn:PurgeStaleArtifactNodes@declared": {
+    "flags": ["SLOW"],
+    "read_requests": 18,
+    "rows_scanned": 16858
+  },
+  "foghorn:PurgeStaleArtifactNodes@distributed": {
+    "flags": ["SLOW"],
+    "read_requests": 18,
+    "rows_scanned": 16858
+  },
+  "foghorn:PurgeTerminalAdmissionEffects@declared": {
+    "flags": ["SEQ_SCAN_LARGE", "SLOW", "SORT_LARGE"],
+    "read_requests": 26,
+    "rows_scanned": 29599
+  },
+  "foghorn:PurgeTerminalAdmissionEffects@distributed": {
+    "flags": ["SEQ_SCAN_LARGE", "SLOW", "SORT_LARGE"],
+    "read_requests": 26,
+    "rows_scanned": 29599
+  },
+  "foghorn:PurgeTerminalOfflineEffects@declared": {
+    "flags": ["SEQ_SCAN_LARGE", "SORT_LARGE"],
+    "read_requests": 10,
+    "rows_scanned": 9513
+  },
+  "foghorn:PurgeTerminalOfflineEffects@distributed": {
+    "flags": ["SEQ_SCAN_LARGE", "SORT_LARGE"],
+    "read_requests": 10,
+    "rows_scanned": 9513
+  },
+  "foghorn:ThumbnailResourceProducedByNode@declared": {
+    "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION"],
+    "read_requests": 8,
+    "rows_scanned": 4411
+  },
+  "foghorn:ThumbnailResourceProducedByNode@distributed": {
+    "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION"],
+    "read_requests": 8,
+    "rows_scanned": 4411
+  },
+  "foghorn:UnprojectedThumbnailRecoveryBacklog@declared": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 26,
+    "rows_scanned": 25238
+  },
+  "foghorn:UnprojectedThumbnailRecoveryBacklog@distributed": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 26,
+    "rows_scanned": 25238
+  },
+  "foghorn:shared:PruneCompleted@declared": {
+    "flags": ["SEQ_SCAN_LARGE"],
+    "read_requests": 2,
+    "rows_scanned": 1269
+  },
+  "foghorn:shared:PruneCompleted@distributed": {
+    "flags": ["SEQ_SCAN_LARGE"],
+    "read_requests": 2,
+    "rows_scanned": 1269
+  },
+  "foghorn:shared:claim@declared": {
+    "flags": ["CORRELATED_SUBPLAN", "MANY_READ_RPCS"],
+    "read_requests": 205,
+    "reason": "Ordered pending index stops at the claim limit; one indexed first-in-aggregate probe per visited candidate preserves aggregate ordering. Removes the whole-pending-set sort, trading more bounded RPCs for fewer scanned rows. Bosun fixture: 2348 rows and 203 RPCs for 100 claims.",
+    "rows_scanned": 2400
+  },
+  "foghorn:shared:claim@distributed": {
+    "flags": ["CORRELATED_SUBPLAN", "MANY_READ_RPCS"],
+    "read_requests": 205,
+    "reason": "Ordered pending index stops at the claim limit; one indexed first-in-aggregate probe per visited candidate preserves aggregate ordering. Removes the whole-pending-set sort, trading more bounded RPCs for fewer scanned rows. Bosun fixture: 2348 rows and 203 RPCs for 100 claims.",
+    "rows_scanned": 2400
+  },
+  "lookout:CancelPendingIncidentPublications@declared": {
+    "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION"],
+    "read_requests": 2,
+    "rows_scanned": 1312
+  },
+  "lookout:CancelPendingIncidentPublications@distributed": {
+    "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION"],
+    "read_requests": 2,
+    "rows_scanned": 1312
+  },
+  "lookout:ClaimDeliveryCandidates@declared": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 102,
+    "rows_scanned": 1232
+  },
+  "lookout:ClaimDeliveryCandidates@distributed": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 102,
+    "rows_scanned": 1232
+  },
+  "lookout:CountIncidents@declared": {
+    "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION"],
+    "read_requests": 10,
+    "rows_scanned": 8366
+  },
+  "lookout:CountIncidents@distributed": {
+    "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION"],
+    "read_requests": 10,
+    "rows_scanned": 8366
+  },
+  "lookout:DeleteDeliveredOperatorActivityRows@declared": {
+    "flags": ["SORT_FEEDS_LIMIT"],
+    "read_requests": 2,
+    "rows_scanned": 784
+  },
+  "lookout:DeleteDeliveredOperatorActivityRows@distributed": {
+    "flags": ["SORT_FEEDS_LIMIT"],
+    "read_requests": 2,
+    "rows_scanned": 784
+  },
+  "lookout:DeleteDeliveredOutboxRows@declared": {
+    "flags": ["SEQ_SCAN_LARGE", "SORT_LARGE"],
+    "read_requests": 7,
+    "rows_scanned": 6517
+  },
+  "lookout:DeleteDeliveredOutboxRows@distributed": {
+    "flags": ["SEQ_SCAN_LARGE", "SORT_LARGE"],
+    "read_requests": 7,
+    "rows_scanned": 6517
+  },
+  "lookout:DeleteFailedOutboxRows@declared": {
+    "flags": ["SORT_FEEDS_LIMIT"],
+    "read_requests": 3,
+    "rows_scanned": 1344
+  },
+  "lookout:DeleteFailedOutboxRows@distributed": {
+    "flags": ["SORT_FEEDS_LIMIT"],
+    "read_requests": 3,
+    "rows_scanned": 1344
+  },
+  "lookout:ListIncidents@declared": {
+    "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION"],
+    "read_requests": 10,
+    "rows_scanned": 8366
+  },
+  "lookout:ListIncidents@distributed": {
+    "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION"],
+    "read_requests": 10,
+    "rows_scanned": 8366
+  },
+  "lookout:ListOpenIncidentClusterIDs@declared": {
+    "flags": ["SEQ_SCAN_LARGE", "SORT_LARGE"],
+    "read_requests": 13,
+    "rows_scanned": 20000
+  },
+  "lookout:ListOpenIncidentClusterIDs@distributed": {
+    "flags": ["SEQ_SCAN_LARGE", "SORT_LARGE"],
+    "read_requests": 13,
+    "rows_scanned": 20000
+  },
+  "lookout:LockOpenClusterIncidents@declared": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 2,
+    "rows_scanned": 20005
+  },
+  "lookout:LockOpenClusterIncidents@distributed": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 2,
+    "rows_scanned": 20005
+  },
+  "navigator:DeleteExpiredCertificateIssuanceLeases@declared": {
+    "flags": ["SEQ_SCAN_LARGE", "SLOW"],
+    "read_requests": 10,
+    "rows_scanned": 9898
+  },
+  "navigator:DeleteExpiredCertificateIssuanceLeases@distributed": {
+    "flags": ["SEQ_SCAN_LARGE", "SLOW"],
+    "read_requests": 10,
+    "rows_scanned": 9898
+  },
+  "navigator:GetTLSBundle@declared": {
+    "flags": ["SEQ_SCAN_LARGE"],
+    "read_requests": 1,
+    "rows_scanned": 2
+  },
+  "navigator:GetTLSBundle@distributed": {
+    "flags": ["SEQ_SCAN_LARGE"],
+    "read_requests": 2,
+    "rows_scanned": 2
+  },
+  "navigator:GetTLSBundleForIssuance@declared": {
+    "flags": ["SEQ_SCAN_LARGE"],
+    "read_requests": 1,
+    "rows_scanned": 2
+  },
+  "navigator:GetTLSBundleForIssuance@distributed": {
+    "flags": ["SEQ_SCAN_LARGE"],
+    "read_requests": 2,
+    "rows_scanned": 2
+  },
+  "navigator:ListExpiringCertificates@declared": {
+    "flags": ["SEQ_SCAN_LARGE", "SORT_LARGE"],
+    "read_requests": 2,
+    "rows_scanned": 3000
+  },
+  "navigator:ListExpiringCertificates@distributed": {
+    "flags": ["SEQ_SCAN_LARGE", "SORT_LARGE"],
+    "read_requests": 2,
+    "rows_scanned": 3000
+  },
+  "navigator:ListExpiringTLSBundles@declared": {
+    "flags": ["SEQ_SCAN_LARGE", "SORT_LARGE"],
+    "read_requests": 2,
+    "rows_scanned": 3000
+  },
+  "navigator:ListExpiringTLSBundles@distributed": {
+    "flags": ["SEQ_SCAN_LARGE", "SORT_LARGE"],
+    "read_requests": 2,
+    "rows_scanned": 3000
+  },
+  "navigator:ListTenantAliasRetirements@declared": {
+    "flags": ["SEQ_SCAN_LARGE", "SORT_LARGE"],
+    "read_requests": 3,
+    "rows_scanned": 2983
+  },
+  "navigator:ListTenantAliasRetirements@distributed": {
+    "flags": ["SEQ_SCAN_LARGE", "SORT_LARGE"],
+    "read_requests": 3,
+    "rows_scanned": 2983
+  },
+  "navigator:ListTenantAliasesByStatus@declared": {
+    "flags": ["SEQ_SCAN_LARGE", "SORT_LARGE"],
+    "read_requests": 3,
+    "rows_scanned": 3000
+  },
+  "navigator:ListTenantAliasesByStatus@distributed": {
+    "flags": ["SEQ_SCAN_LARGE", "SORT_LARGE"],
+    "read_requests": 3,
+    "rows_scanned": 3000
+  },
+  "navigator:ListTenantCustomDomainsByStatus@declared": {
+    "flags": ["SEQ_SCAN_LARGE", "SORT_LARGE"],
+    "read_requests": 8,
+    "rows_scanned": 9979
+  },
+  "navigator:ListTenantCustomDomainsByStatus@distributed": {
+    "flags": ["SEQ_SCAN_LARGE", "SORT_LARGE"],
+    "read_requests": 9,
+    "rows_scanned": 9979
+  },
+  "navigator:shared:PruneCompleted@declared": {
+    "flags": ["SEQ_SCAN_LARGE"],
+    "read_requests": 2,
+    "rows_scanned": 1264
+  },
+  "navigator:shared:PruneCompleted@distributed": {
+    "flags": ["SEQ_SCAN_LARGE"],
+    "read_requests": 2,
+    "rows_scanned": 1264
+  },
+  "navigator:shared:claim@declared": {
+    "flags": ["CORRELATED_SUBPLAN", "MANY_READ_RPCS"],
+    "read_requests": 205,
+    "reason": "Ordered pending index stops at the claim limit; one indexed first-in-aggregate probe per visited candidate preserves aggregate ordering. Removes the whole-pending-set sort, trading more bounded RPCs for fewer scanned rows. Bosun fixture: 2348 rows and 203 RPCs for 100 claims.",
+    "rows_scanned": 2400
+  },
+  "navigator:shared:claim@distributed": {
+    "flags": ["CORRELATED_SUBPLAN", "MANY_READ_RPCS"],
+    "read_requests": 205,
+    "reason": "Ordered pending index stops at the claim limit; one indexed first-in-aggregate probe per visited candidate preserves aggregate ordering. Removes the whole-pending-set sort, trading more bounded RPCs for fewer scanned rows. Bosun fixture: 2348 rows and 203 RPCs for 100 claims.",
+    "rows_scanned": 2400
+  },
+  "purser:ClaimBillingEventOutboxCandidates@declared": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 104,
+    "rows_scanned": 2160
+  },
+  "purser:ClaimBillingEventOutboxCandidates@distributed": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 104,
+    "rows_scanned": 2160
+  },
+  "purser:ClaimInvoiceEmailCandidates@declared": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 102,
+    "rows_scanned": 1835
+  },
+  "purser:ClaimInvoiceEmailCandidates@distributed": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 102,
+    "rows_scanned": 1835
+  },
+  "purser:ClaimMediaAuthorityRefreshBatch@declared": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 105,
+    "rows_scanned": 800
+  },
+  "purser:ClaimMediaAuthorityRefreshBatch@distributed": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 105,
+    "rows_scanned": 802
+  },
+  "purser:ClaimProviderWebhooks@declared": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 103,
+    "rows_scanned": 1927
+  },
+  "purser:ClaimProviderWebhooks@distributed": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 103,
+    "rows_scanned": 1927
+  },
+  "purser:ClearStagedStripeClusterSubscription@declared": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 1,
+    "rows_scanned": 1209
+  },
+  "purser:ClearStagedStripeClusterSubscription@distributed": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 1,
+    "rows_scanned": 1209
+  },
+  "purser:ConsumeCryptoSweepSources@declared": {
+    "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION"],
+    "read_requests": 2,
+    "rows_scanned": 1372
+  },
+  "purser:ConsumeCryptoSweepSources@distributed": {
+    "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION"],
+    "read_requests": 2,
+    "rows_scanned": 1372
+  },
+  "purser:CountActiveMeteringSources@declared": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 1,
+    "rows_scanned": 3000
+  },
+  "purser:CountActiveMeteringSources@distributed": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 1,
+    "rows_scanned": 3000
+  },
+  "purser:CountMissingMeteringWindows@declared": {
+    "flags": ["NESTED_LOOP_UNBATCHED", "READ_AMPLIFICATION", "SEQ_SCAN_LARGE", "SLOW"],
+    "read_requests": 11,
+    "rows_scanned": 23000
+  },
+  "purser:CountMissingMeteringWindows@distributed": {
+    "flags": ["NESTED_LOOP_UNBATCHED", "READ_AMPLIFICATION", "SEQ_SCAN_LARGE", "SLOW"],
+    "read_requests": 11,
+    "rows_scanned": 23000
+  },
+  "purser:CountOpenCryptoAccountingAnomalies@declared": {
+    "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION"],
+    "read_requests": 1,
+    "rows_scanned": 5881
+  },
+  "purser:CountOpenCryptoAccountingAnomalies@distributed": {
+    "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION"],
+    "read_requests": 1,
+    "rows_scanned": 5881
+  },
+  "purser:CountOpenMeteringAnomalies@declared": {
+    "flags": ["READ_AMPLIFICATION"],
+    "read_requests": 1,
+    "rows_scanned": 6121
+  },
+  "purser:CountOpenMeteringAnomalies@distributed": {
+    "flags": ["READ_AMPLIFICATION"],
+    "read_requests": 1,
+    "rows_scanned": 6121
+  },
+  "purser:DeleteBootstrapTierEntitlement@distributed": {
+    "flags": ["READ_AMPLIFICATION"],
+    "read_requests": 4,
+    "rows_scanned": 1145
+  },
+  "purser:DeleteBootstrapTierPricingRule@declared": {
+    "flags": ["READ_AMPLIFICATION", "SLOW"],
+    "read_requests": 5,
+    "rows_scanned": 3068
+  },
+  "purser:DeleteBootstrapTierPricingRule@distributed": {
+    "flags": ["READ_AMPLIFICATION"],
+    "read_requests": 4,
+    "rows_scanned": 1212
+  },
+  "purser:DeleteInvoiceLineItem@declared": {
+    "flags": ["READ_AMPLIFICATION"],
+    "read_requests": 9,
+    "rows_scanned": 52598
+  },
+  "purser:DeleteInvoiceLineItem@distributed": {
+    "flags": ["READ_AMPLIFICATION"],
+    "read_requests": 9,
+    "rows_scanned": 52598
+  },
+  "purser:ExpireStaleCryptoWallets@declared": {
+    "flags": ["SLOW"],
+    "read_requests": 6,
+    "rows_scanned": 5554
+  },
+  "purser:ExpireStaleCryptoWallets@distributed": {
+    "flags": ["SLOW"],
+    "read_requests": 6,
+    "rows_scanned": 5554
+  },
+  "purser:ExpireX402RateLimitWindows@declared": {
+    "flags": ["SLOW"],
+    "read_requests": 20,
+    "rows_scanned": 20000
+  },
+  "purser:ExpireX402RateLimitWindows@distributed": {
+    "flags": ["SLOW"],
+    "read_requests": 20,
+    "rows_scanned": 20000
+  },
+  "purser:GetInvoicePaymentFXBasis@declared": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 8,
+    "rows_scanned": 2370
+  },
+  "purser:GetInvoicePaymentFXBasis@distributed": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 8,
+    "rows_scanned": 2370
+  },
+  "purser:GetPriorReversalTotals@declared": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 1,
+    "rows_scanned": 2363
+  },
+  "purser:GetPriorReversalTotals@distributed": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 1,
+    "rows_scanned": 2363
+  },
+  "purser:GetX402TaxSnapshot@declared": {
+    "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION"],
+    "read_requests": 7,
+    "rows_scanned": 4262
+  },
+  "purser:GetX402TaxSnapshot@distributed": {
+    "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION"],
+    "read_requests": 7,
+    "rows_scanned": 4262
+  },
+  "purser:ListCompletedCryptoTopupsMissingInvoice@declared": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE", "SORT_LARGE"],
+    "read_requests": 7,
+    "rows_scanned": 19705
+  },
+  "purser:ListCompletedCryptoTopupsMissingInvoice@distributed": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE", "SORT_LARGE"],
+    "read_requests": 7,
+    "rows_scanned": 19705
+  },
+  "purser:ListConfirmedCryptoDepositAllocations@declared": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE", "SORT_LARGE"],
+    "read_requests": 10,
+    "rows_scanned": 23011
+  },
+  "purser:ListConfirmedCryptoDepositAllocations@distributed": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE", "SORT_LARGE"],
+    "read_requests": 10,
+    "rows_scanned": 23011
+  },
+  "purser:ListConfirmedX402SettlementsForReconciliation@declared": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 1,
+    "rows_scanned": 10376
+  },
+  "purser:ListConfirmedX402SettlementsForReconciliation@distributed": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 1,
+    "rows_scanned": 10376
+  },
+  "purser:ListCryptoAccountingAnomalyMetrics@declared": {
+    "flags": ["SEQ_SCAN_LARGE"],
+    "read_requests": 6,
+    "rows_scanned": 20000
+  },
+  "purser:ListCryptoAccountingAnomalyMetrics@distributed": {
+    "flags": ["SEQ_SCAN_LARGE"],
+    "read_requests": 6,
+    "rows_scanned": 20000
+  },
+  "purser:ListCryptoFailedSweepMetrics@declared": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 3,
+    "rows_scanned": 19961
+  },
+  "purser:ListCryptoFailedSweepMetrics@distributed": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 3,
+    "rows_scanned": 19961
+  },
+  "purser:ListCryptoPendingDepositMetrics@declared": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 34,
+    "rows_scanned": 39705
+  },
+  "purser:ListCryptoPendingDepositMetrics@distributed": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 34,
+    "rows_scanned": 39705
+  },
+  "purser:ListCryptoSweepCandidates@declared": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE", "SLOW"],
+    "read_requests": 13,
+    "rows_scanned": 36104
+  },
+  "purser:ListCryptoSweepCandidates@distributed": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE", "SLOW"],
+    "read_requests": 13,
+    "rows_scanned": 36104
+  },
+  "purser:ListCryptoSweepReleaseItems@declared": {
+    "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION"],
+    "read_requests": 14,
+    "rows_scanned": 8244
+  },
+  "purser:ListCryptoSweepReleaseItems@distributed": {
+    "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION"],
+    "read_requests": 14,
+    "rows_scanned": 8244
+  },
+  "purser:ListCryptoUnsweptMetrics@declared": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE", "SLOW", "SORT_LARGE"],
+    "read_requests": 18,
+    "rows_scanned": 49769
+  },
+  "purser:ListCryptoUnsweptMetrics@distributed": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE", "SORT_LARGE"],
+    "read_requests": 18,
+    "rows_scanned": 49769
+  },
+  "purser:ListDuePendingDowngradeTenantIDs@declared": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 14,
+    "rows_scanned": 20852
+  },
+  "purser:ListDuePendingDowngradeTenantIDs@distributed": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 15,
+    "rows_scanned": 20852
+  },
+  "purser:ListExpiredUnsignedCryptoSweepBatches@declared": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 2,
+    "rows_scanned": 19963
+  },
+  "purser:ListExpiredUnsignedCryptoSweepBatches@distributed": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 2,
+    "rows_scanned": 19963
+  },
+  "purser:ListKnownCryptoDepositAddresses@declared": {
+    "flags": ["SEQ_SCAN_LARGE"],
+    "read_requests": 2,
+    "rows_scanned": 19705
+  },
+  "purser:ListKnownCryptoDepositAddresses@distributed": {
+    "flags": ["SEQ_SCAN_LARGE"],
+    "read_requests": 2,
+    "rows_scanned": 19705
+  },
+  "purser:ListMollieObservationDrainInvoiceIDs@declared": {
+    "flags": ["READ_AMPLIFICATION", "SLOW", "SORT_LARGE"],
+    "read_requests": 14,
+    "rows_scanned": 14044
+  },
+  "purser:ListMollieObservationDrainInvoiceIDs@distributed": {
+    "flags": ["READ_AMPLIFICATION", "SLOW", "SORT_LARGE"],
+    "read_requests": 14,
+    "rows_scanned": 14044
+  },
+  "purser:ListPayableInvoices@declared": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 84,
+    "rows_scanned": 204
+  },
+  "purser:ListPayableInvoices@distributed": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 84,
+    "rows_scanned": 204
+  },
+  "purser:ListPendingCryptoWallets@declared": {
+    "flags": ["SEQ_SCAN_LARGE"],
+    "read_requests": 26,
+    "rows_scanned": 39705
+  },
+  "purser:ListPendingCryptoWallets@distributed": {
+    "flags": ["SEQ_SCAN_LARGE"],
+    "read_requests": 26,
+    "rows_scanned": 39705
+  },
+  "purser:ListPendingStripeMeterEvents@declared": {
+    "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION"],
+    "read_requests": 2,
+    "rows_scanned": 1776
+  },
+  "purser:ListPendingStripeMeterEvents@distributed": {
+    "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION"],
+    "read_requests": 2,
+    "rows_scanned": 1776
+  },
+  "purser:ListPrepaidDoubleCharges@declared": {
+    "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION"],
+    "read_requests": 6,
+    "rows_scanned": 5539
+  },
+  "purser:ListPrepaidDoubleCharges@distributed": {
+    "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION"],
+    "read_requests": 6,
+    "rows_scanned": 5539
+  },
+  "purser:ListProviderPaymentAttemptsForRetry@declared": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 14,
+    "rows_scanned": 11126
+  },
+  "purser:ListProviderPaymentAttemptsForRetry@distributed": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 14,
+    "rows_scanned": 11143
+  },
+  "purser:ListRecentPayments@declared": {
+    "flags": ["SORT_LARGE"],
+    "read_requests": 10,
+    "rows_scanned": 5366
+  },
+  "purser:ListRecentPayments@distributed": {
+    "flags": ["SORT_LARGE"],
+    "read_requests": 10,
+    "rows_scanned": 5366
+  },
+  "purser:ListRecoverableFailedX402Settlements@declared": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 1,
+    "rows_scanned": 10376
+  },
+  "purser:ListRecoverableFailedX402Settlements@distributed": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 1,
+    "rows_scanned": 10376
+  },
+  "purser:ListSubscriptionTierNames@declared": {
+    "flags": ["SORT_LARGE", "SEQ_SCAN_LARGE"],
+    "read_requests": 8,
+    "reason": "Bulk sweep returns all 3000 tenants: three linear input scans replace per-tenant entitlement subplans (1708 to 8 RPCs).",
+    "rows_scanned": 9004
+  },
+  "purser:ListSubscriptionTierNames@distributed": {
+    "flags": ["SORT_LARGE", "SEQ_SCAN_LARGE"],
+    "read_requests": 8,
+    "reason": "Bulk sweep returns all 3000 tenants: three linear input scans replace per-tenant entitlement subplans (1708 to 8 RPCs).",
+    "rows_scanned": 9004
+  },
+  "purser:ListTenantBillingSnapshots@declared": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 10,
+    "rows_scanned": 3154
+  },
+  "purser:ListTenantBillingSnapshots@distributed": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 10,
+    "rows_scanned": 3154
+  },
+  "purser:ListUsageRecords@declared": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 2,
+    "rows_scanned": 40000
+  },
+  "purser:ListUsageRecords@distributed": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 2,
+    "rows_scanned": 40000
+  },
+  "purser:ListX402QuoteMetrics@declared": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 12,
+    "rows_scanned": 10414
+  },
+  "purser:ListX402QuoteMetrics@distributed": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 12,
+    "rows_scanned": 10414
+  },
+  "purser:MarkPendingInvoicesOverdue@declared": {
+    "flags": ["SEQ_SCAN_LARGE", "SLOW"],
+    "read_requests": 6,
+    "rows_scanned": 20000
+  },
+  "purser:MarkPendingInvoicesOverdue@distributed": {
+    "flags": ["SEQ_SCAN_LARGE", "SLOW"],
+    "read_requests": 6,
+    "rows_scanned": 20000
+  },
+  "purser:ReadPlacementUsageCoverage@declared": {
+    "flags": ["NESTED_LOOP_UNBATCHED", "READ_AMPLIFICATION", "SEQ_SCAN_LARGE", "SLOW"],
+    "read_requests": 12,
+    "rows_scanned": 29121
+  },
+  "purser:ReadPlacementUsageCoverage@distributed": {
+    "flags": ["NESTED_LOOP_UNBATCHED", "READ_AMPLIFICATION", "SEQ_SCAN_LARGE", "SLOW"],
+    "read_requests": 12,
+    "rows_scanned": 29121
+  },
+  "purser:ReleaseCryptoSweepSources@declared": {
+    "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION"],
+    "read_requests": 2,
+    "rows_scanned": 1372
+  },
+  "purser:ReleaseCryptoSweepSources@distributed": {
+    "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION"],
+    "read_requests": 2,
+    "rows_scanned": 1372
+  },
+  "purser:UpdateBootstrapBillingTier@declared": {
+    "flags": ["READ_AMPLIFICATION", "SLOW"],
+    "read_requests": 5,
+    "rows_scanned": 3004
+  },
+  "purser:UpsertBootstrapTierEntitlement@declared": {
+    "flags": ["READ_AMPLIFICATION"],
+    "read_requests": 4,
+    "rows_scanned": 1145
+  },
+  "purser:UpsertBootstrapTierPricingRule@declared": {
+    "flags": ["READ_AMPLIFICATION"],
+    "read_requests": 3,
+    "rows_scanned": 3002
+  },
+  "purser:UpsertBootstrapTierPricingRule@distributed": {
+    "flags": ["READ_AMPLIFICATION", "SLOW"],
+    "read_requests": 6,
+    "rows_scanned": 3002
+  },
+  "purser:hw:VerifyEURLedgerConversion@declared": {
+    "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 8,
+    "rows_scanned": 91986
+  },
+  "purser:hw:VerifyEURLedgerConversion@distributed": {
+    "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 8,
+    "rows_scanned": 91986
+  },
+  "purser:hw:buildTenantPlan#2@declared": {
+    "flags": ["READ_AMPLIFICATION"],
+    "read_requests": 5,
+    "rows_scanned": 2647
+  },
+  "purser:hw:readMovements@declared": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 20,
+    "rows_scanned": 19345
+  },
+  "purser:hw:readMovements@distributed": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 20,
+    "rows_scanned": 19345
+  },
+  "purser:hw:scopes@declared": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE", "SLOW"],
+    "read_requests": 34,
+    "rows_scanned": 91986
+  },
+  "purser:hw:scopes@distributed": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE", "SLOW"],
+    "read_requests": 34,
+    "rows_scanned": 91986
+  },
+  "purser:shared:PruneCompleted@declared": {
+    "flags": ["SEQ_SCAN_LARGE"],
+    "read_requests": 2,
+    "rows_scanned": 1252
+  },
+  "purser:shared:PruneCompleted@distributed": {
+    "flags": ["SEQ_SCAN_LARGE"],
+    "read_requests": 2,
+    "rows_scanned": 1252
+  },
+  "purser:shared:claim@declared": {
+    "flags": ["CORRELATED_SUBPLAN", "MANY_READ_RPCS"],
+    "read_requests": 205,
+    "reason": "Ordered pending index stops at the claim limit; one indexed first-in-aggregate probe per visited candidate preserves aggregate ordering. Removes the whole-pending-set sort, trading more bounded RPCs for fewer scanned rows. Bosun fixture: 2348 rows and 203 RPCs for 100 claims.",
+    "rows_scanned": 2400
+  },
+  "purser:shared:claim@distributed": {
+    "flags": ["CORRELATED_SUBPLAN", "MANY_READ_RPCS"],
+    "read_requests": 205,
+    "reason": "Ordered pending index stops at the claim limit; one indexed first-in-aggregate probe per visited candidate preserves aggregate ordering. Removes the whole-pending-set sort, trading more bounded RPCs for fewer scanned rows. Bosun fixture: 2348 rows and 203 RPCs for 100 claims.",
+    "rows_scanned": 2400
+  },
+  "quartermaster:ClaimMediaAuthorityRefreshBatch@declared": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 103,
+    "rows_scanned": 1074
+  },
+  "quartermaster:ClaimMediaAuthorityRefreshBatch@distributed": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 103,
+    "rows_scanned": 1074
+  },
+  "quartermaster:ClaimNavigatorCustomDomainOutboxBatch@declared": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 102,
+    "rows_scanned": 2106
+  },
+  "quartermaster:ClaimNavigatorCustomDomainOutboxBatch@distributed": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 102,
+    "rows_scanned": 2106
+  },
+  "quartermaster:ClaimNavigatorTenantAliasOutboxBatch@declared": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 106,
+    "rows_scanned": 4176
+  },
+  "quartermaster:ClaimNavigatorTenantAliasOutboxBatch@distributed": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 106,
+    "rows_scanned": 4176
+  },
+  "quartermaster:ClaimServiceEventOutboxBatch@declared": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 104,
+    "rows_scanned": 2210
+  },
+  "quartermaster:ClaimServiceEventOutboxBatch@distributed": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 104,
+    "rows_scanned": 2210
+  },
+  "quartermaster:CountPendingNavigatorCustomDomainOutbox@declared": {
+    "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION"],
+    "read_requests": 1,
+    "rows_scanned": 1003
+  },
+  "quartermaster:CountPendingNavigatorCustomDomainOutbox@distributed": {
+    "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION"],
+    "read_requests": 1,
+    "rows_scanned": 1003
+  },
+  "quartermaster:CountPendingNavigatorTenantAliasOutbox@declared": {
+    "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION"],
+    "read_requests": 1,
+    "rows_scanned": 1075
+  },
+  "quartermaster:CountPendingNavigatorTenantAliasOutbox@distributed": {
+    "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION"],
+    "read_requests": 1,
+    "rows_scanned": 1075
+  },
+  "quartermaster:GetTenantBillingEntitlementCensus@declared": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 3,
+    "rows_scanned": 3000
+  },
+  "quartermaster:GetTenantBillingEntitlementCensus@distributed": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 3,
+    "rows_scanned": 3000
+  },
+  "quartermaster:ListActiveTenantRecords@declared": {
+    "flags": ["SEQ_SCAN_LARGE", "SORT_LARGE"],
+    "read_requests": 2,
+    "rows_scanned": 3000
+  },
+  "quartermaster:ListActiveTenantRecords@distributed": {
+    "flags": ["SEQ_SCAN_LARGE", "SORT_LARGE"],
+    "read_requests": 2,
+    "rows_scanned": 3000
+  },
+  "quartermaster:ListActiveTenantsByCluster@declared": {
+    "flags": ["READ_AMPLIFICATION"],
+    "read_requests": 5,
+    "rows_scanned": 5564
+  },
+  "quartermaster:ListActiveTenantsByCluster@distributed": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 5,
+    "rows_scanned": 5564
+  },
+  "quartermaster:ListBootstrapTenantAliases@declared": {
+    "flags": ["SEQ_SCAN_LARGE"],
+    "read_requests": 3,
+    "rows_scanned": 3000
+  },
+  "quartermaster:ListBootstrapTenantAliases@distributed": {
+    "flags": ["SEQ_SCAN_LARGE"],
+    "read_requests": 3,
+    "rows_scanned": 3000
+  },
+  "quartermaster:ListDesiredTenantAliases@declared": {
+    "flags": ["SEQ_SCAN_LARGE"],
+    "read_requests": 5,
+    "reason": "Bulk tenant sweep groups active access once; five RPCs replace correlated per-tenant lookups.",
+    "rows_scanned": 5134
+  },
+  "quartermaster:ListDesiredTenantAliases@distributed": {
+    "flags": ["SEQ_SCAN_LARGE"],
+    "read_requests": 5,
+    "reason": "Bulk tenant sweep groups active access once; five RPCs replace correlated per-tenant lookups.",
+    "rows_scanned": 5134
+  },
+  "quartermaster:ListDesiredTenantCustomDomains@declared": {
+    "flags": ["SEQ_SCAN_LARGE"],
+    "read_requests": 5,
+    "rows_scanned": 5134
+  },
+  "quartermaster:ListDesiredTenantCustomDomains@distributed": {
+    "flags": ["SEQ_SCAN_LARGE"],
+    "read_requests": 5,
+    "rows_scanned": 5134
+  },
+  "quartermaster:ListGRPCHealthWatchCandidates@declared": {
+    "flags": ["SEQ_SCAN_LARGE"],
+    "read_requests": 4,
+    "reason": "Bulk health inventory: scan active assignments once rather than one lateral lookup per instance (231 to 4 RPCs).",
+    "rows_scanned": 1605
+  },
+  "quartermaster:ListGRPCHealthWatchCandidates@distributed": {
+    "flags": ["SEQ_SCAN_LARGE"],
+    "read_requests": 5,
+    "reason": "Bulk health inventory: scan active assignments once rather than one lateral lookup per instance (231 to 4 RPCs).",
+    "rows_scanned": 1605
+  },
+  "quartermaster:ListHealthPollCandidates@declared": {
+    "flags": ["SEQ_SCAN_LARGE"],
+    "read_requests": 4,
+    "reason": "Bulk health inventory: scan active assignments once rather than one lateral lookup per instance (198 to 4 RPCs).",
+    "rows_scanned": 1563
+  },
+  "quartermaster:ListHealthPollCandidates@distributed": {
+    "flags": ["SEQ_SCAN_LARGE"],
+    "read_requests": 5,
+    "reason": "Bulk health inventory: scan active assignments once rather than one lateral lookup per instance (198 to 4 RPCs).",
+    "rows_scanned": 1563
+  },
+  "quartermaster:ListPeerClusters@declared": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 3,
+    "rows_scanned": 2266
+  },
+  "quartermaster:PeerCensusFingerprint@declared": {
+    "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 8,
+    "rows_scanned": 9782
+  },
+  "quartermaster:PeerCensusFingerprint@distributed": {
+    "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 8,
+    "rows_scanned": 9782
+  },
+  "quartermaster:ResolveTenantByCustomDomain@declared": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 1,
+    "rows_scanned": 3000
+  },
+  "quartermaster:ResolveTenantByCustomDomain@distributed": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 1,
+    "rows_scanned": 3000
+  },
+  "quartermaster:TenantCustomDomainOutboxHasPending@declared": {
+    "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION"],
+    "read_requests": 2,
+    "rows_scanned": 2006
+  },
+  "quartermaster:TenantCustomDomainOutboxHasPending@distributed": {
+    "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION"],
+    "read_requests": 2,
+    "rows_scanned": 2006
+  },
+  "quartermaster:UpdateBootstrapCluster@distributed": {
+    "flags": ["MANY_READ_RPCS", "SLOW"],
+    "read_requests": 138,
+    "rows_scanned": 290
+  },
+  "quartermaster:hw:AssignServicePoolCount@distributed": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 18,
+    "rows_scanned": 1313
+  },
+  "quartermaster:hw:ListLocalMeshServiceTypes@distributed": {
+    "flags": ["READ_AMPLIFICATION"],
+    "read_requests": 5,
+    "rows_scanned": 1184
+  },
+  "quartermaster:hw:ListMeshServiceEndpoints@declared": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 4,
+    "rows_scanned": 1703
+  },
+  "quartermaster:hw:ListMeshServiceEndpoints@distributed": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 5,
+    "rows_scanned": 1697
+  },
+  "quartermaster:hw:ListServicePoolStatus@declared": {
+    "flags": ["SEQ_SCAN_LARGE"],
+    "read_requests": 3,
+    "rows_scanned": 1331
+  },
+  "quartermaster:hw:ListServicePoolStatus@distributed": {
+    "flags": ["SEQ_SCAN_LARGE"],
+    "read_requests": 4,
+    "rows_scanned": 1359
+  },
+  "quartermaster:hw:ReconcilePrivateClusterControlCellFoghorns#2@declared": {
+    "flags": ["SEQ_SCAN_LARGE"],
+    "read_requests": 1,
+    "rows_scanned": 30
+  },
+  "quartermaster:hw:ReconcilePrivateClusterControlCellFoghorns#2@distributed": {
+    "flags": ["SEQ_SCAN_LARGE"],
+    "read_requests": 1,
+    "rows_scanned": 30
+  },
+  "quartermaster:hw:StopStaleFoghornControlListeners@distributed": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 1,
+    "rows_scanned": 1500
+  },
+  "quartermaster:hw:UpsertInfrastructureNode@declared": {
+    "flags": ["READ_AMPLIFICATION"],
+    "read_requests": 7,
+    "rows_scanned": 1564
+  },
+  "quartermaster:hw:runClusterAccessProvenance#2@declared": {
+    "flags": ["MANY_READ_RPCS", "NESTED_LOOP_UNBATCHED", "READ_AMPLIFICATION", "SLOW"],
+    "read_requests": 331,
+    "rows_scanned": 5060
+  },
+  "quartermaster:hw:runClusterAccessProvenance#2@distributed": {
+    "flags": [
+      "MANY_READ_RPCS",
+      "NESTED_LOOP_UNBATCHED",
+      "READ_AMPLIFICATION",
+      "SEQ_SCAN_LARGE",
+      "SLOW"
+    ],
+    "read_requests": 331,
+    "rows_scanned": 2948
+  },
+  "quartermaster:hw:runClusterAccessProvenance@declared": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 10,
+    "rows_scanned": 3045
+  },
+  "quartermaster:hw:runClusterAccessProvenance@distributed": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 11,
+    "rows_scanned": 3045
+  },
+  "quartermaster:hw:runTenantDNSEntitlements#2@declared": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 1,
+    "rows_scanned": 3000
+  },
+  "quartermaster:hw:runTenantDNSEntitlements#2@distributed": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 1,
+    "rows_scanned": 3000
+  },
+  "quartermaster:hw:runTenantDNSEntitlements@declared": {
+    "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION"],
+    "read_requests": 1,
+    "rows_scanned": 3000
+  },
+  "quartermaster:hw:runTenantDNSEntitlements@distributed": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 1,
+    "rows_scanned": 3000
+  },
+  "quartermaster:hw:verifyClusterAccessProvenance#2@declared": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 8,
+    "rows_scanned": 3045
+  },
+  "quartermaster:hw:verifyClusterAccessProvenance#2@distributed": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 9,
+    "rows_scanned": 3045
+  },
+  "quartermaster:hw:verifyClusterAccessProvenance@declared": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 3,
+    "rows_scanned": 2478
+  },
+  "quartermaster:hw:verifyClusterAccessProvenance@distributed": {
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 3,
+    "rows_scanned": 2478
+  },
+  "quartermaster:shared:PruneCompleted@declared": {
+    "flags": ["SEQ_SCAN_LARGE"],
+    "read_requests": 2,
+    "rows_scanned": 1255
+  },
+  "quartermaster:shared:PruneCompleted@distributed": {
+    "flags": ["SEQ_SCAN_LARGE"],
+    "read_requests": 2,
+    "rows_scanned": 1255
+  },
+  "quartermaster:shared:claim@declared": {
+    "flags": ["CORRELATED_SUBPLAN", "MANY_READ_RPCS"],
+    "read_requests": 205,
+    "reason": "Ordered pending index stops at the claim limit; one indexed first-in-aggregate probe per visited candidate preserves aggregate ordering. Removes the whole-pending-set sort, trading more bounded RPCs for fewer scanned rows. Bosun fixture: 2348 rows and 203 RPCs for 100 claims.",
+    "rows_scanned": 2400
+  },
+  "quartermaster:shared:claim@distributed": {
+    "flags": ["CORRELATED_SUBPLAN", "MANY_READ_RPCS"],
+    "read_requests": 205,
+    "reason": "Ordered pending index stops at the claim limit; one indexed first-in-aggregate probe per visited candidate preserves aggregate ordering. Removes the whole-pending-set sort, trading more bounded RPCs for fewer scanned rows. Bosun fixture: 2348 rows and 203 RPCs for 100 claims.",
+    "rows_scanned": 2400
+  },
+  "skipper:ClaimPendingUsage@declared": {
+    "flags": ["MANY_READ_RPCS", "SORT_FEEDS_LIMIT"],
+    "read_requests": 52,
+    "rows_scanned": 2048
+  },
+  "skipper:ClaimPendingUsage@distributed": {
+    "flags": ["MANY_READ_RPCS", "SORT_FEEDS_LIMIT"],
+    "read_requests": 52,
+    "rows_scanned": 2048
+  },
+  "skipper:CountUnreadReports@declared": {
+    "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION"],
+    "read_requests": 2,
+    "rows_scanned": 1234
+  },
+  "skipper:CountUnreadReports@distributed": {
+    "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION"],
+    "read_requests": 2,
+    "rows_scanned": 1234
+  },
+  "skipper:HybridSearchKnowledgeFiltered@declared": {
+    "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION"],
+    "read_requests": 2,
+    "rows_scanned": 1206
+  },
+  "skipper:HybridSearchKnowledgeFiltered@distributed": {
+    "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION"],
+    "read_requests": 2,
+    "rows_scanned": 1206
+  },
+  "skipper:ReapAbandonedCrawlJobs@declared": {
+    "flags": ["SEQ_SCAN_LARGE"],
+    "read_requests": 2,
+    "rows_scanned": 8515
+  },
+  "skipper:ReapAbandonedCrawlJobs@distributed": {
+    "flags": ["SEQ_SCAN_LARGE"],
+    "read_requests": 2,
+    "rows_scanned": 8515
+  }
+}

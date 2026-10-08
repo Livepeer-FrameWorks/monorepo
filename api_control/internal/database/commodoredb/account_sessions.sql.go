@@ -44,7 +44,8 @@ func (q *Queries) DeleteRefreshTokensForUser(ctx context.Context, arg DeleteRefr
 const findUserIDByEmail = `-- name: FindUserIDByEmail :one
 SELECT id
 FROM commodore.users
-WHERE email = $1
+WHERE lower(email::text) = lower($1::text)
+  AND email IS NOT NULL
 `
 
 func (q *Queries) FindUserIDByEmail(ctx context.Context, email sql.NullString) (string, error) {
@@ -70,7 +71,8 @@ SELECT
     updated_at,
     platform_operator
 FROM commodore.users
-WHERE email = $1
+WHERE lower(email::text) = lower($1::text)
+  AND email IS NOT NULL
 `
 
 type GetLoginUserByEmailRow struct {

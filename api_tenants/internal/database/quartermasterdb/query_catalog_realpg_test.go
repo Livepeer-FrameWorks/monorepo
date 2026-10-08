@@ -24,11 +24,71 @@ import (
 )
 
 func TestGeneratedQueryCatalogPrepares_RealPG(t *testing.T) {
-	prepareQuartermasterQueryCatalog(t, startQuartermasterQueryCatalogRealPG(t))
+	db := startQuartermasterQueryCatalogRealPG(t)
+	prepareQuartermasterQueryCatalog(t, db)
+	assertHealthCandidatesChooseOneActiveAssignment(t, db)
 }
 
 func TestGeneratedQueryCatalogPrepares_RealYugabyte(t *testing.T) {
-	prepareQuartermasterQueryCatalog(t, startQuartermasterQueryCatalogRealYugabyte(t))
+	db := startQuartermasterQueryCatalogRealYugabyte(t)
+	prepareQuartermasterQueryCatalog(t, db)
+	assertHealthCandidatesChooseOneActiveAssignment(t, db)
+}
+
+func assertHealthCandidatesChooseOneActiveAssignment(t *testing.T, db *sql.DB) {
+	t.Helper()
+	ctx := context.Background()
+	for _, statement := range []string{
+		`INSERT INTO quartermaster.services (service_id, name, plane, type, protocol) VALUES ('audit-poller', 'Audit poller', 'control', 'api', 'http')`,
+		`INSERT INTO quartermaster.infrastructure_clusters (cluster_id, cluster_name, cluster_type, base_url) VALUES ('audit-a', 'A', 'edge', 'https://a.example.com'), ('audit-b', 'B', 'edge', 'https://b.example.com'), ('audit-c', 'C', 'edge', 'https://c.example.com')`,
+		`INSERT INTO quartermaster.service_instances (instance_id, cluster_id, service_id, status, port) VALUES ('audit-assigned', 'audit-c', 'audit-poller', 'running', 18000), ('audit-unassigned', 'audit-c', 'audit-poller', 'running', 18000)`,
+		`INSERT INTO quartermaster.service_cluster_assignments (service_instance_id, cluster_id, is_active) SELECT i.id, c.cluster_id, c.cluster_id <> 'audit-a' FROM quartermaster.service_instances i CROSS JOIN quartermaster.infrastructure_clusters c WHERE i.instance_id = 'audit-assigned' AND c.cluster_id IN ('audit-a', 'audit-b', 'audit-c')`,
+	} {
+		if _, err := db.ExecContext(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check := func(instance, cluster, baseURL string, seen map[string]bool) {
+		t.Helper()
+		if seen[instance] {
+			t.Fatal("poll candidate duplicated by multiple assignments")
+		}
+		seen[instance] = true
+		wantCluster, wantURL := "", ""
+		if instance == "audit-assigned" {
+			wantCluster, wantURL = "audit-b", "https://b.example.com"
+		}
+		if cluster != wantCluster || baseURL != wantURL {
+			t.Fatalf("instance %s picked %s/%s", instance, cluster, baseURL)
+		}
+	}
+	q := New(db)
+	httpRows, err := q.ListHealthPollCandidates(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, row := range httpRows {
+		if row.ServiceID == "audit-poller" {
+			check(row.InstanceID, row.AssignedClusterID, row.AssignedBaseUrl, seen)
+		}
+	}
+	if len(seen) != 2 {
+		t.Fatal("HTTP health poll lost an unassigned instance")
+	}
+	grpcRows, err := q.ListGRPCHealthWatchCandidates(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen = map[string]bool{}
+	for _, row := range grpcRows {
+		if row.ServiceID == "audit-poller" {
+			check(row.InstanceID, row.AssignedClusterID, row.AssignedBaseUrl, seen)
+		}
+	}
+	if len(seen) != 2 {
+		t.Fatal("gRPC health watch lost an unassigned instance")
+	}
 }
 
 func TestCreateTenantRecordStartsWithObservedFailClosedDNSEntitlements_RealPG(t *testing.T) {
