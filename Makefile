@@ -1779,7 +1779,7 @@ verify-yugabyte-foghorn-authority-contracts: verify-yugabyte-shared-fixture
 	@$(CONTRACT_GO_TEST) api_balancing yugabyte/foghorn-media-authority -tags schema_verify -run '^($(FOGHORN_MEDIA_AUTHORITY_REALYB_TESTS))$$' -count=1 -timeout 600s ./internal/mediaauthority/
 
 verify-yugabyte-service: verify-foghorn-test-selection
-	@case "$(SERVICE)" in commodore|purser|navigator|skipper|quartermaster|periscope-metering|foghorn|foghorn-authority|lookout|bosun) ;; *) echo "ERROR: SERVICE must be commodore, purser, navigator, skipper, quartermaster, periscope-metering, foghorn, foghorn-authority, lookout, or bosun"; exit 2;; esac
+	@case "$(SERVICE)" in commodore|purser|navigator|skipper|quartermaster|periscope-metering|foghorn|foghorn-authority|foghorn-jobs|lookout|bosun) ;; *) echo "ERROR: SERVICE must be commodore, purser, navigator, skipper, quartermaster, periscope-metering, foghorn, foghorn-authority, foghorn-jobs, lookout, or bosun"; exit 2;; esac
 	@$(YUGABYTE_FIXTURE) $(MAKE) --no-print-directory -k -j1 verify-yugabyte-$(SERVICE)-contracts $(if $(filter $(SERVICE),$(YUGABYTE_COLOCATED_SERVICES)),verify-yugabyte-distributed-$(SERVICE))
 
 # One database's schema contract groups and its service's contracts, on one shared engine.
