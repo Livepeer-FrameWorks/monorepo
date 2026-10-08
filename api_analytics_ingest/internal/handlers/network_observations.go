@@ -70,7 +70,7 @@ func (h *AnalyticsHandler) processNetworkObservation(ctx context.Context, event 
 		if m.IP == "" {
 			m.IP = p.TargetIp
 		}
-		m.Qualifying = p.ObserverHealthy && (m.Success || p.FailureKind != "observer_cancelled" && p.FailureKind != "observer_configuration" && p.FailureKind != "ambiguous_attribution")
+		m.Qualifying = obs.DiscoveryQualifies(m.Success, p.ObserverHealthy, p.FailureKind)
 	case *pb.OrchestratorStateUpdate:
 		m.Kind = "state"
 		m.ResourceID = p.OrchAddr

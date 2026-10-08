@@ -83,7 +83,7 @@ func (a *API) Gateway(ctx context.Context, message kafka.Message) error {
 		}
 		ip = discovery.Vantage.ResolvedIp
 		success = discovery.Reachable
-		check = obs.Check{ObservedAt: event.Timestamp, Success: success, Qualifying: discovery.ObserverHealthy, ActualIP: ip, LatencyMS: discovery.DiscoveryLatencyMs, FailureKind: discovery.FailureKind}
+		check = obs.Check{ObservedAt: event.Timestamp, Success: success, Qualifying: obs.DiscoveryQualifies(success, discovery.ObserverHealthy, discovery.FailureKind), ActualIP: ip, LatencyMS: discovery.DiscoveryLatencyMs, FailureKind: discovery.FailureKind}
 	} else {
 		if err = options.Unmarshal(raw, &state); err != nil {
 			return err

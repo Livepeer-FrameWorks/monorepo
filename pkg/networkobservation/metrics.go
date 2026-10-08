@@ -7,6 +7,22 @@ import (
 	"time"
 )
 
+// DiscoveryQualifies excludes observer and admission failures from endpoint downtime.
+func DiscoveryQualifies(success, observerHealthy bool, failureKind string) bool {
+	if !observerHealthy {
+		return false
+	}
+	if success {
+		return true
+	}
+	switch failureKind {
+	case "observer_cancelled", "canceled", "observer_configuration", "ambiguous_attribution", "authentication", "observer_payment", "capacity":
+		return false
+	default:
+		return true
+	}
+}
+
 // Metric is the public projection of an observation. Stream correlation is kept separately.
 type Metric struct {
 	EventID           string    `json:"event_id"`

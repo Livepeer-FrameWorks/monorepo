@@ -126,10 +126,7 @@ func (p *Probe) Check(ctx context.Context, a obs.Assignment) obs.ProbeResult {
 	}
 	if err != nil {
 		result.Check.FailureKind = Classify(err)
-		switch result.Check.FailureKind {
-		case "observer_cancelled", "authentication", "observer_payment", "capacity":
-			result.Check.Qualifying = false
-		}
+		result.Check.Qualifying = obs.DiscoveryQualifies(false, true, result.Check.FailureKind)
 		return result
 	}
 	if !ip.Equal(net.ParseIP(result.Check.ActualIP)) {
