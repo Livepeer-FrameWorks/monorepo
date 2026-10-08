@@ -3,15 +3,14 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"frameworks/api_network_observer/internal/appconfig"
 	"frameworks/api_network_observer/internal/prober"
-	"frameworks/api_network_observer/internal/providers/livepeer"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/telemetryspool"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 	"net/http"
-	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -20,6 +19,17 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && (os.Args[1] == "sign-discovery" || os.Args[1] == "check-config") {
+		command := checkConfig
+		if os.Args[1] == "sign-discovery" {
+			command = signDiscovery
+		}
+		if err := command(os.Args[2:], os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	if version.HandleCLI() {
 		return
 	}
@@ -30,11 +40,7 @@ func main() {
 		logger.WithError(err).Fatal("Invalid prober configuration")
 	}
 	cfg.ApplyLogLevel(logger)
-	u, err := url.Parse(cfg.CoordinatorURL)
-	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Scheme != "https" && (!cfg.AllowInsecureCoordinator || u.Scheme != "http")) {
-		logger.Fatal("Coordinator requires verified HTTPS; local HTTP needs explicit opt-in")
-	}
-	probe, err := livepeer.NewProbe(cfg.BroadcasterAddress, cfg.BroadcasterSignature, cfg.SkipLivepeerTLSVerify, time.Duration(cfg.TimeoutSeconds)*time.Second)
+	probe, err := configuredProbe(cfg)
 	if err != nil {
 		logger.WithError(err).Fatal("Invalid discovery authentication")
 	}

@@ -6,8 +6,12 @@ import (
 	obs "github.com/Livepeer-FrameWorks/monorepo/pkg/networkobservation"
 	lp "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/livepeer_observer"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/restream"
+	"github.com/ethereum/go-ethereum/accounts"
+	"github.com/ethereum/go-ethereum/crypto"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 	"net"
 	"strconv"
 	"testing"
@@ -15,6 +19,68 @@ import (
 )
 
 type orchTest interface{}
+
+func TestProbeValidatesDiscoverySignatureBeforeDialing(t *testing.T) {
+	key, err := crypto.HexToECDSA("0000000000000000000000000000000000000000000000000000000000000001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := crypto.PubkeyToAddress(key.PublicKey)
+	for _, tc := range []struct {
+		name   string
+		digest []byte
+		valid  bool
+	}{
+		{"livepeer", accounts.TextHash(crypto.Keccak256([]byte(address.Hex()))), true},
+		{"ordinary-personal-sign", accounts.TextHash([]byte(address.Hex())), false},
+		{"missing-prefix", crypto.Keccak256([]byte(address.Hex())), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sig, signErr := crypto.Sign(tc.digest, key)
+			if signErr != nil {
+				t.Fatal(signErr)
+			}
+			sig[64] += 27
+			_, probeErr := NewProbe(address.Hex(), hex.EncodeToString(sig), true, time.Second)
+			if (probeErr == nil) != tc.valid {
+				t.Fatalf("valid=%t, discovery signature error=%v", tc.valid, probeErr)
+			}
+		})
+	}
+}
+
+func TestDiscoveryAdmissionFailuresAreNotDowntime(t *testing.T) {
+	for _, tc := range []struct {
+		message, kind string
+		code          codes.Code
+	}{
+		{"insufficient sender reserve", "observer_payment", codes.Unknown},
+		{"Invalid orchestrator request: orchestrator req sig check failed", "authentication", codes.Unknown},
+		{"authentication failed: broadcaster not allowed", "authentication", codes.Unknown},
+		{"denied", "authentication", codes.PermissionDenied},
+		{"busy", "capacity", codes.ResourceExhausted},
+	} {
+		t.Run(tc.kind+tc.message, func(t *testing.T) {
+			listener, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer listener.Close()
+			server := grpc.NewServer()
+			server.RegisterService(&grpc.ServiceDesc{ServiceName: "net.Orchestrator", HandlerType: (*orchTest)(nil), Methods: []grpc.MethodDesc{{MethodName: "GetOrchestrator", Handler: func(_ any, _ context.Context, _ func(any) error, _ grpc.UnaryServerInterceptor) (any, error) {
+				return nil, status.Error(tc.code, tc.message)
+			}}}}, struct{}{})
+			go server.Serve(listener)
+			defer server.Stop()
+			_, allowed, _ := net.ParseCIDR("127.0.0.1/32")
+			probe := Probe{Timeout: time.Second, destinationPolicy: restream.DestinationPolicy{AllowedCIDRs: []*net.IPNet{allowed}}}
+			result := probe.Check(context.Background(), obs.Assignment{Deadline: time.Now().Add(time.Second), Endpoint: obs.Endpoint{IP: "127.0.0.1", Resource: obs.Resource{URI: "http://" + listener.Addr().String()}}})
+			if result.Check.Qualifying || result.Check.Success || result.Check.FailureKind != tc.kind {
+				t.Fatalf("admission rejection counted as downtime: %+v", result.Check)
+			}
+		})
+	}
+}
 
 func TestProbeRejectsUnsafeOrUnpinnedDestinations(t *testing.T) {
 	for _, ip := range []string{"", "not-an-ip", "127.0.0.1", "10.0.0.1", "169.254.169.254", "100.64.0.1", "0.0.0.0", "224.0.0.1", "::1", "fd00::1", "fe80::1", "::ffff:127.0.0.1", "64:ff9b::a00:1"} {
@@ -41,6 +107,16 @@ func TestProbePinsIPAndPreservesAuthority(t *testing.T) {
 	_ = authority
 	server := grpc.NewServer()
 	address := make([]byte, 20)
+	broadcasterKey, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	broadcasterAddress := crypto.PubkeyToAddress(broadcasterKey.PublicKey)
+	signature, err := crypto.Sign(accounts.TextHash(crypto.Keccak256([]byte(broadcasterAddress.Hex()))), broadcasterKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signature[64] += 27
 	server.RegisterService(&grpc.ServiceDesc{ServiceName: "net.Orchestrator", HandlerType: (*orchTest)(nil), Methods: []grpc.MethodDesc{{MethodName: "GetOrchestrator", Handler: func(_ any, ctx context.Context, decode func(any) error, _ grpc.UnaryServerInterceptor) (any, error) {
 		var req lp.DiscoveryRequest
 		if decodeErr := decode(&req); decodeErr != nil {
@@ -52,6 +128,17 @@ func TestProbePinsIPAndPreservesAuthority(t *testing.T) {
 		}
 		if !req.IgnoreCapacityCheck {
 			t.Error("discovery must ignore transient job capacity")
+		}
+		wireSignature := append([]byte(nil), req.Sig...)
+		if len(wireSignature) != 65 || wireSignature[64] < 27 || wireSignature[64] > 28 {
+			t.Error("invalid wire discovery signature")
+			return nil, status.Error(codes.Unauthenticated, "bad signature")
+		}
+		wireSignature[64] -= 27
+		publicKey, signatureErr := crypto.SigToPub(accounts.TextHash(crypto.Keccak256([]byte(broadcasterAddress.Hex()))), wireSignature)
+		if signatureErr != nil || crypto.PubkeyToAddress(*publicKey) != broadcasterAddress || hex.EncodeToString(req.Address) != hex.EncodeToString(broadcasterAddress.Bytes()) {
+			t.Error("discovery signature did not authenticate the broadcaster")
+			return nil, status.Error(codes.Unauthenticated, "bad signature")
 		}
 		return &lp.DiscoveryResponse{Transcoder: "http://" + authority, Address: address, PriceInfo: &lp.DiscoveryPrice{PricePerUnit: 4, PixelsPerUnit: 10}}, nil
 	}}}}, struct{}{})
@@ -66,7 +153,11 @@ func TestProbePinsIPAndPreservesAuthority(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := Probe{Address: address, Signature: make([]byte, 65), Timeout: 2 * time.Second, destinationPolicy: restream.DestinationPolicy{AllowedCIDRs: []*net.IPNet{loopback}}}
+	p, err := NewProbe(broadcasterAddress.Hex(), hex.EncodeToString(signature), false, 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.destinationPolicy = restream.DestinationPolicy{AllowedCIDRs: []*net.IPNet{loopback}}
 	result := p.Check(context.Background(), obs.Assignment{Endpoint: endpoint, ObserverID: "test", Deadline: time.Now().Add(time.Minute)})
 	if !result.Check.Success || result.Check.ActualIP != "127.0.0.1" || result.Quote == nil {
 		t.Fatalf("pinned discovery failed: %+v", result)

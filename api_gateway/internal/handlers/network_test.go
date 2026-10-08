@@ -87,6 +87,43 @@ func TestNetworkHistoryOutageRetainsInventory(t *testing.T) {
 		t.Fatal("public response leaked internal error")
 	}
 }
+
+func TestPublicNetworkPublishesObserverLocationsWithoutPrivateIdentity(t *testing.T) {
+	h, _, router := networkFixture(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"provider":"livepeer","network":"42161","environment":"production","resources":[],"endpoints":[],"observers":[{"id":"private-gateway","kind":"gateway","region":"eu","location":{"known":false}},{"id":"private-prober","kind":"prober","region":"eu","location":{"known":true,"latitude":52,"longitude":5,"source":"mmdb"}}]}`))
+	}))
+	t.Cleanup(server.Close)
+	client, err := networkobserver.New(server.URL, "ingest-secret", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.Observer = client
+	var first string
+	for range 2 {
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, httptest.NewRequestWithContext(context.Background(), "GET", "/network", nil))
+		var body struct {
+			Inventory struct {
+				Observers []obs.Observer `json:"observers"`
+			} `json:"inventory"`
+		}
+		if response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &body) != nil || len(body.Inventory.Observers) != 2 {
+			t.Fatalf("observer locations missing: %d %s", response.Code, response.Body)
+		}
+		gateway, prober := body.Inventory.Observers[0], body.Inventory.Observers[1]
+		if gateway.Kind != "gateway" || gateway.Location.Known || prober.Kind != "prober" || !prober.Location.Valid() || prober.Region != "eu" {
+			t.Fatalf("observer role/geography changed: %+v", body.Inventory.Observers)
+		}
+		if strings.Contains(response.Body.String(), "private-gateway") || strings.Contains(response.Body.String(), "private-prober") || prober.ID == "" || prober.ID == gateway.ID {
+			t.Fatal("observer map identities are private, missing or ambiguous")
+		}
+		if first != "" && first != prober.ID {
+			t.Fatal("public observer identity changed between refreshes")
+		}
+		first = prober.ID
+	}
+}
 func TestNetworkDiagnosticsRequiresPlatformOperator(t *testing.T) {
 	h, reader, router := networkFixture(t)
 	for _, operator := range []bool{false, true} {

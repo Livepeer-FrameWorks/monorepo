@@ -229,6 +229,7 @@ func (a *API) inventory(w http.ResponseWriter, r *http.Request) {
 	a.Engine.Schedule(s, now)
 	endpoints := []obs.Endpoint{}
 	resources := []obs.Resource{}
+	observers := []obs.Observer{}
 	for _, p := range s.Endpoints {
 		if r.URL.Query().Get("include_inactive") != "true" && p.Hidden(now) {
 			continue
@@ -240,8 +241,12 @@ func (a *API) inventory(w http.ResponseWriter, r *http.Request) {
 	for _, v := range s.Resources {
 		resources = append(resources, v)
 	}
+	for _, observer := range s.Observers {
+		observers = append(observers, observer)
+	}
+	sort.Slice(observers, func(i, j int) bool { return observers[i].ID < observers[j].ID })
 	sort.Slice(endpoints, func(i, j int) bool { return endpoints[i].ID < endpoints[j].ID })
-	respond(w, 200, map[string]any{"generated_at": now, "provider": "livepeer", "network": a.Engine.Network, "environment": a.Engine.Environment, "resources": resources, "endpoints": endpoints})
+	respond(w, 200, map[string]any{"generated_at": now, "provider": "livepeer", "network": a.Engine.Network, "environment": a.Engine.Environment, "resources": resources, "endpoints": endpoints, "observers": observers})
 }
 func (a *API) candidates(w http.ResponseWriter, r *http.Request) {
 	s, err := a.Store.Snapshot(r.Context())

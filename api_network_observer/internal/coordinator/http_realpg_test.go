@@ -140,6 +140,15 @@ func verifyObserverReplayRollbackAndRestart(t *testing.T, db *sql.DB) {
 	request(api, "POST", "/v1/observations", raw, 200)
 	api = newAPI(tenant)
 	request(api, "POST", "/v1/observations", raw, 200)
+	var inventory struct {
+		Observers []obs.Observer `json:"observers"`
+	}
+	if err := json.Unmarshal(request(api, "GET", "/v1/inventory", nil, 200), &inventory); err != nil {
+		t.Fatal(err)
+	}
+	if len(inventory.Observers) != 1 || inventory.Observers[0].ID != "eu" || inventory.Observers[0].Kind != "prober" || inventory.Observers[0].Region != "eu-west" || inventory.Observers[0].LastSeen.IsZero() {
+		t.Fatalf("observer measurement site lost across restart: %+v", inventory.Observers)
+	}
 	if count("telemetry_outbox", tenant) != 2 || count("ingest_receipts", tenant) != 2 || count("telemetry_outbox", otherTenant) != 0 {
 		t.Fatal("restart replay duplicated telemetry or crossed tenant scope")
 	}

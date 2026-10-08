@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { motion } from "framer-motion";
+import { bindExplorerViewport } from "../../../../../packages/map-core/network-explorer";
 import {
   addRequiredAttribution,
   basemapMapOptions,
@@ -666,7 +667,7 @@ function drawTopology(maplibre, map, markersRef, pulsePathsRef, data, showOrches
   pulsePathsRef.current = pulsePaths;
 }
 
-function NetworkMapInner({ data }) {
+function NetworkMapInner({ data, viewport }) {
   const containerRef = useRef(null);
   const mapRef = useRef(null);
   const maplibreRef = useRef(null);
@@ -686,6 +687,7 @@ function NetworkMapInner({ data }) {
   useEffect(() => {
     let cancelled = false;
     let unbindWheel = () => {};
+    let unbindViewport = () => {};
     (async () => {
       let runtime;
       try {
@@ -709,7 +711,9 @@ function NetworkMapInner({ data }) {
           maxZoom: 8,
           scrollZoom: false,
           ...basemapMapOptions(runtime.basemap),
+          ...viewport?.camera,
         });
+        unbindViewport = bindExplorerViewport(map, viewport);
         mapRef.current = map;
         maplibreRef.current = maplibre;
         addRequiredAttribution(map, runtime.basemap);
@@ -772,13 +776,14 @@ function NetworkMapInner({ data }) {
     return () => {
       cancelled = true;
       unbindWheel();
+      unbindViewport();
       if (animationRef.current) cancelAnimationFrame(animationRef.current);
       for (const marker of markersRef.current) marker.remove();
       markersRef.current = [];
       mapRef.current?.remove();
       mapRef.current = null;
     };
-  }, []);
+  }, [viewport]);
 
   useEffect(() => {
     dataRef.current = data;
@@ -874,7 +879,7 @@ function NetworkMapInner({ data }) {
   );
 }
 
-export function NetworkMap() {
+export function NetworkMap({ viewport } = {}) {
   const { data, loading } = useNetworkStatus();
   const prefersReducedMotion = usePrefersReducedMotion();
   /* Hold the map's height while status loads so the page does not jump, then
@@ -900,7 +905,7 @@ export function NetworkMap() {
           {statusLabel(status)}
         </span>
       </div>
-      <NetworkMapInner data={data} />
+      <NetworkMapInner data={data} viewport={viewport} />
       <div className="network-viz__summary">
         <span>
           {data.healthyNodes}/{data.totalNodes} Nodes

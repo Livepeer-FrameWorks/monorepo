@@ -413,6 +413,7 @@ verify-go-build:
 	$(MAKE) --no-print-directory proto-breaking
 	$(MAKE) --no-print-directory sqlc-check
 	$(MAKE) --no-print-directory build
+	$(MAKE) --no-print-directory test-network-prober-install
 
 # The CI "SDKs (TypeScript, Go, Python)" job, step for step.
 verify-sdks:
@@ -2105,7 +2106,7 @@ provision-hello: ansible-galaxy-install
 		-cache-dir ../$(ANSIBLE_DIR)/$(ANSIBLE_CACHE_REL)
 
 # Regional probes are manually deployable; the coordinator owns the shared inventory.
-.PHONY: test-network-observer build-bin-network-observer build-bin-network-prober verify-network-observer-db verify-yugabyte-network-observer-contracts
+.PHONY: test-network-observer test-network-prober-install build-bin-network-observer build-bin-network-prober verify-network-observer-db verify-yugabyte-network-observer-contracts
 verify-network-observer-db:
 	@$(CONTRACT_GO_TEST) api_network_observer postgres/network-observer -tags schema_verify -run '^TestObserverReplayRollbackAndRestart_RealPG$$' -count=1 -timeout 300s ./internal/coordinator/
 
@@ -2114,6 +2115,8 @@ verify-yugabyte-network-observer-contracts: verify-yugabyte-shared-fixture
 
 test-network-observer:
 	$(call run-go-tests,network-observer,api_network_observer)
+test-network-prober-install: build-bin-network-prober
+	./scripts/test-network-prober-install.sh
 build-bin-network-observer:
 	@mkdir -p bin
 	cd api_network_observer && go build $(GO_TAG_FLAGS) $(call component_ldflags,network-observer,api_network_observer) -o ../bin/network-observer ./cmd/network-observer

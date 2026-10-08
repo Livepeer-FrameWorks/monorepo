@@ -23,6 +23,7 @@ type Inventory struct {
 	Environment string         `json:"environment"`
 	Resources   []obs.Resource `json:"resources"`
 	Endpoints   []obs.Endpoint `json:"endpoints"`
+	Observers   []obs.Observer `json:"observers"`
 }
 
 func New(baseURL, secret string, allowHTTP bool) (*Client, error) {

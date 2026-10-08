@@ -2,8 +2,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mountNetworkDashboard } from "../../packages/map-core/network-dashboard";
 
+const mapHarness = vi.hoisted(() => ({ module: undefined as object | undefined }));
 vi.mock("../../packages/map-core/index", () => ({
-  loadMapLibre: () => Promise.reject(new Error("Map disabled in DOM test")),
+  loadMapLibre: () =>
+    mapHarness.module
+      ? Promise.resolve(mapHarness.module)
+      : Promise.reject(new Error("Map disabled in DOM test")),
   readRuntimePublicConfig: () => ({}),
   basemapMapOptions: () => ({}),
   addRequiredAttribution: () => {},
@@ -13,6 +17,8 @@ afterEach(() => {
   stop?.();
   vi.unstubAllGlobals();
   document.body.replaceChildren();
+  window.history.replaceState({}, "", "/");
+  mapHarness.module = undefined;
 });
 function fixture() {
   const now = new Date().toISOString();
@@ -80,6 +86,241 @@ function mount(data: ReturnType<typeof fixture>) {
   return { container, fetch };
 }
 describe("shared network dashboard", () => {
+  it("ranks failures by qualifying outcomes rather than unrelated recorded events", async () => {
+    const data = fixture();
+    data.inventory.endpoints.push({
+      ...data.inventory.endpoints[0],
+      id: "reliable",
+      ip: "192.0.2.2",
+      resource: { ...data.inventory.endpoints[0].resource, id: "0xdef" },
+    });
+    data.history.summaries = [
+      { ...data.history.summaries[0], samples: 100, qualified_samples: 10, failures: 5 },
+      {
+        ...data.history.summaries[0],
+        resource_id: "0xdef",
+        ip: "192.0.2.2",
+        samples: 20,
+        qualified_samples: 20,
+        failures: 2,
+      },
+    ];
+    window.history.replaceState(
+      {},
+      "",
+      "/network?view=livepeer&lp_region=eu&lp_profile=720p&lp_sort=failures"
+    );
+    const { container } = mount(data);
+    await vi.waitFor(() => expect(container.querySelector("tbody button")).not.toBeNull());
+    expect(container.querySelector("tbody button")?.textContent).toBe("192.0.2.2");
+  });
+  it("keeps fresh price ordering exact above JavaScript's integer precision", async () => {
+    const data = fixture();
+    const q = {
+      numerator: "9007199254740993",
+      denominator: "3",
+      currency: "WEI",
+      unit: "pixel",
+      observed_at: new Date().toISOString(),
+    };
+    const expensive = { ...data.inventory.endpoints[0], price: q };
+    const cheap = {
+      ...expensive,
+      id: "cheap",
+      ip: "192.0.2.2",
+      resource: { ...expensive.resource, id: "0xdef" },
+      price: { ...q, numerator: "9007199254740992" },
+    };
+    const stale = {
+      ...cheap,
+      id: "stale",
+      ip: "192.0.2.3",
+      price: { ...q, numerator: "1", observed_at: new Date(Date.now() - 86400000).toISOString() },
+    };
+    data.inventory.endpoints = [expensive, stale, cheap];
+    const { container } = mount(data);
+    await vi.waitFor(() => expect(container.querySelector("tbody button")).not.toBeNull());
+    const order = container.querySelector(
+      'select[aria-label="Sort endpoints"]'
+    ) as HTMLSelectElement;
+    order.value = "price";
+    order.dispatchEvent(new Event("change"));
+    const rows = Array.from(container.querySelectorAll(".list tbody tr"));
+    expect(rows.map((row) => row.querySelector("button")?.textContent)).toEqual([
+      "192.0.2.2",
+      "192.0.2.1",
+      "192.0.2.3",
+    ]);
+    expect(rows[2].textContent).toContain("Stale / undated quote");
+  });
+  it("renders independently toggleable gateway and prober layers without inventing unknown locations", async () => {
+    const sources = new Map<
+      string,
+      { data: { features: unknown[] }; setData: (data: { features: unknown[] }) => void }
+    >();
+    const visibility = vi.fn();
+    class TestMap {
+      on(event: string, callback: unknown) {
+        if (event === "load") queueMicrotask(callback as () => void);
+      }
+      addControl() {}
+      isStyleLoaded() {
+        return true;
+      }
+      getSource(id: string) {
+        return sources.get(id);
+      }
+      addSource(id: string, source: { data: { features: unknown[] } }) {
+        sources.set(id, {
+          data: source.data,
+          setData: (next) => {
+            sources.get(id)!.data = next;
+          },
+        });
+      }
+      addLayer() {}
+      setLayoutProperty = visibility;
+      remove() {}
+    }
+    mapHarness.module = { Map: TestMap, NavigationControl: class {} };
+    const data = {
+      ...fixture(),
+      inventory: {
+        ...fixture().inventory,
+        observers: [
+          {
+            id: "site-a",
+            kind: "prober",
+            region: "eu",
+            last_seen: new Date().toISOString(),
+            location: { known: true, latitude: 52, longitude: 5, source: "mmdb" },
+          },
+          { id: "site-b", kind: "prober", region: "us", location: { known: false } },
+        ],
+      },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((url) =>
+        Promise.resolve({
+          ok: true,
+          json: async () =>
+            typeof url === "string"
+              ? {
+                  data: {
+                    networkStatus: {
+                      nodes: [],
+                      clusters: [
+                        {
+                          clusterId: "eu",
+                          name: "Europe",
+                          region: "eu",
+                          latitude: 52,
+                          longitude: 5,
+                          services: ["livepeer-gateway"],
+                        },
+                      ],
+                    },
+                  },
+                }
+              : structuredClone(data),
+        })
+      )
+    );
+    const container = document.createElement("div");
+    document.body.append(container);
+    stop = mountNetworkDashboard(container, {
+      apiURL: "https://api.example/v1/network/livepeer",
+      graphqlURL: "https://api.example/graphql",
+    });
+    await vi.waitFor(() => expect(sources.get("gateway-clusters")?.data.features).toHaveLength(1));
+    expect(sources.get("prober-sites")?.data.features).toHaveLength(1);
+    expect(container.querySelector(".observation-sites")?.textContent).toContain(
+      "Location unknown"
+    );
+    const label = Array.from(container.querySelectorAll("label")).find(
+      (entry) => entry.textContent === "Probers"
+    );
+    const toggle = label?.querySelector("input") as HTMLInputElement;
+    toggle.checked = false;
+    toggle.dispatchEvent(new Event("change"));
+    expect(visibility).toHaveBeenCalledWith("prober-sites", "visibility", "none");
+    expect(visibility).toHaveBeenCalledWith("gateway-clusters", "visibility", "visible");
+  });
+  it("starts the new regional history query while the previous region is still pending", async () => {
+    const data = fixture();
+    data.history.summaries.push({ ...data.history.summaries[0], region: "us" });
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => structuredClone(data) })
+      .mockImplementation(() => new Promise(() => {}));
+    vi.stubGlobal("fetch", fetch);
+    const container = document.createElement("div");
+    document.body.append(container);
+    stop = mountNetworkDashboard(container, { apiURL: "https://api.example/v1/network/livepeer" });
+    await vi.waitFor(() => expect(container.querySelector("tbody button")).not.toBeNull());
+    (container.querySelector("tbody button") as HTMLButtonElement).click();
+    expect(fetch).toHaveBeenCalledTimes(2);
+    const region = container.querySelectorAll("select")[1] as HTMLSelectElement;
+    region.value = "us";
+    region.dispatchEvent(new Event("change"));
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect((fetch.mock.calls[2][0] as URL).searchParams.get("region")).toBe("us");
+  });
+  it("restores a shared Livepeer view and switches presentation without refetching", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/network?view=livepeer&lp_mode=map&lp_region=eu&lp_profile=720p&lp_endpoint=endpoint"
+    );
+    const { container, fetch } = mount(fixture());
+    await vi.waitFor(() =>
+      expect(container.querySelector("aside.detail")?.textContent).toContain("192.0.2.1")
+    );
+    const mapButton = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent === "Map"
+    );
+    expect(mapButton?.getAttribute("aria-pressed")).toBe("true");
+    const count = fetch.mock.calls.length;
+    const compare = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent === "Compare"
+    );
+    compare?.click();
+    expect(container.querySelector(".map")?.getAttribute("data-mode")).toBe("compare");
+    expect(fetch).toHaveBeenCalledTimes(count);
+    expect(container.querySelector("aside.detail")?.textContent).toContain("192.0.2.1");
+  });
+  it("compares performance only within one region and output profile", async () => {
+    const data = fixture();
+    data.inventory.endpoints.push({
+      ...data.inventory.endpoints[0],
+      id: "faster",
+      ip: "192.0.2.2",
+      resource: { ...data.inventory.endpoints[0].resource, id: "0xdef" },
+    });
+    const attempt = { ...data.history.summaries[0], kind: "attempt" };
+    data.history.summaries.push(
+      { ...attempt, p95_ms: 300 },
+      { ...attempt, resource_id: "0xdef", ip: "192.0.2.2", p95_ms: 100 }
+    );
+    const { container } = mount(data);
+    await vi.waitFor(() => expect(container.querySelector("tbody button")).not.toBeNull());
+    const sort = container.querySelector(
+      'select[aria-label="Sort endpoints"]'
+    ) as HTMLSelectElement;
+    expect(sort).not.toBeNull();
+    sort.value = "latency";
+    sort.dispatchEvent(new Event("change"));
+    expect(container.textContent).toContain("Choose one observer region and profile");
+    const selects = container.querySelectorAll("select");
+    const region = selects[1] as HTMLSelectElement;
+    const profiles = selects[2] as HTMLSelectElement;
+    region.value = "eu";
+    region.dispatchEvent(new Event("change"));
+    profiles.value = "720p";
+    profiles.dispatchEvent(new Event("change"));
+    expect(container.querySelector("tbody button")?.textContent).toBe("192.0.2.2");
+  });
   it("uses window totals instead of bounded chart samples and loads endpoint history", async () => {
     const { container, fetch } = mount(fixture());
     await vi.waitFor(() =>

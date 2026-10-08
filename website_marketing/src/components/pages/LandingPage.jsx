@@ -105,7 +105,10 @@ function DeferredNetworkMap() {
     >
       {NetworkMapComponent ? <NetworkMapComponent /> : null}
       <a href="/network" className="network-viz-link">
-        Explore the network and Livepeer performance →
+        Explore FrameWorks topology →
+      </a>
+      <a href="/network?view=livepeer" className="network-viz-link">
+        Compare Livepeer compute →
       </a>
     </div>
   );

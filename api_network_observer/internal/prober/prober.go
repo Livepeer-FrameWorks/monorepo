@@ -24,9 +24,12 @@ type Prober struct {
 	Probe                   interface {
 		Check(context.Context, obs.Assignment) obs.ProbeResult
 	}
-	Concurrency int
-	Timeout     time.Duration
-	LastWork    atomic.Int64
+	Concurrency          int
+	Timeout              time.Duration
+	LastWork             atomic.Int64
+	LastDiscoverySuccess atomic.Int64
+	SuccessfulChecks     atomic.Uint64
+	AdmissionRejections  atomic.Uint64
 }
 
 func (p *Prober) request(ctx context.Context, method, path string, raw []byte) ([]byte, error) {
@@ -58,7 +61,7 @@ func (p *Prober) Health() http.Handler {
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		count, size, dropped := p.Queue.Stats()
 		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(map[string]any{"pending_records": count, "pending_bytes": size, "dropped_records": dropped, "last_work": p.LastWork.Load()}); err != nil {
+		if err := json.NewEncoder(w).Encode(map[string]any{"pending_records": count, "pending_bytes": size, "dropped_records": dropped, "last_work": p.LastWork.Load(), "last_discovery_success": p.LastDiscoverySuccess.Load(), "successful_discovery_checks": p.SuccessfulChecks.Load(), "admission_rejections": p.AdmissionRejections.Load()}); err != nil {
 			return
 		}
 	})
@@ -216,6 +219,13 @@ func (p *Prober) Run(ctx context.Context, report func(error)) error {
 						return
 					}
 					result := p.Probe.Check(ctx, a)
+					if result.Check.Success {
+						p.LastDiscoverySuccess.Store(time.Now().Unix())
+						p.SuccessfulChecks.Add(1)
+					}
+					if result.Check.FailureKind == "authentication" || result.Check.FailureKind == "observer_payment" {
+						p.AdmissionRejections.Add(1)
+					}
 					if !enqueue(obs.Batch{Results: []obs.ProbeResult{result}}) {
 						seenMu.Lock()
 						delete(seen, a.ID)

@@ -1,7 +1,9 @@
 # External network observations
 
 FrameWorks publishes public Livepeer inventory, discovery, quotes and real transcoding
-performance at `/network` on the marketing site and web application. Bridge exposes the
+performance through the Livepeer tab at `/network?view=livepeer` on the marketing site
+and web application. The default FrameWorks tab keeps infrastructure topology visible.
+Bridge exposes the
 same projection at `GET /v1/network/livepeer`. The source is FrameWorks gateways and
 trusted external probers. This does not use Livepeer Studio's performance API.
 
@@ -28,6 +30,14 @@ feature. Install the new external command manually; it is not a managed Edge nod
 requires no FrameWorks CLI enrollment. Managed selfhosted workers remain attached to
 Foghorn and are not inserted into the onchain catalog.
 
+The legacy scripts demonstrate a working Ethereum-authenticated discovery path; their
+data model and implementation are not compatibility requirements. The replacement reads
+the contract directly instead of relying on the legacy subgraph, attributes measurements
+to the socket actually checked, and keeps regional samples instead of extrapolating
+continuous uptime between checks. Livepeer Studio scores, the legacy JSON/Prometheus
+shape and ENS enrichment are not carried over. The separate old dashboard is outside
+this migration.
+
 Inventory, assignments and observer contracts are provider neutral. Livepeer contract
 and discovery protocol details live in `internal/providers/livepeer`. Additional
 providers can implement catalog/check adapters; their workload and pricing units must
@@ -52,6 +62,20 @@ DNS siblings do not receive credit for its success.
 External probes require a pinned public IP. Private, loopback, link-local and
 other non-public destinations are rejected before dialing through the shared
 destination policy. These policy rejections are not orchestrator failures.
+
+Discovery uses the broadcaster's Ethereum address and a signature matching go-livepeer:
+sign `accounts.TextHash(crypto.Keccak256([]byte(address.Hex())))` with the wallet key,
+using the checksummed address representation. The prober receives only the address and
+signature; it does not need the private key or sign transactions. Existing valid pairs
+can be reused. An optional offline `sign-discovery` command uses go-ethereum's signing
+and keystore libraries. The small discovery protobuf projection preserves go-livepeer's
+wire field numbers without importing its media/server runtime.
+
+Standard orchestrators can reject discovery for insufficient broadcaster sender reserve,
+invalid authentication or capacity. These admission responses are retained as distinct
+observations and do not count as qualifying endpoint downtime. No synthetic transcodes
+are submitted. A successful configuration check proves signature validity, not remote
+admission; provisioning needs an actual successful discovery check as well.
 
 The scheduler uses endpoint and prober geolocation when available: assign the nearest
 healthy prober and add the second if its distance is no more than twice the nearest's.
@@ -118,6 +142,22 @@ Inactive catalog metadata with no retained endpoint also expires after 30 days w
 a catalog refresh. Identities still in the current contract catalog keep their minimal
 inventory metadata.
 
+## Network explorer
+
+FrameWorks and Livepeer share a tabbed `/network` shell and preserve the map camera when
+switching. Livepeer offers Compare and Map modes with shared filters, endpoint selection
+and query-string deep links. Compare defaults to a compact map and sortable endpoint
+table. Latency and failure rankings require one observer region and profile; they never
+merge incompatible cohorts. Quotes sort by their exact rational price within matching
+currency/unit groups; stale or missing quotes follow fresh ones. Quotes reflect the
+observing broadcaster's offered price, not a guaranteed price for every broadcaster.
+
+The Livepeer map has independent endpoint, gateway-cluster, prober and infrastructure
+layers. Gateway positions currently use the existing cluster coordinates, not invented
+per-gateway locations. Registered probers with known coordinates appear individually;
+unknown locations remain in coverage listings. The detail panel lists sibling endpoints
+under the same onchain identity and retains regional discovery and performance history.
+
 V3 gateway state/discovery also refresh the existing non-additive current views, using
 observation time as the replacement version. V3 samples do not enter legacy additive
 materialized views. Historical legacy performance queries remain a V2 history surface;
@@ -128,9 +168,11 @@ the new REST/dashboard projection is the canonical V3 performance surface.
 Bridge selects platform tenant scopes from `NETWORK_PUBLIC_TENANT_IDS`; a caller cannot
 supply a tenant or request private data on the public route. Public history includes
 network facts, quotes, coarse errors and regional results. Customer/session identifiers,
-manifest hashes, delivery correlation, detailed selection context, observer identities
+manifest hashes, delivery correlation, detailed selection context, raw observer identities
 and endpoint assignment internals are removed. Existing platform infrastructure map
 visibility remains an independent policy and is not made public by this API.
+Measurement site roles, regions, known coordinates and last-seen times are public with
+stable opaque IDs so viewers can understand the provenance and coverage of measurements.
 
 `GET /v1/network/livepeer/diagnostics` requires an interactive platform-operator JWT,
 audits access and uses `Cache-Control: no-store`. A tenant administrator role alone is

@@ -59,6 +59,8 @@ jobs:
               - 'scripts/verify-db-transactions.sh'
               - 'scripts/edge-dev-dist.sh'
               - 'scripts/resolve-mist-release.sh'
+              - 'scripts/test-network-prober-install.sh'
+              - 'api_network_observer/deploy/**'
               - 'ansible/requirements.yml'
               - 'ansible/playbooks/**'
               - 'ansible/collections/ansible_collections/frameworks/infra/roles/**'
@@ -302,6 +304,8 @@ jobs:
       - run: make build
         env:
           CGO_ENABLED: "1"
+      - name: Check standalone prober installation
+        run: make test-network-prober-install
 
   go-test:
     name: Go test + coverage

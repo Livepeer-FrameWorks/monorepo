@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"encoding/hex"
 	"fmt"
+	"math/big"
 	"net"
 	"net/url"
 	"strconv"
@@ -14,6 +15,9 @@ import (
 	obs "github.com/Livepeer-FrameWorks/monorepo/pkg/networkobservation"
 	lp "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/livepeer_observer"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/restream"
+	"github.com/ethereum/go-ethereum/accounts"
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -41,10 +45,27 @@ func NewProbe(address, signature string, skipTLS bool, timeout time.Duration) (*
 	if err != nil || len(sig) != 65 {
 		return nil, fmt.Errorf("invalid Livepeer discovery broadcaster signature")
 	}
+	if sig[64] == 27 || sig[64] == 28 {
+		sig[64] -= 27
+	}
+	if !crypto.ValidateSignatureValues(sig[64], new(big.Int).SetBytes(sig[:32]), new(big.Int).SetBytes(sig[32:64]), true) {
+		return nil, fmt.Errorf("invalid Livepeer discovery signature values")
+	}
+	addr := common.BytesToAddress(a)
+	publicKey, recoverErr := crypto.SigToPub(DiscoveryDigest(addr), sig)
+	if addr == (common.Address{}) || recoverErr != nil || crypto.PubkeyToAddress(*publicKey) != addr {
+		return nil, fmt.Errorf("livepeer discovery signature does not match the broadcaster address")
+	}
+	sig[64] += 27
 	if timeout <= 0 {
 		timeout = 10 * time.Second
 	}
 	return &Probe{Address: a, Signature: sig, SkipTLSVerify: skipTLS, Timeout: timeout}, nil
+}
+
+// Livepeer signs the Keccak hash of the checksummed address as an Ethereum message.
+func DiscoveryDigest(address common.Address) []byte {
+	return accounts.TextHash(crypto.Keccak256([]byte(address.Hex())))
 }
 func (p *Probe) Check(ctx context.Context, a obs.Assignment) obs.ProbeResult {
 	start := time.Now().UTC()
@@ -105,7 +126,8 @@ func (p *Probe) Check(ctx context.Context, a obs.Assignment) obs.ProbeResult {
 	}
 	if err != nil {
 		result.Check.FailureKind = Classify(err)
-		if result.Check.FailureKind == "observer_cancelled" {
+		switch result.Check.FailureKind {
+		case "observer_cancelled", "authentication", "observer_payment", "capacity":
 			result.Check.Qualifying = false
 		}
 		return result
@@ -141,6 +163,17 @@ func (p *Probe) Check(ctx context.Context, a obs.Assignment) obs.ProbeResult {
 	return result
 }
 func Classify(err error) string {
+	// Livepeer's discovery handler returns plain Go errors as gRPC Unknown.
+	message := strings.ToLower(status.Convert(err).Message())
+	if strings.Contains(message, "insufficient sender reserve") {
+		return "observer_payment"
+	}
+	if strings.Contains(message, "orchestrator req sig check failed") || strings.Contains(message, "authentication failed") {
+		return "authentication"
+	}
+	if strings.Contains(message, "orchestrator is at capacity") {
+		return "capacity"
+	}
 	switch status.Code(err) {
 	case codes.DeadlineExceeded:
 		return "timeout"

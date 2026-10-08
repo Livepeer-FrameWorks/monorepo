@@ -5,6 +5,7 @@ import {
   readRuntimePublicConfig,
 } from "./index";
 import type { Map as MapLibreMap, GeoJSONSource } from "maplibre-gl";
+import { bindExplorerViewport, type ExplorerViewport } from "./network-explorer";
 
 type Location = {
   known: boolean;
@@ -71,6 +72,13 @@ type Response = {
     generated_at: string;
     endpoints: Endpoint[];
     resources: Array<{ id: string; uri: string; active: boolean }>;
+    observers?: Array<{
+      id: string;
+      kind: string;
+      region: string;
+      location: Location;
+      last_seen: string;
+    }>;
   };
   history: {
     generated_at: string;
@@ -90,6 +98,8 @@ type Options = {
   infrastructureURL?: string;
   graphqlURL?: string;
   headers?: () => Record<string, string>;
+  viewport?: ExplorerViewport;
+  onQueryChange?: (query: URLSearchParams) => void;
 };
 type InfrastructureNode = {
   nodeId: string;
@@ -97,6 +107,14 @@ type InfrastructureNode = {
   latitude: number | null;
   longitude: number | null;
   status: string;
+};
+type GatewayCluster = {
+  clusterId: string;
+  name: string;
+  region: string;
+  latitude: number;
+  longitude: number;
+  services: string[];
 };
 
 const styles = `.fw-network{color:#c0caf5;background:#16161e;font:14px/1.5 Inter,system-ui,sans-serif;border:1px solid #414868}.fw-network *{box-sizing:border-box}.fw-network header,.fw-network .toolbar,.fw-network .summary,.fw-network .detail{padding:16px;border-bottom:1px solid #414868}.fw-network h2,.fw-network h3{margin:0 0 12px;font-weight:600}.fw-network button,.fw-network select,.fw-network input{color:inherit;background:#24283b;border:1px solid #414868;border-radius:0;padding:8px}.fw-network button{cursor:pointer}.fw-network button:focus-visible,.fw-network select:focus-visible{outline:2px solid #7aa2f7}.fw-network .toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:12px}.fw-network .toolbar label{display:flex;align-items:center;gap:6px}.fw-network .summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr))}.fw-network .summary strong{display:block;font-size:24px}.fw-network .map{height:420px}.fw-network .body{display:grid;grid-template-columns:minmax(0,2fr) minmax(320px,1fr)}.fw-network .list{overflow:auto;max-height:620px;border-right:1px solid #414868}.fw-network table{width:100%;border-collapse:collapse}.fw-network th,.fw-network td{text-align:left;padding:10px;border-bottom:1px solid #414868;vertical-align:top}.fw-network th{color:#a9b1d6;font-size:12px;text-transform:uppercase}.fw-network .muted{color:#a9b1d6}.fw-network .good{color:#9ece6a}.fw-network .bad{color:#f7768e}.fw-network code{font-size:11px;overflow-wrap:anywhere}.fw-network svg.chart{width:100%;height:190px}.fw-network .chart-key{display:flex;gap:16px;color:#a9b1d6}.fw-network .timeline{display:flex;gap:2px;min-height:18px;overflow:hidden;margin:8px 0}.fw-network .timeline span{flex:1;min-width:2px;height:18px;background:#414868}.fw-network .timeline span.up{background:#9ece6a}.fw-network .timeline span.unavailable{background:#f7768e}.fw-network .detail{overflow:auto}.fw-network .detail pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px}.fw-network a{color:#7aa2f7}.fw-network [hidden]{display:none!important}@media(max-width:1000px){.fw-network .summary{grid-template-columns:repeat(2,minmax(0,1fr))}.fw-network .body{grid-template-columns:1fr}.fw-network .list{border-right:0;max-height:420px}}`;
@@ -133,6 +151,7 @@ function select(label: string, entries: Array<[string, string]>) {
 
 // Both frontends mount the same public renderer and consume the same server definitions.
 export function mountNetworkDashboard(container: HTMLElement, options: Options): () => void {
+  const initialQuery = new URLSearchParams(window.location.search);
   const root = node("section", undefined, "fw-network");
   const style = node("style", styles);
   root.append(style);
@@ -157,9 +176,31 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
   ]);
   const regionChoice = select("Observer region", [["", "All regions"]]);
   const profileChoice = select("Profiles", [["", "All profiles"]]);
+  const orderChoice = select("Order", [
+    ["identity", "Orchestrator / endpoint"],
+    ["availability", "Available first"],
+    ["samples", "Most observed segments"],
+    ["latency", "Lowest regional p95"],
+    ["failures", "Lowest final failure rate"],
+    ["price", "Lowest fresh price (within currency/unit)"],
+  ]);
+  orderChoice.input.setAttribute("aria-label", "Sort endpoints");
+  if (
+    Array.from(orderChoice.input.options).some(
+      (entry) => entry.value === initialQuery.get("lp_sort")
+    )
+  )
+    orderChoice.input.value = initialQuery.get("lp_sort")!;
+  if (
+    Array.from(windowChoice.input.options).some(
+      (entry) => entry.value === initialQuery.get("lp_window")
+    )
+  )
+    windowChoice.input.value = initialQuery.get("lp_window")!;
   const inactiveLabel = node("label", "Show inactive");
   const inactive = node("input");
   inactive.type = "checkbox";
+  inactive.checked = initialQuery.get("lp_inactive") === "true";
   inactiveLabel.append(inactive);
   const refresh = node("button", "Refresh");
   refresh.type = "button";
@@ -169,11 +210,19 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
     windowChoice.wrapper,
     regionChoice.wrapper,
     profileChoice.wrapper,
+    orderChoice.wrapper,
     inactiveLabel,
     refresh,
     maximize
   );
   root.append(toolbar);
+  const presentation = node("div", undefined, "toolbar");
+  const compareButton = node("button", "Compare");
+  const mapButton = node("button", "Map");
+  const comparisonNote = node("p", undefined, "muted");
+  compareButton.type = mapButton.type = "button";
+  presentation.append(compareButton, mapButton, comparisonNote);
+  root.append(presentation);
   const message = node("p", "Loading network observations…", "summary muted");
   message.setAttribute("role", "status");
   message.setAttribute("aria-live", "polite");
@@ -185,6 +234,31 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
   const mapContainer = node("div", undefined, "map");
   mapContainer.setAttribute("aria-label", "Map of observed Livepeer endpoints");
   root.append(mapContainer);
+  const layers = node("div", undefined, "toolbar");
+  const layerControls = new Map<string, HTMLInputElement>();
+  for (const [id, label, checked] of [
+    ["livepeer-endpoints", "Endpoints", true],
+    ["gateway-clusters", "Gateway clusters", true],
+    ["prober-sites", "Probers", true],
+    ["frameworks-nodes", "FrameWorks nodes", false],
+  ] as const) {
+    const wrapper = node("label", label);
+    const checkbox = node("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = initialQuery.has(`lp_layer_${id}`)
+      ? initialQuery.get(`lp_layer_${id}`) === "true"
+      : checked;
+    checkbox.onchange = () => {
+      updateMap();
+      persist();
+    };
+    layerControls.set(id, checkbox);
+    wrapper.append(checkbox);
+    layers.append(wrapper);
+  }
+  root.append(layers);
+  const observationSites = node("details", undefined, "detail observation-sites");
+  root.append(observationSites);
   const body = node("div", undefined, "body");
   const list = node("div", undefined, "list");
   const detail = node("aside", undefined, "detail");
@@ -212,15 +286,57 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
   root.append(foot);
   container.replaceChildren(root);
   let data: Response | undefined;
-  let selected = "";
+  let selected = initialQuery.get("lp_endpoint") ?? "";
+  let mode = initialQuery.get("lp_mode") === "map" ? "map" : "compare";
+  let restoreFilters = true;
   let map: MapLibreMap | undefined;
   let disposed = false;
   let controller: AbortController | undefined;
   let fetchVersion = 0;
   let infrastructure: InfrastructureNode[] = [];
+  let gatewayClusters: GatewayCluster[] = [];
+  let unbindViewport = () => {};
   const infrastructureController = new AbortController();
   const endpointHistory = new Map<string, Response["history"]>();
   const pendingHistory = new Set<string>();
+  function persist() {
+    const query = new URLSearchParams(window.location.search);
+    query.set("view", "livepeer");
+    const fields = {
+      lp_window: windowChoice.input.value,
+      lp_region: regionChoice.input.value,
+      lp_profile: profileChoice.input.value,
+      lp_inactive: String(inactive.checked),
+      lp_mode: mode,
+      lp_sort: orderChoice.input.value,
+      lp_endpoint: selected,
+    };
+    for (const [key, value] of Object.entries(fields)) {
+      if (value) query.set(key, value);
+      else query.delete(key);
+    }
+    for (const [id, input] of layerControls) query.set(`lp_layer_${id}`, String(input.checked));
+    if (query.toString() === window.location.search.slice(1)) return;
+    if (options.onQueryChange) options.onQueryChange(query);
+    else window.history.replaceState(window.history.state, "", `?${query}`);
+  }
+  function present(next: string) {
+    mode = next;
+    mapContainer.dataset.mode = mode;
+    mapContainer.style.height = mode === "map" ? "min(68vh, 760px)" : "260px";
+    compareButton.setAttribute("aria-pressed", String(mode === "compare"));
+    mapButton.setAttribute("aria-pressed", String(mode === "map"));
+    map?.resize();
+  }
+  compareButton.onclick = () => {
+    present("compare");
+    persist();
+  };
+  mapButton.onclick = () => {
+    present("map");
+    persist();
+  };
+  present(mode);
   const filtered = (values = data?.history.cohorts ?? []): Cohort[] =>
     values.filter(
       (c) =>
@@ -234,8 +350,8 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
   const endpointCohorts = (p: Endpoint, summaries = false) =>
     filtered(
       summaries
-        ? ((endpointHistory.get(p.id) ?? data?.history)?.summaries ?? [])
-        : ((endpointHistory.get(p.id) ?? data?.history)?.cohorts ?? [])
+        ? ((endpointHistory.get(historyKey(p.id)) ?? data?.history)?.summaries ?? [])
+        : ((endpointHistory.get(historyKey(p.id)) ?? data?.history)?.cohorts ?? [])
     ).filter((c) => c.resource_id.toLowerCase() === p.resource.id.toLowerCase() && c.ip === p.ip);
   function renderDetail(p: Endpoint) {
     detail.replaceChildren(
@@ -251,6 +367,23 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
       ),
       node("p", `Current price: ${price(p)}`)
     );
+    const siblings = data!.inventory.endpoints.filter(
+      (endpoint) => endpoint.resource.id.toLowerCase() === p.resource.id.toLowerCase()
+    );
+    const instances = node("details");
+    instances.append(
+      node("summary", `${siblings.length} discovered endpoints for this orchestrator`)
+    );
+    for (const endpoint of siblings) {
+      const button = node("button", `${endpoint.ip} · ${endpoint.status}`);
+      button.type = "button";
+      button.onclick = () => {
+        pick(endpoint.id);
+        persist();
+      };
+      instances.append(button);
+    }
+    detail.append(instances);
     const cohorts = endpointCohorts(p);
     const paths = new Set(cohorts.map((c) => `${c.region} | ${c.profile_key || "discovery"}`));
     detail.append(
@@ -264,7 +397,7 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
     const totals = endpointCohorts(p, true).filter(
       (c) => c.kind === "attempt" || c.kind === "segment" || c.kind === "discovery"
     );
-    const history = endpointHistory.get(p.id) ?? data!.history;
+    const history = endpointHistory.get(historyKey(p.id)) ?? data!.history;
     const table = node("table");
     const heading = node("tr");
     for (const text of [
@@ -498,11 +631,13 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
   }
   function pick(id: string) {
     selected = id;
+    persist();
     const endpoint = data?.inventory.endpoints.find((p) => p.id === id);
     if (endpoint) renderDetail(endpoint);
-    if (endpoint && !endpointHistory.has(id) && !pendingHistory.has(id)) {
+    const key = historyKey(id);
+    if (endpoint && !endpointHistory.has(key) && !pendingHistory.has(key)) {
       const version = fetchVersion;
-      pendingHistory.add(id);
+      pendingHistory.add(key);
       const api = requestURL();
       api.searchParams.set("resource", endpoint.resource.id);
       api.searchParams.set("ip", endpoint.ip);
@@ -514,11 +649,11 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
           if (disposed || version !== fetchVersion) return;
           if (next.history_status === "unavailable")
             throw new Error("Endpoint history unavailable");
-          endpointHistory.set(id, next.history);
-          if (selected === id) renderDetail(endpoint);
+          endpointHistory.set(key, next.history);
+          if (selected === id && historyKey(id) === key) renderDetail(endpoint);
         })
         .catch(() => {
-          if (!disposed && version === fetchVersion && selected === id)
+          if (!disposed && version === fetchVersion && selected === id && historyKey(id) === key)
             detail.append(
               node(
                 "p",
@@ -528,13 +663,101 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
             );
         })
         .finally(() => {
-          if (version === fetchVersion) pendingHistory.delete(id);
+          if (version === fetchVersion) pendingHistory.delete(key);
         });
     }
   }
+  function historyKey(id: string) {
+    return `${id}|${regionChoice.input.value}`;
+  }
+  function freshPrice(p: Endpoint) {
+    const q = p.price;
+    if (
+      !q ||
+      !/^\d{1,20}$/.test(q.numerator) ||
+      !/^\d{1,20}$/.test(q.denominator) ||
+      BigInt(q.denominator) === 0n
+    )
+      return;
+    const age = Date.now() - Date.parse(q.observed_at);
+    if (!Number.isFinite(age) || age < -60000 || age > Math.max(180, 2 * p.cadence_seconds) * 1000)
+      return;
+    return {
+      numerator: BigInt(q.numerator),
+      denominator: BigInt(q.denominator),
+      unit: `${q.currency}/${q.unit}`,
+    };
+  }
+  function orderedEndpoints() {
+    const singleCohort = !!regionChoice.input.value && !!profileChoice.input.value;
+    const order = orderChoice.input.value;
+    comparisonNote.textContent =
+      (order === "latency" || order === "failures") && !singleCohort
+        ? "Choose one observer region and profile to rank performance. Showing identity order."
+        : "Sample counts describe observed traffic. Availability gaps remain unknown; price groups keep currency and unit separate.";
+    const identity = (a: Endpoint, b: Endpoint) =>
+      a.resource.id.localeCompare(b.resource.id) ||
+      a.ip.localeCompare(b.ip) ||
+      a.id.localeCompare(b.id);
+    const metric = (p: Endpoint): number | undefined => {
+      if (order === "availability")
+        return p.status === "up" ? 0 : p.status === "unavailable" ? 2 : 1;
+      const segments = endpointCohorts(p, true).filter((c) => c.kind === "segment");
+      if (order === "samples")
+        return segments.length ? -segments.reduce((n, c) => n + c.samples, 0) : undefined;
+      if (!singleCohort) return;
+      if (order === "latency") {
+        const attempts = endpointCohorts(p, true).filter(
+          (c) => c.kind === "attempt" && c.qualified_samples > 0
+        );
+        return attempts.length === 1 && Number.isFinite(attempts[0].p95_ms)
+          ? attempts[0].p95_ms
+          : undefined;
+      }
+      if (order === "failures" && segments.length === 1 && segments[0].qualified_samples > 0)
+        return segments[0].failures / segments[0].qualified_samples;
+    };
+    return [...data!.inventory.endpoints].sort((a, b) => {
+      if (order === "identity") return identity(a, b);
+      if (order === "price") {
+        const left = freshPrice(a),
+          right = freshPrice(b);
+        if (!left || !right) return left ? -1 : right ? 1 : identity(a, b);
+        const unit = left.unit.localeCompare(right.unit);
+        if (unit) return unit;
+        const difference = left.numerator * right.denominator - right.numerator * left.denominator;
+        return difference < 0n ? -1 : difference > 0n ? 1 : identity(a, b);
+      }
+      const left = metric(a),
+        right = metric(b);
+      if (left === undefined || right === undefined)
+        return left === undefined ? (right === undefined ? identity(a, b) : 1) : -1;
+      return left - right || identity(a, b);
+    });
+  }
   function render() {
     if (!data) return;
-    const endpoints = data.inventory.endpoints;
+    const endpoints = orderedEndpoints();
+    observationSites.replaceChildren(
+      node(
+        "summary",
+        `Measurement locations · ${data.inventory.observers?.length ?? 0} reporting observers`
+      )
+    );
+    observationSites.append(
+      node(
+        "p",
+        "Gateway markers show published cluster locations. Probers show their known locations. Clicking a measurement marker selects its observer region; results still describe all observers in that region.",
+        "muted"
+      )
+    );
+    for (const observer of data.inventory.observers ?? [])
+      observationSites.append(
+        node(
+          "p",
+          `${observer.kind} · ${observer.region || "Region unknown"} · ${observer.location.known ? observer.location.source : "Location unknown"} · last seen ${time(observer.last_seen)}`
+        )
+      );
     diagnostics.hidden = !data.history.details?.length;
     diagnostics.replaceChildren(node("summary", "Latest gateway diagnostics"));
     for (let i = 0; i < Math.min(100, data.history.observations.length); i++) {
@@ -622,7 +845,16 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
           )
         );
       if (!attempts.length) latency.textContent = "Unknown";
-      row.append(latency, node("td", price(p)));
+      const quote = node("td", price(p));
+      if (p.price)
+        quote.append(
+          node(
+            "p",
+            `${freshPrice(p) ? "Observed" : "Stale / undated quote"}: ${time(p.price.observed_at)}`,
+            "muted"
+          )
+        );
+      row.append(latency, quote);
       tbody.append(row);
     }
     table.append(tbody);
@@ -674,6 +906,89 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
         },
       });
     }
+    function measurementLayer(
+      id: string,
+      features: Array<{
+        type: "Feature";
+        geometry: { type: "Point"; coordinates: number[] };
+        properties: { region: string };
+      }>,
+      color: string
+    ) {
+      const geo = { type: "FeatureCollection" as const, features };
+      const source = map!.getSource(id) as GeoJSONSource | undefined;
+      if (source) source.setData(geo);
+      else {
+        map!.addSource(id, { type: "geojson", data: geo });
+        map!.addLayer({
+          id,
+          type: "circle",
+          source: id,
+          paint: {
+            "circle-radius": 11,
+            "circle-color": color,
+            "circle-opacity": 0.3,
+            "circle-stroke-width": 3,
+            "circle-stroke-color": color,
+          },
+        });
+        map!.on("click", id, (event) => {
+          const region = event.features?.[0]?.properties?.region;
+          if (
+            typeof region === "string" &&
+            Array.from(regionChoice.input.options).some((entry) => entry.value === region)
+          ) {
+            regionChoice.input.value = region;
+            endpointHistory.clear();
+            persist();
+            render();
+          }
+          observationSites.open = true;
+        });
+        map!.on("mouseenter", id, () => {
+          map!.getCanvas().style.cursor = "pointer";
+        });
+        map!.on("mouseleave", id, () => {
+          map!.getCanvas().style.cursor = "";
+        });
+      }
+    }
+    measurementLayer(
+      "gateway-clusters",
+      gatewayClusters
+        .filter(
+          (cluster) =>
+            Number.isFinite(cluster.latitude) &&
+            Number.isFinite(cluster.longitude) &&
+            !(cluster.latitude === 0 && cluster.longitude === 0)
+        )
+        .map((cluster) => ({
+          type: "Feature",
+          geometry: { type: "Point", coordinates: [cluster.longitude, cluster.latitude] },
+          properties: { region: cluster.region },
+        })),
+      "#7dcfff"
+    );
+    measurementLayer(
+      "prober-sites",
+      (data.inventory.observers ?? [])
+        .filter(
+          (observer) =>
+            observer.kind === "prober" &&
+            observer.location.known &&
+            Number.isFinite(observer.location.latitude) &&
+            Number.isFinite(observer.location.longitude)
+        )
+        .map((observer) => ({
+          type: "Feature",
+          geometry: {
+            type: "Point",
+            coordinates: [observer.location.longitude, observer.location.latitude],
+          },
+          properties: { region: observer.region },
+        })),
+      "#bb9af7"
+    );
     const features = data.inventory.endpoints
       .filter(
         (p) =>
@@ -729,6 +1044,8 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
         map!.getCanvas().style.cursor = "";
       });
     }
+    for (const [id, control] of layerControls)
+      map.setLayoutProperty(id, "visibility", control.checked ? "visible" : "none");
   }
   function fillOptions(input: HTMLSelectElement, values: string[], emptyLabel: string) {
     const current = input.value;
@@ -771,6 +1088,17 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
         [...new Set(data.history.summaries.map((c) => c.profile_key).filter(Boolean))].sort(),
         "All profiles"
       );
+      if (restoreFilters) {
+        for (const [input, key] of [
+          [regionChoice.input, "lp_region"],
+          [profileChoice.input, "lp_profile"],
+        ] as const) {
+          const value = initialQuery.get(key);
+          if (value && Array.from(input.options).some((entry) => entry.value === value))
+            input.value = value;
+        }
+        restoreFilters = false;
+      }
       render();
     } catch (error) {
       if (disposed || version !== fetchVersion || controller.signal.aborted) return;
@@ -793,13 +1121,27 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
     return api;
   }
   refresh.onclick = () => void fetchData();
-  windowChoice.input.onchange = () => void fetchData();
-  inactive.onchange = () => void fetchData();
+  windowChoice.input.onchange = () => {
+    persist();
+    void fetchData();
+  };
+  inactive.onchange = () => {
+    persist();
+    void fetchData();
+  };
   regionChoice.input.onchange = () => {
     endpointHistory.clear();
+    persist();
     render();
   };
-  profileChoice.input.onchange = render;
+  profileChoice.input.onchange = () => {
+    persist();
+    render();
+  };
+  orderChoice.input.onchange = () => {
+    persist();
+    render();
+  };
   maximize.onclick = async () => {
     if (document.fullscreenElement === root) await document.exitFullscreen();
     else await root.requestFullscreen();
@@ -813,8 +1155,12 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
         container: mapContainer,
         ...basemapMapOptions(basemap),
         center: [10, 25],
-        zoom: 1.4,
+        zoom: 2,
+        minZoom: 2,
+        maxZoom: 8,
+        ...options.viewport?.camera,
       });
+      unbindViewport = bindExplorerViewport(map, options.viewport);
       map.addControl(new module.NavigationControl({ showCompass: false }));
       addRequiredAttribution(map, basemap);
       map.on("load", updateMap);
@@ -840,7 +1186,7 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
         signal: infrastructureController.signal,
         body: JSON.stringify({
           query:
-            "query NetworkMap { networkStatus { nodes { nodeId name latitude longitude status } } }",
+            "query NetworkMap { networkStatus { nodes { nodeId name latitude longitude status } clusters { clusterId name region latitude longitude services } } }",
           operationName: "NetworkMap",
         }),
       });
@@ -848,6 +1194,9 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
       const next = await response.json();
       if (!disposed && Array.isArray(next.data?.networkStatus?.nodes)) {
         infrastructure = next.data.networkStatus.nodes;
+        gatewayClusters = (next.data.networkStatus.clusters ?? []).filter(
+          (cluster: GatewayCluster) => cluster.services?.includes("livepeer-gateway")
+        );
         updateMap();
       }
     } catch {
@@ -857,7 +1206,7 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
   foot.append(
     node(
       "p",
-      "Map: blue circles show published FrameWorks nodes; green/red/grey circles show Livepeer endpoints.",
+      "Map: cyan rings show gateway clusters; purple rings show probers; green/red/grey circles show Livepeer endpoints. Optional blue circles show other published FrameWorks nodes.",
       "muted"
     )
   );
@@ -870,6 +1219,7 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
     clearInterval(infrastructureTimer);
     infrastructureController.abort();
     controller?.abort();
+    unbindViewport();
     map?.remove();
     container.replaceChildren();
   };

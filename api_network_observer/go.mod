@@ -6,6 +6,7 @@ require (
 	github.com/Livepeer-FrameWorks/monorepo/pkg v0.0.0
 	github.com/ethereum/go-ethereum v1.17.2
 	github.com/google/uuid v1.6.0
+	github.com/joho/godotenv v1.5.1
 	github.com/lib/pq v1.12.3
 	google.golang.org/grpc v1.80.0
 	google.golang.org/protobuf v1.36.12
@@ -25,6 +26,7 @@ require (
 	github.com/deckarep/golang-set/v2 v2.6.0 // indirect
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.1 // indirect
 	github.com/ethereum/c-kzg-4844/v2 v2.1.6 // indirect
+	github.com/fsnotify/fsnotify v1.6.0 // indirect
 	github.com/go-faster/city v1.0.1 // indirect
 	github.com/go-faster/errors v0.7.1 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
@@ -35,7 +37,6 @@ require (
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
-	github.com/joho/godotenv v1.5.1 // indirect
 	github.com/klauspost/compress v1.18.5 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/oschwald/geoip2-golang v1.13.0 // indirect

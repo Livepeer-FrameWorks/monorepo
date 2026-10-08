@@ -104,6 +104,14 @@ func (h *NetworkHandlers) serve(c *gin.Context, details bool) {
 		c.JSON(503, gin.H{"error": "network inventory namespace mismatch"})
 		return
 	}
+	// Stable map identities do not reveal internal gateway/prober names.
+	for i := range inventory.Observers {
+		o := &inventory.Observers[i]
+		o.ID = obs.Key("observation-site", inventory.Network, inventory.Environment, o.ID)
+		if !o.Location.Valid() {
+			o.Location = obs.Location{Source: "unknown"}
+		}
+	}
 	data := obs.History{GeneratedAt: time.Now().UTC(), Start: start, End: end, Cohorts: []obs.Cohort{}, Summaries: []obs.Cohort{}, Observations: []obs.Metric{}}
 	historyStatus := "available"
 	history, historyErr := h.Analytics.GetNetworkObservations(ctx, req)

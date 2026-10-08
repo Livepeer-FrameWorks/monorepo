@@ -8,6 +8,7 @@ Type=simple
 User=network-prober
 Group=network-prober
 EnvironmentFile=/etc/frameworks/network-prober.env
+EnvironmentFile=-/etc/frameworks/network-prober.identity.env
 ExecStart=/usr/local/bin/network-prober
 Restart=on-failure
 RestartSec=5

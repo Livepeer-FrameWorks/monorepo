@@ -3,10 +3,14 @@ title: Livepeer network observations
 description: Publish network inventory and real gateway performance with external discovery probers.
 ---
 
-The public `/network` page and `GET /v1/network/livepeer` API combine Livepeer discovery
+The public Livepeer tab at `/network?view=livepeer` and `GET /v1/network/livepeer` API combine Livepeer discovery
 with real gateway transcoding observations. Unknown coverage remains unknown; regional
 performance is shown separately. The platform-operator webapp can enable private
 correlation through the authenticated diagnostics route.
+The default FrameWorks tab shows infrastructure topology. Livepeer has Compare and Map
+modes with shared filters and independent worker, gateway-cluster and prober layers.
+Gateway map positions are cluster locations. Unknown prober/worker locations remain
+listed. Price and performance comparisons retain their units, region and profile.
 
 This feature requires platform `v0.3.12` and CLI `v0.3.12-rc1` or later. Upgrade
 existing clusters with the release's ClickHouse expand migration and initialize
@@ -34,12 +38,50 @@ the canonical migration and rollup loop as part of its existing ingestion servic
 
 ## External probers
 
-Build with `make build-bin-network-prober`. These hosts do not need to run the
-FrameWorks stack or enroll through its CLI. Install the binary manually and use the
-supplied `api_network_observer/deploy/network-prober.service` and environment example.
-Create its dedicated service user, private environment file and persistent state
-directory. Configure a unique stable ID, region, verified HTTPS coordinator URL, shared
-secret and the existing Livepeer broadcaster discovery address/signature pair.
+Build with `make build-bin-network-prober`, or use the matching release's Linux amd64 or
+arm64 `network-prober` binary after checking its release checksum. These hosts do not
+need the FrameWorks stack, Node/PM2 or CLI enrollment. Configure a unique stable ID,
+region, verified HTTPS coordinator URL, shared secret and persistent spool directory
+using `api_network_observer/deploy/network-prober.env.example`.
+
+Put the Ethereum broadcaster address and discovery signature in a separate private
+identity file:
+
+```dotenv
+LIVEPEER_BROADCASTER_ADDRESS=0x…
+LIVEPEER_BROADCASTER_SIGNATURE=0x…
+```
+
+An existing valid pair works directly. In the legacy JavaScript configuration,
+`CONF_BROADCASTER` maps to the address; `CONF_SIGNATURE` is the same 65 signature bytes,
+encoded as hex rather than a JavaScript array. No private key belongs on the prober.
+To create another pair, run the optional helper on the wallet host:
+
+```bash
+./network-prober sign-discovery --keystore wallet.json --password-file wallet-password --output network-prober.identity.env
+```
+
+The password file must have mode 0600 or stricter. The helper writes a new mode-0600
+identity file and refuses to overwrite an existing file. Discovery signs the
+checksummed address with go-livepeer's Ethereum hash/signature convention. This command
+does not fund a wallet or send a transaction. The broadcaster may need sender reserve
+for discovery admission even though the prober submits no paid transcodes.
+
+On the Linux prober host, make the configuration and identity files private, validate
+them offline, then install:
+
+```bash
+chmod 600 network-prober.env network-prober.identity.env
+./network-prober check-config --env-file network-prober.env --identity-file network-prober.identity.env
+sudo api_network_observer/deploy/install-network-prober.sh --binary ./network-prober --config network-prober.env --identity network-prober.identity.env
+```
+
+Keep the installer beside its supplied service template. It creates the dedicated
+service user and persistent state directory, installs the files and starts
+`frameworks-network-prober.service`. Add `--no-start` to prepare a host without starting
+it. On later reconfiguration, omitting `--identity` preserves the installed pair.
+After replacing a running binary or configuration, restart the service explicitly with
+`sudo systemctl restart frameworks-network-prober.service`.
 
 Each process resolves the whole catalog every five minutes and executes only its
 assigned endpoint discovery checks. It does not submit synthetic transcodes or require
@@ -47,8 +89,12 @@ broadcaster funding for synthetic work. Orchestrator self-signed discovery certi
 are accepted by default, matching Livepeer; the coordinator connection still verifies
 TLS. Keep the spool directory persistent and exclusive to this process.
 
-Local port 18025 exposes `/health` with spool counts and `/ready` with recent coordinator
-connectivity. Bind/firewall that operational endpoint appropriately for the host.
+Local port 18025 exposes `/health` with spool counts, `successful_discovery_checks`,
+`last_discovery_success` and `admission_rejections`. `/ready` checks recent coordinator
+connectivity only. Verify a real successful discovery and its arrival in the inventory
+before retiring an old prober. Authentication and sender-reserve failures are recorded
+separately and do not count as worker downtime. Firewall that operational endpoint
+appropriately for the host.
 Observer heartbeat and DNS-cycle reports disclose queue depth and lost observations.
 An unavailable prober does not make the orchestrator unavailable.
 

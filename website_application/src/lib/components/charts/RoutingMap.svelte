@@ -1,6 +1,10 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
   import { SvelteMap, SvelteSet } from "svelte/reactivity";
+  import {
+    bindExplorerViewport,
+    type ExplorerViewport,
+  } from "../../../../../packages/map-core/network-explorer";
   import type { Feature, Geometry } from "geojson";
   import type { GeoJSONSource, Map as MapLibreMap, Marker } from "maplibre-gl";
   import {
@@ -137,6 +141,7 @@
     height?: number;
     zoom?: number;
     center?: [number, number];
+    viewport?: ExplorerViewport;
   }
 
   let {
@@ -154,6 +159,7 @@
     height = 500,
     zoom = 2,
     center = [20, 0],
+    viewport,
   }: Props = $props();
 
   const MaximizeIcon = getIconComponent("Maximize2");
@@ -185,6 +191,7 @@
   let markers: Marker[] = [];
   let animationFrame: number | null = null;
   let unbindWheel = () => {};
+  let unbindViewport = () => {};
   let pulsePaths: Array<{ from: [number, number]; to: [number, number]; color: string }> = [];
   const detailRegistry = new SvelteMap<string, MapDetail>();
 
@@ -212,7 +219,9 @@
         maxZoom: 8,
         scrollZoom: false,
         ...basemapMapOptions(runtime.basemap),
+        ...viewport?.camera,
       });
+      unbindViewport = bindExplorerViewport(map, viewport);
       addRequiredAttribution(map, runtime.basemap);
       unbindWheel = bindModifierScrollZoom(map, () => (showScrollHint = false));
       map.once("load", () => {
@@ -232,6 +241,7 @@
 
   onDestroy(() => {
     unbindWheel();
+    unbindViewport();
     if (animationFrame !== null) cancelAnimationFrame(animationFrame);
     animationFrame = null;
     markers.forEach((marker) => marker.remove());
