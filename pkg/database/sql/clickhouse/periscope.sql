@@ -4228,11 +4228,11 @@ CREATE TABLE IF NOT EXISTS network_observations (
  attempts UInt32, fallback_count UInt32, deadline_exceeded UInt8, cadence_seconds UInt32,
  price_numerator String, price_denominator String, currency LowCardinality(String), price_unit LowCardinality(String),
  public_data String, private_tenant_id UUID, private_data String,
+ inserted_at DateTime64(3) DEFAULT now64(3),
  accounting_version UInt32, request_dispatched UInt8, returned_pixels_known UInt8, returned_pixels UInt64,
  accepted_pixels UInt64, accepted_renditions UInt32,
  service_charge_known UInt8, service_charge_numerator Decimal256(0), service_charge_denominator String DEFAULT '1',
- ticket_credit_known UInt8, ticket_credit_numerator String DEFAULT '0', ticket_credit_denominator String DEFAULT '1', tickets_sent UInt64,
- inserted_at DateTime64(3) DEFAULT now64(3)
+ ticket_credit_known UInt8, ticket_credit_numerator String DEFAULT '0', ticket_credit_denominator String DEFAULT '1', tickets_sent UInt64
 ) ENGINE = ReplicatedReplacingMergeTree(inserted_at)
 PARTITION BY toYYYYMM(timestamp)
 ORDER BY (tenant_id,provider,network_id,environment,toDate(timestamp),event_id)
