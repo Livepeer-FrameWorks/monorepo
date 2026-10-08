@@ -6,9 +6,12 @@ import (
 	"time"
 
 	"frameworks/api_gateway/internal/clients/clientstest"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -103,5 +106,56 @@ func TestNetworkStatusOwnerGetsPrivateNodeAndServiceInventory(t *testing.T) {
 	}
 	if len(got.ServiceInstances) != 1 || got.ServiceInstances[0].InstanceID != "mist-1" {
 		t.Fatalf("owner service inventory missing: %+v", got.ServiceInstances)
+	}
+}
+
+// A subscriber to a public cluster it does not own keeps the public topology
+// view. The fakes mirror Quartermaster: tenant-identity node reads only cover
+// clusters the tenant owns, and tenant-identity service-instance reads are
+// refused for non-owners.
+func TestNetworkStatusSubscribedPublicClusterKeepsPublicTopology(t *testing.T) {
+	cluster := networkStatusTestCluster("platform")
+	r := networkStatusAccessResolver(
+		[]*quartermasterpb.InfrastructureCluster{cluster},
+		[]*quartermasterpb.InfrastructureCluster{cluster},
+		nil,
+	)
+	qm, ok := r.Clients.Quartermaster.(*clientstest.FakeQuartermaster)
+	if !ok {
+		t.Fatalf("unexpected quartermaster client %T", r.Clients.Quartermaster)
+	}
+	listNodes, listInstances := qm.ListNodesFn, qm.ListServiceInstancesFn
+	var readTenants []string
+	qm.ListNodesFn = func(ctx context.Context, clusterID, nodeType, region string, page *commonpb.CursorPaginationRequest) (*quartermasterpb.ListNodesResponse, error) {
+		callerTenant := ctxkeys.GetTenantID(ctx)
+		readTenants = append(readTenants, callerTenant)
+		if callerTenant != "" && callerTenant != cluster.GetOwnerTenantId() {
+			return &quartermasterpb.ListNodesResponse{}, nil
+		}
+		return listNodes(ctx, clusterID, nodeType, region, page)
+	}
+	qm.ListServiceInstancesFn = func(ctx context.Context, clusterID, serviceID, nodeID string, page *commonpb.CursorPaginationRequest) (*quartermasterpb.ListServiceInstancesResponse, error) {
+		callerTenant := ctxkeys.GetTenantID(ctx)
+		readTenants = append(readTenants, callerTenant)
+		if callerTenant != "" && callerTenant != cluster.GetOwnerTenantId() {
+			return nil, status.Error(codes.PermissionDenied, "private infrastructure access denied")
+		}
+		return listInstances(ctx, clusterID, serviceID, nodeID, page)
+	}
+
+	got, err := r.DoGetNetworkStatus(clientstest.AuthedCtx("subscriber-tenant"))
+	if err != nil {
+		t.Fatalf("DoGetNetworkStatus: %v", err)
+	}
+	for _, tenant := range readTenants {
+		if tenant != "" {
+			t.Fatalf("public cluster inventory read with caller identity %q, want public read path", tenant)
+		}
+	}
+	if len(got.Nodes) != 1 || got.Nodes[0].NodeID != "edge-1" {
+		t.Fatalf("published public node missing for subscriber: %+v", got.Nodes)
+	}
+	if len(got.ServiceInstances) != 0 {
+		t.Fatalf("subscriber received service inventory: %+v", got.ServiceInstances)
 	}
 }

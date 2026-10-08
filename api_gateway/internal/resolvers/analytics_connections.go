@@ -4420,10 +4420,11 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 			clusterID := cluster.GetClusterId()
 			if exposeTopology {
 				topologyClusterIDs[clusterID] = struct{}{}
+				// Public membership is sticky across the subscribed and owned
+				// passes: a tenant-identity read of a public cluster it does not
+				// own gets no nodes and is refused service instances.
 				if publicTopology {
 					publicTopologyClusterIDs[clusterID] = struct{}{}
-				} else {
-					delete(publicTopologyClusterIDs, clusterID)
 				}
 			}
 			if exposeServiceInventory {

@@ -44,6 +44,9 @@ func (r *Resolver) networkOrchestratorOwnerTenants(ctx context.Context) ([]strin
 		}
 
 		clusterByID := make(map[string]*quartermasterpb.InfrastructureCluster)
+		// A public-topology cluster stays on the public read path even when the
+		// tenant also subscribes to or owns it: Quartermaster authorizes
+		// tenant-identity service-instance reads only for the cluster owner.
 		publicClusterIDs := make(map[string]struct{}, len(clustersResp.GetClusters()))
 		addClusters := func(clusters []*quartermasterpb.InfrastructureCluster, publicTopology bool) {
 			for _, cluster := range clusters {
@@ -54,8 +57,6 @@ func (r *Resolver) networkOrchestratorOwnerTenants(ctx context.Context) ([]strin
 				clusterByID[clusterID] = cluster
 				if publicTopology {
 					publicClusterIDs[clusterID] = struct{}{}
-				} else {
-					delete(publicClusterIDs, clusterID)
 				}
 			}
 		}
@@ -120,6 +121,15 @@ func (r *Resolver) networkOrchestratorOwnerTenants(ctx context.Context) ([]strin
 	return tenantIDs, nil
 }
 
+// networkOrchestratorReadContext drops the caller identity for Periscope
+// orchestrator reads. Periscope refuses a tenant_id that differs from the
+// caller's JWT tenant, and the owner tenants queried here are usually the
+// platform tenant; networkOrchestratorOwnerTenants has already limited them to
+// gateway clusters the caller may see.
+func networkOrchestratorReadContext(ctx context.Context) context.Context {
+	return publicTopologyReadContext(ctx)
+}
+
 func networkOrchestratorScopeKey(tenantIDs []string, parts ...string) []string {
 	out := make([]string, 0, len(tenantIDs)+len(parts))
 	out = append(out, tenantIDs...)
@@ -142,7 +152,7 @@ func (r *Resolver) DoListOrchestrators(ctx context.Context, first *int, after *s
 	val, err := r.fetchPeriscope(ctx, "orchestrators_list", networkOrchestratorScopeKey(tenantIDs, cacheKey), func(ctx context.Context) (any, error) {
 		var out []*periscopepb.Orchestrator
 		for _, tenantID := range tenantIDs {
-			periscopeResp, callErr := r.Clients.Periscope.ListOrchestrators(ctx, tenantID, orchAddr, &periscope.CursorPaginationOpts{
+			periscopeResp, callErr := r.Clients.Periscope.ListOrchestrators(networkOrchestratorReadContext(ctx), tenantID, orchAddr, &periscope.CursorPaginationOpts{
 				First: deref32(first),
 				After: after,
 			})
@@ -178,7 +188,7 @@ func (r *Resolver) DoGetOrchestrator(ctx context.Context, orchAddr string) (*mod
 	val, err := r.fetchPeriscope(ctx, "orchestrator_detail", networkOrchestratorScopeKey(tenantIDs, orchAddr), func(ctx context.Context) (any, error) {
 		var lastNotFound error
 		for _, tenantID := range tenantIDs {
-			periscopeResp, callErr := r.Clients.Periscope.GetOrchestrator(ctx, tenantID, orchAddr)
+			periscopeResp, callErr := r.Clients.Periscope.GetOrchestrator(networkOrchestratorReadContext(ctx), tenantID, orchAddr)
 			if callErr != nil {
 				if status.Code(callErr) == codes.NotFound {
 					lastNotFound = callErr
@@ -226,7 +236,7 @@ func (r *Resolver) DoListOrchestratorInstances(ctx context.Context, orchAddr *st
 	val, err := r.fetchPeriscope(ctx, "orchestrator_instances", networkOrchestratorScopeKey(tenantIDs, cacheKey), func(ctx context.Context) (any, error) {
 		var out []*periscopepb.OrchestratorInstance
 		for _, tenantID := range tenantIDs {
-			periscopeResp, callErr := r.Clients.Periscope.ListOrchestratorInstances(ctx, tenantID, orchAddr)
+			periscopeResp, callErr := r.Clients.Periscope.ListOrchestratorInstances(networkOrchestratorReadContext(ctx), tenantID, orchAddr)
 			if callErr != nil {
 				return nil, callErr
 			}
@@ -258,7 +268,7 @@ func (r *Resolver) DoListOrchestratorVantages(ctx context.Context, orchAddr *str
 	val, err := r.fetchPeriscope(ctx, "orchestrator_vantages", networkOrchestratorScopeKey(tenantIDs, cacheKey), func(ctx context.Context) (any, error) {
 		var out []*periscopepb.OrchestratorVantage
 		for _, tenantID := range tenantIDs {
-			periscopeResp, callErr := r.Clients.Periscope.ListOrchestratorVantages(ctx, tenantID, orchAddr)
+			periscopeResp, callErr := r.Clients.Periscope.ListOrchestratorVantages(networkOrchestratorReadContext(ctx), tenantID, orchAddr)
 			if callErr != nil {
 				return nil, callErr
 			}
@@ -300,7 +310,7 @@ func (r *Resolver) DoGetOrchestratorPerformanceSeries(ctx context.Context, orchA
 		var out []*periscopepb.OrchestratorPerformancePoint
 		for _, tenantID := range tenantIDs {
 			periscopeResp, callErr := r.Clients.Periscope.GetOrchestratorPerformanceSeries(
-				ctx, tenantID, orchAddr,
+				networkOrchestratorReadContext(ctx), tenantID, orchAddr,
 				toTimeRangeOpts(&timeRange), interval, gatewayID, resolvedIP,
 			)
 			if callErr != nil {

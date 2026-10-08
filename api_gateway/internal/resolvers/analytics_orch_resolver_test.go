@@ -14,6 +14,8 @@ import (
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // periO is the analytics/orchestrator-resolver seam: a resolver wired only to a
@@ -460,6 +462,68 @@ func TestDoListOrchestratorVantages_BackendErrorPropagates(t *testing.T) {
 	}
 	if _, err := orchO(p, orchScopeQM("owner-t")).DoListOrchestratorVantages(orchCtx(), nil); err == nil {
 		t.Fatal("expected error propagation")
+	}
+}
+
+// A signed-in tenant subscribed to a public gateway cluster it does not own
+// still sees that cluster's orchestrators. The fakes refuse a caller tenant
+// identity the way Quartermaster (service-instance reads are owner-only) and
+// Periscope (tenant_id must match the caller JWT tenant) do in production.
+func TestDoListOrchestratorVantages_SubscribedPublicClusterUsesPublicReadPath(t *testing.T) {
+	platformOwner := "platform-t"
+	cluster := &quartermasterpb.InfrastructureCluster{
+		ClusterId:     "media-eu-1",
+		OwnerTenantId: &platformOwner,
+		IsActive:      true,
+	}
+	clusters := func(context.Context, *quartermasterpb.ListMySubscriptionsRequest) (*quartermasterpb.ListClustersResponse, error) {
+		return &quartermasterpb.ListClustersResponse{Clusters: []*quartermasterpb.InfrastructureCluster{cluster}}, nil
+	}
+	var instanceReadTenants []string
+	q := &clientstest.FakeQuartermaster{
+		ListPublicTopologyClustersFn: func(context.Context) (*quartermasterpb.ListClustersResponse, error) {
+			return &quartermasterpb.ListClustersResponse{Clusters: []*quartermasterpb.InfrastructureCluster{cluster}}, nil
+		},
+		ListMySubscriptionsFn: clusters,
+		ListClustersByOwnerFn: func(context.Context, string, *commonpb.CursorPaginationRequest) (*quartermasterpb.ListClustersResponse, error) {
+			return &quartermasterpb.ListClustersResponse{}, nil
+		},
+		ListServiceInstancesFn: func(ctx context.Context, _ string, _ string, _ string, _ *commonpb.CursorPaginationRequest) (*quartermasterpb.ListServiceInstancesResponse, error) {
+			callerTenant := ctxkeys.GetTenantID(ctx)
+			instanceReadTenants = append(instanceReadTenants, callerTenant)
+			if callerTenant != "" && callerTenant != platformOwner {
+				return nil, status.Error(codes.PermissionDenied, "private infrastructure access denied")
+			}
+			return &quartermasterpb.ListServiceInstancesResponse{
+				Instances: []*quartermasterpb.ServiceInstance{{ServiceId: "livepeer-gateway"}},
+			}, nil
+		},
+	}
+	var gotTenant string
+	p := &clientstest.FakePeriscope{
+		ListOrchestratorVantagesFn: func(ctx context.Context, tenantID string, _ *string) (*periscopepb.ListOrchestratorVantagesResponse, error) {
+			if callerTenant := ctxkeys.GetTenantID(ctx); callerTenant != "" && callerTenant != tenantID {
+				return nil, status.Error(codes.PermissionDenied, "tenant_id mismatch")
+			}
+			gotTenant = tenantID
+			return &periscopepb.ListOrchestratorVantagesResponse{
+				Vantages: []*periscopepb.OrchestratorVantage{{GatewayId: "gw-eu"}},
+			}, nil
+		},
+	}
+
+	got, err := orchO(p, q).DoListOrchestratorVantages(clientstest.AuthedCtx("subscriber-t"), nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(instanceReadTenants) != 1 || instanceReadTenants[0] != "" {
+		t.Fatalf("public cluster service instances read with caller identity %q, want public read path", instanceReadTenants)
+	}
+	if gotTenant != platformOwner {
+		t.Fatalf("periscope scope = %q, want public cluster owner %q", gotTenant, platformOwner)
+	}
+	if len(got) != 1 || got[0].GetGatewayId() != "gw-eu" {
+		t.Fatalf("public orchestrator vantages missing for subscribed tenant: %+v", got)
 	}
 }
 
