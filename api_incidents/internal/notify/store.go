@@ -120,13 +120,13 @@ func (s *Store) RecordFailure(context.Context, string, int, []string, error, tim
 
 // MarkCompletedToken settles a delivered row and, for operator channels that
 // are still configured, records a notified timeline event in the same
-// transaction.
+// transaction. It runs one attempt: the outbox worker replays settlement.
 func (s *Store) MarkCompletedToken(ctx context.Context, id, leaseToken string) error {
 	tenantID, outboxID, err := parseClaimID(id)
 	if err != nil {
 		return err
 	}
-	return database.WithRetryablePostgresTx(ctx, s.DB, nil, func(tx *sql.Tx) error {
+	return database.WithPostgresTx(ctx, s.DB, nil, func(tx *sql.Tx) error {
 		q := lookoutdb.New(tx)
 		row, err := q.CompleteDelivery(ctx, lookoutdb.CompleteDeliveryParams{
 			ID:         outboxID,

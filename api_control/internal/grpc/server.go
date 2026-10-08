@@ -233,7 +233,8 @@ type CommodoreServer struct {
 	// foghornDiscovery remembers a cell's Foghorn addresses briefly. Deliveries
 	// to one cell arrive in bursts, and asking Quartermaster for each of them is
 	// the same answer many times over.
-	foghornDiscovery sync.Map
+	foghornDiscovery       sync.Map
+	foghornDiscoveryFlight singleflight.Group
 	// routeBuild collapses concurrent full route constructions for the same
 	// tenant; each one fans out to Quartermaster, Purser, and Foghorn discovery.
 	routeBuild           singleflight.Group
@@ -398,32 +399,65 @@ func (s *CommodoreServer) discoverFoghornAddrs(ctx context.Context, clusterID st
 	return dedupeAddrs(addrs...)
 }
 
-const foghornDiscoveryTTL = 30 * time.Second
+const (
+	foghornDiscoveryTTL = 30 * time.Second
+	// foghornDiscoveryMinAge is how long an answer is kept even when deliveries
+	// to its cell fail. Up to eight delivery workers reach one cell together;
+	// when the cell is down they all fail at once, and dropping the answer on
+	// each failure sent every retry back to Quartermaster for the same
+	// addresses.
+	foghornDiscoveryMinAge = 5 * time.Second
+	// foghornDiscoveryTimeout bounds the one Quartermaster call that the
+	// concurrent misses for a cell share.
+	foghornDiscoveryTimeout = 10 * time.Second
+)
 
 type foghornDiscoveryEntry struct {
 	addrs []string
-	until time.Time
+	at    time.Time
 }
 
 // discoverFoghornAddrsBriefly is discoverFoghornAddrs for the asynchronous
 // delivery paths, which reach one cell many times in a burst. An answer is kept
-// for foghornDiscoveryTTL; an empty one is not kept, and forgetFoghornDiscovery
-// drops it the moment a delivery to the cell fails.
+// for foghornDiscoveryTTL; an empty one is not kept. Concurrent misses for one
+// cell share a single Quartermaster call.
 func (s *CommodoreServer) discoverFoghornAddrsBriefly(ctx context.Context, clusterID string) []string {
 	if cached, ok := s.foghornDiscovery.Load(clusterID); ok {
-		if entry, typed := cached.(foghornDiscoveryEntry); typed && time.Now().Before(entry.until) {
+		if entry, typed := cached.(*foghornDiscoveryEntry); typed && time.Since(entry.at) < foghornDiscoveryTTL {
 			return entry.addrs
 		}
 	}
-	addrs := s.discoverFoghornAddrs(ctx, clusterID)
-	if len(addrs) > 0 {
-		s.foghornDiscovery.Store(clusterID, foghornDiscoveryEntry{addrs: addrs, until: time.Now().Add(foghornDiscoveryTTL)})
+	result, err, _ := s.foghornDiscoveryFlight.Do(clusterID, func() (any, error) {
+		// The others share this call, so it does not end with the caller that
+		// started it.
+		callCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), foghornDiscoveryTimeout)
+		defer cancel()
+		addrs := s.discoverFoghornAddrs(callCtx, clusterID)
+		if len(addrs) > 0 {
+			s.foghornDiscovery.Store(clusterID, &foghornDiscoveryEntry{addrs: addrs, at: time.Now()})
+		}
+		return addrs, nil
+	})
+	addrs, ok := result.([]string)
+	if err != nil || !ok {
+		return nil
 	}
 	return addrs
 }
 
+// forgetFoghornDiscovery drops a cell's answer after a failed delivery so the
+// retry discovers afresh, unless the answer is younger than
+// foghornDiscoveryMinAge: a failure that soon is one of a burst against the
+// same addresses, and the burst is not evidence they changed.
 func (s *CommodoreServer) forgetFoghornDiscovery(clusterID string) {
-	s.foghornDiscovery.Delete(clusterID)
+	cached, ok := s.foghornDiscovery.Load(clusterID)
+	if !ok {
+		return
+	}
+	if entry, typed := cached.(*foghornDiscoveryEntry); typed && time.Since(entry.at) < foghornDiscoveryMinAge {
+		return
+	}
+	s.foghornDiscovery.CompareAndDelete(clusterID, cached)
 }
 
 // resolveFoghornForClusterDirect resolves a cluster's Foghorn via Quartermaster SERVICE DISCOVERY, independent of any
@@ -7462,13 +7496,13 @@ func fenceParentStreamLive(ctx context.Context, tx *sql.Tx, tenantID, streamID s
 // the request tenant on the synchronous path); it fences the ownership CAS on tenant in addition to stream_id + lease
 // token. It is REQUIRED: an empty tenant fails the finalize (leaving the row for lease-expiry/retry) rather than
 // settling tenantlessly — the tenant is NOT NULL on the row and always present in a well-formed claim.
+// It runs one transaction attempt: on the worker path the outbox worker replays settlement, and the fast path
+// replays it itself, so a retryable failure is never replayed by two layers at once.
 func (s *CommodoreServer) finalizeStreamDeletion(ctx context.Context, streamID, claimTenantID, leaseToken string) error {
 	if claimTenantID == "" {
 		return fmt.Errorf("finalize stream deletion for %s: missing tenant in claim identity", streamID)
 	}
-	err := s.withStatusTx(ctx,
-		func(err error) error { return fmt.Errorf("begin finalize tx: %w", err) },
-		func(err error) error { return err },
+	err := fwdb.WithPostgresTx(ctx, s.db, nil,
 		func(tx *sql.Tx) error {
 			// OWNERSHIP GATE: settle the outbox row FIRST, token-fenced, and REQUIRE it to affect a row.
 			// A leased worker whose lease lapsed (the row was re-claimed with a NEW token) — or any duplicate finalize after a

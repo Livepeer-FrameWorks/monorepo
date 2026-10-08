@@ -9,7 +9,6 @@ import (
 	"frameworks/api_webhooks/internal/ledger"
 	"frameworks/api_webhooks/internal/metrics"
 
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 
 	"github.com/google/uuid"
@@ -26,6 +25,8 @@ const (
 	leaseMargin = 5 * time.Second
 	// settleTimeout bounds one settlement, which runs after a shutdown began.
 	settleTimeout = 10 * time.Second
+	// claimTimeout bounds one claim including its replays.
+	claimTimeout = 5 * time.Second
 )
 
 // Worker claims due deliveries and sends them.
@@ -76,12 +77,7 @@ func (w *Worker) Run(ctx context.Context) {
 		claimed := 0
 		if free > 0 {
 			claimedAt := w.now()
-			var claims []ledger.Claim
-			err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
-				var claimErr error
-				claims, claimErr = w.Store.Claim(ctx, free)
-				return claimErr
-			})
+			claims, err := w.claim(ctx, free)
 			if err != nil && ctx.Err() == nil {
 				w.Metrics.Internal("claim")
 				if w.Logger != nil {
@@ -123,6 +119,16 @@ func (w *Worker) Run(ctx context.Context) {
 	}
 }
 
+// claim leases up to free deliveries within claimTimeout. ledger.Store.Claim
+// replays its own transaction on retryable failures; the budget stops a
+// contended claim from stacking replays past the next poll, which simply
+// claims again.
+func (w *Worker) claim(ctx context.Context, free int) ([]ledger.Claim, error) {
+	claimCtx, cancel := context.WithTimeout(ctx, claimTimeout)
+	defer cancel()
+	return w.Store.Claim(claimCtx, free)
+}
+
 // Process sends one claimed delivery and settles it. leaseEnd is the local
 // time by which the lease ends; a send that could not finish AttemptTimeout
 // plus a margin before it is not started, and the delivery is left to be
@@ -160,12 +166,8 @@ func (w *Worker) Process(c ledger.Claim, leaseEnd time.Time) {
 func (w *Worker) settle(c ledger.Claim, out ledger.Outcome) {
 	ctx, cancel := context.WithTimeout(context.Background(), settleTimeout)
 	defer cancel()
-	var result ledger.SettleResult
-	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
-		var settleErr error
-		result, settleErr = w.Store.Settle(ctx, c, out, w.Jitter)
-		return settleErr
-	})
+	// Settle replays its own transaction on retryable failures.
+	result, err := w.Store.Settle(ctx, c, out, w.Jitter)
 	if err != nil {
 		w.internal("settle", c, err)
 		return
@@ -206,12 +208,7 @@ func (w *Worker) settleInternal(stage string, c ledger.Claim, cause error, perma
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), settleTimeout)
 	defer cancel()
-	var result ledger.SettleResult
-	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
-		var settleErr error
-		result, settleErr = w.Store.SettleInternal(ctx, c, ClassInternal, permanent, w.Jitter)
-		return settleErr
-	})
+	result, err := w.Store.SettleInternal(ctx, c, ClassInternal, permanent, w.Jitter)
 	if err != nil {
 		w.internal("settle", c, err)
 		return

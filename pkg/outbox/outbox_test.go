@@ -413,7 +413,10 @@ func TestProcessBatchSwallowsClaimError(t *testing.T) {
 	}
 }
 
-func TestProcessBatchRetriesRetryableClaimError(t *testing.T) {
+// TestProcessBatchLeavesClaimReplayToTheStore proves the worker calls ClaimBatch once per pass even on a retryable
+// error: the stores replay their claim transaction themselves, and a second layer here multiplied every contended
+// claim into DefaultRetryAttempts² transactions.
+func TestProcessBatchLeavesClaimReplayToTheStore(t *testing.T) {
 	store := &fakeStore{
 		claims:    []Claim[string]{{ID: "o1", Attempts: 0, Payload: "p1"}},
 		claimErrs: []error{&pq.Error{Code: "40001", Message: "schema version mismatch for table x: expected 89, got 88"}, nil},
@@ -423,11 +426,17 @@ func TestProcessBatchRetriesRetryableClaimError(t *testing.T) {
 
 	w.ProcessBatch(context.Background())
 
-	if store.claimCalls != 2 {
-		t.Fatalf("claim calls = %d, want 2", store.claimCalls)
+	if store.claimCalls != 1 {
+		t.Fatalf("claim calls = %d, want 1", store.claimCalls)
 	}
-	if len(disp.dispatched) != 1 || disp.dispatched[0] != "p1" {
-		t.Fatalf("dispatcher not invoked after retry: %+v", disp.dispatched)
+	if len(disp.dispatched) != 0 {
+		t.Fatalf("dispatched %+v after a failed claim, want nothing", disp.dispatched)
+	}
+
+	// The next pass claims again.
+	w.ProcessBatch(context.Background())
+	if store.claimCalls != 2 || len(disp.dispatched) != 1 || disp.dispatched[0] != "p1" {
+		t.Fatalf("second pass: claim calls = %d, dispatched %+v; want the row dispatched", store.claimCalls, disp.dispatched)
 	}
 }
 

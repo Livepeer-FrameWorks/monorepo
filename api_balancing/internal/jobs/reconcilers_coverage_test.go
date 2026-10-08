@@ -156,8 +156,8 @@ func TestDispatchJobNoNodeRevertsRecon(t *testing.T) {
 	}
 	defer db.Close()
 
-	mock.ExpectExec("UPDATE foghorn.processing_jobs\\s+SET status = 'queued', processing_node_id = NULL").
-		WithArgs("job-nonode-recon").
+	mock.ExpectExec(deferUnroutablePattern).
+		WithArgs(unroutableDeferralSeconds{}, "job-nonode-recon").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("UPDATE foghorn.artifacts").
 		WithArgs("queued", "hash-nonode-recon", "tenant-nonode").

@@ -101,7 +101,10 @@ migrations of its own yet.
 ## Delivery
 
 - **Claim:** workers claim due deliveries with `FOR UPDATE SKIP LOCKED`, at most 5 leased per
-  endpoint, 32 sends per replica. A lease lasts 30 seconds and carries a token; a send that could
+  endpoint, 32 sends per replica. The endpoint rows are locked with `SKIP LOCKED` too, so an
+  endpoint another replica is claiming for or settling is left to the next poll instead of
+  queueing claimers behind it; one claim, with its replays, gets 5 seconds. A lease lasts 30
+  seconds and carries a token; a send that could
   not finish 10 seconds plus a 5-second margin before the lease ends is not started, and
   settlement is fenced on the token, so a reclaimed lease never has two senders.
 - **Render:** `{id, type, api_version, created_at, data}` with `data` rendered by protojson

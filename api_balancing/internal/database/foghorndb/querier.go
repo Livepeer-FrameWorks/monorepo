@@ -131,6 +131,9 @@ type Querier interface {
 	// Deterministic evidence gaps need operator/data repair rather than immediate
 	// retry churn. Retain token ownership and move only its retry timestamp.
 	DeferFederatedArtifactPointerPurgeClaim(ctx context.Context, arg DeferFederatedArtifactPointerPurgeClaimParams) (int64, error)
+	// Returns a claimed job no node can run to the queue and keeps it out of
+	// ClaimQueuedProcessingJobs until next_attempt_at.
+	DeferUnroutableProcessingJob(ctx context.Context, arg DeferUnroutableProcessingJobParams) error
 	DeleteArtifactNode(ctx context.Context, arg DeleteArtifactNodeParams) error
 	DeleteArtifactNodeIfNotNewer(ctx context.Context, arg DeleteArtifactNodeIfNotNewerParams) (string, error)
 	DeleteClipCatalog(ctx context.Context, arg DeleteClipCatalogParams) (int64, error)

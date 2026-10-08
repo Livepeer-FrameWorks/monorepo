@@ -6,6 +6,7 @@ import (
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/periodic"
 )
 
 type Config struct {
@@ -31,6 +32,14 @@ type Claim[P any] struct {
 	LeaseToken string
 }
 
+// Store is one outbox table. Each retryable PostgreSQL failure is replayed by exactly one layer, so contended
+// attempts do not multiply:
+//   - ClaimBatch replays itself. A claim is a transaction (select, then lease), and only the store knows its
+//     boundary, so implementations wrap it in database.WithRetryablePostgresTx or, for one statement,
+//     database.RetryPostgres. The worker calls it once per pass; a claim that still fails waits for the next pass.
+//   - Settlement (MarkCompleted, RecordFailure and their token variants) is replayed by the worker with
+//     database.RetryPostgres, bounded by Config.SettleTimeout. Implementations run one attempt, using
+//     database.WithPostgresTx when they need a transaction.
 type Store[P any] interface {
 	ClaimBatch(ctx context.Context, batchSize int, lease time.Duration) ([]Claim[P], error)
 	MarkCompleted(ctx context.Context, id string) error
@@ -85,7 +94,7 @@ func (w *Worker[P]) Run(ctx context.Context) {
 		}
 		return
 	}
-	ticker := time.NewTicker(w.Config.PollPeriod)
+	ticker := periodic.NewTicker(w.Config.PollPeriod)
 	defer ticker.Stop()
 	for {
 		w.Drain(ctx)
@@ -118,12 +127,7 @@ func (w *Worker[P]) ProcessBatch(ctx context.Context) {
 
 // processBatch claims and settles one batch and reports how many rows it claimed and how many completed.
 func (w *Worker[P]) processBatch(ctx context.Context) (claimed, completed int) {
-	var claims []Claim[P]
-	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
-		var claimErr error
-		claims, claimErr = w.Store.ClaimBatch(ctx, w.Config.BatchSize, w.Config.Lease)
-		return claimErr
-	})
+	claims, err := w.Store.ClaimBatch(ctx, w.Config.BatchSize, w.Config.Lease)
 	if err != nil {
 		if w.Logger != nil {
 			w.Logger.WithError(err).Warn("claim outbox batch failed")

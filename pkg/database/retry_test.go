@@ -168,12 +168,12 @@ func TestWithRetryablePostgresTxRetriesCommitError(t *testing.T) {
 	}
 }
 
-// TestRetryDelayIsCapped proves the backoff doubles from the base delay and never exceeds the cap, so the default
-// budget stays near 2.6s.
+// TestRetryDelayIsCapped proves the backoff ceiling doubles from the base delay and never exceeds the cap, so the
+// default budget stays at most about 2.6s.
 func TestRetryDelayIsCapped(t *testing.T) {
 	var total time.Duration
 	for attempt := 0; attempt < DefaultRetryAttempts-1; attempt++ {
-		delay := retryDelay(25*time.Millisecond, attempt)
+		delay := retryCeiling(25*time.Millisecond, attempt)
 		if delay > maxRetryDelay {
 			t.Fatalf("attempt %d delay %s exceeds cap %s", attempt, delay, maxRetryDelay)
 		}
@@ -182,8 +182,56 @@ func TestRetryDelayIsCapped(t *testing.T) {
 	if total < 2*time.Second || total > 3*time.Second {
 		t.Fatalf("default retry budget = %s, want about 2.6s", total)
 	}
-	if got := retryDelay(25*time.Millisecond, 62); got != maxRetryDelay {
+	if got := retryCeiling(25*time.Millisecond, 62); got != maxRetryDelay {
 		t.Fatalf("overflowing shift delay = %s, want cap", got)
+	}
+}
+
+// TestRetryDelayIsFullyJittered proves each wait is drawn from [0, ceiling) instead of being the ceiling itself, so
+// replicas that conflicted together do not replay together.
+func TestRetryDelayIsFullyJittered(t *testing.T) {
+	const attempt = 3
+	ceiling := 25 * time.Millisecond << attempt
+	seen := map[time.Duration]struct{}{}
+	below := ceiling
+	for range 200 {
+		delay := retryDelay(25*time.Millisecond, attempt)
+		if delay < 0 || delay >= ceiling {
+			t.Fatalf("delay %s outside [0, %s)", delay, ceiling)
+		}
+		seen[delay] = struct{}{}
+		below = min(below, delay)
+	}
+	if len(seen) < 50 {
+		t.Fatalf("200 delays took only %d distinct values; want them spread across [0, %s)", len(seen), ceiling)
+	}
+	if below >= ceiling/2 {
+		t.Fatalf("smallest of 200 delays = %s; full jitter reaches the lower half of [0, %s)", below, ceiling)
+	}
+}
+
+// TestWithPostgresTxRunsOneAttempt proves the single-attempt helper returns a retryable failure instead of replaying
+// it, so a caller that replays does not multiply the attempts.
+func TestWithPostgresTxRunsOneAttempt(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	mock.ExpectBegin()
+	mock.ExpectRollback()
+
+	calls := 0
+	retryable := &pq.Error{Code: "40001", Message: "restart read required"}
+	err = WithPostgresTx(context.Background(), db, nil, func(*sql.Tx) error {
+		calls++
+		return retryable
+	})
+	if !errors.Is(err, retryable) || calls != 1 {
+		t.Fatalf("err = %v after %d body runs; want the retryable error after exactly 1", err, calls)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }
 

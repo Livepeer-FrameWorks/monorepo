@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"strings"
 	"sync"
 	"time"
@@ -15,6 +16,7 @@ import (
 	commodoreclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/periodic"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
@@ -40,9 +42,29 @@ type FreezeRequestSender func(nodeID string, req *ipcpb.FreezeRequest) error
 const catalogBackfillBatch = 500
 
 // catalogLockRetryInterval is how soon a triggered pass that found a peer replica holding the
-// projection lock tries again. A pass holds the lock for seconds, so the owed pass lands shortly
-// after the peer releases it instead of on the fallback interval.
-const catalogLockRetryInterval = 2 * time.Second
+// projection lock first tries again. A pass holds the lock for seconds, so the owed pass lands
+// shortly after the peer releases it instead of on the fallback interval. Each further loss doubles
+// the wait up to catalogLockRetryMax, and every wait varies by catalogLockRetryJitter either way:
+// every replica that lost to the same holder otherwise retried in step every two seconds for as long
+// as a long pass held the lock.
+const (
+	catalogLockRetryInterval = 5 * time.Second
+	catalogLockRetryMax      = 30 * time.Second
+	catalogLockRetryJitter   = 0.2
+)
+
+// catalogLockRetryDelay is the wait after the lost-th consecutive lost lock attempt (lost >= 1),
+// with random in [0, 1) choosing where in the jitter band it falls.
+func catalogLockRetryDelay(base time.Duration, lost int, random float64) time.Duration {
+	limit := max(base, catalogLockRetryMax)
+	delay := limit
+	if lost >= 1 && lost <= 32 {
+		if doubled := base << (lost - 1); doubled > 0 && doubled < limit {
+			delay = doubled
+		}
+	}
+	return periodic.Jittered(delay, catalogLockRetryJitter, random)
+}
 
 // dvrChildRepairBatch bounds the per-pass repair that cascades still-live children of soft-deleted
 // DVR parents. Converges once every such parent's children are cascaded.
@@ -106,6 +128,9 @@ type ArtifactReconciler struct {
 	triggerCh            chan struct{}
 	ledgerTriggerCh      chan struct{}
 	wg                   sync.WaitGroup
+
+	// lockLosses counts consecutive owed passes that lost the projection lock; only run touches it.
+	lockLosses int
 }
 
 func NewArtifactReconciler(cfg ArtifactReconcilerConfig) *ArtifactReconciler {
@@ -218,6 +243,7 @@ func (r *ArtifactReconciler) run() {
 		case <-ticker.C:
 			if r.reconcile() {
 				owedPass = nil
+				r.lockLosses = 0
 			}
 		case <-r.stopCh:
 			return
@@ -225,15 +251,19 @@ func (r *ArtifactReconciler) run() {
 	}
 }
 
+// retryUnlessRan schedules the owed pass after a lost lock and clears the loss count after a pass
+// that ran. Only the run goroutine calls it.
 func (r *ArtifactReconciler) retryUnlessRan(ran bool) <-chan time.Time {
 	if ran {
+		r.lockLosses = 0
 		return nil
 	}
-	retry := r.lockRetryInterval
-	if retry <= 0 {
-		retry = catalogLockRetryInterval
+	r.lockLosses++
+	base := r.lockRetryInterval
+	if base <= 0 {
+		base = catalogLockRetryInterval
 	}
-	return time.After(retry)
+	return time.After(catalogLockRetryDelay(base, r.lockLosses, rand.Float64()))
 }
 
 // reconcile runs one full pass and reports whether its projection section ran under the lock.

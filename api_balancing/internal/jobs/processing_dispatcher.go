@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"net/http"
 	"path"
 	"strconv"
@@ -79,6 +80,8 @@ type ProcessingDispatcher struct {
 	configCacher    ProcessConfigCacher
 	gatewayResolver GatewayResolver
 	onCatalogDirty  func()
+	// random returns a number in [0, 1); nil uses math/rand.
+	random func() float64
 }
 
 var (
@@ -294,6 +297,34 @@ func (d *ProcessingDispatcher) revertToQueued(ctx context.Context, jobID string)
 	}
 }
 
+// unroutableJobDeferral is how long a job no node can run stays out of the
+// claim, varied by unroutableJobJitter either way. Re-claiming it on every poll
+// rewrote the row twice per poll on every replica for as long as no node could
+// take it; deferred, a node that comes back picks it up within one deferral.
+const (
+	unroutableJobDeferral = 15 * time.Second
+	unroutableJobJitter   = 0.2
+)
+
+// deferUnroutable puts a claimed job no node can run back in the queue until
+// its deferral passes.
+func (d *ProcessingDispatcher) deferUnroutable(ctx context.Context, jobID string) {
+	deferral := float64(unroutableJobDeferral) * (1 - unroutableJobJitter + 2*unroutableJobJitter*d.jitter())
+	if err := foghorndb.New(d.db).DeferUnroutableProcessingJob(ctx, foghorndb.DeferUnroutableProcessingJobParams{
+		DeferSeconds: time.Duration(deferral).Seconds(),
+		JobID:        jobID,
+	}); err != nil {
+		d.logger.WithError(err).WithField("job_id", jobID).Warn("Failed to defer unroutable job")
+	}
+}
+
+func (d *ProcessingDispatcher) jitter() float64 {
+	if d.random != nil {
+		return d.random()
+	}
+	return rand.Float64()
+}
+
 func (d *ProcessingDispatcher) dispatchJob(ctx context.Context, job *processingJob) {
 	nodeID, reason := routeProcessingJob(job)
 	if nodeID == "" {
@@ -303,7 +334,7 @@ func (d *ProcessingDispatcher) dispatchJob(ctx context.Context, job *processingJ
 			"origin_cluster": job.OriginCluster,
 			"reason":         reason,
 		}).Debug("No processing node available for job")
-		d.revertToQueued(ctx, job.JobID)
+		d.deferUnroutable(ctx, job.JobID)
 		d.markArtifactQueued(ctx, job, "no processing node available")
 		return
 	}

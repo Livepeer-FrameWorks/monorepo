@@ -256,7 +256,9 @@ func (s *CommodoreServer) completeStreamDeletionInline(ctx context.Context, stre
 		s.kickStreamCleanupOutbox()
 		return "deletion_pending", fmt.Sprintf("Stream deletion pending: removing %d clips and recordings in the background", children)
 	}
-	if fErr := s.finalizeStreamDeletion(inlineCtx, streamID, tenantID, ""); fErr != nil {
+	if fErr := database.RetryPostgres(inlineCtx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		return s.finalizeStreamDeletion(inlineCtx, streamID, tenantID, "")
+	}); fErr != nil {
 		log.WithError(fErr).Warn("stream deletion finalize failed after ack; outbox worker will retry")
 		s.kickStreamCleanupOutbox()
 		return "deletion_pending", pendingMessage

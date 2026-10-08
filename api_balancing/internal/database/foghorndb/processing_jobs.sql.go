@@ -152,6 +152,25 @@ func (q *Queries) CommitDispatchedProcessingJob(ctx context.Context, arg CommitD
 	return result.RowsAffected()
 }
 
+const deferUnroutableProcessingJob = `-- name: DeferUnroutableProcessingJob :exec
+UPDATE foghorn.processing_jobs
+SET status = 'queued', processing_node_id = NULL, updated_at = NOW(),
+    next_attempt_at = NOW() + make_interval(secs => $1::double precision)
+WHERE job_id = $2
+`
+
+type DeferUnroutableProcessingJobParams struct {
+	DeferSeconds float64 `db:"defer_seconds" json:"defer_seconds"`
+	JobID        string  `db:"job_id" json:"job_id"`
+}
+
+// Returns a claimed job no node can run to the queue and keeps it out of
+// ClaimQueuedProcessingJobs until next_attempt_at.
+func (q *Queries) DeferUnroutableProcessingJob(ctx context.Context, arg DeferUnroutableProcessingJobParams) error {
+	_, err := q.db.ExecContext(ctx, deferUnroutableProcessingJob, arg.DeferSeconds, arg.JobID)
+	return err
+}
+
 const failExhaustedProcessingJob = `-- name: FailExhaustedProcessingJob :one
 WITH failed AS (
     UPDATE foghorn.processing_jobs AS job

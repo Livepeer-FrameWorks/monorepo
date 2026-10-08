@@ -40,9 +40,11 @@ func (s *Service) ReconcileClusterScope(ctx context.Context, clusterID string) (
 // row, so it waits for every ingestion that read the previous scope under its
 // share lock, and a later ingestion either reads the new scope or fails with a
 // serialization conflict and retries. The move then starts after those
-// ingestions committed. In one transaction, a snapshot-isolation database
-// (YugabyteDB runs with read committed disabled) would take its snapshot while
-// waiting and never see the incidents those ingestions wrote.
+// ingestions committed, so it sees the incidents they wrote whatever the
+// isolation level. Production YugabyteDB runs read committed
+// (yb_enable_read_committed_isolation), where each statement reads afresh; a
+// database without it runs every transaction at snapshot isolation, and one
+// transaction would keep the snapshot it took while waiting and miss them.
 func (s *Service) applyClusterOwner(ctx context.Context, clusterID string, owner ClusterOwner) (int, error) {
 	tenantID := ""
 	if owner.Scope.Kind == ScopeTenant {

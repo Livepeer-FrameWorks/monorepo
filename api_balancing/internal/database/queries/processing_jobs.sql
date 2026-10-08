@@ -35,6 +35,14 @@ UPDATE foghorn.processing_jobs
 SET status = 'queued', processing_node_id = NULL, updated_at = NOW()
 WHERE job_id = $1;
 
+-- Returns a claimed job no node can run to the queue and keeps it out of
+-- ClaimQueuedProcessingJobs until next_attempt_at.
+-- name: DeferUnroutableProcessingJob :exec
+UPDATE foghorn.processing_jobs
+SET status = 'queued', processing_node_id = NULL, updated_at = NOW(),
+    next_attempt_at = NOW() + make_interval(secs => sqlc.arg(defer_seconds)::double precision)
+WHERE job_id = sqlc.arg(job_id);
+
 -- name: AssignProcessingJobNode :execrows
 UPDATE foghorn.processing_jobs
 SET processing_node_id = $2, updated_at = NOW(),

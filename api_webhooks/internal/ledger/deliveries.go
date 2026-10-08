@@ -176,6 +176,11 @@ type lockedEndpoint struct {
 	apiVersion string
 }
 
+// lockEndpoints locks the candidate endpoints that no other transaction holds.
+// An endpoint another replica is claiming for, or a settlement or disable is
+// writing, is left out of this claim rather than waited on: every replica polls
+// the same longest-waiting endpoints, and waiting turned each poll into a queue
+// of claimers behind one row lock. The next poll considers the endpoint again.
 func lockEndpoints(ctx context.Context, tx *sql.Tx, ids []string) (map[string]lockedEndpoint, error) {
 	sorted := append([]string(nil), ids...)
 	sort.Strings(sorted)
@@ -183,7 +188,7 @@ func lockEndpoints(ctx context.Context, tx *sql.Tx, ids []string) (map[string]lo
 		SELECT id, tenant_id, status, url, api_version FROM bosun.webhook_endpoints
 		WHERE id = ANY((($1)::text)::uuid[])
 		ORDER BY id
-		FOR UPDATE`, arrayLiteral(sorted))
+		FOR UPDATE SKIP LOCKED`, arrayLiteral(sorted))
 	if err != nil {
 		return nil, err
 	}

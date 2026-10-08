@@ -24,6 +24,7 @@ type DNSReconciler struct {
 	serviceTypes       []string
 	healthStaleSeconds int
 	dnsRecordsEnabled  bool
+	physicalSweeps     sweepCoalescer
 }
 
 type quartermasterClient interface {
@@ -163,12 +164,19 @@ func (r *DNSReconciler) syncPhysicalInstanceEndpoints(ctx context.Context) {
 // No-op (nil, nil) for non-physical types. Returns partial errors and a hard error
 // so the event-driven SyncDNS caller can report failure instead of silently
 // succeeding while infra records did not refresh.
+//
+// Each sweep lists every instance of the type and then each one's ingress
+// sites. Quartermaster sends one SyncDNS per served cluster for every health
+// change, so concurrent requests for a type share sweeps (sweepCoalescer)
+// instead of each repeating the whole listing.
 func (r *DNSReconciler) SyncPhysicalInstanceEndpointsForType(ctx context.Context, serviceType string) (map[string]string, error) {
 	if r.dnsManager == nil || r.qmClient == nil || !pkgdns.IsPhysicalEndpointServiceType(serviceType) {
 		return nil, nil
 	}
-	r.ensureInfraZone(ctx)
-	return r.syncPhysicalInstanceEndpointsForType(ctx, serviceType)
+	return r.physicalSweeps.do(ctx, serviceType, func(sweepCtx context.Context) (map[string]string, error) {
+		r.ensureInfraZone(sweepCtx)
+		return r.syncPhysicalInstanceEndpointsForType(sweepCtx, serviceType)
+	})
 }
 
 func (r *DNSReconciler) syncPhysicalInstanceEndpointsForType(ctx context.Context, serviceType string) (map[string]string, error) {

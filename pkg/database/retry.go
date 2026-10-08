@@ -4,12 +4,14 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"math/rand/v2"
 	"strings"
 	"time"
 )
 
-// DefaultRetryAttempts and maxRetryDelay bound a replay to about 2.6s of backoff (25ms doubling, capped at 1s), long
-// enough to outlast the aborts a multi-statement online migration causes in a colocated YugabyteDB database.
+// DefaultRetryAttempts and maxRetryDelay bound a replay to at most about 2.6s of backoff (a ceiling of 25ms doubling,
+// capped at 1s, with each wait drawn below its ceiling), long enough to outlast the aborts a multi-statement online
+// migration causes in a colocated YugabyteDB database.
 const (
 	DefaultRetryAttempts = 8
 	maxRetryDelay        = time.Second
@@ -79,12 +81,23 @@ func walkErrorChain(err error, visit func(error) bool) bool {
 	return false
 }
 
-func retryDelay(baseDelay time.Duration, attempt int) time.Duration {
+// retryJitter returns a number in [0, 1).
+var retryJitter = rand.Float64
+
+// retryCeiling is the upper bound of the wait before replay attempt+1: the base delay doubled per attempt, capped at
+// maxRetryDelay.
+func retryCeiling(baseDelay time.Duration, attempt int) time.Duration {
 	delay := baseDelay << attempt
 	if delay <= 0 || delay > maxRetryDelay {
 		return maxRetryDelay
 	}
 	return delay
+}
+
+// retryDelay waits a uniformly random time below the ceiling (full jitter). Replicas that hit the same conflict at
+// the same moment otherwise replay in lockstep and collide again on every attempt.
+func retryDelay(baseDelay time.Duration, attempt int) time.Duration {
+	return time.Duration(retryJitter() * float64(retryCeiling(baseDelay, attempt)))
 }
 
 func RetryPostgres(ctx context.Context, attempts int, baseDelay time.Duration, fn func() error) error {
@@ -138,25 +151,31 @@ func WithRetryablePostgresTxBeginner(ctx context.Context, db PostgresTxBeginner,
 
 func WithRetryablePostgresTxBeginnerWithHook(ctx context.Context, db PostgresTxBeginner, opts *sql.TxOptions, onRetry func(error, int), fn func(*sql.Tx) error) error {
 	return RetryPostgresWithHook(ctx, DefaultRetryAttempts, 25*time.Millisecond, onRetry, func() error {
-		tx, err := db.BeginTx(ctx, opts)
-		if err != nil {
-			return err
-		}
-		committed := false
-		defer func() {
-			if !committed {
-				_ = tx.Rollback() //nolint:errcheck // rollback is best-effort when replaying retryable tx failures
-			}
-		}()
-		if err := fn(tx); err != nil {
-			return err
-		}
-		if err := tx.Commit(); err != nil {
-			return err
-		}
-		committed = true
-		return nil
+		return WithPostgresTx(ctx, db, opts, fn)
 	})
+}
+
+// WithPostgresTx runs fn in one transaction attempt and commits it, rolling back when fn or the commit fails. It does
+// not replay: it is for callers whose caller already replays retryable failures, so the attempts do not multiply.
+func WithPostgresTx(ctx context.Context, db PostgresTxBeginner, opts *sql.TxOptions, fn func(*sql.Tx) error) error {
+	tx, err := db.BeginTx(ctx, opts)
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback() //nolint:errcheck // rollback is best-effort after a failed body or commit
+		}
+	}()
+	if err := fn(tx); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	committed = true
+	return nil
 }
 
 func WithRetryablePostgresRollbackTx(ctx context.Context, db *sql.DB, opts *sql.TxOptions, fn func(*sql.Tx) error) error {

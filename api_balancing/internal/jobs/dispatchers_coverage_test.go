@@ -11,13 +11,22 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
+// dispatchTestCluster is the cluster of the seeded node; a job routes to it only
+// when its artifact originates there.
+const dispatchTestCluster = "cluster-dispatch"
+
 // seedProcessingNode makes a single node the only viable routing target for a
-// video_transcode job: alive, processing-capable, with unbounded class capacity.
-// Unique IDs per test avoid cross-test state contamination.
+// video_transcode job originating on dispatchTestCluster: alive,
+// processing-capable, with unbounded class capacity, in a cluster every tenant
+// may use. Unique IDs per test avoid cross-test state contamination.
 func seedProcessingNode(t *testing.T, sm *state.StreamStateManager, nodeID string) {
 	t.Helper()
+	sm.SetNodeConnectionInfo(context.Background(), nodeID, "h", "", dispatchTestCluster, nil)
 	sm.TouchNode(nodeID, true)
 	setNodeProcessing(sm, nodeID, true, 0, 0)
+	origAccess := clusterAccessibleForTenant
+	clusterAccessibleForTenant = func(string, string) bool { return true }
+	t.Cleanup(func() { clusterAccessibleForTenant = origAccess })
 }
 
 // TestDispatchJobRoutesThenDispatchFails locks the dispatch decision on the
@@ -41,9 +50,13 @@ func TestDispatchJobRoutesThenDispatchFails(t *testing.T) {
 	}
 	defer db.Close()
 
-	// Routing succeeds -> SendProcessingJob hits an empty registry -> dispatch
-	// fails -> revert + markArtifactQueued. No 'processing' UPDATE must run.
-	mock.ExpectExec("UPDATE foghorn.processing_jobs\\s+SET status = 'queued', processing_node_id = NULL").
+	// Routing succeeds -> the node assignment persists -> SendProcessingJob hits
+	// an empty registry -> dispatch fails -> revert + markArtifactQueued. No
+	// 'processing' UPDATE must run.
+	mock.ExpectExec("UPDATE foghorn.processing_jobs\\s+SET processing_node_id = ").
+		WithArgs("job-route-1", sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("UPDATE foghorn.processing_jobs\\s+SET status = 'queued', processing_node_id = NULL, updated_at = NOW\\(\\)\\s+WHERE").
 		WithArgs("job-route-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("UPDATE foghorn.artifacts").
@@ -61,8 +74,9 @@ func TestDispatchJobRoutesThenDispatchFails(t *testing.T) {
 		InputCodec:     sql.NullString{String: "h264", Valid: true},
 		// SourceURL set so the dispatcher skips S3 presign (which needs a
 		// configured s3Client) and goes straight to param assembly + send.
-		SourceURL:    sql.NullString{String: "https://origin.example/source.mp4", Valid: true},
-		SourceParams: sql.NullString{String: `{"source_kind":"upload","extra":"v"}`, Valid: true},
+		SourceURL:     sql.NullString{String: "https://origin.example/source.mp4", Valid: true},
+		SourceParams:  sql.NullString{String: `{"source_kind":"upload","extra":"v"}`, Valid: true},
+		OriginCluster: dispatchTestCluster,
 	})
 
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -97,13 +111,14 @@ func TestDispatchJobInvalidSourceParamsReverts(t *testing.T) {
 
 	d := NewProcessingDispatcher(ProcessingDispatcherConfig{DB: db, Logger: logging.NewLogger()})
 	d.dispatchJob(context.Background(), &processingJob{
-		JobID:        "job-bad-params",
-		TenantID:     "tenant-bp",
-		ArtifactHash: sql.NullString{String: "hash-bad-params", Valid: true},
-		ArtifactType: sql.NullString{String: "vod", Valid: true},
-		JobType:      "process",
-		SourceURL:    sql.NullString{String: "https://origin.example/s.mp4", Valid: true},
-		SourceParams: sql.NullString{String: `{not valid json`, Valid: true},
+		JobID:         "job-bad-params",
+		TenantID:      "tenant-bp",
+		ArtifactHash:  sql.NullString{String: "hash-bad-params", Valid: true},
+		ArtifactType:  sql.NullString{String: "vod", Valid: true},
+		JobType:       "process",
+		SourceURL:     sql.NullString{String: "https://origin.example/s.mp4", Valid: true},
+		SourceParams:  sql.NullString{String: `{not valid json`, Valid: true},
+		OriginCluster: dispatchTestCluster,
 	})
 
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -144,7 +159,9 @@ func TestDispatchJobPresignFailureReverts(t *testing.T) {
 		ArtifactType: sql.NullString{String: "vod", Valid: true},
 		JobType:      "process",
 		// No SourceURL -> S3 presign path; s3Client is nil in control -> error.
-		S3URL: sql.NullString{String: "s3://bucket/tenant/hash/index.mp4", Valid: true},
+		S3URL:         sql.NullString{String: "s3://bucket/tenant/hash/index.mp4", Valid: true},
+		DurableLocal:  true,
+		OriginCluster: dispatchTestCluster,
 	})
 
 	if err := mock.ExpectationsWereMet(); err != nil {

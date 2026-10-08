@@ -104,8 +104,10 @@ ingestion uses. There is no in-process cache.
   2. The second locks the row `FOR UPDATE` and the cluster's open incidents (`firing` or
      `acknowledged`), moves each one whose scope or tenant differs from the stored scope, and sets
      `applied_revision` to the row's `revision`. It starts after the waiting ingestions committed,
-     so it sees their incidents. YugabyteDB runs with read committed disabled, where a single
-     transaction would keep a snapshot from before those commits and miss them.
+     so it sees their incidents under any isolation level. Production YugabyteDB runs read
+     committed (`yb_enable_read_committed_isolation`), where each statement reads afresh; without
+     it every YugabyteDB transaction is snapshot isolation, and a single transaction would keep a
+     snapshot from before those commits and miss them.
 
   So across replicas an incident is either moved or written with the new owner. If the process
   stops between the two transactions, `applied_revision < revision` marks the move as pending. The

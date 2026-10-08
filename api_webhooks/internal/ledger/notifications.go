@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	pkgoutbox "github.com/Livepeer-FrameWorks/monorepo/pkg/outbox"
 
 	"github.com/google/uuid"
@@ -34,8 +35,19 @@ var (
 // worker never calls because every claim carries a lease token.
 var errUnfencedSettlement = errors.New("notification outbox settlement requires a lease token")
 
-// ClaimBatch leases up to batchSize due notifications.
+// ClaimBatch leases up to batchSize due notifications. It replays its own
+// retryable failures, as the outbox Store contract requires of a claim.
 func (n *NotificationStore) ClaimBatch(ctx context.Context, batchSize int, lease time.Duration) ([]pkgoutbox.Claim[Notification], error) {
+	var out []pkgoutbox.Claim[Notification]
+	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		var claimErr error
+		out, claimErr = n.claimBatch(ctx, batchSize, lease)
+		return claimErr
+	})
+	return out, err
+}
+
+func (n *NotificationStore) claimBatch(ctx context.Context, batchSize int, lease time.Duration) ([]pkgoutbox.Claim[Notification], error) {
 	token := uuid.Must(uuid.NewV7()).String()
 	rows, err := n.Store.DB.QueryContext(ctx, `
 		WITH picked AS (

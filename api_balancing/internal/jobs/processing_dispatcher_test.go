@@ -153,8 +153,8 @@ func TestProcessingDispatcherDispatchScansNullOutputProfiles(t *testing.T) {
 	)
 	mock.ExpectQuery("WITH claimed AS").
 		WillReturnRows(rows)
-	mock.ExpectExec("UPDATE foghorn.processing_jobs").
-		WithArgs("job-1").
+	mock.ExpectExec(deferUnroutablePattern).
+		WithArgs(unroutableDeferralSeconds{}, "job-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	d := NewProcessingDispatcher(ProcessingDispatcherConfig{

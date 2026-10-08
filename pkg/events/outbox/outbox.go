@@ -13,6 +13,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/events"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	pkgoutbox "github.com/Livepeer-FrameWorks/monorepo/pkg/outbox"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/periodic"
 	eventspb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events"
 	"github.com/google/uuid"
 	"github.com/lib/pq"
@@ -118,7 +119,7 @@ func (r *Relay) Notify() {
 
 // Run delivers rows until ctx ends.
 func (r *Relay) Run(ctx context.Context) {
-	ticker := time.NewTicker(pollPeriod)
+	ticker := periodic.NewTicker(pollPeriod)
 	defer ticker.Stop()
 	nextPrune := time.Now()
 	for {
