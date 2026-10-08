@@ -97,8 +97,24 @@ func contractProductionManifest(t *testing.T, extraSecrets ...string) *inventory
 			"steward":          {Enabled: true, Host: "central-eu-1"},
 			"lookout":          {Enabled: true, Host: "central-eu-1"},
 			"bosun":            {Enabled: true, Host: "central-eu-1"},
-			"chatwoot":         {Enabled: true, Host: "central-eu-1", Port: 18092},
-			"listmonk":         {Enabled: true, Host: "central-eu-1", Port: 9001},
+			"network-observer": {Enabled: true, Host: "central-eu-1", Config: map[string]string{
+				"NETWORK_OBSERVER_TENANT_ID":  "11111111-1111-1111-1111-111111111111",
+				"NETWORK_OBSERVER_CLUSTER_ID": contractTestClusterID,
+				"NETWORK_OBSERVER_SECRET":     "test-network-observer-secret",
+				"LIVEPEER_ETH_RPC_URL":        "https://rpc.example.com",
+				"LIVEPEER_CONTROLLER":         "0x1111111111111111111111111111111111111111",
+			}},
+			"network-prober": {Enabled: true, Host: "central-eu-1", Config: map[string]string{
+				"NETWORK_OBSERVER_URL":           "https://observer.example.com",
+				"NETWORK_OBSERVER_SECRET":        "test-network-observer-secret",
+				"NETWORK_PROBER_ID":              "prober-eu-1",
+				"NETWORK_PROBER_REGION":          "eu-west",
+				"LIVEPEER_BROADCASTER_ADDRESS":   "0x1111111111111111111111111111111111111111",
+				"LIVEPEER_BROADCASTER_SIGNATURE": "test-broadcaster-signature",
+				"NETWORK_PROBER_SPOOL_DIR":       "/var/lib/frameworks/network-prober/spool",
+			}},
+			"chatwoot": {Enabled: true, Host: "central-eu-1", Port: 18092},
+			"listmonk": {Enabled: true, Host: "central-eu-1", Port: 9001},
 		},
 	}
 }

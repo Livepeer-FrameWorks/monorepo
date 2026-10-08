@@ -4217,7 +4217,7 @@ CREATE TABLE IF NOT EXISTS _schema_baseline (
 ) ENGINE = ReplicatedReplacingMergeTree(applied_at) ORDER BY tuple();
 INSERT INTO _schema_baseline (floor) VALUES ('v0.3.0');
 
-CREATE TABLE IF NOT EXISTS periscope.network_observations (
+CREATE TABLE IF NOT EXISTS network_observations (
  tenant_id UUID, provider LowCardinality(String), network_id LowCardinality(String), environment LowCardinality(String),
  timestamp DateTime64(3), event_id UUID, gateway_id String, gateway_region LowCardinality(String),
  producer_kind LowCardinality(String), kind LowCardinality(String),
@@ -4235,7 +4235,7 @@ ORDER BY (tenant_id,provider,network_id,environment,toDate(timestamp),event_id)
 TTL timestamp + INTERVAL 30 DAY DELETE;
 
 -- Complete rollup snapshots are rebuilt from deduplicated source observations.
-CREATE TABLE IF NOT EXISTS periscope.network_observation_rollups (
+CREATE TABLE IF NOT EXISTS network_observation_rollups (
  tenant_id UUID, provider LowCardinality(String), network_id LowCardinality(String), environment LowCardinality(String),
  bucket DateTime, interval_seconds UInt32, kind LowCardinality(String), resource_id String, resolved_ip String,
  gateway_region LowCardinality(String), workload LowCardinality(String), profile_key String,

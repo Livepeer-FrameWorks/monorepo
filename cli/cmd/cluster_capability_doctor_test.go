@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	"frameworks/cli/pkg/inventory"
@@ -31,7 +32,12 @@ func TestDoctorCapabilitiesRespectTargetRelease(t *testing.T) {
 		t.Fatalf("v0.3.10 ClickHouse capabilities = %d, want 2", len(before))
 	}
 	current := doctorCapabilitiesForVersion("periscope-ingest", pkgdatabase.EngineClickHouse, "v0.3.11")
-	if len(current) != 3 || current[2].Name != "domain event projections" {
-		t.Fatalf("v0.3.11 ClickHouse capabilities = %#v, want domain event projections included", current)
+	if len(current) != 4 {
+		t.Fatalf("v0.3.11 ClickHouse capabilities = %d, want 4", len(current))
+	}
+	for _, name := range []string{"domain event projections", "network observations and snapshot rollups"} {
+		if !slices.ContainsFunc(current, func(capability pkgdatabase.Capability) bool { return capability.Name == name }) {
+			t.Errorf("v0.3.11 ClickHouse capabilities lack %q", name)
+		}
 	}
 }

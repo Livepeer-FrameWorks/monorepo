@@ -1328,6 +1328,7 @@ verify-backup-restore-yugabyte:
 verify-schema-migrations-core: verify-foghorn-test-selection
 	@docker info >/dev/null 2>&1 || { echo "ERROR: verify-schema-migrations requires a running Docker daemon"; exit 1; }
 	@$(MAKE) --no-print-directory verify-placement-db
+	@$(MAKE) --no-print-directory verify-network-observer-db
 	@echo "Verifying PostgreSQL tagged upgrades and current baseline replay on PostgreSQL/ClickHouse (Docker)..."
 	@FRAMEWORKS_SCHEMA_VERIFY_FROM_TAG='$(SCHEMA_VERIFY_FROM_TAG)' $(CONTRACT_GO_TEST) cli postgres/cli -tags schema_verify -run '$(SCHEMA_VERIFY_COMMON_TESTS)|$(SCHEMA_VERIFY_POSTGRES_TESTS)' -count=1 -timeout 1200s ./pkg/provisioner/
 	@$(CONTRACT_GO_TEST) cli postgres/cli-cmd -tags schema_verify -run '^($(CLI_CMD_REALPG_TESTS))$$' -count=1 -timeout 600s ./cmd/
@@ -1641,7 +1642,7 @@ yugabyte-lane-5:
 	@$(YUGABYTE_LANE) lane-5 $(YUGABYTE_FIXTURE) $(MAKE) --no-print-directory -k -j1 verify-schema-yugabyte-unit-quartermaster-compat verify-schema-yugabyte-unit-quartermaster-completion verify-yugabyte-quartermaster-contracts verify-schema-yugabyte-unit-bosun-compat verify-schema-yugabyte-unit-bosun-completion verify-schema-yugabyte-unit-bosun-preflight verify-schema-yugabyte-unit-lookout-compat verify-schema-yugabyte-unit-lookout-completion verify-schema-yugabyte-unit-lookout-preflight verify-schema-yugabyte-unit-navigator-compat verify-schema-yugabyte-unit-navigator-completion verify-schema-yugabyte-unit-navigator-preflight verify-yugabyte-distributed-foghorn
 
 yugabyte-lane-6:
-	@$(YUGABYTE_LANE) lane-6 $(YUGABYTE_FIXTURE) $(MAKE) --no-print-directory -k -j1 verify-schema-yugabyte-unit-periscope-compat verify-schema-yugabyte-unit-periscope-completion verify-schema-yugabyte-unit-periscope-preflight verify-schema-yugabyte-unit-skipper-compat verify-schema-yugabyte-unit-skipper-completion verify-schema-yugabyte-unit-skipper-preflight verify-yugabyte-commodore-contracts verify-yugabyte-purser-contracts verify-yugabyte-navigator-contracts verify-yugabyte-lookout-contracts verify-yugabyte-bosun-contracts verify-yugabyte-skipper-contracts verify-yugabyte-periscope-metering-contracts
+	@$(YUGABYTE_LANE) lane-6 $(YUGABYTE_FIXTURE) $(MAKE) --no-print-directory -k -j1 verify-schema-yugabyte-unit-periscope-compat verify-schema-yugabyte-unit-periscope-completion verify-schema-yugabyte-unit-periscope-preflight verify-schema-yugabyte-unit-skipper-compat verify-schema-yugabyte-unit-skipper-completion verify-schema-yugabyte-unit-skipper-preflight verify-yugabyte-commodore-contracts verify-yugabyte-purser-contracts verify-yugabyte-navigator-contracts verify-yugabyte-lookout-contracts verify-yugabyte-bosun-contracts verify-yugabyte-skipper-contracts verify-yugabyte-periscope-metering-contracts verify-yugabyte-network-observer-contracts
 
 # Existing production databases stay distributed until an operator relays them out, so every service whose database
 # is declared colocated also runs its contracts on distributed databases, which receive the same layout-rewritten
@@ -1683,7 +1684,7 @@ verify-schema-yugabyte-unit-%: verify-yugabyte-shared-fixture
 	FRAMEWORKS_YUGABYTE_DATABASES="$$database" FRAMEWORKS_SCHEMA_VERIFY_FROM_TAG='$(SCHEMA_VERIFY_FROM_TAG)' \
 		$(CONTRACT_GO_TEST) cli "yugabyte/$$coverage" -tags schema_verify -run "^($$tests)\$$" -count=1 -timeout 1800s ./pkg/provisioner/
 
-verify-yugabyte-service-suites: verify-yugabyte-commodore-contracts verify-yugabyte-foghorn-contracts verify-yugabyte-purser-contracts verify-yugabyte-quartermaster-contracts verify-yugabyte-navigator-contracts verify-yugabyte-lookout-contracts verify-yugabyte-bosun-contracts verify-yugabyte-skipper-contracts verify-yugabyte-periscope-metering-contracts
+verify-yugabyte-service-suites: verify-yugabyte-commodore-contracts verify-yugabyte-foghorn-contracts verify-yugabyte-purser-contracts verify-yugabyte-quartermaster-contracts verify-yugabyte-navigator-contracts verify-yugabyte-lookout-contracts verify-yugabyte-bosun-contracts verify-yugabyte-skipper-contracts verify-yugabyte-periscope-metering-contracts verify-yugabyte-network-observer-contracts
 
 verify-yugabyte-relayout-rehearsal:
 	@docker info >/dev/null 2>&1 || { echo "ERROR: verify-yugabyte-relayout-rehearsal requires a running Docker daemon"; exit 1; }
@@ -1819,7 +1820,7 @@ verify-yugabyte-foghorn-authority-contracts: verify-yugabyte-shared-fixture
 	@$(CONTRACT_GO_TEST) api_balancing yugabyte/foghorn-media-authority -tags schema_verify -run '^($(FOGHORN_MEDIA_AUTHORITY_REALYB_TESTS))$$' -count=1 -timeout 600s ./internal/mediaauthority/
 
 verify-yugabyte-service: verify-foghorn-test-selection
-	@case "$(SERVICE)" in commodore|purser|navigator|skipper|quartermaster|periscope-metering|foghorn|foghorn-authority|foghorn-jobs|lookout|bosun) ;; *) echo "ERROR: SERVICE must be commodore, purser, navigator, skipper, quartermaster, periscope-metering, foghorn, foghorn-authority, foghorn-jobs, lookout, or bosun"; exit 2;; esac
+	@case "$(SERVICE)" in commodore|purser|navigator|skipper|quartermaster|periscope-metering|foghorn|foghorn-authority|foghorn-jobs|lookout|bosun|network-observer) ;; *) echo "ERROR: SERVICE must be commodore, purser, navigator, skipper, quartermaster, periscope-metering, foghorn, foghorn-authority, foghorn-jobs, lookout, bosun, or network-observer"; exit 2;; esac
 	@$(YUGABYTE_FIXTURE) $(MAKE) --no-print-directory -k -j1 verify-yugabyte-$(SERVICE)-contracts $(if $(filter $(SERVICE),$(YUGABYTE_COLOCATED_SERVICES)),verify-yugabyte-distributed-$(SERVICE))
 
 # One database's schema contract groups and its service's contracts, on one shared engine.
@@ -2104,7 +2105,13 @@ provision-hello: ansible-galaxy-install
 		-cache-dir ../$(ANSIBLE_DIR)/$(ANSIBLE_CACHE_REL)
 
 # Regional probes are manually deployable; the coordinator owns the shared inventory.
-.PHONY: test-network-observer build-bin-network-observer build-bin-network-prober
+.PHONY: test-network-observer build-bin-network-observer build-bin-network-prober verify-network-observer-db verify-yugabyte-network-observer-contracts
+verify-network-observer-db:
+	@$(CONTRACT_GO_TEST) api_network_observer postgres/network-observer -tags schema_verify -run '^TestObserverReplayRollbackAndRestart_RealPG$$' -count=1 -timeout 300s ./internal/coordinator/
+
+verify-yugabyte-network-observer-contracts: verify-yugabyte-shared-fixture
+	@$(CONTRACT_GO_TEST) api_network_observer yugabyte/network-observer -tags schema_verify -run '^TestObserverReplayRollbackAndRestart_RealYugabyte$$' -count=1 -timeout 300s ./internal/coordinator/
+
 test-network-observer:
 	$(call run-go-tests,network-observer,api_network_observer)
 build-bin-network-observer:

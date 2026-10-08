@@ -84,6 +84,9 @@ func TestEveryRPCQuerySiteExecutesAgainstCurrentClickHouse(t *testing.T) {
 		}
 	}
 
+	t.Run("NetworkObservationReplayPrivacyAndDelivery", func(t *testing.T) {
+		verifyNetworkObservationProjection(t, ctx, db, server)
+	})
 	if scanErrors := trace.Errors(); len(scanErrors) > 0 {
 		t.Fatalf("real RPC pack observed result-shape scan failures: %v", scanErrors)
 	}
@@ -207,7 +210,7 @@ func assertEveryQuerySiteReached(t *testing.T, traced map[string]int) {
 		}
 	}
 	var missing []string
-	for _, filename := range []string{"server.go", "orchestrators.go"} {
+	for _, filename := range []string{"server.go", "orchestrators.go", "network_observations.go", "network_delivery.go"} {
 		set := token.NewFileSet()
 		file, err := parser.ParseFile(set, filename, nil, 0)
 		if err != nil {
