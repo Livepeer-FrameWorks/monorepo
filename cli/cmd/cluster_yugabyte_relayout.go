@@ -26,13 +26,13 @@ import (
 
 const relayoutDefaultDumpDir = "/var/lib/frameworks/relayout"
 
-// newClusterYugabyteCmd groups YugabyteDB physical layout operations.
+// newClusterYugabyteCmd groups YugabyteDB physical layout and storage maintenance operations.
 func newClusterYugabyteCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "yugabyte",
-		Short: "YugabyteDB physical layout operations",
+		Short: "YugabyteDB physical layout and storage maintenance",
 	}
-	cmd.AddCommand(newYugabyteRelayoutCmd())
+	cmd.AddCommand(newYugabyteRelayoutCmd(), newYugabyteCompactCmd())
 	return cmd
 }
 

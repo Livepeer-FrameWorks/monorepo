@@ -1,6 +1,6 @@
 ---
 title: "YugabyteDB Physical Layout"
-description: "Colocated service databases, placement drift, and relaying out an existing database."
+description: "Colocated service databases, placement drift, relaying out an existing database, and compacting tables."
 sidebar:
   order: 11
 ---
@@ -242,3 +242,49 @@ application, client, state, and query. The relayout's own connections appear as
 - `preflight` and `prepare` create databases, which YugabyteDB records as catalog changes. Services
   replay a transaction that meets a catalog-version error, so this shows as brief retries rather
   than failures.
+
+## Compacting tables
+
+YugabyteDB keeps a deleted or updated row on disk as a tombstone or an older version until a
+compaction rewrites the SST files that hold it. Background compactions do this eventually, but a
+table that churns through deletes, such as one pruned by retention, can stay large and slow to scan
+long after its rows are gone. `cluster yugabyte compact` runs a full compaction of such tables; do
+not run `yb-admin` or SQL by hand.
+
+1. List what would be compacted. The dry run reads the catalog, confirms each table id with the
+   masters, and prints every table with its distinct tablets, tablet replicas, SST files, and SST
+   size summed across replicas, largest first:
+
+   ```bash
+   frameworks cluster yugabyte compact --manifest <path> --database foghorn_eu --dry-run
+   ```
+
+2. Compact the whole database, or only the tables you name:
+
+   ```bash
+   frameworks cluster yugabyte compact --manifest <path> --database foghorn_eu
+   frameworks cluster yugabyte compact --manifest <path> --database foghorn_eu --table foghorn.domain_event_outbox
+   ```
+
+Each table is compacted on its own: the masters ask every tserver that holds a replica of one of its
+tablets to compact it, and the command waits until all of them finish before it starts the next
+table. It prints a line when a table starts, every 30 seconds while it runs, and when it finishes,
+with the duration and the SST size before and after. A table's secondary indexes are compacted right
+after it. In a colocated database, every colocated table shares one tablet, which is compacted once
+for all of them.
+
+<Aside type="caution" title="IO cost">
+  A full compaction reads and rewrites every replica of the table, raising disk IO and CPU on every
+  tserver that holds one and temporarily using up to the table's size in extra disk space. Run it
+  outside peak hours and check free disk space against the sizes the dry run prints.
+</Aside>
+
+- A table that does not finish within `--timeout` (one hour by default) stops the run, and the
+  remaining tables are listed as not started. Its compaction keeps running on the tservers; wait for
+  the SST size in a dry run to settle before compacting again.
+- Ctrl+C stops waiting and prints the tables that were not started. A compaction already requested
+  keeps running on the tservers.
+- Rows deleted more recently than the tservers' history retention
+  (`timestamp_history_retention_interval_sec`, 15 minutes by default) are kept, so compact after a
+  bulk delete has aged past it.
+- A database in the middle of a relayout is refused.

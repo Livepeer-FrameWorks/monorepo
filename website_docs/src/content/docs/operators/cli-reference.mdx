@@ -1226,6 +1226,36 @@ frameworks cluster yugabyte relayout finish --database <name> --yes
 
 Also inherits the [Cluster Manifest-Source Flags](#cluster-manifest-source-flags).
 
+### frameworks cluster yugabyte compact
+
+Run a full compaction of the tables of one YugabyteDB service database, one table at a time, so
+deleted rows and their tombstones leave the disk. Table ids are read from the database catalog and
+confirmed with the masters before anything runs; a `--table` that names no table, or more than one,
+refuses the whole run. Without `--table` every table and materialized view is compacted, largest
+first. Each table's secondary indexes are compacted with it, and the shared tablet of a colocated
+database is compacted once for all its colocated tables. The command prints the tables with their
+tablets, replicas, and SST size, then one line when each table starts and one when it finishes,
+with its duration and SST size before and after. See
+[Compacting tables](/operators/yugabyte-layout#compacting-tables).
+
+**Usage:**
+
+```bash
+frameworks cluster yugabyte compact --database <name> --dry-run
+frameworks cluster yugabyte compact --database <name> [--table <schema.table> ...] [--timeout 1h]
+```
+
+**Flags:**
+
+| Flag         | Default | Description                                                                                               |
+| ------------ | ------- | --------------------------------------------------------------------------------------------------------- |
+| `--database` |         | Physical database, such as `quartermaster` or `foghorn_eu`                                                |
+| `--table`    | all     | Table as `schema.table`, or a table name only one schema holds; repeatable                                |
+| `--timeout`  | `1h`    | Longest wait for one table. A table that runs out stops the run; its compaction continues on the tservers |
+| `--dry-run`  | `false` | List the tables with tablets, replicas, SST files, and size without compacting                            |
+
+Also inherits the [Cluster Manifest-Source Flags](#cluster-manifest-source-flags).
+
 ---
 
 ## Backup & Restore Commands
