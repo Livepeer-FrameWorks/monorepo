@@ -6,6 +6,7 @@ import (
 	"database/sql/driver"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -349,6 +350,9 @@ func TestCompleteVodUpload_StoredSizeMismatchFailsUpload(t *testing.T) {
 	s3 := &completeVodS3Stub{s3URL: "s3://bucket/vod/t1/hash-1/video.mp4", objectSize: 2}
 	srv, mock, cleanup := newCompleteVodServer(t, s3)
 	defer cleanup()
+	var kicks int32
+	control.SetOnCatalogDirty(func() { atomic.AddInt32(&kicks, 1) })
+	t.Cleanup(func() { control.SetOnCatalogDirty(nil) })
 
 	mock.ExpectQuery(`SELECT v\.artifact_hash, v\.s3_key, a\.size_bytes, a\.user_id, a\.status`).
 		WithArgs("up-1", mockTenantUUID).
@@ -391,6 +395,11 @@ func TestCompleteVodUpload_StoredSizeMismatchFailsUpload(t *testing.T) {
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet SQL expectations: %v", err)
+	}
+	// Staging v0.3.13-rc2: the failed upload stayed PROCESSING in the catalog
+	// until the reconciler's fallback pass, up to five minutes later.
+	if got := atomic.LoadInt32(&kicks); got != 1 {
+		t.Fatalf("catalog kicks = %d, want 1 so the failed upload is projected promptly", got)
 	}
 }
 

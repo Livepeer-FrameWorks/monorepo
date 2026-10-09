@@ -4157,6 +4157,10 @@ func (s *FoghornGRPCServer) CompleteVodUpload(ctx context.Context, req *sharedpb
 			s.logger.WithError(txErr).WithField("artifact_hash", artifactHash).Error("Failed to commit VOD size-mismatch failure state+event")
 			return nil, status.Errorf(codes.Internal, "failed to record upload failure: %v", txErr)
 		}
+		// The catalog shows the upload failed only once the artifact reconciler
+		// projects it; kick it now rather than leave it processing until the
+		// next unrelated pass.
+		control.NotifyCatalogDirty()
 		return nil, status.Error(codes.InvalidArgument, reason)
 	}
 
