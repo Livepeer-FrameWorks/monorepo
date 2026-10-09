@@ -33,32 +33,24 @@ func TestSentinelFailover_RealValkey(t *testing.T) {
 		_, _ = dockerpg.CLI("network", "rm", networkName)
 	})
 
-	startData := func(name string, replica bool) {
+	startData := func(name, primaryIP string) {
 		args := []string{"run", "-d", "--name", name, "--network", networkName, "-P", image,
 			"valkey-server", "--appendonly", "yes"}
-		if replica {
-			args = append(args, "--replicaof", dataNames[0], "6379")
+		if primaryIP != "" {
+			args = append(args, "--replicaof", primaryIP, "6379")
 		}
 		if out, runErr := dockerpg.Run(args...); runErr != nil {
 			t.Fatalf("start %s: %v\n%s", name, runErr, out)
 		}
 	}
-	startData(dataNames[0], false)
-	startData(dataNames[1], true)
-	startData(dataNames[2], true)
+	startData(dataNames[0], "")
 
-	// Monitor the primary by IP, not by container name.
-	//
-	// The failover this test exercises stops the primary's container, and Docker's
-	// embedded DNS drops a stopped container's name. With "resolve-hostnames yes"
-	// and a name in the monitor line, every Sentinel then fails to re-resolve the
-	// primary mid-failover ("Failed to resolve hostname ...-master") and the
-	// promotion never converges. Docker Desktop happens to keep resolving it, so
-	// the hostname form passes locally and fails on Linux CI. An IP cannot stop
-	// resolving, which leaves the container being down as the only variable —
-	// which is the condition under test.
+	// Docker removes the stopped primary's DNS entry. Replicas and Sentinels
+	// retain its IP so their failover connections do not depend on that entry.
 	primaryAddr := containerAddress(t, dataNames[0], "6379")
 	primaryIP := strings.TrimSuffix(primaryAddr, ":6379")
+	startData(dataNames[1], primaryIP)
+	startData(dataNames[2], primaryIP)
 
 	// Sentinel rewrites its configuration during failover. Create it inside a writable
 	// container tmpfs so the runtime UID owns the file on both Docker Desktop and Linux CI.
@@ -84,6 +76,14 @@ func TestSentinelFailover_RealValkey(t *testing.T) {
 		}
 		return true
 	}, "two connected replicas")
+
+	for _, replica := range dataNames[1:] {
+		role, roleErr := dockerpg.CLI("exec", replica, "valkey-cli", "--raw", "role")
+		fields := strings.Split(strings.TrimSpace(role), "\n")
+		if roleErr != nil || len(fields) < 2 || fields[1] != primaryIP {
+			t.Fatalf("replica upstream must retain the primary IP during failover: %s role=%q err=%v; want %s", replica, role, roleErr, primaryIP)
+		}
+	}
 
 	diagnostics := func() string {
 		return sentinelDiagnostics(dataNames, sentinelNames, "frameworks-master")
