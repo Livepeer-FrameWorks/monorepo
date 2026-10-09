@@ -109,7 +109,8 @@ func TestSummarizeChunksStreamError(t *testing.T) {
 func TestSummarizeChunksTimeout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Millisecond)
 	defer cancel()
-	time.Sleep(5 * time.Millisecond)
+	// Err stays nil until the timer has fired, however long the test sleeps.
+	<-ctx.Done()
 
 	provider := &mockProvider{err: ctx.Err()}
 	summarizer := NewLLMContextualSummarizer(provider, "test", "test-model")
