@@ -295,34 +295,34 @@
         {
           "key": "NETWORK_OBSERVER_URL",
           "type": "string",
-          "introduced": "v0.3.12",
+          "introduced": "v0.3.13",
           "description": "Observer inventory URL; enables public network REST API when configured."
         },
         {
           "key": "NETWORK_OBSERVER_SECRET",
           "type": "string",
           "secret": true,
-          "introduced": "v0.3.12",
+          "introduced": "v0.3.13",
           "description": "Shared internal observer inventory credential."
         },
         {
           "key": "NETWORK_PUBLIC_TENANT_IDS",
           "type": "list",
-          "introduced": "v0.3.12",
+          "introduced": "v0.3.13",
           "description": "Explicit platform-owned tenant scopes whose public Livepeer observations can be published."
         },
         {
           "key": "LIVEPEER_NETWORK_ID",
           "type": "string",
           "default": "42161",
-          "introduced": "v0.3.12",
+          "introduced": "v0.3.13",
           "description": "Livepeer production network namespace."
         },
         {
           "key": "NETWORK_OBSERVER_ENVIRONMENT",
           "type": "string",
           "default": "production",
-          "introduced": "v0.3.12",
+          "introduced": "v0.3.13",
           "description": "Network observation environment."
         },
         {
@@ -2900,21 +2900,21 @@
           "key": "NETWORK_OBSERVER_PORT",
           "type": "string",
           "default": "18024",
-          "introduced": "v0.3.12",
+          "introduced": "v0.3.13",
           "description": "HTTP port for observer ingest, assignments and candidate feeds."
         },
         {
           "key": "NETWORK_OBSERVER_TENANT_ID",
           "type": "string",
           "required": true,
-          "introduced": "v0.3.12",
+          "introduced": "v0.3.13",
           "description": "Server-owned platform tenant scope for inventory and prober observations."
         },
         {
           "key": "NETWORK_OBSERVER_CLUSTER_ID",
           "type": "string",
           "required": true,
-          "introduced": "v0.3.12",
+          "introduced": "v0.3.13",
           "description": "Platform cluster identity used for probe telemetry."
         },
         {
@@ -2922,35 +2922,35 @@
           "type": "string",
           "required": true,
           "secret": true,
-          "introduced": "v0.3.12",
+          "introduced": "v0.3.13",
           "description": "Shared bearer secret for trusted external probers and internal candidate readers."
         },
         {
           "key": "NETWORK_OBSERVERS_JSON",
           "type": "string",
           "default": "[]",
-          "introduced": "v0.3.12",
+          "introduced": "v0.3.13",
           "description": "JSON observer IDs, regions and optional locations; new shared-secret probers can register within the configured limit."
         },
         {
           "key": "NETWORK_OBSERVER_MAX_PROBERS",
           "type": "integer",
           "default": "32",
-          "introduced": "v0.3.12",
+          "introduced": "v0.3.13",
           "description": "Maximum trusted prober identities."
         },
         {
           "key": "NETWORK_OBSERVER_ENVIRONMENT",
           "type": "string",
           "default": "production",
-          "introduced": "v0.3.12",
+          "introduced": "v0.3.13",
           "description": "Observation environment; staging data remains separate."
         },
         {
           "key": "LIVEPEER_NETWORK_ID",
           "type": "string",
           "default": "42161",
-          "introduced": "v0.3.12",
+          "introduced": "v0.3.13",
           "description": "Expected production Livepeer chain ID, verified against the RPC."
         },
         {
@@ -2958,28 +2958,28 @@
           "type": "string",
           "required": true,
           "secret": true,
-          "introduced": "v0.3.12",
+          "introduced": "v0.3.13",
           "description": "Ethereum RPC URL for read-only production catalog discovery."
         },
         {
           "key": "LIVEPEER_CONTROLLER",
           "type": "string",
           "required": true,
-          "introduced": "v0.3.12",
+          "introduced": "v0.3.13",
           "description": "Livepeer controller contract used to resolve BondingManager and ServiceRegistry."
         },
         {
           "key": "NETWORK_CATALOG_INTERVAL_SECONDS",
           "type": "integer",
           "default": "900",
-          "introduced": "v0.3.12",
+          "introduced": "v0.3.13",
           "description": "Contract catalog refresh interval."
         },
         {
           "key": "DECKLOG_GRPC_ADDR",
           "type": "string",
           "required": true,
-          "introduced": "v0.3.12",
+          "introduced": "v0.3.13",
           "description": "Decklog telemetry ingest address."
         },
         {
@@ -2987,33 +2987,33 @@
           "type": "string",
           "required": true,
           "secret": true,
-          "introduced": "v0.3.12",
+          "introduced": "v0.3.13",
           "description": "Internal service token for Decklog."
         },
         {
           "key": "KAFKA_BROKERS",
           "type": "list",
           "required": true,
-          "introduced": "v0.3.12",
+          "introduced": "v0.3.13",
           "description": "Analytics Kafka brokers for gateway discoveries."
         },
         {
           "key": "KAFKA_CLUSTER_ID",
           "type": "string",
           "default": "local",
-          "introduced": "v0.3.12",
+          "introduced": "v0.3.13",
           "description": "Kafka cluster identifier."
         },
         {
           "key": "GEOIP_MMDB_PATH",
           "type": "string",
-          "introduced": "v0.3.12",
+          "introduced": "v0.3.13",
           "description": "Optional MMDB for endpoint/prober location lookup."
         },
         {
           "key": "NETWORK_OBSERVER_TRUSTED_PROXY_CIDRS",
           "type": "list",
-          "introduced": "v0.3.12",
+          "introduced": "v0.3.13",
           "description": "Trusted HTTPS ingress source CIDRs; only these peers may forward prober source IPs for automatic geography."
         }
       ]
@@ -3026,7 +3026,7 @@
           "key": "NETWORK_PROBER_PORT",
           "type": "string",
           "default": "18025",
-          "introduced": "v0.3.12",
+          "introduced": "v0.3.13",
           "description": "Local prober health and spool statistics HTTP port."
         },
         {
@@ -3040,7 +3040,7 @@
           "key": "NETWORK_OBSERVER_URL",
           "type": "string",
           "required": true,
-          "introduced": "v0.3.12",
+          "introduced": "v0.3.13",
           "description": "Verified HTTPS observer API, accessible from this external host."
         },
         {
@@ -3048,28 +3048,28 @@
           "type": "string",
           "required": true,
           "secret": true,
-          "introduced": "v0.3.12",
+          "introduced": "v0.3.13",
           "description": "Shared observer ingest bearer secret."
         },
         {
           "key": "NETWORK_PROBER_ID",
           "type": "string",
           "required": true,
-          "introduced": "v0.3.12",
+          "introduced": "v0.3.13",
           "description": "Stable prober ID; no CLI enrollment required."
         },
         {
           "key": "NETWORK_PROBER_REGION",
           "type": "string",
           "required": true,
-          "introduced": "v0.3.12",
+          "introduced": "v0.3.13",
           "description": "Prober vantage region."
         },
         {
           "key": "LIVEPEER_BROADCASTER_ADDRESS",
           "type": "string",
           "required": true,
-          "introduced": "v0.3.12",
+          "introduced": "v0.3.13",
           "description": "Public broadcaster address for discovery RPC authentication."
         },
         {
@@ -3077,49 +3077,49 @@
           "type": "string",
           "required": true,
           "secret": true,
-          "introduced": "v0.3.12",
+          "introduced": "v0.3.13",
           "description": "Hex signature over the broadcaster address using the Livepeer protocol."
         },
         {
           "key": "LIVEPEER_DISCOVERY_SKIP_TLS_VERIFY",
           "type": "boolean",
           "default": "true",
-          "introduced": "v0.3.12",
+          "introduced": "v0.3.13",
           "description": "Accept orchestrator self-signed certificates, matching Livepeer discovery; never changes coordinator TLS verification."
         },
         {
           "key": "NETWORK_PROBER_ALLOW_INSECURE",
           "type": "boolean",
           "default": "false",
-          "introduced": "v0.3.12",
+          "introduced": "v0.3.13",
           "description": "Allow HTTP coordinator only for isolated local testing."
         },
         {
           "key": "NETWORK_PROBER_SPOOL_DIR",
           "type": "string",
           "required": true,
-          "introduced": "v0.3.12",
+          "introduced": "v0.3.13",
           "description": "Private local durable observation spool directory."
         },
         {
           "key": "NETWORK_PROBER_SPOOL_MAX_BYTES",
           "type": "integer",
           "default": "67108864",
-          "introduced": "v0.3.12",
+          "introduced": "v0.3.13",
           "description": "Bounded spool byte capacity; overflow is visible in logs and heartbeat reports."
         },
         {
           "key": "NETWORK_PROBER_CONCURRENCY",
           "type": "integer",
           "default": "8",
-          "introduced": "v0.3.12",
+          "introduced": "v0.3.13",
           "description": "Maximum parallel DNS/discovery checks."
         },
         {
           "key": "NETWORK_PROBER_TIMEOUT_SECONDS",
           "type": "integer",
           "default": "10",
-          "introduced": "v0.3.12",
+          "introduced": "v0.3.13",
           "description": "Per DNS/RPC operation timeout."
         }
       ]
@@ -5168,49 +5168,49 @@
           "key": "LOOKOUT_OPS_SLACK_WEBHOOK_URL",
           "type": "string",
           "secret": true,
-          "introduced": "v0.3.12",
+          "introduced": "v0.3.13",
           "description": "Slack destination for platform incidents and operational activity. Re-read after env reload."
         },
         {
           "key": "LOOKOUT_OPS_DISCORD_WEBHOOK_URL",
           "type": "string",
           "secret": true,
-          "introduced": "v0.3.12",
+          "introduced": "v0.3.13",
           "description": "Discord destination for platform incidents and operational activity. Re-read after env reload."
         },
         {
           "key": "LOOKOUT_BUSINESS_PULSE_SLACK_WEBHOOK_URL",
           "type": "string",
           "secret": true,
-          "introduced": "v0.3.12",
+          "introduced": "v0.3.13",
           "description": "Slack destination for business pulse activity. Re-read after env reload."
         },
         {
           "key": "LOOKOUT_BUSINESS_PULSE_DISCORD_WEBHOOK_URL",
           "type": "string",
           "secret": true,
-          "introduced": "v0.3.12",
+          "introduced": "v0.3.13",
           "description": "Discord destination for business pulse activity. Re-read after env reload."
         },
         {
           "key": "LOOKOUT_NOTIFY_LEGACY_FALLBACK",
           "type": "boolean",
           "default": "true",
-          "introduced": "v0.3.12",
+          "introduced": "v0.3.13",
           "description": "Use shared webhook destinations for new notifications lacking a purpose destination. Existing queued legacy rows retain their destination."
         },
         {
           "key": "LOOKOUT_OPS_NOTIFICATIONS_DISABLED",
           "type": "boolean",
           "default": "false",
-          "introduced": "v0.3.12",
+          "introduced": "v0.3.13",
           "description": "Disable new ops notifications and purpose-specific deliveries without business fallback."
         },
         {
           "key": "LOOKOUT_BUSINESS_PULSE_NOTIFICATIONS_DISABLED",
           "type": "boolean",
           "default": "false",
-          "introduced": "v0.3.12",
+          "introduced": "v0.3.13",
           "description": "Disable new business pulse notifications and purpose-specific deliveries without ops fallback."
         },
         {

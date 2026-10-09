@@ -7,8 +7,8 @@ Bridge exposes the
 same projection at `GET /v1/network/livepeer`. The source is FrameWorks gateways and
 trusted external probers. This does not use Livepeer Studio's performance API.
 
-These platform changes target `v0.3.12` and require CLI `v0.3.12-rc1` or later.
-Existing clusters apply the `v0.3.12` ClickHouse expand migration. The new observer
+These platform changes target `v0.3.13` and require CLI `v0.3.13` or later.
+Existing clusters apply the `v0.3.13` ClickHouse expand migration. The new observer
 database is initialized from its baseline by the release's database bootstrap.
 
 ## Ownership
