@@ -16,7 +16,11 @@ SID=$(echo "$S" | jq -r '.id // empty')
 PB=$(echo "$S" | jq -r '.playbackId // empty')
 KEY=$(echo "$S" | jq -r '.streamKey // empty')
 [ -n "$SID" ] || { fail "createStream: $S"; finish; }
-PUB=$(publish "$EDGE_A_RTMP" "$KEY" 640x360 15 $((WINDOW + 120)))
+PUB=$(publish_until_admitted "$EDGE_A_RTMP" "$KEY" 640x360 15 $((WINDOW + 120))) || {
+  fail "setup publisher was not admitted"
+  delete_stream "$SID"
+  finish
+}
 trap 'kill "$PUB" 2>/dev/null; delete_stream "$SID"' EXIT
 
 # The stability window starts after both cells have imported the stream and

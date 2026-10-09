@@ -79,6 +79,49 @@ publishers_stopped() {
 }
 expect "unadmitted publishers are stopped" publishers_stopped
 
+placement_retries_refused_setup() (
+  trap - EXIT
+  rm -f "$work/pids" "$work/polls" "$work/session-queries"
+  PASS=0 FAIL=0 BLOCKED=0
+  export STACK_PLACEMENT_SECONDS=2
+  need() { return 0; }
+  log() { :; }
+  create_stream() { printf '%s\n' '{"id":"stream-1","playbackId":"playback-1","streamKey":"sk_fixture"}'; }
+  delete_stream() { :; }
+  pg() {
+    case "$2" in
+    *commodore.streams*) echo "internal-1" ;;
+    *foghorn.ingest_sessions*)
+      if [ "$(wc -l <"$work/pids" | tr -d ' ')" = 1 ]; then
+        kill "$(tail -n 1 "$work/pids")" 2>/dev/null
+      else
+        echo "generation-2"
+      fi
+      ;;
+    esac
+  }
+  media_at() { [ "$(wc -l <"$work/pids" | tr -d ' ')" -gt 1 ]; }
+  play_status() { if media_at; then echo 307; else echo 404; fi; }
+  curl() { printf '%s\n' '{"primary":{"rtmpUrl":"rtmp://edge/live"}} 200'; }
+  eventually() {
+    local what=$2
+    shift 2
+    "$@" || fail "$what"
+  }
+  # Keep the real scenario body and admission helper; stub only its network
+  # dependencies and omit the library bootstrap that would replace the stubs.
+  sed '\|^\. .*../lib\.sh"$|d' "$here/scenarios/01-placement.sh" >"$work/placement-scenario.sh"
+  . "$work/placement-scenario.sh"
+) >"$work/placement.log" 2>&1
+placement_setup_is_measured() {
+  if placement_retries_refused_setup && grep -qs '^PASS .*viewer resolve via' "$work/placement.log"; then
+    return 0
+  fi
+  tail -15 "$work/placement.log" >&2
+  return 1
+}
+expect "placement measures a live session after its first setup publisher is refused" placement_setup_is_measured
+
 if [ "$failures" -gt 0 ]; then
   echo "lib.sh checks: $failures failed"
   exit 1
