@@ -436,11 +436,12 @@ func TestArtifactDeletedCallbackUsesAuthenticatedNodeID(t *testing.T) {
 
 	got := make(chan *ipcpb.ArtifactDeleted, 1)
 	prevH := artifactDeletedHandler
-	artifactDeletedHandler = func(_ context.Context, del *ipcpb.ArtifactDeleted) {
+	artifactDeletedHandler = func(_ context.Context, del *ipcpb.ArtifactDeleted) error {
 		select {
 		case got <- del:
 		default:
 		}
+		return nil
 	}
 	t.Cleanup(func() { artifactDeletedHandler = prevH })
 	rearmed := make(chan struct {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -192,13 +193,38 @@ func processRecordDVRSegment(
 	}, logger)
 }
 
+// dvrSegmentReportOwner resolves the tenant owning dvrHash and checks that nodeID is its dispatched
+// recording node. ok=false with a nil error is a final rejection; an error is a lookup that did not
+// complete, so the report must be delivered again.
+func dvrSegmentReportOwner(ctx context.Context, dvrHash, segmentName, nodeID, report string, logger logging.Logger) (tenantID string, ok bool, err error) {
+	fields := logging.Fields{"dvr_hash": dvrHash, "segment_name": segmentName, "node_id": nodeID}
+	tenantID, found, ownErr := dvrOwnerTenant(ctx, dvrHash)
+	if ownErr != nil || !found {
+		logger.WithError(ownErr).WithFields(fields).Warn("Ignoring DVR segment " + report + ": no tenant-owned DVR row for hash (or lookup failed)")
+		if ownErr != nil {
+			return "", false, fmt.Errorf("resolve dvr owner tenant: %w", ownErr)
+		}
+		return "", false, nil
+	}
+	authorized, chkErr := dvrReportNodeAuthorized(ctx, dvrHash, tenantID, nodeID, dvrAuthStrict)
+	if chkErr != nil || !authorized {
+		logger.WithError(chkErr).WithFields(fields).Warn("Ignoring DVR segment " + report + ": reporting node is not the dispatched recording owner (or lookup failed)")
+		if chkErr != nil {
+			return "", false, fmt.Errorf("verify dvr segment reporting node: %w", chkErr)
+		}
+		return "", false, nil
+	}
+	return tenantID, true, nil
+}
+
 // processMarkDVRSegmentUploaded transitions a ledger row to 'uploaded' after
-// the sidecar's S3 PUT confirmed.
-func processMarkDVRSegmentUploaded(req *ipcpb.MarkDVRSegmentUploaded, nodeID string, logger logging.Logger) {
+// the sidecar's S3 PUT confirmed. An error means the ledger was not updated
+// and the report must be delivered again.
+func processMarkDVRSegmentUploaded(req *ipcpb.MarkDVRSegmentUploaded, nodeID string, logger logging.Logger) error {
 	dvrHash := req.GetDvrHash()
 	segmentName := req.GetSegmentName()
 	if dvrHash == "" || segmentName == "" {
-		return
+		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -206,48 +232,37 @@ func processMarkDVRSegmentUploaded(req *ipcpb.MarkDVRSegmentUploaded, nodeID str
 	// dispatched recording owner. The ledger mutation keys on (artifact_hash, segment_name), so both the
 	// owner check and the mutation are scoped to the tenant-owned parent. A non-owner reporting an upload
 	// for another node's recording is rejected with no mutation; a hash with no local DVR row is refused.
-	tenantID, found, ownErr := dvrOwnerTenant(ctx, dvrHash)
-	if ownErr != nil || !found {
-		logger.WithError(ownErr).WithFields(logging.Fields{
-			"dvr_hash":     dvrHash,
-			"segment_name": segmentName,
-			"node_id":      nodeID,
-		}).Warn("Ignoring DVR segment uploaded: no tenant-owned DVR row for hash (or lookup failed)")
-		return
+	tenantID, ok, err := dvrSegmentReportOwner(ctx, dvrHash, segmentName, nodeID, "uploaded", logger)
+	if !ok {
+		return err
 	}
-	if authorized, chkErr := dvrReportNodeAuthorized(ctx, dvrHash, tenantID, nodeID, dvrAuthStrict); chkErr != nil || !authorized {
-		logger.WithError(chkErr).WithFields(logging.Fields{
-			"dvr_hash":     dvrHash,
-			"segment_name": segmentName,
-			"node_id":      nodeID,
-		}).Warn("Ignoring DVR segment uploaded: reporting node is not the dispatched recording owner (or lookup failed)")
-		return
-	}
-	if err := MarkDVRSegmentUploaded(ctx, tenantID, dvrHash, segmentName, int64(req.GetSizeBytes())); err != nil {
-		logger.WithError(err).WithFields(logging.Fields{
+	if markErr := MarkDVRSegmentUploaded(ctx, tenantID, dvrHash, segmentName, int64(req.GetSizeBytes())); markErr != nil {
+		logger.WithError(markErr).WithFields(logging.Fields{
 			"dvr_hash":     dvrHash,
 			"segment_name": segmentName,
 			"node_id":      nodeID,
 		}).Error("Failed to mark DVR segment uploaded")
-		return
+		return fmt.Errorf("mark dvr segment uploaded: %w", markErr)
 	}
 	count, size, err := DVRSegmentProgress(ctx, tenantID, dvrHash)
 	if err != nil {
 		logger.WithError(err).WithField("dvr_hash", dvrHash).Warn("Failed to aggregate DVR segment progress")
-		return
+		return nil
 	}
 	publishDVRSegmentProgress(ctx, dvrHash, "recording", count, size, nodeID, logger)
+	return nil
 }
 
 // processDVRSegmentDropped records a sidecar-reported eviction. was_uploaded
 // distinguishes safe local cleanup (deleted_local; chapter finalization
 // recovers from S3) from data loss (lost_local; chapters overlapping the
-// row transition to failed_source_missing).
-func processDVRSegmentDropped(req *ipcpb.DVRSegmentDropped, nodeID string, logger logging.Logger) {
+// row transition to failed_source_missing). An error means the ledger was
+// not updated and the report must be delivered again.
+func processDVRSegmentDropped(req *ipcpb.DVRSegmentDropped, nodeID string, logger logging.Logger) error {
 	dvrHash := req.GetDvrHash()
 	segmentName := req.GetSegmentName()
 	if dvrHash == "" || segmentName == "" {
-		return
+		return nil
 	}
 	reason := req.GetReason()
 	if reason == "" {
@@ -258,22 +273,9 @@ func processDVRSegmentDropped(req *ipcpb.DVRSegmentDropped, nodeID string, logge
 	// Same tenant-scoped owner gate as the uploaded path: the mutation keys on (artifact_hash,
 	// segment_name), so a non-owner reporting a drop for another node's recording is rejected with no
 	// mutation, and a hash with no local DVR row is refused. Fail closed on the owner-lookup query error.
-	tenantID, found, ownErr := dvrOwnerTenant(ctx, dvrHash)
-	if ownErr != nil || !found {
-		logger.WithError(ownErr).WithFields(logging.Fields{
-			"dvr_hash":     dvrHash,
-			"segment_name": segmentName,
-			"node_id":      nodeID,
-		}).Warn("Ignoring DVR segment dropped: no tenant-owned DVR row for hash (or lookup failed)")
-		return
-	}
-	if authorized, chkErr := dvrReportNodeAuthorized(ctx, dvrHash, tenantID, nodeID, dvrAuthStrict); chkErr != nil || !authorized {
-		logger.WithError(chkErr).WithFields(logging.Fields{
-			"dvr_hash":     dvrHash,
-			"segment_name": segmentName,
-			"node_id":      nodeID,
-		}).Warn("Ignoring DVR segment dropped: reporting node is not the dispatched recording owner (or lookup failed)")
-		return
+	tenantID, ok, err := dvrSegmentReportOwner(ctx, dvrHash, segmentName, nodeID, "dropped", logger)
+	if !ok {
+		return err
 	}
 	changed, err := MarkDVRSegmentDropped(
 		ctx, tenantID, dvrHash, segmentName, reason, req.GetWasUploaded(),
@@ -287,7 +289,7 @@ func processDVRSegmentDropped(req *ipcpb.DVRSegmentDropped, nodeID string, logge
 			"reason":       reason,
 			"node_id":      nodeID,
 		}).Error("Failed to mark DVR segment dropped")
-		return
+		return fmt.Errorf("mark dvr segment dropped: %w", err)
 	}
 	if !changed {
 		// The segment is already uploaded, reclaimed or recorded as dropped;
@@ -299,7 +301,7 @@ func processDVRSegmentDropped(req *ipcpb.DVRSegmentDropped, nodeID string, logge
 			"was_uploaded": req.GetWasUploaded(),
 			"node_id":      nodeID,
 		}).Debug("DVR segment drop changed nothing: segment already uploaded or terminal")
-		return
+		return nil
 	}
 	if !req.GetWasUploaded() {
 		// lost_local with was_uploaded=false is the data-loss case;
@@ -314,6 +316,7 @@ func processDVRSegmentDropped(req *ipcpb.DVRSegmentDropped, nodeID string, logge
 			"node_id":      nodeID,
 		}).Warn("DVR segment lost before S3 upload; chapter finalization may degrade")
 	}
+	return nil
 }
 
 // processEvictableSegmentsRequest answers an authoritative "which segments

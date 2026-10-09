@@ -25,10 +25,35 @@ progress, cache-update observations, and storage lifecycle telemetry are live
 samples and are dropped while disconnected; they must never evict terminal
 transitions from a bounded retry queue.
 
-Unlike the Mist-trigger WAL below, the media-control outbox generally has no
-application-level acknowledgement. A successful send moves a row to an in-flight
-state stamped with the current connection epoch; only a later heartbeat on that
-same epoch confirms removal, while reconnect replays every older unconfirmed row.
+A successful send only means the frame reached a local socket buffer, so it moves
+a row to an in-flight state stamped with the current connection epoch, and every
+send carries the row's `durable_delivery_id` (its file name, the same on every
+resend and across Helmsman restarts). Reconnect returns every in-flight row of an
+older epoch to pending and replays it. How an in-flight row is confirmed is
+negotiated per connection from the first message Foghorn sends on it:
+
+- Foghorn sends `ControlCapabilities{durable_delivery_acks}` before it reads
+  Register. Helmsman then deletes a row only when Foghorn's
+  `DurableDeliveryAck` for its id reports success. Foghorn sends that ack after
+  the message's handler returns: the effect committed, the report was final
+  (rejected, stale or duplicate), or the remaining retry belongs to Foghorn's own
+  durable state (a thumbnail or sync attempt left for its recovery reconciler, a
+  chapter finalize attempt). A handler whose database write did not commit
+  answers `success=false`; Helmsman returns the row to pending and resends it
+  after 10 seconds. A Foghorn that dies without closing the socket never acks,
+  so its rows survive until the next instance acknowledges them.
+- Any other first message means a Foghorn that predates acks: a heartbeat sent
+  after the row confirms it, as before.
+- Until Foghorn's first message arrives, no row is confirmed. The decision rests
+  on stream order, never on how long Foghorn takes to answer.
+
+A Helmsman that predates acks sends no delivery id and ignores
+`ControlCapabilities`; Foghorn handles its messages without acknowledging them.
+Within one Foghorn instance, a resend of a row still being handled waits for that
+handling's outcome, and a resend of a row acknowledged in the last 10 minutes is
+acknowledged without running the handler again (keyed by node and delivery id).
+Across instances, deduplication is each handler's own replay safety against
+Foghorn's durable state (attempt and owner fences, guarded status transitions).
 Config-seed apply results add a second durable boundary: Foghorn does not accept
 the stream message until it has stored the latest per-node result in its local
 `config_seed_apply_ack_outbox`. Navigator delivery then retries from that table,

@@ -77,6 +77,8 @@ type streamConn struct {
 	// ended is closed once this connection's stream has ended; a wait for a reply to something
 	// sent on it ends with it.
 	ended chan struct{}
+	// delivery is how this connection confirms durable outbox rows; see durable_delivery.go.
+	delivery *durableDeliveryContract
 }
 
 // lockedClientStream serializes Send on the single Helmsman→Foghorn control
@@ -481,7 +483,7 @@ func storeConn(stream ipcpb.HelmsmanControl_ConnectClient, nodeID string) *strea
 }
 
 func newStreamConn(stream ipcpb.HelmsmanControl_ConnectClient, nodeID string) *streamConn {
-	return &streamConn{stream: stream, nodeID: nodeID, epoch: uuid.NewString(), ended: make(chan struct{})}
+	return &streamConn{stream: stream, nodeID: nodeID, epoch: uuid.NewString(), ended: make(chan struct{}), delivery: newDurableDeliveryContract()}
 }
 
 func publishConn(conn *streamConn) {
@@ -492,7 +494,7 @@ func updateConnNodeID(conn *streamConn, nodeID string) {
 	if conn == nil || strings.TrimSpace(nodeID) == "" {
 		return
 	}
-	updated := &streamConn{stream: conn.stream, nodeID: nodeID, epoch: conn.epoch, ended: conn.ended}
+	updated := &streamConn{stream: conn.stream, nodeID: nodeID, epoch: conn.epoch, ended: conn.ended, delivery: conn.delivery}
 	activeConn.CompareAndSwap(conn, updated)
 }
 
@@ -533,7 +535,7 @@ var (
 	maxOutbox = 100
 
 	// Serializes durable-file transitions (.pb pending -> .sent in flight ->
-	// removal after a later successful exchange).
+	// removal once the connection's delivery contract confirms the row).
 	durableOutboxMu           sync.Mutex
 	durableOutboxReadFile     = os.ReadFile
 	durableOutboxReadFailures = make(map[string]int)
@@ -1365,7 +1367,12 @@ func drainDurableOutboxForConnection(conn *streamConn) error {
 			delete(durableOutboxReadFailures, path)
 		}
 	}
+	now := time.Now()
 	for _, path := range files {
+		deliveryID := durableDeliveryIDForPath(path)
+		if durableOutboxRetryDeferredLocked(deliveryID, now) {
+			continue
+		}
 		payload, readErr := durableOutboxReadFile(path)
 		if readErr != nil {
 			ControlOutboxScanErrors.WithLabelValues("drain_read").Inc()
@@ -1407,6 +1414,7 @@ func drainDurableOutboxForConnection(conn *streamConn) error {
 		if msg.GetSentAt() == nil {
 			msg.SentAt = timestamppb.Now()
 		}
+		msg.DurableDeliveryId = deliveryID
 		if sendErr := conn.stream.Send(&msg); sendErr != nil {
 			if pkgLogger != nil {
 				pkgLogger.WithError(sendErr).WithField("path", path).Warn("Failed to drain durable control outbox")
@@ -1415,8 +1423,8 @@ func drainDurableOutboxForConnection(conn *streamConn) error {
 		}
 		ControlDeliveryOutcomes.WithLabelValues("durable", "sent").Inc()
 		// A successful Send is not an application ack. Preserve the row in an
-		// in-flight state until a later heartbeat proves the connection remained
-		// usable; reconnect converts unconfirmed rows back to pending.
+		// in-flight state until the connection's delivery contract confirms it;
+		// reconnect converts unconfirmed rows back to pending.
 		inflightPath := path + ".sent." + conn.epoch
 		if _, statErr := os.Stat(inflightPath); statErr == nil {
 			return fmt.Errorf("durable control outbox in-flight collision: %s", inflightPath)
@@ -1516,6 +1524,9 @@ func confirmDurableOutboxSendsLocked(epoch string) error {
 	return err
 }
 
+// sendHeartbeatAndConfirmDurableOutbox sends a heartbeat and, only on a
+// connection to a Foghorn without delivery acks, confirms the rows sent before
+// it. With acks, or before the contract is known, rows wait for their ack.
 func sendHeartbeatAndConfirmDurableOutbox(conn *streamConn, msg *ipcpb.ControlMessage) error {
 	if conn == nil || conn.stream == nil || strings.TrimSpace(conn.epoch) == "" {
 		return errors.New("durable confirmation requires a connection epoch")
@@ -1531,6 +1542,9 @@ func sendHeartbeatAndConfirmDurableOutbox(conn *streamConn, msg *ipcpb.ControlMe
 	}
 	if err := conn.stream.Send(msg); err != nil {
 		return err
+	}
+	if conn.delivery.current() != durableContractHeartbeat {
+		return nil
 	}
 	return confirmDurableOutboxSendsLocked(conn.epoch)
 }
@@ -2017,8 +2031,7 @@ func runClient(endpoint controlEndpoint, logger logging.Logger) error {
 		notifyDisconnect()
 	}()
 
-	// Heartbeat ticker
-	hbTicker := time.NewTicker(30 * time.Second)
+	hbTicker := time.NewTicker(controlHeartbeatInterval)
 	defer hbTicker.Stop()
 
 	// Receive loop and heartbeat sender
@@ -2034,7 +2047,10 @@ func runClient(endpoint controlEndpoint, logger logging.Logger) error {
 				}
 				return
 			}
+			connection.delivery.observe(msg)
 			switch x := msg.GetPayload().(type) {
+			case *ipcpb.ControlMessage_DurableDeliveryAck:
+				go handleDurableDeliveryAck(connection, x.DurableDeliveryAck)
 			case *ipcpb.ControlMessage_DvrStartRequest:
 				go handleDVRStart(logger, x.DvrStartRequest, func(m *ipcpb.ControlMessage) {
 					if err := sendControlMessage(m); err != nil {
@@ -2305,8 +2321,8 @@ func runClient(endpoint controlEndpoint, logger logging.Logger) error {
 			}); err != nil {
 				return fmt.Errorf("heartbeat send or durable confirmation: %w", err)
 			}
-			// Make a pass over rows persisted since the reconnect edge; these
-			// remain in-flight until the next successful heartbeat.
+			// Make a pass over rows persisted since the reconnect edge and rows
+			// Foghorn refused; these remain in flight until confirmed.
 			if err := drainDurableOutboxForConnection(connection); err != nil {
 				logger.WithError(err).Warn("Durable control outbox remains pending")
 			}

@@ -1573,6 +1573,9 @@ func (s *Server) Connect(stream ipcpb.HelmsmanControl_ConnectServer) error {
 	// downstream use (conn.stream storage, stream-identity comparisons, handler
 	// dispatch) shares this one wrapper, so all sends funnel through its mutex.
 	stream = &lockedStream{HelmsmanControl_ConnectServer: stream}
+	if err := announceControlCapabilities(stream); err != nil {
+		return err
+	}
 	var nodeID string
 	// connFence is the ownership fence issued to THIS control connection at Register. It is captured
 	// per-Connect-invocation, so a stale older connection's goroutine-dispatched handlers stamp the
@@ -2203,9 +2206,12 @@ receiveLoop:
 					x.ArtifactDeleted.DeletedAtMs = msg.GetSentAt().AsTime().UnixMilli()
 				}
 			}
-			if x.ArtifactDeleted != nil {
-				go artifactDeletedHandler(context.Background(), x.ArtifactDeleted)
-			}
+			dispatchDurableDelivery(stream, connSession.NodeID(), msg.GetDurableDeliveryId(), func() error {
+				if x.ArtifactDeleted == nil {
+					return nil
+				}
+				return artifactDeletedHandler(context.Background(), x.ArtifactDeleted)
+			})
 		case *ipcpb.ControlMessage_Heartbeat:
 			if nodeID != "" {
 				canonicalNodeID := nodeID
@@ -2279,7 +2285,9 @@ receiveLoop:
 			go processDVRProgress(x.DvrProgress, connSession, registry.log)
 		case *ipcpb.ControlMessage_DvrStopped:
 			// Handle DVR completion from storage Helmsman
-			go processDVRStopped(x.DvrStopped, connSession, msg.GetSentAt(), registry.log)
+			dispatchDurableDelivery(stream, connSession.NodeID(), msg.GetDurableDeliveryId(), func() error {
+				return processDVRStopped(x.DvrStopped, connSession, msg.GetSentAt(), registry.log)
+			})
 		case *ipcpb.ControlMessage_MistTrigger:
 			// Handle MistServer trigger forwarding from Helmsman
 			incMistTrigger(x.MistTrigger.GetTriggerType(), x.MistTrigger.GetBlocking(), "received")
@@ -2462,11 +2470,15 @@ receiveLoop:
 			if msg.GetSentAt() != nil {
 				nodeClockCompletedAtMs = msg.GetSentAt().AsTime().UnixMilli()
 			}
-			go processSyncCompleteAt(x.SyncComplete, connSession.NodeID(), nodeClockCompletedAtMs, registry.log)
+			dispatchDurableDelivery(stream, connSession.NodeID(), msg.GetDurableDeliveryId(), func() error {
+				return processSyncCompleteAt(x.SyncComplete, connSession.NodeID(), nodeClockCompletedAtMs, registry.log)
+			})
 		case *ipcpb.ControlMessage_ModeChangeRequest:
 			go processModeChangeRequest(x.ModeChangeRequest, connSession.NodeID(), stream, registry.log)
 		case *ipcpb.ControlMessage_UpdateApplyResult:
-			go processUpdateApplyResult(x.UpdateApplyResult, connSession.NodeID(), registry.log)
+			dispatchDurableDelivery(stream, connSession.NodeID(), msg.GetDurableDeliveryId(), func() error {
+				return processUpdateApplyResult(x.UpdateApplyResult, connSession.NodeID(), registry.log)
+			})
 		case *ipcpb.ControlMessage_ValidateEdgeTokenRequest:
 			go processValidateEdgeToken(msg.GetRequestId(), x.ValidateEdgeTokenRequest, connSession.NodeID(), stream, registry.log)
 		case *ipcpb.ControlMessage_EdgeMistAdminSessionRequest:
@@ -2475,9 +2487,14 @@ receiveLoop:
 			if x.ProcessingJobResult.GetStatus() == "cache_update" {
 				// Refresh cached overrides before returning so the restarted push
 				// reads the latest value from Helmsman.
-				processProcessingJobResult(x.ProcessingJobResult, connSession.NodeID(), registry.log)
+				// A cache observation is ephemeral and never carries a delivery id.
+				if err := processProcessingJobResult(x.ProcessingJobResult, connSession.NodeID(), registry.log); err != nil {
+					registry.log.WithError(err).WithField("node_id", connSession.NodeID()).Debug("Processing cache update did not commit")
+				}
 			} else {
-				go processProcessingJobResult(x.ProcessingJobResult, connSession.NodeID(), registry.log)
+				dispatchDurableDelivery(stream, connSession.NodeID(), msg.GetDurableDeliveryId(), func() error {
+					return processProcessingJobResult(x.ProcessingJobResult, connSession.NodeID(), registry.log)
+				})
 			}
 		case *ipcpb.ControlMessage_ProcessingJobProgress:
 			go processProcessingJobProgress(x.ProcessingJobProgress, connSession.NodeID(), registry.log)
@@ -2486,13 +2503,23 @@ receiveLoop:
 		case *ipcpb.ControlMessage_ThumbnailUploadRequest:
 			go processThumbnailUploadRequest(msg.GetRequestId(), x.ThumbnailUploadRequest, connSession.NodeID(), connProtocolVersion, stream, registry.log)
 		case *ipcpb.ControlMessage_ThumbnailUploaded:
-			go processThumbnailUploaded(x.ThumbnailUploaded, connSession.NodeID(), registry.log)
+			// Every exit of a thumbnail completion either publishes or leaves the
+			// durable attempt to the recovery reconciler, so it is acknowledged
+			// once handled.
+			dispatchDurableDelivery(stream, connSession.NodeID(), msg.GetDurableDeliveryId(), func() error {
+				processThumbnailUploaded(x.ThumbnailUploaded, connSession.NodeID(), registry.log)
+				return nil
+			})
 		case *ipcpb.ControlMessage_RecordDvrSegmentRequest:
 			go processRecordDVRSegment(x.RecordDvrSegmentRequest, connSession.NodeID(), stream, registry.log)
 		case *ipcpb.ControlMessage_MarkDvrSegmentUploaded:
-			go processMarkDVRSegmentUploaded(x.MarkDvrSegmentUploaded, connSession.NodeID(), registry.log)
+			dispatchDurableDelivery(stream, connSession.NodeID(), msg.GetDurableDeliveryId(), func() error {
+				return processMarkDVRSegmentUploaded(x.MarkDvrSegmentUploaded, connSession.NodeID(), registry.log)
+			})
 		case *ipcpb.ControlMessage_DvrSegmentDropped:
-			go processDVRSegmentDropped(x.DvrSegmentDropped, connSession.NodeID(), registry.log)
+			dispatchDurableDelivery(stream, connSession.NodeID(), msg.GetDurableDeliveryId(), func() error {
+				return processDVRSegmentDropped(x.DvrSegmentDropped, connSession.NodeID(), registry.log)
+			})
 		case *ipcpb.ControlMessage_EvictableSegmentsRequest:
 			go processEvictableSegmentsRequest(x.EvictableSegmentsRequest, connSession.NodeID(), stream, registry.log)
 		case *ipcpb.ControlMessage_RestoreLocalSegmentIndexRequest:
@@ -2509,6 +2536,11 @@ receiveLoop:
 					registry.log.WithError(err).WithField("node_id", connSession.NodeID()).Error("Failed to durably accept ConfigSeed apply ACK")
 					return status.Error(codes.Unavailable, "ConfigSeed apply ACK persistence failed")
 				}
+			}
+			// Persisted (or empty): acknowledged off the receive loop, which
+			// must not block on a Send to a Helmsman that is not reading.
+			if id := msg.GetDurableDeliveryId(); id != "" {
+				go sendDurableDeliveryAck(stream, id, nil)
 			}
 		}
 	}
@@ -5001,8 +5033,9 @@ func processDVRProgress(progress *ipcpb.DVRProgress, session NodeSession, logger
 	}
 }
 
-// processDVRStopped handles DVR completion from storage Helmsman
-func processDVRStopped(stopped *ipcpb.DVRStopped, session NodeSession, sentAt *timestamppb.Timestamp, logger logging.Logger) {
+// processDVRStopped handles DVR completion from storage Helmsman. It returns once the report is
+// settled; an error means a database step did not commit and the report must be delivered again.
+func processDVRStopped(stopped *ipcpb.DVRStopped, session NodeSession, sentAt *timestamppb.Timestamp, logger logging.Logger) error {
 	// FinalizeDVR binds the completion to the dispatched recording node (ReportingNodeID); that owner is the
 	// canonical id, so authorize/attribute against the authenticated session, never the raw registry key.
 	storageNodeID := session.NodeID()
@@ -5021,6 +5054,9 @@ func processDVRStopped(stopped *ipcpb.DVRStopped, session NodeSession, sentAt *t
 		"size_bytes":       sizeBytes,
 		"error":            errorMsg,
 	}).Info("DVR recording completed")
+	if dvrHash == "" {
+		return nil
+	}
 
 	// Sidecar reports its local view; Foghorn drives the canonical state
 	// machine through FinalizeDVR(). The "stopped" alias maps to "completed"
@@ -5040,7 +5076,9 @@ func processDVRStopped(stopped *ipcpb.DVRStopped, session NodeSession, sentAt *t
 		if sentAt != nil {
 			deletion.DeletedAtMs = sentAt.AsTime().UnixMilli()
 		}
-		artifactDeletedHandler(streamCtx(), deletion)
+		if err := artifactDeletedHandler(streamCtx(), deletion); err != nil {
+			return err
+		}
 
 		// Bind the deleted report to the dispatched recording node (the finalize branch below is bound
 		// inside FinalizeDVR via ReportingNodeID). A report from any other node for an existing recording
@@ -5051,13 +5089,17 @@ func processDVRStopped(stopped *ipcpb.DVRStopped, session NodeSession, sentAt *t
 		if ownErr != nil {
 			logger.WithError(ownErr).WithFields(logging.Fields{"dvr_hash": dvrHash, "reporting_node": storageNodeID}).
 				Warn("Ignoring DVRStopped(deleted): owner-tenant lookup failed; failing closed")
-			return
+			return fmt.Errorf("resolve dvr owner tenant: %w", ownErr)
 		}
 		if found {
-			if ok, chkErr := dvrReportNodeAuthorized(streamCtx(), dvrHash, tenantID, storageNodeID, dvrAuthIdempotentStop); chkErr != nil || !ok {
+			ok, chkErr := dvrReportNodeAuthorized(streamCtx(), dvrHash, tenantID, storageNodeID, dvrAuthIdempotentStop)
+			if chkErr != nil || !ok {
 				logger.WithError(chkErr).WithFields(logging.Fields{"dvr_hash": dvrHash, "reporting_node": storageNodeID}).
 					Warn("Ignoring DVRStopped(deleted): reporting node is not the dispatched recording owner (or lookup failed)")
-				return
+				if chkErr != nil {
+					return fmt.Errorf("verify dvr delete reporting node: %w", chkErr)
+				}
+				return nil
 			}
 		}
 		if applyErr := state.DefaultManager().ApplyDVRStopped(streamCtx(), dvrHash, "deleted", int64(durationSeconds), uint64(sizeBytes), manifestPath, errorMsg, storageNodeID); applyErr != nil {
@@ -5065,7 +5107,7 @@ func processDVRStopped(stopped *ipcpb.DVRStopped, session NodeSession, sentAt *t
 		}
 		// The authoritative DELETED lifecycle event is emitted in-transaction by SoftDeleteDVRAndChapters
 		// (the deletion path), so a sidecar 'deleted' report does NOT emit a second, duplicate event.
-		return
+		return nil
 	}
 
 	// Drive the idempotent finalize transition. FinalizeDVR retries bounded
@@ -5073,39 +5115,42 @@ func processDVRStopped(stopped *ipcpb.DVRStopped, session NodeSession, sentAt *t
 	// chapter as VOD, and transitions the artifact to a terminal state. The
 	// sidecar's status field here is advisory; Foghorn's classification is
 	// authoritative.
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-		defer cancel()
-		unrecordedSession := detachEndedWriterFromLiveSession(ctx, dvrHash, logger)
-		final, err := FinalizeDVR(ctx, dvrHash, FinalizeOptions{
-			ReportedStatus:  status,
-			StartedAtUnix:   stopped.GetStartedAt(),
-			ReportedError:   errorMsg,
-			DurationSeconds: int64(durationSeconds),
-			SizeBytes:       uint64(sizeBytes),
-			StorageNodeID:   storageNodeID,
-			ReportingNodeID: storageNodeID,
-		})
-		if err != nil {
-			if final.ArtifactStatus == "" {
-				logger.WithError(err).WithField("dvr_hash", dvrHash).Error("FinalizeDVR failed")
-				return
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	unrecordedSession := detachEndedWriterFromLiveSession(ctx, dvrHash, logger)
+	final, err := FinalizeDVR(ctx, dvrHash, FinalizeOptions{
+		ReportedStatus:  status,
+		StartedAtUnix:   stopped.GetStartedAt(),
+		ReportedError:   errorMsg,
+		DurationSeconds: int64(durationSeconds),
+		SizeBytes:       uint64(sizeBytes),
+		StorageNodeID:   storageNodeID,
+		ReportingNodeID: storageNodeID,
+	})
+	if err != nil {
+		if final.ArtifactStatus == "" {
+			logger.WithError(err).WithField("dvr_hash", dvrHash).Error("FinalizeDVR failed")
+			// A rejected report (NoOp) is final; anything else did not commit.
+			if final.NoOp {
+				return nil
 			}
-			logger.WithError(err).WithFields(logging.Fields{
-				"dvr_hash":     dvrHash,
-				"final_status": final.ArtifactStatus,
-			}).Warn("FinalizeDVR completed with follow-up error")
+			return fmt.Errorf("finalize dvr: %w", err)
 		}
-		if applyErr := state.DefaultManager().ApplyDVRStopped(streamCtx(), dvrHash, final.ArtifactStatus, int64(durationSeconds), uint64(sizeBytes), final.ManifestPath, errorMsg, storageNodeID); applyErr != nil {
-			logger.WithError(applyErr).WithField("dvr_hash", dvrHash).Warn("ApplyDVRStopped after FinalizeDVR failed")
-		}
-		// The terminal DVR STOPPED lifecycle event is enqueued INSIDE FinalizeDVR's transaction (durable,
-		// atomic with the terminal state) — no separate crash-lossy callback here.
-		// The fresh recording starts once the ended one is settled, so the two never overlap.
-		if unrecordedSession != "" && unrecordedSessionHandler != nil {
-			unrecordedSessionHandler(unrecordedSession)
-		}
-	}()
+		logger.WithError(err).WithFields(logging.Fields{
+			"dvr_hash":     dvrHash,
+			"final_status": final.ArtifactStatus,
+		}).Warn("FinalizeDVR completed with follow-up error")
+	}
+	if applyErr := state.DefaultManager().ApplyDVRStopped(streamCtx(), dvrHash, final.ArtifactStatus, int64(durationSeconds), uint64(sizeBytes), final.ManifestPath, errorMsg, storageNodeID); applyErr != nil {
+		logger.WithError(applyErr).WithField("dvr_hash", dvrHash).Warn("ApplyDVRStopped after FinalizeDVR failed")
+	}
+	// The terminal DVR STOPPED lifecycle event is enqueued INSIDE FinalizeDVR's transaction (durable,
+	// atomic with the terminal state) — no separate crash-lossy callback here.
+	// The fresh recording starts once the ended one is settled, so the two never overlap.
+	if unrecordedSession != "" && unrecordedSessionHandler != nil {
+		unrecordedSessionHandler(unrecordedSession)
+	}
+	return nil
 }
 
 // unrecordedSessionHandler starts a fresh recording for a live session whose recording
@@ -6559,7 +6604,9 @@ func processModeChangeRequest(req *ipcpb.ModeChangeRequest, nodeID string, _ ipc
 	}
 }
 
-func processUpdateApplyResult(result *ipcpb.UpdateApplyResult, fallbackNodeID string, log logging.Logger) {
+// processUpdateApplyResult records a node's component update outcome. persistErr is set when the update
+// state could not be read or written, so the result must be delivered again; a rejected result is final.
+func processUpdateApplyResult(result *ipcpb.UpdateApplyResult, fallbackNodeID string, log logging.Logger) (persistErr error) {
 	if result == nil {
 		return
 	}
@@ -6611,7 +6658,7 @@ func processUpdateApplyResult(result *ipcpb.UpdateApplyResult, fallbackNodeID st
 		if log != nil {
 			log.WithError(updateStateErr).WithField("node_id", nodeID).Warn("Rejected node update apply result because update state could not be loaded")
 		}
-		return
+		return fmt.Errorf("load node update state: %w", updateStateErr)
 	}
 	if !foundUpdateState || updateState.TargetRelease == "" || targetRelease == "" || targetRelease != updateState.TargetRelease || !updatePhaseAcceptsApplyResult(updateState.Phase) {
 		if log != nil {
@@ -6636,8 +6683,11 @@ func processUpdateApplyResult(result *ipcpb.UpdateApplyResult, fallbackNodeID st
 		if updatePhaseRestoresRouting(updateState.Phase) {
 			phase = "warming_restore"
 		}
-		if err := persistNodeUpdateStateWithDeadlineAndExpected(nodeID, targetRelease, phase, "", time.Now().Add(updateWarmupTimeout), expectedVersions); err != nil && log != nil {
-			log.WithError(err).WithField("node_id", nodeID).Warn("Failed to persist node update warmup phase")
+		if err := persistNodeUpdateStateWithDeadlineAndExpected(nodeID, targetRelease, phase, "", time.Now().Add(updateWarmupTimeout), expectedVersions); err != nil {
+			if log != nil {
+				log.WithError(err).WithField("node_id", nodeID).Warn("Failed to persist node update warmup phase")
+			}
+			return fmt.Errorf("persist node update warmup phase: %w", err)
 		}
 		attempt := updateWarmups.begin(nodeID)
 		go completeUpdateWarmup(nodeID, targetRelease, expectedVersions, time.Now(), attempt, log)
@@ -6659,8 +6709,11 @@ func processUpdateApplyResult(result *ipcpb.UpdateApplyResult, fallbackNodeID st
 		if updatePhaseRestoresRouting(updateState.Phase) {
 			phase = "warming_restore"
 		}
-		if err := persistNodeUpdateStateWithDeadlineAndExpected(nodeID, targetRelease, phase, "", time.Now().Add(HelmsmanReconnectTimeout), expectedVersions); err != nil && log != nil {
-			log.WithError(err).WithField("node_id", nodeID).Warn("Failed to persist node update reconnect phase")
+		if err := persistNodeUpdateStateWithDeadlineAndExpected(nodeID, targetRelease, phase, "", time.Now().Add(HelmsmanReconnectTimeout), expectedVersions); err != nil {
+			if log != nil {
+				log.WithError(err).WithField("node_id", nodeID).Warn("Failed to persist node update reconnect phase")
+			}
+			return fmt.Errorf("persist node update reconnect phase: %w", err)
 		}
 		if log != nil {
 			log.WithFields(logging.Fields{
@@ -6680,8 +6733,11 @@ func processUpdateApplyResult(result *ipcpb.UpdateApplyResult, fallbackNodeID st
 			log.WithError(err).WithField("node_id", nodeID).Warn("Failed to push normal mode after update")
 		}
 	}
-	if err := persistNodeUpdateState(nodeID, targetRelease, phase, lastError); err != nil && log != nil {
-		log.WithError(err).WithField("node_id", nodeID).Warn("Failed to persist node update result")
+	if err := persistNodeUpdateState(nodeID, targetRelease, phase, lastError); err != nil {
+		if log != nil {
+			log.WithError(err).WithField("node_id", nodeID).Warn("Failed to persist node update result")
+		}
+		return fmt.Errorf("persist node update result: %w", err)
 	}
 	if log != nil {
 		log.WithFields(logging.Fields{
@@ -6690,6 +6746,7 @@ func processUpdateApplyResult(result *ipcpb.UpdateApplyResult, fallbackNodeID st
 			"phase":          phase,
 		}).Info("Processed node update apply result")
 	}
+	return nil
 }
 
 func updateResultIncludesMist(result *ipcpb.UpdateApplyResult) bool {
@@ -8194,8 +8251,10 @@ func processingSpeedFromOutputs(outputs map[string]string) (*ipcpb.ProcessingSpe
 	return stats, wallMs
 }
 
-// processProcessingJobResult handles job completion/failure results from Helmsman.
-func processProcessingJobResult(result *ipcpb.ProcessingJobResult, nodeID string, logger logging.Logger) {
+// processProcessingJobResult handles job completion/failure results from Helmsman. deliveryErr is set when
+// the job's terminal or requeue transaction did not commit, so the result must be delivered again; ignored,
+// duplicate and chapter-finalize results (attempt-fenced, re-driven by their own sweep) settle with nil.
+func processProcessingJobResult(result *ipcpb.ProcessingJobResult, nodeID string, logger logging.Logger) (deliveryErr error) {
 	fields := logging.Fields{
 		"job_id":  result.GetJobId(),
 		"status":  result.GetStatus(),
@@ -8255,8 +8314,7 @@ func processProcessingJobResult(result *ipcpb.ProcessingJobResult, nodeID string
 		// artifact "processing" forever with no file. Fail the job terminally instead — the
 		// artifact flips to failed and the lifecycle/UI reflect reality.
 		if result.GetOutputPath() == "" {
-			failProcessingJobAtomic(ctx, result.GetJobId(), "completed processing result carried no output path", nodeID, logger, fields)
-			return
+			return failProcessingJobAtomic(ctx, result.GetJobId(), "completed processing result carried no output path", nodeID, logger, fields)
 		}
 
 		var outputMeta *string
@@ -8495,6 +8553,7 @@ func processProcessingJobResult(result *ipcpb.ProcessingJobResult, nodeID string
 		if txErr != nil {
 			if !errors.Is(txErr, errTxRollbackNoop) {
 				logger.WithError(txErr).WithFields(fields).Error("Processing job completion did not commit; will retry")
+				return fmt.Errorf("commit processing job completion: %w", txErr)
 			}
 			return
 		}
@@ -8518,19 +8577,19 @@ func processProcessingJobResult(result *ipcpb.ProcessingJobResult, nodeID string
 		}
 
 	case "failed":
-		failProcessingJobAtomic(ctx, result.GetJobId(), result.GetError(), nodeID, logger, fields)
+		return failProcessingJobAtomic(ctx, result.GetJobId(), result.GetError(), nodeID, logger, fields)
 
 	case "retryable":
 		if result.GetOutputs()[mist.ProcessingResultRetryCause] == mist.ProcessingRetryCauseSourceStall {
-			requeueStalledProcessingJob(ctx, result.GetJobId(), result.GetError(), nodeID, logger, fields)
-			return
+			return requeueStalledProcessingJob(ctx, result.GetJobId(), result.GetError(), nodeID, logger, fields)
 		}
-		retryProcessingJob(ctx, result.GetJobId(), result.GetError(), nodeID, logger, fields)
+		return retryProcessingJob(ctx, result.GetJobId(), result.GetError(), nodeID, logger, fields)
 
 	default:
 		logger.WithFields(fields).Warn("Unknown processing job result status")
 		return
 	}
+	return nil
 }
 
 // ProcessingMaxRetries is the retry budget of a processing job: stale-lease
@@ -8543,7 +8602,7 @@ const ProcessingMaxRetries = 3
 // so a job that fell back to the local ladder runs that ladder again. Once the
 // budget is spent, or when the report does not match the job's assignment,
 // the job fails like any other failure.
-func retryProcessingJob(ctx context.Context, jobID, errMsg, reportingNode string, logger logging.Logger, fields logging.Fields) {
+func retryProcessingJob(ctx context.Context, jobID, errMsg, reportingNode string, logger logging.Logger, fields logging.Fields) error {
 	n, err := foghorndb.New(db).RequeueRetryableProcessingJob(ctx, foghorndb.RequeueRetryableProcessingJobParams{
 		ErrorMessage: sql.NullString{String: errMsg, Valid: errMsg != ""},
 		JobID:        jobID,
@@ -8552,14 +8611,14 @@ func retryProcessingJob(ctx context.Context, jobID, errMsg, reportingNode string
 	})
 	if err != nil {
 		logger.WithError(err).WithFields(fields).Error("Retryable processing failure could not be requeued")
-		return
+		return fmt.Errorf("requeue retryable processing job: %w", err)
 	}
 	if n == 0 {
-		failProcessingJobAtomic(ctx, jobID, errMsg, reportingNode, logger, fields)
-		return
+		return failProcessingJobAtomic(ctx, jobID, errMsg, reportingNode, logger, fields)
 	}
 	NotifyCatalogDirty()
 	logger.WithFields(fields).WithField("error", errMsg).Warn("Processing job requeued after a retryable failure")
+	return nil
 }
 
 // ProcessingProgressStallTimeout is how long a processing job may go without media
@@ -8576,7 +8635,7 @@ const ProcessingProgressStallTimeout = 20 * time.Minute
 // ProcessingProgressStallTimeout from the first stalled attempt's start, and each
 // requeue waits as long as the run has lasted so far, so a long outage is probed
 // ever less often. Past the window the job fails as timed out.
-func requeueStalledProcessingJob(ctx context.Context, jobID, errMsg, reportingNode string, logger logging.Logger, fields logging.Fields) {
+func requeueStalledProcessingJob(ctx context.Context, jobID, errMsg, reportingNode string, logger logging.Logger, fields logging.Fields) error {
 	n, err := foghorndb.New(db).RequeueStalledProcessingJob(ctx, foghorndb.RequeueStalledProcessingJobParams{
 		ErrorMessage: sql.NullString{String: errMsg, Valid: errMsg != ""},
 		StallWindow:  ProcessingProgressStallTimeout.String(),
@@ -8585,14 +8644,14 @@ func requeueStalledProcessingJob(ctx context.Context, jobID, errMsg, reportingNo
 	})
 	if err != nil {
 		logger.WithError(err).WithFields(fields).Error("Stalled processing attempt could not be requeued")
-		return
+		return fmt.Errorf("requeue stalled processing job: %w", err)
 	}
 	if n == 0 {
-		failProcessingJobAtomic(ctx, jobID, "source stalled for longer than the processing no-progress window: "+errMsg, reportingNode, logger, fields)
-		return
+		return failProcessingJobAtomic(ctx, jobID, "source stalled for longer than the processing no-progress window: "+errMsg, reportingNode, logger, fields)
 	}
 	NotifyCatalogDirty()
 	logger.WithFields(fields).WithField("error", errMsg).Warn("Processing job requeued after its source read stalled")
+	return nil
 }
 
 // failProcessingJobAtomic drives a processing job to its terminal failed state as ONE
@@ -8651,7 +8710,7 @@ func logProcessingFailureIgnored(logger logging.Logger, fields logging.Fields, r
 	}).Warn("Ignoring processing job failure report")
 }
 
-func failProcessingJobAtomic(ctx context.Context, jobID, errMsg, reportingNode string, logger logging.Logger, fields logging.Fields) {
+func failProcessingJobAtomic(ctx context.Context, jobID, errMsg, reportingNode string, logger logging.Logger, fields logging.Fields) error {
 	// The stream-id lookup is a network call; resolve it at most once across transaction replays.
 	var resolvedStreamID string
 	streamIDResolved := false
@@ -8753,14 +8812,16 @@ func failProcessingJobAtomic(ctx context.Context, jobID, errMsg, reportingNode s
 	if txErr != nil {
 		if !errors.Is(txErr, errTxRollbackNoop) {
 			logger.WithError(txErr).WithFields(fields).Error("Processing job failure did not commit; will retry")
+			return fmt.Errorf("commit processing job failure: %w", txErr)
 		}
-		return
+		return nil
 	}
 	// The API reads artifact status from the Commodore catalog, which only the
 	// reconciler writes; without this kick a failed import reads PROCESSING
 	// until an unrelated trigger or the slow fallback pass.
 	NotifyCatalogDirty()
 	logger.WithFields(fields).WithField("error", errMsg).Warn("Processing job failed")
+	return nil
 }
 
 // processProcessingJobProgress handles periodic progress updates from Helmsman.
@@ -9128,8 +9189,9 @@ func DeleteNodeArtifact(ctx context.Context, artifactHash, nodeID string, nodeCl
 // handleNodeArtifactDeleted applies a node's report that it removed an artifact's local bytes. del.NodeId
 // is the authenticated session's node, set by the caller, so a node only ever retires its own placement.
 // The database removes the placement and emits LOST atomically unless a newer node-clock inventory
-// snapshot proves the same node has already reacquired the copy.
-func handleNodeArtifactDeleted(ctx context.Context, del *ipcpb.ArtifactDeleted) {
+// snapshot proves the same node has already reacquired the copy. The returned error reports that the
+// placement removal did not commit, so the node's report must be delivered again.
+func handleNodeArtifactDeleted(ctx context.Context, del *ipcpb.ArtifactDeleted) error {
 	logger := controlLogger()
 	artifactHash := del.GetArtifactHash()
 	nodeID := del.GetNodeId()
@@ -9139,7 +9201,7 @@ func handleNodeArtifactDeleted(ctx context.Context, del *ipcpb.ArtifactDeleted) 
 	if err != nil {
 		ObserveArtifactDeletionOutcome("error")
 		logger.WithError(err).WithField("artifact_hash", artifactHash).Error("Failed to remove artifact node assignment")
-		return
+		return fmt.Errorf("remove artifact node assignment: %w", err)
 	}
 	ObserveArtifactDeletionOutcome(string(outcome))
 	if outcome != state.NodeArtifactDeletionApplied {
@@ -9148,13 +9210,13 @@ func handleNodeArtifactDeleted(ctx context.Context, del *ipcpb.ArtifactDeleted) 
 			"node_id":       nodeID,
 			"outcome":       outcome,
 		}).Info("Artifact deletion did not remove a placement")
-		return
+		return nil
 	}
 	if stateErr := state.DefaultManager().ApplyArtifactDeleted(ctx, artifactHash, nodeID); stateErr != nil {
 		logger.WithError(stateErr).WithField("artifact_hash", artifactHash).Warn("Failed to apply artifact deletion to stream state")
 	}
 	if db == nil {
-		return
+		return nil
 	}
 
 	// A synced artifact with no remaining node copy is now S3-only.
@@ -9172,6 +9234,7 @@ func handleNodeArtifactDeleted(ctx context.Context, del *ipcpb.ArtifactDeleted) 
 		"node_id":       nodeID,
 		"reason":        reason,
 	}).Info("Artifact removed from node")
+	return nil
 }
 
 // ReconcileNodeCopies seeds never-emitted present copies and sweeps stale-present rows
@@ -9367,11 +9430,14 @@ func sendCanDeleteResponse(stream ipcpb.HelmsmanControl_ConnectServer, response 
 
 // processSyncComplete handles sync completion from Helmsman
 // After Helmsman uploads an asset to S3 (without deleting local), it notifies Foghorn
-func processSyncComplete(complete *ipcpb.SyncComplete, nodeID string, logger logging.Logger) {
-	processSyncCompleteAt(complete, nodeID, 0, logger)
+func processSyncComplete(complete *ipcpb.SyncComplete, nodeID string, logger logging.Logger) error {
+	return processSyncCompleteAt(complete, nodeID, 0, logger)
 }
 
-func processSyncCompleteAt(complete *ipcpb.SyncComplete, nodeID string, nodeClockCompletedAtMs int64, logger logging.Logger) {
+// processSyncCompleteAt applies one sync completion. commitErr is set only when the completion's
+// transaction did not commit, so the report must be delivered again. Every other exit is final or leaves
+// the durable sync attempt to stale recovery, which re-drives it without this report.
+func processSyncCompleteAt(complete *ipcpb.SyncComplete, nodeID string, nodeClockCompletedAtMs int64, logger logging.Logger) (commitErr error) {
 	requestID := complete.GetRequestId()
 	assetHash := complete.GetAssetHash()
 	status := complete.GetStatus()
@@ -9842,6 +9908,7 @@ func processSyncCompleteAt(complete *ipcpb.SyncComplete, nodeID string, nodeCloc
 		if syncTxErr != nil {
 			if !errors.Is(syncTxErr, errTxRollbackNoop) {
 				logger.WithError(syncTxErr).WithField("asset_hash", assetHash).Error("Sync completion did not commit")
+				return fmt.Errorf("commit sync completion: %w", syncTxErr)
 			}
 			return
 		}
@@ -9891,6 +9958,7 @@ func processSyncCompleteAt(complete *ipcpb.SyncComplete, nodeID string, nodeCloc
 			logger.WithFields(logging.Fields{"asset_hash": assetHash, "error": errorMsg}).Warn("Asset sync to S3 failed")
 		}
 	}
+	return nil
 }
 
 // syncCompletionArtifactDeleted reports whether the artifact a sync completion names is in a terminal deleted state

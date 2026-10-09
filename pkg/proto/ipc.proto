@@ -261,6 +261,12 @@ message ControlMessage {
 
   string request_id = 1; // Correlates requests/responses
   google.protobuf.Timestamp sent_at = 2;
+  // Helmsman -> Foghorn: names the durable control-outbox row this message
+  // was sent from. It is the same on every resend of the row, including
+  // resends after a Helmsman restart. A Foghorn that announced
+  // ControlCapabilities.durable_delivery_acks answers it with a
+  // DurableDeliveryAck; an older Foghorn ignores the field.
+  string durable_delivery_id = 3;
   oneof payload {
     Register register = 10;
     ControlError error = 15;
@@ -415,7 +421,38 @@ message ControlMessage {
     // a Helmsman restart, a control reconnect and a policy invalidation.
     PlaybackGrantRequest playback_grant_request = 174;
     PlaybackGrantResponse playback_grant_response = 175;
+    // Foghorn -> Helmsman: the first message Foghorn sends on every control
+    // stream, before it reads Register. A Helmsman that receives any other
+    // message first is talking to a Foghorn without these capabilities.
+    ControlCapabilities control_capabilities = 176;
+    // Foghorn -> Helmsman: outcome of handling one message that carried
+    // durable_delivery_id. Helmsman deletes the outbox row only on a
+    // successful ack.
+    DurableDeliveryAck durable_delivery_ack = 177;
   }
+}
+
+// ControlCapabilities lists the control-stream behaviours this Foghorn
+// implements. Helmsman decides per connection from the stream's first
+// message, so the decision never depends on how long Foghorn takes to answer.
+message ControlCapabilities {
+  // Foghorn answers every message carrying durable_delivery_id with a
+  // DurableDeliveryAck once its effect is committed (or its handling is
+  // settled and any remaining retry is owned by Foghorn's own durable
+  // state). Without it Helmsman keeps the older contract: a row is confirmed
+  // by the next heartbeat sent after it.
+  bool durable_delivery_acks = 1;
+}
+
+// DurableDeliveryAck answers one ControlMessage.durable_delivery_id.
+message DurableDeliveryAck {
+  string delivery_id = 1;
+  // True once Foghorn has handled the message: Helmsman deletes the row.
+  // False when the effect did not commit: Helmsman keeps the row and sends
+  // it again later under the same delivery id.
+  bool success = 2;
+  // Operator-facing detail for a failed delivery.
+  string error = 3;
 }
 
 message GoingAway {

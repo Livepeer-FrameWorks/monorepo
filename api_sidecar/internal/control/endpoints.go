@@ -43,6 +43,10 @@ const (
 // and the dialer moves on to the next instance of the cell.
 var controlKeepalive = grpcutil.ControlStreamKeepalive()
 
+// controlHeartbeatInterval paces the Heartbeat that carries the applied
+// managed-stream snapshot and the durable outbox drain pass.
+var controlHeartbeatInterval = 30 * time.Second
+
 // parseControlAddrs splits FOGHORN_CONTROL_ADDR into its entries. The value is
 // one host:port or a comma-separated list of them, all instances of one cell.
 func parseControlAddrs(raw string) []string {
