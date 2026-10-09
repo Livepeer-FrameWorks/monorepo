@@ -59,6 +59,9 @@ git add .
 git commit -qm 'prepare v0.2.96'
 pending_commit=$(git rev-parse HEAD)
 expect_pass 'committed pending release matches its catalog' --diff-base v0.2.95
+printf '%s\n' 'schema_migration_floor: v0.2.95' 'releases:' '  - version: v0.2.96' '  - version: v0.2.97' > cli/internal/releases/catalog.yaml
+expect_fail 'two pending releases without a reachable RC are rejected' --worktree
+write_pending_catalog
 git tag v0.2.96-rc1
 expect_pass 'an RC keeps the base release pending' --worktree
 printf '%s\n' 'SELECT 22;' > pkg/database/sql/migrations/commodore/v0.2.96/expand/001_pending.sql
@@ -86,8 +89,33 @@ printf '%s\n' \
   'releases:' \
   '  - version: v0.2.96' \
   '  - version: v0.2.97' > cli/internal/releases/catalog.yaml
-expect_fail 'multiple unshipped catalog releases are rejected' --worktree
-git show HEAD:cli/internal/releases/catalog.yaml > cli/internal/releases/catalog.yaml
+printf '%s\n' 'SELECT 4;' > pkg/database/sql/migrations/commodore/v0.2.97/expand/001_next_release.sql
+expect_pass 'a reachable RC freezes its release while one successor is prepared' --worktree
+rm pkg/database/sql/migrations/commodore/v0.2.96/expand/001_pending.sql
+expect_fail 'preparing the successor cannot delete an RC migration' --worktree
+git show HEAD:pkg/database/sql/migrations/commodore/v0.2.96/expand/001_pending.sql > pkg/database/sql/migrations/commodore/v0.2.96/expand/001_pending.sql
+printf '%s\n' 'SELECT 5;' > pkg/database/sql/migrations/commodore/v0.2.96/expand/002_late_rc_change.sql
+expect_fail 'the frozen RC bucket cannot accept new migrations while preparing its successor' --worktree
+rm pkg/database/sql/migrations/commodore/v0.2.96/expand/002_late_rc_change.sql
+printf '%s\n' 'SELECT 22;' > pkg/database/sql/migrations/commodore/v0.2.96/expand/001_pending.sql
+expect_fail 'preparing the successor cannot unlock the previous RC migration' --worktree
+git show HEAD:pkg/database/sql/migrations/commodore/v0.2.96/expand/001_pending.sql > pkg/database/sql/migrations/commodore/v0.2.96/expand/001_pending.sql
+git add .
+git commit -qm 'prepare successor to frozen RC'
+expect_pass 'committed successor and frozen RC validate against the last final tag' --diff-base v0.2.95
+printf '%s\n' 'SELECT 23;' > pkg/database/sql/migrations/commodore/v0.2.96/expand/001_pending.sql
+git add pkg/database/sql/migrations/commodore/v0.2.96/expand/001_pending.sql
+expect_fail 'the commit hook still protects the previous RC while its successor is pending' pkg/database/sql/migrations/commodore/v0.2.96/expand/001_pending.sql
+git show HEAD:pkg/database/sql/migrations/commodore/v0.2.96/expand/001_pending.sql > pkg/database/sql/migrations/commodore/v0.2.96/expand/001_pending.sql
+git add pkg/database/sql/migrations/commodore/v0.2.96/expand/001_pending.sql
+printf '%s\n' '  - version: v0.2.98' >> cli/internal/releases/catalog.yaml
+expect_fail 'a frozen RC does not allow two successors' --worktree
+printf '%s\n' 'schema_migration_floor: v0.2.95' 'releases:' '  - version: v0.2.97' '  - version: v0.2.98' > cli/internal/releases/catalog.yaml
+expect_fail 'two releases without a matching reachable RC are rejected' --worktree
+rm pkg/database/sql/migrations/commodore/v0.2.97/expand/001_next_release.sql
+git show "$pending_commit":cli/internal/releases/catalog.yaml > cli/internal/releases/catalog.yaml
+git add .
+git commit -qm 'resume single pending RC fixture'
 
 printf '%s\n' 'SELECT 99;' > pkg/database/sql/migrations/commodore/v0.2.95/expand/001_released.sql
 expect_fail 'a shipped migration is immutable' --worktree

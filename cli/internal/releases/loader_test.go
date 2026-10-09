@@ -32,10 +32,14 @@ func TestShippedCatalogHasDatabaseOwnershipAndReleaseFloor(t *testing.T) {
 			t.Errorf("MinCLIVersionFor(%s) = %q, want v0.3.11-rc23", target, got)
 		}
 	}
-	for _, version := range []string{"v0.3.12", "v0.3.13"} {
-		for _, target := range []string{version + "-rc1", version} {
-			if got := MinCLIVersionFor(target); got != version {
-				t.Errorf("MinCLIVersionFor(%s) = %q, want %s", target, got, version)
+	for _, release := range []struct{ version, floor string }{
+		{"v0.3.12", "v0.3.12"},
+		{"v0.3.13", "v0.3.13-rc1"},
+		{"v0.3.14", "v0.3.14-rc1"},
+	} {
+		for _, target := range []string{release.version + "-rc1", release.version} {
+			if got := MinCLIVersionFor(target); got != release.floor {
+				t.Errorf("MinCLIVersionFor(%s) = %q, want %s", target, got, release.floor)
 			}
 		}
 	}

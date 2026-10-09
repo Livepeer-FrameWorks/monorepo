@@ -84,9 +84,11 @@ tag before adding migrations or version-gated behavior.
   transition `IntroducedIn` values, tests, operator tooling, and canonical docs
   together.
 - Tags are shipped history, not a prerequisite for development: before a release,
-  the latest tag may be behind exactly one pending catalog version. All unshipped
-  migrations must target that version. Once tagged, the pending version becomes
-  shipped and code-only work may continue without inventing another version.
+  the latest final tag may be behind one pending catalog version, or a frozen
+  reachable RC plus one successor. Declaring the successor freezes the RC's
+  migration bucket; all new migrations must target the successor. Once tagged,
+  the pending version becomes shipped and code-only work may continue without
+  inventing another version.
 - Run `make validate-migrations`; it checks the reachable Git tag, the one pending
   catalog version, immutable shipped migrations, and the embedded migration layout.
 - Run `make verify-schema-migrations` for schema work. It proves PostgreSQL's

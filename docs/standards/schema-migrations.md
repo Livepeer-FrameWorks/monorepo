@@ -93,10 +93,13 @@ authority, not an example file.
 
 Git tags and the catalog represent different moments. A `vX.Y.Z` tag says that
 version shipped. During development, its code, baseline SQL, and migrations must
-exist before the tag does, so the catalog may declare **exactly one** release newer
+exist before the tag does, so the catalog normally declares **one** release newer
 than the latest reachable final tag. That entry is the pending release. Every
-migration newer than the tag must target it; multiple future migration buckets are
-invalid. When the release workflow creates the tag, the same catalog entry becomes
+migration newer than the tag must target it. A reachable RC can instead freeze that
+release while one successor is prepared: the older bucket accepts only unchanged
+files already present in the RC, and all new migrations target the successor.
+Two releases without a reachable RC for the older one, or more than one successor,
+are invalid. When the release workflow creates the final tag, its catalog entry becomes
 shipped. Code-only work after that does not require immediately declaring another
 release.
 
@@ -115,17 +118,19 @@ When advancing the next release, update these together:
 
 `make validate-migrations` enforces this state from two directions. The Git-aware
 guard compares the reachable final tag, catalog, full migration tree, and the current
-change set; it rejects edits to shipped migrations, more than one pending catalog
-release, or unshipped migrations outside that pending version. The embedded CLI
+change set; it rejects edits to shipped or RC-tagged migrations, multiple pending
+releases without the frozen-RC exception, or new migrations outside the pending
+version. The embedded CLI
 validator independently rejects migrations newer than its highest catalog entry.
 `make test-release-state` exercises the guard's pre-tag, tag-cut, post-tag,
 wrong-bucket, multiple-pending, and immutable-migration cases in a temporary Git
 repository.
 
 Release candidates use lowercase `vX.Y.Z-rcN` tags and share the base `vX.Y.Z`
-catalog entry and migration directory. The base remains pending until GA, but
-SQL files included in a reachable RC tag are already immutable. Append new
-migrations for later candidates; never rewrite a file that a staging database
+catalog entry and migration directory. The base remains pending until GA unless
+its successor is declared, which freezes the RC bucket. SQL files included in a
+reachable RC tag are already immutable. While no successor is declared, append
+new migrations for later candidates; never rewrite a file that a staging database
 may have recorded in its checksum ledger.
 
 PostgreSQL/YugabyteDB files ending in `.notx.sql` are applied in autocommit

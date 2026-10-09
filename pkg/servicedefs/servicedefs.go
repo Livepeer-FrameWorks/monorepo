@@ -77,7 +77,7 @@ var Services = map[string]Service{
 	"lookout":   {ID: "lookout", DefaultPort: 18022, HealthPath: "/health", ReadyPath: "/ready", ReadySince: sharedRouterReadySince, HealthProtocol: "http", Role: "infra", SupportsSIGHUPReload: true},
 
 	// External network observation
-	"network-observer": {ID: "network-observer", DefaultPort: 18024, HealthPath: "/health", ReadyPath: "/ready", ReadySince: "v0.3.13", HealthProtocol: "http", Role: "analytics"},
+	"network-observer": {ID: "network-observer", DefaultPort: 18024, HealthPath: "/health", ReadyPath: "/ready", ReadySince: "v0.3.14", HealthProtocol: "http", Role: "analytics"},
 	"network-prober":   {ID: "network-prober", DefaultPort: 18025, HealthPath: "/health", HealthProtocol: "http", Role: "analytics"},
 
 	// Tenant integrations
