@@ -112,7 +112,8 @@ type Querier interface {
 	// otherwise, so a missing cluster and an invisible one answer alike.
 	// A gateway counts when it is registered in the cluster or actively assigned
 	// to it: gateways usually run on regional hosts and serve media clusters only
-	// through service_cluster_assignments.
+	// through service_cluster_assignments. Each branch starts from the cluster's
+	// own index, so neither scans every service instance.
 	GetVisibleClusterGatewayPresence(ctx context.Context, arg GetVisibleClusterGatewayPresenceParams) (GetVisibleClusterGatewayPresenceRow, error)
 	GrantDefaultClusterAccess(ctx context.Context, arg GrantDefaultClusterAccessParams) error
 	GrantTenantClusterAccess(ctx context.Context, arg GrantTenantClusterAccessParams) error

@@ -212,22 +212,24 @@ ON CONFLICT (tenant_id, cluster_id) DO UPDATE SET
 -- otherwise, so a missing cluster and an invisible one answer alike.
 -- A gateway counts when it is registered in the cluster or actively assigned
 -- to it: gateways usually run on regional hosts and serve media clusters only
--- through service_cluster_assignments.
+-- through service_cluster_assignments. Each branch starts from the cluster's
+-- own index, so neither scans every service instance.
 SELECT c.owner_tenant_id,
-       EXISTS (
-           SELECT 1
-           FROM quartermaster.service_instances si
-           WHERE (si.service_id = 'livepeer-gateway' OR si.service_id LIKE 'livepeer-gateway-%')
-             AND (
-                 si.cluster_id = c.cluster_id
-                 OR EXISTS (
-                     SELECT 1
-                     FROM quartermaster.service_cluster_assignments sca
-                     WHERE sca.service_instance_id = si.id
-                       AND sca.cluster_id = c.cluster_id
-                       AND sca.is_active = TRUE
-                 )
-             )
+       (
+           EXISTS (
+               SELECT 1
+               FROM quartermaster.service_instances si
+               WHERE si.cluster_id = c.cluster_id
+                 AND (si.service_id = 'livepeer-gateway' OR si.service_id LIKE 'livepeer-gateway-%')
+           )
+           OR EXISTS (
+               SELECT 1
+               FROM quartermaster.service_cluster_assignments sca
+               JOIN quartermaster.service_instances si ON si.id = sca.service_instance_id
+               WHERE sca.cluster_id = c.cluster_id
+                 AND sca.is_active = TRUE
+                 AND (si.service_id = 'livepeer-gateway' OR si.service_id LIKE 'livepeer-gateway-%')
+           )
        )::boolean AS has_livepeer_gateway
 FROM quartermaster.infrastructure_clusters c
 WHERE c.cluster_id = sqlc.arg(cluster_id)::text
