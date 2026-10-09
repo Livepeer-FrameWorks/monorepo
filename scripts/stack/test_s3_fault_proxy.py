@@ -6,6 +6,7 @@ import importlib.util
 import pathlib
 import threading
 import unittest
+from unittest import mock
 
 spec = importlib.util.spec_from_file_location("s3_proxy", pathlib.Path(__file__).with_name("s3-fault-proxy.py"))
 proxy = importlib.util.module_from_spec(spec)
@@ -63,6 +64,20 @@ class ProxyTest(unittest.TestCase):
         self.assertEqual((method, seen_path, body), ("PUT", path, b"thumbnail"))
         for key, value in headers.items():
             self.assertEqual(seen_headers[key], value)
+
+    def test_acceptance_is_recorded_before_forwarding_acknowledgement(self):
+        proxy.FAULT.reset("artifact")
+        observed = []
+        send_response = proxy.Proxy.send_response_only
+
+        def observe_response(handler, *args, **kwargs):
+            observed.append([event["file"] for event in proxy.FAULT.snapshot()["events"]
+                             if event["event"] == "accepted"])
+            return send_response(handler, *args, **kwargs)
+
+        with mock.patch.object(proxy.Proxy, "send_response_only", observe_response):
+            self.request("/bucket/thumbnails/artifact/.staging/attempt/poster.jpg")
+        self.assertEqual(observed, [["poster.jpg"]])
 
     def test_only_two_attempts_of_one_artifact_stall(self):
         proxy.FAULT.reset("artifact")

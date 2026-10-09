@@ -137,6 +137,8 @@ class Proxy(QuietHandler):
                 headers["Content-Length"] = str(len(data))
             connection.request(self.command, self.path, body=data, headers=headers)
             response = connection.getresponse()
+            if 200 <= response.status < 300:
+                FAULT.accepted(name)
             self.send_response_only(response.status, response.reason)
             for key, value in response.getheaders():
                 if key.lower() not in HOP_HEADERS:
@@ -146,8 +148,6 @@ class Proxy(QuietHandler):
             if self.command != "HEAD":
                 while chunk := response.read(65536):
                     self.wfile.write(chunk)
-            if 200 <= response.status < 300:
-                FAULT.accepted(name)
         except (OSError, http.client.HTTPException):
             self.close_connection = True
         finally:
