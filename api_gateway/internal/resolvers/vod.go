@@ -203,6 +203,13 @@ func (r *Resolver) DoCompleteVodUpload(ctx context.Context, input model.Complete
 					ResourceType: "VodUpload",
 					ResourceID:   input.UploadID,
 				})
+			case codes.InvalidArgument:
+				// The upload owner refused the completed object, for example
+				// one shorter than declared; its message is the reason.
+				return handled(&model.ValidationError{
+					Message: st.Message(),
+					Code:    strPtr("UPLOAD_REJECTED"),
+				})
 			case codes.PermissionDenied:
 				if strings.Contains(st.Message(), "account suspended") {
 					return handled(&model.AuthError{Message: "Account suspended - please top up your balance to complete uploads"})

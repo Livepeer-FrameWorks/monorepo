@@ -127,6 +127,24 @@ func TestDoCompleteVodUploadNotFound(t *testing.T) {
 	}
 }
 
+// Staging v0.3.13-rc2: a refused completion (an upload shorter than declared)
+// reached the caller as a bare "invalid request" instead of its reason.
+func TestDoCompleteVodUploadInvalidArgumentCarriesReason(t *testing.T) {
+	const reason = "upload size mismatch: stored object is 1000000 bytes, declared 10326844 bytes"
+	r := commoR(&clientstest.FakeCommodore{
+		CompleteVodUploadFn: func(context.Context, *sharedpb.CompleteVodUploadRequest) (*sharedpb.CompleteVodUploadResponse, error) {
+			return nil, status.Error(codes.InvalidArgument, reason)
+		},
+	})
+	res, err := r.DoCompleteVodUpload(clientstest.AuthedCtx("t1"), model.CompleteVodUploadInput{UploadID: "up1"})
+	if err != nil {
+		t.Fatalf("a refused completion should be a typed result: %v", err)
+	}
+	if ve, ok := res.(*model.ValidationError); !ok || ve.Message != reason || ve.Code == nil || *ve.Code != "UPLOAD_REJECTED" {
+		t.Fatalf("expected ValidationError carrying the reason, got %T %+v", res, res)
+	}
+}
+
 func TestDoAbortVodUpload(t *testing.T) {
 	var gotTenant, gotUpload string
 	commo := &clientstest.FakeCommodore{
