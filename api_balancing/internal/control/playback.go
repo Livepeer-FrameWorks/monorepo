@@ -234,6 +234,16 @@ var ErrPlaybackContentNotFound = errors.New("content not found")
 // one it has deleted. The asking cell maps it to ErrPlaybackContentNotFound.
 const PrepareArtifactNotFoundRefusal = "artifact not found"
 
+// ErrPlaybackContentFailed reports that the requested artifact's upload or
+// processing failed, so it has no bytes any node could serve. The front doors
+// answer it as a content state, not as a resolution failure.
+var ErrPlaybackContentFailed = errors.New("content failed")
+
+// PrepareArtifactFailedRefusal is the PrepareArtifact refusal an origin cell
+// answers for an artifact whose upload or processing failed. The asking cell
+// maps it to ErrPlaybackContentFailed.
+const PrepareArtifactFailedRefusal = "artifact failed"
+
 // ResolveContent determines content type and resolution strategy for a playback request.
 func ResolveContent(ctx context.Context, input string) (*ContentResolution, error) {
 	if input == "" {
@@ -583,6 +593,9 @@ func resolveArtifactPlaybackWithResp(ctx context.Context, deps *PlaybackDependen
 	}
 	if !authoritativeClusterServable(authoritativeCluster, tenantID, grantPeers, allowPlatformShared) {
 		return nil, fmt.Errorf("%s authoritative cluster %q not authorized for tenant", contentType, strings.TrimSpace(authoritativeCluster))
+	}
+	if strings.EqualFold(strings.TrimSpace(status), "failed") {
+		return nil, fmt.Errorf("%s %s: %w", contentType, artifactResp.ArtifactHash, ErrPlaybackContentFailed)
 	}
 
 	// Warm-node routing authority is the in-memory inventory ONLY: FindNodesByArtifactHash excludes
@@ -1765,6 +1778,9 @@ func resolveRemoteArtifactWithMetadata(ctx context.Context, deps *PlaybackDepend
 
 	if resp.GetError() == PrepareArtifactNotFoundRefusal {
 		return nil, fmt.Errorf("origin cluster %s: %w", originClusterID, ErrPlaybackContentNotFound)
+	}
+	if resp.GetError() == PrepareArtifactFailedRefusal {
+		return nil, fmt.Errorf("origin cluster %s: %w", originClusterID, ErrPlaybackContentFailed)
 	}
 	if resp.GetError() != "" {
 		return nil, fmt.Errorf("origin cluster error: %s", resp.GetError())

@@ -2439,6 +2439,16 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 			respondPlaybackError(c, http.StatusNotFound, "VIEW_KEY_NOT_FOUND", "Invalid or expired view key", nil)
 			return
 		}
+		if errors.Is(err, control.ErrPlaybackContentFailed) {
+			logger.WithError(err).WithFields(logging.Fields{
+				"view_key": viewKey, "internal_name": contentID, "content_type": contentType,
+			}).Debug("Playback refused: content failed")
+			respondPlaybackError(c, http.StatusConflict, "CONTENT_FAILED", "This content failed to upload or process and cannot be played", gin.H{
+				"contentType": contentType,
+				"contentId":   contentID,
+			})
+			return
+		}
 		if errors.Is(err, control.ErrCrossClusterArtifactUnavailable) {
 			// Fail-fast — peer origin hasn't pushed the artifact to S3
 			// yet. Surface as 503 (Service Unavailable) so callers retry

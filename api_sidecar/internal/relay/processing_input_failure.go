@@ -13,22 +13,46 @@ import (
 // processing job whether storage stalled under it.
 var processingInputFailures sync.Map
 
+// processingInputDefects holds, per asset hash, a processing input whose
+// stored source cannot be read whole on any attempt, so the processing job can
+// name it when the input does not boot.
+var processingInputDefects sync.Map
+
 // noteProcessingInputFailure records err for assetHash when it is a transient
 // upstream failure: the upstream did not answer before the reader gave up, the
-// connection failed, or the upstream answered a server-side error. An
-// upstream that answered a client error (missing, forbidden) is a property of
-// the source and is not recorded.
+// connection failed, or the upstream answered a server-side error. A source
+// shorter than its catalog size is recorded as a defect instead. An upstream
+// that answered a client error (missing, forbidden) is a property of the
+// source and is not recorded.
 func noteProcessingInputFailure(assetHash string, err error) {
-	if assetHash == "" || err == nil || !transientUpstreamFailure(err) {
+	if assetHash == "" || err == nil {
 		return
 	}
-	processingInputFailures.Store(assetHash, err.Error())
+	var short upstreamShortSourceError
+	if errors.As(err, &short) {
+		processingInputDefects.Store(assetHash, err.Error())
+		return
+	}
+	if transientUpstreamFailure(err) {
+		processingInputFailures.Store(assetHash, err.Error())
+	}
 }
 
 // TakeProcessingInputFailure returns and forgets the transient upstream
 // failure recorded for assetHash's processing input.
 func TakeProcessingInputFailure(assetHash string) (string, bool) {
-	v, ok := processingInputFailures.LoadAndDelete(assetHash)
+	return takeNote(&processingInputFailures, assetHash)
+}
+
+// TakeProcessingInputDefect returns and forgets the source defect recorded for
+// assetHash's processing input. Another attempt reads the same source, so it is
+// not a reason to retry.
+func TakeProcessingInputDefect(assetHash string) (string, bool) {
+	return takeNote(&processingInputDefects, assetHash)
+}
+
+func takeNote(notes *sync.Map, assetHash string) (string, bool) {
+	v, ok := notes.LoadAndDelete(assetHash)
 	if !ok {
 		return "", false
 	}

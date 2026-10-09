@@ -19,6 +19,13 @@ type recoveryS3Stub struct {
 	existsResult  bool
 	existsErr     error
 	existsCalls   int
+	objectSize    int64 // size HeadObjectInfo reports for a present object
+	headCalls     int
+}
+
+func (s *recoveryS3Stub) HeadObjectInfo(context.Context, string) (bool, int64, string, error) {
+	s.headCalls++
+	return true, s.objectSize, `"etag-final"`, nil
 }
 
 func (s *recoveryS3Stub) CompleteMultipartUpload(context.Context, string, string, []storage.CompletedPart) error {
@@ -66,7 +73,7 @@ func recoveryScanRowsWithDescriptor(pastGrace bool) *sqlmock.Rows {
 // A stranded 'completing' row whose object is PRESENT converges to 'processing' (+ PROCESSING lifecycle
 // event) and dispatches the processing job (idempotently).
 func TestCompletingVodRecovery_ConvergesPresentObjectToProcessing(t *testing.T) {
-	s3 := &recoveryS3Stub{existsResult: true}
+	s3 := &recoveryS3Stub{existsResult: true, objectSize: 2048}
 	j, mock, cleanup := newRecoveryJob(t, s3)
 	defer cleanup()
 
@@ -161,7 +168,7 @@ func TestCompletingVodRecovery_ProbeErrorLeavesCompleting(t *testing.T) {
 // (a crash before the client's original completion call) converges the row to 'processing' without
 // any existence probe.
 func TestCompletingVodRecovery_DescriptorRetryCompletesConverges(t *testing.T) {
-	s3 := &recoveryS3Stub{completeErr: nil}
+	s3 := &recoveryS3Stub{completeErr: nil, objectSize: 2048}
 	j, mock, cleanup := newRecoveryJob(t, s3)
 	defer cleanup()
 
@@ -199,7 +206,7 @@ func TestCompletingVodRecovery_DescriptorRetryCompletesConverges(t *testing.T) {
 // (a prior attempt completed it), the job converges rather than failing — never fail while the object
 // exists.
 func TestCompletingVodRecovery_DescriptorRetryErrorButObjectPresentConverges(t *testing.T) {
-	s3 := &recoveryS3Stub{completeErr: errors.New("NoSuchUpload: upload does not exist"), existsResult: true}
+	s3 := &recoveryS3Stub{completeErr: errors.New("NoSuchUpload: upload does not exist"), existsResult: true, objectSize: 2048}
 	j, mock, cleanup := newRecoveryJob(t, s3)
 	defer cleanup()
 
@@ -224,6 +231,34 @@ func TestCompletingVodRecovery_DescriptorRetryErrorButObjectPresentConverges(t *
 
 	if s3.completeCalls != 1 || s3.existsCalls != 1 {
 		t.Fatalf("expected one completion retry and one existence probe, got complete=%d exists=%d", s3.completeCalls, s3.existsCalls)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet SQL expectations: %v", err)
+	}
+}
+
+// Recovery converges a stranded upload only after the same stored-size check
+// CompleteVodUpload runs: an object shorter than its declared size fails the
+// upload with the size mismatch and its stored size instead of dispatching
+// processing.
+func TestCompletingVodRecovery_StoredSizeMismatchFailsUpload(t *testing.T) {
+	s3 := &recoveryS3Stub{completeErr: nil, objectSize: 2}
+	j, mock, cleanup := newRecoveryJob(t, s3)
+	defer cleanup()
+
+	mock.ExpectQuery(`FROM foghorn\.artifacts a\s+JOIN foghorn\.vod_metadata`).
+		WillReturnRows(recoveryScanRowsWithDescriptor(false))
+	mock.ExpectBegin()
+	mock.ExpectExec(`UPDATE foghorn\.artifacts\s+SET status = 'failed'.*size_bytes = \$2.*AND status = 'completing'`).
+		WithArgs("upload size mismatch: stored object is 2 bytes, declared 2048 bytes", int64(2), "hash-1", mockTenantUUID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	expectTransitionInsert(mock, "upload.failed", "hash-1", "vod_lifecycle", mockTenantUUID, "", "hash-1")
+	mock.ExpectCommit()
+
+	j.reconcile()
+
+	if s3.headCalls != 1 {
+		t.Fatalf("expected one HEAD of the completed object, got %d", s3.headCalls)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet SQL expectations: %v", err)

@@ -37,6 +37,7 @@ func TestCompleteVodUpload_AmbiguousErrorWithObjectConvergesToProcessing(t *test
 		completeErr:  errors.New("operation error S3: CompleteMultipartUpload, read tcp 10.0.0.1: connection reset by peer"),
 		existsResult: true,
 		s3URL:        "s3://bucket/vod/t1/hash-1/video.mp4",
+		objectSize:   2048,
 	}
 	srv, mock, cleanup := newCompleteVodServer(t, s3)
 	defer cleanup()

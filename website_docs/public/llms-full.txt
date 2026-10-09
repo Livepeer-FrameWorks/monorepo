@@ -2469,6 +2469,12 @@ cannot check the token because its authentication service is unavailable, it clo
 The [SDKs](/builders/sdks) for TypeScript, Go, and Python handle both, and read the token again
 for every reconnect.
 
+An acknowledged connection stays bound to the credential it authenticated with. The gateway closes
+it with `4403`, ending every subscription on it, when a session token reaches its expiry, when its
+API token is revoked, and within a minute of the credential otherwise ceasing to authenticate. A
+client reconnects with a current token; reconnecting with the revoked or expired one is refused
+before acknowledgement as above.
+
 ## Try It Out
 
 The dashboard has a built-in GraphQL explorer. Go to **Developer → Playground** to run queries against your account.
@@ -20610,6 +20616,17 @@ parameters `startunix`, `stopunix`, `start`, `stop`, and `duration`, plus `dl`, 
 `400 invalid_playback_parameter`. Other parameters are dropped. See
 [ad-hoc cuts](/builders/clips#ad-hoc-cuts-from-a-playback-url) for what each one does.
 
+When `/play` cannot redirect, it answers JSON with a `code` field:
+
+| Status | `code`                           | Meaning                                                                          |
+| ------ | -------------------------------- | -------------------------------------------------------------------------------- |
+| `404`  | `VIEW_KEY_NOT_FOUND`             | The playback ID does not exist or its content was deleted.                       |
+| `409`  | `CONTENT_FAILED`                 | The content failed to upload or process. Its failure webhook carries the reason. |
+| `409`  | `DVR_CHAPTERS_PENDING`           | A recording has ended and has no finalized chapter yet.                          |
+| `503`  | `PLAYBACK_PLACEMENT_UNAVAILABLE` | No playback destination is available right now; retry.                           |
+
+Content that is still processing resolves like ready content: `/play` redirects to an edge.
+
 ### JSON Response (Custom Players)
 
 ```bash
@@ -27932,6 +27949,12 @@ Run `frameworks config path --kind config` to print the canonical path the CLI i
 
 Note: the manifest-source flags (`--manifest`, `--gitops-dir`, `--github-repo`, `--github-ref`, `--cluster`, `--age-key`, `--github-app-id`, `--github-installation-id`, `--github-private-key`) are persistent on the `frameworks cluster` command group — set on any `cluster *` subcommand. They are not global.
 
+`--database-deployment primary|<name>` selects one SQL deployment for database
+maintenance. Without it, bulk database operations cover all enabled deployments.
+Yugabyte maintenance and seeding require an explicit selection when several
+deployments are enabled. For provisioning, use it with `--only infrastructure`;
+application provisioning uses each service's `database_deployment` binding.
+
 ## Command Catalog
 
 `frameworks commands` prints the Cobra command tree for tools that need to
@@ -28879,6 +28902,18 @@ frameworks cluster restart bridge --validate
 
 ---
 
+### frameworks cluster stop
+
+Stop every replica of an application service for maintenance. The service remains
+stopped until explicitly restarted or provisioned. Use the complete fleet manifest
+so every writer is included.
+
+```bash
+frameworks cluster stop foghorn-us
+```
+
+---
+
 ### frameworks cluster upgrade
 
 Upgrade services to new versions from GitOps manifests.
@@ -29105,6 +29140,36 @@ frameworks cluster yugabyte relayout finish --database <name> --yes
 
 Also inherits the [Cluster Manifest-Source Flags](#cluster-manifest-source-flags).
 
+### frameworks cluster yugabyte compact
+
+Run a full compaction of the tables of one YugabyteDB service database, one table at a time, so
+deleted rows and their tombstones leave the disk. Table ids are read from the database catalog and
+confirmed with the masters before anything runs; a `--table` that names no table, or more than one,
+refuses the whole run. Without `--table` every table and materialized view is compacted, largest
+first. Each table's secondary indexes are compacted with it, and the shared tablet of a colocated
+database is compacted once for all its colocated tables. The command prints the tables with their
+tablets, replicas, and SST size, then one line when each table starts and one when it finishes,
+with its duration and SST size before and after. See
+[Compacting tables](/operators/yugabyte-layout#compacting-tables).
+
+**Usage:**
+
+```bash
+frameworks cluster yugabyte compact --database <name> --dry-run
+frameworks cluster yugabyte compact --database <name> [--table <schema.table> ...] [--timeout 1h]
+```
+
+**Flags:**
+
+| Flag         | Default | Description                                                                                               |
+| ------------ | ------- | --------------------------------------------------------------------------------------------------------- |
+| `--database` |         | Physical database, such as `quartermaster` or `foghorn_eu`                                                |
+| `--table`    | all     | Table as `schema.table`, or a table name only one schema holds; repeatable                                |
+| `--timeout`  | `1h`    | Longest wait for one table. A table that runs out stops the run; its compaction continues on the tservers |
+| `--dry-run`  | `false` | List the tables with tablets, replicas, SST files, and size without compacting                            |
+
+Also inherits the [Cluster Manifest-Source Flags](#cluster-manifest-source-flags).
+
 ---
 
 ## Backup & Restore Commands
@@ -29210,6 +29275,7 @@ stays raised until recovery succeeds. There is no legacy replay fallback.
 - `--database string` - Database to restore (repeatable)
 - `--clickhouse` - The ClickHouse billing facts
 - `--yes` - Skip the confirmation prompt
+- `--leave-stopped` - Keep affected services stopped after the database swap, including on failure, until their connection settings have been redeployed
 
 **Examples:**
 
@@ -39318,6 +39384,52 @@ application, client, state, and query. The relayout's own connections appear as
 - `preflight` and `prepare` create databases, which YugabyteDB records as catalog changes. Services
   replay a transaction that meets a catalog-version error, so this shows as brief retries rather
   than failures.
+
+## Compacting tables
+
+YugabyteDB keeps a deleted or updated row on disk as a tombstone or an older version until a
+compaction rewrites the SST files that hold it. Background compactions do this eventually, but a
+table that churns through deletes, such as one pruned by retention, can stay large and slow to scan
+long after its rows are gone. `cluster yugabyte compact` runs a full compaction of such tables; do
+not run `yb-admin` or SQL by hand.
+
+1. List what would be compacted. The dry run reads the catalog, confirms each table id with the
+   masters, and prints every table with its distinct tablets, tablet replicas, SST files, and SST
+   size summed across replicas, largest first:
+
+   ```bash
+   frameworks cluster yugabyte compact --manifest <path> --database foghorn_eu --dry-run
+   ```
+
+2. Compact the whole database, or only the tables you name:
+
+   ```bash
+   frameworks cluster yugabyte compact --manifest <path> --database foghorn_eu
+   frameworks cluster yugabyte compact --manifest <path> --database foghorn_eu --table foghorn.domain_event_outbox
+   ```
+
+Each table is compacted on its own: the masters ask every tserver that holds a replica of one of its
+tablets to compact it, and the command waits until all of them finish before it starts the next
+table. It prints a line when a table starts, every 30 seconds while it runs, and when it finishes,
+with the duration and the SST size before and after. A table's secondary indexes are compacted right
+after it. In a colocated database, every colocated table shares one tablet, which is compacted once
+for all of them.
+
+<Aside type="caution" title="IO cost">
+  A full compaction reads and rewrites every replica of the table, raising disk IO and CPU on every
+  tserver that holds one and temporarily using up to the table's size in extra disk space. Run it
+  outside peak hours and check free disk space against the sizes the dry run prints.
+</Aside>
+
+- A table that does not finish within `--timeout` (one hour by default) stops the run, and the
+  remaining tables are listed as not started. Its compaction keeps running on the tservers; wait for
+  the SST size in a dry run to settle before compacting again.
+- Ctrl+C stops waiting and prints the tables that were not started. A compaction already requested
+  keeps running on the tservers.
+- Rows deleted more recently than the tservers' history retention
+  (`timestamp_history_retention_interval_sec`, 15 minutes by default) are kept, so compact after a
+  bulk delete has aged past it.
+- A database in the middle of a relayout is refused.
 
 
 ---

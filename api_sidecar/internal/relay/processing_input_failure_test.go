@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -75,5 +76,58 @@ func TestProcessingInputUpstreamFailuresAreNotedAndAnswered(t *testing.T) {
 		if reason, ok := TakeProcessingInputFailure("stalledinput"); !ok || reason != errUpstreamNoAnswer.Error() {
 			t.Fatalf("%s: stalled upstream noted %q (%v), want %q", method, reason, ok, errUpstreamNoAnswer)
 		}
+	}
+}
+
+// A source whose upstream declares fewer bytes than its catalog size (an
+// upload stored as 2 bytes against a declared size of 4096) cannot get longer
+// on a retry. The relay answers it as a bad source and does not note it as a
+// storage stall, so the processing job fails instead of retrying for its whole
+// stall window.
+func TestProcessingInputShortSourceIsNotAStall(t *testing.T) {
+	const hash = "shortinput"
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Range", "bytes 0-1/2")
+		w.Header().Set("Content-Length", "2")
+		w.WriteHeader(http.StatusPartialContent)
+		_, _ = w.Write([]byte("ab"))
+	}))
+	t.Cleanup(up.Close)
+	resolver := &fakeResolver{out: map[string]*ResolveResult{"upload/" + hash: {
+		State:             ipcpb.AssetState_ASSET_STATE_PLAYABLE,
+		MediaPresignedURL: up.URL + "/" + hash,
+		ExpectedSizeBytes: 4096,
+		URLTTLSeconds:     60,
+	}}}
+	ts := mount(t, newTestServer(t, t.TempDir(), admission.CacheToDisk, resolver, nil))
+	t.Cleanup(ts.Close)
+	TakeProcessingInputFailure(hash)
+	TakeProcessingInputDefect(hash)
+	t.Cleanup(func() {
+		TakeProcessingInputFailure(hash)
+		TakeProcessingInputDefect(hash)
+	})
+
+	// Mist reads the input in ranges; this one lies past the two stored bytes.
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, ts.URL+"/internal/artifact/upload/"+hash+".mp4", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("User-Agent", "MistServer/test")
+	req.Header.Set("Range", "bytes=100-200")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+
+	if reason, ok := TakeProcessingInputFailure(hash); ok {
+		t.Fatalf("a source shorter than its catalog size is not a storage stall, noted %q", reason)
+	}
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("short source answered %d, want 502", resp.StatusCode)
+	}
+	if reason, ok := TakeProcessingInputDefect(hash); !ok || !strings.Contains(reason, "shorter than its catalog size") {
+		t.Fatalf("short source defect noted %q (%v), want the catalog size mismatch", reason, ok)
 	}
 }

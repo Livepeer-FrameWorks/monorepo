@@ -135,3 +135,30 @@ func TestProcessingBootFailureOnMissingSourceIsTerminal(t *testing.T) {
 		t.Fatalf("a missing source names no retry cause, got %v", outputs)
 	}
 }
+
+// A stored source shorter than its catalog size (2 bytes against a declared
+// 4096) fails the attempt for good and names the size defect, so the upload is
+// not retried as a storage stall for the whole stall window.
+func TestProcessingBootFailureOnShortSourceIsTerminal(t *testing.T) {
+	const hash = "shortupload01"
+	relay.TakeProcessingInputFailure(hash)
+	relay.TakeProcessingInputDefect(hash)
+	t.Cleanup(func() {
+		relay.TakeProcessingInputFailure(hash)
+		relay.TakeProcessingInputDefect(hash)
+	})
+	readUploadThroughRelay(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Range", "bytes 0-1/2")
+		w.Header().Set("Content-Length", "2")
+		w.WriteHeader(http.StatusPartialContent)
+		_, _ = w.Write([]byte("ab"))
+	}, hash)
+
+	err := waitForUnbootedProcessingStream(t, hash)
+	if got := processingReadinessFailureStatus(err); got != "failed" {
+		t.Fatalf("status = %q (%v), want failed", got, err)
+	}
+	if !strings.Contains(err.Error(), "shorter than its catalog size") {
+		t.Fatalf("error %q must name the short source", err)
+	}
+}

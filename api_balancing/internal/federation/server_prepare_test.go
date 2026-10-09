@@ -11,6 +11,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/storage"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
@@ -608,6 +609,45 @@ func TestPrepareArtifact_MetadataDrift(t *testing.T) {
 	}
 	if resp.GetError() == "" {
 		t.Fatal("expected error for metadata drift")
+	}
+}
+
+// A failed upload never reached storage. The origin answers the failed-content
+// refusal so the asking cell reports the content state instead of a resolution
+// error.
+func TestPrepareArtifact_FailedArtifactRefusedAsFailed(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	rows := sqlmock.NewRows([]string{"internal_name", "stream_internal_name", "artifact_type", "format", "storage_location", "sync_status", "size_bytes", "authoritative_cluster", "recorded_object_key", "dtsh_synced", "dtsh_key"}).
+		AddRow("vod-f", "", "vod", "mp4", "pending", "pending", 10326548, nil, "", false, "")
+	mock.ExpectQuery("FROM foghorn.artifacts").WillReturnRows(rows)
+	mock.ExpectQuery(`SELECT status\s+FROM foghorn\.artifacts`).
+		WithArgs("hash-failed", "tenant-a").
+		WillReturnRows(sqlmock.NewRows([]string{"status"}).AddRow("failed"))
+
+	srv := NewFederationServer(FederationServerConfig{
+		AllowFederationMutations: true,
+		Logger:                   logging.NewLogger(),
+		DB:                       db,
+		S3Client:                 &fakeS3Client{},
+	})
+
+	resp, err := srv.PrepareArtifact(serviceAuthContext(), &foghornfederationpb.PrepareArtifactRequest{
+		ArtifactId: "hash-failed",
+		TenantId:   "tenant-a",
+	})
+	if err != nil {
+		t.Fatalf("PrepareArtifact() err = %v", err)
+	}
+	if resp.GetError() != control.PrepareArtifactFailedRefusal {
+		t.Fatalf("refusal = %q, want %q", resp.GetError(), control.PrepareArtifactFailedRefusal)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
 	}
 }
 

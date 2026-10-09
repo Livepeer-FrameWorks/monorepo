@@ -102,3 +102,78 @@ func TestLoginChecksPasswordBeforeUnverifiedState(t *testing.T) {
 		})
 	}
 }
+
+// An unknown email and an account without a password must cost the same bcrypt
+// comparison as a wrong password and answer the same way, so response timing
+// does not reveal whether an account exists.
+func TestLoginComparesPasswordWhenNoStoredHashExists(t *testing.T) {
+	loginRequest := &commodorepb.LoginRequest{
+		Email:    "nobody@example.com",
+		Password: "guess",
+		Behavior: &commodorepb.BehaviorData{
+			FormShownAt: 1,
+			SubmittedAt: 5000,
+			Mouse:       true,
+			Typed:       true,
+		},
+		HumanCheck: "human",
+	}
+	loginQuery := regexp.QuoteMeta("FROM commodore.users WHERE lower(email::text) = lower($1::text)")
+
+	tests := []struct {
+		name   string
+		expect func(sqlmock.Sqlmock)
+	}{
+		{
+			name: "unknown email",
+			expect: func(mock sqlmock.Sqlmock) {
+				mock.ExpectQuery(loginQuery).WithArgs("nobody@example.com").WillReturnError(sql.ErrNoRows)
+			},
+		},
+		{
+			name: "account without a password",
+			expect: func(mock sqlmock.Sqlmock) {
+				now := time.Now()
+				mock.ExpectQuery(loginQuery).WithArgs("nobody@example.com").WillReturnRows(sqlmock.NewRows([]string{
+					"id", "tenant_id", "email", "password_hash", "first_name", "last_name",
+					"role", "permissions", "is_active", "verified", "created_at", "updated_at", "platform_operator",
+				}).AddRow(
+					"user-1", "tenant-1", "nobody@example.com", "",
+					sql.NullString{}, sql.NullString{}, "owner", pq.StringArray{},
+					true, true, now, now, false,
+				))
+				mock.ExpectBegin()
+				expectLegacyEventInsert(mock, eventAuthLoginFailed)
+				mock.ExpectCommit()
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			if err != nil {
+				t.Fatalf("sqlmock: %v", err)
+			}
+			defer db.Close()
+			tt.expect(mock)
+
+			var compared []string
+			server := &CommodoreServer{db: db, logger: logrus.New(), checkPassword: func(_, hash string) bool {
+				compared = append(compared, hash)
+				// A matching comparison still must not admit a login that has no stored hash.
+				return true
+			}}
+			_, err = server.Login(context.Background(), loginRequest)
+			if status.Code(err) != codes.Unauthenticated || status.Convert(err).Message() != "invalid credentials" {
+				t.Fatalf("login error = %v, want Unauthenticated invalid credentials", err)
+			}
+			if len(compared) != 1 || compared[0] != auth.DummyPasswordHash {
+				t.Fatalf("password comparisons = %q, want one against the dummy hash", compared)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatalf("unmet expectations: %v", err)
+			}
+		})
+	}
+}

@@ -224,6 +224,7 @@ type Querier interface {
 	FailStreamCleanupObligation(ctx context.Context, arg FailStreamCleanupObligationParams) error
 	FailThumbnailAttempt(ctx context.Context, attemptID string) error
 	FailVodCompletion(ctx context.Context, arg FailVodCompletionParams) (int64, error)
+	FailVodCompletionSizeMismatch(ctx context.Context, arg FailVodCompletionSizeMismatchParams) (int64, error)
 	FederatedArtifactStreamID(ctx context.Context, arg FederatedArtifactStreamIDParams) (string, error)
 	FenceInterruptedActiveFederatedArtifactPointerPurge(ctx context.Context, arg FenceInterruptedActiveFederatedArtifactPointerPurgeParams) (int64, error)
 	FenceStaleFederatedArtifactPointerForPurge(ctx context.Context, arg FenceStaleFederatedArtifactPointerForPurgeParams) (int64, error)

@@ -233,6 +233,36 @@ func (q *Queries) FailVodCompletion(ctx context.Context, arg FailVodCompletionPa
 	return result.RowsAffected()
 }
 
+const failVodCompletionSizeMismatch = `-- name: FailVodCompletionSizeMismatch :execrows
+UPDATE foghorn.artifacts
+SET status = 'failed', sync_status = 'failed', sync_error = $1,
+    error_message = $1, size_bytes = $2::bigint,
+    last_sync_attempt = NOW(), updated_at = NOW()
+WHERE artifact_hash = $3
+  AND tenant_id = $4::uuid
+  AND status = 'completing'
+`
+
+type FailVodCompletionSizeMismatchParams struct {
+	ErrorMessage    sql.NullString `db:"error_message" json:"error_message"`
+	StoredSizeBytes int64          `db:"stored_size_bytes" json:"stored_size_bytes"`
+	ArtifactHash    string         `db:"artifact_hash" json:"artifact_hash"`
+	TenantID        string         `db:"tenant_id" json:"tenant_id"`
+}
+
+func (q *Queries) FailVodCompletionSizeMismatch(ctx context.Context, arg FailVodCompletionSizeMismatchParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, failVodCompletionSizeMismatch,
+		arg.ErrorMessage,
+		arg.StoredSizeBytes,
+		arg.ArtifactHash,
+		arg.TenantID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const finalizeVodAbort = `-- name: FinalizeVodAbort :execrows
 UPDATE foghorn.artifacts
 SET status = 'deleted', updated_at = NOW()

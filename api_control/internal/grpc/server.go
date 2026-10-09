@@ -196,9 +196,12 @@ type CommodoreServer struct {
 	metrics              *ServerMetrics
 	turnstileValidator   turnstileVerifier
 	turnstileFailOpen    bool
-	passwordResetSecret  []byte
-	systemTenantID       uuid.UUID
-	fieldEncryptor       fieldcrypt.FieldCipher
+	// checkPassword compares a login password with a stored hash; nil uses
+	// auth.CheckPassword. Tests replace it to observe every comparison Login makes.
+	checkPassword       func(password, hash string) bool
+	passwordResetSecret []byte
+	systemTenantID      uuid.UUID
+	fieldEncryptor      fieldcrypt.FieldCipher
 	// Separate FieldEncryptor for playback webhook secrets so HKDF purpose
 	// isolation prevents cross-feature key reuse.
 	playbackWebhookEncryptor fieldcrypt.FieldCipher
@@ -4569,6 +4572,13 @@ func normalizeEmail(email string) string {
 	return strings.ToLower(strings.TrimSpace(email))
 }
 
+func (s *CommodoreServer) passwordMatches(password, hash string) bool {
+	if s.checkPassword != nil {
+		return s.checkPassword(password, hash)
+	}
+	return auth.CheckPassword(password, hash)
+}
+
 // Login authenticates a user and returns a JWT token
 func (s *CommodoreServer) Login(ctx context.Context, req *commodorepb.LoginRequest) (*commodorepb.AuthResponse, error) {
 	email := normalizeEmail(req.GetEmail())
@@ -4616,6 +4626,9 @@ func (s *CommodoreServer) Login(ctx context.Context, req *commodorepb.LoginReque
 	userRow, err := queries.GetLoginUserByEmail(ctx, sql.NullString{String: email, Valid: true})
 
 	if errors.Is(err, sql.ErrNoRows) {
+		// Spend a wrong password's bcrypt work so the answer's timing does not
+		// reveal that no account has this email.
+		s.passwordMatches(password, auth.DummyPasswordHash)
 		return nil, status.Error(codes.Unauthenticated, "invalid credentials")
 	}
 	if err != nil {
@@ -4628,8 +4641,15 @@ func (s *CommodoreServer) Login(ctx context.Context, req *commodorepb.LoginReque
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
-	// Verify password
-	if !auth.CheckPassword(password, user.PasswordHash) {
+	// Verify password. An account without a password (wallet sign-in) is
+	// compared against the dummy hash for equal timing and always rejected.
+	passwordOK := false
+	if user.PasswordHash == "" {
+		s.passwordMatches(password, auth.DummyPasswordHash)
+	} else {
+		passwordOK = s.passwordMatches(password, user.PasswordHash)
+	}
+	if !passwordOK {
 		if recordErr := s.recordLoginFailed(ctx, user.ID, user.TenantID, "password", "invalid_credentials"); recordErr != nil {
 			return nil, recordErr
 		}

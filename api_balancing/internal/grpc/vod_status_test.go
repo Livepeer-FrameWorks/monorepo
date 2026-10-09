@@ -57,6 +57,9 @@ func (f *fakeVodS3Client) AbortMultipartUpload(_ context.Context, key, uploadID 
 	return f.abortErr
 }
 func (f *fakeVodS3Client) Exists(context.Context, string) (bool, error) { return false, nil }
+func (f *fakeVodS3Client) HeadObjectInfo(context.Context, string) (bool, int64, string, error) {
+	return false, 0, "", nil
+}
 func (f *fakeVodS3Client) BuildVodS3Key(string, string, string) string {
 	return "vod/t1/hash/video.mp4"
 }

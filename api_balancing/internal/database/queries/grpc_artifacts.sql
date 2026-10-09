@@ -330,6 +330,15 @@ WHERE artifact_hash = sqlc.arg(artifact_hash)
   AND tenant_id = sqlc.arg(tenant_id)::uuid
   AND status NOT IN ('deleted', 'ready', 'failed', 'processing');
 
+-- name: FailVodCompletionSizeMismatch :execrows
+UPDATE foghorn.artifacts
+SET status = 'failed', sync_status = 'failed', sync_error = sqlc.arg(error_message),
+    error_message = sqlc.arg(error_message), size_bytes = sqlc.arg(stored_size_bytes)::bigint,
+    last_sync_attempt = NOW(), updated_at = NOW()
+WHERE artifact_hash = sqlc.arg(artifact_hash)
+  AND tenant_id = sqlc.arg(tenant_id)::uuid
+  AND status = 'completing';
+
 -- name: AdvanceVodToProcessing :execrows
 UPDATE foghorn.artifacts AS a
 SET status = 'processing',

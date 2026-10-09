@@ -371,6 +371,56 @@ func TestGenericViewerPlayback_VodJSONSuccessReturnsEndpoint(t *testing.T) {
 	}
 }
 
+// A VOD whose upload or processing failed has no bytes to place. /play answers
+// 409 CONTENT_FAILED from its catalog status instead of trying node selection
+// and reporting a 500 resolution failure on every request.
+func TestGenericViewerPlayback_FailedVodReturns409(t *testing.T) {
+	balancingTestEnv(t)
+	t.Cleanup(control.SetupTestRegistry("", nil))
+	mock := withMockDBArms(t)
+	startQuartermasterFake(t, &fakeTenantService{validate: func(_ context.Context, req *quartermasterpb.ValidateTenantRequest) (*quartermasterpb.ValidateTenantResponse, error) {
+		return &quartermasterpb.ValidateTenantResponse{Valid: true, IsActive: true, TenantId: req.GetTenantId(), BillingModel: "postpaid"}, nil
+	}})
+
+	const hash = "vodhashfffffffffffffffffffffff0f"
+	startCommodoreFakeArms(t, &commodoreArmsFake{
+		artifactPlaybackID: func(_ context.Context, _ *commodorepb.ResolveArtifactPlaybackIDRequest) (*commodorepb.ResolveArtifactPlaybackIDResponse, error) {
+			return &commodorepb.ResolveArtifactPlaybackIDResponse{
+				Found:        true,
+				ArtifactHash: hash,
+				InternalName: "failedart",
+				TenantId:     "tenant-vod",
+				ContentType:  "vod",
+			}, nil
+		},
+	})
+	mock.ExpectQuery(`FROM foghorn\.artifacts`).
+		WithArgs(hash, "vod", "tenant-vod").
+		WillReturnRows(sqlmock.NewRows([]string{
+			"internal_name", "status", "duration_seconds", "size_bytes",
+			"created_at", "format", "storage_location", "sync_status",
+			"has_thumbnails", "authoritative_cluster", "thumbnail_serving_cluster",
+		}).AddRow(
+			"failedart", "failed", nil, int64(10326548),
+			time.Now(), "mp4", "pending", "pending",
+			false, "test-platform-cluster", "",
+		))
+
+	c, w := playbackCtxArms(t, "failedvodkey")
+	HandleGenericViewerPlayback(c)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409; body=%s", w.Code, w.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if body["code"] != "CONTENT_FAILED" {
+		t.Fatalf("code = %v, want CONTENT_FAILED", body["code"])
+	}
+}
+
 func TestGenericViewerPlayback_ChapterJSONPreservesChapterIdentity(t *testing.T) {
 	sm := balancingTestEnv(t)
 	t.Cleanup(control.SetupTestRegistry("", nil))

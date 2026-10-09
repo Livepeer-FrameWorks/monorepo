@@ -35,9 +35,10 @@ type VodCompletionPart struct {
 }
 
 // CompletingVodRecoveryS3 is the minimal S3 surface the recovery scan needs: retry the multipart
-// completion, probe object existence, and build the object URL for the lifecycle event.
-// *storage.S3Client satisfies it.
+// completion, probe object existence, read the completed object's size, and build the object URL for
+// the lifecycle event. *storage.S3Client satisfies it.
 type CompletingVodRecoveryS3 interface {
+	VodObjectHeader
 	CompleteMultipartUpload(ctx context.Context, key, uploadID string, parts []storage.CompletedPart) error
 	Exists(ctx context.Context, key string) (bool, error)
 	BuildS3URL(key string) string
@@ -51,7 +52,8 @@ type CompletingVodRecoveryS3 interface {
 //
 //   - completion succeeds, or the object is already present -> advance to 'processing' (+ PROCESSING
 //     lifecycle event) and dispatch the processing job keyed to the persisted processes_json
-//     (idempotent);
+//     (idempotent), unless the stored object's size differs from the declared size, which marks the
+//     upload 'failed' with the mismatch;
 //   - the multipart upload is gone AND no object landed, past the grace period -> mark 'failed'
 //     (+ FAILED lifecycle event);
 //   - object absent within the grace period, or the completion/Exists probe is inconclusive -> leave
@@ -243,7 +245,7 @@ func (j *CompletingVodRecoveryJob) reconcileOne(ctx context.Context, r completin
 		completeErr := j.s3.CompleteMultipartUpload(ctx, r.s3Key, r.descriptor.UploadID, parts)
 		if completeErr == nil {
 			// Completion succeeded (or was already done); the object is now present.
-			j.convergeToProcessing(ctx, r)
+			j.convergeCompleted(ctx, r)
 			return
 		}
 		j.logger.WithError(completeErr).WithFields(logging.Fields{
@@ -267,7 +269,7 @@ func (j *CompletingVodRecoveryJob) reconcileOne(ctx context.Context, r completin
 	}
 
 	if exists {
-		j.convergeToProcessing(ctx, r)
+		j.convergeCompleted(ctx, r)
 		return
 	}
 
@@ -276,6 +278,40 @@ func (j *CompletingVodRecoveryJob) reconcileOne(ctx context.Context, r completin
 		return
 	}
 	j.convergeToFailed(ctx, r)
+}
+
+// convergeCompleted runs CompleteVodUpload's stored-object check on a completed upload before
+// converging it: an object of the declared size advances to 'processing', a different size fails the
+// upload with the mismatch, and a HEAD that cannot answer leaves the row 'completing' for a later pass.
+func (j *CompletingVodRecoveryJob) convergeCompleted(ctx context.Context, r completingVodRow) {
+	stored, err := CheckCompletedVodObject(ctx, j.s3, r.s3Key, r.sizeBytes)
+	if err != nil || !stored.Present {
+		j.logger.WithError(err).WithFields(logging.Fields{
+			"artifact_hash": r.artifactHash,
+			"s3_key":        r.s3Key,
+		}).Warn("Completing-VOD recovery: completed object could not be verified; leaving 'completing'")
+		return
+	}
+	if !stored.SizeMismatch {
+		j.convergeToProcessing(ctx, r)
+		return
+	}
+	failure := VodSizeMismatchFailure{
+		ArtifactHash: r.artifactHash, TenantID: r.tenantID, UploadID: r.uploadID, UserID: r.userID,
+		StoredBytes: stored.StoredBytes, DeclaredBytes: r.sizeBytes,
+	}
+	if txErr := database.WithRetryablePostgresTx(ctx, j.db, nil, func(tx *sql.Tx) error {
+		_, failErr := FailVodSizeMismatchTx(ctx, tx, failure)
+		return failErr
+	}); txErr != nil {
+		j.logger.WithError(txErr).WithField("artifact_hash", r.artifactHash).Warn("Completing-VOD recovery: recording the size-mismatch failure failed; row stays 'completing'")
+		return
+	}
+	j.logger.WithFields(logging.Fields{
+		"artifact_hash":  r.artifactHash,
+		"stored_bytes":   stored.StoredBytes,
+		"declared_bytes": r.sizeBytes,
+	}).Warn("Completing-VOD recovery: stored object size differs from declared size, marked upload failed")
 }
 
 // convergeToProcessing advances a stranded 'completing' row to 'processing', inserts its processing

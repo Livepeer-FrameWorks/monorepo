@@ -410,6 +410,9 @@ func (s *Server) streamBlockFromS3(ctx context.Context, httpc *http.Client, w io
 	}
 	if n != expected {
 		defrostBlocks.WithLabelValues(source, "error").Inc()
+		if upstreamDeclaredShort(resp, expected, totalSize) {
+			return upstreamPhaseError{op: "upstream block copy", err: upstreamShortSourceError{blockIdx: span.Idx, got: n, expected: expected}}
+		}
 		return upstreamPhaseError{op: "upstream block copy", err: fmt.Errorf("block %d short: copied %d bytes, expected %d", span.Idx, n, expected)}
 	}
 	defrostBlocks.WithLabelValues(source, "success").Inc()
@@ -469,6 +472,40 @@ type upstreamPhaseError struct {
 func (e upstreamPhaseError) Error() string { return e.op + ": " + e.err.Error() }
 
 func (e upstreamPhaseError) Unwrap() error { return e.err }
+
+// upstreamShortSourceError is a block fetch whose upstream declared fewer bytes
+// than the catalog size the block range was cut from: the stored object is
+// shorter than its recorded size, and every later read of it is too.
+type upstreamShortSourceError struct {
+	blockIdx int64
+	got      int64
+	expected int64
+}
+
+func (e upstreamShortSourceError) Error() string {
+	return fmt.Sprintf("block %d short: got %d bytes, expected %d: source is shorter than its catalog size", e.blockIdx, e.got, e.expected)
+}
+
+// upstreamDeclaredShort reports whether the upstream's own response headers
+// state fewer bytes than the block needs: a Content-Range total below the
+// catalog size, or a Content-Length below the requested block. A body that ends
+// early against headers promising the full block is a broken transfer instead.
+func upstreamDeclaredShort(resp *http.Response, expected, totalSize int64) bool {
+	if total, ok := totalFromContentRange(resp.Header.Get("Content-Range")); ok && total < totalSize {
+		return true
+	}
+	return resp.ContentLength >= 0 && resp.ContentLength < expected
+}
+
+// upstreamDeclaredLength is the byte count the upstream response declares for
+// its body: Content-Length, else the Content-Range total.
+func upstreamDeclaredLength(resp *http.Response) int64 {
+	if resp.ContentLength >= 0 {
+		return resp.ContentLength
+	}
+	total, _ := totalFromContentRange(resp.Header.Get("Content-Range"))
+	return total
+}
 
 type upstreamStatusError struct {
 	StatusCode int
@@ -534,13 +571,13 @@ func (s *Server) preflightFirstColdSpan(ctx context.Context, httpc *http.Client,
 	if _, err := io.Copy(io.Discard, io.LimitReader(resp.Body, 4*1024)); err != nil {
 		return fmt.Errorf("drain upstream block preflight response: %w", err)
 	}
-	if resp.StatusCode == http.StatusPartialContent {
-		return nil
+	if resp.StatusCode != http.StatusPartialContent && (resp.StatusCode != http.StatusOK || blockStart != 0 || blockEnd != totalSize-1) {
+		return upstreamStatusError{StatusCode: resp.StatusCode}
 	}
-	if resp.StatusCode == http.StatusOK && blockStart == 0 && blockEnd == totalSize-1 {
-		return nil
+	if expected := blockEnd - blockStart + 1; upstreamDeclaredShort(resp, expected, totalSize) {
+		return upstreamShortSourceError{blockIdx: span.Idx, got: upstreamDeclaredLength(resp), expected: expected}
 	}
-	return upstreamStatusError{StatusCode: resp.StatusCode}
+	return nil
 }
 
 // respondColdFetchError answers a cold fetch that failed before any body byte
@@ -565,6 +602,14 @@ func (s *Server) respondColdFetchError(c *gin.Context, op string, err error) {
 			}
 			c.String(http.StatusBadGateway, "source fetch failed: upstream status %d", statusErr.StatusCode)
 		}
+		return
+	}
+	var short upstreamShortSourceError
+	if errors.As(err, &short) {
+		if s.logger != nil {
+			s.logger.WithError(err).WithField("path", c.Request.URL.Path).Warn("relay: source is shorter than its catalog size")
+		}
+		c.String(http.StatusBadGateway, "source shorter than its catalog size")
 		return
 	}
 	var phaseErr upstreamPhaseError

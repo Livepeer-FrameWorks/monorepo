@@ -981,6 +981,8 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 	// A source-read failure noted before this attempt says nothing about it.
 	relay.TakeProcessingInputFailure(req.GetArtifactHash())
 	defer relay.TakeProcessingInputFailure(req.GetArtifactHash())
+	relay.TakeProcessingInputDefect(req.GetArtifactHash())
+	defer relay.TakeProcessingInputDefect(req.GetArtifactHash())
 	processesJSON := strings.TrimSpace(req.GetProcessesJson())
 	if processesJSON == "" {
 		h.sendResult(send, req.GetJobId(), "failed", "processing job is missing processes_json", nil, "", 0)
@@ -1768,6 +1770,10 @@ func (h *ProcessingJobHandler) waitForProcessingStreamReady(ctx context.Context,
 		if time.Now().After(deadline) {
 			if lastErr != nil && len(lastPresence.outputs) == 0 {
 				bootErr := fmt.Errorf("processing stream did not boot: %w", lastErr)
+				// A source defect outranks a stall noted on an earlier read: no retry can get past it.
+				if defect, ok := relay.TakeProcessingInputDefect(req.GetArtifactHash()); ok {
+					return nil, 0, fmt.Errorf("%w (source unreadable: %s)", bootErr, defect)
+				}
 				if reason, stalled := relay.TakeProcessingInputFailure(req.GetArtifactHash()); stalled {
 					return nil, 0, &processingSourceStallError{boot: bootErr, sourceRead: reason}
 				}

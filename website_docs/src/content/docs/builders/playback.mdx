@@ -157,6 +157,17 @@ parameters `startunix`, `stopunix`, `start`, `stop`, and `duration`, plus `dl`, 
 `400 invalid_playback_parameter`. Other parameters are dropped. See
 [ad-hoc cuts](/builders/clips#ad-hoc-cuts-from-a-playback-url) for what each one does.
 
+When `/play` cannot redirect, it answers JSON with a `code` field:
+
+| Status | `code`                           | Meaning                                                                          |
+| ------ | -------------------------------- | -------------------------------------------------------------------------------- |
+| `404`  | `VIEW_KEY_NOT_FOUND`             | The playback ID does not exist or its content was deleted.                       |
+| `409`  | `CONTENT_FAILED`                 | The content failed to upload or process. Its failure webhook carries the reason. |
+| `409`  | `DVR_CHAPTERS_PENDING`           | A recording has ended and has no finalized chapter yet.                          |
+| `503`  | `PLAYBACK_PLACEMENT_UNAVAILABLE` | No playback destination is available right now; retry.                           |
+
+Content that is still processing resolves like ready content: `/play` redirects to an edge.
+
 ### JSON Response (Custom Players)
 
 ```bash

@@ -77,6 +77,9 @@ type S3ClientInterface interface {
 	// Exists reports whether the final object is present. Used by CompleteVodUpload to reconcile a
 	// retry where the multipart already completed on a prior attempt (S3 returns NoSuchUpload).
 	Exists(ctx context.Context, key string) (bool, error)
+	// HeadObjectInfo reads the completed object's size so CompleteVodUpload can compare it with the
+	// size the upload declared.
+	HeadObjectInfo(ctx context.Context, key string) (bool, int64, string, error)
 	ListUploadedParts(ctx context.Context, key, uploadID string) ([]storage.UploadedPart, error)
 	BuildVodS3Key(tenantID, artifactHash, filename string) string
 	BuildS3URL(key string) string
@@ -3122,6 +3125,9 @@ func (s *FoghornGRPCServer) resolveArtifactViewerEndpoint(ctx context.Context, r
 		if errors.Is(err, control.ErrStoredMediaPlacementUnavailable) {
 			return nil, status.Error(codes.Unavailable, err.Error())
 		}
+		if errors.Is(err, control.ErrPlaybackContentFailed) {
+			return nil, status.Error(codes.FailedPrecondition, err.Error())
+		}
 		if errors.Is(err, control.ErrPlaybackContentNotFound) || strings.Contains(err.Error(), "not found") {
 			return nil, status.Error(codes.NotFound, err.Error())
 		}
@@ -4116,6 +4122,42 @@ func (s *FoghornGRPCServer) CompleteVodUpload(ctx context.Context, req *sharedpb
 			}
 			return nil, status.Errorf(codes.Internal, "failed to complete upload: %v", completeErr)
 		}
+	}
+
+	// The assembled object must be the size the upload declared. Part ETags only prove each part arrived
+	// as sent, so a part that carried fewer bytes than planned completes cleanly into a short object that
+	// processing can never read. A HEAD that cannot answer leaves the row 'completing' for a retry or the
+	// completing-VOD recovery job, which run this same check.
+	stored, headErr := jobs.CheckCompletedVodObject(ctx, s.s3Client, s3Key, sizeBytes.Int64)
+	if headErr != nil || !stored.Present {
+		s.logger.WithError(headErr).WithFields(logging.Fields{
+			"artifact_hash": artifactHash,
+			"upload_id":     req.UploadId,
+			"s3_key":        s3Key,
+		}).Warn("Completed VOD object could not be verified; leaving 'completing' for reconciliation")
+		return nil, status.Error(codes.Unavailable, "uploaded object could not be verified yet; retry completion")
+	}
+	if stored.SizeMismatch {
+		failure := jobs.VodSizeMismatchFailure{
+			ArtifactHash: artifactHash, TenantID: req.TenantId, UploadID: req.UploadId, UserID: userID.String,
+			StoredBytes: stored.StoredBytes, DeclaredBytes: sizeBytes.Int64,
+		}
+		reason := jobs.VodSizeMismatchMessage(failure.StoredBytes, failure.DeclaredBytes)
+		s.logger.WithFields(logging.Fields{
+			"artifact_hash":  artifactHash,
+			"upload_id":      req.UploadId,
+			"tenant_id":      req.TenantId,
+			"stored_bytes":   failure.StoredBytes,
+			"declared_bytes": failure.DeclaredBytes,
+		}).Warn("VOD upload failed: stored object size differs from declared size")
+		if txErr := s.withArtifactLifecycleTx(ctx, func(tx *sql.Tx) error {
+			_, failErr := jobs.FailVodSizeMismatchTx(ctx, tx, failure)
+			return failErr
+		}); txErr != nil {
+			s.logger.WithError(txErr).WithField("artifact_hash", artifactHash).Error("Failed to commit VOD size-mismatch failure state+event")
+			return nil, status.Errorf(codes.Internal, "failed to record upload failure: %v", txErr)
+		}
+		return nil, status.Error(codes.InvalidArgument, reason)
 	}
 
 	// Advance the upload to 'processing' and record the PROCESSING lifecycle event in ONE

@@ -3,6 +3,7 @@ package grpc
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"frameworks/api_balancing/internal/storage"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/events"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	publicv1 "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/public/v1"
 	foghorncontrolpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 
@@ -19,6 +21,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 // testStubBackendID is the backend fingerprint that s.localBackendID() computes for the VOD S3 stubs (whose
@@ -38,11 +41,27 @@ type completeVodS3Stub struct {
 	existsResult  bool
 	existsErr     error
 	existsCalls   int
+	// objectSize is the stored object's size HeadObjectInfo reports; objectMissing reports it absent.
+	objectSize    int64
+	objectMissing bool
+	headErr       error
+	headCalls     int
 }
 
 func (f *completeVodS3Stub) Exists(context.Context, string) (bool, error) {
 	f.existsCalls++
 	return f.existsResult, f.existsErr
+}
+
+func (f *completeVodS3Stub) HeadObjectInfo(context.Context, string) (bool, int64, string, error) {
+	f.headCalls++
+	if f.headErr != nil {
+		return false, 0, "", f.headErr
+	}
+	if f.objectMissing {
+		return false, 0, "", nil
+	}
+	return true, f.objectSize, `"etag-final"`, nil
 }
 
 func (f *completeVodS3Stub) ListUploadedParts(context.Context, string, string) ([]storage.UploadedPart, error) {
@@ -222,7 +241,7 @@ func TestCompleteVodUpload_S3FailureMarksArtifactFailed(t *testing.T) {
 // the asset. vodPipeline is nil in tests, so no processing-job INSERT is queued
 // and pipelineFailed stays false — the asset comes back as PROCESSING.
 func TestCompleteVodUpload_HappyPathTransitionsToProcessing(t *testing.T) {
-	s3 := &completeVodS3Stub{s3URL: "s3://bucket/vod/t1/hash-1/video.mp4"}
+	s3 := &completeVodS3Stub{s3URL: "s3://bucket/vod/t1/hash-1/video.mp4", objectSize: 2048}
 	srv, mock, cleanup := newCompleteVodServer(t, s3)
 	defer cleanup()
 
@@ -308,6 +327,108 @@ func TestCompleteVodUpload_HappyPathTransitionsToProcessing(t *testing.T) {
 	}
 }
 
+// uploadFailedReason matches a domain event payload that is an upload.failed
+// fact carrying reason.
+type uploadFailedReason publicv1.MediaFailureReason
+
+func (r uploadFailedReason) Match(v driver.Value) bool {
+	data, ok := v.([]byte)
+	if !ok {
+		return false
+	}
+	var fact publicv1.UploadFailed
+	return proto.Unmarshal(data, &fact) == nil && fact.GetReason() == publicv1.MediaFailureReason(r)
+}
+
+// The stored object is the source of truth for an upload. When the assembled
+// object is smaller than the declared size (a part PUT that sent 2 bytes), the
+// completion fails at once with the size mismatch, records the stored size, and
+// emits upload.failed as invalid input. Accepting it would hand processing a
+// source it can never read and fail 20 minutes later as a storage stall.
+func TestCompleteVodUpload_StoredSizeMismatchFailsUpload(t *testing.T) {
+	s3 := &completeVodS3Stub{s3URL: "s3://bucket/vod/t1/hash-1/video.mp4", objectSize: 2}
+	srv, mock, cleanup := newCompleteVodServer(t, s3)
+	defer cleanup()
+
+	mock.ExpectQuery(`SELECT v\.artifact_hash, v\.s3_key, a\.size_bytes, a\.user_id, a\.status`).
+		WithArgs("up-1", mockTenantUUID).
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "s3_key", "size_bytes", "user_id", "status"}).
+			AddRow("hash-1", "vod/t1/hash-1/video.mp4", int64(10326548), "user-1", "uploading"))
+	mock.ExpectBegin()
+	mock.ExpectExec(`UPDATE foghorn\.artifacts AS a\s+SET status = 'completing'`).
+		WithArgs("hash-1", mockTenantUUID, "up-1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`UPDATE foghorn\.vod_metadata\s+SET processes_json`).
+		WithArgs("", sqlmock.AnyArg(), "hash-1", "up-1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+	expectVodCompletionContractLoad(mock, "hash-1", `{"s3_key":"vod/t1/hash-1/video.mp4","upload_id":"up-1","parts":[{"part_number":1,"etag":"et-1"}]}`)
+	const reason = "upload size mismatch: stored object is 2 bytes, declared 10326548 bytes"
+	mock.ExpectBegin()
+	mock.ExpectExec(`UPDATE foghorn\.artifacts\s+SET status = 'failed'.*size_bytes = \$2.*AND status = 'completing'`).
+		WithArgs(reason, int64(2), "hash-1", mockTenantUUID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`UPDATE foghorn\.artifacts\s+SET revision = revision \+ 1`).
+		WithArgs("hash-1", mockTenantUUID).
+		WillReturnRows(sqlmock.NewRows([]string{"revision"}).AddRow(mockArtifactRevision))
+	mock.ExpectExec(`INSERT INTO foghorn\.domain_event_outbox`).
+		WithArgs(sqlmock.AnyArg(), "upload.failed", "foghorn", sqlmock.AnyArg(), "hash-1", mockArtifactRevision,
+			"tenant", sqlmock.AnyArg(), "", "", "", sqlmock.AnyArg(),
+			uploadFailedReason(publicv1.MediaFailureReason_MEDIA_FAILURE_REASON_INVALID_INPUT)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`INSERT INTO foghorn\.artifact_event_outbox`).
+		WithArgs(sqlmock.AnyArg(), "vod_lifecycle", mockTenantUUID, "", "hash-1", sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	_, err := srv.CompleteVodUpload(context.Background(), &sharedpb.CompleteVodUploadRequest{
+		TenantId: mockTenantUUID,
+		UploadId: "up-1",
+		Parts:    []*sharedpb.VodCompletedPart{{PartNumber: 1, Etag: "et-1"}},
+	})
+	if status.Code(err) != codes.InvalidArgument || status.Convert(err).Message() != reason {
+		t.Fatalf("completion error = %v, want InvalidArgument %q", err, reason)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet SQL expectations: %v", err)
+	}
+}
+
+// A HEAD that cannot answer leaves the claimed row 'completing' for a retry or
+// the recovery job, never advancing an unverified object to processing.
+func TestCompleteVodUpload_UnverifiableStoredObjectStaysCompleting(t *testing.T) {
+	for name, s3 := range map[string]*completeVodS3Stub{
+		"head error":     {headErr: errors.New("connection reset")},
+		"object missing": {objectMissing: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv, mock, cleanup := newCompleteVodServer(t, s3)
+			defer cleanup()
+
+			mock.ExpectQuery(`SELECT v\.artifact_hash, v\.s3_key, a\.size_bytes, a\.user_id, a\.status`).
+				WithArgs("up-1", mockTenantUUID).
+				WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "s3_key", "size_bytes", "user_id", "status"}).
+					AddRow("hash-1", "vod/t1/hash-1/video.mp4", int64(2048), "user-1", "completing"))
+			expectVodCompletionContractLoad(mock, "hash-1", `{"s3_key":"vod/t1/hash-1/video.mp4","upload_id":"up-1","parts":[{"part_number":1,"etag":"et-1"}]}`)
+
+			_, err := srv.CompleteVodUpload(context.Background(), &sharedpb.CompleteVodUploadRequest{
+				TenantId: mockTenantUUID,
+				UploadId: "up-1",
+				Parts:    []*sharedpb.VodCompletedPart{{PartNumber: 1, Etag: "et-1"}},
+			})
+			if status.Code(err) != codes.Unavailable {
+				t.Fatalf("completion error = %v, want Unavailable", err)
+			}
+			if s3.headCalls != 1 {
+				t.Fatalf("HEAD calls = %d, want 1", s3.headCalls)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatalf("unmet SQL expectations: %v", err)
+			}
+		})
+	}
+}
+
 // Reconciliation invariant: a retry where the multipart already completed on a prior attempt
 // (S3 returns NoSuchUpload) but the durable PG transition never committed must NOT record 'failed'.
 // The row is already claimed ('completing'); with the final object present (Exists=true) the RPC
@@ -320,6 +441,7 @@ func TestCompleteVodUpload_NoSuchUploadWithObjectConvergesToProcessing(t *testin
 		completeErr:  fmt.Errorf("operation error S3: CompleteMultipartUpload: %w", &types.NoSuchUpload{}),
 		existsResult: true,
 		s3URL:        "s3://bucket/vod/t1/hash-1/video.mp4",
+		objectSize:   2048,
 	}
 	srv, mock, cleanup := newCompleteVodServer(t, s3)
 	defer cleanup()
