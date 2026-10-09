@@ -250,7 +250,9 @@ func TestTenantDailyStatsIncludesRestreamEgressWithoutInventingViewers_RealClick
 		t.Fatalf("restream was counted as human audience: %+v", got)
 	}
 
-	viewerWindow := now.Add(-24 * time.Hour)
+	// Keep the finalized viewer session on the previous UTC day, including when
+	// the test runs in the last five minutes of the current day.
+	viewerWindow := now.Truncate(24 * time.Hour).Add(-12 * time.Hour)
 	if _, err := db.ExecContext(context.Background(), `
 		INSERT INTO periscope.viewer_usage_5m
 		(window_start, tenant_id, cluster_id, stream_id, node_id, session_id,
@@ -270,9 +272,7 @@ func TestTenantDailyStatsIncludesRestreamEgressWithoutInventingViewers_RealClick
 	`, tenantID, streamID, viewerWindow.UnixMilli(), viewerWindow.Add(5*time.Minute).UnixMilli(), now.UnixMilli()+2); err != nil {
 		t.Fatal(err)
 	}
-	// Day-grain ranges start at the day of viewerWindow-1h, which is two days
-	// back when the test runs before 01:00 UTC. Noon of the day before that day
-	// is outside every range below at any time of day.
+	// Noon before the viewer day is outside both timestamp and day-grain ranges.
 	excludedWindow := viewerWindow.Add(-time.Hour).Truncate(24 * time.Hour).Add(-12 * time.Hour)
 	if _, err := db.ExecContext(context.Background(), `
 		INSERT INTO periscope.restream_sessions_final
@@ -397,7 +397,8 @@ func TestDashboardRefreshPreservesBothPlanesAcrossOneSidedCorrections_RealClickH
 	ctx := context.Background()
 	const tenantID = "8eed517e-ba5e-4a7a-817e-ba5eda7a0001"
 	const streamID = "8eedfeed-11fe-4a57-8eed-11feca570001"
-	window := time.Now().UTC().Add(-5 * time.Minute).Truncate(5 * time.Minute)
+	// Cross midnight so usage windows and finalized daily facts exercise distinct days.
+	window := time.Now().UTC().Truncate(24 * time.Hour).Add(-5 * time.Minute)
 	version := time.Now().UnixMilli()
 
 	insertViewer := func(sessionID string, seconds uint32, downBytes uint64, projectionVersion int64) {
@@ -473,11 +474,12 @@ func TestDashboardRefreshPreservesBothPlanesAcrossOneSidedCorrections_RealClickH
 		}
 
 		var dailyViews, dailyDown uint64
+		// Final facts use the session's end day, which may follow the usage window's day.
 		if err := db.QueryRowContext(ctx, `
 			SELECT total_views, egress_bytes
 			FROM periscope.tenant_analytics_daily
 			WHERE tenant_id = ? AND day = toDate(?)
-		`, tenantID, window).Scan(&dailyViews, &dailyDown); err != nil {
+		`, tenantID, window.Add(5*time.Minute)).Scan(&dailyViews, &dailyDown); err != nil {
 			t.Fatal(err)
 		}
 		if dailyViews != wantSessions || dailyDown != wantDailyDownBytes {
