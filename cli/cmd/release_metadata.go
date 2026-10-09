@@ -41,6 +41,9 @@ func newReleaseMetadataCmd() *cobra.Command {
 			if err := validateRollbackDisabledNames(rollbackDisabled); err != nil {
 				return fmt.Errorf("%s: %w", version, err)
 			}
+			if err := checkReleaseDeploysItself(version, releases.MinCLIVersionFor(version)); err != nil {
+				return err
+			}
 			out := cmd.OutOrStdout()
 			if minCLI := releases.MinCLIVersionFor(version); minCLI != "" {
 				fmt.Fprintf(out, "min_cli_version: %s\n", minCLI)
@@ -64,6 +67,16 @@ func newReleaseMetadataCmd() *cobra.Command {
 		},
 	}
 	return cmd
+}
+
+// checkReleaseDeploysItself refuses a min_cli_version above the version being tagged. The CLI built from that tag
+// reports the tag's version, and an rc sorts below its final release, so a floor of vX.Y.Z would make the
+// vX.Y.Z-rcN CLI refuse to deploy its own release.
+func checkReleaseDeploysItself(version, minCLI string) error {
+	if minCLI == "" || releases.CompareSemver(version, minCLI) >= 0 {
+		return nil
+	}
+	return fmt.Errorf("release-metadata: min_cli_version %s is newer than %s, so the CLI built from this tag could not deploy its own release; set it to %s or an earlier version that carries the requirement", minCLI, version, version)
 }
 
 // validateRollbackDisabledNames rejects any rollback_disabled entry that is not a canonical servicedefs deploy id, so
