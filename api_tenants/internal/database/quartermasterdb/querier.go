@@ -110,6 +110,9 @@ type Querier interface {
 	// cluster or holds active, subscribed, unexpired access of known provenance
 	// to it. No row
 	// otherwise, so a missing cluster and an invisible one answer alike.
+	// A gateway counts when it is registered in the cluster or actively assigned
+	// to it: gateways usually run on regional hosts and serve media clusters only
+	// through service_cluster_assignments.
 	GetVisibleClusterGatewayPresence(ctx context.Context, arg GetVisibleClusterGatewayPresenceParams) (GetVisibleClusterGatewayPresenceRow, error)
 	GrantDefaultClusterAccess(ctx context.Context, arg GrantDefaultClusterAccessParams) error
 	GrantTenantClusterAccess(ctx context.Context, arg GrantTenantClusterAccessParams) error

@@ -210,12 +210,24 @@ ON CONFLICT (tenant_id, cluster_id) DO UPDATE SET
 -- cluster or holds active, subscribed, unexpired access of known provenance
 -- to it. No row
 -- otherwise, so a missing cluster and an invisible one answer alike.
+-- A gateway counts when it is registered in the cluster or actively assigned
+-- to it: gateways usually run on regional hosts and serve media clusters only
+-- through service_cluster_assignments.
 SELECT c.owner_tenant_id,
        EXISTS (
            SELECT 1
            FROM quartermaster.service_instances si
-           WHERE si.cluster_id = c.cluster_id
-             AND (si.service_id = 'livepeer-gateway' OR si.service_id LIKE 'livepeer-gateway-%')
+           WHERE (si.service_id = 'livepeer-gateway' OR si.service_id LIKE 'livepeer-gateway-%')
+             AND (
+                 si.cluster_id = c.cluster_id
+                 OR EXISTS (
+                     SELECT 1
+                     FROM quartermaster.service_cluster_assignments sca
+                     WHERE sca.service_instance_id = si.id
+                       AND sca.cluster_id = c.cluster_id
+                       AND sca.is_active = TRUE
+                 )
+             )
        )::boolean AS has_livepeer_gateway
 FROM quartermaster.infrastructure_clusters c
 WHERE c.cluster_id = sqlc.arg(cluster_id)::text
