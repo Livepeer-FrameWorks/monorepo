@@ -1049,6 +1049,12 @@ func (c *GRPCClient) ListServiceInstances(ctx context.Context, clusterID, servic
 	})
 }
 
+// GetClusterGatewayPresence reports whether a cluster the caller may see runs
+// a Livepeer gateway, and its owner tenant.
+func (c *GRPCClient) GetClusterGatewayPresence(ctx context.Context, clusterID string) (*quartermasterpb.GetClusterGatewayPresenceResponse, error) {
+	return c.serviceRegistry.GetClusterGatewayPresence(ctx, &quartermasterpb.GetClusterGatewayPresenceRequest{ClusterId: clusterID})
+}
+
 // ListServiceInstancesByType lists the physical instances of a service type,
 // each carrying its node external IP and synthesized infra endpoint. Used by
 // Navigator to publish per-node infra DNS records (no SCA grouping).

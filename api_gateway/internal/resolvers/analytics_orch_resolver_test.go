@@ -527,6 +527,109 @@ func TestDoListOrchestratorVantages_SubscribedPublicClusterUsesPublicReadPath(t 
 	}
 }
 
+// A signed-in tenant subscribed to a private gateway cluster it does not own
+// sees that cluster's orchestrators. The fake Quartermaster refuses the
+// owner-only service-instance read for the subscriber, as production does, and
+// answers gateway presence only under the subscriber's own identity.
+func TestDoListOrchestratorVantages_SubscribedPrivateClusterUsesGatewayPresence(t *testing.T) {
+	platformOwner := "platform-t"
+	cluster := &quartermasterpb.InfrastructureCluster{
+		ClusterId:     "staging-media-eu",
+		OwnerTenantId: &platformOwner,
+		IsActive:      true,
+	}
+	var presenceCallers []string
+	q := &clientstest.FakeQuartermaster{
+		ListPublicTopologyClustersFn: func(context.Context) (*quartermasterpb.ListClustersResponse, error) {
+			return &quartermasterpb.ListClustersResponse{}, nil
+		},
+		ListMySubscriptionsFn: func(context.Context, *quartermasterpb.ListMySubscriptionsRequest) (*quartermasterpb.ListClustersResponse, error) {
+			return &quartermasterpb.ListClustersResponse{Clusters: []*quartermasterpb.InfrastructureCluster{cluster}}, nil
+		},
+		ListClustersByOwnerFn: func(context.Context, string, *commonpb.CursorPaginationRequest) (*quartermasterpb.ListClustersResponse, error) {
+			return &quartermasterpb.ListClustersResponse{}, nil
+		},
+		ListServiceInstancesFn: func(ctx context.Context, _ string, _ string, _ string, _ *commonpb.CursorPaginationRequest) (*quartermasterpb.ListServiceInstancesResponse, error) {
+			if ctxkeys.GetTenantID(ctx) != platformOwner {
+				return nil, status.Error(codes.PermissionDenied, "private infrastructure access denied")
+			}
+			return &quartermasterpb.ListServiceInstancesResponse{
+				Instances: []*quartermasterpb.ServiceInstance{{ServiceId: "livepeer-gateway"}},
+			}, nil
+		},
+		GetClusterGatewayPresenceFn: func(ctx context.Context, clusterID string) (*quartermasterpb.GetClusterGatewayPresenceResponse, error) {
+			callerTenant := ctxkeys.GetTenantID(ctx)
+			presenceCallers = append(presenceCallers, callerTenant)
+			if callerTenant != "subscriber-t" || clusterID != "staging-media-eu" {
+				return nil, status.Error(codes.PermissionDenied, "private infrastructure access denied")
+			}
+			return &quartermasterpb.GetClusterGatewayPresenceResponse{
+				ClusterId: clusterID, OwnerTenantId: platformOwner, HasLivepeerGateway: true,
+			}, nil
+		},
+	}
+	var gotTenant string
+	p := &clientstest.FakePeriscope{
+		ListOrchestratorVantagesFn: func(ctx context.Context, tenantID string, _ *string) (*periscopepb.ListOrchestratorVantagesResponse, error) {
+			if callerTenant := ctxkeys.GetTenantID(ctx); callerTenant != "" && callerTenant != tenantID {
+				return nil, status.Error(codes.PermissionDenied, "tenant_id mismatch")
+			}
+			gotTenant = tenantID
+			return &periscopepb.ListOrchestratorVantagesResponse{
+				Vantages: []*periscopepb.OrchestratorVantage{{GatewayId: "gw-staging"}},
+			}, nil
+		},
+	}
+
+	got, err := orchO(p, q).DoListOrchestratorVantages(clientstest.AuthedCtx("subscriber-t"), nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 1 || got[0].GetGatewayId() != "gw-staging" {
+		t.Fatalf("private subscribed cluster's orchestrator vantages missing: %+v", got)
+	}
+	if gotTenant != platformOwner {
+		t.Fatalf("periscope scope = %q, want cluster owner %q", gotTenant, platformOwner)
+	}
+	if len(presenceCallers) != 1 || presenceCallers[0] != "subscriber-t" {
+		t.Fatalf("gateway presence read as %q, want once as the subscriber", presenceCallers)
+	}
+}
+
+// A cluster whose gateway presence Quartermaster refuses contributes no
+// owner tenant: scope never widens past what the caller may see.
+func TestDoListOrchestratorVantages_RefusedGatewayPresenceAddsNoScope(t *testing.T) {
+	foreignOwner := "foreign-t"
+	cluster := &quartermasterpb.InfrastructureCluster{ClusterId: "lapsed", OwnerTenantId: &foreignOwner, IsActive: true}
+	q := &clientstest.FakeQuartermaster{
+		ListPublicTopologyClustersFn: func(context.Context) (*quartermasterpb.ListClustersResponse, error) {
+			return &quartermasterpb.ListClustersResponse{}, nil
+		},
+		ListMySubscriptionsFn: func(context.Context, *quartermasterpb.ListMySubscriptionsRequest) (*quartermasterpb.ListClustersResponse, error) {
+			return &quartermasterpb.ListClustersResponse{Clusters: []*quartermasterpb.InfrastructureCluster{cluster}}, nil
+		},
+		ListClustersByOwnerFn: func(context.Context, string, *commonpb.CursorPaginationRequest) (*quartermasterpb.ListClustersResponse, error) {
+			return &quartermasterpb.ListClustersResponse{}, nil
+		},
+		GetClusterGatewayPresenceFn: func(context.Context, string) (*quartermasterpb.GetClusterGatewayPresenceResponse, error) {
+			return nil, status.Error(codes.PermissionDenied, "private infrastructure access denied")
+		},
+	}
+	p := &clientstest.FakePeriscope{
+		ListOrchestratorVantagesFn: func(context.Context, string, *string) (*periscopepb.ListOrchestratorVantagesResponse, error) {
+			t.Fatal("periscope read for a cluster the caller may not see")
+			return nil, nil
+		},
+	}
+	got, err := orchO(p, q).DoListOrchestratorVantages(clientstest.AuthedCtx("subscriber-t"), nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("vantages = %+v, want none", got)
+	}
+}
+
 // --- DoGetOrchestratorPerformanceSeries (orchestrators.go) ---
 
 func TestDoGetOrchestratorPerformanceSeries_ForwardsRangeIntervalAndFilters(t *testing.T) {

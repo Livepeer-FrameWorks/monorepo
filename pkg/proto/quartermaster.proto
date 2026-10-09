@@ -1835,6 +1835,13 @@ service ServiceRegistryService {
   // Get running service instances
   rpc ListServiceInstances(ListServiceInstancesRequest) returns (ListServiceInstancesResponse);
 
+  // Report whether a cluster runs a Livepeer gateway and which tenant owns it.
+  // A tenant caller may ask only about a cluster it owns or holds active
+  // access to, and learns nothing else of its inventory; any other cluster
+  // answers PermissionDenied. Service and platform-operator callers may ask
+  // about any cluster.
+  rpc GetClusterGatewayPresence(GetClusterGatewayPresenceRequest) returns (GetClusterGatewayPresenceResponse);
+
   // List the concrete PHYSICAL instances of a service type, each carrying its
   // physical node identity, external IP, and synthesized physical endpoint
   // (<service>.<node>.infra.<root>). Unlike DiscoverServices, this does NOT
@@ -2023,6 +2030,18 @@ message ListServiceInstancesRequest {
   string service_id = 2;                // optional filter
   string node_id = 3;                   // optional filter by node
   common.CursorPaginationRequest pagination = 4;
+}
+
+message GetClusterGatewayPresenceRequest {
+  string cluster_id = 1;
+}
+
+message GetClusterGatewayPresenceResponse {
+  string cluster_id = 1;
+  // Empty when the cluster has no owning tenant.
+  string owner_tenant_id = 2;
+  // Whether any livepeer-gateway service instance is registered on the cluster.
+  bool has_livepeer_gateway = 3;
 }
 
 // Matches pkg/api/quartermaster/types.go:ServiceInstancesResponse (lines 221-225)

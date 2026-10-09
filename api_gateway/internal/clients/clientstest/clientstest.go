@@ -761,16 +761,17 @@ type FakeQuartermaster struct {
 	mu    sync.Mutex
 	Calls int
 
-	GetNodeFn               func(ctx context.Context, nodeID string) (*quartermasterpb.NodeResponse, error)
-	GetClusterFn            func(ctx context.Context, clusterID string) (*quartermasterpb.ClusterResponse, error)
-	ListNodesFn             func(ctx context.Context, clusterID, nodeType, region string, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListNodesResponse, error)
-	ListServiceInstancesFn  func(ctx context.Context, clusterID, serviceID, nodeID string, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListServiceInstancesResponse, error)
-	ListMySubscriptionsFn   func(ctx context.Context, req *quartermasterpb.ListMySubscriptionsRequest) (*quartermasterpb.ListClustersResponse, error)
-	ListClustersByOwnerFn   func(ctx context.Context, ownerTenantID string, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListClustersResponse, error)
-	ListClustersFn          func(ctx context.Context, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListClustersResponse, error)
-	ListTenantsFn           func(ctx context.Context, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListTenantsResponse, error)
-	GetTenantsByClusterFn   func(ctx context.Context, clusterID string, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.GetTenantsByClusterResponse, error)
-	CreateEnrollmentTokenFn func(ctx context.Context, req *quartermasterpb.CreateEnrollmentTokenRequest) (*quartermasterpb.CreateBootstrapTokenResponse, error)
+	GetNodeFn                   func(ctx context.Context, nodeID string) (*quartermasterpb.NodeResponse, error)
+	GetClusterFn                func(ctx context.Context, clusterID string) (*quartermasterpb.ClusterResponse, error)
+	ListNodesFn                 func(ctx context.Context, clusterID, nodeType, region string, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListNodesResponse, error)
+	ListServiceInstancesFn      func(ctx context.Context, clusterID, serviceID, nodeID string, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListServiceInstancesResponse, error)
+	GetClusterGatewayPresenceFn func(ctx context.Context, clusterID string) (*quartermasterpb.GetClusterGatewayPresenceResponse, error)
+	ListMySubscriptionsFn       func(ctx context.Context, req *quartermasterpb.ListMySubscriptionsRequest) (*quartermasterpb.ListClustersResponse, error)
+	ListClustersByOwnerFn       func(ctx context.Context, ownerTenantID string, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListClustersResponse, error)
+	ListClustersFn              func(ctx context.Context, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListClustersResponse, error)
+	ListTenantsFn               func(ctx context.Context, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListTenantsResponse, error)
+	GetTenantsByClusterFn       func(ctx context.Context, clusterID string, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.GetTenantsByClusterResponse, error)
+	CreateEnrollmentTokenFn     func(ctx context.Context, req *quartermasterpb.CreateEnrollmentTokenRequest) (*quartermasterpb.CreateBootstrapTokenResponse, error)
 
 	GetTenantFn                  func(ctx context.Context, tenantID string) (*quartermasterpb.GetTenantResponse, error)
 	GetClusterRoutingFn          func(ctx context.Context, req *quartermasterpb.GetClusterRoutingRequest) (*quartermasterpb.ClusterRoutingResponse, error)
@@ -938,6 +939,14 @@ func (f *FakeQuartermaster) ListServiceInstances(ctx context.Context, clusterID,
 		panic("FakeQuartermaster.ListServiceInstances not stubbed")
 	}
 	return f.ListServiceInstancesFn(ctx, clusterID, serviceID, nodeID, pagination)
+}
+
+func (f *FakeQuartermaster) GetClusterGatewayPresence(ctx context.Context, clusterID string) (*quartermasterpb.GetClusterGatewayPresenceResponse, error) {
+	f.Calls++
+	if f.GetClusterGatewayPresenceFn == nil {
+		panic("FakeQuartermaster.GetClusterGatewayPresence not stubbed")
+	}
+	return f.GetClusterGatewayPresenceFn(ctx, clusterID)
 }
 
 func (f *FakeQuartermaster) ListMySubscriptions(ctx context.Context, req *quartermasterpb.ListMySubscriptionsRequest) (*quartermasterpb.ListClustersResponse, error) {

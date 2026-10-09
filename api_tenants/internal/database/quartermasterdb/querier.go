@@ -105,6 +105,12 @@ type Querier interface {
 	GetTenantPrimaryClusterRouting(ctx context.Context, arg GetTenantPrimaryClusterRoutingParams) (GetTenantPrimaryClusterRoutingRow, error)
 	GetTenantRecord(ctx context.Context, tenantID string) (GetTenantRecordRow, error)
 	GetTenantRoutingSelection(ctx context.Context, tenantID string) (GetTenantRoutingSelectionRow, error)
+	// Returns the cluster's owner and whether it runs a Livepeer gateway when the
+	// cluster is visible to the caller: any_tenant is set, or tenant_id owns the
+	// cluster or holds active, subscribed, unexpired access of known provenance
+	// to it. No row
+	// otherwise, so a missing cluster and an invisible one answer alike.
+	GetVisibleClusterGatewayPresence(ctx context.Context, arg GetVisibleClusterGatewayPresenceParams) (GetVisibleClusterGatewayPresenceRow, error)
 	GrantDefaultClusterAccess(ctx context.Context, arg GrantDefaultClusterAccessParams) error
 	GrantTenantClusterAccess(ctx context.Context, arg GrantTenantClusterAccessParams) error
 	HasBillingEntitlementHandoff(ctx context.Context, handoffKey string) (bool, error)

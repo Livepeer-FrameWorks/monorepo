@@ -115,6 +115,7 @@ type Interface interface {
 	ListServices(ctx context.Context, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListServicesResponse, error)
 	ListClusterServices(ctx context.Context, clusterID string, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListClusterServicesResponse, error)
 	ListServiceInstances(ctx context.Context, clusterID, serviceID, nodeID string, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListServiceInstancesResponse, error)
+	GetClusterGatewayPresence(ctx context.Context, clusterID string) (*quartermasterpb.GetClusterGatewayPresenceResponse, error)
 	ListServiceInstancesByType(ctx context.Context, serviceType, clusterID string, staleThresholdSeconds int32) (*quartermasterpb.ListServiceInstancesByTypeResponse, error)
 	ListServiceClusterAssignments(ctx context.Context, instanceID, serviceType string) (*quartermasterpb.ListServiceClusterAssignmentsResponse, error)
 	ListServicesHealth(ctx context.Context, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListServicesHealthResponse, error)

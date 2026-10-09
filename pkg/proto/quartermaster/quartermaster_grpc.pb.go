@@ -4108,6 +4108,7 @@ const (
 	ServiceRegistryService_ListServices_FullMethodName                  = "/quartermaster.ServiceRegistryService/ListServices"
 	ServiceRegistryService_ListClusterServices_FullMethodName           = "/quartermaster.ServiceRegistryService/ListClusterServices"
 	ServiceRegistryService_ListServiceInstances_FullMethodName          = "/quartermaster.ServiceRegistryService/ListServiceInstances"
+	ServiceRegistryService_GetClusterGatewayPresence_FullMethodName     = "/quartermaster.ServiceRegistryService/GetClusterGatewayPresence"
 	ServiceRegistryService_ListServiceInstancesByType_FullMethodName    = "/quartermaster.ServiceRegistryService/ListServiceInstancesByType"
 	ServiceRegistryService_ListServiceClusterAssignments_FullMethodName = "/quartermaster.ServiceRegistryService/ListServiceClusterAssignments"
 	ServiceRegistryService_ListServicesHealth_FullMethodName            = "/quartermaster.ServiceRegistryService/ListServicesHealth"
@@ -4125,6 +4126,12 @@ type ServiceRegistryServiceClient interface {
 	ListClusterServices(ctx context.Context, in *ListClusterServicesRequest, opts ...grpc.CallOption) (*ListClusterServicesResponse, error)
 	// Get running service instances
 	ListServiceInstances(ctx context.Context, in *ListServiceInstancesRequest, opts ...grpc.CallOption) (*ListServiceInstancesResponse, error)
+	// Report whether a cluster runs a Livepeer gateway and which tenant owns it.
+	// A tenant caller may ask only about a cluster it owns or holds active
+	// access to, and learns nothing else of its inventory; any other cluster
+	// answers PermissionDenied. Service and platform-operator callers may ask
+	// about any cluster.
+	GetClusterGatewayPresence(ctx context.Context, in *GetClusterGatewayPresenceRequest, opts ...grpc.CallOption) (*GetClusterGatewayPresenceResponse, error)
 	// List the concrete PHYSICAL instances of a service type, each carrying its
 	// physical node identity, external IP, and synthesized physical endpoint
 	// (<service>.<node>.infra.<root>). Unlike DiscoverServices, this does NOT
@@ -4184,6 +4191,16 @@ func (c *serviceRegistryServiceClient) ListServiceInstances(ctx context.Context,
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListServiceInstancesResponse)
 	err := c.cc.Invoke(ctx, ServiceRegistryService_ListServiceInstances_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *serviceRegistryServiceClient) GetClusterGatewayPresence(ctx context.Context, in *GetClusterGatewayPresenceRequest, opts ...grpc.CallOption) (*GetClusterGatewayPresenceResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetClusterGatewayPresenceResponse)
+	err := c.cc.Invoke(ctx, ServiceRegistryService_GetClusterGatewayPresence_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -4250,6 +4267,12 @@ type ServiceRegistryServiceServer interface {
 	ListClusterServices(context.Context, *ListClusterServicesRequest) (*ListClusterServicesResponse, error)
 	// Get running service instances
 	ListServiceInstances(context.Context, *ListServiceInstancesRequest) (*ListServiceInstancesResponse, error)
+	// Report whether a cluster runs a Livepeer gateway and which tenant owns it.
+	// A tenant caller may ask only about a cluster it owns or holds active
+	// access to, and learns nothing else of its inventory; any other cluster
+	// answers PermissionDenied. Service and platform-operator callers may ask
+	// about any cluster.
+	GetClusterGatewayPresence(context.Context, *GetClusterGatewayPresenceRequest) (*GetClusterGatewayPresenceResponse, error)
 	// List the concrete PHYSICAL instances of a service type, each carrying its
 	// physical node identity, external IP, and synthesized physical endpoint
 	// (<service>.<node>.infra.<root>). Unlike DiscoverServices, this does NOT
@@ -4293,6 +4316,9 @@ func (UnimplementedServiceRegistryServiceServer) ListClusterServices(context.Con
 }
 func (UnimplementedServiceRegistryServiceServer) ListServiceInstances(context.Context, *ListServiceInstancesRequest) (*ListServiceInstancesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListServiceInstances not implemented")
+}
+func (UnimplementedServiceRegistryServiceServer) GetClusterGatewayPresence(context.Context, *GetClusterGatewayPresenceRequest) (*GetClusterGatewayPresenceResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetClusterGatewayPresence not implemented")
 }
 func (UnimplementedServiceRegistryServiceServer) ListServiceInstancesByType(context.Context, *ListServiceInstancesByTypeRequest) (*ListServiceInstancesByTypeResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListServiceInstancesByType not implemented")
@@ -4381,6 +4407,24 @@ func _ServiceRegistryService_ListServiceInstances_Handler(srv interface{}, ctx c
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(ServiceRegistryServiceServer).ListServiceInstances(ctx, req.(*ListServiceInstancesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ServiceRegistryService_GetClusterGatewayPresence_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetClusterGatewayPresenceRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ServiceRegistryServiceServer).GetClusterGatewayPresence(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ServiceRegistryService_GetClusterGatewayPresence_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ServiceRegistryServiceServer).GetClusterGatewayPresence(ctx, req.(*GetClusterGatewayPresenceRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -4493,6 +4537,10 @@ var ServiceRegistryService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListServiceInstances",
 			Handler:    _ServiceRegistryService_ListServiceInstances_Handler,
+		},
+		{
+			MethodName: "GetClusterGatewayPresence",
+			Handler:    _ServiceRegistryService_GetClusterGatewayPresence_Handler,
 		},
 		{
 			MethodName: "ListServiceInstancesByType",

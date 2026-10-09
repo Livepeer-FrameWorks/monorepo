@@ -45,8 +45,9 @@ func (r *Resolver) networkOrchestratorOwnerTenants(ctx context.Context) ([]strin
 
 		clusterByID := make(map[string]*quartermasterpb.InfrastructureCluster)
 		// A public-topology cluster stays on the public read path even when the
-		// tenant also subscribes to or owns it: Quartermaster authorizes
-		// tenant-identity service-instance reads only for the cluster owner.
+		// tenant also subscribes to or owns it. Every other cluster here is one
+		// the tenant owns or subscribes to, and Quartermaster answers its
+		// gateway presence under the tenant's identity.
 		publicClusterIDs := make(map[string]struct{}, len(clustersResp.GetClusters()))
 		addClusters := func(clusters []*quartermasterpb.InfrastructureCluster, publicTopology bool) {
 			for _, cluster := range clusters {
@@ -83,26 +84,21 @@ func (r *Resolver) networkOrchestratorOwnerTenants(ctx context.Context) ([]strin
 
 		seen := make(map[string]struct{})
 		for clusterID, cluster := range clusterByID {
-			readCtx := ctx
+			var ownerTenantID string
+			var hasGateway bool
 			if _, publicCluster := publicClusterIDs[clusterID]; publicCluster {
-				readCtx = publicCtx
+				ownerTenantID, hasGateway = r.publicClusterGateway(publicCtx, cluster)
+			} else {
+				ownerTenantID, hasGateway = r.visibleClusterGateway(ctx, clusterID)
 			}
-			instancesResp, instanceErr := r.Clients.Quartermaster.ListServiceInstances(readCtx, clusterID, "", "", &commonpb.CursorPaginationRequest{First: 2000})
-			if instanceErr != nil {
-				r.Logger.WithError(instanceErr).WithField("cluster_id", clusterID).Warn("orchestrator scope: failed to load cluster service instances")
+			if !hasGateway {
 				continue
 			}
-			for _, instance := range instancesResp.GetInstances() {
-				if instance == nil || !isLivepeerGatewayService(instance.GetServiceId()) {
-					continue
-				}
-				ownerTenantID := strings.TrimSpace(cluster.GetOwnerTenantId())
-				if ownerTenantID == "" {
-					r.Logger.WithField("cluster_id", cluster.GetClusterId()).Warn("livepeer gateway cluster missing owner_tenant_id")
-					continue
-				}
-				seen[ownerTenantID] = struct{}{}
+			if ownerTenantID == "" {
+				r.Logger.WithField("cluster_id", clusterID).Warn("livepeer gateway cluster missing owner_tenant_id")
+				continue
 			}
+			seen[ownerTenantID] = struct{}{}
 		}
 		tenantIDs := make([]string, 0, len(seen))
 		for tenantID := range seen {
@@ -119,6 +115,43 @@ func (r *Resolver) networkOrchestratorOwnerTenants(ctx context.Context) ([]strin
 		return nil, fmt.Errorf("unexpected network orchestrator tenant scope type: %T", val)
 	}
 	return tenantIDs, nil
+}
+
+// publicClusterGateway reads a public-topology cluster's service instances on
+// the public read path and reports its owner and whether it runs a Livepeer
+// gateway.
+func (r *Resolver) publicClusterGateway(publicCtx context.Context, cluster *quartermasterpb.InfrastructureCluster) (string, bool) {
+	clusterID := cluster.GetClusterId()
+	instancesResp, err := r.Clients.Quartermaster.ListServiceInstances(publicCtx, clusterID, "", "", &commonpb.CursorPaginationRequest{First: 2000})
+	if err != nil {
+		r.Logger.WithError(err).WithField("cluster_id", clusterID).Warn("orchestrator scope: failed to load cluster service instances")
+		return "", false
+	}
+	for _, instance := range instancesResp.GetInstances() {
+		if instance != nil && isLivepeerGatewayService(instance.GetServiceId()) {
+			return strings.TrimSpace(cluster.GetOwnerTenantId()), true
+		}
+	}
+	return "", false
+}
+
+// visibleClusterGateway asks Quartermaster, under the caller's identity,
+// whether a cluster the caller owns or subscribes to runs a Livepeer gateway.
+// Quartermaster answers only for clusters the caller may see, so a private
+// cluster's inventory stays with its owner. A refusal means access ended
+// between listing and asking, and is not a failure.
+func (r *Resolver) visibleClusterGateway(ctx context.Context, clusterID string) (string, bool) {
+	presence, err := r.Clients.Quartermaster.GetClusterGatewayPresence(ctx, clusterID)
+	if err != nil {
+		switch status.Code(err) {
+		case codes.PermissionDenied, codes.NotFound:
+			r.Logger.WithError(err).WithField("cluster_id", clusterID).Debug("orchestrator scope: cluster gateway presence not visible to caller")
+		default:
+			r.Logger.WithError(err).WithField("cluster_id", clusterID).Warn("orchestrator scope: failed to load cluster gateway presence")
+		}
+		return "", false
+	}
+	return strings.TrimSpace(presence.GetOwnerTenantId()), presence.GetHasLivepeerGateway()
 }
 
 // networkOrchestratorReadContext drops the caller identity for Periscope

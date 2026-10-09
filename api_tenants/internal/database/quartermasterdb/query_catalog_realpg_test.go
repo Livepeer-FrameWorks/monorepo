@@ -269,8 +269,8 @@ func TestListTenantEffectiveAccessUsesCanonicalActiveGrantPredicate_RealPG(t *te
 func prepareQuartermasterQueryCatalog(t *testing.T, db *sql.DB) {
 	t.Helper()
 	queries := quartermasterGeneratedQueries(t)
-	if len(queries) != 186 {
-		t.Fatalf("found %d generated Quartermaster queries, want 186", len(queries))
+	if len(queries) != 187 {
+		t.Fatalf("found %d generated Quartermaster queries, want 187", len(queries))
 	}
 	ctx := context.Background()
 	conn, err := db.Conn(ctx)

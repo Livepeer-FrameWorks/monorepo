@@ -157,6 +157,55 @@ func (q *Queries) GetTenantPrimaryClusterClass(ctx context.Context, tenantID str
 	return cluster_class, err
 }
 
+const getVisibleClusterGatewayPresence = `-- name: GetVisibleClusterGatewayPresence :one
+SELECT c.owner_tenant_id,
+       EXISTS (
+           SELECT 1
+           FROM quartermaster.service_instances si
+           WHERE si.cluster_id = c.cluster_id
+             AND (si.service_id = 'livepeer-gateway' OR si.service_id LIKE 'livepeer-gateway-%')
+       )::boolean AS has_livepeer_gateway
+FROM quartermaster.infrastructure_clusters c
+WHERE c.cluster_id = $1::text
+  AND (
+      $2::boolean
+      OR c.owner_tenant_id = $3::uuid
+      OR EXISTS (
+          SELECT 1
+          FROM quartermaster.tenant_cluster_access tca
+          WHERE tca.tenant_id = $3::uuid
+            AND tca.cluster_id = c.cluster_id
+            AND tca.is_active = TRUE
+            AND tca.subscription_status = 'active'
+            AND tca.access_source <> 'unknown'
+            AND (tca.expires_at IS NULL OR tca.expires_at > NOW())
+      )
+  )
+`
+
+type GetVisibleClusterGatewayPresenceParams struct {
+	ClusterID string         `db:"cluster_id" json:"cluster_id"`
+	AnyTenant bool           `db:"any_tenant" json:"any_tenant"`
+	TenantID  sql.NullString `db:"tenant_id" json:"tenant_id"`
+}
+
+type GetVisibleClusterGatewayPresenceRow struct {
+	OwnerTenantID      sql.NullString `db:"owner_tenant_id" json:"owner_tenant_id"`
+	HasLivepeerGateway bool           `db:"has_livepeer_gateway" json:"has_livepeer_gateway"`
+}
+
+// Returns the cluster's owner and whether it runs a Livepeer gateway when the
+// cluster is visible to the caller: any_tenant is set, or tenant_id owns the
+// cluster or holds active, subscribed, unexpired access of known provenance
+// to it. No row
+// otherwise, so a missing cluster and an invisible one answer alike.
+func (q *Queries) GetVisibleClusterGatewayPresence(ctx context.Context, arg GetVisibleClusterGatewayPresenceParams) (GetVisibleClusterGatewayPresenceRow, error) {
+	row := q.db.QueryRowContext(ctx, getVisibleClusterGatewayPresence, arg.ClusterID, arg.AnyTenant, arg.TenantID)
+	var i GetVisibleClusterGatewayPresenceRow
+	err := row.Scan(&i.OwnerTenantID, &i.HasLivepeerGateway)
+	return i, err
+}
+
 const grantTenantClusterAccess = `-- name: GrantTenantClusterAccess :exec
 INSERT INTO quartermaster.tenant_cluster_access
     (tenant_id, cluster_id, access_level, access_source, resource_limits,

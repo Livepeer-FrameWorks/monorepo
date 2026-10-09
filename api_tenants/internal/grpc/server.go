@@ -8661,6 +8661,42 @@ func (s *QuartermasterServer) ListServiceInstances(ctx context.Context, req *qua
 	return resp, nil
 }
 
+// GetClusterGatewayPresence reports whether a cluster runs a Livepeer gateway
+// and which tenant owns it. Tenant callers may ask only about clusters they
+// own or hold active access to, so a subscriber of a private cluster can scope
+// orchestrator analytics without the owner-only service-instance read.
+func (s *QuartermasterServer) GetClusterGatewayPresence(ctx context.Context, req *quartermasterpb.GetClusterGatewayPresenceRequest) (*quartermasterpb.GetClusterGatewayPresenceResponse, error) {
+	clusterID := strings.TrimSpace(req.GetClusterId())
+	if clusterID == "" {
+		return nil, status.Error(codes.InvalidArgument, "cluster_id required")
+	}
+	params := quartermasterdb.GetVisibleClusterGatewayPresenceParams{ClusterID: clusterID}
+	if ctxkeys.GetAuthType(ctx) == "service" || ctxkeys.IsPlatformOperator(ctx) {
+		params.AnyTenant = true
+	} else {
+		tenantID := strings.TrimSpace(middleware.GetTenantID(ctx))
+		if _, err := authorizeTenantReadActor(ctx, tenantID); err != nil {
+			return nil, err
+		}
+		params.TenantID = sql.NullString{String: tenantID, Valid: true}
+	}
+	row, err := quartermasterdb.New(s.db).GetVisibleClusterGatewayPresence(ctx, params)
+	if errors.Is(err, sql.ErrNoRows) {
+		if params.AnyTenant {
+			return nil, status.Error(codes.NotFound, "cluster not found")
+		}
+		return nil, status.Error(codes.PermissionDenied, privateInfrastructureDenied)
+	}
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	return &quartermasterpb.GetClusterGatewayPresenceResponse{
+		ClusterId:          clusterID,
+		OwnerTenantId:      row.OwnerTenantID.String,
+		HasLivepeerGateway: row.HasLivepeerGateway,
+	}, nil
+}
+
 // ListServiceInstancesByType returns the concrete physical instances of a
 // service type, each joined to its node for the external IP and stamped with
 // the physical endpoint <service>.<node>.infra.<root>. It deliberately does NOT

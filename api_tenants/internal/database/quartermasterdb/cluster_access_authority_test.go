@@ -15,6 +15,7 @@ func TestAuthorityQueriesRejectUnknownClusterAccessProvenance(t *testing.T) {
 		"active access check":   tenantHasActiveClusterAccess,
 		"peer cluster envelope": listPeerClusters,
 		"tenant aliases":        listAliasedTenantsForCluster,
+		"gateway presence":      getVisibleClusterGatewayPresence,
 	}
 	for name, query := range queries {
 		t.Run(name, func(t *testing.T) {
