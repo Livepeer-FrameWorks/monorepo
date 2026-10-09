@@ -115,6 +115,11 @@ func (r *Resolver) DoRevokeDeveloperToken(ctx context.Context, id string) (model
 		}
 		return nil, fmt.Errorf("failed to revoke developer token: %w", err)
 	}
+	// Commodore scoped the revocation to the caller's tenant, so only that
+	// tenant's connections of the token close.
+	if r.WebsocketSessions != nil {
+		r.WebsocketSessions.CloseAPIToken(ctxkeys.GetTenantID(ctx), id)
+	}
 
 	return &model.DeleteSuccess{Success: true, DeletedID: id}, nil
 }

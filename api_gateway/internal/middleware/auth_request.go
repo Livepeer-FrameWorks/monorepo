@@ -133,7 +133,7 @@ var (
 func AuthenticateBearerToken(ctx context.Context, token string, clients *clients.ServiceClients, jwtSecret []byte) (*AuthResult, error) {
 	claims, err := auth.ValidateInteractiveJWT(token, jwtSecret)
 	if err == nil {
-		return &AuthResult{
+		result := &AuthResult{
 			UserID:           claims.UserID,
 			TenantID:         claims.TenantID,
 			Email:            claims.Email,
@@ -141,7 +141,12 @@ func AuthenticateBearerToken(ctx context.Context, token string, clients *clients
 			AuthType:         "jwt",
 			JWTToken:         token,
 			PlatformOperator: claims.HasRole(auth.RolePlatformOperator),
-		}, nil
+		}
+		if claims.ExpiresAt != nil {
+			expiresAt := claims.ExpiresAt.Time
+			result.ExpiresAt = &expiresAt
+		}
+		return result, nil
 	}
 	if errors.Is(err, auth.ErrDelegatedJWT) {
 		return nil, fmt.Errorf("%w: internal delegated token is not an ingress credential", ErrInvalidCredential)

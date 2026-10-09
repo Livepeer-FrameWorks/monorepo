@@ -157,6 +157,45 @@ func TestDoRevokeDeveloperToken(t *testing.T) {
 	}
 }
 
+type recordingTokenSockets struct {
+	closed [][2]string
+}
+
+func (r *recordingTokenSockets) CloseAPIToken(tenantID, tokenID string) int {
+	r.closed = append(r.closed, [2]string{tenantID, tokenID})
+	return 1
+}
+
+// A successful revocation closes the token's WebSocket connections on this
+// replica, scoped to the revoking tenant; a failed one closes none.
+func TestDoRevokeDeveloperTokenClosesTheTokensSockets(t *testing.T) {
+	sockets := &recordingTokenSockets{}
+	r := commoW2(&clientstest.FakeCommodore{
+		RevokeAPITokenFn: func(_ context.Context, id string) (*commodorepb.RevokeAPITokenResponse, error) {
+			return &commodorepb.RevokeAPITokenResponse{TokenId: id}, nil
+		},
+	})
+	r.WebsocketSessions = sockets
+	if _, err := r.DoRevokeDeveloperToken(clientstest.AuthedCtx("t1"), "tok9"); err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if len(sockets.closed) != 1 || sockets.closed[0] != [2]string{"t1", "tok9"} {
+		t.Fatalf("closed sockets of %v, want [[t1 tok9]]", sockets.closed)
+	}
+
+	failed := &recordingTokenSockets{}
+	fail := commoW2(&clientstest.FakeCommodore{
+		RevokeAPITokenFn: func(context.Context, string) (*commodorepb.RevokeAPITokenResponse, error) {
+			return nil, errors.New("network down")
+		},
+	})
+	fail.WebsocketSessions = failed
+	_, _ = fail.DoRevokeDeveloperToken(clientstest.AuthedCtx("t1"), "tok9")
+	if len(failed.closed) != 0 {
+		t.Fatalf("a failed revocation closed sockets of %v", failed.closed)
+	}
+}
+
 // DoGetDeveloperTokens lists tokens (passing nil pagination) and returns the
 // proto slice verbatim.
 func TestDoGetDeveloperTokens(t *testing.T) {

@@ -155,6 +155,8 @@ func main() {
 	// Initialize GraphQL resolver and server
 	resolverCfg := resolverConfig(liveConfig)
 	resolver := graph.NewResolver(serviceClients, logger, graphqlMetrics, resolverCfg)
+	websocketSessions := middleware.NewWebsocketSessions()
+	resolver.WebsocketSessions = websocketSessions
 
 	// Setup complexity functions for pagination-aware query cost calculation
 	var complexity generated.ComplexityRoot
@@ -288,7 +290,7 @@ func main() {
 	// WebSockets after 100 s, and the control-plane nginx after 300 s.
 	gqlHandler.AddTransport(middleware.GraphQLWebsocketTransport(serviceClients, []byte(jwtSecret), logger, websocket.Upgrader{
 		CheckOrigin: originMatcher.CheckWebsocketOrigin,
-	}, 10*time.Second))
+	}, 10*time.Second, websocketSessions, middleware.DefaultWebsocketRevalidateInterval))
 
 	// Setup router with unified monitoring
 	app := server.NewServiceRouter(server.RouterSpec{

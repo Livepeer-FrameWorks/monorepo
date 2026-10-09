@@ -59,25 +59,48 @@ var (
 // "ka" on graphql-ws only, and PingPongInterval sends "ping" on
 // graphql-transport-ws only, closing a connection that sends no "pong" within
 // twice the interval.
-func GraphQLWebsocketTransport(serviceClients *clients.ServiceClients, jwtSecret []byte, logger logging.Logger, upgrader websocket.Upgrader, keepAlive time.Duration) graphql.Transport {
-	return closeCodeWebsocket{Websocket: transport.Websocket{
-		KeepAlivePingInterval: keepAlive,
-		PingPongInterval:      keepAlive,
-		Upgrader:              upgrader,
-		InitFunc:              GraphQLWebsocketInit(serviceClients, jwtSecret, logger),
-	}}
+//
+// An authenticated connection stays bound to the credential it authenticated
+// with: it closes with 4403 at the session's expiry, when sessions closes the
+// connections of a revoked API token, and when a re-check every
+// revalidateEvery finds the credential no longer authenticates. Closing the
+// connection ends every subscription on it.
+func GraphQLWebsocketTransport(serviceClients *clients.ServiceClients, jwtSecret []byte, logger logging.Logger, upgrader websocket.Upgrader, keepAlive time.Duration, sessions *WebsocketSessions, revalidateEvery time.Duration) graphql.Transport {
+	return closeCodeWebsocket{
+		Websocket: transport.Websocket{
+			KeepAlivePingInterval: keepAlive,
+			PingPongInterval:      keepAlive,
+			Upgrader:              upgrader,
+			InitFunc:              GraphQLWebsocketInit(serviceClients, jwtSecret, logger),
+		},
+		identity: websocketIdentityWatch{
+			serviceClients: serviceClients,
+			jwtSecret:      jwtSecret,
+			logger:         logger,
+			sessions:       sessions,
+			interval:       revalidateEvery,
+		},
+	}
 }
 
-// closeCodeWebsocket is gqlgen's WebSocket transport with one change. gqlgen
-// closes every connection whose InitFunc fails with 1000 "terminated" and
-// offers no way to choose the code, so this transport wraps the hijacked
-// connection and rewrites that one close frame to the code and reason of the
-// WebsocketInitError the InitFunc returned. Everything else passes through.
+// closeCodeWebsocket is gqlgen's WebSocket transport with Bridge's close
+// codes. gqlgen closes a connection with 1000 "terminated" both when its
+// InitFunc fails and when the context InitFunc returned ends, and offers no
+// way to choose the code, so this transport wraps the hijacked connection and
+// rewrites that close frame to the code and reason of the WebsocketInitError
+// that ended the connection. Everything else passes through.
 type closeCodeWebsocket struct {
 	transport.Websocket
+	identity websocketIdentityWatch
 }
 
 func (t closeCodeWebsocket) Do(w http.ResponseWriter, r *http.Request, exec graphql.GraphExecutor) {
+	// gqlgen returns from Do once the connection is closed; ending connCtx
+	// then stops the identity watch.
+	connCtx, endConn := context.WithCancel(r.Context())
+	defer endConn()
+	r = r.WithContext(connCtx)
+
 	rejection := &initRejection{}
 	inner := t.Websocket
 	if init := inner.InitFunc; init != nil {
@@ -87,14 +110,26 @@ func (t closeCodeWebsocket) Do(w http.ResponseWriter, r *http.Request, exec grap
 			if errors.As(err, &initErr) {
 				rejection.set(initErr)
 			}
-			return ctx, ack, err
+			if err != nil {
+				return ctx, ack, err
+			}
+			if id, ok := websocketIdentityFrom(ctx); ok {
+				var closeConn context.CancelFunc
+				ctx, closeConn = context.WithCancel(ctx)
+				go t.identity.watch(ctx, id, func(reason *WebsocketInitError) {
+					rejection.set(reason)
+					closeConn()
+				})
+			}
+			return ctx, ack, nil
 		}
 	}
 	inner.Do(&rejectionResponseWriter{ResponseWriter: w, rejection: rejection}, r, exec)
 }
 
-// initRejection carries the InitFunc's rejection to the connection wrapper.
-// It is taken by the first close frame written after it is set.
+// initRejection carries the WebsocketInitError that ends a connection, at
+// connection_init or later, to the connection wrapper. It is taken by the
+// first close frame written after it is set.
 type initRejection struct {
 	mu  sync.Mutex
 	err *WebsocketInitError
@@ -206,19 +241,24 @@ func GraphQLWebsocketInit(serviceClients *clients.ServiceClients, jwtSecret []by
 			if err != nil {
 				return ctx, nil, ErrWebsocketInvalidAuthorization
 			}
-			return ApplyAuthToContext(ctx, result), &initPayload, nil
+			ctx = withWebsocketIdentity(ApplyAuthToContext(ctx, result), bearerIdentity(token, result))
+			return ctx, &initPayload, nil
 		}
 
 		if cookieToken, ok := ctx.Value(ctxkeys.KeyWSCookieToken).(string); ok && cookieToken != "" {
 			if result, err := AuthenticateBearerToken(ctx, cookieToken, serviceClients, jwtSecret); err == nil {
-				ctx = ApplyAuthToContext(ctx, result)
+				ctx = withWebsocketIdentity(ApplyAuthToContext(ctx, result), bearerIdentity(cookieToken, result))
 			}
 			return ctx, &initPayload, nil
 		}
 
 		if req, ok := ctx.Value(ctxkeys.KeyHTTPRequest).(*http.Request); ok && req != nil && req.Header.Get("X-Wallet-Address") != "" {
 			if result, err := authenticateWallet(ctx, req, serviceClients, logger); err == nil {
-				ctx = ApplyAuthToContext(ctx, result)
+				id := websocketIdentity{tenantID: result.TenantID}
+				if result.ExpiresAt != nil {
+					id.expiresAt = *result.ExpiresAt
+				}
+				ctx = withWebsocketIdentity(ApplyAuthToContext(ctx, result), id)
 			}
 		}
 

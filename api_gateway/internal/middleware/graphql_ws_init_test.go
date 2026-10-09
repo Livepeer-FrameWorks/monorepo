@@ -66,7 +66,7 @@ type wsOutcome struct {
 func dialGraphQLWS(t *testing.T, serviceClients *clients.ServiceClients, payload map[string]any, cookie string) wsOutcome {
 	t.Helper()
 	srv := testserver.New()
-	srv.AddTransport(GraphQLWebsocketTransport(serviceClients, wsInitSecret, nil, websocket.Upgrader{}, 0))
+	srv.AddTransport(GraphQLWebsocketTransport(serviceClients, wsInitSecret, nil, websocket.Upgrader{}, 0, nil, 0))
 	// Bridge's /graphql/ws route puts the upgrade's access_token cookie in the
 	// request context before handing the request to gqlgen.
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -273,7 +273,7 @@ func TestGraphQLWebsocketInitCookieFallbackAuthenticates(t *testing.T) {
 func dialIdleWS(t *testing.T, subprotocol string, keepAlive time.Duration) *websocket.Conn {
 	t.Helper()
 	srv := testserver.New()
-	srv.AddTransport(GraphQLWebsocketTransport(wsInitClients(t), wsInitSecret, nil, websocket.Upgrader{}, keepAlive))
+	srv.AddTransport(GraphQLWebsocketTransport(wsInitClients(t), wsInitSecret, nil, websocket.Upgrader{}, keepAlive, nil, 0))
 	httpSrv := httptest.NewServer(srv)
 	t.Cleanup(httpSrv.Close)
 

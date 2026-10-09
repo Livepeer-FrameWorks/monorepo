@@ -90,6 +90,12 @@ cannot check the token because its authentication service is unavailable, it clo
 The [SDKs](/builders/sdks) for TypeScript, Go, and Python handle both, and read the token again
 for every reconnect.
 
+An acknowledged connection stays bound to the credential it authenticated with. The gateway closes
+it with `4403`, ending every subscription on it, when a session token reaches its expiry, when its
+API token is revoked, and within a minute of the credential otherwise ceasing to authenticate. A
+client reconnects with a current token; reconnecting with the revoked or expired one is refused
+before acknowledgement as above.
+
 ## Try It Out
 
 The dashboard has a built-in GraphQL explorer. Go to **Developer → Playground** to run queries against your account.

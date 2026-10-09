@@ -54,9 +54,18 @@ type Resolver struct {
 	// Streaming supplies the streamingConfig ports and root domain on each
 	// request, so an env-file reload takes effect without a restart.
 	Streaming func() StreamingSettings
+	// WebsocketSessions closes this replica's GraphQL WebSocket connections
+	// of an API token revoked here; nil closes none.
+	WebsocketSessions APITokenSockets
 	// capabilityCache holds the capabilities query's per-tenant sections. It
 	// describes enforcement to clients; no enforcement path reads it.
 	capabilityCache capabilitySections
+}
+
+// APITokenSockets closes the GraphQL WebSocket connections that
+// authenticated with a tenant's API token.
+type APITokenSockets interface {
+	CloseAPIToken(tenantID, tokenID string) int
 }
 
 // StreamingSettings are the values the streamingConfig query reads on each
