@@ -177,6 +177,15 @@ func evaluateEdgeNode(exp edgeRolloutExpectation, status *foghorncontrolpb.NodeU
 }
 
 func evaluateEdgeCluster(ctx context.Context, src edgeRolloutSource, clusterID string) edgeClusterRollout {
+	// A cluster with no enrolled edges has nothing to roll out, and may have no
+	// Foghorn to ask; it is settled without reading the release or Foghorn.
+	enrolled, err := src.EnrolledEdges(ctx, clusterID)
+	if err != nil {
+		return edgeClusterRollout{Expectation: edgeRolloutExpectation{ClusterID: clusterID}, Err: fmt.Errorf("list enrolled edges from Quartermaster: %w", err)}
+	}
+	if len(enrolled) == 0 {
+		return edgeClusterRollout{Expectation: edgeRolloutExpectation{ClusterID: clusterID}}
+	}
 	exp, err := src.Expectation(ctx, clusterID)
 	if err != nil {
 		return edgeClusterRollout{Expectation: edgeRolloutExpectation{ClusterID: clusterID}, Err: err}
@@ -185,11 +194,6 @@ func evaluateEdgeCluster(ctx context.Context, src edgeRolloutSource, clusterID s
 	statuses, err := src.NodeStatuses(ctx, clusterID)
 	if err != nil {
 		result.Err = fmt.Errorf("read node update state from Foghorn: %w", err)
-		return result
-	}
-	enrolled, err := src.EnrolledEdges(ctx, clusterID)
-	if err != nil {
-		result.Err = fmt.Errorf("list enrolled edges from Quartermaster: %w", err)
 		return result
 	}
 	seen := map[string]bool{}
@@ -230,8 +234,13 @@ func waitEdgeRollout(ctx context.Context, w io.Writer, src edgeRolloutSource, cl
 		if outcome.Converged() || outcome.settled() || outcome.count(edgeNodeFailed) > 0 || !time.Now().Before(deadline) || ctx.Err() != nil {
 			return outcome
 		}
-		_, _ = fmt.Fprintf(w, "  waiting for edges: %d converged, %d not converged, %d failed (up to %s more)\n",
-			outcome.count(edgeNodeConverged), outcome.count(edgeNodePending)+outcome.count(edgeNodeMissing), outcome.count(edgeNodeFailed), time.Until(deadline).Round(time.Second))
+		_, _ = fmt.Fprintf(w, "  waiting for edges: %d converged, %d not converged, %d failed, %d cluster(s) unreadable (up to %s more)\n",
+			outcome.count(edgeNodeConverged), outcome.count(edgeNodePending)+outcome.count(edgeNodeMissing), outcome.count(edgeNodeFailed), outcome.unreadable(), time.Until(deadline).Round(time.Second))
+		for _, cluster := range outcome.Clusters {
+			if cluster.Err != nil {
+				_, _ = fmt.Fprintf(w, "    cluster %s unreadable: %v\n", cluster.Expectation.ClusterID, cluster.Err)
+			}
+		}
 		timer := time.NewTimer(interval)
 		select {
 		case <-ctx.Done():

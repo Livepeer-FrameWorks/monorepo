@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -170,5 +171,58 @@ func TestEdgeReleaseExpectationReadsTargetRelease(t *testing.T) {
 	}
 	if exp.TargetRelease != "stable:v0.3.11" || len(exp.Components) != 2 || exp.Components["mist"] != "v3.10.1" {
 		t.Fatalf("expectation = %+v", exp)
+	}
+}
+
+// clusterEdgeRolloutSource answers per cluster, so a fleet can mix clusters
+// with edges and clusters without any.
+type clusterEdgeRolloutSource struct {
+	clusters map[string]*fakeEdgeRolloutSource
+	noEdges  map[string]bool
+}
+
+func (s *clusterEdgeRolloutSource) Expectation(ctx context.Context, clusterID string) (edgeRolloutExpectation, error) {
+	if s.noEdges[clusterID] {
+		return edgeRolloutExpectation{}, errors.New("cluster " + clusterID + " has no edge release target")
+	}
+	return s.clusters[clusterID].Expectation(ctx, clusterID)
+}
+
+func (s *clusterEdgeRolloutSource) EnrolledEdges(ctx context.Context, clusterID string) ([]string, error) {
+	if s.noEdges[clusterID] {
+		return nil, nil
+	}
+	return s.clusters[clusterID].EnrolledEdges(ctx, clusterID)
+}
+
+func (s *clusterEdgeRolloutSource) NodeStatuses(ctx context.Context, clusterID string) ([]*foghorncontrolpb.NodeUpdateStatus, error) {
+	if s.noEdges[clusterID] {
+		return nil, errors.New("no Foghorn serves cluster " + clusterID)
+	}
+	return s.clusters[clusterID].NodeStatuses(ctx, clusterID)
+}
+
+// Staging v0.3.13-rc1: the release target is synced to every cluster, but
+// only two clusters have edges. A cluster without edges, and without a Foghorn
+// to ask, must not keep a fully converged fleet waiting out the whole bound.
+func TestEdgeRolloutClusterWithoutEdgesDoesNotBlockConvergence(t *testing.T) {
+	src := &clusterEdgeRolloutSource{
+		clusters: map[string]*fakeEdgeRolloutSource{"media-eu": {
+			exp:      v0311Expectation(),
+			enrolled: []string{"edge-1"},
+			statuses: []*foghorncontrolpb.NodeUpdateStatus{
+				edgeStatus("edge-1", "idle", "", map[string]string{"helmsman": "v0.3.11", "mist": "v3.10.1"}),
+			},
+		}},
+		noEdges: map[string]bool{"core": true},
+	}
+	var out bytes.Buffer
+	started := time.Now()
+	outcome := waitEdgeRollout(context.Background(), &out, src, []string{"media-eu", "core"}, 200*time.Millisecond, time.Millisecond)
+	if !outcome.Converged() {
+		t.Fatalf("converged fleet with an edge-less cluster not reported converged after %s:\n%s", time.Since(started), out.String())
+	}
+	if waited := time.Since(started); waited > 100*time.Millisecond {
+		t.Fatalf("waited %s for a fleet that was converged on the first read", waited)
 	}
 }
