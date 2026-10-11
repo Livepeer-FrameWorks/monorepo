@@ -106,6 +106,9 @@ var serviceDependencies = map[string][]ServiceDependency{
 		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeGlobal, Purpose: "edge address and tenant/cluster authorization lookups"},
 		{TargetServiceID: "decklog", EnvKey: "DECKLOG_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeAggregatorRegion, Purpose: "custom domain domain events"},
 	},
+	"network-observer": {
+		{TargetServiceID: "decklog", EnvKey: "DECKLOG_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeAggregatorRegion, Purpose: "external discovery observation publication"},
+	},
 	"periscope-ingest": {
 		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeGlobal, Optional: true, Purpose: "service bootstrap"},
 	},
@@ -166,6 +169,10 @@ var infraDependencies = map[string][]InfraDependency{
 	"foghorn":   {{Kind: InfraDatabase, Provider: InfraProviderPrimary, Purpose: "media control state"}, {Kind: InfraRedis, Provider: InfraProviderNamed, Name: "foghorn", Optional: true, Purpose: "HA relay and federation state"}},
 	"lookout":   {{Kind: InfraDatabase, Provider: InfraProviderPrimary, Purpose: "incident, timeline, and operator notification outbox state"}, {Kind: InfraKafka, Provider: InfraProviderAggregator, Purpose: "tenant incident publication, cluster ownership changes, and operator activity from service events"}},
 	"navigator": {{Kind: InfraDatabase, Provider: InfraProviderPrimary, Purpose: "DNS and certificate state"}},
+	"network-observer": {
+		{Kind: InfraDatabase, Provider: InfraProviderPrimary, Purpose: "network inventory, assignments, and observation outbox"},
+		{Kind: InfraKafka, Provider: InfraProviderAggregator, Purpose: "gateway discovery and observer reports from every region"},
+	},
 	"periscope-ingest": {
 		{Kind: InfraDatabase, Provider: InfraProviderPrimary, Purpose: "distributed ledger-worker leases"},
 		{Kind: InfraClickHouse, Provider: InfraProviderPrimary, Purpose: "analytics writes"},

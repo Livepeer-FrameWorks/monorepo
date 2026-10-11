@@ -79,7 +79,7 @@ func main() {
 		logger.WithError(err).Fatal("Gateway discovery consumer unavailable")
 	}
 	defer consumer.Close()
-	consumer.AddHandler("analytics_events", api.Gateway)
+	registerGatewaySubscriptions(consumer, api.Gateway, cfg.MirrorRegionPrefixes)
 	go func() {
 		if consumeErr := consumer.Start(ctx); consumeErr != nil && ctx.Err() == nil {
 			logger.WithError(consumeErr).Error("Gateway discovery consumer stopped")

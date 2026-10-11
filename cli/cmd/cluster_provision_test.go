@@ -3799,6 +3799,7 @@ func TestBuildServiceEnvVarsDerivesMirrorPrefixesFromLinksIntoBoundKafka(t *test
 		{"periscope-ingest", "regional-eu-1", "media-eu-1", "us-east"},
 		{"signalman", "regional-eu-1", "media-eu-1", "us-east"},
 		{"signalman", "regional-us-1", "media-us-1", "eu-west"},
+		{"network-observer", "regional-eu-1", "media-eu-1", "us-east"},
 		{"decklog", "regional-us-1", "media-us-1", ""},
 	} {
 		if got := prefixesFor(tc.service, tc.host, tc.cluster); got != tc.want {

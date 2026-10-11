@@ -548,6 +548,7 @@ Read by `api_network_observer/cmd/network-observer`.
 | `SERVICE_TOKEN` | string |  | required, secret | v0.3.14 | Internal service token for Decklog. |
 | `KAFKA_BROKERS` | list |  | required | v0.3.14 | Analytics Kafka brokers for gateway discoveries. |
 | `KAFKA_CLUSTER_ID` | string | `local` |  | v0.3.14 | Kafka cluster identifier. |
+| `MIRROR_REGION_PREFIXES` | list |  |  | v0.3.14 | MirrorMaker2 source aliases whose analytics topic copies carry gateway discovery from other regions; empty consumes local analytics only. |
 | `GEOIP_MMDB_PATH` | string |  |  | v0.3.14 | Optional MMDB for endpoint/prober location lookup. |
 | `NETWORK_OBSERVER_TRUSTED_PROXY_CIDRS` | list |  |  | v0.3.14 | Trusted HTTPS ingress source CIDRs; only these peers may forward prober source IPs for automatic geography. |
 

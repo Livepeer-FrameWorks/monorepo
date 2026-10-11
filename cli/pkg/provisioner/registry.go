@@ -30,6 +30,7 @@ var ServicePorts = map[string]int{
 	"signalman":          18009,
 	"navigator":          18010,
 	"lookout":            18022,
+	"network-observer":   18024,
 	"bosun":              18013,
 	"prometheus":         9090,
 	"victoriametrics":    8428,
@@ -180,7 +181,7 @@ var genericServiceRoles = []string{
 	"quartermaster", "commodore", "bridge", "foghorn", "decklog",
 	"periscope-ingest", "periscope-query", "periscope-metering", "signalman", "purser", "steward",
 	"navigator", "lookout", "bosun", "chartroom", "foredeck", "logbook", "skipper", "chandler",
-	"deckhand", "metabase", "grafana",
+	"deckhand", "metabase", "grafana", "network-observer",
 	"livepeer-gateway", "livepeer-signer",
 }
 

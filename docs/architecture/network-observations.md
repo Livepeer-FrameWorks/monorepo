@@ -30,6 +30,21 @@ feature. Install the new external command manually; it is not a managed Edge nod
 requires no FrameWorks CLI enrollment. Managed selfhosted workers remain attached to
 Foghorn and are not inserted into the onchain catalog.
 
+The coordinator is an opt-in CLI service (`network-observer`, or the
+`network-observations` service-selection profile). It is excluded from default
+profiles because enabling it requires operator-supplied chain and ingest configuration.
+Native and Docker deployments use the standard platform artifact lifecycle and gate
+`v0.3.14` readiness on `/ready`. Declare `network_observer` in the managed SQL database
+inventory; the existing release bootstrap initializes its owned baseline and runtime
+role. The coordinator binds aggregator Kafka and consumes local and source-prefixed
+mirrored analytics topics, so gateways in every configured region contribute inventory.
+Its Decklog dependency also resolves in the aggregator region.
+
+Linux prober release archives include the standalone installer, systemd unit and
+example environment. They can be installed without a repository checkout. The
+installer validates the private configuration and discovery identity before changing
+the host. Successful coordinator connectivity alone does not prove discovery admission.
+
 The legacy scripts demonstrate a working Ethereum-authenticated discovery path; their
 data model and implementation are not compatibility requirements. The replacement reads
 the contract directly instead of relying on the legacy subgraph, attributes measurements

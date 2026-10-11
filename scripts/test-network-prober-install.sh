@@ -3,7 +3,6 @@ set -euo pipefail
 
 repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 binary="$repo/bin/network-prober"
-installer="$repo/api_network_observer/deploy/install-network-prober.sh"
 fixture=$(mktemp -d "${TMPDIR:-/tmp}/frameworks-prober-install.XXXXXX")
 trap 'rm -rf -- "$fixture"' EXIT
 umask 077
@@ -12,6 +11,15 @@ fail() { echo "$*" >&2; exit 1; }
 mode() {
   if [[ $(uname -s) == Darwin ]]; then stat -f '%Lp' "$1"; else stat -c '%a' "$1"; fi
 }
+
+"$repo/api_network_observer/deploy/package-network-prober.sh" "$binary" "$fixture/prober.tar.gz"
+mkdir "$fixture/release"
+tar xzf "$fixture/prober.tar.gz" -C "$fixture/release"
+installer="$fixture/release/install-network-prober.sh"
+[[ -x $installer ]] || fail 'Release archive does not contain an executable installer'
+[[ -f $fixture/release/network-prober.service ]] || fail 'Release archive does not contain the systemd unit'
+[[ -f $fixture/release/network-prober.env.example ]] || fail 'Release archive does not contain example configuration'
+binary="$fixture/release/network-prober"
 
 # Public Ethereum test key; no real wallet or network access is used.
 printf '%064d\n' 1 > "$fixture/key"

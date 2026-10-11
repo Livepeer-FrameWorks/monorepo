@@ -773,6 +773,13 @@ func (p *Planner) addApplicationTasks(graph *DependencyGraph) error {
 			task := NewServiceTask(deploy, name, instanceID, hostName, PhaseApplications)
 			task.ClusterID = effectiveServiceCluster(svc, hostName, p.manifest)
 			task.DependsOn = append(p.topologyInfraTaskDeps(deploy, svc, task.ClusterID, appendIfInGraph), coreDeps...)
+			if deploy == "network-observer" {
+				decklogTasks, err := p.taskNamesForDeploy("decklog")
+				if err != nil {
+					return err
+				}
+				task.DependsOn = append(task.DependsOn, decklogTasks...)
+			}
 			// Query must stop any embedded producer before Purser changes the
 			// accepted envelope, and the standalone worker must start only after
 			// both services are current. These edges also make clean provision

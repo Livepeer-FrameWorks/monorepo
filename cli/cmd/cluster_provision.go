@@ -5765,13 +5765,14 @@ type kafkaClusterView struct {
 //   - commodore: central control-plane Kafka producer.
 //   - bosun: consumes domain.events and its mirrored copies in one durable
 //     group; every replica must bind the cluster the mirrors write into.
+//   - network-observer: combines local and mirrored gateway discoveries.
 //
 // Region-local services (decklog, signalman) and pool-assigned media services
 // (foghorn, chandler, livepeer-gateway) pick Kafka via serviceKafkaCluster's
 // region resolution. See docs/architecture/service-events.md.
 func isAggregatorPinnedService(serviceType string) bool {
 	switch serviceType {
-	case "periscope-ingest", "periscope-metering", "purser", "periscope-query", "commodore", "bosun":
+	case "periscope-ingest", "periscope-metering", "purser", "periscope-query", "commodore", "bosun", "network-observer":
 		return true
 	default:
 		return false
@@ -6981,6 +6982,17 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 		env["BOSUN_PORT"] = strconv.Itoa(defaultPort("bosun"))
 		env["BOSUN_GRPC_PORT"] = strconv.Itoa(defaultGRPCPort("bosun"))
 	}
+	if baseName == "network-observer" {
+		port := defaultPort(baseName)
+		if _, svc, ok := serviceConfigForTask(manifest.Services, task); ok {
+			resolved, err := resolvePort(task.ServiceID, svc)
+			if err != nil {
+				return nil, err
+			}
+			port = resolved
+		}
+		env["NETWORK_OBSERVER_PORT"] = strconv.Itoa(port)
+	}
 	if baseName == "bridge" {
 		if skipper, ok := manifest.Services["skipper"]; ok && skipper.Enabled {
 			port := skipper.Port
@@ -7062,10 +7074,10 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 		}
 	}
 
-	// Periscope-Ingest, Signalman, and Bosun consume the source-prefixed topic
+	// Ingest, Signalman, Bosun, and the network observer consume source-prefixed topic
 	// copies MirrorMaker2 writes into the Kafka cluster they bind, so the
 	// prefixes are the sources of the links into that cluster.
-	if (baseName == "periscope-ingest" || baseName == "signalman" || baseName == "bosun") && env["MIRROR_REGION_PREFIXES"] == "" {
+	if (baseName == "periscope-ingest" || baseName == "signalman" || baseName == "bosun" || baseName == "network-observer") && env["MIRROR_REGION_PREFIXES"] == "" {
 		bound := kafkaClusterForServiceTask(manifest, task)
 		if prefixes := mirroredSourceAliases(manifest, kafkaClusterAlias(manifest, bound)); len(prefixes) > 0 {
 			env["MIRROR_REGION_PREFIXES"] = strings.Join(prefixes, ",")
@@ -7183,6 +7195,15 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 	// services authenticating as an obsolete tenant.
 	if id, ok := runtimeData["system_tenant_id"].(string); ok && strings.TrimSpace(id) != "" {
 		env["SYSTEM_TENANT_ID"] = strings.TrimSpace(id)
+	}
+	if baseName == "network-observer" {
+		if env["NETWORK_OBSERVER_TENANT_ID"] == "" {
+			env["NETWORK_OBSERVER_TENANT_ID"] = env["SYSTEM_TENANT_ID"]
+		}
+		if env["NETWORK_OBSERVER_CLUSTER_ID"] == "" {
+			env["NETWORK_OBSERVER_CLUSTER_ID"] = task.ClusterID
+		}
+		setEnvIfEmpty(env, "LIVEPEER_ETH_RPC_URL", "ARBITRUM_RPC_ENDPOINT")
 	}
 	if baseName == "foghorn" || baseName == "vmauth" {
 		if edgeTelemetryJWTRequired(manifest) || edgeTelemetryJWTMaterialPresent(runtimeData, env) {

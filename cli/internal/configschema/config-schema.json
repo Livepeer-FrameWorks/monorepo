@@ -3005,6 +3005,12 @@
           "description": "Kafka cluster identifier."
         },
         {
+          "key": "MIRROR_REGION_PREFIXES",
+          "type": "list",
+          "introduced": "v0.3.14",
+          "description": "MirrorMaker2 source aliases whose analytics topic copies carry gateway discovery from other regions; empty consumes local analytics only."
+        },
+        {
           "key": "GEOIP_MMDB_PATH",
           "type": "string",
           "introduced": "v0.3.14",

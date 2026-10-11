@@ -18,7 +18,8 @@
       "docker_cmd": "./cmd/network-prober",
       "health_port": 18025,
       "cgo": false,
-      "darwin_binary": true
+      "darwin_binary": true,
+      "extra_hash_paths": ["api_network_observer/deploy"]
     },
     {
       "name": "bridge",

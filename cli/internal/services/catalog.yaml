@@ -1,4 +1,6 @@
 profiles:
+  network-observations:
+    - network-observer
   central-all:
     - quartermaster
     - bridge
@@ -67,6 +69,17 @@ profiles:
     - chatwoot
 
 services:
+  network-observer:
+    name: network-observer
+    title: External Network Observer
+    role: analytics
+    image: ghcr.io/livepeer-frameworks/frameworks-network-observer:latest
+    ports: ["18024:18024"]
+    health:
+      protocol: http
+      path: /health
+      port: 18024
+    dependencies: [decklog]
   quartermaster:
     name: quartermaster
     title: Quartermaster

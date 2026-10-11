@@ -18,23 +18,89 @@ the new observer database from its baseline.
 
 ## Coordinator
 
-Build with `make build-bin-network-observer`. Apply the `network_observer` baseline to
-its own database using the normal database tooling. Configure `DATABASE_URL`,
+Declare `network-observer` under the cluster manifest's `services`, with an enabled
+entry, a host in the aggregator region, and that host's platform cluster ID. Both
+`native` and `docker` modes are supported by the CLI. It is an opt-in service, also
+available in the `network-observations` selection profile; the default profiles do
+not start an observer. External probers are not part of that profile or CLI enrollment.
+
+Add the `network_observer` database to the selected managed SQL deployment's database
+list. The release bootstrap creates its baseline and `network_observer_runtime` role
+before deploying the observer. The CLI derives its database connection from this
+declaration and the existing database credentials. For a manually managed service,
+build with `make build-bin-network-observer` and apply the same baseline to its own
+database using the normal database tooling.
+
+For the new database, set `owner: network_observer` and
+`runtime_role: network_observer_runtime`. Supply the runtime password through the
+existing `DATABASE_RUNTIME_PASSWORD` secret, or the database-specific
+`POSTGRES_NETWORK_OBSERVER_RUNTIME_PASSWORD`; the latter takes precedence. Keep the
+owner/bootstrap credential separate. An omitted `runtime_role` preserves an owner DSN
+for compatibility; declaring it makes the observer connect with the runtime role.
+
+Configure `DATABASE_URL`,
 `NETWORK_OBSERVER_TENANT_ID`, `NETWORK_OBSERVER_CLUSTER_ID`, `NETWORK_OBSERVER_SECRET`,
 `LIVEPEER_ETH_RPC_URL`, `LIVEPEER_CONTROLLER`, `DECKLOG_GRPC_ADDR`, `SERVICE_TOKEN` and
 `KAFKA_BROKERS`. Use the production Arbitrum chain and choose the observation environment
 explicitly. Configure verified internal gRPC TLS as for other services. The optional
 `docker-compose.network-observations.yml` overlay is for isolated local use.
 
+CLI provisioning defaults the observer tenant to the resolved system tenant and its
+cluster to the manifest task's cluster; explicit observer values take precedence.
+`LIVEPEER_ETH_RPC_URL` can use the existing `ARBITRUM_RPC_ENDPOINT` when not explicitly
+set. The shared secret and controller address still require operator input. The CLI
+generates the aggregator Kafka binding, `MIRROR_REGION_PREFIXES` from inbound
+MirrorMaker links, and aggregator-region `DECKLOG_GRPC_ADDR`. Manual deployments must
+set the source aliases themselves to include gateway discovery from other regions.
+
 Expose the shared-secret work and ingest routes through verified HTTPS. If behind an
 ingress, set `NETWORK_OBSERVER_TRUSTED_PROXY_CIDRS` to the actual ingress CIDRs before
 using its forwarded source addresses for prober geolocation. Optional `GEOIP_MMDB_PATH`
 provides coordinates; missing geography does not prevent discovery.
 
+Use an explicit `ingress_sites` entry with `kind: reverse_proxy_http`, the chosen
+`domains`, the proxy `node`/`cluster`, its existing `tls_bundle_id`, and an `upstream`
+pointing to the observer's HTTP listener. The coordinator has no automatically selected
+public hostname. A co-located proxy can use `127.0.0.1:18024`; another proxy uses the
+observer's reachable mesh address. Configure the matching DNS and TLS bundle through
+the existing ingress/control-plane lifecycle, then use that verified HTTPS URL for
+Bridge and the external probers.
+
 Bridge needs `NETWORK_OBSERVER_URL`, `NETWORK_OBSERVER_SECRET`,
 `NETWORK_PUBLIC_TENANT_IDS` and the matching `NETWORK_OBSERVER_ENVIRONMENT`. Publication
 scopes are server configuration, not caller-supplied query parameters. Periscope runs
 the canonical migration and rollup loop as part of its existing ingestion service.
+
+## GitOps inputs and activation order
+
+The observer binary and prober binaries/images ship with the platform release;
+gateways use the separately released compatible go-livepeer fork. The platform's
+release manifest provides artifact pins, not host placement or configuration.
+Complete these declarations before activating the feature:
+
+| Location                          | Required inputs                                                                                                                                                                                                                                                 |
+| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Cluster manifest                  | Enabled observer service with aggregator-region host/cluster, `network_observer` database, HTTPS ingress for the coordinator, and optional GeoIP service selection/trusted proxy CIDRs.                                                                         |
+| Observer service configuration    | `LIVEPEER_CONTROLLER`, `NETWORK_OBSERVER_ENVIRONMENT`; verify `LIVEPEER_NETWORK_ID=42161` and the resolved observer tenant/cluster.                                                                                                                             |
+| SOPS-managed service environment  | `NETWORK_OBSERVER_SECRET` and `LIVEPEER_ETH_RPC_URL` (or the existing Arbitrum RPC key); preserve existing database credentials and internal `SERVICE_TOKEN`.                                                                                                   |
+| Bridge configuration/environment  | Verified HTTPS `NETWORK_OBSERVER_URL`, matching secret and environment, and explicit `NETWORK_PUBLIC_TENANT_IDS` for the dataset to publish.                                                                                                                    |
+| Gateway configuration/environment | Compatible fork artifact pin, stable gateway ID/region/cluster owner, verified Decklog connection and persistent telemetry spool; `FRAMEWORKS_NETWORK_ID=42161` and matching `FRAMEWORKS_ENVIRONMENT`. Candidate hints are optional and start in `shadow` mode. |
+| Lookout service environment       | Optional `LOOKOUT_OPS_SLACK_WEBHOOK_URL`, `LOOKOUT_OPS_DISCORD_WEBHOOK_URL`, `LOOKOUT_BUSINESS_PULSE_SLACK_WEBHOOK_URL`, `LOOKOUT_BUSINESS_PULSE_DISCORD_WEBHOOK_URL` to split the existing destinations.                                                       |
+
+Keep credentials in encrypted env files referenced by the services. Edit GitOps secrets
+with `gitops/scripts/sops-env.sh`, not by editing encrypted content. Choose the actual
+coordinator hostname and ingress from the cluster's existing DNS/TLS setup; example
+hostnames below are not provisioned endpoints. Production and staging need separate
+observation environments, secrets and explicit publication scopes.
+
+Use the normal `frameworks cluster release plan` and `cluster release apply --dry-run`
+with the updated manifest before applying the release. Release application initializes
+the declared observer database, applies ClickHouse expand migrations and deploys the
+observer and analytics/API services. Verify observer `/ready`, deploy the compatible
+gateway fork through its managed-dependency lifecycle, and install the external probers.
+Confirm real discovery in the inventory, real gateway observations in the public API,
+and the dashboard's observer coverage before retiring the old scripts. Livepeer alerts
+are disabled; new Ops/Business Pulse webhook destinations require no Livepeer rollout.
 
 ## External probers
 
@@ -43,6 +109,15 @@ arm64 `network-prober` binary after checking its release checksum. These hosts d
 need the FrameWorks stack, Node/PM2 or CLI enrollment. Configure a unique stable ID,
 region, verified HTTPS coordinator URL, shared secret and persistent spool directory
 using `api_network_observer/deploy/network-prober.env.example`.
+
+The Linux release tarball includes `install-network-prober.sh`,
+`network-prober.service` and `network-prober.env.example` alongside the binary. Extract
+it on the prober host, rename the architecture-suffixed binary to `network-prober`
+for the commands below, and copy the example to a private `network-prober.env`.
+The installer and unit stay together in the extracted directory. A source checkout
+uses the same files from `api_network_observer/deploy/`.
+The supplied systemd unit grants writable state at `/var/lib/frameworks-network-prober`;
+use that path for `NETWORK_PROBER_SPOOL_DIR` with this installer.
 
 Put the Ethereum broadcaster address and discovery signature in a separate private
 identity file:
@@ -73,7 +148,7 @@ them offline, then install:
 ```bash
 chmod 600 network-prober.env network-prober.identity.env
 ./network-prober check-config --env-file network-prober.env --identity-file network-prober.identity.env
-sudo api_network_observer/deploy/install-network-prober.sh --binary ./network-prober --config network-prober.env --identity network-prober.identity.env
+sudo ./install-network-prober.sh --binary ./network-prober --config network-prober.env --identity network-prober.identity.env
 ```
 
 Keep the installer beside its supplied service template. It creates the dedicated

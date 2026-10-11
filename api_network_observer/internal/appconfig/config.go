@@ -24,6 +24,7 @@ type Observer struct {
 	ServiceToken           string   `env:"SERVICE_TOKEN" required:"true" secret:"true" desc:"Internal service token for Decklog." introduced:"v0.3.14"`
 	KafkaBrokers           []string `env:"KAFKA_BROKERS" required:"true" desc:"Analytics Kafka brokers for gateway discoveries." introduced:"v0.3.14"`
 	KafkaClusterID         string   `env:"KAFKA_CLUSTER_ID" default:"local" desc:"Kafka cluster identifier." introduced:"v0.3.14"`
+	MirrorRegionPrefixes   []string `env:"MIRROR_REGION_PREFIXES" desc:"MirrorMaker2 source aliases whose analytics topic copies carry gateway discovery from other regions; empty consumes local analytics only." introduced:"v0.3.14"`
 	GeoIPPath              string   `env:"GEOIP_MMDB_PATH" desc:"Optional MMDB for endpoint/prober location lookup." introduced:"v0.3.14"`
 	TrustedProxyCIDRs      []string `env:"NETWORK_OBSERVER_TRUSTED_PROXY_CIDRS" desc:"Trusted HTTPS ingress source CIDRs; only these peers may forward prober source IPs for automatic geography." introduced:"v0.3.14"`
 }
