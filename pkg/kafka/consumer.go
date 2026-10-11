@@ -55,7 +55,17 @@ type Consumer struct {
 	lagTracker *LagTrackerConfig
 	resetAtEnd bool
 	lagSeries  map[string]struct{}
+
+	// stopRun cancels the running Start loop and runDone closes when it has
+	// returned, so Close can stop polling before it leaves the group.
+	runMu   sync.Mutex
+	stopRun context.CancelFunc
+	runDone chan struct{}
 }
+
+// consumerCloseTimeout bounds each step of Close: waiting for Start to return
+// and leaving the consumer group.
+const consumerCloseTimeout = 5 * time.Second
 
 // ConsumerOption configures a Consumer at construction time. Callers wanting
 // non-default behaviour (e.g. broadcast/fanout consumer groups that must not
@@ -145,9 +155,33 @@ func (c *Consumer) AddHandler(topic string, handler Handler) {
 	c.client.AddConsumeTopics(topic)
 }
 
-// Close closes the underlying client
+// Close stops Start, leaves the consumer group and closes the client. Leaving
+// the group waits until no poll blocks rebalancing, so Start is stopped first
+// and every step is bounded by consumerCloseTimeout: a handler that ignores
+// cancellation or an unreachable broker cannot hold shutdown. A member that
+// could not leave in time is expired by the broker after the session timeout.
 func (c *Consumer) Close() error {
-	c.client.CloseAllowingRebalance()
+	c.runMu.Lock()
+	stop, done := c.stopRun, c.runDone
+	c.runMu.Unlock()
+	if stop != nil {
+		stop()
+		select {
+		case <-done:
+		case <-time.After(consumerCloseTimeout):
+			c.logger.WithField("group", c.groupID).Warn("Kafka consumer handler still running at close; leaving the group without it")
+		}
+	}
+	if c.client == nil {
+		return nil
+	}
+	c.client.AllowRebalance()
+	leaveCtx, cancel := context.WithTimeout(context.Background(), consumerCloseTimeout)
+	defer cancel()
+	if err := c.client.LeaveGroupContext(leaveCtx); err != nil {
+		c.logger.WithError(err).WithField("group", c.groupID).Warn("Kafka consumer did not leave its group before close")
+	}
+	c.client.Close()
 	return nil
 }
 
@@ -263,8 +297,10 @@ func (c *Consumer) runLagTracker(ctx context.Context) {
 	}
 }
 
-// Start starts polling for messages
-func (c *Consumer) Start(ctx context.Context) error {
+// Start polls and handles records until ctx is cancelled, Close stops it, or
+// polling fails. It returns ctx's error after cancellation and nil once Close
+// stopped it.
+func (c *Consumer) Start(parent context.Context) error {
 	poller := c.poller
 	if poller == nil {
 		if c.client == nil {
@@ -272,18 +308,31 @@ func (c *Consumer) Start(ctx context.Context) error {
 		}
 		poller = c.client
 	}
+	ctx, stop := context.WithCancel(parent)
+	done := make(chan struct{})
+	c.runMu.Lock()
+	c.stopRun, c.runDone = stop, done
+	c.runMu.Unlock()
+	// Under BlockRebalanceOnPoll every poll blocks rebalancing until
+	// AllowRebalance, including the poll answered with the context's error
+	// that ends this loop. Releasing it on return lets Close leave the group.
+	defer func() {
+		poller.AllowRebalance()
+		stop()
+		close(done)
+	}()
 	if c.lagTracker != nil && c.lagTracker.Gauge != nil {
 		go c.runLagTracker(ctx)
 	}
 	for {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return parent.Err()
 		default:
 			fetches := poller.PollRecords(ctx, defaultMaxPollRecords)
 			if errs := fetches.Errors(); len(errs) > 0 {
 				if ctx.Err() != nil {
-					return ctx.Err()
+					return parent.Err()
 				}
 				// A closed client returns immediately on every poll; shutdown
 				// can close it before cancelling ctx, so stop instead of spinning.

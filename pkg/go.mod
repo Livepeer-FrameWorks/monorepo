@@ -21,6 +21,7 @@ require (
 	github.com/sirupsen/logrus v1.9.4
 	github.com/twmb/franz-go v1.21.0
 	github.com/twmb/franz-go/pkg/kadm v1.18.0
+	github.com/twmb/franz-go/pkg/kfake v0.0.0-20260421212619-897f85bae559
 	github.com/x402-foundation/x402/go/v2 v2.23.0
 	github.com/yugabyte/pgx/v5 v5.7.6-yb-1
 	golang.org/x/crypto v0.50.0

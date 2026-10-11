@@ -159,8 +159,9 @@ func TestConsumerStartAllowsRebalanceAndRecoversMembershipCommitError(t *testing
 	if poller.maxRecords != defaultMaxPollRecords {
 		t.Fatalf("PollRecords max = %d, want %d", poller.maxRecords, defaultMaxPollRecords)
 	}
-	if poller.rebalances != 1 {
-		t.Fatalf("AllowRebalance calls = %d, want 1", poller.rebalances)
+	// One release after the batch, one when Start returns.
+	if poller.rebalances != 2 {
+		t.Fatalf("AllowRebalance calls = %d, want 2", poller.rebalances)
 	}
 	if len(poller.committed) != 1 || poller.committed[0] != record {
 		t.Fatalf("committed records = %v, want original record", poller.committed)
