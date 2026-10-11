@@ -445,14 +445,7 @@ func (s *CommodoreServer) compileLiveStreamAuthority(ctx context.Context, stream
 			policy.ConnectedOnly = len(sealedPlayback) == 0
 		}
 	}
-	// The origin of a stream that is not ingesting is the tenant's preferred
-	// cluster: the same route origin connected validation reports, which local
-	// ingest promotion requires the signed origin to equal. A stream with neither
-	// has no origin, which is an ordinary state and not a compile failure.
-	originClusterID := strings.TrimSpace(source.ActiveIngestClusterID)
-	if originClusterID == "" {
-		originClusterID = strings.TrimSpace(tenant.GetPreferredClusterId())
-	}
+	originClusterID := liveStreamAuthorityOrigin(tenant, source.ActiveIngestClusterID, source.LastIngestClusterID)
 	var processesJSON, dvrProcessesJSON string
 	if lifecycle == mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE {
 		processesJSON, err = s.resolveProcessesJSONStrict(ctx, source.TenantID, source.StreamID, originClusterID, "live")
@@ -982,6 +975,28 @@ func tenantCanServeMediaObjects(tenant *mediaauthoritypb.TenantAuthority, secret
 		tenant.GetLifecycle() == mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE &&
 		tenant.GetBillingDecision() == mediaauthoritypb.TenantBillingDecision_TENANT_BILLING_DECISION_ALLOW &&
 		len(secretTargets) > 0
+}
+
+// liveStreamAuthorityOrigin is a live stream's signed origin and outage ingest
+// owner: the cluster holding its ingest claim, else the cluster it last
+// ingested on while the tenant is still granted it, else the tenant's preferred
+// cluster. It stays put across a publisher stopping and reconnecting to the
+// same cluster, so neither republishes the stream. Connected validation reports
+// the same cluster (liveIngestClusterID), which local ingest promotion requires
+// the signed origin to equal. A stream with none of these has no
+// origin, which is an ordinary state and not a compile failure.
+func liveStreamAuthorityOrigin(tenant *mediaauthoritypb.TenantAuthority, activeClusterID, lastIngestClusterID string) string {
+	if active := strings.TrimSpace(activeClusterID); active != "" {
+		return active
+	}
+	if last := strings.TrimSpace(lastIngestClusterID); last != "" {
+		for _, grant := range tenant.GetEffectiveClusterGrants() {
+			if strings.TrimSpace(grant.GetClusterId()) == last {
+				return last
+			}
+		}
+	}
+	return strings.TrimSpace(tenant.GetPreferredClusterId())
 }
 
 func activeTenantAuthorityCells(tenant *mediaauthoritypb.TenantAuthority) []string {
@@ -1567,12 +1582,19 @@ func (s *CommodoreServer) publishMediaObjectAuthority(ctx context.Context, autho
 				return err
 			}
 			bound := &mediaauthoritypb.TenantAuthority{}
-			if err := proto.Unmarshal(current.Payload, bound); err != nil {
+			if err = proto.Unmarshal(current.Payload, bound); err != nil {
 				return err
 			}
 			// The row lock serializes first/cold publication with tenant changes.
-			// Fan-out cannot find an object that has not published yet.
-			if !proto.Equal(parent, bound) {
+			// Fan-out cannot find an object that has not published yet. Only the
+			// fields objects derive from pin the compile: a metering publish
+			// changes none of them and fans out to no object, so superseding on it
+			// would retry the object for nothing.
+			same, err := sameTenantDependents(parent, bound)
+			if err != nil {
+				return err
+			}
+			if !same {
 				return fmt.Errorf("tenant changed while compiling object: %w", errMediaAuthorityCompileSuperseded)
 			}
 		}
@@ -1582,12 +1604,14 @@ func (s *CommodoreServer) publishMediaObjectAuthority(ctx context.Context, autho
 				return err
 			}
 			bound := &mediaauthoritypb.TenantAuthority{}
-			if err := proto.Unmarshal(current.Payload, bound); err != nil {
+			if err = proto.Unmarshal(current.Payload, bound); err != nil {
 				return err
 			}
 			// Every placement object is compiled against the tenant it captured,
-			// and must still be. Only a quoted one is also bounded by that tenant's
-			// validity: its quotes were priced for it. Every decision a cell makes
+			// and must still be. An unquoted one is pinned to the fields objects
+			// derive from, as above; a quoted one to the whole tenant version, and
+			// it is also bounded by that tenant's validity: its quotes were priced
+			// for it. Every decision a cell makes
 			// needs the tenant authority anyway, so an unquoted object outliving
 			// its tenant's copy never widens what a cell serves. A correction
 			// compiled on a lapsed tenant is exempt from the tenant's validity for
@@ -1595,7 +1619,13 @@ func (s *CommodoreServer) publishMediaObjectAuthority(ctx context.Context, autho
 			// renewed, and the correction has to be there first.
 			lapsed := mediaAuthorityLapsedParent(ctx)
 			parentExpired := !current.ValidUntil.After(time.Now())
-			if !proto.Equal(bound, commercial.tenant) || (parentExpired && !lapsed) ||
+			sameParent := proto.Equal(bound, commercial.tenant)
+			if !commercial.quoted {
+				if sameParent, err = sameTenantDependents(bound, commercial.tenant); err != nil {
+					return err
+				}
+			}
+			if !sameParent || (parentExpired && !lapsed) ||
 				(commercial.quoted && ((!lapsed && validUntil.After(current.ValidUntil)) || !validUntil.After(time.Now()))) {
 				return errors.New("commercial parent authority changed or expired before publication")
 			}

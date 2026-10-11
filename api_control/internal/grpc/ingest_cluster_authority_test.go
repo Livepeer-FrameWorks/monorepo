@@ -9,6 +9,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	mediapb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_authority"
 
 	"github.com/sirupsen/logrus"
 )
@@ -17,6 +18,7 @@ var streamContextCols = []string{
 	"id", "user_id", "tenant_id", "internal_name", "is_active",
 	"is_recording_enabled", "playback_id", "ingest_mode", "requires_auth",
 	"active_ingest_cluster_id", "lease_fresh", "dvr_chapter_mode", "dvr_chapter_interval_seconds",
+	"last_ingest_cluster_id",
 }
 
 func healthyPeer(clusterID string) *clusterpeerpb.TenantClusterPeer {
@@ -50,11 +52,14 @@ func serverWithRoute(t *testing.T, db *sql.DB, route *clusterRoute) *CommodoreSe
 	}
 }
 
+// expectStreamKeyRow returns a stream whose last ingest cluster is the leased
+// one, as the streams trigger records it whenever a claim is written.
 func expectStreamKeyRow(mock sqlmock.Sqlmock, leasedCluster any, leaseFresh any) {
+	lastIngest, _ := leasedCluster.(string) //nolint:errcheck // nil means the stream never ingested
 	mock.ExpectQuery(`ResolveStreamContextByIdentifier`).
 		WithArgs(int64(activeIngestLease.Seconds()), "stream_key", "sk_live").
 		WillReturnRows(sqlmock.NewRows(streamContextCols).
-			AddRow("stream-id", "user-id", "tenant-id", "internal", true, true, "pk", "push", false, leasedCluster, leaseFresh, nil, nil))
+			AddRow("stream-id", "user-id", "tenant-id", "internal", true, true, "pk", "push", false, leasedCluster, leaseFresh, nil, nil, lastIngest))
 }
 
 func resolveByStreamKey(t *testing.T, s *CommodoreServer, clusterID string) *commodorepb.ResolveStreamContextResponse {
@@ -222,9 +227,11 @@ func TestResolveStreamContext_FreshLeaseOutranksTenantRoute(t *testing.T) {
 	}
 }
 
-// An expired lease is not placement. Once it lapses the tenant's route decides
-// again, or a stream would be pinned to wherever it last published.
-func TestResolveStreamContext_StaleLeaseFallsBackToTenantRoute(t *testing.T) {
+// An expired lease is not a claim, but the cluster the stream last ingested on
+// is its signed origin and outage ingest owner. A publisher returning after the
+// lease lapsed is sent there, so the connected answer agrees with the one a
+// cell gives from the signed authority.
+func TestResolveStreamContext_StaleLeaseReturnsToLastIngestCluster(t *testing.T) {
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	if err != nil {
 		t.Fatalf("sqlmock: %v", err)
@@ -236,6 +243,48 @@ func TestResolveStreamContext_StaleLeaseFallsBackToTenantRoute(t *testing.T) {
 		clusterID:      "media-eu",
 		admissionPeers: []*clusterpeerpb.TenantClusterPeer{healthyPeer("media-eu"), healthyPeer("media-us")},
 		clusterPeers:   []*clusterpeerpb.TenantClusterPeer{healthyPeer("media-eu"), healthyPeer("media-us")},
+	})
+
+	if got := resolveByStreamKey(t, s, "").GetOriginClusterId(); got != "media-us" {
+		t.Fatalf("origin = %q, want the last ingest cluster media-us", got)
+	}
+}
+
+// The signed origin is the claim, then the last ingest cluster while the tenant
+// is still granted it, then the tenant's preferred cluster.
+func TestLiveStreamAuthorityOrigin(t *testing.T) {
+	tenant := &mediapb.TenantAuthority{
+		PreferredClusterId:     "media-eu",
+		EffectiveClusterGrants: []*mediapb.TenantClusterGrant{{ClusterId: "media-eu"}, {ClusterId: "media-us"}},
+	}
+	for _, tt := range []struct {
+		name, active, last, want string
+	}{
+		{"claim", "media-ap", "media-ap", "media-ap"},
+		{"after the publisher left", "", "media-us", "media-us"},
+		{"last ingest no longer granted", "", "media-ap", "media-eu"},
+		{"never ingested", "", "", "media-eu"},
+	} {
+		if got := liveStreamAuthorityOrigin(tenant, tt.active, tt.last); got != tt.want {
+			t.Errorf("%s: origin = %q, want %q", tt.name, got, tt.want)
+		}
+	}
+}
+
+// A last ingest cluster the route no longer offers for live ingest is not
+// returned to: the tenant's route decides.
+func TestResolveStreamContext_UnroutableLastIngestFallsBackToTenantRoute(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	expectStreamKeyRow(mock, "media-us", false)
+
+	s := serverWithRoute(t, db, &clusterRoute{
+		clusterID:      "media-eu",
+		admissionPeers: []*clusterpeerpb.TenantClusterPeer{healthyPeer("media-eu"), healthyPeer("media-us")},
+		clusterPeers:   []*clusterpeerpb.TenantClusterPeer{healthyPeer("media-eu")},
 	})
 
 	if got := resolveByStreamKey(t, s, "").GetOriginClusterId(); got != "media-eu" {
@@ -277,7 +326,7 @@ func TestResolveStreamContext_NonPublishIntentStillSkipsClusterGate(t *testing.T
 	mock.ExpectQuery(`ResolveStreamContextByIdentifier`).
 		WithArgs(int64(activeIngestLease.Seconds()), "internal_name", "internal").
 		WillReturnRows(sqlmock.NewRows(streamContextCols).
-			AddRow("stream-id", "user-id", "tenant-id", "internal", true, true, "pk", "mist_native", false, nil, false, nil, nil))
+			AddRow("stream-id", "user-id", "tenant-id", "internal", true, true, "pk", "mist_native", false, nil, false, nil, nil, ""))
 
 	// No admission peer for the routed cluster: a gate would reject.
 	s := serverWithRoute(t, db, &clusterRoute{clusterID: "media-eu"})

@@ -219,6 +219,34 @@ the tenant authority: process configuration comes from the tenant's tier. The
 two Purser reasons that can change it, `subscription_authority_changed` and
 `billing_tier_authority_changed`, refresh the tenant's objects directly.
 
+An object compile captures the current tenant version and, under that tenant's
+current-pointer lock, publishes only if the tenant's `dependents_digest` is still
+the one it captured; otherwise the compile is superseded and the fanout the change
+enqueued recompiles it. Every field the object compile reads (lifecycle, billing
+decision, preferred cluster, grants and their cells and entitlement fields,
+placement policy and schema) is inside the digest, and the excluded allowances,
+limits and decision text are read only by cells at decision time. A metering
+publish therefore never supersedes an object compile. An object carrying
+commercial quotes is the exception: it stays pinned to the whole tenant version
+it was priced against and to that version's validity.
+
+A live stream's signed origin, which is also its outage ingest owner, is the
+cluster holding its ingest claim, else the cluster it last ingested on
+(`streams.last_ingest_cluster_id`, kept after the claim is released) while the
+tenant is still granted it, else the tenant's preferred cluster. The streams
+trigger recompiles the stream only when that effective origin moves, so a
+publisher that stops and reconnects to the same cluster publishes nothing, and a
+move to another cluster publishes once. A publisher that disconnects keeps its
+cluster as outage owner. Connected `ValidateStreamKey` and publish-intent
+`ResolveStreamContext` report the same cluster when the caller names none, while
+the route still offers it for live ingest, so local ingest promotion compares
+like with like. A changed preferred cluster therefore does not move a stream that
+has ingested before; the stream moves when its publisher ingests elsewhere. While
+Commodore replicas of different versions run side by side, an older replica
+compiles an idle stream's origin as the preferred cluster and a newer one as the
+last ingest cluster, so an idle stream's authority can alternate between the two
+until every replica runs the same version.
+
 Push delivery is the fast path. Owner refresh and delivery have independent
 worker loops, and delivery is per cell: the cells with a delivery waiting are
 found by stepping through the per-cell index, and each is drained by its own

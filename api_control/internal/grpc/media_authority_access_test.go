@@ -230,8 +230,8 @@ func TestCompileAuthorityChecksAccessBeforeTenantLookupSucceeds(t *testing.T) {
 					}}
 					mock.ExpectQuery("GetLiveStreamMediaAuthoritySource").WithArgs(objectID).WillReturnRows(sqlmock.NewRows([]string{
 						"stream_id", "tenant_id", "user_id", "internal_name", "playback_id", "stream_key", "ingest_mode", "requires_auth", "is_recording_enabled",
-						"playback_policy", "playback_webhook_secret_enc", "active_ingest_cluster_id", "deleted_at", "age_seconds", "ingest_lease_age_seconds",
-					}).AddRow(objectID, tenantID, "user", "internal", "playback", "stream-key", "push", true, false, tt.policy, "", "", nil, 0, 0))
+						"playback_policy", "playback_webhook_secret_enc", "active_ingest_cluster_id", "last_ingest_cluster_id", "deleted_at", "age_seconds", "ingest_lease_age_seconds",
+					}).AddRow(objectID, tenantID, "user", "internal", "playback", "stream-key", "push", true, false, tt.policy, "", "", "", nil, 0, 0))
 				}
 				encoded, err := proto.Marshal(object)
 				if err != nil {

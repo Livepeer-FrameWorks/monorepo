@@ -62,13 +62,16 @@ func testMediaPlacementCommercialPublication(t *testing.T, quoted bool) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, changed := range []bool{false, true} {
+	// A quoted object is pinned to the whole tenant version it was priced for,
+	// so even a metering-only tenant publish during quoting refuses it.
+	for version, parentChange := range []string{"", "metering", "grant"} {
+		changed := parentChange != ""
 		if changed && !quoted {
 			continue
 		}
 		object := proto.CloneOf(baseObject)
 		if changed {
-			object.GetLiveStream().StreamId = "changed-stream"
+			object.GetLiveStream().StreamId = "changed-stream-" + parentChange
 		}
 		var change sync.Once
 		source := commercialSourceFunc(func(callCtx context.Context, request *pb.CommercialQuoteRequest) (*pb.CommercialQuoteResponse, error) {
@@ -76,8 +79,12 @@ func testMediaPlacementCommercialPublication(t *testing.T, quoted bool) {
 			if changed {
 				change.Do(func() {
 					replacement := proto.CloneOf(tenant)
-					replacement.EffectiveClusterGrants[0].MediaConsent.Revision++
-					writeErr = seedCommercialTenantVersion(callCtx, db, replacement, 2)
+					if parentChange == "grant" {
+						replacement.EffectiveClusterGrants[0].MediaConsent.Revision++
+					} else {
+						replacement.DecisionReason = "allowance updated"
+					}
+					writeErr = seedCommercialTenantVersion(callCtx, db, replacement, int64(version)+1)
 				})
 			}
 			if writeErr != nil {

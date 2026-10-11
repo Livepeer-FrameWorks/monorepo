@@ -1,7 +1,8 @@
 -- name: GetStreamAdmissionByKey :one
 SELECT s.id, s.user_id, s.tenant_id, s.internal_name,
        u.is_active, s.is_recording_enabled, s.playback_id, s.ingest_mode,
-       s.dvr_chapter_mode, s.dvr_chapter_interval_seconds
+       s.dvr_chapter_mode, s.dvr_chapter_interval_seconds,
+       COALESCE(s.last_ingest_cluster_id, '')::text AS last_ingest_cluster_id
 FROM commodore.streams s
 JOIN commodore.users u ON s.user_id = u.id
 WHERE s.stream_key = $1 AND s.deleted_at IS NULL;
@@ -50,7 +51,8 @@ SELECT s.id, s.user_id, s.tenant_id, s.internal_name,
            s.active_ingest_cluster_updated_at > NOW() - (sqlc.arg(lease_seconds)::bigint * INTERVAL '1 second'),
            false
        )::boolean AS lease_fresh,
-       s.dvr_chapter_mode, s.dvr_chapter_interval_seconds
+       s.dvr_chapter_mode, s.dvr_chapter_interval_seconds,
+       COALESCE(s.last_ingest_cluster_id, '')::text AS last_ingest_cluster_id
 FROM commodore.streams s
 JOIN commodore.users u ON s.user_id = u.id
 WHERE CASE sqlc.arg(identifier_kind)::text

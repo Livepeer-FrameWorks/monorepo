@@ -88,7 +88,8 @@ func (q *Queries) GetActiveIngestClaim(ctx context.Context, streamKey string) (G
 const getStreamAdmissionByKey = `-- name: GetStreamAdmissionByKey :one
 SELECT s.id, s.user_id, s.tenant_id, s.internal_name,
        u.is_active, s.is_recording_enabled, s.playback_id, s.ingest_mode,
-       s.dvr_chapter_mode, s.dvr_chapter_interval_seconds
+       s.dvr_chapter_mode, s.dvr_chapter_interval_seconds,
+       COALESCE(s.last_ingest_cluster_id, '')::text AS last_ingest_cluster_id
 FROM commodore.streams s
 JOIN commodore.users u ON s.user_id = u.id
 WHERE s.stream_key = $1 AND s.deleted_at IS NULL
@@ -105,6 +106,7 @@ type GetStreamAdmissionByKeyRow struct {
 	IngestMode                string         `db:"ingest_mode" json:"ingest_mode"`
 	DvrChapterMode            sql.NullString `db:"dvr_chapter_mode" json:"dvr_chapter_mode"`
 	DvrChapterIntervalSeconds sql.NullInt32  `db:"dvr_chapter_interval_seconds" json:"dvr_chapter_interval_seconds"`
+	LastIngestClusterID       string         `db:"last_ingest_cluster_id" json:"last_ingest_cluster_id"`
 }
 
 func (q *Queries) GetStreamAdmissionByKey(ctx context.Context, streamKey string) (GetStreamAdmissionByKeyRow, error) {
@@ -121,6 +123,7 @@ func (q *Queries) GetStreamAdmissionByKey(ctx context.Context, streamKey string)
 		&i.IngestMode,
 		&i.DvrChapterMode,
 		&i.DvrChapterIntervalSeconds,
+		&i.LastIngestClusterID,
 	)
 	return i, err
 }
@@ -133,7 +136,8 @@ SELECT s.id, s.user_id, s.tenant_id, s.internal_name,
            s.active_ingest_cluster_updated_at > NOW() - ($1::bigint * INTERVAL '1 second'),
            false
        )::boolean AS lease_fresh,
-       s.dvr_chapter_mode, s.dvr_chapter_interval_seconds
+       s.dvr_chapter_mode, s.dvr_chapter_interval_seconds,
+       COALESCE(s.last_ingest_cluster_id, '')::text AS last_ingest_cluster_id
 FROM commodore.streams s
 JOIN commodore.users u ON s.user_id = u.id
 WHERE CASE $2::text
@@ -166,6 +170,7 @@ type ResolveStreamContextByIdentifierRow struct {
 	LeaseFresh                bool           `db:"lease_fresh" json:"lease_fresh"`
 	DvrChapterMode            sql.NullString `db:"dvr_chapter_mode" json:"dvr_chapter_mode"`
 	DvrChapterIntervalSeconds sql.NullInt32  `db:"dvr_chapter_interval_seconds" json:"dvr_chapter_interval_seconds"`
+	LastIngestClusterID       string         `db:"last_ingest_cluster_id" json:"last_ingest_cluster_id"`
 }
 
 func (q *Queries) ResolveStreamContextByIdentifier(ctx context.Context, arg ResolveStreamContextByIdentifierParams) (ResolveStreamContextByIdentifierRow, error) {
@@ -185,6 +190,7 @@ func (q *Queries) ResolveStreamContextByIdentifier(ctx context.Context, arg Reso
 		&i.LeaseFresh,
 		&i.DvrChapterMode,
 		&i.DvrChapterIntervalSeconds,
+		&i.LastIngestClusterID,
 	)
 	return i, err
 }

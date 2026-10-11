@@ -321,6 +321,12 @@ CREATE TABLE IF NOT EXISTS commodore.streams (
     -- it, so an attempt that took no claim — or a different node in the same cluster — cannot clear
     -- a live publisher's placement. NULL when nothing holds the claim.
     active_ingest_claim_id VARCHAR(64),
+    -- The cluster this stream last ingested on. Set from active_ingest_cluster_id by
+    -- trg_streams_last_ingest_cluster whenever that column is written non-empty, and never
+    -- cleared, so it outlives the claim. The signed stream origin and outage ingest owner are
+    -- COALESCE(active, last ingest, tenant preferred cluster): a publisher that stops and
+    -- reconnects to the same cluster leaves the signed authority unchanged.
+    last_ingest_cluster_id VARCHAR(100),
     -- Durable, append-only set of every media cluster that has served this stream's live thumbnails. SOLE writer:
     -- RegisterStreamThumbnailServingCell (the service-fenced register-before-mint call), so a cell is here iff it
     -- registered before minting any object. active_ingest_cluster_id is NOT a writer (it names only the current ingest
@@ -1934,7 +1940,11 @@ BEGIN
        AND OLD.requires_auth IS NOT DISTINCT FROM NEW.requires_auth
        AND OLD.playback_policy IS NOT DISTINCT FROM NEW.playback_policy
        AND OLD.playback_webhook_secret_enc IS NOT DISTINCT FROM NEW.playback_webhook_secret_enc
-       AND OLD.active_ingest_cluster_id IS NOT DISTINCT FROM NEW.active_ingest_cluster_id
+       -- The authority carries the effective origin, not the claim: an ingest
+       -- starting or stopping on the cluster the stream last ingested on
+       -- changes nothing a cell holds.
+       AND COALESCE(NULLIF(OLD.active_ingest_cluster_id, ''), NULLIF(OLD.last_ingest_cluster_id, ''))
+           IS NOT DISTINCT FROM COALESCE(NULLIF(NEW.active_ingest_cluster_id, ''), NULLIF(NEW.last_ingest_cluster_id, ''))
        AND OLD.deleted_at IS NOT DISTINCT FROM NEW.deleted_at THEN
         RETURN NEW;
     END IF;
@@ -1948,9 +1958,29 @@ $$;
 CREATE OR REPLACE TRIGGER trg_live_stream_media_authority
 AFTER INSERT OR DELETE OR UPDATE OF tenant_id, user_id, internal_name, playback_id, stream_key,
     ingest_mode, live_video_abr, always_on, is_recording_enabled, requires_auth, playback_policy,
-    playback_webhook_secret_enc, active_ingest_cluster_id, deleted_at
+    playback_webhook_secret_enc, active_ingest_cluster_id, last_ingest_cluster_id, deleted_at
 ON commodore.streams
 FOR EACH ROW EXECUTE FUNCTION commodore.live_stream_media_authority_changed();
+
+-- Every writer of active_ingest_cluster_id (push claims, managed and pull
+-- placement, and Commodore replicas of any version) records the cluster here
+-- in the same row write, so last_ingest_cluster_id cannot fall behind a claim.
+CREATE OR REPLACE FUNCTION commodore.streams_track_last_ingest_cluster()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF NULLIF(NEW.active_ingest_cluster_id, '') IS NOT NULL THEN
+        NEW.last_ingest_cluster_id := NEW.active_ingest_cluster_id;
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE OR REPLACE TRIGGER trg_streams_last_ingest_cluster
+BEFORE INSERT OR UPDATE OF active_ingest_cluster_id
+ON commodore.streams
+FOR EACH ROW EXECUTE FUNCTION commodore.streams_track_last_ingest_cluster();
 
 CREATE OR REPLACE FUNCTION commodore.live_stream_child_media_authority_changed()
 RETURNS TRIGGER

@@ -1324,6 +1324,7 @@ SELECT id::text AS stream_id, tenant_id::text AS tenant_id, user_id::text AS use
        COALESCE(playback_policy::text, '')::text AS playback_policy,
        COALESCE(playback_webhook_secret_enc, '')::text AS playback_webhook_secret_enc,
        COALESCE(active_ingest_cluster_id, '')::text AS active_ingest_cluster_id,
+       COALESCE(last_ingest_cluster_id, '')::text AS last_ingest_cluster_id,
        deleted_at,
        -- Ages are taken on the database clock, in the column's own time zone.
        COALESCE(EXTRACT(EPOCH FROM (NOW()::timestamp - created_at)), 1e12)::bigint AS age_seconds,

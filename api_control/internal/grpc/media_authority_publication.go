@@ -65,6 +65,22 @@ func withMediaObjectParent(ctx context.Context, tenant *mediaauthoritypb.TenantA
 	return context.WithValue(ctx, mediaObjectParentContextKey{}, proto.CloneOf(tenant))
 }
 
+// sameTenantDependents reports whether two tenant versions agree on every field
+// a media-object compile reads. It is the comparison tenant publication uses to
+// decide object fan-out, so an object compile is superseded exactly when its
+// tenant change would have recompiled it anyway.
+func sameTenantDependents(left, right *mediaauthoritypb.TenantAuthority) (bool, error) {
+	leftDigest, err := sharedauthority.TenantDependentsDigest(left)
+	if err != nil {
+		return false, fmt.Errorf("digest tenant authority dependents: %w", err)
+	}
+	rightDigest, err := sharedauthority.TenantDependentsDigest(right)
+	if err != nil {
+		return false, fmt.Errorf("digest tenant authority dependents: %w", err)
+	}
+	return bytes.Equal(leftDigest, rightDigest), nil
+}
+
 // Access revocations cannot leave a previous allow usable because a dependency
 // failed. Unchanged or widened playback access retains its valid copy.
 func (s *CommodoreServer) revokeChangedAccessOnCompileFailure(ctx context.Context, authorityID string, kind mediaauthoritypb.MediaObjectKind, desired *mediaauthoritypb.PlaybackPolicy, desiredLive *mediaauthoritypb.LiveStreamAuthority, compileErr error) error {

@@ -1852,11 +1852,19 @@ func firstLiveIngestPeer(peers []*clusterpeerpb.TenantClusterPeer) *clusterpeerp
 // does the recorded ingest lease decide, and only while it is fresh: the
 // publisher is mid-session on that cluster, so routing a reconnect to the
 // tenant's default instead would hand them an endpoint PUSH_REWRITE refuses as
-// a duplicate. With no lease and no declaration, the tenant's route decides.
-func liveIngestClusterID(route *clusterRoute, requestedClusterID string, leasedClusterID sql.NullString, leaseFresh sql.NullBool) string {
+// a duplicate. With no lease and no declaration, the cluster the stream last
+// ingested on decides while the route still offers it for live ingest: that is
+// the origin and outage owner the stream's signed authority carries
+// (liveStreamAuthorityOrigin). Otherwise the tenant's route decides.
+func liveIngestClusterID(route *clusterRoute, requestedClusterID string, leasedClusterID sql.NullString, leaseFresh sql.NullBool, lastIngestClusterID string) string {
 	if requestedClusterID == "" && leaseFresh.Valid && leaseFresh.Bool && leasedClusterID.Valid {
 		if leased := strings.TrimSpace(leasedClusterID.String); leased != "" {
 			return leased
+		}
+	}
+	if last := strings.TrimSpace(lastIngestClusterID); requestedClusterID == "" && last != "" {
+		if sticky := resolveLiveIngestClusterID(route, last); sticky != "" {
+			return sticky
 		}
 	}
 	return resolveLiveIngestClusterID(route, requestedClusterID)
@@ -2145,7 +2153,7 @@ func (s *CommodoreServer) validateStreamKey(ctx context.Context, req *commodorep
 	resp.TenantResourceLimits = tenantResourceLimits
 
 	if route, err := s.resolveClusterRouteForTenant(ctx, admission.TenantID); err == nil {
-		resolvedOriginClusterID := resolveLiveIngestClusterID(route, req.GetClusterId())
+		resolvedOriginClusterID := liveIngestClusterID(route, req.GetClusterId(), sql.NullString{}, sql.NullBool{}, admission.LastIngestClusterID)
 		resp.OriginClusterId = &resolvedOriginClusterID
 		if route.officialClusterID != "" {
 			resp.OfficialClusterId = &route.officialClusterID
@@ -2538,7 +2546,7 @@ func (s *CommodoreServer) ResolveStreamContext(ctx context.Context, req *commodo
 	if route != nil {
 		resolvedOriginClusterID := liveIngestClusterID(
 			route, requestedClusterID, resolved.ActiveIngestClusterID,
-			sql.NullBool{Bool: resolved.LeaseFresh, Valid: true},
+			sql.NullBool{Bool: resolved.LeaseFresh, Valid: true}, resolved.LastIngestClusterID,
 		)
 		resp.OriginClusterId = &resolvedOriginClusterID
 		if route.officialClusterID != "" {
