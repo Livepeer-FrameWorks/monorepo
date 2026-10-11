@@ -773,7 +773,7 @@ func TestSyncMeshMarksNodeActive(t *testing.T) {
 		WithArgs("node-1").
 		WillReturnRows(sqlmock.NewRows([]string{"wireguard_ip", "wireguard_public_key", "external_ip", "internal_ip", "wireguard_listen_port", "cluster_id"}).
 			AddRow("10.200.0.5", "pub", "1.2.3.4", "10.0.0.5", int32(51820), "cluster-1"))
-	mock.ExpectExec(`(?s)UPDATE quartermaster\.infrastructure_nodes.*status = 'active'`).
+	mock.ExpectExec(`(?s)UPDATE quartermaster\.infrastructure_nodes.*ELSE 'active' END`).
 		WithArgs("node-1", sqlmock.AnyArg(), meshHeartbeatRefreshAfterSeconds).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	expectMeshConfigCacheMiss(mock, "node-1")

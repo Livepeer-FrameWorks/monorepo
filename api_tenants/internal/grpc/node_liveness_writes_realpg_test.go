@@ -285,5 +285,15 @@ func verifyUnchangedNodeLivenessLeavesNodeRowsAlone(t *testing.T, db *sql.DB) { 
 		if got := topology(t); got != steady {
 			t.Fatalf("an unchanged mesh sync moved the mesh topology revision %d -> %d", steady, got)
 		}
+		// An operator's lifecycle status outlives the node's own syncs: a node
+		// in maintenance, retired or evicted keeps reporting until it is
+		// stopped, and its heartbeat must not put it back into routing.
+		for _, held := range []string{"maintenance", "retired", "evicted"} {
+			exec(t, `UPDATE quartermaster.infrastructure_nodes SET status = $1, last_heartbeat = NOW() - make_interval(secs => $2) WHERE node_id = 'liveness-core'`, held, int(meshHeartbeatRefreshAfterSeconds)+1)
+			sync(t, "mesh-2", 80)
+			if got := row(t, "liveness-core"); got.status != held || age(t, "liveness-core", "last_heartbeat") > 5 {
+				t.Fatalf("a sync of a node in %s: %+v, want the status kept and the heartbeat refreshed", held, got)
+			}
+		}
 	})
 }
