@@ -1979,8 +1979,12 @@ CREATE INDEX IF NOT EXISTS idx_foghorn_dvr_chapters_playback_artifact
     ON foghorn.dvr_chapters(playback_artifact_hash)
     WHERE playback_artifact_hash IS NOT NULL;
 
-CREATE INDEX IF NOT EXISTS idx_foghorn_ingest_sessions_projected_node
+-- Open projected sessions are a small, live subset of the retained session
+-- history. The included columns let the claim, reaper and node-reconcile reads
+-- answer from the index without fetching each session row.
+CREATE INDEX IF NOT EXISTS idx_foghorn_ingest_sessions_projected_node_covering
     ON foghorn.ingest_sessions(node_id ASC, started_at ASC)
+    INCLUDE (tenant_id, stream_internal_name, ingest_cluster_id, start_trigger_uuid)
     WHERE ended_at IS NULL AND projection_state = 'active';
 
 CREATE INDEX IF NOT EXISTS idx_foghorn_ingest_sessions_open_trigger

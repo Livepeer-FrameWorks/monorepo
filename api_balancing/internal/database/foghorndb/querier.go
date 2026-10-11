@@ -414,6 +414,8 @@ type Querier interface {
 	ListActiveDVRRecordingNodes(ctx context.Context, artifactHash string) ([]string, error)
 	// A pending session holds its claim only while its admission can still be answered; past the
 	// admission window Mist has refused that push, so the claim is left to lapse.
+	// projection_state is either 'active' or 'pending', so the two branches are disjoint and each
+	// reads only open sessions through its own partial index.
 	ListActiveIngestSessionClaims(ctx context.Context, admissionWindowMs int64) ([]ListActiveIngestSessionClaimsRow, error)
 	ListActiveObjectKeyBackfillRows(ctx context.Context, arg ListActiveObjectKeyBackfillRowsParams) ([]ListActiveObjectKeyBackfillRowsRow, error)
 	ListActivePushTargetActivationsForNodeRequeue(ctx context.Context, arg ListActivePushTargetActivationsForNodeRequeueParams) ([]ListActivePushTargetActivationsForNodeRequeueRow, error)

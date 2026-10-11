@@ -74,13 +74,15 @@ type checkConstraint struct {
 }
 
 var (
-	checkInRe     = regexp.MustCompile(`\(?\(?([a-z_][a-z0-9_]*)\)?(?:::[a-z ]+)?\s*=\s*ANY\s*\(\(?ARRAY\[([^\]]*)\]`)
-	checkEqRe     = regexp.MustCompile(`\(([a-z_][a-z0-9_]*)\s*=\s*'([^']*)'`)
-	quotedRe      = regexp.MustCompile(`'((?:[^']|'')*)'`)
-	lenRe         = regexp.MustCompile(`\((\d+)(?:,(\d+))?\)`)
-	queueNameRe   = regexp.MustCompile(`(outbox|_queue|queue_|_jobs?$|_inbox|deliver|attempt|_intents?$|_commands?$|dispatch|retries|pending)`)
-	hotNameRe     = regexp.MustCompile(`(event|log|history|usage|ledger|session|sample|metric|audit|replay|record|entr|line_item|transaction|snapshot|_runs?$|messages|artifact|placement|incident|invoice|webhook)`)
-	settledColRe  = regexp.MustCompile(`^(completed|published|processed|delivered|sent|dispatched|acked|applied|finished|succeeded|settled|resolved|done|consumed|handled)_at$`)
+	checkInRe   = regexp.MustCompile(`\(?\(?([a-z_][a-z0-9_]*)\)?(?:::[a-z ]+)?\s*=\s*ANY\s*\(\(?ARRAY\[([^\]]*)\]`)
+	checkEqRe   = regexp.MustCompile(`\(([a-z_][a-z0-9_]*)\s*=\s*'([^']*)'`)
+	quotedRe    = regexp.MustCompile(`'((?:[^']|'')*)'`)
+	lenRe       = regexp.MustCompile(`\((\d+)(?:,(\d+))?\)`)
+	queueNameRe = regexp.MustCompile(`(outbox|_queue|queue_|_jobs?$|_inbox|deliver|attempt|_intents?$|_commands?$|dispatch|retries|pending)`)
+	hotNameRe   = regexp.MustCompile(`(event|log|history|usage|ledger|session|sample|metric|audit|replay|record|entr|line_item|transaction|snapshot|_runs?$|messages|artifact|placement|incident|invoice|webhook)`)
+	// ended_at closes a session or recording: the retained history is nearly all ended and only the live ones
+	// are open, unlike a tombstone column such as deleted_at.
+	settledColRe  = regexp.MustCompile(`^(completed|published|processed|delivered|sent|dispatched|acked|applied|finished|succeeded|settled|resolved|done|consumed|handled|ended)_at$`)
 	dueColRe      = regexp.MustCompile(`^(next_attempt|next_retry|available|run|scheduled|due|not_before|retry|visible|next_run|next_check|poll)_(at|after)$`)
 	claimColRe    = regexp.MustCompile(`^(claimed|locked|leased|lease_expires|locked_until|lease_until|claim_expires|lease_expiry|lease_deadline|picked)(_at)?$`)
 	recentColRe   = regexp.MustCompile(`^last_.*(heartbeat|seen|check|health|report|ping|observed|alive|contact)`)
@@ -763,7 +765,7 @@ func (s *seeder) generate(rng *rand.Rand, t *table, c *column, i int) *string {
 			if nullable && rng.Float64() < 0.9 {
 				return nil
 			}
-		case strings.HasPrefix(name, "deleted") || strings.HasPrefix(name, "revoked") || strings.HasPrefix(name, "archived") || strings.HasPrefix(name, "disabled") || strings.HasPrefix(name, "suspended") || strings.HasPrefix(name, "purged") || strings.HasPrefix(name, "canceled") || strings.HasPrefix(name, "cancelled") || strings.HasPrefix(name, "failed") || strings.HasPrefix(name, "ended") || strings.HasPrefix(name, "superseded") || strings.HasPrefix(name, "retired"):
+		case strings.HasPrefix(name, "deleted") || strings.HasPrefix(name, "revoked") || strings.HasPrefix(name, "archived") || strings.HasPrefix(name, "disabled") || strings.HasPrefix(name, "suspended") || strings.HasPrefix(name, "purged") || strings.HasPrefix(name, "canceled") || strings.HasPrefix(name, "cancelled") || strings.HasPrefix(name, "failed") || strings.HasPrefix(name, "superseded") || strings.HasPrefix(name, "retired"):
 			if nullable && rng.Float64() < 0.9 {
 				return nil
 			}

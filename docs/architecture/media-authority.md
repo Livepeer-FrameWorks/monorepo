@@ -344,13 +344,15 @@ claims:
   off to four while claims come back empty or fail, with every wait jittered by
   up to a fifth, so idle replicas do not read the queue every second in step.
 
-The claim has a two-second budget and costs one index probe per cell it visits,
-never one per queued row: it steps through the cells with something due from
-where the replica's previous claim ended, drops a cell with a delivery in flight
-with one probe, takes the first claimable row of each remaining cell, and stops
-once the batch is full. Replicas claiming at once therefore start at different
-cells. On YugabyteDB a probe per queued row is a storage round trip per row, and
-a few thousand queued rows put the claim past its budget. YugabyteDB logs
+The claim has a two-second budget and reads the queue as sets, never with a
+lookup per cell or per queued row: it reads the due short-lease deliveries of
+current versions in one batched join and the cells with a delivery in flight in
+one scan, takes the first claimable row of every other cell as its head, and
+locks heads in cell order from where the replica's previous claim ended,
+wrapping around, until the batch is full. Replicas claiming at once therefore
+start at different cells. On YugabyteDB a lookup per cell or per queued row is a
+storage round trip each, and a few hundred of them put the claim past its
+budget. YugabyteDB logs
 `Skip locking since entity was modified` whenever a claim passes over a head
 another replica has just taken; that is the claim working, not a fault. A claim
 that keeps failing is logged as a warning once and then at most once a minute,

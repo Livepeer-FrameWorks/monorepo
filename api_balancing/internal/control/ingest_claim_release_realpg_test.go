@@ -291,6 +291,16 @@ func TestActiveIngestSessionClaimsSkipLapsedPending_RealPG(t *testing.T) {
 	lapsed := mintPending(t, "node-renew", "live+renew-lapsed", 541, "renew-lapsed", IngestAdmissionWindow+time.Second)
 	projected := mintPending(t, "node-renew", "live+renew-projected", 542, "renew-projected", 0)
 	projectAged(t, projected, time.Hour)
+	// The claim list is a union of the projected and the fresh pending sessions; an ended
+	// session of either kind is in neither.
+	endedProjected := mintPending(t, "node-renew", "live+renew-ended-projected", 543, "renew-ended-projected", 0)
+	projectAged(t, endedProjected, time.Hour)
+	endedPending := mintPending(t, "node-renew", "live+renew-ended-pending", 544, "renew-ended-pending", 0)
+	for _, id := range []string{endedProjected, endedPending} {
+		if _, err := db.ExecContext(ctx, `UPDATE foghorn.ingest_sessions SET ended_at = NOW() WHERE id = $1::uuid`, id); err != nil {
+			t.Fatalf("end session %s: %v", id, err)
+		}
+	}
 
 	claims, err := activeIngestSessionClaims(ctx)
 	if err != nil {
@@ -305,5 +315,11 @@ func TestActiveIngestSessionClaimsSkipLapsedPending_RealPG(t *testing.T) {
 	}
 	if renewed["renew-lapsed"] {
 		t.Fatalf("renewal re-asserted the claim of lapsed pending session %s", lapsed)
+	}
+	if renewed["renew-ended-projected"] || renewed["renew-ended-pending"] {
+		t.Fatalf("renewal re-asserted the claim of an ended session: %v", renewed)
+	}
+	if len(renewed) != 2 {
+		t.Fatalf("renewed %v, want only the fresh pending and the projected session", renewed)
 	}
 }

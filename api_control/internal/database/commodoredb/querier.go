@@ -39,17 +39,18 @@ type Querier interface {
 	// history on an expression no index can serve, inside a claim budget of a
 	// couple of seconds.
 	//
-	// The work is per cell, never per queued row: the cells with something due are
-	// found by stepping through the per-cell index, a cell with a delivery in
-	// flight is dropped with one probe, and each remaining cell contributes the
-	// first claimable row of its index range. On YugabyteDB every probe is a
-	// storage round trip, so a check per queued row costs a round trip per row of
-	// the backlog.
+	// The deliveries that are due are read once, as a set, and checked against the
+	// current version in one batched join; the cells with a delivery in flight are
+	// read the same way. Each remaining cell offers its first claimable row as its
+	// head. On YugabyteDB every lookup made per cell or per row is a storage round
+	// trip, so a claim that probes cell by cell costs a round trip per cell and per
+	// row it passes over, while the set reads cost a few round trips in all.
 	//
-	// The walk starts after the cell the claimant's previous claim ended at and
-	// wraps around, and stops once the batch is full. A claim reads only the cells
-	// it takes, every cell is reached in turn, and replicas claiming at once start
-	// from different cells instead of contending for the same heads.
+	// The heads are taken in cell order starting after the cell the claimant's
+	// previous claim ended at, wrapping around, until the batch is full. Every cell
+	// is reached in turn, and replicas claiming at once start from different cells
+	// instead of contending for the same heads. A head another claim holds is
+	// skipped with its cell: a cell's other rows wait behind its head.
 	ClaimMediaAuthorityDeadlineDelivery(ctx context.Context, arg ClaimMediaAuthorityDeadlineDeliveryParams) ([]ClaimMediaAuthorityDeadlineDeliveryRow, error)
 	// Deliveries are claimed one cell at a time, each cell with its own workers, so
 	// a cell that is slow or down cannot take the workers another cell needs. Within
@@ -349,8 +350,10 @@ type Querier interface {
 	ListLegacySchemaTenantsTargetingCell(ctx context.Context, arg ListLegacySchemaTenantsTargetingCellParams) ([]string, error)
 	ListLiveStreamMediaAuthoritySources(ctx context.Context) ([]ListLiveStreamMediaAuthoritySourcesRow, error)
 	ListManagedStreams(ctx context.Context, clusterID string) ([]ListManagedStreamsRow, error)
-	// The cells that have an ordinary delivery waiting, found by stepping through
-	// the per-cell index from one cell to the next instead of reading the queue.
+	// The cells that have an ordinary delivery waiting. The per-cell index leads
+	// with cell_id, so YugabyteDB answers the DISTINCT by skipping from one cell to
+	// the next inside the storage scan, in a single round trip rather than one per
+	// cell.
 	ListMediaAuthorityDeliveryCells(ctx context.Context) ([]string, error)
 	// Reads the deliveries that are not settled, through their partial indexes, and
 	// nothing else: a delivery that was acknowledged has no backlog, no age, and no

@@ -136,16 +136,16 @@
     "rows_scanned": 2262
   },
   "commodore:ClaimMediaAuthorityDeadlineDelivery@declared": {
-    "flags": ["NESTED_LOOP_UNBATCHED", "CORRELATED_SUBPLAN", "MANY_READ_RPCS"],
-    "read_requests": 872,
-    "reason": "Current v0.3.13 cursor walk differs from the handoff query. Fixture visits 161 due cells via indexed one-row probes, with six claimable heads; loop cost follows visited cells, not retained delivery history. Keep visible as accepted per-cell RPC cost.",
-    "rows_scanned": 937
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 19,
+    "reason": "Due short-lease deliveries and in-flight cells are read as sets and checked against current in one join; the fixture planner hashes the 1545-row current table rather than batching key lookups. 19 RPCs for the whole claim, independent of the number of cells.",
+    "rows_scanned": 2729
   },
   "commodore:ClaimMediaAuthorityDeadlineDelivery@distributed": {
-    "flags": ["NESTED_LOOP_UNBATCHED", "CORRELATED_SUBPLAN", "MANY_READ_RPCS"],
-    "read_requests": 872,
-    "reason": "Current v0.3.13 cursor walk differs from the handoff query. Fixture visits 161 due cells via indexed one-row probes, with six claimable heads; loop cost follows visited cells, not retained delivery history. Keep visible as accepted per-cell RPC cost.",
-    "rows_scanned": 937
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 19,
+    "reason": "Due short-lease deliveries and in-flight cells are read as sets and checked against current in one join; the fixture planner hashes the 1545-row current table rather than batching key lookups. 19 RPCs for the whole claim, independent of the number of cells.",
+    "rows_scanned": 2729
   },
   "commodore:ClaimMediaAuthorityObligations@declared": {
     "flags": ["MANY_READ_RPCS"],
@@ -198,26 +198,14 @@
     "rows_scanned": 400
   },
   "commodore:DeleteExpiredMediaAuthorityDeliveries@declared": {
-    "flags": [
-      "MANY_READ_RPCS",
-      "NESTED_LOOP_UNBATCHED",
-      "READ_AMPLIFICATION",
-      "SEQ_SCAN_LARGE",
-      "SORT_LARGE"
-    ],
-    "read_requests": 112,
-    "rows_scanned": 11711
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE", "SORT_LARGE"],
+    "read_requests": 16,
+    "rows_scanned": 14342
   },
   "commodore:DeleteExpiredMediaAuthorityDeliveries@distributed": {
-    "flags": [
-      "MANY_READ_RPCS",
-      "NESTED_LOOP_UNBATCHED",
-      "READ_AMPLIFICATION",
-      "SEQ_SCAN_LARGE",
-      "SORT_LARGE"
-    ],
-    "read_requests": 112,
-    "rows_scanned": 11711
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE", "SORT_LARGE"],
+    "read_requests": 16,
+    "rows_scanned": 14342
   },
   "commodore:DeleteOrphanedMediaAuthorityVersions@declared": {
     "flags": [
@@ -225,11 +213,11 @@
       "NESTED_LOOP_UNBATCHED",
       "READ_AMPLIFICATION",
       "SEQ_SCAN_LARGE",
-      "SLOW",
       "SORT_LARGE"
     ],
-    "read_requests": 353,
-    "rows_scanned": 11870
+    "read_requests": 255,
+    "reason": "Retained deliveries are read as one batch; the remaining read RPCs are the two foreign-key checks per deleted version (current and deliveries reference versions).",
+    "rows_scanned": 13517
   },
   "commodore:DeleteOrphanedMediaAuthorityVersions@distributed": {
     "flags": [
@@ -237,11 +225,11 @@
       "NESTED_LOOP_UNBATCHED",
       "READ_AMPLIFICATION",
       "SEQ_SCAN_LARGE",
-      "SLOW",
       "SORT_LARGE"
     ],
-    "read_requests": 353,
-    "rows_scanned": 11870
+    "read_requests": 255,
+    "reason": "Retained deliveries are read as one batch; the remaining read RPCs are the two foreign-key checks per deleted version (current and deliveries reference versions).",
+    "rows_scanned": 13517
   },
   "commodore:DeleteRetiredMediaAuthorityTargets@declared": {
     "flags": ["MANY_READ_RPCS"],
@@ -363,25 +351,17 @@
     "read_requests": 3,
     "rows_scanned": 1501
   },
-  "commodore:ListMediaAuthorityDeliveryCells@declared": {
-    "flags": ["CORRELATED_SUBPLAN", "MANY_READ_RPCS"],
-    "read_requests": 216,
-    "rows_scanned": 215
-  },
-  "commodore:ListMediaAuthorityDeliveryCells@distributed": {
-    "flags": ["CORRELATED_SUBPLAN", "MANY_READ_RPCS"],
-    "read_requests": 216,
-    "rows_scanned": 215
-  },
   "commodore:ListMediaAuthorityDeliveryStats@declared": {
-    "flags": ["MANY_READ_RPCS", "READ_AMPLIFICATION", "SEQ_SCAN_LARGE", "SLOW"],
-    "read_requests": 275,
-    "rows_scanned": 13665
+    "flags": ["INDEX_SCAN_AMPLIFICATION", "MANY_READ_RPCS", "READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 93,
+    "reason": "Rejected deliveries are resolved with batched target, distribution and reset lookups; each rejected current delivery still costs a versions and a copy lookup, and the copy lookup reads every cell of that version (INDEX_SCAN_AMPLIFICATION). The fixture planner hashes the 1545-row current table.",
+    "rows_scanned": 6748
   },
   "commodore:ListMediaAuthorityDeliveryStats@distributed": {
-    "flags": ["MANY_READ_RPCS", "READ_AMPLIFICATION", "SEQ_SCAN_LARGE", "SLOW"],
-    "read_requests": 275,
-    "rows_scanned": 13665
+    "flags": ["INDEX_SCAN_AMPLIFICATION", "MANY_READ_RPCS", "READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 93,
+    "reason": "Rejected deliveries are resolved with batched target, distribution and reset lookups; each rejected current delivery still costs a versions and a copy lookup, and the copy lookup reads every cell of that version (INDEX_SCAN_AMPLIFICATION). The fixture planner hashes the 1545-row current table.",
+    "rows_scanned": 6748
   },
   "commodore:RearmParkedMediaAuthorityObligations@declared": {
     "flags": ["MANY_READ_RPCS"],
@@ -845,16 +825,6 @@
     "read_requests": 16,
     "rows_scanned": 20000
   },
-  "foghorn:ListActiveIngestSessionClaims@declared": {
-    "flags": ["SEQ_SCAN_LARGE"],
-    "read_requests": 18,
-    "rows_scanned": 20000
-  },
-  "foghorn:ListActiveIngestSessionClaims@distributed": {
-    "flags": ["SEQ_SCAN_LARGE"],
-    "read_requests": 18,
-    "rows_scanned": 20000
-  },
   "foghorn:ListActivePushTargetActivationsForNodeRequeue@declared": {
     "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
     "read_requests": 2,
@@ -907,13 +877,13 @@
   },
   "foghorn:ListCapacityPendingPushTargetEffectsForRearm@declared": {
     "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
-    "read_requests": 19,
-    "rows_scanned": 28599
+    "read_requests": 3,
+    "rows_scanned": 10607
   },
   "foghorn:ListCapacityPendingPushTargetEffectsForRearm@distributed": {
     "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
-    "read_requests": 19,
-    "rows_scanned": 28599
+    "read_requests": 3,
+    "rows_scanned": 10607
   },
   "foghorn:ListCollectableMediaAuthorities@declared": {
     "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE", "SORT_LARGE"],
@@ -1005,16 +975,6 @@
     "read_requests": 1,
     "rows_scanned": 14129
   },
-  "foghorn:ListNeverProjectedIngestSessions@declared": {
-    "flags": ["SEQ_SCAN_LARGE", "SORT_LARGE"],
-    "read_requests": 6,
-    "rows_scanned": 20000
-  },
-  "foghorn:ListNeverProjectedIngestSessions@distributed": {
-    "flags": ["SEQ_SCAN_LARGE", "SORT_LARGE"],
-    "read_requests": 6,
-    "rows_scanned": 20000
-  },
   "foghorn:ListNodeFinalizingDVRChapters@declared": {
     "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION"],
     "read_requests": 6,
@@ -1024,36 +984,6 @@
     "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION"],
     "read_requests": 6,
     "rows_scanned": 4410
-  },
-  "foghorn:ListNodeProjectedIngestSessionsBefore@declared": {
-    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
-    "read_requests": 1,
-    "rows_scanned": 20000
-  },
-  "foghorn:ListNodeProjectedIngestSessionsBefore@distributed": {
-    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
-    "read_requests": 1,
-    "rows_scanned": 20000
-  },
-  "foghorn:ListOpenIngestSessionsByTrigger@declared": {
-    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
-    "read_requests": 1,
-    "rows_scanned": 20000
-  },
-  "foghorn:ListOpenIngestSessionsByTrigger@distributed": {
-    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
-    "read_requests": 1,
-    "rows_scanned": 20000
-  },
-  "foghorn:ListOpenProjectedIngestSessions@declared": {
-    "flags": ["SEQ_SCAN_LARGE", "SORT_LARGE"],
-    "read_requests": 13,
-    "rows_scanned": 20000
-  },
-  "foghorn:ListOpenProjectedIngestSessions@distributed": {
-    "flags": ["SEQ_SCAN_LARGE", "SORT_LARGE"],
-    "read_requests": 13,
-    "rows_scanned": 20000
   },
   "foghorn:ListPurgeableArtifacts@declared": {
     "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION"],
@@ -1178,14 +1108,14 @@
     "rows_scanned": 20100
   },
   "foghorn:PurgeAdmissionPushTargetRevisions@declared": {
-    "flags": ["SEQ_SCAN_LARGE", "SLOW", "SORT_LARGE"],
-    "read_requests": 39,
-    "rows_scanned": 41000
+    "flags": ["SEQ_SCAN_LARGE", "SORT_LARGE"],
+    "read_requests": 23,
+    "rows_scanned": 23008
   },
   "foghorn:PurgeAdmissionPushTargetRevisions@distributed": {
-    "flags": ["SEQ_SCAN_LARGE", "SLOW", "SORT_LARGE"],
-    "read_requests": 39,
-    "rows_scanned": 41000
+    "flags": ["SEQ_SCAN_LARGE", "SORT_LARGE"],
+    "read_requests": 23,
+    "rows_scanned": 23008
   },
   "foghorn:PurgeExpiredCloseTombstones@declared": {
     "flags": ["SEQ_SCAN_LARGE", "SLOW"],
@@ -1216,16 +1146,6 @@
     "flags": ["SLOW"],
     "read_requests": 18,
     "rows_scanned": 16858
-  },
-  "foghorn:PurgeTerminalAdmissionEffects@declared": {
-    "flags": ["SEQ_SCAN_LARGE", "SLOW", "SORT_LARGE"],
-    "read_requests": 26,
-    "rows_scanned": 29599
-  },
-  "foghorn:PurgeTerminalAdmissionEffects@distributed": {
-    "flags": ["SEQ_SCAN_LARGE", "SLOW", "SORT_LARGE"],
-    "read_requests": 26,
-    "rows_scanned": 29599
   },
   "foghorn:PurgeTerminalOfflineEffects@declared": {
     "flags": ["SEQ_SCAN_LARGE", "SORT_LARGE"],

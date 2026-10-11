@@ -94,20 +94,17 @@ WHERE authority_kind = sqlc.arg(authority_kind)
   );
 
 -- name: ListMediaAuthorityDeliveryCells :many
--- The cells that have an ordinary delivery waiting, found by stepping through
--- the per-cell index from one cell to the next instead of reading the queue.
-WITH RECURSIVE cells AS (
-    (SELECT queued.cell_id FROM commodore.media_authority_deliveries AS queued
-     WHERE NOT queued.short_lease AND queued.status IN ('pending', 'delivering')
-     ORDER BY queued.cell_id LIMIT 1)
-    UNION ALL
-    SELECT (SELECT queued.cell_id FROM commodore.media_authority_deliveries AS queued
-            WHERE NOT queued.short_lease AND queued.status IN ('pending', 'delivering')
-              AND queued.cell_id > cells.cell_id
-            ORDER BY queued.cell_id LIMIT 1)
-    FROM cells WHERE cells.cell_id IS NOT NULL
-)
-SELECT cell_id::text AS cell_id FROM cells WHERE cell_id IS NOT NULL;
+-- The cells that have an ordinary delivery waiting. The per-cell index leads
+-- with cell_id, so YugabyteDB answers the DISTINCT by skipping from one cell to
+-- the next inside the storage scan, in a single round trip rather than one per
+-- cell.
+SELECT cells.cell_id::text AS cell_id
+FROM (
+    SELECT DISTINCT queued.cell_id
+    FROM commodore.media_authority_deliveries AS queued
+    WHERE NOT queued.short_lease AND queued.status IN ('pending', 'delivering')
+) AS cells
+ORDER BY cells.cell_id;
 
 -- name: ClaimMediaAuthorityDeliveries :many
 -- Deliveries are claimed one cell at a time, each cell with its own workers, so
@@ -165,99 +162,59 @@ RETURNING delivery.authority_kind, delivery.authority_id, delivery.authority_ver
 -- history on an expression no index can serve, inside a claim budget of a
 -- couple of seconds.
 --
--- The work is per cell, never per queued row: the cells with something due are
--- found by stepping through the per-cell index, a cell with a delivery in
--- flight is dropped with one probe, and each remaining cell contributes the
--- first claimable row of its index range. On YugabyteDB every probe is a
--- storage round trip, so a check per queued row costs a round trip per row of
--- the backlog.
+-- The deliveries that are due are read once, as a set, and checked against the
+-- current version in one batched join; the cells with a delivery in flight are
+-- read the same way. Each remaining cell offers its first claimable row as its
+-- head. On YugabyteDB every lookup made per cell or per row is a storage round
+-- trip, so a claim that probes cell by cell costs a round trip per cell and per
+-- row it passes over, while the set reads cost a few round trips in all.
 --
--- The walk starts after the cell the claimant's previous claim ended at and
--- wraps around, and stops once the batch is full. A claim reads only the cells
--- it takes, every cell is reached in turn, and replicas claiming at once start
--- from different cells instead of contending for the same heads.
-WITH RECURSIVE due_after AS (
-    (SELECT queued.cell_id FROM commodore.media_authority_deliveries AS queued
-     WHERE queued.short_lease AND queued.status IN ('pending', 'delivering')
-       AND queued.next_attempt_at <= NOW()
-       AND queued.cell_id > sqlc.arg(after_cell)::text
-     ORDER BY queued.cell_id LIMIT 1)
-    UNION ALL
-    SELECT (SELECT queued.cell_id FROM commodore.media_authority_deliveries AS queued
-            WHERE queued.short_lease AND queued.status IN ('pending', 'delivering')
-              AND queued.next_attempt_at <= NOW()
-              AND queued.cell_id > due_after.cell_id
-            ORDER BY queued.cell_id LIMIT 1)
-    FROM due_after WHERE due_after.cell_id IS NOT NULL
-), due_before AS (
-    (SELECT queued.cell_id FROM commodore.media_authority_deliveries AS queued
-     WHERE queued.short_lease AND queued.status IN ('pending', 'delivering')
-       AND queued.next_attempt_at <= NOW()
-       AND queued.cell_id <= sqlc.arg(after_cell)::text
-     ORDER BY queued.cell_id LIMIT 1)
-    UNION ALL
-    SELECT (SELECT queued.cell_id FROM commodore.media_authority_deliveries AS queued
-            WHERE queued.short_lease AND queued.status IN ('pending', 'delivering')
-              AND queued.next_attempt_at <= NOW()
-              AND queued.cell_id > due_before.cell_id
-              AND queued.cell_id <= sqlc.arg(after_cell)::text
-            ORDER BY queued.cell_id LIMIT 1)
-    FROM due_before WHERE due_before.cell_id IS NOT NULL
-), due_cells AS (
-    SELECT due_after.cell_id FROM due_after
-    UNION ALL
-    SELECT due_before.cell_id FROM due_before
-), heads AS (
-    SELECT head.authority_kind, head.authority_id, head.authority_version,
-           head.cell_id, head.next_attempt_at, head.created_at
-    FROM due_cells
-    CROSS JOIN LATERAL (
-        -- The current-version check is a lookup per visited row rather than a
-        -- join, so the scan stays in index order and stops at the first match
-        -- instead of joining the cell's whole range to the current table.
-        SELECT queued.authority_kind, queued.authority_id, queued.authority_version,
-               queued.cell_id, queued.next_attempt_at, queued.created_at
-        FROM commodore.media_authority_deliveries AS queued
-        WHERE queued.short_lease
-          AND queued.cell_id = due_cells.cell_id
-          AND (queued.correction_until IS NULL OR queued.correction_until > NOW())
-          AND queued.status IN ('pending', 'delivering')
-          AND queued.next_attempt_at <= NOW()
-          AND (queued.lease_expires_at IS NULL OR queued.lease_expires_at <= NOW())
-          AND queued.authority_version = (
-              SELECT current.authority_version
-              FROM commodore.media_authority_current AS current
-              WHERE current.authority_kind = queued.authority_kind
-                AND current.authority_id = queued.authority_id
-          )
-        ORDER BY queued.next_attempt_at, queued.created_at
-        LIMIT 1
-    ) AS head
-    -- A scalar probe, not NOT EXISTS: an anti-join lets the planner batch the
-    -- cells into one primary-key scan that reads the whole table, while the
-    -- probe is one lookup in the cell's range of the short-lease index.
-    WHERE due_cells.cell_id IS NOT NULL
-      AND (
-          SELECT 1 FROM commodore.media_authority_deliveries AS inflight
-          WHERE inflight.short_lease
-            AND inflight.cell_id = due_cells.cell_id
-            AND inflight.status IN ('pending', 'delivering')
-            AND inflight.status = 'delivering' AND inflight.lease_expires_at > NOW()
-          LIMIT 1
-      ) IS NULL
+-- The heads are taken in cell order starting after the cell the claimant's
+-- previous claim ended at, wrapping around, until the batch is full. Every cell
+-- is reached in turn, and replicas claiming at once start from different cells
+-- instead of contending for the same heads. A head another claim holds is
+-- skipped with its cell: a cell's other rows wait behind its head.
+WITH due AS MATERIALIZED (
+    SELECT queued.authority_kind, queued.authority_id, queued.authority_version,
+           queued.cell_id, queued.next_attempt_at, queued.created_at
+    FROM commodore.media_authority_deliveries AS queued
+    JOIN commodore.media_authority_current AS current
+      ON current.authority_kind = queued.authority_kind
+     AND current.authority_id = queued.authority_id
+     AND current.authority_version = queued.authority_version
+    WHERE queued.short_lease
+      AND queued.status IN ('pending', 'delivering')
+      AND queued.next_attempt_at <= NOW()
+      AND (queued.correction_until IS NULL OR queued.correction_until > NOW())
+      AND (queued.lease_expires_at IS NULL OR queued.lease_expires_at <= NOW())
+), inflight AS MATERIALIZED (
+    SELECT DISTINCT inflight.cell_id
+    FROM commodore.media_authority_deliveries AS inflight
+    WHERE inflight.short_lease
+      AND inflight.status IN ('pending', 'delivering')
+      AND inflight.status = 'delivering' AND inflight.lease_expires_at > NOW()
+), heads AS MATERIALIZED (
+    SELECT DISTINCT ON (due.cell_id)
+           due.authority_kind, due.authority_id, due.authority_version, due.cell_id
+    FROM due
+    WHERE NOT EXISTS (SELECT 1 FROM inflight WHERE inflight.cell_id = due.cell_id)
+    ORDER BY due.cell_id, due.next_attempt_at, due.created_at
 ), candidates AS (
     -- Each head is locked on its own as the walk reaches it, so the walk stops
-    -- when the batch is full; a join of all heads to the queue would be
-    -- batched, and would compute every cell's head first.
+    -- when the batch is full.
     SELECT locked.authority_kind, locked.authority_id, locked.authority_version, locked.cell_id
-    FROM heads
+    FROM (
+        SELECT heads.authority_kind, heads.authority_id, heads.authority_version, heads.cell_id
+        FROM heads
+        ORDER BY heads.cell_id <= sqlc.arg(after_cell)::text, heads.cell_id
+    ) AS walk
     CROSS JOIN LATERAL (
         SELECT queued.authority_kind, queued.authority_id, queued.authority_version, queued.cell_id
         FROM commodore.media_authority_deliveries AS queued
-        WHERE queued.authority_kind = heads.authority_kind
-          AND queued.authority_id = heads.authority_id
-          AND queued.authority_version = heads.authority_version
-          AND queued.cell_id = heads.cell_id
+        WHERE queued.authority_kind = walk.authority_kind
+          AND queued.authority_id = walk.authority_id
+          AND queued.authority_version = walk.authority_version
+          AND queued.cell_id = walk.cell_id
           AND queued.status IN ('pending', 'delivering')
           AND queued.next_attempt_at <= NOW()
           AND (queued.lease_expires_at IS NULL OR queued.lease_expires_at <= NOW())
@@ -727,11 +684,6 @@ WITH queued AS MATERIALIZED (
            delivery.cell_id, delivery.created_at
     FROM commodore.media_authority_deliveries AS delivery
     WHERE delivery.status IN ('pending', 'delivering')
-), rejected AS MATERIALIZED (
-    SELECT delivery.authority_kind, delivery.authority_id, delivery.authority_version,
-           delivery.cell_id, delivery.created_at
-    FROM commodore.media_authority_deliveries AS delivery
-    WHERE delivery.status = 'rejected'
 ), current_deliveries AS MATERIALIZED (
     SELECT current.authority_kind, current.authority_id, current.authority_version,
            queued.cell_id, 'pending'::text AS status, queued.created_at
@@ -741,19 +693,10 @@ WITH queued AS MATERIALIZED (
      AND current.authority_id = queued.authority_id
      AND current.authority_version = queued.authority_version
     UNION ALL
-    SELECT current.authority_kind, current.authority_id, current.authority_version,
-           rejected.cell_id, 'rejected'::text AS status, rejected.created_at
-    FROM rejected
-    JOIN commodore.media_authority_current AS current
-      ON current.authority_kind = rejected.authority_kind
-     AND current.authority_id = rejected.authority_id
-     AND current.authority_version = rejected.authority_version
-    WHERE EXISTS (
-        SELECT 1 FROM commodore.media_authority_actionable_rejections AS actionable
-        WHERE actionable.authority_kind = rejected.authority_kind
-          AND actionable.authority_id = rejected.authority_id
-          AND actionable.authority_version = rejected.authority_version
-          AND actionable.cell_id = rejected.cell_id)
+    -- The view holds only rejected deliveries of the current version.
+    SELECT actionable.authority_kind, actionable.authority_id, actionable.authority_version,
+           actionable.cell_id, 'rejected'::text AS status, NULL::timestamptz AS created_at
+    FROM commodore.media_authority_actionable_rejections AS actionable
 )
 SELECT current.authority_kind,
        COUNT(*) FILTER (WHERE current.status IN ('pending', 'delivering'))::bigint AS pending_count,
@@ -802,12 +745,28 @@ WITH candidates AS MATERIALIZED (
     ORDER BY version.valid_until, version.authority_kind,
              version.authority_id, version.authority_version
     LIMIT sqlc.arg(batch_size)
+), doomed AS MATERIALIZED (
+    -- The deliveries of the candidate authorities are read in one scan of the
+    -- primary key by its authority prefix and matched to the candidate versions
+    -- here. A lookup per candidate costs YugabyteDB a storage round trip each,
+    -- and a join on the version key alone is planned as a scan of every
+    -- retained delivery.
+    SELECT delivery.authority_kind, delivery.authority_id, delivery.authority_version, delivery.cell_id
+    FROM commodore.media_authority_deliveries AS delivery
+    JOIN candidates
+      ON candidates.authority_kind = delivery.authority_kind
+     AND candidates.authority_id = delivery.authority_id
+     AND candidates.authority_version = delivery.authority_version
+    WHERE delivery.authority_kind = ANY (ARRAY(SELECT DISTINCT candidates.authority_kind FROM candidates))
+      AND delivery.authority_id = ANY (ARRAY(SELECT DISTINCT candidates.authority_id FROM candidates))
+      AND delivery.status IN ('acknowledged', 'superseded', 'rejected')
 )
 DELETE FROM commodore.media_authority_deliveries AS delivery
-USING candidates
-WHERE delivery.authority_kind = candidates.authority_kind
-  AND delivery.authority_id = candidates.authority_id
-  AND delivery.authority_version = candidates.authority_version
+USING doomed
+WHERE delivery.authority_kind = doomed.authority_kind
+  AND delivery.authority_id = doomed.authority_id
+  AND delivery.authority_version = doomed.authority_version
+  AND delivery.cell_id = doomed.cell_id
   AND delivery.status IN ('acknowledged', 'superseded', 'rejected');
 
 -- name: DeleteOrphanedMediaAuthorityVersions :execrows
@@ -823,6 +782,19 @@ WITH candidates AS MATERIALIZED (
     ORDER BY version.valid_until, version.authority_kind,
              version.authority_id, version.authority_version
     LIMIT sqlc.arg(batch_size)
+), retained AS MATERIALIZED (
+    -- The candidates that still have a delivery, read as one batch the way
+    -- DeleteExpiredMediaAuthorityDeliveries reads them. A check per candidate
+    -- costs YugabyteDB a storage round trip each. The foreign keys from the
+    -- current table and the queue still check each deleted version on its own.
+    SELECT DISTINCT delivery.authority_kind, delivery.authority_id, delivery.authority_version
+    FROM commodore.media_authority_deliveries AS delivery
+    JOIN candidates
+      ON candidates.authority_kind = delivery.authority_kind
+     AND candidates.authority_id = delivery.authority_id
+     AND candidates.authority_version = delivery.authority_version
+    WHERE delivery.authority_kind = ANY (ARRAY(SELECT DISTINCT candidates.authority_kind FROM candidates))
+      AND delivery.authority_id = ANY (ARRAY(SELECT DISTINCT candidates.authority_id FROM candidates))
 )
 DELETE FROM commodore.media_authority_versions AS version
 USING candidates
@@ -831,10 +803,10 @@ WHERE version.authority_kind = candidates.authority_kind
   AND version.authority_version = candidates.authority_version
   AND NOT EXISTS (
       SELECT 1
-      FROM commodore.media_authority_deliveries AS delivery
-      WHERE delivery.authority_kind = version.authority_kind
-        AND delivery.authority_id = version.authority_id
-        AND delivery.authority_version = version.authority_version
+      FROM retained
+      WHERE retained.authority_kind = candidates.authority_kind
+        AND retained.authority_id = candidates.authority_id
+        AND retained.authority_version = candidates.authority_version
   );
 
 -- name: EnqueueMediaAuthorityObligation :exec

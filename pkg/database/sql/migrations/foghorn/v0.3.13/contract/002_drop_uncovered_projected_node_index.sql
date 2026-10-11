@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS foghorn.idx_foghorn_ingest_sessions_projected_node;
