@@ -18,6 +18,7 @@ import (
 	"frameworks/api_balancing/internal/geo"
 	"frameworks/api_balancing/internal/state"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/foghorn"
 	foghornfed "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/foghorn/federation"
@@ -59,8 +60,8 @@ type PeerManager struct {
 	trackedAddrRefs               map[string]map[string]map[int64]int
 	trackedAlwaysOnRefs           map[string]int
 	trackedCellRefs               map[string]map[string]int // cluster -> control cell -> active memberships naming it
-	quartermasterHints            map[string]PeerHint       // leader-owned authoritative refresh snapshot
-	quartermasterHintsRefreshedAt time.Time                 // bounds renewal when Quartermaster stops answering
+	quartermasterHints            map[string]PeerHint       // leader-owned: Quartermaster's last answer, replaced only by its next one
+	quartermasterHintsRefreshedAt time.Time                 // when Quartermaster last answered; reported while it is unreachable
 	nextPeerRunnerToken           uint64
 	done                          chan struct{}
 	isLeader                      bool
@@ -915,6 +916,11 @@ func (pm *PeerManager) cleanupStreamMembershipTombstones(ctx context.Context) er
 
 const (
 	peerRefreshInterval = 5 * time.Minute // reconciliation only; demand-driven path handles fast discovery
+	// peerRefreshTimeout bounds one Quartermaster peer read. The leader renews
+	// its lease from the loop that runs the read, once per streamAdPushInterval,
+	// so the read plus that interval must stay inside leaderLeaseTTL or an
+	// unreachable Quartermaster hands leadership between replicas.
+	peerRefreshTimeout = 5 * time.Second
 	// streamAdPushInterval paces stream advertisements. Peers hold a peer's live
 	// streams for remoteLiveStreamTTL (30s), so six of these intervals fit inside
 	// the window a single missed push has to make up.
@@ -1036,12 +1042,23 @@ func (pm *PeerManager) runAsLeader() {
 		pm.logger.WithError(err).Warn("Cannot reconstruct exact stream-peer state; relinquishing leadership")
 		return
 	}
+	// The term starts from Quartermaster's last stored answer, so a handover
+	// while Quartermaster is unreachable keeps the cell's peers; the refresh
+	// below replaces it as soon as Quartermaster answers.
+	quartermasterHints, confirmedAt, err := pm.loadQuartermasterPeerSnapshot()
+	if err != nil {
+		pm.logger.WithError(err).Warn("Cannot read Quartermaster's last peer set; relinquishing leadership")
+		return
+	}
 	pm.mu.Lock()
-	pm.quartermasterHints = make(map[string]PeerHint)
-	pm.quartermasterHintsRefreshedAt = time.Time{}
+	pm.quartermasterHints = quartermasterHints
+	pm.quartermasterHintsRefreshedAt = confirmedAt
 	pm.isLeader = true
 	pm.leaderReady = false
 	pm.mu.Unlock()
+	if len(quartermasterHints) > 0 {
+		pm.publishQuartermasterHints()
+	}
 	if err := pm.loadPeerAddressesFromRedis(); err != nil {
 		pm.logger.WithError(err).Warn("Cannot establish exact federation authority; relinquishing leadership")
 		return
@@ -1054,6 +1071,12 @@ func (pm *PeerManager) runAsLeader() {
 		Role:      strPtr("peer_manager"),
 	})
 	pm.refreshPeers()
+	// The first renewal below is one advertisement interval away; renewing
+	// here keeps the startup reads and refresh out of the lease budget.
+	if !pm.renewLease() {
+		pm.logger.Warn("Lost PeerManager leader lease while starting, stepping down")
+		return
+	}
 
 	// Subscribe for the duration of this leadership term: changes arrive when
 	// they happen, and the ticker below stays as the backstop.
@@ -1119,6 +1142,22 @@ func (pm *PeerManager) runAsLeader() {
 	}
 }
 
+func (pm *PeerManager) loadQuartermasterPeerSnapshot() (map[string]PeerHint, time.Time, error) {
+	if pm.cache == nil {
+		return make(map[string]PeerHint), time.Time{}, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	hints, confirmedAt, found, err := pm.cache.LoadQuartermasterPeerSnapshot(ctx)
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	if !found {
+		return make(map[string]PeerHint), time.Time{}, nil
+	}
+	return hints, confirmedAt, nil
+}
+
 // refreshPeers queries Quartermaster for peer clusters and manages connections.
 func (pm *PeerManager) refreshPeers() {
 	if pm.peerDiscovery == nil {
@@ -1126,12 +1165,25 @@ func (pm *PeerManager) refreshPeers() {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// One attempt that does not wait for a ready connection: an unreachable
+	// Quartermaster answers at once and the periodic refresh and the watch try
+	// again later.
+	ctx, cancel := context.WithTimeout(clients.WithSingleAttempt(context.Background()), peerRefreshTimeout)
 	defer cancel()
 
 	resp, err := pm.peerDiscovery.ListPeers(ctx, pm.clusterID)
 	if err != nil {
-		pm.logger.WithError(err).Warn("Failed to refresh federation peers")
+		// The last answer stays in force: Quartermaster is the only writer of
+		// the peer set, so its outage freezes the set rather than emptying it.
+		pm.mu.RLock()
+		confirmedAt := pm.quartermasterHintsRefreshedAt
+		peers := len(pm.quartermasterHints)
+		pm.mu.RUnlock()
+		fields := logging.Fields{"quartermaster_peers": peers}
+		if !confirmedAt.IsZero() {
+			fields["unconfirmed_for"] = time.Since(confirmedAt).Round(time.Second).String()
+		}
+		pm.logger.WithError(err).WithFields(fields).Warn("Failed to refresh federation peers; keeping Quartermaster's last peer set")
 		return
 	}
 	pm.applyQuartermasterPeers(resp)
@@ -1155,10 +1207,18 @@ func (pm *PeerManager) applyQuartermasterPeers(resp *quartermasterpb.ListPeersRe
 			Tenants:       append([]string(nil), peer.SharedTenantIds...),
 		}
 	}
+	confirmedAt := time.Now()
 	pm.mu.Lock()
 	pm.quartermasterHints = hints
-	pm.quartermasterHintsRefreshedAt = time.Now()
+	pm.quartermasterHintsRefreshedAt = confirmedAt
 	pm.mu.Unlock()
+	if pm.cache != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		if err := pm.cache.StoreQuartermasterPeerSnapshot(ctx, hints, confirmedAt); err != nil {
+			pm.logger.WithError(err).Warn("Failed to store Quartermaster's peer set for leader handover")
+		}
+		cancel()
+	}
 	pm.publishQuartermasterHints()
 	if err := pm.loadPeerAddressesFromRedis(); err != nil {
 		pm.logger.WithError(err).Warn("Failed to reconcile refreshed federation peers")
@@ -1229,16 +1289,16 @@ func unambiguousTrackedAddress(addresses map[string]map[int64]int) (string, bool
 	return selected, selected != ""
 }
 
+// publishQuartermasterHints renews this leader's lease on Quartermaster's last
+// answer. The answer has no age limit; the lease only ends this leader's
+// contribution when the leader stops renewing it.
 func (pm *PeerManager) publishQuartermasterHints() {
-	pm.mu.Lock()
-	if pm.quartermasterHintsRefreshedAt.IsZero() || time.Since(pm.quartermasterHintsRefreshedAt) > peerRefreshInterval+peerAddrTTL {
-		pm.quartermasterHints = make(map[string]PeerHint)
-	}
+	pm.mu.RLock()
 	hints := make(map[string]PeerHint, len(pm.quartermasterHints))
 	for clusterID, hint := range pm.quartermasterHints {
 		hints[clusterID] = hint
 	}
-	pm.mu.Unlock()
+	pm.mu.RUnlock()
 	if pm.cache == nil {
 		if err := pm.loadPeerAddressesFromRedis(); err != nil {
 			pm.logger.WithError(err).Warn("Failed to reconcile local federation peers")

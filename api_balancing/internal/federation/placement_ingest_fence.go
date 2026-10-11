@@ -90,17 +90,6 @@ func readIngestOwnership(ctx context.Context, fence PlacementIngestFenceReader, 
 	return ownership.under(authority)
 }
 
-const (
-	placementIngestOwnershipReadTimeout = time.Second
-	// placementIngestOwnershipOutageBackoff matches the authority fetcher's
-	// outage backoff: once Commodore is known unreachable, ownership reads
-	// answer from the signed outage owner without waiting on it again.
-	placementIngestOwnershipOutageBackoff = 5 * time.Second
-	// A slow answer for one stream is not an outage; consecutive timeouts
-	// with no answer in between are.
-	placementIngestOwnershipTimeoutsToBackOff = 3
-)
-
 // ConnectedPlacementIngestFence reads Commodore's current publisher lease
 // without taking or renewing it, in one attempt bounded to 1 s. When Commodore
 // is unreachable (Unavailable, including an open circuit breaker, or a timeout)
@@ -113,12 +102,14 @@ type ConnectedPlacementIngestFence struct {
 	// ClientSnapshot follows a reconnecting client without rewriting a live
 	// reader. A configured provider returning nil cannot use the initial client.
 	ClientSnapshot func() PlacementStreamContextClient
-	// Now is the backoff clock; nil uses the wall clock.
+	// Backoff is the process-wide Commodore outage backoff shared with the
+	// PUSH_REWRITE admission calls; nil keeps one for this fence alone.
+	Backoff *CommodoreOutageBackoff
+	// Now is the clock of the fence's own backoff when Backoff is nil.
 	Now func() time.Time
 
-	mu          sync.Mutex
-	outageUntil time.Time
-	timeouts    int
+	ownBackoff     CommodoreOutageBackoff
+	ownBackoffOnce sync.Once
 }
 
 var _ PlacementIngestFenceReader = (*ConnectedPlacementIngestFence)(nil)
@@ -130,7 +121,8 @@ func (reader *ConnectedPlacementIngestFence) IngestOwnership(ctx context.Context
 	if contextErr := ctx.Err(); contextErr != nil {
 		return PlacementIngestOwnership{}, status.FromContextError(contextErr).Err()
 	}
-	if reader.inOutage() {
+	backoff := reader.backoff()
+	if backoff.InOutage() {
 		return outageIngestOwnership(identity)
 	}
 	client := reader.Client
@@ -142,19 +134,31 @@ func (reader *ConnectedPlacementIngestFence) IngestOwnership(ctx context.Context
 		// reconnected client is used on the next request.
 		return outageIngestOwnership(identity)
 	}
-	cluster, err := readIngestLease(ctx, client, identity)
+	var cluster string
+	err := backoff.Call(ctx, func(callCtx context.Context) error {
+		var readErr error
+		cluster, readErr = readIngestLease(callCtx, client, identity)
+		return readErr
+	})
 	if err == nil {
-		reader.recordAnswer()
 		return PlacementIngestOwnership{Cluster: cluster, Source: PlacementIngestOwnershipConnected}, nil
 	}
 	// The caller's own budget ending says nothing about Commodore.
 	if contextErr := ctx.Err(); contextErr != nil {
 		return PlacementIngestOwnership{}, status.FromContextError(contextErr).Err()
 	}
-	if !reader.recordUnreachable(err) {
+	if !CommodoreUnreachable(err) {
 		return PlacementIngestOwnership{}, err
 	}
 	return outageIngestOwnership(identity)
+}
+
+func (reader *ConnectedPlacementIngestFence) backoff() *CommodoreOutageBackoff {
+	if reader.Backoff != nil {
+		return reader.Backoff
+	}
+	reader.ownBackoffOnce.Do(func() { reader.ownBackoff.Now = reader.Now })
+	return &reader.ownBackoff
 }
 
 func outageIngestOwnership(identity PlacementIngestIdentity) (PlacementIngestOwnership, error) {
@@ -165,14 +169,9 @@ func outageIngestOwnership(identity PlacementIngestIdentity) (PlacementIngestOwn
 }
 
 func readIngestLease(ctx context.Context, client PlacementStreamContextClient, identity PlacementIngestIdentity) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, placementIngestOwnershipReadTimeout)
-	defer cancel()
 	// No candidate cluster is asserted: this is a non-claiming read of the
 	// existing lease, independent of the node this preparation would select.
 	response, err := client.ResolveStreamContext(ctx, "", "", identity.InternalName, "")
-	if contextErr := ctx.Err(); contextErr != nil {
-		return "", status.FromContextError(contextErr).Err()
-	}
 	if err != nil {
 		return "", err
 	}
@@ -191,45 +190,4 @@ func readIngestLease(ctx context.Context, client PlacementStreamContextClient, i
 		return "", status.Error(codes.FailedPrecondition, "ingest ownership context contains an invalid cluster")
 	}
 	return clusterID, nil
-}
-
-func (reader *ConnectedPlacementIngestFence) now() time.Time {
-	if reader.Now != nil {
-		return reader.Now()
-	}
-	return time.Now()
-}
-
-func (reader *ConnectedPlacementIngestFence) inOutage() bool {
-	reader.mu.Lock()
-	defer reader.mu.Unlock()
-	return reader.now().Before(reader.outageUntil)
-}
-
-func (reader *ConnectedPlacementIngestFence) recordAnswer() {
-	reader.mu.Lock()
-	reader.timeouts = 0
-	reader.mu.Unlock()
-}
-
-// recordUnreachable reports whether err means Commodore could not answer, and
-// opens the outage backoff when that is established.
-func (reader *ConnectedPlacementIngestFence) recordUnreachable(err error) bool {
-	switch status.Code(err) {
-	case codes.Unavailable:
-		reader.mu.Lock()
-		reader.outageUntil = reader.now().Add(placementIngestOwnershipOutageBackoff)
-		reader.mu.Unlock()
-		return true
-	case codes.DeadlineExceeded:
-		reader.mu.Lock()
-		reader.timeouts++
-		if reader.timeouts >= placementIngestOwnershipTimeoutsToBackOff {
-			reader.outageUntil = reader.now().Add(placementIngestOwnershipOutageBackoff)
-		}
-		reader.mu.Unlock()
-		return true
-	default:
-		return false
-	}
 }

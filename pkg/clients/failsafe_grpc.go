@@ -106,6 +106,23 @@ func isTransportUnavailableMessage(message string) bool {
 	return false
 }
 
+type singleAttemptKey struct{}
+
+// WithSingleAttempt marks unary calls made with ctx to run once, without
+// retries and without waiting for the connection to become ready: an
+// unreachable service answers Unavailable at once instead of holding the
+// caller until its deadline. The circuit breaker still applies. Callers on a
+// request path that has its own fallback for an unreachable service use it.
+func WithSingleAttempt(ctx context.Context) context.Context {
+	return context.WithValue(ctx, singleAttemptKey{}, true)
+}
+
+// IsSingleAttempt reports whether ctx was marked by WithSingleAttempt.
+func IsSingleAttempt(ctx context.Context) bool {
+	marked, ok := ctx.Value(singleAttemptKey{}).(bool)
+	return ok && marked
+}
+
 // newGRPCRetryPolicy creates a retry policy for gRPC calls with sensible defaults.
 func newGRPCRetryPolicy() retrypolicy.RetryPolicy[any] {
 	return retrypolicy.NewBuilder[any]().
@@ -216,6 +233,14 @@ func FailsafeUnaryInterceptorWithMethodIsolation(serviceName string, isolatedMet
 
 	return func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
 		policy := grpcUnaryPolicyForMethod(defaultPolicy, methodPolicies, method)
+		if IsSingleAttempt(ctx) {
+			// Appended last, so it overrides a connection's default WaitForReady(true).
+			opts = append(opts, grpc.WaitForReady(false))
+			_, err := failsafe.With[any](policy.cb).WithContext(ctx).Get(func() (any, error) {
+				return nil, invoker(ctx, method, req, reply, cc, opts...)
+			})
+			return normalizeCircuitBreakerError(err, policy.name)
+		}
 		_, err := failsafe.With[any](policy.retry, policy.cb).WithContext(ctx).GetWithExecution(func(exec failsafe.Execution[any]) (any, error) {
 			return nil, invoker(exec.Context(), method, req, reply, cc, opts...)
 		})

@@ -130,6 +130,7 @@ const (
 type Processor struct {
 	logger                    logging.Logger
 	commodoreClient           *commodore.GRPCClient
+	commodoreOutage           atomic.Pointer[federation.CommodoreOutageBackoff]
 	quartermasterClient       *qmclient.GRPCClient
 	tenantAdmission           tenantAdmissionClient
 	decklogClient             *decklog.BatchedClient
@@ -1077,6 +1078,22 @@ func (p *Processor) SetCommodoreClient(c *commodore.GRPCClient) {
 	p.commodoreClient = c
 }
 
+// SetCommodoreOutageBackoff shares the process-wide Commodore outage backoff
+// with the ingest-ownership fence.
+func (p *Processor) SetCommodoreOutageBackoff(backoff *federation.CommodoreOutageBackoff) {
+	p.commodoreOutage.Store(backoff)
+}
+
+// CommodoreOutageBackoff is the backoff PUSH_REWRITE admission calls run
+// behind; a processor without a configured one keeps its own.
+func (p *Processor) CommodoreOutageBackoff() *federation.CommodoreOutageBackoff {
+	if backoff := p.commodoreOutage.Load(); backoff != nil {
+		return backoff
+	}
+	p.commodoreOutage.CompareAndSwap(nil, &federation.CommodoreOutageBackoff{})
+	return p.commodoreOutage.Load()
+}
+
 // SetGeoIPCache configures a cache for GeoIP lookups
 func (p *Processor) SetGeoIPCache(c *cache.Cache) {
 	p.geoipCache = c
@@ -1743,11 +1760,20 @@ func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (_ string, _ b
 	// A marked signed denial is terminal. Positive authority still uses the
 	// connected identity/claim path while Commodore is available and becomes
 	// the fallback only for an actual central failure.
+	//
+	// Each Commodore call here is one attempt of at most 1 s behind the
+	// process-wide outage backoff, so an unreachable Commodore leaves most of
+	// the admission budget to the signed outage owner path below.
+	commodoreOutage := p.CommodoreOutageBackoff()
 	if localFound && localValidation != nil && !localValidation.GetValid() {
 		identity = localValidation
 		usedLocalIdentity = true
 	} else if p.commodoreClient != nil {
-		identity, err = p.commodoreClient.ValidateStreamKeyAsService(admissionCtx, pushRewrite.GetStreamName())
+		err = commodoreOutage.Call(admissionCtx, func(callCtx context.Context) error {
+			var callErr error
+			identity, callErr = p.commodoreClient.ValidateStreamKeyAsService(callCtx, pushRewrite.GetStreamName())
+			return callErr
+		})
 	}
 	if err != nil || identity == nil {
 		if localValidation != nil && localValidation.GetValid() {
@@ -1819,8 +1845,12 @@ func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (_ string, _ b
 	var streamValidation *commodorepb.ValidateStreamKeyResponse
 	usedLocalAdmission := usedLocalIdentity
 	if !usedLocalIdentity && p.commodoreClient != nil {
-		streamValidation, err = control.ClaimIngestPlacement(admissionCtx, p.commodoreClient, pushRewrite.GetStreamName(),
-			identity.GetTenantId(), identity.GetInternalName(), trigger.GetNodeId(), ingestClusterID, claimToken, p.logger)
+		err = commodoreOutage.Call(admissionCtx, func(callCtx context.Context) error {
+			var callErr error
+			streamValidation, callErr = control.ClaimIngestPlacement(callCtx, p.commodoreClient, pushRewrite.GetStreamName(),
+				identity.GetTenantId(), identity.GetInternalName(), trigger.GetNodeId(), ingestClusterID, claimToken, p.logger)
+			return callErr
+		})
 	}
 	if err != nil || streamValidation == nil {
 		if localValidation == nil || !localValidation.GetValid() {

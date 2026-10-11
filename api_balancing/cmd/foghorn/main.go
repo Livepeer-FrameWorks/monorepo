@@ -1507,6 +1507,7 @@ func main() {
 	foghornServer.SetPlacementCapacityObserver(placementPreviewInventory)
 	foghornServer.SetPlacementPushSourceObserver(&federation.PlacementPushSourceObserver{Inventory: placementPreviewInventory, Registry: streamRegistry, RegistryCellID: foghornCfg.ClusterID})
 	foghornServer.SetLocalIngestResolver(triggerProcessor)
+	foghornServer.SetCommodoreOutageBackoff(triggerProcessor.CommodoreOutageBackoff())
 	foghornServer.SetLocalPlaybackPolicyEvaluator(triggerProcessor)
 	var authorityStore *localauthority.Store
 	mediaAuthorityCellID := cfg.MediaAuthorityCellID
@@ -1807,7 +1808,7 @@ func main() {
 		federation.SetDefaultArrangeDeps(arrangeDeps)
 		if placementDestination.Discovery != nil {
 			deps := federation.LivePlacementDependencies{Redis: redisClient, Registry: streamRegistry, Arrange: arrangeDeps, Client: fedClient, Logger: logger,
-				IngestFence: &federation.ConnectedPlacementIngestFence{ClientSnapshot: func() federation.PlacementStreamContextClient {
+				IngestFence: &federation.ConnectedPlacementIngestFence{Backoff: triggerProcessor.CommodoreOutageBackoff(), ClientSnapshot: func() federation.PlacementStreamContextClient {
 					if client := placementCommodore.Load(); client != nil {
 						return client
 					}

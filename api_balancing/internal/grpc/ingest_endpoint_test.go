@@ -314,6 +314,48 @@ func TestResolveIngestEndpoint_ReadyLocalAuthorityFallsBackAfterConnectedAttempt
 	}
 }
 
+// A Commodore that accepts the connection and never answers costs endpoint
+// resolution one bounded attempt, after which the ready local authority
+// answers; inside the outage backoff that follows, Commodore is not asked.
+func TestResolveIngestEndpoint_HangingCommodoreFallsBackWithinOneAttempt(t *testing.T) {
+	sm := state.ResetDefaultManagerForTests()
+	seedGRPCIngestNode(t, sm, "ingest-a", "ingest-a.example.com:18090")
+
+	fake := &commodoreIngestFake{streamContext: func(ctx context.Context, _ *commodorepb.ResolveStreamContextRequest) (*commodorepb.ResolveStreamContextResponse, error) {
+		<-ctx.Done()
+		return nil, status.FromContextError(ctx.Err()).Err()
+	}}
+	startCommodoreIngestFake(t, fake)
+
+	srv := newIngestGRPCServer()
+	srv.localIngestResolver = localIngestResolverFunc(func(context.Context, string) (*commodorepb.ResolveStreamContextResponse, bool, error) {
+		return &commodorepb.ResolveStreamContextResponse{
+			Admitted: true, StreamId: "stream-local", InternalName: "internal-local", TenantId: "tenant-local",
+			IngestMode: "push", OriginClusterId: proto.String(ingestTestCluster), ClusterPeers: ingestTestPeers(),
+		}, true, nil
+	})
+
+	for attempt, wantHits := range []int32{1, 1, 1} {
+		started := time.Now()
+		resp, err := srv.ResolveIngestEndpoint(context.Background(), &sharedpb.IngestEndpointRequest{StreamKey: "sk-local"})
+		elapsed := time.Since(started)
+		if err != nil || resp.GetPrimary().GetNodeId() != "ingest-a" {
+			t.Fatalf("attempt %d: resolve during a hanging Commodore = %+v, %v", attempt, resp, err)
+		}
+		if elapsed > 1500*time.Millisecond {
+			t.Fatalf("attempt %d: resolution waited %s on a hanging Commodore", attempt, elapsed)
+		}
+		if attempt == 0 {
+			// The timeout alone is not yet an outage; two more establish it.
+			srv.commodoreBackoff().RecordUnreachable(status.Error(codes.DeadlineExceeded, "timeout"))
+			srv.commodoreBackoff().RecordUnreachable(status.Error(codes.DeadlineExceeded, "timeout"))
+		}
+		if hits := fake.streamCtxHits.Load(); hits != wantHits {
+			t.Fatalf("attempt %d: Commodore calls = %d, want %d", attempt, hits, wantHits)
+		}
+	}
+}
+
 func TestResolveIngestEndpoint_ConnectedClaimOverridesSignedOutageOwner(t *testing.T) {
 	sm := state.ResetDefaultManagerForTests()
 	seedGRPCIngestNode(t, sm, "ingest-b", "ingest-b.example.com:18090")

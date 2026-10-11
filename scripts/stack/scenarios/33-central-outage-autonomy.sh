@@ -121,14 +121,17 @@ fi
 refusals "$SINCE" foghorn-b foghorn-b-2
 check "no ingest session for cell A's stream opened in cell B" [ -z "$(admitted_generation "$FOGHORN_B_DB" "${IN[a]}" "$SINCE_S")" ]
 
-SINCE=$(utc_now)
-if PUB[a]=$(publish_until_admitted "$EDGE_A_RTMP" "${KEY[a]}" 640x360 15 600 60); then
+# One publisher connection, as an encoder reconnecting once: admission decides
+# on signed local state inside its budget instead of waiting on Commodore, so
+# the first connection is admitted.
+SINCE=$(utc_now) ATTEMPT_AT=$(date +%s)
+if PUB[a]=$(publish_until_admitted "$EDGE_A_RTMP" "${KEY[a]}" 640x360 15 600 1); then
   PUBS+=("${PUB[a]}")
-  pass "a reconnect into cell A (the signed owner $OWNER) is admitted within a minute of retries during the outage"
+  pass "the first reconnect into cell A (the signed owner $OWNER) is admitted during the outage (after $(($(date +%s) - ATTEMPT_AT))s)"
   eventually 60 "cell A's republished stream is served during the outage" media_at "${BASE[a]}" "${PB[a]}"
 else
   PUB[a]=""
-  fail "a reconnect into cell A (the signed owner $OWNER) is admitted within a minute of retries during the outage"
+  fail "the first reconnect into cell A (the signed owner $OWNER) is admitted during the outage"
 fi
 refusals "$SINCE" foghorn foghorn-2
 viewers_everywhere

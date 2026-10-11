@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"frameworks/api_balancing/internal/balancer"
+	"frameworks/api_balancing/internal/federation"
 	"frameworks/api_balancing/internal/state"
 
 	commodorecli "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
@@ -84,11 +85,16 @@ func startIngestCommodoreFake(t *testing.T, fake *ingestCommodoreFake) {
 
 	prevControl := control.CommodoreClient
 	prevHandlers := commodoreClient
+	prevOutage := standaloneCommodoreOutage
 	control.CommodoreClient = client
 	commodoreClient = client
+	// Each test's Commodore starts reachable; an outage another test
+	// established does not carry over.
+	standaloneCommodoreOutage = &federation.CommodoreOutageBackoff{}
 	t.Cleanup(func() {
 		control.CommodoreClient = prevControl
 		commodoreClient = prevHandlers
+		standaloneCommodoreOutage = prevOutage
 		_ = client.Close()
 		srv.Stop()
 		_ = lis.Close()
@@ -614,6 +620,41 @@ func TestIngestFrontDoor_CommodoreErrorFailsClosed(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "VALIDATION_UNAVAILABLE") {
 		t.Errorf("body %s missing VALIDATION_UNAVAILABLE", rec.Body.String())
+	}
+}
+
+// A Commodore that accepts the connection and never answers costs the front
+// door one bounded attempt; once the outage is established, following
+// requests answer from local state without asking it.
+func TestIngestFrontDoor_HangingCommodoreIsOneBoundedAttempt(t *testing.T) {
+	sm := state.ResetDefaultManagerForTests()
+	seedIngestTestNode(t, sm, "ingest-a", "ingest-a.example.com:18090")
+
+	fake := &ingestCommodoreFake{
+		streamContext: func(ctx context.Context, _ *commodorepb.ResolveStreamContextRequest) (*commodorepb.ResolveStreamContextResponse, error) {
+			<-ctx.Done()
+			return nil, status.FromContextError(ctx.Err()).Err()
+		},
+	}
+	startIngestCommodoreFake(t, fake)
+	router := newIngestTestRouter(t)
+
+	for attempt := range 4 {
+		started := time.Now()
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/ingest/sk-abc", nil))
+		elapsed := time.Since(started)
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Fatalf("attempt %d: status %d, want 503 (body %s)", attempt, rec.Code, rec.Body.String())
+		}
+		if elapsed > 1500*time.Millisecond {
+			t.Fatalf("attempt %d: the front door waited %s on a hanging Commodore", attempt, elapsed)
+		}
+	}
+	// Three consecutive timeouts establish the outage; the fourth request
+	// falls inside the backoff.
+	if hits := fake.streamContextHits.Load(); hits != 3 {
+		t.Fatalf("Commodore calls = %d, want 3 before the outage backoff answers", hits)
 	}
 }
 

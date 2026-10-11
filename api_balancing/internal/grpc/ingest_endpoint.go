@@ -70,8 +70,14 @@ func (s *FoghornGRPCServer) ResolveIngestEndpoint(ctx context.Context, req *shar
 	// cluster_peers envelope, which selection then ranks nodes across.
 	var streamCtx *commodorepb.ResolveStreamContextResponse
 	var err error
-	if control.CommodoreClient != nil {
-		streamCtx, err = control.CommodoreClient.ResolveStreamContextByStreamKey(ctx, streamKey, "")
+	// One bounded attempt behind the process-wide outage backoff, so an
+	// unreachable Commodore leaves the answer to the signed local authority.
+	if commodoreClient := control.CommodoreClient; commodoreClient != nil {
+		err = s.commodoreBackoff().Call(ctx, func(callCtx context.Context) error {
+			var callErr error
+			streamCtx, callErr = commodoreClient.ResolveStreamContextByStreamKey(callCtx, streamKey, "")
+			return callErr
+		})
 	}
 	if err != nil || streamCtx == nil {
 		streamCtx = localContext

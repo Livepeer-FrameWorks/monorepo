@@ -349,6 +349,78 @@ func (c *RemoteEdgeCache) PublishPeerHints(ctx context.Context, contributorID st
 	return c.client.Set(ctx, c.keyPeerHintContribution(contributorID), raw, peerAddrTTL).Err()
 }
 
+const quartermasterPeerSnapshotVersion = uint32(1)
+
+type quartermasterPeerSnapshot struct {
+	Version              uint32              `json:"version"`
+	ConfirmedAtUnixMilli int64               `json:"confirmed_at_unix_milli"`
+	Hints                map[string]PeerHint `json:"hints"`
+}
+
+func (c *RemoteEdgeCache) keyQuartermasterPeerSnapshot() string {
+	return fmt.Sprintf("{%s}:peer_quartermaster_snapshot:v1", c.clusterID)
+}
+
+// StoreQuartermasterPeerSnapshot records the peer set Quartermaster last
+// answered. It has no expiry: Quartermaster is the only writer of the peer
+// set, so its last answer stays correct until it answers again, and a leader
+// that takes over while Quartermaster is unreachable starts from it. A peer
+// the lease contribution would refuse is left out here too.
+func (c *RemoteEdgeCache) StoreQuartermasterPeerSnapshot(ctx context.Context, hints map[string]PeerHint, confirmedAt time.Time) error {
+	normalized := make(map[string]PeerHint, len(hints))
+	for clusterID, hint := range hints {
+		clusterID = strings.TrimSpace(clusterID)
+		normalizedHint, err := normalizePeerHint(hint)
+		if clusterID == "" || err != nil {
+			continue
+		}
+		normalized[clusterID] = normalizedHint
+	}
+	raw, err := json.Marshal(quartermasterPeerSnapshot{Version: quartermasterPeerSnapshotVersion, ConfirmedAtUnixMilli: confirmedAt.UnixMilli(), Hints: normalized})
+	if err != nil {
+		return fmt.Errorf("marshal Quartermaster peer snapshot: %w", err)
+	}
+	return c.client.Set(ctx, c.keyQuartermasterPeerSnapshot(), raw, 0).Err()
+}
+
+// LoadQuartermasterPeerSnapshot returns the peer set Quartermaster last
+// answered and when. found is false when none was stored or the stored record
+// cannot be read; a Redis failure is an error.
+func (c *RemoteEdgeCache) LoadQuartermasterPeerSnapshot(ctx context.Context) (hints map[string]PeerHint, confirmedAt time.Time, found bool, err error) {
+	raw, err := c.client.Get(ctx, c.keyQuartermasterPeerSnapshot()).Bytes()
+	if errors.Is(err, goredis.Nil) {
+		return nil, time.Time{}, false, nil
+	}
+	if err != nil {
+		return nil, time.Time{}, false, err
+	}
+	// A record this release cannot read is treated as absent: the next
+	// Quartermaster answer overwrites it.
+	record, readable := decodeQuartermasterPeerSnapshot(raw)
+	if !readable {
+		c.logger.Warn("Ignoring malformed Quartermaster peer snapshot")
+		return nil, time.Time{}, false, nil
+	}
+	hints = make(map[string]PeerHint, len(record.Hints))
+	for clusterID, hint := range record.Hints {
+		normalizedHint, normalizeErr := normalizePeerHint(hint)
+		if strings.TrimSpace(clusterID) == "" || normalizeErr != nil {
+			c.logger.WithField("peer_cluster", clusterID).Warn("Ignoring invalid peer in Quartermaster peer snapshot")
+			continue
+		}
+		hints[strings.TrimSpace(clusterID)] = normalizedHint
+	}
+	return hints, time.UnixMilli(record.ConfirmedAtUnixMilli), true, nil
+}
+
+func decodeQuartermasterPeerSnapshot(raw []byte) (quartermasterPeerSnapshot, bool) {
+	var record quartermasterPeerSnapshot
+	if err := json.Unmarshal(raw, &record); err != nil {
+		return quartermasterPeerSnapshot{}, false
+	}
+	return record, record.Version == quartermasterPeerSnapshotVersion
+}
+
 type selectedPeerHint struct {
 	hint          PeerHint
 	contributorID string

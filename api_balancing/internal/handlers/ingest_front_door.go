@@ -11,6 +11,7 @@ import (
 
 	"frameworks/api_balancing/internal/balancer"
 	"frameworks/api_balancing/internal/control"
+	"frameworks/api_balancing/internal/federation"
 	"frameworks/api_balancing/internal/triggers"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
@@ -25,6 +26,19 @@ import (
 
 var ingestPlacementPreparer control.IngestPlacementPreparer
 var ingestPlacementRequired bool
+
+// standaloneCommodoreOutage serves the front door when no trigger processor
+// (and so no process-wide backoff) is configured.
+var standaloneCommodoreOutage = &federation.CommodoreOutageBackoff{}
+
+// frontDoorCommodoreOutage is the process-wide Commodore outage backoff that
+// PUSH_REWRITE admission shares.
+func frontDoorCommodoreOutage() *federation.CommodoreOutageBackoff {
+	if triggerProcessor != nil {
+		return triggerProcessor.CommodoreOutageBackoff()
+	}
+	return standaloneCommodoreOutage
+}
 
 // SetIngestPlacementPreparer installs the policy path before serving requests.
 // Once required, a missing adapter is unavailable, never legacy selection.
@@ -133,8 +147,14 @@ func HandleIngestFrontDoor(c *gin.Context) {
 	// cluster_peers envelope, which selection then ranks nodes across.
 	var streamCtx *commodorepb.ResolveStreamContextResponse
 	var err error
-	if commodoreClient != nil {
-		streamCtx, err = commodoreClient.ResolveStreamContextByStreamKey(c.Request.Context(), streamKey, "")
+	// One bounded attempt behind the process-wide outage backoff, so an
+	// unreachable Commodore leaves the answer to the signed local authority.
+	if client := commodoreClient; client != nil {
+		err = frontDoorCommodoreOutage().Call(c.Request.Context(), func(callCtx context.Context) error {
+			var callErr error
+			streamCtx, callErr = client.ResolveStreamContextByStreamKey(callCtx, streamKey, "")
+			return callErr
+		})
 	}
 	if err != nil || streamCtx == nil {
 		streamCtx = localContext
