@@ -2434,8 +2434,12 @@ func (s *PeriscopeServer) GetRoutingEfficiency(ctx context.Context, req *perisco
 		args = append(args, streamID)
 	}
 
+	// routing_distance_km and latency_ms are Nullable, so avg() is NULL when
+	// no decision in the window carries a measurement or the window is empty.
+	// The summary reports those averages as 0; total_decisions tells an empty
+	// window apart.
 	var total, successes int64
-	var avgDist, avgLat float64
+	var avgDist, avgLat sql.NullFloat64
 	if scanErr := periscopequerydb.QueryRow(ctx, s.clickhouse, query, args...).Scan(&total, &successes, &avgDist, &avgLat); scanErr != nil {
 		return nil, wrapClickhouseError(scanErr, "database error")
 	}
@@ -2483,8 +2487,8 @@ func (s *PeriscopeServer) GetRoutingEfficiency(ctx context.Context, req *perisco
 			TotalDecisions:     total,
 			SuccessCount:       successes,
 			SuccessRate:        successRate,
-			AvgRoutingDistance: avgDist,
-			AvgLatencyMs:       avgLat,
+			AvgRoutingDistance: avgDist.Float64,
+			AvgLatencyMs:       avgLat.Float64,
 			TopCountries:       countries,
 		},
 	}, nil

@@ -112,3 +112,31 @@ func TestStreamEventsReturnsStreamEndWithoutStatus(t *testing.T) {
 		t.Fatalf("events = %v", types)
 	}
 }
+
+func TestRoutingEfficiencyReportsUnmeasuredAveragesAsZero(t *testing.T) {
+	db, server, mock := newLiveUsageSummaryServer(t)
+	t.Cleanup(func() { _ = db.Close() })
+	_, timeRange := nullableScanTimeRange()
+	// avg() over decisions that carry no distance or latency, or over an
+	// empty window, is NULL in ClickHouse.
+	mock.ExpectQuery(`(?s)avg\(routing_distance_km\).*FROM periscope\.routing_decisions`).
+		WillReturnRows(sqlmock.NewRows([]string{"total", "successes", "avg_dist", "avg_lat"}).
+			AddRow(int64(2), int64(1), nil, nil))
+	mock.ExpectQuery(`(?s)SELECT client_country, count\(\) AS cnt`).
+		WillReturnRows(sqlmock.NewRows([]string{"client_country", "cnt"}).AddRow("NL", int64(2)))
+
+	resp, err := server.GetRoutingEfficiency(context.Background(), &periscopepb.GetRoutingEfficiencyRequest{
+		TenantId: "tenant-1", TimeRange: timeRange,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := resp.GetSummary()
+	if got.GetTotalDecisions() != 2 || got.GetSuccessRate() != 0.5 || got.GetAvgRoutingDistance() != 0 ||
+		got.GetAvgLatencyMs() != 0 || len(got.GetTopCountries()) != 1 {
+		t.Fatalf("summary = %+v", got)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
