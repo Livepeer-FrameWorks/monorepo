@@ -2,11 +2,15 @@ package resolvers
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"frameworks/api_gateway/internal/clients/clientstest"
+	gatewayerrors "frameworks/api_gateway/internal/errors"
+	"frameworks/api_gateway/internal/middleware"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
@@ -78,6 +82,54 @@ func TestNetworkStatusAnonymousPublicTopologyIncludesPublishedNodesOnly(t *testi
 	}
 	if len(got.ServiceInstances) != 0 {
 		t.Fatalf("public topology leaked service instances: %+v", got.ServiceInstances)
+	}
+}
+
+// A platform that publishes no public cluster has nothing to show an
+// anonymous caller. That is a not-found answer Bridge logs at info, not a
+// platform failure logged at error.
+func TestNetworkStatusWithNoVisibleClustersIsNotAPlatformFailure(t *testing.T) {
+	_, err := networkStatusAccessResolver(nil, nil, nil).DoGetNetworkStatus(context.Background())
+	if !errors.Is(err, middleware.ErrNotFound) {
+		t.Fatalf("anonymous read with no public clusters: err = %v, want ErrNotFound", err)
+	}
+	if level := gatewayerrors.LogLevel(err); level != logging.InfoLevel {
+		t.Fatalf("anonymous read with no public clusters logs at %v, want info", level)
+	}
+
+	_, err = networkStatusAccessResolver(nil, nil, nil).DoGetNetworkStatus(clientstest.AuthedCtx("tenant-without-clusters"))
+	if !errors.Is(err, middleware.ErrNotFound) || gatewayerrors.LogLevel(err) != logging.InfoLevel {
+		t.Fatalf("tenant read with no visible clusters: err = %v, level = %v", err, gatewayerrors.LogLevel(err))
+	}
+}
+
+// When a topology read failed and nothing is left to show, the empty answer
+// is caused by that failure and stays an error-level platform fault.
+func TestNetworkStatusEmptyAfterFailedTopologyReadsIsAPlatformFailure(t *testing.T) {
+	r := networkStatusAccessResolver(nil, nil, nil)
+	qm, ok := r.Clients.Quartermaster.(*clientstest.FakeQuartermaster)
+	if !ok {
+		t.Fatalf("unexpected quartermaster client %T", r.Clients.Quartermaster)
+	}
+	unavailable := status.Error(codes.Unavailable, "quartermaster unavailable")
+	qm.ListPublicTopologyClustersFn = func(context.Context) (*quartermasterpb.ListClustersResponse, error) {
+		return nil, unavailable
+	}
+	qm.ListMySubscriptionsFn = func(context.Context, *quartermasterpb.ListMySubscriptionsRequest) (*quartermasterpb.ListClustersResponse, error) {
+		return nil, unavailable
+	}
+
+	_, err := r.DoGetNetworkStatus(clientstest.AuthedCtx("tenant-1"))
+	if err == nil || errors.Is(err, middleware.ErrNotFound) {
+		t.Fatalf("tenant read after failed topology reads: err = %v, want a platform failure", err)
+	}
+	if level := gatewayerrors.LogLevel(err); level != logging.ErrorLevel {
+		t.Fatalf("tenant read after failed topology reads logs at %v, want error", level)
+	}
+
+	_, err = r.DoGetNetworkStatus(context.Background())
+	if err == nil || gatewayerrors.LogLevel(err) != logging.ErrorLevel {
+		t.Fatalf("anonymous read after failed public topology read: err = %v, level = %v", err, gatewayerrors.LogLevel(err))
 	}
 }
 

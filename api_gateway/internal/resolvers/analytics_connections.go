@@ -4395,11 +4395,15 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 
 	tenantID := tenantIDFromContext(ctx)
 	operatorView := false
+	// topologyReadErr keeps the last failed topology read, which decides
+	// whether an empty result is a platform failure or an empty network.
+	var topologyReadErr error
 	var ownedClusters map[string]struct{}
 	if tenantID != "" {
 		var accessErr error
 		ownedClusters, accessErr = r.ownedClusterIDs(ctx)
 		if accessErr != nil {
+			topologyReadErr = accessErr
 			r.Logger.WithError(accessErr).Warn("networkStatus: failed to resolve cluster ownership; returning public topology")
 		}
 		operatorView = len(ownedClusters) > 0
@@ -4444,6 +4448,7 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 		if tenantID == "" {
 			return nil, fmt.Errorf("network topology unavailable: %w", err)
 		}
+		topologyReadErr = err
 		r.Logger.WithError(err).Warn("networkStatus: failed to list public topology; returning tenant-accessible topology only")
 	} else {
 		appendClusters(publicClustersResp.GetClusters(), true, true, true, false)
@@ -4455,6 +4460,7 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 			Pagination: &commonpb.CursorPaginationRequest{First: 500},
 		})
 		if accessErr != nil {
+			topologyReadErr = accessErr
 			r.Logger.WithError(accessErr).Warn("networkStatus: failed to list tenant cluster access")
 		} else {
 			appendClusters(accessResp.GetClusters(), true, false, false, false)
@@ -4469,7 +4475,13 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 		appendClusters(ownedClustersResp.GetClusters(), true, false, true, true)
 	}
 	if len(clustersResp.GetClusters()) == 0 {
-		return nil, fmt.Errorf("network topology unavailable: no visible clusters")
+		if topologyReadErr != nil {
+			return nil, fmt.Errorf("network topology unavailable: %w", topologyReadErr)
+		}
+		// Every topology read succeeded and none exposes a cluster to this
+		// caller, such as an anonymous read of a platform without public
+		// clusters. That is a not-found answer, not a platform failure.
+		return nil, middleware.NotFound("network topology unavailable: no visible clusters")
 	}
 
 	// Fetch pool assignments for peer connection derivation and virtual cluster geo.
