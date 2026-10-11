@@ -372,7 +372,8 @@ func (q *Queries) ClaimMediaAuthorityDeliveries(ctx context.Context, arg ClaimMe
 
 const claimMediaAuthorityObligations = `-- name: ClaimMediaAuthorityObligations :many
 WITH candidates AS (
-    SELECT queued.target_key, queued.lane, gen_random_uuid() AS claim_token
+    SELECT queued.target_key, queued.lane, gen_random_uuid() AS claim_token,
+           queued.updated_at AS triggered_at
     FROM commodore.media_authority_refresh_obligations AS queued
     WHERE queued.lane = $2
       AND queued.status IN ('pending', 'processing')
@@ -410,11 +411,16 @@ SET status = 'processing', attempts = obligation.attempts + 1,
     claim_token = won.claim_token,
     updated_at = NOW()
 FROM won
+JOIN candidates
+  ON candidates.target_key = won.target_key
+ AND candidates.lane = won.lane
 WHERE obligation.target_key = won.target_key
   AND obligation.lane = won.lane
 RETURNING obligation.target_key, obligation.lane, obligation.tenant_id::text AS tenant_id,
           obligation.target_kind, obligation.revision, obligation.bound_version,
-          obligation.attempts, obligation.last_reason, won.claim_token::text AS claim_token
+          obligation.attempts, obligation.last_reason, won.claim_token::text AS claim_token,
+          candidates.triggered_at::timestamptz AS triggered_at,
+          clock_timestamp()::timestamptz AS claimed_at
 `
 
 type ClaimMediaAuthorityObligationsParams struct {
@@ -433,6 +439,8 @@ type ClaimMediaAuthorityObligationsRow struct {
 	Attempts     int32         `db:"attempts" json:"attempts"`
 	LastReason   string        `db:"last_reason" json:"last_reason"`
 	ClaimToken   string        `db:"claim_token" json:"claim_token"`
+	TriggeredAt  time.Time     `db:"triggered_at" json:"triggered_at"`
+	ClaimedAt    time.Time     `db:"claimed_at" json:"claimed_at"`
 }
 
 // A target is never compiled by two lanes at once: an event compile and a
@@ -451,6 +459,12 @@ type ClaimMediaAuthorityObligationsRow struct {
 // Settlement and release require it: a worker whose lease lapsed and whose
 // target was claimed again cannot settle or release the attempt that replaced
 // it, even at the same revision.
+//
+// triggered_at is the row's last write before this claim, by the database
+// clock. Every enqueue folded into the row wrote it, so it is no earlier than
+// the start of the transaction of the latest one. claimed_at is read after the
+// claim's snapshot was taken, so every row the claim returns was committed
+// before it.
 func (q *Queries) ClaimMediaAuthorityObligations(ctx context.Context, arg ClaimMediaAuthorityObligationsParams) ([]ClaimMediaAuthorityObligationsRow, error) {
 	rows, err := q.db.QueryContext(ctx, claimMediaAuthorityObligations, arg.LeaseMs, arg.Lane, arg.BatchSize)
 	if err != nil {
@@ -470,6 +484,8 @@ func (q *Queries) ClaimMediaAuthorityObligations(ctx context.Context, arg ClaimM
 			&i.Attempts,
 			&i.LastReason,
 			&i.ClaimToken,
+			&i.TriggeredAt,
+			&i.ClaimedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -764,45 +780,106 @@ func (q *Queries) EnqueueMediaAuthorityObligation(ctx context.Context, arg Enque
 	return err
 }
 
-const enqueueTenantMediaObjectRefreshes = `-- name: EnqueueTenantMediaObjectRefreshes :one
+const enqueueMediaObjectBulkRefreshes = `-- name: EnqueueMediaObjectBulkRefreshes :one
 SELECT COUNT(commodore.enqueue_media_authority_obligation(
-    'bulk', renewal.target_key, renewal.target_kind, renewal.tenant_id,
-    $1::text, 'commodore', $2::text, NULL, NULL
+    'bulk', target.target_key, split_part(target.target_key, ':', 2), $1::uuid,
+    $2::text, 'commodore', $3::text, NULL, NULL
 ))::bigint AS enqueued
-FROM commodore.media_authority_refresh_obligations AS renewal
-JOIN commodore.media_authority_current AS current
-  ON current.authority_kind = split_part(renewal.target_key, ':', 1)
- AND current.authority_id = substr(renewal.target_key, strpos(renewal.target_key, ':') + 1)
-JOIN commodore.media_authority_versions AS versions
-  ON versions.authority_kind = current.authority_kind
- AND versions.authority_id = current.authority_id
- AND versions.authority_version = current.authority_version
-WHERE renewal.tenant_id = $3::uuid
-  AND renewal.lane = 'object_deadline'
-  AND NOT versions.tombstone
-  AND EXISTS (
-      SELECT 1 FROM commodore.media_authority_versions AS held
-      WHERE held.authority_kind = current.authority_kind
-        AND held.authority_id = current.authority_id
-        AND held.valid_until > NOW()
-  )
+FROM unnest($4::text[]) AS target(target_key)
+WHERE split_part(target.target_key, ':', 1) = 'media_object'
+  AND split_part(target.target_key, ':', 2) IN ('live_stream', 'artifact')
 `
 
-type EnqueueTenantMediaObjectRefreshesParams struct {
-	Reason        string `db:"reason" json:"reason"`
-	SourceEventID string `db:"source_event_id" json:"source_event_id"`
-	TenantID      string `db:"tenant_id" json:"tenant_id"`
+type EnqueueMediaObjectBulkRefreshesParams struct {
+	TenantID      string   `db:"tenant_id" json:"tenant_id"`
+	Reason        string   `db:"reason" json:"reason"`
+	SourceEventID string   `db:"source_event_id" json:"source_event_id"`
+	TargetKeys    []string `db:"target_keys" json:"target_keys"`
 }
 
-// Refreshes the tenant's objects that some cell may still hold a valid copy of:
-// any version of the object is valid, and the current one is not a tombstone.
-// The current version alone does not decide it: a shorter-lived replacement can
-// run out while a cell that never received it still holds the longer original.
-// An object with no valid copy anywhere has nothing to correct and is compiled
-// when it is next used. The renewal rows are the tenant's index into its
-// published objects; their status does not matter.
-func (q *Queries) EnqueueTenantMediaObjectRefreshes(ctx context.Context, arg EnqueueTenantMediaObjectRefreshesParams) (int64, error) {
-	row := q.db.QueryRowContext(ctx, enqueueTenantMediaObjectRefreshes, arg.Reason, arg.SourceEventID, arg.TenantID)
+// One chunk of a fanout: a bulk-lane refresh for each listed media-object
+// target of the tenant. A target key is media_object:<kind>:<id>, and its kind
+// names the target kind.
+func (q *Queries) EnqueueMediaObjectBulkRefreshes(ctx context.Context, arg EnqueueMediaObjectBulkRefreshesParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, enqueueMediaObjectBulkRefreshes,
+		arg.TenantID,
+		arg.Reason,
+		arg.SourceEventID,
+		pq.Array(arg.TargetKeys),
+	)
+	var enqueued int64
+	err := row.Scan(&enqueued)
+	return enqueued, err
+}
+
+const enqueueStreamPlaybackDependentRefreshes = `-- name: EnqueueStreamPlaybackDependentRefreshes :one
+WITH recordings AS MATERIALIZED (
+    SELECT dvr.id, dvr.dvr_hash
+    FROM commodore.dvr_recordings AS dvr
+    WHERE dvr.stream_id = $3::uuid
+      AND dvr.tenant_id = $1::uuid
+), dependents AS MATERIALIZED (
+    SELECT recordings.id, 'dvr'::text AS kind FROM recordings
+    UNION
+    SELECT clip.id, 'clip'::text
+    FROM commodore.clips AS clip
+    WHERE clip.stream_id = $3::uuid
+      AND clip.tenant_id = $1::uuid
+    UNION
+    SELECT chapter.id, 'chapter'::text
+    FROM commodore.vod_assets AS chapter
+    WHERE chapter.stream_id = $3::uuid
+      AND chapter.tenant_id = $1::uuid
+      AND chapter.origin_type = 'dvr_chapter'
+    UNION
+    SELECT chapter.id, 'chapter'::text
+    FROM commodore.dvr_chapter_playback AS identity
+    JOIN recordings ON recordings.dvr_hash = identity.dvr_hash
+    JOIN commodore.vod_assets AS chapter
+      ON chapter.tenant_id = identity.tenant_id
+     AND chapter.vod_hash = identity.artifact_hash
+    WHERE identity.tenant_id = $1::uuid
+      AND chapter.origin_type = 'dvr_chapter'
+), held AS MATERIALIZED (
+    SELECT dependents.id, dependents.kind
+    FROM dependents
+    JOIN commodore.media_authority_current AS current
+      ON current.authority_kind = 'media_object'
+     AND current.authority_id = 'artifact:' || dependents.id::text
+    JOIN commodore.media_authority_versions AS versions
+      ON versions.authority_kind = current.authority_kind
+     AND versions.authority_id = current.authority_id
+     AND versions.authority_version = current.authority_version
+    WHERE NOT versions.tombstone
+      AND EXISTS (
+          SELECT 1 FROM commodore.media_authority_versions AS copy
+          WHERE copy.authority_kind = current.authority_kind
+            AND copy.authority_id = current.authority_id
+            AND copy.valid_until > NOW()
+      )
+)
+SELECT COUNT(commodore.enqueue_media_authority_obligation(
+    'event', 'media_object:artifact:' || held.id::text, 'artifact', $1::uuid,
+    'media_object:' || held.kind || ':' || held.id::text || ':playback_policy_changed',
+    'commodore', $2::text, NOW(), NULL
+))::bigint AS enqueued
+FROM held
+`
+
+type EnqueueStreamPlaybackDependentRefreshesParams struct {
+	TenantID      string `db:"tenant_id" json:"tenant_id"`
+	SourceEventID string `db:"source_event_id" json:"source_event_id"`
+	StreamID      string `db:"stream_id" json:"stream_id"`
+}
+
+// A stream's playback policy is copied onto its recordings and their chapters,
+// a recording that has no copy yet compiles from the stream's, and its clips
+// name the stream. Refreshes those of the stream's artifacts that some cell may
+// still hold a valid copy of; one no cell holds is compiled when next used. The
+// event lane folds these into the refreshes the artifact triggers already
+// queued for rows whose policy columns changed.
+func (q *Queries) EnqueueStreamPlaybackDependentRefreshes(ctx context.Context, arg EnqueueStreamPlaybackDependentRefreshesParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, enqueueStreamPlaybackDependentRefreshes, arg.TenantID, arg.SourceEventID, arg.StreamID)
 	var enqueued int64
 	err := row.Scan(&enqueued)
 	return enqueued, err
@@ -2429,6 +2506,59 @@ func (q *Queries) ListTenantLiveStreamMediaAuthoritySources(ctx context.Context,
 	return items, nil
 }
 
+const listTenantMediaObjectRefreshTargets = `-- name: ListTenantMediaObjectRefreshTargets :many
+SELECT renewal.target_key
+FROM commodore.media_authority_refresh_obligations AS renewal
+JOIN commodore.media_authority_current AS current
+  ON current.authority_kind = split_part(renewal.target_key, ':', 1)
+ AND current.authority_id = substr(renewal.target_key, strpos(renewal.target_key, ':') + 1)
+JOIN commodore.media_authority_versions AS versions
+  ON versions.authority_kind = current.authority_kind
+ AND versions.authority_id = current.authority_id
+ AND versions.authority_version = current.authority_version
+WHERE renewal.tenant_id = $1::uuid
+  AND renewal.lane = 'object_deadline'
+  AND NOT versions.tombstone
+  AND EXISTS (
+      SELECT 1 FROM commodore.media_authority_versions AS held
+      WHERE held.authority_kind = current.authority_kind
+        AND held.authority_id = current.authority_id
+        AND held.valid_until > NOW()
+  )
+`
+
+// The tenant's objects that some cell may still hold a valid copy of: any
+// version of the object is valid, and the current one is not a tombstone. The
+// current version alone does not decide it: a shorter-lived replacement can run
+// out while a cell that never received it still holds the longer original. An
+// object with no valid copy anywhere has nothing to correct and is compiled
+// when it is next used. The renewal rows are the tenant's index into its
+// published objects; their status does not matter. Read once per fanout, so the
+// enqueues that follow are bounded statements without rereading the tenant's
+// rows for each of them.
+func (q *Queries) ListTenantMediaObjectRefreshTargets(ctx context.Context, tenantID string) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listTenantMediaObjectRefreshTargets, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var target_key string
+		if err := rows.Scan(&target_key); err != nil {
+			return nil, err
+		}
+		items = append(items, target_key)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listWarmTenantIDs = `-- name: ListWarmTenantIDs :many
 SELECT tenant_id::text AS tenant_id
 FROM commodore.media_authority_refresh_obligations
@@ -2566,6 +2696,59 @@ func (q *Queries) LockMediaAuthorityTargetHorizons(ctx context.Context, arg Lock
 		return nil, err
 	}
 	return items, nil
+}
+
+const makeCellMediaAuthorityDeliveriesDue = `-- name: MakeCellMediaAuthorityDeliveriesDue :execrows
+WITH backed_off AS MATERIALIZED (
+    SELECT delivery.authority_kind, delivery.authority_id, delivery.authority_version, delivery.cell_id
+    FROM commodore.media_authority_deliveries AS delivery
+    WHERE delivery.cell_id = $1
+      AND NOT delivery.short_lease
+      AND delivery.status IN ('pending', 'delivering')
+      AND delivery.status = 'pending'
+      AND delivery.next_attempt_at > NOW()
+    LIMIT $2
+    FOR UPDATE OF delivery SKIP LOCKED
+), backed_off_short AS MATERIALIZED (
+    SELECT delivery.authority_kind, delivery.authority_id, delivery.authority_version, delivery.cell_id
+    FROM commodore.media_authority_deliveries AS delivery
+    WHERE delivery.cell_id = $1
+      AND delivery.short_lease
+      AND delivery.status IN ('pending', 'delivering')
+      AND delivery.status = 'pending'
+      AND delivery.next_attempt_at > NOW()
+    LIMIT $2
+    FOR UPDATE OF delivery SKIP LOCKED
+), candidates AS (
+    SELECT authority_kind, authority_id, authority_version, cell_id FROM backed_off
+    UNION ALL
+    SELECT authority_kind, authority_id, authority_version, cell_id FROM backed_off_short
+)
+UPDATE commodore.media_authority_deliveries AS delivery
+SET next_attempt_at = NOW(), updated_at = NOW()
+FROM candidates
+WHERE delivery.authority_kind = candidates.authority_kind
+  AND delivery.authority_id = candidates.authority_id
+  AND delivery.authority_version = candidates.authority_version
+  AND delivery.cell_id = candidates.cell_id
+`
+
+type MakeCellMediaAuthorityDeliveriesDueParams struct {
+	CellID    string `db:"cell_id" json:"cell_id"`
+	BatchSize int32  `db:"batch_size" json:"batch_size"`
+}
+
+// The cell answered, so the deliveries that failed while it could not be
+// reached need not wait out their backoff: up to batch_size of them per
+// statement are due now. Only pending rows waiting on a failure's backoff are
+// touched; one in flight keeps its lease. Each branch reads one of the cell's
+// partial queue indexes.
+func (q *Queries) MakeCellMediaAuthorityDeliveriesDue(ctx context.Context, arg MakeCellMediaAuthorityDeliveriesDueParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, makeCellMediaAuthorityDeliveriesDue, arg.CellID, arg.BatchSize)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const markMediaAuthorityCellAcknowledgementsUntrusted = `-- name: MarkMediaAuthorityCellAcknowledgementsUntrusted :exec
@@ -2715,14 +2898,36 @@ func (q *Queries) RearmMediaAuthorityObligationsAwaitingTenant(ctx context.Conte
 }
 
 const rearmParkedMediaAuthorityObligations = `-- name: RearmParkedMediaAuthorityObligations :execrows
-UPDATE commodore.media_authority_refresh_obligations
-SET status = 'pending', park_reason = NULL, attempts = 0, revision = revision + 1,
+WITH parked AS (
+    SELECT target_key, lane
+    FROM commodore.media_authority_refresh_obligations
+    WHERE status = 'parked'
+    LIMIT $2
+    FOR UPDATE SKIP LOCKED
+)
+UPDATE commodore.media_authority_refresh_obligations AS obligation
+SET status = 'pending', park_reason = NULL,
+    attempts = CASE WHEN obligation.park_reason = 'exhausted' THEN $1::integer ELSE 0 END,
+    revision = obligation.revision + 1,
     next_attempt_at = NOW(), pending_since = NOW(), updated_at = NOW()
-WHERE status = 'parked'
+FROM parked
+WHERE obligation.target_key = parked.target_key
+  AND obligation.lane = parked.lane
 `
 
-func (q *Queries) RearmParkedMediaAuthorityObligations(ctx context.Context) (int64, error) {
-	result, err := q.db.ExecContext(ctx, rearmParkedMediaAuthorityObligations)
+type RearmParkedMediaAuthorityObligationsParams struct {
+	RearmedAttempts int32 `db:"rearmed_attempts" json:"rearmed_attempts"`
+	BatchSize       int32 `db:"batch_size" json:"batch_size"`
+}
+
+// Puts parked targets back in the queue, up to batch_size per statement. A
+// target parked after exhausting its transient attempts comes back with
+// rearmed_attempts of them already used, so it gets only the few left before
+// it parks again: a long outage costs a few attempts per reconciliation pass
+// instead of a full retry budget. A target parked for any other reason waits
+// on its source changing, so its attempts start over.
+func (q *Queries) RearmParkedMediaAuthorityObligations(ctx context.Context, arg RearmParkedMediaAuthorityObligationsParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, rearmParkedMediaAuthorityObligations, arg.RearmedAttempts, arg.BatchSize)
 	if err != nil {
 		return 0, err
 	}

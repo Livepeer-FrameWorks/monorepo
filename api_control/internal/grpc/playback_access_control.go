@@ -350,23 +350,31 @@ func (s *CommodoreServer) SetPlaybackPolicy(ctx context.Context, req *commodorep
 			}
 
 			queries := commodoredb.New(tx)
-			var err error
+			var (
+				err      error
+				objectID string
+			)
 			switch target.kind {
 			case "stream":
 				responseID, err = queries.SetStreamPlaybackPolicy(ctx, commodoredb.SetStreamPlaybackPolicyParams{
 					RequiresAuth: requiresAuth, PlaybackPolicy: string(policyJSON), WebhookSecret: webhookSecretEnc,
 					TargetID: target.id, TenantID: tenantID,
 				})
+				objectID = responseID
 			case "vod_asset":
-				responseID, err = queries.SetVODPlaybackPolicy(ctx, commodoredb.SetVODPlaybackPolicyParams{
+				var updated commodoredb.SetVODPlaybackPolicyRow
+				updated, err = queries.SetVODPlaybackPolicy(ctx, commodoredb.SetVODPlaybackPolicyParams{
 					RequiresAuth: requiresAuth, PlaybackPolicy: string(policyJSON), WebhookSecret: webhookSecretEnc,
 					TargetID: target.id, TenantID: tenantID,
 				})
+				responseID, objectID = updated.VodHash, updated.ID
 			case "clip":
-				responseID, err = queries.SetClipPlaybackPolicy(ctx, commodoredb.SetClipPlaybackPolicyParams{
+				var updated commodoredb.SetClipPlaybackPolicyRow
+				updated, err = queries.SetClipPlaybackPolicy(ctx, commodoredb.SetClipPlaybackPolicyParams{
 					RequiresAuth: requiresAuth, PlaybackPolicy: string(policyJSON), WebhookSecret: webhookSecretEnc,
 					TargetID: target.id, TenantID: tenantID,
 				})
+				responseID, objectID = updated.ClipHash, updated.ID
 			}
 			if errors.Is(err, sql.ErrNoRows) {
 				if target.kind == "vod_asset" {
@@ -397,10 +405,11 @@ func (s *CommodoreServer) SetPlaybackPolicy(ctx context.Context, req *commodorep
 				s.logger.WithError(enqueueErr).Error("enqueue invalidation outbox failed; aborting policy change")
 				return txStatus(status.Errorf(codes.Internal, "database error"), enqueueErr)
 			}
-			// Playback policy belongs to media-object authority, not tenant authority.
-			// Queue the object refresh atomically with the policy mutation.
-			if refreshErr := queries.EnqueueMediaAuthorityEvent(ctx, commodoredb.TenantMediaObjectsAuthorityTarget(tenantID), tenantID,
-				"tenant_media_objects:playback_policy_changed", "commodore", "playback-policy:"+outboxID); refreshErr != nil {
+			// Playback policy belongs to the changed object's authority and, for a
+			// stream, to those of its recordings, chapters and clips; no other
+			// object of the tenant carries it. The refreshes are queued atomically
+			// with the policy mutation.
+			if refreshErr := enqueuePlaybackPolicyRefreshes(ctx, queries, tenantID, target.kind, objectID, "playback-policy:"+outboxID); refreshErr != nil {
 				s.logger.WithError(refreshErr).Error("enqueue media authority refresh failed; aborting policy change")
 				return txStatus(status.Errorf(codes.Internal, "database error"), refreshErr)
 			}
@@ -1024,4 +1033,31 @@ func (s *CommodoreServer) scopeInternalNames(ctx context.Context, tenantID strin
 		name = prefix + name
 	}
 	return []string{name}
+}
+
+// enqueuePlaybackPolicyRefreshes queues the authorities a policy change on one
+// target alters. The row triggers already queue an object whose policy columns
+// changed; these refreshes also cover the stream's dependents whose compiled
+// policy follows the stream without their own columns changing, and fold into
+// the trigger's refresh where both exist.
+func enqueuePlaybackPolicyRefreshes(ctx context.Context, queries *commodoredb.Queries, tenantID, targetKind, objectID, sourceEventID string) error {
+	switch targetKind {
+	case "stream":
+		if err := queries.EnqueueMediaAuthorityEvent(ctx, commodoredb.LiveStreamMediaAuthorityTarget(objectID), tenantID,
+			"media_object:live_stream:"+objectID+":playback_policy_changed", "commodore", sourceEventID); err != nil {
+			return err
+		}
+		_, err := queries.EnqueueStreamPlaybackDependentRefreshes(ctx, commodoredb.EnqueueStreamPlaybackDependentRefreshesParams{
+			TenantID: tenantID, StreamID: objectID, SourceEventID: sourceEventID,
+		})
+		return err
+	case "vod_asset":
+		return queries.EnqueueMediaAuthorityEvent(ctx, commodoredb.ArtifactMediaAuthorityTarget(objectID), tenantID,
+			"media_object:vod:"+objectID+":playback_policy_changed", "commodore", sourceEventID)
+	case "clip":
+		return queries.EnqueueMediaAuthorityEvent(ctx, commodoredb.ArtifactMediaAuthorityTarget(objectID), tenantID,
+			"media_object:clip:"+objectID+":playback_policy_changed", "commodore", sourceEventID)
+	default:
+		return fmt.Errorf("unsupported playback policy target %q", targetKind)
+	}
 }

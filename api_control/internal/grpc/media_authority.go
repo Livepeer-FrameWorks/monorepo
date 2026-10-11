@@ -1829,7 +1829,8 @@ func (s *CommodoreServer) runMediaAuthorityReconciler(ctx context.Context) {
 	if !s.mediaAuthorityEnabled() {
 		return
 	}
-	s.reconcileMediaAuthorities(ctx)
+	defer s.releaseMediaAuthoritySweeps()
+	s.reconcileMediaAuthoritiesOnLeader(ctx)
 	ticker := time.NewTicker(mediaAuthorityReconcileInterval)
 	defer ticker.Stop()
 	for {
@@ -1837,15 +1838,16 @@ func (s *CommodoreServer) runMediaAuthorityReconciler(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			s.reconcileMediaAuthorities(ctx)
+			s.reconcileMediaAuthoritiesOnLeader(ctx)
 		}
 	}
 }
 
-// reconcileMediaAuthorities is the safety net behind event-driven refresh. It
-// recompiles the tenants that are in use, which publishes only where content
-// drifted, and a tenant that was never compiled at all, which is how a missed
-// creation event is recovered. A tenant nobody uses is left alone: it is
+// reconcileMediaAuthorities is the safety net behind event-driven refresh, run
+// by the replica that leads the media authority sweeps. It recompiles the
+// tenants that are in use, which publishes only where content drifted, and a
+// tenant that was never compiled at all, which is how a missed creation event
+// is recovered. A tenant nobody uses is left alone: it is
 // compiled when it is next used. The work goes to the bulk lane, spread over
 // the interval, so it never stands in front of a change.
 //
@@ -1886,7 +1888,7 @@ func (s *CommodoreServer) reconcileMediaAuthorities(ctx context.Context) {
 			s.logger.WithError(storeErr).Warn("Failed to record the media authority compiler fingerprint")
 		}
 	}
-	if rearmed, rearmErr := queries.RearmParkedMediaAuthorityObligations(ctx); rearmErr != nil {
+	if rearmed, rearmErr := s.rearmParkedMediaAuthorityObligations(ctx); rearmErr != nil {
 		s.logger.WithError(rearmErr).Warn("Failed to re-arm parked media authority refresh obligations")
 	} else if rearmed > 0 {
 		s.logger.WithField("targets", rearmed).Info("Re-armed parked media authority refresh obligations")
@@ -2022,6 +2024,9 @@ func (s *CommodoreServer) runMediaAuthorityRetention(ctx context.Context) {
 		return
 	}
 	sweep := func() {
+		if !s.leadsMediaAuthoritySweeps(ctx) {
+			return
+		}
 		sweepCtx, cancel := context.WithTimeout(ctx, mediaAuthorityRetentionTimeout)
 		defer cancel()
 		if err := s.sweepMediaAuthorityRetention(sweepCtx, time.Now().UTC()); err != nil && ctx.Err() == nil {
@@ -2230,17 +2235,7 @@ func (s *CommodoreServer) observeMediaAuthorityQueues(ctx context.Context) {
 	if !s.mediaAuthorityQueueObservationDue(time.Now()) {
 		return
 	}
-	queries := commodoredb.New(s.db)
-	if _, err := authorityMetricQuery(ctx, func(ctx context.Context) (int64, error) {
-		return queries.SupersedeExpiredObsoleteMediaAuthorityDeliveries(ctx, mediaAuthorityQueueSweepBatch)
-	}); err != nil {
-		s.logger.WithError(err).Warn("Failed to settle obsolete media authority deliveries")
-	}
-	if _, err := authorityMetricQuery(ctx, func(ctx context.Context) (int64, error) {
-		return queries.SettleExpiredMediaAuthorityDeliveries(ctx, mediaAuthorityQueueSweepBatch)
-	}); err != nil {
-		s.logger.WithError(err).Warn("Failed to settle expired media authority deliveries")
-	}
+	s.sweepMediaAuthorityDeliveryQueue(ctx, mediaAuthorityQueueSweepBatch)
 	statsCtx, statsCancel := context.WithTimeout(ctx, mediaAuthorityStatsTimeout)
 	s.observeMediaAuthorityDeliveryStats(statsCtx)
 	statsCancel()

@@ -21,8 +21,9 @@ const (
 	tenantMediaAuthorityDeadlineLease   = 35 * time.Second
 
 	// A transient failure that survives this many attempts is parked. The
-	// reconciler re-arms parked targets, so a long outage costs one attempt per
-	// reconcile pass instead of one per backoff period.
+	// reconciler re-arms parked targets with mediaAuthorityRearmAttempts of
+	// them left, so a long outage costs a few attempts per reconcile pass
+	// instead of one per backoff period.
 	mediaAuthorityMaxTransientAttempts = 12
 	// How long a renewal that lost the compile fence waits before it runs again.
 	mediaAuthoritySupersededRenewalDelay = 30 * time.Second
@@ -30,6 +31,9 @@ const (
 	mediaAuthorityLegacyAdoptIdleTicks   = 30
 	mediaAuthorityRenewalRepairBatch     = 500
 	mediaAuthorityRenewalRepairPasses    = 400
+	// mediaAuthorityFanoutChunk is how many objects one statement of a tenant
+	// fanout enqueues.
+	mediaAuthorityFanoutChunk = 500
 	// One adoption batch is a few hundred statements in one transaction.
 	mediaAuthorityLegacyAdoptTimeout = 30 * time.Second
 )
@@ -176,7 +180,7 @@ func (s *CommodoreServer) processMediaAuthorityObligationLane(ctx context.Contex
 			}
 			continue
 		}
-		memo := newMediaAuthorityCompileMemo()
+		memo := s.compileMemoForClaim()
 		claimCtx, cancel := context.WithTimeout(ctx, mediaAuthorityClaimTimeout)
 		rows, err := claimMediaAuthorityWork(claimCtx, s.db, func(queries *commodoredb.Queries) ([]commodoredb.ClaimMediaAuthorityObligationsRow, error) {
 			return queries.ClaimMediaAuthorityObligations(claimCtx, commodoredb.ClaimMediaAuthorityObligationsParams{
@@ -211,7 +215,7 @@ func (s *CommodoreServer) processMediaAuthorityObligationLane(ctx context.Contex
 				outcome := &mediaAuthorityCompileOutcome{}
 				rowCtx = context.WithValue(rowCtx, mediaAuthorityObligationLaneContextKey{}, row.Lane)
 				rowCtx = context.WithValue(rowCtx, mediaAuthorityCompileOutcomeContextKey{}, outcome)
-				rowCtx = withMediaAuthorityCompileMemo(rowCtx, memo)
+				rowCtx = withMediaAuthorityCompileMemo(rowCtx, memo, row.TriggeredAt, row.ClaimedAt)
 				stopRenewing := s.renewMediaAuthorityObligationLease(rowCtx, row, lease)
 				compileErr := s.compileMediaAuthorityObligation(rowCtx, row)
 				stopRenewing()
@@ -290,17 +294,15 @@ func (s *CommodoreServer) compileMediaAuthorityObligation(ctx context.Context, r
 }
 
 // enqueueTenantMediaObjectRefreshes refreshes the tenant's objects that cells
-// still hold, in one statement, so a fanout is never half applied. The work goes
-// to the bulk lane: a tenant with many objects must not stand in front of a
-// change or a revocation waiting in the event lane. An object no cell holds a
-// valid copy of has nothing to correct and is compiled when it is next used.
+// still hold, mediaAuthorityFanoutChunk per statement, so a tenant with many
+// objects never writes them all in one statement. A fanout that fails part way
+// fails its obligation, which runs again from the start. The work goes to the
+// bulk lane: a tenant with many objects must not stand in front of a change or
+// a revocation waiting in the event lane. An object no cell holds a valid copy
+// of has nothing to correct and is compiled when it is next used.
 func (s *CommodoreServer) enqueueTenantMediaObjectRefreshes(ctx context.Context, tenantID string) error {
-	if _, err := commodoredb.New(s.db).EnqueueTenantMediaObjectRefreshes(ctx, commodoredb.EnqueueTenantMediaObjectRefreshesParams{
-		TenantID: tenantID, Reason: "tenant_media_objects:fanout", SourceEventID: "tenant-fanout:" + tenantID,
-	}); err != nil {
-		return fmt.Errorf("enqueue tenant media-object refreshes: %w", err)
-	}
-	return nil
+	_, err := s.enqueueTenantMediaObjectRefreshesInChunks(ctx, tenantID, mediaAuthorityFanoutChunk)
+	return err
 }
 
 // settleMediaAuthorityObligation runs on a detached context: the row's own

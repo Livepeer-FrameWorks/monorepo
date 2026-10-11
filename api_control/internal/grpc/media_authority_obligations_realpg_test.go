@@ -247,7 +247,7 @@ func testMediaAuthorityObligationQueue(t *testing.T, db *sql.DB) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if rearmed, rearmErr := queries.RearmParkedMediaAuthorityObligations(ctx); rearmErr != nil || rearmed != 1 {
+	if rearmed, rearmErr := (&CommodoreServer{db: db}).rearmParkedMediaAuthorityObligations(ctx); rearmErr != nil || rearmed != 1 {
 		t.Fatalf("reconciler re-armed %d parked targets (err %v), want 1", rearmed, rearmErr)
 	}
 	if len(claim(commodoredb.MediaAuthorityLaneEvent)) != 1 {

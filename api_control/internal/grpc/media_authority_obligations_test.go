@@ -157,23 +157,33 @@ func TestAuthorityProcessConfigFailsClosedWhenPurserIsUnreachable(t *testing.T) 
 	}
 }
 
-// A tenant's objects claimed together share one read of what they all derive
-// from. The next claim reads again: a memo that outlived its claim could hand a
-// compile the state from before the change that enqueued it, and an unchanged
-// compile publishes nothing, so that would never be corrected.
-func TestCompileInputsAreSharedWithinAClaimAndNeverBeyondIt(t *testing.T) {
+// A read is shared by every row triggered before it, in this claim or a later
+// one, and by no row triggered after it: an unchanged compile publishes
+// nothing, so a compile that used state from before its trigger would never be
+// corrected.
+func TestCompileInputsAreSharedOnlyWithRowsTriggeredBeforeTheRead(t *testing.T) {
 	loads := 0
 	load := func() (string, error) { loads++; return fmt.Sprintf("tier-%d", loads), nil }
+	memo := newMediaAuthorityCompileMemo()
+	triggered := time.Now().UTC()
+	claimed := triggered.Add(time.Minute)
+	row := func(triggeredAt, claimedAt time.Time) context.Context {
+		return withMediaAuthorityCompileMemo(context.Background(), memo, triggeredAt, claimedAt)
+	}
 
-	claim := withMediaAuthorityCompileMemo(context.Background(), newMediaAuthorityCompileMemo())
 	for range 3 {
-		if got, err := memoizedCompileInput(claim, "billing_tier\x00t1", load); err != nil || got != "tier-1" {
-			t.Fatalf("within one claim: %q (err %v), want the first read shared", got, err)
+		if got, err := memoizedCompileInput(row(triggered, claimed), "billing_tier\x00t1", load); err != nil || got != "tier-1" {
+			t.Fatalf("rows of one claim: %q (err %v), want the first read shared", got, err)
 		}
 	}
-	nextClaim := withMediaAuthorityCompileMemo(context.Background(), newMediaAuthorityCompileMemo())
-	if got, _ := memoizedCompileInput(nextClaim, "billing_tier\x00t1", load); got != "tier-2" {
-		t.Fatalf("the next claim reused %q from the one before it", got)
+	if got, _ := memoizedCompileInput(row(triggered, claimed.Add(time.Second)), "billing_tier\x00t1", load); got != "tier-1" {
+		t.Fatalf("a later claim of a row triggered before the read got %q, want the shared read", got)
+	}
+	if got, _ := memoizedCompileInput(row(claimed.Add(time.Second), claimed.Add(2*time.Second)), "billing_tier\x00t1", load); got != "tier-2" {
+		t.Fatalf("a row triggered after the read reused %q", got)
+	}
+	if got, _ := memoizedCompileInput(row(claimed.Add(-mediaAuthorityCompileMemoClockMargin/2), claimed.Add(3*time.Second)), "billing_tier\x00t1", load); got != "tier-2" {
+		t.Fatalf("a row triggered before the newest read was not served it: got %q", got)
 	}
 	if got, _ := memoizedCompileInput(context.Background(), "billing_tier\x00t1", load); got != "tier-3" {
 		t.Fatalf("a compile outside a claim got %q, want its own read", got)
@@ -182,7 +192,7 @@ func TestCompileInputsAreSharedWithinAClaimAndNeverBeyondIt(t *testing.T) {
 	failures := 0
 	failing := func() (string, error) { failures++; return "", errors.New("purser down") }
 	for range 2 {
-		if _, err := memoizedCompileInput(claim, "subscription\x00t1", failing); err == nil {
+		if _, err := memoizedCompileInput(row(triggered, claimed), "subscription\x00t1", failing); err == nil {
 			t.Fatal("a failed read was served as a value")
 		}
 	}

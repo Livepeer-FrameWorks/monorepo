@@ -383,6 +383,18 @@
     "read_requests": 275,
     "rows_scanned": 13665
   },
+  "commodore:RearmParkedMediaAuthorityObligations@declared": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 103,
+    "reason": "Bounded re-arm: the parked partial index yields one batch, and locking and updating each row of the batch accounts for the RPCs; 400 rows and 103 RPCs for a 100-row batch.",
+    "rows_scanned": 400
+  },
+  "commodore:RearmParkedMediaAuthorityObligations@distributed": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 103,
+    "reason": "Bounded re-arm: the parked partial index yields one batch, and locking and updating each row of the batch accounts for the RPCs; 400 rows and 103 RPCs for a 100-row batch.",
+    "rows_scanned": 400
+  },
   "commodore:RequeueCurrentMediaAuthoritiesForCell@declared": {
     "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
     "read_requests": 10,

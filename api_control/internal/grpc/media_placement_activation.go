@@ -252,9 +252,10 @@ func placementSweepStart() placementSweepCursor {
 // This re-runs the same derivation for those scopes. It cannot activate
 // anything the acknowledgement path would not have: reconcilePlacementActivation
 // re-reads the delivery rows under the same lock and reaches the same
-// conclusion. It only supplies the missing trigger.
+// conclusion. It only supplies the missing trigger. Only the replica that leads
+// the media authority sweeps runs it; the others skip their tick.
 func (s *CommodoreServer) processPlacementActivationBacklog(ctx context.Context) {
-	if !s.mediaAuthorityEnabled() || s.db == nil {
+	if !s.mediaAuthorityEnabled() || s.db == nil || !s.leadsMediaAuthoritySweeps(ctx) {
 		return
 	}
 	s.placementSweepMu.Lock()

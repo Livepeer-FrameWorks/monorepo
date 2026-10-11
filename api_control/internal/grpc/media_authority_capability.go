@@ -215,6 +215,11 @@ func (s *CommodoreServer) readBackPlacementCellCapability(ctx context.Context, c
 	if err != nil {
 		return nil, fmt.Errorf("read placement capability for cell %q: %w", cellID, err)
 	}
+	// The cell answered, so deliveries that failed while it could not be
+	// reached are retried now instead of after their backoff.
+	if _, dueErr := s.makeCellMediaAuthorityDeliveriesDue(ctx, cellID); dueErr != nil && s.logger != nil {
+		s.logger.WithError(dueErr).WithField("cell_id", cellID).Warn("Failed to make backed-off media authority deliveries due for a reachable cell")
+	}
 	if err := s.recordCellPlacementCapability(ctx, cellID, capability); err != nil {
 		return nil, fmt.Errorf("persist placement capability for cell %q: %w", cellID, err)
 	}

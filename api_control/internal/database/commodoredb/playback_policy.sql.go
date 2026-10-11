@@ -421,7 +421,7 @@ WHERE (c.id::text = $4 OR c.clip_hash = $4)
       SELECT 1 FROM commodore.artifact_catalog_tombstones t
       WHERE t.tenant_id = c.tenant_id AND t.kind = 'clip' AND t.artifact_hash = c.clip_hash
   )
-RETURNING c.clip_hash
+RETURNING c.clip_hash, c.id::text AS id
 `
 
 type SetClipPlaybackPolicyParams struct {
@@ -432,7 +432,12 @@ type SetClipPlaybackPolicyParams struct {
 	TenantID       string         `db:"tenant_id" json:"tenant_id"`
 }
 
-func (q *Queries) SetClipPlaybackPolicy(ctx context.Context, arg SetClipPlaybackPolicyParams) (string, error) {
+type SetClipPlaybackPolicyRow struct {
+	ClipHash string `db:"clip_hash" json:"clip_hash"`
+	ID       string `db:"id" json:"id"`
+}
+
+func (q *Queries) SetClipPlaybackPolicy(ctx context.Context, arg SetClipPlaybackPolicyParams) (SetClipPlaybackPolicyRow, error) {
 	row := q.db.QueryRowContext(ctx, setClipPlaybackPolicy,
 		arg.RequiresAuth,
 		arg.PlaybackPolicy,
@@ -440,9 +445,9 @@ func (q *Queries) SetClipPlaybackPolicy(ctx context.Context, arg SetClipPlayback
 		arg.TargetID,
 		arg.TenantID,
 	)
-	var clip_hash string
-	err := row.Scan(&clip_hash)
-	return clip_hash, err
+	var i SetClipPlaybackPolicyRow
+	err := row.Scan(&i.ClipHash, &i.ID)
+	return i, err
 }
 
 const setStreamPlaybackPolicy = `-- name: SetStreamPlaybackPolicy :one
@@ -550,7 +555,7 @@ WHERE (v.id::text = $4 OR v.vod_hash = $4)
       SELECT 1 FROM commodore.artifact_catalog_tombstones t
       WHERE t.tenant_id = v.tenant_id AND t.kind = 'vod' AND t.artifact_hash = v.vod_hash
   )
-RETURNING v.vod_hash
+RETURNING v.vod_hash, v.id::text AS id
 `
 
 type SetVODPlaybackPolicyParams struct {
@@ -561,7 +566,12 @@ type SetVODPlaybackPolicyParams struct {
 	TenantID       string         `db:"tenant_id" json:"tenant_id"`
 }
 
-func (q *Queries) SetVODPlaybackPolicy(ctx context.Context, arg SetVODPlaybackPolicyParams) (string, error) {
+type SetVODPlaybackPolicyRow struct {
+	VodHash string `db:"vod_hash" json:"vod_hash"`
+	ID      string `db:"id" json:"id"`
+}
+
+func (q *Queries) SetVODPlaybackPolicy(ctx context.Context, arg SetVODPlaybackPolicyParams) (SetVODPlaybackPolicyRow, error) {
 	row := q.db.QueryRowContext(ctx, setVODPlaybackPolicy,
 		arg.RequiresAuth,
 		arg.PlaybackPolicy,
@@ -569,7 +579,7 @@ func (q *Queries) SetVODPlaybackPolicy(ctx context.Context, arg SetVODPlaybackPo
 		arg.TargetID,
 		arg.TenantID,
 	)
-	var vod_hash string
-	err := row.Scan(&vod_hash)
-	return vod_hash, err
+	var i SetVODPlaybackPolicyRow
+	err := row.Scan(&i.VodHash, &i.ID)
+	return i, err
 }

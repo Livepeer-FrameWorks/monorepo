@@ -366,7 +366,7 @@ func testMediaAuthorityFollowsUse(t *testing.T, db *sql.DB) {
 	if settled, settleErr := queries.SettleDormantMediaAuthorityObligation(ctx, commodoredb.SettleDormantMediaAuthorityObligationParams{TargetKey: target.Key, Lane: claimed.Lane, Revision: claimed.Revision, ClaimToken: claimed.ClaimToken}); settleErr != nil || settled != 1 {
 		t.Fatalf("dormant settle settled %d rows (err %v)", settled, settleErr)
 	}
-	if _, err = queries.RearmParkedMediaAuthorityObligations(ctx); err != nil {
+	if _, err = server.rearmParkedMediaAuthorityObligations(ctx); err != nil {
 		t.Fatal(err)
 	}
 	server.repairMediaAuthorityRenewals(ctx, queries)

@@ -74,6 +74,12 @@ type Querier interface {
 	// Settlement and release require it: a worker whose lease lapsed and whose
 	// target was claimed again cannot settle or release the attempt that replaced
 	// it, even at the same revision.
+	//
+	// triggered_at is the row's last write before this claim, by the database
+	// clock. Every enqueue folded into the row wrote it, so it is no earlier than
+	// the start of the transaction of the latest one. claimed_at is read after the
+	// claim's snapshot was taken, so every row the claim returns was committed
+	// before it.
 	ClaimMediaAuthorityObligations(ctx context.Context, arg ClaimMediaAuthorityObligationsParams) ([]ClaimMediaAuthorityObligationsRow, error)
 	ClaimServiceEventOutboxBatch(ctx context.Context, arg ClaimServiceEventOutboxBatchParams) ([]ClaimServiceEventOutboxBatchRow, error)
 	ClaimStreamCleanupBatch(ctx context.Context, batchSize int32) ([]ClaimStreamCleanupBatchRow, error)
@@ -132,16 +138,19 @@ type Querier interface {
 	// clock the claim compares against. An event stamped with the caller's clock
 	// would not be claimable until any skew between the two had passed.
 	EnqueueMediaAuthorityObligation(ctx context.Context, arg EnqueueMediaAuthorityObligationParams) error
+	// One chunk of a fanout: a bulk-lane refresh for each listed media-object
+	// target of the tenant. A target key is media_object:<kind>:<id>, and its kind
+	// names the target kind.
+	EnqueueMediaObjectBulkRefreshes(ctx context.Context, arg EnqueueMediaObjectBulkRefreshesParams) (int64, error)
 	EnqueueServiceEvent(ctx context.Context, arg EnqueueServiceEventParams) (string, error)
 	EnqueueStreamCleanup(ctx context.Context, arg EnqueueStreamCleanupParams) (string, error)
-	// Refreshes the tenant's objects that some cell may still hold a valid copy of:
-	// any version of the object is valid, and the current one is not a tombstone.
-	// The current version alone does not decide it: a shorter-lived replacement can
-	// run out while a cell that never received it still holds the longer original.
-	// An object with no valid copy anywhere has nothing to correct and is compiled
-	// when it is next used. The renewal rows are the tenant's index into its
-	// published objects; their status does not matter.
-	EnqueueTenantMediaObjectRefreshes(ctx context.Context, arg EnqueueTenantMediaObjectRefreshesParams) (int64, error)
+	// A stream's playback policy is copied onto its recordings and their chapters,
+	// a recording that has no copy yet compiles from the stream's, and its clips
+	// name the stream. Refreshes those of the stream's artifacts that some cell may
+	// still hold a valid copy of; one no cell holds is compiled when next used. The
+	// event lane folds these into the refreshes the artifact triggers already
+	// queued for rows whose policy columns changed.
+	EnqueueStreamPlaybackDependentRefreshes(ctx context.Context, arg EnqueueStreamPlaybackDependentRefreshesParams) (int64, error)
 	// Gives a live authority a renewal obligation when it has none or only a
 	// settled one. A pending, processing, or parked renewal is left exactly as it
 	// is: this is the recovery path, not a way to move a schedule. A dormant
@@ -389,6 +398,16 @@ type Querier interface {
 	ListStreamsForwardAfter(ctx context.Context, arg ListStreamsForwardAfterParams) ([]ListStreamsForwardAfterRow, error)
 	ListTenantArtifactMediaAuthoritySources(ctx context.Context, tenantID string) ([]ListTenantArtifactMediaAuthoritySourcesRow, error)
 	ListTenantLiveStreamMediaAuthoritySources(ctx context.Context, tenantID string) ([]ListTenantLiveStreamMediaAuthoritySourcesRow, error)
+	// The tenant's objects that some cell may still hold a valid copy of: any
+	// version of the object is valid, and the current one is not a tombstone. The
+	// current version alone does not decide it: a shorter-lived replacement can run
+	// out while a cell that never received it still holds the longer original. An
+	// object with no valid copy anywhere has nothing to correct and is compiled
+	// when it is next used. The renewal rows are the tenant's index into its
+	// published objects; their status does not matter. Read once per fanout, so the
+	// enqueues that follow are bounded statements without rereading the tenant's
+	// rows for each of them.
+	ListTenantMediaObjectRefreshTargets(ctx context.Context, tenantID string) ([]string, error)
 	ListUserWallets(ctx context.Context, userID string) ([]ListUserWalletsRow, error)
 	// Tenants whose authority is still being renewed. Reconciliation covers these;
 	// a tenant nobody uses is compiled when it is next used.
@@ -430,6 +449,12 @@ type Querier interface {
 	LookupStreamPolicyByPlaybackID(ctx context.Context, playbackID string) (LookupStreamPolicyByPlaybackIDRow, error)
 	LookupVODPolicyByInternalName(ctx context.Context, internalName string) (LookupVODPolicyByInternalNameRow, error)
 	LookupVODPolicyByPlaybackID(ctx context.Context, playbackID string) (LookupVODPolicyByPlaybackIDRow, error)
+	// The cell answered, so the deliveries that failed while it could not be
+	// reached need not wait out their backoff: up to batch_size of them per
+	// statement are due now. Only pending rows waiting on a failure's backoff are
+	// touched; one in flight keeps its lease. Each branch reads one of the cell's
+	// partial queue indexes.
+	MakeCellMediaAuthorityDeliveriesDue(ctx context.Context, arg MakeCellMediaAuthorityDeliveriesDueParams) (int64, error)
 	MarkCreatedStreamPull(ctx context.Context, arg MarkCreatedStreamPullParams) error
 	// A cell reported holding something other than what it acknowledged. Until it
 	// acknowledges again, it may hold any version it was ever sent.
@@ -447,7 +472,13 @@ type Querier interface {
 	NoteArtifactCreationIntentAttempt(ctx context.Context, arg NoteArtifactCreationIntentAttemptParams) error
 	ParkMediaAuthorityObligation(ctx context.Context, arg ParkMediaAuthorityObligationParams) (int64, error)
 	RearmMediaAuthorityObligationsAwaitingTenant(ctx context.Context, tenantID string) (int64, error)
-	RearmParkedMediaAuthorityObligations(ctx context.Context) (int64, error)
+	// Puts parked targets back in the queue, up to batch_size per statement. A
+	// target parked after exhausting its transient attempts comes back with
+	// rearmed_attempts of them already used, so it gets only the few left before
+	// it parks again: a long outage costs a few attempts per reconciliation pass
+	// instead of a full retry budget. A target parked for any other reason waits
+	// on its source changing, so its attempts start over.
+	RearmParkedMediaAuthorityObligations(ctx context.Context, arg RearmParkedMediaAuthorityObligationsParams) (int64, error)
 	// Compare each identity with its acknowledged floor. An unrelated delivery
 	// cannot hide a regression; an apply ahead of its acknowledgement is normal.
 	ReconcileMediaAuthorityPage(ctx context.Context, arg ReconcileMediaAuthorityPageParams) ([]ReconcileMediaAuthorityPageRow, error)
@@ -526,7 +557,7 @@ type Querier interface {
 	RevokeRefreshTokensForUser(ctx context.Context, arg RevokeRefreshTokensForUserParams) error
 	RevokeSigningKey(ctx context.Context, arg RevokeSigningKeyParams) (RevokeSigningKeyRow, error)
 	RotateRefreshToken(ctx context.Context, arg RotateRefreshTokenParams) error
-	SetClipPlaybackPolicy(ctx context.Context, arg SetClipPlaybackPolicyParams) (string, error)
+	SetClipPlaybackPolicy(ctx context.Context, arg SetClipPlaybackPolicyParams) (SetClipPlaybackPolicyRow, error)
 	SetCreatedStreamDescription(ctx context.Context, arg SetCreatedStreamDescriptionParams) error
 	SetCreatedStreamLiveVideoABR(ctx context.Context, arg SetCreatedStreamLiveVideoABRParams) error
 	SetMediaAuthorityCompilerFingerprint(ctx context.Context, fingerprint string) error
@@ -537,7 +568,7 @@ type Querier interface {
 	// Only the link in the most recent send is valid: each attempt rotates the
 	// stored hash before handing the raw token to SMTP.
 	SetUnverifiedUserVerificationToken(ctx context.Context, arg SetUnverifiedUserVerificationTokenParams) (int64, error)
-	SetVODPlaybackPolicy(ctx context.Context, arg SetVODPlaybackPolicyParams) (string, error)
+	SetVODPlaybackPolicy(ctx context.Context, arg SetVODPlaybackPolicyParams) (SetVODPlaybackPolicyRow, error)
 	// The renewal of an object nobody uses. Dormant is not claimable, is not
 	// re-armed by reconciliation, and still counts as the authority's renewal, so
 	// nothing schedules another one. Use or the next publication revives it.

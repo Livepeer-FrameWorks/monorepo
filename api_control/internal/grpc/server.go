@@ -184,11 +184,18 @@ type CommodoreServer struct {
 	// placementSweepCursor pages the activation backlog so a permanently
 	// blocked prefix cannot hide the scopes behind it. Guarded because the
 	// worker that advances it is not the only possible reader.
-	placementSweepMu         sync.Mutex
-	placementSweepCursor     placementSweepCursor
-	mediaAuthorityRecipients sharedauthority.SealRecipientSet
-	listmonkClient           *listmonk.Client
-	decklogClient            *decklogclient.BatchedClient
+	placementSweepMu     sync.Mutex
+	placementSweepCursor placementSweepCursor
+	// mediaAuthoritySweeps elects the one replica that runs the whole-catalog
+	// sweeps; see mediaAuthoritySweepLeadership.
+	mediaAuthoritySweeps mediaAuthoritySweepLeadership
+	// mediaAuthorityCompileInputs holds what a tenant's compiles share across
+	// claims; see mediaAuthorityCompileMemo.
+	mediaAuthorityCompileInputs     *mediaAuthorityCompileMemo
+	mediaAuthorityCompileInputsOnce sync.Once
+	mediaAuthorityRecipients        sharedauthority.SealRecipientSet
+	listmonkClient                  *listmonk.Client
+	decklogClient                   *decklogclient.BatchedClient
 	// tokenHasher attributes domain events to the calling API token with the
 	// hash Bridge's usage batches record.
 	tokenHasher          *events.TokenHasher

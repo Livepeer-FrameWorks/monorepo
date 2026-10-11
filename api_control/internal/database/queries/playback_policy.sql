@@ -99,7 +99,7 @@ WHERE (v.id::text = sqlc.arg(target_id) OR v.vod_hash = sqlc.arg(target_id))
       SELECT 1 FROM commodore.artifact_catalog_tombstones t
       WHERE t.tenant_id = v.tenant_id AND t.kind = 'vod' AND t.artifact_hash = v.vod_hash
   )
-RETURNING v.vod_hash;
+RETURNING v.vod_hash, v.id::text AS id;
 
 -- name: IsDVRChapterPlaybackTarget :one
 SELECT EXISTS (
@@ -122,7 +122,7 @@ WHERE (c.id::text = sqlc.arg(target_id) OR c.clip_hash = sqlc.arg(target_id))
       SELECT 1 FROM commodore.artifact_catalog_tombstones t
       WHERE t.tenant_id = c.tenant_id AND t.kind = 'clip' AND t.artifact_hash = c.clip_hash
   )
-RETURNING c.clip_hash;
+RETURNING c.clip_hash, c.id::text AS id;
 
 -- name: LookupStreamPolicyByPlaybackID :one
 SELECT COALESCE(playback_policy::text, ''::text)::text AS playback_policy, playback_webhook_secret_enc,

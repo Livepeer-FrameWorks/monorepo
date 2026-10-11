@@ -84,10 +84,17 @@ scheduled renewal, each with its own worker, lease, and timeout. A tenant change
 that touches thousands of objects therefore never stands in front of a change to
 one of them. Each lane is drained by one claimant feeding a fixed number of
 compile slots, claiming again as soon as a slot frees, so a lane's rate is what
-its compiles take and one slow compile holds one slot. The compiles of one claim
-share the inputs a tenant's objects all derive from (its subscription and tier);
-that memo is created before the claim and dropped with it, so nothing in it was
-read before the rows it serves were enqueued.
+its compiles take and one slow compile holds one slot. Object compiles share the
+Purser answers a tenant's objects all derive from (its subscription and tier)
+across claims, so a fanout asks Purser about a tenant a constant number of times
+rather than once per object. Every claimed row carries `triggered_at`, its last
+write before the claim, and `claimed_at`, read after the claim's snapshot, both
+by the database clock. An answer is stamped with the `claimed_at` of the claim
+whose compile read it, and serves a row only when the row's `triggered_at` is at
+least 500 ms (the clock skew YugabyteDB tolerates between nodes) before that
+stamp, so a compile never uses Purser state from before the change that enqueued
+it. Purser commits a change before the event that enqueues its refresh, which is
+what makes the rule hold; answers age out after two minutes.
 
 Every writer goes through `commodore.enqueue_media_authority_obligation`: source
 triggers, owner-service events, placement and playback-policy changes, fanout,
@@ -125,7 +132,10 @@ attempt with a `park_reason`. A transient failure backs off with deterministic
 jitter and parks as `exhausted` after twelve attempts. A media object whose
 tenant has no published authority requests that authority and parks until it
 exists. A parked target costs nothing until a new event for it arrives or the
-hourly reconciler re-arms it; it is never retried on a timer by itself.
+hourly reconciler re-arms it; it is never retried on a timer by itself. The
+reconciler re-arms an `exhausted` target with three attempts left, so a long
+outage costs three attempts per pass rather than a full retry budget; a target
+parked for any other reason waits on its source changing and starts over.
 
 Compiler errors are not access decisions. Missing recipients, unavailable
 decryption keys, unchanged source that cannot compile, or dependency outages leave the previous valid
@@ -207,9 +217,11 @@ A tenant publication fans out to the tenant's media objects only when
 allowances, limits, and decision text — changes (and, while some cell still takes
 only short-lived object authorities, when tenant validity shrinks below what
 objects were capped to). The fanout obligation is written in the tenant's
-publishing transaction. Processing it is one statement that refreshes, in the
-`bulk` lane, the tenant's objects cells may still hold: the current version is
-not a tombstone and some version of the object is still valid. The newest
+publishing transaction. Processing it reads, once, the tenant's objects cells may
+still hold — the current version is not a tombstone and some version of the
+object is still valid — and refreshes them in the `bulk` lane, 500 per
+statement; a fanout that fails part way runs again from the start, and an
+object enqueued twice folds into its one pending refresh. The newest
 version can be expired while an older one still verifies, so the check covers
 every version. An object with no valid version left has nothing to correct.
 Metering therefore publishes tenant versions without re-signing a single object.
@@ -218,6 +230,10 @@ parked waiting for it, even when the compile publishes nothing. One input reache
 the tenant authority: process configuration comes from the tenant's tier. The
 two Purser reasons that can change it, `subscription_authority_changed` and
 `billing_tier_authority_changed`, refresh the tenant's objects directly.
+Signing-key and tenant processing changes refresh all of the tenant's objects as
+well. A playback-policy change does not: it refreshes the changed object and,
+for a stream, the recordings, chapters and clips of that stream that cells may
+still hold, since those are the only authorities that carry the stream's policy.
 
 An object compile captures the current tenant version and, under that tenant's
 current-pointer lock, publishes only if the tenant's `dependents_digest` is still
@@ -282,7 +298,20 @@ ones so catching up never holds back a change or a revocation. A cell that
 refuses an envelope in a way retrying cannot change — it holds a newer version, a
 conflicting digest, or a terminal tombstone, or the envelope is malformed for that
 cell's release or past its validity on arrival — settles that delivery as
-`rejected` instead of returning it to the queue; replay re-opens it.
+`rejected` instead of returning it to the queue; replay re-opens it. A failed
+delivery backs off from one second, doubling, up to about three minutes. When a
+cell's Foghorn answers the placement-capability read-back (its own report, or a
+probe before publication), the cell is reachable again, and its deliveries
+waiting out a backoff are made due at once, a thousand per statement.
+
+Hourly reconciliation, retention and the activation-backlog sweep each cover the
+whole catalog, so they run on one replica: the one holding the
+`commodore-media-authority-sweeps` session advisory lock
+(`pkg/database.SessionLeader`). Every replica ticks, asks for the lock first, and
+skips the sweep while another replica holds it; a leader that stops or loses its
+database session hands the lock to the next replica that asks. The minute sweeps
+that settle undeliverable deliveries run on every replica, a batch of 500 per
+statement until a batch comes back short, at most twenty batches a minute.
 
 Hourly reconciliation is the safety net behind event-driven refresh. It gives any
 live current authority without a renewal obligation one, recompiles the tenants in

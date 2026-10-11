@@ -796,18 +796,28 @@ func TestRequestMediaAuthorityReplayRequiresServiceAndValidClock(t *testing.T) {
 	}
 }
 
-// The fanout is one statement, so it cannot be half applied and needs no
-// transaction. Which objects it selects and which lane they land in is SQL, and
-// is asserted against a real database in TestMediaAuthorityFollowsUse_RealPG.
-func TestTenantMediaObjectFanoutIsOneStatement(t *testing.T) {
+// The fanout reads the tenant's held objects once and enqueues them in bounded
+// statements, so a tenant with many objects never writes them all in one. Which
+// objects it selects and which lane they land in is SQL, and is asserted
+// against a real database in TestMediaAuthorityTenantFanoutChunks_RealPG.
+func TestTenantMediaObjectFanoutReadsOnceAndEnqueuesInChunks(t *testing.T) {
 	s, mock, done := newMockServer(t)
 	defer done()
 	const tenantID = "10000000-0000-0000-0000-000000000001"
-	mock.ExpectQuery("EnqueueTenantMediaObjectRefreshes").
-		WithArgs("tenant_media_objects:fanout", "tenant-fanout:"+tenantID, tenantID).
-		WillReturnRows(sqlmock.NewRows([]string{"enqueued"}).AddRow(int64(2)))
-	if err := s.enqueueTenantMediaObjectRefreshes(context.Background(), tenantID); err != nil {
-		t.Fatalf("enqueueTenantMediaObjectRefreshes: %v", err)
+	mock.ExpectQuery("ListTenantMediaObjectRefreshTargets").WithArgs(tenantID).
+		WillReturnRows(sqlmock.NewRows([]string{"target_key"}).
+			AddRow("media_object:artifact:a").AddRow("media_object:artifact:b").AddRow("media_object:live_stream:c"))
+	for _, enqueued := range []int64{2, 1} {
+		mock.ExpectQuery("EnqueueMediaObjectBulkRefreshes").
+			WithArgs(tenantID, "tenant_media_objects:fanout", "tenant-fanout:"+tenantID, sqlmock.AnyArg()).
+			WillReturnRows(sqlmock.NewRows([]string{"enqueued"}).AddRow(enqueued))
+	}
+	chunks, err := s.enqueueTenantMediaObjectRefreshesInChunks(context.Background(), tenantID, 2)
+	if err != nil {
+		t.Fatalf("enqueueTenantMediaObjectRefreshesInChunks: %v", err)
+	}
+	if len(chunks) != 2 || chunks[0] != 2 || chunks[1] != 1 {
+		t.Fatalf("chunks = %v, want [2 1]", chunks)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
