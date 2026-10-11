@@ -25,8 +25,19 @@ Schema-2 issuance and schema-2 readiness are gated by one attestation chain, not
 - `ApplyMediaAuthority` acknowledgements carry `MediaCellPlacementCapability`: the acknowledging
   replica reads the ledger and attests `enforcement_ready` only when it enforces itself and every
   replica seen inside the liveness window enforces schema 2. A failed ledger read acknowledges
-  without attesting; absent is not ready.
+  without attesting.
+- Each replica also reports the attestation itself (`ReportMediaCellPlacementCapability`) after the
+  heartbeat that changes it, when Commodore (re)connects, and at least every five minutes; a failed
+  report is retried after two seconds. The service token names no cell, so Commodore treats the
+  report as a prompt: it reads the attestation back from the named cell's Foghorn over its own
+  channel and records that answer. A Commodore without the RPC answers `Unimplemented`; the replica
+  then reports only every five minutes and Commodore learns through its probe and acknowledgements.
 - Commodore records the attestation per cell in `commodore.media_cell_placement_capabilities`.
+  Only an attestation by live replicas changes the row: an answer without one (a failed ledger
+  read, no live replica in the ledger) keeps what the cell attested last, so a transient read
+  failure cannot drop a ready cell back to schema 1, which its enforcing replicas refuse. Live
+  replicas that attest they do not enforce withdraw readiness. An unchanged attestation rewrites
+  the row at most every five minutes.
   A tenant with no schema-2 history receives its first policy-bearing authority only when every
   current target cell is attested; otherwise the refresh keeps schema 1 and each newly ready
   cell enqueues a `cell_placement_capability_ready` refresh for the legacy tenants it holds.
@@ -40,6 +51,12 @@ Schema-2 issuance and schema-2 readiness are gated by one attestation chain, not
   tenant.
   Schema 2 is monotonic once published, so a later grant on an unattested cell fails publication
   (and retries with backoff) rather than rolling the tenant back.
+- An enforcing replica refuses a schema-1 pair on every path: push ingest and viewers, and also
+  managed (Mist-native) materialization, managed node election and pulled-source dials, where it is
+  a transient refusal. Its cell attested enforcement, so a schema-1 tenant there is one whose
+  activation has not been published yet, and serving it would skip the tenant's residency rules.
+  `frameworks cluster doctor` reports unhealthy while any attested cell still holds a tenant below
+  schema 2, and `cluster diagnose media-authority` counts them per cell.
 - On an enforcing replica, an applied schema-2 authority is promoted read/ingest/source-ready in
   the apply transaction. Commodore only issued it because this cell attested, and routing needs
   a ready pair before any connected admission could have compared it. Shadow comparison of

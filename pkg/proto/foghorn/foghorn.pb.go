@@ -1199,7 +1199,8 @@ type ApplyMediaAuthorityResponse struct {
 	AuthorityVersion uint64                        `protobuf:"varint,4,opt,name=authority_version,json=authorityVersion,proto3" json:"authority_version,omitempty"`
 	RefreshDue       bool                          `protobuf:"varint,5,opt,name=refresh_due,json=refreshDue,proto3" json:"refresh_due,omitempty"`
 	// Cell-level placement capability observed by the acknowledging replica at
-	// acknowledgement time. Absent means the cell does not attest capability.
+	// acknowledgement time. Absent attests nothing, and Commodore keeps the
+	// cell's stored attestation; only an attestation by live replicas changes it.
 	PlacementCapability *MediaCellPlacementCapability `protobuf:"bytes,6,opt,name=placement_capability,json=placementCapability,proto3" json:"placement_capability,omitempty"`
 	unknownFields       protoimpl.UnknownFields
 	sizeCache           protoimpl.SizeCache

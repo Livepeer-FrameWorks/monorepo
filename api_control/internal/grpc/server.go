@@ -10171,6 +10171,7 @@ func commodoreServiceOnlyMethods() []string {
 		commodorepb.InternalService_RequestMediaAuthorityReplay_FullMethodName,
 		commodorepb.InternalService_FetchMediaAuthority_FullMethodName,
 		commodorepb.InternalService_ReportMediaAuthorityUse_FullMethodName,
+		commodorepb.InternalService_ReportMediaCellPlacementCapability_FullMethodName,
 		commodorepb.PushTargetService_GetStreamPushTargets_FullMethodName,
 		commodorepb.PushTargetService_UpdatePushTargetStatus_FullMethodName,
 	}

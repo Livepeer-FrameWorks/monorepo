@@ -11,12 +11,17 @@ import (
 	"time"
 
 	"frameworks/api_control/internal/database/commodoredb"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	sharedauthority "github.com/Livepeer-FrameWorks/monorepo/pkg/mediaauthority"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 const (
@@ -33,9 +38,16 @@ func cellPlacementCapabilityReady(maxSchemaVersion int32, enforcementReady bool)
 	return enforcementReady && maxSchemaVersion >= int32(sharedauthority.PlacementSchemaVersion)
 }
 
-// attestedCellPlacementCapability normalizes an acknowledgement's attestation.
-// Absent or malformed attestations are recorded as not ready, never ignored,
-// so a cell that stops attesting cannot keep an earlier readiness on file.
+// cellPlacementCapabilityAttested reports whether a cell's answer carries an
+// attestation at all. A Foghorn whose ledger read failed answers without one,
+// and a ledger without live replicas lacks even the answering replica's own
+// heartbeat; neither says anything about what the cell enforces.
+func cellPlacementCapabilityAttested(capability *foghornpb.MediaCellPlacementCapability) bool {
+	return capability != nil && capability.GetLiveReplicas() > 0
+}
+
+// attestedCellPlacementCapability normalizes an attestation. A malformed one
+// (an unknown schema version, an implausible replica count) is not ready.
 func attestedCellPlacementCapability(capability *foghornpb.MediaCellPlacementCapability) (maxSchema int32, ready bool, replicas int32) {
 	if capability == nil {
 		return int32(sharedauthority.SchemaVersion), false, 0
@@ -65,10 +77,21 @@ func attestedCellPlacementCapability(capability *foghornpb.MediaCellPlacementCap
 // recordCellPlacementCapability queues activation only when readiness advances.
 // The attestation row lock serializes the activation marker and tenant enqueues
 // in one transaction, including concurrent first acknowledgements.
+//
+// An answer without an attestation keeps the stored row: only an explicit
+// attestation by live replicas withdraws readiness. Dropping readiness on a
+// transient ledger read failure would hand new tenants the legacy schema, which
+// the cell's enforcing replicas refuse.
 func (s *CommodoreServer) recordCellPlacementCapability(ctx context.Context, cellID string, capability *foghornpb.MediaCellPlacementCapability) error {
 	cellID = strings.TrimSpace(cellID)
 	if cellID == "" || s == nil || s.db == nil {
 		return errors.New("cell placement capability requires a cell and database")
+	}
+	if !cellPlacementCapabilityAttested(capability) {
+		if s.logger != nil {
+			s.logger.WithField("cell_id", cellID).Debug("Cell answered without a placement capability attestation; stored capability kept")
+		}
+		return nil
 	}
 	maxSchema, ready, replicas := attestedCellPlacementCapability(capability)
 	return database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
@@ -77,10 +100,16 @@ func (s *CommodoreServer) recordCellPlacementCapability(ctx context.Context, cel
 			CellID: cellID, MaxSchemaVersion: maxSchema, EnforcementReady: ready, LiveReplicas: replicas,
 			// These two do not depend on placement enforcement: a cell that only
 			// reads legacy-schema authorities still accepts long validity and
-			// reports use. An absent attestation reads as not ready.
-			LongValidityReady: capability.GetLiveReplicas() > 0 && capability.GetLongValidityReady(),
-			UseReportsReady:   capability.GetLiveReplicas() > 0 && capability.GetUseReportsReady(),
+			// reports use.
+			LongValidityReady: capability.GetLongValidityReady(),
+			UseReportsReady:   capability.GetUseReportsReady(),
 		})
+		// The upsert skips an attestation identical to a recent one. The row it
+		// leaves was written, and its activation decided, by the transaction
+		// that last changed it.
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
 		if err != nil {
 			return fmt.Errorf("record cell placement capability: %w", err)
 		}
@@ -172,18 +201,57 @@ func (s *CommodoreServer) probePlacementCellCapabilities(ctx context.Context, ce
 }
 
 func (s *CommodoreServer) probePlacementCellCapability(ctx context.Context, cellID string) error {
+	_, err := s.readBackPlacementCellCapability(ctx, cellID)
+	return err
+}
+
+// readBackPlacementCellCapability asks the cell's own Foghorn for its
+// attestation, records it, and returns what the cell answered.
+func (s *CommodoreServer) readBackPlacementCellCapability(ctx context.Context, cellID string) (*foghornpb.MediaCellPlacementCapability, error) {
 	client, err := s.resolveFoghornForClusterDirect(ctx, cellID)
 	if err != nil {
-		return fmt.Errorf("resolve placement capability cell %q: %w", cellID, err)
+		return nil, fmt.Errorf("resolve placement capability cell %q: %w", cellID, err)
 	}
 	capability, err := client.GetMediaCellPlacementCapability(ctx)
 	if err != nil {
-		return fmt.Errorf("read placement capability for cell %q: %w", cellID, err)
+		return nil, fmt.Errorf("read placement capability for cell %q: %w", cellID, err)
 	}
 	if err := s.recordCellPlacementCapability(ctx, cellID, capability); err != nil {
-		return fmt.Errorf("persist placement capability for cell %q: %w", cellID, err)
+		return nil, fmt.Errorf("persist placement capability for cell %q: %w", cellID, err)
 	}
-	return nil
+	return capability, nil
+}
+
+// ReportMediaCellPlacementCapability records a cell's attestation as soon as
+// its Foghorn observes a change, instead of on the next acknowledgement. The
+// service token is shared by every service and names no cell, so the report
+// only prompts Commodore to read the attestation back from the named cell's
+// Foghorn, which it resolves and dials itself.
+func (s *CommodoreServer) ReportMediaCellPlacementCapability(ctx context.Context, req *commodorepb.ReportMediaCellPlacementCapabilityRequest) (*emptypb.Empty, error) {
+	if ctxkeys.GetAuthType(ctx) != "service" {
+		return nil, status.Error(codes.PermissionDenied, "placement capability report requires service authentication")
+	}
+	cellID := strings.TrimSpace(req.GetControlCellId())
+	if cellID == "" || len(cellID) > 255 {
+		return nil, status.Error(codes.InvalidArgument, "control_cell_id is required")
+	}
+	if s.db == nil {
+		return nil, status.Error(codes.Unavailable, "placement capability store is not configured")
+	}
+	readCtx, cancel := context.WithTimeout(ctx, placementProbeTimeout)
+	defer cancel()
+	attested, err := s.readBackPlacementCellCapability(readCtx, cellID)
+	if err != nil {
+		// Never the cell's own code: the reporter reads Unimplemented as a
+		// Commodore without this RPC, not as a cell without the probe.
+		return nil, status.Errorf(codes.Unavailable, "read back placement capability: %v", err)
+	}
+	s.placementProbeFailures.Delete(cellID)
+	if !proto.Equal(attested, req.GetCapability()) && s.logger != nil {
+		s.logger.WithFields(logging.Fields{"cell_id": cellID, "reported": req.GetCapability().String(), "attested": attested.String()}).
+			Info("Reported cell placement capability differs from the cell's own answer; recorded the cell's answer")
+	}
+	return &emptypb.Empty{}, nil
 }
 
 type placementProbeFailure struct {

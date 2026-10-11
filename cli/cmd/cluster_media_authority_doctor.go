@@ -66,6 +66,27 @@ SELECT 'invalid_indexes=' || count(*) FROM pg_index AS i
   JOIN pg_class AS tbl ON tbl.oid = i.indrelid
   JOIN pg_namespace AS ns ON ns.oid = tbl.relnamespace
   WHERE ns.nspname = 'commodore' AND tbl.relname LIKE 'media_authority%' AND NOT (i.indisvalid AND i.indisready);
+` + legacySchemaTenantsOnReadyCellsSQL
+
+// legacySchemaTenantsOnReadyCellsSQL counts, per cell that attests placement
+// enforcement, the tenants whose current authority is still on the policy-free
+// schema 1. That cell's replicas refuse such a tenant's live, managed and
+// pulled streams until its schema-2 authority is published.
+const legacySchemaTenantsOnReadyCellsSQL = `WITH stranded AS (
+  SELECT target.cell_id, target.authority_id
+  FROM commodore.media_authority_targets AS target
+  JOIN commodore.media_cell_placement_capabilities AS capability
+    ON capability.cell_id = target.cell_id AND capability.enforcement_ready AND capability.max_schema_version >= 2
+  JOIN commodore.media_authority_current AS current
+    ON current.authority_kind = target.authority_kind AND current.authority_id = target.authority_id
+  JOIN commodore.media_authority_versions AS version
+    ON version.authority_kind = current.authority_kind AND version.authority_id = current.authority_id
+   AND version.authority_version = current.authority_version
+  WHERE target.authority_kind = 'tenant' AND version.payload_schema_version < 2 AND NOT version.tombstone
+)
+SELECT 'legacy_schema_tenants_on_ready_cells=' || count(*) FROM stranded
+UNION ALL
+SELECT 'legacy_schema_tenants_cell:' || cell_id || '=' || count(*) FROM stranded GROUP BY cell_id;
 `
 
 // A cell holding an authority past its validity is not by itself a problem: an
@@ -186,9 +207,22 @@ var (
 	commodoreMediaAuthorityDoctorKeys = []string{
 		"parked", "refresh_oldest_due_seconds", "bulk_oldest_due_seconds", "expired_warm", "renewal_missing",
 		"delivery_stuck", "delivery_rejected", "authorities", "versions_last_hour", "invalid_indexes",
+		"legacy_schema_tenants_on_ready_cells",
 	}
 	foghornMediaAuthorityDoctorKeys = []string{"collection_overdue", "rejections_last_hour"}
 )
+
+// legacySchemaTenantsByCell renders the per-cell counts as "cell-a: 2, cell-b: 1".
+func legacySchemaTenantsByCell(state map[string]int64) string {
+	var cells []string
+	for key, n := range state {
+		if cell, ok := strings.CutPrefix(key, "legacy_schema_tenants_cell:"); ok && n > 0 {
+			cells = append(cells, fmt.Sprintf("%s: %d", cell, n))
+		}
+	}
+	sort.Strings(cells)
+	return strings.Join(cells, ", ")
+}
 
 func missingMediaAuthorityDoctorKeys(state map[string]int64, keys []string) []string {
 	var missing []string
@@ -239,6 +273,10 @@ func evaluateMediaAuthorityDoctor(expected []string, values map[string]map[strin
 			}
 			if n := state["invalid_indexes"]; n > 0 {
 				problems = append(problems, fmt.Sprintf("commodore: %d invalid media-authority index(es)", n))
+			}
+			if n := state["legacy_schema_tenants_on_ready_cells"]; n > 0 {
+				problems = append(problems, fmt.Sprintf("commodore: %d tenant authority(ies) still on schema 1 in cells that enforce placement (%s); those cells refuse the tenants' streams until schema 2 is published",
+					n, legacySchemaTenantsByCell(state)))
 			}
 			if n := state["renewal_missing"]; n > 0 && state["obligations_table"] == 1 {
 				warnings = append(warnings, fmt.Sprintf("commodore: %d current authority(ies) have no renewal obligation yet", n))

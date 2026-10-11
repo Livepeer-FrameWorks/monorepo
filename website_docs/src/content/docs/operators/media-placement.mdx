@@ -134,6 +134,13 @@ local source without a federation pull. The same startup installs public routing
 and each replica publishes its own enforcement state to the heartbeat ledger the cell's attestation
 is derived from. Edge and core must be upgraded together; mixed legacy enforcement is unsupported.
 
+A cell that attests enforcement refuses every stream of a tenant whose authority is still on the
+legacy (policy-free) schema, including managed and pulled sources, until that tenant's
+policy-bearing authority is published. `frameworks cluster doctor` reports the
+**Media authority convergence** check unhealthy while any attested cell holds such a tenant, and
+`frameworks cluster diagnose media-authority` lists the count per cell. Confirm the count is zero
+before upgrading the next cell.
+
 Stored artifacts are served under the same policy: it removes destinations the tenant's rules
 refuse, while storage affinity decides the order of what is left. Choosing which durable backend
 holds the bytes, and where processing runs, stays outside placement.

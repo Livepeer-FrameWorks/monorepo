@@ -25,6 +25,7 @@ delivery_rejected=0
 authorities=58
 versions_last_hour=7
 invalid_indexes=0
+legacy_schema_tenants_on_ready_cells=0
 
 ######## database foghorn_eu
 collection_overdue=0
@@ -65,6 +66,7 @@ delivery_rejected=0
 authorities=58
 versions_last_hour=560
 invalid_indexes=0
+legacy_schema_tenants_on_ready_cells=0
 ######## database foghorn_eu
 collection_overdue=0
 rejections_last_hour=33
@@ -101,10 +103,59 @@ legacy_inbox_unfinished=2416
 delivery_stuck=0
 delivery_rejected=0
 invalid_indexes=0
+legacy_schema_tenants_on_ready_cells=0
 `
 	problems, warnings = evaluateMediaAuthorityDoctor([]string{"commodore"}, parseMediaAuthorityDoctorOutput(preObligations))
 	if len(problems) != 0 || !strings.Contains(strings.Join(warnings, "\n"), "refresh obligations are not installed") {
 		t.Fatalf("pre-obligation schema judged problems=%v warnings=%v", problems, warnings)
+	}
+}
+
+// A cell that attests placement enforcement refuses a tenant still on schema 1,
+// so any such tenant is an outage in that cell and makes the check unhealthy,
+// named per cell. A probe that could not count them is not read as zero.
+func TestMediaAuthorityDoctorFlagsLegacySchemaTenantsOnEnforcingCells(t *testing.T) {
+	healthyCommodore := `
+######## database commodore
+obligations_table=1
+parked=0
+refresh_oldest_due_seconds=0
+bulk_oldest_due_seconds=0
+expired_warm=0
+renewal_missing=0
+delivery_stuck=0
+delivery_rejected=0
+authorities=12
+versions_last_hour=1
+invalid_indexes=0
+`
+	stranded := healthyCommodore + `?column?
+legacy_schema_tenants_on_ready_cells=3
+legacy_schema_tenants_cell:cell-us=1
+legacy_schema_tenants_cell:cell-eu=2
+(3 rows)
+`
+	problems, _ := evaluateMediaAuthorityDoctor([]string{"commodore"}, parseMediaAuthorityDoctorOutput(stranded))
+	want := "3 tenant authority(ies) still on schema 1 in cells that enforce placement (cell-eu: 2, cell-us: 1)"
+	if !strings.Contains(strings.Join(problems, "\n"), want) {
+		t.Fatalf("problems %v missing %q", problems, want)
+	}
+
+	clean := healthyCommodore + "legacy_schema_tenants_on_ready_cells=0\n"
+	problems, warnings := evaluateMediaAuthorityDoctor([]string{"commodore"}, parseMediaAuthorityDoctorOutput(clean))
+	if len(problems) != 0 || len(warnings) != 0 {
+		t.Fatalf("no stranded tenants judged problems=%v warnings=%v", problems, warnings)
+	}
+
+	problems, warnings = evaluateMediaAuthorityDoctor([]string{"commodore"}, parseMediaAuthorityDoctorOutput(healthyCommodore))
+	if len(problems) != 0 || !strings.Contains(strings.Join(warnings, "\n"), "could not be checked: legacy_schema_tenants_on_ready_cells") {
+		t.Fatalf("uncounted stranded tenants judged problems=%v warnings=%v", problems, warnings)
+	}
+
+	for _, sql := range []string{commodoreMediaAuthorityDoctorSQL, commodoreMediaAuthorityDiagnosticSQL} {
+		if !strings.Contains(sql, "version.payload_schema_version < 2") || !strings.Contains(sql, "capability.enforcement_ready") {
+			t.Fatal("legacy-schema count does not compare tenant schema with the cell's attested enforcement")
+		}
 	}
 }
 

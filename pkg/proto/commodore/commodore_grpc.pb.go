@@ -81,6 +81,7 @@ const (
 	InternalService_RequestMediaAuthorityReplay_FullMethodName        = "/commodore.InternalService/RequestMediaAuthorityReplay"
 	InternalService_FetchMediaAuthority_FullMethodName                = "/commodore.InternalService/FetchMediaAuthority"
 	InternalService_ReportMediaAuthorityUse_FullMethodName            = "/commodore.InternalService/ReportMediaAuthorityUse"
+	InternalService_ReportMediaCellPlacementCapability_FullMethodName = "/commodore.InternalService/ReportMediaCellPlacementCapability"
 )
 
 // InternalServiceClient is the client API for InternalService service.
@@ -321,6 +322,16 @@ type InternalServiceClient interface {
 	// Foghorn reports the authorities it decided on, at most once per authority
 	// per day. Commodore keeps renewing an object only while it is in use.
 	ReportMediaAuthorityUse(ctx context.Context, in *ReportMediaAuthorityUseRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	// Foghorn reports its cell's placement capability at startup, whenever it
+	// changes, when it (re)connects to Commodore, and at least every five
+	// minutes. The service token does not identify a cell, so Commodore records
+	// only the attestation it reads back from the named cell's Foghorn over its
+	// own authenticated channel; a report naming another cell can only make
+	// Commodore ask that cell. A cell that newly attests enforcement has its
+	// legacy-schema tenants queued for activation in the same transaction that
+	// records the attestation. Unavailable: the cell could not be asked or its
+	// answer not recorded; report again later.
+	ReportMediaCellPlacementCapability(ctx context.Context, in *ReportMediaCellPlacementCapabilityRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 }
 
 type internalServiceClient struct {
@@ -911,6 +922,16 @@ func (c *internalServiceClient) ReportMediaAuthorityUse(ctx context.Context, in 
 	return out, nil
 }
 
+func (c *internalServiceClient) ReportMediaCellPlacementCapability(ctx context.Context, in *ReportMediaCellPlacementCapabilityRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, InternalService_ReportMediaCellPlacementCapability_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // InternalServiceServer is the server API for InternalService service.
 // All implementations must embed UnimplementedInternalServiceServer
 // for forward compatibility.
@@ -1149,6 +1170,16 @@ type InternalServiceServer interface {
 	// Foghorn reports the authorities it decided on, at most once per authority
 	// per day. Commodore keeps renewing an object only while it is in use.
 	ReportMediaAuthorityUse(context.Context, *ReportMediaAuthorityUseRequest) (*emptypb.Empty, error)
+	// Foghorn reports its cell's placement capability at startup, whenever it
+	// changes, when it (re)connects to Commodore, and at least every five
+	// minutes. The service token does not identify a cell, so Commodore records
+	// only the attestation it reads back from the named cell's Foghorn over its
+	// own authenticated channel; a report naming another cell can only make
+	// Commodore ask that cell. A cell that newly attests enforcement has its
+	// legacy-schema tenants queued for activation in the same transaction that
+	// records the attestation. Unavailable: the cell could not be asked or its
+	// answer not recorded; report again later.
+	ReportMediaCellPlacementCapability(context.Context, *ReportMediaCellPlacementCapabilityRequest) (*emptypb.Empty, error)
 	mustEmbedUnimplementedInternalServiceServer()
 }
 
@@ -1332,6 +1363,9 @@ func (UnimplementedInternalServiceServer) FetchMediaAuthority(context.Context, *
 }
 func (UnimplementedInternalServiceServer) ReportMediaAuthorityUse(context.Context, *ReportMediaAuthorityUseRequest) (*emptypb.Empty, error) {
 	return nil, status.Error(codes.Unimplemented, "method ReportMediaAuthorityUse not implemented")
+}
+func (UnimplementedInternalServiceServer) ReportMediaCellPlacementCapability(context.Context, *ReportMediaCellPlacementCapabilityRequest) (*emptypb.Empty, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReportMediaCellPlacementCapability not implemented")
 }
 func (UnimplementedInternalServiceServer) mustEmbedUnimplementedInternalServiceServer() {}
 func (UnimplementedInternalServiceServer) testEmbeddedByValue()                         {}
@@ -2398,6 +2432,24 @@ func _InternalService_ReportMediaAuthorityUse_Handler(srv interface{}, ctx conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _InternalService_ReportMediaCellPlacementCapability_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReportMediaCellPlacementCapabilityRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InternalServiceServer).ReportMediaCellPlacementCapability(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InternalService_ReportMediaCellPlacementCapability_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InternalServiceServer).ReportMediaCellPlacementCapability(ctx, req.(*ReportMediaCellPlacementCapabilityRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // InternalService_ServiceDesc is the grpc.ServiceDesc for InternalService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -2636,6 +2688,10 @@ var InternalService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ReportMediaAuthorityUse",
 			Handler:    _InternalService_ReportMediaAuthorityUse_Handler,
+		},
+		{
+			MethodName: "ReportMediaCellPlacementCapability",
+			Handler:    _InternalService_ReportMediaCellPlacementCapability_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

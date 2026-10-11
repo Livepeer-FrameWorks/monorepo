@@ -300,7 +300,8 @@ message ApplyMediaAuthorityResponse {
   uint64 authority_version = 4;
   bool refresh_due = 5;
   // Cell-level placement capability observed by the acknowledging replica at
-  // acknowledgement time. Absent means the cell does not attest capability.
+  // acknowledgement time. Absent attests nothing, and Commodore keeps the
+  // cell's stored attestation; only an attestation by live replicas changes it.
   MediaCellPlacementCapability placement_capability = 6;
 }
 

@@ -1101,6 +1101,27 @@ WHERE target_key = sqlc.arg(target_key)
   AND lane = sqlc.arg(lane)
   AND claim_token::text = sqlc.arg(claim_token)::text;
 
+-- name: RenewMediaAuthorityObligationLease :execrows
+-- A compile in flight extends its lease on the obligation and on the target's
+-- claim row, so the lease stays short and a worker that stopped without
+-- settling holds its target only until the lease lapses. Only the claim that
+-- compiles may renew; a lapsed lease is never revived. A fold that re-armed the
+-- row mid-compile keeps the lease and the token, so it is renewed as well.
+WITH renewed_claim AS (
+    UPDATE commodore.media_authority_target_claims AS claim
+    SET lease_expires_at = NOW() + sqlc.arg(lease_ms)::bigint * INTERVAL '1 millisecond'
+    WHERE claim.target_key = sqlc.arg(target_key)
+      AND claim.lane = sqlc.arg(lane)
+      AND claim.claim_token::text = sqlc.arg(claim_token)::text
+      AND claim.lease_expires_at > NOW()
+)
+UPDATE commodore.media_authority_refresh_obligations AS obligation
+SET lease_expires_at = NOW() + sqlc.arg(lease_ms)::bigint * INTERVAL '1 millisecond'
+WHERE obligation.target_key = sqlc.arg(target_key)
+  AND obligation.lane = sqlc.arg(lane)
+  AND obligation.claim_token::text = sqlc.arg(claim_token)::text
+  AND obligation.lease_expires_at > NOW();
+
 -- name: CompleteMediaAuthorityObligation :execrows
 UPDATE commodore.media_authority_refresh_obligations
 SET status = 'completed', lease_expires_at = NULL, claim_token = NULL, last_error = NULL, updated_at = NOW()
@@ -1424,6 +1445,14 @@ SET max_schema_version = EXCLUDED.max_schema_version,
         ELSE NULL END,
     attested_at = NOW(),
     updated_at = NOW()
+-- Every acknowledgement carries an attestation; an unchanged one rewrites the
+-- row at most every five minutes, and returns no row when it does not.
+WHERE commodore.media_cell_placement_capabilities.max_schema_version <> EXCLUDED.max_schema_version
+   OR commodore.media_cell_placement_capabilities.enforcement_ready <> EXCLUDED.enforcement_ready
+   OR commodore.media_cell_placement_capabilities.live_replicas <> EXCLUDED.live_replicas
+   OR commodore.media_cell_placement_capabilities.long_validity_ready <> EXCLUDED.long_validity_ready
+   OR commodore.media_cell_placement_capabilities.use_reports_ready <> EXCLUDED.use_reports_ready
+   OR commodore.media_cell_placement_capabilities.attested_at < NOW() - INTERVAL '5 minutes'
 RETURNING enforcement_ready, first_ready_at, activation_schema_version;
 
 -- name: MarkMediaCellPlacementActivated :exec

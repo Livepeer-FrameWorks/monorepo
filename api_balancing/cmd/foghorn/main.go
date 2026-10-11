@@ -1631,11 +1631,22 @@ func main() {
 	}
 	var commodoreDependentWorkers sync.Once
 	var placementCommodore atomic.Pointer[commodore.GRPCClient]
+	// The cell's placement capability goes to Commodore after each replica
+	// heartbeat that changes it, and when Commodore (re)connects, so readiness
+	// does not wait for Commodore's probe or the next acknowledgement.
+	capabilityReporter := localauthority.NewCellCapabilityReporter(func(ctx context.Context, capability localauthority.CellPlacementCapability) error {
+		current := placementCommodore.Load()
+		if current == nil {
+			return errors.New("commodore is not connected")
+		}
+		return current.ReportMediaCellPlacementCapability(ctx, mediaAuthorityCellID, capability.Proto())
+	}, logger)
 	onCommodoreConnected := func(client *commodore.GRPCClient) {
 		if client == nil {
 			return
 		}
 		placementCommodore.Store(client)
+		capabilityReporter.Nudge()
 		if authorityStore != nil {
 			authorityStore.SetRefreshRequester(func(ctx context.Context) error {
 				refreshErr := authorityStore.Reconcile(ctx, client.RequestMediaAuthorityReplayIfDrifted)
@@ -1847,7 +1858,7 @@ func main() {
 		// The heartbeat records this replica's enforcement state as it stands now;
 		// a replica without the placement destination reports itself as not
 		// enforcing and thereby withholds the cell's attestation.
-		go authorityStore.RunReplicaHeartbeat(context.Background(), instanceID, version.Version, logger)
+		go authorityStore.RunReplicaHeartbeat(context.Background(), instanceID, version.Version, capabilityReporter, logger)
 	}
 
 	// Wire the cross-cluster artifact resolver so RelayResolve can

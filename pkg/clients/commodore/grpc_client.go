@@ -14,6 +14,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
 	foghorncontrolpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 
@@ -294,6 +295,14 @@ func (c *GRPCClient) FetchMediaAuthority(ctx context.Context, req *commodorepb.F
 // ReportMediaAuthorityUse reports the authorities this cell decided on.
 func (c *GRPCClient) ReportMediaAuthorityUse(ctx context.Context, controlCellID string, uses []*commodorepb.MediaAuthorityUse) error {
 	_, err := c.internal.ReportMediaAuthorityUse(ctx, &commodorepb.ReportMediaAuthorityUseRequest{ControlCellId: controlCellID, Uses: uses})
+	return err
+}
+
+// ReportMediaCellPlacementCapability asks Commodore to record this cell's
+// placement capability now. Commodore reads the attestation back from the cell;
+// Unimplemented means a Commodore release without the report.
+func (c *GRPCClient) ReportMediaCellPlacementCapability(ctx context.Context, controlCellID string, capability *foghornpb.MediaCellPlacementCapability) error {
+	_, err := c.internal.ReportMediaCellPlacementCapability(ctx, &commodorepb.ReportMediaCellPlacementCapabilityRequest{ControlCellId: controlCellID, Capability: capability})
 	return err
 }
 

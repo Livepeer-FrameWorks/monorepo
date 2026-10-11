@@ -1560,7 +1560,9 @@ incident:
 - **What is in use** — authorities by renewal state, with `dormant` meaning nobody
   has used the object for thirty days so it is no longer renewed or kept in
   cells; the authorities still in use whose version ran out (there should be
-  none); recorded use; and what each cell attested.
+  none); recorded use; what each cell attested; and, per cell, how many of the
+  tenants it holds are still below placement schema 2 (a cell that enforces
+  placement refuses their streams).
 - **Delivery health** — deliveries waiting per cell, split into fresh and replayed,
   unacknowledged deliveries against the current version, index validity, and the
   measured plan of the short-lease claim predicate.
@@ -1575,8 +1577,9 @@ it was issued.
 `frameworks cluster doctor` runs the pass/fail form of the same state as its
 **Media authority convergence** check: unhealthy when a refresh target is parked,
 a refresh or a current delivery has been stuck for more than five minutes, a cell
-refuses the current version, or an authority that is still in use is past its
-validity. A fan-out backlog older than an hour and a cell that is not forgetting
+refuses the current version, an authority that is still in use is past its
+validity, or a cell that attests placement enforcement still holds a tenant
+below placement schema 2 (named per cell). A fan-out backlog older than an hour and a cell that is not forgetting
 expired authorities are warnings. It probes Commodore and every cell's Foghorn
 database; a database or a count it could not read is reported as degraded, never
 as healthy.

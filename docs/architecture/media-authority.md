@@ -102,7 +102,11 @@ snapshot, and two lanes can both pass it before either commits. Writing one
 row serializes them — on PostgreSQL the second waits and then sees the first's
 claim; under Yugabyte's snapshot isolation the second fails and the next pass
 sees it. Folds keep a live obligation lease because a fold flips the row to
-pending while its compile is still running. Without this, an event compile and a
+pending while its compile is still running. Event and bulk leases are ten
+seconds, renewed every third of that on the obligation and the claim row while
+the compile runs, so a replica that stops mid-compile (a restart, or a claim
+that committed after its caller gave up) holds the target for at most one
+lease, and a change that folded into its row runs within seconds. Without this, an event compile and a
 renewal of the same authority both run, and the compile fence discards one after
 its source reads and signing. Each claim carries a fresh token on the
 obligation and the claim row, and every settlement and release requires it: a

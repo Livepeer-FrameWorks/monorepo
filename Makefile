@@ -1161,7 +1161,7 @@ SCHEMA_VERIFY_CLICKHOUSE_TESTS := TestClickHouseServiceCapabilitiesExecute|TestC
 MIGRATION_PRECHECK_REALPG_TESTS := TestMigrationPrecheckRefusesDuplicateFingerprints_RealPG
 MIGRATION_PRECHECK_REALYB_TESTS := TestMigrationPrecheckRefusesDuplicateFingerprints_RealYugabyte
 SCHEMA_VERIFY_POSTGRES_TESTS := $(SCHEMA_VERIFY_POSTGRES_TESTS)|$(MIGRATION_PRECHECK_REALPG_TESTS)
-CLI_CMD_REALPG_TESTS := TestPostExpandReportAgainstQuartermasterRealPG
+CLI_CMD_REALPG_TESTS := TestPostExpandReportAgainstQuartermasterRealPG|TestMediaAuthorityDoctorLegacySchemaTenantsRealPG
 YUGABYTE_SCHEMA_DATABASES := bosun commodore foghorn lookout navigator periscope purser quartermaster skipper
 SCHEMA_VERIFY_YUGABYTE_STATIC_TESTS := $(SCHEMA_VERIFY_COMMON_TESTS)|TestYugabyteDatabaseSelection
 SCHEMA_VERIFY_YUGABYTE_COMPAT_TESTS := TestYugabyteTaggedMigrationPaths|TestYugabyteCurrentBaselinesAndCapabilities
@@ -1225,7 +1225,7 @@ COMMODORE_PLACEMENT_REALYB_TESTS_B := TestMediaPlacementObjectPolicy_RealYugabyt
 COMMODORE_MEDIA_AUTHORITY_REALPG_TESTS := TestMediaAuthorityObligationQueue_RealPG|TestMediaAuthorityPublishesOnlyOnChange_RealPG|TestMediaAuthorityFollowsUse_RealPG|TestMediaAuthorityInUseDecision_RealPG|TestMediaAuthorityReconcileReissuesOncePerCompilerChange_RealPG|TestMediaAuthorityDeliveryQueue_RealPG|TestMediaAuthorityConvergenceInvariants_RealPG|TestMediaAuthorityRetention_RealPG
 COMMODORE_MEDIA_AUTHORITY_REALPG_TESTS := $(COMMODORE_MEDIA_AUTHORITY_REALPG_TESTS)|TestMediaAuthorityFirstPublicationRechecksParent_RealPG|TestMediaAuthorityCompileFailurePreservesAccess_RealPG|TestMediaAuthorityDeadlineClaimLoad_RealPG|TestMediaAuthorityLostDeliveryClaim_RealPG
 COMMODORE_MEDIA_AUTHORITY_REALYB_TESTS_C := TestMediaAuthorityObligationQueue_RealYugabyte|TestMediaAuthorityPublishesOnlyOnChange_RealYugabyte|TestMediaAuthorityFollowsUse_RealYugabyte|TestMediaAuthorityDeliveryQueue_RealYugabyte|TestMediaAuthorityRetention_RealYugabyte|TestMediaAuthorityQueueIndexesUseRangeSharding_RealYugabyte
-COMMODORE_MEDIA_AUTHORITY_REALYB_TESTS_D := TestMediaAuthorityInUseDecision_RealYugabyte|TestMediaAuthorityReconcileReissuesOncePerCompilerChange_RealYugabyte|TestMediaAuthorityConvergenceInvariants_RealYugabyte|TestMediaAuthorityFirstPublicationRechecksParent_RealYugabyte|TestMediaAuthorityCompileFailurePreservesAccess_RealYugabyte|TestMediaAuthorityDeadlineClaimLoad_RealYugabyte
+COMMODORE_MEDIA_AUTHORITY_REALYB_TESTS_D := TestMediaAuthorityLostDeliveryClaim_RealYugabyte|TestMediaAuthorityInUseDecision_RealYugabyte|TestMediaAuthorityReconcileReissuesOncePerCompilerChange_RealYugabyte|TestMediaAuthorityConvergenceInvariants_RealYugabyte|TestMediaAuthorityFirstPublicationRechecksParent_RealYugabyte|TestMediaAuthorityCompileFailurePreservesAccess_RealYugabyte|TestMediaAuthorityDeadlineClaimLoad_RealYugabyte
 COMMODORE_MEDIA_AUTHORITY_REALYB_TESTS := $(COMMODORE_MEDIA_AUTHORITY_REALYB_TESTS_C)|$(COMMODORE_MEDIA_AUTHORITY_REALYB_TESTS_D)
 YUGABYTE_HA_TESTS := TestYugabyteSmartDriverThreeNodeHA
 YUGABYTE_ROLE_ENGINE_TESTS := TestYugabyteRoleBoundsRuntimeSessions|TestYugabyteRoleAppliesEveryServiceBaseline|TestYugabyteRoleFreshInstallAppliesEveryMigration|TestYugabyteRoleUpgradeAppliesPendingMigrations|TestYugabyteRoleMigrationRerunConvergesAfterPartialFailure|TestYugabyteRoleMigrationReplaysOnlyTheStatementThatFailedRetryably|TestYugabyteRoleMigrationRefusesAbortedConcurrentIndex
@@ -1262,6 +1262,8 @@ verify-foghorn-test-selection: verify-commodore-placement-test-selection
 	@./scripts/check-go-test-selection.sh cli ./pkg/provisioner '$(CLI_PROVISIONER_REAL_ENGINE_TESTS)' '^Test' schema_verify
 	@./scripts/check-go-test-selection.sh api_control ./internal/grpc '$(COMMODORE_INGEST_CLAIM_REALPG_TESTS)' '^(TestValidateStreamKey_|TestSyncActiveIngestPlacement_|TestClearStreamActiveCluster_).*RealPG$$'
 	@./scripts/check-go-test-selection.sh api_control ./internal/grpc '$(COMMODORE_PLACEMENT_ACTIVATION_REALPG_TESTS)' '^TestPlacementActivation.*_RealPG$$'
+	@./scripts/check-go-test-selection.sh api_control ./internal/grpc '$(COMMODORE_CELL_CAPABILITY_REALPG_TESTS)' '^(TestRecordCapability_|TestCapabilityAck_|TestReportCapability_|TestObligationLease).*_RealPG$$'
+	@./scripts/check-go-test-selection.sh cli ./cmd '$(CLI_CMD_REALPG_TESTS)' 'RealPG$$'
 	@./scripts/check-go-test-selection.sh api_control ./internal/database/commodoredb '$(COMMODORE_QUERY_CATALOG_REALPG_TESTS)' 'RealPG$$'
 	@./scripts/check-go-test-selection.sh api_balancing ./internal/control '$(FOGHORN_CONTROL_REALPG_TESTS)' 'RealPG$$'
 	@./scripts/check-go-test-selection.sh api_balancing ./internal/grpc '$(FOGHORN_GRPC_REALPG_TESTS)' 'RealPG$$'
@@ -1761,11 +1763,12 @@ COMMODORE_PLACEMENT_REALPG_TESTS := ^TestMediaPlacement(Repository|Management|Op
 # selector on | and compares literal test names, so the drift guard can only
 # cover a family that is spelled out.
 COMMODORE_PLACEMENT_ACTIVATION_REALPG_TESTS := TestPlacementActivationSurvivesConcurrentAcknowledgements_RealPG|TestPlacementActivationWaitsForEveryCell_RealPG|TestPlacementActivationSerializesConcurrentDerivation_RealPG|TestPlacementActivationBacklogConvergesStrandedChange_RealPG|TestPlacementActivationBacklogRespectsOutstandingCells_RealPG|TestPlacementActivationBacklogPagesPastBlockedScopes_RealPG
+COMMODORE_CELL_CAPABILITY_REALPG_TESTS := TestRecordCapability_AbsentKeepsReadiness_RealPG|TestRecordCapability_ExplicitNonEnforcingDowngrades_RealPG|TestCapabilityAck_UnchangedNoWrite_RealPG|TestReportCapability_ReadyEnqueuesLegacyTenants_RealPG|TestReportCapability_ActivationNotHeldByAbandonedClaim_RealPG|TestObligationLeaseRenewal_RealPG
 
 .PHONY: verify-placement-db
 verify-placement-db:
 	@docker info >/dev/null 2>&1 || { echo "ERROR: verify-placement-db requires a running Docker daemon"; exit 1; }
-	@$(CONTRACT_GO_TEST) api_control postgres/commodore-placement -tags schema_verify -run '$(COMMODORE_PLACEMENT_REALPG_TESTS)|$(COMMODORE_PLACEMENT_ACTIVATION_REALPG_TESTS)' -count=1 -timeout 600s ./internal/grpc/
+	@$(CONTRACT_GO_TEST) api_control postgres/commodore-placement -tags schema_verify -run '$(COMMODORE_PLACEMENT_REALPG_TESTS)|$(COMMODORE_PLACEMENT_ACTIVATION_REALPG_TESTS)|^($(COMMODORE_CELL_CAPABILITY_REALPG_TESTS))$$' -count=1 -timeout 600s ./internal/grpc/
 	@$(CONTRACT_GO_TEST) api_control postgres/commodore-media-authority -tags schema_verify -run '^($(COMMODORE_MEDIA_AUTHORITY_REALPG_TESTS))$$' -count=1 -timeout 600s ./internal/grpc/
 
 verify-yugabyte-purser-contracts: verify-yugabyte-shared-fixture

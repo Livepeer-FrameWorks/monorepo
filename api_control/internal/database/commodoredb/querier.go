@@ -473,6 +473,12 @@ type Querier interface {
 	// row is processing again under its token, and that lease belongs to it.
 	ReleaseSupersededMediaAuthorityObligation(ctx context.Context, arg ReleaseSupersededMediaAuthorityObligationParams) (int64, error)
 	RelinkRefreshToken(ctx context.Context, arg RelinkRefreshTokenParams) error
+	// A compile in flight extends its lease on the obligation and on the target's
+	// claim row, so the lease stays short and a worker that stopped without
+	// settling holds its target only until the lease lapses. Only the claim that
+	// compiles may renew; a lapsed lease is never revived. A fold that re-armed the
+	// row mid-compile keeps the lease and the token, so it is renewed as well.
+	RenewMediaAuthorityObligationLease(ctx context.Context, arg RenewMediaAuthorityObligationLeaseParams) (int64, error)
 	// Repeats what the cell was sent, for a cell whose database was restored or
 	// rebuilt. The rows are marked as a replay, which the claim serves after fresh
 	// deliveries, and a version past its validity is left alone: the cell would
@@ -583,6 +589,8 @@ type Querier interface {
 	UpsertCurrentMediaAuthority(ctx context.Context, arg UpsertCurrentMediaAuthorityParams) (int64, error)
 	UpsertMediaAuthorityDistribution(ctx context.Context, arg UpsertMediaAuthorityDistributionParams) error
 	UpsertMediaAuthorityTarget(ctx context.Context, arg UpsertMediaAuthorityTargetParams) error
+	// Every acknowledgement carries an attestation; an unchanged one rewrites the
+	// row at most every five minutes, and returns no row when it does not.
 	UpsertMediaCellPlacementCapability(ctx context.Context, arg UpsertMediaCellPlacementCapabilityParams) (UpsertMediaCellPlacementCapabilityRow, error)
 	UpsertTenantMediaRetentionPolicy(ctx context.Context, arg UpsertTenantMediaRetentionPolicyParams) error
 	UserOwnsWallet(ctx context.Context, arg UserOwnsWalletParams) (bool, error)

@@ -60,7 +60,8 @@ func (s *FoghornGRPCServer) GetMediaCellPlacementCapability(ctx context.Context,
 
 // attestCellPlacementCapability rides on the acknowledgement so Commodore learns
 // cell capability from the same replica that durably applied the authority. A
-// failed ledger read acknowledges without attesting: absent means not ready.
+// failed ledger read acknowledges without attesting; Commodore keeps what the
+// cell attested last.
 func (s *FoghornGRPCServer) attestCellPlacementCapability(ctx context.Context) *foghornpb.MediaCellPlacementCapability {
 	if s.cellPlacementCapability == nil {
 		return nil
@@ -72,17 +73,7 @@ func (s *FoghornGRPCServer) attestCellPlacementCapability(ctx context.Context) *
 		}
 		return nil
 	}
-	if capability.LiveReplicas < 0 || capability.LiveReplicas > 1<<20 {
-		return nil
-	}
-	return &foghornpb.MediaCellPlacementCapability{
-		SupportedSchemaVersions: capability.SupportedSchemaVersions,
-		EnforcementReady:        capability.EnforcementReady,
-		LiveReplicas:            uint32(capability.LiveReplicas),
-		NodePlacementReady:      capability.NodePlacementReady,
-		LongValidityReady:       capability.LongValidityReady,
-		UseReportsReady:         capability.UseReportsReady,
-	}
+	return capability.Proto()
 }
 
 func mediaAuthorityStatus(err error) error {

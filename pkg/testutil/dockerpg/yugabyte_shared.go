@@ -52,9 +52,17 @@ func execSharedYugabyteAdmin(ctx context.Context, adminDSN, statement string) er
 // index). The databases a process still holds for reuse when it exits are dropped by run-go-contract-test.sh.
 func OpenSharedYugabyteBaseline(t testing.TB, prefix, database string) (*sql.DB, bool) {
 	t.Helper()
+	db, _, ok := OpenSharedYugabyteBaselineWithDSN(t, prefix, database)
+	return db, ok
+}
+
+// OpenSharedYugabyteBaselineWithDSN is OpenSharedYugabyteBaseline that also returns the database's DSN, for a test
+// that opens its own connections to the same database.
+func OpenSharedYugabyteBaselineWithDSN(t testing.TB, prefix, database string) (*sql.DB, string, bool) {
+	t.Helper()
 	baseDSN := strings.TrimSpace(os.Getenv(SharedYugabyteDSNEnv))
 	if baseDSN == "" {
-		return nil, false
+		return nil, "", false
 	}
 	pool := sharedBaselinePool(database)
 	var entry *sharedBaselineDatabase
@@ -98,7 +106,7 @@ func OpenSharedYugabyteBaseline(t testing.TB, prefix, database string) (*sql.DB,
 			t.Errorf("drop shared Yugabyte test database %s: %v", entry.name, err)
 		}
 	})
-	return db, true
+	return db, entry.dsn, true
 }
 
 // dropSharedYugabyteDatabase ends every session on a database that will not be handed out again and drops it.

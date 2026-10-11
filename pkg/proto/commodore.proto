@@ -13,6 +13,7 @@ import "cluster_peer.proto";
 import "tenant_limits.proto";
 import "metering_contract.proto";
 import "media_placement.proto";
+import "foghorn.proto";
 
 // ============================================================================
 // COMMODORE CONTROL PLANE - INTERNAL SERVICE APIs
@@ -333,6 +334,24 @@ service InternalService {
   // Foghorn reports the authorities it decided on, at most once per authority
   // per day. Commodore keeps renewing an object only while it is in use.
   rpc ReportMediaAuthorityUse(ReportMediaAuthorityUseRequest) returns (google.protobuf.Empty);
+
+  // Foghorn reports its cell's placement capability at startup, whenever it
+  // changes, when it (re)connects to Commodore, and at least every five
+  // minutes. The service token does not identify a cell, so Commodore records
+  // only the attestation it reads back from the named cell's Foghorn over its
+  // own authenticated channel; a report naming another cell can only make
+  // Commodore ask that cell. A cell that newly attests enforcement has its
+  // legacy-schema tenants queued for activation in the same transaction that
+  // records the attestation. Unavailable: the cell could not be asked or its
+  // answer not recorded; report again later.
+  rpc ReportMediaCellPlacementCapability(ReportMediaCellPlacementCapabilityRequest) returns (google.protobuf.Empty);
+}
+
+message ReportMediaCellPlacementCapabilityRequest {
+  string control_cell_id = 1;
+  // The reporting replica's view of the attestation. Commodore compares it
+  // with what it reads back and never records it directly.
+  foghorn.MediaCellPlacementCapability capability = 2;
 }
 
 message RequestMediaAuthorityRefreshRequest {

@@ -3016,6 +3016,48 @@ func (q *Queries) ReleaseSupersededMediaAuthorityObligation(ctx context.Context,
 	return result.RowsAffected()
 }
 
+const renewMediaAuthorityObligationLease = `-- name: RenewMediaAuthorityObligationLease :execrows
+WITH renewed_claim AS (
+    UPDATE commodore.media_authority_target_claims AS claim
+    SET lease_expires_at = NOW() + $1::bigint * INTERVAL '1 millisecond'
+    WHERE claim.target_key = $2
+      AND claim.lane = $3
+      AND claim.claim_token::text = $4::text
+      AND claim.lease_expires_at > NOW()
+)
+UPDATE commodore.media_authority_refresh_obligations AS obligation
+SET lease_expires_at = NOW() + $1::bigint * INTERVAL '1 millisecond'
+WHERE obligation.target_key = $2
+  AND obligation.lane = $3
+  AND obligation.claim_token::text = $4::text
+  AND obligation.lease_expires_at > NOW()
+`
+
+type RenewMediaAuthorityObligationLeaseParams struct {
+	LeaseMs    int64  `db:"lease_ms" json:"lease_ms"`
+	TargetKey  string `db:"target_key" json:"target_key"`
+	Lane       string `db:"lane" json:"lane"`
+	ClaimToken string `db:"claim_token" json:"claim_token"`
+}
+
+// A compile in flight extends its lease on the obligation and on the target's
+// claim row, so the lease stays short and a worker that stopped without
+// settling holds its target only until the lease lapses. Only the claim that
+// compiles may renew; a lapsed lease is never revived. A fold that re-armed the
+// row mid-compile keeps the lease and the token, so it is renewed as well.
+func (q *Queries) RenewMediaAuthorityObligationLease(ctx context.Context, arg RenewMediaAuthorityObligationLeaseParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, renewMediaAuthorityObligationLease,
+		arg.LeaseMs,
+		arg.TargetKey,
+		arg.Lane,
+		arg.ClaimToken,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const requeueCurrentMediaAuthoritiesForCell = `-- name: RequeueCurrentMediaAuthoritiesForCell :one
 WITH requeued AS (
     UPDATE commodore.media_authority_deliveries AS delivery
@@ -3458,6 +3500,12 @@ SET max_schema_version = EXCLUDED.max_schema_version,
         ELSE NULL END,
     attested_at = NOW(),
     updated_at = NOW()
+WHERE commodore.media_cell_placement_capabilities.max_schema_version <> EXCLUDED.max_schema_version
+   OR commodore.media_cell_placement_capabilities.enforcement_ready <> EXCLUDED.enforcement_ready
+   OR commodore.media_cell_placement_capabilities.live_replicas <> EXCLUDED.live_replicas
+   OR commodore.media_cell_placement_capabilities.long_validity_ready <> EXCLUDED.long_validity_ready
+   OR commodore.media_cell_placement_capabilities.use_reports_ready <> EXCLUDED.use_reports_ready
+   OR commodore.media_cell_placement_capabilities.attested_at < NOW() - INTERVAL '5 minutes'
 RETURNING enforcement_ready, first_ready_at, activation_schema_version
 `
 
@@ -3476,6 +3524,8 @@ type UpsertMediaCellPlacementCapabilityRow struct {
 	ActivationSchemaVersion int32        `db:"activation_schema_version" json:"activation_schema_version"`
 }
 
+// Every acknowledgement carries an attestation; an unchanged one rewrites the
+// row at most every five minutes, and returns no row when it does not.
 func (q *Queries) UpsertMediaCellPlacementCapability(ctx context.Context, arg UpsertMediaCellPlacementCapabilityParams) (UpsertMediaCellPlacementCapabilityRow, error) {
 	row := q.db.QueryRowContext(ctx, upsertMediaCellPlacementCapability,
 		arg.CellID,

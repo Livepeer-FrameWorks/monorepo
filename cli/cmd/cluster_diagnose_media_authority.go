@@ -421,6 +421,21 @@ FROM commodore.media_authority_use GROUP BY authority_kind ORDER BY authority_ki
 SELECT cell_id, max_schema_version, enforcement_ready, live_replicas, long_validity_ready, use_reports_ready, attested_at
 FROM commodore.media_cell_placement_capabilities ORDER BY cell_id;
 
+\echo == tenants per cell below placement schema 2 (a cell that enforces placement refuses their streams) ==
+SELECT target.cell_id,
+       COALESCE(capability.enforcement_ready AND capability.max_schema_version >= 2, FALSE) AS cell_enforces,
+       count(*) AS tenants,
+       count(*) FILTER (WHERE version.payload_schema_version < 2) AS below_schema_2
+FROM commodore.media_authority_targets AS target
+JOIN commodore.media_authority_current AS current
+  ON current.authority_kind = target.authority_kind AND current.authority_id = target.authority_id
+JOIN commodore.media_authority_versions AS version
+  ON version.authority_kind = current.authority_kind AND version.authority_id = current.authority_id
+ AND version.authority_version = current.authority_version
+LEFT JOIN commodore.media_cell_placement_capabilities AS capability ON capability.cell_id = target.cell_id
+WHERE target.authority_kind = 'tenant' AND NOT version.tombstone
+GROUP BY 1, 2 ORDER BY 1;
+
 \echo == deliveries waiting, per cell (replay = the cell asked to be sent everything again) ==
 SELECT cell_id, replay, status, count(*) AS deliveries, min(next_attempt_at) AS oldest_due, max(attempts) AS max_attempts
 FROM commodore.media_authority_deliveries

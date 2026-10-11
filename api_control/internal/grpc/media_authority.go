@@ -44,9 +44,11 @@ const (
 	mediaAuthorityReconcileInterval = time.Hour
 	mediaAuthorityValidity          = 24 * time.Hour
 	mediaAuthorityWorkerInterval    = time.Second
-	// Event and bulk refresh obligations hold their target for the compile's
-	// whole timeout.
-	mediaAuthorityObligationLease = 2 * time.Minute
+	// Event and bulk refresh obligations hold their target while the compile
+	// runs by renewing this lease; a compile that stopped without settling
+	// (a replica restarted mid-compile) releases its target when it lapses, so
+	// a readiness change that folded into the row is compiled within seconds.
+	mediaAuthorityObligationLease = 10 * time.Second
 	// An ordinary delivery's lease spans one attempt: the claim, the delivery,
 	// and recording its acknowledgement and, when that fails, its failure, plus
 	// a margin for the gaps between those steps. A lease past the attempt only

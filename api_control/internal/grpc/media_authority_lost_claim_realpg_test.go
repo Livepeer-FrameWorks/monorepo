@@ -15,6 +15,7 @@ import (
 
 	"frameworks/api_control/internal/database/commodoredb"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/testutil/dockerpg"
 	"github.com/lib/pq"
 )
 
@@ -93,6 +94,18 @@ func (c *lostResponseConn) QueryContext(ctx context.Context, query string, args 
 // stopped) must hold the delivery for no longer than about one attempt.
 func TestMediaAuthorityLostDeliveryClaim_RealPG(t *testing.T) {
 	db, dsn := startCommodoreRealPGWithDSN(t)
+	testMediaAuthorityLostDeliveryClaim(t, db, dsn)
+}
+
+func TestMediaAuthorityLostDeliveryClaim_RealYugabyte(t *testing.T) {
+	db, dsn, ok := dockerpg.OpenSharedYugabyteBaselineWithDSN(t, "lost_delivery_claim", "commodore")
+	if !ok {
+		t.Skip("requires make verify-placement-yugabyte-db")
+	}
+	testMediaAuthorityLostDeliveryClaim(t, db, dsn)
+}
+
+func testMediaAuthorityLostDeliveryClaim(t *testing.T, db *sql.DB, dsn string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	q := commodoredb.New(db)

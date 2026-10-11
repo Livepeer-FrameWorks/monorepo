@@ -212,9 +212,56 @@ func (s *CommodoreServer) processMediaAuthorityObligationLane(ctx context.Contex
 				rowCtx = context.WithValue(rowCtx, mediaAuthorityObligationLaneContextKey{}, row.Lane)
 				rowCtx = context.WithValue(rowCtx, mediaAuthorityCompileOutcomeContextKey{}, outcome)
 				rowCtx = withMediaAuthorityCompileMemo(rowCtx, memo)
-				s.settleMediaAuthorityObligation(row, outcome, s.compileMediaAuthorityObligation(rowCtx, row))
+				stopRenewing := s.renewMediaAuthorityObligationLease(rowCtx, row, lease)
+				compileErr := s.compileMediaAuthorityObligation(rowCtx, row)
+				stopRenewing()
+				s.settleMediaAuthorityObligation(row, outcome, compileErr)
 			}()
 		}
+	}
+}
+
+// renewMediaAuthorityObligationLease keeps the claim's lease alive while its
+// compile runs, renewing it every third of the lease. A lease therefore only
+// has to outlast one renewal gap, not the compile's whole timeout, and a
+// replica that stops mid-compile (restart, crash, a claim that committed after
+// its caller gave up) holds the target for at most one lease. The returned
+// function stops renewing and waits for a renewal in progress.
+func (s *CommodoreServer) renewMediaAuthorityObligationLease(ctx context.Context, row commodoredb.ClaimMediaAuthorityObligationsRow, lease time.Duration) func() {
+	renewCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(lease / 3)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-renewCtx.Done():
+				return
+			case <-ticker.C:
+			}
+			queryCtx, cancelQuery := context.WithTimeout(renewCtx, lease/3)
+			renewed, err := commodoredb.New(s.db).RenewMediaAuthorityObligationLease(queryCtx, commodoredb.RenewMediaAuthorityObligationLeaseParams{
+				LeaseMs: lease.Milliseconds(), TargetKey: row.TargetKey, Lane: row.Lane, ClaimToken: row.ClaimToken,
+			})
+			cancelQuery()
+			if renewCtx.Err() != nil {
+				return
+			}
+			if err != nil {
+				s.logger.WithError(err).WithFields(logging.Fields{"lane": row.Lane, "target": row.TargetKey}).Warn("Failed to renew a media authority refresh lease; another replica may compile the target concurrently")
+				continue
+			}
+			if renewed == 0 {
+				// The lease lapsed or another claim replaced it; the compile fence
+				// decides between the two compiles.
+				return
+			}
+		}
+	}()
+	return func() {
+		cancel()
+		<-done
 	}
 }
 

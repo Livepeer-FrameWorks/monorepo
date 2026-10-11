@@ -32,7 +32,9 @@ func checkManagedPlacement(ctx context.Context, reader managedPlacementReader, c
 // before the deterministic election, so a stream is never elected onto a node
 // its admission would refuse while a permitted node exists. Every Foghorn reads
 // the same signed pair, so the filtered election stays identical across peers.
-// A schema-1 pair keeps the input; missing or unreadable evidence is transient.
+// A schema-1 pair keeps the input on a replica that does not enforce placement
+// and is transient on one that does, as at admission; missing or unreadable
+// evidence is transient.
 func filterManagedNodesByPlacement(ctx context.Context, reader managedPlacementReader, row *commodorepb.ManagedStreamRow, nodes []eligibleNode, now time.Time) ([]eligibleNode, placementStatus) {
 	if reader == nil || len(nodes) == 0 {
 		return nodes, placementOK
@@ -49,7 +51,10 @@ func filterManagedNodesByPlacement(ctx context.Context, reader managedPlacementR
 	if err != nil || readCtx.Err() != nil {
 		return nil, placementTransient
 	}
-	if pair.Tenant.Authority.GetSchemaVersion() == sharedauthority.SchemaVersion && pair.Object.Authority.GetSchemaVersion() == sharedauthority.SchemaVersion {
+	if legacySchemaPair(pair) {
+		if localauthority.PlacementEnforced() {
+			return nil, placementTransient
+		}
 		return nodes, placementOK
 	}
 	authority, err := balancer.CompilePlacementAuthority(pair, placement.Ingest, now)
@@ -87,7 +92,14 @@ func checkManagedPlacementAdmission(ctx context.Context, reader managedPlacement
 	if err != nil || readCtx.Err() != nil {
 		return materializeTransient
 	}
-	if pair.Tenant.Authority.GetSchemaVersion() == sharedauthority.SchemaVersion && pair.Object.Authority.GetSchemaVersion() == sharedauthority.SchemaVersion {
+	// A schema-1 pair carries no policy. An enforcing replica's cell attested
+	// placement, so the tenant's policy-bearing authority is on its way; until
+	// it arrives the stream waits rather than materializing outside the
+	// tenant's residency rules.
+	if legacySchemaPair(pair) {
+		if localauthority.PlacementEnforced() {
+			return materializeTransient
+		}
 		return materializeOK
 	}
 	if streamCtx.GetTenantId() != row.GetTenantId() || streamCtx.GetStreamId() != row.GetStreamId() || streamCtx.GetInternalName() != row.GetInternalName() ||
