@@ -179,9 +179,12 @@ func doctorCapabilitiesForVersion(service string, engine pkgdatabase.Engine, tar
 	if targetVersion == "" {
 		return capabilities
 	}
+	// A release candidate applies its release's migrations, so it is held to
+	// that release's capabilities.
+	targetBase := releases.BaseVersion(targetVersion)
 	filtered := capabilities[:0]
 	for _, capability := range capabilities {
-		if capability.IntroducedIn == "" || releases.CompareSemver(capability.IntroducedIn, targetVersion) <= 0 {
+		if capability.IntroducedIn == "" || releases.CompareSemver(capability.IntroducedIn, targetBase) <= 0 {
 			filtered = append(filtered, capability)
 		}
 	}

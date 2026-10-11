@@ -44,6 +44,11 @@ func TestDoctorCapabilitiesRespectTargetRelease(t *testing.T) {
 	if len(current) != 4 {
 		t.Fatalf("v0.3.13 ClickHouse capabilities = %d, want 4", len(current))
 	}
+	// Staging v0.3.13-rc3: a release candidate carries its release's
+	// migrations, so the doctor must check that release's capabilities too.
+	if rc := doctorCapabilitiesForVersion("periscope-ingest", pkgdatabase.EngineClickHouse, "v0.3.13-rc3"); len(rc) != 4 {
+		t.Fatalf("v0.3.13-rc3 ClickHouse capabilities = %d, want 4", len(rc))
+	}
 	for _, name := range []string{"domain event projections", "network observations and snapshot rollups"} {
 		if !slices.ContainsFunc(current, func(capability pkgdatabase.Capability) bool { return capability.Name == name }) {
 			t.Errorf("v0.3.13 ClickHouse capabilities lack %q", name)
