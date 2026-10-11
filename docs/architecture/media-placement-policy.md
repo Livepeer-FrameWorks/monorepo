@@ -1086,9 +1086,11 @@ reevaluate that census after an exact destination refusal.
 `PlacementPolicyGate.Assess` uses that path for final admission of a connection that did not come
 through a coordinator. It reconstructs all cells from current signed authority, binds the incoming
 query to this cell's complete authorized cluster set, and checks that the exact node remains in the
-selected policy group. It rereads authority and ingest ownership after observation. A decision
-stands only on the snapshot it was made on: when owner consent, commercial facts or the active
-ingest cluster changed, the decision is made again on the newer snapshot, at most three rounds in
+selected policy group. Ingest ownership is read once per request, or supplied by a caller that
+already holds the publisher's claim or verified outage owner; each round rereads only the local
+authority pair after observation. A decision stands only on the snapshot it was made on: when owner
+consent, commercial facts or the signed outage owner changed, the decision is made again on the
+newer snapshot, at most three rounds in
 the three-second budget. Only a snapshot that forbids the node refuses it. Version counters that
 advanced with every other fact unchanged, such as the compilation a publisher's own ownership claim
 triggers, keep the decision and carry the newer versions. Authority that changes on every round
@@ -1342,9 +1344,14 @@ callback or DTSC change is introduced by this store.
 `ConnectedPlacementIngestFence` supplies the connected ownership read through Commodore's existing
 non-claiming stream-context API. It asserts no candidate cluster and takes no ingest lease. Tenant,
 exact signed live-stream object identity, push mode, admission and billing state must match before
-a missing active-cluster field can mean no current publisher. Denied/partial responses and
-control-plane failure remain unknown.
-This reader does not replace signed outage ownership or the final atomic publisher claim.
+a missing active-cluster field can mean no current publisher. Denied/partial responses and any
+other failure are refusals. A read is one attempt bounded to one second. When Commodore is
+unreachable (`Unavailable`, which includes an open circuit breaker, or a timeout), the reader
+returns the pair's signed outage owner as the ownership constraint, and a stream without one is
+refused. One `Unavailable`, or three consecutive timeouts, open a process-wide five-second backoff
+in which reads answer from the outage owner without asking Commodore.
+This reader does not replace the final atomic publisher claim or `PUSH_REWRITE`'s own outage-owner
+check.
 
 Every receipt operation atomically checks the engine identity, primary replication identity,
 eviction counter and Redis time. A restart, primary change, eviction or missing cell epoch fences

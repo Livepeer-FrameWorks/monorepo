@@ -28,6 +28,10 @@ type PlacementAdmissionInput struct {
 	Location                         *placement.Coordinates
 	// Optional paired versions bind owner-resolved source evidence to authority.
 	TenantAuthorityVersion, ObjectAuthorityVersion int64
+	// IngestOwnership is publisher ownership the caller already holds for
+	// ClusterID: its own Commodore claim, or the signed outage owner it
+	// verified against local authority. When set, admission reads no lease.
+	IngestOwnership PlacementIngestOwnership
 }
 
 // PlacementAdmissionDecision is a current exact-destination policy check, not a
@@ -61,6 +65,10 @@ func (gate *PlacementPolicyGate) Admit(ctx context.Context, input PlacementAdmis
 	if input.TenantAuthorityVersion < 0 || input.ObjectAuthorityVersion < 0 || (input.TenantAuthorityVersion == 0) != (input.ObjectAuthorityVersion == 0) {
 		return PlacementAdmissionDecision{}, status.Error(codes.InvalidArgument, "placement admission authority binding is incomplete")
 	}
+	if held := input.IngestOwnership; held.Source != "" && (input.Verb != placement.Ingest || held.Cluster != input.ClusterID ||
+		(held.Source != PlacementIngestOwnershipClaim && held.Source != PlacementIngestOwnershipOutageOwner)) {
+		return PlacementAdmissionDecision{}, status.Error(codes.InvalidArgument, "held ingest ownership is not this publisher's cluster")
+	}
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	if err := ctx.Err(); err != nil {
@@ -69,6 +77,13 @@ func (gate *PlacementPolicyGate) Admit(ctx context.Context, input PlacementAdmis
 	authority, err := gate.readAdmissionAuthority(ctx, input)
 	if err != nil {
 		return PlacementAdmissionDecision{}, err
+	}
+	// Ownership is read once for the whole admission; every round below
+	// decides on it.
+	if input.Verb == placement.Ingest && input.IngestOwnership.Source == "" {
+		if input.IngestOwnership, err = readIngestOwnership(ctx, gate.IngestFence, authority); err != nil {
+			return PlacementAdmissionDecision{}, err
+		}
 	}
 	// Assessment reads authority again. When it no longer matches the snapshot
 	// this admission was built from, the admission is re-made on the newer
@@ -148,8 +163,8 @@ func (gate *PlacementPolicyGate) admitOn(ctx context.Context, input PlacementAdm
 	if authority.ExpiresAt.Before(until) {
 		until = authority.ExpiresAt
 	}
-	checked, err := gate.Validate(ctx, &pb.PreparePlacementRequest{Query: query, ClusterId: input.ClusterID, NodeId: input.NodeID,
-		AttemptId: attempt, ExpiresAt: timestamppb.New(until)})
+	checked, err := gate.validate(ctx, &pb.PreparePlacementRequest{Query: query, ClusterId: input.ClusterID, NodeId: input.NodeID,
+		AttemptId: attempt, ExpiresAt: timestamppb.New(until)}, input.IngestOwnership)
 	if err != nil {
 		return PlacementAdmissionDecision{}, err
 	}

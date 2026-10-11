@@ -2969,6 +2969,9 @@ func (s *FoghornGRPCServer) resolveLiveViewerEndpoint(ctx context.Context, req *
 		if errors.Is(prepareErr, control.ErrLiveSourceOffline) {
 			return nil, grpcutil.StreamOfflineError()
 		}
+		if control.ClassifyViewerPlacementError(prepareErr) == control.ViewerPlacementDenied {
+			return nil, status.Errorf(codes.PermissionDenied, "viewer placement denied: %v", prepareErr)
+		}
 		return nil, status.Errorf(codes.Unavailable, "viewer placement unavailable: %v", prepareErr)
 	}
 	s.emitRoutingEvent(response.Primary, lat, lon, 0, 0, internalName, tenantID, streamID, "", originClusterID, float32(time.Since(start).Milliseconds()), 1, "grpc_resolve", "grpc")
@@ -3121,7 +3124,11 @@ func (s *FoghornGRPCServer) resolveArtifactViewerEndpoint(ctx context.Context, r
 			// yet. codes.Unavailable; caller retries at the app layer.
 			return nil, status.Error(codes.Unavailable, err.Error())
 		}
-		// A serving-policy refusal is retryable and is not a missing artifact.
+		// A signed or policy refusal is reported as such; any other serving
+		// placement failure is retryable and is not a missing artifact.
+		if control.ClassifyViewerPlacementError(err) == control.ViewerPlacementDenied {
+			return nil, status.Errorf(codes.PermissionDenied, "viewer placement denied: %v", err)
+		}
 		if errors.Is(err, control.ErrStoredMediaPlacementUnavailable) {
 			return nil, status.Error(codes.Unavailable, err.Error())
 		}

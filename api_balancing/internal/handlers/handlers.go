@@ -6,8 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"google.golang.org/grpc/codes"
-	grpcstatus "google.golang.org/grpc/status"
 	"math"
 	"net/http"
 	"net/url"
@@ -2499,11 +2497,17 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 			"internal_name": contentID,
 			"content_type":  contentType,
 		}).Error("Failed to resolve viewer endpoint")
-		// A policy refusal is not a resolution failure: stored media reports it
-		// with the same retryable placement code the live lane uses, so a client
-		// distinguishes "not permitted here" from "this content is broken".
-		if grpcstatus.Code(err) == codes.PermissionDenied {
+		// A policy refusal is not a resolution failure: every content type
+		// reports it with the same placement code, so a client distinguishes
+		// "not permitted here" from "this content is broken". Authority that has
+		// not arrived or an unavailable dependency is retried after a short wait.
+		switch control.ClassifyViewerPlacementError(err) {
+		case control.ViewerPlacementDenied:
 			respondPlaybackError(c, http.StatusForbidden, "PLAYBACK_PLACEMENT_DENIED", "Playback of this content is not permitted from any available destination", nil)
+			return
+		case control.ViewerPlacementNotReady:
+			c.Header("Retry-After", strconv.Itoa(control.ViewerPlacementRetryAfterSeconds))
+			respondPlaybackError(c, http.StatusServiceUnavailable, "PLAYBACK_PLACEMENT_UNAVAILABLE", "No permitted playback destination is available; retry safely", nil)
 			return
 		}
 		if contentType == "live" || errors.Is(err, control.ErrStoredMediaPlacementUnavailable) {

@@ -19,6 +19,68 @@ func (fn placementStreamContextFunc) ResolveStreamContext(ctx context.Context, s
 	return fn(ctx, stream, playback, internal, cluster)
 }
 
+func fenceCluster(ctx context.Context, reader *ConnectedPlacementIngestFence, identity PlacementIngestIdentity) (string, error) {
+	ownership, err := reader.IngestOwnership(ctx, identity)
+	if err == nil && ownership.Source != PlacementIngestOwnershipConnected {
+		return "", errors.New("ownership did not come from a connected read: " + string(ownership.Source))
+	}
+	return ownership.Cluster, err
+}
+
+// An unreachable Commodore yields the signed outage owner, and the outage
+// backoff answers following requests without asking Commodore until it lapses.
+// A slow answer opens the backoff only after consecutive timeouts.
+func TestConnectedPlacementIngestFenceFallsBackToSignedOutageOwner(t *testing.T) {
+	for _, failure := range []codes.Code{codes.Unavailable, codes.DeadlineExceeded} {
+		t.Run(failure.String(), func(t *testing.T) {
+			now := time.Unix(1800000000, 0)
+			reads := 0
+			answer := failure
+			reader := &ConnectedPlacementIngestFence{Now: func() time.Time { return now },
+				Client: placementStreamContextFunc(func(context.Context, string, string, string, string) (*commodorepb.ResolveStreamContextResponse, error) {
+					reads++
+					if answer == codes.OK {
+						return &commodorepb.ResolveStreamContextResponse{Admitted: true, TenantId: "tenant", StreamId: "stream", InternalName: "internal", IngestMode: "push", ActiveIngestClusterId: proto.String("eu")}, nil
+					}
+					return nil, status.Error(answer, "commodore unreachable")
+				})}
+			identity := PlacementIngestIdentity{TenantID: "tenant", ObjectID: sharedauthority.LiveStreamAuthorityID("stream"), InternalName: "internal", OutageIngestClusterID: "us"}
+			wantReadsBeforeBackoff := 1
+			if failure == codes.DeadlineExceeded {
+				wantReadsBeforeBackoff = placementIngestOwnershipTimeoutsToBackOff
+			}
+			for range wantReadsBeforeBackoff + 2 {
+				ownership, err := reader.IngestOwnership(context.Background(), identity)
+				if err != nil || ownership != (PlacementIngestOwnership{Cluster: "us", Source: PlacementIngestOwnershipOutageOwner}) {
+					t.Fatalf("unreachable Commodore = %+v, %v; want signed outage owner", ownership, err)
+				}
+			}
+			if reads != wantReadsBeforeBackoff {
+				t.Fatalf("Commodore reads = %d, want %d before the outage backoff answers", reads, wantReadsBeforeBackoff)
+			}
+			now = now.Add(placementIngestOwnershipOutageBackoff)
+			answer = codes.OK
+			ownership, err := reader.IngestOwnership(context.Background(), identity)
+			if err != nil || ownership != (PlacementIngestOwnership{Cluster: "eu", Source: PlacementIngestOwnershipConnected}) || reads != wantReadsBeforeBackoff+1 {
+				t.Fatalf("after the backoff = %+v, %v, reads=%d; want Commodore's lease", ownership, err, reads)
+			}
+		})
+	}
+}
+
+func TestConnectedPlacementIngestFenceWithoutOutageOwnerFailsClosed(t *testing.T) {
+	reader := &ConnectedPlacementIngestFence{Client: placementStreamContextFunc(func(context.Context, string, string, string, string) (*commodorepb.ResolveStreamContextResponse, error) {
+		return nil, status.Error(codes.Unavailable, "commodore unreachable")
+	})}
+	for _, owner := range []string{"", " us"} {
+		ownership, err := reader.IngestOwnership(context.Background(), PlacementIngestIdentity{TenantID: "tenant", ObjectID: sharedauthority.LiveStreamAuthorityID("stream"),
+			InternalName: "internal", OutageIngestClusterID: owner})
+		if status.Code(err) != codes.Unavailable || ownership != (PlacementIngestOwnership{}) {
+			t.Fatalf("outage owner %q = %+v, %v; want Unavailable", owner, ownership, err)
+		}
+	}
+}
+
 func TestConnectedPlacementIngestFenceFollowsClientReplacement(t *testing.T) {
 	var current PlacementStreamContextClient
 	reads := 0
@@ -40,7 +102,7 @@ func TestConnectedPlacementIngestFenceFollowsClientReplacement(t *testing.T) {
 			})
 		}
 		before := reads
-		got, err := reader.ActiveIngestCluster(context.Background(), identity)
+		got, err := fenceCluster(context.Background(), reader, identity)
 		if reads != before+1 {
 			t.Fatal("request did not capture exactly one client snapshot")
 		}
@@ -55,7 +117,7 @@ func TestConnectedPlacementIngestFenceFollowsClientReplacement(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	before := reads
-	if _, err := reader.ActiveIngestCluster(ctx, identity); status.Code(err) != codes.Canceled || reads != before {
+	if _, err := fenceCluster(ctx, reader, identity); status.Code(err) != codes.Canceled || reads != before {
 		t.Fatal("canceled request consulted client provider")
 	}
 }
@@ -75,7 +137,7 @@ func TestConnectedPlacementIngestFenceIsScopedAndNonClaiming(t *testing.T) {
 			}
 			return response, nil
 		})}
-		got, err := reader.ActiveIngestCluster(context.Background(), PlacementIngestIdentity{TenantID: "tenant", ObjectID: sharedauthority.LiveStreamAuthorityID("stream"), InternalName: "internal"})
+		got, err := fenceCluster(context.Background(), reader, PlacementIngestIdentity{TenantID: "tenant", ObjectID: sharedauthority.LiveStreamAuthorityID("stream"), InternalName: "internal"})
 		if err != nil || got != response.GetActiveIngestClusterId() {
 			t.Fatalf("ownership=%q, %v", got, err)
 		}
@@ -121,8 +183,12 @@ func TestConnectedPlacementIngestFenceRejectsUnknownAndDeniedContext(t *testing.
 				}
 				return response, nil
 			})}
-			if got, err := reader.ActiveIngestCluster(ctx, PlacementIngestIdentity{TenantID: "tenant", ObjectID: sharedauthority.LiveStreamAuthorityID("stream"), InternalName: "internal"}); got != "" || err == nil {
-				t.Fatalf("invalid context became unowned: %q, %v", got, err)
+			// A signed outage owner is present, so only an unreachable
+			// Commodore could select it; a denied, mismatched or failed
+			// answer stays a refusal.
+			if got, err := fenceCluster(ctx, reader, PlacementIngestIdentity{TenantID: "tenant", ObjectID: sharedauthority.LiveStreamAuthorityID("stream"), InternalName: "internal",
+				OutageIngestClusterID: "us"}); got != "" || err == nil {
+				t.Fatalf("invalid context became owned or unowned: %q, %v", got, err)
 			}
 		})
 	}
@@ -135,7 +201,7 @@ func TestConnectedPlacementIngestFenceCancelledBeforeLookup(t *testing.T) {
 		t.Fatal("cancelled ownership read performed I/O")
 		return nil, nil
 	})}
-	if _, err := reader.ActiveIngestCluster(ctx, PlacementIngestIdentity{TenantID: "tenant", ObjectID: sharedauthority.LiveStreamAuthorityID("stream"), InternalName: "internal"}); err == nil {
+	if _, err := fenceCluster(ctx, reader, PlacementIngestIdentity{TenantID: "tenant", ObjectID: sharedauthority.LiveStreamAuthorityID("stream"), InternalName: "internal"}); err == nil {
 		t.Fatal("cancelled ownership read succeeded")
 	}
 }
@@ -177,7 +243,7 @@ func TestConnectedPlacementIngestFenceRequiresCompleteIdentityBeforeIO(t *testin
 		{ObjectID: sharedauthority.LiveStreamAuthorityID("stream"), InternalName: "internal"},
 		{TenantID: "tenant", ObjectID: sharedauthority.LiveStreamAuthorityID("stream")},
 	} {
-		if _, err := reader.ActiveIngestCluster(context.Background(), identity); err == nil {
+		if _, err := fenceCluster(context.Background(), reader, identity); err == nil {
 			t.Fatal("incomplete identity was accepted")
 		}
 	}

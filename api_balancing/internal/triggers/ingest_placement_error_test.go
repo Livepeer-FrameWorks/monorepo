@@ -25,7 +25,12 @@ func TestIngestPlacementErrorCodeSeparatesDenialFromTransientFailure(t *testing.
 	}{
 		{"policy_denied", status.Error(codes.PermissionDenied, "selected destination has no current placement permission"), ipcpb.IngestErrorCode_INGEST_ERROR_PLACEMENT_DENIED},
 		{"unsupported_protocol", unsupported, ipcpb.IngestErrorCode_INGEST_ERROR_PLACEMENT_DENIED},
-		{"observation_unavailable", status.Error(codes.Unavailable, "selected destination observation is unavailable"), ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL},
+		{"protocol_not_offered", federation.ErrProtocolNotOffered, ipcpb.IngestErrorCode_INGEST_ERROR_PLACEMENT_DENIED},
+		{"signed_authority_denies", fmt.Errorf("compile: %w", balancer.ErrPlacementAuthorityDenied), ipcpb.IngestErrorCode_INGEST_ERROR_PLACEMENT_DENIED},
+		// An unobservable destination or an unreachable dependency, such as
+		// Commodore without a signed outage owner, is retried on reconnect.
+		{"observation_unavailable", status.Error(codes.Unavailable, "selected destination observation is unavailable"), ipcpb.IngestErrorCode_INGEST_ERROR_TIMEOUT},
+		{"rpc_deadline", status.Error(codes.DeadlineExceeded, "slow"), ipcpb.IngestErrorCode_INGEST_ERROR_TIMEOUT},
 		{"incomplete_census", fmt.Errorf("%w: %w", balancer.ErrPlacementUnavailable, balancer.ErrPlacementObservationIncomplete), ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL},
 		{"authority_race", status.Error(codes.FailedPrecondition, "placement authority facts changed during revalidation"), ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL},
 		{"authority_kept_changing", fmt.Errorf("admission: %w", federation.ErrPlacementAuthorityChanged), ipcpb.IngestErrorCode_INGEST_ERROR_TIMEOUT},

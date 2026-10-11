@@ -41,6 +41,10 @@ type PlacementAuthority struct {
 	IngestMode             string
 	SourceGrants           map[string]PlacementSourceGrant
 	CommercialQuote        *placementpb.CommercialQuoteResponse
+	// OutageIngestClusterID is the signed cluster that alone may admit the
+	// publisher while Commodore's ownership lease cannot be read. Empty means
+	// no cluster may.
+	OutageIngestClusterID string
 }
 
 // Source grants are independent of destination preferences. An ingest-only
@@ -116,6 +120,7 @@ func compilePlacementAuthority(pair localauthority.PlacementPair, verb placement
 		TenantAuthorityVersion: pair.Tenant.Version, ObjectAuthorityVersion: pair.Object.Version,
 		ExpiresAt: pair.Tenant.ValidUntil, Clusters: make(map[string]PlacementClusterFacts),
 		ObjectKind: object.GetObjectKind(), IngestMode: object.GetLiveStream().GetIngestMode(), SourceGrants: make(map[string]PlacementSourceGrant),
+		OutageIngestClusterID: strings.TrimSpace(object.GetLiveStream().GetOutageIngestClusterId()),
 	}
 	if pair.Object.ValidUntil.Before(result.ExpiresAt) {
 		result.ExpiresAt = pair.Object.ValidUntil

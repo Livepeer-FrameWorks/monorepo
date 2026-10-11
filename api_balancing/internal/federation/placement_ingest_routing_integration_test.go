@@ -27,6 +27,8 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	goredis "github.com/redis/go-redis/v9"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -104,6 +106,9 @@ func ingestRoutingCells(t *testing.T, scenario, protocol string) (map[string]bal
 			MediaConsent: &placementpb.CapacityConsent{AllowIngest: true, AllowServe: true, AllowExternalSource: true},
 		})
 	}
+	if scenario == "commodore-down" {
+		pair.Object.Authority.GetLiveStream().OutageIngestClusterId = "eu"
+	}
 	if scenario == "official-denied" {
 		pair.Tenant.Authority.MediaPlacement.Ingest = &placementpb.Rules{SchemaVersion: 1, Constraints: &placementpb.Constraints{
 			Deny: []*placementpb.Selector{{Classes: []placementpb.ClusterClass{placementpb.ClusterClass_CLUSTER_CLASS_PLATFORM_OFFICIAL}}},
@@ -140,6 +145,9 @@ func ingestRoutingCells(t *testing.T, scenario, protocol string) (map[string]bal
 	reads := &atomic.Int64{}
 	fence := &ConnectedPlacementIngestFence{Client: placementStreamContextFunc(func(_ context.Context, stream, playback, internal, cluster string) (*commodorepb.ResolveStreamContextResponse, error) {
 		reads.Add(1)
+		if strings.HasPrefix(scenario, "commodore-down") {
+			return nil, status.Error(codes.Unavailable, "commodore is down")
+		}
 		if stream != "" || playback != "" || internal != "internal" || cluster != "" || scenario == "owner-unknown" {
 			return nil, errors.New("ownership unavailable or claiming lookup")
 		}

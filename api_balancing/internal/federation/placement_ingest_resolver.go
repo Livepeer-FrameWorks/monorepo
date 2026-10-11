@@ -55,17 +55,20 @@ func (resolver *IngestPlacementResolver) PrepareIngest(ctx context.Context, requ
 	if authority.TenantID != identity.TenantID || authority.ObjectID != identity.ObjectID || authority.InternalName != identity.InternalName || authority.IngestMode != "push" {
 		return balancer.PlacementPreparationResult{}, errors.New("ingest placement authority identity differs")
 	}
+	// Ownership is read once per request; while Commodore is unreachable it is
+	// the signed outage owner, so the publisher is sent only where it can be
+	// admitted.
+	ownership, err := readIngestOwnership(ctx, resolver.Fence, authority)
+	if err != nil {
+		return balancer.PlacementPreparationResult{}, err
+	}
 	// A route stands only on the snapshot it was decided on. A snapshot that
 	// changed while routing is routed again, so only a policy that forbids
 	// every destination refuses the publisher.
 	for round := 1; ; round++ {
-		owner, err := resolver.Fence.ActiveIngestCluster(ctx, identity)
-		if err != nil {
-			return balancer.PlacementPreparationResult{}, err
-		}
 		result, err := resolver.Router.Route(ctx, balancer.PlacementRouteRequest{TenantID: authority.TenantID, ObjectID: authority.ObjectID, InternalName: authority.InternalName,
 			Verb: placement.Ingest, Protocol: request.Protocol, Policy: authority.Policy, PolicyDigest: authority.PolicyDigest, PolicyRevision: authority.PolicyRevision,
-			ParentRevision: authority.ParentRevision, Cells: authority.Cells, Location: request.Location, ActiveIngestClusterID: owner,
+			ParentRevision: authority.ParentRevision, Cells: authority.Cells, Location: request.Location, ActiveIngestClusterID: ownership.Cluster,
 			ArrivalClusterIDs:      control.ServedClustersSnapshot(),
 			TenantAuthorityVersion: authority.TenantAuthorityVersion, ObjectAuthorityVersion: authority.ObjectAuthorityVersion})
 		if err != nil {
@@ -75,14 +78,17 @@ func (resolver *IngestPlacementResolver) PrepareIngest(ctx context.Context, requ
 		if err != nil {
 			return balancer.PlacementPreparationResult{}, err
 		}
-		if err := ctx.Err(); err != nil {
-			return balancer.PlacementPreparationResult{}, err
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return balancer.PlacementPreparationResult{}, ctxErr
 		}
 		if placementDecisionFactsEqual(authority, current) {
 			return result.Preparation, nil
 		}
 		if round == placementAuthorityRounds {
 			return balancer.PlacementPreparationResult{}, &placementAuthorityChangedError{rounds: round}
+		}
+		if ownership, err = ownership.under(current); err != nil {
+			return balancer.PlacementPreparationResult{}, err
 		}
 		authority = current
 	}

@@ -16,6 +16,8 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/placement"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
+	"google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 )
 
 func TestPreparedViewerHTTPResolvesRequestedManifestBeforePreparation(t *testing.T) {
@@ -180,6 +182,41 @@ func TestPreparedViewerHTTPReportsLiveSourceState(t *testing.T) {
 			}
 			if w.Code != tc.status || body.Code != tc.code || w.Header().Get("Retry-After") != tc.retryAfter || w.Header().Get("Location") != "" {
 				t.Fatalf("status=%d retry-after=%q body=%s", w.Code, w.Header().Get("Retry-After"), w.Body.String())
+			}
+		})
+	}
+}
+
+// A signed refusal is a 403 the client must not retry; authority that is not
+// ready or a dependency that is unavailable is a 503 retried after 2 s.
+func TestPreparedViewerHTTPMapsPlacementAuthorityErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		cause      error
+		status     int
+		code       string
+		retryAfter string
+	}{
+		{"authority denied", balancer.ErrPlacementAuthorityDenied, http.StatusForbidden, "PLAYBACK_PLACEMENT_DENIED", ""},
+		{"permission denied", grpcstatus.Error(codes.PermissionDenied, "policy refuses"), http.StatusForbidden, "PLAYBACK_PLACEMENT_DENIED", ""},
+		{"authority not ready", balancer.ErrPlacementAuthorityNotReady, http.StatusServiceUnavailable, "PLAYBACK_PLACEMENT_UNAVAILABLE", "2"},
+		{"unavailable", grpcstatus.Error(codes.Unavailable, "observation unavailable"), http.StatusServiceUnavailable, "PLAYBACK_PLACEMENT_UNAVAILABLE", "2"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setupPreparedViewerHTTP(t, false)
+			SetViewerPlacementPreparer(viewerPlacementFunc(func(context.Context, control.ViewerPlacementRequest) (balancer.PlacementPreparationResult, error) {
+				return balancer.PlacementPreparationResult{}, fmt.Errorf("prepare viewer: %w", tc.cause)
+			}))
+			c, w := playbackCtxArms(t, "public/hls/index.m3u8")
+			HandleGenericViewerPlayback(c)
+			var body struct {
+				Code string `json:"code"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			if w.Code != tc.status || body.Code != tc.code || w.Header().Get("Retry-After") != tc.retryAfter {
+				t.Fatalf("status=%d retry-after=%q body=%s; want %d %s retry-after=%q", w.Code, w.Header().Get("Retry-After"), w.Body.String(), tc.status, tc.code, tc.retryAfter)
 			}
 		})
 	}

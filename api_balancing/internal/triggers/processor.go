@@ -1622,7 +1622,8 @@ func (p *Processor) handleDVRLifecycleData(trigger *ipcpb.MistTrigger) (string, 
 // terminal for this publisher and node, from an observation, timing or
 // revalidation failure, which the publisher's reconnect resolves.
 func ingestPlacementErrorCode(err error) ipcpb.IngestErrorCode {
-	if errors.Is(err, mist.ErrUnsupportedIngestProtocol) || errors.Is(err, federation.ErrProtocolNotOffered) {
+	if errors.Is(err, mist.ErrUnsupportedIngestProtocol) || errors.Is(err, federation.ErrProtocolNotOffered) ||
+		errors.Is(err, balancer.ErrPlacementAuthorityDenied) {
 		return ipcpb.IngestErrorCode_INGEST_ERROR_PLACEMENT_DENIED
 	}
 	// Authority that kept changing through every decision round is not a
@@ -1637,7 +1638,9 @@ func ingestPlacementErrorCode(err error) ipcpb.IngestErrorCode {
 		switch st.Code() {
 		case codes.PermissionDenied:
 			return ipcpb.IngestErrorCode_INGEST_ERROR_PLACEMENT_DENIED
-		case codes.DeadlineExceeded:
+		// An unobservable destination or unreachable dependency is resolved
+		// by the publisher's reconnect.
+		case codes.DeadlineExceeded, codes.Unavailable:
 			return ipcpb.IngestErrorCode_INGEST_ERROR_TIMEOUT
 		}
 	}
@@ -1871,9 +1874,21 @@ func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (_ string, _ b
 	}
 	// Final publisher admission runs after the claim so a policy denial releases
 	// it through the deferred release above. The protocol is Mist's observed
-	// connector, never the publisher-controlled push URL.
+	// connector, never the publisher-controlled push URL. Ownership this trigger
+	// already proved is handed over so placement does not ask Commodore again:
+	// the claim Commodore reserved for this connection on ingestClusterID, or
+	// ingestClusterID verified above as the signed outage owner. A valid answer
+	// without a reservation (a re-fire refreshing its own claim) proves no
+	// claim by itself, so placement reads the lease once.
+	var ownership federation.PlacementIngestOwnership
+	switch {
+	case usedLocalAdmission:
+		ownership = federation.PlacementIngestOwnership{Cluster: ingestClusterID, Source: federation.PlacementIngestOwnershipOutageOwner}
+	case streamValidation.GetClaimAcquired():
+		ownership = federation.PlacementIngestOwnership{Cluster: ingestClusterID, Source: federation.PlacementIngestOwnershipClaim}
+	}
 	if _, placementErr := p.checkIngestPlacement(admissionCtx, streamValidation.GetTenantId(), streamValidation.GetInternalName(), ingestClusterID, trigger.GetNodeId(),
-		pushRewrite.GetObservedConnector(), pushRewrite.GetHostname()); placementErr != nil {
+		pushRewrite.GetObservedConnector(), pushRewrite.GetHostname(), ownership); placementErr != nil {
 		code := ingestPlacementErrorCode(placementErr)
 		p.logger.WithError(placementErr).WithFields(logging.Fields{"node_id": trigger.GetNodeId(), "ingest_cluster_id": ingestClusterID, "error_code": code.String()}).Warn("PUSH_REWRITE refused by ingest placement")
 		if errors.Is(placementErr, federation.ErrProtocolNotOffered) {

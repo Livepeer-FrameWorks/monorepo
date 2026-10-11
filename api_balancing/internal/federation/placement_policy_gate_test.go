@@ -20,8 +20,12 @@ import (
 
 type placementFenceFunc func(context.Context, string, string) (string, error)
 
-func (fn placementFenceFunc) ActiveIngestCluster(ctx context.Context, identity PlacementIngestIdentity) (string, error) {
-	return fn(ctx, identity.TenantID, identity.InternalName)
+func (fn placementFenceFunc) IngestOwnership(ctx context.Context, identity PlacementIngestIdentity) (PlacementIngestOwnership, error) {
+	cluster, err := fn(ctx, identity.TenantID, identity.InternalName)
+	if err != nil {
+		return PlacementIngestOwnership{}, err
+	}
+	return PlacementIngestOwnership{Cluster: cluster, Source: PlacementIngestOwnershipConnected}, nil
 }
 
 func TestPlacementPolicyGateRebuildsGlobalCensusFromAuthority(t *testing.T) {
@@ -202,7 +206,7 @@ func TestPlacementPolicyGateIngestRequiresCurrentOwnership(t *testing.T) {
 	if _, err = gate.Validate(context.Background(), req); err == nil {
 		t.Fatal("missing ownership reader treated as no active publisher")
 	}
-	for _, owner := range []string{"us", "", "empty", "unknown", "changed"} {
+	for _, owner := range []string{"us", "", "empty", "unknown"} {
 		calls := 0
 		gate.IngestFence = placementFenceFunc(func(_ context.Context, tenant, internal string) (string, error) {
 			calls++
@@ -212,15 +216,12 @@ func TestPlacementPolicyGateIngestRequiresCurrentOwnership(t *testing.T) {
 			if owner == "unknown" {
 				return "", errors.New("ownership store unavailable")
 			}
-			if owner == "changed" {
-				if calls == 1 {
-					return "us", nil
-				}
-				return "empty", nil
-			}
 			return owner, nil
 		})
 		result, checkErr := gate.Validate(context.Background(), req)
+		if calls != 1 {
+			t.Fatalf("ownership %q read %d times, want once per request", owner, calls)
+		}
 		if owner == "us" || owner == "" {
 			if checkErr != nil || result.Choice.NodeID != req.NodeId {
 				t.Fatalf("active owner rejected: %v, %v", result, checkErr)

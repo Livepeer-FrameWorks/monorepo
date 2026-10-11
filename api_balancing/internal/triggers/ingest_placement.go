@@ -26,6 +26,10 @@ import (
 type IngestPlacementConnection struct {
 	TenantID, InternalName, ClusterID, NodeID string
 	Connector, PublisherAddress               string
+	// Ownership is what PUSH_REWRITE already established for ClusterID: the
+	// Commodore claim this connection holds, or the signed outage owner it
+	// verified while Commodore was unreachable.
+	Ownership federation.PlacementIngestOwnership
 }
 
 type IngestPlacementAdmission func(context.Context, IngestPlacementConnection) (federation.PlacementAdmissionDecision, error)
@@ -59,7 +63,7 @@ func (p *Processor) ConfigureLiveIngestPlacementAdmission(runtime *federation.Li
 
 // checkIngestPlacement runs after the claim so a policy denial releases it. The
 // protocol comes from Mist's observed connector; a missing attestation denies.
-func (p *Processor) checkIngestPlacement(ctx context.Context, tenantID, internalName, clusterID, nodeID, connector, publisherAddress string) (*federation.PlacementAdmissionDecision, error) {
+func (p *Processor) checkIngestPlacement(ctx context.Context, tenantID, internalName, clusterID, nodeID, connector, publisherAddress string, ownership federation.PlacementIngestOwnership) (*federation.PlacementAdmissionDecision, error) {
 	if p.ingestPlacementAdmission == nil {
 		return nil, errors.New("ingest placement admission is unavailable")
 	}
@@ -75,7 +79,7 @@ func (p *Processor) checkIngestPlacement(ctx context.Context, tenantID, internal
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	decision, err := p.ingestPlacementAdmission(ctx, IngestPlacementConnection{TenantID: tenantID, InternalName: internalName, ClusterID: clusterID, NodeID: nodeID,
-		Connector: connector, PublisherAddress: publisherAddress})
+		Connector: connector, PublisherAddress: publisherAddress, Ownership: ownership})
 	if err != nil {
 		return nil, err
 	}
@@ -162,7 +166,7 @@ func (adapter *IngestPlacementAdapter) AdmitPublisher(ctx context.Context, conne
 	// not bound to the versions of this lookup: the authority advance that the
 	// publisher's own ownership claim causes must not refuse it.
 	input := federation.PlacementAdmissionInput{TenantID: connection.TenantID, ObjectID: authority.ObjectID, InternalName: connection.InternalName,
-		ClusterID: connection.ClusterID, NodeID: connection.NodeID, Protocol: protocol, Verb: placement.Ingest}
+		ClusterID: connection.ClusterID, NodeID: connection.NodeID, Protocol: protocol, Verb: placement.Ingest, IngestOwnership: connection.Ownership}
 	if address, parseErr := netip.ParseAddr(connection.PublisherAddress); parseErr == nil && adapter.GeoIP != nil {
 		if found := geoip.LookupCached(ctx, adapter.GeoIP, adapter.GeoCache, address.Unmap().String()); found != nil {
 			input.Location = &placement.Coordinates{Latitude: found.Latitude, Longitude: found.Longitude}

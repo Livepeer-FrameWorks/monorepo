@@ -107,3 +107,29 @@ func TestGRPCViewerReportsTypedLiveSourceState(t *testing.T) {
 		})
 	}
 }
+
+// A signed refusal surfaces as PermissionDenied; authority that is not ready
+// or an unavailable dependency stays Unavailable for the caller to retry.
+func TestGRPCViewerMapsPlacementAuthorityErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		cause error
+		code  codes.Code
+	}{
+		{"authority denied", balancer.ErrPlacementAuthorityDenied, codes.PermissionDenied},
+		{"permission denied", status.Error(codes.PermissionDenied, "policy refuses"), codes.PermissionDenied},
+		{"authority not ready", balancer.ErrPlacementAuthorityNotReady, codes.Unavailable},
+		{"unavailable", status.Error(codes.Unavailable, "observation unavailable"), codes.Unavailable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &FoghornGRPCServer{}
+			s.SetViewerPlacementPreparer(viewerPlacementFunc(func(context.Context, control.ViewerPlacementRequest) (balancer.PlacementPreparationResult, error) {
+				return balancer.PlacementPreparationResult{}, fmt.Errorf("prepare viewer: %w", tc.cause)
+			}))
+			_, err := s.resolveLiveViewerEndpoint(t.Context(), &sharedpb.ViewerEndpointRequest{ContentId: "public", Protocol: "hls"}, math.NaN(), math.NaN(), "live+internal", "tenant", "stream", "eu", nil, "eu", "", false)
+			if status.Code(grpcutil.SanitizeError(err)) != tc.code {
+				t.Fatalf("got %v, want %s", err, tc.code)
+			}
+		})
+	}
+}

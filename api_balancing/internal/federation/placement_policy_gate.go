@@ -17,18 +17,21 @@ import (
 )
 
 // PlacementIngestFenceReader returns the current ownership constraint, including
-// a verified empty result when no publisher holds a cluster. Unknown must error.
-// Final publisher admission still requires its atomic ownership claim.
+// a verified empty result when no publisher holds a cluster, or the signed
+// outage owner while that cannot be read. Unknown must error. Final publisher
+// admission still requires its atomic ownership claim or verified outage owner.
 type PlacementIngestFenceReader interface {
-	ActiveIngestCluster(context.Context, PlacementIngestIdentity) (string, error)
+	IngestOwnership(context.Context, PlacementIngestIdentity) (PlacementIngestOwnership, error)
 }
 
 // PlacementIngestIdentity binds the connected ownership read to the exact
-// signed object, not just a reusable internal stream name.
+// signed object, not just a reusable internal stream name, and carries that
+// object's signed outage owner from the same authority snapshot.
 type PlacementIngestIdentity struct {
-	TenantID     string
-	ObjectID     string
-	InternalName string
+	TenantID              string
+	ObjectID              string
+	InternalName          string
+	OutageIngestClusterID string
 }
 
 // ErrProtocolNotOffered reports that the destination node does not advertise
@@ -36,9 +39,9 @@ type PlacementIngestIdentity struct {
 // same connection retried on that node is refused again.
 var ErrProtocolNotOffered = errors.New("protocol not offered by this node")
 
-// ErrPlacementAuthorityChanged reports that signed authority or ingest
-// ownership changed on every decision round. Each round re-decides on the
-// newer snapshot, so this is not a refusal by policy; the caller retries.
+// ErrPlacementAuthorityChanged reports that signed authority changed on every
+// decision round. Each round re-decides on the newer snapshot, so this is not a
+// refusal by policy; the caller retries.
 var ErrPlacementAuthorityChanged = errors.New("placement authority kept changing while the decision was made")
 
 // placementAuthorityRounds bounds how often one decision is re-made on a newer
@@ -111,7 +114,11 @@ type PlacementPolicyValidation struct {
 }
 
 func (gate *PlacementPolicyGate) Validate(ctx context.Context, req *placementpb.PreparePlacementRequest) (PlacementPolicyValidation, error) {
-	result, err := gate.Assess(ctx, req)
+	return gate.validate(ctx, req, PlacementIngestOwnership{})
+}
+
+func (gate *PlacementPolicyGate) validate(ctx context.Context, req *placementpb.PreparePlacementRequest, held PlacementIngestOwnership) (PlacementPolicyValidation, error) {
+	result, err := gate.assess(ctx, req, held)
 	if err != nil {
 		return PlacementPolicyValidation{}, err
 	}
@@ -131,6 +138,13 @@ func (gate *PlacementPolicyGate) Validate(ctx context.Context, req *placementpb.
 // It evaluates the complete multi-cell census, because it serves final
 // admission of connections that did not come through a coordinator.
 func (gate *PlacementPolicyGate) Assess(ctx context.Context, req *placementpb.PreparePlacementRequest) (PlacementPolicyValidation, error) {
+	return gate.assess(ctx, req, PlacementIngestOwnership{})
+}
+
+// assess decides on ingest ownership read once for the request: held, when
+// the caller already holds it, else one fence read. Rounds re-read only the
+// local authority pair.
+func (gate *PlacementPolicyGate) assess(ctx context.Context, req *placementpb.PreparePlacementRequest, held PlacementIngestOwnership) (PlacementPolicyValidation, error) {
 	if gate == nil || gate.CellID == "" || gate.Authority == nil || gate.Router.Observe == nil {
 		return PlacementPolicyValidation{}, status.Error(codes.Unavailable, "placement policy revalidation is unavailable")
 	}
@@ -143,33 +157,32 @@ func (gate *PlacementPolicyGate) Assess(ctx context.Context, req *placementpb.Pr
 	if err != nil {
 		return PlacementPolicyValidation{}, err
 	}
-	activeCluster, err := gate.activeIngestCluster(ctx, authority)
+	ownership, err := gate.ingestOwnership(ctx, authority, held)
 	if err != nil {
 		return PlacementPolicyValidation{}, err
 	}
 	for round := 1; ; round++ {
-		route := gate.route(req, authority, activeCluster, authority.Cells)
+		route := gate.route(req, authority, ownership.Cluster, authority.Cells)
 		result, observationExpiry, err := gate.decide(ctx, req, route, false)
 		if err != nil {
 			return PlacementPolicyValidation{}, err
 		}
-		// Authority or ownership may change while other cells are being
-		// observed. A decision stands only on the snapshot it was made on;
-		// a changed snapshot is decided again, so only a policy that now
-		// forbids the destination refuses it.
+		// Authority may change while other cells are being observed. A
+		// decision stands only on the snapshot it was made on; a changed
+		// snapshot is decided again, so only a policy that now forbids the
+		// destination refuses it.
 		current, err := gate.readAuthority(ctx, req)
 		if err != nil {
 			return PlacementPolicyValidation{}, err
 		}
-		currentCluster, err := gate.activeIngestCluster(ctx, current)
-		if err != nil {
-			return PlacementPolicyValidation{}, err
-		}
-		if !placementDecisionFactsEqual(authority, current) || currentCluster != activeCluster {
+		if !placementDecisionFactsEqual(authority, current) {
 			if round == placementAuthorityRounds {
 				return PlacementPolicyValidation{}, &placementAuthorityChangedError{rounds: round}
 			}
-			authority, activeCluster = current, currentCluster
+			if ownership, err = ownership.under(current); err != nil {
+				return PlacementPolicyValidation{}, err
+			}
+			authority = current
 			continue
 		}
 		result.Request = req
@@ -215,12 +228,12 @@ func (gate *PlacementPolicyGate) CheckDestination(ctx context.Context, req *plac
 	}
 	local := proto.CloneOf(req)
 	local.Query = localQuery
-	activeCluster, err := gate.activeIngestCluster(ctx, authority)
+	ownership, err := gate.ingestOwnership(ctx, authority, PlacementIngestOwnership{})
 	if err != nil {
 		return PlacementPolicyValidation{}, err
 	}
 	cell := balancer.PlacementCell{ID: gate.CellID, ClusterIDs: localQuery.GetClusterIds()}
-	route := gate.route(local, authority, activeCluster, []balancer.PlacementCell{cell})
+	route := gate.route(local, authority, ownership.Cluster, []balancer.PlacementCell{cell})
 	result, observationExpiry, err := gate.decide(ctx, req, route, true)
 	if err != nil {
 		return PlacementPolicyValidation{}, err
@@ -348,14 +361,13 @@ func (gate *PlacementPolicyGate) readAuthority(ctx context.Context, req *placeme
 	return authority, nil
 }
 
-func (gate *PlacementPolicyGate) activeIngestCluster(ctx context.Context, authority balancer.PlacementAuthority) (string, error) {
-	if authority.Verb != placement.Ingest {
-		return "", nil
+// ingestOwnership uses ownership the caller holds without reading the fence;
+// held is bound to the same snapshot rules as a fence read.
+func (gate *PlacementPolicyGate) ingestOwnership(ctx context.Context, authority balancer.PlacementAuthority, held PlacementIngestOwnership) (PlacementIngestOwnership, error) {
+	if held.Source != "" {
+		return held.under(authority)
 	}
-	if gate.IngestFence == nil {
-		return "", status.Error(codes.Unavailable, "ingest ownership is unavailable")
-	}
-	return gate.IngestFence.ActiveIngestCluster(ctx, PlacementIngestIdentity{TenantID: authority.TenantID, ObjectID: authority.ObjectID, InternalName: authority.InternalName})
+	return readIngestOwnership(ctx, gate.IngestFence, authority)
 }
 
 func (gate *PlacementPolicyGate) now() time.Time {

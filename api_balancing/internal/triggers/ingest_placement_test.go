@@ -24,8 +24,12 @@ import (
 
 type ingestFenceFunc func(context.Context, federation.PlacementIngestIdentity) (string, error)
 
-func (f ingestFenceFunc) ActiveIngestCluster(ctx context.Context, identity federation.PlacementIngestIdentity) (string, error) {
-	return f(ctx, identity)
+func (f ingestFenceFunc) IngestOwnership(ctx context.Context, identity federation.PlacementIngestIdentity) (federation.PlacementIngestOwnership, error) {
+	cluster, err := f(ctx, identity)
+	if err != nil {
+		return federation.PlacementIngestOwnership{}, err
+	}
+	return federation.PlacementIngestOwnership{Cluster: cluster, Source: federation.PlacementIngestOwnershipConnected}, nil
 }
 
 func TestConfigureLiveIngestPlacementAdmissionUsesPublicRuntime(t *testing.T) {
@@ -119,7 +123,7 @@ func TestCheckIngestPlacementRequiresBoundDecision(t *testing.T) {
 			case "unsupported-connector":
 				connector = "DTSC"
 			}
-			decision, err := p.checkIngestPlacement(context.Background(), "tenant", "stream", "cluster", "node", connector, "203.0.113.5")
+			decision, err := p.checkIngestPlacement(context.Background(), "tenant", "stream", "cluster", "node", connector, "203.0.113.5", federation.PlacementIngestOwnership{})
 			switch scenario {
 			case "never-installed":
 				// Publisher admission has no unenforced mode: without an
@@ -180,6 +184,9 @@ func TestPushRewriteDeniedByPlacementReleasesItsClaim(t *testing.T) {
 			}
 			if calls.Load() != 1 || seen.TenantID != "tenant-1" || seen.InternalName != "internal-1" || seen.ClusterID != "demo-media" || seen.NodeID != "node-A" || seen.Connector != "RTMP" || seen.PublisherAddress != "127.0.0.1" {
 				t.Fatalf("placement admission saw the wrong connection: calls=%d %+v", calls.Load(), seen)
+			}
+			if seen.Ownership != (federation.PlacementIngestOwnership{Cluster: "demo-media", Source: federation.PlacementIngestOwnershipClaim}) {
+				t.Fatalf("admission did not receive the claim this connection reserved: %+v", seen.Ownership)
 			}
 			if mentions := strings.Contains(err.Error(), "placement policy"); mentions == allowed {
 				t.Fatalf("allowed=%t but error = %v", allowed, err)
