@@ -83,6 +83,7 @@ type QuartermasterServer struct {
 	// lookupHost resolves a service's advertised hostname to associate it with a node; nil uses the system resolver.
 	lookupHost                  func(ctx context.Context, host string) ([]string, error)
 	peerWatch                   *peerWatchHub
+	membershipWatch             *peerWatchHub
 	navigatorClient             *navigator.Client
 	decklogClient               *decklogclient.BatchedClient
 	purserClient                *purserclient.GRPCClient // For billing status lookups (cross-service via gRPC, not DB)
@@ -204,6 +205,7 @@ func NewQuartermasterServer(db *sql.DB, logger logging.Logger, navigatorClient *
 		db:                           db,
 		logger:                       logger,
 		peerWatch:                    newPeerWatchHub(),
+		membershipWatch:              newPeerWatchHub(),
 		navigatorClient:              navigatorClient,
 		decklogClient:                decklogClient,
 		purserClient:                 purserClient,
@@ -10804,8 +10806,9 @@ func clusterSubscriptionFromListRow(row quartermasterdb.ClusterSubscriptionListR
 }
 
 type GRPCServerConfig struct {
-	// PeerWatchContext ends permanent peer subscriptions at drain, without
-	// cancelling ordinary RPCs that are still completing.
+	// PeerWatchContext ends permanent peer and placement-membership
+	// subscriptions at drain, without cancelling ordinary RPCs that are still
+	// completing.
 	PeerWatchContext            context.Context
 	ConsentReviewKeyID          string
 	ConsentReviewPrivateKey     ed25519.PrivateKey
@@ -10940,6 +10943,7 @@ func NewGRPCServer(ctx context.Context, cfg GRPCServerConfig) (*grpc.Server, err
 	qmServer := NewQuartermasterServer(cfg.DB, cfg.Logger, cfg.NavigatorClient, cfg.DecklogClient, cfg.PurserClient, cfg.GeoIPReader, cfg.Metrics)
 	if cfg.PeerWatchContext != nil {
 		qmServer.peerWatch.ctx = cfg.PeerWatchContext
+		qmServer.membershipWatch.ctx = cfg.PeerWatchContext
 	}
 	qmServer.SetQuartermasterGRPCAddr(cfg.AdvertiseGRPCAddr)
 	qmServer.SetPlatformRootDomain(cfg.PlatformRootDomain)
@@ -10974,6 +10978,9 @@ func NewGRPCServer(ctx context.Context, cfg GRPCServerConfig) (*grpc.Server, err
 	// Wake peer subscribers when the census a peer set is derived from changes.
 	// It reads nothing while no cell is subscribed.
 	go qmServer.RunPeerCensusWatcher(qmServer.peerWatch.ctx, cfg.Logger)
+	// Wake placement-membership subscribers when a cell's clusters or edge
+	// admission change. It reads nothing while no cell is subscribed.
+	go qmServer.RunPlacementMembershipWatcher(qmServer.membershipWatch.ctx, cfg.Logger)
 
 	// Register all services
 	quartermasterpb.RegisterTenantServiceServer(server, qmServer)

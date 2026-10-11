@@ -155,6 +155,19 @@ service ClusterService {
   // Offline nodes and empty clusters remain visible; health cannot prove an empty pool.
   rpc GetMediaPlacementInventory(GetMediaPlacementInventoryRequest) returns (MediaPlacementInventory);
 
+  // Complete, tenant-independent placement membership of one control cell:
+  // every cluster whose canonical control cell is the requested one, with its
+  // active flag, and every edge node of those clusters with its administrative
+  // admission state. Tenant access is not evaluated here; the cell takes it
+  // from signed tenant authority. Service-token only.
+  rpc GetPlacementMembership(GetPlacementMembershipRequest) returns (PlacementMembership);
+
+  // Streams GetPlacementMembership: the current membership when the stream
+  // opens, then a new one only when its revision changes. Heartbeats and other
+  // timestamp-only rewrites do not change the revision. Callers keep their own
+  // periodic GetPlacementMembership reconciliation. Service-token only.
+  rpc WatchPlacementMembership(GetPlacementMembershipRequest) returns (stream PlacementMembership);
+
   // Tenant-owner consent management; these calls do not grant cluster access.
   rpc GetClusterMediaConsent(GetClusterMediaConsentRequest) returns (ClusterMediaConsentState);
   rpc ReviewClusterMediaConsentChange(ReviewClusterMediaConsentRequest) returns (media_placement.Review);
@@ -1068,6 +1081,31 @@ message MediaPlacementInventory {
   string control_cell_id = 2;
   repeated string cluster_ids = 3;
   repeated MediaPlacementInventoryNode nodes = 4;
+  google.protobuf.Timestamp observed_at = 5;
+  bool complete = 6;
+}
+
+message GetPlacementMembershipRequest {
+  string control_cell_id = 1;
+}
+
+message PlacementMembershipCluster {
+  string cluster_id = 1;
+  // An inactive cluster is listed so its removal from service is observable;
+  // it never contributes placement membership.
+  bool is_active = 2;
+}
+
+message PlacementMembership {
+  string control_cell_id = 1;
+  // Digest of clusters, active flags, edge nodes and their admission state.
+  // Equal revisions carry equal membership; the value is not ordered.
+  string revision = 2;
+  // Sorted by cluster_id.
+  repeated PlacementMembershipCluster clusters = 3;
+  // Edge nodes of the listed clusters, sorted by cluster_id then node_id.
+  repeated MediaPlacementInventoryNode nodes = 4;
+  // Quartermaster's read instant. Ordering only, never freshness.
   google.protobuf.Timestamp observed_at = 5;
   bool complete = 6;
 }

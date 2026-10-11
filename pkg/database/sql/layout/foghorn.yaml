@@ -22,6 +22,7 @@ colocated_tables:
   - foghorn.tenant_authority_projection
   - foghorn.tenant_authority_grants
   - foghorn.control_replicas
+  - foghorn.placement_membership_snapshot
   - public._schema_baseline
 distributed_tables:
   - foghorn.config_seed_apply_ack_outbox

@@ -25,9 +25,10 @@ const peerChangeInterval = 2 * time.Second
 // misbehaving client from growing the hub without limit.
 const maxPeerWatchers = 512
 
-// peerWatchHub wakes subscribers when the peer census may have changed. It
-// carries no peer data: a woken subscriber re-reads its own peer set, so a
-// subscriber can never be handed another cluster's census.
+// peerWatchHub wakes subscribers when the values their view is derived from
+// may have changed. It carries no data: a woken subscriber re-reads its own
+// view, so a subscriber can never be handed another cluster's or cell's data.
+// One hub serves peer sets and another placement membership.
 type peerWatchHub struct {
 	ctx     context.Context
 	mu      sync.Mutex
@@ -45,10 +46,10 @@ func (hub *peerWatchHub) subscribe() (uint64, chan struct{}, error) {
 	hub.mu.Lock()
 	defer hub.mu.Unlock()
 	if hub.ctx.Err() != nil {
-		return 0, nil, status.Error(codes.Unavailable, "peer watch is draining")
+		return 0, nil, status.Error(codes.Unavailable, "watch is draining")
 	}
 	if len(hub.waiters) >= maxPeerWatchers {
-		return 0, nil, status.Error(codes.ResourceExhausted, "peer watch capacity reached")
+		return 0, nil, status.Error(codes.ResourceExhausted, "watch capacity reached")
 	}
 	hub.next++
 	id := hub.next
@@ -95,6 +96,19 @@ func (s *QuartermasterServer) RunPeerCensusWatcher(ctx context.Context, logger l
 	if s == nil || s.db == nil || s.peerWatch == nil {
 		return
 	}
+	runHubWatcher(ctx, s.peerWatch, s.peerCensusFingerprint, func(err error) {
+		if logger != nil {
+			logger.WithError(err).Warn("Peer census fingerprint unavailable; subscribers fall back to their own reconciliation")
+		}
+	})
+}
+
+// runHubWatcher reads fingerprint once per peerChangeInterval while the hub has
+// subscribers and wakes them all when it changes. The first read also wakes
+// them: a change between a subscriber's initial view and that baseline would
+// otherwise wait for the subscriber's own reconciliation. A woken subscriber
+// whose view is unchanged sends nothing.
+func runHubWatcher(ctx context.Context, hub *peerWatchHub, fingerprint func(context.Context) (string, error), unavailable func(error)) {
 	ticker := time.NewTicker(peerChangeInterval)
 	defer ticker.Stop()
 	previous := ""
@@ -104,25 +118,19 @@ func (s *QuartermasterServer) RunPeerCensusWatcher(ctx context.Context, logger l
 			return
 		case <-ticker.C:
 		}
-		if s.peerWatch.watcherCount() == 0 {
+		if hub.watcherCount() == 0 {
 			continue
 		}
 		readCtx, cancel := context.WithTimeout(ctx, peerChangeInterval)
-		fingerprint, err := s.peerCensusFingerprint(readCtx)
+		current, err := fingerprint(readCtx)
 		cancel()
 		if err != nil {
-			if logger != nil {
-				logger.WithError(err).Warn("Peer census fingerprint unavailable; subscribers fall back to their own reconciliation")
-			}
+			unavailable(err)
 			continue
 		}
-		if previous == "" {
-			previous = fingerprint
-			continue
-		}
-		if fingerprint != previous {
-			previous = fingerprint
-			s.peerWatch.wake()
+		if current != previous {
+			previous = current
+			hub.wake()
 		}
 	}
 }
@@ -138,28 +146,36 @@ func (s *QuartermasterServer) WatchPeers(req *quartermasterpb.ListPeersRequest, 
 	if s.peerWatch == nil {
 		return status.Error(codes.Unavailable, "peer watch is not available")
 	}
-	id, wake, err := s.peerWatch.subscribe()
+	return serveHubWatch(s.peerWatch, stream.Context(), func(ctx context.Context, wake <-chan struct{}) error {
+		return s.watchPeers(ctx, req, stream, wake)
+	})
+}
+
+// serveHubWatch subscribes one stream to hub and runs watch until the stream
+// ends, watch fails, or the hub drains.
+func serveHubWatch(hub *peerWatchHub, streamCtx context.Context, watch func(context.Context, <-chan struct{}) error) error {
+	id, wake, err := hub.subscribe()
 	if err != nil {
 		return err
 	}
-	defer s.peerWatch.unsubscribe(id)
+	defer hub.unsubscribe(id)
 
-	ctx, cancel := context.WithCancel(stream.Context())
+	ctx, cancel := context.WithCancel(streamCtx)
 	defer cancel()
-	stop := context.AfterFunc(s.peerWatch.ctx, cancel)
+	stop := context.AfterFunc(hub.ctx, cancel)
 	defer stop()
 	// Returning the handler closes its transport stream, releasing a Send blocked
 	// by client flow control. Cancelling only a derived context cannot do that.
 	done := make(chan error, 1)
-	go func() { done <- s.watchPeers(ctx, req, stream, wake) }()
+	go func() { done <- watch(ctx, wake) }()
 	select {
-	case <-s.peerWatch.ctx.Done():
-		return status.Error(codes.Unavailable, "peer watch is draining")
-	case <-stream.Context().Done():
-		return stream.Context().Err()
+	case <-hub.ctx.Done():
+		return status.Error(codes.Unavailable, "watch is draining")
+	case <-streamCtx.Done():
+		return streamCtx.Err()
 	case err := <-done:
-		if s.peerWatch.ctx.Err() != nil {
-			return status.Error(codes.Unavailable, "peer watch is draining")
+		if hub.ctx.Err() != nil {
+			return status.Error(codes.Unavailable, "watch is draining")
 		}
 		return err
 	}

@@ -8,8 +8,10 @@ import (
 	"time"
 
 	"frameworks/api_balancing/internal/balancer"
+	"frameworks/api_balancing/internal/control"
 	localauthority "frameworks/api_balancing/internal/mediaauthority"
 	"frameworks/api_balancing/internal/state"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/placement"
 	placementpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_placement"
@@ -25,6 +27,13 @@ type PlacementAuthorityReader interface {
 
 type PlacementInventoryReader interface {
 	GetMediaPlacementInventory(context.Context, *quartermasterpb.GetMediaPlacementInventoryRequest) (*quartermasterpb.MediaPlacementInventory, error)
+}
+
+// PlacementMembershipReader answers inventory from the cell's membership
+// snapshot. balancer.ErrPlacementMembershipUnavailable sends the caller to the
+// per-request Quartermaster read.
+type PlacementMembershipReader interface {
+	Inventory(tenantID string, clusterIDs []string, readAt time.Time) (*quartermasterpb.MediaPlacementInventory, error)
 }
 
 // PlacementPathObservation is independently resolved, credential-free evidence
@@ -47,10 +56,13 @@ type PlacementPathReader interface {
 type PlacementDiscovery struct {
 	CellID    string
 	Authority PlacementAuthorityReader
-	Inventory PlacementInventoryReader
-	Paths     PlacementPathReader
-	Snapshot  func() *state.BalancerSnapshot
-	Now       func() time.Time
+	// Membership answers inventory locally; Inventory is the per-request
+	// Quartermaster read used only while no membership snapshot can.
+	Membership PlacementMembershipReader
+	Inventory  PlacementInventoryReader
+	Paths      PlacementPathReader
+	Snapshot   func() *state.BalancerSnapshot
+	Now        func() time.Time
 	// Logger receives clock-skew and membership drift warnings. Refusals are
 	// returned with their reason in the status message and logged by the router.
 	Logger logging.Logger
@@ -62,7 +74,7 @@ func (discovery *PlacementDiscovery) QueryPlacementCandidates(ctx context.Contex
 	if err := placement.ValidateCandidateQuery(req); err != nil {
 		return nil, discovery.refuse(req, codes.InvalidArgument, "invalid placement query", err)
 	}
-	if discovery == nil || discovery.CellID == "" || discovery.Authority == nil || discovery.Inventory == nil || discovery.Paths == nil || discovery.Snapshot == nil {
+	if discovery == nil || discovery.CellID == "" || discovery.Authority == nil || (discovery.Inventory == nil && discovery.Membership == nil) || discovery.Paths == nil || discovery.Snapshot == nil {
 		return nil, status.Error(codes.Unavailable, "placement discovery is not ready")
 	}
 	// Public and routing callers already carry a tighter end-to-end deadline.
@@ -94,13 +106,19 @@ func (discovery *PlacementDiscovery) QueryPlacementCandidates(ctx context.Contex
 	if !authority.MatchesQuery(req, discovery.CellID) {
 		return nil, status.Error(codes.FailedPrecondition, "placement authority does not match query")
 	}
-	cell := balancer.PlacementCell{ID: discovery.CellID, ClusterIDs: slices.Clone(req.GetClusterIds())}
+	// The clusters come from the signed tenant grants for this cell, which
+	// MatchesQuery has just bound to the query, so a revoked grant leaves its
+	// cluster out without asking Quartermaster.
+	cell := balancer.PlacementCell{ID: discovery.CellID}
+	for _, granted := range authority.Cells {
+		if granted.ID == discovery.CellID {
+			cell.ClusterIDs = slices.Clone(granted.ClusterIDs)
+		}
+	}
 	// Membership lifetime is anchored to this local instant, taken before the
 	// read, so Quartermaster's clock can never make fresh membership look stale.
 	readAt := discovery.now()
-	membership, err := discovery.Inventory.GetMediaPlacementInventory(ctx, &quartermasterpb.GetMediaPlacementInventoryRequest{
-		TenantId: authority.TenantID, ControlCellId: cell.ID, ClusterIds: slices.Clone(cell.ClusterIDs),
-	})
+	membership, err := discovery.inventory(ctx, authority.TenantID, cell, readAt)
 	if contextErr := ctx.Err(); contextErr != nil {
 		return nil, status.FromContextError(contextErr).Err()
 	}
@@ -169,6 +187,27 @@ func (discovery *PlacementDiscovery) QueryPlacementCandidates(ctx context.Contex
 		response.Candidates = append(response.Candidates, wire)
 	}
 	return response, nil
+}
+
+// inventory reads membership from the cell's snapshot, and from Quartermaster
+// only while no snapshot can answer: none has been received or stored, or
+// Quartermaster predates membership.
+func (discovery *PlacementDiscovery) inventory(ctx context.Context, tenantID string, cell balancer.PlacementCell, readAt time.Time) (*quartermasterpb.MediaPlacementInventory, error) {
+	if discovery.Membership != nil {
+		inventory, err := discovery.Membership.Inventory(tenantID, cell.ClusterIDs, readAt)
+		if !errors.Is(err, balancer.ErrPlacementMembershipUnavailable) {
+			return inventory, err
+		}
+	}
+	if discovery.Inventory == nil {
+		return nil, balancer.ErrPlacementMembershipUnavailable
+	}
+	if !ctxkeys.HasMediaRequestRPCObserver(ctx) {
+		ctx = control.MediaRequestContext(ctx, "placement_discovery")
+	}
+	return discovery.Inventory.GetMediaPlacementInventory(ctx, &quartermasterpb.GetMediaPlacementInventoryRequest{
+		TenantId: tenantID, ControlCellId: cell.ID, ClusterIds: slices.Clone(cell.ClusterIDs),
+	})
 }
 
 // stalePlacementPaths returns a stable reason code and a detail line when path

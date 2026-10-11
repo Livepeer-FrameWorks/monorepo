@@ -861,6 +861,8 @@ const (
 	ClusterService_ListTenantClusterAccess_FullMethodName           = "/quartermaster.ClusterService/ListTenantClusterAccess"
 	ClusterService_GetTenantEntitlement_FullMethodName              = "/quartermaster.ClusterService/GetTenantEntitlement"
 	ClusterService_GetMediaPlacementInventory_FullMethodName        = "/quartermaster.ClusterService/GetMediaPlacementInventory"
+	ClusterService_GetPlacementMembership_FullMethodName            = "/quartermaster.ClusterService/GetPlacementMembership"
+	ClusterService_WatchPlacementMembership_FullMethodName          = "/quartermaster.ClusterService/WatchPlacementMembership"
 	ClusterService_GetClusterMediaConsent_FullMethodName            = "/quartermaster.ClusterService/GetClusterMediaConsent"
 	ClusterService_ReviewClusterMediaConsentChange_FullMethodName   = "/quartermaster.ClusterService/ReviewClusterMediaConsentChange"
 	ClusterService_ApplyClusterMediaConsentChange_FullMethodName    = "/quartermaster.ClusterService/ApplyClusterMediaConsentChange"
@@ -947,6 +949,17 @@ type ClusterServiceClient interface {
 	// Complete, unranked node membership for one entitled control cell. Service-token only.
 	// Offline nodes and empty clusters remain visible; health cannot prove an empty pool.
 	GetMediaPlacementInventory(ctx context.Context, in *GetMediaPlacementInventoryRequest, opts ...grpc.CallOption) (*MediaPlacementInventory, error)
+	// Complete, tenant-independent placement membership of one control cell:
+	// every cluster whose canonical control cell is the requested one, with its
+	// active flag, and every edge node of those clusters with its administrative
+	// admission state. Tenant access is not evaluated here; the cell takes it
+	// from signed tenant authority. Service-token only.
+	GetPlacementMembership(ctx context.Context, in *GetPlacementMembershipRequest, opts ...grpc.CallOption) (*PlacementMembership, error)
+	// Streams GetPlacementMembership: the current membership when the stream
+	// opens, then a new one only when its revision changes. Heartbeats and other
+	// timestamp-only rewrites do not change the revision. Callers keep their own
+	// periodic GetPlacementMembership reconciliation. Service-token only.
+	WatchPlacementMembership(ctx context.Context, in *GetPlacementMembershipRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[PlacementMembership], error)
 	// Tenant-owner consent management; these calls do not grant cluster access.
 	GetClusterMediaConsent(ctx context.Context, in *GetClusterMediaConsentRequest, opts ...grpc.CallOption) (*ClusterMediaConsentState, error)
 	ReviewClusterMediaConsentChange(ctx context.Context, in *ReviewClusterMediaConsentRequest, opts ...grpc.CallOption) (*media_placement.Review, error)
@@ -1180,6 +1193,35 @@ func (c *clusterServiceClient) GetMediaPlacementInventory(ctx context.Context, i
 	return out, nil
 }
 
+func (c *clusterServiceClient) GetPlacementMembership(ctx context.Context, in *GetPlacementMembershipRequest, opts ...grpc.CallOption) (*PlacementMembership, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PlacementMembership)
+	err := c.cc.Invoke(ctx, ClusterService_GetPlacementMembership_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *clusterServiceClient) WatchPlacementMembership(ctx context.Context, in *GetPlacementMembershipRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[PlacementMembership], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &ClusterService_ServiceDesc.Streams[0], ClusterService_WatchPlacementMembership_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[GetPlacementMembershipRequest, PlacementMembership]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ClusterService_WatchPlacementMembershipClient = grpc.ServerStreamingClient[PlacementMembership]
+
 func (c *clusterServiceClient) GetClusterMediaConsent(ctx context.Context, in *GetClusterMediaConsentRequest, opts ...grpc.CallOption) (*ClusterMediaConsentState, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ClusterMediaConsentState)
@@ -1412,7 +1454,7 @@ func (c *clusterServiceClient) ListPeers(ctx context.Context, in *ListPeersReque
 
 func (c *clusterServiceClient) WatchPeers(ctx context.Context, in *ListPeersRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ListPeersResponse], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &ClusterService_ServiceDesc.Streams[0], ClusterService_WatchPeers_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &ClusterService_ServiceDesc.Streams[1], ClusterService_WatchPeers_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1570,6 +1612,17 @@ type ClusterServiceServer interface {
 	// Complete, unranked node membership for one entitled control cell. Service-token only.
 	// Offline nodes and empty clusters remain visible; health cannot prove an empty pool.
 	GetMediaPlacementInventory(context.Context, *GetMediaPlacementInventoryRequest) (*MediaPlacementInventory, error)
+	// Complete, tenant-independent placement membership of one control cell:
+	// every cluster whose canonical control cell is the requested one, with its
+	// active flag, and every edge node of those clusters with its administrative
+	// admission state. Tenant access is not evaluated here; the cell takes it
+	// from signed tenant authority. Service-token only.
+	GetPlacementMembership(context.Context, *GetPlacementMembershipRequest) (*PlacementMembership, error)
+	// Streams GetPlacementMembership: the current membership when the stream
+	// opens, then a new one only when its revision changes. Heartbeats and other
+	// timestamp-only rewrites do not change the revision. Callers keep their own
+	// periodic GetPlacementMembership reconciliation. Service-token only.
+	WatchPlacementMembership(*GetPlacementMembershipRequest, grpc.ServerStreamingServer[PlacementMembership]) error
 	// Tenant-owner consent management; these calls do not grant cluster access.
 	GetClusterMediaConsent(context.Context, *GetClusterMediaConsentRequest) (*ClusterMediaConsentState, error)
 	ReviewClusterMediaConsentChange(context.Context, *ReviewClusterMediaConsentRequest) (*media_placement.Review, error)
@@ -1690,6 +1743,12 @@ func (UnimplementedClusterServiceServer) GetTenantEntitlement(context.Context, *
 }
 func (UnimplementedClusterServiceServer) GetMediaPlacementInventory(context.Context, *GetMediaPlacementInventoryRequest) (*MediaPlacementInventory, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetMediaPlacementInventory not implemented")
+}
+func (UnimplementedClusterServiceServer) GetPlacementMembership(context.Context, *GetPlacementMembershipRequest) (*PlacementMembership, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetPlacementMembership not implemented")
+}
+func (UnimplementedClusterServiceServer) WatchPlacementMembership(*GetPlacementMembershipRequest, grpc.ServerStreamingServer[PlacementMembership]) error {
+	return status.Error(codes.Unimplemented, "method WatchPlacementMembership not implemented")
 }
 func (UnimplementedClusterServiceServer) GetClusterMediaConsent(context.Context, *GetClusterMediaConsentRequest) (*ClusterMediaConsentState, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetClusterMediaConsent not implemented")
@@ -2098,6 +2157,35 @@ func _ClusterService_GetMediaPlacementInventory_Handler(srv interface{}, ctx con
 	}
 	return interceptor(ctx, in, info, handler)
 }
+
+func _ClusterService_GetPlacementMembership_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetPlacementMembershipRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClusterServiceServer).GetPlacementMembership(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClusterService_GetPlacementMembership_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClusterServiceServer).GetPlacementMembership(ctx, req.(*GetPlacementMembershipRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ClusterService_WatchPlacementMembership_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(GetPlacementMembershipRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(ClusterServiceServer).WatchPlacementMembership(m, &grpc.GenericServerStream[GetPlacementMembershipRequest, PlacementMembership]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ClusterService_WatchPlacementMembershipServer = grpc.ServerStreamingServer[PlacementMembership]
 
 func _ClusterService_GetClusterMediaConsent_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetClusterMediaConsentRequest)
@@ -2758,6 +2846,10 @@ var ClusterService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _ClusterService_GetMediaPlacementInventory_Handler,
 		},
 		{
+			MethodName: "GetPlacementMembership",
+			Handler:    _ClusterService_GetPlacementMembership_Handler,
+		},
+		{
 			MethodName: "GetClusterMediaConsent",
 			Handler:    _ClusterService_GetClusterMediaConsent_Handler,
 		},
@@ -2887,6 +2979,11 @@ var ClusterService_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "WatchPlacementMembership",
+			Handler:       _ClusterService_WatchPlacementMembership_Handler,
+			ServerStreams: true,
+		},
 		{
 			StreamName:    "WatchPeers",
 			Handler:       _ClusterService_WatchPeers_Handler,

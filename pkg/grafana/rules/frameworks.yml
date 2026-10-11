@@ -99,6 +99,18 @@ groups:
           summary: "A cell cannot fetch media authority it does not hold"
           description: "{{ $labels.instance }} could not fetch an authority for {{ $value }} decisions per second. Objects that have not been used for a while cannot be served from this cell until Commodore answers."
 
+      # Membership is confirmed by the watch stream and a 60-second read, so
+      # two minutes without a confirmation means Quartermaster is unreachable
+      # from this replica. Placement keeps using the held membership.
+      - alert: FoghornPlacementMembershipUnconfirmed
+        expr: foghorn_placement_membership_snapshot_age_seconds > 120
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "A cell is placing from unconfirmed cluster membership"
+          description: "{{ $labels.instance }} has not had its placement membership confirmed by Quartermaster for {{ $value }} seconds. Placement continues from the held membership, so node drains, cluster deactivations and control-cell moves made since then are not applied in this cell until Quartermaster is reachable again."
+
       - alert: MediaAuthorityRefreshParked
         expr: commodore_media_authority_refresh_parked > 0
         for: 15m

@@ -1497,8 +1497,9 @@ func main() {
 	foghornServer := foghorngrpc.NewFoghornGRPCServer(db, logger, lb, geoipReader, geoipCache, decklogClient, s3ForGRPC, purserClient)
 	foghornServer.SetSigningKeyUseRecorder(signingKeyUseRecorder)
 	foghornServer.SetClusterID(foghornCfg.ClusterID)
+	placementMembership := startPlacementMembership(db, controlCellID, metricsCollector, logger)
 	placementPreviewInventory := &balancer.PlacementCapacityObserver{
-		CellID: controlCellID, Owner: control.PlacementCapacityOwner,
+		CellID: controlCellID, Owner: control.PlacementCapacityOwner, Membership: placementMembership,
 		Snapshot: func() *state.BalancerSnapshot {
 			return state.DefaultManager().GetBalancerSnapshotAtomicWithOptions(true)
 		},
@@ -1597,7 +1598,8 @@ func main() {
 		// kind requires its own reader, so a kind this cell cannot resolve is
 		// refused rather than served outside the policy.
 		placementDestination.Discovery = &federation.PlacementDiscovery{
-			CellID: controlCellID, Authority: authorityStore, Inventory: livePlacementInventory{}, Snapshot: placementSnapshot, Logger: logger,
+			CellID: controlCellID, Authority: authorityStore, Membership: placementMembership, Inventory: livePlacementInventory{},
+			Snapshot: placementSnapshot, Logger: logger,
 			Paths: &federation.MediaPlacementPaths{
 				Push: &federation.LivePushPlacementPaths{
 					CellID: controlCellID, RegistryCellID: foghornCfg.ClusterID,

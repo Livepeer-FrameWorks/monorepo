@@ -2,6 +2,7 @@ package balancer
 
 import (
 	"context"
+	"errors"
 	"math"
 	"slices"
 	"time"
@@ -25,8 +26,13 @@ type PlacementCapacityOwner interface {
 // PlacementCapacityObserver has only owner reads and a telemetry snapshot. It
 // does not depend on active policy, source preparation, reservations or receipts.
 type PlacementCapacityObserver struct {
-	CellID   string
-	Owner    func() PlacementCapacityOwner
+	CellID string
+	Owner  func() PlacementCapacityOwner
+	// Membership answers inventory from the cell's snapshot; the owner's
+	// per-request inventory is read only while it cannot.
+	Membership interface {
+		Inventory(tenantID string, clusterIDs []string, readAt time.Time) (*quartermasterpb.MediaPlacementInventory, error)
+	}
 	Snapshot func() *state.BalancerSnapshot
 	Now      func() time.Time
 }
@@ -74,7 +80,14 @@ func (observer *PlacementCapacityObserver) ObserveInventory(ctx context.Context,
 		return nil, status.FromContextError(contextErr).Err()
 	}
 	readAt := observer.now()
-	membership, err := owner.GetMediaPlacementInventory(ctx, &quartermasterpb.GetMediaPlacementInventoryRequest{TenantId: req.GetTenantId(), ControlCellId: req.GetControlCellId(), ClusterIds: slices.Clone(req.GetClusterIds())})
+	var membership *quartermasterpb.MediaPlacementInventory
+	err = ErrPlacementMembershipUnavailable
+	if observer.Membership != nil {
+		membership, err = observer.Membership.Inventory(req.GetTenantId(), req.GetClusterIds(), readAt)
+	}
+	if errors.Is(err, ErrPlacementMembershipUnavailable) {
+		membership, err = owner.GetMediaPlacementInventory(ctx, &quartermasterpb.GetMediaPlacementInventoryRequest{TenantId: req.GetTenantId(), ControlCellId: req.GetControlCellId(), ClusterIds: slices.Clone(req.GetClusterIds())})
+	}
 	if err != nil {
 		return nil, status.Errorf(codes.Unavailable, "capacity inventory is unavailable: %v", err)
 	}

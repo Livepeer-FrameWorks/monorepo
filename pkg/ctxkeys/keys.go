@@ -69,6 +69,16 @@ func WithMediaRequestRPCObserver(ctx context.Context, path string, observe func(
 	return context.WithValue(ctx, KeyMediaRequestRPCObserver, mediaRequestRPCObserver{path: path, observe: observe})
 }
 
+// HasMediaRequestRPCObserver reports whether ctx already carries a media
+// request path, so a shared component can tag only otherwise untagged calls.
+func HasMediaRequestRPCObserver(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	_, ok := ctx.Value(KeyMediaRequestRPCObserver).(mediaRequestRPCObserver)
+	return ok
+}
+
 // ObserveMediaRequestRPC invokes the request-scoped observer, if any.
 func ObserveMediaRequestRPC(ctx context.Context, service, method string) {
 	if ctx == nil {

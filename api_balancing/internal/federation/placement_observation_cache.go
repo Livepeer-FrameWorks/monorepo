@@ -11,11 +11,16 @@ import (
 	"frameworks/api_balancing/internal/balancer"
 )
 
+// The bounds hold one entry per remote (cell, query, authority version) the
+// cell is actively routing, so thousands of concurrent streams reuse their
+// observations instead of evicting each other. The flight bound caps
+// concurrent remote reads, cold and refresh-ahead together.
 const (
 	placementObservationReuse      = time.Second
 	placementObservationLoadMax    = 5 * time.Second
-	placementObservationEntries    = 128
-	placementObservationCandidates = 16384
+	placementObservationEntries    = 8192
+	placementObservationCandidates = 262144
+	placementObservationFlights    = 512
 )
 
 type placementObservationKey struct {
@@ -70,7 +75,7 @@ func (cache *PlacementObservationCache) observe(ctx context.Context, key placeme
 			// Refresh ahead: once half the reuse window has passed, fetch the next
 			// observation in the background so the following caller finds a warm
 			// entry instead of paying a cold discovery round trip.
-			if !now.Before(stored.stored.Add(placementObservationReuse/2)) && cache.flights[key] == nil && len(cache.flights) < placementObservationEntries {
+			if !now.Before(stored.stored.Add(placementObservationReuse/2)) && cache.flights[key] == nil && len(cache.flights) < placementObservationFlights {
 				refreshCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), placementObservationLoadMax)
 				cache.startFlightLocked(key, refreshCtx, cancel, load)
 			}
@@ -81,7 +86,7 @@ func (cache *PlacementObservationCache) observe(ctx context.Context, key placeme
 	}
 	flight := cache.flights[key]
 	if flight == nil {
-		if len(cache.flights) >= placementObservationEntries {
+		if len(cache.flights) >= placementObservationFlights {
 			cache.mu.Unlock()
 			return balancer.PlacementCellObservation{}, errors.New("placement observation concurrency limit reached")
 		}

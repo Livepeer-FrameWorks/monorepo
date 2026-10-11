@@ -156,7 +156,12 @@ func TestPlacementObservationCacheBoundsRetainedEntriesAndCandidates(t *testing.
 			}
 			return value, nil
 		}
-		for i := range placementObservationEntries + 1 {
+		// Enough observations to cross whichever bound this candidate count reaches first.
+		observations := placementObservationEntries + 1
+		if count > 0 {
+			observations = min(observations, placementObservationCandidates/count+1)
+		}
+		for i := range observations {
 			if _, err := cache.observe(context.Background(), placementObservationKey{Query: fmt.Sprint(i)}, load); err != nil {
 				t.Fatal(err)
 			}
@@ -213,5 +218,38 @@ func TestPlacementObservationCacheRefreshesAheadOfExpiry(t *testing.T) {
 	}
 	if calls.Load() != 2 {
 		t.Fatalf("refresh-ahead issued %d loads, want 2", calls.Load())
+	}
+}
+
+// A cell routing a thousand concurrent streams to a peer holds one entry per
+// stream query, so every stream reuses its observation for the reuse window
+// instead of evicting the others.
+func TestObservationCache_1000StreamsReuseWithin1s(t *testing.T) {
+	now := time.Now()
+	cache := NewPlacementObservationCache(func() time.Time { return now })
+	var loads atomic.Int32
+	load := func(context.Context) (balancer.PlacementCellObservation, error) {
+		loads.Add(1)
+		value := balancer.PlacementCellObservation{Complete: true, ObservedAt: now, ExpiresAt: now.Add(10 * time.Second)}
+		for range 32 {
+			value.Candidates = append(value.Candidates, placement.Candidate{ExpiresAt: value.ExpiresAt})
+		}
+		return value, nil
+	}
+	observeAll := func() {
+		t.Helper()
+		for stream := range 1000 {
+			key := placementObservationKey{CellID: "peer-cell", Query: fmt.Sprintf("stream-%d", stream), TenantVersion: 1, ObjectVersion: 1}
+			if _, err := cache.observe(context.Background(), key, load); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	observeAll()
+	// Inside the reuse window and before refresh-ahead begins.
+	now = now.Add(400 * time.Millisecond)
+	observeAll()
+	if got := loads.Load(); got != 1000 {
+		t.Fatalf("1000 streams observed twice within the reuse window made %d remote reads, want 1000", got)
 	}
 }

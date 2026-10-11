@@ -1961,6 +1961,20 @@ CREATE TABLE IF NOT EXISTS foghorn.control_replicas (
 CREATE INDEX IF NOT EXISTS idx_foghorn_control_replicas_seen_range
     ON foghorn.control_replicas(last_seen_at ASC);
 
+-- The cell's last Quartermaster placement membership: its clusters, their
+-- active flags, and their edge nodes' admission. Replicas place from it while
+-- Quartermaster is unreachable, including after a restart. A row changes only
+-- when the membership revision does; observed_at is Quartermaster's read
+-- instant and orders writes from replicas that received revisions at
+-- different times. confirmed_at is when a replica stored this revision.
+CREATE TABLE IF NOT EXISTS foghorn.placement_membership_snapshot (
+    cell_id VARCHAR(100) PRIMARY KEY CHECK (btrim(cell_id) <> ''),
+    revision TEXT NOT NULL CHECK (revision <> ''),
+    payload BYTEA NOT NULL,
+    observed_at TIMESTAMPTZ NOT NULL,
+    confirmed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE INDEX IF NOT EXISTS idx_foghorn_dvr_chapters_playback_artifact
     ON foghorn.dvr_chapters(playback_artifact_hash)
     WHERE playback_artifact_hash IS NOT NULL;

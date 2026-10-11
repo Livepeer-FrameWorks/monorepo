@@ -361,6 +361,20 @@ func (c *GRPCClient) GetMediaPlacementInventory(ctx context.Context, req *quarte
 	return c.cluster.GetMediaPlacementInventory(ctx, req)
 }
 
+// GetPlacementMembership reads one control cell's complete placement
+// membership.
+func (c *GRPCClient) GetPlacementMembership(ctx context.Context, controlCellID string) (*quartermasterpb.PlacementMembership, error) {
+	return c.cluster.GetPlacementMembership(ctx, &quartermasterpb.GetPlacementMembershipRequest{ControlCellId: controlCellID})
+}
+
+// WatchPlacementMembership subscribes to one control cell's placement
+// membership. The first message is the current membership; later messages
+// arrive only when its revision changes. The caller owns the context and keeps
+// its own periodic GetPlacementMembership reconciliation.
+func (c *GRPCClient) WatchPlacementMembership(ctx context.Context, controlCellID string) (quartermasterpb.ClusterService_WatchPlacementMembershipClient, error) {
+	return c.cluster.WatchPlacementMembership(ctx, &quartermasterpb.GetPlacementMembershipRequest{ControlCellId: controlCellID})
+}
+
 func (c *GRPCClient) GetClusterMediaConsent(ctx context.Context, req *quartermasterpb.GetClusterMediaConsentRequest) (*quartermasterpb.ClusterMediaConsentState, error) {
 	return c.cluster.GetClusterMediaConsent(ctx, req)
 }

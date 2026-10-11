@@ -92,6 +92,9 @@ type Querier interface {
 	GetOwnedMediaCapacityConsentChange(ctx context.Context, arg GetOwnedMediaCapacityConsentChangeParams) (QuartermasterMediaCapacityConsentChange, error)
 	GetPendingInviteByToken(ctx context.Context, inviteToken string) (GetPendingInviteByTokenRow, error)
 	GetPendingInviteWithClusterPolicy(ctx context.Context, inviteToken string) (GetPendingInviteWithClusterPolicyRow, error)
+	// Tenant-independent membership of one canonical control cell. Inactive
+	// clusters stay listed with their flag so a deactivation is observable.
+	GetPlacementMembership(ctx context.Context, controlCellID string) ([]GetPlacementMembershipRow, error)
 	GetSubscriptionOwner(ctx context.Context, subscriptionID string) (GetSubscriptionOwnerRow, error)
 	GetSubscriptionOwnerPolicy(ctx context.Context, subscriptionID string) (GetSubscriptionOwnerPolicyRow, error)
 	GetTenantBillingEntitlementCensus(ctx context.Context) (GetTenantBillingEntitlementCensusRow, error)
@@ -202,6 +205,12 @@ type Querier interface {
 	// rewritten only as often as the DNS freshness gate needs. The prior status is
 	// returned whether or not the row was written.
 	PersistServiceHealthStatus(ctx context.Context, arg PersistServiceHealthStatusParams) (PersistServiceHealthStatusRow, error)
+	// Digests exactly the values GetPlacementMembership derives every cell's
+	// membership from: cluster identity, canonical control cell and active flag,
+	// and each edge node's cluster and admission. Heartbeats, health refreshes and
+	// status changes between two non-admitting states leave it unchanged, so they
+	// wake no membership subscriber.
+	PlacementMembershipFingerprint(ctx context.Context) (string, error)
 	RejectClusterSubscriptionRecord(ctx context.Context, arg RejectClusterSubscriptionRecordParams) error
 	ReleaseSupersededMediaAuthorityRefresh(ctx context.Context, arg ReleaseSupersededMediaAuthorityRefreshParams) (int64, error)
 	RepairTenantPrivateBaseURLBatch(ctx context.Context, batchSize int32) (int64, error)

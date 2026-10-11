@@ -517,6 +517,7 @@ type Querier interface {
 	ListTombstonedFederatedArtifactPointersForPurge(ctx context.Context, retentionInterval string) ([]ListTombstonedFederatedArtifactPointersForPurgeRow, error)
 	ListUnattributedStoragePairs(ctx context.Context, arg ListUnattributedStoragePairsParams) ([]ListUnattributedStoragePairsRow, error)
 	ListUnemittedArtifactNodeKeys(ctx context.Context, limit int32) ([]ListUnemittedArtifactNodeKeysRow, error)
+	LoadPlacementMembershipSnapshot(ctx context.Context, cellID string) (LoadPlacementMembershipSnapshotRow, error)
 	LocalArtifactTenant(ctx context.Context, artifactHash string) (string, error)
 	LockActiveStreamIngestSession(ctx context.Context, arg LockActiveStreamIngestSessionParams) (LockActiveStreamIngestSessionRow, error)
 	LockArtifactNodeRole(ctx context.Context, arg LockArtifactNodeRoleParams) (string, error)
@@ -742,6 +743,10 @@ type Querier interface {
 	SoftDeleteDVRParent(ctx context.Context, arg SoftDeleteDVRParentParams) (int64, error)
 	SoftDeleteVodArtifact(ctx context.Context, arg SoftDeleteVodArtifactParams) (int64, error)
 	StoreAdmissionPushTargetRevision(ctx context.Context, arg StoreAdmissionPushTargetRevisionParams) error
+	// Writes only a different revision observed no earlier than the stored one, so
+	// an unchanged membership costs no write and a replica that received an older
+	// revision later cannot replace a newer one.
+	StorePlacementMembershipSnapshot(ctx context.Context, arg StorePlacementMembershipSnapshotParams) (int64, error)
 	SumTenantActiveArtifactBytes(ctx context.Context, tenantID string) (int64, error)
 	SupersedeOfflineEffect(ctx context.Context, arg SupersedeOfflineEffectParams) (int64, error)
 	ThumbnailParentTombstoned(ctx context.Context, artifactHash string) (sql.NullBool, error)

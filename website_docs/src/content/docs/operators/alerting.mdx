@@ -124,6 +124,16 @@ window contains no further failures. This is separate from
 parked for fifteen minutes. A missing dependency alone does not revoke unchanged
 playback access.
 
+### Placement membership
+
+`FoghornPlacementMembershipUnconfirmed` warns when a Foghorn replica has not had its
+placement membership (the cell's clusters and the admission state of their edge nodes)
+confirmed by Quartermaster for two minutes. The replica keeps placing from the membership
+it holds, which survives restarts, so viewers and publishers are not refused. Node drains,
+cluster deactivations and control-cell moves made in Quartermaster since then do not reach
+that cell until it is confirmed again. Check the replica's connection to Quartermaster;
+`foghorn_placement_membership_snapshot_age_seconds` shows the age per replica.
+
 ### Notification delivery
 
 1. **Heartbeat.** Confirm your heartbeat provider shows a ping roughly every minute from
