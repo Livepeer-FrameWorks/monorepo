@@ -37,7 +37,7 @@ func TestClusterControlCellReassignment_RealPG(t *testing.T) {
 	}
 	observe := func(cellID string, nodeIDs []string, observedAt ...time.Time) {
 		t.Helper()
-		if err := q.RecordNodeControlCellObservations(ctx, cellID, nodeIDs, observedAt); err != nil {
+		if err := q.RecordNodeControlCellObservations(ctx, cellID, nodeIDs, observedAt, 60); err != nil {
 			t.Fatal(err)
 		}
 	}

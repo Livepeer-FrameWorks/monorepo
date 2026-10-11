@@ -320,7 +320,8 @@ CREATE TABLE IF NOT EXISTS quartermaster.infrastructure_nodes (
     last_heartbeat TIMESTAMP,
 
     -- ===== LATEST RESOURCE SNAPSHOT =====
-    -- Reported by Privateer on every SyncMesh. snapshot_at is Quartermaster
+    -- Reported by Privateer on every SyncMesh and stored with the heartbeat
+    -- once the stored one is 30 s old. snapshot_at is Quartermaster
     -- receipt time so freshness does not depend on node clock skew. NULL means
     -- the agent has never sent a complete snapshot (older client, fresh row, or
     -- collection failure on every sync). Bridge synthesises

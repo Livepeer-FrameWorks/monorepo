@@ -396,10 +396,16 @@ func TestActiveIngestPlacementSchedule_RenewsWellInsideTheLease(t *testing.T) {
 		t.Fatalf("renewal margin %s is under a quarter of the %s lease",
 			margin, streamident.ActiveIngestLease)
 	}
-	// An already-rotating claim's gap must also fit, and is the smaller case.
-	if gap := activeIngestPlacementInterval + activeIngestPlacementTickBudget; gap >= activeIngestPlacementMaxFirstRenewal {
-		t.Fatalf("steady-state gap %s should be under the first-renewal bound %s",
+	// An already-rotating claim's gap must also fit: renewed in the first wave
+	// of one tick and the final wave of the next.
+	if gap := max(activeIngestPlacementInterval, activeIngestPlacementTickBudget) + activeIngestPlacementTickBudget; gap > activeIngestPlacementMaxFirstRenewal {
+		t.Fatalf("steady-state gap %s exceeds the first-renewal bound %s",
 			gap, activeIngestPlacementMaxFirstRenewal)
+	}
+	// Each renewal is a Commodore UPDATE per publisher, so the cadence is the
+	// slowest that still gives a claim three attempts inside its lease.
+	if attempts := streamident.ActiveIngestLease / activeIngestPlacementInterval; attempts != 3 {
+		t.Fatalf("a claim is re-asserted %d times per %s lease, want 3", attempts, streamident.ActiveIngestLease)
 	}
 	// The capacity figure must be reachable within the budget it is derived
 	// from, or the over-capacity warning names a number the job cannot meet.

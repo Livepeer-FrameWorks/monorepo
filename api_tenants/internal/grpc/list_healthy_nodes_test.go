@@ -494,7 +494,7 @@ func TestReportAliveNodesUpsertsEdgeCapabilities(t *testing.T) {
 		WithArgs(sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"node_id", "type", "cluster_id", "health"}))
 	mock.ExpectExec(`(?s)UPDATE quartermaster\.infrastructure_nodes n.*FROM unnest`).
-		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), edgeHeartbeatRefreshAfterSeconds).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	// Healthy node: aggregate `edge` upsert plus one upsert per set cap
 	// (ingest, egress). The two unset caps have no prior row, so no statement.
@@ -558,7 +558,7 @@ func TestReportAliveNodesMarksDroppedCapUnhealthy(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"node_id", "type", "cluster_id", "health"}).
 			AddRow("edge-eu-1", "edge-egress", "cluster-eu", "healthy"))
 	mock.ExpectExec(`(?s)UPDATE quartermaster\.infrastructure_nodes n.*FROM unnest`).
-		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), edgeHeartbeatRefreshAfterSeconds).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	// Aggregate `edge` is unconditional: INSERT upsert (healthy) for the live
 	// node. Processed first because `edge` leads the derivation list.
@@ -620,7 +620,7 @@ func TestReportAliveNodesEnsuresEdgeServicesOncePerProcess(t *testing.T) {
 			WillReturnRows(sqlmock.NewRows([]string{"node_id", "type", "cluster_id", "health"}).
 				AddRow("edge-eu-1", "edge", "cluster-eu", "healthy"))
 		mock.ExpectExec(`(?s)UPDATE quartermaster\.infrastructure_nodes n.*FROM unnest`).
-			WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 1))
+			WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), edgeHeartbeatRefreshAfterSeconds).WillReturnResult(sqlmock.NewResult(0, 1))
 		upsert := mock.ExpectExec(`(?s)INSERT INTO quartermaster\.service_instances.*ON CONFLICT \(instance_id\) DO UPDATE`).
 			WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg())
 		if failUpsert {

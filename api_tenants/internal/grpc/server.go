@@ -155,6 +155,28 @@ const (
 	// api_balancing/cmd/foghorn), the longest gap between reports of an
 	// unchanged edge.
 	foghornEdgeSnapshotInterval = 60 * time.Second
+	// edgeHeartbeatReaderWindow is the shortest last_heartbeat freshness
+	// window applied to a node only Foghorn reports: the web console counts a
+	// heartbeat as recent for 5 minutes. The 90 s windows of the GraphQL
+	// resource-snapshot fallback and `mesh wg audit` judge only nodes running
+	// Privateer, whose SyncMesh refreshes the heartbeat itself.
+	edgeHeartbeatReaderWindow = 5 * time.Minute
+	// meshHeartbeatReaderWindow is the last_heartbeat and snapshot_at
+	// freshness window of the GraphQL resource-snapshot fallback
+	// (liveNodeFreshnessWindow) and of `mesh wg audit`.
+	meshHeartbeatReaderWindow = 90 * time.Second
+	// privateerSyncInterval is Privateer's default SyncMesh interval, the
+	// longest gap between syncs of a running agent.
+	privateerSyncInterval = 30 * time.Second
+)
+
+// Node liveness rows are rewritten only when a reported value changes or when
+// the stored stamp is old enough that, after one lost or late report, a reader
+// could otherwise see it go stale.
+var (
+	edgeHeartbeatRefreshAfterSeconds          = quartermasterdb.HealthRefreshAfterSeconds(int(edgeHeartbeatReaderWindow/time.Second), foghornEdgeSnapshotInterval)
+	controlCellObservationRefreshAfterSeconds = quartermasterdb.HealthRefreshAfterSeconds(int(controlCellObservationWindow/time.Second), foghornEdgeSnapshotInterval)
+	meshHeartbeatRefreshAfterSeconds          = quartermasterdb.HealthRefreshAfterSeconds(int(meshHeartbeatReaderWindow/time.Second), privateerSyncInterval)
 )
 
 // SetQuartermasterGRPCAddr configures the gRPC address this Quartermaster
@@ -5606,8 +5628,10 @@ func (s *QuartermasterServer) ReportAliveNodes(ctx context.Context, req *quarter
 		}
 
 		// Per-node heartbeat + external_ip. Heartbeat is refreshed only for
-		// healthy nodes; edge DNS membership reads service_instances.health_status
-		// set below, so last_heartbeat stays a mesh liveness signal.
+		// healthy nodes, and only once it is edgeHeartbeatRefreshAfterSeconds
+		// old; a changed external_ip is written at once. Edge DNS membership
+		// reads service_instances.health_status set below, so last_heartbeat
+		// stays a liveness signal for display and Privateer-node checks.
 		upNodeIDs := make([]string, 0, len(updates))
 		upExternalIPs := make([]string, 0, len(updates))
 		upRefreshHB := make([]bool, 0, len(updates))
@@ -5622,12 +5646,15 @@ func (s *QuartermasterServer) ReportAliveNodes(ctx context.Context, req *quarter
 		}
 		if execErr := txQueries.UpdateReportedNodes(ctx, quartermasterdb.UpdateReportedNodesParams{
 			NodeIDs: upNodeIDs, ExternalIPs: upExternalIPs, RefreshHeartbeat: upRefreshHB,
+			HeartbeatRefreshAfterSeconds: edgeHeartbeatRefreshAfterSeconds,
 		}); execErr != nil {
 			return fmt.Errorf("failed to update node state: %w", execErr)
 		}
 
 		// The reporting cell becomes a node's control cell when this is the
 		// node's newest observation; control-cell reassignment completes on it.
+		// The same cell's observation is refreshed only where the
+		// reassignment window reads it.
 		if reporterCellID := strings.TrimSpace(req.GetReporterCellId()); reporterCellID != "" {
 			observedNodeIDs := make([]string, 0, len(nodes))
 			observedAts := make([]time.Time, 0, len(nodes))
@@ -5640,7 +5667,7 @@ func (s *QuartermasterServer) ReportAliveNodes(ctx context.Context, req *quarter
 				observedAts = append(observedAts, n.GetObservedAt().AsTime())
 			}
 			if len(observedNodeIDs) > 0 {
-				if execErr := txQueries.RecordNodeControlCellObservations(ctx, reporterCellID, observedNodeIDs, observedAts); execErr != nil {
+				if execErr := txQueries.RecordNodeControlCellObservations(ctx, reporterCellID, observedNodeIDs, observedAts, controlCellObservationRefreshAfterSeconds); execErr != nil {
 					return fmt.Errorf("failed to record node control cell: %w", execErr)
 				}
 			}
@@ -7935,8 +7962,11 @@ func (s *QuartermasterServer) SyncMesh(ctx context.Context, req *quartermasterpb
 	}
 	wireguardPort := identity.ListenPort.Int32
 
-	// 2. Update heartbeat every sync. WireGuard identity is set by either
-	// CreateNode (gitops_seed) or BootstrapInfrastructureNode
+	// 2. Record the sync. A status or applied-revision change is written at
+	// once; the heartbeat and snapshot are refreshed once they are
+	// meshHeartbeatRefreshAfterSeconds old, which keeps them inside the 90 s
+	// windows their readers apply after one lost sync. WireGuard identity is
+	// set by either CreateNode (gitops_seed) or BootstrapInfrastructureNode
 	// (runtime_enrolled); SyncMesh only reads it. The applied revision is
 	// persisted as the agent reports it — empty string is stored as NULL
 	// so 'mesh wg audit' can distinguish "never reported" from "reported
@@ -7973,9 +8003,10 @@ func (s *QuartermasterServer) SyncMesh(ctx context.Context, req *quartermasterpb
 			SnapshotRamUsed: snapRamUsed, SnapshotRamTotal: snapRamTotal,
 			SnapshotDiskUsed: snapDiskUsed, SnapshotDiskTotal: snapDiskTotal,
 			SnapshotUptime: snapUptime, SnapshotAt: snapAt,
+			RefreshAfterSeconds: meshHeartbeatRefreshAfterSeconds,
 		})
 	} else {
-		err = queries.UpdateMeshHeartbeat(ctx, nodeID, appliedRev)
+		err = queries.UpdateMeshHeartbeat(ctx, nodeID, appliedRev, meshHeartbeatRefreshAfterSeconds)
 	}
 	recordPhase("heartbeat_update", phaseStarted)
 	if err != nil {

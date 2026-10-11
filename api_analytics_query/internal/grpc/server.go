@@ -7832,7 +7832,8 @@ func (s *PeriscopeServer) GetStreamAnalyticsDaily(ctx context.Context, req *peri
 
 	// The postdeploy backfill and refresh worker maintain one end-day contract
 	// for both playback and restream egress. Reads stay on the daily projection;
-	// they never rescan the 730-day projection-partitioned fact tables.
+	// they never rescan the 730-day projection-partitioned fact tables. A
+	// stored row under the zero stream id holds artifact views, not a stream.
 	dailySource := `
 		WITH daily AS (
 			SELECT day, tenant_id, stream_id,
@@ -7843,6 +7844,7 @@ func (s *PeriscopeServer) GetStreamAnalyticsDaily(ctx context.Context, req *peri
 				toUInt64(egress_bytes) AS egress_bytes
 			FROM stream_analytics_daily
 			WHERE tenant_id = ? AND day >= toDate(?) AND day < toDate(?)
+			  AND stream_id != toUUIDOrZero('')
 		)`
 	dailyArgs := []any{tenantID, startDayInclusive, endDayExclusive}
 	countQuery := dailySource + ` SELECT count() FROM daily WHERE 1 = 1`

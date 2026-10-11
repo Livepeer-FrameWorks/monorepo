@@ -2058,6 +2058,7 @@ CREATE TABLE IF NOT EXISTS viewer_sessions_final (
     origin_cluster_id LowCardinality(String) DEFAULT '',
     control_cell_id LowCardinality(String) DEFAULT '',
     stream_id UUID DEFAULT toUUIDOrZero(''),
+    artifact_hash String DEFAULT '',        -- non-live content (artifact replay, uploaded VOD); stream_id then names only the source stream, if any
     stream_name String DEFAULT '',
     connector LowCardinality(String) DEFAULT '',
     host String DEFAULT '',
@@ -2106,6 +2107,7 @@ SELECT
     argMax(source_event_id,       projection_version_ms) AS source_event_id,
     argMax(cluster_id,            projection_version_ms) AS cluster_id,
     argMax(stream_id,             projection_version_ms) AS stream_id,
+    argMax(artifact_hash,         projection_version_ms) AS artifact_hash,
     argMax(stream_name,           projection_version_ms) AS stream_name,
     argMax(connector,             projection_version_ms) AS connector,
     argMax(host,                  projection_version_ms) AS host,
@@ -3747,9 +3749,13 @@ PARTITION BY toYYYYMM(day)
 ORDER BY (tenant_id, day, stream_id)
 TTL day + INTERVAL 730 DAY;
 
+-- A live stream's own audience: views of an artifact (stream_id then names only
+-- the replay's source stream, or is zero for an uploaded VOD) are left out, and
+-- the zero stream_id forms no row.
 CREATE MATERIALIZED VIEW IF NOT EXISTS stream_analytics_daily_mv
 REFRESH EVERY 1 HOUR APPEND TO stream_analytics_daily_store AS
 WITH affected AS (
+    SELECT day, tenant_id, stream_id FROM (
     SELECT DISTINCT toDate(window_start) AS day, tenant_id, stream_id
     FROM delivery_usage_5m
     WHERE projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 2 DAY)
@@ -3772,6 +3778,7 @@ WITH affected AS (
         WHERE projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 2 DAY)
     )
       AND old.source_ended_at_ms >= toInt64(toUnixTimestamp(toStartOfDay(now() - INTERVAL 729 DAY))) * 1000
+      AND old.artifact_hash = ''
     UNION DISTINCT
     SELECT DISTINCT toDate(toDateTime(intDiv(old.source_ended_at_ms, 1000))) AS day, old.tenant_id, old.stream_id
     FROM restream_sessions_final AS old
@@ -3791,6 +3798,8 @@ WITH affected AS (
     WHERE scope = 'stream_analytics_daily'
       AND seed_version_ms >= now64(3) - INTERVAL 1 DAY
       AND bucket >= toStartOfDay(now() - INTERVAL 729 DAY)
+    )
+    WHERE stream_id != toUUIDOrZero('')
 )
 SELECT
     affected.day AS day,
@@ -3812,6 +3821,7 @@ LEFT JOIN (
         FROM viewer_sessions_final_v
         WHERE (toDate(toDateTime(intDiv(source_ended_at_ms, 1000))), tenant_id, stream_id) IN (SELECT day, tenant_id, stream_id FROM affected)
           AND closed_reason = 'final'
+          AND artifact_hash = ''
         UNION ALL
         SELECT toDate(toDateTime(intDiv(source_ended_at_ms, 1000))) AS day, tenant_id, stream_id,
             bytes_sent AS bytes
@@ -3840,6 +3850,7 @@ LEFT JOIN (
         FROM viewer_sessions_final_v
         WHERE (toDate(toDateTime(intDiv(source_ended_at_ms, 1000))), tenant_id, stream_id) IN (SELECT day, tenant_id, stream_id FROM affected)
           AND closed_reason = 'final'
+          AND artifact_hash = ''
     )
     GROUP BY day, tenant_id, stream_id
 ) AS audience USING (day, tenant_id, stream_id)

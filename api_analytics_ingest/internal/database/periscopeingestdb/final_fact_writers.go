@@ -8,7 +8,7 @@ import (
 
 const insertViewerSessionFinal = `INSERT INTO periscope.viewer_sessions_final (
 	tenant_id, node_id, session_id, source_event_id,
-	cluster_id, origin_cluster_id, control_cell_id, stream_id, stream_name, connector, host,
+	cluster_id, origin_cluster_id, control_cell_id, stream_id, artifact_hash, stream_name, connector, host,
 	country_code, city, latitude, longitude, tags,
 	duration_seconds, uploaded_bytes, downloaded_bytes, seconds_connected,
 	source_started_at_ms, source_ended_at_ms, edge_received_at_ms, projection_version_ms,
@@ -24,6 +24,7 @@ type ViewerSessionFinalRow struct {
 	OriginClusterID     string
 	ControlCellID       string
 	StreamID            uuid.UUID
+	ArtifactHash        string
 	StreamName          string
 	Connector           string
 	Host                string
@@ -51,7 +52,7 @@ func PrepareViewerSessionFinal(ctx context.Context, db BatchPreparer) (*Writer[V
 	return prepare(ctx, db, insertViewerSessionFinal, func(row ViewerSessionFinalRow) []interface{} {
 		return []interface{}{
 			row.TenantID, row.NodeID, row.SessionID, row.SourceEventID,
-			row.ClusterID, row.OriginClusterID, row.ControlCellID, row.StreamID, row.StreamName, row.Connector, row.Host,
+			row.ClusterID, row.OriginClusterID, row.ControlCellID, row.StreamID, row.ArtifactHash, row.StreamName, row.Connector, row.Host,
 			row.CountryCode, row.City, row.Latitude, row.Longitude, row.Tags,
 			row.DurationSeconds, row.UploadedBytes, row.DownloadedBytes, row.SecondsConnected,
 			row.SourceStartedAtMS, row.SourceEndedAtMS, row.EdgeReceivedAtMS, row.ProjectionVersionMS,

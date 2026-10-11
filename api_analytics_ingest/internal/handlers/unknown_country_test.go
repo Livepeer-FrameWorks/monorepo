@@ -60,7 +60,7 @@ func TestUnknownCountryViewerUsesOneMarkerForSessionsAndViewerHours(t *testing.T
 		t.Fatalf("expected one viewer_sessions_final row, got %#v", final)
 	}
 	sessionCountry := connection.rows[0][15] // viewer_connection_events.country_code
-	finalCountry := final.rows[0][11]        // viewer_sessions_final.country_code
+	finalCountry := final.rows[0][12]        // viewer_sessions_final.country_code
 	if sessionCountry != "--" || finalCountry != "--" {
 		t.Fatalf("unknown country: connection event %q, final session %q; want both %q", sessionCountry, finalCountry, "--")
 	}

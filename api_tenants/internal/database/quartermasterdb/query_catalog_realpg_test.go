@@ -766,7 +766,7 @@ func runConvertedRuntimeWriteAdapters(t *testing.T, ctx context.Context, db *sql
 		PeersJSON: `[]`, ServiceEndpointsJSON: `{}`}); err != nil {
 		t.Fatalf("store mesh node config: %v", err)
 	}
-	if err := queries.UpdateMeshHeartbeat(ctx, "contract-runtime-node", sql.NullString{String: "8", Valid: true}); err != nil {
+	if err := queries.UpdateMeshHeartbeat(ctx, "contract-runtime-node", sql.NullString{String: "8", Valid: true}, 30); err != nil {
 		t.Fatalf("update mesh heartbeat: %v", err)
 	}
 	if _, err := queries.CurrentMeshTopologyRevision(ctx); err != nil {
@@ -912,7 +912,7 @@ func runConvertedRuntimeWriteAdapters(t *testing.T, ctx context.Context, db *sql
 	if _, err := queries.ControlCellHasRunningFoghorn(ctx, "demo-media"); err != nil {
 		t.Fatalf("control cell has running foghorn: %v", err)
 	}
-	if err := queries.RecordNodeControlCellObservations(ctx, "central-primary", []string{"central-node-1"}, []time.Time{now}); err != nil {
+	if err := queries.RecordNodeControlCellObservations(ctx, "central-primary", []string{"central-node-1"}, []time.Time{now}, 60); err != nil {
 		t.Fatalf("record node control cell observations: %v", err)
 	}
 	for _, target := range []string{"demo-media", "central-primary"} {
@@ -959,7 +959,7 @@ func runConvertedRuntimeWriteAdapters(t *testing.T, ctx context.Context, db *sql
 		t.Fatalf("get cluster internal foghorn: %v", err)
 	}
 
-	if err := queries.UpdateReportedNodes(ctx, UpdateReportedNodesParams{NodeIDs: []string{"contract-runtime-node"}, ExternalIPs: []string{"192.0.2.22"}, RefreshHeartbeat: []bool{true}}); err != nil {
+	if err := queries.UpdateReportedNodes(ctx, UpdateReportedNodesParams{NodeIDs: []string{"contract-runtime-node"}, ExternalIPs: []string{"192.0.2.22"}, RefreshHeartbeat: []bool{true}, HeartbeatRefreshAfterSeconds: 180}); err != nil {
 		t.Fatalf("update reported nodes: %v", err)
 	}
 	if err := queries.UpsertHealthyEdgeInstance(ctx, UpsertHealthyEdgeInstanceParams{InstanceID: "contract-edge-instance", NodeID: "contract-runtime-node", ServiceType: "edge"}); err != nil {

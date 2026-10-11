@@ -209,7 +209,13 @@ func (q *Queries) ListReleasedControlCellClusters(ctx context.Context, instanceI
 // RecordNodeControlCellObservations stores cellID as the control cell of each
 // node whose observation is at least as recent as the stored one, so a
 // previous cell reporting an older snapshot cannot take a moved node back.
-func (q *Queries) RecordNodeControlCellObservations(ctx context.Context, cellID string, nodeIDs []string, observedAt []time.Time) error {
+//
+// A new control cell is written at once. The same cell's newer observation is
+// written only for a node of a tenant-private cluster, and only once it is
+// refreshAfterSeconds past the stored one: control_cell_observed_at is read
+// only by the reassignment window (ListControlCellPendingNodes), and only
+// tenant-private clusters are reassigned.
+func (q *Queries) RecordNodeControlCellObservations(ctx context.Context, cellID string, nodeIDs []string, observedAt []time.Time, refreshAfterSeconds int32) error {
 	stamps := make([]string, len(observedAt))
 	for i, observed := range observedAt {
 		stamps[i] = observed.UTC().Format(time.RFC3339Nano)
@@ -218,10 +224,16 @@ func (q *Queries) RecordNodeControlCellObservations(ctx context.Context, cellID 
 		UPDATE quartermaster.infrastructure_nodes n
 		SET control_cell_id = $1,
 		    control_cell_observed_at = LEAST(payload.observed_at, NOW())
-		FROM unnest($2::text[], $3::timestamptz[]) AS payload(node_id, observed_at)
+		FROM unnest($2::text[], $3::timestamptz[]) AS payload(node_id, observed_at),
+		     quartermaster.infrastructure_clusters c
 		WHERE n.node_id = payload.node_id
+		  AND c.cluster_id = n.cluster_id
 		  AND (n.control_cell_observed_at IS NULL OR n.control_cell_observed_at <= LEAST(payload.observed_at, NOW()))
-	`, cellID, pq.Array(nodeIDs), pq.Array(stamps))
+		  AND (n.control_cell_id IS DISTINCT FROM $1
+		       OR n.control_cell_observed_at IS NULL
+		       OR (c.cluster_class = 'tenant_private'
+		           AND n.control_cell_observed_at <= LEAST(payload.observed_at, NOW()) - ($4::int * INTERVAL '1 second')))
+	`, cellID, pq.Array(nodeIDs), pq.Array(stamps), refreshAfterSeconds)
 	return err
 }
 

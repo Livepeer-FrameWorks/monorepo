@@ -17,10 +17,12 @@ import (
 // The binding deadline belongs to a publisher that has just been ADMITTED, not
 // to one already in the rotation. Its claim starts ageing at PUSH_REWRITE, and
 // the worst case is: it arrives moments after a tick took its source snapshot,
-// so it waits out that whole tick, then lands in the final wave of the next —
-// two full tick budgets before its first renewal. An already-renewed claim's
-// gap is smaller (interval plus one tick), so sizing against the new publisher
-// covers both.
+// so it waits until the next tick starts (the interval, or the whole tick when
+// that overruns the interval), then lands in the final wave of that tick. An
+// already-renewed claim's gap is the same at most: renewed in the first wave of
+// one tick and the final wave of the next. With the interval equal to the tick
+// budget, both are two budgets, and the lease holds three ticks, so a claim
+// gets three renewal attempts per lease.
 //
 // A tick is enumeration followed by batches, and the budget covers both. The
 // enumeration queries ingest sessions, so it is not free and a tick that spent
@@ -47,10 +49,11 @@ const (
 	activeIngestPlacementConcurrency = 64
 	activeIngestPlacementCallTimeout = 5 * time.Second
 
-	// The tick budget is a third of the lease, so the two-budget worst case
-	// above leaves the remaining third as margin. Ticks coalesce when a tick
-	// overruns the interval, so the interval only shortens the gap.
-	activeIngestPlacementInterval   = streamident.ActiveIngestLease / 6 // 5s
+	// The interval and the tick budget are each a third of the lease, so the
+	// two-budget worst case above leaves the remaining third as margin and
+	// each claim is re-asserted three times per lease. Ticks coalesce when a
+	// tick overruns the interval.
+	activeIngestPlacementInterval   = streamident.ActiveIngestLease / 3 // 10s
 	activeIngestPlacementTickBudget = streamident.ActiveIngestLease / 3 // 10s
 
 	// activeIngestPlacementEnumerationBudget is the tick budget's share for
@@ -61,8 +64,8 @@ const (
 	activeIngestPlacementBatchBudget       = activeIngestPlacementTickBudget - activeIngestPlacementEnumerationBudget
 
 	// activeIngestPlacementMaxFirstRenewal is how long a just-admitted claim can
-	// wait for its first renewal.
-	activeIngestPlacementMaxFirstRenewal = 2 * activeIngestPlacementTickBudget
+	// wait for its first renewal: until the next tick starts, then that tick.
+	activeIngestPlacementMaxFirstRenewal = max(activeIngestPlacementInterval, activeIngestPlacementTickBudget) + activeIngestPlacementTickBudget
 
 	// activeIngestPlacementCapacity is the live-publisher count one Foghorn can
 	// re-assert inside the budget: waves that fit in the batch budget, times

@@ -1399,8 +1399,8 @@ func TestRawUserEndProjectsFinalSessionWithHeaderTenantFallback(t *testing.T) {
 		t.Fatalf("expected EU-origin/US-serving placement, got node=%#v cluster=%#v origin=%#v control=%#v",
 			finalBatch.rows[0][1], finalBatch.rows[0][4], finalBatch.rows[0][5], finalBatch.rows[0][6])
 	}
-	if finalBatch.rows[0][17] != uint64(11) || finalBatch.rows[0][18] != uint64(99) {
-		t.Fatalf("expected Mist USER_END bytes mapped to uploaded=11 downloaded=99, got uploaded=%#v downloaded=%#v", finalBatch.rows[0][17], finalBatch.rows[0][18])
+	if finalBatch.rows[0][18] != uint64(11) || finalBatch.rows[0][19] != uint64(99) {
+		t.Fatalf("expected Mist USER_END bytes mapped to uploaded=11 downloaded=99, got uploaded=%#v downloaded=%#v", finalBatch.rows[0][18], finalBatch.rows[0][19])
 	}
 }
 

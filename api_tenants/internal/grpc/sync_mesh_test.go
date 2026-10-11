@@ -246,7 +246,7 @@ func TestSyncMeshFailsClosedWhenTopologyQueryFails(t *testing.T) {
 		WithArgs("node-1").
 		WillReturnRows(sqlmock.NewRows([]string{"wireguard_ip", "wireguard_public_key", "external_ip", "internal_ip", "wireguard_listen_port", "cluster_id"}).AddRow("10.200.0.5", "pub-key-1", "1.2.3.4", "10.0.0.5", int32(51820), "cluster-1"))
 	mock.ExpectExec(`UPDATE quartermaster\.infrastructure_nodes`).
-		WithArgs("node-1", sqlmock.AnyArg()).
+		WithArgs("node-1", sqlmock.AnyArg(), meshHeartbeatRefreshAfterSeconds).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	expectMeshConfigCacheMiss(mock, "node-1")
 	expectCurrentMeshTopologySourceHash(mock, 1)
@@ -284,7 +284,7 @@ func TestSyncMeshServiceEndpointsKeyedByType(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"wireguard_ip", "wireguard_public_key", "external_ip", "internal_ip", "wireguard_listen_port", "cluster_id"}).AddRow("10.200.0.5", "pub-key-1", "1.2.3.4", "10.0.0.5", int32(51820), "cluster-1"))
 
 	mock.ExpectExec(`UPDATE quartermaster\.infrastructure_nodes`).
-		WithArgs("node-1", sqlmock.AnyArg()).
+		WithArgs("node-1", sqlmock.AnyArg(), meshHeartbeatRefreshAfterSeconds).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	expectMeshConfigCacheMiss(mock, "node-1")
 	expectCurrentMeshTopologySourceHash(mock, 1)
@@ -339,7 +339,7 @@ func TestSyncMeshReturnsStoredPortOverRequestEcho(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"wireguard_ip", "wireguard_public_key", "external_ip", "internal_ip", "wireguard_listen_port", "cluster_id"}).AddRow("10.200.0.5", "pub", "1.2.3.4", "10.0.0.5", int32(51900), "cluster-1"))
 
 	mock.ExpectExec(`UPDATE quartermaster\.infrastructure_nodes`).
-		WithArgs("node-1", sqlmock.AnyArg()).
+		WithArgs("node-1", sqlmock.AnyArg(), meshHeartbeatRefreshAfterSeconds).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	expectMeshConfigCacheMiss(mock, "node-1")
 	expectCurrentMeshTopologySourceHash(mock, 1)
@@ -379,7 +379,7 @@ func TestSyncMeshCacheHitSkipsTopologyQueries(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"wireguard_ip", "wireguard_public_key", "external_ip", "internal_ip", "wireguard_listen_port", "cluster_id"}).
 			AddRow("10.200.0.5", "pub", "1.2.3.4", "10.0.0.5", int32(51820), "cluster-1"))
 	mock.ExpectExec(`UPDATE quartermaster\.infrastructure_nodes`).
-		WithArgs("node-1", sqlmock.AnyArg()).
+		WithArgs("node-1", sqlmock.AnyArg(), meshHeartbeatRefreshAfterSeconds).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(`(?s)SELECT c\.cluster_id,\s+c\.mesh_revision,\s+c\.topology_source_hash.*FROM quartermaster\.mesh_node_configs c\s+WHERE c\.node_id = \$1`).
 		WithArgs("node-1").
@@ -435,7 +435,7 @@ func TestSyncMeshStaleCacheServesStoredConfig(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"wireguard_ip", "wireguard_public_key", "external_ip", "internal_ip", "wireguard_listen_port", "cluster_id"}).
 			AddRow("10.200.0.5", "pub", "1.2.3.4", "10.0.0.5", int32(51820), "cluster-1"))
 	mock.ExpectExec(`UPDATE quartermaster\.infrastructure_nodes`).
-		WithArgs("node-1", sqlmock.AnyArg()).
+		WithArgs("node-1", sqlmock.AnyArg(), meshHeartbeatRefreshAfterSeconds).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(`(?s)SELECT c\.cluster_id,\s+c\.mesh_revision,\s+c\.topology_source_hash.*FROM quartermaster\.mesh_node_configs c\s+WHERE c\.node_id = \$1`).
 		WithArgs("node-1").
@@ -537,7 +537,7 @@ func TestSyncMeshReturnsComputedConfigWhenCacheWriteFails(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"wireguard_ip", "wireguard_public_key", "external_ip", "internal_ip", "wireguard_listen_port", "cluster_id"}).
 			AddRow("10.200.0.5", "pub", "1.2.3.4", "10.0.0.5", int32(51820), "cluster-1"))
 	mock.ExpectExec(`UPDATE quartermaster\.infrastructure_nodes`).
-		WithArgs("node-1", sqlmock.AnyArg()).
+		WithArgs("node-1", sqlmock.AnyArg(), meshHeartbeatRefreshAfterSeconds).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	expectMeshConfigCacheMiss(mock, "node-1")
 	expectCurrentMeshTopologySourceHash(mock, 1)
@@ -575,7 +575,7 @@ func TestSyncMeshReturnsCrossClusterPeersAndQuartermasterEndpoint(t *testing.T) 
 		WillReturnRows(sqlmock.NewRows([]string{"wireguard_ip", "wireguard_public_key", "external_ip", "internal_ip", "wireguard_listen_port", "cluster_id"}).
 			AddRow("10.88.1.20", "regional-pub", "203.0.113.20", "10.0.1.20", int32(51820), "regional"))
 	mock.ExpectExec(`UPDATE quartermaster\.infrastructure_nodes`).
-		WithArgs("regional-1", sqlmock.AnyArg()).
+		WithArgs("regional-1", sqlmock.AnyArg(), meshHeartbeatRefreshAfterSeconds).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	expectMeshConfigCacheMiss(mock, "regional-1")
 	expectCurrentMeshTopologySourceHash(mock, 1)
@@ -624,7 +624,7 @@ func TestSyncMeshIncludesInfraDependencyPeersWithoutDNSAliases(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"wireguard_ip", "wireguard_public_key", "external_ip", "internal_ip", "wireguard_listen_port", "cluster_id"}).
 			AddRow("10.88.1.20", "regional-pub", "203.0.113.20", "10.0.1.20", int32(51820), "regional"))
 	mock.ExpectExec(`UPDATE quartermaster\.infrastructure_nodes`).
-		WithArgs("regional-1", sqlmock.AnyArg()).
+		WithArgs("regional-1", sqlmock.AnyArg(), meshHeartbeatRefreshAfterSeconds).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	expectMeshConfigCacheMiss(mock, "regional-1")
 	expectCurrentMeshTopologySourceHash(mock, 1)
@@ -705,7 +705,7 @@ func TestSyncMeshIncludesReciprocalServiceConsumers(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"wireguard_ip", "wireguard_public_key", "external_ip", "internal_ip", "wireguard_listen_port", "cluster_id"}).
 			AddRow("10.88.0.10", "central-pub", "203.0.113.10", "10.0.0.10", int32(51820), "core"))
 	mock.ExpectExec(`UPDATE quartermaster\.infrastructure_nodes`).
-		WithArgs("central-1", sqlmock.AnyArg()).
+		WithArgs("central-1", sqlmock.AnyArg(), meshHeartbeatRefreshAfterSeconds).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	expectMeshConfigCacheMiss(mock, "central-1")
 	expectCurrentMeshTopologySourceHash(mock, 1)
@@ -774,7 +774,7 @@ func TestSyncMeshMarksNodeActive(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"wireguard_ip", "wireguard_public_key", "external_ip", "internal_ip", "wireguard_listen_port", "cluster_id"}).
 			AddRow("10.200.0.5", "pub", "1.2.3.4", "10.0.0.5", int32(51820), "cluster-1"))
 	mock.ExpectExec(`(?s)UPDATE quartermaster\.infrastructure_nodes.*status = 'active'`).
-		WithArgs("node-1", sqlmock.AnyArg()).
+		WithArgs("node-1", sqlmock.AnyArg(), meshHeartbeatRefreshAfterSeconds).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	expectMeshConfigCacheMiss(mock, "node-1")
 	expectCurrentMeshTopologySourceHash(mock, 1)
@@ -806,7 +806,7 @@ func TestSyncMeshIgnoresIncompleteResourceSnapshot(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"wireguard_ip", "wireguard_public_key", "external_ip", "internal_ip", "wireguard_listen_port", "cluster_id"}).
 			AddRow("10.200.0.5", "pub", "1.2.3.4", "10.0.0.5", int32(51820), "cluster-1"))
 	mock.ExpectExec(`(?s)UPDATE quartermaster\.infrastructure_nodes.*SET last_heartbeat = NOW\(\),.*updated_at = NOW\(\).*WHERE node_id = \$1`).
-		WithArgs("node-1", sqlmock.AnyArg()).
+		WithArgs("node-1", sqlmock.AnyArg(), meshHeartbeatRefreshAfterSeconds).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	expectMeshConfigCacheMiss(mock, "node-1")
 	expectCurrentMeshTopologySourceHash(mock, 1)
@@ -859,6 +859,7 @@ func TestSyncMeshStoresSnapshotAtReceiptTime(t *testing.T) {
 			int64(4096),
 			int64(99),
 			recentTimeArg{earliest: before, latest: before.Add(5 * time.Second)},
+			meshHeartbeatRefreshAfterSeconds,
 		).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	expectMeshConfigCacheMiss(mock, "node-1")
@@ -941,7 +942,7 @@ func TestSyncMeshExcludesPeerWithMissingEndpoint(t *testing.T) {
 		WithArgs("node-1").
 		WillReturnRows(sqlmock.NewRows([]string{"wireguard_ip", "wireguard_public_key", "external_ip", "internal_ip", "wireguard_listen_port", "cluster_id"}).AddRow("10.200.0.5", "pub", "1.2.3.4", "10.0.0.5", int32(51820), "cluster-1"))
 	mock.ExpectExec(`UPDATE quartermaster\.infrastructure_nodes`).
-		WithArgs("node-1", sqlmock.AnyArg()).
+		WithArgs("node-1", sqlmock.AnyArg(), meshHeartbeatRefreshAfterSeconds).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	expectMeshConfigCacheMiss(mock, "node-1")
 	expectCurrentMeshTopologySourceHash(mock, 1)
@@ -996,7 +997,7 @@ func TestSyncMeshExcludesPeerWithScanError(t *testing.T) {
 		WithArgs("node-1").
 		WillReturnRows(sqlmock.NewRows([]string{"wireguard_ip", "wireguard_public_key", "external_ip", "internal_ip", "wireguard_listen_port", "cluster_id"}).AddRow("10.200.0.5", "pub", "1.2.3.4", "10.0.0.5", int32(51820), "cluster-1"))
 	mock.ExpectExec(`UPDATE quartermaster\.infrastructure_nodes`).
-		WithArgs("node-1", sqlmock.AnyArg()).
+		WithArgs("node-1", sqlmock.AnyArg(), meshHeartbeatRefreshAfterSeconds).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	expectMeshConfigCacheMiss(mock, "node-1")
 	expectCurrentMeshTopologySourceHash(mock, 1)

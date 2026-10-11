@@ -149,14 +149,17 @@ func (h *AnalyticsHandler) projectViewerSessionFinal(ctx context.Context, trigge
 	}
 
 	row := viewerSessionFinalRow{
-		tenantID:            tenantID,
-		nodeID:              nodeID,
-		sessionID:           sessionID,
-		sourceEventID:       sourceEventID,
-		clusterID:           clusterID,
-		originClusterID:     trigger.GetOriginClusterId(),
-		controlCellID:       trigger.GetControlCellId(),
-		streamID:            streamID,
+		tenantID:        tenantID,
+		nodeID:          nodeID,
+		sessionID:       sessionID,
+		sourceEventID:   sourceEventID,
+		clusterID:       clusterID,
+		originClusterID: trigger.GetOriginClusterId(),
+		controlCellID:   trigger.GetControlCellId(),
+		streamID:        streamID,
+		// A viewer of non-live content keeps the source stream Foghorn named
+		// next to the artifact; the artifact hash marks the view as not live.
+		artifactHash:        mistTriggerArtifactHash(trigger),
 		streamName:          vd.GetStreamName(),
 		connector:           vd.GetConnector(),
 		host:                vd.GetHost(),
@@ -192,7 +195,7 @@ func (h *AnalyticsHandler) projectViewerSessionFinal(ctx context.Context, trigge
 	if err := batch.Append(periscopeingestdb.ViewerSessionFinalRow{
 		TenantID: row.tenantID, NodeID: row.nodeID, SessionID: row.sessionID, SourceEventID: row.sourceEventID,
 		ClusterID: row.clusterID, OriginClusterID: row.originClusterID, ControlCellID: row.controlCellID,
-		StreamID: row.streamID, StreamName: row.streamName, Connector: row.connector, Host: row.host,
+		StreamID: row.streamID, ArtifactHash: row.artifactHash, StreamName: row.streamName, Connector: row.connector, Host: row.host,
 		CountryCode: row.countryCode, City: row.city, Latitude: row.latitude, Longitude: row.longitude, Tags: row.tags,
 		DurationSeconds: row.durationSeconds, UploadedBytes: row.uploadedBytes, DownloadedBytes: row.downloadedBytes, SecondsConnected: row.secondsConnected,
 		SourceStartedAtMS: row.sourceStartedAtMS, SourceEndedAtMS: row.sourceEndedAtMS, EdgeReceivedAtMS: row.edgeReceivedAtMS, ProjectionVersionMS: row.projectionVersionMS,
@@ -672,6 +675,7 @@ type viewerSessionFinalRow struct {
 	originClusterID     string
 	controlCellID       string
 	streamID            uuid.UUID
+	artifactHash        string
 	streamName          string
 	connector           string
 	host                string

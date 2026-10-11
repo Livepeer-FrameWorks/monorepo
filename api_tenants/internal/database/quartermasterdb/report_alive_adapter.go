@@ -63,8 +63,16 @@ func (q *Queries) ListPriorEdgeInstanceStates(ctx context.Context, nodeIDs []str
 type UpdateReportedNodesParams struct {
 	NodeIDs, ExternalIPs []string
 	RefreshHeartbeat     []bool
+	// HeartbeatRefreshAfterSeconds is how old last_heartbeat may grow before
+	// a healthy report of an otherwise unchanged node rewrites it.
+	HeartbeatRefreshAfterSeconds int32
 }
 
+// UpdateReportedNodes records reported external IPs and refreshes the
+// heartbeat of nodes reported healthy. A node row is rewritten only when its
+// external IP changes or a healthy report finds its heartbeat
+// HeartbeatRefreshAfterSeconds old, so repeated reports of an unchanged node
+// leave the row alone.
 func (q *Queries) UpdateReportedNodes(ctx context.Context, arg UpdateReportedNodesParams) error {
 	_, err := q.db.ExecContext(ctx, `
 		UPDATE quartermaster.infrastructure_nodes n
@@ -73,7 +81,11 @@ func (q *Queries) UpdateReportedNodes(ctx context.Context, arg UpdateReportedNod
 		    external_ip = COALESCE(NULLIF(payload.ip, '')::inet, n.external_ip)
 		FROM unnest($1::text[], $2::text[], $3::boolean[]) AS payload(node_id, ip, refresh_hb)
 		WHERE n.node_id = payload.node_id
-	`, pq.Array(arg.NodeIDs), pq.Array(arg.ExternalIPs), pq.Array(arg.RefreshHeartbeat))
+		  AND ((NULLIF(payload.ip, '')::inet IS NOT NULL AND n.external_ip IS DISTINCT FROM NULLIF(payload.ip, '')::inet)
+		       OR (payload.refresh_hb
+		           AND (n.last_heartbeat IS NULL
+		                OR n.last_heartbeat <= NOW() - ($4::int * INTERVAL '1 second'))))
+	`, pq.Array(arg.NodeIDs), pq.Array(arg.ExternalIPs), pq.Array(arg.RefreshHeartbeat), arg.HeartbeatRefreshAfterSeconds)
 	return err
 }
 

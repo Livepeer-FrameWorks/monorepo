@@ -30,8 +30,15 @@ type UpdateMeshHeartbeatParams struct {
 	SnapshotCPU                                                                            sql.NullFloat64
 	SnapshotRamUsed, SnapshotRamTotal, SnapshotDiskUsed, SnapshotDiskTotal, SnapshotUptime sql.NullInt64
 	SnapshotAt                                                                             sql.NullTime
+	// RefreshAfterSeconds is how old last_heartbeat and snapshot_at may grow
+	// before a sync that changes nothing else rewrites them.
+	RefreshAfterSeconds int32
 }
 
+// UpdateMeshHeartbeatWithSnapshot records a Privateer sync with its resource
+// snapshot. The row is rewritten when the node is not active, the applied
+// revision changed, or the heartbeat or snapshot is RefreshAfterSeconds old;
+// the snapshot values are a sample refreshed together with the heartbeat.
 func (q *Queries) UpdateMeshHeartbeatWithSnapshot(ctx context.Context, arg UpdateMeshHeartbeatParams) error {
 	_, err := q.db.ExecContext(ctx, `
 		UPDATE quartermaster.infrastructure_nodes
@@ -47,12 +54,21 @@ func (q *Queries) UpdateMeshHeartbeatWithSnapshot(ctx context.Context, arg Updat
 		    snapshot_at = $9,
 		    updated_at = NOW()
 		WHERE node_id = $1
+		  AND (status IS DISTINCT FROM 'active'
+		       OR applied_mesh_revision IS DISTINCT FROM $2
+		       OR last_heartbeat IS NULL
+		       OR last_heartbeat <= NOW() - ($10::int * INTERVAL '1 second')
+		       OR snapshot_at IS NULL
+		       OR snapshot_at <= NOW() - ($10::int * INTERVAL '1 second'))
 	`, arg.NodeID, arg.AppliedRevision, arg.SnapshotCPU, arg.SnapshotRamUsed, arg.SnapshotRamTotal,
-		arg.SnapshotDiskUsed, arg.SnapshotDiskTotal, arg.SnapshotUptime, arg.SnapshotAt)
+		arg.SnapshotDiskUsed, arg.SnapshotDiskTotal, arg.SnapshotUptime, arg.SnapshotAt, arg.RefreshAfterSeconds)
 	return err
 }
 
-func (q *Queries) UpdateMeshHeartbeat(ctx context.Context, nodeID string, revision sql.NullString) error {
+// UpdateMeshHeartbeat records a Privateer sync without a resource snapshot.
+// The row is rewritten when the node is not active, the applied revision
+// changed, or the heartbeat is refreshAfterSeconds old.
+func (q *Queries) UpdateMeshHeartbeat(ctx context.Context, nodeID string, revision sql.NullString, refreshAfterSeconds int32) error {
 	_, err := q.db.ExecContext(ctx, `
 		UPDATE quartermaster.infrastructure_nodes
 		SET last_heartbeat = NOW(),
@@ -60,7 +76,11 @@ func (q *Queries) UpdateMeshHeartbeat(ctx context.Context, nodeID string, revisi
 		    status = 'active',
 		    updated_at = NOW()
 		WHERE node_id = $1
-	`, nodeID, revision)
+		  AND (status IS DISTINCT FROM 'active'
+		       OR applied_mesh_revision IS DISTINCT FROM $2
+		       OR last_heartbeat IS NULL
+		       OR last_heartbeat <= NOW() - ($3::int * INTERVAL '1 second'))
+	`, nodeID, revision, refreshAfterSeconds)
 	return err
 }
 
