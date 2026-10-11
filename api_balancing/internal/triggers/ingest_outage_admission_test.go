@@ -122,9 +122,8 @@ func TestPushRewrite_CommodoreHangs_OutageOwnerAdmittedWithinBudget(t *testing.T
 		t.Run(tc.name, func(t *testing.T) {
 			server := &hangingCommodore{answerValidation: tc.answerValidation}
 			client := hangingCommodoreClient(t, server)
-			started := time.Now()
-			assertOutageOwnerPushRewriteAdmitted(t, func(p *Processor) { p.commodoreClient = client })
-			if elapsed := time.Since(started); elapsed > 2500*time.Millisecond {
+			elapsed := assertOutageOwnerPushRewriteAdmitted(t, func(p *Processor) { p.commodoreClient = client })
+			if elapsed > 2500*time.Millisecond {
 				t.Fatalf("admission took %s of its 3s budget waiting on Commodore", elapsed)
 			}
 			if server.calls.Load() == 0 {
@@ -141,26 +140,27 @@ func TestPushRewrite_CommodoreOutageBackoffSkipsAdmissionCalls(t *testing.T) {
 	client := hangingCommodoreClient(t, server)
 	backoff := &federation.CommodoreOutageBackoff{}
 	backoff.RecordUnreachable(status.Error(codes.Unavailable, "commodore is down"))
-	started := time.Now()
-	assertOutageOwnerPushRewriteAdmitted(t, func(p *Processor) {
+	elapsed := assertOutageOwnerPushRewriteAdmitted(t, func(p *Processor) {
 		p.commodoreClient = client
 		p.SetCommodoreOutageBackoff(backoff)
 	})
 	if calls := server.calls.Load(); calls != 0 {
 		t.Fatalf("admission asked Commodore %d times inside the outage backoff", calls)
 	}
-	if elapsed := time.Since(started); elapsed > time.Second {
+	if elapsed > time.Second {
 		t.Fatalf("admission inside the outage backoff took %s", elapsed)
 	}
 }
 
-func assertOutageOwnerPushRewriteAdmitted(t *testing.T, configure func(*Processor)) {
+// assertOutageOwnerPushRewriteAdmitted returns how long the PUSH_REWRITE
+// itself took, excluding fixture setup.
+func assertOutageOwnerPushRewriteAdmitted(t *testing.T, configure func(*Processor)) time.Duration {
 	t.Helper()
 	installIngestSessionMintMockWithStream(t)
 	sm := state.ResetDefaultManagerForTests()
 	t.Cleanup(sm.Shutdown)
 	sm.SetNodeInfo("edge-node-1", "http://edge.example/view", true, nil, nil, "", "", nil)
-	sm.SetNodeConnectionInfo(context.Background(), "edge-node-1", "edge-node-1:18090", "", "cluster-a", nil)
+	sm.SetNodeConnectionInfo(context.Background(), "edge-node-1", "127.0.0.1:18090", "", "cluster-a", nil)
 	previousRegistry := control.StreamRegistryInstance
 	control.SetStreamRegistry(control.NewStreamRegistry(nil, "cluster-a", time.Minute))
 	t.Cleanup(func() { control.SetStreamRegistry(previousRegistry) })
@@ -196,7 +196,9 @@ func assertOutageOwnerPushRewriteAdmitted(t *testing.T, configure func(*Processo
 		PushRewrite: &ipcpb.PushRewriteTrigger{Pid: 4242, TriggerUuid: "outage-owner-trigger", TriggerUnixMillis: 1, StreamName: "sk_local",
 			PushUrl: "rtmp://example/live/sk_local", ObservedConnector: "RTMP"},
 	}}
+	started := time.Now()
 	streamName, blocking, err := p.handlePushRewrite(trigger)
+	elapsed := time.Since(started)
 	if err != nil || blocking || streamName != "live+stream-internal" {
 		code := ipcpb.IngestErrorCode_INGEST_ERROR_NONE
 		if ingestErr, ok := errors.AsType[*ingesterrors.IngestError](err); ok {
@@ -213,4 +215,5 @@ func assertOutageOwnerPushRewriteAdmitted(t *testing.T, configure func(*Processo
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
 	}
+	return elapsed
 }
