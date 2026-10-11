@@ -2130,9 +2130,9 @@ https://logbook.frameworks.network/builders/analytics-api
 The webapp's `/analytics`, `/analytics/audience`, `/analytics/usage`, and `/streams/:id/analytics` pages are all built on the same GraphQL surface you can query directly. This page maps each view to the operations that drive it so you can replicate or extend them in your own dashboards.
 
 <Aside type="note">
-  All analytics queries are tenant-scoped via the JWT — you don't need to pass a tenant ID, and you
-  can't query across tenants. Bounded time ranges and pagination are enforced server-side; see field
-  definitions in the [GraphQL playground](%APP_URL%/developer/playground).
+  GraphQL analytics queries are tenant-scoped via the JWT — you don't need to pass a tenant ID, and
+  you can't query across tenants. Bounded time ranges and pagination are enforced server-side; see
+  field definitions in the [GraphQL playground](%APP_URL%/developer/playground).
 </Aside>
 
 <Aside type="note" title="Cluster data is scoped by intent">
@@ -2341,6 +2341,94 @@ query NetworkStatus {
   }
 }
 ```
+
+## Public Livepeer observations
+
+Platform v0.3.12 adds `GET /v1/network/livepeer` on the Bridge API origin when network
+observations are enabled. This REST endpoint powers the Livepeer tab at
+`/network?view=livepeer` and is available to external explorers and import jobs without
+an account, wallet signature or API key. Browser clients can fetch the public route
+from any origin without cookies or other browser credentials.
+
+```bash
+curl --fail --get "https://bridge.frameworks.network/v1/network/livepeer" \
+  --data-urlencode "resource=0xYOUR_ORCHESTRATOR_ADDRESS" \
+  --data-urlencode "region=eu-west" \
+  --data-urlencode "interval=5m"
+```
+
+| Response field         | Meaning                                                                                       |
+| ---------------------- | --------------------------------------------------------------------------------------------- |
+| `inventory.resources`  | Contract catalog identities and advertised service URIs                                       |
+| `inventory.endpoints`  | Observed endpoints, IPs, availability, geography, latest quote and check times                |
+| `inventory.observers`  | Measurement roles, regions, known locations and last-seen times with opaque IDs               |
+| `history.summaries`    | Whole-window comparisons by identity, IP, region, workload, profile and event kind            |
+| `history.work`         | Full-window observed work, execution-time service charges and separate expected ticket credit |
+| `history.cohorts`      | Time buckets for charts, with sample counts and latency distributions                         |
+| `history.observations` | Bounded discovery, state, price, error and decision observations                              |
+| `history_status`       | Whether historical analytics was available for this response                                  |
+
+`start` and `end` accept RFC3339 timestamps; the default window is 24 hours and the
+maximum is 730 days. `resource`, `ip` and `region` filter history. Inventory remains
+the network inventory; filter its resource/endpoint arrays when importing one
+orchestrator. `interval` accepts `1m`, `5m` or `1h`. `include_inactive=true` includes
+endpoints hidden by the default inactivity window. Tenant scopes and publication
+permissions are server-owned and cannot be changed through query parameters.
+
+Discovery comes from external probers and real gateways; workload performance comes
+from FrameWorks production transcodes. An endpoint IP is not proof of a physical
+worker. Preserve region, profile, workload, event kind, sample counts and price units
+when comparing results. `failures / qualified_samples` describes qualifying outcomes;
+unrelated recorded events must not dilute the denominator. Prices are exact rational
+numerator/denominator strings and reflect the observing broadcaster's offered price.
+An observer's successful RPC checks do not establish continuous uptime or a benchmark
+score comparable to another testing system.
+
+Use `inventory.generated_at`, endpoint check/quote timestamps, observer `last_seen`
+and the history window to determine freshness. Polling every few minutes is sufficient
+for typical importers; responses have a short public cache lifetime. On HTTP 429, back
+off; on an outage, retain your last successful import with its original timestamps.
+`history_status=unavailable` can accompany HTTP 200 with valid inventory and empty
+history: that means historical data is unavailable, not zero traffic or zero failures.
+Inspect `history.truncated` and `history.rolled_up` before treating returned chart or
+observation arrays as complete. Raw checks and quotes expire after 30 days; older
+windows use retained hourly aggregates.
+
+`history.work.scope` is `frameworks-gateways`: these are FrameWorks-observed work
+totals, not an orchestrator's total Livepeer activity or earnings. Its summaries retain
+`resource_id`, `ip`, `region` and `profile_key`; sum sibling endpoints when comparing
+onchain identities. `dispatched_source_ms` includes retried and hedged submissions;
+`accepted_source_ms` counts final gateway-accepted segments once. Divide milliseconds
+by 60,000 for source minutes. `accepted_rendition_ms` derives from source duration times
+accepted rendition count. Duration and accepted-output sample counters distinguish
+missing measurements from known zero; compare them with the dispatched/accepted counts
+before treating totals as complete. `returned_pixels` includes returned work that was discarded;
+`accepted_pixels` covers final accepted output. Pixel totals, duration totals and ticket
+counts are decimal strings to preserve integer precision in JavaScript.
+
+`service_charge` uses execution-time session prices and includes priced returned work
+even when it was not finally accepted. `ticket_credit_sent` is separate expected payment
+credit. Amounts have exact `numerator`, `denominator`, `currency="ETH"` and `unit="wei"`;
+use rational arithmetic before converting wei to ETH. Neither amount is redeemed
+earnings or a historical dollar valuation. A missing amount is unknown; a zero
+numerator is a known zero. Sample counters and `unaccounted_samples` expose partial
+accounting; older events are not repriced from their latest quote.
+
+Work totals are independent of the chart/sample limit. Inspect `history.work.truncated`
+separately: when its work cohort/service-rate bound is exceeded, no partial work totals
+are returned. Ticket-credit values have their own bound: `ticket_credit_truncated=true`
+preserves work and service-charge totals, omits credit amounts and sets
+`ticket_credit_incomplete=true` on summaries with payment observations. Never treat
+those missing amounts as zero. Narrow `start`/`end`, `resource` or `region`. Retained long-range work uses
+whole hours inside the requested window; use its own `start`, `end` and
+`interval_seconds` when presenting totals. Hourly workload and cost snapshots expire
+after two years, and update every five minutes. The endpoint is an observation API,
+not a settlement ledger.
+
+The live endpoint depends on Bridge and the inventory coordinator; it currently has
+no independently hosted snapshot fallback. The authenticated
+`/v1/network/livepeer/diagnostics` route is private and must not be used by public
+importers. See [operator setup and retention](/operators/network-observations).
 
 ## Live event firehose
 
@@ -26971,6 +27059,20 @@ The fallback sends through the platform SMTP settings. `ALERTMANAGER_SMTP_SMARTH
 
 Each notification channel is active only while its key is set. Lookout re-reads these keys on
 every use, so an env reload changes routing without a restart.
+
+Use `LOOKOUT_OPS_SLACK_WEBHOOK_URL` / `LOOKOUT_OPS_DISCORD_WEBHOOK_URL` for incidents
+and cluster subscription requests, and `LOOKOUT_BUSINESS_PULSE_SLACK_WEBHOOK_URL` /
+`LOOKOUT_BUSINESS_PULSE_DISCORD_WEBHOOK_URL` for the other existing business activity.
+Each destination uses an incoming webhook for its target channel; Slack can keep the
+same app. Configure both purposes before setting `LOOKOUT_NOTIFY_LEGACY_FALLBACK=false`.
+The per-purpose `*_NOTIFICATIONS_DISABLED` flags disable that purpose explicitly.
+Email retains its existing critical-ops recipients; tenant in-app incidents and
+investigations keep their existing routes. Livepeer/network notifications are disabled.
+
+Upgrade all Lookout replicas before enabling these destinations. Queued delivery IDs
+pin their purpose and target; old unclassified rows continue using the legacy webhook.
+Keep the shared URLs until those rows drain, and drain purpose-routed rows before
+downgrading to a binary that does not understand the destination IDs.
 Slack and Discord also receive Lookout's fixed allowlist of direct signup,
 product, billing, support, and marketing activity events. These activity
 messages are separate from incidents and never page by email.
@@ -32654,6 +32756,11 @@ Read by `api_gateway/cmd/bridge`.
 
 | Variable | Type | Default | Notes | Since | Description |
 | --- | --- | --- | --- | --- | --- |
+| `NETWORK_OBSERVER_URL` | string |  |  | v0.3.13 | Observer inventory URL; enables public network REST API when configured. |
+| `NETWORK_OBSERVER_SECRET` | string |  | secret | v0.3.13 | Shared internal observer inventory credential. |
+| `NETWORK_PUBLIC_TENANT_IDS` | list |  |  | v0.3.13 | Explicit platform-owned tenant scopes whose public Livepeer observations can be published. |
+| `LIVEPEER_NETWORK_ID` | string | `42161` |  | v0.3.13 | Livepeer production network namespace. |
+| `NETWORK_OBSERVER_ENVIRONMENT` | string | `production` |  | v0.3.13 | Network observation environment. |
 | `PORT` | string | `18000` |  | v0.3.0 | TCP port for the HTTP listener that serves health, readiness, metrics, and HTTP APIs. |
 | `GIN_MODE` | string | `debug` |  | v0.3.0 | Router mode. release enables Gin release mode and restricts CORS to ALLOWED_ORIGINS; any other value runs the router in development mode. |
 | `ALLOWED_ORIGINS` | list |  |  | v0.3.0 | Comma-separated browser origins accepted by CORS when GIN_MODE is release. |
@@ -33100,6 +33207,60 @@ Read by `api_realtime/cmd/signalman`.
 | `QUARTERMASTER_GRPC_TLS_SERVER_NAME` | string |  |  | v0.3.0 | TLS server name override for the Quartermaster connection. Empty uses the canonical internal name. |
 | `SIGNALMAN_HOST` | string | `signalman` |  | v0.3.0 | Host name this instance advertises when it registers with Quartermaster. |
 
+## network-observer
+
+Read by `api_network_observer/cmd/network-observer`.
+
+| Variable | Type | Default | Notes | Since | Description |
+| --- | --- | --- | --- | --- | --- |
+| `GIN_MODE` | string | `debug` |  | v0.3.0 | Router mode. release enables Gin release mode and restricts CORS to ALLOWED_ORIGINS; any other value runs the router in development mode. |
+| `ALLOWED_ORIGINS` | list |  |  | v0.3.0 | Comma-separated browser origins accepted by CORS when GIN_MODE is release. |
+| `LOG_LEVEL` | string | `info` |  | v0.3.0 | Log level: debug, info, warn, or error. Any other value fails startup. |
+| `DATABASE_URL` | string |  | required, secret | v0.3.0 | Connection URL for this service's PostgreSQL or YugabyteDB database. |
+| `GRPC_TLS_CA_PATH` | string |  |  | v0.3.0 | CA bundle that internal gRPC clients use to verify servers. |
+| `GRPC_ALLOW_INSECURE` | boolean | `false` |  | v0.3.0 | Allows plaintext internal gRPC when no TLS material is configured. Development only. |
+| `GRPC_TLS_CERT_PATH` | string |  |  | v0.3.0 | Certificate presented by this service's gRPC listener. |
+| `GRPC_TLS_KEY_PATH` | string |  |  | v0.3.0 | Private key for GRPC_TLS_CERT_PATH. |
+| `NETWORK_OBSERVER_PORT` | string | `18024` |  | v0.3.13 | HTTP port for observer ingest, assignments and candidate feeds. |
+| `NETWORK_OBSERVER_TENANT_ID` | string |  | required | v0.3.13 | Server-owned platform tenant scope for inventory and prober observations. |
+| `NETWORK_OBSERVER_CLUSTER_ID` | string |  | required | v0.3.13 | Platform cluster identity used for probe telemetry. |
+| `NETWORK_OBSERVER_SECRET` | string |  | required, secret | v0.3.13 | Shared bearer secret for trusted external probers and internal candidate readers. |
+| `NETWORK_OBSERVERS_JSON` | string | `[]` |  | v0.3.13 | JSON observer IDs, regions and optional locations; new shared-secret probers can register within the configured limit. |
+| `NETWORK_OBSERVER_MAX_PROBERS` | integer | `32` |  | v0.3.13 | Maximum trusted prober identities. |
+| `NETWORK_OBSERVER_ENVIRONMENT` | string | `production` |  | v0.3.13 | Observation environment; staging data remains separate. |
+| `LIVEPEER_NETWORK_ID` | string | `42161` |  | v0.3.13 | Expected production Livepeer chain ID, verified against the RPC. |
+| `LIVEPEER_ETH_RPC_URL` | string |  | required, secret | v0.3.13 | Ethereum RPC URL for read-only production catalog discovery. |
+| `LIVEPEER_CONTROLLER` | string |  | required | v0.3.13 | Livepeer controller contract used to resolve BondingManager and ServiceRegistry. |
+| `NETWORK_CATALOG_INTERVAL_SECONDS` | integer | `900` |  | v0.3.13 | Contract catalog refresh interval. |
+| `DECKLOG_GRPC_ADDR` | string |  | required | v0.3.13 | Decklog telemetry ingest address. |
+| `SERVICE_TOKEN` | string |  | required, secret | v0.3.13 | Internal service token for Decklog. |
+| `KAFKA_BROKERS` | list |  | required | v0.3.13 | Analytics Kafka brokers for gateway discoveries. |
+| `KAFKA_CLUSTER_ID` | string | `local` |  | v0.3.13 | Kafka cluster identifier. |
+| `MIRROR_REGION_PREFIXES` | list |  |  | v0.3.13 | MirrorMaker2 source aliases whose analytics topic copies carry gateway discovery from other regions; empty consumes local analytics only. |
+| `GEOIP_MMDB_PATH` | string |  |  | v0.3.13 | Optional MMDB for endpoint/prober location lookup. |
+| `NETWORK_OBSERVER_TRUSTED_PROXY_CIDRS` | list |  |  | v0.3.13 | Trusted HTTPS ingress source CIDRs; only these peers may forward prober source IPs for automatic geography. |
+
+## network-prober
+
+Read by `api_network_observer/cmd/network-prober`.
+
+| Variable | Type | Default | Notes | Since | Description |
+| --- | --- | --- | --- | --- | --- |
+| `NETWORK_PROBER_PORT` | string | `18025` |  | v0.3.13 | Local prober health and spool statistics HTTP port. |
+| `LOG_LEVEL` | string | `info` |  | v0.3.0 | Log level: debug, info, warn, or error. Any other value fails startup. |
+| `NETWORK_OBSERVER_URL` | string |  | required | v0.3.13 | Verified HTTPS observer API, accessible from this external host. |
+| `NETWORK_OBSERVER_SECRET` | string |  | required, secret | v0.3.13 | Shared observer ingest bearer secret. |
+| `NETWORK_PROBER_ID` | string |  | required | v0.3.13 | Stable prober ID; no CLI enrollment required. |
+| `NETWORK_PROBER_REGION` | string |  | required | v0.3.13 | Prober vantage region. |
+| `LIVEPEER_BROADCASTER_ADDRESS` | string |  | required | v0.3.13 | Public broadcaster address for discovery RPC authentication. |
+| `LIVEPEER_BROADCASTER_SIGNATURE` | string |  | required, secret | v0.3.13 | Hex signature over the broadcaster address using the Livepeer protocol. |
+| `LIVEPEER_DISCOVERY_SKIP_TLS_VERIFY` | boolean | `true` |  | v0.3.13 | Accept orchestrator self-signed certificates, matching Livepeer discovery; never changes coordinator TLS verification. |
+| `NETWORK_PROBER_ALLOW_INSECURE` | boolean | `false` |  | v0.3.13 | Allow HTTP coordinator only for isolated local testing. |
+| `NETWORK_PROBER_SPOOL_DIR` | string |  | required | v0.3.13 | Private local durable observation spool directory. |
+| `NETWORK_PROBER_SPOOL_MAX_BYTES` | integer | `67108864` |  | v0.3.13 | Bounded spool byte capacity; overflow is visible in logs and heartbeat reports. |
+| `NETWORK_PROBER_CONCURRENCY` | integer | `8` |  | v0.3.13 | Maximum parallel DNS/discovery checks. |
+| `NETWORK_PROBER_TIMEOUT_SECONDS` | integer | `10` |  | v0.3.13 | Per DNS/RPC operation timeout. |
+
 ## periscope-ingest
 
 Read by `api_analytics_ingest/cmd/periscope`.
@@ -33460,6 +33621,13 @@ Read by `api_incidents/cmd/lookout`.
 | `LOOKOUT_NOTIFY_EMAIL_TO` | list |  |  | v0.3.8 | Comma-separated operator addresses that receive critical incident emails. Empty disables the email channel. Re-read after an env-file reload. |
 | `LOOKOUT_SLACK_WEBHOOK_URL` | string |  | secret | v0.3.8 | Slack incoming webhook URL for incident and operator activity notifications. Empty disables the Slack channel. Re-read after an env-file reload. |
 | `LOOKOUT_DISCORD_WEBHOOK_URL` | string |  | secret | v0.3.8 | Discord webhook URL for incident and operator activity notifications. Empty disables the Discord channel. Re-read after an env-file reload. |
+| `LOOKOUT_OPS_SLACK_WEBHOOK_URL` | string |  | secret | v0.3.13 | Slack destination for platform incidents and operational activity. Re-read after env reload. |
+| `LOOKOUT_OPS_DISCORD_WEBHOOK_URL` | string |  | secret | v0.3.13 | Discord destination for platform incidents and operational activity. Re-read after env reload. |
+| `LOOKOUT_BUSINESS_PULSE_SLACK_WEBHOOK_URL` | string |  | secret | v0.3.13 | Slack destination for business pulse activity. Re-read after env reload. |
+| `LOOKOUT_BUSINESS_PULSE_DISCORD_WEBHOOK_URL` | string |  | secret | v0.3.13 | Discord destination for business pulse activity. Re-read after env reload. |
+| `LOOKOUT_NOTIFY_LEGACY_FALLBACK` | boolean | `true` |  | v0.3.13 | Use shared webhook destinations for new notifications lacking a purpose destination. Existing queued legacy rows retain their destination. |
+| `LOOKOUT_OPS_NOTIFICATIONS_DISABLED` | boolean | `false` |  | v0.3.13 | Disable new ops notifications and purpose-specific deliveries without business fallback. |
+| `LOOKOUT_BUSINESS_PULSE_NOTIFICATIONS_DISABLED` | boolean | `false` |  | v0.3.13 | Disable new business pulse notifications and purpose-specific deliveries without ops fallback. |
 | `SMTP_HOST` | string |  |  | v0.3.8 | SMTP server host for incident emails. Empty fails every email delivery. Re-read after an env-file reload. |
 | `SMTP_PORT` | string | `587` |  | v0.3.8 | SMTP server port for incident emails. Re-read after an env-file reload. |
 | `SMTP_USER` | string |  |  | v0.3.8 | SMTP user for incident emails. Re-read after an env-file reload. |
@@ -36858,6 +37026,218 @@ ClickHouse tables partition by `cluster_id`, enabling per-cluster dashboards for
 - Edge node utilization
 - Cross-cluster replication events
 - Federation event geo data (local/remote lat/lon for topology visualization)
+
+
+---
+# Livepeer network observations
+https://logbook.frameworks.network/operators/network-observations
+
+The public Livepeer tab at `/network?view=livepeer` and `GET /v1/network/livepeer` API combine Livepeer discovery
+with real gateway transcoding observations. Unknown coverage remains unknown; regional
+performance is shown separately. The platform-operator webapp can enable private
+correlation through the authenticated diagnostics route.
+The default FrameWorks tab shows infrastructure topology. Livepeer has Compare and Map
+modes with shared filters and independent worker, gateway-cluster and prober layers.
+Gateway map positions are cluster locations. Unknown prober/worker locations remain
+listed. Price and performance comparisons retain their units, region and profile.
+
+This feature requires platform `v0.3.13` and CLI `v0.3.13` or later. Upgrade
+existing clusters with the release's ClickHouse expand migration and initialize
+the new observer database from its baseline.
+
+## Coordinator
+
+Declare `network-observer` under the cluster manifest's `services`, with an enabled
+entry, a host in the aggregator region, and that host's platform cluster ID. Both
+`native` and `docker` modes are supported by the CLI. It is an opt-in service, also
+available in the `network-observations` selection profile; the default profiles do
+not start an observer. External probers are not part of that profile or CLI enrollment.
+
+Add the `network_observer` database to the selected managed SQL deployment's database
+list. The release bootstrap creates its baseline and `network_observer_runtime` role
+before deploying the observer. The CLI derives its database connection from this
+declaration and the existing database credentials. For a manually managed service,
+build with `make build-bin-network-observer` and apply the same baseline to its own
+database using the normal database tooling.
+
+For the new database, set `owner: network_observer` and
+`runtime_role: network_observer_runtime`. Supply the runtime password through the
+existing `DATABASE_RUNTIME_PASSWORD` secret, or the database-specific
+`POSTGRES_NETWORK_OBSERVER_RUNTIME_PASSWORD`; the latter takes precedence. Keep the
+owner/bootstrap credential separate. An omitted `runtime_role` preserves an owner DSN
+for compatibility; declaring it makes the observer connect with the runtime role.
+
+Configure `DATABASE_URL`,
+`NETWORK_OBSERVER_TENANT_ID`, `NETWORK_OBSERVER_CLUSTER_ID`, `NETWORK_OBSERVER_SECRET`,
+`LIVEPEER_ETH_RPC_URL`, `LIVEPEER_CONTROLLER`, `DECKLOG_GRPC_ADDR`, `SERVICE_TOKEN` and
+`KAFKA_BROKERS`. Use the production Arbitrum chain and choose the observation environment
+explicitly. Configure verified internal gRPC TLS as for other services. The optional
+`docker-compose.network-observations.yml` overlay is for isolated local use.
+
+CLI provisioning defaults the observer tenant to the resolved system tenant and its
+cluster to the manifest task's cluster; explicit observer values take precedence.
+`LIVEPEER_ETH_RPC_URL` can use the existing `ARBITRUM_RPC_ENDPOINT` when not explicitly
+set. The shared secret and controller address still require operator input. The CLI
+generates the aggregator Kafka binding, `MIRROR_REGION_PREFIXES` from inbound
+MirrorMaker links, and aggregator-region `DECKLOG_GRPC_ADDR`. Manual deployments must
+set the source aliases themselves to include gateway discovery from other regions.
+
+Expose the shared-secret work and ingest routes through verified HTTPS. If behind an
+ingress, set `NETWORK_OBSERVER_TRUSTED_PROXY_CIDRS` to the actual ingress CIDRs before
+using its forwarded source addresses for prober geolocation. Optional `GEOIP_MMDB_PATH`
+provides coordinates; missing geography does not prevent discovery.
+
+Use an explicit `ingress_sites` entry with `kind: reverse_proxy_http`, the chosen
+`domains`, the proxy `node`/`cluster`, its existing `tls_bundle_id`, and an `upstream`
+pointing to the observer's HTTP listener. The coordinator has no automatically selected
+public hostname. A co-located proxy can use `127.0.0.1:18024`; another proxy uses the
+observer's reachable mesh address. Configure the matching DNS and TLS bundle through
+the existing ingress/control-plane lifecycle, then use that verified HTTPS URL for
+Bridge and the external probers.
+
+Bridge needs `NETWORK_OBSERVER_URL`, `NETWORK_OBSERVER_SECRET`,
+`NETWORK_PUBLIC_TENANT_IDS` and the matching `NETWORK_OBSERVER_ENVIRONMENT`. Publication
+scopes are server configuration, not caller-supplied query parameters. Periscope runs
+the canonical migration and rollup loop as part of its existing ingestion service.
+
+## GitOps inputs and activation order
+
+The observer binary and prober binaries/images ship with the platform release;
+gateways use the separately released compatible go-livepeer fork. The platform's
+release manifest provides artifact pins, not host placement or configuration.
+Complete these declarations before activating the feature:
+
+| Location                          | Required inputs                                                                                                                                                                                                                                                 |
+| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Cluster manifest                  | Enabled observer service with aggregator-region host/cluster, `network_observer` database, HTTPS ingress for the coordinator, and optional GeoIP service selection/trusted proxy CIDRs.                                                                         |
+| Observer service configuration    | `LIVEPEER_CONTROLLER`, `NETWORK_OBSERVER_ENVIRONMENT`; verify `LIVEPEER_NETWORK_ID=42161` and the resolved observer tenant/cluster.                                                                                                                             |
+| SOPS-managed service environment  | `NETWORK_OBSERVER_SECRET` and `LIVEPEER_ETH_RPC_URL` (or the existing Arbitrum RPC key); preserve existing database credentials and internal `SERVICE_TOKEN`.                                                                                                   |
+| Bridge configuration/environment  | Verified HTTPS `NETWORK_OBSERVER_URL`, matching secret and environment, and explicit `NETWORK_PUBLIC_TENANT_IDS` for the dataset to publish.                                                                                                                    |
+| Gateway configuration/environment | Compatible fork artifact pin, stable gateway ID/region/cluster owner, verified Decklog connection and persistent telemetry spool; `FRAMEWORKS_NETWORK_ID=42161` and matching `FRAMEWORKS_ENVIRONMENT`. Candidate hints are optional and start in `shadow` mode. |
+| Lookout service environment       | Optional `LOOKOUT_OPS_SLACK_WEBHOOK_URL`, `LOOKOUT_OPS_DISCORD_WEBHOOK_URL`, `LOOKOUT_BUSINESS_PULSE_SLACK_WEBHOOK_URL`, `LOOKOUT_BUSINESS_PULSE_DISCORD_WEBHOOK_URL` to split the existing destinations.                                                       |
+
+Keep credentials in encrypted env files referenced by the services. Edit GitOps secrets
+with `gitops/scripts/sops-env.sh`, not by editing encrypted content. Choose the actual
+coordinator hostname and ingress from the cluster's existing DNS/TLS setup; example
+hostnames below are not provisioned endpoints. Production and staging need separate
+observation environments, secrets and explicit publication scopes.
+
+Use the normal `frameworks cluster release plan` and `cluster release apply --dry-run`
+with the updated manifest before applying the release. Release application initializes
+the declared observer database, applies ClickHouse expand migrations and deploys the
+observer and analytics/API services. Verify observer `/ready`, deploy the compatible
+gateway fork through its managed-dependency lifecycle, and install the external probers.
+Confirm real discovery in the inventory, real gateway observations in the public API,
+and the dashboard's observer coverage before retiring the old scripts. Livepeer alerts
+are disabled; new Ops/Business Pulse webhook destinations require no Livepeer rollout.
+
+## External probers
+
+Build with `make build-bin-network-prober`, or use the matching release's Linux amd64 or
+arm64 `network-prober` binary after checking its release checksum. These hosts do not
+need the FrameWorks stack, Node/PM2 or CLI enrollment. Configure a unique stable ID,
+region, verified HTTPS coordinator URL, shared secret and persistent spool directory
+using `api_network_observer/deploy/network-prober.env.example`.
+
+The Linux release tarball includes `install-network-prober.sh`,
+`network-prober.service` and `network-prober.env.example` alongside the binary. Extract
+it on the prober host, rename the architecture-suffixed binary to `network-prober`
+for the commands below, and copy the example to a private `network-prober.env`.
+The installer and unit stay together in the extracted directory. A source checkout
+uses the same files from `api_network_observer/deploy/`.
+The supplied systemd unit grants writable state at `/var/lib/frameworks-network-prober`;
+use that path for `NETWORK_PROBER_SPOOL_DIR` with this installer.
+
+Put the Ethereum broadcaster address and discovery signature in a separate private
+identity file:
+
+```dotenv
+LIVEPEER_BROADCASTER_ADDRESS=0x…
+LIVEPEER_BROADCASTER_SIGNATURE=0x…
+```
+
+An existing valid pair works directly. In the legacy JavaScript configuration,
+`CONF_BROADCASTER` maps to the address; `CONF_SIGNATURE` is the same 65 signature bytes,
+encoded as hex rather than a JavaScript array. No private key belongs on the prober.
+To create another pair, run the optional helper on the wallet host:
+
+```bash
+./network-prober sign-discovery --keystore wallet.json --password-file wallet-password --output network-prober.identity.env
+```
+
+The password file must have mode 0600 or stricter. The helper writes a new mode-0600
+identity file and refuses to overwrite an existing file. Discovery signs the
+checksummed address with go-livepeer's Ethereum hash/signature convention. This command
+does not fund a wallet or send a transaction. The broadcaster may need sender reserve
+for discovery admission even though the prober submits no paid transcodes.
+
+On the Linux prober host, make the configuration and identity files private, validate
+them offline, then install:
+
+```bash
+chmod 600 network-prober.env network-prober.identity.env
+./network-prober check-config --env-file network-prober.env --identity-file network-prober.identity.env
+sudo ./install-network-prober.sh --binary ./network-prober --config network-prober.env --identity network-prober.identity.env
+```
+
+Keep the installer beside its supplied service template. It creates the dedicated
+service user and persistent state directory, installs the files and starts
+`frameworks-network-prober.service`. Add `--no-start` to prepare a host without starting
+it. On later reconfiguration, omitting `--identity` preserves the installed pair.
+After replacing a running binary or configuration, restart the service explicitly with
+`sudo systemctl restart frameworks-network-prober.service`.
+
+Each process resolves the whole catalog every five minutes and executes only its
+assigned endpoint discovery checks. It does not submit synthetic transcodes or require
+broadcaster funding for synthetic work. Orchestrator self-signed discovery certificates
+are accepted by default, matching Livepeer; the coordinator connection still verifies
+TLS. Keep the spool directory persistent and exclusive to this process.
+
+Local port 18025 exposes `/health` with spool counts, `successful_discovery_checks`,
+`last_discovery_success` and `admission_rejections`. `/ready` checks recent coordinator
+connectivity only. Verify a real successful discovery and its arrival in the inventory
+before retiring an old prober. Authentication and sender-reserve failures are recorded
+separately and do not count as worker downtime. Firewall that operational endpoint
+appropriately for the host.
+Observer heartbeat and DNS-cycle reports disclose queue depth and lost observations.
+An unavailable prober does not make the orchestrator unavailable.
+
+## Gateway
+
+Configure a stable `FRAMEWORKS_GATEWAY_ID`, `FRAMEWORKS_GATEWAY_REGION`,
+`FRAMEWORKS_CLUSTER_ID`, `FRAMEWORKS_CLUSTER_OWNER_TENANT_ID`,
+`FRAMEWORKS_DECKLOG_GRPC_ADDR` and the existing service authentication/TLS settings.
+Set `FRAMEWORKS_TELEMETRY_SPOOL_DIR` to persistent private storage when containerizing;
+the default is under the gateway user's `.lpData/frameworks-telemetry` directory.
+Set `FRAMEWORKS_NETWORK_ID=42161` and `FRAMEWORKS_ENVIRONMENT` to the coordinator namespace.
+
+Per-orchestrator work totals require the gateway build with accounting version 1.
+Apply the release's `002_network_work.sql` ClickHouse expand migration before upgrading
+Periscope ingestion and queries. Existing gateway observations remain readable, but
+their missing work and charge fields appear as unaccounted coverage. This extension
+uses the same telemetry credentials and spool; probers do not require new settings.
+The dashboard separates submitted work, accepted source minutes, reported pixels,
+service charges and expected ticket credit. These describe FrameWorks gateway traffic,
+not all work or redeemed earnings across the Livepeer network.
+
+The optional `FRAMEWORKS_NETWORK_OBSERVER_URL` and
+`FRAMEWORKS_NETWORK_OBSERVER_SECRET` enable candidate hints. Keep
+`FRAMEWORKS_CANDIDATE_FEED_MODE=shadow` initially; `supplement` adds fresh hints without
+replacing local discovery or relaxing local eligibility checks. HTTP overrides are for
+isolated local development only.
+
+## API filters
+
+The public route accepts RFC3339 `start`/`end` (maximum 730-day window), `resource`
+(onchain address), `ip`, `region`, `interval` (`1m`, `5m`, `1h`) and
+`include_inactive=true`. Windows beyond raw retention use hourly snapshots and identify
+that in the response. Prices and raw checks retain 30 days. Whole-window summaries and
+bounded chart series are separate fields; inspect `truncated` before treating a series
+as complete.
+
+Livepeer notifications and incident escalation are disabled in this version. Operational
+incidents and business pulse delivery can be routed separately using Lookout's purpose
+settings in the configuration reference.
 
 
 ---

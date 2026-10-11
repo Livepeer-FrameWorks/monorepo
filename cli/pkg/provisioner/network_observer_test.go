@@ -9,7 +9,7 @@ import (
 
 func TestNetworkObserverRoleRendersNativeAndComposeReadiness(t *testing.T) {
 	cfg := genericServiceRoleConfig("network-observer", ServicePorts["network-observer"])
-	config := ServiceConfig{Version: "v0.3.14-rc1", BinaryURL: "https://example.invalid/observer.tar.gz", Image: "ghcr.io/livepeer-frameworks/frameworks-network-observer:v0.3.14-rc1", EnvVars: map[string]string{
+	config := ServiceConfig{Version: "v0.3.13-rc3", BinaryURL: "https://example.invalid/observer.tar.gz", Image: "ghcr.io/livepeer-frameworks/frameworks-network-observer:v0.3.13-rc3", EnvVars: map[string]string{
 		"NETWORK_OBSERVER_SECRET": "test-observer-secret", "NETWORK_OBSERVER_CLUSTER_ID": "platform-cluster", "MIRROR_REGION_PREFIXES": "us-east",
 	}}
 	host := inventory.Host{Name: "central"}

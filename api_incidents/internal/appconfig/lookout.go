@@ -44,13 +44,13 @@ type Lookout struct {
 	SlackWebhookURL   string   `env:"LOOKOUT_SLACK_WEBHOOK_URL" secret:"true" desc:"Slack incoming webhook URL for incident and operator activity notifications. Empty disables the Slack channel. Re-read after an env-file reload." introduced:"v0.3.8"`
 	DiscordWebhookURL string   `env:"LOOKOUT_DISCORD_WEBHOOK_URL" secret:"true" desc:"Discord webhook URL for incident and operator activity notifications. Empty disables the Discord channel. Re-read after an env-file reload." introduced:"v0.3.8"`
 
-	OpsSlackWebhookURL                 string `env:"LOOKOUT_OPS_SLACK_WEBHOOK_URL" secret:"true" desc:"Slack destination for platform incidents and operational activity. Re-read after env reload." introduced:"v0.3.14"`
-	OpsDiscordWebhookURL               string `env:"LOOKOUT_OPS_DISCORD_WEBHOOK_URL" secret:"true" desc:"Discord destination for platform incidents and operational activity. Re-read after env reload." introduced:"v0.3.14"`
-	BusinessPulseSlackWebhookURL       string `env:"LOOKOUT_BUSINESS_PULSE_SLACK_WEBHOOK_URL" secret:"true" desc:"Slack destination for business pulse activity. Re-read after env reload." introduced:"v0.3.14"`
-	BusinessPulseDiscordWebhookURL     string `env:"LOOKOUT_BUSINESS_PULSE_DISCORD_WEBHOOK_URL" secret:"true" desc:"Discord destination for business pulse activity. Re-read after env reload." introduced:"v0.3.14"`
-	NotifyLegacyFallback               bool   `env:"LOOKOUT_NOTIFY_LEGACY_FALLBACK" default:"true" desc:"Use shared webhook destinations for new notifications lacking a purpose destination. Existing queued legacy rows retain their destination." introduced:"v0.3.14"`
-	OpsNotificationsDisabled           bool   `env:"LOOKOUT_OPS_NOTIFICATIONS_DISABLED" default:"false" desc:"Disable new ops notifications and purpose-specific deliveries without business fallback." introduced:"v0.3.14"`
-	BusinessPulseNotificationsDisabled bool   `env:"LOOKOUT_BUSINESS_PULSE_NOTIFICATIONS_DISABLED" default:"false" desc:"Disable new business pulse notifications and purpose-specific deliveries without ops fallback." introduced:"v0.3.14"`
+	OpsSlackWebhookURL                 string `env:"LOOKOUT_OPS_SLACK_WEBHOOK_URL" secret:"true" desc:"Slack destination for platform incidents and operational activity. Re-read after env reload." introduced:"v0.3.13"`
+	OpsDiscordWebhookURL               string `env:"LOOKOUT_OPS_DISCORD_WEBHOOK_URL" secret:"true" desc:"Discord destination for platform incidents and operational activity. Re-read after env reload." introduced:"v0.3.13"`
+	BusinessPulseSlackWebhookURL       string `env:"LOOKOUT_BUSINESS_PULSE_SLACK_WEBHOOK_URL" secret:"true" desc:"Slack destination for business pulse activity. Re-read after env reload." introduced:"v0.3.13"`
+	BusinessPulseDiscordWebhookURL     string `env:"LOOKOUT_BUSINESS_PULSE_DISCORD_WEBHOOK_URL" secret:"true" desc:"Discord destination for business pulse activity. Re-read after env reload." introduced:"v0.3.13"`
+	NotifyLegacyFallback               bool   `env:"LOOKOUT_NOTIFY_LEGACY_FALLBACK" default:"true" desc:"Use shared webhook destinations for new notifications lacking a purpose destination. Existing queued legacy rows retain their destination." introduced:"v0.3.13"`
+	OpsNotificationsDisabled           bool   `env:"LOOKOUT_OPS_NOTIFICATIONS_DISABLED" default:"false" desc:"Disable new ops notifications and purpose-specific deliveries without business fallback." introduced:"v0.3.13"`
+	BusinessPulseNotificationsDisabled bool   `env:"LOOKOUT_BUSINESS_PULSE_NOTIFICATIONS_DISABLED" default:"false" desc:"Disable new business pulse notifications and purpose-specific deliveries without ops fallback." introduced:"v0.3.13"`
 
 	SMTPHost          string `env:"SMTP_HOST" desc:"SMTP server host for incident emails. Empty fails every email delivery. Re-read after an env-file reload." introduced:"v0.3.8"`
 	SMTPPort          string `env:"SMTP_PORT" default:"587" desc:"SMTP server port for incident emails. Re-read after an env-file reload." introduced:"v0.3.8"`

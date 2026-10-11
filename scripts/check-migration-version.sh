@@ -1,9 +1,16 @@
 #!/usr/bin/env bash
 set -eo pipefail
 
-# One release may be prepared ahead of the last final tag. A reachable RC may
-# also freeze that release while its single successor is prepared; the frozen
-# bucket accepts only migration files already present in the RC.
+# Keep the shipped Git state, the one pending release, and migration paths in
+# one lifecycle:
+#
+#   development: latest tag < one catalog release == every pending migration
+#   release:     latest tag == catalog release; no migration is "future"
+#   afterwards:  code-only work is allowed without inventing another release
+#
+# A release tag is intentionally NOT required before its code lands. The
+# catalog is the explicit declaration of the single release being prepared;
+# the tag records that the release actually shipped.
 
 catalog_path="cli/internal/releases/catalog.yaml"
 migration_re='^pkg/database/(sql/migrations|sql/clickhouse/migrations)/[^/]+/(v[0-9]+\.[0-9]+\.[0-9]+)/'
@@ -103,34 +110,9 @@ if [[ ! "$schema_migration_floor" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   exit 1
 fi
 
-reachable_rc_tags=()
-while IFS= read -r tag; do
-  if [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-rc[0-9]+$ ]]; then
-    reachable_rc_tags+=("$tag")
-  fi
-done < <(git tag --merged HEAD --sort=-v:refname)
-
 violations=()
 pending_version=""
-frozen_version=""
-frozen_rc=""
-if [ "${#pending_versions[@]}" -eq 2 ]; then
-  frozen_version=${pending_versions[0]}
-  pending_version=${pending_versions[1]}
-  if version_gt "$frozen_version" "$pending_version"; then
-    frozen_version=${pending_versions[1]}
-    pending_version=${pending_versions[0]}
-  fi
-  for tag in "${reachable_rc_tags[@]}"; do
-    if [ "${tag%%-rc*}" = "$frozen_version" ]; then
-      frozen_rc=$tag
-      break
-    fi
-  done
-  if [ -z "$frozen_rc" ]; then
-    violations+=("  release catalog declares multiple unshipped releases after $latest_tag without a reachable RC freezing $frozen_version: ${pending_versions[*]}")
-  fi
-elif [ "${#pending_versions[@]}" -gt 2 ]; then
+if [ "${#pending_versions[@]}" -gt 1 ]; then
   violations+=("  release catalog declares multiple unshipped releases after $latest_tag: ${pending_versions[*]}")
 elif [ "${#pending_versions[@]}" -eq 1 ]; then
   pending_version=${pending_versions[0]}
@@ -144,12 +126,6 @@ check_pending_path() {
 
   local version=${BASH_REMATCH[2]}
   if version_gt "$version" "$latest_tag"; then
-    if [ -n "$frozen_rc" ] && [ "$version" = "$frozen_version" ]; then
-      if ! git cat-file -e "$frozen_rc:$file" 2>/dev/null; then
-        violations+=("  $file  (adds a migration to $frozen_version, frozen at $frozen_rc while $pending_version is prepared)")
-      fi
-      return
-    fi
     if [ -z "$pending_version" ]; then
       violations+=("  $file  (migration $version is newer than shipped tag $latest_tag, but the catalog declares no pending release)")
     elif [ "$version" != "$pending_version" ]; then
@@ -219,26 +195,30 @@ check_name_status_stream() {
 
 latest_tag_commit=$(git rev-parse "$latest_tag^{commit}")
 
-# Every reachable RC above the final tag protects its recorded migration bytes,
-# including the frozen release when a successor becomes the pending release.
-for rc_tag in "${reachable_rc_tags[@]}"; do
-  if ! version_gt "${rc_tag%%-rc*}" "$latest_tag"; then
-    continue
-  fi
-  rc_diff=(git diff --no-renames --name-only -z --diff-filter=MD)
-  if [ -n "$diff_base" ]; then
-    rc_diff+=("$rc_tag" HEAD)
-  elif [ "$worktree" = true ]; then
-    rc_diff+=("$rc_tag")
-  else
-    rc_diff+=(--cached "$rc_tag")
-  fi
-  while IFS= read -r -d '' file; do
-    if [[ "$file" =~ $migration_re ]]; then
-      violations+=("  $file  (changes migration bytes already shipped in $rc_tag; append a new migration instead)")
+# RCs keep the base release pending, but their applied SQL already has ledger
+# checksums. New files may be appended for the next RC; existing ones are frozen.
+if [ -n "$pending_version" ]; then
+  while IFS= read -r rc_tag; do
+    if [[ ! "$rc_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-rc[0-9]+$ ]] ||
+      [ "${rc_tag%%-rc*}" != "$pending_version" ]; then
+      continue
     fi
-  done < <("${rc_diff[@]}" -- "${path_args[@]}")
-done
+    rc_diff=(git diff --no-renames --name-only -z --diff-filter=MD)
+    if [ -n "$diff_base" ]; then
+      rc_diff+=("$rc_tag" HEAD)
+    elif [ "$worktree" = true ]; then
+      rc_diff+=("$rc_tag")
+    else
+      rc_diff+=(--cached "$rc_tag")
+    fi
+    while IFS= read -r -d '' file; do
+      if [[ "$file" =~ $migration_re ]]; then
+        violations+=("  $file  (changes migration bytes already shipped in $rc_tag; append a new migration instead)")
+      fi
+    done < <("${rc_diff[@]}" -- "${path_args[@]}")
+    break
+  done < <(git tag --merged HEAD --sort=-v:refname)
+fi
 
 if [ -n "$diff_base" ]; then
   if ! git cat-file -e "$diff_base^{commit}" 2>/dev/null; then
@@ -272,12 +252,12 @@ if [ "${#violations[@]}" -gt 0 ]; then
   fi
   printf '%s\n' "${violations[@]}" >&2
   echo >&2
-  echo "Code and migrations must target the pending release declared in $catalog_path; a preceding RC bucket stays frozen." >&2
+  echo "Code and migrations for one release may land before its tag, but they must all target the single release declared in $catalog_path." >&2
   exit 1
 fi
 
 if [ -n "$pending_version" ]; then
-  echo "Release state valid: shipped=$latest_tag, frozen_rc=${frozen_rc:-none}, pending=$pending_version"
+  echo "Release state valid: shipped=$latest_tag, pending=$pending_version"
 else
   echo "Release state valid: shipped=$latest_tag, pending=none"
 fi

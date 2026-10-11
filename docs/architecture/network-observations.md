@@ -7,8 +7,8 @@ Bridge exposes the
 same projection at `GET /v1/network/livepeer`. The source is FrameWorks gateways and
 trusted external probers. This does not use Livepeer Studio's performance API.
 
-These platform changes target `v0.3.14` and require CLI `v0.3.14-rc1` or later.
-Existing clusters apply the `v0.3.14` ClickHouse expand migration. The new observer
+These platform changes target `v0.3.13` and require CLI `v0.3.13` or later.
+Existing clusters apply the `v0.3.13` ClickHouse expand migration. The new observer
 database is initialized from its baseline by the release's database bootstrap.
 
 ## Ownership
@@ -34,7 +34,7 @@ The coordinator is an opt-in CLI service (`network-observer`, or the
 `network-observations` service-selection profile). It is excluded from default
 profiles because enabling it requires operator-supplied chain and ingest configuration.
 Native and Docker deployments use the standard platform artifact lifecycle and gate
-`v0.3.14` readiness on `/ready`. Declare `network_observer` in the managed SQL database
+`v0.3.13` readiness on `/ready`. Declare `network_observer` in the managed SQL database
 inventory; the existing release bootstrap initializes its owned baseline and runtime
 role. The coordinator binds aggregator Kafka and consumes local and source-prefixed
 mirrored analytics topics, so gateways in every configured region contribute inventory.

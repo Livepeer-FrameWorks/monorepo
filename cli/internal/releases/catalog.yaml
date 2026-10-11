@@ -162,5 +162,3 @@ releases:
     min_cli_version: v0.3.12
   - version: v0.3.13
     min_cli_version: v0.3.13-rc1
-  - version: v0.3.14
-    min_cli_version: v0.3.14-rc1
