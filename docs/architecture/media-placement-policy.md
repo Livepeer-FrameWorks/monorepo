@@ -30,6 +30,14 @@ Schema-2 issuance and schema-2 readiness are gated by one attestation chain, not
   A tenant with no schema-2 history receives its first policy-bearing authority only when every
   current target cell is attested; otherwise the refresh keeps schema 1 and each newly ready
   cell enqueues a `cell_placement_capability_ready` refresh for the legacy tenants it holds.
+  Before keeping schema 1, the compile asks each unattested target cell's Foghorn for an
+  attestation (`GetMediaCellPlacementCapability`, ten seconds; a cell whose probe failed is not
+  asked again for thirty). When a cell may still attest (its probe failed, or it reads schema 2
+  but does not enforce it yet), an event or bulk refresh publishes schema 1 and then fails, so
+  its obligation retries the activation with the normal backoff instead of waiting for the next
+  attestation. A cell whose Foghorn answers that it cannot read placement (no capability probe,
+  or an attestation without schema 2) is not retried; its first ready attestation re-queues the
+  tenant.
   Schema 2 is monotonic once published, so a later grant on an unattested cell fails publication
   (and retries with backoff) rather than rolling the tenant back.
 - On an enforcing replica, an applied schema-2 authority is promoted read/ingest/source-ready in

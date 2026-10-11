@@ -8,15 +8,23 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"frameworks/api_control/internal/database/commodoredb"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	sharedauthority "github.com/Livepeer-FrameWorks/monorepo/pkg/mediaauthority"
 	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
 	"golang.org/x/sync/errgroup"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
-const cellPlacementCapabilityRefreshReason = "cell_placement_capability_ready"
+const (
+	cellPlacementCapabilityRefreshReason = "cell_placement_capability_ready"
+	// The probe is one ledger read at the cell's Foghorn and one write here.
+	placementProbeTimeout = 10 * time.Second
+	placementProbeQuiet   = 30 * time.Second
+)
 
 // cellPlacementCapabilityReady is the single predicate behind the activation
 // barrier: a cell counts as capable only when its own Foghorn attested schema-2
@@ -111,27 +119,82 @@ func (s *CommodoreServer) recordCellPlacementCapability(ctx context.Context, cel
 // before publication. Authority acknowledgements keep the stored capability
 // fresh, while this path breaks the first-delivery dependency for a new cell.
 func (s *CommodoreServer) refreshPlacementCellCapabilities(ctx context.Context, cells []string) error {
+	failures := s.probePlacementCellCapabilities(ctx, cells)
+	errs := make([]error, 0, len(failures))
+	for _, cellID := range sortedUnique(cells) {
+		if err := failures[cellID]; err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// probePlacementCellCapabilities asks each cell for an attestation and records
+// it, returning the error of every cell that could not be asked or recorded.
+// A cell whose probe failed is not asked again for placementProbeQuiet and
+// reports that failure instead: every legacy tenant targeting an unreachable
+// cell retries its activation, and each retry would otherwise hold a refresh
+// worker for up to placementProbeTimeout.
+func (s *CommodoreServer) probePlacementCellCapabilities(ctx context.Context, cells []string) map[string]error {
 	targets := sortedUnique(cells)
+	results := make([]error, len(targets))
 	var group errgroup.Group
 	group.SetLimit(mediaAuthorityDeliveryWorkers)
-	for _, cellID := range targets {
-		cellID := cellID
+	for i, cellID := range targets {
+		if failure, ok := s.placementProbeFailures.Load(cellID); ok {
+			if recent, typed := failure.(placementProbeFailure); typed && time.Since(recent.at) < placementProbeQuiet {
+				results[i] = recent.err
+				continue
+			}
+		}
 		group.Go(func() error {
-			client, err := s.resolveFoghornForClusterDirect(ctx, cellID)
-			if err != nil {
-				return fmt.Errorf("resolve placement capability cell %q: %w", cellID, err)
+			probeCtx, cancel := context.WithTimeout(ctx, placementProbeTimeout)
+			defer cancel()
+			if err := s.probePlacementCellCapability(probeCtx, cellID); err != nil {
+				results[i] = err
+				if ctx.Err() == nil {
+					s.placementProbeFailures.Store(cellID, placementProbeFailure{at: time.Now(), err: err})
+				}
+				return nil
 			}
-			capability, err := client.GetMediaCellPlacementCapability(ctx)
-			if err != nil {
-				return fmt.Errorf("read placement capability for cell %q: %w", cellID, err)
-			}
-			if err := s.recordCellPlacementCapability(ctx, cellID, capability); err != nil {
-				return fmt.Errorf("persist placement capability for cell %q: %w", cellID, err)
-			}
+			s.placementProbeFailures.Delete(cellID)
 			return nil
 		})
 	}
-	return group.Wait()
+	_ = group.Wait() //nolint:errcheck // every probe reports through results
+	failures := make(map[string]error)
+	for i, cellID := range targets {
+		if results[i] != nil {
+			failures[cellID] = results[i]
+		}
+	}
+	return failures
+}
+
+func (s *CommodoreServer) probePlacementCellCapability(ctx context.Context, cellID string) error {
+	client, err := s.resolveFoghornForClusterDirect(ctx, cellID)
+	if err != nil {
+		return fmt.Errorf("resolve placement capability cell %q: %w", cellID, err)
+	}
+	capability, err := client.GetMediaCellPlacementCapability(ctx)
+	if err != nil {
+		return fmt.Errorf("read placement capability for cell %q: %w", cellID, err)
+	}
+	if err := s.recordCellPlacementCapability(ctx, cellID, capability); err != nil {
+		return fmt.Errorf("persist placement capability for cell %q: %w", cellID, err)
+	}
+	return nil
+}
+
+type placementProbeFailure struct {
+	at  time.Time
+	err error
+}
+
+// placementProbeAnsweredUnsupported reports a probe the cell's Foghorn refused
+// because its release has no capability probe, and so no placement enforcement.
+func placementProbeAnsweredUnsupported(err error) bool {
+	return status.Code(err) == codes.Unimplemented
 }
 
 // cellPlacementSchema is the highest placement schema a stored attestation lets
@@ -152,28 +215,90 @@ func cellPlacementSchema(maxSchemaVersion int32, enforcementReady bool) uint32 {
 // ready: a tenant with nobody to notify has nobody who could reject the schema,
 // and any later target is checked again at publication.
 func placementTargetSchema(ctx context.Context, queries *commodoredb.Queries, cells []string) (uint32, error) {
-	wanted := make([]string, 0, len(cells))
+	attestations, err := readPlacementCellAttestations(ctx, queries, cells)
+	if err != nil {
+		return 0, err
+	}
+	return attestations.schema(), nil
+}
+
+// placementCellAttestations is the stored attestation of each listed cell; a
+// cell without a row has attested nothing.
+type placementCellAttestations struct {
+	cells []string
+	rows  map[string]commodoredb.ListMediaCellPlacementCapabilitiesRow
+}
+
+func readPlacementCellAttestations(ctx context.Context, queries *commodoredb.Queries, cells []string) (placementCellAttestations, error) {
+	attestations := placementCellAttestations{rows: map[string]commodoredb.ListMediaCellPlacementCapabilitiesRow{}}
 	for _, cell := range cells {
-		if cell = strings.TrimSpace(cell); cell != "" && !slices.Contains(wanted, cell) {
-			wanted = append(wanted, cell)
+		if cell = strings.TrimSpace(cell); cell != "" && !slices.Contains(attestations.cells, cell) {
+			attestations.cells = append(attestations.cells, cell)
 		}
 	}
-	if len(wanted) == 0 {
-		return sharedauthority.NodePlacementSchemaVersion, nil
+	if len(attestations.cells) == 0 {
+		return attestations, nil
 	}
-	rows, err := queries.ListMediaCellPlacementCapabilities(ctx, wanted)
+	rows, err := queries.ListMediaCellPlacementCapabilities(ctx, attestations.cells)
 	if err != nil {
-		return 0, fmt.Errorf("read cell placement capabilities: %w", err)
+		return placementCellAttestations{}, fmt.Errorf("read cell placement capabilities: %w", err)
 	}
-	schemas := make(map[string]uint32, len(rows))
 	for _, row := range rows {
-		schemas[row.CellID] = cellPlacementSchema(row.MaxSchemaVersion, row.EnforcementReady)
+		attestations.rows[row.CellID] = row
 	}
+	return attestations, nil
+}
+
+func (a placementCellAttestations) cellSchema(cell string) uint32 {
+	row, ok := a.rows[cell]
+	if !ok {
+		return 0
+	}
+	return cellPlacementSchema(row.MaxSchemaVersion, row.EnforcementReady)
+}
+
+// schema is the highest placement schema every cell attests, zero when any
+// attests none.
+func (a placementCellAttestations) schema() uint32 {
 	result := uint32(sharedauthority.NodePlacementSchemaVersion)
-	for _, cell := range wanted {
-		result = min(result, schemas[cell])
+	for _, cell := range a.cells {
+		result = min(result, a.cellSchema(cell))
 	}
-	return result, nil
+	return result
+}
+
+// below lists the cells that do not attest schema.
+func (a placementCellAttestations) below(schema uint32) []string {
+	var cells []string
+	for _, cell := range a.cells {
+		if a.cellSchema(cell) < schema {
+			cells = append(cells, cell)
+		}
+	}
+	return cells
+}
+
+// awaiting lists the cells that do not attest schema yet but may: a cell whose
+// probe failed for any reason other than its release lacking the probe, one
+// that has attested nothing, and one whose Foghorn reads placement schema 2
+// without enforcing it yet (replicas starting or still upgrading). A cell whose
+// Foghorn answered that it reads no placement schema is not awaited; if it
+// upgrades, its first ready attestation re-queues the tenants it holds back.
+func (a placementCellAttestations) awaiting(schema uint32, probeFailures map[string]error) []string {
+	var cells []string
+	for _, cell := range a.below(schema) {
+		if probeErr, failed := probeFailures[cell]; failed {
+			if !placementProbeAnsweredUnsupported(probeErr) {
+				cells = append(cells, cell)
+			}
+			continue
+		}
+		row, attested := a.rows[cell]
+		if !attested || row.MaxSchemaVersion >= int32(sharedauthority.PlacementSchemaVersion) {
+			cells = append(cells, cell)
+		}
+	}
+	return cells
 }
 
 // placementCellsReady reports whether every listed cell has attested schema-2

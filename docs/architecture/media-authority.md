@@ -226,6 +226,16 @@ moment a delivery to it fails. Durable acknowledgement then gets an independent
 five-second settlement budget, so a slow cell cannot spend the database
 acknowledgement's deadline. Refresh compilation is bounded to 90 seconds per
 claimed row and failure settlement likewise escapes the expired work context.
+A delivery's lease spans one attempt (the five-second claim, the delivery, its
+acknowledgement and failure record, plus five seconds), 55 seconds for an
+ordinary delivery and 20 for a short lease, so a delivery whose replica stopped
+mid-attempt is claimable again within a minute. Every claim (deliveries and
+refresh obligations) runs in its own transaction bound to the claim's timeout: a
+claim that times out or is interrupted before COMMIT rolls back, so a lease is
+only ever held by a worker that received the row. Deliveries stay correct when a
+lease lapses under a worker that is still running: a cell applies a version it
+already holds as a duplicate and refuses an older one, and acknowledgement and
+failure settle only a row still `delivering`.
 Per-cell obligations lease and retry independently, and a newer version terminally
 supersedes older pending work. A version past its validity is never sent and
 leaves the queue.

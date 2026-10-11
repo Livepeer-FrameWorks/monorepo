@@ -101,3 +101,24 @@ func TestMediaAuthorityDeliveryUsesEarlierDeadlineAndRejectsLateSuccess(t *testi
 		t.Fatalf("timely delivery rejected: %v", err)
 	}
 }
+
+// A delivery is redelivered by another replica only after its lease lapses.
+// Each lease must outlast one whole attempt (claim, delivery, acknowledgement,
+// and the failure record when the acknowledgement fails), and an ordinary lease
+// left by a replica that stopped must free its delivery within a minute.
+func TestMediaAuthorityDeliveryLeasesOutlastOneAttempt(t *testing.T) {
+	for _, lane := range []struct {
+		name                   string
+		lease, claim, delivery time.Duration
+	}{
+		{"ordinary", mediaAuthorityDeliveryLease, mediaAuthorityClaimTimeout, mediaAuthorityDeliveryTimeout},
+		{"short lease", mediaAuthorityDeadlineDeliveryLease, mediaAuthorityDeadlineClaimBudget, mediaAuthorityDeadlineDeliveryTimeout},
+	} {
+		if attempt := lane.claim + lane.delivery + 2*mediaAuthoritySettleTimeout; lane.lease <= attempt {
+			t.Errorf("%s delivery lease %s does not outlast one attempt of %s", lane.name, lane.lease, attempt)
+		}
+	}
+	if mediaAuthorityDeliveryLease > time.Minute {
+		t.Errorf("ordinary delivery lease %s holds a stopped replica's delivery for over a minute", mediaAuthorityDeliveryLease)
+	}
+}

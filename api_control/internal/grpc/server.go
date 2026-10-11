@@ -238,6 +238,9 @@ type CommodoreServer struct {
 	// the same answer many times over.
 	foghornDiscovery       sync.Map
 	foghornDiscoveryFlight singleflight.Group
+	// placementProbeFailures holds each cell's last failed placement capability
+	// probe, by cell ID.
+	placementProbeFailures sync.Map
 	// routeBuild collapses concurrent full route constructions for the same
 	// tenant; each one fans out to Quartermaster, Purser, and Foghorn discovery.
 	routeBuild           singleflight.Group

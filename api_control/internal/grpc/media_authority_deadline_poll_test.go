@@ -78,7 +78,9 @@ func TestMediaAuthorityDeadlineClaimStopsAtItsBudget(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = db.Close() }()
+	mock.ExpectBegin()
 	mock.ExpectQuery("ClaimMediaAuthorityDeadlineDelivery").WillDelayFor(time.Minute).WillReturnRows(sqlmock.NewRows(nil))
+	mock.ExpectRollback()
 	server := &CommodoreServer{db: db}
 	started := time.Now()
 	_, err = server.claimMediaAuthorityDeadlineDeliveries(context.Background(), mediaAuthorityDeliveryWorkers)
@@ -89,8 +91,18 @@ func TestMediaAuthorityDeadlineClaimStopsAtItsBudget(t *testing.T) {
 		t.Fatalf("claim stopped by its budget returned %v, want it to report the exceeded budget", err)
 	}
 
-	// A claim ended by shutdown is not a budget failure.
-	mock.ExpectQuery("ClaimMediaAuthorityDeadlineDelivery").WillDelayFor(time.Minute).WillReturnRows(sqlmock.NewRows(nil))
+	// A claim ended by shutdown is not a budget failure. It runs on its own
+	// mock: the claim above ended its transaction, and database/sql closes
+	// that connection in the background.
+	shutdownDB, shutdownMock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = shutdownDB.Close() }()
+	shutdownMock.ExpectBegin()
+	shutdownMock.ExpectQuery("ClaimMediaAuthorityDeadlineDelivery").WillDelayFor(time.Minute).WillReturnRows(sqlmock.NewRows(nil))
+	shutdownMock.ExpectRollback()
+	server = &CommodoreServer{db: shutdownDB}
 	ctx, cancel := context.WithCancel(context.Background())
 	time.AfterFunc(50*time.Millisecond, cancel)
 	if _, err := server.claimMediaAuthorityDeadlineDeliveries(ctx, mediaAuthorityDeliveryWorkers); err == nil || errors.Is(err, context.DeadlineExceeded) {

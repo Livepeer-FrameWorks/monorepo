@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -159,6 +160,16 @@ func TestMediaPlacementFirstIssuance_RealPG(t *testing.T) {
 			t.Fatal(err)
 		}
 		return version, payload
+	}
+	// No history and a target cell that cannot be asked: an event refresh
+	// publishes the legacy schema and fails retryably, so its obligation tries
+	// the activation again.
+	eventCtx := context.WithValue(ctx, mediaAuthorityObligationLaneContextKey{}, commodoredb.MediaAuthorityLaneEvent)
+	if err := server.compileTenantAuthority(eventCtx, tenant.TenantId); !errors.Is(err, errTenantPlacementActivationPending) {
+		t.Fatalf("event refresh with an unreachable target cell returned %v, want the activation retried", err)
+	}
+	if version, payload := current(); version != 1 || payload.SchemaVersion != 1 || payload.MediaPlacement != nil {
+		t.Fatalf("pending activation did not publish the legacy authority: version=%d schema=%d", version, payload.SchemaVersion)
 	}
 	// No history and no attestation: the first compile stays on the legacy schema.
 	if err := server.compileTenantAuthority(ctx, tenant.TenantId); err != nil {

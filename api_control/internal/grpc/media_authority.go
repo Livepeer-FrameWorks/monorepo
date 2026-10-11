@@ -44,18 +44,26 @@ const (
 	mediaAuthorityReconcileInterval = time.Hour
 	mediaAuthorityValidity          = 24 * time.Hour
 	mediaAuthorityWorkerInterval    = time.Second
-	mediaAuthorityLease             = 2 * time.Minute
-	mediaAuthorityRefreshBatch      = 8
-	mediaAuthorityDeliveryBatch     = 8
-	mediaAuthorityRefreshWorkers    = 8
-	mediaAuthorityDeliveryWorkers   = 8
-	mediaAuthorityRefreshTimeout    = 90 * time.Second
-	mediaAuthorityDeliveryTimeout   = 35 * time.Second
-	mediaAuthoritySettleTimeout     = 5 * time.Second
-	mediaAuthorityStatsTimeout      = 5 * time.Second
-	mediaAuthorityHistoryRetention  = 30 * 24 * time.Hour
-	mediaAuthorityInboxRetention    = 7 * 24 * time.Hour
-	mediaAuthorityRetentionInterval = time.Hour
+	// Event and bulk refresh obligations hold their target for the compile's
+	// whole timeout.
+	mediaAuthorityObligationLease = 2 * time.Minute
+	// An ordinary delivery's lease spans one attempt: the claim, the delivery,
+	// and recording its acknowledgement and, when that fails, its failure, plus
+	// a margin for the gaps between those steps. A lease past the attempt only
+	// delays the delivery after its holder stopped.
+	mediaAuthorityDeliveryLease       = mediaAuthorityClaimTimeout + mediaAuthorityDeliveryTimeout + 2*mediaAuthoritySettleTimeout + mediaAuthorityDeliveryLeaseMargin
+	mediaAuthorityDeliveryLeaseMargin = 5 * time.Second
+	mediaAuthorityRefreshBatch        = 8
+	mediaAuthorityDeliveryBatch       = 8
+	mediaAuthorityRefreshWorkers      = 8
+	mediaAuthorityDeliveryWorkers     = 8
+	mediaAuthorityRefreshTimeout      = 90 * time.Second
+	mediaAuthorityDeliveryTimeout     = 35 * time.Second
+	mediaAuthoritySettleTimeout       = 5 * time.Second
+	mediaAuthorityStatsTimeout        = 5 * time.Second
+	mediaAuthorityHistoryRetention    = 30 * 24 * time.Hour
+	mediaAuthorityInboxRetention      = 7 * 24 * time.Hour
+	mediaAuthorityRetentionInterval   = time.Hour
 	// A sweep deletes in batches until nothing old is left or its time is up. A
 	// fixed number of batches an hour is a fixed ceiling on deletion, and history
 	// that is written faster than that ceiling never stops growing.
@@ -286,14 +294,30 @@ func (s *CommodoreServer) compileTenantAuthority(ctx context.Context, tenantID s
 	if err != nil {
 		return err
 	}
-	if placementErr := s.compileTenantPlacement(ctx, payload, entitlement, targets); placementErr != nil {
+	placementErr := s.compileTenantPlacement(ctx, payload, entitlement, targets)
+	activationPending := errors.Is(placementErr, errTenantPlacementActivationPending)
+	if placementErr != nil && !activationPending {
 		return placementErr
 	}
 	revisions, err = tenantPlacementSourceRevisions(payload, revisions)
 	if err != nil {
 		return err
 	}
-	return s.persistTenantAuthority(ctx, payload, targets, revisions, issuedAt, validUntil)
+	if err := s.persistTenantAuthority(ctx, payload, targets, revisions, issuedAt, validUntil); err != nil {
+		return err
+	}
+	// The legacy authority is published either way. An event or bulk refresh
+	// then fails so its obligation retries the activation with backoff; a
+	// renewal or a cell's fetch has what it came for, and the activation does
+	// not depend on them.
+	if activationPending && mediaAuthorityLaneRetriesPlacementActivation(mediaAuthorityObligationLane(ctx)) {
+		return placementErr
+	}
+	return nil
+}
+
+func mediaAuthorityLaneRetriesPlacementActivation(lane string) bool {
+	return lane == commodoredb.MediaAuthorityLaneEvent || lane == commodoredb.MediaAuthorityLaneBulk
 }
 
 func tenantAuthorityNotFound(resp *quartermasterpb.GetTenantResponse) bool {
@@ -2082,6 +2106,24 @@ func (s *CommodoreServer) processMediaAuthorityDeliveryBatch(ctx context.Context
 	}
 }
 
+// claimMediaAuthorityWork runs a claim in its own transaction bound to ctx, so
+// the rows are leased only if the claimant receives them. A claim whose context
+// ends before COMMIT (its timeout passing while the database answers, the
+// replica shutting down) rolls back and leaves the rows claimable, instead of
+// committing a lease that no worker holds.
+func claimMediaAuthorityWork[T any](ctx context.Context, db *sql.DB, claim func(*commodoredb.Queries) ([]T, error)) ([]T, error) {
+	var rows []T
+	err := database.WithPostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
+		var claimErr error
+		rows, claimErr = claim(commodoredb.New(tx))
+		return claimErr
+	})
+	if err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
+
 // drainMediaAuthorityDeliveryCell delivers to one cell until nothing is waiting
 // for it. A single claimant feeds the cell's workers and claims again as soon as
 // one frees.
@@ -2109,8 +2151,10 @@ func (s *CommodoreServer) drainMediaAuthorityDeliveryCell(ctx context.Context, c
 			continue
 		}
 		claimCtx, cancel := context.WithTimeout(ctx, mediaAuthorityClaimTimeout)
-		rows, err := commodoredb.New(s.db).ClaimMediaAuthorityDeliveries(claimCtx, commodoredb.ClaimMediaAuthorityDeliveriesParams{
-			CellID: cellID, LeaseMs: mediaAuthorityLease.Milliseconds(), BatchSize: int32(available),
+		rows, err := claimMediaAuthorityWork(claimCtx, s.db, func(queries *commodoredb.Queries) ([]commodoredb.ClaimMediaAuthorityDeliveriesRow, error) {
+			return queries.ClaimMediaAuthorityDeliveries(claimCtx, commodoredb.ClaimMediaAuthorityDeliveriesParams{
+				CellID: cellID, LeaseMs: mediaAuthorityDeliveryLease.Milliseconds(), BatchSize: int32(available),
+			})
 		})
 		cancel()
 		if err != nil {

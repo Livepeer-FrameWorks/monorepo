@@ -223,8 +223,10 @@ func (s *CommodoreServer) claimMediaAuthorityDeadlineDeliveries(ctx context.Cont
 	claimCtx, cancel := context.WithTimeout(ctx, mediaAuthorityDeadlineClaimBudget)
 	defer cancel()
 	from := s.mediaAuthoritySchedule.deadlineCursor.load()
-	rows, err := commodoredb.New(s.db).ClaimMediaAuthorityDeadlineDelivery(claimCtx, commodoredb.ClaimMediaAuthorityDeadlineDeliveryParams{
-		LeaseMs: mediaAuthorityDeadlineDeliveryLease.Milliseconds(), AfterCell: from, BatchSize: int32(available),
+	rows, err := claimMediaAuthorityWork(claimCtx, s.db, func(queries *commodoredb.Queries) ([]commodoredb.ClaimMediaAuthorityDeadlineDeliveryRow, error) {
+		return queries.ClaimMediaAuthorityDeadlineDelivery(claimCtx, commodoredb.ClaimMediaAuthorityDeadlineDeliveryParams{
+			LeaseMs: mediaAuthorityDeadlineDeliveryLease.Milliseconds(), AfterCell: from, BatchSize: int32(available),
+		})
 	})
 	if err != nil {
 		if ctx.Err() == nil && claimCtx.Err() != nil {

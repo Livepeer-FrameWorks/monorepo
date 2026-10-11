@@ -29,6 +29,14 @@ import (
 // ACTUAL deployed schema, so the two-phase deletion saga's DB coordination cannot drift from the schema undetected.
 func startCommodoreRealPG(t *testing.T) *sql.DB {
 	t.Helper()
+	conn, _ := startCommodoreRealPGWithDSN(t)
+	return conn
+}
+
+// startCommodoreRealPGWithDSN is startCommodoreRealPG for a test that also opens
+// its own connections to the same database.
+func startCommodoreRealPGWithDSN(t *testing.T) (*sql.DB, string) {
+	t.Helper()
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skip("docker not available")
 	}
@@ -70,7 +78,7 @@ func startCommodoreRealPG(t *testing.T) *sql.DB {
 	if _, err := conn.Exec(string(schema)); err != nil {
 		t.Fatalf("apply commodore.sql: %v", err)
 	}
-	return conn
+	return conn, dsn
 }
 
 // TestStreamCleanupOutboxLoop_DeliveryOutageConverges_RealPG is the wired end-to-end proof of the two-phase deletion

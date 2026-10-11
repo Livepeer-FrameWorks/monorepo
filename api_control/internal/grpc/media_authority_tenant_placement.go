@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"frameworks/api_control/internal/database/commodoredb"
@@ -53,11 +54,34 @@ func tenantPlacementSourceRevisions(payload *mediapb.TenantAuthority, revisions 
 	return out, nil
 }
 
+// errTenantPlacementActivationPending reports a tenant left on the legacy
+// schema because a target cell may still attest placement enforcement. The
+// legacy payload is complete and publishable; the error only asks for the
+// activation to be tried again.
+var errTenantPlacementActivationPending = errors.New("tenant placement activation pending")
+
+func joinPlacementProbeFailures(failures map[string]error) error {
+	cells := make([]string, 0, len(failures))
+	for cell := range failures {
+		cells = append(cells, cell)
+	}
+	sort.Strings(cells)
+	errs := make([]error, 0, len(cells))
+	for _, cell := range cells {
+		errs = append(errs, failures[cell])
+	}
+	return errors.Join(errs...)
+}
+
 // Established placement history is inherited and never downgraded. A tenant
 // still on the legacy schema, or without history, receives its first
 // policy-bearing authority only when every current target cell has attested
-// schema-2 enforcement; otherwise the refresh keeps the legacy schema, and the
-// next attestation re-queues it. The issued schema is the highest one every
+// schema-2 enforcement. Until then the payload keeps the legacy schema; when a
+// target cell may still attest (its probe failed, or it reads schema 2 but does
+// not enforce it yet) compileTenantPlacement returns
+// errTenantPlacementActivationPending with that payload so the refresh is
+// retried, and a cell whose Foghorn cannot read placement re-queues the tenant
+// with its first ready attestation. The issued schema is the highest one every
 // target cell attests, so schema 3 (node selectors) follows the same gate.
 func (s *CommodoreServer) compileTenantPlacement(ctx context.Context, payload *mediapb.TenantAuthority, entitlement *quartermasterpb.GetTenantEntitlementResponse, targets []string) error {
 	queries := commodoredb.New(s.db)
@@ -87,23 +111,27 @@ func (s *CommodoreServer) compileTenantPlacement(ctx context.Context, payload *m
 		return nil
 	}
 	required := max(uint32(sharedauthority.PlacementSchemaVersion), previous.GetSchemaVersion())
-	schema, err := placementTargetSchema(ctx, queries, targets)
+	attestations, err := readPlacementCellAttestations(ctx, queries, targets)
 	if err != nil {
 		return err
 	}
-	var probeErr error
-	if schema < required {
-		probeErr = s.refreshPlacementCellCapabilities(ctx, targets)
-		if schema, err = placementTargetSchema(ctx, queries, targets); err != nil {
+	var probeFailures map[string]error
+	if attestations.schema() < required {
+		probeFailures = s.probePlacementCellCapabilities(ctx, attestations.below(required))
+		if attestations, err = readPlacementCellAttestations(ctx, queries, targets); err != nil {
 			return err
 		}
 	}
+	schema := attestations.schema()
 	if schema < required {
 		if established {
-			if probeErr != nil {
-				return fmt.Errorf("placement enforcement capability unavailable: %w", probeErr)
+			if len(probeFailures) > 0 {
+				return fmt.Errorf("placement enforcement capability unavailable: %w", joinPlacementProbeFailures(probeFailures))
 			}
 			return fmt.Errorf("tenant authority targets a cell without placement schema %d enforcement capability", required)
+		}
+		if awaiting := attestations.awaiting(required, probeFailures); len(awaiting) > 0 {
+			return fmt.Errorf("%w: cells %s have not attested placement schema %d enforcement yet", errTenantPlacementActivationPending, strings.Join(awaiting, ", "), required)
 		}
 		return nil
 	}

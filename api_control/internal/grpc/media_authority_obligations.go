@@ -121,14 +121,14 @@ func markMediaAuthorityPublished(ctx context.Context) {
 }
 
 func (s *CommodoreServer) processMediaAuthorityEventObligations(ctx context.Context) {
-	s.processMediaAuthorityObligationLane(ctx, commodoredb.MediaAuthorityLaneEvent, mediaAuthorityLease, mediaAuthorityRefreshTimeout)
+	s.processMediaAuthorityObligationLane(ctx, commodoredb.MediaAuthorityLaneEvent, mediaAuthorityObligationLease, mediaAuthorityRefreshTimeout)
 }
 
 // processMediaAuthorityBulkObligations compiles fan-out and reconciliation work.
 // It has its own lane and workers so that a tenant change touching thousands of
 // objects never stands in front of a change to one of them.
 func (s *CommodoreServer) processMediaAuthorityBulkObligations(ctx context.Context) {
-	s.processMediaAuthorityObligationLane(ctx, commodoredb.MediaAuthorityLaneBulk, mediaAuthorityLease, mediaAuthorityRefreshTimeout)
+	s.processMediaAuthorityObligationLane(ctx, commodoredb.MediaAuthorityLaneBulk, mediaAuthorityObligationLease, mediaAuthorityRefreshTimeout)
 }
 
 func (s *CommodoreServer) processMediaAuthorityObjectRenewals(ctx context.Context) {
@@ -178,8 +178,10 @@ func (s *CommodoreServer) processMediaAuthorityObligationLane(ctx context.Contex
 		}
 		memo := newMediaAuthorityCompileMemo()
 		claimCtx, cancel := context.WithTimeout(ctx, mediaAuthorityClaimTimeout)
-		rows, err := commodoredb.New(s.db).ClaimMediaAuthorityObligations(claimCtx, commodoredb.ClaimMediaAuthorityObligationsParams{
-			LeaseMs: lease.Milliseconds(), Lane: lane, BatchSize: int32(available),
+		rows, err := claimMediaAuthorityWork(claimCtx, s.db, func(queries *commodoredb.Queries) ([]commodoredb.ClaimMediaAuthorityObligationsRow, error) {
+			return queries.ClaimMediaAuthorityObligations(claimCtx, commodoredb.ClaimMediaAuthorityObligationsParams{
+				LeaseMs: lease.Milliseconds(), Lane: lane, BatchSize: int32(available),
+			})
 		})
 		cancel()
 		if err != nil {
