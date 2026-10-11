@@ -1536,6 +1536,15 @@ func main() {
 			}
 		}
 		authorityStore.SetApplyOutcomeMetric(mediaAuthorityApplyOutcomes)
+		placementPairReads := metricsCollector.NewCounter(
+			"placement_pair_reads_total",
+			"Placement authority pair reads: hit (kept pair or shared in-flight read), miss (database read, kept), bypass (database read, not kept)",
+			[]string{"result"},
+		)
+		for _, result := range localauthority.PlacementPairReadResults {
+			placementPairReads.WithLabelValues(result).Add(0)
+		}
+		authorityStore.SetPlacementPairReadMetric(placementPairReads)
 		authorityStore.SetFetchOutcomeMetric(mediaAuthorityFetches)
 		authorityStore.SetLogger(logger)
 		// Read the local restore marker before serving. Ordinary restart is
@@ -1561,7 +1570,14 @@ func main() {
 		authorityStore.SetApplyObserver(triggerProcessor.HandleMediaAuthorityApply)
 		control.SetLocalMediaAuthorityStore(authorityStore)
 		control.SetPlaybackGrantBuilder(triggerProcessor.PlaybackGrantForStream)
-		state.DefaultManager().SetPlaybackAuthorityChangeHandler(triggerProcessor.HandlePeerPlaybackAuthorityChange)
+		// A peer replica's apply drops this replica's kept placement pairs before
+		// its edges are pushed new grants. The pair cache's one-second lifetime,
+		// not this announcement, bounds how long a lost announcement can delay a
+		// revocation here.
+		state.DefaultManager().SetPlaybackAuthorityChangeHandler(func(change state.PlaybackAuthorityChange) {
+			authorityStore.ForgetPlacementPairs(change.Kind, change.TenantID, change.InternalName)
+			triggerProcessor.HandlePeerPlaybackAuthorityChange(change)
+		})
 		go authorityStore.RunAuditRetention(context.Background(), logger)
 		go authorityStore.RunCollection(context.Background(), logger)
 		logger.WithFields(logging.Fields{"trusted_signers": len(trust), "control_cell_id": mediaAuthorityCellID}).Info("Signed media authority apply enabled")

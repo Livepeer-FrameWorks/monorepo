@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"frameworks/api_balancing/internal/database/foghorndb"
@@ -44,6 +45,25 @@ type restoreFence struct {
 	answered           bool
 	recoveryPending    bool
 	recoveryGeneration uint64
+	// changes counts every raise and lower of the fence, by startup or
+	// durably. Kept placement pairs are tied to the count they were read
+	// under, so any fence change drops them all.
+	changes atomic.Uint64
+}
+
+func (f *restoreFence) changeEpoch() uint64 {
+	if f == nil {
+		return 0
+	}
+	return f.changes.Load()
+}
+
+// setStartupLocked sets the startup fence and counts a change.
+func (f *restoreFence) setStartupLocked(up bool) {
+	if f.startup != up {
+		f.changes.Add(1)
+	}
+	f.startup = up
 }
 
 // FenceCheck is the answer to a summary of what the cell holds.
@@ -111,6 +131,9 @@ func (f *restoreFence) confirm(kind, id string, generation uint64) bool {
 // that comes up anew forgets what was confirmed before it: those confirmations
 // may describe a database that has since been replaced.
 func (f *restoreFence) setDurableLocked(at time.Time) {
+	if !at.Equal(f.durableAt) {
+		f.changes.Add(1)
+	}
 	if at.IsZero() {
 		f.durableAt = time.Time{}
 		if !f.startup {
@@ -146,7 +169,8 @@ func (s *Store) RaiseStartupFence(ctx context.Context) error {
 	at, err := s.loadDurableFence(ctx)
 	s.fence.mu.Lock()
 	defer s.fence.mu.Unlock()
-	s.fence.startup = err != nil
+	s.fence.setStartupLocked(err != nil)
+	s.fence.changes.Add(1)
 	s.fence.generation++
 	s.fence.confirmed = nil
 	s.fence.recoveryPending = true
@@ -177,7 +201,7 @@ func (s *Store) SettleFence(ctx context.Context, check FenceCheck) error {
 	at, loadErr := s.loadDurableFence(ctx)
 	s.fence.mu.Lock()
 	defer s.fence.mu.Unlock()
-	s.fence.startup = loadErr != nil
+	s.fence.setStartupLocked(loadErr != nil)
 	s.fence.answered = s.fence.answered || check.Checked
 	if check.InventoryComplete && check.Checked && check.Matches && check.InventoryGeneration == s.fence.recoveryGeneration {
 		s.fence.recoveryPending = false
@@ -209,7 +233,7 @@ func (s *Store) ReloadFence(ctx context.Context) error {
 		return err
 	}
 	s.fence.mu.Lock()
-	s.fence.startup = false
+	s.fence.setStartupLocked(false)
 	s.fence.setDurableLocked(at)
 	s.fence.mu.Unlock()
 	return nil

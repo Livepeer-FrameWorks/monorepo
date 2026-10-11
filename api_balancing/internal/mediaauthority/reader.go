@@ -373,6 +373,9 @@ func (s *Store) MarkMediaObjectLocalReadReady(ctx context.Context, tenantID, aut
 	rows, err := foghorndb.New(s.db).MarkMediaObjectAuthorityLocalReadReady(ctx, foghorndb.MarkMediaObjectAuthorityLocalReadReadyParams{
 		TenantID: strings.TrimSpace(tenantID), AuthorityID: strings.TrimSpace(authorityID), AuthorityVersion: version,
 	})
+	if rows == 1 {
+		s.forgetLocalReadiness(tenantID, authorityID)
+	}
 	return rows == 1, err
 }
 
@@ -380,6 +383,9 @@ func (s *Store) MarkMediaObjectLocalIngestReady(ctx context.Context, tenantID, a
 	rows, err := foghorndb.New(s.db).MarkMediaObjectAuthorityLocalIngestReady(ctx, foghorndb.MarkMediaObjectAuthorityLocalIngestReadyParams{
 		TenantID: strings.TrimSpace(tenantID), AuthorityID: strings.TrimSpace(authorityID), AuthorityVersion: version,
 	})
+	if rows == 1 {
+		s.forgetLocalReadiness(tenantID, authorityID)
+	}
 	return rows == 1, err
 }
 
@@ -387,6 +393,9 @@ func (s *Store) MarkMediaObjectLocalSourceReady(ctx context.Context, tenantID, a
 	rows, err := foghorndb.New(s.db).MarkMediaObjectAuthorityLocalSourceReady(ctx, foghorndb.MarkMediaObjectAuthorityLocalSourceReadyParams{
 		TenantID: strings.TrimSpace(tenantID), AuthorityID: strings.TrimSpace(authorityID), AuthorityVersion: version,
 	})
+	if rows == 1 {
+		s.forgetLocalReadiness(tenantID, authorityID)
+	}
 	return rows == 1, err
 }
 
@@ -412,6 +421,7 @@ func (s *Store) MarkPlaybackPairLocalReadReady(ctx context.Context, tenantID str
 	})
 	switch {
 	case err == nil:
+		s.forgetLocalReadiness(tenantID, "")
 		return true, nil
 	case stage == "begin":
 		return false, fmt.Errorf("begin local-read promotion: %w", err)
@@ -444,6 +454,7 @@ func (s *Store) MarkIngestPairLocalReady(ctx context.Context, tenantID string, t
 	})
 	switch {
 	case err == nil:
+		s.forgetLocalReadiness(tenantID, "")
 		return true, nil
 	case stage == "begin":
 		return false, fmt.Errorf("begin local-ingest promotion: %w", err)
@@ -476,6 +487,7 @@ func (s *Store) MarkSourcePairLocalReady(ctx context.Context, tenantID string, t
 	})
 	switch {
 	case err == nil:
+		s.forgetLocalReadiness(tenantID, "")
 		return true, nil
 	case stage == "begin":
 		return false, fmt.Errorf("begin local-source promotion: %w", err)

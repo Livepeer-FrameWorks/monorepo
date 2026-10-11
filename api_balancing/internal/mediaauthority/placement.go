@@ -34,14 +34,17 @@ func (s *Store) Placement(ctx context.Context, tenantID, authorityID, internalNa
 		strings.TrimSpace(tenantID) != tenantID || strings.TrimSpace(authorityID) != authorityID || strings.TrimSpace(internalName) != internalName {
 		return PlacementPair{}, errors.New("placement authority identity is required")
 	}
-	read := func(ctx context.Context) (PlacementPair, error) {
+	load := func(ctx context.Context) (storedPlacementPair, error) {
 		row, err := foghorndb.New(s.db).GetLocalPlacementAuthorityPair(ctx, foghorndb.GetLocalPlacementAuthorityPairParams{
 			TenantID: tenantID, AuthorityID: authorityID, InternalName: internalName,
 		})
 		if err != nil {
-			return PlacementPair{}, err
+			return storedPlacementPair{}, err
 		}
-		return s.decodePlacementPair(row, tenantID, authorityID, internalName)
+		return decodePlacementPair(row, tenantID, authorityID, internalName)
+	}
+	read := func(ctx context.Context) (PlacementPair, error) {
+		return s.readPlacementPair(ctx, tenantID, authorityID, internalName, load)
 	}
 	return s.readPlacementFetchingOnMiss(ctx, AuthorityLookup{AuthorityID: authorityID}, read)
 }
@@ -53,12 +56,15 @@ func (s *Store) PlacementForInternalName(ctx context.Context, tenantID, internal
 	if tenantID == "" || internalName == "" || strings.TrimSpace(tenantID) != tenantID || strings.TrimSpace(internalName) != internalName {
 		return PlacementPair{}, errors.New("placement tenant and internal name are required")
 	}
-	read := func(ctx context.Context) (PlacementPair, error) {
+	load := func(ctx context.Context) (storedPlacementPair, error) {
 		row, err := foghorndb.New(s.db).GetLocalPlacementAuthorityPairByInternalName(ctx, foghorndb.GetLocalPlacementAuthorityPairByInternalNameParams{TenantID: tenantID, InternalName: internalName})
 		if err != nil {
-			return PlacementPair{}, err
+			return storedPlacementPair{}, err
 		}
-		return s.decodePlacementPair(foghorndb.GetLocalPlacementAuthorityPairRow(row), tenantID, row.ObjectAuthorityID, internalName)
+		return decodePlacementPair(foghorndb.GetLocalPlacementAuthorityPairRow(row), tenantID, row.ObjectAuthorityID, internalName)
+	}
+	read := func(ctx context.Context) (PlacementPair, error) {
+		return s.readPlacementPair(ctx, tenantID, "", internalName, load)
 	}
 	return s.readPlacementFetchingOnMiss(ctx, AuthorityLookup{InternalName: internalName}, read)
 }
@@ -75,7 +81,9 @@ const PlacementReadTimeout = 2*placementLocalReadTimeout + authorityFetchTimeout
 
 // readPlacementFetchingOnMiss reads the pair, and when either half is missing
 // or past its validity asks for the object once and reads again. A tombstoned
-// object is an answer and is never asked around.
+// object is an answer and is never asked around. The local reads go through
+// the pair cache; an applied fetch drops the pair there, so the read again
+// reaches the database.
 func (s *Store) readPlacementFetchingOnMiss(ctx context.Context, lookup AuthorityLookup, read func(context.Context) (PlacementPair, error)) (PlacementPair, error) {
 	readLocal := func() (PlacementPair, error) {
 		readCtx, stop := context.WithTimeout(ctx, placementLocalReadTimeout)
@@ -115,49 +123,47 @@ func placementPairNeedsFetch(pair PlacementPair, err error, now time.Time) bool 
 		pair.Object.Freshness == FreshnessHardExpired || pair.Tenant.Freshness == FreshnessHardExpired
 }
 
-func (s *Store) decodePlacementPair(row foghorndb.GetLocalPlacementAuthorityPairRow, tenantID, authorityID, internalName string) (PlacementPair, error) {
-	now := s.now().UTC()
+// decodePlacementPair verifies and decodes the stored rows. Freshness is left
+// to each use (placementAtUse).
+func decodePlacementPair(row foghorndb.GetLocalPlacementAuthorityPairRow, tenantID, authorityID, internalName string) (storedPlacementPair, error) {
 	object, err := decodeMediaObjectSnapshot(row.ObjectPayload, row.ObjectPayloadSha256, row.ObjectAuthorityID, row.ObjectAuthorityVersion,
-		row.ObjectReadReady, row.ObjectRefreshAfter, row.ObjectValidUntil, now)
+		row.ObjectReadReady, row.ObjectRefreshAfter, row.ObjectValidUntil, time.Time{})
 	if err != nil {
-		return PlacementPair{}, err
+		return storedPlacementPair{}, err
 	}
 	object.ParentVersion = row.TenantAuthorityVersion
 	object.IngestReady, object.SourceReady = row.ObjectIngestReady, row.ObjectSourceReady
 	if object.Authority.GetTenantId() != tenantID || object.Authority.GetInternalName() != internalName || object.AuthorityID != authorityID {
-		return PlacementPair{}, errors.New("placement object authority identity mismatch")
+		return storedPlacementPair{}, errors.New("placement object authority identity mismatch")
 	}
 	switch object.Authority.GetObjectKind() {
 	case mediaauthoritypb.MediaObjectKind_MEDIA_OBJECT_KIND_LIVE_STREAM:
 		if object.Authority.GetLiveStream().GetStreamId() == "" || authorityID != sharedauthority.LiveStreamAuthorityID(object.Authority.GetLiveStream().GetStreamId()) {
-			return PlacementPair{}, errors.New("placement live authority identity mismatch")
+			return storedPlacementPair{}, errors.New("placement live authority identity mismatch")
 		}
 	case mediaauthoritypb.MediaObjectKind_MEDIA_OBJECT_KIND_ARTIFACT:
 		if object.Authority.GetArtifact().GetArtifactId() == "" || authorityID != sharedauthority.ArtifactAuthorityID(object.Authority.GetArtifact().GetArtifactId()) {
-			return PlacementPair{}, errors.New("placement artifact authority identity mismatch")
+			return storedPlacementPair{}, errors.New("placement artifact authority identity mismatch")
 		}
 	default:
-		return PlacementPair{}, errors.New("placement object kind is unsupported")
+		return storedPlacementPair{}, errors.New("placement object kind is unsupported")
 	}
 	if err := verifyStoredPayload(row.TenantPayload, row.TenantPayloadSha256); err != nil {
-		return PlacementPair{}, err
+		return storedPlacementPair{}, err
 	}
 	tenant := &mediaauthoritypb.TenantAuthority{}
 	if err := (proto.UnmarshalOptions{DiscardUnknown: false}).Unmarshal(row.TenantPayload, tenant); err != nil {
-		return PlacementPair{}, errors.New("decode placement tenant authority")
+		return storedPlacementPair{}, errors.New("decode placement tenant authority")
 	}
 	if tenant.GetTenantId() != tenantID {
-		return PlacementPair{}, errors.New("placement tenant authority identity mismatch")
+		return storedPlacementPair{}, errors.New("placement tenant authority identity mismatch")
 	}
-	result := PlacementPair{Object: object, Tenant: TenantSnapshot{
-		Authority: tenant, Version: row.TenantAuthorityVersion,
-		Ready: row.TenantReadReady, IngestReady: row.TenantIngestReady, SourceReady: row.TenantSourceReady,
-		RefreshAfter: row.TenantRefreshAfter, ValidUntil: row.TenantValidUntil,
-		Freshness: authorityFreshness(now, row.TenantRefreshAfter, row.TenantValidUntil),
-	}}
-	result.Tenant.Freshness = s.fencedFreshness(result.Tenant.Freshness, "tenant", tenant.GetTenantId(), false)
-	result.Object.Freshness = s.fencedFreshness(result.Object.Freshness, "media_object", object.AuthorityID, row.ObjectWithheldByTenantRevival)
-	s.observeFreshness(result.Tenant.Freshness, AuthorityLookup{TenantID: tenant.GetTenantId()})
-	s.observeFreshness(result.Object.Freshness, AuthorityLookup{AuthorityID: object.AuthorityID})
-	return result, nil
+	return storedPlacementPair{
+		pair: PlacementPair{Object: object, Tenant: TenantSnapshot{
+			Authority: tenant, Version: row.TenantAuthorityVersion,
+			Ready: row.TenantReadReady, IngestReady: row.TenantIngestReady, SourceReady: row.TenantSourceReady,
+			RefreshAfter: row.TenantRefreshAfter, ValidUntil: row.TenantValidUntil,
+		}},
+		objectWithheld: row.ObjectWithheldByTenantRevival,
+	}, nil
 }

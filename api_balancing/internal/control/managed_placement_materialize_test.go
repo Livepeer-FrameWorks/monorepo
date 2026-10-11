@@ -78,6 +78,9 @@ func TestManagedPlacementDenialPrecedesMaterializationAndApply(t *testing.T) {
 	}})
 	for _, path := range []string{"local", "connected", "apply"} {
 		t.Run(path, func(t *testing.T) {
+			// Each path decides on its own database read, not on the pair the
+			// previous path left in the store's pair cache.
+			store.ForgetPlacementPairs("tenant", tenantID, "")
 			now := time.Now()
 			if path == "connected" {
 				mock.ExpectQuery("SELECT").WithArgs("internal").WillReturnError(sql.ErrNoRows)

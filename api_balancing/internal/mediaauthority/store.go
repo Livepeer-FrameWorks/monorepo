@@ -65,6 +65,7 @@ type Store struct {
 	fetcher        *fetchCoordinator
 	uses           *useRecorder
 	fence          *restoreFence
+	pairs          *pairCache
 	recovery       recoveryCoordinator
 	fetchOutcomes  *prometheus.CounterVec
 	runtimePeers   RuntimePeerResolver
@@ -149,7 +150,7 @@ func NewStore(db *sql.DB, cellID string, trust sharedauthority.TrustSet) (*Store
 	if db == nil || strings.TrimSpace(cellID) == "" || len(trust) == 0 {
 		return nil, errors.New("media authority store requires database, control-cell ID, and trust set")
 	}
-	return &Store{db: db, cellID: strings.TrimSpace(cellID), trust: cloneTrust(trust), now: time.Now, refresh: &refreshCoordinator{}, fetcher: &fetchCoordinator{}, uses: newUseRecorder(), fence: &restoreFence{}}, nil
+	return &Store{db: db, cellID: strings.TrimSpace(cellID), trust: cloneTrust(trust), now: time.Now, refresh: &refreshCoordinator{}, fetcher: &fetchCoordinator{}, uses: newUseRecorder(), fence: &restoreFence{}, pairs: newPairCache()}, nil
 }
 
 func (s *Store) SetSealPrivateKey(keyID string, privateKey *ecdh.PrivateKey) error {
@@ -381,6 +382,12 @@ func (s *Store) apply(ctx context.Context, encoded []byte, confirmedAt time.Time
 		stage = "commit"
 		return nil
 	})
+	// Kept placement pairs are dropped once the apply committed, before the
+	// observer and any caller read again. A failed commit may still have
+	// committed, so it drops them too.
+	if rejectErr == nil && (txErr == nil || stage == "commit") {
+		s.forgetApplied(result)
+	}
 	if txErr != nil {
 		switch stage {
 		case "begin":
