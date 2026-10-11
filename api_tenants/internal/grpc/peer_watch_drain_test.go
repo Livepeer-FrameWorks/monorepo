@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -25,6 +26,8 @@ import (
 
 type servicePeerStream struct {
 	grpc.ServerStream
+	slowSends          *atomic.Int32
+	firstSlowSent      chan struct{}
 	blockedSendEntered chan struct{}
 	blockedSendExited  chan struct{}
 }
@@ -33,10 +36,19 @@ func (s servicePeerStream) Context() context.Context {
 	return context.WithValue(s.ServerStream.Context(), ctxkeys.KeyAuthType, "service")
 }
 
+// SendMsg marks the slow reader's snapshots, the only ones with peers. gRPC
+// admits a message while the stream still has write quota, however large, so
+// the first snapshot returns at once and spends the quota; the second one is
+// the Send that waits for the unread stream.
 func (s servicePeerStream) SendMsg(msg any) error {
 	if response, ok := msg.(*quartermasterpb.ListPeersResponse); ok && len(response.Peers) != 0 {
-		close(s.blockedSendEntered)
-		defer close(s.blockedSendExited)
+		switch s.slowSends.Add(1) {
+		case 1:
+			defer close(s.firstSlowSent)
+		case 2:
+			close(s.blockedSendEntered)
+			defer close(s.blockedSendExited)
+		}
 	}
 	return s.ServerStream.SendMsg(msg)
 }
@@ -52,22 +64,27 @@ func TestWatchPeersDrainPreservesOrdinaryRPC(t *testing.T) {
 			"cluster_id", "shared_tenant_ids", "cluster_name", "cluster_type", "foghorn_addr", "foghorn_addrs", "control_cell_id",
 		}))
 	}
-	// This snapshot exceeds the stream's receive window. The client never reads
-	// it, so draining must also release a transport-level flow-control wait.
-	mock.ExpectQuery("peer_clusters").WillReturnRows(sqlmock.NewRows([]string{
-		"cluster_id", "shared_tenant_ids", "cluster_name", "cluster_type", "foghorn_addr", "foghorn_addrs", "control_cell_id",
-	}).AddRow("eu", []byte("{tenant}"), "EU", "central", strings.Repeat("x", 2*1024*1024), []byte("{}"), "eu-cell"))
+	// These snapshots exceed the stream's receive window. The client never reads
+	// them, so the second one waits on flow control and draining must release it.
+	for _, name := range []string{"EU", "EU changed"} {
+		mock.ExpectQuery("peer_clusters").WillReturnRows(sqlmock.NewRows([]string{
+			"cluster_id", "shared_tenant_ids", "cluster_name", "cluster_type", "foghorn_addr", "foghorn_addrs", "control_cell_id",
+		}).AddRow("eu", []byte("{tenant}"), name, "central", strings.Repeat("x", 2*1024*1024), []byte("{}"), "eu-cell"))
+	}
 	peerCtx, drainPeers := context.WithCancel(context.Background())
 	defer drainPeers()
 	hub := newPeerWatchHub()
 	hub.ctx = peerCtx
 	qm := &QuartermasterServer{db: db, peerWatch: hub}
 	entered, release := make(chan struct{}), make(chan struct{})
+	var slowSends atomic.Int32
+	firstSlowSent := make(chan struct{})
 	blockedSendEntered, blockedSendExited := make(chan struct{}), make(chan struct{})
 	server := grpc.NewServer(
 		grpc.StreamInterceptor(func(srv any, stream grpc.ServerStream, _ *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 			return handler(srv, servicePeerStream{
-				ServerStream: stream, blockedSendEntered: blockedSendEntered, blockedSendExited: blockedSendExited,
+				ServerStream: stream, slowSends: &slowSends, firstSlowSent: firstSlowSent,
+				blockedSendEntered: blockedSendEntered, blockedSendExited: blockedSendExited,
 			})
 		}),
 		grpc.UnknownServiceHandler(func(_ any, stream grpc.ServerStream) error {
@@ -102,7 +119,10 @@ func TestWatchPeersDrainPreservesOrdinaryRPC(t *testing.T) {
 			OnShutdown:      []func(context.Context){func(context.Context) { close(cleanup) }},
 		})
 	}()
+	// Fixed windows turn off BDP window growth, which would otherwise let the
+	// transport flush the unread snapshots and replenish the write quota.
 	conn, err := grpc.NewClient("passthrough:///peer-drain", grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithInitialWindowSize(65535), grpc.WithInitialConnWindowSize(65535),
 		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) { return listener.DialContext(ctx) }))
 	if err != nil {
 		t.Fatal(err)
@@ -128,9 +148,25 @@ func TestWatchPeersDrainPreservesOrdinaryRPC(t *testing.T) {
 		t.Fatal(err)
 	}
 	select {
+	case <-firstSlowSent:
+	case <-ctx.Done():
+		t.Fatal("slow-reader snapshot never sent")
+	}
+	// Only the slow reader, the last subscriber, is woken: the other watchers'
+	// re-reads would take the changed snapshot.
+	hub.mu.Lock()
+	slowWake := hub.waiters[hub.next]
+	hub.mu.Unlock()
+	slowWake <- struct{}{}
+	select {
 	case <-blockedSendEntered:
 	case <-ctx.Done():
-		t.Fatal("slow-reader snapshot never started")
+		t.Fatal("slow-reader changed snapshot never started")
+	}
+	select {
+	case <-blockedSendExited:
+		t.Fatal("the changed snapshot was sent to a reader that consumed nothing; flow control did not hold it")
+	case <-time.After(200 * time.Millisecond):
 	}
 	healthWatch, err := grpc_health_v1.NewHealthClient(conn).Watch(ctx, &grpc_health_v1.HealthCheckRequest{})
 	if err != nil {
@@ -152,6 +188,8 @@ func TestWatchPeersDrainPreservesOrdinaryRPC(t *testing.T) {
 			t.Fatalf("drained peer watch: %v", err)
 		}
 	}
+	// The blocked Send is released only when the handler's return finishes the
+	// stream, after serveHubWatch has unsubscribed, so the hub is empty from here.
 	select {
 	case <-blockedSendExited:
 	case <-ctx.Done():

@@ -102,6 +102,13 @@ falls back to a central allow. A transient local read failure or inconsistent
 row is not an authority decision; the request may use the connected evaluator
 when it is available and otherwise returns unavailable.
 
+How long each local input is used, and what happens while its source service
+is unreachable (authority, the per-process placement pair cache, cluster
+membership, remote cell observations, node evidence and ingest ownership), is
+the [staleness contract](media-authority.md#staleness-contract). A viewer
+request makes no Commodore, Quartermaster or Purser call while those copies are
+usable.
+
 ### Edge playback grants
 
 Mist fires `PLAY_REWRITE` for every request of an HTTP viewer: the HLS master

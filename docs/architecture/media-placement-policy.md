@@ -19,7 +19,8 @@ empty placement policy is not an exception.
 Schema-2 issuance and schema-2 readiness are gated by one attestation chain, not by a flag:
 
 - Every Foghorn replica heartbeats `foghorn.control_replicas` (replica id, release, supported
-  placement schema, whether this process installed enforcement). Startup sets the enforcement
+  placement schema, whether this process installed enforcement) every 15 seconds; a replica whose
+  last beat is within 60 seconds counts as live. Startup sets the enforcement
   state only after the destination, prepared-source admission, both front-door resolvers and
   USER_NEW admission are installed; nothing configurable can set it.
 - `ApplyMediaAuthority` acknowledgements carry `MediaCellPlacementCapability`: the acknowledging
@@ -37,7 +38,8 @@ Schema-2 issuance and schema-2 readiness are gated by one attestation chain, not
   read, no live replica in the ledger) keeps what the cell attested last, so a transient read
   failure cannot drop a ready cell back to schema 1, which its enforcing replicas refuse. Live
   replicas that attest they do not enforce withdraw readiness. An unchanged attestation rewrites
-  the row at most every five minutes.
+  the row at most every five minutes. The cadences of these and the cell's other local inputs are
+  listed in the [staleness contract](media-authority.md#staleness-contract).
   A tenant with no schema-2 history receives its first policy-bearing authority only when every
   current target cell is attested; otherwise the refresh keeps schema 1 and each newly ready
   cell enqueues a `cell_placement_capability_ready` refresh for the legacy tenants it holds.
