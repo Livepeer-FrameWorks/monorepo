@@ -45,7 +45,7 @@ func TestReportCapability_ReadyEnqueuesLegacyTenants_RealPG(t *testing.T) {
 		}
 		return n
 	}
-	report := &commodorepb.ReportMediaCellPlacementCapabilityRequest{ControlCellId: "cell-a", Capability: readyCellAttestation()}
+	report := &commodorepb.ReportMediaCellPlacementCapabilityRequest{ControlCellId: "cell-a"}
 
 	if _, err := server.ReportMediaCellPlacementCapability(ctx, report); status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("unauthenticated report returned %v, want PermissionDenied", err)
@@ -72,7 +72,7 @@ func TestReportCapability_ReadyEnqueuesLegacyTenants_RealPG(t *testing.T) {
 	}
 
 	// A cell nobody can reach is not recorded, and the reporter is told to retry.
-	unknown := &commodorepb.ReportMediaCellPlacementCapabilityRequest{ControlCellId: "cell-unknown", Capability: readyCellAttestation()}
+	unknown := &commodorepb.ReportMediaCellPlacementCapabilityRequest{ControlCellId: "cell-unknown"}
 	if _, err := server.ReportMediaCellPlacementCapability(serviceCtx, unknown); status.Code(err) != codes.Unavailable {
 		t.Fatalf("report for an unreachable cell returned %v, want Unavailable", err)
 	}

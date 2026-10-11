@@ -11,16 +11,15 @@ import (
 	"time"
 
 	"frameworks/api_control/internal/database/commodoredb"
+
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	sharedauthority "github.com/Livepeer-FrameWorks/monorepo/pkg/mediaauthority"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -240,17 +239,12 @@ func (s *CommodoreServer) ReportMediaCellPlacementCapability(ctx context.Context
 	}
 	readCtx, cancel := context.WithTimeout(ctx, placementProbeTimeout)
 	defer cancel()
-	attested, err := s.readBackPlacementCellCapability(readCtx, cellID)
-	if err != nil {
+	if _, err := s.readBackPlacementCellCapability(readCtx, cellID); err != nil {
 		// Never the cell's own code: the reporter reads Unimplemented as a
 		// Commodore without this RPC, not as a cell without the probe.
 		return nil, status.Errorf(codes.Unavailable, "read back placement capability: %v", err)
 	}
 	s.placementProbeFailures.Delete(cellID)
-	if !proto.Equal(attested, req.GetCapability()) && s.logger != nil {
-		s.logger.WithFields(logging.Fields{"cell_id": cellID, "reported": req.GetCapability().String(), "attested": attested.String()}).
-			Info("Reported cell placement capability differs from the cell's own answer; recorded the cell's answer")
-	}
 	return &emptypb.Empty{}, nil
 }
 

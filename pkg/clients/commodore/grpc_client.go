@@ -14,7 +14,6 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
-	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
 	foghorncontrolpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 
@@ -301,8 +300,8 @@ func (c *GRPCClient) ReportMediaAuthorityUse(ctx context.Context, controlCellID 
 // ReportMediaCellPlacementCapability asks Commodore to record this cell's
 // placement capability now. Commodore reads the attestation back from the cell;
 // Unimplemented means a Commodore release without the report.
-func (c *GRPCClient) ReportMediaCellPlacementCapability(ctx context.Context, controlCellID string, capability *foghornpb.MediaCellPlacementCapability) error {
-	_, err := c.internal.ReportMediaCellPlacementCapability(ctx, &commodorepb.ReportMediaCellPlacementCapabilityRequest{ControlCellId: controlCellID, Capability: capability})
+func (c *GRPCClient) ReportMediaCellPlacementCapability(ctx context.Context, controlCellID string) error {
+	_, err := c.internal.ReportMediaCellPlacementCapability(ctx, &commodorepb.ReportMediaCellPlacementCapabilityRequest{ControlCellId: controlCellID})
 	return err
 }
 

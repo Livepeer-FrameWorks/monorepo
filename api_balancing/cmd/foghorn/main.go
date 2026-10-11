@@ -1636,12 +1636,12 @@ func main() {
 	// The cell's placement capability goes to Commodore after each replica
 	// heartbeat that changes it, and when Commodore (re)connects, so readiness
 	// does not wait for Commodore's probe or the next acknowledgement.
-	capabilityReporter := localauthority.NewCellCapabilityReporter(func(ctx context.Context, capability localauthority.CellPlacementCapability) error {
+	capabilityReporter := localauthority.NewCellCapabilityReporter(func(ctx context.Context, _ localauthority.CellPlacementCapability) error {
 		current := placementCommodore.Load()
 		if current == nil {
 			return errors.New("commodore is not connected")
 		}
-		return current.ReportMediaCellPlacementCapability(ctx, mediaAuthorityCellID, capability.Proto())
+		return current.ReportMediaCellPlacementCapability(ctx, mediaAuthorityCellID)
 	}, logger)
 	onCommodoreConnected := func(client *commodore.GRPCClient) {
 		if client == nil {
