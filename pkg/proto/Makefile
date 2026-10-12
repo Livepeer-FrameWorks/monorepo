@@ -55,17 +55,28 @@ clean:
 # count: FILE level. Internal events and the envelope are protobuf on the wire
 # between services released together: WIRE level. A tag that predates a file
 # has nothing to break, so paths absent from the tag are skipped.
+#
+# The tag's module reaches buf as a git archive tarball rather than a .git#
+# input: buf clones that repository over upload-pack, which cannot serve blobs
+# a partial clone (remote-dev slots are blob:none) has not fetched, while git
+# archive fetches them from the promisor remote on demand. Run from this
+# directory, git archive emits only pkg/proto, with paths relative to it.
 AGAINST_TAG ?=
 proto-breaking:
 	@test -n "$(AGAINST_TAG)" || { echo "ERROR: AGAINST_TAG is required"; exit 1; }
-	@against='$(shell git rev-parse --show-toplevel)/.git#tag=$(AGAINST_TAG),subdir=pkg/proto'; \
+	@work=$$(mktemp -d "$${TMPDIR:-/tmp}/proto-breaking.XXXXXX") || exit 1; \
+	trap 'rm -rf "$$work"' EXIT; \
+	against="$$work/against.tar"; \
+	{ git archive --format=tar -o "$$against" '$(AGAINST_TAG)' -- buf.yaml '*.proto' && \
+		mkdir "$$work/tree" && tar -x -f "$$against" -C "$$work/tree"; } || { \
+		echo "ERROR: cannot read pkg/proto from $(AGAINST_TAG)"; exit 1; }; \
 	echo "buf breaking against $(AGAINST_TAG)"; \
-	if git cat-file -e '$(AGAINST_TAG):pkg/proto/events/public/v1' 2>/dev/null; then \
+	if test -e "$$work/tree/events/public/v1"; then \
 		$(BUF) breaking --against "$$against" --path events/public/v1 \
 			--config '{"version":"v2","breaking":{"use":["FILE"]}}' || exit 1; \
 	else echo "  events/public/v1 not in $(AGAINST_TAG); nothing to compare"; fi; \
 	for p in events/internal/v1 events/options.proto events/envelope.proto; do \
-		if git cat-file -e '$(AGAINST_TAG):pkg/proto/'"$$p" 2>/dev/null; then \
+		if test -e "$$work/tree/$$p"; then \
 			$(BUF) breaking --against "$$against" --path "$$p" \
 				--config '{"version":"v2","breaking":{"use":["WIRE"]}}' || exit 1; \
 		else echo "  $$p not in $(AGAINST_TAG); nothing to compare"; fi; \
