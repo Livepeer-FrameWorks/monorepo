@@ -319,16 +319,19 @@ func subscribeAs(t *testing.T, client signalmanpb.SignalmanServiceClient, userID
 }
 
 // user.sessions_revoked is internal, yet Bridge closes the user's WebSockets
-// on it: Signalman delivers it on CHANNEL_SESSIONS to the service streams of
-// its tenant only. A tenant user's stream cannot subscribe to the channel,
-// and neither CHANNEL_EVENTS nor CHANNEL_ALL carries it.
-func TestSessionRevocationsReachOnlyTheTenantsServiceStreams(t *testing.T) {
+// on it: Signalman delivers it on CHANNEL_SESSIONS to service streams only,
+// those of its tenant and the tenantless ones every Bridge replica holds for
+// all tenants. A tenant user's stream cannot subscribe to the channel, and
+// neither CHANNEL_EVENTS nor CHANNEL_ALL carries it.
+func TestSessionRevocationsReachOnlyServiceStreams(t *testing.T) {
 	server, client := startSignalman(t)
 	m := testDomainMetrics()
 	handlers := wireDomainEvents(t, server, m)
 
 	tenantID, otherTenantID, userID := uuid.NewString(), uuid.NewString(), uuid.NewString()
 	bridge := streamEvents(subscribeTenant(t, client, tenantID, signalmanpb.Channel_CHANNEL_SESSIONS))
+	platformWide := streamEvents(subscribeTenant(t, client, "", signalmanpb.Channel_CHANNEL_SESSIONS))
+	tenantlessOther := streamEvents(subscribeTenant(t, client, "", signalmanpb.Channel_CHANNEL_PLATFORM, signalmanpb.Channel_CHANNEL_ALL))
 	otherTenantBridge := streamEvents(subscribeTenant(t, client, otherTenantID, signalmanpb.Channel_CHANNEL_SESSIONS))
 	publicOnly := streamEvents(subscribeTenant(t, client, tenantID, signalmanpb.Channel_CHANNEL_EVENTS, signalmanpb.Channel_CHANNEL_ALL))
 	userStream, confirmed := subscribeAs(t, client, userID, tenantID, signalmanpb.Channel_CHANNEL_SESSIONS, signalmanpb.Channel_CHANNEL_ALL)
@@ -336,7 +339,7 @@ func TestSessionRevocationsReachOnlyTheTenantsServiceStreams(t *testing.T) {
 		t.Fatalf("a tenant user's stream was subscribed to CHANNEL_SESSIONS: %v", confirmed)
 	}
 	user := streamEvents(userStream)
-	waitForConnections(t, client, 4)
+	waitForConnections(t, client, 6)
 
 	revoked := &internalv1.UserSessionsRevoked{
 		UserId: userID, RevokedAt: timestamppb.Now(), Reason: internalv1.SessionRevocationReason_SESSION_REVOCATION_REASON_LOGOUT,
@@ -358,8 +361,12 @@ func TestSessionRevocationsReachOnlyTheTenantsServiceStreams(t *testing.T) {
 	if tenantEvent.GetId() != ev.ID || tenantEvent.GetType() != "user.sessions_revoked" || err != nil || !proto.Equal(payload, revoked) {
 		t.Fatalf("tenant event = %v (%v), want %s carrying %v", tenantEvent, err, ev.ID, revoked)
 	}
+	if got := nextEvent(platformWide, 2*time.Second); got.GetTenantId() != tenantID || got.GetData().GetTenantEvent().GetId() != ev.ID {
+		t.Fatalf("the platform-wide service stream received %v, want the revocation stamped with tenant %s", got, tenantID)
+	}
 	for name, stream := range map[string]<-chan *signalmanpb.SignalmanEvent{
 		"another tenant's service stream": otherTenantBridge, "a CHANNEL_EVENTS/CHANNEL_ALL stream": publicOnly, "a tenant user's stream": user,
+		"a tenantless stream without CHANNEL_SESSIONS": tenantlessOther,
 	} {
 		if leaked := nextEvent(stream, 100*time.Millisecond); leaked != nil {
 			t.Fatalf("%s received %v", name, leaked)

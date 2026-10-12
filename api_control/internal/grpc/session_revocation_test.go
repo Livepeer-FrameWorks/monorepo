@@ -11,6 +11,7 @@ import (
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/internalv1"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const sessionTestUserID = "20000000-0000-4000-8000-0000000000b2"
@@ -220,4 +221,43 @@ func TestValidateSession(t *testing.T) {
 			}
 		})
 	}
+}
+
+// ListRecentSessionRevocations returns every tenant's recent revocations and
+// never looks back further than a session token can live.
+func TestListRecentSessionRevocationsClampsItsLookback(t *testing.T) {
+	s, mock, done := newMockServer(t)
+	defer done()
+	revokedAt := time.Now().Add(-time.Minute).UTC()
+	since := &capturedTime{}
+	mock.ExpectQuery(`FROM commodore\.users\s+WHERE sessions_revoked_at > \$1`).
+		WithArgs(since).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "tenant_id", "sessions_revoked_at"}).
+			AddRow(sessionTestUserID, testTenantID, revokedAt).
+			AddRow("30000000-0000-4000-8000-0000000000c3", "40000000-0000-4000-8000-0000000000d4", revokedAt))
+	start := time.Now()
+	resp, err := s.ListRecentSessionRevocations(context.Background(), &commodorepb.ListRecentSessionRevocationsRequest{
+		Since: timestamppb.New(start.Add(-24 * time.Hour)),
+	})
+	if err != nil {
+		t.Fatalf("ListRecentSessionRevocations: %v", err)
+	}
+	if len(resp.GetRevocations()) != 2 || resp.GetRevocations()[0].GetUserId() != sessionTestUserID || resp.GetRevocations()[1].GetTenantId() != "40000000-0000-4000-8000-0000000000d4" {
+		t.Fatalf("revocations = %v", resp.GetRevocations())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+	if lookback := start.Sub(since.at); lookback < auth.SessionTokenTTL || lookback > maxSessionRevocationLookback+time.Second {
+		t.Fatalf("a day-old since read back %s, want between the session lifetime and %s", lookback, maxSessionRevocationLookback)
+	}
+}
+
+// capturedTime matches any time argument and records it.
+type capturedTime struct{ at time.Time }
+
+func (c *capturedTime) Match(v driver.Value) bool {
+	at, ok := v.(time.Time)
+	c.at = at
+	return ok
 }

@@ -190,33 +190,20 @@ func TestGraphQLWebsocketClosesAtOnceWhenItsAPITokenIsRevokedHere(t *testing.T) 
 	}
 }
 
-// recordingWatch records the tenants it follows and lets the test report a
-// revocation stream as (re)subscribed.
+// recordingWatch records the tenants whose API token revocations it follows.
 type recordingWatch struct {
-	mu      sync.Mutex
 	started chan string
 	stopped chan string
-	resumed map[string]func(RevocationKind)
 }
 
 func newRecordingWatch() *recordingWatch {
-	return &recordingWatch{started: make(chan string, 8), stopped: make(chan string, 8), resumed: map[string]func(RevocationKind){}}
+	return &recordingWatch{started: make(chan string, 8), stopped: make(chan string, 8)}
 }
 
-func (w *recordingWatch) watch(ctx context.Context, tenantID string, resumed func(RevocationKind)) {
-	w.mu.Lock()
-	w.resumed[tenantID] = resumed
-	w.mu.Unlock()
+func (w *recordingWatch) watch(ctx context.Context, tenantID string, _ func()) {
 	w.started <- tenantID
 	<-ctx.Done()
 	w.stopped <- tenantID
-}
-
-func (w *recordingWatch) resume(tenantID string, kind RevocationKind) {
-	w.mu.Lock()
-	resumed := w.resumed[tenantID]
-	w.mu.Unlock()
-	resumed(kind)
 }
 
 func receiveTenant(t *testing.T, ch <-chan string, what string) string {
@@ -253,15 +240,18 @@ func TestGraphQLWebsocketWatchesRevocationsWhileTheTenantHasSockets(t *testing.T
 	}
 }
 
-// A session socket is watched too: signing out ends it on every replica.
-func TestGraphQLWebsocketSessionSocketIsWatched(t *testing.T) {
+// A session socket starts no tenant watch: session revocations of every
+// tenant arrive on the replica's platform-wide stream.
+func TestGraphQLWebsocketSessionSocketStartsNoTenantWatch(t *testing.T) {
 	sc, _ := switchableClients(t)
 	watch := newRecordingWatch()
 	sessions := NewWebsocketSessions(watch.watch)
 	_, _ = openSubscription(t, sc, "Bearer "+sessionJWTIssuedAt(t, time.Now(), time.Now().Add(time.Hour)), sessions, 0)
 
-	if got := receiveTenant(t, watch.started, "started"); got != "tenant-1" {
-		t.Fatalf("watch started for %q, want tenant-1", got)
+	select {
+	case tenantID := <-watch.started:
+		t.Fatalf("a session socket started a tenant watch for %q", tenantID)
+	case <-time.After(200 * time.Millisecond):
 	}
 }
 

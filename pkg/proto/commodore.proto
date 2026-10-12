@@ -145,6 +145,12 @@ service InternalService {
   // stops holding realtime connections before it expires.
   rpc ValidateSession(ValidateSessionRequest) returns (ValidateSessionResponse);
 
+  // Called by Gateway when its platform-wide stream of session revocations
+  // (re)subscribes: returns every user whose sessions were revoked after
+  // since, across tenants, so a replica that missed user.sessions_revoked
+  // events still refuses those users' older session tokens.
+  rpc ListRecentSessionRevocations(ListRecentSessionRevocationsRequest) returns (ListRecentSessionRevocationsResponse);
+
   // Mint a short-TTL session token authorizing an operator to open the
   // Mist admin UI on a specific edge node. The token is bound to a
   // single node_id; Foghorn rejects validation against any other node.
@@ -971,6 +977,23 @@ message ValidateSessionRequest {
 // the session could not be checked.
 message ValidateSessionResponse {
   bool valid = 1;
+}
+
+message ListRecentSessionRevocationsRequest {
+  google.protobuf.Timestamp since = 1;
+}
+
+// SessionRevocation is the latest revocation of one user's sessions: every
+// session token of the user issued in or before revoked_at's second is
+// revoked.
+message SessionRevocation {
+  string tenant_id = 1;
+  string user_id = 2;
+  google.protobuf.Timestamp revoked_at = 3;
+}
+
+message ListRecentSessionRevocationsResponse {
+  repeated SessionRevocation revocations = 1;
 }
 
 // ============================================================================

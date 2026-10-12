@@ -2,6 +2,8 @@ package commodore
 
 import (
 	"context"
+	"time"
+
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	foghorncontrolpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
@@ -32,6 +34,7 @@ type Interface interface {
 	ResolvePullSourceByInternalName(ctx context.Context, internalName string) (*commodorepb.ResolvePullSourceByInternalNameResponse, error)
 	ValidateAPIToken(ctx context.Context, token string) (*commodorepb.ValidateAPITokenResponse, error)
 	ValidateSession(ctx context.Context, token string) (*commodorepb.ValidateSessionResponse, error)
+	ListRecentSessionRevocations(ctx context.Context, since time.Time) (*commodorepb.ListRecentSessionRevocationsResponse, error)
 	MintMistAdminSession(ctx context.Context, req *commodorepb.MintMistAdminSessionRequest) (*commodorepb.MintMistAdminSessionResponse, error)
 	ValidateMistAdminSession(ctx context.Context, req *commodorepb.ValidateMistAdminSessionRequest) (*commodorepb.ValidateMistAdminSessionResponse, error)
 	StartDVR(ctx context.Context, req *sharedpb.StartDVRRequest) (*sharedpb.StartDVRResponse, error)

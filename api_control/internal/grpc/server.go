@@ -3304,6 +3304,36 @@ func (s *CommodoreServer) ValidateSession(ctx context.Context, req *commodorepb.
 	return &commodorepb.ValidateSessionResponse{Valid: true}, nil
 }
 
+// maxSessionRevocationLookback bounds ListRecentSessionRevocations: a
+// revocation older than a session token's lifetime (plus clock leeway)
+// concerns no token that still verifies.
+const maxSessionRevocationLookback = auth.SessionTokenTTL + time.Minute
+
+// ListRecentSessionRevocations returns, across tenants, every user whose
+// sessions were revoked after req.since, which is clamped to the last
+// maxSessionRevocationLookback.
+func (s *CommodoreServer) ListRecentSessionRevocations(ctx context.Context, req *commodorepb.ListRecentSessionRevocationsRequest) (*commodorepb.ListRecentSessionRevocationsResponse, error) {
+	since := time.Now().Add(-maxSessionRevocationLookback)
+	if ts := req.GetSince(); ts.IsValid() && ts.AsTime().After(since) {
+		since = ts.AsTime()
+	}
+	rows, err := commodoredb.New(s.db).ListSessionRevocationsSince(ctx, sql.NullTime{Time: since, Valid: true})
+	if err != nil {
+		s.logger.WithError(err).Error("Database error listing session revocations")
+		return nil, status.Error(codes.Internal, "database error")
+	}
+	resp := &commodorepb.ListRecentSessionRevocationsResponse{Revocations: make([]*commodorepb.SessionRevocation, 0, len(rows))}
+	for _, row := range rows {
+		if !row.SessionsRevokedAt.Valid {
+			continue
+		}
+		resp.Revocations = append(resp.Revocations, &commodorepb.SessionRevocation{
+			TenantId: row.TenantID, UserId: row.ID, RevokedAt: timestamppb.New(row.SessionsRevokedAt.Time),
+		})
+	}
+	return resp, nil
+}
+
 // Quartermaster lookup functions are package variables so tests can exercise
 // the ownership policy without a real Quartermaster gRPC server.
 var (
@@ -10232,6 +10262,7 @@ func commodoreServiceOnlyMethods() []string {
 	return []string{
 		commodorepb.InternalService_ValidateAPIToken_FullMethodName,
 		commodorepb.InternalService_ValidateSession_FullMethodName,
+		commodorepb.InternalService_ListRecentSessionRevocations_FullMethodName,
 		commodorepb.InternalService_ResolveStreamContext_FullMethodName,
 		commodorepb.InternalService_ListManagedStreams_FullMethodName,
 		commodorepb.InternalService_ResolveInternalName_FullMethodName,

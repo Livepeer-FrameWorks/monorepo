@@ -39,6 +39,7 @@ const (
 	InternalService_ResolveInternalName_FullMethodName                = "/commodore.InternalService/ResolveInternalName"
 	InternalService_ValidateAPIToken_FullMethodName                   = "/commodore.InternalService/ValidateAPIToken"
 	InternalService_ValidateSession_FullMethodName                    = "/commodore.InternalService/ValidateSession"
+	InternalService_ListRecentSessionRevocations_FullMethodName       = "/commodore.InternalService/ListRecentSessionRevocations"
 	InternalService_MintMistAdminSession_FullMethodName               = "/commodore.InternalService/MintMistAdminSession"
 	InternalService_ValidateMistAdminSession_FullMethodName           = "/commodore.InternalService/ValidateMistAdminSession"
 	InternalService_StartDVR_FullMethodName                           = "/commodore.InternalService/StartDVR"
@@ -193,6 +194,11 @@ type InternalServiceClient interface {
 	// access token and when it re-checks one, so a signed-out session's token
 	// stops holding realtime connections before it expires.
 	ValidateSession(ctx context.Context, in *ValidateSessionRequest, opts ...grpc.CallOption) (*ValidateSessionResponse, error)
+	// Called by Gateway when its platform-wide stream of session revocations
+	// (re)subscribes: returns every user whose sessions were revoked after
+	// since, across tenants, so a replica that missed user.sessions_revoked
+	// events still refuses those users' older session tokens.
+	ListRecentSessionRevocations(ctx context.Context, in *ListRecentSessionRevocationsRequest, opts ...grpc.CallOption) (*ListRecentSessionRevocationsResponse, error)
 	// Mint a short-TTL session token authorizing an operator to open the
 	// Mist admin UI on a specific edge node. The token is bound to a
 	// single node_id; Foghorn rejects validation against any other node.
@@ -501,6 +507,16 @@ func (c *internalServiceClient) ValidateSession(ctx context.Context, in *Validat
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ValidateSessionResponse)
 	err := c.cc.Invoke(ctx, InternalService_ValidateSession_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *internalServiceClient) ListRecentSessionRevocations(ctx context.Context, in *ListRecentSessionRevocationsRequest, opts ...grpc.CallOption) (*ListRecentSessionRevocationsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListRecentSessionRevocationsResponse)
+	err := c.cc.Invoke(ctx, InternalService_ListRecentSessionRevocations_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1055,6 +1071,11 @@ type InternalServiceServer interface {
 	// access token and when it re-checks one, so a signed-out session's token
 	// stops holding realtime connections before it expires.
 	ValidateSession(context.Context, *ValidateSessionRequest) (*ValidateSessionResponse, error)
+	// Called by Gateway when its platform-wide stream of session revocations
+	// (re)subscribes: returns every user whose sessions were revoked after
+	// since, across tenants, so a replica that missed user.sessions_revoked
+	// events still refuses those users' older session tokens.
+	ListRecentSessionRevocations(context.Context, *ListRecentSessionRevocationsRequest) (*ListRecentSessionRevocationsResponse, error)
 	// Mint a short-TTL session token authorizing an operator to open the
 	// Mist admin UI on a specific edge node. The token is bound to a
 	// single node_id; Foghorn rejects validation against any other node.
@@ -1256,6 +1277,9 @@ func (UnimplementedInternalServiceServer) ValidateAPIToken(context.Context, *Val
 }
 func (UnimplementedInternalServiceServer) ValidateSession(context.Context, *ValidateSessionRequest) (*ValidateSessionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ValidateSession not implemented")
+}
+func (UnimplementedInternalServiceServer) ListRecentSessionRevocations(context.Context, *ListRecentSessionRevocationsRequest) (*ListRecentSessionRevocationsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListRecentSessionRevocations not implemented")
 }
 func (UnimplementedInternalServiceServer) MintMistAdminSession(context.Context, *MintMistAdminSessionRequest) (*MintMistAdminSessionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method MintMistAdminSession not implemented")
@@ -1694,6 +1718,24 @@ func _InternalService_ValidateSession_Handler(srv interface{}, ctx context.Conte
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(InternalServiceServer).ValidateSession(ctx, req.(*ValidateSessionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _InternalService_ListRecentSessionRevocations_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListRecentSessionRevocationsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InternalServiceServer).ListRecentSessionRevocations(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InternalService_ListRecentSessionRevocations_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InternalServiceServer).ListRecentSessionRevocations(ctx, req.(*ListRecentSessionRevocationsRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -2560,6 +2602,10 @@ var InternalService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ValidateSession",
 			Handler:    _InternalService_ValidateSession_Handler,
+		},
+		{
+			MethodName: "ListRecentSessionRevocations",
+			Handler:    _InternalService_ListRecentSessionRevocations_Handler,
 		},
 		{
 			MethodName: "MintMistAdminSession",

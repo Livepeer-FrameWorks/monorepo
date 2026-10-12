@@ -156,9 +156,20 @@ func main() {
 	// Initialize GraphQL resolver and server
 	resolverCfg := resolverConfig(liveConfig)
 	resolver := graph.NewResolver(serviceClients, logger, graphqlMetrics, resolverCfg)
-	websocketSessions := middleware.NewWebsocketSessions(resolver.SubManager.WatchCredentialRevocations)
+	websocketSessions := middleware.NewWebsocketSessions(resolver.SubManager.WatchAPITokenRevocations)
 	resolver.SubManager.SetCredentialSockets(websocketSessions)
 	resolver.WebsocketSessions = websocketSessions
+	// Every session token check refuses signed-out sessions this replica
+	// learned of: every tenant's user.sessions_revoked arrives on one
+	// platform-wide stream, and each (re)subscription reads the revocations
+	// it may have missed from Commodore. The watch ends with the
+	// subscription manager.
+	middleware.EnforceSessionRevocations(websocketSessions.SessionRevocations())
+	if serviceClients.Commodore != nil {
+		go resolver.SubManager.WatchSessionRevocations(context.Background(), func() {
+			websocketSessions.ResumeSessionRevocations(serviceClients.Commodore.ListRecentSessionRevocations, logger)
+		})
+	}
 
 	// Setup complexity functions for pagination-aware query cost calculation
 	var complexity generated.ComplexityRoot

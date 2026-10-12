@@ -22,6 +22,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const DefaultServerName = "commodore.internal"
@@ -659,6 +660,15 @@ func (c *GRPCClient) ValidateAPIToken(ctx context.Context, token string) (*commo
 func (c *GRPCClient) ValidateSession(ctx context.Context, token string) (*commodorepb.ValidateSessionResponse, error) {
 	return c.internal.ValidateSession(withServiceAuth(ctx), &commodorepb.ValidateSessionRequest{
 		Token: token,
+	})
+}
+
+// ListRecentSessionRevocations returns, across tenants, every user whose
+// sessions were revoked after since (clamped by Commodore to a session
+// token's lifetime).
+func (c *GRPCClient) ListRecentSessionRevocations(ctx context.Context, since time.Time) (*commodorepb.ListRecentSessionRevocationsResponse, error) {
+	return c.internal.ListRecentSessionRevocations(withServiceAuth(ctx), &commodorepb.ListRecentSessionRevocationsRequest{
+		Since: timestamppb.New(since),
 	})
 }
 

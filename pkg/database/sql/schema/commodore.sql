@@ -2204,6 +2204,11 @@ CREATE INDEX IF NOT EXISTS idx_commodore_users_verification_token
     ON commodore.users(verification_token)
     WHERE verification_token IS NOT NULL AND verified = false;
 
+-- Gateway replicas backfill recent sign-outs across tenants by this column.
+CREATE INDEX IF NOT EXISTS idx_commodore_users_sessions_revoked_at
+    ON commodore.users(sessions_revoked_at)
+    WHERE sessions_revoked_at IS NOT NULL;
+
 -- Schema baseline identity marker. Records that this database was created from the
 -- consolidated baseline at this floor, so the migration min-version guard treats
 -- below-floor migrations as folded into the baseline (not missing). An existing

@@ -52,8 +52,8 @@ type Client struct {
 	// platformAudience is set for a service-token stream without a tenant,
 	// the only kind of stream that may subscribe to CHANNEL_PLATFORM.
 	platformAudience bool
-	// sessionsAudience is set for a service-token stream with a tenant, the
-	// only kind of stream that may subscribe to CHANNEL_SESSIONS.
+	// sessionsAudience is set for a service-token stream, the only kind of
+	// stream that may subscribe to CHANNEL_SESSIONS.
 	sessionsAudience bool
 	send             chan *signalmanpb.ServerMessage
 	done             chan struct{}
@@ -303,9 +303,14 @@ func (c *Client) shouldReceive(event *signalmanpb.SignalmanEvent) bool {
 		return c.platformAudience && slices.Contains(c.channels, signalmanpb.Channel_CHANNEL_PLATFORM)
 	}
 
-	// Session revocations go only to service streams of their tenant.
-	if event.Channel == signalmanpb.Channel_CHANNEL_SESSIONS && !c.sessionsAudience {
-		return false
+	// Session revocations go only to service streams that subscribed to the
+	// channel by name: a tenantless one receives every tenant's, a tenant's
+	// one only that tenant's.
+	if event.Channel == signalmanpb.Channel_CHANNEL_SESSIONS {
+		if !c.sessionsAudience || !slices.Contains(c.channels, signalmanpb.Channel_CHANNEL_SESSIONS) {
+			return false
+		}
+		return c.tenantID == "" || (event.TenantId != nil && *event.TenantId == c.tenantID)
 	}
 
 	// Check channel subscription. CHANNEL_ALL covers the legacy channels only:
@@ -350,7 +355,7 @@ func (s *SignalmanServer) Subscribe(stream signalmanpb.SignalmanService_Subscrib
 		userID:           userID,
 		tenantID:         tenantID,
 		platformAudience: ctxkeys.GetAuthType(ctx) == "service" && tenantID == "",
-		sessionsAudience: ctxkeys.GetAuthType(ctx) == "service" && tenantID != "",
+		sessionsAudience: ctxkeys.GetAuthType(ctx) == "service",
 		send:             make(chan *signalmanpb.ServerMessage, 256),
 		done:             make(chan struct{}),
 		logger:           s.logger,
@@ -528,7 +533,7 @@ func (c *Client) handleSubscribe(req *signalmanpb.SubscribeRequest) {
 			Message: &signalmanpb.ServerMessage_Error{
 				Error: &signalmanpb.SignalmanError{
 					Code:    "permission_denied",
-					Message: "sessions channel requires a service stream with a tenant",
+					Message: "sessions channel requires a service stream",
 				},
 			},
 		}

@@ -120,6 +120,14 @@ SET sessions_revoked_at = NOW()
 WHERE id = $1 AND tenant_id = $2
 RETURNING sessions_revoked_at;
 
+-- name: ListSessionRevocationsSince :many
+-- Platform-wide by design: Gateway replicas refuse every tenant's signed-out
+-- session tokens, so this read spans tenants.
+SELECT id, tenant_id, sessions_revoked_at
+FROM commodore.users
+WHERE sessions_revoked_at > $1
+ORDER BY sessions_revoked_at;
+
 -- name: GetUserSessionState :one
 SELECT
     COALESCE(is_active, false)::boolean AS is_active,

@@ -8,7 +8,9 @@ and a session started after the sign-out can still connect.
 Prints one JSON object: {"stream_id", "sockets": [{"url", "code",
 "closed_after_s", "events_after_signout": [<event type>...]}],
 "reconnect_signed_out": {"first", "code"}, "reconnect_new_session":
-{"first", "code"}}. code is the close code, or null when the socket was still
+{"first", "code"}, "http_signed_out", "http_new_session"}, the last two the
+HTTP status of a GraphQL POST to the last replica with each session's
+token. code is the close code, or null when the socket was still
 open WAIT_S seconds after the sign-out; closed_after_s counts from the
 sign-out's answer. A stream is created CREATE_AFTER_S seconds after the
 sign-out with a new session, so a socket still open would deliver its events.
@@ -19,6 +21,7 @@ import http.cookiejar
 import json
 import sys
 import time
+import urllib.error
 import urllib.request
 
 import websockets
@@ -47,6 +50,18 @@ def post(url, jwt, body=None):
     })
     with urllib.request.urlopen(req, timeout=30) as resp:
         return resp.status, json.load(resp)
+
+
+def http_status(ws_url, jwt):
+    """Status of a GraphQL POST with jwt to the Bridge replica serving ws_url."""
+    base = ws_url.replace("ws://", "http://", 1).replace("wss://", "https://", 1).rsplit("/graphql", 1)[0]
+    req = urllib.request.Request(base + "/graphql", data=json.dumps({"query": "{streamsConnection(page:{first:1}){totalCount}}"}).encode(),
+                                 method="POST", headers={"Authorization": "Bearer " + jwt, "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return resp.status
+    except urllib.error.HTTPError as exc:
+        return exc.code
 
 
 async def open_socket(url, token):
@@ -134,6 +149,10 @@ async def main():
 
     reconnect_signed_out = await init_outcome(ws_urls[-1], session)
     reconnect_new_session = await init_outcome(ws_urls[-1], fresh)
+    # The last replica did not handle the sign-out; it learned of it from
+    # the session revocation stream.
+    http_signed_out = await asyncio.to_thread(http_status, ws_urls[-1], session)
+    http_new_session = await asyncio.to_thread(http_status, ws_urls[-1], fresh)
     print(json.dumps({
         "stream_id": stream_id,
         "sockets": [{
@@ -142,6 +161,8 @@ async def main():
         } for r in results],
         "reconnect_signed_out": reconnect_signed_out,
         "reconnect_new_session": reconnect_new_session,
+        "http_signed_out": http_signed_out,
+        "http_new_session": http_new_session,
     }))
 
 

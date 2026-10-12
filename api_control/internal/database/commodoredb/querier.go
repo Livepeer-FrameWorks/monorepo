@@ -384,6 +384,9 @@ type Querier interface {
 	ListPullSourceEventsByStream(ctx context.Context, arg ListPullSourceEventsByStreamParams) ([]ListPullSourceEventsByStreamRow, error)
 	ListPushTargetSiblingsForOwner(ctx context.Context, arg ListPushTargetSiblingsForOwnerParams) ([]ListPushTargetSiblingsForOwnerRow, error)
 	ListPushTargets(ctx context.Context, arg ListPushTargetsParams) ([]ListPushTargetsRow, error)
+	// Platform-wide by design: Gateway replicas refuse every tenant's signed-out
+	// session tokens, so this read spans tenants.
+	ListSessionRevocationsSince(ctx context.Context, sessionsRevokedAt sql.NullTime) ([]ListSessionRevocationsSinceRow, error)
 	ListSigningKeys(ctx context.Context, arg ListSigningKeysParams) ([]ListSigningKeysRow, error)
 	ListSigningKeysAfter(ctx context.Context, arg ListSigningKeysAfterParams) ([]ListSigningKeysAfterRow, error)
 	ListSigningKeysByStatus(ctx context.Context, arg ListSigningKeysByStatusParams) ([]ListSigningKeysByStatusRow, error)

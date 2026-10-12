@@ -99,9 +99,9 @@ delivered on the connection once the gateway has learned of the revocation, incl
 `api_token.revoked` event of the connection's own token. Signing out ends every session of the
 user, so connections opened with a session token issued before the sign-out close, and a session
 started afterwards is unaffected. A client reconnects with a current token; reconnecting with the
-revoked, signed-out, or expired one is refused before acknowledgement as above. Over HTTP, a
-signed-out session token keeps authenticating until it expires, at most 15 minutes after it was
-issued.
+revoked, signed-out, or expired one is refused before acknowledgement as above. Over HTTP, every
+gateway instance answers a request with a signed-out session token with `401` within a few
+seconds of the sign-out.
 
 ## Try It Out
 

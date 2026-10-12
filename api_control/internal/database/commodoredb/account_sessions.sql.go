@@ -415,6 +415,44 @@ func (q *Queries) InsertWalletUser(ctx context.Context, arg InsertWalletUserPara
 	return err
 }
 
+const listSessionRevocationsSince = `-- name: ListSessionRevocationsSince :many
+SELECT id, tenant_id, sessions_revoked_at
+FROM commodore.users
+WHERE sessions_revoked_at > $1
+ORDER BY sessions_revoked_at
+`
+
+type ListSessionRevocationsSinceRow struct {
+	ID                string       `db:"id" json:"id"`
+	TenantID          string       `db:"tenant_id" json:"tenant_id"`
+	SessionsRevokedAt sql.NullTime `db:"sessions_revoked_at" json:"sessions_revoked_at"`
+}
+
+// Platform-wide by design: Gateway replicas refuse every tenant's signed-out
+// session tokens, so this read spans tenants.
+func (q *Queries) ListSessionRevocationsSince(ctx context.Context, sessionsRevokedAt sql.NullTime) ([]ListSessionRevocationsSinceRow, error) {
+	rows, err := q.db.QueryContext(ctx, listSessionRevocationsSince, sessionsRevokedAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListSessionRevocationsSinceRow{}
+	for rows.Next() {
+		var i ListSessionRevocationsSinceRow
+		if err := rows.Scan(&i.ID, &i.TenantID, &i.SessionsRevokedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listUserWallets = `-- name: ListUserWallets :many
 SELECT id, wallet_address, created_at, last_auth_at
 FROM commodore.wallet_identities

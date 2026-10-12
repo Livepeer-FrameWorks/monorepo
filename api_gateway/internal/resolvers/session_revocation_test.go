@@ -76,9 +76,9 @@ func TestSignOutClosesTheUsersSessionSocketsOnEveryBridgeReplica(t *testing.T) {
 	onB := openTokenSocket(t, replicaB, userToken)
 	otherUser := openTokenSocket(t, replicaB, sessionToken(t, "user-2", tenantID))
 	apiToken := openTokenSocket(t, replicaB, "token-value")
-	broker.waitStreams(t, tenantID, signalmanpb.Channel_CHANNEL_SESSIONS, 2)
+	broker.waitStreams(t, "", signalmanpb.Channel_CHANNEL_SESSIONS, 2)
 
-	broker.publish(t, tenantID, signalmanpb.Channel_CHANNEL_SESSIONS, sessionsRevokedEvent(t, tenantID, "user-1", time.Now()))
+	broker.publish(t, "", signalmanpb.Channel_CHANNEL_SESSIONS, sessionsRevokedEvent(t, tenantID, "user-1", time.Now()))
 
 	for name, conn := range map[string]*websocket.Conn{"the replica that signed out": onA, "the other replica": onB} {
 		if code := socketCloseCode(t, conn, 2*time.Second); code != middleware.WebsocketCloseForbidden {
@@ -116,9 +116,11 @@ func (r *recordingSockets) CloseUserSessions(tenantID, userID string, _ time.Tim
 	return 0
 }
 
-// The upstream streams hand only their own tenant's api_token.revoked and
-// user.sessions_revoked to the credential sockets, and the watch takes none
-// of the tenant's GraphQL subscription slots.
+// A tenant's CHANNEL_EVENTS stream hands only that tenant's
+// api_token.revoked to the credential sockets, the platform-wide
+// CHANNEL_SESSIONS stream hands each user.sessions_revoked under the tenant
+// it names, and the API-token watch takes none of the tenant's GraphQL
+// subscription slots.
 func TestCredentialRevocationsReachTheSocketsOnlyForTheStreamsTenant(t *testing.T) {
 	broker := newSignalmanBroker()
 	sm := newSubscriptionManager(logging.NewLoggerWithService("test"), SubscriptionManagerConfig{
@@ -130,9 +132,10 @@ func TestCredentialRevocationsReachTheSocketsOnlyForTheStreamsTenant(t *testing.
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go sm.WatchCredentialRevocations(ctx, "tenant-1", func(middleware.RevocationKind) {})
+	go sm.WatchAPITokenRevocations(ctx, "tenant-1", func() {})
+	go sm.WatchSessionRevocations(ctx, func() {})
 	broker.waitStreams(t, "tenant-1", signalmanpb.Channel_CHANNEL_EVENTS, 1)
-	broker.waitStreams(t, "tenant-1", signalmanpb.Channel_CHANNEL_SESSIONS, 1)
+	broker.waitStreams(t, "", signalmanpb.Channel_CHANNEL_SESSIONS, 1)
 
 	if _, err := sm.SubscribeToTenantEvents(ctx, ConnectionConfig{TenantID: "tenant-1"}, TenantEventFilter{}); err != nil {
 		t.Fatalf("the watch took the tenant's only subscription slot: %v", err)
@@ -143,7 +146,7 @@ func TestCredentialRevocationsReachTheSocketsOnlyForTheStreamsTenant(t *testing.
 	otherTenant.TenantId = &otherTenantID
 	broker.publish(t, "tenant-1", signalmanpb.Channel_CHANNEL_EVENTS, otherTenant)
 	otherTenantLogout := sessionsRevokedEvent(t, "tenant-2", "user-9", time.Now())
-	broker.publish(t, "tenant-1", signalmanpb.Channel_CHANNEL_SESSIONS, otherTenantLogout)
+	broker.publish(t, "", signalmanpb.Channel_CHANNEL_SESSIONS, otherTenantLogout)
 
 	created, err := anypb.New(&publicv1.ApiTokenCreated{TokenId: "token-9"})
 	if err != nil {
@@ -155,13 +158,13 @@ func TestCredentialRevocationsReachTheSocketsOnlyForTheStreamsTenant(t *testing.
 	broker.publish(t, "tenant-1", signalmanpb.Channel_CHANNEL_EVENTS, createdEvent)
 
 	broker.publish(t, "tenant-1", signalmanpb.Channel_CHANNEL_EVENTS, apiTokenRevokedEvent(t, "tenant-1", "token-1"))
-	broker.publish(t, "tenant-1", signalmanpb.Channel_CHANNEL_SESSIONS, sessionsRevokedEvent(t, "tenant-1", "user-1", time.Now()))
+	broker.publish(t, "", signalmanpb.Channel_CHANNEL_SESSIONS, sessionsRevokedEvent(t, "tenant-1", "user-1", time.Now()))
 
-	for range 2 {
+	for range 3 {
 		select {
 		case <-sockets.seen:
 		case <-time.After(2 * time.Second):
-			t.Fatal("a revocation of the stream's tenant did not reach the sockets")
+			t.Fatal("a revocation did not reach the sockets")
 		}
 	}
 	select {
@@ -170,8 +173,11 @@ func TestCredentialRevocationsReachTheSocketsOnlyForTheStreamsTenant(t *testing.
 	}
 	sockets.mu.Lock()
 	defer sockets.mu.Unlock()
-	if len(sockets.tokens) != 1 || sockets.tokens[0] != "tenant-1/token-1" || len(sockets.sessions) != 1 || sockets.sessions[0] != "tenant-1/user-1" {
-		t.Fatalf("sockets received token revocations %v and session revocations %v, want only tenant-1/token-1 and tenant-1/user-1", sockets.tokens, sockets.sessions)
+	if len(sockets.tokens) != 1 || sockets.tokens[0] != "tenant-1/token-1" {
+		t.Fatalf("sockets received token revocations %v, want only tenant-1/token-1", sockets.tokens)
+	}
+	if len(sockets.sessions) != 2 || sockets.sessions[0] != "tenant-2/user-9" || sockets.sessions[1] != "tenant-1/user-1" {
+		t.Fatalf("sockets received session revocations %v, want tenant-2/user-9 then tenant-1/user-1", sockets.sessions)
 	}
 }
 
@@ -283,7 +289,7 @@ func tenantEventsReplica(t *testing.T, broker streamOpener, sc *clients.ServiceC
 	t.Helper()
 	sm := newSubscriptionManager(logging.NewLoggerWithService("test"), SubscriptionManagerConfig{SignalmanAddrs: []string{"signalman.internal:19005"}}, broker)
 	t.Cleanup(func() { _ = sm.Shutdown() })
-	sessions := middleware.NewWebsocketSessions(sm.WatchCredentialRevocations)
+	sessions := middleware.NewWebsocketSessions(sm.WatchAPITokenRevocations)
 	sm.SetCredentialSockets(sessions)
 	srv := handler.New(tenantEventsSchema(&Resolver{SubManager: sm, Logger: logging.NewLoggerWithService("test")}))
 	srv.AddTransport(middleware.GraphQLWebsocketTransport(sc, []byte(replicaJWTSecret), nil, websocket.Upgrader{}, 0, sessions, middleware.DefaultWebsocketRevalidateInterval))

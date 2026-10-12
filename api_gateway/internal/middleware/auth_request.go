@@ -134,7 +134,7 @@ var (
 // wrapping ErrInvalidCredential; a failure of the API-token check itself
 // returns one wrapping ErrAuthBackendUnavailable.
 func AuthenticateBearerToken(ctx context.Context, token string, clients *clients.ServiceClients, jwtSecret []byte) (*AuthResult, error) {
-	claims, err := auth.ValidateInteractiveJWT(token, jwtSecret)
+	claims, err := validateSessionJWT(token, jwtSecret)
 	if err == nil {
 		result := &AuthResult{
 			UserID:           claims.UserID,
@@ -158,9 +158,9 @@ func AuthenticateBearerToken(ctx context.Context, token string, clients *clients
 	if errors.Is(err, auth.ErrDelegatedJWT) {
 		return nil, fmt.Errorf("%w: internal delegated token is not an ingress credential", ErrInvalidCredential)
 	}
-	// A correctly signed JWT past its expiry is never an API token, so it is
-	// rejected without asking Commodore.
-	if errors.Is(err, auth.ErrExpiredJWT) {
+	// A correctly signed JWT past its expiry, or of a signed-out session, is
+	// never an API token, so it is rejected without asking Commodore.
+	if errors.Is(err, auth.ErrExpiredJWT) || errors.Is(err, ErrSessionRevoked) {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidCredential, err)
 	}
 

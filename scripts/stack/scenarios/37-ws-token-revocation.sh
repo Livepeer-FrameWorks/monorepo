@@ -6,11 +6,13 @@
 # neither delivers the events of a stream created three seconds later. Then a
 # demo session holds one on each and signs out through bridge: both close
 # with 4403 within two seconds, the signed-out token is refused at
-# connection_init, and a session started after the sign-out connects.
+# connection_init, bridge-2 answers it with 401 over HTTP, and a session
+# started after the sign-out connects and is served.
 # Catches: a revocation closing only the revoking replica's sockets while the
 # other replica's keep serving tenant events until its one-minute credential
 # re-check (staging: 49-60 s); a sign-out leaving the session's sockets open,
-# and reconnectable, until the access token expires (up to 15 minutes).
+# reconnectable, or served over HTTP until the access token expires (up to
+# 15 minutes).
 . "$(dirname "$0")/../lib.sh"
 
 REPO=${STACK_REPO:-/repo}
@@ -82,4 +84,6 @@ done
 check "the signed-out session token is refused at connection_init with 4403" json_has "$OUT" \
   '.reconnect_signed_out.first == "close" and .reconnect_signed_out.code == 4403'
 check "a session started after the sign-out connects" json_has "$OUT" '.reconnect_new_session.first == "connection_ack"'
+check "bridge-2, which did not handle the sign-out, answers the signed-out token with 401 over HTTP" json_has "$OUT" '.http_signed_out == 401'
+check "bridge-2 serves a session started after the sign-out over HTTP" json_has "$OUT" '.http_new_session == 200'
 finish

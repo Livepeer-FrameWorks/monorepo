@@ -47,16 +47,12 @@ type websocketIdentity struct {
 	expiresAt time.Time
 }
 
-func (id websocketIdentity) kind() (RevocationKind, bool) {
-	switch {
-	case id.credential == "":
-		return 0, false
-	case id.tokenID != "":
-		return RevocationAPITokens, true
-	case id.userID != "":
-		return RevocationSessions, true
-	}
-	return 0, false
+func (id websocketIdentity) isAPIToken() bool {
+	return id.credential != "" && id.tokenID != ""
+}
+
+func (id websocketIdentity) isSession() bool {
+	return id.credential != "" && id.tokenID == "" && id.userID != ""
 }
 
 type websocketIdentityKey struct{}
@@ -114,38 +110,28 @@ func WebsocketCredentialRevoked(ctx context.Context) <-chan struct{} {
 	return nil
 }
 
-// RevocationKind names the revocations a feed carries.
-type RevocationKind int
-
-const (
-	// RevocationAPITokens is api_token.revoked, on the tenant's public events.
-	RevocationAPITokens RevocationKind = iota
-	// RevocationSessions is user.sessions_revoked, the internal event that
-	// ends every session of a user.
-	RevocationSessions
-	revocationKinds
-)
-
-// CredentialRevocationWatch keeps this replica following tenantID's
-// credential revocations, committed through any Bridge replica, until ctx
-// ends. The revocations themselves reach the WebsocketSessions through
-// CloseAPIToken and CloseUserSessions. resumed(kind) is called whenever the
-// stream that carries kind's revocations becomes subscribed (first and after
-// every reconnect): a revocation committed before that may never have
-// arrived.
-type CredentialRevocationWatch func(ctx context.Context, tenantID string, resumed func(RevocationKind))
+// APITokenRevocationWatch keeps this replica following tenantID's API token
+// revocations, committed through any Bridge replica, until ctx ends. The
+// revocations themselves reach the WebsocketSessions through CloseAPIToken.
+// resumed is called whenever the stream that carries them becomes subscribed
+// (first and after every reconnect): a revocation committed before that may
+// never have arrived.
+type APITokenRevocationWatch func(ctx context.Context, tenantID string, resumed func())
 
 // WebsocketSessions tracks this replica's GraphQL WebSocket connections that
 // authenticated with an API token or a session token, so a revocation closes
-// them at once. A revocation handled here closes them directly; one handled
-// by another replica arrives through the watch, which runs for every tenant
-// with such a connection here. Whenever the watch's stream (re)subscribes,
-// the tenant's credentials of that kind are re-checked once, so a revocation
-// committed while the stream was not subscribed closes its connections then.
-// Each connection's periodic re-check covers anything else. A nil
-// *WebsocketSessions tracks nothing.
+// them at once. A token revocation handled here closes its connections
+// directly; one handled by another replica arrives through the watch, which
+// runs for every tenant with an API-token connection here. Whenever the
+// watch's stream (re)subscribes, the tenant's API tokens are re-checked once,
+// so a revocation committed while the stream was not subscribed closes its
+// connections then. Session revocations of every tenant arrive through
+// CloseUserSessions and are kept in the replica's SessionRevocations, which
+// HTTP authentication reads too. Each connection's periodic re-check covers
+// anything else. A nil *WebsocketSessions tracks nothing.
 type WebsocketSessions struct {
-	watch CredentialRevocationWatch
+	watch       APITokenRevocationWatch
+	revocations *SessionRevocations
 
 	mu sync.Mutex
 	// check re-checks a credential: nil when it authenticates, an error
@@ -154,11 +140,14 @@ type WebsocketSessions struct {
 	byToken map[websocketTokenKey]map[*websocketSession]struct{}
 	byUser  map[websocketUserKey]map[*websocketSession]struct{}
 	tenants map[string]*tenantRevocationWatch
-	// Revocations seen in the last DefaultWebsocketRevalidateInterval, for a
-	// connection whose credential was checked before the revocation and that
-	// registers after it arrived.
+	// Token revocations seen in the last DefaultWebsocketRevalidateInterval,
+	// for a connection whose credential was checked before the revocation
+	// and that registers after it arrived.
 	revokedTokens map[websocketTokenKey]time.Time
-	revokedUsers  map[websocketUserKey]userRevocation
+	// backfilling is set while a goroutine reads recent session
+	// revocations; backfillPending queues one more read.
+	backfilling     bool
+	backfillPending bool
 }
 
 type websocketTokenKey struct {
@@ -171,38 +160,42 @@ type websocketUserKey struct {
 	userID   string
 }
 
-type userRevocation struct {
-	revokedAt time.Time
-	seenAt    time.Time
-}
-
 type websocketSession struct {
 	id    websocketIdentity
 	close func(*WebsocketInitError)
 }
 
-// tenantRevocationWatch is the watch of one tenant's revocations, kept while
-// the tenant has tracked connections on this replica.
+// tenantRevocationWatch is the watch of one tenant's API token revocations,
+// kept while the tenant has API-token connections on this replica.
 type tenantRevocationWatch struct {
 	sessions map[*websocketSession]struct{}
 	stop     context.CancelFunc
-	// revalidating is set while a goroutine re-checks the kinds in pending;
-	// a resume during that run is queued, never run concurrently.
+	// revalidating is set while a goroutine re-checks the tenant's API
+	// tokens; a resume during that run sets pending and runs once after it.
 	revalidating bool
-	pending      [revocationKinds]bool
+	pending      bool
 }
 
-// NewWebsocketSessions returns an empty registry that follows revocations
-// from other replicas through watch; a nil watch follows none.
-func NewWebsocketSessions(watch CredentialRevocationWatch) *WebsocketSessions {
+// NewWebsocketSessions returns an empty registry that follows API token
+// revocations from other replicas through watch (a nil watch follows none)
+// and records session revocations in a new SessionRevocations.
+func NewWebsocketSessions(watch APITokenRevocationWatch) *WebsocketSessions {
 	return &WebsocketSessions{
 		watch:         watch,
+		revocations:   NewSessionRevocations(),
 		byToken:       map[websocketTokenKey]map[*websocketSession]struct{}{},
 		byUser:        map[websocketUserKey]map[*websocketSession]struct{}{},
 		tenants:       map[string]*tenantRevocationWatch{},
 		revokedTokens: map[websocketTokenKey]time.Time{},
-		revokedUsers:  map[websocketUserKey]userRevocation{},
 	}
+}
+
+// SessionRevocations returns the session revocations this registry records.
+func (s *WebsocketSessions) SessionRevocations() *SessionRevocations {
+	if s == nil {
+		return nil
+	}
+	return s.revocations
 }
 
 // useCheck sets how a resumed watch re-checks credentials.
@@ -219,39 +212,38 @@ func (s *WebsocketSessions) useCheck(check func(context.Context, websocketIdenti
 // is true when a revocation of the connection's credential already reached
 // this replica; the connection is then not tracked and must be refused.
 func (s *WebsocketSessions) register(session *websocketSession) (unregister func(), revoked bool) {
-	kind, tracked := session.id.kind()
-	if s == nil || !tracked || session.id.tenantID == "" {
+	id := session.id
+	if s == nil || id.tenantID == "" || (!id.isAPIToken() && !id.isSession()) {
 		return func() {}, false
 	}
-	id := session.id
 	tokenKey := websocketTokenKey{tenantID: id.tenantID, tokenID: id.tokenID}
 	userKey := websocketUserKey{tenantID: id.tenantID, userID: id.userID}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.pruneLocked(time.Now())
-	switch kind {
-	case RevocationAPITokens:
-		if _, ok := s.revokedTokens[tokenKey]; ok {
-			return func() {}, true
-		}
-		addSession(s.byToken, tokenKey, session)
-	case RevocationSessions:
-		if rev, ok := s.revokedUsers[userKey]; ok && sessionRevokedBy(id, rev.revokedAt) {
+	if id.isSession() {
+		// CloseUserSessions records under s.mu, so a revocation either is
+		// seen here or finds this connection registered.
+		if s.revocations.Revoked(id.tenantID, id.userID, id.issuedAt) {
 			return func() {}, true
 		}
 		addSession(s.byUser, userKey, session)
+		return func() {
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			removeSession(s.byUser, userKey, session)
+		}, false
 	}
+	s.pruneLocked(time.Now())
+	if _, ok := s.revokedTokens[tokenKey]; ok {
+		return func() {}, true
+	}
+	addSession(s.byToken, tokenKey, session)
 	s.watchTenantLocked(id.tenantID, session)
 	return func() {
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		switch kind {
-		case RevocationAPITokens:
-			removeSession(s.byToken, tokenKey, session)
-		case RevocationSessions:
-			removeSession(s.byUser, userKey, session)
-		}
+		removeSession(s.byToken, tokenKey, session)
 		s.unwatchTenantLocked(id.tenantID, session)
 	}, false
 }
@@ -272,13 +264,6 @@ func removeSession[K comparable](index map[K]map[*websocketSession]struct{}, key
 	}
 }
 
-// sessionRevokedBy reports whether a revocation of the user's sessions at
-// revokedAt covers id's session token. Token issue times have whole-second
-// precision, so a token issued in the revocation's second is covered.
-func sessionRevokedBy(id websocketIdentity, revokedAt time.Time) bool {
-	return id.issuedAt.Unix() <= revokedAt.Unix()
-}
-
 func (s *WebsocketSessions) watchTenantLocked(tenantID string, session *websocketSession) {
 	if watch := s.tenants[tenantID]; watch != nil {
 		watch.sessions[session] = struct{}{}
@@ -291,7 +276,7 @@ func (s *WebsocketSessions) watchTenantLocked(tenantID string, session *websocke
 	}
 	ctx, stop := context.WithCancel(context.Background())
 	watch.stop = stop
-	go s.watch(ctx, tenantID, func(kind RevocationKind) { s.resume(tenantID, watch, kind) })
+	go s.watch(ctx, tenantID, func() { s.resume(tenantID, watch) })
 }
 
 func (s *WebsocketSessions) unwatchTenantLocked(tenantID string, session *websocketSession) {
@@ -307,15 +292,15 @@ func (s *WebsocketSessions) unwatchTenantLocked(tenantID string, session *websoc
 	delete(s.tenants, tenantID)
 }
 
-// resume re-checks, once, the credentials of kind held by watch's tenant on
-// this replica.
-func (s *WebsocketSessions) resume(tenantID string, watch *tenantRevocationWatch, kind RevocationKind) {
+// resume re-checks, once, the API tokens held by watch's tenant on this
+// replica.
+func (s *WebsocketSessions) resume(tenantID string, watch *tenantRevocationWatch) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.tenants[tenantID] != watch {
 		return
 	}
-	watch.pending[kind] = true
+	watch.pending = true
 	if watch.revalidating {
 		return
 	}
@@ -323,30 +308,21 @@ func (s *WebsocketSessions) resume(tenantID string, watch *tenantRevocationWatch
 	go s.revalidate(tenantID, watch)
 }
 
-// revalidate runs the queued re-checks of watch one kind at a time until
-// none is left. Connections sharing a credential share one check.
+// revalidate runs the queued re-checks of watch until none is left.
+// Connections sharing a credential share one check.
 func (s *WebsocketSessions) revalidate(tenantID string, watch *tenantRevocationWatch) {
 	for {
 		s.mu.Lock()
-		kind, found := RevocationKind(0), false
-		for k := range revocationKinds {
-			if watch.pending[k] {
-				kind, found = k, true
-				watch.pending[k] = false
-				break
-			}
-		}
-		if !found || s.tenants[tenantID] != watch {
+		if !watch.pending || s.tenants[tenantID] != watch {
 			watch.revalidating = false
 			s.mu.Unlock()
 			return
 		}
+		watch.pending = false
 		check := s.check
 		byCredential := map[string][]*websocketSession{}
 		for session := range watch.sessions {
-			if k, ok := session.id.kind(); ok && k == kind {
-				byCredential[session.id.credential] = append(byCredential[session.id.credential], session)
-			}
+			byCredential[session.id.credential] = append(byCredential[session.id.credential], session)
 		}
 		s.mu.Unlock()
 		if check == nil {
@@ -373,11 +349,6 @@ func (s *WebsocketSessions) pruneLocked(now time.Time) {
 	for key, seenAt := range s.revokedTokens {
 		if seenAt.Before(cutoff) {
 			delete(s.revokedTokens, key)
-		}
-	}
-	for key, rev := range s.revokedUsers {
-		if rev.seenAt.Before(cutoff) {
-			delete(s.revokedUsers, key)
 		}
 	}
 }
@@ -408,22 +379,20 @@ func (s *WebsocketSessions) CloseAPIToken(tenantID, tokenID string) int {
 // CloseUserSessions closes, with 4403, every connection on this replica that
 // authenticated with a session token of the tenant's user userID issued in or
 // before revokedAt's second, and returns how many it closed. A connection
-// opened with a later session stays open. Each closed connection stops
-// delivering events before this returns.
+// opened with a later session stays open. The revocation is recorded in the
+// registry's SessionRevocations first, so this replica also refuses those
+// session tokens over HTTP and at connection_init. Each closed connection
+// stops delivering events before this returns.
 func (s *WebsocketSessions) CloseUserSessions(tenantID, userID string, revokedAt time.Time) int {
 	if s == nil || tenantID == "" || userID == "" {
 		return 0
 	}
 	key := websocketUserKey{tenantID: tenantID, userID: userID}
 	s.mu.Lock()
-	now := time.Now()
-	s.pruneLocked(now)
-	if prev, ok := s.revokedUsers[key]; !ok || revokedAt.After(prev.revokedAt) {
-		s.revokedUsers[key] = userRevocation{revokedAt: revokedAt, seenAt: now}
-	}
+	s.revocations.Record(tenantID, userID, revokedAt)
 	var sessions []*websocketSession
 	for session := range s.byUser[key] {
-		if sessionRevokedBy(session.id, revokedAt) {
+		if sessionTokenCoveredBy(session.id.issuedAt, revokedAt) {
 			sessions = append(sessions, session)
 		}
 	}

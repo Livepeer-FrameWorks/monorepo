@@ -42,10 +42,11 @@ const (
 	// subscriber's tenant, as EVENT_TYPE_TENANT_EVENT with a TenantEvent payload.
 	// Subscribers name it explicitly: CHANNEL_ALL does not include it.
 	Channel_CHANNEL_EVENTS Channel = 8
-	// Session revocations (the internal domain event user.sessions_revoked) of
-	// the stream's tenant, as EVENT_TYPE_TENANT_EVENT with a TenantEvent
-	// payload. Only a service-token stream with a tenant may subscribe, so no
-	// tenant receives it; CHANNEL_ALL does not include it.
+	// Session revocations (the internal domain event user.sessions_revoked), as
+	// EVENT_TYPE_TENANT_EVENT with a TenantEvent payload. Only a service-token
+	// stream may subscribe, so no tenant receives it: a stream with a tenant
+	// receives that tenant's, a tenantless one every tenant's. CHANNEL_ALL does
+	// not include it.
 	Channel_CHANNEL_SESSIONS Channel = 9
 )
 
