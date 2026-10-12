@@ -43,6 +43,7 @@ STACK_SERVICES=(
   edge edge-b edge-proxy-a edge-proxy-b
   livepeer-orch-a livepeer-gateway-a livepeer-proxy-a
   livepeer-orch-b livepeer-gateway-b livepeer-proxy-b
+  livepeer-chain network-observer
   webhook-receiver mailpit stack-runner
 )
 
@@ -70,6 +71,8 @@ if [ ! -s "$ENV_FILE" ]; then
     # Both edges' MistController creates its API account from this, and
     # Helmsman logs in with it; the dev Mist configs carry no account.
     printf 'MIST_API_PASSWORD=%s\n' "$(openssl rand -hex 16)"
+    # The network observer's prober and Bridge credential.
+    printf 'NETWORK_OBSERVER_SECRET=%s\n' "$(openssl rand -hex 32)"
     # Cross-cell placement and origin pull run over federation, which the dev
     # .env leaves off for cell A (cell B's compose service hardcodes it on).
     # Edges advertise in-network addresses: the other cell's Mist pulls DTSC
@@ -91,6 +94,8 @@ if [ ! -s "$ENV_FILE" ]; then
 fi
 grep -qE '^MIST_API_PASSWORD="?[^"[:space:]]' "$ENV_FILE" ||
   fail "$ENV_FILE has no MIST_API_PASSWORD, so the edges' Mist would start without an API account: remove it and rerun to regenerate the slot environment"
+grep -qE '^NETWORK_OBSERVER_SECRET="?[^"[:space:]]' "$ENV_FILE" ||
+  fail "$ENV_FILE has no NETWORK_OBSERVER_SECRET, so the network observer cannot start: remove it and rerun to regenerate the slot environment"
 # The stack runs the go-livepeer release the next platform release bakes, unless the
 # caller names an image. It goes into the slot env file so every later compose
 # command of this slot interpolates the same image.
@@ -134,6 +139,8 @@ wait_for 180 "postgres" stack_compose exec -T postgres pg_isready -q
 pg_user="$(sed -n 's/^POSTGRES_USER="\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' "$ENV_FILE" | head -1)"
 stack_compose exec -T postgres psql -U "$pg_user" -d postgres -Atc "SELECT 1 FROM pg_database WHERE datname='foghorn_b'" | grep -q 1 ||
   fail "database foghorn_b is missing: the two-cell profile needs a fresh volume (scripts/stack/down.sh, then rerun)"
+stack_compose exec -T postgres psql -U "$pg_user" -d postgres -Atc "SELECT 1 FROM pg_database WHERE datname='network_observer'" | grep -q 1 ||
+  fail "database network_observer is missing: the slot's Postgres volume predates it (scripts/stack/down.sh, then rerun)"
 wait_for 180 "quartermaster schema" psql_db quartermaster -Atc "SELECT 1 FROM quartermaster.services LIMIT 1"
 
 log "3/7 demo, two-cell and stack fixtures"

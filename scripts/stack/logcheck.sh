@@ -40,6 +40,8 @@ case "$scenario" in
   03-* | 04-* | 05-* | 24-* | 29-*) scenario_signatures='PROCESS_TRACKS_CHANGED|Failed to load page|header.*not declared|Failed to claim thumbnail attempt|Thumbnail upload denied|freeze failed' ;;
   25-*) scenario_signatures='PROCESS_TRACKS_CHANGED|Failed to load page|header.*not declared|Failed to claim thumbnail attempt|freeze failed|Freeze request: local path not found' ;;
   26-*) scenario_signatures='DUPLICATE_INGEST|duplicate ingest|admission.*abandoned.*active' ;;
+  # The network-observation pipeline's degraded paths log at warning level.
+  35-*) scenario_signatures='Catalog refresh failed|Telemetry outbox delivery failed|Assignment scheduling failed|Network rollup rebuild failed|Network rollup lease unavailable|Network history unavailable' ;;
   *) scenario_signatures='' ;;
 esac
 # Mist FAIL| lines that are expected in the stack, with why:

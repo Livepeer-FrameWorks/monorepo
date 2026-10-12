@@ -282,7 +282,7 @@ services:
       STACK_SLOT: ${STACK_SLOT:-1}
       STACK_STATE_DIR: /tmp/fw-stack
       COMPOSE_PROJECT_NAME: ${COMPOSE_PROJECT_NAME:-fw-stack-1}
-      COMPOSE_PROFILES: ${COMPOSE_PROFILES:-edge,two-cell,stack,stack-s3-ceph}
+      COMPOSE_PROFILES: ${COMPOSE_PROFILES:-edge,two-cell,stack,stack-s3-ceph,network-observations}
       COMPOSE_FILE: /repo/docker-compose.yml:/repo/docker-compose.stack.yml:/repo/.stack/slot-${STACK_SLOT:-1}/reset.yml
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -290,6 +290,7 @@ services:
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
       SERVICE_TOKEN: ${SERVICE_TOKEN}
       JWT_SECRET: ${JWT_SECRET}
+      NETWORK_OBSERVER_SECRET: ${NETWORK_OBSERVER_SECRET}
       GRPC_ALLOW_INSECURE: "true"
       SUPPLIER_NAME: ${SUPPLIER_NAME}
       SUPPLIER_ADDRESS: ${SUPPLIER_ADDRESS}
@@ -423,6 +424,44 @@ services:
       SMTP_PASSWORD: ""
       SMTP_ALLOW_INSECURE: "true"
       BOSUN_ALLOW_PRIVATE_DESTINATIONS: "true"
+
+  # Livepeer network observations: the coordinator (profile
+  # network-observations, which scripts/stack/common.sh enables) reads its
+  # orchestrator catalog from the stack chain instead of Arbitrum, and Bridge
+  # publishes the demo tenant's observations under the stack namespace.
+  livepeer-chain:
+    image: python:3.13-alpine
+    profiles: ["stack"]
+    command: ["python3", "/app/livepeer-chain.py"]
+    volumes:
+      - ./scripts/stack/livepeer-chain.py:/app/livepeer-chain.py:ro
+    networks: [frameworks]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python3",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8545/orchestrators', timeout=3)",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 6
+    logging: *stack-logging
+  network-observer:
+    environment:
+      LIVEPEER_ETH_RPC_URL: http://livepeer-chain:8545
+      LIVEPEER_CONTROLLER: "0x5eed00000000000000000000000000000000c0de"
+      NETWORK_OBSERVER_ENVIRONMENT: stack
+    depends_on:
+      livepeer-chain:
+        condition: service_healthy
+  bridge:
+    environment:
+      NETWORK_OBSERVER_URL: http://network-observer:18024
+      NETWORK_OBSERVER_SECRET: ${NETWORK_OBSERVER_SECRET}
+      NETWORK_PUBLIC_TENANT_IDS: 5eed517e-ba5e-da7a-517e-ba5eda7a0001
+      NETWORK_OBSERVER_ENVIRONMENT: stack
 
 networks:
   frameworks:

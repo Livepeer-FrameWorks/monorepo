@@ -37,6 +37,13 @@ export LIVEPEER_GATEWAY_B_FQDN="livepeer-gateway.stack-lp-b.infra.frameworks.net
 export LIVEPEER_GATEWAY_A_SERVICE="livepeer-gateway-a"
 export LIVEPEER_GATEWAY_B_SERVICE="livepeer-gateway-b"
 
+# Livepeer network observations: the coordinator, the stack chain its catalog
+# reads, and the namespace Bridge publishes (docker-compose.stack.yml)
+export NETWORK_OBSERVER_URL="http://network-observer:18024"
+export LIVEPEER_CHAIN_URL="http://livepeer-chain:8545"
+export NETWORK_OBSERVATION_NETWORK="42161"
+export NETWORK_OBSERVATION_ENVIRONMENT="stack"
+
 # Test doubles
 export WEBHOOK_RECEIVER_URL="http://webhook-receiver:18777"
 export WEBHOOK_TARGET_URL="$WEBHOOK_RECEIVER_URL/hooks"

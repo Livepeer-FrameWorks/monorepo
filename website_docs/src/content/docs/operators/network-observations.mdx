@@ -42,8 +42,9 @@ Configure `DATABASE_URL`,
 `NETWORK_OBSERVER_TENANT_ID`, `NETWORK_OBSERVER_CLUSTER_ID`, `NETWORK_OBSERVER_SECRET`,
 `LIVEPEER_ETH_RPC_URL`, `LIVEPEER_CONTROLLER`, `DECKLOG_GRPC_ADDR`, `SERVICE_TOKEN` and
 `KAFKA_BROKERS`. Use the production Arbitrum chain and choose the observation environment
-explicitly. Configure verified internal gRPC TLS as for other services. The optional
-`docker-compose.network-observations.yml` overlay is for isolated local use.
+explicitly. Configure verified internal gRPC TLS as for other services. For isolated
+local use, the development `docker-compose.yml` runs the observer under the
+`network-observations` profile once the chain settings and shared secret are set.
 
 CLI provisioning defaults the observer tenant to the resolved system tenant and its
 cluster to the manifest task's cluster; explicit observer values take precedence.

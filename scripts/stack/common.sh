@@ -35,7 +35,7 @@ case "$STACK_S3" in
   *) echo "ERROR: STACK_S3 must be ceph or seaweed, got '$STACK_S3'" >&2; exit 2 ;;
 esac
 export STACK_S3
-export COMPOSE_PROFILES="edge,two-cell,stack,stack-s3-$STACK_S3"
+export COMPOSE_PROFILES="edge,two-cell,stack,stack-s3-$STACK_S3,network-observations"
 # The go-livepeer gateway trusts X-Forwarded-For only from this subnet, which is
 # why each slot pins its own.
 export STACK_SUBNET="${STACK_SUBNET:-10.231.$STACK_SLOT.0/24}"

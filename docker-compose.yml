@@ -4,6 +4,7 @@
 #   support   Chatwoot and Listmonk
 #   two-cell  a second media cell (implies the edge)
 #   llm       local Ollama
+#   network-observations  the Livepeer network observer (needs chain settings)
 # The generated .env sets COMPOSE_PROFILES=edge and lists the presets.
 
 networks:
@@ -1208,6 +1209,59 @@ services:
     healthcheck:
       test:
         ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:18013/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # Network Observer (profile: network-observations): the Livepeer catalog
+  # coordinator for external probers. It reads the orchestrator catalog from
+  # LIVEPEER_ETH_RPC_URL and LIVEPEER_CONTROLLER, which have no dev default;
+  # Bridge publishes it once NETWORK_OBSERVER_URL, NETWORK_OBSERVER_SECRET and
+  # NETWORK_PUBLIC_TENANT_IDS are set in .env. The observed tenant defaults to
+  # the demo seed's cluster owner.
+  network-observer:
+    <<: *default-env
+    container_name: frameworks-network-observer
+    profiles: ["network-observations"]
+    build:
+      context: .
+      dockerfile: api_network_observer/Dockerfile
+    ports:
+      - "18024:18024"
+    environment:
+      DATABASE_URL: postgresql://network_observer:${POSTGRES_PASSWORD}@postgres:5432/network_observer?sslmode=disable
+      LOG_LEVEL: ${LOG_LEVEL}
+      NETWORK_OBSERVER_SECRET: ${NETWORK_OBSERVER_SECRET:-}
+      NETWORK_OBSERVER_TENANT_ID: ${NETWORK_OBSERVER_TENANT_ID:-5eed517e-ba5e-da7a-517e-ba5eda7a0001}
+      NETWORK_OBSERVER_CLUSTER_ID: central-primary
+      NETWORK_OBSERVER_ENVIRONMENT: ${NETWORK_OBSERVER_ENVIRONMENT:-dev}
+      LIVEPEER_ETH_RPC_URL: ${LIVEPEER_ETH_RPC_URL:-}
+      LIVEPEER_CONTROLLER: ${LIVEPEER_CONTROLLER:-}
+      DECKLOG_GRPC_ADDR: ${DECKLOG_GRPC_ADDR:-decklog:18006}
+      SERVICE_TOKEN: ${SERVICE_TOKEN}
+      KAFKA_BROKERS: ${KAFKA_BROKERS}
+      KAFKA_CLUSTER_ID: ${KAFKA_CLUSTER_ID}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      decklog:
+        condition: service_started
+      kafka-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    networks:
+      - frameworks
+    mem_limit: 256m
+    mem_reservation: 128m
+    cpus: 0.5
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:18024/ready"]
       interval: 10s
       timeout: 5s
       retries: 3
