@@ -29,11 +29,11 @@ var ingestPlacementRequired bool
 
 // standaloneCommodoreOutage serves the front door when no trigger processor
 // (and so no process-wide backoff) is configured.
-var standaloneCommodoreOutage = &federation.CommodoreOutageBackoff{}
+var standaloneCommodoreOutage = &federation.CentralOutageBackoff{Service: "commodore"}
 
 // frontDoorCommodoreOutage is the process-wide Commodore outage backoff that
 // PUSH_REWRITE admission shares.
-func frontDoorCommodoreOutage() *federation.CommodoreOutageBackoff {
+func frontDoorCommodoreOutage() *federation.CentralOutageBackoff {
 	if triggerProcessor != nil {
 		return triggerProcessor.CommodoreOutageBackoff()
 	}

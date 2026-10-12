@@ -90,7 +90,7 @@ func startIngestCommodoreFake(t *testing.T, fake *ingestCommodoreFake) {
 	commodoreClient = client
 	// Each test's Commodore starts reachable; an outage another test
 	// established does not carry over.
-	standaloneCommodoreOutage = &federation.CommodoreOutageBackoff{}
+	standaloneCommodoreOutage = &federation.CentralOutageBackoff{Service: "commodore"}
 	t.Cleanup(func() {
 		control.CommodoreClient = prevControl
 		commodoreClient = prevHandlers

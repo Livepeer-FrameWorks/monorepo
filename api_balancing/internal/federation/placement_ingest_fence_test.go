@@ -47,7 +47,7 @@ func TestConnectedPlacementIngestFenceFallsBackToSignedOutageOwner(t *testing.T)
 			identity := PlacementIngestIdentity{TenantID: "tenant", ObjectID: sharedauthority.LiveStreamAuthorityID("stream"), InternalName: "internal", OutageIngestClusterID: "us"}
 			wantReadsBeforeBackoff := 1
 			if failure == codes.DeadlineExceeded {
-				wantReadsBeforeBackoff = commodoreTimeoutsToBackOff
+				wantReadsBeforeBackoff = centralTimeoutsToBackOff
 			}
 			for range wantReadsBeforeBackoff + 2 {
 				ownership, err := reader.IngestOwnership(context.Background(), identity)
@@ -58,7 +58,7 @@ func TestConnectedPlacementIngestFenceFallsBackToSignedOutageOwner(t *testing.T)
 			if reads != wantReadsBeforeBackoff {
 				t.Fatalf("Commodore reads = %d, want %d before the outage backoff answers", reads, wantReadsBeforeBackoff)
 			}
-			now = now.Add(commodoreOutageBackoff)
+			now = now.Add(centralOutageBackoff)
 			answer = codes.OK
 			ownership, err := reader.IngestOwnership(context.Background(), identity)
 			if err != nil || ownership != (PlacementIngestOwnership{Cluster: "eu", Source: PlacementIngestOwnershipConnected}) || reads != wantReadsBeforeBackoff+1 {

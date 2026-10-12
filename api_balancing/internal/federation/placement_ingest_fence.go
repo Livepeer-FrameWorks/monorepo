@@ -104,11 +104,11 @@ type ConnectedPlacementIngestFence struct {
 	ClientSnapshot func() PlacementStreamContextClient
 	// Backoff is the process-wide Commodore outage backoff shared with the
 	// PUSH_REWRITE admission calls; nil keeps one for this fence alone.
-	Backoff *CommodoreOutageBackoff
+	Backoff *CentralOutageBackoff
 	// Now is the clock of the fence's own backoff when Backoff is nil.
 	Now func() time.Time
 
-	ownBackoff     CommodoreOutageBackoff
+	ownBackoff     CentralOutageBackoff
 	ownBackoffOnce sync.Once
 }
 
@@ -147,17 +147,20 @@ func (reader *ConnectedPlacementIngestFence) IngestOwnership(ctx context.Context
 	if contextErr := ctx.Err(); contextErr != nil {
 		return PlacementIngestOwnership{}, status.FromContextError(contextErr).Err()
 	}
-	if !CommodoreUnreachable(err) {
+	if !CentralUnreachable(err) {
 		return PlacementIngestOwnership{}, err
 	}
 	return outageIngestOwnership(identity)
 }
 
-func (reader *ConnectedPlacementIngestFence) backoff() *CommodoreOutageBackoff {
+func (reader *ConnectedPlacementIngestFence) backoff() *CentralOutageBackoff {
 	if reader.Backoff != nil {
 		return reader.Backoff
 	}
-	reader.ownBackoffOnce.Do(func() { reader.ownBackoff.Now = reader.Now })
+	reader.ownBackoffOnce.Do(func() {
+		reader.ownBackoff.Service = "commodore"
+		reader.ownBackoff.Now = reader.Now
+	})
 	return &reader.ownBackoff
 }
 

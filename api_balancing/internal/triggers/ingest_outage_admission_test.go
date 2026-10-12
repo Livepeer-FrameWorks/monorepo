@@ -28,6 +28,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 type placementStreamContextDown struct{ reads *int }
@@ -138,7 +139,7 @@ func TestPushRewrite_CommodoreHangs_OutageOwnerAdmittedWithinBudget(t *testing.T
 func TestPushRewrite_CommodoreOutageBackoffSkipsAdmissionCalls(t *testing.T) {
 	server := &hangingCommodore{}
 	client := hangingCommodoreClient(t, server)
-	backoff := &federation.CommodoreOutageBackoff{}
+	backoff := &federation.CentralOutageBackoff{Service: "commodore"}
 	backoff.RecordUnreachable(status.Error(codes.Unavailable, "commodore is down"))
 	elapsed := assertOutageOwnerPushRewriteAdmitted(t, func(p *Processor) {
 		p.commodoreClient = client
@@ -156,6 +157,15 @@ func TestPushRewrite_CommodoreOutageBackoffSkipsAdmissionCalls(t *testing.T) {
 // itself took, excluding fixture setup.
 func assertOutageOwnerPushRewriteAdmitted(t *testing.T, configure func(*Processor)) time.Duration {
 	t.Helper()
+	elapsed, _ := admitOutageOwnerPushRewrite(t, "", configure)
+	return elapsed
+}
+
+// admitOutageOwnerPushRewrite is assertOutageOwnerPushRewriteAdmitted for a
+// stream whose signed authority carries processesJSON ("" keeps the fixture's),
+// returning the processor so the admitted processing config can be read.
+func admitOutageOwnerPushRewrite(t *testing.T, processesJSON string, configure func(*Processor)) (time.Duration, *Processor) {
+	t.Helper()
 	installIngestSessionMintMockWithStream(t)
 	sm := state.ResetDefaultManagerForTests()
 	t.Cleanup(sm.Shutdown)
@@ -167,6 +177,17 @@ func assertOutageOwnerPushRewriteAdmitted(t *testing.T, configure func(*Processo
 
 	p, mock, closeDB, tenantBytes, objectBytes := localAuthorityFixture(t)
 	defer closeDB()
+	if processesJSON != "" {
+		object := &mediapb.MediaObjectAuthority{}
+		if err := proto.Unmarshal(objectBytes, object); err != nil {
+			t.Fatal(err)
+		}
+		object.GetLiveStream().ProcessesJson = processesJSON
+		var err error
+		if objectBytes, err = (proto.MarshalOptions{Deterministic: true}).Marshal(object); err != nil {
+			t.Fatal(err)
+		}
+	}
 	validUntil := time.Now().Add(time.Hour)
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT authority.payload, authority.payload_sha256, authority.refresh_after, authority.valid_until,")).
 		WithArgs(sharedauthority.PublishingCredentialDigest("sk_local")).
@@ -215,5 +236,5 @@ func assertOutageOwnerPushRewriteAdmitted(t *testing.T, configure func(*Processo
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
 	}
-	return elapsed
+	return elapsed, p
 }

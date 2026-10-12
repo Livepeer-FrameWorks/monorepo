@@ -150,8 +150,8 @@ type FoghornGRPCServer struct {
 	cellPlacementCapability func(context.Context) (localauthority.CellPlacementCapability, error)
 	signingKeyUse           triggers.SigningKeyUseRecorder
 	localIngestResolver     localIngestResolver
-	commodoreOutage         *federation.CommodoreOutageBackoff
-	ownCommodoreOutage      federation.CommodoreOutageBackoff
+	commodoreOutage         *federation.CentralOutageBackoff
+	ownCommodoreOutage      federation.CentralOutageBackoff
 	ingestPlacementPreparer control.IngestPlacementPreparer
 	ingestPlacementRequired bool
 	viewerPlacementPreparer control.ViewerPlacementPreparer
@@ -191,11 +191,11 @@ func (s *FoghornGRPCServer) SetLocalIngestResolver(resolver localIngestResolver)
 
 // SetCommodoreOutageBackoff shares the process-wide Commodore outage backoff
 // that publisher admission runs behind; without one the server keeps its own.
-func (s *FoghornGRPCServer) SetCommodoreOutageBackoff(backoff *federation.CommodoreOutageBackoff) {
+func (s *FoghornGRPCServer) SetCommodoreOutageBackoff(backoff *federation.CentralOutageBackoff) {
 	s.commodoreOutage = backoff
 }
 
-func (s *FoghornGRPCServer) commodoreBackoff() *federation.CommodoreOutageBackoff {
+func (s *FoghornGRPCServer) commodoreBackoff() *federation.CentralOutageBackoff {
 	if s.commodoreOutage != nil {
 		return s.commodoreOutage
 	}

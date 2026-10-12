@@ -1599,7 +1599,7 @@ func main() {
 		// kind requires its own reader, so a kind this cell cannot resolve is
 		// refused rather than served outside the policy.
 		placementDestination.Discovery = &federation.PlacementDiscovery{
-			CellID: controlCellID, Authority: authorityStore, Membership: placementMembership, Inventory: livePlacementInventory{},
+			CellID: controlCellID, Authority: authorityStore, Membership: placementMembership, Inventory: livePlacementInventory{outage: triggerProcessor.QuartermasterOutageBackoff()},
 			Snapshot: placementSnapshot, Logger: logger,
 			Paths: &federation.MediaPlacementPaths{
 				Push: &federation.LivePushPlacementPaths{

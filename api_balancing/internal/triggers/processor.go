@@ -130,8 +130,9 @@ const (
 type Processor struct {
 	logger                    logging.Logger
 	commodoreClient           *commodore.GRPCClient
-	commodoreOutage           atomic.Pointer[federation.CommodoreOutageBackoff]
+	commodoreOutage           atomic.Pointer[federation.CentralOutageBackoff]
 	quartermasterClient       *qmclient.GRPCClient
+	quartermasterOutage       atomic.Pointer[federation.CentralOutageBackoff]
 	tenantAdmission           tenantAdmissionClient
 	decklogClient             *decklog.BatchedClient
 	loadBalancer              *balancer.LoadBalancer
@@ -445,47 +446,57 @@ const (
 // gateway is registered for that cluster; negative results are cached only
 // briefly (gatewayEmptyCacheTTL) so a (re)appearing gateway converges in seconds
 // while still avoiding a per-trigger hot-loop.
-func (p *Processor) getLivepeerGatewayURLsForCluster(clusterID string) ([]string, []string) {
+//
+// The refresh is one attempt bounded to federation.AdmissionCallTimeout behind
+// the Quartermaster outage backoff, and never asked when ask is false. When it
+// cannot be made or fails, the last answer for the cluster is used whatever its
+// age: Quartermaster is the only writer of gateway assignments, so an outage
+// freezes them. unreachable reports that Quartermaster gave no answer.
+func (p *Processor) getLivepeerGatewayURLsForCluster(ctx context.Context, clusterID string, ask bool) (urls, cells []string, unreachable bool) {
 	clusterID = strings.TrimSpace(clusterID)
 	if clusterID == "" {
-		return nil, nil
+		return nil, nil, false
 	}
 
 	p.gatewayMu.RLock()
-	if entry, ok := p.gatewayURLs[clusterID]; ok {
+	entry, known := p.gatewayURLs[clusterID]
+	p.gatewayMu.RUnlock()
+	if known {
 		ttl := gatewayCacheTTL
 		if len(entry.urls) == 0 {
 			ttl = gatewayEmptyCacheTTL // converge fast when a gateway (re)appears
 		}
 		if time.Since(entry.resolvedAt) < ttl {
-			p.gatewayMu.RUnlock()
-			return entry.urls, entry.cells
+			return entry.urls, entry.cells, false
 		}
 	}
-	p.gatewayMu.RUnlock()
 
 	disc := p.gatewayDiscoverer
-	if disc == nil {
+	if disc == nil && p.quartermasterClient != nil {
 		disc = p.quartermasterClient
 	}
-	if disc == nil {
-		return nil, nil
+	if disc == nil || !ask {
+		return entry.urls, entry.cells, false
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	resp, err := disc.DiscoverServices(ctx, "livepeer-gateway", clusterID, nil)
+	var resp *quartermasterpb.ServiceDiscoveryResponse
+	err := p.QuartermasterOutageBackoff().Call(ctx, func(callCtx context.Context) error {
+		var discoverErr error
+		resp, discoverErr = disc.DiscoverServices(callCtx, "livepeer-gateway", clusterID, nil)
+		return discoverErr
+	})
 	if err != nil {
 		// A discovery error is not evidence that the cluster has no gateway.
 		// Caching nil here would force local-AV fallback for the whole TTL; let
 		// the next stream re-resolve instead.
-		p.logger.WithError(err).WithField("cluster_id", clusterID).Debug("Livepeer gateway discovery failed; not caching result")
-		return nil, nil
+		p.logger.WithError(err).WithFields(logging.Fields{"cluster_id": clusterID, "last_known_gateways": len(entry.urls)}).
+			Debug("Livepeer gateway discovery failed; using the last known answer")
+		return entry.urls, entry.cells, federation.CentralUnreachable(err) || ctx.Err() != nil
 	}
 
 	seen := map[string]struct{}{}
 	seenCells := map[string]struct{}{}
-	var resolved, cells []string
+	var resolved []string
 	for _, inst := range resp.GetInstances() {
 		// DiscoverServices scopes to the gateways assigned to this media cluster
 		// but returns starting/unhealthy instances too; only a healthy gateway
@@ -523,7 +534,7 @@ func (p *Processor) getLivepeerGatewayURLsForCluster(clusterID string) ([]string
 	p.gatewayURLs[clusterID] = gatewayCacheEntry{urls: resolved, cells: cells, resolvedAt: time.Now()}
 	p.gatewayMu.Unlock()
 
-	return resolved, cells
+	return resolved, cells, false
 }
 
 // livepeerGatewayURLFromInstance returns the broadcaster URL for a gateway
@@ -557,6 +568,14 @@ func livepeerGatewayURLFromInstance(inst *quartermasterpb.ServiceInstance) strin
 // MistProcAV so video processing still runs in dev/self-hosted clusters without
 // a Livepeer gateway.
 func (p *Processor) ApplyLivepeerBroadcasters(processesJSON string, candidates []string) string {
+	return p.ApplyLivepeerBroadcastersContext(context.Background(), processesJSON, candidates)
+}
+
+// ApplyLivepeerBroadcastersContext is ApplyLivepeerBroadcasters bounded by
+// ctx. Once Quartermaster gives no answer for one candidate, the remaining
+// candidates are answered from the last known discovery only, so one
+// resolution waits on Quartermaster at most once.
+func (p *Processor) ApplyLivepeerBroadcastersContext(ctx context.Context, processesJSON string, candidates []string) string {
 	if !mist.HasLivepeerProcesses(processesJSON) {
 		return processesJSON
 	}
@@ -567,6 +586,7 @@ func (p *Processor) ApplyLivepeerBroadcasters(processesJSON string, candidates [
 
 	seen := map[string]struct{}{}
 	tried := []string{}
+	discoveryUnreachable := false
 	for _, candidate := range candidates {
 		candidate = strings.TrimSpace(candidate)
 		if candidate == "" {
@@ -578,7 +598,9 @@ func (p *Processor) ApplyLivepeerBroadcasters(processesJSON string, candidates [
 		seen[candidate] = struct{}{}
 		tried = append(tried, candidate)
 
-		if urls, cells := p.getLivepeerGatewayURLsForCluster(candidate); len(urls) > 0 {
+		urls, cells, unreachable := p.getLivepeerGatewayURLsForCluster(ctx, candidate, !discoveryUnreachable)
+		discoveryUnreachable = discoveryUnreachable || unreachable
+		if len(urls) > 0 {
 			withBroadcasters := mist.SetLivepeerBroadcasters(processesJSON, urls)
 			// The job capability names the cells whose Foghorn receives each
 			// selected gateway's auth webhook, not the media cluster asked for.
@@ -586,9 +608,15 @@ func (p *Processor) ApplyLivepeerBroadcasters(processesJSON string, candidates [
 		}
 	}
 
-	p.logger.WithField("candidates", tried).Warn(
-		"Livepeer gateway not registered in any candidate cluster — falling back to local MistProcAV (service_unavailable)",
-	)
+	if discoveryUnreachable {
+		p.logger.WithField("candidates", tried).Warn(
+			"Livepeer gateway discovery unavailable and no gateway known for any candidate cluster — falling back to local MistProcAV (service_unavailable)",
+		)
+	} else {
+		p.logger.WithField("candidates", tried).Warn(
+			"Livepeer gateway not registered in any candidate cluster — falling back to local MistProcAV (service_unavailable)",
+		)
+	}
 	if p.metrics != nil && p.metrics.ServiceResolutionRejected != nil {
 		p.metrics.ServiceResolutionRejected.WithLabelValues("service_unavailable", "livepeer-gateway").Inc()
 	}
@@ -1080,18 +1108,29 @@ func (p *Processor) SetCommodoreClient(c *commodore.GRPCClient) {
 
 // SetCommodoreOutageBackoff shares the process-wide Commodore outage backoff
 // with the ingest-ownership fence.
-func (p *Processor) SetCommodoreOutageBackoff(backoff *federation.CommodoreOutageBackoff) {
+func (p *Processor) SetCommodoreOutageBackoff(backoff *federation.CentralOutageBackoff) {
 	p.commodoreOutage.Store(backoff)
 }
 
 // CommodoreOutageBackoff is the backoff PUSH_REWRITE admission calls run
 // behind; a processor without a configured one keeps its own.
-func (p *Processor) CommodoreOutageBackoff() *federation.CommodoreOutageBackoff {
+func (p *Processor) CommodoreOutageBackoff() *federation.CentralOutageBackoff {
 	if backoff := p.commodoreOutage.Load(); backoff != nil {
 		return backoff
 	}
-	p.commodoreOutage.CompareAndSwap(nil, &federation.CommodoreOutageBackoff{})
+	p.commodoreOutage.CompareAndSwap(nil, &federation.CentralOutageBackoff{Service: "commodore"})
 	return p.commodoreOutage.Load()
+}
+
+// QuartermasterOutageBackoff is the process-wide backoff every Quartermaster
+// call on a media request path runs behind: Livepeer gateway discovery, node
+// attribution and the placement inventory read.
+func (p *Processor) QuartermasterOutageBackoff() *federation.CentralOutageBackoff {
+	if backoff := p.quartermasterOutage.Load(); backoff != nil {
+		return backoff
+	}
+	p.quartermasterOutage.CompareAndSwap(nil, &federation.CentralOutageBackoff{Service: "quartermaster"})
+	return p.quartermasterOutage.Load()
 }
 
 // SetGeoIPCache configures a cache for GeoIP lookups
@@ -1691,6 +1730,21 @@ func ingestErrorCodeForStreamKeyRejection(reason commodorepb.StreamKeyRejectionR
 	}
 }
 
+// ingestSessionPersistReserve is the part of the PUSH_REWRITE budget kept for
+// the cell's own session mint and source projection, which decide admission.
+const ingestSessionPersistReserve = time.Second
+
+// admissionReserveContext derives a context that ends reserve before ctx's
+// deadline, so a step that may wait on a central service leaves that much of
+// the budget to the steps after it. A ctx without a deadline is not shortened.
+func admissionReserveContext(ctx context.Context, reserve time.Duration) (context.Context, context.CancelFunc) {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return context.WithCancel(ctx)
+	}
+	return context.WithDeadline(ctx, deadline.Add(-reserve))
+}
+
 func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (_ string, _ bool, retErr error) {
 	payload, ok := trigger.GetTriggerPayload().(*ipcpb.MistTrigger_PushRewrite)
 	if !ok {
@@ -1797,8 +1851,13 @@ func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (_ string, _ b
 	// The control plane validated a key this cell holds no authority for: a
 	// stream nobody has used for a while. Its authority is asked for now, because
 	// placement admission further down decides on the local pair alone.
-	if !localFound && !usedLocalIdentity {
-		p.fetchLocalIngestAuthority(admissionCtx, identity.GetStreamId())
+	//
+	// The wait is one bounded Commodore call, and none inside the outage
+	// backoff; a fetch that outlives it still applies for the publisher's retry.
+	if !localFound && !usedLocalIdentity && !commodoreOutage.InOutage() {
+		fetchCtx, cancelFetch := context.WithTimeout(admissionCtx, federation.AdmissionCallTimeout)
+		p.fetchLocalIngestAuthority(fetchCtx, identity.GetStreamId())
+		cancelFetch()
 	}
 
 	// An existing session's cluster outranks the node's present registration:
@@ -1934,11 +1993,16 @@ func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (_ string, _ b
 	}
 	liveProcessesJSON := streamValidation.GetProcessesJson()
 	if liveProcessesJSON != "" {
-		liveProcessesJSON = p.ApplyLivepeerBroadcasters(liveProcessesJSON, []string{
+		// Gateway discovery never takes the budget the session mint and
+		// projection below need; without an answer in time the last known
+		// gateways, else local MistProcAV, process the stream.
+		discoveryCtx, cancelDiscovery := admissionReserveContext(admissionCtx, ingestSessionPersistReserve)
+		liveProcessesJSON = p.ApplyLivepeerBroadcastersContext(discoveryCtx, liveProcessesJSON, []string{
 			streamValidation.GetOriginClusterId(),
 			streamValidation.GetOfficialClusterId(),
 			p.clusterID,
 		})
+		cancelDiscovery()
 		liveProcessesJSON = p.ApplyLivepeerWorkload(liveProcessesJSON, mist.WorkloadLive)
 	}
 
@@ -6205,11 +6269,15 @@ func (p *Processor) resolveNodeClusterIDWithContext(ctx context.Context, nodeID 
 		return ""
 	}
 
+	// One bounded attempt behind the Quartermaster outage backoff: trigger
+	// handlers call this inside their admission budget.
 	val, ok, cacheErr := p.nodeClusterCache.Get(ctx, nodeID, func(ctx context.Context, key string) (interface{}, bool, error) {
-		ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
-		defer cancel()
-
-		node, err := p.quartermasterClient.GetNodeByLogicalName(ctx, key)
+		var node *quartermasterpb.InfrastructureNode
+		err := p.QuartermasterOutageBackoff().Call(ctx, func(callCtx context.Context) error {
+			var lookupErr error
+			node, lookupErr = p.quartermasterClient.GetNodeByLogicalName(callCtx, key)
+			return lookupErr
+		})
 		if err != nil {
 			p.logger.WithFields(logging.Fields{
 				"node_id": key,
