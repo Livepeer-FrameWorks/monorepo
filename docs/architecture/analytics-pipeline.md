@@ -310,6 +310,17 @@ If an insert fails (schema mismatch, non-null constraint violation, etc.), commi
 
 The shared Kafka consumer behavior lives in `pkg/kafka`. Transient dependency failures retry in place without committing; permanent handler failures are captured to the `decklog_events_dlq` dead-letter topic before the offset commits — see [decklog.md](decklog.md) for the DLQ + replay contract.
 
+### Write batching: one INSERT per table per poll batch
+
+Periscope Ingest consumes every subscribed topic with one consumer that polls up to 500 records at a time (`pkg/kafka`, `BlockRebalanceOnPoll`). The handlers run per record, but the rows they write go into a write buffer for the poll batch (`periscopeingestdb.WriteBuffer`); after the last record is handled, each INSERT statement's rows are sent as one native ClickHouse batch, and only then are the batch's offsets committed (`kafka.WithBatchFlusher`). A Replicated INSERT costs tens of milliseconds whatever its size, so throughput scales with the poll batch instead of being capped near one event per insert. Batch size follows the backlog: an idle topic flushes each record as it arrives, a backlog flushes 500 at a time. There is no batching setting.
+
+- **Ordering.** Rows keep the order they were written in. A read a handler makes (a stream's current `started_at`, the prior projection of a final fact, the session start of a `STREAM_END`) first inserts the batch's pending rows when they include the rows it must observe, so every read sees what earlier records of the batch wrote.
+- **Partitions.** Most tables partition by `(month, tenant_id)`; one INSERT carries at most 100 such partitions (ClickHouse's `max_partitions_per_insert_block`), so a batch spanning more tenants is split.
+- **Poison rows.** A row the driver cannot encode, or a batch the server rejects outright, is retried row by row so only the offending rows fail; each failed row's record then goes through the subscription's normal failure policy (dead-letter for analytics, service and domain events; for raw triggers the record is not settled). A transient ClickHouse failure retries the whole flush with backoff and commits nothing until it succeeds.
+- **Unsettled records.** A record whose handler or rows failed and that the policy did not dead-letter holds back its partition: the consumer commits only the records before it, seeks the partition back to it, pauses the partition for a backoff that doubles per consecutive failure (0.5 s to 30 s), and fetches it again. Later records of that partition are not handled until it succeeds, and the other partitions keep flowing.
+- **Redelivery.** A record delivered again writes the same rows, in a batch cut differently from the first: after a crash between the INSERTs and the offset commit, or as the copy MirrorMaker2 writes to a mirrored topic. Every append-only table the consumer writes stores an `ingest_id`, derived from the record's key and value, the table and the row's position among that record's rows for the table. At flush time the buffer drops rows whose `ingest_id` the batch repeats, looks up the remaining ids with one query per table (bounded by the rows' tenants and time range, then the `ingest_id` bloom-filter index), and drops those already stored, so a redelivery adds no row. Replacing tables collapse a redelivery by their key and store no `ingest_id`. A flush is not interrupted by shutdown, and the batch's offsets are committed even when shutdown began during the batch.
+- **Rollups over insert blocks.** Insert-triggered materialized views see one INSERT block at a time, so `stream_health_5m`, `stream_viewer_5m` and `client_qoe_5m` hold one row per block and bucket. Besides the block averages they store sums, sample counts and a `uniq` session state, and Periscope Query combines a bucket's rows from those, so averages, loss rates and distinct sessions are the bucket's whatever the batching. Rebuffer starts and ends are buffer-state transitions between consecutive health samples of a stream across inserts; Periscope Query derives them from `stream_health_samples` in timestamp order when it reads them, looking an hour before the requested range for the preceding state.
+
 ## 5) Storage: ClickHouse (Periscope schema)
 
 ClickHouse is the platform’s time-series/event store for analytics, optimized for:
@@ -403,9 +414,10 @@ Two read surfaces (both diagnostic, never billing/viewer-count truth):
 Where the boot trace covers _how playback started_, `client_qoe_session_deltas` covers
 _how it went_: the viewer's actually-experienced quality after first frame. This is the
 authoritative source for rebuffering — the server cannot see it. For HLS/DASH the player
-prefetches segments, so the origin buffer (`stream_health_samples` → `rebuffering_events`)
-reads healthy while the viewer's media buffer underruns on a bad last-mile link;
-`rebuffering_events` is **origin/stream buffer state, not per-viewer rebuffering**.
+prefetches segments, so the origin buffer (`stream_health_samples`, whose buffer-state
+transitions Periscope Query reports as rebuffering events) reads healthy while the viewer's
+media buffer underruns on a bad last-mile link; those events are **origin/stream buffer
+state, not per-viewer rebuffering**.
 
 The npm player's `SessionQoeReporter` measures, all client-side, at instrumentation time:
 

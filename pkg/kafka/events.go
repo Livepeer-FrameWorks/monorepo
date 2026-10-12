@@ -78,21 +78,27 @@ type EventHandler interface {
 
 // AnalyticsEventHandler implements EventHandler to handle analytics events
 type AnalyticsEventHandler struct {
-	handler func(AnalyticsEvent) error
+	handler func(context.Context, AnalyticsEvent) error
 	logger  *logrus.Logger
 }
 
 // NewAnalyticsEventHandler creates a new handler for analytics events
 func NewAnalyticsEventHandler(handler func(AnalyticsEvent) error, logger *logrus.Logger) *AnalyticsEventHandler {
 	return &AnalyticsEventHandler{
-		handler: handler,
+		handler: func(_ context.Context, event AnalyticsEvent) error { return handler(event) },
 		logger:  logger,
 	}
 }
 
+// NewAnalyticsEventContextHandler creates a handler for analytics events that
+// receives the context of the Kafka message being handled.
+func NewAnalyticsEventContextHandler(handler func(context.Context, AnalyticsEvent) error, logger *logrus.Logger) *AnalyticsEventHandler {
+	return &AnalyticsEventHandler{handler: handler, logger: logger}
+}
+
 // HandleEvent implements EventHandler by directly handling AnalyticsEvent
 func (h *AnalyticsEventHandler) HandleEvent(event AnalyticsEvent) error {
-	return h.handler(event)
+	return h.handler(context.Background(), event)
 }
 
 // HandleMessage adapts the generic Message handler signature to the typed AnalyticsEvent handler.
@@ -140,8 +146,7 @@ func (h *AnalyticsEventHandler) HandleMessage(ctx context.Context, msg Message) 
 		}
 	}
 
-	// Delegate to the typed handler
-	return h.HandleEvent(event)
+	return h.handler(ctx, event)
 }
 
 // ConsumerInterface defines the interface for Kafka consumers

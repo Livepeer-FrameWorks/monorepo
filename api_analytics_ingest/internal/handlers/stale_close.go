@@ -165,8 +165,8 @@ func (h *AnalyticsHandler) staleCloseRestreamSessions(ctx context.Context) error
 	if err := batch.Send(); err != nil {
 		return fmt.Errorf("restream_sessions_anomalous send: %w", err)
 	}
-	if h.metrics != nil && h.metrics.ClickHouseInserts != nil {
-		h.metrics.ClickHouseInserts.WithLabelValues("restream_sessions_anomalous", "stale").Add(float64(rowsEmitted))
+	if h.metrics != nil && h.metrics.HandlerWrites != nil {
+		h.metrics.HandlerWrites.WithLabelValues("restream_sessions_anomalous", "stale").Add(float64(rowsEmitted))
 	}
 	h.logger.WithField("count", rowsEmitted).Info("Stale-closed restream sessions")
 	return nil
@@ -276,8 +276,8 @@ func (h *AnalyticsHandler) staleCloseViewerSessions(ctx context.Context) error {
 	if err := batch.Send(); err != nil {
 		return fmt.Errorf("viewer_sessions_anomalous send: %w", err)
 	}
-	if h.metrics != nil && h.metrics.ClickHouseInserts != nil {
-		h.metrics.ClickHouseInserts.WithLabelValues("viewer_sessions_anomalous", "inserted").Add(float64(rowsEmitted))
+	if h.metrics != nil && h.metrics.HandlerWrites != nil {
+		h.metrics.HandlerWrites.WithLabelValues("viewer_sessions_anomalous", "inserted").Add(float64(rowsEmitted))
 	}
 	h.logger.WithField("count", rowsEmitted).Info("Stale-closed viewer sessions")
 	return nil
@@ -368,8 +368,8 @@ func (h *AnalyticsHandler) staleCloseStreamSessions(ctx context.Context) error {
 	if err := batch.Send(); err != nil {
 		return fmt.Errorf("stream_sessions_anomalous send: %w", err)
 	}
-	if h.metrics != nil && h.metrics.ClickHouseInserts != nil {
-		h.metrics.ClickHouseInserts.WithLabelValues("stream_sessions_anomalous", "inserted").Add(float64(rowsEmitted))
+	if h.metrics != nil && h.metrics.HandlerWrites != nil {
+		h.metrics.HandlerWrites.WithLabelValues("stream_sessions_anomalous", "inserted").Add(float64(rowsEmitted))
 	}
 	h.logger.WithField("count", rowsEmitted).Info("Stale-closed stream sessions")
 	return nil

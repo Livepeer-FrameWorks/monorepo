@@ -177,8 +177,8 @@ func (h *AnalyticsHandler) rebuildDeliveryUsage5m(ctx context.Context, windowSta
 			h.logger.WithFields(logging.Fields{
 				"ledger": "delivery_usage_5m", "delivery_kind": s.kind,
 			}).Warn("Skipping over-span delivery fact without retracting prior ledger rows")
-			if h.metrics != nil && h.metrics.ClickHouseInserts != nil {
-				h.metrics.ClickHouseInserts.WithLabelValues("delivery_usage_5m", "quarantined_span").Inc()
+			if h.metrics != nil && h.metrics.HandlerWrites != nil {
+				h.metrics.HandlerWrites.WithLabelValues("delivery_usage_5m", "quarantined_span").Inc()
 			}
 			continue
 		}
@@ -273,8 +273,8 @@ func (h *AnalyticsHandler) reconcilePlaybackDeliveryUsage5m(ctx context.Context,
 		totalMS := endMS - startMS
 		if totalMS > LedgerMaxSpan.Milliseconds() {
 			h.logger.WithFields(logging.Fields{"ledger": "delivery_usage_5m", "delivery_kind": "playback"}).Warn("Skipping over-span delivery fact without retracting prior ledger rows")
-			if h.metrics != nil && h.metrics.ClickHouseInserts != nil {
-				h.metrics.ClickHouseInserts.WithLabelValues("delivery_usage_5m", "quarantined_span").Inc()
+			if h.metrics != nil && h.metrics.HandlerWrites != nil {
+				h.metrics.HandlerWrites.WithLabelValues("delivery_usage_5m", "quarantined_span").Inc()
 			}
 			continue
 		}
@@ -346,8 +346,8 @@ func (h *AnalyticsHandler) writeDeliveryUsage5m(ctx context.Context, emissions [
 	if err := batch.Send(); err != nil {
 		return fmt.Errorf("delivery_usage_5m send: %w", err)
 	}
-	if h.metrics != nil && h.metrics.ClickHouseInserts != nil {
-		h.metrics.ClickHouseInserts.WithLabelValues("delivery_usage_5m", "inserted").Add(float64(len(emissions)))
+	if h.metrics != nil && h.metrics.HandlerWrites != nil {
+		h.metrics.HandlerWrites.WithLabelValues("delivery_usage_5m", "inserted").Add(float64(len(emissions)))
 	}
 	return nil
 }
@@ -728,8 +728,8 @@ func (h *AnalyticsHandler) rebuildViewerUsage5m(ctx context.Context, windowStart
 		}
 		if totalSpanMS > LedgerMaxSpan.Milliseconds() {
 			h.logger.WithField("ledger", "viewer_usage_5m").Warn("Skipping over-span viewer fact without retracting prior ledger rows")
-			if h.metrics != nil && h.metrics.ClickHouseInserts != nil {
-				h.metrics.ClickHouseInserts.WithLabelValues("viewer_usage_5m", "quarantined_span").Inc()
+			if h.metrics != nil && h.metrics.HandlerWrites != nil {
+				h.metrics.HandlerWrites.WithLabelValues("viewer_usage_5m", "quarantined_span").Inc()
 			}
 			continue
 		}
@@ -833,8 +833,8 @@ func (h *AnalyticsHandler) writeViewerUsage5m(ctx context.Context, emissions []v
 	if err := batch.Send(); err != nil {
 		return fmt.Errorf("viewer_usage_5m send: %w", err)
 	}
-	if h.metrics != nil && h.metrics.ClickHouseInserts != nil {
-		h.metrics.ClickHouseInserts.WithLabelValues("viewer_usage_5m", "inserted").Add(float64(len(emissions)))
+	if h.metrics != nil && h.metrics.HandlerWrites != nil {
+		h.metrics.HandlerWrites.WithLabelValues("viewer_usage_5m", "inserted").Add(float64(len(emissions)))
 	}
 	return nil
 }
@@ -1076,8 +1076,8 @@ func (h *AnalyticsHandler) rebuildStreamRuntime5m(ctx context.Context, windowSta
 	if err := batch.Send(); err != nil {
 		return fmt.Errorf("stream_runtime_5m send: %w", err)
 	}
-	if h.metrics != nil && h.metrics.ClickHouseInserts != nil {
-		h.metrics.ClickHouseInserts.WithLabelValues("stream_runtime_5m", "inserted").Add(float64(rowsEmitted))
+	if h.metrics != nil && h.metrics.HandlerWrites != nil {
+		h.metrics.HandlerWrites.WithLabelValues("stream_runtime_5m", "inserted").Add(float64(rowsEmitted))
 	}
 	return nil
 }
@@ -1383,8 +1383,8 @@ func (h *AnalyticsHandler) rebuildStorageGBSeconds5m(ctx context.Context, window
 	if err := batch.Send(); err != nil {
 		return fmt.Errorf("storage_gb_seconds_5m send: %w", err)
 	}
-	if h.metrics != nil && h.metrics.ClickHouseInserts != nil {
-		h.metrics.ClickHouseInserts.WithLabelValues("storage_gb_seconds_5m", "inserted").Add(float64(rowsEmitted))
+	if h.metrics != nil && h.metrics.HandlerWrites != nil {
+		h.metrics.HandlerWrites.WithLabelValues("storage_gb_seconds_5m", "inserted").Add(float64(rowsEmitted))
 	}
 	return nil
 }
@@ -1549,8 +1549,8 @@ func (h *AnalyticsHandler) rebuildProcessing5m(ctx context.Context, windowStart,
 	if err := batch.Send(); err != nil {
 		return fmt.Errorf("processing_5m send: %w", err)
 	}
-	if h.metrics != nil && h.metrics.ClickHouseInserts != nil {
-		h.metrics.ClickHouseInserts.WithLabelValues("processing_5m", "inserted").Add(float64(rowsEmitted))
+	if h.metrics != nil && h.metrics.HandlerWrites != nil {
+		h.metrics.HandlerWrites.WithLabelValues("processing_5m", "inserted").Add(float64(rowsEmitted))
 	}
 	return nil
 }
@@ -1625,8 +1625,8 @@ func (h *AnalyticsHandler) rebuildApiUsage5m(ctx context.Context, windowStart, w
 		windowStart.UnixMilli(), windowEnd.UnixMilli(), projectionVersionMS); err != nil {
 		return fmt.Errorf("api_usage_5m insert: %w", err)
 	}
-	if h.metrics != nil && h.metrics.ClickHouseInserts != nil {
-		h.metrics.ClickHouseInserts.WithLabelValues("api_usage_5m", "inserted").Inc()
+	if h.metrics != nil && h.metrics.HandlerWrites != nil {
+		h.metrics.HandlerWrites.WithLabelValues("api_usage_5m", "inserted").Inc()
 	}
 	return nil
 }

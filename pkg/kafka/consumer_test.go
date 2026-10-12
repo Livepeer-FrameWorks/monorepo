@@ -103,6 +103,7 @@ func TestIsRecoverableGroupCommitError(t *testing.T) {
 }
 
 type fakeConsumerPoller struct {
+	noSeek
 	batch      kgo.Fetches
 	commitErr  error
 	cancel     context.CancelFunc
@@ -131,6 +132,14 @@ func (f *fakeConsumerPoller) CommitRecords(_ context.Context, records ...*kgo.Re
 func (f *fakeConsumerPoller) AllowRebalance() {
 	f.rebalances++
 }
+
+// noSeek gives a fake poller the partition seek and pause calls, which its
+// tests do not exercise.
+type noSeek struct{}
+
+func (noSeek) SetOffsets(map[string]map[int32]kgo.EpochOffset)            {}
+func (noSeek) PauseFetchPartitions(map[string][]int32) map[string][]int32 { return nil }
+func (noSeek) ResumeFetchPartitions(map[string][]int32)                   {}
 
 func TestConsumerStartAllowsRebalanceAndRecoversMembershipCommitError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -168,7 +177,10 @@ func TestConsumerStartAllowsRebalanceAndRecoversMembershipCommitError(t *testing
 	}
 }
 
-type closedClientPoller struct{ polls int }
+type closedClientPoller struct {
+	noSeek
+	polls int
+}
 
 func (p *closedClientPoller) PollRecords(context.Context, int) kgo.Fetches {
 	p.polls++

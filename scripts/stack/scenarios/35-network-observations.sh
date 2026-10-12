@@ -38,8 +38,7 @@
 # builds its price and its ticket sender and recipient only on a chain, so the
 # offchain stack orchestrators quote no price and the gateway's attempts carry
 # a known zero ticket credit and no service charge.
-# Manual: it waits for the rollup loop's five-minute pass, and in the default
-# order behind scenario 32's analytics backlog (about 12 minutes in all).
+# Manual: it waits for the rollup loop's five-minute pass.
 . "$(dirname "$0")/../lib.sh"
 
 need curl jq python3 psql ffmpeg || finish
@@ -233,11 +232,10 @@ rows_landed() {
     FROM periscope.network_observations FINAL WHERE $NS AND event_id IN ($EVENTS) FORMAT JSONEachRow" | jq -sc .)
   [ "$(echo "$ROWS" | jq length)" = 4 ]
 }
-# Periscope-ingest drains one analytics topic for every scenario at about ten
-# events a second; scenario 32's viewer bursts (about 7,000 /play requests,
-# one load-balancing event each) leave over ten minutes of backlog ahead of
-# these events.
-eventually 1200 "all 4 prober observations reached periscope.network_observations" rows_landed || { echo "    rows: $ROWS"; finish; }
+# Periscope-ingest drains one analytics topic for every scenario, inserting
+# each poll batch of up to 500 events at once; scenario 32's viewer bursts
+# (about 8,000 events) are behind it within seconds.
+eventually 120 "all 4 prober observations reached periscope.network_observations" rows_landed || { echo "    rows: $ROWS"; finish; }
 row() { echo "$ROWS" | jq -e --arg id "$1" "any(.[]; .id == \$id and ($2))" >/dev/null; }
 check "prober success: discovery of $IP_A, 42 ms, from $REGION" row "$RESULT_A" \
   ".kind == \"discovery\" and .producer_kind == \"prober\" and .gateway_id == \"$PROBER\" and .gateway_region == \"$REGION\" and .resource_id == \"$ORCH_A\" and .resolved_ip == \"$IP_A\" and .success == 1 and .qualifying == 1 and .latency_ms == 42"

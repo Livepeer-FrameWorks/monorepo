@@ -62,15 +62,14 @@ func TestStreamHealth5mUnknownHeightIsNotSD_RealClickHouse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetStreamHealth5M: %v", err)
 	}
-	tiers := map[string]int{}
-	for _, record := range resp.GetRecords() {
-		tiers[record.GetQualityTier()]++
-	}
-	if tiers["SD"] != 0 {
-		t.Fatalf("samples without a known height projected as SD: %v", tiers)
-	}
-	if tiers["1080p"] != 3 || tiers["Unknown"] != 3 || len(tiers) != 2 {
-		t.Fatalf("tiers = %v, want 3 x 1080p and 3 x Unknown", tiers)
+	// The six single-sample blocks share one bucket, which reports the tier of
+	// its latest sample with a known height.
+	if records := resp.GetRecords(); len(records) != 1 || records[0].GetQualityTier() != "1080p" {
+		tiers := []string{}
+		for _, record := range records {
+			tiers = append(tiers, record.GetQualityTier())
+		}
+		t.Fatalf("bucket tiers = %v, want one 1080p bucket", tiers)
 	}
 
 	summaryStreamID := streamID

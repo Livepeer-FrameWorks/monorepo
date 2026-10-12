@@ -31,12 +31,20 @@ import (
 type PeriscopeMetrics struct {
 	AnalyticsEvents         *prometheus.CounterVec
 	BatchProcessingDuration *prometheus.HistogramVec
-	ClickHouseInserts       *prometheus.CounterVec
-	DuplicateEvents         *prometheus.CounterVec
-	DLQMessages             *prometheus.CounterVec
-	KafkaMessages           *prometheus.CounterVec
-	KafkaDuration           *prometheus.HistogramVec
-	KafkaLag                *prometheus.GaugeVec
+	// HandlerWrites counts the handlers' per-table write outcomes: attempt,
+	// success or inserted (rows accepted into the poll batch, or written
+	// directly by a background job), error, and quarantine or skip
+	// classifications. It does not count ClickHouse INSERTs. Labels: table,
+	// status.
+	HandlerWrites *prometheus.CounterVec
+	// ClickHouseInserts counts INSERT statements sent to ClickHouse. Labels:
+	// table, status (success, error).
+	ClickHouseInserts *prometheus.CounterVec
+	DuplicateEvents   *prometheus.CounterVec
+	DLQMessages       *prometheus.CounterVec
+	KafkaMessages     *prometheus.CounterVec
+	KafkaDuration     *prometheus.HistogramVec
+	KafkaLag          *prometheus.GaugeVec
 	// ProjectionDivergences counts cases where a new projection of an
 	// already-seen logical fact carries a different rated field value
 	// beyond the per-meter epsilon. The row is still written (append
@@ -51,6 +59,21 @@ type PeriscopeMetrics struct {
 	// non-zero rate means Periscope Ingest must be upgraded. Labels:
 	// event_type, status.
 	DomainEvents *prometheus.CounterVec
+	// WriteBatchRecords observes the Kafka records of each poll batch whose
+	// ClickHouse rows were inserted together. No labels.
+	WriteBatchRecords *prometheus.HistogramVec
+	// WriteInsertRows observes the rows of each INSERT. Label: table.
+	WriteInsertRows *prometheus.HistogramVec
+	// DuplicateRows counts buffered rows dropped because their table already
+	// held, or the poll batch already carried, their ingest_id: rows of a
+	// redelivered Kafka record. Label: table.
+	DuplicateRows *prometheus.CounterVec
+	// WriteFlushDuration observes the time to insert a poll batch's rows,
+	// including retries of transient ClickHouse failures. No labels.
+	WriteFlushDuration *prometheus.HistogramVec
+	// IngestDelay observes, per record, the seconds from its Kafka timestamp
+	// to the insert of its poll batch's rows. No labels.
+	IngestDelay *prometheus.HistogramVec
 }
 
 // AnalyticsHandler handles analytics events
@@ -63,12 +86,7 @@ type AnalyticsHandler struct {
 
 type clickhouseBatch = periscopeingestdb.Batch
 
-type clickhouseRows interface {
-	Next() bool
-	Close() error
-	Scan(dest ...interface{}) error
-	Err() error
-}
+type clickhouseRows = periscopeingestdb.Rows
 
 type clickhouseConn interface {
 	periscopeingestdb.BatchPreparer
@@ -136,6 +154,12 @@ func NewAnalyticsHandler(clickhouse database.ClickHouseNativeConn, logger loggin
 	}
 }
 
+// NewWriteBuffer returns a buffer that inserts and deduplicates through the
+// handler's ClickHouse connection.
+func (h *AnalyticsHandler) NewWriteBuffer(opts periscopeingestdb.WriteBufferOptions) *periscopeingestdb.WriteBuffer {
+	return periscopeingestdb.NewWriteBuffer(h.clickhouse, opts)
+}
+
 // parseProtobufData parses the transparent protobuf JSON data from the Kafka event
 func (h *AnalyticsHandler) parseProtobufData(event kafka.AnalyticsEvent, target proto.Message) error {
 	// Convert the Data map back to JSON
@@ -156,8 +180,15 @@ func (h *AnalyticsHandler) parseProtobufData(event kafka.AnalyticsEvent, target 
 
 // HandleAnalyticsEvent processes analytics events and writes to ClickHouse
 func (h *AnalyticsHandler) HandleAnalyticsEvent(event kafka.AnalyticsEvent) error {
+	return h.HandleAnalyticsEventContext(context.Background(), event)
+}
+
+// HandleAnalyticsEventContext is HandleAnalyticsEvent with the values of ctx,
+// such as the poll batch's write buffer. Cancelling ctx does not interrupt
+// the event's ClickHouse calls.
+func (h *AnalyticsHandler) HandleAnalyticsEventContext(ctx context.Context, event kafka.AnalyticsEvent) error {
 	start := time.Now()
-	ctx := context.Background()
+	ctx = context.WithoutCancel(ctx)
 
 	// Track analytics event received
 	if h.metrics != nil {
@@ -340,8 +371,14 @@ var streamKeyTokenPattern = regexp.MustCompile(`(?:^|[^A-Za-z0-9])sk_[A-Za-z0-9_
 
 // HandleServiceEvent processes service-plane events from the service_events topic.
 func (h *AnalyticsHandler) HandleServiceEvent(event kafka.ServiceEvent) error {
+	return h.HandleServiceEventContext(context.Background(), event)
+}
+
+// HandleServiceEventContext is HandleServiceEvent with the values of ctx.
+// Cancelling ctx does not interrupt the event's ClickHouse calls.
+func (h *AnalyticsHandler) HandleServiceEventContext(ctx context.Context, event kafka.ServiceEvent) error {
 	start := time.Now()
-	ctx := context.Background()
+	ctx = context.WithoutCancel(ctx)
 
 	if h.metrics != nil {
 		h.metrics.AnalyticsEvents.WithLabelValues(event.EventType, "received").Inc()
@@ -476,8 +513,8 @@ func (h *AnalyticsHandler) HandleRawMistTriggerMessage(ctx context.Context, msg 
 	if err := batch.Send(); err != nil {
 		return fmt.Errorf("raw_mist_triggers send: %w", err)
 	}
-	if h.metrics != nil && h.metrics.ClickHouseInserts != nil {
-		h.metrics.ClickHouseInserts.WithLabelValues("raw_mist_triggers", "inserted").Inc()
+	if h.metrics != nil && h.metrics.HandlerWrites != nil {
+		h.metrics.HandlerWrites.WithLabelValues("raw_mist_triggers", "inserted").Inc()
 	}
 
 	// Project final-fact rows for the trigger types Decklog republished
@@ -657,7 +694,7 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, event kaf
 		}
 	}
 	if h.metrics != nil {
-		h.metrics.ClickHouseInserts.WithLabelValues("stream_events", "attempt").Inc()
+		h.metrics.HandlerWrites.WithLabelValues("stream_events", "attempt").Inc()
 	}
 
 	// 2. Write to stream_events (historical log - MergeTree)
@@ -665,7 +702,7 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, event kaf
 	if err != nil {
 		h.logger.Errorf("Failed to prepare stream_events batch: %v", err)
 		if h.metrics != nil {
-			h.metrics.ClickHouseInserts.WithLabelValues("stream_events", "error").Inc()
+			h.metrics.HandlerWrites.WithLabelValues("stream_events", "error").Inc()
 		}
 		return err
 	}
@@ -689,7 +726,7 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, event kaf
 	}); appendErr != nil {
 		h.logger.Errorf("Failed to append to stream_events batch: %v", appendErr)
 		if h.metrics != nil {
-			h.metrics.ClickHouseInserts.WithLabelValues("stream_events", "error").Inc()
+			h.metrics.HandlerWrites.WithLabelValues("stream_events", "error").Inc()
 		}
 		return appendErr
 	}
@@ -697,26 +734,26 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, event kaf
 	if sendErr := eventBatch.Send(); sendErr != nil {
 		h.logger.Errorf("Failed to send stream_events batch: %v", sendErr)
 		if h.metrics != nil {
-			h.metrics.ClickHouseInserts.WithLabelValues("stream_events", "error").Inc()
+			h.metrics.HandlerWrites.WithLabelValues("stream_events", "error").Inc()
 		}
 		return sendErr
 	}
 
 	if h.metrics != nil {
-		h.metrics.ClickHouseInserts.WithLabelValues("stream_events", "success").Inc()
+		h.metrics.HandlerWrites.WithLabelValues("stream_events", "success").Inc()
 	}
 
 	// 3. Write to stream_health_metrics (for health charts - every 10s sample)
 	// This provides continuous health data from polling, not just sparse STREAM_BUFFER triggers
 	if h.metrics != nil {
-		h.metrics.ClickHouseInserts.WithLabelValues("stream_health_metrics", "attempt").Inc()
+		h.metrics.HandlerWrites.WithLabelValues("stream_health_metrics", "attempt").Inc()
 	}
 
 	healthBatch, err := periscopeingestdb.PrepareStreamLifecycleHealth(ctx, h.clickhouse)
 	if err != nil {
 		h.logger.Errorf("Failed to prepare stream_health_metrics batch: %v", err)
 		if h.metrics != nil {
-			h.metrics.ClickHouseInserts.WithLabelValues("stream_health_metrics", "error").Inc()
+			h.metrics.HandlerWrites.WithLabelValues("stream_health_metrics", "error").Inc()
 		}
 		return err
 	}
@@ -765,7 +802,7 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, event kaf
 	}); err != nil {
 		h.logger.Errorf("Failed to append to stream_health_metrics: %v", err)
 		if h.metrics != nil {
-			h.metrics.ClickHouseInserts.WithLabelValues("stream_health_metrics", "error").Inc()
+			h.metrics.HandlerWrites.WithLabelValues("stream_health_metrics", "error").Inc()
 		}
 		return err
 	}
@@ -773,13 +810,13 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, event kaf
 	if err := healthBatch.Send(); err != nil {
 		h.logger.Errorf("Failed to send stream_health_metrics: %v", err)
 		if h.metrics != nil {
-			h.metrics.ClickHouseInserts.WithLabelValues("stream_health_metrics", "error").Inc()
+			h.metrics.HandlerWrites.WithLabelValues("stream_health_metrics", "error").Inc()
 		}
 		return err
 	}
 
 	if h.metrics != nil {
-		h.metrics.ClickHouseInserts.WithLabelValues("stream_health_metrics", "success").Inc()
+		h.metrics.HandlerWrites.WithLabelValues("stream_health_metrics", "success").Inc()
 	}
 
 	return nil
@@ -788,13 +825,13 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, event kaf
 // writeStreamLifecycleState upserts the live stream's current state from its lifecycle report.
 func (h *AnalyticsHandler) writeStreamLifecycleState(ctx context.Context, event kafka.AnalyticsEvent, mt *ipcpb.MistTrigger, streamLifecycle *ipcpb.StreamLifecycleUpdate, streamID, internalName, status, bufferState string) error {
 	if h.metrics != nil {
-		h.metrics.ClickHouseInserts.WithLabelValues("live_streams", "attempt").Inc()
+		h.metrics.HandlerWrites.WithLabelValues("live_streams", "attempt").Inc()
 	}
 	stateBatch, err := periscopeingestdb.PrepareStreamLifecycleState(ctx, h.clickhouse)
 	if err != nil {
 		h.logger.Errorf("Failed to prepare live_streams batch: %v", err)
 		if h.metrics != nil {
-			h.metrics.ClickHouseInserts.WithLabelValues("live_streams", "error").Inc()
+			h.metrics.HandlerWrites.WithLabelValues("live_streams", "error").Inc()
 		}
 		return err
 	}
@@ -805,13 +842,23 @@ func (h *AnalyticsHandler) writeStreamLifecycleState(ctx context.Context, event 
 		value := time.Unix(*streamLifecycle.StartedAt, 0)
 		startedAt = &value
 	} else if status == "live" {
-		if existingStartedAt, ok := h.lookupCurrentLiveStreamStartedAt(ctx, event.TenantID, parseUUID(streamID)); ok {
+		existingStartedAt, ok, err := h.lookupCurrentLiveStreamStartedAt(ctx, event.TenantID, parseUUID(streamID))
+		if err != nil {
+			return err
+		}
+		if ok {
 			startedAt = &existingStartedAt
 		} else {
 			startedAt = &event.Timestamp
 		}
-	} else if existingStartedAt, ok := h.lookupCurrentStreamStartedAt(ctx, event.TenantID, parseUUID(streamID)); ok {
-		startedAt = &existingStartedAt
+	} else {
+		existingStartedAt, ok, err := h.lookupCurrentStreamStartedAt(ctx, event.TenantID, parseUUID(streamID))
+		if err != nil {
+			return err
+		}
+		if ok {
+			startedAt = &existingStartedAt
+		}
 	}
 
 	if appendErr := stateBatch.Append(periscopeingestdb.StreamLifecycleStateRow{
@@ -830,7 +877,7 @@ func (h *AnalyticsHandler) writeStreamLifecycleState(ctx context.Context, event 
 	}); appendErr != nil {
 		h.logger.Errorf("Failed to append to live_streams batch: %v", appendErr)
 		if h.metrics != nil {
-			h.metrics.ClickHouseInserts.WithLabelValues("live_streams", "error").Inc()
+			h.metrics.HandlerWrites.WithLabelValues("live_streams", "error").Inc()
 		}
 		return appendErr
 	}
@@ -838,13 +885,13 @@ func (h *AnalyticsHandler) writeStreamLifecycleState(ctx context.Context, event 
 	if sendErr := stateBatch.Send(); sendErr != nil {
 		h.logger.Errorf("Failed to send live_streams batch: %v", sendErr)
 		if h.metrics != nil {
-			h.metrics.ClickHouseInserts.WithLabelValues("live_streams", "error").Inc()
+			h.metrics.HandlerWrites.WithLabelValues("live_streams", "error").Inc()
 		}
 		return sendErr
 	}
 
 	if h.metrics != nil {
-		h.metrics.ClickHouseInserts.WithLabelValues("live_streams", "success").Inc()
+		h.metrics.HandlerWrites.WithLabelValues("live_streams", "success").Inc()
 	}
 	return nil
 }
@@ -860,7 +907,7 @@ func (h *AnalyticsHandler) processViewerConnection(ctx context.Context, event ka
 	if err := h.requireContentIdentity(ctx, event, streamID, artifactHash); err != nil {
 		return err
 	}
-	if h.isDuplicateEvent(ctx, "viewer_connection_events", parseUUID(event.EventID), event.EventType) {
+	if h.isDuplicateEvent(ctx, "viewer_connection_events", event) {
 		return nil
 	}
 
@@ -1238,18 +1285,27 @@ func optionalUUID(value string) *uuid.UUID {
 	return &parsed
 }
 
-func (h *AnalyticsHandler) lookupCurrentStreamStartedAt(ctx context.Context, tenantID string, streamID uuid.UUID) (time.Time, bool) {
+func (h *AnalyticsHandler) lookupCurrentStreamStartedAt(ctx context.Context, tenantID string, streamID uuid.UUID) (time.Time, bool, error) {
 	return h.lookupCurrentStreamStartedAtByStatus(ctx, tenantID, streamID, "")
 }
 
-func (h *AnalyticsHandler) lookupCurrentLiveStreamStartedAt(ctx context.Context, tenantID string, streamID uuid.UUID) (time.Time, bool) {
+func (h *AnalyticsHandler) lookupCurrentLiveStreamStartedAt(ctx context.Context, tenantID string, streamID uuid.UUID) (time.Time, bool, error) {
 	return h.lookupCurrentStreamStartedAtByStatus(ctx, tenantID, streamID, "live")
 }
 
-func (h *AnalyticsHandler) lookupCurrentStreamStartedAtByStatus(ctx context.Context, tenantID string, streamID uuid.UUID, requiredStatus string) (time.Time, bool) {
+// lookupCurrentStreamStartedAtByStatus returns the stream's current started_at.
+// A failed lookup reads as no value; the error reports only a failed flush of
+// the poll batch's rows for the same stream, which the lookup must observe.
+func (h *AnalyticsHandler) lookupCurrentStreamStartedAtByStatus(ctx context.Context, tenantID string, streamID uuid.UUID, requiredStatus string) (time.Time, bool, error) {
 	tenantUUID, err := uuid.Parse(strings.TrimSpace(tenantID))
 	if err != nil || tenantUUID == uuid.Nil || streamID == uuid.Nil {
-		return time.Time{}, false
+		return time.Time{}, false, nil
+	}
+	if flushErr := h.flushBeforeRead(ctx, "stream_state_current", func(row any) bool {
+		state, ok := row.(periscopeingestdb.StreamLifecycleStateRow)
+		return ok && state.TenantID == tenantUUID && state.StreamID == streamID
+	}); flushErr != nil {
+		return time.Time{}, false, flushErr
 	}
 	query := `
 		SELECT started_at
@@ -1266,25 +1322,41 @@ func (h *AnalyticsHandler) lookupCurrentStreamStartedAtByStatus(ctx context.Cont
 	rows, err := h.clickhouse.Query(ctx, query, args...)
 	if err != nil {
 		h.logger.WithError(err).Debug("Stream started_at lookup failed")
-		return time.Time{}, false
+		return time.Time{}, false, nil
 	}
 	defer func() { _ = rows.Close() }()
 	if !rows.Next() {
-		return time.Time{}, false
+		return time.Time{}, false, nil
 	}
 	var startedAt time.Time
 	if err := rows.Scan(&startedAt); err != nil {
 		h.logger.WithError(err).Debug("Stream started_at lookup scan failed")
-		return time.Time{}, false
+		return time.Time{}, false, nil
 	}
 	if startedAt.IsZero() {
-		return time.Time{}, false
+		return time.Time{}, false, nil
 	}
-	return startedAt.UTC(), true
+	return startedAt.UTC(), true, nil
 }
 
-func (h *AnalyticsHandler) isDuplicateEvent(ctx context.Context, table string, eventID uuid.UUID, eventType string) bool {
-	if eventID == uuid.Nil {
+// flushBeforeRead inserts the poll batch's buffered rows when table holds a
+// pending row satisfying match (nil matches any row), so the read that follows
+// observes the rows this batch wrote before it, as it would without buffering.
+func (h *AnalyticsHandler) flushBeforeRead(ctx context.Context, table string, match func(row any) bool) error {
+	buffer := periscopeingestdb.WriteBufferFrom(ctx)
+	if buffer == nil || !buffer.HasPending(table, match) {
+		return nil
+	}
+	return buffer.Flush(ctx)
+}
+
+// isDuplicateEvent reports whether table already holds event's id. Under a
+// poll batch's write buffer it reports false without a lookup: every row a
+// redelivered record writes carries the same ingest_id as before, and the
+// flush drops the rows whose ingest_id is already stored.
+func (h *AnalyticsHandler) isDuplicateEvent(ctx context.Context, table string, event kafka.AnalyticsEvent) bool {
+	eventID, eventType := parseUUID(event.EventID), event.EventType
+	if eventID == uuid.Nil || periscopeingestdb.WriteBufferFrom(ctx) != nil {
 		return false
 	}
 	rows, err := h.clickhouse.Query(ctx, fmt.Sprintf("SELECT 1 FROM %s WHERE event_id = ? LIMIT 1", table), eventID)
@@ -1490,7 +1562,7 @@ var (
 
 func (h *AnalyticsHandler) writeIngestError(ctx context.Context, event kafka.AnalyticsEvent, streamID string, reason string, cause error) {
 	if h.metrics != nil {
-		h.metrics.ClickHouseInserts.WithLabelValues("ingest_errors", "attempt").Inc()
+		h.metrics.HandlerWrites.WithLabelValues("ingest_errors", "attempt").Inc()
 	}
 
 	payloadJSON := "{}"
@@ -1513,7 +1585,7 @@ func (h *AnalyticsHandler) writeIngestError(ctx context.Context, event kafka.Ana
 	if err != nil {
 		h.logger.WithError(err).Error("Failed to prepare ingest_errors batch")
 		if h.metrics != nil {
-			h.metrics.ClickHouseInserts.WithLabelValues("ingest_errors", "error").Inc()
+			h.metrics.HandlerWrites.WithLabelValues("ingest_errors", "error").Inc()
 		}
 		return
 	}
@@ -1527,7 +1599,7 @@ func (h *AnalyticsHandler) writeIngestError(ctx context.Context, event kafka.Ana
 	}); appendErr != nil {
 		h.logger.WithError(appendErr).Error("Failed to append ingest_errors batch")
 		if h.metrics != nil {
-			h.metrics.ClickHouseInserts.WithLabelValues("ingest_errors", "error").Inc()
+			h.metrics.HandlerWrites.WithLabelValues("ingest_errors", "error").Inc()
 		}
 		return
 	}
@@ -1535,13 +1607,13 @@ func (h *AnalyticsHandler) writeIngestError(ctx context.Context, event kafka.Ana
 	if err := batch.Send(); err != nil {
 		h.logger.WithError(err).Error("Failed to send ingest_errors batch")
 		if h.metrics != nil {
-			h.metrics.ClickHouseInserts.WithLabelValues("ingest_errors", "error").Inc()
+			h.metrics.HandlerWrites.WithLabelValues("ingest_errors", "error").Inc()
 		}
 		return
 	}
 
 	if h.metrics != nil {
-		h.metrics.ClickHouseInserts.WithLabelValues("ingest_errors", "success").Inc()
+		h.metrics.HandlerWrites.WithLabelValues("ingest_errors", "success").Inc()
 	}
 }
 
@@ -1699,8 +1771,8 @@ func (h *AnalyticsHandler) processRestreamStatus(ctx context.Context, event kafk
 	if err := batch.Send(); err != nil {
 		return fmt.Errorf("restream_sessions_current send: %w", err)
 	}
-	if h.metrics != nil && h.metrics.ClickHouseInserts != nil {
-		h.metrics.ClickHouseInserts.WithLabelValues("restream_sessions_current", "inserted").Inc()
+	if h.metrics != nil && h.metrics.HandlerWrites != nil {
+		h.metrics.HandlerWrites.WithLabelValues("restream_sessions_current", "inserted").Inc()
 	}
 	return nil
 }
@@ -1724,7 +1796,11 @@ func (h *AnalyticsHandler) processPushRewrite(ctx context.Context, event kafka.A
 
 	if streamUUID != uuid.Nil {
 		startedAt := event.Timestamp
-		if existingStartedAt, ok := h.lookupCurrentLiveStreamStartedAt(ctx, event.TenantID, streamUUID); ok {
+		existingStartedAt, ok, err := h.lookupCurrentLiveStreamStartedAt(ctx, event.TenantID, streamUUID)
+		if err != nil {
+			return err
+		}
+		if ok {
 			startedAt = existingStartedAt
 		}
 		stateBatch, err := periscopeingestdb.PrepareStreamLifecycleState(ctx, h.clickhouse)
@@ -1744,7 +1820,7 @@ func (h *AnalyticsHandler) processPushRewrite(ctx context.Context, event kafka.A
 		}
 	}
 
-	if h.isDuplicateEvent(ctx, "stream_event_log", parseUUID(event.EventID), event.EventType) {
+	if h.isDuplicateEvent(ctx, "stream_event_log", event) {
 		return nil
 	}
 
@@ -2225,7 +2301,7 @@ func (h *AnalyticsHandler) processNodeLifecycle(ctx context.Context, event kafka
 	nodeLifecycle := tp.NodeLifecycleUpdate
 
 	if h.metrics != nil {
-		h.metrics.ClickHouseInserts.WithLabelValues("live_nodes", "attempt").Inc()
+		h.metrics.HandlerWrites.WithLabelValues("live_nodes", "attempt").Inc()
 	}
 	env := analyticsEnvelopeColumns(event)
 
@@ -2234,7 +2310,7 @@ func (h *AnalyticsHandler) processNodeLifecycle(ctx context.Context, event kafka
 	if err != nil {
 		h.logger.Errorf("Failed to prepare live_nodes batch: %v", err)
 		if h.metrics != nil {
-			h.metrics.ClickHouseInserts.WithLabelValues("live_nodes", "error").Inc()
+			h.metrics.HandlerWrites.WithLabelValues("live_nodes", "error").Inc()
 		}
 		return err
 	}
@@ -2274,7 +2350,7 @@ func (h *AnalyticsHandler) processNodeLifecycle(ctx context.Context, event kafka
 	}); appendErr != nil {
 		h.logger.Errorf("Failed to append to live_nodes batch: %v", appendErr)
 		if h.metrics != nil {
-			h.metrics.ClickHouseInserts.WithLabelValues("live_nodes", "error").Inc()
+			h.metrics.HandlerWrites.WithLabelValues("live_nodes", "error").Inc()
 		}
 		return appendErr
 	}
@@ -2282,14 +2358,14 @@ func (h *AnalyticsHandler) processNodeLifecycle(ctx context.Context, event kafka
 	if sendErr := stateBatch.Send(); sendErr != nil {
 		h.logger.Errorf("Failed to send live_nodes batch: %v", sendErr)
 		if h.metrics != nil {
-			h.metrics.ClickHouseInserts.WithLabelValues("live_nodes", "error").Inc()
+			h.metrics.HandlerWrites.WithLabelValues("live_nodes", "error").Inc()
 		}
 		return sendErr
 	}
 
 	if h.metrics != nil {
-		h.metrics.ClickHouseInserts.WithLabelValues("live_nodes", "success").Inc()
-		h.metrics.ClickHouseInserts.WithLabelValues("node_metrics", "attempt").Inc()
+		h.metrics.HandlerWrites.WithLabelValues("live_nodes", "success").Inc()
+		h.metrics.HandlerWrites.WithLabelValues("node_metrics", "attempt").Inc()
 	}
 
 	// 2. Write to node_metrics (historical log - MergeTree)
@@ -2297,7 +2373,7 @@ func (h *AnalyticsHandler) processNodeLifecycle(ctx context.Context, event kafka
 	if err != nil {
 		h.logger.Errorf("Failed to prepare node_metrics batch: %v", err)
 		if h.metrics != nil {
-			h.metrics.ClickHouseInserts.WithLabelValues("node_metrics", "error").Inc()
+			h.metrics.HandlerWrites.WithLabelValues("node_metrics", "error").Inc()
 		}
 		return err
 	}
@@ -2318,7 +2394,7 @@ func (h *AnalyticsHandler) processNodeLifecycle(ctx context.Context, event kafka
 	}); err != nil {
 		h.logger.Errorf("Failed to append to node_metrics batch: %v", err)
 		if h.metrics != nil {
-			h.metrics.ClickHouseInserts.WithLabelValues("node_metrics", "error").Inc()
+			h.metrics.HandlerWrites.WithLabelValues("node_metrics", "error").Inc()
 		}
 		return err
 	}
@@ -2326,13 +2402,13 @@ func (h *AnalyticsHandler) processNodeLifecycle(ctx context.Context, event kafka
 	if err := metricsBatch.Send(); err != nil {
 		h.logger.Errorf("Failed to send node_metrics batch: %v", err)
 		if h.metrics != nil {
-			h.metrics.ClickHouseInserts.WithLabelValues("node_metrics", "error").Inc()
+			h.metrics.HandlerWrites.WithLabelValues("node_metrics", "error").Inc()
 		}
 		return err
 	}
 
 	if h.metrics != nil {
-		h.metrics.ClickHouseInserts.WithLabelValues("node_metrics", "success").Inc()
+		h.metrics.HandlerWrites.WithLabelValues("node_metrics", "success").Inc()
 	}
 
 	return nil
@@ -2428,7 +2504,7 @@ func (h *AnalyticsHandler) processStreamBuffer(ctx context.Context, event kafka.
 	if err := h.requireContentIdentity(ctx, event, mistTriggerStreamID(&mt), artifactHash); err != nil {
 		return err
 	}
-	if h.isDuplicateEvent(ctx, "stream_event_log", parseUUID(event.EventID), event.EventType) {
+	if h.isDuplicateEvent(ctx, "stream_event_log", event) {
 		return nil
 	}
 	payload, ok := mt.GetTriggerPayload().(*ipcpb.MistTrigger_StreamBuffer)
@@ -2587,7 +2663,8 @@ func (h *AnalyticsHandler) processStreamBuffer(ctx context.Context, event kafka.
 		}
 	}
 
-	// ALSO write to stream_health_metrics table for detailed health tracking and rebuffering_events MV
+	// Health samples also carry the buffer states Periscope Query derives
+	// rebuffering transitions from.
 	healthBatch, err := periscopeingestdb.PrepareStreamBufferHealth(ctx, h.clickhouse)
 	if err != nil {
 		h.logger.Errorf("Failed to prepare stream_health_metrics batch: %v", err)
@@ -2663,7 +2740,11 @@ func (h *AnalyticsHandler) processStreamEnd(ctx context.Context, event kafka.Ana
 
 	streamUUID := parseUUID(streamID)
 	var startedAt *time.Time
-	if existingStartedAt, ok := h.lookupCurrentStreamStartedAt(ctx, event.TenantID, streamUUID); ok {
+	existingStartedAt, ok, err := h.lookupCurrentStreamStartedAt(ctx, event.TenantID, streamUUID)
+	if err != nil {
+		return err
+	}
+	if ok {
 		startedAt = &existingStartedAt
 	}
 
@@ -2683,7 +2764,7 @@ func (h *AnalyticsHandler) processStreamEnd(ctx context.Context, event kafka.Ana
 		return sendErr
 	}
 
-	if h.isDuplicateEvent(ctx, "stream_event_log", parseUUID(event.EventID), event.EventType) {
+	if h.isDuplicateEvent(ctx, "stream_event_log", event) {
 		return nil
 	}
 
@@ -2758,8 +2839,8 @@ func (h *AnalyticsHandler) processTrackList(ctx context.Context, event kafka.Ana
 		return err
 	}
 	eventID := parseUUID(event.EventID)
-	if h.isDuplicateEvent(ctx, "track_list_events", eventID, event.EventType) ||
-		h.isDuplicateEvent(ctx, "stream_event_log", eventID, event.EventType) {
+	if h.isDuplicateEvent(ctx, "track_list_events", event) ||
+		h.isDuplicateEvent(ctx, "stream_event_log", event) {
 		return nil
 	}
 	tp, ok := mt.GetTriggerPayload().(*ipcpb.MistTrigger_TrackList)
@@ -2887,7 +2968,7 @@ func (h *AnalyticsHandler) processClipLifecycle(ctx context.Context, event kafka
 	}
 
 	if h.metrics != nil {
-		h.metrics.ClickHouseInserts.WithLabelValues("live_artifacts", "attempt").Inc()
+		h.metrics.HandlerWrites.WithLabelValues("live_artifacts", "attempt").Inc()
 	}
 
 	// 1. Write to live_artifacts (current state - ReplacingMergeTree)
@@ -2895,7 +2976,7 @@ func (h *AnalyticsHandler) processClipLifecycle(ctx context.Context, event kafka
 	if err != nil {
 		h.logger.Errorf("Failed to prepare live_artifacts batch: %v", err)
 		if h.metrics != nil {
-			h.metrics.ClickHouseInserts.WithLabelValues("live_artifacts", "error").Inc()
+			h.metrics.HandlerWrites.WithLabelValues("live_artifacts", "error").Inc()
 		}
 		return err
 	}
@@ -2918,7 +2999,7 @@ func (h *AnalyticsHandler) processClipLifecycle(ctx context.Context, event kafka
 	}); appendErr != nil {
 		h.logger.Errorf("Failed to append to live_artifacts batch: %v", appendErr)
 		if h.metrics != nil {
-			h.metrics.ClickHouseInserts.WithLabelValues("live_artifacts", "error").Inc()
+			h.metrics.HandlerWrites.WithLabelValues("live_artifacts", "error").Inc()
 		}
 		return appendErr
 	}
@@ -2926,14 +3007,14 @@ func (h *AnalyticsHandler) processClipLifecycle(ctx context.Context, event kafka
 	if sendErr := stateBatch.Send(); sendErr != nil {
 		h.logger.Errorf("Failed to send live_artifacts batch: %v", sendErr)
 		if h.metrics != nil {
-			h.metrics.ClickHouseInserts.WithLabelValues("live_artifacts", "error").Inc()
+			h.metrics.HandlerWrites.WithLabelValues("live_artifacts", "error").Inc()
 		}
 		return sendErr
 	}
 
 	if h.metrics != nil {
-		h.metrics.ClickHouseInserts.WithLabelValues("live_artifacts", "success").Inc()
-		h.metrics.ClickHouseInserts.WithLabelValues("clip_events", "attempt").Inc()
+		h.metrics.HandlerWrites.WithLabelValues("live_artifacts", "success").Inc()
+		h.metrics.HandlerWrites.WithLabelValues("clip_events", "attempt").Inc()
 	}
 
 	// Processing speed telemetry (STAGE_DONE enrichment from Foghorn)
@@ -2957,7 +3038,7 @@ func (h *AnalyticsHandler) processClipLifecycle(ctx context.Context, event kafka
 	batch, err := periscopeingestdb.PrepareClipArtifactEvent(ctx, h.clickhouse)
 	if err != nil {
 		if h.metrics != nil {
-			h.metrics.ClickHouseInserts.WithLabelValues("clip_events", "error").Inc()
+			h.metrics.HandlerWrites.WithLabelValues("clip_events", "error").Inc()
 		}
 		return err
 	}
@@ -2977,20 +3058,20 @@ func (h *AnalyticsHandler) processClipLifecycle(ctx context.Context, event kafka
 		Percent: optionalUint32(uint32(cl.GetProgressPercent())), ArtifactSpeedFields: speed,
 	}); err != nil {
 		if h.metrics != nil {
-			h.metrics.ClickHouseInserts.WithLabelValues("clip_events", "error").Inc()
+			h.metrics.HandlerWrites.WithLabelValues("clip_events", "error").Inc()
 		}
 		return err
 	}
 
 	if err := batch.Send(); err != nil {
 		if h.metrics != nil {
-			h.metrics.ClickHouseInserts.WithLabelValues("clip_events", "error").Inc()
+			h.metrics.HandlerWrites.WithLabelValues("clip_events", "error").Inc()
 		}
 		return err
 	}
 
 	if h.metrics != nil {
-		h.metrics.ClickHouseInserts.WithLabelValues("clip_events", "success").Inc()
+		h.metrics.HandlerWrites.WithLabelValues("clip_events", "success").Inc()
 	}
 
 	return nil
@@ -3040,7 +3121,7 @@ func (h *AnalyticsHandler) processDVRLifecycle(ctx context.Context, event kafka.
 	}
 
 	if h.metrics != nil {
-		h.metrics.ClickHouseInserts.WithLabelValues("live_artifacts", "attempt").Inc()
+		h.metrics.HandlerWrites.WithLabelValues("live_artifacts", "attempt").Inc()
 	}
 
 	// 1. Write to live_artifacts (current state - ReplacingMergeTree)
@@ -3048,7 +3129,7 @@ func (h *AnalyticsHandler) processDVRLifecycle(ctx context.Context, event kafka.
 	if err != nil {
 		h.logger.Errorf("Failed to prepare live_artifacts batch: %v", err)
 		if h.metrics != nil {
-			h.metrics.ClickHouseInserts.WithLabelValues("live_artifacts", "error").Inc()
+			h.metrics.HandlerWrites.WithLabelValues("live_artifacts", "error").Inc()
 		}
 		return err
 	}
@@ -3068,7 +3149,7 @@ func (h *AnalyticsHandler) processDVRLifecycle(ctx context.Context, event kafka.
 	}); appendErr != nil {
 		h.logger.Errorf("Failed to append to live_artifacts batch: %v", appendErr)
 		if h.metrics != nil {
-			h.metrics.ClickHouseInserts.WithLabelValues("live_artifacts", "error").Inc()
+			h.metrics.HandlerWrites.WithLabelValues("live_artifacts", "error").Inc()
 		}
 		return appendErr
 	}
@@ -3076,21 +3157,21 @@ func (h *AnalyticsHandler) processDVRLifecycle(ctx context.Context, event kafka.
 	if sendErr := stateBatch.Send(); sendErr != nil {
 		h.logger.Errorf("Failed to send live_artifacts batch: %v", sendErr)
 		if h.metrics != nil {
-			h.metrics.ClickHouseInserts.WithLabelValues("live_artifacts", "error").Inc()
+			h.metrics.HandlerWrites.WithLabelValues("live_artifacts", "error").Inc()
 		}
 		return sendErr
 	}
 
 	if h.metrics != nil {
-		h.metrics.ClickHouseInserts.WithLabelValues("live_artifacts", "success").Inc()
-		h.metrics.ClickHouseInserts.WithLabelValues("clip_events", "attempt").Inc()
+		h.metrics.HandlerWrites.WithLabelValues("live_artifacts", "success").Inc()
+		h.metrics.HandlerWrites.WithLabelValues("clip_events", "attempt").Inc()
 	}
 
 	// 2. Write to clip_events (historical log - MergeTree)
 	batch, err := periscopeingestdb.PrepareDVRArtifactEvent(ctx, h.clickhouse)
 	if err != nil {
 		if h.metrics != nil {
-			h.metrics.ClickHouseInserts.WithLabelValues("clip_events", "error").Inc()
+			h.metrics.HandlerWrites.WithLabelValues("clip_events", "error").Inc()
 		}
 		return err
 	}
@@ -3111,20 +3192,20 @@ func (h *AnalyticsHandler) processDVRLifecycle(ctx context.Context, event kafka.
 		StartUnix: optionalInt64(dvrData.GetStartedAt()), StopUnix: optionalInt64(dvrData.GetEndedAt()),
 	}); err != nil {
 		if h.metrics != nil {
-			h.metrics.ClickHouseInserts.WithLabelValues("clip_events", "error").Inc()
+			h.metrics.HandlerWrites.WithLabelValues("clip_events", "error").Inc()
 		}
 		return err
 	}
 
 	if err := batch.Send(); err != nil {
 		if h.metrics != nil {
-			h.metrics.ClickHouseInserts.WithLabelValues("clip_events", "error").Inc()
+			h.metrics.HandlerWrites.WithLabelValues("clip_events", "error").Inc()
 		}
 		return err
 	}
 
 	if h.metrics != nil {
-		h.metrics.ClickHouseInserts.WithLabelValues("clip_events", "success").Inc()
+		h.metrics.HandlerWrites.WithLabelValues("clip_events", "success").Inc()
 	}
 
 	return nil
@@ -3164,7 +3245,7 @@ func (h *AnalyticsHandler) processVodLifecycle(ctx context.Context, event kafka.
 	}
 
 	if h.metrics != nil {
-		h.metrics.ClickHouseInserts.WithLabelValues("live_artifacts", "attempt").Inc()
+		h.metrics.HandlerWrites.WithLabelValues("live_artifacts", "attempt").Inc()
 	}
 
 	// 1. Write to live_artifacts (current state - ReplacingMergeTree)
@@ -3173,7 +3254,7 @@ func (h *AnalyticsHandler) processVodLifecycle(ctx context.Context, event kafka.
 	if err != nil {
 		h.logger.Errorf("Failed to prepare live_artifacts batch for VOD: %v", err)
 		if h.metrics != nil {
-			h.metrics.ClickHouseInserts.WithLabelValues("live_artifacts", "error").Inc()
+			h.metrics.HandlerWrites.WithLabelValues("live_artifacts", "error").Inc()
 		}
 		return err
 	}
@@ -3197,7 +3278,7 @@ func (h *AnalyticsHandler) processVodLifecycle(ctx context.Context, event kafka.
 	}}); appendErr != nil {
 		h.logger.Errorf("Failed to append to live_artifacts batch for VOD: %v", appendErr)
 		if h.metrics != nil {
-			h.metrics.ClickHouseInserts.WithLabelValues("live_artifacts", "error").Inc()
+			h.metrics.HandlerWrites.WithLabelValues("live_artifacts", "error").Inc()
 		}
 		return appendErr
 	}
@@ -3205,14 +3286,14 @@ func (h *AnalyticsHandler) processVodLifecycle(ctx context.Context, event kafka.
 	if sendErr := stateBatch.Send(); sendErr != nil {
 		h.logger.Errorf("Failed to send live_artifacts batch for VOD: %v", sendErr)
 		if h.metrics != nil {
-			h.metrics.ClickHouseInserts.WithLabelValues("live_artifacts", "error").Inc()
+			h.metrics.HandlerWrites.WithLabelValues("live_artifacts", "error").Inc()
 		}
 		return sendErr
 	}
 
 	if h.metrics != nil {
-		h.metrics.ClickHouseInserts.WithLabelValues("live_artifacts", "success").Inc()
-		h.metrics.ClickHouseInserts.WithLabelValues("clip_events", "attempt").Inc()
+		h.metrics.HandlerWrites.WithLabelValues("live_artifacts", "success").Inc()
+		h.metrics.HandlerWrites.WithLabelValues("clip_events", "attempt").Inc()
 	}
 
 	// Processing speed telemetry (STATUS_COMPLETED enrichment from Foghorn)
@@ -3237,7 +3318,7 @@ func (h *AnalyticsHandler) processVodLifecycle(ctx context.Context, event kafka.
 	batch, err := periscopeingestdb.PrepareVODArtifactEvent(ctx, h.clickhouse)
 	if err != nil {
 		if h.metrics != nil {
-			h.metrics.ClickHouseInserts.WithLabelValues("clip_events", "error").Inc()
+			h.metrics.HandlerWrites.WithLabelValues("clip_events", "error").Inc()
 		}
 		return err
 	}
@@ -3256,20 +3337,20 @@ func (h *AnalyticsHandler) processVodLifecycle(ctx context.Context, event kafka.
 		ArtifactSpeedFields: vodSpeed,
 	}); err != nil {
 		if h.metrics != nil {
-			h.metrics.ClickHouseInserts.WithLabelValues("clip_events", "error").Inc()
+			h.metrics.HandlerWrites.WithLabelValues("clip_events", "error").Inc()
 		}
 		return err
 	}
 
 	if err := batch.Send(); err != nil {
 		if h.metrics != nil {
-			h.metrics.ClickHouseInserts.WithLabelValues("clip_events", "error").Inc()
+			h.metrics.HandlerWrites.WithLabelValues("clip_events", "error").Inc()
 		}
 		return err
 	}
 
 	if h.metrics != nil {
-		h.metrics.ClickHouseInserts.WithLabelValues("clip_events", "success").Inc()
+		h.metrics.HandlerWrites.WithLabelValues("clip_events", "success").Inc()
 	}
 
 	h.logger.WithFields(logging.Fields{
@@ -3491,7 +3572,7 @@ func (h *AnalyticsHandler) processProcessBilling(ctx context.Context, event kafk
 	tenantID := event.TenantID
 
 	if h.metrics != nil {
-		h.metrics.ClickHouseInserts.WithLabelValues("process_billing", "attempt").Inc()
+		h.metrics.HandlerWrites.WithLabelValues("process_billing", "attempt").Inc()
 	}
 
 	// Write diagnostic processing telemetry. cluster_id flows from the
@@ -3517,7 +3598,7 @@ func (h *AnalyticsHandler) processProcessBilling(ctx context.Context, event kafk
 	if err != nil {
 		h.logger.Errorf("Failed to prepare process_billing batch: %v", err)
 		if h.metrics != nil {
-			h.metrics.ClickHouseInserts.WithLabelValues("process_billing", "error").Inc()
+			h.metrics.HandlerWrites.WithLabelValues("process_billing", "error").Inc()
 		}
 		return err
 	}
@@ -3557,7 +3638,7 @@ func (h *AnalyticsHandler) processProcessBilling(ctx context.Context, event kafk
 	}); err != nil {
 		h.logger.Errorf("Failed to append to process_billing batch: %v", err)
 		if h.metrics != nil {
-			h.metrics.ClickHouseInserts.WithLabelValues("process_billing", "error").Inc()
+			h.metrics.HandlerWrites.WithLabelValues("process_billing", "error").Inc()
 		}
 		return err
 	}
@@ -3565,13 +3646,13 @@ func (h *AnalyticsHandler) processProcessBilling(ctx context.Context, event kafk
 	if err := batch.Send(); err != nil {
 		h.logger.Errorf("Failed to send process_billing batch: %v", err)
 		if h.metrics != nil {
-			h.metrics.ClickHouseInserts.WithLabelValues("process_billing", "error").Inc()
+			h.metrics.HandlerWrites.WithLabelValues("process_billing", "error").Inc()
 		}
 		return err
 	}
 
 	if h.metrics != nil {
-		h.metrics.ClickHouseInserts.WithLabelValues("process_billing", "success").Inc()
+		h.metrics.HandlerWrites.WithLabelValues("process_billing", "success").Inc()
 	}
 
 	h.logger.WithFields(logging.Fields{
@@ -3604,7 +3685,7 @@ func (h *AnalyticsHandler) processAPIRequestBatch(ctx context.Context, event kaf
 	batch := tp.ApiRequestBatch
 
 	if h.metrics != nil {
-		h.metrics.ClickHouseInserts.WithLabelValues("api_request_batch", "attempt").Inc()
+		h.metrics.HandlerWrites.WithLabelValues("api_request_batch", "attempt").Inc()
 	}
 	env := analyticsEnvelopeColumns(event)
 
@@ -3614,7 +3695,7 @@ func (h *AnalyticsHandler) processAPIRequestBatch(ctx context.Context, event kaf
 	if err != nil {
 		h.logger.Errorf("Failed to prepare api_request_batch batch: %v", err)
 		if h.metrics != nil {
-			h.metrics.ClickHouseInserts.WithLabelValues("api_request_batch", "error").Inc()
+			h.metrics.HandlerWrites.WithLabelValues("api_request_batch", "error").Inc()
 		}
 		return err
 	}
@@ -3675,13 +3756,13 @@ func (h *AnalyticsHandler) processAPIRequestBatch(ctx context.Context, event kaf
 		// Returning an error would cause the Kafka consumer to retry forever and stall the partition.
 		if appendErrors > 0 {
 			if h.metrics != nil {
-				h.metrics.ClickHouseInserts.WithLabelValues("api_request_batch", "error").Inc()
+				h.metrics.HandlerWrites.WithLabelValues("api_request_batch", "error").Inc()
 			}
 			return fmt.Errorf("api_request_batch append failures: %d", appendErrors)
 		}
 
 		if h.metrics != nil {
-			h.metrics.ClickHouseInserts.WithLabelValues("api_request_batch", "skip").Inc()
+			h.metrics.HandlerWrites.WithLabelValues("api_request_batch", "skip").Inc()
 		}
 		h.logger.WithFields(logging.Fields{
 			"source_node": sourceNode,
@@ -3691,7 +3772,7 @@ func (h *AnalyticsHandler) processAPIRequestBatch(ctx context.Context, event kaf
 
 	if appendErrors > 0 {
 		if h.metrics != nil {
-			h.metrics.ClickHouseInserts.WithLabelValues("api_request_batch", "error").Inc()
+			h.metrics.HandlerWrites.WithLabelValues("api_request_batch", "error").Inc()
 		}
 		return fmt.Errorf("api_request_batch append failures: %d", appendErrors)
 	}
@@ -3699,13 +3780,13 @@ func (h *AnalyticsHandler) processAPIRequestBatch(ctx context.Context, event kaf
 	if err := chBatch.Send(); err != nil {
 		h.logger.Errorf("Failed to send api_request_batch batch: %v", err)
 		if h.metrics != nil {
-			h.metrics.ClickHouseInserts.WithLabelValues("api_request_batch", "error").Inc()
+			h.metrics.HandlerWrites.WithLabelValues("api_request_batch", "error").Inc()
 		}
 		return err
 	}
 
 	if h.metrics != nil {
-		h.metrics.ClickHouseInserts.WithLabelValues("api_request_batch", "success").Inc()
+		h.metrics.HandlerWrites.WithLabelValues("api_request_batch", "success").Inc()
 	}
 
 	h.logger.WithFields(logging.Fields{
@@ -3731,7 +3812,7 @@ func validNodeCopyRole(role string) bool {
 // enum name.
 func (h *AnalyticsHandler) processArtifactNodeCopy(ctx context.Context, event kafka.ServiceEvent) error {
 	if h.metrics != nil {
-		h.metrics.ClickHouseInserts.WithLabelValues("artifact_node_copy", "attempt").Inc()
+		h.metrics.HandlerWrites.WithLabelValues("artifact_node_copy", "attempt").Inc()
 	}
 
 	tenantID := parseUUID(event.TenantID)
@@ -3792,7 +3873,7 @@ func (h *AnalyticsHandler) processArtifactNodeCopy(ctx context.Context, event ka
 	logBatch, err := periscopeingestdb.PrepareArtifactNodeCopyEvent(ctx, h.clickhouse)
 	if err != nil {
 		if h.metrics != nil {
-			h.metrics.ClickHouseInserts.WithLabelValues("artifact_node_copy", "error").Inc()
+			h.metrics.HandlerWrites.WithLabelValues("artifact_node_copy", "error").Inc()
 		}
 		return err
 	}
@@ -3824,7 +3905,7 @@ func (h *AnalyticsHandler) processArtifactNodeCopy(ctx context.Context, event ka
 	}
 
 	if h.metrics != nil {
-		h.metrics.ClickHouseInserts.WithLabelValues("artifact_node_copy", "success").Inc()
+		h.metrics.HandlerWrites.WithLabelValues("artifact_node_copy", "success").Inc()
 	}
 	return nil
 }
@@ -3837,7 +3918,7 @@ func (h *AnalyticsHandler) processServiceAPIRequestBatch(ctx context.Context, ev
 	}
 
 	if h.metrics != nil {
-		h.metrics.ClickHouseInserts.WithLabelValues("api_request_batch", "attempt").Inc()
+		h.metrics.HandlerWrites.WithLabelValues("api_request_batch", "attempt").Inc()
 	}
 
 	timestamp := event.Timestamp
@@ -3861,7 +3942,7 @@ func (h *AnalyticsHandler) processServiceAPIRequestBatch(ctx context.Context, ev
 	if err != nil {
 		h.logger.Errorf("Failed to prepare api_request_batch batch: %v", err)
 		if h.metrics != nil {
-			h.metrics.ClickHouseInserts.WithLabelValues("api_request_batch", "error").Inc()
+			h.metrics.HandlerWrites.WithLabelValues("api_request_batch", "error").Inc()
 		}
 		return err
 	}
@@ -3926,13 +4007,13 @@ func (h *AnalyticsHandler) processServiceAPIRequestBatch(ctx context.Context, ev
 		// Returning an error would cause the Kafka consumer to retry forever and stall the partition.
 		if appendErrors > 0 {
 			if h.metrics != nil {
-				h.metrics.ClickHouseInserts.WithLabelValues("api_request_batch", "error").Inc()
+				h.metrics.HandlerWrites.WithLabelValues("api_request_batch", "error").Inc()
 			}
 			return fmt.Errorf("api_request_batch append failures: %d", appendErrors)
 		}
 
 		if h.metrics != nil {
-			h.metrics.ClickHouseInserts.WithLabelValues("api_request_batch", "skip").Inc()
+			h.metrics.HandlerWrites.WithLabelValues("api_request_batch", "skip").Inc()
 		}
 		h.logger.WithFields(logging.Fields{
 			"source_node": sourceNode,
@@ -3942,7 +4023,7 @@ func (h *AnalyticsHandler) processServiceAPIRequestBatch(ctx context.Context, ev
 
 	if appendErrors > 0 {
 		if h.metrics != nil {
-			h.metrics.ClickHouseInserts.WithLabelValues("api_request_batch", "error").Inc()
+			h.metrics.HandlerWrites.WithLabelValues("api_request_batch", "error").Inc()
 		}
 		return fmt.Errorf("api_request_batch append failures: %d", appendErrors)
 	}
@@ -3950,13 +4031,13 @@ func (h *AnalyticsHandler) processServiceAPIRequestBatch(ctx context.Context, ev
 	if err := chBatch.Send(); err != nil {
 		h.logger.Errorf("Failed to send api_request_batch batch: %v", err)
 		if h.metrics != nil {
-			h.metrics.ClickHouseInserts.WithLabelValues("api_request_batch", "error").Inc()
+			h.metrics.HandlerWrites.WithLabelValues("api_request_batch", "error").Inc()
 		}
 		return err
 	}
 
 	if h.metrics != nil {
-		h.metrics.ClickHouseInserts.WithLabelValues("api_request_batch", "success").Inc()
+		h.metrics.HandlerWrites.WithLabelValues("api_request_batch", "success").Inc()
 	}
 
 	h.logger.WithFields(logging.Fields{
@@ -4010,7 +4091,7 @@ func (s *apiRequestBatchAuditSummary) add(aggMap map[string]interface{}) {
 
 func (h *AnalyticsHandler) processServiceAPIRequestBatchAudit(ctx context.Context, event kafka.ServiceEvent, aggregates []interface{}, sourceNode string, batchTimestamp time.Time) error {
 	if h.metrics != nil {
-		h.metrics.ClickHouseInserts.WithLabelValues("api_events", "attempt").Inc()
+		h.metrics.HandlerWrites.WithLabelValues("api_events", "attempt").Inc()
 	}
 
 	summaries := map[uuid.UUID]*apiRequestBatchAuditSummary{}
@@ -4038,7 +4119,7 @@ func (h *AnalyticsHandler) processServiceAPIRequestBatchAudit(ctx context.Contex
 	chBatch, err := periscopeingestdb.PrepareAPIEvent(ctx, h.clickhouse)
 	if err != nil {
 		if h.metrics != nil {
-			h.metrics.ClickHouseInserts.WithLabelValues("api_events", "error").Inc()
+			h.metrics.HandlerWrites.WithLabelValues("api_events", "error").Inc()
 		}
 		return err
 	}
@@ -4048,7 +4129,7 @@ func (h *AnalyticsHandler) processServiceAPIRequestBatchAudit(ctx context.Contex
 		detailsJSON, err := json.Marshal(summary)
 		if err != nil {
 			if h.metrics != nil {
-				h.metrics.ClickHouseInserts.WithLabelValues("api_events", "error").Inc()
+				h.metrics.HandlerWrites.WithLabelValues("api_events", "error").Inc()
 			}
 			return fmt.Errorf("failed to marshal api_request_batch audit details: %w", err)
 		}
@@ -4061,7 +4142,7 @@ func (h *AnalyticsHandler) processServiceAPIRequestBatchAudit(ctx context.Contex
 			StreamOriginClusterID: env.streamOriginClusterID, SchemaVersion: env.schemaVersion,
 		}); err != nil {
 			if h.metrics != nil {
-				h.metrics.ClickHouseInserts.WithLabelValues("api_events", "error").Inc()
+				h.metrics.HandlerWrites.WithLabelValues("api_events", "error").Inc()
 			}
 			return err
 		}
@@ -4069,13 +4150,13 @@ func (h *AnalyticsHandler) processServiceAPIRequestBatchAudit(ctx context.Contex
 
 	if err := chBatch.Send(); err != nil {
 		if h.metrics != nil {
-			h.metrics.ClickHouseInserts.WithLabelValues("api_events", "error").Inc()
+			h.metrics.HandlerWrites.WithLabelValues("api_events", "error").Inc()
 		}
 		return err
 	}
 
 	if h.metrics != nil {
-		h.metrics.ClickHouseInserts.WithLabelValues("api_events", "success").Inc()
+		h.metrics.HandlerWrites.WithLabelValues("api_events", "success").Inc()
 	}
 
 	return nil
@@ -4095,7 +4176,7 @@ func (h *AnalyticsHandler) processTenantCreated(ctx context.Context, event kafka
 		return nil
 	}
 	if h.metrics != nil {
-		h.metrics.ClickHouseInserts.WithLabelValues("tenant_acquisition_events", "attempt").Inc()
+		h.metrics.HandlerWrites.WithLabelValues("tenant_acquisition_events", "attempt").Inc()
 	}
 	eventDataJSON, err := json.Marshal(event.Data)
 	if err != nil {
@@ -4105,7 +4186,7 @@ func (h *AnalyticsHandler) processTenantCreated(ctx context.Context, event kafka
 	chBatch, err := periscopeingestdb.PrepareTenantAcquisitionEvent(ctx, h.clickhouse)
 	if err != nil {
 		if h.metrics != nil {
-			h.metrics.ClickHouseInserts.WithLabelValues("tenant_acquisition_events", "error").Inc()
+			h.metrics.HandlerWrites.WithLabelValues("tenant_acquisition_events", "error").Inc()
 		}
 		return err
 	}
@@ -4121,18 +4202,18 @@ func (h *AnalyticsHandler) processTenantCreated(ctx context.Context, event kafka
 		StreamOriginRegion: env.streamOriginRegion, StreamOriginClusterID: env.streamOriginClusterID, SchemaVersion: env.schemaVersion,
 	}); err != nil {
 		if h.metrics != nil {
-			h.metrics.ClickHouseInserts.WithLabelValues("tenant_acquisition_events", "error").Inc()
+			h.metrics.HandlerWrites.WithLabelValues("tenant_acquisition_events", "error").Inc()
 		}
 		return err
 	}
 	if err := chBatch.Send(); err != nil {
 		if h.metrics != nil {
-			h.metrics.ClickHouseInserts.WithLabelValues("tenant_acquisition_events", "error").Inc()
+			h.metrics.HandlerWrites.WithLabelValues("tenant_acquisition_events", "error").Inc()
 		}
 		return err
 	}
 	if h.metrics != nil {
-		h.metrics.ClickHouseInserts.WithLabelValues("tenant_acquisition_events", "success").Inc()
+		h.metrics.HandlerWrites.WithLabelValues("tenant_acquisition_events", "success").Inc()
 	}
 	return nil
 }
@@ -4172,7 +4253,7 @@ func (h *AnalyticsHandler) processServiceEventAudit(ctx context.Context, event k
 	data := sanitizeServiceEventData(event)
 
 	if h.metrics != nil {
-		h.metrics.ClickHouseInserts.WithLabelValues("api_events", "attempt").Inc()
+		h.metrics.HandlerWrites.WithLabelValues("api_events", "attempt").Inc()
 	}
 
 	detailsJSON, err := json.Marshal(data)
@@ -4184,7 +4265,7 @@ func (h *AnalyticsHandler) processServiceEventAudit(ctx context.Context, event k
 	chBatch, err := periscopeingestdb.PrepareAPIEvent(ctx, h.clickhouse)
 	if err != nil {
 		if h.metrics != nil {
-			h.metrics.ClickHouseInserts.WithLabelValues("api_events", "error").Inc()
+			h.metrics.HandlerWrites.WithLabelValues("api_events", "error").Inc()
 		}
 		return err
 	}
@@ -4199,20 +4280,20 @@ func (h *AnalyticsHandler) processServiceEventAudit(ctx context.Context, event k
 		ActorAuthType: event.ActorAuthType, ActorTokenHash: event.ActorTokenHash,
 	}); err != nil {
 		if h.metrics != nil {
-			h.metrics.ClickHouseInserts.WithLabelValues("api_events", "error").Inc()
+			h.metrics.HandlerWrites.WithLabelValues("api_events", "error").Inc()
 		}
 		return err
 	}
 
 	if err := chBatch.Send(); err != nil {
 		if h.metrics != nil {
-			h.metrics.ClickHouseInserts.WithLabelValues("api_events", "error").Inc()
+			h.metrics.HandlerWrites.WithLabelValues("api_events", "error").Inc()
 		}
 		return err
 	}
 
 	if h.metrics != nil {
-		h.metrics.ClickHouseInserts.WithLabelValues("api_events", "success").Inc()
+		h.metrics.HandlerWrites.WithLabelValues("api_events", "success").Inc()
 	}
 
 	return nil

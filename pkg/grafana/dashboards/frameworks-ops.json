@@ -5296,14 +5296,14 @@
                 "uid": "victoriametrics"
               },
               "editorMode": "code",
-              "expr": "sum by (event_type) (rate(periscope_ingest_duplicate_events_total{region=~\"$region\", cluster=~\"$cluster\"}[$__rate_interval]))",
+              "expr": "sum by (table) (rate(periscope_ingest_duplicate_rows_total{region=~\"$region\", cluster=~\"$cluster\"}[$__rate_interval]))",
               "format": "time_series",
               "legendFormat": "__auto",
               "range": true,
               "refId": "A"
             }
           ],
-          "title": "Duplicate events",
+          "title": "Duplicate rows (redelivered records)",
           "transparent": false,
           "type": "timeseries"
         },

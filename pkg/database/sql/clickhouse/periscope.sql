@@ -102,7 +102,11 @@ CREATE TABLE IF NOT EXISTS stream_event_log (
     source_region LowCardinality(String) DEFAULT '',
     stream_origin_region LowCardinality(String) DEFAULT '',
     stream_origin_cluster_id LowCardinality(String) DEFAULT '',
-    schema_version UInt8 DEFAULT 0
+    schema_version UInt8 DEFAULT 0,
+    -- Derived from the Kafka record that wrote the row; Periscope Ingest drops
+    -- a redelivered record's rows by it.
+    ingest_id UUID,
+    INDEX idx_ingest_id ingest_id TYPE bloom_filter(0.01) GRANULARITY 1
 ) ENGINE = ReplicatedMergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (tenant_id, stream_id, timestamp, event_id)
@@ -117,7 +121,13 @@ CREATE TABLE IF NOT EXISTS stream_viewer_5m (
     tenant_id UUID,
     stream_id UUID,
     max_viewers UInt32,
-    avg_viewers Float32
+    -- The view writes one row per insert block and bucket, so avg_viewers is
+    -- the block's average. viewers_sum / viewers_samples summed over a
+    -- bucket's rows is the bucket's average whatever the blocks were; rows
+    -- written before these columns read as one sample of avg_viewers.
+    avg_viewers Float32,
+    viewers_sum Float64 DEFAULT avg_viewers,
+    viewers_samples UInt64 DEFAULT 1
 ) ENGINE = ReplicatedMergeTree()
 PARTITION BY toYYYYMM(timestamp_5m)
 ORDER BY (timestamp_5m, tenant_id, stream_id)
@@ -129,7 +139,9 @@ SELECT
     tenant_id,
     stream_id,
     max(total_viewers) AS max_viewers,
-    avg(total_viewers) AS avg_viewers
+    avg(total_viewers) AS avg_viewers,
+    ifNull(sum(total_viewers), 0) AS viewers_sum,
+    count(total_viewers) AS viewers_samples
 FROM stream_event_log
 WHERE total_viewers IS NOT NULL AND artifact_hash = ''
 GROUP BY timestamp_5m, tenant_id, stream_id;
@@ -220,7 +232,10 @@ CREATE TABLE IF NOT EXISTS stream_health_samples (
     source_region LowCardinality(String) DEFAULT '',
     stream_origin_region LowCardinality(String) DEFAULT '',
     stream_origin_cluster_id LowCardinality(String) DEFAULT '',
-    schema_version UInt8 DEFAULT 0
+    schema_version UInt8 DEFAULT 0,
+    -- Kafka record identity; Periscope Ingest drops redelivered rows by it.
+    ingest_id UUID,
+    INDEX idx_ingest_id ingest_id TYPE bloom_filter(0.01) GRANULARITY 1
 ) ENGINE = ReplicatedMergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (tenant_id, stream_id, timestamp)
@@ -242,7 +257,22 @@ CREATE TABLE IF NOT EXISTS stream_health_5m (
     avg_frame_jitter_ms Nullable(Float32),
     max_frame_jitter_ms Nullable(Float32),
     buffer_dry_count UInt32,
-    quality_tier LowCardinality(String)
+    quality_tier LowCardinality(String),
+    -- The view writes one row per insert block and bucket, so the avg_*
+    -- columns are block averages and a bucket can have several rows. Readers
+    -- divide the summed *_sum by the summed *_samples of a bucket's rows,
+    -- which is the bucket's average whatever the blocks were, and take the
+    -- tier with the latest quality_tier_at. Rows written before these columns
+    -- read as one sample of their block average.
+    bitrate_sum Float64 DEFAULT avg_bitrate,
+    bitrate_samples UInt64 DEFAULT 1,
+    fps_sum Float64 DEFAULT avg_fps,
+    fps_samples UInt64 DEFAULT 1,
+    buffer_health_sum Float64 DEFAULT avg_buffer_health,
+    buffer_health_samples UInt64 DEFAULT 1,
+    frame_jitter_sum Float64 DEFAULT ifNull(avg_frame_jitter_ms, 0),
+    frame_jitter_samples UInt64 DEFAULT if(isNull(avg_frame_jitter_ms), 0, 1),
+    quality_tier_at DateTime DEFAULT timestamp_5m
 ) ENGINE = ReplicatedMergeTree()
 PARTITION BY toYYYYMM(timestamp_5m)
 ORDER BY (timestamp_5m, tenant_id, stream_id, node_id)
@@ -274,12 +304,26 @@ SELECT
                 assumeNotNull(height) >= 720, '720p',
                 assumeNotNull(height) >= 480, '480p', 'SD'),
         timestamp, height > 0
-    )) AS quality_tier
+    )) AS quality_tier,
+    ifNull(sum(bitrate), 0) AS bitrate_sum,
+    count(bitrate) AS bitrate_samples,
+    ifNull(sumIf(fps, fps > 0), 0) AS fps_sum,
+    countIf(fps > 0) AS fps_samples,
+    ifNull(sum(buffer_health), 0) AS buffer_health_sum,
+    count(buffer_health) AS buffer_health_samples,
+    ifNull(sum(frame_jitter_ms), 0) AS frame_jitter_sum,
+    count(frame_jitter_ms) AS frame_jitter_samples,
+    if(countIf(height > 0) = 0, toDateTime(0), maxIf(timestamp, height > 0)) AS quality_tier_at
 FROM stream_health_samples
 WHERE artifact_hash = ''
 GROUP BY timestamp_5m, tenant_id, stream_id, internal_name, node_id;
 
--- Rebuffering events derived from health samples
+-- Rebuffer starts and ends are buffer-state transitions between consecutive
+-- health samples of a stream. Periscope Query derives them from
+-- stream_health_samples in timestamp order when it reads them, and nothing
+-- reads rebuffering_events: its view sees one insert block at a time, so it
+-- misses every transition between samples of different inserts. The table and
+-- view stay because a post-floor migration modifies the view.
 CREATE TABLE IF NOT EXISTS rebuffering_events (
     timestamp DateTime,
     tenant_id UUID,
@@ -345,7 +389,10 @@ CREATE TABLE IF NOT EXISTS track_list_events (
     source_region LowCardinality(String) DEFAULT '',
     stream_origin_region LowCardinality(String) DEFAULT '',
     stream_origin_cluster_id LowCardinality(String) DEFAULT '',
-    schema_version UInt8 DEFAULT 0
+    schema_version UInt8 DEFAULT 0,
+    -- Kafka record identity; Periscope Ingest drops redelivered rows by it.
+    ingest_id UUID,
+    INDEX idx_ingest_id ingest_id TYPE bloom_filter(0.01) GRANULARITY 1
 ) ENGINE = ReplicatedMergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (tenant_id, stream_id, timestamp, event_id)
@@ -434,7 +481,10 @@ CREATE TABLE IF NOT EXISTS viewer_connection_events (
     stream_origin_region LowCardinality(String) DEFAULT '',
     stream_origin_cluster_id LowCardinality(String) DEFAULT '',
     schema_version UInt8 DEFAULT 0,
-    INDEX idx_viewer_client_session client_session_id TYPE bloom_filter(0.01) GRANULARITY 1
+    -- Kafka record identity; Periscope Ingest drops redelivered rows by it.
+    ingest_id UUID,
+    INDEX idx_viewer_client_session client_session_id TYPE bloom_filter(0.01) GRANULARITY 1,
+    INDEX idx_ingest_id ingest_id TYPE bloom_filter(0.01) GRANULARITY 1
 ) ENGINE = ReplicatedMergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (tenant_id, stream_id, timestamp, event_id)
@@ -542,7 +592,10 @@ CREATE TABLE IF NOT EXISTS client_qoe_samples (
     source_region LowCardinality(String) DEFAULT '',
     stream_origin_region LowCardinality(String) DEFAULT '',
     stream_origin_cluster_id LowCardinality(String) DEFAULT '',
-    schema_version UInt8 DEFAULT 0
+    schema_version UInt8 DEFAULT 0,
+    -- Kafka record identity; Periscope Ingest drops redelivered rows by it.
+    ingest_id UUID,
+    INDEX idx_ingest_id ingest_id TYPE bloom_filter(0.01) GRANULARITY 1
 ) ENGINE = ReplicatedMergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (tenant_id, stream_id, timestamp)
@@ -559,7 +612,21 @@ CREATE TABLE IF NOT EXISTS client_qoe_5m (
     avg_bw_in Float64,
     avg_bw_out Float64,
     avg_connection_time Float32,
-    pkt_loss_rate Nullable(Float32)
+    pkt_loss_rate Nullable(Float32),
+    -- The view writes one row per insert block and bucket, so the columns
+    -- above are block values and a bucket can have several rows. Readers
+    -- combine a bucket's rows from these: summed *_sum over summed
+    -- qoe_samples, summed packets for loss, and merged session states for
+    -- distinct sessions. rollup_version 0 marks rows written before them,
+    -- which read as one sample of their block values.
+    bw_in_sum Float64 DEFAULT avg_bw_in,
+    bw_out_sum Float64 DEFAULT avg_bw_out,
+    connection_time_sum Float64 DEFAULT avg_connection_time,
+    qoe_samples UInt64 DEFAULT 1,
+    packets_sent_sum UInt64 DEFAULT 0,
+    packets_lost_sum UInt64 DEFAULT 0,
+    sessions_state AggregateFunction(uniq, String),
+    rollup_version UInt8 DEFAULT 0
 ) ENGINE = ReplicatedMergeTree()
 PARTITION BY toYYYYMM(timestamp_5m)
 ORDER BY (timestamp_5m, tenant_id, stream_id, node_id)
@@ -577,7 +644,15 @@ SELECT
     avg(bandwidth_in) AS avg_bw_in,
     avg(bandwidth_out) AS avg_bw_out,
     avg(connection_time) AS avg_connection_time,
-    if(sum(packets_sent) > 0, sum(packets_lost) / sum(packets_sent), NULL) AS pkt_loss_rate
+    if(sum(packets_sent) > 0, sum(packets_lost) / sum(packets_sent), NULL) AS pkt_loss_rate,
+    sum(bandwidth_in) AS bw_in_sum,
+    sum(bandwidth_out) AS bw_out_sum,
+    sum(connection_time) AS connection_time_sum,
+    count() AS qoe_samples,
+    sum(packets_sent) AS packets_sent_sum,
+    sum(packets_lost) AS packets_lost_sum,
+    uniqState(session_id) AS sessions_state,
+    toUInt8(1) AS rollup_version
 FROM client_qoe_samples
 GROUP BY timestamp_5m, tenant_id, stream_id, artifact_hash, internal_name, node_id;
 
@@ -637,7 +712,10 @@ CREATE TABLE IF NOT EXISTS player_boot_samples (
     source_region LowCardinality(String) DEFAULT '',
     stream_origin_region LowCardinality(String) DEFAULT '',
     stream_origin_cluster_id LowCardinality(String) DEFAULT '',
-    schema_version UInt8 DEFAULT 0
+    schema_version UInt8 DEFAULT 0,
+    -- Kafka record identity; Periscope Ingest drops redelivered rows by it.
+    ingest_id UUID,
+    INDEX idx_ingest_id ingest_id TYPE bloom_filter(0.01) GRANULARITY 1
 ) ENGINE = ReplicatedMergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 -- stream_id is Nullable (null for VOD), so it cannot appear raw in the sorting
@@ -831,7 +909,10 @@ CREATE TABLE IF NOT EXISTS routing_decisions (
     stream_origin_region LowCardinality(String) DEFAULT '',
     stream_origin_cluster_id LowCardinality(String) DEFAULT '',
     schema_version UInt8 DEFAULT 0,
-    INDEX idx_routing_stream_tenant stream_tenant_id TYPE bloom_filter(0.01) GRANULARITY 1
+    -- Kafka record identity; Periscope Ingest drops redelivered rows by it.
+    ingest_id UUID,
+    INDEX idx_routing_stream_tenant stream_tenant_id TYPE bloom_filter(0.01) GRANULARITY 1,
+    INDEX idx_ingest_id ingest_id TYPE bloom_filter(0.01) GRANULARITY 1
 ) ENGINE = ReplicatedMergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (tenant_id, stream_id, timestamp)
@@ -908,7 +989,10 @@ CREATE TABLE IF NOT EXISTS federation_events (
     stream_origin_cluster_id LowCardinality(String) DEFAULT '',
     control_cell_id LowCardinality(String) DEFAULT '',
     schema_version UInt8 DEFAULT 0,
-    INDEX idx_federation_stream_tenant stream_tenant_id TYPE bloom_filter(0.01) GRANULARITY 1
+    -- Kafka record identity; Periscope Ingest drops redelivered rows by it.
+    ingest_id UUID,
+    INDEX idx_federation_stream_tenant stream_tenant_id TYPE bloom_filter(0.01) GRANULARITY 1,
+    INDEX idx_ingest_id ingest_id TYPE bloom_filter(0.01) GRANULARITY 1
 ) ENGINE = ReplicatedMergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (tenant_id, local_cluster, event_type, timestamp)
@@ -1041,7 +1125,10 @@ CREATE TABLE IF NOT EXISTS node_metrics_samples (
     source_region LowCardinality(String) DEFAULT '',
     stream_origin_region LowCardinality(String) DEFAULT '',
     stream_origin_cluster_id LowCardinality(String) DEFAULT '',
-    schema_version UInt8 DEFAULT 0
+    schema_version UInt8 DEFAULT 0,
+    -- Kafka record identity; Periscope Ingest drops redelivered rows by it.
+    ingest_id UUID,
+    INDEX idx_ingest_id ingest_id TYPE bloom_filter(0.01) GRANULARITY 1
 ) ENGINE = ReplicatedMergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (tenant_id, cluster_id, node_id, timestamp)
@@ -1212,7 +1299,10 @@ CREATE TABLE IF NOT EXISTS artifact_events (
     -- default, so rows written before the column existed read as such) or 'domain_events' for
     -- Periscope Ingest's domain.events projection, which carries no node, path, URL, or
     -- progress fields. artifact_events_deduped uses it to prefer the lifecycle row.
-    record_source LowCardinality(String) DEFAULT 'analytics_events'
+    record_source LowCardinality(String) DEFAULT 'analytics_events',
+    -- Kafka record identity; Periscope Ingest drops redelivered rows by it.
+    ingest_id UUID,
+    INDEX idx_ingest_id ingest_id TYPE bloom_filter(0.01) GRANULARITY 1
 ) ENGINE = ReplicatedMergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (tenant_id, stream_id, timestamp, request_id)
@@ -1422,7 +1512,10 @@ CREATE TABLE IF NOT EXISTS storage_snapshots (
     -- source `timestamp`) so a snapshot that lands minutes or hours
     -- after its recorded `timestamp` is still picked up by the next
     -- rebuilder pass instead of being permanently skipped.
-    ingested_at_ms Int64 DEFAULT toUnixTimestamp64Milli(now64(3))
+    ingested_at_ms Int64 DEFAULT toUnixTimestamp64Milli(now64(3)),
+    -- Kafka record identity; Periscope Ingest drops redelivered rows by it.
+    ingest_id UUID,
+    INDEX idx_ingest_id ingest_id TYPE bloom_filter(0.01) GRANULARITY 1
 ) ENGINE = ReplicatedMergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (timestamp, tenant_id, node_id)
@@ -1452,7 +1545,10 @@ CREATE TABLE IF NOT EXISTS storage_events (
     source_region LowCardinality(String) DEFAULT '',
     stream_origin_region LowCardinality(String) DEFAULT '',
     stream_origin_cluster_id LowCardinality(String) DEFAULT '',
-    schema_version UInt8 DEFAULT 0
+    schema_version UInt8 DEFAULT 0,
+    -- Kafka record identity; Periscope Ingest drops redelivered rows by it.
+    ingest_id UUID,
+    INDEX idx_ingest_id ingest_id TYPE bloom_filter(0.01) GRANULARITY 1
 ) ENGINE = ReplicatedMergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (tenant_id, stream_id, timestamp, asset_hash)
@@ -1524,7 +1620,10 @@ CREATE TABLE IF NOT EXISTS processing_events (
     source_region LowCardinality(String) DEFAULT '',
     stream_origin_region LowCardinality(String) DEFAULT '',
     stream_origin_cluster_id LowCardinality(String) DEFAULT '',
-    schema_version UInt8 DEFAULT 0
+    schema_version UInt8 DEFAULT 0,
+    -- Kafka record identity; Periscope Ingest drops redelivered rows by it.
+    ingest_id UUID,
+    INDEX idx_ingest_id ingest_id TYPE bloom_filter(0.01) GRANULARITY 1
 ) ENGINE = ReplicatedMergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (tenant_id, stream_id, timestamp)
@@ -1547,7 +1646,10 @@ CREATE TABLE IF NOT EXISTS ingest_errors (
     source_region LowCardinality(String) DEFAULT '',
     stream_origin_region LowCardinality(String) DEFAULT '',
     stream_origin_cluster_id LowCardinality(String) DEFAULT '',
-    schema_version UInt8 DEFAULT 0
+    schema_version UInt8 DEFAULT 0,
+    -- Kafka record identity; Periscope Ingest drops redelivered rows by it.
+    ingest_id UUID,
+    INDEX idx_ingest_id ingest_id TYPE bloom_filter(0.01) GRANULARITY 1
 ) ENGINE = ReplicatedMergeTree()
 PARTITION BY toYYYYMM(received_at)
 ORDER BY (received_at, event_type, event_id)
@@ -1604,7 +1706,10 @@ CREATE TABLE IF NOT EXISTS api_requests (
     -- Sorted GraphQL root fields the aggregate's requests resolved. operation_name is chosen by the
     -- client and empty for anonymous operations; root fields name what was actually used.
     root_fields Array(LowCardinality(String)) DEFAULT [],
-    graphql_error_count UInt32 DEFAULT 0
+    graphql_error_count UInt32 DEFAULT 0,
+    -- Kafka record identity; Periscope Ingest drops redelivered rows by it.
+    ingest_id UUID,
+    INDEX idx_ingest_id ingest_id TYPE bloom_filter(0.01) GRANULARITY 1
 ) ENGINE = ReplicatedMergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (tenant_id, timestamp)
@@ -1634,7 +1739,10 @@ CREATE TABLE IF NOT EXISTS tenant_acquisition_events (
     source_region LowCardinality(String) DEFAULT '',
     stream_origin_region LowCardinality(String) DEFAULT '',
     stream_origin_cluster_id LowCardinality(String) DEFAULT '',
-    schema_version UInt8 DEFAULT 0
+    schema_version UInt8 DEFAULT 0,
+    -- Kafka record identity; Periscope Ingest drops redelivered rows by it.
+    ingest_id UUID,
+    INDEX idx_ingest_id ingest_id TYPE bloom_filter(0.01) GRANULARITY 1
 ) ENGINE = ReplicatedMergeTree()
 PARTITION BY toYYYYMM(timestamp)
 ORDER BY (signup_channel, timestamp, tenant_id)
@@ -1663,9 +1771,12 @@ CREATE TABLE IF NOT EXISTS api_events (
     -- The token hash is the same keyed hash Bridge records in api_requests.token_hashes.
     actor_auth_type LowCardinality(String) DEFAULT '',
     actor_token_hash UInt64 DEFAULT 0,
+    -- Kafka record identity; Periscope Ingest drops redelivered rows by it.
+    ingest_id UUID,
 
     INDEX idx_event_type event_type TYPE bloom_filter GRANULARITY 4,
-    INDEX idx_resource_type resource_type TYPE bloom_filter GRANULARITY 4
+    INDEX idx_resource_type resource_type TYPE bloom_filter GRANULARITY 4,
+    INDEX idx_ingest_id ingest_id TYPE bloom_filter(0.01) GRANULARITY 1
 ) ENGINE = ReplicatedMergeTree()
 PARTITION BY toYYYYMM(timestamp)
 ORDER BY (tenant_id, event_type, timestamp)
@@ -1801,8 +1912,11 @@ CREATE TABLE IF NOT EXISTS orchestrator_discovery_samples (
     stream_origin_region LowCardinality(String) DEFAULT '',
     stream_origin_cluster_id LowCardinality(String) DEFAULT '',
     schema_version UInt8 DEFAULT 0,
+    -- Kafka record identity; Periscope Ingest drops redelivered rows by it.
+    ingest_id UUID,
 
-    INDEX idx_orch_addr orch_addr TYPE bloom_filter GRANULARITY 4
+    INDEX idx_orch_addr orch_addr TYPE bloom_filter GRANULARITY 4,
+    INDEX idx_ingest_id ingest_id TYPE bloom_filter(0.01) GRANULARITY 1
 ) ENGINE = ReplicatedMergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (tenant_id, gateway_id, orch_addr, resolved_ip, timestamp)
@@ -1905,9 +2019,12 @@ CREATE TABLE IF NOT EXISTS orchestrator_transcode_outcomes (
     stream_origin_region LowCardinality(String) DEFAULT '',
     stream_origin_cluster_id LowCardinality(String) DEFAULT '',
     schema_version UInt8 DEFAULT 0,
+    -- Kafka record identity; Periscope Ingest drops redelivered rows by it.
+    ingest_id UUID,
 
     INDEX idx_orch_addr orch_addr TYPE bloom_filter GRANULARITY 4,
-    INDEX idx_session_id session_id TYPE bloom_filter GRANULARITY 4
+    INDEX idx_session_id session_id TYPE bloom_filter GRANULARITY 4,
+    INDEX idx_ingest_id ingest_id TYPE bloom_filter(0.01) GRANULARITY 1
 ) ENGINE = ReplicatedMergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (tenant_id, orch_addr, resolved_ip, timestamp)
@@ -1969,9 +2086,12 @@ CREATE TABLE IF NOT EXISTS orchestrator_ai_outcomes (
     success UInt8,
     error_code String,
     error_kind LowCardinality(String),
+    -- Kafka record identity; Periscope Ingest drops redelivered rows by it.
+    ingest_id UUID,
 
     INDEX idx_orch_addr orch_addr TYPE bloom_filter GRANULARITY 4,
-    INDEX idx_pipeline pipeline TYPE bloom_filter GRANULARITY 4
+    INDEX idx_pipeline pipeline TYPE bloom_filter GRANULARITY 4,
+    INDEX idx_ingest_id ingest_id TYPE bloom_filter(0.01) GRANULARITY 1
 ) ENGINE = ReplicatedMergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (tenant_id, orch_addr, resolved_ip, timestamp)
@@ -2091,7 +2211,9 @@ CREATE TABLE IF NOT EXISTS viewer_sessions_final (
     connector_times Array(Tuple(name LowCardinality(String), seconds UInt32)) DEFAULT [],
     host_times Array(Tuple(name LowCardinality(String), seconds UInt32)) DEFAULT [],
 
-    payload_raw String CODEC(ZSTD(3))
+    payload_raw String CODEC(ZSTD(3)),
+    -- Kafka record identity; Periscope Ingest drops redelivered rows by it.
+    ingest_id UUID
 ) ENGINE = ReplicatedMergeTree()
 PARTITION BY toYYYYMM(toDateTime(projection_version_ms / 1000))
 ORDER BY (tenant_id, projection_version_ms, node_id, session_id)
@@ -2099,6 +2221,9 @@ TTL toDateTime(projection_version_ms / 1000) + INTERVAL 730 DAY;
 
 ALTER TABLE viewer_sessions_final
     ADD INDEX IF NOT EXISTS viewer_final_source_end_minmax source_ended_at_ms TYPE minmax GRANULARITY 1;
+
+ALTER TABLE viewer_sessions_final
+    ADD INDEX IF NOT EXISTS idx_ingest_id ingest_id TYPE bloom_filter(0.01) GRANULARITY 1;
 
 CREATE VIEW IF NOT EXISTS viewer_sessions_final_v AS
 SELECT
@@ -2184,7 +2309,9 @@ CREATE TABLE IF NOT EXISTS restream_sessions_final (
     source_ended_at_ms Int64,
     edge_received_at_ms Int64,
     projection_version_ms Int64,
-    payload_raw String CODEC(ZSTD(3))
+    payload_raw String CODEC(ZSTD(3)),
+    -- Kafka record identity; Periscope Ingest drops redelivered rows by it.
+    ingest_id UUID
 ) ENGINE = ReplicatedMergeTree()
 PARTITION BY toYYYYMM(toDateTime(projection_version_ms / 1000))
 ORDER BY (tenant_id, projection_version_ms, node_id, source_event_id)
@@ -2192,6 +2319,9 @@ TTL toDateTime(projection_version_ms / 1000) + INTERVAL 730 DAY;
 
 ALTER TABLE restream_sessions_final
     ADD INDEX IF NOT EXISTS restream_final_source_end_minmax source_ended_at_ms TYPE minmax GRANULARITY 1;
+
+ALTER TABLE restream_sessions_final
+    ADD INDEX IF NOT EXISTS idx_ingest_id ingest_id TYPE bloom_filter(0.01) GRANULARITY 1;
 
 CREATE VIEW IF NOT EXISTS restream_sessions_final_v AS
 SELECT
@@ -2230,7 +2360,10 @@ CREATE TABLE IF NOT EXISTS restream_sessions_anomalous (
     reason LowCardinality(String),
     notes String DEFAULT '',
     projection_version_ms Int64,
-    payload_raw String CODEC(ZSTD(3))
+    payload_raw String CODEC(ZSTD(3)),
+    -- Kafka record identity; Periscope Ingest drops redelivered rows by it.
+    ingest_id UUID,
+    INDEX idx_ingest_id ingest_id TYPE bloom_filter(0.01) GRANULARITY 1
 ) ENGINE = ReplicatedMergeTree()
 PARTITION BY toYYYYMM(toDateTime(projection_version_ms / 1000))
 ORDER BY (tenant_id, projection_version_ms, node_id, source_event_id)
@@ -2280,7 +2413,10 @@ CREATE TABLE IF NOT EXISTS stream_sessions_final (
     projection_version_ms Int64,
 
     closed_reason LowCardinality(String) DEFAULT 'final',
-    payload_raw String CODEC(ZSTD(3))
+    payload_raw String CODEC(ZSTD(3)),
+    -- Kafka record identity; Periscope Ingest drops redelivered rows by it.
+    ingest_id UUID,
+    INDEX idx_ingest_id ingest_id TYPE bloom_filter(0.01) GRANULARITY 1
 ) ENGINE = ReplicatedMergeTree()
 PARTITION BY toYYYYMM(toDateTime(projection_version_ms / 1000))
 ORDER BY (tenant_id, projection_version_ms, node_id, stream_id, source_event_id)
@@ -2364,7 +2500,10 @@ CREATE TABLE IF NOT EXISTS processing_segments_final (
     edge_received_at_ms Int64,
     projection_version_ms Int64,
 
-    payload_raw String CODEC(ZSTD(3))
+    payload_raw String CODEC(ZSTD(3)),
+    -- Kafka record identity; Periscope Ingest drops redelivered rows by it.
+    ingest_id UUID,
+    INDEX idx_ingest_id ingest_id TYPE bloom_filter(0.01) GRANULARITY 1
 ) ENGINE = ReplicatedMergeTree()
 PARTITION BY toYYYYMM(toDateTime(projection_version_ms / 1000))
 ORDER BY (tenant_id, projection_version_ms, node_id, stream_id, source_event_id, process_type, output_codec, track_type)
@@ -2472,7 +2611,10 @@ CREATE TABLE IF NOT EXISTS viewer_sessions_anomalous (
     closed_reason LowCardinality(String) DEFAULT 'stale', -- 'stale' | 'orphan' | 'parser_error'
     projection_version_ms Int64,
 
-    notes String DEFAULT ''
+    notes String DEFAULT '',
+    -- Kafka record identity; Periscope Ingest drops redelivered rows by it.
+    ingest_id UUID,
+    INDEX idx_ingest_id ingest_id TYPE bloom_filter(0.01) GRANULARITY 1
 ) ENGINE = ReplicatedMergeTree()
 PARTITION BY toYYYYMM(toDateTime(closed_at_ms / 1000))
 ORDER BY (tenant_id, closed_at_ms, node_id, session_id)
@@ -2514,7 +2656,10 @@ CREATE TABLE IF NOT EXISTS stream_sessions_anomalous (
     closed_reason LowCardinality(String) DEFAULT 'stale',
     projection_version_ms Int64,
 
-    notes String DEFAULT ''
+    notes String DEFAULT '',
+    -- Kafka record identity; Periscope Ingest drops redelivered rows by it.
+    ingest_id UUID,
+    INDEX idx_ingest_id ingest_id TYPE bloom_filter(0.01) GRANULARITY 1
 ) ENGINE = ReplicatedMergeTree()
 PARTITION BY toYYYYMM(toDateTime(closed_at_ms / 1000))
 ORDER BY (tenant_id, closed_at_ms, node_id, stream_id)
@@ -2852,7 +2997,10 @@ CREATE TABLE IF NOT EXISTS projection_divergences (
     prior_value_json String CODEC(ZSTD(3)),
     new_value_json String CODEC(ZSTD(3)),
     source_event_id String,
-    occurrence_id String DEFAULT ''
+    occurrence_id String DEFAULT '',
+    -- Kafka record identity; Periscope Ingest drops redelivered rows by it.
+    ingest_id UUID,
+    INDEX idx_ingest_id ingest_id TYPE bloom_filter(0.01) GRANULARITY 1
 ) ENGINE = ReplicatedMergeTree()
 PARTITION BY toYYYYMM(toDateTime(observed_at_ms / 1000))
 ORDER BY (table_name, observed_at_ms, source_event_id)

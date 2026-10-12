@@ -47,10 +47,17 @@ var ActiveTenants = statement("billing.active_tenants", `
 	ORDER BY tenant_id
 `)
 
+// PeakBandwidth is the highest 5-minute average egress of any stream on any
+// node. client_qoe_5m holds one row per insert block, so each bucket's
+// average is its summed egress over its summed samples.
 var PeakBandwidth = statement("billing.peak_bandwidth", `
-	SELECT COALESCE(max(avg_bw_out) / (1024*1024), 0) AS peak_bandwidth_mbps
-	FROM periscope.client_qoe_5m
-	WHERE tenant_id = ? AND timestamp_5m >= ? AND timestamp_5m < ?
+	SELECT COALESCE(max(bucket_bw_out) / (1024*1024), 0) AS peak_bandwidth_mbps
+	FROM (
+		SELECT sum(bw_out_sum) / nullIf(sum(qoe_samples), 0) AS bucket_bw_out
+		FROM periscope.client_qoe_5m
+		WHERE tenant_id = ? AND timestamp_5m >= ? AND timestamp_5m < ?
+		GROUP BY timestamp_5m, stream_id, node_id
+	)
 `)
 
 var MonthlyUniqueUsers = statement("billing.monthly_unique_users", `

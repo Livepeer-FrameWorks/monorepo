@@ -87,10 +87,11 @@ func TestArtifactEventsCarryStableEventID(t *testing.T) {
 				t.Fatalf("expected dual-write (artifact_state_current + artifact_events), got %d rows", len(batch.rows))
 			}
 
+			// event_id is the last column the writer lists; ingest_id follows it.
 			artifactEventsRow := batch.rows[1]
-			gotEventID := artifactEventsRow[len(artifactEventsRow)-1]
+			gotEventID := artifactEventsRow[len(artifactEventsRow)-2]
 			if gotEventID != c.eventID {
-				t.Errorf("artifact_events event_id (last column) = %v, want %q", gotEventID, c.eventID)
+				t.Errorf("artifact_events event_id = %v, want %q", gotEventID, c.eventID)
 			}
 		})
 	}

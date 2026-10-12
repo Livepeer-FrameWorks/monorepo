@@ -2903,11 +2903,8 @@ func (s *PeriscopeServer) GetPlatformOverview(ctx context.Context, req *periscop
 
 	// Get peak bandwidth from client_qoe_5m (actual bandwidth rate, not cumulative bytes)
 	peakBwQuery := `
-		SELECT COALESCE(max(avg_bw_out), 0) as peak_bandwidth
-		FROM client_qoe_5m
-		WHERE tenant_id = ?
-		AND timestamp_5m >= ?
-		AND timestamp_5m <  ?
+		SELECT COALESCE(max(bucket_avg_bw_out), 0) as peak_bandwidth
+		FROM (` + clientQoeBuckets(`tenant_id = ? AND timestamp_5m >= ? AND timestamp_5m < ?`) + `)
 	`
 	err = periscopequerydb.QueryRow(ctx, s.clickhouse, peakBwQuery, tenantID, startTime, endTime).Scan(&resp.PeakBandwidth)
 	if err != nil {
@@ -3995,35 +3992,25 @@ func (s *PeriscopeServer) GetClientMetrics5M(ctx context.Context, req *periscope
 	nodeID := req.GetNodeId()
 
 	// Build count query
-	countQuery := `SELECT count(*) FROM client_qoe_5m WHERE tenant_id = ? AND timestamp_5m >= ? AND timestamp_5m <= ?`
-	countArgs := []any{tenantID, startTime, endTime}
-	if streamID != "" {
-		countQuery += " AND stream_id = ?"
-		countArgs = append(countArgs, streamID)
-	}
-	if nodeID != "" {
-		countQuery += " AND node_id = ?"
-		countArgs = append(countArgs, nodeID)
-	}
-	countCh := s.countAsync(ctx, countQuery, countArgs...)
-
-	query := `
-		SELECT timestamp_5m, tenant_id, stream_id, node_id, active_sessions,
-		       avg_bw_in, avg_bw_out, avg_connection_time, pkt_loss_rate
-		FROM client_qoe_5m
-		WHERE tenant_id = ? AND timestamp_5m >= ? AND timestamp_5m <= ?
-	`
+	where := `tenant_id = ? AND timestamp_5m >= ? AND timestamp_5m <= ?`
 	args := []any{tenantID, startTime, endTime}
-
 	if streamID != "" {
-		query += " AND stream_id = ?"
+		where += " AND stream_id = ?"
 		args = append(args, streamID)
 	}
-
 	if nodeID != "" {
-		query += " AND node_id = ?"
+		where += " AND node_id = ?"
 		args = append(args, nodeID)
 	}
+	buckets := clientQoeBuckets(where)
+	countCh := s.countAsync(ctx, `SELECT count(*) FROM (`+buckets+`)`, append([]any{}, args...)...)
+
+	query := `
+		SELECT timestamp_5m, tenant_id, stream_id, node_id, bucket_active_sessions,
+		       bucket_avg_bw_in, bucket_avg_bw_out, bucket_avg_connection_time, bucket_pkt_loss_rate
+		FROM (` + buckets + `)
+		WHERE 1 = 1
+	`
 
 	if params.Cursor != nil {
 		if params.Direction == pagination.Backward {
@@ -4300,7 +4287,7 @@ func (s *PeriscopeServer) GetStreamAnalyticsSummary(ctx context.Context, req *pe
 		var avgBitrate sql.NullFloat64
 		var rebufferCount, issueCount, bufferDryCount sql.NullInt64
 		err := periscopequerydb.QueryRow(ctx, s.clickhouse, `
-			SELECT avg(avg_buffer_health), avg(avg_bitrate), avg(avg_fps),
+			SELECT `+streamHealthMean("buffer_health")+`, `+streamHealthMean("bitrate")+`, `+streamHealthMean("fps")+`,
 			       sum(rebuffer_count), sum(issue_count), sum(buffer_dry_count)
 			FROM periscope.stream_health_5m
 			WHERE tenant_id = ? AND stream_id = ? AND timestamp_5m >= ? AND timestamp_5m < ?
@@ -4335,7 +4322,7 @@ func (s *PeriscopeServer) GetStreamAnalyticsSummary(ctx context.Context, req *pe
 	{
 		var pktLossRate, avgConnTime sql.NullFloat64
 		err := periscopequerydb.QueryRow(ctx, s.clickhouse, `
-			SELECT avg(pkt_loss_rate), avg(avg_connection_time)
+			SELECT `+clientQoeLossRate+`, sum(connection_time_sum) / nullIf(sum(qoe_samples), 0)
 			FROM periscope.client_qoe_5m
 			WHERE tenant_id = ? AND stream_id = ? AND timestamp_5m >= ? AND timestamp_5m < ?
 		`, tenantID, streamID, bucketStart, endTime).Scan(&pktLossRate, &avgConnTime)
@@ -5041,14 +5028,16 @@ func (s *PeriscopeServer) GetStreamHealth5M(ctx context.Context, req *periscopep
 	}
 
 	// Count query
-	countQuery := `SELECT count(*) FROM stream_health_5m WHERE tenant_id = ? AND stream_id = ? AND timestamp_5m >= ? AND timestamp_5m <= ?`
+	buckets := streamHealthBuckets(`tenant_id = ? AND stream_id = ? AND timestamp_5m >= ? AND timestamp_5m <= ?`)
+	countQuery := `SELECT count(*) FROM (` + buckets + `)`
 	countCh := s.countAsync(ctx, countQuery, tenantID, streamID, startTime, endTime)
 
 	query := `
-		SELECT timestamp_5m, tenant_id, stream_id, node_id, rebuffer_count, issue_count,
-		       sample_issues, avg_bitrate, avg_fps, avg_buffer_health, avg_frame_jitter_ms, max_frame_jitter_ms, buffer_dry_count, quality_tier
-		FROM stream_health_5m
-		WHERE tenant_id = ? AND stream_id = ? AND timestamp_5m >= ? AND timestamp_5m <= ?
+		SELECT timestamp_5m, tenant_id, stream_id, node_id, bucket_rebuffer_count, bucket_issue_count,
+		       bucket_sample_issues, bucket_avg_bitrate, bucket_avg_fps, bucket_avg_buffer_health,
+		       bucket_avg_frame_jitter_ms, bucket_max_frame_jitter_ms, bucket_buffer_dry_count, bucket_quality_tier
+		FROM (` + buckets + `)
+		WHERE 1 = 1
 	`
 	args := []any{tenantID, streamID, startTime, endTime}
 
@@ -5149,14 +5138,14 @@ func (s *PeriscopeServer) GetStreamHealthSummary(ctx context.Context, req *peris
 
 	query := `
 		SELECT
-			avg(avg_bitrate) AS avg_bitrate,
-			avg(avg_fps) AS avg_fps,
-			avg(avg_buffer_health) AS avg_buffer_health,
+			ifNull(` + streamHealthMean("bitrate") + `, 0) AS avg_bitrate,
+			ifNull(` + streamHealthMean("fps") + `, 0) AS avg_fps,
+			ifNull(` + streamHealthMean("buffer_health") + `, 0) AS avg_buffer_health,
 			sum(rebuffer_count) AS total_rebuffers,
 			sum(issue_count) AS total_issues,
-			count() AS samples,
-			countIf(issue_count > 0) AS issue_samples,
-			argMaxIf(quality_tier, timestamp_5m, quality_tier NOT IN ('', 'Unknown')) AS latest_tier
+			uniqExact(timestamp_5m, stream_id, node_id) AS samples,
+			uniqExactIf(timestamp_5m, stream_id, node_id, issue_count > 0) AS issue_samples,
+			argMaxIf(quality_tier, quality_tier_at, quality_tier NOT IN ('', 'Unknown')) AS latest_tier
 		FROM stream_health_5m
 		WHERE tenant_id = ? AND timestamp_5m >= ? AND timestamp_5m <= ?
 	`
@@ -5205,21 +5194,21 @@ func (s *PeriscopeServer) GetClientQoeSummary(ctx context.Context, req *periscop
 
 	query := `
 		SELECT
-			avg(pkt_loss_rate) AS avg_pkt_loss,
-			max(pkt_loss_rate) AS peak_pkt_loss,
-			avg(avg_bw_in) AS avg_bw_in,
-			avg(avg_bw_out) AS avg_bw_out,
-			avg(avg_connection_time) AS avg_conn_time,
-			sum(active_sessions) AS total_sessions
-		FROM client_qoe_5m
-		WHERE tenant_id = ? AND timestamp_5m >= ? AND timestamp_5m <= ?
-	`
+			if(sum(bucket_packets_sent) > 0, sum(bucket_packets_lost) / sum(bucket_packets_sent), avg(bucket_pkt_loss_rate)) AS avg_pkt_loss,
+			max(bucket_pkt_loss_rate) AS peak_pkt_loss,
+			ifNull(sum(bucket_bw_in_sum) / nullIf(sum(bucket_samples), 0), 0) AS avg_bw_in,
+			ifNull(sum(bucket_bw_out_sum) / nullIf(sum(bucket_samples), 0), 0) AS avg_bw_out,
+			ifNull(sum(bucket_connection_time_sum) / nullIf(sum(bucket_samples), 0), 0) AS avg_conn_time,
+			sum(bucket_active_sessions) AS total_sessions
+		FROM (`
+	where := `tenant_id = ? AND timestamp_5m >= ? AND timestamp_5m <= ?`
 	args := []any{tenantID, startTime, endTime}
 
 	if streamID := req.GetStreamId(); streamID != "" {
-		query += " AND stream_id = ?"
+		where += " AND stream_id = ?"
 		args = append(args, streamID)
 	}
+	query += clientQoeBuckets(where) + `)`
 
 	var avgPktLoss, peakPktLoss sql.NullFloat64
 	var avgBwIn, avgBwOut, avgConnTime float64
@@ -7249,11 +7238,8 @@ func (s *PeriscopeServer) GetLiveUsageSummary(ctx context.Context, req *periscop
 	queryCount++
 	queryCtx, cancel = withClickhouseTimeout(ctx)
 	err = periscopequerydb.QueryRow(queryCtx, s.clickhouse, `
-		SELECT COALESCE(max(avg_bw_out), 0) AS peak_bandwidth
-		FROM client_qoe_5m
-		WHERE tenant_id = ?
-		  AND timestamp_5m >= ?
-		  AND timestamp_5m <  ?
+		SELECT COALESCE(max(bucket_avg_bw_out), 0) AS peak_bandwidth
+		FROM (`+clientQoeBuckets(`tenant_id = ? AND timestamp_5m >= ? AND timestamp_5m < ?`)+`)
 	`, tenantID, startTime, endTime).Scan(&peakBandwidthBytes)
 	cancel()
 	recordQueryError(err, "Failed to query client_qoe_5m for peak bandwidth")
@@ -7534,8 +7520,39 @@ func (s *PeriscopeServer) GetLiveUsageSummary(ctx context.Context, req *periscop
 }
 
 // ============================================================================
-// Rebuffering Events (from rebuffering_events table)
+// Rebuffering Events (buffer-state transitions of stream_health_samples)
 // ============================================================================
+
+// rebufferLookback is how far before the requested range the previous buffer
+// state of a stream is looked for. Live streams report health every ten
+// seconds, so a stream without a sample for an hour has ended and an older
+// sample belongs to an earlier session.
+const rebufferLookback = time.Hour
+
+// rebufferingTransitionsQuery returns every FULL, DRY or RECOVER health sample
+// of the tenant's live streams from rebufferLookback before start through end,
+// with the stream's previous such state and whether the sample starts or ends
+// a rebuffer. Transitions are computed over the samples in timestamp order at
+// read time, so they do not depend on how the samples were inserted. The
+// caller restricts the result to start and later.
+func rebufferingTransitionsQuery(tenantID, streamID string, start, end time.Time) (string, []any) {
+	query := `
+		SELECT timestamp, tenant_id, stream_id, node_id, buffer_state,
+		       lagInFrame(buffer_state, 1, '') OVER (
+		           PARTITION BY tenant_id, stream_id ORDER BY timestamp
+		           ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS prev_state,
+		       if(buffer_state = 'DRY' AND prev_state IN ('FULL', 'RECOVER'), 1, 0) AS rebuffer_start,
+		       if(buffer_state = 'RECOVER' AND prev_state = 'DRY', 1, 0) AS rebuffer_end
+		FROM stream_health_samples
+		WHERE tenant_id = ? AND artifact_hash = '' AND buffer_state IN ('FULL', 'DRY', 'RECOVER')
+		  AND timestamp >= ? AND timestamp <= ?`
+	args := []any{tenantID, start.Add(-rebufferLookback), end}
+	if streamID != "" {
+		query += ` AND stream_id = ?`
+		args = append(args, streamID)
+	}
+	return query, args
+}
 
 // GetRebufferingEvents returns buffer state transition events
 func (s *PeriscopeServer) GetRebufferingEvents(ctx context.Context, req *periscopepb.GetRebufferingEventsRequest) (*periscopepb.GetRebufferingEventsResponse, error) {
@@ -7554,35 +7571,22 @@ func (s *PeriscopeServer) GetRebufferingEvents(ctx context.Context, req *perisco
 		return nil, status.Errorf(codes.InvalidArgument, "invalid pagination: %v", err)
 	}
 
-	// Build count query
-	countQuery := `SELECT count(*) FROM rebuffering_events WHERE tenant_id = ? AND timestamp >= ? AND timestamp <= ?`
-	countArgs := []any{tenantID, startTime, endTime}
-	if streamID := req.GetStreamId(); streamID != "" {
-		countQuery += ` AND stream_id = ?`
-		countArgs = append(countArgs, streamID)
-	}
+	transitions, transitionArgs := rebufferingTransitionsQuery(tenantID, req.GetStreamId(), startTime, endTime)
+	outerFilter := ` WHERE timestamp >= ?`
+	outerArgs := []any{startTime}
 	if req.NodeId != nil && *req.NodeId != "" {
-		countQuery += ` AND node_id = ?`
-		countArgs = append(countArgs, *req.NodeId)
+		outerFilter += ` AND node_id = ?`
+		outerArgs = append(outerArgs, *req.NodeId)
 	}
+
+	countQuery := `SELECT count(*) FROM (` + transitions + `)` + outerFilter
+	countArgs := append(append([]any{}, transitionArgs...), outerArgs...)
 	countCh := s.countAsync(ctx, countQuery, countArgs...)
 
-	// Build main query
 	query := `
 		SELECT timestamp, tenant_id, stream_id, node_id, buffer_state, prev_state, rebuffer_start, rebuffer_end
-		FROM rebuffering_events
-		WHERE tenant_id = ? AND timestamp >= ? AND timestamp <= ?
-	`
-	args := []any{tenantID, startTime, endTime}
-
-	if streamID := req.GetStreamId(); streamID != "" {
-		query += ` AND stream_id = ?`
-		args = append(args, streamID)
-	}
-	if req.NodeId != nil && *req.NodeId != "" {
-		query += ` AND node_id = ?`
-		args = append(args, *req.NodeId)
-	}
+		FROM (` + transitions + `)` + outerFilter
+	args := append(append([]any{}, transitionArgs...), outerArgs...)
 
 	var cursorParts []string
 	if params.Cursor != nil {

@@ -166,6 +166,9 @@ func TestEveryTypedWriterAppendsToCurrentClickHouse(t *testing.T) {
 			}
 			writer.MethodByName("Close").Call(nil)
 		})
+		t.Run(contract.name+"/redelivery", func(t *testing.T) {
+			verifyRedeliveredRowIsDropped(t, ctx, conn, contract)
+		})
 	}
 	t.Run("network replay and snapshot rebuilding", func(t *testing.T) {
 		for _, service := range []string{"periscope-ingest", "periscope-query"} {
@@ -351,4 +354,85 @@ func waitForClickHouse(t *testing.T, name string) {
 	}
 	logs, _ := dockerRunTimeout(t, 30*time.Second, "", "logs", "--tail", "60", name)
 	t.Fatalf("ClickHouse did not become ready:\n%s", logs)
+}
+
+// setTimes replaces every time.Time in value with at.
+func setTimes(value reflect.Value, at time.Time) {
+	if value.Type() == reflect.TypeOf(time.Time{}) {
+		value.Set(reflect.ValueOf(at))
+		return
+	}
+	switch value.Kind() {
+	case reflect.Struct:
+		for i := 0; i < value.NumField(); i++ {
+			if value.Field(i).CanSet() {
+				setTimes(value.Field(i), at)
+			}
+		}
+	case reflect.Pointer:
+		if !value.IsNil() {
+			setTimes(value.Elem(), at)
+		}
+	}
+}
+
+type bufferContractConn struct{ driver.Conn }
+
+func (c bufferContractConn) PrepareBatch(ctx context.Context, query string) (Batch, error) {
+	return c.Conn.PrepareBatch(ctx, query)
+}
+
+func (c bufferContractConn) Query(ctx context.Context, query string, args ...interface{}) (Rows, error) {
+	return c.Conn.Query(ctx, query, args...)
+}
+
+type contractRecord struct{ identity string }
+
+func (r *contractRecord) IngestIdentity() string { return r.identity }
+
+// verifyRedeliveredRowIsDropped writes a writer's representative row from
+// the same record twice, through two write buffers, and requires the second
+// flush to find the stored ingest_id with the table's lookup bounds and drop
+// the row. Writers of tables without ingest_id are skipped.
+func verifyRedeliveredRowIsDropped(t *testing.T, ctx context.Context, conn driver.Conn, contract writerContract) {
+	t.Helper()
+	record := &contractRecord{identity: "writer-contract-" + contract.name + "-" + uuid.NewString()}
+	now := time.Now().UTC().Truncate(time.Second)
+	for attempt := 0; attempt < 2; attempt++ {
+		dropped := 0
+		buffer := NewWriteBuffer(bufferContractConn{Conn: conn}, WriteBufferOptions{
+			OnDuplicate: func(_ string, rows int) { dropped += rows },
+		})
+		writerCtx := WithRowOrigin(WithWriteBuffer(ctx, buffer), record)
+		noPreparer := reflect.Zero(reflect.TypeOf((*BatchPreparer)(nil)).Elem())
+		outputs := reflect.ValueOf(contract.prepare).Call([]reflect.Value{reflect.ValueOf(writerCtx), noPreparer})
+		if errValue := outputs[1].Interface(); errValue != nil {
+			t.Fatalf("prepare: %v", errValue)
+		}
+		writer := outputs[0]
+		appendMethod := writer.MethodByName("Append")
+		row := representativeValue(appendMethod.Type().In(0), true)
+		// The representative date is older than every table's TTL, and
+		// ClickHouse may drop an expired part before the second attempt
+		// looks for it.
+		setTimes(row, now)
+		if result := appendMethod.Call([]reflect.Value{row})[0].Interface(); result != nil {
+			t.Fatalf("append: %v", result)
+		}
+		if result := writer.MethodByName("Send").Call(nil)[0].Interface(); result != nil {
+			t.Fatalf("send: %v", result)
+		}
+		if len(buffer.statements) != 1 || buffer.statements[0].identity == nil {
+			t.Skip("table stores no ingest_id")
+		}
+		if err := buffer.Flush(ctx); err != nil {
+			t.Fatalf("flush attempt %d: %v", attempt, err)
+		}
+		if failures := buffer.TakeFailures(); len(failures) != 0 {
+			t.Fatalf("flush attempt %d rejected rows: %v", attempt, failures[0].Err)
+		}
+		if want := attempt; dropped != want {
+			t.Fatalf("attempt %d dropped %d rows, want %d", attempt, dropped, want)
+		}
+	}
 }

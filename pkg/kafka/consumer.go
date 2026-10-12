@@ -36,6 +36,9 @@ type consumerPoller interface {
 	PollRecords(ctx context.Context, maxPollRecords int) kgo.Fetches
 	CommitRecords(ctx context.Context, records ...*kgo.Record) error
 	AllowRebalance()
+	SetOffsets(offsets map[string]map[int32]kgo.EpochOffset)
+	PauseFetchPartitions(partitions map[string][]int32) map[string][]int32
+	ResumeFetchPartitions(partitions map[string][]int32)
 }
 
 // Consumer implements a generic Kafka consumer that routes messages to handlers
@@ -55,6 +58,7 @@ type Consumer struct {
 	lagTracker *LagTrackerConfig
 	resetAtEnd bool
 	lagSeries  map[string]struct{}
+	flusher    BatchFlusher
 
 	// stopRun cancels the running Start loop and runDone closes when it has
 	// returned, so Close can stop polling before it leaves the group.
@@ -76,6 +80,28 @@ type consumerOptions struct {
 	resetOffset kgo.Offset
 	resetAtEnd  bool
 	lagTracker  *LagTrackerConfig
+	flusher     BatchFlusher
+}
+
+// BatchFlusher lets handlers defer side effects to one flush per poll batch.
+// A non-empty poll batch runs BeginBatch, every record's handler with the
+// returned context, FlushBatch, and then the offset commit, so an offset is
+// committed only after the batch's deferred effects are durable.
+type BatchFlusher interface {
+	// BeginBatch returns the context the batch's handlers run with.
+	BeginBatch(ctx context.Context) context.Context
+	// FlushBatch completes the batch begun with ctx. A returned record is
+	// treated as a failed handler call: its partition commits only the
+	// records before the earliest one. An error commits nothing and stops the
+	// consumer, so the batch is delivered again after a restart.
+	FlushBatch(ctx context.Context) ([]Message, error)
+}
+
+// WithBatchFlusher runs every poll batch through f.
+func WithBatchFlusher(f BatchFlusher) ConsumerOption {
+	return func(o *consumerOptions) {
+		o.flusher = f
+	}
 }
 
 // LagTrackerConfig configures the background lag tracker. Gauge labels
@@ -143,6 +169,7 @@ func NewConsumer(brokers []string, groupID string, clusterID string, clientID st
 		lagTracker: cfg.lagTracker,
 		resetAtEnd: cfg.resetAtEnd,
 		lagSeries:  make(map[string]struct{}),
+		flusher:    cfg.flusher,
 	}, nil
 }
 
@@ -324,13 +351,23 @@ func (c *Consumer) Start(parent context.Context) error {
 	if c.lagTracker != nil && c.lagTracker.Gauge != nil {
 		go c.runLagTracker(ctx)
 	}
+	retries := newPartitionRetries()
 	for {
 		select {
 		case <-ctx.Done():
 			return parent.Err()
 		default:
-			fetches := poller.PollRecords(ctx, defaultMaxPollRecords)
-			if errs := fetches.Errors(); len(errs) > 0 {
+			// A poll waits no longer than the next paused partition's resume,
+			// so a partition held back after a failure is fetched again even
+			// when no other partition has records.
+			pollCtx, cancelPoll := ctx, context.CancelFunc(func() {})
+			if wait := retries.resumeDue(poller, time.Now()); wait > 0 {
+				pollCtx, cancelPoll = context.WithTimeout(ctx, wait)
+			}
+			fetches := poller.PollRecords(pollCtx, defaultMaxPollRecords)
+			pollTimedOut := pollCtx.Err() != nil && ctx.Err() == nil
+			cancelPoll()
+			if errs := fetches.Errors(); len(errs) > 0 && !pollTimedOut {
 				if ctx.Err() != nil {
 					return parent.Err()
 				}
@@ -348,11 +385,24 @@ func (c *Consumer) Start(parent context.Context) error {
 				records = append(records, iter.Next())
 			}
 
-			commitRecords := c.processRecords(ctx, records)
+			commitRecords, failedAt, flushErr := c.processBatchDetailed(ctx, records)
+			if flushErr != nil {
+				if ctx.Err() != nil {
+					return parent.Err()
+				}
+				return fmt.Errorf("flush poll batch: %w", flushErr)
+			}
+			// Records already handled are committed even when shutdown began
+			// during the batch, so a restart does not deliver them again.
 			var commitErr error
 			if len(commitRecords) > 0 {
-				commitErr = poller.CommitRecords(ctx, commitRecords...)
+				commitCtx, cancelCommit := context.WithTimeout(context.WithoutCancel(ctx), consumerCloseTimeout)
+				commitErr = poller.CommitRecords(commitCtx, commitRecords...)
+				cancelCommit()
 			}
+			// The client's fetch position is already past a failed record;
+			// without the rewind the next commit of its partition would skip it.
+			retries.rewind(poller, records, failedAt, time.Now())
 
 			// BlockRebalanceOnPoll keeps partition ownership stable while handlers
 			// run. Release it after every non-empty batch, including failed commit
@@ -379,20 +429,81 @@ func isRecoverableGroupCommitError(err error) bool {
 		errors.Is(err, kerr.FencedInstanceID)
 }
 
-func (c *Consumer) processRecords(ctx context.Context, records []*kgo.Record) []*kgo.Record {
-	type topicPartition struct {
-		topic     string
-		partition int32
+// processBatch handles records and returns the records to commit. With a
+// BatchFlusher the batch's deferred effects are flushed first, and a record
+// the flush failed holds back its partition's commit like a handler failure.
+func (c *Consumer) processBatch(ctx context.Context, records []*kgo.Record) ([]*kgo.Record, error) {
+	commit, _, err := c.processBatchDetailed(ctx, records)
+	return commit, err
+}
+
+type topicPartition struct {
+	topic     string
+	partition int32
+}
+
+// processBatchDetailed is processBatch that also returns, per partition, the
+// offset of the earliest record that failed and was not settled. Records from
+// that offset on are not committed and must be fetched again.
+func (c *Consumer) processBatchDetailed(ctx context.Context, records []*kgo.Record) ([]*kgo.Record, map[topicPartition]int64, error) {
+	if c.flusher == nil || len(records) == 0 {
+		commit, failedAt := c.handleRecords(ctx, records)
+		return commit, failedAt, nil
 	}
-	blocked := make(map[topicPartition]bool)
+	batchCtx := c.flusher.BeginBatch(ctx)
+	commit, failedAt := c.handleRecords(batchCtx, records)
+	failed, err := c.flusher.FlushBatch(batchCtx)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(failed) == 0 {
+		return commit, failedAt, nil
+	}
+	for _, msg := range failed {
+		tp := topicPartition{topic: msg.Topic, partition: msg.Partition}
+		if offset, ok := failedAt[tp]; !ok || msg.Offset < offset {
+			failedAt[tp] = msg.Offset
+		}
+	}
+	kept := make([]*kgo.Record, 0, len(commit))
+	for _, last := range commit {
+		tp := topicPartition{topic: last.Topic, partition: last.Partition}
+		limit, ok := failedAt[tp]
+		if !ok || last.Offset < limit {
+			kept = append(kept, last)
+			continue
+		}
+		var before *kgo.Record
+		for _, record := range records {
+			if record.Topic == tp.topic && record.Partition == tp.partition && record.Offset < limit {
+				before = record
+			}
+		}
+		if before != nil {
+			kept = append(kept, before)
+		}
+	}
+	return kept, failedAt, nil
+}
+
+func (c *Consumer) processRecords(ctx context.Context, records []*kgo.Record) []*kgo.Record {
+	commit, _ := c.handleRecords(ctx, records)
+	return commit
+}
+
+// handleRecords runs each record's handler in order and returns the last
+// handled record of every partition, to commit, and the offset of each
+// partition's first failed record.
+func (c *Consumer) handleRecords(ctx context.Context, records []*kgo.Record) ([]*kgo.Record, map[topicPartition]int64) {
+	failedAt := make(map[topicPartition]int64)
 	lastSuccess := make(map[topicPartition]*kgo.Record)
 
 	for _, record := range records {
 		tp := topicPartition{topic: record.Topic, partition: record.Partition}
-		if blocked[tp] {
-			// A prior message in this topic/partition failed. We must not
-			// process or commit later offsets, otherwise we'd skip the failed
-			// message on restart.
+		if _, blocked := failedAt[tp]; blocked {
+			// A prior message in this topic/partition failed. Later offsets
+			// are neither handled nor committed; the partition is fetched
+			// again from the failed record.
 			continue
 		}
 
@@ -427,9 +538,8 @@ func (c *Consumer) processRecords(ctx context.Context, records []*kgo.Record) []
 				"topic":     record.Topic,
 				"partition": record.Partition,
 				"offset":    record.Offset,
-			}).Error("Failed to handle message - will retry on restart")
-			// Block this partition to avoid committing offsets beyond the failed message.
-			blocked[tp] = true
+			}).Error("Failed to handle message; its partition is fetched again from it")
+			failedAt[tp] = record.Offset
 			continue
 		}
 
@@ -437,14 +547,86 @@ func (c *Consumer) processRecords(ctx context.Context, records []*kgo.Record) []
 	}
 
 	if len(lastSuccess) == 0 {
-		return nil
+		return nil, failedAt
 	}
 
 	commitRecords := make([]*kgo.Record, 0, len(lastSuccess))
 	for _, record := range lastSuccess {
 		commitRecords = append(commitRecords, record)
 	}
-	return commitRecords
+	return commitRecords, failedAt
+}
+
+// failedRecordBackoff is the pause before a partition whose record failed is
+// fetched again, doubling per consecutive failure of that partition.
+func failedRecordBackoff(attempt int) time.Duration {
+	delay := 500 * time.Millisecond
+	for i := 1; i < attempt && delay < 30*time.Second; i++ {
+		delay *= 2
+	}
+	if delay > 30*time.Second {
+		delay = 30 * time.Second
+	}
+	return delay
+}
+
+// partitionRetries rewinds and pauses partitions whose record failed, and
+// resumes them after their backoff.
+type partitionRetries struct {
+	attempts map[topicPartition]int
+	resumeAt map[topicPartition]time.Time
+}
+
+func newPartitionRetries() *partitionRetries {
+	return &partitionRetries{attempts: make(map[topicPartition]int), resumeAt: make(map[topicPartition]time.Time)}
+}
+
+// rewind seeks every failed partition back to its failed offset and pauses it.
+// A partition handled without failure resets its backoff.
+func (r *partitionRetries) rewind(poller consumerPoller, records []*kgo.Record, failedAt map[topicPartition]int64, now time.Time) {
+	for _, record := range records {
+		tp := topicPartition{topic: record.Topic, partition: record.Partition}
+		if _, failed := failedAt[tp]; !failed {
+			delete(r.attempts, tp)
+		}
+	}
+	if len(failedAt) == 0 {
+		return
+	}
+	offsets := make(map[string]map[int32]kgo.EpochOffset)
+	pause := make(map[string][]int32)
+	for tp, offset := range failedAt {
+		if offsets[tp.topic] == nil {
+			offsets[tp.topic] = make(map[int32]kgo.EpochOffset)
+		}
+		offsets[tp.topic][tp.partition] = kgo.EpochOffset{Epoch: -1, Offset: offset}
+		pause[tp.topic] = append(pause[tp.topic], tp.partition)
+		r.attempts[tp]++
+		r.resumeAt[tp] = now.Add(failedRecordBackoff(r.attempts[tp]))
+	}
+	poller.PauseFetchPartitions(pause)
+	poller.SetOffsets(offsets)
+}
+
+// resumeDue resumes the partitions whose backoff ended and returns how long
+// until the next paused partition is due, or zero when none is paused.
+func (r *partitionRetries) resumeDue(poller consumerPoller, now time.Time) time.Duration {
+	resume := make(map[string][]int32)
+	var next time.Duration
+	for tp, at := range r.resumeAt {
+		if !now.Before(at) {
+			resume[tp.topic] = append(resume[tp.topic], tp.partition)
+			delete(r.resumeAt, tp)
+			continue
+		}
+		if wait := at.Sub(now); next == 0 || wait < next {
+			next = wait
+		}
+	}
+	if len(resume) > 0 {
+		poller.ResumeFetchPartitions(resume)
+	}
+	return next
 }
 
 // HealthCheck pings the broker

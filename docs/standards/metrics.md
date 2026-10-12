@@ -95,20 +95,20 @@ to facts first projected before the cutover are also excluded.
 
 Operational convergence is exposed through bounded labels only:
 
-| Metric                                                                           | Labels                 | Meaning                                                                                           |
-| -------------------------------------------------------------------------------- | ---------------------- | ------------------------------------------------------------------------------------------------- |
-| `foghorn_restream_reconcile_total`                                               | `operation`, `outcome` | Activation/deactivation dispatch and correlated convergence results                               |
-| `foghorn_restream_final_fence_total`                                             | `outcome`              | Final-fact Mist-ID bind, accepted-unbound compatibility, mismatch, or missing-ID fence outcomes   |
-| `foghorn_offline_effect_dead_letters_total`                                      | `outcome`              | Exhausted offline obligations retained for diagnosis and late acknowledgements that revive them   |
-| `foghorn_rolling_upgrade_fallbacks_total`                                        | `contract`             | Optional-field compatibility branches still used by mixed-version control-plane calls             |
-| `foghorn_push_target_status_outbox_outcomes_total`                               | `outcome`              | Durable status delivery, retry, deleted-target tombstone, supersession, and storage errors        |
-| `periscope_ingest_clickhouse_inserts_total{table="restream_sessions_anomalous"}` | `table`, `status`      | Final restream facts quarantined because required trustworthy usage fields were absent or invalid |
-| `periscope_metering_projection_divergence_billing_total`                         | `outcome`, `table`     | Billing-reader duplicate, orphan, and malformed divergence rows skipped without wedging a slice   |
-| `periscope_ingest_clickhouse_inserts_total{status="quarantined_span"}`           | `table`, `status`      | A finalized fact exceeded the bounded ledger projection span and was not expanded                 |
-| `periscope_ingest_ledger_rebuild_leader`                                         | `ledger`               | One only while this replica holds the named rebuild lease; zero after release or a lost election  |
-| `periscope_ingest_ledger_rebuild_cursor_lag_seconds`                             | `ledger`               | Age of the rebuild cursor relative to the settled frontier                                        |
-| `periscope_metering_billing_malformed_facts_skipped_total`                       | `fact_kind`, `reason`  | Malformed canonical facts skipped without wedging an otherwise billable slice                     |
-| `commodore_field_decrypt_failures_total`                                         | `purpose`, `format`    | Fail-closed application-field opens grouped by bounded field purpose and envelope version         |
+| Metric                                                                       | Labels                 | Meaning                                                                                           |
+| ---------------------------------------------------------------------------- | ---------------------- | ------------------------------------------------------------------------------------------------- |
+| `foghorn_restream_reconcile_total`                                           | `operation`, `outcome` | Activation/deactivation dispatch and correlated convergence results                               |
+| `foghorn_restream_final_fence_total`                                         | `outcome`              | Final-fact Mist-ID bind, accepted-unbound compatibility, mismatch, or missing-ID fence outcomes   |
+| `foghorn_offline_effect_dead_letters_total`                                  | `outcome`              | Exhausted offline obligations retained for diagnosis and late acknowledgements that revive them   |
+| `foghorn_rolling_upgrade_fallbacks_total`                                    | `contract`             | Optional-field compatibility branches still used by mixed-version control-plane calls             |
+| `foghorn_push_target_status_outbox_outcomes_total`                           | `outcome`              | Durable status delivery, retry, deleted-target tombstone, supersession, and storage errors        |
+| `periscope_ingest_handler_writes_total{table="restream_sessions_anomalous"}` | `table`, `status`      | Final restream facts quarantined because required trustworthy usage fields were absent or invalid |
+| `periscope_metering_projection_divergence_billing_total`                     | `outcome`, `table`     | Billing-reader duplicate, orphan, and malformed divergence rows skipped without wedging a slice   |
+| `periscope_ingest_handler_writes_total{status="quarantined_span"}`           | `table`, `status`      | A finalized fact exceeded the bounded ledger projection span and was not expanded                 |
+| `periscope_ingest_ledger_rebuild_leader`                                     | `ledger`               | One only while this replica holds the named rebuild lease; zero after release or a lost election  |
+| `periscope_ingest_ledger_rebuild_cursor_lag_seconds`                         | `ledger`               | Age of the rebuild cursor relative to the settled frontier                                        |
+| `periscope_metering_billing_malformed_facts_skipped_total`                   | `fact_kind`, `reason`  | Malformed canonical facts skipped without wedging an otherwise billable slice                     |
+| `commodore_field_decrypt_failures_total`                                     | `purpose`, `format`    | Fail-closed application-field opens grouped by bounded field purpose and envelope version         |
 
 The labels never contain tenant, stream, node, target, platform, destination, or
 error text. Target and stream identifiers belong in sanitized logs, not metric
@@ -447,6 +447,22 @@ rows are retained but are not pending; a future same- or newer-seed result can
 repair them. Alert on sustained pending age and on `enqueue_error`,
 `retry_error`, `settle_error`, `quarantine_error`, or `scan_error` increases;
 the quarantine gauge and `quarantined` outcome require inspection of retained rows.
+
+### Periscope Ingest write batching
+
+Periscope Ingest inserts each Kafka poll batch's rows with one ClickHouse INSERT per statement (see [analytics-pipeline.md](../architecture/analytics-pipeline.md), "Write batching").
+
+| Metric                                          | Type      | Labels            | Meaning                                                                                                                                                    |
+| ----------------------------------------------- | --------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `periscope_ingest_write_batch_records`          | Histogram | none              | Kafka records per poll batch whose rows were inserted together                                                                                             |
+| `periscope_ingest_clickhouse_inserts_total`     | Counter   | `table`, `status` | INSERT statements sent to ClickHouse, batched or direct; `status` is `success` or `error`                                                                  |
+| `periscope_ingest_write_insert_rows`            | Histogram | `table`           | Rows per successful INSERT                                                                                                                                 |
+| `periscope_ingest_handler_writes_total`         | Counter   | `table`, `status` | Handler write outcomes: `attempt`, `success`/`inserted` (rows accepted for insert), `error`, and quarantine or skip classifications; not INSERT statements |
+| `periscope_ingest_write_flush_duration_seconds` | Histogram | none              | Time to insert one poll batch's rows, including retries of transient ClickHouse failures                                                                   |
+| `periscope_ingest_ingest_delay_seconds`         | Histogram | none              | Per record, seconds from its Kafka timestamp to the INSERT of its poll batch: end-to-end ingest lag                                                        |
+| `periscope_ingest_duplicate_rows_total`         | Counter   | `table`           | Rows of a redelivered or mirrored Kafka record dropped because their `ingest_id` was already stored or already in the batch                                |
+
+`periscope_ingest_kafka_consumer_lag` remains the backlog in records; `ingest_delay_seconds` is the same lag in time.
 
 ## Prometheus Metric Wiring Policy
 

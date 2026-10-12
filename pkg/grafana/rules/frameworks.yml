@@ -310,7 +310,7 @@ groups:
           description: "A {{ $labels.purpose }} value in {{ $labels.format }} format failed closed. Check field-key deployment and migration state."
 
       - alert: PeriscopeRestreamFactQuarantined
-        expr: increase(periscope_ingest_clickhouse_inserts_total{table="restream_sessions_anomalous",status=~"invalid_identity|non_terminal_state|invalid_time_range"}[10m]) > 0
+        expr: increase(periscope_ingest_handler_writes_total{table="restream_sessions_anomalous",status=~"invalid_identity|non_terminal_state|invalid_time_range"}[10m]) > 0
         labels:
           severity: warning
         annotations:
@@ -318,7 +318,7 @@ groups:
           description: "A final restream event lacked a trustworthy identity, terminal state, or bounded time range and was excluded from billing."
 
       - alert: PeriscopeRestreamBytesUnobserved
-        expr: increase(periscope_ingest_clickhouse_inserts_total{table="restream_sessions_anomalous",status="bytes_unobserved"}[10m]) > 0
+        expr: increase(periscope_ingest_handler_writes_total{table="restream_sessions_anomalous",status="bytes_unobserved"}[10m]) > 0
         labels:
           severity: warning
         annotations:

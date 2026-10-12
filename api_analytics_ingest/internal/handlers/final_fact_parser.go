@@ -206,8 +206,8 @@ func (h *AnalyticsHandler) projectViewerSessionFinal(ctx context.Context, trigge
 	if err := batch.Send(); err != nil {
 		return fmt.Errorf("viewer_sessions_final send: %w", err)
 	}
-	if h.metrics != nil && h.metrics.ClickHouseInserts != nil {
-		h.metrics.ClickHouseInserts.WithLabelValues("viewer_sessions_final", "inserted").Inc()
+	if h.metrics != nil && h.metrics.HandlerWrites != nil {
+		h.metrics.HandlerWrites.WithLabelValues("viewer_sessions_final", "inserted").Inc()
 	}
 	return nil
 }
@@ -334,8 +334,8 @@ func (h *AnalyticsHandler) projectRestreamSessionFinal(ctx context.Context, trig
 	if err := batch.Send(); err != nil {
 		return fmt.Errorf("restream_sessions_final send: %w", err)
 	}
-	if h.metrics != nil && h.metrics.ClickHouseInserts != nil {
-		h.metrics.ClickHouseInserts.WithLabelValues("restream_sessions_final", "inserted").Inc()
+	if h.metrics != nil && h.metrics.HandlerWrites != nil {
+		h.metrics.HandlerWrites.WithLabelValues("restream_sessions_final", "inserted").Inc()
 	}
 	return nil
 }
@@ -358,8 +358,8 @@ func (h *AnalyticsHandler) projectRestreamSessionAnomalous(ctx context.Context, 
 	if err := batch.Send(); err != nil {
 		return fmt.Errorf("restream_sessions_anomalous send: %w", err)
 	}
-	if h.metrics != nil && h.metrics.ClickHouseInserts != nil {
-		h.metrics.ClickHouseInserts.WithLabelValues("restream_sessions_anomalous", row.Reason).Inc()
+	if h.metrics != nil && h.metrics.HandlerWrites != nil {
+		h.metrics.HandlerWrites.WithLabelValues("restream_sessions_anomalous", row.Reason).Inc()
 	}
 	return nil
 }
@@ -405,6 +405,13 @@ func (h *AnalyticsHandler) projectStreamSessionFinal(ctx context.Context, trigge
 	streamName := se.GetStreamName()
 	internalName := mist.ExtractInternalName(streamName)
 	sourceEndedAtMS := edgeReceivedAtMS
+	// The session start comes from the stream's event log and current state,
+	// which this poll batch may have written already.
+	for _, table := range []string{"stream_event_log", "stream_state_current"} {
+		if err := h.flushBeforeRead(ctx, table, nil); err != nil {
+			return err
+		}
+	}
 	sourceStartedAtMS := h.lookupStreamStartedAtMS(ctx, streamStartLookup{
 		tenantID:     tenantID,
 		streamID:     streamID,
@@ -480,8 +487,8 @@ func (h *AnalyticsHandler) projectStreamSessionFinal(ctx context.Context, trigge
 	if err := batch.Send(); err != nil {
 		return fmt.Errorf("stream_sessions_final send: %w", err)
 	}
-	if h.metrics != nil && h.metrics.ClickHouseInserts != nil {
-		h.metrics.ClickHouseInserts.WithLabelValues("stream_sessions_final", "inserted").Inc()
+	if h.metrics != nil && h.metrics.HandlerWrites != nil {
+		h.metrics.HandlerWrites.WithLabelValues("stream_sessions_final", "inserted").Inc()
 	}
 	return nil
 }
@@ -513,8 +520,8 @@ func (h *AnalyticsHandler) projectStreamSessionAnomalous(
 	if err := batch.Send(); err != nil {
 		return fmt.Errorf("stream_sessions_anomalous send: %w", err)
 	}
-	if h.metrics != nil && h.metrics.ClickHouseInserts != nil {
-		h.metrics.ClickHouseInserts.WithLabelValues("stream_sessions_anomalous", "inserted").Inc()
+	if h.metrics != nil && h.metrics.HandlerWrites != nil {
+		h.metrics.HandlerWrites.WithLabelValues("stream_sessions_anomalous", "inserted").Inc()
 	}
 	return nil
 }
@@ -555,8 +562,8 @@ func (h *AnalyticsHandler) projectProcessingSegmentFinal(ctx context.Context, tr
 			"trigger_type":    trigger.GetTriggerType(),
 			"process_type":    pb_.GetProcessType(),
 		}).Warn("Quarantining processing segment with empty output_codec")
-		if h.metrics != nil && h.metrics.ClickHouseInserts != nil {
-			h.metrics.ClickHouseInserts.WithLabelValues("processing_segments_final", "quarantined_empty_codec").Inc()
+		if h.metrics != nil && h.metrics.HandlerWrites != nil {
+			h.metrics.HandlerWrites.WithLabelValues("processing_segments_final", "quarantined_empty_codec").Inc()
 		}
 		return nil
 	}
@@ -656,8 +663,8 @@ func (h *AnalyticsHandler) projectProcessingSegmentFinal(ctx context.Context, tr
 	if err := batch.Send(); err != nil {
 		return fmt.Errorf("processing_segments_final send: %w", err)
 	}
-	if h.metrics != nil && h.metrics.ClickHouseInserts != nil {
-		h.metrics.ClickHouseInserts.WithLabelValues("processing_segments_final", "inserted").Inc()
+	if h.metrics != nil && h.metrics.HandlerWrites != nil {
+		h.metrics.HandlerWrites.WithLabelValues("processing_segments_final", "inserted").Inc()
 	}
 	return nil
 }
@@ -735,6 +742,12 @@ type restreamSessionFinalRow struct {
 }
 
 func (h *AnalyticsHandler) checkRestreamSessionDivergence(ctx context.Context, row restreamSessionFinalRow) error {
+	if err := h.flushBeforeRead(ctx, "restream_sessions_final", func(pending any) bool {
+		prior, ok := pending.(periscopeingestdb.RestreamSessionFinalRow)
+		return ok && prior.TenantID == row.tenantID && prior.NodeID == row.nodeID && prior.SourceEventID == row.sourceEventID
+	}); err != nil {
+		return err
+	}
 	rows, err := h.clickhouse.Query(ctx, `
 		SELECT argMax(duration_ms, projection_version_ms),
 		       argMax(bytes_sent, projection_version_ms),
@@ -813,6 +826,12 @@ func (h *AnalyticsHandler) checkRestreamSessionDivergence(ctx context.Context, r
 // newer projection is written because the billing cursor does not revisit
 // already-seen logical facts.
 func (h *AnalyticsHandler) checkViewerSessionDivergence(ctx context.Context, row viewerSessionFinalRow) error {
+	if err := h.flushBeforeRead(ctx, "viewer_sessions_final", func(pending any) bool {
+		prior, ok := pending.(periscopeingestdb.ViewerSessionFinalRow)
+		return ok && prior.TenantID == row.tenantID && prior.NodeID == row.nodeID && prior.SessionID == row.sessionID
+	}); err != nil {
+		return err
+	}
 	rows, err := h.clickhouse.Query(ctx, `
 		SELECT
 			argMax(duration_seconds,    projection_version_ms),
@@ -916,6 +935,12 @@ func (h *AnalyticsHandler) checkViewerSessionDivergence(ctx context.Context, row
 }
 
 func (h *AnalyticsHandler) checkStreamSessionDivergence(ctx context.Context, row streamSessionFinalRow) error {
+	if err := h.flushBeforeRead(ctx, "stream_sessions_final", func(pending any) bool {
+		prior, ok := pending.(periscopeingestdb.StreamSessionFinalRow)
+		return ok && prior.TenantID == row.tenantID && prior.NodeID == row.nodeID && prior.StreamID == row.streamID && prior.SourceEventID == row.sourceEventID
+	}); err != nil {
+		return err
+	}
 	rows, err := h.clickhouse.Query(ctx, `
 		SELECT
 			argMax(cluster_id,           projection_version_ms),
@@ -1018,6 +1043,12 @@ type processingDivergence struct {
 // process_type, output_codec, track_type, media_seconds, and cluster_id are
 // materialized fields that can change if parser attribution is corrected.
 func (h *AnalyticsHandler) checkProcessingSegmentDivergence(ctx context.Context, row processingSegmentFinalRow) error {
+	if err := h.flushBeforeRead(ctx, "processing_segments_final", func(pending any) bool {
+		prior, ok := pending.(periscopeingestdb.ProcessingSegmentFinalRow)
+		return ok && prior.TenantID == row.tenantID && prior.NodeID == row.nodeID && prior.StreamID == row.streamID && prior.SourceEventID == row.sourceEventID
+	}); err != nil {
+		return err
+	}
 	rows, err := h.clickhouse.Query(ctx, `
 		SELECT
 			argMax(process_type,   projection_version_ms),

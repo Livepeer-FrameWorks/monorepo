@@ -106,6 +106,7 @@ func closeConsumerWhilePolling(t *testing.T, cluster *kfake.Cluster, producer *k
 // poll, including one answered with the context's error, blocks rebalancing
 // until AllowRebalance.
 type pollBlockingPoller struct {
+	noSeek
 	mu       sync.Mutex
 	blocking int
 }

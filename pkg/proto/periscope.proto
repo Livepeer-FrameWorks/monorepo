@@ -1548,7 +1548,7 @@ message GetProcessingUsageResponse {
 }
 
 // ============================================================================
-// Rebuffering Events (from rebuffering_events table)
+// Rebuffering Events (buffer-state transitions of stream health samples)
 // ============================================================================
 
 // Rebuffering event capturing buffer state transitions
