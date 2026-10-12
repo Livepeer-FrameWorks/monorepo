@@ -85,13 +85,28 @@ CREATE TABLE frameworks_ha_probe (
 
 	victimContext, cancelVictim := context.WithTimeout(ctx, 15*time.Second)
 	defer cancelVictim()
-	tx, err := victimConnection.BeginTx(victimContext, nil)
+	// The victim's backend last ran a statement before the ALTER above, and its tserver may not have the new catalog
+	// version yet, so its first write can fail with a schema version mismatch (40001). The transaction is replayed as
+	// every service transaction is, and is left open for the partition.
+	var tx *sql.Tx
+	writeAttempts := 0
+	err := RetryPostgres(victimContext, DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		writeAttempts++
+		attempt, err := victimConnection.BeginTx(victimContext, nil)
+		if err != nil {
+			return err
+		}
+		if _, err := attempt.ExecContext(victimContext, "INSERT INTO frameworks_ha_probe (id, value) VALUES (999, 1)"); err != nil {
+			_ = attempt.Rollback()
+			return err
+		}
+		tx = attempt
+		return nil
+	})
 	if err != nil {
-		t.Fatalf("begin victim transaction: %v", err)
+		t.Fatalf("write uncommitted victim transaction (%d attempts): %v", writeAttempts, err)
 	}
-	if _, err := tx.ExecContext(victimContext, "INSERT INTO frameworks_ha_probe (id, value) VALUES (999, 1)"); err != nil {
-		t.Fatalf("write uncommitted victim transaction: %v", err)
-	}
+	t.Logf("victim transaction wrote after %d attempt(s)", writeAttempts)
 	cluster.partitionNode(t, victim)
 	commitErr := tx.Commit()
 	cancelVictim()
