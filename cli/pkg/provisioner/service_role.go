@@ -393,7 +393,7 @@ func serviceNativeVars(ctx context.Context, cfg ServiceRoleConfig, host inventor
 	}
 	envMap := buildServiceEnvMap(config)
 	if cfg.ServiceName == "livepeer-gateway" || cfg.ServiceName == "livepeer-signer" {
-		applyLivepeerNativeEnvDefaults(envMap, cfg.StateDirs)
+		applyLivepeerNativeEnvDefaults(cfg.ServiceName, envMap, cfg.StateDirs)
 	}
 	files := []map[string]string{}
 	livepeerKeystorePath := ""
@@ -547,7 +547,7 @@ func nonNilStringSlice(values []string) []string {
 	return values
 }
 
-func applyLivepeerNativeEnvDefaults(env map[string]string, stateDirs []string) {
+func applyLivepeerNativeEnvDefaults(serviceName string, env map[string]string, stateDirs []string) {
 	if len(stateDirs) == 0 || stateDirs[0] == "" {
 		return
 	}
@@ -557,6 +557,17 @@ func applyLivepeerNativeEnvDefaults(env map[string]string, stateDirs []string) {
 	if env["HOME"] == "" {
 		env["HOME"] = stateDirs[0]
 	}
+	if serviceName == "livepeer-gateway" && env["FRAMEWORKS_TELEMETRY_SPOOL_DIR"] == "" {
+		env["FRAMEWORKS_TELEMETRY_SPOOL_DIR"] = livepeerGatewayTelemetrySpoolDir(stateDirs[0])
+	}
+}
+
+// livepeerGatewayTelemetrySpoolDir is the gateway's durable Decklog telemetry
+// spool: a state directory the go_service role creates with the service
+// user's ownership and the unit's sandbox can write, so undelivered
+// observations survive restarts and upgrades.
+func livepeerGatewayTelemetrySpoolDir(stateDir string) string {
+	return stateDir + "/frameworks-telemetry"
 }
 
 func livepeerNativeFiles(env map[string]string, stateDirs []string) ([]map[string]string, string, string, error) {

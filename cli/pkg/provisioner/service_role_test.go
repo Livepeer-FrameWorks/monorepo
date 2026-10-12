@@ -978,3 +978,33 @@ func assertStringSlice(t *testing.T, got any, want []string) {
 		}
 	}
 }
+
+// The gateway's telemetry spool lives in a state directory the go_service role
+// creates for the service user and the sandbox lets it write, never in a home
+// directory the unit happens to inherit.
+func TestLivepeerGatewayTelemetrySpoolIsAManagedStateDir(t *testing.T) {
+	cfg := genericServiceRoleConfig("livepeer-gateway", 8935)
+	spool := "/var/lib/frameworks/livepeer-gateway/frameworks-telemetry"
+	if !slices.Contains(cfg.StateDirs, spool) {
+		t.Fatalf("gateway state dirs %v lack the telemetry spool %s", cfg.StateDirs, spool)
+	}
+	vars, err := serviceNativeVars(context.Background(), cfg, inventory.Host{Name: "media-1"}, ServiceConfig{
+		Mode: "native", BinaryURL: "https://example.test/livepeer.tar.gz", EnvVars: map[string]string{"network": "arbitrum-one-mainnet"}, Metadata: map[string]any{},
+	}, RoleBuildHelpers{})
+	if err != nil {
+		t.Fatalf("gateway vars: %v", err)
+	}
+	assertStringSlice(t, vars["go_service_state_dirs"], cfg.StateDirs)
+	if got := stringMapFromAny(vars["go_service_env"])["FRAMEWORKS_TELEMETRY_SPOOL_DIR"]; got != spool {
+		t.Fatalf("FRAMEWORKS_TELEMETRY_SPOOL_DIR = %q, want %s", got, spool)
+	}
+	unit := renderGoServiceUnit("livepeer-gateway", stringSliceFromAny(vars["go_service_args"]), false, true, cfg.StateDirs)
+	if !strings.Contains(unit, spool) {
+		t.Fatalf("the sandboxed unit cannot write the spool:\n%s", unit)
+	}
+
+	signer := genericServiceRoleConfig("livepeer-signer", 8935)
+	if slices.Contains(signer.StateDirs, "/var/lib/frameworks/livepeer-signer/frameworks-telemetry") {
+		t.Fatalf("the signer emits no gateway telemetry: %v", signer.StateDirs)
+	}
+}

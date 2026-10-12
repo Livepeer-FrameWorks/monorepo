@@ -7432,6 +7432,9 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 		applyLivepeerRPCPool(env, livepeerServiceHostIndex(task, manifest))
 	}
 	normalizeServiceEnvVars(baseName, env)
+	if err := applyNetworkObservationNamespace(manifest, baseName, env); err != nil {
+		return nil, err
+	}
 	if err := validateLivepeerProductionEnv(manifest, task, baseName, env); err != nil {
 		return nil, err
 	}
@@ -8354,6 +8357,67 @@ func manifestServiceEnabledForDeploy(manifest *inventory.Manifest, deploy string
 		}
 	}
 	return false
+}
+
+// applyNetworkObservationNamespace renders the network-observation namespace
+// every producer and reader of one deployment must share. The environment is
+// the manifest profile, so a staging cluster's gateways, coordinator and Bridge
+// keep their observations apart from production's. A gateway's network is the
+// chain ID of the Livepeer network it runs on (its `network` flag); offchain
+// gateways observe no chain and report chain ID 0, as go-livepeer records for
+// an offchain node. Values already set by an env file or service config win.
+func applyNetworkObservationNamespace(manifest *inventory.Manifest, serviceID string, env map[string]string) error {
+	switch serviceID {
+	case "network-observer", "bridge":
+		if strings.TrimSpace(env["NETWORK_OBSERVER_ENVIRONMENT"]) == "" {
+			env["NETWORK_OBSERVER_ENVIRONMENT"] = networkObservationEnvironment(manifest)
+		}
+	case "livepeer-gateway":
+		if strings.TrimSpace(env["FRAMEWORKS_ENVIRONMENT"]) == "" {
+			env["FRAMEWORKS_ENVIRONMENT"] = networkObservationEnvironment(manifest)
+		}
+		if strings.TrimSpace(env["FRAMEWORKS_NETWORK_ID"]) == "" {
+			chainID, ok := livepeerNetworkChainID(env["network"])
+			if !ok {
+				return fmt.Errorf("service livepeer-gateway: Livepeer network %q has no known chain ID for gateway telemetry; set FRAMEWORKS_NETWORK_ID to the chain ID of its eth_url", env["network"])
+			}
+			env["FRAMEWORKS_NETWORK_ID"] = chainID
+		}
+	}
+	return nil
+}
+
+func networkObservationEnvironment(manifest *inventory.Manifest) string {
+	profile := ""
+	if manifest != nil {
+		profile = strings.ToLower(strings.TrimSpace(manifest.Profile))
+	}
+	switch profile {
+	case "":
+		return "production"
+	case "dev":
+		return "development"
+	default:
+		return profile
+	}
+}
+
+// livepeerNetworkChainID maps the go-livepeer network names the gateway can
+// run on to their chain IDs. An empty network flag is not rendered, and
+// go-livepeer then runs offchain.
+func livepeerNetworkChainID(network string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(network)) {
+	case "arbitrum-one-mainnet":
+		return "42161", true
+	case "arbitrum-sepolia":
+		return "421614", true
+	case "mainnet":
+		return "1", true
+	case "", "offchain":
+		return "0", true
+	default:
+		return "", false
+	}
 }
 
 func applyLivepeerGatewayRuntimeDefaults(env map[string]string) {

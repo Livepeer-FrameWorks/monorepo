@@ -622,3 +622,72 @@ func TestBuildServiceEnvVarsFailsProductionGatewayWithoutCellFoghorn(t *testing.
 		t.Fatalf("err = %v, want the unresolved auth webhook refusal", err)
 	}
 }
+
+// A gateway, coordinator and Bridge provisioned from one manifest publish and
+// read the same observation namespace: the manifest profile as environment and
+// the gateway's own Livepeer network as chain ID.
+func TestBuildServiceEnvVarsRendersStagingObservationNamespace(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Profile: "staging",
+		Hosts: map[string]inventory.Host{
+			"fw-stg-eu-1": {Cluster: "staging-media-eu"},
+			"fw-stg-core": {Cluster: "staging-core"},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"foghorn-eu": {Enabled: true, Deploy: "foghorn", Hosts: []string{"fw-stg-eu-1"}, Cluster: "staging-media-eu"},
+			"livepeer-gateway-eu": {Enabled: true, Deploy: "livepeer-gateway", Hosts: []string{"fw-stg-eu-1"}, Cluster: "staging-media-eu", Config: map[string]string{
+				"eth_acct_addr": "0x00000000000000000000000000000000000000aa", "keystore_path": "/var/lib/frameworks/livepeer-gateway/keystore/key.json",
+			}},
+			"network-observer": {Enabled: true, Hosts: []string{"fw-stg-core"}},
+			"bridge":           {Enabled: true, Hosts: []string{"fw-stg-core"}},
+		},
+	}
+	gateway, err := buildServiceEnvVars(&orchestrator.Task{
+		Name: "livepeer-gateway-eu@fw-stg-eu-1", Type: "livepeer-gateway", ServiceID: "livepeer-gateway-eu", Host: "fw-stg-eu-1", ClusterID: "staging-media-eu",
+	}, manifest, map[string]interface{}{}, "", "", map[string]string{}, nil, "native")
+	if err != nil {
+		t.Fatalf("gateway env: %v", err)
+	}
+	if gateway["FRAMEWORKS_ENVIRONMENT"] != "staging" || gateway["FRAMEWORKS_NETWORK_ID"] != "42161" {
+		t.Fatalf("gateway namespace = (%q, %q), want (staging, 42161)", gateway["FRAMEWORKS_ENVIRONMENT"], gateway["FRAMEWORKS_NETWORK_ID"])
+	}
+	for _, service := range []string{"network-observer", "bridge"} {
+		env := map[string]string{}
+		if err := applyNetworkObservationNamespace(manifest, service, env); err != nil {
+			t.Fatalf("%s: %v", service, err)
+		}
+		if env["NETWORK_OBSERVER_ENVIRONMENT"] != "staging" {
+			t.Fatalf("%s NETWORK_OBSERVER_ENVIRONMENT = %q, want staging", service, env["NETWORK_OBSERVER_ENVIRONMENT"])
+		}
+	}
+}
+
+func TestNetworkObservationNamespaceFollowsGatewayNetwork(t *testing.T) {
+	for _, tc := range []struct {
+		profile, network, wantEnv, wantNetwork string
+	}{
+		{"production", "arbitrum-one-mainnet", "production", "42161"},
+		{"", "arbitrum-one-mainnet", "production", "42161"},
+		{"dev", "offchain", "development", "0"},
+		{"staging", "", "staging", "0"},
+		{"staging", "arbitrum-sepolia", "staging", "421614"},
+	} {
+		env := map[string]string{"network": tc.network}
+		if err := applyNetworkObservationNamespace(&inventory.Manifest{Profile: tc.profile}, "livepeer-gateway", env); err != nil {
+			t.Fatalf("%+v: %v", tc, err)
+		}
+		if env["FRAMEWORKS_ENVIRONMENT"] != tc.wantEnv || env["FRAMEWORKS_NETWORK_ID"] != tc.wantNetwork {
+			t.Fatalf("%+v: got (%q, %q)", tc, env["FRAMEWORKS_ENVIRONMENT"], env["FRAMEWORKS_NETWORK_ID"])
+		}
+	}
+	explicit := map[string]string{"network": "custom-chain", "FRAMEWORKS_NETWORK_ID": "31337", "FRAMEWORKS_ENVIRONMENT": "lab"}
+	if err := applyNetworkObservationNamespace(&inventory.Manifest{Profile: "staging"}, "livepeer-gateway", explicit); err != nil {
+		t.Fatalf("explicit namespace: %v", err)
+	}
+	if explicit["FRAMEWORKS_NETWORK_ID"] != "31337" || explicit["FRAMEWORKS_ENVIRONMENT"] != "lab" {
+		t.Fatalf("explicit namespace overridden: %v", explicit)
+	}
+	if err := applyNetworkObservationNamespace(&inventory.Manifest{Profile: "staging"}, "livepeer-gateway", map[string]string{"network": "custom-chain"}); err == nil {
+		t.Fatal("a network with no known chain ID must not publish under a guessed one")
+	}
+}

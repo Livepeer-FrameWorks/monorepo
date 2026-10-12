@@ -170,6 +170,9 @@ func genericServiceRoleConfig(serviceName string, port int) ServiceRoleConfig {
 		cfg.PacmanRuntimePackages = []string{"libva"}
 		stateDir := fmt.Sprintf("/var/lib/frameworks/%s", serviceName)
 		cfg.StateDirs = []string{stateDir, stateDir + "/keystore"}
+		if serviceName == "livepeer-gateway" {
+			cfg.StateDirs = append(cfg.StateDirs, livepeerGatewayTelemetrySpoolDir(stateDir))
+		}
 	}
 	return cfg
 }

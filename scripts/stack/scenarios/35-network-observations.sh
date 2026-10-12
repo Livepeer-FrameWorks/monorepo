@@ -6,29 +6,43 @@
 # the network-prober protocol registers through GET /v1/work, answers the
 # hostname with a DNS batch, receives assignments for both endpoints and reports
 # a qualifying success for one and a qualifying timeout for the other, plus a
-# heartbeat. A gateway reports discovery, state, a dispatched attempt and an
-# accepted segment for the first orchestrator through Decklog, as the gateway
-# fork does. Then:
+# heartbeat. Cell A's go-livepeer gateway reports to Decklog with the identity
+# and Decklog settings the CLI renders for a production gateway
+# (docker-compose.stack.yml); a stream published to cell A's edge is transcoded
+# through it, so the gateway rows are its own discovery, state, admission
+# decision, dispatched attempts, accepted segments and heartbeat. Then:
 #   - a wrong secret is refused on work and ingest and leaves no receipt; an
 #     exact replay is acknowledged with the same ID and a conflicting reuse of
 #     the ID is refused;
-#   - every observation lands once in periscope.network_observations with the
-#     reported facts, and the rollup loop's 5-minute and hourly snapshots and
-#     the work snapshots equal the deduplicated raw rows;
-#   - Bridge's public GET /v1/network/livepeer returns both orchestrators with
-#     the observed latency, failure and accepted work, for the raw window and
-#     for a window old enough to be served from the snapshots, without raw
-#     observer identities; diagnostics refuse an anonymous caller;
+#   - every prober observation lands once in periscope.network_observations
+#     with the reported facts;
+#   - every gateway row is attributed to the socket the gateway dialed
+#     (livepeer-orch-a), the stream's attempts and accepted segments carry the
+#     stream tenant and work accounting, each accepted segment's pixels equal
+#     its dispatched attempt's returned pixels, and the gateway's heartbeat
+#     lands as a coverage row;
+#   - the rollup loop's 5-minute and hourly snapshots and the work snapshots
+#     equal the deduplicated raw rows;
+#   - Bridge's public GET /v1/network/livepeer returns both chain orchestrators
+#     from the inventory, the prober's latency and failure, and the gateway's
+#     discovery, segments and accepted work, for the raw window and for a
+#     window old enough to be served from the snapshots, without raw observer
+#     identities or the stream's name; diagnostics refuse an anonymous caller;
 #   - the public GraphQL orchestrator fields answer with the gateway's vantage
 #     and instance.
-# Catches: any break between prober, coordinator, Decklog, Kafka,
-# periscope-ingest, the rollup loop, periscope-query and Bridge, a replay
-# counted twice, and observer identities leaking onto the public route.
+# Catches: any break between the gateway's Decklog client, the prober,
+# coordinator, Decklog, Kafka, periscope-ingest, the rollup loop,
+# periscope-query and Bridge, a replay counted twice, and observer identities
+# leaking onto the public route.
+# Not covered: service charges and ticket credit at a nonzero price. go-livepeer
+# builds its price and its ticket sender and recipient only on a chain, so the
+# offchain stack orchestrators quote no price and the gateway's attempts carry
+# a known zero ticket credit and no service charge.
 # Manual: it waits for the rollup loop's five-minute pass, and in the default
 # order behind scenario 32's analytics backlog (about 12 minutes in all).
 . "$(dirname "$0")/../lib.sh"
 
-need curl jq python3 psql || finish
+need curl jq python3 psql ffmpeg || finish
 
 : "${NETWORK_OBSERVER_URL:=http://network-observer:18024}"
 : "${LIVEPEER_CHAIN_URL:=http://livepeer-chain:8545}"
@@ -42,12 +56,22 @@ NET=$NETWORK_OBSERVATION_NETWORK
 ENVN=$NETWORK_OBSERVATION_ENVIRONMENT
 PROBER=stack-prober-eu
 REGION=stack-eu
-GATEWAY=stack-livepeer-gateway-a
-GATEWAY_REGION=stack-central
+# Cell A's gateway identity and orchestrator, as docker-compose.stack.yml
+# configures them.
+GATEWAY=stack-lp-a
+GATEWAY_REGION=eu-west
+ORCH_URI=https://livepeer-orch-a:8935
+ORCH_IP=$(python3 -c 'import socket; print(socket.gethostbyname("livepeer-orch-a"))')
 SINCE=$(utc_now)
 RUN_START=$(date -u +%s)
 work_dir=$(mktemp -d)
-trap 'rm -rf "$work_dir"' EXIT
+SID="" PUB=""
+cleanup() {
+  [ -n "$PUB" ] && kill "$PUB" 2>/dev/null
+  [ -n "$SID" ] && delete_stream "$SID"
+  rm -rf "$work_dir"
+}
+trap cleanup EXIT
 
 now_rfc3339() { date -u +%Y-%m-%dT%H:%M:%S.%NZ; }
 new_id() { cat /proc/sys/kernel/random/uuid; }
@@ -179,55 +203,41 @@ check "$IP_B is unavailable from the checked location" json_has "$I" "any(.inven
 inventory_private() { ! grep -qE "$PROBER" "$work_dir/inventory.json"; }
 check "the public inventory names no raw observer" inventory_private
 
-log "gateway telemetry"
-SESSION=stack-netobs-session-$RUN_START
-# gateway_event <event id> <payload field> <payload json> [stream tenant]: one
-# GatewayTelemetryEvent through Decklog's SendGatewayTelemetry, as the gateway
-# fork sends it.
-gateway_event() {
-  jq -cn --arg id "$1" --arg field "$2" --argjson p "$3" --arg st "${4:-}" --arg g "$GATEWAY" --arg r "$GATEWAY_REGION" \
-    --arg t "$TENANT" --arg n "$NET" --arg e "$ENVN" --arg at "$(now_rfc3339)" '
-    {gatewayId:$g, gatewayRegion:$r, clusterId:"central-primary", clusterOwnerTenantId:$t, timestamp:$at,
-     schemaVersion:3, eventId:$id, networkId:$n, environment:$e, producerKind:"gateway"}
-    + {($field):$p} + (if $st == "" then {} else {streamTenantId:$st} end)' |
-    stack_exec decklog sh -c 'grpcurl -plaintext -max-time 10 -H "authorization: Bearer $SERVICE_TOKEN" -d @ "localhost:${PORT:-18006}" helmsmancontrol.DecklogService/SendGatewayTelemetry' >/dev/null 2>"$work_dir/grpc.err"
-}
-G_DISCOVERY=$(new_id) G_STATE=$(new_id) G_ATTEMPT=$(new_id) G_SEGMENT=$(new_id)
-VANTAGE=$(jq -cn --arg ip "$IP_A" '{resolvedIp:$ip, dialed:true}')
-check "Decklog accepts the gateway's discovery" gateway_event "$G_DISCOVERY" discovery \
-  "$(jq -cn --arg a "$ORCH_A" --arg u "$URI_A" --arg ip "$IP_A" --argjson v "$VANTAGE" \
-    '{orchAddr:$a, orchUrl:$u, discoveryLatencyMs:37, reachable:true, vantage:$v, targetIp:$ip, samplingSource:"gateway", observerHealthy:true}')"
-check "Decklog accepts the gateway's state" gateway_event "$G_STATE" state \
-  "$(jq -cn --arg a "$ORCH_A" --arg u "$URI_A" --argjson v "$VANTAGE" \
-    '{orchAddr:$a, canonicalUrl:$u, capabilities:["h264"], pricePerUnit:"1200", pixelsPerUnit:"1", priceKnown:true, priceCurrency:"ETH", priceUnit:"pixel", hardware:"stack-gpu", source:"gateway_pool", vantage:$v}')"
-check "Decklog accepts the gateway's dispatched attempt" gateway_event "$G_ATTEMPT" transcode \
-  "$(jq -cn --arg a "$ORCH_A" --arg u "$URI_A" --arg ip "$IP_A" --arg s "$SESSION" \
-    '{orchAddr:$a, orchUrl:$u, sessionId:$s, manifestIdHash:"stack", seqNo:"1", success:true, overallMs:800, pixels:"1000000",
-      profiles:["P240p30fps16x9"], resolvedIp:$ip, remoteIpVerified:true, sourceDurationMs:2000, disposition:"accepted",
-      accounting:{version:1, requestDispatched:true, returnedPixelsKnown:true,
-        serviceCharge:{numerator:"1200000000", denominator:"1", currency:"ETH", unit:"wei"}, ticketsSent:"1"}}')" "$TENANT"
-check "Decklog accepts the gateway's accepted segment" gateway_event "$G_SEGMENT" segmentResult \
-  "$(jq -cn --arg a "$ORCH_A" --arg u "$URI_A" --arg ip "$IP_A" --arg s "$SESSION" \
-    '{orchAddr:$a, orchUrl:$u, resolvedIp:$ip, sessionId:$s, manifestIdHash:"stack", seqNo:"1", sourceDurationMs:2000, overallMs:900,
-      attempts:1, success:true, profiles:["P240p30fps16x9"], workAccountingVersion:1, acceptedPixels:"1000000", acceptedRenditions:1}')" "$TENANT"
-[ -s "$work_dir/grpc.err" ] && echo "    grpcurl: $(tr '\n' ' ' <"$work_dir/grpc.err")"
+log "a live transcode through cell A's gateway"
+# A 854x480@15 source keeps the work cheap: the 360p rung is transcoded and the
+# 480p rung is equal-area, as in scenario 02. Two-second segments for 40 seconds.
+S=$(create_stream "stack-netobs-$RUN_START" false)
+SID=$(echo "$S" | jq -r '.id // empty')
+UUID=$(echo "$S" | jq -r '.streamId // empty')
+KEY=$(echo "$S" | jq -r '.streamKey // empty')
+[ -n "$SID" ] || { fail "createStream: $S"; finish; }
+eventually 90 "cell A's Livepeer gateway is discoverable" gateway_discoverable stack-livepeer-gateway-a
+PUB=$(publish "$EDGE_A_RTMP" "$KEY" 854x480 15 40)
+INTERNAL=$(internal_name_of "$UUID")
+# The gateway's manifest ID, recorded as the segment's delivery session, is the
+# Mist runtime name plus the Livepeer process's 8-character suffix.
+DELIVERY_PREFIX="live+$INTERNAL-"
+transcoded() { video_heights "$UUID" | grep -qx 360; }
+eventually 90 "the stream carries the transcoded 360p rendition" transcoded
+wait_publisher "$PUB" 120
+PUB=""
 
 log "ClickHouse observations"
 NS="tenant_id='$TENANT' AND provider='livepeer' AND network_id='$NET' AND environment='$ENVN'"
 STATE_A=$(derived_id "$RESULT_A:state")
 REPORT_EVENT=$(derived_id "$REPORT_ID:report")
-EVENTS="'$RESULT_A','$STATE_A','$RESULT_B','$REPORT_EVENT','$G_DISCOVERY','$G_STATE','$G_ATTEMPT','$G_SEGMENT'"
+EVENTS="'$RESULT_A','$STATE_A','$RESULT_B','$REPORT_EVENT'"
 rows_landed() {
   ROWS=$(ch "SELECT toString(event_id) AS id, kind, producer_kind, gateway_id, gateway_region, resource_id, resolved_ip,
-      success, qualifying, latency_ms, failure_kind, price_numerator, accounting_version, accepted_pixels
+      success, qualifying, latency_ms, failure_kind, price_numerator
     FROM periscope.network_observations FINAL WHERE $NS AND event_id IN ($EVENTS) FORMAT JSONEachRow" | jq -sc .)
-  [ "$(echo "$ROWS" | jq length)" = 8 ]
+  [ "$(echo "$ROWS" | jq length)" = 4 ]
 }
 # Periscope-ingest drains one analytics topic for every scenario at about ten
 # events a second; scenario 32's viewer bursts (about 7,000 /play requests,
 # one load-balancing event each) leave over ten minutes of backlog ahead of
 # these events.
-eventually 1200 "all 8 observations reached periscope.network_observations" rows_landed || { echo "    rows: $ROWS"; finish; }
+eventually 1200 "all 4 prober observations reached periscope.network_observations" rows_landed || { echo "    rows: $ROWS"; finish; }
 row() { echo "$ROWS" | jq -e --arg id "$1" "any(.[]; .id == \$id and ($2))" >/dev/null; }
 check "prober success: discovery of $IP_A, 42 ms, from $REGION" row "$RESULT_A" \
   ".kind == \"discovery\" and .producer_kind == \"prober\" and .gateway_id == \"$PROBER\" and .gateway_region == \"$REGION\" and .resource_id == \"$ORCH_A\" and .resolved_ip == \"$IP_A\" and .success == 1 and .qualifying == 1 and .latency_ms == 42"
@@ -235,12 +245,63 @@ check "prober success also records the quoted state" row "$STATE_A" ".kind == \"
 check "prober timeout: qualifying failure of $IP_B" row "$RESULT_B" \
   ".kind == \"discovery\" and .resource_id == \"$ORCH_B\" and .resolved_ip == \"$IP_B\" and .success == 0 and .qualifying == 1 and .failure_kind == \"timeout\""
 check "prober heartbeat: coverage row" row "$REPORT_EVENT" ".kind == \"coverage\" and .gateway_id == \"$PROBER\" and .success == 1"
-gateway_kinds() { echo "$ROWS" | jq -e '[.[] | select(.producer_kind == "gateway") | .kind] | sort == ["attempt","discovery","segment","state"]' >/dev/null; }
-check "gateway rows: discovery, state, attempt and segment" gateway_kinds
-check "the gateway's accepted segment carries its accounted pixels" row "$G_SEGMENT" ".accounting_version == 1 and (.accepted_pixels | tostring) == \"1000000\""
 check "the refused conflicting body did not replace the reported latency" row "$RESULT_A" ".latency_ms == 42"
 raw_copies=$(ch "SELECT count() FROM periscope.network_observations WHERE $NS AND event_id = '$RESULT_A'")
 check "the replayed batch was emitted once (raw rows for its result: $raw_copies)" [ "$raw_copies" = 1 ]
+
+GW_NS="$NS AND producer_kind='gateway' AND gateway_id='$GATEWAY' AND gateway_region='$GATEWAY_REGION' AND timestamp >= toDateTime($RUN_START)"
+STREAM_SEGMENTS="$GW_NS AND kind='segment' AND startsWith(JSONExtractString(private_data, 'delivery_session_id'), '$DELIVERY_PREFIX')"
+segment_count() { ch "SELECT count() FROM periscope.network_observations FINAL WHERE $STREAM_SEGMENTS"; }
+# The gateway sends from its local spool; the stream's rows stop growing once
+# the publisher has ended and the spool has drained.
+gateway_settled() {
+  local before
+  before=$(segment_count)
+  [ "${before:-0}" -ge 5 ] || return 1
+  sleep 10
+  [ "$(segment_count)" = "$before" ]
+}
+eventually 300 "the gateway's accepted segments for the stream reached ClickHouse and settled" gateway_settled || finish
+SEGMENTS=$(segment_count)
+GW_ORCH=$(ch "SELECT any(resource_id) FROM periscope.network_observations FINAL WHERE $GW_NS AND kind='discovery' AND resolved_ip='$ORCH_IP'")
+# An offchain orchestrator has no Ethereum account, so it reports the zero
+# address as its identity.
+check "the gateway's discovery dialed $ORCH_URI at $ORCH_IP and identified orchestrator ${GW_ORCH:-<none>}" \
+  [ "$(ch "SELECT count() FROM periscope.network_observations FINAL WHERE $GW_NS AND kind='discovery' AND success=1 AND qualifying=1
+    AND resource_id='$GW_ORCH' AND endpoint_uri='$ORCH_URI' AND resolved_ip='$ORCH_IP'")" -ge 1 ]
+check "the gateway reported the orchestrator's state" \
+  [ "$(ch "SELECT count() FROM periscope.network_observations FINAL WHERE $GW_NS AND kind='state' AND resource_id='$GW_ORCH' AND endpoint_uri='$ORCH_URI'")" -ge 1 ]
+check "the gateway reported its admission decision" \
+  [ "$(ch "SELECT count() FROM periscope.network_observations FINAL WHERE $GW_NS AND kind='decision' AND disposition='accepted'
+    AND JSONExtractString(private_data, 'stage') = 'admission'")" -ge 1 ]
+# A failure without a connected socket stays unattributed (no IP); every other
+# row carries the socket the gateway actually dialed.
+misattributed=$(ch "SELECT count() FROM periscope.network_observations FINAL WHERE $GW_NS
+  AND kind IN ('discovery','state','decision','attempt','segment')
+  AND (resource_id != '$GW_ORCH' OR resolved_ip NOT IN ('$ORCH_IP', '') OR (success=1 AND resolved_ip != '$ORCH_IP'))")
+check "every gateway row names the orchestrator and the socket it dialed ($misattributed other)" [ "$misattributed" = 0 ]
+MANIFEST=$(ch "SELECT any(JSONExtractString(private_data, 'manifest_id_hash')) FROM periscope.network_observations FINAL WHERE $STREAM_SEGMENTS")
+STREAM_ATTEMPTS="$GW_NS AND kind='attempt' AND JSONExtractString(private_data, 'manifest_id_hash') = '$MANIFEST'"
+check "$SEGMENTS accepted segments for the stream, each with two renditions, the stream tenant and work accounting" \
+  [ "$(ch "SELECT count() FROM periscope.network_observations FINAL WHERE $STREAM_SEGMENTS AND success=1 AND qualifying=1
+    AND accounting_version=1 AND accepted_pixels > 0 AND accepted_renditions = 2 AND attempts >= 1
+    AND private_tenant_id='$TENANT' AND profile_key != ''")" = "$SEGMENTS" ]
+attempts=$(ch "SELECT count() FROM periscope.network_observations FINAL WHERE $STREAM_ATTEMPTS AND success=1
+  AND disposition='workload' AND accounting_version=1 AND request_dispatched=1 AND returned_pixels_known=1 AND returned_pixels > 0
+  AND source_duration_ms > 0 AND private_tenant_id='$TENANT'")
+check "the stream's dispatched attempts are accounted with returned pixels ($attempts for $SEGMENTS segments)" [ "${attempts:-0}" -ge "$SEGMENTS" ]
+unmatched=$(ch "SELECT count() FROM
+    (SELECT JSONExtractUInt(private_data, 'seq_no') AS seq, accepted_pixels FROM periscope.network_observations FINAL WHERE $STREAM_SEGMENTS) s
+  LEFT JOIN
+    (SELECT JSONExtractUInt(private_data, 'seq_no') AS seq, max(returned_pixels) AS returned FROM periscope.network_observations FINAL
+     WHERE $STREAM_ATTEMPTS AND success=1 GROUP BY seq) a USING seq
+  WHERE a.returned != s.accepted_pixels")
+check "each accepted segment's pixels equal its attempt's returned pixels ($unmatched differ)" [ "$unmatched" = 0 ]
+gateway_heartbeat() {
+  [ "$(ch "SELECT count() FROM periscope.network_observations FINAL WHERE $GW_NS AND kind='coverage' AND success=1")" -ge 1 ]
+}
+eventually 120 "the gateway's heartbeat is a coverage row" gateway_heartbeat
+GW_LATENCY=$(ch "SELECT argMax(latency_ms, timestamp) FROM periscope.network_observations FINAL WHERE $GW_NS AND kind='discovery' AND resolved_ip='$ORCH_IP'")
 
 log "Bridge public REST history"
 raw_count() { # raw_count <kind> <ip> <region> <since epoch>
@@ -257,15 +318,22 @@ check "summary for $IP_A from $REGION: $samples_a sample(s), all successes, p50 
 samples_b=$(raw_count discovery "$IP_B" "$REGION" "$day_ago")
 check "summary for $IP_B from $REGION: $samples_b qualifying failure(s)" json_has "$P" \
   "any(.history.summaries[]; .kind == \"discovery\" and .resource_id == \"$ORCH_B\" and .ip == \"$IP_B\" and .region == \"$REGION\" and .failures == $samples_b and .successes == 0)"
-check "the gateway's discovery of $IP_A is a separate cohort at 37 ms" json_has "$P" \
-  "any(.history.summaries[]; .kind == \"discovery\" and .ip == \"$IP_A\" and .region == \"$GATEWAY_REGION\" and .p50_ms == 37)"
 check "raw samples include the 42 ms check without its observer ID" json_has "$P" \
   "any(.history.observations[]; .event_id == \"$RESULT_A\" and .latency_ms == 42 and .observer_id == null)"
-segments_a=$(ch "SELECT count() FROM periscope.network_observations FINAL WHERE $NS AND kind='segment' AND resolved_ip='$IP_A' AND success=1 AND accounting_version=1 AND timestamp >= toDateTime($day_ago)")
-check "work for $IP_A: $segments_a accepted segment(s) and a dispatched attempt" json_has "$P" \
-  "any(.history.work.summaries[]; .resource_id == \"$ORCH_A\" and .ip == \"$IP_A\" and .accepted_segments == $segments_a and .dispatched_attempts >= 1 and (.accepted_pixels | tonumber) >= 1000000)"
-no_identities() { ! grep -qE "$PROBER|$GATEWAY|$SESSION" "$work_dir/public.json"; }
-check "no raw observer or gateway identity and no session reaches the public route" no_identities
+gw_discovery=$(raw_count discovery "$ORCH_IP" "$GATEWAY_REGION" "$day_ago")
+check "the gateway's discovery of $ORCH_IP is a $GATEWAY_REGION cohort of $gw_discovery sample(s)" json_has "$P" \
+  "[.history.summaries[] | select(.kind == \"discovery\" and .resource_id == \"$GW_ORCH\" and .ip == \"$ORCH_IP\" and .region == \"$GATEWAY_REGION\") | .samples] | add == $gw_discovery"
+gw_segments=$(raw_count segment "$ORCH_IP" "$GATEWAY_REGION" "$day_ago")
+check "the gateway's segment cohorts for $ORCH_IP hold $gw_segments sample(s)" json_has "$P" \
+  "[.history.summaries[] | select(.kind == \"segment\" and .resource_id == \"$GW_ORCH\" and .ip == \"$ORCH_IP\" and .region == \"$GATEWAY_REGION\") | .samples] | add == $gw_segments"
+read -r accepted_gw pixels_gw <<<"$(ch "SELECT count(), sum(accepted_pixels) FROM periscope.network_observations FINAL WHERE $NS AND kind='segment'
+  AND resolved_ip='$ORCH_IP' AND gateway_region='$GATEWAY_REGION' AND success=1 AND accounting_version=1 AND timestamp >= toDateTime($day_ago) FORMAT TSV")"
+check "work for $ORCH_IP: $accepted_gw accepted segment(s) and $pixels_gw accepted pixels, all dispatched" json_has "$P" \
+  "[.history.work.summaries[] | select(.resource_id == \"$GW_ORCH\" and .ip == \"$ORCH_IP\" and .region == \"$GATEWAY_REGION\")]
+    | (map(.accepted_segments) | add) == $accepted_gw and (map(.accepted_pixels | tonumber) | add) == $pixels_gw
+      and (map(.dispatched_attempts) | add) >= $accepted_gw"
+no_identities() { ! grep -qF -e "$PROBER" -e "$GATEWAY" -e "$INTERNAL" "$work_dir/public.json"; }
+check "no raw observer or gateway identity and no stream name reaches the public route" no_identities
 
 log "GraphQL"
 public_gql() {
@@ -273,24 +341,24 @@ public_gql() {
     --data "$(jq -cn --arg q "$1" --argjson v "$2" '{query:$q, variables:$v}')"
 }
 gql_orchestrator() {
-  G=$(public_gql 'query($a:String!){orchestrator(orchAddr:$a){orchestrator{orchAddr} instances{resolvedIp canonicalUrl capabilities} vantages{gatewayId gatewayRegion resolvedIp latestLatencyMs}} orchestratorsConnection(orchAddr:$a){totalCount nodes{orchAddr}}}' \
-    "$(jq -cn --arg a "$ORCH_A" '{a:$a}')")
-  json_has "$G" "(.errors == null) and .data.orchestrator.orchestrator.orchAddr == \"$ORCH_A\"
-    and any(.data.orchestrator.vantages[]; .gatewayId == \"$GATEWAY\" and .resolvedIp == \"$IP_A\" and .latestLatencyMs == 37)
-    and any(.data.orchestrator.instances[]; .resolvedIp == \"$IP_A\" and .canonicalUrl == \"$URI_A\")
+  G=$(public_gql 'query($g:String!, $a:String!){orchestrator(orchAddr:$g){orchestrator{orchAddr} instances{resolvedIp canonicalUrl capabilities} vantages{gatewayId gatewayRegion resolvedIp latestLatencyMs}} orchestratorsConnection(orchAddr:$g){totalCount nodes{orchAddr}} proberVantages: orchestratorVantages(orchAddr:$a){gatewayId}}' \
+    "$(jq -cn --arg g "$GW_ORCH" --arg a "$ORCH_A" '{g:$g, a:$a}')")
+  json_has "$G" "(.errors == null) and .data.orchestrator.orchestrator.orchAddr == \"$GW_ORCH\"
+    and any(.data.orchestrator.vantages[]; .gatewayId == \"$GATEWAY\" and .gatewayRegion == \"$GATEWAY_REGION\" and .resolvedIp == \"$ORCH_IP\" and .latestLatencyMs == $GW_LATENCY)
+    and any(.data.orchestrator.instances[]; .resolvedIp == \"$ORCH_IP\" and .canonicalUrl == \"$ORCH_URI\")
     and .data.orchestratorsConnection.totalCount >= 1"
 }
-eventually 90 "anonymous GraphQL answers the orchestrator with the gateway's vantage (37 ms) and instance" gql_orchestrator ||
+eventually 90 "anonymous GraphQL answers the orchestrator with the gateway's vantage (${GW_LATENCY} ms) and instance" gql_orchestrator ||
   echo "    graphql: $(echo "$G" | jq -c .)"
 check "GraphQL vantages carry gateway observations only, never the prober" json_has "$G" \
-  "all(.data.orchestrator.vantages[]; .gatewayId != \"$PROBER\")"
+  "all(.data.proberVantages[]; .gatewayId != \"$PROBER\")"
 
 log "rollups"
 # Snapshots must equal the deduplicated raw rows of every bucket this run
-# touched, for both orchestrators.
+# touched, for both chain orchestrators and the gateway's orchestrator.
 RUN_BUCKET_5M=$((RUN_START / 300 * 300))
 RUN_BUCKET_1H=$((RUN_START / 3600 * 3600))
-SCOPE="$NS AND resource_id IN ('$ORCH_A','$ORCH_B')"
+SCOPE="$NS AND resource_id IN ('$ORCH_A','$ORCH_B','$GW_ORCH')"
 raw_cohorts() { # raw_cohorts <interval> <first bucket epoch>
   ch "SELECT toUnixTimestamp(toStartOfInterval(timestamp, INTERVAL $1 SECOND)) AS b, kind, resource_id, resolved_ip, gateway_region,
       count() AS samples, countIf(success=1 AND qualifying=1) AS successes, countIf(success=0 AND qualifying=1) AS failures
@@ -342,10 +410,10 @@ snapshot_has_success() {
     '$2 == "discovery" && $4 == ip && $5 == r && $6 >= 1 && $7 >= 1 { ok = 1 } END { exit !ok }'
 }
 snapshot_has_segment() {
-  rollup_work 300 "$RUN_BUCKET_5M" | awk -F'\t' -v ip="$IP_A" '$3 == ip && $7 >= 1 && $9 >= 1000000 { ok = 1 } END { exit !ok }'
+  rollup_work 300 "$RUN_BUCKET_5M" | awk -F'\t' -v ip="$ORCH_IP" '$3 == ip && $7 >= 1 && $9 >= 1 { ok = 1 } END { exit !ok }'
 }
 check "the 5-minute snapshot has the success of $IP_A" snapshot_has_success
-check "the work snapshot has the accepted segment of $IP_A" snapshot_has_segment
+check "the work snapshot has the accepted segments of $ORCH_IP" snapshot_has_segment
 
 log "Bridge public REST from snapshots"
 # A window reaching past raw retention is served from the hourly snapshots.
@@ -357,9 +425,11 @@ R=$(cat "$work_dir/rolled.json")
 all_a=$(raw_count discovery "$IP_A" "$REGION" 0)
 check "the 31-day window is served from snapshots with $all_a sample(s) for $IP_A" json_has "$R" \
   ".history.rolled_up == true and any(.history.summaries[]; .kind == \"discovery\" and .ip == \"$IP_A\" and .region == \"$REGION\" and .samples == $all_a and .p50_ms == 42)"
-all_segments=$(ch "SELECT count() FROM periscope.network_observations FINAL WHERE $NS AND kind='segment' AND resolved_ip='$IP_A' AND success=1 AND accounting_version=1")
-check "the 31-day window's work comes from the work snapshots ($all_segments accepted segment(s))" json_has "$R" \
-  ".history.work.interval_seconds == 3600 and any(.history.work.summaries[]; .ip == \"$IP_A\" and .accepted_segments == $all_segments)"
+all_segments=$(ch "SELECT count() FROM periscope.network_observations FINAL WHERE $NS AND kind='segment' AND resolved_ip='$ORCH_IP'
+  AND gateway_region='$GATEWAY_REGION' AND success=1 AND accounting_version=1")
+check "the 31-day window's work for $ORCH_IP comes from the work snapshots ($all_segments accepted segment(s))" json_has "$R" \
+  ".history.work.interval_seconds == 3600
+    and ([.history.work.summaries[] | select(.ip == \"$ORCH_IP\" and .region == \"$GATEWAY_REGION\") | .accepted_segments] | add) == $all_segments"
 
 log "logs"
 errors=$(log_json "$SINCE" 'select(.level == "error" or .level == "fatal" or .level == "panic") | "\(.msg) \(.error // "")"' \
@@ -370,5 +440,8 @@ else
   fail "errors from the observer, Decklog, Periscope or Bridge"
   echo "$errors" | head -20 | sed 's/^/    /'
 fi
+undelivered=$(logs_since "$SINCE" "$STACK_LIVEPEER_GATEWAY_A" | grep -E 'frameworks telemetry (delivery pending|spool enqueue failed|: dropping)' | head -5)
+check "the gateway delivered every telemetry record without a retry or drop" [ -z "$undelivered" ]
+[ -n "$undelivered" ] && echo "$undelivered" | sed 's/^/    /'
 
 finish

@@ -63,3 +63,6 @@ Injected per-gateway from gitops cluster facts:
 - `GRPC_TLS_CA_PATH` and `DECKLOG_GRPC_TLS_SERVER_NAME=decklog.internal`
 - `SERVICE_TOKEN` for Decklog auth; `FRAMEWORKS_DECKLOG_AUTH_TOKEN` may override it for a distinct gateway token.
 - `GEOIP_MMDB_PATH`
+- `FRAMEWORKS_ENVIRONMENT`: the manifest profile, the same value rendered as the observer's and Bridge's `NETWORK_OBSERVER_ENVIRONMENT`
+- `FRAMEWORKS_NETWORK_ID`: the chain ID of the gateway's Livepeer `network` (42161 for `arbitrum-one-mainnet`, 0 offchain)
+- `FRAMEWORKS_TELEMETRY_SPOOL_DIR`: `/var/lib/frameworks/livepeer-gateway/frameworks-telemetry`, a managed state directory of the service

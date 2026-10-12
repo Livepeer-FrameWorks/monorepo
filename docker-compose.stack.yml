@@ -15,6 +15,21 @@
 # container (down, logs) interpolate this file on a slot that was never brought up.
 x-go-livepeer-image: &go-livepeer-image ${GO_LIVEPEER_IMAGE:-go-livepeer-unresolved-run-scripts-stack-up}
 
+# Gateway telemetry to Decklog, as the CLI renders it for a production
+# livepeer-gateway (cli/cmd/cluster_provision.go): the platform service token,
+# Decklog's gRPC address, and the owner tenant of both cells' clusters. Each
+# gateway adds its host (gateway ID), region and cluster. The namespace is the
+# network observer's stack namespace: the CLI would label an offchain gateway
+# chain 0, but here the stack chain (livepeer-chain) stands in for Arbitrum, so
+# the gateways publish under its 42161 for Bridge to project their rows.
+x-stack-gateway-telemetry: &stack-gateway-telemetry
+  SERVICE_TOKEN: ${SERVICE_TOKEN}
+  FRAMEWORKS_DECKLOG_GRPC_ADDR: decklog:18006
+  FRAMEWORKS_DECKLOG_TLS_MODE: disabled
+  FRAMEWORKS_CLUSTER_OWNER_TENANT_ID: 5eed517e-ba5e-da7a-517e-ba5eda7a0001
+  FRAMEWORKS_ENVIRONMENT: stack
+  FRAMEWORKS_NETWORK_ID: "42161"
+
 x-stack-logging: &stack-logging
   driver: "json-file"
   options:
@@ -159,6 +174,11 @@ services:
       - -authWebhookUrl=http://foghorn:18008/webhooks/livepeer/auth
       - -trustedProxyCIDRs=${STACK_SUBNET:-10.231.1.0/24}
       - -v=4
+    environment:
+      <<: *stack-gateway-telemetry
+      FRAMEWORKS_GATEWAY_ID: stack-lp-a
+      FRAMEWORKS_GATEWAY_REGION: eu-west
+      FRAMEWORKS_CLUSTER_ID: central-primary
     depends_on: [livepeer-orch-a]
     networks: [frameworks]
     mem_limit: 1g
@@ -212,6 +232,11 @@ services:
       - -authWebhookUrl=http://foghorn-b:18008/webhooks/livepeer/auth
       - -trustedProxyCIDRs=${STACK_SUBNET:-10.231.1.0/24}
       - -v=4
+    environment:
+      <<: *stack-gateway-telemetry
+      FRAMEWORKS_GATEWAY_ID: stack-lp-b
+      FRAMEWORKS_GATEWAY_REGION: us-east
+      FRAMEWORKS_CLUSTER_ID: us-primary
     depends_on: [livepeer-orch-b]
     networks: [frameworks]
     mem_limit: 1g
