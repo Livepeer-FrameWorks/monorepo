@@ -14,6 +14,7 @@ set -euo pipefail
 # shellcheck source=scripts/stack/common.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 cd "$stack_repo_root"
+stack_claim_slot || exit 1
 
 ts() { date -u +%H:%M:%S; }
 log() { printf '\n[stack-%s %s] %s\n' "$STACK_SLOT" "$(ts)" "$*"; }

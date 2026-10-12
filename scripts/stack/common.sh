@@ -8,6 +8,8 @@
 #
 # Each slot is its own compose project (fw-stack-N) on its own subnet, with
 # every fixed container_name and host port reset, so 2-3 slots coexist.
+# A slot number belongs to one checkout at a time per Docker engine (see
+# stack_require_slot below).
 
 stack_repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 STACK_SLOT="${STACK_SLOT:-1}"
@@ -76,6 +78,80 @@ stack_write_reset_overlay || { echo "ERROR: could not list compose services for 
 export COMPOSE_FILE="$stack_repo_root/docker-compose.yml:$stack_repo_root/docker-compose.stack.yml:$STACK_STATE_DIR/reset.yml"
 
 stack_compose() { docker compose --project-directory "$stack_repo_root" "$@"; }
+
+# Slot ownership. The project name, subnet and edge image tag all derive from
+# the slot number alone, so two checkouts on one Docker engine cannot share a
+# slot: the second would recreate or tear down the first one's containers. A
+# slot belongs to the checkout whose stack is in it, which Docker records as
+# compose's working_dir label on every container of the project. Before the
+# first container exists, up.sh's claim file (checkout and PID, kept per engine
+# under /tmp so every user of a shared host sees it) names the owner for as long
+# as that up.sh runs.
+stack_canonical_dir() { (cd -P "$1" 2>/dev/null && pwd) || printf '%s\n' "$1"; }
+
+stack_slot_claim_file() {
+  local engine
+  engine="$(docker info --format '{{.ID}}' 2>/dev/null | tr -cd 'A-Za-z0-9-')"
+  printf '/tmp/frameworks-stack-slots/%s/slot-%s\n' "${engine:-default}" "$STACK_SLOT"
+}
+
+# Prints the other checkout that holds this slot; prints nothing when the slot
+# is free or already this checkout's.
+stack_slot_foreign_owner() {
+  local self dir claim owner pid
+  self="$(stack_canonical_dir "$stack_repo_root")"
+  while IFS= read -r dir; do
+    [ -n "$dir" ] || continue
+    [ "$(stack_canonical_dir "$dir")" = "$self" ] && continue
+    printf '%s\n' "$dir"
+    return 0
+  done < <(docker ps -a --filter "label=com.docker.compose.project=$COMPOSE_PROJECT_NAME" \
+    --format '{{.Label "com.docker.compose.project.working_dir"}}' 2>/dev/null | sort -u)
+  claim="$(stack_slot_claim_file)"
+  [ -s "$claim" ] || return 0
+  owner="$(sed -n 's/^checkout=//p' "$claim")"
+  pid="$(sed -n 's/^pid=//p' "$claim")"
+  [ -n "$owner" ] && [ "$(stack_canonical_dir "$owner")" != "$self" ] || return 0
+  case "$pid" in '' | *[!0-9]*) return 0 ;; esac
+  if kill -0 "$pid" 2>/dev/null || ps -p "$pid" >/dev/null 2>&1; then
+    printf '%s (bring-up PID %s)\n' "$owner" "$pid"
+  fi
+}
+
+# Fails, naming the owner, when another checkout holds this slot.
+stack_require_slot() {
+  local owner
+  owner="$(stack_slot_foreign_owner)"
+  [ -z "$owner" ] && return 0
+  echo "ERROR: stack slot $STACK_SLOT ($COMPOSE_PROJECT_NAME) belongs to the checkout at $owner; use another STACK_SLOT, or free it with make stack-down from that checkout" >&2
+  return 1
+}
+
+# Claims the slot for this checkout and the calling shell's PID ($$), or fails
+# like stack_require_slot. The check and the write run under a host-wide lock
+# so two checkouts starting the same slot at once cannot both pass.
+stack_claim_slot() {
+  local claim rc=0
+  claim="$(stack_slot_claim_file)"
+  mkdir -p "${claim%/*}" && chmod 1777 /tmp/frameworks-stack-slots "${claim%/*}" 2>/dev/null
+  exec 9>>"$claim.lock" || { echo "ERROR: cannot open the slot lock $claim.lock" >&2; return 1; }
+  chmod 666 "$claim.lock" 2>/dev/null
+  if command -v flock >/dev/null 2>&1; then
+    flock -w 60 9 || rc=1
+  else
+    perl -MFcntl=:flock -e 'open(my $fh, ">>&=9") or exit 1; flock($fh, LOCK_EX) or exit 1' || rc=1
+  fi
+  if [ "$rc" -ne 0 ]; then
+    echo "ERROR: could not take the slot lock $claim.lock" >&2
+  elif stack_require_slot; then
+    printf 'checkout=%s\npid=%s\n' "$stack_repo_root" "$$" >"$claim" || rc=1
+    chmod 666 "$claim" 2>/dev/null
+  else
+    rc=1
+  fi
+  exec 9>&-
+  return "$rc"
+}
 
 # Gateway TLS: go-livepeer instances are reached as https://<infra fqdn>, exactly
 # as Foghorn addresses a physical gateway in production. Mist's broadcaster

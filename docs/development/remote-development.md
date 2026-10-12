@@ -77,7 +77,10 @@ scripts/remote-dev.sh run stack-1 bash -lc 'STACK_SLOT=1 MIST_SOURCE_DIR=/srv/fr
   release candidate run.
 - `STACK_KEEP=1` leaves the slot running for inspection; `STACK_REUSE=1` runs scenarios against a
   slot that is already up. `make stack-down` removes it.
-- `STACK_SLOT=N` runs independent slots side by side on the same host.
+- `STACK_SLOT=N` runs independent slots side by side on the same host. A slot number belongs to
+  one workspace at a time on the host's Docker engine: `make verify-stack`, `make stack-up`, and
+  `make stack-down` from another workspace refuse a slot that is up or coming up elsewhere and name
+  the workspace holding it. Pick a different `STACK_SLOT`, or free it from that workspace.
 
 The manual Mist processing stress wrapper repeats the ten-clip scenario against
 the real stack under bounded CPU load. It checks each repetition's logs as well

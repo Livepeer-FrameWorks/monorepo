@@ -688,6 +688,7 @@ verify-stack-fixtures:
 	python3 scripts/stack/test_s3_fault_proxy.py
 	bash scripts/stack/test_lib.sh
 	bash scripts/stack/test_logcheck.sh
+	bash scripts/stack/test_slot_ownership.sh
 
 clean:
 	rm -rf bin/

@@ -23,9 +23,14 @@ fi
 # shellcheck source=scripts/stack/common.sh
 . "$here/common.sh"
 cd "$stack_repo_root" || exit 1
+# Another checkout's stack in this slot is neither reused nor torn down.
+stack_require_slot || exit 1
 
 teardown() {
   local rc=$?
+  # up.sh refused because another checkout claimed the slot meanwhile; its
+  # stack is not this run's evidence.
+  [ -z "$(stack_slot_foreign_owner)" ] || return 0
   # Keep the evidence of a failed run: containers are about to go away.
   if [ "$rc" -ne 0 ]; then
     stack_compose logs --no-color --timestamps >"$STACK_STATE_DIR/compose.log" 2>&1 || true
