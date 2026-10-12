@@ -384,7 +384,7 @@ jobs:
       - name: Verify explicit transactions are replayable
         run: make verify-db-transactions
       - name: Install golangci-lint
-        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.1
+        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0
       - name: Check Go formatting
         run: make fmt-check
       - name: Read baseline commit

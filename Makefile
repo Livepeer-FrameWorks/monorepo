@@ -14,7 +14,7 @@ BUILD_DATE ?= $(shell date -u '+%Y-%m-%dT%H:%M:%SZ')
 GO_BUILD_TAGS ?= nomsgpack
 GO_TAG_FLAGS = $(if $(strip $(GO_BUILD_TAGS)),-tags=$(GO_BUILD_TAGS),)
 SQLC_VERSION ?= v1.31.1
-GOLANGCI_LINT_VERSION ?= v2.13.1
+GOLANGCI_LINT_VERSION ?= v2.14.0
 
 # component_ldflags(binary_name, source_dir) returns the -ldflags block that
 # injects platform + per-component version fields into a go build. Components
