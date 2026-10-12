@@ -133,7 +133,9 @@ services:
       nofile:
         soft: 65536
         hard: 65536
-    mem_limit: 1g
+    # Sized for every pool at its limit: 400 backends do not fit in 1 GiB, and
+    # the kernel kills the checkpointer once they all hold memory.
+    mem_limit: 2g
     mem_reservation: 512m
     cpus: 2.0
     logging:
