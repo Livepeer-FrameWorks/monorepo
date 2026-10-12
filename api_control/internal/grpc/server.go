@@ -198,11 +198,12 @@ type CommodoreServer struct {
 	decklogClient                   *decklogclient.BatchedClient
 	// tokenHasher attributes domain events to the calling API token with the
 	// hash Bridge's usage batches record.
-	tokenHasher          *events.TokenHasher
-	defaultMailingListID int
-	metrics              *ServerMetrics
-	turnstileValidator   turnstileVerifier
-	turnstileFailOpen    bool
+	tokenHasher           *events.TokenHasher
+	domainEventsCommitted func()
+	defaultMailingListID  int
+	metrics               *ServerMetrics
+	turnstileValidator    turnstileVerifier
+	turnstileFailOpen     bool
 	// checkPassword compares a login password with a stored hash; nil uses
 	// auth.CheckPassword. Tests replace it to observe every comparison Login makes.
 	checkPassword       func(password, hash string) bool
@@ -808,18 +809,22 @@ func (u commodoreUserRecord) toProtoUser(userID, tenantID string) *commodorepb.U
 
 // CommodoreServerConfig contains all dependencies for CommodoreServer
 type CommodoreServerConfig struct {
-	DB                   *sql.DB
-	Logger               logging.Logger
-	FoghornPool          *foghornclient.FoghornPool
-	QuartermasterClient  *qmclient.GRPCClient
-	NavigatorClient      *navigator.Client
-	PurserClient         *purserclient.GRPCClient
-	ListmonkClient       *listmonk.Client
-	DecklogClient        *decklogclient.BatchedClient
-	TokenHasher          *events.TokenHasher
-	ClusterURLs          *clusterurls.Resolver
-	DefaultMailingListID int
-	Metrics              *ServerMetrics
+	DB                  *sql.DB
+	Logger              logging.Logger
+	FoghornPool         *foghornclient.FoghornPool
+	QuartermasterClient *qmclient.GRPCClient
+	NavigatorClient     *navigator.Client
+	PurserClient        *purserclient.GRPCClient
+	ListmonkClient      *listmonk.Client
+	DecklogClient       *decklogclient.BatchedClient
+	TokenHasher         *events.TokenHasher
+	// DomainEventsCommitted wakes the domain event relay after a transaction
+	// that may have enqueued domain events commits; nil leaves delivery to
+	// the relay's poll.
+	DomainEventsCommitted func()
+	ClusterURLs           *clusterurls.Resolver
+	DefaultMailingListID  int
+	Metrics               *ServerMetrics
 	// Auth config for gRPC interceptor
 	ServiceToken   string
 	JWTSecret      []byte
@@ -930,6 +935,7 @@ func NewCommodoreServer(cfg CommodoreServerConfig) *CommodoreServer {
 		listmonkClient:           cfg.ListmonkClient,
 		decklogClient:            cfg.DecklogClient,
 		tokenHasher:              cfg.TokenHasher,
+		domainEventsCommitted:    cfg.DomainEventsCommitted,
 		clusterURLs:              cfg.ClusterURLs,
 		defaultMailingListID:     cfg.DefaultMailingListID,
 		metrics:                  cfg.Metrics,

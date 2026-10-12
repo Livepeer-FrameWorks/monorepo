@@ -61,14 +61,22 @@ func bearerIdentity(token string, result *AuthResult) websocketIdentity {
 	return id
 }
 
+// APITokenRevocationFeed delivers the revocations of tenantID's API tokens,
+// committed through any Bridge replica, to revoked until ctx ends.
+type APITokenRevocationFeed func(ctx context.Context, tenantID string, revoked func(tokenID string))
+
 // WebsocketSessions tracks this replica's authenticated GraphQL WebSocket
-// connections by API token, so a revocation handled here closes that token's
-// connections at once. Revocations handled by another replica reach a
-// connection through its periodic re-check instead. A nil *WebsocketSessions
-// tracks nothing.
+// connections by API token, so a revocation closes that token's connections
+// at once. A revocation handled here closes them directly; one handled by
+// another replica arrives through the feed, which runs for every tenant with
+// an API-token connection here. A revocation the feed misses reaches a
+// connection through its periodic re-check. A nil *WebsocketSessions tracks
+// nothing.
 type WebsocketSessions struct {
+	feed    APITokenRevocationFeed
 	mu      sync.Mutex
 	byToken map[websocketTokenKey]map[*websocketSession]struct{}
+	tenants map[string]*tenantRevocationWatch
 }
 
 type websocketTokenKey struct {
@@ -80,13 +88,25 @@ type websocketSession struct {
 	close func(*WebsocketInitError)
 }
 
-// NewWebsocketSessions returns an empty registry.
-func NewWebsocketSessions() *WebsocketSessions {
-	return &WebsocketSessions{byToken: map[websocketTokenKey]map[*websocketSession]struct{}{}}
+// tenantRevocationWatch is the feed of one tenant's revocations, kept while
+// the tenant has API-token connections on this replica.
+type tenantRevocationWatch struct {
+	connections int
+	stop        context.CancelFunc
+}
+
+// NewWebsocketSessions returns an empty registry that follows revocations
+// from other replicas through feed; a nil feed follows none.
+func NewWebsocketSessions(feed APITokenRevocationFeed) *WebsocketSessions {
+	return &WebsocketSessions{
+		feed:    feed,
+		byToken: map[websocketTokenKey]map[*websocketSession]struct{}{},
+		tenants: map[string]*tenantRevocationWatch{},
+	}
 }
 
 func (s *WebsocketSessions) register(key websocketTokenKey, session *websocketSession) func() {
-	if s == nil || key.tokenID == "" {
+	if s == nil || key.tenantID == "" || key.tokenID == "" {
 		return func() {}
 	}
 	s.mu.Lock()
@@ -96,6 +116,7 @@ func (s *WebsocketSessions) register(key websocketTokenKey, session *websocketSe
 		s.byToken[key] = set
 	}
 	set[session] = struct{}{}
+	s.watchTenantLocked(key.tenantID)
 	s.mu.Unlock()
 	return func() {
 		s.mu.Lock()
@@ -103,13 +124,40 @@ func (s *WebsocketSessions) register(key websocketTokenKey, session *websocketSe
 		if len(s.byToken[key]) == 0 {
 			delete(s.byToken, key)
 		}
+		s.unwatchTenantLocked(key.tenantID)
 		s.mu.Unlock()
 	}
 }
 
+func (s *WebsocketSessions) watchTenantLocked(tenantID string) {
+	if s.feed == nil {
+		return
+	}
+	if watch := s.tenants[tenantID]; watch != nil {
+		watch.connections++
+		return
+	}
+	ctx, stop := context.WithCancel(context.Background())
+	s.tenants[tenantID] = &tenantRevocationWatch{connections: 1, stop: stop}
+	go s.feed(ctx, tenantID, func(tokenID string) { s.CloseAPIToken(tenantID, tokenID) })
+}
+
+func (s *WebsocketSessions) unwatchTenantLocked(tenantID string) {
+	watch := s.tenants[tenantID]
+	if watch == nil {
+		return
+	}
+	watch.connections--
+	if watch.connections > 0 {
+		return
+	}
+	watch.stop()
+	delete(s.tenants, tenantID)
+}
+
 // CloseAPIToken closes, with 4403, every connection on this replica that
 // authenticated with the tenant's API token tokenID, and returns how many it
-// closed.
+// closed. Closing a token with no connections here does nothing.
 func (s *WebsocketSessions) CloseAPIToken(tenantID, tokenID string) int {
 	if s == nil || tenantID == "" || tokenID == "" {
 		return 0

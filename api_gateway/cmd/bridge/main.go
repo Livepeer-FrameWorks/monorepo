@@ -156,7 +156,7 @@ func main() {
 	// Initialize GraphQL resolver and server
 	resolverCfg := resolverConfig(liveConfig)
 	resolver := graph.NewResolver(serviceClients, logger, graphqlMetrics, resolverCfg)
-	websocketSessions := middleware.NewWebsocketSessions()
+	websocketSessions := middleware.NewWebsocketSessions(resolver.SubManager.WatchAPITokenRevocations)
 	resolver.WebsocketSessions = websocketSessions
 
 	// Setup complexity functions for pagination-aware query cost calculation

@@ -153,7 +153,7 @@ func TestGraphQLWebsocketClosesWhenItsAPITokenStopsAuthenticating(t *testing.T) 
 // without waiting for a re-check, and only the revoking tenant's.
 func TestGraphQLWebsocketClosesAtOnceWhenItsAPITokenIsRevokedHere(t *testing.T) {
 	sc, _ := switchableClients(t)
-	sessions := NewWebsocketSessions()
+	sessions := NewWebsocketSessions(nil)
 	conn, _ := openSubscription(t, sc, "Bearer fw_api_token_value", sessions, 0)
 
 	if n := sessions.CloseAPIToken("tenant-2", "token-1"); n != 0 {
@@ -164,6 +164,82 @@ func TestGraphQLWebsocketClosesAtOnceWhenItsAPITokenIsRevokedHere(t *testing.T) 
 	}
 	if code := awaitClose(t, conn, 2*time.Second); code != WebsocketCloseForbidden {
 		t.Fatalf("after revocation the socket closed with %d, want %d", code, WebsocketCloseForbidden)
+	}
+}
+
+// recordingFeed records the tenants it follows and lets the test deliver a
+// revocation to them.
+type recordingFeed struct {
+	mu      sync.Mutex
+	started chan string
+	stopped chan string
+	revoke  map[string]func(string)
+}
+
+func newRecordingFeed() *recordingFeed {
+	return &recordingFeed{started: make(chan string, 8), stopped: make(chan string, 8), revoke: map[string]func(string){}}
+}
+
+func (f *recordingFeed) feed(ctx context.Context, tenantID string, revoked func(string)) {
+	f.mu.Lock()
+	f.revoke[tenantID] = revoked
+	f.mu.Unlock()
+	f.started <- tenantID
+	<-ctx.Done()
+	f.stopped <- tenantID
+}
+
+func (f *recordingFeed) deliver(tenantID, tokenID string) {
+	f.mu.Lock()
+	revoked := f.revoke[tenantID]
+	f.mu.Unlock()
+	revoked(tokenID)
+}
+
+func receiveTenant(t *testing.T, ch <-chan string, what string) string {
+	t.Helper()
+	select {
+	case tenantID := <-ch:
+		return tenantID
+	case <-time.After(2 * time.Second):
+		t.Fatalf("feed was not %s", what)
+		return ""
+	}
+}
+
+// The registry follows a tenant's revocations from other replicas while the
+// tenant has an API-token socket here, closes the revoked token's sockets
+// with 4403 when the feed delivers a revocation, and stops following once
+// the last of them closed.
+func TestGraphQLWebsocketFollowsRevocationsFromOtherReplicasWhileTheTenantHasSockets(t *testing.T) {
+	sc, _ := switchableClients(t)
+	feed := newRecordingFeed()
+	sessions := NewWebsocketSessions(feed.feed)
+	conn, _ := openSubscription(t, sc, "Bearer fw_api_token_value", sessions, 0)
+
+	if got := receiveTenant(t, feed.started, "started"); got != "tenant-1" {
+		t.Fatalf("feed started for %q, want tenant-1", got)
+	}
+	feed.deliver("tenant-1", "token-1")
+	if code := awaitClose(t, conn, 2*time.Second); code != WebsocketCloseForbidden {
+		t.Fatalf("after a revocation from the feed the socket closed with %d, want %d", code, WebsocketCloseForbidden)
+	}
+	if got := receiveTenant(t, feed.stopped, "stopped"); got != "tenant-1" {
+		t.Fatalf("feed stopped for %q, want tenant-1", got)
+	}
+}
+
+// A session socket has no API token to revoke, so it starts no feed.
+func TestGraphQLWebsocketSessionSocketStartsNoRevocationFeed(t *testing.T) {
+	sc, _ := switchableClients(t)
+	feed := newRecordingFeed()
+	sessions := NewWebsocketSessions(feed.feed)
+	_, _ = openSubscription(t, sc, "Bearer "+sessionJWTExpiringAt(t, time.Now().Add(time.Hour)), sessions, 0)
+
+	select {
+	case tenantID := <-feed.started:
+		t.Fatalf("a session socket started a revocation feed for %q", tenantID)
+	case <-time.After(200 * time.Millisecond):
 	}
 }
 

@@ -37,7 +37,7 @@ psql_db() { stack_compose exec -T postgres psql -v ON_ERROR_STOP=1 -U "$1" -d "$
 # consumers no scenario asserts on (lookout).
 STACK_SERVICES=(
   postgres kafka kafka-init clickhouse
-  quartermaster quartermaster-2 commodore commodore-2 purser bridge decklog signalman bosun chandler
+  quartermaster quartermaster-2 commodore commodore-2 purser bridge bridge-2 decklog signalman bosun chandler
   periscope-ingest periscope-query periscope-metering
   storage-init storage-init-b "s3-$STACK_S3" s3-proxy
   foghorn foghorn-2 foghorn-redis foghorn-b foghorn-b-2 foghorn-redis-b foghorn-tls-a-1 foghorn-tls-a-2

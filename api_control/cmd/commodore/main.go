@@ -374,6 +374,19 @@ func main() {
 	clusterURLsResolver := clusterurls.NewResolver(quartermasterGRPCClient, logger, cfg.ChandlerBaseURL)
 	clusterURLsResolver.Start(context.Background(), 60*time.Second)
 
+	// The domain event relay publishes committed commodore.domain_event_outbox
+	// rows to Decklog; the gRPC server wakes it after each event transaction.
+	var relay *eventoutbox.Relay
+	var domainEventsCommitted func()
+	if decklogClient != nil {
+		var relayErr error
+		relay, relayErr = eventoutbox.NewRelay(db, commodoregrpc.DomainEventSchema, decklogClient, logger)
+		if relayErr != nil {
+			logger.WithError(relayErr).Fatal("Failed to create the domain event relay")
+		}
+		domainEventsCommitted = relay.Notify
+	}
+
 	// NewGRPCServer waits for the gRPC TLS files, so the server builds in the
 	// background while HTTP health already serves.
 	buildGRPCServer := func(ctx context.Context) (*grpc.Server, error) {
@@ -387,6 +400,7 @@ func main() {
 			ListmonkClient:                  listmonkClient,
 			DecklogClient:                   decklogClient,
 			TokenHasher:                     tokenHasher,
+			DomainEventsCommitted:           domainEventsCommitted,
 			ClusterURLs:                     clusterURLsResolver,
 			DefaultMailingListID:            cfg.DefaultMailingListID,
 			Metrics:                         serverMetrics,
@@ -416,15 +430,10 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// The domain event relay publishes committed commodore.domain_event_outbox
-	// rows to Decklog. It stops after the listeners, so events committed by the
-	// last in-flight requests stay in the outbox for the next process.
+	// The relay stops after the listeners, so events committed by the last
+	// in-flight requests stay in the outbox for the next process.
 	var onShutdown []func(context.Context)
-	if decklogClient != nil {
-		relay, relayErr := eventoutbox.NewRelay(db, commodoregrpc.DomainEventSchema, decklogClient, logger)
-		if relayErr != nil {
-			logger.WithError(relayErr).Fatal("Failed to create the domain event relay")
-		}
+	if relay != nil {
 		relayCtx, stopRelay := context.WithCancel(context.Background())
 		relayDone := make(chan struct{})
 		go func() {

@@ -91,8 +91,9 @@ The [SDKs](/builders/sdks) for TypeScript, Go, and Python handle both, and read 
 for every reconnect.
 
 An acknowledged connection stays bound to the credential it authenticated with. The gateway closes
-it with `4403`, ending every subscription on it, when a session token reaches its expiry, when its
-API token is revoked, and within a minute of the credential otherwise ceasing to authenticate. A
+it with `4403`, ending every subscription on it, when a session token reaches its expiry, within a
+few seconds of its API token being revoked, whichever gateway instance holds the connection, and
+within a minute of the credential otherwise ceasing to authenticate. A
 client reconnects with a current token; reconnecting with the revoked or expired one is refused
 before acknowledgement as above.
 

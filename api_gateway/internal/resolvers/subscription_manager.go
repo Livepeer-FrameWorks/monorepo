@@ -15,6 +15,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	deckhandpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/deckhand"
+	publicv1 "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/public/v1"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
 	signalmanpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/signalman"
@@ -231,7 +232,7 @@ func sendSubscriptionUpdate[T any](ctx context.Context, output chan<- T, update 
 // every channel it needs and serves events to handle until ctx ends, handle
 // returns false, or a subscriber is ended. closeOutput runs when serving stops.
 func (sm *SubscriptionManager) startSubscription(ctx context.Context, operation string, config ConnectionConfig, channels []signalmanpb.Channel, closeOutput func(), handle func(*signalmanpb.SignalmanEvent) bool) error {
-	subs, release, err := sm.attach(config, channels)
+	subs, release, err := sm.attach(config, channels, true)
 	if err != nil {
 		return err
 	}
@@ -245,7 +246,9 @@ func (sm *SubscriptionManager) startSubscription(ctx context.Context, operation 
 	return nil
 }
 
-func (sm *SubscriptionManager) attach(config ConnectionConfig, channels []signalmanpb.Channel) ([]*signalmanclient.Subscriber, func(), error) {
+// attach subscribes to the upstream stream of every channel. A capped
+// attachment is a GraphQL subscription and counts toward its tenant's cap.
+func (sm *SubscriptionManager) attach(config ConnectionConfig, channels []signalmanpb.Channel, capped bool) ([]*signalmanclient.Subscriber, func(), error) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 	if sm.closed {
@@ -255,7 +258,11 @@ func (sm *SubscriptionManager) attach(config ConnectionConfig, channels []signal
 		return nil, nil, fmt.Errorf("no Signalman addresses configured")
 	}
 	tenantID := config.TenantID
-	if sm.maxSubscriptionsPerTenant > 0 && tenantID != "" && sm.tenantSubscriptions[tenantID] >= sm.maxSubscriptionsPerTenant {
+	counted := ""
+	if capped {
+		counted = tenantID
+	}
+	if sm.maxSubscriptionsPerTenant > 0 && counted != "" && sm.tenantSubscriptions[counted] >= sm.maxSubscriptionsPerTenant {
 		sm.logger.WithFields(logging.Fields{
 			"tenant_id": tenantID,
 			"limit":     sm.maxSubscriptionsPerTenant,
@@ -284,8 +291,8 @@ func (sm *SubscriptionManager) attach(config ConnectionConfig, channels []signal
 		entries = append(entries, entry)
 		subs = append(subs, sub)
 	}
-	if tenantID != "" {
-		sm.tenantSubscriptions[tenantID]++
+	if counted != "" {
+		sm.tenantSubscriptions[counted]++
 	}
 
 	var once sync.Once
@@ -296,13 +303,13 @@ func (sm *SubscriptionManager) attach(config ConnectionConfig, channels []signal
 			for i, sub := range subs {
 				sm.detachLocked(entries[i], sub)
 			}
-			if tenantID == "" {
+			if counted == "" {
 				return
 			}
-			if sm.tenantSubscriptions[tenantID] <= 1 {
-				delete(sm.tenantSubscriptions, tenantID)
+			if sm.tenantSubscriptions[counted] <= 1 {
+				delete(sm.tenantSubscriptions, counted)
 			} else {
-				sm.tenantSubscriptions[tenantID]--
+				sm.tenantSubscriptions[counted]--
 			}
 		})
 	}
@@ -756,6 +763,60 @@ func (sm *SubscriptionManager) SubscribeToTenantEvents(ctx context.Context, conf
 		return nil, err
 	}
 	return updates, nil
+}
+
+// WatchAPITokenRevocations passes the token ID of every api_token.revoked
+// event of tenantID to revoked until ctx ends. It reads the tenant's
+// CHANNEL_EVENTS stream, which every Signalman replica fills from the domain
+// event backbone, so it sees revocations committed through any Bridge
+// replica. It shares that stream with the tenant's tenantEvents
+// subscriptions without counting toward their cap. When its subscriber ends
+// it attaches again after a backoff; a revocation in between is missed.
+func (sm *SubscriptionManager) WatchAPITokenRevocations(ctx context.Context, tenantID string, revoked func(tokenID string)) {
+	if tenantID == "" {
+		return
+	}
+	handle := func(event *signalmanpb.SignalmanEvent) bool {
+		if tokenID := revokedAPITokenID(tenantID, event); tokenID != "" {
+			revoked(tokenID)
+		}
+		return true
+	}
+	retry := upstreamRetryInitial
+	for {
+		subs, release, err := sm.attach(ConnectionConfig{TenantID: tenantID}, []signalmanpb.Channel{signalmanpb.Channel_CHANNEL_EVENTS}, false)
+		if errors.Is(err, errSubscriptionManagerClosed) {
+			return
+		}
+		if err != nil {
+			sm.logger.WithError(err).WithField("tenant_id", tenantID).Warn("Failed to watch API token revocations")
+		} else {
+			retry = upstreamRetryInitial
+			sm.serve(ctx, "api_token_revocations", subs, handle)
+			release()
+		}
+		if !sleepContext(ctx, jitter(retry)) {
+			return
+		}
+		retry = min(retry*2, upstreamRetryMax)
+	}
+}
+
+// revokedAPITokenID returns the revoked token's ID when event is tenantID's
+// api_token.revoked, and "" otherwise.
+func revokedAPITokenID(tenantID string, event *signalmanpb.SignalmanEvent) string {
+	if event.GetEventType() != signalmanpb.EventType_EVENT_TYPE_TENANT_EVENT || event.GetTenantId() != tenantID {
+		return ""
+	}
+	tenantEvent := event.GetData().GetTenantEvent()
+	if tenantEvent.GetType() != "api_token.revoked" {
+		return ""
+	}
+	var payload publicv1.ApiTokenRevoked
+	if err := tenantEvent.GetData().UnmarshalTo(&payload); err != nil {
+		return ""
+	}
+	return payload.GetTokenId()
 }
 
 // SubscribeToMessages subscribes to messaging events and returns a channel

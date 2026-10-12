@@ -218,6 +218,8 @@ func TestRevokeAPIToken(t *testing.T) {
 	t.Run("not_found", func(t *testing.T) {
 		s, mock, done := newMockServer(t)
 		defer done()
+		wakes := 0
+		s.domainEventsCommitted = func() { wakes++ }
 		mock.ExpectBegin()
 		mock.ExpectQuery("UPDATE commodore.api_tokens").
 			WithArgs("tok1", "u1", false, testTenantID).
@@ -225,6 +227,9 @@ func TestRevokeAPIToken(t *testing.T) {
 		mock.ExpectRollback()
 		_, err := s.RevokeAPIToken(ctxAs("u1", testTenantID, "member"), &commodorepb.RevokeAPITokenRequest{TokenId: "tok1"})
 		wantCode(t, err, codes.NotFound)
+		if wakes != 0 {
+			t.Errorf("a rolled-back revocation woke the domain event relay %d times, want 0", wakes)
+		}
 		if err := mock.ExpectationsWereMet(); err != nil {
 			t.Fatalf("expectations: %v", err)
 		}
@@ -233,6 +238,15 @@ func TestRevokeAPIToken(t *testing.T) {
 	t.Run("happy_path_deactivates_and_emits", func(t *testing.T) {
 		s, mock, done := newMockServer(t)
 		defer done()
+		// Bridge replicas close the revoked token's sockets when the event
+		// reaches them, so the relay is woken at commit.
+		wakes := 0
+		s.domainEventsCommitted = func() { wakes++ }
+		defer func() {
+			if wakes != 1 {
+				t.Errorf("revocation woke the domain event relay %d times, want 1", wakes)
+			}
+		}()
 		mock.ExpectBegin()
 		mock.ExpectQuery("UPDATE commodore.api_tokens").
 			WithArgs("tok1", "u1", false, testTenantID).

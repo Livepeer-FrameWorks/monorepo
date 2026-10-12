@@ -86,6 +86,24 @@ services:
       frameworks:
         aliases: [commodore]
 
+  # Second Bridge replica. It has no shared alias: scenarios reach it as
+  # bridge-2 to hold a WebSocket on each replica, while every other client
+  # keeps using bridge.
+  bridge-2:
+    extends:
+      file: docker-compose.yml
+      service: bridge
+    profiles: ["stack"]
+    environment:
+      BRIDGE_HOST: bridge-2
+      NODE_ID: central-node-2
+    depends_on:
+      quartermaster:
+        condition: service_healthy
+      commodore:
+        condition: service_started
+    networks: [frameworks]
+
   # Second cell-B replica. Its Quartermaster instance row and cluster
   # assignments come from scripts/stack/seed.sql before it starts.
   foghorn-b-2:

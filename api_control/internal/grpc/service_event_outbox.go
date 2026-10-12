@@ -137,7 +137,16 @@ func (s *CommodoreServer) withEventTx(ctx context.Context, fn func(tx *sql.Tx) e
 	if s.db == nil {
 		return errors.New("database not configured")
 	}
-	return database.WithRetryablePostgresTx(ctx, s.db, nil, fn)
+	if err := database.WithRetryablePostgresTx(ctx, s.db, nil, fn); err != nil {
+		return err
+	}
+	// Realtime consumers act on domain events, such as Bridge closing a
+	// revoked API token's sockets, so delivery starts at commit rather than
+	// at the relay's next poll.
+	if s.domainEventsCommitted != nil {
+		s.domainEventsCommitted()
+	}
+	return nil
 }
 
 // EnqueueServiceEventTx writes the legacy outbox row inside the caller's
