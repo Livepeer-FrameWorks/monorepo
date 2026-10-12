@@ -2,6 +2,7 @@ package federation
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -212,4 +213,82 @@ type peerDiscoveryFunc func(context.Context) (*quartermasterpb.ListPeersResponse
 
 func (fn peerDiscoveryFunc) ListPeers(ctx context.Context, _ string) (*quartermasterpb.ListPeersResponse, error) {
 	return fn(ctx)
+}
+
+// Quartermaster names a peer cluster without a Foghorn address while every
+// Foghorn of that cluster is restarting and not yet healthy again. The cluster
+// still shares tenants with this cell, so the leader keeps its last known
+// address, in memory and in the stored peer set that standbys and the next
+// leader read, and keeps redialing it. Only a cluster Quartermaster no longer
+// names at all is removed.
+func TestQuartermasterPeerWithoutHealthyFoghornKeepsLastAddress(t *testing.T) {
+	cache, _ := setupTestCache(t)
+	qm := &switchableQuartermaster{}
+	qm.set(false, &quartermasterpb.PeerCluster{
+		ClusterId:       "us-primary",
+		SharedTenantIds: []string{"tenant-a"},
+		FoghornAddr:     "foghorn-b:18019",
+		FoghornAddrs:    []string{"foghorn-b:18019", "foghorn-b-2:18019"},
+		ControlCellId:   "cell-b",
+	})
+	pm := newTestPeerManager(t, "cluster-a", cache, true)
+	pm.peerDiscovery = qm
+	pm.refreshPeers()
+	if pm.GetPeerAddr("us-primary") != "foghorn-b:18019" {
+		t.Fatal("setup: Quartermaster's peer was not applied")
+	}
+
+	qm.set(false, &quartermasterpb.PeerCluster{
+		ClusterId:       "us-primary",
+		SharedTenantIds: []string{"tenant-a"},
+		FoghornAddr:     "",
+		ControlCellId:   "cell-b",
+	})
+	pm.refreshPeers()
+	if got := pm.GetPeerAddr("us-primary"); got != "foghorn-b:18019" {
+		t.Fatalf("leader peer address = %q while the peer's Foghorns restart; want the last known foghorn-b:18019", got)
+	}
+	ctx := context.Background()
+	stored, _, found, err := cache.LoadQuartermasterPeerSnapshot(ctx)
+	if err != nil || !found {
+		t.Fatalf("load stored peer set: found=%v err=%v", found, err)
+	}
+	if hint, ok := stored["us-primary"]; !ok || hint.Addr != "foghorn-b:18019" || !slices.Contains(hint.Addrs, "foghorn-b-2:18019") {
+		t.Fatalf("stored peer set lost the peer's last known addresses: %+v", stored)
+	}
+	standby := newTestPeerManager(t, "cluster-a", cache, false)
+	standby.instanceID = "standby"
+	if err = standby.loadPeerAddressesFromRedis(); err != nil {
+		t.Fatalf("standby reconcile: %v", err)
+	}
+	if got := standby.GetPeerAddr("us-primary"); got != "foghorn-b:18019" {
+		t.Fatalf("standby peer address = %q while the peer's Foghorns restart; want foghorn-b:18019", got)
+	}
+
+	qm.set(false)
+	pm.refreshPeers()
+	if hasPeer(pm, "us-primary") {
+		t.Fatal("Quartermaster no longer names the peer cluster but the leader kept it")
+	}
+	stored, _, _, err = cache.LoadQuartermasterPeerSnapshot(ctx)
+	if err != nil {
+		t.Fatalf("load stored peer set: %v", err)
+	}
+	if _, ok := stored["us-primary"]; ok {
+		t.Fatal("stored peer set kept a cluster Quartermaster no longer names")
+	}
+}
+
+// Without a previously known address there is nothing to dial, so a peer that
+// Quartermaster names without a Foghorn address is not added.
+func TestQuartermasterPeerWithoutAnyKnownAddressIsNotAdded(t *testing.T) {
+	cache, _ := setupTestCache(t)
+	qm := &switchableQuartermaster{}
+	qm.set(false, &quartermasterpb.PeerCluster{ClusterId: "us-primary", SharedTenantIds: []string{"tenant-a"}})
+	pm := newTestPeerManager(t, "cluster-a", cache, true)
+	pm.peerDiscovery = qm
+	pm.refreshPeers()
+	if hasPeer(pm, "us-primary") {
+		t.Fatal("leader added a peer with no address to dial")
+	}
 }

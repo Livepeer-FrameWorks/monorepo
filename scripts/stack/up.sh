@@ -217,5 +217,12 @@ gateways_healthy() {
 }
 wait_for 180 "both Livepeer gateways healthy in Quartermaster" gateways_healthy
 
+# Peer cells learn each other's Foghorn addresses from Quartermaster, which
+# names only healthy Foghorns.
+foghorns_healthy() {
+  [ "$(psql_db quartermaster -Atc "SELECT count(DISTINCT si.advertise_host) FROM quartermaster.service_instances si JOIN quartermaster.services svc ON svc.service_id = si.service_id WHERE svc.type = 'foghorn' AND si.protocol = 'grpc' AND si.status = 'running' AND si.health_status = 'healthy' AND si.advertise_host IN ('foghorn', 'foghorn-2', 'foghorn-b', 'foghorn-b-2')")" = 4 ]
+}
+wait_for 120 "all four Foghorns healthy in Quartermaster" foghorns_healthy
+
 date -u +%Y-%m-%dT%H:%M:%SZ >"$STACK_STATE_DIR/ready"
 log "slot $STACK_SLOT ready (project $COMPOSE_PROJECT_NAME)"

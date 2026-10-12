@@ -152,6 +152,9 @@ type serviceInstance struct {
 	id, serviceID, proto, defaultProto, host, path string
 	assignedClusterID, assignedBaseURL             string
 	port                                           int
+	// checkReset is set when the stored health check is empty: the instance
+	// was just registered or re-registered after a restart.
+	checkReset bool
 }
 
 type serviceHealthCounts struct {
@@ -244,8 +247,10 @@ func newProbeSchedule() *probeSchedule {
 }
 
 // due returns up to batchSize of the candidates not probed within minAge,
-// longest-unprobed first, and records them as probed now. Instances no longer
-// listed are forgotten.
+// longest-unprobed first, and records them as probed now. A candidate whose
+// stored check was reset by a (re-)registration is due at once and ahead of
+// the rest, so a restarted instance is not held out of discovery for minAge.
+// Instances no longer listed are forgotten.
 func (p *probeSchedule) due(candidates []serviceInstance, minAge time.Duration, batchSize int, now time.Time) []serviceInstance {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -253,7 +258,7 @@ func (p *probeSchedule) due(candidates []serviceInstance, minAge time.Duration, 
 	due := make([]serviceInstance, 0, len(candidates))
 	for _, inst := range candidates {
 		listed[inst.id] = struct{}{}
-		if last, ok := p.probed[inst.id]; ok && now.Sub(last) < minAge {
+		if last, ok := p.probed[inst.id]; ok && !inst.checkReset && now.Sub(last) < minAge {
 			continue
 		}
 		due = append(due, inst)
@@ -266,6 +271,9 @@ func (p *probeSchedule) due(candidates []serviceInstance, minAge time.Duration, 
 	// Candidates arrive oldest stored check first; the stable sort keeps that
 	// order among instances this replica has not probed yet.
 	sort.SliceStable(due, func(i, j int) bool {
+		if due[i].checkReset != due[j].checkReset {
+			return due[i].checkReset
+		}
 		return p.probed[due[i].id].Before(p.probed[due[j].id])
 	})
 	if len(due) > batchSize {
@@ -297,6 +305,7 @@ func pollOnce(client *http.Client, sem chan struct{}, batchSize int, minAge time
 				id: row.InstanceID, serviceID: row.ServiceID, proto: row.Protocol,
 				host: row.AdvertiseHost, port: port, path: row.Path, defaultProto: row.DefaultProtocol,
 				assignedClusterID: row.AssignedClusterID, assignedBaseURL: row.AssignedBaseUrl,
+				checkReset: !row.LastHealthCheck.Valid,
 			})
 		}
 		list = nextList
@@ -799,7 +808,7 @@ func (m *grpcWatchManager) refreshGrpcWatches(dialTimeout, backoff time.Duration
 		go func(ii serviceInstance, instID string, watchCtx context.Context) {
 			defer func() { <-sem }()
 			defer m.clearWatch(instID)
-			m.watchGrpcInstance(watchCtx, ii, dialTimeout, backoff)
+			m.keepWatching(watchCtx, ii, dialTimeout, backoff)
 		}(inst, id, ctxWatch)
 	}
 
@@ -815,13 +824,61 @@ func (m *grpcWatchManager) clearWatch(instanceID string) {
 	m.mu.Unlock()
 }
 
-func (m *grpcWatchManager) watchGrpcInstance(ctx context.Context, inst serviceInstance, dialTimeout, backoff time.Duration) {
+// A watch that ends while its instance is still watched (a restart, a drain, a
+// refused connection) is opened again after watchReopenMin, doubling up to
+// watchReopenMax while the instance stays unreachable. A restarted instance's
+// SERVING is then recorded within seconds of it listening, and an instance
+// that never returns costs one dial per watchReopenMax until the watch
+// refresh drops it.
+const (
+	watchReopenMin = time.Second
+	watchReopenMax = 4 * time.Second
+)
+
+// watchOutcome says how one watch attempt ended.
+type watchOutcome int
+
+const (
+	// watchEnded: the stream failed or closed; the instance may come back.
+	watchEnded watchOutcome = iota
+	// watchDelivered: the stream reported at least one status before it ended.
+	watchDelivered
+	// watchGaveUp: the instance cannot be watched; it is in backoff until a
+	// later refresh.
+	watchGaveUp
+)
+
+// keepWatching runs watches of one instance until ctx ends or the instance
+// cannot be watched. ctx ends when the refresh no longer lists the instance or
+// this replica stops leading.
+func (m *grpcWatchManager) keepWatching(ctx context.Context, inst serviceInstance, dialTimeout, backoff time.Duration) {
+	delay := watchReopenMin
+	for {
+		outcome := m.watchGrpcInstance(ctx, inst, dialTimeout, backoff)
+		if outcome == watchGaveUp || ctx.Err() != nil {
+			return
+		}
+		if outcome == watchDelivered {
+			delay = watchReopenMin
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+		delay = min(delay*2, watchReopenMax)
+	}
+}
+
+func (m *grpcWatchManager) watchGrpcInstance(ctx context.Context, inst serviceInstance, dialTimeout, backoff time.Duration) watchOutcome {
 	addr := fmt.Sprintf("%s:%d", inst.host, inst.port)
 	transport, err := grpcHealthDialOption(inst, m.tls(inst.serviceID))
 	if err != nil {
 		logger.WithError(err).WithField("service", inst.serviceID).WithField("addr", addr).Debug("gRPC watch TLS config failed")
 		m.setBackoff(inst.id, backoff)
-		return
+		return watchGaveUp
 	}
 	conn, err := grpc.NewClient(
 		addr,
@@ -831,7 +888,7 @@ func (m *grpcWatchManager) watchGrpcInstance(ctx context.Context, inst serviceIn
 	if err != nil {
 		logger.WithError(err).WithField("service", inst.serviceID).WithField("addr", addr).Debug("gRPC watch dial failed")
 		m.setBackoff(inst.id, backoff)
-		return
+		return watchGaveUp
 	}
 	defer func() { _ = conn.Close() }()
 
@@ -840,18 +897,24 @@ func (m *grpcWatchManager) watchGrpcInstance(ctx context.Context, inst serviceIn
 	if err != nil {
 		if status.Code(err) == codes.Unimplemented {
 			m.setBackoff(inst.id, backoff)
-			return
+			return watchGaveUp
 		}
 		logger.WithError(err).WithField("service", inst.serviceID).WithField("addr", addr).Debug("gRPC watch start failed")
-		return
+		return watchEnded
 	}
 
+	outcome := watchEnded
 	for {
 		resp, err := stream.Recv()
 		if err != nil {
+			if status.Code(err) == codes.Unimplemented {
+				m.setBackoff(inst.id, backoff)
+				return watchGaveUp
+			}
 			logger.WithError(err).WithField("service", inst.serviceID).WithField("addr", addr).Debug("gRPC watch ended")
-			return
+			return outcome
 		}
+		outcome = watchDelivered
 		statusStr := mapGrpcHealthStatus(resp.GetStatus())
 		// Route through persistHealthTransition so a gRPC-watch health transition
 		// also wakes physical-endpoint DNS and logs, same as the HTTP poll path.

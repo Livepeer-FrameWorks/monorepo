@@ -1195,20 +1195,37 @@ func (pm *PeerManager) refreshPeers() {
 // through exactly the same path.
 func (pm *PeerManager) applyQuartermasterPeers(resp *quartermasterpb.ListPeersResponse) {
 	hints := make(map[string]PeerHint, len(resp.GetPeers()))
+	confirmedAt := time.Now()
+	// The previous answer is read and replaced under one lock so a concurrent
+	// refresh and watch delivery cannot carry an address from a superseded set.
+	pm.mu.Lock()
 	for _, peer := range resp.GetPeers() {
-		if strings.TrimSpace(peer.FoghornAddr) == "" || strings.TrimSpace(peer.ClusterId) == "" || peer.ClusterId == pm.clusterID {
+		if strings.TrimSpace(peer.ClusterId) == "" || peer.ClusterId == pm.clusterID {
 			continue
 		}
+		addr := strings.TrimSpace(peer.FoghornAddr)
+		addrs := peerReplicaAddrs(addr, peer.FoghornAddrs)
+		if addr == "" {
+			// Quartermaster lists only healthy Foghorns, so a cluster that still
+			// shares tenants but has no address has every Foghorn restarting or
+			// unhealthy. Its last known addresses stay so the leader keeps
+			// redialing them; the peer leaves the set only when Quartermaster
+			// stops naming the cluster.
+			previous, known := pm.quartermasterHints[peer.ClusterId]
+			if !known || previous.Addr == "" || len(peer.SharedTenantIds) == 0 {
+				continue
+			}
+			addr = previous.Addr
+			addrs = append([]string(nil), previous.Addrs...)
+		}
 		hints[peer.ClusterId] = PeerHint{
-			Addr:          peer.FoghornAddr,
-			Addrs:         peerReplicaAddrs(peer.FoghornAddr, peer.FoghornAddrs),
+			Addr:          addr,
+			Addrs:         addrs,
 			ControlCellID: peer.ControlCellId,
 			AlwaysOn:      true,
 			Tenants:       append([]string(nil), peer.SharedTenantIds...),
 		}
 	}
-	confirmedAt := time.Now()
-	pm.mu.Lock()
 	pm.quartermasterHints = hints
 	pm.quartermasterHintsRefreshedAt = confirmedAt
 	pm.mu.Unlock()
