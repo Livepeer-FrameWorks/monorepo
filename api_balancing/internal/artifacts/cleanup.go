@@ -117,8 +117,7 @@ type Cleaner struct {
 	LocalBackendID string
 }
 
-// Sentinel errors callers can switch on. Keep stable: gRPC handlers map
-// these into "cleanup_pending" response messages, the purge job uses
+// Sentinel errors callers can switch on. Keep stable: the purge job uses
 // them to decide whether to retry next cycle vs. drop the row.
 var (
 	// ErrMissingTarget — required field absent (e.g. VOD without s3_key,

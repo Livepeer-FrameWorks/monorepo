@@ -125,7 +125,7 @@ func (s *ChapterReclaimSweep) run() {
 }
 
 func (s *ChapterReclaimSweep) tick() {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	ctx, cancel := stoppable(s.stopCh, 5*time.Minute)
 	defer cancel()
 
 	chapters, err := control.ListChaptersNeedingReclaim(ctx, chapterReclaimBatchMax, chapterReclaimFreshness)

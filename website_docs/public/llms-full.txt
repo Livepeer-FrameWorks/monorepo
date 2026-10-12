@@ -20708,10 +20708,11 @@ When `/play` cannot redirect, it answers JSON with a `code` field:
 
 | Status | `code`                           | Meaning                                                                          |
 | ------ | -------------------------------- | -------------------------------------------------------------------------------- |
+| `403`  | `PLAYBACK_PLACEMENT_DENIED`      | Playback is not permitted from any destination; do not retry.                    |
 | `404`  | `VIEW_KEY_NOT_FOUND`             | The playback ID does not exist or its content was deleted.                       |
 | `409`  | `CONTENT_FAILED`                 | The content failed to upload or process. Its failure webhook carries the reason. |
 | `409`  | `DVR_CHAPTERS_PENDING`           | A recording has ended and has no finalized chapter yet.                          |
-| `503`  | `PLAYBACK_PLACEMENT_UNAVAILABLE` | No playback destination is available right now; retry.                           |
+| `503`  | `PLAYBACK_PLACEMENT_UNAVAILABLE` | No playback destination is available right now; retry after `Retry-After`.       |
 
 Content that is still processing resolves like ready content: `/play` redirects to an edge.
 
@@ -27115,6 +27116,16 @@ window contains no further failures. This is separate from
 parked for fifteen minutes. A missing dependency alone does not revoke unchanged
 playback access.
 
+### Placement membership
+
+`FoghornPlacementMembershipUnconfirmed` warns when a Foghorn replica has not had its
+placement membership (the cell's clusters and the admission state of their edge nodes)
+confirmed by Quartermaster for two minutes. The replica keeps placing from the membership
+it holds, which survives restarts, so viewers and publishers are not refused. Node drains,
+cluster deactivations and control-cell moves made in Quartermaster since then do not reach
+that cell until it is confirmed again. Check the replica's connection to Quartermaster;
+`foghorn_placement_membership_snapshot_age_seconds` shows the age per replica.
+
 ### Notification delivery
 
 1. **Heartbeat.** Confirm your heartbeat provider shows a ping roughly every minute from
@@ -29576,7 +29587,9 @@ incident:
 - **What is in use** — authorities by renewal state, with `dormant` meaning nobody
   has used the object for thirty days so it is no longer renewed or kept in
   cells; the authorities still in use whose version ran out (there should be
-  none); recorded use; and what each cell attested.
+  none); recorded use; what each cell attested; and, per cell, how many of the
+  tenants it holds are still below placement schema 2 (a cell that enforces
+  placement refuses their streams).
 - **Delivery health** — deliveries waiting per cell, split into fresh and replayed,
   unacknowledged deliveries against the current version, index validity, and the
   measured plan of the short-lease claim predicate.
@@ -29591,8 +29604,9 @@ it was issued.
 `frameworks cluster doctor` runs the pass/fail form of the same state as its
 **Media authority convergence** check: unhealthy when a refresh target is parked,
 a refresh or a current delivery has been stuck for more than five minutes, a cell
-refuses the current version, or an authority that is still in use is past its
-validity. A fan-out backlog older than an hour and a cell that is not forgetting
+refuses the current version, an authority that is still in use is past its
+validity, or a cell that attests placement enforcement still holds a tenant
+below placement schema 2 (named per cell). A fan-out backlog older than an hour and a cell that is not forgetting
 expired authorities are warnings. It probes Commodore and every cell's Foghorn
 database; a database or a count it could not read is reported as degraded, never
 as healthy.
@@ -33131,7 +33145,7 @@ Read by `api_tenants/cmd/quartermaster`.
 | `QM_HEALTH_WATCH_REFRESH_SECONDS` | integer | `60` |  | v0.3.0 | Seconds between refreshes of the set of watched gRPC instances. Must be positive when QM_HEALTH_GRPC_WATCH is true. |
 | `QM_HEALTH_WATCH_BACKOFF_SECONDS` | integer | `300` |  | v0.3.0 | Seconds an instance is skipped after its gRPC health watch cannot be set up or is not implemented. |
 | `QM_HEALTH_WATCH_DIAL_TIMEOUT_MS` | integer | `2000` |  | v0.3.0 | Minimum connect timeout in milliseconds for a gRPC health watch connection. |
-| `QM_HEALTH_WATCH_MAX_CONCURRENCY` | integer |  |  | v0.3.0 | Maximum concurrent gRPC health watch streams. Unset, zero, or negative uses QM_HEALTH_MAX_CONCURRENCY. |
+| `QM_HEALTH_WATCH_MAX_CONCURRENCY` | integer |  | deprecated in v0.3.13 | v0.3.0 | Ignored. Every registered gRPC instance keeps its own health watch stream, independent of QM_HEALTH_MAX_CONCURRENCY. |
 
 ### bootstrap subcommand
 
@@ -36139,6 +36153,13 @@ relays a live origin from another cell; an edge allowed to originate that config
 local source without a federation pull. The same startup installs public routing and final admission,
 and each replica publishes its own enforcement state to the heartbeat ledger the cell's attestation
 is derived from. Edge and core must be upgraded together; mixed legacy enforcement is unsupported.
+
+A cell that attests enforcement refuses every stream of a tenant whose authority is still on the
+legacy (policy-free) schema, including managed and pulled sources, until that tenant's
+policy-bearing authority is published. `frameworks cluster doctor` reports the
+**Media authority convergence** check unhealthy while any attested cell holds such a tenant, and
+`frameworks cluster diagnose media-authority` lists the count per cell. Confirm the count is zero
+before upgrading the next cell.
 
 Stored artifacts are served under the same policy: it removes destinations the tenant's rules
 refuse, while storage affinity decides the order of what is left. Choosing which durable backend

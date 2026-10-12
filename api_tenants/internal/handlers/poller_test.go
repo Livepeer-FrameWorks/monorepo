@@ -211,7 +211,7 @@ func TestGrpcWatchesRunOnlyOnTheElectedReplica(t *testing.T) {
 		backoff: map[string]time.Time{},
 		tls:     func(string) HealthWatchTLS { return HealthWatchTLS{} },
 	}
-	if err := m.refreshIfLeader(&fixedLeader{leading: false}, time.Second, time.Second, make(chan struct{}, 1)); err != nil {
+	if err := m.refreshIfLeader(&fixedLeader{leading: false}, time.Second, time.Second); err != nil {
 		t.Fatal(err)
 	}
 	if !watchCancelled || len(m.active) != 0 {
@@ -224,7 +224,7 @@ func TestGrpcWatchesRunOnlyOnTheElectedReplica(t *testing.T) {
 	mock.ExpectQuery("instance_id").WillReturnRows(sqlmock.NewRows([]string{
 		"instance_id", "service_id", "protocol", "advertise_host", "port", "default_protocol", "assigned_cluster_id", "assigned_base_url",
 	}))
-	if err := m.refreshIfLeader(&fixedLeader{leading: true}, time.Second, time.Second, make(chan struct{}, 1)); err != nil {
+	if err := m.refreshIfLeader(&fixedLeader{leading: true}, time.Second, time.Second); err != nil {
 		t.Fatal(err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {

@@ -264,7 +264,7 @@ func NotifyProcessingJobQueued() {
 }
 
 func (d *ProcessingDispatcher) dispatch() {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := stoppable(d.stopCh, 30*time.Second)
 	defer cancel()
 
 	// Atomically claim queued jobs via CTE — prevents double-dispatch when
@@ -754,7 +754,7 @@ func (d *ProcessingDispatcher) resolveHLSSegmentURLs(ctx context.Context, s3URL,
 }
 
 func (d *ProcessingDispatcher) recoverStale() {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := stoppable(d.stopCh, 10*time.Second)
 	defer cancel()
 
 	// Reset stale dispatched jobs back to queued (or failed if retries exhausted)

@@ -115,7 +115,7 @@ func (j *IngestSessionReaperJob) run() {
 }
 
 func (j *IngestSessionReaperJob) reconcile() {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := stoppable(j.stopCh, 60*time.Second)
 	defer cancel()
 	if j.purgeTombstones != nil {
 		if _, err := j.purgeTombstones(ctx, j.tombstoneTTL); err != nil {

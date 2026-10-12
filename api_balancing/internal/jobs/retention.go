@@ -99,7 +99,7 @@ func (j *RetentionJob) run() {
 }
 
 func (j *RetentionJob) scan() {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	ctx, cancel := stoppable(j.stopCh, 10*time.Minute)
 	defer cancel()
 
 	j.logger.Info("Starting retention scan")

@@ -185,7 +185,7 @@ func (j *DVRStartingRecoveryJob) reconcile() {
 	if j.db == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := stoppable(j.stopCh, 60*time.Second)
 	defer cancel()
 
 	staleSeconds := int64(j.staleAfter.Seconds())

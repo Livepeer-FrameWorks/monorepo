@@ -18,6 +18,21 @@ import (
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 )
 
+// waitForWatches reports whether every watch goroutine of m returned within d.
+func waitForWatches(m *grpcWatchManager, d time.Duration) bool {
+	done := make(chan struct{})
+	go func() {
+		m.running.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(d):
+		return false
+	}
+}
+
 func listenTCP(t *testing.T, addr string) net.Listener {
 	t.Helper()
 	var lc net.ListenConfig
@@ -136,21 +151,15 @@ func TestGrpcHealthWatchReopensSoonAfterTheInstanceRestarts(t *testing.T) {
 		backoff: map[string]time.Time{},
 		tls:     func(string) HealthWatchTLS { return HealthWatchTLS{AllowInsecure: true} },
 	}
-	sem := make(chan struct{}, 4)
-	// The watch goroutine holds a semaphore slot until it returns; taking
-	// every slot waits for it, so it cannot touch the next test's handles.
+	// Waiting for the watch goroutine keeps it from touching the next test's
+	// handles.
 	defer func() {
 		m.stopAll()
-		timeout := time.After(5 * time.Second)
-		for range cap(sem) {
-			select {
-			case sem <- struct{}{}:
-			case <-timeout:
-				t.Fatal("watch goroutine did not return after its watch was stopped")
-			}
+		if !waitForWatches(m, 5*time.Second) {
+			t.Fatal("watch goroutine did not return after its watch was stopped")
 		}
 	}()
-	if err = m.refreshGrpcWatches(time.Second, time.Minute, sem); err != nil {
+	if err = m.refreshGrpcWatches(time.Second, time.Minute); err != nil {
 		t.Fatal(err)
 	}
 	awaitPersisted(5*time.Second, "SERVING of the running instance")
@@ -193,13 +202,10 @@ func TestGrpcHealthWatchWithoutWatchMethodBacksOff(t *testing.T) {
 		backoff: map[string]time.Time{},
 		tls:     func(string) HealthWatchTLS { return HealthWatchTLS{AllowInsecure: true} },
 	}
-	sem := make(chan struct{}, 1)
-	if err := m.refreshGrpcWatches(time.Second, time.Minute, sem); err != nil {
+	if err := m.refreshGrpcWatches(time.Second, time.Minute); err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case sem <- struct{}{}:
-	case <-time.After(5 * time.Second):
+	if !waitForWatches(m, 5*time.Second) {
 		m.stopAll()
 		t.Fatal("watch of an instance without the Watch method kept running")
 	}
@@ -208,5 +214,82 @@ func TestGrpcHealthWatchWithoutWatchMethodBacksOff(t *testing.T) {
 	m.mu.Unlock()
 	if !backedOff || time.Until(until) < 30*time.Second {
 		t.Fatalf("instance without the Watch method not in backoff (until %v)", until)
+	}
+}
+
+// Every listed gRPC instance gets a health watch, however many there are, and
+// the refresh that opens them returns at once: a watch is an idle stream held
+// for as long as the instance is listed, so watches must not queue behind
+// one another or behind the probe concurrency.
+func TestGrpcHealthWatchesCoverEveryCandidate(t *testing.T) {
+	mockDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = mockDB.Close() }()
+	Init(mockDB, logging.NewLogger())
+
+	var mu sync.Mutex
+	watching := 0
+	srv := grpc.NewServer(grpc.StreamInterceptor(func(srv any, ss grpc.ServerStream, _ *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+		mu.Lock()
+		watching++
+		mu.Unlock()
+		defer func() {
+			mu.Lock()
+			watching--
+			mu.Unlock()
+		}()
+		return handler(srv, ss)
+	}))
+	healthpb.RegisterHealthServer(srv, health.NewServer())
+	listener := listenTCP(t, "127.0.0.1:0")
+	go func() { _ = srv.Serve(listener) }()
+	defer srv.Stop()
+	host, portText, _ := net.SplitHostPort(listener.Addr().String())
+	port, _ := strconv.Atoi(portText)
+
+	const candidates = 24
+	rows := sqlmock.NewRows([]string{
+		"instance_id", "service_id", "advertise_host", "port", "protocol", "default_protocol", "assigned_cluster_id", "assigned_base_url",
+	})
+	for i := range candidates {
+		rows.AddRow("inst-"+strconv.Itoa(i), "foghorn", host, port, "grpc", "grpc", "", "")
+	}
+	mock.ExpectQuery(`instance_id`).WillReturnRows(rows)
+
+	m := &grpcWatchManager{
+		active:  map[string]context.CancelFunc{},
+		backoff: map[string]time.Time{},
+		tls:     func(string) HealthWatchTLS { return HealthWatchTLS{AllowInsecure: true} },
+	}
+	defer func() {
+		m.stopAll()
+		waitForWatches(m, 5*time.Second)
+	}()
+
+	refreshed := make(chan error, 1)
+	go func() { refreshed <- m.refreshGrpcWatches(time.Second, time.Minute) }()
+	select {
+	case err := <-refreshed:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("refresh of %d candidates blocked waiting for a watch slot", candidates)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		mu.Lock()
+		open := watching
+		mu.Unlock()
+		if open == candidates {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%d of %d candidates have an open health watch", open, candidates)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }

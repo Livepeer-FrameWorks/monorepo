@@ -158,7 +158,7 @@ func NotifyChapterFinalizationQueued() {
 }
 
 func (q *ChapterFinalizationQueue) tick() {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	ctx, cancel := stoppable(q.stopCh, 5*time.Minute)
 	defer cancel()
 
 	var chapters []control.DVRChapterRow

@@ -202,7 +202,7 @@ func (j *ActiveIngestPlacementJob) run() {
 // A failing batch does not stop the others, since placement lapses on the lease
 // clock rather than corrupting; the next tick recovers.
 func (j *ActiveIngestPlacementJob) renew() {
-	enumCtx, cancelEnum := context.WithTimeout(context.Background(), activeIngestPlacementEnumerationBudget)
+	enumCtx, cancelEnum := stoppable(j.stopCh, activeIngestPlacementEnumerationBudget)
 	sources, err := j.sources(enumCtx)
 	cancelEnum()
 	if err != nil {
@@ -268,7 +268,7 @@ func (j *ActiveIngestPlacementJob) renew() {
 }
 
 func (j *ActiveIngestPlacementJob) syncBatch(streams []*commodorepb.ActiveIngestStream) error {
-	ctx, cancel := context.WithTimeout(context.Background(), activeIngestPlacementCallTimeout)
+	ctx, cancel := stoppable(j.stopCh, activeIngestPlacementCallTimeout)
 	defer cancel()
 	// No request-level cluster: every entry names its own.
 	resp, err := j.syncer.SyncActiveIngestPlacement(ctx, "", streams, nil)

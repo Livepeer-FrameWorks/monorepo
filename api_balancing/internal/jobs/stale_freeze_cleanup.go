@@ -88,7 +88,7 @@ func (j *StaleFreezeCleanupJob) run() {
 }
 
 func (j *StaleFreezeCleanupJob) cleanup() {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := stoppable(j.stopCh, 30*time.Second)
 	defer cancel()
 
 	staleAfterSeconds := int64(j.staleAfter.Seconds())

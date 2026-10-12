@@ -126,7 +126,7 @@ func (j *OrphanCleanupJob) run() {
 }
 
 func (j *OrphanCleanupJob) reconcile() {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := stoppable(j.stopCh, 2*time.Minute)
 	defer cancel()
 
 	// Reconcile orphaned clips

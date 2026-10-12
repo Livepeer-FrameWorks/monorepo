@@ -125,7 +125,7 @@ func (j *StreamCleanupJob) drain() {
 	// fewer than a batch of obligations are due.
 	progressed := 0
 	for {
-		claimCtx, claimCancel := context.WithTimeout(context.Background(), 15*time.Second)
+		claimCtx, claimCancel := stoppable(j.stopCh, 15*time.Second)
 		items, err := j.claimBatch(claimCtx)
 		claimCancel()
 		if err != nil {
@@ -133,6 +133,12 @@ func (j *StreamCleanupJob) drain() {
 			break
 		}
 		for _, it := range items {
+			select {
+			case <-j.stopCh:
+				// The rest of the batch stays leased and is claimed again once the lease runs out.
+				return
+			default:
+			}
 			if j.settleObligation(it) {
 				progressed++
 			}
@@ -183,7 +189,7 @@ func (j *StreamCleanupJob) claimBatch(ctx context.Context) ([]streamCleanupItem,
 // second sweep — all token-fenced on the claim's lease. A failed sweep applies a capped backoff. Idempotent: DeletePrefix
 // on an absent prefix is a NotFound no-op; a stolen lease makes the settlement a no-op.
 func (j *StreamCleanupJob) settleObligation(it streamCleanupItem) (progressed bool) {
-	sweepCtx, cancel := context.WithTimeout(context.Background(), j.itemTimeout)
+	sweepCtx, cancel := stoppable(j.stopCh, j.itemTimeout)
 	defer cancel()
 
 	// Always sweep LOCAL (backendLocal=true): a Foghorn DB owns one immutable store, and its live-stream thumbnails were
@@ -198,7 +204,7 @@ func (j *StreamCleanupJob) settleObligation(it streamCleanupItem) (progressed bo
 	// between them can never drop the control rows without marking cleaned (or vice versa) — the FinalizeAtomic guard.
 	// The S3 sweep above is idempotent, so a rolled-back tx just re-sweeps next pass.
 	windowSecs := int64(control.DeterministicCopyWindow.Seconds())
-	txCtx, txCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	txCtx, txCancel := stoppable(j.stopCh, 15*time.Second)
 	defer txCancel()
 	// The helper rolls back (releasing the row lock) before returning, so recordFailure's backoff write on a separate
 	// connection never blocks on that lock.
@@ -258,7 +264,7 @@ func (j *StreamCleanupJob) settleObligation(it streamCleanupItem) (progressed bo
 // Token-fenced: a stolen lease makes this a no-op. Backoff uses the OLD attempts (Postgres SET reads pre-update
 // values), matching backoffBase * min(attempts+1, 30).
 func (j *StreamCleanupJob) recordFailure(it streamCleanupItem, msg string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := stoppable(j.stopCh, 10*time.Second)
 	defer cancel()
 	if upErr := foghorndb.New(j.db).FailStreamCleanupObligation(ctx, foghorndb.FailStreamCleanupObligationParams{
 		BackoffSeconds: int64(j.backoffBase.Seconds()), LastError: sql.NullString{String: msg, Valid: true},

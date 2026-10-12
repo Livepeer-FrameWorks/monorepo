@@ -243,14 +243,21 @@ func TestStagingCleanup_PassIsBounded(t *testing.T) {
 	}
 }
 
-// Stop interrupts the pause between batches, so a pass never outlives Stop by more than the batch in flight.
+// stopOnDelete stops its job while the first delete request is in flight.
+type stopOnDelete struct{ stop chan struct{} }
+
+func (d *stopOnDelete) DeleteKeys(context.Context, []string) map[string]error {
+	close(d.stop)
+	return nil
+}
+
+// Stop during a batch ends the pass after that batch without the pause before the next one and without settling it,
+// so a pass never outlives Stop by more than the request in flight. The batch stays leased for a later pass.
 func TestStagingCleanup_StopInterruptsPause(t *testing.T) {
-	del := &stubDeleter{}
-	j, mock := newStagingCleanupTestJob(t, del, 1, "local-backend")
+	j, mock := newStagingCleanupTestJob(t, nil, 1, "local-backend")
+	j.s3 = &stopOnDelete{stop: j.stopCh}
 	j.batchPause = time.Hour
 	expectClaim(mock, &captureArg{}, sqlmock.AnyArg(), 1, sqlmock.NewRows(claimCols).AddRow("k1", 0, "local-backend"))
-	mock.ExpectExec(settleSQL).WillReturnResult(sqlmock.NewResult(0, 1))
-	close(j.stopCh)
 
 	done := make(chan struct{})
 	go func() {
@@ -283,6 +290,61 @@ func TestJitterDurationStaysInRangeAndVaries(t *testing.T) {
 	}
 	if got := jitterDuration(d, 0, 1); got < 0 || got >= d {
 		t.Fatalf("initial delay %s outside [0, 1m)", got)
+	}
+}
+
+// hangingDeleter blocks every delete until its context ends or release is closed.
+type hangingDeleter struct {
+	called  chan struct{}
+	release chan struct{}
+}
+
+func (d *hangingDeleter) DeleteKeys(ctx context.Context, keys []string) map[string]error {
+	close(d.called)
+	select {
+	case <-ctx.Done():
+	case <-d.release:
+	}
+	failed := make(map[string]error, len(keys))
+	for _, k := range keys {
+		failed[k] = fmt.Errorf("failed to delete objects: %w", context.Cause(ctx))
+	}
+	return failed
+}
+
+// Stop cancels a delete the object store has not answered instead of waiting
+// for it, so a slow store cannot hold a stopping Foghorn past the edges'
+// restart deadline. The claimed rows stay leased and are deleted again once
+// the lease runs out.
+func TestStagingCleanup_StopCancelsAHangingDelete(t *testing.T) {
+	del := &hangingDeleter{called: make(chan struct{}), release: make(chan struct{})}
+	defer close(del.release)
+	mockDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = mockDB.Close() }()
+	j := NewStagingCleanupJob(StagingCleanupConfig{DB: mockDB, S3: del, Logger: logging.NewLogger(), Interval: time.Millisecond, LocalBackendID: "local-backend"})
+	mock.ExpectQuery(claimSQL).WillReturnRows(sqlmock.NewRows(claimCols).AddRow("tenant-1/clips/hash.mp4.staging.att-1", 0, "local-backend"))
+
+	j.Start()
+	select {
+	case <-del.called:
+	case <-time.After(5 * time.Second):
+		t.Fatal("drain never reached the object store")
+	}
+	stopped := make(chan struct{})
+	go func() {
+		j.Stop()
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop waited on an object-store delete that does not answer")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }
 

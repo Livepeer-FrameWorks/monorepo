@@ -366,7 +366,6 @@ func main() {
 		WatchRefreshSeconds: cfg.HealthWatchRefreshSeconds,
 		WatchBackoffSeconds: cfg.HealthWatchBackoffSeconds,
 		WatchDialTimeoutMS:  cfg.HealthWatchDialTimeoutMS,
-		WatchMaxConcurrency: cfg.HealthWatchMaxConcurrency,
 		TLS: func(serviceID string) handlers.HealthWatchTLS {
 			current := liveConfig.Get()
 			return handlers.HealthWatchTLS{

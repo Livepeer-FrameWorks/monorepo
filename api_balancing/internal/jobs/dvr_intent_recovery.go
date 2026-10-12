@@ -121,7 +121,7 @@ func (j *DVRIntentRecoveryJob) reconcile() {
 	if j.startDVR == nil || j.claimIntents == nil || j.failIntent == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := stoppable(j.stopCh, 60*time.Second)
 	defer cancel()
 
 	// Atomically claim (lease + count) a batch — HA-safe, so a sibling replica does not also

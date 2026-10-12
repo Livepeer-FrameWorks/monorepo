@@ -324,9 +324,10 @@ func (s *FoghornGRPCServer) SetCacheInvalidator(ci CacheInvalidator) {
 
 // SetArtifactCleaner wires the shared cleanup helper used by DeleteClip,
 // DeleteDVR, and DeleteVodAsset to delete S3 bytes (locally or via the
-// federation delete delegate). Wired from cmd/foghorn/main.go; nil in
-// tests that don't focus on cleanup, in which case the delete handlers
-// soft-delete only and report cleanup as pending.
+// federation delete delegate) after each delete has answered. Wired from
+// cmd/foghorn/main.go; nil in tests that don't focus on cleanup, in which
+// case the delete handlers soft-delete only and leave the bytes to the purge
+// job.
 func (s *FoghornGRPCServer) SetArtifactCleaner(c *artifacts.Cleaner) {
 	s.artifactCleaner = c
 }
@@ -463,6 +464,42 @@ func (s *FoghornGRPCServer) retirePeerArtifactPointers(ctx context.Context, tena
 		}(clusterID, addr)
 	}
 	wg.Wait()
+}
+
+// A deleted artifact's objects are freed after its delete has answered, at most
+// artifactByteDeleteConcurrency at a time per process and each within
+// artifactByteDeleteTimeout. The delete is durable once its soft-delete
+// commits, so a slow or unreachable object store neither delays nor fails it.
+// A deletion that fails, times out or is cut short by a restart leaves the
+// objects to the purge job, which frees the bytes of every deleted row before
+// it drops the row.
+const (
+	artifactByteDeleteConcurrency = 8
+	artifactByteDeleteTimeout     = 2 * time.Minute
+)
+
+var artifactByteDeleteSlots = make(chan struct{}, artifactByteDeleteConcurrency)
+
+// deleteArtifactBytesAfterCommit frees ref's objects in the background, locally
+// or through the federation delete delegate.
+func (s *FoghornGRPCServer) deleteArtifactBytesAfterCommit(ref artifacts.ArtifactRef) {
+	fields := logging.Fields{"artifact_hash": ref.Hash, "artifact_type": ref.Type}
+	cleaner := s.artifactCleaner
+	if cleaner == nil {
+		s.logger.WithFields(fields).Warn("Artifact cleaner not wired; object deletion deferred to the purge job")
+		return
+	}
+	go func() {
+		artifactByteDeleteSlots <- struct{}{}
+		defer func() { <-artifactByteDeleteSlots }()
+		ctx, cancel := context.WithTimeout(context.Background(), artifactByteDeleteTimeout)
+		defer cancel()
+		if err := cleaner.Delete(ctx, ref); err != nil {
+			s.logger.WithError(err).WithFields(fields).Warn("Failed to delete a deleted artifact's objects; the purge job retries")
+			return
+		}
+		s.logger.WithFields(fields).Debug("Deleted a deleted artifact's objects")
+	}()
 }
 
 // deletionRequester is the user an artifact_deleted event is attributed to:
@@ -1592,15 +1629,7 @@ func (s *FoghornGRPCServer) DeleteClip(ctx context.Context, req *sharedpb.Delete
 		}
 	}
 
-	// Delete S3 bytes (cross-cluster aware via the federation delete delegate). Failure marks
-	// cleanup-pending; the row is already in the purge cycle for retries.
-	if s.artifactCleaner == nil {
-		if cleanupError != "" {
-			cleanupError += "; "
-		}
-		cleanupError += "s3 cleanup pending: cleaner not wired"
-		s.logger.WithField("clip_hash", req.ClipHash).Warn("Artifact cleaner not wired; clip S3 cleanup deferred to purge job")
-	} else if errCleanup := s.artifactCleaner.Delete(ctx, artifacts.ArtifactRef{
+	s.deleteArtifactBytesAfterCommit(artifacts.ArtifactRef{
 		Hash:                req.ClipHash,
 		Type:                "clip",
 		TenantID:            req.GetTenantId(),
@@ -1613,13 +1642,7 @@ func (s *FoghornGRPCServer) DeleteClip(ctx context.Context, req *sharedpb.Delete
 		PendingObjectKey:    clipRow.SyncObjectKey.String,
 		DurableBackendLocal: clipRow.DurableBackendLocal,
 		BackendID:           clipRow.BackendID.String,
-	}); errCleanup != nil {
-		if cleanupError != "" {
-			cleanupError += "; "
-		}
-		cleanupError += fmt.Sprintf("s3 cleanup pending: %v", errCleanup)
-		s.logger.WithError(errCleanup).WithField("clip_hash", req.ClipHash).Warn("Failed to delete clip from S3, will be retried by purge job")
-	}
+	})
 
 	s.logger.WithField("clip_hash", req.ClipHash).Info("Clip soft-deleted successfully")
 
@@ -2676,14 +2699,7 @@ func (s *FoghornGRPCServer) DeleteDVR(ctx context.Context, req *sharedpb.DeleteD
 		}
 	}
 
-	// Delete S3 bytes (cross-cluster aware). Failure marks cleanup-pending.
-	if s.artifactCleaner == nil {
-		if cleanupError != "" {
-			cleanupError += "; "
-		}
-		cleanupError += "s3 cleanup pending: cleaner not wired"
-		s.logger.WithField("dvr_hash", req.DvrHash).Warn("Artifact cleaner not wired; DVR S3 cleanup deferred to purge job")
-	} else if errCleanup := s.artifactCleaner.Delete(ctx, artifacts.ArtifactRef{
+	s.deleteArtifactBytesAfterCommit(artifacts.ArtifactRef{
 		Hash:                req.DvrHash,
 		Type:                "dvr",
 		TenantID:            req.GetTenantId(),
@@ -2695,13 +2711,7 @@ func (s *FoghornGRPCServer) DeleteDVR(ctx context.Context, req *sharedpb.DeleteD
 		PendingObjectKey:    dvrRow.SyncObjectKey.String,
 		DurableBackendLocal: dvrRow.DurableBackendLocal,
 		BackendID:           dvrRow.BackendID.String,
-	}); errCleanup != nil {
-		if cleanupError != "" {
-			cleanupError += "; "
-		}
-		cleanupError += fmt.Sprintf("s3 cleanup pending: %v", errCleanup)
-		s.logger.WithError(errCleanup).WithField("dvr_hash", req.DvrHash).Warn("Failed to delete DVR from S3, will be retried by purge job")
-	}
+	})
 
 	// The DVR-deleted (and per-chapter VOD-deleted) lifecycle events were already enqueued
 	// DURABLY inside SoftDeleteDVRAndChapters' transaction — no separate loss-prone emit here.
@@ -4606,12 +4616,9 @@ func (s *FoghornGRPCServer) DeleteVodAsset(ctx context.Context, req *sharedpb.De
 	// Delete from S3 (cross-cluster aware via the federation delete delegate). The cleaner derives
 	// the target from vod_metadata.s3_key, falling back to a.s3_url and finally to the deterministic
 	// BuildVodS3Key shape so VODs whose s3_key was never recorded still get cleaned. Skipped for an
-	// uploading row whose multipart was just aborted. Failure marks cleanup-pending; the row is
-	// already in the purge cycle for retries.
+	// uploading row whose multipart was just aborted.
 	if currentStatus != "uploading" {
-		if s.artifactCleaner == nil {
-			s.logger.WithField("artifact_hash", req.ArtifactHash).Warn("Artifact cleaner not wired; VOD S3 cleanup deferred to purge job")
-		} else if errDelete := s.artifactCleaner.Delete(ctx, artifacts.ArtifactRef{
+		s.deleteArtifactBytesAfterCommit(artifacts.ArtifactRef{
 			Hash:                req.ArtifactHash,
 			Type:                "vod",
 			TenantID:            req.GetTenantId(),
@@ -4625,13 +4632,7 @@ func (s *FoghornGRPCServer) DeleteVodAsset(ctx context.Context, req *sharedpb.De
 			PendingObjectKey:    vodRow.SyncObjectKey.String,
 			DurableBackendLocal: vodRow.DurableBackendLocal,
 			BackendID:           vodRow.BackendID.String,
-		}); errDelete != nil {
-			s.logger.WithFields(logging.Fields{
-				"artifact_hash": req.ArtifactHash,
-				"s3_key":        s3Key,
-				"error":         errDelete,
-			}).Warn("Failed to delete from S3, will be retried by purge job")
-		}
+		})
 	}
 
 	return &sharedpb.DeleteVodAssetResponse{

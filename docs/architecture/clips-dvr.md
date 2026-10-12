@@ -468,6 +468,13 @@ user's library before any bytes are reclaimed. `'expired'` is only the brief
 transient state between the retention deadline passing and the sweep that soft-deletes
 the row.
 
+**Explicit deletes.** `DeleteClip`, `DeleteDVR` and `DeleteVodAsset` answer once
+the soft-delete commits. The object-store delete of the artifact's bytes runs in
+the background after that answer (at most 8 at a time per Foghorn, each bounded to
+2 minutes), so a slow or unreachable object store never delays or fails a delete
+that already happened. Bytes that background delete does not free stay with the
+row until `PurgeDeletedJob` frees them.
+
 ### RetentionJob
 
 Uses `retention_until` to decide when terminal artifacts are soft-deleted.

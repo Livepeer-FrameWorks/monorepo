@@ -290,7 +290,7 @@ func (r *ArtifactReconciler) reconcile() bool {
 // 'artifact_reconciler' advisory lock. It reports false when this replica did not get the lock (a
 // peer holds it, or the connection failed), so the caller can retry an owed pass.
 func (r *ArtifactReconciler) reconcileUnderLock() bool {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := stoppable(r.stopCh, 2*time.Minute)
 	defer cancel()
 
 	conn, err := r.db.Conn(ctx)
@@ -364,7 +364,7 @@ func (r *ArtifactReconciler) reconcileUnderLock() bool {
 // or == this cell's id); it never consults the live resolver/backing (I2). Idempotent (only flips false→true); a
 // lost lock (a peer holds it) or a busy pass simply retries next tick.
 func (r *ArtifactReconciler) reconcileBillingAttribution() {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := stoppable(r.stopCh, 2*time.Minute)
 	defer cancel()
 
 	conn, err := r.db.Conn(ctx)
@@ -393,7 +393,7 @@ func (r *ArtifactReconciler) reconcileBillingAttribution() {
 // projection lock and delay catalog convergence. It self-triggers another pass when it drained a FULL batch so
 // a backlog drains promptly instead of waiting a full interval.
 func (r *ArtifactReconciler) reconcileFreezePublicationLedgerPass() {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := stoppable(r.stopCh, 2*time.Minute)
 	defer cancel()
 
 	conn, err := r.db.Conn(ctx)

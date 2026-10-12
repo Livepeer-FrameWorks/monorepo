@@ -171,7 +171,7 @@ func (j *ThumbnailRecoveryJob) reconcile() {
 
 	// Observable backlog: due leased-phase attempts (stuck-incomplete + unprojected) still awaiting a re-drive
 	// (excludes backed-off + leased), so it reflects actionable work and shrinks toward zero as the reconciler drains.
-	blCtx, blCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	blCtx, blCancel := stoppable(j.stopCh, 15*time.Second)
 	backlog, blErr := control.ThumbnailRecoveryBacklog(blCtx, j.db, staleBefore)
 	if blErr != nil {
 		j.logger.WithError(blErr).Debug("Thumbnail recovery: backlog query failed")
@@ -189,7 +189,7 @@ func (j *ThumbnailRecoveryJob) reconcile() {
 	const maxDrainPasses = 20
 	var redriven, failed, gced int
 	for pass := 0; pass < maxDrainPasses; pass++ {
-		drainCtx, drainCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		drainCtx, drainCancel := stoppable(j.stopCh, 30*time.Second)
 		r, f, g, err := control.RecoverStuckThumbnailAttempts(drainCtx, j.db, time.Now(), j.batch)
 		drainCancel()
 		if err != nil {
@@ -223,19 +223,25 @@ func (j *ThumbnailRecoveryJob) drainLeasedRecoveryPhase(
 	drive func(ctx context.Context, attemptID string) (bool, error),
 	phase string,
 ) (progressed, backedOff int) {
-	claimCtx, claimCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	claimCtx, claimCancel := stoppable(j.stopCh, 30*time.Second)
 	claimed, err := claim(claimCtx, j.db, staleBefore, j.leaseTTL, j.batch)
 	claimCancel()
 	if err != nil {
 		j.logger.WithError(err).WithField("phase", phase).Warn("Thumbnail recovery: claim failed")
 	}
 	for _, c := range claimed {
-		itemCtx, itemCancel := context.WithTimeout(context.Background(), j.itemTimeout)
+		select {
+		case <-j.stopCh:
+			// The rest of the batch stays leased and is claimed again once the lease runs out.
+			return progressed, backedOff
+		default:
+		}
+		itemCtx, itemCancel := stoppable(j.stopCh, j.itemTimeout)
 		ok, dErr := drive(itemCtx, c.AttemptID)
 		itemCancel()
-		// Settlement/backoff writes use their OWN fresh short context so they always complete (releasing or backing-off
-		// the lease) even if the re-drive above spent its deadline.
-		settleCtx, settleCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		// Settlement/backoff writes use their OWN fresh short context so they complete (releasing or backing-off
+		// the lease) even if the re-drive above spent its deadline. Stop cancels them too; the lease then runs out.
+		settleCtx, settleCancel := stoppable(j.stopCh, 10*time.Second)
 		if dErr == nil && ok {
 			if sErr := control.SettleThumbnailRecoveryDone(settleCtx, j.db, c.AttemptID, c.Token); sErr != nil {
 				j.logger.WithError(sErr).WithField("attempt_id", c.AttemptID).Debug("Thumbnail recovery: settle progressed attempt failed")

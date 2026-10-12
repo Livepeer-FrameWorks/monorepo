@@ -1,7 +1,6 @@
 package jobs
 
 import (
-	"context"
 	"database/sql"
 	"math/rand/v2"
 	"sync"
@@ -180,6 +179,16 @@ func (j *StagingCleanupJob) drain() {
 	}
 }
 
+// stopping reports whether Stop was called.
+func (j *StagingCleanupJob) stopping() bool {
+	select {
+	case <-j.stopCh:
+		return true
+	default:
+		return false
+	}
+}
+
 // pauseBetweenBatches waits a jittered batchPause and reports false when the job was stopped meanwhile.
 func (j *StagingCleanupJob) pauseBetweenBatches() bool {
 	if j.batchPause <= 0 {
@@ -201,7 +210,7 @@ func (j *StagingCleanupJob) pauseBetweenBatches() bool {
 // token), this worker's settlement leaves that row to its current owner. bucket < 0 claims from any bucket.
 func (j *StagingCleanupJob) processBatch(bucket int) (claimed, deleted int, err error) {
 	token := uuid.NewString()
-	claimCtx, claimCancel := context.WithTimeout(context.Background(), stagingCleanupClaimTimeout)
+	claimCtx, claimCancel := stoppable(j.stopCh, stagingCleanupClaimTimeout)
 	rows, err := foghorndb.New(j.db).ClaimStagingCleanupItems(claimCtx, foghorndb.ClaimStagingCleanupItemsParams{
 		LeaseSeconds: int64(j.leaseTTL.Seconds()), LeaseToken: token,
 		ClaimBucket: int64(bucket), ClaimBuckets: stagingCleanupClaimBuckets, BatchLimit: int32(j.batchSize),
@@ -228,9 +237,15 @@ func (j *StagingCleanupJob) processBatch(bucket int) (claimed, deleted int, err 
 
 	var done []string
 	if len(owned) > 0 {
-		delCtx, delCancel := context.WithTimeout(context.Background(), stagingCleanupDeleteTimeout)
+		delCtx, delCancel := stoppable(j.stopCh, stagingCleanupDeleteTimeout)
 		failed := j.s3.DeleteKeys(delCtx, owned)
 		delCancel()
+		if j.stopping() {
+			// The job is stopping. The batch stays leased and a later pass
+			// deletes it again once the lease runs out; S3 reports an object
+			// this request already removed as deleted.
+			return len(rows), 0, nil
+		}
 		done = make([]string, 0, len(owned))
 		for _, key := range owned {
 			if delErr, ok := failed[key]; ok {
@@ -245,7 +260,7 @@ func (j *StagingCleanupJob) processBatch(bucket int) (claimed, deleted int, err 
 	if len(done) > 0 {
 		// A failure here leaves the rows leased; after the lease expires a later pass deletes the already-absent
 		// objects again (S3 reports a missing key as deleted) and removes the rows then.
-		ctx, cancel := context.WithTimeout(context.Background(), stagingCleanupSettleTimeout)
+		ctx, cancel := stoppable(j.stopCh, stagingCleanupSettleTimeout)
 		n, delErr := foghorndb.New(j.db).DeleteStagingCleanupItems(ctx, foghorndb.DeleteStagingCleanupItemsParams{
 			ObjectKeys: done, LeaseToken: token,
 		})
@@ -256,7 +271,7 @@ func (j *StagingCleanupJob) processBatch(bucket int) (claimed, deleted int, err 
 		deleted = int(n)
 	}
 	if len(failedKeys) > 0 {
-		ctx, cancel := context.WithTimeout(context.Background(), stagingCleanupSettleTimeout)
+		ctx, cancel := stoppable(j.stopCh, stagingCleanupSettleTimeout)
 		_, failErr := foghorndb.New(j.db).FailStagingCleanupItems(ctx, foghorndb.FailStagingCleanupItemsParams{
 			BackoffBaseSeconds: int64(j.backoffBase.Seconds()), ObjectKeys: failedKeys, LastErrors: failedErrs,
 			LeaseToken: token,

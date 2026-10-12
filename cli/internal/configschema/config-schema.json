@@ -2461,7 +2461,8 @@
           "key": "QM_HEALTH_WATCH_MAX_CONCURRENCY",
           "type": "integer",
           "introduced": "v0.3.0",
-          "description": "Maximum concurrent gRPC health watch streams. Unset, zero, or negative uses QM_HEALTH_MAX_CONCURRENCY."
+          "deprecated": "v0.3.13",
+          "description": "Ignored. Every registered gRPC instance keeps its own health watch stream, independent of QM_HEALTH_MAX_CONCURRENCY."
         }
       ]
     },

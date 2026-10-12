@@ -443,7 +443,7 @@ Read by `api_tenants/cmd/quartermaster`.
 | `QM_HEALTH_WATCH_REFRESH_SECONDS` | integer | `60` |  | v0.3.0 | Seconds between refreshes of the set of watched gRPC instances. Must be positive when QM_HEALTH_GRPC_WATCH is true. |
 | `QM_HEALTH_WATCH_BACKOFF_SECONDS` | integer | `300` |  | v0.3.0 | Seconds an instance is skipped after its gRPC health watch cannot be set up or is not implemented. |
 | `QM_HEALTH_WATCH_DIAL_TIMEOUT_MS` | integer | `2000` |  | v0.3.0 | Minimum connect timeout in milliseconds for a gRPC health watch connection. |
-| `QM_HEALTH_WATCH_MAX_CONCURRENCY` | integer |  |  | v0.3.0 | Maximum concurrent gRPC health watch streams. Unset, zero, or negative uses QM_HEALTH_MAX_CONCURRENCY. |
+| `QM_HEALTH_WATCH_MAX_CONCURRENCY` | integer |  | deprecated in v0.3.13 | v0.3.0 | Ignored. Every registered gRPC instance keeps its own health watch stream, independent of QM_HEALTH_MAX_CONCURRENCY. |
 
 ### bootstrap subcommand
 

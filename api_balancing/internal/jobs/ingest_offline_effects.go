@@ -60,11 +60,13 @@ func (j *IngestOfflineEffectsJob) run() {
 	defer j.wg.Done()
 	ticker := time.NewTicker(j.interval)
 	defer ticker.Stop()
-	j.RunOnce(context.Background())
+	ctx, cancel := untilStopped(j.stopCh)
+	defer cancel()
+	j.RunOnce(ctx)
 	for {
 		select {
 		case <-ticker.C:
-			j.RunOnce(context.Background())
+			j.RunOnce(ctx)
 		case <-j.stopCh:
 			return
 		}

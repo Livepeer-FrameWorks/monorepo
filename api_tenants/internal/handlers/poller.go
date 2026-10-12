@@ -59,8 +59,6 @@ type HealthPollerConfig struct {
 	WatchRefreshSeconds int
 	WatchBackoffSeconds int
 	WatchDialTimeoutMS  int
-	// WatchMaxConcurrency falls back to MaxConcurrency when not positive.
-	WatchMaxConcurrency int
 
 	// TLS returns the TLS settings for a gRPC health probe or watch of the
 	// given service type. It is called for every dial, so a configuration
@@ -119,12 +117,7 @@ func StartHealthPoller(cfg HealthPollerConfig) {
 		watchRefresh := time.Duration(cfg.WatchRefreshSeconds) * time.Second
 		watchBackoff := time.Duration(cfg.WatchBackoffSeconds) * time.Second
 		watchDialTimeout := time.Duration(cfg.WatchDialTimeoutMS) * time.Millisecond
-		watchMaxConc := cfg.WatchMaxConcurrency
-		if watchMaxConc <= 0 {
-			watchMaxConc = maxConc
-		}
-		watchSem := make(chan struct{}, watchMaxConc)
-		go startGrpcHealthWatchers(leader, watchRefresh, watchDialTimeout, watchBackoff, watchSem, tls)
+		go startGrpcHealthWatchers(leader, watchRefresh, watchDialTimeout, watchBackoff, tls)
 	}
 
 	go func() {
@@ -666,14 +659,19 @@ func recordSkippedHealthCheck(instanceID string) {
 	}
 }
 
+// grpcWatchManager keeps one health watch per listed gRPC instance. A watch is
+// an idle stream held for as long as its instance is listed, so watches are
+// not limited by the probe concurrency: the number of watches is the number of
+// listed candidates, and the refresh never waits for one to end.
 type grpcWatchManager struct {
 	mu      sync.Mutex
 	active  map[string]context.CancelFunc
 	backoff map[string]time.Time
 	tls     func(serviceID string) HealthWatchTLS
+	running sync.WaitGroup
 }
 
-func startGrpcHealthWatchers(leader healthLeader, refreshInterval, dialTimeout, backoff time.Duration, sem chan struct{}, tls func(serviceID string) HealthWatchTLS) {
+func startGrpcHealthWatchers(leader healthLeader, refreshInterval, dialTimeout, backoff time.Duration, tls func(serviceID string) HealthWatchTLS) {
 	manager := &grpcWatchManager{
 		active:  make(map[string]context.CancelFunc),
 		backoff: make(map[string]time.Time),
@@ -684,7 +682,7 @@ func startGrpcHealthWatchers(leader healthLeader, refreshInterval, dialTimeout, 
 	defer ticker.Stop()
 
 	for {
-		if err := manager.refreshIfLeader(leader, dialTimeout, backoff, sem); err != nil {
+		if err := manager.refreshIfLeader(leader, dialTimeout, backoff); err != nil {
 			logger.WithError(err).Warn("grpc health watcher refresh failed")
 		}
 		<-ticker.C
@@ -694,12 +692,12 @@ func startGrpcHealthWatchers(leader healthLeader, refreshInterval, dialTimeout, 
 // refreshIfLeader keeps one watch per gRPC instance while this replica leads
 // and ends every watch once it does not, so a replica that lost the election
 // stops writing health verdicts.
-func (m *grpcWatchManager) refreshIfLeader(leader healthLeader, dialTimeout, backoff time.Duration, sem chan struct{}) error {
+func (m *grpcWatchManager) refreshIfLeader(leader healthLeader, dialTimeout, backoff time.Duration) error {
 	if !leader.lead() {
 		m.stopAll()
 		return nil
 	}
-	return m.refreshGrpcWatches(dialTimeout, backoff, sem)
+	return m.refreshGrpcWatches(dialTimeout, backoff)
 }
 
 func (m *grpcWatchManager) stopAll() {
@@ -748,7 +746,7 @@ func (p *pollerLeadership) lead() bool {
 	return leading
 }
 
-func (m *grpcWatchManager) refreshGrpcWatches(dialTimeout, backoff time.Duration, sem chan struct{}) error {
+func (m *grpcWatchManager) refreshGrpcWatches(dialTimeout, backoff time.Duration) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -804,9 +802,9 @@ func (m *grpcWatchManager) refreshGrpcWatches(dialTimeout, backoff time.Duration
 		m.active[id] = cancel
 		m.mu.Unlock()
 
-		sem <- struct{}{}
+		m.running.Add(1)
 		go func(ii serviceInstance, instID string, watchCtx context.Context) {
-			defer func() { <-sem }()
+			defer m.running.Done()
 			defer m.clearWatch(instID)
 			m.keepWatching(watchCtx, ii, dialTimeout, backoff)
 		}(inst, id, ctxWatch)

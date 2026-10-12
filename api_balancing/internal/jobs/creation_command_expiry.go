@@ -144,7 +144,7 @@ func (j *CreationCommandExpiryJob) run() {
 // sweep runs one pass: terminalize stranded accepts, enforce terminal-row retention on
 // CONSUMED rows, then warn on any unconsumed terminal backlog. All run in bounded work.
 func (j *CreationCommandExpiryJob) sweep() {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := stoppable(j.stopCh, 30*time.Second)
 	defer cancel()
 
 	j.expire(ctx)

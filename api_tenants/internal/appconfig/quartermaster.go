@@ -73,7 +73,7 @@ type Quartermaster struct {
 	HealthWatchRefreshSeconds int    `env:"QM_HEALTH_WATCH_REFRESH_SECONDS" default:"60" desc:"Seconds between refreshes of the set of watched gRPC instances. Must be positive when QM_HEALTH_GRPC_WATCH is true." introduced:"v0.3.0"`
 	HealthWatchBackoffSeconds int    `env:"QM_HEALTH_WATCH_BACKOFF_SECONDS" default:"300" desc:"Seconds an instance is skipped after its gRPC health watch cannot be set up or is not implemented." introduced:"v0.3.0"`
 	HealthWatchDialTimeoutMS  int    `env:"QM_HEALTH_WATCH_DIAL_TIMEOUT_MS" default:"2000" desc:"Minimum connect timeout in milliseconds for a gRPC health watch connection." introduced:"v0.3.0"`
-	HealthWatchMaxConcurrency int    `env:"QM_HEALTH_WATCH_MAX_CONCURRENCY" desc:"Maximum concurrent gRPC health watch streams. Unset, zero, or negative uses QM_HEALTH_MAX_CONCURRENCY." introduced:"v0.3.0"`
+	HealthWatchMaxConcurrency int    `env:"QM_HEALTH_WATCH_MAX_CONCURRENCY" deprecated:"v0.3.13" desc:"Ignored. Every registered gRPC instance keeps its own health watch stream, independent of QM_HEALTH_MAX_CONCURRENCY." introduced:"v0.3.0"`
 }
 
 // HealthMinAge returns QM_HEALTH_MIN_AGE_SECONDS, or -1 when it is unset so
