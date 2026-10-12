@@ -1,7 +1,10 @@
 package relay
 
 import (
+	"fmt"
 	"sync"
+	"sync/atomic"
+	"time"
 )
 
 // blockFetchCoalescer coalesces concurrent cold-block fetches that
@@ -10,7 +13,7 @@ import (
 // runs the actual S3 fetch + disk write + its own client stream; late
 // arrivals wait for the leader's signal, then re-attempt a warm read
 // of the now-cached block (or fall back to their own S3 fetch when the
-// leader's cache write failed).
+// leader's cache write failed or the leader stopped reading upstream bytes).
 //
 // Coalescing only applies when admission allows CacheToDisk — that's
 // the regime where the leader will leave a warm file for late arrivals
@@ -29,10 +32,26 @@ type blockFetchCoalescer struct {
 // coldFetch holds the rendezvous channel for a single (asset, block)
 // fetch in flight. diskOk records whether the leader's disk-side write
 // completed cleanly — late arrivals read this after done closes and
-// decide whether to expect a warm file or re-fetch from S3.
+// decide whether to expect a warm file or re-fetch from S3. lastProgress
+// is the unix-nano time of the leader's claim or its latest upstream read;
+// late arrivals watch it to stop waiting on a leader that stalled.
 type coldFetch struct {
-	done   chan struct{}
-	diskOk bool
+	done         chan struct{}
+	diskOk       bool
+	lastProgress atomic.Int64
+}
+
+// noteProgress records that the leader read upstream bytes.
+func (f *coldFetch) noteProgress() { f.lastProgress.Store(time.Now().UnixNano()) }
+
+// idleFor is how long ago the leader last made progress.
+func (f *coldFetch) idleFor() time.Duration {
+	return time.Since(time.Unix(0, f.lastProgress.Load()))
+}
+
+// blockFetchKey identifies one block of one asset in the coalescer.
+func blockFetchKey(store *BlockStore, idx int64) string {
+	return fmt.Sprintf("%s|%d", store.Dir(), idx)
 }
 
 func newBlockFetchCoalescer() *blockFetchCoalescer {
@@ -51,6 +70,7 @@ func (c *blockFetchCoalescer) claim(key string) (bool, *coldFetch) {
 		return false, existing
 	}
 	cf := &coldFetch{done: make(chan struct{})}
+	cf.noteProgress()
 	c.inflight[key] = cf
 	return true, cf
 }

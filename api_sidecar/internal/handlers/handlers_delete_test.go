@@ -19,6 +19,12 @@ func setupDeleteHandlers(t *testing.T) *Handlers {
 	prometheusMonitor = nil
 	t.Cleanup(func() { prometheusMonitor = oldMonitor })
 
+	// A delete keeps its hash refused for freezes for artifactDeletionWindow;
+	// each test starts with no recorded deletions.
+	oldDeletions := nodeArtifactDeletions
+	nodeArtifactDeletions = newArtifactDeletions()
+	t.Cleanup(func() { nodeArtifactDeletions = oldDeletions })
+
 	return &Handlers{storagePath: t.TempDir()}
 }
 

@@ -1694,9 +1694,9 @@ func ingestPlacementErrorCode(err error) ipcpb.IngestErrorCode {
 		switch st.Code() {
 		case codes.PermissionDenied:
 			return ipcpb.IngestErrorCode_INGEST_ERROR_PLACEMENT_DENIED
-		// An unobservable destination or unreachable dependency is resolved
-		// by the publisher's reconnect.
-		case codes.DeadlineExceeded, codes.Unavailable:
+		// An unobservable destination, an unreachable dependency or an
+		// aborted preparation attempt is resolved by the publisher's reconnect.
+		case codes.DeadlineExceeded, codes.Unavailable, codes.Aborted:
 			return ipcpb.IngestErrorCode_INGEST_ERROR_TIMEOUT
 		}
 	}

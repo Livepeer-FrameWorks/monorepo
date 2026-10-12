@@ -327,6 +327,7 @@ func TestProcessingOverrideExpiryWaitsForMistOwnershipReconciliation(t *testing.
 }
 
 func TestChapterFinalizeCleansProcessingStageOnBuildFailure(t *testing.T) {
+	isolateProcessingOverrideState(t)
 	dir := t.TempDir()
 	h := NewProcessingJobHandler(logrus.New(), "", dir, dir)
 	req := &ipcpb.ProcessingJobRequest{
@@ -1751,6 +1752,7 @@ func (f *fakeProcessingRuntimeClient) GetActiveStreams() (map[string]interface{}
 }
 
 func TestRestartProcessingStreamForLocalFallbackStopsSessionsBeforeDrain(t *testing.T) {
+	isolateProcessingOverrideState(t)
 	const streamName = "processing+fallback"
 	dir := t.TempDir()
 	outputPath := filepath.Join(dir, "out.mkv")
@@ -1783,6 +1785,7 @@ func TestRestartProcessingStreamForLocalFallbackStopsSessionsBeforeDrain(t *test
 }
 
 func TestRestartProcessingStreamForLocalFallbackFallsBackToStreamLookupWhenPushIDMissing(t *testing.T) {
+	isolateProcessingOverrideState(t)
 	const streamName = "processing+fallback"
 	dir := t.TempDir()
 	outputPath := filepath.Join(dir, "out.mkv")

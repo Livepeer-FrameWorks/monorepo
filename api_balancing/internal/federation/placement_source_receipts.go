@@ -41,7 +41,7 @@ func (store *PlacementReceiptStore) CompletedPull(ctx context.Context, query Pla
 		return PlacementReceipt{}, ErrPlacementReceiptMissing
 	}
 	if err != nil {
-		return PlacementReceipt{}, ErrPlacementReceiptUnavailable
+		return PlacementReceipt{}, placementReceiptStorageError(ctx)
 	}
 	request := &placementpb.PreparePlacementRequest{}
 	if len(payload) > 1<<20 || proto.Unmarshal(payload, request) != nil ||

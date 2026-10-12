@@ -281,7 +281,9 @@ func TestHandleStreamProcessBranches(t *testing.T) {
 	setupTriggerTest(t, "tenant-blk")
 
 	t.Run("local override short-circuits", func(t *testing.T) {
-		_ = setProcessingProcessOverride("processing+ovr", "[{\"process\":\"MKVExec\"}]", "test-job", time.Now().Add(time.Hour))
+		if err := setProcessingProcessOverride("processing+ovr", "[{\"process\":\"MKVExec\"}]", "test-job", time.Now().Add(time.Hour)); err != nil {
+			t.Fatalf("set process override: %v", err)
+		}
 		t.Cleanup(func() { clearProcessingProcessOverride("processing+ovr") })
 		stubSendMistTrigger(t, func(trigger *ipcpb.MistTrigger) (*control.MistTriggerResult, error) {
 			t.Fatal("local process override must not reach Foghorn")

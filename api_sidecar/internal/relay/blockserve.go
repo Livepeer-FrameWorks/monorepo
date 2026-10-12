@@ -162,7 +162,12 @@ func (s *Server) serveViaBlockCache(c *gin.Context, kind, hash, ext, localPath s
 	// the cold preflight. Missing upstream sources should not leave a
 	// meta-only .blocks directory behind.
 	if cacheDecision == admission.CacheToDisk {
-		store.CleanTmps()
+		// Tmp files left by an earlier process are removed once; later
+		// ones belong to block fetches of this process that may still be
+		// writing them.
+		if _, cleaned := s.cleanedBlockDirs.LoadOrStore(store.Dir(), struct{}{}); !cleaned {
+			store.CleanTmps()
+		}
 		if _, err := store.EnsureMeta(hash, ext, totalSize); err != nil {
 			if strictCache {
 				c.Writer.Header().Set("Retry-After", "5")
@@ -192,12 +197,27 @@ func (s *Server) serveViaBlockCache(c *gin.Context, kind, hash, ext, localPath s
 		c.Writer.WriteHeader(http.StatusOK)
 	}
 
+	// A block whose resume is refused with 401/403 after some of its bytes
+	// were copied renews here and resumes from the copied offset; the renewed
+	// resolution also serves every later span of this response.
+	renewMidBlock := func() (upstreamTarget, bool) {
+		if renew == nil {
+			return upstreamTarget{}, false
+		}
+		fresh, ok := renew(res)
+		if !ok {
+			return upstreamTarget{}, false
+		}
+		res, upstreamURL, upstreamClient = fresh, fresh.UpstreamURL(), s.upstreamClient(fresh)
+		renewedSinceProgress = true
+		return upstreamTarget{url: upstreamURL, grantID: res.PeerRelayGrantID, client: upstreamClient}, true
+	}
 	for _, span := range spans {
 		// A span fetch refused with 401/403 wrote nothing for that span, so it
 		// is sent again on the renewed resolution without a gap in the body.
-		err := s.serveBlockSpan(c.Request.Context(), upstreamClient, c.Writer, store, span, totalSize, upstreamURL, res.PeerRelayGrantID, cacheDecision, strictCache, recordDefrost)
+		err := s.serveBlockSpan(c.Request.Context(), upstreamClient, c.Writer, store, span, totalSize, upstreamURL, res.PeerRelayGrantID, cacheDecision, strictCache, recordDefrost, renewMidBlock)
 		if err != nil && renewAfter(err) {
-			err = s.serveBlockSpan(c.Request.Context(), upstreamClient, c.Writer, store, span, totalSize, upstreamURL, res.PeerRelayGrantID, cacheDecision, strictCache, recordDefrost)
+			err = s.serveBlockSpan(c.Request.Context(), upstreamClient, c.Writer, store, span, totalSize, upstreamURL, res.PeerRelayGrantID, cacheDecision, strictCache, recordDefrost, renewMidBlock)
 		}
 		if err == nil {
 			renewedSinceProgress = false
@@ -240,39 +260,71 @@ func (s *Server) serveViaBlockCache(c *gin.Context, kind, hash, ext, localPath s
 // disk. Without coalescing, N viewers on the same cold block would
 // fire N parallel S3 range GETs and N tmpfiles. Memory-only viewers
 // bypass the coalescer (no shared warm file to wait for).
-func (s *Server) serveBlockSpan(ctx context.Context, httpc *http.Client, w io.Writer, store *BlockStore, span blockSpan, totalSize int64, mediaURL, grantID string, decision admission.CacheDecision, strictCache bool, defrost func(int64)) error {
+func (s *Server) serveBlockSpan(ctx context.Context, httpc *http.Client, w io.Writer, store *BlockStore, span blockSpan, totalSize int64, mediaURL, grantID string, decision admission.CacheDecision, strictCache bool, defrost func(int64), renewMidBlock func() (upstreamTarget, bool)) error {
 	if served, err := s.serveWarmBlock(w, store, span); served || err != nil {
 		return err
 	}
 	if decision != admission.CacheToDisk || s.coldFetch == nil {
-		return s.streamBlockFromS3(ctx, httpc, w, store, span, totalSize, mediaURL, grantID, decision, strictCache, defrost)
+		return s.streamBlockFromS3(ctx, httpc, w, store, span, totalSize, mediaURL, grantID, decision, strictCache, defrost, nil, renewMidBlock)
 	}
 
-	key := fmt.Sprintf("%s|%d", store.Dir(), span.Idx)
-	leader, fetch := s.coldFetch.claim(key)
-	if !leader {
+	// Only a registered leader writes the block's tmp file, so a late arrival
+	// that does not find a warm block after its leader finished claims the
+	// block again instead of writing beside another fetch. A late arrival
+	// whose leader stopped reading upstream bytes, or a second leader that
+	// also left no warm block, streams the block itself without caching it.
+	key := blockFetchKey(store, span.Idx)
+	for round := 0; ; round++ {
+		leader, fetch := s.coldFetch.claim(key)
+		if leader {
+			coldfetchCoalesced.WithLabelValues("leader").Inc()
+			err := s.streamBlockFromS3(ctx, httpc, w, store, span, totalSize, mediaURL, grantID, decision, strictCache, defrost, fetch.noteProgress, renewMidBlock)
+			s.coldFetch.finish(key, err == nil && store.HasBlock(span.Idx))
+			return err
+		}
 		coldfetchCoalesced.WithLabelValues("follower").Inc()
-		// Late arrival: wait for the leader, then read the warm block.
-		// If the leader's disk write failed, fall through to an own
-		// S3 fetch (no coalescing this time).
-		select {
-		case <-fetch.done:
-		case <-ctx.Done():
-			return ctx.Err()
+		finished, err := s.awaitColdFetch(ctx, fetch)
+		if err != nil {
+			return err
+		}
+		if !finished {
+			coldfetchCoalesced.WithLabelValues("follower_stalled_leader").Inc()
+			return s.streamBlockFromS3(ctx, httpc, w, store, span, totalSize, mediaURL, grantID, admission.CacheMemoryOnly, strictCache, defrost, nil, renewMidBlock)
 		}
 		if fetch.diskOk {
 			if served, err := s.serveWarmBlock(w, store, span); served || err != nil {
 				return err
 			}
 		}
-		return s.streamBlockFromS3(ctx, httpc, w, store, span, totalSize, mediaURL, grantID, decision, strictCache, defrost)
+		if round > 0 {
+			return s.streamBlockFromS3(ctx, httpc, w, store, span, totalSize, mediaURL, grantID, admission.CacheMemoryOnly, strictCache, defrost, nil, renewMidBlock)
+		}
 	}
-	coldfetchCoalesced.WithLabelValues("leader").Inc()
+}
 
-	// Leader path: run the fetch, then publish disk-write outcome.
-	err := s.streamBlockFromS3(ctx, httpc, w, store, span, totalSize, mediaURL, grantID, decision, strictCache, defrost)
-	s.coldFetch.finish(key, err == nil && store.HasBlock(span.Idx))
-	return err
+// awaitColdFetch waits for fetch's leader to finish. It returns false when
+// the leader read no upstream byte for upstreamReadStall: the leader's
+// upstream or its own client stalled, and the waiting reader is better served
+// by its own fetch than by the leader's remaining stall bound.
+func (s *Server) awaitColdFetch(ctx context.Context, fetch *coldFetch) (bool, error) {
+	stall := s.upstreamReadStall
+	if stall <= 0 {
+		stall = relayUpstreamBounds.readStall
+	}
+	check := time.NewTicker(stall / 4)
+	defer check.Stop()
+	for {
+		select {
+		case <-fetch.done:
+			return true, nil
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case <-check.C:
+			if fetch.idleFor() >= stall {
+				return false, nil
+			}
+		}
+	}
 }
 
 // serveWarmBlock attempts to serve span from a warm on-disk block.
@@ -315,31 +367,26 @@ func (s *Server) serveWarmBlock(w io.Writer, store *BlockStore, span blockSpan) 
 // have already gone through the blockFetchCoalescer in serveBlockSpan,
 // so at most one leader reaches here per (asset, block). Memory-only
 // viewers bypass the coalescer and each issue their own S3 range
-// fetch. The first writer to finish wins the rename; later writers
-// see the warm block exists and drop their tmpfile.
-func (s *Server) streamBlockFromS3(ctx context.Context, httpc *http.Client, w io.Writer, store *BlockStore, span blockSpan, totalSize int64, mediaURL, grantID string, decision admission.CacheDecision, strictCache bool, defrost func(int64)) error {
+// fetch.
+//
+// An upstream body that fails mid-block (a read stall, a dropped
+// connection) is requested again from the first byte not yet copied, up to
+// maxBlockFetchResumes times, and the client and the tmp file continue from
+// there without a gap. A resume refused with 401/403 is sent once more on the
+// resolution renewMidBlock returns. onProgress, when set, is called on every
+// upstream read that returned bytes.
+func (s *Server) streamBlockFromS3(ctx context.Context, httpc *http.Client, w io.Writer, store *BlockStore, span blockSpan, totalSize int64, mediaURL, grantID string, decision admission.CacheDecision, strictCache bool, defrost func(int64), onProgress func(), renewMidBlock func() (upstreamTarget, bool)) error {
 	blockStart, blockEnd := store.BlockRange(span.Idx, totalSize)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, mediaURL, nil)
-	if err != nil {
-		return fmt.Errorf("build upstream block request: %w", err)
-	}
-	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", blockStart, blockEnd))
-	// Peer-relay upstream (origin Helmsman) requires the capability grant id
-	// as Authorization: Bearer. Empty for S3 presigned URLs (auth in the URL
-	// query string).
-	if grantID != "" {
-		req.Header.Set("Authorization", "Bearer "+grantID)
-	}
 	source := upstreamSourceLabel(grantID)
 	fetchStart := time.Now()
-	resp, err := httpc.Do(req)
+	req, resp, err := requestUpstreamRange(ctx, httpc, mediaURL, grantID, blockStart, blockEnd)
 	if err != nil {
 		defrostBlocks.WithLabelValues(source, "error").Inc()
 		return upstreamPhaseError{op: "upstream block fetch", err: err}
 	}
 	headersAt := time.Now()
 	defrostTTFB.WithLabelValues(source).Observe(headersAt.Sub(fetchStart).Seconds())
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusPartialContent {
 		// 200 OK is acceptable only when the requested range covers the
 		// whole asset — otherwise the upstream ignored Range and would
@@ -400,10 +447,56 @@ func (s *Server) streamBlockFromS3(ctx context.Context, httpc *http.Client, w io
 	// tolerantTee channel headroom (~4 buffers).
 	copyBuf := make([]byte, 256*1024)
 	expected := blockEnd - blockStart + 1
-	upstreamBody := &firstByteReader{r: resp.Body, onFirst: func() {
+	var body io.Reader = &firstByteReader{r: resp.Body, onFirst: func() {
 		s.observeFirstBodyByte(req, source, span.Idx, fetchStart, headersAt)
 	}}
-	n, copyErr := io.CopyBuffer(tee, io.LimitReader(upstreamBody, expected), copyBuf)
+	var (
+		n              int64
+		copyErr        error
+		attemptStart   int64
+		renewedInBlock bool
+		target         = upstreamTarget{url: mediaURL, grantID: grantID, client: httpc}
+	)
+	for resumes := 0; ; resumes++ {
+		upstream := &upstreamReader{r: body, onProgress: onProgress}
+		copied, err := io.CopyBuffer(tee, io.LimitReader(upstream, expected-n), copyBuf)
+		n += copied
+		copyErr = err
+		if err == nil || upstream.err == nil || ctx.Err() != nil || resumes >= maxBlockFetchResumes {
+			break
+		}
+		_ = resp.Body.Close()
+		defrostBlockResumes.WithLabelValues(source).Inc()
+		if s.logger != nil {
+			s.logger.WithError(err).WithFields(logging.Fields{
+				"upstream_host": req.URL.Host,
+				"source":        source,
+				"block_idx":     span.Idx,
+				"block_offset":  n,
+			}).Warn("blockcache: upstream body failed mid-block; resuming from the last copied byte")
+		}
+		var renew func() (upstreamTarget, bool)
+		if !renewedInBlock && renewMidBlock != nil {
+			renew = func() (upstreamTarget, bool) {
+				renewedInBlock = true
+				return renewMidBlock()
+			}
+		}
+		next, resumeErr := resumeUpstreamRange(ctx, &target, renew, blockStart+n, blockEnd)
+		if resumeErr != nil {
+			// A refused resume is a status error only while no byte of the
+			// block was copied: the caller answers an auth refusal by sending
+			// the whole span again, which after copied bytes would repeat them.
+			var statusErr upstreamStatusError
+			if n == 0 && errors.As(resumeErr, &statusErr) {
+				copyErr = statusErr
+			} else {
+				copyErr = fmt.Errorf("%w; resume at block offset %d: %s", err, n, resumeErr.Error())
+			}
+			break
+		}
+		resp, body, attemptStart = next, next.Body, n
+	}
 	if teeTol != nil {
 		teeTol.Close() // drain the disk worker so SecondaryAlive reflects final state
 	}
@@ -439,7 +532,7 @@ func (s *Server) streamBlockFromS3(ctx context.Context, httpc *http.Client, w io
 	}
 	if n != expected {
 		defrostBlocks.WithLabelValues(source, "error").Inc()
-		if upstreamDeclaredShort(resp, expected, totalSize) {
+		if upstreamDeclaredShort(resp, expected-attemptStart, totalSize) {
 			return upstreamPhaseError{op: "upstream block copy", err: upstreamShortSourceError{blockIdx: span.Idx, got: n, expected: expected}}
 		}
 		return upstreamPhaseError{op: "upstream block copy", err: fmt.Errorf("block %d short: copied %d bytes, expected %d", span.Idx, n, expected)}
@@ -452,6 +545,86 @@ func (s *Server) streamBlockFromS3(ctx context.Context, httpc *http.Client, w io
 		defrost(n)
 	}
 	return nil
+}
+
+// maxBlockFetchResumes bounds how often one block fetch is requested again
+// after its upstream body failed, so an upstream that keeps stalling fails
+// the fetch within (1+maxBlockFetchResumes) read-stall bounds.
+const maxBlockFetchResumes = 2
+
+// requestUpstreamRange sends a GET for bytes [from, to] of mediaURL.
+func requestUpstreamRange(ctx context.Context, httpc *http.Client, mediaURL, grantID string, from, to int64) (*http.Request, *http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, mediaURL, nil)
+	if err != nil {
+		return nil, nil, fmt.Errorf("build upstream block request: %w", err)
+	}
+	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", from, to))
+	// Peer-relay upstream (origin Helmsman) requires the capability grant id
+	// as Authorization: Bearer. Empty for S3 presigned URLs (auth in the URL
+	// query string).
+	if grantID != "" {
+		req.Header.Set("Authorization", "Bearer "+grantID)
+	}
+	resp, err := httpc.Do(req)
+	if err != nil {
+		return nil, nil, err
+	}
+	return req, resp, nil
+}
+
+// resumeUpstreamRange requests the rest of a block from byte from. A resume
+// refused with 401/403 (the presigned URL expired while the block was in
+// flight) is sent once more on the resolution renew returns, which replaces
+// target; the request asks only for bytes not yet copied, so nothing repeats.
+func resumeUpstreamRange(ctx context.Context, target *upstreamTarget, renew func() (upstreamTarget, bool), from, to int64) (*http.Response, error) {
+	resp, err := requestResumeRange(ctx, *target, from, to)
+	if err == nil || renew == nil || !isUpstreamAuthError(err) {
+		return resp, err
+	}
+	fresh, ok := renew()
+	if !ok {
+		return nil, err
+	}
+	*target = fresh
+	return requestResumeRange(ctx, fresh, from, to)
+}
+
+// requestResumeRange requests bytes [from, to] of target. Only a 206 whose
+// Content-Range starts at from continues the block at the right offset.
+func requestResumeRange(ctx context.Context, target upstreamTarget, from, to int64) (*http.Response, error) {
+	_, resp, err := requestUpstreamRange(ctx, target.client, target.url, target.grantID, from, to)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusPartialContent {
+		_ = resp.Body.Close()
+		return nil, upstreamStatusError{StatusCode: resp.StatusCode}
+	}
+	if cr := resp.Header.Get("Content-Range"); !strings.HasPrefix(cr, fmt.Sprintf("bytes %d-", from)) {
+		_ = resp.Body.Close()
+		return nil, fmt.Errorf("upstream resume answered Content-Range %q, want start %d", cr, from)
+	}
+	return resp, nil
+}
+
+// upstreamReader records the error of a failed upstream read, which tells an
+// upstream failure apart from a client write failure in the copy that
+// consumes it, and reports reads that returned bytes to onProgress.
+type upstreamReader struct {
+	r          io.Reader
+	onProgress func()
+	err        error
+}
+
+func (u *upstreamReader) Read(p []byte) (int, error) {
+	n, err := u.r.Read(p)
+	if n > 0 && u.onProgress != nil {
+		u.onProgress()
+	}
+	if err != nil && !errors.Is(err, io.EOF) {
+		u.err = err
+	}
+	return n, err
 }
 
 // firstByteReader calls onFirst once, when the first non-empty read returns.

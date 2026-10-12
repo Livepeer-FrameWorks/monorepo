@@ -88,8 +88,21 @@ var (
 		[]string{"source"},
 	)
 
+	// defrostBlockResumes counts cold block fetches requested again from the
+	// last copied byte after the upstream body failed mid-block.
+	defrostBlockResumes = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "helmsman",
+			Name:      "defrost_block_resumes_total",
+			Help:      "Cold block read-through fetches resumed after a mid-block upstream failure by source",
+		},
+		[]string{"source"},
+	)
+
 	// coldfetchCoalesced counts same-block cold-fan-out coalescing outcomes.
-	// result: "leader" (ran the fetch) or "follower" (waited on the leader).
+	// result: "leader" (ran the fetch), "follower" (waited on the leader) or
+	// "follower_stalled_leader" (stopped waiting on a leader that read no
+	// upstream byte for the read-stall bound and fetched the block itself).
 	coldfetchCoalesced = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "helmsman",

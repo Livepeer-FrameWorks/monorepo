@@ -63,6 +63,9 @@ func newUniversalClient(ctx context.Context, cfg Config, dialer func(context.Con
 		writeTimeout = defaultDialTimeout
 	}
 
+	// ContextTimeoutEnabled makes a command end at the caller's context
+	// deadline when that comes before ReadTimeout/WriteTimeout, so a stalled
+	// Redis cannot hold a caller past its own budget.
 	var client goredis.UniversalClient
 	switch cfg.Mode {
 	case ModeSingle:
@@ -72,6 +75,7 @@ func newUniversalClient(ctx context.Context, cfg Config, dialer func(context.Con
 		client = goredis.NewClient(&goredis.Options{
 			Addr: cfg.Addrs[0], Username: cfg.Username, Password: cfg.Password, DB: cfg.DB,
 			Dialer: dialer, DialTimeout: dialTimeout, ReadTimeout: readTimeout, WriteTimeout: writeTimeout,
+			ContextTimeoutEnabled: true,
 		})
 	case ModeSentinel:
 		if cfg.MasterName == "" {
@@ -82,6 +86,7 @@ func newUniversalClient(ctx context.Context, cfg Config, dialer func(context.Con
 			Username: cfg.Username, Password: cfg.Password,
 			SentinelUsername: cfg.SentinelUsername, SentinelPassword: cfg.SentinelPassword,
 			DB: cfg.DB, Dialer: dialer, DialTimeout: dialTimeout, ReadTimeout: readTimeout, WriteTimeout: writeTimeout,
+			ContextTimeoutEnabled: true,
 		})
 	case ModeCluster:
 		if cfg.DB != 0 {
@@ -90,6 +95,7 @@ func newUniversalClient(ctx context.Context, cfg Config, dialer func(context.Con
 		clusterClient := goredis.NewClusterClient(&goredis.ClusterOptions{
 			Addrs: cfg.Addrs, Username: cfg.Username, Password: cfg.Password,
 			Dialer: dialer, DialTimeout: dialTimeout, ReadTimeout: readTimeout, WriteTimeout: writeTimeout,
+			ContextTimeoutEnabled: true,
 		})
 		if _, err := clusterClient.ClusterShards(ctx).Result(); err != nil {
 			_ = clusterClient.Close()
@@ -128,6 +134,7 @@ func NewClientFromURL(ctx context.Context, redisURL string) (*goredis.Client, er
 	if opts.WriteTimeout == 0 {
 		opts.WriteTimeout = defaultDialTimeout
 	}
+	opts.ContextTimeoutEnabled = true
 
 	client := goredis.NewClient(opts)
 	if err := client.Ping(ctx).Err(); err != nil {

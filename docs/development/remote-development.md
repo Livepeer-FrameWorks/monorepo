@@ -115,6 +115,12 @@ VOD: every presigned GET of it signed before the arming second answers 403
 has to re-resolve the resolution it cached on the first play and answer
 Mist's source HEAD with 200. The fixture is cleared on scenario exit.
 
+Default scenario 38 arms the proxy's stall fixture for one cross-cell VOD: the
+first ranged media read stops after 64 KiB and holds the connection. The cell-B
+relay has to resume from inside the stalled range before Mist's 5 second read
+timeout, so edge B never logs `Timeout while retrieving` and every variant
+plays the full duration.
+
 Manual scenario 09 stages an edge release inside the stack. It packs edge A's
 image-baked Helmsman binary and Mist tree as release artifacts under new
 version labels and serves them from the runner. It then writes the release and

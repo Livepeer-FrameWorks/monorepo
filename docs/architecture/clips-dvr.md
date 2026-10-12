@@ -312,7 +312,14 @@ forwards the origin cell's 15-minute presigned GETs with a TTL ending one minute
 When an upstream still answers 401/403 (an expired presigned URL, a dead peer-relay grant), the relay
 re-resolves through Foghorn once and resends that request, including a HEAD, a `.dtsh` fetch, and a block
 fetch in the middle of a long ranged response; Mist never receives the store's authorization error. A
-refusal that survives the re-resolve is answered 502. `.dtsh` sidecars are
+refusal that survives the re-resolve is answered 502. S3 and peer-relay fetches use a bounded client
+(`api_sidecar/internal/relay/upstream.go`): 10 s dial and TLS handshake, 30 s to response headers (a peer
+answers only once its own cold fetch has a first byte), and a body read that waits 2.5 s for a byte, half
+of Mist's 5 s source read budget, ends the fetch. A block whose upstream body fails mid-block is requested
+again from the first byte not yet copied, at most twice, so the client and the block's cache file continue
+without a gap; a resume refused because the presigned URL expired meanwhile re-resolves and resumes from
+the same byte on the fresh URL. Concurrent readers of one cold block wait on a single leader fetch; a reader whose leader
+read no upstream byte for that same 2.5 s fetches the block itself without caching it. `.dtsh` sidecars are
 served from disk when present, fetched from S3 when Foghorn has one, and 404'd otherwise so Mist generates
 and PUTs one (`api_sidecar/internal/relay/dtsh.go`).
 

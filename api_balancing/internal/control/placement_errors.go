@@ -1,6 +1,7 @@
 package control
 
 import (
+	"context"
 	"errors"
 
 	"frameworks/api_balancing/internal/balancer"
@@ -16,8 +17,9 @@ const (
 	ViewerPlacementErrorOther ViewerPlacementErrorClass = iota
 	// ViewerPlacementDenied is a signed or policy refusal.
 	ViewerPlacementDenied
-	// ViewerPlacementNotReady is authority that has not arrived or a
-	// dependency that is unavailable right now.
+	// ViewerPlacementNotReady is authority that has not arrived, a dependency
+	// that is unavailable right now, a preparation that ran out of its budget,
+	// or an aborted preparation attempt that a new attempt can complete.
 	ViewerPlacementNotReady
 )
 
@@ -32,7 +34,9 @@ func ClassifyViewerPlacementError(err error) ViewerPlacementErrorClass {
 		return ViewerPlacementErrorOther
 	case errors.Is(err, balancer.ErrPlacementAuthorityDenied) || status.Code(err) == codes.PermissionDenied:
 		return ViewerPlacementDenied
-	case errors.Is(err, balancer.ErrPlacementAuthorityNotReady) || status.Code(err) == codes.Unavailable:
+	case errors.Is(err, balancer.ErrPlacementAuthorityNotReady) || errors.Is(err, context.DeadlineExceeded):
+		return ViewerPlacementNotReady
+	case status.Code(err) == codes.Unavailable || status.Code(err) == codes.DeadlineExceeded || status.Code(err) == codes.Aborted:
 		return ViewerPlacementNotReady
 	default:
 		return ViewerPlacementErrorOther

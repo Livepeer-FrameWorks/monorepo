@@ -221,3 +221,38 @@ func TestPreparedViewerHTTPMapsPlacementAuthorityErrors(t *testing.T) {
 		})
 	}
 }
+
+// A DVR or stored-media preparation that ran out of its budget, found no
+// destination, or whose attempt was abandoned is a retryable 503 for every
+// content type, not a resolution failure.
+func TestViewerResolveFailureRetriesExhaustedPreparation(t *testing.T) {
+	balancingTestEnv(t)
+	for _, contentType := range []string{"dvr", "vod", "clip"} {
+		for _, tc := range []struct {
+			name  string
+			cause error
+		}{
+			{"remote deadline", grpcstatus.Error(codes.DeadlineExceeded, "context deadline exceeded")},
+			{"local budget", context.DeadlineExceeded},
+			{"aborted attempt", grpcstatus.Error(codes.Aborted, "placement attempt is expired")},
+			{"no destination", balancer.ErrPlacementUnavailable},
+		} {
+			c, w := playbackCtxArms(t, "public/hls/index.m3u8")
+			respondViewerResolveFailure(c, nil, contentType, fmt.Errorf("prepare viewer: %w", tc.cause))
+			var body struct {
+				Code string `json:"code"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			if w.Code != http.StatusServiceUnavailable || body.Code != "PLAYBACK_PLACEMENT_UNAVAILABLE" || w.Header().Get("Retry-After") == "" {
+				t.Errorf("%s %s: status=%d retry-after=%q body=%s, want a retryable 503", contentType, tc.name, w.Code, w.Header().Get("Retry-After"), w.Body.String())
+			}
+		}
+		c, w := playbackCtxArms(t, "public/hls/index.m3u8")
+		respondViewerResolveFailure(c, nil, contentType, errors.New("viewer preparation does not match the requested destination"))
+		if w.Code != http.StatusInternalServerError {
+			t.Errorf("%s: invalid preparation answered %d, want 500", contentType, w.Code)
+		}
+	}
+}

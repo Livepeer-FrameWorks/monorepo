@@ -2205,6 +2205,39 @@ func resolveArtifactViewerEndpoint(req *sharedpb.ViewerEndpointRequest, lat, lon
 	return response, nil
 }
 
+// respondViewerResolveFailure answers a viewer resolution that failed in
+// placement or in an unclassified step.
+func respondViewerResolveFailure(c *gin.Context, fields logging.Fields, contentType string, err error) {
+	placementClass := control.ClassifyViewerPlacementError(err)
+	entry := logger.WithError(err).WithFields(fields)
+	// A destination that is not ready answers a retryable refusal; under a
+	// viewer herd that is one line per viewer, which is not an error.
+	if placementClass == control.ViewerPlacementNotReady {
+		entry.Warn("Failed to resolve viewer endpoint")
+	} else {
+		entry.Error("Failed to resolve viewer endpoint")
+	}
+	// A policy refusal is not a resolution failure: every content type
+	// reports it with the same placement code, so a client distinguishes
+	// "not permitted here" from "this content is broken". Authority that has
+	// not arrived or an unavailable dependency is retried after a short wait.
+	switch placementClass {
+	case control.ViewerPlacementDenied:
+		respondPlaybackError(c, http.StatusForbidden, "PLAYBACK_PLACEMENT_DENIED", "Playback of this content is not permitted from any available destination", nil)
+		return
+	case control.ViewerPlacementNotReady:
+		c.Header("Retry-After", strconv.Itoa(control.ViewerPlacementRetryAfterSeconds))
+		respondPlaybackError(c, http.StatusServiceUnavailable, "PLAYBACK_PLACEMENT_UNAVAILABLE", "No permitted playback destination is available; retry safely", nil)
+		return
+	}
+	if contentType == "live" || errors.Is(err, control.ErrStoredMediaPlacementUnavailable) || errors.Is(err, balancer.ErrPlacementUnavailable) {
+		c.Header("Retry-After", "1")
+		respondPlaybackError(c, http.StatusServiceUnavailable, "PLAYBACK_PLACEMENT_UNAVAILABLE", "No permitted playback destination is available; retry safely", nil)
+		return
+	}
+	respondPlaybackError(c, http.StatusInternalServerError, "PLAYBACK_RESOLUTION_FAILED", "Failed to resolve playback endpoint", nil)
+}
+
 func respondPlaybackError(c *gin.Context, status int, code, message string, extra gin.H) {
 	payload := gin.H{
 		"error":   strings.ToLower(code),
@@ -2492,38 +2525,11 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 			respondPlaybackError(c, http.StatusNotFound, "STREAM_OFFLINE", "The stream is offline", nil)
 			return
 		}
-		placementClass := control.ClassifyViewerPlacementError(err)
-		entry := logger.WithError(err).WithFields(logging.Fields{
+		respondViewerResolveFailure(c, logging.Fields{
 			"view_key":      viewKey,
 			"internal_name": contentID,
 			"content_type":  contentType,
-		})
-		// A destination that is not ready answers a retryable refusal; under a
-		// viewer herd that is one line per viewer, which is not an error.
-		if placementClass == control.ViewerPlacementNotReady {
-			entry.Warn("Failed to resolve viewer endpoint")
-		} else {
-			entry.Error("Failed to resolve viewer endpoint")
-		}
-		// A policy refusal is not a resolution failure: every content type
-		// reports it with the same placement code, so a client distinguishes
-		// "not permitted here" from "this content is broken". Authority that has
-		// not arrived or an unavailable dependency is retried after a short wait.
-		switch placementClass {
-		case control.ViewerPlacementDenied:
-			respondPlaybackError(c, http.StatusForbidden, "PLAYBACK_PLACEMENT_DENIED", "Playback of this content is not permitted from any available destination", nil)
-			return
-		case control.ViewerPlacementNotReady:
-			c.Header("Retry-After", strconv.Itoa(control.ViewerPlacementRetryAfterSeconds))
-			respondPlaybackError(c, http.StatusServiceUnavailable, "PLAYBACK_PLACEMENT_UNAVAILABLE", "No permitted playback destination is available; retry safely", nil)
-			return
-		}
-		if contentType == "live" || errors.Is(err, control.ErrStoredMediaPlacementUnavailable) {
-			c.Header("Retry-After", "1")
-			respondPlaybackError(c, http.StatusServiceUnavailable, "PLAYBACK_PLACEMENT_UNAVAILABLE", "No permitted playback destination is available; retry safely", nil)
-			return
-		}
-		respondPlaybackError(c, http.StatusInternalServerError, "PLAYBACK_RESOLUTION_FAILED", "Failed to resolve playback endpoint", nil)
+		}, contentType, err)
 		return
 	}
 

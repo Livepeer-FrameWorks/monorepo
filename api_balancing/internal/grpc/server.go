@@ -3007,6 +3007,23 @@ func (s *FoghornGRPCServer) resolveLiveViewerEndpoint(ctx context.Context, req *
 	return response, nil
 }
 
+// viewerPlacementStatus reports a failed viewer preparation as a status the
+// viewer acts on: a signed or policy refusal is PermissionDenied, a
+// preparation that can succeed on retry is Unavailable, and anything else
+// keeps its own status or becomes Internal.
+func viewerPlacementStatus(err error) error {
+	switch {
+	case control.ClassifyViewerPlacementError(err) == control.ViewerPlacementDenied:
+		return status.Errorf(codes.PermissionDenied, "viewer placement denied: %v", err)
+	case control.ClassifyViewerPlacementError(err) == control.ViewerPlacementNotReady || errors.Is(err, balancer.ErrPlacementUnavailable):
+		return status.Errorf(codes.Unavailable, "viewer placement unavailable: %v", err)
+	}
+	if _, isStatus := status.FromError(err); isStatus {
+		return err
+	}
+	return status.Errorf(codes.Internal, "%v", err)
+}
+
 // resolveDVRViewerEndpoint routes DVR viewer requests by lifecycle:
 // active recordings use live-style edge selection so any healthy edge
 // can serve via Mist's PLAY_REWRITE → STREAM_SOURCE → DTSC pull path
@@ -3054,7 +3071,7 @@ func (s *FoghornGRPCServer) resolveDVRViewerEndpoint(ctx context.Context, req *s
 		}
 		resp, err := control.ResolvePreparedDVRViewerEndpoint(ctx, s.viewerPlacementPreparer, resolution, req.GetProtocol(), control.ViewerPlacementLocation(lat, lon))
 		if err != nil {
-			return nil, err
+			return nil, viewerPlacementStatus(err)
 		}
 		// The live resolver labels metadata as live; rewrite to DVR
 		// identity so clients see what they're actually playing.
@@ -3158,7 +3175,8 @@ func (s *FoghornGRPCServer) resolveArtifactViewerEndpoint(ctx context.Context, r
 		if control.ClassifyViewerPlacementError(err) == control.ViewerPlacementDenied {
 			return nil, status.Errorf(codes.PermissionDenied, "viewer placement denied: %v", err)
 		}
-		if errors.Is(err, control.ErrStoredMediaPlacementUnavailable) {
+		if errors.Is(err, control.ErrStoredMediaPlacementUnavailable) || errors.Is(err, balancer.ErrPlacementUnavailable) ||
+			control.ClassifyViewerPlacementError(err) == control.ViewerPlacementNotReady {
 			return nil, status.Error(codes.Unavailable, err.Error())
 		}
 		if errors.Is(err, control.ErrPlaybackContentFailed) {

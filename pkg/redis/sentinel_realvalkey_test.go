@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	goredis "github.com/redis/go-redis/v9"
+
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/testutil/dockerpg"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/testutil/dockervalkey"
 )
@@ -133,6 +135,9 @@ func TestSentinelFailover_RealValkey(t *testing.T) {
 		t.Fatalf("connect through Sentinel: %v", err)
 	}
 	defer func() { _ = client.Close() }()
+	if failover, ok := client.(*goredis.Client); !ok || !failover.Options().ContextTimeoutEnabled {
+		t.Fatalf("Sentinel client %T does not end commands at the caller's context deadline", client)
+	}
 	ctx := context.Background()
 	if err = client.Set(ctx, "ha-contract", "before-failover", 0).Err(); err != nil {
 		t.Fatalf("write before failover: %v", err)
@@ -301,6 +306,9 @@ func TestClusterRouting_RealValkey(t *testing.T) {
 		t.Fatalf("connect to Valkey cluster: %v", err)
 	}
 	defer func() { _ = client.Close() }()
+	if cluster, ok := client.(*goredis.ClusterClient); !ok || !cluster.Options().ContextTimeoutEnabled {
+		t.Fatalf("cluster client %T does not end commands at the caller's context deadline", client)
+	}
 	for key, value := range map[string]string{"{alpha}:key": "a", "{beta}:key": "b", "{gamma}:key": "c"} {
 		if setErr := client.Set(context.Background(), key, value, 0).Err(); setErr != nil {
 			t.Fatalf("cluster set %s: %v", key, setErr)

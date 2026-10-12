@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -15,14 +14,23 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/placement"
 	placementpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_placement"
 	goredis "github.com/redis/go-redis/v9"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
 
 var (
-	ErrPlacementReceiptUnavailable = errors.New("placement receipt storage unavailable")
-	ErrPlacementReceiptConflict    = errors.New("placement attempt conflicts with its recorded intent")
-	ErrPlacementReceiptMissing     = errors.New("placement attempt has no recorded intent")
-	ErrPlacementReceiptExpired     = errors.New("placement attempt is expired")
+	// ErrPlacementReceiptUnavailable refuses a preparation only for now, so it
+	// carries Unavailable: the calling cell and the viewer path retry it.
+	ErrPlacementReceiptUnavailable = status.Error(codes.Unavailable, "placement receipt storage unavailable")
+	// A conflicting, missing or expired attempt record ends this attempt only:
+	// the router moves to its next candidate and a viewer retries with a new
+	// attempt ID. They carry Aborted, which the calling cell keeps distinct
+	// from a missing object (NotFound) and from a refusal the client must not
+	// retry (FailedPrecondition, PermissionDenied).
+	ErrPlacementReceiptConflict = status.Error(codes.Aborted, "placement attempt conflicts with its recorded intent")
+	ErrPlacementReceiptMissing  = status.Error(codes.Aborted, "placement attempt has no recorded intent")
+	ErrPlacementReceiptExpired  = status.Error(codes.Aborted, "placement attempt is expired")
 )
 
 // PlacementPullBinding authorizes a destination connection to use a physical
@@ -190,7 +198,10 @@ func (store *PlacementReceiptStore) epochReadyDelay(ctx context.Context) (time.D
 	}
 	epochKey := fmt.Sprintf("{%s}:placement_attempt_epoch", store.CellID)
 	values, err := placementReceiptEpochScript.Run(ctx, store.Client, []string{epochKey}, placement.PreparationClockSkew.Milliseconds()).StringSlice()
-	if err != nil || len(values) == 0 {
+	if err != nil {
+		return 0, placementReceiptStorageError(ctx)
+	}
+	if len(values) == 0 {
 		return 0, ErrPlacementReceiptUnavailable
 	}
 	switch values[0] {
@@ -348,7 +359,10 @@ func (store *PlacementReceiptStore) run(ctx context.Context, operation string, r
 		issued.UnixMilli(), req.ExpiresAt.AsTime().UnixMilli(), payload, expectedPull,
 		placement.PreparationClockSkew.Milliseconds(), placement.PreparationLifetime.Milliseconds(),
 		(placement.PreparationLifetime + 5*time.Second).Milliseconds(), responseExpires, indexKind).StringSlice()
-	if err != nil || len(values) == 0 {
+	if err != nil {
+		return nil, placementReceiptStorageError(ctx)
+	}
+	if len(values) == 0 {
 		return nil, ErrPlacementReceiptUnavailable
 	}
 	switch values[0] {
@@ -363,6 +377,16 @@ func (store *PlacementReceiptStore) run(ctx context.Context, operation string, r
 	default:
 		return nil, ErrPlacementReceiptUnavailable
 	}
+}
+
+// placementReceiptStorageError classifies a failed Redis call. A call the
+// caller's context ended reports that context's status: the preparation ran out
+// of its own budget, which says nothing about the storage.
+func placementReceiptStorageError(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return status.FromContextError(err).Err()
+	}
+	return ErrPlacementReceiptUnavailable
 }
 
 func (store *PlacementReceiptStore) now() time.Time {

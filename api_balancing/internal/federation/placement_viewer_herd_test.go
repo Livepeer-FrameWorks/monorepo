@@ -58,18 +58,34 @@ func TestPushPreparationViewerHerdSharesThePullWithoutRewritingIt(t *testing.T) 
 	var wg sync.WaitGroup
 	failures := make(chan error, viewers)
 	start := make(chan struct{})
+	// Each preparation has a fixed wall-clock budget. On a starved test host
+	// the whole herd can outlast it; a viewer refused for its own deadline
+	// retries with a new attempt, as a real viewer does. Any other refusal,
+	// including contention on the shared pull record, fails the test.
+	const deadlineRetries = 3
 	for viewer := range viewers {
-		next := proto.CloneOf(request)
-		next.AttemptId, err = placement.NewPreparationAttemptID(destination.now())
-		if err != nil {
-			t.Fatal(err)
+		attempts := make([]*placementpb.PreparePlacementRequest, deadlineRetries+1)
+		for i := range attempts {
+			next := proto.CloneOf(request)
+			next.AttemptId, err = placement.NewPreparationAttemptID(destination.now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			next.Query.ClientLocation = &placementpb.Coordinates{Latitude: 40 + float64(viewer%20)/10, Longitude: -3 + float64(viewer%13)/10}
+			attempts[i] = next
 		}
-		next.Query.ClientLocation = &placementpb.Coordinates{Latitude: 40 + float64(viewer%20)/10, Longitude: -3 + float64(viewer%13)/10}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			<-start
-			response, prepareErr := destination.PreparePlacement(ctx, next)
+			var response *placementpb.Preparation
+			var prepareErr error
+			for _, next := range attempts {
+				response, prepareErr = destination.PreparePlacement(ctx, next)
+				if status.Code(prepareErr) != codes.DeadlineExceeded && !errors.Is(prepareErr, context.DeadlineExceeded) {
+					break
+				}
+			}
 			switch {
 			case prepareErr != nil:
 				failures <- prepareErr

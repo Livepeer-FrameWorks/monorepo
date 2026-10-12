@@ -95,6 +95,13 @@ type Server struct {
 	// writeStallTimeout is how long one response write may block before the
 	// client counts as gone; see writeProgressDeadline.
 	writeStallTimeout time.Duration
+	// upstreamReadStall is how long a coalesced block fetch may go without
+	// reading an upstream byte before its followers stop waiting on it.
+	upstreamReadStall time.Duration
+	// cleanedBlockDirs records the .blocks dirs whose leftover tmp files this
+	// process already removed; tmp files created after that belong to a
+	// fetch still running in this process.
+	cleanedBlockDirs sync.Map
 }
 
 // Options configures the relay. basePath is the Helmsman storage root used
@@ -106,9 +113,9 @@ type Options struct {
 	Freeze   FreezeHandoff
 	Heat     HeatToucher
 	Logger   logging.Logger
-	// HTTPClient is used for outbound fetches of presigned URLs.
-	// Defaults to http.DefaultClient when nil; tests inject a recording
-	// transport.
+	// HTTPClient is used for outbound fetches of presigned URLs and peer
+	// relays. Defaults to newRelayUpstreamClient(relayUpstreamBounds) when
+	// nil; tests inject a recording transport.
 	HTTPClient *http.Client
 	// TenantSourceHTTPClient fetches VOD import sources. Defaults to a client
 	// that dials only public addresses (newTenantSourceClient); tests inject
@@ -143,7 +150,7 @@ type Options struct {
 func New(opts Options) *Server {
 	c := opts.HTTPClient
 	if c == nil {
-		c = http.DefaultClient
+		c = newRelayUpstreamClient(relayUpstreamBounds)
 	}
 	blockSize := opts.BlockSize
 	if blockSize <= 0 {
@@ -176,6 +183,7 @@ func New(opts Options) *Server {
 		defrost:      newDefrostAggregator(),
 
 		writeStallTimeout: relayWriteStallTimeout,
+		upstreamReadStall: relayUpstreamBounds.readStall,
 	}
 }
 

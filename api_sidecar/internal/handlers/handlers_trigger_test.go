@@ -42,6 +42,7 @@ func setupTriggerTest(t *testing.T, tenantID string) {
 	t.Helper()
 	appconfigtest.Setenv(t, "NODE_ID", triggerTestNodeID)
 	appconfigtest.Setenv(t, "HELMSMAN_STATE_DIR", t.TempDir())
+	isolateProcessingOverrideState(t)
 	gin.SetMode(gin.TestMode)
 	logger = logging.NewLoggerWithService("handlers-test")
 	metrics = nil
@@ -480,7 +481,9 @@ func TestHandleStreamProcessUsesLocalOverride(t *testing.T) {
 	const streamName = "processing+artifact123"
 	const override = `[{"process":"AV","codec":"H264","track_select":"video=maxbps"}]`
 
-	_ = setProcessingProcessOverride(streamName, override, "test-job", time.Now().Add(time.Hour))
+	if err := setProcessingProcessOverride(streamName, override, "test-job", time.Now().Add(time.Hour)); err != nil {
+		t.Fatalf("set process override: %v", err)
+	}
 	t.Cleanup(func() {
 		clearProcessingProcessOverride(streamName)
 	})

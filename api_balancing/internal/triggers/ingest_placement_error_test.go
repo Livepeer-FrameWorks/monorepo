@@ -35,6 +35,10 @@ func TestIngestPlacementErrorCodeSeparatesDenialFromTransientFailure(t *testing.
 		{"authority_race", status.Error(codes.FailedPrecondition, "placement authority facts changed during revalidation"), ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL},
 		{"authority_kept_changing", fmt.Errorf("admission: %w", federation.ErrPlacementAuthorityChanged), ipcpb.IngestErrorCode_INGEST_ERROR_TIMEOUT},
 		{"deadline", context.DeadlineExceeded, ipcpb.IngestErrorCode_INGEST_ERROR_TIMEOUT},
+		// An attempt whose receipt conflicted, vanished or expired ends only
+		// that attempt; the reconnect prepares a new one.
+		{"receipt_attempt_expired", fmt.Errorf("prepare: %w", federation.ErrPlacementReceiptExpired), ipcpb.IngestErrorCode_INGEST_ERROR_TIMEOUT},
+		{"receipt_attempt_conflict", federation.ErrPlacementReceiptConflict, ipcpb.IngestErrorCode_INGEST_ERROR_TIMEOUT},
 		// A new stream whose authority has not reached this cell because the
 		// fetch failed (here skipped during the outage backoff) is a slow
 		// control plane, not a refusal.
