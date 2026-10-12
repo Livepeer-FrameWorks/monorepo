@@ -106,6 +106,12 @@ It checks sibling completion, a successful retry within 30 seconds, thumbnail
 publication, and playback. `make verify-stack-fixtures` checks proxy forwarding
 and fault isolation. The fault is cleared on scenario exit.
 
+Default scenario 36 arms the same proxy's expiry fixture for one cross-cell
+VOD: every presigned GET of it signed before the arming second answers 403
+"Request has expired", as S3 does past `X-Amz-Expires`. The cell-B edge then
+has to re-resolve the resolution it cached on the first play and answer
+Mist's source HEAD with 200. The fixture is cleared on scenario exit.
+
 Manual scenario 09 stages an edge release inside the stack. It packs edge A's
 image-baked Helmsman binary and Mist tree as release artifacts under new
 version labels and serves them from the runner. It then writes the release and

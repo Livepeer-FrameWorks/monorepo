@@ -44,7 +44,13 @@ var slowFirstBodyByteAfter = mistSourceReadTimeout / 2
 // serveViaBlockCache is the relay's random-access entrypoint for single-file
 // artifacts. The block cache needs a total size; when Foghorn did not provide
 // one, the relay probes byte 0 and uses Content-Range as the source of truth.
-func (s *Server) serveViaBlockCache(c *gin.Context, kind, hash, ext, localPath string, res *ResolveResult, intent admission.StorageIntent) string {
+//
+// Every upstream fetch is its own request, so an upstream that refuses res's
+// credential (401/403: an expired presigned URL, a dead peer grant) is retried
+// once with the resolution renew supplies, including mid-response: a read that
+// outlives its presigned URL continues on the renewed one. A second refusal
+// before any fetch succeeds on the renewed resolution ends the request.
+func (s *Server) serveViaBlockCache(c *gin.Context, kind, hash, ext, localPath string, res *ResolveResult, intent admission.StorageIntent, renew func(*ResolveResult) (*ResolveResult, bool)) string {
 	strictCache := intent == admission.IntentProcessingInput
 	// A processing input whose upstream fails before Mist got a byte may keep
 	// its input from booting; the processing job reads this note to tell a
@@ -54,9 +60,27 @@ func (s *Server) serveViaBlockCache(c *gin.Context, kind, hash, ext, localPath s
 			noteProcessingInputFailure(hash, upstreamFailureCause(c.Request.Context(), err))
 		}
 	}
+	upstreamURL := res.UpstreamURL()
+	upstreamClient := s.upstreamClient(res)
+	renewedSinceProgress := false
+	renewAfter := func(err error) bool {
+		if renew == nil || renewedSinceProgress || !isUpstreamAuthError(err) {
+			return false
+		}
+		fresh, ok := renew(res)
+		if !ok {
+			return false
+		}
+		res, upstreamURL, upstreamClient = fresh, fresh.UpstreamURL(), s.upstreamClient(fresh)
+		renewedSinceProgress = true
+		return true
+	}
 	totalSize := int64(res.ExpectedSizeBytes)
 	if totalSize <= 0 {
-		probedSize, err := s.probeTotalSize(c.Request.Context(), s.upstreamClient(res), res.UpstreamURL(), res.PeerRelayGrantID)
+		probedSize, err := s.probeTotalSize(c.Request.Context(), upstreamClient, upstreamURL, res.PeerRelayGrantID)
+		if err != nil && renewAfter(err) {
+			probedSize, err = s.probeTotalSize(c.Request.Context(), upstreamClient, upstreamURL, res.PeerRelayGrantID)
+		}
 		if err != nil {
 			noteUpstreamFailure(err)
 			s.respondColdFetchError(c, "upstream size probe", err)
@@ -121,11 +145,13 @@ func (s *Server) serveViaBlockCache(c *gin.Context, kind, hash, ext, localPath s
 		c.AbortWithStatus(http.StatusRequestedRangeNotSatisfiable)
 		return "error"
 	}
-	upstreamURL := res.UpstreamURL()
-	upstreamClient := s.upstreamClient(res)
 	recordDefrost := s.defrostRecorderFor(kind, hash)
 	if cacheDecision == admission.CacheToDisk && !hasRange {
-		if err := s.preflightFirstColdSpan(c.Request.Context(), upstreamClient, store, spans[0], totalSize, upstreamURL, res.PeerRelayGrantID); err != nil {
+		err := s.preflightFirstColdSpan(c.Request.Context(), upstreamClient, store, spans[0], totalSize, upstreamURL, res.PeerRelayGrantID)
+		if err != nil && renewAfter(err) {
+			err = s.preflightFirstColdSpan(c.Request.Context(), upstreamClient, store, spans[0], totalSize, upstreamURL, res.PeerRelayGrantID)
+		}
+		if err != nil {
 			noteUpstreamFailure(err)
 			s.cache.Delete(kind, hash)
 			s.respondColdFetchError(c, "upstream block preflight", err)
@@ -167,30 +193,33 @@ func (s *Server) serveViaBlockCache(c *gin.Context, kind, hash, ext, localPath s
 	}
 
 	for _, span := range spans {
-		if err := s.serveBlockSpan(c.Request.Context(), upstreamClient, c.Writer, store, span, totalSize, upstreamURL, res.PeerRelayGrantID, cacheDecision, strictCache, recordDefrost); err != nil {
-			// A peer-relay grant that 401/403s mid-stream is dead (origin
-			// restarted, grant evicted before the resolve TTL lapsed). Drop the
-			// resolve-cache entry so the next request re-resolves and re-mints
-			// instead of replaying the dead grant. Headers are already sent for
-			// this request, so this only heals subsequent ones. The un-ranged
-			// cold preflight above handles the same case before headers; ranged
-			// and memory-only requests skip it and land here.
-			if res.PeerRelayGrantID != "" && isUpstreamAuthError(err) {
-				s.cache.Delete(kind, hash)
-			}
-			// Gin defers the status until the first body write. A failed cold
-			// fetch must not commit an empty 200/206 with an advertised length.
-			if !c.Writer.Written() {
-				noteUpstreamFailure(err)
-				c.Writer.Header().Del("Content-Length")
-				c.Writer.Header().Del("Content-Range")
-				s.respondColdFetchError(c, "block span serve", err)
-			}
-			if s.logger != nil && !isClientGone(err) {
-				s.logger.WithError(err).WithField("block_idx", span.Idx).Debug("blockcache: span serve aborted")
-			}
-			return "error"
+		// A span fetch refused with 401/403 wrote nothing for that span, so it
+		// is sent again on the renewed resolution without a gap in the body.
+		err := s.serveBlockSpan(c.Request.Context(), upstreamClient, c.Writer, store, span, totalSize, upstreamURL, res.PeerRelayGrantID, cacheDecision, strictCache, recordDefrost)
+		if err != nil && renewAfter(err) {
+			err = s.serveBlockSpan(c.Request.Context(), upstreamClient, c.Writer, store, span, totalSize, upstreamURL, res.PeerRelayGrantID, cacheDecision, strictCache, recordDefrost)
 		}
+		if err == nil {
+			renewedSinceProgress = false
+			continue
+		}
+		// A refusal that renewal did not cure leaves no cached resolution
+		// behind, so the next request resolves again.
+		if res.renewable() && isUpstreamAuthError(err) {
+			s.cache.Delete(kind, hash)
+		}
+		// Gin defers the status until the first body write. A failed cold
+		// fetch must not commit an empty 200/206 with an advertised length.
+		if !c.Writer.Written() {
+			noteUpstreamFailure(err)
+			c.Writer.Header().Del("Content-Length")
+			c.Writer.Header().Del("Content-Range")
+			s.respondColdFetchError(c, "block span serve", err)
+		}
+		if s.logger != nil && !isClientGone(err) {
+			s.logger.WithError(err).WithField("block_idx", span.Idx).Debug("blockcache: span serve aborted")
+		}
+		return "error"
 	}
 	return "served"
 }
@@ -515,13 +544,16 @@ func (e upstreamStatusError) Error() string {
 	return fmt.Sprintf("upstream artifact fetch returned status %d", e.StatusCode)
 }
 
-// isUpstreamAuthError reports whether err is an upstream 401/403 — the signature
-// of a dead peer-relay grant whose resolve-cache entry must be dropped so the
-// next request re-mints rather than replaying it until the resolve TTL lapses.
+// isAuthStatus reports an upstream refusing the request's credential.
+func isAuthStatus(code int) bool {
+	return code == http.StatusUnauthorized || code == http.StatusForbidden
+}
+
+// isUpstreamAuthError reports whether err is an upstream 401/403: an expired
+// presigned URL or a dead peer-relay grant, which a fresh resolve replaces.
 func isUpstreamAuthError(err error) bool {
 	var se upstreamStatusError
-	return errors.As(err, &se) &&
-		(se.StatusCode == http.StatusUnauthorized || se.StatusCode == http.StatusForbidden)
+	return errors.As(err, &se) && isAuthStatus(se.StatusCode)
 }
 
 func (s *Server) probeTotalSize(ctx context.Context, httpc *http.Client, mediaURL, grantID string) (int64, error) {

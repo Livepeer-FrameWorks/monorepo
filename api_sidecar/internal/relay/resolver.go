@@ -9,6 +9,7 @@ import (
 
 	"frameworks/api_sidecar/internal/admission"
 	"frameworks/api_sidecar/internal/control"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/presignurl"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
@@ -132,9 +133,35 @@ func (r *controlResolver) Resolve(rc ResolveContext) (*ResolveResult, error) {
 	}, nil
 }
 
+// presignRefreshMargin is how long before the expiry signed into a cached
+// storage URL the cache stops serving that resolution.
+const presignRefreshMargin = 30 * time.Second
+
+// renewable reports whether a fresh resolve can replace r's upstream
+// credential: a presigned storage URL or a peer-relay grant. A tenant-supplied
+// import source resolves to the same URL every time.
+func (r *ResolveResult) renewable() bool {
+	return r != nil && (r.PeerRelayGrantID != "" || r.MediaPresignedURL != "" || r.DtshPresignedGet != "")
+}
+
+// fresh reports whether r may still be served from the cache: within 80% of
+// its declared TTL, and short of the earliest expiry signed into its storage
+// URLs by presignRefreshMargin. A TTL of 0 means never cache.
+func (r *ResolveResult) fresh(now time.Time) bool {
+	if r.URLTTLSeconds <= 0 {
+		return false
+	}
+	if now.Sub(r.cachedAt) > time.Duration(float64(r.URLTTLSeconds)*0.8)*time.Second {
+		return false
+	}
+	if exp, ok := presignurl.EarliestExpiry(r.MediaPresignedURL, r.DtshPresignedGet); ok && !now.Before(exp.Add(-presignRefreshMargin)) {
+		return false
+	}
+	return true
+}
+
 // resolveCache is a small in-memory cache of recent RelayResolve responses,
-// keyed by (kind, hash). Entries expire at url_ttl_seconds * 0.8 so the
-// relay refreshes before the presigned URL goes stale.
+// keyed by (kind, hash).
 type resolveCache struct {
 	mu      sync.RWMutex
 	entries map[string]*ResolveResult
@@ -152,17 +179,27 @@ func (rc *resolveCache) Get(kind, hash string) (*ResolveResult, bool) {
 	rc.mu.RLock()
 	defer rc.mu.RUnlock()
 	r, ok := rc.entries[cacheKey(kind, hash)]
-	if !ok {
-		return nil, false
-	}
-	// Expire at 80% of declared TTL. 0 TTL means never cache.
-	if r.URLTTLSeconds <= 0 {
-		return nil, false
-	}
-	if time.Since(r.cachedAt) > time.Duration(float64(r.URLTTLSeconds)*0.8)*time.Second {
+	if !ok || !r.fresh(time.Now()) {
 		return nil, false
 	}
 	return r, true
+}
+
+// successor returns the cached resolution that already replaced stale, when a
+// concurrent request renewed it. Otherwise it drops stale from the cache and
+// reports false.
+func (rc *resolveCache) successor(kind, hash string, stale *ResolveResult) (*ResolveResult, bool) {
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+	key := cacheKey(kind, hash)
+	cur, ok := rc.entries[key]
+	if ok && cur != stale && cur.fresh(time.Now()) {
+		return cur, true
+	}
+	if ok && cur == stale {
+		delete(rc.entries, key)
+	}
+	return nil, false
 }
 
 func (rc *resolveCache) Put(kind, hash string, r *ResolveResult) {
@@ -192,6 +229,38 @@ func (s *Server) resolveCached(rc ResolveContext) (*ResolveResult, error) {
 	}
 	s.cache.Put(rc.AssetKind, rc.AssetHash, res)
 	return res, nil
+}
+
+// resolveRenewer returns the function a request calls when its upstream
+// refused the resolution it holds (an expired presigned URL, a dead peer
+// grant). The function yields a playable replacement: the one a concurrent
+// request already fetched, else a fresh resolve through Foghorn. ok is false
+// when stale cannot be renewed or the fresh resolve is not playable; stale is
+// out of the cache either way.
+func (s *Server) resolveRenewer(ctx context.Context, kind, hash, ext string) func(stale *ResolveResult) (*ResolveResult, bool) {
+	return func(stale *ResolveResult) (*ResolveResult, bool) {
+		if !stale.renewable() {
+			return nil, false
+		}
+		if cur, ok := s.cache.successor(kind, hash, stale); ok {
+			return cur, true
+		}
+		res, err := s.resolver.Resolve(ResolveContext{
+			Ctx:       ctx,
+			AssetKind: kind,
+			AssetHash: hash,
+			Ext:       ext,
+			Hint:      ipcpb.RelayResolveRequest_RELAY_HINT_RANDOM_ACCESS,
+		})
+		if err != nil || res == nil || res.State != ipcpb.AssetState_ASSET_STATE_PLAYABLE || res.UpstreamURL() == "" {
+			if s.logger != nil {
+				s.logger.WithError(err).WithField("asset_hash", hash).Warn("relay: upstream refused the resolved credential and re-resolve gave no playable source")
+			}
+			return nil, false
+		}
+		s.cache.Put(kind, hash, res)
+		return res, true
+	}
 }
 
 func newRequestID() (string, error) {

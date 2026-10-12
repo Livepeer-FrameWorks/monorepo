@@ -305,8 +305,14 @@ other warm file, ranked by heat rather than plain age: the relay touches `HeatTr
 dir as key on warm-block reads, and the cleanup monitor sorts on that access count and recency
 (`api_sidecar/internal/handlers/cleanup.go`), so a lease-free cache that is still being played is retained
 over one that filled and was never read. Resolution metadata from `RelayResolve` (presigned media URL,
-expected size, `.dtsh` sidecar URLs) is TTL-cached in memory and refreshed mid-session before the presigned
-URL expires, so a playback session longer than the presign lifetime does not break. `.dtsh` sidecars are
+expected size, `.dtsh` sidecar URLs) is TTL-cached in memory. The cache entry ends at 80% of the
+`url_ttl_seconds` Foghorn returns and at least 30 s before the earliest expiry signed into its presigned
+URLs (`X-Amz-Date` + `X-Amz-Expires`). Foghorn bounds that TTL the same way: a cross-cell resolution
+forwards the origin cell's 15-minute presigned GETs with a TTL ending one minute before their signed expiry.
+When an upstream still answers 401/403 (an expired presigned URL, a dead peer-relay grant), the relay
+re-resolves through Foghorn once and resends that request, including a HEAD, a `.dtsh` fetch, and a block
+fetch in the middle of a long ranged response; Mist never receives the store's authorization error. A
+refusal that survives the re-resolve is answered 502. `.dtsh` sidecars are
 served from disk when present, fetched from S3 when Foghorn has one, and 404'd otherwise so Mist generates
 and PUTs one (`api_sidecar/internal/relay/dtsh.go`).
 

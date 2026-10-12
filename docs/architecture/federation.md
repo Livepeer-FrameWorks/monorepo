@@ -201,7 +201,9 @@ Viewer requests clip/VOD on Cluster A, artifact lives on Cluster B:
    PrepareArtifact to that storage cluster (single hop; chained redirects
    are rejected, and the redirect target is allowlist-authorized BEFORE
    the dial).
-4. If sync_status='synced': mints presigned S3 GET URL (15min) → returns to A
+4. If sync_status='synced': mints presigned S3 GET URL (15min) → returns to A,
+   which hands its relays a resolve TTL ending one minute before the expiry
+   signed into that URL
 5. Else if storage_location is local/freezing and a local origin node has
    the canonical full file on disk (foghorn.artifact_nodes row with
    role='origin', is_complete=true, not orphaned, last_seen < 90s):

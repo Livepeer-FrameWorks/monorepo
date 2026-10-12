@@ -460,8 +460,14 @@ func UsageTrackerMiddleware(tracker *UsageTracker) gin.HandlerFunc {
 			return
 		}
 
-		// Extract metrics after request completes
+		// Extract metrics after request completes. A WebSocket upgrade returns
+		// here only when the socket closes, so its elapsed time is the
+		// subscription's lifetime, not request handling: it counts as a request
+		// with no duration.
 		duration := time.Since(start).Milliseconds()
+		if c.IsWebsocket() {
+			duration = 0
+		}
 
 		// Get tenant ID from context
 		tenantID := ""

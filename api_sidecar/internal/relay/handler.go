@@ -3,6 +3,7 @@ package relay
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -303,6 +304,7 @@ func (s *Server) fetchAndServe(c *gin.Context, kind, hash, ext, localPath string
 }
 
 func (s *Server) fetchAndServeWithIntent(c *gin.Context, kind, hash, ext, localPath string, res *ResolveResult, intent admission.StorageIntent) string {
+	renew := s.resolveRenewer(c.Request.Context(), kind, hash, ext)
 	if c.Request.Method == http.MethodHead {
 		var onUpstreamFailure func(error)
 		if intent == admission.IntentProcessingInput {
@@ -310,35 +312,45 @@ func (s *Server) fetchAndServeWithIntent(c *gin.Context, kind, hash, ext, localP
 				noteProcessingInputFailure(hash, upstreamFailureCause(c.Request.Context(), err))
 			}
 		}
-		return s.streamRangeNoCache(c, res, onUpstreamFailure)
+		return s.streamRangeNoCache(c, res, onUpstreamFailure, renew)
 	}
-	return s.serveViaBlockCache(c, kind, hash, ext, localPath, res, intent)
+	return s.serveViaBlockCache(c, kind, hash, ext, localPath, res, intent, renew)
 }
 
 // streamRangeNoCache forwards the requested Range to S3, copies the response
 // straight back, and never touches disk. Used for HEAD probes and memory-only
 // playback-cache outcomes. onUpstreamFailure, when set, receives an upstream
-// that failed or answered an error status.
-func (s *Server) streamRangeNoCache(c *gin.Context, res *ResolveResult, onUpstreamFailure func(error)) string {
+// that failed or answered an error status. When the upstream refuses res's
+// credential with 401/403, renew (when set) supplies one replacement
+// resolution and the request is sent again; a refusal that remains is answered
+// as 502, so Mist never reads the store's authorization error as its own.
+func (s *Server) streamRangeNoCache(c *gin.Context, res *ResolveResult, onUpstreamFailure func(error), renew func(*ResolveResult) (*ResolveResult, bool)) string {
 	method := c.Request.Method
 	if method == http.MethodHead {
 		method = http.MethodGet
 	}
-	upstream := res.UpstreamURL()
-	req, err := http.NewRequestWithContext(c.Request.Context(), method, upstream, nil)
-	if err != nil {
-		s.serverError(c, "build upstream request", err)
-		return "error"
+	send := func(res *ResolveResult) (*http.Response, error) {
+		req, err := http.NewRequestWithContext(c.Request.Context(), method, res.UpstreamURL(), nil)
+		if err != nil {
+			return nil, fmt.Errorf("build upstream request: %w", err)
+		}
+		if res.PeerRelayGrantID != "" {
+			req.Header.Set("Authorization", "Bearer "+res.PeerRelayGrantID)
+		}
+		if c.Request.Method == http.MethodHead {
+			req.Header.Set("Range", "bytes=0-0")
+		} else if rng := c.Request.Header.Get("Range"); rng != "" {
+			req.Header.Set("Range", rng)
+		}
+		return s.upstreamClient(res).Do(req)
 	}
-	if res.PeerRelayGrantID != "" {
-		req.Header.Set("Authorization", "Bearer "+res.PeerRelayGrantID)
+	resp, err := send(res)
+	if err == nil && isAuthStatus(resp.StatusCode) && renew != nil {
+		if fresh, ok := renew(res); ok {
+			_ = resp.Body.Close()
+			resp, err = send(fresh)
+		}
 	}
-	if c.Request.Method == http.MethodHead {
-		req.Header.Set("Range", "bytes=0-0")
-	} else if rng := c.Request.Header.Get("Range"); rng != "" {
-		req.Header.Set("Range", rng)
-	}
-	resp, err := s.upstreamClient(res).Do(req)
 	if err != nil {
 		if onUpstreamFailure != nil {
 			onUpstreamFailure(err)
@@ -349,6 +361,10 @@ func (s *Server) streamRangeNoCache(c *gin.Context, res *ResolveResult, onUpstre
 	defer resp.Body.Close()
 	if resp.StatusCode >= http.StatusBadRequest && onUpstreamFailure != nil {
 		onUpstreamFailure(upstreamStatusError{StatusCode: resp.StatusCode})
+	}
+	if isAuthStatus(resp.StatusCode) {
+		c.String(http.StatusBadGateway, "source authorization failed")
+		return "error"
 	}
 
 	// Mirror status and the headers that Mist cares about. Content-Length,

@@ -88,17 +88,7 @@ func (s *Server) serveSidecarGetWithStream(c *gin.Context, kind, hash, file, str
 		c.Status(http.StatusNotFound)
 		return
 	}
-	// Source order: S3 (synced) first, else a peer relay holding the hot
-	// sidecar (origin node, not yet S3-synced). Foghorn sets at most one of
-	// these per resolve. peerBearer is non-empty only on the peer path; the
-	// grant authorizes both the media and its .dtsh path, validated online by
-	// the origin edge's Foghorn.
-	fetchURL := res.DtshPresignedGet
-	peerBearer := ""
-	if fetchURL == "" {
-		fetchURL = res.PeerRelayDtshURL
-		peerBearer = res.PeerRelayGrantID
-	}
+	fetchURL, peerBearer := sidecarSource(res)
 	if fetchURL == "" {
 		// No sidecar anywhere yet. 404 is the signal for Mist to generate
 		// one and PUT it back.
@@ -108,17 +98,31 @@ func (s *Server) serveSidecarGetWithStream(c *gin.Context, kind, hash, file, str
 	}
 
 	key := c.Request.Method + "|" + kind + "|" + streamInternal + "|" + file
-	fetch := func(ctx context.Context) sidecarFetchResult {
-		return s.fetchSidecarBody(ctx, fetchURL, peerBearer, localPath)
-	}
-	if c.Request.Method == http.MethodHead {
-		fetch = func(ctx context.Context) sidecarFetchResult {
-			return probeSidecarSize(ctx, s.httpc, fetchURL, peerBearer)
+	fetchFrom := func(fetchURL, peerBearer string) func(context.Context) sidecarFetchResult {
+		if c.Request.Method == http.MethodHead {
+			return func(ctx context.Context) sidecarFetchResult {
+				return probeSidecarSize(ctx, s.httpc, fetchURL, peerBearer)
+			}
+		}
+		return func(ctx context.Context) sidecarFetchResult {
+			return s.fetchSidecarBody(ctx, fetchURL, peerBearer, localPath)
 		}
 	}
-	result, err := s.sidecarFetches.do(c.Request.Context(), key, fetch)
+	result, err := s.sidecarFetches.do(c.Request.Context(), key, fetchFrom(fetchURL, peerBearer))
 	if err != nil {
 		return // the reader left while another request's fetch ran
+	}
+	// An upstream that refuses the resolved credential (expired presigned
+	// URL, dead peer grant) gets one more fetch on a renewed resolution.
+	if result.authRefused {
+		if fresh, ok := s.resolveRenewer(c.Request.Context(), kind, hash, ext)(res); ok {
+			if freshURL, freshBearer := sidecarSource(fresh); freshURL != "" {
+				result, err = s.sidecarFetches.do(c.Request.Context(), key, fetchFrom(freshURL, freshBearer))
+				if err != nil {
+					return
+				}
+			}
+		}
 	}
 
 	switch result.status {
@@ -160,6 +164,18 @@ func (s *Server) serveSidecarGetWithStream(c *gin.Context, kind, hash, file, str
 	}
 }
 
+// sidecarSource is where a resolution's sidecar is fetched from: S3 (synced)
+// first, else a peer relay holding the hot sidecar (origin node, not yet
+// S3-synced). Foghorn sets at most one of these per resolve. bearer is
+// non-empty only on the peer path; the grant authorizes both the media and its
+// .dtsh path, validated online by the origin edge's Foghorn.
+func sidecarSource(res *ResolveResult) (fetchURL, bearer string) {
+	if res.DtshPresignedGet != "" {
+		return res.DtshPresignedGet, ""
+	}
+	return res.PeerRelayDtshURL, res.PeerRelayGrantID
+}
+
 // sidecarFetchResult is the outcome of one upstream sidecar fetch, shared by
 // every request that waited on it. status is 200 (body or size known), 404
 // (the store has no valid sidecar) or 503 (the store did not answer usably).
@@ -172,6 +188,9 @@ type sidecarFetchResult struct {
 	// staleResolve marks a failure that may come from the resolved URL itself
 	// (expired presign, dead peer grant, unreachable upstream).
 	staleResolve bool
+	// authRefused marks an upstream 401/403: the resolved credential itself
+	// was refused.
+	authRefused bool
 }
 
 // sidecarFetchGroup runs one upstream fetch per sidecar request key at a
@@ -228,7 +247,8 @@ func sidecarFetchFailure(statusCode int) sidecarFetchResult {
 	return sidecarFetchResult{
 		status:       http.StatusServiceUnavailable,
 		reason:       fmt.Sprintf("upstream status %d", statusCode),
-		staleResolve: statusCode == http.StatusUnauthorized || statusCode == http.StatusForbidden,
+		staleResolve: isAuthStatus(statusCode),
+		authRefused:  isAuthStatus(statusCode),
 	}
 }
 

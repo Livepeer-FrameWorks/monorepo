@@ -160,6 +160,40 @@ func TestUsageTrackerMiddlewareCountsFailedRequestsAndGraphQLErrorsSeparately(t 
 	}
 }
 
+// A GraphQL WebSocket stays inside the middleware for the socket's lifetime.
+// It counts as one request but adds no request duration, so api_duration_ms
+// measures request handling rather than how long subscriptions stayed open.
+func TestUsageTrackerMiddlewareRecordsNoDurationForWebSocket(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	sink := &recordingDecklog{}
+	tracker := NewUsageTracker(UsageTrackerConfig{Decklog: sink, FlushInterval: time.Hour, ServiceTenantID: "owner"})
+	defer tracker.Stop()
+
+	r := gin.New()
+	r.Use(UsageTrackerMiddleware(tracker))
+	r.GET("/graphql", func(c *gin.Context) {
+		c.Set(string(ctxkeys.KeyGraphQLOperationType), "subscription")
+		time.Sleep(60 * time.Millisecond)
+		c.Status(http.StatusOK)
+	})
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/graphql", nil)
+	req.Header.Set("Connection", "Upgrade")
+	req.Header.Set("Upgrade", "websocket")
+	r.ServeHTTP(httptest.NewRecorder(), req)
+	tracker.flush()
+
+	if len(sink.delivered) != 1 {
+		t.Fatalf("delivered %d batches, want 1", len(sink.delivered))
+	}
+	aggs := sink.delivered[0].GetApiRequestBatch().GetAggregates()
+	if len(aggs) != 1 {
+		t.Fatalf("got %d aggregates, want 1", len(aggs))
+	}
+	if got := aggs[0]; got.GetRequestCount() != 1 || got.GetTotalDurationMs() != 0 {
+		t.Fatalf("websocket requests/duration_ms = %d/%d, want 1/0", got.GetRequestCount(), got.GetTotalDurationMs())
+	}
+}
+
 // A batch whose send fails is retried on the next flush with the event ID it
 // was first sent with, so Periscope's api_requests keys dedupe the copies.
 func TestUsageTrackerRetriesBatchWithStableEventID(t *testing.T) {

@@ -692,6 +692,11 @@ func (s *FederationServer) prepareOriginPull(ctx context.Context, req *foghornfe
 	return ack, nil
 }
 
+// federatedPresignTTL is the lifetime of the storage GET URLs PrepareArtifact
+// hands another cell. The URLs carry it in their signature; the requesting
+// cell reads it there to bound how long its relays reuse them.
+const federatedPresignTTL = 15 * time.Minute
+
 // one of: (a) a presigned S3 GET URL when sync_status='synced'; (b) a
 // node-specific peer_relay_url + opaque peer_relay_grant_id when an
 // origin node holds the canonical full file but S3 sync is pending —
@@ -876,7 +881,7 @@ func (s *FederationServer) PrepareArtifact(ctx context.Context, req *foghornfede
 			return &foghornfederationpb.PrepareArtifactResponse{Error: "artifact has no recorded storage object key"}, nil
 		}
 		s3Key := recordedObjectKey
-		presignedURL, err := s.s3Client.GeneratePresignedGET(s3Key, 15*time.Minute)
+		presignedURL, err := s.s3Client.GeneratePresignedGET(s3Key, federatedPresignTTL)
 		if err != nil {
 			log.WithError(err).Error("Failed to generate presigned GET for artifact")
 			return &foghornfederationpb.PrepareArtifactResponse{Error: "failed to generate download URL"}, nil
@@ -884,7 +889,7 @@ func (s *FederationServer) PrepareArtifact(ctx context.Context, req *foghornfede
 		var size uint64
 		var dtshURL string
 		if descriptor.DtshSynced && descriptor.DtshKey != "" {
-			dtshURL, err = s.s3Client.GeneratePresignedGET(descriptor.DtshKey, 15*time.Minute)
+			dtshURL, err = s.s3Client.GeneratePresignedGET(descriptor.DtshKey, federatedPresignTTL)
 			if err != nil {
 				log.WithError(err).Error("Failed to generate presigned GET for artifact index")
 				return &foghornfederationpb.PrepareArtifactResponse{Error: "failed to generate index download URL"}, nil

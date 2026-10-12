@@ -336,7 +336,7 @@ func TestServeColdFilePropagatesUpstreamNotFoundBeforeMediaHeaders(t *testing.T)
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.Request = httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/internal/artifact/vod/"+file, nil)
-	if got := s.serveViaBlockCache(ctx, "vod", hash, ".mkv", filepath.Join(dir, "vod", file), res, admission.IntentPlaybackCache); got != "error" {
+	if got := s.serveViaBlockCache(ctx, "vod", hash, ".mkv", filepath.Join(dir, "vod", file), res, admission.IntentPlaybackCache, nil); got != "error" {
 		t.Fatalf("serveViaBlockCache status = %q, want error", got)
 	}
 }

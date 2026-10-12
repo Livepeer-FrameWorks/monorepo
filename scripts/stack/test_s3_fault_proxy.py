@@ -43,7 +43,32 @@ class ProxyTest(unittest.TestCase):
 
     def setUp(self):
         proxy.FAULT.reset()
+        proxy.EXPIRY.arm("")
         self.backend.seen.clear()
+
+    def get(self, path):
+        connection = http.client.HTTPConnection("127.0.0.1", self.server.server_port, timeout=2)
+        try:
+            connection.request("GET", path)
+            response = connection.getresponse()
+            return response.status, response.read()
+        finally:
+            connection.close()
+
+    def test_expiry_refuses_only_the_armed_artifacts_older_presigned_gets(self):
+        proxy.EXPIRY.arm("abc123", before=1_760_259_600)  # 2025-10-12T09:00:00Z
+        old = "X-Amz-Date=20251012T085959Z&X-Amz-Expires=900&X-Amz-Signature=s"
+        new = "X-Amz-Date=20251012T090000Z&X-Amz-Expires=900&X-Amz-Signature=s"
+        status, body = self.get("/bucket/vod/abc123/abc123.mkv?" + old)
+        self.assertEqual(status, 403)
+        self.assertIn(b"Request has expired", body)
+        self.assertEqual(self.get("/bucket/vod/abc123/abc123.mkv?" + new)[0], 200)
+        self.assertEqual(self.get("/bucket/vod/other/other.mkv?" + old)[0], 200)
+        self.assertEqual(self.get("/bucket/vod/abc123/abc123.mkv")[0], 200)
+        self.assertEqual(proxy.EXPIRY.snapshot()["refused"], 1)
+        self.assertEqual(len(self.backend.seen), 3)
+        proxy.EXPIRY.arm("")
+        self.assertEqual(self.get("/bucket/vod/abc123/abc123.mkv?" + old)[0], 200)
 
     def request(self, path, timeout=2, headers=None, body=b"thumbnail"):
         connection = http.client.HTTPConnection("127.0.0.1", self.server.server_port, timeout=timeout)

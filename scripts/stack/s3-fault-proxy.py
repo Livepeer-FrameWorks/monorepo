@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Forward real S3 traffic; stall two PUTs for one explicitly armed artifact.
+"""Forward real S3 traffic; stall two PUTs for one explicitly armed artifact;
+expire one armed artifact's presigned GETs signed before the arming instant.
 
-Only the private control port can arm the thumbnail regression fixture. Paths,
-queries, Host and signed headers reach the real backend unchanged. Neither
-presigned URLs nor credentials are logged.
+Only the private control port can arm the fixtures. Paths, queries, Host and
+signed headers reach the real backend unchanged. Neither presigned URLs nor
+credentials are logged.
 """
+import calendar
 import hmac
 import http.client
 import http.server
@@ -62,7 +64,52 @@ class Fault:
                     "events": list(self.events)}
 
 
+class Expiry:
+    """Answers a presigned GET/HEAD for the armed artifact the way S3 answers
+    an expired signature when its X-Amz-Date is before the arming second, as if
+    every URL minted before then had reached its X-Amz-Expires."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.arm("")
+
+    def arm(self, artifact, before=0):
+        with self.lock:
+            self.artifact = artifact
+            self.before = before
+            self.refused = 0
+            self.passed = 0
+
+    def refuses(self, method, path):
+        if method not in ("GET", "HEAD"):
+            return False
+        parts = urllib.parse.urlsplit(path)
+        query = urllib.parse.parse_qs(parts.query)
+        if "X-Amz-Signature" not in query:
+            return False
+        with self.lock:
+            if not self.artifact or self.artifact not in urllib.parse.unquote(parts.path):
+                return False
+            try:
+                signed = calendar.timegm(time.strptime(query["X-Amz-Date"][0], "%Y%m%dT%H%M%SZ"))
+            except (KeyError, ValueError):
+                return False
+            if signed < self.before:
+                self.refused += 1
+                return True
+            self.passed += 1
+            return False
+
+    def snapshot(self):
+        with self.lock:
+            return {"artifact": self.artifact, "before": self.before,
+                    "refused": self.refused, "passed": self.passed}
+
+
 FAULT = Fault()
+EXPIRY = Expiry()
+EXPIRED_BODY = (b'<?xml version="1.0" encoding="UTF-8"?><Error><Code>AccessDenied</Code>'
+                b'<Message>Request has expired</Message></Error>')
 UPSTREAM = os.environ.get("STACK_S3_UPSTREAM", "s3-ceph:8080")
 TOKEN = os.environ.get("SERVICE_TOKEN", "")
 HOP_HEADERS = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
@@ -82,14 +129,18 @@ class Control(QuietHandler):
         if self.command == "POST":
             try:
                 payload = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
-                artifact = payload.get("artifact", "")
-                if not isinstance(artifact, str) or (artifact and not artifact.isalnum()):
-                    raise ValueError("invalid artifact hash")
-                FAULT.reset(artifact)
-            except (ValueError, TypeError):
+                for field in ("artifact", "expire_artifact"):
+                    value = payload.get(field, "")
+                    if not isinstance(value, str) or (value and not value.isalnum()):
+                        raise ValueError("invalid artifact hash")
+                if "artifact" in payload:
+                    FAULT.reset(payload["artifact"])
+                if "expire_artifact" in payload:
+                    EXPIRY.arm(payload["expire_artifact"], int(time.time()))
+            except (ValueError, TypeError, AttributeError):
                 self.send_error(400)
                 return
-        body = json.dumps(FAULT.snapshot()).encode()
+        body = json.dumps({**FAULT.snapshot(), "expiry": EXPIRY.snapshot()}).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
@@ -115,6 +166,16 @@ class Proxy(QuietHandler):
 
     def forward(self):
         data = self.body()
+        if EXPIRY.refuses(self.command, self.path):
+            self.send_response_only(403, "Forbidden")
+            self.send_header("Content-Type", "application/xml")
+            self.send_header("Content-Length", str(len(EXPIRED_BODY)))
+            self.send_header("Connection", "close")
+            self.end_headers()
+            if self.command != "HEAD":
+                self.wfile.write(EXPIRED_BODY)
+            self.close_connection = True
+            return
         name, stall = FAULT.begin(self.command, self.path)
         if stall:
             # Do not commit the PUT. Wait until the client's own per-attempt

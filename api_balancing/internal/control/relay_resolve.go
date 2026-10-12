@@ -20,6 +20,7 @@ import (
 	"frameworks/api_balancing/internal/state"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/presignurl"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -28,6 +29,40 @@ import (
 // than the relay's own refresh window (url_ttl_seconds * 0.8) so a single
 // resolve survives normal playback without thrashing.
 const relayURLTTL = 1 * time.Hour
+
+// presignExpiryMargin is how long before a presigned URL's signed expiry the
+// resolve TTL handed to Helmsman ends. It absorbs clock skew between cells and
+// a read that starts just before Helmsman's cache entry lapses.
+const presignExpiryMargin = time.Minute
+
+// unsignedPresignResolveTTL caps the resolve TTL for a forwarded storage URL
+// whose expiry cannot be read from its query string.
+const unsignedPresignResolveTTL = 5 * time.Minute
+
+// presignedResolveTTL is the resolve TTL for a response that carries the given
+// presigned URLs: at most ceiling, and ending presignExpiryMargin before the
+// earliest expiry signed into them. URLs without a readable SigV4 window cap
+// it at unsignedPresignResolveTTL. Zero means Helmsman must not cache the
+// resolution.
+func presignedResolveTTL(now time.Time, ceiling time.Duration, urls ...string) time.Duration {
+	ttl := ceiling
+	for _, raw := range urls {
+		if raw == "" {
+			continue
+		}
+		exp, ok := presignurl.Expiry(raw)
+		if !ok {
+			ttl = min(ttl, unsignedPresignResolveTTL)
+			continue
+		}
+		ttl = min(ttl, exp.Sub(now)-presignExpiryMargin)
+	}
+	// Helmsman reads the TTL in whole seconds; anything shorter is no window.
+	if ttl < time.Second {
+		return 0
+	}
+	return ttl.Truncate(time.Second)
+}
 
 // processRelayResolveRequest looks up the asset Helmsman is about to
 // serve and responds with presigned URLs + metadata. State on the
@@ -590,10 +625,11 @@ func fillCrossClusterArtifact(ctx context.Context, req *ipcpb.RelayResolveReques
 	} else {
 		resp.MediaPresignedUrl = result.URL
 		resp.DtshPresignedGet = result.DtshURL
-		// Peer's S3 presigned URL has its own expiry we don't know
-		// precisely; use the local TTL so the relay re-resolves (peer mints
-		// a fresh presigned URL) before it expires.
-		resp.UrlTtlSeconds = int64(relayURLTTL.Seconds())
+		// The origin cell chose these URLs' lifetime and signed it into them.
+		// Helmsman replays a cached resolve until its TTL lapses and the store
+		// refuses an expired URL, so the TTL ends before the earliest signed
+		// expiry; the next resolve asks the origin for fresh URLs.
+		resp.UrlTtlSeconds = int64(presignedResolveTTL(time.Now(), relayURLTTL, result.URL, result.DtshURL).Seconds())
 	}
 	if artifactType == "vod" || artifactType == "clip" {
 		// vod/clip implies a single media file — no special hint.
