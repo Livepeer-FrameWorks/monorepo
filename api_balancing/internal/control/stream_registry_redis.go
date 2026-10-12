@@ -351,7 +351,8 @@ func (r *RedisRegistryStore) readSourceSnapshot(ctx context.Context, internalNam
 
 // MutateInboundPull commits the destination record and changelog atomically. The
 // callback is rerun on the latest snapshot after contention so attempt fences
-// are checked against durable state, not a lagging replica's cache.
+// are checked against durable state, not a lagging replica's cache. A callback
+// that leaves the pull unchanged returns the snapshot without writing.
 func (r *RedisRegistryStore) MutateInboundPull(ctx context.Context, internalName, nodeID, instance string, update func(InboundPull, bool) (InboundPull, error)) (StreamEntry, InboundPull, error) {
 	for attempt := 0; attempt < 16; attempt++ {
 		entry, raw, err := r.readSourceSnapshot(ctx, internalName)
@@ -365,9 +366,12 @@ func (r *RedisRegistryStore) MutateInboundPull(ctx context.Context, internalName
 		if revision == ^uint64(0) {
 			return StreamEntry{}, InboundPull{}, errors.New("replication revision exhausted")
 		}
-		entry, pull, err := updateInboundEntry(entry, r.clusterID, nodeID, revision+1, update)
+		entry, pull, changed, err := updateInboundEntry(entry, r.clusterID, nodeID, revision+1, update)
 		if err != nil {
 			return StreamEntry{}, InboundPull{}, err
+		}
+		if !changed {
+			return entry, pull, nil
 		}
 		sourceRevision := sourceRevisionForCluster(entry, r.clusterID)
 		change := RegistryChange{InstanceID: instance, Entity: RegistryEntitySource, Operation: RegistryOpUpsert, Key: internalName, SourceRevision: sourceRevision}
@@ -382,7 +386,7 @@ func (r *RedisRegistryStore) MutateInboundPull(ctx context.Context, internalName
 			return StreamEntry{}, InboundPull{}, ErrReplicationConflict
 		}
 	}
-	return StreamEntry{}, InboundPull{}, errors.New("replication mutation contention")
+	return StreamEntry{}, InboundPull{}, ErrReplicationContention
 }
 
 // DeleteSourceRevisioned atomically deletes a source and publishes a revisioned tombstone. A delete

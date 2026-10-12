@@ -35,7 +35,23 @@ func (runtime *LivePushPreparationRuntime) RetainPreparedSourceDemand(ctx contex
 		TenantID: request.Query.TenantId, AttemptID: pull.AttemptID, DestClusterID: request.ClusterId, DestNodeID: request.NodeId,
 		SourceClusterID: pull.SourceCellID, SourceMediaClusterID: pull.SourceClusterID, SourceNodeID: pull.SourceNodeID,
 		SourceGeneration: pull.SourceGeneration, SourceRevision: pull.SourceRevision,
-	}, string(payload))
+	}, string(payload), func(stored string) bool { return equivalentSourceDemand(stored, demand) })
+}
+
+// equivalentSourceDemand reports whether stored context serves for demand.
+// Every viewer handed one pull was admitted with its own location, and any of
+// them is an admitted request to re-evaluate that pull with, so viewers of the
+// same request shape keep the stored context instead of each rewriting the
+// stream's shared record. Whether a location is present still has to match: a
+// request without coordinates evaluates differently under a distance bound.
+func equivalentSourceDemand(stored string, demand *placementpb.CandidateQuery) bool {
+	kept := &placementpb.CandidateQuery{}
+	if protojson.Unmarshal([]byte(stored), kept) != nil || (kept.ClientLocation == nil) != (demand.GetClientLocation() == nil) {
+		return false
+	}
+	shape := proto.CloneOf(demand)
+	kept.ClientLocation, shape.ClientLocation = nil, nil
+	return proto.Equal(kept, shape)
 }
 
 // ResolveOrReauthorizeSource uses completed evidence when available. Missing or

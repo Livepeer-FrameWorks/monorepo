@@ -47,6 +47,11 @@ func (r *StreamRegistry) RefreshInboundPullReuse(ctx context.Context, internalNa
 		if !exists || current.Cleared || current.AttemptID != expected.AttemptID {
 			return InboundPull{}, ErrReplicationConflict
 		}
+		// Concurrent hand-outs all read the same aging record; once one of them
+		// restarted the grace, the others leave the record unchanged.
+		if now.Before(inboundPullStartedAt(current).Add(inboundPullStartGrace / 2)) {
+			return current, nil
+		}
 		if now.After(current.ReusedAt) {
 			current.ReusedAt = now
 		}
@@ -108,6 +113,11 @@ func (r *StreamRegistry) ClearUnstartedInboundPulls(ctx context.Context, nodeID 
 
 var ErrReplicationConflict = errors.New("replication attempt superseded")
 
+// ErrReplicationContention reports that concurrent writers to the stream's
+// shared record outlasted the compare-and-set retries. Nothing was refused or
+// fenced, so the same request can be retried.
+var ErrReplicationContention = errors.New("replication mutation contention")
+
 func cloneLocations(locations map[string]Location) map[string]Location {
 	result := make(map[string]Location, len(locations))
 	for key, loc := range locations {
@@ -152,11 +162,13 @@ type InboundPull struct {
 
 // RecordInboundPlacementDemand binds non-authorizing request context to the
 // existing physical attempt. Clearing or replacing the pull invalidates the write.
-func (r *StreamRegistry) RecordInboundPlacementDemand(ctx context.Context, internalName string, expected InboundPull, demand string) error {
+// keep reports whether the stored context already serves for this request; the
+// stored context is then left in place. A nil keep keeps only identical context.
+func (r *StreamRegistry) RecordInboundPlacementDemand(ctx context.Context, internalName string, expected InboundPull, demand string, keep func(stored string) bool) error {
 	if demand == "" || len(demand) > 65536 {
 		return ErrReplicationConflict
 	}
-	return r.bindInboundPlacement(ctx, internalName, expected, demand)
+	return r.bindInboundPlacement(ctx, internalName, expected, demand, keep)
 }
 
 // RequireInboundPlacement fences a reused physical pull before its URL is exposed.
@@ -164,10 +176,10 @@ func (r *StreamRegistry) RequireInboundPlacement(ctx context.Context, internalNa
 	if expected.DTSCURL == "" {
 		return ErrReplicationConflict
 	}
-	return r.bindInboundPlacement(ctx, internalName, expected, "")
+	return r.bindInboundPlacement(ctx, internalName, expected, "", nil)
 }
 
-func (r *StreamRegistry) bindInboundPlacement(ctx context.Context, internalName string, expected InboundPull, demand string) error {
+func (r *StreamRegistry) bindInboundPlacement(ctx context.Context, internalName string, expected InboundPull, demand string, keep func(string) bool) error {
 	if expected.TenantID == "" || expected.AttemptID == "" || expected.DestClusterID == "" || expected.DestNodeID == "" {
 		return ErrReplicationConflict
 	}
@@ -180,7 +192,7 @@ func (r *StreamRegistry) bindInboundPlacement(ctx context.Context, internalName 
 			return InboundPull{}, ErrReplicationConflict
 		}
 		current.PlacementRequired = true
-		if demand != "" {
+		if demand != "" && demand != current.PlacementDemand && (current.PlacementDemand == "" || keep == nil || !keep(current.PlacementDemand)) {
 			current.PlacementDemand = demand
 		}
 		return current, nil
@@ -371,7 +383,11 @@ func (r *StreamRegistry) ClearInboundPull(ctx context.Context, internalName, nod
 	return err == nil, err
 }
 
-func updateInboundEntry(entry StreamEntry, localCluster, nodeID string, revision uint64, update func(InboundPull, bool) (InboundPull, error)) (StreamEntry, InboundPull, error) {
+// updateInboundEntry applies update to the node's pull. changed is false when
+// the pull already holds what update asks for; the entry is then returned as
+// read and must not be written, so a request repeated for every viewer handed
+// the same pull does not compete for the stream's record.
+func updateInboundEntry(entry StreamEntry, localCluster, nodeID string, revision uint64, update func(InboundPull, bool) (InboundPull, error)) (_ StreamEntry, _ InboundPull, changed bool, _ error) {
 	entry.Locations = maps.Clone(entry.Locations)
 	if entry.Locations == nil {
 		entry.Locations = make(map[string]Location)
@@ -381,14 +397,17 @@ func updateInboundEntry(entry StreamEntry, localCluster, nodeID string, revision
 	pulls := inboundPulls(loc)
 	current, exists := pulls[nodeID]
 	if !exists && len(pulls) >= maxInboundDestinations {
-		return entry, InboundPull{}, fmt.Errorf("replication destination limit reached")
+		return entry, InboundPull{}, false, fmt.Errorf("replication destination limit reached")
 	}
 	pull, err := update(current, exists)
 	if err != nil {
-		return entry, InboundPull{}, err
+		return entry, InboundPull{}, false, err
 	}
 	if entry.TenantID != "" && pull.TenantID != "" && entry.TenantID != pull.TenantID {
-		return entry, InboundPull{}, ErrReplicationConflict
+		return entry, InboundPull{}, false, ErrReplicationConflict
+	}
+	if exists && pull == current && (entry.TenantID != "" || pull.TenantID == "") {
+		return entry, current, false, nil
 	}
 	if entry.TenantID == "" {
 		entry.TenantID = pull.TenantID
@@ -399,7 +418,7 @@ func updateInboundEntry(entry StreamEntry, localCluster, nodeID string, revision
 	loc = syncReplicationView(loc)
 	loc.UpdatedAt = time.Now()
 	entry.Locations[localCluster] = loc
-	return entry, pull, nil
+	return entry, pull, true, nil
 }
 
 func (r *StreamRegistry) mutateInboundPull(ctx context.Context, internalName, nodeID string, update func(InboundPull, bool) (InboundPull, error)) (InboundPull, error) {
@@ -421,8 +440,8 @@ func (r *StreamRegistry) mutateInboundPull(ctx context.Context, internalName, no
 			r.mu.Unlock()
 			return InboundPull{}, fmt.Errorf("replication revision exhausted")
 		}
-		entry, pull, err := updateInboundEntry(entry, r.clusterID, nodeID, revision+1, update)
-		if err == nil {
+		entry, pull, changed, err := updateInboundEntry(entry, r.clusterID, nodeID, revision+1, update)
+		if err == nil && changed {
 			r.installReplicationEntryLocked(entry)
 		}
 		r.mu.Unlock()

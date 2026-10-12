@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"frameworks/api_balancing/internal/control"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/placement"
 	placementpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_placement"
 	"google.golang.org/grpc/codes"
@@ -148,6 +149,11 @@ func (destination *PlacementDestination) PreparePlacement(ctx context.Context, r
 func (destination *PlacementDestination) retainPrepared(ctx context.Context, req *placementpb.PreparePlacementRequest, receipt PlacementReceipt) error {
 	if destination.RetainPrepared != nil {
 		if err := destination.RetainPrepared(ctx, clonePreparationRequest(req), clonePlacementReceipt(receipt)); err != nil {
+			// The completed receipt is durable, so a replay of this attempt on
+			// any replica retries only the retention.
+			if errors.Is(err, control.ErrReplicationContention) {
+				return status.Error(codes.Unavailable, "placement source record is contended")
+			}
 			return err
 		}
 		return destination.Receipts.Finish(ctx, req, receipt.Response, receipt.Pull)

@@ -101,14 +101,14 @@ func TestSourceReauthorizationDoesNotTurnContextIntoPermission(t *testing.T) {
 			}
 			switch change {
 			case "missing-context":
-				if err = media.Registry.RecordInboundPlacementDemand(ctx, input.InternalName, pull, "{}"); err != nil {
+				if err = media.Registry.RecordInboundPlacementDemand(ctx, input.InternalName, pull, "{}", nil); err != nil {
 					t.Fatal(err)
 				}
 			case "foreign-context":
 				query := proto.CloneOf(request.Query)
 				query.TenantId = "foreign"
 				payload, _ := protojson.Marshal(query)
-				if err = media.Registry.RecordInboundPlacementDemand(ctx, input.InternalName, pull, string(payload)); err != nil {
+				if err = media.Registry.RecordInboundPlacementDemand(ctx, input.InternalName, pull, string(payload), nil); err != nil {
 					t.Fatal(err)
 				}
 			case "consent":

@@ -29,14 +29,14 @@ func TestInboundPlacementDemandFollowsExactPhysicalAttempt(t *testing.T) {
 		case "url":
 			expected.DTSCURL = "dtsc://foreign/stream"
 		}
-		if err = registry.RecordInboundPlacementDemand(ctx, "stream", expected, "context"); err == nil {
+		if err = registry.RecordInboundPlacementDemand(ctx, "stream", expected, "context", nil); err == nil {
 			t.Fatalf("%s changed retained demand", mismatch)
 		}
 		if err = registry.RequireInboundPlacement(ctx, "stream", expected); err == nil {
 			t.Fatalf("%s changed placement requirement", mismatch)
 		}
 	}
-	if err = registry.RecordInboundPlacementDemand(ctx, "stream", pull, "context"); err != nil {
+	if err = registry.RecordInboundPlacementDemand(ctx, "stream", pull, "context", nil); err != nil {
 		t.Fatal(err)
 	}
 	warm, err := registry.RecordInboundPull(ctx, "stream", testInbound("edge"))
@@ -46,7 +46,7 @@ func TestInboundPlacementDemandFollowsExactPhysicalAttempt(t *testing.T) {
 	if _, err = registry.ClearInboundPull(ctx, "stream", "edge", pull.AttemptID); err != nil {
 		t.Fatal(err)
 	}
-	if err = registry.RecordInboundPlacementDemand(ctx, "stream", pull, "late"); err == nil {
+	if err = registry.RecordInboundPlacementDemand(ctx, "stream", pull, "late", nil); err == nil {
 		t.Fatal("cleared pull accepted late request context")
 	}
 	next := testInbound("edge")
@@ -73,7 +73,7 @@ func TestInboundPlacementDemandPersistsAcrossReplicasAndClear(t *testing.T) {
 	if err != nil || !marked.Locations["cluster-test"].InboundPulls["edge"].PlacementRequired || marked.Locations["cluster-test"].InboundPulls["edge"].PlacementDemand != "" {
 		t.Fatal("admission marker was not durable before request-context retention")
 	}
-	if err = writer.RecordInboundPlacementDemand(ctx, "stream", pull, "request-context"); err != nil {
+	if err = writer.RecordInboundPlacementDemand(ctx, "stream", pull, "request-context", nil); err != nil {
 		t.Fatal(err)
 	}
 	reader := NewStreamRegistry(nil, "cluster-test", time.Minute)
@@ -85,7 +85,7 @@ func TestInboundPlacementDemandPersistsAcrossReplicasAndClear(t *testing.T) {
 	if _, err = reader.ClearInboundPull(ctx, "stream", "edge", pull.AttemptID); err != nil {
 		t.Fatal(err)
 	}
-	if err = writer.RecordInboundPlacementDemand(ctx, "stream", pull, "late-context"); err == nil {
+	if err = writer.RecordInboundPlacementDemand(ctx, "stream", pull, "late-context", nil); err == nil {
 		t.Fatal("stale writer restored cleared request context")
 	}
 	entry, _, err := store.GetSource(ctx, "stream")
@@ -95,7 +95,7 @@ func TestInboundPlacementDemandPersistsAcrossReplicasAndClear(t *testing.T) {
 	server.Close()
 	bounded, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
 	defer cancel()
-	if err = writer.RecordInboundPlacementDemand(bounded, "stream", pull, "offline-context"); err == nil {
+	if err = writer.RecordInboundPlacementDemand(bounded, "stream", pull, "offline-context", nil); err == nil {
 		t.Fatal("failed persistence used a local fallback")
 	}
 }

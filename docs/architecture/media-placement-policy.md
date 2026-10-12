@@ -1077,6 +1077,14 @@ It omits policy revisions, grant inventory and credentials. This context is not 
 written only after the completed receipt is durable, fenced to the current physical attempt, and
 removed on explicit clearing; replacement pulls do not inherit it. A failed context write makes
 preparation unavailable, and replay retries that write without another publisher notification.
+Every viewer handed one pull was admitted with its own coordinates, and any of them is an admitted
+request to re-evaluate the pull with, so the first context is kept: a later viewer with the same
+identity, protocol, source generation and presence of coordinates leaves the record unchanged.
+Marking a pull placement-required, restarting its start grace and retaining context write the
+stream's shared registry record only when they change it, so a viewer herd on one stream does not
+contend for that record. Contention that still outlasts its compare-and-set retries answers
+`Unavailable`, which the calling cell retries on another replica of the destination cell and a
+viewer sees as a retryable 503.
 
 `ResolveOrReauthorizeSource` takes the existing completed-evidence fast path without a federation
 census. Missing/expired evidence, including a changed connection fence or renewed authority version,

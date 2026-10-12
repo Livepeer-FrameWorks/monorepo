@@ -239,6 +239,13 @@ func TestStreamRegistryContracts_RealValkey(t *testing.T) {
 	}
 }
 
+// The viewer-herd contract on the release-pinned engine: the compare-and-set
+// script and its retries behave as on miniredis under real concurrency.
+func TestInboundPullViewerHerd_RealValkey(t *testing.T) {
+	engine := dockervalkey.Start(t)
+	assertInboundHerdMutatesAtMostOnce(t, NewRedisRegistryStore(engine.Client, "cluster-test"))
+}
+
 func TestRelayGrantContracts_RealValkey(t *testing.T) {
 	engine := dockervalkey.Start(t)
 	previousCluster := GetLocalClusterID()

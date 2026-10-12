@@ -2875,9 +2875,13 @@ func (s *FoghornGRPCServer) resolveViewerEndpoint(ctx context.Context, req *shar
 			"content_type": resolvedType,
 			"content_id":   req.ContentId,
 		})
-		if status.Code(err) == codes.NotFound {
+		switch {
+		case status.Code(err) == codes.NotFound:
 			entry.Info("Resolved content has no playable artifact in this cell")
-		} else {
+		case control.ClassifyViewerPlacementError(err) == control.ViewerPlacementNotReady:
+			// A retryable refusal; under a viewer herd it is one line per viewer.
+			entry.Warn("Failed to resolve viewer endpoint")
+		default:
 			entry.Error("Failed to resolve viewer endpoint")
 		}
 		return nil, err

@@ -10,15 +10,24 @@
 #     than the stack's two edges hold, so part of it is refused for capacity.
 #   fit: STACK_BURST_FIT_PLAYS /play requests (default 600) at once, after the
 #     herd's unused reservations lapsed, within the edges' capacity.
+# And a third concentrated on two streams, one ingested in each cell:
+#   hot: STACK_BURST_HOT_PLAYS /play requests (default 600) at once, after the
+#     fit burst's reservations lapsed, each sent to a replica of the cell that
+#     does not ingest the stream, so every viewer of a stream is handed the one
+#     cross-cell pull into its arrival cell's edge. Within the edges' capacity.
 # Measures, as Foghorn /metrics deltas summed over the replicas, for each burst:
 #   media_request_central_rpcs_total for Quartermaster is 0 on every path, and
 #   for Commodore is 0 on every viewer path; placement_pair_reads_total misses
 #   stay within streams x replicas x seconds (a replica reads a pair at most
 #   once per second). Every herd /play is answered by the cell (307, or 503
-#   with Retry-After); every fit /play redirects to media.
+#   with Retry-After); every fit and hot /play redirects to media, every hot
+#   viewer to its arrival cell's edge, and no Foghorn replica runs out of
+#   retries writing a stream's registry record ("replication mutation
+#   contention") during the hot burst.
 # Catches: a per-request Quartermaster inventory read or Commodore call on the
-# viewer path, pair reads that are not shared across a burst, and viewers
-# refused while capacity remains.
+# viewer path, pair reads that are not shared across a burst, viewers refused
+# while capacity remains, and a herd on one stream refused because every
+# viewer's preparation rewrites that stream's shared pull record.
 # Sizing: every live stream runs a thumbnail process on its edge, and the
 # stack's cell-B edge (1.5 GiB) runs out of memory well before 100 streams, so
 # the default is 80. Every prepared viewer reserves an estimated 1 Mbit/s on
@@ -34,6 +43,7 @@ N=${STACK_BURST_STREAMS:-80}
 PLAYS=${STACK_BURST_PLAYS:-5000}
 USER_NEWS=${STACK_BURST_USER_NEW:-500}
 FIT_PLAYS=${STACK_BURST_FIT_PLAYS:-600}
+HOT_PLAYS=${STACK_BURST_HOT_PLAYS:-600}
 CONCURRENCY=${STACK_BURST_CONCURRENCY:-1000}
 RUN="burst-$(date +%s)"
 SRC="$STACK_STATE_DIR/$RUN.mp4"
@@ -149,6 +159,19 @@ def play(i):
     ok = code in (302, 307) and bool(h.get("location"))
     return ("play", code, ok, ok or (code == 503 and bool(h.get("retry"))), took, base)
 
+# A viewer of stream i % len(streams) arriving at a replica of the other cell.
+# where is "local:" when the redirect names the arrival cell's own edge.
+def play_cross(i):
+    pb, _, _, cell = streams[i % len(streams)]
+    arrival_cell = "b" if cell == "a" else "a"
+    arrival = cell_replicas[arrival_cell]
+    base = arrival[(i // len(streams)) % len(arrival)]
+    code, h, _, took = request(base, "GET", f"/play/{pb}/hls")
+    ok = code in (302, 307) and bool(h.get("location"))
+    host = urllib.parse.urlsplit(h.get("location", "")).hostname or ""
+    where = f"local:{base}" if ok and host == edges[arrival_cell] else f"{base} -> {host}"
+    return ("play", code, ok, ok or (code == 503 and bool(h.get("retry"))), took, where)
+
 def probe(pb, cell):
     code, h, _, took = request(cell_replicas[cell][0], "GET", f"/play/{pb}/hls")
     ok = code in (302, 307) and bool(h.get("location"))
@@ -185,6 +208,8 @@ elif mode == "burst":
         jobs += [lambda cell=cell, j=j: user_new(cell, j) for j in range(user_news)]
     # Interleave so both kinds are in flight together.
     jobs = [jobs[k] for k in sorted(range(len(jobs)), key=lambda k: (k * 7919) % len(jobs))]
+elif mode == "hot":
+    jobs = [lambda i=i: play_cross(i) for i in range(plays)]
 elif mode == "user_end":
     for cell in edges:
         jobs += [lambda cell=cell, j=j: user_end(cell, j) for j in range(user_news)]
@@ -206,6 +231,9 @@ for kind, code, ok, answered, took, where in results:
     if not ok:
         by_where[f"{kind} {code} {where}"] += 1
 report = {"elapsed": round(elapsed, 2)}
+if mode == "hot":
+    report["local"] = sum(1 for r in results if str(r[5]).startswith("local:"))
+    report["elsewhere"] = dict(collections.Counter(r[5] for r in results if r[2] and not str(r[5]).startswith("local:")).most_common(6))
 for kind, s in summary.items():
     lat = sorted(s["lat"])
     report[kind] = {"n": s["n"], "ok": s["ok"], "answered": s["answered"], "codes": dict(s["codes"]),
@@ -255,15 +283,18 @@ PY
 }
 VIEWER_PATHS='l.get("path") not in ("ingest_grpc", "ingest_http", "mist_push_rewrite", "mist_ingest_release")'
 
-# burst <label> <plays> <user_new per edge>: one burst and its metric checks.
+# burst <label> <plays> <user_new per edge> [mode] [streams file]: one burst and
+# its metric checks. Mode "burst" spreads over every stream and replica; "hot"
+# sends each stream's viewers to the other cell's replicas.
 burst() {
-  local label=$1 plays=$2 user_news=$3 start end window qm commodore purser misses bypass hits bound
+  local label=$1 plays=$2 user_news=$3 mode=${4:-burst} streams=${5:-$WORK/streams}
+  local start end window qm commodore purser misses bypass hits bound
   metrics "$WORK/$label.before"
   check "$label: every replica exports foghorn_placement_pair_reads_total" \
     [ "$(awk '$2 ~ /^foghorn_placement_pair_reads_total\{/ {print $1}' "$WORK/$label.before" | sort -u | wc -l | tr -d ' ')" -eq "${#REPLICAS[@]}" ]
   start=$(date +%s.%N)
   log "$label: $plays /play over ${#REPLICAS[@]} replicas and $user_news USER_NEW per edge, up to $CONCURRENCY in flight"
-  python3 "$WORK/burst.py" burst "$WORK/streams" "$WORK/$label.json" "${REPLICAS[*]}" "$plays" "$user_news" "$CONCURRENCY"
+  python3 "$WORK/burst.py" "$mode" "$streams" "$WORK/$label.json" "${REPLICAS[*]}" "$plays" "$user_news" "$CONCURRENCY"
   end=$(date +%s.%N)
   metrics "$WORK/$label.after"
   window=$(python3 -c "import math,sys; print(math.ceil(float(sys.argv[2]) - float(sys.argv[1])) + 1)" "$start" "$end")
@@ -311,6 +342,25 @@ check "the synthetic sessions are ended ($(field user_end '.user_end.ok') of $((
 sleep 35
 burst fit "$FIT_PLAYS" 0
 check "fit: every /play redirects to media ($(field fit '.play.ok') of $FIT_PLAYS)" [ "$(field fit '.play.ok')" -eq "$FIT_PLAYS" ]
+
+# The hot burst: one stream of each cell, every viewer arriving at the other
+# cell. One viewer of each first, so the herd shares an existing cross-cell pull
+# rather than measuring its arrangement.
+{ awk '$4 == "a"' "$WORK/streams" | head -1; awk '$4 == "b"' "$WORK/streams" | head -1; } >"$WORK/hot-streams"
+cross_cell_resolves() {
+  python3 "$WORK/burst.py" hot "$WORK/hot-streams" "$WORK/hot-warm.json" "${REPLICAS[*]}" 2 0 2
+  [ "$(jq -r '.play.ok' "$WORK/hot-warm.json")" -eq 2 ]
+}
+eventually 60 "each hot stream resolves through the other cell" cross_cell_resolves
+sleep 35
+HOT_SINCE=$(utc_now)
+burst hot "$HOT_PLAYS" 0 hot "$WORK/hot-streams"
+check "hot: every cross-cell /play on two streams redirects to media ($(field hot '.play.ok') of $HOT_PLAYS)" \
+  [ "$(field hot '.play.ok')" -eq "$HOT_PLAYS" ]
+check "hot: every viewer is sent to its arrival cell's edge, which has room ($(field hot '.local') of $HOT_PLAYS; elsewhere $(field hot '.elsewhere | tojson'))" \
+  [ "$(field hot '.local')" -eq "$HOT_PLAYS" ]
+contended=$(logs_since "$HOT_SINCE" foghorn foghorn-2 foghorn-b foghorn-b-2 | grep -c 'replication mutation contention')
+check "hot: no Foghorn replica exhausted its registry record retries (got $contended lines)" [ "${contended:-0}" -eq 0 ]
 
 # A sample of streams is fetched as a viewer would, so the redirects point at
 # segments and not only at a location.

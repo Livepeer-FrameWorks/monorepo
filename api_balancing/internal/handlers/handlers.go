@@ -2492,16 +2492,24 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 			respondPlaybackError(c, http.StatusNotFound, "STREAM_OFFLINE", "The stream is offline", nil)
 			return
 		}
-		logger.WithError(err).WithFields(logging.Fields{
+		placementClass := control.ClassifyViewerPlacementError(err)
+		entry := logger.WithError(err).WithFields(logging.Fields{
 			"view_key":      viewKey,
 			"internal_name": contentID,
 			"content_type":  contentType,
-		}).Error("Failed to resolve viewer endpoint")
+		})
+		// A destination that is not ready answers a retryable refusal; under a
+		// viewer herd that is one line per viewer, which is not an error.
+		if placementClass == control.ViewerPlacementNotReady {
+			entry.Warn("Failed to resolve viewer endpoint")
+		} else {
+			entry.Error("Failed to resolve viewer endpoint")
+		}
 		// A policy refusal is not a resolution failure: every content type
 		// reports it with the same placement code, so a client distinguishes
 		// "not permitted here" from "this content is broken". Authority that has
 		// not arrived or an unavailable dependency is retried after a short wait.
-		switch control.ClassifyViewerPlacementError(err) {
+		switch placementClass {
 		case control.ViewerPlacementDenied:
 			respondPlaybackError(c, http.StatusForbidden, "PLAYBACK_PLACEMENT_DENIED", "Playback of this content is not permitted from any available destination", nil)
 			return
