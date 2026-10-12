@@ -117,11 +117,12 @@ func TestDispatchChapter_NoSegmentsFailsSourceMissing(t *testing.T) {
 	parentCols := []string{
 		"tenant_id", "user_id", "stream_id", "stream_internal_name",
 		"origin_cluster_id", "storage_cluster_id", "retention_until", "recording_node",
+		"recording_active", "started_at_ms",
 	}
 	qmock.ExpectQuery(`FROM foghorn\.artifacts`).
 		WithArgs("dvrhash").
 		WillReturnRows(sqlmock.NewRows(parentCols).
-			AddRow("tenant-1", "user-1", "stream-1", "stream-int", "cluster-1", "cluster-1", nil, ""))
+			AddRow("tenant-1", "user-1", "stream-1", "stream-int", "cluster-1", "cluster-1", nil, "", false, int64(0)))
 
 	// Segment list returns zero rows for this chapter's media range.
 	segCols := []string{
@@ -178,11 +179,12 @@ func TestDispatchChapter_MissingSegmentsFailsSourceMissing(t *testing.T) {
 	parentCols := []string{
 		"tenant_id", "user_id", "stream_id", "stream_internal_name",
 		"origin_cluster_id", "storage_cluster_id", "retention_until", "recording_node",
+		"recording_active", "started_at_ms",
 	}
 	qmock.ExpectQuery(`FROM foghorn\.artifacts`).
 		WithArgs("dvrhash").
 		WillReturnRows(sqlmock.NewRows(parentCols).
-			AddRow("tenant-1", "user-1", "stream-1", "stream-int", "cluster-1", "cluster-1", nil, ""))
+			AddRow("tenant-1", "user-1", "stream-1", "stream-int", "cluster-1", "cluster-1", nil, "", false, int64(0)))
 
 	segCols := []string{
 		"artifact_hash", "segment_name", "sequence",

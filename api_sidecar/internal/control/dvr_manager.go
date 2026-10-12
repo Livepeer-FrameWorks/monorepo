@@ -62,6 +62,10 @@ var (
 	// accepted-but-unconfirmed push whose exact identity never appears) before
 	// the monitor stops it. A var so tests can shorten it.
 	dvrStartupTimeout = 5 * time.Minute
+	// dvrWriterExitWait bounds how long a stop waits for the stopped Mist
+	// writer to leave the push list before its final segment sync.
+	dvrWriterExitWait = 10 * time.Second
+	dvrWriterExitPoll = 250 * time.Millisecond
 )
 
 // DVRJob represents a running DVR recording session
@@ -1710,6 +1714,7 @@ func (dm *DVRManager) stopRecording(dvrHash string, sendFunc func(*ipcpb.Control
 	// the stop is CONFIRMED. We must never report completion or delete the job while
 	// a writer may still be live.
 	stopConfirmed := true
+	stopRequestedAt := dm.now()
 	if stopPushID > 0 {
 		if err := dm.mistClient.PushStop(stopPushID); err != nil {
 			job.Logger.WithError(err).Warn("Failed to stop MistServer push; leaving stop obligation open")
@@ -1756,9 +1761,14 @@ func (dm *DVRManager) stopRecording(dvrHash string, sendFunc func(*ipcpb.Control
 		return nil
 	}
 
-	// Final sync: flush remaining segments to S3. syncNewSegments uses
-	// job.syncMutex internally and is idempotent (SyncedSegments tracks
-	// what's already uploaded).
+	// Mist writes the final segment as the stopped writer exits, and Foghorn
+	// rejects segments once the stop report claims the recording, so the
+	// final sync waits for that exit. syncNewSegments uses job.syncMutex
+	// internally and is idempotent (SyncedSegments tracks what's already
+	// uploaded).
+	if stopConfirmed {
+		dm.awaitDVRWriterExit(stopIdentity, stopRequestedAt, job.Logger)
+	}
 	dm.syncNewSegments(job)
 
 	dm.mutex.Lock()
@@ -2419,6 +2429,10 @@ func (dm *DVRManager) maintainPushStatus(job *DVRJob) {
 		}
 		dm.mutex.Unlock()
 		if exists {
+			// Foghorn rejects segments once the stop report claims the
+			// recording, and the final segment's RECORDING_SEGMENT sync may
+			// still be in flight. Ledger every segment the writer left first.
+			dm.syncNewSegments(job)
 			job.Logger.Info("DVR recording completed successfully")
 			dm.sendCompletion(job, "success", "")
 		}
@@ -2771,6 +2785,33 @@ func (dm *DVRManager) writerEndedSince(snap pushIdentity, since time.Time) bool 
 	return false
 }
 
+// awaitDVRWriterExit waits, up to dvrWriterExitWait, until Mist reports the
+// stopped writer ended or a successful push list no longer shows it. Mist
+// closes the final segment and its playlist entry before the writer exits.
+// A writer still listed at the deadline is logged; the caller syncs what the
+// playlist holds by then.
+func (dm *DVRManager) awaitDVRWriterExit(snap pushIdentity, since time.Time, logger logging.Logger) {
+	if dm.mistClient == nil {
+		return
+	}
+	deadline := dm.now().Add(dvrWriterExitWait)
+	for {
+		if dm.writerEndedSince(snap, since) {
+			return
+		}
+		if pushes, err := dm.mistClient.PushList(); err == nil {
+			if _, live := findExactDVRPush(pushes, snap.streamName, snap.targetURI, snap.dvrHash); !live {
+				return
+			}
+		}
+		if !dm.now().Before(deadline) {
+			logger.WithField("dvr_hash", snap.dvrHash).Warn("Stopped DVR writer still listed after the exit wait; syncing the playlist as it stands")
+			return
+		}
+		dm.sleep(dvrWriterExitPoll)
+	}
+}
+
 func dvrPushMatches(push mist.PushInfo, streamName, targetURI, dvrHash string) bool {
 	if push.StreamName != streamName {
 		return false
@@ -2876,26 +2917,18 @@ func (dm *DVRManager) syncNewSegments(job *DVRJob) {
 	segmentsDir := filepath.Join(job.OutputDir, "segments")
 	var newCount int
 	var skippedNoClock int
-	var nextClockMs int64
-
-	for _, seg := range parsed.Segments {
-		durationMs := int64(seg.Duration * 1000.0)
-		mediaStartMs := seg.ProgramDateTimeMs
-		if mediaStartMs <= 0 && nextClockMs > 0 {
-			mediaStartMs = nextClockMs
-		}
-		if mediaStartMs > 0 {
-			nextClockMs = mediaStartMs + durationMs
-		}
+	for _, seg := range dvrPlaylistClocks(parsed) {
+		durationMs := seg.durationMs
+		mediaStartMs := seg.startMs
 
 		job.syncMutex.Lock()
-		alreadySynced := job.SyncedSegments[seg.Name]
+		alreadySynced := job.SyncedSegments[seg.name]
 		job.syncMutex.Unlock()
 		if alreadySynced {
 			continue
 		}
 
-		segPath := filepath.Join(segmentsDir, seg.Name)
+		segPath := filepath.Join(segmentsDir, seg.name)
 		info, err := os.Stat(segPath)
 		if err != nil {
 			// Segment file is gone (evicted) or not yet present. Don't
@@ -2909,11 +2942,11 @@ func (dm *DVRManager) syncNewSegments(job *DVRJob) {
 		mediaEndMs := mediaStartMs + durationMs
 
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		resp, err := RecordDVRSegment(ctx, job.DVRHash, seg.Name, segPath, mediaStartMs, mediaEndMs, durationMs)
+		resp, err := RecordDVRSegment(ctx, job.DVRHash, seg.name, segPath, mediaStartMs, mediaEndMs, durationMs)
 		if err != nil || resp == nil {
 			cancel()
 			if err != nil {
-				job.Logger.WithError(err).WithField("segment", seg.Name).Warn("Reconciliation: RecordDVRSegment failed")
+				job.Logger.WithError(err).WithField("segment", seg.name).Warn("Reconciliation: RecordDVRSegment failed")
 			}
 			continue
 		}
@@ -2922,14 +2955,14 @@ func (dm *DVRManager) syncNewSegments(job *DVRJob) {
 			reason := resp.GetReason()
 			if reason == "dvr_terminal" {
 				if dropErr := SendDVRSegmentDropped(
-					job.DVRHash, seg.Name, "artifact_terminal", segPath,
+					job.DVRHash, seg.name, "artifact_terminal", segPath,
 					mediaStartMs, mediaEndMs, durationMs, uint64(info.Size()), false,
 				); dropErr != nil {
-					job.Logger.WithError(dropErr).WithField("segment", seg.Name).Debug("Reconciliation: DVRSegmentDropped emit failed")
+					job.Logger.WithError(dropErr).WithField("segment", seg.name).Debug("Reconciliation: DVRSegmentDropped emit failed")
 				}
 			} else {
 				job.Logger.WithFields(logging.Fields{
-					"segment": seg.Name,
+					"segment": seg.name,
 					"reason":  reason,
 				}).Warn("Reconciliation: RecordDVRSegment rejected; leaving segment retryable")
 			}
@@ -2942,27 +2975,27 @@ func (dm *DVRManager) syncNewSegments(job *DVRJob) {
 		if upErr := dm.uploadSegmentToS3(ctx, segPath, resp.GetPresignedPutUrl()); upErr != nil {
 			cancel()
 			if errors.Is(upErr, ErrSegmentUploadInFlight) {
-				job.Logger.WithField("segment", seg.Name).Debug("Reconciliation: upload already in flight")
+				job.Logger.WithField("segment", seg.name).Debug("Reconciliation: upload already in flight")
 				continue
 			}
-			job.Logger.WithError(upErr).WithField("segment", seg.Name).Warn("Reconciliation: upload failed")
+			job.Logger.WithError(upErr).WithField("segment", seg.name).Warn("Reconciliation: upload failed")
 			continue
 		}
 		cancel()
-		markErr := SendMarkDVRSegmentUploaded(job.DVRHash, seg.Name, uint64(info.Size()))
+		markErr := SendMarkDVRSegmentUploaded(job.DVRHash, seg.name, uint64(info.Size()))
 		if markErr != nil {
-			job.Logger.WithError(markErr).WithField("segment", seg.Name).Warn("Reconciliation: MarkDVRSegmentUploaded failed")
+			job.Logger.WithError(markErr).WithField("segment", seg.name).Warn("Reconciliation: MarkDVRSegmentUploaded failed")
 		}
 		job.syncMutex.Lock()
-		job.SyncedSegments[seg.Name] = true
+		job.SyncedSegments[seg.name] = true
 		if markErr != nil {
-			job.UnmarkedSegments[seg.Name] = uint64(info.Size())
+			job.UnmarkedSegments[seg.name] = uint64(info.Size())
 		} else {
-			delete(job.UnmarkedSegments, seg.Name)
+			delete(job.UnmarkedSegments, seg.name)
 		}
 		job.syncMutex.Unlock()
 		if idx := localSegmentIndex; idx != nil {
-			idx.MarkUploaded(job.DVRHash, seg.Name, segPath, info.Size())
+			idx.MarkUploaded(job.DVRHash, seg.name, segPath, info.Size())
 		}
 		newCount++
 	}

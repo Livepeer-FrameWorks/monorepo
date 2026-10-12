@@ -40,7 +40,12 @@ func (f *endsFirstPushFakeMist) PushStart(streamName, targetURI string) error {
 	return nil
 }
 
-func (f *endsFirstPushFakeMist) PushStop(int) error { return nil }
+func (f *endsFirstPushFakeMist) PushStop(int) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.live = false
+	return nil
+}
 
 func (f *endsFirstPushFakeMist) PushList() ([]mist.PushInfo, error) {
 	f.mu.Lock()

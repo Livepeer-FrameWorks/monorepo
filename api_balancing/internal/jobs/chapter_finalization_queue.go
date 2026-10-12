@@ -52,6 +52,10 @@ const (
 	// dispatch without local-segment access from the origin).
 	chapterFinalizeAbandonNodeGrace = 4 * time.Hour
 	chapterRecoveryURLTTL           = 6 * time.Hour
+	// chapterLedgerSettleMaxWait bounds how long past its end a chapter of a
+	// still-recording DVR waits for the ledger to cover its range. A hole that
+	// outlasts it is a real media gap, finalized with has_gaps.
+	chapterLedgerSettleMaxWait = 5 * time.Minute
 )
 
 type ChapterFinalizationQueueConfig struct {
@@ -219,6 +223,31 @@ func (q *ChapterFinalizationQueue) dispatchChapter(ctx context.Context, c contro
 	parent, err := q.readParentDVR(ctx, c.ArtifactHash)
 	if err != nil {
 		return fmt.Errorf("read parent DVR: %w", err)
+	}
+
+	// The sweeper closes a chapter at its boundary, but the segment running
+	// across that boundary, and any segment whose RECORDING_SEGMENT sync
+	// lags, reaches the ledger later. A segment that starts inside the range
+	// belongs to no other chapter, so dispatching early drops its media.
+	if parent.recordingActive {
+		settled, settleErr := chapterLedgerSettled(ctx, c, parent.startedAtMs)
+		if settleErr != nil {
+			return fmt.Errorf("check chapter ledger coverage: %w", settleErr)
+		}
+		if !settled {
+			if time.Since(time.UnixMilli(c.EndMs)) < chapterLedgerSettleMaxWait {
+				q.logger.WithFields(logging.Fields{
+					"chapter_id": c.ChapterID,
+					"dvr_hash":   c.ArtifactHash,
+				}).Debug("Chapter finalize: ledger does not cover the chapter yet; awaiting its segments")
+				return nil
+			}
+			q.logger.WithFields(logging.Fields{
+				"chapter_id": c.ChapterID,
+				"dvr_hash":   c.ArtifactHash,
+				"wait":       chapterLedgerSettleMaxWait.String(),
+			}).Warn("Chapter finalize: ledger hole outlasted the settle wait; finalizing with the recorded segments")
+		}
 	}
 
 	segments, err := control.ListDVRSegmentsOwnedByChapter(ctx, c.ArtifactHash, c.StartMs, c.EndMs)
@@ -454,6 +483,21 @@ type parentDVR struct {
 	// retentionUntil is the parent DVR's retention horizon; a chapter inherits it at
 	// allocation so the chapter's lifetime always tracks the parent (keep-forever ⇒ NULL).
 	retentionUntil sql.NullTime
+	// recordingActive is true while the DVR still accepts segments into its
+	// ledger; startedAtMs is its first recorded media (0 when none yet).
+	recordingActive bool
+	startedAtMs     int64
+}
+
+// chapterLedgerSettled reports whether the ledger holds every segment whose
+// media starts inside the chapter: the rows overlapping the chapter cover it
+// from the later of its start and the recording's first media to its end.
+func chapterLedgerSettled(ctx context.Context, c control.DVRChapterRow, startedAtMs int64) (bool, error) {
+	rows, err := control.ListDVRSegmentsForRange(ctx, c.ArtifactHash, c.StartMs, c.EndMs)
+	if err != nil {
+		return false, err
+	}
+	return control.DVRSegmentsCoverRange(rows, max(c.StartMs, startedAtMs), c.EndMs), nil
 }
 
 func (q *ChapterFinalizationQueue) readParentDVR(ctx context.Context, dvrHash string) (parentDVR, error) {
@@ -468,7 +512,7 @@ func (q *ChapterFinalizationQueue) readParentDVR(ctx context.Context, dvrHash st
 	p = parentDVR{tenantID: row.TenantID, userID: row.UserID, streamID: row.StreamID,
 		streamInternalName: row.StreamInternalName, originClusterID: row.OriginClusterID,
 		storageClusterID: row.StorageClusterID, retentionUntil: row.RetentionUntil,
-		recordingNode: row.RecordingNode}
+		recordingNode: row.RecordingNode, recordingActive: row.RecordingActive, startedAtMs: row.StartedAtMs}
 	return p, nil
 }
 

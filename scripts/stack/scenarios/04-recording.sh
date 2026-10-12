@@ -106,6 +106,23 @@ while IFS=' ' read -r cid cpb clen; do
   echo "    chapter ${cid:0:8}: expected ${clen}s"
   every_replica "chapter ${cid:0:8} replays its full ${clen}s" "$cpb" chapter_full
 done < <(chapters | jq -r '.[] | select(.state=="FINALIZED" or .state=="FROZEN") | "\(.chapterId) \(.playbackId // "") \(((.endMs - .startMs) / 1000) | floor)"')
-check "a chapter of the full ${WINDOW}s window was recorded" json_has "$(chapters)" \
+C=$(chapters)
+F=$FAIL
+check "a chapter of the full ${WINDOW}s window was recorded" json_has "$C" \
   "any((.state == \"FINALIZED\" or .state == \"FROZEN\") and ((.endMs - .startMs) / 1000) >= $((WINDOW - 4)))"
+# The chapters hold the whole ${PUSH}s push back to back: a segment that reached
+# the ledger after its chapter was dispatched, or after the stop claimed the
+# recording, is in no chapter.
+echo "    chapter spans: $(echo "$C" | jq -c 'sort_by(.startMs) | map((.endMs - .startMs) / 1000)')"
+check "the chapters hold the whole ${PUSH}s push without a hole" json_has "$C" \
+  "sort_by(.startMs) | all(.[]; .state == \"FINALIZED\" or .state == \"FROZEN\")
+   and (map(.endMs - .startMs) | add) >= $(((PUSH - 2) * 1000))
+   and ([range(1; length) as \$i | (.[\$i].startMs - .[\$i - 1].endMs) | fabs <= 1000] | all)"
+if [ "$FAIL" -gt "$F" ]; then
+  echo "    segment ledger (offset from the first media ms, duration, status, recorded at):"
+  pg "$FOGHORN_A_DB" "SELECT s.segment_name, s.media_start_ms - (EXTRACT(EPOCH FROM a.started_at) * 1000)::bigint, s.duration_ms, s.status, s.created_at
+    FROM foghorn.dvr_segments s JOIN foghorn.artifacts a ON a.artifact_hash = s.artifact_hash
+    WHERE s.artifact_hash = (SELECT artifact_hash FROM foghorn.dvr_chapters WHERE chapter_id = '$FIRST_ID') AND a.tenant_id = '$STACK_TENANT_ID'
+    ORDER BY s.media_start_ms" | sed 's/^/      /'
+fi
 finish

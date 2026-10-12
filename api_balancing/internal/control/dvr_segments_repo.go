@@ -478,6 +478,29 @@ func ListDVRSegmentsForRange(ctx context.Context, artifactHash string, startMs, 
 	return mapDVRSegmentRows(rows), nil
 }
 
+// dvrSegmentCoverageGapToleranceMs absorbs the millisecond drift between one
+// segment's playlist-derived end and the next segment's start. A missing
+// segment spans at least one keyframe interval.
+const dvrSegmentCoverageGapToleranceMs = 1000
+
+// DVRSegmentsCoverRange reports whether ledger rows ordered by media start
+// (ListDVRSegmentsForRange) cover [startMs, endMs) without a hole: every
+// segment whose media starts in the range is recorded, including the one
+// that runs past endMs.
+func DVRSegmentsCoverRange(rows []DVRSegmentRow, startMs, endMs int64) bool {
+	covered := startMs
+	for _, r := range rows {
+		if r.MediaStartMs > covered+dvrSegmentCoverageGapToleranceMs {
+			return false
+		}
+		covered = max(covered, r.MediaEndMs)
+		if covered >= endMs {
+			return true
+		}
+	}
+	return false
+}
+
 // LookupDVRSegmentsByName returns ledger rows matching (artifact_hash,
 // segment_name) IN (...). Bounded by the caller-supplied name list (caller
 // must page; current callers cap at ~500 names per call). Used by sidecar

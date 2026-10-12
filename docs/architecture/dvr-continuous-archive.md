@@ -104,13 +104,14 @@ A chapter is **playable** at `finalized` or later — the canonical `.mkv` is th
 
 `chapter_finalization_queue.dispatchChapter`:
 
-1. Read parent DVR (tenant, stream, origin cluster, recording node).
-2. Range-query `foghorn.dvr_segments`; abort with `failed_source_missing` if the range is empty.
-3. Build per-segment refs. Uploaded / deleted_local rows carry a presigned recovery URL minted by Foghorn; lost_local rows carry one too when an S3 object survives the local-loss. A presign error is fail-retryable — the chapter rolls back to `closed`.
-4. Resolve the tenant's `dvr_finalize` `processes_json` via Commodore, then fill the Livepeer `hardcoded_broadcasters` list from the cluster's gateway instances (`ApplyLivepeerBroadcasters`) + cache for the STREAM_PROCESS trigger. A miss here is fail-retryable; the chapter stays `closed` rather than finalizing without the tenant's configured pipeline.
-5. `MarkChapterFinalizing` — transitions `closed → finalizing` with the chapter's playback artifact hash.
-6. Pick the dispatch target: recording origin if alive, otherwise an alternate processing-capable node selected via `routeProcessingJob` (works whenever every ref has a recovery URL — the alternate Mist reads from S3).
-7. Dispatch `ProcessingJobRequest{job_type='dvr_chapter_finalize'}` with the resolved processes_json. On send error, `RetryChapterFinalize` rolls back to `closed`.
+1. Read parent DVR (tenant, stream, origin cluster, recording node, whether it still records).
+2. While the recording still accepts segments, wait until the ledger covers the chapter: the rows overlapping `[start_ms, end_ms)` run without a hole (1 s tolerance) from the later of `start_ms` and the first recorded media to `end_ms`. The sweeper closes a chapter at its boundary, before the segment that runs across it has finished, and a segment owned by this chapter belongs to no other; dispatching early drops its media. A hole that lasts 5 minutes past `end_ms` is a real media gap and the chapter finalizes with `has_gaps`. A stopped recording dispatches at once: its ledger is closed.
+3. Range-query `foghorn.dvr_segments`; abort with `failed_source_missing` if the range is empty.
+4. Build per-segment refs. Uploaded / deleted_local rows carry a presigned recovery URL minted by Foghorn; lost_local rows carry one too when an S3 object survives the local-loss. A presign error is fail-retryable — the chapter rolls back to `closed`.
+5. Resolve the tenant's `dvr_finalize` `processes_json` via Commodore, then fill the Livepeer `hardcoded_broadcasters` list from the cluster's gateway instances (`ApplyLivepeerBroadcasters`) + cache for the STREAM_PROCESS trigger. A miss here is fail-retryable; the chapter stays `closed` rather than finalizing without the tenant's configured pipeline.
+6. `MarkChapterFinalizing` — transitions `closed → finalizing` with the chapter's playback artifact hash.
+7. Pick the dispatch target: recording origin if alive, otherwise an alternate processing-capable node selected via `routeProcessingJob` (works whenever every ref has a recovery URL — the alternate Mist reads from S3).
+8. Dispatch `ProcessingJobRequest{job_type='dvr_chapter_finalize'}` with the resolved processes_json. On send error, `RetryChapterFinalize` rolls back to `closed`.
 
 ### Helmsman finalize handler
 
@@ -180,6 +181,7 @@ or control-plane call cannot pin a Foghorn connection or chapter lock.
 
 - Forwards Mist triggers (`RECORDING_SEGMENT`, `RECORDING_END`, etc.) to Foghorn over the control stream.
 - Uploads segment bytes to S3 against presigned URLs minted by Foghorn (recovery bridge, not playback).
+- Sends `DVRStopped` only after the writer's last segment is in the ledger: Foghorn rejects segments once the stop claims the recording. When Mist ends the push itself, Helmsman syncs the playlist before the report; on a Foghorn stop it first waits (up to 10 s) for the stopped writer to leave Mist's push list, since Mist closes the final segment as the writer exits. The trigger path and the playlist sync time a segment identically (`dvrPlaylistClocks`).
 - Emits `DVRSegmentDropped(was_uploaded=…)` for forced evictions and post-stop reclaim orders.
 - Maintains a per-segment local cache index (`api_sidecar/internal/control/local_segment_index.go`); rebuilds it from disk on restart via `RestoreLocalSegmentIndex` RPC.
 - Owns the chapter finalize processing path (`handleChapterFinalize`): temp HLS, MistProc, push, validate, DTSH boot.

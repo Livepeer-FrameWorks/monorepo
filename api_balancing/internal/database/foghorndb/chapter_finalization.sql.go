@@ -59,7 +59,10 @@ SELECT a.tenant_id::text AS tenant_id,
        a.retention_until,
        COALESCE((SELECT node_id FROM foghorn.artifact_nodes
                  WHERE artifact_hash = a.artifact_hash AND is_orphaned = false
-                 ORDER BY last_seen_at DESC NULLS LAST LIMIT 1), '')::text AS recording_node
+                 ORDER BY last_seen_at DESC NULLS LAST LIMIT 1), '')::text AS recording_node,
+       -- The recording still accepts segments into its ledger.
+       (a.status IN ('requested', 'starting', 'recording', 'stopping'))::boolean AS recording_active,
+       COALESCE(FLOOR(EXTRACT(EPOCH FROM a.started_at) * 1000), 0)::bigint AS started_at_ms
 FROM foghorn.artifacts a
 WHERE a.artifact_hash = $1 AND a.artifact_type = 'dvr'
 `
@@ -73,6 +76,8 @@ type GetChapterParentDVRRow struct {
 	StorageClusterID   string       `db:"storage_cluster_id" json:"storage_cluster_id"`
 	RetentionUntil     sql.NullTime `db:"retention_until" json:"retention_until"`
 	RecordingNode      string       `db:"recording_node" json:"recording_node"`
+	RecordingActive    bool         `db:"recording_active" json:"recording_active"`
+	StartedAtMs        int64        `db:"started_at_ms" json:"started_at_ms"`
 }
 
 func (q *Queries) GetChapterParentDVR(ctx context.Context, artifactHash string) (GetChapterParentDVRRow, error) {
@@ -87,6 +92,8 @@ func (q *Queries) GetChapterParentDVR(ctx context.Context, artifactHash string) 
 		&i.StorageClusterID,
 		&i.RetentionUntil,
 		&i.RecordingNode,
+		&i.RecordingActive,
+		&i.StartedAtMs,
 	)
 	return i, err
 }
