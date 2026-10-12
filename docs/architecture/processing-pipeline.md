@@ -103,7 +103,10 @@ the last-good record for the next pass.
    lineage, so Helmsman records the source tracks when it cuts: it reads the Tracks header of the
    same cut narrowed to `video=source` (Mist writes each track as stream index + 1) and of the staged
    file, and maps them onto the processing stream's tracks in file order
-   (`processing_source_identity.go`). A mapping that does not line up fails the clip.
+   (`processing_source_identity.go`). A cut declares every selected track, also one that holds none
+   of its frames (a rendition replaced just before the cut); the processing stream does not
+   register those, so Helmsman scans the staged file's blocks and leaves them out by the same rule
+   (no frames, or video without a keyframe). A mapping that still does not line up fails the clip.
 
 ### VOD upload
 
@@ -286,7 +289,12 @@ whose output changed (another init or resolution, e.g. another orchestrator)
 registers a replacement track under the same key, and the buffer removes the old
 track at once. A replacement configuration (`PROCESS_REPLACE`, Livepeer → CPU
 fallback) has its own identity: it never takes the replaced producer's tracks,
-whose data stays in the stream. In a processing stream a restarted Livepeer run
+whose data stays in the stream. A live Livepeer process gives up a segment its
+gateway had no result for within the segment's budget (its duration plus one
+second), as it does a segment every gateway rejected, and continues with the
+next; it exits unrecoverably, which brings the replacement, only after five
+consecutive segments failed. A VOD or processing job cannot leave that hole and
+falls back at the first. In a processing stream a restarted Livepeer run
 starts at the first source keyframe after what its renditions already hold.
 On live streams the buffer keeps a process output whose process is being
 restarted, instead of idle-erasing it, until the restarted process claims it,

@@ -27,11 +27,14 @@ import (
 //     Mist's own lineage (mistserver lib/stream.cpp, trackLow == "source"), so
 //     the same cut URL with video=source names the source TrackNumbers.
 //  3. processing+ reads the staged file as a realtime input, which numbers the
-//     file's tracks 0..n in file order and only skips (never later maps) a
-//     track without frames (mistserver src/input/input.cpp realtimeMainLoop).
-//     The k-th processing+ video track by id is therefore the k-th staged
-//     video TrackEntry, provided none was skipped; counts and heights are
-//     checked to prove that.
+//     file's tracks 0..n in file order and does not register a track without
+//     frames, or a video track without a keyframe (mistserver
+//     src/input/input.cpp realtimeMainLoop, realtimeTrackSkipReason). A cut
+//     declares every selected track even when it holds none of its frames: a
+//     rendition whose producer was replaced just before the cut. The staged
+//     file's blocks are scanned to apply the same rule, so the k-th
+//     processing+ video track by id is the k-th registered staged video
+//     TrackEntry; counts and heights are checked to prove that.
 
 const (
 	ebmlIDSegment     = 0x18538067
@@ -44,6 +47,9 @@ const (
 	ebmlIDVideo       = 0xE0
 	ebmlIDPixelWidth  = 0xB0
 	ebmlIDPixelHeight = 0xBA
+	ebmlIDBlockGroup  = 0xA0
+	ebmlIDBlock       = 0xA1
+	ebmlIDSimpleBlock = 0xA3
 
 	mkvTrackTypeVideo = 1
 
@@ -59,10 +65,88 @@ type mkvTrack struct {
 	codecID string
 	width   int
 	height  int
+	// realtimeSkip is why Mist's realtime input does not register this track
+	// of the staged file; empty when it does.
+	realtimeSkip string
 }
 
 func (t mkvTrack) isPlayableVideo() bool {
 	return t.trackTy == mkvTrackTypeVideo && t.codecID != "V_MJPEG"
+}
+
+// mkvBlockPresence is what a file's blocks hold for one TrackNumber.
+type mkvBlockPresence struct {
+	frames   bool
+	keyframe bool
+}
+
+// realtimeTrackSkipReason mirrors mistserver src/processing_lifecycle.h for a
+// fully indexed file.
+func realtimeTrackSkipReason(t mkvTrack, p mkvBlockPresence) string {
+	if !p.frames {
+		return "it has no frames"
+	}
+	if t.trackTy == mkvTrackTypeVideo && !p.keyframe {
+		return "it has no keyframe"
+	}
+	return ""
+}
+
+// readMKVBlockPresence scans every SimpleBlock and Block of an MKV file and
+// reports, per TrackNumber, whether it carries a frame and a keyframe (the
+// block flag's top bit, as Mist's EBML input reads it). Only block headers are
+// read; payloads are skipped.
+func readMKVBlockPresence(r io.Reader) (map[uint64]mkvBlockPresence, error) {
+	br := bufio.NewReaderSize(r, 64<<10)
+	presence := map[uint64]mkvBlockPresence{}
+	for {
+		id, size, err := readEBMLElementHeader(br)
+		if errors.Is(err, io.EOF) {
+			return presence, nil
+		}
+		if err != nil {
+			return nil, fmt.Errorf("mkv blocks: %w", err)
+		}
+		switch id {
+		case ebmlIDSegment, ebmlIDCluster, ebmlIDBlockGroup:
+			// Containers: their children follow directly, also when the
+			// size is unknown (a live-written Segment or Cluster).
+			continue
+		case ebmlIDSimpleBlock, ebmlIDBlock:
+			if size < 4 {
+				return nil, fmt.Errorf("mkv blocks: block of %d bytes", size)
+			}
+			raw, numLen, err := readEBMLVint(br)
+			if err != nil {
+				return nil, fmt.Errorf("mkv blocks: block track number: %w", err)
+			}
+			track := raw & (uint64(1)<<(7*numLen) - 1)
+			var head [3]byte // timecode (2) and flags
+			if _, err := io.ReadFull(br, head[:]); err != nil {
+				return nil, fmt.Errorf("mkv blocks: block header: %w", err)
+			}
+			payload := size - int64(numLen) - 3
+			if payload < 0 {
+				return nil, fmt.Errorf("mkv blocks: block of %d bytes", size)
+			}
+			p := presence[track]
+			if payload > 0 {
+				p.frames = true
+				p.keyframe = p.keyframe || head[2]&0x80 != 0
+			}
+			presence[track] = p
+			if _, err := br.Discard(int(payload)); err != nil {
+				return nil, fmt.Errorf("mkv blocks: skip block: %w", err)
+			}
+		default:
+			if size < 0 {
+				return nil, fmt.Errorf("mkv blocks: element %#x of unknown size", id)
+			}
+			if _, err := br.Discard(int(size)); err != nil {
+				return nil, fmt.Errorf("mkv blocks: skip element %#x: %w", id, err)
+			}
+		}
+	}
 }
 
 // readMKVTracks reads an MKV stream up to and including its first Tracks
@@ -276,17 +360,34 @@ func probeClipSourceTrackNumbers(ctx context.Context, cutURL string) (map[uint64
 	return numbers, nil
 }
 
+// readStagedMKVTracks returns the staged file's TrackEntries in file order,
+// each marked with whether Mist's realtime input registers it.
 func readStagedMKVTracks(path string) ([]mkvTrack, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
-	return readMKVTracks(f)
+	tracks, err := readMKVTracks(f)
+	if err != nil {
+		return nil, err
+	}
+	if _, err = f.Seek(0, io.SeekStart); err != nil {
+		return nil, err
+	}
+	presence, err := readMKVBlockPresence(f)
+	if err != nil {
+		return nil, err
+	}
+	for i := range tracks {
+		tracks[i].realtimeSkip = realtimeTrackSkipReason(tracks[i], presence[tracks[i].number])
+	}
+	return tracks, nil
 }
 
 // clipSourceIdentity is what a clip records at cut time: the staged file's
-// video TrackEntries in file order and which TrackNumbers are source tracks.
+// video TrackEntries that processing+ registers, in file order, and which
+// TrackNumbers are source tracks.
 type clipSourceIdentity struct {
 	stagedVideo   []mkvTrack
 	sourceNumbers map[uint64]bool
@@ -295,7 +396,7 @@ type clipSourceIdentity struct {
 func newClipSourceIdentity(staged []mkvTrack, sourceNumbers map[uint64]bool) *clipSourceIdentity {
 	id := &clipSourceIdentity{sourceNumbers: sourceNumbers}
 	for _, t := range staged {
-		if t.isPlayableVideo() {
+		if t.isPlayableVideo() && t.realtimeSkip == "" {
 			id.stagedVideo = append(id.stagedVideo, t)
 		}
 	}

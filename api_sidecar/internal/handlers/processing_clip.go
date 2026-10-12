@@ -71,6 +71,11 @@ func (h *ProcessingJobHandler) handleClip(req *ipcpb.ProcessingJobRequest, send 
 		h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("clip staged source header: %v", headerErr), nil, "", 0)
 		return
 	}
+	for _, t := range stagedTracks {
+		if t.realtimeSkip != "" {
+			log.WithFields(logging.Fields{"track_number": t.number, "reason": t.realtimeSkip}).Info("Clip: staged track is not part of the processing stream")
+		}
+	}
 	sourceIdentity := newClipSourceIdentity(stagedTracks, sourceNumbers)
 	setProcessingSourceOverride(streamName, stagedSourcePath)
 	log.WithField("staged_path", stagedSourcePath).Info("Staged clip source for processing")

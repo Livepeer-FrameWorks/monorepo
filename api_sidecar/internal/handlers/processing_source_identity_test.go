@@ -24,7 +24,11 @@ import (
 //   - mist_cut:            ?audio=all&video=all,!JPEG&meta=all&subtitle=all&rate=0
 func readMistFixture(t *testing.T, name string) []mkvTrack {
 	t.Helper()
-	tracks, err := readStagedMKVTracks(filepath.Join("testdata", name))
+	head, err := os.ReadFile(filepath.Join("testdata", name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tracks, err := readMKVTracks(bytes.NewReader(head))
 	if err != nil {
 		t.Fatalf("%s: %v", name, err)
 	}
@@ -69,7 +73,9 @@ func fakeMistCutBody() []byte {
 	tracks := append(ebmlElement(ebmlIDTrackEntry, video), ebmlElement(ebmlIDTrackEntry, audio)...)
 	header := ebmlElement(0x1A45DFA3, ebmlElement(0x4282, []byte("matroska")))
 	segment := append([]byte{0x18, 0x53, 0x80, 0x67, 0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}, ebmlElement(ebmlIDTracks, tracks)...)
-	return append(append(header, segment...), ebmlElement(ebmlIDCluster, []byte{0x00})...)
+	cluster := append(ebmlUintElement(0xE7, 0), mkvBlock(ebmlIDSimpleBlock, 1, true)...)
+	cluster = append(cluster, mkvBlock(ebmlIDSimpleBlock, 2, true)...)
+	return append(append(header, segment...), ebmlElement(ebmlIDCluster, cluster)...)
 }
 
 func TestFakeMistCutBodyParses(t *testing.T) {
@@ -207,7 +213,8 @@ func TestClipSourceIdentityFailsClosedWhenStagedTracksDoNotLineUp(t *testing.T) 
 	streamData, identity := r184StagedClip(21370)
 	health := streamData["health"].(map[string]interface{})
 
-	// Mist skipped a frameless staged track: positions no longer line up.
+	// A staged track the file shows with frames is missing from the stream:
+	// positions no longer line up.
 	delete(health, "video_H264_1280x720_30fps_3")
 	if _, err := identity.sourceTrackIDs(inspectProcessingActiveStream(streamData).videoTracks); err == nil {
 		t.Fatal("a missing staged video track must fail the mapping")
@@ -218,6 +225,87 @@ func TestClipSourceIdentityFailsClosedWhenStagedTracksDoNotLineUp(t *testing.T) 
 	health["video_H264_1920x1080_30fps_2"].(map[string]interface{})["height"] = float64(480)
 	if _, err := identity.sourceTrackIDs(inspectProcessingActiveStream(streamData).videoTracks); err == nil {
 		t.Fatal("a height that disagrees with the staged entry must fail the mapping")
+	}
+}
+
+func mkvTrackEntry(number, trackType uint64, codec string, height uint64) []byte {
+	entry := append(ebmlUintElement(ebmlIDTrackNumber, number), ebmlUintElement(ebmlIDTrackType, trackType)...)
+	entry = append(entry, ebmlElement(ebmlIDCodecID, []byte(codec))...)
+	if trackType == mkvTrackTypeVideo {
+		entry = append(entry, ebmlElement(ebmlIDVideo, append(ebmlUintElement(ebmlIDPixelWidth, height*16/9), ebmlUintElement(ebmlIDPixelHeight, height)...))...)
+	}
+	return ebmlElement(ebmlIDTrackEntry, entry)
+}
+
+// mkvBlock is a SimpleBlock (or, in a BlockGroup, a Block) of one frame.
+func mkvBlock(id, track uint64, keyframe bool) []byte {
+	flags := byte(0)
+	if keyframe {
+		flags = 0x80
+	}
+	return ebmlElement(id, []byte{0x80 | byte(track), 0x00, 0x00, flags, 0xDE, 0xAD})
+}
+
+// The rc6 05-clip cut: the stream's Livepeer process was replaced by local
+// renditions seven seconds before the clip, so the cut declares the source
+// (TrackNumber 2), the Livepeer rendition (8) and the replacement's rendition
+// (9), all 640x360, while only the first two hold frames. processing+ does not
+// register track 9 (nor the frameless meta track 1) and numbers the rest 0..3.
+func TestClipSourceIdentitySkipsStagedTracksWithoutFrames(t *testing.T) {
+	tracks := append(mkvTrackEntry(1, 0x21, "M_JSON", 0), mkvTrackEntry(2, mkvTrackTypeVideo, "V_MPEG4/ISO/AVC", 360)...)
+	tracks = append(tracks, mkvTrackEntry(3, 2, "A_AAC", 0)...)
+	tracks = append(tracks, mkvTrackEntry(7, 2, "A_OPUS", 0)...)
+	tracks = append(tracks, mkvTrackEntry(8, mkvTrackTypeVideo, "V_MPEG4/ISO/AVC", 360)...)
+	tracks = append(tracks, mkvTrackEntry(9, mkvTrackTypeVideo, "V_MPEG4/ISO/AVC", 360)...)
+	sized := ebmlElement(ebmlIDCluster, append(append(append(
+		ebmlUintElement(0xE7, 0), mkvBlock(ebmlIDSimpleBlock, 2, true)...), mkvBlock(ebmlIDSimpleBlock, 3, true)...),
+		ebmlElement(ebmlIDBlockGroup, mkvBlock(ebmlIDBlock, 7, false))...))
+	// A live-written Cluster of unknown size, running to the end of the file.
+	unsized := append([]byte{0x1F, 0x43, 0xB6, 0x75, 0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}, ebmlUintElement(0xE7, 2000)...)
+	unsized = append(unsized, mkvBlock(ebmlIDSimpleBlock, 8, true)...)
+	unsized = append(unsized, mkvBlock(ebmlIDSimpleBlock, 2, false)...)
+	header := ebmlElement(0x1A45DFA3, ebmlElement(0x4282, []byte("matroska")))
+	file := append(header, 0x18, 0x53, 0x80, 0x67, 0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF)
+	file = append(file, ebmlElement(ebmlIDTracks, tracks)...)
+	file = append(append(file, sized...), unsized...)
+	path := filepath.Join(t.TempDir(), "staged.mkv")
+	if err := os.WriteFile(path, file, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	staged, err := readStagedMKVTracks(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := newClipSourceIdentity(staged, map[uint64]bool{2: true})
+	ids, err := identity.sourceTrackIDs([]processingMetaVideoTrack{chapterTrack(0, 640, 360, 10000), chapterTrack(3, 640, 360, 10000)})
+	if err != nil {
+		t.Fatalf("map identity: %v", err)
+	}
+	if !reflect.DeepEqual(ids, map[int64]bool{0: true}) {
+		t.Fatalf("source ids = %v, want {0}", ids)
+	}
+}
+
+func TestReadMKVBlockPresenceAppliesMistRegistrationRule(t *testing.T) {
+	video := mkvTrack{number: 1, trackTy: mkvTrackTypeVideo}
+	audio := mkvTrack{number: 2, trackTy: 2}
+	file := ebmlElement(ebmlIDCluster, append(mkvBlock(ebmlIDSimpleBlock, 1, false), mkvBlock(ebmlIDSimpleBlock, 2, false)...))
+	presence, err := readMKVBlockPresence(bytes.NewReader(file))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := realtimeTrackSkipReason(video, presence[1]); got != "it has no keyframe" {
+		t.Fatalf("video without keyframe: %q", got)
+	}
+	if got := realtimeTrackSkipReason(audio, presence[2]); got != "" {
+		t.Fatalf("audio with frames: %q", got)
+	}
+	if got := realtimeTrackSkipReason(audio, presence[5]); got != "it has no frames" {
+		t.Fatalf("track without blocks: %q", got)
+	}
+	if _, err := readMKVBlockPresence(bytes.NewReader(file[:len(file)-2])); err == nil {
+		t.Fatal("a truncated block must be refused")
 	}
 }
 

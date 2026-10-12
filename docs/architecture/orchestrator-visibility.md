@@ -66,3 +66,8 @@ Injected per-gateway from gitops cluster facts:
 - `FRAMEWORKS_ENVIRONMENT`: the manifest profile, the same value rendered as the observer's and Bridge's `NETWORK_OBSERVER_ENVIRONMENT`
 - `FRAMEWORKS_NETWORK_ID`: the chain ID of the gateway's Livepeer `network` (42161 for `arbitrum-one-mainnet`, 0 offchain)
 - `FRAMEWORKS_TELEMETRY_SPOOL_DIR`: `/var/lib/frameworks/livepeer-gateway/frameworks-telemetry`, a managed state directory of the service
+
+The gateway emits events from inside a segment's few-second budget, while a spool write fsyncs the
+record and its directory. Events therefore go through a bounded in-memory queue (4096 events) that
+one writer persists; a full queue drops the event and counts it in the heartbeat's dropped records,
+so a slow disk never delays a segment.
