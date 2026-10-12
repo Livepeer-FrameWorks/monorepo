@@ -115,8 +115,8 @@ func (h *AnalyticsHandler) countDomainEvent(eventType, status string) {
 var domainDetailsJSON = protojson.MarshalOptions{UseProtoNames: true}
 
 // auditedInternalTypes are the internal event types that record a change to
-// the tenant's own account, billing, cluster access, or webhook endpoints, so
-// they belong in the tenant's audit log. Every other internal type stays out
+// the tenant's own account, its members' sessions, billing, cluster access,
+// or webhook endpoints, so they belong in the tenant's audit log. Every other internal type stays out
 // of api_events: artifact.node_copy_changed names a storage node, and
 // recording.chapter_ready is a processing step, not a tenant action. A new
 // internal type is not audited until it is listed here.
@@ -135,6 +135,7 @@ var auditedInternalTypes = map[string]bool{
 	"billing.subscription_created":   true,
 	"billing.subscription_updated":   true,
 	"webhook.endpoint_auto_disabled": true,
+	"user.sessions_revoked":          true,
 }
 
 // writeDomainAuditEvent writes the api_events row of a public tenant event or

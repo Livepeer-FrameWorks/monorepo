@@ -62,10 +62,19 @@ var (
 //
 // An authenticated connection stays bound to the credential it authenticated
 // with: it closes with 4403 at the session's expiry, when sessions closes the
-// connections of a revoked API token, and when a re-check every
-// revalidateEvery finds the credential no longer authenticates. Closing the
-// connection ends every subscription on it.
+// connections of a revoked API token or a signed-out user, and when a
+// re-check every revalidateEvery finds the credential no longer
+// authenticates. Closing the connection ends every subscription on it, and
+// no subscription delivers an event once its credential was found revoked.
 func GraphQLWebsocketTransport(serviceClients *clients.ServiceClients, jwtSecret []byte, logger logging.Logger, upgrader websocket.Upgrader, keepAlive time.Duration, sessions *WebsocketSessions, revalidateEvery time.Duration) graphql.Transport {
+	identity := websocketIdentityWatch{
+		serviceClients: serviceClients,
+		jwtSecret:      jwtSecret,
+		logger:         logger,
+		sessions:       sessions,
+		interval:       revalidateEvery,
+	}
+	sessions.useCheck(identity.check)
 	return closeCodeWebsocket{
 		Websocket: transport.Websocket{
 			KeepAlivePingInterval: keepAlive,
@@ -73,13 +82,7 @@ func GraphQLWebsocketTransport(serviceClients *clients.ServiceClients, jwtSecret
 			Upgrader:              upgrader,
 			InitFunc:              GraphQLWebsocketInit(serviceClients, jwtSecret, logger),
 		},
-		identity: websocketIdentityWatch{
-			serviceClients: serviceClients,
-			jwtSecret:      jwtSecret,
-			logger:         logger,
-			sessions:       sessions,
-			interval:       revalidateEvery,
-		},
+		identity: identity,
 	}
 }
 
@@ -106,25 +109,50 @@ func (t closeCodeWebsocket) Do(w http.ResponseWriter, r *http.Request, exec grap
 	if init := inner.InitFunc; init != nil {
 		inner.InitFunc = func(ctx context.Context, payload transport.InitPayload) (context.Context, *transport.InitPayload, error) {
 			ctx, ack, err := init(ctx, payload)
+			if err == nil {
+				ctx, err = t.bindIdentity(ctx, rejection)
+			}
 			var initErr *WebsocketInitError
 			if errors.As(err, &initErr) {
 				rejection.set(initErr)
 			}
-			if err != nil {
-				return ctx, ack, err
-			}
-			if id, ok := websocketIdentityFrom(ctx); ok {
-				var closeConn context.CancelFunc
-				ctx, closeConn = context.WithCancel(ctx)
-				go t.identity.watch(ctx, id, func(reason *WebsocketInitError) {
-					rejection.set(reason)
-					closeConn()
-				})
-			}
-			return ctx, ack, nil
+			return ctx, ack, err
 		}
 	}
 	inner.Do(&rejectionResponseWriter{ResponseWriter: w, rejection: rejection}, r, exec)
+}
+
+// bindIdentity keeps the connection that ctx authenticated bound to its
+// credential. The connection is registered before connection_ack, so a
+// revocation that arrives from then on reaches it before any subscription
+// starts; one that arrived after its credential was checked rejects it with
+// ErrWebsocketCredentialRevoked.
+func (t closeCodeWebsocket) bindIdentity(ctx context.Context, rejection *initRejection) (context.Context, error) {
+	id, ok := websocketIdentityFrom(ctx)
+	if !ok {
+		return ctx, nil
+	}
+	ctx, closeConn := context.WithCancel(ctx)
+	gate := newWebsocketGate()
+	ctx = context.WithValue(ctx, websocketGateKey{}, gate)
+	// The gate closes first, so no subscription delivers another event while
+	// the close frame is written.
+	closeWith := func(reason *WebsocketInitError) {
+		gate.close()
+		rejection.set(reason)
+		closeConn()
+	}
+	unregister, revoked := t.identity.sessions.register(&websocketSession{id: id, close: closeWith})
+	if revoked {
+		gate.close()
+		closeConn()
+		return ctx, ErrWebsocketCredentialRevoked
+	}
+	go func() {
+		defer unregister()
+		t.identity.watch(ctx, id, closeWith)
+	}()
+	return ctx, nil
 }
 
 // initRejection carries the WebsocketInitError that ends a connection, at
@@ -219,7 +247,10 @@ func (c *rejectionConn) Write(p []byte) (int, error) {
 // the Authorization value names the identity the client asked for, and the
 // gateway never substitutes a different credential for it. An Authorization
 // value that could not be checked because the authentication backend failed
-// closes with 1013, which clients retry.
+// closes with 1013, which clients retry. A session token whose user signed
+// out does not authenticate; when Commodore cannot say whether it did, the
+// locally verified session token is accepted and the connection's re-checks
+// ask again.
 //
 // The cookie and wallet paths stay lenient: a connection with no valid
 // credential there is anonymous, and GraphQLOperationAuth limits it to public
@@ -231,14 +262,15 @@ func GraphQLWebsocketInit(serviceClients *clients.ServiceClients, jwtSecret []by
 			if !ok {
 				return ctx, nil, ErrWebsocketInvalidAuthorization
 			}
-			result, err := AuthenticateBearerToken(ctx, token, serviceClients, jwtSecret)
+			result, err := authenticateWebsocketBearer(ctx, token, serviceClients, jwtSecret)
 			if errors.Is(err, ErrAuthBackendUnavailable) {
 				if logger != nil {
 					logger.WithError(err).Warn("WebSocket authentication backend unavailable")
 				}
-				return ctx, nil, ErrWebsocketAuthUnavailable
-			}
-			if err != nil {
+				if result == nil {
+					return ctx, nil, ErrWebsocketAuthUnavailable
+				}
+			} else if err != nil {
 				return ctx, nil, ErrWebsocketInvalidAuthorization
 			}
 			ctx = withWebsocketIdentity(ApplyAuthToContext(ctx, result), bearerIdentity(token, result))
@@ -246,7 +278,8 @@ func GraphQLWebsocketInit(serviceClients *clients.ServiceClients, jwtSecret []by
 		}
 
 		if cookieToken, ok := ctx.Value(ctxkeys.KeyWSCookieToken).(string); ok && cookieToken != "" {
-			if result, err := AuthenticateBearerToken(ctx, cookieToken, serviceClients, jwtSecret); err == nil {
+			result, err := authenticateWebsocketBearer(ctx, cookieToken, serviceClients, jwtSecret)
+			if result != nil && (err == nil || errors.Is(err, ErrAuthBackendUnavailable)) {
 				ctx = withWebsocketIdentity(ApplyAuthToContext(ctx, result), bearerIdentity(cookieToken, result))
 			}
 			return ctx, &initPayload, nil

@@ -56,7 +56,7 @@ SELECT id
 FROM commodore.users
 WHERE reset_token = $1 AND reset_token_expires > NOW();
 
--- name: ResetUserPassword :execrows
+-- name: ResetUserPassword :one
 UPDATE commodore.users
 SET password_hash = sqlc.arg(password_hash),
     reset_token = NULL,
@@ -64,7 +64,8 @@ SET password_hash = sqlc.arg(password_hash),
     updated_at = NOW()
 WHERE id = sqlc.arg(id)
   AND reset_token = sqlc.arg(reset_token)
-  AND reset_token_expires > NOW();
+  AND reset_token_expires > NOW()
+RETURNING tenant_id;
 
 -- name: UpdateUserFirstName :exec
 UPDATE commodore.users

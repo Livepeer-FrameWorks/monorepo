@@ -26,7 +26,10 @@ type AuthResult struct {
 	APIToken      string
 	WalletAddress string
 	ExpiresAt     *time.Time
-	Permissions   []string
+	// IssuedAt is a session token's iat, compared with the user's session
+	// revocations.
+	IssuedAt    *time.Time
+	Permissions []string
 	// PlatformOperator is the platform staff grant, carried from the verified
 	// token (roles claim) or the validated credential response.
 	PlatformOperator bool
@@ -145,6 +148,10 @@ func AuthenticateBearerToken(ctx context.Context, token string, clients *clients
 		if claims.ExpiresAt != nil {
 			expiresAt := claims.ExpiresAt.Time
 			result.ExpiresAt = &expiresAt
+		}
+		if claims.IssuedAt != nil {
+			issuedAt := claims.IssuedAt.Time
+			result.IssuedAt = &issuedAt
 		}
 		return result, nil
 	}

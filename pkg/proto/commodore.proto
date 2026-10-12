@@ -140,6 +140,11 @@ service InternalService {
   // Source: pkg/api/commodore/types.go:ValidateAPITokenResponse
   rpc ValidateAPIToken(ValidateAPITokenRequest) returns (ValidateAPITokenResponse);
 
+  // Called by Gateway when a GraphQL WebSocket authenticates with a session
+  // access token and when it re-checks one, so a signed-out session's token
+  // stops holding realtime connections before it expires.
+  rpc ValidateSession(ValidateSessionRequest) returns (ValidateSessionResponse);
+
   // Mint a short-TTL session token authorizing an operator to open the
   // Mist admin UI on a specific edge node. The token is bound to a
   // single node_id; Foghorn rejects validation against any other node.
@@ -953,6 +958,19 @@ message ValidateAPITokenResponse {
   repeated string permissions = 6;      // json:"permissions,omitempty"
   string token_id = 7;                  // json:"token_id,omitempty"
   bool platform_operator = 8;           // json:"platform_operator,omitempty" - computed from the token's user row
+}
+
+message ValidateSessionRequest {
+  // token is an interactive session access token (JWT).
+  string token = 1;
+}
+
+// valid is true when the token verifies, its user is active in the token's
+// tenant, and the user's sessions were not revoked at or after the token's
+// issue time. An invalid token is valid=false, never an error; an error means
+// the session could not be checked.
+message ValidateSessionResponse {
+  bool valid = 1;
 }
 
 // ============================================================================

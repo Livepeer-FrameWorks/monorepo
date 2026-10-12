@@ -38,6 +38,7 @@ const (
 	InternalService_RecordSigningKeyUse_FullMethodName                = "/commodore.InternalService/RecordSigningKeyUse"
 	InternalService_ResolveInternalName_FullMethodName                = "/commodore.InternalService/ResolveInternalName"
 	InternalService_ValidateAPIToken_FullMethodName                   = "/commodore.InternalService/ValidateAPIToken"
+	InternalService_ValidateSession_FullMethodName                    = "/commodore.InternalService/ValidateSession"
 	InternalService_MintMistAdminSession_FullMethodName               = "/commodore.InternalService/MintMistAdminSession"
 	InternalService_ValidateMistAdminSession_FullMethodName           = "/commodore.InternalService/ValidateMistAdminSession"
 	InternalService_StartDVR_FullMethodName                           = "/commodore.InternalService/StartDVR"
@@ -188,6 +189,10 @@ type InternalServiceClient interface {
 	// Called by Gateway to validate developer API tokens
 	// Source: pkg/api/commodore/types.go:ValidateAPITokenResponse
 	ValidateAPIToken(ctx context.Context, in *ValidateAPITokenRequest, opts ...grpc.CallOption) (*ValidateAPITokenResponse, error)
+	// Called by Gateway when a GraphQL WebSocket authenticates with a session
+	// access token and when it re-checks one, so a signed-out session's token
+	// stops holding realtime connections before it expires.
+	ValidateSession(ctx context.Context, in *ValidateSessionRequest, opts ...grpc.CallOption) (*ValidateSessionResponse, error)
 	// Mint a short-TTL session token authorizing an operator to open the
 	// Mist admin UI on a specific edge node. The token is bound to a
 	// single node_id; Foghorn rejects validation against any other node.
@@ -486,6 +491,16 @@ func (c *internalServiceClient) ValidateAPIToken(ctx context.Context, in *Valida
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ValidateAPITokenResponse)
 	err := c.cc.Invoke(ctx, InternalService_ValidateAPIToken_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *internalServiceClient) ValidateSession(ctx context.Context, in *ValidateSessionRequest, opts ...grpc.CallOption) (*ValidateSessionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ValidateSessionResponse)
+	err := c.cc.Invoke(ctx, InternalService_ValidateSession_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1036,6 +1051,10 @@ type InternalServiceServer interface {
 	// Called by Gateway to validate developer API tokens
 	// Source: pkg/api/commodore/types.go:ValidateAPITokenResponse
 	ValidateAPIToken(context.Context, *ValidateAPITokenRequest) (*ValidateAPITokenResponse, error)
+	// Called by Gateway when a GraphQL WebSocket authenticates with a session
+	// access token and when it re-checks one, so a signed-out session's token
+	// stops holding realtime connections before it expires.
+	ValidateSession(context.Context, *ValidateSessionRequest) (*ValidateSessionResponse, error)
 	// Mint a short-TTL session token authorizing an operator to open the
 	// Mist admin UI on a specific edge node. The token is bound to a
 	// single node_id; Foghorn rejects validation against any other node.
@@ -1234,6 +1253,9 @@ func (UnimplementedInternalServiceServer) ResolveInternalName(context.Context, *
 }
 func (UnimplementedInternalServiceServer) ValidateAPIToken(context.Context, *ValidateAPITokenRequest) (*ValidateAPITokenResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ValidateAPIToken not implemented")
+}
+func (UnimplementedInternalServiceServer) ValidateSession(context.Context, *ValidateSessionRequest) (*ValidateSessionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ValidateSession not implemented")
 }
 func (UnimplementedInternalServiceServer) MintMistAdminSession(context.Context, *MintMistAdminSessionRequest) (*MintMistAdminSessionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method MintMistAdminSession not implemented")
@@ -1654,6 +1676,24 @@ func _InternalService_ValidateAPIToken_Handler(srv interface{}, ctx context.Cont
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(InternalServiceServer).ValidateAPIToken(ctx, req.(*ValidateAPITokenRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _InternalService_ValidateSession_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ValidateSessionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InternalServiceServer).ValidateSession(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InternalService_ValidateSession_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InternalServiceServer).ValidateSession(ctx, req.(*ValidateSessionRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -2516,6 +2556,10 @@ var InternalService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ValidateAPIToken",
 			Handler:    _InternalService_ValidateAPIToken_Handler,
+		},
+		{
+			MethodName: "ValidateSession",
+			Handler:    _InternalService_ValidateSession_Handler,
 		},
 		{
 			MethodName: "MintMistAdminSession",

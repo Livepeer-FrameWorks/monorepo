@@ -67,6 +67,7 @@ var catalog = map[string]struct {
 	"billing.subscription_created":   {},
 	"billing.subscription_updated":   {},
 	"webhook.endpoint_auto_disabled": {},
+	"user.sessions_revoked":          {},
 }
 
 func TestRegistryHoldsTheDecidedCatalog(t *testing.T) {

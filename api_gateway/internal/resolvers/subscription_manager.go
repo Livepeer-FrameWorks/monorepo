@@ -8,13 +8,16 @@ import (
 	"math/rand/v2"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"frameworks/api_gateway/graph/model"
+	"frameworks/api_gateway/internal/middleware"
 	signalmanclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/signalman"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	deckhandpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/deckhand"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/internalv1"
 	publicv1 "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/public/v1"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
@@ -55,10 +58,31 @@ type SubscriptionManager struct {
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 
+	// sockets receives the credential revocations read from upstream
+	// streams before their events reach any subscriber.
+	sockets atomic.Pointer[credentialSocketsHolder]
+
 	mu                  sync.Mutex
 	closed              bool
 	upstreams           map[signalmanclient.StreamKey]*upstreamEntry
 	tenantSubscriptions map[string]int
+}
+
+// CredentialSockets closes this replica's GraphQL WebSockets whose credential
+// was revoked; *middleware.WebsocketSessions implements it.
+type CredentialSockets interface {
+	CloseAPIToken(tenantID, tokenID string) int
+	CloseUserSessions(tenantID, userID string, revokedAt time.Time) int
+}
+
+type credentialSocketsHolder struct{ sockets CredentialSockets }
+
+// SetCredentialSockets makes every upstream stream pass the api_token.revoked
+// and user.sessions_revoked events it reads to sockets before fanning them
+// out, so a revoked credential's sockets deliver none of them, nor anything
+// after them.
+func (sm *SubscriptionManager) SetCredentialSockets(sockets CredentialSockets) {
+	sm.sockets.Store(&credentialSocketsHolder{sockets: sockets})
 }
 
 type upstreamEntry struct {
@@ -219,11 +243,21 @@ func (sm *SubscriptionManager) recordUpstreamOpen(outcome string) {
 	}
 }
 
+// sendSubscriptionUpdate passes update to a subscription's output unless the
+// subscription ended or its WebSocket's credential was revoked.
 func sendSubscriptionUpdate[T any](ctx context.Context, output chan<- T, update T) bool {
+	revoked := middleware.WebsocketCredentialRevoked(ctx)
+	select {
+	case <-revoked:
+		return false
+	default:
+	}
 	select {
 	case output <- update:
 		return true
 	case <-ctx.Done():
+		return false
+	case <-revoked:
 		return false
 	}
 }
@@ -386,6 +420,7 @@ func (sm *SubscriptionManager) runUpstream(ctx context.Context, entry *upstreamE
 		}
 		sm.recordUpstreamOpen("connection_success")
 		retry = upstreamRetryInitial
+		entry.fanout.SetLive(true)
 
 		for {
 			event, recvErr := stream.Recv()
@@ -399,6 +434,7 @@ func (sm *SubscriptionManager) runUpstream(ctx context.Context, entry *upstreamE
 				}
 				break
 			}
+			sm.applyCredentialRevocation(entry.key, event)
 			if slow := entry.fanout.Publish(event); slow > 0 {
 				sm.logger.WithFields(logging.Fields{
 					"tenant_id": entry.key.TenantID,
@@ -407,9 +443,31 @@ func (sm *SubscriptionManager) runUpstream(ctx context.Context, entry *upstreamE
 				}).Warn("Ended GraphQL subscriptions that fell behind")
 			}
 		}
+		entry.fanout.SetLive(false)
 		stream.Close()
 		if !sleepContext(ctx, jitter(retry)) {
 			return
+		}
+	}
+}
+
+// applyCredentialRevocation passes a credential revocation read from key's
+// stream to the credential sockets. It runs on the stream's goroutine before
+// the event is fanned out, so the revoked sockets stop delivering before any
+// subscription sees the revocation or a later event of the stream.
+func (sm *SubscriptionManager) applyCredentialRevocation(key signalmanclient.StreamKey, event *signalmanpb.SignalmanEvent) {
+	holder := sm.sockets.Load()
+	if holder == nil || holder.sockets == nil || key.TenantID == "" {
+		return
+	}
+	switch key.Channel {
+	case signalmanpb.Channel_CHANNEL_EVENTS:
+		if tokenID := revokedAPITokenID(key.TenantID, event); tokenID != "" {
+			holder.sockets.CloseAPIToken(key.TenantID, tokenID)
+		}
+	case signalmanpb.Channel_CHANNEL_SESSIONS:
+		if userID, revokedAt, ok := revokedUserSessions(key.TenantID, event); ok {
+			holder.sockets.CloseUserSessions(key.TenantID, userID, revokedAt)
 		}
 	}
 }
@@ -765,34 +823,38 @@ func (sm *SubscriptionManager) SubscribeToTenantEvents(ctx context.Context, conf
 	return updates, nil
 }
 
-// WatchAPITokenRevocations passes the token ID of every api_token.revoked
-// event of tenantID to revoked until ctx ends. It reads the tenant's
-// CHANNEL_EVENTS stream, which every Signalman replica fills from the domain
-// event backbone, so it sees revocations committed through any Bridge
-// replica. It shares that stream with the tenant's tenantEvents
-// subscriptions without counting toward their cap. When its subscriber ends
-// it attaches again after a backoff; a revocation in between is missed.
-func (sm *SubscriptionManager) WatchAPITokenRevocations(ctx context.Context, tenantID string, revoked func(tokenID string)) {
+// revocationChannels are the streams that carry each kind of credential
+// revocation, indexed by middleware.RevocationKind.
+var revocationChannels = [...]signalmanpb.Channel{
+	middleware.RevocationAPITokens: signalmanpb.Channel_CHANNEL_EVENTS,
+	middleware.RevocationSessions:  signalmanpb.Channel_CHANNEL_SESSIONS,
+}
+
+// WatchCredentialRevocations keeps tenantID's CHANNEL_EVENTS and
+// CHANNEL_SESSIONS streams open until ctx ends. Every Signalman replica fills
+// them from the domain event backbone, so they carry api_token.revoked and
+// user.sessions_revoked committed through any Bridge replica; the upstream
+// loop hands those to the credential sockets (SetCredentialSockets). The
+// watch shares the streams with the tenant's subscriptions without counting
+// toward their cap. resumed(kind) is called each time the stream carrying
+// kind becomes subscribed, at attach and after every upstream reconnect, and
+// after the watch re-attaches because its subscriber ended: a revocation
+// committed while the stream was not subscribed never arrives.
+func (sm *SubscriptionManager) WatchCredentialRevocations(ctx context.Context, tenantID string, resumed func(middleware.RevocationKind)) {
 	if tenantID == "" {
 		return
 	}
-	handle := func(event *signalmanpb.SignalmanEvent) bool {
-		if tokenID := revokedAPITokenID(tenantID, event); tokenID != "" {
-			revoked(tokenID)
-		}
-		return true
-	}
 	retry := upstreamRetryInitial
 	for {
-		subs, release, err := sm.attach(ConnectionConfig{TenantID: tenantID}, []signalmanpb.Channel{signalmanpb.Channel_CHANNEL_EVENTS}, false)
+		subs, release, err := sm.attach(ConnectionConfig{TenantID: tenantID}, revocationChannels[:], false)
 		if errors.Is(err, errSubscriptionManagerClosed) {
 			return
 		}
 		if err != nil {
-			sm.logger.WithError(err).WithField("tenant_id", tenantID).Warn("Failed to watch API token revocations")
+			sm.logger.WithError(err).WithField("tenant_id", tenantID).Warn("Failed to watch credential revocations")
 		} else {
 			retry = upstreamRetryInitial
-			sm.serve(ctx, "api_token_revocations", subs, handle)
+			sm.followRevocationStreams(ctx, subs, resumed)
 			release()
 		}
 		if !sleepContext(ctx, jitter(retry)) {
@@ -800,6 +862,48 @@ func (sm *SubscriptionManager) WatchAPITokenRevocations(ctx context.Context, ten
 		}
 		retry = min(retry*2, upstreamRetryMax)
 	}
+}
+
+// followRevocationStreams reports each subscriber's live signal as its
+// revocation kind and discards its events, which the upstream loop already
+// applied, until ctx ends or a subscriber ends.
+func (sm *SubscriptionManager) followRevocationStreams(ctx context.Context, subs []*signalmanclient.Subscriber, resumed func(middleware.RevocationKind)) {
+	apiTokens, sessions := subs[middleware.RevocationAPITokens], subs[middleware.RevocationSessions]
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-apiTokens.Done():
+			sm.logSubscriberEnded("credential_revocations", apiTokens.Err())
+			return
+		case <-sessions.Done():
+			sm.logSubscriberEnded("credential_revocations", sessions.Err())
+			return
+		case <-apiTokens.Live():
+			resumed(middleware.RevocationAPITokens)
+		case <-sessions.Live():
+			resumed(middleware.RevocationSessions)
+		case <-apiTokens.Events():
+		case <-sessions.Events():
+		}
+	}
+}
+
+// revokedUserSessions returns the user and revocation time when event is
+// tenantID's user.sessions_revoked.
+func revokedUserSessions(tenantID string, event *signalmanpb.SignalmanEvent) (string, time.Time, bool) {
+	if event.GetEventType() != signalmanpb.EventType_EVENT_TYPE_TENANT_EVENT || event.GetTenantId() != tenantID {
+		return "", time.Time{}, false
+	}
+	tenantEvent := event.GetData().GetTenantEvent()
+	if tenantEvent.GetType() != "user.sessions_revoked" {
+		return "", time.Time{}, false
+	}
+	var payload internalv1.UserSessionsRevoked
+	if err := tenantEvent.GetData().UnmarshalTo(&payload); err != nil || payload.GetUserId() == "" || !payload.GetRevokedAt().IsValid() {
+		return "", time.Time{}, false
+	}
+	return payload.GetUserId(), payload.GetRevokedAt().AsTime(), true
 }
 
 // revokedAPITokenID returns the revoked token's ID when event is tenantID's

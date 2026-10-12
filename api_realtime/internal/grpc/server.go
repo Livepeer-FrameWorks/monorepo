@@ -52,6 +52,9 @@ type Client struct {
 	// platformAudience is set for a service-token stream without a tenant,
 	// the only kind of stream that may subscribe to CHANNEL_PLATFORM.
 	platformAudience bool
+	// sessionsAudience is set for a service-token stream with a tenant, the
+	// only kind of stream that may subscribe to CHANNEL_SESSIONS.
+	sessionsAudience bool
 	send             chan *signalmanpb.ServerMessage
 	done             chan struct{}
 	logger           logging.Logger
@@ -300,12 +303,17 @@ func (c *Client) shouldReceive(event *signalmanpb.SignalmanEvent) bool {
 		return c.platformAudience && slices.Contains(c.channels, signalmanpb.Channel_CHANNEL_PLATFORM)
 	}
 
+	// Session revocations go only to service streams of their tenant.
+	if event.Channel == signalmanpb.Channel_CHANNEL_SESSIONS && !c.sessionsAudience {
+		return false
+	}
+
 	// Check channel subscription. CHANNEL_ALL covers the legacy channels only:
-	// CHANNEL_EVENTS carries a different payload contract, so its subscribers
-	// name it.
+	// CHANNEL_EVENTS and CHANNEL_SESSIONS carry a different payload contract,
+	// so their subscribers name them.
 	subscribed := false
 	for _, ch := range c.channels {
-		if ch == event.Channel || (ch == signalmanpb.Channel_CHANNEL_ALL && event.Channel != signalmanpb.Channel_CHANNEL_EVENTS) {
+		if ch == event.Channel || (ch == signalmanpb.Channel_CHANNEL_ALL && event.Channel != signalmanpb.Channel_CHANNEL_EVENTS && event.Channel != signalmanpb.Channel_CHANNEL_SESSIONS) {
 			subscribed = true
 			break
 		}
@@ -342,6 +350,7 @@ func (s *SignalmanServer) Subscribe(stream signalmanpb.SignalmanService_Subscrib
 		userID:           userID,
 		tenantID:         tenantID,
 		platformAudience: ctxkeys.GetAuthType(ctx) == "service" && tenantID == "",
+		sessionsAudience: ctxkeys.GetAuthType(ctx) == "service" && tenantID != "",
 		send:             make(chan *signalmanpb.ServerMessage, 256),
 		done:             make(chan struct{}),
 		logger:           s.logger,
@@ -462,18 +471,23 @@ func (c *Client) sendLoop() {
 }
 
 // handleSubscribe processes a subscribe request. A CHANNEL_PLATFORM request
-// from a stream outside the platform audience is refused with an error message
-// and left out of the confirmation.
+// from a stream outside the platform audience, or a CHANNEL_SESSIONS request
+// from a stream outside the sessions audience, is refused with an error
+// message and left out of the confirmation.
 func (c *Client) handleSubscribe(req *signalmanpb.SubscribeRequest) {
 	c.mutex.Lock()
 	existing := make(map[signalmanpb.Channel]struct{}, len(c.channels))
 	for _, ch := range c.channels {
 		existing[ch] = struct{}{}
 	}
-	refusedPlatform := false
+	refusedPlatform, refusedSessions := false, false
 	for _, ch := range req.Channels {
 		if ch == signalmanpb.Channel_CHANNEL_PLATFORM && !c.platformAudience {
 			refusedPlatform = true
+			continue
+		}
+		if ch == signalmanpb.Channel_CHANNEL_SESSIONS && !c.sessionsAudience {
+			refusedSessions = true
 			continue
 		}
 		if _, ok := existing[ch]; ok {
@@ -503,6 +517,25 @@ func (c *Client) handleSubscribe(req *signalmanpb.SubscribeRequest) {
 		case c.send <- refusal:
 		default:
 			c.logger.Warn("Failed to send platform channel refusal - buffer full")
+		}
+	}
+	if refusedSessions {
+		c.logger.WithFields(logging.Fields{
+			"user_id":   c.userID,
+			"tenant_id": c.tenantID,
+		}).Warn("Refused sessions channel subscription outside the sessions audience")
+		refusal := &signalmanpb.ServerMessage{
+			Message: &signalmanpb.ServerMessage_Error{
+				Error: &signalmanpb.SignalmanError{
+					Code:    "permission_denied",
+					Message: "sessions channel requires a service stream with a tenant",
+				},
+			},
+		}
+		select {
+		case c.send <- refusal:
+		default:
+			c.logger.Warn("Failed to send sessions channel refusal - buffer full")
 		}
 	}
 
@@ -624,6 +657,8 @@ func channelToString(ch signalmanpb.Channel) string {
 		return "platform"
 	case signalmanpb.Channel_CHANNEL_EVENTS:
 		return "events"
+	case signalmanpb.Channel_CHANNEL_SESSIONS:
+		return "sessions"
 	default:
 		return "unknown"
 	}

@@ -3,11 +3,13 @@ package main
 import (
 	"context"
 	"net"
+	"slices"
 	"testing"
 	"time"
 
 	signalmangrpc "frameworks/api_realtime/internal/grpc"
 	"frameworks/api_realtime/internal/metrics"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/events"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/kafka"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -23,6 +25,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/test/bufconn"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const testServiceToken = "service-token"
@@ -36,6 +39,7 @@ func startSignalman(t *testing.T) (*signalmangrpc.SignalmanServer, signalmanpb.S
 	lis := bufconn.Listen(1 << 20)
 	grpcServer := grpc.NewServer(grpc.ChainStreamInterceptor(middleware.GRPCStreamAuthInterceptor(middleware.GRPCAuthConfig{
 		ServiceToken:   testServiceToken,
+		JWTSecret:      testJWTSecret,
 		MetadataPolicy: middleware.MetadataPolicyAllow,
 		Logger:         logging.NewLogger(),
 	})))
@@ -279,5 +283,86 @@ func TestInternalDomainEventsNeverReachTenants(t *testing.T) {
 	deliver("domain.events", public)
 	if got := nextEvent(subscriber, 2*time.Second); got.GetData().GetTenantEvent().GetId() != ev.ID {
 		t.Fatalf("subscriber received %v, want public event %s", got, ev.ID)
+	}
+}
+
+var testJWTSecret = []byte("signalman-test-jwt-secret")
+
+// subscribeAs opens a stream authenticated with a tenant user's session token
+// on channels and returns it with the channels its confirmation names.
+func subscribeAs(t *testing.T, client signalmanpb.SignalmanServiceClient, userID, tenantID string, channels ...signalmanpb.Channel) (signalmanpb.SignalmanService_SubscribeClient, []signalmanpb.Channel) {
+	t.Helper()
+	token, err := auth.GenerateJWT(userID, tenantID, "user@example.com", "owner", testJWTSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(metadata.NewOutgoingContext(context.Background(), metadata.Pairs("authorization", "Bearer "+token)))
+	t.Cleanup(cancel)
+	stream, err := client.Subscribe(ctx)
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	if err := stream.Send(&signalmanpb.ClientMessage{Message: &signalmanpb.ClientMessage_Subscribe{
+		Subscribe: &signalmanpb.SubscribeRequest{Channels: channels},
+	}}); err != nil {
+		t.Fatalf("send subscribe: %v", err)
+	}
+	for {
+		msg, err := stream.Recv()
+		if err != nil {
+			t.Fatalf("receive confirmation: %v", err)
+		}
+		if confirmed := msg.GetSubscriptionConfirmed(); confirmed != nil {
+			return stream, confirmed.GetSubscribedChannels()
+		}
+	}
+}
+
+// user.sessions_revoked is internal, yet Bridge closes the user's WebSockets
+// on it: Signalman delivers it on CHANNEL_SESSIONS to the service streams of
+// its tenant only. A tenant user's stream cannot subscribe to the channel,
+// and neither CHANNEL_EVENTS nor CHANNEL_ALL carries it.
+func TestSessionRevocationsReachOnlyTheTenantsServiceStreams(t *testing.T) {
+	server, client := startSignalman(t)
+	m := testDomainMetrics()
+	handlers := wireDomainEvents(t, server, m)
+
+	tenantID, otherTenantID, userID := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	bridge := streamEvents(subscribeTenant(t, client, tenantID, signalmanpb.Channel_CHANNEL_SESSIONS))
+	otherTenantBridge := streamEvents(subscribeTenant(t, client, otherTenantID, signalmanpb.Channel_CHANNEL_SESSIONS))
+	publicOnly := streamEvents(subscribeTenant(t, client, tenantID, signalmanpb.Channel_CHANNEL_EVENTS, signalmanpb.Channel_CHANNEL_ALL))
+	userStream, confirmed := subscribeAs(t, client, userID, tenantID, signalmanpb.Channel_CHANNEL_SESSIONS, signalmanpb.Channel_CHANNEL_ALL)
+	if slices.Contains(confirmed, signalmanpb.Channel_CHANNEL_SESSIONS) {
+		t.Fatalf("a tenant user's stream was subscribed to CHANNEL_SESSIONS: %v", confirmed)
+	}
+	user := streamEvents(userStream)
+	waitForConnections(t, client, 4)
+
+	revoked := &internalv1.UserSessionsRevoked{
+		UserId: userID, RevokedAt: timestamppb.Now(), Reason: internalv1.SessionRevocationReason_SESSION_REVOCATION_REASON_LOGOUT,
+	}
+	record, ev := domainRecord(t, "domain.events", tenantID, userID, revoked)
+	if record.Headers[events.HeaderVisibility] != events.VisibilityInternal {
+		t.Fatalf("user.sessions_revoked must be produced as internal, got %q", record.Headers[events.HeaderVisibility])
+	}
+	if err := handlers["domain.events"](context.Background(), record); err != nil {
+		t.Fatalf("deliver: %v", err)
+	}
+
+	got := nextEvent(bridge, 2*time.Second)
+	if got == nil || got.GetChannel() != signalmanpb.Channel_CHANNEL_SESSIONS || got.GetTenantId() != tenantID {
+		t.Fatalf("the tenant's service stream received %v, want the revocation on CHANNEL_SESSIONS", got)
+	}
+	tenantEvent := got.GetData().GetTenantEvent()
+	payload, err := tenantEvent.GetData().UnmarshalNew()
+	if tenantEvent.GetId() != ev.ID || tenantEvent.GetType() != "user.sessions_revoked" || err != nil || !proto.Equal(payload, revoked) {
+		t.Fatalf("tenant event = %v (%v), want %s carrying %v", tenantEvent, err, ev.ID, revoked)
+	}
+	for name, stream := range map[string]<-chan *signalmanpb.SignalmanEvent{
+		"another tenant's service stream": otherTenantBridge, "a CHANNEL_EVENTS/CHANNEL_ALL stream": publicOnly, "a tenant user's stream": user,
+	} {
+		if leaked := nextEvent(stream, 100*time.Millisecond); leaked != nil {
+			t.Fatalf("%s received %v", name, leaked)
+		}
 	}
 }

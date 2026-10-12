@@ -31,6 +31,7 @@ type Interface interface {
 	ResolveArtifactInternalName(ctx context.Context, internalName string) (*commodorepb.ResolveArtifactInternalNameResponse, error)
 	ResolvePullSourceByInternalName(ctx context.Context, internalName string) (*commodorepb.ResolvePullSourceByInternalNameResponse, error)
 	ValidateAPIToken(ctx context.Context, token string) (*commodorepb.ValidateAPITokenResponse, error)
+	ValidateSession(ctx context.Context, token string) (*commodorepb.ValidateSessionResponse, error)
 	MintMistAdminSession(ctx context.Context, req *commodorepb.MintMistAdminSessionRequest) (*commodorepb.MintMistAdminSessionResponse, error)
 	ValidateMistAdminSession(ctx context.Context, req *commodorepb.ValidateMistAdminSessionRequest) (*commodorepb.ValidateMistAdminSessionResponse, error)
 	StartDVR(ctx context.Context, req *sharedpb.StartDVRRequest) (*sharedpb.StartDVRResponse, error)

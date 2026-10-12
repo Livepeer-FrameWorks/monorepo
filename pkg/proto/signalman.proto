@@ -28,6 +28,11 @@ enum Channel {
   // subscriber's tenant, as EVENT_TYPE_TENANT_EVENT with a TenantEvent payload.
   // Subscribers name it explicitly: CHANNEL_ALL does not include it.
   CHANNEL_EVENTS = 8;
+  // Session revocations (the internal domain event user.sessions_revoked) of
+  // the stream's tenant, as EVENT_TYPE_TENANT_EVENT with a TenantEvent
+  // payload. Only a service-token stream with a tenant may subscribe, so no
+  // tenant receives it; CHANNEL_ALL does not include it.
+  CHANNEL_SESSIONS = 9;
 }
 
 enum EventType {

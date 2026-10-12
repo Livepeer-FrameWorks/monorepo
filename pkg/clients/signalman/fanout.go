@@ -26,12 +26,14 @@ type Fanout struct {
 	depth  int
 	subs   map[*Subscriber]struct{}
 	closed error
+	live   bool
 }
 
 // Subscriber receives events from a Fanout until Done is closed.
 type Subscriber struct {
 	events chan *signalmanpb.SignalmanEvent
 	done   chan struct{}
+	live   chan struct{}
 	err    error
 }
 
@@ -53,9 +55,34 @@ func (f *Fanout) Attach() (*Subscriber, error) {
 	s := &Subscriber{
 		events: make(chan *signalmanpb.SignalmanEvent, f.depth),
 		done:   make(chan struct{}),
+		live:   make(chan struct{}, 1),
+	}
+	if f.live {
+		s.live <- struct{}{}
 	}
 	f.subs[s] = struct{}{}
 	return s, nil
+}
+
+// SetLive records whether the upstream stream is subscribed. Each change to
+// live signals every attached subscriber's Live channel; a subscriber that
+// attaches while the stream is live is signaled at once.
+func (f *Fanout) SetLive(live bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.live == live {
+		return
+	}
+	f.live = live
+	if !live {
+		return
+	}
+	for s := range f.subs {
+		select {
+		case s.live <- struct{}{}:
+		default:
+		}
+	}
 }
 
 // Detach removes s, ends it without an error, and returns how many subscribers
@@ -126,6 +153,15 @@ func (s *Subscriber) end(err error) {
 // Events returns the subscriber's buffered event queue.
 func (s *Subscriber) Events() <-chan *signalmanpb.SignalmanEvent {
 	return s.events
+}
+
+// Live receives a signal when the fanout's upstream stream becomes
+// subscribed: on attach to a live stream, and after every reconnect. Events
+// dispatched upstream while the stream was not subscribed never arrive, so a
+// subscriber that must not miss one re-reads current state on this signal.
+// Signals coalesce.
+func (s *Subscriber) Live() <-chan struct{} {
+	return s.live
 }
 
 // Done is closed when the subscriber has been detached, fell behind, or its

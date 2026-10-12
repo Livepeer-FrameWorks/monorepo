@@ -260,6 +260,7 @@ type Querier interface {
 	GetTenantUserCounts(ctx context.Context, tenantID string) (GetTenantUserCountsRow, error)
 	GetUserEmail(ctx context.Context, arg GetUserEmailParams) (sql.NullString, error)
 	GetUserProfile(ctx context.Context, arg GetUserProfileParams) (GetUserProfileRow, error)
+	GetUserSessionState(ctx context.Context, arg GetUserSessionStateParams) (GetUserSessionStateRow, error)
 	GetVODCatalogState(ctx context.Context, arg GetVODCatalogStateParams) (GetVODCatalogStateRow, error)
 	GetVODOriginCluster(ctx context.Context, arg GetVODOriginClusterParams) (sql.NullString, error)
 	GetVODPlaybackID(ctx context.Context, arg GetVODPlaybackIDParams) (string, error)
@@ -518,7 +519,7 @@ type Querier interface {
 	// deliveries, and a version past its validity is left alone: the cell would
 	// refuse it.
 	RequeueCurrentMediaAuthoritiesForCell(ctx context.Context, cellID string) (int64, error)
-	ResetUserPassword(ctx context.Context, arg ResetUserPasswordParams) (int64, error)
+	ResetUserPassword(ctx context.Context, arg ResetUserPasswordParams) (string, error)
 	ResolveChapterByPlaybackID(ctx context.Context, playbackID string) (ResolveChapterByPlaybackIDRow, error)
 	ResolveClipByHash(ctx context.Context, clipHash string) (ResolveClipByHashRow, error)
 	ResolveClipByInternalName(ctx context.Context, internalName string) (ResolveClipByInternalNameRow, error)
@@ -559,6 +560,7 @@ type Querier interface {
 	RevokeRefreshTokenByID(ctx context.Context, id string) error
 	RevokeRefreshTokensForUser(ctx context.Context, arg RevokeRefreshTokensForUserParams) error
 	RevokeSigningKey(ctx context.Context, arg RevokeSigningKeyParams) (RevokeSigningKeyRow, error)
+	RevokeUserSessions(ctx context.Context, arg RevokeUserSessionsParams) (sql.NullTime, error)
 	RotateRefreshToken(ctx context.Context, arg RotateRefreshTokenParams) error
 	SetClipPlaybackPolicy(ctx context.Context, arg SetClipPlaybackPolicyParams) (SetClipPlaybackPolicyRow, error)
 	SetCreatedStreamDescription(ctx context.Context, arg SetCreatedStreamDescriptionParams) error

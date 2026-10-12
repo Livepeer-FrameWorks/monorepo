@@ -290,7 +290,7 @@ func (q *Queries) LockUserAuthenticationMethods(ctx context.Context, arg LockUse
 	return has_password_signin, err
 }
 
-const resetUserPassword = `-- name: ResetUserPassword :execrows
+const resetUserPassword = `-- name: ResetUserPassword :one
 UPDATE commodore.users
 SET password_hash = $1,
     reset_token = NULL,
@@ -299,6 +299,7 @@ SET password_hash = $1,
 WHERE id = $2
   AND reset_token = $3
   AND reset_token_expires > NOW()
+RETURNING tenant_id
 `
 
 type ResetUserPasswordParams struct {
@@ -307,12 +308,11 @@ type ResetUserPasswordParams struct {
 	ResetToken   sql.NullString `db:"reset_token" json:"reset_token"`
 }
 
-func (q *Queries) ResetUserPassword(ctx context.Context, arg ResetUserPasswordParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, resetUserPassword, arg.PasswordHash, arg.ID, arg.ResetToken)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
+func (q *Queries) ResetUserPassword(ctx context.Context, arg ResetUserPasswordParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, resetUserPassword, arg.PasswordHash, arg.ID, arg.ResetToken)
+	var tenant_id string
+	err := row.Scan(&tenant_id)
+	return tenant_id, err
 }
 
 const setPasswordResetToken = `-- name: SetPasswordResetToken :exec

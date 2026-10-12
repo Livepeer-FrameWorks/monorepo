@@ -91,11 +91,17 @@ The [SDKs](/builders/sdks) for TypeScript, Go, and Python handle both, and read 
 for every reconnect.
 
 An acknowledged connection stays bound to the credential it authenticated with. The gateway closes
-it with `4403`, ending every subscription on it, when a session token reaches its expiry, within a
-few seconds of its API token being revoked, whichever gateway instance holds the connection, and
-within a minute of the credential otherwise ceasing to authenticate. A
-client reconnects with a current token; reconnecting with the revoked or expired one is refused
-before acknowledgement as above.
+it with `4403`, ending every subscription on it, when a session token reaches its expiry; within a
+few seconds of its API token being revoked, or of its user signing out, resetting their password,
+or having their sessions ended for a reused refresh token, whichever gateway instance holds the
+connection; and within a minute of the credential otherwise ceasing to authenticate. No event is
+delivered on the connection once the gateway has learned of the revocation, including the
+`api_token.revoked` event of the connection's own token. Signing out ends every session of the
+user, so connections opened with a session token issued before the sign-out close, and a session
+started afterwards is unaffected. A client reconnects with a current token; reconnecting with the
+revoked, signed-out, or expired one is refused before acknowledgement as above. Over HTTP, a
+signed-out session token keeps authenticating until it expires, at most 15 minutes after it was
+issued.
 
 ## Try It Out
 

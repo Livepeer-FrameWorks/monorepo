@@ -178,3 +178,45 @@ func TestFanoutConcurrentPublishAttachDetach(t *testing.T) {
 	wg.Wait()
 	f.Close(nil)
 }
+
+func liveSignaled(s *Subscriber) bool {
+	select {
+	case <-s.Live():
+		return true
+	case <-time.After(50 * time.Millisecond):
+		return false
+	}
+}
+
+// A subscriber learns each time the upstream stream becomes subscribed: at
+// attach when it already is, and after every reconnect.
+func TestFanoutSignalsLiveOnAttachAndEveryReconnect(t *testing.T) {
+	f := NewFanout(4)
+	early, err := f.Attach()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if liveSignaled(early) {
+		t.Fatal("live signaled before the stream was subscribed")
+	}
+	f.SetLive(true)
+	if !liveSignaled(early) {
+		t.Fatal("live not signaled when the stream was subscribed")
+	}
+	late, err := f.Attach()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !liveSignaled(late) {
+		t.Fatal("a subscriber attaching to a subscribed stream was not signaled")
+	}
+	f.SetLive(true)
+	if liveSignaled(early) {
+		t.Fatal("live signaled again without a reconnect")
+	}
+	f.SetLive(false)
+	f.SetLive(true)
+	if !liveSignaled(early) || !liveSignaled(late) {
+		t.Fatal("live not signaled after a reconnect")
+	}
+}

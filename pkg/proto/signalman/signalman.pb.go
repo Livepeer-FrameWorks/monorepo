@@ -42,6 +42,11 @@ const (
 	// subscriber's tenant, as EVENT_TYPE_TENANT_EVENT with a TenantEvent payload.
 	// Subscribers name it explicitly: CHANNEL_ALL does not include it.
 	Channel_CHANNEL_EVENTS Channel = 8
+	// Session revocations (the internal domain event user.sessions_revoked) of
+	// the stream's tenant, as EVENT_TYPE_TENANT_EVENT with a TenantEvent
+	// payload. Only a service-token stream with a tenant may subscribe, so no
+	// tenant receives it; CHANNEL_ALL does not include it.
+	Channel_CHANNEL_SESSIONS Channel = 9
 )
 
 // Enum value maps for Channel.
@@ -56,6 +61,7 @@ var (
 		6: "CHANNEL_AI",
 		7: "CHANNEL_PLATFORM",
 		8: "CHANNEL_EVENTS",
+		9: "CHANNEL_SESSIONS",
 	}
 	Channel_value = map[string]int32{
 		"CHANNEL_UNSPECIFIED": 0,
@@ -67,6 +73,7 @@ var (
 		"CHANNEL_AI":          6,
 		"CHANNEL_PLATFORM":    7,
 		"CHANNEL_EVENTS":      8,
+		"CHANNEL_SESSIONS":    9,
 	}
 )
 
@@ -1576,7 +1583,7 @@ const file_signalman_proto_rawDesc = "" +
 	"\x15channel_subscriptions\x18\x03 \x03(\v2-.signalman.HubStats.ChannelSubscriptionsEntryR\x14channelSubscriptions\x1aG\n" +
 	"\x19ChannelSubscriptionsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\x05R\x05value:\x028\x01*\xc4\x01\n" +
+	"\x05value\x18\x02 \x01(\x05R\x05value:\x028\x01*\xda\x01\n" +
 	"\aChannel\x12\x17\n" +
 	"\x13CHANNEL_UNSPECIFIED\x10\x00\x12\x13\n" +
 	"\x0fCHANNEL_STREAMS\x10\x01\x12\x15\n" +
@@ -1587,7 +1594,8 @@ const file_signalman_proto_rawDesc = "" +
 	"\n" +
 	"CHANNEL_AI\x10\x06\x12\x14\n" +
 	"\x10CHANNEL_PLATFORM\x10\a\x12\x12\n" +
-	"\x0eCHANNEL_EVENTS\x10\b*\x9f\a\n" +
+	"\x0eCHANNEL_EVENTS\x10\b\x12\x14\n" +
+	"\x10CHANNEL_SESSIONS\x10\t*\x9f\a\n" +
 	"\tEventType\x12\x1a\n" +
 	"\x16EVENT_TYPE_UNSPECIFIED\x10\x00\x12%\n" +
 	"!EVENT_TYPE_SUBSCRIPTION_CONFIRMED\x10\x01\x12'\n" +

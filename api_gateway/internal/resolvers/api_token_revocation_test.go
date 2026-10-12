@@ -130,12 +130,19 @@ func (v *tokenValidator) ValidateAPIToken(_ context.Context, req *commodorepb.Va
 
 func validatorClients(t *testing.T, tokens map[string]*commodorepb.ValidateAPITokenResponse) *clients.ServiceClients {
 	t.Helper()
+	return internalServiceClients(t, &tokenValidator{tokens: tokens})
+}
+
+// internalServiceClients serves impl as Commodore's InternalService and
+// returns service clients connected to it.
+func internalServiceClients(t *testing.T, impl commodorepb.InternalServiceServer) *clients.ServiceClients {
+	t.Helper()
 	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
 	server := grpc.NewServer()
-	commodorepb.RegisterInternalServiceServer(server, &tokenValidator{tokens: tokens})
+	commodorepb.RegisterInternalServiceServer(server, impl)
 	go func() { _ = server.Serve(listener) }()
 	t.Cleanup(server.Stop)
 	client, err := commodore.NewGRPCClient(commodore.GRPCConfig{
@@ -156,11 +163,12 @@ type bridgeReplica struct {
 	url      string
 }
 
-func newBridgeReplica(t *testing.T, broker *signalmanBroker, sc *clients.ServiceClients) bridgeReplica {
+func newBridgeReplica(t *testing.T, broker streamOpener, sc *clients.ServiceClients) bridgeReplica {
 	t.Helper()
 	sm := newSubscriptionManager(logging.NewLoggerWithService("test"), SubscriptionManagerConfig{SignalmanAddrs: []string{"signalman.internal:19005"}}, broker)
 	t.Cleanup(func() { _ = sm.Shutdown() })
-	sessions := middleware.NewWebsocketSessions(sm.WatchAPITokenRevocations)
+	sessions := middleware.NewWebsocketSessions(sm.WatchCredentialRevocations)
+	sm.SetCredentialSockets(sessions)
 	srv := testserver.New()
 	srv.AddTransport(middleware.GraphQLWebsocketTransport(sc, []byte("jwt-secret"), nil, websocket.Upgrader{}, 0, sessions, middleware.DefaultWebsocketRevalidateInterval))
 	httpSrv := httptest.NewServer(srv)
@@ -266,55 +274,5 @@ func TestAPITokenRevocationClosesItsSocketsOnEveryBridgeReplica(t *testing.T) {
 	}
 	if code := socketCloseCode(t, otherOnB, 300*time.Millisecond); code != 0 {
 		t.Fatalf("socket of another token closed with %d, want it open", code)
-	}
-}
-
-// The watch passes only its tenant's api_token.revoked events, and it does
-// not take one of the tenant's GraphQL subscription slots.
-func TestWatchAPITokenRevocationsPassesOnlyItsTenantsRevocations(t *testing.T) {
-	broker := newSignalmanBroker()
-	sm := newSubscriptionManager(logging.NewLoggerWithService("test"), SubscriptionManagerConfig{
-		SignalmanAddrs: []string{"signalman.internal:19005"}, MaxSubscriptionsPerTenant: 1,
-	}, broker)
-	t.Cleanup(func() { _ = sm.Shutdown() })
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	revoked := make(chan string, 4)
-	go sm.WatchAPITokenRevocations(ctx, "tenant-1", func(tokenID string) { revoked <- tokenID })
-	broker.waitStreams(t, "tenant-1", signalmanpb.Channel_CHANNEL_EVENTS, 1)
-
-	if _, err := sm.SubscribeToTenantEvents(ctx, ConnectionConfig{TenantID: "tenant-1"}, TenantEventFilter{}); err != nil {
-		t.Fatalf("the watch took the tenant's only subscription slot: %v", err)
-	}
-
-	otherTenant := apiTokenRevokedEvent(t, "tenant-1", "token-2")
-	otherTenantID := "tenant-2"
-	otherTenant.TenantId = &otherTenantID
-	broker.publish(t, "tenant-1", signalmanpb.Channel_CHANNEL_EVENTS, otherTenant)
-
-	created, err := anypb.New(&publicv1.ApiTokenCreated{TokenId: "token-9"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	createdEvent := apiTokenRevokedEvent(t, "tenant-1", "token-9")
-	createdEvent.Data.GetTenantEvent().Type = "api_token.created"
-	createdEvent.Data.GetTenantEvent().Data = created
-	broker.publish(t, "tenant-1", signalmanpb.Channel_CHANNEL_EVENTS, createdEvent)
-
-	broker.publish(t, "tenant-1", signalmanpb.Channel_CHANNEL_EVENTS, apiTokenRevokedEvent(t, "tenant-1", "token-1"))
-
-	select {
-	case got := <-revoked:
-		if got != "token-1" {
-			t.Fatalf("watch passed %q, want only token-1", got)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("watch did not pass the tenant's revocation")
-	}
-	select {
-	case got := <-revoked:
-		t.Fatalf("watch passed an extra token %q", got)
-	case <-time.After(100 * time.Millisecond):
 	}
 }

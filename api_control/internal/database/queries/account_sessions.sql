@@ -114,6 +114,19 @@ SELECT COALESCE(revoked, false)::boolean AS revoked
 FROM commodore.refresh_tokens
 WHERE id = $1;
 
+-- name: RevokeUserSessions :one
+UPDATE commodore.users
+SET sessions_revoked_at = NOW()
+WHERE id = $1 AND tenant_id = $2
+RETURNING sessions_revoked_at;
+
+-- name: GetUserSessionState :one
+SELECT
+    COALESCE(is_active, false)::boolean AS is_active,
+    sessions_revoked_at
+FROM commodore.users
+WHERE id = $1 AND tenant_id = $2;
+
 -- name: RevokeRefreshTokensForUser :exec
 UPDATE commodore.refresh_tokens
 SET revoked = true

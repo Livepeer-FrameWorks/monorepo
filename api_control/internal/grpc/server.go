@@ -55,6 +55,7 @@ import (
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	dnspb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/dns"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/internalv1"
 	publicv1 "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/public/v1"
 	foghorncontrolpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
@@ -3268,6 +3269,41 @@ func (s *CommodoreServer) ValidateAPIToken(ctx context.Context, req *commodorepb
 	}, nil
 }
 
+// ValidateSession reports whether an interactive session access token may
+// still hold realtime connections: it must verify, its user must be active
+// in its tenant, and the user's sessions must not have been revoked in or
+// after the second the token was issued (JWT iat has whole-second precision,
+// so a token issued in the revocation's second counts as revoked).
+func (s *CommodoreServer) ValidateSession(ctx context.Context, req *commodorepb.ValidateSessionRequest) (*commodorepb.ValidateSessionResponse, error) {
+	claims, err := auth.ValidateInteractiveJWT(req.GetToken(), s.settings().JWTSecret)
+	if err != nil {
+		//nolint:nilerr // a token that does not verify is an invalid session, not a failed check
+		return &commodorepb.ValidateSessionResponse{Valid: false}, nil
+	}
+	if claims.UserID == "" || claims.TenantID == "" {
+		return &commodorepb.ValidateSessionResponse{Valid: false}, nil
+	}
+	state, err := commodoredb.New(s.db).GetUserSessionState(ctx, commodoredb.GetUserSessionStateParams{
+		ID: claims.UserID, TenantID: claims.TenantID,
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return &commodorepb.ValidateSessionResponse{Valid: false}, nil
+	}
+	if err != nil {
+		s.logger.WithError(err).WithField("user_id", claims.UserID).Error("Database error validating session")
+		return nil, status.Error(codes.Internal, "database error")
+	}
+	if !state.IsActive {
+		return &commodorepb.ValidateSessionResponse{Valid: false}, nil
+	}
+	if state.SessionsRevokedAt.Valid {
+		if claims.IssuedAt == nil || claims.IssuedAt.Unix() <= state.SessionsRevokedAt.Time.Unix() {
+			return &commodorepb.ValidateSessionResponse{Valid: false}, nil
+		}
+	}
+	return &commodorepb.ValidateSessionResponse{Valid: true}, nil
+}
+
 // Quartermaster lookup functions are package variables so tests can exercise
 // the ownership policy without a real Quartermaster gRPC server.
 var (
@@ -4967,12 +5003,14 @@ func (s *CommodoreServer) GetMe(ctx context.Context, req *commodorepb.GetMeReque
 	return result, nil
 }
 
-// Logout invalidates user session (token blacklisting handled at Gateway)
+// Logout ends every session of the calling user on every device: it deletes
+// the user's refresh tokens and revokes the access tokens issued so far for
+// realtime connections (revokeUserSessionsTx). The caller clears its own
+// cookies whatever happens here, so a failure is logged and the logout is
+// still acknowledged.
 func (s *CommodoreServer) Logout(ctx context.Context, req *commodorepb.LogoutRequest) (*commodorepb.LogoutResponse, error) {
-	// Get user context to delete their refresh tokens
 	userID, tenantID, err := extractUserContext(ctx)
 	if err != nil {
-		// Still acknowledge logout even without user context
 		//nolint:nilerr // graceful logout even without user context
 		return &commodorepb.LogoutResponse{
 			Success: true,
@@ -4980,12 +5018,19 @@ func (s *CommodoreServer) Logout(ctx context.Context, req *commodorepb.LogoutReq
 		}, nil
 	}
 
-	// Delete all refresh tokens for this user (logs them out of all devices)
-	err = commodoredb.New(s.db).DeleteRefreshTokensForUser(ctx, commodoredb.DeleteRefreshTokensForUserParams{
-		UserID: userID, TenantID: tenantID,
+	err = s.withEventTx(ctx, func(tx *sql.Tx) error {
+		if deleteErr := commodoredb.New(tx).DeleteRefreshTokensForUser(ctx, commodoredb.DeleteRefreshTokensForUserParams{
+			UserID: userID, TenantID: tenantID,
+		}); deleteErr != nil {
+			return deleteErr
+		}
+		return s.revokeUserSessionsTx(ctx, tx, userID, tenantID, internalv1.SessionRevocationReason_SESSION_REVOCATION_REASON_LOGOUT)
 	})
 	if err != nil {
-		s.logger.WithError(err).Warn("Failed to delete refresh tokens during logout")
+		s.logger.WithError(err).WithFields(logging.Fields{
+			"user_id":   userID,
+			"tenant_id": tenantID,
+		}).Error("Failed to end the user's sessions during logout")
 	}
 
 	return &commodorepb.LogoutResponse{
@@ -5087,6 +5132,13 @@ func (s *CommodoreServer) RefreshToken(ctx context.Context, req *commodorepb.Ref
 							}).Error("Failed to revoke sessions after refresh token reuse detection")
 							return txStatus(status.Error(codes.Unauthenticated, "session invalidated"), revokeErr)
 						}
+						if revokeErr := s.revokeUserSessionsTx(ctx, tx, userID, tenantID, internalv1.SessionRevocationReason_SESSION_REVOCATION_REASON_REFRESH_TOKEN_REUSE); revokeErr != nil {
+							s.logger.WithError(revokeErr).WithFields(logging.Fields{
+								"user_id":   userID,
+								"tenant_id": tenantID,
+							}).Error("Failed to revoke access tokens after refresh token reuse detection")
+							return txStatus(status.Error(codes.Unauthenticated, "session invalidated"), revokeErr)
+						}
 						// The revocation commits; the caller still receives Unauthenticated.
 						sessionInvalidated = true
 						return nil
@@ -5171,6 +5223,7 @@ func (s *CommodoreServer) RefreshToken(ctx context.Context, req *commodorepb.Ref
 		return nil, txErr
 	}
 	if sessionInvalidated {
+		s.domainEventsCommittedNotify()
 		return nil, status.Error(codes.Unauthenticated, "session invalidated")
 	}
 
@@ -6041,16 +6094,29 @@ func (s *CommodoreServer) ResetPassword(ctx context.Context, req *commodorepb.Re
 		return nil, status.Errorf(codes.Internal, "failed to hash password: %v", err)
 	}
 
-	// Update password only if this token is still valid, then consume it.
-	rowsAffected, err := queries.ResetUserPassword(ctx, commodoredb.ResetUserPasswordParams{
-		PasswordHash: sql.NullString{String: hashedPassword, Valid: true},
-		ID:           userID,
-		ResetToken:   sql.NullString{String: tokenHash, Valid: true},
+	// Update the password only if this token is still valid, consume it, and
+	// end every session opened with the old password, in one transaction.
+	err = s.withEventTx(ctx, func(tx *sql.Tx) error {
+		txQueries := commodoredb.New(tx)
+		tenantID, resetErr := txQueries.ResetUserPassword(ctx, commodoredb.ResetUserPasswordParams{
+			PasswordHash: sql.NullString{String: hashedPassword, Valid: true},
+			ID:           userID,
+			ResetToken:   sql.NullString{String: tokenHash, Valid: true},
+		})
+		if resetErr != nil {
+			return resetErr
+		}
+		if deleteErr := txQueries.DeleteRefreshTokensForUser(ctx, commodoredb.DeleteRefreshTokensForUserParams{
+			UserID: userID, TenantID: tenantID,
+		}); deleteErr != nil {
+			return deleteErr
+		}
+		return s.revokeUserSessionsTx(ctx, tx, userID, tenantID, internalv1.SessionRevocationReason_SESSION_REVOCATION_REASON_PASSWORD_RESET)
 	})
-	if err != nil {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Errorf(codes.Internal, "failed to update password: %v", err)
 	}
-	if rowsAffected == 0 {
+	if errors.Is(err, sql.ErrNoRows) {
 		return &commodorepb.ResetPasswordResponse{
 			Success: false,
 			Message: "invalid or expired reset token",
@@ -10165,6 +10231,7 @@ func (s *CommodoreServer) GetNodeHealth(ctx context.Context, req *foghorncontrol
 func commodoreServiceOnlyMethods() []string {
 	return []string{
 		commodorepb.InternalService_ValidateAPIToken_FullMethodName,
+		commodorepb.InternalService_ValidateSession_FullMethodName,
 		commodorepb.InternalService_ResolveStreamContext_FullMethodName,
 		commodorepb.InternalService_ListManagedStreams_FullMethodName,
 		commodorepb.InternalService_ResolveInternalName_FullMethodName,

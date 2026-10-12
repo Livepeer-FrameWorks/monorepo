@@ -107,7 +107,7 @@ func TestAccountRecoveryWalletRepository_RealPG(t *testing.T) {
 	if found, err := q.FindUserByResetToken(ctx, sql.NullString{String: resetHash, Valid: true}); err != nil || found != userID {
 		t.Fatalf("reset lookup=%q err=%v", found, err)
 	}
-	updated, err = q.ResetUserPassword(ctx, ResetUserPasswordParams{
+	resetTenant, err := q.ResetUserPassword(ctx, ResetUserPasswordParams{
 		PasswordHash: sql.NullString{String: "new-password", Valid: true},
 		ID:           userID,
 		ResetToken:   sql.NullString{String: resetHash, Valid: true},
@@ -115,22 +115,34 @@ func TestAccountRecoveryWalletRepository_RealPG(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if updated != 1 {
-		t.Fatalf("updated reset rows = %d, want 1", updated)
+	if resetTenant != tenantID {
+		t.Fatalf("reset returned tenant %q, want %q", resetTenant, tenantID)
 	}
-	updated, err = q.ResetUserPassword(ctx, ResetUserPasswordParams{
+	if _, err = q.ResetUserPassword(ctx, ResetUserPasswordParams{
 		PasswordHash: sql.NullString{String: "second-password", Valid: true},
 		ID:           userID,
 		ResetToken:   sql.NullString{String: resetHash, Valid: true},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if updated != 0 {
-		t.Fatal("consumed reset token changed the password a second time")
+	}); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("consumed reset token changed the password a second time (err=%v)", err)
 	}
 	if _, err := q.FindUserByResetToken(ctx, sql.NullString{String: resetHash, Valid: true}); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("consumed reset token err=%v", err)
+	}
+
+	state, err := q.GetUserSessionState(ctx, GetUserSessionStateParams{ID: userID, TenantID: tenantID})
+	if err != nil || state.SessionsRevokedAt.Valid {
+		t.Fatalf("session state before revocation = %+v, err=%v; want never revoked", state, err)
+	}
+	revokedAt, err := q.RevokeUserSessions(ctx, RevokeUserSessionsParams{ID: userID, TenantID: tenantID})
+	if err != nil || !revokedAt.Valid {
+		t.Fatalf("revoke sessions = %+v, err=%v", revokedAt, err)
+	}
+	state, err = q.GetUserSessionState(ctx, GetUserSessionStateParams{ID: userID, TenantID: tenantID})
+	if err != nil || !state.SessionsRevokedAt.Valid || !state.SessionsRevokedAt.Time.Equal(revokedAt.Time) {
+		t.Fatalf("session state after revocation = %+v, err=%v; want revoked at %s", state, err, revokedAt.Time)
+	}
+	if _, err := q.RevokeUserSessions(ctx, RevokeUserSessionsParams{ID: userID, TenantID: otherTenantID}); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("revoking the user's sessions in another tenant err=%v, want no rows", err)
 	}
 
 	if err := q.UpdateUserFirstName(ctx, UpdateUserFirstNameParams{

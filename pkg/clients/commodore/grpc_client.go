@@ -654,6 +654,14 @@ func (c *GRPCClient) ValidateAPIToken(ctx context.Context, token string) (*commo
 	})
 }
 
+// ValidateSession reports whether a session access token may still hold
+// realtime connections: valid=false once the user's sessions were revoked.
+func (c *GRPCClient) ValidateSession(ctx context.Context, token string) (*commodorepb.ValidateSessionResponse, error) {
+	return c.internal.ValidateSession(withServiceAuth(ctx), &commodorepb.ValidateSessionRequest{
+		Token: token,
+	})
+}
+
 // MintMistAdminSession mints a short-TTL session token bound to a single
 // edge node. Caller is expected to have authorized the operator at the
 // Gateway resolver level — this RPC is the mint primitive only.

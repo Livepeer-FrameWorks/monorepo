@@ -282,9 +282,11 @@ func TestResetPasswordRejectsTokenConsumedDuringHashing(t *testing.T) {
 	mock.ExpectQuery("SELECT id FROM commodore.users WHERE reset_token").
 		WithArgs(sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("user-1"))
-	mock.ExpectExec("UPDATE commodore.users.*reset_token =").
+	mock.ExpectBegin()
+	mock.ExpectQuery("UPDATE commodore.users.*reset_token =").
 		WithArgs(sqlmock.AnyArg(), "user-1", sqlmock.AnyArg()).
-		WillReturnResult(sqlmock.NewResult(0, 0))
+		WillReturnRows(sqlmock.NewRows([]string{"tenant_id"}))
+	mock.ExpectRollback()
 
 	resp, err := s.ResetPassword(context.Background(), &commodorepb.ResetPasswordRequest{
 		Token:    "already-consumed",

@@ -136,3 +136,85 @@ func TestDialerOpensTenantScopedSingleChannelStream(t *testing.T) {
 		t.Fatalf("Open after Close err = %v, want ErrDialerClosed", err)
 	}
 }
+
+// scriptedSignalmanServer answers a subscribe with the messages in script.
+type scriptedSignalmanServer struct {
+	signalmanpb.UnimplementedSignalmanServiceServer
+	script []*signalmanpb.ServerMessage
+}
+
+func (s *scriptedSignalmanServer) Subscribe(stream signalmanpb.SignalmanService_SubscribeServer) error {
+	if _, err := stream.Recv(); err != nil {
+		return err
+	}
+	for _, msg := range s.script {
+		if err := stream.Send(msg); err != nil {
+			return err
+		}
+	}
+	<-stream.Context().Done()
+	return nil
+}
+
+func openScripted(t *testing.T, script ...*signalmanpb.ServerMessage) (EventStream, error) {
+	t.Helper()
+	lis, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	srv := grpc.NewServer()
+	signalmanpb.RegisterSignalmanServiceServer(srv, &scriptedSignalmanServer{script: script})
+	go func() { _ = srv.Serve(lis) }()
+	t.Cleanup(srv.Stop)
+	dialer, err := NewDialer(DialerConfig{AllowInsecure: true, Logger: logging.NewLoggerWithService("test"), OpenTimeout: 500 * time.Millisecond})
+	if err != nil {
+		t.Fatalf("NewDialer: %v", err)
+	}
+	t.Cleanup(func() { _ = dialer.Close() })
+	return dialer.Open(context.Background(), lis.Addr().String(), StreamKey{TenantID: "tenant-a", Channel: signalmanpb.Channel_CHANNEL_EVENTS})
+}
+
+func confirmation(channels ...signalmanpb.Channel) *signalmanpb.ServerMessage {
+	return &signalmanpb.ServerMessage{Message: &signalmanpb.ServerMessage_SubscriptionConfirmed{
+		SubscriptionConfirmed: &signalmanpb.SubscriptionConfirmation{SubscribedChannels: channels},
+	}}
+}
+
+func eventMessage(eventType signalmanpb.EventType) *signalmanpb.ServerMessage {
+	return &signalmanpb.ServerMessage{Message: &signalmanpb.ServerMessage_Event{Event: &signalmanpb.SignalmanEvent{EventType: eventType}}}
+}
+
+// Open returns once Signalman confirmed the channel, and an event Signalman
+// sent before its confirmation is still delivered first.
+func TestDialerOpenWaitsForTheSubscriptionConfirmation(t *testing.T) {
+	stream, err := openScripted(t,
+		eventMessage(signalmanpb.EventType_EVENT_TYPE_TENANT_EVENT),
+		confirmation(signalmanpb.Channel_CHANNEL_EVENTS),
+		eventMessage(signalmanpb.EventType_EVENT_TYPE_STREAM_END),
+	)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer stream.Close()
+	for _, want := range []signalmanpb.EventType{signalmanpb.EventType_EVENT_TYPE_TENANT_EVENT, signalmanpb.EventType_EVENT_TYPE_STREAM_END} {
+		got, err := stream.Recv()
+		if err != nil || got.GetEventType() != want {
+			t.Fatalf("Recv = %v, %v; want %s", got, err, want)
+		}
+	}
+}
+
+// A confirmation without the channel is a refusal, and a stream that is
+// never confirmed fails Open within the open timeout.
+func TestDialerOpenFailsWithoutAConfirmationOfTheChannel(t *testing.T) {
+	if _, err := openScripted(t, confirmation(signalmanpb.Channel_CHANNEL_ALL)); err == nil {
+		t.Fatal("Open succeeded although Signalman did not confirm the channel")
+	}
+	start := time.Now()
+	if _, err := openScripted(t, eventMessage(signalmanpb.EventType_EVENT_TYPE_TENANT_EVENT)); err == nil {
+		t.Fatal("Open succeeded without a confirmation")
+	}
+	if waited := time.Since(start); waited > 3*time.Second {
+		t.Fatalf("Open waited %s for a confirmation, want about the 500ms open timeout", waited)
+	}
+}

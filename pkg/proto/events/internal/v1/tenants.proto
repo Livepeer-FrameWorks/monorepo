@@ -7,6 +7,7 @@ package frameworks.events.internal.v1;
 option go_package = "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/internalv1;internalv1";
 
 import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
 import "common.proto";
 import "events/options.proto";
 
@@ -40,6 +41,28 @@ message TenantClusterUnassigned {
   option (frameworks.events.event) = {type: "tenant.cluster_unassigned", visibility: VISIBILITY_INTERNAL, scope: SCOPE_TENANT, aggregate: "tenants"};
   string tenant_id = 1;
   string cluster_id = 2;
+}
+
+enum SessionRevocationReason {
+  SESSION_REVOCATION_REASON_UNSPECIFIED = 0;
+  // The user signed out, which ends every one of the user's sessions.
+  SESSION_REVOCATION_REASON_LOGOUT = 1;
+  SESSION_REVOCATION_REASON_PASSWORD_RESET = 2;
+  // A rotated refresh token was replayed after its grace period, so two
+  // parties hold the same session line.
+  SESSION_REVOCATION_REASON_REFRESH_TOKEN_REUSE = 3;
+}
+
+// UserSessionsRevoked ends every interactive session of a user: each access
+// token issued at or before revoked_at (whole seconds, the precision of the
+// token's iat) stops authenticating realtime connections, and the user's
+// refresh tokens are gone. Signalman delivers it on CHANNEL_SESSIONS so every
+// Bridge replica closes the user's GraphQL WebSockets.
+message UserSessionsRevoked {
+  option (frameworks.events.event) = {type: "user.sessions_revoked", visibility: VISIBILITY_INTERNAL, scope: SCOPE_TENANT, aggregate: "users"};
+  string user_id = 1;
+  google.protobuf.Timestamp revoked_at = 2;
+  SessionRevocationReason reason = 3;
 }
 
 // ClusterCreated and ClusterUpdated describe infrastructure, so they are

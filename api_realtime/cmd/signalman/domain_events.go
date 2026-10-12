@@ -48,22 +48,34 @@ func registerDomainEventSubscriptions(reg handlerRegistrar, prefixes []string, h
 	return topics
 }
 
+// sessionRevocationType is the internal domain event delivered on
+// CHANNEL_SESSIONS, which only service streams may subscribe to.
+const sessionRevocationType = "user.sessions_revoked"
+
 // newDomainEventHandler delivers public domain events to the subscribers of
-// their tenant on CHANNEL_EVENTS, once per event ID within the window.
+// their tenant on CHANNEL_EVENTS, and user.sessions_revoked to the service
+// streams of its tenant on CHANNEL_SESSIONS, once per event ID within the
+// window.
 //
 // A record whose ce_visibility header is not public is dropped before its
-// payload is decoded. A record that claims to be public is delivered only if
-// this binary's registry also registers its type as public and it names a
-// tenant, so an internal event never reaches a tenant even with a wrong header.
-// A type this binary does not register is dropped: it cannot be checked. An
-// undecodable record returns an error for the DLQ wrapper.
+// payload is decoded, except a session revocation, whose registered type is
+// checked to be internal. A record that claims to be public is delivered only
+// if this binary's registry also registers its type as public and it names a
+// tenant, so an internal event never reaches a tenant even with a wrong
+// header. A type this binary does not register is dropped: it cannot be
+// checked. An undecodable record returns an error for the DLQ wrapper.
 //
 // The window is separate from the one the legacy topics use: while producers
 // dual-write, a legacy service event carries the same ID as its domain event,
 // and each belongs on its own channel.
 func newDomainEventHandler(hub tenantEventHub, window *eventIDWindow, m *metrics.Metrics, logger logging.Logger) kafka.Handler {
 	return func(_ context.Context, msg kafka.Message) error {
-		if msg.Headers[events.HeaderVisibility] != events.VisibilityPublic {
+		channel := signalmanpb.Channel_CHANNEL_EVENTS
+		switch {
+		case msg.Headers[events.HeaderVisibility] == events.VisibilityPublic:
+		case msg.Headers[events.HeaderVisibility] == events.VisibilityInternal && msg.Headers[events.HeaderType] == sessionRevocationType:
+			channel = signalmanpb.Channel_CHANNEL_SESSIONS
+		default:
 			m.RecordDomainEventDropped(dropNotPublic)
 			return nil
 		}
@@ -83,7 +95,11 @@ func newDomainEventHandler(hub tenantEventHub, window *eventIDWindow, m *metrics
 			}
 			return fmt.Errorf("parse domain event: %w", err)
 		}
-		if !rec.Spec.Public() {
+		if channel == signalmanpb.Channel_CHANNEL_SESSIONS && (rec.Spec.Public() || rec.Type != sessionRevocationType) {
+			m.RecordDomainEventDropped(dropRegistryInternal)
+			return nil
+		}
+		if channel == signalmanpb.Channel_CHANNEL_EVENTS && !rec.Spec.Public() {
 			m.RecordDomainEventDropped(dropRegistryInternal)
 			logger.WithFields(logging.Fields{
 				"event_type": rec.Type,
@@ -104,7 +120,7 @@ func newDomainEventHandler(hub tenantEventHub, window *eventIDWindow, m *metrics
 		if err != nil {
 			return fmt.Errorf("pack %s: %w", rec.Type, err)
 		}
-		hub.BroadcastToTenant(rec.TenantID, signalmanpb.EventType_EVENT_TYPE_TENANT_EVENT, signalmanpb.Channel_CHANNEL_EVENTS,
+		hub.BroadcastToTenant(rec.TenantID, signalmanpb.EventType_EVENT_TYPE_TENANT_EVENT, channel,
 			&signalmanpb.EventData{Payload: &signalmanpb.EventData_TenantEvent{TenantEvent: &signalmanpb.TenantEvent{
 				Id:      rec.ID,
 				Type:    rec.Type,

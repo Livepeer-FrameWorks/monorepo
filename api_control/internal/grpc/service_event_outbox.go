@@ -13,9 +13,11 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/events"
 	eventoutbox "github.com/Livepeer-FrameWorks/monorepo/pkg/events/outbox"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/internalv1"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"github.com/google/uuid"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/outbox"
@@ -90,20 +92,56 @@ func (s *CommodoreServer) enqueueEventTx(ctx context.Context, exec commodoredb.D
 		}
 		legacy.EventId = id.String()
 	} else {
-		if s.tokenHasher == nil {
-			return errors.New("domain event actor hasher is not configured")
-		}
-		ev, err := events.New(commodoreEventSource, legacy.GetTenantId(), domain.aggregateID, domain.msg,
-			events.WithActor(events.ActorFromContext(ctx, s.tokenHasher)), events.WithTime(occurredAt))
+		ev, err := s.enqueueDomainEventTx(ctx, exec, legacy.GetTenantId(), domain, occurredAt)
 		if err != nil {
-			return fmt.Errorf("build domain event for %s: %w", legacy.GetEventType(), err)
-		}
-		if err := eventoutbox.Enqueue(ctx, exec, DomainEventSchema, ev); err != nil {
-			return err
+			return fmt.Errorf("domain event for %s: %w", legacy.GetEventType(), err)
 		}
 		legacy.EventId = ev.ID
 	}
 	_, err := s.EnqueueServiceEventTx(ctx, exec, legacy)
+	return err
+}
+
+// enqueueDomainEventTx writes a domain event through exec, which must be the
+// transaction that commits the state change it describes. A domain event with
+// no legacy counterpart, such as an internal one, is written with this alone.
+func (s *CommodoreServer) enqueueDomainEventTx(ctx context.Context, exec commodoredb.DBTX, tenantID string, domain *domainEvent, occurredAt time.Time) (events.Event, error) {
+	if s.tokenHasher == nil {
+		return events.Event{}, errors.New("domain event actor hasher is not configured")
+	}
+	ev, err := events.New(commodoreEventSource, tenantID, domain.aggregateID, domain.msg,
+		events.WithActor(events.ActorFromContext(ctx, s.tokenHasher)), events.WithTime(occurredAt))
+	if err != nil {
+		return events.Event{}, fmt.Errorf("build domain event: %w", err)
+	}
+	if err := eventoutbox.Enqueue(ctx, exec, DomainEventSchema, ev); err != nil {
+		return events.Event{}, err
+	}
+	return ev, nil
+}
+
+// revokeUserSessionsTx records, inside tx, that every access token of the
+// user issued so far no longer holds realtime connections, and writes the
+// internal user.sessions_revoked event that has every Bridge replica close
+// the user's GraphQL WebSockets. The caller removes the user's refresh tokens
+// in the same transaction and commits it through withEventTx (or wakes the
+// relay itself). A user missing from the tenant has no session to revoke.
+func (s *CommodoreServer) revokeUserSessionsTx(ctx context.Context, tx *sql.Tx, userID, tenantID string, reason internalv1.SessionRevocationReason) error {
+	revokedAt, err := commodoredb.New(tx).RevokeUserSessions(ctx, commodoredb.RevokeUserSessionsParams{ID: userID, TenantID: tenantID})
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("revoke sessions: %w", err)
+	}
+	if ctxkeys.IsDemoMode(ctx) {
+		return nil
+	}
+	at := revokedAt.Time.UTC()
+	_, err = s.enqueueDomainEventTx(ctx, tx, tenantID, &domainEvent{
+		msg:         &internalv1.UserSessionsRevoked{UserId: userID, RevokedAt: timestamppb.New(at), Reason: reason},
+		aggregateID: userID,
+	}, at)
 	return err
 }
 
@@ -140,13 +178,18 @@ func (s *CommodoreServer) withEventTx(ctx context.Context, fn func(tx *sql.Tx) e
 	if err := database.WithRetryablePostgresTx(ctx, s.db, nil, fn); err != nil {
 		return err
 	}
-	// Realtime consumers act on domain events, such as Bridge closing a
-	// revoked API token's sockets, so delivery starts at commit rather than
-	// at the relay's next poll.
+	s.domainEventsCommittedNotify()
+	return nil
+}
+
+// domainEventsCommittedNotify wakes the domain event relay after a
+// transaction that wrote domain events committed. Realtime consumers act on
+// them, such as Bridge closing a revoked credential's sockets, so delivery
+// starts at commit rather than at the relay's next poll.
+func (s *CommodoreServer) domainEventsCommittedNotify() {
 	if s.domainEventsCommitted != nil {
 		s.domainEventsCommitted()
 	}
-	return nil
 }
 
 // EnqueueServiceEventTx writes the legacy outbox row inside the caller's

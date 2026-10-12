@@ -42,6 +42,9 @@ CREATE TABLE IF NOT EXISTS commodore.users (
     token_expires_at TIMESTAMP,
     reset_token VARCHAR(255),
     reset_token_expires TIMESTAMP,
+    -- Access tokens issued at or before this instant (whole seconds) no longer
+    -- hold realtime connections; set when every session of the user ends.
+    sessions_revoked_at TIMESTAMPTZ,
 
     -- ===== PROFILE =====
     first_name VARCHAR(100),

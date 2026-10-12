@@ -50,6 +50,9 @@ async def watch(ws, result, revoked):
             if kind == "ping":
                 await ws.send(json.dumps({"type": "pong"}))
                 continue
+            # "complete" ends the subscription without delivering anything.
+            if kind == "complete":
+                continue
             if kind == "next":
                 event = ((msg.get("payload") or {}).get("data") or {}).get("tenantEvents") or {}
                 kind = event.get("type")

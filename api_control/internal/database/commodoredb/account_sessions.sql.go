@@ -238,6 +238,31 @@ func (q *Queries) GetUserProfile(ctx context.Context, arg GetUserProfileParams) 
 	return i, err
 }
 
+const getUserSessionState = `-- name: GetUserSessionState :one
+SELECT
+    COALESCE(is_active, false)::boolean AS is_active,
+    sessions_revoked_at
+FROM commodore.users
+WHERE id = $1 AND tenant_id = $2
+`
+
+type GetUserSessionStateParams struct {
+	ID       string `db:"id" json:"id"`
+	TenantID string `db:"tenant_id" json:"tenant_id"`
+}
+
+type GetUserSessionStateRow struct {
+	IsActive          bool         `db:"is_active" json:"is_active"`
+	SessionsRevokedAt sql.NullTime `db:"sessions_revoked_at" json:"sessions_revoked_at"`
+}
+
+func (q *Queries) GetUserSessionState(ctx context.Context, arg GetUserSessionStateParams) (GetUserSessionStateRow, error) {
+	row := q.db.QueryRowContext(ctx, getUserSessionState, arg.ID, arg.TenantID)
+	var i GetUserSessionStateRow
+	err := row.Scan(&i.IsActive, &i.SessionsRevokedAt)
+	return i, err
+}
+
 const getWalletIdentityByAddress = `-- name: GetWalletIdentityByAddress :one
 SELECT tenant_id, user_id
 FROM commodore.wallet_identities
@@ -509,6 +534,25 @@ type RevokeRefreshTokensForUserParams struct {
 func (q *Queries) RevokeRefreshTokensForUser(ctx context.Context, arg RevokeRefreshTokensForUserParams) error {
 	_, err := q.db.ExecContext(ctx, revokeRefreshTokensForUser, arg.UserID, arg.TenantID)
 	return err
+}
+
+const revokeUserSessions = `-- name: RevokeUserSessions :one
+UPDATE commodore.users
+SET sessions_revoked_at = NOW()
+WHERE id = $1 AND tenant_id = $2
+RETURNING sessions_revoked_at
+`
+
+type RevokeUserSessionsParams struct {
+	ID       string `db:"id" json:"id"`
+	TenantID string `db:"tenant_id" json:"tenant_id"`
+}
+
+func (q *Queries) RevokeUserSessions(ctx context.Context, arg RevokeUserSessionsParams) (sql.NullTime, error) {
+	row := q.db.QueryRowContext(ctx, revokeUserSessions, arg.ID, arg.TenantID)
+	var sessions_revoked_at sql.NullTime
+	err := row.Scan(&sessions_revoked_at)
+	return sessions_revoked_at, err
 }
 
 const rotateRefreshToken = `-- name: RotateRefreshToken :exec

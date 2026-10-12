@@ -65,8 +65,15 @@ type wsOutcome struct {
 // cookie, when set, is the access_token cookie Bridge captures at upgrade.
 func dialGraphQLWS(t *testing.T, serviceClients *clients.ServiceClients, payload map[string]any, cookie string) wsOutcome {
 	t.Helper()
+	return dialGraphQLWSSessions(t, serviceClients, nil, payload, cookie)
+}
+
+// dialGraphQLWSSessions is dialGraphQLWS with the transport tracking its
+// connections in sessions.
+func dialGraphQLWSSessions(t *testing.T, serviceClients *clients.ServiceClients, sessions *WebsocketSessions, payload map[string]any, cookie string) wsOutcome {
+	t.Helper()
 	srv := testserver.New()
-	srv.AddTransport(GraphQLWebsocketTransport(serviceClients, wsInitSecret, nil, websocket.Upgrader{}, 0, nil, 0))
+	srv.AddTransport(GraphQLWebsocketTransport(serviceClients, wsInitSecret, nil, websocket.Upgrader{}, 0, sessions, 0))
 	// Bridge's /graphql/ws route puts the upgrade's access_token cookie in the
 	// request context before handing the request to gqlgen.
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

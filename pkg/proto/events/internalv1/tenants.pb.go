@@ -12,6 +12,7 @@ import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	structpb "google.golang.org/protobuf/types/known/structpb"
+	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
@@ -23,6 +24,61 @@ const (
 	// Verify that runtime/protoimpl is sufficiently up-to-date.
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
+
+type SessionRevocationReason int32
+
+const (
+	SessionRevocationReason_SESSION_REVOCATION_REASON_UNSPECIFIED SessionRevocationReason = 0
+	// The user signed out, which ends every one of the user's sessions.
+	SessionRevocationReason_SESSION_REVOCATION_REASON_LOGOUT         SessionRevocationReason = 1
+	SessionRevocationReason_SESSION_REVOCATION_REASON_PASSWORD_RESET SessionRevocationReason = 2
+	// A rotated refresh token was replayed after its grace period, so two
+	// parties hold the same session line.
+	SessionRevocationReason_SESSION_REVOCATION_REASON_REFRESH_TOKEN_REUSE SessionRevocationReason = 3
+)
+
+// Enum value maps for SessionRevocationReason.
+var (
+	SessionRevocationReason_name = map[int32]string{
+		0: "SESSION_REVOCATION_REASON_UNSPECIFIED",
+		1: "SESSION_REVOCATION_REASON_LOGOUT",
+		2: "SESSION_REVOCATION_REASON_PASSWORD_RESET",
+		3: "SESSION_REVOCATION_REASON_REFRESH_TOKEN_REUSE",
+	}
+	SessionRevocationReason_value = map[string]int32{
+		"SESSION_REVOCATION_REASON_UNSPECIFIED":         0,
+		"SESSION_REVOCATION_REASON_LOGOUT":              1,
+		"SESSION_REVOCATION_REASON_PASSWORD_RESET":      2,
+		"SESSION_REVOCATION_REASON_REFRESH_TOKEN_REUSE": 3,
+	}
+)
+
+func (x SessionRevocationReason) Enum() *SessionRevocationReason {
+	p := new(SessionRevocationReason)
+	*p = x
+	return p
+}
+
+func (x SessionRevocationReason) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (SessionRevocationReason) Descriptor() protoreflect.EnumDescriptor {
+	return file_events_internal_v1_tenants_proto_enumTypes[0].Descriptor()
+}
+
+func (SessionRevocationReason) Type() protoreflect.EnumType {
+	return &file_events_internal_v1_tenants_proto_enumTypes[0]
+}
+
+func (x SessionRevocationReason) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use SessionRevocationReason.Descriptor instead.
+func (SessionRevocationReason) EnumDescriptor() ([]byte, []int) {
+	return file_events_internal_v1_tenants_proto_rawDescGZIP(), []int{0}
+}
 
 type ClusterRejectReason int32
 
@@ -69,11 +125,11 @@ func (x ClusterRejectReason) String() string {
 }
 
 func (ClusterRejectReason) Descriptor() protoreflect.EnumDescriptor {
-	return file_events_internal_v1_tenants_proto_enumTypes[0].Descriptor()
+	return file_events_internal_v1_tenants_proto_enumTypes[1].Descriptor()
 }
 
 func (ClusterRejectReason) Type() protoreflect.EnumType {
-	return &file_events_internal_v1_tenants_proto_enumTypes[0]
+	return &file_events_internal_v1_tenants_proto_enumTypes[1]
 }
 
 func (x ClusterRejectReason) Number() protoreflect.EnumNumber {
@@ -82,7 +138,7 @@ func (x ClusterRejectReason) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use ClusterRejectReason.Descriptor instead.
 func (ClusterRejectReason) EnumDescriptor() ([]byte, []int) {
-	return file_events_internal_v1_tenants_proto_rawDescGZIP(), []int{0}
+	return file_events_internal_v1_tenants_proto_rawDescGZIP(), []int{1}
 }
 
 type TenantCreated struct {
@@ -337,6 +393,71 @@ func (x *TenantClusterUnassigned) GetClusterId() string {
 	return ""
 }
 
+// UserSessionsRevoked ends every interactive session of a user: each access
+// token issued at or before revoked_at (whole seconds, the precision of the
+// token's iat) stops authenticating realtime connections, and the user's
+// refresh tokens are gone. Signalman delivers it on CHANNEL_SESSIONS so every
+// Bridge replica closes the user's GraphQL WebSockets.
+type UserSessionsRevoked struct {
+	state         protoimpl.MessageState  `protogen:"open.v1"`
+	UserId        string                  `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	RevokedAt     *timestamppb.Timestamp  `protobuf:"bytes,2,opt,name=revoked_at,json=revokedAt,proto3" json:"revoked_at,omitempty"`
+	Reason        SessionRevocationReason `protobuf:"varint,3,opt,name=reason,proto3,enum=frameworks.events.internal.v1.SessionRevocationReason" json:"reason,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UserSessionsRevoked) Reset() {
+	*x = UserSessionsRevoked{}
+	mi := &file_events_internal_v1_tenants_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UserSessionsRevoked) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UserSessionsRevoked) ProtoMessage() {}
+
+func (x *UserSessionsRevoked) ProtoReflect() protoreflect.Message {
+	mi := &file_events_internal_v1_tenants_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UserSessionsRevoked.ProtoReflect.Descriptor instead.
+func (*UserSessionsRevoked) Descriptor() ([]byte, []int) {
+	return file_events_internal_v1_tenants_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *UserSessionsRevoked) GetUserId() string {
+	if x != nil {
+		return x.UserId
+	}
+	return ""
+}
+
+func (x *UserSessionsRevoked) GetRevokedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.RevokedAt
+	}
+	return nil
+}
+
+func (x *UserSessionsRevoked) GetReason() SessionRevocationReason {
+	if x != nil {
+		return x.Reason
+	}
+	return SessionRevocationReason_SESSION_REVOCATION_REASON_UNSPECIFIED
+}
+
 // ClusterCreated and ClusterUpdated describe infrastructure, so they are
 // platform-scoped: the owner, when there is one, is a payload field and never
 // the envelope tenant.
@@ -350,7 +471,7 @@ type ClusterCreated struct {
 
 func (x *ClusterCreated) Reset() {
 	*x = ClusterCreated{}
-	mi := &file_events_internal_v1_tenants_proto_msgTypes[5]
+	mi := &file_events_internal_v1_tenants_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -362,7 +483,7 @@ func (x *ClusterCreated) String() string {
 func (*ClusterCreated) ProtoMessage() {}
 
 func (x *ClusterCreated) ProtoReflect() protoreflect.Message {
-	mi := &file_events_internal_v1_tenants_proto_msgTypes[5]
+	mi := &file_events_internal_v1_tenants_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -375,7 +496,7 @@ func (x *ClusterCreated) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClusterCreated.ProtoReflect.Descriptor instead.
 func (*ClusterCreated) Descriptor() ([]byte, []int) {
-	return file_events_internal_v1_tenants_proto_rawDescGZIP(), []int{5}
+	return file_events_internal_v1_tenants_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *ClusterCreated) GetClusterId() string {
@@ -406,7 +527,7 @@ type ClusterUpdated struct {
 
 func (x *ClusterUpdated) Reset() {
 	*x = ClusterUpdated{}
-	mi := &file_events_internal_v1_tenants_proto_msgTypes[6]
+	mi := &file_events_internal_v1_tenants_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -418,7 +539,7 @@ func (x *ClusterUpdated) String() string {
 func (*ClusterUpdated) ProtoMessage() {}
 
 func (x *ClusterUpdated) ProtoReflect() protoreflect.Message {
-	mi := &file_events_internal_v1_tenants_proto_msgTypes[6]
+	mi := &file_events_internal_v1_tenants_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -431,7 +552,7 @@ func (x *ClusterUpdated) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClusterUpdated.ProtoReflect.Descriptor instead.
 func (*ClusterUpdated) Descriptor() ([]byte, []int) {
-	return file_events_internal_v1_tenants_proto_rawDescGZIP(), []int{6}
+	return file_events_internal_v1_tenants_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *ClusterUpdated) GetClusterId() string {
@@ -481,7 +602,7 @@ type ClusterInviteCreated struct {
 
 func (x *ClusterInviteCreated) Reset() {
 	*x = ClusterInviteCreated{}
-	mi := &file_events_internal_v1_tenants_proto_msgTypes[7]
+	mi := &file_events_internal_v1_tenants_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -493,7 +614,7 @@ func (x *ClusterInviteCreated) String() string {
 func (*ClusterInviteCreated) ProtoMessage() {}
 
 func (x *ClusterInviteCreated) ProtoReflect() protoreflect.Message {
-	mi := &file_events_internal_v1_tenants_proto_msgTypes[7]
+	mi := &file_events_internal_v1_tenants_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -506,7 +627,7 @@ func (x *ClusterInviteCreated) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClusterInviteCreated.ProtoReflect.Descriptor instead.
 func (*ClusterInviteCreated) Descriptor() ([]byte, []int) {
-	return file_events_internal_v1_tenants_proto_rawDescGZIP(), []int{7}
+	return file_events_internal_v1_tenants_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *ClusterInviteCreated) GetInviteId() string {
@@ -540,7 +661,7 @@ type ClusterInviteRevoked struct {
 
 func (x *ClusterInviteRevoked) Reset() {
 	*x = ClusterInviteRevoked{}
-	mi := &file_events_internal_v1_tenants_proto_msgTypes[8]
+	mi := &file_events_internal_v1_tenants_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -552,7 +673,7 @@ func (x *ClusterInviteRevoked) String() string {
 func (*ClusterInviteRevoked) ProtoMessage() {}
 
 func (x *ClusterInviteRevoked) ProtoReflect() protoreflect.Message {
-	mi := &file_events_internal_v1_tenants_proto_msgTypes[8]
+	mi := &file_events_internal_v1_tenants_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -565,7 +686,7 @@ func (x *ClusterInviteRevoked) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClusterInviteRevoked.ProtoReflect.Descriptor instead.
 func (*ClusterInviteRevoked) Descriptor() ([]byte, []int) {
-	return file_events_internal_v1_tenants_proto_rawDescGZIP(), []int{8}
+	return file_events_internal_v1_tenants_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *ClusterInviteRevoked) GetInviteId() string {
@@ -593,7 +714,7 @@ type ClusterSubscriptionRequested struct {
 
 func (x *ClusterSubscriptionRequested) Reset() {
 	*x = ClusterSubscriptionRequested{}
-	mi := &file_events_internal_v1_tenants_proto_msgTypes[9]
+	mi := &file_events_internal_v1_tenants_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -605,7 +726,7 @@ func (x *ClusterSubscriptionRequested) String() string {
 func (*ClusterSubscriptionRequested) ProtoMessage() {}
 
 func (x *ClusterSubscriptionRequested) ProtoReflect() protoreflect.Message {
-	mi := &file_events_internal_v1_tenants_proto_msgTypes[9]
+	mi := &file_events_internal_v1_tenants_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -618,7 +739,7 @@ func (x *ClusterSubscriptionRequested) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClusterSubscriptionRequested.ProtoReflect.Descriptor instead.
 func (*ClusterSubscriptionRequested) Descriptor() ([]byte, []int) {
-	return file_events_internal_v1_tenants_proto_rawDescGZIP(), []int{9}
+	return file_events_internal_v1_tenants_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *ClusterSubscriptionRequested) GetSubscriptionId() string {
@@ -645,7 +766,7 @@ type ClusterSubscriptionApproved struct {
 
 func (x *ClusterSubscriptionApproved) Reset() {
 	*x = ClusterSubscriptionApproved{}
-	mi := &file_events_internal_v1_tenants_proto_msgTypes[10]
+	mi := &file_events_internal_v1_tenants_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -657,7 +778,7 @@ func (x *ClusterSubscriptionApproved) String() string {
 func (*ClusterSubscriptionApproved) ProtoMessage() {}
 
 func (x *ClusterSubscriptionApproved) ProtoReflect() protoreflect.Message {
-	mi := &file_events_internal_v1_tenants_proto_msgTypes[10]
+	mi := &file_events_internal_v1_tenants_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -670,7 +791,7 @@ func (x *ClusterSubscriptionApproved) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClusterSubscriptionApproved.ProtoReflect.Descriptor instead.
 func (*ClusterSubscriptionApproved) Descriptor() ([]byte, []int) {
-	return file_events_internal_v1_tenants_proto_rawDescGZIP(), []int{10}
+	return file_events_internal_v1_tenants_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *ClusterSubscriptionApproved) GetSubscriptionId() string {
@@ -699,7 +820,7 @@ type ClusterSubscriptionRejected struct {
 
 func (x *ClusterSubscriptionRejected) Reset() {
 	*x = ClusterSubscriptionRejected{}
-	mi := &file_events_internal_v1_tenants_proto_msgTypes[11]
+	mi := &file_events_internal_v1_tenants_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -711,7 +832,7 @@ func (x *ClusterSubscriptionRejected) String() string {
 func (*ClusterSubscriptionRejected) ProtoMessage() {}
 
 func (x *ClusterSubscriptionRejected) ProtoReflect() protoreflect.Message {
-	mi := &file_events_internal_v1_tenants_proto_msgTypes[11]
+	mi := &file_events_internal_v1_tenants_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -724,7 +845,7 @@ func (x *ClusterSubscriptionRejected) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClusterSubscriptionRejected.ProtoReflect.Descriptor instead.
 func (*ClusterSubscriptionRejected) Descriptor() ([]byte, []int) {
-	return file_events_internal_v1_tenants_proto_rawDescGZIP(), []int{11}
+	return file_events_internal_v1_tenants_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *ClusterSubscriptionRejected) GetSubscriptionId() string {
@@ -759,7 +880,7 @@ var File_events_internal_v1_tenants_proto protoreflect.FileDescriptor
 
 const file_events_internal_v1_tenants_proto_rawDesc = "" +
 	"\n" +
-	" events/internal/v1/tenants.proto\x12\x1dframeworks.events.internal.v1\x1a\x1cgoogle/protobuf/struct.proto\x1a\fcommon.proto\x1a\x14events/options.proto\"\x8c\x01\n" +
+	" events/internal/v1/tenants.proto\x12\x1dframeworks.events.internal.v1\x1a\x1cgoogle/protobuf/struct.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\fcommon.proto\x1a\x14events/options.proto\"\x8c\x01\n" +
 	"\rTenantCreated\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12;\n" +
 	"\vattribution\x18\x02 \x01(\v2\x19.common.SignupAttributionR\vattribution:!\xc2\xf3\x18\x1d\n" +
@@ -780,7 +901,13 @@ const file_events_internal_v1_tenants_proto_rawDesc = "" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x1d\n" +
 	"\n" +
 	"cluster_id\x18\x02 \x01(\tR\tclusterId:,\xc2\xf3\x18(\n" +
-	"\x19tenant.cluster_unassigned\x10\x02\x18\x01\"\atenants\"|\n" +
+	"\x19tenant.cluster_unassigned\x10\x02\x18\x01\"\atenants\"\xe1\x01\n" +
+	"\x13UserSessionsRevoked\x12\x17\n" +
+	"\auser_id\x18\x01 \x01(\tR\x06userId\x129\n" +
+	"\n" +
+	"revoked_at\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\trevokedAt\x12N\n" +
+	"\x06reason\x18\x03 \x01(\x0e26.frameworks.events.internal.v1.SessionRevocationReasonR\x06reason:&\xc2\xf3\x18\"\n" +
+	"\x15user.sessions_revoked\x10\x02\x18\x01\"\x05users\"|\n" +
 	"\x0eClusterCreated\x12\x1d\n" +
 	"\n" +
 	"cluster_id\x18\x01 \x01(\tR\tclusterId\x12&\n" +
@@ -822,7 +949,12 @@ const file_events_internal_v1_tenants_proto_rawDesc = "" +
 	"cluster_id\x18\x02 \x01(\tR\tclusterId\x12W\n" +
 	"\rreject_reason\x18\x03 \x01(\x0e22.frameworks.events.internal.v1.ClusterRejectReasonR\frejectReason\x12\x16\n" +
 	"\x06reason\x18\x04 \x01(\tR\x06reason:>\xc2\xf3\x18:\n" +
-	"\x1dcluster.subscription_rejected\x10\x02\x18\x01\"\x15cluster_subscriptions*\x94\x02\n" +
+	"\x1dcluster.subscription_rejected\x10\x02\x18\x01\"\x15cluster_subscriptions*\xcb\x01\n" +
+	"\x17SessionRevocationReason\x12)\n" +
+	"%SESSION_REVOCATION_REASON_UNSPECIFIED\x10\x00\x12$\n" +
+	" SESSION_REVOCATION_REASON_LOGOUT\x10\x01\x12,\n" +
+	"(SESSION_REVOCATION_REASON_PASSWORD_RESET\x10\x02\x121\n" +
+	"-SESSION_REVOCATION_REASON_REFRESH_TOKEN_REUSE\x10\x03*\x94\x02\n" +
 	"\x13ClusterRejectReason\x12%\n" +
 	"!CLUSTER_REJECT_REASON_UNSPECIFIED\x10\x00\x12\"\n" +
 	"\x1eCLUSTER_REJECT_REASON_CAPACITY\x10\x01\x12 \n" +
@@ -844,35 +976,40 @@ func file_events_internal_v1_tenants_proto_rawDescGZIP() []byte {
 	return file_events_internal_v1_tenants_proto_rawDescData
 }
 
-var file_events_internal_v1_tenants_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_events_internal_v1_tenants_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
+var file_events_internal_v1_tenants_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_events_internal_v1_tenants_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
 var file_events_internal_v1_tenants_proto_goTypes = []any{
-	(ClusterRejectReason)(0),             // 0: frameworks.events.internal.v1.ClusterRejectReason
-	(*TenantCreated)(nil),                // 1: frameworks.events.internal.v1.TenantCreated
-	(*TenantUpdated)(nil),                // 2: frameworks.events.internal.v1.TenantUpdated
-	(*TenantDeleted)(nil),                // 3: frameworks.events.internal.v1.TenantDeleted
-	(*TenantClusterAssigned)(nil),        // 4: frameworks.events.internal.v1.TenantClusterAssigned
-	(*TenantClusterUnassigned)(nil),      // 5: frameworks.events.internal.v1.TenantClusterUnassigned
-	(*ClusterCreated)(nil),               // 6: frameworks.events.internal.v1.ClusterCreated
-	(*ClusterUpdated)(nil),               // 7: frameworks.events.internal.v1.ClusterUpdated
-	(*ClusterInviteCreated)(nil),         // 8: frameworks.events.internal.v1.ClusterInviteCreated
-	(*ClusterInviteRevoked)(nil),         // 9: frameworks.events.internal.v1.ClusterInviteRevoked
-	(*ClusterSubscriptionRequested)(nil), // 10: frameworks.events.internal.v1.ClusterSubscriptionRequested
-	(*ClusterSubscriptionApproved)(nil),  // 11: frameworks.events.internal.v1.ClusterSubscriptionApproved
-	(*ClusterSubscriptionRejected)(nil),  // 12: frameworks.events.internal.v1.ClusterSubscriptionRejected
-	(*common.SignupAttribution)(nil),     // 13: common.SignupAttribution
-	(*structpb.Struct)(nil),              // 14: google.protobuf.Struct
+	(SessionRevocationReason)(0),         // 0: frameworks.events.internal.v1.SessionRevocationReason
+	(ClusterRejectReason)(0),             // 1: frameworks.events.internal.v1.ClusterRejectReason
+	(*TenantCreated)(nil),                // 2: frameworks.events.internal.v1.TenantCreated
+	(*TenantUpdated)(nil),                // 3: frameworks.events.internal.v1.TenantUpdated
+	(*TenantDeleted)(nil),                // 4: frameworks.events.internal.v1.TenantDeleted
+	(*TenantClusterAssigned)(nil),        // 5: frameworks.events.internal.v1.TenantClusterAssigned
+	(*TenantClusterUnassigned)(nil),      // 6: frameworks.events.internal.v1.TenantClusterUnassigned
+	(*UserSessionsRevoked)(nil),          // 7: frameworks.events.internal.v1.UserSessionsRevoked
+	(*ClusterCreated)(nil),               // 8: frameworks.events.internal.v1.ClusterCreated
+	(*ClusterUpdated)(nil),               // 9: frameworks.events.internal.v1.ClusterUpdated
+	(*ClusterInviteCreated)(nil),         // 10: frameworks.events.internal.v1.ClusterInviteCreated
+	(*ClusterInviteRevoked)(nil),         // 11: frameworks.events.internal.v1.ClusterInviteRevoked
+	(*ClusterSubscriptionRequested)(nil), // 12: frameworks.events.internal.v1.ClusterSubscriptionRequested
+	(*ClusterSubscriptionApproved)(nil),  // 13: frameworks.events.internal.v1.ClusterSubscriptionApproved
+	(*ClusterSubscriptionRejected)(nil),  // 14: frameworks.events.internal.v1.ClusterSubscriptionRejected
+	(*common.SignupAttribution)(nil),     // 15: common.SignupAttribution
+	(*timestamppb.Timestamp)(nil),        // 16: google.protobuf.Timestamp
+	(*structpb.Struct)(nil),              // 17: google.protobuf.Struct
 }
 var file_events_internal_v1_tenants_proto_depIdxs = []int32{
-	13, // 0: frameworks.events.internal.v1.TenantCreated.attribution:type_name -> common.SignupAttribution
-	14, // 1: frameworks.events.internal.v1.ClusterUpdated.before_state:type_name -> google.protobuf.Struct
-	14, // 2: frameworks.events.internal.v1.ClusterUpdated.after_state:type_name -> google.protobuf.Struct
-	0,  // 3: frameworks.events.internal.v1.ClusterSubscriptionRejected.reject_reason:type_name -> frameworks.events.internal.v1.ClusterRejectReason
-	4,  // [4:4] is the sub-list for method output_type
-	4,  // [4:4] is the sub-list for method input_type
-	4,  // [4:4] is the sub-list for extension type_name
-	4,  // [4:4] is the sub-list for extension extendee
-	0,  // [0:4] is the sub-list for field type_name
+	15, // 0: frameworks.events.internal.v1.TenantCreated.attribution:type_name -> common.SignupAttribution
+	16, // 1: frameworks.events.internal.v1.UserSessionsRevoked.revoked_at:type_name -> google.protobuf.Timestamp
+	0,  // 2: frameworks.events.internal.v1.UserSessionsRevoked.reason:type_name -> frameworks.events.internal.v1.SessionRevocationReason
+	17, // 3: frameworks.events.internal.v1.ClusterUpdated.before_state:type_name -> google.protobuf.Struct
+	17, // 4: frameworks.events.internal.v1.ClusterUpdated.after_state:type_name -> google.protobuf.Struct
+	1,  // 5: frameworks.events.internal.v1.ClusterSubscriptionRejected.reject_reason:type_name -> frameworks.events.internal.v1.ClusterRejectReason
+	6,  // [6:6] is the sub-list for method output_type
+	6,  // [6:6] is the sub-list for method input_type
+	6,  // [6:6] is the sub-list for extension type_name
+	6,  // [6:6] is the sub-list for extension extendee
+	0,  // [0:6] is the sub-list for field type_name
 }
 
 func init() { file_events_internal_v1_tenants_proto_init() }
@@ -885,8 +1022,8 @@ func file_events_internal_v1_tenants_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_events_internal_v1_tenants_proto_rawDesc), len(file_events_internal_v1_tenants_proto_rawDesc)),
-			NumEnums:      1,
-			NumMessages:   12,
+			NumEnums:      2,
+			NumMessages:   13,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

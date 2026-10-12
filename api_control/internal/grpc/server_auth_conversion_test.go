@@ -283,43 +283,6 @@ func TestRefreshToken_LostRotationResponseRecoversSession(t *testing.T) {
 	}
 }
 
-func TestRefreshToken_ReuseWithUsedSuccessorRevokesSessionFamily(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatalf("failed to create sqlmock: %v", err)
-	}
-	defer db.Close()
-
-	refreshToken := "refresh-token-raw"
-
-	mock.ExpectBegin()
-	mock.ExpectQuery("FROM commodore.refresh_tokens\\s+WHERE token_hash").
-		WithArgs(hashToken(refreshToken)).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "revoked", "rotated_at", "replaced_by"}).
-			AddRow("rt-1", "user-2", "tenant-2", true, time.Now().Add(-time.Hour), "rt-2"))
-
-	// Successor is itself rotated: two parties share this session line.
-	mock.ExpectQuery("FROM commodore.refresh_tokens\\s+WHERE id").
-		WithArgs("rt-2").
-		WillReturnRows(sqlmock.NewRows([]string{"revoked"}).AddRow(true))
-
-	mock.ExpectExec("UPDATE commodore.refresh_tokens SET revoked = true\\s+WHERE user_id").
-		WithArgs("user-2", "tenant-2").
-		WillReturnResult(sqlmock.NewResult(0, 3))
-
-	mock.ExpectCommit()
-
-	server := &CommodoreServer{db: db, logger: logrus.New(), runtimeSettings: refreshTokenTestSettings}
-	_, err = server.RefreshToken(context.Background(), &commodorepb.RefreshTokenRequest{RefreshToken: refreshToken})
-	if err == nil {
-		t.Fatal("expected refresh token reuse with a used successor to be rejected")
-	}
-
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("unmet expectations: %v", err)
-	}
-}
-
 func TestRefreshToken_StoreFailureRollsBack(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {

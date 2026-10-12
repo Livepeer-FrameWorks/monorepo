@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -100,8 +101,12 @@ func NewDialer(cfg DialerConfig) (*Dialer, error) {
 	return &Dialer{cfg: cfg, transport: transport, pools: make(map[string]*connPool)}, nil
 }
 
-// Open opens a stream subscribed to key.Channel on addr. The stream lives until
-// ctx is canceled, Close is called, or the server ends it.
+// Open opens a stream subscribed to key.Channel on addr and returns once
+// Signalman confirmed the subscription, so every event Signalman dispatches
+// after Open returns reaches the stream. Events that arrive before the
+// confirmation are kept for Recv. A confirmation that does not name the
+// channel is a refusal. The stream lives until ctx is canceled, Close is
+// called, or the server ends it.
 func (d *Dialer) Open(ctx context.Context, addr string, key StreamKey) (EventStream, error) {
 	pool, err := d.pool(addr)
 	if err != nil {
@@ -129,7 +134,44 @@ func (d *Dialer) Open(ctx context.Context, addr string, key StreamKey) (EventStr
 		cancel()
 		return nil, fmt.Errorf("subscribe signalman stream on %s: %w", addr, sendErr)
 	}
-	return &eventStream{stream: stream, cancel: cancel, logger: d.cfg.Logger}, nil
+	pending, err := d.awaitConfirmation(stream, key.Channel, cancel)
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("subscribe signalman %s stream on %s: %w", key.Channel, addr, err)
+	}
+	return &eventStream{stream: stream, cancel: cancel, logger: d.cfg.Logger, pending: pending}, nil
+}
+
+// awaitConfirmation reads stream until Signalman confirms the subscription
+// to channel, within OpenTimeout, and returns the events read before it.
+func (d *Dialer) awaitConfirmation(stream signalmanpb.SignalmanService_SubscribeClient, channel signalmanpb.Channel, cancel context.CancelFunc) ([]*signalmanpb.SignalmanEvent, error) {
+	timer := time.AfterFunc(d.cfg.OpenTimeout, cancel)
+	defer timer.Stop()
+	var pending []*signalmanpb.SignalmanEvent
+	for {
+		msg, err := stream.Recv()
+		if err != nil {
+			return nil, fmt.Errorf("no subscription confirmation: %w", err)
+		}
+		switch m := msg.Message.(type) {
+		case *signalmanpb.ServerMessage_SubscriptionConfirmed:
+			if !slices.Contains(m.SubscriptionConfirmed.GetSubscribedChannels(), channel) {
+				return nil, errors.New("subscription refused")
+			}
+			return pending, nil
+		case *signalmanpb.ServerMessage_Event:
+			if m.Event != nil {
+				pending = append(pending, m.Event)
+			}
+		case *signalmanpb.ServerMessage_Error:
+			if d.cfg.Logger != nil {
+				d.cfg.Logger.WithFields(logging.Fields{
+					"code":    m.Error.GetCode(),
+					"message": m.Error.GetMessage(),
+				}).Warn("Signalman stream reported an error")
+			}
+		}
+	}
 }
 
 // Close closes every pooled connection. Open fails afterwards.
@@ -208,9 +250,17 @@ type eventStream struct {
 	stream signalmanpb.SignalmanService_SubscribeClient
 	cancel context.CancelFunc
 	logger logging.Logger
+	// pending holds the events that arrived before the subscription
+	// confirmation; Recv returns them first.
+	pending []*signalmanpb.SignalmanEvent
 }
 
 func (s *eventStream) Recv() (*signalmanpb.SignalmanEvent, error) {
+	if len(s.pending) > 0 {
+		event := s.pending[0]
+		s.pending = s.pending[1:]
+		return event, nil
+	}
 	for {
 		msg, err := s.stream.Recv()
 		if err != nil {
