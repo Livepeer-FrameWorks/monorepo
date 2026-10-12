@@ -302,30 +302,33 @@ eventually 120 "the gateway's heartbeat is a coverage row" gateway_heartbeat
 GW_LATENCY=$(ch "SELECT argMax(latency_ms, timestamp) FROM periscope.network_observations FINAL WHERE $GW_NS AND kind='discovery' AND resolved_ip='$ORCH_IP'")
 
 log "Bridge public REST history"
-raw_count() { # raw_count <kind> <ip> <region> <since epoch>
-  ch "SELECT count() FROM periscope.network_observations FINAL WHERE $NS AND kind = '$1' AND resolved_ip = '$2' AND gateway_region = '$3' AND timestamp >= toDateTime($4)"
+# A public cohort is keyed by resource, IP and region; earlier scenarios leave
+# rows for the same IP under other resources (a never-identified orchestrator's
+# URL key), so the raw count names the cohort's resource too.
+raw_count() { # raw_count <kind> <resource> <ip> <region> <since epoch>
+  ch "SELECT count() FROM periscope.network_observations FINAL WHERE $NS AND kind = '$1' AND resource_id = '$2' AND resolved_ip = '$3' AND gateway_region = '$4' AND timestamp >= toDateTime($5)"
 }
 code=$(curl -s -m 30 -o "$work_dir/public.json" -w '%{http_code}' "$BRIDGE_URL/v1/network/livepeer")
 check "GET /v1/network/livepeer answers (HTTP $code)" [ "$code" = 200 ]
 P=$(cat "$work_dir/public.json")
 check "the history is available" json_has "$P" '.history_status == "available"'
 day_ago=$(($(date -u +%s) - 86400))
-samples_a=$(raw_count discovery "$IP_A" "$REGION" "$day_ago")
+samples_a=$(raw_count discovery "$ORCH_A" "$IP_A" "$REGION" "$day_ago")
 check "summary for $IP_A from $REGION: $samples_a sample(s), all successes, p50 42 ms (the raw count, so the replay counted once)" json_has "$P" \
   "any(.history.summaries[]; .kind == \"discovery\" and .resource_id == \"$ORCH_A\" and .ip == \"$IP_A\" and .region == \"$REGION\" and .samples == $samples_a and .successes == $samples_a and .failures == 0 and .p50_ms == 42)"
-samples_b=$(raw_count discovery "$IP_B" "$REGION" "$day_ago")
+samples_b=$(raw_count discovery "$ORCH_B" "$IP_B" "$REGION" "$day_ago")
 check "summary for $IP_B from $REGION: $samples_b qualifying failure(s)" json_has "$P" \
   "any(.history.summaries[]; .kind == \"discovery\" and .resource_id == \"$ORCH_B\" and .ip == \"$IP_B\" and .region == \"$REGION\" and .failures == $samples_b and .successes == 0)"
 check "raw samples include the 42 ms check without its observer ID" json_has "$P" \
   "any(.history.observations[]; .event_id == \"$RESULT_A\" and .latency_ms == 42 and .observer_id == null)"
-gw_discovery=$(raw_count discovery "$ORCH_IP" "$GATEWAY_REGION" "$day_ago")
+gw_discovery=$(raw_count discovery "$GW_ORCH" "$ORCH_IP" "$GATEWAY_REGION" "$day_ago")
 check "the gateway's discovery of $ORCH_IP is a $GATEWAY_REGION cohort of $gw_discovery sample(s)" json_has "$P" \
   "[.history.summaries[] | select(.kind == \"discovery\" and .resource_id == \"$GW_ORCH\" and .ip == \"$ORCH_IP\" and .region == \"$GATEWAY_REGION\") | .samples] | add == $gw_discovery"
-gw_segments=$(raw_count segment "$ORCH_IP" "$GATEWAY_REGION" "$day_ago")
+gw_segments=$(raw_count segment "$GW_ORCH" "$ORCH_IP" "$GATEWAY_REGION" "$day_ago")
 check "the gateway's segment cohorts for $ORCH_IP hold $gw_segments sample(s)" json_has "$P" \
   "[.history.summaries[] | select(.kind == \"segment\" and .resource_id == \"$GW_ORCH\" and .ip == \"$ORCH_IP\" and .region == \"$GATEWAY_REGION\") | .samples] | add == $gw_segments"
 read -r accepted_gw pixels_gw <<<"$(ch "SELECT count(), sum(accepted_pixels) FROM periscope.network_observations FINAL WHERE $NS AND kind='segment'
-  AND resolved_ip='$ORCH_IP' AND gateway_region='$GATEWAY_REGION' AND success=1 AND accounting_version=1 AND timestamp >= toDateTime($day_ago) FORMAT TSV")"
+  AND resource_id='$GW_ORCH' AND resolved_ip='$ORCH_IP' AND gateway_region='$GATEWAY_REGION' AND success=1 AND accounting_version=1 AND timestamp >= toDateTime($day_ago) FORMAT TSV")"
 check "work for $ORCH_IP: $accepted_gw accepted segment(s) and $pixels_gw accepted pixels, all dispatched" json_has "$P" \
   "[.history.work.summaries[] | select(.resource_id == \"$GW_ORCH\" and .ip == \"$ORCH_IP\" and .region == \"$GATEWAY_REGION\")]
     | (map(.accepted_segments) | add) == $accepted_gw and (map(.accepted_pixels | tonumber) | add) == $pixels_gw
@@ -420,7 +423,7 @@ end=$(date -u -d '2 hours' +%Y-%m-%dT%H:%M:%SZ)
 code=$(curl -s -m 30 -o "$work_dir/rolled.json" -w '%{http_code}' "$BRIDGE_URL/v1/network/livepeer?start=$start&end=$end")
 check "the 31-day window answers (HTTP $code)" [ "$code" = 200 ]
 R=$(cat "$work_dir/rolled.json")
-all_a=$(raw_count discovery "$IP_A" "$REGION" 0)
+all_a=$(raw_count discovery "$ORCH_A" "$IP_A" "$REGION" 0)
 check "the 31-day window is served from snapshots with $all_a sample(s) for $IP_A" json_has "$R" \
   ".history.rolled_up == true and any(.history.summaries[]; .kind == \"discovery\" and .ip == \"$IP_A\" and .region == \"$REGION\" and .samples == $all_a and .p50_ms == 42)"
 all_segments=$(ch "SELECT count() FROM periscope.network_observations FINAL WHERE $NS AND kind='segment' AND resolved_ip='$ORCH_IP'

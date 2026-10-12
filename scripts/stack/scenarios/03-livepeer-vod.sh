@@ -5,7 +5,9 @@
 # Catches: N2/F4 (processing+ manifest rejected by Livepeer auth), N12 (fallback
 # config never persisted: job_id "cache_update:<hash>"), N5 (fallback upscales),
 # WS4 (404 import stuck PROCESSING, no upload.failed), N25 (a source longer
-# than the processing buffer window READY with renditions missing its start).
+# than the processing buffer window READY with renditions missing its start), a
+# gateway discovery failure reported under a URL key after the gateway had
+# identified the orchestrator.
 . "$(dirname "$0")/../lib.sh"
 
 GATEWAY=${STACK_LIVEPEER_GATEWAY_A:-livepeer-gateway-a}
@@ -78,6 +80,28 @@ if [ -n "$LID" ]; then
   fi
 else
   fail "upload: $L"
+fi
+
+# The VODs reach the gateway faster than real time, so its per-segment
+# discovery calls can find the orchestrator at capacity. Once the gateway has
+# identified the orchestrator, such a failure belongs to that identity: a
+# URL-keyed resource is invisible to the orchestrator's public history and
+# endpoint availability.
+GW_DISCOVERY="tenant_id='$STACK_TENANT_ID' AND producer_kind='gateway' AND gateway_id='stack-lp-a'
+  AND kind='discovery' AND endpoint_uri='https://livepeer-orch-a:8935' AND timestamp >= toDateTime($SINCE)"
+# The gateway delivers from its local spool; its rows stop growing once it is idle.
+gateway_discovery_settled() {
+  local before
+  [ "$(ch "SELECT count() FROM periscope.network_observations FINAL WHERE $GW_DISCOVERY AND NOT startsWith(resource_id, 'url:')")" -ge 1 ] 2>/dev/null || return 1
+  before=$(ch "SELECT count() FROM periscope.network_observations FINAL WHERE $GW_DISCOVERY")
+  sleep 10
+  [ "$(ch "SELECT count() FROM periscope.network_observations FINAL WHERE $GW_DISCOVERY")" = "$before" ]
+}
+if eventually 120 "the gateway's discovery of the orchestrator reached ClickHouse and settled" gateway_discovery_settled; then
+  url_keyed=$(ch "SELECT count() FROM periscope.network_observations FINAL WHERE $GW_DISCOVERY AND startsWith(resource_id, 'url:')
+    AND timestamp > (SELECT min(timestamp) FROM periscope.network_observations FINAL WHERE $GW_DISCOVERY AND NOT startsWith(resource_id, 'url:'))")
+  failed=$(ch "SELECT count() FROM periscope.network_observations FINAL WHERE $GW_DISCOVERY AND success=0")
+  check "every discovery failure after the gateway identified the orchestrator names it ($url_keyed of $failed failures URL-keyed)" [ "$url_keyed" = 0 ]
 fi
 
 log "VOD with the gateway down -> CPU fallback"
