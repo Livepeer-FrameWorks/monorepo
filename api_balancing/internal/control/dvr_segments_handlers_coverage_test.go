@@ -849,7 +849,7 @@ func TestFillCrossClusterArtifact_DepsUnwiredSilent(t *testing.T) {
 	}
 	fillCrossClusterArtifact(context.Background(),
 		&ipcpb.RelayResolveRequest{AssetHash: "h-peer"},
-		resp, logging.NewLogger(), "peer-cluster", "tenant-1", "vod", nil)
+		resp, logging.NewLogger(), "", "peer-cluster", "tenant-1", "vod", nil)
 
 	if resp.GetState() != ipcpb.AssetState_ASSET_STATE_SOURCE_MISSING {
 		t.Fatalf("expected state unchanged (SOURCE_MISSING) when deps unwired, got %v", resp.GetState())

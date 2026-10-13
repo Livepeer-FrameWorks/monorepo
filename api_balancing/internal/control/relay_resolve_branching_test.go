@@ -9,6 +9,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"google.golang.org/protobuf/proto"
 )
@@ -354,4 +355,61 @@ func entitlePlatformNode(t *testing.T, nodeID string) {
 	sm.SetNodeInfo(nodeID, "n", true, nil, nil, "", "", nil)
 	sm.SetNodeConnectionInfo(context.Background(), nodeID, "n", "", "platform-eu", nil)
 	AddPlatformSharedCluster("platform-eu")
+}
+
+// One Foghorn pool serves the platform cluster a node belongs to and the
+// virtual cluster an artifact is recorded under, so the federated answer for
+// a hot, unsynced chapter can name the origin node that is itself resolving.
+// Fetching its own sidecar from itself stalls the relay until its fetch
+// deadline; the requester holds the canonical file, so it gets no peer source
+// and Mist builds the index locally.
+func TestFillFileArtifactResolveCrossClusterPeerRelayNeverAddressesRequester(t *testing.T) {
+	cases := []struct {
+		name        string
+		peerURL     string
+		wantForward bool
+	}{
+		{name: "peer URL naming the requester is dropped", peerURL: "http://edge:8082/internal/artifact/vod/h.mkv"},
+		{name: "peer URL naming another node is forwarded", peerURL: "http://edge-2:8082/internal/artifact/vod/h.mkv", wantForward: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			mock, _, _ := setupArtifactTestDeps(t)
+			entitlePlatformNode(t, "edge-node-1")
+			previous := crossClusterDeps
+			t.Cleanup(func() { SetCrossClusterArtifactDeps(previous) })
+			fed := &fakeCrossClusterFedClient{responses: []*foghornfederationpb.PrepareArtifactResponse{{
+				Ready: true, Format: "mkv", PeerRelayUrl: tc.peerURL, PeerRelayDtshUrl: tc.peerURL + ".dtsh", PeerRelayGrantId: "grant",
+			}}}
+			SetCrossClusterArtifactDeps(makeCCDeps(fed, map[string]string{"demo-media": "foghorn:18019"}))
+
+			mock.ExpectQuery(`FROM foghorn.artifacts`).WithArgs("h").
+				WillReturnRows(fileArtifactRows().AddRow(
+					"", int64(1234), "mkv", false, "",
+					"pending", "demo-media", "", "t1", "vod", "", false))
+			mock.ExpectQuery(`FROM foghorn.artifact_nodes`).WithArgs("h", "edge-node-1").WillReturnError(sql.ErrNoRows)
+			mock.ExpectQuery(`FROM foghorn.node_outputs`).WithArgs("edge-node-1").
+				WillReturnRows(sqlmock.NewRows([]string{"base_url", "outputs_json"}).AddRow("http://edge:8082/view", "{}"))
+			mock.ExpectQuery(`FROM foghorn.node_config_seeds`).WithArgs("edge-node-1").WillReturnError(sql.ErrNoRows)
+
+			resp := &ipcpb.RelayResolveResponse{State: ipcpb.AssetState_ASSET_STATE_SOURCE_MISSING}
+			fillFileArtifactResolve(ctx, &ipcpb.RelayResolveRequest{AssetHash: "h", AssetKind: "vod", Ext: ".mkv"}, resp, "edge-node-1", logging.NewLogger())
+			if tc.wantForward {
+				if resp.GetPeerRelayDtshUrl() != tc.peerURL+".dtsh" || resp.GetState() != ipcpb.AssetState_ASSET_STATE_PLAYABLE {
+					t.Fatalf("another node's peer URL must be forwarded, got dtsh=%q state=%s", resp.GetPeerRelayDtshUrl(), resp.GetState())
+				}
+			} else {
+				if resp.GetPeerRelayUrl() != "" || resp.GetPeerRelayDtshUrl() != "" {
+					t.Fatalf("requester was handed a peer URL to itself: media=%q dtsh=%q", resp.GetPeerRelayUrl(), resp.GetPeerRelayDtshUrl())
+				}
+				if resp.GetState() != ipcpb.AssetState_ASSET_STATE_SOURCE_MISSING {
+					t.Fatalf("state = %s, want source-missing so the relay answers 404 and Mist builds the index", resp.GetState())
+				}
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
 }

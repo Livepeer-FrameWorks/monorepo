@@ -344,7 +344,11 @@ Resolution reads the **adopted local row only**. Two fallbacks apply before
 (hot-but-unsynced) → peer-relay grant, never naming the requesting node
 itself; (2) the row points at a peer
 cluster → federate via the adopted-row path (nil redirect authorizer: the
-row's clusters were allowlist-checked at adopt time). S3 authority is gated
+row's clusters were allowlist-checked at adopt time). A federated peer-relay
+answer whose origin is the requesting node's own relay is dropped too: when
+one Foghorn pool serves both the node's platform cluster and the artifact's
+recorded cluster, the origin answer for a fresh chapter names the node that
+produced it, and that node reads or builds the index from its own file. S3 authority is gated
 on `sync_status='synced'` to close the post-processing race where `s3_url`
 still points at the original upload while a rewritten container syncs.
 

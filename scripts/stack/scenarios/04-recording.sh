@@ -7,7 +7,8 @@
 # Catches: F9 (default not replayable), R1 (two inputs -> Mist crash), R2 (DTSH
 # upload truncated, chapters never freeze), R4 (finalize pinned at 1x), N16
 # (recording.ready at stop without a playback id; chapter id changed at stop),
-# N8 (cross-cell chapter replay refused on non-leaders).
+# N8 (cross-cell chapter replay refused on non-leaders), the origin edge's relay
+# fetching a fresh chapter's .dtsh from itself until its fetch deadline.
 . "$(dirname "$0")/../lib.sh"
 
 WINDOW=${STACK_DVR_WINDOW_SECONDS:-120}
@@ -16,6 +17,7 @@ PUSH=$((WINDOW + 90))
 FINALIZE_BOUND=${STACK_FINALIZE_BOUND_SECONDS:-$((WINDOW / 2 + 90))}
 need ffmpeg jq curl python3 || finish
 SINCE=$(date +%s)
+LOG_SINCE=$(utc_now)
 webhook_endpoint >/dev/null || fail "webhook endpoint at $RECEIVER_HOOK_URL"
 
 S=$(create_stream "stack-recording-$(date +%s)" true)
@@ -73,6 +75,11 @@ frozen() {
   [ "$row" = "t|t|synced" ]
 }
 eventually 300 "first chapter frozen with its .dtsh synced" frozen
+# The chapter's origin edge builds its .dtsh from its own canonical file. A
+# resolve that names the edge itself as the chapter's peer-relay origin makes
+# its relay fetch the sidecar from itself and stall to its fetch deadline.
+no_self_sidecar_fetch() { ! log_has "$LOG_SINCE" "relay dtsh fetch failed.*//$EDGE_A_HOST:8082/internal/artifact/" edge; }
+check "the origin edge never fetched a chapter .dtsh from its own relay" no_self_sidecar_fetch
 
 chapter_thumbnails() {
   local hash published code

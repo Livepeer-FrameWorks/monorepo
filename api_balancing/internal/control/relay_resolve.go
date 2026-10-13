@@ -179,7 +179,7 @@ func fillFileArtifactResolve(ctx context.Context, req *ipcpb.RelayResolveRequest
 		if peerCluster != "" {
 			// nil authorizeRedirect: already-adopted row, allowlist-checked at
 			// adopt time; RelayResolve has no requesting-tenant peer set here.
-			fillCrossClusterArtifact(ctx, req, resp, logger, peerCluster, tenantID, artifactType, nil)
+			fillCrossClusterArtifact(ctx, req, resp, logger, nodeID, peerCluster, tenantID, artifactType, nil)
 		}
 		return
 	}
@@ -231,7 +231,7 @@ func fillFileArtifactResolve(ctx context.Context, req *ipcpb.RelayResolveRequest
 			peerCluster = strings.TrimSpace(originClusterID.String)
 		}
 		if peerCluster != "" {
-			fillCrossClusterArtifact(ctx, req, resp, logger, peerCluster, tenantID, artifactType, nil)
+			fillCrossClusterArtifact(ctx, req, resp, logger, nodeID, peerCluster, tenantID, artifactType, nil)
 		} else {
 			logger.WithField("asset_hash", req.GetAssetHash()).Debug("RelayResolve: synced row has a non-local s3_url and no peer cluster; not presigning locally")
 		}
@@ -494,6 +494,24 @@ func PeerRelayOrigin(ctx context.Context, conn foghorndb.DBTX, nodeID, baseURL s
 	return origin, nil
 }
 
+// peerRelayAddressesNode reports whether peerURL is served by nodeID's own
+// relay, i.e. its origin is the one PeerRelayOrigin derives for that node.
+func peerRelayAddressesNode(ctx context.Context, nodeID, peerURL string) bool {
+	if db == nil || strings.TrimSpace(nodeID) == "" {
+		return false
+	}
+	outputs, err := foghorndb.New(db).GetPersistedNodeOutputs(ctx, nodeID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return false
+	}
+	own, err := PeerRelayOrigin(ctx, db, nodeID, outputs.BaseUrl)
+	if err != nil || own == "" {
+		return false
+	}
+	target, ok := RelayPeerOrigin(peerURL)
+	return ok && strings.EqualFold(target, own)
+}
+
 // RelayPeerOrigin extracts <scheme>://<host> from a node's advertised
 // base_url, dropping any path. node_outputs.base_url is the playback base
 // (e.g. https://<edge>/view), so the playback path must not leak into the
@@ -584,7 +602,7 @@ func fillCrossClusterArtifactFromCommodore(ctx context.Context, req *ipcpb.Relay
 		return
 	}
 	authorizeRedirect := func(c string) bool { return isAuthorizedPeerCluster(c, peers) }
-	fillCrossClusterArtifact(ctx, req, resp, logger, originCluster, commodoreResp.GetTenantId(), "vod", authorizeRedirect)
+	fillCrossClusterArtifact(ctx, req, resp, logger, nodeID, originCluster, commodoreResp.GetTenantId(), "vod", authorizeRedirect)
 }
 
 // fillCrossClusterArtifact federates to a known peer cluster for a
@@ -594,7 +612,14 @@ func fillCrossClusterArtifactFromCommodore(ctx context.Context, req *ipcpb.Relay
 // authorizeRedirect gates the storage-redirect target against the tenant peer
 // allowlist; pass nil only for an already-adopted row (its origin/storage were
 // allowlist-checked at adopt time and RelayResolve has no tenant peer set).
-func fillCrossClusterArtifact(ctx context.Context, req *ipcpb.RelayResolveRequest, resp *ipcpb.RelayResolveResponse, logger logging.Logger, peerClusterID, tenantID, artifactType string, authorizeRedirect func(string) bool) {
+//
+// requestingNodeID is never handed a peer-relay URL that addresses its own
+// relay: when one Foghorn pool serves both the node's cluster and the
+// artifact's recorded cluster, the origin answer for a hot, unsynced artifact
+// names the origin node, which may be the requester itself. That node holds the
+// canonical file, so it gets no peer source and Mist reads (or builds) the
+// index locally instead of the relay fetching its own sidecar from itself.
+func fillCrossClusterArtifact(ctx context.Context, req *ipcpb.RelayResolveRequest, resp *ipcpb.RelayResolveResponse, logger logging.Logger, requestingNodeID, peerClusterID, tenantID, artifactType string, authorizeRedirect func(string) bool) {
 	result, err := ResolveCrossClusterArtifactURL(ctx, req.GetAssetHash(), artifactType, tenantID, peerClusterID, authorizeRedirect)
 	if err != nil || result == nil {
 		// The relay answers 404 to its caller; the federation cause (deps
@@ -603,6 +628,14 @@ func fillCrossClusterArtifact(ctx context.Context, req *ipcpb.RelayResolveReques
 			logger.WithError(err).WithFields(logging.Fields{
 				"asset_hash": req.GetAssetHash(), "artifact_type": artifactType, "tenant_id": tenantID, "origin_cluster": peerClusterID,
 			}).Warn("RelayResolve: cross-cluster artifact not retrievable from origin")
+		}
+		return
+	}
+	if result.PeerRelayURL != "" && peerRelayAddressesNode(ctx, requestingNodeID, result.PeerRelayURL) {
+		if logger != nil {
+			logger.WithFields(logging.Fields{
+				"asset_hash": req.GetAssetHash(), "node_id": requestingNodeID, "origin_cluster": peerClusterID,
+			}).Debug("RelayResolve: origin cluster named the requesting node as the peer-relay origin; no peer source")
 		}
 		return
 	}

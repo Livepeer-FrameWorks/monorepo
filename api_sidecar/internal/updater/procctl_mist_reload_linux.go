@@ -13,6 +13,10 @@ import (
 var (
 	mistReloadTimeout = 90 * time.Second
 	mistReloadPoll    = 250 * time.Millisecond
+	// mistReloadControllerPIDs lists the controllers the reload must observe;
+	// tests narrow it to their own helper because the host /proc also shows
+	// unrelated MistControllers running under the same uid.
+	mistReloadControllerPIDs = func() ([]int, error) { return mistControllerParentPIDs("/proc") }
 )
 
 func waitMistControllerReload(ctx context.Context, controllerPath string) error {
@@ -23,7 +27,7 @@ func waitMistControllerReload(ctx context.Context, controllerPath string) error 
 	deadline := time.Now().Add(mistReloadTimeout)
 	lastState := "controller process not found"
 	for {
-		pids, scanErr := mistControllerParentPIDs("/proc")
+		pids, scanErr := mistReloadControllerPIDs()
 		if scanErr != nil {
 			lastState = scanErr.Error()
 		} else if len(pids) > 0 {

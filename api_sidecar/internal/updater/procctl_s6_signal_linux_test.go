@@ -66,8 +66,15 @@ func TestReplaceMistPayloadInPlacePreservesExecutableLookupPath(t *testing.T) {
 			if err := os.WriteFile(marker, []byte("re-execed"), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			time.Sleep(time.Second)
-			return
+			// Stay alive until the parent has observed the re-exec through
+			// /proc; an exited helper has no executable left to inspect.
+			release := os.Getenv("FW_MIST_EXEC_RELEASE")
+			for deadline := time.Now().Add(time.Minute); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+				if _, err := os.Stat(release); err == nil {
+					return
+				}
+			}
+			t.Fatal("parent never released the re-execed helper")
 		}
 		ready := os.Getenv("FW_MIST_EXEC_READY")
 		observed := os.Getenv("FW_MIST_EXEC_PATH")
@@ -118,7 +125,8 @@ func TestReplaceMistPayloadInPlacePreservesExecutableLookupPath(t *testing.T) {
 	ready := filepath.Join(parent, "ready")
 	marker := filepath.Join(parent, "marker")
 	observed := filepath.Join(parent, "observed")
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	release := filepath.Join(parent, "release")
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, filepath.Join(root, "bin", "MistController"), "-test.run=^TestReplaceMistPayloadInPlacePreservesExecutableLookupPath$")
 	cmd.Env = append(os.Environ(),
@@ -126,6 +134,7 @@ func TestReplaceMistPayloadInPlacePreservesExecutableLookupPath(t *testing.T) {
 		"FW_MIST_EXEC_READY="+ready,
 		"FW_MIST_EXEC_MARKER="+marker,
 		"FW_MIST_EXEC_PATH="+observed,
+		"FW_MIST_EXEC_RELEASE="+release,
 	)
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
@@ -135,7 +144,7 @@ func TestReplaceMistPayloadInPlacePreservesExecutableLookupPath(t *testing.T) {
 			_ = cmd.Process.Kill()
 		}
 	}()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(30 * time.Second)
 	for {
 		if _, err := os.Stat(ready); err == nil {
 			break
@@ -145,15 +154,31 @@ func TestReplaceMistPayloadInPlacePreservesExecutableLookupPath(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	previousTimeout, previousPoll := mistReloadTimeout, mistReloadPoll
-	mistReloadTimeout, mistReloadPoll = 5*time.Second, 10*time.Millisecond
-	defer func() { mistReloadTimeout, mistReloadPoll = previousTimeout, previousPoll }()
+	previousTimeout, previousPoll, previousPIDs := mistReloadTimeout, mistReloadPoll, mistReloadControllerPIDs
+	mistReloadTimeout, mistReloadPoll = 30*time.Second, 10*time.Millisecond
+	// The real /proc scan still has to find the helper, but any other
+	// MistController on this host (Mist builds, dev stacks) never runs this
+	// test's replacement binary and would hold the wait until it times out.
+	helperPID := cmd.Process.Pid
+	mistReloadControllerPIDs = func() ([]int, error) {
+		pids, err := mistControllerParentPIDs("/proc")
+		if err != nil || !slices.Contains(pids, helperPID) {
+			return nil, err
+		}
+		return []int{helperPID}, nil
+	}
+	defer func() {
+		mistReloadTimeout, mistReloadPoll, mistReloadControllerPIDs = previousTimeout, previousPoll, previousPIDs
+	}()
 	if err := replaceMistPayloadInPlace(staged, root, func() error {
 		return cmd.Process.Signal(syscall.SIGUSR1)
 	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := waitMistControllerReload(context.Background(), filepath.Join(root, "bin", "MistController")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(release, []byte("done"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := cmd.Wait(); err != nil {

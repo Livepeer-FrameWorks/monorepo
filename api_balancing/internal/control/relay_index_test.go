@@ -16,7 +16,7 @@ func TestCrossClusterRelayPreservesPublishedIndex(t *testing.T) {
 	}}}
 	SetCrossClusterArtifactDeps(makeCCDeps(fed, map[string]string{"origin": "peer:443"}))
 	response := &ipcpb.RelayResolveResponse{}
-	fillCrossClusterArtifact(t.Context(), &ipcpb.RelayResolveRequest{AssetHash: "hash"}, response, logging.NewLogger(), "origin", "tenant", "clip", nil)
+	fillCrossClusterArtifact(t.Context(), &ipcpb.RelayResolveRequest{AssetHash: "hash"}, response, logging.NewLogger(), "", "origin", "tenant", "clip", nil)
 	if response.GetMediaPresignedUrl() != "https://storage.example/media" || response.GetDtshPresignedGet() != "https://storage.example/index.att-current" {
 		t.Fatalf("relay dropped media or index URL: %v", response)
 	}

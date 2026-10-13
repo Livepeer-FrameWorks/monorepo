@@ -30,7 +30,7 @@ func TestCrossClusterPresignedResolveTTLNeverOutlivesSignedURL(t *testing.T) {
 	SetCrossClusterArtifactDeps(makeCCDeps(fed, map[string]string{"origin": "peer:443"}))
 
 	response := &ipcpb.RelayResolveResponse{}
-	fillCrossClusterArtifact(t.Context(), &ipcpb.RelayResolveRequest{AssetHash: "hash"}, response, logging.NewLogger(), "origin", "tenant", "clip", nil)
+	fillCrossClusterArtifact(t.Context(), &ipcpb.RelayResolveRequest{AssetHash: "hash"}, response, logging.NewLogger(), "", "origin", "tenant", "clip", nil)
 
 	ttl := time.Duration(response.GetUrlTtlSeconds()) * time.Second
 	remaining := time.Until(signedAt.Add(15 * time.Minute))
@@ -48,7 +48,7 @@ func TestCrossClusterPresignedResolveTTLWithoutSignedWindowIsConservative(t *tes
 	SetCrossClusterArtifactDeps(makeCCDeps(fed, map[string]string{"origin": "peer:443"}))
 
 	response := &ipcpb.RelayResolveResponse{}
-	fillCrossClusterArtifact(t.Context(), &ipcpb.RelayResolveRequest{AssetHash: "hash"}, response, logging.NewLogger(), "origin", "tenant", "vod", nil)
+	fillCrossClusterArtifact(t.Context(), &ipcpb.RelayResolveRequest{AssetHash: "hash"}, response, logging.NewLogger(), "", "origin", "tenant", "vod", nil)
 
 	if ttl := time.Duration(response.GetUrlTtlSeconds()) * time.Second; ttl <= 0 || ttl > unsignedPresignResolveTTL {
 		t.Fatalf("forwarded TTL %s for a URL without a readable window, want (0, %s]", ttl, unsignedPresignResolveTTL)
