@@ -499,6 +499,19 @@ services:
     depends_on:
       livepeer-chain:
         condition: service_healthy
+  # The real prober probes the stack's own orchestrators, which sit on the slot's
+  # private subnet. Its ID sorts after scenario 35's protocol prober
+  # (stack-prober-eu), so the coordinator, which assigns an endpoint without
+  # known geography to the lowest-ID healthy prober, hands this one every
+  # endpoint except while the scenario's prober is polling.
+  network-prober:
+    environment:
+      NETWORK_PROBER_ID: stack-prober-real
+      NETWORK_PROBER_REGION: stack-us
+      NETWORK_PROBER_ALLOWED_PRIVATE_CIDRS: ${STACK_SUBNET:-10.231.1.0/24}
+    depends_on:
+      network-observer:
+        condition: service_healthy
   bridge:
     environment:
       NETWORK_OBSERVER_URL: http://network-observer:18024

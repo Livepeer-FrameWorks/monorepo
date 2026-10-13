@@ -29,18 +29,13 @@ type API struct {
 	Secret, ClusterID string
 	MaxObservers      int
 	TrustedProxies    []netip.Prefix
+	Readiness         *Readiness
 }
 
 func (a *API) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })
-	mux.HandleFunc("GET /ready", func(w http.ResponseWriter, r *http.Request) {
-		if err := a.Store.DB.PingContext(r.Context()); err != nil {
-			http.Error(w, "database unavailable", http.StatusServiceUnavailable)
-			return
-		}
-		w.WriteHeader(200)
-	})
+	mux.HandleFunc("GET /ready", a.ready)
 	protected := func(next http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
@@ -58,6 +53,28 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/candidates", protected(a.candidates))
 	return mux
 }
+
+// ready answers 200 only while the database answers, the contract catalog
+// refreshes and the gateway consumer group is consuming; the body names every
+// failing condition.
+func (a *API) ready(w http.ResponseWriter, r *http.Request) {
+	var report ReadinessReport
+	if a.Readiness != nil {
+		report = a.Readiness.Check(time.Now().UTC())
+	} else {
+		report = ReadinessReport{Ready: true, Reasons: []string{}}
+	}
+	if err := a.Store.DB.PingContext(r.Context()); err != nil {
+		report.Ready = false
+		report.Reasons = append([]string{"database: unavailable"}, report.Reasons...)
+	}
+	status := http.StatusOK
+	if !report.Ready {
+		status = http.StatusServiceUnavailable
+	}
+	respond(w, status, report)
+}
+
 func respond(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

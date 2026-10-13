@@ -8,6 +8,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/joho/godotenv v1.5.1
 	github.com/lib/pq v1.12.3
+	github.com/twmb/franz-go/pkg/kadm v1.18.0
 	google.golang.org/grpc v1.80.0
 	google.golang.org/protobuf v1.36.12
 )
@@ -55,7 +56,6 @@ require (
 	github.com/tklauser/go-sysconf v0.3.12 // indirect
 	github.com/tklauser/numcpus v0.6.1 // indirect
 	github.com/twmb/franz-go v1.21.0 // indirect
-	github.com/twmb/franz-go/pkg/kadm v1.18.0 // indirect
 	github.com/twmb/franz-go/pkg/kmsg v1.13.1 // indirect
 	github.com/yugabyte/pgx/v5 v5.7.6-yb-1 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect

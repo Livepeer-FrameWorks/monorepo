@@ -569,6 +569,7 @@ Read by `api_network_observer/cmd/network-prober`.
 | `LIVEPEER_BROADCASTER_SIGNATURE` | string |  | required, secret | v0.3.13 | Hex signature over the broadcaster address using the Livepeer protocol. |
 | `LIVEPEER_DISCOVERY_SKIP_TLS_VERIFY` | boolean | `true` |  | v0.3.13 | Accept orchestrator self-signed certificates, matching Livepeer discovery; never changes coordinator TLS verification. |
 | `NETWORK_PROBER_ALLOW_INSECURE` | boolean | `false` |  | v0.3.13 | Allow HTTP coordinator only for isolated local testing. |
+| `NETWORK_PROBER_ALLOWED_PRIVATE_CIDRS` | list |  |  | v0.3.13 | Private orchestrator networks the prober may dial; only for isolated local testing, since public discovery never targets them. |
 | `NETWORK_PROBER_SPOOL_DIR` | string |  | required | v0.3.13 | Private local durable observation spool directory. |
 | `NETWORK_PROBER_SPOOL_MAX_BYTES` | integer | `67108864` |  | v0.3.13 | Bounded spool byte capacity; overflow is visible in logs and heartbeat reports. |
 | `NETWORK_PROBER_CONCURRENCY` | integer | `8` |  | v0.3.13 | Maximum parallel DNS/discovery checks. |

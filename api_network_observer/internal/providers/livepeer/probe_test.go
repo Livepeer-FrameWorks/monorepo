@@ -2,6 +2,11 @@ package livepeer
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	obs "github.com/Livepeer-FrameWorks/monorepo/pkg/networkobservation"
 	lp "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/livepeer_observer"
@@ -10,8 +15,10 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"math/big"
 	"net"
 	"strconv"
 	"testing"
@@ -161,5 +168,95 @@ func TestProbePinsIPAndPreservesAuthority(t *testing.T) {
 	result := p.Check(context.Background(), obs.Assignment{Endpoint: endpoint, ObserverID: "test", Deadline: time.Now().Add(time.Minute)})
 	if !result.Check.Success || result.Check.ActualIP != "127.0.0.1" || result.Quote == nil {
 		t.Fatalf("pinned discovery failed: %+v", result)
+	}
+}
+
+// Livepeer orchestrators advertise https://host:port. The pinned dial must
+// send the advertised host:port as :authority and the bare hostname as SNI,
+// as go-livepeer's broadcaster does.
+func TestProbeDialsTLSOrchestratorAtAdvertisedHostAndPort(t *testing.T) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{SerialNumber: big.NewInt(1), DNSNames: []string{"unresolvable.invalid"}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour)}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sni string
+	serverTLS := &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: key}}, GetConfigForClient: func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
+		sni = hello.ServerName
+		return nil, nil
+	}}
+	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	authority := "unresolvable.invalid:" + strconv.Itoa(listener.Addr().(*net.TCPAddr).Port)
+	address := make([]byte, 20)
+	var gotAuthority string
+	server := grpc.NewServer(grpc.Creds(credentials.NewTLS(serverTLS)))
+	server.RegisterService(&grpc.ServiceDesc{ServiceName: "net.Orchestrator", HandlerType: (*orchTest)(nil), Methods: []grpc.MethodDesc{{MethodName: "GetOrchestrator", Handler: func(_ any, ctx context.Context, decode func(any) error, _ grpc.UnaryServerInterceptor) (any, error) {
+		var req lp.DiscoveryRequest
+		if decodeErr := decode(&req); decodeErr != nil {
+			return nil, decodeErr
+		}
+		if md, ok := metadata.FromIncomingContext(ctx); ok && len(md.Get(":authority")) > 0 {
+			gotAuthority = md.Get(":authority")[0]
+		}
+		return &lp.DiscoveryResponse{Transcoder: "https://" + authority, Address: address}, nil
+	}}}}, struct{}{})
+	go server.Serve(listener)
+	defer server.Stop()
+	endpoint, err := obs.NewEndpoint(obs.Resource{ID: "0x" + hex.EncodeToString(address), URI: "https://" + authority}, "127.0.0.1", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	probe := &Probe{SkipTLSVerify: true, Timeout: 2 * time.Second}
+	if err := probe.AllowPrivateNetworks([]string{"127.0.0.0/8"}); err != nil {
+		t.Fatal(err)
+	}
+	result := probe.Check(context.Background(), obs.Assignment{Endpoint: endpoint, ObserverID: "test", Deadline: time.Now().Add(time.Minute)})
+	if !result.Check.Success || result.Check.ActualIP != "127.0.0.1" {
+		t.Fatalf("TLS discovery of %s failed: %+v", authority, result.Check)
+	}
+	if gotAuthority != authority || sni != "unresolvable.invalid" {
+		t.Fatalf(":authority %q and SNI %q, want %q and the bare hostname", gotAuthority, sni, authority)
+	}
+}
+
+func TestAllowPrivateNetworksAdmitsOnlyTheConfiguredNetworks(t *testing.T) {
+	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	server := grpc.NewServer()
+	server.RegisterService(&grpc.ServiceDesc{ServiceName: "net.Orchestrator", HandlerType: (*orchTest)(nil), Methods: []grpc.MethodDesc{{MethodName: "GetOrchestrator", Handler: func(_ any, _ context.Context, _ func(any) error, _ grpc.UnaryServerInterceptor) (any, error) {
+		return nil, status.Error(codes.ResourceExhausted, "busy")
+	}}}}, struct{}{})
+	go server.Serve(listener)
+	defer server.Stop()
+	check := func(cidrs ...string) obs.Check {
+		t.Helper()
+		probe := &Probe{Timeout: time.Second}
+		if err := probe.AllowPrivateNetworks(cidrs); err != nil {
+			t.Fatal(err)
+		}
+		return probe.Check(context.Background(), obs.Assignment{Deadline: time.Now().Add(time.Second), Endpoint: obs.Endpoint{IP: "127.0.0.1", Resource: obs.Resource{URI: "http://" + listener.Addr().String()}}}).Check
+	}
+	if got := check(); got.FailureKind != "endpoint_policy" {
+		t.Fatalf("loopback orchestrator dialed without an allowed network: %+v", got)
+	}
+	if got := check("10.231.1.0/24"); got.FailureKind != "endpoint_policy" {
+		t.Fatalf("an unrelated private network admitted loopback: %+v", got)
+	}
+	if got := check(" 10.231.1.0/24", "127.0.0.0/8 "); got.FailureKind != "capacity" {
+		t.Fatalf("orchestrator inside an allowed network was not dialed: %+v", got)
+	}
+	if err := (&Probe{}).AllowPrivateNetworks([]string{"10.0.0.0/33"}); err == nil {
+		t.Fatal("an invalid network was accepted")
 	}
 }

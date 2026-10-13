@@ -7547,8 +7547,8 @@ export type GetOrchestratorPerformanceSeriesQueryVariables = Exact<{
 }>;
 
 
-/** Time-series performance points for an orchestrator from the discovery rollups (5m or 1h). `meanLatencyMs` is server-pre-computed; callers don't divide latency_sum/latency_count themselves. */
-export type GetOrchestratorPerformanceSeriesQuery = { /** Time-series performance points for an orchestrator from the discovery rollups (5m or 1h). `meanLatencyMs` is server-pre-computed; callers don't divide latency_sum/latency_count themselves. */
+/** Time-series performance points for an orchestrator in 5m or 1h buckets per gateway, region and instance IP: gateway discovery and transcode attempts from both the legacy rollups and the network observations the public route serves (raw, 30 days), counted as that route counts them, plus legacy AI outcomes. `meanLatencyMs` is server-pre-computed; callers don't divide latency_sum/latency_count themselves. */
+export type GetOrchestratorPerformanceSeriesQuery = { /** Time-series performance points for an orchestrator in 5m or 1h buckets per gateway, region and instance IP: gateway discovery and transcode attempts from both the legacy rollups and the network observations the public route serves (raw, 30 days), counted as that route counts them, plus legacy AI outcomes. `meanLatencyMs` is server-pre-computed; callers don't divide latency_sum/latency_count themselves. */
 orchestratorPerformanceSeries: Array<{ timestamp: string, gatewayId: string, gatewayRegion: string, resolvedIp: string, attempts: number, successes: number, failures: number, meanLatencyMs: number, maxLatencyMs: number, transcodeAttempts: number, transcodeSuccesses: number, transcodeFailures: number, transcodeMeanOverallMs: number, transcodeMaxOverallMs: number, transcodePixels: number, aiAttempts: number, aiSuccesses: number, aiFailures: number, aiMeanLatencyMs: number, aiMaxLatencyMs: number }> };
 
 export type GetOrchestratorVantagesQueryVariables = Exact<{
@@ -23874,7 +23874,7 @@ export const GetOrchestratorInstancesDocument = /*#__PURE__*/ new TypedDocumentS
   lastSeen
   updatedAt
 }`) as unknown as TypedDocumentString<GetOrchestratorInstancesQuery, GetOrchestratorInstancesQueryVariables>;
-/** Time-series performance points for an orchestrator from the discovery rollups (5m or 1h). `meanLatencyMs` is server-pre-computed; callers don't divide latency_sum/latency_count themselves. */
+/** Time-series performance points for an orchestrator in 5m or 1h buckets per gateway, region and instance IP: gateway discovery and transcode attempts from both the legacy rollups and the network observations the public route serves (raw, 30 days), counted as that route counts them, plus legacy AI outcomes. `meanLatencyMs` is server-pre-computed; callers don't divide latency_sum/latency_count themselves. */
 export const GetOrchestratorPerformanceSeriesDocument = /*#__PURE__*/ new TypedDocumentString(`
     query GetOrchestratorPerformanceSeries($orchAddr: String!, $timeRange: TimeRangeInput!, $interval: String, $gatewayId: String, $resolvedIp: String) {
   orchestratorPerformanceSeries(

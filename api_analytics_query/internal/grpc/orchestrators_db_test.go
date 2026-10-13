@@ -8,7 +8,9 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func newOrchServer(t *testing.T) (*PeriscopeServer, sqlmock.Sqlmock, func()) {
@@ -61,16 +63,18 @@ func TestListOrchestrators_RequiresTenant(t *testing.T) {
 	}
 }
 
-// TestMergeOrchestratorOutcomes pins the get-or-create accumulation: transcode
-// and AI rows sharing the same (ts, gateway, ip) key merge into ONE point, with
-// each side's fields populated and the mean computed from sum/count.
-func TestMergeOrchestratorOutcomes(t *testing.T) {
+// TestOrchestratorPerformanceSeriesMergesLegacyAndNetworkObservations pins
+// the sources: legacy discovery rollups by owner, legacy outcomes by their
+// cluster owner (tenant_id there is the stream tenant), and the gateway's
+// schema-3 discovery and attempts from network_observations, all summed into
+// one point per (bucket, gateway, region, IP).
+func TestOrchestratorPerformanceSeriesMergesLegacyAndNetworkObservations(t *testing.T) {
 	s, mock, done := newOrchServer(t)
 	defer done()
 
 	const (
 		tenant = "tenant-1"
-		orch   = "0xorch"
+		orch   = "0xOrch"
 		gw     = "gw-1"
 		region = "eu-west"
 		ip     = "10.0.0.1"
@@ -78,58 +82,45 @@ func TestMergeOrchestratorOutcomes(t *testing.T) {
 	start := time.Unix(1_700_000_000, 0).UTC()
 	end := start.Add(time.Hour)
 	ts := start
+	sixColumns := []string{"ts", "gateway_id", "gateway_region", "resolved_ip", "attempts", "successes", "failures", "latency_sum", "latency_count", "max_latency"}
 
-	// Transcode (5m branch): 11 columns.
-	mock.ExpectQuery(`FROM periscope\.orchestrator_transcode_outcomes`).
+	mock.ExpectQuery(`FROM periscope\.orchestrator_discovery_5m\s+WHERE tenant_id = \?`).
 		WithArgs(tenant, orch, start, end).
-		WillReturnRows(sqlmock.NewRows([]string{
-			"ts", "gateway_id", "gateway_region", "resolved_ip",
-			"attempts", "successes", "failures",
-			"overall_ms_sum", "overall_ms_count", "max_overall_ms", "pixels",
-		}).AddRow(ts, gw, region, ip,
-			uint64(10), uint64(8), uint64(2),
-			uint64(800), uint64(8), uint32(150), uint64(123456)))
-
-	// AI (5m branch): 10 columns, same key → merges into the same point.
-	mock.ExpectQuery(`FROM periscope\.orchestrator_ai_outcomes`).
+		WillReturnRows(sqlmock.NewRows(sixColumns).AddRow(ts, gw, region, ip, uint64(2), uint64(2), uint64(0), uint64(100), uint64(2), uint32(60)))
+	mock.ExpectQuery(`FROM periscope\.orchestrator_transcode_outcomes\s+WHERE cluster_owner_tenant_id = \?`).
 		WithArgs(tenant, orch, start, end).
-		WillReturnRows(sqlmock.NewRows([]string{
-			"ts", "gateway_id", "gateway_region", "resolved_ip",
-			"attempts", "successes", "failures",
-			"latency_ms_sum", "latency_ms_count", "max_latency_ms",
-		}).AddRow(ts, gw, region, ip,
-			uint64(4), uint64(4), uint64(0),
-			uint64(200), uint64(4), uint32(70)))
+		WillReturnRows(sqlmock.NewRows(append(sixColumns, "pixels")).
+			AddRow(ts, gw, region, ip, uint64(10), uint64(8), uint64(2), uint64(800), uint64(8), uint32(150), uint64(123456)))
+	mock.ExpectQuery(`FROM periscope\.orchestrator_ai_outcomes\s+WHERE cluster_owner_tenant_id = \?`).
+		WithArgs(tenant, orch, start, end).
+		WillReturnRows(sqlmock.NewRows(sixColumns).AddRow(ts, gw, region, ip, uint64(4), uint64(4), uint64(0), uint64(200), uint64(4), uint32(70)))
+	mock.ExpectQuery(`(?s)FROM periscope\.network_observations FINAL.*producer_kind = 'gateway'.*kind IN \('discovery', 'attempt'\) AND resource_id = lower\(\?\).*GROUP BY ts, gateway_id, gateway_region, resolved_ip, kind`).
+		WithArgs(tenant, orch, start, end).
+		WillReturnRows(sqlmock.NewRows([]string{"ts", "gateway_id", "gateway_region", "resolved_ip", "kind", "attempts", "successes", "failures", "latency_sum", "latency_count", "max_latency", "pixels"}).
+			AddRow(ts, gw, region, ip, "discovery", uint64(3), uint64(1), uint64(1), uint64(200), uint64(1), uint32(200), uint64(0)).
+			AddRow(ts, gw, region, ip, "attempt", uint64(5), uint64(5), uint64(0), uint64(1000), uint64(5), uint32(400), uint64(5000)))
 
-	points := map[orchestratorPerformanceKey]*periscopepb.OrchestratorPerformancePoint{}
-	if err := s.mergeOrchestratorTranscodeOutcomes(context.Background(), points, tenant, orch, start, end, "5m", "", ""); err != nil {
-		t.Fatalf("transcode merge: %v", err)
+	resp, err := s.GetOrchestratorPerformanceSeries(context.Background(), &periscopepb.GetOrchestratorPerformanceSeriesRequest{
+		TenantId: tenant, OrchAddr: orch, TimeRange: &commonpb.TimeRange{Start: timestamppb.New(start), End: timestamppb.New(end)},
+	})
+	if err != nil {
+		t.Fatalf("GetOrchestratorPerformanceSeries: %v", err)
 	}
-	if err := s.mergeOrchestratorAIOutcomes(context.Background(), points, tenant, orch, start, end, "5m", "", ""); err != nil {
-		t.Fatalf("ai merge: %v", err)
+	if len(resp.GetPoints()) != 1 {
+		t.Fatalf("shared key should yield 1 point, got %d", len(resp.GetPoints()))
 	}
-
-	if len(points) != 1 {
-		t.Fatalf("shared key should yield 1 point, got %d", len(points))
+	p := resp.GetPoints()[0]
+	if p.GetAttempts() != 5 || p.GetSuccesses() != 3 || p.GetFailures() != 1 || p.GetMeanLatencyMs() != 100 || p.GetMaxLatencyMs() != 200 {
+		t.Errorf("discovery = %d/%d/%d mean %v max %d, want 5/3/1 mean 100 max 200", p.GetAttempts(), p.GetSuccesses(), p.GetFailures(), p.GetMeanLatencyMs(), p.GetMaxLatencyMs())
 	}
-	var p *periscopepb.OrchestratorPerformancePoint
-	for _, v := range points {
-		p = v
-	}
-	if p.GetTranscodeAttempts() != 10 || p.GetTranscodeSuccesses() != 8 || p.GetTranscodeFailures() != 2 {
+	if p.GetTranscodeAttempts() != 15 || p.GetTranscodeSuccesses() != 13 || p.GetTranscodeFailures() != 2 || p.GetTranscodePixels() != 128456 {
 		t.Errorf("transcode counts wrong: %+v", p)
 	}
-	if p.GetTranscodeMeanOverallMs() != 100 { // 800/8
-		t.Errorf("transcode mean = %v, want 100", p.GetTranscodeMeanOverallMs())
+	if p.GetTranscodeMeanOverallMs() != 138.46154 || p.GetTranscodeMaxOverallMs() != 400 { // 1800/13
+		t.Errorf("transcode mean/max = %v/%d", p.GetTranscodeMeanOverallMs(), p.GetTranscodeMaxOverallMs())
 	}
-	if p.GetTranscodeMaxOverallMs() != 150 || p.GetTranscodePixels() != 123456 {
-		t.Errorf("transcode max/pixels wrong: %+v", p)
-	}
-	if p.GetAiAttempts() != 4 || p.GetAiMeanLatencyMs() != 50 { // 200/4
-		t.Errorf("ai fields wrong: attempts=%d mean=%v", p.GetAiAttempts(), p.GetAiMeanLatencyMs())
-	}
-	if p.GetAiMaxLatencyMs() != 70 {
-		t.Errorf("ai max latency = %d, want 70", p.GetAiMaxLatencyMs())
+	if p.GetAiAttempts() != 4 || p.GetAiMeanLatencyMs() != 50 || p.GetAiMaxLatencyMs() != 70 {
+		t.Errorf("ai fields wrong: %+v", p)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)

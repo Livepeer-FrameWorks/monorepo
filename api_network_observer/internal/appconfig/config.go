@@ -33,16 +33,17 @@ type Observer struct {
 type Prober struct {
 	HealthPort string `env:"NETWORK_PROBER_PORT" default:"18025" desc:"Local prober health and spool statistics HTTP port." introduced:"v0.3.13"`
 	config.Logging
-	CoordinatorURL           string `env:"NETWORK_OBSERVER_URL" required:"true" desc:"Verified HTTPS observer API, accessible from this external host." introduced:"v0.3.13"`
-	SharedSecret             string `env:"NETWORK_OBSERVER_SECRET" required:"true" secret:"true" desc:"Shared observer ingest bearer secret." introduced:"v0.3.13"`
-	ObserverID               string `env:"NETWORK_PROBER_ID" required:"true" desc:"Stable prober ID; no CLI enrollment required." introduced:"v0.3.13"`
-	Region                   string `env:"NETWORK_PROBER_REGION" required:"true" desc:"Prober vantage region." introduced:"v0.3.13"`
-	BroadcasterAddress       string `env:"LIVEPEER_BROADCASTER_ADDRESS" required:"true" desc:"Public broadcaster address for discovery RPC authentication." introduced:"v0.3.13"`
-	BroadcasterSignature     string `env:"LIVEPEER_BROADCASTER_SIGNATURE" required:"true" secret:"true" desc:"Hex signature over the broadcaster address using the Livepeer protocol." introduced:"v0.3.13"`
-	SkipLivepeerTLSVerify    bool   `env:"LIVEPEER_DISCOVERY_SKIP_TLS_VERIFY" default:"true" desc:"Accept orchestrator self-signed certificates, matching Livepeer discovery; never changes coordinator TLS verification." introduced:"v0.3.13"`
-	AllowInsecureCoordinator bool   `env:"NETWORK_PROBER_ALLOW_INSECURE" default:"false" desc:"Allow HTTP coordinator only for isolated local testing." introduced:"v0.3.13"`
-	SpoolDirectory           string `env:"NETWORK_PROBER_SPOOL_DIR" required:"true" desc:"Private local durable observation spool directory." introduced:"v0.3.13"`
-	SpoolMaxBytes            int    `env:"NETWORK_PROBER_SPOOL_MAX_BYTES" default:"67108864" desc:"Bounded spool byte capacity; overflow is visible in logs and heartbeat reports." introduced:"v0.3.13"`
-	Concurrency              int    `env:"NETWORK_PROBER_CONCURRENCY" default:"8" desc:"Maximum parallel DNS/discovery checks." introduced:"v0.3.13"`
-	TimeoutSeconds           int    `env:"NETWORK_PROBER_TIMEOUT_SECONDS" default:"10" desc:"Per DNS/RPC operation timeout." introduced:"v0.3.13"`
+	CoordinatorURL           string   `env:"NETWORK_OBSERVER_URL" required:"true" desc:"Verified HTTPS observer API, accessible from this external host." introduced:"v0.3.13"`
+	SharedSecret             string   `env:"NETWORK_OBSERVER_SECRET" required:"true" secret:"true" desc:"Shared observer ingest bearer secret." introduced:"v0.3.13"`
+	ObserverID               string   `env:"NETWORK_PROBER_ID" required:"true" desc:"Stable prober ID; no CLI enrollment required." introduced:"v0.3.13"`
+	Region                   string   `env:"NETWORK_PROBER_REGION" required:"true" desc:"Prober vantage region." introduced:"v0.3.13"`
+	BroadcasterAddress       string   `env:"LIVEPEER_BROADCASTER_ADDRESS" required:"true" desc:"Public broadcaster address for discovery RPC authentication." introduced:"v0.3.13"`
+	BroadcasterSignature     string   `env:"LIVEPEER_BROADCASTER_SIGNATURE" required:"true" secret:"true" desc:"Hex signature over the broadcaster address using the Livepeer protocol." introduced:"v0.3.13"`
+	SkipLivepeerTLSVerify    bool     `env:"LIVEPEER_DISCOVERY_SKIP_TLS_VERIFY" default:"true" desc:"Accept orchestrator self-signed certificates, matching Livepeer discovery; never changes coordinator TLS verification." introduced:"v0.3.13"`
+	AllowInsecureCoordinator bool     `env:"NETWORK_PROBER_ALLOW_INSECURE" default:"false" desc:"Allow HTTP coordinator only for isolated local testing." introduced:"v0.3.13"`
+	AllowedPrivateCIDRs      []string `env:"NETWORK_PROBER_ALLOWED_PRIVATE_CIDRS" desc:"Private orchestrator networks the prober may dial; only for isolated local testing, since public discovery never targets them." introduced:"v0.3.13"`
+	SpoolDirectory           string   `env:"NETWORK_PROBER_SPOOL_DIR" required:"true" desc:"Private local durable observation spool directory." introduced:"v0.3.13"`
+	SpoolMaxBytes            int      `env:"NETWORK_PROBER_SPOOL_MAX_BYTES" default:"67108864" desc:"Bounded spool byte capacity; overflow is visible in logs and heartbeat reports." introduced:"v0.3.13"`
+	Concurrency              int      `env:"NETWORK_PROBER_CONCURRENCY" default:"8" desc:"Maximum parallel DNS/discovery checks." introduced:"v0.3.13"`
+	TimeoutSeconds           int      `env:"NETWORK_PROBER_TIMEOUT_SECONDS" default:"10" desc:"Per DNS/RPC operation timeout." introduced:"v0.3.13"`
 }

@@ -7,7 +7,8 @@ import (
 	"time"
 )
 
-// DiscoveryQualifies excludes observer and admission failures from endpoint downtime.
+// DiscoveryQualifies excludes observer and admission failures, and endpoints a
+// prober refused before dialing, from endpoint downtime.
 func DiscoveryQualifies(success, observerHealthy bool, failureKind string) bool {
 	if !observerHealthy {
 		return false
@@ -16,7 +17,7 @@ func DiscoveryQualifies(success, observerHealthy bool, failureKind string) bool 
 		return true
 	}
 	switch failureKind {
-	case "observer_cancelled", "canceled", "observer_configuration", "ambiguous_attribution", "authentication", "observer_payment", "capacity":
+	case "observer_cancelled", "canceled", "observer_configuration", "ambiguous_attribution", "authentication", "observer_payment", "capacity", "endpoint_policy", "invalid_endpoint":
 		return false
 	default:
 		return true

@@ -9426,9 +9426,12 @@ class AsyncGraphQLClient(AsyncBaseClient):
         resolved_ip: Union[Optional[str], UnsetType] = UNSET,
         **kwargs: Any,
     ) -> GetOrchestratorPerformanceSeries:
-        """Time-series performance points for an orchestrator from the discovery
-        rollups (5m or 1h). `meanLatencyMs` is server-pre-computed; callers don't
-        divide latency_sum/latency_count themselves."""
+        """Time-series performance points for an orchestrator in 5m or 1h buckets per
+        gateway, region and instance IP: gateway discovery and transcode attempts
+        from both the legacy rollups and the network observations the public route
+        serves (raw, 30 days), counted as that route counts them, plus legacy AI
+        outcomes. `meanLatencyMs` is server-pre-computed; callers don't divide
+        latency_sum/latency_count themselves."""
         query = gql("""
             query GetOrchestratorPerformanceSeries($orchAddr: String!, $timeRange: TimeRangeInput!, $interval: String, $gatewayId: String, $resolvedIp: String) {
               orchestratorPerformanceSeries(

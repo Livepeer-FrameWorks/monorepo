@@ -17,6 +17,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	obs "github.com/Livepeer-FrameWorks/monorepo/pkg/networkobservation"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
+	"github.com/twmb/franz-go/pkg/kadm"
 	"net/http"
 	"net/netip"
 	"os"
@@ -64,7 +65,9 @@ func main() {
 		}
 		return obs.Location{Source: "unknown"}
 	}}
-	api := &coordinator.API{Store: &store.Store{DB: db, TenantID: cfg.TenantID}, Engine: engine, Secret: cfg.SharedSecret, ClusterID: cfg.ClusterID, MaxObservers: cfg.MaxObservers}
+	catalogInterval := time.Duration(cfg.CatalogIntervalSeconds) * time.Second
+	readiness := coordinator.NewReadiness(catalogInterval, time.Now().UTC())
+	api := &coordinator.API{Store: &store.Store{DB: db, TenantID: cfg.TenantID}, Engine: engine, Secret: cfg.SharedSecret, ClusterID: cfg.ClusterID, MaxObservers: cfg.MaxObservers, Readiness: readiness}
 	for _, raw := range cfg.TrustedProxyCIDRs {
 		prefix, prefixErr := netip.ParsePrefix(raw)
 		if prefixErr != nil {
@@ -74,15 +77,41 @@ func main() {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	consumer, err := kafka.NewConsumer(cfg.KafkaBrokers, "network-observer-discovery-"+cfg.Environment, cfg.KafkaClusterID, "network-observer", logger)
+	consumerGroup := "network-observer-discovery-" + cfg.Environment
+	consumer, err := kafka.NewConsumer(cfg.KafkaBrokers, consumerGroup, cfg.KafkaClusterID, "network-observer", logger)
 	if err != nil {
 		logger.WithError(err).Fatal("Gateway discovery consumer unavailable")
 	}
 	defer consumer.Close()
 	registerGatewaySubscriptions(consumer, api.Gateway, cfg.MirrorRegionPrefixes)
 	go func() {
-		if consumeErr := consumer.Start(ctx); consumeErr != nil && ctx.Err() == nil {
+		consumeErr := consumer.Start(ctx)
+		if ctx.Err() == nil {
+			readiness.KafkaStopped(consumeErr)
 			logger.WithError(consumeErr).Error("Gateway discovery consumer stopped")
+		}
+	}()
+	go func() {
+		admin := kadm.NewClient(consumer.GetClient())
+		for {
+			sampleCtx, stop := context.WithTimeout(ctx, 10*time.Second)
+			memberID, _ := consumer.GetClient().GroupMetadata()
+			sample := coordinator.SampleKafkaGroup(sampleCtx, admin, consumerGroup, memberID)
+			stop()
+			if ctx.Err() != nil {
+				return
+			}
+			readiness.KafkaSampled(time.Now().UTC(), sample)
+			// Joining the group takes seconds; sample quickly until then.
+			wait := coordinator.KafkaSampleInterval
+			if !sample.Joined || sample.Partitions == 0 {
+				wait = 5 * time.Second
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(wait):
+			}
 		}
 	}()
 	var definitions []obs.Observer
@@ -127,16 +156,19 @@ func main() {
 		}
 	}()
 	go func() {
-		ticker := time.NewTicker(time.Duration(cfg.CatalogIntervalSeconds) * time.Second)
+		ticker := time.NewTicker(catalogInterval)
 		defer ticker.Stop()
 		for {
-			refreshCtx, stop := context.WithTimeout(ctx, 2*time.Minute)
+			refreshCtx, stop := context.WithTimeout(ctx, coordinator.CatalogRefreshTimeout)
 			resources, refreshErr := catalog.List(refreshCtx)
 			stop()
 			if refreshErr != nil {
 				logger.WithError(refreshErr).Warn("Catalog refresh failed; preserving inventory")
-			} else if persistErr := api.Store.Update(ctx, func(s *store.State, _ *sql.Tx) error { engine.Catalog(s, resources, time.Now().UTC()); return nil }); persistErr != nil {
-				logger.WithError(persistErr).Error("Catalog persistence failed")
+			} else if refreshErr = api.Store.Update(ctx, func(s *store.State, _ *sql.Tx) error { engine.Catalog(s, resources, time.Now().UTC()); return nil }); refreshErr != nil {
+				logger.WithError(refreshErr).Error("Catalog persistence failed")
+			}
+			if ctx.Err() == nil {
+				readiness.CatalogRefreshed(time.Now().UTC(), refreshErr)
 			}
 			select {
 			case <-ctx.Done():

@@ -4245,9 +4245,12 @@ export interface Query {
      */
     orchestratorVantages: OrchestratorVantage[]
     /**
-     * Time-series performance points for an orchestrator from the discovery
-     * rollups (5m or 1h). `meanLatencyMs` is server-pre-computed; callers don't
-     * divide latency_sum/latency_count themselves.
+     * Time-series performance points for an orchestrator in 5m or 1h buckets per
+     * gateway, region and instance IP: gateway discovery and transcode attempts
+     * from both the legacy rollups and the network observations the public route
+     * serves (raw, 30 days), counted as that route counts them, plus legacy AI
+     * outcomes. `meanLatencyMs` is server-pre-computed; callers don't divide
+     * latency_sum/latency_count themselves.
      */
     orchestratorPerformanceSeries: OrchestratorPerformancePoint[]
     /** Discover service instances by type. */
@@ -11969,9 +11972,12 @@ export interface QueryGenqlSelection{
      */
     orchestratorVantages?: (OrchestratorVantageGenqlSelection & { __args?: {orchAddr?: (Scalars['String'] | null)} })
     /**
-     * Time-series performance points for an orchestrator from the discovery
-     * rollups (5m or 1h). `meanLatencyMs` is server-pre-computed; callers don't
-     * divide latency_sum/latency_count themselves.
+     * Time-series performance points for an orchestrator in 5m or 1h buckets per
+     * gateway, region and instance IP: gateway discovery and transcode attempts
+     * from both the legacy rollups and the network observations the public route
+     * serves (raw, 30 days), counted as that route counts them, plus legacy AI
+     * outcomes. `meanLatencyMs` is server-pre-computed; callers don't divide
+     * latency_sum/latency_count themselves.
      */
     orchestratorPerformanceSeries?: (OrchestratorPerformancePointGenqlSelection & { __args: {orchAddr: Scalars['String'], timeRange: TimeRangeInput,
     /** Rollup interval. "5m" (default) or "1h". */

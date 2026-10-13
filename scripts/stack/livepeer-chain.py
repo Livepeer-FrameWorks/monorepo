@@ -8,9 +8,12 @@ POST /                 JSON-RPC: eth_chainId, eth_blockNumber, and eth_call on
                        and ServiceRegistry.getServiceURI.
 GET  /orchestrators    the pool as JSON, for scenario assertions.
 
-The service URIs carry documentation-range addresses: the scenario's prober
-reports checks instead of dialing, and a real prober refuses non-public
-destinations before dialing anyway.
+The first two service URIs carry documentation-range addresses that scenario
+35's protocol prober reports checks for without dialing; the real prober
+refuses them as non-public. The third is cell B's stack orchestrator, which the
+real prober (network-prober, allowed the slot's subnet) resolves and dials. An
+offchain orchestrator identifies itself with the zero address, which a pool
+cannot list, so that discovery completes as an identity mismatch.
 """
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -32,10 +35,12 @@ CONTRACT_IDS = {
     "79c5d2a4a07754f4bacb0ffba18ac516030ee589ebc89db8627680c4d4cdb230": SERVICE_REGISTRY,
 }
 # The first entry has an IP-literal URI, so the coordinator creates its
-# endpoint from the catalog; the second needs a prober's DNS answer.
+# endpoint from the catalog; the others need a prober's DNS answer, which the
+# real prober can give only for the third.
 ORCHESTRATORS = [
     {"address": address("a1"), "uri": "https://203.0.113.10:8935", "active": True, "ip": "203.0.113.10"},
     {"address": address("b2"), "uri": "https://orch-b.stack.invalid:8935", "active": True, "ip": "198.51.100.20"},
+    {"address": address("c3"), "uri": "https://livepeer-orch-b:8935", "active": True, "ip": ""},
 ]
 
 GET_CONTRACT = "e16c7d98"

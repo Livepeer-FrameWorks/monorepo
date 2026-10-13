@@ -34,7 +34,13 @@ The coordinator is an opt-in CLI service (`network-observer`, or the
 `network-observations` service-selection profile). It is excluded from default
 profiles because enabling it requires operator-supplied chain and ingest configuration.
 Native and Docker deployments use the standard platform artifact lifecycle and gate
-`v0.3.13` readiness on `/ready`. Declare `network_observer` in the managed SQL database
+`v0.3.13` readiness on `/ready`. It answers 200 only while the database answers, the
+contract catalog has refreshed, and the gateway consumer group is joined with assigned
+partitions whose lag is consumed; the JSON body lists each failing reason. The windows
+derive from the catalog refresh interval: a startup grace of one interval plus the
+two-minute refresh timeout, catalog staleness after two intervals plus that timeout
+(one failed refresh is tolerated), and two intervals for a failed group sample, a
+rebalance without partitions or a lag without committed progress. Declare `network_observer` in the managed SQL database
 inventory; the existing release bootstrap initializes its owned baseline and runtime
 role. The coordinator binds aggregator Kafka and consumes local and source-prefixed
 mirrored analytics topics, so gateways in every configured region contribute inventory.
@@ -221,8 +227,14 @@ under the same onchain identity and retains regional discovery and performance h
 
 V3 gateway state/discovery also refresh the existing non-additive current views, using
 observation time as the replacement version. V3 samples do not enter legacy additive
-materialized views. Historical legacy performance queries remain a V2 history surface;
-the new REST/dashboard projection is the canonical V3 performance surface.
+materialized views. Each gateway event is either V2 (legacy `orchestrator_*` tables) or
+V3 (`network_observations`), never both, so the GraphQL `orchestratorPerformanceSeries`
+sums the two without double counting. Its V3 part counts a gateway's raw discovery and
+dispatched attempts exactly as the public projection does: every deduplicated row is a
+sample; successes and failures count qualifying rows. Points stay keyed by gateway,
+region and IP, so prober observations, whose observer identities are private, are
+excluded and V3 history follows the 30-day raw retention. Legacy outcome rows are
+scoped by their gateway cluster owner, not by the stream tenant they also carry.
 
 ## Publication boundary
 

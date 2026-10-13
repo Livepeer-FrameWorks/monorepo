@@ -63,6 +63,23 @@ func NewProbe(address, signature string, skipTLS bool, timeout time.Duration) (*
 	return &Probe{Address: a, Signature: sig, SkipTLSVerify: skipTLS, Timeout: timeout}, nil
 }
 
+// AllowPrivateNetworks lets the probe dial orchestrators inside the given
+// CIDRs, which the destination policy otherwise refuses as non-public.
+func (p *Probe) AllowPrivateNetworks(cidrs []string) error {
+	for _, raw := range cidrs {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		_, network, err := net.ParseCIDR(raw)
+		if err != nil {
+			return fmt.Errorf("invalid private orchestrator network %q", raw)
+		}
+		p.destinationPolicy.AllowedCIDRs = append(p.destinationPolicy.AllowedCIDRs, network)
+	}
+	return nil
+}
+
 // Livepeer signs the Keccak hash of the checksummed address as an Ethereum message.
 func DiscoveryDigest(address common.Address) []byte {
 	return accounts.TextHash(crypto.Keccak256([]byte(address.Hex())))
@@ -98,11 +115,13 @@ func (p *Probe) Check(ctx context.Context, a obs.Assignment) obs.ProbeResult {
 	if u.Port() == "" {
 		target = net.JoinHostPort(u.Hostname(), port)
 	}
-	var transport = credentials.NewTLS(&tls.Config{MinVersion: tls.VersionTLS12, ServerName: u.Hostname(), InsecureSkipVerify: p.SkipTLSVerify})
+	// No ServerName: gRPC refuses a credentials ServerName that differs from the
+	// authority option, and derives SNI from the authority's hostname.
+	var transport = credentials.NewTLS(&tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: p.SkipTLSVerify})
 	if u.Scheme == "http" {
 		transport = insecure.NewCredentials()
 	}
-	// The authority remains the advertised hostname while the socket is pinned.
+	// The authority remains the advertised host and port while the socket is pinned.
 	dialer := func(ctx context.Context, _ string) (net.Conn, error) {
 		var d net.Dialer
 		return d.DialContext(ctx, "tcp", net.JoinHostPort(ip.String(), port))

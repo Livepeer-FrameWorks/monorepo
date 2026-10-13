@@ -14,13 +14,6 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-type orchestratorPerformanceKey struct {
-	ts            time.Time
-	gatewayID     string
-	gatewayRegion string
-	resolvedIP    string
-}
-
 // ListOrchestrators returns identity-level rows ((tenant, orch_addr,
 // last_seen)). Per-instance config (price/capabilities/hardware) lives on
 // orchestrator_instance_state_current and is fetched by ListOrchestratorInstances
@@ -167,8 +160,114 @@ func (s *PeriscopeServer) ListOrchestratorVantages(ctx context.Context, req *per
 	return &periscopepb.ListOrchestratorVantagesResponse{Vantages: vantages}, nil
 }
 
-// GetOrchestratorPerformanceSeries combines discovery reachability with
-// transcode/AI outcome rollups by gateway and resolved orchestrator instance IP.
+type orchestratorPerformanceKey struct {
+	ts            time.Time
+	gatewayID     string
+	gatewayRegion string
+	resolvedIP    string
+}
+
+// performanceTotals carries additive sums so a bucket that both the legacy
+// tables and network_observations contribute to keeps an exact weighted mean.
+type performanceTotals struct {
+	attempts, successes, failures uint64
+	latencySum, latencyCount      uint64
+	maxLatency                    uint32
+	pixels                        uint64
+}
+
+func (t *performanceTotals) add(o performanceTotals) {
+	t.attempts += o.attempts
+	t.successes += o.successes
+	t.failures += o.failures
+	t.latencySum += o.latencySum
+	t.latencyCount += o.latencyCount
+	if o.maxLatency > t.maxLatency {
+		t.maxLatency = o.maxLatency
+	}
+	t.pixels += o.pixels
+}
+
+func (t performanceTotals) mean() float32 {
+	if t.latencyCount == 0 {
+		return 0
+	}
+	return float32(t.latencySum) / float32(t.latencyCount)
+}
+
+type performanceBucket struct {
+	discovery, transcode, ai performanceTotals
+}
+
+type performanceSeries map[orchestratorPerformanceKey]*performanceBucket
+
+func (p performanceSeries) bucket(key orchestratorPerformanceKey) *performanceBucket {
+	if b := p[key]; b != nil {
+		return b
+	}
+	b := &performanceBucket{}
+	p[key] = b
+	return b
+}
+
+func (p performanceSeries) points() []*periscopepb.OrchestratorPerformancePoint {
+	keys := make([]orchestratorPerformanceKey, 0, len(p))
+	for key := range p {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if !keys[i].ts.Equal(keys[j].ts) {
+			return keys[i].ts.Before(keys[j].ts)
+		}
+		if keys[i].gatewayID != keys[j].gatewayID {
+			return keys[i].gatewayID < keys[j].gatewayID
+		}
+		if keys[i].gatewayRegion != keys[j].gatewayRegion {
+			return keys[i].gatewayRegion < keys[j].gatewayRegion
+		}
+		return keys[i].resolvedIP < keys[j].resolvedIP
+	})
+	points := make([]*periscopepb.OrchestratorPerformancePoint, 0, len(keys))
+	for _, key := range keys {
+		b := p[key]
+		points = append(points, &periscopepb.OrchestratorPerformancePoint{
+			Timestamp:              timestamppb.New(key.ts),
+			GatewayId:              key.gatewayID,
+			GatewayRegion:          key.gatewayRegion,
+			ResolvedIp:             key.resolvedIP,
+			Attempts:               b.discovery.attempts,
+			Successes:              b.discovery.successes,
+			Failures:               b.discovery.failures,
+			MeanLatencyMs:          b.discovery.mean(),
+			MaxLatencyMs:           b.discovery.maxLatency,
+			TranscodeAttempts:      b.transcode.attempts,
+			TranscodeSuccesses:     b.transcode.successes,
+			TranscodeFailures:      b.transcode.failures,
+			TranscodeMeanOverallMs: b.transcode.mean(),
+			TranscodeMaxOverallMs:  b.transcode.maxLatency,
+			TranscodePixels:        b.transcode.pixels,
+			AiAttempts:             b.ai.attempts,
+			AiSuccesses:            b.ai.successes,
+			AiFailures:             b.ai.failures,
+			AiMeanLatencyMs:        b.ai.mean(),
+			AiMaxLatencyMs:         b.ai.maxLatency,
+		})
+	}
+	return points
+}
+
+type performanceFilter struct {
+	tenantID, orchAddr    string
+	start, end            time.Time
+	interval              string
+	gatewayID, resolvedIP string
+}
+
+// GetOrchestratorPerformanceSeries returns per-(bucket, gateway, instance IP)
+// discovery, transcode and AI performance for one orchestrator. Gateways that
+// send schema-3 telemetry land only in periscope.network_observations, and
+// earlier gateways only in the legacy orchestrator_* tables, so the series sums
+// both sources without counting an event twice.
 func (s *PeriscopeServer) GetOrchestratorPerformanceSeries(ctx context.Context, req *periscopepb.GetOrchestratorPerformanceSeriesRequest) (*periscopepb.GetOrchestratorPerformanceSeriesResponse, error) {
 	tenantID, err := requireTenantID(ctx, req.GetTenantId())
 	if err != nil {
@@ -182,193 +281,72 @@ func (s *PeriscopeServer) GetOrchestratorPerformanceSeries(ctx context.Context, 
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "invalid time range: %v", err)
 	}
-
 	interval := strings.TrimSpace(req.GetInterval())
-	var (
-		table string
-		tsCol string
-	)
 	switch interval {
-	case "1h":
-		table, tsCol = "periscope.orchestrator_discovery_1h", "timestamp_1h"
-	case "", "5m":
-		table, tsCol = "periscope.orchestrator_discovery_5m", "timestamp_5m"
+	case "":
+		interval = "5m"
+	case "5m", "1h":
 	default:
 		return nil, status.Errorf(codes.InvalidArgument, "interval must be '5m' or '1h', got %q", interval)
 	}
-
-	query := fmt.Sprintf(`
-		SELECT %s AS ts, gateway_id, gateway_region, resolved_ip,
-		       sum(attempts) AS attempts,
-		       sum(successes) AS successes,
-		       sum(failures) AS failures,
-		       sum(latency_sum) AS latency_sum,
-		       sum(latency_count) AS latency_count,
-		       max(max_latency) AS max_latency
-		FROM %s
-		WHERE tenant_id = ? AND orch_addr = ?
-		  AND %s >= ? AND %s <= ?
-	`, tsCol, table, tsCol, tsCol)
-	args := []any{tenantID, orchAddr, startTime, endTime}
-
-	if gw := strings.TrimSpace(req.GetGatewayId()); gw != "" {
-		query += " AND gateway_id = ?"
-		args = append(args, gw)
-	}
-	if ip := strings.TrimSpace(req.GetResolvedIp()); ip != "" {
-		query += " AND resolved_ip = ?"
-		args = append(args, ip)
+	filter := performanceFilter{
+		tenantID: tenantID, orchAddr: orchAddr, start: startTime, end: endTime, interval: interval,
+		gatewayID: strings.TrimSpace(req.GetGatewayId()), resolvedIP: strings.TrimSpace(req.GetResolvedIp()),
 	}
 
-	query += " GROUP BY ts, gateway_id, gateway_region, resolved_ip ORDER BY ts ASC, gateway_id ASC, resolved_ip ASC"
-
-	rows, err := periscopequerydb.Query(ctx, s.clickhouse, query, args...)
-	if err != nil {
-		return nil, wrapClickhouseError(err, "database error")
-	}
-	defer func() { _ = rows.Close() }()
-
-	pointsByKey := make(map[orchestratorPerformanceKey]*periscopepb.OrchestratorPerformancePoint)
-	for rows.Next() {
-		var (
-			ts                            time.Time
-			gwID, gwRegion, resolvedIP    string
-			attempts, successes, failures uint64
-			latencySum, latencyCount      uint64
-			maxLatency                    uint32
-		)
-		if scanErr := rows.Scan(&ts, &gwID, &gwRegion, &resolvedIP, &attempts, &successes, &failures, &latencySum, &latencyCount, &maxLatency); scanErr != nil {
-			s.logger.WithError(scanErr).Warn("Failed to scan orchestrator performance row")
-			continue
-		}
-		var meanLatency float32
-		if latencyCount > 0 {
-			meanLatency = float32(latencySum) / float32(latencyCount)
-		}
-		key := orchestratorPerformanceKey{ts: ts, gatewayID: gwID, gatewayRegion: gwRegion, resolvedIP: resolvedIP}
-		pointsByKey[key] = &periscopepb.OrchestratorPerformancePoint{
-			Timestamp:     timestamppb.New(ts),
-			GatewayId:     gwID,
-			GatewayRegion: gwRegion,
-			ResolvedIp:    resolvedIP,
-			Attempts:      attempts,
-			Successes:     successes,
-			Failures:      failures,
-			MeanLatencyMs: meanLatency,
-			MaxLatencyMs:  maxLatency,
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, wrapClickhouseError(err, "database error")
-	}
-
-	gatewayFilter := strings.TrimSpace(req.GetGatewayId())
-	resolvedIPFilter := strings.TrimSpace(req.GetResolvedIp())
-	if err := s.mergeOrchestratorTranscodeOutcomes(ctx, pointsByKey, tenantID, orchAddr, startTime, endTime, interval, gatewayFilter, resolvedIPFilter); err != nil {
+	series := performanceSeries{}
+	if err := s.mergeLegacyDiscovery(ctx, series, filter); err != nil {
 		return nil, err
 	}
-	if err := s.mergeOrchestratorAIOutcomes(ctx, pointsByKey, tenantID, orchAddr, startTime, endTime, interval, gatewayFilter, resolvedIPFilter); err != nil {
+	if err := s.mergeLegacyTranscodeOutcomes(ctx, series, filter); err != nil {
 		return nil, err
 	}
-
-	keys := make([]orchestratorPerformanceKey, 0, len(pointsByKey))
-	for key := range pointsByKey {
-		keys = append(keys, key)
+	if err := s.mergeLegacyAIOutcomes(ctx, series, filter); err != nil {
+		return nil, err
 	}
-	sort.Slice(keys, func(i, j int) bool {
-		if !keys[i].ts.Equal(keys[j].ts) {
-			return keys[i].ts.Before(keys[j].ts)
-		}
-		if keys[i].gatewayID != keys[j].gatewayID {
-			return keys[i].gatewayID < keys[j].gatewayID
-		}
-		return keys[i].resolvedIP < keys[j].resolvedIP
-	})
-	points := make([]*periscopepb.OrchestratorPerformancePoint, 0, len(keys))
-	for _, key := range keys {
-		points = append(points, pointsByKey[key])
+	if err := s.mergeNetworkObservations(ctx, series, filter); err != nil {
+		return nil, err
 	}
-	return &periscopepb.GetOrchestratorPerformanceSeriesResponse{Points: points}, nil
+	return &periscopepb.GetOrchestratorPerformanceSeriesResponse{Points: series.points()}, nil
 }
 
-func (s *PeriscopeServer) performancePoint(points map[orchestratorPerformanceKey]*periscopepb.OrchestratorPerformancePoint, key orchestratorPerformanceKey) *periscopepb.OrchestratorPerformancePoint {
-	if point := points[key]; point != nil {
-		return point
-	}
-	point := &periscopepb.OrchestratorPerformancePoint{
-		Timestamp:     timestamppb.New(key.ts),
-		GatewayId:     key.gatewayID,
-		GatewayRegion: key.gatewayRegion,
-		ResolvedIp:    key.resolvedIP,
-	}
-	points[key] = point
-	return point
-}
-
-func (s *PeriscopeServer) mergeOrchestratorTranscodeOutcomes(ctx context.Context, points map[orchestratorPerformanceKey]*periscopepb.OrchestratorPerformancePoint, tenantID, orchAddr string, startTime, endTime time.Time, interval, gatewayFilter, resolvedIPFilter string) error {
-	var query string
-	args := []any{tenantID, orchAddr, startTime, endTime}
-	switch interval {
-	case "1h":
-		query = `
-				SELECT timestamp_1h AS ts, gateway_id, gateway_region, resolved_ip,
-				       sum(attempts), sum(successes), sum(failures),
-			       sum(overall_ms_sum), sum(overall_ms_count),
-			       max(max_overall_ms), sum(pixels_sum)
-			FROM periscope.orchestrator_transcode_hourly
-			WHERE tenant_id = ? AND orch_addr = ?
-			  AND timestamp_1h >= ? AND timestamp_1h <= ?
-		`
-	default:
-		query = `
-				SELECT toStartOfInterval(timestamp, INTERVAL 5 MINUTE) AS ts, gateway_id, gateway_region, resolved_ip,
-				       count(), sumIf(1, success = 1), sumIf(1, success = 0),
-			       sumIf(toUInt64(overall_ms), success = 1), sumIf(1, success = 1),
-			       maxIf(overall_ms, success = 1), sumIf(pixels, success = 1)
-			FROM periscope.orchestrator_transcode_outcomes
-			WHERE tenant_id = ? AND orch_addr = ?
-			  AND timestamp >= ? AND timestamp <= ?
-		`
-	}
-	if gatewayFilter != "" {
+func (f performanceFilter) drillDown(query string, args []any) (string, []any) {
+	if f.gatewayID != "" {
 		query += " AND gateway_id = ?"
-		args = append(args, gatewayFilter)
+		args = append(args, f.gatewayID)
 	}
-	if resolvedIPFilter != "" {
+	if f.resolvedIP != "" {
 		query += " AND resolved_ip = ?"
-		args = append(args, resolvedIPFilter)
+		args = append(args, f.resolvedIP)
 	}
-	query += " GROUP BY ts, gateway_id, gateway_region, resolved_ip"
+	return query, args
+}
 
-	rows, err := periscopequerydb.Query(ctx, s.clickhouse, query, args...)
+const performanceGroupBy = " GROUP BY ts, gateway_id, gateway_region, resolved_ip"
+
+// scanPerformance reads rows shaped (ts, gateway_id, gateway_region,
+// resolved_ip, attempts, successes, failures, latency_sum, latency_count,
+// max_latency[, pixels]) and adds each into the totals target selects.
+func (s *PeriscopeServer) scanPerformance(ctx context.Context, series performanceSeries, label string, withPixels bool, target func(*performanceBucket) *performanceTotals, query string, args ...any) error {
+	rows, err := periscopequerydb.Query(ctx, s.clickhouse, query+performanceGroupBy, args...)
 	if err != nil {
 		return wrapClickhouseError(err, "database error")
 	}
 	defer func() { _ = rows.Close() }()
-
 	for rows.Next() {
 		var (
-			ts                            time.Time
-			gatewayID, gatewayRegion      string
-			resolvedIP                    string
-			attempts, successes, failures uint64
-			overallSum, overallCount      uint64
-			maxOverall                    uint32
-			pixels                        uint64
+			key    orchestratorPerformanceKey
+			totals performanceTotals
 		)
-		if scanErr := rows.Scan(&ts, &gatewayID, &gatewayRegion, &resolvedIP, &attempts, &successes, &failures, &overallSum, &overallCount, &maxOverall, &pixels); scanErr != nil {
-			s.logger.WithError(scanErr).Warn("Failed to scan orchestrator transcode performance row")
+		dest := []any{&key.ts, &key.gatewayID, &key.gatewayRegion, &key.resolvedIP, &totals.attempts, &totals.successes, &totals.failures, &totals.latencySum, &totals.latencyCount, &totals.maxLatency}
+		if withPixels {
+			dest = append(dest, &totals.pixels)
+		}
+		if scanErr := rows.Scan(dest...); scanErr != nil {
+			s.logger.WithError(scanErr).Warnf("Failed to scan orchestrator %s performance row", label)
 			continue
 		}
-		point := s.performancePoint(points, orchestratorPerformanceKey{ts: ts, gatewayID: gatewayID, gatewayRegion: gatewayRegion, resolvedIP: resolvedIP})
-		point.TranscodeAttempts = attempts
-		point.TranscodeSuccesses = successes
-		point.TranscodeFailures = failures
-		if overallCount > 0 {
-			point.TranscodeMeanOverallMs = float32(overallSum) / float32(overallCount)
-		}
-		point.TranscodeMaxOverallMs = maxOverall
-		point.TranscodePixels = pixels
+		target(series.bucket(key)).add(totals)
 	}
 	if err := rows.Err(); err != nil {
 		return wrapClickhouseError(err, "database error")
@@ -376,67 +354,109 @@ func (s *PeriscopeServer) mergeOrchestratorTranscodeOutcomes(ctx context.Context
 	return nil
 }
 
-func (s *PeriscopeServer) mergeOrchestratorAIOutcomes(ctx context.Context, points map[orchestratorPerformanceKey]*periscopepb.OrchestratorPerformancePoint, tenantID, orchAddr string, startTime, endTime time.Time, interval, gatewayFilter, resolvedIPFilter string) error {
-	var query string
-	args := []any{tenantID, orchAddr, startTime, endTime}
-	switch interval {
-	case "1h":
-		query = `
-				SELECT timestamp_1h AS ts, gateway_id, gateway_region, resolved_ip,
-				       sum(attempts), sum(successes), sum(failures),
-			       sum(latency_ms_sum), sum(latency_ms_count), max(max_latency_ms)
-			FROM periscope.orchestrator_ai_hourly
-			WHERE tenant_id = ? AND orch_addr = ?
-			  AND timestamp_1h >= ? AND timestamp_1h <= ?
-		`
-	default:
-		query = `
-				SELECT toStartOfInterval(timestamp, INTERVAL 5 MINUTE) AS ts, gateway_id, gateway_region, resolved_ip,
-				       count(), sumIf(1, success = 1), sumIf(1, success = 0),
-			       sumIf(toUInt64(latency_ms), success = 1), sumIf(1, success = 1),
-			       maxIf(latency_ms, success = 1)
-			FROM periscope.orchestrator_ai_outcomes
-			WHERE tenant_id = ? AND orch_addr = ?
-			  AND timestamp >= ? AND timestamp <= ?
-		`
+func (s *PeriscopeServer) mergeLegacyDiscovery(ctx context.Context, series performanceSeries, f performanceFilter) error {
+	table, tsCol := "periscope.orchestrator_discovery_5m", "timestamp_5m"
+	if f.interval == "1h" {
+		table, tsCol = "periscope.orchestrator_discovery_1h", "timestamp_1h"
 	}
-	if gatewayFilter != "" {
-		query += " AND gateway_id = ?"
-		args = append(args, gatewayFilter)
-	}
-	if resolvedIPFilter != "" {
-		query += " AND resolved_ip = ?"
-		args = append(args, resolvedIPFilter)
-	}
-	query += " GROUP BY ts, gateway_id, gateway_region, resolved_ip"
+	query, args := f.drillDown(fmt.Sprintf(`
+		SELECT %s AS ts, gateway_id, gateway_region, resolved_ip,
+		       sum(attempts), sum(successes), sum(failures),
+		       sum(latency_sum), sum(latency_count), max(max_latency)
+		FROM %s
+		WHERE tenant_id = ? AND orch_addr = ?
+		  AND %s >= ? AND %s <= ?`, tsCol, table, tsCol, tsCol),
+		[]any{f.tenantID, f.orchAddr, f.start, f.end})
+	return s.scanPerformance(ctx, series, "discovery", false, func(b *performanceBucket) *performanceTotals { return &b.discovery }, query, args...)
+}
 
-	rows, err := periscopequerydb.Query(ctx, s.clickhouse, query, args...)
+// Legacy outcome rows carry the stream tenant in tenant_id; the series is
+// scoped to the gateway cluster's owner, which they carry separately.
+func (s *PeriscopeServer) mergeLegacyTranscodeOutcomes(ctx context.Context, series performanceSeries, f performanceFilter) error {
+	query := `
+		SELECT toStartOfInterval(timestamp, INTERVAL 5 MINUTE) AS ts, gateway_id, gateway_region, resolved_ip,
+		       count(), sumIf(1, success = 1), sumIf(1, success = 0),
+		       sumIf(toUInt64(overall_ms), success = 1), sumIf(1, success = 1),
+		       maxIf(overall_ms, success = 1), sumIf(pixels, success = 1)
+		FROM periscope.orchestrator_transcode_outcomes
+		WHERE cluster_owner_tenant_id = ? AND orch_addr = ?
+		  AND timestamp >= ? AND timestamp <= ?`
+	if f.interval == "1h" {
+		query = `
+		SELECT timestamp_1h AS ts, gateway_id, gateway_region, resolved_ip,
+		       sum(attempts), sum(successes), sum(failures),
+		       sum(overall_ms_sum), sum(overall_ms_count),
+		       max(max_overall_ms), sum(pixels_sum)
+		FROM periscope.orchestrator_transcode_hourly
+		WHERE cluster_owner_tenant_id = ? AND orch_addr = ?
+		  AND timestamp_1h >= ? AND timestamp_1h <= ?`
+	}
+	query, args := f.drillDown(query, []any{f.tenantID, f.orchAddr, f.start, f.end})
+	return s.scanPerformance(ctx, series, "transcode", true, func(b *performanceBucket) *performanceTotals { return &b.transcode }, query, args...)
+}
+
+func (s *PeriscopeServer) mergeLegacyAIOutcomes(ctx context.Context, series performanceSeries, f performanceFilter) error {
+	query := `
+		SELECT toStartOfInterval(timestamp, INTERVAL 5 MINUTE) AS ts, gateway_id, gateway_region, resolved_ip,
+		       count(), sumIf(1, success = 1), sumIf(1, success = 0),
+		       sumIf(toUInt64(latency_ms), success = 1), sumIf(1, success = 1),
+		       maxIf(latency_ms, success = 1)
+		FROM periscope.orchestrator_ai_outcomes
+		WHERE cluster_owner_tenant_id = ? AND orch_addr = ?
+		  AND timestamp >= ? AND timestamp <= ?`
+	if f.interval == "1h" {
+		query = `
+		SELECT timestamp_1h AS ts, gateway_id, gateway_region, resolved_ip,
+		       sum(attempts), sum(successes), sum(failures),
+		       sum(latency_ms_sum), sum(latency_ms_count), max(max_latency_ms)
+		FROM periscope.orchestrator_ai_hourly
+		WHERE cluster_owner_tenant_id = ? AND orch_addr = ?
+		  AND timestamp_1h >= ? AND timestamp_1h <= ?`
+	}
+	query, args := f.drillDown(query, []any{f.tenantID, f.orchAddr, f.start, f.end})
+	return s.scanPerformance(ctx, series, "AI", false, func(b *performanceBucket) *performanceTotals { return &b.ai }, query, args...)
+}
+
+// mergeNetworkObservations adds the gateway's schema-3 discovery and dispatched
+// transcode attempts with the public projection's counting: every
+// deduplicated row is a sample, and successes and failures count qualifying
+// rows only. Prober rows are excluded; their observer identities are private
+// and the series is keyed by gateway. Raw observations are retained 30 days.
+func (s *PeriscopeServer) mergeNetworkObservations(ctx context.Context, series performanceSeries, f performanceFilter) error {
+	seconds := 300
+	if f.interval == "1h" {
+		seconds = 3600
+	}
+	query, args := f.drillDown(fmt.Sprintf(`
+		SELECT toStartOfInterval(timestamp, INTERVAL %d SECOND) AS ts, gateway_id, gateway_region, resolved_ip, kind,
+		       count(), countIf(success = 1 AND qualifying = 1), countIf(success = 0 AND qualifying = 1),
+		       sumIf(toUInt64(latency_ms), success = 1 AND qualifying = 1), countIf(success = 1 AND qualifying = 1),
+		       maxIf(latency_ms, success = 1 AND qualifying = 1), sumIf(returned_pixels, success = 1 AND returned_pixels_known = 1)
+		FROM periscope.network_observations FINAL
+		WHERE tenant_id = ? AND provider = 'livepeer' AND producer_kind = 'gateway'
+		  AND kind IN ('discovery', 'attempt') AND resource_id = lower(?)
+		  AND timestamp >= ? AND timestamp <= ?`, seconds),
+		[]any{f.tenantID, f.orchAddr, f.start, f.end})
+	rows, err := periscopequerydb.Query(ctx, s.clickhouse, query+performanceGroupBy+", kind", args...)
 	if err != nil {
 		return wrapClickhouseError(err, "database error")
 	}
 	defer func() { _ = rows.Close() }()
-
 	for rows.Next() {
 		var (
-			ts                            time.Time
-			gatewayID, gatewayRegion      string
-			resolvedIP                    string
-			attempts, successes, failures uint64
-			latencySum, latencyCount      uint64
-			maxLatency                    uint32
+			key    orchestratorPerformanceKey
+			kind   string
+			totals performanceTotals
 		)
-		if scanErr := rows.Scan(&ts, &gatewayID, &gatewayRegion, &resolvedIP, &attempts, &successes, &failures, &latencySum, &latencyCount, &maxLatency); scanErr != nil {
-			s.logger.WithError(scanErr).Warn("Failed to scan orchestrator AI performance row")
+		if scanErr := rows.Scan(&key.ts, &key.gatewayID, &key.gatewayRegion, &key.resolvedIP, &kind, &totals.attempts, &totals.successes, &totals.failures, &totals.latencySum, &totals.latencyCount, &totals.maxLatency, &totals.pixels); scanErr != nil {
+			s.logger.WithError(scanErr).Warn("Failed to scan network observation performance row")
 			continue
 		}
-		point := s.performancePoint(points, orchestratorPerformanceKey{ts: ts, gatewayID: gatewayID, gatewayRegion: gatewayRegion, resolvedIP: resolvedIP})
-		point.AiAttempts = attempts
-		point.AiSuccesses = successes
-		point.AiFailures = failures
-		if latencyCount > 0 {
-			point.AiMeanLatencyMs = float32(latencySum) / float32(latencyCount)
+		if b := series.bucket(key); kind == "discovery" {
+			b.discovery.add(totals)
+		} else {
+			b.transcode.add(totals)
 		}
-		point.AiMaxLatencyMs = maxLatency
 	}
 	if err := rows.Err(); err != nil {
 		return wrapClickhouseError(err, "database error")

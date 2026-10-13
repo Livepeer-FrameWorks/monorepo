@@ -42,8 +42,12 @@ Configure `DATABASE_URL`,
 `NETWORK_OBSERVER_TENANT_ID`, `NETWORK_OBSERVER_CLUSTER_ID`, `NETWORK_OBSERVER_SECRET`,
 `LIVEPEER_ETH_RPC_URL`, `LIVEPEER_CONTROLLER`, `DECKLOG_GRPC_ADDR`, `SERVICE_TOKEN` and
 `KAFKA_BROKERS`. Use the production Arbitrum chain. Configure verified internal gRPC TLS as for other services. For isolated
-local use, the development `docker-compose.yml` runs the observer under the
-`network-observations` profile once the chain settings and shared secret are set.
+local use, the development `docker-compose.yml` runs the observer and a `network-prober`
+under the `network-observations` profile once the chain settings and shared secret are
+set. That prober uses a signed, unfunded local discovery identity unless
+`LIVEPEER_BROADCASTER_ADDRESS` and `LIVEPEER_BROADCASTER_SIGNATURE` are set.
+`NETWORK_PROBER_ALLOWED_PRIVATE_CIDRS` lets a prober dial orchestrators on a private test
+network; leave it unset on real probers.
 
 CLI provisioning defaults the observer tenant to the resolved system tenant and its
 cluster to the manifest task's cluster; explicit observer values take precedence.
@@ -103,6 +107,12 @@ with the updated manifest before applying the release. Release application initi
 the declared observer database, applies ClickHouse expand migrations and deploys the
 observer and analytics/API services. Verify observer `/ready`, deploy the compatible
 gateway fork through its managed-dependency lifecycle, and install the external probers.
+The observer is ready once its database answers, the contract catalog has refreshed and
+its Kafka consumer group is joined with assigned partitions that are being consumed. A
+503 response lists each failing reason, such as a catalog RPC error or a lag without
+committed progress. One failed catalog refresh is tolerated; two consecutive failures,
+or a consumer group that stays unassigned or stalled for two refresh intervals, make it
+not ready.
 Confirm real discovery in the inventory, real gateway observations in the public API,
 and the dashboard's observer coverage before retiring the old scripts. Livepeer alerts
 are disabled; new Ops/Business Pulse webhook destinations require no Livepeer rollout.

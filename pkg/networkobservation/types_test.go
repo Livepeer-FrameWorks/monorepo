@@ -5,6 +5,22 @@ import (
 	"time"
 )
 
+// A prober refuses a non-public or malformed endpoint before dialing; the
+// coordinator re-emits the result, and analytics must not count it as the
+// orchestrator's downtime any more than the prober's own check does.
+func TestDiscoveryQualifiesExcludesRefusalsBeforeDialing(t *testing.T) {
+	for _, kind := range []string{"endpoint_policy", "invalid_endpoint", "observer_configuration", "ambiguous_attribution", "authentication", "observer_payment", "capacity"} {
+		if DiscoveryQualifies(false, true, kind) {
+			t.Errorf("%s counted as orchestrator downtime", kind)
+		}
+	}
+	for _, kind := range []string{"timeout", "unavailable", "identity_mismatch", "rpc"} {
+		if !DiscoveryQualifies(false, true, kind) {
+			t.Errorf("%s did not count as a qualifying failure", kind)
+		}
+	}
+}
+
 func TestMonitoringReferenceSurvivesHistoryExpiry(t *testing.T) {
 	now := time.Now()
 	e := Endpoint{Referenced: true, FirstSeen: now.Add(-90 * 24 * time.Hour)}

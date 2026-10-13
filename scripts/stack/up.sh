@@ -44,7 +44,7 @@ STACK_SERVICES=(
   edge edge-b edge-proxy-a edge-proxy-b
   livepeer-orch-a livepeer-gateway-a livepeer-proxy-a
   livepeer-orch-b livepeer-gateway-b livepeer-proxy-b
-  livepeer-chain network-observer
+  livepeer-chain network-observer network-prober
   webhook-receiver mailpit stack-runner
 )
 

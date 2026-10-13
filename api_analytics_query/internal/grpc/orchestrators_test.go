@@ -3,8 +3,6 @@ package grpc
 import (
 	"testing"
 	"time"
-
-	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
 )
 
 func TestCapabilityPricesFromArrays(t *testing.T) {
@@ -83,50 +81,35 @@ func TestCapabilityPricesFromArrays(t *testing.T) {
 	})
 }
 
-func TestPerformancePoint(t *testing.T) {
-	// Intent: a get-or-create accumulator. The same key must return the SAME
-	// pointer so callers can keep summing metrics into one row; a new key
-	// must mint a row seeded from the key's dimensions.
-	s := &PeriscopeServer{}
-	points := map[orchestratorPerformanceKey]*periscopepb.OrchestratorPerformancePoint{}
-
+// A bucket fed by both the legacy tables and network_observations sums their
+// counts and keeps the mean weighted by each source's sample count.
+func TestPerformanceSeriesSumsSourcesIntoOnePoint(t *testing.T) {
 	ts := time.Unix(1_700_000_000, 0).UTC()
-	key := orchestratorPerformanceKey{
-		ts:            ts,
-		gatewayID:     "gw-1",
-		gatewayRegion: "eu-west",
-		resolvedIP:    "10.0.0.1",
-	}
+	key := orchestratorPerformanceKey{ts: ts, gatewayID: "gw-1", gatewayRegion: "eu-west", resolvedIP: "10.0.0.1"}
+	series := performanceSeries{}
+	series.bucket(key).discovery.add(performanceTotals{attempts: 3, successes: 3, latencySum: 300, latencyCount: 3, maxLatency: 120})
+	series.bucket(key).discovery.add(performanceTotals{attempts: 2, successes: 1, failures: 1, latencySum: 600, latencyCount: 1, maxLatency: 600})
+	series.bucket(key).transcode.add(performanceTotals{attempts: 4, successes: 4, latencySum: 800, latencyCount: 4, maxLatency: 250, pixels: 1000})
+	series.bucket(orchestratorPerformanceKey{ts: ts, gatewayID: "gw-2"}).ai.add(performanceTotals{attempts: 1})
 
-	first := s.performancePoint(points, key)
-	if first == nil {
-		t.Fatal("expected a point")
-	}
-	if first.GatewayId != "gw-1" || first.GatewayRegion != "eu-west" || first.ResolvedIp != "10.0.0.1" {
-		t.Errorf("point not seeded from key: %+v", first)
-	}
-	if first.GetTimestamp().AsTime().Unix() != ts.Unix() {
-		t.Errorf("timestamp = %v, want %v", first.GetTimestamp().AsTime(), ts)
-	}
-	if len(points) != 1 {
-		t.Errorf("map size = %d, want 1 after create", len(points))
-	}
-
-	// Same key → same pointer, no new row.
-	again := s.performancePoint(points, key)
-	if again != first {
-		t.Error("same key must return the identical pointer")
-	}
-	if len(points) != 1 {
-		t.Errorf("map size = %d, want 1 (no duplicate)", len(points))
-	}
-
-	// Different key → distinct row.
-	other := s.performancePoint(points, orchestratorPerformanceKey{ts: ts, gatewayID: "gw-2"})
-	if other == first {
-		t.Error("distinct key must return a distinct pointer")
-	}
+	points := series.points()
 	if len(points) != 2 {
-		t.Errorf("map size = %d, want 2", len(points))
+		t.Fatalf("points = %d, want one per key", len(points))
+	}
+	p := points[0]
+	if p.GetGatewayId() != "gw-1" || p.GetGatewayRegion() != "eu-west" || p.GetResolvedIp() != "10.0.0.1" || !p.GetTimestamp().AsTime().Equal(ts) {
+		t.Fatalf("point not seeded from its key: %+v", p)
+	}
+	if p.GetAttempts() != 5 || p.GetSuccesses() != 4 || p.GetFailures() != 1 || p.GetMaxLatencyMs() != 600 {
+		t.Fatalf("discovery totals = %+v", p)
+	}
+	if p.GetMeanLatencyMs() != 225 { // (300+600)/(3+1)
+		t.Fatalf("mean latency = %v, want the sample-weighted 225", p.GetMeanLatencyMs())
+	}
+	if p.GetTranscodeAttempts() != 4 || p.GetTranscodeMeanOverallMs() != 200 || p.GetTranscodePixels() != 1000 || p.GetAiAttempts() != 0 {
+		t.Fatalf("transcode/AI totals leaked between buckets: %+v", p)
+	}
+	if points[1].GetGatewayId() != "gw-2" || points[1].GetAiAttempts() != 1 {
+		t.Fatalf("second key = %+v", points[1])
 	}
 }

@@ -201,4 +201,18 @@ func verifyObserverReplayRollbackAndRestart(t *testing.T, db *sql.DB) {
 	if err := api.Drain(ctx, sender); !errors.Is(err, sql.ErrNoRows) || len(seen) != 4 {
 		t.Fatalf("final drain = %v, delivered IDs = %d", err, len(seen))
 	}
+
+	// A reachable database alone is not readiness: the collector must have
+	// refreshed its catalog and be consuming its consumer group.
+	started := time.Now().UTC()
+	api.Readiness = NewReadiness(15*time.Minute, started)
+	var report ReadinessReport
+	if err := json.Unmarshal(request(api, "GET", "/ready", nil, 503), &report); err != nil || report.Ready || len(report.Reasons) != 2 {
+		t.Fatalf("collector without a catalog or consumer group reported %+v (%v)", report, err)
+	}
+	api.Readiness.CatalogRefreshed(started, nil)
+	api.Readiness.KafkaSampled(started, KafkaSample{Joined: true, Partitions: 1})
+	if err := json.Unmarshal(request(api, "GET", "/ready", nil, 200), &report); err != nil || !report.Ready || report.Catalog.LastSuccess == nil {
+		t.Fatalf("working collector reported %+v (%v)", report, err)
+	}
 }

@@ -227,3 +227,102 @@ func verifyNetworkWorkProjection(t *testing.T, ctx context.Context, db *sql.DB, 
 		t.Fatalf("retained work did not survive raw expiry with honest hour bounds: %+v", history)
 	}
 }
+
+// verifyOrchestratorPerformanceParity proves the GraphQL performance series
+// counts a gateway's schema-3 observations exactly as the public projection
+// does, excludes prober rows, and still shows legacy outcomes scoped by their
+// cluster owner rather than their stream tenant.
+func verifyOrchestratorPerformanceParity(t *testing.T, ctx context.Context, db *sql.DB, server *PeriscopeServer) {
+	t.Helper()
+	owner, customer := uuid.NewString(), uuid.NewString()
+	const (
+		orch    = "0xperfparity"
+		ip      = "192.0.2.77"
+		gateway = "gw-perf"
+		region  = "eu"
+	)
+	now := time.Now().UTC().Truncate(time.Second)
+	at := now.Add(-20 * time.Minute)
+	bucket := at.Truncate(5 * time.Minute)
+	insert := func(id, producer, observer, kind string, success, qualifying bool, latency uint32, pixels uint64) {
+		t.Helper()
+		_, err := db.ExecContext(ctx, `INSERT INTO periscope.network_observations
+		(tenant_id,event_id,timestamp,provider,network_id,environment,gateway_id,gateway_region,producer_kind,kind,resource_id,resolved_ip,workload,
+		 success,qualifying,latency_ms,returned_pixels_known,returned_pixels,public_data)
+		VALUES (?,?,?,'livepeer','42161','staging',?,?,?,?,?,?,'transcoding',?,?,?,?,?,'{}')`,
+			owner, id, at, observer, region, producer, kind, orch, ip, success, qualifying, latency, pixels > 0, pixels)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	replayed := uuid.NewString()
+	insert(replayed, "gateway", gateway, "discovery", true, true, 40, 0)
+	insert(replayed, "gateway", gateway, "discovery", true, true, 40, 0)
+	insert(uuid.NewString(), "gateway", gateway, "discovery", false, true, 0, 0)
+	insert(uuid.NewString(), "gateway", gateway, "discovery", false, false, 0, 0)
+	insert(uuid.NewString(), "gateway", gateway, "attempt", true, true, 300, 1000)
+	insert(uuid.NewString(), "gateway", gateway, "attempt", false, true, 0, 0)
+	insert(uuid.NewString(), "gateway", gateway, "decision", true, false, 5, 0)
+	legacyAt := now.Add(-3 * time.Hour)
+	if _, err := db.ExecContext(ctx, `INSERT INTO periscope.orchestrator_transcode_outcomes
+		(timestamp,tenant_id,cluster_owner_tenant_id,gateway_id,gateway_region,orch_addr,resolved_ip,success,overall_ms,pixels)
+		VALUES (?,?,?,?,?,?,?,1,500,2000)`, legacyAt, customer, owner, gateway, region, orch, ip); err != nil {
+		t.Fatal(err)
+	}
+
+	response, err := server.GetNetworkObservations(ctx, &pb.NetworkObservationsRequest{TenantIds: []string{owner}, Provider: "livepeer", NetworkId: "42161", Environment: "staging",
+		ResourceId: orch, ResolvedIp: ip, GatewayRegion: region, TimeRange: &commonpb.TimeRange{Start: timestamppb.New(now.Add(-time.Hour)), End: timestamppb.New(now)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var history obs.History
+	if err := json.Unmarshal(response.Json, &history); err != nil {
+		t.Fatal(err)
+	}
+	rest := map[string]obs.Cohort{}
+	for _, c := range history.Summaries {
+		rest[c.Kind] = c
+	}
+
+	series := func(start time.Time, interval string) []*pb.OrchestratorPerformancePoint {
+		t.Helper()
+		resp, err := server.GetOrchestratorPerformanceSeries(ctx, &pb.GetOrchestratorPerformanceSeriesRequest{TenantId: owner, OrchAddr: orch, Interval: &interval,
+			TimeRange: &commonpb.TimeRange{Start: timestamppb.New(start), End: timestamppb.New(now)}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp.GetPoints()
+	}
+	points := series(now.Add(-time.Hour), "5m")
+	if len(points) != 1 {
+		t.Fatalf("5m series = %+v, want one point for the gateway's bucket", points)
+	}
+	p := points[0]
+	if !p.GetTimestamp().AsTime().Equal(bucket) || p.GetGatewayId() != gateway || p.GetGatewayRegion() != region || p.GetResolvedIp() != ip {
+		t.Fatalf("series point key = %v %s %s %s", p.GetTimestamp().AsTime(), p.GetGatewayId(), p.GetGatewayRegion(), p.GetResolvedIp())
+	}
+	discovery, attempt := rest["discovery"], rest["attempt"]
+	if discovery.Samples != 3 || attempt.Samples != 2 {
+		t.Fatalf("public projection cohorts = %+v", history.Summaries)
+	}
+	if p.GetAttempts() != discovery.Samples || p.GetSuccesses() != discovery.Successes || p.GetFailures() != discovery.Failures || p.GetMeanLatencyMs() != 40 {
+		t.Fatalf("series discovery %d/%d/%d mean %v != public %d/%d/%d", p.GetAttempts(), p.GetSuccesses(), p.GetFailures(), p.GetMeanLatencyMs(), discovery.Samples, discovery.Successes, discovery.Failures)
+	}
+	if p.GetTranscodeAttempts() != attempt.Samples || p.GetTranscodeSuccesses() != attempt.Successes || p.GetTranscodeFailures() != attempt.Failures || p.GetTranscodePixels() != 1000 || p.GetTranscodeMeanOverallMs() != 300 {
+		t.Fatalf("series transcode %+v != public attempt cohort %+v", p, attempt)
+	}
+
+	points = series(now.Add(-6*time.Hour), "1h")
+	var legacyAttempts, v3Attempts uint64
+	for _, point := range points {
+		if point.GetTimestamp().AsTime().Equal(legacyAt.Truncate(time.Hour)) {
+			legacyAttempts += point.GetTranscodeAttempts()
+		}
+		if point.GetTimestamp().AsTime().Equal(at.Truncate(time.Hour)) {
+			v3Attempts += point.GetAttempts()
+		}
+	}
+	if legacyAttempts != 1 || v3Attempts != discovery.Samples {
+		t.Fatalf("1h series legacy transcode attempts = %d (want 1, scoped by cluster owner), schema-3 discovery = %d (want %d): %+v", legacyAttempts, v3Attempts, discovery.Samples, points)
+	}
+}

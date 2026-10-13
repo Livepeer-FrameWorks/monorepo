@@ -52474,9 +52474,12 @@ func (v *GetOrchestratorPerformanceSeriesOrchestratorPerformanceSeriesOrchestrat
 
 // GetOrchestratorPerformanceSeriesResponse is returned by GetOrchestratorPerformanceSeries on success.
 type GetOrchestratorPerformanceSeriesResponse struct {
-	// Time-series performance points for an orchestrator from the discovery
-	// rollups (5m or 1h). `meanLatencyMs` is server-pre-computed; callers don't
-	// divide latency_sum/latency_count themselves.
+	// Time-series performance points for an orchestrator in 5m or 1h buckets per
+	// gateway, region and instance IP: gateway discovery and transcode attempts
+	// from both the legacy rollups and the network observations the public route
+	// serves (raw, 30 days), counted as that route counts them, plus legacy AI
+	// outcomes. `meanLatencyMs` is server-pre-computed; callers don't divide
+	// latency_sum/latency_count themselves.
 	OrchestratorPerformanceSeries []GetOrchestratorPerformanceSeriesOrchestratorPerformanceSeriesOrchestratorPerformancePoint `json:"orchestratorPerformanceSeries"`
 }
 
@@ -134905,9 +134908,12 @@ fragment OrchestratorPerformancePointDefaultFields on OrchestratorPerformancePoi
 
 // GetOrchestratorPerformanceSeries executes the corresponding GraphQL operation.
 //
-// Time-series performance points for an orchestrator from the discovery
-// rollups (5m or 1h). `meanLatencyMs` is server-pre-computed; callers don't
-// divide latency_sum/latency_count themselves.
+// Time-series performance points for an orchestrator in 5m or 1h buckets per
+// gateway, region and instance IP: gateway discovery and transcode attempts
+// from both the legacy rollups and the network observations the public route
+// serves (raw, 30 days), counted as that route counts them, plus legacy AI
+// outcomes. `meanLatencyMs` is server-pre-computed; callers don't divide
+// latency_sum/latency_count themselves.
 func GetOrchestratorPerformanceSeries(
 	ctx_ context.Context,
 	client_ graphql.Client,

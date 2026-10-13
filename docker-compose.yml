@@ -1267,6 +1267,55 @@ services:
       retries: 3
       start_period: 10s
 
+  # Network Prober (profile: network-observations): the released external
+  # prober, configured as api_network_observer/deploy/network-prober.env.example
+  # describes, against the local observer over plain HTTP. It receives only its
+  # own settings, as an external host would. The default discovery identity is a
+  # signed, unfunded throwaway address for local use; set
+  # LIVEPEER_BROADCASTER_ADDRESS and LIVEPEER_BROADCASTER_SIGNATURE to probe
+  # orchestrators that require sender reserve.
+  network-prober:
+    container_name: frameworks-network-prober
+    profiles: ["network-observations"]
+    build:
+      context: .
+      dockerfile: api_network_observer/Dockerfile
+      args:
+        CMD_PACKAGE: ./cmd/network-prober
+        COMPONENT_NAME: network-prober
+        HEALTH_PORT: "18025"
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL}
+      NETWORK_OBSERVER_URL: http://network-observer:18024
+      NETWORK_PROBER_ALLOW_INSECURE: "true"
+      NETWORK_OBSERVER_SECRET: ${NETWORK_OBSERVER_SECRET:-}
+      NETWORK_PROBER_ID: ${NETWORK_PROBER_ID:-local-prober}
+      NETWORK_PROBER_REGION: ${NETWORK_PROBER_REGION:-local}
+      NETWORK_PROBER_SPOOL_DIR: /var/lib/frameworks/network-prober
+      LIVEPEER_BROADCASTER_ADDRESS: ${LIVEPEER_BROADCASTER_ADDRESS:-0xbBE2e4892041b79580f9DE38A8A382e8391AceA5}
+      LIVEPEER_BROADCASTER_SIGNATURE: ${LIVEPEER_BROADCASTER_SIGNATURE:-0x0a8a3a1ba02356b086623e7ea38fb198e4b8a8db18207afb5c3c020a58f31ea2444a0e27452ce5f43f7c62c8dd0fad40e1d4e6a4b0242dfa2b5ba8826111e3891b}
+      LIVEPEER_DISCOVERY_SKIP_TLS_VERIFY: "true"
+    depends_on:
+      network-observer:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - frameworks
+    mem_limit: 128m
+    mem_reservation: 64m
+    cpus: 0.25
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:18025/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
   # One-shot: establish the cell's S3 storage descriptor on the Quartermaster
   # cluster row BEFORE Chandler/Foghorn start. Quartermaster is the sole
   # authority for the descriptor and Chandler no longer serves from env, so the

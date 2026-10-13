@@ -116,7 +116,14 @@ func configuredProbe(cfg *appconfig.Prober) (*livepeer.Probe, error) {
 	if len(cfg.ObserverID) > 128 || strings.ContainsAny(cfg.ObserverID, "\r\n") || strings.HasPrefix(cfg.ObserverID, "gateway:") || len(cfg.Region) > 128 {
 		return nil, fmt.Errorf("invalid observer identity or region")
 	}
-	return livepeer.NewProbe(cfg.BroadcasterAddress, cfg.BroadcasterSignature, cfg.SkipLivepeerTLSVerify, time.Duration(cfg.TimeoutSeconds)*time.Second)
+	probe, err := livepeer.NewProbe(cfg.BroadcasterAddress, cfg.BroadcasterSignature, cfg.SkipLivepeerTLSVerify, time.Duration(cfg.TimeoutSeconds)*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	if err = probe.AllowPrivateNetworks(cfg.AllowedPrivateCIDRs); err != nil {
+		return nil, err
+	}
+	return probe, nil
 }
 
 func checkConfig(args []string, out io.Writer) error {

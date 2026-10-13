@@ -15,9 +15,9 @@ class GetOrchestratorPerformanceSeries(BaseModel):
         "GetOrchestratorPerformanceSeriesOrchestratorPerformanceSeries"
     ] = Field(
         alias="orchestratorPerformanceSeries",
-        description="Time-series performance points for an orchestrator from the discovery\nrollups (5m or 1h). `meanLatencyMs` is server-pre-computed; callers don't\ndivide latency_sum/latency_count themselves.",
+        description="Time-series performance points for an orchestrator in 5m or 1h buckets per\ngateway, region and instance IP: gateway discovery and transcode attempts\nfrom both the legacy rollups and the network observations the public route\nserves (raw, 30 days), counted as that route counts them, plus legacy AI\noutcomes. `meanLatencyMs` is server-pre-computed; callers don't divide\nlatency_sum/latency_count themselves.",
     )
-    "Time-series performance points for an orchestrator from the discovery\nrollups (5m or 1h). `meanLatencyMs` is server-pre-computed; callers don't\ndivide latency_sum/latency_count themselves."
+    "Time-series performance points for an orchestrator in 5m or 1h buckets per\ngateway, region and instance IP: gateway discovery and transcode attempts\nfrom both the legacy rollups and the network observations the public route\nserves (raw, 30 days), counted as that route counts them, plus legacy AI\noutcomes. `meanLatencyMs` is server-pre-computed; callers don't divide\nlatency_sum/latency_count themselves."
 
 
 class GetOrchestratorPerformanceSeriesOrchestratorPerformanceSeries(

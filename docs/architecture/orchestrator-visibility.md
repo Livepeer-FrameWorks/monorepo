@@ -2,8 +2,8 @@
 
 Per-orchestrator current-state telemetry from FrameWorks-managed Livepeer gateways.
 The V3 public dashboard and replay-safe performance history are documented in
-[network-observations.md](network-observations.md); the tables below also retain legacy
-V2 history for existing GraphQL readers.
+[network-observations.md](network-observations.md); the tables below retain legacy V2
+history, which the GraphQL performance series combines with V3 gateway observations.
 
 ## Identity vs instance
 

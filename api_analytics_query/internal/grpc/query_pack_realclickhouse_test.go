@@ -88,6 +88,7 @@ func TestEveryRPCQuerySiteExecutesAgainstCurrentClickHouse(t *testing.T) {
 		verifyNetworkObservationProjection(t, ctx, db, server)
 		verifyNetworkWorkProjection(t, ctx, db, server)
 		verifyNetworkWorkCreditVariety(t, ctx, db, server)
+		verifyOrchestratorPerformanceParity(t, ctx, db, server)
 	})
 	if scanErrors := trace.Errors(); len(scanErrors) > 0 {
 		t.Fatalf("real RPC pack observed result-shape scan failures: %v", scanErrors)

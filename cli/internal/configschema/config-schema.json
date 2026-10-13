@@ -3108,6 +3108,12 @@
           "description": "Allow HTTP coordinator only for isolated local testing."
         },
         {
+          "key": "NETWORK_PROBER_ALLOWED_PRIVATE_CIDRS",
+          "type": "list",
+          "introduced": "v0.3.13",
+          "description": "Private orchestrator networks the prober may dial; only for isolated local testing, since public discovery never targets them."
+        },
+        {
           "key": "NETWORK_PROBER_SPOOL_DIR",
           "type": "string",
           "required": true,
