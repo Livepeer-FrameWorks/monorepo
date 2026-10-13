@@ -9,17 +9,17 @@
 # its deploy/network-prober.env.example describes, allowed the slot's subnet)
 # runs beside the stack. It registers by polling GET /v1/work, resolves the
 # catalog, and dials its assignments directly: cell B's orchestrator answers
-# discovery from the socket the prober pinned, identifying itself with the zero
-# address an offchain orchestrator has, so the check completes as a qualifying
-# identity mismatch; the documentation-range endpoint is refused before
+# discovery from the socket the prober pinned with the offchain identity the
+# chain lists for it (-ethOrchAddr), so the check is a qualifying success that
+# leaves the endpoint up; the documentation-range endpoint is refused before
 # dialing; the unresolvable hostname fails its DNS cycle. Its results, DNS
 # cycle and heartbeat travel its spool, the coordinator, Decklog and Kafka to
 # Periscope and the public route.
 #
 # A scripted prober speaking the same protocol covers what the real one cannot
 # produce here: credentials it would never send (a wrong secret), an exact
-# replay and a conflicting reuse of a batch ID, and a qualifying success with a
-# quote, which needs an orchestrator whose identity is in the pool. Its ID
+# replay and a conflicting reuse of a batch ID, and a success with a price
+# quote, which an orchestrator quotes only with a configured price. Its ID
 # sorts before the real prober's, so while it polls the coordinator assigns it
 # every endpoint; the real prober's checks are asserted before it starts.
 #
@@ -49,11 +49,13 @@
 # coordinator, Decklog, Kafka, periscope-ingest, the rollup loop,
 # periscope-query and Bridge, a replay counted twice, GraphQL history diverging
 # from the public route, and observer identities leaking onto the public route.
-# Not covered: service charges and ticket credit at a nonzero price, and a real
-# prober's successful discovery. go-livepeer builds its price, its ticket sender
-# and recipient and its Ethereum identity only on a chain, so the offchain stack
-# orchestrators quote no price, report the zero address, and the gateway's
-# attempts carry a known zero ticket credit and no service charge.
+# Priced work (its own section below): the offchain stack orchestrators quote
+# -pricePerUnit=1500 -pixelsPerUnit=1000 without tickets, so every attempt that
+# returned pixels carries a service charge of returned pixels x 3/2 wei and a
+# known zero ticket credit; the rollups, the public REST work summaries (raw
+# and from snapshots) and the public GraphQL instance price carry the same.
+# Cell A's orchestrator keeps the zero address an offchain orchestrator reports
+# without -ethOrchAddr.
 # Manual: it waits for the rollup loop's five-minute pass.
 . "$(dirname "$0")/../lib.sh"
 
@@ -158,16 +160,16 @@ eventually 120 "$REAL_PROBER registered through GET /v1/work and keeps polling" 
 real_endpoint() {
   [ "$(observer GET /v1/inventory "$SECRET")" = 200 ] || return 1
   body | jq -e --arg c "$ORCH_C" --arg ip "$IP_C" \
-    'any(.endpoints[]; .resource.id == $c and .ip == $ip and .status == "unavailable" and .failure_streak >= 1)' >/dev/null
+    'any(.endpoints[]; .resource.id == $c and .ip == $ip and .status == "up" and .failure_streak == 0 and (.last_success | startswith("0001") | not))' >/dev/null
 }
-eventually 240 "its DNS answer for $URI_C created endpoint $IP_C, unavailable after its identity-mismatch cycle" real_endpoint ||
+eventually 240 "its DNS answer for $URI_C created endpoint $IP_C, up after its successful discovery" real_endpoint ||
   echo "    endpoints: $(body | jq -c --arg c "$ORCH_C" '[.endpoints[] | select(.resource.id == $c) | {ip, status, failure_streak, checks}]')"
 real_discovery() {
   [ "$(ch "SELECT count() FROM periscope.network_observations FINAL WHERE $REAL_NS AND kind='discovery'
     AND resource_id='$ORCH_C' AND endpoint_uri='$URI_C' AND resolved_ip='$IP_C'
-    AND success=0 AND qualifying=1 AND failure_kind='identity_mismatch' AND latency_ms > 0")" -ge 1 ]
+    AND success=1 AND qualifying=1 AND failure_kind='' AND latency_ms > 0")" -ge 1 ]
 }
-eventually 120 "its discovery RPC to $IP_C, pinned to that socket, reached Periscope as a qualifying identity mismatch" real_discovery
+eventually 120 "its discovery RPC to $IP_C, pinned to that socket and identified as $ORCH_C, reached Periscope as a qualifying success" real_discovery
 real_policy() {
   [ "$(ch "SELECT count() FROM periscope.network_observations FINAL WHERE $REAL_NS AND kind='discovery'
     AND resource_id='$ORCH_A' AND resolved_ip='$IP_A' AND success=0 AND qualifying=0 AND failure_kind='endpoint_policy'")" -ge 1 ]
@@ -182,19 +184,19 @@ real_reports() {
 }
 eventually 120 "its heartbeat and DNS cycle (the unresolvable $URI_B counted failed) are coverage rows" real_reports
 real_public() {
-  local raw qualifying_failures
+  local raw qualifying_successes qualifying_failures
   code=$(curl -s -m 30 -o "$work_dir/real.json" -w '%{http_code}' "$BRIDGE_URL/v1/network/livepeer")
   [ "$code" = 200 ] || return 1
   raw=$(ch "SELECT count() FROM periscope.network_observations FINAL WHERE $NS AND kind='discovery' AND resource_id='$ORCH_C'
     AND resolved_ip='$IP_C' AND gateway_region='$REAL_REGION' AND timestamp >= now() - INTERVAL 1 DAY")
-  qualifying_failures=$(ch "SELECT countIf(success=0 AND qualifying=1) FROM periscope.network_observations FINAL WHERE $NS AND kind='discovery'
-    AND resource_id='$ORCH_C' AND resolved_ip='$IP_C' AND gateway_region='$REAL_REGION' AND timestamp >= now() - INTERVAL 1 DAY")
-  jq -e --arg c "$ORCH_C" --arg ip "$IP_C" --arg r "$REAL_REGION" --argjson n "${raw:-0}" --argjson f "${qualifying_failures:-0}" '
-    $n >= 1
+  read -r qualifying_successes qualifying_failures <<<"$(ch "SELECT countIf(success=1 AND qualifying=1), countIf(success=0 AND qualifying=1) FROM periscope.network_observations FINAL WHERE $NS AND kind='discovery'
+    AND resource_id='$ORCH_C' AND resolved_ip='$IP_C' AND gateway_region='$REAL_REGION' AND timestamp >= now() - INTERVAL 1 DAY FORMAT TSV")"
+  jq -e --arg c "$ORCH_C" --arg ip "$IP_C" --arg r "$REAL_REGION" --argjson n "${raw:-0}" --argjson s "${qualifying_successes:-0}" --argjson f "${qualifying_failures:-0}" '
+    $n >= 1 and $s >= 1
     and ([.history.summaries[] | select(.kind == "discovery" and .resource_id == $c and .ip == $ip and .region == $r)]
-      | (map(.samples) | add) == $n and (map(.failures) | add) == $f and (map(.successes) | add) == 0)
+      | (map(.samples) | add) == $n and (map(.failures) | add) == $f and (map(.successes) | add) == $s)
     and any(.inventory.resources[]; .id == $c)
-    and any(.inventory.endpoints[]; .resource.id == $c and .ip == $ip and .status == "unavailable" and .checks == null)
+    and any(.inventory.endpoints[]; .resource.id == $c and .ip == $ip and .status == "up" and .checks == null)
     and any(.inventory.observers[]; .kind == "prober" and .region == $r)' "$work_dir/real.json" >/dev/null
 }
 eventually 90 "Bridge's public route carries its $REAL_REGION cohort for $IP_C (the raw counts), the endpoint and its measurement site" real_public
@@ -483,8 +485,26 @@ rollup_work() { # rollup_work <interval> <first bucket epoch>
     FROM periscope.network_work_rollups FINAL WHERE $SCOPE AND interval_seconds = $1 AND bucket >= toDateTime($2)
     GROUP BY b, resource_id, resolved_ip, gateway_region ORDER BY b, resource_id, resolved_ip, gateway_region FORMAT TSV"
 }
+raw_gateway() { # raw_gateway <interval> <first bucket epoch>
+  ch "SELECT toUnixTimestamp(toStartOfInterval(timestamp, INTERVAL $1 SECOND)) AS b, kind, resource_id, resolved_ip, gateway_id, gateway_region,
+      count(), countIf(success=1 AND qualifying=1), countIf(success=0 AND qualifying=1),
+      sumIf(toUInt64(latency_ms), success=1 AND qualifying=1), sumIf(returned_pixels, success=1 AND returned_pixels_known=1)
+    FROM periscope.network_observations FINAL WHERE $SCOPE AND producer_kind='gateway' AND kind IN ('discovery','attempt')
+      AND toStartOfInterval(timestamp, INTERVAL $1 SECOND) >= toDateTime($2)
+    GROUP BY b, kind, resource_id, resolved_ip, gateway_id, gateway_region ORDER BY b, kind, resource_id, resolved_ip, gateway_id, gateway_region FORMAT TSV"
+}
+rollup_gateway() { # rollup_gateway <interval> <first bucket epoch>
+  ch "SELECT toUnixTimestamp(bucket) AS b, kind, resource_id, resolved_ip, gateway_id, gateway_region,
+      sum(samples), sum(successes), sum(failures), sum(latency_sum), sum(returned_pixels)
+    FROM periscope.network_gateway_rollups FINAL WHERE $SCOPE AND interval_seconds = $1 AND bucket >= toDateTime($2)
+    GROUP BY b, kind, resource_id, resolved_ip, gateway_id, gateway_region ORDER BY b, kind, resource_id, resolved_ip, gateway_id, gateway_region FORMAT TSV"
+}
 snapshots_match() {
   local raw
+  raw=$(raw_gateway 300 "$RUN_BUCKET_5M")
+  [ -n "$raw" ] && [ "$raw" = "$(rollup_gateway 300 "$RUN_BUCKET_5M")" ] || return 1
+  raw=$(raw_gateway 3600 "$RUN_BUCKET_1H")
+  [ "$raw" = "$(rollup_gateway 3600 "$RUN_BUCKET_1H")" ] || return 1
   raw=$(raw_cohorts 300 "$RUN_BUCKET_5M")
   [ -n "$raw" ] && [ "$raw" = "$(rollup_cohorts 300 "$RUN_BUCKET_5M")" ] || return 1
   raw=$(raw_cohorts 3600 "$RUN_BUCKET_1H")
@@ -495,7 +515,9 @@ snapshots_match() {
   [ "$raw" = "$(rollup_work 3600 "$RUN_BUCKET_1H")" ]
 }
 # Periscope-ingest rebuilds changed buckets every five minutes.
-if ! eventually 420 "observation and work snapshots (5m and 1h) equal the deduplicated raw rows" snapshots_match; then
+if ! eventually 420 "gateway, observation and work snapshots (5m and 1h) equal the deduplicated raw rows" snapshots_match; then
+  echo "    raw gateway 5m:"; raw_gateway 300 "$RUN_BUCKET_5M" | sed 's/^/      /'
+  echo "    rollup gateway 5m:"; rollup_gateway 300 "$RUN_BUCKET_5M" | sed 's/^/      /'
   echo "    raw 5m:"; raw_cohorts 300 "$RUN_BUCKET_5M" | sed 's/^/      /'
   echo "    rollup 5m:"; rollup_cohorts 300 "$RUN_BUCKET_5M" | sed 's/^/      /'
   echo "    raw work 5m:"; raw_work 300 "$RUN_BUCKET_5M" | sed 's/^/      /'
@@ -526,6 +548,144 @@ all_segments=$(ch "SELECT count() FROM periscope.network_observations FINAL WHER
 check "the 31-day window's work for $ORCH_IP comes from the work snapshots ($all_segments accepted segment(s))" json_has "$R" \
   ".history.work.interval_seconds == 3600
     and ([.history.work.summaries[] | select(.ip == \"$ORCH_IP\" and .region == \"$GATEWAY_REGION\") | .accepted_segments] | add) == $all_segments"
+
+# --- Priced work -------------------------------------------------------------
+# docker-compose.stack.yml starts both orchestrators offchain with
+# -pricePerUnit=1500 -pixelsPerUnit=1000: they quote 3/2 wei per pixel and
+# issue no ticket params, so the gateway charges what it would on a chain and
+# sends no tickets. Amounts are exact rationals end to end; the sums below are
+# exact too.
+log "priced work"
+PRICE_PER_UNIT=1500
+PIXELS_PER_UNIT=1000
+read -r QUOTE_NUM QUOTE_DEN <<<"$(python3 -c 'import sys; from fractions import Fraction as F; q = F(int(sys.argv[1]), int(sys.argv[2])); print(q.numerator, q.denominator)' "$PRICE_PER_UNIT" "$PIXELS_PER_UNIT")"
+# rational_sum: sums "numerator<TAB>denominator" lines to "numerator/denominator".
+rational_sum() {
+  python3 -c 'import sys; from fractions import Fraction as F
+t = sum((F(int(n), int(d)) for n, d in (line.split("\t") for line in sys.stdin.read().splitlines() if line)), F(0))
+print(f"{t.numerator}/{t.denominator}")'
+}
+# amount_sum <json> <jq path to the amounts>: the exact sum of public amounts.
+amount_sum() { printf '%s' "$1" | jq -r "$2 | \"\(.numerator)\t\(.denominator)\"" | rational_sum; }
+check "the gateway's state row carries the orchestrator's quote of $QUOTE_NUM/$QUOTE_DEN wei per pixel" \
+  [ "$(ch "SELECT count() FROM periscope.network_observations FINAL WHERE $GW_NS AND kind='state' AND resource_id='$GW_ORCH'
+    AND price_numerator='$QUOTE_NUM' AND price_denominator='$QUOTE_DEN'")" -ge 1 ]
+ch "SELECT returned_pixels_known, returned_pixels, service_charge_known, toString(service_charge_numerator), service_charge_denominator,
+    ticket_credit_known, ticket_credit_numerator, tickets_sent
+  FROM periscope.network_observations FINAL WHERE $STREAM_ATTEMPTS AND request_dispatched=1 FORMAT TSV" >"$work_dir/priced.tsv"
+# Each dispatched attempt is charged exactly when its result reported pixels,
+# at returned pixels x quote; its payment, once sent, is a known zero ticket
+# credit, and no attempt sends a ticket.
+read -r mispriced charged <<<"$(python3 -c 'import sys; from fractions import Fraction as F
+quote = F(int(sys.argv[1]), int(sys.argv[2]))
+bad = charged = 0
+for line in open(sys.argv[3]).read().splitlines():
+    known, pixels, ck, cn, cd, tk, tn, sent = line.split("\t")
+    if known == "1":
+        charged += 1
+        ok = ck == "1" and F(int(cn), int(cd)) == int(pixels) * quote and tk == "1"
+    else:
+        ok = ck == "0"
+    if not (ok and (tk == "0" or tn == "0") and sent == "0"):
+        bad += 1
+print(bad, charged)' "$PRICE_PER_UNIT" "$PIXELS_PER_UNIT" "$work_dir/priced.tsv")"
+priced_attempts() { [ "${charged:-0}" -ge "$SEGMENTS" ] && [ "$mispriced" = 0 ]; }
+check "the stream's $charged charged attempt(s) cost returned pixels x $QUOTE_NUM/$QUOTE_DEN wei with zero ticket credit (${mispriced:-?} differ)" priced_attempts
+
+# The gateway's cohort: its orchestrator, as dialed, from its region.
+COHORT="$NS AND resource_id='$GW_ORCH' AND resolved_ip='$ORCH_IP' AND gateway_region='$GATEWAY_REGION'"
+raw_charges() { # raw_charges <interval> <first bucket epoch>
+  ch "SELECT toUnixTimestamp(toStartOfInterval(timestamp, INTERVAL $1 SECOND)) AS b, profile_key, service_charge_denominator,
+      countIf(service_charge_known=1), toString(sumIf(service_charge_numerator, service_charge_known=1)), countIf(ticket_credit_known=1), sum(tickets_sent)
+    FROM periscope.network_observations FINAL WHERE $COHORT AND kind IN ('attempt','segment') AND toStartOfInterval(timestamp, INTERVAL $1 SECOND) >= toDateTime($2)
+    GROUP BY b, profile_key, service_charge_denominator ORDER BY b, profile_key, service_charge_denominator FORMAT TSV"
+}
+rollup_charges() { # rollup_charges <interval> <first bucket epoch>
+  ch "SELECT toUnixTimestamp(bucket) AS b, profile_key, service_charge_denominator,
+      sum(service_charge_samples), toString(sum(service_charge_numerator)), sum(ticket_credit_samples), sum(tickets_sent)
+    FROM periscope.network_work_rollups FINAL WHERE $COHORT AND interval_seconds = $1 AND bucket >= toDateTime($2)
+    GROUP BY b, profile_key, service_charge_denominator ORDER BY b, profile_key, service_charge_denominator FORMAT TSV"
+}
+charges_rolled_up() {
+  local raw
+  raw=$(raw_charges 300 "$RUN_BUCKET_5M")
+  [ -n "$raw" ] && [ "$raw" = "$(rollup_charges 300 "$RUN_BUCKET_5M")" ] || return 1
+  raw=$(raw_charges 3600 "$RUN_BUCKET_1H")
+  [ "$raw" = "$(rollup_charges 3600 "$RUN_BUCKET_1H")" ]
+}
+if ! eventually 420 "the 5-minute and hourly work snapshots carry the cohort's exact charges and ticket credit" charges_rolled_up; then
+  echo "    raw 5m:"; raw_charges 300 "$RUN_BUCKET_5M" | sed 's/^/      /'
+  echo "    rollup 5m:"; rollup_charges 300 "$RUN_BUCKET_5M" | sed 's/^/      /'
+fi
+
+# cohort_totals <since epoch>: charge samples, exact charge, ticket credit
+# samples and tickets sent from the deduplicated raw rows.
+cohort_totals() {
+  local where="$COHORT AND kind IN ('attempt','segment') AND timestamp >= toDateTime($1)"
+  printf '%s %s %s %s\n' \
+    "$(ch "SELECT countIf(service_charge_known=1) FROM periscope.network_observations FINAL WHERE $where")" \
+    "$(ch "SELECT toString(service_charge_numerator), service_charge_denominator FROM periscope.network_observations FINAL WHERE $where AND service_charge_known=1 FORMAT TSV" | rational_sum)" \
+    "$(ch "SELECT countIf(ticket_credit_known=1) FROM periscope.network_observations FINAL WHERE $where")" \
+    "$(ch "SELECT sum(tickets_sent) FROM periscope.network_observations FINAL WHERE $where")"
+}
+# public_cohort <json>: the same four from the public work summaries.
+public_cohort() {
+  local cohort=".history.work.summaries[] | select(.resource_id == \"$GW_ORCH\" and .ip == \"$ORCH_IP\" and .region == \"$GATEWAY_REGION\")"
+  printf '%s %s %s %s\n' \
+    "$(printf '%s' "$1" | jq "[$cohort | .service_charge_samples] | add // 0")" \
+    "$(amount_sum "$1" "$cohort | .service_charge // empty")" \
+    "$(printf '%s' "$1" | jq "[$cohort | .ticket_credit_samples] | add // 0")" \
+    "$(printf '%s' "$1" | jq "[$cohort | .tickets_sent | tonumber] | add // 0")"
+}
+public_credit_zero() { # every public cohort summary with ticket credit reports exactly zero
+  printf '%s' "$1" | jq -e --arg o "$GW_ORCH" --arg ip "$ORCH_IP" --arg r "$GATEWAY_REGION" '
+    [.history.work.summaries[] | select(.resource_id == $o and .ip == $ip and .region == $r and .ticket_credit_samples > 0)]
+    | length > 0 and all(.ticket_credit_sent.numerator == "0" and (.ticket_credit_incomplete // false) == false)' >/dev/null
+}
+
+window_start=$(($(date -u +%s) - 3600))
+window_end=$(($(date -u +%s) + 60))
+code=$(curl -s -m 30 -o "$work_dir/priced-public.json" -w '%{http_code}' \
+  "$BRIDGE_URL/v1/network/livepeer?start=$(date -u -d "@$window_start" +%Y-%m-%dT%H:%M:%SZ)&end=$(date -u -d "@$window_end" +%Y-%m-%dT%H:%M:%SZ)")
+check "GET /v1/network/livepeer for the last hour answers (HTTP $code)" [ "$code" = 200 ]
+PRICED=$(cat "$work_dir/priced-public.json")
+read -r raw_samples raw_charge raw_credit raw_tickets <<<"$(cohort_totals "$window_start")"
+read -r pub_samples pub_charge pub_credit pub_tickets <<<"$(public_cohort "$PRICED")"
+raw_cohort_charged() { [ "${raw_samples:-0}" -ge "${charged:-1}" ] && [ "${raw_charge%%/*}" != 0 ] && [ "$raw_tickets" = 0 ]; }
+check "the raw cohort is charged: $raw_samples charge(s) totalling $raw_charge wei, $raw_tickets ticket(s)" raw_cohort_charged
+check "public REST work for $ORCH_IP: $pub_samples charge(s) totalling $pub_charge wei equal the raw rows" \
+  [ "$pub_samples $pub_charge $pub_credit $pub_tickets" = "$raw_samples $raw_charge $raw_credit $raw_tickets" ]
+check "public REST reports the cohort's ticket credit as a known zero" public_credit_zero "$PRICED"
+
+# A 31-day window is served from the hourly work snapshots; whole hours only.
+rolled_start_epoch=$((($(date -u +%s) - 31 * 86400 + 3599) / 3600 * 3600))
+ROLLED='{}'
+rolled_matches() {
+  local code
+  code=$(curl -s -m 30 -o "$work_dir/priced-rolled.json" -w '%{http_code}' \
+    "$BRIDGE_URL/v1/network/livepeer?start=$(date -u -d "@$rolled_start_epoch" +%Y-%m-%dT%H:%M:%SZ)&end=$(date -u -d '2 hours' +%Y-%m-%dT%H:%M:%SZ)")
+  [ "$code" = 200 ] || return 1
+  ROLLED=$(cat "$work_dir/priced-rolled.json")
+  json_has "$ROLLED" '.history.rolled_up == true and .history.work.interval_seconds == 3600' || return 1
+  ROLLED_TOTALS=$(public_cohort "$ROLLED")
+  [ "$ROLLED_TOTALS" = "$(cohort_totals "$rolled_start_epoch")" ]
+}
+if ! eventually 120 "the 31-day public REST window's charges for $ORCH_IP come from the snapshots and equal the raw rows" rolled_matches; then
+  echo "    public: ${ROLLED_TOTALS:-}"
+  echo "    raw:    $(cohort_totals "$rolled_start_epoch")"
+fi
+check "the 31-day window reports the cohort's ticket credit as a known zero" public_credit_zero "$ROLLED"
+
+quote_eth=$(python3 -c 'import sys; from decimal import Decimal, getcontext; getcontext().prec = 60; print(format(Decimal(int(sys.argv[1])) / Decimal(10**18), "f").rstrip("0").rstrip("."))' "$QUOTE_NUM")
+gql_priced_instance() {
+  PG=$(public_gql 'query($g:String!){orchestrator(orchAddr:$g){instances{resolvedIp pricePerUnitEth pixelsPerUnit}}}' \
+    "$(jq -cn --arg g "$GW_ORCH" '{g:$g}')")
+  json_has "$PG" "(.errors == null) and any(.data.orchestrator.instances[]; .resolvedIp == \"$ORCH_IP\"
+    and .pricePerUnitEth == \"$quote_eth\" and .pixelsPerUnit == \"$QUOTE_DEN\")"
+}
+eventually 90 "public GraphQL prices the $ORCH_IP instance at $quote_eth ETH per $QUOTE_DEN pixels" gql_priced_instance ||
+  echo "    graphql: $(echo "$PG" | jq -c .)"
+# --- End of priced work -----------------------------------------------------
 
 log "logs"
 errors=$(log_json "$SINCE" 'select(.level == "error" or .level == "fatal" or .level == "panic") | "\(.msg) \(.error // "")"' \

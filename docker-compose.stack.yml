@@ -142,7 +142,9 @@ services:
 
   # Offchain Livepeer, cell A: orchestrator+transcoder on CPU, gateway with the
   # production auth webhook into the cell's Foghorn, nginx front on the
-  # physical infra FQDN Quartermaster advertises.
+  # physical infra FQDN Quartermaster advertises. Each orchestrator quotes 1500
+  # wei per 1000 pixels without tickets, so the gateway charges its work at
+  # that price with zero ticket credit (scenario 35).
   livepeer-orch-a:
     image: *go-livepeer-image
     profiles: ["stack"]
@@ -150,6 +152,8 @@ services:
       - -orchestrator
       - -transcoder
       - -network=offchain
+      - -pricePerUnit=1500
+      - -pixelsPerUnit=1000
       - -serviceAddr=livepeer-orch-a:8935
       - -httpAddr=0.0.0.0:8935
       - -cliAddr=127.0.0.1:7935
@@ -208,7 +212,12 @@ services:
       - -orchestrator
       - -transcoder
       - -network=offchain
+      - -pricePerUnit=1500
+      - -pixelsPerUnit=1000
       - -serviceAddr=livepeer-orch-b:8935
+      # The identity scripts/stack/livepeer-chain.py lists for this
+      # orchestrator, so the real network-prober's discovery is attributed.
+      - -ethOrchAddr=0x5eed0000000000000000000000000000000000c3
       - -httpAddr=0.0.0.0:8935
       - -cliAddr=127.0.0.1:7935
       - -orchSecret=stack-orch-secret

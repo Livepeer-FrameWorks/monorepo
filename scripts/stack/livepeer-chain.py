@@ -11,9 +11,9 @@ GET  /orchestrators    the pool as JSON, for scenario assertions.
 The first two service URIs carry documentation-range addresses that scenario
 35's protocol prober reports checks for without dialing; the real prober
 refuses them as non-public. The third is cell B's stack orchestrator, which the
-real prober (network-prober, allowed the slot's subnet) resolves and dials. An
-offchain orchestrator identifies itself with the zero address, which a pool
-cannot list, so that discovery completes as an identity mismatch.
+real prober (network-prober, allowed the slot's subnet) resolves and dials; that
+orchestrator reports the third address as its offchain identity
+(-ethOrchAddr in docker-compose.stack.yml), so the discovery succeeds.
 """
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
