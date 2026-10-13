@@ -118,8 +118,12 @@ chapter_thumbnails() {
 }
 eventually 240 "chapter thumbnails are accepted and Chandler serves the poster" chapter_thumbnails
 
-log "recording.ready carries the chapter"
-eventually 60 "recording.ready with the first chapter's playback id" saw_event "$SINCE" recording.ready ".artifact.playbackId == \"$FIRST_PB\""
+log "recording.ready carries a chapter"
+# recording.ready names the chapter that finalized first. That is the first
+# chapter unless it is far longer than the next one, as with a long window.
+CHAPTER_PBS=$(chapters | jq -c '[.[].playbackId // empty]')
+eventually 60 "recording.ready with a chapter's playback id" saw_event "$SINCE" recording.ready \
+  ".artifact.playbackId as \$p | $CHAPTER_PBS | any(. == \$p)"
 ready_count=$(webhook_events "$SINCE" | awk -v s="$UUID" '$1=="recording.ready" && $3=="valid" && index($0, s) {print $2}' | sort -u | wc -l | tr -d ' ')
 check "exactly one recording.ready event for this recording (got $ready_count)" [ "$ready_count" = 1 ]
 

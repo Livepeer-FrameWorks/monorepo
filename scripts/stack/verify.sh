@@ -10,7 +10,7 @@
 #   STACK_REUSE=1           run against an already-up slot instead of up.sh
 #   STACK_REPEAT=N          repeat each selected scenario N times (default 1)
 #   STACK_DVR_WINDOW_SECONDS=N  the demo tier's DVR window, so the chapter length
-#                           scenario 04 records (default 120)
+#                           scenarios 04 and 39 record (default 120; 39 needs >=1800)
 #
 # Exit status: 0 all passed; 1 a scenario or the log check failed; 2 nothing
 # failed but a scenario was BLOCKED (the stack lacked something it needs).
