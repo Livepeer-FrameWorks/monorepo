@@ -141,11 +141,16 @@ func runMigrate(cmd *cobra.Command, rc *resolvedCluster, dryRun bool, phase stri
 	// Service databases a live cluster lacks (a database introduced by this
 	// release) are created with their roles and current baseline before the
 	// floor guard and any migration read their ledgers. In dry-run nothing is
-	// created, so the planned databases are excluded from those ledger reads.
+	// created, so the planned databases are excluded from those ledger reads,
+	// and recorded on rc so the dry-run gates and postdeploy step of the same
+	// release skip them too.
 	// Baseline work is bounded per database inside the step, not by the
 	// migrate budget: completing a large YugabyteDB database alone can outlast
 	// that budget, and cancelling it midway only leaves it unverified again.
 	var plannedDatabases map[string]struct{}
+	if dryRun {
+		plannedDatabases = rc.dryRunCreatedDatabases
+	}
 	if phase == "expand" {
 		created, ensureErr := ensureServiceDatabasesFn(context.Background(), cmd, rc, sshPool, dryRun, completeInterruptedBaselines)
 		if ensureErr != nil {
@@ -153,6 +158,7 @@ func runMigrate(cmd *cobra.Command, rc *resolvedCluster, dryRun bool, phase stri
 		}
 		if dryRun {
 			plannedDatabases = schemaDatabaseNameSet(created)
+			rc.dryRunCreatedDatabases = plannedDatabases
 		}
 	}
 
@@ -220,18 +226,13 @@ func runMigrate(cmd *cobra.Command, rc *resolvedCluster, dryRun bool, phase stri
 	return nil
 }
 
-// runBelowFloorGuard refuses the migration if any cluster is missing a migration
-// that was folded below the baseline floor — those are no longer offered, so an
-// existing cluster lacking them would be silently stranded. Read-only; fail-closed
-// (a ledger-read failure blocks rather than risk an unsafe upgrade).
-func runBelowFloorGuard(ctx context.Context, rc *resolvedCluster, sshPool *ssh.Pool) error {
-	return runBelowFloorGuardExcluding(ctx, rc, sshPool, nil)
-}
-
-// runBelowFloorGuardExcluding is runBelowFloorGuard without the named physical
-// Postgres databases. A dry-run excludes the service databases the release would
-// create: they do not exist yet, and they are born from the current baseline
-// whose marker folds every below-floor migration.
+// runBelowFloorGuardExcluding refuses the migration if any manifest database is
+// missing a migration that was folded below the baseline floor — those are no
+// longer offered, so an existing cluster lacking them would be silently stranded.
+// Read-only; fail-closed (a ledger-read failure blocks rather than risk an unsafe
+// upgrade). excluded names physical Postgres databases a dry-run would create:
+// they do not exist yet, and they are born from the current baseline whose marker
+// folds every below-floor migration.
 func runBelowFloorGuardExcluding(ctx context.Context, rc *resolvedCluster, sshPool *ssh.Pool, excluded map[string]struct{}) error {
 	if hasUnscopedDatabaseDeployments(rc.Manifest) {
 		first := true
@@ -270,7 +271,7 @@ func runBelowFloorGuardExcluding(ctx context.Context, rc *resolvedCluster, sshPo
 				if pErr != nil {
 					return pErr
 				}
-				gap, gErr := provisioner.PostgresBelowFloorGap(ctx, sshPool, pgHost, pg, password, databases)
+				gap, gErr := postgresBelowFloorGapFn(ctx, sshPool, pgHost, pg, password, databases)
 				if gErr != nil {
 					return fmt.Errorf("baseline-floor check (postgres): %w", gErr)
 				}
@@ -288,7 +289,7 @@ func runBelowFloorGuardExcluding(ctx context.Context, rc *resolvedCluster, sshPo
 			if sErr != nil {
 				return fmt.Errorf("load manifest env_files: %w", sErr)
 			}
-			gap, gErr := provisioner.ClickHouseBelowFloorGap(ctx, sshPool, host, ch.EffectivePort(), env["CLICKHOUSE_PASSWORD"], ch.Databases)
+			gap, gErr := clickHouseBelowFloorGapFn(ctx, sshPool, host, ch.EffectivePort(), env["CLICKHOUSE_PASSWORD"], ch.Databases)
 			if gErr != nil {
 				return fmt.Errorf("baseline-floor check (clickhouse): %w", gErr)
 			}

@@ -16,11 +16,14 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/datamigrate"
 )
 
-// Prior-release preflight seams. Production reads the migration ledgers and service data-migration state over SSH;
-// tests substitute scripted ledgers and states.
+// Ledger seams shared by the prior-release preflight, the pre-deploy gate, and the below-floor guard. Production
+// reads the migration ledgers, baseline markers, and service data-migration state over SSH; tests substitute
+// scripted ledgers and states.
 var (
 	missingPostgresMigrationsFn   = provisioner.MissingMigrationsForDatabases
 	missingClickHouseMigrationsFn = provisioner.MissingClickHouseMigrationsForDatabases
+	postgresBelowFloorGapFn       = provisioner.PostgresBelowFloorGap
+	clickHouseBelowFloorGapFn     = provisioner.ClickHouseBelowFloorGap
 	priorDataMigrationSourceFn    = func(pool *ssh.Pool, manifest *inventory.Manifest) datamigrate.StateSource {
 		return preflight.SSHStateSource(pool, manifestHostFor(manifest), manifestRuntimeFor(manifest))
 	}

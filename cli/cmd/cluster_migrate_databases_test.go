@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"reflect"
 	"strings"
 	"testing"
@@ -428,6 +429,46 @@ func TestRunMigrateCreatesServiceDatabasesBeforeLedgerChecks(t *testing.T) {
 	}
 }
 
+// The databases a dry-run expand step would create are skipped by the same
+// release's later dry-run steps, and a real apply never skips any.
+func TestRunMigrateCarriesDryRunCreatedDatabasesThroughTheRelease(t *testing.T) {
+	origEnsure, origGuard := ensureServiceDatabasesFn, migrateBelowFloorGuardFn
+	t.Cleanup(func() { ensureServiceDatabasesFn, migrateBelowFloorGuardFn = origEnsure, origGuard })
+	ensureServiceDatabasesFn = func(context.Context, *cobra.Command, *resolvedCluster, *ssh.Pool, bool, bool) ([]provisioner.SchemaDatabase, error) {
+		return []provisioner.SchemaDatabase{{Name: "network_observer"}}, nil
+	}
+	var guardExcluded map[string]struct{}
+	migrateBelowFloorGuardFn = func(_ context.Context, _ *resolvedCluster, _ *ssh.Pool, excluded map[string]struct{}) error {
+		guardExcluded = excluded
+		return nil
+	}
+	cmd, _ := commandWithOutput()
+
+	applied := &resolvedCluster{Manifest: &inventory.Manifest{}}
+	for _, phase := range []string{"expand", "postdeploy"} {
+		if err := runMigrate(cmd, applied, false, phase, true, "v0.3.13", true, false); err != nil {
+			t.Fatal(err)
+		}
+		if guardExcluded != nil || applied.dryRunCreatedDatabases != nil {
+			t.Fatalf("real %s excluded %v and recorded %v; a real apply has created every database and checks them all", phase, guardExcluded, applied.dryRunCreatedDatabases)
+		}
+	}
+
+	dry := &resolvedCluster{Manifest: &inventory.Manifest{}}
+	for _, phase := range []string{"expand", "postdeploy"} {
+		guardExcluded = nil
+		if err := runMigrate(cmd, dry, true, phase, true, "v0.3.13", true, false); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := guardExcluded["network_observer"]; !ok {
+			t.Fatalf("dry-run %s floor guard excluded %v, want network_observer", phase, guardExcluded)
+		}
+	}
+	if _, ok := dry.withDatabaseManifest(dry.Manifest).dryRunCreatedDatabases["network_observer"]; !ok {
+		t.Fatal("a database deployment view lost the dry-run's planned databases")
+	}
+}
+
 func TestRunMigrateStartsItsBudgetAfterServiceDatabaseBaselines(t *testing.T) {
 	origEnsure, origGuard := ensureServiceDatabasesFn, migrateBelowFloorGuardFn
 	t.Cleanup(func() { ensureServiceDatabasesFn, migrateBelowFloorGuardFn = origEnsure, origGuard })
@@ -461,7 +502,7 @@ func TestPostgresGateRefusesMissingServiceDatabaseBeforeLedgerChecks(t *testing.
 	seams := &serviceDatabaseSeams{states: []map[string]provisioner.ServiceDatabaseState{{"lookout": {}}}}
 	seams.install(t)
 	manifest := postgresServiceDatabaseManifest()
-	err := checkPostgresMigrationGate(context.Background(), &resolvedCluster{Manifest: manifest}, nil, manifest, "lookout", "lookout", "v0.3.8")
+	err := checkPostgresMigrationGate(context.Background(), io.Discard, &resolvedCluster{Manifest: manifest}, nil, manifest, "lookout", "lookout", "v0.3.8")
 	if err == nil {
 		t.Fatal("gate passed for a service whose database does not exist")
 	}
@@ -481,7 +522,7 @@ func TestPostgresGateIncludesExplicitCompletionForUnverifiedDatabase(t *testing.
 	}}}
 	seams.install(t)
 	manifest := postgresServiceDatabaseManifest()
-	err := checkPostgresMigrationGate(context.Background(), &resolvedCluster{Manifest: manifest}, nil, manifest, "lookout", "lookout", "v0.3.8")
+	err := checkPostgresMigrationGate(context.Background(), io.Discard, &resolvedCluster{Manifest: manifest}, nil, manifest, "lookout", "lookout", "v0.3.8")
 	if err == nil || !strings.Contains(err.Error(), "--complete-interrupted-baselines") {
 		t.Fatalf("err = %v, want explicit completion remediation", err)
 	}

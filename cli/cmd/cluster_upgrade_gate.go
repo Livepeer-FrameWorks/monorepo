@@ -3,6 +3,8 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"io"
+	"sort"
 	"strings"
 
 	"frameworks/cli/internal/releases"
@@ -40,10 +42,11 @@ func serviceDependsOnClickHouse(deployName string) bool {
 }
 
 // checkPostgresMigrationGate verifies, for a database-backed service, that every Postgres EXPAND migration up to the
-// target and every prior release's postdeploy migration is already applied — checked against the actual _migrations
-// ledger (the authority), never a detected running version. When a prior release is incomplete, the refusal names the
-// first such release; the target's own postdeploy is excluded (it runs after deploy).
-func checkPostgresMigrationGate(ctx context.Context, rc *resolvedCluster, sshPool *ssh.Pool, manifest *inventory.Manifest, dbName, serviceName, target string) error {
+// target and every prior release's postdeploy migration is already applied to the databases the service owns —
+// checked against the actual _migrations ledger (the authority), never a detected running version — and that those
+// databases hold every migration folded below the baseline floor. When a prior release is incomplete, the refusal
+// names the first such release; the target's own postdeploy is excluded (it runs after deploy).
+func checkPostgresMigrationGate(ctx context.Context, out io.Writer, rc *resolvedCluster, sshPool *ssh.Pool, manifest *inventory.Manifest, dbName, serviceName, target string) error {
 	if len(manifest.Infrastructure.DatabaseDeployments) > 0 {
 		view, err := manifest.WithDatabaseDeployment(manifest.ServiceDatabaseDeployment(serviceName))
 		if err != nil {
@@ -55,16 +58,27 @@ func checkPostgresMigrationGate(ctx context.Context, rc *resolvedCluster, sshPoo
 	if pg == nil || !pg.Enabled {
 		return fmt.Errorf("[gate] %s is database-backed but postgres is not enabled in the manifest; cannot verify its migrations before deploy", serviceName)
 	}
-	dbHost, ok := resolvePGHost(manifest, pg)
-	if !ok {
-		return fmt.Errorf("[gate] cannot resolve postgres host from manifest")
-	}
 	password, _ := resolveYugabytePassword(pg, sharedEnvForGate(rc)) //nolint:errcheck // missing yugabyte password is reported by ReadMigrationLedger
 	databases := yugabyteSchemaDatabases([]inventory.DatabaseConfig{{Name: dbName}}, manifest)
+	// A dry-run release's expand step only plans the databases it would create, so they do not exist here; the real
+	// expand step creates them from the current baseline before any upgrade, and then this gate checks them.
+	if planned := plannedSchemaDatabaseNames(databases, rc.dryRunCreatedDatabases); len(planned) > 0 {
+		fmt.Fprintf(out, "[gate] %s would be created at the current baseline by this release's expand step; dry-run skips its baseline, ledger, and floor checks.\n", strings.Join(planned, ", "))
+		databases = excludeSchemaDatabases(databases, rc.dryRunCreatedDatabases)
+		if len(databases) == 0 {
+			return nil
+		}
+	}
+	// One host serves the existence probe, ledger, and floor reads: the first Yugabyte tserver whose local YSQL
+	// answers, so a down first node does not block the gate.
+	dbHost, err := postgresAdminHost(ctx, manifest, pg, sshPool)
+	if err != nil {
+		return fmt.Errorf("[gate] select %s host: %w", serviceName, err)
+	}
 	// A database the release introduces has no migrations, so the ledger checks
 	// below would pass for it while it does not exist. Its presence with a
 	// baseline is checked first; creating it is the release expand step's job.
-	serviceDatabases, err := manifestServiceDatabases(manifest, []inventory.DatabaseConfig{{Name: dbName}})
+	serviceDatabases, err := provisioner.ServiceDatabasesWithBaseline(databases)
 	if err != nil {
 		return fmt.Errorf("[gate] collect %s databases: %w", serviceName, err)
 	}
@@ -81,12 +95,12 @@ func checkPostgresMigrationGate(ctx context.Context, rc *resolvedCluster, sshPoo
 			return serviceDatabaseBootstrapRefusal(serviceName, target, pending, states)
 		}
 	}
-	missingExpand, err := provisioner.MissingMigrationsForDatabases(ctx, sshPool, dbHost, pg, password, databases, "expand", target)
+	missingExpand, err := missingPostgresMigrationsFn(ctx, sshPool, dbHost, pg, password, databases, "expand", target)
 	if err != nil {
 		return fmt.Errorf("[gate] check postgres expand migrations: %w", err)
 	}
 	incompleteRelease, missingPostdeploy, err := firstIncompletePriorRelease(target, releases.ReleasesBelow, func(v string) ([]provisioner.MigrationKey, error) {
-		return provisioner.MissingMigrationsForDatabases(ctx, sshPool, dbHost, pg, password, databases, "postdeploy", v)
+		return missingPostgresMigrationsFn(ctx, sshPool, dbHost, pg, password, databases, "postdeploy", v)
 	})
 	if err != nil {
 		return fmt.Errorf("[gate] check postgres prior postdeploy: %w", err)
@@ -94,12 +108,34 @@ func checkPostgresMigrationGate(ctx context.Context, rc *resolvedCluster, sshPoo
 	if len(missingExpand) > 0 || len(missingPostdeploy) > 0 {
 		return fmt.Errorf("%s", formatMigrationRemediation(serviceName, target, incompleteRelease, missingExpand, missingPostdeploy))
 	}
+	// The ledger checks above select migrations with the builder that excludes those folded below the baseline floor,
+	// so a database with an incomplete folded ledger passes them while missing schema.
+	gap, err := postgresBelowFloorGapFn(ctx, sshPool, dbHost, pg, password, databases)
+	if err != nil {
+		return fmt.Errorf("[gate] baseline-floor check (postgres): %w", err)
+	}
+	if len(gap) > 0 {
+		return fmt.Errorf("%s", provisioner.FormatBelowFloorRefusal("postgres", gap))
+	}
 	return nil
 }
 
-// checkClickHouseMigrationGate is the ClickHouse counterpart: it verifies expand + prior-release postdeploy for the
-// analytics databases against the coordinator's ledger. Symmetric with checkPostgresMigrationGate so a ClickHouse-
-// dependent service (Periscope) is gated on the same completeness the Postgres branch enforces.
+// plannedSchemaDatabaseNames returns the sorted names of databases that planned contains.
+func plannedSchemaDatabaseNames(databases []provisioner.SchemaDatabase, planned map[string]struct{}) []string {
+	var names []string
+	for _, database := range databases {
+		if _, ok := planned[strings.TrimSpace(database.Name)]; ok {
+			names = append(names, database.Name)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
+// checkClickHouseMigrationGate is the ClickHouse counterpart: it verifies expand + prior-release postdeploy and the
+// baseline floor for the analytics databases against the coordinator's ledger. Symmetric with
+// checkPostgresMigrationGate so a ClickHouse-dependent service (Periscope) is gated on the same completeness the
+// Postgres branch enforces.
 func checkClickHouseMigrationGate(ctx context.Context, rc *resolvedCluster, sshPool *ssh.Pool, manifest *inventory.Manifest, serviceName, target string) error {
 	ch := manifest.Infrastructure.ClickHouse
 	if ch == nil || !ch.Enabled || len(ch.Databases) == 0 {
@@ -116,18 +152,25 @@ func checkClickHouseMigrationGate(ctx context.Context, rc *resolvedCluster, sshP
 	}
 	password := env["CLICKHOUSE_PASSWORD"]
 	port := ch.EffectivePort()
-	missingExpand, err := provisioner.MissingClickHouseMigrationsForDatabases(ctx, sshPool, host, port, password, ch.Databases, "expand", target)
+	missingExpand, err := missingClickHouseMigrationsFn(ctx, sshPool, host, port, password, ch.Databases, "expand", target)
 	if err != nil {
 		return fmt.Errorf("[gate] check clickhouse expand migrations: %w", err)
 	}
 	incompleteRelease, missingPostdeploy, err := firstIncompletePriorRelease(target, releases.ReleasesBelow, func(v string) ([]provisioner.MigrationKey, error) {
-		return provisioner.MissingClickHouseMigrationsForDatabases(ctx, sshPool, host, port, password, ch.Databases, "postdeploy", v)
+		return missingClickHouseMigrationsFn(ctx, sshPool, host, port, password, ch.Databases, "postdeploy", v)
 	})
 	if err != nil {
 		return fmt.Errorf("[gate] check clickhouse prior postdeploy: %w", err)
 	}
 	if len(missingExpand) > 0 || len(missingPostdeploy) > 0 {
 		return fmt.Errorf("%s", formatMigrationRemediation(serviceName, target, incompleteRelease, missingExpand, missingPostdeploy))
+	}
+	gap, err := clickHouseBelowFloorGapFn(ctx, sshPool, host, port, password, ch.Databases)
+	if err != nil {
+		return fmt.Errorf("[gate] baseline-floor check (clickhouse): %w", err)
+	}
+	if len(gap) > 0 {
+		return fmt.Errorf("%s", provisioner.FormatBelowFloorRefusal("clickhouse", gap))
 	}
 	return nil
 }
@@ -177,7 +220,6 @@ var loadReleaseCatalog = releases.CatalogOrError
 var (
 	checkPostgresMigrationGateFn   = checkPostgresMigrationGate
 	checkClickHouseMigrationGateFn = checkClickHouseMigrationGate
-	runBelowFloorGuardFn           = runBelowFloorGuard
 )
 
 // runUpgradePreDeployGate is the pre-deploy gate every cluster upgrade goes
@@ -366,23 +408,18 @@ func runUpgradePreDeployGate(
 	if skipMigrationCheck {
 		fmt.Fprintln(cmd.OutOrStderr(), "[gate] WARNING: --skip-migration-check active; pre-deploy schema gate bypassed.")
 	} else if pgBacked || chBacked {
-		// PostgreSQL branch: expand + prior-release postdeploy for this service's owned database.
+		// Each branch checks only the databases this service's binary reads: expand, prior-release postdeploy, and the
+		// baseline floor. `cluster migrate` (step 2 of `release apply`) floor-checks every manifest database.
 		if pgBacked {
-			if err := checkPostgresMigrationGateFn(ctx, rc, sshPool, manifest, dbName, serviceName, targetPlatformVersion); err != nil {
+			if err := checkPostgresMigrationGateFn(ctx, cmd.OutOrStdout(), rc, sshPool, manifest, dbName, serviceName, targetPlatformVersion); err != nil {
 				return err
 			}
 		}
-		// ClickHouse branch (INDEPENDENT): expand + prior-release postdeploy for the analytics databases.
+		// ClickHouse branch (INDEPENDENT): the analytics databases.
 		if chBacked {
 			if err := checkClickHouseMigrationGateFn(ctx, rc, sshPool, manifest, serviceName, targetPlatformVersion); err != nil {
 				return err
 			}
-		}
-		// Baseline-floor guard (Postgres AND ClickHouse). The expand/postdeploy checks use the same builder that EXCLUDES
-		// migrations folded below the declared baseline floor, so a cluster with an incomplete folded ledger would pass
-		// them yet be missing schema. The floor guard fails closed on such a cluster before any binary mutates.
-		if err := runBelowFloorGuardFn(ctx, rc, sshPool); err != nil {
-			return err
 		}
 	} else {
 		fmt.Fprintf(cmd.OutOrStdout(), "[gate] %s (deploy %q) has no primary-database or ClickHouse dependency; no engine schema checks.\n", serviceName, deployName)
@@ -457,8 +494,9 @@ func enforceCatalogPath(cmd *cobra.Command, target string) error {
 	return checkCLIVersionFloor(cmd.ErrOrStderr(), tgt.MinCLIVersion, unsafeCLIFloor(cmd))
 }
 
-// resolvePGHost returns the host used by upgrade-gate SQL checks. Runtime
-// services and `cluster migrate` have separate HA-aware Yugabyte selection.
+// resolvePGHost returns the first declared Postgres/Yugabyte host without a
+// health probe, for provision's data-migration reads. The upgrade gate and
+// `cluster migrate` select a healthy tserver (postgresAdminHost).
 func resolvePGHost(manifest *inventory.Manifest, pg *inventory.PostgresConfig) (inventory.Host, bool) {
 	if pg.IsYugabyte() && len(pg.Nodes) > 0 {
 		return manifest.GetHost(pg.Nodes[0].Host)

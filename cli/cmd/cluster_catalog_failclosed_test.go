@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 
@@ -194,21 +195,17 @@ func TestUpgradeGate_PeriscopeIngestChecksBothStores(t *testing.T) {
 	t.Cleanup(func() { fwv.Version = origVer })
 	fwv.Version = "v0.3.0"
 
-	origPG, origCH, origFloor := checkPostgresMigrationGateFn, checkClickHouseMigrationGateFn, runBelowFloorGuardFn
+	origPG, origCH := checkPostgresMigrationGateFn, checkClickHouseMigrationGateFn
 	t.Cleanup(func() {
-		checkPostgresMigrationGateFn, checkClickHouseMigrationGateFn, runBelowFloorGuardFn = origPG, origCH, origFloor
+		checkPostgresMigrationGateFn, checkClickHouseMigrationGateFn = origPG, origCH
 	})
-	pgCalled, chCalled, floorCalled := false, false, false
-	checkPostgresMigrationGateFn = func(_ context.Context, _ *resolvedCluster, _ *ssh.Pool, _ *inventory.Manifest, _, _, _ string) error {
+	pgCalled, chCalled := false, false
+	checkPostgresMigrationGateFn = func(_ context.Context, _ io.Writer, _ *resolvedCluster, _ *ssh.Pool, _ *inventory.Manifest, _, _, _ string) error {
 		pgCalled = true
 		return nil
 	}
 	checkClickHouseMigrationGateFn = func(_ context.Context, _ *resolvedCluster, _ *ssh.Pool, _ *inventory.Manifest, _, _ string) error {
 		chCalled = true
-		return nil
-	}
-	runBelowFloorGuardFn = func(_ context.Context, _ *resolvedCluster, _ *ssh.Pool) error {
-		floorCalled = true
 		return nil
 	}
 
@@ -226,9 +223,6 @@ func TestUpgradeGate_PeriscopeIngestChecksBothStores(t *testing.T) {
 	if !pgCalled {
 		t.Error("Postgres migration check must run for Periscope ingest's lease store")
 	}
-	if !floorCalled {
-		t.Error("baseline-floor guard must run")
-	}
 }
 
 // TestUpgradeGate_DataMigrationCheckedForDBLessService pins the fix that decouples the catalog-wide data-migration
@@ -244,11 +238,7 @@ func TestUpgradeGate_DataMigrationCheckedForDBLessService(t *testing.T) {
 	t.Cleanup(func() { fwv.Version = origVer })
 	fwv.Version = "v0.3.0"
 
-	// signalman is DB-less; the engine branches are not taken, so no SSH is touched. Stub the floor guard defensively.
-	origFloor := runBelowFloorGuardFn
-	t.Cleanup(func() { runBelowFloorGuardFn = origFloor })
-	runBelowFloorGuardFn = func(_ context.Context, _ *resolvedCluster, _ *ssh.Pool) error { return nil }
-
+	// signalman is DB-less; the engine branches are not taken, so no SSH is touched.
 	manifest := &inventory.Manifest{}
 	rc := &resolvedCluster{Manifest: manifest}
 	var out bytes.Buffer

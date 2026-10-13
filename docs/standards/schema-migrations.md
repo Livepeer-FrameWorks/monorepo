@@ -68,10 +68,15 @@ the release path, not through `cluster provision`:
 - A second probe must show every bootstrapped database initialized or the release stops.
 - Dry-run sends no role, database, marker, or baseline SQL. It lists the databases it
   would create or complete and excludes them from the floor guard and migration ledger
-  checks.
+  checks. A `release apply --dry-run` carries that list into its later steps: the
+  pre-deploy gate of the owning service reports each one as created at the current
+  baseline and never connects to it, and the postdeploy step skips it.
 - The pre-deploy gate (`cluster upgrade`) refuses a service whose owned database is
   missing, empty, or unverified, because a database without migrations would otherwise
-  pass the ledger checks.
+  pass the ledger checks. It checks expand, prior postdeploy, and the baseline floor
+  only on the databases that service reads (its owned Postgres database, plus the
+  ClickHouse databases for a ClickHouse-dependent service); `cluster migrate` floor-checks
+  every manifest database before it applies anything.
 - Tagged-upgrade proofs treat a baseline absent at the tag as created from the current
   baseline, and fail if a post-tag migration targets that database.
 
@@ -297,7 +302,8 @@ Executable v0.2 migration bodies are not shipped in the v0.3 CLI.
 Because raising the floor would strand a cluster that hasn't applied the folded
 migrations, `cluster migrate` runs a **below-floor guard** before applying anything
 (`{Postgres,ClickHouse}BelowFloorGap` in `cli/pkg/provisioner/migration_floor_guard.go`,
-wired via `runBelowFloorGuard`).
+wired via `runBelowFloorGuardExcluding`). The pre-deploy gate runs the same check on
+the upgrading service's own databases.
 
 Fresh vs stale is decided by a **durable marker plus compact source certificates**, not
 ledger-shape inference. Each

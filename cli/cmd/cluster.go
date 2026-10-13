@@ -134,6 +134,11 @@ type resolvedCluster struct {
 	// detected fleet, so `cluster upgrade --all` reads running versions once rather than once per service.
 	sourceFloorVerifiedFor string
 
+	// dryRunCreatedDatabases names the physical service databases a dry-run expand step in this run found missing and
+	// would create at the current baseline. Only a dry-run sets it, so a real apply never skips a database; later
+	// dry-run steps (pre-deploy gates, postdeploy) skip reading them because they do not exist yet.
+	dryRunCreatedDatabases map[string]struct{}
+
 	sharedEnvOnce         sync.Once
 	sharedEnv             map[string]string
 	sharedEnvErr          error
@@ -1485,6 +1490,10 @@ func checkYugabyteCluster(ctx context.Context, sshPool *fwssh.Pool, manifest *in
 	return last
 }
 
+// yugabyteHostSelectionProbeFn is the local YSQL probe firstHealthyYugabyteHost
+// selects with; tests substitute node health.
+var yugabyteHostSelectionProbeFn = checkYugabyteLocalYSQL
+
 // firstHealthyYugabyteHost returns the first candidate tserver that answers a
 // local YSQL probe (SELECT 1 via ysqlsh), so admin DB operations (e.g. migrations
 // applied through ysqlsh -h localhost on the node) target a node whose database
@@ -1492,7 +1501,7 @@ func checkYugabyteCluster(ctx context.Context, sshPool *fwssh.Pool, manifest *in
 // retry a mutation across nodes.
 func firstHealthyYugabyteHost(ctx context.Context, sshPool *fwssh.Pool, hosts []inventory.Host, pg *inventory.PostgresConfig) (inventory.Host, bool) {
 	for _, h := range hosts {
-		if checkYugabyteLocalYSQL(ctx, sshPool, h, pg).OK {
+		if yugabyteHostSelectionProbeFn(ctx, sshPool, h, pg).OK {
 			return h, true
 		}
 	}
