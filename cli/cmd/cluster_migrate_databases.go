@@ -91,12 +91,26 @@ func ensureServiceDatabases(ctx context.Context, cmd *cobra.Command, rc *resolve
 		})
 		return all, err
 	}
-	out := cmd.OutOrStdout()
-	manifest := rc.Manifest
-	pg := manifest.Infrastructure.Postgres
+	pg := rc.Manifest.Infrastructure.Postgres
 	if pg == nil || !pg.Enabled {
 		return nil, nil
 	}
+	ensured, err := ensureDeploymentServiceDatabases(ctx, cmd, rc, sshPool, dryRun, completeInterruptedBaselines)
+	if err != nil {
+		return nil, err
+	}
+	if err := convergeInstanceRuntimeRoleSessionLimits(ctx, cmd.OutOrStdout(), sshPool, rc.Manifest, pg, dryRun); err != nil {
+		return nil, err
+	}
+	return ensured, nil
+}
+
+// ensureDeploymentServiceDatabases is ensureServiceDatabases for the databases
+// on the deployment's own server; Postgres instances hold no service database.
+func ensureDeploymentServiceDatabases(ctx context.Context, cmd *cobra.Command, rc *resolvedCluster, sshPool *ssh.Pool, dryRun, completeInterruptedBaselines bool) ([]provisioner.SchemaDatabase, error) {
+	out := cmd.OutOrStdout()
+	manifest := rc.Manifest
+	pg := manifest.Infrastructure.Postgres
 	candidates, err := manifestServiceDatabases(manifest, pg.Databases)
 	if err != nil {
 		return nil, fmt.Errorf("collect service databases: %w", err)
@@ -185,9 +199,35 @@ func ensureServiceDatabases(ctx context.Context, cmd *cobra.Command, rc *resolve
 // brings a role that existed before the limits up to them, so `release apply`
 // and `cluster migrate --phase expand` converge a running cluster.
 func convergeRuntimeRoleSessionLimits(ctx context.Context, out io.Writer, sshPool *ssh.Pool, host inventory.Host, manifest *inventory.Manifest, pg *inventory.PostgresConfig, dryRun bool) error {
+	return boundRuntimeRoleSessions(ctx, out, "", sshPool, host, pg, runtimeRoleNames(expandedYugabyteDatabaseConfigs(pg.Databases, manifest)), dryRun)
+}
+
+// convergeInstanceRuntimeRoleSessionLimits bounds the runtime roles of each
+// named Postgres instance's databases on that instance's own server: its host,
+// over the local socket of its port.
+func convergeInstanceRuntimeRoleSessionLimits(ctx context.Context, out io.Writer, sshPool *ssh.Pool, manifest *inventory.Manifest, pg *inventory.PostgresConfig, dryRun bool) error {
+	for i := range pg.Instances {
+		inst := &pg.Instances[i]
+		roles := runtimeRoleNames(inst.Databases)
+		if len(roles) == 0 {
+			continue
+		}
+		host, ok := manifest.GetHost(inst.Host)
+		if !ok {
+			return fmt.Errorf("postgres instance %s: host %s not found", inst.Name, inst.Host)
+		}
+		server := &inventory.PostgresConfig{Enabled: true, Engine: "postgres", Host: inst.Host, Port: postgresInstancePort(inst)}
+		if err := boundRuntimeRoleSessions(ctx, out, " on instance "+inst.Name, sshPool, host, server, roles, dryRun); err != nil {
+			return fmt.Errorf("postgres instance %s: %w", inst.Name, err)
+		}
+	}
+	return nil
+}
+
+func runtimeRoleNames(databases []inventory.DatabaseConfig) []string {
 	seen := map[string]struct{}{}
 	var roles []string
-	for _, db := range expandedYugabyteDatabaseConfigs(pg.Databases, manifest) {
+	for _, db := range databases {
 		role := databaseRuntimeRole(db)
 		if _, dup := seen[role]; role == "" || dup {
 			continue
@@ -195,10 +235,16 @@ func convergeRuntimeRoleSessionLimits(ctx context.Context, out io.Writer, sshPoo
 		seen[role] = struct{}{}
 		roles = append(roles, role)
 	}
+	sort.Strings(roles)
+	return roles
+}
+
+// boundRuntimeRoleSessions attaches the session limits to roles on the server
+// pg describes, reached through host; scope names that server in the output.
+func boundRuntimeRoleSessions(ctx context.Context, out io.Writer, scope string, sshPool *ssh.Pool, host inventory.Host, pg *inventory.PostgresConfig, roles []string, dryRun bool) error {
 	if len(roles) == 0 {
 		return nil
 	}
-	sort.Strings(roles)
 	altered, err := ensureRuntimeRoleSessionLimitsFn(ctx, sshPool, host, pg, roles, dryRun)
 	if err != nil {
 		return fmt.Errorf("runtime role session limits: %w", err)
@@ -206,11 +252,11 @@ func convergeRuntimeRoleSessionLimits(ctx context.Context, out io.Writer, sshPoo
 	limits := strings.Join(provisioner.RuntimeRoleSessionLimits, ", ")
 	switch {
 	case len(altered) == 0:
-		fmt.Fprintf(out, "Runtime role sessions: all %d role(s) carry %s.\n", len(roles), limits)
+		fmt.Fprintf(out, "Runtime role sessions%s: all %d role(s) carry %s.\n", scope, len(roles), limits)
 	case dryRun:
-		fmt.Fprintf(out, "  [DRY-RUN] would bound runtime role sessions (%s): %s\n", limits, strings.Join(altered, ", "))
+		fmt.Fprintf(out, "  [DRY-RUN] would bound runtime role sessions%s (%s): %s\n", scope, limits, strings.Join(altered, ", "))
 	default:
-		ux.Success(out, fmt.Sprintf("Bounded runtime role sessions (%s): %s", limits, strings.Join(altered, ", ")))
+		ux.Success(out, fmt.Sprintf("Bounded runtime role sessions%s (%s): %s", scope, limits, strings.Join(altered, ", ")))
 	}
 	return nil
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -50,6 +51,8 @@ type serviceDatabaseSeams struct {
 type sessionLimitRun struct {
 	roles  []string
 	dryRun bool
+	// target is the server the run connected to, as host:port.
+	target string
 }
 
 func (s *serviceDatabaseSeams) install(t *testing.T) {
@@ -58,8 +61,8 @@ func (s *serviceDatabaseSeams) install(t *testing.T) {
 	t.Cleanup(func() {
 		readServiceDatabaseStatesFn, bootstrapServiceDatabasesFn, ensureRuntimeRoleSessionLimitsFn = origRead, origBootstrap, origLimits
 	})
-	ensureRuntimeRoleSessionLimitsFn = func(_ context.Context, _ *ssh.Pool, _ inventory.Host, _ *inventory.PostgresConfig, roles []string, dryRun bool) ([]string, error) {
-		s.limitRuns = append(s.limitRuns, sessionLimitRun{roles: roles, dryRun: dryRun})
+	ensureRuntimeRoleSessionLimitsFn = func(_ context.Context, _ *ssh.Pool, host inventory.Host, pg *inventory.PostgresConfig, roles []string, dryRun bool) ([]string, error) {
+		s.limitRuns = append(s.limitRuns, sessionLimitRun{roles: roles, dryRun: dryRun, target: fmt.Sprintf("%s:%d", host.ExternalIP, pg.EffectivePort())})
 		return s.unbounded, nil
 	}
 	readServiceDatabaseStatesFn = func(_ context.Context, _ *ssh.Pool, _ inventory.Host, _ *inventory.PostgresConfig, databases []provisioner.SchemaDatabase) (map[string]provisioner.ServiceDatabaseState, error) {
@@ -288,7 +291,7 @@ func TestEnsureServiceDatabasesConvergesRuntimeRoleSessionLimits(t *testing.T) {
 		if _, err := ensureServiceDatabases(context.Background(), cmd, &resolvedCluster{Manifest: postgresServiceDatabaseManifest()}, nil, dryRun, false); err != nil {
 			t.Fatal(err)
 		}
-		if want := []sessionLimitRun{{roles: wantRoles, dryRun: dryRun}}; !reflect.DeepEqual(seams.limitRuns, want) {
+		if want := []sessionLimitRun{{roles: wantRoles, dryRun: dryRun, target: "192.0.2.10:5432"}}; !reflect.DeepEqual(seams.limitRuns, want) {
 			t.Fatalf("dry-run %v: session limit runs = %+v, want %+v", dryRun, seams.limitRuns, want)
 		}
 		wantLine := "Bounded runtime role sessions (statement_timeout=60s, idle_in_transaction_session_timeout=60s): commodore_runtime"
@@ -323,6 +326,51 @@ func TestEnsureServiceDatabasesBoundsSessionsAfterBootstrap(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "Runtime role sessions: all 3 role(s) carry statement_timeout=60s, idle_in_transaction_session_timeout=60s") {
 		t.Fatalf("output:\n%s", out.String())
+	}
+}
+
+// Databases on a named Postgres instance run on that instance's own server,
+// so their runtime roles are bounded there, on the instance's host and port,
+// also when the deployment itself holds no service database.
+func TestEnsureServiceDatabasesBoundsPostgresInstanceRoles(t *testing.T) {
+	withInstance := func(manifest *inventory.Manifest) *inventory.Manifest {
+		manifest.Hosts["apps-1"] = inventory.Host{ExternalIP: "192.0.2.20", User: "root"}
+		manifest.Infrastructure.Postgres.Instances = []inventory.PostgresInstance{
+			{Name: "apps", Host: "apps-1", Port: 5434, Databases: []inventory.DatabaseConfig{{Name: "listmonk"}, {Name: "chatwoot", Owner: "chatwoot"}}},
+			{Name: "empty", Host: "apps-1", Port: 5435},
+		}
+		return manifest
+	}
+	instanceRun := sessionLimitRun{roles: []string{"chatwoot_runtime", "listmonk_runtime"}, target: "192.0.2.20:5434"}
+
+	seams := &serviceDatabaseSeams{states: []map[string]provisioner.ServiceDatabaseState{{
+		"commodore": {Exists: true, HasTables: true, Initialized: true},
+		"lookout":   {Exists: true, HasTables: true, Initialized: true},
+	}}}
+	seams.install(t)
+	cmd, _ := commandWithOutput()
+	if _, err := ensureServiceDatabases(context.Background(), cmd, &resolvedCluster{Manifest: withInstance(postgresServiceDatabaseManifest())}, nil, false, false); err != nil {
+		t.Fatal(err)
+	}
+	want := []sessionLimitRun{{roles: []string{"chatwoot_runtime", "commodore_runtime", "lookout_runtime"}, target: "192.0.2.10:5432"}, instanceRun}
+	if !reflect.DeepEqual(seams.limitRuns, want) {
+		t.Fatalf("session limit runs = %+v\nwant %+v", seams.limitRuns, want)
+	}
+
+	instanceOnly := withInstance(postgresServiceDatabaseManifest())
+	instanceOnly.Infrastructure.Postgres.Databases = nil
+	seams = &serviceDatabaseSeams{}
+	seams.install(t)
+	for _, dryRun := range []bool{false, true} {
+		seams.limitRuns = nil
+		if _, err := ensureServiceDatabases(context.Background(), cmd, &resolvedCluster{Manifest: instanceOnly}, nil, dryRun, false); err != nil {
+			t.Fatal(err)
+		}
+		run := instanceRun
+		run.dryRun = dryRun
+		if !reflect.DeepEqual(seams.limitRuns, []sessionLimitRun{run}) {
+			t.Fatalf("dry-run %v, instances only: session limit runs = %+v, want %+v", dryRun, seams.limitRuns, run)
+		}
 	}
 }
 

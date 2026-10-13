@@ -124,9 +124,10 @@ func runReleasePlan(cmd *cobra.Command, rc *resolvedCluster, opts releasePlanOpt
 	out := cmd.OutOrStdout()
 	ux.Heading(out, fmt.Sprintf("Static release plan for %s (platform %s)", selector, platformVersion))
 	writeReleaseHostConvergencePlan(out, "1. pre-upgrade host convergence", manifest, planReleaseHostConvergence(execution, manifest), releaseYugabyteEngine(gm))
-	writeReleasePlanGroup(out, "2. service databases (created with roles and current baseline when missing on the cluster)", releasePlanServiceDatabases(manifest))
+	writeReleasePlanGroup(out, releasePlanServiceDatabasesStep, releasePlanServiceDatabases(manifest))
 	fmt.Fprintln(out, "  3. schema expand migrations")
 	writeReleasePlanGroup(out, "4. platform artifact upgrades", classes.Platform)
+	writeFoghornCellGatePlan(out, manifest, classes.Platform)
 	if len(transitions) == 0 {
 		fmt.Fprintln(out, "  5. release reconciliations: none")
 	} else {
@@ -419,12 +420,13 @@ func runReleaseApply(cmd *cobra.Command, rc *resolvedCluster, opts releaseApplyO
 	hostSteps := planReleaseHostConvergence(plan, manifest)
 	ux.Heading(out, fmt.Sprintf("Release plan for %s (platform %s)", version, platformVersion))
 	writeReleaseHostConvergencePlan(out, "1. pre-upgrade host convergence", manifest, hostSteps, releaseYugabyteEngine(gm))
-	fmt.Fprintln(out, "  2. service databases missing on the cluster (created with roles and current baseline), then expand migrations")
+	fmt.Fprintln(out, releaseApplyServiceDatabasesStep)
 	fmt.Fprintln(out, "     · read-only Quartermaster report: nodes without an identity key, DNS grants the entitlement migration clears")
 	if len(services) == 0 {
 		fmt.Fprintln(out, "  3. service upgrades: none pending")
 	} else {
 		fmt.Fprintf(out, "  3. service upgrades: %s\n", strings.Join(services, " -> "))
+		writeFoghornCellGatePlan(out, manifest, services)
 	}
 	for _, t := range transitions {
 		fmt.Fprintf(out, "     · reconcile %q after [%s] before [%s]\n", t.ID(), strings.Join(t.AfterServices(), ","), strings.Join(t.BeforeServices(), ","))

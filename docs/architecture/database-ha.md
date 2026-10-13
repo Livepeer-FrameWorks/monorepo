@@ -299,7 +299,8 @@ equal to the roles' `vars/main.yml` by a test):
 - `cluster release apply` and `cluster migrate --phase expand`: the service-database
   step (`ensureServiceDatabases`) that runs before expand migrations reads every
   runtime role of each SQL deployment's databases from `pg_db_role_setting` through the
-  deployment's admin host and alters only the roles that lack a limit. This is how a
+  deployment's admin host, and of each named Postgres instance's databases on that
+  instance's host and port, and alters only the roles that lack a limit. This is how a
   running cluster whose roles predate the limits converges; the roles' `init.yml` is a
   `never`-tagged import that a release does not run, and a release initializes Yugabyte
   only during an engine upgrade. `--dry-run` reports the roles it would alter.

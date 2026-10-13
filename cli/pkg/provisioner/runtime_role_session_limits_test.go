@@ -6,6 +6,10 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
+
+	"frameworks/cli/pkg/inventory"
+	"frameworks/cli/pkg/ssh"
 )
 
 // roleSettingsProbe answers the runtime-role settings query from bounded and
@@ -93,6 +97,28 @@ func TestEnsureRuntimeRoleSessionLimitsRefusesUnsafeRoleNames(t *testing.T) {
 	}
 	if len(probe.queries) != 0 || len(probe.statements) != 0 {
 		t.Fatalf("unsafe role name reached SQL: %v %v", probe.queries, probe.statements)
+	}
+}
+
+// A Postgres server is reached on its own port's local socket, so a named
+// instance on another port is read and altered there, not on the default
+// server's.
+func TestPostgresAdminProbeConnectsToTheServersPort(t *testing.T) {
+	pool := ssh.NewPool(time.Second, "")
+	defer pool.Close()
+	host := inventory.Host{Name: "apps-1", ExternalIP: "192.0.2.20"}
+	for port, want := range map[int]string{0: "-p 5432 ", 5434: "-p 5434 "} {
+		probe, err := newServiceDatabaseProbe(pool, host, &inventory.PostgresConfig{Enabled: true, Engine: "postgres", Port: port})
+		if err != nil {
+			t.Fatal(err)
+		}
+		psql, ok := probe.(psqlStateProbe)
+		if !ok {
+			t.Fatalf("probe = %T, want the psql probe", probe)
+		}
+		if command := psql.command("postgres", "SELECT 1"); !strings.Contains(command, "sudo -u postgres psql -X -v ON_ERROR_STOP=1 "+want) {
+			t.Fatalf("port %d: command %q does not connect with %q", port, command, want)
+		}
 	}
 }
 

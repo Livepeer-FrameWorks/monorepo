@@ -120,7 +120,7 @@ func newServiceDatabaseProbe(sshPool *ssh.Pool, host inventory.Host, pg *invento
 		return nil, errors.New("service database probe: host has no external IP")
 	}
 	if !pg.IsYugabyte() {
-		return psqlStateProbe{sshPool: sshPool, host: host}, nil
+		return psqlStateProbe{sshPool: sshPool, host: host, port: pg.EffectivePort()}, nil
 	}
 	runner, err := sshPool.Get(&ssh.ConnectionConfig{Address: host.ExternalIP, Port: 22, User: host.User, HostName: host.Name, Timeout: 30 * time.Second})
 	if err != nil {
@@ -205,6 +205,7 @@ type serviceDatabaseProbe interface {
 type psqlStateProbe struct {
 	sshPool *ssh.Pool
 	host    inventory.Host
+	port    int
 }
 
 func (p psqlStateProbe) run(ctx context.Context, database, query string) (string, error) {
@@ -213,7 +214,7 @@ func (p psqlStateProbe) run(ctx context.Context, database, query string) (string
 
 func (p psqlStateProbe) runWithin(ctx context.Context, timeout time.Duration, database, query string) (string, error) {
 	cfg := &ssh.ConnectionConfig{Address: p.host.ExternalIP, Port: 22, User: p.host.User, HostName: p.host.Name, Timeout: 30 * time.Second}
-	cmd := fmt.Sprintf("sudo -u postgres psql -X -v ON_ERROR_STOP=1 -tAc %s -d %s", shellQuote(query), shellQuote(database))
+	cmd := p.command(database, query)
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	result, err := p.sshPool.Run(runCtx, cfg, cmd)
@@ -224,6 +225,12 @@ func (p psqlStateProbe) runWithin(ctx context.Context, timeout time.Duration, da
 		return "", fmt.Errorf("psql exit %d: %s", result.ExitCode, strings.TrimSpace(result.Stderr))
 	}
 	return result.Stdout, nil
+}
+
+// command selects the server by its port's local socket, so a named instance
+// on another port is reached as its own server.
+func (p psqlStateProbe) command(database, query string) string {
+	return fmt.Sprintf("sudo -u postgres psql -X -v ON_ERROR_STOP=1 -p %d -tAc %s -d %s", p.port, shellQuote(query), shellQuote(database))
 }
 
 func (p psqlStateProbe) databaseNames(ctx context.Context) (map[string]struct{}, error) {
