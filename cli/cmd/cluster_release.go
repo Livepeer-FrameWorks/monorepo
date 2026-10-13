@@ -300,6 +300,7 @@ type releaseApplyOptions struct {
 	noRollback                   bool
 	completeInterruptedBaselines bool
 	edgeWait                     time.Duration
+	edgeManifest                 string
 }
 
 func newClusterReleaseApplyCmd() *cobra.Command {
@@ -328,6 +329,7 @@ func newClusterReleaseApplyCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&opts.noRollback, "no-rollback", false, "Skip automatic rollback on a service health-check failure")
 	cmd.Flags().BoolVar(&opts.completeInterruptedBaselines, "complete-interrupted-baselines", false, "Reapply and verify baselines for populated databases without migration provenance")
 	cmd.Flags().DurationVar(&opts.edgeWait, "edge-wait", edgeRolloutReleaseWait, "How long to wait for every edge to report the release after syncing the edge target")
+	cmd.Flags().StringVar(&opts.edgeManifest, "edge-manifest", "", "Edge manifest whose enrolled edges get this CLI's edge config once they run the release (default: edge.yaml beside the cluster manifest)")
 	cmd.Flags().Bool(unsafeCLIFloorFlag, false, "UNSAFE: let a non-concrete (dev/unversioned) CLI bypass the release's min_cli_version floor")
 	return cmd
 }
@@ -447,6 +449,11 @@ func runReleaseApply(cmd *cobra.Command, rc *resolvedCluster, opts releaseApplyO
 		fmt.Fprintln(out, "     · then the Purser tier catalog reconcile (purser bootstrap + validate)")
 	}
 	fmt.Fprintf(out, "  6. contract migrations: deferred until the rollback window closes; take a fresh backup first (`cluster migrate --phase contract --to-version %s --backup <completed-backup-path> --yes`)\n", platformVersion)
+	if edgeManifest := releaseEdgeManifestPath(rc, opts.edgeManifest); edgeManifest != "" {
+		fmt.Fprintf(out, "  7. edges: pin the edge release target, wait for every edge to report it, then re-render this CLI's edge config on the drifted enrolled edges of %s, one at a time\n", edgeManifest)
+	} else {
+		fmt.Fprintln(out, "  7. edges: pin the edge release target and wait for every edge to report it; no edge manifest, so edge config is not re-rendered")
+	}
 
 	// Every service env the release deploys must pass the schema contract, and
 	// required operator inputs must exist, before the first mutation.
@@ -574,24 +581,7 @@ func runReleaseApply(cmd *cobra.Command, rc *resolvedCluster, opts releaseApplyO
 		return nil
 	}
 
-	// Keep the edge target pinned to this release's resolved version. The
-	// target only tells Foghorn's reconciler what to roll out; the edges have
-	// the release once they report it, which the wait below checks.
-	ux.Subheading(out, "Syncing edge release target")
-	if err := syncClusterEdgeReleaseTargetPinned(cmd, rc, releaseChannel, platformVersion, nil); err != nil {
-		return fmt.Errorf("edge release target sync: %w", err)
-	}
-	ux.Subheading(out, "Waiting for edges to report the release")
-	edgesConverged, edgeErr := releaseVerifyEdgeRolloutFn(cmd, rc, opts.edgeWait)
-	if edgeErr != nil {
-		return fmt.Errorf("release %s applied to the control plane, but the edge rollout failed: %w", version, edgeErr)
-	}
-	if !edgesConverged {
-		ux.Warn(out, fmt.Sprintf("Release %s applied to the control plane; the edge fleet has not converged yet", version))
-		return nil
-	}
-	ux.Success(out, fmt.Sprintf("Release %s applied", version))
-	return nil
+	return runReleaseEdgeStage(cmd, rc, opts, releaseChannel, platformVersion, version)
 }
 
 // writeReleaseResumeHint tells the operator how a release that stopped in

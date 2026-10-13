@@ -1153,6 +1153,8 @@ expand has been applied (including a `--dry-run` on such a cluster) it prints
 - `--skip-validation` - Skip health validation after each service upgrade
 - `--no-rollback` - Skip automatic rollback on a service health-check failure
 - `--complete-interrupted-baselines` - Reapply and verify baselines for inspected populated databases without migration provenance
+- `--edge-wait duration` - How long to wait for every edge to report the release after syncing the edge target (default 10m)
+- `--edge-manifest string` - Edge manifest whose enrolled edges get this CLI's edge config once they run the release (default: `edge.yaml` beside the cluster manifest)
 
 **Examples:**
 
@@ -2542,7 +2544,9 @@ frameworks cluster edges rollout status --cluster-id media-eu --wait 15m
 `--wait` polls (every `--interval`, default 15s) until every edge converges, a
 node fails, or the wait passes. The command exits non-zero only when a node's
 update failed; unconverged edges are a warning. `cluster release apply` runs
-the same check after syncing the edge target, bounded by `--edge-wait`.
+the same check after syncing the edge target, bounded by `--edge-wait`, and
+re-renders the edge config of the edge manifest's enrolled edges once every edge
+reports the release.
 
 ---
 

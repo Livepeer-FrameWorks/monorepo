@@ -69,7 +69,7 @@ func TestEvaluateEdgeConfigVersionsListsStaleEdges(t *testing.T) {
 	if result.OK || result.Status != "degraded" {
 		t.Fatalf("result = ok=%v status=%s, want failing degraded", result.OK, result.Status)
 	}
-	for _, want := range []string{"2/4", "edge-b (rendered by CLI v0.3.10, current CLI is v0.3.11)", "edge-c (no provisioned-config marker"} {
+	for _, want := range []string{"2/4", "edge-b (rendered by CLI v0.3.10, current CLI is v0.3.11)", "edge-c (no provisioned-config marker", "`frameworks cluster release apply` re-renders", "`frameworks edge provision --manifest <edge-manifest>`"} {
 		if !strings.Contains(result.Message, want) {
 			t.Fatalf("message %q missing %q", result.Message, want)
 		}

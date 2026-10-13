@@ -51,16 +51,17 @@
     mode: "0644"
   when: go_service_data_migrations_marker | length > 0
 
+# A file rendered into a state directory (the Livepeer keystore and password)
+# leaves that directory to the state-directory task above; giving it 0755 here
+# would flip it against that task's 0750 on every run.
 - name: Ensure service file directories
   ansible.builtin.file:
-    path: "{{ item.path | dirname }}"
+    path: "{{ item }}"
     state: directory
     owner: "{{ omit if ansible_check_mode else go_service_user }}"
     group: "{{ omit if ansible_check_mode else go_service_group }}"
     mode: "0755"
-  loop: "{{ go_service_files }}"
-  loop_control:
-    label: "{{ item.path | dirname }}"
+  loop: "{{ go_service_files | map(attribute='path') | map('dirname') | unique | difference(go_service_state_dirs) }}"
   when: go_service_files | length > 0
 
 - name: Render service files

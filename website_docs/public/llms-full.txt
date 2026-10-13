@@ -2558,10 +2558,17 @@ The [SDKs](/builders/sdks) for TypeScript, Go, and Python handle both, and read 
 for every reconnect.
 
 An acknowledged connection stays bound to the credential it authenticated with. The gateway closes
-it with `4403`, ending every subscription on it, when a session token reaches its expiry, when its
-API token is revoked, and within a minute of the credential otherwise ceasing to authenticate. A
-client reconnects with a current token; reconnecting with the revoked or expired one is refused
-before acknowledgement as above.
+it with `4403`, ending every subscription on it, when a session token reaches its expiry; within a
+few seconds of its API token being revoked, or of its user signing out, resetting their password,
+or having their sessions ended for a reused refresh token, whichever gateway instance holds the
+connection; and within a minute of the credential otherwise ceasing to authenticate. No event is
+delivered on the connection once the gateway has learned of the revocation, including the
+`api_token.revoked` event of the connection's own token. Signing out ends every session of the
+user, so connections opened with a session token issued before the sign-out close, and a session
+started afterwards is unaffected. A client reconnects with a current token; reconnecting with the
+revoked, signed-out, or expired one is refused before acknowledgement as above. Over HTTP, every
+gateway instance answers a request with a signed-out session token with `401` within a few
+seconds of the sign-out.
 
 ## Try It Out
 
@@ -8020,7 +8027,7 @@ orchestratorInstances(
 
 ### Query.orchestratorPerformanceSeries
 
-Time-series performance points for an orchestrator from the discovery rollups (5m or 1h). `meanLatencyMs` is server-pre-computed; callers don&#39;t divide latency_sum/latency_count themselves.
+Time-series performance points for an orchestrator in 5m or 1h buckets per gateway, region and instance IP: gateway discovery and transcode attempts from both the legacy rollups and the network observations the public route serves (raw rows, then gateway-keyed snapshots for buckets older than 29 days), counted as that route counts them, plus legacy AI outcomes. `meanLatencyMs` is server-pre-computed; callers don&#39;t divide latency_sum/latency_count themselves.
 
 ```graphql
 orchestratorPerformanceSeries(
@@ -8748,7 +8755,7 @@ Generated from the public schema [`pkg/graphql/public/schema.public.graphql`](ht
 | [Streams](/builders/api-schema/streams/) | 6 | 9 | 0 | 26 |
 | [Media and storage](/builders/api-schema/media/) | 15 | 16 | 0 | 105 |
 | [Access and playback](/builders/api-schema/access/) | 4 | 6 | 0 | 30 |
-| [Live subscriptions](/builders/api-schema/live/) | 0 | 0 | 13 | 60 |
+| [Live subscriptions](/builders/api-schema/live/) | 0 | 0 | 13 | 61 |
 | [Analytics](/builders/api-schema/analytics/) | 1 | 0 | 0 | 122 |
 | [Webhooks](/builders/api-schema/webhooks/) | 5 | 9 | 0 | 24 |
 | [Incidents](/builders/api-schema/incidents/) | 2 | 3 | 0 | 7 |
@@ -9330,6 +9337,7 @@ Payload of a PublicEvent: one member per public event type. Fields of the same n
 - Member: [CustomDomainFailed](/builders/api-schema/live/#customdomainfailed)
 - Member: [CustomDomainVerified](/builders/api-schema/live/#customdomainverified)
 - Member: [MultistreamStatusChanged](/builders/api-schema/live/#multistreamstatuschanged)
+- Member: [RecordingChapterFailed](/builders/api-schema/live/#recordingchapterfailed)
 - Member: [RecordingFailed](/builders/api-schema/live/#recordingfailed)
 - Member: [RecordingReady](/builders/api-schema/live/#recordingready)
 - Member: [RecordingStarted](/builders/api-schema/live/#recordingstarted)
@@ -9346,6 +9354,18 @@ Payload of a PublicEvent: one member per public event type. Fields of the same n
 - Member: [UploadCreated](/builders/api-schema/live/#uploadcreated)
 - Member: [UploadFailed](/builders/api-schema/live/#uploadfailed)
 - Member: [UploadReady](/builders/api-schema/live/#uploadready)
+
+### RecordingChapterFailed
+
+**object**
+
+`recording.chapter_failed` event. Aggregate: `artifacts`.
+
+- **artifact**: `EventArtifact` ([EventArtifact](/builders/api-schema/live/#eventartifact))
+- **chapterId**: `ID!`
+- **startMs**: `Int!`
+- **endMs**: `Int!`
+- **reason**: `EventMediaFailureReason!` ([EventMediaFailureReason](/builders/api-schema/live/#eventmediafailurereason))
 
 ### RecordingFailed
 
@@ -15092,7 +15112,9 @@ pass `0` for no bound. Paginate with `pageSize` (default 200, max 1000) + `nextP
 
 ## Gaps and failed chapters
 
-If a segment was lost from both local disk AND the recovery-bridge S3 (severe storage pressure during recording), chapter finalization marks the chapter `FAILED_SOURCE_MISSING`. `lastFailureReason` carries the operator-facing explanation. The chapter row remains addressable as range metadata; the artifact does not exist.
+If a segment was lost from both local disk AND the recovery-bridge S3 (severe storage pressure during recording), chapter finalization marks the chapter `FAILED_SOURCE_MISSING`. A chapter whose finalization keeps failing ends `FAILED_PERMANENT`. `lastFailureReason` carries the operator-facing explanation. The chapter row remains addressable as range metadata; the artifact does not exist.
+
+Either failure emits one `recording.chapter_failed` [event](/builders/events) on the parent recording, carrying the chapter's `chapterId`, its `startMs`/`endMs` bounds, and a `reason`, so a webhook or `tenantEvents` subscriber learns which span of the recording was lost without polling `dvrChapters`.
 
 `hasGaps=true` on a successful chapter means the output media has missing timeline coverage. Recovery from the temporary S3 segment object produces the original bytes and does not count as a gap.
 
@@ -15474,20 +15496,21 @@ control plane was unreachable. A playback ID can be rotated, so key your records
 
 Subject: `artifacts/<artifact id>`.
 
-| Type                | Fires when                                                   | Payload                                     |
-| ------------------- | ------------------------------------------------------------ | ------------------------------------------- |
-| `clip.requested`    | A clip is requested.                                         | `artifact`, `durationMs` (requested length) |
-| `clip.ready`        | The clip is stored and playable.                             | `artifact`, `durationMs`, `sizeBytes`       |
-| `clip.failed`       | The clip could not be produced.                              | `artifact`, `reason`                        |
-| `recording.started` | The recording node confirmed it is capturing the stream.     | `artifact`                                  |
-| `recording.stopped` | Capture ended and the recording is being finalized.          | `artifact`                                  |
-| `recording.ready`   | The recording's first saved chapter is replayable.           | `artifact`, `durationMs`, `sizeBytes`       |
-| `recording.failed`  | A DVR recording could not be finalized.                      | `artifact`, `reason`                        |
-| `upload.created`    | A VOD upload session is created.                             | `artifact`, `filename`, `expectedSizeBytes` |
-| `upload.completed`  | Every part is uploaded and the file is handed to processing. | `artifact`, `sizeBytes`                     |
-| `upload.aborted`    | The upload is aborted before completion.                     | `artifact`                                  |
-| `upload.ready`      | Processing finished and the asset is playable.               | `artifact`, `durationMs`, `sizeBytes`       |
-| `upload.failed`     | Processing rejected or could not process the file.           | `artifact`, `reason`                        |
+| Type                       | Fires when                                                   | Payload                                               |
+| -------------------------- | ------------------------------------------------------------ | ----------------------------------------------------- |
+| `clip.requested`           | A clip is requested.                                         | `artifact`, `durationMs` (requested length)           |
+| `clip.ready`               | The clip is stored and playable.                             | `artifact`, `durationMs`, `sizeBytes`                 |
+| `clip.failed`              | The clip could not be produced.                              | `artifact`, `reason`                                  |
+| `recording.started`        | The recording node confirmed it is capturing the stream.     | `artifact`                                            |
+| `recording.stopped`        | Capture ended and the recording is being finalized.          | `artifact`                                            |
+| `recording.ready`          | The recording's first saved chapter is replayable.           | `artifact`, `durationMs`, `sizeBytes`                 |
+| `recording.failed`         | A DVR recording could not be finalized.                      | `artifact`, `reason`                                  |
+| `recording.chapter_failed` | One chapter of a recording could not be saved.               | `artifact`, `chapterId`, `startMs`, `endMs`, `reason` |
+| `upload.created`           | A VOD upload session is created.                             | `artifact`, `filename`, `expectedSizeBytes`           |
+| `upload.completed`         | Every part is uploaded and the file is handed to processing. | `artifact`, `sizeBytes`                               |
+| `upload.aborted`           | The upload is aborted before completion.                     | `artifact`                                            |
+| `upload.ready`             | Processing finished and the asset is playable.               | `artifact`, `durationMs`, `sizeBytes`                 |
+| `upload.failed`            | Processing rejected or could not process the file.           | `artifact`, `reason`                                  |
 
 A recording that captured media emits `recording.started`, then `recording.stopped` once.
 `recording.ready` fires once, when the recording's first saved chapter becomes replayable: its
@@ -15497,6 +15520,15 @@ still live. `recording.failed` reports a recording that could not be finalized. 
 live-rewind-only recording (stream `dvrChapterMode: NONE`) keeps nothing replayable, so it ends
 with `recording.stopped` and no `recording.ready`. A recording that never captured anything
 emits only `recording.failed`.
+
+`recording.chapter_failed` fires once for each chapter that fails for good, while the broadcast
+is live or after it ended. The recording keeps no replayable media between `startMs` and `endMs`
+(Unix epoch milliseconds, the chapter's scheduled bounds), while its other chapters stay
+playable; `chapterId` is the chapter's `chapterId` in `dvrChapters`. `reason` is
+`MEDIA_FAILURE_REASON_SOURCE_UNAVAILABLE` when the chapter's recorded segments were lost and
+`MEDIA_FAILURE_REASON_PROCESSING_FAILED` when saving the chapter kept failing. It does not change
+the recording's own state: `recording.ready` and `recording.failed` still describe the
+recording as a whole.
 
 Upload events carry no transfer progress. Your client knows its own transfer progress; for the
 server-side state of an upload, query `vodUploadStatus`. An [import from a URL](/builders/recordings#import-a-video-from-a-url)
@@ -20706,15 +20738,19 @@ parameters `startunix`, `stopunix`, `start`, `stop`, and `duration`, plus `dl`, 
 
 When `/play` cannot redirect, it answers JSON with a `code` field:
 
-| Status | `code`                           | Meaning                                                                          |
-| ------ | -------------------------------- | -------------------------------------------------------------------------------- |
-| `403`  | `PLAYBACK_PLACEMENT_DENIED`      | Playback is not permitted from any destination; do not retry.                    |
-| `404`  | `VIEW_KEY_NOT_FOUND`             | The playback ID does not exist or its content was deleted.                       |
-| `409`  | `CONTENT_FAILED`                 | The content failed to upload or process. Its failure webhook carries the reason. |
-| `409`  | `DVR_CHAPTERS_PENDING`           | A recording has ended and has no finalized chapter yet.                          |
-| `503`  | `PLAYBACK_PLACEMENT_UNAVAILABLE` | No playback destination is available right now; retry after `Retry-After`.       |
+| Status | `code`                           | Meaning                                                                                         |
+| ------ | -------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `403`  | `PLAYBACK_PLACEMENT_DENIED`      | Playback is not permitted from any destination; do not retry.                                   |
+| `404`  | `VIEW_KEY_NOT_FOUND`             | The playback ID does not exist or its content was deleted.                                      |
+| `409`  | `CONTENT_FAILED`                 | The content failed to upload or process. Its failure webhook carries the reason.                |
+| `409`  | `DVR_CHAPTERS_PENDING`           | A recording has ended and has no finalized chapter yet.                                         |
+| `503`  | `CONTENT_NOT_READY`              | The content is still being produced and nothing of it is stored yet; retry after `Retry-After`. |
+| `503`  | `PLAYBACK_PLACEMENT_UNAVAILABLE` | No playback destination is available right now; retry after `Retry-After`.                      |
 
-Content that is still processing resolves like ready content: `/play` redirects to an edge.
+An upload that is still processing resolves like ready content, because its source is already
+stored: `/play` redirects to an edge. A clip that is still being cut and a recording chapter that
+is still being saved have nothing stored yet, so `/play` answers `CONTENT_NOT_READY` until they
+are ready.
 
 ### JSON Response (Custom Players)
 
@@ -21547,7 +21583,8 @@ two kinds:
 read from, events, the URL parameters, and how far back each playback ID reaches.
 
 The `tenantEvents` subscription with `types: ["recording.ready", "recording.failed"]` reports
-saved and failed recordings. A live-rewind-only (`NONE`) recording ends with `recording.stopped`
+saved and failed recordings; add `recording.chapter_failed` to hear about a single chapter of a
+recording that could not be saved. A live-rewind-only (`NONE`) recording ends with `recording.stopped`
 and no `recording.ready`, because nothing replayable is kept. See [Events](/builders/events) for
 every event type.
 
@@ -28299,6 +28336,9 @@ frameworks cluster diff --output json
 Diff kinds: `binary`, `env`, `unit`, `cert`, `infra`, `unknown`. Services
 without a registered fingerprinter report `unknown`; `cluster apply --confirm`
 falls through to the heavy `cluster provision` path for them.
+Service env files are mode `0600` for the service user. A non-root SSH user
+hashes them through passwordless `sudo`; a file it still cannot read is
+reported as `unknown` ("unreadable"), not as missing.
 Exits non-zero when any kind diff is detected.
 
 ---
@@ -28605,31 +28645,32 @@ viewer or ingest placement enforcement.
 
 ### Additional Cluster Provisioning Commands
 
-| Command                                                            | Purpose                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `frameworks cluster control-plane plan/reconcile`                  | Validate or reconcile service-owned platform state by the `quartermaster`, `billing`, `accounts`, `assignments`, or `validation` domain without provisioning or deploying services.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `frameworks cluster finalize`                                      | Deprecated compatibility alias for control-plane reconciliation. Its existing `--only quartermaster`, `--only purser`, `--only commodore`, `--only assignments`, and `--only validation` behavior remains available.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `frameworks cluster seed`                                          | Apply idempotent static seed data; add `--demo` for sample tenant/user/stream data and `--force` to skip the prompt.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `frameworks cluster migrate`                                       | Apply pending PostgreSQL/YugabyteDB schema migrations from `pkg/database/sql/migrations/` and ClickHouse migrations from `pkg/database/sql/clickhouse/migrations/`; contract-phase runs require `--yes`; use `--phase expand --dry-run` for Ansible check/diff mode. Filtered to `--to-version vX.Y.Z` (defaults to cluster's resolved platform version). Populated databases without a baseline marker or migration history require the explicit `--complete-interrupted-baselines` recovery flag. A migration with a [precheck](/operators/postgres-migrations#migration-prechecks) is refused before its first statement when the precheck returns rows; the failure prints the total and up to 50 rows. |
-| `frameworks cluster migrate validate`                              | Validate migration path layout, checksums-at-source assumptions, conservative expand-phase SQL safety rules, and that every precheck is a single `SELECT` keyed to an offered migration.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `frameworks cluster secrets generate-shared --out <file>`          | Generate the complete production shared-secret set for a fresh deployment into a new mode-0600 dotenv fragment. The output passes the same production validation used by lifecycle commands; import it into the operator-owned SOPS store. It never overwrites a file or mutates the manifest/secret store.                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `frameworks cluster secrets generate-internal-ca --out <file>`     | Generate a fresh managed internal root certificate, Navigator signing intermediate, and intermediate private key in a new mode-0600 dotenv fragment. Import all three values together into the SOPS store before provisioning a non-development cluster. The root signing key is discarded after the intermediate is created, so rotating this material establishes a new trust domain.                                                                                                                                                                                                                                                                                                                     |
-| `frameworks cluster secrets generate-media-authority --out <file>` | Generate only the five media-authority values needed when upgrading an existing deployment: the Ed25519 signer/trust tuple, seal root, and Foghorn state-encryption root. Merge the new mode-0600 fragment into the existing shared secret set. The command never overwrites a file and never rotates unrelated platform credentials.                                                                                                                                                                                                                                                                                                                                                                       |
-| `frameworks cluster data-migrate list`                             | List required data migrations declared in the embedded release catalog up to `--to-version`. Empty catalog reports "no required data migrations declared" — never silent OK.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `frameworks cluster data-migrate status <service>.<id>`            | Show persisted state for one data migration on its owning service host (queries the service binary's `data-migrations status --format json`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `frameworks cluster data-migrate run <service>.<id>`               | Run one data migration to completion or until error; honors `--batch-size`, `--dry-run`, `--scope-kind/--scope-value`. `--dry-run` runs inside a read-only transaction, needs no backup, and prints the migration's summary lines and findings (`findings: showing N of TOTAL`) when it reports them.                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `frameworks cluster data-migrate verify <service>.<id>`            | Run the migration's read-only verification on the service host, printing the migration's report first when it has one (for example the Commodore field-encryption quarantine).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `frameworks cluster data-migrate pause <service>.<id>`             | Mark a data migration paused.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `frameworks cluster data-migrate resume <service>.<id>`            | Mark a paused data migration runnable again.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `frameworks cluster skipper knowledge reset`                       | Clear Skipper knowledge embeddings and crawl cache so configured sources are fetched and embedded again.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `frameworks cluster skipper posts`                                 | Query recent Skipper social post drafts from the skipper database over the manifest-selected SSH/database path.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `frameworks cluster metabase sync`                                 | Sync repo-managed Metabase Periscope cards and attach missing cards to the dashboard without overwriting unmanaged manual edits.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `frameworks cluster sync-geoip`                                    | Upload GeoLite2-City MMDB data to Foghorn/Quartermaster hosts; supports `--source maxmind` or `--source file`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `frameworks cluster set-channel <channel>`                         | Set the manifest release channel. Use `stable` for production, `candidate` for the newest GA or RC, or legacy `rc` for the newest RC only; `cluster release plan/apply` uses this when no explicit version is given.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `frameworks cluster clickhouse migrate backfill`                   | Bulk-copy periscope data into the new Replicated node via `remote()` over the WireGuard mesh, using the same idempotent staging + `REPLACE PARTITION`/`EXCHANGE` mechanics as `sync` (re-runnable after a partial failure); stops refreshable MVs for the duration. Requires `--from <source host key>` (and `--from-port` if source/dest run on swapped ports).                                                                                                                                                                                                                                                                                                                                            |
-| `frameworks cluster clickhouse migrate sync`                       | Idempotent per-partition re-copy of the growing tail (staging table + atomic `REPLACE PARTITION`; additive-safe — re-runs replace, never double). Unpartitioned tables use an atomic `EXCHANGE`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `frameworks cluster clickhouse migrate verify`                     | Parity fingerprint — FINAL row count plus a `cityHash64` content hash over the shared (source-and-destination) columns, each side normalized to the destination type (`AggregateFunction` columns finalized; a type-evolved source column cast to the destination type). Destination-only/new tables absent on the source are asserted EMPTY instead of hashed. Plus a catalog-coverage assertion that fails if the live schema has a table the migration catalog doesn't classify.                                                                                                                                                                                                                         |
-| `frameworks cluster clickhouse migrate cutover`                    | Refuses unless `--ingest-stopped` is passed (periscope-ingest must be stopped first; Kafka buffers). Stops the refreshable MVs on BOTH the source (quiescing the old node so a timer refresh can't race the copy) and the destination, runs the final idempotent sync, RE-VERIFIES parity (aborting before any MV starts on a mismatch), then starts the destination MVs; any post-quiesce failure restores the source MVs so the old node stays usable. It then prints the operator repoint steps — either flip BOTH endpoints (downtime, ingest stays stopped) or write-first/drain/read (online) — plus the rollback path. The endpoint flips are operator gitops steps, not done by the command.        |
+| Command                                                             | Purpose                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `frameworks cluster control-plane plan/reconcile`                   | Validate or reconcile service-owned platform state by the `quartermaster`, `billing`, `accounts`, `assignments`, or `validation` domain without provisioning or deploying services.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `frameworks cluster finalize`                                       | Deprecated compatibility alias for control-plane reconciliation. Its existing `--only quartermaster`, `--only purser`, `--only commodore`, `--only assignments`, and `--only validation` behavior remains available.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `frameworks cluster seed`                                           | Apply idempotent static seed data; add `--demo` for sample tenant/user/stream data and `--force` to skip the prompt.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `frameworks cluster migrate`                                        | Apply pending PostgreSQL/YugabyteDB schema migrations from `pkg/database/sql/migrations/` and ClickHouse migrations from `pkg/database/sql/clickhouse/migrations/`; contract-phase runs require `--yes`; use `--phase expand --dry-run` for Ansible check/diff mode. Filtered to `--to-version vX.Y.Z` (defaults to cluster's resolved platform version). Populated databases without a baseline marker or migration history require the explicit `--complete-interrupted-baselines` recovery flag. A migration with a [precheck](/operators/postgres-migrations#migration-prechecks) is refused before its first statement when the precheck returns rows; the failure prints the total and up to 50 rows. |
+| `frameworks cluster migrate validate`                               | Validate migration path layout, checksums-at-source assumptions, conservative expand-phase SQL safety rules, and that every precheck is a single `SELECT` keyed to an offered migration.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `frameworks cluster secrets generate-shared --out <file>`           | Generate the complete production shared-secret set for a fresh deployment into a new mode-0600 dotenv fragment. The output passes the same production validation used by lifecycle commands; import it into the operator-owned SOPS store. It never overwrites a file or mutates the manifest/secret store.                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `frameworks cluster secrets generate-internal-ca --out <file>`      | Generate a fresh managed internal root certificate, Navigator signing intermediate, and intermediate private key in a new mode-0600 dotenv fragment. Import all three values together into the SOPS store before provisioning a non-development cluster. The root signing key is discarded after the intermediate is created, so rotating this material establishes a new trust domain.                                                                                                                                                                                                                                                                                                                     |
+| `frameworks cluster secrets generate-media-authority --out <file>`  | Generate only the five media-authority values needed when upgrading an existing deployment: the Ed25519 signer/trust tuple, seal root, and Foghorn state-encryption root. Merge the new mode-0600 fragment into the existing shared secret set. The command never overwrites a file and never rotates unrelated platform credentials.                                                                                                                                                                                                                                                                                                                                                                       |
+| `frameworks cluster secrets generate-network-observer --out <file>` | Generate only `NETWORK_OBSERVER_SECRET`, the shared secret of the network observer, Bridge and the external probers, into a new mode-0600 dotenv fragment. Use it when enabling the observer on a deployment whose platform secrets already exist; import it into the SOPS-managed shared env. It never overwrites a file and never rotates other credentials.                                                                                                                                                                                                                                                                                                                                              |
+| `frameworks cluster data-migrate list`                              | List required data migrations declared in the embedded release catalog up to `--to-version`. Empty catalog reports "no required data migrations declared" — never silent OK.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `frameworks cluster data-migrate status <service>.<id>`             | Show persisted state for one data migration on its owning service host (queries the service binary's `data-migrations status --format json`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `frameworks cluster data-migrate run <service>.<id>`                | Run one data migration to completion or until error; honors `--batch-size`, `--dry-run`, `--scope-kind/--scope-value`. `--dry-run` runs inside a read-only transaction, needs no backup, and prints the migration's summary lines and findings (`findings: showing N of TOTAL`) when it reports them.                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `frameworks cluster data-migrate verify <service>.<id>`             | Run the migration's read-only verification on the service host, printing the migration's report first when it has one (for example the Commodore field-encryption quarantine).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `frameworks cluster data-migrate pause <service>.<id>`              | Mark a data migration paused.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `frameworks cluster data-migrate resume <service>.<id>`             | Mark a paused data migration runnable again.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `frameworks cluster skipper knowledge reset`                        | Clear Skipper knowledge embeddings and crawl cache so configured sources are fetched and embedded again.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `frameworks cluster skipper posts`                                  | Query recent Skipper social post drafts from the skipper database over the manifest-selected SSH/database path.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `frameworks cluster metabase sync`                                  | Sync repo-managed Metabase Periscope cards and attach missing cards to the dashboard without overwriting unmanaged manual edits.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `frameworks cluster sync-geoip`                                     | Upload GeoLite2-City MMDB data to Foghorn/Quartermaster hosts; supports `--source maxmind` or `--source file`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `frameworks cluster set-channel <channel>`                          | Set the manifest release channel. Use `stable` for production, `candidate` for the newest GA or RC, or legacy `rc` for the newest RC only; `cluster release plan/apply` uses this when no explicit version is given.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `frameworks cluster clickhouse migrate backfill`                    | Bulk-copy periscope data into the new Replicated node via `remote()` over the WireGuard mesh, using the same idempotent staging + `REPLACE PARTITION`/`EXCHANGE` mechanics as `sync` (re-runnable after a partial failure); stops refreshable MVs for the duration. Requires `--from <source host key>` (and `--from-port` if source/dest run on swapped ports).                                                                                                                                                                                                                                                                                                                                            |
+| `frameworks cluster clickhouse migrate sync`                        | Idempotent per-partition re-copy of the growing tail (staging table + atomic `REPLACE PARTITION`; additive-safe — re-runs replace, never double). Unpartitioned tables use an atomic `EXCHANGE`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `frameworks cluster clickhouse migrate verify`                      | Parity fingerprint — FINAL row count plus a `cityHash64` content hash over the shared (source-and-destination) columns, each side normalized to the destination type (`AggregateFunction` columns finalized; a type-evolved source column cast to the destination type). Destination-only/new tables absent on the source are asserted EMPTY instead of hashed. Plus a catalog-coverage assertion that fails if the live schema has a table the migration catalog doesn't classify.                                                                                                                                                                                                                         |
+| `frameworks cluster clickhouse migrate cutover`                     | Refuses unless `--ingest-stopped` is passed (periscope-ingest must be stopped first; Kafka buffers). Stops the refreshable MVs on BOTH the source (quiescing the old node so a timer refresh can't race the copy) and the destination, runs the final idempotent sync, RE-VERIFIES parity (aborting before any MV starts on a mismatch), then starts the destination MVs; any post-quiesce failure restores the source MVs so the old node stays usable. It then prints the operator repoint steps — either flip BOTH endpoints (downtime, ingest stays stopped) or write-first/drain/read (online) — plus the rollback path. The endpoint flips are operator gitops steps, not done by the command.        |
 
 `cluster migrate --phase contract` (with or without `--dry-run`) and `cluster data-migrate run` of
 an irreversible migration take `--backup <dir|s3-url>`: a backup from `cluster backup create` that
@@ -29176,6 +29217,8 @@ expand has been applied (including a `--dry-run` on such a cluster) it prints
 - `--skip-validation` - Skip health validation after each service upgrade
 - `--no-rollback` - Skip automatic rollback on a service health-check failure
 - `--complete-interrupted-baselines` - Reapply and verify baselines for inspected populated databases without migration provenance
+- `--edge-wait duration` - How long to wait for every edge to report the release after syncing the edge target (default 10m)
+- `--edge-manifest string` - Edge manifest whose enrolled edges get this CLI's edge config once they run the release (default: `edge.yaml` beside the cluster manifest)
 
 **Examples:**
 
@@ -30565,7 +30608,9 @@ frameworks cluster edges rollout status --cluster-id media-eu --wait 15m
 `--wait` polls (every `--interval`, default 15s) until every edge converges, a
 node fails, or the wait passes. The command exits non-zero only when a node's
 update failed; unconverged edges are a warning. `cluster release apply` runs
-the same check after syncing the edge target, bounded by `--edge-wait`.
+the same check after syncing the edge target, bounded by `--edge-wait`, and
+re-renders the edge config of the edge manifest's enrolled edges once every edge
+reports the release.
 
 ---
 
@@ -31251,7 +31296,7 @@ This determines which cluster subsequent commands operate against.
 Update a service endpoint URL.
 
 ```bash
-frameworks context set-url bridge http://bridge.example.com:18000
+frameworks context set-url bridge https://bridge.example.com
 frameworks context set-url quartermaster-grpc quartermaster.internal:19002 --allow-insecure
 frameworks context set-url foghorn-grpc 10.88.0.10:18019 --allow-insecure
 ```
@@ -32785,6 +32830,7 @@ Read by `api_gateway/cmd/bridge`.
 | `NODE_ID` | string |  |  | v0.3.0 | Node the instance registers under in Quartermaster. |
 | `BUILD_ENV` | string |  |  | v0.3.0 | Runtime environment selector. Empty, dev, or development enables development-only behavior; production or prod marks a production process. |
 | `BRIDGE_HOST` | string | `bridge` |  | v0.3.0 | Host name this instance advertises when it registers with Quartermaster. |
+| `BRIDGE_BIND_ADDRS` | list |  |  | v0.3.13 | Comma-separated addresses the HTTP listener on PORT binds, one listener per address. Provisioning sets loopback and the host's WireGuard address so only the local reverse proxy and mesh peers reach Bridge. Empty binds every interface. |
 | `HOSTNAME` | string | `bridge` |  | v0.3.0 | Node name recorded as the source of API usage events. |
 | `REGION` | string |  |  | v0.3.0 | Region label attached to API usage events sent to Decklog. |
 | `COMMODORE_GRPC_ADDR` | string |  | required | v0.3.0 | Commodore gRPC address for authentication, streams, and tenant resources. |
@@ -33235,7 +33281,13 @@ Read by `api_network_observer/cmd/network-observer`.
 | `GRPC_ALLOW_INSECURE` | boolean | `false` |  | v0.3.0 | Allows plaintext internal gRPC when no TLS material is configured. Development only. |
 | `GRPC_TLS_CERT_PATH` | string |  |  | v0.3.0 | Certificate presented by this service's gRPC listener. |
 | `GRPC_TLS_KEY_PATH` | string |  |  | v0.3.0 | Private key for GRPC_TLS_CERT_PATH. |
+| `CLUSTER_ID` | string |  |  | v0.3.0 | Cluster the instance registers under in Quartermaster. Empty lets Quartermaster resolve it. |
+| `NODE_ID` | string |  |  | v0.3.0 | Node the instance registers under in Quartermaster. |
 | `NETWORK_OBSERVER_PORT` | string | `18024` |  | v0.3.13 | HTTP port for observer ingest, assignments and candidate feeds. |
+| `NETWORK_OBSERVER_INTERNAL_PORT` | string | `18034` |  | v0.3.13 | HTTPS port serving the same API to mesh callers such as Bridge with the internal-CA certificate in GRPC_TLS_CERT_PATH/GRPC_TLS_KEY_PATH; not opened when those are unset. |
+| `NETWORK_OBSERVER_HOST` | string | `network-observer` |  | v0.3.13 | Host name this instance advertises when it registers with Quartermaster. |
+| `QUARTERMASTER_GRPC_ADDR` | string |  |  | v0.3.13 | Quartermaster gRPC address for service registration, which publishes the observer's mesh DNS name to Bridge. Empty skips registration. |
+| `QUARTERMASTER_GRPC_TLS_SERVER_NAME` | string |  |  | v0.3.13 | TLS server name override for the Quartermaster connection. Empty uses the canonical internal name. |
 | `NETWORK_OBSERVER_TENANT_ID` | string |  | required | v0.3.13 | Server-owned platform tenant scope for inventory and prober observations. |
 | `NETWORK_OBSERVER_CLUSTER_ID` | string |  | required | v0.3.13 | Platform cluster identity used for probe telemetry. |
 | `NETWORK_OBSERVER_SECRET` | string |  | required, secret | v0.3.13 | Shared bearer secret for trusted external probers and internal candidate readers. |
@@ -33262,7 +33314,7 @@ Read by `api_network_observer/cmd/network-prober`.
 | --- | --- | --- | --- | --- | --- |
 | `NETWORK_PROBER_PORT` | string | `18025` |  | v0.3.13 | Local prober health and spool statistics HTTP port. |
 | `LOG_LEVEL` | string | `info` |  | v0.3.0 | Log level: debug, info, warn, or error. Any other value fails startup. |
-| `NETWORK_OBSERVER_URL` | string |  | required | v0.3.13 | Verified HTTPS observer API, accessible from this external host. |
+| `NETWORK_OBSERVER_URL` | string |  | required | v0.3.13 | Verified HTTPS observer relay on the platform's public Bridge API, such as https://bridge.example.net/network-observer; the prober appends the observer's /v1 paths. |
 | `NETWORK_OBSERVER_SECRET` | string |  | required, secret | v0.3.13 | Shared observer ingest bearer secret. |
 | `NETWORK_PROBER_ID` | string |  | required | v0.3.13 | Stable prober ID; no CLI enrollment required. |
 | `NETWORK_PROBER_REGION` | string |  | required | v0.3.13 | Prober vantage region. |
@@ -33270,6 +33322,7 @@ Read by `api_network_observer/cmd/network-prober`.
 | `LIVEPEER_BROADCASTER_SIGNATURE` | string |  | required, secret | v0.3.13 | Hex signature over the broadcaster address using the Livepeer protocol. |
 | `LIVEPEER_DISCOVERY_SKIP_TLS_VERIFY` | boolean | `true` |  | v0.3.13 | Accept orchestrator self-signed certificates, matching Livepeer discovery; never changes coordinator TLS verification. |
 | `NETWORK_PROBER_ALLOW_INSECURE` | boolean | `false` |  | v0.3.13 | Allow HTTP coordinator only for isolated local testing. |
+| `NETWORK_PROBER_ALLOWED_PRIVATE_CIDRS` | list |  |  | v0.3.13 | Private orchestrator networks the prober may dial; only for isolated local testing, since public discovery never targets them. |
 | `NETWORK_PROBER_SPOOL_DIR` | string |  | required | v0.3.13 | Private local durable observation spool directory. |
 | `NETWORK_PROBER_SPOOL_MAX_BYTES` | integer | `67108864` |  | v0.3.13 | Bounded spool byte capacity; overflow is visible in logs and heartbeat reports. |
 | `NETWORK_PROBER_CONCURRENCY` | integer | `8` |  | v0.3.13 | Maximum parallel DNS/discovery checks. |
@@ -36158,8 +36211,15 @@ A cell that attests enforcement refuses every stream of a tenant whose authority
 legacy (policy-free) schema, including managed and pulled sources, until that tenant's
 policy-bearing authority is published. `frameworks cluster doctor` reports the
 **Media authority convergence** check unhealthy while any attested cell holds such a tenant, and
-`frameworks cluster diagnose media-authority` lists the count per cell. Confirm the count is zero
-before upgrading the next cell.
+`frameworks cluster diagnose media-authority` lists the count per cell.
+
+`frameworks cluster release apply` (and `frameworks cluster upgrade foghorn`) upgrades Foghorn one
+cell at a time. After each cell's replicas are upgraded, it waits until that cell holds no tenant on
+the legacy schema before the next cell starts, printing the count as it changes. A cell that does not
+attest enforcement within 90 seconds of its upgrade refuses no tenant and passes. If a cell still holds
+legacy-schema tenants after 15 minutes, the release stops with that cell named and the later cells
+untouched; list the tenants with `frameworks cluster diagnose media-authority` and rerun the release
+once the count is zero.
 
 Stored artifacts are served under the same policy: it removes destinations the tenant's rules
 refuse, while storage affinity decides the order of what is left. Choosing which durable backend
@@ -37070,9 +37130,16 @@ the new observer database from its baseline.
 
 Declare `network-observer` under the cluster manifest's `services`, with an enabled
 entry, a host in the aggregator region, and that host's platform cluster ID. Both
-`native` and `docker` modes are supported by the CLI. It is an opt-in service, also
-available in the `network-observations` selection profile; the default profiles do
-not start an observer. External probers are not part of that profile or CLI enrollment.
+`native` and `docker` modes are supported by the CLI. The observer is one coordinator
+per platform, not a per-gateway-cluster service, so it runs only where a manifest
+declares it; a self-hosted platform that does not want public Livepeer observations
+omits the entry. It is also available in the `network-observations` selection profile;
+the default profiles do not start an observer. External probers are not part of that
+profile or CLI enrollment.
+
+The observer has no public hostname, ingress site or DNS record. Bridge reaches it over
+the WireGuard mesh with the internal service CA, and external probers reach it through
+Bridge's public API.
 
 Add the `network_observer` database to the selected managed SQL deployment's database
 list. The release bootstrap creates its baseline and `network_observer_runtime` role
@@ -37088,38 +37155,84 @@ existing `DATABASE_RUNTIME_PASSWORD` secret, or the database-specific
 owner/bootstrap credential separate. An omitted `runtime_role` preserves an owner DSN
 for compatibility; declaring it makes the observer connect with the runtime role.
 
-Configure `DATABASE_URL`,
-`NETWORK_OBSERVER_TENANT_ID`, `NETWORK_OBSERVER_CLUSTER_ID`, `NETWORK_OBSERVER_SECRET`,
-`LIVEPEER_ETH_RPC_URL`, `LIVEPEER_CONTROLLER`, `DECKLOG_GRPC_ADDR`, `SERVICE_TOKEN` and
-`KAFKA_BROKERS`. Use the production Arbitrum chain and choose the observation environment
-explicitly. Configure verified internal gRPC TLS as for other services. The optional
-`docker-compose.network-observations.yml` overlay is for isolated local use.
+The observer needs `DATABASE_URL`, `NETWORK_OBSERVER_TENANT_ID`,
+`NETWORK_OBSERVER_CLUSTER_ID`, `NETWORK_OBSERVER_SECRET`, `LIVEPEER_ETH_RPC_URL`,
+`LIVEPEER_CONTROLLER`, `DECKLOG_GRPC_ADDR`, `SERVICE_TOKEN` and `KAFKA_BROKERS`, with
+verified internal gRPC TLS as for other services. CLI provisioning renders all of them
+from the manifest and the shared env; the only operator inputs are the shared secret
+and an Arbitrum RPC endpoint. For isolated local use, the development
+`docker-compose.yml` runs the observer under the `network-observations` profile once
+the chain settings and shared secret are set, together with a `network-prober` that
+uses a signed, unfunded local discovery identity unless `LIVEPEER_BROADCASTER_ADDRESS`
+and `LIVEPEER_BROADCASTER_SIGNATURE` are set. `NETWORK_PROBER_ALLOWED_PRIVATE_CIDRS` lets
+a prober dial orchestrators on a private test network; leave it unset on real probers.
 
-CLI provisioning defaults the observer tenant to the resolved system tenant and its
-cluster to the manifest task's cluster; explicit observer values take precedence.
-`LIVEPEER_ETH_RPC_URL` can use the existing `ARBITRUM_RPC_ENDPOINT` when not explicitly
-set. The shared secret and controller address still require operator input. The CLI
-generates the aggregator Kafka binding, `MIRROR_REGION_PREFIXES` from inbound
-MirrorMaker links, and aggregator-region `DECKLOG_GRPC_ADDR`. Manual deployments must
-set the source aliases themselves to include gateway discovery from other regions.
+What CLI provisioning derives, with explicit env-file or service-config values taking
+precedence:
 
-Expose the shared-secret work and ingest routes through verified HTTPS. If behind an
-ingress, set `NETWORK_OBSERVER_TRUSTED_PROXY_CIDRS` to the actual ingress CIDRs before
-using its forwarded source addresses for prober geolocation. Optional `GEOIP_MMDB_PATH`
-provides coordinates; missing geography does not prevent discovery.
+- **Tenant and cluster.** The observer tenant is the resolved system tenant and its
+  cluster is the manifest task's cluster.
+- **Namespace.** The observation environment is the manifest `profile` (`production`,
+  `staging`, and `development` for `dev`): the CLI renders it as
+  `NETWORK_OBSERVER_ENVIRONMENT` on the observer and Bridge and as
+  `FRAMEWORKS_ENVIRONMENT` on every Livepeer gateway, so one manifest's producers and
+  readers share a namespace and staging stays apart from production.
+- **Chain and Controller.** `LIVEPEER_NETWORK_ID` defaults to Arbitrum One (`42161`).
+  `LIVEPEER_CONTROLLER` is the Livepeer Controller of that chain, taken from
+  go-livepeer's network defaults: `0xD8E8328501E9645d16Cf49539efC04f734606ee4` for
+  `42161` and `0xf96d54e490317c557a967abfa5d6e33006be69b3` for Ethereum mainnet (`1`).
+  Provisioning refuses any other chain unless `LIVEPEER_CONTROLLER` is set explicitly.
+- **RPC.** `LIVEPEER_ETH_RPC_URL` falls back to the existing `ARBITRUM_RPC_ENDPOINT`.
+- **Analytics bindings.** The aggregator Kafka binding, `MIRROR_REGION_PREFIXES` from
+  inbound MirrorMaker links, and the aggregator-region `DECKLOG_GRPC_ADDR`. Manual
+  deployments must set the source aliases themselves to include gateway discovery from
+  other regions.
+- **Internal identity.** The observer gets an internal-CA leaf
+  (`/etc/frameworks/pki/services/network-observer/`), which Privateer renews, and
+  serves its API with it on `NETWORK_OBSERVER_INTERNAL_PORT` (`18034`). The plain
+  `NETWORK_OBSERVER_PORT` (`18024`) listener answers health and readiness probes. The
+  observer registers with Quartermaster through the rendered `QUARTERMASTER_GRPC_ADDR`,
+  and every Bridge host's mesh seed resolves `network-observer.<aggregator-region>.internal`
+  to the observer host and peers with it.
+- **Relay trust.** `NETWORK_OBSERVER_TRUSTED_PROXY_CIDRS` is the mesh address of every
+  Bridge host, so the observer takes a relayed prober's source address from Bridge and
+  from nothing else.
+- **GeoIP.** With the manifest's `geoip` enabled, a declared observer always receives
+  the MMDB and `GEOIP_MMDB_PATH`, including when `geoip.services` lists other services
+  only. The MMDB supplies worker and prober coordinates for the map and the
+  proximity-based prober assignment; missing geography does not prevent discovery.
 
-Use an explicit `ingress_sites` entry with `kind: reverse_proxy_http`, the chosen
-`domains`, the proxy `node`/`cluster`, its existing `tls_bundle_id`, and an `upstream`
-pointing to the observer's HTTP listener. The coordinator has no automatically selected
-public hostname. A co-located proxy can use `127.0.0.1:18024`; another proxy uses the
-observer's reachable mesh address. Configure the matching DNS and TLS bundle through
-the existing ingress/control-plane lifecycle, then use that verified HTTPS URL for
-Bridge and the external probers.
+`NETWORK_OBSERVER_SECRET` is a platform-generated shared secret kept in the SOPS-managed
+shared env. `frameworks cluster secrets generate-shared` includes it, and
+`frameworks cluster secrets generate-network-observer --out <file>` generates it alone
+for an existing deployment. Development provisioning generates it. A non-development
+manifest that declares the observer refuses to render the observer or Bridge without
+it. Provisioning renders it only to the observer and Bridge; external probers receive
+the same value from the operator.
 
-Bridge needs `NETWORK_OBSERVER_URL`, `NETWORK_OBSERVER_SECRET`,
-`NETWORK_PUBLIC_TENANT_IDS` and the matching `NETWORK_OBSERVER_ENVIRONMENT`. Publication
-scopes are server configuration, not caller-supplied query parameters. Periscope runs
-the canonical migration and rollup loop as part of its existing ingestion service.
+When the manifest declares an observer, provisioning renders Bridge's
+`NETWORK_OBSERVER_URL` as `https://network-observer.<aggregator-region>.internal:18034`
+(Bridge verifies the leaf as `network-observer.internal` against `GRPC_TLS_CA_PATH`), its
+`NETWORK_OBSERVER_SECRET`, `LIVEPEER_NETWORK_ID` and `NETWORK_OBSERVER_ENVIRONMENT` from
+the observer's values, and `NETWORK_PUBLIC_TENANT_IDS` as the observer's tenant. A
+development manifest without Navigator has no internal CA, so Bridge uses the plain
+listener there. Gateway
+observations are stored under their cluster owner tenant, and platform clusters are owned
+by the system tenant, so this scope publishes the platform-operated dataset (the
+coordinator's inventory and prober results and the platform gateways' traffic) and never
+a tenant-owned cluster's gateways. Set `NETWORK_PUBLIC_TENANT_IDS` on Bridge explicitly
+to publish a different scope. Publication scopes are server configuration, not
+caller-supplied query parameters. Periscope runs the canonical migration and rollup loop
+as part of its existing ingestion service.
+
+Bridge relays the external probers' two routes on its public API:
+`GET /network-observer/v1/work` and `POST /network-observer/v1/observations`. Bridge
+forwards the prober's own `Authorization` header unchanged, so the observer
+authenticates the shared secret, and rejects a request without a bearer token before
+relaying it. It replaces any `X-Forwarded-For` with the source address it resolved,
+bounds request and response bodies at 8 MiB, and rate-limits each route per source
+address (work 60 per minute, observations 1200 per minute). The inventory and candidate
+routes are not exposed publicly.
 
 ## GitOps inputs and activation order
 
@@ -37128,37 +37241,60 @@ gateways use the separately released compatible go-livepeer fork. The platform's
 release manifest provides artifact pins, not host placement or configuration.
 Complete these declarations before activating the feature:
 
-| Location                          | Required inputs                                                                                                                                                                                                                                                 |
-| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Cluster manifest                  | Enabled observer service with aggregator-region host/cluster, `network_observer` database, HTTPS ingress for the coordinator, and optional GeoIP service selection/trusted proxy CIDRs.                                                                         |
-| Observer service configuration    | `LIVEPEER_CONTROLLER`, `NETWORK_OBSERVER_ENVIRONMENT`; verify `LIVEPEER_NETWORK_ID=42161` and the resolved observer tenant/cluster.                                                                                                                             |
-| SOPS-managed service environment  | `NETWORK_OBSERVER_SECRET` and `LIVEPEER_ETH_RPC_URL` (or the existing Arbitrum RPC key); preserve existing database credentials and internal `SERVICE_TOKEN`.                                                                                                   |
-| Bridge configuration/environment  | Verified HTTPS `NETWORK_OBSERVER_URL`, matching secret and environment, and explicit `NETWORK_PUBLIC_TENANT_IDS` for the dataset to publish.                                                                                                                    |
-| Gateway configuration/environment | Compatible fork artifact pin, stable gateway ID/region/cluster owner, verified Decklog connection and persistent telemetry spool; `FRAMEWORKS_NETWORK_ID=42161` and matching `FRAMEWORKS_ENVIRONMENT`. Candidate hints are optional and start in `shadow` mode. |
-| Lookout service environment       | Optional `LOOKOUT_OPS_SLACK_WEBHOOK_URL`, `LOOKOUT_OPS_DISCORD_WEBHOOK_URL`, `LOOKOUT_BUSINESS_PULSE_SLACK_WEBHOOK_URL`, `LOOKOUT_BUSINESS_PULSE_DISCORD_WEBHOOK_URL` to split the existing destinations.                                                       |
+| Location                        | Required inputs                                                                                                                                                                                                                              |
+| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Cluster manifest                | Enabled `network-observer` service on an aggregator-region host, and the `network_observer` database (`owner: network_observer`, `runtime_role: network_observer_runtime`) in the managed SQL database list.                                 |
+| SOPS-managed shared environment | `NETWORK_OBSERVER_SECRET` from `frameworks cluster secrets generate-network-observer`, and `ARBITRUM_RPC_ENDPOINT` (or an explicit `LIVEPEER_ETH_RPC_URL`). Preserve existing database credentials and the internal `SERVICE_TOKEN`.         |
+| Derived by provisioning         | Controller, chain, namespace, tenant and cluster on the observer; its internal leaf, registration and mesh DNS; Bridge's URL, secret and publication scope; the observer's trust in Bridge relays. Set a key explicitly only to override it. |
+| Gateway configuration           | The go-livepeer pin from the platform release and a verified Decklog connection; the CLI renders the gateway identity, namespace and telemetry spool. The CLI does not render candidate hints.                                               |
+| Lookout service environment     | Optional `LOOKOUT_OPS_SLACK_WEBHOOK_URL`, `LOOKOUT_OPS_DISCORD_WEBHOOK_URL`, `LOOKOUT_BUSINESS_PULSE_SLACK_WEBHOOK_URL`, `LOOKOUT_BUSINESS_PULSE_DISCORD_WEBHOOK_URL` to split the existing destinations.                                    |
 
-Keep credentials in encrypted env files referenced by the services. Edit GitOps secrets
-with `gitops/scripts/sops-env.sh`, not by editing encrypted content. Choose the actual
-coordinator hostname and ingress from the cluster's existing DNS/TLS setup; example
-hostnames below are not provisioned endpoints. Production and staging need separate
-observation environments, secrets and explicit publication scopes.
+Keep credentials in encrypted env files referenced by the services. Generate the secret
+and import it with the GitOps SOPS helper, never by editing encrypted content, then
+delete the plaintext fragment:
 
-Use the normal `frameworks cluster release plan` and `cluster release apply --dry-run`
-with the updated manifest before applying the release. Release application initializes
-the declared observer database, applies ClickHouse expand migrations and deploys the
-observer and analytics/API services. Verify observer `/ready`, deploy the compatible
-gateway fork through its managed-dependency lifecycle, and install the external probers.
-Confirm real discovery in the inventory, real gateway observations in the public API,
-and the dashboard's observer coverage before retiring the old scripts. Livepeer alerts
-are disabled; new Ops/Business Pulse webhook destinations require no Livepeer rollout.
+```bash
+frameworks cluster secrets generate-network-observer --out /secure/path/network-observer.env
+gitops/scripts/sops-env.sh set <shared-secret-file> NETWORK_OBSERVER_SECRET <value-from-fragment>
+```
+
+Production and staging use separate secrets and, through the manifest profile, separate
+observation environments.
+
+Activate in this order:
+
+1. Add the manifest and SOPS inputs above.
+2. Preview with `frameworks cluster release plan` and `frameworks cluster release apply
+--dry-run`. The dry-run renders the observer and Bridge environments and fails on a
+   missing secret or an unknown chain.
+3. Apply the release. It initializes the observer database baseline and runtime role,
+   applies the ClickHouse expand migrations, converges the Privateer mesh seeds that
+   resolve the observer for Bridge hosts, deploys the observer, Bridge and the analytics
+   services, and rolls the gateways to the release's go-livepeer pin.
+4. Verify with `frameworks cluster status`, then `GET /v1/network/livepeer` on Bridge:
+   `inventory.network` is `42161`, `inventory.environment` is the manifest profile, and
+   the inventory lists catalog resources. A `503 network inventory temporarily
+unavailable` means Bridge cannot reach or verify the observer.
+5. Install the external probers with `NETWORK_OBSERVER_URL=<public Bridge URL>/network-observer`
+   and the same secret.
+   The observer is ready once its database answers, the contract catalog has refreshed
+   and its Kafka consumer group is joined with assigned partitions that are being
+   consumed. A 503 lists each failing reason; one failed catalog refresh is tolerated,
+   two consecutive failures or a group unassigned or stalled for two refresh intervals
+   make it not ready.
+6. Confirm real discovery in the inventory, real gateway observations in the public API,
+   and the dashboard's observer coverage before retiring the old scripts.
+
+Livepeer alerts are disabled; new Ops/Business Pulse webhook destinations require no
+Livepeer rollout.
 
 ## External probers
 
 Build with `make build-bin-network-prober`, or use the matching release's Linux amd64 or
 arm64 `network-prober` binary after checking its release checksum. These hosts do not
 need the FrameWorks stack, Node/PM2 or CLI enrollment. Configure a unique stable ID,
-region, verified HTTPS coordinator URL, shared secret and persistent spool directory
-using `api_network_observer/deploy/network-prober.env.example`.
+region, the Bridge relay URL (`<public Bridge URL>/network-observer`), shared secret and
+persistent spool directory using `api_network_observer/deploy/network-prober.env.example`.
 
 The Linux release tarball includes `install-network-prober.sh`,
 `network-prober.service` and `network-prober.env.example` alongside the binary. Extract
@@ -37225,12 +37361,16 @@ An unavailable prober does not make the orchestrator unavailable.
 
 ## Gateway
 
-Configure a stable `FRAMEWORKS_GATEWAY_ID`, `FRAMEWORKS_GATEWAY_REGION`,
-`FRAMEWORKS_CLUSTER_ID`, `FRAMEWORKS_CLUSTER_OWNER_TENANT_ID`,
-`FRAMEWORKS_DECKLOG_GRPC_ADDR` and the existing service authentication/TLS settings.
-Set `FRAMEWORKS_TELEMETRY_SPOOL_DIR` to persistent private storage when containerizing;
-the default is under the gateway user's `.lpData/frameworks-telemetry` directory.
-Set `FRAMEWORKS_NETWORK_ID=42161` and `FRAMEWORKS_ENVIRONMENT` to the coordinator namespace.
+CLI provisioning renders every gateway telemetry setting from the manifest:
+`FRAMEWORKS_GATEWAY_ID` (the host), `FRAMEWORKS_GATEWAY_REGION`, `FRAMEWORKS_CLUSTER_ID`,
+`FRAMEWORKS_CLUSTER_OWNER_TENANT_ID`, `FRAMEWORKS_DECKLOG_GRPC_ADDR` with its TLS mode,
+and the internal `SERVICE_TOKEN`. `FRAMEWORKS_ENVIRONMENT` is the manifest profile and
+`FRAMEWORKS_NETWORK_ID` is the chain ID of the gateway's Livepeer `network`
+(`arbitrum-one-mainnet` is 42161; an offchain gateway reports 0). Provisioning refuses a
+network with no known chain ID unless `FRAMEWORKS_NETWORK_ID` is set explicitly. The
+telemetry spool is `/var/lib/frameworks/livepeer-gateway/frameworks-telemetry`, a state
+directory created for the service user and writable inside the unit's sandbox, so
+undelivered observations survive restarts and upgrades.
 
 Per-orchestrator work totals require the gateway build with accounting version 1.
 Apply the release's `002_network_work.sql` ClickHouse expand migration before upgrading
@@ -37242,10 +37382,12 @@ service charges and expected ticket credit. These describe FrameWorks gateway tr
 not all work or redeemed earnings across the Livepeer network.
 
 The optional `FRAMEWORKS_NETWORK_OBSERVER_URL` and
-`FRAMEWORKS_NETWORK_OBSERVER_SECRET` enable candidate hints. Keep
-`FRAMEWORKS_CANDIDATE_FEED_MODE=shadow` initially; `supplement` adds fresh hints without
-replacing local discovery or relaxing local eligibility checks. HTTP overrides are for
-isolated local development only.
+`FRAMEWORKS_NETWORK_OBSERVER_SECRET` enable candidate hints. Provisioning does not
+render them: the observer serves gateways only on its internal-CA listener, and the
+gateway's candidate client verifies the system roots, so hints stay off on managed
+gateways. When set, keep `FRAMEWORKS_CANDIDATE_FEED_MODE=shadow` initially; `supplement`
+adds fresh hints without replacing local discovery or relaxing local eligibility checks.
+HTTP overrides are for isolated local development only.
 
 ## API filters
 
@@ -37849,7 +37991,7 @@ For multi-host deployments, you need:
 
 2. **systemd-resolved** - Production backend hosts must run systemd-resolved so Privateer can route `.internal` names to the local DNS listener.
 
-3. **Firewall Rules** - Open the manifest's WireGuard listen port between backend nodes and keep internal service ports private to the mesh.
+3. **Firewall Rules** - Open the manifest's WireGuard listen port between backend nodes and keep internal service ports private to the mesh. Bridge is provisioned to listen only on loopback and the host's WireGuard address, so public API traffic and the Cloudflare load-balancer health check (`http://<origin>:80/health`, answered by the reverse proxy) reach it through the host's reverse proxy, never on port 18000. A native reverse proxy reaches Bridge on loopback; a `mode: docker` nginx or Caddy reaches it on the host's WireGuard address, so a host that runs Bridge behind a docker-mode proxy needs a `wireguard_ip`. The listener binds the WireGuard address even before the mesh interface is up and starts answering once it is.
 
 4. **No DHCP search domains** - FrameWorks resolves only fully qualified names. A search domain from DHCP or a router advertisement makes the resolver retry a name under that suffix when the upstream drops a query, and a wildcard record there returns a wrong address. Provisioning sets `UseDomains=no` for DHCPv4, DHCPv6 and router advertisements on every systemd-networkd link (netplan included) on platform hosts and Linux edges; on hosts under another network manager, turn off DHCP-provided search domains yourself.
 
@@ -38231,16 +38373,21 @@ plan` and `release apply --dry-run` list every step and, per host, the role task
    the service catalog, and clusters. The desired state renders before the first mutation, so a
    render failure refuses the release up front. Replicas and MirrorMaker2 workers the manifest no
    longer places are removed only after every desired replica is healthy, and then the
-   service-cluster assignments are reconciled. A dry run reports these steps without running
-   them.
+   service-cluster assignments are reconciled. Then the Livepeer signer and gateways converge to
+   the go-livepeer artifact the release manifest pins, one host at a time, signers first. They
+   follow the platform services because a gateway calls its cell's Foghorn and Decklog. A host
+   whose installed artifact already matches is skipped; a changed host reinstalls and restarts,
+   and its Livepeer health and keystore validation must pass before the next host starts. A dry
+   run reports these steps without running them.
 4. **Postdeploy migrations.** These refuse to run until the release's required data migrations
    are complete. The Purser tier catalog reconcile follows.
 
 After postdeploy, `release apply` checks that every replica of the auth services and the web app
 runs the release's version, since a readiness check cannot detect an older web app bundle. It
 then sets the edge release target, from which Foghorn rolls edge nodes (see [Edge nodes](#edge-nodes)), and waits up to
-`--edge-wait` (default 10 minutes) for every edge to report the release. Contract migrations
-are printed, never run.
+`--edge-wait` (default 10 minutes) for every edge to report the release. Once they all do, it
+re-renders this CLI's edge configuration on the enrolled edges of the edge manifest (see
+[Edge configuration](#edge-configuration)). Contract migrations are printed, never run.
 
 A reconciliation transition is a Check, Apply, Verify step that converges a declared invariant
 against the authoritative state. On a rerun it is checked again and skipped when complete. A
@@ -38333,8 +38480,11 @@ frameworks cluster release apply --version vX.Y.Z --dry-run
 ### What `release apply` does not change
 
 - **Other managed dependencies** with their own manifest pins: VictoriaMetrics, Alertmanager,
-  Prometheus, MistServer, and the Livepeer gateway and signer. Use `cluster diff` to see desired
-  and observed state, and `cluster provision` when their pins change.
+  Prometheus, and MistServer. Use `cluster diff` to see desired and observed
+  state, and `cluster provision` when their pins change. The Livepeer gateway and signer are not
+  in this group: the platform release pins their go-livepeer artifact, so `release apply`
+  converges them (stage 3), and `cluster status` compares each host's installed artifact with
+  that pin.
 - **A standalone PostgreSQL server**, which `cluster provision` converges.
 
 A direct `cluster upgrade <service>` refuses a host where the service is not installed; only
@@ -38379,7 +38529,22 @@ identity and undelivered control acknowledgements.
 
 Foghorn rolls component versions; it does not change an edge's rendered configuration (env
 files, systemd units, the compose file). A new CLI carries the current edge configuration, and
-re-running `edge provision` with it is how that configuration reaches the edges:
+the edge provision rollout is how that configuration reaches the edges.
+
+`release apply` runs that rollout itself once every edge reports the release: it re-renders the
+enrolled edges of the edge manifest (`--edge-manifest`, by default `edge.yaml` beside the cluster
+manifest) against the release it applied, with the per-node plan, drain, and control-stream check
+described below. A node of the manifest that was never installed is listed and left for
+`edge provision`. When the edges have not all reported the release by the end of `--edge-wait`,
+or there is no edge manifest, `release apply` prints the command to run instead:
+
+```bash
+frameworks edge provision --manifest <edge-manifest> --version <release>
+```
+
+Edges outside the manifest, such as customer-enrolled ones, take the new configuration from their
+own `edge provision` run. To converge edge configuration on its own, for example after installing
+a new CLI without a new release:
 
 1. Install the new CLI.
 2. See which edges drifted and what would change:
