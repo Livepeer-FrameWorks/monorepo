@@ -9816,6 +9816,7 @@ subject: string, data:
       | { __typename: 'InvoicePaid', invoiceId: string, amountPaid: { amountMinor: number, currency: string } | null }
       | { __typename: 'MultistreamStatusChanged', streamId: string, targetId: string, targetName: string, status: EventMultistreamStatus, previousStatus: EventMultistreamStatus }
       | { __typename: 'PaymentFailed', paymentId: string, invoiceId: string, provider: string, providerReferenceId: string, paymentFailureReason: EventPaymentFailureReason, amount: { amountMinor: number, currency: string } | null }
+      | { __typename: 'RecordingChapterFailed' }
       | { __typename: 'RecordingFailed', mediaFailureReason: EventMediaFailureReason, artifact: { artifactId: string, kind: EventArtifactKind, streamId: string, playbackId: string } | null }
       | { __typename: 'RecordingReady', durationMs: number, sizeBytes: number, artifact: { artifactId: string, kind: EventArtifactKind, streamId: string, playbackId: string } | null }
       | { __typename: 'RecordingStarted' }

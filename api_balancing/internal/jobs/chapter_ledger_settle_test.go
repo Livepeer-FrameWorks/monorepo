@@ -107,6 +107,7 @@ func TestDispatchChapter_ProceedsOnceTheLedgerCoversTheChapter(t *testing.T) {
 	controlMock.ExpectQuery(`UPDATE foghorn\.dvr_chapters.*RETURNING playback_artifact_hash`).
 		WithArgs(control.ChapterStateFailedSourceMissing, sqlmock.AnyArg(), "chap-1", int32(0), "").
 		WillReturnRows(sqlmock.NewRows([]string{"playback_artifact_hash"}).AddRow(nil))
+	expectChapterFailedEvent(controlMock, "chap-1", "dvrhash")
 	controlMock.ExpectCommit()
 
 	q := &ChapterFinalizationQueue{db: mockDB, logger: logging.NewLogger()}
@@ -142,6 +143,7 @@ func TestDispatchChapter_HoleOutlastingTheSettleWaitProceeds(t *testing.T) {
 	controlMock.ExpectQuery(`UPDATE foghorn\.dvr_chapters.*RETURNING playback_artifact_hash`).
 		WithArgs(control.ChapterStateFailedSourceMissing, sqlmock.AnyArg(), "chap-1", int32(0), "").
 		WillReturnRows(sqlmock.NewRows([]string{"playback_artifact_hash"}).AddRow(nil))
+	expectChapterFailedEvent(controlMock, "chap-1", "dvrhash")
 	controlMock.ExpectCommit()
 
 	q := &ChapterFinalizationQueue{db: mockDB, logger: logging.NewLogger()}

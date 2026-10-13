@@ -67,6 +67,15 @@ subscription TenantEvents($types: [String!], $streamId: ID) {
         }
         reason
       }
+      ... on RecordingChapterFailed {
+        artifact {
+          ...EventArtifactFields
+        }
+        chapterId
+        startMs
+        endMs
+        reason
+      }
       ... on UploadCreated {
         artifact {
           ...EventArtifactFields

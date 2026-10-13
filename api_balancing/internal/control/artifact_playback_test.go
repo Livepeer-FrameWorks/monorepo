@@ -3,8 +3,10 @@ package control
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"testing"
 
+	"frameworks/api_balancing/internal/artifacts"
 	"frameworks/api_balancing/internal/state"
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
@@ -290,5 +292,84 @@ func foundArtifact(hash, contentType, tenantID, originCluster string) func(conte
 		return &commodorepb.ResolveArtifactPlaybackIDResponse{
 			Found: true, ArtifactHash: hash, ContentType: contentType, TenantId: tenantID, OriginClusterId: originCluster,
 		}, nil
+	}
+}
+
+// A recording chapter, clip, or upload that is still being produced answers
+// ErrPlaybackContentNotReady whether or not a node already holds the file
+// being written: a viewer is never sent to a partial file and never sees a
+// resolution failure for content that will be playable shortly.
+func TestResolveArtifactPlayback_InProductionContentIsNotReady(t *testing.T) {
+	cases := []struct {
+		name, contentType, status, location string
+		warm                                bool
+	}{
+		{name: "finalizing chapter on the node writing it", contentType: "chapter", status: "finalizing", location: "pending", warm: true},
+		{name: "finalizing chapter between attempts", contentType: "chapter", status: "finalizing", location: "pending"},
+		{name: "completing upload", contentType: "vod", status: "completing", location: "pending"},
+		{name: "processing clip on its node", contentType: "clip", status: "processing", location: "pending", warm: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			previousLocalCluster := GetLocalClusterID()
+			t.Cleanup(func() { SetLocalClusterID(previousLocalCluster) })
+			SetLocalClusterID("c1")
+			AddPlatformSharedCluster("c1")
+			sm := state.ResetDefaultManagerForTests()
+			t.Cleanup(sm.Shutdown)
+			if tc.warm {
+				lat, lon := 52.0, 5.0
+				sm.SetNodeInfo("n1", "https://n1.example.com", true, &lat, &lon, "ams", "", map[string]any{"HLS": "x"})
+				sm.TouchNode("n1", true)
+				sm.SetNodeArtifacts("n1", []*ipcpb.StoredArtifact{{ClipHash: "h1"}}, state.ArtifactReportOrder{Fence: 1, Seq: 1})
+			}
+			startFakeCommodoreServer(t, &fakeCommodoreInternal{
+				artifactPlaybackID: foundArtifact("h1", tc.contentType, "t1", "c1"),
+			})
+			mockDB, mock, _ := sqlmock.New()
+			t.Cleanup(func() { _ = mockDB.Close() })
+			mock.ExpectQuery(`FROM foghorn.artifacts\s+WHERE artifact_hash = \$1`).
+				WithArgs("h1", artifacts.CanonicalByteKind(tc.contentType), "t1").
+				WillReturnRows(sqlmock.NewRows([]string{
+					"internal_name", "status", "duration_seconds", "size_bytes", "created_at",
+					"format", "storage_location", "sync_status", "has_thumbnails", "authoritative_cluster", "thumbnail_serving_cluster",
+				}).AddRow("s1", tc.status, nil, nil, nil, "mkv", tc.location, "pending", false, "c1", ""))
+
+			resp, err := ResolveArtifactPlayback(context.Background(), &PlaybackDependencies{DB: mockDB, LocalClusterID: "c1", GeoLat: 52, GeoLon: 5}, "pb")
+			if !errors.Is(err, ErrPlaybackContentNotReady) {
+				t.Fatalf("%s %q resolved to (%v, %v), want ErrPlaybackContentNotReady", tc.contentType, tc.status, resp.GetPrimary(), err)
+			}
+		})
+	}
+}
+
+// An upload being processed already has its source stored, so it keeps playing
+// from it like ready content.
+func TestResolveArtifactPlayback_ProcessingUploadPlaysItsStoredSource(t *testing.T) {
+	previousLocalCluster := GetLocalClusterID()
+	t.Cleanup(func() { SetLocalClusterID(previousLocalCluster) })
+	SetLocalClusterID("c1")
+	AddPlatformSharedCluster("c1")
+	sm := state.ResetDefaultManagerForTests()
+	t.Cleanup(sm.Shutdown)
+	lat, lon := 52.0, 5.0
+	sm.SetNodeInfo("n1", "https://n1.example.com", true, &lat, &lon, "ams", "", map[string]any{"HLS": "x"})
+	sm.TouchNode("n1", true)
+	sm.SetNodeArtifacts("n1", []*ipcpb.StoredArtifact{{ClipHash: "h1"}}, state.ArtifactReportOrder{Fence: 1, Seq: 1})
+	startFakeCommodoreServer(t, &fakeCommodoreInternal{
+		artifactPlaybackID: foundArtifact("h1", "vod", "t1", "c1"),
+	})
+	mockDB, mock, _ := sqlmock.New()
+	t.Cleanup(func() { _ = mockDB.Close() })
+	mock.ExpectQuery(`FROM foghorn.artifacts\s+WHERE artifact_hash = \$1`).
+		WithArgs("h1", "vod", "t1").
+		WillReturnRows(sqlmock.NewRows([]string{
+			"internal_name", "status", "duration_seconds", "size_bytes", "created_at",
+			"format", "storage_location", "sync_status", "has_thumbnails", "authoritative_cluster", "thumbnail_serving_cluster",
+		}).AddRow("s1", "processing", nil, int64(9000), nil, "mp4", "s3", "synced", false, "c1", ""))
+
+	resp, err := ResolveArtifactPlayback(context.Background(), &PlaybackDependencies{DB: mockDB, LocalClusterID: "c1", GeoLat: 52, GeoLon: 5}, "pb")
+	if err != nil || resp.GetPrimary().GetNodeId() != "n1" {
+		t.Fatalf("processing upload with a stored source resolved to (%v, %v), want a redirect to n1", resp.GetPrimary(), err)
 	}
 }

@@ -848,12 +848,18 @@ func (s *FederationServer) PrepareArtifact(ctx context.Context, req *foghornfede
 			log.WithFields(logging.Fields{"storage_location": location, "sync_status": syncSt}).Warn("PrepareArtifact: metadata drift detected")
 			return &foghornfederationpb.PrepareArtifactResponse{Error: "artifact metadata inconsistent: s3 location without synced status"}, nil
 		default:
-			// A failed upload or processing run leaves the row without a storage
-			// location; name that state so the asking cell answers it as failed content.
+			// A failed upload or processing run, and an artifact still being
+			// produced, leave the row without a storage location; name those states
+			// so the asking cell answers failed or not-yet-ready content.
 			if st, stErr := foghorndb.New(s.db).GetArtifactStatusForTenant(ctx, foghorndb.GetArtifactStatusForTenantParams{
 				ArtifactHash: hash, TenantID: tenantID,
-			}); stErr == nil && strings.EqualFold(st.String, "failed") {
-				return &foghornfederationpb.PrepareArtifactResponse{Error: control.PrepareArtifactFailedRefusal}, nil
+			}); stErr == nil {
+				if strings.EqualFold(st.String, "failed") {
+					return &foghornfederationpb.PrepareArtifactResponse{Error: control.PrepareArtifactFailedRefusal}, nil
+				}
+				if control.StoredArtifactInProduction(artifactType, st.String, location) {
+					return &foghornfederationpb.PrepareArtifactResponse{Error: control.PrepareArtifactNotReadyRefusal}, nil
+				}
 			}
 			return &foghornfederationpb.PrepareArtifactResponse{Error: "artifact in unexpected state: " + location}, nil
 		}

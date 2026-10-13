@@ -107025,6 +107025,7 @@ func (v *TenantEventsTenantEventsPublicEvent) __premarshalJSON() (*__premarshalT
 // TenantEventsTenantEventsPublicEventDataInvoicePaid
 // TenantEventsTenantEventsPublicEventDataMultistreamStatusChanged
 // TenantEventsTenantEventsPublicEventDataPaymentFailed
+// TenantEventsTenantEventsPublicEventDataRecordingChapterFailed
 // TenantEventsTenantEventsPublicEventDataRecordingFailed
 // TenantEventsTenantEventsPublicEventDataRecordingReady
 // TenantEventsTenantEventsPublicEventDataRecordingStarted
@@ -107078,6 +107079,8 @@ func (v *TenantEventsTenantEventsPublicEventDataInvoicePaid) implementsGraphQLIn
 func (v *TenantEventsTenantEventsPublicEventDataMultistreamStatusChanged) implementsGraphQLInterfaceTenantEventsTenantEventsPublicEventData() {
 }
 func (v *TenantEventsTenantEventsPublicEventDataPaymentFailed) implementsGraphQLInterfaceTenantEventsTenantEventsPublicEventData() {
+}
+func (v *TenantEventsTenantEventsPublicEventDataRecordingChapterFailed) implementsGraphQLInterfaceTenantEventsTenantEventsPublicEventData() {
 }
 func (v *TenantEventsTenantEventsPublicEventDataRecordingFailed) implementsGraphQLInterfaceTenantEventsTenantEventsPublicEventData() {
 }
@@ -107166,6 +107169,9 @@ func __unmarshalTenantEventsTenantEventsPublicEventData(b []byte, v *TenantEvent
 		return json.Unmarshal(b, *v)
 	case "PaymentFailed":
 		*v = new(TenantEventsTenantEventsPublicEventDataPaymentFailed)
+		return json.Unmarshal(b, *v)
+	case "RecordingChapterFailed":
+		*v = new(TenantEventsTenantEventsPublicEventDataRecordingChapterFailed)
 		return json.Unmarshal(b, *v)
 	case "RecordingFailed":
 		*v = new(TenantEventsTenantEventsPublicEventDataRecordingFailed)
@@ -107333,6 +107339,14 @@ func __marshalTenantEventsTenantEventsPublicEventData(v *TenantEventsTenantEvent
 		result := struct {
 			TypeName string `json:"__typename"`
 			*TenantEventsTenantEventsPublicEventDataPaymentFailed
+		}{typename, v}
+		return json.Marshal(result)
+	case *TenantEventsTenantEventsPublicEventDataRecordingChapterFailed:
+		typename = "RecordingChapterFailed"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*TenantEventsTenantEventsPublicEventDataRecordingChapterFailed
 		}{typename, v}
 		return json.Marshal(result)
 	case *TenantEventsTenantEventsPublicEventDataRecordingFailed:
@@ -108282,6 +108296,19 @@ func (v *TenantEventsTenantEventsPublicEventDataPaymentFailedAmountEventMoney) _
 	retval.AmountMinor = v.EventMoneyFields.AmountMinor
 	retval.Currency = v.EventMoneyFields.Currency
 	return &retval, nil
+}
+
+// TenantEventsTenantEventsPublicEventDataRecordingChapterFailed includes the requested fields of the GraphQL type RecordingChapterFailed.
+// The GraphQL type's documentation follows.
+//
+// `recording.chapter_failed` event. Aggregate: `artifacts`.
+type TenantEventsTenantEventsPublicEventDataRecordingChapterFailed struct {
+	Typename *string `json:"__typename"`
+}
+
+// GetTypename returns TenantEventsTenantEventsPublicEventDataRecordingChapterFailed.Typename, and is useful for accessing the field via an interface.
+func (v *TenantEventsTenantEventsPublicEventDataRecordingChapterFailed) GetTypename() *string {
+	return v.Typename
 }
 
 // TenantEventsTenantEventsPublicEventDataRecordingFailed includes the requested fields of the GraphQL type RecordingFailed.

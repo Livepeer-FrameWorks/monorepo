@@ -6099,7 +6099,7 @@ Payload of a PublicEvent: one member per public event type. Fields of the same
 name can have different types across members (reason is a different enum per
 event family); alias them when one selection covers several.
 """
-union PublicEventData = AccountSuspended | ApiTokenCreated | ApiTokenRevoked | BillingDetailsUpdated | InvoiceCreated | InvoicePaid | PaymentFailed | TopupCredited | ClipFailed | ClipReady | ClipRequested | CustomDomainFailed | CustomDomainVerified | MultistreamStatusChanged | RecordingFailed | RecordingReady | RecordingStarted | RecordingStopped | StreamConnected | StreamCreated | StreamDeleted | StreamIdle | StreamKeyRotated | StreamLive | StreamUpdated | UploadAborted | UploadCompleted | UploadCreated | UploadFailed | UploadReady
+union PublicEventData = AccountSuspended | ApiTokenCreated | ApiTokenRevoked | BillingDetailsUpdated | InvoiceCreated | InvoicePaid | PaymentFailed | TopupCredited | ClipFailed | ClipReady | ClipRequested | CustomDomainFailed | CustomDomainVerified | MultistreamStatusChanged | RecordingChapterFailed | RecordingFailed | RecordingReady | RecordingStarted | RecordingStopped | StreamConnected | StreamCreated | StreamDeleted | StreamIdle | StreamKeyRotated | StreamLive | StreamUpdated | UploadAborted | UploadCompleted | UploadCreated | UploadFailed | UploadReady
 
 """
 A single pull-source resolution outcome from Foghorn's STREAM_SOURCE
@@ -6995,6 +6995,17 @@ type RebufferingEventsConnection {
   nodes: [RebufferingEvent!]!
   pageInfo: PageInfo!
   totalCount: Int!
+}
+
+"""
+`recording.chapter_failed` event. Aggregate: `artifacts`.
+"""
+type RecordingChapterFailed {
+  artifact: EventArtifact
+  chapterId: ID!
+  startMs: Int!
+  endMs: Int!
+  reason: EventMediaFailureReason!
 }
 
 """

@@ -421,6 +421,70 @@ func TestGenericViewerPlayback_FailedVodReturns409(t *testing.T) {
 	}
 }
 
+// A recording chapter that is still being finalized has no complete copy
+// anywhere. /play answers 503 CONTENT_NOT_READY with Retry-After on every
+// request, whatever the node inventory says, instead of alternating between a
+// redirect to the node writing the file and a 500 resolution failure.
+func TestGenericViewerPlayback_FinalizingChapterReturns503(t *testing.T) {
+	sm := balancingTestEnv(t)
+	t.Cleanup(control.SetupTestRegistry("", nil))
+	startQuartermasterFake(t, &fakeTenantService{validate: func(_ context.Context, req *quartermasterpb.ValidateTenantRequest) (*quartermasterpb.ValidateTenantResponse, error) {
+		return &quartermasterpb.ValidateTenantResponse{Valid: true, IsActive: true, TenantId: req.GetTenantId(), BillingModel: "postpaid"}, nil
+	}})
+
+	const hash = "chapterhashfffffffffffffffffff0f"
+	startCommodoreFakeArms(t, &commodoreArmsFake{
+		artifactPlaybackID: func(_ context.Context, _ *commodorepb.ResolveArtifactPlaybackIDRequest) (*commodorepb.ResolveArtifactPlaybackIDResponse, error) {
+			return &commodorepb.ResolveArtifactPlaybackIDResponse{
+				Found:        true,
+				ArtifactHash: hash,
+				InternalName: "finalizingchapter",
+				TenantId:     "tenant-vod",
+				ContentType:  "chapter",
+			}, nil
+		},
+	})
+	for _, writerHoldsFile := range []bool{true, false} {
+		if writerHoldsFile {
+			lat, lon := 52.0, 5.0
+			sm.SetNodeInfo("writer", "https://writer.example.com", true, &lat, &lon, "ams", "", map[string]any{"HLS": "x"})
+			sm.TouchNode("writer", true)
+			sm.SetNodeArtifacts("writer", []*ipcpb.StoredArtifact{{ClipHash: hash}}, state.ArtifactReportOrder{Fence: 1, Seq: 1})
+		} else {
+			sm.SetNodeArtifacts("writer", nil, state.ArtifactReportOrder{Fence: 1, Seq: 2})
+		}
+		mock := withMockDBArms(t)
+		mock.ExpectQuery(`FROM foghorn\.artifacts`).
+			WithArgs(hash, "vod", "tenant-vod").
+			WillReturnRows(sqlmock.NewRows([]string{
+				"internal_name", "status", "duration_seconds", "size_bytes",
+				"created_at", "format", "storage_location", "sync_status",
+				"has_thumbnails", "authoritative_cluster", "thumbnail_serving_cluster",
+			}).AddRow(
+				"finalizingchapter", "finalizing", nil, nil,
+				time.Now(), "mkv", "pending", "pending",
+				false, "test-platform-cluster", "",
+			))
+
+		c, w := playbackCtxArms(t, "finalizingchapterkey")
+		HandleGenericViewerPlayback(c)
+
+		if w.Code != http.StatusServiceUnavailable {
+			t.Fatalf("writer holds file=%v: status = %d, want 503; body=%s", writerHoldsFile, w.Code, w.Body.String())
+		}
+		if got := w.Header().Get("Retry-After"); got != "5" {
+			t.Fatalf("writer holds file=%v: Retry-After = %q, want 5", writerHoldsFile, got)
+		}
+		var body map[string]any
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if body["code"] != "CONTENT_NOT_READY" {
+			t.Fatalf("writer holds file=%v: code = %v, want CONTENT_NOT_READY", writerHoldsFile, body["code"])
+		}
+	}
+}
+
 func TestGenericViewerPlayback_ChapterJSONPreservesChapterIdentity(t *testing.T) {
 	sm := balancingTestEnv(t)
 	t.Cleanup(control.SetupTestRegistry("", nil))

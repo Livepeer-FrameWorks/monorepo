@@ -320,8 +320,12 @@ again from the first byte not yet copied, at most twice, so the client and the b
 without a gap; a resume refused because the presigned URL expired meanwhile re-resolves and resumes from
 the same byte on the fresh URL. Concurrent readers of one cold block wait on a single leader fetch; a reader whose leader
 read no upstream byte for that same 2.5 s fetches the block itself without caching it. `.dtsh` sidecars are
-served from disk when present, fetched from S3 when Foghorn has one, and 404'd otherwise so Mist generates
-and PUTs one (`api_sidecar/internal/relay/dtsh.go`).
+served from disk when present, fetched from S3 or the origin's peer relay when Foghorn has one, and 404'd
+otherwise so Mist generates and PUTs one (`api_sidecar/internal/relay/dtsh.go`). Mist receives no sidecar
+byte until the relay has the whole sidecar and validated it, so the whole fetch is bounded at 4 s, under
+Mist's 5 s read budget; a sidecar body that waits 1 s for a byte is requested again from the first byte not
+yet copied, at most twice, inside that bound. A store that still did not deliver the sidecar is answered 503
+with `Retry-After`; only a store that reports the sidecar missing or invalid gets the generation 404.
 
 ## Service Events Audit (service_events)
 

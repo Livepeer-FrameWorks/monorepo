@@ -150,8 +150,8 @@ func TestHandleChapterFinalizeResult_CompletedAdvancesToFinalized(t *testing.T) 
 	// chapter's completion lifecycle row (same tx).
 	mock.ExpectQuery(`SELECT c.artifact_hash AS recording_hash`).
 		WithArgs(chapterID).
-		WillReturnRows(sqlmock.NewRows([]string{"recording_hash", "stream_id", "start_ms", "end_ms", "playback_id", "replayable_chapters"}).
-			AddRow("parentdvrhash", "", int64(0), int64(60000), "pbchapfin1", int64(2)))
+		WillReturnRows(sqlmock.NewRows(chapterRecordingContextColumns).
+			AddRow("parentdvrhash", "", tenant, int64(0), int64(60000), "pbchapfin1", int64(2)))
 	expectTransitionInsert(mock, "recording.chapter_ready", "parentdvrhash", "vod_lifecycle", tenant, "", chapterHash32)
 	// An earlier chapter of this recording already announced recording.ready.
 	mock.ExpectCommit()
@@ -366,6 +366,7 @@ func TestHandleChapterFinalizeResult_TerminalFailureMarksFailed(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"tenant_id"}).AddRow("5eed517e-ba5e-da7a-517e-ba5eda7a0001"))
 	mock.ExpectExec(`INSERT INTO foghorn.artifact_event_outbox`).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	expectChapterFailedEvent(mock, chapterID, "parentdvrhash")
 	mock.ExpectCommit()
 
 	handleChapterFinalizeResult(context.Background(), chapterID, "failed", chapterFinalizeAttempt, result, "node-1", logging.NewLogger())

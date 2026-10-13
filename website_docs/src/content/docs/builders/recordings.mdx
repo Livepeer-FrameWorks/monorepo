@@ -321,7 +321,8 @@ two kinds:
 read from, events, the URL parameters, and how far back each playback ID reaches.
 
 The `tenantEvents` subscription with `types: ["recording.ready", "recording.failed"]` reports
-saved and failed recordings. A live-rewind-only (`NONE`) recording ends with `recording.stopped`
+saved and failed recordings; add `recording.chapter_failed` to hear about a single chapter of a
+recording that could not be saved. A live-rewind-only (`NONE`) recording ends with `recording.stopped`
 and no `recording.ready`, because nothing replayable is kept. See [Events](/builders/events) for
 every event type.
 

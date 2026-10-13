@@ -244,6 +244,40 @@ var ErrPlaybackContentFailed = errors.New("content failed")
 // maps it to ErrPlaybackContentFailed.
 const PrepareArtifactFailedRefusal = "artifact failed"
 
+// ErrPlaybackContentNotReady reports that the requested clip, upload, or
+// recording chapter exists but is still being produced, so no complete copy
+// exists to serve. A node that holds the file while it is being written is not
+// a copy. The front doors answer it as a retryable state with Retry-After.
+var ErrPlaybackContentNotReady = errors.New("content not ready")
+
+// PrepareArtifactNotReadyRefusal is the PrepareArtifact refusal an origin cell
+// answers for an artifact that is still being produced. The asking cell maps it
+// to ErrPlaybackContentNotReady.
+const PrepareArtifactNotReadyRefusal = "artifact not ready"
+
+// PlaybackContentNotReadyRetryAfter is the delay the front doors advise before
+// a viewer retries content that is still being produced.
+const PlaybackContentNotReadyRetryAfter = 5 * time.Second
+
+// StoredArtifactInProduction reports whether a clip, upload, or recording
+// chapter row is still being produced and nothing of it is stored yet
+// (storage_location 'pending'). An upload being processed already has its
+// source stored and plays from it. Recordings are left out: a recording in
+// progress is served from its live source.
+func StoredArtifactInProduction(artifactType, status, storageLocation string) bool {
+	if artifacts.CanonicalByteKind(artifactType) == "dvr" {
+		return false
+	}
+	if location := strings.ToLower(strings.TrimSpace(storageLocation)); location != "" && location != "pending" {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "requested", "queued", "uploading", "completing", "processing", "finalizing":
+		return true
+	}
+	return false
+}
+
 // ResolveContent determines content type and resolution strategy for a playback request.
 func ResolveContent(ctx context.Context, input string) (*ContentResolution, error) {
 	if input == "" {
@@ -596,6 +630,12 @@ func resolveArtifactPlaybackWithResp(ctx context.Context, deps *PlaybackDependen
 	}
 	if strings.EqualFold(strings.TrimSpace(status), "failed") {
 		return nil, fmt.Errorf("%s %s: %w", contentType, artifactResp.ArtifactHash, ErrPlaybackContentFailed)
+	}
+	// The node producing the artifact reports the file it is still writing, and a
+	// finalize retry replaces that file, so neither the warm inventory nor its
+	// absence says anything about playability until the row is ready.
+	if StoredArtifactInProduction(artifactType, status, storageLocation) {
+		return nil, fmt.Errorf("%s %s is %s: %w", contentType, artifactResp.ArtifactHash, strings.TrimSpace(status), ErrPlaybackContentNotReady)
 	}
 
 	// Warm-node routing authority is the in-memory inventory ONLY: FindNodesByArtifactHash excludes
@@ -1781,6 +1821,9 @@ func resolveRemoteArtifactWithMetadata(ctx context.Context, deps *PlaybackDepend
 	}
 	if resp.GetError() == PrepareArtifactFailedRefusal {
 		return nil, fmt.Errorf("origin cluster %s: %w", originClusterID, ErrPlaybackContentFailed)
+	}
+	if resp.GetError() == PrepareArtifactNotReadyRefusal {
+		return nil, fmt.Errorf("origin cluster %s: %w", originClusterID, ErrPlaybackContentNotReady)
 	}
 	if resp.GetError() != "" {
 		return nil, fmt.Errorf("origin cluster error: %s", resp.GetError())

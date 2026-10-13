@@ -394,6 +394,12 @@
           "description": "Host name this instance advertises when it registers with Quartermaster."
         },
         {
+          "key": "BRIDGE_BIND_ADDRS",
+          "type": "list",
+          "introduced": "v0.3.13",
+          "description": "Comma-separated addresses the HTTP listener on PORT binds, one listener per address. Provisioning sets loopback and the host's WireGuard address so only the local reverse proxy and mesh peers reach Bridge. Empty binds every interface."
+        },
+        {
           "key": "HOSTNAME",
           "type": "string",
           "default": "bridge",

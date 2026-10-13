@@ -516,6 +516,92 @@ func TestArtifactTransitionDomainEvents_RealPG(t *testing.T) {
 	}
 }
 
+// A chapter that fails terminally tells the tenant which span of its recording
+// was lost: recording.chapter_failed on the parent recording, once per chapter,
+// in the transaction that fails the chapter.
+func TestRecordingChapterFailedDomainEvent_RealPG(t *testing.T) {
+	conn := startRealPG(t)
+	prev := db
+	SetDB(conn)
+	t.Cleanup(func() { SetDB(prev) })
+	ctx := context.Background()
+
+	const parent = "dvrchapterfail000000000000000001"
+	insertFinalizingDVR(t, conn, parent)
+	if _, err := conn.Exec(`UPDATE foghorn.artifacts SET status = 'completed' WHERE artifact_hash = $1`, parent); err != nil {
+		t.Fatal(err)
+	}
+	insertChapter := func(chapterID, playbackHash, state string, startMs, endMs int64, attempts int32, node string) {
+		t.Helper()
+		if playbackHash != "" {
+			if _, err := conn.Exec(`
+				INSERT INTO foghorn.artifacts (artifact_hash, artifact_type, tenant_id, status, origin_type, origin_id, library_visible)
+				VALUES ($1, 'vod', $2::uuid, 'finalizing', 'dvr_chapter', $3, false)`, playbackHash, domainTenant, chapterID); err != nil {
+				t.Fatalf("insert chapter artifact: %v", err)
+			}
+		}
+		if _, err := conn.Exec(`
+			INSERT INTO foghorn.dvr_chapters (chapter_id, artifact_hash, mode, start_ms, end_ms, state,
+				playback_artifact_hash, finalize_attempts, finalize_node_id)
+			VALUES ($1, $2, 'fixed_interval', $3, $4, $5, NULLIF($6, ''), $7, NULLIF($8, ''))`,
+			chapterID, parent, startMs, endMs, state, playbackHash, attempts, node); err != nil {
+			t.Fatalf("insert chapter: %v", err)
+		}
+	}
+	decodeFailed := func(row domainRow) *publicv1.RecordingChapterFailed {
+		t.Helper()
+		_, msg, err := events.Decode("recording.chapter_failed", row.payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return msg.(*publicv1.RecordingChapterFailed)
+	}
+
+	// Attempts exhausted: the queue fails a closed chapter internally.
+	insertChapter("chapterfailperm01", "chapterfailpermplayback000000001", "closed", 1_800_000, 3_600_000, 5, "")
+	if failed, err := MarkChapterFailed(ctx, "chapterfailperm01", ChapterStateFailedPermanent, "max attempts (5) exceeded", "", 5); err != nil || !failed {
+		t.Fatalf("MarkChapterFailed failed=%v err=%v", failed, err)
+	}
+	rows := domainRows(t, conn, "recording.chapter_failed")
+	if len(rows) != 1 {
+		t.Fatalf("recording.chapter_failed rows = %d, want 1 for a permanently failed chapter", len(rows))
+	}
+	if rows[0].aggregateType != "artifacts" || rows[0].aggregateID != parent || rows[0].tenantID != domainTenant {
+		t.Fatalf("recording.chapter_failed row = %+v, want the parent recording's aggregate", rows[0])
+	}
+	got := decodeFailed(rows[0])
+	if art := got.GetArtifact(); art.GetArtifactId() != parent || art.GetKind() != publicv1.ArtifactKind_ARTIFACT_KIND_RECORDING || art.GetStreamId() != domainStream {
+		t.Fatalf("recording.chapter_failed artifact = %+v", art)
+	}
+	if got.GetChapterId() != "chapterfailperm01" || got.GetStartMs() != 1_800_000 || got.GetEndMs() != 3_600_000 ||
+		got.GetReason() != publicv1.MediaFailureReason_MEDIA_FAILURE_REASON_PROCESSING_FAILED {
+		t.Fatalf("recording.chapter_failed payload = %+v", got)
+	}
+
+	// A repeated terminal transition matches no row and emits nothing.
+	if failed, err := MarkChapterFailed(ctx, "chapterfailperm01", ChapterStateFailedPermanent, "max attempts (5) exceeded", "", 5); err != nil || failed {
+		t.Fatalf("repeat failed=%v err=%v", failed, err)
+	}
+	if n := len(domainRows(t, conn, "recording.chapter_failed")); n != 1 {
+		t.Fatalf("a repeated terminal transition emitted again: %d rows", n)
+	}
+
+	// Source loss reported by the finalizing node, on a chapter that never got a
+	// playback artifact, still reaches the tenant with its own reason.
+	insertChapter("chapterfailsrc001", "", "finalizing", 3_600_000, 5_400_000, 1, "node-a")
+	if failed, err := MarkChapterFailed(ctx, "chapterfailsrc001", ChapterStateFailedSourceMissing, "source segments unavailable", "node-a", 1); err != nil || !failed {
+		t.Fatalf("MarkChapterFailed source missing failed=%v err=%v", failed, err)
+	}
+	rows = domainRows(t, conn, "recording.chapter_failed")
+	if len(rows) != 2 {
+		t.Fatalf("recording.chapter_failed rows = %d, want 2", len(rows))
+	}
+	if got := decodeFailed(rows[1]); got.GetChapterId() != "chapterfailsrc001" ||
+		got.GetReason() != publicv1.MediaFailureReason_MEDIA_FAILURE_REASON_SOURCE_UNAVAILABLE {
+		t.Fatalf("source-missing recording.chapter_failed payload = %+v", got)
+	}
+}
+
 // A requested deletion records exactly one artifact_deleted, in the deletion's
 // transaction and attributed to the requester; a repeated delete records none.
 // Commodore records no copy (TestArtifactDeletionNamesRequesterAndRecordsNoEvent),

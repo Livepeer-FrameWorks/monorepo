@@ -4017,7 +4017,7 @@ export interface PublicEvent {
  * name can have different types across members (reason is a different enum per
  * event family); alias them when one selection covers several.
  */
-export type PublicEventData = (AccountSuspended | ApiTokenCreated | ApiTokenRevoked | BillingDetailsUpdated | InvoiceCreated | InvoicePaid | PaymentFailed | TopupCredited | ClipFailed | ClipReady | ClipRequested | CustomDomainFailed | CustomDomainVerified | MultistreamStatusChanged | RecordingFailed | RecordingReady | RecordingStarted | RecordingStopped | StreamConnected | StreamCreated | StreamDeleted | StreamIdle | StreamKeyRotated | StreamLive | StreamUpdated | UploadAborted | UploadCompleted | UploadCreated | UploadFailed | UploadReady) & { __isUnion?: true }
+export type PublicEventData = (AccountSuspended | ApiTokenCreated | ApiTokenRevoked | BillingDetailsUpdated | InvoiceCreated | InvoicePaid | PaymentFailed | TopupCredited | ClipFailed | ClipReady | ClipRequested | CustomDomainFailed | CustomDomainVerified | MultistreamStatusChanged | RecordingChapterFailed | RecordingFailed | RecordingReady | RecordingStarted | RecordingStopped | StreamConnected | StreamCreated | StreamDeleted | StreamIdle | StreamKeyRotated | StreamLive | StreamUpdated | UploadAborted | UploadCompleted | UploadCreated | UploadFailed | UploadReady) & { __isUnion?: true }
 
 
 /**
@@ -4467,6 +4467,17 @@ export interface RebufferingEventsConnection {
     pageInfo: PageInfo
     totalCount: Scalars['Int']
     __typename: 'RebufferingEventsConnection'
+}
+
+
+/** `recording.chapter_failed` event. Aggregate: `artifacts`. */
+export interface RecordingChapterFailed {
+    artifact: (EventArtifact | null)
+    chapterId: Scalars['ID']
+    startMs: Scalars['Int']
+    endMs: Scalars['Int']
+    reason: EventMediaFailureReason
+    __typename: 'RecordingChapterFailed'
 }
 
 
@@ -11636,6 +11647,7 @@ export interface PublicEventDataGenqlSelection{
     on_CustomDomainFailed?:CustomDomainFailedGenqlSelection,
     on_CustomDomainVerified?:CustomDomainVerifiedGenqlSelection,
     on_MultistreamStatusChanged?:MultistreamStatusChangedGenqlSelection,
+    on_RecordingChapterFailed?:RecordingChapterFailedGenqlSelection,
     on_RecordingFailed?:RecordingFailedGenqlSelection,
     on_RecordingReady?:RecordingReadyGenqlSelection,
     on_RecordingStarted?:RecordingStartedGenqlSelection,
@@ -12262,6 +12274,18 @@ export interface RebufferingEventsConnectionGenqlSelection{
     nodes?: RebufferingEventGenqlSelection
     pageInfo?: PageInfoGenqlSelection
     totalCount?: boolean | number
+    __typename?: boolean | number
+    __scalar?: boolean | number
+}
+
+
+/** `recording.chapter_failed` event. Aggregate: `artifacts`. */
+export interface RecordingChapterFailedGenqlSelection{
+    artifact?: EventArtifactGenqlSelection
+    chapterId?: boolean | number
+    startMs?: boolean | number
+    endMs?: boolean | number
+    reason?: boolean | number
     __typename?: boolean | number
     __scalar?: boolean | number
 }
@@ -17240,7 +17264,7 @@ export interface X402PaymentResultGenqlSelection{
 
 
 
-    const PublicEventData_possibleTypes: string[] = ['AccountSuspended','ApiTokenCreated','ApiTokenRevoked','BillingDetailsUpdated','InvoiceCreated','InvoicePaid','PaymentFailed','TopupCredited','ClipFailed','ClipReady','ClipRequested','CustomDomainFailed','CustomDomainVerified','MultistreamStatusChanged','RecordingFailed','RecordingReady','RecordingStarted','RecordingStopped','StreamConnected','StreamCreated','StreamDeleted','StreamIdle','StreamKeyRotated','StreamLive','StreamUpdated','UploadAborted','UploadCompleted','UploadCreated','UploadFailed','UploadReady']
+    const PublicEventData_possibleTypes: string[] = ['AccountSuspended','ApiTokenCreated','ApiTokenRevoked','BillingDetailsUpdated','InvoiceCreated','InvoicePaid','PaymentFailed','TopupCredited','ClipFailed','ClipReady','ClipRequested','CustomDomainFailed','CustomDomainVerified','MultistreamStatusChanged','RecordingChapterFailed','RecordingFailed','RecordingReady','RecordingStarted','RecordingStopped','StreamConnected','StreamCreated','StreamDeleted','StreamIdle','StreamKeyRotated','StreamLive','StreamUpdated','UploadAborted','UploadCompleted','UploadCreated','UploadFailed','UploadReady']
     export const isPublicEventData = (obj?: { __typename?: any } | null): obj is PublicEventData => {
       if (!obj?.__typename) throw new Error('__typename is missing in "isPublicEventData"')
       return PublicEventData_possibleTypes.includes(obj.__typename)
@@ -17340,6 +17364,14 @@ export interface X402PaymentResultGenqlSelection{
     export const isRebufferingEventsConnection = (obj?: { __typename?: any } | null): obj is RebufferingEventsConnection => {
       if (!obj?.__typename) throw new Error('__typename is missing in "isRebufferingEventsConnection"')
       return RebufferingEventsConnection_possibleTypes.includes(obj.__typename)
+    }
+
+
+
+    const RecordingChapterFailed_possibleTypes: string[] = ['RecordingChapterFailed']
+    export const isRecordingChapterFailed = (obj?: { __typename?: any } | null): obj is RecordingChapterFailed => {
+      if (!obj?.__typename) throw new Error('__typename is missing in "isRecordingChapterFailed"')
+      return RecordingChapterFailed_possibleTypes.includes(obj.__typename)
     }
 
 

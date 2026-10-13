@@ -344,6 +344,7 @@ func TestMarkChapterFailed_AcceptsSourceMissing(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"tenant_id"}).AddRow("tenant-1"))
 	mock.ExpectExec(`INSERT INTO foghorn.artifact_event_outbox`).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	expectChapterFailedEvent(mock, "chap-1", "parentdvrhash")
 	mock.ExpectCommit()
 	changed, err := MarkChapterFailed(context.Background(), "chap-1",
 		ChapterStateFailedSourceMissing, "segments unavailable", "", 2)

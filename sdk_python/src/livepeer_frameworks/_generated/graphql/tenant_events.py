@@ -60,6 +60,7 @@ class TenantEventsTenantEvents(BaseModel):
             "TenantEventsTenantEventsDataCustomDomainFailed",
             "TenantEventsTenantEventsDataCustomDomainVerified",
             "TenantEventsTenantEventsDataMultistreamStatusChanged",
+            "TenantEventsTenantEventsDataRecordingChapterFailed",
             "TenantEventsTenantEventsDataRecordingFailed",
             "TenantEventsTenantEventsDataRecordingReady",
             "TenantEventsTenantEventsDataRecordingStarted",
@@ -279,6 +280,14 @@ class TenantEventsTenantEventsDataMultistreamStatusChanged(BaseModel):
     target_name: str = Field(alias="targetName")
     status: EventMultistreamStatus
     previous_status: EventMultistreamStatus = Field(alias="previousStatus")
+
+
+class TenantEventsTenantEventsDataRecordingChapterFailed(BaseModel):
+    """Payload of a PublicEvent: one member per public event type. Fields of the same
+    name can have different types across members (reason is a different enum per
+    event family); alias them when one selection covers several."""
+
+    typename__: Literal["RecordingChapterFailed"] = Field(alias="__typename")
 
 
 class TenantEventsTenantEventsDataRecordingFailed(BaseModel):

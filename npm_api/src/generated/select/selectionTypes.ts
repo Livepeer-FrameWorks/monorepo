@@ -2451,6 +2451,13 @@ export const scalarFields = {
         "totalCount",
         "__typename"
     ],
+    "RecordingChapterFailed": [
+        "chapterId",
+        "startMs",
+        "endMs",
+        "reason",
+        "__typename"
+    ],
     "RecordingFailed": [
         "reason",
         "__typename"
@@ -4035,7 +4042,7 @@ export interface PossibleTypes {
     Node: 'APIUsageRecord' | 'ArtifactEvent' | 'BufferEvent' | 'ClientMetrics5m' | 'Clip' | 'Cluster' | 'ConnectionEvent' | 'Conversation' | 'InfrastructureNode' | 'Message' | 'NodeMetric' | 'NodeMetricHourly' | 'NodePerformance5m' | 'ProcessingUsageRecord' | 'QualityTierDaily' | 'SigningKey' | 'StorageEvent' | 'StorageUsageRecord' | 'Stream' | 'StreamAnalyticsDaily' | 'StreamConnectionHourly' | 'StreamEvent' | 'StreamHealth5m' | 'StreamHealthMetric' | 'TenantDailyStat' | 'TrackListEvent' | 'ViewerGeoHourly' | 'ViewerHoursHourly' | 'ViewerSession' | 'VodAsset'
     OpenMistAdminSessionResult: 'AuthError' | 'MistAdminSession' | 'NotFoundError' | 'ValidationError'
     PromoteToPaidResult: 'AuthError' | 'PromoteToPaidPayload' | 'ValidationError'
-    PublicEventData: 'AccountSuspended' | 'ApiTokenCreated' | 'ApiTokenRevoked' | 'BillingDetailsUpdated' | 'ClipFailed' | 'ClipReady' | 'ClipRequested' | 'CustomDomainFailed' | 'CustomDomainVerified' | 'InvoiceCreated' | 'InvoicePaid' | 'MultistreamStatusChanged' | 'PaymentFailed' | 'RecordingFailed' | 'RecordingReady' | 'RecordingStarted' | 'RecordingStopped' | 'StreamConnected' | 'StreamCreated' | 'StreamDeleted' | 'StreamIdle' | 'StreamKeyRotated' | 'StreamLive' | 'StreamUpdated' | 'TopupCredited' | 'UploadAborted' | 'UploadCompleted' | 'UploadCreated' | 'UploadFailed' | 'UploadReady'
+    PublicEventData: 'AccountSuspended' | 'ApiTokenCreated' | 'ApiTokenRevoked' | 'BillingDetailsUpdated' | 'ClipFailed' | 'ClipReady' | 'ClipRequested' | 'CustomDomainFailed' | 'CustomDomainVerified' | 'InvoiceCreated' | 'InvoicePaid' | 'MultistreamStatusChanged' | 'PaymentFailed' | 'RecordingChapterFailed' | 'RecordingFailed' | 'RecordingReady' | 'RecordingStarted' | 'RecordingStopped' | 'StreamConnected' | 'StreamCreated' | 'StreamDeleted' | 'StreamIdle' | 'StreamKeyRotated' | 'StreamLive' | 'StreamUpdated' | 'TopupCredited' | 'UploadAborted' | 'UploadCompleted' | 'UploadCreated' | 'UploadFailed' | 'UploadReady'
     ReplayWebhookDeliveriesResult: 'AuthError' | 'NotFoundError' | 'ValidationError' | 'WebhookReplayResult'
     ReplayWebhookDeliveryResult: 'AuthError' | 'NotFoundError' | 'ValidationError' | 'WebhookDelivery'
     RevokeClusterInviteResult: 'AuthError' | 'DeleteSuccess' | 'NotFoundError'

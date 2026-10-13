@@ -6922,6 +6922,15 @@ enum GQL {
           }
           reason
         }
+        ... on RecordingChapterFailed {
+          artifact {
+            ...EventArtifactFields
+          }
+          chapterId
+          startMs
+          endMs
+          reason
+        }
         ... on UploadCreated {
           artifact {
             ...EventArtifactFields

@@ -25,6 +25,7 @@ __all__ = (
     "MultistreamStatusChanged",
     "PaymentFailed",
     "PaymentFailureReason",
+    "RecordingChapterFailed",
     "RecordingFailed",
     "RecordingReady",
     "RecordingStarted",
@@ -589,6 +590,39 @@ class PaymentFailed(betterproto2.Message):
 
 default_message_pool.register_message(
     "frameworks.events.public.v1", "PaymentFailed", PaymentFailed
+)
+
+
+@dataclass(eq=False, repr=False)
+class RecordingChapterFailed(betterproto2.Message):
+    """
+    RecordingChapterFailed reports that one chapter of a recording could not be
+    saved, so the recording keeps no replayable media between start_ms and
+    end_ms (Unix epoch milliseconds, the chapter's scheduled bounds). The
+    recording itself and its other chapters are unaffected. It is emitted once
+    per chapter, when the chapter fails terminally.
+    """
+
+    artifact: "Artifact | None" = betterproto2.field(
+        1, betterproto2.TYPE_MESSAGE, optional=True
+    )
+
+    chapter_id: "str" = betterproto2.field(2, betterproto2.TYPE_STRING)
+    """
+    chapter_id is the chapterId of the recording's dvrChapters entry.
+    """
+
+    start_ms: "int" = betterproto2.field(3, betterproto2.TYPE_INT64)
+
+    end_ms: "int" = betterproto2.field(4, betterproto2.TYPE_INT64)
+
+    reason: "MediaFailureReason" = betterproto2.field(
+        5, betterproto2.TYPE_ENUM, default_factory=lambda: MediaFailureReason(0)
+    )
+
+
+default_message_pool.register_message(
+    "frameworks.events.public.v1", "RecordingChapterFailed", RecordingChapterFailed
 )
 
 

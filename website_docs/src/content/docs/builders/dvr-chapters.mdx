@@ -118,7 +118,9 @@ pass `0` for no bound. Paginate with `pageSize` (default 200, max 1000) + `nextP
 
 ## Gaps and failed chapters
 
-If a segment was lost from both local disk AND the recovery-bridge S3 (severe storage pressure during recording), chapter finalization marks the chapter `FAILED_SOURCE_MISSING`. `lastFailureReason` carries the operator-facing explanation. The chapter row remains addressable as range metadata; the artifact does not exist.
+If a segment was lost from both local disk AND the recovery-bridge S3 (severe storage pressure during recording), chapter finalization marks the chapter `FAILED_SOURCE_MISSING`. A chapter whose finalization keeps failing ends `FAILED_PERMANENT`. `lastFailureReason` carries the operator-facing explanation. The chapter row remains addressable as range metadata; the artifact does not exist.
+
+Either failure emits one `recording.chapter_failed` [event](/builders/events) on the parent recording, carrying the chapter's `chapterId`, its `startMs`/`endMs` bounds, and a `reason`, so a webhook or `tenantEvents` subscriber learns which span of the recording was lost without polling `dvrChapters`.
 
 `hasGaps=true` on a successful chapter means the output media has missing timeline coverage. Recovery from the temporary S3 segment object produces the original bytes and does not count as a gap.
 

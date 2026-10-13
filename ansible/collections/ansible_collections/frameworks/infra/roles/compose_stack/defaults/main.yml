@@ -11,8 +11,11 @@
 #                                  (used by service-specific roles whose
 #                                  compose shape is non-generic, e.g.
 #                                  chatwoot app+sidekiq)
-#   compose_stack_service          {image, port, container_port, health_path}
-#                                  dict for the single-service generic shape;
+#   compose_stack_service          {image, port, container_port, health_path,
+#                                  publish_addrs} dict for the single-service
+#                                  generic shape; publish_addrs limits the host
+#                                  addresses the port is published on (empty =
+#                                  every interface);
 #                                  role renders compose from the packaged
 #                                  templates/generic-compose.yml.j2
 

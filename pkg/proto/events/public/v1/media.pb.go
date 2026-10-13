@@ -397,6 +397,88 @@ func (x *RecordingFailed) GetReason() MediaFailureReason {
 	return MediaFailureReason_MEDIA_FAILURE_REASON_UNSPECIFIED
 }
 
+// RecordingChapterFailed reports that one chapter of a recording could not be
+// saved, so the recording keeps no replayable media between start_ms and
+// end_ms (Unix epoch milliseconds, the chapter's scheduled bounds). The
+// recording itself and its other chapters are unaffected. It is emitted once
+// per chapter, when the chapter fails terminally.
+type RecordingChapterFailed struct {
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Artifact *Artifact              `protobuf:"bytes,1,opt,name=artifact,proto3" json:"artifact,omitempty"`
+	// chapter_id is the chapterId of the recording's dvrChapters entry.
+	ChapterId     string             `protobuf:"bytes,2,opt,name=chapter_id,json=chapterId,proto3" json:"chapter_id,omitempty"`
+	StartMs       int64              `protobuf:"varint,3,opt,name=start_ms,json=startMs,proto3" json:"start_ms,omitempty"`
+	EndMs         int64              `protobuf:"varint,4,opt,name=end_ms,json=endMs,proto3" json:"end_ms,omitempty"`
+	Reason        MediaFailureReason `protobuf:"varint,5,opt,name=reason,proto3,enum=frameworks.events.public.v1.MediaFailureReason" json:"reason,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RecordingChapterFailed) Reset() {
+	*x = RecordingChapterFailed{}
+	mi := &file_events_public_v1_media_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RecordingChapterFailed) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RecordingChapterFailed) ProtoMessage() {}
+
+func (x *RecordingChapterFailed) ProtoReflect() protoreflect.Message {
+	mi := &file_events_public_v1_media_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RecordingChapterFailed.ProtoReflect.Descriptor instead.
+func (*RecordingChapterFailed) Descriptor() ([]byte, []int) {
+	return file_events_public_v1_media_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *RecordingChapterFailed) GetArtifact() *Artifact {
+	if x != nil {
+		return x.Artifact
+	}
+	return nil
+}
+
+func (x *RecordingChapterFailed) GetChapterId() string {
+	if x != nil {
+		return x.ChapterId
+	}
+	return ""
+}
+
+func (x *RecordingChapterFailed) GetStartMs() int64 {
+	if x != nil {
+		return x.StartMs
+	}
+	return 0
+}
+
+func (x *RecordingChapterFailed) GetEndMs() int64 {
+	if x != nil {
+		return x.EndMs
+	}
+	return 0
+}
+
+func (x *RecordingChapterFailed) GetReason() MediaFailureReason {
+	if x != nil {
+		return x.Reason
+	}
+	return MediaFailureReason_MEDIA_FAILURE_REASON_UNSPECIFIED
+}
+
 type UploadCreated struct {
 	state    protoimpl.MessageState `protogen:"open.v1"`
 	Artifact *Artifact              `protobuf:"bytes,1,opt,name=artifact,proto3" json:"artifact,omitempty"`
@@ -409,7 +491,7 @@ type UploadCreated struct {
 
 func (x *UploadCreated) Reset() {
 	*x = UploadCreated{}
-	mi := &file_events_public_v1_media_proto_msgTypes[7]
+	mi := &file_events_public_v1_media_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -421,7 +503,7 @@ func (x *UploadCreated) String() string {
 func (*UploadCreated) ProtoMessage() {}
 
 func (x *UploadCreated) ProtoReflect() protoreflect.Message {
-	mi := &file_events_public_v1_media_proto_msgTypes[7]
+	mi := &file_events_public_v1_media_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -434,7 +516,7 @@ func (x *UploadCreated) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UploadCreated.ProtoReflect.Descriptor instead.
 func (*UploadCreated) Descriptor() ([]byte, []int) {
-	return file_events_public_v1_media_proto_rawDescGZIP(), []int{7}
+	return file_events_public_v1_media_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *UploadCreated) GetArtifact() *Artifact {
@@ -468,7 +550,7 @@ type UploadCompleted struct {
 
 func (x *UploadCompleted) Reset() {
 	*x = UploadCompleted{}
-	mi := &file_events_public_v1_media_proto_msgTypes[8]
+	mi := &file_events_public_v1_media_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -480,7 +562,7 @@ func (x *UploadCompleted) String() string {
 func (*UploadCompleted) ProtoMessage() {}
 
 func (x *UploadCompleted) ProtoReflect() protoreflect.Message {
-	mi := &file_events_public_v1_media_proto_msgTypes[8]
+	mi := &file_events_public_v1_media_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -493,7 +575,7 @@ func (x *UploadCompleted) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UploadCompleted.ProtoReflect.Descriptor instead.
 func (*UploadCompleted) Descriptor() ([]byte, []int) {
-	return file_events_public_v1_media_proto_rawDescGZIP(), []int{8}
+	return file_events_public_v1_media_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *UploadCompleted) GetArtifact() *Artifact {
@@ -519,7 +601,7 @@ type UploadAborted struct {
 
 func (x *UploadAborted) Reset() {
 	*x = UploadAborted{}
-	mi := &file_events_public_v1_media_proto_msgTypes[9]
+	mi := &file_events_public_v1_media_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -531,7 +613,7 @@ func (x *UploadAborted) String() string {
 func (*UploadAborted) ProtoMessage() {}
 
 func (x *UploadAborted) ProtoReflect() protoreflect.Message {
-	mi := &file_events_public_v1_media_proto_msgTypes[9]
+	mi := &file_events_public_v1_media_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -544,7 +626,7 @@ func (x *UploadAborted) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UploadAborted.ProtoReflect.Descriptor instead.
 func (*UploadAborted) Descriptor() ([]byte, []int) {
-	return file_events_public_v1_media_proto_rawDescGZIP(), []int{9}
+	return file_events_public_v1_media_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *UploadAborted) GetArtifact() *Artifact {
@@ -565,7 +647,7 @@ type UploadReady struct {
 
 func (x *UploadReady) Reset() {
 	*x = UploadReady{}
-	mi := &file_events_public_v1_media_proto_msgTypes[10]
+	mi := &file_events_public_v1_media_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -577,7 +659,7 @@ func (x *UploadReady) String() string {
 func (*UploadReady) ProtoMessage() {}
 
 func (x *UploadReady) ProtoReflect() protoreflect.Message {
-	mi := &file_events_public_v1_media_proto_msgTypes[10]
+	mi := &file_events_public_v1_media_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -590,7 +672,7 @@ func (x *UploadReady) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UploadReady.ProtoReflect.Descriptor instead.
 func (*UploadReady) Descriptor() ([]byte, []int) {
-	return file_events_public_v1_media_proto_rawDescGZIP(), []int{10}
+	return file_events_public_v1_media_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *UploadReady) GetArtifact() *Artifact {
@@ -624,7 +706,7 @@ type UploadFailed struct {
 
 func (x *UploadFailed) Reset() {
 	*x = UploadFailed{}
-	mi := &file_events_public_v1_media_proto_msgTypes[11]
+	mi := &file_events_public_v1_media_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -636,7 +718,7 @@ func (x *UploadFailed) String() string {
 func (*UploadFailed) ProtoMessage() {}
 
 func (x *UploadFailed) ProtoReflect() protoreflect.Message {
-	mi := &file_events_public_v1_media_proto_msgTypes[11]
+	mi := &file_events_public_v1_media_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -649,7 +731,7 @@ func (x *UploadFailed) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UploadFailed.ProtoReflect.Descriptor instead.
 func (*UploadFailed) Descriptor() ([]byte, []int) {
-	return file_events_public_v1_media_proto_rawDescGZIP(), []int{11}
+	return file_events_public_v1_media_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *UploadFailed) GetArtifact() *Artifact {
@@ -705,7 +787,15 @@ const file_events_public_v1_media_proto_rawDesc = "" +
 	"\x0fRecordingFailed\x12A\n" +
 	"\bartifact\x18\x01 \x01(\v2%.frameworks.events.public.v1.ArtifactR\bartifact\x12G\n" +
 	"\x06reason\x18\x02 \x01(\x0e2/.frameworks.events.public.v1.MediaFailureReasonR\x06reason:%\xc2\xf3\x18!\n" +
-	"\x10recording.failed\x10\x01\x18\x01\"\tartifacts\"\xc3\x01\n" +
+	"\x10recording.failed\x10\x01\x18\x01\"\tartifacts\"\xa4\x02\n" +
+	"\x16RecordingChapterFailed\x12A\n" +
+	"\bartifact\x18\x01 \x01(\v2%.frameworks.events.public.v1.ArtifactR\bartifact\x12\x1d\n" +
+	"\n" +
+	"chapter_id\x18\x02 \x01(\tR\tchapterId\x12\x19\n" +
+	"\bstart_ms\x18\x03 \x01(\x03R\astartMs\x12\x15\n" +
+	"\x06end_ms\x18\x04 \x01(\x03R\x05endMs\x12G\n" +
+	"\x06reason\x18\x05 \x01(\x0e2/.frameworks.events.public.v1.MediaFailureReasonR\x06reason:-\xc2\xf3\x18)\n" +
+	"\x18recording.chapter_failed\x10\x01\x18\x01\"\tartifacts\"\xc3\x01\n" +
 	"\rUploadCreated\x12A\n" +
 	"\bartifact\x18\x01 \x01(\v2%.frameworks.events.public.v1.ArtifactR\bartifact\x12\x1a\n" +
 	"\bfilename\x18\x02 \x01(\tR\bfilename\x12.\n" +
@@ -743,44 +833,47 @@ func file_events_public_v1_media_proto_rawDescGZIP() []byte {
 	return file_events_public_v1_media_proto_rawDescData
 }
 
-var file_events_public_v1_media_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
+var file_events_public_v1_media_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
 var file_events_public_v1_media_proto_goTypes = []any{
-	(*ClipRequested)(nil),    // 0: frameworks.events.public.v1.ClipRequested
-	(*ClipReady)(nil),        // 1: frameworks.events.public.v1.ClipReady
-	(*ClipFailed)(nil),       // 2: frameworks.events.public.v1.ClipFailed
-	(*RecordingStarted)(nil), // 3: frameworks.events.public.v1.RecordingStarted
-	(*RecordingStopped)(nil), // 4: frameworks.events.public.v1.RecordingStopped
-	(*RecordingReady)(nil),   // 5: frameworks.events.public.v1.RecordingReady
-	(*RecordingFailed)(nil),  // 6: frameworks.events.public.v1.RecordingFailed
-	(*UploadCreated)(nil),    // 7: frameworks.events.public.v1.UploadCreated
-	(*UploadCompleted)(nil),  // 8: frameworks.events.public.v1.UploadCompleted
-	(*UploadAborted)(nil),    // 9: frameworks.events.public.v1.UploadAborted
-	(*UploadReady)(nil),      // 10: frameworks.events.public.v1.UploadReady
-	(*UploadFailed)(nil),     // 11: frameworks.events.public.v1.UploadFailed
-	(*Artifact)(nil),         // 12: frameworks.events.public.v1.Artifact
-	(MediaFailureReason)(0),  // 13: frameworks.events.public.v1.MediaFailureReason
+	(*ClipRequested)(nil),          // 0: frameworks.events.public.v1.ClipRequested
+	(*ClipReady)(nil),              // 1: frameworks.events.public.v1.ClipReady
+	(*ClipFailed)(nil),             // 2: frameworks.events.public.v1.ClipFailed
+	(*RecordingStarted)(nil),       // 3: frameworks.events.public.v1.RecordingStarted
+	(*RecordingStopped)(nil),       // 4: frameworks.events.public.v1.RecordingStopped
+	(*RecordingReady)(nil),         // 5: frameworks.events.public.v1.RecordingReady
+	(*RecordingFailed)(nil),        // 6: frameworks.events.public.v1.RecordingFailed
+	(*RecordingChapterFailed)(nil), // 7: frameworks.events.public.v1.RecordingChapterFailed
+	(*UploadCreated)(nil),          // 8: frameworks.events.public.v1.UploadCreated
+	(*UploadCompleted)(nil),        // 9: frameworks.events.public.v1.UploadCompleted
+	(*UploadAborted)(nil),          // 10: frameworks.events.public.v1.UploadAborted
+	(*UploadReady)(nil),            // 11: frameworks.events.public.v1.UploadReady
+	(*UploadFailed)(nil),           // 12: frameworks.events.public.v1.UploadFailed
+	(*Artifact)(nil),               // 13: frameworks.events.public.v1.Artifact
+	(MediaFailureReason)(0),        // 14: frameworks.events.public.v1.MediaFailureReason
 }
 var file_events_public_v1_media_proto_depIdxs = []int32{
-	12, // 0: frameworks.events.public.v1.ClipRequested.artifact:type_name -> frameworks.events.public.v1.Artifact
-	12, // 1: frameworks.events.public.v1.ClipReady.artifact:type_name -> frameworks.events.public.v1.Artifact
-	12, // 2: frameworks.events.public.v1.ClipFailed.artifact:type_name -> frameworks.events.public.v1.Artifact
-	13, // 3: frameworks.events.public.v1.ClipFailed.reason:type_name -> frameworks.events.public.v1.MediaFailureReason
-	12, // 4: frameworks.events.public.v1.RecordingStarted.artifact:type_name -> frameworks.events.public.v1.Artifact
-	12, // 5: frameworks.events.public.v1.RecordingStopped.artifact:type_name -> frameworks.events.public.v1.Artifact
-	12, // 6: frameworks.events.public.v1.RecordingReady.artifact:type_name -> frameworks.events.public.v1.Artifact
-	12, // 7: frameworks.events.public.v1.RecordingFailed.artifact:type_name -> frameworks.events.public.v1.Artifact
-	13, // 8: frameworks.events.public.v1.RecordingFailed.reason:type_name -> frameworks.events.public.v1.MediaFailureReason
-	12, // 9: frameworks.events.public.v1.UploadCreated.artifact:type_name -> frameworks.events.public.v1.Artifact
-	12, // 10: frameworks.events.public.v1.UploadCompleted.artifact:type_name -> frameworks.events.public.v1.Artifact
-	12, // 11: frameworks.events.public.v1.UploadAborted.artifact:type_name -> frameworks.events.public.v1.Artifact
-	12, // 12: frameworks.events.public.v1.UploadReady.artifact:type_name -> frameworks.events.public.v1.Artifact
-	12, // 13: frameworks.events.public.v1.UploadFailed.artifact:type_name -> frameworks.events.public.v1.Artifact
-	13, // 14: frameworks.events.public.v1.UploadFailed.reason:type_name -> frameworks.events.public.v1.MediaFailureReason
-	15, // [15:15] is the sub-list for method output_type
-	15, // [15:15] is the sub-list for method input_type
-	15, // [15:15] is the sub-list for extension type_name
-	15, // [15:15] is the sub-list for extension extendee
-	0,  // [0:15] is the sub-list for field type_name
+	13, // 0: frameworks.events.public.v1.ClipRequested.artifact:type_name -> frameworks.events.public.v1.Artifact
+	13, // 1: frameworks.events.public.v1.ClipReady.artifact:type_name -> frameworks.events.public.v1.Artifact
+	13, // 2: frameworks.events.public.v1.ClipFailed.artifact:type_name -> frameworks.events.public.v1.Artifact
+	14, // 3: frameworks.events.public.v1.ClipFailed.reason:type_name -> frameworks.events.public.v1.MediaFailureReason
+	13, // 4: frameworks.events.public.v1.RecordingStarted.artifact:type_name -> frameworks.events.public.v1.Artifact
+	13, // 5: frameworks.events.public.v1.RecordingStopped.artifact:type_name -> frameworks.events.public.v1.Artifact
+	13, // 6: frameworks.events.public.v1.RecordingReady.artifact:type_name -> frameworks.events.public.v1.Artifact
+	13, // 7: frameworks.events.public.v1.RecordingFailed.artifact:type_name -> frameworks.events.public.v1.Artifact
+	14, // 8: frameworks.events.public.v1.RecordingFailed.reason:type_name -> frameworks.events.public.v1.MediaFailureReason
+	13, // 9: frameworks.events.public.v1.RecordingChapterFailed.artifact:type_name -> frameworks.events.public.v1.Artifact
+	14, // 10: frameworks.events.public.v1.RecordingChapterFailed.reason:type_name -> frameworks.events.public.v1.MediaFailureReason
+	13, // 11: frameworks.events.public.v1.UploadCreated.artifact:type_name -> frameworks.events.public.v1.Artifact
+	13, // 12: frameworks.events.public.v1.UploadCompleted.artifact:type_name -> frameworks.events.public.v1.Artifact
+	13, // 13: frameworks.events.public.v1.UploadAborted.artifact:type_name -> frameworks.events.public.v1.Artifact
+	13, // 14: frameworks.events.public.v1.UploadReady.artifact:type_name -> frameworks.events.public.v1.Artifact
+	13, // 15: frameworks.events.public.v1.UploadFailed.artifact:type_name -> frameworks.events.public.v1.Artifact
+	14, // 16: frameworks.events.public.v1.UploadFailed.reason:type_name -> frameworks.events.public.v1.MediaFailureReason
+	17, // [17:17] is the sub-list for method output_type
+	17, // [17:17] is the sub-list for method input_type
+	17, // [17:17] is the sub-list for extension type_name
+	17, // [17:17] is the sub-list for extension extendee
+	0,  // [0:17] is the sub-list for field type_name
 }
 
 func init() { file_events_public_v1_media_proto_init() }
@@ -795,7 +888,7 @@ func file_events_public_v1_media_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_events_public_v1_media_proto_rawDesc), len(file_events_public_v1_media_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   12,
+			NumMessages:   13,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

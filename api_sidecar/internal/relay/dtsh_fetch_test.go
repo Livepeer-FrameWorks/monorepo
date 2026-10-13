@@ -178,3 +178,38 @@ func TestDtshConcurrentReadsShareOneFetch(t *testing.T) {
 		t.Fatalf("upstream fetches = %d, want 1 shared by %d readers", got, readers)
 	}
 }
+
+// A sidecar body that stops mid-transfer is resumed from the copied byte, as
+// a cold media block is, instead of answering retry-later: Mist answered
+// retry-later rebuilds the index by reading the whole media file.
+func TestDtshStalledMidBodyResumesFromCopiedByte(t *testing.T) {
+	withUpstreamBounds(t, testUpstreamBounds)
+	body := validDtshBytes()
+	sent := len(body) / 2
+	up := newStallUpstream(t, body, func(n int, _ *http.Request) int {
+		if n == 1 {
+			return sent
+		}
+		return -1
+	})
+	ts := mount(t, newTestServer(t, t.TempDir(), admission.CacheToDisk, sidecarResolver{url: up.srv.URL + "/sidecar.dtsh"}, nil))
+	t.Cleanup(ts.Close)
+
+	status, _, got, err := mistSidecarRequest(t, http.MethodGet, ts.URL+"/internal/artifact/vod/stalledmid.mkv.dtsh")
+	if err != nil || status != http.StatusOK || !bytes.Equal(got, body) {
+		t.Fatalf("GET status %d (%v), %d of %d bytes, want 200 with the whole sidecar", status, err, len(got), len(body))
+	}
+	reqs := up.requests()
+	if want := "bytes=" + strconv.Itoa(sent) + "-"; reqs[len(reqs)-1] != want {
+		t.Fatalf("upstream requests = %q, want the last to resume at %q", reqs, want)
+	}
+}
+
+// The whole sidecar fetch must answer Mist within dtshFetchTimeout, so a
+// stalled sidecar read has to be detected early enough to leave a resume room
+// to finish inside that budget.
+func TestDtshReadStallLeavesRoomToResume(t *testing.T) {
+	if stall := min(dtshReadStall, relayUpstreamBounds.readStall); 2*stall >= dtshFetchTimeout {
+		t.Fatalf("sidecar read stall %s leaves no resume inside the %s fetch budget", stall, dtshFetchTimeout)
+	}
+}

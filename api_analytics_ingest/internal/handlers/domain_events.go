@@ -32,7 +32,9 @@ var artifactProjections = map[string]artifactProjection{
 	"clip.failed":    {contentType: "clip", stage: "failed"},
 	// recording.stopped is not projected: the recording's artifact state moves
 	// on at recording.ready or recording.failed, and no lifecycle row carries a
-	// finalizing stage. It still reaches api_events.
+	// finalizing stage. recording.chapter_failed is not projected either: a lost
+	// chapter leaves the recording's own state unchanged. Both still reach
+	// api_events.
 	"recording.started": {contentType: "dvr", stage: "recording"},
 	"recording.ready":   {contentType: "dvr", stage: "stopped"},
 	"recording.failed":  {contentType: "dvr", stage: "failed"},

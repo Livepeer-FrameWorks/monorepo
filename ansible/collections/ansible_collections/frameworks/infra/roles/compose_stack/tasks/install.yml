@@ -242,6 +242,31 @@
     - not (compose_stack_render_only | default(false) | bool)
     - not ansible_check_mode
 
+# Docker binds published host addresses itself, and a service published on the
+# WireGuard address must start even when wg0 is not up yet at boot; a refused
+# bind leaves the restart:always container exited. Non-local binds let the
+# published port bind first and accept once the mesh address exists.
+- name: Allow binds to mesh addresses before the mesh is up
+  ansible.builtin.copy:
+    dest: /etc/sysctl.d/90-frameworks-nonlocal-bind.conf
+    content: |
+      net.ipv4.ip_nonlocal_bind = 1
+      net.ipv6.ip_nonlocal_bind = 1
+    owner: root
+    group: root
+    mode: "0644"
+  register: compose_stack_nonlocal_bind
+  when:
+    - compose_stack_service.publish_addrs | default([]) | length > 0
+    - not (compose_stack_render_only | default(false) | bool)
+
+- name: Apply the non-local bind sysctls # noqa: no-handler
+  ansible.builtin.command: sysctl --system
+  changed_when: true
+  when:
+    - compose_stack_nonlocal_bind is changed
+    - not ansible_check_mode
+
 # Two rendering paths:
 #   - callers with a specific shape (chatwoot, listmonk) hand in a fully
 #     rendered docker-compose.yml as `compose_stack_compose_content`;

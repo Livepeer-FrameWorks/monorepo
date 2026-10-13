@@ -60,6 +60,21 @@ message RecordingFailed {
   MediaFailureReason reason = 2;
 }
 
+// RecordingChapterFailed reports that one chapter of a recording could not be
+// saved, so the recording keeps no replayable media between start_ms and
+// end_ms (Unix epoch milliseconds, the chapter's scheduled bounds). The
+// recording itself and its other chapters are unaffected. It is emitted once
+// per chapter, when the chapter fails terminally.
+message RecordingChapterFailed {
+  option (frameworks.events.event) = {type: "recording.chapter_failed", visibility: VISIBILITY_PUBLIC, scope: SCOPE_TENANT, aggregate: "artifacts"};
+  Artifact artifact = 1;
+  // chapter_id is the chapterId of the recording's dvrChapters entry.
+  string chapter_id = 2;
+  int64 start_ms = 3;
+  int64 end_ms = 4;
+  MediaFailureReason reason = 5;
+}
+
 message UploadCreated {
   option (frameworks.events.event) = {type: "upload.created", visibility: VISIBILITY_PUBLIC, scope: SCOPE_TENANT, aggregate: "artifacts"};
   Artifact artifact = 1;

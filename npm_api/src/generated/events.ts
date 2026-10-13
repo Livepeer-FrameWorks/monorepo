@@ -2,7 +2,7 @@
 
 import { AccountSuspended, ApiTokenCreated, ApiTokenRevoked, CustomDomainFailed, CustomDomainVerified, MultistreamStatusChanged } from "./proto/events/public/v1/access.js";
 import { BillingDetailsUpdated, InvoiceCreated, InvoicePaid, PaymentFailed, TopupCredited } from "./proto/events/public/v1/billing.js";
-import { ClipFailed, ClipReady, ClipRequested, RecordingFailed, RecordingReady, RecordingStarted, RecordingStopped, UploadAborted, UploadCompleted, UploadCreated, UploadFailed, UploadReady } from "./proto/events/public/v1/media.js";
+import { ClipFailed, ClipReady, ClipRequested, RecordingChapterFailed, RecordingFailed, RecordingReady, RecordingStarted, RecordingStopped, UploadAborted, UploadCompleted, UploadCreated, UploadFailed, UploadReady } from "./proto/events/public/v1/media.js";
 import { StreamConnected, StreamCreated, StreamDeleted, StreamIdle, StreamKeyRotated, StreamLive, StreamUpdated } from "./proto/events/public/v1/streams.js";
 
 /** The payload type of each public event type. */
@@ -21,6 +21,7 @@ export interface PublicEventDataMap {
   "custom_domain.failed": CustomDomainFailed;
   "custom_domain.verified": CustomDomainVerified;
   "multistream.status_changed": MultistreamStatusChanged;
+  "recording.chapter_failed": RecordingChapterFailed;
   "recording.failed": RecordingFailed;
   "recording.ready": RecordingReady;
   "recording.started": RecordingStarted;
@@ -59,6 +60,7 @@ export const publicEventDecoders: {
   "custom_domain.failed": CustomDomainFailed,
   "custom_domain.verified": CustomDomainVerified,
   "multistream.status_changed": MultistreamStatusChanged,
+  "recording.chapter_failed": RecordingChapterFailed,
   "recording.failed": RecordingFailed,
   "recording.ready": RecordingReady,
   "recording.started": RecordingStarted,

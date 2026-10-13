@@ -120,6 +120,7 @@ func (q *Queries) GetChapterArtifactRouting(ctx context.Context, artifactHash st
 
 const getChapterRecordingContext = `-- name: GetChapterRecordingContext :one
 SELECT c.artifact_hash AS recording_hash, COALESCE(p.stream_id::text, '')::text AS stream_id,
+       COALESCE(p.tenant_id::text, '')::text AS tenant_id,
        c.start_ms, c.end_ms, COALESCE(c.playback_id, '')::text AS playback_id,
        (SELECT count(*) FROM foghorn.dvr_chapters o
          WHERE o.artifact_hash = c.artifact_hash
@@ -132,6 +133,7 @@ WHERE c.chapter_id = $1
 type GetChapterRecordingContextRow struct {
 	RecordingHash      string `db:"recording_hash" json:"recording_hash"`
 	StreamID           string `db:"stream_id" json:"stream_id"`
+	TenantID           string `db:"tenant_id" json:"tenant_id"`
 	StartMs            int64  `db:"start_ms" json:"start_ms"`
 	EndMs              int64  `db:"end_ms" json:"end_ms"`
 	PlaybackID         string `db:"playback_id" json:"playback_id"`
@@ -146,6 +148,7 @@ func (q *Queries) GetChapterRecordingContext(ctx context.Context, chapterID stri
 	err := row.Scan(
 		&i.RecordingHash,
 		&i.StreamID,
+		&i.TenantID,
 		&i.StartMs,
 		&i.EndMs,
 		&i.PlaybackID,

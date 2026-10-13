@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"maps"
+	"net"
 	"os"
 	"path/filepath"
 	"sort"
@@ -173,7 +174,7 @@ func serviceCleanupVars(cfg ServiceRoleConfig, config ServiceConfig) (map[string
 	}
 }
 
-func serviceComposeVars(_ context.Context, cfg ServiceRoleConfig, _ inventory.Host, config ServiceConfig, _ RoleBuildHelpers) (map[string]any, error) {
+func serviceComposeVars(_ context.Context, cfg ServiceRoleConfig, host inventory.Host, config ServiceConfig, _ RoleBuildHelpers) (map[string]any, error) {
 	port := config.Port
 	if port == 0 {
 		port = cfg.DefaultPort
@@ -244,6 +245,7 @@ func serviceComposeVars(_ context.Context, cfg ServiceRoleConfig, _ inventory.Ho
 			"image":          image,
 			"port":           port,
 			"container_port": containerPort,
+			"publish_addrs":  composePublishAddrs(cfg.ServiceName, host),
 			"health_path":    healthPath,
 			"volumes":        composeVolumes,
 			"extra_hosts":    composeExtraHosts,
@@ -392,6 +394,9 @@ func serviceNativeVars(ctx context.Context, cfg ServiceRoleConfig, host inventor
 		port = cfg.DefaultPort
 	}
 	envMap := buildServiceEnvMap(config)
+	if addrs := meshOnlyHTTPAddrs(cfg.ServiceName, host); len(addrs) > 0 && strings.TrimSpace(envMap["BRIDGE_BIND_ADDRS"]) == "" {
+		envMap["BRIDGE_BIND_ADDRS"] = strings.Join(addrs, ",")
+	}
 	if cfg.ServiceName == "livepeer-gateway" || cfg.ServiceName == "livepeer-signer" {
 		applyLivepeerNativeEnvDefaults(cfg.ServiceName, envMap, cfg.StateDirs)
 	}
@@ -693,6 +698,35 @@ func livepeerNativeArgs(serviceName string, env map[string]string, stateDirs []s
 	}
 
 	return args
+}
+
+// meshOnlyHTTPAddrs is where Bridge's HTTP port answers on a host: loopback
+// for the local nginx and vmagent, and the WireGuard address for the peers'
+// nginx upstream backups, Skipper's bridge.internal MCP calls, and
+// Quartermaster's health probes. The LAN and public interfaces stay closed so
+// a client cannot bypass the proxy's TLS and client-IP headers.
+func meshOnlyHTTPAddrs(serviceName string, host inventory.Host) []string {
+	if serviceName != "bridge" {
+		return nil
+	}
+	addrs := []string{"127.0.0.1"}
+	if ip := strings.TrimSpace(host.WireguardIP); ip != "" {
+		addrs = append(addrs, ip)
+	}
+	return addrs
+}
+
+// composePublishAddrs is meshOnlyHTTPAddrs in Compose ports syntax, which
+// needs IPv6 addresses bracketed. Empty publishes on every interface.
+func composePublishAddrs(serviceName string, host inventory.Host) []string {
+	out := []string{}
+	for _, addr := range meshOnlyHTTPAddrs(serviceName, host) {
+		if ip := net.ParseIP(addr); ip != nil && ip.To4() == nil {
+			addr = "[" + addr + "]"
+		}
+		out = append(out, addr)
+	}
+	return out
 }
 
 func buildServiceEnvMap(config ServiceConfig) map[string]string {

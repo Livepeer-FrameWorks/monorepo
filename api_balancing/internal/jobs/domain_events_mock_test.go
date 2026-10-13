@@ -32,3 +32,19 @@ func expectTransitionInsert(mock sqlmock.Sqlmock, eventType, aggregateID, kind, 
 		WithArgs(sqlmock.AnyArg(), kind, tenantID, streamID, artifactID, sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 }
+
+// expectChapterFailedEvent expects MarkChapterFailed's recording.chapter_failed:
+// the chapter's recording context, then the fact on the parent recording.
+func expectChapterFailedEvent(mock sqlmock.Sqlmock, chapterID, recordingHash string) {
+	mock.ExpectQuery(`SELECT c.artifact_hash AS recording_hash`).
+		WithArgs(chapterID).
+		WillReturnRows(sqlmock.NewRows([]string{"recording_hash", "stream_id", "tenant_id", "start_ms", "end_ms", "playback_id", "replayable_chapters"}).
+			AddRow(recordingHash, "", mockTenantUUID, int64(0), int64(60000), "", int64(0)))
+	mock.ExpectQuery(`UPDATE foghorn\.artifacts\s+SET revision = revision \+ 1`).
+		WithArgs(recordingHash, mockTenantUUID).
+		WillReturnRows(sqlmock.NewRows([]string{"revision"}).AddRow(mockArtifactRevision))
+	mock.ExpectExec(`INSERT INTO foghorn\.domain_event_outbox`).
+		WithArgs(sqlmock.AnyArg(), "recording.chapter_failed", "foghorn", sqlmock.AnyArg(), recordingHash, mockArtifactRevision,
+			"tenant", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+}

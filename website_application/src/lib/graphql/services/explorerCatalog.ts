@@ -798,7 +798,7 @@ export const EXPLORER_CATALOG: ExplorerSection[] = [
         operationType: "subscription",
         templatePath: "operations/subscriptions/TenantEvents.gql",
         expectedPayload:
-          "clip.requested/ready/failed and recording.started/stopped/ready/failed with the artifact.",
+          "clip.requested/ready/failed and recording.started/stopped/ready/failed/chapter_failed with the artifact.",
         variables: {
           types: [
             "clip.requested",
@@ -808,6 +808,7 @@ export const EXPLORER_CATALOG: ExplorerSection[] = [
             "recording.stopped",
             "recording.ready",
             "recording.failed",
+            "recording.chapter_failed",
           ],
           streamId: DEMO_STREAM_GLOBAL_ID,
         },

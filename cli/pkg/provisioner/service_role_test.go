@@ -1008,3 +1008,82 @@ func TestLivepeerGatewayTelemetrySpoolIsAManagedStateDir(t *testing.T) {
 		t.Fatalf("the signer emits no gateway telemetry: %v", signer.StateDirs)
 	}
 }
+
+// Bridge sits behind the host's nginx, which proxies to 127.0.0.1 and to the
+// peers' mesh addresses. Its listener must not answer on the LAN or public
+// interface, where it would bypass TLS and the proxy's client-IP headers.
+func TestServiceNativeVarsBindsBridgeToLoopbackAndMesh(t *testing.T) {
+	render := func(host inventory.Host, env map[string]string) map[string]string {
+		t.Helper()
+		vars, err := serviceNativeVars(context.Background(), ServiceRoleConfig{
+			ServiceName: "bridge",
+			DefaultPort: 18000,
+		}, host, ServiceConfig{
+			Mode:      "native",
+			BinaryURL: "http://example.invalid/bridge.tar.gz",
+			EnvVars:   env,
+			Metadata:  map[string]any{},
+		}, RoleBuildHelpers{})
+		if err != nil {
+			t.Fatalf("serviceNativeVars: %v", err)
+		}
+		return stringMapFromAny(vars["go_service_env"])
+	}
+
+	if got := render(inventory.Host{Name: "regional-eu-1", WireguardIP: "10.88.0.1"}, nil)["BRIDGE_BIND_ADDRS"]; got != "127.0.0.1,10.88.0.1" {
+		t.Fatalf("BRIDGE_BIND_ADDRS with mesh = %q, want 127.0.0.1,10.88.0.1", got)
+	}
+	if got := render(inventory.Host{Name: "regional-eu-1"}, nil)["BRIDGE_BIND_ADDRS"]; got != "127.0.0.1" {
+		t.Fatalf("BRIDGE_BIND_ADDRS without mesh = %q, want 127.0.0.1", got)
+	}
+	explicit := map[string]string{"BRIDGE_BIND_ADDRS": "127.0.0.1"}
+	if got := render(inventory.Host{Name: "regional-eu-1", WireguardIP: "10.88.0.1"}, explicit)["BRIDGE_BIND_ADDRS"]; got != "127.0.0.1" {
+		t.Fatalf("BRIDGE_BIND_ADDRS operator override = %q, want 127.0.0.1", got)
+	}
+	vars, err := serviceNativeVars(context.Background(), ServiceRoleConfig{ServiceName: "commodore", DefaultPort: 18001},
+		inventory.Host{Name: "central-eu-1", WireguardIP: "10.88.0.2"},
+		ServiceConfig{Mode: "native", BinaryURL: "http://example.invalid/commodore.tar.gz", Metadata: map[string]any{}}, RoleBuildHelpers{})
+	if err != nil {
+		t.Fatalf("serviceNativeVars commodore: %v", err)
+	}
+	if got, ok := stringMapFromAny(vars["go_service_env"])["BRIDGE_BIND_ADDRS"]; ok {
+		t.Fatalf("commodore env carries BRIDGE_BIND_ADDRS=%q", got)
+	}
+}
+
+// In docker mode Bridge binds every interface inside its container, so the
+// host publishes its port only on loopback and the mesh address.
+func TestServiceComposeVarsPublishesBridgeOnLoopbackAndMesh(t *testing.T) {
+	render := func(serviceName string, host inventory.Host) map[string]any {
+		t.Helper()
+		vars, err := serviceComposeVars(context.Background(), ServiceRoleConfig{
+			ServiceName:  serviceName,
+			DefaultPort:  18000,
+			DefaultImage: "ghcr.io/livepeer-frameworks/frameworks-bridge:test",
+		}, host, ServiceConfig{Mode: "docker", Metadata: map[string]any{}}, RoleBuildHelpers{})
+		if err != nil {
+			t.Fatalf("serviceComposeVars: %v", err)
+		}
+		return vars["compose_stack_service"].(map[string]any)
+	}
+
+	if got := render("bridge", inventory.Host{Name: "regional-eu-1", WireguardIP: "10.88.0.1"})["publish_addrs"]; !reflect.DeepEqual(got, []string{"127.0.0.1", "10.88.0.1"}) {
+		t.Fatalf("bridge publish_addrs with mesh = %#v, want [127.0.0.1 10.88.0.1]", got)
+	}
+	if got := render("bridge", inventory.Host{Name: "regional-eu-1"})["publish_addrs"]; !reflect.DeepEqual(got, []string{"127.0.0.1"}) {
+		t.Fatalf("bridge publish_addrs without mesh = %#v, want [127.0.0.1]", got)
+	}
+	if got := render("commodore", inventory.Host{Name: "central-eu-1", WireguardIP: "10.88.0.2"})["publish_addrs"]; !reflect.DeepEqual(got, []string{}) {
+		t.Fatalf("commodore publish_addrs = %#v, want none (all interfaces)", got)
+	}
+
+	tmpl := readRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/compose_stack/templates/generic-compose.yml.j2")
+	for _, want := range []string{
+		"{% for addr in compose_stack_service.publish_addrs %}",
+		`- "{{ addr }}:{{ compose_stack_service.port }}:{{ container_port }}"`,
+	} {
+		if !strings.Contains(tmpl, want) {
+			t.Errorf("generic-compose.yml.j2 does not publish per address; missing %q", want)
+		}
+	}
+}

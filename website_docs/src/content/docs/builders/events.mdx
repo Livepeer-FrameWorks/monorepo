@@ -142,20 +142,21 @@ control plane was unreachable. A playback ID can be rotated, so key your records
 
 Subject: `artifacts/<artifact id>`.
 
-| Type                | Fires when                                                   | Payload                                     |
-| ------------------- | ------------------------------------------------------------ | ------------------------------------------- |
-| `clip.requested`    | A clip is requested.                                         | `artifact`, `durationMs` (requested length) |
-| `clip.ready`        | The clip is stored and playable.                             | `artifact`, `durationMs`, `sizeBytes`       |
-| `clip.failed`       | The clip could not be produced.                              | `artifact`, `reason`                        |
-| `recording.started` | The recording node confirmed it is capturing the stream.     | `artifact`                                  |
-| `recording.stopped` | Capture ended and the recording is being finalized.          | `artifact`                                  |
-| `recording.ready`   | The recording's first saved chapter is replayable.           | `artifact`, `durationMs`, `sizeBytes`       |
-| `recording.failed`  | A DVR recording could not be finalized.                      | `artifact`, `reason`                        |
-| `upload.created`    | A VOD upload session is created.                             | `artifact`, `filename`, `expectedSizeBytes` |
-| `upload.completed`  | Every part is uploaded and the file is handed to processing. | `artifact`, `sizeBytes`                     |
-| `upload.aborted`    | The upload is aborted before completion.                     | `artifact`                                  |
-| `upload.ready`      | Processing finished and the asset is playable.               | `artifact`, `durationMs`, `sizeBytes`       |
-| `upload.failed`     | Processing rejected or could not process the file.           | `artifact`, `reason`                        |
+| Type                       | Fires when                                                   | Payload                                               |
+| -------------------------- | ------------------------------------------------------------ | ----------------------------------------------------- |
+| `clip.requested`           | A clip is requested.                                         | `artifact`, `durationMs` (requested length)           |
+| `clip.ready`               | The clip is stored and playable.                             | `artifact`, `durationMs`, `sizeBytes`                 |
+| `clip.failed`              | The clip could not be produced.                              | `artifact`, `reason`                                  |
+| `recording.started`        | The recording node confirmed it is capturing the stream.     | `artifact`                                            |
+| `recording.stopped`        | Capture ended and the recording is being finalized.          | `artifact`                                            |
+| `recording.ready`          | The recording's first saved chapter is replayable.           | `artifact`, `durationMs`, `sizeBytes`                 |
+| `recording.failed`         | A DVR recording could not be finalized.                      | `artifact`, `reason`                                  |
+| `recording.chapter_failed` | One chapter of a recording could not be saved.               | `artifact`, `chapterId`, `startMs`, `endMs`, `reason` |
+| `upload.created`           | A VOD upload session is created.                             | `artifact`, `filename`, `expectedSizeBytes`           |
+| `upload.completed`         | Every part is uploaded and the file is handed to processing. | `artifact`, `sizeBytes`                               |
+| `upload.aborted`           | The upload is aborted before completion.                     | `artifact`                                            |
+| `upload.ready`             | Processing finished and the asset is playable.               | `artifact`, `durationMs`, `sizeBytes`                 |
+| `upload.failed`            | Processing rejected or could not process the file.           | `artifact`, `reason`                                  |
 
 A recording that captured media emits `recording.started`, then `recording.stopped` once.
 `recording.ready` fires once, when the recording's first saved chapter becomes replayable: its
@@ -165,6 +166,15 @@ still live. `recording.failed` reports a recording that could not be finalized. 
 live-rewind-only recording (stream `dvrChapterMode: NONE`) keeps nothing replayable, so it ends
 with `recording.stopped` and no `recording.ready`. A recording that never captured anything
 emits only `recording.failed`.
+
+`recording.chapter_failed` fires once for each chapter that fails for good, while the broadcast
+is live or after it ended. The recording keeps no replayable media between `startMs` and `endMs`
+(Unix epoch milliseconds, the chapter's scheduled bounds), while its other chapters stay
+playable; `chapterId` is the chapter's `chapterId` in `dvrChapters`. `reason` is
+`MEDIA_FAILURE_REASON_SOURCE_UNAVAILABLE` when the chapter's recorded segments were lost and
+`MEDIA_FAILURE_REASON_PROCESSING_FAILED` when saving the chapter kept failing. It does not change
+the recording's own state: `recording.ready` and `recording.failed` still describe the
+recording as a whole.
 
 Upload events carry no transfer progress. Your client knows its own transfer progress; for the
 server-side state of an upload, query `vodUploadStatus`. An [import from a URL](/builders/recordings#import-a-video-from-a-url)

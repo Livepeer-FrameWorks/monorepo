@@ -24,7 +24,13 @@ services:
 {% if compose_stack_service.port | default(0) | int > 0 %}
 {% set container_port = compose_stack_service.container_port | default(compose_stack_service.port) %}
     ports:
+{% if compose_stack_service.publish_addrs | default([]) | length > 0 %}
+{% for addr in compose_stack_service.publish_addrs %}
+      - "{{ addr }}:{{ compose_stack_service.port }}:{{ container_port }}"
+{% endfor %}
+{% else %}
       - "{{ compose_stack_service.port }}:{{ container_port }}"
+{% endif %}
 {% endif %}
 {% if compose_stack_service.volumes | default([]) | length > 0 %}
     volumes:

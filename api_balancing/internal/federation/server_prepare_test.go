@@ -651,6 +651,45 @@ func TestPrepareArtifact_FailedArtifactRefusedAsFailed(t *testing.T) {
 	}
 }
 
+// A recording chapter being finalized, like an upload being processed, has no
+// storage location yet. The origin answers the not-ready refusal so the asking
+// cell tells the viewer to retry instead of reporting a resolution error.
+func TestPrepareArtifact_InProductionArtifactRefusedAsNotReady(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	rows := sqlmock.NewRows([]string{"internal_name", "stream_internal_name", "artifact_type", "format", "storage_location", "sync_status", "size_bytes", "authoritative_cluster", "recorded_object_key", "dtsh_synced", "dtsh_key"}).
+		AddRow("chapter-f", "", "vod", "mkv", "pending", "pending", nil, nil, "", false, "")
+	mock.ExpectQuery("FROM foghorn.artifacts").WillReturnRows(rows)
+	mock.ExpectQuery(`SELECT status\s+FROM foghorn\.artifacts`).
+		WithArgs("hash-finalizing", "tenant-a").
+		WillReturnRows(sqlmock.NewRows([]string{"status"}).AddRow("finalizing"))
+
+	srv := NewFederationServer(FederationServerConfig{
+		AllowFederationMutations: true,
+		Logger:                   logging.NewLogger(),
+		DB:                       db,
+		S3Client:                 &fakeS3Client{},
+	})
+
+	resp, err := srv.PrepareArtifact(serviceAuthContext(), &foghornfederationpb.PrepareArtifactRequest{
+		ArtifactId: "hash-finalizing",
+		TenantId:   "tenant-a",
+	})
+	if err != nil {
+		t.Fatalf("PrepareArtifact() err = %v", err)
+	}
+	if resp.GetError() != control.PrepareArtifactNotReadyRefusal {
+		t.Fatalf("refusal = %q, want %q", resp.GetError(), control.PrepareArtifactNotReadyRefusal)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
 func TestPrepareArtifact_NilDBAndS3(t *testing.T) {
 	srv := NewFederationServer(FederationServerConfig{
 		AllowFederationMutations: true,

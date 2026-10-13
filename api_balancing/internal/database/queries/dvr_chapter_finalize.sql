@@ -53,6 +53,7 @@ WHERE c.chapter_id = $1;
 -- finalized, including this one once it is marked.
 -- name: GetChapterRecordingContext :one
 SELECT c.artifact_hash AS recording_hash, COALESCE(p.stream_id::text, '')::text AS stream_id,
+       COALESCE(p.tenant_id::text, '')::text AS tenant_id,
        c.start_ms, c.end_ms, COALESCE(c.playback_id, '')::text AS playback_id,
        (SELECT count(*) FROM foghorn.dvr_chapters o
          WHERE o.artifact_hash = c.artifact_hash

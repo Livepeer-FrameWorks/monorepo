@@ -83,6 +83,7 @@ Read by `api_gateway/cmd/bridge`.
 | `NODE_ID` | string |  |  | v0.3.0 | Node the instance registers under in Quartermaster. |
 | `BUILD_ENV` | string |  |  | v0.3.0 | Runtime environment selector. Empty, dev, or development enables development-only behavior; production or prod marks a production process. |
 | `BRIDGE_HOST` | string | `bridge` |  | v0.3.0 | Host name this instance advertises when it registers with Quartermaster. |
+| `BRIDGE_BIND_ADDRS` | list |  |  | v0.3.13 | Comma-separated addresses the HTTP listener on PORT binds, one listener per address. Provisioning sets loopback and the host's WireGuard address so only the local reverse proxy and mesh peers reach Bridge. Empty binds every interface. |
 | `HOSTNAME` | string | `bridge` |  | v0.3.0 | Node name recorded as the source of API usage events. |
 | `REGION` | string |  |  | v0.3.0 | Region label attached to API usage events sent to Decklog. |
 | `COMMODORE_GRPC_ADDR` | string |  | required | v0.3.0 | Commodore gRPC address for authentication, streams, and tenant resources. |

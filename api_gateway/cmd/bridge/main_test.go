@@ -1,17 +1,70 @@
 package main
 
 import (
+	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
 	"frameworks/api_gateway/internal/appconfig"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/server"
 
 	"github.com/vektah/gqlparser/v2/ast"
 )
+
+// BRIDGE_BIND_ADDRS yields one listener per address on PORT, so a regional
+// host can serve its nginx on loopback and its mesh peers on the WireGuard
+// address without answering on the LAN. Empty keeps one all-interface listener.
+func TestHTTPListenersBindConfiguredAddresses(t *testing.T) {
+	load := func(bindAddrs string) *appconfig.Bridge {
+		t.Helper()
+		env := map[string]string{
+			"SERVICE_TOKEN":           "service-token",
+			"JWT_SECRET":              "jwt-secret",
+			"COMMODORE_GRPC_ADDR":     "commodore:19001",
+			"PERISCOPE_GRPC_ADDR":     "periscope:19004",
+			"PURSER_GRPC_ADDR":        "purser:19003",
+			"QUARTERMASTER_GRPC_ADDR": "quartermaster:19002",
+			"SIGNALMAN_GRPC_ADDR":     "signalman:19005",
+			"DECKLOG_GRPC_ADDR":       "decklog:18006",
+			"PORT":                    "18000",
+			"BRIDGE_BIND_ADDRS":       bindAddrs,
+		}
+		cfg, err := config.Load[appconfig.Bridge](config.Options{Service: "bridge", Lookup: func(key string) (string, bool) {
+			value, ok := env[key]
+			return value, ok
+		}})
+		if err != nil {
+			t.Fatalf("load: %v", err)
+		}
+		return cfg
+	}
+	addrs := func(listeners []server.HTTPListener) []string {
+		out := make([]string, 0, len(listeners))
+		for _, l := range listeners {
+			out = append(out, l.BindAddr+"|"+l.Port)
+		}
+		return out
+	}
+
+	if got := addrs(httpListeners(load("127.0.0.1, 10.88.0.1"), http.NotFoundHandler())); !slices.Equal(got, []string{"127.0.0.1|18000", "10.88.0.1|18000"}) {
+		t.Fatalf("listeners = %v, want loopback and mesh on 18000", got)
+	}
+	if got := addrs(httpListeners(load(""), http.NotFoundHandler())); !slices.Equal(got, []string{"|18000"}) {
+		t.Fatalf("listeners without BRIDGE_BIND_ADDRS = %v, want one all-interface listener", got)
+	}
+	// The WireGuard address may not exist yet when Bridge starts; a refused
+	// bind would fail the whole process until Privateer brings the mesh up.
+	for _, l := range httpListeners(load("127.0.0.1, 10.88.0.1"), http.NotFoundHandler()) {
+		if !l.FreeBind {
+			t.Fatalf("listener %s has FreeBind=false, want true so it binds before the mesh interface is up", l.BindAddr)
+		}
+	}
+}
 
 // The streamingConfig and Signalman dial getters must observe an env-file
 // reload; values copied at startup would not.

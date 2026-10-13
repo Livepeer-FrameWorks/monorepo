@@ -24,6 +24,16 @@ import (
 // it generate the index itself, so answering fast is always safe.
 var dtshFetchTimeout = 4 * time.Second
 
+// dtshReadStall is how long a sidecar body read may wait for a byte before the
+// fetch resumes from the copied byte. It is shorter than the media read-stall
+// bound because Mist gets no sidecar byte until the whole sidecar is fetched,
+// so detection and every resume share the one dtshFetchTimeout budget.
+var dtshReadStall = dtshFetchTimeout / 4
+
+// maxSidecarFetchResumes bounds how often one sidecar fetch is requested again
+// after its body stalled or broke.
+const maxSidecarFetchResumes = 2
+
 // serveSidecarGetWithStream handles GET/HEAD for sidecar requests.
 // Mist computes the dtsh URL as source + ".dtsh"; the relay must
 // respond even before any local dtsh exists so Mist can decide whether
@@ -265,29 +275,91 @@ func newSidecarRequest(ctx context.Context, fetchURL, bearer string) (*http.Requ
 
 // fetchSidecarBody downloads and validates the whole sidecar, and caches a
 // valid one at localPath (tmpfile, then atomic rename) so a half-written file
-// never ends up at the canonical path.
+// never ends up at the canonical path. A body that stalls or breaks is
+// requested again from the first byte not yet copied.
 func (s *Server) fetchSidecarBody(ctx context.Context, fetchURL, bearer, localPath string) sidecarFetchResult {
-	req, err := newSidecarRequest(ctx, fetchURL, bearer)
-	if err != nil {
-		return sidecarFetchResult{status: http.StatusServiceUnavailable, reason: err.Error(), staleResolve: true}
-	}
-	resp, err := s.httpc.Do(req)
-	if err != nil {
-		return sidecarFetchResult{status: http.StatusServiceUnavailable, reason: err.Error(), staleResolve: true}
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= http.StatusBadRequest {
-		return sidecarFetchFailure(resp.StatusCode)
-	}
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return sidecarFetchResult{status: http.StatusServiceUnavailable, reason: err.Error()}
+	var (
+		body   []byte
+		header http.Header
+	)
+	for resumes := 0; ; resumes++ {
+		attempt, err := s.readSidecarAttempt(ctx, fetchURL, bearer, body)
+		if attempt.failure != nil {
+			return *attempt.failure
+		}
+		body = attempt.body
+		if header == nil {
+			header = attempt.header
+		}
+		if err == nil {
+			break
+		}
+		if ctx.Err() != nil || resumes >= maxSidecarFetchResumes {
+			return sidecarFetchResult{status: http.StatusServiceUnavailable, reason: err.Error()}
+		}
+		if s.logger != nil {
+			s.logger.WithError(err).WithFields(logging.Fields{
+				"sidecar_offset": len(body),
+				"resume":         resumes + 1,
+			}).Warn("relay dtsh upstream body failed; resuming from the last copied byte")
+		}
 	}
 	if validateErr := dtsh.Validate(body); validateErr != nil {
 		return sidecarFetchResult{status: http.StatusNotFound, reason: "invalid sidecar: " + validateErr.Error()}
 	}
 	s.cacheSidecar(localPath, body)
-	return sidecarFetchResult{status: http.StatusOK, body: body, size: int64(len(body)), header: resp.Header}
+	return sidecarFetchResult{status: http.StatusOK, body: body, size: int64(len(body)), header: header}
+}
+
+// sidecarAttempt is one upstream request of a sidecar fetch. failure ends the
+// fetch with that result; otherwise body holds every byte copied so far.
+type sidecarAttempt struct {
+	body    []byte
+	header  http.Header
+	failure *sidecarFetchResult
+}
+
+// readSidecarAttempt requests the sidecar from byte len(copied) on and appends
+// what arrives. The returned error is a body read that failed after the
+// request was answered, which the caller may resume. An upstream that ignores
+// the resume Range and answers 200 restarts the copy from byte zero.
+func (s *Server) readSidecarAttempt(ctx context.Context, fetchURL, bearer string, copied []byte) (sidecarAttempt, error) {
+	attemptCtx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	fail := func(r sidecarFetchResult) (sidecarAttempt, error) {
+		return sidecarAttempt{body: copied, failure: &r}, nil
+	}
+	req, err := newSidecarRequest(attemptCtx, fetchURL, bearer)
+	if err != nil {
+		return fail(sidecarFetchResult{status: http.StatusServiceUnavailable, reason: err.Error(), staleResolve: true})
+	}
+	from := len(copied)
+	if from > 0 {
+		req.Header.Set("Range", fmt.Sprintf("bytes=%d-", from))
+	}
+	resp, err := s.httpc.Do(req)
+	if err != nil {
+		reason := err.Error()
+		if from > 0 {
+			reason = fmt.Sprintf("resume at sidecar offset %d: %s", from, reason)
+		}
+		return fail(sidecarFetchResult{status: http.StatusServiceUnavailable, reason: reason, staleResolve: from == 0})
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= http.StatusBadRequest {
+		return fail(sidecarFetchFailure(resp.StatusCode))
+	}
+	if from > 0 {
+		switch {
+		case resp.StatusCode == http.StatusOK:
+			copied = copied[:0]
+		case resp.StatusCode != http.StatusPartialContent || !strings.HasPrefix(resp.Header.Get("Content-Range"), fmt.Sprintf("bytes %d-", from)):
+			return fail(sidecarFetchResult{status: http.StatusServiceUnavailable, reason: fmt.Sprintf("sidecar resume answered %d Content-Range %q, want start %d", resp.StatusCode, resp.Header.Get("Content-Range"), from)})
+		}
+	}
+	body := &stallBoundBody{body: resp.Body, ctx: attemptCtx, cancel: cancel, stall: dtshReadStall}
+	rest, readErr := io.ReadAll(body)
+	return sidecarAttempt{body: append(copied, rest...), header: resp.Header}, readErr
 }
 
 // probeSidecarSize answers a HEAD from a one-byte ranged read; a presigned GET

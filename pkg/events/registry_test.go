@@ -33,6 +33,7 @@ var catalog = map[string]struct {
 	"recording.stopped":              {public: true},
 	"recording.ready":                {public: true},
 	"recording.failed":               {public: true},
+	"recording.chapter_failed":       {public: true},
 	"upload.created":                 {public: true},
 	"upload.completed":               {public: true},
 	"upload.aborted":                 {public: true},

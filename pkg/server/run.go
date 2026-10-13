@@ -47,7 +47,11 @@ type HTTPListener struct {
 	BindAddr string
 	Port     string
 	// Listener, when set, is served instead of binding BindAddr:Port.
-	Listener     net.Listener
+	Listener net.Listener
+	// FreeBind lets BindAddr be an address no interface holds yet, so a
+	// listener on a mesh address binds before the mesh interface is up and
+	// accepts once it is. Linux only; elsewhere the bind is unchanged.
+	FreeBind     bool
 	Handler      http.Handler
 	TLSCertFile  string
 	TLSKeyFile   string
@@ -338,7 +342,7 @@ func bindListeners(spec RunSpec) ([]runningHTTP, []*runningGRPC, error) {
 		if (cfg.TLSCertFile == "") != (cfg.TLSKeyFile == "") {
 			return fail(fmt.Errorf("server: HTTP listener %q requires both certificate and key files", cfg.Name))
 		}
-		lis, err := listen(cfg.Listener, cfg.BindAddr, cfg.Port)
+		lis, err := listen(cfg.Listener, cfg.BindAddr, cfg.Port, cfg.FreeBind)
 		if err != nil {
 			return fail(fmt.Errorf("server: HTTP listener %q: %w", cfg.Name, err))
 		}
@@ -356,7 +360,7 @@ func bindListeners(spec RunSpec) ([]runningHTTP, []*runningGRPC, error) {
 		if (cfg.Server == nil) == (cfg.Build == nil) {
 			return fail(fmt.Errorf("server: gRPC listener %q needs exactly one of Server or Build", cfg.Name))
 		}
-		lis, err := listen(cfg.Listener, cfg.BindAddr, cfg.Port)
+		lis, err := listen(cfg.Listener, cfg.BindAddr, cfg.Port, false)
 		if err != nil {
 			return fail(fmt.Errorf("server: gRPC listener %q: %w", cfg.Name, err))
 		}
@@ -366,7 +370,7 @@ func bindListeners(spec RunSpec) ([]runningHTTP, []*runningGRPC, error) {
 	return httpRunning, grpcRunning, nil
 }
 
-func listen(existing net.Listener, bindAddr, port string) (net.Listener, error) {
+func listen(existing net.Listener, bindAddr, port string, freeBind bool) (net.Listener, error) {
 	if existing != nil {
 		return existing, nil
 	}
@@ -374,6 +378,9 @@ func listen(existing net.Listener, bindAddr, port string) (net.Listener, error) 
 		return nil, errors.New("no port configured")
 	}
 	var lc net.ListenConfig
+	if freeBind {
+		lc.Control = freeBindControl
+	}
 	return lc.Listen(context.Background(), "tcp", net.JoinHostPort(bindAddr, port))
 }
 

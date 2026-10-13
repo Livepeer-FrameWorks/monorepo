@@ -13,6 +13,7 @@ import (
 	"frameworks/api_balancing/internal/artifactoutbox"
 	"frameworks/api_balancing/internal/database/foghorndb"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
+	publicv1 "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/public/v1"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
@@ -445,6 +446,23 @@ func MarkChapterFailed(ctx context.Context, chapterID, terminalState, reason, ex
 				}
 			}
 		}
+		// The chapter's span of the recording is now lost for good; the tenant learns
+		// it from recording.chapter_failed on the parent recording, committed with the
+		// transition so a crash cannot lose it.
+		recording, ctxErr := q.GetChapterRecordingContext(ctx, chapterID)
+		if ctxErr != nil {
+			return fmt.Errorf("read chapter recording context: %w", ctxErr)
+		}
+		chapterFailed := &publicv1.RecordingChapterFailed{
+			Artifact:  artifactoutbox.RecordingArtifact(recording.RecordingHash, recording.StreamID),
+			ChapterId: chapterID,
+			StartMs:   recording.StartMs,
+			EndMs:     recording.EndMs,
+			Reason:    chapterFailureReason(terminalState),
+		}
+		if enqErr := artifactoutbox.EnqueueArtifactFactTx(ctx, tx, recording.TenantID, chapterFailed); enqErr != nil {
+			return fmt.Errorf("enqueue recording.chapter_failed: %w", enqErr)
+		}
 		failed = true
 		return nil
 	})
@@ -455,6 +473,16 @@ func MarkChapterFailed(ctx context.Context, chapterID, terminalState, reason, ex
 		return false, err
 	}
 	return failed, nil
+}
+
+// chapterFailureReason maps a terminal chapter state to the public failure
+// reason: lost source segments are SOURCE_UNAVAILABLE, exhausted finalize
+// attempts PROCESSING_FAILED.
+func chapterFailureReason(terminalState string) publicv1.MediaFailureReason {
+	if terminalState == ChapterStateFailedSourceMissing {
+		return publicv1.MediaFailureReason_MEDIA_FAILURE_REASON_SOURCE_UNAVAILABLE
+	}
+	return publicv1.MediaFailureReason_MEDIA_FAILURE_REASON_PROCESSING_FAILED
 }
 
 // RetryChapterFinalize bounces a 'finalizing' chapter back to 'closed' so the queue re-dispatches it.

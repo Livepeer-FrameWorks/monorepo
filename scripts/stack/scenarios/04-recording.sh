@@ -52,14 +52,36 @@ if chapters | jq -e 'all(.state != "FINALIZED" and .state != "FROZEN")' >/dev/nu
   check "no recording.ready while chapters are still finalizing" no_early_ready
 fi
 
+# While a chapter is FINALIZING nothing of it is stored, so /play answers the
+# retryable 503 on every replica: never a 500, and never a redirect to the node
+# still writing the file. A 307 counts only once the chapter has finalized.
+FINALIZING_PLAY_PROBES=0
+FINALIZING_PLAY_BAD=""
+probe_finalizing_play() {
+  local pb base code state
+  for pb in $(echo "$1" | jq -r '.[] | select(.state=="FINALIZING" and (.playbackId // "") != "") | .playbackId'); do
+    for base in $FOGHORN_A_URLS $FOGHORN_B_URLS; do
+      code=$(play_status "$base" "$pb")
+      FINALIZING_PLAY_PROBES=$((FINALIZING_PLAY_PROBES + 1))
+      [ "$code" = 503 ] && continue
+      state=$(chapters | jq -r --arg pb "$pb" '.[] | select(.playbackId==$pb) | .state')
+      if [ "$code" = 307 ] && { [ "$state" = FINALIZED ] || [ "$state" = FROZEN ]; }; then
+        continue
+      fi
+      FINALIZING_PLAY_BAD="$FINALIZING_PLAY_BAD $base:$pb:$code:$state"
+    done
+  done
+}
 all_final() {
   local c
   c=$(chapters)
   echo "    chapters: $(echo "$c" | jq -c 'map({id:.chapterId[0:8],state,segs:.segmentCount})')"
+  probe_finalizing_play "$c"
   echo "$c" | jq -e 'length > 0 and all(.state == "FINALIZED" or .state == "FROZEN")' >/dev/null
 }
 eventually "$FINALIZE_BOUND" "every chapter FINALIZED within ${FINALIZE_BOUND}s of the stop" all_final
-echo "    finalized after $(($(date +%s) - STOPPED))s"
+echo "    finalized after $(($(date +%s) - STOPPED))s; /play probes of FINALIZING chapters: $FINALIZING_PLAY_PROBES"
+check "/play of a FINALIZING chapter answers 503 on every replica (bad:${FINALIZING_PLAY_BAD:- none})" [ -z "$FINALIZING_PLAY_BAD" ]
 C=$(chapters)
 check "the first chapter kept its id across the stop ($FIRST_ID)" json_has "$C" "any(.chapterId == \"$FIRST_ID\")"
 FIRST_PB=$(echo "$C" | jq -r --arg id "$FIRST_ID" '.[] | select(.chapterId==$id) | .playbackId // empty')

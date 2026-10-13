@@ -2480,6 +2480,17 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 			})
 			return
 		}
+		if errors.Is(err, control.ErrPlaybackContentNotReady) {
+			logger.WithError(err).WithFields(logging.Fields{
+				"view_key": viewKey, "internal_name": contentID, "content_type": contentType,
+			}).Debug("Playback deferred: content is still being produced")
+			c.Header("Retry-After", strconv.Itoa(int(control.PlaybackContentNotReadyRetryAfter/time.Second)))
+			respondPlaybackError(c, http.StatusServiceUnavailable, "CONTENT_NOT_READY", "This content is still being processed; retry after the advised delay", gin.H{
+				"contentType": contentType,
+				"contentId":   contentID,
+			})
+			return
+		}
 		if errors.Is(err, control.ErrCrossClusterArtifactUnavailable) {
 			// Fail-fast — peer origin hasn't pushed the artifact to S3
 			// yet. Surface as 503 (Service Unavailable) so callers retry

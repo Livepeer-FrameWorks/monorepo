@@ -9216,6 +9216,7 @@ union PublicEventData =
   | CustomDomainFailed
   | CustomDomainVerified
   | MultistreamStatusChanged
+  | RecordingChapterFailed
   | RecordingFailed
   | RecordingReady
   | RecordingStarted
@@ -9352,6 +9353,17 @@ type MultistreamStatusChanged {
   targetName: String!
   status: EventMultistreamStatus!
   previousStatus: EventMultistreamStatus!
+}
+
+"""
+`recording.chapter_failed` event. Aggregate: `artifacts`.
+"""
+type RecordingChapterFailed {
+  artifact: EventArtifact
+  chapterId: ID!
+  startMs: Int!
+  endMs: Int!
+  reason: EventMediaFailureReason!
 }
 
 """

@@ -2730,6 +2730,14 @@ type ComplexityRoot struct {
 		TotalCount func(childComplexity int) int
 	}
 
+	RecordingChapterFailed struct {
+		Artifact  func(childComplexity int) int
+		ChapterId func(childComplexity int) int
+		EndMs     func(childComplexity int) int
+		Reason    func(childComplexity int) int
+		StartMs   func(childComplexity int) int
+	}
+
 	RecordingFailed struct {
 		Artifact func(childComplexity int) int
 		Reason   func(childComplexity int) int
@@ -17701,6 +17709,37 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.RebufferingEventsConnection.TotalCount(childComplexity), true
+
+	case "RecordingChapterFailed.artifact":
+		if e.ComplexityRoot.RecordingChapterFailed.Artifact == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RecordingChapterFailed.Artifact(childComplexity), true
+	case "RecordingChapterFailed.chapterId":
+		if e.ComplexityRoot.RecordingChapterFailed.ChapterId == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RecordingChapterFailed.ChapterId(childComplexity), true
+	case "RecordingChapterFailed.endMs":
+		if e.ComplexityRoot.RecordingChapterFailed.EndMs == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RecordingChapterFailed.EndMs(childComplexity), true
+	case "RecordingChapterFailed.reason":
+		if e.ComplexityRoot.RecordingChapterFailed.Reason == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RecordingChapterFailed.Reason(childComplexity), true
+	case "RecordingChapterFailed.startMs":
+		if e.ComplexityRoot.RecordingChapterFailed.StartMs == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RecordingChapterFailed.StartMs(childComplexity), true
 
 	case "RecordingFailed.artifact":
 		if e.ComplexityRoot.RecordingFailed.Artifact == nil {
@@ -33739,6 +33778,7 @@ union PublicEventData =
   | CustomDomainFailed
   | CustomDomainVerified
   | MultistreamStatusChanged
+  | RecordingChapterFailed
   | RecordingFailed
   | RecordingReady
   | RecordingStarted
@@ -33875,6 +33915,17 @@ type MultistreamStatusChanged {
   targetName: String!
   status: EventMultistreamStatus!
   previousStatus: EventMultistreamStatus!
+}
+
+"""
+` + "`" + `recording.chapter_failed` + "`" + ` event. Aggregate: ` + "`" + `artifacts` + "`" + `.
+"""
+type RecordingChapterFailed {
+  artifact: EventArtifact
+  chapterId: ID!
+  startMs: Int!
+  endMs: Int!
+  reason: EventMediaFailureReason!
 }
 
 """
@@ -100363,6 +100414,161 @@ func (ec *executionContext) fieldContext_RebufferingEventsConnection_totalCount(
 	return fc, nil
 }
 
+func (ec *executionContext) _RecordingChapterFailed_artifact(ctx context.Context, field graphql.CollectedField, obj *publicv1.RecordingChapterFailed) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_RecordingChapterFailed_artifact,
+		func(ctx context.Context) (any, error) {
+			return obj.Artifact, nil
+		},
+		nil,
+		ec.marshalOEventArtifact2ᚖgithubᚗcomᚋLivepeerᚑFrameWorksᚋmonorepoᚋpkgᚋprotoᚋeventsᚋpublicᚋv1ᚐArtifact,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_RecordingChapterFailed_artifact(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RecordingChapterFailed",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "artifactId":
+				return ec.fieldContext_EventArtifact_artifactId(ctx, field)
+			case "kind":
+				return ec.fieldContext_EventArtifact_kind(ctx, field)
+			case "streamId":
+				return ec.fieldContext_EventArtifact_streamId(ctx, field)
+			case "playbackId":
+				return ec.fieldContext_EventArtifact_playbackId(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type EventArtifact", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RecordingChapterFailed_chapterId(ctx context.Context, field graphql.CollectedField, obj *publicv1.RecordingChapterFailed) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_RecordingChapterFailed_chapterId,
+		func(ctx context.Context) (any, error) {
+			return obj.ChapterId, nil
+		},
+		nil,
+		ec.marshalNID2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_RecordingChapterFailed_chapterId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RecordingChapterFailed",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ID does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RecordingChapterFailed_startMs(ctx context.Context, field graphql.CollectedField, obj *publicv1.RecordingChapterFailed) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_RecordingChapterFailed_startMs,
+		func(ctx context.Context) (any, error) {
+			return obj.StartMs, nil
+		},
+		nil,
+		ec.marshalNInt2int64,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_RecordingChapterFailed_startMs(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RecordingChapterFailed",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RecordingChapterFailed_endMs(ctx context.Context, field graphql.CollectedField, obj *publicv1.RecordingChapterFailed) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_RecordingChapterFailed_endMs,
+		func(ctx context.Context) (any, error) {
+			return obj.EndMs, nil
+		},
+		nil,
+		ec.marshalNInt2int64,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_RecordingChapterFailed_endMs(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RecordingChapterFailed",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RecordingChapterFailed_reason(ctx context.Context, field graphql.CollectedField, obj *publicv1.RecordingChapterFailed) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_RecordingChapterFailed_reason,
+		func(ctx context.Context) (any, error) {
+			return obj.Reason, nil
+		},
+		nil,
+		ec.marshalNEventMediaFailureReason2githubᚗcomᚋLivepeerᚑFrameWorksᚋmonorepoᚋpkgᚋprotoᚋeventsᚋpublicᚋv1ᚐMediaFailureReason,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_RecordingChapterFailed_reason(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RecordingChapterFailed",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type EventMediaFailureReason does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _RecordingFailed_artifact(ctx context.Context, field graphql.CollectedField, obj *publicv1.RecordingFailed) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -143007,6 +143213,11 @@ func (ec *executionContext) _PublicEventData(ctx context.Context, sel ast.Select
 			return graphql.Null
 		}
 		return ec._RecordingFailed(ctx, sel, obj)
+	case *publicv1.RecordingChapterFailed:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._RecordingChapterFailed(ctx, sel, obj)
 	case *publicv1.PaymentFailed:
 		if obj == nil {
 			return graphql.Null
@@ -174466,6 +174677,62 @@ func (ec *executionContext) _RebufferingEventsConnection(ctx context.Context, se
 			}
 		case "totalCount":
 			out.Values[i] = ec._RebufferingEventsConnection_totalCount(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var recordingChapterFailedImplementors = []string{"RecordingChapterFailed", "PublicEventData"}
+
+func (ec *executionContext) _RecordingChapterFailed(ctx context.Context, sel ast.SelectionSet, obj *publicv1.RecordingChapterFailed) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, recordingChapterFailedImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("RecordingChapterFailed")
+		case "artifact":
+			out.Values[i] = ec._RecordingChapterFailed_artifact(ctx, field, obj)
+		case "chapterId":
+			out.Values[i] = ec._RecordingChapterFailed_chapterId(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "startMs":
+			out.Values[i] = ec._RecordingChapterFailed_startMs(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "endMs":
+			out.Values[i] = ec._RecordingChapterFailed_endMs(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "reason":
+			out.Values[i] = ec._RecordingChapterFailed_reason(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}

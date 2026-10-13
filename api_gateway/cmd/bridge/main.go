@@ -658,7 +658,7 @@ func main() {
 		Service:  "bridge",
 		Logger:   logger,
 		Ready:    readiness,
-		HTTP:     []server.HTTPListener{{Name: "http", Port: cfg.Port, Handler: app}},
+		HTTP:     httpListeners(cfg, app),
 		OnReload: []server.ReloadCallback{liveConfig.Reload},
 		OnShutdown: []func(context.Context){func(context.Context) {
 			// Shutdown the resolver to clean up WebSocket connections
@@ -673,6 +673,23 @@ func main() {
 
 func seconds(n int) time.Duration {
 	return time.Duration(n) * time.Second
+}
+
+// httpListeners serves the router on PORT once per BRIDGE_BIND_ADDRS entry, or
+// on every interface when none is set. Configured addresses bind with
+// FreeBind: provisioning includes the WireGuard address, which does not exist
+// until Privateer brings the mesh up, and Bridge must not depend on that order.
+func httpListeners(cfg *appconfig.Bridge, handler http.Handler) []server.HTTPListener {
+	var listeners []server.HTTPListener
+	for _, addr := range cfg.BindAddrs {
+		if addr = strings.TrimSpace(addr); addr != "" {
+			listeners = append(listeners, server.HTTPListener{Name: "http " + addr, BindAddr: addr, Port: cfg.Port, FreeBind: true, Handler: handler})
+		}
+	}
+	if len(listeners) == 0 {
+		listeners = append(listeners, server.HTTPListener{Name: "http", Port: cfg.Port, Handler: handler})
+	}
+	return listeners
 }
 
 // serviceClientsConfig builds the downstream gRPC client configuration. The

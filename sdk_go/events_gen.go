@@ -23,6 +23,7 @@ var publicEventMessages = map[string]func() proto.Message{
 	"custom_domain.failed":       func() proto.Message { return &publicv1.CustomDomainFailed{} },
 	"custom_domain.verified":     func() proto.Message { return &publicv1.CustomDomainVerified{} },
 	"multistream.status_changed": func() proto.Message { return &publicv1.MultistreamStatusChanged{} },
+	"recording.chapter_failed":   func() proto.Message { return &publicv1.RecordingChapterFailed{} },
 	"recording.failed":           func() proto.Message { return &publicv1.RecordingFailed{} },
 	"recording.ready":            func() proto.Message { return &publicv1.RecordingReady{} },
 	"recording.started":          func() proto.Message { return &publicv1.RecordingStarted{} },

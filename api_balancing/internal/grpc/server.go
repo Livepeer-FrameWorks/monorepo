@@ -3165,9 +3165,10 @@ func (s *FoghornGRPCServer) resolveArtifactViewerEndpoint(ctx context.Context, r
 		response, err = control.ResolveArtifactPlayback(ctx, deps, req.ContentId)
 	}
 	if err != nil {
-		if errors.Is(err, control.ErrCrossClusterArtifactUnavailable) {
+		if errors.Is(err, control.ErrCrossClusterArtifactUnavailable) || errors.Is(err, control.ErrPlaybackContentNotReady) {
 			// Fail-fast — peer origin hasn't pushed the artifact to S3
-			// yet. codes.Unavailable; caller retries at the app layer.
+			// yet, or the artifact is still being produced. codes.Unavailable;
+			// caller retries at the app layer.
 			return nil, status.Error(codes.Unavailable, err.Error())
 		}
 		// A signed or policy refusal is reported as such; any other serving

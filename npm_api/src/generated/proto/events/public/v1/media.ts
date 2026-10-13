@@ -61,6 +61,24 @@ export interface RecordingFailed {
   reason: MediaFailureReason;
 }
 
+/**
+ * RecordingChapterFailed reports that one chapter of a recording could not be
+ * saved, so the recording keeps no replayable media between start_ms and
+ * end_ms (Unix epoch milliseconds, the chapter's scheduled bounds). The
+ * recording itself and its other chapters are unaffected. It is emitted once
+ * per chapter, when the chapter fails terminally.
+ */
+export interface RecordingChapterFailed {
+  artifact:
+    | Artifact
+    | undefined;
+  /** chapter_id is the chapterId of the recording's dvrChapters entry. */
+  chapterId: string;
+  startMs: bigint;
+  endMs: bigint;
+  reason: MediaFailureReason;
+}
+
 export interface UploadCreated {
   artifact:
     | Artifact
@@ -166,6 +184,24 @@ export const RecordingFailed: MessageFns<RecordingFailed> = {
   fromJSON(object: any): RecordingFailed {
     return {
       artifact: isSet(object.artifact) ? Artifact.fromJSON(object.artifact) : undefined,
+      reason: isSet(object.reason)
+        ? mediaFailureReasonFromJSON(object.reason)
+        : MediaFailureReason.MEDIA_FAILURE_REASON_UNSPECIFIED,
+    };
+  },
+};
+
+export const RecordingChapterFailed: MessageFns<RecordingChapterFailed> = {
+  fromJSON(object: any): RecordingChapterFailed {
+    return {
+      artifact: isSet(object.artifact) ? Artifact.fromJSON(object.artifact) : undefined,
+      chapterId: isSet(object.chapterId)
+        ? globalThis.String(object.chapterId)
+        : isSet(object.chapter_id)
+        ? globalThis.String(object.chapter_id)
+        : "",
+      startMs: isSet(object.startMs) ? BigInt(object.startMs) : isSet(object.start_ms) ? BigInt(object.start_ms) : 0n,
+      endMs: isSet(object.endMs) ? BigInt(object.endMs) : isSet(object.end_ms) ? BigInt(object.end_ms) : 0n,
       reason: isSet(object.reason)
         ? mediaFailureReasonFromJSON(object.reason)
         : MediaFailureReason.MEDIA_FAILURE_REASON_UNSPECIFIED,
