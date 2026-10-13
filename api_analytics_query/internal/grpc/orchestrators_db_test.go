@@ -94,10 +94,16 @@ func TestOrchestratorPerformanceSeriesMergesLegacyAndNetworkObservations(t *test
 	mock.ExpectQuery(`FROM periscope\.orchestrator_ai_outcomes\s+WHERE cluster_owner_tenant_id = \?`).
 		WithArgs(tenant, orch, start, end).
 		WillReturnRows(sqlmock.NewRows(sixColumns).AddRow(ts, gw, region, ip, uint64(4), uint64(4), uint64(0), uint64(200), uint64(4), uint32(70)))
+	networkColumns := []string{"ts", "gateway_id", "gateway_region", "resolved_ip", "kind", "attempts", "successes", "failures", "latency_sum", "latency_count", "max_latency", "pixels"}
 	mock.ExpectQuery(`(?s)FROM periscope\.network_observations FINAL.*producer_kind = 'gateway'.*kind IN \('discovery', 'attempt'\) AND resource_id = lower\(\?\).*GROUP BY ts, gateway_id, gateway_region, resolved_ip, kind`).
-		WithArgs(tenant, orch, start, end).
-		WillReturnRows(sqlmock.NewRows([]string{"ts", "gateway_id", "gateway_region", "resolved_ip", "kind", "attempts", "successes", "failures", "latency_sum", "latency_count", "max_latency", "pixels"}).
-			AddRow(ts, gw, region, ip, "discovery", uint64(3), uint64(1), uint64(1), uint64(200), uint64(1), uint32(200), uint64(0)).
+		WithArgs(tenant, orch, start, sqlmock.AnyArg(), end).
+		WillReturnRows(sqlmock.NewRows(networkColumns).
+			AddRow(ts, gw, region, ip, "discovery", uint64(3), uint64(1), uint64(1), uint64(200), uint64(1), uint32(200), uint64(0)))
+	// The window starts before the raw retention, so its older buckets come
+	// from the gateway-keyed snapshots.
+	mock.ExpectQuery(`(?s)FROM periscope\.network_gateway_rollups FINAL.*interval_seconds = \?.*resource_id = lower\(\?\).*bucket >= \? AND bucket < \? AND bucket <= \?.*GROUP BY ts, gateway_id, gateway_region, resolved_ip, kind`).
+		WithArgs(tenant, uint32(300), orch, start, sqlmock.AnyArg(), end).
+		WillReturnRows(sqlmock.NewRows(networkColumns).
 			AddRow(ts, gw, region, ip, "attempt", uint64(5), uint64(5), uint64(0), uint64(1000), uint64(5), uint32(400), uint64(5000)))
 
 	resp, err := s.GetOrchestratorPerformanceSeries(context.Background(), &periscopepb.GetOrchestratorPerformanceSeriesRequest{

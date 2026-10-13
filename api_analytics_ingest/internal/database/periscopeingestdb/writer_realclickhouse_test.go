@@ -184,6 +184,7 @@ func TestEveryTypedWriterAppendsToCurrentClickHouse(t *testing.T) {
 		}
 		verifyNetworkReplayAndRollups(t, conn)
 		verifyNetworkWorkAccounting(t, conn)
+		verifyNetworkGatewayRollups(t, conn)
 	})
 }
 

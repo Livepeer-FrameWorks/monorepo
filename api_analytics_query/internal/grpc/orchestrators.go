@@ -417,16 +417,24 @@ func (s *PeriscopeServer) mergeLegacyAIOutcomes(ctx context.Context, series perf
 	return s.scanPerformance(ctx, series, "AI", false, func(b *performanceBucket) *performanceTotals { return &b.ai }, query, args...)
 }
 
+// networkSeriesRawWindow is how far back the series reads raw observations.
+// Raw rows expire after 30 days and the rollup loop rebuilds a bucket only
+// while it starts within them, so a gateway snapshot older than this is final.
+const networkSeriesRawWindow = 29 * 24 * time.Hour
+
 // mergeNetworkObservations adds the gateway's schema-3 discovery and dispatched
 // transcode attempts with the public projection's counting: every
 // deduplicated row is a sample, and successes and failures count qualifying
 // rows only. Prober rows are excluded; their observer identities are private
-// and the series is keyed by gateway. Raw observations are retained 30 days.
+// and the series is keyed by gateway. Buckets starting before the raw window
+// come from the gateway-keyed snapshots, whole buckets from the window start
+// on, as the public route's long windows do.
 func (s *PeriscopeServer) mergeNetworkObservations(ctx context.Context, series performanceSeries, f performanceFilter) error {
 	seconds := 300
 	if f.interval == "1h" {
 		seconds = 3600
 	}
+	rawFrom := time.Now().UTC().Add(-networkSeriesRawWindow).Truncate(time.Duration(seconds) * time.Second)
 	query, args := f.drillDown(fmt.Sprintf(`
 		SELECT toStartOfInterval(timestamp, INTERVAL %d SECOND) AS ts, gateway_id, gateway_region, resolved_ip, kind,
 		       count(), countIf(success = 1 AND qualifying = 1), countIf(success = 0 AND qualifying = 1),
@@ -435,12 +443,38 @@ func (s *PeriscopeServer) mergeNetworkObservations(ctx context.Context, series p
 		FROM periscope.network_observations FINAL
 		WHERE tenant_id = ? AND provider = 'livepeer' AND producer_kind = 'gateway'
 		  AND kind IN ('discovery', 'attempt') AND resource_id = lower(?)
-		  AND timestamp >= ? AND timestamp <= ?`, seconds),
-		[]any{f.tenantID, f.orchAddr, f.start, f.end})
+		  AND timestamp >= ? AND timestamp >= ? AND timestamp <= ?`, seconds),
+		[]any{f.tenantID, f.orchAddr, f.start, rawFrom, f.end})
 	rows, err := periscopequerydb.Query(ctx, s.clickhouse, query+performanceGroupBy+", kind", args...)
 	if err != nil {
 		return wrapClickhouseError(err, "database error")
 	}
+	if err = s.scanNetworkPerformance(series, rows); err != nil {
+		return err
+	}
+	if !f.start.Before(rawFrom) {
+		return nil
+	}
+	query, args = f.drillDown(`
+		SELECT bucket AS ts, gateway_id, gateway_region, resolved_ip, kind,
+		       sum(samples), sum(successes), sum(failures), sum(latency_sum), sum(latency_count),
+		       max(max_latency), sum(returned_pixels)
+		FROM periscope.network_gateway_rollups FINAL
+		WHERE tenant_id = ? AND provider = 'livepeer' AND interval_seconds = ?
+		  AND kind IN ('discovery', 'attempt') AND resource_id = lower(?)
+		  AND bucket >= ? AND bucket < ? AND bucket <= ?`,
+		[]any{f.tenantID, uint32(seconds), f.orchAddr, f.start, rawFrom, f.end})
+	rows, err = periscopequerydb.Query(ctx, s.clickhouse, query+performanceGroupBy+", kind", args...)
+	if err != nil {
+		return wrapClickhouseError(err, "database error")
+	}
+	return s.scanNetworkPerformance(series, rows)
+}
+
+// scanNetworkPerformance adds rows shaped (ts, gateway_id, gateway_region,
+// resolved_ip, kind, samples, successes, failures, latency_sum, latency_count,
+// max_latency, returned_pixels) to the discovery or transcode totals.
+func (s *PeriscopeServer) scanNetworkPerformance(series performanceSeries, rows *periscopequerydb.Rows) error {
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var (

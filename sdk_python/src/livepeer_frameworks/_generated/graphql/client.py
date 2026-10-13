@@ -9392,7 +9392,8 @@ class GraphQLClient(BaseClient):
         """Time-series performance points for an orchestrator in 5m or 1h buckets per
         gateway, region and instance IP: gateway discovery and transcode attempts
         from both the legacy rollups and the network observations the public route
-        serves (raw, 30 days), counted as that route counts them, plus legacy AI
+        serves (raw rows, then gateway-keyed snapshots for buckets older than 29
+        days), counted as that route counts them, plus legacy AI
         outcomes. `meanLatencyMs` is server-pre-computed; callers don't divide
         latency_sum/latency_count themselves."""
         query = gql("""

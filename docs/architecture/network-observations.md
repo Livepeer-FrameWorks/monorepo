@@ -216,6 +216,9 @@ The rebuild loop runs every five minutes.
 | Hourly discovery snapshots                   | 365 days  |
 | Hourly workload/decision snapshots           | 730 days  |
 
+Gateway-keyed snapshots follow the same rows: five-minute 180 days, hourly discovery 365
+days, hourly attempts 730 days.
+
 Long-range API queries use hourly snapshots. Raw samples and pricing history are limited
 to their retained window; missing history is not zero or evidence of downtime. Responses
 mark rolled-up and truncated series. Whole-window comparison summaries are queried
@@ -250,7 +253,11 @@ sums the two without double counting. Its V3 part counts a gateway's raw discove
 dispatched attempts exactly as the public projection does: every deduplicated row is a
 sample; successes and failures count qualifying rows. Points stay keyed by gateway,
 region and IP, so prober observations, whose observer identities are private, are
-excluded and V3 history follows the 30-day raw retention. Legacy outcome rows are
+excluded. The region-keyed observation snapshots mix gateways and probers, so the rollup
+loop also writes gateway-keyed snapshots (`network_gateway_rollups`) of each gateway's
+discovery and attempts, with the same retention as the observation snapshots. The series
+reads raw rows for the last 29 days and those snapshots, whole buckets from the window
+start, for older buckets, as the public route's long windows do. Legacy outcome rows are
 scoped by their gateway cluster owner, not by the stream tenant they also carry.
 
 ## Publication boundary

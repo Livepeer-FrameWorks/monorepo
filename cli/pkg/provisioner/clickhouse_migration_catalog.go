@@ -49,7 +49,7 @@ var PeriscopeMigrationCatalog = ClickHouseMigrationCatalog{
 		"client_qoe_5m", "client_qoe_samples", "client_qoe_session_deltas",
 		"delivery_usage_5m", "federation_events", "federation_hourly", "federation_hourly_v2", "ingest_errors",
 		"ledger_rebuild_cursors", "ledger_rebuild_cursors_v2",
-		"network_observation_rollups", "network_observations", "network_work_rollups", "node_metrics_1h", "node_metrics_samples",
+		"network_gateway_rollups", "network_observation_rollups", "network_observations", "network_work_rollups", "node_metrics_1h", "node_metrics_samples",
 		"node_performance_5m", "node_state_current", "orchestrator_ai_hourly",
 		"orchestrator_ai_outcomes", "orchestrator_discovery_1h",
 		"orchestrator_discovery_5m", "orchestrator_discovery_samples",

@@ -5,6 +5,7 @@ package periscopeingestdb
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"math/big"
 	"testing"
 	"time"
@@ -79,6 +80,77 @@ func verifyNetworkReplayAndRollups(t *testing.T, conn driver.Conn) {
 	insert(ids[2], true, 300)
 	rebuild()
 	assertCounts(3)
+}
+
+// verifyNetworkGatewayRollups proves the gateway-keyed snapshots keep each
+// gateway's discovery and attempts per gateway, deduplicated, without prober
+// rows or other kinds, so the performance series can read them once raw
+// observations expire.
+func verifyNetworkGatewayRollups(t *testing.T, conn driver.Conn) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	tenant := uuid.New()
+	now := time.Now().UTC()
+	observed := now.Truncate(time.Hour).Add(-time.Hour + time.Minute)
+	insert := func(id uuid.UUID, producer, gateway, kind string, success, qualifying bool, latency uint32, pixels uint64) {
+		t.Helper()
+		metric := obs.Metric{EventID: id.String(), Timestamp: observed, Provider: "livepeer", Network: "42161", Environment: "staging", ProducerKind: producer, ObserverID: gateway, Region: "eu", Kind: kind, ResourceID: "0xgw", IP: "192.0.2.9", Workload: "transcoding", Success: success, Qualifying: qualifying, LatencyMS: latency}
+		if pixels > 0 {
+			metric.Work = &obs.WorkFact{Version: 1, RequestDispatched: true, ReturnedPixelsKnown: true, ReturnedPixels: pixels}
+		}
+		writer, err := PrepareNetworkObservation(ctx, nativeContractConn{Conn: conn})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer writer.Close()
+		if err := writer.Append(NetworkObservationRow{TenantID: tenant, EventID: id, Timestamp: observed, Metric: metric, PublicData: "{}", PrivateData: "{}"}); err != nil {
+			t.Fatal(err)
+		}
+		if err := writer.Send(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	replayed := uuid.New()
+	insert(replayed, "gateway", "gw-a", "discovery", true, true, 40, 0)
+	insert(replayed, "gateway", "gw-a", "discovery", true, true, 40, 0)
+	insert(uuid.New(), "gateway", "gw-a", "discovery", false, true, 0, 0)
+	insert(uuid.New(), "gateway", "gw-b", "discovery", true, true, 80, 0)
+	insert(uuid.New(), "gateway", "gw-a", "attempt", true, true, 300, 1000)
+	insert(uuid.New(), "gateway", "gw-a", "segment", true, true, 300, 0)
+	insert(uuid.New(), "prober", "prober-eu", "discovery", true, true, 10, 0)
+	for range 2 {
+		for _, interval := range []int{300, 3600} {
+			if err := RebuildNetworkRollups(ctx, conn, tenant.String(), "42161", "staging", now.Add(-time.Minute), time.Now().Add(time.Minute), interval); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	for _, interval := range []uint32{300, 3600} {
+		rows, err := conn.Query(ctx, `SELECT gateway_id, kind, samples, successes, failures, latency_sum, latency_count, max_latency, returned_pixels
+			FROM periscope.network_gateway_rollups FINAL WHERE tenant_id=? AND interval_seconds=? ORDER BY gateway_id, kind`, tenant, interval)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for rows.Next() {
+			var gateway, kind string
+			var samples, successes, failures, latencySum, latencyCount, pixels uint64
+			var maxLatency uint32
+			if err := rows.Scan(&gateway, &kind, &samples, &successes, &failures, &latencySum, &latencyCount, &maxLatency, &pixels); err != nil {
+				t.Fatal(err)
+			}
+			got = append(got, fmt.Sprintf("%s %s %d/%d/%d %d/%d max %d px %d", gateway, kind, samples, successes, failures, latencySum, latencyCount, maxLatency, pixels))
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatal(err)
+		}
+		_ = rows.Close()
+		want := []string{"gw-a attempt 1/1/0 300/1 max 300 px 1000", "gw-a discovery 2/1/1 40/1 max 40 px 0", "gw-b discovery 1/1/0 80/1 max 80 px 0"}
+		if fmt.Sprint(got) != fmt.Sprint(want) {
+			t.Fatalf("interval %d gateway snapshots = %v, want %v", interval, got, want)
+		}
+	}
 }
 
 func verifyNetworkWorkAccounting(t *testing.T, conn driver.Conn) {

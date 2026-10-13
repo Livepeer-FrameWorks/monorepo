@@ -325,4 +325,53 @@ func verifyOrchestratorPerformanceParity(t *testing.T, ctx context.Context, db *
 	if legacyAttempts != 1 || v3Attempts != discovery.Samples {
 		t.Fatalf("1h series legacy transcode attempts = %d (want 1, scoped by cluster owner), schema-3 discovery = %d (want %d): %+v", legacyAttempts, v3Attempts, discovery.Samples, points)
 	}
+
+	// Beyond raw retention the series reads the gateway-keyed snapshots, and
+	// a long window agrees with the public route's region snapshots of the
+	// same hour.
+	old := now.Truncate(time.Hour).Add(-45 * 24 * time.Hour)
+	for i, statement := range []string{
+		`INSERT INTO periscope.network_gateway_rollups
+		 (tenant_id,provider,network_id,environment,bucket,interval_seconds,kind,resource_id,resolved_ip,gateway_id,gateway_region,
+		  samples,successes,failures,latency_sum,latency_count,max_latency,returned_pixels,snapshot_version)
+		 VALUES (?,'livepeer','42161','staging',?,3600,'discovery','` + orch + `','` + ip + `','` + gateway + `','` + region + `',4,3,1,150,3,60,0,now64(3)),
+		        (?,'livepeer','42161','staging',?,3600,'attempt','` + orch + `','` + ip + `','` + gateway + `','` + region + `',2,2,0,600,2,400,5000,now64(3))`,
+		`INSERT INTO periscope.network_observation_rollups
+		 (tenant_id,provider,network_id,environment,bucket,interval_seconds,kind,resource_id,resolved_ip,gateway_region,workload,profile_key,
+		  samples,successes,failures,qualified_samples,latency_state,duration_samples,duration_ratio_state,retries,fallbacks,deadline_misses,snapshot_version)
+		 SELECT ?,'livepeer','42161','staging',?,3600,'discovery','` + orch + `','` + ip + `','` + region + `','transcoding','',
+		  4,3,1,4,quantilesTDigestIfState(0.5,0.95,0.99)(toUInt32(50),toUInt8(1)),0,quantileTDigestIfState(0.95)(toFloat64(0),toUInt8(0)),0,0,0,now64(3)`,
+	} {
+		args := []any{owner, old}
+		if i == 0 {
+			args = append(args, owner, old)
+		}
+		if _, err := db.ExecContext(ctx, statement, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	points = series(now.Add(-60*24*time.Hour), "1h")
+	var retained *pb.OrchestratorPerformancePoint
+	for _, point := range points {
+		if point.GetTimestamp().AsTime().Equal(old) {
+			retained = point
+		}
+	}
+	if retained == nil || retained.GetGatewayId() != gateway || retained.GetAttempts() != 4 || retained.GetSuccesses() != 3 || retained.GetFailures() != 1 ||
+		retained.GetMeanLatencyMs() != 50 || retained.GetMaxLatencyMs() != 60 || retained.GetTranscodeAttempts() != 2 || retained.GetTranscodePixels() != 5000 {
+		t.Fatalf("series beyond raw retention lost the gateway's retained history: %+v", retained)
+	}
+	response, err = server.GetNetworkObservations(ctx, &pb.NetworkObservationsRequest{TenantIds: []string{owner}, Provider: "livepeer", NetworkId: "42161", Environment: "staging",
+		ResourceId: orch, ResolvedIp: ip, GatewayRegion: region, TimeRange: &commonpb.TimeRange{Start: timestamppb.New(old), End: timestamppb.New(old.Add(time.Hour))}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	history = obs.History{}
+	if err := json.Unmarshal(response.Json, &history); err != nil {
+		t.Fatal(err)
+	}
+	if !history.RolledUp || len(history.Summaries) != 1 || history.Summaries[0].Samples != retained.GetAttempts() ||
+		history.Summaries[0].Successes != retained.GetSuccesses() || history.Summaries[0].Failures != retained.GetFailures() {
+		t.Fatalf("public long window %+v differs from the series point %+v", history.Summaries, retained)
+	}
 }
