@@ -105,9 +105,9 @@ func TestPrivateerRoleVarsKeepsSeedFileConfiguredWithZeroPeers(t *testing.T) {
 
 func TestPrivateerRoleVarsMetadataEnvOverridesEnvVars(t *testing.T) {
 	config := ServiceConfig{
-		EnvVars: map[string]string{"FOO": "from-envvars"},
+		EnvVars: map[string]string{"UPSTREAM_DNS": "from-envvars"},
 		Metadata: map[string]any{
-			"env": map[string]string{"FOO": "from-metadata"},
+			"env": map[string]string{"UPSTREAM_DNS": "from-metadata"},
 		},
 	}
 	vars, err := privateerRoleVars(context.Background(), inventory.Host{}, config, mockPrivateerHelpers())
@@ -115,8 +115,8 @@ func TestPrivateerRoleVarsMetadataEnvOverridesEnvVars(t *testing.T) {
 		t.Fatalf("privateerRoleVars: %v", err)
 	}
 	env := vars["privateer_env"].(map[string]any)
-	if env["FOO"] != "from-metadata" {
-		t.Errorf("FOO = %v, want from-metadata", env["FOO"])
+	if env["UPSTREAM_DNS"] != "from-metadata" {
+		t.Errorf("UPSTREAM_DNS = %v, want from-metadata", env["UPSTREAM_DNS"])
 	}
 }
 

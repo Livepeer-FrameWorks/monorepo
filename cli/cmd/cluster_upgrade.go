@@ -1419,7 +1419,11 @@ func collectUpgradeableServices(plan *orchestrator.ExecutionPlan) []string {
 // ensurePlannedArtifactsResolvable (also before mutation), so a missing artifact aborts the release up front rather
 // than mid-rollout. A deploy-name that cannot be resolved is a hard error here, not an ignored skip. Alias-aware.
 type releaseServiceClasses struct {
-	Platform       []string
+	Platform []string
+	// ReleasePinned are managed dependencies whose artifact the platform
+	// release manifest pins (its external_dependencies, such as go-livepeer),
+	// so `release apply` converges them to the target release.
+	ReleasePinned  []string
 	Dependencies   []string
 	Infrastructure []string
 }
@@ -1433,7 +1437,11 @@ func classifyReleaseServices(manifest *inventory.Manifest, services []string) (r
 		}
 		switch servicedefs.DeliveryClassFor(deployName) {
 		case servicedefs.DeliveryManagedDependency:
-			classes.Dependencies = append(classes.Dependencies, svcID)
+			if provisioner.ExternalDependencyForService(deployName) != "" {
+				classes.ReleasePinned = append(classes.ReleasePinned, svcID)
+			} else {
+				classes.Dependencies = append(classes.Dependencies, svcID)
+			}
 			continue
 		case servicedefs.DeliveryHostInfrastructure:
 			classes.Infrastructure = append(classes.Infrastructure, svcID)
@@ -1448,6 +1456,9 @@ func classifyUpgradeableServices(cmd *cobra.Command, manifest *inventory.Manifes
 	classes, err := classifyReleaseServices(manifest, services)
 	if err != nil {
 		return nil, err
+	}
+	if len(classes.ReleasePinned) > 0 {
+		fmt.Fprintf(cmd.OutOrStdout(), "  release-pinned managed dependencies (artifact pinned by the platform release; `release apply` converges them after the platform services): %s\n", strings.Join(classes.ReleasePinned, ", "))
 	}
 	if len(classes.Dependencies) > 0 {
 		fmt.Fprintf(cmd.OutOrStdout(), "  managed dependencies (independent pins; inspect with `cluster diff`): %s\n", strings.Join(classes.Dependencies, ", "))

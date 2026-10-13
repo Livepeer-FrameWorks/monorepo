@@ -35,7 +35,7 @@ func TestNetworkObserverCanBeSelectedWithoutEnrollingExternalProbers(t *testing.
 	}
 	for _, profile := range []string{"central-all", "platform"} {
 		if slices.Contains(catalog.Profiles[profile], "network-observer") {
-			t.Errorf("%s enables observer without operator-supplied chain/ingest configuration", profile)
+			t.Errorf("%s starts the observer; a platform enables it by declaring it in the cluster manifest", profile)
 		}
 	}
 	if got := provisioner.ServicePorts["network-observer"]; got != 18024 {

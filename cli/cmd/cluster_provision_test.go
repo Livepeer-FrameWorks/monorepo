@@ -1600,7 +1600,7 @@ func TestServiceRegistrationMetadataUsesResolvedGatewayWallet(t *testing.T) {
 		},
 	}
 
-	metadata, err := serviceRegistrationMetadata("livepeer-gateway", "central-eu-1", "media-central-primary", manifest, map[string]any{}, "", testLoadSharedEnv(t, manifest), nil)
+	metadata, err := serviceRegistrationMetadata("livepeer-gateway", "central-eu-1", "media-central-primary", manifest, gatewayRuntimeData(), "", testLoadSharedEnv(t, manifest), nil)
 	if err != nil {
 		t.Fatalf("serviceRegistrationMetadata returned error: %v", err)
 	}
@@ -1887,7 +1887,7 @@ func TestBuildServiceEnvVarsLoadsSplitManifestEnvFiles(t *testing.T) {
 		Type:      "livepeer-gateway",
 		ServiceID: "livepeer-gateway",
 		ClusterID: "media-central-primary",
-	}, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil, "native")
+	}, manifest, gatewayRuntimeData(), "", "", testLoadSharedEnv(t, manifest), nil, "native")
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
@@ -3208,7 +3208,7 @@ func TestBuildServiceEnvVarsCoversRuntimeEnvDependencies(t *testing.T) {
 	}
 
 	sharedEnv := testLoadSharedEnv(t, manifest)
-	runtimeData := map[string]any{"service_token": "runtime-service-token"}
+	runtimeData := map[string]any{"service_token": "runtime-service-token", "system_tenant_id": testSystemTenantID}
 	cases := []struct {
 		serviceID string
 		want      map[string]string
@@ -3786,7 +3786,9 @@ func TestBuildServiceEnvVarsDerivesMirrorPrefixesFromLinksIntoBoundKafka(t *test
 	prefixesFor := func(serviceType, host, cluster string) string {
 		t.Helper()
 		task := &orchestrator.Task{Type: serviceType, ServiceID: serviceType, Host: host, ClusterID: cluster}
-		env, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil, "native")
+		shared := testLoadSharedEnv(t, manifest)
+		shared["NETWORK_OBSERVER_SECRET"] = "test-network-observer-secret"
+		env, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", shared, nil, "native")
 		if err != nil {
 			t.Fatalf("buildServiceEnvVars %s on %s: %v", serviceType, host, err)
 		}

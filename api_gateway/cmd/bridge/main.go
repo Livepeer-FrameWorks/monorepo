@@ -465,7 +465,7 @@ func main() {
 
 	var observerClient *networkobserver.Client
 	if cfg.NetworkObserverURL != "" {
-		observerClient, err = networkobserver.New(cfg.NetworkObserverURL, cfg.NetworkObserverSecret, !cfg.Release())
+		observerClient, err = networkobserver.NewWithTLS(cfg.NetworkObserverURL, cfg.NetworkObserverSecret, !cfg.Release(), networkobserver.TLS{CAFile: cfg.GRPCTLSCAPath})
 		if err != nil {
 			logger.WithError(err).Fatal("Invalid network observer client configuration")
 		}
@@ -474,9 +474,15 @@ func main() {
 	if observerClient != nil && !networkReaderOK {
 		logger.Fatal("Network observations require a compatible analytics client")
 	}
-	networkHandlers := &handlers.NetworkHandlers{Observer: observerClient, Analytics: networkReader, TenantIDs: cfg.NetworkPublicTenantIDs, Token: serviceToken, Network: cfg.NetworkID, Environment: cfg.NetworkEnvironment, JWTSecret: []byte(jwtSecret), Logger: logger}
+	networkHandlers := &handlers.NetworkHandlers{Observer: observerClient, Analytics: networkReader, TenantIDs: cfg.NetworkPublicTenantIDs, Token: serviceToken, Network: cfg.NetworkID, Environment: cfg.NetworkEnvironment, JWTSecret: []byte(jwtSecret), Logger: logger,
+		ClientIP: func(r *http.Request) string { return middleware.ClientIPFromRequestWithTrust(r, trustedProxies) }}
 	server.HandleOptionalTrailingSlash(app, http.MethodGet, "/v1/network/livepeer", middleware.PublicOperationRateLimitMiddleware(rateLimiter, trustedProxies, "networkObservations"), networkHandlers.Public)
 	server.HandleOptionalTrailingSlash(app, http.MethodGet, "/v1/network/livepeer/diagnostics", middleware.RequireJWTAuth([]byte(jwtSecret)), networkHandlers.Diagnostics)
+	// External probers set NETWORK_OBSERVER_URL to <public API>/network-observer
+	// and append the observer's own /v1 paths. A prober polls work every five
+	// seconds and posts one batch per check, so each route has its own bucket.
+	app.GET("/network-observer/v1/work", middleware.PublicOperationRateLimitMiddlewareWithLimits(rateLimiter, trustedProxies, "networkObserverWork", 60, 30), networkHandlers.ProberRelay("/v1/work"))
+	app.POST("/network-observer/v1/observations", middleware.PublicOperationRateLimitMiddlewareWithLimits(rateLimiter, trustedProxies, "networkObserverObservations", 1200, 600), networkHandlers.ProberRelay("/v1/observations"))
 
 	// Public infrastructure-node enrollment endpoint. Takes a bootstrap token
 	// (validated server-side by Quartermaster) and a locally-generated

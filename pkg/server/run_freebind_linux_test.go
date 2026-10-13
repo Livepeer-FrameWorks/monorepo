@@ -28,7 +28,7 @@ func TestBindListenersFreeBindAcceptsUnassignedAddress(t *testing.T) {
 }
 
 func TestBindListenersFreeBindAcceptsUnassignedIPv6Address(t *testing.T) {
-	probe, err := net.Listen("tcp6", "[::1]:0")
+	probe, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp6", "[::1]:0")
 	if err != nil {
 		t.Skipf("no IPv6 on this host: %v", err)
 	}

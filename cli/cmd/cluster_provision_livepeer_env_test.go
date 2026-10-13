@@ -11,6 +11,60 @@ import (
 	"frameworks/cli/pkg/orchestrator"
 )
 
+const testSystemTenantID = "5eed517e-ba5e-da7a-517e-ba5eda7a0001"
+
+// gatewayRuntimeData is the Quartermaster-resolved identity every real gateway
+// render has: the system tenant that owns platform clusters.
+func gatewayRuntimeData() map[string]any {
+	return map[string]any{"system_tenant_id": testSystemTenantID}
+}
+
+// A gateway render without a resolvable owner tenant is refused: go-livepeer
+// exits at startup when Decklog is set without FRAMEWORKS_CLUSTER_OWNER_TENANT_ID.
+// `--only-services livepeer-gateway-*` runs no Quartermaster bootstrap, so it
+// must read the owners from the running Quartermaster before rendering.
+func TestGatewayRenderRequiresResolvedOwnerTenant(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Profile:  "dev",
+		Hosts:    map[string]inventory.Host{"gw-eu-1": {Cluster: "staging-media-eu"}, "core-1": {Cluster: "staging-core"}},
+		Clusters: map[string]inventory.ClusterConfig{"staging-media-eu": {Name: "Staging Media EU"}, "tenant-media": {Name: "Tenant", OwnerTenant: "acme"}},
+		Services: map[string]inventory.ServiceConfig{
+			"foghorn-eu":          {Enabled: true, Deploy: "foghorn", Hosts: []string{"gw-eu-1"}, Cluster: "staging-media-eu"},
+			"livepeer-gateway-eu": {Enabled: true, Deploy: "livepeer-gateway", Hosts: []string{"gw-eu-1"}, Cluster: "staging-media-eu"},
+			"quartermaster":       {Enabled: true, Host: "core-1"},
+		},
+	}
+	task := &orchestrator.Task{Name: "livepeer-gateway-eu@gw-eu-1", Type: "livepeer-gateway", ServiceID: "livepeer-gateway-eu", Host: "gw-eu-1", ClusterID: "staging-media-eu", Phase: orchestrator.PhaseApplications}
+	_, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", map[string]string{}, nil, "native")
+	if err == nil || !strings.Contains(err.Error(), "FRAMEWORKS_CLUSTER_OWNER_TENANT_ID") {
+		t.Fatalf("gateway rendered without an owner tenant: err = %v", err)
+	}
+	env, err := buildServiceEnvVars(task, manifest, map[string]any{"owner_tenant_ids_by_alias": map[string]string{"frameworks": testSystemTenantID}}, "", "", map[string]string{}, nil, "native")
+	if err != nil || env["FRAMEWORKS_CLUSTER_OWNER_TENANT_ID"] != testSystemTenantID {
+		t.Fatalf("resolved owner = %q (err %v), want the system tenant", env["FRAMEWORKS_CLUSTER_OWNER_TENANT_ID"], err)
+	}
+	tenantTask := *task
+	tenantTask.ClusterID = "tenant-media"
+	if _, tenantErr := buildServiceEnvVars(&tenantTask, manifest, gatewayRuntimeData(), "", "", map[string]string{}, nil, "native"); tenantErr == nil {
+		t.Fatal("a tenant-owned cluster's gateway was attributed to the system tenant")
+	}
+
+	plan := &orchestrator.ExecutionPlan{Batches: [][]*orchestrator.Task{
+		{{Name: "quartermaster", Type: "quartermaster", ServiceID: "quartermaster"}},
+		{task},
+	}}
+	if provisionNeedsExistingClusterOwners(plan) {
+		t.Fatal("a provision that runs the Quartermaster bootstrap pre-resolved owners it resolves itself")
+	}
+	targeted, err := filterProvisionPlan(plan, []string{"livepeer-gateway-eu"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !provisionNeedsExistingClusterOwners(targeted) {
+		t.Fatal("--only-services livepeer-gateway-eu renders gateways without resolving cluster owners")
+	}
+}
+
 func TestBuildServiceEnvVarsMapsLivepeerRPCFromNetworkEnv(t *testing.T) {
 	envFile := writeTestEnvFile(t, "ARBITRUM_RPC_ENDPOINT=https://arb.example\n")
 
@@ -31,7 +85,7 @@ func TestBuildServiceEnvVarsMapsLivepeerRPCFromNetworkEnv(t *testing.T) {
 		Name:      "livepeer-gateway",
 		Type:      "livepeer-gateway",
 		ServiceID: "livepeer-gateway",
-	}, manifest, map[string]interface{}{}, "", "", testLoadSharedEnv(t, manifest), nil, "native")
+	}, manifest, gatewayRuntimeData(), "", "", testLoadSharedEnv(t, manifest), nil, "native")
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
@@ -70,7 +124,7 @@ func TestBuildServiceEnvVarsWiresOrchHealthRedisForGateway(t *testing.T) {
 		ServiceID: "livepeer-gateway-eu",
 		Host:      "regional-eu-1",
 		ClusterID: "media-eu-1",
-	}, manifest, map[string]interface{}{}, "", "", testLoadSharedEnv(t, manifest), nil, "native")
+	}, manifest, gatewayRuntimeData(), "", "", testLoadSharedEnv(t, manifest), nil, "native")
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
@@ -126,7 +180,7 @@ func TestBuildServiceEnvVarsWiresOrchHealthSentinelAndPerfWeightsForGateway(t *t
 		ServiceID: "livepeer-gateway-eu",
 		Host:      "regional-eu-1",
 		ClusterID: "media-eu-1",
-	}, manifest, map[string]interface{}{}, "", "", testLoadSharedEnv(t, manifest), nil, "native")
+	}, manifest, gatewayRuntimeData(), "", "", testLoadSharedEnv(t, manifest), nil, "native")
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
@@ -171,7 +225,7 @@ func TestBuildServiceEnvVarsInjectsGeoIPForAliasedLivepeerGateway(t *testing.T) 
 		Type:      "livepeer-gateway",
 		ServiceID: "livepeer-gateway-eu",
 		Host:      "regional-eu-1",
-	}, manifest, map[string]interface{}{}, "", "", nil, nil, "native")
+	}, manifest, gatewayRuntimeData(), "", "", nil, nil, "native")
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
@@ -202,7 +256,7 @@ func TestBuildServiceEnvVarsPrefersExplicitLivepeerConfig(t *testing.T) {
 		Name:      "livepeer-gateway",
 		Type:      "livepeer-gateway",
 		ServiceID: "livepeer-gateway",
-	}, manifest, map[string]interface{}{}, "", "", testLoadSharedEnv(t, manifest), nil, "native")
+	}, manifest, gatewayRuntimeData(), "", "", testLoadSharedEnv(t, manifest), nil, "native")
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
@@ -237,7 +291,7 @@ func TestBuildServiceEnvVarsMapsLivepeerUppercaseAliases(t *testing.T) {
 		Name:      "livepeer-gateway",
 		Type:      "livepeer-gateway",
 		ServiceID: "livepeer-gateway",
-	}, manifest, map[string]interface{}{}, "", "", testLoadSharedEnv(t, manifest), nil, "native")
+	}, manifest, gatewayRuntimeData(), "", "", testLoadSharedEnv(t, manifest), nil, "native")
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
@@ -281,7 +335,7 @@ func TestBuildServiceEnvVarsPreservesExplicitLivepeerGatewayHostConfig(t *testin
 		Type:      "livepeer-gateway",
 		ServiceID: "livepeer-gateway",
 		ClusterID: "media-central-primary",
-	}, manifest, map[string]interface{}{}, "", "", testLoadSharedEnv(t, manifest), nil, "native")
+	}, manifest, gatewayRuntimeData(), "", "", testLoadSharedEnv(t, manifest), nil, "native")
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
@@ -313,7 +367,7 @@ func TestBuildServiceEnvVarsDoesNotDefaultGatewayHost(t *testing.T) {
 		Type:      "livepeer-gateway",
 		ServiceID: "livepeer-gateway",
 		ClusterID: "media-central-primary",
-	}, manifest, map[string]interface{}{}, "", "", testLoadSharedEnv(t, manifest), nil, "native")
+	}, manifest, gatewayRuntimeData(), "", "", testLoadSharedEnv(t, manifest), nil, "native")
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
@@ -345,7 +399,7 @@ func TestBuildServiceEnvVarsIgnoresSharedLivepeerGatewayHostAlias(t *testing.T) 
 		Type:      "livepeer-gateway",
 		ServiceID: "livepeer-gateway",
 		ClusterID: "media-central-primary",
-	}, manifest, map[string]interface{}{}, "", "", testLoadSharedEnv(t, manifest), nil, "native")
+	}, manifest, gatewayRuntimeData(), "", "", testLoadSharedEnv(t, manifest), nil, "native")
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
@@ -386,7 +440,7 @@ func TestBuildServiceEnvVarsSelectsLivepeerRPCPoolByGatewayHostOrder(t *testing.
 		ServiceID: "livepeer-gateway",
 		Host:      "gateway-b",
 		ClusterID: "media-central-primary",
-	}, manifest, map[string]interface{}{}, "", "", testLoadSharedEnv(t, manifest), nil, "native")
+	}, manifest, gatewayRuntimeData(), "", "", testLoadSharedEnv(t, manifest), nil, "native")
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
@@ -424,7 +478,7 @@ func TestBuildServiceEnvVarsLivepeerGatewayRuntimeDefaults(t *testing.T) {
 		ServiceID: "livepeer-gateway",
 		Host:      "central-eu-1",
 		ClusterID: "core-central-primary",
-	}, manifest, map[string]interface{}{}, "", "", testLoadSharedEnv(t, manifest), nil, "native")
+	}, manifest, gatewayRuntimeData(), "", "", testLoadSharedEnv(t, manifest), nil, "native")
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
@@ -617,7 +671,7 @@ func TestBuildServiceEnvVarsFailsProductionGatewayWithoutCellFoghorn(t *testing.
 	}
 	_, err := buildServiceEnvVars(&orchestrator.Task{
 		Name: "livepeer-gateway-ap@fw-ap-1", Type: "livepeer-gateway", ServiceID: "livepeer-gateway-ap", Host: "fw-ap-1", ClusterID: "media-ap",
-	}, manifest, map[string]interface{}{}, "", "", map[string]string{}, nil, "native")
+	}, manifest, gatewayRuntimeData(), "", "", map[string]string{}, nil, "native")
 	if err == nil || !strings.Contains(err.Error(), "auth webhook") {
 		t.Fatalf("err = %v, want the unresolved auth webhook refusal", err)
 	}
@@ -644,7 +698,7 @@ func TestBuildServiceEnvVarsRendersStagingObservationNamespace(t *testing.T) {
 	}
 	gateway, err := buildServiceEnvVars(&orchestrator.Task{
 		Name: "livepeer-gateway-eu@fw-stg-eu-1", Type: "livepeer-gateway", ServiceID: "livepeer-gateway-eu", Host: "fw-stg-eu-1", ClusterID: "staging-media-eu",
-	}, manifest, map[string]interface{}{}, "", "", map[string]string{}, nil, "native")
+	}, manifest, gatewayRuntimeData(), "", "", map[string]string{}, nil, "native")
 	if err != nil {
 		t.Fatalf("gateway env: %v", err)
 	}

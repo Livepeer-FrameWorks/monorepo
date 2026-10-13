@@ -184,8 +184,12 @@ plan` and `release apply --dry-run` list every step and, per host, the role task
    the service catalog, and clusters. The desired state renders before the first mutation, so a
    render failure refuses the release up front. Replicas and MirrorMaker2 workers the manifest no
    longer places are removed only after every desired replica is healthy, and then the
-   service-cluster assignments are reconciled. A dry run reports these steps without running
-   them.
+   service-cluster assignments are reconciled. Then the Livepeer signer and gateways converge to
+   the go-livepeer artifact the release manifest pins, one host at a time, signers first. They
+   follow the platform services because a gateway calls its cell's Foghorn and Decklog. A host
+   whose installed artifact already matches is skipped; a changed host reinstalls and restarts,
+   and its Livepeer health and keystore validation must pass before the next host starts. A dry
+   run reports these steps without running them.
 4. **Postdeploy migrations.** These refuse to run until the release's required data migrations
    are complete. The Purser tier catalog reconcile follows.
 
@@ -286,8 +290,11 @@ frameworks cluster release apply --version vX.Y.Z --dry-run
 ### What `release apply` does not change
 
 - **Other managed dependencies** with their own manifest pins: VictoriaMetrics, Alertmanager,
-  Prometheus, MistServer, and the Livepeer gateway and signer. Use `cluster diff` to see desired
-  and observed state, and `cluster provision` when their pins change.
+  Prometheus, and MistServer. Use `cluster diff` to see desired and observed
+  state, and `cluster provision` when their pins change. The Livepeer gateway and signer are not
+  in this group: the platform release pins their go-livepeer artifact, so `release apply`
+  converges them (stage 3), and `cluster status` compares each host's installed artifact with
+  that pin.
 - **A standalone PostgreSQL server**, which `cluster provision` converges.
 
 A direct `cluster upgrade <service>` refuses a host where the service is not installed; only

@@ -31,8 +31,8 @@ func TestIsMissing(t *testing.T) {
 
 func TestKeys(t *testing.T) {
 	keys := Keys()
-	if len(keys) != len(generatable)+len(mediaAuthorityKeys) {
-		t.Fatalf("Keys() len = %d, want %d", len(keys), len(generatable)+len(mediaAuthorityKeys))
+	if want := len(generatable) + len(featureGeneratable) + len(mediaAuthorityKeys); len(keys) != want {
+		t.Fatalf("Keys() len = %d, want %d", len(keys), want)
 	}
 	want := map[string]bool{
 		"DATABASE_RUNTIME_PASSWORD": true,
@@ -45,6 +45,7 @@ func TestKeys(t *testing.T) {
 		"MEDIA_AUTHORITY_SIGNING_KEY_ID":              true,
 		"MEDIA_AUTHORITY_SIGNING_PRIVATE_KEY_PEM_B64": true,
 		"MEDIA_AUTHORITY_TRUST_SET":                   true,
+		"NETWORK_OBSERVER_SECRET":                     true,
 	}
 	for _, k := range keys {
 		if !want[k] {
@@ -279,6 +280,35 @@ func TestGenerateSharedDeploymentMaterialIncludesEdgeTelemetrySigner(t *testing.
 	}
 	if privateKey.Curve.Params().Name != "P-256" {
 		t.Fatalf("edge telemetry signer uses %s, want P-256", privateKey.Curve.Params().Name)
+	}
+}
+
+// The observer secret is generated with the shared set and on its own for an
+// existing deployment, but only a manifest declaring the observer requires it.
+func TestNetworkObserverSecretIsGeneratedButFeatureValidated(t *testing.T) {
+	shared, err := GenerateSharedDeploymentMaterial()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if raw, decodeErr := hex.DecodeString(shared[NetworkObserverSecretKey]); decodeErr != nil || len(raw) != 32 {
+		t.Fatalf("shared set %s is not a 32-byte hex secret", NetworkObserverSecretKey)
+	}
+	delete(shared, NetworkObserverSecretKey)
+	if validateErr := ValidateShared(shared); validateErr != nil {
+		t.Fatalf("platform without an observer must not require %s: %v", NetworkObserverSecretKey, validateErr)
+	}
+
+	upgrade, err := GenerateNetworkObserverMaterial()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(upgrade) != 1 || ValidateNetworkObserverSecret(upgrade[NetworkObserverSecretKey]) != nil {
+		t.Fatalf("upgrade generator = %v, want only a valid %s", upgrade, NetworkObserverSecretKey)
+	}
+	for _, placeholder := range []string{"", "change-me", " "} {
+		if err := ValidateNetworkObserverSecret(placeholder); err == nil {
+			t.Fatalf("placeholder %q accepted as the observer secret", placeholder)
+		}
 	}
 }
 

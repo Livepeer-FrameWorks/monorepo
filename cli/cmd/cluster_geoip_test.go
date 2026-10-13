@@ -194,3 +194,30 @@ func TestGeoIPExplicitOverrideAlignsEnvInjection(t *testing.T) {
 		}
 	}
 }
+
+// The observer locates endpoints and probers only through the MMDB, so a
+// declared observer receives it with the default selection and with an
+// explicit selection that predates the observer. Purser's x402 geolocation is
+// in the default selection too.
+func TestEffectiveGeoIPServicesIncludesDeclaredObserver(t *testing.T) {
+	m := &inventory.Manifest{Services: map[string]inventory.ServiceConfig{
+		"foghorn":     {Enabled: true},
+		"purser":      {Enabled: true},
+		"observer-eu": {Enabled: true, Deploy: "network-observer"},
+	}}
+	if got := effectiveGeoIPServices(m, nil); !slices.Equal(got, []string{"foghorn", "purser", "network-observer"}) {
+		t.Fatalf("default selection = %v, want foghorn, purser and the observer", got)
+	}
+	m.GeoIP = &inventory.GeoIPConfig{Services: []string{"foghorn", "purser"}}
+	if got := effectiveGeoIPServices(m, nil); !slices.Equal(got, []string{"foghorn", "purser", "network-observer"}) {
+		t.Fatalf("explicit selection = %v, want the observer added", got)
+	}
+	targets, err := geoIPTargetServiceNames(m, effectiveGeoIPServices(m, nil))
+	if err != nil || !slices.Contains(targets, "observer-eu") {
+		t.Fatalf("GeoIP targets = %v (err %v), want the observer's manifest entry", targets, err)
+	}
+	delete(m.Services, "observer-eu")
+	if got := effectiveGeoIPServices(m, nil); slices.Contains(got, "network-observer") {
+		t.Fatalf("selection %v includes an undeclared observer", got)
+	}
+}

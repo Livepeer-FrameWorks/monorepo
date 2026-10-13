@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -128,6 +129,7 @@ func runReleasePlan(cmd *cobra.Command, rc *resolvedCluster, opts releasePlanOpt
 	fmt.Fprintln(out, "  3. schema expand migrations")
 	writeReleasePlanGroup(out, "4. platform artifact upgrades", classes.Platform)
 	writeFoghornCellGatePlan(out, manifest, classes.Platform)
+	describeReleasePinnedDependencies(out, planReleasePinnedDependencies(execution))
 	if len(transitions) == 0 {
 		fmt.Fprintln(out, "  5. release reconciliations: none")
 	} else {
@@ -418,6 +420,7 @@ func runReleaseApply(cmd *cobra.Command, rc *resolvedCluster, opts releaseApplyO
 	}
 
 	hostSteps := planReleaseHostConvergence(plan, manifest)
+	pinnedDependencies := planReleasePinnedDependencies(plan)
 	ux.Heading(out, fmt.Sprintf("Release plan for %s (platform %s)", version, platformVersion))
 	writeReleaseHostConvergencePlan(out, "1. pre-upgrade host convergence", manifest, hostSteps, releaseYugabyteEngine(gm))
 	fmt.Fprintln(out, releaseApplyServiceDatabasesStep)
@@ -428,6 +431,7 @@ func runReleaseApply(cmd *cobra.Command, rc *resolvedCluster, opts releaseApplyO
 		fmt.Fprintf(out, "  3. service upgrades: %s\n", strings.Join(services, " -> "))
 		writeFoghornCellGatePlan(out, manifest, services)
 	}
+	describeReleasePinnedDependencies(out, pinnedDependencies)
 	for _, t := range transitions {
 		fmt.Fprintf(out, "     · reconcile %q after [%s] before [%s]\n", t.ID(), strings.Join(t.AfterServices(), ","), strings.Join(t.BeforeServices(), ","))
 	}
@@ -447,13 +451,13 @@ func runReleaseApply(cmd *cobra.Command, rc *resolvedCluster, opts releaseApplyO
 	// Every service env the release deploys must pass the schema contract, and
 	// required operator inputs must exist, before the first mutation.
 	var hostConvergence *releaseHostConvergence
-	if len(hostSteps) > 0 {
+	if len(hostSteps) > 0 || len(pinnedDependencies) > 0 {
 		hostConvergence, err = releaseNewHostConvergenceFn(cmd, rc, platformVersion, sshPool)
 		if err != nil {
 			return fmt.Errorf("pre-upgrade host convergence: %w", err)
 		}
 		hostConvergence.yugabyteEngine = releaseYugabyteEngine(gm)
-		if contractErr := hostConvergence.preflightEnvContract(hostSteps); contractErr != nil {
+		if contractErr := hostConvergence.preflightEnvContract(append(slices.Clone(hostSteps), releasePinnedDependencySteps(pinnedDependencies)...)); contractErr != nil {
 			return contractErr
 		}
 	}
@@ -530,6 +534,10 @@ func runReleaseApply(cmd *cobra.Command, rc *resolvedCluster, opts releaseApplyO
 	if err := releaseReconcileAssignmentsFn(cmd.Context(), cmd, rc, opts.dryRun); err != nil {
 		writeReleaseResumeHint(cmd.ErrOrStderr(), platformVersion, opts.dryRun)
 		return fmt.Errorf("service-cluster assignments: %w", err)
+	}
+	if err := hostConvergence.runReleasePinnedDependencies(cmd.Context(), pinnedDependencies, opts.dryRun); err != nil {
+		writeReleaseResumeHint(cmd.ErrOrStderr(), platformVersion, opts.dryRun)
+		return fmt.Errorf("release-pinned managed dependencies: %w", err)
 	}
 
 	// Postdeploy migrations gate on, but do not execute, required data migrations.

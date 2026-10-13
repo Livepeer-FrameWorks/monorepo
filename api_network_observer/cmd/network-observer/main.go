@@ -10,12 +10,15 @@ import (
 	"frameworks/api_network_observer/internal/providers/livepeer"
 	"frameworks/api_network_observer/internal/store"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/kafka"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	obs "github.com/Livepeer-FrameWorks/monorepo/pkg/networkobservation"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/qmbootstrap"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 	"github.com/twmb/franz-go/pkg/kadm"
 	"net/http"
@@ -195,16 +198,109 @@ func main() {
 			}
 		}
 	}()
-	httpServer := &http.Server{Addr: ":" + cfg.HTTPPort, Handler: api.Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
+	handler := api.Handler()
+	httpServer := newHTTPServer(":"+cfg.HTTPPort, handler)
+	internalTLS := grpcutil.ServerTLSConfig{CertFile: cfg.CertPath, KeyFile: cfg.KeyPath}
+	var internalServer *http.Server
+	if cfg.CertPath != "" && cfg.KeyPath != "" {
+		internalServer = newHTTPServer(":"+cfg.InternalPort, handler)
+		httpServer.Handler = probesOnly(handler)
+		go serveInternalTLS(ctx, internalServer, internalTLS, logger)
+	}
+	go registerWithQuartermaster(ctx, cfg, logger)
 	go func() {
 		<-ctx.Done()
 		stopCtx, stop := context.WithTimeout(context.Background(), 10*time.Second)
 		defer stop()
-		if shutdownErr := httpServer.Shutdown(stopCtx); shutdownErr != nil {
-			logger.WithError(shutdownErr).Warn("Observer shutdown failed")
+		for _, srv := range []*http.Server{internalServer, httpServer} {
+			if srv == nil {
+				continue
+			}
+			if shutdownErr := srv.Shutdown(stopCtx); shutdownErr != nil {
+				logger.WithError(shutdownErr).Warn("Observer shutdown failed")
+			}
 		}
 	}()
 	if err = httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		logger.WithError(err).Fatal("Observer HTTP server failed")
 	}
+}
+
+// probesOnly limits the plain listener to health and readiness once the
+// internal TLS listener carries the API, so the bearer secret never crosses the
+// mesh in plaintext.
+func probesOnly(handler http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && (r.URL.Path == "/health" || r.URL.Path == "/ready") {
+			handler.ServeHTTP(w, r)
+			return
+		}
+		http.NotFound(w, r)
+	})
+}
+
+func newHTTPServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
+}
+
+// serveInternalTLS serves the API to mesh callers with the internal-CA leaf.
+// Privateer may write the leaf after the process starts, so the listener opens
+// once the files exist; the plain listener keeps health probes answering
+// meanwhile. The certificate is reloaded when Privateer renews it.
+func serveInternalTLS(ctx context.Context, srv *http.Server, files grpcutil.ServerTLSConfig, logger logging.Logger) {
+	if err := grpcutil.WaitForServerTLSFiles(ctx, files, logger); err != nil {
+		if ctx.Err() == nil {
+			logger.WithError(err).Fatal("Observer internal TLS files unavailable")
+		}
+		return
+	}
+	tlsConfig, err := grpcutil.HTTPServerTLSConfig(files)
+	if err != nil {
+		logger.WithError(err).Fatal("Observer internal TLS configuration invalid")
+	}
+	srv.TLSConfig = tlsConfig
+	if err := srv.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		logger.WithError(err).Fatal("Observer internal HTTPS server failed")
+	}
+}
+
+// registerWithQuartermaster records this instance in the service registry,
+// which is what resolves network-observer.<region>.internal for Bridge on other
+// nodes. The registered port is the plain listener that serves the readiness
+// probe.
+func registerWithQuartermaster(ctx context.Context, cfg *appconfig.Observer, logger logging.Logger) {
+	if cfg.QuartermasterGRPCAddr == "" {
+		logger.Info("Quartermaster address unset; observer not registered for mesh DNS")
+		return
+	}
+	qmClient, err := quartermaster.NewGRPCClient(quartermaster.GRPCConfig{
+		GRPCAddr:      cfg.QuartermasterGRPCAddr,
+		Timeout:       10 * time.Second,
+		Logger:        logger,
+		ServiceToken:  cfg.ServiceToken,
+		AllowInsecure: cfg.AllowInsecure,
+		CACertFile:    cfg.CAPath,
+		ServerName:    cfg.QuartermasterTLSName,
+	})
+	if err != nil {
+		logger.WithError(err).Warn("Quartermaster client unavailable; observer not registered")
+		return
+	}
+	defer func() { _ = qmClient.Close() }()
+	req, err := qmbootstrap.NewServiceRequest(qmbootstrap.ServiceRegistration{
+		ServiceType:   "network-observer",
+		Port:          cfg.HTTPPort,
+		AdvertiseHost: cfg.AdvertiseHost,
+		ClusterID:     cfg.Registration.ClusterID,
+		NodeID:        cfg.NodeID,
+	})
+	if err != nil {
+		logger.WithError(err).Warn("Quartermaster bootstrap skipped")
+		return
+	}
+	if _, err := qmbootstrap.BootstrapServiceWithRetry(ctx, qmClient, req, logger, qmbootstrap.DefaultRetryConfig("network-observer")); err != nil {
+		logger.WithError(err).Warn("Quartermaster bootstrap (network-observer) failed")
+		return
+	}
+	logger.Info("Quartermaster bootstrap (network-observer) ok")
 }

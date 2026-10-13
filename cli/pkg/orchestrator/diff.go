@@ -95,6 +95,11 @@ func Classify(serviceName, hostName string, desired *detect.Fingerprint, observe
 			continue
 		}
 		got, present := observed[expected.Path]
+		if got == detect.UnreadableSHA256 {
+			out.Kinds = append(out.Kinds, DiffUnknown)
+			out.Details[DiffUnknown] = expected.Path + ": present on host but unreadable by the SSH user; grant it passwordless sudo to compare the file"
+			continue
+		}
 		if !present || got == "" {
 			out.Kinds = append(out.Kinds, dk)
 			out.Details[dk] = expected.Path + ": missing on host (expected " + short(expected.SHA256) + ")"

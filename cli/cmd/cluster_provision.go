@@ -27,6 +27,7 @@ import (
 	"sync"
 	"time"
 
+	"frameworks/cli/internal/configschema"
 	"frameworks/cli/internal/internalpki"
 	meshutil "frameworks/cli/internal/mesh"
 	"frameworks/cli/internal/readiness"
@@ -803,6 +804,14 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, rc *resolvedClust
 	runtimeData, err := provisionRuntimeData(manifest, manifestDir, sharedEnv)
 	if err != nil {
 		return err
+	}
+	if provisionNeedsExistingClusterOwners(plan) {
+		resolveCtx, resolveCancel := context.WithTimeout(ctx, provisionInitializeTimeout)
+		resolveErr := resolveExistingClusterOwners(resolveCtx, manifest, runtimeData, raSession)
+		resolveCancel()
+		if resolveErr != nil {
+			return fmt.Errorf("resolve cluster owner tenants for livepeer-gateway: %w", resolveErr)
+		}
 	}
 
 	ybRolls := map[string]*yugabyteRoll{}
@@ -1888,6 +1897,9 @@ func manifestMeshHostname(manifest *inventory.Manifest, hostName string) string 
 func usesInternalGRPCLeaf(serviceName string) bool {
 	switch serviceName {
 	case "commodore", "quartermaster", "purser", "periscope-query", "decklog", "foghorn", "signalman", "deckhand", "skipper", "navigator", "lookout", "bosun":
+		return true
+	case "network-observer":
+		// The leaf serves the observer's internal HTTPS listener to Bridge.
 		return true
 	default:
 		return false
@@ -5638,7 +5650,10 @@ func yugabyteLogicalDatabaseName(name string, manifest *inventory.Manifest) stri
 		if deploy == "" {
 			deploy = serviceID
 		}
-		if alias := strings.ReplaceAll(serviceID, "-", "_"); alias == name && alias != deploy {
+		// A per-cluster alias (foghorn-eu -> foghorn_eu) renames a shared
+		// template; a service's own database (network-observer ->
+		// network_observer) is the deploy name in database spelling.
+		if alias := strings.ReplaceAll(serviceID, "-", "_"); alias == name && alias != strings.ReplaceAll(deploy, "-", "_") {
 			return deploy
 		}
 	}
@@ -7213,6 +7228,14 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 			env["NETWORK_OBSERVER_CLUSTER_ID"] = task.ClusterID
 		}
 		setEnvIfEmpty(env, "LIVEPEER_ETH_RPC_URL", "ARBITRUM_RPC_ENDPOINT")
+		if err := renderNetworkObserverEnv(manifest, env); err != nil {
+			return nil, err
+		}
+	}
+	if baseName == "bridge" {
+		if err := renderBridgeNetworkObservationEnv(manifest, env); err != nil {
+			return nil, err
+		}
 	}
 	if baseName == "foghorn" || baseName == "vmauth" {
 		if edgeTelemetryJWTRequired(manifest) || edgeTelemetryJWTMaterialPresent(runtimeData, env) {
@@ -7279,25 +7302,22 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 		// clusters (alias "frameworks" → system tenant UUID) AND non-platform
 		// clusters (private/customer/marketplace) so their gateway telemetry
 		// attributes correctly. Empty alias is treated as "frameworks".
-		if env["FRAMEWORKS_CLUSTER_OWNER_TENANT_ID"] == "" && task.ClusterID != "" {
-			if cluster, ok := manifest.Clusters[task.ClusterID]; ok {
-				ownerAlias := strings.TrimSpace(cluster.OwnerTenant)
-				if ownerAlias == "" {
-					ownerAlias = "frameworks"
+		if env["FRAMEWORKS_CLUSTER_OWNER_TENANT_ID"] == "" {
+			ownerAlias := "frameworks"
+			if cluster, ok := manifest.Clusters[task.ClusterID]; ok && strings.TrimSpace(cluster.OwnerTenant) != "" {
+				ownerAlias = strings.TrimSpace(cluster.OwnerTenant)
+			}
+			if ownerMap, ok := runtimeData["owner_tenant_ids_by_alias"].(map[string]string); ok {
+				if id, ok := ownerMap[ownerAlias]; ok && id != "" {
+					env["FRAMEWORKS_CLUSTER_OWNER_TENANT_ID"] = id
 				}
-				if ownerMap, ok := runtimeData["owner_tenant_ids_by_alias"].(map[string]string); ok {
-					if id, ok := ownerMap[ownerAlias]; ok && id != "" {
-						env["FRAMEWORKS_CLUSTER_OWNER_TENANT_ID"] = id
-					}
-				}
-				// Fallback to system_tenant_id for the platform-cluster case
-				// when the owner-alias resolution didn't run (e.g., during a
-				// degraded provision where QM bootstrap succeeded but the
-				// alias batch failed).
-				if env["FRAMEWORKS_CLUSTER_OWNER_TENANT_ID"] == "" && ownerAlias == "frameworks" {
-					if id, ok := runtimeData["system_tenant_id"].(string); ok && id != "" {
-						env["FRAMEWORKS_CLUSTER_OWNER_TENANT_ID"] = id
-					}
+			}
+			// The platform owner is the system tenant, which every
+			// Quartermaster-backed render resolves even where the alias batch
+			// did not run.
+			if env["FRAMEWORKS_CLUSTER_OWNER_TENANT_ID"] == "" && ownerAlias == "frameworks" {
+				if id, ok := runtimeData["system_tenant_id"].(string); ok && id != "" {
+					env["FRAMEWORKS_CLUSTER_OWNER_TENANT_ID"] = id
 				}
 			}
 		}
@@ -7340,6 +7360,12 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 			decklogPort = decklogSvc.GRPCPort
 		}
 		env["FRAMEWORKS_DECKLOG_GRPC_ADDR"] = fmt.Sprintf("decklog.internal:%d", decklogPort)
+		// go-livepeer exits at startup when Decklog is configured without the
+		// owner tenant, so an unresolved owner refuses the render instead of
+		// deploying a gateway that crash-loops.
+		if strings.TrimSpace(env["FRAMEWORKS_CLUSTER_OWNER_TENANT_ID"]) == "" {
+			return nil, fmt.Errorf("service livepeer-gateway: the owner tenant of cluster %q is unresolved; the gateway refuses to start with FRAMEWORKS_DECKLOG_GRPC_ADDR and no FRAMEWORKS_CLUSTER_OWNER_TENANT_ID. Run with Quartermaster reachable so the CLI resolves it, or set FRAMEWORKS_CLUSTER_OWNER_TENANT_ID", task.ClusterID)
+		}
 		if env["FRAMEWORKS_DECKLOG_TLS_MODE"] == "" {
 			if _, ok := manifest.Services["navigator"]; ok {
 				env["FRAMEWORKS_DECKLOG_TLS_MODE"] = "mtls"
@@ -7519,6 +7545,9 @@ func restrictClusterAccessSecrets(serviceID string, env map[string]string) {
 	if serviceID != "foghorn" {
 		delete(env, "FOGHORN_BALANCER_CAPABILITY_SECRET")
 		delete(env, "FOGHORN_STATE_ENCRYPTION_KEY")
+	}
+	if serviceID != "network-observer" && serviceID != "bridge" && serviceID != "network-prober" {
+		delete(env, credentials.NetworkObserverSecretKey)
 	}
 	if serviceID != "commodore" {
 		delete(env, "MEDIA_AUTHORITY_SIGNING_KEY_ID")
@@ -8195,7 +8224,7 @@ func validateProductionServiceEnv(manifest *inventory.Manifest, serviceID string
 			return fmt.Errorf("service periscope-metering: METERING_SOURCE_REGION %q must match %s and be at most 64 characters", sourceRegion, meteringSourceIDPattern.String())
 		}
 	case "quartermaster", "commodore", "purser":
-		if strings.TrimSpace(env["DATABASE_HOST"]) == "" {
+		if strings.TrimSpace(env["DATABASE_HOST"]) == "" && !databaseURLHasHost(env["DATABASE_URL"]) {
 			return fmt.Errorf("service %s: non-dev deploy requires DATABASE_HOST", serviceID)
 		}
 		if strings.TrimSpace(env["DATABASE_PASSWORD"]) == "" && !databaseURLHasPassword(env["DATABASE_URL"]) {
@@ -8274,6 +8303,36 @@ func databaseURLHasPassword(raw string) bool {
 	}
 	_, password, ok := strings.Cut(authority[:at], ":")
 	return ok && password != ""
+}
+
+// databaseURLHasHost reports whether a PostgreSQL connection string names a
+// server, in URL form (postgres://user@host/db) or key/value form (host=...).
+// The service process reads only DATABASE_URL, so the final env proves its
+// database endpoint through the URL.
+func databaseURLHasHost(raw string) bool {
+	raw = strings.TrimSpace(raw)
+	scheme := strings.Index(raw, "://")
+	if scheme < 0 {
+		for _, field := range strings.Fields(raw) {
+			if value, ok := strings.CutPrefix(field, "host="); ok && strings.Trim(value, `'`) != "" {
+				return true
+			}
+		}
+		return false
+	}
+	authority := raw[scheme+3:]
+	if end := strings.IndexAny(authority, "/?"); end >= 0 {
+		authority = authority[:end]
+	}
+	if at := strings.LastIndex(authority, "@"); at >= 0 {
+		authority = authority[at+1:]
+	}
+	if bracketed, ok := strings.CutPrefix(authority, "["); ok {
+		host, _, _ := strings.Cut(bracketed, "]")
+		return host != ""
+	}
+	host, _, _ := strings.Cut(authority, ":")
+	return host != ""
 }
 
 func validateNavigatorProductionEnv(env map[string]string) error {
@@ -8366,6 +8425,169 @@ func manifestServiceEnabledForDeploy(manifest *inventory.Manifest, deploy string
 		}
 	}
 	return false
+}
+
+// livepeerControllerByChainID holds the Livepeer Controller contract each chain
+// resolves its protocol contracts through, keyed by chain ID. The addresses are
+// go-livepeer's own network defaults (cmd/livepeer/starter configOptions for
+// mainnet and arbitrum-one-mainnet); a chain without a protocol deployment there
+// has no default.
+var livepeerControllerByChainID = map[string]string{
+	"1":     "0xf96d54e490317c557a967abfa5d6e33006be69b3",
+	"42161": "0xD8E8328501E9645d16Cf49539efC04f734606ee4",
+}
+
+// renderNetworkObserverEnv derives the observer settings the platform already
+// determines: the Controller of its chain, and trust in the Bridge hosts that
+// relay external probers and forward each prober's source address. Explicit
+// values win.
+func renderNetworkObserverEnv(manifest *inventory.Manifest, env map[string]string) error {
+	if strings.TrimSpace(env["LIVEPEER_CONTROLLER"]) == "" {
+		chainID := strings.TrimSpace(env["LIVEPEER_NETWORK_ID"])
+		if chainID == "" {
+			chainID = networkObserverSchemaDefault("LIVEPEER_NETWORK_ID")
+		}
+		controller, ok := livepeerControllerByChainID[chainID]
+		if !ok {
+			return fmt.Errorf("service network-observer: Livepeer chain %q has no known Controller address; set LIVEPEER_CONTROLLER", chainID)
+		}
+		env["LIVEPEER_CONTROLLER"] = controller
+	}
+	if strings.TrimSpace(env["NETWORK_OBSERVER_TRUSTED_PROXY_CIDRS"]) == "" {
+		if relays := bridgeMeshCIDRs(manifest); len(relays) > 0 {
+			env["NETWORK_OBSERVER_TRUSTED_PROXY_CIDRS"] = strings.Join(relays, ",")
+		}
+	}
+	if !isDevProfile(manifest) {
+		if err := credentials.ValidateNetworkObserverSecret(env[credentials.NetworkObserverSecretKey]); err != nil {
+			return fmt.Errorf("service network-observer: %w", err)
+		}
+	}
+	return nil
+}
+
+// renderBridgeNetworkObservationEnv points Bridge at the manifest's observer:
+// its mesh URL, its secret and namespace, and its tenant as the published
+// scope. The observer records platform inventory, prober results and gateway
+// telemetry under the cluster owner tenant, so its own tenant is the
+// platform-operated dataset; tenant-owned clusters' gateways stay unpublished.
+// Explicit Bridge values win.
+func renderBridgeNetworkObservationEnv(manifest *inventory.Manifest, env map[string]string) error {
+	name, observer, ok := declaredNetworkObserver(manifest)
+	if !ok {
+		return nil
+	}
+	for _, key := range []string{credentials.NetworkObserverSecretKey, "LIVEPEER_NETWORK_ID", "NETWORK_OBSERVER_ENVIRONMENT"} {
+		if strings.TrimSpace(env[key]) == "" {
+			if value := strings.TrimSpace(observer.Config[key]); value != "" {
+				env[key] = value
+			}
+		}
+	}
+	if strings.TrimSpace(env["NETWORK_PUBLIC_TENANT_IDS"]) == "" {
+		for _, tenant := range []string{observer.Config["NETWORK_OBSERVER_TENANT_ID"], env["NETWORK_OBSERVER_TENANT_ID"], env["SYSTEM_TENANT_ID"]} {
+			if tenant = strings.TrimSpace(tenant); tenant != "" {
+				env["NETWORK_PUBLIC_TENANT_IDS"] = tenant
+				break
+			}
+		}
+	}
+	if strings.TrimSpace(env["NETWORK_OBSERVER_URL"]) == "" {
+		observerURL, err := networkObserverMeshURL(manifest, name, observer)
+		if err != nil {
+			return fmt.Errorf("service bridge: %w", err)
+		}
+		env["NETWORK_OBSERVER_URL"] = observerURL
+	}
+	if !isDevProfile(manifest) {
+		if err := credentials.ValidateNetworkObserverSecret(env[credentials.NetworkObserverSecretKey]); err != nil {
+			return fmt.Errorf("service bridge: %w", err)
+		}
+	}
+	return nil
+}
+
+// networkObserverMeshURL is the observer's address for mesh callers: its
+// registered service alias, in the aggregator region it is pinned to, on the
+// internal-CA HTTPS listener. Bridge verifies the leaf as
+// network-observer.internal; the alias is only the route. Without the internal
+// CA (a development manifest with no Navigator) only the plain listener exists.
+func networkObserverMeshURL(manifest *inventory.Manifest, name string, observer inventory.ServiceConfig) (string, error) {
+	alias := "network-observer"
+	if topology.ServiceDependencyScope("bridge", "network-observer", "NETWORK_OBSERVER_URL") == topology.DNSScopeAggregatorRegion {
+		if regional := aggregatorRegionAlias(manifest, "network-observer"); regional != "" {
+			alias = regional
+		}
+	}
+	if navigator, ok := manifest.Services["navigator"]; ok && navigator.Enabled {
+		port := strings.TrimSpace(observer.Config["NETWORK_OBSERVER_INTERNAL_PORT"])
+		if port == "" {
+			port = networkObserverSchemaDefault("NETWORK_OBSERVER_INTERNAL_PORT")
+		}
+		return fmt.Sprintf("https://%s.internal:%s", alias, port), nil
+	}
+	port, err := resolvePort(name, observer)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("http://%s.internal:%d", alias, port), nil
+}
+
+// bridgeMeshCIDRs lists the mesh address of every host running Bridge, the
+// peers the observer sees for relayed prober requests.
+func bridgeMeshCIDRs(manifest *inventory.Manifest) []string {
+	if manifest == nil {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	var out []string
+	for name, svc := range manifest.Services {
+		if !svc.Enabled || !serviceDeployMatches(name, svc, "bridge") {
+			continue
+		}
+		for _, hostName := range serviceHosts(svc) {
+			host, ok := manifest.GetHost(hostName)
+			if !ok || strings.TrimSpace(host.WireguardIP) == "" {
+				continue
+			}
+			cidr := strings.TrimSpace(host.WireguardIP) + "/32"
+			if _, dup := seen[cidr]; !dup {
+				seen[cidr] = struct{}{}
+				out = append(out, cidr)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// declaredNetworkObserver returns the manifest's enabled observer service.
+// Every observer of one manifest serves the same namespace, so the first by
+// name stands for all of them.
+func declaredNetworkObserver(manifest *inventory.Manifest) (string, inventory.ServiceConfig, bool) {
+	if manifest == nil {
+		return "", inventory.ServiceConfig{}, false
+	}
+	names := make([]string, 0, len(manifest.Services))
+	for name, svc := range manifest.Services {
+		if svc.Enabled && serviceDeployMatches(name, svc, "network-observer") {
+			names = append(names, name)
+		}
+	}
+	if len(names) == 0 {
+		return "", inventory.ServiceConfig{}, false
+	}
+	sort.Strings(names)
+	return names[0], manifest.Services[names[0]], true
+}
+
+func networkObserverSchemaDefault(key string) string {
+	schema, err := configschema.Load()
+	if err != nil {
+		return ""
+	}
+	value, _ := schema.Default("network-observer", key)
+	return value
 }
 
 // applyNetworkObservationNamespace renders the network-observation namespace

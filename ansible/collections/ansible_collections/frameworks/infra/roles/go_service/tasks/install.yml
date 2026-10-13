@@ -202,17 +202,11 @@
   changed_when: false
   failed_when: false
 
+# The installed version comes from the install record, never from running the
+# binary: a managed dependency such as go-livepeer has no `version` subcommand
+# and starts a node when given one.
 - name: Read installed service version
-  ansible.builtin.shell: |
-    set -o pipefail
-    version="$(
-      "{{ go_service_install_dir }}/{{ go_service_name }}" version 2>/dev/null |
-        awk -F': ' '/platform version:/ {print $2; exit}'
-    )"
-    test -n "$version"
-    printf '%s\n' "$version"
-  args:
-    executable: /bin/bash
+  ansible.builtin.command: cat "{{ go_service_artifact_version_record }}"
   register: go_service_installed_version
   changed_when: false
   failed_when: false
@@ -367,6 +361,21 @@
   loop: "{{ go_service_obsolete_install_sentinels.files | default([]) }}"
   loop_control:
     label: "{{ item.path }}"
+
+# The current sentinel exists here, so the binary on disk is this run's pinned
+# artifact and its label is the release's. Status reads the label; it is not
+# service state, so writing it never reports a change or triggers a restart.
+- name: Record installed artifact version
+  ansible.builtin.copy:
+    dest: "{{ go_service_artifact_version_record }}"
+    content: "{{ go_service_version }}\n"
+    owner: "{{ go_service_user }}"
+    group: "{{ go_service_group }}"
+    mode: "0644"
+  changed_when: false
+  when:
+    - not ansible_check_mode
+    - go_service_version | length > 0
 
 - name: Check native binary shared libraries
   ansible.builtin.shell: |

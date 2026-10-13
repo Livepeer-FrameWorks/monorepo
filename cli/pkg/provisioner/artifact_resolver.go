@@ -198,6 +198,13 @@ func binaryFromExternalDependency(name, osName, arch string, manifest *gitops.Ma
 	return nil, depName
 }
 
+// ExternalDependencyForService names the platform release manifest's
+// external_dependencies entry whose artifact a managed service installs, or ""
+// when the service's artifact is not pinned by the platform release.
+func ExternalDependencyForService(serviceName string) string {
+	return externalDependencyForService(serviceName)
+}
+
 func externalDependencyForService(serviceName string) string {
 	switch serviceName {
 	case "livepeer-gateway", "livepeer-signer":

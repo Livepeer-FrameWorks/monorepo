@@ -9,7 +9,12 @@ type Observer struct {
 	config.Logging
 	config.Postgres
 	config.GRPCTLS
+	config.Registration
 	HTTPPort               string   `env:"NETWORK_OBSERVER_PORT" default:"18024" desc:"HTTP port for observer ingest, assignments and candidate feeds." introduced:"v0.3.13"`
+	InternalPort           string   `env:"NETWORK_OBSERVER_INTERNAL_PORT" default:"18034" desc:"HTTPS port serving the same API to mesh callers such as Bridge with the internal-CA certificate in GRPC_TLS_CERT_PATH/GRPC_TLS_KEY_PATH; not opened when those are unset." introduced:"v0.3.13"`
+	AdvertiseHost          string   `env:"NETWORK_OBSERVER_HOST" default:"network-observer" desc:"Host name this instance advertises when it registers with Quartermaster." introduced:"v0.3.13"`
+	QuartermasterGRPCAddr  string   `env:"QUARTERMASTER_GRPC_ADDR" desc:"Quartermaster gRPC address for service registration, which publishes the observer's mesh DNS name to Bridge. Empty skips registration." introduced:"v0.3.13"`
+	QuartermasterTLSName   string   `env:"QUARTERMASTER_GRPC_TLS_SERVER_NAME" desc:"TLS server name override for the Quartermaster connection. Empty uses the canonical internal name." introduced:"v0.3.13"`
 	TenantID               string   `env:"NETWORK_OBSERVER_TENANT_ID" required:"true" desc:"Server-owned platform tenant scope for inventory and prober observations." introduced:"v0.3.13"`
 	ClusterID              string   `env:"NETWORK_OBSERVER_CLUSTER_ID" required:"true" desc:"Platform cluster identity used for probe telemetry." introduced:"v0.3.13"`
 	SharedSecret           string   `env:"NETWORK_OBSERVER_SECRET" required:"true" secret:"true" desc:"Shared bearer secret for trusted external probers and internal candidate readers." introduced:"v0.3.13"`
@@ -33,7 +38,7 @@ type Observer struct {
 type Prober struct {
 	HealthPort string `env:"NETWORK_PROBER_PORT" default:"18025" desc:"Local prober health and spool statistics HTTP port." introduced:"v0.3.13"`
 	config.Logging
-	CoordinatorURL           string   `env:"NETWORK_OBSERVER_URL" required:"true" desc:"Verified HTTPS observer API, accessible from this external host." introduced:"v0.3.13"`
+	CoordinatorURL           string   `env:"NETWORK_OBSERVER_URL" required:"true" desc:"Verified HTTPS observer relay on the platform's public Bridge API, such as https://bridge.example.net/network-observer; the prober appends the observer's /v1 paths." introduced:"v0.3.13"`
 	SharedSecret             string   `env:"NETWORK_OBSERVER_SECRET" required:"true" secret:"true" desc:"Shared observer ingest bearer secret." introduced:"v0.3.13"`
 	ObserverID               string   `env:"NETWORK_PROBER_ID" required:"true" desc:"Stable prober ID; no CLI enrollment required." introduced:"v0.3.13"`
 	Region                   string   `env:"NETWORK_PROBER_REGION" required:"true" desc:"Prober vantage region." introduced:"v0.3.13"`

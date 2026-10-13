@@ -11,6 +11,7 @@ import (
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
 	"github.com/gin-gonic/gin"
 	"google.golang.org/grpc/metadata"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -146,5 +147,80 @@ func TestNetworkDiagnosticsRequiresPlatformOperator(t *testing.T) {
 		} else if response.Code != 403 {
 			t.Fatalf("tenant administrator accessed operator diagnostics: %d", response.Code)
 		}
+	}
+}
+
+// Probers reach the observer only through Bridge: the public route maps to the
+// observer's path, the observer authenticates the prober's own secret, and the
+// source address is Bridge's resolved client address, not one the prober sent.
+func TestProberRelayForwardsToObserverOverTheMesh(t *testing.T) {
+	type seen struct{ method, path, query, auth, forwarded, body string }
+	var calls []seen
+	observer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		calls = append(calls, seen{r.Method, r.URL.Path, r.URL.RawQuery, r.Header.Get("Authorization"), r.Header.Get("X-Forwarded-For"), string(raw)})
+		if r.Header.Get("Authorization") != "Bearer prober-secret" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"assignments":[]}`))
+	}))
+	t.Cleanup(observer.Close)
+	client, err := networkobserver.New(observer.URL, "bridge-inventory-secret", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := &NetworkHandlers{Observer: client, ClientIP: func(*http.Request) string { return "203.0.113.9" }}
+	router := gin.New()
+	router.GET("/network-observer/v1/work", h.ProberRelay("/v1/work"))
+	router.POST("/network-observer/v1/observations", h.ProberRelay("/v1/observations"))
+	serve := func(method, target, auth, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequestWithContext(context.Background(), method, target, strings.NewReader(body))
+		if auth != "" {
+			req.Header.Set("Authorization", auth)
+		}
+		req.Header.Set("X-Forwarded-For", "10.0.0.1")
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, req)
+		return response
+	}
+
+	work := serve(http.MethodGet, "/network-observer/v1/work?observer_id=p1&region=eu", "Bearer prober-secret", "")
+	if work.Code != 200 || work.Body.String() != `{"assignments":[]}` || work.Header().Get("Content-Type") != "application/json" {
+		t.Fatalf("work relay = %d %q", work.Code, work.Body)
+	}
+	ingest := serve(http.MethodPost, "/network-observer/v1/observations", "Bearer prober-secret", `{"id":"b1"}`)
+	if ingest.Code != 200 {
+		t.Fatalf("observation relay = %d %q", ingest.Code, ingest.Body)
+	}
+	want := []seen{
+		{http.MethodGet, "/v1/work", "observer_id=p1&region=eu", "Bearer prober-secret", "203.0.113.9", ""},
+		{http.MethodPost, "/v1/observations", "", "Bearer prober-secret", "203.0.113.9", `{"id":"b1"}`},
+	}
+	if len(calls) != len(want) || calls[0] != want[0] || calls[1] != want[1] {
+		t.Fatalf("observer received %+v, want %+v", calls, want)
+	}
+
+	if rejected := serve(http.MethodGet, "/network-observer/v1/work", "Bearer wrong", ""); rejected.Code != http.StatusUnauthorized {
+		t.Fatalf("wrong prober secret = %d, want the observer's 401", rejected.Code)
+	}
+	before := len(calls)
+	if anonymous := serve(http.MethodGet, "/network-observer/v1/work", "", ""); anonymous.Code != http.StatusUnauthorized || len(calls) != before {
+		t.Fatalf("request without a bearer = %d after %d observer calls, want 401 without relaying", anonymous.Code, len(calls)-before)
+	}
+	oversized := serve(http.MethodPost, "/network-observer/v1/observations", "Bearer prober-secret", strings.Repeat("x", networkobserver.MaxBodyBytes+1))
+	if oversized.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized batch = %d, want 413", oversized.Code)
+	}
+
+	unconfigured := gin.New()
+	unconfigured.GET("/network-observer/v1/work", (&NetworkHandlers{}).ProberRelay("/v1/work"))
+	response := httptest.NewRecorder()
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/network-observer/v1/work", nil)
+	req.Header.Set("Authorization", "Bearer prober-secret")
+	unconfigured.ServeHTTP(response, req)
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("relay without an observer = %d, want 503", response.Code)
 	}
 }

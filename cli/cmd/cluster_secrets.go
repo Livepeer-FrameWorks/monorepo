@@ -20,6 +20,33 @@ func newClusterSecretsCmd() *cobra.Command {
 	cmd.AddCommand(newClusterSecretsGenerateInternalCACmd())
 	cmd.AddCommand(newClusterSecretsGenerateMediaAuthorityCmd())
 	cmd.AddCommand(newClusterSecretsGenerateCapacityConsentCmd())
+	cmd.AddCommand(newClusterSecretsGenerateNetworkObserverCmd())
+	return cmd
+}
+
+func newClusterSecretsGenerateNetworkObserverCmd() *cobra.Command {
+	var outputPath string
+	cmd := &cobra.Command{
+		Use:   "generate-network-observer",
+		Short: "Generate the network observer's shared prober/Bridge secret",
+		Long:  "Writes NETWORK_OBSERVER_SECRET to a new mode-0600 dotenv fragment and refuses to overwrite an existing file. Import it into the SOPS-managed shared env; provisioning renders it to the observer and Bridge, and the external probers use the same value. It never rotates other platform credentials.",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if strings.TrimSpace(outputPath) == "" {
+				return fmt.Errorf("--out is required")
+			}
+			values, err := credentials.GenerateNetworkObserverMaterial()
+			if err != nil {
+				return err
+			}
+			if err := writeSecretFragment(outputPath, "Network observer shared secret; merge with the existing shared-secret set.", values); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "Network observer secret written to %s (mode 0600).\n", outputPath)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&outputPath, "out", "", "new dotenv fragment path (required; never overwritten)")
 	return cmd
 }
 

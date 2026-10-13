@@ -469,3 +469,46 @@ func TestYugabyteDetectScriptReadsTheEngineVersion(t *testing.T) {
 		t.Fatalf("report = %q", got)
 	}
 }
+
+// A managed dependency's version comes from the go_service install record:
+// go-livepeer has no `version` subcommand and starts a node when given one, so
+// detection must never execute it.
+func TestDetect_ManagedDependencyReadsInstallRecordWithoutExecutingBinary(t *testing.T) {
+	t.Parallel()
+	r := &fakeRunner{responses: []fakeResponse{
+		{matchPrefix: "cat /etc/frameworks/inventory.json", exitCode: 1},
+		{matchPrefix: "docker ps -a", exitCode: 1},
+		{matchPrefix: "systemctl show", exitCode: 0, stdout: strings.Join([]string{
+			"LoadState=loaded",
+			"ActiveState=active",
+			"SubState=running",
+			"ExecStart={ path=/opt/frameworks/livepeer-gateway/livepeer-gateway ; argv[]=/opt/frameworks/livepeer-gateway/livepeer-gateway -gateway ; }",
+		}, "\n")},
+		{matchPrefix: "cd '/opt/frameworks/livepeer-gateway'", exitCode: 0, stdout: "version=v0.3.5\nsentinel=abc123\n"},
+		{matchPrefix: "'/opt/frameworks/livepeer-gateway/livepeer-gateway' version", exitCode: 0, stdout: ""},
+	}}
+	d := newDetectorWithRunner(inventory.Host{ExternalIP: "1.2.3.4", User: "root"}, r)
+
+	state, err := d.Detect(context.Background(), "livepeer-gateway")
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	for _, call := range r.calls {
+		if strings.Contains(call, "livepeer-gateway' version") {
+			t.Fatalf("detection executed the go-livepeer binary: %q", call)
+		}
+	}
+	if state.Version != "v0.3.5" || state.Metadata[InstallArtifactSentinelsKey] != "abc123" {
+		t.Fatalf("version %q sentinels %q, want v0.3.5 and abc123 from the install record", state.Version, state.Metadata[InstallArtifactSentinelsKey])
+	}
+}
+
+// The install identity must equal the go_service role's sentinel name,
+// `(checksum ~ ':' ~ url) | hash('sha256')`.
+func TestInstallIdentityMatchesGoServiceSentinel(t *testing.T) {
+	t.Parallel()
+	// printf '%s' 'sha256:00:https://example.invalid/livepeer.tar.gz' | sha256sum
+	if got := InstallIdentity("sha256:00", "https://example.invalid/livepeer.tar.gz"); got != "58daefa557dc30c94a39e64ca5fa39cbbaa854c874d9deb38fe7f4b51519ff48" {
+		t.Fatalf("identity = %q", got)
+	}
+}

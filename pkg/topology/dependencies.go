@@ -63,6 +63,7 @@ var serviceDependencies = map[string][]ServiceDependency{
 		{TargetServiceID: "skipper", EnvKey: "SKIPPER_GRPC_ADDR", Transport: "grpc", Optional: true, Purpose: "AI consultant APIs"},
 		{TargetServiceID: "lookout", EnvKey: "LOOKOUT_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeAggregatorRegion, Optional: true, Purpose: "incident APIs"},
 		{TargetServiceID: "bosun", EnvKey: "BOSUN_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeAggregatorRegion, Purpose: "outbound webhook APIs"},
+		{TargetServiceID: "network-observer", EnvKey: "NETWORK_OBSERVER_URL", Transport: "https", DNSScope: DNSScopeAggregatorRegion, Optional: true, Purpose: "Livepeer inventory and the external prober relay"},
 	},
 	"chandler": {
 		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeGlobal, Purpose: "bootstrap and storage cluster lookup"},
@@ -108,6 +109,7 @@ var serviceDependencies = map[string][]ServiceDependency{
 	},
 	"network-observer": {
 		{TargetServiceID: "decklog", EnvKey: "DECKLOG_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeAggregatorRegion, Purpose: "external discovery observation publication"},
+		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeGlobal, Purpose: "service registration that publishes its mesh DNS name"},
 	},
 	"periscope-ingest": {
 		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeGlobal, Optional: true, Purpose: "service bootstrap"},

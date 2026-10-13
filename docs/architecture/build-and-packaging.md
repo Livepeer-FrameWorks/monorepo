@@ -282,7 +282,7 @@ Darwin binaries are signed and notarized at build time. A carried-forward Darwin
 
 ### External dependencies
 
-`external_dependencies.mistserver` and `external_dependencies.go-livepeer` are never built by this monorepo's CI — `release.yml` queries the GitHub API for the upstream release tag and records the digest + asset URLs. If the upstream tag is unchanged, the new manifest records the same image digest and native asset checksums; provisioning then naturally no-ops because Docker compares the digest and native installs compare the tarball checksum.
+`external_dependencies.mistserver` and `external_dependencies.go-livepeer` are never built by this monorepo's CI — `release.yml` queries the GitHub API for the upstream release tag and records the digest + asset URLs. If the upstream tag is unchanged, the new manifest records the same image digest and native asset checksums; provisioning then naturally no-ops because Docker compares the digest and native installs compare the tarball checksum. Because the platform release pins go-livepeer, `cluster release apply` converges the Livepeer gateway and signer hosts to it after the platform services, and `cluster status` reports a host as current only when its go_service install sentinel names one of the release's go-livepeer artifacts. The installed version is read from the role's `.artifact-version` record, never by executing the go-livepeer binary, which has no `version` subcommand.
 
 ## Key Files
 

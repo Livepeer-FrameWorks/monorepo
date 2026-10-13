@@ -2904,11 +2904,49 @@
           "description": "Private key for GRPC_TLS_CERT_PATH."
         },
         {
+          "key": "CLUSTER_ID",
+          "type": "string",
+          "introduced": "v0.3.0",
+          "description": "Cluster the instance registers under in Quartermaster. Empty lets Quartermaster resolve it."
+        },
+        {
+          "key": "NODE_ID",
+          "type": "string",
+          "introduced": "v0.3.0",
+          "description": "Node the instance registers under in Quartermaster."
+        },
+        {
           "key": "NETWORK_OBSERVER_PORT",
           "type": "string",
           "default": "18024",
           "introduced": "v0.3.13",
           "description": "HTTP port for observer ingest, assignments and candidate feeds."
+        },
+        {
+          "key": "NETWORK_OBSERVER_INTERNAL_PORT",
+          "type": "string",
+          "default": "18034",
+          "introduced": "v0.3.13",
+          "description": "HTTPS port serving the same API to mesh callers such as Bridge with the internal-CA certificate in GRPC_TLS_CERT_PATH/GRPC_TLS_KEY_PATH; not opened when those are unset."
+        },
+        {
+          "key": "NETWORK_OBSERVER_HOST",
+          "type": "string",
+          "default": "network-observer",
+          "introduced": "v0.3.13",
+          "description": "Host name this instance advertises when it registers with Quartermaster."
+        },
+        {
+          "key": "QUARTERMASTER_GRPC_ADDR",
+          "type": "string",
+          "introduced": "v0.3.13",
+          "description": "Quartermaster gRPC address for service registration, which publishes the observer's mesh DNS name to Bridge. Empty skips registration."
+        },
+        {
+          "key": "QUARTERMASTER_GRPC_TLS_SERVER_NAME",
+          "type": "string",
+          "introduced": "v0.3.13",
+          "description": "TLS server name override for the Quartermaster connection. Empty uses the canonical internal name."
         },
         {
           "key": "NETWORK_OBSERVER_TENANT_ID",
@@ -3054,7 +3092,7 @@
           "type": "string",
           "required": true,
           "introduced": "v0.3.13",
-          "description": "Verified HTTPS observer API, accessible from this external host."
+          "description": "Verified HTTPS observer relay on the platform's public Bridge API, such as https://bridge.example.net/network-observer; the prober appends the observer's /v1 paths."
         },
         {
           "key": "NETWORK_OBSERVER_SECRET",

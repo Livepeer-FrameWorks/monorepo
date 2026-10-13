@@ -227,8 +227,9 @@ func serviceComposeVars(_ context.Context, cfg ServiceRoleConfig, host inventory
 			"mode":  "0750",
 		})
 	}
-	envAny := make(map[string]any, len(envMap))
-	for k, v := range envMap {
+	processEnv := scopeProcessEnv(cfg.ServiceName, envMap)
+	envAny := make(map[string]any, len(processEnv))
+	for k, v := range processEnv {
 		envAny[k] = v
 	}
 	return map[string]any{
@@ -418,8 +419,9 @@ func serviceNativeVars(ctx context.Context, cfg ServiceRoleConfig, host inventor
 		}
 		files = append(files, skipperFiles...)
 	}
-	envAny := make(map[string]any, len(envMap))
-	for k, v := range envMap {
+	processEnv := scopeProcessEnv(cfg.ServiceName, envMap)
+	envAny := make(map[string]any, len(processEnv))
+	for k, v := range processEnv {
 		envAny[k] = v
 	}
 	args := cfg.Args

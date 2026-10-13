@@ -534,7 +534,13 @@ Read by `api_network_observer/cmd/network-observer`.
 | `GRPC_ALLOW_INSECURE` | boolean | `false` |  | v0.3.0 | Allows plaintext internal gRPC when no TLS material is configured. Development only. |
 | `GRPC_TLS_CERT_PATH` | string |  |  | v0.3.0 | Certificate presented by this service's gRPC listener. |
 | `GRPC_TLS_KEY_PATH` | string |  |  | v0.3.0 | Private key for GRPC_TLS_CERT_PATH. |
+| `CLUSTER_ID` | string |  |  | v0.3.0 | Cluster the instance registers under in Quartermaster. Empty lets Quartermaster resolve it. |
+| `NODE_ID` | string |  |  | v0.3.0 | Node the instance registers under in Quartermaster. |
 | `NETWORK_OBSERVER_PORT` | string | `18024` |  | v0.3.13 | HTTP port for observer ingest, assignments and candidate feeds. |
+| `NETWORK_OBSERVER_INTERNAL_PORT` | string | `18034` |  | v0.3.13 | HTTPS port serving the same API to mesh callers such as Bridge with the internal-CA certificate in GRPC_TLS_CERT_PATH/GRPC_TLS_KEY_PATH; not opened when those are unset. |
+| `NETWORK_OBSERVER_HOST` | string | `network-observer` |  | v0.3.13 | Host name this instance advertises when it registers with Quartermaster. |
+| `QUARTERMASTER_GRPC_ADDR` | string |  |  | v0.3.13 | Quartermaster gRPC address for service registration, which publishes the observer's mesh DNS name to Bridge. Empty skips registration. |
+| `QUARTERMASTER_GRPC_TLS_SERVER_NAME` | string |  |  | v0.3.13 | TLS server name override for the Quartermaster connection. Empty uses the canonical internal name. |
 | `NETWORK_OBSERVER_TENANT_ID` | string |  | required | v0.3.13 | Server-owned platform tenant scope for inventory and prober observations. |
 | `NETWORK_OBSERVER_CLUSTER_ID` | string |  | required | v0.3.13 | Platform cluster identity used for probe telemetry. |
 | `NETWORK_OBSERVER_SECRET` | string |  | required, secret | v0.3.13 | Shared bearer secret for trusted external probers and internal candidate readers. |
@@ -561,7 +567,7 @@ Read by `api_network_observer/cmd/network-prober`.
 | --- | --- | --- | --- | --- | --- |
 | `NETWORK_PROBER_PORT` | string | `18025` |  | v0.3.13 | Local prober health and spool statistics HTTP port. |
 | `LOG_LEVEL` | string | `info` |  | v0.3.0 | Log level: debug, info, warn, or error. Any other value fails startup. |
-| `NETWORK_OBSERVER_URL` | string |  | required | v0.3.13 | Verified HTTPS observer API, accessible from this external host. |
+| `NETWORK_OBSERVER_URL` | string |  | required | v0.3.13 | Verified HTTPS observer relay on the platform's public Bridge API, such as https://bridge.example.net/network-observer; the prober appends the observer's /v1 paths. |
 | `NETWORK_OBSERVER_SECRET` | string |  | required, secret | v0.3.13 | Shared observer ingest bearer secret. |
 | `NETWORK_PROBER_ID` | string |  | required | v0.3.13 | Stable prober ID; no CLI enrollment required. |
 | `NETWORK_PROBER_REGION` | string |  | required | v0.3.13 | Prober vantage region. |

@@ -65,6 +65,20 @@ func (s Schema) Server(service string) (Section, bool) {
 	return Section{}, false
 }
 
+// Default returns the startup default of one server variable of a service.
+func (s Schema) Default(service, key string) (string, bool) {
+	section, ok := s.Server(service)
+	if !ok {
+		return "", false
+	}
+	for _, v := range section.Variables {
+		if v.Key == key {
+			return v.Default, v.Default != ""
+		}
+	}
+	return "", false
+}
+
 // RequiredEnv lists the variables a service's server command requires at
 // startup. It returns nil for a service the schema does not describe.
 // Subcommand variants are not included; Missing checks those as well.

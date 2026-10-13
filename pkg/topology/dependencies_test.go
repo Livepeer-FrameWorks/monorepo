@@ -101,9 +101,9 @@ func TestCentralWritersReachDecklogInAggregatorRegion(t *testing.T) {
 			t.Fatalf("%s decklog scope = %q, want %q", serviceID, scope, DNSScopeAggregatorRegion)
 		}
 	}
-	// Regional Gateways reach the single Lookout and Bosun in the aggregator
-	// region; their Decklog writes stay cluster-local.
-	if got, want := AggregatorRegionDNSServiceDependencies("bridge"), []string{"bosun", "lookout"}; !equalStrings(got, want) {
+	// Regional Gateways reach the single Lookout, Bosun and network observer in
+	// the aggregator region; their Decklog writes stay cluster-local.
+	if got, want := AggregatorRegionDNSServiceDependencies("bridge"), []string{"bosun", "lookout", "network-observer"}; !equalStrings(got, want) {
 		t.Fatalf("AggregatorRegionDNSServiceDependencies(bridge) = %v, want %v", got, want)
 	}
 	if got := AggregatorRegionDNSServiceDependencies("foghorn"); len(got) != 0 {

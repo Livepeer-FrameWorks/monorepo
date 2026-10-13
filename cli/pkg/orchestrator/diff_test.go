@@ -6,6 +6,19 @@ import (
 	"frameworks/cli/pkg/detect"
 )
 
+// An env file the probe could not read is unknown state, not a missing file
+// that `cluster apply` would rewrite.
+func TestClassifyUnreadableFileIsUnknownNotMissing(t *testing.T) {
+	envPath := "/etc/frameworks/livepeer-gateway.env"
+	desired := &detect.Fingerprint{ServiceName: "livepeer-gateway", Host: "gw-1", Files: map[detect.FileKind]detect.ExpectedFile{
+		detect.FileKindEnv: {Path: envPath, SHA256: envA},
+	}}
+	got := Classify("livepeer-gateway", "gw-1", desired, map[string]string{envPath: detect.UnreadableSHA256})
+	if got.HasKind(DiffEnv) || !got.HasKind(DiffUnknown) {
+		t.Fatalf("unreadable env classified as %v (%v), want unknown", got.Kinds, got.Details)
+	}
+}
+
 // expected sha values used across test cases.
 const (
 	binA  = "1111111111111111111111111111111111111111111111111111111111111111"

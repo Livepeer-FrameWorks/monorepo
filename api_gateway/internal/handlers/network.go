@@ -1,8 +1,10 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/networkobserver"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
@@ -14,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -30,8 +33,60 @@ type NetworkHandlers struct {
 	Analytics                   NetworkReader
 	TenantIDs                   []string
 	Token, Network, Environment string
-	mu                          sync.Mutex
-	active                      int
+	// ClientIP resolves a caller's source address through Bridge's trusted
+	// proxies; the prober relay forwards it for the observer's geolocation.
+	ClientIP func(*http.Request) string
+	mu       sync.Mutex
+	active   int
+}
+
+// ProberRelay forwards an external prober's call to the observer's path over
+// the mesh. Probers reach the observer only through this public route. The
+// observer authenticates the prober's own bearer secret; Bridge only rejects a
+// request that carries none and bounds its body.
+func (h *NetworkHandlers) ProberRelay(path string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if h.Observer == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "network observations are not configured"})
+			return
+		}
+		authorization := c.GetHeader("Authorization")
+		if !strings.HasPrefix(authorization, "Bearer ") || strings.TrimSpace(strings.TrimPrefix(authorization, "Bearer ")) == "" {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+			return
+		}
+		var body io.Reader
+		if c.Request.Method != http.MethodGet {
+			raw, err := io.ReadAll(http.MaxBytesReader(c.Writer, c.Request.Body, networkobserver.MaxBodyBytes))
+			if err != nil {
+				var tooLarge *http.MaxBytesError
+				if errors.As(err, &tooLarge) {
+					c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "request body too large"})
+					return
+				}
+				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+				return
+			}
+			body = bytes.NewReader(raw)
+		}
+		clientIP := ""
+		if h.ClientIP != nil {
+			clientIP = h.ClientIP(c.Request)
+		}
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 20*time.Second)
+		defer cancel()
+		relayed, err := h.Observer.Relay(ctx, c.Request.Method, path, c.Request.URL.RawQuery, authorization, clientIP, body)
+		if err != nil {
+			c.JSON(http.StatusBadGateway, gin.H{"error": "network observer unavailable"})
+			return
+		}
+		contentType := relayed.ContentType
+		if contentType == "" {
+			contentType = "application/octet-stream"
+		}
+		c.Header("Cache-Control", "no-store")
+		c.Data(relayed.Status, contentType, relayed.Body)
+	}
 }
 
 func (h *NetworkHandlers) Public(c *gin.Context) { h.serve(c, false) }

@@ -71,6 +71,24 @@ func ClientTransportCredentials(cfg ClientTLSConfig, logger logging.Logger) (cre
 	return credentials.NewTLS(tlsConfig), nil
 }
 
+// HTTPServerTLSConfig returns the internal-CA server configuration for an HTTPS
+// listener. The certificate is reloaded when Privateer replaces the leaf files,
+// as for gRPC listeners. It returns nil when AllowInsecure permits plaintext.
+func HTTPServerTLSConfig(cfg ServerTLSConfig) (*tls.Config, error) {
+	return buildServerTLSConfig(cfg)
+}
+
+// HTTPClientTLSConfig returns the client configuration for an HTTPS call to an
+// internal service, with the same CA and ServerName rules as ClientTLS. It
+// returns nil when AllowInsecure permits plaintext.
+func HTTPClientTLSConfig(cfg ClientTLSConfig) (*tls.Config, error) {
+	tlsConfig, insecureAllowed, err := buildClientTLSConfig(cfg)
+	if err != nil || insecureAllowed {
+		return nil, err
+	}
+	return tlsConfig, nil
+}
+
 func buildServerTLSConfig(cfg ServerTLSConfig) (*tls.Config, error) {
 	if cfg.AllowInsecure && config.IsProduction() {
 		return nil, fmt.Errorf("server TLS cannot use AllowInsecure in production")

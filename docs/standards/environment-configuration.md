@@ -27,6 +27,7 @@ Every Go service uses a typed configuration struct in `api_*/internal/appconfig`
 - `make generate-config-reference` regenerates the operator page `website_docs/src/content/docs/operators/configuration-reference.mdx` and the CLI schema `cli/internal/configschema/config-schema.json`. `make verify-config-annotations` fails when either is stale, when an annotation is invalid, when a migrated command reads the environment outside its struct, or when a non-test file under `pkg/` reads the environment directly.
 - Shared packages take their settings as parameters, filled from the service's typed configuration. The shared blocks `config.Logging`, `config.GRPCMetadataPolicy`, `config.SystemTenant`, and `config.GeoIP` carry `LOG_LEVEL`, `GRPC_METADATA_POLICY`, `SYSTEM_TENANT_ID`, and `GEOIP_MMDB_PATH`, and a block's `Validate` runs at load. Only these shared-package reads remain, listed in `sharedEnvReadAllowlist` in `scripts/configref/main.go`: the `BUILD_ENV` guard in `pkg/grpcutil/tls.go` and `pkg/clients/foghorn/grpc_client.go`, which fails closed because an injected flag would default to permissive; the `LOG_LEVEL` bootstrap read in `pkg/logging`, so logging works before configuration loads; the helpers in `pkg/config/env.go` and the env-file reload in `pkg/config/reload.go`; and test harness overrides in `pkg/testutil`.
 - Migrated services serve `/ready` from dependency checks and the authenticated `/debug/config` and `/debug/pprof` endpoints through `pkg/server.NewServiceRouter`, and stop HTTP and gRPC listeners together through `pkg/server.Run`.
+- Because the typed configuration is the complete set of keys a service reads, CLI provisioning writes only those keys to the service's env file on the host (native `/etc/frameworks/<service>.env`, the Compose `.env`, and Privateer's env): every variable of every command of the service in the schema, plus `BUILD_ENV`, `LOG_LEVEL`, `GIN_MODE`, `CLUSTER_ID` and `NODE_ID`. Services without a typed schema use an explicit allow-list in `cli/pkg/provisioner/service_env.go`: the Livepeer gateway and signer get `LP_*`, `FRAMEWORKS_*` and `LIVE_AI_*` plus the process keys go-livepeer reads (the gateway also `SERVICE_TOKEN` for Decklog); Metabase `MB_*`/`JAVA_*`; Grafana `GF_*`; Chartroom, Foredeck and Logbook their listener, proxy-header, `PUBLIC_*` and basemap keys. The task env still starts from the whole shared and cluster env so the renderer can derive values such as `DATABASE_URL` from `DATABASE_PASSWORD`, but platform credentials such as `CLOUDFLARE_API_TOKEN` or LLM keys never reach a process that does not read them. A new key a service reads must be added to its typed struct (or, for the listed non-Go services, to their allow-list), or provisioning will not deliver it.
 
 ## Canonical Layers
 
@@ -113,6 +114,16 @@ Recommendation:
   Provisioning generates them when absent in development, while
   non-development manifests require shared secret inputs. Do not copy either
   key into tenant-hosted edge environments.
+
+### Network observer secret
+
+- `NETWORK_OBSERVER_SECRET` is the bearer secret of the network observer's prober and inventory
+  API. Provisioning renders it only to `network-observer` and Bridge (and a manifest-declared
+  `network-prober`); external probers hold the same value. `generate-shared` includes it, and
+  `frameworks cluster secrets generate-network-observer --out <new-file>` emits only this key for a
+  deployment that already has its platform secrets. Development provisioning generates it.
+  Non-development provisioning requires it only when the manifest declares `network-observer`, and
+  refuses to render the observer or Bridge with an absent or placeholder value.
 
 ### Media-authority signing keys
 

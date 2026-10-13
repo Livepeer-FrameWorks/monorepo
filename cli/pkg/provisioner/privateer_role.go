@@ -125,7 +125,7 @@ func privateerEnv(host inventory.Host, config ServiceConfig) map[string]string {
 	if services, ok := config.Metadata["expected_internal_grpc_services"].([]string); ok && len(services) > 0 && env["EXPECTED_INTERNAL_GRPC_SERVICES"] == "" {
 		env["EXPECTED_INTERNAL_GRPC_SERVICES"] = strings.Join(services, ",")
 	}
-	return env
+	return scopeProcessEnv("privateer", env)
 }
 
 func removeNavigatorInternalCAEnv(env map[string]string) {

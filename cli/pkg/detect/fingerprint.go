@@ -78,15 +78,21 @@ func ProbeSHA256(ctx context.Context, pool *fwssh.Pool, host inventory.Host, pat
 	return ParseSHA256ProbeOutput(paths, result.Stdout), nil
 }
 
+// UnreadableSHA256 marks a path that exists on the host but that the probe
+// could not read, as distinct from the empty value of a missing file.
+const UnreadableSHA256 = "unreadable"
+
 // BuildSHA256ProbeScript renders the shell script ProbeSHA256 runs remotely.
 // It keeps the file path outside awk so shell-quoted paths cannot break awk's
-// single-quoted program string.
+// single-quoted program string. Service env files are mode 0600 and owned by
+// the service user, so a non-root SSH user reads them through passwordless
+// sudo; a file neither can read is reported unreadable, never missing.
 func BuildSHA256ProbeScript(paths []string) string {
 	var b strings.Builder
 	for _, p := range paths {
 		q := shellQuote(p)
-		fmt.Fprintf(&b, "if [ -f %s ]; then hash=$(sha256sum %s 2>/dev/null | awk '{print $1}'); if [ -n \"$hash\" ]; then printf '%%s\\t%%s\\n' \"$hash\" %s; else printf 'MISSING\\t%%s\\n' %s; fi; else printf 'MISSING\\t%%s\\n' %s; fi\n",
-			q, q, q, q, q)
+		fmt.Fprintf(&b, "if [ -f %s ]; then hash=$(sha256sum %s 2>/dev/null | awk '{print $1}'); if [ -z \"$hash\" ]; then hash=$(sudo -n sha256sum %s 2>/dev/null | awk '{print $1}'); fi; if [ -n \"$hash\" ]; then printf '%%s\\t%%s\\n' \"$hash\" %s; else printf 'UNREADABLE\\t%%s\\n' %s; fi; else printf 'MISSING\\t%%s\\n' %s; fi\n",
+			q, q, q, q, q, q)
 	}
 	return b.String()
 }
@@ -109,6 +115,10 @@ func ParseSHA256ProbeOutput(paths []string, stdout string) map[string]string {
 		path := strings.TrimSpace(fields[1])
 		if hash == "missing" {
 			out[path] = ""
+			continue
+		}
+		if hash == UnreadableSHA256 {
+			out[path] = UnreadableSHA256
 			continue
 		}
 		out[path] = hash

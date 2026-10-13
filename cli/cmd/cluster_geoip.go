@@ -166,9 +166,16 @@ func effectiveGeoIPServices(manifest *inventory.Manifest, services []string) []s
 		return services
 	}
 	if manifest != nil && manifest.GeoIP != nil && len(manifest.GeoIP.Services) > 0 {
-		return append([]string{}, manifest.GeoIP.Services...)
+		out := append([]string{}, manifest.GeoIP.Services...)
+		// The observer's endpoint and prober coordinates, and so its
+		// proximity-based prober assignment, come only from the MMDB; a
+		// selection written before the observer was declared still serves it.
+		if geoIPTargetExists(manifest, "network-observer") && !slices.Contains(out, "network-observer") {
+			out = append(out, "network-observer")
+		}
+		return out
 	}
-	candidates := []string{"foghorn", "quartermaster", "livepeer-gateway"}
+	candidates := []string{"foghorn", "quartermaster", "purser", "livepeer-gateway", "network-observer"}
 	if manifest == nil {
 		return candidates
 	}

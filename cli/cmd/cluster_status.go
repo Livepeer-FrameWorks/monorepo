@@ -14,6 +14,7 @@ import (
 	"frameworks/cli/pkg/detect"
 	"frameworks/cli/pkg/gitops"
 	"frameworks/cli/pkg/inventory"
+	"frameworks/cli/pkg/provisioner"
 	fwssh "frameworks/cli/pkg/ssh"
 
 	"github.com/spf13/cobra"
@@ -112,9 +113,14 @@ func runClusterStatus(cmd *cobra.Command, rc *resolvedCluster, jsonOutput bool) 
 
 		available := ""
 		availableDigest := ""
+		var pinnedDependency *gitops.ExternalDependency
 		if svcInfo, infoErr := gitopsManifest.GetServiceInfo(deployName); infoErr == nil {
 			available = svcInfo.Version
 			availableDigest = svcInfo.Digest
+		} else if depName := provisioner.ExternalDependencyForService(deployName); depName != "" {
+			if pinnedDependency = gitopsManifest.GetExternalDependency(depName); pinnedDependency != nil {
+				available = pinnedDependency.ReleaseTag
+			}
 		}
 
 		replicas := make([]serviceReplicaStatus, len(hostNames))
@@ -148,6 +154,10 @@ func runClusterStatus(cmd *cobra.Command, rc *resolvedCluster, jsonOutput bool) 
 				replica.Deployed = state.Version
 				replica.Mode = state.Mode
 				replica.ArtifactDigest = dockerImageDigest(state.Metadata["image"])
+				if pinnedDependency != nil {
+					replicas[i] = pinnedDependencyReplicaStatus(replica, state, pinnedDependency)
+					return
+				}
 				switch {
 				case !state.Running:
 					replica.Status = "not running"
@@ -223,6 +233,53 @@ func runClusterStatus(cmd *cobra.Command, rc *resolvedCluster, jsonOutput bool) 
 	return nil
 }
 
+// pinnedDependencyReplicaStatus classifies a replica of a managed dependency
+// whose artifact the platform release pins (go-livepeer for the Livepeer
+// gateway and signer). The installed artifact is the pinned one exactly when
+// the host carries the go_service install sentinel of one of the release's
+// artifacts for that dependency: the same identity the role's reinstall
+// decision, and so `cluster diff`, compares. A host whose sentinels name
+// another artifact runs a different binary and an upgrade is available; one
+// with no sentinel is reported from its version label alone.
+func pinnedDependencyReplicaStatus(replica serviceReplicaStatus, state *detect.ServiceState, dep *gitops.ExternalDependency) serviceReplicaStatus {
+	want := map[string]bool{}
+	for _, bin := range dep.Binaries {
+		if bin.URL != "" && bin.Checksum != "" {
+			want[detect.InstallIdentity(bin.Checksum, bin.URL)] = true
+		}
+	}
+	matched, observed := false, false
+	for _, sentinel := range strings.Split(state.Metadata[detect.InstallArtifactSentinelsKey], ",") {
+		if sentinel = strings.TrimSpace(sentinel); sentinel == "" {
+			continue
+		}
+		observed = true
+		if want[sentinel] {
+			matched = true
+		}
+	}
+	if matched && replica.Deployed == "" {
+		replica.Deployed = dep.ReleaseTag
+	}
+	switch {
+	case !state.Running:
+		replica.Status = "not running"
+	case observed && !matched:
+		replica.Status = "upgrade available"
+		replica.Error = fmt.Sprintf("installed artifact is not the release's %s %s", dep.Name, dep.ReleaseTag)
+	case matched:
+		replica.Status = "up to date"
+	case replica.Deployed != "" && dep.ReleaseTag != "" && replica.Deployed != dep.ReleaseTag:
+		replica.Status = "upgrade available"
+	case replica.Deployed == "":
+		replica.Status = "unverified"
+		replica.Error = "no install record or sentinel identifies the installed artifact; check `cluster diff`"
+	default:
+		replica.Status = "up to date"
+	}
+	return replica
+}
+
 func summarizeServiceReplicas(name, configuredMode, available string, replicas []serviceReplicaStatus) serviceStatus {
 	result := serviceStatus{
 		Name:          name,
@@ -236,7 +293,7 @@ func summarizeServiceReplicas(name, configuredMode, available string, replicas [
 	statusCounts := map[string]int{}
 	for _, replica := range replicas {
 		statusCounts[replica.Status]++
-		if replica.Status == "up to date" || replica.Status == "upgrade available" || replica.Status == "artifact drift" {
+		if replica.Status == "up to date" || replica.Status == "upgrade available" || replica.Status == "artifact drift" || replica.Status == "unverified" {
 			result.RunningReplicas++
 		}
 		if replica.Deployed != "" {
@@ -284,6 +341,8 @@ func summarizeServiceReplicas(name, configuredMode, available string, replicas [
 		result.Status = fmt.Sprintf("artifact drift (%d/%d)", statusCounts["artifact drift"], len(replicas))
 	case statusCounts["upgrade available"] > 0:
 		result.Status = "upgrade available"
+	case statusCounts["unverified"] > 0:
+		result.Status = fmt.Sprintf("unverified (%d/%d)", statusCounts["unverified"], len(replicas))
 	default:
 		result.Status = "up to date"
 	}

@@ -243,7 +243,7 @@ func TestBuildTaskConfig_ClusterScopedServiceAliasesUseTaskConfig(t *testing.T) 
 		Host:       "regional-us-2",
 		Phase:      orchestrator.PhaseApplications,
 		ClusterID:  "media-us-1",
-	}, manifest, map[string]interface{}{}, false, "", nil, nil, nil)
+	}, manifest, gatewayRuntimeData(), false, "", nil, nil, nil)
 	if err != nil {
 		t.Fatalf("buildTaskConfig for gateway alias returned error: %v", err)
 	}

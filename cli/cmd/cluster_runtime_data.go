@@ -9,6 +9,7 @@ import (
 
 	"frameworks/cli/pkg/bootstrap"
 	"frameworks/cli/pkg/inventory"
+	"frameworks/cli/pkg/orchestrator"
 	"frameworks/cli/pkg/remoteaccess"
 )
 
@@ -54,6 +55,31 @@ func clusterRuntimeData(ctx context.Context, manifest *inventory.Manifest, share
 		runtimeData["quartermaster_grpc_addr"] = qmAddr
 	}
 	return runtimeData, nil
+}
+
+// provisionNeedsExistingClusterOwners reports whether a provision renders a
+// Livepeer gateway without running the Quartermaster bootstrap that resolves
+// cluster owners, as `--only-services livepeer-gateway-*` does. Such a run
+// reads the owners from the running Quartermaster first.
+func provisionNeedsExistingClusterOwners(plan *orchestrator.ExecutionPlan) bool {
+	if plan == nil {
+		return false
+	}
+	return remainingBatchesContainService(plan.Batches, "livepeer-gateway") && !remainingBatchesContainService(plan.Batches, "quartermaster")
+}
+
+// resolveExistingClusterOwners is the read-only lookup of the identities the
+// Quartermaster bootstrap step otherwise resolves for gateway rendering.
+func resolveExistingClusterOwners(ctx context.Context, manifest *inventory.Manifest, runtimeData map[string]any, sess *remoteaccess.Session) error {
+	owners, err := resolveClusterOwnerTenantIDs(ctx, manifest, runtimeData, sess)
+	if err != nil {
+		return err
+	}
+	runtimeData["owner_tenant_ids_by_alias"] = owners
+	if systemTenantID := strings.TrimSpace(owners[bootstrap.SystemTenantAlias]); systemTenantID != "" {
+		runtimeData["system_tenant_id"] = systemTenantID
+	}
+	return nil
 }
 
 // RuntimeData returns clusterRuntimeData for this invocation, resolved once

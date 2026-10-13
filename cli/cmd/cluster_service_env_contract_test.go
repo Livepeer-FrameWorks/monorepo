@@ -33,6 +33,7 @@ func contractProductionManifest(t *testing.T, extraSecrets ...string) *inventory
 		"NAVIGATOR_INTERNAL_CA_ROOT_CERT_PEM_B64=cm9vdA==",
 		"NAVIGATOR_INTERNAL_CA_INTERMEDIATE_CERT_PEM_B64=aW50ZXJtZWRpYXRl",
 		"NAVIGATOR_INTERNAL_CA_INTERMEDIATE_KEY_PEM_B64=a2V5",
+		"NETWORK_OBSERVER_SECRET=test-network-observer-secret",
 	}
 	envFile := writeTestEnvFile(t, testSharedSecrets+strings.Join(append(lines, extraSecrets...), "\n")+"\n")
 	return &inventory.Manifest{
@@ -97,12 +98,12 @@ func contractProductionManifest(t *testing.T, extraSecrets ...string) *inventory
 			"steward":          {Enabled: true, Host: "central-eu-1"},
 			"lookout":          {Enabled: true, Host: "central-eu-1"},
 			"bosun":            {Enabled: true, Host: "central-eu-1"},
+			// The controller, the Bridge URL/secret/scope and the ingress
+			// proxy trust are derived; only the RPC endpoint and the
+			// SOPS-held secret (in the shared env file) are inputs.
 			"network-observer": {Enabled: true, Host: "central-eu-1", Config: map[string]string{
-				"NETWORK_OBSERVER_TENANT_ID":  "11111111-1111-1111-1111-111111111111",
-				"NETWORK_OBSERVER_CLUSTER_ID": contractTestClusterID,
-				"NETWORK_OBSERVER_SECRET":     "test-network-observer-secret",
-				"LIVEPEER_ETH_RPC_URL":        "https://rpc.example.com",
-				"LIVEPEER_CONTROLLER":         "0x1111111111111111111111111111111111111111",
+				"NETWORK_OBSERVER_TENANT_ID": "11111111-1111-1111-1111-111111111111",
+				"LIVEPEER_ETH_RPC_URL":       "https://rpc.example.com",
 			}},
 			"network-prober": {Enabled: true, Host: "central-eu-1", Config: map[string]string{
 				"NETWORK_OBSERVER_URL":           "https://observer.example.com",
@@ -333,6 +334,23 @@ func TestDatabaseURLHasPassword(t *testing.T) {
 	} {
 		if got := databaseURLHasPassword(raw); got != want {
 			t.Errorf("databaseURLHasPassword(%q) = %v, want %v", raw, got, want)
+		}
+	}
+}
+
+func TestDatabaseURLHasHost(t *testing.T) {
+	for raw, want := range map[string]bool{
+		"postgres://commodore:secret@db.internal:5433/commodore": true,
+		"postgres://commodore@[fd00::1]:5433/commodore":          true,
+		"postgres://h1:5433,h2:5433/commodore":                   true,
+		"host=db.internal user=commodore":                        true,
+		"postgres:///commodore":                                  false,
+		"postgres://commodore@:5433/commodore":                   false,
+		"user=commodore dbname=commodore":                        false,
+		"":                                                       false,
+	} {
+		if got := databaseURLHasHost(raw); got != want {
+			t.Errorf("databaseURLHasHost(%q) = %v, want %v", raw, got, want)
 		}
 	}
 }

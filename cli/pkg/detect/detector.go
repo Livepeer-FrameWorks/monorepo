@@ -2,8 +2,11 @@ package detect
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"path"
 	"strings"
 	"time"
 
@@ -279,7 +282,16 @@ func (d *Detector) detectFromSystemd(ctx context.Context, serviceName string, st
 			state.Metadata["exec_start"] = props["ExecStart"]
 			if bin := systemdExecPath(props["ExecStart"]); bin != "" && state.Mode == "native" {
 				state.Metadata["binary_path"] = bin
-				version, err := d.readNativePlatformVersion(ctx, bin)
+				var version string
+				var err error
+				// A managed dependency's binary is third-party software with its
+				// own CLI: go-livepeer ignores a `version` argument and starts a
+				// node. Its version comes from the install record instead.
+				if servicedefs.DeliveryClassFor(serviceName) == servicedefs.DeliveryManagedDependency {
+					version, err = d.readNativeInstallRecord(ctx, bin, state)
+				} else {
+					version, err = d.readNativePlatformVersion(ctx, bin)
+				}
 				if err != nil {
 					return nil, err
 				}
@@ -416,6 +428,57 @@ func (d *Detector) checkSystemdRunning(ctx context.Context, serviceName string, 
 		state.Running = strings.TrimSpace(stdout) == "active"
 	}
 	return nil
+}
+
+// InstallArtifactSentinelsKey is the ServiceState metadata key listing the
+// install sentinels of a natively installed managed dependency, comma
+// separated. Each is the go_service role's install identity: the SHA-256 hex
+// of "<artifact checksum>:<artifact URL>" of the artifact on the host.
+const InstallArtifactSentinelsKey = "install_artifact_sentinels"
+
+// InstallIdentity is the go_service role's install sentinel name for an
+// artifact, matching `(checksum ~ ':' ~ url) | hash('sha256')`.
+func InstallIdentity(checksum, url string) string {
+	sum := sha256.Sum256([]byte(checksum + ":" + url))
+	return hex.EncodeToString(sum[:])
+}
+
+// readNativeInstallRecord reads, without executing the binary, the version
+// label the go_service role recorded for the installed artifact and the
+// install sentinels naming that artifact.
+func (d *Detector) readNativeInstallRecord(ctx context.Context, binaryPath string, state *ServiceState) (string, error) {
+	dir := shellQuote(path.Dir(binaryPath))
+	cmd := fmt.Sprintf(`cd %s 2>/dev/null || exit 0
+printf 'version=%%s\n' "$(cat .artifact-version 2>/dev/null)"
+for f in .installed-*; do [ -e "$f" ] && printf 'sentinel=%%s\n' "${f#.installed-}"; done
+exit 0`, dir)
+	exitCode, stdout, _, err := d.runSSH(ctx, cmd)
+	if err != nil {
+		return "", fmt.Errorf("inspect install record on %s: %w", d.host.Name, err)
+	}
+	if exitCode != 0 {
+		return "", nil
+	}
+	version := ""
+	var sentinels []string
+	for _, line := range strings.Split(stdout, "\n") {
+		key, value, ok := strings.Cut(strings.TrimSpace(line), "=")
+		if !ok {
+			continue
+		}
+		switch key {
+		case "version":
+			version = strings.TrimSpace(value)
+		case "sentinel":
+			if value = strings.TrimSpace(value); value != "" {
+				sentinels = append(sentinels, value)
+			}
+		}
+	}
+	if len(sentinels) > 0 {
+		state.Metadata[InstallArtifactSentinelsKey] = strings.Join(sentinels, ",")
+	}
+	return version, nil
 }
 
 func (d *Detector) readNativePlatformVersion(ctx context.Context, binaryPath string) (string, error) {

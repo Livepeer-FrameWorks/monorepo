@@ -79,7 +79,7 @@ func TestUpgradeTaskConfigEnforcesLivepeerProductionValidation(t *testing.T) {
 		Name: "livepeer-gateway", Type: "livepeer-gateway", ServiceID: "livepeer-gateway",
 		Host: "media-1", ClusterID: "media-eu", Phase: orchestrator.PhaseApplications,
 	}
-	_, err := buildTaskConfig(task, manifest, map[string]any{}, true, "", map[string]string{}, nil, nil)
+	_, err := buildTaskConfig(task, manifest, gatewayRuntimeData(), true, "", map[string]string{}, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "http_addr to bind loopback") {
 		t.Fatalf("upgrade builder accepted public Livepeer HTTP bind: %v", err)
 	}

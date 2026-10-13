@@ -14,6 +14,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"io"
+	"slices"
 	"sort"
 	"strings"
 
@@ -40,6 +41,18 @@ var generatable = []secretSpec{
 	{"FIELD_ENCRYPTION_KEY", 32},
 	{"USAGE_HASH_SECRET", 32},
 	{"TELEMETRY_TOKEN_SECRET", 32},
+}
+
+// NetworkObserverSecretKey is the bearer secret shared by the network observer,
+// Bridge and the external probers. Production requires it only for a manifest
+// that declares the observer, so it is generated with the platform set but is
+// not part of ValidateShared.
+const NetworkObserverSecretKey = "NETWORK_OBSERVER_SECRET"
+
+// featureGeneratable lists secrets generated with the shared set whose presence
+// is validated by the feature that consumes them.
+var featureGeneratable = []secretSpec{
+	{NetworkObserverSecretKey, 32},
 }
 
 type MediaAuthoritySealPrivate struct {
@@ -159,7 +172,7 @@ func GenerateIfMissing(env map[string]string) (map[string]string, error) {
 		return nil, fmt.Errorf("media authority signing configuration is partial; set all of %s or leave all as placeholders", strings.Join(mediaAuthorityKeys, ", "))
 	}
 
-	for _, spec := range generatable {
+	for _, spec := range slices.Concat(generatable, featureGeneratable) {
 		if !isMissing(env[spec.Key]) {
 			continue
 		}
@@ -237,7 +250,7 @@ func GenerateMediaAuthorityDeploymentMaterial() (map[string]string, error) {
 // ValidateShared. It is intended for first production bootstrap; upgrade tooling should use the
 // narrower media-authority generator so existing platform secrets are never rotated implicitly.
 func GenerateSharedDeploymentMaterial() (map[string]string, error) {
-	values := make(map[string]string, len(generatable)+len(mediaAuthorityKeys)+3)
+	values := make(map[string]string, len(generatable)+len(featureGeneratable)+len(mediaAuthorityKeys)+3)
 	if _, err := GenerateIfMissing(values); err != nil {
 		return nil, err
 	}
@@ -286,10 +299,31 @@ func GenerateCapacityConsentReviewMaterial() (map[string]string, error) {
 	}, nil
 }
 
+// GenerateNetworkObserverMaterial creates only the network-observer shared
+// secret, for enabling the observer on a deployment whose platform secrets
+// already exist.
+func GenerateNetworkObserverMaterial() (map[string]string, error) {
+	value, err := randomHex(32)
+	if err != nil {
+		return nil, fmt.Errorf("generate %s: %w", NetworkObserverSecretKey, err)
+	}
+	return map[string]string{NetworkObserverSecretKey: value}, nil
+}
+
+// ValidateNetworkObserverSecret rejects an absent or placeholder observer
+// secret. External probers present it over the public ingress, so it must be a
+// generated value rather than a template default.
+func ValidateNetworkObserverSecret(value string) error {
+	if isMissing(strings.TrimSpace(value)) {
+		return fmt.Errorf("%s is required when the manifest declares network-observer; generate it with `frameworks cluster secrets generate-network-observer --out <file>` and import it into the SOPS-managed shared env", NetworkObserverSecretKey)
+	}
+	return nil
+}
+
 // Keys returns the list of secret keys that GenerateIfMissing handles.
 func Keys() []string {
-	out := make([]string, 0, len(generatable)+len(mediaAuthorityKeys))
-	for _, s := range generatable {
+	out := make([]string, 0, len(generatable)+len(featureGeneratable)+len(mediaAuthorityKeys))
+	for _, s := range slices.Concat(generatable, featureGeneratable) {
 		out = append(out, s.Key)
 	}
 	out = append(out, mediaAuthorityKeys...)

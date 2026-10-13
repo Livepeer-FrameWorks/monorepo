@@ -20,9 +20,16 @@ the new observer database from its baseline.
 
 Declare `network-observer` under the cluster manifest's `services`, with an enabled
 entry, a host in the aggregator region, and that host's platform cluster ID. Both
-`native` and `docker` modes are supported by the CLI. It is an opt-in service, also
-available in the `network-observations` selection profile; the default profiles do
-not start an observer. External probers are not part of that profile or CLI enrollment.
+`native` and `docker` modes are supported by the CLI. The observer is one coordinator
+per platform, not a per-gateway-cluster service, so it runs only where a manifest
+declares it; a self-hosted platform that does not want public Livepeer observations
+omits the entry. It is also available in the `network-observations` selection profile;
+the default profiles do not start an observer. External probers are not part of that
+profile or CLI enrollment.
+
+The observer has no public hostname, ingress site or DNS record. Bridge reaches it over
+the WireGuard mesh with the internal service CA, and external probers reach it through
+Bridge's public API.
 
 Add the `network_observer` database to the selected managed SQL deployment's database
 list. The release bootstrap creates its baseline and `network_observer_runtime` role
@@ -38,47 +45,84 @@ existing `DATABASE_RUNTIME_PASSWORD` secret, or the database-specific
 owner/bootstrap credential separate. An omitted `runtime_role` preserves an owner DSN
 for compatibility; declaring it makes the observer connect with the runtime role.
 
-Configure `DATABASE_URL`,
-`NETWORK_OBSERVER_TENANT_ID`, `NETWORK_OBSERVER_CLUSTER_ID`, `NETWORK_OBSERVER_SECRET`,
-`LIVEPEER_ETH_RPC_URL`, `LIVEPEER_CONTROLLER`, `DECKLOG_GRPC_ADDR`, `SERVICE_TOKEN` and
-`KAFKA_BROKERS`. Use the production Arbitrum chain. Configure verified internal gRPC TLS as for other services. For isolated
-local use, the development `docker-compose.yml` runs the observer and a `network-prober`
-under the `network-observations` profile once the chain settings and shared secret are
-set. That prober uses a signed, unfunded local discovery identity unless
-`LIVEPEER_BROADCASTER_ADDRESS` and `LIVEPEER_BROADCASTER_SIGNATURE` are set.
-`NETWORK_PROBER_ALLOWED_PRIVATE_CIDRS` lets a prober dial orchestrators on a private test
-network; leave it unset on real probers.
+The observer needs `DATABASE_URL`, `NETWORK_OBSERVER_TENANT_ID`,
+`NETWORK_OBSERVER_CLUSTER_ID`, `NETWORK_OBSERVER_SECRET`, `LIVEPEER_ETH_RPC_URL`,
+`LIVEPEER_CONTROLLER`, `DECKLOG_GRPC_ADDR`, `SERVICE_TOKEN` and `KAFKA_BROKERS`, with
+verified internal gRPC TLS as for other services. CLI provisioning renders all of them
+from the manifest and the shared env; the only operator inputs are the shared secret
+and an Arbitrum RPC endpoint. For isolated local use, the development
+`docker-compose.yml` runs the observer under the `network-observations` profile once
+the chain settings and shared secret are set, together with a `network-prober` that
+uses a signed, unfunded local discovery identity unless `LIVEPEER_BROADCASTER_ADDRESS`
+and `LIVEPEER_BROADCASTER_SIGNATURE` are set. `NETWORK_PROBER_ALLOWED_PRIVATE_CIDRS` lets
+a prober dial orchestrators on a private test network; leave it unset on real probers.
 
-CLI provisioning defaults the observer tenant to the resolved system tenant and its
-cluster to the manifest task's cluster; explicit observer values take precedence.
-The observation environment is the manifest `profile` (`production`, `staging`, and
-`development` for `dev`): the CLI renders it as `NETWORK_OBSERVER_ENVIRONMENT` on the
-observer and Bridge and as `FRAMEWORKS_ENVIRONMENT` on every Livepeer gateway, so one
-manifest's producers and readers share a namespace and staging stays apart from
-production. An explicit value in an env file or service config takes precedence.
-`LIVEPEER_ETH_RPC_URL` can use the existing `ARBITRUM_RPC_ENDPOINT` when not explicitly
-set. The shared secret and controller address still require operator input. The CLI
-generates the aggregator Kafka binding, `MIRROR_REGION_PREFIXES` from inbound
-MirrorMaker links, and aggregator-region `DECKLOG_GRPC_ADDR`. Manual deployments must
-set the source aliases themselves to include gateway discovery from other regions.
+What CLI provisioning derives, with explicit env-file or service-config values taking
+precedence:
 
-Expose the shared-secret work and ingest routes through verified HTTPS. If behind an
-ingress, set `NETWORK_OBSERVER_TRUSTED_PROXY_CIDRS` to the actual ingress CIDRs before
-using its forwarded source addresses for prober geolocation. Optional `GEOIP_MMDB_PATH`
-provides coordinates; missing geography does not prevent discovery.
+- **Tenant and cluster.** The observer tenant is the resolved system tenant and its
+  cluster is the manifest task's cluster.
+- **Namespace.** The observation environment is the manifest `profile` (`production`,
+  `staging`, and `development` for `dev`): the CLI renders it as
+  `NETWORK_OBSERVER_ENVIRONMENT` on the observer and Bridge and as
+  `FRAMEWORKS_ENVIRONMENT` on every Livepeer gateway, so one manifest's producers and
+  readers share a namespace and staging stays apart from production.
+- **Chain and Controller.** `LIVEPEER_NETWORK_ID` defaults to Arbitrum One (`42161`).
+  `LIVEPEER_CONTROLLER` is the Livepeer Controller of that chain, taken from
+  go-livepeer's network defaults: `0xD8E8328501E9645d16Cf49539efC04f734606ee4` for
+  `42161` and `0xf96d54e490317c557a967abfa5d6e33006be69b3` for Ethereum mainnet (`1`).
+  Provisioning refuses any other chain unless `LIVEPEER_CONTROLLER` is set explicitly.
+- **RPC.** `LIVEPEER_ETH_RPC_URL` falls back to the existing `ARBITRUM_RPC_ENDPOINT`.
+- **Analytics bindings.** The aggregator Kafka binding, `MIRROR_REGION_PREFIXES` from
+  inbound MirrorMaker links, and the aggregator-region `DECKLOG_GRPC_ADDR`. Manual
+  deployments must set the source aliases themselves to include gateway discovery from
+  other regions.
+- **Internal identity.** The observer gets an internal-CA leaf
+  (`/etc/frameworks/pki/services/network-observer/`), which Privateer renews, and
+  serves its API with it on `NETWORK_OBSERVER_INTERNAL_PORT` (`18034`). The plain
+  `NETWORK_OBSERVER_PORT` (`18024`) listener answers health and readiness probes. The
+  observer registers with Quartermaster through the rendered `QUARTERMASTER_GRPC_ADDR`,
+  and every Bridge host's mesh seed resolves `network-observer.<aggregator-region>.internal`
+  to the observer host and peers with it.
+- **Relay trust.** `NETWORK_OBSERVER_TRUSTED_PROXY_CIDRS` is the mesh address of every
+  Bridge host, so the observer takes a relayed prober's source address from Bridge and
+  from nothing else.
+- **GeoIP.** With the manifest's `geoip` enabled, a declared observer always receives
+  the MMDB and `GEOIP_MMDB_PATH`, including when `geoip.services` lists other services
+  only. The MMDB supplies worker and prober coordinates for the map and the
+  proximity-based prober assignment; missing geography does not prevent discovery.
 
-Use an explicit `ingress_sites` entry with `kind: reverse_proxy_http`, the chosen
-`domains`, the proxy `node`/`cluster`, its existing `tls_bundle_id`, and an `upstream`
-pointing to the observer's HTTP listener. The coordinator has no automatically selected
-public hostname. A co-located proxy can use `127.0.0.1:18024`; another proxy uses the
-observer's reachable mesh address. Configure the matching DNS and TLS bundle through
-the existing ingress/control-plane lifecycle, then use that verified HTTPS URL for
-Bridge and the external probers.
+`NETWORK_OBSERVER_SECRET` is a platform-generated shared secret kept in the SOPS-managed
+shared env. `frameworks cluster secrets generate-shared` includes it, and
+`frameworks cluster secrets generate-network-observer --out <file>` generates it alone
+for an existing deployment. Development provisioning generates it. A non-development
+manifest that declares the observer refuses to render the observer or Bridge without
+it. Provisioning renders it only to the observer and Bridge; external probers receive
+the same value from the operator.
 
-Bridge needs `NETWORK_OBSERVER_URL`, `NETWORK_OBSERVER_SECRET` and
-`NETWORK_PUBLIC_TENANT_IDS`; the CLI renders its `NETWORK_OBSERVER_ENVIRONMENT`. Publication
-scopes are server configuration, not caller-supplied query parameters. Periscope runs
-the canonical migration and rollup loop as part of its existing ingestion service.
+When the manifest declares an observer, provisioning renders Bridge's
+`NETWORK_OBSERVER_URL` as `https://network-observer.<aggregator-region>.internal:18034`
+(Bridge verifies the leaf as `network-observer.internal` against `GRPC_TLS_CA_PATH`), its
+`NETWORK_OBSERVER_SECRET`, `LIVEPEER_NETWORK_ID` and `NETWORK_OBSERVER_ENVIRONMENT` from
+the observer's values, and `NETWORK_PUBLIC_TENANT_IDS` as the observer's tenant. A
+development manifest without Navigator has no internal CA, so Bridge uses the plain
+listener there. Gateway
+observations are stored under their cluster owner tenant, and platform clusters are owned
+by the system tenant, so this scope publishes the platform-operated dataset (the
+coordinator's inventory and prober results and the platform gateways' traffic) and never
+a tenant-owned cluster's gateways. Set `NETWORK_PUBLIC_TENANT_IDS` on Bridge explicitly
+to publish a different scope. Publication scopes are server configuration, not
+caller-supplied query parameters. Periscope runs the canonical migration and rollup loop
+as part of its existing ingestion service.
+
+Bridge relays the external probers' two routes on its public API:
+`GET /network-observer/v1/work` and `POST /network-observer/v1/observations`. Bridge
+forwards the prober's own `Authorization` header unchanged, so the observer
+authenticates the shared secret, and rejects a request without a bearer token before
+relaying it. It replaces any `X-Forwarded-For` with the source address it resolved,
+bounds request and response bodies at 8 MiB, and rate-limits each route per source
+address (work 60 per minute, observations 1200 per minute). The inventory and candidate
+routes are not exposed publicly.
 
 ## GitOps inputs and activation order
 
@@ -87,43 +131,60 @@ gateways use the separately released compatible go-livepeer fork. The platform's
 release manifest provides artifact pins, not host placement or configuration.
 Complete these declarations before activating the feature:
 
-| Location                          | Required inputs                                                                                                                                                                                           |
-| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Cluster manifest                  | Enabled observer service with aggregator-region host/cluster, `network_observer` database, HTTPS ingress for the coordinator, and optional GeoIP service selection/trusted proxy CIDRs.                   |
-| Observer service configuration    | `LIVEPEER_CONTROLLER`; verify `LIVEPEER_NETWORK_ID=42161`, the rendered `NETWORK_OBSERVER_ENVIRONMENT` and the resolved observer tenant/cluster.                                                          |
-| SOPS-managed service environment  | `NETWORK_OBSERVER_SECRET` and `LIVEPEER_ETH_RPC_URL` (or the existing Arbitrum RPC key); preserve existing database credentials and internal `SERVICE_TOKEN`.                                             |
-| Bridge configuration/environment  | Verified HTTPS `NETWORK_OBSERVER_URL`, matching secret, and explicit `NETWORK_PUBLIC_TENANT_IDS` for the dataset to publish.                                                                              |
-| Gateway configuration/environment | Compatible fork artifact pin and a verified Decklog connection; the CLI renders the gateway identity, namespace and telemetry spool. Candidate hints are optional and start in `shadow` mode.             |
-| Lookout service environment       | Optional `LOOKOUT_OPS_SLACK_WEBHOOK_URL`, `LOOKOUT_OPS_DISCORD_WEBHOOK_URL`, `LOOKOUT_BUSINESS_PULSE_SLACK_WEBHOOK_URL`, `LOOKOUT_BUSINESS_PULSE_DISCORD_WEBHOOK_URL` to split the existing destinations. |
+| Location                        | Required inputs                                                                                                                                                                                                                              |
+| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Cluster manifest                | Enabled `network-observer` service on an aggregator-region host, and the `network_observer` database (`owner: network_observer`, `runtime_role: network_observer_runtime`) in the managed SQL database list.                                 |
+| SOPS-managed shared environment | `NETWORK_OBSERVER_SECRET` from `frameworks cluster secrets generate-network-observer`, and `ARBITRUM_RPC_ENDPOINT` (or an explicit `LIVEPEER_ETH_RPC_URL`). Preserve existing database credentials and the internal `SERVICE_TOKEN`.         |
+| Derived by provisioning         | Controller, chain, namespace, tenant and cluster on the observer; its internal leaf, registration and mesh DNS; Bridge's URL, secret and publication scope; the observer's trust in Bridge relays. Set a key explicitly only to override it. |
+| Gateway configuration           | The go-livepeer pin from the platform release and a verified Decklog connection; the CLI renders the gateway identity, namespace and telemetry spool. The CLI does not render candidate hints.                                               |
+| Lookout service environment     | Optional `LOOKOUT_OPS_SLACK_WEBHOOK_URL`, `LOOKOUT_OPS_DISCORD_WEBHOOK_URL`, `LOOKOUT_BUSINESS_PULSE_SLACK_WEBHOOK_URL`, `LOOKOUT_BUSINESS_PULSE_DISCORD_WEBHOOK_URL` to split the existing destinations.                                    |
 
-Keep credentials in encrypted env files referenced by the services. Edit GitOps secrets
-with `gitops/scripts/sops-env.sh`, not by editing encrypted content. Choose the actual
-coordinator hostname and ingress from the cluster's existing DNS/TLS setup; example
-hostnames below are not provisioned endpoints. Production and staging need separate
-observation environments, secrets and explicit publication scopes.
+Keep credentials in encrypted env files referenced by the services. Generate the secret
+and import it with the GitOps SOPS helper, never by editing encrypted content, then
+delete the plaintext fragment:
 
-Use the normal `frameworks cluster release plan` and `cluster release apply --dry-run`
-with the updated manifest before applying the release. Release application initializes
-the declared observer database, applies ClickHouse expand migrations and deploys the
-observer and analytics/API services. Verify observer `/ready`, deploy the compatible
-gateway fork through its managed-dependency lifecycle, and install the external probers.
-The observer is ready once its database answers, the contract catalog has refreshed and
-its Kafka consumer group is joined with assigned partitions that are being consumed. A
-503 response lists each failing reason, such as a catalog RPC error or a lag without
-committed progress. One failed catalog refresh is tolerated; two consecutive failures,
-or a consumer group that stays unassigned or stalled for two refresh intervals, make it
-not ready.
-Confirm real discovery in the inventory, real gateway observations in the public API,
-and the dashboard's observer coverage before retiring the old scripts. Livepeer alerts
-are disabled; new Ops/Business Pulse webhook destinations require no Livepeer rollout.
+```bash
+frameworks cluster secrets generate-network-observer --out /secure/path/network-observer.env
+gitops/scripts/sops-env.sh set <shared-secret-file> NETWORK_OBSERVER_SECRET <value-from-fragment>
+```
+
+Production and staging use separate secrets and, through the manifest profile, separate
+observation environments.
+
+Activate in this order:
+
+1. Add the manifest and SOPS inputs above.
+2. Preview with `frameworks cluster release plan` and `frameworks cluster release apply
+--dry-run`. The dry-run renders the observer and Bridge environments and fails on a
+   missing secret or an unknown chain.
+3. Apply the release. It initializes the observer database baseline and runtime role,
+   applies the ClickHouse expand migrations, converges the Privateer mesh seeds that
+   resolve the observer for Bridge hosts, deploys the observer, Bridge and the analytics
+   services, and rolls the gateways to the release's go-livepeer pin.
+4. Verify with `frameworks cluster status`, then `GET /v1/network/livepeer` on Bridge:
+   `inventory.network` is `42161`, `inventory.environment` is the manifest profile, and
+   the inventory lists catalog resources. A `503 network inventory temporarily
+unavailable` means Bridge cannot reach or verify the observer.
+5. Install the external probers with `NETWORK_OBSERVER_URL=<public Bridge URL>/network-observer`
+   and the same secret.
+   The observer is ready once its database answers, the contract catalog has refreshed
+   and its Kafka consumer group is joined with assigned partitions that are being
+   consumed. A 503 lists each failing reason; one failed catalog refresh is tolerated,
+   two consecutive failures or a group unassigned or stalled for two refresh intervals
+   make it not ready.
+6. Confirm real discovery in the inventory, real gateway observations in the public API,
+   and the dashboard's observer coverage before retiring the old scripts.
+
+Livepeer alerts are disabled; new Ops/Business Pulse webhook destinations require no
+Livepeer rollout.
 
 ## External probers
 
 Build with `make build-bin-network-prober`, or use the matching release's Linux amd64 or
 arm64 `network-prober` binary after checking its release checksum. These hosts do not
 need the FrameWorks stack, Node/PM2 or CLI enrollment. Configure a unique stable ID,
-region, verified HTTPS coordinator URL, shared secret and persistent spool directory
-using `api_network_observer/deploy/network-prober.env.example`.
+region, the Bridge relay URL (`<public Bridge URL>/network-observer`), shared secret and
+persistent spool directory using `api_network_observer/deploy/network-prober.env.example`.
 
 The Linux release tarball includes `install-network-prober.sh`,
 `network-prober.service` and `network-prober.env.example` alongside the binary. Extract
@@ -211,10 +272,12 @@ service charges and expected ticket credit. These describe FrameWorks gateway tr
 not all work or redeemed earnings across the Livepeer network.
 
 The optional `FRAMEWORKS_NETWORK_OBSERVER_URL` and
-`FRAMEWORKS_NETWORK_OBSERVER_SECRET` enable candidate hints. Keep
-`FRAMEWORKS_CANDIDATE_FEED_MODE=shadow` initially; `supplement` adds fresh hints without
-replacing local discovery or relaxing local eligibility checks. HTTP overrides are for
-isolated local development only.
+`FRAMEWORKS_NETWORK_OBSERVER_SECRET` enable candidate hints. Provisioning does not
+render them: the observer serves gateways only on its internal-CA listener, and the
+gateway's candidate client verifies the system roots, so hints stay off on managed
+gateways. When set, keep `FRAMEWORKS_CANDIDATE_FEED_MODE=shadow` initially; `supplement`
+adds fresh hints without replacing local discovery or relaxing local eligibility checks.
+HTTP overrides are for isolated local development only.
 
 ## API filters
 
