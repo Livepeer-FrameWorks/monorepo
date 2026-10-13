@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -41,6 +42,9 @@ func startRecordingGraceJob(t *testing.T, kind, artifactHash string) *recordingG
 		streamName: "processing+" + artifactHash,
 		results:    make(chan *ipcpb.ProcessingJobResult, 4),
 	}
+	var booted atomic.Bool
+	var startupListed sync.Once
+	startupListedCh := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/source.mkv":
@@ -49,6 +53,11 @@ func startRecordingGraceJob(t *testing.T, kind, artifactHash string) *recordingG
 		case strings.HasPrefix(r.URL.Path, "/json_vod+"):
 			// Booting the published VOD stream writes its DTSH sidecar.
 			_ = os.WriteFile(hx.outputPath+".dtsh", validDTSHBytes(), 0o644)
+			_, _ = w.Write([]byte("{}"))
+			return
+		case r.URL.Path == "/json_"+hx.streamName+".js":
+			// Like Mist, a /json_ request is a viewer that boots the stream.
+			booted.Store(true)
 			_, _ = w.Write([]byte("{}"))
 			return
 		case strings.HasPrefix(r.URL.Path, "/json_"):
@@ -62,9 +71,13 @@ func startRecordingGraceJob(t *testing.T, kind, artifactHash string) *recordingG
 		}
 		if strings.Contains(request, "nuke_stream") {
 			hx.nuked.Store(true)
+			booted.Store(false)
 		}
+		// The processing stream is active only between a boot and a nuke, as
+		// in Mist; a job boots it only after claiming it, so the handler's
+		// startup orphan sweep never stops the job's own stream.
 		active := map[string]any{}
-		if !hx.nuked.Load() {
+		if booted.Load() {
 			active[hx.streamName] = map[string]any{
 				"health": map[string]any{
 					"video_H264_640x360_15fps_0": map[string]any{"codec": "H264", "id": 0.0, "idx": 0.0, "width": 640.0, "height": 360.0},
@@ -73,11 +86,22 @@ func startRecordingGraceJob(t *testing.T, kind, artifactHash string) *recordingG
 			}
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"authorize": map[string]any{"status": "OK"}, "active_streams": active})
+		if strings.Contains(request, "active_streams") {
+			startupListed.Do(func() { close(startupListedCh) })
+		}
 	}))
 	t.Cleanup(srv.Close)
 
 	storage := t.TempDir()
 	h := NewProcessingJobHandler(logrus.New(), srv.URL, storage, t.TempDir())
+	// The job is dispatched only after the handler's startup orphan sweep has
+	// listed Mist's streams, the order a restarted Helmsman sees before Foghorn
+	// re-dispatches, so every run exercises the same interleaving.
+	select {
+	case <-startupListedCh:
+	case <-time.After(20 * time.Second):
+		t.Fatal("the handler never listed Mist streams for its startup orphan sweep")
+	}
 	send := func(msg *ipcpb.ControlMessage) {
 		if result := msg.GetProcessingJobResult(); result != nil {
 			hx.results <- result

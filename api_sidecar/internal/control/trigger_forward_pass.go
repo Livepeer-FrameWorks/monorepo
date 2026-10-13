@@ -159,7 +159,7 @@ func (p *triggerForwardPass) onConnection() bool {
 func (p *triggerForwardPass) run() {
 	for {
 		if !p.onConnection() {
-			p.abandon("connection_ended")
+			p.endWithConnection()
 			return
 		}
 		if !p.fill() {
@@ -174,7 +174,7 @@ func (p *triggerForwardPass) run() {
 			p.handleAck(ack)
 		case <-p.connection.ended:
 			timer.Stop()
-			p.abandon("connection_ended")
+			p.endWithConnection()
 			return
 		case <-timer.C:
 			p.expire(time.Now())
@@ -439,6 +439,15 @@ func (p *triggerForwardPass) abandon(outcome string) {
 		p.logger.WithFields(TriggerSummaryFields(entry.trigger, requestID)).
 			WithField("outcome", outcome).Warn("Trigger ack wait ended with the control connection; resending on the next connection")
 	}
+}
+
+// endWithConnection ends a pass whose connection has ended or been replaced. A replacement
+// connection kicks the forwarder as soon as it is published, and that wakeup can reach this pass
+// before it sees its own connection end; it is posted again so the next pass resends the WAL on the
+// new connection without waiting for the periodic tick.
+func (p *triggerForwardPass) endWithConnection() {
+	p.abandon("connection_ended")
+	wakeupTriggerForwarder()
 }
 
 func (p *triggerForwardPass) release() {

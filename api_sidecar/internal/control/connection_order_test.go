@@ -169,3 +169,42 @@ func TestAckWaitEndsWithItsConnection(t *testing.T) {
 		t.Fatalf("runtime still has %d pending end triggers", pending)
 	}
 }
+
+// When a connection is replaced, the forwarder pass still waiting on the old one can receive the
+// wakeup the new connection sent (select picks among ready cases at random). The pass hands that
+// wakeup back as it ends, so the WAL is resent on the new connection at once rather than on the
+// next periodic tick.
+func TestEndedPassHandsBackTheNewConnectionsWakeup(t *testing.T) {
+	wal := withTestTriggerWAL(t)
+	resetPendingAcks(t)
+	runForwarder(t)
+
+	first := &fakeControlStream{sendCh: make(chan *ipcpb.ControlMessage, 4)}
+	firstConn := storeConn(first, "test-node")
+	appendClose(t, wal, "close-handoff", "live+handoff", time.Now().UnixMilli())
+	wakeupTriggerForwarder()
+	waitForControlMessage(t, first.sendCh, "close on the first connection")
+
+	// The pass is blocked on the first connection's ack, so it alone receives the new
+	// connection's wakeup before it sees the first connection end.
+	second := &fakeControlStream{sendCh: make(chan *ipcpb.ControlMessage, 4)}
+	secondConn := storeConn(second, "test-node")
+	t.Cleanup(func() {
+		clearConn()
+		close(secondConn.ended)
+	})
+	wakeupTriggerForwarder()
+	deadline := time.Now().Add(5 * time.Second)
+	for len(triggerForwarderWakeup) > 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the pass on the first connection never took the wakeup")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	close(firstConn.ended)
+
+	resent := waitForControlMessage(t, second.sendCh, "close resent on the second connection")
+	if got := resent.GetMistTrigger().GetRequestId(); got != "close-handoff" {
+		t.Fatalf("second connection received %q, want the pending close", got)
+	}
+}
