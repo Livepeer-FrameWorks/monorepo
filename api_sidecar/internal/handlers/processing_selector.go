@@ -204,11 +204,12 @@ func completeRenditionTracks(expectedHeights []int, videoTracks []processingMeta
 }
 
 // startProcessingSelectorPush starts the local-disk push for a selection-based
-// output (clip / DVR chapter) using the chosen video selector.
-func (h *ProcessingJobHandler) startProcessingSelectorPush(log *logrus.Entry, mistClient *mist.Client, streamName, outputPath, videoSelector, processesJSON string) (int, error) {
+// output (clip / DVR chapter) using the chosen video selector, and returns the
+// push's Mist id (0 when push_list never showed it) and target URI.
+func (h *ProcessingJobHandler) startProcessingSelectorPush(log *logrus.Entry, mistClient *mist.Client, streamName, outputPath, videoSelector, processesJSON string) (int, string, error) {
 	targetURI := processingMuxTargetURIWithSelectors(outputPath, videoSelector, processingMetaSelector(processesJSON))
 	if err := mistClient.PushStart(streamName, targetURI); err != nil {
-		return 0, err
+		return 0, targetURI, err
 	}
 	pushID := findProcessingPushID(log, mistClient, streamName, targetURI)
 	log.WithFields(logrus.Fields{
@@ -216,5 +217,5 @@ func (h *ProcessingJobHandler) startProcessingSelectorPush(log *logrus.Entry, mi
 		"target_uri":  targetURI,
 		"push_id":     pushID,
 	}).Info("Selection push started")
-	return pushID, nil
+	return pushID, targetURI, nil
 }

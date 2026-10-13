@@ -2,6 +2,19 @@ package mist
 
 import "testing"
 
+func TestParsePushProgress(t *testing.T) {
+	got := ParsePushProgress(map[string]any{"mediatime": float64(812345), "media_tx": float64(800000), "active_ms": float64(90000), "bytes": float64(5678)})
+	if got.MediaMs != 812345 || got.Bytes != 5678 {
+		t.Fatalf("ParsePushProgress(recording status) = %+v", got)
+	}
+	if got := ParsePushProgress(nil); got != (PushProgress{}) {
+		t.Fatalf("ParsePushProgress(nil) = %+v, want zero", got)
+	}
+	if got := ParsePushProgress(map[string]any{"mediatime": "bad", "bytes": float64(-1)}); got != (PushProgress{}) {
+		t.Fatalf("ParsePushProgress(malformed) = %+v, want zero", got)
+	}
+}
+
 func TestParsePushEndStatus(t *testing.T) {
 	tests := []struct {
 		name      string

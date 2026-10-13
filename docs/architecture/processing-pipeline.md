@@ -238,6 +238,14 @@ All three mux under `processing+<artifact_hash>`, then **validate the `RECORDING
 stale / failed / retired-generation events, verify output completeness against the authoritative
 source span), generate the `vod+<…>` DTSH sidecar, and return the result via `sendCompletedResult`.
 
+While the push runs, all three measure the recording, not the processing stream's source: every
+five seconds Helmsman reads the push's own status from Mist's `push_list` (`mediatime`, `bytes`,
+refreshed by the recorder about every five seconds) and the output file's size on disk. The
+progress it reports carries the recorder's `mediatime`, and an attempt fails as stalled only when
+none of the three advanced for three minutes. The source's `lastms` is no measure of the job:
+the input can buffer the whole source while the buffer holds its feed for a recorder that is still
+writing, so a 30-minute chapter's source can reach its end minutes before its recording does.
+
 Processing progress and lease renewals are ephemeral: Helmsman sends them only while the Foghorn
 control stream is connected, because replaying stale progress cannot renew current ownership. A
 terminal `ProcessingJobResult` is a durable transition. The `cache_update` status is instead an

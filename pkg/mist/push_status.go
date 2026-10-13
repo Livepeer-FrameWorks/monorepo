@@ -55,6 +55,29 @@ func ParsePushEndStatus(raw string) PushEndStatus {
 	}
 }
 
+// PushProgress is the output position a running push reports in its push_list
+// status. A recording output refreshes it about every five seconds.
+type PushProgress struct {
+	// MediaMs is the media timestamp, in ms on the stream's timeline, of the
+	// packet the output last handled.
+	MediaMs int64
+	// Bytes is the output's cumulative bytes written.
+	Bytes uint64
+}
+
+// ParsePushProgress reads a push_list status entry; fields Mist has not
+// reported yet are zero.
+func ParsePushProgress(status map[string]any) PushProgress {
+	var progress PushProgress
+	if value, ok := firstNumber(status, "mediatime"); ok {
+		progress.MediaMs = clampInt64(value)
+	}
+	if value, ok := firstUint(status, "bytes"); ok {
+		progress.Bytes = value
+	}
+	return progress
+}
+
 func firstDurationMS(values map[string]any) (int64, bool) {
 	if value, ok := firstNumber(values, "active_ms", "duration_ms", "media_duration_ms"); ok {
 		return clampInt64(value), true

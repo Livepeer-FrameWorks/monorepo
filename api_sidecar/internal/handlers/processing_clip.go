@@ -149,7 +149,7 @@ func (h *ProcessingJobHandler) handleClip(req *ipcpb.ProcessingJobRequest, send 
 	// generation id, so a delayed event from a retired push is rejected by
 	// comparing its TimeStarted against this.
 	currentPushStartedAt := time.Now().Unix()
-	_, pushErr := h.startProcessingSelectorPush(log, mistClient, streamName, outputPath, videoSelector, req.GetProcessesJson())
+	pushID, pushTargetURI, pushErr := h.startProcessingSelectorPush(log, mistClient, streamName, outputPath, videoSelector, req.GetProcessesJson())
 	if pushErr != nil {
 		log.WithError(pushErr).Error("Clip: push_start failed")
 		h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
@@ -157,16 +157,15 @@ func (h *ProcessingJobHandler) handleClip(req *ipcpb.ProcessingJobRequest, send 
 		return
 	}
 
-	// 5s cadence: fine-grained enough to derive throughput (Δlastms/Δwall)
-	// for the completion telemetry; the lastms read is controller-API-only,
-	// so it neither wakes the stream nor counts as a viewer.
+	// 5s cadence matches the recorder's push status refresh and is
+	// fine-grained enough to derive throughput for the completion telemetry;
+	// push_list is controller-API-only, so it neither wakes the stream nor
+	// counts as a viewer.
 	progressTicker := time.NewTicker(5 * time.Second)
 	defer progressTicker.Stop()
 	absoluteTimeout := time.After(4 * time.Hour)
-	var lastMs int64
-	lastAdvance := time.Now()
+	stallWatch := newRecorderStallWatch(time.Now())
 	var recordingEnd *ProcessingRecordingEndEvent
-	const stallTimeout = 3 * time.Minute
 	pushStartWallMs := time.Now().UnixMilli()
 	speedSampler := &processingSpeedSampler{}
 	var awaitRecordingEnd recordingEndWait
@@ -229,12 +228,9 @@ loop:
 				log.WithFields(evtFields).Info("Clip: process exited cleanly")
 			}
 		case <-progressTicker.C:
-			currentMs := h.getStreamLastMs(mistClient, streamName)
+			recorder, stalledFor := stallWatch.observe(time.Now(), sampleProcessingRecorderProgress(mistClient, streamName, pushTargetURI, pushID, outputPath))
+			currentMs := recorder.mediaMs
 			speedSampler.observe(time.Now().UnixMilli(), currentMs)
-			if currentMs > lastMs {
-				lastMs = currentMs
-				lastAdvance = time.Now()
-			}
 			var progressPct int32
 			if sourceDurationMs > 0 && currentMs > 0 {
 				progressPct = int32(currentMs * 100 / sourceDurationMs)
@@ -243,8 +239,8 @@ loop:
 				}
 			}
 			h.sendProgress(send, req.GetJobId(), progressPct, currentMs, sourceDurationMs)
-			if !awaitRecordingEnd.active() && time.Since(lastAdvance) >= stallTimeout {
-				log.WithField("progress_pct", progressPct).Warn("Clip: processing stalled")
+			if !awaitRecordingEnd.active() && stalledFor >= processingRecorderStallWindow {
+				log.WithFields(recorderProgressFields(recorder)).WithField("progress_pct", progressPct).Warn("Clip: recording stalled")
 				h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
 				h.sendResult(send, req.GetJobId(), "failed",
 					fmt.Sprintf("clip stalled at %d%%", progressPct), nil, "", 0)

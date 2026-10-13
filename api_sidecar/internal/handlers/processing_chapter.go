@@ -224,21 +224,20 @@ func (h *ProcessingJobHandler) handleChapterFinalize(req *ipcpb.ProcessingJobReq
 	}
 
 	currentPushStartedAt := time.Now().Unix()
-	_, pushErr := h.startProcessingSelectorPush(log, mistClient, streamName, outputPath, chapterVideoSelector, originalProcessesJSON)
+	pushID, pushTargetURI, pushErr := h.startProcessingSelectorPush(log, mistClient, streamName, outputPath, chapterVideoSelector, originalProcessesJSON)
 	if pushErr != nil {
 		log.WithError(pushErr).Error("Chapter finalize: push_start failed")
 		h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("push_start failed: %v", pushErr), nil, "", 0)
 		return
 	}
 
-	// 5s cadence: feeds the throughput sampler for completion telemetry; the
-	// lastms read is controller-API-only (no stream wake, no viewer count).
+	// 5s cadence matches the recorder's push status refresh and feeds the
+	// throughput sampler; push_list is controller-API-only (no stream wake, no
+	// viewer count).
 	progressTicker := time.NewTicker(5 * time.Second)
 	defer progressTicker.Stop()
-	var lastMs int64
-	lastAdvance := time.Now()
+	stallWatch := newRecorderStallWatch(time.Now())
 	var recordingEnd *ProcessingRecordingEndEvent
-	const stallTimeout = 3 * time.Minute
 	pushStartWallMs := time.Now().UnixMilli()
 	speedSampler := &processingSpeedSampler{}
 
@@ -302,12 +301,9 @@ loop:
 				log.WithFields(evtFields).Info("Chapter finalize: process exited cleanly")
 			}
 		case <-progressTicker.C:
-			currentMs := h.getStreamLastMs(mistClient, streamName)
+			recorder, stalledFor := stallWatch.observe(time.Now(), sampleProcessingRecorderProgress(mistClient, streamName, pushTargetURI, pushID, outputPath))
+			currentMs := recorder.mediaMs
 			speedSampler.observe(time.Now().UnixMilli(), currentMs)
-			if currentMs > lastMs {
-				lastMs = currentMs
-				lastAdvance = time.Now()
-			}
 			spanMs := int64(chapterSpanMs)
 			var progressPct int32
 			if spanMs > 0 && currentMs > 0 {
@@ -317,11 +313,11 @@ loop:
 				}
 			}
 			h.sendProgress(send, req.GetJobId(), progressPct, currentMs, spanMs)
-			if !awaitRecordingEnd.active() && time.Since(lastAdvance) >= stallTimeout {
-				log.WithField("last_ms", lastMs).Warn("Chapter finalize: push stalled")
+			if !awaitRecordingEnd.active() && stalledFor >= processingRecorderStallWindow {
+				log.WithFields(recorderProgressFields(recorder)).Warn("Chapter finalize: recording stalled")
 				h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
 				h.sendResult(send, req.GetJobId(), "failed",
-					fmt.Sprintf("chapter finalize stalled at %dms", lastMs), nil, "", 0)
+					fmt.Sprintf("chapter finalize recording stalled at %dms", recorder.mediaMs), nil, "", 0)
 				return
 			}
 		case <-ctx.Done():

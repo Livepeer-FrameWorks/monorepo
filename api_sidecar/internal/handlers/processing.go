@@ -1179,16 +1179,16 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 	}
 
 	// Single select loop: terminal triggers, process state, progress, and timeouts.
-	// 5s cadence feeds the throughput sampler; the lastms read is
-	// controller-API-only (no stream wake, no viewer count).
+	// 5s cadence matches the recorder's push status refresh and feeds the
+	// throughput sampler; push_list is controller-API-only (no stream wake, no
+	// viewer count).
 	progressTicker := time.NewTicker(5 * time.Second)
 	defer progressTicker.Stop()
 	absoluteTimeout := time.After(4 * time.Hour)
 
-	var lastMs int64
-	lastAdvance := time.Now()
+	pushTargetURI := processingMuxTargetURI(outputPath)
+	stallWatch := newRecorderStallWatch(time.Now())
 	var recordingEnd *ProcessingRecordingEndEvent
-	const stallTimeout = 3 * time.Minute
 	pushStartWallMs := time.Now().UnixMilli()
 	speedSampler := &processingSpeedSampler{}
 	var awaitRecordingEnd recordingEndWait
@@ -1242,8 +1242,7 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 			h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("livepeer fallback restart: %v", pushErr), nil, "", 0)
 			return false
 		}
-		lastMs = 0
-		lastAdvance = time.Now()
+		stallWatch = newRecorderStallWatch(time.Now())
 		fallbackAttempted = true
 		hasLivepeer = false
 		h.sendProgress(send, req.GetJobId(), 0, 0, sourceDurationMs)
@@ -1415,12 +1414,9 @@ loop:
 					continue loop
 				}
 			}
-			currentMs := h.getStreamLastMs(mistClient, streamName)
+			recorder, stalledFor := stallWatch.observe(time.Now(), sampleProcessingRecorderProgress(mistClient, streamName, pushTargetURI, activePushID, outputPath))
+			currentMs := recorder.mediaMs
 			speedSampler.observe(time.Now().UnixMilli(), currentMs)
-			if currentMs > lastMs {
-				lastMs = currentMs
-				lastAdvance = time.Now()
-			}
 
 			var progressPct int32
 			if sourceDurationMs > 0 && currentMs > 0 {
@@ -1432,15 +1428,17 @@ loop:
 
 			h.sendProgress(send, req.GetJobId(), progressPct, currentMs, sourceDurationMs)
 
-			if !awaitRecordingEnd.active() && time.Since(lastAdvance) >= stallTimeout {
+			if !awaitRecordingEnd.active() && stalledFor >= processingRecorderStallWindow {
+				stallFields := recorderProgressFields(recorder)
+				stallFields["progress_pct"] = progressPct
 				if hasLivepeer && !fallbackAttempted {
-					log.WithField("progress_pct", progressPct).Warn("Livepeer stalled, falling back to local MistProcAV")
+					log.WithFields(stallFields).Warn("Livepeer stalled, falling back to local MistProcAV")
 					if !restartWithLocalFallback("Livepeer", 0) {
 						return
 					}
 					continue loop
 				}
-				log.WithField("progress_pct", progressPct).Warn("Processing stalled")
+				log.WithFields(stallFields).Warn("Processing stalled")
 				h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
 				h.sendResult(send, req.GetJobId(), "failed",
 					fmt.Sprintf("processing stalled at %d%%", progressPct), nil, "", 0)
@@ -3353,19 +3351,6 @@ func (h *ProcessingJobHandler) updateProcessConfigCache(send func(*ipcpb.Control
 		},
 		SentAt: timestamppb.Now(),
 	})
-}
-
-// getStreamLastMs queries MistServer's active_streams for the current lastms
-// of the given stream. Returns 0 if the stream is not found or query fails.
-func (h *ProcessingJobHandler) getStreamLastMs(mistClient *mist.Client, streamName string) int64 {
-	streamData, err := h.getActiveProcessingStreamData(mistClient, streamName)
-	if err != nil {
-		return 0
-	}
-	if lastms, ok := streamData["lastms"].(float64); ok {
-		return int64(lastms)
-	}
-	return 0
 }
 
 func (h *ProcessingJobHandler) getActiveProcessingStreamData(mistClient *mist.Client, streamName string) (map[string]interface{}, error) {
