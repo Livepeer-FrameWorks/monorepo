@@ -7,7 +7,9 @@
 # WS4 (404 import stuck PROCESSING, no upload.failed), N25 (a source longer
 # than the processing buffer window READY with renditions missing its start), a
 # gateway discovery failure reported under a URL key after the gateway had
-# identified the orchestrator.
+# identified the orchestrator, a loaded orchestrator refusing the gateway's
+# replacement session on the realtime ratio of work it had already finished
+# (a VOD segment past its 30 s budget, so the job fell back).
 . "$(dirname "$0")/../lib.sh"
 
 GATEWAY=${STACK_LIVEPEER_GATEWAY_A:-livepeer-gateway-a}
@@ -72,9 +74,13 @@ fi
 log "VOD longer than the processing buffer window (${LONG}s)"
 L=$(upload_vod "$STACK_STATE_DIR/vod480-long.mp4" "stack long vod")
 LID=$(echo "$L" | jq -r '.id // empty')
+LHASH=$(echo "$L" | jq -r '.artifactHash // empty')
 LPB=$(echo "$L" | jq -r '.playbackId // empty')
 if [ -n "$LID" ]; then
   if eventually 600 "long VOD reaches READY" ready_or_failed "$LID"; then
+    # On a loaded host the gateway replaces its orchestrator session during
+    # a job this long; the replacement must not hold a segment past its budget.
+    check "long VOD processing used Livepeer (no local fallback)" json_has "$(job_processes "$LHASH")" 'map(.process) | index("Livepeer") != null'
     full_long() { full_length "$1" "$2" "$LONG"; }
     every_replica "long VOD renditions span the whole ${LONG}s source" "$LPB" full_long
   fi
