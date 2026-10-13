@@ -52,6 +52,8 @@ type fakeUniverse struct {
 	pending      map[string]bool
 	markerWrites []string
 	engineReads  int
+	// masterHosts names the universe's master cohort; empty is yb-1, yb-2, yb-3.
+	masterHosts []string
 }
 
 const testYugabyteEngine = "2026.1.1.2"
@@ -133,7 +135,11 @@ func (u *fakeUniverse) Masters(context.Context, inventory.Host) ([]yugabyteMaste
 		return nil, u.mastersErr
 	}
 	var masters []yugabyteMaster
-	for i, name := range []string{"yb-1", "yb-2", "yb-3"} {
+	names := u.masterHosts
+	if len(names) == 0 {
+		names = []string{"yb-1", "yb-2", "yb-3"}
+	}
+	for i, name := range names {
 		m := yugabyteMaster{UUID: "m-" + name, Host: name, State: "ALIVE", Role: "FOLLOWER"}
 		if u.deadMasters[name] {
 			m.State = "NETWORK_ERROR"

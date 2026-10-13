@@ -34,10 +34,34 @@ type fakeYugabyteOps struct {
 	log      *serviceEventLog
 	universe *fakeUniverse
 	drift    map[string]bool
+	// deployments holds the universe of each named SQL deployment; a node of
+	// none of them belongs to universe, the primary deployment's.
+	deployments map[string]*fakeUniverse
+	// rolls records the deployment each roll was asked for.
+	rolls []string
 }
 
-func (o *fakeYugabyteOps) Roll(io.Writer) *yugabyteRoll {
-	return o.universe.roll("yb-1", "yb-2", "yb-3")
+func (o *fakeYugabyteOps) Roll(_ io.Writer, deployment *inventory.Manifest) *yugabyteRoll {
+	name := inventory.DatabaseDeploymentName(deployment.DatabaseDeployment)
+	o.rolls = append(o.rolls, name)
+	var hosts []string
+	for _, node := range deployment.Infrastructure.Postgres.Nodes {
+		hosts = append(hosts, node.Host)
+	}
+	if u, ok := o.deployments[name]; ok {
+		return u.roll(hosts...)
+	}
+	return o.universe.roll(hosts...)
+}
+
+// universeOf returns the universe host's node belongs to.
+func (o *fakeYugabyteOps) universeOf(host string) *fakeUniverse {
+	for _, u := range o.deployments {
+		if slices.Contains(u.masterHosts, host) {
+			return u
+		}
+	}
+	return o.universe
 }
 
 func (o *fakeYugabyteOps) TserverConfigDrift(_ context.Context, node *orchestrator.Task) (bool, error) {
@@ -46,20 +70,21 @@ func (o *fakeYugabyteOps) TserverConfigDrift(_ context.Context, node *orchestrat
 
 func (o *fakeYugabyteOps) Restart(_ context.Context, node *orchestrator.Task, scope string) error {
 	o.log.add("restart-" + scope + ":" + node.Host)
-	o.universe.mu.Lock()
-	if o.universe.processes == nil {
-		o.universe.processes = map[string]yugabyteProcessState{}
+	u := o.universeOf(node.Host)
+	u.mu.Lock()
+	if u.processes == nil {
+		u.processes = map[string]yugabyteProcessState{}
 	}
-	o.universe.processes[node.Host+"/yb-"+scope] = yugabyteProcessCurrent
-	delete(o.universe.staleBinaries, node.Host+"/yb-"+scope)
-	o.universe.mu.Unlock()
-	o.universe.recover(node.Host)
+	u.processes[node.Host+"/yb-"+scope] = yugabyteProcessCurrent
+	delete(u.staleBinaries, node.Host+"/yb-"+scope)
+	u.mu.Unlock()
+	u.recover(node.Host)
 	return nil
 }
 
 func (o *fakeYugabyteOps) InstallEngine(_ context.Context, node *orchestrator.Task) error {
 	o.log.add("install-engine:" + node.Host)
-	u := o.universe
+	u := o.universeOf(node.Host)
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	if u.engines == nil {
@@ -343,6 +368,82 @@ func TestReleaseYugabyteEngineDowngradeIsRefused(t *testing.T) {
 		}
 		if len(run.events) != 0 || len(universe.markerWrites) != 0 || len(universe.asked) != 0 {
 			t.Fatalf("dry-run %v: a refused downgrade changed the universe: events %v, markers %v", dryRun, run.events, universe.markerWrites)
+		}
+	}
+}
+
+// yugabyteTwoDeploymentManifest runs the primary universe on yb-1..3 and a
+// named deployment eu on eu-1..3: two independent master cohorts.
+func yugabyteTwoDeploymentManifest() *inventory.Manifest {
+	manifest := yugabyteReleaseManifest()
+	for _, name := range []string{"eu-1", "eu-2", "eu-3"} {
+		manifest.Hosts[name] = serviceHost(name)
+	}
+	manifest.Infrastructure.DatabaseDeployments = map[string]*inventory.PostgresConfig{
+		"eu": {
+			Enabled: true, Engine: "yugabyte", Mode: "native", ReplicationFactor: 3,
+			PlacementCloud: "hetzner", PlacementRegion: "eu-central",
+			Nodes: []inventory.PostgresNode{
+				{Host: "eu-1", ID: 1, PlacementZone: "fsn1"},
+				{Host: "eu-2", ID: 2, PlacementZone: "nbg1"},
+				{Host: "eu-3", ID: 3, PlacementZone: "hel1"},
+			},
+		},
+	}
+	return manifest
+}
+
+// Each SQL deployment is its own universe: its nodes are admitted by its own
+// masters, and its engine upgrade begins, completes, and finalizes within that
+// deployment, so a named deployment is never gated by the primary's masters.
+func TestReleaseYugabyteConvergenceRollsEachDeploymentThroughItsOwnUniverse(t *testing.T) {
+	primary := previousEngineUniverse()
+	primary.masterHosts = []string{"yb-1", "yb-2", "yb-3"}
+	eu := &fakeUniverse{
+		serving:     map[string]bool{"eu-1": true, "eu-2": true, "eu-3": true},
+		engines:     map[string]string{"eu-1": "2025.2.3.0", "eu-2": "2025.2.3.0", "eu-3": "2025.2.3.0"},
+		masterHosts: []string{"eu-1", "eu-2", "eu-3"},
+	}
+	ops := &fakeYugabyteOps{log: &serviceEventLog{}, universe: primary, deployments: map[string]*fakeUniverse{"eu": eu}}
+	converged := configConverged()
+	for _, name := range []string{"eu-1", "eu-2", "eu-3"} {
+		converged["eu-yugabyte[master]:"+name] = true
+		converged["yugabyte[master]:"+name] = true
+	}
+	fake := &serviceReleaseProvisioner{log: ops.log, converged: converged}
+	run := runServiceConvergence(t, yugabyteTwoDeploymentManifest(), fake, &releaseServiceOps{yugabyte: ops}, false)
+	if run.err != nil {
+		t.Fatalf("run: %v\n%s", run.err, run.out)
+	}
+	if !slices.Equal(ops.rolls, []string{"primary", "eu"}) {
+		t.Fatalf("rolls = %v, want one per deployment", ops.rolls)
+	}
+	want := []string{
+		"install-engine:yb-1", "install-engine:yb-2", "install-engine:yb-3",
+		"restart-tserver:yb-1", "restart-tserver:yb-2", "restart-tserver:yb-3",
+		"complete-engine:yb-1", "complete-engine:yb-2", "complete-engine:yb-3",
+		"install-engine:eu-1", "install-engine:eu-2", "install-engine:eu-3",
+		"restart-tserver:eu-1", "restart-tserver:eu-2", "restart-tserver:eu-3",
+		"complete-engine:eu-1", "complete-engine:eu-2", "complete-engine:eu-3",
+	}
+	if !slices.Equal(run.events, want) {
+		t.Fatalf("events = %v\nwant     %v", run.events, want)
+	}
+	for name, u := range map[string]*fakeUniverse{"primary": primary, "eu": eu} {
+		for _, write := range u.markerWrites {
+			if !slices.Contains(u.masterHosts, strings.SplitN(write, "=", 2)[0]) {
+				t.Errorf("%s universe: finalize marker written on a foreign node: %v", name, u.markerWrites)
+			}
+		}
+		if len(u.markerWrites) != 6 || len(u.finalized) != 1 || !slices.Contains(u.masterHosts, u.finalized[0]) || len(u.pending) != 0 {
+			t.Errorf("%s universe: markers %v, finalized %v, pending %v; want its own upgrade begun and finalized once", name, u.markerWrites, u.finalized, u.pending)
+		}
+		for _, asked := range u.asked {
+			for _, uuid := range asked {
+				if !slices.ContainsFunc(u.masterHosts, func(host string) bool { return strings.HasSuffix(uuid, "-"+host) }) {
+					t.Errorf("%s universe was asked about a foreign node %s", name, uuid)
+				}
+			}
 		}
 	}
 }

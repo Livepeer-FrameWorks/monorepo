@@ -4639,6 +4639,54 @@ func TestBuildTaskConfigAllowsNativeNginxProxySites(t *testing.T) {
 	}
 }
 
+// Bridge listens only on loopback and the WireGuard address, so its proxy
+// sites are marked for the role to route a docker-mode proxy over WireGuard;
+// a service on every interface is not marked.
+func TestBuildTaskConfigMarksBridgeProxySitesMeshOnly(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Profile:    "dev",
+		RootDomain: "frameworks.network",
+		Hosts: map[string]inventory.Host{
+			"edge-1": {ExternalIP: "10.0.0.10", Cluster: "media-a", WireguardIP: "10.88.0.10"},
+		},
+		Clusters: map[string]inventory.ClusterConfig{"media-a": {}},
+		Services: map[string]inventory.ServiceConfig{
+			"bridge":    {Enabled: true, Host: "edge-1", Port: 18000},
+			"chartroom": {Enabled: true, Host: "edge-1", Port: 18030},
+		},
+		Interfaces: map[string]inventory.ServiceConfig{
+			"nginx": {Enabled: true, Host: "edge-1", Mode: "docker"},
+		},
+	}
+	cfg, err := buildTaskConfig(&orchestrator.Task{
+		Name: "nginx", Type: "nginx", ServiceID: "nginx", Host: "edge-1", ClusterID: "media-a", Phase: orchestrator.PhaseInterfaces,
+	}, manifest, map[string]any{}, false, "", map[string]string{}, nil, nil)
+	if err != nil {
+		t.Fatalf("buildTaskConfig: %v", err)
+	}
+	sites, ok := cfg.Metadata["proxy_sites"].([]map[string]any)
+	if !ok || len(sites) == 0 {
+		t.Fatalf("proxy_sites missing: %#v", cfg.Metadata["proxy_sites"])
+	}
+	var bridgeSites int
+	for _, site := range sites {
+		name, _ := site["name"].(string)
+		meshOnly, _ := site["mesh_only"].(bool)
+		switch {
+		case strings.HasPrefix(name, "bridge"):
+			bridgeSites++
+			if !meshOnly {
+				t.Errorf("bridge site %s is not marked mesh_only: %#v", name, site)
+			}
+		case meshOnly:
+			t.Errorf("site %s is marked mesh_only: %#v", name, site)
+		}
+	}
+	if bridgeSites == 0 {
+		t.Fatalf("no bridge site rendered: %#v", sites)
+	}
+}
+
 func TestBuildTaskConfigBridgeProxySitesCarryCellPeerReplicasAsBackups(t *testing.T) {
 	manifest := &inventory.Manifest{
 		Profile:    "staging",

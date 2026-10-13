@@ -103,7 +103,10 @@ runs its role's check-mode precheck, and only a host whose check reports a
 change is touched, one host at a time; the first gate that fails stops the
 stage and leaves later hosts untouched, and a rerun resumes because converged
 hosts are skipped and each remaining change is gated on a healthy service
-first. Yugabyte first settles its engine, then converges its configuration in
+first. Yugabyte runs per SQL deployment (`SQLDeploymentForHost`), primary
+first: each deployment's nodes go through a roll over that deployment's own
+masters, and its engine upgrade begins and finalizes within it. In each
+deployment Yugabyte first settles its engine, then converges its configuration in
 two passes through the Yugabyte roll. The engine step reads each node's
 installed engine (the selected release's `yb-master --version`), whether a
 process still runs another binary, and a finalize marker. When a joined node
@@ -151,7 +154,14 @@ deploy's tier: CONTROL one at a time with the first as canary, MEDIA one per
 cell with cells in parallel, OTHER together. The effective `MaxUnavailable`
 (`DefaultStrategyFor` plus the manifest `update_strategy` override) caps the
 parallel lanes, and every built-in default is 1. Yugabyte keeps its master
-roll. A failure starts no further host, leaves every later wave untouched, and
+roll. Foghorn takes its cells one at a time (`cli/cmd/release_media_cell_gate.go`):
+a cell whose replicas all enforce signed placement refuses every tenant whose
+authority is still on schema 1, so after each cell the upgrade reads Commodore
+(the query behind the doctor's Media authority convergence check) until the cell
+holds no such tenant, and either attests enforcement or has not attested within
+90 s of its upgrade (the replica liveness window plus a heartbeat). A cell still
+holding schema-1 tenants after 15 min stops the release before the next cell.
+A failure starts no further host, leaves every later wave untouched, and
 names the untouched hosts; parallel hosts write line-prefixed output, with
 Ansible output routed through `ansiblerun.WithOutputWriter`.
 Contract migrations are universally deferred. `release apply` prints the exact

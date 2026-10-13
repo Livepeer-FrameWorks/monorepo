@@ -700,13 +700,20 @@ func livepeerNativeArgs(serviceName string, env map[string]string, stateDirs []s
 	return args
 }
 
+// MeshOnlyHTTPService reports whether serviceName's HTTP port answers only on
+// loopback and the host's WireGuard address (meshOnlyHTTPAddrs).
+func MeshOnlyHTTPService(serviceName string) bool {
+	return serviceName == "bridge"
+}
+
 // meshOnlyHTTPAddrs is where Bridge's HTTP port answers on a host: loopback
-// for the local nginx and vmagent, and the WireGuard address for the peers'
-// nginx upstream backups, Skipper's bridge.internal MCP calls, and
-// Quartermaster's health probes. The LAN and public interfaces stay closed so
-// a client cannot bypass the proxy's TLS and client-IP headers.
+// for the local native nginx and vmagent, and the WireGuard address for a
+// docker-mode proxy on the same host, the peers' nginx upstream backups,
+// Skipper's bridge.internal MCP calls, and Quartermaster's health probes. The
+// LAN and public interfaces stay closed so a client cannot bypass the proxy's
+// TLS and client-IP headers.
 func meshOnlyHTTPAddrs(serviceName string, host inventory.Host) []string {
-	if serviceName != "bridge" {
+	if !MeshOnlyHTTPService(serviceName) {
 		return nil
 	}
 	addrs := []string{"127.0.0.1"}

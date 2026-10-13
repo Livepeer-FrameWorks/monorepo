@@ -287,11 +287,24 @@ and the successful-lookup contract must pass.
 
 Services log in as their database's runtime role, and nothing else does: migrations,
 backups, restores, relayout and `cluster doctor` connect as the superuser, and
-relayout's probes `SET ROLE`, which does not apply a role's settings. The yugabyte and
-postgres roles' `init.yml` attach `statement_timeout = 60s` and
-`idle_in_transaction_session_timeout = 60s` to every runtime role (`ALTER ROLE … SET`,
-only when the role does not already carry them, because on YugabyteDB the shared-catalog
-change invalidates every backend's catalog cache). A transaction a service leaves open
+relayout's probes `SET ROLE`, which does not apply a role's settings. Every runtime
+role carries `statement_timeout = 60s` and `idle_in_transaction_session_timeout = 60s`
+(`ALTER ROLE … SET`, only when the role does not already carry them, because on
+YugabyteDB the shared-catalog change invalidates every backend's catalog cache). Two
+paths attach them, with the same values (`provisioner.RuntimeRoleSessionLimits`, held
+equal to the roles' `vars/main.yml` by a test):
+
+- `cluster provision` and `cluster init`: the yugabyte and postgres roles' `init.yml`,
+  when they create or initialize the databases.
+- `cluster release apply` and `cluster migrate --phase expand`: the service-database
+  step (`ensureServiceDatabases`) that runs before expand migrations reads every
+  runtime role of each SQL deployment's databases from `pg_db_role_setting` through the
+  deployment's admin host and alters only the roles that lack a limit. This is how a
+  running cluster whose roles predate the limits converges; the roles' `init.yml` is a
+  `never`-tagged import that a release does not run, and a release initializes Yugabyte
+  only during an engine upgrade. `--dry-run` reports the roles it would alter.
+
+A transaction a service leaves open
 holds its row locks and provisional writes until its session ends; with the limit the
 engine ends that session after a minute and writers queued behind it proceed. The
 settings apply at login, so a running service takes them up as its pool opens
@@ -557,7 +570,11 @@ change Yugabyte nodes one at a time through quorum checks:
   YugabyteDB upgrade order: every master, then every tserver, then finalize. Both run
   the same code (`cli/cmd/yugabyte_engine_upgrade.go`); `release apply` runs it before
   converging Yugabyte configuration whenever a joined node's engine differs from the
-  release's pin, and refuses a pin older than a node's engine.
+  release's pin, and refuses a pin older than a node's engine. Every SQL deployment
+  is its own universe: like `cluster provision`, `release apply` groups the nodes by
+  deployment (`SQLDeploymentForHost`) and runs the engine step and both configuration
+  passes per deployment, primary first, each node admitted by its own deployment's
+  masters and each engine upgrade begun and finalized within its deployment.
   `config/infrastructure.yaml` pins the native engine archives for both architectures;
   `config/schema-contract-engines.yaml` pins the matching build for real-engine tests.
   Release generation includes the native pins in the platform manifest.

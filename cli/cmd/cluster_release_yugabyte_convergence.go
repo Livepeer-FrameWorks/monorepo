@@ -57,9 +57,10 @@ func describeYugabyteEngine(out io.Writer, engine string) {
 
 // yugabyteReleaseOps are the live Yugabyte operations of the stage.
 type yugabyteReleaseOps interface {
-	// Roll returns the roll that admits and gates node changes, or nil when
-	// the manifest runs no Yugabyte universe.
-	Roll(out io.Writer) *yugabyteRoll
+	// Roll returns the roll that admits and gates node changes in the universe
+	// of deployment, a manifest view of one SQL deployment, or nil when that
+	// deployment runs no Yugabyte universe.
+	Roll(out io.Writer, deployment *inventory.Manifest) *yugabyteRoll
 	// TserverConfigDrift reports whether the role rendered for the tserver
 	// restart scope would change node.
 	TserverConfigDrift(ctx context.Context, node *orchestrator.Task) (bool, error)
@@ -75,11 +76,48 @@ type yugabyteReleaseOps interface {
 	CompleteEngine(ctx context.Context, node *orchestrator.Task) error
 }
 
+// runYugabyteConvergence converges each SQL deployment's universe in turn.
+// Every deployment runs its own masters, so a node is admitted only by the
+// masters of its own deployment, and an engine upgrade begins, restarts, and
+// finalizes within one deployment.
 func runYugabyteConvergence(ctx context.Context, c *releaseHostConvergence, tasks []*orchestrator.Task, dryRun bool) error {
 	out := c.cmd.OutOrStdout()
 	fmt.Fprintf(out, "\nYugabyte (%d node(s))\n", len(tasks))
+	views := map[string]*inventory.Manifest{}
+	byDeployment := map[string][]*orchestrator.Task{}
+	for _, task := range tasks {
+		view, err := c.manifest.SQLDeploymentForHost(task.Host)
+		if err != nil {
+			return fmt.Errorf("node on %s: %w", task.Host, err)
+		}
+		name := inventory.DatabaseDeploymentName(view.DatabaseDeployment)
+		views[name] = view
+		byDeployment[name] = append(byDeployment[name], task)
+	}
+	for _, deployment := range c.manifest.SQLDeployments() {
+		group := byDeployment[deployment.Name]
+		if len(group) == 0 {
+			continue
+		}
+		if len(byDeployment) > 1 {
+			fmt.Fprintf(out, "  deployment %s (%d node(s))\n", deployment.Name, len(group))
+		}
+		if err := convergeYugabyteDeployment(ctx, c, views[deployment.Name], group, dryRun); err != nil {
+			if len(byDeployment) > 1 {
+				return fmt.Errorf("deployment %s: %w", deployment.Name, err)
+			}
+			return err
+		}
+	}
+	return nil
+}
+
+// convergeYugabyteDeployment runs the engine step and both configuration
+// passes over the nodes of the deployment view selects.
+func convergeYugabyteDeployment(ctx context.Context, c *releaseHostConvergence, deployment *inventory.Manifest, tasks []*orchestrator.Task, dryRun bool) error {
+	out := c.cmd.OutOrStdout()
 	ops := c.yugabyteOps()
-	roll := ops.Roll(out)
+	roll := ops.Roll(out, deployment)
 	if roll == nil {
 		return errors.New("the manifest declares Yugabyte nodes but no Yugabyte universe")
 	}
@@ -241,8 +279,8 @@ type sshYugabyteReleaseOps struct {
 	c *releaseHostConvergence
 }
 
-func (o sshYugabyteReleaseOps) Roll(out io.Writer) *yugabyteRoll {
-	return newYugabyteGate(out, o.c.manifest, o.c.pool)
+func (o sshYugabyteReleaseOps) Roll(out io.Writer, deployment *inventory.Manifest) *yugabyteRoll {
+	return newYugabyteGate(out, deployment, o.c.pool)
 }
 
 // render renders node's role with overrides added to the runtime data.
@@ -299,5 +337,9 @@ func (o sshYugabyteReleaseOps) CompleteEngine(ctx context.Context, node *orchest
 	if err != nil {
 		return err
 	}
-	return initializeAndValidateYugabyteNode(ctx, o.c.pool, o.c.manifest, host, prov, config)
+	deployment, err := o.c.manifest.SQLDeploymentForHost(node.Host)
+	if err != nil {
+		return err
+	}
+	return initializeAndValidateYugabyteNode(ctx, o.c.pool, deployment, host, prov, config)
 }

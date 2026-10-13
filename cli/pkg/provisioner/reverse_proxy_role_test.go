@@ -10,7 +10,7 @@ import (
 )
 
 func TestReverseProxyComposeVarsRendersNginxConfigMount(t *testing.T) {
-	vars, err := reverseProxyComposeVars("nginx", 18090, ServiceConfig{
+	vars, err := reverseProxyComposeVars("nginx", 18090, inventory.Host{}, ServiceConfig{
 		Mode:  "docker",
 		Image: "nginx:alpine",
 		Port:  18090,
@@ -57,6 +57,46 @@ func TestReverseProxyComposeVarsRendersNginxConfigMount(t *testing.T) {
 	}
 }
 
+// Bridge answers only on loopback and the host's WireGuard address. A docker
+// proxy reaches host loopback services through the Docker gateway, where Bridge
+// does not listen, so its Bridge sites go to the WireGuard address instead;
+// every other site keeps the gateway.
+func TestDockerProxyReachesMeshOnlyServicesOnTheWireguardAddress(t *testing.T) {
+	sites := []map[string]any{
+		{"name": "bridge", "domains": []string{"bridge.example.com"}, "upstream": "127.0.0.1:18000", "mesh_only": true, "backup_upstreams": []string{"10.88.0.2:18000"}},
+		{"name": "foghorn", "domains": []string{"foghorn.example.com"}, "upstream": "127.0.0.1:18008"},
+	}
+	for _, proxy := range []string{"nginx", "caddy"} {
+		vars, err := reverseProxyComposeVars(proxy, 18090, inventory.Host{Name: "regional-1", WireguardIP: "10.88.0.1"}, ServiceConfig{
+			Mode: "docker", Image: proxy + ":test", Port: 18090,
+			Metadata: map[string]any{"proxy_sites": sites},
+		})
+		if err != nil {
+			t.Fatalf("%s: %v", proxy, err)
+		}
+		var conf string
+		for _, content := range decodedComposeFilesAny(t, vars) {
+			if text, ok := content.(string); ok {
+				conf += text
+			}
+		}
+		if strings.Contains(conf, "host.docker.internal:18000") || !strings.Contains(conf, "10.88.0.1:18000") {
+			t.Fatalf("%s: Bridge site must go to the WireGuard address, not the Docker gateway:\n%s", proxy, conf)
+		}
+		if !strings.Contains(conf, "host.docker.internal:18008") {
+			t.Fatalf("%s: a site that listens on every interface keeps the Docker gateway:\n%s", proxy, conf)
+		}
+	}
+
+	_, err := reverseProxyComposeVars("nginx", 18090, inventory.Host{Name: "regional-1"}, ServiceConfig{
+		Mode: "docker", Image: "nginx:test", Port: 18090,
+		Metadata: map[string]any{"proxy_sites": sites},
+	})
+	if err == nil || !strings.Contains(err.Error(), "bridge") || !strings.Contains(err.Error(), "wireguard") {
+		t.Fatalf("err = %v; a docker proxy on a host without a WireGuard address cannot reach Bridge and must refuse", err)
+	}
+}
+
 func TestRenderCaddyfileRestrictsMediaIngestAndOverwritesForwardingHeaders(t *testing.T) {
 	content := renderCaddyfile([]proxySite{{
 		Domains: []string{"livepeer.example.com"}, Upstream: "127.0.0.1:8935", Profile: "media_ingest",
@@ -74,7 +114,7 @@ func TestRenderCaddyfileRestrictsMediaIngestAndOverwritesForwardingHeaders(t *te
 }
 
 func TestReverseProxyComposeVarsRendersTLSMountsAndHTTPSPort(t *testing.T) {
-	vars, err := reverseProxyComposeVars("nginx", 18090, ServiceConfig{
+	vars, err := reverseProxyComposeVars("nginx", 18090, inventory.Host{}, ServiceConfig{
 		Mode:  "docker",
 		Image: "nginx:alpine",
 		Port:  80,
@@ -109,7 +149,7 @@ func TestReverseProxyComposeVarsRendersTLSMountsAndHTTPSPort(t *testing.T) {
 }
 
 func TestReverseProxyComposeVarsAppliesMediaIngestProfile(t *testing.T) {
-	vars, err := reverseProxyComposeVars("nginx", 18090, ServiceConfig{
+	vars, err := reverseProxyComposeVars("nginx", 18090, inventory.Host{}, ServiceConfig{
 		Mode:  "docker",
 		Image: "nginx:alpine",
 		Port:  18090,
@@ -154,7 +194,7 @@ func TestReverseProxyComposeVarsAppliesMediaIngestProfile(t *testing.T) {
 // variable-cert :443 catch-all, and the tenant-alias cert dir mount must all
 // render from the tenant_alias_playback metadata.
 func TestReverseProxyComposeVarsRendersTenantAliasPlayback(t *testing.T) {
-	vars, err := reverseProxyComposeVars("nginx", 18090, ServiceConfig{
+	vars, err := reverseProxyComposeVars("nginx", 18090, inventory.Host{}, ServiceConfig{
 		Mode:  "docker",
 		Image: "nginx:alpine",
 		Port:  80,
@@ -196,7 +236,7 @@ func TestReverseProxyComposeVarsRendersTenantAliasPlayback(t *testing.T) {
 
 // Without the metadata key, nothing tenant-alias related renders.
 func TestReverseProxyComposeVarsTenantAliasDisabledByDefault(t *testing.T) {
-	vars, err := reverseProxyComposeVars("nginx", 18090, ServiceConfig{
+	vars, err := reverseProxyComposeVars("nginx", 18090, inventory.Host{}, ServiceConfig{
 		Mode:  "docker",
 		Image: "nginx:alpine",
 		Port:  18090,

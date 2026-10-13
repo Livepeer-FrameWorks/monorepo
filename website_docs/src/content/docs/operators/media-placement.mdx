@@ -138,8 +138,15 @@ A cell that attests enforcement refuses every stream of a tenant whose authority
 legacy (policy-free) schema, including managed and pulled sources, until that tenant's
 policy-bearing authority is published. `frameworks cluster doctor` reports the
 **Media authority convergence** check unhealthy while any attested cell holds such a tenant, and
-`frameworks cluster diagnose media-authority` lists the count per cell. Confirm the count is zero
-before upgrading the next cell.
+`frameworks cluster diagnose media-authority` lists the count per cell.
+
+`frameworks cluster release apply` (and `frameworks cluster upgrade foghorn`) upgrades Foghorn one
+cell at a time. After each cell's replicas are upgraded, it waits until that cell holds no tenant on
+the legacy schema before the next cell starts, printing the count as it changes. A cell that does not
+attest enforcement within 90 seconds of its upgrade refuses no tenant and passes. If a cell still holds
+legacy-schema tenants after 15 minutes, the release stops with that cell named and the later cells
+untouched; list the tenants with `frameworks cluster diagnose media-authority` and rerun the release
+once the count is zero.
 
 Stored artifacts are served under the same policy: it removes destinations the tenant's rules
 refuse, while storage affinity decides the order of what is left. Choosing which durable backend

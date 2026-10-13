@@ -4869,6 +4869,15 @@ func buildProxySitesForHost(manifest *inventory.Manifest, hostName, clusterID st
 			profileService = serviceType
 		}
 		backupUpstreams := proxySiteBackupUpstreams(manifest, profileService, svc, hostName, port)
+		// A docker-mode proxy cannot reach a mesh-only service through the Docker
+		// gateway; the role routes these sites to the host's WireGuard address.
+		meshOnly := provisioner.MeshOnlyHTTPService(profileService)
+		appendLocalSite := func(site map[string]any) {
+			if meshOnly {
+				site["mesh_only"] = true
+			}
+			appendSite(site)
+		}
 		for _, ingressClusterID := range proxySiteIngressClusterIDs(name, manifest, svc, clusterID) {
 			domains, bundleID := autoIngressDomainsForService(name, svc, manifest, ingressClusterID)
 			if len(domains) == 0 {
@@ -4888,7 +4897,7 @@ func buildProxySitesForHost(manifest *inventory.Manifest, hostName, clusterID st
 				applyProxySiteIngressTLSDefaults(site, bundleID)
 				applyProxySiteTLSBundleMetadata(site, manifest, bundleID)
 			}
-			appendSite(site)
+			appendLocalSite(site)
 
 			globalDomains, globalBundleID := clusterderive.PlatformGlobalRootIngressDomainsForService(name, svc, manifest, ingressClusterID)
 			if len(globalDomains) == 0 || globalBundleID == "" {
@@ -4906,7 +4915,7 @@ func buildProxySitesForHost(manifest *inventory.Manifest, hostName, clusterID st
 			globalSite["tls_bundle_id"] = globalBundleID
 			applyProxySiteIngressTLSDefaults(globalSite, globalBundleID)
 			applyProxySiteTLSBundleMetadata(globalSite, manifest, globalBundleID)
-			appendSite(globalSite)
+			appendLocalSite(globalSite)
 		}
 
 		// Physical per-instance endpoint: a separate server block answering
@@ -4927,7 +4936,7 @@ func buildProxySitesForHost(manifest *inventory.Manifest, hostName, clusterID st
 				}
 				applyProxySiteIngressTLSDefaults(site, bundleID)
 				applyProxySiteTLSBundleMetadata(site, manifest, bundleID)
-				appendSite(site)
+				appendLocalSite(site)
 			}
 		}
 	}

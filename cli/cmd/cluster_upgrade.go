@@ -456,6 +456,10 @@ func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version st
 		deadline += 2*time.Duration(len(hosts))*(2*yugabyteRollRecoveryTimeout+5*time.Minute) +
 			yugabyteRollRecoveryTimeout + yugabyteFinalizeTimeout + time.Minute
 	}
+	if deployName == "foghorn" {
+		// Each cell may wait for its tenants' schema-2 authority (gatedMediaCellWaves).
+		deadline += time.Duration(len(hosts)) * mediaCellGateTimeout
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), deadline)
 	defer cancel()
 
@@ -598,8 +602,13 @@ func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version st
 		replicaIndex[host.Name] = i + 1
 	}
 	waves := []rolloutWave{{Name: "yugabyte roll", Lanes: [][]string{hostNames}, Limit: 1}}
+	var afterWave func(rolloutWave) error
 	if serviceName != "yugabyte" {
-		waves = upgradeReplicaWaves(manifest, serviceName, deployName, hostNames)
+		var cellGate *mediaCellGate
+		if deployName == "foghorn" && !dryRun {
+			cellGate = newMediaCellGate(cmd.OutOrStdout(), rc, sshPool, sshKey)
+		}
+		waves, afterWave = upgradeRolloutWaves(ctx, manifest, serviceName, deployName, hostNames, cellGate)
 	}
 	var (
 		resultMu    sync.Mutex
@@ -640,7 +649,7 @@ func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version st
 		result.installed = result.installed || hostResult.installed
 		return nil
 	}
-	if err := runRolloutWaves(ctx, cmd.OutOrStdout(), waves, upgradeHost, nil); err != nil {
+	if err := runRolloutWaves(ctx, cmd.OutOrStdout(), waves, upgradeHost, afterWave); err != nil {
 		return result, err
 	}
 

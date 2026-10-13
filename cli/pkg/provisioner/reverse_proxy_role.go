@@ -3,6 +3,7 @@ package provisioner
 import (
 	"context"
 	"fmt"
+	"net"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -55,7 +56,7 @@ func reverseProxyVarsBuilder(serviceName string, defaultPort int) RoleVarsBuilde
 	return func(ctx context.Context, host inventory.Host, config ServiceConfig, helpers RoleBuildHelpers) (map[string]any, error) {
 		switch config.Mode {
 		case "docker":
-			return reverseProxyComposeVars(serviceName, defaultPort, config)
+			return reverseProxyComposeVars(serviceName, defaultPort, host, config)
 		case "native":
 			switch serviceName {
 			case "caddy":
@@ -71,7 +72,7 @@ func reverseProxyVarsBuilder(serviceName string, defaultPort int) RoleVarsBuilde
 	}
 }
 
-func reverseProxyComposeVars(serviceName string, defaultPort int, config ServiceConfig) (map[string]any, error) {
+func reverseProxyComposeVars(serviceName string, defaultPort int, host inventory.Host, config ServiceConfig) (map[string]any, error) {
 	port := config.Port
 	if port == 0 {
 		port = defaultPort
@@ -90,7 +91,10 @@ func reverseProxyComposeVars(serviceName string, defaultPort int, config Service
 		}
 	}
 
-	sites := normalizeProxySites(config.Metadata, "docker")
+	sites, err := routeMeshOnlySitesOverWireguard(serviceName, normalizeProxySites(config.Metadata, "docker"), host)
+	if err != nil {
+		return nil, err
+	}
 	var tap *tenantAliasPlayback
 	if serviceName == "nginx" {
 		tap = tenantAliasPlaybackFromMetadata(config.Metadata)
@@ -880,9 +884,12 @@ func caddyTLSDirective(site proxySite) string {
 }
 
 type proxySite struct {
-	Name                  string
-	Domains               []string
-	Upstream              string
+	Name     string
+	Domains  []string
+	Upstream string
+	// MeshOnly marks a local upstream that listens only on loopback and the
+	// host's WireGuard address (MeshOnlyHTTPService).
+	MeshOnly              bool
 	Profile               string
 	PathPrefixes          []string
 	TLSBundleID           string
@@ -998,6 +1005,7 @@ func normalizeProxySites(metadata map[string]any, mode string) []proxySite {
 			Name:                  stringValue(raw["name"]),
 			Domains:               stringSliceValue(raw["domains"]),
 			Upstream:              normalizeProxyUpstream(stringValue(raw["upstream"]), mode),
+			MeshOnly:              boolValue(raw["mesh_only"]).value,
 			Profile:               stringValue(raw["profile"]),
 			PathPrefixes:          normalizePathPrefixes(raw),
 			TLSBundleID:           stringValue(raw["tls_bundle_id"]),
@@ -1101,6 +1109,31 @@ func normalizeProxyUpstream(upstream, mode string) string {
 		}
 	}
 	return scheme + upstream
+}
+
+// routeMeshOnlySitesOverWireguard points a docker proxy's mesh-only sites at
+// the host's WireGuard address. The container reaches host loopback services
+// through the Docker gateway (host.docker.internal), and a mesh-only service
+// does not listen there; its WireGuard listener is reachable from the container
+// and, like loopback, is closed to the LAN.
+func routeMeshOnlySitesOverWireguard(serviceName string, sites []proxySite, host inventory.Host) ([]proxySite, error) {
+	wireguardIP := strings.TrimSpace(host.WireguardIP)
+	for i := range sites {
+		if !sites[i].MeshOnly {
+			continue
+		}
+		scheme, hostPort := splitUpstreamScheme(sites[i].Upstream)
+		upstreamHost, port, err := net.SplitHostPort(hostPort)
+		if err != nil || upstreamHost != "host.docker.internal" {
+			continue
+		}
+		if wireguardIP == "" {
+			return nil, fmt.Errorf("%s: site %s fronts a service that listens only on loopback and the WireGuard address, and a docker-mode %s cannot reach host loopback; host %s needs a wireguard_ip, or run %s in native mode",
+				serviceName, sites[i].Name, serviceName, host.Name, serviceName)
+		}
+		sites[i].Upstream = scheme + net.JoinHostPort(wireguardIP, port)
+	}
+	return sites, nil
 }
 
 func nginxProxyPassTarget(upstream string) string {

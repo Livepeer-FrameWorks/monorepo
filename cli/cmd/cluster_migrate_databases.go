@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 
@@ -21,6 +22,8 @@ var (
 	initializeServiceDatabasesFn = provisioner.InitializeServiceDatabases
 	bootstrapServiceDatabasesFn  = bootstrapServiceDatabases
 	migrateBelowFloorGuardFn     = runBelowFloorGuardExcluding
+	// ensureRuntimeRoleSessionLimitsFn attaches the runtime-role session limits over SSH.
+	ensureRuntimeRoleSessionLimitsFn = provisioner.EnsureRuntimeRoleSessionLimits
 	// refuseDuringYugabyteRelayoutFn reads the relayout journal through a healthy tserver.
 	refuseDuringYugabyteRelayoutFn = refuseDuringYugabyteRelayout
 )
@@ -129,7 +132,7 @@ func ensureServiceDatabases(ctx context.Context, cmd *cobra.Command, rc *resolve
 	}
 	if len(pending) == 0 {
 		fmt.Fprintf(out, "Service databases: all %d present with their baselines.\n", len(candidates))
-		return nil, nil
+		return nil, convergeRuntimeRoleSessionLimits(ctx, out, sshPool, host, manifest, pg, dryRun)
 	}
 
 	fmt.Fprintln(out, "Service databases missing their baseline on this cluster:")
@@ -146,6 +149,9 @@ func ensureServiceDatabases(ctx context.Context, cmd *cobra.Command, rc *resolve
 	}
 	if dryRun {
 		fmt.Fprintln(out, "  [DRY-RUN] no database, role, or baseline SQL was sent; the planned databases are skipped by the ledger checks below.")
+		if limitErr := convergeRuntimeRoleSessionLimits(ctx, out, sshPool, host, manifest, pg, dryRun); limitErr != nil {
+			return nil, limitErr
+		}
 		return pending, nil
 	}
 
@@ -167,7 +173,46 @@ func ensureServiceDatabases(ctx context.Context, cmd *cobra.Command, rc *resolve
 		return nil, fmt.Errorf("service database(s) %s still have no baseline after bootstrap; refusing to continue", strings.Join(schemaDatabaseNameList(stillPending), ", "))
 	}
 	ux.Success(out, fmt.Sprintf("Initialized service database(s): %s", strings.Join(schemaDatabaseNameList(pending), ", ")))
+	if limitErr := convergeRuntimeRoleSessionLimits(ctx, out, sshPool, host, manifest, pg, dryRun); limitErr != nil {
+		return nil, limitErr
+	}
 	return pending, nil
+}
+
+// convergeRuntimeRoleSessionLimits attaches the session limits to every
+// runtime role of the deployment's databases, the roles the database role's
+// init.yml creates. The role attaches them when it creates a role; this pass
+// brings a role that existed before the limits up to them, so `release apply`
+// and `cluster migrate --phase expand` converge a running cluster.
+func convergeRuntimeRoleSessionLimits(ctx context.Context, out io.Writer, sshPool *ssh.Pool, host inventory.Host, manifest *inventory.Manifest, pg *inventory.PostgresConfig, dryRun bool) error {
+	seen := map[string]struct{}{}
+	var roles []string
+	for _, db := range expandedYugabyteDatabaseConfigs(pg.Databases, manifest) {
+		role := databaseRuntimeRole(db)
+		if _, dup := seen[role]; role == "" || dup {
+			continue
+		}
+		seen[role] = struct{}{}
+		roles = append(roles, role)
+	}
+	if len(roles) == 0 {
+		return nil
+	}
+	sort.Strings(roles)
+	altered, err := ensureRuntimeRoleSessionLimitsFn(ctx, sshPool, host, pg, roles, dryRun)
+	if err != nil {
+		return fmt.Errorf("runtime role session limits: %w", err)
+	}
+	limits := strings.Join(provisioner.RuntimeRoleSessionLimits, ", ")
+	switch {
+	case len(altered) == 0:
+		fmt.Fprintf(out, "Runtime role sessions: all %d role(s) carry %s.\n", len(roles), limits)
+	case dryRun:
+		fmt.Fprintf(out, "  [DRY-RUN] would bound runtime role sessions (%s): %s\n", limits, strings.Join(altered, ", "))
+	default:
+		ux.Success(out, fmt.Sprintf("Bounded runtime role sessions (%s): %s", limits, strings.Join(altered, ", ")))
+	}
+	return nil
 }
 
 // bootstrapServiceDatabases applies the normal database role to the selected

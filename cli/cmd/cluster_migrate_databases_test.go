@@ -40,12 +40,28 @@ type serviceDatabaseSeams struct {
 	probeErr         error
 	bootstraps       [][]string
 	initializeStates []map[string]provisioner.ServiceDatabaseState
+	// limitRuns records each runtime-role session-limit convergence: the roles
+	// it was handed and whether it ran as a dry run. unbounded is what it
+	// reports altered.
+	limitRuns []sessionLimitRun
+	unbounded []string
+}
+
+type sessionLimitRun struct {
+	roles  []string
+	dryRun bool
 }
 
 func (s *serviceDatabaseSeams) install(t *testing.T) {
 	t.Helper()
-	origRead, origBootstrap := readServiceDatabaseStatesFn, bootstrapServiceDatabasesFn
-	t.Cleanup(func() { readServiceDatabaseStatesFn, bootstrapServiceDatabasesFn = origRead, origBootstrap })
+	origRead, origBootstrap, origLimits := readServiceDatabaseStatesFn, bootstrapServiceDatabasesFn, ensureRuntimeRoleSessionLimitsFn
+	t.Cleanup(func() {
+		readServiceDatabaseStatesFn, bootstrapServiceDatabasesFn, ensureRuntimeRoleSessionLimitsFn = origRead, origBootstrap, origLimits
+	})
+	ensureRuntimeRoleSessionLimitsFn = func(_ context.Context, _ *ssh.Pool, _ inventory.Host, _ *inventory.PostgresConfig, roles []string, dryRun bool) ([]string, error) {
+		s.limitRuns = append(s.limitRuns, sessionLimitRun{roles: roles, dryRun: dryRun})
+		return s.unbounded, nil
+	}
 	readServiceDatabaseStatesFn = func(_ context.Context, _ *ssh.Pool, _ inventory.Host, _ *inventory.PostgresConfig, databases []provisioner.SchemaDatabase) (map[string]provisioner.ServiceDatabaseState, error) {
 		s.calls = append(s.calls, "probe")
 		s.probes = append(s.probes, schemaDatabaseNameList(databases))
@@ -253,6 +269,61 @@ func TestEnsureServiceDatabasesFailsClosed(t *testing.T) {
 			t.Fatalf("created = %v, bootstraps = %v, err = %v", created, seams.bootstraps, err)
 		}
 	})
+}
+
+// A cluster whose databases all exist still gets the runtime-role session
+// limits: `release apply` and `cluster migrate --phase expand` attach them to
+// every runtime role of the deployment, the third-party ones included, and a
+// dry run only reads.
+func TestEnsureServiceDatabasesConvergesRuntimeRoleSessionLimits(t *testing.T) {
+	allPresent := map[string]provisioner.ServiceDatabaseState{
+		"commodore": {Exists: true, HasTables: true, Initialized: true},
+		"lookout":   {Exists: true, HasTables: true, Initialized: true},
+	}
+	wantRoles := []string{"chatwoot_runtime", "commodore_runtime", "lookout_runtime"}
+	for _, dryRun := range []bool{false, true} {
+		seams := &serviceDatabaseSeams{states: []map[string]provisioner.ServiceDatabaseState{allPresent}, unbounded: []string{"commodore_runtime"}}
+		seams.install(t)
+		cmd, out := commandWithOutput()
+		if _, err := ensureServiceDatabases(context.Background(), cmd, &resolvedCluster{Manifest: postgresServiceDatabaseManifest()}, nil, dryRun, false); err != nil {
+			t.Fatal(err)
+		}
+		if want := []sessionLimitRun{{roles: wantRoles, dryRun: dryRun}}; !reflect.DeepEqual(seams.limitRuns, want) {
+			t.Fatalf("dry-run %v: session limit runs = %+v, want %+v", dryRun, seams.limitRuns, want)
+		}
+		wantLine := "Bounded runtime role sessions (statement_timeout=60s, idle_in_transaction_session_timeout=60s): commodore_runtime"
+		if dryRun {
+			wantLine = "[DRY-RUN] would bound runtime role sessions (statement_timeout=60s, idle_in_transaction_session_timeout=60s): commodore_runtime"
+		}
+		if !strings.Contains(out.String(), wantLine) {
+			t.Fatalf("dry-run %v: output lacks %q:\n%s", dryRun, wantLine, out.String())
+		}
+	}
+}
+
+// A database the release creates is bounded once its roles exist, after the
+// verification probe.
+func TestEnsureServiceDatabasesBoundsSessionsAfterBootstrap(t *testing.T) {
+	seams := &serviceDatabaseSeams{states: []map[string]provisioner.ServiceDatabaseState{
+		{"commodore": {Exists: true, HasTables: true, Initialized: true}, "lookout": {}},
+		{"lookout": {Exists: true, HasTables: true, Initialized: true}},
+	}}
+	seams.install(t)
+	origLimits := ensureRuntimeRoleSessionLimitsFn
+	ensureRuntimeRoleSessionLimitsFn = func(ctx context.Context, pool *ssh.Pool, host inventory.Host, pg *inventory.PostgresConfig, roles []string, dryRun bool) ([]string, error) {
+		seams.calls = append(seams.calls, "session-limits")
+		return origLimits(ctx, pool, host, pg, roles, dryRun)
+	}
+	cmd, out := commandWithOutput()
+	if _, err := ensureServiceDatabases(context.Background(), cmd, &resolvedCluster{Manifest: postgresServiceDatabaseManifest()}, nil, false, false); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(seams.calls, []string{"probe", "bootstrap", "probe", "session-limits"}) {
+		t.Fatalf("calls = %v, want the limits after the verification probe", seams.calls)
+	}
+	if !strings.Contains(out.String(), "Runtime role sessions: all 3 role(s) carry statement_timeout=60s, idle_in_transaction_session_timeout=60s") {
+		t.Fatalf("output:\n%s", out.String())
+	}
 }
 
 func TestRunMigrateCreatesServiceDatabasesBeforeLedgerChecks(t *testing.T) {
