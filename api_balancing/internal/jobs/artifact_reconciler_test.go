@@ -28,7 +28,7 @@ func newTestReconciler(t *testing.T, db *sql.DB, s3 ReconcilerS3Client, commodor
 		// Default: a successful assignment (server-minted attempt + staging URL). Tests that exercise
 		// denial / not-eligible override this.
 		prepareFreeze: func(_ context.Context, _, hash, _, _, _, _, _ string, _ time.Duration) (control.FreezeAssignment, string, bool) {
-			return control.FreezeAssignment{AttemptID: "att-" + hash, StagingURL: "https://s3/staging/" + hash, CanonicalKey: "k/" + hash, DestCluster: "platform-eu"}, "", true
+			return control.FreezeAssignment{AttemptID: "att-" + hash, StagingURL: "https://s3/staging/" + hash, DtshStagingURL: "https://s3/staging/" + hash + ".dtsh", CanonicalKey: "k/" + hash, DestCluster: "platform-eu"}, "", true
 		},
 		logger:    logging.NewLogger(),
 		interval:  time.Minute,
@@ -272,6 +272,9 @@ func TestSendFreezeForArtifact_Clip(t *testing.T) {
 	call := fc.last()
 	if call.Req.PresignedPutUrl != "https://s3/staging/clip-hash" {
 		t.Fatalf("expected the staging URL from the assignment, got %q", call.Req.PresignedPutUrl)
+	}
+	if call.Req.GetPresignedDtshPutUrl() != "https://s3/staging/clip-hash.dtsh" {
+		t.Fatalf("expected the index staging URL from the assignment, got %q", call.Req.GetPresignedDtshPutUrl())
 	}
 	if call.Req.RequestId != "att-clip-hash" {
 		t.Fatalf("expected the server-minted attempt id as request id, got %q", call.Req.RequestId)

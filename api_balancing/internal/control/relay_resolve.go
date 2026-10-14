@@ -254,9 +254,10 @@ func fillFileArtifactResolve(ctx context.Context, req *ipcpb.RelayResolveRequest
 		resp.ContentType = contentTypeForFormat(format.String)
 	}
 
-	// The durable .dtsh index is produced ONLY by the server-assigned STAGED publication (a node that holds a
-	// freshly-generated .dtsh reports has_dtsh → checkAndTriggerDtshSync → TriggerDtshSync → HEAD-verify →
-	// conditional promotion → active_dtsh_key flip). The relay only ever mints a READ URL: when the index is
+	// The durable .dtsh index is produced ONLY by a server-assigned STAGED publication: uploaded with the media
+	// in the freeze attempt, or later by a node that reports has_dtsh → checkAndTriggerDtshSync →
+	// TriggerDtshSync; either way HEAD-verify → conditional promotion → active_dtsh_key flip. The relay only
+	// ever mints a READ URL: when the index is
 	// synced, a GET for the version-addressed key (legacy rows fall back to the co-located <media>.dtsh).
 	if dtshSynced.Valid && dtshSynced.Bool {
 		if k := strings.TrimSpace(activeDtshKey); k != "" {

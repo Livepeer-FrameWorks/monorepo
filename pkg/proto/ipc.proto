@@ -1503,6 +1503,8 @@ message FreezePermissionResponse {
   // Foghorn-assigned operation rather than a node-chosen id. The presigned PUT targets an attempt-scoped
   // staging object that Foghorn promotes to the canonical key after verifying it.
   string attempt_id = 11;
+  // Presigned PUT for the clip/VOD .dtsh index, to the attempt's index staging object (see FreezeRequest).
+  string presigned_dtsh_put_url = 12;
   // DVR set-freeze is rejected, so no per-segment URL map is ever returned.
   reserved 7;
   reserved "segment_urls";
@@ -1531,6 +1533,9 @@ message FreezeRequest {
   bool delete_after_upload = 8;  // Delete local copy after successful upload
   int64 url_expiry_seconds = 9;  // When the presigned URL expires
   map<string, string> segment_urls = 10; // For DVR: relative path -> presigned PUT URL
+  // Presigned PUT for the clip/VOD .dtsh index, to the attempt's index staging object. The node uploads the
+  // index with the media and reports dtsh_included, so the artifact becomes synced together with its index.
+  string presigned_dtsh_put_url = 11;
 }
 
 // FreezeProgress reports upload progress for freezing operations

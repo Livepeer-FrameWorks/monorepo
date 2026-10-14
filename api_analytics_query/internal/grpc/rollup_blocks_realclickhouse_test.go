@@ -3,7 +3,9 @@
 package grpc
 
 import (
+	"fmt"
 	"math"
+	"slices"
 	"testing"
 	"time"
 
@@ -229,5 +231,109 @@ func TestRebufferingTransitionsStayOnOneNode_RealClickHouse(t *testing.T) {
 	}
 	if len(seen) != len(samples) {
 		t.Fatalf("paged %d distinct events, want every one of the %d samples", len(seen), len(samples))
+	}
+}
+
+// TestRebufferingTransitionsFollowEventOrder_RealClickHouse records Mist's
+// buffer edges the way Periscope Ingest stores them: the DRY and RECOVER of
+// a short rebuffer within one second of timestamp, with ingest_ids that sort
+// opposite to their event order, and a periodic sample, which is not a
+// buffer edge, reporting FULL in the middle of a longer rebuffer. Each node
+// must report exactly one rebuffer start and one end, in event order, on one
+// page and when paged one event at a time.
+func TestRebufferingTransitionsFollowEventOrder_RealClickHouse(t *testing.T) {
+	db := startQueryPackClickHouse(t)
+	server := NewPeriscopeServer(db, logging.NewLoggerWithService("rebuffering-order-real-ch-test"))
+	ctx := serviceTestContext()
+	const streamID = "5eedfeed-11fe-ca57-feed-11feca5700c3"
+	start := time.Now().UTC().Truncate(time.Second).Add(-10 * time.Minute)
+
+	edge := `INSERT INTO periscope.stream_health_samples
+		(timestamp, tenant_id, stream_id, internal_name, node_id, buffer_state, ingest_id, buffer_edge_at)
+		VALUES (?, ?, ?, 'rebuffer-order', ?, ?, ?, fromUnixTimestamp64Milli(?))`
+	periodic := `INSERT INTO periscope.stream_health_samples
+		(timestamp, tenant_id, stream_id, internal_name, node_id, buffer_state, ingest_id, buffer_edge_at)
+		VALUES (?, ?, ?, 'rebuffer-order', ?, ?, ?, NULL)`
+	samples := []struct {
+		edgeAt      time.Duration
+		node, state string
+		ingestID    string
+		periodic    bool
+	}{
+		{100 * time.Millisecond, "edge-tie", "FULL", "80000000-0000-4000-8000-000000000001", false},
+		{22100 * time.Millisecond, "edge-tie", "DRY", "ffffffff-ffff-4fff-bfff-ffffffffffff", false},
+		{22600 * time.Millisecond, "edge-tie", "RECOVER", "00000000-0000-4000-8000-000000000001", false},
+		{200 * time.Millisecond, "edge-poll", "FULL", "80000000-0000-4000-8000-000000000002", false},
+		{30100 * time.Millisecond, "edge-poll", "DRY", "80000000-0000-4000-8000-000000000003", false},
+		{35 * time.Second, "edge-poll", "FULL", "80000000-0000-4000-8000-000000000004", true},
+		{40200 * time.Millisecond, "edge-poll", "RECOVER", "80000000-0000-4000-8000-000000000005", false},
+	}
+	for _, sample := range samples {
+		at := start.Add(sample.edgeAt)
+		var err error
+		if sample.periodic {
+			_, err = db.ExecContext(ctx, periodic, at.Truncate(time.Second), queryPackTenantID, streamID, sample.node, sample.state, sample.ingestID)
+		} else {
+			_, err = db.ExecContext(ctx, edge, at.Truncate(time.Second), queryPackTenantID, streamID, sample.node, sample.state, sample.ingestID, at.UnixMilli())
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	stream := streamID
+	request := func(first int32, after *string) *periscopepb.GetRebufferingEventsResponse {
+		t.Helper()
+		resp, err := server.GetRebufferingEvents(ctx, &periscopepb.GetRebufferingEventsRequest{
+			TenantId:   queryPackTenantID,
+			StreamId:   &stream,
+			TimeRange:  &commonpb.TimeRange{Start: timestamppb.New(start.Add(-time.Second)), End: timestamppb.New(start.Add(time.Minute))},
+			Pagination: &commonpb.CursorPaginationRequest{First: first, After: after},
+		})
+		if err != nil {
+			t.Fatalf("GetRebufferingEvents: %v", err)
+		}
+		return resp
+	}
+	describe := func(events []*periscopepb.RebufferingEvent) []string {
+		var out []string
+		for _, event := range events {
+			mark := ""
+			if event.GetRebufferStart() != nil {
+				mark = " start"
+			}
+			if event.GetRebufferEnd() != nil {
+				mark = " end"
+			}
+			out = append(out, fmt.Sprintf("%s@%d:%s>%s%s", event.GetNodeId(), event.GetTimestamp().AsTime().Sub(start).Milliseconds(), event.GetPrevState(), event.GetBufferState(), mark))
+		}
+		return out
+	}
+	// Newest first; the periodic FULL is not a buffer edge.
+	want := []string{
+		"edge-poll@40200:DRY>RECOVER end",
+		"edge-poll@30100:FULL>DRY start",
+		"edge-tie@22600:DRY>RECOVER end",
+		"edge-tie@22100:FULL>DRY start",
+		"edge-poll@200:>FULL",
+		"edge-tie@100:>FULL",
+	}
+
+	if got := describe(request(int32(len(samples)), nil).GetEvents()); !slices.Equal(got, want) {
+		t.Fatalf("events = %v\nwant     %v", got, want)
+	}
+
+	var paged []*periscopepb.RebufferingEvent
+	var after *string
+	for page := 0; page < len(samples)+2; page++ {
+		resp := request(1, after)
+		paged = append(paged, resp.GetEvents()...)
+		if !resp.GetPagination().GetHasNextPage() {
+			break
+		}
+		after = resp.GetPagination().EndCursor
+	}
+	if got := describe(paged); !slices.Equal(got, want) {
+		t.Fatalf("paged events = %v\nwant           %v", got, want)
 	}
 }

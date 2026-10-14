@@ -10322,9 +10322,11 @@ type FreezePermissionResponse struct {
 	// Server-minted attempt id. The node echoes it as SyncComplete.request_id, so completion consumes a
 	// Foghorn-assigned operation rather than a node-chosen id. The presigned PUT targets an attempt-scoped
 	// staging object that Foghorn promotes to the canonical key after verifying it.
-	AttemptId     string `protobuf:"bytes,11,opt,name=attempt_id,json=attemptId,proto3" json:"attempt_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	AttemptId string `protobuf:"bytes,11,opt,name=attempt_id,json=attemptId,proto3" json:"attempt_id,omitempty"`
+	// Presigned PUT for the clip/VOD .dtsh index, to the attempt's index staging object (see FreezeRequest).
+	PresignedDtshPutUrl string `protobuf:"bytes,12,opt,name=presigned_dtsh_put_url,json=presignedDtshPutUrl,proto3" json:"presigned_dtsh_put_url,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *FreezePermissionResponse) Reset() {
@@ -10413,6 +10415,13 @@ func (x *FreezePermissionResponse) GetAttemptId() string {
 	return ""
 }
 
+func (x *FreezePermissionResponse) GetPresignedDtshPutUrl() string {
+	if x != nil {
+		return x.PresignedDtshPutUrl
+	}
+	return ""
+}
+
 // FreezeRequest tells Helmsman to upload an asset to S3 cold storage.
 // Foghorn generates presigned URLs - Helmsman never sees S3 credentials.
 type FreezeRequest struct {
@@ -10427,8 +10436,11 @@ type FreezeRequest struct {
 	DeleteAfterUpload bool                   `protobuf:"varint,8,opt,name=delete_after_upload,json=deleteAfterUpload,proto3" json:"delete_after_upload,omitempty"`                                                       // Delete local copy after successful upload
 	UrlExpirySeconds  int64                  `protobuf:"varint,9,opt,name=url_expiry_seconds,json=urlExpirySeconds,proto3" json:"url_expiry_seconds,omitempty"`                                                          // When the presigned URL expires
 	SegmentUrls       map[string]string      `protobuf:"bytes,10,rep,name=segment_urls,json=segmentUrls,proto3" json:"segment_urls,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // For DVR: relative path -> presigned PUT URL
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// Presigned PUT for the clip/VOD .dtsh index, to the attempt's index staging object. The node uploads the
+	// index with the media and reports dtsh_included, so the artifact becomes synced together with its index.
+	PresignedDtshPutUrl string `protobuf:"bytes,11,opt,name=presigned_dtsh_put_url,json=presignedDtshPutUrl,proto3" json:"presigned_dtsh_put_url,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *FreezeRequest) Reset() {
@@ -10529,6 +10541,13 @@ func (x *FreezeRequest) GetSegmentUrls() map[string]string {
 		return x.SegmentUrls
 	}
 	return nil
+}
+
+func (x *FreezeRequest) GetPresignedDtshPutUrl() string {
+	if x != nil {
+		return x.PresignedDtshPutUrl
+	}
+	return ""
 }
 
 // FreezeProgress reports upload progress for freezing operations
@@ -23882,7 +23901,7 @@ const file_ipc_proto_rawDesc = "" +
 	"asset_hash\x18\x03 \x01(\tR\tassetHash\x12\x1d\n" +
 	"\n" +
 	"size_bytes\x18\x05 \x01(\x04R\tsizeBytesJ\x04\b\x04\x10\x05J\x04\b\x06\x10\aJ\x04\b\a\x10\bJ\x04\b\b\x10\tR\n" +
-	"local_pathR\anode_idR\tfilenamesR\x1esupports_server_minted_attempt\"\xba\x02\n" +
+	"local_pathR\anode_idR\tfilenamesR\x1esupports_server_minted_attempt\"\xef\x02\n" +
 	"\x18FreezePermissionResponse\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x12\x1d\n" +
@@ -23896,7 +23915,8 @@ const file_ipc_proto_rawDesc = "" +
 	" \x01(\bR\n" +
 	"skipUpload\x12\x1d\n" +
 	"\n" +
-	"attempt_id\x18\v \x01(\tR\tattemptIdJ\x04\b\a\x10\bR\fsegment_urls\"\xeb\x03\n" +
+	"attempt_id\x18\v \x01(\tR\tattemptId\x123\n" +
+	"\x16presigned_dtsh_put_url\x18\f \x01(\tR\x13presignedDtshPutUrlJ\x04\b\a\x10\bR\fsegment_urls\"\xa0\x04\n" +
 	"\rFreezeRequest\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x12\x1d\n" +
@@ -23912,7 +23932,8 @@ const file_ipc_proto_rawDesc = "" +
 	"\x13delete_after_upload\x18\b \x01(\bR\x11deleteAfterUpload\x12,\n" +
 	"\x12url_expiry_seconds\x18\t \x01(\x03R\x10urlExpirySeconds\x12R\n" +
 	"\fsegment_urls\x18\n" +
-	" \x03(\v2/.helmsmancontrol.FreezeRequest.SegmentUrlsEntryR\vsegmentUrls\x1a>\n" +
+	" \x03(\v2/.helmsmancontrol.FreezeRequest.SegmentUrlsEntryR\vsegmentUrls\x123\n" +
+	"\x16presigned_dtsh_put_url\x18\v \x01(\tR\x13presignedDtshPutUrl\x1a>\n" +
 	"\x10SegmentUrlsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xa9\x01\n" +

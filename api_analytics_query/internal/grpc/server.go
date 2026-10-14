@@ -7529,28 +7529,27 @@ func (s *PeriscopeServer) GetLiveUsageSummary(ctx context.Context, req *periscop
 // sample belongs to an earlier session.
 const rebufferLookback = time.Hour
 
-// rebufferingTransitionsQuery returns every FULL, DRY or RECOVER health sample
-// of the tenant's live streams from rebufferLookback before start through end,
-// with the previous such state of the stream on the same node and whether the
-// sample starts or ends a rebuffer. Each node holds its own buffer of a stream
-// an origin and its edges both serve, so transitions never cross nodes.
-// Transitions are computed over the samples in timestamp order at read time,
-// so they do not depend on how the samples were inserted. Helmsman's periodic
-// poll and a stream-update refresh can both sample a node within one second,
-// the column's resolution; ingest_id, the sample's Kafka record identity,
-// orders such samples the same way on every read. The caller restricts the
-// result to start and later.
+// rebufferingTransitionsQuery returns every FULL, DRY or RECOVER buffer edge
+// Mist reported for the tenant's live streams from rebufferLookback before
+// start through end, with the previous edge of the stream on the same node and
+// whether the edge starts or ends a rebuffer. Each node holds its own buffer of
+// a stream an origin and its edges both serve, so transitions never cross
+// nodes. A periodic sample has no buffer_edge_at: its state is derived by
+// Periscope Ingest, not reported by Mist, so it is left out. Edges are ordered
+// by Mist's millisecond event time, then ingest_id, at read time, so the
+// transitions do not depend on how or when the samples were inserted. The
+// caller restricts the result to edges at start and later.
 func rebufferingTransitionsQuery(tenantID, streamID string, start, end time.Time) (string, []any) {
 	query := `
-		SELECT timestamp, tenant_id, stream_id, node_id, ingest_id, buffer_state,
+		SELECT assumeNotNull(buffer_edge_at) AS edge_at, tenant_id, stream_id, node_id, ingest_id, buffer_state,
 		       lagInFrame(buffer_state, 1, '') OVER (
-		           PARTITION BY tenant_id, stream_id, node_id ORDER BY timestamp, ingest_id
+		           PARTITION BY tenant_id, stream_id, node_id ORDER BY edge_at, ingest_id
 		           ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS prev_state,
 		       if(buffer_state = 'DRY' AND prev_state IN ('FULL', 'RECOVER'), 1, 0) AS rebuffer_start,
 		       if(buffer_state = 'RECOVER' AND prev_state = 'DRY', 1, 0) AS rebuffer_end
 		FROM stream_health_samples
 		WHERE tenant_id = ? AND artifact_hash = '' AND buffer_state IN ('FULL', 'DRY', 'RECOVER')
-		  AND timestamp >= ? AND timestamp <= ?`
+		  AND buffer_edge_at IS NOT NULL AND timestamp >= ? AND timestamp <= ?`
 	args := []any{tenantID, start.Add(-rebufferLookback), end}
 	if streamID != "" {
 		query += ` AND stream_id = ?`
@@ -7577,7 +7576,7 @@ func (s *PeriscopeServer) GetRebufferingEvents(ctx context.Context, req *perisco
 	}
 
 	transitions, transitionArgs := rebufferingTransitionsQuery(tenantID, req.GetStreamId(), startTime, endTime)
-	outerFilter := ` WHERE timestamp >= ?`
+	outerFilter := ` WHERE edge_at >= ?`
 	outerArgs := []any{startTime}
 	if req.NodeId != nil && *req.NodeId != "" {
 		outerFilter += ` AND node_id = ?`
@@ -7589,28 +7588,31 @@ func (s *PeriscopeServer) GetRebufferingEvents(ctx context.Context, req *perisco
 	countCh := s.countAsync(ctx, countQuery, countArgs...)
 
 	query := `
-		SELECT timestamp, tenant_id, stream_id, node_id, ingest_id, buffer_state, prev_state, rebuffer_start, rebuffer_end
+		SELECT edge_at, tenant_id, stream_id, node_id, ingest_id, buffer_state, prev_state, rebuffer_start, rebuffer_end
 		FROM (` + transitions + `)` + outerFilter
 	args := append(append([]any{}, transitionArgs...), outerArgs...)
 
-	// Two samples of one node in one second share timestamp, stream and node,
-	// so the keyset also carries ingest_id; without it a page boundary between
-	// them would skip the second sample.
+	// Two edges of one node can share an event time, so the keyset also
+	// carries ingest_id; without it a page boundary between them would skip
+	// the second edge. A positional bind formats a time.Time to whole seconds,
+	// so the cursor's edge time is compared in milliseconds.
+	const edgeMillis = "toUnixTimestamp64Milli(edge_at)"
 	keysetCols := []string{"stream_id", "node_id", "ingest_id"}
 	var cursorParts []string
 	if params.Cursor != nil {
 		cursorParts = strings.SplitN(params.Cursor.ID, "|", len(keysetCols))
 	}
-	keysetCond, keysetArgs, err := buildKeysetConditionN(params, "timestamp", keysetCols, cursorParts)
+	keysetCond, keysetArgs, err := buildKeysetConditionN(params, edgeMillis, keysetCols, cursorParts)
 	if err != nil {
 		return nil, err
 	}
 	if keysetCond != "" {
+		keysetArgs[0] = params.Cursor.Timestamp.UnixMilli()
 		query += keysetCond
 		args = append(args, keysetArgs...)
 	}
 
-	query += buildOrderByN(params, "timestamp", keysetCols)
+	query += buildOrderByN(params, edgeMillis, keysetCols)
 	query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
 
 	rows, err := periscopequerydb.Query(ctx, s.clickhouse, query, args...)

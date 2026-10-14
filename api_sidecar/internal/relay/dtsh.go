@@ -101,8 +101,12 @@ func (s *Server) serveSidecarGetWithStream(c *gin.Context, kind, hash, file, str
 	fetchURL, peerBearer := sidecarSource(res)
 	if fetchURL == "" {
 		// No sidecar anywhere yet. 404 is the signal for Mist to generate
-		// one and PUT it back.
+		// one and PUT it back. Generation reads the whole media file, so each
+		// one is logged.
 		dtshGeneration.WithLabelValues("lazy_404", "ok").Inc()
+		if s.logger != nil {
+			s.logger.WithField("asset_hash", hash).WithField("reason", "no stored index").Info("relay returning dtsh generation signal")
+		}
 		c.Status(http.StatusNotFound)
 		return
 	}
@@ -141,7 +145,7 @@ func (s *Server) serveSidecarGetWithStream(c *gin.Context, kind, hash, file, str
 		// The store reports no sidecar, or one that does not validate: Mist
 		// generates a fresh one and PUTs it back.
 		if s.logger != nil {
-			s.logger.WithField("asset_hash", hash).WithField("reason", result.reason).Debug("relay dtsh not in store; returning generation signal")
+			s.logger.WithField("asset_hash", hash).WithField("reason", result.reason).Info("relay returning dtsh generation signal")
 		}
 		c.Status(http.StatusNotFound)
 		return

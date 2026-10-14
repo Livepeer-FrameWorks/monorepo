@@ -2673,7 +2673,7 @@ func (h *AnalyticsHandler) processStreamBuffer(ctx context.Context, event kafka.
 	defer healthBatch.Close()
 
 	if appendErr := healthBatch.Append(periscopeingestdb.StreamBufferHealthRow{
-		Timestamp: event.Timestamp, TenantID: parseUUID(event.TenantID), StreamID: seriesStreamID,
+		Timestamp: event.Timestamp, BufferEdgeAt: bufferEdgeTime(&mt, event.Timestamp), TenantID: parseUUID(event.TenantID), StreamID: seriesStreamID,
 		InternalName: internalName, NodeID: mt.GetNodeId(), BufferState: streamBuffer.GetBufferState(),
 		HasIssues: optionalBoolUInt8(streamBuffer.GetHasIssues()), IssuesDescription: optionalString(streamBuffer.GetIssuesDescription()),
 		TrackCount: optionalUint16(streamBuffer.GetTrackCount()), TrackMetadata: trackMetadataJSON,
@@ -2696,6 +2696,17 @@ func (h *AnalyticsHandler) processStreamBuffer(ctx context.Context, event kafka.
 
 	h.logger.Debugf("Successfully processed stream buffer event for stream: %s (written to both stream_events and stream_health_metrics)", streamBuffer.GetStreamName())
 	return nil
+}
+
+// bufferEdgeTime is Mist's event time of a STREAM_BUFFER edge, from the
+// X-Trigger-UnixMillis header Helmsman forwards. Mist fires a stream's buffer
+// edges in order from one thread, so this orders a DRY and RECOVER of the same
+// second; the event's publish time is the fallback for a trigger without it.
+func bufferEdgeTime(mt *ipcpb.MistTrigger, published time.Time) time.Time {
+	if millis := mt.GetTriggerUnixMillis(); millis > 0 {
+		return time.UnixMilli(millis).UTC()
+	}
+	return published
 }
 
 // extractPrimaryTracks returns the video track that the Helmsman quality tier

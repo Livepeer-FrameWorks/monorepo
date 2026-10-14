@@ -917,11 +917,12 @@ func (sm *StorageManager) HandleFreezeRequest(req *ipcpb.FreezeRequest) {
 	}
 
 	permResp := &ipcpb.FreezePermissionResponse{
-		RequestId:        req.RequestId,
-		AssetHash:        req.AssetHash,
-		Approved:         true,
-		PresignedPutUrl:  req.PresignedPutUrl,
-		UrlExpirySeconds: req.UrlExpirySeconds,
+		RequestId:           req.RequestId,
+		AssetHash:           req.AssetHash,
+		Approved:            true,
+		PresignedPutUrl:     req.PresignedPutUrl,
+		PresignedDtshPutUrl: req.GetPresignedDtshPutUrl(),
+		UrlExpirySeconds:    req.UrlExpirySeconds,
 	}
 
 	if err := sm.uploadAsset(ctx, asset, permResp); err != nil {
@@ -1028,16 +1029,31 @@ func (sm *StorageManager) uploadAsset(ctx context.Context, asset FreezeCandidate
 	dtshIncluded := false
 
 	if asset.AssetType == AssetTypeClip || asset.AssetType == AssetTypeVOD {
-		// clip/VOD is a single-object upload to the server-minted presigned PUT. Any .dtsh index is synced
-		// separately (SyncDtshOnly / TriggerDtshSync), so no per-file URL map is involved.
+		// clip/VOD is one media object to the server-minted presigned PUT, plus its .dtsh index to the index
+		// staging PUT of the same attempt. Foghorn publishes both in one completion, so the artifact is never
+		// synced, and advertised to other edges and cells, before its index is. The index goes first: it is
+		// small, and a failed index upload fails the attempt before the media is sent. Without a local index
+		// (generation failed) the media syncs alone and the incremental index sync follows.
 		presignedURL := permResp.PresignedPutUrl
 		if presignedURL == "" {
 			return fmt.Errorf("no presigned URL provided for %s freeze", asset.AssetType)
 		}
-		uploadErr = sm.presignedClient.UploadFileToPresignedURL(ctx, presignedURL, asset.FilePath, func(uploaded int64) {
-			percent := uint32((uploaded * 100) / int64(asset.SizeBytes))
-			_ = sm.sendFreezeProgress(requestID, asset.AssetHash, percent, uint64(uploaded)) //nolint:errcheck // best-effort progress report
-		})
+		if dtshURL := permResp.GetPresignedDtshPutUrl(); dtshURL != "" {
+			if dtshPath, prepErr := sm.ensureLocalDtsh(string(asset.AssetType), asset.AssetHash, asset.FilePath); prepErr != nil {
+				sm.logger.WithError(prepErr).WithField("asset_hash", asset.AssetHash).Warn("No .dtsh index to sync with the media; the incremental index sync will follow")
+			} else if uploadErr = sm.presignedClient.UploadFileToPresignedURL(ctx, dtshURL, dtshPath, nil); uploadErr == nil {
+				dtshIncluded = true
+			} else {
+				// Not wrapped: a vanished index is not a lost media source, which fs.ErrNotExist would report.
+				uploadErr = errors.New("upload .dtsh index: " + uploadErr.Error())
+			}
+		}
+		if uploadErr == nil {
+			uploadErr = sm.presignedClient.UploadFileToPresignedURL(ctx, presignedURL, asset.FilePath, func(uploaded int64) {
+				percent := uint32((uploaded * 100) / int64(asset.SizeBytes))
+				_ = sm.sendFreezeProgress(requestID, asset.AssetHash, percent, uint64(uploaded)) //nolint:errcheck // best-effort progress report
+			})
+		}
 	} else {
 		return fmt.Errorf("unsupported asset type for freeze: %s", asset.AssetType)
 	}
@@ -1072,7 +1088,7 @@ func (sm *StorageManager) uploadAsset(ctx context.Context, asset FreezeCandidate
 			Error:      &errStr,
 			DurationMs: &durationMs,
 		})
-		_ = sm.sendSyncComplete(requestID, asset.AssetHash, "failed", 0, uploadErr.Error(), dtshIncluded, localMissing) //nolint:errcheck // best-effort report
+		_ = sm.sendSyncComplete(requestID, asset.AssetHash, "failed", 0, uploadErr.Error(), false, localMissing) //nolint:errcheck // best-effort report
 		return fmt.Errorf("failed to upload to S3: %w", uploadErr)
 	}
 
@@ -1353,6 +1369,45 @@ func (sm *StorageManager) ColdStorageAvailable() bool {
 	return control.IsConnected()
 }
 
+// ensureLocalDtsh returns the path of a valid .dtsh index next to a clip or
+// VOD's media file. A clip's index is written before the clip is published, so
+// it is only validated. A VOD's index may not exist yet (a DVR chapter's
+// generation runs after the chapter is registered) or may be corrupt; the
+// asset is then booted in Mist, which writes it. A storage-relative VOD path
+// (vod/<hash>.<ext>, from a catch-up request without a warm artifact report)
+// resolves against the storage root Mist writes to.
+func (sm *StorageManager) ensureLocalDtsh(assetType, assetHash, mediaPath string) (string, error) {
+	if assetType == "clip" {
+		dtshPath := mediaPath + ".dtsh"
+		if err := dtsh.ValidateFile(dtshPath); err != nil {
+			return "", fmt.Errorf(".dtsh file not valid at %s: %w", dtshPath, err)
+		}
+		return dtshPath, nil
+	}
+	if !filepath.IsAbs(mediaPath) {
+		mediaPath = filepath.Join(config.GetStoragePath(), mediaPath)
+	}
+	dtshPath := mediaPath + ".dtsh"
+	if err := dtsh.ValidateFile(dtshPath); err != nil {
+		reason := "missing"
+		if !os.IsNotExist(err) {
+			reason = "invalid"
+			sm.logger.WithError(err).WithField("dtsh_path", dtshPath).Warn("Removing invalid VOD .dtsh before on-demand regeneration")
+			if removeErr := os.Remove(dtshPath); removeErr != nil && !os.IsNotExist(removeErr) {
+				return "", fmt.Errorf("remove invalid .dtsh at %s: %w", dtshPath, removeErr)
+			}
+		}
+		vodStreamName := "vod+" + assetHash
+		if genErr := GenerateDTSHForPath(appconfig.MistServerURL(), vodStreamName, dtshPath, sm.logger.WithField("asset_hash", assetHash)); genErr != nil {
+			return "", fmt.Errorf("dtsh %s and on-demand generation failed: %w", reason, genErr)
+		}
+	}
+	if err := dtsh.ValidateFile(dtshPath); err != nil {
+		return "", fmt.Errorf(".dtsh file not valid at %s: %w", dtshPath, err)
+	}
+	return dtshPath, nil
+}
+
 // SyncDtshOnly handles incremental .dtsh file sync requests from Foghorn.
 // This is called when .dtsh appeared after the main asset was already synced to S3.
 func (sm *StorageManager) SyncDtshOnly(ctx context.Context, req *ipcpb.DtshSyncRequest) error {
@@ -1375,80 +1430,29 @@ func (sm *StorageManager) SyncDtshOnly(ctx context.Context, req *ipcpb.DtshSyncR
 	var uploadErr error
 	dtshUploaded := false
 
-	if assetType == "clip" {
-		// For clips: single .dtsh file next to the main file
-		dtshPath := localPath + ".dtsh"
-		presignedURL := req.GetPresignedPutUrl()
-
-		if presignedURL == "" {
-			return fmt.Errorf("no presigned URL provided for clip .dtsh")
-		}
-
-		if err := dtsh.ValidateFile(dtshPath); err != nil {
-			return fmt.Errorf(".dtsh file not valid at %s: %w", dtshPath, err)
-		}
-
-		// Upload the .dtsh file
-		if err := sm.presignedClient.UploadFileToPresignedURL(ctx, presignedURL, dtshPath, nil); err != nil {
-			uploadErr = fmt.Errorf("failed to upload clip .dtsh: %w", err)
-		} else {
-			dtshUploaded = true
-			sm.logger.WithFields(logging.Fields{
-				"asset_hash": assetHash,
-				"dtsh_path":  dtshPath,
-			}).Info("Uploaded clip .dtsh file")
-		}
-	} else if assetType == "vod" {
-		// Foghorn may send a storage-relative path (vod/<hash>.<ext>) for
-		// catch-up triggers where there's no warm artifact report yet to
-		// supply an absolute one. Join against the local storage root so
-		// the stat and any GenerateDTSH side-effects all land in the
-		// same place Mist writes to.
-		resolvedPath := localPath
-		if !filepath.IsAbs(resolvedPath) {
-			resolvedPath = filepath.Join(config.GetStoragePath(), resolvedPath)
-		}
-		dtshPath := resolvedPath + ".dtsh"
-		presignedURL := req.GetPresignedPutUrl()
-		if presignedURL == "" {
-			return fmt.Errorf("no presigned URL provided for vod .dtsh")
-		}
-		// On-demand generation: if Foghorn is asking us to sync .dtsh for
-		// a VOD artifact we haven't generated one for yet (chapter
-		// finalization where the inline DTSH boot missed), or the local
-		// sidecar is corrupt, boot the asset now so Mist rewrites it.
-		if err := dtsh.ValidateFile(dtshPath); err != nil {
-			reason := "missing"
-			if !os.IsNotExist(err) {
-				reason = "invalid"
-				sm.logger.WithError(err).WithField("dtsh_path", dtshPath).Warn("Removing invalid VOD .dtsh before on-demand regeneration")
-				if removeErr := os.Remove(dtshPath); removeErr != nil && !os.IsNotExist(removeErr) {
-					return fmt.Errorf("remove invalid .dtsh at %s: %w", dtshPath, removeErr)
-				}
-			}
-			vodStreamName := "vod+" + assetHash
-			if genErr := GenerateDTSHForPath(appconfig.MistServerURL(), vodStreamName, dtshPath, sm.logger.WithField("asset_hash", assetHash)); genErr != nil {
-				return fmt.Errorf("dtsh %s and on-demand generation failed: %w", reason, genErr)
-			}
-		}
-		if err := dtsh.ValidateFile(dtshPath); err != nil {
-			return fmt.Errorf(".dtsh file not valid at %s: %w", dtshPath, err)
-		}
-		if err := sm.presignedClient.UploadFileToPresignedURL(ctx, presignedURL, dtshPath, nil); err != nil {
-			uploadErr = fmt.Errorf("failed to upload vod .dtsh: %w", err)
-		} else {
-			dtshUploaded = true
-			sm.logger.WithFields(logging.Fields{
-				"asset_hash": assetHash,
-				"dtsh_path":  dtshPath,
-			}).Info("Uploaded vod .dtsh file")
-		}
-	} else {
+	if assetType != "clip" && assetType != "vod" {
 		// Only clip and vod have a single canonical .dtsh index that Foghorn stages and promotes. Whole-DVR
 		// .dtsh sync was retired (a DVR is reclaimed segment-wise; its chapters are frozen as their own VOD
 		// artifacts) and Foghorn's TriggerDtshSync rejects asset_type="dvr" before any request is sent, so
 		// this is unreachable in practice — reject rather than silently report a no-op success.
 		return fmt.Errorf("unsupported asset_type %q for incremental .dtsh sync", assetType)
+	}
+	presignedURL := req.GetPresignedPutUrl()
+	if presignedURL == "" {
+		return fmt.Errorf("no presigned URL provided for %s .dtsh", assetType)
+	}
+	dtshPath, err := sm.ensureLocalDtsh(assetType, assetHash, localPath)
+	if err != nil {
+		return err
+	}
+	if err := sm.presignedClient.UploadFileToPresignedURL(ctx, presignedURL, dtshPath, nil); err != nil {
+		uploadErr = fmt.Errorf("failed to upload %s .dtsh: %w", assetType, err)
+	} else {
+		dtshUploaded = true
+		sm.logger.WithFields(logging.Fields{
+			"asset_hash": assetHash,
+			"dtsh_path":  dtshPath,
+		}).Infof("Uploaded %s .dtsh file", assetType)
 	}
 
 	if uploadErr != nil {

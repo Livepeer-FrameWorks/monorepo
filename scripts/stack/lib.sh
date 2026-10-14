@@ -564,6 +564,29 @@ upload_vod() {
 }
 vod_status() { gql 'query($id:ID!){node(id:$id){... on VodAsset{status errorMessage}}}' "$(jq -cn --arg id "$1" '{id:$id}')" | jq -r '.data.node.status // "?"'; }
 
+# synced_with_index <foghorn db> <artifact hash>: rc 0 once the artifact is
+# synced with its .dtsh index, 1 while not yet synced, 2 when it is synced
+# without its index (one completion publishes both, so no reader may be handed
+# the media while the index waits).
+synced_with_index() {
+  local row
+  row=$(pg "$1" "SELECT COALESCE(sync_status,''), COALESCE(dtsh_synced,false) FROM foghorn.artifacts
+    WHERE tenant_id='$STACK_TENANT_ID' AND artifact_hash='$2'")
+  echo "    sync|dtsh_synced: ${row:-?}"
+  case "$row" in
+  "synced|t") return 0 ;;
+  synced\|*) return 2 ;;
+  esac
+  return 1
+}
+
+# dtsh_generation_signals <since> <artifact hash> <service>: how often the
+# service's relay answered a .dtsh read of the artifact with the 404 that makes
+# Mist rebuild the index from the media.
+dtsh_generation_signals() {
+  log_json "$1" "select(.msg == \"relay returning dtsh generation signal\" and .asset_hash == \"$2\") | .reason" "$3" | wc -l | tr -d ' '
+}
+
 # ---- tracks -----------------------------------------------------------------
 
 # latest_tracks <stream uuid>: "type codec WxH" lines from the newest track list.

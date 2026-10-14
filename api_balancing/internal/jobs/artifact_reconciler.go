@@ -1140,13 +1140,14 @@ func (r *ArtifactReconciler) sendFreezeForArtifact(ctx context.Context, hash, as
 	}
 
 	req := &ipcpb.FreezeRequest{
-		RequestId:        assignment.AttemptID, // server-minted; the node echoes it at completion
-		AssetType:        assetType,
-		AssetHash:        hash,
-		InternalName:     streamName,
-		LocalPath:        filePath,
-		PresignedPutUrl:  assignment.StagingURL,
-		UrlExpirySeconds: int64(expiry.Seconds()),
+		RequestId:           assignment.AttemptID, // server-minted; the node echoes it at completion
+		AssetType:           assetType,
+		AssetHash:           hash,
+		InternalName:        streamName,
+		LocalPath:           filePath,
+		PresignedPutUrl:     assignment.StagingURL,
+		PresignedDtshPutUrl: assignment.DtshStagingURL,
+		UrlExpirySeconds:    int64(expiry.Seconds()),
 	}
 
 	if err := r.sendFreeze(nodeID, req); err != nil {

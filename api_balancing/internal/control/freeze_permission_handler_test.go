@@ -3,6 +3,7 @@ package control
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -110,6 +111,9 @@ func TestFreezePermission_OriginClusterClipApproved(t *testing.T) {
 	resp := h.lastResponse(t)
 	if !resp.GetApproved() || resp.GetPresignedPutUrl() == "" {
 		t.Fatalf("expected approval with a presigned URL, got approved=%v reason=%q", resp.GetApproved(), resp.GetReason())
+	}
+	if !strings.Contains(resp.GetPresignedDtshPutUrl(), ".dtsh.staging."+resp.GetAttemptId()) {
+		t.Fatalf("PresignedDtshPutUrl = %q, want the attempt's .dtsh staging object", resp.GetPresignedDtshPutUrl())
 	}
 	if resp.GetAttemptId() == "" || resp.GetAttemptId() == "req-1" {
 		t.Fatalf("expected a SERVER-MINTED attempt_id (not the node request id), got %q", resp.GetAttemptId())
@@ -251,6 +255,11 @@ func TestPrepareLocalFreezeAssignment(t *testing.T) {
 		}
 		if a.DestCluster != "platform-eu" {
 			t.Fatalf("DestCluster = %q, want the origin platform-eu", a.DestCluster)
+		}
+		// The index is granted with the media, to the attempt's index staging object that completion
+		// promotes, so the artifact syncs together with its .dtsh.
+		if want := "https://s3.test/put/" + FreezeStagingKey(a.CanonicalKey+".dtsh", a.AttemptID); a.DtshStagingURL != want {
+			t.Fatalf("DtshStagingURL = %q, want %q", a.DtshStagingURL, want)
 		}
 		if err := mock.ExpectationsWereMet(); err != nil {
 			t.Fatal(err)

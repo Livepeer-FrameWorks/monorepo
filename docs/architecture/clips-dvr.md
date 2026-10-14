@@ -275,15 +275,23 @@ FREEZE (warm -> cold, S3 upload):
   1. Foghorn claims the freeze attempt, binding the exact canonical object key into
      artifacts.sync_object_key, SERVER-MINTS the attempt id, and mints a presigned PUT for an ATTEMPT-SCOPED
      STAGING key (sync_object_key + ".staging." + attempt_id) — NOT the canonical key; then sends
-     FreezeRequest(artifact_hash, attempt_id) to Helmsman. Only a lifecycle-ready (status='ready') artifact is claimable.
-  2. Helmsman uploads to that presigned STAGING URL (it never holds a PUT to the canonical object) and echoes
-     the attempt id at completion
-  3. On completion Foghorn HEAD-verifies the staged object, PUBLISHES it (server-side conditional copy) to a
-     FRESH immutable version key (sync_object_key + ".att-" + attempt_id) OUTSIDE the transaction, then the
-     guarded transaction atomically FLIPS the authoritative pointer artifacts.active_object_key (and s3_url /
-     vod_metadata.s3_key) to it and sets sync_status='synced'. Publishing to a fresh key means the copy never
-     overwrites a served object, so a rollback can never expose uncommitted bytes; a superseded previous
-     version and the staging object are durably enqueued for cleanup. The node's reported URL is not trusted.
+     FreezeRequest(artifact_hash, attempt_id) to Helmsman. The same grant carries a presigned PUT for the
+     attempt's .dtsh index staging key (sync_object_key + ".dtsh.staging." + attempt_id). Only a lifecycle-ready
+     (status='ready') artifact is claimable.
+  2. Helmsman uploads the .dtsh index and then the media to those presigned STAGING URLs (it never holds a PUT
+     to a canonical object) and echoes the attempt id at completion with dtsh_included. A clip's index exists
+     before the clip is published; a VOD (including a DVR chapter) without one is booted in Mist to write it.
+     A failed index upload fails the attempt; an index that cannot be generated leaves the media to sync alone,
+     and the incremental TriggerDtshSync path publishes the index once the node reports it.
+  3. On completion Foghorn HEAD-verifies the staged objects, PUBLISHES them (server-side conditional copy) to
+     FRESH immutable version keys (sync_object_key + ".att-" + attempt_id, and ".dtsh.att-" + attempt_id)
+     OUTSIDE the transaction, then the guarded transaction atomically FLIPS the authoritative pointers
+     artifacts.active_object_key (and s3_url / vod_metadata.s3_key) and active_dtsh_key, and sets
+     sync_status='synced' with dtsh_synced. A synced artifact therefore carries its index from the moment any
+     reader is handed its S3 URL, and a cold reader in another cell reads the stored index instead of having
+     Mist rebuild it from the media. Publishing to a fresh key means the copy never overwrites a served object,
+     so a rollback can never expose uncommitted bytes; a superseded previous version and the staging objects
+     are durably enqueued for cleanup. The node's reported URL is not trusted.
   4. While the reporting node still has a warm copy, artifacts.storage_location remains 'local'
   5. If a remote-origin warm copy is evicted later, Foghorn removes that node cache and may mark the artifact S3-resident
 

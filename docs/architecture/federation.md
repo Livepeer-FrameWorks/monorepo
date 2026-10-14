@@ -336,7 +336,8 @@ Helmsman's `/internal/artifact/*` relay encodes only (kind, hash, ext); on
 a cold serve it sends `RelayResolveRequest` up the control stream and gets
 back state (`PLAYABLE` / `SOURCE_MISSING` / freezing), a presigned media
 GET (1h TTL, above the relay's refresh window), a `.dtsh` sidecar GET URL
-(read-only; the durable index is published only via the staged
+(read-only; the durable index is published only by a staged freeze
+attempt, together with the media or through the incremental
 `TriggerDtshSync` path, never a direct relay PUT), expected size, and the
 stream_internal_name for nested clip paths.
 Resolution reads the **adopted local row only**. Two fallbacks apply before

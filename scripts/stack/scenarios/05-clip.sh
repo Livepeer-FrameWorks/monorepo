@@ -9,6 +9,7 @@
 
 need ffmpeg jq curl python3 || finish
 SINCE=$(date +%s)
+LOG_SINCE=$(utc_now)
 webhook_endpoint >/dev/null || fail "webhook endpoint at $RECEIVER_HOOK_URL"
 
 S=$(create_stream "stack-clip-$(date +%s)" false)
@@ -62,11 +63,19 @@ cells() {
     FROM foghorn.artifacts WHERE tenant_id='$STACK_TENANT_ID' AND artifact_hash='$CHASH'"
 }
 settled() {
-  local row
+  local row rc
+  synced_with_index "$FOGHORN_A_DB" "$CHASH"
+  rc=$?
+  [ "$rc" = 0 ] || return "$rc"
   row=$(cells)
   echo "    thumbs|origin|storage|thumbnail-serving|sync: $row"
   IFS='|' read -r thumbs origin storage serving sync <<<"$row"
   [ "$thumbs" = t ] && [ "$sync" = synced ] && [ "$storage" = "$origin" ] && [ "$serving" = "$origin" ]
 }
-eventually 240 "clip bytes and thumbnails stored and served by its origin cell" settled
+eventually 240 "clip bytes, .dtsh index and thumbnails stored and served by its origin cell" settled
+
+# The clip was cut on edge A. Cell B's edge reads the clip's index from edge A
+# before the sync and from storage after it, never rebuilding it from the media.
+signals=$(dtsh_generation_signals "$LOG_SINCE" "$CHASH" "$STACK_EDGE_B_SERVICE")
+check "cell B's edge read the clip's .dtsh instead of rebuilding it (generation signals: $signals)" [ "$signals" = 0 ]
 finish

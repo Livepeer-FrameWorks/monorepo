@@ -235,6 +235,11 @@ CREATE TABLE IF NOT EXISTS stream_health_samples (
     schema_version UInt8 DEFAULT 0,
     -- Kafka record identity; Periscope Ingest drops redelivered rows by it.
     ingest_id UUID,
+    -- Mist's event time of the STREAM_BUFFER edge the sample records; NULL for
+    -- a periodic sample, which carries no native buffer state. Rebuffer
+    -- transitions are ordered by it. A row inserted without it reads as an
+    -- edge at its timestamp.
+    buffer_edge_at Nullable(DateTime64(3)) DEFAULT timestamp,
     INDEX idx_ingest_id ingest_id TYPE bloom_filter(0.01) GRANULARITY 1
 ) ENGINE = ReplicatedMergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
@@ -318,9 +323,9 @@ FROM stream_health_samples
 WHERE artifact_hash = ''
 GROUP BY timestamp_5m, tenant_id, stream_id, internal_name, node_id;
 
--- Rebuffer starts and ends are buffer-state transitions between consecutive
--- health samples of a stream. Periscope Query derives them from
--- stream_health_samples in timestamp order when it reads them, and nothing
+-- Rebuffer starts and ends are transitions between consecutive Mist buffer
+-- edges of a stream on one node. Periscope Query derives them from
+-- stream_health_samples in buffer_edge_at order when it reads them, and nothing
 -- reads rebuffering_events: its view sees one insert block at a time, so it
 -- misses every transition between samples of different inserts. The table and
 -- view stay because a post-floor migration modifies the view.

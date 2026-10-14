@@ -160,3 +160,67 @@ func TestProcessStreamBuffer_RejectsMissingStreamID(t *testing.T) {
 		t.Fatal("expected drop error for missing/invalid stream_id")
 	}
 }
+
+// TestProcessStreamBuffer_RecordsMistEdgeTime pins buffer_edge_at, the order
+// of rebuffer transitions: Mist's millisecond event time from the trigger, not
+// the event's publish time, so a DRY and RECOVER of one second stay ordered.
+// A trigger without Mist's time falls back to the publish time.
+func TestProcessStreamBuffer_RecordsMistEdgeTime(t *testing.T) {
+	published := time.Unix(1_700_000_000, 0).UTC()
+	for name, tc := range map[string]struct {
+		millis int64
+		want   time.Time
+	}{
+		"mist event time":        {1_700_000_000_123, time.UnixMilli(1_700_000_000_123).UTC()},
+		"publish time otherwise": {0, published},
+	} {
+		t.Run(name, func(t *testing.T) {
+			batch := &captureBatch{}
+			h := &AnalyticsHandler{clickhouse: &captureClickhouse{batch: batch}, logger: logging.NewLoggerWithService("test")}
+			event := mistTriggerEvent(t, typedWriterTestTenantID, published, &ipcpb.MistTrigger{
+				StreamId: proto.String(uuid.NewString()), NodeId: "node-1", TriggerUnixMillis: tc.millis,
+				TriggerPayload: &ipcpb.MistTrigger_StreamBuffer{StreamBuffer: &ipcpb.StreamBufferTrigger{StreamName: "live+edge", BufferState: "DRY"}},
+			})
+			if err := h.processStreamBuffer(context.Background(), event); err != nil {
+				t.Fatalf("processStreamBuffer: %v", err)
+			}
+			health := batch.rows[1]
+			// buffer_edge_at precedes the ingest_id the writer appends.
+			if got, ok := health[len(health)-2].(time.Time); !ok || !got.Equal(tc.want) {
+				t.Fatalf("buffer_edge_at = %#v, want %v", health[len(health)-2], tc.want)
+			}
+		})
+	}
+}
+
+// TestStreamLifecycleHealthIsNotABufferEdge pins that a periodic health
+// sample, whose FULL state Periscope Ingest derives from the reported buffer,
+// stores a NULL buffer_edge_at, so rebuffer transitions never pair it with
+// Mist's edges.
+func TestStreamLifecycleHealthIsNotABufferEdge(t *testing.T) {
+	conn := newFakeClickhouseConn()
+	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+	streamID := uuid.NewString()
+	bufferMS := uint32(4_000)
+	data := mustMistTriggerData(t, &ipcpb.MistTrigger{
+		StreamId: &streamID,
+		NodeId:   "edge-eu-1",
+		TriggerPayload: &ipcpb.MistTrigger_StreamLifecycleUpdate{
+			StreamLifecycleUpdate: &ipcpb.StreamLifecycleUpdate{InternalName: "live+poll", Status: "live", BufferMs: &bufferMS},
+		},
+	})
+	event := kafka.AnalyticsEvent{
+		EventID: uuid.NewString(), EventType: "stream_lifecycle_update",
+		Timestamp: time.Unix(1710000000, 0), TenantID: uuid.NewString(), Data: data,
+	}
+	if err := handler.HandleAnalyticsEvent(event); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	row := conn.batches["stream_health_samples"].rows[0]
+	if row[11] != "FULL" {
+		t.Fatalf("buffer_state = %#v, want the derived FULL", row[11])
+	}
+	if got, ok := row[len(row)-2].(*time.Time); !ok || got != nil {
+		t.Fatalf("buffer_edge_at = %#v, want a NULL *time.Time", row[len(row)-2])
+	}
+}

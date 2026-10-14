@@ -24,12 +24,17 @@ type fakePresignedClient struct {
 	uploadCalls      int64
 	downloadCalls    int64
 	lastUploadedPath string
-	uploadFileErr    error // when set, UploadFileToPresignedURL fails
+	uploadFileErr    error             // when set, UploadFileToPresignedURL fails
+	uploads          map[string]string // presigned URL -> uploaded local path
 }
 
-func (f *fakePresignedClient) UploadFileToPresignedURL(_ context.Context, _, localPath string, onProgress storage.ProgressCallback) error {
+func (f *fakePresignedClient) UploadFileToPresignedURL(_ context.Context, url, localPath string, onProgress storage.ProgressCallback) error {
 	atomic.AddInt64(&f.uploadFileCalls, 1)
 	f.lastUploadedPath = localPath
+	if f.uploads == nil {
+		f.uploads = map[string]string{}
+	}
+	f.uploads[url] = localPath
 	if f.uploadFileErr != nil {
 		return f.uploadFileErr
 	}
@@ -336,6 +341,97 @@ func TestHandleFreezeRequest_ClipUpload(t *testing.T) {
 	}
 	if syncStatus != "success" {
 		t.Fatalf("expected sync status 'success', got %q", syncStatus)
+	}
+}
+
+// TestFreezeUploadsIndexWithMedia pins that a clip or VOD freeze uploads the
+// .dtsh index to the index staging URL Foghorn granted, in the same attempt as
+// the media, and reports dtsh_included on its SyncComplete. The artifact is then
+// synced together with its index, so no reader is handed the media while the
+// index waits for the next storage report. A VOD whose index is missing (a DVR
+// chapter whose generation has not finished) has it generated first.
+func TestFreezeUploadsIndexWithMedia(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		assetType string
+		haveIndex bool
+	}{
+		{"clip", "clip", true},
+		{"vod", "vod", true},
+		{"vod generates its missing index", "vod", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sm := newTestStorageManager(t)
+			fake := &fakePresignedClient{}
+			sm.presignedClient = fake
+			var status string
+			var dtshIncluded bool
+			sm.sendSyncComplete = func(_, _, s string, _ uint64, _ string, included bool, _ bool) error {
+				status, dtshIncluded = s, included
+				return nil
+			}
+			mediaPath := filepath.Join(sm.basePath, "asset123.mkv")
+			if err := os.WriteFile(mediaPath, []byte("media data"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			dtshPath := mediaPath + ".dtsh"
+			if tc.haveIndex {
+				if err := os.WriteFile(dtshPath, validDTSHBytes(), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_ = os.WriteFile(dtshPath, validDTSHBytes(), 0o644)
+				_, _ = w.Write([]byte(`{"meta":{"tracks":{}}}`))
+			}))
+			t.Cleanup(server.Close)
+			appconfigtest.Setenv(t, "MISTSERVER_URL", server.URL)
+
+			const mediaURL, indexURL = "https://s3.example.com/media?staging", "https://s3.example.com/media.dtsh?staging"
+			sm.HandleFreezeRequest(&ipcpb.FreezeRequest{
+				RequestId: "req-1", AssetHash: "asset123", AssetType: tc.assetType, LocalPath: mediaPath,
+				PresignedPutUrl: mediaURL, PresignedDtshPutUrl: indexURL,
+			})
+
+			if fake.uploads[mediaURL] != mediaPath || fake.uploads[indexURL] != dtshPath {
+				t.Fatalf("uploads = %v, want the media to %s and its index to %s", fake.uploads, mediaURL, indexURL)
+			}
+			if status != "success" || !dtshIncluded {
+				t.Fatalf("SyncComplete status=%q dtsh_included=%v, want success with the index included", status, dtshIncluded)
+			}
+		})
+	}
+}
+
+// TestFreezeIndexUploadFailureFailsTheAttempt pins that an index that exists
+// but could not be uploaded fails the attempt before the media is uploaded, so
+// Foghorn retries the pair instead of publishing media whose index readers
+// would miss.
+func TestFreezeIndexUploadFailureFailsTheAttempt(t *testing.T) {
+	sm := newTestStorageManager(t)
+	fake := &fakePresignedClient{uploadFileErr: errors.New("staging PUT refused")}
+	sm.presignedClient = fake
+	var status string
+	sm.sendSyncComplete = func(_, _, s string, _ uint64, _ string, _ bool, _ bool) error {
+		status = s
+		return nil
+	}
+	clipPath := filepath.Join(sm.basePath, "clip.mkv")
+	if err := os.WriteFile(clipPath, []byte("clip data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(clipPath+".dtsh", validDTSHBytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sm.HandleFreezeRequest(&ipcpb.FreezeRequest{
+		RequestId: "req-2", AssetHash: "clip123", AssetType: "clip", LocalPath: clipPath,
+		PresignedPutUrl: "https://s3.example.com/clip?staging", PresignedDtshPutUrl: "https://s3.example.com/clip.dtsh?staging",
+	})
+	if got := atomic.LoadInt64(&fake.uploadFileCalls); got != 1 {
+		t.Fatalf("upload calls = %d, want only the failed index upload", got)
+	}
+	if status != "failed" {
+		t.Fatalf("SyncComplete status = %q, want failed", status)
 	}
 }
 

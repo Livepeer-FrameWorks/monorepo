@@ -188,9 +188,13 @@ const insertStreamLifecycleHealth = `INSERT INTO stream_health_samples (
 	has_issues, issues_description, track_count,
 	track_metadata,
 	audio_channels, audio_sample_rate, audio_codec, audio_bitrate,
-	source_region, stream_origin_region, stream_origin_cluster_id, schema_version, artifact_hash
+	source_region, stream_origin_region, stream_origin_cluster_id, schema_version, artifact_hash,
+	buffer_edge_at
 )`
 
+// StreamLifecycleHealthRow is a periodic health sample. Its buffer state is
+// derived from the reported buffer, not a Mist STREAM_BUFFER edge, so the row
+// stores no buffer_edge_at and rebuffer transitions skip it.
 type StreamLifecycleHealthRow struct {
 	Timestamp             time.Time
 	TenantID              uuid.UUID
@@ -233,6 +237,7 @@ func PrepareStreamLifecycleHealth(ctx context.Context, db BatchPreparer) (*Write
 			row.TrackMetadata,
 			row.AudioChannels, row.AudioSampleRate, row.AudioCodec, row.AudioBitrate,
 			row.SourceRegion, row.StreamOriginRegion, row.StreamOriginClusterID, row.SchemaVersion, row.ArtifactHash,
+			(*time.Time)(nil),
 		}
 	})
 }

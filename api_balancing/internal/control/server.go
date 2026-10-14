@@ -7285,7 +7285,10 @@ type FreezeAssignment struct {
 	AttemptID    string // server-minted; the node echoes it at completion
 	CanonicalKey string // base descriptor key (persisted as sync_object_key); completion derives the staging + versioned candidate keys from it, never handing it to the node
 	StagingURL   string // presigned PUT to the attempt-scoped staging key
-	DestCluster  string // the artifact's origin cluster, whose storage this cell mints into
+	// DtshStagingURL is the presigned PUT to the attempt's .dtsh index staging key. The node uploads the index
+	// with the media, so one completion publishes both and the artifact is never synced without its index.
+	DtshStagingURL string
+	DestCluster    string // the artifact's origin cluster, whose storage this cell mints into
 }
 
 // PrepareLocalFreezeAssignment is the SINGLE shared freeze contract used by BOTH the interactive permission
@@ -7333,12 +7336,16 @@ func PrepareLocalFreezeAssignment(ctx context.Context, assetType, assetHash, ten
 	if err != nil {
 		return FreezeAssignment{}, "presign_failed", false
 	}
+	dtshStagingURL, err := s3Client.GeneratePresignedPUT(FreezeStagingKey(canonicalKey+".dtsh", attemptID), expiry)
+	if err != nil {
+		return FreezeAssignment{}, "presign_failed", false
+	}
 
 	// storage_cluster_id stays NULL: NULL means "same as origin_cluster_id", which is always the case here.
 	if claimed, cErr := claimFreezeAttempt(ctx, assetHash, attemptID, nodeID, tenantID, "", canonicalKey); cErr != nil || !claimed {
 		return FreezeAssignment{}, "not_claimable", false
 	}
-	return FreezeAssignment{AttemptID: attemptID, CanonicalKey: canonicalKey, StagingURL: stagingURL, DestCluster: destCluster}, "", true
+	return FreezeAssignment{AttemptID: attemptID, CanonicalKey: canonicalKey, StagingURL: stagingURL, DtshStagingURL: dtshStagingURL, DestCluster: destCluster}, "", true
 }
 
 // resolveThumbnailStorageCluster resolves the durable destination for an artifact thumbnail: the artifact's
@@ -7591,12 +7598,13 @@ func processFreezePermissionRequest(req *ipcpb.FreezePermissionRequest, nodeID s
 	}
 
 	grant := &ipcpb.FreezePermissionResponse{
-		RequestId:        requestID,
-		AssetHash:        assetHash,
-		Approved:         true,
-		PresignedPutUrl:  assignment.StagingURL,
-		UrlExpirySeconds: int64(expiry.Seconds()),
-		AttemptId:        assignment.AttemptID,
+		RequestId:           requestID,
+		AssetHash:           assetHash,
+		Approved:            true,
+		PresignedPutUrl:     assignment.StagingURL,
+		PresignedDtshPutUrl: assignment.DtshStagingURL,
+		UrlExpirySeconds:    int64(expiry.Seconds()),
+		AttemptId:           assignment.AttemptID,
 	}
 	// FENCE the GRANT to THIS connection generation: it carries a freshly CLAIMED, server-minted attempt, so if
 	// a reconnect superseded this connection in the window between the admission check above and here, the grant
