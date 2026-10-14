@@ -1632,8 +1632,10 @@ verify-yugabyte-role-engine: verify-foghorn-test-selection
 	@docker info >/dev/null 2>&1 || { echo "ERROR: verify-yugabyte-role-engine requires a running Docker daemon"; exit 1; }
 	@$(MAKE) --no-print-directory yugabyte-role-engine-contracts
 
-# The role contract takes longest of every Yugabyte job, so it has no prerequisite that would let a lane start first.
+# The role contract takes longest of every Yugabyte job, so it has no prerequisite that would let a lane start first;
+# it installs the pinned collections itself only when a fresh checkout has none.
 yugabyte-role-engine-contracts:
+	@test -d $(ANSIBLE_DIR)/$(ANSIBLE_CACHE_REL)/ansible_collections/community/postgresql || $(MAKE) --no-print-directory ansible-galaxy-install
 	@$(YUGABYTE_LANE) role-engine $(CONTRACT_GO_TEST) cli yugabyte/role-engine -tags yugabyte_role_engine -run '^($(YUGABYTE_ROLE_ENGINE_TESTS))$$' -count=1 -timeout 60m ./pkg/provisioner/
 
 yugabyte-lane-1:
