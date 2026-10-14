@@ -117,7 +117,9 @@ func (h *AnalyticsHandler) processNetworkObservation(ctx context.Context, event 
 				*pair.target = obs.AmountFromRat(rat)
 			}
 		}
-		m.Qualifying = p.Disposition != "input_fault" && p.Disposition != "hedge_loser" && p.Disposition != "local_cancelled"
+		// A session warm-up submits one frame whose round trip is mostly the
+		// orchestrator's session setup, so it does not measure its performance.
+		m.Qualifying = p.Disposition != "input_fault" && p.Disposition != "hedge_loser" && p.Disposition != "local_cancelled" && p.Disposition != "session_warmup"
 		private["session_id"] = p.SessionId
 		private["manifest_id_hash"] = p.ManifestIdHash
 		private["seq_no"] = p.SeqNo
