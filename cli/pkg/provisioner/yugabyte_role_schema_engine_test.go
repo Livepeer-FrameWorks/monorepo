@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -556,6 +557,130 @@ func TestYugabyteRoleBoundsRuntimeSessions(t *testing.T) {
 	if got := ybRoleQuery(t, container, "purser", "SELECT v FROM public.stall_probe WHERE id = 1"); got != "2" {
 		t.Fatalf("stall_probe.v = %s, want the queued writer's 2 over the ended transaction's uncommitted 1", got)
 	}
+}
+
+// TestYugabyteRoleOwnershipSurvivesConcurrentCatalogChange covers the role's ownership steps, the baseline one in
+// schema.yml and the pre-migration one in migrate.yml, against catalog-version changes from another session, which the
+// auto-analyze service makes at any moment after a baseline or migration wrote rows. Inside one transaction such a
+// change followed by a breaking DDL makes the next catalog read fail; the control subtest pins that engine behaviour.
+// Each step therefore plans its statements with one read and runs them one transaction each: the test runs the
+// rendered plan, raises the catalog version before every planned statement, and requires every relation, function and
+// procedure of the schema to reach the owner role.
+func TestYugabyteRoleOwnershipSurvivesConcurrentCatalogChange(t *testing.T) {
+	repo := ybRoleRepo(t)
+	container := fmt.Sprintf("fw-yb-role-ownership-%d-%d", os.Getpid(), time.Now().UnixNano())
+	ybRoleStartEngine(t, repo, container)
+
+	ybRoleQuery(t, container, "yugabyte", "CREATE ROLE app_owner LOGIN")
+	ybRoleQuery(t, container, "yugabyte", "CREATE DATABASE ownership_probe")
+	ybRoleQuery(t, container, "ownership_probe", "CREATE TABLE public.catalog_bump (id INT PRIMARY KEY)")
+	const bump = "\\! /home/yugabyte/bin/ysqlsh -X -h 127.0.0.1 -d ownership_probe -v ON_ERROR_STOP=1 -qc 'ANALYZE public.catalog_bump'\n"
+	session := func(script string) (string, error) {
+		command := exec.Command("docker", "exec", "-i", container, "/home/yugabyte/bin/ysqlsh", "-X", "-h", "127.0.0.1",
+			"-d", "ownership_probe", "-v", "ON_ERROR_STOP=1", "-qtA")
+		command.Stdin = strings.NewReader(script)
+		output, err := command.CombinedOutput()
+		return string(output), err
+	}
+	fixture := func(t *testing.T) {
+		t.Helper()
+		ybRoleQuery(t, container, "ownership_probe", `DROP SCHEMA IF EXISTS app CASCADE;
+CREATE SCHEMA app;
+CREATE TABLE app.accounts (id SERIAL PRIMARY KEY, name TEXT NOT NULL);
+CREATE TABLE app.events (id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, account_id INT NOT NULL);
+CREATE SEQUENCE app.invoice_numbers;
+CREATE VIEW app.account_names AS SELECT id, name FROM app.accounts;
+CREATE FUNCTION app.account_count() RETURNS BIGINT LANGUAGE sql AS 'SELECT count(*) FROM app.accounts';
+CREATE PROCEDURE app.touch_accounts() LANGUAGE sql AS 'UPDATE app.accounts SET name = name';
+INSERT INTO public.catalog_bump VALUES (1) ON CONFLICT DO NOTHING`)
+	}
+
+	t.Run("control", func(t *testing.T) {
+		fixture(t)
+		output, err := session("BEGIN;\nSELECT count(*) FROM pg_namespace;\n" + bump +
+			"ALTER SCHEMA app OWNER TO app_owner;\nSELECT count(*) FROM pg_class WHERE relnamespace = 'app'::regnamespace;\nCOMMIT;\n")
+		if err == nil || !strings.Contains(output, "MISMATCHED_SCHEMA") {
+			t.Fatalf("a catalog read after a concurrent catalog change and a breaking DDL in one transaction did not fail with MISMATCHED_SCHEMA (err=%v):\n%s", err, output)
+		}
+	})
+
+	tasks := filepath.Join(repo, "ansible", "collections", "ansible_collections", "frameworks", "infra", "roles", "yugabyte", "tasks")
+	if runtime := ybRoleQueryTask(t, filepath.Join(tasks, "schema.yml"), "Grant least-privilege runtime access to application schema"); runtime["autocommit"] != true {
+		t.Errorf("schema.yml runtime grants must run one statement per transaction (autocommit: true)")
+	}
+	placeholder := regexp.MustCompile(`'\{\{ *[a-z_]+\.(schema|owner)\b[^}]*\}\}'`)
+	for _, step := range []struct{ file, plan, apply string }{
+		{"schema.yml", "Plan baseline schema ownership changes", "Grant baseline schema ownership to application role"},
+		{"migrate.yml", "Plan application schema ownership before migrations (Yugabyte)", "Reconcile application schema ownership before migrations (Yugabyte)"},
+	} {
+		t.Run(step.file, func(t *testing.T) {
+			apply := ybRoleQueryTask(t, filepath.Join(tasks, step.file), step.apply)
+			if query, _ := apply["query"].(string); apply["autocommit"] != true || !strings.Contains(query, "query_result") {
+				t.Fatalf("%s %q must run the planned statements one per transaction (autocommit: true, query from the plan)", step.file, step.apply)
+			}
+			planQuery, _ := ybRoleQueryTask(t, filepath.Join(tasks, step.file), step.plan)["query"].(string)
+			plan := placeholder.ReplaceAllStringFunc(planQuery, func(match string) string {
+				if placeholder.FindStringSubmatch(match)[1] == "schema" {
+					return "'app'"
+				}
+				return "'app_owner'"
+			})
+			if plan == "" || strings.Contains(plan, "{{") {
+				t.Fatalf("%s %q keeps a template expression after substitution:\n%s", step.file, step.plan, plan)
+			}
+			fixture(t)
+			statements := strings.Split(ybRoleQuery(t, container, "ownership_probe", plan), "\n")
+			if len(statements) < 6 || !strings.HasPrefix(statements[0], "ALTER SCHEMA") {
+				t.Fatalf("%s plan = %q, want ALTER SCHEMA first and every fixture object", step.file, statements)
+			}
+			var script strings.Builder
+			for _, statement := range statements {
+				script.WriteString(bump + statement + ";\n")
+			}
+			if output, err := session(script.String()); err != nil {
+				t.Fatalf("%s planned statements failed under concurrent catalog changes: %v\n%s", step.file, err, output)
+			}
+
+			notOwned := ybRoleQuery(t, container, "ownership_probe", `SELECT coalesce(string_agg(name, ', ' ORDER BY name), '') FROM (
+  SELECT 'schema app' AS name FROM pg_namespace WHERE nspname = 'app' AND nspowner <> 'app_owner'::regrole
+  UNION ALL
+  SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE n.nspname = 'app' AND c.relkind IN ('r', 'v', 'S') AND c.relowner <> 'app_owner'::regrole
+  UNION ALL
+  SELECT p.proname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'app' AND p.proowner <> 'app_owner'::regrole
+) objects`)
+			if notOwned != "" {
+				t.Fatalf("%s ownership step left objects with another owner: %s", step.file, notOwned)
+			}
+		})
+	}
+}
+
+// ybRoleQueryTask returns the arguments of the community.postgresql.postgresql_query task named name in a role task
+// file.
+func ybRoleQueryTask(t *testing.T, path, name string) map[string]any {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tasks []map[string]any
+	if err = yaml.Unmarshal(raw, &tasks); err != nil {
+		t.Fatalf("%s: %v", path, err)
+	}
+	for _, task := range tasks {
+		if task["name"] != name {
+			continue
+		}
+		module, ok := task["community.postgresql.postgresql_query"].(map[string]any)
+		if !ok {
+			t.Fatalf("%s: task %q is not a postgresql_query task", path, name)
+		}
+		return module
+	}
+	t.Fatalf("%s: task %q not found", path, name)
+	return nil
 }
 
 // ybRoleSessionQuery runs sql in a session that logs in as role.

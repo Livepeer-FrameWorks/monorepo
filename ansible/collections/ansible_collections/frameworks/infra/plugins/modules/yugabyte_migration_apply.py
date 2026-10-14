@@ -61,8 +61,9 @@ options:
     default: 10
   invalid_index_repair:
     description:
-      - Statement run inside the advisory lock before the item's statements, under a 60s statement_timeout and a 5s
-        lock_timeout, then both reset. Empty runs nothing.
+      - Query run inside the advisory lock before the item's statements that returns one repair statement per row;
+        each returned statement then runs in its own transaction. The query and the statements run under a 60s
+        statement_timeout and a 5s lock_timeout, then both reset. Empty runs nothing.
     type: str
     default: ""
   invalid_index_verify:
@@ -175,7 +176,9 @@ def main():
             stage = "invalid index repair"
             run("SET statement_timeout = '60s'")
             run("SET lock_timeout = '5s'")
-            run(params["invalid_index_repair"])
+            cursor.execute(params["invalid_index_repair"])
+            for (repair,) in cursor.fetchall():
+                run(repair)
             run("RESET lock_timeout")
             run("RESET statement_timeout")
         stage = "session setup"

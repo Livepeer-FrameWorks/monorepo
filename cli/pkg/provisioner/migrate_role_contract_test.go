@@ -161,12 +161,14 @@ func TestYugabyteMigrationRoleAppliesStatementByStatement(t *testing.T) {
 		t.Fatalf("apply runs in check mode: when %v", task.When)
 	}
 	repair, _ := task.Vars["invalid_index_repair_sql"].(string)
+	if !strings.HasPrefix(repair, "SELECT 'DROP INDEX IF EXISTS ' || ") {
+		t.Fatalf("invalid-index repair must be a query returning the DROP statements the module runs one per transaction:\n%s", repair)
+	}
 	for _, want := range []string{
-		"IF NOT EXISTS (SELECT 1 FROM _migrations",
+		"AND NOT EXISTS (SELECT 1 FROM _migrations",
 		"version = '{{ item.version }}' AND phase = '{{ item.phase }}' AND seq = {{ item.sequence }}",
 		"WHERE NOT i.indisvalid",
 		"item.invalid_index_guards",
-		"EXECUTE 'DROP INDEX IF EXISTS ' || target",
 	} {
 		if !strings.Contains(repair, want) {
 			t.Fatalf("invalid-index repair lacks %q:\n%s", want, repair)
@@ -184,7 +186,9 @@ func TestYugabyteMigrationRoleAppliesStatementByStatement(t *testing.T) {
 		"pg_advisory_lock(hashtext('frameworks_migrations'), hashtext(%s))",
 		`run("SET statement_timeout = '60s'")`,
 		`run("SET lock_timeout = '5s'")`,
-		`run(params["invalid_index_repair"])`,
+		`cursor.execute(params["invalid_index_repair"])`,
+		`for (repair,) in cursor.fetchall():`,
+		"run(repair)",
 		`run("RESET lock_timeout")`,
 		`run("RESET statement_timeout")`,
 		`if params["bounded"]:`,

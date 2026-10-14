@@ -114,7 +114,12 @@
     - yugabyte_schema_items | default([]) | length > 0
     - (not (yugabyte_schema_has_tables_by_db[item.db] | default(false))) or (item.reapply | default(false) | bool)
 
-- name: Grant baseline schema ownership to application role
+# Ownership and grants are planned by one catalog read and then run one statement per transaction (autocommit). A
+# YSQL transaction keeps the catalog version it began with: once another session raised it (the auto-analyze
+# service does at any time after rows were written) and the transaction ran a breaking DDL such as
+# ALTER SCHEMA ... OWNER, its next catalog read, including the one inside GRANT ... ON ALL TABLES, fails with
+# MISMATCHED_SCHEMA. A statement that starts its own transaction reads the current catalog.
+- name: Plan baseline schema ownership changes
   community.postgresql.postgresql_query:
     login_host: 127.0.0.1
     login_port: "{{ yugabyte_ysql_port }}"
@@ -122,93 +127,88 @@
     login_password: "{{ yugabyte_superuser_password }}"
     login_db: "{{ item.db }}"
     query: |
-      DO $frameworks_schema_ownership$
-      DECLARE
-        target_schema text := '{{ item.schema | default(item.db, true) }}';
-        target_owner text := '{{ item.owner | default(item.db, true) }}';
-        target_owner_oid oid;
-        obj record;
-      BEGIN
-        IF NOT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = target_schema) THEN
-          RETURN;
-        END IF;
-
-        SELECT oid INTO target_owner_oid FROM pg_roles WHERE rolname = target_owner;
-        IF target_owner_oid IS NULL THEN
-          RAISE EXCEPTION 'role % does not exist', target_owner;
-        END IF;
-
-        IF EXISTS (
-          SELECT 1 FROM pg_namespace
-          WHERE nspname = target_schema AND nspowner <> target_owner_oid
-        ) THEN
-          EXECUTE format('ALTER SCHEMA %I OWNER TO %I', target_schema, target_owner);
-        END IF;
-
-        FOR obj IN
-          SELECT n.nspname, c.relname, c.relkind
-          FROM pg_class c
-          JOIN pg_namespace n ON n.oid = c.relnamespace
-          WHERE n.nspname = target_schema
-            AND c.relkind IN ('r', 'p', 'v', 'm', 'S', 'f')
-            AND c.relowner <> target_owner_oid
-            -- A sequence owned by a column (serial, identity) cannot change owner by itself; ALTER TABLE moves it.
-            AND NOT (c.relkind = 'S' AND EXISTS (
-              SELECT 1 FROM pg_depend d
-              WHERE d.classid = 'pg_class'::regclass AND d.objid = c.oid
-                AND d.refclassid = 'pg_class'::regclass AND d.deptype IN ('a', 'i')
-            ))
-        LOOP
-          IF obj.relkind = 'S' THEN
-            EXECUTE format('ALTER SEQUENCE %I.%I OWNER TO %I', obj.nspname, obj.relname, target_owner);
-          ELSIF obj.relkind = 'v' THEN
-            EXECUTE format('ALTER VIEW %I.%I OWNER TO %I', obj.nspname, obj.relname, target_owner);
-          ELSIF obj.relkind = 'm' THEN
-            EXECUTE format('ALTER MATERIALIZED VIEW %I.%I OWNER TO %I', obj.nspname, obj.relname, target_owner);
-          ELSIF obj.relkind = 'f' THEN
-            EXECUTE format('ALTER FOREIGN TABLE %I.%I OWNER TO %I', obj.nspname, obj.relname, target_owner);
-          ELSE
-            EXECUTE format('ALTER TABLE %I.%I OWNER TO %I', obj.nspname, obj.relname, target_owner);
-          END IF;
-        END LOOP;
-
-        FOR obj IN
-          SELECT n.nspname, p.proname, pg_get_function_identity_arguments(p.oid) AS args
-          FROM pg_proc p
-          JOIN pg_namespace n ON n.oid = p.pronamespace
-          WHERE n.nspname = target_schema
-            AND p.proowner <> target_owner_oid
-            AND p.prokind = 'f'
-        LOOP
-          EXECUTE format('ALTER FUNCTION %I.%I(%s) OWNER TO %I', obj.nspname, obj.proname, obj.args, target_owner);
-        END LOOP;
-
-        FOR obj IN
-          SELECT n.nspname, p.proname, pg_get_function_identity_arguments(p.oid) AS args
-          FROM pg_proc p
-          JOIN pg_namespace n ON n.oid = p.pronamespace
-          WHERE n.nspname = target_schema
-            AND p.proowner <> target_owner_oid
-            AND p.prokind = 'p'
-        LOOP
-          EXECUTE format('ALTER PROCEDURE %I.%I(%s) OWNER TO %I', obj.nspname, obj.proname, obj.args, target_owner);
-        END LOOP;
-
-        EXECUTE format('GRANT USAGE, CREATE ON SCHEMA %I TO %I', target_schema, target_owner);
-        EXECUTE format('GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA %I TO %I', target_schema, target_owner);
-        EXECUTE format('GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA %I TO %I', target_schema, target_owner);
-        EXECUTE format('GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA %I TO %I', target_schema, target_owner);
-        EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA %I GRANT ALL PRIVILEGES ON TABLES TO %I', target_schema, target_owner);
-        EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA %I GRANT ALL PRIVILEGES ON SEQUENCES TO %I', target_schema, target_owner);
-        EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA %I GRANT EXECUTE ON FUNCTIONS TO %I', target_schema, target_owner);
-      END
-      $frameworks_schema_ownership$;
+      WITH target AS (
+        SELECT n.oid AS schema_oid, n.nspname AS schema_name, n.nspowner AS schema_owner,
+               r.rolname AS owner_name, r.oid AS owner_oid
+        FROM pg_namespace n
+        -- The cast fails when the owner role is missing.
+        CROSS JOIN LATERAL (
+          SELECT rolname, oid FROM pg_roles WHERE oid = quote_ident('{{ item.owner | default(item.db, true) }}')::regrole
+        ) r
+        WHERE n.nspname = '{{ item.schema | default(item.db, true) }}'
+      )
+      SELECT ddl FROM (
+        SELECT 0 AS phase, ''::text AS object_name, format('ALTER SCHEMA %I OWNER TO %I', t.schema_name, t.owner_name) AS ddl
+        FROM target t
+        WHERE t.schema_owner <> t.owner_oid
+        UNION ALL
+        SELECT 1, c.relname::text, format(
+          CASE c.relkind
+            WHEN 'S' THEN 'ALTER SEQUENCE %I.%I OWNER TO %I'
+            WHEN 'v' THEN 'ALTER VIEW %I.%I OWNER TO %I'
+            WHEN 'm' THEN 'ALTER MATERIALIZED VIEW %I.%I OWNER TO %I'
+            WHEN 'f' THEN 'ALTER FOREIGN TABLE %I.%I OWNER TO %I'
+            ELSE 'ALTER TABLE %I.%I OWNER TO %I'
+          END, t.schema_name, c.relname, t.owner_name)
+        FROM target t
+        JOIN pg_class c ON c.relnamespace = t.schema_oid
+        WHERE c.relkind IN ('r', 'p', 'v', 'm', 'S', 'f')
+          AND c.relowner <> t.owner_oid
+          -- A sequence owned by a column (serial, identity) cannot change owner by itself; ALTER TABLE moves it.
+          AND NOT (c.relkind = 'S' AND EXISTS (
+            SELECT 1 FROM pg_depend d
+            WHERE d.classid = 'pg_class'::regclass AND d.objid = c.oid
+              AND d.refclassid = 'pg_class'::regclass AND d.deptype IN ('a', 'i')
+          ))
+        UNION ALL
+        SELECT 2, p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')',
+          format('ALTER %s %I.%I(%s) OWNER TO %I',
+            CASE p.prokind WHEN 'p' THEN 'PROCEDURE' ELSE 'FUNCTION' END,
+            t.schema_name, p.proname, pg_get_function_identity_arguments(p.oid), t.owner_name)
+        FROM target t
+        JOIN pg_proc p ON p.pronamespace = t.schema_oid
+        WHERE p.proowner <> t.owner_oid
+          AND p.prokind IN ('f', 'p')
+        UNION ALL
+        SELECT 3 + g.position, '', format(g.template, t.schema_name, t.owner_name)
+        FROM target t
+        CROSS JOIN unnest(ARRAY[
+          'GRANT USAGE, CREATE ON SCHEMA %I TO %I',
+          'GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA %I TO %I',
+          'GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA %I TO %I',
+          'GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA %I TO %I',
+          'ALTER DEFAULT PRIVILEGES IN SCHEMA %I GRANT ALL PRIVILEGES ON TABLES TO %I',
+          'ALTER DEFAULT PRIVILEGES IN SCHEMA %I GRANT ALL PRIVILEGES ON SEQUENCES TO %I',
+          'ALTER DEFAULT PRIVILEGES IN SCHEMA %I GRANT EXECUTE ON FUNCTIONS TO %I'
+        ]) WITH ORDINALITY AS g(template, position)
+      ) ownership
+      ORDER BY phase, object_name
+  register: yugabyte_schema_ownership_plans
+  changed_when: false
   loop: "{{ yugabyte_schema_items | default([]) }}"
   loop_control:
     label: "{{ item.db }}"
   when:
     - not ansible_check_mode
     - yugabyte_schema_items | default([]) | length > 0
+
+- name: Grant baseline schema ownership to application role
+  community.postgresql.postgresql_query:
+    login_host: 127.0.0.1
+    login_port: "{{ yugabyte_ysql_port }}"
+    login_user: "{{ yugabyte_superuser_role }}"
+    login_password: "{{ yugabyte_superuser_password }}"
+    login_db: "{{ ownership_plan.item.db }}"
+    autocommit: true
+    query: "{{ ownership_plan.query_result | map(attribute='ddl') | list }}"
+  loop: "{{ yugabyte_schema_ownership_plans.results | default([]) }}"
+  loop_control:
+    loop_var: ownership_plan
+    label: "{{ ownership_plan.item.db }}"
+  when:
+    - not ansible_check_mode
+    - yugabyte_schema_items | default([]) | length > 0
+    - ownership_plan.query_result | default([]) | length > 0
 
 - name: Grant least-privilege runtime access to application schema
   community.postgresql.postgresql_query:
@@ -217,34 +217,29 @@
     login_user: "{{ yugabyte_superuser_role }}"
     login_password: "{{ yugabyte_superuser_password }}"
     login_db: "{{ item.db }}"
-    query: |
-      DO $frameworks_runtime_grants$
-      DECLARE
-        target_schema text := '{{ item.schema | default(item.db, true) }}';
-        target_owner text := '{{ item.owner | default(item.db, true) }}';
-        target_runtime text := '{{ item.runtime_role | default((item.owner | default(item.db, true)) ~ '_runtime') }}';
-      BEGIN
-        IF NOT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = target_schema) THEN
-          RAISE EXCEPTION 'application schema % does not exist', target_schema;
-        END IF;
-        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = target_runtime) THEN
-          RAISE EXCEPTION 'runtime role % does not exist', target_runtime;
-        END IF;
-        EXECUTE format('GRANT CONNECT ON DATABASE %I TO %I', current_database(), target_runtime);
-        EXECUTE format('GRANT USAGE ON SCHEMA %I TO %I', target_schema, target_runtime);
-        EXECUTE format('REVOKE CREATE ON SCHEMA %I FROM %I', target_schema, target_runtime);
-        EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA %I TO %I', target_schema, target_runtime);
-        EXECUTE format('GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA %I TO %I', target_schema, target_runtime);
-        EXECUTE format('GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA %I TO %I', target_schema, target_runtime);
-        EXECUTE format(
-          'ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA %I GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO %I',
-          target_owner, target_schema, target_runtime);
-        EXECUTE format(
-          'ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA %I GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO %I',
-          target_owner, target_schema, target_runtime);
-        EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA %I GRANT EXECUTE ON FUNCTIONS TO %I', target_owner, target_schema, target_runtime);
-      END
-      $frameworks_runtime_grants$;
+    # One transaction per statement, for the catalog-version reason above the ownership plan. A missing schema or
+    # runtime role fails the first statement that names it.
+    autocommit: true
+    query:
+      - GRANT CONNECT ON DATABASE "{{ item.db }}" TO "{{ runtime_role }}"
+      - GRANT USAGE ON SCHEMA "{{ target_schema }}" TO "{{ runtime_role }}"
+      - REVOKE CREATE ON SCHEMA "{{ target_schema }}" FROM "{{ runtime_role }}"
+      - GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA "{{ target_schema }}" TO "{{ runtime_role }}"
+      - GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA "{{ target_schema }}" TO "{{ runtime_role }}"
+      - GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA "{{ target_schema }}" TO "{{ runtime_role }}"
+      - >-
+        ALTER DEFAULT PRIVILEGES FOR ROLE "{{ target_owner }}" IN SCHEMA "{{ target_schema }}"
+        GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO "{{ runtime_role }}"
+      - >-
+        ALTER DEFAULT PRIVILEGES FOR ROLE "{{ target_owner }}" IN SCHEMA "{{ target_schema }}"
+        GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO "{{ runtime_role }}"
+      - >-
+        ALTER DEFAULT PRIVILEGES FOR ROLE "{{ target_owner }}" IN SCHEMA "{{ target_schema }}"
+        GRANT EXECUTE ON FUNCTIONS TO "{{ runtime_role }}"
+  vars:
+    target_schema: "{{ item.schema | default(item.db, true) }}"
+    target_owner: "{{ item.owner | default(item.db, true) }}"
+    runtime_role: "{{ item.runtime_role | default((item.owner | default(item.db, true)) ~ '_runtime') }}"
   loop: "{{ yugabyte_schema_items | default([]) }}"
   loop_control:
     label: "{{ item.db }}:{{ item.runtime_role | default((item.owner | default(item.db, true)) ~ '_runtime') }}"

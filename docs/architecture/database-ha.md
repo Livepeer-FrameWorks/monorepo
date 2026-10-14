@@ -483,6 +483,23 @@ this. For the same reason the Yugabyte contract harness never runs two contract 
 one engine at once (processes on an engine run one after another, and only separate engines
 run concurrently), and a process creates its databases before it runs DDL in several of them.
 
+### A catalog query after breaking DDL in one transaction
+
+A YSQL transaction reads the catalog at the version it began with. When another session
+raises the database's catalog version after that (the auto-analyze service runs `ANALYZE`
+in the background at any time after rows were written, and `ANALYZE` raises it), and the
+transaction then runs a breaking DDL such as `ALTER SCHEMA … OWNER` or
+`ALTER DEFAULT PRIVILEGES`, its next query on a catalog table fails with
+`The catalog snapshot used for this transaction has been invalidated … MISMATCHED_SCHEMA`.
+The read may be the statement's own: `GRANT … ON ALL TABLES IN SCHEMA` scans `pg_class`
+and fails the same way. A `DO` block is one transaction, so the Yugabyte role never loops
+over the catalog and alters what it finds inside one. The ownership steps (`schema.yml`,
+`migrate.yml`) and the migration index repair plan their statements with one catalog query
+and then run each statement in its own autocommit transaction, which starts at the current
+catalog version; the runtime grants run the same way.
+`TestYugabyteRoleOwnershipSurvivesConcurrentCatalogChange` pins the engine behaviour and runs
+both ownership plans with the catalog version raised before every statement.
+
 ### DDL aborts DML on colocated siblings
 
 `ALTER TABLE` on any table in a colocated database aborts every open multi-statement

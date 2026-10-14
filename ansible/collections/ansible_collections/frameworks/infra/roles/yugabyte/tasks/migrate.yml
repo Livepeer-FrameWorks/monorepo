@@ -95,7 +95,12 @@
     label: "{{ item.db }}/{{ item.version }}/{{ item.phase }}/{{ item.filename }}"
   when: ansible_check_mode
 
-- name: Reconcile application schema ownership before migrations (Yugabyte)
+# Ownership is planned by one catalog read and then changed one statement per transaction (autocommit). A YSQL
+# transaction keeps the catalog version it began with: once another session raised it (the auto-analyze service
+# does at any time after rows were written) and the transaction ran a breaking DDL such as ALTER SCHEMA ... OWNER,
+# its next catalog read fails with MISMATCHED_SCHEMA. A statement that starts its own transaction reads the current
+# catalog.
+- name: Plan application schema ownership before migrations (Yugabyte)
   community.postgresql.postgresql_query:
     login_host: 127.0.0.1
     login_port: "{{ yugabyte_ysql_port }}"
@@ -103,87 +108,76 @@
     login_password: "{{ yugabyte_superuser_password }}"
     login_db: "{{ db_entry }}"
     query: |
-      DO $frameworks_migration_ownership$
-      DECLARE
-        target_schema text := '{{ migration_target.schema }}';
-        target_owner text := '{{ migration_target.owner }}';
-        target_owner_oid oid;
-        obj record;
-      BEGIN
-        SELECT oid INTO target_owner_oid FROM pg_roles WHERE rolname = target_owner;
-        IF target_owner_oid IS NULL THEN
-          RAISE EXCEPTION 'role % does not exist', target_owner;
-        END IF;
-        IF NOT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = target_schema) THEN
-          RAISE EXCEPTION 'application schema % does not exist', target_schema;
-        END IF;
-
-        IF EXISTS (
-          SELECT 1 FROM pg_namespace
-          WHERE nspname = target_schema AND nspowner <> target_owner_oid
-        ) THEN
-          EXECUTE format('ALTER SCHEMA %I OWNER TO %I', target_schema, target_owner);
-        END IF;
-
-        FOR obj IN
-          SELECT n.nspname, c.relname, c.relkind
-          FROM pg_class c
-          JOIN pg_namespace n ON n.oid = c.relnamespace
-          WHERE n.nspname = target_schema
-            AND c.relkind IN ('r', 'p', 'v', 'm', 'S', 'f')
-            AND c.relowner <> target_owner_oid
-            -- A sequence owned by a column (serial, identity) cannot change owner by itself; ALTER TABLE moves it.
-            AND NOT (c.relkind = 'S' AND EXISTS (
-              SELECT 1 FROM pg_depend d
-              WHERE d.classid = 'pg_class'::regclass AND d.objid = c.oid
-                AND d.refclassid = 'pg_class'::regclass AND d.deptype IN ('a', 'i')
-            ))
-        LOOP
-          IF obj.relkind = 'S' THEN
-            EXECUTE format('ALTER SEQUENCE %I.%I OWNER TO %I', obj.nspname, obj.relname, target_owner);
-          ELSIF obj.relkind = 'v' THEN
-            EXECUTE format('ALTER VIEW %I.%I OWNER TO %I', obj.nspname, obj.relname, target_owner);
-          ELSIF obj.relkind = 'm' THEN
-            EXECUTE format('ALTER MATERIALIZED VIEW %I.%I OWNER TO %I', obj.nspname, obj.relname, target_owner);
-          ELSIF obj.relkind = 'f' THEN
-            EXECUTE format('ALTER FOREIGN TABLE %I.%I OWNER TO %I', obj.nspname, obj.relname, target_owner);
-          ELSE
-            EXECUTE format('ALTER TABLE %I.%I OWNER TO %I', obj.nspname, obj.relname, target_owner);
-          END IF;
-        END LOOP;
-
-        FOR obj IN
-          SELECT n.nspname, p.proname, pg_get_function_identity_arguments(p.oid) AS args
-          FROM pg_proc p
-          JOIN pg_namespace n ON n.oid = p.pronamespace
-          WHERE n.nspname = target_schema
-            AND p.proowner <> target_owner_oid
-            AND p.prokind = 'f'
-        LOOP
-          EXECUTE format('ALTER FUNCTION %I.%I(%s) OWNER TO %I', obj.nspname, obj.proname, obj.args, target_owner);
-        END LOOP;
-
-        FOR obj IN
-          SELECT n.nspname, p.proname, pg_get_function_identity_arguments(p.oid) AS args
-          FROM pg_proc p
-          JOIN pg_namespace n ON n.oid = p.pronamespace
-          WHERE n.nspname = target_schema
-            AND p.proowner <> target_owner_oid
-            AND p.prokind = 'p'
-        LOOP
-          EXECUTE format('ALTER PROCEDURE %I.%I(%s) OWNER TO %I', obj.nspname, obj.proname, obj.args, target_owner);
-        END LOOP;
-      END
-      $frameworks_migration_ownership$;
+      WITH target AS (
+        SELECT n.oid AS schema_oid, n.nspname AS schema_name, n.nspowner AS schema_owner,
+               r.rolname AS owner_name, r.oid AS owner_oid
+        -- The casts fail when the application schema or the owner role is missing.
+        FROM pg_namespace n
+        JOIN pg_roles r ON r.oid = quote_ident('{{ migration_target.owner }}')::regrole
+        WHERE n.oid = quote_ident('{{ migration_target.schema }}')::regnamespace
+      )
+      SELECT ddl FROM (
+        SELECT 0 AS phase, ''::text AS object_name, format('ALTER SCHEMA %I OWNER TO %I', t.schema_name, t.owner_name) AS ddl
+        FROM target t
+        WHERE t.schema_owner <> t.owner_oid
+        UNION ALL
+        SELECT 1, c.relname::text, format(
+          CASE c.relkind
+            WHEN 'S' THEN 'ALTER SEQUENCE %I.%I OWNER TO %I'
+            WHEN 'v' THEN 'ALTER VIEW %I.%I OWNER TO %I'
+            WHEN 'm' THEN 'ALTER MATERIALIZED VIEW %I.%I OWNER TO %I'
+            WHEN 'f' THEN 'ALTER FOREIGN TABLE %I.%I OWNER TO %I'
+            ELSE 'ALTER TABLE %I.%I OWNER TO %I'
+          END, t.schema_name, c.relname, t.owner_name)
+        FROM target t
+        JOIN pg_class c ON c.relnamespace = t.schema_oid
+        WHERE c.relkind IN ('r', 'p', 'v', 'm', 'S', 'f')
+          AND c.relowner <> t.owner_oid
+          -- A sequence owned by a column (serial, identity) cannot change owner by itself; ALTER TABLE moves it.
+          AND NOT (c.relkind = 'S' AND EXISTS (
+            SELECT 1 FROM pg_depend d
+            WHERE d.classid = 'pg_class'::regclass AND d.objid = c.oid
+              AND d.refclassid = 'pg_class'::regclass AND d.deptype IN ('a', 'i')
+          ))
+        UNION ALL
+        SELECT 2, p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')',
+          format('ALTER %s %I.%I(%s) OWNER TO %I',
+            CASE p.prokind WHEN 'p' THEN 'PROCEDURE' ELSE 'FUNCTION' END,
+            t.schema_name, p.proname, pg_get_function_identity_arguments(p.oid), t.owner_name)
+        FROM target t
+        JOIN pg_proc p ON p.pronamespace = t.schema_oid
+        WHERE p.proowner <> t.owner_oid
+          AND p.prokind IN ('f', 'p')
+      ) ownership
+      ORDER BY phase, object_name
+  register: yugabyte_migration_ownership_plans
+  changed_when: false
   loop: "{{ yugabyte_pending_migrate_items | default([]) | map(attribute='db') | unique | list }}"
   loop_control:
     loop_var: db_entry
-  no_log: true
   vars:
     migration_target: "{{ yugabyte_pending_migrate_items | selectattr('db', 'equalto', db_entry) | first }}"
   when:
     - not ansible_check_mode
     - yugabyte_pending_migrate_items | default([]) | length > 0
+
+- name: Reconcile application schema ownership before migrations (Yugabyte)
+  community.postgresql.postgresql_query:
+    login_host: 127.0.0.1
+    login_port: "{{ yugabyte_ysql_port }}"
+    login_user: "{{ yugabyte_superuser_role }}"
+    login_password: "{{ yugabyte_superuser_password }}"
+    login_db: "{{ ownership_plan.db_entry }}"
+    autocommit: true
+    query: "{{ ownership_plan.query_result | map(attribute='ddl') | list }}"
+  loop: "{{ yugabyte_migration_ownership_plans.results | default([]) }}"
+  loop_control:
+    loop_var: ownership_plan
+    label: "{{ ownership_plan.db_entry }}"
+  when:
+    - not ansible_check_mode
+    - yugabyte_pending_migrate_items | default([]) | length > 0
+    - ownership_plan.query_result | default([]) | length > 0
 
 - name: Ensure _migrations tracking table per database (Yugabyte)
   community.postgresql.postgresql_query:

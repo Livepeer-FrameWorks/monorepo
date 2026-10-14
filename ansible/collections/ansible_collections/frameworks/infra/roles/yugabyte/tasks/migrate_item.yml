@@ -74,25 +74,19 @@
   register: yugabyte_migration_apply
   when: not ansible_check_mode
   vars:
+    # A query that returns one DROP INDEX per row; the module runs each in its own transaction. Within one
+    # transaction, a catalog read after a breaking DDL fails with MISMATCHED_SCHEMA once another session raised the
+    # catalog version.
     invalid_index_repair_sql: >-
-      DO $repair$
-      DECLARE target text;
-      BEGIN
-        IF NOT EXISTS (SELECT 1 FROM _migrations
-                        WHERE version = '{{ item.version }}' AND phase = '{{ item.phase }}' AND seq = {{ item.sequence }}) THEN
-          FOR target IN
-            SELECT format('%I.%I', n.nspname, c.relname)
-              FROM pg_index i
-              JOIN pg_class c ON c.oid = i.indexrelid
-              JOIN pg_namespace n ON n.oid = c.relnamespace
-             WHERE NOT i.indisvalid
-               AND n.nspname || '.' || c.relname = ANY(
-                 ARRAY['{{ item.invalid_index_guards | default([]) | map('replace', "'", "''") | join("', '") }}']::text[])
-          LOOP
-            EXECUTE 'DROP INDEX IF EXISTS ' || target;
-          END LOOP;
-        END IF;
-      END $repair$
+      SELECT 'DROP INDEX IF EXISTS ' || format('%I.%I', n.nspname, c.relname)
+        FROM pg_index i
+        JOIN pg_class c ON c.oid = i.indexrelid
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+       WHERE NOT i.indisvalid
+         AND n.nspname || '.' || c.relname = ANY(
+           ARRAY['{{ item.invalid_index_guards | default([]) | map('replace', "'", "''") | join("', '") }}']::text[])
+         AND NOT EXISTS (SELECT 1 FROM _migrations
+                          WHERE version = '{{ item.version }}' AND phase = '{{ item.phase }}' AND seq = {{ item.sequence }})
     invalid_index_verify_sql: >-
       DO $verify$
       DECLARE broken text;
