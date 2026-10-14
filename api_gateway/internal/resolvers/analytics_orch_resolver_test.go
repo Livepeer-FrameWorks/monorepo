@@ -3,6 +3,7 @@ package resolvers
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 
 	"frameworks/api_gateway/graph/model"
@@ -687,3 +688,82 @@ var (
 	_ = model.OrchestratorsConnection{}
 	_ = model.OrchestratorWithDetails{}
 )
+
+// privateOnlyQM is a Quartermaster where the caller sees no gateway cluster:
+// none is in the public topology and the caller's private-infrastructure reads
+// are refused, as for an API token on a platform whose clusters are private.
+func privateOnlyQM() *clientstest.FakeQuartermaster {
+	denied := status.Error(codes.PermissionDenied, "private infrastructure access denied")
+	return &clientstest.FakeQuartermaster{
+		ListPublicTopologyClustersFn: func(context.Context) (*quartermasterpb.ListClustersResponse, error) {
+			return &quartermasterpb.ListClustersResponse{}, nil
+		},
+		ListMySubscriptionsFn: func(context.Context, *quartermasterpb.ListMySubscriptionsRequest) (*quartermasterpb.ListClustersResponse, error) {
+			return &quartermasterpb.ListClustersResponse{}, nil
+		},
+		ListClustersByOwnerFn: func(context.Context, string, *commonpb.CursorPaginationRequest) (*quartermasterpb.ListClustersResponse, error) {
+			return nil, denied
+		},
+	}
+}
+
+// The orchestrators the publication tenants' gateways discovered are what
+// /v1/network/livepeer publishes, so the GraphQL inventory lists them for every
+// caller, including one that may not see the platform's private gateway
+// clusters. Rows naming a gateway stay limited to clusters the caller may see.
+func TestOrchestratorInventoryIncludesPublicationTenantsWithoutClusterAccess(t *testing.T) {
+	const platform = "platform-t"
+	var listTenants, instanceTenants []string
+	p := &clientstest.FakePeriscope{
+		ListOrchestratorsFn: func(_ context.Context, tenantID string, _ *string, _ *periscope.CursorPaginationOpts) (*periscopepb.ListOrchestratorsResponse, error) {
+			listTenants = append(listTenants, tenantID)
+			return &periscopepb.ListOrchestratorsResponse{Orchestrators: []*periscopepb.Orchestrator{{TenantId: tenantID, OrchAddr: "0xabc"}}}, nil
+		},
+		ListOrchestratorInstancesFn: func(_ context.Context, tenantID string, _ *string) (*periscopepb.ListOrchestratorInstancesResponse, error) {
+			instanceTenants = append(instanceTenants, tenantID)
+			return &periscopepb.ListOrchestratorInstancesResponse{Instances: []*periscopepb.OrchestratorInstance{{TenantId: tenantID, ResolvedIp: "9.9.9.9"}}}, nil
+		},
+		GetOrchestratorFn: func(_ context.Context, tenantID, orchAddr string) (*periscopepb.GetOrchestratorResponse, error) {
+			return &periscopepb.GetOrchestratorResponse{
+				Orchestrator: &periscopepb.Orchestrator{TenantId: tenantID, OrchAddr: orchAddr},
+				Instances:    []*periscopepb.OrchestratorInstance{{ResolvedIp: "9.9.9.9"}},
+				Vantages:     []*periscopepb.OrchestratorVantage{{GatewayId: "fw-stg-regional-eu"}},
+			}, nil
+		},
+		ListOrchestratorVantagesFn: func(context.Context, string, *string) (*periscopepb.ListOrchestratorVantagesResponse, error) {
+			t.Fatal("vantages read for a gateway cluster the caller may not see")
+			return nil, nil
+		},
+	}
+	r := orchO(p, privateOnlyQM())
+	r.NetworkPublicTenantIDs = []string{" " + platform + " ", platform}
+
+	for name, ctx := range map[string]context.Context{"api token": clientstest.AuthedCtx("customer-t"), "anonymous": context.Background()} {
+		listTenants, instanceTenants = nil, nil
+		got, err := r.DoListOrchestrators(ctx, nil, nil, nil)
+		if err != nil {
+			t.Fatalf("%s: DoListOrchestrators: %v", name, err)
+		}
+		if got.TotalCount != 1 || len(got.Nodes) != 1 || got.Nodes[0].GetOrchAddr() != "0xabc" {
+			t.Fatalf("%s: orchestratorsConnection = %+v, want the publication tenant's orchestrator", name, got)
+		}
+		if !slices.Equal(listTenants, []string{platform}) {
+			t.Fatalf("%s: periscope scope = %v, want [%s]", name, listTenants, platform)
+		}
+		instances, err := r.DoListOrchestratorInstances(ctx, nil)
+		if err != nil || len(instances) != 1 || !slices.Equal(instanceTenants, []string{platform}) {
+			t.Fatalf("%s: instances = %+v (scope %v), err %v; want the publication tenant's instance", name, instances, instanceTenants, err)
+		}
+		detail, err := r.DoGetOrchestrator(ctx, "0xabc")
+		if err != nil || detail == nil || detail.Orchestrator.GetOrchAddr() != "0xabc" || len(detail.Instances) != 1 {
+			t.Fatalf("%s: orchestrator detail = %+v, err %v; want identity and instances", name, detail, err)
+		}
+		if len(detail.Vantages) != 0 {
+			t.Fatalf("%s: detail vantages = %+v, want none for a gateway cluster the caller may not see", name, detail.Vantages)
+		}
+		vantages, err := r.DoListOrchestratorVantages(ctx, nil)
+		if err != nil || len(vantages) != 0 {
+			t.Fatalf("%s: vantages = %+v, err %v; want none", name, vantages, err)
+		}
+	}
+}

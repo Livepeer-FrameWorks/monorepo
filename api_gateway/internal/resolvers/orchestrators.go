@@ -3,6 +3,7 @@ package resolvers
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -157,10 +158,40 @@ func (r *Resolver) visibleClusterGateway(ctx context.Context, clusterID string) 
 // networkOrchestratorReadContext drops the caller identity for Periscope
 // orchestrator reads. Periscope refuses a tenant_id that differs from the
 // caller's JWT tenant, and the owner tenants queried here are usually the
-// platform tenant; networkOrchestratorOwnerTenants has already limited them to
-// gateway clusters the caller may see.
+// platform tenant; the callers have already limited them to gateway clusters
+// the caller may see, plus the publication tenants for public inventory.
 func networkOrchestratorReadContext(ctx context.Context) context.Context {
 	return publicTopologyReadContext(ctx)
+}
+
+// orchestratorInventoryTenants is the owner-tenant scope of orchestrator
+// identity and instance reads: the gateway-cluster owners the caller may see,
+// then the publication tenants (NETWORK_PUBLIC_TENANT_IDS). Orchestrator
+// addresses, URLs, prices and capabilities discovered by the publication
+// tenants' gateways are what /v1/network/livepeer publishes to anyone, so they
+// never depend on the caller's private-cluster access. Rows that name a
+// gateway (vantages, per-gateway performance) stay limited to visible, the
+// owners whose gateway clusters the caller may see.
+func (r *Resolver) orchestratorInventoryTenants(ctx context.Context) (tenantIDs []string, visible map[string]struct{}, err error) {
+	visibleIDs, err := r.networkOrchestratorOwnerTenants(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	visible = make(map[string]struct{}, len(visibleIDs))
+	for _, id := range visibleIDs {
+		visible[id] = struct{}{}
+	}
+	tenantIDs = append(tenantIDs, visibleIDs...)
+	var publicOnly []string
+	for _, id := range r.NetworkPublicTenantIDs {
+		id = strings.TrimSpace(id)
+		if id == "" || slices.Contains(tenantIDs, id) || slices.Contains(publicOnly, id) {
+			continue
+		}
+		publicOnly = append(publicOnly, id)
+	}
+	sort.Strings(publicOnly)
+	return append(tenantIDs, publicOnly...), visible, nil
 }
 
 func networkOrchestratorScopeKey(tenantIDs []string, parts ...string) []string {
@@ -173,7 +204,7 @@ func networkOrchestratorScopeKey(tenantIDs []string, parts ...string) []string {
 // DoListOrchestrators returns public network-orchestrator identity rows.
 // Per-instance config lives on OrchestratorInstance.
 func (r *Resolver) DoListOrchestrators(ctx context.Context, first *int, after *string, orchAddr *string) (*model.OrchestratorsConnection, error) {
-	tenantIDs, err := r.networkOrchestratorOwnerTenants(ctx)
+	tenantIDs, _, err := r.orchestratorInventoryTenants(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -212,8 +243,10 @@ func (r *Resolver) DoListOrchestrators(ctx context.Context, first *int, after *s
 
 // DoGetOrchestrator returns one orchestrator's identity plus known instances
 // and per-(gateway, instance) vantage rows for the public network topology.
+// An orchestrator found only through a publication tenant whose gateway
+// clusters the caller may not see is returned without vantages.
 func (r *Resolver) DoGetOrchestrator(ctx context.Context, orchAddr string) (*model.OrchestratorWithDetails, error) {
-	tenantIDs, err := r.networkOrchestratorOwnerTenants(ctx)
+	tenantIDs, visible, err := r.orchestratorInventoryTenants(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -229,12 +262,12 @@ func (r *Resolver) DoGetOrchestrator(ctx context.Context, orchAddr string) (*mod
 				}
 				return nil, callErr
 			}
-			return periscopeResp, nil
+			return orchestratorDetail{ownerTenantID: tenantID, resp: periscopeResp}, nil
 		}
 		if lastNotFound != nil {
 			return nil, lastNotFound
 		}
-		return nil, nil
+		return orchestratorDetail{}, nil
 	})
 	if err != nil {
 		if status.Code(err) == codes.NotFound {
@@ -242,23 +275,35 @@ func (r *Resolver) DoGetOrchestrator(ctx context.Context, orchAddr string) (*mod
 		}
 		return nil, err
 	}
-	resp, ok := val.(*periscopepb.GetOrchestratorResponse)
+	detail, ok := val.(orchestratorDetail)
 	if !ok {
 		return nil, fmt.Errorf("unexpected response type for GetOrchestrator: %T", val)
 	}
+	resp := detail.resp
 	if resp == nil || resp.GetOrchestrator() == nil {
 		return nil, nil
+	}
+	vantages := resp.GetVantages()
+	if _, ok := visible[detail.ownerTenantID]; !ok {
+		vantages = nil
 	}
 	return &model.OrchestratorWithDetails{
 		Orchestrator: resp.GetOrchestrator(),
 		Instances:    resp.GetInstances(),
-		Vantages:     resp.GetVantages(),
+		Vantages:     vantages,
 	}, nil
+}
+
+// orchestratorDetail is a GetOrchestrator answer with the owner tenant it was
+// read under, which decides whether its vantages may be shown.
+type orchestratorDetail struct {
+	ownerTenantID string
+	resp          *periscopepb.GetOrchestratorResponse
 }
 
 // DoListOrchestratorInstances returns public network per-instance rows.
 func (r *Resolver) DoListOrchestratorInstances(ctx context.Context, orchAddr *string) ([]*periscopepb.OrchestratorInstance, error) {
-	tenantIDs, err := r.networkOrchestratorOwnerTenants(ctx)
+	tenantIDs, _, err := r.orchestratorInventoryTenants(ctx)
 	if err != nil {
 		return nil, err
 	}

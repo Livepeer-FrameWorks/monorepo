@@ -54,6 +54,10 @@ type Resolver struct {
 	// Streaming supplies the streamingConfig ports and root domain on each
 	// request, so an env-file reload takes effect without a restart.
 	Streaming func() StreamingSettings
+	// NetworkPublicTenantIDs are the platform tenants whose gateway-discovered
+	// orchestrator inventory is public (NETWORK_PUBLIC_TENANT_IDS), the same
+	// scope the public /v1/network/livepeer route publishes.
+	NetworkPublicTenantIDs []string
 	// WebsocketSessions closes this replica's GraphQL WebSocket connections
 	// of an API token revoked here; nil closes none.
 	WebsocketSessions APITokenSockets
@@ -99,6 +103,8 @@ type ResolverConfig struct {
 	LocalClusterID  string
 	// Streaming is read on each streamingConfig request.
 	Streaming func() StreamingSettings
+	// NetworkPublicTenantIDs is Resolver.NetworkPublicTenantIDs.
+	NetworkPublicTenantIDs []string
 }
 
 // NewResolver creates a new GraphQL resolver
@@ -150,6 +156,8 @@ func NewResolver(serviceClients *clients.ServiceClients, logger logging.Logger, 
 		TelemetrySecret: cfg.TelemetrySecret,
 		LocalClusterID:  cfg.LocalClusterID,
 		Streaming:       cfg.Streaming,
+
+		NetworkPublicTenantIDs: cfg.NetworkPublicTenantIDs,
 	}
 }
 

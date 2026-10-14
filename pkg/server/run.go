@@ -370,6 +370,12 @@ func bindListeners(spec RunSpec) ([]runningHTTP, []*runningGRPC, error) {
 	return httpRunning, grpcRunning, nil
 }
 
+// ListenTCP binds bindAddr:port for a service that runs its own http.Server
+// instead of Run. freeBind has the HTTPListener.FreeBind meaning.
+func ListenTCP(bindAddr, port string, freeBind bool) (net.Listener, error) {
+	return listen(nil, bindAddr, port, freeBind)
+}
+
 func listen(existing net.Listener, bindAddr, port string, freeBind bool) (net.Listener, error) {
 	if existing != nil {
 		return existing, nil

@@ -24955,8 +24955,9 @@ type Query {
   ): Node
 
   """
-  List orchestrators discovered by Livepeer gateways under this cluster owner
-  tenant. Federation-map data source. Vantage-independent; the per-region
+  List orchestrators discovered by Livepeer gateways in the platform's
+  published network inventory plus the clusters the caller can see.
+  Federation-map data source. Vantage-independent; the per-region
   table comes from ` + "`" + `orchestratorVantages` + "`" + `.
   """
   orchestratorsConnection(

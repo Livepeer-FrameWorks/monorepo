@@ -148,3 +148,86 @@ func TestRebufferingTransitionsSpanInsertBlocks_RealClickHouse(t *testing.T) {
 		t.Fatalf("events = %v; rebuffer starts %v, ends %v; want 3 events, one FULL>DRY start and one DRY>RECOVER end", resp.GetEvents(), starts, ends)
 	}
 }
+
+// TestRebufferingTransitionsStayOnOneNode_RealClickHouse samples one stream
+// on an origin and an edge, which each hold their own buffer, and samples the
+// origin twice within one second the way Helmsman's periodic poll and a
+// stream-update refresh do. No transition may cross nodes, and paging one
+// event at a time must return every sample once.
+func TestRebufferingTransitionsStayOnOneNode_RealClickHouse(t *testing.T) {
+	db := startQueryPackClickHouse(t)
+	server := NewPeriscopeServer(db, logging.NewLoggerWithService("rebuffering-nodes-real-ch-test"))
+	ctx := serviceTestContext()
+	const streamID = "5eedfeed-11fe-ca57-feed-11feca5700c2"
+	start := time.Now().UTC().Truncate(time.Second).Add(-10 * time.Minute)
+
+	insert := `INSERT INTO periscope.stream_health_samples
+		(timestamp, tenant_id, stream_id, internal_name, node_id, buffer_state, ingest_id)
+		VALUES (?, ?, ?, 'rebuffer-nodes', ?, ?, ?)`
+	samples := []struct {
+		offset      time.Duration
+		node, state string
+		ingestID    string
+	}{
+		{0, "origin", "FULL", "00000000-0000-4000-8000-000000000001"},
+		{10 * time.Second, "edge", "DRY", "00000000-0000-4000-8000-000000000002"},
+		{20 * time.Second, "origin", "FULL", "00000000-0000-4000-8000-000000000003"},
+		{30 * time.Second, "edge", "DRY", "00000000-0000-4000-8000-000000000004"},
+		{40 * time.Second, "origin", "FULL", "00000000-0000-4000-8000-000000000005"},
+		{40 * time.Second, "origin", "FULL", "00000000-0000-4000-8000-000000000006"},
+	}
+	for _, sample := range samples {
+		if _, err := db.ExecContext(ctx, insert, start.Add(sample.offset), queryPackTenantID, streamID, sample.node, sample.state, sample.ingestID); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	stream := streamID
+	request := func(first int32, after *string) *periscopepb.GetRebufferingEventsResponse {
+		t.Helper()
+		resp, err := server.GetRebufferingEvents(ctx, &periscopepb.GetRebufferingEventsRequest{
+			TenantId:   queryPackTenantID,
+			StreamId:   &stream,
+			TimeRange:  &commonpb.TimeRange{Start: timestamppb.New(start.Add(-time.Second)), End: timestamppb.New(start.Add(time.Minute))},
+			Pagination: &commonpb.CursorPaginationRequest{First: first, After: after},
+		})
+		if err != nil {
+			t.Fatalf("GetRebufferingEvents: %v", err)
+		}
+		return resp
+	}
+
+	var transitions []string
+	ids := map[string]bool{}
+	for _, event := range request(int32(len(samples)), nil).GetEvents() {
+		ids[event.GetId()] = true
+		if event.GetRebufferStart() != nil || event.GetRebufferEnd() != nil {
+			transitions = append(transitions, event.GetNodeId()+":"+event.GetPrevState()+">"+event.GetBufferState())
+		}
+	}
+	if len(transitions) != 0 {
+		t.Fatalf("rebuffer transitions %v, want none: the edge stayed DRY and the origin FULL", transitions)
+	}
+	if len(ids) != len(samples) {
+		t.Fatalf("%d distinct event IDs, want one per sample (%d)", len(ids), len(samples))
+	}
+
+	seen := map[string]bool{}
+	var after *string
+	for page := 0; page < len(samples)+2; page++ {
+		resp := request(1, after)
+		for _, event := range resp.GetEvents() {
+			if seen[event.GetId()] {
+				t.Fatalf("event %s returned twice", event.GetId())
+			}
+			seen[event.GetId()] = true
+		}
+		if !resp.GetPagination().GetHasNextPage() {
+			break
+		}
+		after = resp.GetPagination().EndCursor
+	}
+	if len(seen) != len(samples) {
+		t.Fatalf("paged %d distinct events, want every one of the %d samples", len(seen), len(samples))
+	}
+}

@@ -56,7 +56,10 @@ a lag without committed progress.
 The coordinator has no public hostname. Bridge reads inventory over the WireGuard mesh
 from `network-observer.<aggregator-region>.internal` on a second, internal-CA HTTPS
 listener, verifying the leaf as `network-observer.internal`; the plain listener serves
-health probes. The coordinator registers with Quartermaster so the runtime mesh DNS lists
+health probes. Provisioning binds both listeners only to loopback and the host's WireGuard
+address (`NETWORK_OBSERVER_BIND_ADDRS` natively, the published ports in Docker), with
+FreeBind so the observer starts before the mesh interface exists; the LAN and public
+interfaces do not answer. The coordinator registers with Quartermaster so the runtime mesh DNS lists
 it, and the CLI-rendered Privateer seeds resolve and peer the alias on Bridge hosts.
 External probers call Bridge's public `/network-observer/v1/work` and
 `/network-observer/v1/observations` relay. Bridge passes the prober's bearer secret
@@ -240,8 +243,13 @@ currency/unit groups; stale or missing quotes follow fresh ones. Quotes reflect 
 observing broadcaster's offered price, not a guaranteed price for every broadcaster.
 
 The Livepeer map has independent endpoint, gateway-cluster, prober and infrastructure
-layers. Gateway positions currently use the existing cluster coordinates, not invented
-per-gateway locations. Registered probers with known coordinates appear individually;
+layers. Gateway telemetry carries no address of the gateway host, so the coordinator
+places each gateway observer from Quartermaster once per catalog interval: at its node's
+position (GeoIP of the node's external IP), or else at the centroid of the located nodes
+in that node's cluster, the position the cluster layer draws. A gateway whose node and
+cluster have no position, such as one on hosts with only private addresses, stays
+unknown; region labels never become coordinates. A location in `NETWORK_OBSERVERS_JSON`
+takes precedence. Registered probers with known coordinates appear individually;
 unknown locations remain in coverage listings. The detail panel lists sibling endpoints
 under the same onchain identity and retains regional discovery and performance history.
 
@@ -273,6 +281,14 @@ and endpoint assignment internals are removed. Existing platform infrastructure 
 visibility remains an independent policy and is not made public by this API.
 Measurement site roles, regions, known coordinates and last-seen times are public with
 stable opaque IDs so viewers can understand the provenance and coverage of measurements.
+
+The GraphQL orchestrator inventory (`orchestratorsConnection`, `orchestratorInstances` and
+the identity and instances of `orchestrator`) always includes the orchestrators the
+`NETWORK_PUBLIC_TENANT_IDS` tenants' gateways discovered, for any caller, because it is
+the same data this route publishes; it does not depend on the caller's access to private
+clusters. Rows that name a gateway (`orchestratorVantages`, `orchestratorPerformanceSeries`
+and the vantages of `orchestrator`) stay limited to gateway clusters in the public
+topology or ones the caller owns or subscribes to.
 
 `GET /v1/network/livepeer/diagnostics` requires an interactive platform-operator JWT,
 audits access and uses `Cache-Control: no-store`. A tenant administrator role alone is

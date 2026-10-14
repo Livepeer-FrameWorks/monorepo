@@ -4222,8 +4222,9 @@ export interface Query {
     /** Fetch a single node by its global ID. */
     node: (Node | null)
     /**
-     * List orchestrators discovered by Livepeer gateways under this cluster owner
-     * tenant. Federation-map data source. Vantage-independent; the per-region
+     * List orchestrators discovered by Livepeer gateways in the platform's
+     * published network inventory plus the clusters the caller can see.
+     * Federation-map data source. Vantage-independent; the per-region
      * table comes from `orchestratorVantages`.
      */
     orchestratorsConnection: OrchestratorsConnection
@@ -11944,8 +11945,9 @@ export interface QueryGenqlSelection{
     /** The global ID of the node. */
     id: Scalars['ID']} })
     /**
-     * List orchestrators discovered by Livepeer gateways under this cluster owner
-     * tenant. Federation-map data source. Vantage-independent; the per-region
+     * List orchestrators discovered by Livepeer gateways in the platform's
+     * published network inventory plus the clusters the caller can see.
+     * Federation-map data source. Vantage-independent; the per-region
      * table comes from `orchestratorVantages`.
      */
     orchestratorsConnection?: (OrchestratorsConnectionGenqlSelection & { __args?: {

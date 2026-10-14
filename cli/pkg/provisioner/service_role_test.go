@@ -1087,3 +1087,36 @@ func TestServiceComposeVarsPublishesBridgeOnLoopbackAndMesh(t *testing.T) {
 		}
 	}
 }
+
+// The network observer has no public listener: Bridge reaches its internal
+// HTTPS API and Quartermaster its health port over the mesh, and external
+// probers only through Bridge's relay. Both render paths keep its ports off
+// the LAN and public interfaces.
+func TestNetworkObserverBindsToLoopbackAndMesh(t *testing.T) {
+	host := inventory.Host{Name: "central-eu-1", WireguardIP: "10.88.0.3"}
+	cfg := ServiceRoleConfig{ServiceName: "network-observer", DefaultPort: 18024, DefaultImage: "ghcr.io/livepeer-frameworks/frameworks-network-observer:test"}
+
+	native, err := serviceNativeVars(context.Background(), cfg, host, ServiceConfig{
+		Mode:      "native",
+		BinaryURL: "http://example.invalid/network-observer.tar.gz",
+		Metadata:  map[string]any{},
+	}, RoleBuildHelpers{})
+	if err != nil {
+		t.Fatalf("serviceNativeVars: %v", err)
+	}
+	env := stringMapFromAny(native["go_service_env"])
+	if got := env["NETWORK_OBSERVER_BIND_ADDRS"]; got != "127.0.0.1,10.88.0.3" {
+		t.Fatalf("NETWORK_OBSERVER_BIND_ADDRS = %q, want 127.0.0.1,10.88.0.3", got)
+	}
+	if got, ok := env["BRIDGE_BIND_ADDRS"]; ok {
+		t.Fatalf("observer env carries BRIDGE_BIND_ADDRS=%q", got)
+	}
+
+	compose, err := serviceComposeVars(context.Background(), cfg, host, ServiceConfig{Mode: "docker", Metadata: map[string]any{}}, RoleBuildHelpers{})
+	if err != nil {
+		t.Fatalf("serviceComposeVars: %v", err)
+	}
+	if got := compose["compose_stack_service"].(map[string]any)["publish_addrs"]; !reflect.DeepEqual(got, []string{"127.0.0.1", "10.88.0.3"}) {
+		t.Fatalf("observer publish_addrs = %#v, want [127.0.0.1 10.88.0.3]", got)
+	}
+}

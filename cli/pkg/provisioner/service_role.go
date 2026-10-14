@@ -395,8 +395,8 @@ func serviceNativeVars(ctx context.Context, cfg ServiceRoleConfig, host inventor
 		port = cfg.DefaultPort
 	}
 	envMap := buildServiceEnvMap(config)
-	if addrs := meshOnlyHTTPAddrs(cfg.ServiceName, host); len(addrs) > 0 && strings.TrimSpace(envMap["BRIDGE_BIND_ADDRS"]) == "" {
-		envMap["BRIDGE_BIND_ADDRS"] = strings.Join(addrs, ",")
+	if key := meshOnlyBindEnv[cfg.ServiceName]; key != "" && strings.TrimSpace(envMap[key]) == "" {
+		envMap[key] = strings.Join(meshOnlyHTTPAddrs(cfg.ServiceName, host), ",")
 	}
 	if cfg.ServiceName == "livepeer-gateway" || cfg.ServiceName == "livepeer-signer" {
 		applyLivepeerNativeEnvDefaults(cfg.ServiceName, envMap, cfg.StateDirs)
@@ -702,18 +702,28 @@ func livepeerNativeArgs(serviceName string, env map[string]string, stateDirs []s
 	return args
 }
 
+// meshOnlyBindEnv names the variable through which each mesh-only service
+// receives its listen addresses in native mode.
+var meshOnlyBindEnv = map[string]string{
+	"bridge":           "BRIDGE_BIND_ADDRS",
+	"network-observer": "NETWORK_OBSERVER_BIND_ADDRS",
+}
+
 // MeshOnlyHTTPService reports whether serviceName's HTTP port answers only on
 // loopback and the host's WireGuard address (meshOnlyHTTPAddrs).
 func MeshOnlyHTTPService(serviceName string) bool {
-	return serviceName == "bridge"
+	return meshOnlyBindEnv[serviceName] != ""
 }
 
-// meshOnlyHTTPAddrs is where Bridge's HTTP port answers on a host: loopback
-// for the local native nginx and vmagent, and the WireGuard address for a
-// docker-mode proxy on the same host, the peers' nginx upstream backups,
-// Skipper's bridge.internal MCP calls, and Quartermaster's health probes. The
-// LAN and public interfaces stay closed so a client cannot bypass the proxy's
-// TLS and client-IP headers.
+// meshOnlyHTTPAddrs is where a mesh-only service answers on a host: loopback
+// for local callers (native nginx, vmagent, rollout readiness), and the
+// WireGuard address for mesh peers. For Bridge those are a docker-mode proxy
+// on the same host, the peers' nginx upstream backups, Skipper's
+// bridge.internal MCP calls and Quartermaster's health probes; the LAN and
+// public interfaces stay closed so a client cannot bypass the proxy's TLS and
+// client-IP headers. The network observer has no public listener at all:
+// Bridge reaches its internal API and Quartermaster its health port over the
+// mesh, and external probers only through Bridge's relay.
 func meshOnlyHTTPAddrs(serviceName string, host inventory.Host) []string {
 	if !MeshOnlyHTTPService(serviceName) {
 		return nil

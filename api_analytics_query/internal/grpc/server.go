@@ -7531,15 +7531,20 @@ const rebufferLookback = time.Hour
 
 // rebufferingTransitionsQuery returns every FULL, DRY or RECOVER health sample
 // of the tenant's live streams from rebufferLookback before start through end,
-// with the stream's previous such state and whether the sample starts or ends
-// a rebuffer. Transitions are computed over the samples in timestamp order at
-// read time, so they do not depend on how the samples were inserted. The
-// caller restricts the result to start and later.
+// with the previous such state of the stream on the same node and whether the
+// sample starts or ends a rebuffer. Each node holds its own buffer of a stream
+// an origin and its edges both serve, so transitions never cross nodes.
+// Transitions are computed over the samples in timestamp order at read time,
+// so they do not depend on how the samples were inserted. Helmsman's periodic
+// poll and a stream-update refresh can both sample a node within one second,
+// the column's resolution; ingest_id, the sample's Kafka record identity,
+// orders such samples the same way on every read. The caller restricts the
+// result to start and later.
 func rebufferingTransitionsQuery(tenantID, streamID string, start, end time.Time) (string, []any) {
 	query := `
-		SELECT timestamp, tenant_id, stream_id, node_id, buffer_state,
+		SELECT timestamp, tenant_id, stream_id, node_id, ingest_id, buffer_state,
 		       lagInFrame(buffer_state, 1, '') OVER (
-		           PARTITION BY tenant_id, stream_id ORDER BY timestamp
+		           PARTITION BY tenant_id, stream_id, node_id ORDER BY timestamp, ingest_id
 		           ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS prev_state,
 		       if(buffer_state = 'DRY' AND prev_state IN ('FULL', 'RECOVER'), 1, 0) AS rebuffer_start,
 		       if(buffer_state = 'RECOVER' AND prev_state = 'DRY', 1, 0) AS rebuffer_end
@@ -7584,15 +7589,19 @@ func (s *PeriscopeServer) GetRebufferingEvents(ctx context.Context, req *perisco
 	countCh := s.countAsync(ctx, countQuery, countArgs...)
 
 	query := `
-		SELECT timestamp, tenant_id, stream_id, node_id, buffer_state, prev_state, rebuffer_start, rebuffer_end
+		SELECT timestamp, tenant_id, stream_id, node_id, ingest_id, buffer_state, prev_state, rebuffer_start, rebuffer_end
 		FROM (` + transitions + `)` + outerFilter
 	args := append(append([]any{}, transitionArgs...), outerArgs...)
 
+	// Two samples of one node in one second share timestamp, stream and node,
+	// so the keyset also carries ingest_id; without it a page boundary between
+	// them would skip the second sample.
+	keysetCols := []string{"stream_id", "node_id", "ingest_id"}
 	var cursorParts []string
 	if params.Cursor != nil {
-		cursorParts = strings.SplitN(params.Cursor.ID, "|", 2)
+		cursorParts = strings.SplitN(params.Cursor.ID, "|", len(keysetCols))
 	}
-	keysetCond, keysetArgs, err := buildKeysetConditionN(params, "timestamp", []string{"stream_id", "node_id"}, cursorParts)
+	keysetCond, keysetArgs, err := buildKeysetConditionN(params, "timestamp", keysetCols, cursorParts)
 	if err != nil {
 		return nil, err
 	}
@@ -7601,7 +7610,7 @@ func (s *PeriscopeServer) GetRebufferingEvents(ctx context.Context, req *perisco
 		args = append(args, keysetArgs...)
 	}
 
-	query += buildOrderByN(params, "timestamp", []string{"stream_id", "node_id"})
+	query += buildOrderByN(params, "timestamp", keysetCols)
 	query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
 
 	rows, err := periscopequerydb.Query(ctx, s.clickhouse, query, args...)
@@ -7611,18 +7620,21 @@ func (s *PeriscopeServer) GetRebufferingEvents(ctx context.Context, req *perisco
 	defer func() { _ = rows.Close() }()
 
 	var events []*periscopepb.RebufferingEvent
+	var keys []string
 	for rows.Next() {
 		var timestamp time.Time
 		var rebufferStart, rebufferEnd uint8
-		var tenantIDStr, streamIDStr, nodeID, bufferState, prevState string
+		var tenantIDStr, streamIDStr, nodeID, ingestID, bufferState, prevState string
 
-		err := rows.Scan(&timestamp, &tenantIDStr, &streamIDStr, &nodeID, &bufferState, &prevState, &rebufferStart, &rebufferEnd)
+		err := rows.Scan(&timestamp, &tenantIDStr, &streamIDStr, &nodeID, &ingestID, &bufferState, &prevState, &rebufferStart, &rebufferEnd)
 		if err != nil {
 			return nil, wrapClickhouseError(err, "scan rebuffering event")
 		}
 
+		key := streamIDStr + "|" + nodeID + "|" + ingestID
+		keys = append(keys, key)
 		event := &periscopepb.RebufferingEvent{
-			Id:          fmt.Sprintf("%s_%s", timestamp.Format(time.RFC3339Nano), streamIDStr),
+			Id:          timestamp.Format(time.RFC3339Nano) + "|" + key,
 			Timestamp:   timestamppb.New(timestamp),
 			TenantId:    tenantIDStr,
 			StreamId:    streamIDStr,
@@ -7642,18 +7654,20 @@ func (s *PeriscopeServer) GetRebufferingEvents(ctx context.Context, req *perisco
 	resultsLen := len(events)
 	if resultsLen > params.Limit {
 		events = events[:params.Limit]
+		keys = keys[:params.Limit]
 	}
 
 	if params.Direction == pagination.Backward {
 		slices.Reverse(events)
+		slices.Reverse(keys)
 	}
 
 	total := <-countCh
 
 	var startCursor, endCursor string
 	if len(events) > 0 {
-		startCursor = pagination.EncodeCursor(events[0].Timestamp.AsTime(), events[0].StreamId+"|"+events[0].NodeId)
-		endCursor = pagination.EncodeCursor(events[len(events)-1].Timestamp.AsTime(), events[len(events)-1].StreamId+"|"+events[len(events)-1].NodeId)
+		startCursor = pagination.EncodeCursor(events[0].Timestamp.AsTime(), keys[0])
+		endCursor = pagination.EncodeCursor(events[len(events)-1].Timestamp.AsTime(), keys[len(keys)-1])
 	}
 
 	return &periscopepb.GetRebufferingEventsResponse{

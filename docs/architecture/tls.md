@@ -65,7 +65,8 @@ its API on an internal-CA HTTPS listener (`:18034`, ServerName
 `network-observer.internal`), and its plain `:18024` listener then answers only health
 and readiness probes. Bridge dials it at its aggregator-region mesh alias and verifies
 that ServerName, as for gRPC clients. The observer has no public certificate; external
-probers reach it through Bridge.
+probers reach it through Bridge. Both observer listeners bind only loopback and the
+host's WireGuard address, so neither answers on the LAN or public interfaces.
 
 Public HTTP remains a Caddy concern unless a service explicitly owns an HTTP
 endpoint. Foghorn's viewer redirect and MistServer pull-routing surfaces are

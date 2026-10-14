@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"frameworks/api_network_observer/internal/appconfig"
 	"frameworks/api_network_observer/internal/coordinator"
 	"frameworks/api_network_observer/internal/providers/livepeer"
@@ -18,13 +19,18 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/kafka"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	obs "github.com/Livepeer-FrameWorks/monorepo/pkg/networkobservation"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/qmbootstrap"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/server"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 	"github.com/twmb/franz-go/pkg/kadm"
+	"net"
 	"net/http"
 	"net/netip"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -199,15 +205,20 @@ func main() {
 		}
 	}()
 	handler := api.Handler()
-	httpServer := newHTTPServer(":"+cfg.HTTPPort, handler)
+	plainListeners, err := observerListeners(cfg.BindAddrs, cfg.HTTPPort)
+	if err != nil {
+		logger.WithError(err).Fatal("Observer HTTP listener failed")
+	}
+	httpServer := newHTTPServer(handler)
 	internalTLS := grpcutil.ServerTLSConfig{CertFile: cfg.CertPath, KeyFile: cfg.KeyPath}
 	var internalServer *http.Server
 	if cfg.CertPath != "" && cfg.KeyPath != "" {
-		internalServer = newHTTPServer(":"+cfg.InternalPort, handler)
+		internalServer = newHTTPServer(handler)
 		httpServer.Handler = probesOnly(handler)
-		go serveInternalTLS(ctx, internalServer, internalTLS, logger)
+		go serveInternalTLS(ctx, internalServer, cfg.BindAddrs, cfg.InternalPort, internalTLS, logger)
 	}
 	go registerWithQuartermaster(ctx, cfg, logger)
+	go refreshGatewayLocations(ctx, cfg, api.Store, catalogInterval, logger)
 	go func() {
 		<-ctx.Done()
 		stopCtx, stop := context.WithTimeout(context.Background(), 10*time.Second)
@@ -221,7 +232,7 @@ func main() {
 			}
 		}
 	}()
-	if err = httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	if err = serveListeners(httpServer, plainListeners, false); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		logger.WithError(err).Fatal("Observer HTTP server failed")
 	}
 }
@@ -239,15 +250,64 @@ func probesOnly(handler http.Handler) http.Handler {
 	})
 }
 
-func newHTTPServer(addr string, handler http.Handler) *http.Server {
-	return &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
+func newHTTPServer(handler http.Handler) *http.Server {
+	return &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
+}
+
+// observerListeners binds port once per NETWORK_OBSERVER_BIND_ADDRS entry, or
+// on every interface when none is set. Configured addresses bind with
+// FreeBind: provisioning includes the WireGuard address, which does not exist
+// until Privateer brings the mesh up, and the observer must not depend on that
+// order.
+func observerListeners(bindAddrs []string, port string) ([]net.Listener, error) {
+	var listeners []net.Listener
+	fail := func(err error) ([]net.Listener, error) {
+		for _, lis := range listeners {
+			_ = lis.Close()
+		}
+		return nil, err
+	}
+	for _, addr := range bindAddrs {
+		if addr = strings.TrimSpace(addr); addr == "" {
+			continue
+		}
+		lis, err := server.ListenTCP(addr, port, true)
+		if err != nil {
+			return fail(fmt.Errorf("bind %s port %s: %w", addr, port, err))
+		}
+		listeners = append(listeners, lis)
+	}
+	if len(listeners) == 0 {
+		lis, err := server.ListenTCP("", port, false)
+		if err != nil {
+			return fail(fmt.Errorf("bind port %s: %w", port, err))
+		}
+		listeners = append(listeners, lis)
+	}
+	return listeners, nil
+}
+
+// serveListeners serves srv on every listener until one stops; Shutdown
+// closes them all, so a clean stop returns http.ErrServerClosed.
+func serveListeners(srv *http.Server, listeners []net.Listener, useTLS bool) error {
+	errs := make(chan error, len(listeners))
+	for _, lis := range listeners {
+		go func(lis net.Listener) {
+			if useTLS {
+				errs <- srv.ServeTLS(lis, "", "")
+				return
+			}
+			errs <- srv.Serve(lis)
+		}(lis)
+	}
+	return <-errs
 }
 
 // serveInternalTLS serves the API to mesh callers with the internal-CA leaf.
 // Privateer may write the leaf after the process starts, so the listener opens
 // once the files exist; the plain listener keeps health probes answering
 // meanwhile. The certificate is reloaded when Privateer renews it.
-func serveInternalTLS(ctx context.Context, srv *http.Server, files grpcutil.ServerTLSConfig, logger logging.Logger) {
+func serveInternalTLS(ctx context.Context, srv *http.Server, bindAddrs []string, port string, files grpcutil.ServerTLSConfig, logger logging.Logger) {
 	if err := grpcutil.WaitForServerTLSFiles(ctx, files, logger); err != nil {
 		if ctx.Err() == nil {
 			logger.WithError(err).Fatal("Observer internal TLS files unavailable")
@@ -259,8 +319,98 @@ func serveInternalTLS(ctx context.Context, srv *http.Server, files grpcutil.Serv
 		logger.WithError(err).Fatal("Observer internal TLS configuration invalid")
 	}
 	srv.TLSConfig = tlsConfig
-	if err := srv.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	listeners, err := observerListeners(bindAddrs, port)
+	if err != nil {
+		logger.WithError(err).Fatal("Observer internal HTTPS listener failed")
+	}
+	if err := serveListeners(srv, listeners, true); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		logger.WithError(err).Fatal("Observer internal HTTPS server failed")
+	}
+}
+
+// nodeLister is the Quartermaster node listing refreshGatewayLocations reads.
+type nodeLister interface {
+	ListNodes(ctx context.Context, clusterID, nodeType, region string, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListNodesResponse, error)
+}
+
+// refreshGatewayLocations positions gateway observers from Quartermaster's
+// node coordinates once per catalog interval. Gateway telemetry carries no
+// address of the gateway host, so the node row is the only location source.
+func refreshGatewayLocations(ctx context.Context, cfg *appconfig.Observer, st *store.Store, interval time.Duration, logger logging.Logger) {
+	if cfg.QuartermasterGRPCAddr == "" {
+		logger.Info("Quartermaster address unset; gateway observer locations stay unknown")
+		return
+	}
+	qmClient, err := quartermaster.NewGRPCClient(quartermaster.GRPCConfig{
+		GRPCAddr:      cfg.QuartermasterGRPCAddr,
+		Timeout:       30 * time.Second,
+		Logger:        logger,
+		ServiceToken:  cfg.ServiceToken,
+		AllowInsecure: cfg.AllowInsecure,
+		CACertFile:    cfg.CAPath,
+		ServerName:    cfg.QuartermasterTLSName,
+	})
+	if err != nil {
+		logger.WithError(err).Warn("Quartermaster client unavailable; gateway observer locations stay unknown")
+		return
+	}
+	defer func() { _ = qmClient.Close() }()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		listCtx, stop := context.WithTimeout(ctx, time.Minute)
+		nodes, listErr := listNodeLocations(listCtx, qmClient)
+		stop()
+		if listErr != nil {
+			logger.WithError(listErr).Warn("Gateway observer location refresh failed")
+		} else if updateErr := st.Update(ctx, func(s *store.State, _ *sql.Tx) error {
+			coordinator.LocateGateways(s, nodes)
+			return nil
+		}); updateErr != nil {
+			logger.WithError(updateErr).Warn("Gateway observer location persistence failed")
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+// listNodeLocations reads every Quartermaster node, following pagination to
+// the end so no gateway loses its position to a truncated page.
+func listNodeLocations(ctx context.Context, qm nodeLister) ([]coordinator.NodeLocation, error) {
+	const pageSize = 500
+	var out []coordinator.NodeLocation
+	after := ""
+	for {
+		page := &commonpb.CursorPaginationRequest{First: pageSize}
+		if after != "" {
+			cursor := after
+			page.After = &cursor
+		}
+		resp, err := qm.ListNodes(ctx, "", "", "", page)
+		if err != nil {
+			return nil, err
+		}
+		for _, n := range resp.GetNodes() {
+			out = append(out, coordinator.NodeLocation{
+				NodeID:    n.GetNodeId(),
+				ClusterID: n.GetClusterId(),
+				Latitude:  n.GetLatitude(),
+				Longitude: n.GetLongitude(),
+				Known:     n.Latitude != nil && n.Longitude != nil,
+			})
+		}
+		p := resp.GetPagination()
+		if p == nil || !p.GetHasNextPage() {
+			return out, nil
+		}
+		end := p.GetEndCursor()
+		if end == "" || end == after {
+			return nil, fmt.Errorf("list nodes: pagination cursor %q did not advance", end)
+		}
+		after = end
 	}
 }
 

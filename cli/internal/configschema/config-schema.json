@@ -2930,6 +2930,12 @@
           "description": "HTTPS port serving the same API to mesh callers such as Bridge with the internal-CA certificate in GRPC_TLS_CERT_PATH/GRPC_TLS_KEY_PATH; not opened when those are unset."
         },
         {
+          "key": "NETWORK_OBSERVER_BIND_ADDRS",
+          "type": "list",
+          "introduced": "v0.3.13",
+          "description": "Comma-separated addresses both observer ports bind, one listener per address and port. Provisioning sets loopback and the host's WireGuard address so only local probes and mesh peers such as Bridge and Quartermaster reach the observer. Empty binds every interface."
+        },
+        {
           "key": "NETWORK_OBSERVER_HOST",
           "type": "string",
           "default": "network-observer",

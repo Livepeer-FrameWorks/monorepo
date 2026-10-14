@@ -751,9 +751,10 @@ func resolverConfig(live *config.Live[appconfig.Bridge]) resolvers.ResolverConfi
 			NegativeTTL:          seconds(cfg.PeriscopeCacheNegTTLSeconds),
 			MaxEntries:           cfg.PeriscopeCacheMax,
 		},
-		PeriscopeLoadTimeout: seconds(cfg.PeriscopeCacheLoadTimeoutSeconds),
-		TelemetrySecret:      []byte(cfg.TelemetryTokenSecret),
-		LocalClusterID:       cfg.ClusterID,
+		PeriscopeLoadTimeout:   seconds(cfg.PeriscopeCacheLoadTimeoutSeconds),
+		TelemetrySecret:        []byte(cfg.TelemetryTokenSecret),
+		LocalClusterID:         cfg.ClusterID,
+		NetworkPublicTenantIDs: cfg.NetworkPublicTenantIDs,
 		Streaming: func() resolvers.StreamingSettings {
 			current := live.Get()
 			return resolvers.StreamingSettings{

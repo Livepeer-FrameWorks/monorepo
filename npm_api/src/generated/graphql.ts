@@ -7566,8 +7566,8 @@ export type GetOrchestratorsConnectionQueryVariables = Exact<{
 }>;
 
 
-/** List orchestrators discovered by Livepeer gateways under this cluster owner tenant. Federation-map data source. Vantage-independent; the per-region table comes from `orchestratorVantages`. */
-export type GetOrchestratorsConnectionQuery = { /** List orchestrators discovered by Livepeer gateways under this cluster owner tenant. Federation-map data source. Vantage-independent; the per-region table comes from `orchestratorVantages`. */
+/** List orchestrators discovered by Livepeer gateways in the platform's published network inventory plus the clusters the caller can see. Federation-map data source. Vantage-independent; the per-region table comes from `orchestratorVantages`. */
+export type GetOrchestratorsConnectionQuery = { /** List orchestrators discovered by Livepeer gateways in the platform's published network inventory plus the clusters the caller can see. Federation-map data source. Vantage-independent; the per-region table comes from `orchestratorVantages`. */
 orchestratorsConnection: { totalCount: number, nodes: Array<{ tenantId: string, orchAddr: string, lastSeen: string, updatedAt: string }> } };
 
 export type GetOverviewQueryVariables = Exact<{
@@ -23933,7 +23933,7 @@ export const GetOrchestratorVantagesDocument = /*#__PURE__*/ new TypedDocumentSt
   dialedRecently
   lastSeen
 }`) as unknown as TypedDocumentString<GetOrchestratorVantagesQuery, GetOrchestratorVantagesQueryVariables>;
-/** List orchestrators discovered by Livepeer gateways under this cluster owner tenant. Federation-map data source. Vantage-independent; the per-region table comes from `orchestratorVantages`. */
+/** List orchestrators discovered by Livepeer gateways in the platform's published network inventory plus the clusters the caller can see. Federation-map data source. Vantage-independent; the per-region table comes from `orchestratorVantages`. */
 export const GetOrchestratorsConnectionDocument = /*#__PURE__*/ new TypedDocumentString(`
     query GetOrchestratorsConnection($page: ConnectionInput, $orchAddr: String) {
   orchestratorsConnection(page: $page, orchAddr: $orchAddr) {

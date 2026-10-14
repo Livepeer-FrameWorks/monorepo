@@ -538,6 +538,7 @@ Read by `api_network_observer/cmd/network-observer`.
 | `NODE_ID` | string |  |  | v0.3.0 | Node the instance registers under in Quartermaster. |
 | `NETWORK_OBSERVER_PORT` | string | `18024` |  | v0.3.13 | HTTP port for observer ingest, assignments and candidate feeds. |
 | `NETWORK_OBSERVER_INTERNAL_PORT` | string | `18034` |  | v0.3.13 | HTTPS port serving the same API to mesh callers such as Bridge with the internal-CA certificate in GRPC_TLS_CERT_PATH/GRPC_TLS_KEY_PATH; not opened when those are unset. |
+| `NETWORK_OBSERVER_BIND_ADDRS` | list |  |  | v0.3.13 | Comma-separated addresses both observer ports bind, one listener per address and port. Provisioning sets loopback and the host's WireGuard address so only local probes and mesh peers such as Bridge and Quartermaster reach the observer. Empty binds every interface. |
 | `NETWORK_OBSERVER_HOST` | string | `network-observer` |  | v0.3.13 | Host name this instance advertises when it registers with Quartermaster. |
 | `QUARTERMASTER_GRPC_ADDR` | string |  |  | v0.3.13 | Quartermaster gRPC address for service registration, which publishes the observer's mesh DNS name to Bridge. Empty skips registration. |
 | `QUARTERMASTER_GRPC_TLS_SERVER_NAME` | string |  |  | v0.3.13 | TLS server name override for the Quartermaster connection. Empty uses the canonical internal name. |

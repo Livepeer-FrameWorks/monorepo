@@ -16,9 +16,9 @@ class GetOrchestratorsConnection(BaseModel):
 
     orchestrators_connection: "GetOrchestratorsConnectionOrchestratorsConnection" = Field(
         alias="orchestratorsConnection",
-        description="List orchestrators discovered by Livepeer gateways under this cluster owner\ntenant. Federation-map data source. Vantage-independent; the per-region\ntable comes from `orchestratorVantages`.",
+        description="List orchestrators discovered by Livepeer gateways in the platform's\npublished network inventory plus the clusters the caller can see.\nFederation-map data source. Vantage-independent; the per-region\ntable comes from `orchestratorVantages`.",
     )
-    "List orchestrators discovered by Livepeer gateways under this cluster owner\ntenant. Federation-map data source. Vantage-independent; the per-region\ntable comes from `orchestratorVantages`."
+    "List orchestrators discovered by Livepeer gateways in the platform's\npublished network inventory plus the clusters the caller can see.\nFederation-map data source. Vantage-independent; the per-region\ntable comes from `orchestratorVantages`."
 
 
 class GetOrchestratorsConnectionOrchestratorsConnection(OrchestratorsConnectionDefault):
