@@ -500,6 +500,20 @@ catalog version; the runtime grants run the same way.
 `TestYugabyteRoleOwnershipSurvivesConcurrentCatalogChange` pins the engine behaviour and runs
 both ownership plans with the catalog version raised before every statement.
 
+### A read restart inside a DDL statement
+
+DDL such as `ALTER TABLE … ADD CONSTRAINT` reads `pg_yb_catalog_version`, one table shared
+by every database on the universe, which every database's DDL and `ANALYZE` (including the
+auto-analyze service's) write. When such a write lands inside the read's uncertainty window,
+the statement fails with `Restart read required` (40001), and YSQL does not retry a DDL
+statement internally (yugabyte-db #32923, #34417). A baseline is applied by the role's
+`yugabyte-apply-baseline.sh`: ysqlsh runs the file one statement at a time and stops at the
+first failure, and when that failure is 40001, 40P01 or a read restart the script applies the
+whole file again, up to six runs. Every baseline is idempotent, and the tables a failed run
+left are reachable only by the superuser applying it, because owner and runtime grants follow
+the apply. The shared contract fixture loads baselines through the same script. Migration
+items replay only the failed statement (below).
+
 ### DDL aborts DML on colocated siblings
 
 `ALTER TABLE` on any table in a colocated database aborts every open multi-statement

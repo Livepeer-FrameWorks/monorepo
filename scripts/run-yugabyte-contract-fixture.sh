@@ -110,7 +110,12 @@ if [[ "$catalog_version_on_ddl" != "on" ]]; then
   exit 1
 fi
 
+# Service tests apply each baseline with the script the yugabyte role applies it with.
+baseline_apply=/tmp/frameworks-yugabyte-apply-baseline.sh
+docker cp "$repo_root/ansible/collections/ansible_collections/frameworks/infra/roles/yugabyte/files/yugabyte-apply-baseline.sh" "$container:$baseline_apply" >/dev/null
+
 export FRAMEWORKS_YUGABYTE_TEST_CONTAINER="$container"
+export FRAMEWORKS_YUGABYTE_TEST_BASELINE_APPLY="$baseline_apply"
 export FRAMEWORKS_YUGABYTE_TEST_DSN="postgres://yugabyte@127.0.0.1:${port}/yugabyte?sslmode=disable"
 export FRAMEWORKS_YUGABYTE_TEST_BASELINES="$baselines"
 

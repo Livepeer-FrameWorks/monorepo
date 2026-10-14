@@ -26,6 +26,10 @@ const (
 	// database keeps until it is relaid out, while it still receives the baseline with the declared layout applied, as
 	// migrations reach such a database. Unset, each database is created in its declared layout.
 	SharedYugabyteLayoutEnv = "FRAMEWORKS_YUGABYTE_TEST_LAYOUT"
+
+	// SharedYugabyteBaselineApplyEnv names the path, inside the suite-owned engine container, of the yugabyte role's
+	// yugabyte-apply-baseline.sh, which the fixture copies there so tests load baselines as the release applies them.
+	SharedYugabyteBaselineApplyEnv = "FRAMEWORKS_YUGABYTE_TEST_BASELINE_APPLY"
 )
 
 // execSharedYugabyteAdmin runs one statement in the suite-owned engine's maintenance database.
@@ -234,12 +238,17 @@ func createSharedBaselineDatabase(t testing.TB, baseDSN, prefix, database string
 	if err := WaitReadyFor(db, strings.TrimSpace(os.Getenv(SharedYugabyteContainerEnv)), 90*time.Second); err != nil {
 		t.Fatal(err)
 	}
-	// ysqlsh sends the baseline one statement at a time. As one multi-statement query the baseline runs in a single
-	// implicit transaction that YugabyteDB cannot retry, and the colocated foghorn baseline sent that way failed with
-	// 40001 on every attempt on the pinned engine.
+	// The role's apply script sends the baseline one statement at a time and runs the file again when a statement
+	// fails with 40001 or 40P01. As one multi-statement query the baseline runs in a single implicit transaction that
+	// YugabyteDB cannot retry, and the colocated foghorn baseline sent that way failed with 40001 on every attempt on
+	// the pinned engine.
 	container := strings.TrimSpace(os.Getenv(SharedYugabyteContainerEnv))
-	if out, err := runDockerStdin(context.Background(), baseline, "exec", "-i", container, "ysqlsh", "-X", "-h", container, "-U", "yugabyte",
-		"-d", name, "-v", "ON_ERROR_STOP=1", "-q"); err != nil {
+	applyScript := strings.TrimSpace(os.Getenv(SharedYugabyteBaselineApplyEnv))
+	if applyScript == "" {
+		t.Fatalf("%s is set without %s; run Yugabyte contracts through their make target", SharedYugabyteDSNEnv, SharedYugabyteBaselineApplyEnv)
+	}
+	const stageAndApply = `file="/tmp/frameworks-baseline-$1.sql"; cat >"$file" || exit 1; sh "$0" ysqlsh "$file" -h "$2" -U yugabyte -d "$1"; status=$?; rm -f "$file"; exit $status`
+	if out, err := runDockerStdin(context.Background(), baseline, "exec", "-i", container, "sh", "-c", stageAndApply, applyScript, name, container); err != nil {
 		t.Fatalf("apply rendered %s baseline to %s: %v\n%s", database, name, err, out)
 	}
 	if err := entry.capture(db); err != nil {

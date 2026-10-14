@@ -63,6 +63,64 @@ func TestYugabyteRoleAppliesEveryServiceBaseline(t *testing.T) {
 	}
 }
 
+// TestYugabyteRoleBaselineApplyReplaysAfterARetryableFailure applies the commodore baseline through the role with
+// a statement after its last one that fails with SQLSTATE 40001 on its first run, as a DDL statement that hits a read
+// restart on pg_yb_catalog_version does: YSQL cannot retry it, so the role runs the whole file again, over the
+// tables and non-concurrent indexes its first run left, and the database ends with the complete baseline.
+func TestYugabyteRoleBaselineApplyReplaysAfterARetryableFailure(t *testing.T) {
+	repo := ybRoleRepo(t)
+	container := fmt.Sprintf("fw-yb-role-baseline-retry-%d-%d", os.Getpid(), time.Now().UnixNano())
+	ybRoleStartEngine(t, repo, container)
+
+	services := ybRoleServices(t, "commodore")
+	items, cleanup, err := BuildSchemaItemsForEngine(services.schemaDatabases, SQLEngineYugabyte)
+	t.Cleanup(cleanup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	src, _ := items[0]["src"].(string)
+	baseline, err := os.ReadFile(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const readRestartOnFirstRun = `
+CREATE TABLE IF NOT EXISTS public.baseline_apply_runs (run_at TIMESTAMPTZ NOT NULL DEFAULT now());
+INSERT INTO public.baseline_apply_runs DEFAULT VALUES;
+DO $$
+BEGIN
+  IF (SELECT count(*) FROM public.baseline_apply_runs) = 1 THEN
+    RAISE EXCEPTION 'Restart read required' USING ERRCODE = '40001';
+  END IF;
+END $$;
+`
+	if err = os.WriteFile(src, append(baseline, readRestartOnFirstRun...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	output, err := ybRoleRunPlaybook(t, repo, container, map[string]any{
+		"yugabyte_databases":           services.databases,
+		"yugabyte_database_placements": services.placements,
+		"yugabyte_schema_items":        items,
+	}, `    - ansible.builtin.include_role:
+        name: frameworks.infra.yugabyte
+        tasks_from: init.yml
+    - ansible.builtin.include_role:
+        name: frameworks.infra.yugabyte
+        tasks_from: schema.yml
+`)
+	if err != nil {
+		t.Fatalf("baseline apply failed although its only failure was retryable: %v\n%s", err, ybRoleTail(output, 20000))
+	}
+	// The table counts the runs: 2 is the failed run and the replay that completed the file.
+	got := ybRoleQuery(t, container, "commodore", `SELECT (SELECT count(*) FROM public.baseline_apply_runs)::text || '|' ||
+  (SELECT floor FROM public._schema_baseline) || '|' ||
+  (SELECT count(*) FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'commodore' AND NOT (i.indisvalid AND i.indisready))::text`)
+	if want := "2|" + releases.SchemaMigrationFloor() + "|0"; got != want {
+		t.Fatalf("baseline runs|marker|invalid indexes = %s, want %s", got, want)
+	}
+}
+
 // TestYugabyteRoleFreshInstallAppliesEveryMigration provisions every platform database in its declared layout from its
 // current baseline through the role, then applies every embedded migration up to the pending release, one phase at a
 // time through migrate.yml, as `cluster provision` and the releases that follow it do. A fresh database replays the

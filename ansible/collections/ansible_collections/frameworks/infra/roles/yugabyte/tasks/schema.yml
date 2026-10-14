@@ -74,12 +74,23 @@
     - yugabyte_schema_items | default([]) | length > 0
     - (not (yugabyte_schema_has_tables_by_db[item.db] | default(false))) or (item.reapply | default(false) | bool)
 
+- name: Copy baseline apply script
+  ansible.builtin.copy:
+    src: yugabyte-apply-baseline.sh
+    dest: /tmp/frameworks-yugabyte-apply-baseline.sh
+    mode: "0700"
+  when:
+    - not ansible_check_mode
+    - yugabyte_schema_items | default([]) | length > 0
+
 # ysqlsh sends the baseline one statement at a time in autocommit. Sent as one query, the file runs as one implicit
 # transaction that YugabyteDB can neither keep nor retry: DDL runs outside transaction blocks, so an ALTER TABLE or
 # foreign key on a colocated database's shared tablet aborts the transaction holding the file's earlier inserts
 # (40001), and query-layer retries do not apply to multi-statement queries. ON_ERROR_STOP ends the apply at the
-# first failing statement; a reapply finishes it through the baseline's IF NOT EXISTS DDL. The tools come from the
-# selected release, as relayout selects them, or from an in-place installation the role has not converted yet.
+# first failing statement. YSQL does not retry a read restart inside a DDL statement either, so
+# yugabyte-apply-baseline.sh runs the whole idempotent file again when a statement fails with 40001 or 40P01. The
+# tools come from the selected release, as relayout selects them, or from an in-place installation the role has not
+# converted yet.
 - name: Apply baseline schemas via YSQL
   ansible.builtin.shell: |
     set -eu
@@ -98,9 +109,9 @@
       echo "no ysqlsh in the selected YugabyteDB release or {{ yugabyte_install_dir }}" >&2
       exit 2
     fi
-    exec "$ysqlsh" -X -q -v ON_ERROR_STOP=1 -h 127.0.0.1 -p {{ yugabyte_ysql_port | quote }} \
-      -U {{ yugabyte_superuser_role | quote }} -d {{ item.db | quote }} \
-      -f {{ ('/tmp/frameworks-schema-' ~ (item.db | regex_replace('[^A-Za-z0-9_.-]', '_')) ~ '.sql') | quote }}
+    exec /bin/sh /tmp/frameworks-yugabyte-apply-baseline.sh "$ysqlsh" \
+      {{ ('/tmp/frameworks-schema-' ~ (item.db | regex_replace('[^A-Za-z0-9_.-]', '_')) ~ '.sql') | quote }} \
+      -h 127.0.0.1 -p {{ yugabyte_ysql_port | quote }} -U {{ yugabyte_superuser_role | quote }} -d {{ item.db | quote }}
   args:
     executable: /bin/bash
   environment:
@@ -260,3 +271,11 @@
     - not ansible_check_mode
     - yugabyte_schema_items | default([]) | length > 0
     - (not (yugabyte_schema_has_tables_by_db[item.db] | default(false))) or (item.reapply | default(false) | bool)
+
+- name: Remove baseline apply script
+  ansible.builtin.file:
+    path: /tmp/frameworks-yugabyte-apply-baseline.sh
+    state: absent
+  when:
+    - not ansible_check_mode
+    - yugabyte_schema_items | default([]) | length > 0

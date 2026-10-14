@@ -18,19 +18,21 @@ import (
 // engine is the Yugabyte engine scripts/run-yugabyte-contract-fixture.sh started, with the baselines it rendered
 // through the release code path.
 type engine struct {
-	adminDSN  string
-	container string
-	baselines string
+	adminDSN      string
+	container     string
+	baselines     string
+	baselineApply string
 }
 
 func engineFromEnv() (*engine, error) {
 	e := &engine{
-		adminDSN:  strings.TrimSpace(os.Getenv("FRAMEWORKS_YUGABYTE_TEST_DSN")),
-		container: strings.TrimSpace(os.Getenv("FRAMEWORKS_YUGABYTE_TEST_CONTAINER")),
-		baselines: strings.TrimSpace(os.Getenv("FRAMEWORKS_YUGABYTE_TEST_BASELINES")),
+		adminDSN:      strings.TrimSpace(os.Getenv("FRAMEWORKS_YUGABYTE_TEST_DSN")),
+		container:     strings.TrimSpace(os.Getenv("FRAMEWORKS_YUGABYTE_TEST_CONTAINER")),
+		baselines:     strings.TrimSpace(os.Getenv("FRAMEWORKS_YUGABYTE_TEST_BASELINES")),
+		baselineApply: strings.TrimSpace(os.Getenv("FRAMEWORKS_YUGABYTE_TEST_BASELINE_APPLY")),
 	}
-	if e.adminDSN == "" || e.container == "" || e.baselines == "" {
-		return nil, fmt.Errorf("run through scripts/run-yugabyte-contract-fixture.sh (make verify-yugabyte-explain-audit): FRAMEWORKS_YUGABYTE_TEST_DSN, _CONTAINER and _BASELINES are required")
+	if e.adminDSN == "" || e.container == "" || e.baselines == "" || e.baselineApply == "" {
+		return nil, fmt.Errorf("run through scripts/run-yugabyte-contract-fixture.sh (make verify-yugabyte-explain-audit): FRAMEWORKS_YUGABYTE_TEST_DSN, _CONTAINER, _BASELINES and _BASELINE_APPLY are required")
 	}
 	return e, nil
 }
@@ -54,8 +56,8 @@ func (e *engine) admin(ctx context.Context, statement string) error {
 	return err
 }
 
-// createDatabase creates name, colocated or not, applies the rendered baseline one statement at a time through
-// ysqlsh exactly as the shared contract fixture does, and returns a connection pool to it.
+// createDatabase creates name, colocated or not, applies the rendered baseline with the yugabyte role's
+// yugabyte-apply-baseline.sh exactly as the shared contract fixture does, and returns a connection pool to it.
 func (e *engine) createDatabase(database, name string, colocated bool) (*sql.DB, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -73,8 +75,8 @@ func (e *engine) createDatabase(database, name string, colocated bool) (*sql.DB,
 	if err != nil {
 		return nil, err
 	}
-	cmd := exec.CommandContext(ctx, "docker", "exec", "-i", e.container, "ysqlsh", "-X", "-h", e.container, "-U", "yugabyte",
-		"-d", name, "-v", "ON_ERROR_STOP=1", "-q")
+	const stageAndApply = `file="/tmp/frameworks-baseline-$1.sql"; cat >"$file" || exit 1; sh "$0" ysqlsh "$file" -h "$2" -U yugabyte -d "$1"; status=$?; rm -f "$file"; exit $status`
+	cmd := exec.CommandContext(ctx, "docker", "exec", "-i", e.container, "sh", "-c", stageAndApply, e.baselineApply, name, e.container)
 	cmd.Stdin = bytes.NewReader(baseline)
 	if out, runErr := cmd.CombinedOutput(); runErr != nil {
 		return nil, fmt.Errorf("apply %s baseline: %w\n%s", database, runErr, out)
