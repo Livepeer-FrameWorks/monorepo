@@ -31,7 +31,7 @@ func TestComposeStackAllowsNonLocalBindBeforePublishingMeshAddresses(t *testing.
 	if end := strings.Index(task[1:], "\n- name:"); end >= 0 {
 		task = task[:end+1]
 	}
-	if !strings.Contains(task, "compose_stack_service.publish_addrs") {
-		t.Fatalf("the non-local bind task must apply only to stacks with publish_addrs:\n%s", task)
+	if !strings.Contains(task, "compose_stack_service.ports") || !strings.Contains(task, "attribute='addrs'") {
+		t.Fatalf("the non-local bind task must apply only to stacks publishing ports on given addresses:\n%s", task)
 	}
 }

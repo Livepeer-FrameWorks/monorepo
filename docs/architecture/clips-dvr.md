@@ -329,11 +329,15 @@ of the block, the one that started it, concurrent ones and retries alike, reads 
 fill extends it, so the first byte reaches Mist as it arrives from the upstream, and Mist abandoning a read
 after its 5 s budget neither aborts the fill nor makes its retry fetch the block from the start. A fill
 whose upstream body fails mid-block requests the rest again from the first byte not yet written, at most
-twice; a resume refused because the presigned URL expired meanwhile re-resolves and resumes from the same
-byte on the fresh URL. A fill that still ends early keeps the bytes it wrote, and the next fill of that
-block requests only the rest. A playback reader whose fill cannot write the cache streams the rest of its
-span from the upstream without caching it; a processing input fails instead. Memory-only reads (a node
-under disk pressure) stream each block from the upstream per reader. `.dtsh` sidecars are
+twice; a resume refused because the presigned URL expired meanwhile re-resolves through Foghorn on the
+fill's own behalf, so it succeeds after every reader of the block has left, and resumes from the same byte
+on the fresh URL. A fill that still ends early keeps the bytes it wrote, and the next fill of that block
+requests only the rest. A playback reader whose fill cannot write the cache streams the rest of its span
+from the upstream without caching it; a processing input fails instead. Memory-only reads (a node under
+disk pressure) share a fill of the block held in memory in the same way, for at most four blocks at once;
+its bytes stay for 10 s after the fill ends so the retry of a reader that gave up reads them, and a memory
+fill that ended early is resumed from them. A memory-only read that finds four memory fills running
+streams its block from the upstream on its own. `.dtsh` sidecars are
 served from disk when present, fetched from S3 or the origin's peer relay when Foghorn has one, and 404'd
 otherwise so Mist generates and PUTs one (`api_sidecar/internal/relay/dtsh.go`). Mist receives no sidecar
 byte until the relay has the whole sidecar and validated it, so the whole fetch is bounded at 4 s, under

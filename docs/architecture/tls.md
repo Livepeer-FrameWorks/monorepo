@@ -68,6 +68,15 @@ that ServerName, as for gRPC clients. The observer has no public certificate; ex
 probers reach it through Bridge. Both observer listeners bind only loopback and the
 host's WireGuard address, so neither answers on the LAN or public interfaces.
 
+A service deployed in Docker mode reads the same paths: the `compose_stack` role
+bootstraps the CA bundle and leaf as `go_service` does, mounts their directories
+(`/etc/frameworks/pki`) read-only at the same path so Privateer's renewals reach the
+container, and adds the container to the host's `frameworks` group, which may read the
+leaf key. The render publishes every listener of the service (its HTTP, gRPC, metrics and
+internal HTTPS ports) where the native binary binds it: a mesh-only service such as the
+observer on loopback and the WireGuard address, Foghorn's internal HTTP listener on
+loopback, every other listener on all interfaces.
+
 Public HTTP remains a Caddy concern unless a service explicitly owns an HTTP
 endpoint. Foghorn's viewer redirect and MistServer pull-routing surfaces are
 separate from the gRPC split.

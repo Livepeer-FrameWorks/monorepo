@@ -1,0 +1,210 @@
+---
+# Internal-CA material a docker-mode service reads through the read-only
+# mounts the CLI renders (compose_stack_pki). The CLI's CA bundle and leaf
+# only bootstrap a host, as for the go_service role: Privateer owns the PKI
+# tree afterwards and rotates every leaf, so existing material is replaced
+# only when it no longer trusts or chains to the desired CA.
+- name: Ensure the service PKI read group
+  ansible.builtin.group:
+    name: "{{ compose_stack_pki_group }}"
+    system: true
+  when: not ansible_check_mode
+
+- name: Ensure internal CA directory
+  ansible.builtin.file:
+    path: "{{ compose_stack_pki.ca_path | dirname }}"
+    state: directory
+    mode: "0755"
+  when:
+    - not ansible_check_mode
+    - compose_stack_pki.ca_path | default('') | length > 0
+    - compose_stack_pki.ca_bundle_pem | default('') | length > 0
+
+- name: Check internal CA trust bundle holds the desired CA certificates
+  ansible.builtin.shell: |
+    set -euo pipefail
+    fingerprints() {
+      awk '/-----BEGIN CERTIFICATE-----/ { pem = "" }
+           { pem = pem $0 "\n" }
+           /-----END CERTIFICATE-----/ {
+             cmd = "openssl x509 -noout -fingerprint -sha256"
+             printf "%s", pem | cmd
+             close(cmd)
+           }' "$1" | sort -u
+    }
+    bundle={{ compose_stack_pki.ca_path | quote }}
+    test -s "$bundle"
+    desired="$(mktemp)"
+    trap 'rm -f "$desired"' EXIT
+    cat > "$desired"
+    missing="$(comm -23 <(fingerprints "$desired") <(fingerprints "$bundle"))"
+    test -z "$missing"
+  args:
+    executable: /bin/bash
+    stdin: "{{ compose_stack_pki.ca_bundle_pem }}"
+  register: compose_stack_pki_ca_check
+  check_mode: false
+  changed_when: false
+  failed_when: false
+  when:
+    - compose_stack_pki.ca_path | default('') | length > 0
+    - compose_stack_pki.ca_bundle_pem | default('') | length > 0
+
+- name: Render internal CA trust bundle
+  ansible.builtin.copy:
+    dest: "{{ compose_stack_pki.ca_path }}"
+    content: "{{ compose_stack_pki.ca_bundle_pem }}"
+    owner: root
+    group: root
+    mode: "0644"
+  register: compose_stack_pki_ca_render
+  when:
+    - not ansible_check_mode
+    - compose_stack_pki_ca_check.rc | default(0) != 0
+
+- name: Check existing internal certificate/key pair
+  ansible.builtin.shell: |
+    set -euo pipefail
+    test -s {{ compose_stack_pki.cert_path | quote }}
+    test -s {{ compose_stack_pki.key_path | quote }}
+    cert_hash="$(openssl x509 -in {{ compose_stack_pki.cert_path | quote }} -pubkey -noout 2>/dev/null \
+      | openssl pkey -pubin -outform der 2>/dev/null \
+      | sha256sum \
+      | awk '{print $1}')"
+    key_hash="$(openssl pkey -in {{ compose_stack_pki.key_path | quote }} -pubout -outform der 2>/dev/null \
+      | sha256sum \
+      | awk '{print $1}')"
+    test -n "$cert_hash"
+    test "$cert_hash" = "$key_hash"
+    # openssl verify also rejects an expired leaf.
+    ca_bundle="$(mktemp)"
+    trap 'rm -f "$ca_bundle"' EXIT
+    cat > "$ca_bundle"
+    openssl verify -CAfile "$ca_bundle" {{ compose_stack_pki.cert_path | quote }} >/dev/null
+  args:
+    executable: /bin/bash
+    stdin: "{{ compose_stack_pki.ca_bundle_pem }}"
+  register: compose_stack_pki_pair_check
+  check_mode: false
+  changed_when: false
+  failed_when: false
+  when:
+    - compose_stack_pki.cert_path | default('') | length > 0
+    - compose_stack_pki.key_path | default('') | length > 0
+    - compose_stack_pki.cert_pem | default('') | length > 0
+    - compose_stack_pki.key_pem | default('') | length > 0
+
+- name: Report pending bootstrap internal certificate pair under --check
+  ansible.builtin.debug:
+    msg: >-
+      {{ compose_stack_name }} would update bootstrap internal certificate pair
+      at {{ compose_stack_pki.cert_path }} and {{ compose_stack_pki.key_path }}
+  changed_when: true
+  when:
+    - ansible_check_mode
+    - compose_stack_pki_pair_check.rc | default(0) != 0
+
+- name: Create temporary internal certificate file
+  ansible.builtin.tempfile:
+    state: file
+    suffix: ".crt"
+  register: compose_stack_pki_temp_cert
+  when:
+    - not ansible_check_mode
+    - compose_stack_pki_pair_check.rc | default(0) != 0
+
+- name: Create temporary internal key file
+  ansible.builtin.tempfile:
+    state: file
+    suffix: ".key"
+  register: compose_stack_pki_temp_key
+  no_log: true
+  when:
+    - not ansible_check_mode
+    - compose_stack_pki_pair_check.rc | default(0) != 0
+
+- name: Stage bootstrap internal certificate
+  ansible.builtin.copy:
+    dest: "{{ compose_stack_pki_temp_cert.path }}"
+    content: "{{ compose_stack_pki.cert_pem }}"
+    owner: root
+    group: root
+    mode: "0600"
+  when:
+    - not ansible_check_mode
+    - compose_stack_pki_pair_check.rc | default(0) != 0
+
+- name: Stage bootstrap internal key
+  ansible.builtin.copy:
+    dest: "{{ compose_stack_pki_temp_key.path }}"
+    content: "{{ compose_stack_pki.key_pem }}"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+  when:
+    - not ansible_check_mode
+    - compose_stack_pki_pair_check.rc | default(0) != 0
+
+# Owner and modes match the go_service bootstrap and Privateer's runtime
+# writer, and the swap holds the same flock on the certificate directory.
+- name: Install bootstrap internal certificate pair atomically
+  ansible.builtin.shell: |
+    set -eu
+    cert_dir={{ (compose_stack_pki.cert_path | dirname) | quote }}
+    install -d -o privateer -g {{ compose_stack_pki_group | quote }} -m 2750 "$cert_dir"
+    (
+      flock -x 9
+      install -o privateer -g {{ compose_stack_pki_group | quote }} -m 0644 \
+        {{ compose_stack_pki_temp_cert.path | quote }} \
+        {{ compose_stack_pki.cert_path | quote }}
+      install -o privateer -g {{ compose_stack_pki_group | quote }} -m 0640 \
+        {{ compose_stack_pki_temp_key.path | quote }} \
+        {{ compose_stack_pki.key_path | quote }}
+    ) 9<"$cert_dir"
+    rm -f {{ compose_stack_pki_temp_cert.path | quote }} {{ compose_stack_pki_temp_key.path | quote }}
+  args:
+    executable: /bin/bash
+  register: compose_stack_pki_pair_install
+  changed_when: true
+  when:
+    - not ansible_check_mode
+    - compose_stack_pki_pair_check.rc | default(0) != 0
+
+- name: Stat internal PKI material
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop: >-
+    {{ [compose_stack_pki.ca_path | default(''), compose_stack_pki.cert_path | default(''),
+        compose_stack_pki.key_path | default('')] | select | list }}
+  register: compose_stack_pki_material
+  when: not ansible_check_mode
+
+# A bind mount of a missing host path would create an empty root-owned
+# directory in its place, and the service would start without its TLS.
+- name: Fail when internal PKI material is missing
+  ansible.builtin.fail:
+    msg: >-
+      {{ compose_stack_name }} is configured for internal TLS but
+      {{ compose_stack_pki_material.results | rejectattr('stat.exists') | map(attribute='item') | join(', ') }}
+      is missing.
+  when:
+    - not ansible_check_mode
+    - compose_stack_pki_material.results | default([]) | rejectattr('stat.exists') | list | length > 0
+
+- name: Resolve the service PKI read group id
+  ansible.builtin.getent:
+    database: group
+    key: "{{ compose_stack_pki_group }}"
+  when:
+    - not ansible_check_mode
+    - compose_stack_pki.key_path | default('') | length > 0
+
+# The container joins the host's PKI read group by id; its own image has no
+# group of that name.
+- name: Set the container's PKI read group id
+  ansible.builtin.set_fact:
+    compose_stack_pki_gid: "{{ ansible_facts.getent_group[compose_stack_pki_group][1] }}"
+  when:
+    - not ansible_check_mode
+    - compose_stack_pki.key_path | default('') | length > 0

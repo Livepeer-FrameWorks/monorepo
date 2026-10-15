@@ -503,6 +503,31 @@ func TestColdBlockResumeAfterPresignExpiryRenewsAndContinues(t *testing.T) {
 // and the block is never requested from its first byte again. The reader that
 // gives up stands for Mist's 5 s source read timeout.
 func TestColdBlockFillOutlivesReaderThatGaveUp(t *testing.T) {
+	s := testFillOutlivesReaderThatGaveUp(t, admission.CacheToDisk)
+	store := NewBlockStore(filepath.Join(s.basePath, "vod", "giveup.mkv"), 64*1024)
+	if !eventuallyHasBlock(store, 0) {
+		t.Fatal("block was not cached")
+	}
+}
+
+// A read that admission keeps off disk (a node under disk pressure) shares a
+// memory fill of its block the same way: the reader giving up does not end
+// the fill, the retry reads on from the fill's bytes without requesting the
+// block from its first byte again, and nothing lands on disk.
+func TestMemoryOnlyBlockFillOutlivesReaderThatGaveUp(t *testing.T) {
+	s := testFillOutlivesReaderThatGaveUp(t, admission.CacheMemoryOnly)
+	store := NewBlockStore(filepath.Join(s.basePath, "vod", "giveup.mkv"), 64*1024)
+	if _, err := os.Stat(store.Dir()); !os.IsNotExist(err) {
+		t.Fatalf("memory-only read touched the block cache dir: stat err=%v", err)
+	}
+}
+
+// testFillOutlivesReaderThatGaveUp runs a reader that gives up on a cold block
+// whose upstream stalls mid-body and resumes late, then a second reader, and
+// requires the second reader to receive the whole block while the block is
+// requested from its first byte only once.
+func testFillOutlivesReaderThatGaveUp(t *testing.T, decision admission.CacheDecision) *Server {
+	t.Helper()
 	bounds := testUpstreamBounds
 	bounds.responseHeader = 2 * time.Second
 	withUpstreamBounds(t, bounds)
@@ -549,7 +574,7 @@ func TestColdBlockFillOutlivesReaderThatGaveUp(t *testing.T) {
 		close(release)
 		up.Close()
 	})
-	s := relayForUpstream(t, up, "giveup", size, admission.CacheToDisk, size)
+	s := relayForUpstream(t, up, "giveup", size, decision, size)
 	ts := mount(t, s)
 	defer ts.Close()
 	url := ts.URL + "/internal/artifact/vod/giveup.mkv"
@@ -571,8 +596,114 @@ func TestColdBlockFillOutlivesReaderThatGaveUp(t *testing.T) {
 	if fromStart != 1 {
 		t.Fatalf("upstream requests = %v: the block was requested from its first byte %d times, want once", seen, fromStart)
 	}
-	store := NewBlockStore(filepath.Join(s.basePath, "vod", "giveup.mkv"), size)
-	if !eventuallyHasBlock(store, 0) {
-		t.Fatal("block was not cached")
+	return s
+}
+
+// A presigned URL that expires while a block fill is resuming, after the
+// reader that started the fill has gone, is renewed by the fill itself: the
+// fill re-resolves on its own context, resumes on the fresh URL from the byte
+// it stopped at, and caches the block.
+func TestColdBlockFillRenewsPresignAfterReaderLeft(t *testing.T) {
+	withUpstreamBounds(t, testUpstreamBounds)
+	const size = 64 * 1024
+	const sent = 16 * 1024
+	body := patternBody(size)
+	var (
+		mu     sync.Mutex
+		oldUse int
+		seen   []string
+	)
+	release := make(chan struct{})
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sig := r.URL.Query().Get("sig")
+		mu.Lock()
+		seen = append(seen, sig+" "+r.Header.Get("Range"))
+		first := false
+		if sig == "old" {
+			oldUse++
+			first = oldUse == 1
+		}
+		mu.Unlock()
+		if sig == "old" && !first {
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = io.WriteString(w, "<Error><Code>AccessDenied</Code><Message>Request has expired</Message></Error>")
+			return
+		}
+		start, end := parseTestRange(r, size)
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, size))
+		w.Header().Set("Content-Length", strconv.FormatInt(end-start+1, 10))
+		w.WriteHeader(http.StatusPartialContent)
+		part := body[start : end+1]
+		if first {
+			_, _ = w.Write(part[:sent])
+			w.(http.Flusher).Flush()
+			select {
+			case <-r.Context().Done():
+			case <-release:
+			}
+			return
+		}
+		_, _ = w.Write(part)
+	}))
+	t.Cleanup(func() {
+		close(release)
+		up.Close()
+	})
+	resolver := &sequenceResolver{out: []*ResolveResult{presignedResult(up.URL, "old", size), presignedResult(up.URL, "new", size)}}
+	s := New(Options{
+		BasePath:  t.TempDir(),
+		Admitter:  &fakeAdmitter{decision: admission.CacheToDisk},
+		Resolver:  resolver,
+		BlockSize: size,
+	})
+	ts := mount(t, s)
+	defer ts.Close()
+
+	// The reader leaves before the stalled body hits the read-stall bound, so
+	// the fill resumes, and meets the expired URL, without it.
+	got, _, _, err := getWithin(t, ts.URL+"/internal/artifact/vod/expiring.mkv", fmt.Sprintf("bytes=0-%d", size-1), testUpstreamBounds.readStall/2)
+	if err == nil && len(got) == size {
+		t.Fatal("reader got the whole block before it left; the stall does not outlast it")
+	}
+
+	store := NewBlockStore(filepath.Join(s.basePath, "vod", "expiring.mkv"), size)
+	cached := eventuallyHasBlock(store, 0)
+	mu.Lock()
+	reqs := append([]string(nil), seen...)
+	mu.Unlock()
+	if !cached {
+		t.Fatalf("block was not cached after its reader left (upstream requests %v, resolver calls %d), want the fill to renew and finish", reqs, resolver.callCount())
+	}
+	if want := fmt.Sprintf("new bytes=%d-%d", sent, size-1); reqs[len(reqs)-1] != want {
+		t.Fatalf("upstream requests = %v, want the last to resume on the renewed URL at %q", reqs, want)
+	}
+	cachedBytes, err := os.ReadFile(store.BlockPath(0))
+	if err != nil || !bytes.Equal(cachedBytes, body) {
+		t.Fatalf("cached block: %d bytes equal=%v err=%v, want the whole block", len(cachedBytes), bytes.Equal(cachedBytes, body), err)
+	}
+}
+
+// Memory fills hold at most maxMemoryFills blocks: with that many running, a
+// further memory-only read gets no fill and streams its block on its own.
+func TestMemoryFillsAreBounded(t *testing.T) {
+	withUpstreamBounds(t, testUpstreamBounds)
+	const blockSize = 1024
+	const size = blockSize * (maxMemoryFills + 1)
+	up := newStallUpstream(t, patternBody(size), func(int, *http.Request) int { return 0 })
+	s := relayFor(t, up, "bounded", size, admission.CacheMemoryOnly, blockSize)
+	waitFillsOnCleanup(t, s)
+	store := NewBlockStore(filepath.Join(s.basePath, "vod", "bounded.mkv"), blockSize)
+	src := fillSource{target: upstreamTarget{url: up.srv.URL + "/o", client: s.httpc}}
+	ctx := context.Background()
+	for idx := range int64(maxMemoryFills) {
+		if fill := s.claimMemoryFill(ctx, store, blockSpan{Idx: idx, From: 0, To: blockSize - 1}, size, src); fill == nil {
+			t.Fatalf("memory fill %d refused below the bound", idx)
+		}
+	}
+	if fill := s.claimMemoryFill(ctx, store, blockSpan{Idx: 0, From: 0, To: blockSize - 1}, size, src); fill == nil {
+		t.Fatal("a read of a block with a running memory fill got no fill, want the running one")
+	}
+	if fill := s.claimMemoryFill(ctx, store, blockSpan{Idx: maxMemoryFills, From: 0, To: blockSize - 1}, size, src); fill != nil {
+		t.Fatalf("memory fill %d started with %d running, want none past the bound", maxMemoryFills, maxMemoryFills)
 	}
 }

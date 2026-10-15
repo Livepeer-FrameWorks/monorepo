@@ -1,4 +1,9 @@
 ---
+- name: Compose_stack | internal PKI
+  ansible.builtin.import_tasks: pki.yml
+  tags: [install, configure, pki]
+  when: compose_stack_pki | default({}) | length > 0
+
 - name: Compose_stack | install (pull + up)
   ansible.builtin.import_tasks: install.yml
   tags: [install, configure, service]

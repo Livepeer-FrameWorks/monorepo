@@ -7625,7 +7625,6 @@ func (s *PeriscopeServer) GetRebufferingEvents(ctx context.Context, req *perisco
 	defer func() { _ = rows.Close() }()
 
 	var events []*periscopepb.RebufferingEvent
-	var keys []string
 	for rows.Next() {
 		var timestamp time.Time
 		var rebufferStart, rebufferEnd uint8
@@ -7636,10 +7635,11 @@ func (s *PeriscopeServer) GetRebufferingEvents(ctx context.Context, req *perisco
 			return nil, wrapClickhouseError(err, "scan rebuffering event")
 		}
 
-		key := streamIDStr + "|" + nodeID + "|" + ingestID
-		keys = append(keys, key)
+		// The ID is the keyset tuple after the edge time, so a cursor built
+		// from any event's timestamp and ID, as the Gateway does for each
+		// connection edge, resumes paging right after that event.
 		event := &periscopepb.RebufferingEvent{
-			Id:          timestamp.Format(time.RFC3339Nano) + "|" + key,
+			Id:          streamIDStr + "|" + nodeID + "|" + ingestID,
 			Timestamp:   timestamppb.New(timestamp),
 			TenantId:    tenantIDStr,
 			StreamId:    streamIDStr,
@@ -7659,20 +7659,18 @@ func (s *PeriscopeServer) GetRebufferingEvents(ctx context.Context, req *perisco
 	resultsLen := len(events)
 	if resultsLen > params.Limit {
 		events = events[:params.Limit]
-		keys = keys[:params.Limit]
 	}
 
 	if params.Direction == pagination.Backward {
 		slices.Reverse(events)
-		slices.Reverse(keys)
 	}
 
 	total := <-countCh
 
 	var startCursor, endCursor string
 	if len(events) > 0 {
-		startCursor = pagination.EncodeCursor(events[0].Timestamp.AsTime(), keys[0])
-		endCursor = pagination.EncodeCursor(events[len(events)-1].Timestamp.AsTime(), keys[len(keys)-1])
+		startCursor = pagination.EncodeCursor(events[0].Timestamp.AsTime(), events[0].Id)
+		endCursor = pagination.EncodeCursor(events[len(events)-1].Timestamp.AsTime(), events[len(events)-1].Id)
 	}
 
 	return &periscopepb.GetRebufferingEventsResponse{

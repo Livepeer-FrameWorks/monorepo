@@ -2,6 +2,7 @@ package provisioner
 
 import (
 	"context"
+	"fmt"
 	"maps"
 	"reflect"
 	"slices"
@@ -1067,24 +1068,164 @@ func TestServiceComposeVarsPublishesBridgeOnLoopbackAndMesh(t *testing.T) {
 		return vars["compose_stack_service"].(map[string]any)
 	}
 
-	if got := render("bridge", inventory.Host{Name: "regional-eu-1", WireguardIP: "10.88.0.1"})["publish_addrs"]; !reflect.DeepEqual(got, []string{"127.0.0.1", "10.88.0.1"}) {
-		t.Fatalf("bridge publish_addrs with mesh = %#v, want [127.0.0.1 10.88.0.1]", got)
+	if got := composePortSpecs(t, render("bridge", inventory.Host{Name: "regional-eu-1", WireguardIP: "10.88.0.1"})); !reflect.DeepEqual(got, []string{"127.0.0.1:18000:18000", "10.88.0.1:18000:18000"}) {
+		t.Fatalf("bridge ports with mesh = %#v, want loopback and mesh", got)
 	}
-	if got := render("bridge", inventory.Host{Name: "regional-eu-1"})["publish_addrs"]; !reflect.DeepEqual(got, []string{"127.0.0.1"}) {
-		t.Fatalf("bridge publish_addrs without mesh = %#v, want [127.0.0.1]", got)
+	if got := composePortSpecs(t, render("bridge", inventory.Host{Name: "regional-eu-1"})); !reflect.DeepEqual(got, []string{"127.0.0.1:18000:18000"}) {
+		t.Fatalf("bridge ports without mesh = %#v, want loopback", got)
 	}
-	if got := render("commodore", inventory.Host{Name: "central-eu-1", WireguardIP: "10.88.0.2"})["publish_addrs"]; !reflect.DeepEqual(got, []string{}) {
-		t.Fatalf("commodore publish_addrs = %#v, want none (all interfaces)", got)
+	if got := composePortSpecs(t, render("commodore", inventory.Host{Name: "central-eu-1", WireguardIP: "10.88.0.2"})); !reflect.DeepEqual(got, []string{"18000:18000", "19001:19001"}) {
+		t.Fatalf("commodore ports = %#v, want its HTTP and gRPC ports on every interface", got)
 	}
 
 	tmpl := readRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/compose_stack/templates/generic-compose.yml.j2")
 	for _, want := range []string{
-		"{% for addr in compose_stack_service.publish_addrs %}",
-		`- "{{ addr }}:{{ compose_stack_service.port }}:{{ container_port }}"`,
+		"{% for published in compose_stack_service.ports %}",
+		"{% for addr in published.addrs %}",
+		`- "{{ addr }}:{{ published.port }}:{{ container_port }}"`,
+		`- "{{ published.port }}:{{ container_port }}"`,
 	} {
 		if !strings.Contains(tmpl, want) {
-			t.Errorf("generic-compose.yml.j2 does not publish per address; missing %q", want)
+			t.Errorf("generic-compose.yml.j2 does not publish every port per address; missing %q", want)
 		}
+	}
+}
+
+// composePortSpecs renders compose_stack_service.ports the way
+// generic-compose.yml.j2 writes them: addr:host:container per address, or
+// host:container on every interface.
+func composePortSpecs(t *testing.T, service map[string]any) []string {
+	t.Helper()
+	ports, ok := service["ports"].([]map[string]any)
+	if !ok {
+		t.Fatalf("compose_stack_service.ports = %#v, want a list of published ports", service["ports"])
+	}
+	var specs []string
+	for _, published := range ports {
+		addrs, _ := published["addrs"].([]string)
+		if len(addrs) == 0 {
+			specs = append(specs, fmt.Sprintf("%v:%v", published["port"], published["container_port"]))
+			continue
+		}
+		for _, addr := range addrs {
+			specs = append(specs, fmt.Sprintf("%s:%v:%v", addr, published["port"], published["container_port"]))
+		}
+	}
+	return specs
+}
+
+// A docker-mode service publishes every port its binary listens on, bound as
+// the native render binds them, and mounts the directories of its internal-CA
+// trust bundle and leaf read-only, so its internal TLS listeners serve and
+// its clients verify peers as they do natively.
+func TestServiceComposeVarsPublishesEveryListenerAndMountsInternalPKI(t *testing.T) {
+	host := inventory.Host{Name: "central-eu-1", WireguardIP: "10.88.0.3"}
+	pkiEnv := func(service string) map[string]string {
+		return map[string]string{
+			"GRPC_TLS_CA_PATH":   "/etc/frameworks/pki/ca.crt",
+			"GRPC_TLS_CERT_PATH": "/etc/frameworks/pki/services/" + service + "/tls.crt",
+			"GRPC_TLS_KEY_PATH":  "/etc/frameworks/pki/services/" + service + "/tls.key",
+		}
+	}
+	cases := []struct {
+		service string
+		port    int
+		env     map[string]string
+		want    []string
+	}{
+		{"network-observer", 18024, map[string]string{"NETWORK_OBSERVER_PORT": "18024"}, []string{
+			"127.0.0.1:18024:18024", "10.88.0.3:18024:18024", "127.0.0.1:18034:18034", "10.88.0.3:18034:18034",
+		}},
+		{"commodore", 18001, nil, []string{"18001:18001", "19001:19001"}},
+		{"quartermaster", 18002, nil, []string{"18002:18002", "19002:19002"}},
+		{"purser", 18003, nil, []string{"18003:18003", "19003:19003"}},
+		{"periscope-query", 18004, nil, []string{"18004:18004", "19004:19004"}},
+		{"signalman", 18009, nil, []string{"18009:18009", "19005:19005"}},
+		{"skipper", 18018, nil, []string{"18018:18018", "19007:19007"}},
+		{"deckhand", 18015, nil, []string{"18015:18015", "19006:19006"}},
+		{"navigator", 18010, map[string]string{"NAVIGATOR_PORT": "18010", "NAVIGATOR_GRPC_PORT": "18011"}, []string{"18010:18010", "18011:18011"}},
+		{"lookout", 18022, nil, []string{"18022:18022", "19008:19008"}},
+		{"bosun", 18013, nil, []string{"18013:18013", "19009:19009"}},
+		{"decklog", 18006, nil, []string{"18006:18006", "18026:18026"}},
+		{"foghorn", 18008, map[string]string{
+			"FOGHORN_INTERNAL_GRPC_BIND_ADDR": ":18019", "FOGHORN_EXTERNAL_GRPC_BIND_ADDR": ":18029",
+			"FOGHORN_INTERNAL_HTTP_PORT": "18027", "FOGHORN_INTERNAL_HTTP_BIND_ADDR": "127.0.0.1",
+		}, []string{"18008:18008", "18019:18019", "18029:18029", "127.0.0.1:18027:18027"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.service, func(t *testing.T) {
+			env := pkiEnv(tc.service)
+			maps.Copy(env, tc.env)
+			vars, err := serviceComposeVars(context.Background(), ServiceRoleConfig{
+				ServiceName:  tc.service,
+				DefaultPort:  tc.port,
+				DefaultImage: "ghcr.io/livepeer-frameworks/frameworks-" + tc.service + ":test",
+			}, host, ServiceConfig{Mode: "docker", EnvVars: env, Metadata: map[string]any{
+				"internal_ca_bundle_pem": "CA PEM",
+				"internal_tls_cert_pem":  "LEAF PEM",
+				"internal_tls_key_pem":   "KEY PEM",
+			}}, RoleBuildHelpers{})
+			if err != nil {
+				t.Fatalf("serviceComposeVars: %v", err)
+			}
+			service := vars["compose_stack_service"].(map[string]any)
+			if got := composePortSpecs(t, service); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("ports = %#v, want %#v", got, tc.want)
+			}
+			var pkiMounts []string
+			for _, volume := range service["volumes"].([]string) {
+				if strings.Contains(volume, "/etc/frameworks/pki") {
+					pkiMounts = append(pkiMounts, volume)
+				}
+			}
+			if !reflect.DeepEqual(pkiMounts, []string{"/etc/frameworks/pki:/etc/frameworks/pki:ro"}) {
+				t.Fatalf("volumes = %#v, want the internal PKI directory mounted read-only once", service["volumes"])
+			}
+			pki, _ := vars["compose_stack_pki"].(map[string]any)
+			want := map[string]any{
+				"ca_path":       "/etc/frameworks/pki/ca.crt",
+				"cert_path":     "/etc/frameworks/pki/services/" + tc.service + "/tls.crt",
+				"key_path":      "/etc/frameworks/pki/services/" + tc.service + "/tls.key",
+				"ca_bundle_pem": "CA PEM",
+				"cert_pem":      "LEAF PEM",
+				"key_pem":       "KEY PEM",
+			}
+			if !reflect.DeepEqual(pki, want) {
+				t.Fatalf("compose_stack_pki = %#v, want %#v", pki, want)
+			}
+			if tc.service == "foghorn" {
+				if got := vars["compose_stack_env"].(map[string]any)["FOGHORN_INTERNAL_HTTP_BIND_ADDR"]; got != "0.0.0.0" {
+					t.Fatalf("FOGHORN_INTERNAL_HTTP_BIND_ADDR = %v, want 0.0.0.0 inside the container behind its loopback publish", got)
+				}
+			}
+		})
+	}
+
+	// Without a leaf the observer opens no internal HTTPS listener, and a
+	// service without internal TLS mounts nothing.
+	vars, err := serviceComposeVars(context.Background(), ServiceRoleConfig{ServiceName: "network-observer", DefaultPort: 18024, DefaultImage: "ghcr.io/livepeer-frameworks/frameworks-network-observer:test"},
+		host, ServiceConfig{Mode: "docker", Metadata: map[string]any{}}, RoleBuildHelpers{})
+	if err != nil {
+		t.Fatalf("serviceComposeVars: %v", err)
+	}
+	service := vars["compose_stack_service"].(map[string]any)
+	if got := composePortSpecs(t, service); !reflect.DeepEqual(got, []string{"127.0.0.1:18024:18024", "10.88.0.3:18024:18024"}) {
+		t.Fatalf("observer ports without a leaf = %#v", got)
+	}
+	if got := service["volumes"]; !reflect.DeepEqual(got, []string{}) {
+		t.Fatalf("volumes without internal TLS = %#v, want none", got)
+	}
+	if got := vars["compose_stack_pki"]; !reflect.DeepEqual(got, map[string]any{}) {
+		t.Fatalf("compose_stack_pki without internal TLS = %#v, want empty", got)
+	}
+
+	tmpl := readRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/compose_stack/templates/generic-compose.yml.j2")
+	if !strings.Contains(tmpl, "group_add:") || !strings.Contains(tmpl, `- "{{ compose_stack_pki_gid }}"`) {
+		t.Fatalf("generic-compose.yml.j2 does not join the PKI read group:\n%s", tmpl)
+	}
+	tasks := readRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/compose_stack/tasks/main.yml")
+	if pkiAt, installAt := strings.Index(tasks, "import_tasks: pki.yml"), strings.Index(tasks, "import_tasks: install.yml"); pkiAt < 0 || pkiAt > installAt {
+		t.Fatalf("compose_stack must bootstrap internal PKI before it applies the stack:\n%s", tasks)
 	}
 }
 
@@ -1116,7 +1257,7 @@ func TestNetworkObserverBindsToLoopbackAndMesh(t *testing.T) {
 	if err != nil {
 		t.Fatalf("serviceComposeVars: %v", err)
 	}
-	if got := compose["compose_stack_service"].(map[string]any)["publish_addrs"]; !reflect.DeepEqual(got, []string{"127.0.0.1", "10.88.0.3"}) {
-		t.Fatalf("observer publish_addrs = %#v, want [127.0.0.1 10.88.0.3]", got)
+	if got := composePortSpecs(t, compose["compose_stack_service"].(map[string]any)); !reflect.DeepEqual(got, []string{"127.0.0.1:18024:18024", "10.88.0.3:18024:18024"}) {
+		t.Fatalf("observer ports = %#v, want loopback and mesh", got)
 	}
 }

@@ -19,14 +19,18 @@ import (
 )
 
 // sequenceResolver hands out its results in order, the last one repeatedly,
-// stamped as freshly resolved the way controlResolver stamps them.
+// stamped as freshly resolved the way controlResolver stamps them. Like
+// controlResolver, it fails a resolve whose context has ended.
 type sequenceResolver struct {
 	mu    sync.Mutex
 	out   []*ResolveResult
 	calls int
 }
 
-func (r *sequenceResolver) Resolve(ResolveContext) (*ResolveResult, error) {
+func (r *sequenceResolver) Resolve(rc ResolveContext) (*ResolveResult, error) {
+	if rc.Ctx != nil && rc.Ctx.Err() != nil {
+		return nil, rc.Ctx.Err()
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	idx := min(r.calls, len(r.out)-1)

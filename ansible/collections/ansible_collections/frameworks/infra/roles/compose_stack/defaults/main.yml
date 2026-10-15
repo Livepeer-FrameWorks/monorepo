@@ -12,18 +12,28 @@
 #                                  compose shape is non-generic, e.g.
 #                                  chatwoot app+sidekiq)
 #   compose_stack_service          {image, port, container_port, health_path,
-#                                  publish_addrs} dict for the single-service
-#                                  generic shape; publish_addrs limits the host
-#                                  addresses the port is published on (empty =
+#                                  ports, volumes, extra_hosts} dict for the
+#                                  single-service generic shape; port is the
+#                                  health-gated port, ports lists every
+#                                  published port as {port, container_port,
+#                                  addrs}, where addrs limits the host
+#                                  addresses it is published on (empty =
 #                                  every interface);
 #                                  role renders compose from the packaged
 #                                  templates/generic-compose.yml.j2
+#
+# compose_stack_pki {ca_path, cert_path, key_path, ca_bundle_pem, cert_pem,
+# key_pem} is the internal-CA material a generic service reads from the
+# directories it mounts read-only; the role bootstraps it as the go_service
+# role does and the container joins compose_stack_pki_group.
 
 compose_stack_name: ""
 compose_stack_project_dir: "/opt/frameworks/{{ compose_stack_name }}"
 compose_stack_compose_content: ""
 compose_stack_files: {}
 compose_stack_service: {}
+compose_stack_pki: {}
+compose_stack_pki_group: frameworks
 compose_stack_state_dirs: []
 compose_stack_env: {}
 compose_stack_registry_auth: {}

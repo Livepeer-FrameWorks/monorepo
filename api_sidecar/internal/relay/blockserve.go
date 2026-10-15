@@ -9,8 +9,8 @@ package relay
 // Concurrency: when admission grants CacheToDisk, one block fill runs
 // per (asset, block) independent of any reader (blockFills); every
 // reader of the block, concurrent or retrying, reads the same fill.
-// Memory-only viewers have no shared file to read and each issue
-// their own S3 range fetch.
+// Memory-only viewers share a fill of the block held in memory, within
+// maxMemoryFills blocks; past that each issues its own S3 range fetch.
 
 import (
 	"context"
@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -210,16 +209,22 @@ func (s *Server) serveViaBlockCache(c *gin.Context, kind, hash, ext, localPath s
 		return upstreamTarget{url: upstreamURL, grantID: res.PeerRelayGrantID, client: upstreamClient}, true
 	}
 	// A block fill outlives this request, so it renews a copy of the current
-	// resolution and leaves this request's own resolution alone.
+	// resolution and leaves this request's own resolution alone. Its renewal
+	// resolves on a context this request ending does not cancel; the control
+	// stream bounds each resolve on its own.
+	var fillRenew func(*ResolveResult) (*ResolveResult, bool)
+	if renew != nil {
+		fillRenew = s.resolveRenewer(context.WithoutCancel(c.Request.Context()), kind, hash, ext)
+	}
 	fillFrom := func() fillSource {
 		src := fillSource{
 			target:  upstreamTarget{url: upstreamURL, grantID: res.PeerRelayGrantID, client: upstreamClient},
 			defrost: recordDefrost,
 		}
-		if renew != nil {
+		if fillRenew != nil {
 			fillRes := res
 			src.renew = func() (upstreamTarget, bool) {
-				fresh, ok := renew(fillRes)
+				fresh, ok := fillRenew(fillRes)
 				if !ok {
 					return upstreamTarget{}, false
 				}
@@ -269,21 +274,27 @@ func (s *Server) serveViaBlockCache(c *gin.Context, kind, hash, ext, localPath s
 // retrying reader of the block shares one upstream fetch. A playback reader
 // whose fill cannot write the cache continues its span straight from the
 // upstream; a processing input (strictCache) fails instead, because Mist will
-// seek these bytes again. Memory-only reads stream from the upstream without
-// a fill.
+// seek these bytes again. A memory-only read reads the block's memory fill the
+// same way, and streams from the upstream without a fill when maxMemoryFills
+// fills are running.
 func (s *Server) serveBlockSpan(ctx context.Context, httpc *http.Client, w io.Writer, store *BlockStore, span blockSpan, totalSize int64, mediaURL, grantID string, decision admission.CacheDecision, strictCache bool, defrost func(int64), renewMidBlock func() (upstreamTarget, bool), fillFrom func() fillSource) error {
 	if served, err := s.serveWarmBlock(w, store, span); served || err != nil {
 		return err
 	}
-	if decision != admission.CacheToDisk {
-		return s.streamBlockFromS3(ctx, httpc, w, store, span, totalSize, mediaURL, grantID, defrost, renewMidBlock)
-	}
-	fill, err := s.claimBlockFill(ctx, store, span, totalSize, fillFrom())
-	if err == nil && fill == nil {
-		// The block turned warm between the first look and the claim.
-		if served, warmErr := s.serveWarmBlock(w, store, span); served || warmErr != nil {
-			return warmErr
+	var (
+		fill *blockFill
+		err  error
+	)
+	if decision == admission.CacheToDisk {
+		fill, err = s.claimBlockFill(ctx, store, span, totalSize, fillFrom())
+		if err == nil && fill == nil {
+			// The block turned warm between the first look and the claim.
+			if served, warmErr := s.serveWarmBlock(w, store, span); served || warmErr != nil {
+				return warmErr
+			}
 		}
+	} else if fill = s.claimMemoryFill(ctx, store, span, totalSize, fillFrom()); fill == nil {
+		return s.streamBlockFromS3(ctx, httpc, w, store, span, totalSize, mediaURL, grantID, defrost, renewMidBlock)
 	}
 	pos := span.From
 	if err == nil && fill != nil {
@@ -318,7 +329,7 @@ func (s *Server) serveBlockSpan(ctx context.Context, httpc *http.Client, w io.Wr
 func readBlockFill(ctx context.Context, w io.Writer, fill *blockFill, span blockSpan) (int64, error) {
 	flusher, canFlush := w.(http.Flusher)
 	pos := span.From
-	var file *os.File
+	var file fillReader
 	defer func() {
 		if file != nil {
 			_ = file.Close()

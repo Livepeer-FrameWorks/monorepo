@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/pagination"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -380,5 +381,87 @@ func TestRebufferingTransitionsFollowEventOrder_RealClickHouse(t *testing.T) {
 	}
 	if got := describe(paged); !slices.Equal(got, want) {
 		t.Fatalf("paged events = %v\nwant           %v", got, want)
+	}
+}
+
+// TestRebufferingEdgeCursorsResumePaging_RealClickHouse pages from every
+// event of one page with the cursor the Gateway gives that event's connection
+// edge, the event's timestamp and ID, in both directions. Two nodes report an
+// edge in the same millisecond, so the keyset tie-break after the edge time
+// decides the boundary. Each page must hold exactly the events after (or
+// before) that event in the full listing.
+func TestRebufferingEdgeCursorsResumePaging_RealClickHouse(t *testing.T) {
+	db := startQueryPackClickHouse(t)
+	server := NewPeriscopeServer(db, logging.NewLoggerWithService("rebuffering-edge-cursor-real-ch-test"))
+	ctx := serviceTestContext()
+	const streamID = "5eedfeed-11fe-ca57-feed-11feca5700c5"
+	start := time.Now().UTC().Truncate(time.Second).Add(-10 * time.Minute)
+
+	edge := `INSERT INTO periscope.stream_health_samples
+		(timestamp, tenant_id, stream_id, internal_name, node_id, buffer_state, ingest_id, buffer_edge_at)
+		VALUES (?, ?, ?, 'rebuffer-edge-cursor', ?, ?, ?, fromUnixTimestamp64Milli(?))`
+	samples := []struct {
+		edgeAt      time.Duration
+		node, state string
+		ingestID    string
+	}{
+		{100 * time.Millisecond, "node-a", "FULL", "90000000-0000-4000-8000-000000000001"},
+		{100 * time.Millisecond, "node-b", "FULL", "90000000-0000-4000-8000-000000000002"},
+		{5100 * time.Millisecond, "node-a", "DRY", "90000000-0000-4000-8000-000000000003"},
+		{5100 * time.Millisecond, "node-b", "DRY", "90000000-0000-4000-8000-000000000004"},
+		{9300 * time.Millisecond, "node-a", "RECOVER", "90000000-0000-4000-8000-000000000005"},
+	}
+	for _, sample := range samples {
+		at := start.Add(sample.edgeAt)
+		if _, err := db.ExecContext(ctx, edge, at.Truncate(time.Second), queryPackTenantID, streamID, sample.node, sample.state, sample.ingestID, at.UnixMilli()); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	stream := streamID
+	request := func(page *commonpb.CursorPaginationRequest) []string {
+		t.Helper()
+		resp, err := server.GetRebufferingEvents(ctx, &periscopepb.GetRebufferingEventsRequest{
+			TenantId:   queryPackTenantID,
+			StreamId:   &stream,
+			TimeRange:  &commonpb.TimeRange{Start: timestamppb.New(start.Add(-time.Second)), End: timestamppb.New(start.Add(time.Minute))},
+			Pagination: page,
+		})
+		if err != nil {
+			t.Fatalf("GetRebufferingEvents: %v", err)
+		}
+		var ids []string
+		for _, event := range resp.GetEvents() {
+			ids = append(ids, event.GetId())
+		}
+		return ids
+	}
+
+	resp, err := server.GetRebufferingEvents(ctx, &periscopepb.GetRebufferingEventsRequest{
+		TenantId:   queryPackTenantID,
+		StreamId:   &stream,
+		TimeRange:  &commonpb.TimeRange{Start: timestamppb.New(start.Add(-time.Second)), End: timestamppb.New(start.Add(time.Minute))},
+		Pagination: &commonpb.CursorPaginationRequest{First: int32(len(samples))},
+	})
+	if err != nil {
+		t.Fatalf("GetRebufferingEvents: %v", err)
+	}
+	events := resp.GetEvents()
+	if len(events) != len(samples) {
+		t.Fatalf("%d events, want %d", len(events), len(samples))
+	}
+	var all []string
+	for _, event := range events {
+		all = append(all, event.GetId())
+	}
+
+	for i, event := range events {
+		cursor := pagination.EncodeCursor(event.GetTimestamp().AsTime(), event.GetId())
+		if got, want := request(&commonpb.CursorPaginationRequest{First: int32(len(samples)), After: &cursor}), all[i+1:]; !slices.Equal(got, want) {
+			t.Fatalf("after edge %d (%s): events %v\nwant %v", i, event.GetId(), got, want)
+		}
+		if got, want := request(&commonpb.CursorPaginationRequest{Last: int32(len(samples)), Before: &cursor}), all[:i]; !slices.Equal(got, want) {
+			t.Fatalf("before edge %d (%s): events %v\nwant %v", i, event.GetId(), got, want)
+		}
 	}
 }

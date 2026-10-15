@@ -198,7 +198,6 @@ func serviceComposeVars(_ context.Context, cfg ServiceRoleConfig, host inventory
 	composeStateDirs := []map[string]string{}
 	composeExtraHosts := []string{}
 	if cfg.ServiceName == "skipper" {
-		var err error
 		composeFiles, composeVolumes, err = skipperComposeSourceFiles(envMap)
 		if err != nil {
 			return nil, err
@@ -228,6 +227,13 @@ func serviceComposeVars(_ context.Context, cfg ServiceRoleConfig, host inventory
 		})
 	}
 	processEnv := scopeProcessEnv(cfg.ServiceName, envMap)
+	ports, bindOverrides, err := composePublishedPorts(cfg.ServiceName, host, port, containerPort, processEnv)
+	if err != nil {
+		return nil, err
+	}
+	maps.Copy(processEnv, bindOverrides)
+	pkiVolumes, pki := composeInternalPKI(processEnv, config.Metadata)
+	composeVolumes = append(composeVolumes, pkiVolumes...)
 	envAny := make(map[string]any, len(processEnv))
 	for k, v := range processEnv {
 		envAny[k] = v
@@ -246,11 +252,12 @@ func serviceComposeVars(_ context.Context, cfg ServiceRoleConfig, host inventory
 			"image":          image,
 			"port":           port,
 			"container_port": containerPort,
-			"publish_addrs":  composePublishAddrs(cfg.ServiceName, host),
+			"ports":          ports,
 			"health_path":    healthPath,
 			"volumes":        composeVolumes,
 			"extra_hosts":    composeExtraHosts,
 		},
+		"compose_stack_pki":                    pki,
 		"compose_stack_env":                    envAny,
 		"compose_stack_state_dirs":             composeStateDirs,
 		"compose_stack_data_migrations_marker": dataMigrationsMarker(cfg, config),
