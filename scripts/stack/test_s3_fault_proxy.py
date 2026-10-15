@@ -57,6 +57,7 @@ class ProxyTest(unittest.TestCase):
         proxy.FAULT.reset()
         proxy.EXPIRY.arm("")
         proxy.STALL.arm("")
+        proxy.KEY_ORDER.arm("")
         self.backend.seen.clear()
 
     def ranged(self, path, start, end, timeout=3, read=None):
@@ -202,6 +203,24 @@ class ProxyTest(unittest.TestCase):
         proxy.FAULT.reset()
         self.request(path + "sprite.jpg")
         self.assertEqual(proxy.FAULT.snapshot()["events"], [])
+
+    def test_copies_to_the_armed_key_apply_in_order_past_their_clients(self):
+        proxy.KEY_ORDER.arm("4f0c-asset", "sprite.jpg", hold=0.6, service=0.05)
+        copy = {"x-amz-copy-source": "/bucket/thumbnails/4f0c-asset/v/tok/sprite.jpg"}
+        served = "/bucket/thumbnails/4f0c-asset/sprite.jpg"
+        with self.assertRaises(TimeoutError):
+            self.request(served, timeout=0.2, headers=copy, body=b"")
+        started = time.monotonic()
+        self.request(served, timeout=3, headers=copy, body=b"")
+        self.assertGreater(time.monotonic() - started, 0.3)
+        self.request("/bucket/thumbnails/4f0c-asset/poster.jpg", headers=copy, body=b"")
+        self.request(served, body=b"thumbnail")
+        snapshot = proxy.KEY_ORDER.snapshot()
+        self.assertEqual(snapshot["max_queued"], 2)
+        self.assertEqual(snapshot["queued"], 0)
+        self.assertEqual(len(snapshot["copies"]), 2)
+        self.assertTrue(all("landed" in c for c in snapshot["copies"]))
+        self.assertEqual(sum(1 for m, p, _, _ in self.backend.seen if p == served and m == "PUT"), 3)
 
 
 if __name__ == "__main__":

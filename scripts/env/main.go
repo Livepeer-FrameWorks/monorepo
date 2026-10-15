@@ -69,6 +69,7 @@ const composeProfilePresets = `
 #   COMPOSE_PROFILES=edge,support    plus Chatwoot and Listmonk
 #   COMPOSE_PROFILES=edge,two-cell   plus a second media cell
 #   COMPOSE_PROFILES=llm             control plane and local Ollama
+#   COMPOSE_PROFILES=network-observations  control plane, network observer and prober
 `
 
 // appendComposeProfiles writes the preset list and, unless the merged env files

@@ -17,6 +17,10 @@ type S3AttemptPolicy struct {
 	AttemptTimeout time.Duration
 	// Backoff is the wait before attempt n+1, multiplied by n.
 	Backoff time.Duration
+	// NoRetryAfterTimeout ends the call at a timed-out attempt instead of retrying it. Set it for a write whose retry
+	// would target the same key: the store keeps executing a request after the client abandons it and applies writes
+	// to one key in order, so the retry would wait behind the abandoned request.
+	NoRetryAfterTimeout bool
 }
 
 // ErrS3AttemptTimedOut marks a request abandoned at its S3AttemptPolicy.AttemptTimeout.
@@ -31,7 +35,8 @@ type S3AttemptFailure struct {
 }
 
 // RetryS3 runs call under policy, giving each attempt its own context bounded by the attempt timeout. A timed-out
-// attempt, a transport failure and a 408, 429 or 5xx response are retried; any other provider response (403, 404,
+// attempt (unless the policy sets NoRetryAfterTimeout), a transport failure and a 408, 429 or 5xx response are
+// retried; any other provider response (403, 404,
 // 412, ...) and the caller's own cancellation end the call at once. onRetry, when set, sees every failed attempt
 // that is retried. The returned error names the attempt count and total elapsed time and wraps the last failure.
 func RetryS3(ctx context.Context, policy S3AttemptPolicy, call func(ctx context.Context) error, onRetry func(S3AttemptFailure)) error {
@@ -50,7 +55,8 @@ func RetryS3(ctx context.Context, policy S3AttemptPolicy, call func(ctx context.
 			return nil
 		}
 		lastErr = err
-		if attempt == maxAttempts || ctx.Err() != nil || !IsRetryableS3Error(err) {
+		if attempt == maxAttempts || ctx.Err() != nil || !IsRetryableS3Error(err) ||
+			(policy.NoRetryAfterTimeout && errors.Is(err, ErrS3AttemptTimedOut)) {
 			break
 		}
 		if onRetry != nil {

@@ -2,7 +2,8 @@
 """Forward real S3 traffic; stall two PUTs for one explicitly armed artifact;
 expire one armed artifact's presigned GETs signed before the arming instant;
 stall one armed artifact's ranged media GET mid-body, optionally holding every
-resume of it back and stalling every fresh read of the same range again.
+resume of it back and stalling every fresh read of the same range again; apply
+copies to one armed served thumbnail key in order, slowly, past their clients.
 
 Only the private control port can arm the fixtures. Paths, queries, Host and
 signed headers reach the real backend unchanged. Neither presigned URLs nor
@@ -184,6 +185,66 @@ class Stall:
                     "restarts": self.restarts, "resumes": list(self.resumes)}
 
 
+class KeyOrder:
+    """Applies CopyObject requests to one armed served thumbnail key
+    (thumbnails/<asset>/<file>) the way an object store does: one at a time in
+    arrival order, each taking `service` seconds, the first one `hold` seconds,
+    and each one finishing even after its client gave up on it. Records how
+    many copies were queued on the key at once and when each one landed."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.order = threading.Lock()
+        self.arm("")
+
+    def arm(self, asset, file="sprite.jpg", hold=0, service=0):
+        with self.lock:
+            self.key = f"thumbnails/{asset}/{file}" if asset else ""
+            self.hold = hold
+            self.service = service
+            self.held = False
+            self.queued = 0
+            self.max_queued = 0
+            self.copies = []
+            self.epoch = time.monotonic()
+
+    def matches(self, method, path, headers):
+        if method != "PUT" or not headers.get("x-amz-copy-source"):
+            return False
+        key = urllib.parse.unquote(urllib.parse.urlsplit(path).path).split("/", 2)[-1]
+        with self.lock:
+            return bool(self.key) and key == self.key
+
+    def apply(self, forward):
+        """Runs forward() in the key's order after the store's service time;
+        returns forward()'s result."""
+        with self.lock:
+            self.queued += 1
+            self.max_queued = max(self.max_queued, self.queued)
+            copy = {"queued": time.monotonic() - self.epoch}
+            self.copies.append(copy)
+        with self.order:
+            with self.lock:
+                wait = self.service
+                if not self.held:
+                    self.held = True
+                    wait = self.hold
+                copy["started"] = time.monotonic() - self.epoch
+            time.sleep(wait)
+            try:
+                return forward()
+            finally:
+                with self.lock:
+                    self.queued -= 1
+                    copy["landed"] = time.monotonic() - self.epoch
+
+    def snapshot(self):
+        with self.lock:
+            return {"key": self.key, "hold": self.hold, "service": self.service,
+                    "queued": self.queued, "max_queued": self.max_queued,
+                    "now": time.monotonic() - self.epoch, "copies": [dict(c) for c in self.copies]}
+
+
 def client_gone(connection):
     readable, _, _ = select.select([connection], [], [], 0)
     if not readable:
@@ -206,6 +267,7 @@ STALL_AFTER = 64 * 1024
 FAULT = Fault()
 EXPIRY = Expiry()
 STALL = Stall()
+KEY_ORDER = KeyOrder()
 EXPIRED_BODY = (b'<?xml version="1.0" encoding="UTF-8"?><Error><Code>AccessDenied</Code>'
                 b'<Message>Request has expired</Message></Error>')
 UPSTREAM = os.environ.get("STACK_S3_UPSTREAM", "s3-ceph:8080")
@@ -235,17 +297,28 @@ class Control(QuietHandler):
                 if isinstance(resume_delay, bool) or not isinstance(resume_delay, (int, float)) \
                         or not 0 <= resume_delay <= 30:
                     raise ValueError("invalid resume delay")
+                order = payload.get("copy_order")
+                if order is not None:
+                    asset, file = order.get("asset", ""), order.get("file", "sprite.jpg")
+                    hold, service = order.get("hold", 0), order.get("service", 0)
+                    if not isinstance(asset, str) or (asset and not asset.replace("-", "").isalnum()) \
+                            or file not in ("poster.jpg", "sprite.jpg", "sprite.vtt") \
+                            or any(isinstance(v, bool) or not isinstance(v, (int, float)) for v in (hold, service)) \
+                            or not 0 <= hold <= 120 or not 0 <= service <= 10:
+                        raise ValueError("invalid copy order")
                 if "artifact" in payload:
                     FAULT.reset(payload["artifact"])
                 if "expire_artifact" in payload:
                     EXPIRY.arm(payload["expire_artifact"], int(time.time()))
                 if "stall_artifact" in payload:
                     STALL.arm(payload["stall_artifact"], resume_delay)
+                if order is not None:
+                    KEY_ORDER.arm(asset, file, hold, service)
             except (ValueError, TypeError, AttributeError):
                 self.send_error(400)
                 return
         body = json.dumps({**FAULT.snapshot(), "expiry": EXPIRY.snapshot(),
-                           "stall": STALL.snapshot()}).encode()
+                           "stall": STALL.snapshot(), "copy_order": KEY_ORDER.snapshot()}).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
@@ -296,6 +369,9 @@ class Proxy(QuietHandler):
                         break
             self.close_connection = True
             return
+        if KEY_ORDER.matches(self.command, self.path, self.headers):
+            self.forward_ordered_copy(data)
+            return
         stall_range, delay = STALL.candidate(self.command, self.path, self.headers)
         if delay:
             time.sleep(delay)
@@ -328,6 +404,38 @@ class Proxy(QuietHandler):
         finally:
             connection.close()
             self.close_connection = True
+
+    def forward_ordered_copy(self, data):
+        """A copy to the armed key reaches the backend in the key's order and
+        completes there whether or not this client is still waiting."""
+        headers = {k: v for k, v in self.headers.items() if k.lower() not in HOP_HEADERS}
+
+        def upstream():
+            connection = http.client.HTTPConnection(UPSTREAM, timeout=120)
+            try:
+                connection.request(self.command, self.path, body=data, headers=headers)
+                response = connection.getresponse()
+                return response.status, response.reason, response.getheaders(), response.read()
+            except (OSError, http.client.HTTPException):
+                return None
+            finally:
+                connection.close()
+
+        result = KEY_ORDER.apply(upstream)
+        self.close_connection = True
+        if result is None:
+            return
+        status, reason, response_headers, body = result
+        try:
+            self.send_response_only(status, reason)
+            for key, value in response_headers:
+                if key.lower() not in HOP_HEADERS:
+                    self.send_header(key, value)
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.write(body)
+        except OSError:
+            pass
 
     do_GET = do_HEAD = do_PUT = do_POST = do_DELETE = do_OPTIONS = forward
 

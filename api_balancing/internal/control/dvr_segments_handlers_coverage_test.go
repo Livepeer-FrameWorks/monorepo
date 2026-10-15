@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"testing"
+	"time"
 
 	"frameworks/api_balancing/internal/state"
 	"github.com/DATA-DOG/go-sqlmock"
@@ -256,6 +257,117 @@ func TestProcessRecordDVRSegment_HappyPathInsertsAndReplies(t *testing.T) {
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Invariant: a database write stall that spans the artifact_nodes refresh and the
+// ledger transaction (staging eu-3: WAL fsyncs of 4-6 s on every Yugabyte replica at
+// once) delays the ledger row but does not fail it; the sidecar waits 30 s for the reply.
+func TestProcessRecordDVRSegment_RidesOutMultiSecondWriteStall(t *testing.T) {
+	if testing.Short() {
+		t.Skip("waits through a 6 s simulated write stall")
+	}
+	mock, s3, _ := setupArtifactTestDeps(t)
+	cs := &captureStream{}
+
+	mock.ExpectQuery("SELECT tenant_id::text, stream_internal_name").
+		WithArgs("dvr-stall").
+		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "stream_internal_name"}).
+			AddRow("tenant-1", "live+demo"))
+	mock.ExpectQuery(dvrNodeAuthSelectRe).
+		WithArgs("dvr-stall", "tenant-1").
+		WillReturnRows(sqlmock.NewRows([]string{"status", "dispatch_node"}).AddRow("recording", "node-9"))
+	mock.ExpectExec("INSERT INTO foghorn.artifact_nodes").
+		WithArgs("dvr-stall", "node-9").
+		WillDelayFor(4 * time.Second).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT status FROM foghorn.artifacts").
+		WithArgs("dvr-stall", "tenant-1").
+		WillDelayFor(2 * time.Second).
+		WillReturnRows(sqlmock.NewRows([]string{"status"}).AddRow("recording"))
+	mock.ExpectQuery("SELECT sequence, status, media_start_ms, media_end_ms, duration_ms").
+		WithArgs("dvr-stall", "51_67.ts").
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery("SELECT \\(COALESCE\\(MAX\\(sequence\\), -1\\) \\+ 1\\)::bigint").
+		WithArgs("dvr-stall").
+		WillReturnRows(sqlmock.NewRows([]string{"seq"}).AddRow(67))
+	mock.ExpectExec("INSERT INTO foghorn.dvr_segments").
+		WithArgs("dvr-stall", "51_67.ts", int64(67), int64(1000), int64(2000), int64(1000), "tenant-1/live+demo/dvr/dvr-stall/segments/51_67.ts").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	processRecordDVRSegment(&ipcpb.RecordDVRSegmentRequest{
+		RequestId:    "r-stall",
+		DvrHash:      "dvr-stall",
+		SegmentName:  "51_67.ts",
+		MediaStartMs: 1000,
+		MediaEndMs:   2000,
+		DurationMs:   1000,
+	}, "node-9", cs, logging.NewLogger())
+
+	resp := extractRecordResp(t, cs)
+	if !resp.GetAccepted() {
+		t.Fatalf("expected the ledger row to survive a 6 s write stall, got accepted=false reason=%q", resp.GetReason())
+	}
+	if resp.GetSequence() != 67 || len(s3.presignPUTCalls) != 1 {
+		t.Fatalf("expected sequence 67 and one presigned PUT, got sequence=%d presigns=%v", resp.GetSequence(), s3.presignPUTCalls)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Invariant: a stalled best-effort artifact_nodes refresh is cut off at its own
+// bound and the ledger insert still runs.
+func TestProcessRecordDVRSegment_StalledNodeRefreshDoesNotStarveLedgerInsert(t *testing.T) {
+	if testing.Short() {
+		t.Skip("waits out the artifact_nodes refresh bound")
+	}
+	mock, _, _ := setupArtifactTestDeps(t)
+	cs := &captureStream{}
+
+	mock.ExpectQuery("SELECT tenant_id::text, stream_internal_name").
+		WithArgs("dvr-touch").
+		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "stream_internal_name"}).
+			AddRow("tenant-1", "live+demo"))
+	mock.ExpectQuery(dvrNodeAuthSelectRe).
+		WithArgs("dvr-touch", "tenant-1").
+		WillReturnRows(sqlmock.NewRows([]string{"status", "dispatch_node"}).AddRow("recording", "node-9"))
+	mock.ExpectExec("INSERT INTO foghorn.artifact_nodes").
+		WithArgs("dvr-touch", "node-9").
+		WillDelayFor(dvrRecordingNodeTouchTimeout + 2*time.Second).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT status FROM foghorn.artifacts").
+		WithArgs("dvr-touch", "tenant-1").
+		WillReturnRows(sqlmock.NewRows([]string{"status"}).AddRow("recording"))
+	mock.ExpectQuery("SELECT sequence, status, media_start_ms, media_end_ms, duration_ms").
+		WithArgs("dvr-touch", "seg-1.ts").
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery("SELECT \\(COALESCE\\(MAX\\(sequence\\), -1\\) \\+ 1\\)::bigint").
+		WithArgs("dvr-touch").
+		WillReturnRows(sqlmock.NewRows([]string{"seq"}).AddRow(1))
+	mock.ExpectExec("INSERT INTO foghorn.dvr_segments").
+		WithArgs("dvr-touch", "seg-1.ts", int64(1), int64(1000), int64(2000), int64(1000), "tenant-1/live+demo/dvr/dvr-touch/segments/seg-1.ts").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	start := time.Now()
+	processRecordDVRSegment(&ipcpb.RecordDVRSegmentRequest{
+		RequestId:    "r-touch",
+		DvrHash:      "dvr-touch",
+		SegmentName:  "seg-1.ts",
+		MediaStartMs: 1000,
+		MediaEndMs:   2000,
+		DurationMs:   1000,
+	}, "node-9", cs, logging.NewLogger())
+
+	if resp := extractRecordResp(t, cs); !resp.GetAccepted() {
+		t.Fatalf("expected accepted=true after a stalled node refresh, got reason=%q", resp.GetReason())
+	}
+	if elapsed := time.Since(start); elapsed >= dvrRecordingNodeTouchTimeout+2*time.Second {
+		t.Fatalf("node refresh was not cut off at its bound: handler took %s", elapsed)
 	}
 }
 

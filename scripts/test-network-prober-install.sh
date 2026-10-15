@@ -24,13 +24,12 @@ binary="$fixture/release/network-prober"
 # Public Ethereum test key; no real wallet or network access is used.
 printf '%064d\n' 1 > "$fixture/key"
 "$binary" sign-discovery --key-file "$fixture/key" --output "$fixture/identity.env"
-cat > "$fixture/prober.env" <<'CONFIG'
-NETWORK_OBSERVER_URL=https://observer.example.net
-NETWORK_OBSERVER_SECRET=installation-test-secret
-NETWORK_PROBER_ID=install-test
-NETWORK_PROBER_REGION=eu-west
-NETWORK_PROBER_SPOOL_DIR=/var/lib/frameworks-network-prober
-CONFIG
+# Operators start from the shipped example: the observer relay on Bridge, under
+# its /network-observer path prefix.
+sed 's|^NETWORK_OBSERVER_SECRET=.*|NETWORK_OBSERVER_SECRET=installation-test-secret|' \
+  "$fixture/release/network-prober.env.example" > "$fixture/prober.env"
+grep -qx 'NETWORK_OBSERVER_URL=https://bridge.example.net/network-observer' "$fixture/prober.env" ||
+  fail 'Shipped example no longer points the prober at the Bridge observer relay'
 
 "$installer" --binary "$binary" --config "$fixture/prober.env" --identity "$fixture/identity.env" --root "$fixture/root" --no-start
 installed="$fixture/root/usr/local/bin/network-prober"
@@ -47,10 +46,23 @@ cmp "$repo/api_network_observer/deploy/network-prober.service" "$fixture/root/et
 "$installer" --binary "$installed" --config "$config_dir/network-prober.env" --root "$fixture/root" --no-start
 cmp "$fixture/identity.env" "$config_dir/network-prober.identity.env"
 
-sed 's|https://observer.example.net|http://observer.example.net|' "$fixture/prober.env" > "$fixture/invalid.env"
-if "$installer" --binary "$binary" --config "$fixture/invalid.env" --identity "$fixture/identity.env" --root "$fixture/rejected" --no-start > "$fixture/rejected.log" 2>&1; then
-  fail 'Installer accepted unverified HTTP coordinator configuration'
-fi
-[[ ! -e $fixture/rejected ]] || fail 'Invalid configuration modified the installation root'
+# An isolated test network may let the prober dial its private orchestrators.
+{ cat "$fixture/prober.env"; echo 'NETWORK_PROBER_ALLOWED_PRIVATE_CIDRS=10.231.1.0/24,192.168.50.0/24'; } > "$fixture/private.env"
+"$binary" check-config --env-file "$fixture/private.env" --identity-file "$fixture/identity.env" >/dev/null ||
+  fail 'Prober rejected valid private orchestrator networks'
 
-echo 'External prober installation, identity reuse and configuration rejection verified.'
+reject() { # <description> <config file>
+  local root="$fixture/rejected-$RANDOM"
+  if "$installer" --binary "$binary" --config "$2" --identity "$fixture/identity.env" --root "$root" --no-start > "$fixture/rejected.log" 2>&1; then
+    fail "Installer accepted $1"
+  fi
+  [[ ! -e $root ]] || fail "Installer modified the installation root for $1"
+}
+sed 's|https://bridge.example.net|http://bridge.example.net|' "$fixture/prober.env" > "$fixture/insecure.env"
+reject 'unverified HTTP coordinator configuration' "$fixture/insecure.env"
+sed 's|/network-observer$|/network-observer?token=x|' "$fixture/prober.env" > "$fixture/query.env"
+reject 'a coordinator URL carrying a query string' "$fixture/query.env"
+{ cat "$fixture/prober.env"; echo 'NETWORK_PROBER_ALLOWED_PRIVATE_CIDRS=10.231.1.0'; } > "$fixture/bad-cidr.env"
+reject 'a malformed private orchestrator network' "$fixture/bad-cidr.env"
+
+echo 'External prober installation from the shipped example, identity reuse, private test networks and configuration rejection verified.'

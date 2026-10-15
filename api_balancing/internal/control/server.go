@@ -11604,9 +11604,9 @@ func finishThumbnailPublication(ctx context.Context, dbh *sql.DB, a ThumbnailAss
 	// reclaims it. The WINNER de-registers exactly these keys inside its publish CAS (they become the live version),
 	// so only a non-winning holder's candidate stays queued — and a stale holder's key is distinct per token, so it
 	// can never dequeue or overwrite the winner's object.
-	candidateKeys := make([]string, 0, len(objs))
+	candidateKeys := make([]string, 0, len(objs)*thumbnailCandidateTries)
 	for _, o := range objs {
-		candidateKeys = append(candidateKeys, ThumbnailVersionKey(a.AssetKey, publishToken, o.FileName))
+		candidateKeys = append(candidateKeys, thumbnailCandidateKeys(a.AssetKey, publishToken, o.FileName)...)
 	}
 	// GRACE-DELAYED so the shared cleanup worker cannot claim + settle the row before promotion creates the object
 	// (a delete of the absent key would drop the row and orphan the promoted object). The winner de-registers these
@@ -11625,7 +11625,7 @@ func finishThumbnailPublication(ctx context.Context, dbh *sql.DB, a ThumbnailAss
 	// objects — it can never overwrite or dequeue the winner's.
 	// Each HEAD and CopyObject runs under its own bounded, retried attempt (thumbnailObjectStore), so a stalled request
 	// is abandoned and retried instead of spending the whole completion deadline.
-	versionETags := make(map[string]string, len(objs))
+	promoted := make(map[string]promotedCandidate, len(objs))
 	for _, o := range objs {
 		headStarted := time.Now()
 		exists, size, etag, hErr := headThumbnailObject(ctx, s3Client, o.StagingKey, logger)
@@ -11639,9 +11639,8 @@ func finishThumbnailPublication(ctx context.Context, dbh *sql.DB, a ThumbnailAss
 				Warn("Thumbnail completion: staged object missing/empty; leaving for recovery")
 			return
 		}
-		versionKey := ThumbnailVersionKey(a.AssetKey, publishToken, o.FileName)
 		promoteStarted := time.Now()
-		versionETag, pErr := promoteThumbnailObject(ctx, s3Client, o.StagingKey, versionKey, etag, logger)
+		versionKey, versionETag, pErr := promoteThumbnailCandidate(ctx, s3Client, o.StagingKey, a.AssetKey, publishToken, o.FileName, etag, logger)
 		if pErr != nil {
 			logger.WithError(pErr).WithFields(logging.Fields{"attempt_id": attemptID, "version_key": versionKey, "elapsed_ms": time.Since(promoteStarted).Milliseconds()}).
 				Warn("Thumbnail completion: promote to candidate key failed; leaving for retry")
@@ -11654,8 +11653,8 @@ func finishThumbnailPublication(ctx context.Context, dbh *sql.DB, a ThumbnailAss
 		recordedETag := etag
 		if strings.TrimSpace(versionETag) != "" {
 			recordedETag = versionETag
-			versionETags[o.FileName] = versionETag
 		}
+		promoted[o.FileName] = promotedCandidate{Key: versionKey, ETag: strings.TrimSpace(versionETag)}
 		moved, mErr := MarkThumbnailObjectVerifiedToken(ctx, dbh, attemptID, o.FileName, versionKey, recordedETag, size, publishToken)
 		if mErr != nil {
 			logger.WithError(mErr).WithField("attempt_id", attemptID).Warn("Thumbnail completion: recording verified object failed; leaving for recovery")
@@ -11715,7 +11714,7 @@ func finishThumbnailPublication(ctx context.Context, dbh *sql.DB, a ThumbnailAss
 		// the context is cancelled), so a loser's straggler overwrite is corrected by the winner's reassert (and a
 		// resurrection by the delayed delete sweep) when it lands within the copy window — the contract is eventual,
 		// with a straggler past the assumed provider tail an accepted residual risk. See docs/architecture/thumbnails.md.
-		if marked, mErr := projectAndMarkThumbnailFromToken(ctx, dbh, s3Client, attemptID, a.AssetKey, a.TenantID, a.DestinationCluster, publishToken, fileNames, versionETags, logger); mErr != nil {
+		if marked, mErr := projectAndMarkThumbnailFromToken(ctx, dbh, s3Client, attemptID, a.AssetKey, a.TenantID, a.DestinationCluster, publishToken, fileNames, promoted, logger); mErr != nil {
 			logger.WithError(mErr).WithField("attempt_id", attemptID).Warn("Thumbnail projection failed; leaving unprojected for recovery")
 		} else if marked {
 			// Node-authorized convergence: has_thumbnails is already flipped by the settle; this backfills a MISSING
@@ -11733,12 +11732,13 @@ func finishThumbnailPublication(ctx context.Context, dbh *sql.DB, a ThumbnailAss
 // copyThumbnailObjectsToDeterministic copies each object's VersionKey → its deterministic served key
 // (thumbnails/{asset}/{file}). It is PURE S3 and runs OUTSIDE any transaction/lock (a PostgreSQL lock cannot serialize
 // this network copy), between the CLAIM and SETTLE fences of projectAndMarkThumbnail. Every HEAD and CopyObject runs
-// under its own bounded, retried attempt (thumbnailObjectStore). An object whose source ETag is already known (the
-// completion's copy result, or the ETag recorded at verification) is copied under it without a HEAD; a copy the
-// provider refuses on that ETag falls back to HEADing the source. The destination write is unconditional, so a stale
-// straggler is possible; the winner's reassert + the delayed delete sweep converge it. Returns true iff EVERY object was
-// copied (an empty or absent source, or a retry-exhausted transport error, returns false → the caller commits nothing
-// and recovery re-drives).
+// under its own bounded attempt (thumbnailObjectStore), and each served key admits this process's copies one at a
+// time (deterministicCopies): a projection that a newer one replaced while it waited copies nothing. An object whose
+// source ETag is already known (the completion's copy result, or the ETag recorded at verification) is copied under
+// it without a HEAD; a copy the provider refuses on that ETag falls back to HEADing the source. The destination write
+// is unconditional, so a stale straggler is possible; the winner's reassert + the delayed delete sweep converge it.
+// Returns true iff EVERY object was copied (an empty or absent source, a superseded or timed-out copy, or a
+// retry-exhausted transport error, returns false → the caller commits nothing and recovery re-drives).
 func copyThumbnailObjectsToDeterministic(ctx context.Context, client S3ClientInterface, assetKey string, objs []ThumbnailObject, logger logging.Logger) bool {
 	if client == nil {
 		return false
@@ -11749,53 +11749,76 @@ func copyThumbnailObjectsToDeterministic(ctx context.Context, client S3ClientInt
 			allCopied = false // no source recorded yet → leave for recovery once verification has landed it
 			continue
 		}
-		detKey := ThumbnailDeterministicKey(assetKey, o.FileName)
-		started := time.Now()
-		if known := strings.TrimSpace(o.ETag); known != "" {
-			_, pErr := promoteThumbnailObject(ctx, client, o.VersionKey, detKey, known, logger)
-			if pErr == nil {
-				continue
-			}
-			if storage.IsRetryableS3Error(pErr) || ctx.Err() != nil {
-				allCopied = false
-				logger.WithError(pErr).WithFields(logging.Fields{"deterministic_key": detKey, "elapsed_ms": time.Since(started).Milliseconds()}).
-					Warn("Deterministic thumbnail projection failed after retries; leaving unprojected for recovery to re-drive")
-				continue
-			}
-			logger.WithError(pErr).WithField("version_key", o.VersionKey).
-				Debug("Deterministic projection: copy refused on the known source ETag; re-reading the source")
-		}
-		exists, _, etag, hErr := headThumbnailObject(ctx, client, o.VersionKey, logger)
-		if hErr != nil {
+		if !copyThumbnailObjectToDeterministic(ctx, client, assetKey, o, logger) {
 			allCopied = false
-			logger.WithError(hErr).WithFields(logging.Fields{"version_key": o.VersionKey, "elapsed_ms": time.Since(started).Milliseconds()}).
-				Warn("Deterministic thumbnail projection: source HEAD failed after retries; leaving unprojected for recovery to re-drive")
-			continue
-		}
-		if !exists || strings.TrimSpace(etag) == "" {
-			allCopied = false
-			logger.WithField("version_key", o.VersionKey).Debug("Deterministic projection: source version object not present yet; leaving unprojected")
-			continue
-		}
-		if _, pErr := promoteThumbnailObject(ctx, client, o.VersionKey, detKey, etag, logger); pErr != nil {
-			allCopied = false
-			logger.WithError(pErr).WithFields(logging.Fields{"deterministic_key": detKey, "elapsed_ms": time.Since(started).Milliseconds()}).
-				Warn("Deterministic thumbnail projection failed after retries; leaving unprojected for recovery to re-drive")
 		}
 	}
 	return allCopied
 }
 
-// projectAndMarkThumbnailFromToken is the publish-path entry to the fenced projection: it computes each source
-// version key from the winning publishToken (ThumbnailVersionKey) — the just-loaded attempt does not carry the
-// version_key in memory (verification writes it to the DB, not to the in-memory objects) — attaches the ETag the
-// completion's promote returned for each file (versionETags; a missing entry makes the projection HEAD that source),
-// then runs the fenced project+mark. Returns marked=true only when every object was copied AND the projection stamp
-// committed.
-func projectAndMarkThumbnailFromToken(ctx context.Context, dbh *sql.DB, client S3ClientInterface, attemptID, assetKey, tenantID, servingCluster, publishToken string, fileNames []string, versionETags map[string]string, logger logging.Logger) (bool, error) {
+// copyThumbnailObjectToDeterministic copies one version object to its served key while holding that key's admission.
+func copyThumbnailObjectToDeterministic(ctx context.Context, client S3ClientInterface, assetKey string, o ThumbnailObject, logger logging.Logger) bool {
+	detKey := ThumbnailDeterministicKey(assetKey, o.FileName)
+	started := time.Now()
+	release, gErr := deterministicCopies.acquire(ctx, detKey)
+	if gErr != nil {
+		logger.WithError(gErr).WithFields(logging.Fields{"deterministic_key": detKey, "version_key": o.VersionKey, "elapsed_ms": time.Since(started).Milliseconds()}).
+			Debug("Deterministic projection: not copied while another copy to the served key ran; leaving unprojected")
+		return false
+	}
+	defer release()
+	if known := strings.TrimSpace(o.ETag); known != "" {
+		_, pErr := promoteThumbnailDeterministic(ctx, client, o.VersionKey, detKey, known, logger)
+		if pErr == nil {
+			return true
+		}
+		if storage.IsRetryableS3Error(pErr) || ctx.Err() != nil {
+			logger.WithError(pErr).WithFields(logging.Fields{"deterministic_key": detKey, "elapsed_ms": time.Since(started).Milliseconds()}).
+				Warn("Deterministic thumbnail projection failed; leaving unprojected for recovery to re-drive")
+			return false
+		}
+		logger.WithError(pErr).WithField("version_key", o.VersionKey).
+			Debug("Deterministic projection: copy refused on the known source ETag; re-reading the source")
+	}
+	exists, _, etag, hErr := headThumbnailObject(ctx, client, o.VersionKey, logger)
+	if hErr != nil {
+		logger.WithError(hErr).WithFields(logging.Fields{"version_key": o.VersionKey, "elapsed_ms": time.Since(started).Milliseconds()}).
+			Warn("Deterministic thumbnail projection: source HEAD failed after retries; leaving unprojected for recovery to re-drive")
+		return false
+	}
+	if !exists || strings.TrimSpace(etag) == "" {
+		logger.WithField("version_key", o.VersionKey).Debug("Deterministic projection: source version object not present yet; leaving unprojected")
+		return false
+	}
+	if _, pErr := promoteThumbnailDeterministic(ctx, client, o.VersionKey, detKey, etag, logger); pErr != nil {
+		logger.WithError(pErr).WithFields(logging.Fields{"deterministic_key": detKey, "elapsed_ms": time.Since(started).Milliseconds()}).
+			Warn("Deterministic thumbnail projection failed; leaving unprojected for recovery to re-drive")
+		return false
+	}
+	return true
+}
+
+// promotedCandidate is the candidate object a completion's promotion wrote for one file: the key of the try that
+// landed and the destination ETag the provider reported ("" when it omitted it).
+type promotedCandidate struct {
+	Key  string
+	ETag string
+}
+
+// projectAndMarkThumbnailFromToken is the publish-path entry to the fenced projection. Each file's source is the
+// candidate the completion's promotion wrote (promoted), or the token's first-try key (thumbnailObjectsFromToken)
+// for a file it did not report — the just-loaded attempt does not carry the version_key in memory (verification
+// writes it to the DB, not to the in-memory objects). The promotion's ETag is attached (an empty one makes the
+// projection HEAD that source), then the fenced project+mark runs. Returns marked=true only when every object was
+// copied AND the projection stamp committed.
+func projectAndMarkThumbnailFromToken(ctx context.Context, dbh *sql.DB, client S3ClientInterface, attemptID, assetKey, tenantID, servingCluster, publishToken string, fileNames []string, promoted map[string]promotedCandidate, logger logging.Logger) (bool, error) {
 	objs := thumbnailObjectsFromToken(assetKey, publishToken, fileNames)
 	for i := range objs {
-		objs[i].ETag = versionETags[objs[i].FileName]
+		p := promoted[objs[i].FileName]
+		if p.Key != "" {
+			objs[i].VersionKey = p.Key
+		}
+		objs[i].ETag = p.ETag
 	}
 	return projectAndMarkThumbnail(ctx, dbh, client, attemptID, assetKey, tenantID, servingCluster, objs, logger)
 }

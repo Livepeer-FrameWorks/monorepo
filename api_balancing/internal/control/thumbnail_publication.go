@@ -38,6 +38,29 @@ func ThumbnailVersionKey(assetKey, version, file string) string {
 	return "thumbnails/" + assetKey + "/v/" + version + "/" + file
 }
 
+// thumbnailCandidateTries is how many CopyObject requests a completion may spend promoting one file. Each try writes
+// its own candidate key, so a retry never waits at the store behind the copy it abandoned.
+const thumbnailCandidateTries = 3
+
+// thumbnailCandidateKey is the candidate key of one promotion try (1-based): the token's version key for the first
+// try and the version segment "{token}.{try}" after it. The recorded version_key names the try that landed.
+func thumbnailCandidateKey(assetKey, token, file string, try int) string {
+	if try <= 1 {
+		return ThumbnailVersionKey(assetKey, token, file)
+	}
+	return ThumbnailVersionKey(assetKey, fmt.Sprintf("%s.%d", token, try), file)
+}
+
+// thumbnailCandidateKeys lists every candidate key a completion holding token may have written for file, so cleanup
+// reclaims an abandoned try's object that the store completed after the client gave up on it.
+func thumbnailCandidateKeys(assetKey, token, file string) []string {
+	keys := make([]string, 0, thumbnailCandidateTries)
+	for try := 1; try <= thumbnailCandidateTries; try++ {
+		keys = append(keys, thumbnailCandidateKey(assetKey, token, file, try))
+	}
+	return keys
+}
+
 // ThumbnailDeterministicKey is the STABLE served key Chandler serves at /assets/{asset}/{file}: thumbnails/{asset}/{file},
 // with no version segment. The activated winner is PROJECTED here (copy from its private v/{token}/… candidate) and the
 // projection is durably recovered (published-but-unprojected attempts are re-driven, then reasserted past the max-copy
@@ -809,7 +832,8 @@ func DequeueThumbnailCleanup(ctx context.Context, ex sqlExecer, objectKeys []str
 // from (asset_key, version-segment, file_name) rather than the recorded version_key column — so an object promoted
 // to S3 whose version_key was never recorded (a completion that died between promote and MarkVerified) is STILL
 // reclaimable. The version segment is the completion's per-token candidate segment (publish_lease_token), falling
-// back to a.version (attempt_id) for a never-leased row — matching exactly what the completion promotes to. Read
+// back to a.version (attempt_id) for a never-leased row, and every promotion try's key under it
+// (thumbnailCandidateKeys) — matching exactly what the completion promotes to. Read
 // within the given tx so it shares the guarded transition's snapshot. Enqueueing a key for an object that was never
 // actually promoted is harmless: the S3 delete is a NotFound no-op.
 func reconstructAttemptObjectKeys(ctx context.Context, tx *sql.Tx, attemptID string) (staging, version []string, err error) {
@@ -820,7 +844,7 @@ func reconstructAttemptObjectKeys(ctx context.Context, tx *sql.Tx, attemptID str
 	for _, row := range rows {
 		staging = append(staging, ThumbnailStagingKey(row.AssetKey, attemptID, row.FileName))
 		if strings.TrimSpace(row.Version) != "" {
-			version = append(version, ThumbnailVersionKey(row.AssetKey, row.Version, row.FileName))
+			version = append(version, thumbnailCandidateKeys(row.AssetKey, row.Version, row.FileName)...)
 		}
 	}
 	return staging, version, nil
@@ -921,7 +945,7 @@ func DeleteThumbnailControlRowsTx(ctx context.Context, tx *sql.Tx, tenantID, ass
 // locking the assignment rows. Used immediately before the asset's control rows are deleted so a late-promoted
 // object (whose row is about to vanish) is still swept. The candidate
 // segment is the attempt's publish token (`COALESCE(publish_lease_token, version)`) — matching exactly what a
-// completion promotes to (`v/{token}/…`) — plus the recorded version_key column for a completion whose token was
+// completion promotes to (`v/{token}/…` and its later tries' `v/{token}.{n}/…`) — plus the recorded version_key column for a completion whose token was
 // re-minted by a peer since (so a prior holder's candidate is still reclaimed). A key whose object was never
 // promoted is a NotFound no-op. This is a backstop; the authoritative removal is the caller's `thumbnails/{hash}/`
 // prefix delete.
@@ -936,7 +960,7 @@ func assetThumbnailObjectKeys(ctx context.Context, tx *sql.Tx, tenantID, assetKe
 	for _, row := range rows {
 		keys = append(keys, ThumbnailStagingKey(assetKey, row.AttemptID, row.FileName))
 		if strings.TrimSpace(row.Version) != "" {
-			keys = append(keys, ThumbnailVersionKey(assetKey, row.Version, row.FileName))
+			keys = append(keys, thumbnailCandidateKeys(assetKey, row.Version, row.FileName)...)
 		}
 		if k := strings.TrimSpace(row.VersionKey); k != "" {
 			keys = append(keys, k)

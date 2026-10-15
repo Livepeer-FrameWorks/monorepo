@@ -31,6 +31,16 @@ import (
 // retries without re-asking Foghorn for a fresh URL.
 const presignTTL = 15 * time.Minute
 
+// recordDVRSegmentTimeout bounds one RecordDVRSegment exchange. The sidecar waits
+// 30 s for the reply, so the ledger write gets enough room to ride out a
+// multi-second database write stall (a WAL fsync stall on every replica or a
+// tablet leader move) and still answer before the sidecar gives up.
+const recordDVRSegmentTimeout = 20 * time.Second
+
+// dvrRecordingNodeTouchTimeout bounds the best-effort artifact_nodes refresh so a
+// stalled refresh cannot spend the budget of the ledger insert that follows it.
+const dvrRecordingNodeTouchTimeout = 5 * time.Second
+
 // processRecordDVRSegment handles RecordDVRSegmentRequest from the sidecar.
 // Resolves the parent DVR's tenant + stream so the S3 prefix can be built,
 // inserts a 'pending' ledger row (Foghorn-assigned sequence), mints a
@@ -56,7 +66,7 @@ func processRecordDVRSegment(
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), recordDVRSegmentTimeout)
 	defer cancel()
 
 	tenantID, streamName, ok := resolveDVRTenantAndStream(ctx, dvrHash, logger)
@@ -93,16 +103,18 @@ func processRecordDVRSegment(
 	}
 
 	if db != nil && nodeID != "" {
-		if err := foghorndb.New(db).TouchDVRRecordingNode(ctx, foghorndb.TouchDVRRecordingNodeParams{
+		touchCtx, touchCancel := context.WithTimeout(ctx, dvrRecordingNodeTouchTimeout)
+		if err := foghorndb.New(db).TouchDVRRecordingNode(touchCtx, foghorndb.TouchDVRRecordingNodeParams{
 			ArtifactHash: dvrHash, NodeID: nodeID,
 		}); err != nil {
 			logger.WithError(err).WithFields(logging.Fields{
 				"dvr_hash": dvrHash,
 				"node_id":  nodeID,
 			}).Warn("Failed to refresh active DVR recording node from segment trigger")
-		} else if rerr := RefreshNodeCopy(ctx, dvrHash, nodeID); rerr != nil {
+		} else if rerr := RefreshNodeCopy(touchCtx, dvrHash, nodeID); rerr != nil {
 			logger.WithError(rerr).WithField("dvr_hash", dvrHash).Warn("Failed to emit node-copy GAINED after DVR segment refresh")
 		}
+		touchCancel()
 	}
 
 	if s3Client == nil {

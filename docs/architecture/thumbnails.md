@@ -216,9 +216,12 @@ Foghorn (verify → promote → publish, all guarded, token-fenced)
     per-token candidate key `v/{token}/…` (private to this completion, so a stale holder can only ever write its own
     candidate, never overwrite the winner's object); a missing/failed object leaves the attempt for retry/sweep.
     The candidate's ETag from the copy result is recorded, so the projection below copies it without another HEAD.
-    Every HEAD and CopyObject here and in the projection runs under its own attempt timeout (5 s HEAD, 10 s copy,
-    3 attempts); a stalled request is abandoned and retried instead of consuming the 2 min completion deadline or a
-    recovery item's 20 s budget
+    Every HEAD and CopyObject here and in the projection runs under its own attempt timeout (5 s HEAD, 10 s candidate
+    copy, 30 s served-key copy) instead of consuming the 2 min completion deadline or a recovery item's 20 s budget.
+    The store keeps executing a copy its client abandoned and applies writes to one key in order, so a copy is never
+    retried onto the key it abandoned: candidate try n writes `v/{token}.{n}/…` (try 1 keeps `v/{token}/…`; the
+    recorded `version_key` names the try that landed, and cleanup enumerates all three), while a served-key copy is
+    not retried after a timeout
   → guarded monotonic CAS on the tenant-scoped active pointer: replaying the same attempt is idempotent, while a
     distinct attempt advances only with a strictly greater claim. A stale or equal-claim distinct attempt that lost
     the race is settled 'failed' and its promoted objects are enqueued for cleanup, never leaked
@@ -248,6 +251,13 @@ the recovery reconciler re-copies the still-active winner once, correcting a str
 window; (2) on deletion the cleanup drainer performs a **delayed second sweep** past the window, reclaiming a straggler
 copy that resurrected the object within the window. A superseded loser can never expose `has_thumbnails` (the
 CAS-settle rejects it).
+
+A live stream publishes every few seconds, so successive publications copy to the same served keys. Because the store
+applies writes to one key in order and finishes abandoned ones, overlapping copies and their retries would queue on
+the key, and once one stalls the queue grows faster than it drains for as long as the stream publishes. Each Foghorn
+therefore admits one copy per served key at a time and keeps only the newest waiting projection; an older waiter
+copies nothing and stays unprojected (a superseded attempt is no longer eligible; an active one is re-driven by
+recovery). Stack scenario 40 reproduces the queue with the S3 fault proxy's `copy_order` fixture.
 
 `DeterministicCopyWindow` is `presigned upload TTL (15m) + provider-ambiguity (≈5m)` = 20m. The bounding operation
 lifetime is the staging-upload PUT — the longest an object issued just before the anchoring event can still land — not
