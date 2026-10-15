@@ -204,7 +204,7 @@ func TestUpgradeGate_PeriscopeIngestChecksBothStores(t *testing.T) {
 		pgCalled = true
 		return nil
 	}
-	checkClickHouseMigrationGateFn = func(_ context.Context, _ *resolvedCluster, _ *ssh.Pool, _ *inventory.Manifest, _, _ string) error {
+	checkClickHouseMigrationGateFn = func(_ context.Context, _ io.Writer, _ *resolvedCluster, _ *ssh.Pool, _ *inventory.Manifest, _, _ string) error {
 		chCalled = true
 		return nil
 	}

@@ -139,6 +139,12 @@ type resolvedCluster struct {
 	// dry-run steps (pre-deploy gates, postdeploy) skip reading them because they do not exist yet.
 	dryRunCreatedDatabases map[string]struct{}
 
+	// dryRunExpandMigrations names the expand migrations a dry-run expand step in this run submitted to the
+	// PostgreSQL/YugabyteDB and ClickHouse migrate roles, keyed by dryRunMigrationKey. The real expand step applies
+	// every one of them the ledger lacks before any upgrade, so later dry-run pre-deploy gates count a missing expand
+	// migration in this set as applied. Only a dry-run sets it, so a real apply checks the ledger strictly.
+	dryRunExpandMigrations map[string]struct{}
+
 	sharedEnvOnce         sync.Once
 	sharedEnv             map[string]string
 	sharedEnvErr          error

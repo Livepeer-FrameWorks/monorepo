@@ -45,7 +45,9 @@ func serviceDependsOnClickHouse(deployName string) bool {
 // target and every prior release's postdeploy migration is already applied to the databases the service owns —
 // checked against the actual _migrations ledger (the authority), never a detected running version — and that those
 // databases hold every migration folded below the baseline floor. When a prior release is incomplete, the refusal
-// names the first such release; the target's own postdeploy is excluded (it runs after deploy).
+// names the first such release; the target's own postdeploy is excluded (it runs after deploy). In a dry-run release,
+// a missing expand migration that the run's dry-run expand step submitted counts as applied (the real expand step runs
+// before every upgrade); prior postdeploy, checksum mismatches, and the floor are still checked against the ledger.
 func checkPostgresMigrationGate(ctx context.Context, out io.Writer, rc *resolvedCluster, sshPool *ssh.Pool, manifest *inventory.Manifest, dbName, serviceName, target string) error {
 	if len(manifest.Infrastructure.DatabaseDeployments) > 0 {
 		view, err := manifest.WithDatabaseDeployment(manifest.ServiceDatabaseDeployment(serviceName))
@@ -99,6 +101,8 @@ func checkPostgresMigrationGate(ctx context.Context, out io.Writer, rc *resolved
 	if err != nil {
 		return fmt.Errorf("[gate] check postgres expand migrations: %w", err)
 	}
+	missingExpand, wouldApply := splitDryRunExpandMigrations(missingExpand, dryRunEnginePostgres, rc.dryRunExpandMigrations)
+	reportDryRunExpandMigrations(out, serviceName, wouldApply)
 	incompleteRelease, missingPostdeploy, err := firstIncompletePriorRelease(target, releases.ReleasesBelow, func(v string) ([]provisioner.MigrationKey, error) {
 		return missingPostgresMigrationsFn(ctx, sshPool, dbHost, pg, password, databases, "postdeploy", v)
 	})
@@ -136,7 +140,7 @@ func plannedSchemaDatabaseNames(databases []provisioner.SchemaDatabase, planned 
 // baseline floor for the analytics databases against the coordinator's ledger. Symmetric with
 // checkPostgresMigrationGate so a ClickHouse-dependent service (Periscope) is gated on the same completeness the
 // Postgres branch enforces.
-func checkClickHouseMigrationGate(ctx context.Context, rc *resolvedCluster, sshPool *ssh.Pool, manifest *inventory.Manifest, serviceName, target string) error {
+func checkClickHouseMigrationGate(ctx context.Context, out io.Writer, rc *resolvedCluster, sshPool *ssh.Pool, manifest *inventory.Manifest, serviceName, target string) error {
 	ch := manifest.Infrastructure.ClickHouse
 	if ch == nil || !ch.Enabled || len(ch.Databases) == 0 {
 		return fmt.Errorf("[gate] %s depends on ClickHouse but ClickHouse is not enabled/configured in the manifest; cannot verify its migrations before deploy", serviceName)
@@ -156,6 +160,8 @@ func checkClickHouseMigrationGate(ctx context.Context, rc *resolvedCluster, sshP
 	if err != nil {
 		return fmt.Errorf("[gate] check clickhouse expand migrations: %w", err)
 	}
+	missingExpand, wouldApply := splitDryRunExpandMigrations(missingExpand, dryRunEngineClickHouse, rc.dryRunExpandMigrations)
+	reportDryRunExpandMigrations(out, serviceName, wouldApply)
 	incompleteRelease, missingPostdeploy, err := firstIncompletePriorRelease(target, releases.ReleasesBelow, func(v string) ([]provisioner.MigrationKey, error) {
 		return missingClickHouseMigrationsFn(ctx, sshPool, host, port, password, ch.Databases, "postdeploy", v)
 	})
@@ -417,7 +423,7 @@ func runUpgradePreDeployGate(
 		}
 		// ClickHouse branch (INDEPENDENT): the analytics databases.
 		if chBacked {
-			if err := checkClickHouseMigrationGateFn(ctx, rc, sshPool, manifest, serviceName, targetPlatformVersion); err != nil {
+			if err := checkClickHouseMigrationGateFn(ctx, cmd.OutOrStdout(), rc, sshPool, manifest, serviceName, targetPlatformVersion); err != nil {
 				return err
 			}
 		}

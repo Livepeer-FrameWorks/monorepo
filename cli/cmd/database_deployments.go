@@ -16,7 +16,8 @@ func (rc *resolvedCluster) withDatabaseManifest(manifest *inventory.Manifest) *r
 		Source: rc.Source, Cluster: rc.Cluster, ReleaseRepos: rc.ReleaseRepos,
 		Persona: rc.Persona, ContextName: rc.ContextName, ContextSystemTenantID: rc.ContextSystemTenantID,
 		ClusterOverridesContext: rc.ClusterOverridesContext, SourcePersistsManifest: rc.SourcePersistsManifest,
-		sourceFloorVerifiedFor: rc.sourceFloorVerifiedFor, dryRunCreatedDatabases: rc.dryRunCreatedDatabases, envSource: rc,
+		sourceFloorVerifiedFor: rc.sourceFloorVerifiedFor, dryRunCreatedDatabases: rc.dryRunCreatedDatabases,
+		dryRunExpandMigrations: rc.dryRunExpandMigrations, envSource: rc,
 	}
 }
 

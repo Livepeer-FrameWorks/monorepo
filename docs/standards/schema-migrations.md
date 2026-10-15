@@ -185,6 +185,15 @@ enforced in the PostgreSQL and YugabyteDB Ansible roles with explicit
 `not ansible_check_mode` guards and a repository test that treats database-module
 tasks as mutating unless their task name is explicitly audited as read-only.
 
+A `release apply --dry-run` runs its expand step in check mode, so the target's
+expand migrations stay absent from the ledgers when the service upgrades are
+checked. The expand step records the PostgreSQL/YugabyteDB and ClickHouse expand
+migrations it submitted, and each later pre-deploy gate in the same dry-run lists a
+missing expand migration from that set as applied by the release's expand step
+instead of refusing. Checksum mismatches, prior-release postdeploy migrations, and
+the baseline floor are still checked against the ledgers, and a real apply checks
+every expand migration against the ledger.
+
 Rollback is not a dry-run mechanism. In particular, YugabyteDB configurations that
 do not provide transactional DDL can retain schema changes after a client rolls back
 while also rolling back the corresponding `_migrations` insert. Check mode therefore

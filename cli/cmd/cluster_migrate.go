@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"frameworks/cli/pkg/inventory"
+	"io"
 	"maps"
 	"strings"
 	"time"
@@ -150,6 +151,10 @@ func runMigrate(cmd *cobra.Command, rc *resolvedCluster, dryRun bool, phase stri
 	var plannedDatabases map[string]struct{}
 	if dryRun {
 		plannedDatabases = rc.dryRunCreatedDatabases
+	}
+	if dryRun && phase == "expand" {
+		// Allocated before the branches so the per-deployment views, which share this map, record into it.
+		rc.dryRunExpandMigrations = map[string]struct{}{}
 	}
 	if phase == "expand" {
 		created, ensureErr := ensureServiceDatabasesFn(context.Background(), cmd, rc, sshPool, dryRun, completeInterruptedBaselines)
@@ -388,13 +393,9 @@ func runMigratePostgresBranch(ctx context.Context, cmd *cobra.Command, rc *resol
 		itemsKey = "yugabyte_migrate_items"
 	}
 
-	prov, err := provisioner.GetProvisioner(serviceName, sshPool)
+	migrator, err := migratorForFn(serviceName, sshPool)
 	if err != nil {
 		return err
-	}
-	migrator, ok := prov.(provisioner.Migrator)
-	if !ok {
-		return fmt.Errorf("%s provisioner does not implement Migrator", serviceName)
 	}
 
 	cfg := provisioner.ServiceConfig{
@@ -420,7 +421,79 @@ func runMigratePostgresBranch(ctx context.Context, cmd *cobra.Command, rc *resol
 	if err := migrator.ApplyMigrations(ctx, pgHost, cfg, dryRun); err != nil {
 		return fmt.Errorf("apply postgres migrations: %w", err)
 	}
+	if dryRun && phase == "expand" {
+		recordDryRunExpandMigrations(rc.dryRunExpandMigrations, dryRunEnginePostgres, items)
+	}
 	return nil
+}
+
+// Engine labels of dryRunMigrationKey. PostgreSQL and YugabyteDB share one ledger shape and one gate branch.
+const (
+	dryRunEnginePostgres   = "postgres"
+	dryRunEngineClickHouse = "clickhouse"
+)
+
+// migratorForFn resolves the migrate-role runner for an engine's provisioner. Tests substitute a recorder so the
+// migrate branches run without ansible.
+var migratorForFn = func(serviceName string, sshPool *ssh.Pool) (provisioner.Migrator, error) {
+	prov, err := provisioner.GetProvisioner(serviceName, sshPool)
+	if err != nil {
+		return nil, err
+	}
+	migrator, ok := prov.(provisioner.Migrator)
+	if !ok {
+		return nil, fmt.Errorf("%s provisioner does not implement Migrator", serviceName)
+	}
+	return migrator, nil
+}
+
+// dryRunMigrationKey identifies one migration in one physical database by its ledger identity (version, phase,
+// sequence), the same identity the pre-deploy gate's ledger diff reports.
+func dryRunMigrationKey(engine, database, version, phase string, seq int) string {
+	return fmt.Sprintf("%s|%s|%s|%s|%d", engine, database, version, phase, seq)
+}
+
+// recordDryRunExpandMigrations adds the migrate items a dry-run expand step submitted to its engine's role. The role
+// applies each item absent from the ledger, so these are what the real expand step would apply. A nil set records
+// nothing.
+func recordDryRunExpandMigrations(set map[string]struct{}, engine string, items []map[string]any) {
+	if set == nil {
+		return
+	}
+	for _, item := range items {
+		seq, _ := item["sequence"].(int) //nolint:errcheck // the provisioner item builders always set an int sequence
+		set[dryRunMigrationKey(engine, fmt.Sprint(item["db"]), fmt.Sprint(item["version"]), fmt.Sprint(item["phase"]), seq)] = struct{}{}
+	}
+}
+
+// splitDryRunExpandMigrations separates the missing expand migrations a dry-run expand step in this run would apply
+// from those it would not. A checksum mismatch stays a refusal: the migrate role does not re-apply a ledgered
+// migration. With no recorded set (every real apply) all missing migrations remain.
+func splitDryRunExpandMigrations(missing []provisioner.MigrationKey, engine string, recorded map[string]struct{}) (remaining, wouldApply []provisioner.MigrationKey) {
+	if len(recorded) == 0 {
+		return missing, nil
+	}
+	for _, m := range missing {
+		if m.MismatchedChecksum == "" {
+			if _, ok := recorded[dryRunMigrationKey(engine, m.Database, m.Version, m.Phase, m.Seq)]; ok {
+				wouldApply = append(wouldApply, m)
+				continue
+			}
+		}
+		remaining = append(remaining, m)
+	}
+	return remaining, wouldApply
+}
+
+// reportDryRunExpandMigrations prints the missing expand migrations a dry-run gate counts as applied.
+func reportDryRunExpandMigrations(out io.Writer, serviceName string, wouldApply []provisioner.MigrationKey) {
+	if len(wouldApply) == 0 {
+		return
+	}
+	fmt.Fprintf(out, "[gate] %d expand migration(s) for %s would be applied by this release's expand step; dry-run counts them as applied:\n", len(wouldApply), serviceName)
+	for _, m := range wouldApply {
+		fmt.Fprintf(out, "    - %s\n", m.String())
+	}
 }
 
 func runMigrateClickHouseBranch(ctx context.Context, cmd *cobra.Command, rc *resolvedCluster, sshPool *ssh.Pool, dryRun bool, phase, target string, branchesRun, branchesWithItems *[]string) error {
@@ -458,13 +531,9 @@ func runMigrateClickHouseBranch(ctx context.Context, cmd *cobra.Command, rc *res
 	}
 	chPassword := chEnv["CLICKHOUSE_PASSWORD"]
 
-	prov, err := provisioner.GetProvisioner("clickhouse", sshPool)
+	migrator, err := migratorForFn("clickhouse", sshPool)
 	if err != nil {
 		return err
-	}
-	migrator, ok := prov.(provisioner.Migrator)
-	if !ok {
-		return fmt.Errorf("clickhouse provisioner does not implement Migrator")
 	}
 
 	chPort := ch.Port
@@ -492,6 +561,9 @@ func runMigrateClickHouseBranch(ctx context.Context, cmd *cobra.Command, rc *res
 	}
 	if err := migrator.ApplyMigrations(ctx, host, cfg, dryRun); err != nil {
 		return fmt.Errorf("apply clickhouse migrations: %w", err)
+	}
+	if dryRun && phase == "expand" {
+		recordDryRunExpandMigrations(rc.dryRunExpandMigrations, dryRunEngineClickHouse, items)
 	}
 	return nil
 }
