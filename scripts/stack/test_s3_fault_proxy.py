@@ -104,6 +104,26 @@ class ProxyTest(unittest.TestCase):
         self.assertEqual(self.ranged(path, 0, end)[1], MEDIA)
         self.assertEqual(proxy.STALL.snapshot()["resumes"], [{"start": 100_000, "end": end}])
 
+    def test_resume_delay_holds_resumes_and_stalls_fresh_reads_again(self):
+        proxy.STALL.arm("abc123", 0.5)
+        path = "/bucket/vod/abc123/media/abc123.mkv?X-Amz-Signature=s"
+        end = len(MEDIA) - 1
+        status, got = self.ranged(path, 0, end, timeout=1)
+        self.assertEqual((status, got), (206, MEDIA[:proxy.STALL_AFTER]))
+        # A resume is answered in full, after the delay.
+        began = time.monotonic()
+        self.assertEqual(self.ranged(path, 100_000, end)[1], MEDIA[100_000:])
+        self.assertGreaterEqual(time.monotonic() - began, 0.5)
+        # A fresh read of the range stalls at the same byte and counts as a
+        # restart; one that leaves on its own does not.
+        self.assertEqual(self.ranged(path, 0, end, read=4096)[1], MEDIA[:4096])
+        time.sleep(0.5)
+        self.assertEqual(proxy.STALL.snapshot()["restarts"], 0)
+        self.assertEqual(self.ranged(path, 0, end, timeout=1)[1], MEDIA[:proxy.STALL_AFTER])
+        snapshot = proxy.STALL.snapshot()
+        self.assertEqual(snapshot["restarts"], 1)
+        self.assertEqual(snapshot["resumes"], [{"start": 100_000, "end": end}])
+
     def get(self, path):
         connection = http.client.HTTPConnection("127.0.0.1", self.server.server_port, timeout=2)
         try:

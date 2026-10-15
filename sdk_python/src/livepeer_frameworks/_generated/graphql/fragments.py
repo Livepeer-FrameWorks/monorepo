@@ -8763,9 +8763,17 @@ class RebufferingEventDefault(BaseModel):
     stream: Optional["RebufferingEventDefaultStream"]
     node_id: str = Field(alias="nodeId")
     buffer_state: BufferState = Field(alias="bufferState")
-    previous_state: BufferState = Field(alias="previousState")
+    previous_state: BufferState = Field(
+        alias="previousState",
+        description="The state of the stream's previous buffer transition on the same node;\nUNKNOWN for the stream's first transition there.",
+    )
+    "The state of the stream's previous buffer transition on the same node;\nUNKNOWN for the stream's first transition there."
     rebuffer_start: bool = Field(alias="rebufferStart")
-    rebuffer_end: bool = Field(alias="rebufferEnd")
+    rebuffer_end: bool = Field(
+        alias="rebufferEnd",
+        description="This transition ends a rebuffer: DRY to RECOVER when the buffer recovered,\nDRY to EMPTY when the stream ended while it was rebuffering.",
+    )
+    "This transition ends a rebuffer: DRY to RECOVER when the buffer recovered,\nDRY to EMPTY when the stream ended while it was rebuffering."
 
 
 class RebufferingEventDefaultStream(BaseModel):

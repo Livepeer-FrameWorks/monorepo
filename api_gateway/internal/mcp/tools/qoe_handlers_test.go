@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -12,11 +13,25 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-func rebufferEvent(startUnix, endUnix int64) *periscopepb.RebufferingEvent {
-	return &periscopepb.RebufferingEvent{
-		RebufferStart: timestamppb.New(time.Unix(startUnix, 0)),
-		RebufferEnd:   timestamppb.New(time.Unix(endUnix, 0)),
+// bufferEdge is one buffer edge of node at unix second at, shaped like
+// Periscope's rebuffering transitions: a DRY after FULL or RECOVER starts a
+// rebuffer, a RECOVER or EMPTY after DRY ends it, on separate edges.
+func bufferEdge(node string, at int64, prev, state string) *periscopepb.RebufferingEvent {
+	ts := timestamppb.New(time.Unix(at, 0))
+	evt := &periscopepb.RebufferingEvent{Timestamp: ts, NodeId: node, PrevState: prev, BufferState: state}
+	if state == "DRY" && (prev == "FULL" || prev == "RECOVER") {
+		evt.RebufferStart = ts
 	}
+	if prev == "DRY" && (state == "RECOVER" || state == "EMPTY") {
+		evt.RebufferEnd = ts
+	}
+	return evt
+}
+
+// rebuffer is one rebuffer of node: its start edge at start and its end edge
+// at end.
+func rebuffer(node string, start, end int64) []*periscopepb.RebufferingEvent {
+	return []*periscopepb.RebufferingEvent{bufferEdge(node, start, "FULL", "DRY"), bufferEdge(node, end, "DRY", "RECOVER")}
 }
 
 // ----- diagnose_rebuffering -----
@@ -44,9 +59,9 @@ func TestHandleDiagnoseRebuffering_Thresholds(t *testing.T) {
 	}
 
 	// >20 events → critical with remediation recommendations.
-	many := make([]*periscopepb.RebufferingEvent, 21)
-	for i := range many {
-		many[i] = rebufferEvent(0, 0)
+	var many []*periscopepb.RebufferingEvent
+	for i := range int64(21) {
+		many = append(many, rebuffer("n1", i*10, i*10+1)...)
 	}
 	_, out, _ = handleDiagnoseRebuffering(clientstest.AuthedCtx("t1"),
 		DiagnoseRebufferingInput{StreamID: "s1"}, clientstest.Clients(clientstest.WithPeriscope(mk(many))), clientstest.DiscardLogger())
@@ -55,11 +70,47 @@ func TestHandleDiagnoseRebuffering_Thresholds(t *testing.T) {
 	}
 
 	// A few short events → healthy "minor rebuffering".
-	few := []*periscopepb.RebufferingEvent{rebufferEvent(0, 0), rebufferEvent(10, 10), rebufferEvent(20, 20)}
+	var few []*periscopepb.RebufferingEvent
+	for _, at := range []int64{0, 10, 20} {
+		few = append(few, rebuffer("n1", at, at+1)...)
+	}
 	_, out, _ = handleDiagnoseRebuffering(clientstest.AuthedCtx("t1"),
 		DiagnoseRebufferingInput{StreamID: "s1"}, clientstest.Clients(clientstest.WithPeriscope(mk(few))), clientstest.DiscardLogger())
 	if dr := out.(DiagnosticResult); dr.Status != "healthy" || dr.Metrics["rebuffer_count"].(int) != 3 {
 		t.Fatalf("3 short events should be healthy: %+v", dr)
+	}
+}
+
+// A rebuffer is a start edge and a later end edge of the same node; edges that
+// neither start nor end one are not rebuffers, and a rebuffer still open at the
+// end of the range has no duration yet.
+func TestHandleDiagnoseRebuffering_PairsStartAndEndEdgesPerNode(t *testing.T) {
+	events := []*periscopepb.RebufferingEvent{
+		bufferEdge("n1", 100, "", "FULL"),
+		bufferEdge("n1", 110, "FULL", "DRY"),
+		bufferEdge("n2", 111, "", "FULL"),
+		bufferEdge("n2", 112, "FULL", "DRY"),
+		bufferEdge("n1", 112, "DRY", "RECOVER"),
+		bufferEdge("n1", 120, "RECOVER", "DRY"),
+		bufferEdge("n2", 113, "DRY", "EMPTY"),
+		bufferEdge("n1", 124, "DRY", "EMPTY"),
+		bufferEdge("n1", 130, "EMPTY", "FULL"),
+		bufferEdge("n1", 140, "FULL", "DRY"),
+	}
+	slices.Reverse(events)
+	sc := clientstest.Clients(clientstest.WithPeriscope(&clientstest.FakePeriscope{
+		GetRebufferingEventsFn: func(context.Context, string, *string, *string, *periscope.TimeRangeOpts, *periscope.CursorPaginationOpts) (*periscopepb.GetRebufferingEventsResponse, error) {
+			return &periscopepb.GetRebufferingEventsResponse{Events: events}, nil
+		},
+	}))
+	_, out, err := handleDiagnoseRebuffering(clientstest.AuthedCtx("t1"), DiagnoseRebufferingInput{StreamID: "s1"}, sc, clientstest.DiscardLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := out.(DiagnosticResult).Metrics
+	// n1: 110-112 (2 s), 120-124 (4 s), 140 open; n2: 112-113 (1 s).
+	if m["rebuffer_count"] != 4 || m["open_rebuffer_count"] != 1 || m["total_rebuffer_time_ms"] != int64(7000) || m["avg_rebuffer_duration_ms"] != int64(2333) {
+		t.Fatalf("metrics = %v, want 4 rebuffers (1 open), 7000 ms total, 2333 ms average", m)
 	}
 }
 

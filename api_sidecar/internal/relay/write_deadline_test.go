@@ -86,6 +86,7 @@ func TestRelayStreamOutlivesServerWriteTimeout(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	s.MountRoutes(r)
+	waitFillsOnCleanup(t, s)
 	ts := httptest.NewUnstartedServer(r)
 	ts.Config.WriteTimeout = 200 * time.Millisecond
 	ts.Start()
@@ -125,6 +126,7 @@ func TestRelayStreamTimesOutClientThatStopsReading(t *testing.T) {
 		handlerDone <- time.Now()
 	})
 	s.MountRoutes(r)
+	waitFillsOnCleanup(t, s)
 	ts := httptest.NewServer(r)
 	defer ts.Close()
 

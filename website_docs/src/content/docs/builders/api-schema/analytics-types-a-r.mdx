@@ -432,10 +432,13 @@ Implements [Node](/builders/api-schema/shared/#node).
 
 **enum**
 
+Mist&#39;s buffer state of a stream on one node.
+
 - `FULL`
 - `EMPTY`
 - `DRY`
 - `RECOVER`
+- `UNKNOWN` — No buffer state is known: the previous state of a stream&#39;s first buffer transition on a node, which has no earlier transition.
 
 ## CityMetric
 
@@ -881,9 +884,9 @@ Implements [Node](/builders/api-schema/shared/#node).
 - **stream**: `Stream` ([Stream](/builders/api-schema/shared/#stream))
 - **nodeId**: `String!`
 - **bufferState**: `BufferState!` ([BufferState](/builders/api-schema/analytics-types-a-r/#bufferstate))
-- **previousState**: `BufferState!` ([BufferState](/builders/api-schema/analytics-types-a-r/#bufferstate))
+- **previousState**: `BufferState!` ([BufferState](/builders/api-schema/analytics-types-a-r/#bufferstate)) — The state of the stream&#39;s previous buffer transition on the same node; UNKNOWN for the stream&#39;s first transition there.
 - **rebufferStart**: `Boolean!`
-- **rebufferEnd**: `Boolean!`
+- **rebufferEnd**: `Boolean!` — This transition ends a rebuffer: DRY to RECOVER when the buffer recovered, DRY to EMPTY when the stream ended while it was rebuffering.
 
 ## RebufferingEventEdge
 

@@ -3612,6 +3612,7 @@ func (e BootstrapTokenType) MarshalJSON() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// Mist's buffer state of a stream on one node.
 type BufferState string
 
 const (
@@ -3619,6 +3620,9 @@ const (
 	BufferStateEmpty   BufferState = "EMPTY"
 	BufferStateDry     BufferState = "DRY"
 	BufferStateRecover BufferState = "RECOVER"
+	// No buffer state is known: the previous state of a stream's first buffer
+	// transition on a node, which has no earlier transition.
+	BufferStateUnknown BufferState = "UNKNOWN"
 )
 
 var AllBufferState = []BufferState{
@@ -3626,11 +3630,12 @@ var AllBufferState = []BufferState{
 	BufferStateEmpty,
 	BufferStateDry,
 	BufferStateRecover,
+	BufferStateUnknown,
 }
 
 func (e BufferState) IsValid() bool {
 	switch e {
-	case BufferStateFull, BufferStateEmpty, BufferStateDry, BufferStateRecover:
+	case BufferStateFull, BufferStateEmpty, BufferStateDry, BufferStateRecover, BufferStateUnknown:
 		return true
 	}
 	return false

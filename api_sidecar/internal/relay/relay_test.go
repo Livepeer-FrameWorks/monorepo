@@ -123,6 +123,7 @@ func mount(t *testing.T, s *Server) *httptest.Server {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	s.MountRoutes(r)
+	waitFillsOnCleanup(t, s)
 	return httptest.NewServer(r)
 }
 

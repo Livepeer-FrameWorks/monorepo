@@ -151,6 +151,51 @@ func TestRebufferingTransitionsSpanInsertBlocks_RealClickHouse(t *testing.T) {
 	}
 }
 
+// TestRebufferingEndsWhenStreamEndsDry_RealClickHouse ends a stream while its
+// buffer is DRY: Mist reports DRY and then EMPTY when the input goes away. The
+// EMPTY edge ends the open rebuffer, so the stream has one start and one end.
+func TestRebufferingEndsWhenStreamEndsDry_RealClickHouse(t *testing.T) {
+	db := startQueryPackClickHouse(t)
+	server := NewPeriscopeServer(db, logging.NewLoggerWithService("rebuffering-stream-end-real-ch-test"))
+	ctx := serviceTestContext()
+	const streamID = "5eedfeed-11fe-ca57-feed-11feca5700c4"
+	start := time.Now().UTC().Truncate(time.Second).Add(-10 * time.Minute)
+
+	insert := `INSERT INTO periscope.stream_health_samples
+		(timestamp, tenant_id, stream_id, internal_name, node_id, buffer_state, buffer_edge_at)
+		VALUES (?, ?, ?, 'rebuffer-end', 'edge-1', ?, fromUnixTimestamp64Milli(?))`
+	for i, state := range []string{"FULL", "DRY", "EMPTY"} {
+		at := start.Add(time.Duration(i) * 10 * time.Second)
+		if _, err := db.ExecContext(ctx, insert, at, queryPackTenantID, streamID, state, at.UnixMilli()); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	stream := streamID
+	resp, err := server.GetRebufferingEvents(ctx, &periscopepb.GetRebufferingEventsRequest{
+		TenantId:  queryPackTenantID,
+		StreamId:  &stream,
+		TimeRange: &commonpb.TimeRange{Start: timestamppb.New(start), End: timestamppb.New(start.Add(time.Minute))},
+	})
+	if err != nil {
+		t.Fatalf("GetRebufferingEvents: %v", err)
+	}
+	var edges, starts, ends []string
+	for _, event := range resp.GetEvents() {
+		edge := event.GetPrevState() + ">" + event.GetBufferState()
+		edges = append(edges, edge)
+		if event.GetRebufferStart() != nil {
+			starts = append(starts, edge)
+		}
+		if event.GetRebufferEnd() != nil {
+			ends = append(ends, edge)
+		}
+	}
+	if len(starts) != 1 || starts[0] != "FULL>DRY" || len(ends) != 1 || ends[0] != "DRY>EMPTY" {
+		t.Fatalf("edges %v: rebuffer starts %v, ends %v; want one FULL>DRY start and one DRY>EMPTY end", edges, starts, ends)
+	}
+}
+
 // TestRebufferingTransitionsStayOnOneNode_RealClickHouse samples one stream
 // on an origin and an edge, which each hold their own buffer, and samples the
 // origin twice within one second the way Helmsman's periodic poll and a

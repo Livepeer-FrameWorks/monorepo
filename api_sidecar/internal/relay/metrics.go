@@ -99,10 +99,9 @@ var (
 		[]string{"source"},
 	)
 
-	// coldfetchCoalesced counts same-block cold-fan-out coalescing outcomes.
-	// result: "leader" (ran the fetch), "follower" (waited on the leader) or
-	// "follower_stalled_leader" (stopped waiting on a leader that read no
-	// upstream byte for the read-stall bound and fetched the block itself).
+	// coldfetchCoalesced counts cold block reads by whether they started the
+	// block's fill. result: "leader" (started the fill) or "follower" (read a
+	// fill already running, including a retry of a read that gave up).
 	coldfetchCoalesced = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "helmsman",

@@ -293,7 +293,7 @@ func forceCloseForMistReader(c *gin.Context) {
 // to S3 (no caching needed). GET routes through the block cache —
 // block-aligned Range fetches, write-through to disk per admission,
 // served as a 206 (or 200 for un-ranged). Concurrent cold viewers on
-// the same (asset, block) coalesce via blockFetchCoalescer when
+// the same (asset, block) share one block fill (blockFills) when
 // admission allows CacheToDisk; memory-only fetches don't coalesce
 // (no shared warm file to wait for). The block cache is the only
 // persistent cache the relay maintains for single-file artifacts; the

@@ -323,11 +323,17 @@ fetch in the middle of a long ranged response; Mist never receives the store's a
 refusal that survives the re-resolve is answered 502. S3 and peer-relay fetches use a bounded client
 (`api_sidecar/internal/relay/upstream.go`): 10 s dial and TLS handshake, 30 s to response headers (a peer
 answers only once its own cold fetch has a first byte), and a body read that waits 2.5 s for a byte, half
-of Mist's 5 s source read budget, ends the fetch. A block whose upstream body fails mid-block is requested
-again from the first byte not yet copied, at most twice, so the client and the block's cache file continue
-without a gap; a resume refused because the presigned URL expired meanwhile re-resolves and resumes from
-the same byte on the fresh URL. Concurrent readers of one cold block wait on a single leader fetch; a reader whose leader
-read no upstream byte for that same 2.5 s fetches the block itself without caching it. `.dtsh` sidecars are
+of Mist's 5 s source read budget, ends the fetch. A cold block that lands on disk is copied by one block
+fill per (asset, block) (`api_sidecar/internal/relay/blockfetch.go`) that belongs to no reader: every reader
+of the block, the one that started it, concurrent ones and retries alike, reads the block's tmp file as the
+fill extends it, so the first byte reaches Mist as it arrives from the upstream, and Mist abandoning a read
+after its 5 s budget neither aborts the fill nor makes its retry fetch the block from the start. A fill
+whose upstream body fails mid-block requests the rest again from the first byte not yet written, at most
+twice; a resume refused because the presigned URL expired meanwhile re-resolves and resumes from the same
+byte on the fresh URL. A fill that still ends early keeps the bytes it wrote, and the next fill of that
+block requests only the rest. A playback reader whose fill cannot write the cache streams the rest of its
+span from the upstream without caching it; a processing input fails instead. Memory-only reads (a node
+under disk pressure) stream each block from the upstream per reader. `.dtsh` sidecars are
 served from disk when present, fetched from S3 or the origin's peer relay when Foghorn has one, and 404'd
 otherwise so Mist generates and PUTs one (`api_sidecar/internal/relay/dtsh.go`). Mist receives no sidecar
 byte until the relay has the whole sidecar and validated it, so the whole fetch is bounded at 4 s, under

@@ -4553,7 +4553,9 @@ func (r *rebufferingEventResolver) PreviousState(ctx context.Context, obj *peris
 	case "RECOVER":
 		return model.BufferStateRecover, nil
 	default:
-		return model.BufferStateRecover, nil
+		// Periscope leaves the previous state empty for a stream's first
+		// transition on a node.
+		return model.BufferStateUnknown, nil
 	}
 }
 

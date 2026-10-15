@@ -446,6 +446,20 @@
   }
 
   // Utility functions for color formatting
+  // A buffer edge starts a rebuffer, ends one (on recovery or stream end), or
+  // is a buffer state change that is neither.
+  function rebufferEdgeLabel(edge: {
+    rebufferStart: boolean;
+    rebufferEnd: boolean;
+    bufferState: string;
+  }): string {
+    if (edge.rebufferStart) return "Rebuffer Started";
+    if (edge.rebufferEnd) {
+      return edge.bufferState === "EMPTY" ? "Rebuffer Ended (stream ended)" : "Rebuffer Ended";
+    }
+    return `Buffer ${edge.bufferState}`;
+  }
+
   function getBufferStateColor(state: string | null | undefined): string {
     if (!state) return "text-muted-foreground";
     switch (state.toLowerCase()) {
@@ -1611,7 +1625,7 @@
                   <div class="flex items-center gap-2">
                     <PauseIcon class="w-4 h-4 text-warning-alt" />
                     <span class="font-medium text-foreground">
-                      {event.rebufferStart ? "Rebuffer Started" : "Rebuffer Ended"}
+                      {rebufferEdgeLabel(event)}
                     </span>
                   </div>
                   <span class="text-xs text-muted-foreground"

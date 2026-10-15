@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -115,6 +116,14 @@ func newStallUpstream(t *testing.T, body []byte, stall func(n int, r *http.Reque
 		u.srv.Close()
 	})
 	return u
+}
+
+// waitFillsOnCleanup waits, when the test ends, for block fills of s still
+// running: a fill outlives the request that started it and may still be
+// writing under the test's temp dir.
+func waitFillsOnCleanup(t *testing.T, s *Server) {
+	t.Helper()
+	t.Cleanup(s.fills.wg.Wait)
 }
 
 // eventuallyHasBlock waits briefly for a block's rename, which follows the
@@ -229,33 +238,67 @@ func TestColdBlockPersistentStallFailsWithinBoundAndRetryServes(t *testing.T) {
 	if err != nil || status != http.StatusOK || !bytes.Equal(got, body) {
 		t.Fatalf("retry: status=%d bytes=%d err=%v, want 200 and the full block", status, len(got), err)
 	}
+	// The failed fill kept the bytes it wrote; the retry fetches only the rest.
+	reqs := up.requests()
+	if last := reqs[len(reqs)-1]; strings.HasPrefix(last, "bytes=0-") {
+		t.Fatalf("upstream requests = %v, want the retry to continue after the bytes the failed fill wrote", reqs)
+	}
 }
 
-// A request for a block whose coalesced leader stopped making progress does
-// not wait for that leader; it fetches the block itself.
-func TestColdBlockFollowerLeavesStalledLeader(t *testing.T) {
-	withUpstreamBounds(t, testUpstreamBounds)
+// A block fill that cannot create its cache file does not fail a playback
+// read: the reader streams the block from the upstream without caching it.
+func TestColdBlockFillWithoutCacheFileStreamsUpstream(t *testing.T) {
 	const size = 64 * 1024
 	body := patternBody(size)
-	up := newStallUpstream(t, body, func(int, *http.Request) int { return -1 })
-	s := relayFor(t, up, "follower", size, admission.CacheToDisk, size)
+	up := upstreamServer(t, body)
+	defer up.Close()
+	s := relayForUpstream(t, up, "nocachefile", size, admission.CacheToDisk, size)
 	ts := mount(t, s)
 	defer ts.Close()
-
-	store := NewBlockStore(filepath.Join(s.basePath, "vod", "follower.mkv"), size)
-	key := blockFetchKey(store, 0)
-	leader, _ := s.coldFetch.claim(key)
-	if !leader {
-		t.Fatal("test could not claim the block")
+	store := NewBlockStore(filepath.Join(s.basePath, "vod", "nocachefile.mkv"), size)
+	if err := os.MkdirAll(store.BlockPath(0)+".tmp", 0o755); err != nil {
+		t.Fatal(err)
 	}
-	defer s.coldFetch.finish(key, false)
+	s.cleanedBlockDirs.Store(store.Dir(), struct{}{})
 
-	got, status, elapsed, err := getWithin(t, ts.URL+"/internal/artifact/vod/follower.mkv", "", 5*time.Second)
-	if err != nil || status != http.StatusOK || !bytes.Equal(got, body) {
-		t.Fatalf("follower: status=%d bytes=%d err=%v after %s, want 200 and the full block", status, len(got), err, elapsed)
+	got, status, _, err := getWithin(t, ts.URL+"/internal/artifact/vod/nocachefile.mkv", fmt.Sprintf("bytes=0-%d", size-1), 5*time.Second)
+	if err != nil || status != http.StatusPartialContent || !bytes.Equal(got, body) {
+		t.Fatalf("status=%d bytes=%d err=%v, want 206 and the full block", status, len(got), err)
 	}
-	if limit := testUpstreamBounds.readStall + 2*time.Second; elapsed > limit {
-		t.Fatalf("follower waited %s on a stalled leader, want under %s", elapsed, limit)
+	if store.HasBlock(0) {
+		t.Fatal("block cached although its cache file could not be created")
+	}
+}
+
+// A reader that stops reading the block it started does not hold the block
+// back from other readers: the block's fill does not wait on any reader.
+func TestColdBlockReaderNotHeldBySlowReader(t *testing.T) {
+	withUpstreamBounds(t, testUpstreamBounds)
+	const size = 8 << 20
+	body := patternBody(size)
+	up := newStallUpstream(t, body, func(int, *http.Request) int { return -1 })
+	s := relayFor(t, up, "slowreader", size, admission.CacheToDisk, size)
+	ts := mount(t, s)
+	defer ts.Close()
+	url := ts.URL + "/internal/artifact/vod/slowreader.mkv"
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rng := fmt.Sprintf("bytes=0-%d", size-1)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req.Header.Set("Range", rng)
+	slow, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer slow.Body.Close()
+
+	got, status, elapsed, err := getWithin(t, url, rng, 5*time.Second)
+	if err != nil || status != http.StatusPartialContent || !bytes.Equal(got, body) {
+		t.Fatalf("second reader: status=%d bytes=%d err=%v after %s, want 206 and the full block", status, len(got), err, elapsed)
+	}
+	if n := len(up.requests()); n != 1 {
+		t.Fatalf("upstream requests = %v, want the one fill both readers share", up.requests())
 	}
 }
 
@@ -451,5 +494,85 @@ func TestColdBlockResumeAfterPresignExpiryRenewsAndContinues(t *testing.T) {
 	}
 	if resolver.callCount() != 2 {
 		t.Fatalf("resolver calls = %d, want 2 (initial + one renewal)", resolver.callCount())
+	}
+}
+
+// A cold block whose upstream stalls mid-body, and whose resume answers later
+// than the reader's own deadline, keeps filling after that reader gives up:
+// the next reader receives the whole block from the fill already in flight,
+// and the block is never requested from its first byte again. The reader that
+// gives up stands for Mist's 5 s source read timeout.
+func TestColdBlockFillOutlivesReaderThatGaveUp(t *testing.T) {
+	bounds := testUpstreamBounds
+	bounds.responseHeader = 2 * time.Second
+	withUpstreamBounds(t, bounds)
+	const size = 64 * 1024
+	const sent = 16 * 1024
+	const resumeDelay = 700 * time.Millisecond
+	body := patternBody(size)
+	release := make(chan struct{})
+	var (
+		mu     sync.Mutex
+		ranges []string
+		starts = map[int64]int{}
+	)
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start, end := parseTestRange(r, size)
+		mu.Lock()
+		ranges = append(ranges, r.Header.Get("Range"))
+		starts[start]++
+		nth := starts[start]
+		mu.Unlock()
+		if start == sent && nth == 1 {
+			select {
+			case <-r.Context().Done():
+				return
+			case <-time.After(resumeDelay):
+			}
+		}
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, size))
+		w.Header().Set("Content-Length", strconv.FormatInt(end-start+1, 10))
+		w.WriteHeader(http.StatusPartialContent)
+		part := body[start : end+1]
+		if start == 0 && nth == 1 {
+			_, _ = w.Write(part[:sent])
+			w.(http.Flusher).Flush()
+			select {
+			case <-r.Context().Done():
+			case <-release:
+			}
+			return
+		}
+		_, _ = w.Write(part)
+	}))
+	t.Cleanup(func() {
+		close(release)
+		up.Close()
+	})
+	s := relayForUpstream(t, up, "giveup", size, admission.CacheToDisk, size)
+	ts := mount(t, s)
+	defer ts.Close()
+	url := ts.URL + "/internal/artifact/vod/giveup.mkv"
+	rng := fmt.Sprintf("bytes=0-%d", size-1)
+
+	first, _, _, err := getWithin(t, url, rng, testUpstreamBounds.readStall+300*time.Millisecond)
+	if err == nil && len(first) == size {
+		t.Fatal("first reader got the whole block before its deadline; the resume delay does not exceed it")
+	}
+
+	got, status, elapsed, err := getWithin(t, url, rng, 3*time.Second)
+	mu.Lock()
+	seen := append([]string(nil), ranges...)
+	fromStart := starts[0]
+	mu.Unlock()
+	if err != nil || status != http.StatusPartialContent || !bytes.Equal(got, body) {
+		t.Fatalf("second reader: status=%d bytes=%d equal=%v err=%v after %s (upstream requests %v), want 206 and the whole block", status, len(got), bytes.Equal(got, body), err, elapsed, seen)
+	}
+	if fromStart != 1 {
+		t.Fatalf("upstream requests = %v: the block was requested from its first byte %d times, want once", seen, fromStart)
+	}
+	store := NewBlockStore(filepath.Join(s.basePath, "vod", "giveup.mkv"), size)
+	if !eventuallyHasBlock(store, 0) {
+		t.Fatal("block was not cached")
 	}
 }

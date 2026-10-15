@@ -661,7 +661,9 @@ export interface BufferEventsConnection {
     __typename: 'BufferEventsConnection'
 }
 
-export type BufferState = 'FULL' | 'EMPTY' | 'DRY' | 'RECOVER'
+
+/** Mist's buffer state of a stream on one node. */
+export type BufferState = 'FULL' | 'EMPTY' | 'DRY' | 'RECOVER' | 'UNKNOWN'
 
 
 /**
@@ -4454,8 +4456,16 @@ export interface RebufferingEvent {
     stream: (Stream | null)
     nodeId: Scalars['String']
     bufferState: BufferState
+    /**
+     * The state of the stream's previous buffer transition on the same node;
+     * UNKNOWN for the stream's first transition there.
+     */
     previousState: BufferState
     rebufferStart: Scalars['Boolean']
+    /**
+     * This transition ends a rebuffer: DRY to RECOVER when the buffer recovered,
+     * DRY to EMPTY when the stream ended while it was rebuffering.
+     */
     rebufferEnd: Scalars['Boolean']
     __typename: 'RebufferingEvent'
 }
@@ -12265,8 +12275,16 @@ export interface RebufferingEventGenqlSelection{
     stream?: StreamGenqlSelection
     nodeId?: boolean | number
     bufferState?: boolean | number
+    /**
+     * The state of the stream's previous buffer transition on the same node;
+     * UNKNOWN for the stream's first transition there.
+     */
     previousState?: boolean | number
     rebufferStart?: boolean | number
+    /**
+     * This transition ends a rebuffer: DRY to RECOVER when the buffer recovered,
+     * DRY to EMPTY when the stream ended while it was rebuffering.
+     */
     rebufferEnd?: boolean | number
     __typename?: boolean | number
     __scalar?: boolean | number
@@ -18925,7 +18943,8 @@ export const enumBufferState = {
    FULL: 'FULL' as const,
    EMPTY: 'EMPTY' as const,
    DRY: 'DRY' as const,
-   RECOVER: 'RECOVER' as const
+   RECOVER: 'RECOVER' as const,
+   UNKNOWN: 'UNKNOWN' as const
 }
 
 export const enumCardPaymentProvider = {

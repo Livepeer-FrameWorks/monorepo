@@ -48,11 +48,17 @@ export type BootstrapEdgeInput = {
   token: string;
 };
 
+/** Mist's buffer state of a stream on one node. */
 export type BufferState =
   | 'DRY'
   | 'EMPTY'
   | 'FULL'
   | 'RECOVER'
+  /**
+   * No buffer state is known: the previous state of a stream's first buffer
+   * transition on a node, which has no earlier transition.
+   */
+  | 'UNKNOWN'
   | '%future added value';
 
 /** Card payment provider for top-ups. */
@@ -2917,7 +2923,9 @@ dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | nul
 
 export type RateLimitErrorDefaultFieldsFragment = { message: string, code: string | null, retryAfter: number | null };
 
-export type RebufferingEventDefaultFieldsFragment = { timestamp: string, streamId: string, nodeId: string, bufferState: BufferState, previousState: BufferState, rebufferStart: boolean, rebufferEnd: boolean, stream: { /** Global unique identifier for Relay compatibility. */
+export type RebufferingEventDefaultFieldsFragment = { timestamp: string, streamId: string, nodeId: string, bufferState: BufferState, /** The state of the stream's previous buffer transition on the same node; UNKNOWN for the stream's first transition there. */
+previousState: BufferState, rebufferStart: boolean, /** This transition ends a rebuffer: DRY to RECOVER when the buffer recovered, DRY to EMPTY when the stream ended while it was rebuffering. */
+rebufferEnd: boolean, stream: { /** Global unique identifier for Relay compatibility. */
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */

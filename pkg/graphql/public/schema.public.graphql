@@ -857,11 +857,19 @@ type BufferEventsConnection {
   totalCount: Int!
 }
 
+"""
+Mist's buffer state of a stream on one node.
+"""
 enum BufferState {
   FULL
   EMPTY
   DRY
   RECOVER
+  """
+  No buffer state is known: the previous state of a stream's first buffer
+  transition on a node, which has no earlier transition.
+  """
+  UNKNOWN
 }
 
 """
@@ -6985,8 +6993,16 @@ type RebufferingEvent {
   stream: Stream
   nodeId: String!
   bufferState: BufferState!
+  """
+  The state of the stream's previous buffer transition on the same node;
+  UNKNOWN for the stream's first transition there.
+  """
   previousState: BufferState!
   rebufferStart: Boolean!
+  """
+  This transition ends a rebuffer: DRY to RECOVER when the buffer recovered,
+  DRY to EMPTY when the stream ended while it was rebuffering.
+  """
   rebufferEnd: Boolean!
 }
 

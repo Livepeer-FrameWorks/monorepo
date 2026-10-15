@@ -74,7 +74,7 @@ S3 sees zero traffic on the live lane.
    clip / VOD /   ──▶│ Helmsman relay        │── stream ─▶ Mist ─▶ viewers
    finalized DVR    │   /internal/artifact/  │           (shm look-ahead)
    playback         │   S3 → disk cache      │
-                    │   stream-first tee     │
+                    │   shared block fill    │
                     └───────────────────────┘
                                 ▲
                                 │ S3 range GET (presigned)

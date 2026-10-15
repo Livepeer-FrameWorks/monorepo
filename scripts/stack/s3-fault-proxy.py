@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Forward real S3 traffic; stall two PUTs for one explicitly armed artifact;
 expire one armed artifact's presigned GETs signed before the arming instant;
-stall one armed artifact's ranged media GET mid-body.
+stall one armed artifact's ranged media GET mid-body, optionally holding every
+resume of it back and stalling every fresh read of the same range again.
 
 Only the private control port can arm the fixtures. Paths, queries, Host and
 signed headers reach the real backend unchanged. Neither presigned URLs nor
@@ -114,39 +115,51 @@ class Stall:
     client is still reading at that point counts, so a reader that stops on its
     own (the relay's 4 KiB preflight) does not use the stall up. Requests that
     start inside the stalled range afterwards are recorded: only a resume of
-    the stalled read starts there, block fetches start on block boundaries."""
+    the stalled read starts there, block fetches start on block boundaries.
+
+    With a resume delay the object store behaves like a cold read that is slow
+    at one byte: every resume of the stalled read waits resume_delay seconds
+    before it is answered, and every fresh read of the stalled range from its
+    first byte stalls at the same byte again. Those fresh reads that a client
+    kept reading are counted as restarts."""
 
     def __init__(self):
         self.lock = threading.Lock()
         self.arm("")
 
-    def arm(self, artifact):
+    def arm(self, artifact, resume_delay=0):
         with self.lock:
             self.artifact = artifact
+            self.resume_delay = resume_delay
             self.stalled = None
             self.skipped = 0
+            self.restarts = 0
             self.resumes = []
 
     def candidate(self, method, path, headers):
-        """The requested (start, end) when this GET may be the stalled one."""
+        """(stall range, delay): the requested (start, end) when this GET may
+        stall, and the seconds to hold it back before forwarding it."""
         if method != "GET":
-            return None
+            return None, 0
         key = urllib.parse.unquote(urllib.parse.urlsplit(path).path)
         rng = headers.get("Range", "")
         with self.lock:
             if not self.artifact or self.artifact not in key or key.endswith(".dtsh"):
-                return None
+                return None, 0
             try:
                 start, end = (int(v) for v in rng.removeprefix("bytes=").split("-", 1))
             except ValueError:
-                return None
+                return None, 0
             if self.stalled is not None:
                 if self.stalled["start"] < start <= self.stalled["end"]:
                     self.resumes.append({"start": start, "end": end})
-                return None
+                    return None, self.resume_delay
+                if self.resume_delay and start == self.stalled["start"]:
+                    return (start, end), 0
+                return None, 0
             if end - start + 1 <= 2 * STALL_AFTER:
-                return None
-            return start, end
+                return None, 0
+            return (start, end), 0
 
     def take(self, start, end, connection):
         """Claims the stall for this response unless its client already left."""
@@ -156,15 +169,19 @@ class Stall:
                 self.skipped += 1
             return False
         with self.lock:
-            if self.stalled is not None:
-                return False
-            self.stalled = {"start": start, "end": end, "sent": STALL_AFTER}
-            return True
+            if self.stalled is None:
+                self.stalled = {"start": start, "end": end, "sent": STALL_AFTER}
+                return True
+            if self.resume_delay and start == self.stalled["start"]:
+                self.restarts += 1
+                return True
+            return False
 
     def snapshot(self):
         with self.lock:
-            return {"artifact": self.artifact, "stalled": self.stalled,
-                    "skipped": self.skipped, "resumes": list(self.resumes)}
+            return {"artifact": self.artifact, "resume_delay": self.resume_delay,
+                    "stalled": self.stalled, "skipped": self.skipped,
+                    "restarts": self.restarts, "resumes": list(self.resumes)}
 
 
 def client_gone(connection):
@@ -214,12 +231,16 @@ class Control(QuietHandler):
                     value = payload.get(field, "")
                     if not isinstance(value, str) or (value and not value.isalnum()):
                         raise ValueError("invalid artifact hash")
+                resume_delay = payload.get("stall_resume_delay", 0)
+                if isinstance(resume_delay, bool) or not isinstance(resume_delay, (int, float)) \
+                        or not 0 <= resume_delay <= 30:
+                    raise ValueError("invalid resume delay")
                 if "artifact" in payload:
                     FAULT.reset(payload["artifact"])
                 if "expire_artifact" in payload:
                     EXPIRY.arm(payload["expire_artifact"], int(time.time()))
                 if "stall_artifact" in payload:
-                    STALL.arm(payload["stall_artifact"])
+                    STALL.arm(payload["stall_artifact"], resume_delay)
             except (ValueError, TypeError, AttributeError):
                 self.send_error(400)
                 return
@@ -275,7 +296,9 @@ class Proxy(QuietHandler):
                         break
             self.close_connection = True
             return
-        stall_range = STALL.candidate(self.command, self.path, self.headers)
+        stall_range, delay = STALL.candidate(self.command, self.path, self.headers)
+        if delay:
+            time.sleep(delay)
         connection = http.client.HTTPConnection(UPSTREAM, timeout=120)
         try:
             headers = {k: v for k, v in self.headers.items() if k.lower() not in HOP_HEADERS}

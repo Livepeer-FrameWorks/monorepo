@@ -74,7 +74,7 @@ type Server struct {
 	tenantHTTPC *http.Client
 	cache       *resolveCache
 	blockSize   int64
-	coldFetch   *blockFetchCoalescer
+	fills       *blockFills
 	// sidecarFetches shares one upstream .dtsh fetch among concurrent readers.
 	sidecarFetches sidecarFetchGroup
 	nodeID         string
@@ -95,12 +95,9 @@ type Server struct {
 	// writeStallTimeout is how long one response write may block before the
 	// client counts as gone; see writeProgressDeadline.
 	writeStallTimeout time.Duration
-	// upstreamReadStall is how long a coalesced block fetch may go without
-	// reading an upstream byte before its followers stop waiting on it.
-	upstreamReadStall time.Duration
 	// cleanedBlockDirs records the .blocks dirs whose leftover tmp files this
 	// process already removed; tmp files created after that belong to a
-	// fetch still running in this process.
+	// fill still running in this process.
 	cleanedBlockDirs sync.Map
 }
 
@@ -175,7 +172,7 @@ func New(opts Options) *Server {
 		tenantHTTPC:  tenantClient,
 		cache:        newResolveCache(),
 		blockSize:    blockSize,
-		coldFetch:    newBlockFetchCoalescer(),
+		fills:        newBlockFills(),
 		nodeID:       strings.TrimSpace(opts.NodeID),
 		authorizer:   authorizer,
 		trustedCIDRs: parseTrustedCIDRs(opts.RelayTrustedCIDR, opts.Logger),
@@ -183,7 +180,6 @@ func New(opts Options) *Server {
 		defrost:      newDefrostAggregator(),
 
 		writeStallTimeout: relayWriteStallTimeout,
-		upstreamReadStall: relayUpstreamBounds.readStall,
 	}
 }
 

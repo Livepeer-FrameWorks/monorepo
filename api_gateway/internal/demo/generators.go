@@ -4082,25 +4082,32 @@ func GenerateRebufferingEventsConnection(internalName *string) *model.Rebufferin
 		streamName = *internalName
 	}
 
-	// Generate sample rebuffering events
-	bufferStates := []string{"FILLING", "FULL", "DRY", "FILLING"}
-	events := make([]*periscopepb.RebufferingEvent, 4)
+	// One node's buffer edges: a rebuffer that recovers, then one the stream
+	// ends in. The first edge has no previous state.
+	bufferStates := []string{"FULL", "DRY", "RECOVER", "DRY", "EMPTY"}
+	events := make([]*periscopepb.RebufferingEvent, len(bufferStates))
 
-	for i := 0; i < 4; i++ {
+	for i, state := range bufferStates {
 		timestamp := now.Add(-time.Duration(30-i*5) * time.Minute)
-		rebufferStart := timestamp.Add(-time.Second * 2)
-		rebufferEnd := timestamp
-
-		events[i] = &periscopepb.RebufferingEvent{
-			Id:            fmt.Sprintf("rebuf_%d", i+1),
-			Timestamp:     timestamppb.New(timestamp),
-			StreamId:      streamName,
-			NodeId:        "demo_node_001",
-			BufferState:   bufferStates[i],
-			PrevState:     bufferStates[(i+3)%4], // Previous state
-			RebufferStart: timestamppb.New(rebufferStart),
-			RebufferEnd:   timestamppb.New(rebufferEnd),
+		prev := ""
+		if i > 0 {
+			prev = bufferStates[i-1]
 		}
+		event := &periscopepb.RebufferingEvent{
+			Id:          fmt.Sprintf("rebuf_%d", i+1),
+			Timestamp:   timestamppb.New(timestamp),
+			StreamId:    streamName,
+			NodeId:      "demo_node_001",
+			BufferState: state,
+			PrevState:   prev,
+		}
+		if state == "DRY" && (prev == "FULL" || prev == "RECOVER") {
+			event.RebufferStart = timestamppb.New(timestamp)
+		}
+		if prev == "DRY" && (state == "RECOVER" || state == "EMPTY") {
+			event.RebufferEnd = timestamppb.New(timestamp)
+		}
+		events[i] = event
 	}
 
 	edges := make([]*model.RebufferingEventEdge, len(events))
@@ -4125,7 +4132,7 @@ func GenerateRebufferingEventsConnection(internalName *string) *model.Rebufferin
 			HasPreviousPage: false,
 			HasNextPage:     false,
 			StartCursor:     stringPtr("rebuf_cursor_1"),
-			EndCursor:       stringPtr("rebuf_cursor_4"),
+			EndCursor:       stringPtr(fmt.Sprintf("rebuf_cursor_%d", len(events))),
 		},
 		TotalCount: len(events),
 	}

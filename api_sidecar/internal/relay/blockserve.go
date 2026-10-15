@@ -2,18 +2,15 @@ package relay
 
 // Block-aware cold-fetch + serve. The relay's only persistent caching
 // path for single-file artifacts: each missing block is fetched from
-// S3 with a block-aligned Range GET, streamed to the client through a
-// range-clamped writer, and tee'd to a tmpfile that becomes the
-// canonical .blk on full successful download. Disk side is best-
-// effort; client side never waits on it.
+// S3 with a block-aligned Range GET into a tmpfile that becomes the
+// canonical .blk on full successful download, and readers are served
+// from that tmpfile as it grows.
 //
-// Concurrency: same-block cold fan-out coalesces via
-// blockFetchCoalescer when admission grants CacheToDisk — the first
-// viewer (leader) runs the S3 fetch + disk write + its own client
-// stream, late viewers wait briefly for the leader and then serve
-// from the warm block. Memory-only viewers bypass the coalescer
-// (no shared warm file to wait for) and each issue their own S3
-// range fetch.
+// Concurrency: when admission grants CacheToDisk, one block fill runs
+// per (asset, block) independent of any reader (blockFills); every
+// reader of the block, concurrent or retrying, reads the same fill.
+// Memory-only viewers have no shared file to read and each issue
+// their own S3 range fetch.
 
 import (
 	"context"
@@ -212,12 +209,32 @@ func (s *Server) serveViaBlockCache(c *gin.Context, kind, hash, ext, localPath s
 		renewedSinceProgress = true
 		return upstreamTarget{url: upstreamURL, grantID: res.PeerRelayGrantID, client: upstreamClient}, true
 	}
+	// A block fill outlives this request, so it renews a copy of the current
+	// resolution and leaves this request's own resolution alone.
+	fillFrom := func() fillSource {
+		src := fillSource{
+			target:  upstreamTarget{url: upstreamURL, grantID: res.PeerRelayGrantID, client: upstreamClient},
+			defrost: recordDefrost,
+		}
+		if renew != nil {
+			fillRes := res
+			src.renew = func() (upstreamTarget, bool) {
+				fresh, ok := renew(fillRes)
+				if !ok {
+					return upstreamTarget{}, false
+				}
+				fillRes = fresh
+				return upstreamTarget{url: fresh.UpstreamURL(), grantID: fresh.PeerRelayGrantID, client: s.upstreamClient(fresh)}, true
+			}
+		}
+		return src
+	}
 	for _, span := range spans {
 		// A span fetch refused with 401/403 wrote nothing for that span, so it
 		// is sent again on the renewed resolution without a gap in the body.
-		err := s.serveBlockSpan(c.Request.Context(), upstreamClient, c.Writer, store, span, totalSize, upstreamURL, res.PeerRelayGrantID, cacheDecision, strictCache, recordDefrost, renewMidBlock)
+		err := s.serveBlockSpan(c.Request.Context(), upstreamClient, c.Writer, store, span, totalSize, upstreamURL, res.PeerRelayGrantID, cacheDecision, strictCache, recordDefrost, renewMidBlock, fillFrom)
 		if err != nil && renewAfter(err) {
-			err = s.serveBlockSpan(c.Request.Context(), upstreamClient, c.Writer, store, span, totalSize, upstreamURL, res.PeerRelayGrantID, cacheDecision, strictCache, recordDefrost, renewMidBlock)
+			err = s.serveBlockSpan(c.Request.Context(), upstreamClient, c.Writer, store, span, totalSize, upstreamURL, res.PeerRelayGrantID, cacheDecision, strictCache, recordDefrost, renewMidBlock, fillFrom)
 		}
 		if err == nil {
 			renewedSinceProgress = false
@@ -245,86 +262,102 @@ func (s *Server) serveViaBlockCache(c *gin.Context, kind, hash, ext, localPath s
 }
 
 // serveBlockSpan serves a single block's worth of bytes (clipped to
-// [from,to] within the block). Warm path: open the disk block and copy
-// the requested slice. Cold path: stream from S3 through a tolerant
-// tee — bytes go to the client (range-clamped) AND to a disk tmpfile
-// for the cache. First byte to client == first byte from S3; the
-// client never waits for the full block to land. If the disk side
-// fails (full, slow, permissions), the cache write is abandoned mid-
-// stream and the client continues to receive bytes from S3.
-//
-// Same-block cold-fan-out is coalesced when admission allows
-// CacheToDisk: the first viewer (leader) does the S3 fetch + disk
-// write + its own client stream; subsequent viewers wait briefly for
-// the leader to publish the warm block, then serve directly from
-// disk. Without coalescing, N viewers on the same cold block would
-// fire N parallel S3 range GETs and N tmpfiles. Memory-only viewers
-// bypass the coalescer (no shared warm file to wait for).
-func (s *Server) serveBlockSpan(ctx context.Context, httpc *http.Client, w io.Writer, store *BlockStore, span blockSpan, totalSize int64, mediaURL, grantID string, decision admission.CacheDecision, strictCache bool, defrost func(int64), renewMidBlock func() (upstreamTarget, bool)) error {
+// [from,to] within the block). Warm path: open the disk block and copy the
+// requested slice. Cold path with CacheToDisk: read the block's fill (see
+// blockFills) as it lands in the block's tmp file, so the first byte to the
+// client follows the first byte from the upstream and every concurrent or
+// retrying reader of the block shares one upstream fetch. A playback reader
+// whose fill cannot write the cache continues its span straight from the
+// upstream; a processing input (strictCache) fails instead, because Mist will
+// seek these bytes again. Memory-only reads stream from the upstream without
+// a fill.
+func (s *Server) serveBlockSpan(ctx context.Context, httpc *http.Client, w io.Writer, store *BlockStore, span blockSpan, totalSize int64, mediaURL, grantID string, decision admission.CacheDecision, strictCache bool, defrost func(int64), renewMidBlock func() (upstreamTarget, bool), fillFrom func() fillSource) error {
 	if served, err := s.serveWarmBlock(w, store, span); served || err != nil {
 		return err
 	}
-	if decision != admission.CacheToDisk || s.coldFetch == nil {
-		return s.streamBlockFromS3(ctx, httpc, w, store, span, totalSize, mediaURL, grantID, decision, strictCache, defrost, nil, renewMidBlock)
+	if decision != admission.CacheToDisk {
+		return s.streamBlockFromS3(ctx, httpc, w, store, span, totalSize, mediaURL, grantID, defrost, renewMidBlock)
 	}
-
-	// Only a registered leader writes the block's tmp file, so a late arrival
-	// that does not find a warm block after its leader finished claims the
-	// block again instead of writing beside another fetch. A late arrival
-	// whose leader stopped reading upstream bytes, or a second leader that
-	// also left no warm block, streams the block itself without caching it.
-	key := blockFetchKey(store, span.Idx)
-	for round := 0; ; round++ {
-		leader, fetch := s.coldFetch.claim(key)
-		if leader {
-			coldfetchCoalesced.WithLabelValues("leader").Inc()
-			err := s.streamBlockFromS3(ctx, httpc, w, store, span, totalSize, mediaURL, grantID, decision, strictCache, defrost, fetch.noteProgress, renewMidBlock)
-			s.coldFetch.finish(key, err == nil && store.HasBlock(span.Idx))
-			return err
-		}
-		coldfetchCoalesced.WithLabelValues("follower").Inc()
-		finished, err := s.awaitColdFetch(ctx, fetch)
-		if err != nil {
-			return err
-		}
-		if !finished {
-			coldfetchCoalesced.WithLabelValues("follower_stalled_leader").Inc()
-			return s.streamBlockFromS3(ctx, httpc, w, store, span, totalSize, mediaURL, grantID, admission.CacheMemoryOnly, strictCache, defrost, nil, renewMidBlock)
-		}
-		if fetch.diskOk {
-			if served, err := s.serveWarmBlock(w, store, span); served || err != nil {
-				return err
-			}
-		}
-		if round > 0 {
-			return s.streamBlockFromS3(ctx, httpc, w, store, span, totalSize, mediaURL, grantID, admission.CacheMemoryOnly, strictCache, defrost, nil, renewMidBlock)
+	fill, err := s.claimBlockFill(ctx, store, span, totalSize, fillFrom())
+	if err == nil && fill == nil {
+		// The block turned warm between the first look and the claim.
+		if served, warmErr := s.serveWarmBlock(w, store, span); served || warmErr != nil {
+			return warmErr
 		}
 	}
+	pos := span.From
+	if err == nil && fill != nil {
+		pos, err = readBlockFill(ctx, w, fill, span)
+		if err == nil {
+			return nil
+		}
+	}
+	var diskErr fillDiskError
+	if (err == nil || errors.As(err, &diskErr)) && !strictCache && ctx.Err() == nil {
+		if err != nil && s.logger != nil {
+			s.logger.WithError(err).WithField("block_idx", span.Idx).Debug("blockcache: block fill could not write the cache; streaming the rest of the span without it")
+		}
+		return s.streamBlockFromS3(ctx, httpc, w, store, blockSpan{Idx: span.Idx, From: pos, To: span.To}, totalSize, mediaURL, grantID, defrost, renewMidBlock)
+	}
+	if err == nil {
+		return fmt.Errorf("block %d evicted while it was being served", span.Idx)
+	}
+	// The caller answers a status error by serving the whole span again on a
+	// renewed resolution, which after bytes of the span went out would repeat
+	// them.
+	var statusErr upstreamStatusError
+	if pos > span.From && errors.As(err, &statusErr) {
+		err = upstreamPhaseError{op: "upstream block fetch", err: errors.New(err.Error())}
+	}
+	return err
 }
 
-// awaitColdFetch waits for fetch's leader to finish. It returns false when
-// the leader read no upstream byte for upstreamReadStall: the leader's
-// upstream or its own client stalled, and the waiting reader is better served
-// by its own fetch than by the leader's remaining stall bound.
-func (s *Server) awaitColdFetch(ctx context.Context, fetch *coldFetch) (bool, error) {
-	stall := s.upstreamReadStall
-	if stall <= 0 {
-		stall = relayUpstreamBounds.readStall
-	}
-	check := time.NewTicker(stall / 4)
-	defer check.Stop()
-	for {
-		select {
-		case <-fetch.done:
-			return true, nil
-		case <-ctx.Done():
-			return false, ctx.Err()
-		case <-check.C:
-			if fetch.idleFor() >= stall {
-				return false, nil
+// readBlockFill copies span from fill's tmp file to w, waiting for the fill
+// to write each byte before it is read. It returns the block position of the
+// first byte not copied.
+func readBlockFill(ctx context.Context, w io.Writer, fill *blockFill, span blockSpan) (int64, error) {
+	flusher, canFlush := w.(http.Flusher)
+	pos := span.From
+	var file *os.File
+	defer func() {
+		if file != nil {
+			_ = file.Close()
+		}
+	}()
+	for pos <= span.To {
+		st := fill.state()
+		if pos < st.written {
+			if file == nil {
+				opened, err := fill.open()
+				if err != nil {
+					return pos, err
+				}
+				file = opened
 			}
+			end := min(st.written, span.To+1)
+			n, err := io.Copy(w, io.NewSectionReader(file, pos, end-pos))
+			pos += n
+			if err != nil {
+				return pos, err
+			}
+			if canFlush {
+				flusher.Flush()
+			}
+			continue
+		}
+		if st.done {
+			if st.err != nil {
+				return pos, st.err
+			}
+			return pos, fmt.Errorf("block fill ended at block offset %d before byte %d", st.written, pos)
+		}
+		select {
+		case <-st.changed:
+		case <-ctx.Done():
+			return pos, ctx.Err()
 		}
 	}
+	return pos, nil
 }
 
 // serveWarmBlock attempts to serve span from a warm on-disk block.
@@ -355,27 +388,16 @@ func (s *Server) serveWarmBlock(w io.Writer, store *BlockStore, span blockSpan) 
 	return true, nil
 }
 
-// streamBlockFromS3 issues a block-aligned S3 Range GET and streams
-// bytes to the client (range-clamped to the requested span) and,
-// opportunistically, to a tmp cache file. The tmp file is fsync+rename
-// to the canonical block path only on full successful download. Playback
-// callers tolerate disk-side failure and keep serving the client; processing
-// input callers use strictCache so a cache failure aborts and Mist retries
-// instead of silently losing random-access locality.
+// streamBlockFromS3 issues a block-aligned upstream Range GET and streams the
+// span's bytes to the client without caching them: the memory-only read path,
+// and the rest of a playback span whose block fill could not write the cache.
 //
-// Same-block fan-out: callers of streamBlockFromS3 with CacheToDisk
-// have already gone through the blockFetchCoalescer in serveBlockSpan,
-// so at most one leader reaches here per (asset, block). Memory-only
-// viewers bypass the coalescer and each issue their own S3 range
-// fetch.
-//
-// An upstream body that fails mid-block (a read stall, a dropped
-// connection) is requested again from the first byte not yet copied, up to
-// maxBlockFetchResumes times, and the client and the tmp file continue from
-// there without a gap. A resume refused with 401/403 is sent once more on the
-// resolution renewMidBlock returns. onProgress, when set, is called on every
-// upstream read that returned bytes.
-func (s *Server) streamBlockFromS3(ctx context.Context, httpc *http.Client, w io.Writer, store *BlockStore, span blockSpan, totalSize int64, mediaURL, grantID string, decision admission.CacheDecision, strictCache bool, defrost func(int64), onProgress func(), renewMidBlock func() (upstreamTarget, bool)) error {
+// An upstream body that fails mid-block (a read stall, a dropped connection)
+// is requested again from the first byte not yet copied, up to
+// maxBlockFetchResumes times, and the client continues from there without a
+// gap. A resume refused with 401/403 is sent once more on the resolution
+// renewMidBlock returns.
+func (s *Server) streamBlockFromS3(ctx context.Context, httpc *http.Client, w io.Writer, store *BlockStore, span blockSpan, totalSize int64, mediaURL, grantID string, defrost func(int64), renewMidBlock func() (upstreamTarget, bool)) error {
 	blockStart, blockEnd := store.BlockRange(span.Idx, totalSize)
 	source := upstreamSourceLabel(grantID)
 	fetchStart := time.Now()
@@ -397,54 +419,12 @@ func (s *Server) streamBlockFromS3(ctx context.Context, httpc *http.Client, w io
 		}
 	}
 
-	// Client side: range-clamped writer that only forwards the
-	// [span.From, span.To] subrange to the caller's writer. Tracks
-	// position relative to the block (offset 0 == blockStart).
+	// Range-clamped writer that only forwards the [span.From, span.To]
+	// subrange; offset 0 is blockStart.
 	clientSide := newClampedWriter(w, span.From, span.To)
 
-	// Disk side: tmp file we'll rename into the canonical block path
-	// on success. Playback can degrade to client-only stream; processing
-	// input cannot, because Mist will seek these bytes again.
-	var (
-		tmpFile *os.File
-		tmpPath string
-	)
-	if decision == admission.CacheToDisk {
-		if mkErr := os.MkdirAll(store.Dir(), 0o755); mkErr == nil {
-			tmpPath = store.BlockPath(span.Idx) + ".tmp"
-			if f, openErr := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644); openErr == nil {
-				tmpFile = f
-			} else if strictCache {
-				return fmt.Errorf("open strict block tmp %d: %w", span.Idx, openErr)
-			} else if s.logger != nil {
-				s.logger.WithError(openErr).WithField("block_idx", span.Idx).Debug("blockcache: open tmp failed; streaming without cache")
-			}
-		} else if strictCache {
-			return fmt.Errorf("mkdir strict block cache: %w", mkErr)
-		}
-	}
-
-	var (
-		tee    io.Writer = clientSide
-		teeTol *tolerantTee
-	)
-	if tmpFile != nil {
-		if strictCache {
-			tee = io.MultiWriter(clientSide, tmpFile)
-		} else {
-			teeTol = newTolerantTee(clientSide, tmpFile, func(diskErr error) {
-				if s.logger != nil {
-					s.logger.WithError(diskErr).WithField("block_idx", span.Idx).Debug("blockcache: disk write failed or fell behind mid-stream; abandoning cache for this block")
-				}
-			})
-			tee = teeTol
-		}
-	}
-
 	// 256 KiB copy buffer — sized for syscall economy without holding
-	// any meaningful heap. Memory peak per in-flight fetch is this
-	// buffer plus the kernel's socket/file buffers plus the
-	// tolerantTee channel headroom (~4 buffers).
+	// any meaningful heap.
 	copyBuf := make([]byte, 256*1024)
 	expected := blockEnd - blockStart + 1
 	var body io.Reader = &firstByteReader{r: resp.Body, onFirst: func() {
@@ -458,8 +438,8 @@ func (s *Server) streamBlockFromS3(ctx context.Context, httpc *http.Client, w io
 		target         = upstreamTarget{url: mediaURL, grantID: grantID, client: httpc}
 	)
 	for resumes := 0; ; resumes++ {
-		upstream := &upstreamReader{r: body, onProgress: onProgress}
-		copied, err := io.CopyBuffer(tee, io.LimitReader(upstream, expected-n), copyBuf)
+		upstream := &upstreamReader{r: body}
+		copied, err := io.CopyBuffer(clientSide, io.LimitReader(upstream, expected-n), copyBuf)
 		n += copied
 		copyErr = err
 		if err == nil || upstream.err == nil || ctx.Err() != nil || resumes >= maxBlockFetchResumes {
@@ -496,34 +476,6 @@ func (s *Server) streamBlockFromS3(ctx context.Context, httpc *http.Client, w io
 			break
 		}
 		resp, body, attemptStart = next, next.Body, n
-	}
-	if teeTol != nil {
-		teeTol.Close() // drain the disk worker so SecondaryAlive reflects final state
-	}
-
-	// Disk-side close+rename happens only on a clean full transfer AND
-	// when the async disk writer kept up with every chunk. Anything
-	// else — short read, copy error, client gone, disk fell behind —
-	// means the tmpfile is incomplete and gets removed.
-	if tmpFile != nil {
-		diskComplete := strictCache || (teeTol != nil && teeTol.SecondaryAlive())
-		if copyErr == nil && n == expected && diskComplete {
-			syncErr := tmpFile.Sync()
-			closeErr := tmpFile.Close()
-			if syncErr == nil && closeErr == nil {
-				if renameErr := os.Rename(tmpPath, store.BlockPath(span.Idx)); renameErr != nil {
-					if s.logger != nil {
-						s.logger.WithError(renameErr).WithField("block_idx", span.Idx).Debug("blockcache: rename failed")
-					}
-					_ = os.Remove(tmpPath)
-				}
-			} else {
-				_ = os.Remove(tmpPath)
-			}
-		} else {
-			_ = tmpFile.Close()
-			_ = os.Remove(tmpPath)
-		}
 	}
 
 	if copyErr != nil {
@@ -608,19 +560,14 @@ func requestResumeRange(ctx context.Context, target upstreamTarget, from, to int
 }
 
 // upstreamReader records the error of a failed upstream read, which tells an
-// upstream failure apart from a client write failure in the copy that
-// consumes it, and reports reads that returned bytes to onProgress.
+// upstream failure apart from a write failure in the copy that consumes it.
 type upstreamReader struct {
-	r          io.Reader
-	onProgress func()
-	err        error
+	r   io.Reader
+	err error
 }
 
 func (u *upstreamReader) Read(p []byte) (int, error) {
 	n, err := u.r.Read(p)
-	if n > 0 && u.onProgress != nil {
-		u.onProgress()
-	}
 	if err != nil && !errors.Is(err, io.EOF) {
 		u.err = err
 	}
@@ -756,7 +703,9 @@ func (s *Server) probeTotalSize(ctx context.Context, httpc *http.Client, mediaUR
 }
 
 func (s *Server) preflightFirstColdSpan(ctx context.Context, httpc *http.Client, store *BlockStore, span blockSpan, totalSize int64, mediaURL, grantID string) error {
-	if store.HasBlock(span.Idx) {
+	// A fill that is running already answered the upstream's status for
+	// this block.
+	if store.HasBlock(span.Idx) || s.fills.running(blockFetchKey(store, span.Idx)) {
 		return nil
 	}
 	blockStart, blockEnd := store.BlockRange(span.Idx, totalSize)

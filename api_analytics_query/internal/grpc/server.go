@@ -7529,16 +7529,19 @@ func (s *PeriscopeServer) GetLiveUsageSummary(ctx context.Context, req *periscop
 // sample belongs to an earlier session.
 const rebufferLookback = time.Hour
 
-// rebufferingTransitionsQuery returns every FULL, DRY or RECOVER buffer edge
-// Mist reported for the tenant's live streams from rebufferLookback before
+// rebufferingTransitionsQuery returns every FULL, DRY, RECOVER or EMPTY buffer
+// edge Mist reported for the tenant's live streams from rebufferLookback before
 // start through end, with the previous edge of the stream on the same node and
-// whether the edge starts or ends a rebuffer. Each node holds its own buffer of
-// a stream an origin and its edges both serve, so transitions never cross
-// nodes. A periodic sample has no buffer_edge_at: its state is derived by
-// Periscope Ingest, not reported by Mist, so it is left out. Edges are ordered
-// by Mist's millisecond event time, then ingest_id, at read time, so the
-// transitions do not depend on how or when the samples were inserted. The
-// caller restricts the result to edges at start and later.
+// whether the edge starts or ends a rebuffer. A stream whose input goes away
+// while its buffer is DRY reports EMPTY next and never RECOVER, so EMPTY after
+// DRY ends that rebuffer; the edge's buffer state tells a recovery from a stream
+// end. The first edge of a stream on a node has an empty previous state. Each
+// node holds its own buffer of a stream an origin and its edges both serve, so
+// transitions never cross nodes. A periodic sample has no buffer_edge_at: its
+// state is derived by Periscope Ingest, not reported by Mist, so it is left
+// out. Edges are ordered by Mist's millisecond event time, then ingest_id, at
+// read time, so the transitions do not depend on how or when the samples were
+// inserted. The caller restricts the result to edges at start and later.
 func rebufferingTransitionsQuery(tenantID, streamID string, start, end time.Time) (string, []any) {
 	query := `
 		SELECT assumeNotNull(buffer_edge_at) AS edge_at, tenant_id, stream_id, node_id, ingest_id, buffer_state,
@@ -7546,9 +7549,9 @@ func rebufferingTransitionsQuery(tenantID, streamID string, start, end time.Time
 		           PARTITION BY tenant_id, stream_id, node_id ORDER BY edge_at, ingest_id
 		           ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS prev_state,
 		       if(buffer_state = 'DRY' AND prev_state IN ('FULL', 'RECOVER'), 1, 0) AS rebuffer_start,
-		       if(buffer_state = 'RECOVER' AND prev_state = 'DRY', 1, 0) AS rebuffer_end
+		       if(buffer_state IN ('RECOVER', 'EMPTY') AND prev_state = 'DRY', 1, 0) AS rebuffer_end
 		FROM stream_health_samples
-		WHERE tenant_id = ? AND artifact_hash = '' AND buffer_state IN ('FULL', 'DRY', 'RECOVER')
+		WHERE tenant_id = ? AND artifact_hash = '' AND buffer_state IN ('FULL', 'DRY', 'RECOVER', 'EMPTY')
 		  AND buffer_edge_at IS NOT NULL AND timestamp >= ? AND timestamp <= ?`
 	args := []any{tenantID, start.Add(-rebufferLookback), end}
 	if streamID != "" {

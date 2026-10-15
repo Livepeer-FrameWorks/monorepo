@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -214,6 +215,46 @@ func packetLossStatus(protocolType string, avgLoss float64) string {
 	}
 }
 
+// rebufferSummary counts the rebuffers among a stream's buffer edges.
+type rebufferSummary struct {
+	// count is the number of rebuffers that started.
+	count int
+	// ended is the number of those whose end is among the edges.
+	ended int
+	// totalMs sums the durations of the ended ones.
+	totalMs int64
+}
+
+// summarizeRebuffers pairs each rebuffer start edge with the next rebuffer end
+// edge of the same node. Each edge carries one of the two, never both: a
+// rebuffer's duration is the time between its start edge and its end edge.
+func summarizeRebuffers(events []*periscopepb.RebufferingEvent) rebufferSummary {
+	sorted := slices.Clone(events)
+	slices.SortStableFunc(sorted, func(a, b *periscopepb.RebufferingEvent) int {
+		if c := strings.Compare(a.GetNodeId(), b.GetNodeId()); c != 0 {
+			return c
+		}
+		return a.GetTimestamp().AsTime().Compare(b.GetTimestamp().AsTime())
+	})
+	var out rebufferSummary
+	open := map[string]time.Time{}
+	for _, evt := range sorted {
+		node := evt.GetNodeId()
+		if evt.RebufferEnd != nil {
+			if started, ok := open[node]; ok {
+				out.ended++
+				out.totalMs += evt.RebufferEnd.AsTime().Sub(started).Milliseconds()
+				delete(open, node)
+			}
+		}
+		if evt.RebufferStart != nil {
+			out.count++
+			open[node] = evt.RebufferStart.AsTime()
+		}
+	}
+	return out
+}
+
 func handleDiagnoseRebuffering(ctx context.Context, args DiagnoseRebufferingInput, serviceClients *clients.ServiceClients, logger logging.Logger) (*mcp.CallToolResult, any, error) {
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
@@ -229,24 +270,18 @@ func handleDiagnoseRebuffering(ctx context.Context, args DiagnoseRebufferingInpu
 	}
 
 	timeRangeLabel, timeRange := normalizeTimeRange(args.TimeRange)
-	resp, err := serviceClients.Periscope.GetRebufferingEvents(ctx, tenantID, &streamID, nil, timeRange, nil)
+	resp, err := serviceClients.Periscope.GetRebufferingEvents(ctx, tenantID, &streamID, nil, timeRange, &periscope.CursorPaginationOpts{First: 200})
 	if err != nil {
 		logger.WithError(err).Warn("Failed to get rebuffering events")
 		return toolError(fmt.Sprintf("Failed to fetch rebuffering data: %v", err))
 	}
 
-	rebufferCount := len(resp.Events)
-	var totalDurationMs int64
-	for _, evt := range resp.Events {
-		if evt.RebufferStart != nil && evt.RebufferEnd != nil {
-			duration := evt.RebufferEnd.AsTime().Sub(evt.RebufferStart.AsTime())
-			totalDurationMs += duration.Milliseconds()
-		}
-	}
-
+	rebuffers := summarizeRebuffers(resp.Events)
+	rebufferCount := rebuffers.count
+	totalDurationMs := rebuffers.totalMs
 	avgDurationMs := int64(0)
-	if rebufferCount > 0 {
-		avgDurationMs = totalDurationMs / int64(rebufferCount)
+	if rebuffers.ended > 0 {
+		avgDurationMs = totalDurationMs / int64(rebuffers.ended)
 	}
 
 	status := "healthy"
@@ -281,6 +316,7 @@ func handleDiagnoseRebuffering(ctx context.Context, args DiagnoseRebufferingInpu
 		Status: status,
 		Metrics: map[string]interface{}{
 			"rebuffer_count":           rebufferCount,
+			"open_rebuffer_count":      rebufferCount - rebuffers.ended,
 			"avg_rebuffer_duration_ms": avgDurationMs,
 			"total_rebuffer_time_ms":   totalDurationMs,
 			"time_range":               timeRangeLabel,
@@ -376,17 +412,12 @@ func handleDiagnoseBufferHealth(ctx context.Context, args DiagnoseBufferHealthIn
 		}
 	}
 
-	rebufferCount := 0
-	var totalRebufferDurationMs int64
+	var rebuffers rebufferSummary
 	if rebufferResp != nil {
-		for _, evt := range rebufferResp.Events {
-			if evt.RebufferStart != nil && evt.RebufferEnd != nil {
-				duration := evt.RebufferEnd.AsTime().Sub(evt.RebufferStart.AsTime())
-				totalRebufferDurationMs += duration.Milliseconds()
-				rebufferCount++
-			}
-		}
+		rebuffers = summarizeRebuffers(rebufferResp.Events)
 	}
+	rebufferCount := rebuffers.count
+	totalRebufferDurationMs := rebuffers.totalMs
 
 	status := "healthy"
 	analysis := fmt.Sprintf("Buffer health is stable. Average: %.1f%%, minimum: %.1f%%.", avgBufferHealth*100, minBufferHealth*100)

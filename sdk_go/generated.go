@@ -8935,6 +8935,7 @@ func (v *BufferEventInNodeDefaultFields) GetEventData() *string { return v.Event
 // GetPayload returns BufferEventInNodeDefaultFields.Payload, and is useful for accessing the field via an interface.
 func (v *BufferEventInNodeDefaultFields) GetPayload() *json.RawMessage { return v.Payload }
 
+// Mist's buffer state of a stream on one node.
 type BufferState string
 
 const (
@@ -8942,6 +8943,9 @@ const (
 	BufferStateEmpty   BufferState = "EMPTY"
 	BufferStateDry     BufferState = "DRY"
 	BufferStateRecover BufferState = "RECOVER"
+	// No buffer state is known: the previous state of a stream's first buffer
+	// transition on a node, which has no earlier transition.
+	BufferStateUnknown BufferState = "UNKNOWN"
 )
 
 var AllBufferState = []BufferState{
@@ -8949,6 +8953,7 @@ var AllBufferState = []BufferState{
 	BufferStateEmpty,
 	BufferStateDry,
 	BufferStateRecover,
+	BufferStateUnknown,
 }
 
 // CapabilitiesDefaultFields includes the GraphQL fields of Capabilities requested by the fragment CapabilitiesDefaultFields.
@@ -82396,14 +82401,18 @@ func (v *RateLimitErrorFields) GetRetryAfter() *int { return v.RetryAfter }
 
 // RebufferingEventDefaultFields includes the GraphQL fields of RebufferingEvent requested by the fragment RebufferingEventDefaultFields.
 type RebufferingEventDefaultFields struct {
-	Timestamp     time.Time                            `json:"timestamp"`
-	StreamId      string                               `json:"streamId"`
-	Stream        *RebufferingEventDefaultFieldsStream `json:"stream"`
-	NodeId        string                               `json:"nodeId"`
-	BufferState   BufferState                          `json:"bufferState"`
-	PreviousState BufferState                          `json:"previousState"`
-	RebufferStart bool                                 `json:"rebufferStart"`
-	RebufferEnd   bool                                 `json:"rebufferEnd"`
+	Timestamp   time.Time                            `json:"timestamp"`
+	StreamId    string                               `json:"streamId"`
+	Stream      *RebufferingEventDefaultFieldsStream `json:"stream"`
+	NodeId      string                               `json:"nodeId"`
+	BufferState BufferState                          `json:"bufferState"`
+	// The state of the stream's previous buffer transition on the same node;
+	// UNKNOWN for the stream's first transition there.
+	PreviousState BufferState `json:"previousState"`
+	RebufferStart bool        `json:"rebufferStart"`
+	// This transition ends a rebuffer: DRY to RECOVER when the buffer recovered,
+	// DRY to EMPTY when the stream ended while it was rebuffering.
+	RebufferEnd bool `json:"rebufferEnd"`
 }
 
 // GetTimestamp returns RebufferingEventDefaultFields.Timestamp, and is useful for accessing the field via an interface.

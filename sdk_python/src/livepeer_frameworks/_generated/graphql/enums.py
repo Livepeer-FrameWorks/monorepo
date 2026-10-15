@@ -6,6 +6,7 @@ class BufferState(OpenEnum):
     EMPTY = "EMPTY"
     DRY = "DRY"
     RECOVER = "RECOVER"
+    UNKNOWN = "UNKNOWN"
 
 
 class CardPaymentProvider(OpenEnum):
