@@ -277,7 +277,11 @@ FREEZE (warm -> cold, S3 upload):
      STAGING key (sync_object_key + ".staging." + attempt_id) — NOT the canonical key; then sends
      FreezeRequest(artifact_hash, attempt_id) to Helmsman. The same grant carries a presigned PUT for the
      attempt's .dtsh index staging key (sync_object_key + ".dtsh.staging." + attempt_id). Only a lifecycle-ready
-     (status='ready') artifact is claimable.
+     (status='ready') artifact is claimable. A node-requested permission has a 20 s budget inside the node's
+     30 s wait, so a multi-second database write stall delays the grant instead of denying it. When the claim
+     call itself fails, its COMMIT may still have landed, so Foghorn releases the attempt under its identity to
+     sync_status='failed' (waiting on the row lock of a commit still in flight) and the failed-freeze retry
+     re-drives the artifact; nothing is left in_progress under an attempt no node received.
   2. Helmsman uploads the .dtsh index and then the media to those presigned STAGING URLs (it never holds a PUT
      to a canonical object) and echoes the attempt id at completion with dtsh_included. A clip's index exists
      before the clip is published; a VOD (including a DVR chapter) without one is booted in Mist to write it.
@@ -337,7 +341,12 @@ from the upstream without caching it; a processing input fails instead. Memory-o
 disk pressure) share a fill of the block held in memory in the same way, for at most four blocks at once;
 its bytes stay for 10 s after the fill ends so the retry of a reader that gave up reads them, and a memory
 fill that ended early is resumed from them. A memory-only read that finds four memory fills running
-streams its block from the upstream on its own. `.dtsh` sidecars are
+streams its block from the upstream on its own. An object without a catalog size (a URL import's source)
+is sized by one upstream probe per object that likewise belongs to no reader: it runs for up to 40 s (the
+tenant-source dial and header bounds), every reader waits on it, and a size or a status a retry would get
+again (404, 410, other non-auth 4xx) is kept for 10 s for Mist's next retry. A processing input's source
+that the probe hears refuse is noted for the processing job, which fails the import with that status as
+it arrives instead of booting the input again; a slow 404 is learned from one request. `.dtsh` sidecars are
 served from disk when present, fetched from S3 or the origin's peer relay when Foghorn has one, and 404'd
 otherwise so Mist generates and PUTs one (`api_sidecar/internal/relay/dtsh.go`). Mist receives no sidecar
 byte until the relay has the whole sidecar and validated it, so the whole fetch is bounded at 4 s, under

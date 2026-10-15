@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"frameworks/api_sidecar/internal/admission"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
@@ -109,6 +110,83 @@ func TestUpstreamClientSelection(t *testing.T) {
 		if got := s.upstreamClient(tc.res); got != tc.want {
 			t.Errorf("%s: wrong client", tc.name)
 		}
+	}
+}
+
+// slowMissingSource answers 404 after delay, like an import source host whose
+// 404 takes seconds, and counts the requests that reached it.
+func slowMissingSource(t *testing.T, delay time.Duration) (*httptest.Server, *atomic.Int32) {
+	t.Helper()
+	var hits atomic.Int32
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		select {
+		case <-time.After(delay):
+			w.WriteHeader(http.StatusNotFound)
+		case <-r.Context().Done():
+		}
+	}))
+	t.Cleanup(up.Close)
+	return up, &hits
+}
+
+// slowMissingImport mounts a relay whose upload hash resolves to an import
+// source on up.
+func slowMissingImport(t *testing.T, up *httptest.Server, hash string) *httptest.Server {
+	t.Helper()
+	resolver := &fakeResolver{out: map[string]*ResolveResult{"upload/" + hash: {
+		State:           ipcpb.AssetState_ASSET_STATE_PLAYABLE,
+		TenantSourceURL: up.URL + "/missing.mp4",
+	}}}
+	s := New(Options{
+		BasePath:               t.TempDir(),
+		Admitter:               &fakeAdmitter{decision: admission.CacheToDisk},
+		Resolver:               resolver,
+		HTTPClient:             &http.Client{Transport: failingTransport{}},
+		TenantSourceHTTPClient: newTenantSourceClient(loopbackPolicy()),
+	})
+	ts := mount(t, s)
+	t.Cleanup(ts.Close)
+	return ts
+}
+
+// mistRead is one Mist read of url with Mist's 5 s source read timeout. It
+// returns 0 when the read timed out.
+func mistRead(t *testing.T, url string) int {
+	t.Helper()
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, url, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("User-Agent", "MistServer/Unknown")
+	resp, err := (&http.Client{Timeout: mistSourceReadTimeout}).Do(req)
+	if err != nil {
+		return 0
+	}
+	_ = resp.Body.Close()
+	return resp.StatusCode
+}
+
+// An import whose source answers 404 only after 12 s, read by Mist with its
+// 5 s source read timeout: the size probe outlives each reader, so the 404 is
+// learned once, from one upstream request, and the retry that arrives after
+// it is answered 404 instead of starting another probe that Mist abandons.
+func TestImportSourceSlowMissingAnswerOutlivesReaders(t *testing.T) {
+	up, hits := slowMissingSource(t, 12*time.Second)
+	const hash = "importslow404"
+	ts := slowMissingImport(t, up, hash)
+
+	started := time.Now()
+	status := 0
+	for status == 0 && time.Since(started) < 25*time.Second {
+		status = mistRead(t, ts.URL+"/internal/artifact/upload/"+hash+".mp4")
+	}
+	elapsed := time.Since(started)
+	if status != http.StatusNotFound || elapsed > 14*time.Second {
+		t.Fatalf("status %d after %s; want 404 within ~12 s", status, elapsed.Round(time.Second))
+	}
+	if n := hits.Load(); n != 1 {
+		t.Fatalf("source got %d requests; want one probe shared by every reader", n)
 	}
 }
 

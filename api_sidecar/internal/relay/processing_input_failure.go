@@ -3,6 +3,7 @@ package relay
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"sync"
 )
@@ -17,6 +18,28 @@ var processingInputFailures sync.Map
 // stored source cannot be read whole on any attempt, so the processing job can
 // name it when the input does not boot.
 var processingInputDefects sync.Map
+
+// processingInputUnavailable holds, per asset hash, the upstream status of a
+// processing input whose source answered one no retry gets past (missing,
+// gone), so the processing job fails with it instead of booting the input
+// again.
+var processingInputUnavailable sync.Map
+
+// noteProcessingInputUnavailable records the upstream status for assetHash
+// when err is a definitive upstream answer (definitiveUpstreamStatus).
+func noteProcessingInputUnavailable(assetHash string, err error) {
+	var statusErr upstreamStatusError
+	if assetHash == "" || !definitiveUpstreamStatus(err) || !errors.As(err, &statusErr) {
+		return
+	}
+	processingInputUnavailable.Store(assetHash, fmt.Sprintf("%d %s", statusErr.StatusCode, http.StatusText(statusErr.StatusCode)))
+}
+
+// TakeProcessingInputUnavailable returns and forgets the definitive upstream
+// status recorded for assetHash's processing input source.
+func TakeProcessingInputUnavailable(assetHash string) (string, bool) {
+	return takeNote(&processingInputUnavailable, assetHash)
+}
 
 // noteProcessingInputFailure records err for assetHash when it is a transient
 // upstream failure: the upstream did not answer before the reader gave up, the

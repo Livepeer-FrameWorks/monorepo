@@ -3,9 +3,12 @@ package control
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
+	"frameworks/api_balancing/internal/identity"
+	"frameworks/api_balancing/internal/state"
 	"frameworks/api_balancing/internal/storage"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -66,6 +69,56 @@ func TestProcessThumbnailUploadRequest_ProtocolGateRefusesOldSidecar(t *testing.
 	)
 	if msg := stream.lastSent(); msg != nil {
 		t.Fatalf("a sub-min protocol version must be refused with no response, got %T", msg.GetPayload())
+	}
+}
+
+// A live thumbnail mint whose attempt claim is held up by a multi-second database write stall (a WAL fsync stall
+// on every replica) still hands the node its presigned URLs instead of dropping the upload.
+func TestProcessThumbnailUploadRequest_ClaimRidesOutDatabaseWriteStall(t *testing.T) {
+	mock, _, _ := setupArtifactTestDeps(t)
+	identity.SetDefault(identity.NewResolver(identity.Config{
+		RegistrySource: func(_ context.Context, name string) (identity.StreamIdentity, error) {
+			return identity.StreamIdentity{InternalName: name, StreamID: "stream-stall-id", TenantID: "tenant-1", OriginClusterID: "cluster-a"}, nil
+		},
+	}))
+	prevShared := platformSharedConfig.Load()
+	platformSharedConfig.Store(&sync.Map{})
+	AddPlatformSharedCluster("cluster-a")
+	prevLocal := localClusterID
+	SetLocalClusterID("cluster-a")
+	prevRegister := registerThumbnailServingCellFn
+	registerThumbnailServingCellFn = func(context.Context, string, string, string) (bool, error) { return true, nil }
+	t.Cleanup(func() {
+		platformSharedConfig.Store(prevShared)
+		SetLocalClusterID(prevLocal)
+		registerThumbnailServingCellFn = prevRegister
+	})
+	sm := state.DefaultManager()
+	sm.SetNodeInfo("node-1", "n", true, nil, nil, "", "", nil)
+	sm.SetNodeConnectionInfo(context.Background(), "node-1", "n", "", "cluster-a", nil)
+	sm.UpdateNodeStats("stream-stall", "node-1", 1, 1, 0, 0, false)
+
+	mock.ExpectBegin()
+	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery(`SELECT status IN`).WillReturnRows(sqlmock.NewRows([]string{"terminal"}))
+	mock.ExpectQuery(`FROM foghorn.stream_cleanup_obligation`).WillReturnRows(sqlmock.NewRows([]string{"one"}))
+	mock.ExpectExec(`INSERT INTO foghorn.thumbnail_claim_counter`).
+		WillDelayFor(6 * time.Second).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`INSERT INTO foghorn.thumbnail_task_object`).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	stream := &captureStream{}
+	processThumbnailUploadRequest("req-stall",
+		&ipcpb.ThumbnailUploadRequest{InternalName: "live+stream-stall", FilePaths: []string{"/tmp/stall/poster.jpg"}},
+		"node-1", ThumbnailStagedProtocolMin, stream, logging.Logger(logrus.New()))
+
+	resp := stream.lastSent().GetThumbnailUploadResponse()
+	if resp == nil || resp.GetAttemptId() == "" || len(resp.GetUploads()) != 1 {
+		t.Fatalf("the stalled claim dropped the upload: response=%v", resp)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -26,21 +26,35 @@ func (stallTestAdmitter) Decide(context.Context, string, admission.StorageIntent
 	return admission.CacheToDisk, nil
 }
 
-type stallTestResolver struct{ upstream string }
+// stallTestResolver resolves every input to upstream. An unsized input carries
+// no catalog size, so the relay probes the upstream for it, as for an import.
+type stallTestResolver struct {
+	upstream string
+	unsized  bool
+}
 
 func (r stallTestResolver) Resolve(relay.ResolveContext) (*relay.ResolveResult, error) {
-	return &relay.ResolveResult{
+	res := &relay.ResolveResult{
 		State:             ipcpb.AssetState_ASSET_STATE_PLAYABLE,
 		MediaPresignedURL: r.upstream,
 		ExpectedSizeBytes: 4096,
 		URLTTLSeconds:     60,
-	}, nil
+	}
+	if r.unsized {
+		res.ExpectedSizeBytes = 0
+	}
+	return res, nil
 }
 
 // readUploadThroughRelay serves hash's processing input through a real relay
 // backed by upstream, and reads it the way Mist does: give up after a short
 // data timeout.
 func readUploadThroughRelay(t *testing.T, upstream http.HandlerFunc, hash string) {
+	t.Helper()
+	readInputThroughRelay(t, upstream, hash, false)
+}
+
+func readInputThroughRelay(t *testing.T, upstream http.HandlerFunc, hash string, unsized bool) {
 	t.Helper()
 	up := httptest.NewServer(upstream)
 	t.Cleanup(up.Close)
@@ -49,7 +63,7 @@ func readUploadThroughRelay(t *testing.T, upstream http.HandlerFunc, hash string
 	relay.New(relay.Options{
 		BasePath: t.TempDir(),
 		Admitter: stallTestAdmitter{},
-		Resolver: stallTestResolver{upstream: up.URL + "/" + hash},
+		Resolver: stallTestResolver{upstream: up.URL + "/" + hash, unsized: unsized},
 		Logger:   logging.NewLogger(),
 	}).MountRoutes(engine)
 	rs := httptest.NewServer(engine)
@@ -133,6 +147,25 @@ func TestProcessingBootFailureOnMissingSourceIsTerminal(t *testing.T) {
 	}
 	if outputs := processingReadinessFailureOutputs(err); outputs != nil {
 		t.Fatalf("a missing source names no retry cause, got %v", outputs)
+	}
+}
+
+// An input without a catalog size whose source the relay's size probe hears
+// answer 404 fails readiness as an unavailable source at once, rather than
+// waiting out the readiness window for a stream whose input cannot open.
+func TestProcessingReadinessFailsOnSourceTheRelayProbeHeardMissing(t *testing.T) {
+	const hash = "probemissing01"
+	readInputThroughRelay(t, func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	}, hash, true)
+
+	started := time.Now()
+	err := waitForUnbootedProcessingStream(t, hash)
+	if !strings.HasPrefix(err.Error(), "source unavailable: 404") || time.Since(started) >= processingReadinessWindow {
+		t.Fatalf("readiness ended with %q after %s; want the source's 404 before the readiness window", err, time.Since(started))
+	}
+	if got := processingReadinessFailureStatus(err); got != "failed" {
+		t.Fatalf("status = %q, want failed", got)
 	}
 }
 

@@ -131,3 +131,31 @@ func TestProcessingInputShortSourceIsNotAStall(t *testing.T) {
 		t.Fatalf("short source defect noted %q (%v), want the catalog size mismatch", reason, ok)
 	}
 }
+
+// An import source that answers 404 after 12 s, read once by Mist, which gives
+// up at 5 s: the size probe that outlived the read notes the 404 for the
+// processing job as it arrives, with no reader left to answer it to.
+func TestProcessingInputSlowMissingSourceNotedAfterReaderLeft(t *testing.T) {
+	up, hits := slowMissingSource(t, 12*time.Second)
+	const hash = "importslownote"
+	ts := slowMissingImport(t, up, hash)
+	TakeProcessingInputUnavailable(hash)
+	t.Cleanup(func() { TakeProcessingInputUnavailable(hash) })
+
+	started := time.Now()
+	if status := mistRead(t, ts.URL+"/internal/artifact/upload/"+hash+".mp4"); status != 0 {
+		t.Fatalf("the 5 s read answered %d before the source did", status)
+	}
+	var status string
+	for ok := false; !ok && time.Since(started) < 20*time.Second; {
+		time.Sleep(100 * time.Millisecond)
+		status, ok = TakeProcessingInputUnavailable(hash)
+	}
+	elapsed := time.Since(started)
+	if status != "404 Not Found" || elapsed > 14*time.Second {
+		t.Fatalf("noted %q after %s; want the source's 404 within ~12 s", status, elapsed.Round(time.Second))
+	}
+	if n := hits.Load(); n != 1 {
+		t.Fatalf("source got %d requests; want the one probe", n)
+	}
+}

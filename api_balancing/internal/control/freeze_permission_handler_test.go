@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -117,6 +118,29 @@ func TestFreezePermission_OriginClusterClipApproved(t *testing.T) {
 	}
 	if resp.GetAttemptId() == "" || resp.GetAttemptId() == "req-1" {
 		t.Fatalf("expected a SERVER-MINTED attempt_id (not the node request id), got %q", resp.GetAttemptId())
+	}
+	if err := h.mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A claim transaction held up by a multi-second database write stall still grants the freeze: the exchange has
+// room for the stall inside the sidecar's 30 s wait instead of denying the clip and leaving its sync to a retry.
+func TestFreezePermission_ClaimRidesOutDatabaseWriteStall(t *testing.T) {
+	h := setupFreezePermTest(t, "tenant-a", "platform-eu", "platform-eu", "platform-eu")
+	h.expectMetadataAndPossession("platform-eu", "", "pending", true)
+	h.mock.ExpectBegin()
+	h.mock.ExpectExec(`UPDATE foghorn.artifacts\s+SET storage_location = 'freezing'`).
+		WillDelayFor(3 * time.Second).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	h.mock.ExpectExec("INSERT INTO foghorn.freeze_publication_ledger").WillReturnResult(sqlmock.NewResult(0, 4))
+	h.mock.ExpectCommit()
+
+	h.run()
+
+	resp := h.lastResponse(t)
+	if !resp.GetApproved() || resp.GetAttemptId() == "" {
+		t.Fatalf("expected the stalled claim to be granted, got approved=%v reason=%q", resp.GetApproved(), resp.GetReason())
 	}
 	if err := h.mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
@@ -263,6 +287,30 @@ func TestPrepareLocalFreezeAssignment(t *testing.T) {
 		}
 		if err := mock.ExpectationsWereMet(); err != nil {
 			t.Fatal(err)
+		}
+	})
+
+	// The claim's COMMIT reached the server but the call reported an error (its context expired while the commit
+	// waited on a write stall), so the row may be in_progress under an attempt no node received. The claim is
+	// released under that attempt's identity so the failed-freeze retry re-drives the clip instead of leaving it
+	// in_progress until stale recovery.
+	t.Run("claim error → claim released under its attempt", func(t *testing.T) {
+		mock := setupSeams(t, "platform-eu", true)
+		mock.ExpectBegin()
+		mock.ExpectExec(`UPDATE foghorn.artifacts\s+SET storage_location = 'freezing'`).WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectExec("INSERT INTO foghorn.freeze_publication_ledger").WillReturnResult(sqlmock.NewResult(0, 4))
+		mock.ExpectCommit().WillReturnError(context.DeadlineExceeded)
+		mock.ExpectBegin()
+		mock.ExpectExec(`UPDATE foghorn.artifacts\s+SET sync_status = 'failed', storage_location = 'local'`).
+			WithArgs("hash-1", sqlmock.AnyArg(), "node-1", "tenant-a").
+			WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectCommit()
+		_, reason, ok := PrepareLocalFreezeAssignment(context.Background(), "clip", "hash-1", "tenant-a", "s", "mp4", "platform-eu", "node-1", 30_000_000_000)
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatalf("the undelivered claim was not released: %v", err)
+		}
+		if ok || reason != "claim_failed" {
+			t.Fatalf("expected claim_failed, got ok=%v reason=%q", ok, reason)
 		}
 	})
 

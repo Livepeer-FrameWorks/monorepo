@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -71,11 +72,18 @@ func (s *Server) serveViaBlockCache(c *gin.Context, kind, hash, ext, localPath s
 		renewedSinceProgress = true
 		return true
 	}
+	// A processing input whose source answers a status no retry gets past is
+	// noted when the shared probe learns it, even after every reader left, so
+	// the processing job fails at once instead of booting the input again.
+	var probeSettled func(error)
+	if strictCache {
+		probeSettled = func(err error) { noteProcessingInputUnavailable(hash, err) }
+	}
 	totalSize := int64(res.ExpectedSizeBytes)
 	if totalSize <= 0 {
-		probedSize, err := s.probeTotalSize(c.Request.Context(), upstreamClient, upstreamURL, res.PeerRelayGrantID)
+		probedSize, err := s.sharedProbeTotalSize(c.Request.Context(), upstreamClient, upstreamURL, res.PeerRelayGrantID, probeSettled)
 		if err != nil && renewAfter(err) {
-			probedSize, err = s.probeTotalSize(c.Request.Context(), upstreamClient, upstreamURL, res.PeerRelayGrantID)
+			probedSize, err = s.sharedProbeTotalSize(c.Request.Context(), upstreamClient, upstreamURL, res.PeerRelayGrantID, probeSettled)
 		}
 		if err != nil {
 			noteUpstreamFailure(err)
@@ -685,6 +693,102 @@ func isAuthStatus(code int) bool {
 func isUpstreamAuthError(err error) bool {
 	var se upstreamStatusError
 	return errors.As(err, &se) && isAuthStatus(se.StatusCode)
+}
+
+// upstreamSizeProbeTimeout bounds one shared size probe. It covers the
+// tenant-source client's dial and response-header bounds, so a source that
+// answers slowly is still heard from once.
+const upstreamSizeProbeTimeout = tenantSourceDialTimeout + tenantSourceHeaderTimeout
+
+// sizeProbeLinger is how long a definitive size-probe answer is kept after
+// the probe ends, so Mist's retry, sent right after its source read timeout,
+// reads it instead of probing the upstream again.
+const sizeProbeLinger = 2 * mistSourceReadTimeout
+
+// sizeProbeGroup runs one upstream size probe per upstream object. Like a
+// block fill, a probe does not belong to the reader that started it: it runs
+// on a context bounded only by upstreamSizeProbeTimeout, so Mist abandoning a
+// read (its 5 s source read timeout) does not abort it, and every reader of
+// the object, concurrent or retrying, waits for the same answer. A size, or an
+// upstream status a retry would get again, is kept for sizeProbeLinger; any
+// other failure is dropped as the probe ends so the next reader probes again.
+type sizeProbeGroup struct {
+	mu    sync.Mutex
+	calls map[string]*sizeProbeCall
+	// wg counts the probe goroutines still running.
+	wg sync.WaitGroup
+}
+
+// sizeProbeCall is one probe; size and err are set before done is closed.
+type sizeProbeCall struct {
+	done chan struct{}
+	size int64
+	err  error
+}
+
+// do returns the answer of the probe of key, starting it with run when none
+// runs or lingers. settled, when set on the call that starts the probe,
+// receives the probe's error (nil on success) once, before any reader does.
+// A reader whose ctx ends first gets ctx's error; the probe continues.
+func (g *sizeProbeGroup) do(ctx context.Context, key string, run func(context.Context) (int64, error), settled func(error)) (int64, error) {
+	g.mu.Lock()
+	if g.calls == nil {
+		g.calls = make(map[string]*sizeProbeCall)
+	}
+	call, ok := g.calls[key]
+	if !ok {
+		call = &sizeProbeCall{done: make(chan struct{})}
+		g.calls[key] = call
+		g.wg.Add(1)
+		go g.run(key, call, run, settled)
+	}
+	g.mu.Unlock()
+	select {
+	case <-call.done:
+		return call.size, call.err
+	case <-ctx.Done():
+		return 0, fmt.Errorf("upstream size probe: %w", ctx.Err())
+	}
+}
+
+func (g *sizeProbeGroup) run(key string, call *sizeProbeCall, run func(context.Context) (int64, error), settled func(error)) {
+	defer g.wg.Done()
+	ctx, cancel := context.WithTimeout(context.Background(), upstreamSizeProbeTimeout)
+	call.size, call.err = run(ctx)
+	cancel()
+	if settled != nil {
+		settled(call.err)
+	}
+	close(call.done)
+	if call.err != nil && !definitiveUpstreamStatus(call.err) {
+		g.forget(key, call)
+		return
+	}
+	time.AfterFunc(sizeProbeLinger, func() { g.forget(key, call) })
+}
+
+func (g *sizeProbeGroup) forget(key string, call *sizeProbeCall) {
+	g.mu.Lock()
+	if g.calls[key] == call {
+		delete(g.calls, key)
+	}
+	g.mu.Unlock()
+}
+
+// definitiveUpstreamStatus reports an upstream that answered a status a later
+// request gets again: a client error other than a refused credential, which a
+// renewed resolution may cure.
+func definitiveUpstreamStatus(err error) bool {
+	var statusErr upstreamStatusError
+	return errors.As(err, &statusErr) && statusErr.StatusCode >= http.StatusBadRequest &&
+		!transientUpstreamStatus(statusErr.StatusCode) && !isAuthStatus(statusErr.StatusCode)
+}
+
+// sharedProbeTotalSize is probeTotalSize through the server's sizeProbeGroup.
+func (s *Server) sharedProbeTotalSize(ctx context.Context, httpc *http.Client, mediaURL, grantID string, settled func(error)) (int64, error) {
+	return s.sizeProbes.do(ctx, mediaURL+"\x00"+grantID, func(probeCtx context.Context) (int64, error) {
+		return s.probeTotalSize(probeCtx, httpc, mediaURL, grantID)
+	}, settled)
 }
 
 func (s *Server) probeTotalSize(ctx context.Context, httpc *http.Client, mediaURL, grantID string) (int64, error) {

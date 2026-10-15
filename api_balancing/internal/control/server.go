@@ -788,7 +788,7 @@ var thumbnailRegistrationCache = cache.New(cache.Options{
 // steady stream registers at most once per interval rather than on every refresh.
 func liveThumbnailMintMayProceed(streamID, tenantID, clusterID string, logger logging.Logger) bool {
 	v, ok, err := thumbnailRegistrationCache.Get(context.Background(), streamID, func(loadCtx context.Context, _ string) (interface{}, bool, error) {
-		regCtx, regCancel := context.WithTimeout(loadCtx, 5*time.Second)
+		regCtx, regCancel := context.WithTimeout(loadCtx, thumbnailMintTimeout)
 		defer regCancel()
 		registered, rErr := registerThumbnailServingCellFn(regCtx, streamID, tenantID, clusterID)
 		if rErr != nil {
@@ -7342,7 +7342,15 @@ func PrepareLocalFreezeAssignment(ctx context.Context, assetType, assetHash, ten
 	}
 
 	// storage_cluster_id stays NULL: NULL means "same as origin_cluster_id", which is always the case here.
-	if claimed, cErr := claimFreezeAttempt(ctx, assetHash, attemptID, nodeID, tenantID, "", canonicalKey); cErr != nil || !claimed {
+	claimed, cErr := claimFreezeAttempt(ctx, assetHash, attemptID, nodeID, tenantID, "", canonicalKey)
+	if cErr != nil {
+		// A failed claim call does not prove the claim did not commit: a COMMIT the server applies after the
+		// client gave up leaves the row in_progress under an attempt no node will ever upload, which only stale
+		// recovery would reap. Release it so the failed-freeze retry re-drives the artifact.
+		releaseUndeliveredFreezeClaim(assetHash, attemptID, nodeID, tenantID)
+		return FreezeAssignment{}, "claim_failed", false
+	}
+	if !claimed {
 		return FreezeAssignment{}, "not_claimable", false
 	}
 	return FreezeAssignment{AttemptID: attemptID, CanonicalKey: canonicalKey, StagingURL: stagingURL, DtshStagingURL: dtshStagingURL, DestCluster: destCluster}, "", true
@@ -7362,6 +7370,13 @@ func resolveThumbnailStorageCluster(ctx context.Context, tenantID, originCluster
 	}
 	return resolver.ResolveOriginDurable(originClusterID)
 }
+
+// freezePermissionTimeout bounds one FreezePermission exchange. The sidecar waits 30 s for the reply, so the
+// metadata reads and the claim transaction can ride out a multi-second database write stall and still answer.
+const freezePermissionTimeout = 20 * time.Second
+
+// freezeClaimReleaseTimeout bounds the release of a claim whose outcome the claim call could not report.
+const freezeClaimReleaseTimeout = 10 * time.Second
 
 // processFreezePermissionRequest handles freeze permission requests from Helmsman
 // Generates presigned URLs for secure S3 uploads without exposing credentials
@@ -7383,7 +7398,7 @@ func processFreezePermissionRequest(req *ipcpb.FreezePermissionRequest, nodeID s
 	// verdict (unavailable / peer-cluster reject / local) is produced first with a structured reason
 	// rather than a blanket "s3_not_configured".
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), freezePermissionTimeout)
 	defer cancel()
 
 	if assetType == "dvr" || assetType == "dvr_segment" || assetType == "dvr_manifest" {
@@ -7644,6 +7659,29 @@ func sendFreezePermissionResponse(stream ipcpb.HelmsmanControl_ConnectServer, re
 			"request_id": response.RequestId,
 			"error":      err,
 		}).Error("Failed to send freeze permission response")
+	}
+}
+
+// releaseUndeliveredFreezeClaim reverts an attempt this cell claimed but never handed to a node to the retryable
+// 'failed' state. The UPDATE is guarded by the attempt identity, so it touches nothing when the claim did not commit,
+// and it waits on the row lock of a claim whose COMMIT is still in flight, so it cannot run before that claim lands.
+// It runs on its own budget because the caller's context is usually the one that just expired.
+func releaseUndeliveredFreezeClaim(assetHash, attemptID, nodeID, tenantID string) {
+	if db == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), freezeClaimReleaseTimeout)
+	defer cancel()
+	err := database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
+		_, uErr := foghorndb.New(tx).RevertFailedFreezeDispatch(ctx, foghorndb.RevertFailedFreezeDispatchParams{
+			ArtifactHash: assetHash, SyncRequestID: sql.NullString{String: attemptID, Valid: true},
+			SyncNodeID: sql.NullString{String: nodeID, Valid: true}, TenantID: tenantID,
+		})
+		return uErr
+	})
+	if err != nil {
+		controlLogger().WithError(err).WithFields(logging.Fields{"asset_hash": assetHash, "attempt_id": attemptID, "node_id": nodeID}).
+			Warn("Could not release an undelivered freeze claim; stale freeze recovery reclaims it")
 	}
 }
 
@@ -11064,6 +11102,11 @@ func nodeProducesThumbnailResource(ctx context.Context, nodeID string, kind stre
 	}
 }
 
+// thumbnailMintTimeout bounds the database work of one thumbnail mint: the producer check and the attempt claim. It is
+// sized like the DVR ledger exchange so a routine multi-second database write stall delays the upload instead of
+// dropping it.
+const thumbnailMintTimeout = 20 * time.Second
+
 func processThumbnailUploadRequest(requestID string, req *ipcpb.ThumbnailUploadRequest, nodeID string, connProtocolVersion int32, stream ipcpb.HelmsmanControl_ConnectServer, logger logging.Logger) {
 	internalName := req.GetInternalName()
 	filePaths := req.GetFilePaths()
@@ -11288,9 +11331,10 @@ func processThumbnailUploadRequest(requestID string, req *ipcpb.ThumbnailUploadR
 	// overwrite-capable PUT must not be mintable by a tenant-entitled node (e.g. a tenantless platform-shared
 	// edge) merely for NAMING a resource it is not serving/processing. Live: the node must be running the
 	// stream; artifacts: it must hold a complete copy (serving) or be its assigned processing node. Fail closed.
-	ownCtx, ownCancel := context.WithTimeout(context.Background(), 3*time.Second)
-	produces, produceErr := nodeProducesThumbnailResource(ownCtx, nodeID, parsed.Kind, isLive, streamInternalName, thumbnailKey, thumbTenantID)
-	ownCancel()
+	// One budget covers the database work from here to the attempt claim, sized to ride out a multi-second write stall.
+	mintCtx, mintCancel := context.WithTimeout(context.Background(), thumbnailMintTimeout)
+	defer mintCancel()
+	produces, produceErr := nodeProducesThumbnailResource(mintCtx, nodeID, parsed.Kind, isLive, streamInternalName, thumbnailKey, thumbTenantID)
 	if produceErr != nil {
 		logger.WithError(produceErr).WithFields(logging.Fields{
 			"internal_name": internalName,
@@ -11391,13 +11435,11 @@ func processThumbnailUploadRequest(requestID string, req *ipcpb.ThumbnailUploadR
 	// Presigned-upload lifetime. This same constant bounds the deletion delayed-sweep window (DeterministicCopyWindow),
 	// so a PUT issued just before a deletion cannot land after cleanup finalized and strand an object.
 	expiry := thumbnailUploadTTL
-	claimCtx, claimCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	// backend evidence (I2): the mint only reaches here for a StorageMintLocal destination (Unavailable + remote
 	// federation are dropped above), so ClaimThumbnailAttempt records durable_backend_local from that invariant —
 	// cleanup then routes the sweep local even when the origin cluster is a locally-backed ALIAS.
 	claimStarted := time.Now()
-	claim, claimErr := ClaimThumbnailAttemptOutcome(claimCtx, GetDB(), attemptID, thumbTenantID, thumbnailKey, nodeID, storageCluster, fileNames, time.Now().Add(expiry))
-	claimCancel()
+	claim, claimErr := ClaimThumbnailAttemptOutcome(mintCtx, GetDB(), attemptID, thumbTenantID, thumbnailKey, nodeID, storageCluster, fileNames, time.Now().Add(expiry))
 	claimFields := logging.Fields{
 		"internal_name": internalName,
 		"thumbnail_key": thumbnailKey,

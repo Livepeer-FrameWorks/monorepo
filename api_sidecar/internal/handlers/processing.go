@@ -983,6 +983,8 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 	defer relay.TakeProcessingInputFailure(req.GetArtifactHash())
 	relay.TakeProcessingInputDefect(req.GetArtifactHash())
 	defer relay.TakeProcessingInputDefect(req.GetArtifactHash())
+	relay.TakeProcessingInputUnavailable(req.GetArtifactHash())
+	defer relay.TakeProcessingInputUnavailable(req.GetArtifactHash())
 	processesJSON := strings.TrimSpace(req.GetProcessesJson())
 	if processesJSON == "" {
 		h.sendResult(send, req.GetJobId(), "failed", "processing job is missing processes_json", nil, "", 0)
@@ -1677,6 +1679,11 @@ func (h *ProcessingJobHandler) waitForProcessingStreamReady(ctx context.Context,
 	for {
 		if failure, ok := takeProcessingSourceFailure(streamName); ok {
 			return nil, 0, errors.New(failure)
+		}
+		// The relay's shared size probe heard the source refuse after Mist's
+		// reads had given up, so no STREAM_SOURCE probe saw the answer.
+		if status, ok := relay.TakeProcessingInputUnavailable(req.GetArtifactHash()); ok {
+			return nil, 0, fmt.Errorf("source unavailable: %s", status)
 		}
 		if evt, ok := nextProcessExitEvent(processExitCh, ignoredProcessExitBootCounts); ok {
 			evtFields := processExitFields(evt)

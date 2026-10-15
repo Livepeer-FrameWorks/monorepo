@@ -75,6 +75,8 @@ type Server struct {
 	cache       *resolveCache
 	blockSize   int64
 	fills       *blockFills
+	// sizeProbes shares one upstream size probe per object among its readers.
+	sizeProbes sizeProbeGroup
 	// sidecarFetches shares one upstream .dtsh fetch among concurrent readers.
 	sidecarFetches sidecarFetchGroup
 	nodeID         string

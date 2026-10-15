@@ -195,7 +195,9 @@ Foghorn (mint + assign)
     the chapter is finalizing
   → MINTS a 128-bit crypto-random attempt_id (the attempt identity + its staging segment)
   → in ONE tx, persists the attempt (status='assigned') + a per-file row per allowlisted file, each with its
-    per-attempt STAGING key — BEFORE the node holds any PUT URL
+    per-attempt STAGING key — BEFORE the node holds any PUT URL. The producer check and this claim share one
+    20 s budget (the DVR ledger exchange's size), so a multi-second database write stall delays the mint
+    instead of dropping the upload
   → presigns a PUT for EVERY object (all-or-nothing; a single presign failure fails the whole attempt so the
     node never gets a partial assignment) and returns ThumbnailUploadResponse{attempt_id, presigned URLs}
 

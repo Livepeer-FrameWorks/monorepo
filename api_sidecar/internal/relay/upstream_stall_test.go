@@ -124,6 +124,7 @@ func newStallUpstream(t *testing.T, body []byte, stall func(n int, r *http.Reque
 func waitFillsOnCleanup(t *testing.T, s *Server) {
 	t.Helper()
 	t.Cleanup(s.fills.wg.Wait)
+	t.Cleanup(s.sizeProbes.wg.Wait)
 }
 
 // eventuallyHasBlock waits briefly for a block's rename, which follows the
