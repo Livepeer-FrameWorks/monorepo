@@ -14,6 +14,23 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/topology"
 )
 
+// KafkaBrokerJMXPort and KafkaControllerJMXPort are the loopback ports a
+// broker's and a KRaft controller's JMX exporter serve on. They differ because
+// a host runs both, next to MirrorMaker2's KafkaMirrorMakerJMXPort.
+const (
+	KafkaBrokerJMXPort     = 9405
+	KafkaControllerJMXPort = 9406
+)
+
+// KafkaJMXPort returns the JMX exporter port for a kafka role ("broker" or
+// "controller").
+func KafkaJMXPort(role string) int {
+	if role == "controller" {
+		return KafkaControllerJMXPort
+	}
+	return KafkaBrokerJMXPort
+}
+
 func kafkaRoleVarsFor(role string) RoleVarsBuilder {
 	return func(ctx context.Context, host inventory.Host, config ServiceConfig, helpers RoleBuildHelpers) (map[string]any, error) {
 		_, arch, err := helpers.DetectRemoteOS(ctx, host)
@@ -25,6 +42,10 @@ func kafkaRoleVarsFor(role string) RoleVarsBuilder {
 		art, err := helpers.ResolveArtifact("kafka", archKey, channel, config.Metadata)
 		if err != nil {
 			return nil, err
+		}
+		jmxExporter, err := helpers.ResolveArtifact(jmxExporterArtifact, archKey, channel, config.Metadata)
+		if err != nil {
+			return nil, fmt.Errorf("kafka %s: resolve JMX exporter artifact: %w", role, err)
 		}
 		nodeID := metaIntOr(config.Metadata, "node_id", 1)
 		clusterID := metaString(config.Metadata, "cluster_id")
@@ -39,6 +60,10 @@ func kafkaRoleVarsFor(role string) RoleVarsBuilder {
 			"kafka_advertised_host":     meshOrExternal(config.Metadata, host),
 			"kafka_log_retention_bytes": topology.PartitionRetentionBytes,
 			"kafka_log_segment_bytes":   topology.BrokerSegmentBytes,
+
+			"kafka_jmx_exporter_artifact_url":      jmxExporter.URL,
+			"kafka_jmx_exporter_artifact_checksum": jmxExporter.Checksum,
+			"kafka_jmx_port":                       KafkaJMXPort(role),
 		}
 		if controllers, ok := config.Metadata["controllers"].([]map[string]any); ok {
 			vars["kafka_controllers"] = controllers

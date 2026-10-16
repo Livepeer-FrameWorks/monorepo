@@ -15,6 +15,18 @@
     - /etc/frameworks/telemetry
     - /var/log/frameworks
 
+# Host metrics (disk, filesystem, memory, load, systemd unit restarts) and the
+# host crash scan, which catches Mist child-process segfaults that never fail
+# a systemd unit.
+- name: Install node_exporter and the host crash scan
+  ansible.builtin.include_role:
+    name: frameworks.infra.prometheus_stack
+    tasks_from: node_exporter.yml
+  vars:
+    node_exporter_artifact_url: "{{ edge_node_exporter_artifact_url }}"
+    node_exporter_artifact_checksum: "{{ edge_node_exporter_artifact_checksum }}"
+    node_exporter_port: "{{ edge_node_exporter_port }}"
+
 - name: Render vmagent scrape config
   ansible.builtin.template:
     src: vmagent-edge.yml.j2

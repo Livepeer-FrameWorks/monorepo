@@ -147,3 +147,48 @@
   when:
     - not ansible_check_mode
     - kafka_reinstall_required | default(true)
+
+- name: Assert JMX exporter javaagent artifact is pinned
+  ansible.builtin.assert:
+    that:
+      - kafka_jmx_exporter_artifact_url | length > 0
+      - kafka_jmx_exporter_artifact_checksum is match('^(sha1|sha224|sha256|sha384|sha512):[0-9a-fA-F]+$')
+    fail_msg: "frameworks.infra.kafka requires the pinned JMX exporter javaagent URL and checksum"
+
+- name: Stat JMX exporter javaagent
+  ansible.builtin.stat:
+    path: "{{ kafka_jmx_exporter_jar }}"
+    checksum_algorithm: "{{ kafka_jmx_exporter_artifact_checksum.split(':', 1)[0] }}"
+  register: kafka_jmx_exporter_stat
+  check_mode: false
+  changed_when: false
+
+- name: Report pending JMX exporter refresh under --check
+  ansible.builtin.debug:
+    msg: "kafka would refresh the pinned JMX exporter javaagent"
+  changed_when: >-
+    not (kafka_jmx_exporter_stat.stat.exists | default(false)) or
+    (kafka_jmx_exporter_stat.stat.checksum | default('')) != kafka_jmx_exporter_artifact_checksum.split(':', 1)[1]
+  when: ansible_check_mode
+
+- name: Ensure JMX exporter directory
+  ansible.builtin.file:
+    path: "{{ kafka_jmx_exporter_dir }}"
+    state: directory
+    owner: root
+    group: "{{ kafka_group }}"
+    mode: "0755"
+
+# get_url re-downloads whenever the on-disk jar no longer matches the pinned
+# checksum, so a version bump replaces the jar in place.
+- name: Download JMX exporter javaagent
+  ansible.builtin.get_url:
+    url: "{{ kafka_jmx_exporter_artifact_url }}"
+    dest: "{{ kafka_jmx_exporter_jar }}"
+    checksum: "{{ kafka_jmx_exporter_artifact_checksum }}"
+    owner: root
+    group: "{{ kafka_group }}"
+    mode: "0644"
+    timeout: 120
+  notify: kafka restart
+  when: not ansible_check_mode

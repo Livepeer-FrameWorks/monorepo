@@ -3,6 +3,10 @@
   ansible.builtin.import_tasks: install.yml
   tags: [install, configure, service]
 
+- name: Postgres | exporter
+  ansible.builtin.import_tasks: exporter.yml
+  tags: [install, configure, service]
+
 - name: Postgres | flush handlers before validate
   ansible.builtin.meta: flush_handlers
   tags: [service, validate]

@@ -1,0 +1,6 @@
+[Unit]
+Description=FrameWorks host crash scan for node_exporter
+
+[Service]
+Type=oneshot
+ExecStart={{ node_exporter_crash_scan_dir }}/host-crash-scan.sh {{ node_exporter_crash_scan_dir }}/host-crash-scan.awk {{ node_exporter_textfile_dir }} {{ node_exporter_crash_scan_window_seconds }}

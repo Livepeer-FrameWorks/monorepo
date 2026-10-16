@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -26,12 +27,13 @@ func newClusterDiagnoseCmd() *cobra.Command {
 		Long: `Run diagnostic checks on cluster components.
 
 Supported diagnostics:
-  network    - Test network connectivity between hosts
-  resources  - Check CPU, memory, disk usage on all hosts
-  ports      - Check for port conflicts
-  kafka      - Check Kafka cluster health, topic lag, broker status
+  network    - Test network connectivity between hosts, edges included
+  resources  - Check CPU, iowait, load, memory, and every data filesystem on all hosts and edges
+  ports      - Check every port the manifest places on a host has a listener
+  crashes    - Report unit failures, automatic restarts, core dumps, segfaults, and OOM kills since --since
+  kafka      - Check Kafka cluster health, topic lag, broker status, KRaft quorum and leadership losses since --since
   dns        - Check Privateer serves only .internal (wg0 routing, forwarded public queries)
-  media      - Capture media/DNS/federation service state without provisioning
+  media      - Capture media/DNS/federation service state on hosts and edges without provisioning
   media-authority - Trace media-authority refresh, versioning, delivery, and apply state
   dvr <dvr-hash>  - Show a DVR recording's segments, chapters, and finalize queue on its cell
 
@@ -39,6 +41,7 @@ Diagnostics help troubleshoot issues and identify problems before they
 cause outages.`,
 		Example: `  frameworks cluster diagnose network
   frameworks cluster diagnose resources
+  frameworks cluster diagnose crashes --since "24 hours ago"
   frameworks cluster diagnose kafka
   frameworks cluster diagnose dns
   frameworks cluster diagnose media
@@ -55,19 +58,21 @@ cause outages.`,
 	}
 	cmd.Flags().StringVar(&opts.StreamID, "stream-id", "", "Stream ID to trace in media diagnostics")
 	cmd.Flags().StringVar(&opts.TenantID, "tenant-id", "", "Tenant ID to include in stream database probes")
-	cmd.Flags().StringVar(&opts.Since, "since", opts.Since, "Journal time window for media diagnostics")
+	cmd.Flags().StringVar(&opts.Since, "since", opts.Since, "Journal time window for media, kafka, and crashes diagnostics")
 	cmd.Flags().IntVar(&opts.WindowHours, "window-hours", opts.WindowHours, "Database lookback in hours for media-authority diagnostics")
+	cmd.Flags().StringVar(&opts.EdgeManifest, "edge-manifest", "", "Edge manifest whose nodes host-level diagnostics also probe (default: edge.yaml beside the cluster manifest)")
 	cmd.AddCommand(newClusterDiagnoseDVRCmd())
 
 	return cmd
 }
 
 type diagnoseOptions struct {
-	StreamID    string
-	TenantID    string
-	Since       string
-	WindowHours int
-	OutputJSON  bool
+	StreamID     string
+	TenantID     string
+	Since        string
+	WindowHours  int
+	OutputJSON   bool
+	EdgeManifest string
 }
 
 // runDiagnose executes diagnostic checks against an already-resolved cluster.
@@ -90,15 +95,27 @@ func runDiagnose(cmd *cobra.Command, rc *resolvedCluster, component string, opts
 	defer sshPool.Close()
 
 	// Execute diagnostic based on component
+	runnerFor := func(host inventory.Host) (ssh.Runner, error) { return getRunner(host, sshPool) }
 	switch component {
-	case "network":
-		return diagnoseNetwork(ctx, cmd, manifest, sshPool)
-	case "resources":
-		return diagnoseResources(ctx, cmd, manifest, sshPool)
-	case "ports":
-		return diagnosePorts(ctx, cmd, manifest, sshPool)
+	case "network", "resources", "ports", "crashes":
+		targets := diagnoseHostTargets(cmd.ErrOrStderr(), rc, opts.EdgeManifest)
+		var failures int
+		switch component {
+		case "network":
+			failures = diagnoseNetwork(ctx, cmd.OutOrStdout(), cmd.ErrOrStderr(), targets, runnerFor)
+		case "resources":
+			failures = diagnoseResources(ctx, cmd.OutOrStdout(), cmd.ErrOrStderr(), targets, runnerFor)
+		case "crashes":
+			failures = diagnoseCrashes(ctx, cmd.OutOrStdout(), cmd.ErrOrStderr(), targets, opts.Since, runnerFor)
+		default:
+			failures = diagnosePorts(ctx, cmd.OutOrStdout(), cmd.ErrOrStderr(), manifest, targets, runnerFor)
+		}
+		if failures > 0 {
+			return fmt.Errorf("%s diagnostics found %d problem(s)", component, failures)
+		}
+		return nil
 	case "kafka":
-		return diagnoseKafka(ctx, cmd, manifest, sshPool)
+		return diagnoseKafka(ctx, cmd, manifest, runnerFor, opts.Since)
 	case "dns":
 		failures := checkPrivateerDNSScope(ctx, cmd.OutOrStdout(), cmd.ErrOrStderr(), manifest, func(host inventory.Host) (ssh.Runner, error) {
 			return getRunner(host, sshPool)
@@ -108,126 +125,12 @@ func runDiagnose(cmd *cobra.Command, rc *resolvedCluster, component string, opts
 		}
 		return nil
 	case "media":
-		return diagnoseMedia(ctx, cmd, manifest, sshPool, opts)
+		return diagnoseMedia(ctx, cmd, manifest, diagnoseHostTargets(cmd.ErrOrStderr(), rc, opts.EdgeManifest), runnerFor, opts)
 	case "media-authority":
 		return diagnoseMediaAuthority(ctx, cmd, rc, sshPool, opts)
 	default:
-		return fmt.Errorf("unknown component: %s (must be network, resources, ports, kafka, dns, media, or media-authority)", component)
+		return fmt.Errorf("unknown component: %s (must be network, resources, ports, crashes, kafka, dns, media, or media-authority)", component)
 	}
-}
-
-// diagnoseNetwork tests network connectivity
-func diagnoseNetwork(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, pool *ssh.Pool) error {
-	fmt.Fprintln(cmd.OutOrStdout(), "Network Connectivity Diagnostics")
-
-	hosts := make([]inventory.Host, 0, len(manifest.Hosts))
-	for _, h := range manifest.Hosts {
-		hosts = append(hosts, h)
-	}
-
-	// Test connectivity from each host to every other host
-	for i, sourceHost := range hosts {
-		runner, err := getRunner(sourceHost, pool)
-		if err != nil {
-			ux.Fail(cmd.ErrOrStderr(), fmt.Sprintf("Cannot connect to %s: %v", sourceHost.ExternalIP, err))
-			continue
-		}
-
-		for j, targetHost := range hosts {
-			if i == j {
-				continue // Skip self-ping
-			}
-
-			// Ping test
-			pingCmd := fmt.Sprintf("ping -c 1 -W 2 %s", targetHost.ExternalIP)
-			result, err := runner.Run(ctx, pingCmd)
-
-			if err != nil || result.ExitCode != 0 {
-				ux.Fail(cmd.ErrOrStderr(), fmt.Sprintf("%s → %s: FAILED (no response)", sourceHost.ExternalIP, targetHost.ExternalIP))
-			} else {
-				ux.Success(cmd.OutOrStdout(), fmt.Sprintf("%s → %s: OK", sourceHost.ExternalIP, targetHost.ExternalIP))
-			}
-		}
-	}
-
-	return nil
-}
-
-// diagnoseResources checks resource usage on all hosts
-func diagnoseResources(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, pool *ssh.Pool) error {
-	fmt.Fprintln(cmd.OutOrStdout(), "Resource Usage Diagnostics")
-
-	for hostname, host := range manifest.Hosts {
-		fmt.Fprintf(cmd.OutOrStdout(), "Host: %s (%s)\n", hostname, host.ExternalIP)
-
-		runner, err := getRunner(host, pool)
-		if err != nil {
-			ux.Fail(cmd.ErrOrStderr(), fmt.Sprintf("Cannot connect: %v", err))
-			continue
-		}
-
-		// CPU usage
-		cpuCmd := "top -bn1 | grep 'Cpu(s)' | awk '{print $2}'"
-		if result, err := runner.Run(ctx, cpuCmd); err == nil && result.ExitCode == 0 {
-			fmt.Fprintf(cmd.OutOrStdout(), "  CPU: %s%% used\n", result.Stdout)
-		}
-
-		// Memory usage
-		memCmd := "free -h | awk 'NR==2{printf \"  Memory: %s / %s (%.2f%%)\\n\", $3, $2, $3*100/$2}'"
-		if result, err := runner.Run(ctx, memCmd); err == nil && result.ExitCode == 0 {
-			fmt.Fprint(cmd.OutOrStdout(), result.Stdout)
-		}
-
-		// Disk usage
-		diskCmd := "df -h / | awk 'NR==2{printf \"  Disk: %s / %s (%s used)\\n\", $3, $2, $5}'"
-		if result, err := runner.Run(ctx, diskCmd); err == nil && result.ExitCode == 0 {
-			fmt.Fprint(cmd.OutOrStdout(), result.Stdout)
-		}
-
-		// Load average
-		loadCmd := "uptime | awk -F'load average:' '{print $2}'"
-		if result, err := runner.Run(ctx, loadCmd); err == nil && result.ExitCode == 0 {
-			fmt.Fprintf(cmd.OutOrStdout(), "  Load:%s\n", result.Stdout)
-		}
-
-		fmt.Fprintln(cmd.OutOrStdout(), "")
-	}
-
-	return nil
-}
-
-// diagnosePorts checks for port conflicts
-func diagnosePorts(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, pool *ssh.Pool) error {
-	fmt.Fprintln(cmd.OutOrStdout(), "Port Conflict Diagnostics")
-
-	// Check standard ports on each host
-	standardPorts := buildStandardPorts()
-
-	for hostname, host := range manifest.Hosts {
-		fmt.Fprintf(cmd.OutOrStdout(), "Host: %s (%s)\n", hostname, host.ExternalIP)
-
-		runner, err := getRunner(host, pool)
-		if err != nil {
-			ux.Fail(cmd.ErrOrStderr(), fmt.Sprintf("Cannot connect: %v", err))
-			continue
-		}
-
-		for port, service := range standardPorts {
-			checkCmd := fmt.Sprintf("netstat -tuln | grep ':%d ' || echo 'free'", port)
-			result, err := runner.Run(ctx, checkCmd)
-			if err == nil && result.ExitCode == 0 {
-				if result.Stdout == "free\n" {
-					fmt.Fprintf(cmd.OutOrStdout(), "  Port %d (%s): FREE\n", port, service)
-				} else {
-					fmt.Fprintf(cmd.OutOrStdout(), "  Port %d (%s): IN USE\n", port, service)
-				}
-			}
-		}
-
-		fmt.Fprintln(cmd.OutOrStdout(), "")
-	}
-
-	return nil
 }
 
 func buildStandardPorts() map[int]string {
@@ -261,7 +164,7 @@ func buildStandardPorts() map[int]string {
 }
 
 // diagnoseKafka checks Kafka cluster health
-func diagnoseKafka(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, pool *ssh.Pool) error {
+func diagnoseKafka(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, runnerFor func(inventory.Host) (ssh.Runner, error), since string) error {
 	if manifest.Infrastructure.Kafka == nil || !manifest.Infrastructure.Kafka.Enabled {
 		return fmt.Errorf("kafka not enabled in manifest")
 	}
@@ -289,7 +192,7 @@ func diagnoseKafka(ctx context.Context, cmd *cobra.Command, manifest *inventory.
 			ux.Fail(cmd.ErrOrStderr(), fmt.Sprintf("%s: broker host not found: %s", region, broker.Host))
 			continue
 		}
-		runner, runnerErr := getRunner(host, pool)
+		runner, runnerErr := runnerFor(host)
 		if runnerErr != nil {
 			failures++
 			ux.Fail(cmd.ErrOrStderr(), fmt.Sprintf("%s: connect to %s: %v", region, broker.Host, runnerErr))
@@ -315,13 +218,15 @@ func diagnoseKafka(ctx context.Context, cmd *cobra.Command, manifest *inventory.
 				fmt.Fprintln(cmd.OutOrStdout(), result.Stdout)
 			}
 		}
+		fmt.Fprintf(cmd.OutOrStdout(), "\nKRaft Metadata Quorum (leadership losses since %s):\n", since)
+		quorum := checkKafkaQuorum(ctx, manifest, cluster, manifest.Infrastructure.Kafka.Mode, since, runnerFor)
+		printHealthResult(cmd, "quorum", quorum)
+		if !quorum.OK {
+			failures++
+		}
 	}
-	failures += checkMirrorMakerTopicCoverage(ctx, cmd.OutOrStdout(), cmd.ErrOrStderr(), manifest, func(host inventory.Host) (ssh.Runner, error) {
-		return getRunner(host, pool)
-	})
-	if result := checkMirrorMakerWorkers(ctx, manifest, func(host inventory.Host) (ssh.Runner, error) {
-		return getRunner(host, pool)
-	}); result != nil {
+	failures += checkMirrorMakerTopicCoverage(ctx, cmd.OutOrStdout(), cmd.ErrOrStderr(), manifest, runnerFor)
+	if result := checkMirrorMakerWorkers(ctx, manifest, runnerFor); result != nil {
 		fmt.Fprintln(cmd.OutOrStdout(), "\nMirrorMaker2 workers:")
 		printHealthResult(cmd, "workers", result)
 		if !result.OK {
@@ -393,7 +298,7 @@ type mediaDiagnosticReport struct {
 	Hosts    []mediaDiagnosticHostReport `json:"hosts"`
 }
 
-func diagnoseMedia(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, pool *ssh.Pool, opts diagnoseOptions) error {
+func diagnoseMedia(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, targets []diagnoseHost, runnerFor func(inventory.Host) (ssh.Runner, error), opts diagnoseOptions) error {
 	if !opts.OutputJSON {
 		fmt.Fprintln(cmd.OutOrStdout(), "Media/DNS/Federation Diagnostics")
 		fmt.Fprintln(cmd.OutOrStdout(), "Read-only host probes for service state, listeners, TLS SANs, and recent error logs.")
@@ -403,6 +308,13 @@ func diagnoseMedia(ctx context.Context, cmd *cobra.Command, manifest *inventory.
 	}
 
 	hostServices := mediaDiagnosticHostServices(manifest)
+	edgeHosts := map[string]inventory.Host{}
+	for _, target := range targets {
+		if target.Edge {
+			edgeHosts[target.Name] = target.Host
+			hostServices[target.Name] = append([]string(nil), mediaDiagnosticEdgeServices...)
+		}
+	}
 	if len(hostServices) == 0 {
 		return fmt.Errorf("no media diagnostic service placements found in manifest")
 	}
@@ -413,13 +325,20 @@ func diagnoseMedia(ctx context.Context, cmd *cobra.Command, manifest *inventory.
 	}
 	sort.Strings(hosts)
 
-	ports := mediaDiagnosticPorts()
 	report := mediaDiagnosticReport{StreamID: opts.StreamID, TenantID: opts.TenantID, Since: opts.Since}
 	failures := 0
 	for _, hostName := range hosts {
 		hostReport := mediaDiagnosticHostReport{Host: hostName, Services: append([]string(nil), hostServices[hostName]...), ExitCode: -1}
 		sort.Strings(hostReport.Services)
 		host, ok := manifest.GetHost(hostName)
+		_, edge := edgeHosts[hostName]
+		if edge {
+			host, ok = edgeHosts[hostName], true
+		}
+		ports := mediaDiagnosticPorts()
+		if edge {
+			ports = mediaDiagnosticEdgePorts()
+		}
 		if !ok {
 			hostReport.Error = "host missing from manifest"
 			report.Hosts = append(report.Hosts, hostReport)
@@ -436,7 +355,7 @@ func diagnoseMedia(ctx context.Context, cmd *cobra.Command, manifest *inventory.
 			fmt.Fprintf(cmd.OutOrStdout(), "Services: %s\n", strings.Join(hostReport.Services, ", "))
 		}
 
-		runner, err := getRunner(host, pool)
+		runner, err := runnerFor(host)
 		if err != nil {
 			hostReport.Error = err.Error()
 			report.Hosts = append(report.Hosts, hostReport)
@@ -448,6 +367,9 @@ func diagnoseMedia(ctx context.Context, cmd *cobra.Command, manifest *inventory.
 		}
 
 		probe := mediaDiagnosticScript(hostReport.Services, ports, opts)
+		if edge {
+			probe += mediaDiagnosticEdgeContainerScript
+		}
 		result, err := runner.Run(ctx, "sh -lc "+ssh.ShellQuote(probe))
 		if result != nil {
 			hostReport.Stdout = strings.TrimSpace(result.Stdout)
@@ -571,6 +493,41 @@ func mediaDiagnosticPorts() []int {
 	return ports
 }
 
+// mediaDiagnosticEdgeServices are the units of a native edge; the probe runs
+// frameworks-<name>.service for each.
+var mediaDiagnosticEdgeServices = []string{"caddy", "helmsman", "mistserver"}
+
+// mediaDiagnosticEdgePorts are the listeners of an edge: Caddy's public HTTP(S),
+// Helmsman with its management port, and MistServer's HTTP, API and RTMP.
+func mediaDiagnosticEdgePorts() []int {
+	ports := []int{80, 443, servicedefs.HelmsmanManagementPort, 4242, 1935}
+	for _, id := range []string{"helmsman", "mistserver"} {
+		if svc, ok := servicedefs.Services[id]; ok && svc.DefaultPort != 0 {
+			ports = append(ports, svc.DefaultPort)
+		}
+	}
+	sort.Ints(ports)
+	return slices.Compact(ports)
+}
+
+// mediaDiagnosticEdgeContainerScript reports a container-mode edge, whose
+// services run inside the single frameworks-edge container rather than as
+// units. It reuses SINCE from mediaDiagnosticScript.
+const mediaDiagnosticEdgeContainerScript = `
+fw_docker() { if docker version >/dev/null 2>&1; then docker "$@"; else sudo -n docker "$@"; fi; }
+if command -v docker >/dev/null 2>&1 && fw_docker inspect frameworks-edge >/dev/null 2>&1; then
+  echo "== frameworks-edge container =="
+  fw_docker inspect -f 'status={{.State.Status}} restarts={{.RestartCount}} started={{.State.StartedAt}} oom_killed={{.State.OOMKilled}}' frameworks-edge 2>/dev/null || true
+  echo "-- suspicious container log lines since ${SINCE} (count, most frequent first) --"
+  since_epoch=$(date -d "${SINCE}" +%s 2>/dev/null || echo 0)
+  fw_docker logs --since "${since_epoch}" frameworks-edge 2>&1 \
+    | grep -Ei 'error|warn|failed|x509|deadline|panic|segfault' \
+    | sed -E 's/"time":"[^"]+",?//g; s/,"time":"[^"]+"//g' \
+    | sort | uniq -c | sort -rn \
+    | head -n 20 || true
+fi
+`
+
 func appendUniqueString(values []string, value string) []string {
 	for _, existing := range values {
 		if existing == value {
@@ -612,7 +569,7 @@ hostname -f 2>/dev/null || hostname
 echo "== resource snapshot =="
 uptime 2>/dev/null || true
 free -h 2>/dev/null | sed -n '1,2p' || true
-df -h / 2>/dev/null | sed -n '1,2p' || true
+df -h -x tmpfs -x devtmpfs -x overlay -x squashfs -x efivarfs 2>/dev/null || true
 echo "== listeners =="
 ss -ltnp 2>/dev/null | grep -E %s || true
 for svc in %s; do
@@ -620,16 +577,18 @@ for svc in %s; do
   echo "== ${unit} =="
   systemctl is-active "${unit}" 2>/dev/null || true
   systemctl show "${unit}" -p ActiveState -p SubState -p ExecMainStatus -p MainPID --no-page 2>/dev/null || true
-  echo "-- recent suspicious logs --"
-  journalctl -u "${unit}" --since "${SINCE}" -n 200 --no-pager 2>/dev/null \
+  # The whole --since window is scanned; repeats collapse into a count so the
+  # 20 most frequent distinct lines are shown regardless of when they occurred.
+  echo "-- suspicious log lines since ${SINCE} (count, most frequent first) --"
+  journalctl -u "${unit}" --since "${SINCE}" --no-pager 2>/dev/null \
     | grep -Ei 'error|warn|failed|x509|deadline|No healthy|unsupported protocol|(^|[^[:alnum:]_])(nan|inf)([^[:alnum:]_]|$)|storage_usage|bunny|cloudflare' \
     | sed -E 's/^[A-Z][a-z]{2} [ 0-9][0-9] [0-9:]+ [^ ]+ [^:]+: //' \
     | sed -E 's/"time":"[^"]+",?//g; s/,"time":"[^"]+"//g' \
-    | awk '!seen[$0]++' \
-    | tail -n 20 || true
+    | sort | uniq -c | sort -rn \
+    | head -n 20 || true
   if [ -n "${STREAM_ID}" ]; then
-    echo "-- stream-specific logs --"
-    journalctl -u "${unit}" --since "${SINCE}" -n 300 --no-pager 2>/dev/null \
+    echo "-- stream-specific logs since ${SINCE} (latest 20) --"
+    journalctl -u "${unit}" --since "${SINCE}" --no-pager 2>/dev/null \
       | grep -F "${STREAM_ID}" \
       | tail -n 20 || true
   fi

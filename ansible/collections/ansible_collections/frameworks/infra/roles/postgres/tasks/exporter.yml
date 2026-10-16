@@ -1,0 +1,91 @@
+---
+# postgres_exporter beside the instance. It runs as the postgres OS user and
+# connects over the Unix socket with peer auth, so it needs no password, and
+# listens on loopback at postgres_exporter_port for the host-local vmagent.
+- name: Assert postgres_exporter artifact is pinned
+  ansible.builtin.assert:
+    that:
+      - postgres_exporter_artifact_url | length > 0
+      - postgres_exporter_artifact_checksum is match('^(sha1|sha224|sha256|sha384|sha512):[0-9a-fA-F]+$')
+    fail_msg: "frameworks.infra.postgres requires the pinned postgres-exporter artifact URL and checksum"
+
+- name: Stat postgres_exporter install sentinel
+  ansible.builtin.stat:
+    path: "{{ postgres_exporter_install_sentinel }}"
+  register: postgres_exporter_install_sentinel_stat
+  check_mode: false
+  changed_when: false
+
+- name: Report pending postgres_exporter install under --check
+  ansible.builtin.debug:
+    msg: "postgres_exporter would install {{ postgres_exporter_artifact_url }}"
+  changed_when: not (postgres_exporter_install_sentinel_stat.stat.exists | default(false))
+  when: ansible_check_mode
+
+- name: Install postgres_exporter artifact
+  when:
+    - not ansible_check_mode
+    - not (postgres_exporter_install_sentinel_stat.stat.exists | default(false))
+  block:
+    - name: Create postgres_exporter extract directory
+      ansible.builtin.tempfile:
+        state: directory
+        suffix: postgres-exporter
+      register: postgres_exporter_extract_dir
+
+    - name: Download postgres_exporter archive
+      ansible.builtin.get_url:
+        url: "{{ postgres_exporter_artifact_url }}"
+        dest: "{{ postgres_exporter_extract_dir.path }}/postgres_exporter.tar.gz"
+        checksum: "{{ postgres_exporter_artifact_checksum }}"
+        mode: "0644"
+        timeout: 120
+
+    - name: Extract postgres_exporter archive
+      ansible.builtin.unarchive:
+        src: "{{ postgres_exporter_extract_dir.path }}/postgres_exporter.tar.gz"
+        dest: "{{ postgres_exporter_extract_dir.path }}"
+        remote_src: true
+        extra_opts:
+          - --strip-components=1
+
+    - name: Install postgres_exporter binary
+      ansible.builtin.copy:
+        src: "{{ postgres_exporter_extract_dir.path }}/postgres_exporter"
+        dest: "{{ postgres_exporter_bin }}"
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0755"
+      notify: postgres exporter restart
+
+    - name: Record postgres_exporter install sentinel
+      ansible.builtin.file:
+        path: "{{ postgres_exporter_install_sentinel }}"
+        state: touch
+        owner: root
+        group: root
+        mode: "0644"
+  always:
+    - name: Remove postgres_exporter extract directory
+      ansible.builtin.file:
+        path: "{{ postgres_exporter_extract_dir.path }}"
+        state: absent
+      when: postgres_exporter_extract_dir.path is defined
+
+- name: Render postgres_exporter systemd unit
+  ansible.builtin.template:
+    src: exporter.service.j2
+    dest: "/etc/systemd/system/{{ postgres_exporter_service_name }}.service"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: postgres exporter restart
+
+- name: Ensure postgres_exporter service
+  ansible.builtin.systemd:
+    name: "{{ postgres_exporter_service_name }}"
+    state: started
+    enabled: true
+    daemon_reload: true
+  when: not ansible_check_mode

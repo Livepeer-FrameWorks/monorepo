@@ -44,3 +44,29 @@ func TestRebuildSourceLeasesFromMist_UnresolvedVODStaysDegraded(t *testing.T) {
 		t.Fatal("an unresolved VOD stream must raise the degraded VOD pause")
 	}
 }
+
+// Mist keeps the input of a header-generation boot alive for tens of seconds
+// after the sidecar lands and the source override is gone. The first poll that
+// sees the stream after that must still resolve it to the output file.
+func TestLocalVODSourceBootStaysResolvedAfterOverrideClears(t *testing.T) {
+	monitorLogger = logging.NewLogger()
+	tracker := installTestTracker(t)
+
+	const streamName = "vod+lingering-output-int"
+	output := filepath.Join(t.TempDir(), "lingering.mkv")
+	if err := withLocalVODSource(streamName, output, func() error { return nil }); err != nil {
+		t.Fatalf("boot: %v", err)
+	}
+	if _, ok := getProcessingSourceOverride(streamName); ok {
+		t.Fatal("source override must be cleared once the boot returns")
+	}
+
+	rebuildSourceLeasesFromMist(tracker, map[string]struct{}{streamName: {}}, nil)
+
+	if tracker.DegradedVodCleanupActive() {
+		t.Fatal("a lingering header-generation boot got a degraded VOD lease")
+	}
+	if !tracker.IsPathLeased(output) {
+		t.Fatalf("expected the output file %q to stay pinned", output)
+	}
+}

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 	"sort"
 	"strings"
@@ -80,6 +81,61 @@ func mirrorLinkTopics(link inventory.KafkaMirrorLink, aggregatorAlias string) []
 		return topology.RegionalToAggregatorTopics()
 	}
 	return topology.AggregatorToRegionalTopics()
+}
+
+// mirroredTopicDeclarations returns the topic copies MirrorMaker2 replicates
+// into target, declared like any other topic of that cluster: named
+// "<source alias>.<topic>", with the source cluster's declared partition count
+// and config and the replication factor MirrorMaker2 gives the copies it
+// creates. The kafka role creates them and converges their config, so a
+// retention change reaches every copy with the release that makes it, and the
+// MirrorMaker2 workers leave topic configs alone (sync.topic.configs.enabled
+// is false). A link topic its source cluster does not declare has no platform
+// config and is left to MirrorMaker2, which copies the source config on
+// creation.
+func mirroredTopicDeclarations(manifest *inventory.Manifest, target *kafkaClusterView) []inventory.KafkaTopic {
+	if manifest == nil || manifest.Infrastructure.Kafka == nil || target == nil {
+		return nil
+	}
+	mm := manifest.Infrastructure.Kafka.MirrorMaker
+	if mm == nil || !mm.Enabled {
+		return nil
+	}
+	targetAlias := kafkaClusterAlias(manifest, target)
+	aggregatorAlias := kafkaClusterAlias(manifest, aggregatorKafkaClusterView(manifest))
+	replicas := replicasForCluster(target, mm.Replicas)
+	seen := map[string]bool{}
+	for _, declared := range target.Topics {
+		seen[declared.Name] = true
+	}
+	var copies []inventory.KafkaTopic
+	for _, link := range mm.Links {
+		if strings.TrimSpace(link.Target) != targetAlias {
+			continue
+		}
+		source := kafkaClusterViewByAlias(manifest, strings.TrimSpace(link.Source))
+		if source == nil {
+			continue
+		}
+		sourceAlias := kafkaClusterAlias(manifest, source)
+		for _, name := range mirrorLinkTopics(link, aggregatorAlias) {
+			idx := slices.IndexFunc(source.Topics, func(t inventory.KafkaTopic) bool { return t.Name == name })
+			copyName := topology.MirroredTopicName(sourceAlias, name)
+			if idx < 0 || seen[copyName] {
+				continue
+			}
+			seen[copyName] = true
+			declared := source.Topics[idx]
+			copies = append(copies, inventory.KafkaTopic{
+				Name:              copyName,
+				Partitions:        declared.Partitions,
+				ReplicationFactor: replicas,
+				Config:            maps.Clone(declared.Config),
+			})
+		}
+	}
+	sort.Slice(copies, func(i, j int) bool { return copies[i].Name < copies[j].Name })
+	return copies
 }
 
 // mirroredSourceAliases returns the source aliases of the enabled MirrorMaker2

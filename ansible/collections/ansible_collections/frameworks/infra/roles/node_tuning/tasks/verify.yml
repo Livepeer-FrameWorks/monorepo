@@ -125,6 +125,24 @@
     label: "{{ item.key }}"
   when: node_tuning_profile == "edge"
 
+# A data role may own a key on its hosts (yugabyte's 99-yugabyte.conf sets
+# vm.swappiness=0); `sysctl --system` applies drop-ins in name order and
+# /etc/sysctl.conf last, so a key a later file sets is that role's to verify.
+# POSIX sh (no pipefail) so it runs on every Linux family; an unreadable file
+# only drops its keys, which keeps the runtime check on them.
+- name: Node_tuning verify | sysctl keys later drop-ins set # noqa: risky-shell-pipe
+  ansible.builtin.shell: |
+    set -eu
+    {
+      ls /etc/sysctl.d/*.conf 2>/dev/null \
+        | LC_ALL=C awk -F/ '$NF > "90-frameworks-baseline.conf" && $NF != "91-frameworks-edge.conf"' || true
+      [ -f /etc/sysctl.conf ] && echo /etc/sysctl.conf || true
+    } | while read -r file; do
+      sed -n 's/^[[:space:]]*-\{0,1\}\([A-Za-z0-9_./-]*\)[[:space:]]*=.*/\1/p' "$file"
+    done | LC_ALL=C sort -u
+  register: node_tuning_sysctl_overridden
+  changed_when: false
+
 - name: Node_tuning verify | sysctl runtime values
   ansible.builtin.command: sysctl -n {{ item.key }}
   loop: "{{ node_tuning_expected_sysctl | dict2items }}"
@@ -163,7 +181,9 @@
   loop: "{{ sysctl_runtime.results }}"
   loop_control:
     label: "{{ item.item.key }}"
-  when: item.rc == 0
+  when:
+    - item.rc == 0
+    - item.item.key not in node_tuning_sysctl_overridden.stdout_lines
 
 - name: Node_tuning verify | limits file present
   ansible.builtin.stat:

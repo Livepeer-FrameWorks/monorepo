@@ -45,6 +45,10 @@ refresh.groups.interval.seconds = 60
 {{ flow }}.offset-syncs.topic.replication.factor = {{ source_rf }}
 {{ flow }}.tasks.max = {{ src.tasks_max | default(kafka_mm_task_count) }}
 {{ flow }}.sync.topic.acls.enabled = false
+{# The kafka role declares every mirrored copy with its platform config and
+   converges it; MirrorMaker2 copies the source config only when it creates a
+   copy itself. #}
+{{ flow }}.sync.topic.configs.enabled = false
 {% endfor %}
 offset.storage.replication.factor = {{ target_rf }}
 status.storage.replication.factor = {{ target_rf }}

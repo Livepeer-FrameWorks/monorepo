@@ -85,6 +85,8 @@ type AssetHandler struct {
 	cacheHits   prometheus.Counter
 	cacheMisses prometheus.Counter
 	s3Errors    prometheus.Counter
+	// storeProbes counts sentinel probe outcomes by result (ok, unavailable, refused); nil-safe.
+	storeProbes *prometheus.CounterVec
 
 	storeState storeProbeState
 
@@ -173,6 +175,8 @@ type storeProbeState struct {
 	lastSuccess time.Time
 	lastErr     error
 	failing     bool
+	// warned records that the current outage outlived storeReadinessWindow and was logged.
+	warned bool
 	// lastErrRefused records whether lastErr was the store refusing this instance (see storeRefusedRead) rather
 	// than the store being slow or unreachable.
 	lastErrRefused bool
@@ -236,25 +240,51 @@ func (h *AssetHandler) RunStoreProbe(ctx context.Context) {
 	}
 }
 
-// recordStoreProbe stores one probe outcome and logs when the store starts or stops answering, with the failure.
+// SetStoreProbeCounter wires the counter of sentinel probe outcomes, labelled by result.
+func (h *AssetHandler) SetStoreProbeCounter(probes *prometheus.CounterVec) {
+	h.storeProbes = probes
+}
+
+// recordStoreProbe stores one probe outcome and counts it. Failures that stay
+// inside storeReadinessWindow do not change readiness and are only counted; the
+// warning fires once when readiness lapses, and recovery is logged only after it.
 func (h *AssetHandler) recordStoreProbe(err error) {
 	h.storeState.mu.Lock()
 	defer h.storeState.mu.Unlock()
 	if err == nil {
-		if h.storeState.failing {
+		h.countStoreProbe("ok")
+		if h.storeState.warned {
 			h.logger.Info("Readiness sentinel readable from the object store again")
 		}
 		h.storeState.lastSuccess = h.clock()
 		h.storeState.lastErr = nil
 		h.storeState.failing = false
+		h.storeState.warned = false
 		return
 	}
-	if !h.storeState.failing {
-		h.logger.WithError(err).WithField("bucket", h.bucket).Warn("Readiness sentinel read from the object store failed")
+	refused := storeRefusedRead(err)
+	if refused {
+		h.countStoreProbe("refused")
+	} else {
+		h.countStoreProbe("unavailable")
 	}
 	h.storeState.lastErr = err
-	h.storeState.lastErrRefused = storeRefusedRead(err)
+	h.storeState.lastErrRefused = refused
 	h.storeState.failing = true
+	lapsed := h.storeState.lastSuccess.IsZero() || h.clock().Sub(h.storeState.lastSuccess) > storeReadinessWindow
+	if lapsed && !h.storeState.warned {
+		h.storeState.warned = true
+		h.logger.WithError(err).WithFields(logging.Fields{
+			"bucket":  h.bucket,
+			"refused": refused,
+		}).Warn("Readiness sentinel unreadable from the object store for the whole readiness window")
+	}
+}
+
+func (h *AssetHandler) countStoreProbe(result string) {
+	if h.storeProbes != nil {
+		h.storeProbes.WithLabelValues(result).Inc()
+	}
 }
 
 // errEmptySentinel reports a sentinel object that exists but has no content.

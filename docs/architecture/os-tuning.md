@@ -58,11 +58,27 @@ node_tuning    (this role)                   frameworks cluster os update --chec
 | `apt-daily.timer`                              | enabled                               | masked                      |
 | `apt-daily-upgrade.timer`                      | enabled                               | masked                      |
 | `needrestart` restart mode                     | `i` (22.04) / `u` Ubuntu-mode (24.04) | `l` (list only)             |
+| `needrestart` `override_rc` for platform units | none                                  | `0` (never restarted)       |
 | `needrestart` kernel/microcode prompts         | enabled                               | silenced                    |
 | `snapd`                                        | installed + active                    | purged + masked             |
 | `motd-news.timer`                              | enabled                               | masked                      |
 | `fwupd-refresh.timer`                          | enabled                               | masked                      |
 | `e2scrub_all.timer`                            | enabled                               | masked when no LVM detected |
+
+`NEEDRESTART_MODE` in the environment overrides the configured restart mode,
+so the drop-in also maps every platform-managed unit to `override_rc = 0`:
+`frameworks-*`, Valkey/Redis, PostgreSQL, `yb-master`/`yb-tserver`,
+ClickHouse server and Keeper, Kafka, MistServer, Docker/containerd and the
+VictoriaMetrics stack. A library upgrade never restarts them; the platform
+restarts them in its own rolling order, and `cluster os update` try-restarts
+the units needrestart lists.
+
+The role's policy tasks carry the `configure` tag and its verify tasks the
+`validate` tag, the tags `cluster provision` and `cluster release apply`
+select, so every host (not only standalone edges) converges and verifies the
+policy. The runtime sysctl check skips a key that a drop-in sorting after
+`90-frameworks-baseline.conf` (or `/etc/sysctl.conf`) sets: that key belongs to
+the role writing the later file (Yugabyte, Redis).
 
 ## Sysctl baseline (core profile)
 
@@ -172,6 +188,16 @@ write yugabyte-user-scoped `nofile=1048576 + nproc=12000`. These are
 database-tuning values keyed to YugabyteDB's specific behavior, not
 general OS tuning — they intentionally live with the role that owns them
 and override the node_tuning baseline on yugabyte hosts.
+
+## Carve-out: Redis / Valkey
+
+The `redis` role writes `/etc/sysctl.d/92-frameworks-redis.conf` with
+`vm.overcommit_memory = 1` and applies it at runtime on every host where it
+installs a Redis or Valkey server (not on Sentinel-only tasks). Valkey forks
+for each background save and each full replica resync; under the kernel's
+heuristic overcommit (`0`) that fork can fail whenever free memory is below the
+dataset size, although copy-on-write touches little of it. The setting is
+host-wide, so co-located services on a Redis host run with it too.
 
 ## Gotchas
 

@@ -28,3 +28,11 @@ redis_local_host: >-
 # file found at this unrotated path, and the directory once it is empty.
 redis_named_log_dir: /var/log/frameworks/redis
 redis_named_log_file: "{{ redis_named_log_dir ~ '/' ~ redis_instance_suffix ~ '.log' }}"
+# One exporter per server, named and ported after it (port + 10000, loopback).
+redis_exporter_enabled: "{{ redis_role != 'sentinel' }}"
+redis_exporter_service_name: "{{ redis_service_name ~ '-exporter' }}"
+redis_exporter_port: "{{ redis_port | int + 10000 }}"
+redis_exporter_env_path: "/etc/frameworks/redis/{{ redis_service_name }}-exporter.env"
+redis_exporter_bin: /usr/local/bin/redis_exporter
+redis_exporter_install_identity: "{{ redis_exporter_artifact_checksum ~ ':' ~ redis_exporter_artifact_url }}"
+redis_exporter_install_sentinel: "/usr/local/bin/.frameworks-redis-exporter-installed-{{ redis_exporter_install_identity | hash('sha256') }}"

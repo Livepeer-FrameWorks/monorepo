@@ -15,9 +15,10 @@ import (
 // exporter serves connector metrics on; the host-local vmagent scrapes it.
 const KafkaMirrorMakerJMXPort = 9404
 
-// kafkaMirrorMakerJMXExporterArtifact is the release-manifest infrastructure
-// entry pinning the Prometheus JMX exporter javaagent jar.
-const kafkaMirrorMakerJMXExporterArtifact = "jmx-prometheus-javaagent"
+// jmxExporterArtifact is the release-manifest infrastructure entry pinning the
+// Prometheus JMX exporter javaagent jar loaded by brokers, controllers and
+// MirrorMaker2 workers.
+const jmxExporterArtifact = "jmx-prometheus-javaagent"
 
 // KafkaMirrorMakerRESTPort is the port of each worker's internal REST server.
 const KafkaMirrorMakerRESTPort = 8083
@@ -50,7 +51,7 @@ func kafkaMirrorMakerRoleVars(ctx context.Context, host inventory.Host, config S
 	if err != nil {
 		return nil, err
 	}
-	jmxExporter, err := helpers.ResolveArtifact(kafkaMirrorMakerJMXExporterArtifact, archKey, channel, config.Metadata)
+	jmxExporter, err := helpers.ResolveArtifact(jmxExporterArtifact, archKey, channel, config.Metadata)
 	if err != nil {
 		return nil, fmt.Errorf("kafka-mirrormaker: resolve JMX exporter artifact: %w", err)
 	}

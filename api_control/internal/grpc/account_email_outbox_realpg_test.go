@@ -6,9 +6,13 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"net/textproto"
+	"strings"
 	"testing"
 
 	"frameworks/api_control/internal/database/commodoredb"
+	emailpkg "github.com/Livepeer-FrameWorks/monorepo/pkg/email"
 	"github.com/sirupsen/logrus"
 )
 
@@ -121,5 +125,57 @@ func TestAccountEmailOutbox_RetriesUntilDelivered_RealPG(t *testing.T) {
 		if status != want {
 			t.Fatalf("user %s: status %s, want %s", id, status, want)
 		}
+	}
+}
+
+// A receiving server that permanently refuses the recipient (550 5.1.1 user
+// unknown) cannot accept a resend to the same address, so the request is
+// abandoned on that answer instead of being retried for the whole window.
+func TestAccountEmailOutbox_AbandonsRejectedRecipient_RealPG(t *testing.T) {
+	conn := startCommodoreRealPG(t)
+	ctx := context.Background()
+	const (
+		tenantID = "10000000-0000-4000-8000-00000000e101"
+		userID   = "20000000-0000-4000-8000-00000000e101"
+	)
+	if _, err := conn.ExecContext(ctx, `
+		INSERT INTO commodore.users (id, tenant_id, email, verified) VALUES ($1::uuid, $2::uuid, 'gone@example.com', false)
+	`, userID, tenantID); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	sends := 0
+	server := &CommodoreServer{db: conn, logger: logrus.New()}
+	server.verificationEmailSendFn = func(string, string) error {
+		sends++
+		return fmt.Errorf("rcpt to: %w", &emailpkg.RecipientError{Err: &textproto.Error{
+			Code: 550, Msg: "5.1.1 <gone@example.com>: Recipient address rejected: User unknown",
+		}})
+	}
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := enqueueAccountEmailTx(ctx, tx, userID, tenantID, accountEmailPurposeVerification); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	worker := server.accountEmailOutboxWorker()
+	worker.ProcessBatch(ctx)
+	if _, err := conn.ExecContext(ctx, `UPDATE commodore.account_email_outbox SET next_attempt_at = NOW() WHERE user_id = $1::uuid`, userID); err != nil {
+		t.Fatal(err)
+	}
+	worker.ProcessBatch(ctx)
+
+	var status string
+	var attempts int
+	var lastError sql.NullString
+	if err := conn.QueryRowContext(ctx, `SELECT status, attempts, last_error FROM commodore.account_email_outbox WHERE user_id = $1::uuid`, userID).Scan(&status, &attempts, &lastError); err != nil {
+		t.Fatal(err)
+	}
+	if status != "abandoned" || attempts != 1 || sends != 1 || !strings.Contains(lastError.String, "5.1.1") {
+		t.Fatalf("rejected recipient: status=%s attempts=%d sends=%d last_error=%q, want abandoned after one send with the reply recorded", status, attempts, sends, lastError.String)
 	}
 }

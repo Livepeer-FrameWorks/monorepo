@@ -6,6 +6,21 @@
     enabled: false
   failed_when: false
 
+- name: Stop and disable redis exporter
+  ansible.builtin.systemd:
+    name: "{{ redis_exporter_service_name }}"
+    state: stopped
+    enabled: false
+  failed_when: false
+
+- name: Remove redis exporter unit and environment
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "/etc/systemd/system/{{ redis_exporter_service_name }}.service"
+    - "{{ redis_exporter_env_path }}"
+
 - name: Remove named Redis systemd unit
   ansible.builtin.file:
     path: "/etc/systemd/system/{{ redis_service_name }}.service"

@@ -1,0 +1,111 @@
+---
+# Per-instance redis_exporter beside every server (Sentinels are not
+# exported). It listens on loopback at redis_exporter_port for the host-local
+# vmagent and authenticates with the instance password from a root-only
+# environment file, so the password never appears on a command line.
+- name: Assert redis_exporter artifact is pinned
+  ansible.builtin.assert:
+    that:
+      - redis_exporter_artifact_url | length > 0
+      - redis_exporter_artifact_checksum is match('^(sha1|sha224|sha256|sha384|sha512):[0-9a-fA-F]+$')
+    fail_msg: "frameworks.infra.redis requires the pinned redis-exporter artifact URL and checksum"
+
+- name: Stat redis_exporter install sentinel
+  ansible.builtin.stat:
+    path: "{{ redis_exporter_install_sentinel }}"
+  register: redis_exporter_install_sentinel_stat
+  check_mode: false
+  changed_when: false
+
+- name: Report pending redis_exporter install under --check
+  ansible.builtin.debug:
+    msg: "redis_exporter would install {{ redis_exporter_artifact_url }}"
+  changed_when: not (redis_exporter_install_sentinel_stat.stat.exists | default(false))
+  when: ansible_check_mode
+
+- name: Install redis_exporter artifact
+  when:
+    - not ansible_check_mode
+    - not (redis_exporter_install_sentinel_stat.stat.exists | default(false))
+  block:
+    - name: Create redis_exporter extract directory
+      ansible.builtin.tempfile:
+        state: directory
+        suffix: redis-exporter
+      register: redis_exporter_extract_dir
+
+    - name: Download redis_exporter archive
+      ansible.builtin.get_url:
+        url: "{{ redis_exporter_artifact_url }}"
+        dest: "{{ redis_exporter_extract_dir.path }}/redis_exporter.tar.gz"
+        checksum: "{{ redis_exporter_artifact_checksum }}"
+        mode: "0644"
+        timeout: 120
+
+    - name: Extract redis_exporter archive
+      ansible.builtin.unarchive:
+        src: "{{ redis_exporter_extract_dir.path }}/redis_exporter.tar.gz"
+        dest: "{{ redis_exporter_extract_dir.path }}"
+        remote_src: true
+        extra_opts:
+          - --strip-components=1
+
+    - name: Install redis_exporter binary
+      ansible.builtin.copy:
+        src: "{{ redis_exporter_extract_dir.path }}/redis_exporter"
+        dest: "{{ redis_exporter_bin }}"
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0755"
+      notify: redis exporter restart
+
+    - name: Record redis_exporter install sentinel
+      ansible.builtin.file:
+        path: "{{ redis_exporter_install_sentinel }}"
+        state: touch
+        owner: root
+        group: root
+        mode: "0644"
+  always:
+    - name: Remove redis_exporter extract directory
+      ansible.builtin.file:
+        path: "{{ redis_exporter_extract_dir.path }}"
+        state: absent
+      when: redis_exporter_extract_dir.path is defined
+
+- name: Ensure redis_exporter environment directory
+  ansible.builtin.file:
+    path: /etc/frameworks/redis
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Render redis_exporter environment
+  ansible.builtin.copy:
+    dest: "{{ redis_exporter_env_path }}"
+    content: |
+      REDIS_PASSWORD={{ redis_password }}
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+  notify: redis exporter restart
+
+- name: Render redis_exporter systemd unit
+  ansible.builtin.template:
+    src: exporter.service.j2
+    dest: "/etc/systemd/system/{{ redis_exporter_service_name }}.service"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: redis exporter restart
+
+- name: Ensure redis_exporter service
+  ansible.builtin.systemd:
+    name: "{{ redis_exporter_service_name }}"
+    state: started
+    enabled: true
+    daemon_reload: true
+  when: not ansible_check_mode

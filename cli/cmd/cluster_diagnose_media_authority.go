@@ -13,6 +13,7 @@ import (
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/ssh"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/streamident"
 	"github.com/spf13/cobra"
 )
 
@@ -325,7 +326,7 @@ func mediaAuthorityDiagnosticSQL(deploy string) string {
 	}
 }
 
-const commodoreMediaAuthorityDiagnosticSQL = `\echo == authorities and retained versions by kind ==
+var commodoreMediaAuthorityDiagnosticSQL = `\echo == authorities and retained versions by kind ==
 SELECT authority_kind, count(DISTINCT authority_id) AS authorities, count(*) AS versions,
        min(issued_at) AS oldest_issued, max(issued_at) AS newest_issued
 FROM commodore.media_authority_versions
@@ -507,22 +508,8 @@ WHERE deleted_at IS NULL
   )
 ORDER BY updated_at DESC LIMIT 15;
 
-\echo == live streams: ingest owner, current authority, unfinished refreshes ==
-SELECT stream.id AS stream_id, stream.tenant_id, stream.ingest_mode, stream.always_on,
-       stream.active_ingest_cluster_id AS ingest_owner, stream.active_ingest_cluster_updated_at AS owner_updated,
-       head.authority_version AS authority_version, version.issued_at AS authority_issued,
-       (SELECT count(*) FROM commodore.media_authority_refresh_inbox AS inbox
-        WHERE inbox.status <> 'completed'
-          AND inbox.reason LIKE 'media_object:live_stream:' || stream.id::text || ':%') AS unfinished_refreshes
-FROM commodore.streams AS stream
-LEFT JOIN commodore.media_authority_current AS head
-       ON head.authority_kind = 'media_object' AND head.authority_id = 'live_stream:' || stream.id::text
-LEFT JOIN commodore.media_authority_versions AS version
-       ON version.authority_kind = head.authority_kind AND version.authority_id = head.authority_id
-      AND version.authority_version = head.authority_version
-WHERE stream.deleted_at IS NULL
-ORDER BY unfinished_refreshes DESC, owner_updated DESC NULLS LAST LIMIT 40;
-
+\echo == live streams (ingest claim within its lease) and streams with unfinished refreshes ==
+` + commodoreLiveStreamsDiagnosticSQL + `
 \echo == database sessions by state and wait ==
 SELECT usename, state, wait_event_type, wait_event, count(*) AS sessions,
        max(NOW() - query_start) AS longest_running
@@ -646,3 +633,29 @@ FROM quartermaster.media_authority_refresh_outbox
 WHERE updated_at > NOW() - INTERVAL '{{WINDOW_HOURS}} hours'
 GROUP BY 1, 2 ORDER BY obligations DESC;
 `
+
+// commodoreLiveStreamsDiagnosticSQL lists streams that are live now (an ingest
+// claim renewed within streamident.ActiveIngestLease; a lapsed claim means the
+// publisher left) and any stream with an unfinished refresh, which is the
+// stuck case worth seeing even when the stream is idle.
+var commodoreLiveStreamsDiagnosticSQL = fmt.Sprintf(`SELECT stream.id AS stream_id, stream.tenant_id, stream.ingest_mode, stream.always_on,
+       stream.active_ingest_cluster_id AS ingest_owner, stream.active_ingest_cluster_updated_at AS owner_updated,
+       head.authority_version AS authority_version, version.issued_at AS authority_issued,
+       refreshes.unfinished AS unfinished_refreshes
+FROM commodore.streams AS stream
+CROSS JOIN LATERAL (
+    SELECT count(*) AS unfinished FROM commodore.media_authority_refresh_inbox AS inbox
+    WHERE inbox.status <> 'completed'
+      AND inbox.reason LIKE 'media_object:live_stream:' || stream.id::text || ':%%'
+) AS refreshes
+LEFT JOIN commodore.media_authority_current AS head
+       ON head.authority_kind = 'media_object' AND head.authority_id = 'live_stream:' || stream.id::text
+LEFT JOIN commodore.media_authority_versions AS version
+       ON version.authority_kind = head.authority_kind AND version.authority_id = head.authority_id
+      AND version.authority_version = head.authority_version
+WHERE stream.deleted_at IS NULL
+  AND ((NULLIF(stream.active_ingest_cluster_id, '') IS NOT NULL
+        AND stream.active_ingest_cluster_updated_at > NOW() - INTERVAL '%d seconds')
+       OR refreshes.unfinished > 0)
+ORDER BY unfinished_refreshes DESC, owner_updated DESC NULLS LAST LIMIT 40;
+`, int(streamident.ActiveIngestLease/time.Second))

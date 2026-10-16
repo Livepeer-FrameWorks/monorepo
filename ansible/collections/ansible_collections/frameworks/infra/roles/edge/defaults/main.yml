@@ -124,6 +124,11 @@ edge_caddy_version: ""
 edge_caddy_restart_pending_marker: /opt/frameworks/caddy/.restart-pending
 edge_vmagent_artifact_url: ""
 edge_vmagent_artifact_checksum: ""
+# node_exporter beside the native edge vmagent; the port matches the core
+# hosts' (loopback only).
+edge_node_exporter_artifact_url: ""
+edge_node_exporter_artifact_checksum: ""
+edge_node_exporter_port: 9110
 edge_config_schema_version: ""
 
 # CLI release that renders this config; stamped into the provisioned-config

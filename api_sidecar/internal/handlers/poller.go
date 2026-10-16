@@ -1753,10 +1753,13 @@ func (pm *PrometheusMonitor) processObservedStreamDataContext(ctx context.Contex
 			"stream_name": streamName,
 			"count":       len(trackDetails),
 		}).Debug("Extracted tracks from health data")
-	} else {
+	} else if trackCount > 0 {
+		// Mist omits health while a stream has no tracks (input booting or
+		// draining); only tracks without health is unexpected.
 		monitorLogger.WithFields(logging.Fields{
 			"node_id":     nodeID,
 			"stream_name": streamName,
+			"tracks":      trackCount,
 		}).Warn("No health data found for stream")
 	}
 

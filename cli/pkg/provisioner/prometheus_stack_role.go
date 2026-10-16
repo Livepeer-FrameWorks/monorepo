@@ -17,6 +17,15 @@ import (
 	repografana "github.com/Livepeer-FrameWorks/monorepo/pkg/grafana"
 )
 
+// NodeExporterArtifact is the release-manifest infrastructure entry pinning
+// the host exporter installed beside every vmagent and edge vmagent.
+const NodeExporterArtifact = "node-exporter"
+
+// NodeExporterPort is the loopback port node_exporter serves on; only the
+// host-local vmagent scrapes it. Not the upstream 9100, which is the
+// yb-tserver RPC port.
+const NodeExporterPort = 9110
+
 // prometheusStackRoleVars maps observability.* manifest entries into the
 // prometheus_stack role vars. The CLI passes one component per call
 // (prometheus, victoriametrics, vmagent, vmauth, vmalert, alertmanager) and the
@@ -27,8 +36,14 @@ func prometheusStackRoleVars(ctx context.Context, host inventory.Host, config Se
 		component = metaString(config.Metadata, "service_name")
 	}
 
+	components := []string{component}
+	if component == "vmagent" {
+		// Every vmagent host carries the host exporter and crash scan that the
+		// host alert rules read; vmagent scrapes it on loopback.
+		components = []string{"node_exporter", "vmagent"}
+	}
 	vars := map[string]any{
-		"prometheus_stack_components": []string{component},
+		"prometheus_stack_components": components,
 	}
 
 	_, arch, err := helpers.DetectRemoteOS(ctx, host)
@@ -48,6 +63,11 @@ func prometheusStackRoleVars(ctx context.Context, host inventory.Host, config Se
 				vars["vmagent_artifact_url"] = art.URL
 				vars["vmagent_artifact_checksum"] = art.Checksum
 				vars["vmagent_version"] = releaseVersion(config.Version, art.Version)
+			}
+			if art, err := helpers.ResolveArtifact(NodeExporterArtifact, archKey, channel, config.Metadata); err == nil {
+				vars["node_exporter_artifact_url"] = art.URL
+				vars["node_exporter_artifact_checksum"] = art.Checksum
+				vars["node_exporter_version"] = art.Version
 			}
 		case "vmauth":
 			if art, err := helpers.ResolveArtifact("vmauth", archKey, channel, config.Metadata); err == nil {
@@ -76,6 +96,7 @@ func prometheusStackRoleVars(ctx context.Context, host inventory.Host, config Se
 
 	switch component {
 	case "vmagent":
+		vars["node_exporter_port"] = NodeExporterPort
 		if targets, ok := config.Metadata["scrape_targets"]; ok {
 			vars["vmagent_scrape_targets"] = targets
 		}

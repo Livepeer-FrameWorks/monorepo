@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"mime"
 	"mime/multipart"
@@ -136,7 +137,7 @@ func (s *Sender) Send(ctx context.Context, message Message) error {
 	}
 
 	if errRcpt := c.Rcpt(to); errRcpt != nil {
-		return fmt.Errorf("rcpt to: %w", errRcpt)
+		return fmt.Errorf("rcpt to: %w", &RecipientError{Err: errRcpt})
 	}
 
 	w, err := c.Data()
@@ -154,6 +155,39 @@ func (s *Sender) Send(ctx context.Context, message Message) error {
 	}
 
 	return c.Quit()
+}
+
+// RecipientError marks the server's reply to RCPT TO, the only stage whose
+// refusal is about the recipient rather than this sender's relay, credentials
+// or identity.
+type RecipientError struct{ Err error }
+
+func (e *RecipientError) Error() string { return e.Err.Error() }
+func (e *RecipientError) Unwrap() error { return e.Err }
+
+// IsRecipientRejected reports whether err is the receiving server permanently
+// refusing the recipient address at RCPT TO: a 5xx reply carrying an
+// addressing status (5.1.x: no such user, bad domain), a disabled mailbox
+// (5.2.1), or a bare 550/551/553 without an enhanced status. Resending to that
+// address cannot succeed. A 5.7.x policy refusal (relaying denied, sender not
+// authorised) is this sender's configuration and is not reported.
+func IsRecipientRejected(err error) bool {
+	var rcpt *RecipientError
+	if !errors.As(err, &rcpt) {
+		return false
+	}
+	var reply *textproto.Error
+	if !errors.As(rcpt.Err, &reply) || reply.Code < 500 || reply.Code > 599 {
+		return false
+	}
+	status, _, _ := strings.Cut(strings.TrimSpace(reply.Msg), " ")
+	switch {
+	case strings.HasPrefix(status, "5.1."), status == "5.2.1":
+		return true
+	case strings.HasPrefix(status, "5."):
+		return false
+	}
+	return reply.Code == 550 || reply.Code == 551 || reply.Code == 553
 }
 
 func buildMessage(config Config, message Message) ([]byte, error) {

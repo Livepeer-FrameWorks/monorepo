@@ -69,6 +69,11 @@ func main() {
 	if err != nil {
 		logger.WithError(err).Fatal("Failed to create asset handler")
 	}
+	storeProbes := metricsCollector.NewCounter("store_probes_total", "Readiness sentinel reads from the object store by result (ok, unavailable, refused)", []string{"result"})
+	for _, result := range []string{"ok", "unavailable", "refused"} {
+		storeProbes.WithLabelValues(result).Add(0)
+	}
+	assetHandler.SetStoreProbeCounter(storeProbes)
 
 	readiness := monitoring.NewReadinessChecker("chandler", version.Version)
 	router := newChandlerRouter(server.RouterSpec{

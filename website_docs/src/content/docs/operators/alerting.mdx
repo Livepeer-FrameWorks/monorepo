@@ -7,8 +7,9 @@ sidebar:
 
 import { Aside } from "@astrojs/starlight/components";
 
-vmalert evaluates the rules in `pkg/grafana/rules/frameworks.yml` and sends firing and resolved
-alerts to Alertmanager. Alertmanager groups them by `alertname`, `region`, and `cluster` and routes
+vmalert evaluates the rules in `pkg/grafana/rules/` (`frameworks.yml` for platform services,
+`infrastructure.yml` for hosts and data stores) and sends firing and resolved alerts to
+Alertmanager. Alertmanager groups them by `alertname`, `region`, and `cluster` and routes
 each group three ways:
 
 - **Lookout** receives every group. Lookout (`api_incidents`) turns groups into incidents, keeps a
@@ -27,6 +28,31 @@ channels remain independently controlled by their optional destination variables
 Lookout notifies operator channels only for platform incidents. Critical incidents go to every
 configured channel; other severities go to Slack and Discord. Notifications are sent when an
 incident opens and when it resolves.
+
+## Infrastructure coverage
+
+`frameworks cluster provision` installs the exporters behind the infrastructure rules from the
+release manifest's pinned artifacts. Each listens on loopback and is scraped by the vmagent on the
+same host; nothing needs adding to the cluster manifest.
+
+| Source                                                                | Where it runs                              | Port (loopback)              | Rules                                                                                                                                                                                      |
+| --------------------------------------------------------------------- | ------------------------------------------ | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| node_exporter with the systemd collector and the host crash scan      | every `vmagent` host and every native edge | 9110                         | filesystem space and inodes, disk I/O latency and saturation, iowait, memory and PSI pressure, OOM kills, load, clock sync, systemd restarts and failed units, process crashes             |
+| JMX exporter in each Kafka broker and KRaft controller                | Kafka hosts                                | 9405 broker, 9406 controller | quorum leader, election churn, unreachable voters, active controller count, offline / under-min-ISR / under-replicated partitions, fenced brokers, controller event queue, metadata errors |
+| YugabyteDB yb-master and yb-tserver `/prometheus-metrics`             | YugabyteDB nodes                           | 7000, 11000 (mesh)           | leaderless tables, follower lag                                                                                                                                                            |
+| redis_exporter per Redis/Valkey server (Sentinels excluded)           | Redis hosts                                | instance port + 10000        | down, replica lost its primary, primary count per Sentinel set, failed background saves                                                                                                    |
+| postgres_exporter per PostgreSQL instance (peer auth over the socket) | PostgreSQL hosts                           | instance port + 10000        | down, replica lag                                                                                                                                                                          |
+| ClickHouse built-in Prometheus endpoint                               | ClickHouse hosts                           | 9363                         | read-only replicas, lost Keeper session, replication delay, part count, broken distributed inserts                                                                                         |
+
+`ServiceDown` fires for any of these scrape targets that stops answering.
+
+The host crash scan (`frameworks-host-crash-scan.timer`) runs every minute and counts the kernel's
+fatal-signal reports (`segfault at`, general protection and trap faults) and `systemd-coredump`
+dumps in the journal over the last fifteen minutes. It catches crashes of child processes, such
+as Mist's `MistProc*` workers, that never fail a systemd unit. `HostProcessCrashed` names the
+process; `journalctl -k` and `coredumpctl list` on the host hold the details.
+`SystemdServiceRestarting` fires on any restart systemd makes under `Restart=`; operator and deploy
+restarts do not count.
 
 ## Secrets
 

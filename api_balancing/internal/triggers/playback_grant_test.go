@@ -32,12 +32,12 @@ func newRecordingGrantDelivery() *recordingGrantDelivery {
 	return &recordingGrantDelivery{offered: make(chan struct{}, 16), holders: map[string][]string{}}
 }
 
-func (d *recordingGrantDelivery) Offer(nodeID string, grant *ipcpb.PlaybackGrant) error {
+func (d *recordingGrantDelivery) Offer(nodeID string, grant *ipcpb.PlaybackGrant) (bool, error) {
 	d.mu.Lock()
 	d.offers = append(d.offers, grantOffer{nodeID: nodeID, grant: proto.CloneOf(grant)})
 	d.mu.Unlock()
 	d.offered <- struct{}{}
-	return nil
+	return true, nil
 }
 
 func (d *recordingGrantDelivery) Holders(internalName string) []string {

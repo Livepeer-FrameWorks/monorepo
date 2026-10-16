@@ -152,6 +152,15 @@ frameworks cluster doctor [flags]
 **Checks:**
 
 - **Infrastructure:** Postgres/Yugabyte, ClickHouse, and Kafka broker connectivity
+  in every Kafka region. On YugabyteDB every tserver must answer a local YSQL
+  `SELECT 1` within one second (net of the SSH round trip) and be listed ALIVE by
+  the masters; vanilla PostgreSQL must answer `SELECT 1` within one second
+- **Kafka KRaft quorum:** per Kafka cluster, a quorum leader, the manifest's voter
+  set, no voter more than 30 seconds behind, and no controller leadership loss in
+  the last hour
+- **Host crashes:** unit failures, automatic restarts, core dumps, segfaults, and
+  OOM kills in the last 24 hours on every host and edge
+  (`cluster diagnose crashes` lists them)
 - **Applications:** Health endpoints for enabled services
 - **Interfaces:** Health endpoints for enabled interfaces
 - **Observability:** Health endpoints for enabled observability services
@@ -1397,9 +1406,15 @@ frameworks cluster restore rollback --all
 
 ## Diagnostic Commands
 
+The host-level diagnostics (`network`, `resources`, `ports`, `crashes`, and
+`media`) probe every host of the cluster manifest and every node of the edge
+manifest: `--edge-manifest <path>`, or `edge.yaml` beside the cluster manifest.
+An edge manifest that cannot be loaded is reported and the cluster hosts are
+still probed. Each exits non-zero when any finding is a failure.
+
 ### frameworks cluster diagnose network
 
-Test network connectivity between all hosts in the cluster.
+Test network connectivity between all hosts and edges.
 
 **Usage:**
 
@@ -1409,10 +1424,8 @@ frameworks cluster diagnose network [flags]
 
 **Tests:**
 
-- Ping test from each host to every other host
-- Reports success/failure matrix
-
-The report shows host-to-host connectivity results for the manifest targets.
+- Ping test from each host to every other host, edges included
+- Any unreachable pair or host that cannot be reached over SSH fails the command
 
 **Examples:**
 
@@ -1424,7 +1437,7 @@ frameworks cluster diagnose network
 
 ### frameworks cluster diagnose resources
 
-Check CPU, memory, disk, and load average on all hosts.
+Check CPU, I/O wait, load, memory, and every data filesystem on all hosts and edges.
 
 **Usage:**
 
@@ -1432,14 +1445,14 @@ Check CPU, memory, disk, and load average on all hosts.
 frameworks cluster diagnose resources [flags]
 ```
 
-**Metrics:**
+**Metrics and thresholds:**
 
-- CPU usage (%)
-- Memory usage (used/total)
-- Disk usage (/)
-- Load average (1m, 5m, 15m)
-
-The report shows CPU, memory, disk, and load data for each manifest host.
+- CPU busy and I/O wait over a one-second sample; I/O wait of 20% or more warns
+- Load average (1m, 5m, 15m) per core; two or more per core warns
+- Memory available; under 10% warns, under 5% fails
+- Every mounted filesystem except tmpfs, overlay, and snap mounts (so data disks
+  such as `/var/lib/yugabyte` are included), with block and inode use; 80% warns,
+  90% fails
 
 **Examples:**
 
@@ -1451,7 +1464,7 @@ frameworks cluster diagnose resources
 
 ### frameworks cluster diagnose ports
 
-Check for port conflicts on all hosts.
+Check that every port the manifest places on a host has a listener.
 
 **Usage:**
 
@@ -1459,16 +1472,35 @@ Check for port conflicts on all hosts.
 frameworks cluster diagnose ports [flags]
 ```
 
-**Checks Standard Ports:**
-Uses the CLI's built-in port list for core services, interfaces, and gRPC endpoints. For the canonical port table, see [Architecture Overview](/operators/architecture#core-services).
-
-The report checks the CLI's built-in port set against each manifest host.
+For each host the planned ports come from the manifest: SQL, ClickHouse and
+Kafka (regional clusters included), Redis instances and Sentinels, and every
+enabled service, interface and observability component with its gRPC and
+auxiliary ports. Edges are checked for Caddy's 80 and 443. A planned port
+without a listener fails. Catalog ports held on a host the manifest does not
+place them on are listed so a conflicting process is visible.
 
 **Examples:**
 
 ```bash
 frameworks cluster diagnose ports
 ```
+
+---
+
+### frameworks cluster diagnose crashes
+
+Report processes that died unplanned since `--since` (default `4 hours ago`).
+
+```bash
+frameworks cluster diagnose crashes --since "24 hours ago"
+```
+
+Read from each host's journal: units that failed (by systemd result, such as
+`core-dump`, `signal`, `exit-code`, `oom-kill`) and units systemd restarted on
+its own, core dumps recorded by systemd-coredump, kernel-reported segfaults and
+general-protection faults, and OOM kills. Every finding fails the command.
+`cluster doctor` runs the same probe over the last 24 hours as its
+`Host crashes` check.
 
 ---
 
@@ -1488,7 +1520,16 @@ frameworks cluster diagnose kafka [flags]
 - List consumer groups
 - Broker API version check
 - Cluster responsiveness
+- KRaft metadata quorum and controller leadership losses since `--since`
 - MirrorMaker2 topic coverage
+
+The quorum check reads `kafka-metadata-quorum.sh describe --status` and fails
+when there is no leader, when the voter set differs from the manifest's
+controllers, or when a voter lags the leader by more than 30 seconds. It also
+counts, in every controller's journal since `--since`, how often a controller
+gave up leadership with no successor; any such loss fails the check, and
+exceptionally slow controller events are reported alongside. `cluster doctor`
+runs the same check per Kafka cluster over the last hour.
 
 The report covers topic listing, consumer groups, a committed-offset lag
 snapshot, broker API reachability, and cluster responsiveness for one broker in
@@ -1521,7 +1562,12 @@ frameworks cluster diagnose media --stream-id <uuid> --tenant-id <uuid>
 frameworks cluster diagnose media --output json
 ```
 
-`--since` controls the journal window (default `4 hours ago`). JSON output is a
+Edges report their Caddy, Helmsman and MistServer units, or the
+`frameworks-edge` container on a container-mode edge.
+
+`--since` controls the journal window (default `4 hours ago`); the whole window
+is scanned and repeated lines are shown once with their count, most frequent
+first. JSON output is a
 single structured report containing every host's services, stdout, stderr, exit
 code, and connection/probe error. A missing host, SSH failure, or non-zero probe
 causes a non-zero command exit instead of a silent partial report.

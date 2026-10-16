@@ -64,6 +64,21 @@ WHERE user_id = sqlc.arg(user_id)::uuid
   AND status = 'pending'
   AND (sqlc.arg(lease_token)::text = '' OR lease_token = sqlc.arg(lease_token)::text);
 
+-- name: AbandonRejectedAccountEmail :exec
+-- The receiving server refused the recipient permanently; a resend to the
+-- same address cannot succeed.
+UPDATE commodore.account_email_outbox
+SET status = 'abandoned',
+    attempts = sqlc.arg(attempts),
+    last_error = sqlc.arg(last_error)::text,
+    lease_token = NULL,
+    updated_at = NOW()
+WHERE user_id = sqlc.arg(user_id)::uuid
+  AND purpose = sqlc.arg(purpose)::text
+  AND tenant_id = sqlc.arg(tenant_id)::uuid
+  AND status = 'pending'
+  AND (sqlc.arg(lease_token)::text = '' OR lease_token = sqlc.arg(lease_token)::text);
+
 -- name: GetAccountEmailRecipient :one
 SELECT COALESCE(email::text, ''::text)::text AS email,
        COALESCE(verified, false)::boolean AS verified

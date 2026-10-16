@@ -27,7 +27,9 @@ const playbackGrantPushTimeout = 10 * time.Second
 // PlaybackGrantDelivery reaches the edges holding grants. The default is the
 // control package's connection-scoped delivery.
 type PlaybackGrantDelivery interface {
-	Offer(nodeID string, grant *ipcpb.PlaybackGrant) error
+	// Offer reports whether the grant was sent; an edge already holding an
+	// equivalent grant is not sent it again.
+	Offer(nodeID string, grant *ipcpb.PlaybackGrant) (bool, error)
 	Holders(internalName string) []string
 	// HeldStreams returns the Mist names of granted streams with the bare
 	// internal name, or of the tenant when internalName is empty.
@@ -36,7 +38,7 @@ type PlaybackGrantDelivery interface {
 
 type controlPlaybackGrantDelivery struct{}
 
-func (controlPlaybackGrantDelivery) Offer(nodeID string, grant *ipcpb.PlaybackGrant) error {
+func (controlPlaybackGrantDelivery) Offer(nodeID string, grant *ipcpb.PlaybackGrant) (bool, error) {
 	return control.OfferPlaybackGrant(nodeID, grant)
 }
 
@@ -125,7 +127,7 @@ func (p *Processor) offerPlaybackGrant(nodeID, requested string, local localPlay
 		return
 	}
 	grant := playbackGrantFromLocal(local, requested)
-	if err := p.playbackGrantDelivery().Offer(nodeID, grant); err != nil {
+	if _, err := p.playbackGrantDelivery().Offer(nodeID, grant); err != nil {
 		p.logger.WithError(err).WithFields(logging.Fields{
 			"node_id": nodeID, "internal_name": grant.GetInternalName(),
 		}).Warn("Playback grant not delivered; the edge fetches it itself")
@@ -226,10 +228,14 @@ func (p *Processor) pushPlaybackGrantUpdates(change state.PlaybackAuthorityChang
 				continue
 			}
 			for _, nodeID := range holders {
-				if err := delivery.Offer(nodeID, grant); err != nil {
+				sent, err := delivery.Offer(nodeID, grant)
+				if err != nil {
 					p.logger.WithError(err).WithFields(logging.Fields{
 						"node_id": nodeID, "internal_name": grant.GetInternalName(),
 					}).Warn("Playback grant update not delivered; the edge fetches it on its next reconnect")
+					continue
+				}
+				if !sent {
 					continue
 				}
 				p.logger.WithFields(logging.Fields{

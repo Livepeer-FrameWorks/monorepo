@@ -26,6 +26,45 @@ func (m *Manifest) validatePortCollisions() error {
 		return nil
 	}
 
+	if err := m.registerInfrastructurePorts(addPort); err != nil {
+		return err
+	}
+	if err := m.registerServicePorts(addPort, m.Services, "service"); err != nil {
+		return err
+	}
+	if err := m.registerServicePorts(addPort, m.Interfaces, "interface"); err != nil {
+		return err
+	}
+	if err := m.registerServicePorts(addPort, m.Observability, "observability"); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// InfrastructurePortOwners returns, per host name, every port the manifest's
+// SQL deployments, ClickHouse and Kafka bind there, keyed to its owner. It is
+// the same registry validation checks for collisions; a port two owners
+// claim keeps its first owner.
+func (m *Manifest) InfrastructurePortOwners() map[string]map[int]string {
+	owners := map[string]map[int]string{}
+	//nolint:errcheck // this addPort never fails.
+	_ = m.registerInfrastructurePorts(func(host string, port int, owner string) error {
+		if host == "" || port == 0 {
+			return nil
+		}
+		if owners[host] == nil {
+			owners[host] = map[int]string{}
+		}
+		if _, ok := owners[host][port]; !ok {
+			owners[host][port] = owner
+		}
+		return nil
+	})
+	return owners
+}
+
+func (m *Manifest) registerInfrastructurePorts(addPort func(string, int, string) error) error {
 	for _, deployment := range m.SQLDeployments() {
 		pg := deployment.Config
 		port := pg.EffectivePort()
@@ -135,17 +174,6 @@ func (m *Manifest) validatePortCollisions() error {
 			}
 		}
 	}
-
-	if err := m.registerServicePorts(addPort, m.Services, "service"); err != nil {
-		return err
-	}
-	if err := m.registerServicePorts(addPort, m.Interfaces, "interface"); err != nil {
-		return err
-	}
-	if err := m.registerServicePorts(addPort, m.Observability, "observability"); err != nil {
-		return err
-	}
-
 	return nil
 }
 

@@ -1,8 +1,13 @@
 ---
-- name: Prometheus_stack | prometheus + node_exporter via prometheus-community
+- name: Prometheus_stack | prometheus via prometheus-community
   ansible.builtin.import_tasks: prometheus_community.yml
   tags: [install, configure, service]
-  when: "'prometheus' in prometheus_stack_components or 'node_exporter' in prometheus_stack_components"
+  when: "'prometheus' in prometheus_stack_components"
+
+- name: Prometheus_stack | node_exporter and host crash scan
+  ansible.builtin.import_tasks: node_exporter.yml
+  tags: [install, configure, service]
+  when: "'node_exporter' in prometheus_stack_components"
 
 - name: Prometheus_stack | VictoriaMetrics shared runtime identity
   ansible.builtin.import_tasks: vm_identity.yml

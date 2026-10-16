@@ -30,6 +30,8 @@ The canonical names and sets live in `pkg/topology/kafka_topics.go`; MM2 provisi
 
 Replication cannot loop or produce transitive names. Topic lists are full-name allowlists, so `analytics_events` never matches `us-east.analytics_events`; MM2's default replication policy skips topics that originated in the target; and every link also sets `topics.exclude` to `^(<every region>)\..*` alongside MM2's default internal-topic excludes.
 
+The platform owns every copy's config. The kafka role of each target cluster declares `{source_region}.{topic}` for every topic of every enabled link into it, with the source cluster's declared partition count and config (retention above all) and the link's mirrored replication factor, creates it if missing and converges its config like any declared topic. A retention change in `pkg/topology` therefore reaches every copy with the release that makes it. Workers run with `sync.topic.configs.enabled = false`: MM2 still copies the source config onto a copy it creates itself, but never rewrites a copy's config afterwards. On Kafka 4.0 to 4.2 that periodic sync also logged `Could not alter configuration of topic` for every copy every ten minutes after each successful alter. A link topic its source cluster does not declare has no platform config and keeps whatever MM2 copied at creation.
+
 ## Operator manifest
 
 `KafkaConfig.MirrorMaker` declares one link per direction. Each link's worker hosts must be in its target region.

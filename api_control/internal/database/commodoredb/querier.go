@@ -12,6 +12,9 @@ import (
 
 type Querier interface {
 	AbandonExpiredAccountEmails(ctx context.Context, windowMs int64) (int64, error)
+	// The receiving server refused the recipient permanently; a resend to the
+	// same address cannot succeed.
+	AbandonRejectedAccountEmail(ctx context.Context, arg AbandonRejectedAccountEmailParams) error
 	AcquireIngestClaim(ctx context.Context, arg AcquireIngestClaimParams) (AcquireIngestClaimRow, error)
 	ActivateMediaPlacementPolicy(ctx context.Context, arg ActivateMediaPlacementPolicyParams) (int64, error)
 	AdminGetUserByEmail(ctx context.Context, email string) (AdminGetUserByEmailRow, error)

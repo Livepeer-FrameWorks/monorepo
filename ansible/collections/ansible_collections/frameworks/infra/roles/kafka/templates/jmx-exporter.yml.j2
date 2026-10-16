@@ -1,0 +1,33 @@
+{# Prometheus JMX exporter config for a KRaft broker or controller. Only the
+   quorum, replication and controller MBeans the alert rules read are exported,
+   which keeps per-topic and per-partition MBeans out of the scrape. Patterns
+   are unanchored and match "<bean><>attribute: value"; each ends at ":" so a
+   name never also matches a longer one. Yammer gauges expose "Value", the
+   controller event-queue histograms expose percentile attributes, and the
+   raft-metrics group's hyphenated attribute names become snake_case.
+   Every rule's first group lists the exported names and its name ends in $1,
+   which cli/pkg/dashcheck parses to declare the metrics. #}
+lowercaseOutputName: true
+lowercaseOutputLabelNames: true
+includeObjectNames:
+  - "kafka.server:type=ReplicaManager,*"
+  - "kafka.server:type=raft-metrics"
+  - "kafka.server:type=broker-metadata-metrics"
+  - "kafka.controller:type=KafkaController,*"
+  - "kafka.controller:type=ControllerEventManager,*"
+rules:
+  - pattern: 'kafka.server<type=ReplicaManager, name=(UnderReplicatedPartitions|UnderMinIsrPartitionCount|AtMinIsrPartitionCount|OfflineReplicaCount|PartitionCount|LeaderCount)><>Value:'
+    name: kafka_server_replicamanager_$1
+    type: GAUGE
+  - pattern: 'kafka.server<type=raft-metrics><>(current-leader|current-epoch|high-watermark|log-end-offset|number-unknown-voter-connections|election-latency-max|commit-latency-max):'
+    name: kafka_raft_$1
+    type: GAUGE
+  - pattern: 'kafka.server<type=broker-metadata-metrics><>(metadata-load-error-count|metadata-apply-error-count):'
+    name: kafka_broker_metadata_$1
+    type: GAUGE
+  - pattern: 'kafka.controller<type=KafkaController, name=(ActiveControllerCount|OfflinePartitionsCount|GlobalPartitionCount|PreferredReplicaImbalanceCount|ActiveBrokerCount|FencedBrokerCount|MetadataErrorCount|TimedOutBrokerHeartbeatCount)><>Value:'
+    name: kafka_controller_kafkacontroller_$1
+    type: GAUGE
+  - pattern: 'kafka.controller<type=ControllerEventManager, name=(EventQueueTimeMs|EventQueueProcessingTimeMs)><>99thPercentile:'
+    name: kafka_controller_$1_p99
+    type: GAUGE

@@ -1,0 +1,15 @@
+---
+# Valkey forks for every background save and every full resync of a replica.
+# Under the kernel's heuristic overcommit (vm.overcommit_memory=0) that fork
+# can fail whenever free memory is below the dataset size, even though
+# copy-on-write never touches most of it; Valkey warns about it at every start.
+# The setting is host-wide; the file sorts after node_tuning's
+# 90-frameworks-baseline.conf.
+- name: Redis | allow memory overcommit for background saves and resyncs
+  ansible.posix.sysctl:
+    name: vm.overcommit_memory
+    value: "1"
+    sysctl_file: /etc/sysctl.d/92-frameworks-redis.conf
+    sysctl_set: true
+    state: present
+    reload: true

@@ -1,6 +1,14 @@
 ---
 postgres_service_name: postgresql
 
+# Loopback exporter port: the instance port + 10000, as the CLI's scrape
+# targets derive it.
+postgres_exporter_service_name: frameworks-postgres-exporter
+postgres_exporter_port: "{{ postgres_port | int + 10000 }}"
+postgres_exporter_bin: /usr/local/bin/postgres_exporter
+postgres_exporter_install_identity: "{{ postgres_exporter_artifact_checksum ~ ':' ~ postgres_exporter_artifact_url }}"
+postgres_exporter_install_sentinel: "/usr/local/bin/.frameworks-postgres-exporter-installed-{{ postgres_exporter_install_identity | hash('sha256') }}"
+
 # Session limits init.yml attaches to every runtime role ("Bound runtime role sessions"). They are written as
 # pg_db_role_setting stores them, which is how init.yml recognises a role that already carries them.
 postgres_runtime_statement_timeout: 60s

@@ -113,8 +113,6 @@ const caddyfileTmpl = `{
 				write_timeout 0
 				keepalive 64s
 			}
-			header_up X-Forwarded-Proto {scheme}
-			header_up X-Forwarded-For {remote_host}
 		}
 	}
 {{- end}}
@@ -157,8 +155,6 @@ const caddyfileTmpl = `{
 				write_timeout 0
 				keepalive 64s
 			}
-			header_up X-Forwarded-Proto {scheme}
-			header_up X-Forwarded-For {remote_host}
 			header_up X-Mst-Path {scheme}://{host}/view/
 		}
 	}

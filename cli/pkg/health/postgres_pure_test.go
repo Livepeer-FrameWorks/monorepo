@@ -3,7 +3,21 @@ package health
 import (
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestClassifyPostgresLatencyDegradesSlowSelect(t *testing.T) {
+	slow := &CheckResult{Metadata: map[string]string{}, Latency: 30 * time.Millisecond}
+	classifyPostgresLatency(slow, 1440*time.Millisecond)
+	if slow.OK || slow.Status != "degraded" || !strings.Contains(slow.Error, "SELECT 1 took 1.44s") {
+		t.Fatalf("slow database = %+v", slow)
+	}
+	fast := &CheckResult{Metadata: map[string]string{}, Latency: 30 * time.Millisecond}
+	classifyPostgresLatency(fast, 4*time.Millisecond)
+	if !fast.OK || fast.Status != "healthy" {
+		t.Fatalf("fast database = %+v", fast)
+	}
+}
 
 // connString builds the lib/pq DSN; an empty database must default to
 // "postgres" and sslmode must stay disabled for the local probe.

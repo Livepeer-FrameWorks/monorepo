@@ -47,14 +47,14 @@ func testGrant(names ...string) *ipcpb.PlaybackGrant {
 func TestOfferPlaybackGrantSendsOncePerConnectionAndChange(t *testing.T) {
 	stream := installGrantTestConn(t, "edge-1")
 	for range 3 {
-		if err := OfferPlaybackGrant("edge-1", testGrant("pb1")); err != nil {
+		if _, err := OfferPlaybackGrant("edge-1", testGrant("pb1")); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if got := len(grantMessages(stream.sent)); got != 1 {
 		t.Fatalf("identical admissions pushed %d grants, want 1", got)
 	}
-	if err := OfferPlaybackGrant("edge-1", testGrant("live+s1")); err != nil {
+	if _, err := OfferPlaybackGrant("edge-1", testGrant("live+s1")); err != nil {
 		t.Fatal(err)
 	}
 	grants := grantMessages(stream.sent)
@@ -62,8 +62,9 @@ func TestOfferPlaybackGrantSendsOncePerConnectionAndChange(t *testing.T) {
 		t.Fatalf("a new requested name was not merged into the pushed grant: %+v", grants)
 	}
 	renewed := testGrant("pb1", "live+s1")
-	renewed.ValidUntil = timestamppb.New(time.Unix(1_900_100_000, 0))
-	if err := OfferPlaybackGrant("edge-1", renewed); err != nil {
+	held := time.Unix(1_900_000_000, 0)
+	renewed.ValidUntil = timestamppb.New(held.Add(time.Until(held) + time.Hour))
+	if _, err := OfferPlaybackGrant("edge-1", renewed); err != nil {
 		t.Fatal(err)
 	}
 	if got := len(grantMessages(stream.sent)); got != 3 {
@@ -76,11 +77,59 @@ func TestOfferPlaybackGrantSendsOncePerConnectionAndChange(t *testing.T) {
 		t.Fatalf("tenant streams = %v", streams)
 	}
 	forgetPlaybackGrantsSent("edge-1")
-	if err := OfferPlaybackGrant("edge-1", renewed); err != nil {
+	if _, err := OfferPlaybackGrant("edge-1", renewed); err != nil {
 		t.Fatal(err)
 	}
 	if got := len(grantMessages(stream.sent)); got != 4 {
 		t.Fatalf("a new connection did not get the grant again (%d pushes)", got)
+	}
+}
+
+// A tenant authority is re-signed whenever its allowances or billing state
+// move, which bumps the grant's authority versions and extends its validity by
+// minutes without changing what the edge enforces. Such a reissue is not pushed
+// while the edge's grant still holds at least half of the new validity; a
+// changed policy, a shortened validity, or a held grant past half its renewal
+// is.
+func TestOfferPlaybackGrantSkipsVersionOnlyReissues(t *testing.T) {
+	stream := installGrantTestConn(t, "edge-1")
+	now := time.Now()
+	issue := func(tenantVersion int64, validFor time.Duration) *ipcpb.PlaybackGrant {
+		g := testGrant("pb1")
+		g.ObjectAuthorityVersion = 1
+		g.TenantAuthorityVersion = tenantVersion
+		g.ValidUntil = timestamppb.New(now.Add(validFor))
+		return g
+	}
+	pushes := func() int { return len(grantMessages(stream.sent)) }
+	offer := func(g *ipcpb.PlaybackGrant) {
+		t.Helper()
+		if _, err := OfferPlaybackGrant("edge-1", g); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	offer(issue(321, 24*time.Hour))
+	for v := int64(322); v < 330; v++ {
+		offer(issue(v, 24*time.Hour+time.Duration(v-321)*5*time.Minute))
+	}
+	if got := pushes(); got != 1 {
+		t.Fatalf("version-only tenant reissues pushed %d grants, want 1", got)
+	}
+
+	offer(issue(330, 2*time.Hour))
+	if got := pushes(); got != 2 {
+		t.Fatal("a shortened validity was not pushed")
+	}
+	offer(issue(331, 24*time.Hour))
+	if got := pushes(); got != 3 {
+		t.Fatal("a renewal of a grant with under half the new validity left was not pushed")
+	}
+	changed := issue(332, 24*time.Hour)
+	changed.Policy = &ipcpb.PlaybackGrantPolicy{Kind: ipcpb.PlaybackGrantPolicyKind_PLAYBACK_GRANT_POLICY_KIND_CONNECTED}
+	offer(changed)
+	if got := pushes(); got != 4 {
+		t.Fatal("a policy change was not pushed")
 	}
 }
 

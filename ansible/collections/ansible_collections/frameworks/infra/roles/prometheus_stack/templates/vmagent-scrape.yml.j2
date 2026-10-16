@@ -13,6 +13,12 @@ scrape_configs:
 {% if target.max_scrape_size is defined and target.max_scrape_size %}
     max_scrape_size: {{ target.max_scrape_size }}
 {% endif %}
+{% if target.params is defined and target.params | length > 0 %}
+    params:
+{% for key, values in target.params | dictsort %}
+      {{ key | to_json }}: {{ values | to_json }}
+{% endfor %}
+{% endif %}
     static_configs:
       - targets:
 {% for address in target.targets %}

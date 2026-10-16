@@ -1143,16 +1143,28 @@ func doctorSections(rc *resolvedCluster, pool *fwssh.Pool, sharedEnv map[string]
 	}
 
 	if kafka := manifest.Infrastructure.Kafka; kafka != nil && kafka.Enabled {
-		for _, broker := range kafka.Brokers {
-			brokerName := fmt.Sprintf("Kafka Broker %d", broker.ID)
-			host, ok := manifest.GetHost(broker.Host)
-			if !ok {
-				infra.checks = append(infra.checks, doctorStaticCheck(brokerName, doctorMissOutcome(brokerName, fmt.Sprintf("host %q not found in manifest", broker.Host))))
-				continue
+		clusters := allKafkaClusters(manifest)
+		runnerFor := func(host inventory.Host) (fwssh.Runner, error) { return getRunner(host, pool) }
+		for _, cluster := range clusters {
+			label := ""
+			if len(clusters) > 1 {
+				label = " (" + kafkaClusterLabel(cluster) + ")"
 			}
-			infra.checks = append(infra.checks, doctorCheck{name: brokerName, run: func(context.Context) doctorOutcome {
-				checker := &health.KafkaChecker{}
-				return doctorInfraOutcome(brokerName, checker.Check(host.ExternalIP, broker.Port))
+			for _, broker := range cluster.Brokers {
+				brokerName := fmt.Sprintf("Kafka Broker %d%s", broker.ID, label)
+				host, ok := manifest.GetHost(broker.Host)
+				if !ok {
+					infra.checks = append(infra.checks, doctorStaticCheck(brokerName, doctorMissOutcome(brokerName, fmt.Sprintf("host %q not found in manifest", broker.Host))))
+					continue
+				}
+				infra.checks = append(infra.checks, doctorCheck{name: brokerName, run: func(context.Context) doctorOutcome {
+					checker := &health.KafkaChecker{}
+					return doctorInfraOutcome(brokerName, checker.Check(host.ExternalIP, broker.Port))
+				}})
+			}
+			quorumName := "Kafka KRaft quorum" + label
+			infra.checks = append(infra.checks, doctorCheck{name: quorumName, run: func(ctx context.Context) doctorOutcome {
+				return doctorInfraOutcome(quorumName, checkKafkaQuorum(ctx, manifest, cluster, kafka.Mode, doctorKafkaQuorumWindow, runnerFor))
 			}})
 		}
 		infra.checks = append(infra.checks, doctorCheck{name: "Kafka MirrorMaker2 workers", run: func(ctx context.Context) doctorOutcome {
@@ -1201,6 +1213,18 @@ func doctorSections(rc *resolvedCluster, pool *fwssh.Pool, sharedEnv map[string]
 		}
 		return checks
 	}
+
+	infra.checks = append(infra.checks, doctorCheck{
+		name:     "Host crashes",
+		progress: "reading unit failures, core dumps, and kernel faults from every host's journal",
+		run: func(ctx context.Context) doctorOutcome {
+			targets := diagnoseHostTargets(io.Discard, rc, "")
+			return doctorResultOutcome(doctorHostCrashes(ctx, targets, func(host inventory.Host) (fwssh.Runner, error) { return getRunner(host, pool) }), ux.NextStep{
+				Cmd: `frameworks cluster diagnose crashes --since "24 hours ago"`,
+				Why: "List each crashed unit, core dump, segfault, and OOM kill per host.",
+			})
+		},
+	})
 
 	sections := []doctorSection{
 		infra,
@@ -1427,6 +1451,12 @@ func checkYugabyteLocalYSQL(ctx context.Context, sshPool *fwssh.Pool, host inven
 	queryCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
+	// The probe runs over SSH; its own round trip is measured first and
+	// subtracted, so Latency is the node's ysqlsh connect-and-query time.
+	rttStart := time.Now()
+	_, _ = runner.Run(queryCtx, "true") //nolint:errcheck // timing only; the query below reports failures.
+	sshRTT := time.Since(rttStart)
+
 	start := time.Now()
 	var one int
 	if err := exec.QueryRow(queryCtx, conn, "SELECT 1", nil, &one); err != nil {
@@ -1435,7 +1465,8 @@ func checkYugabyteLocalYSQL(ctx context.Context, sshPool *fwssh.Pool, host inven
 		result.Error = fmt.Sprintf("local YSQL query failed: %v", err)
 		return result
 	}
-	result.Latency = time.Since(start)
+	result.Latency = max(time.Since(start)-sshRTT, 0)
+	result.Metadata["ssh_rtt"] = sshRTT.String()
 
 	var version string
 	if err := exec.QueryRow(queryCtx, conn, "SELECT version()", nil, &version); err == nil {
@@ -1447,7 +1478,7 @@ func checkYugabyteLocalYSQL(ctx context.Context, sshPool *fwssh.Pool, host inven
 
 	result.OK = true
 	result.Status = "healthy"
-	result.Message = fmt.Sprintf("Local YSQL query OK (latency: %v)", result.Latency)
+	result.Message = fmt.Sprintf("Local YSQL query OK (latency: %v net of %v SSH round trip)", result.Latency, sshRTT)
 	return result
 }
 
@@ -1472,29 +1503,68 @@ func postgresCandidateHosts(manifest *inventory.Manifest, pg *inventory.Postgres
 	return hosts
 }
 
-// checkYugabyteCluster probes each tserver in order and returns the first
-// healthy result (annotated with the node name). Any tserver serves YSQL, so
-// doctor reflects cluster health rather than the status of one pinned node. If
-// every node fails it returns the last failure.
+// yugabyteYSQLSlowThreshold is the local connect-and-query time past which a
+// tserver counts as degraded: a healthy node answers SELECT 1 in well under it.
+const yugabyteYSQLSlowThreshold = time.Second
+
+// checkYugabyteCluster probes YSQL on every tserver and asks the masters
+// which tservers are alive. It is healthy only when every node answers within
+// yugabyteYSQLSlowThreshold and every manifest node is a live tserver; it is
+// degraded while at least one node still serves YSQL, and unhealthy when none
+// does.
 func checkYugabyteCluster(ctx context.Context, sshPool *fwssh.Pool, manifest *inventory.Manifest, pg *inventory.PostgresConfig) *health.CheckResult {
 	hosts := postgresCandidateHosts(manifest, pg)
 	if len(hosts) == 0 {
 		return &health.CheckResult{Name: "yugabyte", CheckedAt: time.Now(), OK: false, Status: "unhealthy", Error: "no yugabyte nodes resolvable in manifest"}
 	}
-	var last *health.CheckResult
+	result := &health.CheckResult{Name: "yugabyte", CheckedAt: time.Now(), Metadata: map[string]string{}}
+	var problems, latencies []string
+	serving := 0
 	for _, host := range hosts {
-		res := checkYugabyteLocalYSQL(ctx, sshPool, host, pg)
-		if res.OK {
-			if res.Metadata == nil {
-				res.Metadata = map[string]string{}
-			}
-			res.Metadata["node"] = host.Name
-			return res
+		res := yugabyteDoctorNodeProbeFn(ctx, sshPool, host, pg)
+		if !res.OK {
+			problems = append(problems, fmt.Sprintf("%s: %s", host.Name, firstNonEmpty(res.Error, res.Status, "probe failed")))
+			continue
 		}
-		last = res
+		serving++
+		if result.Latency < res.Latency {
+			result.Latency = res.Latency
+		}
+		if version := res.Metadata["version"]; version != "" {
+			result.Metadata["version"] = version
+		}
+		latency := res.Latency.Round(time.Millisecond)
+		latencies = append(latencies, fmt.Sprintf("%s %v", host.Name, latency))
+		if res.Latency > yugabyteYSQLSlowThreshold {
+			problems = append(problems, fmt.Sprintf("%s: YSQL took %v (limit %v)", host.Name, latency, yugabyteYSQLSlowThreshold))
+		}
 	}
-	return last
+	if serving == 0 {
+		result.Status = "unhealthy"
+		result.Error = "no tserver answers YSQL: " + strings.Join(problems, "; ")
+		return result
+	}
+	if dead, err := yugabyteTServerLivenessFn(ctx, sshPool, manifest, pg); err != nil {
+		problems = append(problems, "tserver liveness unreadable: "+err.Error())
+	} else {
+		problems = append(problems, dead...)
+	}
+	if len(problems) > 0 {
+		result.Status = "degraded"
+		result.Error = fmt.Sprintf("%d/%d tserver(s) answer YSQL; %s", serving, len(hosts), strings.Join(problems, "; "))
+		return result
+	}
+	result.OK, result.Status = true, "healthy"
+	result.Message = fmt.Sprintf("%d/%d tservers alive and answer YSQL (%s)", serving, len(hosts), strings.Join(latencies, ", "))
+	return result
 }
+
+// yugabyteDoctorNodeProbeFn is the per-tserver probe checkYugabyteCluster runs; tests substitute node health.
+var yugabyteDoctorNodeProbeFn = checkYugabyteLocalYSQL
+
+// yugabyteTServerLivenessFn reports manifest tservers the masters do not list
+// as ALIVE; tests substitute the master's view.
+var yugabyteTServerLivenessFn = yugabyteDeadTServers
 
 // yugabyteHostSelectionProbeFn is the local YSQL probe firstHealthyYugabyteHost
 // selects with; tests substitute node health.

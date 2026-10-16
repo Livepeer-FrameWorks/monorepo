@@ -21,6 +21,7 @@ import (
 	"frameworks/api_sidecar/internal/admission"
 	"frameworks/api_sidecar/internal/appconfig"
 	"frameworks/api_sidecar/internal/dtsh"
+	"frameworks/api_sidecar/internal/leases"
 	"frameworks/api_sidecar/internal/relay"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
@@ -835,6 +836,23 @@ func getProcessingSourceOverride(streamName string) (string, bool) {
 	return sourceURL, ok
 }
 
+// withLocalVODSource runs boot (a header-generation boot of a fresh output
+// under its vod+ name) while STREAM_SOURCE resolves that name to outputPath.
+// Mist keeps that input alive well after boot returns and the override is
+// cleared, so the source lease on outputPath is installed up front; the
+// poller's reconciliation releases it once Mist drops the stream.
+func withLocalVODSource(vodStreamName, outputPath string, boot func() error) error {
+	if internalName, ok := leases.ParseVODInternalName(vodStreamName); ok && filepath.IsAbs(outputPath) {
+		leases.GlobalTracker().ReconcileResolvedSource(vodStreamName,
+			[]string{outputPath, outputPath + ".dtsh", outputPath + ".gop"},
+			leases.AssetKey{Type: "vod", Hash: internalName}, nil,
+			leases.SourceEntry{StreamName: vodStreamName, LocalPath: outputPath, AssetType: "vod", InternalName: internalName})
+	}
+	setProcessingSourceOverride(vodStreamName, outputPath)
+	defer clearProcessingSourceOverride(vodStreamName)
+	return boot()
+}
+
 func clearProcessingSourceOverride(streamName string) {
 	if streamName == "" {
 		return
@@ -1550,9 +1568,9 @@ loop:
 	if vodStreamName == "" {
 		log.Warn("ProcessingJobRequest missing output_runtime_name; skipping DTSH generation (will be generated on first playback)")
 	} else {
-		setProcessingSourceOverride(vodStreamName, outputPath)
-		err := GenerateDTSHForPath(h.mistServerURL, vodStreamName, outputPath+".dtsh", log)
-		clearProcessingSourceOverride(vodStreamName)
+		err := withLocalVODSource(vodStreamName, outputPath, func() error {
+			return GenerateDTSHForPath(h.mistServerURL, vodStreamName, outputPath+".dtsh", log)
+		})
 		if err != nil {
 			log.WithError(err).Warn("DTSH generation failed (will be generated on first playback)")
 		}

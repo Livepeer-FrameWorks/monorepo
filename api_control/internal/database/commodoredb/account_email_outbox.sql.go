@@ -26,6 +26,43 @@ func (q *Queries) AbandonExpiredAccountEmails(ctx context.Context, windowMs int6
 	return result.RowsAffected()
 }
 
+const abandonRejectedAccountEmail = `-- name: AbandonRejectedAccountEmail :exec
+UPDATE commodore.account_email_outbox
+SET status = 'abandoned',
+    attempts = $1,
+    last_error = $2::text,
+    lease_token = NULL,
+    updated_at = NOW()
+WHERE user_id = $3::uuid
+  AND purpose = $4::text
+  AND tenant_id = $5::uuid
+  AND status = 'pending'
+  AND ($6::text = '' OR lease_token = $6::text)
+`
+
+type AbandonRejectedAccountEmailParams struct {
+	Attempts   int32  `db:"attempts" json:"attempts"`
+	LastError  string `db:"last_error" json:"last_error"`
+	UserID     string `db:"user_id" json:"user_id"`
+	Purpose    string `db:"purpose" json:"purpose"`
+	TenantID   string `db:"tenant_id" json:"tenant_id"`
+	LeaseToken string `db:"lease_token" json:"lease_token"`
+}
+
+// The receiving server refused the recipient permanently; a resend to the
+// same address cannot succeed.
+func (q *Queries) AbandonRejectedAccountEmail(ctx context.Context, arg AbandonRejectedAccountEmailParams) error {
+	_, err := q.db.ExecContext(ctx, abandonRejectedAccountEmail,
+		arg.Attempts,
+		arg.LastError,
+		arg.UserID,
+		arg.Purpose,
+		arg.TenantID,
+		arg.LeaseToken,
+	)
+	return err
+}
+
 const claimAccountEmailBatch = `-- name: ClaimAccountEmailBatch :many
 SELECT user_id::text AS user_id,
        tenant_id::text AS tenant_id,

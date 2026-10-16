@@ -13,35 +13,35 @@
 
     - name: Node_tuning | apt policy
       ansible.builtin.import_tasks: apt_policy.yml
-      tags: [apt]
+      tags: [configure, apt]
 
     - name: Node_tuning | needrestart policy
       ansible.builtin.import_tasks: needrestart.yml
-      tags: [needrestart]
+      tags: [configure, needrestart]
 
     - name: Node_tuning | systemd timers
       ansible.builtin.import_tasks: timers.yml
-      tags: [timers]
+      tags: [configure, timers]
 
     - name: Node_tuning | snapd removal
       ansible.builtin.import_tasks: snapd.yml
       when: node_tuning_purge_snapd | bool
-      tags: [snapd]
+      tags: [configure, snapd]
 
 - name: Node_tuning | apply Linux kernel and limits policy
   when: (ansible_facts['system'] | default('')) == "Linux"
   block:
     - name: Node_tuning | sysctl baseline
       ansible.builtin.import_tasks: sysctl.yml
-      tags: [sysctl]
+      tags: [configure, sysctl]
 
     - name: Node_tuning | limits baseline
       ansible.builtin.import_tasks: limits.yml
-      tags: [limits]
+      tags: [configure, limits]
 
     - name: Node_tuning | verify convergence
       ansible.builtin.import_tasks: verify.yml
       # Check mode predicts file/unit changes without applying them, so runtime
       # probes would inspect the old state and falsely fail on a fresh host.
       when: not ansible_check_mode
-      tags: [verify]
+      tags: [validate, verify]

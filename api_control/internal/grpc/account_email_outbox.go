@@ -10,6 +10,7 @@ import (
 
 	"frameworks/api_control/internal/database/commodoredb"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
+	emailpkg "github.com/Livepeer-FrameWorks/monorepo/pkg/email"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/outbox"
 )
@@ -150,6 +151,18 @@ func (st *accountEmailOutboxStore) RecordFailureToken(ctx context.Context, id st
 	last := ""
 	if cause != nil {
 		last = cause.Error()
+	}
+	if emailpkg.IsRecipientRejected(cause) {
+		if err := commodoredb.New(st.server.db).AbandonRejectedAccountEmail(ctx, commodoredb.AbandonRejectedAccountEmailParams{
+			Attempts: int32(nextAttempts), LastError: last,
+			UserID: userID, Purpose: purpose, TenantID: tenantID, LeaseToken: leaseToken,
+		}); err != nil {
+			return fmt.Errorf("abandon rejected account email: %w", err)
+		}
+		st.server.logger.WithFields(logging.Fields{
+			"user_id": userID, "tenant_id": tenantID, "purpose": purpose, "attempts": nextAttempts, "cause": last,
+		}).Warn("Account email recipient rejected permanently; request abandoned")
+		return nil
 	}
 	backoff := outbox.ComputeBackoff(accountEmailOutboxConfig(), currentAttempts)
 	if err := commodoredb.New(st.server.db).FailAccountEmail(ctx, commodoredb.FailAccountEmailParams{

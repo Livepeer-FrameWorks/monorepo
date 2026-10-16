@@ -47,27 +47,62 @@ var playbackGrantsSent = struct {
 }{byNode: map[string]map[string]*ipcpb.PlaybackGrant{}}
 
 // OfferPlaybackGrant delivers grant to nodeID over this instance's control
-// stream to it, unless that connection already holds the same grant. It never
-// relays: each replica pushes to the edges it holds, and learns of authority
-// applied elsewhere from the replicas' announcements. Requested names
-// delivered earlier for the stream stay in the grant.
-func OfferPlaybackGrant(nodeID string, grant *ipcpb.PlaybackGrant) error {
+// stream to it, unless that connection already holds an equivalent grant
+// (playbackGrantRedundant), and reports whether it sent one. It never relays:
+// each replica pushes to the edges it holds, and learns of authority applied
+// elsewhere from the replicas' announcements. Requested names delivered
+// earlier for the stream stay in the grant.
+func OfferPlaybackGrant(nodeID string, grant *ipcpb.PlaybackGrant) (bool, error) {
 	if nodeID == "" || grant == nil || grant.GetInternalName() == "" {
-		return nil
+		return false, nil
 	}
 	key := mist.ExtractInternalName(grant.GetInternalName())
 	playbackGrantsSent.mu.Lock()
-	merged := mergePlaybackGrantNames(playbackGrantsSent.byNode[nodeID][key], grant)
-	unchanged := playbackGrantDigest(playbackGrantsSent.byNode[nodeID][key]) == playbackGrantDigest(merged)
+	held := playbackGrantsSent.byNode[nodeID][key]
+	merged := mergePlaybackGrantNames(held, grant)
+	redundant := playbackGrantRedundant(held, merged, time.Now())
 	playbackGrantsSent.mu.Unlock()
-	if unchanged {
-		return nil
+	if redundant {
+		return false, nil
 	}
 	if err := SendLocalPlaybackGrant(nodeID, merged); err != nil {
-		return err
+		return false, err
 	}
 	recordPlaybackGrantSent(nodeID, merged)
-	return nil
+	return true, nil
+}
+
+// playbackGrantRedundant reports whether an edge holding held needs next. The
+// authority versions are not enforced by the edge, and a tenant authority is
+// re-signed whenever its allowances or billing state move, so a grant that
+// differs only in versions and a later validity is a renewal. A renewal is
+// sent once the held grant has less than half of the new validity left, which
+// keeps the edge's local authority long enough to ride out a control outage
+// without pushing every reissue; the edge also fetches a renewal itself
+// shortly before expiry. A shortened validity is always sent.
+func playbackGrantRedundant(held, next *ipcpb.PlaybackGrant, now time.Time) bool {
+	if held == nil {
+		return false
+	}
+	if playbackGrantDigest(held) == playbackGrantDigest(next) {
+		return true
+	}
+	if playbackGrantDigest(withoutRenewal(held)) != playbackGrantDigest(withoutRenewal(next)) {
+		return false
+	}
+	heldUntil, nextUntil := held.GetValidUntil().AsTime(), next.GetValidUntil().AsTime()
+	if nextUntil.Before(heldUntil) {
+		return false
+	}
+	return heldUntil.Sub(now) >= nextUntil.Sub(now)/2
+}
+
+func withoutRenewal(grant *ipcpb.PlaybackGrant) *ipcpb.PlaybackGrant {
+	out := proto.CloneOf(grant)
+	out.ObjectAuthorityVersion = 0
+	out.TenantAuthorityVersion = 0
+	out.ValidUntil = nil
+	return out
 }
 
 // PlaybackGrantHolders returns the nodes this instance delivered a grant for

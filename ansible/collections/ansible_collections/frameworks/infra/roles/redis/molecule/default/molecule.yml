@@ -35,6 +35,8 @@ provisioner:
         redis_port: 6379
         redis_bind_interface: "127.0.0.1"
         redis_password: "molecule-test"
+        redis_exporter_artifact_url: "https://github.com/oliver006/redis_exporter/releases/download/v1.94.0/redis_exporter-v1.94.0.linux-amd64.tar.gz"
+        redis_exporter_artifact_checksum: "sha256:eaf433a64e6418235b25d4ec815d64759898f314d64dbb1fb074ca354f81b18b"
         # Named Sentinel HA set on one host: a declared primary, a declared
         # replica and a single Sentinel. The shared vars below mirror what the
         # CLI passes for each task of a sentinel-mode manifest instance.

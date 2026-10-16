@@ -11,6 +11,11 @@ kafka_role_log_dir: >-
 kafka_format_sentinel: "{{ kafka_role_data_dir }}/meta.properties"
 kafka_unit_path: "/etc/systemd/system/{{ kafka_service_name }}.service"
 kafka_properties_path: "{{ kafka_conf_dir }}/{{ kafka_service_name }}.properties"
+# Outside kafka_install_dir so a Kafka tarball reinstall never removes it, and
+# separate from the MirrorMaker2 exporter directory, which that role's cleanup
+# deletes.
+kafka_jmx_exporter_jar: "{{ kafka_jmx_exporter_dir }}/jmx_prometheus_javaagent.jar"
+kafka_jmx_exporter_config_path: "{{ kafka_jmx_exporter_dir }}/{{ kafka_service_name }}.yml"
 
 kafka_java_package_by_family:
   Debian: default-jre-headless

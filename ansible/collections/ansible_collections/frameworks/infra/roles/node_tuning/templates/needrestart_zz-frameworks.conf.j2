@@ -7,4 +7,18 @@ $nrconf{restart} = 'l';
 $nrconf{kernelhints} = 0;
 $nrconf{ucodehints} = 0;
 
+# NEEDRESTART_MODE in the environment overrides the restart mode above, so the
+# data and platform services are also excluded from any automatic restart:
+# a library upgrade must never bounce a database, a broker or a media server
+# outside the platform's own rolling restarts.
+$nrconf{override_rc}{qr(^frameworks-)} = 0;
+$nrconf{override_rc}{qr(^(valkey|redis)(-server|-sentinel)?[@.])} = 0;
+$nrconf{override_rc}{qr(^postgresql)} = 0;
+$nrconf{override_rc}{qr(^yb-(master|tserver)\.)} = 0;
+$nrconf{override_rc}{qr(^clickhouse-(server|keeper)\.)} = 0;
+$nrconf{override_rc}{qr(^kafka)} = 0;
+$nrconf{override_rc}{qr(^mistserver\.)} = 0;
+$nrconf{override_rc}{qr(^(docker|containerd)\.)} = 0;
+$nrconf{override_rc}{qr(^(victoriametrics|vmagent|vmalert|vmauth|alertmanager)\.)} = 0;
+
 1;

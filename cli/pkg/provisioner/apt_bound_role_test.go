@@ -178,12 +178,6 @@ var vendorPackageTasks = []vendorPackages{
 		preinstall:  []string{"python3-apt"},
 	},
 	{
-		requirement: "prometheus.prometheus", version: "0.30.1", include: "prometheus.prometheus.node_exporter",
-		wrapper: "prometheus_stack/tasks/prometheus_community.yml", vendorFile: "../_common/tasks/preflight.yml",
-		vendorNames: []string{"{{ _common_dependencies }}"},
-		preinstall:  []string{"python3-apt"},
-	},
-	{
 		// Only the config task file runs; it installs nothing.
 		requirement: "idealista.clickhouse", version: "3.3.4", include: "idealista.clickhouse",
 		tasksFrom: "config/clickhouse.yml", wrapper: "clickhouse/tasks/install.yml",

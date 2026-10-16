@@ -1,0 +1,450 @@
+groups:
+  # Host health from node_exporter, which runs beside every vmagent and every
+  # native edge vmagent. Core targets carry node_id; edge targets carry
+  # frameworks_node, so summaries name both.
+  - name: host.rules
+    rules:
+      - alert: HostFilesystemSpaceLow
+        expr: |
+          node_filesystem_avail_bytes{fstype!~"tmpfs|ramfs|squashfs|overlay|nsfs|fuse.*"}
+            / node_filesystem_size_bytes{fstype!~"tmpfs|ramfs|squashfs|overlay|nsfs|fuse.*"} < 0.10
+          and node_filesystem_readonly == 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.mountpoint }} on {{ $labels.node_id }}{{ $labels.frameworks_node }} has under 10% free"
+          description: "Filesystem {{ $labels.device }} mounted at {{ $labels.mountpoint }} has {{ $value | humanizePercentage }} space left. Data services stop writing when it fills."
+
+      - alert: HostFilesystemSpaceLow
+        expr: |
+          node_filesystem_avail_bytes{fstype!~"tmpfs|ramfs|squashfs|overlay|nsfs|fuse.*"}
+            / node_filesystem_size_bytes{fstype!~"tmpfs|ramfs|squashfs|overlay|nsfs|fuse.*"} < 0.05
+          and node_filesystem_readonly == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.mountpoint }} on {{ $labels.node_id }}{{ $labels.frameworks_node }} has under 5% free"
+          description: "Filesystem {{ $labels.device }} mounted at {{ $labels.mountpoint }} has {{ $value | humanizePercentage }} space left."
+
+      # The linear fit over 6h ignores short bursts; the 25% floor keeps a
+      # large, mostly empty disk with a steady write rate from paging.
+      - alert: HostFilesystemFillingUp
+        expr: |
+          predict_linear(node_filesystem_avail_bytes{fstype!~"tmpfs|ramfs|squashfs|overlay|nsfs|fuse.*"}[6h], 24 * 3600) < 0
+          and node_filesystem_avail_bytes / node_filesystem_size_bytes < 0.25
+          and node_filesystem_readonly == 0
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.mountpoint }} on {{ $labels.node_id }}{{ $labels.frameworks_node }} fills within 24h"
+          description: "At the write rate of the last six hours {{ $labels.mountpoint }} runs out of space within a day."
+
+      - alert: HostFilesystemInodesLow
+        expr: |
+          node_filesystem_files_free{fstype!~"tmpfs|ramfs|squashfs|overlay|nsfs|fuse.*"}
+            / node_filesystem_files{fstype!~"tmpfs|ramfs|squashfs|overlay|nsfs|fuse.*"} < 0.05
+          and node_filesystem_readonly == 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.mountpoint }} on {{ $labels.node_id }}{{ $labels.frameworks_node }} has under 5% free inodes"
+          description: "Filesystem {{ $labels.mountpoint }} has {{ $value | humanizePercentage }} of its inodes left; file creation fails at zero."
+
+      # Average time per completed read or write (await). An idle disk has no
+      # completions, so the ratio is undefined there and never fires.
+      - alert: HostDiskIOLatencyHigh
+        expr: |
+          (rate(node_disk_read_time_seconds_total[5m]) + rate(node_disk_write_time_seconds_total[5m]))
+            / (rate(node_disk_reads_completed_total[5m]) + rate(node_disk_writes_completed_total[5m])) > 0.1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Disk {{ $labels.device }} on {{ $labels.node_id }}{{ $labels.frameworks_node }} averages over 100ms per I/O"
+          description: "Average I/O completion time on {{ $labels.device }} is {{ $value | humanizeDuration }} over five minutes. Raft quorums (Kafka KRaft, YugabyteDB) miss heartbeats and lose leaders on disks this slow."
+
+      - alert: HostDiskIOLatencyHigh
+        expr: |
+          (rate(node_disk_read_time_seconds_total[5m]) + rate(node_disk_write_time_seconds_total[5m]))
+            / (rate(node_disk_reads_completed_total[5m]) + rate(node_disk_writes_completed_total[5m])) > 0.5
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Disk {{ $labels.device }} on {{ $labels.node_id }}{{ $labels.frameworks_node }} averages over 500ms per I/O"
+          description: "Average I/O completion time on {{ $labels.device }} is {{ $value | humanizeDuration }} over five minutes."
+
+      - alert: HostDiskSaturated
+        expr: rate(node_disk_io_time_seconds_total[5m]) > 0.9
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Disk {{ $labels.device }} on {{ $labels.node_id }}{{ $labels.frameworks_node }} is busy over 90% of the time"
+          description: "{{ $labels.device }} has had I/O in flight {{ $value | humanizePercentage }} of the last five minutes for fifteen minutes."
+
+      - alert: HostIOWaitHigh
+        expr: avg without (cpu, mode) (rate(node_cpu_seconds_total{mode="iowait"}[5m])) > 0.3
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.node_id }}{{ $labels.frameworks_node }} spends over 30% of CPU time waiting on I/O"
+          description: "CPU iowait is {{ $value | humanizePercentage }}; processes on this host are blocked on storage."
+
+      - alert: HostMemoryLow
+        expr: node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes < 0.10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.node_id }}{{ $labels.frameworks_node }} has under 10% memory available"
+          description: "Available memory is {{ $value | humanizePercentage }} of total; the kernel OOM killer runs when it is exhausted."
+
+      - alert: HostMemoryLow
+        expr: node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes < 0.05
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.node_id }}{{ $labels.frameworks_node }} has under 5% memory available"
+          description: "Available memory is {{ $value | humanizePercentage }} of total."
+
+      # Share of wall time in which every runnable task was stalled on memory
+      # (PSI "full"); sustained stalls mean reclaim or swap is throttling work.
+      - alert: HostMemoryPressure
+        expr: rate(node_pressure_memory_stalled_seconds_total[5m]) > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.node_id }}{{ $labels.frameworks_node }} stalls on memory {{ $value | humanizePercentage }} of the time"
+          description: "All runnable tasks were stalled waiting for memory for over 5% of the last five minutes, sustained for ten minutes."
+
+      - alert: HostOOMKill
+        expr: increase(node_vmstat_oom_kill[15m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "The kernel OOM killer ran on {{ $labels.node_id }}{{ $labels.frameworks_node }}"
+          description: "{{ $value }} process(es) were killed for memory in the last fifteen minutes. The journal names the victim."
+
+      - alert: HostLoadHigh
+        expr: node_load15 / count without (cpu, mode) (node_cpu_seconds_total{mode="idle"}) > 2
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.node_id }}{{ $labels.frameworks_node }} 15-minute load is over twice its CPU count"
+          description: "Load per CPU is {{ $value }} for thirty minutes; runnable or I/O-blocked tasks are queueing."
+
+      - alert: HostClockNotSynchronised
+        expr: node_timex_sync_status == 0 or abs(node_timex_offset_seconds) > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Clock on {{ $labels.node_id }}{{ $labels.frameworks_node }} is unsynchronised or drifting"
+          description: "NTP sync is lost or the offset exceeds 50ms. YugabyteDB refuses operations beyond its maximum clock skew, and signed tokens fail validation on skewed hosts."
+
+      # Core targets carry node_id and page through ServiceDown; edge targets
+      # carry frameworks_node instead, so ServiceDown does not see them.
+      - alert: HostExporterDown
+        expr: up{job="edge-node-exporter"} == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "node_exporter on edge {{ $labels.frameworks_node }} is unreachable"
+          description: "vmagent cannot scrape {{ $labels.instance }}; host disk, memory, systemd and crash alerts for this host are blind."
+
+  # systemd units and process crashes on every host, edges included.
+  - name: process.rules
+    rules:
+      # NRestarts counts only restarts systemd made under Restart=, never an
+      # operator or deploy restart, so any increase is a crash or exit.
+      - alert: SystemdServiceRestarting
+        expr: increase(node_systemd_service_restart_total[15m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.name }} on {{ $labels.node_id }}{{ $labels.frameworks_node }} was restarted by systemd"
+          description: "systemd restarted {{ $labels.name }} {{ $value }} time(s) in the last fifteen minutes after it exited or crashed. The unit journal holds the exit status."
+
+      - alert: SystemdServiceRestartLoop
+        expr: increase(node_systemd_service_restart_total[30m]) >= 3
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.name }} on {{ $labels.node_id }}{{ $labels.frameworks_node }} is crash-looping"
+          description: "systemd restarted {{ $labels.name }} {{ $value }} times in thirty minutes."
+
+      - alert: SystemdUnitFailed
+        expr: node_systemd_unit_state{state="failed"} == 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.name }} on {{ $labels.node_id }}{{ $labels.frameworks_node }} is in the failed state"
+          description: "The unit stopped and systemd will not restart it. `systemctl status {{ $labels.name }}` shows why."
+
+      # A crashed child process (MistProc*, transcoders) never fails its
+      # systemd unit; the kernel fatal-signal report and systemd-coredump are
+      # the only host-wide record of it.
+      - alert: HostProcessCrashed
+        expr: frameworks_host_process_crash_reports > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.process }} crashed on {{ $labels.node_id }}{{ $labels.frameworks_node }}"
+          description: "{{ $value }} {{ $labels.source }} crash report(s) for {{ $labels.process }} in the last fifteen minutes. `journalctl -k` and `coredumpctl list` on the host hold the signal and faulting address."
+
+      - alert: HostCrashScanStale
+        expr: |
+          time() - frameworks_host_crash_scan_timestamp_seconds > 600
+          or (up{job=~"node-exporter|edge-node-exporter"} == 1 unless on (job, instance) frameworks_host_crash_scan_timestamp_seconds)
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Host crash scan on {{ $labels.node_id }}{{ $labels.frameworks_node }} is not reporting"
+          description: "frameworks-host-crash-scan.timer has not refreshed its textfile for ten minutes, so process crashes on this host go unreported."
+
+  - name: kafka.rules
+    rules:
+      # current-leader is the KRaft voter this node follows; -1 means the
+      # metadata quorum has no leader and no broker can commit metadata.
+      - alert: KafkaQuorumNoLeader
+        expr: kafka_raft_current_leader == -1
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "Kafka {{ $labels.kafka_region }} metadata quorum has no leader on {{ $labels.node_id }}"
+          description: "{{ $labels.job }} on {{ $labels.node_id }} sees no KRaft leader. Topic, partition and broker changes stall until the controllers elect one."
+
+      # Every election bumps the epoch. Repeated elections without a stable
+      # leader mean the controllers keep missing each other's fetches
+      # (disk stalls, network, GC).
+      - alert: KafkaQuorumElectionChurn
+        expr: max by (region, cluster, kafka_region) (changes(kafka_raft_current_epoch{job="kafka-controller"}[30m])) >= 3
+        labels:
+          severity: warning
+        annotations:
+          summary: "Kafka {{ $labels.kafka_region }} metadata quorum elected {{ $value }} leaders in 30 minutes"
+          description: "The KRaft epoch keeps changing. Check controller journals, disk latency and mesh connectivity between the controllers."
+
+      - alert: KafkaQuorumVoterUnreachable
+        expr: kafka_raft_number_unknown_voter_connections > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.job }} on {{ $labels.node_id }} cannot reach {{ $value }} KRaft voter(s)"
+          description: "This node has no connection to some controller quorum voters; one more loss can cost the quorum."
+
+      - alert: KafkaNoActiveController
+        expr: sum by (region, cluster, kafka_region) (kafka_controller_kafkacontroller_activecontrollercount) != 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Kafka {{ $labels.kafka_region }} has {{ $value }} active controllers"
+          description: "Exactly one controller must be active. Zero means no metadata changes are applied; more than one means a split quorum."
+
+      - alert: KafkaOfflinePartitions
+        expr: max by (region, cluster, kafka_region) (kafka_controller_kafkacontroller_offlinepartitionscount) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Kafka {{ $labels.kafka_region }} has {{ $value }} offline partitions"
+          description: "Partitions without a leader reject produce and fetch. Their replicas' brokers are down or fenced."
+
+      - alert: KafkaUnderMinISRPartitions
+        expr: sum by (region, cluster, kafka_region) (kafka_server_replicamanager_underminisrpartitioncount) > 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Kafka {{ $labels.kafka_region }} has {{ $value }} partitions below min.insync.replicas"
+          description: "Producers using acks=all fail on these partitions until enough replicas catch up."
+
+      - alert: KafkaUnderReplicatedPartitions
+        expr: sum by (region, cluster, kafka_region) (kafka_server_replicamanager_underreplicatedpartitions) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Kafka {{ $labels.kafka_region }} has {{ $value }} under-replicated partitions"
+          description: "Some replicas have fallen out of the ISR for ten minutes; one more broker loss can take partitions offline."
+
+      - alert: KafkaFencedBrokers
+        expr: max by (region, cluster, kafka_region) (kafka_controller_kafkacontroller_fencedbrokercount) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Kafka {{ $labels.kafka_region }} has {{ $value }} fenced broker(s)"
+          description: "A fenced broker missed its heartbeats to the active controller and leads no partitions."
+
+      - alert: KafkaControllerEventQueueSlow
+        expr: max by (region, cluster, kafka_region, node_id) (kafka_controller_eventqueuetimems_p99) > 1000 or max by (region, cluster, kafka_region, node_id) (kafka_controller_eventqueueprocessingtimems_p99) > 1000
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Kafka {{ $labels.kafka_region }} controller {{ $labels.node_id }} events wait or run over 1s (p99)"
+          description: "The controller event queue is backing up; broker heartbeats and metadata changes are delayed and brokers may be fenced."
+
+      - alert: KafkaMetadataErrors
+        expr: |
+          delta(kafka_controller_kafkacontroller_metadataerrorcount[15m]) > 0
+          or delta(kafka_broker_metadata_metadata_apply_error_count[15m]) > 0
+          or delta(kafka_broker_metadata_metadata_load_error_count[15m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.job }} on {{ $labels.node_id }} failed to load or apply Kafka metadata"
+          description: "The node's metadata image diverges from the quorum's; its server log names the record."
+
+  - name: yugabyte.rules
+    rules:
+      # Tservers report per-table leadership: is_raft_leader is how many of
+      # the table's tablets this server leads. A table no server leads has
+      # every tablet without a Raft leader, so reads and writes to it fail.
+      # Masters report the same for the sys.catalog tablet.
+      - alert: YugabyteTableLeaderless
+        expr: sum by (region, cluster, namespace_name, table_name, table_id) (is_raft_leader{job=~"yugabyte-(master|tserver)"}) == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "YugabyteDB {{ $labels.namespace_name }}.{{ $labels.table_name }} has no Raft leader in {{ $labels.cluster }}"
+          description: "No yb-master or yb-tserver leads any tablet of {{ $labels.table_name }}; statements touching it fail. A majority of its replicas is down or partitioned."
+
+      - alert: YugabyteFollowerLagHigh
+        expr: max by (region, cluster, node_id, namespace_name, table_name) (follower_lag_ms{job="yugabyte-tserver"}) > 30000
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "YugabyteDB follower on {{ $labels.node_id }} lags {{ $labels.table_name }} by over 30s"
+          description: "A tserver replica of {{ $labels.namespace_name }}.{{ $labels.table_name }} is {{ $value }}ms behind its leader; one more replica loss can cost the tablet its majority."
+
+  - name: redis.rules
+    rules:
+      - alert: RedisDown
+        expr: redis_up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Redis {{ $labels.frameworks_instance }} on {{ $labels.node_id }} is down"
+          description: "redis_exporter cannot reach the {{ $labels.frameworks_instance }} server on {{ $labels.node_id }}."
+
+      - alert: RedisReplicaMasterLinkDown
+        expr: redis_master_link_up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Redis {{ $labels.frameworks_instance }} replica on {{ $labels.node_id }} lost its primary"
+          description: "The replica's link to its primary is down; it serves stale data and cannot take over cleanly."
+
+      # The second operand covers a set whose servers all report as replicas,
+      # which has no role="master" series to count.
+      - alert: RedisPrimaryCountWrong
+        expr: |
+          count by (redis_cluster, frameworks_instance) (redis_instance_info{role="master"}) > 1
+          or (
+            count by (redis_cluster, frameworks_instance) (redis_instance_info)
+            unless on (redis_cluster, frameworks_instance)
+            count by (redis_cluster, frameworks_instance) (redis_instance_info{role="master"})
+          )
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Redis {{ $labels.frameworks_instance }} {{ $labels.redis_cluster }} does not have exactly one primary"
+          description: "A Redis set must have exactly one primary. None means writes fail until Sentinel promotes a replica; more than one means split brain."
+
+      - alert: RedisPersistenceFailing
+        expr: redis_rdb_last_bgsave_status == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Redis {{ $labels.frameworks_instance }} on {{ $labels.node_id }} fails to persist"
+          description: "The last background save failed; a restart loses writes since the last good snapshot. Check disk space and vm.overcommit_memory."
+
+  - name: postgres.rules
+    rules:
+      - alert: PostgresDown
+        expr: pg_up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "PostgreSQL {{ $labels.frameworks_instance }} on {{ $labels.node_id }} is down"
+          description: "postgres_exporter cannot connect to the instance on {{ $labels.node_id }}."
+
+      - alert: PostgresReplicationLagHigh
+        expr: pg_replication_lag_seconds > 300 and on (job, instance) pg_replication_is_replica == 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "PostgreSQL replica on {{ $labels.node_id }} lags by over five minutes"
+          description: "The replica last replayed WAL {{ $value | humanizeDuration }} ago."
+
+  - name: clickhouse.rules
+    rules:
+      - alert: ClickHouseReadonlyReplica
+        expr: ClickHouseMetrics_ReadonlyReplica > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "ClickHouse on {{ $labels.node_id }} has {{ $value }} read-only replicated tables"
+          description: "Replicated tables go read-only when the server loses its Keeper session; inserts into them fail."
+
+      - alert: ClickHouseKeeperSessionLost
+        expr: ClickHouseMetrics_ZooKeeperSession == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "ClickHouse on {{ $labels.node_id }} has no Keeper session"
+          description: "Without a Keeper session replicated tables cannot accept inserts or merges."
+
+      - alert: ClickHouseReplicationDelay
+        expr: ClickHouseAsyncMetrics_ReplicasMaxAbsoluteDelay > 300
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "ClickHouse replica on {{ $labels.node_id }} is {{ $value }}s behind"
+          description: "A replicated table on this server lags its freshest replica by over five minutes."
+
+      - alert: ClickHouseTooManyParts
+        expr: ClickHouseAsyncMetrics_MaxPartCountForPartition > 300
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "ClickHouse on {{ $labels.node_id }} has a partition with {{ $value }} parts"
+          description: "Merges are not keeping up with inserts; inserts are throttled and then rejected as the part count grows."
+
+      - alert: ClickHouseDistributedInsertsBroken
+        expr: ClickHouseMetrics_BrokenDistributedFilesToInsert > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "ClickHouse on {{ $labels.node_id }} has {{ $value }} broken distributed insert files"
+          description: "Distributed inserts that failed permanently were moved aside and their rows are not in the target table."

@@ -17,6 +17,25 @@
     mode: "0644"
   notify: kafka restart
 
+- name: Stat JMX exporter config directory under --check
+  ansible.builtin.stat:
+    path: "{{ kafka_jmx_exporter_dir }}"
+  register: kafka_jmx_exporter_dir_stat
+  check_mode: false
+  changed_when: false
+  when: ansible_check_mode
+
+- name: Render JMX exporter config
+  ansible.builtin.template:
+    src: jmx-exporter.yml.j2
+    dest: "{{ kafka_jmx_exporter_config_path }}"
+    owner: root
+    group: "{{ kafka_group }}"
+    mode: "0644"
+  notify: kafka restart
+  when:
+    - not ansible_check_mode or (kafka_jmx_exporter_dir_stat.stat.exists | default(false))
+
 - name: Render systemd unit
   ansible.builtin.template:
     src: kafka.service.j2

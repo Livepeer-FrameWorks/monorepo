@@ -1,0 +1,23 @@
+{# The systemd collector reports every service unit's state and NRestarts
+   (node_systemd_service_restart_total), which is how a unit crash-looping
+   under Restart=always becomes visible. The unit-include pattern uses [.]
+   because systemd would unescape a backslash in ExecStart. #}
+[Unit]
+Description=Prometheus node_exporter
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User={{ node_exporter_user }}
+Group={{ node_exporter_user }}
+ExecStart={{ node_exporter_bin }} \
+  --web.listen-address={{ node_exporter_listen_address }}:{{ node_exporter_port }} \
+  --collector.systemd \
+  --collector.systemd.enable-restarts-metrics \
+  --collector.systemd.unit-include=.+[.]service \
+  --collector.textfile.directory={{ node_exporter_textfile_dir }}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

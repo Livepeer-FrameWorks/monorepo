@@ -7,6 +7,9 @@ redis_password: ""
 redis_maxmemory: "0" # 0 = unlimited; override from manifest tuning
 redis_appendonly: "yes"
 redis_conf_dir_mode: "0755"
+# Pinned redis-exporter release-manifest artifact; the CLI passes it.
+redis_exporter_artifact_url: ""
+redis_exporter_artifact_checksum: ""
 redis_conf_mode: "0644"
 
 # Named-instance suffix. Empty = default "redis" service; setting e.g.

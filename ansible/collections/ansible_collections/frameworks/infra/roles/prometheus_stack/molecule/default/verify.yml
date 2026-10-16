@@ -13,6 +13,10 @@
           - ansible_facts.services['prometheus.service'].state == 'running'
           - ansible_facts.services['node_exporter.service'].state == 'running'
 
+    - name: Assert the host crash scan timer is active
+      ansible.builtin.command: systemctl is-active frameworks-host-crash-scan.timer
+      changed_when: false
+
     - name: Wait for prometheus listener
       ansible.builtin.wait_for:
         host: 127.0.0.1
@@ -22,7 +26,7 @@
     - name: Wait for node_exporter listener
       ansible.builtin.wait_for:
         host: 127.0.0.1
-        port: 9100
+        port: 9110
         timeout: 60
 
     - name: Rerun role (idempotence)

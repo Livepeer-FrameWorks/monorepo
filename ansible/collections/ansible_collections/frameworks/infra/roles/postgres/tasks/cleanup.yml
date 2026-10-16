@@ -1,4 +1,16 @@
 ---
+- name: Stop and disable postgres exporter
+  ansible.builtin.systemd:
+    name: "{{ postgres_exporter_service_name }}"
+    state: stopped
+    enabled: false
+  failed_when: false
+
+- name: Remove postgres exporter unit
+  ansible.builtin.file:
+    path: "/etc/systemd/system/{{ postgres_exporter_service_name }}.service"
+    state: absent
+
 - name: Stop and disable postgresql
   ansible.builtin.systemd:
     name: "{{ postgres_service_name }}"

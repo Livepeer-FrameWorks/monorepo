@@ -17,3 +17,7 @@ alertmanager_bin: /usr/local/bin/alertmanager
 amtool_bin: /usr/local/bin/amtool
 alertmanager_install_identity: "{{ alertmanager_artifact_checksum ~ ':' ~ alertmanager_artifact_url }}"
 alertmanager_install_sentinel: "/usr/local/bin/.frameworks-alertmanager-installed-{{ alertmanager_install_identity | hash('sha256') }}"
+node_exporter_bin: /usr/local/bin/node_exporter
+node_exporter_install_identity: "{{ node_exporter_artifact_checksum ~ ':' ~ node_exporter_artifact_url }}"
+node_exporter_install_sentinel: "/usr/local/bin/.frameworks-node-exporter-installed-{{ node_exporter_install_identity | hash('sha256') }}"
+node_exporter_crash_scan_dir: /usr/local/lib/frameworks/host-crash-scan

@@ -314,9 +314,9 @@ loop:
 		h.sendResult(send, req.GetJobId(), "failed", "clip missing output_runtime_name for DTSH generation", nil, "", 0)
 		return
 	}
-	setProcessingSourceOverride(vodStreamName, outputPath)
-	dtshErr := GenerateDTSHForPath(h.mistServerURL, vodStreamName, outputPath+".dtsh", log)
-	clearProcessingSourceOverride(vodStreamName)
+	dtshErr := withLocalVODSource(vodStreamName, outputPath, func() error {
+		return GenerateDTSHForPath(h.mistServerURL, vodStreamName, outputPath+".dtsh", log)
+	})
 	if dtshErr != nil {
 		log.WithError(dtshErr).Error("Clip DTSH generation failed before publication")
 		h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)

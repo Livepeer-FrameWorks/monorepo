@@ -97,6 +97,137 @@ func jmxExporterMetrics(t *testing.T, repoRoot string) []string {
 	return names
 }
 
+// kafkaServerJMXExporterMetrics derives the metric names the broker and
+// controller JMX exporter config emits: each rule's first group lists the
+// exported names and its name template ends in (or contains) $1. The exporter
+// lowercases output names and turns hyphens into underscores.
+func kafkaServerJMXExporterMetrics(t *testing.T, repoRoot string) []string {
+	t.Helper()
+	path := filepath.Join(repoRoot, "ansible/collections/ansible_collections/frameworks/infra/roles/kafka/templates/jmx-exporter.yml.j2")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	ruleRe := regexp.MustCompile(`(?m)^\s+- pattern: '[^(']*\(([A-Za-z0-9|-]+)\)[^']*'\n\s+name: (\S+)\n\s+type: GAUGE`)
+	matches := ruleRe.FindAllStringSubmatch(string(content), -1)
+	if len(matches) == 0 {
+		t.Fatalf("no JMX exporter rules parsed from %s", path)
+	}
+	var names []string
+	for _, match := range matches {
+		for _, attribute := range strings.Split(match[1], "|") {
+			name := strings.ReplaceAll(match[2], "$1", attribute)
+			names = append(names, strings.ToLower(strings.ReplaceAll(name, "-", "_")))
+		}
+	}
+	return names
+}
+
+// hostCrashScanMetrics reads the metric families the host crash scan writes
+// for node_exporter's textfile collector from their "# TYPE" lines.
+func hostCrashScanMetrics(t *testing.T, repoRoot string) []string {
+	t.Helper()
+	typeRe := regexp.MustCompile(`# TYPE (\S+) gauge`)
+	var names []string
+	for _, file := range []string{"host-crash-scan.awk", "host-crash-scan.sh"} {
+		path := filepath.Join(repoRoot, "ansible/collections/ansible_collections/frameworks/infra/roles/prometheus_stack/files", file)
+		content, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		for _, match := range typeRe.FindAllStringSubmatch(string(content), -1) {
+			names = append(names, match[1])
+		}
+	}
+	if len(names) == 0 {
+		t.Fatal("host crash scan declares no metric families")
+	}
+	return names
+}
+
+// infrastructureExporterMetrics are the third-party exporter series the
+// infrastructure alert rules read: node_exporter (with the systemd collector's
+// restart metrics), redis_exporter, postgres_exporter, YugabyteDB's
+// /prometheus-metrics and ClickHouse's built-in Prometheus endpoint.
+var infrastructureExporterMetrics = []string{
+	"node_filesystem_avail_bytes",
+	"node_filesystem_size_bytes",
+	"node_filesystem_files_free",
+	"node_filesystem_files",
+	"node_filesystem_readonly",
+	"node_disk_read_time_seconds_total",
+	"node_disk_write_time_seconds_total",
+	"node_disk_reads_completed_total",
+	"node_disk_writes_completed_total",
+	"node_disk_io_time_seconds_total",
+	"node_cpu_seconds_total",
+	"node_memory_MemAvailable_bytes",
+	"node_memory_MemTotal_bytes",
+	"node_pressure_memory_stalled_seconds_total",
+	"node_vmstat_oom_kill",
+	"node_load15",
+	"node_timex_sync_status",
+	"node_timex_offset_seconds",
+	"node_systemd_service_restart_total",
+	"node_systemd_unit_state",
+	"redis_up",
+	"redis_master_link_up",
+	"redis_instance_info",
+	"redis_rdb_last_bgsave_status",
+	"pg_up",
+	"pg_replication_lag_seconds",
+	"pg_replication_is_replica",
+	"is_raft_leader",
+	"follower_lag_ms",
+	"ClickHouseMetrics_ReadonlyReplica",
+	"ClickHouseMetrics_ZooKeeperSession",
+	"ClickHouseMetrics_BrokenDistributedFilesToInsert",
+	"ClickHouseAsyncMetrics_ReplicasMaxAbsoluteDelay",
+	"ClickHouseAsyncMetrics_MaxPartCountForPartition",
+}
+
+// TestInfrastructureAlertRulesCoverEveryTier holds the infrastructure rule set
+// to the tiers a staging incident went unalerted on: host disk/filesystem/
+// memory/load, systemd restarts and process crashes, the Kafka KRaft quorum
+// and replication, YugabyteDB leadership, Redis, PostgreSQL and ClickHouse.
+func TestInfrastructureAlertRulesCoverEveryTier(t *testing.T) {
+	content, err := gfdash.Rules.ReadFile("rules/infrastructure.yml")
+	if err != nil {
+		t.Fatalf("infrastructure alert rules are not embedded: %v", err)
+	}
+	var doc struct {
+		Groups []struct {
+			Rules []struct {
+				Alert string `yaml:"alert"`
+			} `yaml:"rules"`
+		} `yaml:"groups"`
+	}
+	if err := yaml.Unmarshal(content, &doc); err != nil {
+		t.Fatalf("parse infrastructure.yml: %v", err)
+	}
+	present := map[string]bool{}
+	for _, group := range doc.Groups {
+		for _, rule := range group.Rules {
+			present[rule.Alert] = true
+		}
+	}
+	for _, want := range []string{
+		"HostFilesystemSpaceLow", "HostFilesystemFillingUp", "HostDiskIOLatencyHigh", "HostMemoryLow",
+		"HostMemoryPressure", "HostOOMKill", "HostLoadHigh", "HostExporterDown",
+		"SystemdServiceRestarting", "SystemdServiceRestartLoop", "SystemdUnitFailed", "HostProcessCrashed", "HostCrashScanStale",
+		"KafkaQuorumNoLeader", "KafkaQuorumElectionChurn", "KafkaNoActiveController", "KafkaOfflinePartitions",
+		"KafkaUnderMinISRPartitions", "KafkaUnderReplicatedPartitions", "KafkaControllerEventQueueSlow",
+		"YugabyteTableLeaderless", "YugabyteFollowerLagHigh",
+		"RedisDown", "RedisReplicaMasterLinkDown", "RedisPrimaryCountWrong",
+		"PostgresDown", "PostgresReplicationLagHigh",
+		"ClickHouseReadonlyReplica", "ClickHouseKeeperSessionLost", "ClickHouseReplicationDelay",
+	} {
+		if !present[want] {
+			t.Errorf("infrastructure alert rules lack %s", want)
+		}
+	}
+}
+
 func TestGrafanaDashboardQueriesReferenceKnownMetrics(t *testing.T) {
 	repoRoot := findRepoRoot(t)
 	knownMetrics := loadDeclaredMetrics(t, repoRoot)
@@ -322,6 +453,15 @@ func loadDeclaredMetrics(t *testing.T, repoRoot string) map[string]bool {
 	for _, name := range jmxExporterMetrics(t, repoRoot) {
 		metrics[name] = true
 	}
+	for _, name := range kafkaServerJMXExporterMetrics(t, repoRoot) {
+		metrics[name] = true
+	}
+	for _, name := range hostCrashScanMetrics(t, repoRoot) {
+		metrics[name] = true
+	}
+	for _, name := range infrastructureExporterMetrics {
+		metrics[name] = true
+	}
 
 	err := filepath.WalkDir(repoRoot, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -480,7 +620,8 @@ func looksLikeMetric(token string) bool {
 		"helmsman_", "navigator_", "periscope_", "privateer_", "purser_",
 		"quartermaster_", "signalman_", "skipper_", "steward_", "stream_",
 		"victoriametrics_", "vm_", "vmagent_", "vm_promscrape_", "vmalert_",
-		"kafka_connect_mirror_",
+		"kafka_connect_mirror_", "kafka_server_", "kafka_controller_", "kafka_raft_",
+		"kafka_broker_", "node_", "redis_", "pg_", "frameworks_host_", "ClickHouse",
 	}
 	for _, prefix := range prefixes {
 		if strings.HasPrefix(token, prefix) {
@@ -513,6 +654,8 @@ var promIgnoredTokens = set(
 	"query_type", "reason", "result", "selected_node", "service", "status", "stream",
 	"table", "tenant_id", "topic", "trigger_type", "type", "url",
 	"node", "service", "rate_interval",
+	"kafka_region", "redis_cluster", "node_id", "changes", "delta", "predict_linear", "time",
+	"abs", "unless", "and", "or", "max_over_time",
 )
 
 func knownMetric(metric string, known map[string]bool) bool {

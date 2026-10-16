@@ -37,3 +37,12 @@ kafka_log_segment_bytes: 1073741824
 
 # Resource limits.
 kafka_heap_opts: "-Xmx2G -Xms2G"
+
+# Prometheus JMX exporter javaagent (pinned jmx-prometheus-javaagent artifact).
+# It serves the broker or controller quorum, replication and controller-queue
+# metrics on loopback for the host-local vmagent. Brokers and controllers on
+# one host need distinct ports; the CLI passes them.
+kafka_jmx_exporter_artifact_url: ""
+kafka_jmx_exporter_artifact_checksum: ""
+kafka_jmx_exporter_dir: /opt/kafka-server-jmx-exporter
+kafka_jmx_port: 9405

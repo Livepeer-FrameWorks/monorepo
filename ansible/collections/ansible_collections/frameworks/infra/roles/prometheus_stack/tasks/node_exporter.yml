@@ -1,0 +1,155 @@
+---
+# Host exporter installed beside every vmagent (and every edge vmagent through
+# include_role tasks_from). It listens on loopback only: the host-local vmagent
+# is its sole scraper.
+- name: Validate node_exporter configuration
+  ansible.builtin.assert:
+    that:
+      - node_exporter_artifact_url | length > 0
+      - node_exporter_artifact_checksum | length > 0
+    fail_msg: "node_exporter requires the pinned node-exporter artifact URL and checksum from the release manifest"
+
+- name: Ensure node_exporter system group
+  ansible.builtin.group:
+    name: "{{ node_exporter_user }}"
+    system: true
+    state: present
+
+- name: Ensure node_exporter system user
+  ansible.builtin.user:
+    name: "{{ node_exporter_user }}"
+    group: "{{ node_exporter_user }}"
+    system: true
+    shell: /usr/sbin/nologin
+    create_home: false
+    state: present
+
+- name: Stat node_exporter install sentinel
+  ansible.builtin.stat:
+    path: "{{ node_exporter_install_sentinel }}"
+  register: node_exporter_install_sentinel_stat
+  check_mode: false
+  changed_when: false
+
+- name: Report pending node_exporter install under --check
+  ansible.builtin.debug:
+    msg: "node_exporter would install {{ node_exporter_artifact_url }}"
+  changed_when: not (node_exporter_install_sentinel_stat.stat.exists | default(false))
+  when: ansible_check_mode
+
+# The sentinel names the pinned artifact, so a version bump reinstalls and an
+# unchanged pin never downloads.
+- name: Install node_exporter artifact
+  when:
+    - not ansible_check_mode
+    - not (node_exporter_install_sentinel_stat.stat.exists | default(false))
+  block:
+    - name: Create node_exporter extract directory
+      ansible.builtin.tempfile:
+        state: directory
+        suffix: node-exporter
+      register: node_exporter_extract_dir
+
+    - name: Download node_exporter archive
+      ansible.builtin.get_url:
+        url: "{{ node_exporter_artifact_url }}"
+        dest: "{{ node_exporter_extract_dir.path }}/node_exporter.tar.gz"
+        checksum: "{{ node_exporter_artifact_checksum }}"
+        mode: "0644"
+        timeout: 120
+
+    - name: Extract node_exporter archive
+      ansible.builtin.unarchive:
+        src: "{{ node_exporter_extract_dir.path }}/node_exporter.tar.gz"
+        dest: "{{ node_exporter_extract_dir.path }}"
+        remote_src: true
+        extra_opts:
+          - --strip-components=1
+
+    - name: Install node_exporter binary
+      ansible.builtin.copy:
+        src: "{{ node_exporter_extract_dir.path }}/node_exporter"
+        dest: "{{ node_exporter_bin }}"
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0755"
+      notify: node_exporter restart
+
+    - name: Record node_exporter install sentinel
+      ansible.builtin.file:
+        path: "{{ node_exporter_install_sentinel }}"
+        state: touch
+        owner: root
+        group: root
+        mode: "0644"
+  always:
+    - name: Remove node_exporter extract directory
+      ansible.builtin.file:
+        path: "{{ node_exporter_extract_dir.path }}"
+        state: absent
+      when: node_exporter_extract_dir.path is defined
+
+- name: Ensure node_exporter textfile directory
+  ansible.builtin.file:
+    path: "{{ node_exporter_textfile_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Render node_exporter systemd unit
+  ansible.builtin.template:
+    src: node_exporter.service.j2
+    dest: /etc/systemd/system/node_exporter.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: node_exporter restart
+
+- name: Ensure node_exporter service
+  ansible.builtin.systemd:
+    name: node_exporter
+    state: started
+    enabled: true
+    daemon_reload: true
+  when: not ansible_check_mode
+
+- name: Ensure host crash scan directory
+  ansible.builtin.file:
+    path: "{{ node_exporter_crash_scan_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install host crash scan
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "{{ node_exporter_crash_scan_dir }}/{{ item }}"
+    owner: root
+    group: root
+    mode: "{{ '0755' if item is match('.*\\.sh$') else '0644' }}"
+  loop:
+    - host-crash-scan.sh
+    - host-crash-scan.awk
+
+- name: Render host crash scan units
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "/etc/systemd/system/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - frameworks-host-crash-scan.service
+    - frameworks-host-crash-scan.timer
+  notify: host crash scan timer restart
+
+- name: Ensure host crash scan timer
+  ansible.builtin.systemd:
+    name: frameworks-host-crash-scan.timer
+    state: started
+    enabled: true
+    daemon_reload: true
+  when: not ansible_check_mode

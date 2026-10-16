@@ -350,3 +350,23 @@ func TestCaddyfileForSeedRoutesArtifactRelayOnSeededEdgeDomainOnly(t *testing.T)
 		t.Fatalf("@artifact_relay hosts = %v, want exactly [%s]", hosts, edgeDomain)
 	}
 }
+
+// Caddy's reverse_proxy already sets X-Forwarded-For to the client address and
+// X-Forwarded-Proto to the scheme when no trusted_proxies are configured, and
+// warns on every config load about explicit copies of those defaults.
+func TestRenderCaddyfile_NoRedundantForwardedHeaders(t *testing.T) {
+	p := baseParams()
+	p.EdgeDomain = "edge-us-1.media-us-1.frameworks.network"
+	out, err := RenderCaddyfile(p)
+	if err != nil {
+		t.Fatalf("RenderCaddyfile: %v", err)
+	}
+	for _, line := range []string{"header_up X-Forwarded-Proto", "header_up X-Forwarded-For"} {
+		if strings.Contains(out, line) {
+			t.Fatalf("rendered Caddyfile repeats a reverse_proxy default %q:\n%s", line, out)
+		}
+	}
+	if strings.Contains(out, "trusted_proxies") {
+		t.Fatal("trusted_proxies changes the forwarded-header defaults this route relies on")
+	}
+}

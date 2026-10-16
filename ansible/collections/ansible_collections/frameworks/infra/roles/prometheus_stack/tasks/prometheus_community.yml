@@ -7,7 +7,7 @@
     state: present
   when:
     - ansible_facts.pkg_mgr == 'apt'
-    - ('prometheus' in prometheus_stack_components) or ('node_exporter' in prometheus_stack_components)
+    - "'prometheus' in prometheus_stack_components"
   # async kills a stalled apt fetch at the deadline; until re-runs it.
   register: prometheus_stack_package_attempt
   until: prometheus_stack_package_attempt is succeeded
@@ -24,12 +24,3 @@
   vars:
     prometheus_web_listen_address: "0.0.0.0:{{ prometheus_port }}"
   when: "'prometheus' in prometheus_stack_components"
-
-- name: Install node_exporter via prometheus.prometheus.node_exporter
-  ansible.builtin.include_role:
-    name: prometheus.prometheus.node_exporter
-    apply:
-      tags: [install, configure, service]
-  vars:
-    node_exporter_web_listen_address: "0.0.0.0:{{ node_exporter_port }}"
-  when: "'node_exporter' in prometheus_stack_components"

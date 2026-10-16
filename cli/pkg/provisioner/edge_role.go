@@ -348,6 +348,15 @@ func edgeRoleVars(config *EdgeProvisionConfig, remoteOS, remoteArch string) (map
 		}
 		vars["edge_vmagent_artifact_url"] = artifact.URL
 		vars["edge_vmagent_artifact_checksum"] = artifact.Checksum
+		if remoteOS == "linux" {
+			nodeExporter, err := resolveInfraArtifactFromChannel(NodeExporterArtifact, arch, config.Version, nil)
+			if err != nil {
+				return nil, fmt.Errorf("edge: resolve node-exporter artifact: %w", err)
+			}
+			vars["edge_node_exporter_artifact_url"] = nodeExporter.URL
+			vars["edge_node_exporter_artifact_checksum"] = nodeExporter.Checksum
+			vars["edge_node_exporter_port"] = NodeExporterPort
+		}
 	}
 
 	return vars, nil

@@ -8,3 +8,11 @@
   loop:
     "{{ ['prometheus', 'node_exporter', 'victoriametrics', 'vmagent', 'vmauth', 'vmalert', 'alertmanager']
     | intersect(prometheus_stack_components | map('regex_replace', '^prometheus$', 'prometheus')) }}"
+
+- name: Stop host crash scan timer
+  ansible.builtin.systemd:
+    name: frameworks-host-crash-scan.timer
+    state: stopped
+    enabled: false
+  failed_when: false
+  when: "'node_exporter' in prometheus_stack_components"

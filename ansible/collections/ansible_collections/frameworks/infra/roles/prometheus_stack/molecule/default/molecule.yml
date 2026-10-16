@@ -26,9 +26,12 @@ provisioner:
     group_vars:
       all:
         # Single-node scenario: prometheus + node_exporter only. VM binaries
-        # are artifact-pinned and exercised in the production path.
+        # are artifact-pinned and exercised in the production path; the
+        # node_exporter pin mirrors config/infrastructure.yaml.
         prometheus_stack_components: [prometheus, node_exporter]
         prometheus_version: "2.54.1"
-        node_exporter_version: "1.8.2"
+        node_exporter_version: "1.12.1"
+        node_exporter_artifact_url: "https://github.com/prometheus/node_exporter/releases/download/v1.12.1/node_exporter-1.12.1.linux-amd64.tar.gz"
+        node_exporter_artifact_checksum: "sha256:b51d8a76aa2a9156a55d501aca6276fae09e262259a5e4e831d2c2222f084e63"
 verifier:
   name: ansible

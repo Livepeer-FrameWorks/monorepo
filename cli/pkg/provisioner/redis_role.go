@@ -71,7 +71,29 @@ func redisRoleVars(ctx context.Context, host inventory.Host, config ServiceConfi
 	if q, ok := config.Metadata["redis_sentinel_quorum"].(int); ok && q > 0 {
 		vars["redis_sentinel_quorum"] = q
 	}
+	if metaString(config.Metadata, "redis_role") != "sentinel" && !metaBool(config.Metadata, "_cleanup_only", false) {
+		_, arch, err := helpers.DetectRemoteOS(ctx, host)
+		if err != nil {
+			return nil, err
+		}
+		exporter, err := helpers.ResolveArtifact(redisExporterArtifact, "linux-"+arch, platformChannelFromMetadata(config.Metadata), config.Metadata)
+		if err != nil {
+			return nil, fmt.Errorf("redis: resolve exporter artifact: %w", err)
+		}
+		vars["redis_exporter_artifact_url"] = exporter.URL
+		vars["redis_exporter_artifact_checksum"] = exporter.Checksum
+	}
 	return vars, nil
+}
+
+// redisExporterArtifact is the release-manifest infrastructure entry pinning
+// the redis_exporter installed beside every Redis/Valkey server.
+const redisExporterArtifact = "redis-exporter"
+
+// RedisExporterPort is the loopback port of the redis_exporter serving the
+// server on redisPort; the role derives the same value.
+func RedisExporterPort(redisPort int) int {
+	return redisPort + 10000
 }
 
 func redisRoleDetect(ctx context.Context, host inventory.Host, config ServiceConfig, helpers RoleBuildHelpers) (*detect.ServiceState, error) {

@@ -4167,9 +4167,104 @@ func TestBuildVMAgentScrapeTargetsIncludesYugabyte(t *testing.T) {
 	if got := scrapeTargetLabels(t, master)["port"]; got != "master" {
 		t.Fatalf("master port label = %q, want master", got)
 	}
-	for _, target := range targets {
-		if target["job_name"] == "yugabyte-tserver" {
-			t.Fatalf("yugabyte-tserver scrape should not be emitted by default: %#v", target)
+	// The tserver is the only source of per-table Raft leadership, so it is
+	// scraped, restricted to the series the alert rules read: the unfiltered
+	// endpoint returns tens of MB per scrape.
+	tserver := findScrapeTarget(t, targets, "yugabyte-tserver", "yuga-1.internal:11000")
+	if got := tserver["path"]; got != "/prometheus-metrics" {
+		t.Fatalf("tserver path = %v, want /prometheus-metrics", got)
+	}
+	if got := scrapeTargetLabels(t, tserver)["port"]; got != "tserver" {
+		t.Fatalf("tserver port label = %q, want tserver", got)
+	}
+	params, ok := tserver["params"].(map[string][]string)
+	if !ok {
+		t.Fatalf("tserver params = %#v, want a metrics filter", tserver["params"])
+	}
+	if got := params["metrics"]; len(got) != 1 || !strings.Contains(got[0], "is_raft_leader") {
+		t.Fatalf("tserver metrics filter = %v, want is_raft_leader", got)
+	}
+	if got := params["show_help"]; !slices.Equal(got, []string{"false"}) {
+		t.Fatalf("tserver show_help = %v, want false", got)
+	}
+}
+
+// Host, Kafka quorum, Redis and Postgres health only reach the alert rules
+// through these scrapes; staging lost its KRaft quorum repeatedly with no
+// alert because none of them existed.
+func TestBuildVMAgentScrapeTargetsCoverHostAndDataTiers(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Profile: "production",
+		Hosts: map[string]inventory.Host{
+			"data-1": {ExternalIP: "10.0.0.10"},
+			"data-2": {ExternalIP: "10.0.0.11"},
+			"core-1": {ExternalIP: "10.0.0.20"},
+		},
+		Infrastructure: inventory.InfrastructureConfig{
+			Postgres: &inventory.PostgresConfig{
+				Enabled: true,
+				Engine:  "yugabyte",
+				Nodes:   []inventory.PostgresNode{{Host: "data-1", ID: 1}},
+				Instances: []inventory.PostgresInstance{
+					{Name: "support", Host: "core-1", Port: 5432},
+				},
+			},
+			Kafka: &inventory.KafkaConfig{
+				Enabled:     true,
+				RegionID:    "eu-west",
+				Brokers:     []inventory.KafkaBroker{{Host: "data-1", ID: 1, Port: 9092}},
+				Controllers: []inventory.KafkaController{{Host: "data-1", ID: 101, Port: 9093}},
+				Regional: []inventory.RegionalKafkaCluster{{
+					RegionID:    "us-east",
+					Brokers:     []inventory.KafkaBroker{{Host: "data-2", ID: 11, Port: 9092}},
+					Controllers: []inventory.KafkaController{{Host: "data-2", ID: 201, Port: 9093}},
+				}},
+			},
+			Redis: &inventory.RedisConfig{
+				Enabled: true,
+				Mode:    "native",
+				Instances: []inventory.RedisInstance{
+					{Name: "foghorn", Mode: "sentinel", Host: "data-1", ReplicaHosts: []string{"data-2"}, Port: 6379, Cluster: "media-eu"},
+					{Name: "chatwoot", Host: "core-1", Port: 6380},
+				},
+			},
+		},
+	}
+
+	data1 := buildVMAgentScrapeTargets(manifest, "data-1")
+	assertUniqueScrapeJobNames(t, data1)
+	node := findScrapeTarget(t, data1, "node-exporter", "127.0.0.1:9110")
+	if got := scrapeTargetLabels(t, node)["node_id"]; got != "data-1" {
+		t.Fatalf("node-exporter node_id = %q, want data-1", got)
+	}
+	broker := findScrapeTarget(t, data1, "kafka-broker", "127.0.0.1:9405")
+	if got := scrapeTargetLabels(t, broker)["kafka_region"]; got != "eu-west" {
+		t.Fatalf("broker kafka_region = %q, want eu-west", got)
+	}
+	findScrapeTarget(t, data1, "kafka-controller", "127.0.0.1:9406")
+	redis := findScrapeTarget(t, data1, "redis-foghorn", "127.0.0.1:16379")
+	if got := scrapeTargetLabels(t, redis)["redis_cluster"]; got != "media-eu" {
+		t.Fatalf("redis redis_cluster = %q, want media-eu", got)
+	}
+
+	data2 := buildVMAgentScrapeTargets(manifest, "data-2")
+	if got := scrapeTargetLabels(t, findScrapeTarget(t, data2, "kafka-controller", "127.0.0.1:9406"))["kafka_region"]; got != "us-east" {
+		t.Fatalf("regional controller kafka_region = %q, want us-east", got)
+	}
+	findScrapeTarget(t, data2, "kafka-broker", "127.0.0.1:9405")
+	findScrapeTarget(t, data2, "redis-foghorn", "127.0.0.1:16379")
+
+	core := buildVMAgentScrapeTargets(manifest, "core-1")
+	assertUniqueScrapeJobNames(t, core)
+	findScrapeTarget(t, core, "node-exporter", "127.0.0.1:9110")
+	findScrapeTarget(t, core, "redis-chatwoot", "127.0.0.1:16380")
+	pg := findScrapeTarget(t, core, "postgres-exporter-support", "127.0.0.1:15432")
+	if got := scrapeTargetLabels(t, pg)["frameworks_service"]; got != "postgres" {
+		t.Fatalf("postgres frameworks_service = %q, want postgres", got)
+	}
+	for _, target := range core {
+		if strings.HasPrefix(target["job_name"].(string), "kafka-") {
+			t.Fatalf("core-1 runs no Kafka but got %#v", target)
 		}
 	}
 }

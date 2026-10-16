@@ -1,7 +1,17 @@
 ---
+- name: Redis | kernel memory policy
+  ansible.builtin.import_tasks: sysctl.yml
+  when: redis_role != "sentinel"
+  tags: [configure]
+
 - name: Redis | install + configure + service (via geerlingguy.redis)
   ansible.builtin.import_tasks: install.yml
   tags: [install, configure, service]
+
+- name: Redis | exporter
+  ansible.builtin.import_tasks: exporter.yml
+  tags: [install, configure, service]
+  when: redis_exporter_enabled | bool
 
 - name: Redis | flush handlers before validate
   ansible.builtin.meta: flush_handlers

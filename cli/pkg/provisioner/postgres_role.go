@@ -43,6 +43,17 @@ func postgresRoleVars(ctx context.Context, host inventory.Host, config ServiceCo
 		"postgres_instance_name":    sanitizePostgresInstanceName(firstNonEmpty(config.DeployName, "postgres")),
 	}
 
+	_, arch, err := helpers.DetectRemoteOS(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	exporter, err := helpers.ResolveArtifact(postgresExporterArtifact, "linux-"+arch, platformChannelFromMetadata(config.Metadata), config.Metadata)
+	if err != nil {
+		return nil, fmt.Errorf("postgres: resolve exporter artifact: %w", err)
+	}
+	vars["postgres_exporter_artifact_url"] = exporter.URL
+	vars["postgres_exporter_artifact_checksum"] = exporter.Checksum
+
 	if tuning, ok := config.Metadata["tuning"].(map[string]any); ok {
 		if v, ok := tuning["max_connections"].(int); ok {
 			vars["postgres_max_connections"] = v
@@ -94,6 +105,16 @@ func postgresRoleVars(ctx context.Context, host inventory.Host, config ServiceCo
 		vars["postgres_migrate_items"] = items
 	}
 	return vars, nil
+}
+
+// postgresExporterArtifact is the release-manifest infrastructure entry
+// pinning the postgres_exporter installed beside every PostgreSQL instance.
+const postgresExporterArtifact = "postgres-exporter"
+
+// PostgresExporterPort is the loopback port of the postgres_exporter serving
+// the instance on postgresPort; the role derives the same value.
+func PostgresExporterPort(postgresPort int) int {
+	return postgresPort + 10000
 }
 
 func postgresMajorVersion(version string) string {

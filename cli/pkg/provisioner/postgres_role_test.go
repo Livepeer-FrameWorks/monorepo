@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"frameworks/cli/pkg/inventory"
 )
 
 func TestPostgresRoleSuppliesArchVarsMissingFromGalaxyRole(t *testing.T) {
@@ -156,6 +158,15 @@ func TestPostgresRoleCreatesOwnerRolesWithPerDatabasePassword(t *testing.T) {
 	}
 }
 
+func postgresTestHelpers() RoleBuildHelpers {
+	return RoleBuildHelpers{
+		DetectRemoteOS: func(context.Context, inventory.Host) (string, string, error) { return "linux", "amd64", nil },
+		ResolveArtifact: func(name, _, _ string, _ map[string]any) (ResolvedArtifact, error) {
+			return ResolvedArtifact{URL: "https://example.test/" + name + ".tar.gz", Checksum: "sha256:ab"}, nil
+		},
+	}
+}
+
 func TestPostgresRoleVarsPassesStableInstanceName(t *testing.T) {
 	vars, err := postgresRoleVars(context.Background(), nilHost(), ServiceConfig{
 		DeployName: "postgres-support",
@@ -164,7 +175,7 @@ func TestPostgresRoleVarsPassesStableInstanceName(t *testing.T) {
 		Metadata: map[string]any{
 			"postgres_password": "secret",
 		},
-	}, RoleBuildHelpers{})
+	}, postgresTestHelpers())
 	if err != nil {
 		t.Fatalf("postgresRoleVars: %v", err)
 	}
@@ -179,7 +190,7 @@ func TestPostgresRoleVarsUsesMajorPackageVersion(t *testing.T) {
 		Metadata: map[string]any{
 			"postgres_password": "secret",
 		},
-	}, RoleBuildHelpers{})
+	}, postgresTestHelpers())
 	if err != nil {
 		t.Fatalf("postgresRoleVars: %v", err)
 	}
@@ -205,7 +216,7 @@ infrastructure:
 			"gitops_repository": repo,
 			"platform_channel":  "stable",
 		},
-	}, RoleBuildHelpers{})
+	}, postgresTestHelpers())
 	if err != nil {
 		t.Fatalf("postgresRoleVars: %v", err)
 	}
@@ -223,7 +234,7 @@ func TestPostgresRoleVarsRequestsChatwootExtensions(t *testing.T) {
 				{"name": "chatwoot", "owner": "chatwoot"},
 			},
 		},
-	}, RoleBuildHelpers{})
+	}, postgresTestHelpers())
 	if err != nil {
 		t.Fatalf("postgresRoleVars: %v", err)
 	}
@@ -250,7 +261,7 @@ func TestPostgresRoleVarsPassesDatabaseOwnerPassword(t *testing.T) {
 				{"name": "foghorn_eu", "owner": "foghorn_eu", "password": "owner-secret", "runtime_role": "foghorn_app", "runtime_password": "runtime-secret"},
 			},
 		},
-	}, RoleBuildHelpers{})
+	}, postgresTestHelpers())
 	if err != nil {
 		t.Fatalf("postgresRoleVars: %v", err)
 	}
@@ -278,7 +289,7 @@ func TestPostgresRoleVarsRejectsRuntimeOwnerCollision(t *testing.T) {
 				"name": "quartermaster", "owner": "quartermaster", "runtime_role": "quartermaster",
 			}},
 		},
-	}, RoleBuildHelpers{})
+	}, postgresTestHelpers())
 	if err == nil || !strings.Contains(err.Error(), "runtime role \"quartermaster\" must differ from owner") {
 		t.Fatalf("postgresRoleVars() error = %v, want owner/runtime collision", err)
 	}
@@ -294,7 +305,7 @@ func TestPostgresRoleVarsRejectsRuntimeOwnerPasswordCollision(t *testing.T) {
 				"name": "quartermaster", "owner": "quartermaster", "runtime_role": "quartermaster_runtime",
 			}},
 		},
-	}, RoleBuildHelpers{})
+	}, postgresTestHelpers())
 	if err == nil || !strings.Contains(err.Error(), "runtime password must differ from owner password") {
 		t.Fatalf("postgresRoleVars() error = %v, want password collision", err)
 	}
@@ -312,7 +323,7 @@ func TestPostgresRoleVarsRejectsMissingRuntimePassword(t *testing.T) {
 				"name": "quartermaster", "owner": "quartermaster", "runtime_role": "quartermaster_runtime",
 			}},
 		},
-	}, RoleBuildHelpers{})
+	}, postgresTestHelpers())
 	if err == nil || !strings.Contains(err.Error(), "runtime role \"quartermaster_runtime\" has no runtime password") {
 		t.Fatalf("postgresRoleVars() error = %v, want missing runtime password", err)
 	}

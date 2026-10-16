@@ -119,7 +119,7 @@ func (c *PostgresChecker) Check(address string, port int) *CheckResult {
 
 	result.Latency = time.Since(start)
 
-	// Execute simple query
+	queryStart := time.Now()
 	var one int
 	if err := db.QueryRowContext(ctx, "SELECT 1").Scan(&one); err != nil {
 		result.OK = false
@@ -127,6 +127,8 @@ func (c *PostgresChecker) Check(address string, port int) *CheckResult {
 		result.Error = fmt.Sprintf("query failed: %v", err)
 		return result
 	}
+	queryLatency := time.Since(queryStart)
+	result.Metadata["query_latency"] = queryLatency.String()
 
 	// Check if it's YugabyteDB or vanilla Postgres
 	var version string
@@ -145,11 +147,26 @@ func (c *PostgresChecker) Check(address string, port int) *CheckResult {
 		result.Metadata["active_connections"] = fmt.Sprintf("%d", activeConns)
 	}
 
+	classifyPostgresLatency(result, queryLatency)
+	return result
+}
+
+// PostgresSlowQueryThreshold is the SELECT 1 round trip past which a reachable
+// database counts as degraded.
+const PostgresSlowQueryThreshold = time.Second
+
+// classifyPostgresLatency marks a connected database healthy, or degraded when
+// SELECT 1 took longer than PostgresSlowQueryThreshold.
+func classifyPostgresLatency(result *CheckResult, queryLatency time.Duration) {
+	if queryLatency > PostgresSlowQueryThreshold {
+		result.OK = false
+		result.Status = "degraded"
+		result.Error = fmt.Sprintf("SELECT 1 took %v (limit %v; connect %v)", queryLatency.Round(time.Millisecond), PostgresSlowQueryThreshold, result.Latency.Round(time.Millisecond))
+		return
+	}
 	result.OK = true
 	result.Status = "healthy"
-	result.Message = fmt.Sprintf("Connected successfully (latency: %v)", result.Latency)
-
-	return result
+	result.Message = fmt.Sprintf("Connected successfully (connect: %v, SELECT 1: %v)", result.Latency.Round(time.Millisecond), queryLatency.Round(time.Millisecond))
 }
 
 func (c *PostgresChecker) connString(address string, port int, database string) string {

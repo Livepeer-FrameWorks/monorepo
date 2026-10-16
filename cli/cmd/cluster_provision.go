@@ -3343,8 +3343,8 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 					config.Metadata["controller_port"] = controllerPort
 				}
 
-				if len(cluster.Topics) > 0 {
-					config.Metadata["topics"] = kafkaTopicsToMetadata(cluster.Topics)
+				if topics := append(slices.Clone(cluster.Topics), mirroredTopicDeclarations(manifest, cluster)...); len(topics) > 0 {
+					config.Metadata["topics"] = kafkaTopicsToMetadata(topics)
 				}
 				if brokerCount := len(cluster.Brokers); brokerCount > 0 {
 					config.Metadata["broker_count"] = brokerCount
@@ -3840,6 +3840,10 @@ func ensureProvisionGeoIP(ctx context.Context, out io.Writer, manifest *inventor
 	return nil
 }
 
+// yugabyteTServerScrapeMetrics is the yb-tserver /prometheus-metrics
+// "metrics" filter: the comma-separated metric names the scrape returns.
+const yugabyteTServerScrapeMetrics = "is_raft_leader,follower_lag_ms,hybrid_clock_skew"
+
 func buildVMAgentScrapeTargets(manifest *inventory.Manifest, hostName string) []map[string]any {
 	if manifest == nil || hostName == "" {
 		return nil
@@ -3885,11 +3889,12 @@ func buildVMAgentScrapeTargets(manifest *inventory.Manifest, hostName string) []
 		address       string
 		path          string
 		labels        map[string]string
+		params        map[string][]string
 		maxScrapeSize int
 	}
 
 	var targets []target
-	addTarget := func(name, address string, port int, path string, labels map[string]string, maxScrapeSize ...int) {
+	addParamTarget := func(name, address string, port int, path string, labels map[string]string, params map[string][]string, maxScrapeSize int) {
 		if port == 0 {
 			return
 		}
@@ -3899,17 +3904,17 @@ func buildVMAgentScrapeTargets(manifest *inventory.Manifest, hostName string) []
 		if path == "" {
 			path = "/metrics"
 		}
-		var scrapeSize int
-		if len(maxScrapeSize) > 0 {
-			scrapeSize = maxScrapeSize[0]
-		}
 		targets = append(targets, target{
 			name:          name,
 			address:       fmt.Sprintf("%s:%d", address, port),
 			path:          path,
 			labels:        labels,
-			maxScrapeSize: scrapeSize,
+			params:        params,
+			maxScrapeSize: maxScrapeSize,
 		})
+	}
+	addTarget := func(name, address string, port int, path string, labels map[string]string) {
+		addParamTarget(name, address, port, path, labels, nil, 0)
 	}
 	addServiceTarget := func(name string, svc inventory.ServiceConfig, source string) {
 		if !svc.Enabled {
@@ -3965,23 +3970,104 @@ func buildVMAgentScrapeTargets(manifest *inventory.Manifest, hostName string) []
 		addServiceTarget(name, svc, "observability")
 	}
 
-	if pg := manifest.Infrastructure.Postgres; pg != nil && pg.Enabled && pg.IsYugabyte() {
-		for _, node := range pg.Nodes {
-			if node.Host != hostName {
+	infraLabels := func(service string) map[string]string {
+		return map[string]string{
+			"frameworks_service": service,
+			"frameworks_source":  "infrastructure",
+			"node_id":            hostName,
+		}
+	}
+
+	// Every vmagent host runs node_exporter (installed with vmagent) and its
+	// host crash scan.
+	addTarget("node-exporter", "127.0.0.1", provisioner.NodeExporterPort, "/metrics", map[string]string{
+		"frameworks_service": "node-exporter",
+		"frameworks_source":  "host",
+		"node_id":            hostName,
+	})
+
+	for _, deployment := range manifest.SQLDeployments() {
+		pg := deployment.Config
+		if pg.IsYugabyte() {
+			for _, node := range pg.Nodes {
+				if node.Host != hostName {
+					continue
+				}
+				address := manifestMeshHostname(manifest, hostName)
+				if address == "" {
+					address = "127.0.0.1"
+				}
+				masterLabels := infraLabels("yugabyte")
+				masterLabels["port"] = "master"
+				addTarget("yugabyte-master", address, 7000, "/prometheus-metrics", masterLabels)
+				// The full tserver endpoint carries every per-table series (tens
+				// of MB per scrape on a few hundred tables), so the scrape asks
+				// for the per-table Raft leadership and follower lag plus clock
+				// skew the alert rules read.
+				tserverLabels := infraLabels("yugabyte")
+				tserverLabels["port"] = "tserver"
+				addParamTarget("yugabyte-tserver", address, 11000, "/prometheus-metrics", tserverLabels, map[string][]string{
+					"show_help": {"false"},
+					"metrics":   {yugabyteTServerScrapeMetrics},
+				}, 0)
+			}
+		} else if pg.Host == hostName && pg.Mode != "docker" {
+			addTarget("postgres-exporter", "127.0.0.1", provisioner.PostgresExporterPort(pg.EffectivePort()), "/metrics", infraLabels("postgres"))
+		}
+		for _, inst := range pg.Instances {
+			if inst.Host != hostName || inst.Mode == "docker" {
 				continue
 			}
-			address := manifestMeshHostname(manifest, hostName)
-			if address == "" {
-				address = "127.0.0.1"
+			port := inst.Port
+			if port == 0 {
+				port = 5432
 			}
-			baseLabels := map[string]string{
-				"frameworks_service": "yugabyte",
-				"frameworks_source":  "infrastructure",
-				"node_id":            hostName,
+			labels := infraLabels("postgres")
+			labels["frameworks_instance"] = inst.Name
+			addTarget("postgres-exporter-"+inst.Name, "127.0.0.1", provisioner.PostgresExporterPort(port), "/metrics", labels)
+		}
+	}
+
+	if kafka := manifest.Infrastructure.Kafka; kafka != nil && kafka.Enabled {
+		addKafka := func(regionID string, brokers []inventory.KafkaBroker, controllers []inventory.KafkaController) {
+			for _, broker := range brokers {
+				if broker.Host != hostName {
+					continue
+				}
+				labels := infraLabels("kafka")
+				labels["kafka_region"] = regionID
+				addTarget("kafka-broker", "127.0.0.1", provisioner.KafkaBrokerJMXPort, "/metrics", labels)
 			}
-			masterLabels := maps.Clone(baseLabels)
-			masterLabels["port"] = "master"
-			addTarget("yugabyte-master", address, 7000, "/prometheus-metrics", masterLabels)
+			for _, controller := range controllers {
+				if controller.Host != hostName {
+					continue
+				}
+				labels := infraLabels("kafka-controller")
+				labels["kafka_region"] = regionID
+				addTarget("kafka-controller", "127.0.0.1", provisioner.KafkaControllerJMXPort, "/metrics", labels)
+			}
+		}
+		addKafka(kafka.RegionID, kafka.Brokers, kafka.Controllers)
+		for _, regional := range kafka.Regional {
+			addKafka(regional.RegionID, regional.Brokers, regional.Controllers)
+		}
+	}
+
+	if redis := manifest.Infrastructure.Redis; redis != nil && redis.Enabled && redis.Mode != "docker" {
+		for _, inst := range redis.Instances {
+			if inst.Host != hostName && !slices.Contains(inst.ReplicaHosts, hostName) {
+				continue
+			}
+			port := inst.Port
+			if port == 0 {
+				port = 6379
+			}
+			labels := infraLabels("redis")
+			labels["frameworks_instance"] = inst.Name
+			if inst.Cluster != "" {
+				labels["redis_cluster"] = inst.Cluster
+			}
+			addTarget("redis-"+inst.Name, "127.0.0.1", provisioner.RedisExporterPort(port), "/metrics", labels)
 		}
 	}
 	if ch := manifest.Infrastructure.ClickHouse; ch != nil && ch.Enabled && ch.HasHost(hostName) {
@@ -4022,6 +4108,9 @@ func buildVMAgentScrapeTargets(manifest *inventory.Manifest, hostName string) []
 		}
 		if tgt.maxScrapeSize > 0 {
 			item["max_scrape_size"] = tgt.maxScrapeSize
+		}
+		if len(tgt.params) > 0 {
+			item["params"] = tgt.params
 		}
 		result = append(result, item)
 	}

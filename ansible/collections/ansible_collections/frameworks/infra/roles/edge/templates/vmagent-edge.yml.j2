@@ -8,6 +8,8 @@
     service by name. Caddy's admin endpoint is a unix socket inside the
     container, so there is no caddy scrape in container mode.
   MistServer exposes Prometheus metrics from its controller listener on 4242.
+  Native edges also run node_exporter and the host crash scan on loopback
+  (prometheus_stack's node_exporter tasks).
   external_labels stamp cluster and region on every series, sorted by key
   with empty values omitted, exactly like edgeVMAgentExternalLabels.
 #}
@@ -54,4 +56,13 @@ scrape_configs:
           frameworks_mode: "edge"
           frameworks_node: "{{ edge_node_id }}"
           frameworks_service: "caddy"
+  - job_name: edge-node-exporter
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - "127.0.0.1:{{ edge_node_exporter_port }}"
+        labels:
+          frameworks_mode: "edge"
+          frameworks_node: "{{ edge_node_id }}"
+          frameworks_service: "node-exporter"
 {% endif %}

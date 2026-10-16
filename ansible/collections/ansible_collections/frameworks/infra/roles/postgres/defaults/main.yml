@@ -9,6 +9,10 @@ postgres_instance_name: postgres
 postgres_listen_addresses: "*"
 postgres_port: 5432
 
+# Pinned postgres-exporter release-manifest artifact; the CLI passes it.
+postgres_exporter_artifact_url: ""
+postgres_exporter_artifact_checksum: ""
+
 # Paths mirror the Debian/Ubuntu package defaults that geerlingguy.postgresql
 # uses — explicit here so templates that reference them stay portable when
 # we extend to RHEL/Arch.

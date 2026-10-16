@@ -1,0 +1,16 @@
+[Unit]
+Description=redis_exporter for {{ redis_service_name }}
+After=network-online.target {{ redis_service_name }}.service
+Wants=network-online.target
+
+[Service]
+DynamicUser=yes
+EnvironmentFile={{ redis_exporter_env_path }}
+ExecStart={{ redis_exporter_bin }} \
+  --web.listen-address=127.0.0.1:{{ redis_exporter_port }} \
+  --redis.addr=redis://{{ '[' ~ redis_local_host ~ ']' if ':' in redis_local_host else redis_local_host }}:{{ redis_port }}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

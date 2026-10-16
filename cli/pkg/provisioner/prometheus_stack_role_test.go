@@ -5,21 +5,22 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
 	"frameworks/cli/pkg/inventory"
 )
 
-func alertingTestHelpers(t *testing.T, wantArtifact string) RoleBuildHelpers {
+func alertingTestHelpers(t *testing.T, wantArtifacts ...string) RoleBuildHelpers {
 	t.Helper()
 	return RoleBuildHelpers{
 		DetectRemoteOS: func(context.Context, inventory.Host) (string, string, error) {
 			return "linux", "amd64", nil
 		},
 		ResolveArtifact: func(name, arch, channel string, metadata map[string]any) (ResolvedArtifact, error) {
-			if name != wantArtifact {
-				t.Fatalf("ResolveArtifact name = %q, want %q", name, wantArtifact)
+			if !slices.Contains(wantArtifacts, name) {
+				t.Fatalf("ResolveArtifact name = %q, want one of %q", name, wantArtifacts)
 			}
 			return ResolvedArtifact{URL: "https://example.test/" + name + ".tar.gz", Checksum: "sha256:" + name, Version: "vtest"}, nil
 		},
@@ -34,7 +35,7 @@ func TestPrometheusStackRoleVarsPassVMAgentExternalLabels(t *testing.T) {
 			"platform_channel": "stable",
 			"external_labels":  labels,
 		},
-	}, alertingTestHelpers(t, "vmagent"))
+	}, alertingTestHelpers(t, "vmagent", NodeExporterArtifact))
 	if err != nil {
 		t.Fatalf("prometheusStackRoleVars: %v", err)
 	}

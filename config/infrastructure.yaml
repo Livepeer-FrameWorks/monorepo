@@ -122,8 +122,9 @@ infrastructure:
         url: https://github.com/prometheus/alertmanager/releases/download/v0.34.0/alertmanager-0.34.0.linux-arm64.tar.gz
         checksum: sha256:a96ef16598ddc58e84d28167b3352b30e3205698d76c56ef467e4504d7664da4
 
-  # Prometheus JMX exporter javaagent loaded into MirrorMaker2 workers. The
-  # jar is JVM bytecode, so both architectures pin the same artifact.
+  # Prometheus JMX exporter javaagent loaded into Kafka brokers, KRaft
+  # controllers and MirrorMaker2 workers. The jar is JVM bytecode, so both
+  # architectures pin the same artifact.
   - name: jmx-prometheus-javaagent
     version: "1.6.0"
     artifacts:
@@ -133,6 +134,42 @@ infrastructure:
       - arch: linux-arm64
         url: https://github.com/prometheus/jmx_exporter/releases/download/1.6.0/jmx_prometheus_javaagent-1.6.0.jar
         checksum: sha256:a95983fd96e865d2bcdf911cc500e7c82808c27ab9fd226bf96732b6c3d8c46e
+
+  # Host exporter installed beside every vmagent and edge vmagent: disk,
+  # filesystem, memory, load, systemd unit state and restart counters, plus the
+  # textfile collector that carries the host crash scan.
+  - name: node-exporter
+    version: "1.12.1"
+    artifacts:
+      - arch: linux-amd64
+        url: https://github.com/prometheus/node_exporter/releases/download/v1.12.1/node_exporter-1.12.1.linux-amd64.tar.gz
+        checksum: sha256:b51d8a76aa2a9156a55d501aca6276fae09e262259a5e4e831d2c2222f084e63
+      - arch: linux-arm64
+        url: https://github.com/prometheus/node_exporter/releases/download/v1.12.1/node_exporter-1.12.1.linux-arm64.tar.gz
+        checksum: sha256:ad35b605f9954b9f1ffddf5ba054bdc5a98d790b9eae5291e1eeb83f1ecbd0e7
+
+  # Per-instance Redis/Valkey exporter installed beside every non-Sentinel
+  # instance.
+  - name: redis-exporter
+    version: "1.94.0"
+    artifacts:
+      - arch: linux-amd64
+        url: https://github.com/oliver006/redis_exporter/releases/download/v1.94.0/redis_exporter-v1.94.0.linux-amd64.tar.gz
+        checksum: sha256:eaf433a64e6418235b25d4ec815d64759898f314d64dbb1fb074ca354f81b18b
+      - arch: linux-arm64
+        url: https://github.com/oliver006/redis_exporter/releases/download/v1.94.0/redis_exporter-v1.94.0.linux-arm64.tar.gz
+        checksum: sha256:a0b6bd03f1d3fbbb60d74690d7553cf8ef0614d2e1a457d81fa5f72d63d2de21
+
+  # Exporter installed beside every vanilla PostgreSQL instance.
+  - name: postgres-exporter
+    version: "0.20.1"
+    artifacts:
+      - arch: linux-amd64
+        url: https://github.com/prometheus-community/postgres_exporter/releases/download/v0.20.1/postgres_exporter-0.20.1.linux-amd64.tar.gz
+        checksum: sha256:89d4f7e7920cad48fdc3133f789556ef5253c330a9f5fdace3bdb6344c0a8b5a
+      - arch: linux-arm64
+        url: https://github.com/prometheus-community/postgres_exporter/releases/download/v0.20.1/postgres_exporter-0.20.1.linux-arm64.tar.gz
+        checksum: sha256:d5d86fb98bb1f26b088d1a6fda07fd6b6f035cb5d40492f75ec3bfebb5ddfe9d
 
   - name: grafana
     version: "13.0.1"

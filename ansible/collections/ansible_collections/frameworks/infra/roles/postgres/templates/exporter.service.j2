@@ -1,0 +1,16 @@
+[Unit]
+Description=postgres_exporter for {{ postgres_service_name }}
+After=network-online.target {{ postgres_service_name }}.service
+Wants=network-online.target
+
+[Service]
+User=postgres
+Group=postgres
+Environment="DATA_SOURCE_NAME=postgresql://postgres@:{{ postgres_port }}/postgres?host=/var/run/postgresql&sslmode=disable"
+ExecStart={{ postgres_exporter_bin }} \
+  --web.listen-address=127.0.0.1:{{ postgres_exporter_port }}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
