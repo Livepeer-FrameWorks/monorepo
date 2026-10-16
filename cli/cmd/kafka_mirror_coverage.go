@@ -16,13 +16,13 @@ import (
 
 // kafkaEndOffsetsCommand lists the latest offset of every partition of the
 // named topics on the local broker. It only reads broker metadata.
-func kafkaEndOffsetsCommand(mode string, port int, topics []string) string {
+func kafkaEndOffsetsCommand(mode, bootstrap string, topics []string) string {
 	quoted := make([]string, len(topics))
 	for i, topic := range topics {
 		quoted[i] = regexp.QuoteMeta(topic)
 	}
 	pattern := "^(" + strings.Join(quoted, "|") + ")$"
-	return kafkaToolCommand(mode, port, "kafka-get-offsets", "--time -1 --topic "+ssh.ShellQuote(pattern))
+	return kafkaToolCommand(mode, bootstrap, "kafka-get-offsets", "--time -1 --topic "+ssh.ShellQuote(pattern))
 }
 
 // parseKafkaEndOffsets sums kafka-get-offsets output (topic:partition:offset
@@ -164,7 +164,7 @@ func readClusterEndOffsets(ctx context.Context, manifest *inventory.Manifest, al
 	}
 	sorted := append([]string(nil), topics...)
 	sort.Strings(sorted)
-	result, err := runner.Run(ctx, kafkaEndOffsetsCommand(mode, port, sorted))
+	result, err := runner.Run(ctx, kafkaEndOffsetsCommand(mode, kafkaLocalBootstrap(host, port), sorted))
 	if err != nil || result == nil || result.ExitCode != 0 {
 		return nil, fmt.Errorf("%s: %s", broker.Host, diagnosticCommandError(result, err))
 	}

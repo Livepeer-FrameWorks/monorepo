@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -16,7 +17,6 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 )
 
 // MonitorConfig holds Cloudflare health monitor settings
@@ -202,43 +202,27 @@ func isGranularEdgeService(serviceType string) bool {
 	return false
 }
 
-// defaultServicePorts returns the default HTTP health check port for each service type,
-// sourced from the canonical servicedefs registry where possible.
+// edgeMonitorServiceTypes are the service types whose load-balancer monitor
+// probes the edge node itself. Every other type is a platform service behind
+// its host's reverse proxy, whose service port listens only on loopback and the
+// WireGuard address, so its monitor probes the ingress (ensureMonitor).
+var edgeMonitorServiceTypes = []string{"edge", "edge-egress", "edge-ingest", "edge-storage", "edge-processing"}
+
+// defaultServicePorts returns the health check port for each edge service type.
 func defaultServicePorts() map[string]int {
-	ports := map[string]int{
-		"edge":            18008,
-		"edge-egress":     18008,
-		"edge-ingest":     18008,
-		"edge-storage":    18008,
-		"edge-processing": 18008,
-	}
-	for _, name := range pkgdns.ManagedServiceTypes() {
-		if _, exists := ports[name]; exists {
-			continue
-		}
-		if svc, ok := servicedefs.Lookup(name); ok {
-			ports[name] = svc.DefaultPort
-		}
+	ports := make(map[string]int, len(edgeMonitorServiceTypes))
+	for _, e := range edgeMonitorServiceTypes {
+		ports[e] = 18008
 	}
 	return ports
 }
 
-// defaultServiceHealthPaths returns the load-balancer monitor path for each service type. Edge types probe the edge
-// ingress's /health. Platform services use the fleet-wide readiness path: a pool can mix releases during a rolling
-// upgrade and one monitor covers every origin, so the path is /ready only once every supported release serves it
-// (servicedefs.ReadySince unset) and liveness before that.
+// defaultServiceHealthPaths returns the load-balancer monitor path for each edge service type: the edge ingress's
+// /health.
 func defaultServiceHealthPaths() map[string]string {
-	paths := make(map[string]string)
-	for _, e := range []string{"edge", "edge-egress", "edge-ingest", "edge-storage", "edge-processing"} {
+	paths := make(map[string]string, len(edgeMonitorServiceTypes))
+	for _, e := range edgeMonitorServiceTypes {
 		paths[e] = "/health"
-	}
-	for _, name := range pkgdns.ManagedServiceTypes() {
-		if _, exists := paths[name]; exists {
-			continue
-		}
-		if svc, ok := servicedefs.Lookup(name); ok && svc.ReadinessPath() != "" {
-			paths[name] = svc.ReadinessPath()
-		}
 	}
 	return paths
 }
@@ -1772,10 +1756,12 @@ func (m *DNSManager) ensureMonitor(serviceType string) (string, error) {
 	monitorType := "http"
 	expectedCodes := "200"
 	followRedirects := false
-	if serviceType == rootIngressPoolServiceType {
+	if serviceType == rootIngressPoolServiceType || !slices.Contains(edgeMonitorServiceTypes, serviceType) {
 		// Probe the ingress /health endpoint, not "/": the root path is real
 		// traffic (redirected to HTTPS by the ingress), while /health answers
-		// 2xx directly on :80.
+		// 2xx directly on :80. A platform service's own port answers only on
+		// loopback and the WireGuard address, never at the origin's external
+		// IP the monitor dials.
 		path = "/health"
 		port = 80
 		expectedCodes = "2xx"

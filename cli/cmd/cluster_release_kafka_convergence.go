@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"frameworks/cli/pkg/orchestrator"
+	"frameworks/cli/pkg/ssh"
 )
 
 // Release Kafka convergence applies the kafka role to every controller and
@@ -183,7 +184,7 @@ type sshKafkaReleaseOps struct {
 const kafkaReleaseHealthScript = `set -u
 bin=/opt/kafka/bin
 export KAFKA_HEAP_OPTS="-Xms64m -Xmx256m" KAFKA_JMX_OPTS="-Djava.awt.headless=true" JMX_PORT=
-server=127.0.0.1:%d
+server=%s
 echo "== quorum"
 "$bin/kafka-metadata-quorum.sh" --bootstrap-server "$server" describe --replication || exit 1
 echo "== under-replicated"
@@ -207,7 +208,7 @@ func (o sshKafkaReleaseOps) Health(ctx context.Context, broker *orchestrator.Tas
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
-	result, err := o.c.pool.Run(probeCtx, sshConfigFor(host), fmt.Sprintf(kafkaReleaseHealthScript, port))
+	result, err := o.c.pool.Run(probeCtx, sshConfigFor(host), fmt.Sprintf(kafkaReleaseHealthScript, ssh.ShellQuote(kafkaLocalBootstrap(host, port))))
 	if err != nil {
 		return kafkaReleaseHealth{}, err
 	}

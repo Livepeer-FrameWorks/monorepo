@@ -223,6 +223,7 @@ func main() {
 		Service:    "periscope-ingest",
 		Logger:     logger,
 		Ready:      readiness,
+		BindAddrs:  cfg.BindAddrs,
 		HTTP:       []server.HTTPListener{{Name: "http", Port: cfg.Port, Handler: router}},
 		OnShutdown: []func(context.Context){shutdownConsumers},
 	})

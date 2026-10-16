@@ -17,6 +17,7 @@ import (
 //
 //configref:service skipper cmd=cmd/skipper
 type Skipper struct {
+	config.ListenAddrs
 	config.HTTPListen
 	config.GRPCListen
 	config.HTTPRuntime

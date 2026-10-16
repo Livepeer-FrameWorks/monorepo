@@ -19,6 +19,7 @@ import (
 //
 //configref:service navigator cmd=cmd/navigator
 type Navigator struct {
+	config.ListenAddrs
 	config.HTTPRuntime
 	config.Logging
 	config.GRPCMetadataPolicy

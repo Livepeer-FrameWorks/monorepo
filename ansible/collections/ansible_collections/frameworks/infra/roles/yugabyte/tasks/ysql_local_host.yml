@@ -1,0 +1,24 @@
+---
+# Local admin tasks connect to the address the running YSQL listener accepts
+# on and the HBA trusts for the superuser: loopback while an older tserver
+# still binds every interface (its HBA trusted the superuser from 127.0.0.1),
+# otherwise the node address tserver.conf.j2 binds. Loopback is tried first,
+# so a listener on every interface is reached the way its HBA expects.
+- name: Resolve the local YSQL listener address
+  ansible.builtin.shell: |
+    for host in 127.0.0.1 {{ yugabyte_node_address | quote }}; do
+      if timeout 3 bash -c "exec 3<>/dev/tcp/${host}/{{ yugabyte_ysql_port }}" 2>/dev/null; then
+        echo "${host}"
+        exit 0
+      fi
+    done
+    echo {{ yugabyte_node_address | quote }}
+  args:
+    executable: /bin/bash
+  register: yugabyte_ysql_listener
+  changed_when: false
+  check_mode: false
+
+- name: Record the local YSQL host
+  ansible.builtin.set_fact:
+    yugabyte_ysql_local_host: "{{ yugabyte_ysql_listener.stdout | trim }}"

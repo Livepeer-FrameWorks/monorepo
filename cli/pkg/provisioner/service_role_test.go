@@ -61,7 +61,7 @@ func TestServiceComposeVarsUsesSeparateContainerPortAndHealthPath(t *testing.T) 
 		ContainerPort: 3000,
 		HealthPath:    "/api/health",
 		DefaultImage:  "metabase/metabase:v0.59.1",
-	}, inventory.Host{Name: "central-eu-1"}, ServiceConfig{
+	}, inventory.Host{Name: "central-eu-1", WireguardIP: "10.88.0.5"}, ServiceConfig{
 		Mode:     "docker",
 		Metadata: map[string]any{},
 	}, RoleBuildHelpers{})
@@ -201,7 +201,7 @@ func TestServiceComposeVarsMapsMetabasePostgresEnv(t *testing.T) {
 		ContainerPort: 3000,
 		HealthPath:    "/api/health",
 		DefaultImage:  "metabase/metabase:v0.59.1",
-	}, inventory.Host{Name: "central-eu-1"}, ServiceConfig{
+	}, inventory.Host{Name: "central-eu-1", WireguardIP: "10.88.0.5"}, ServiceConfig{
 		Mode: "docker",
 		EnvVars: map[string]string{
 			"DATABASE_HOST":     "127.0.0.1",
@@ -222,7 +222,7 @@ func TestServiceComposeVarsMapsMetabasePostgresEnv(t *testing.T) {
 	}
 	for key, want := range map[string]any{
 		"MB_DB_TYPE":   "postgres",
-		"MB_DB_HOST":   "host.docker.internal",
+		"MB_DB_HOST":   "10.88.0.5",
 		"MB_DB_PORT":   "5432",
 		"MB_DB_DBNAME": "metabase",
 		"MB_DB_USER":   "metabase",
@@ -237,7 +237,7 @@ func TestServiceComposeVarsMapsMetabasePostgresEnv(t *testing.T) {
 		t.Fatalf("compose_stack_service got %T, want map[string]any", vars["compose_stack_service"])
 	}
 	assertStringSlice(t, service["volumes"], []string{"/var/lib/frameworks/metabase:/metabase-data", "./metabase/log4j2.xml:/etc/metabase/log4j2.xml:ro"})
-	assertStringSlice(t, service["extra_hosts"], []string{"host.docker.internal:host-gateway"})
+	assertStringSlice(t, service["extra_hosts"], []string{})
 	wantStateDirs := []map[string]string{{
 		"path":  "/var/lib/frameworks/metabase",
 		"owner": "2000",
@@ -254,7 +254,7 @@ func TestServiceComposeVarsRunsMetabaseLoggersAtInfo(t *testing.T) {
 		ServiceName:  "metabase",
 		DefaultPort:  3001,
 		DefaultImage: "metabase/metabase:v0.59.1",
-	}, inventory.Host{Name: "central-eu-1"}, ServiceConfig{
+	}, inventory.Host{Name: "central-eu-1", WireguardIP: "10.88.0.5"}, ServiceConfig{
 		Mode:     "docker",
 		EnvVars:  map[string]string{"JAVA_OPTS": "-Xmx2g"},
 		Metadata: map[string]any{},
@@ -1010,45 +1010,71 @@ func TestLivepeerGatewayTelemetrySpoolIsAManagedStateDir(t *testing.T) {
 	}
 }
 
-// Bridge sits behind the host's nginx, which proxies to 127.0.0.1 and to the
-// peers' mesh addresses. Its listener must not answer on the LAN or public
-// interface, where it would bypass TLS and the proxy's client-IP headers.
-func TestServiceNativeVarsBindsBridgeToLoopbackAndMesh(t *testing.T) {
-	render := func(host inventory.Host, env map[string]string) map[string]string {
+// Every FrameWorks Go service sits behind the host's reverse proxy or is
+// dialed by mesh peers. A native listener on the LAN or public interface
+// would bypass the proxy's TLS and client-IP headers, so the native render
+// binds every one to loopback and the host's WireGuard address. A service
+// whose typed configuration has no BIND_ADDRS would bind every interface.
+func TestServiceNativeVarsBindsEveryGoServiceToLoopbackAndMesh(t *testing.T) {
+	render := func(serviceName string, host inventory.Host, env map[string]string) map[string]string {
 		t.Helper()
-		vars, err := serviceNativeVars(context.Background(), ServiceRoleConfig{
-			ServiceName: "bridge",
-			DefaultPort: 18000,
-		}, host, ServiceConfig{
+		vars, err := serviceNativeVars(context.Background(), ServiceRoleConfig{ServiceName: serviceName, DefaultPort: 18000}, host, ServiceConfig{
 			Mode:      "native",
-			BinaryURL: "http://example.invalid/bridge.tar.gz",
+			BinaryURL: "http://example.invalid/" + serviceName + ".tar.gz",
 			EnvVars:   env,
 			Metadata:  map[string]any{},
 		}, RoleBuildHelpers{})
 		if err != nil {
-			t.Fatalf("serviceNativeVars: %v", err)
+			t.Fatalf("serviceNativeVars %s: %v", serviceName, err)
 		}
 		return stringMapFromAny(vars["go_service_env"])
 	}
+	// Services the schema does not describe are not FrameWorks Go binaries:
+	// go-livepeer binds its own http_addr/cli_addr flags, and the interface
+	// apps and Grafana/Metabase run only as Compose stacks.
+	notGoBinaries := map[string]bool{
+		"livepeer-gateway": true, "livepeer-signer": true, "chartroom": true, "foredeck": true,
+		"logbook": true, "metabase": true, "grafana": true,
+	}
+	meshHost := inventory.Host{Name: "regional-eu-1", WireguardIP: "10.88.0.1"}
+	for _, serviceName := range genericServiceRoles {
+		if notGoBinaries[serviceName] {
+			if ReadsBindAddrs(serviceName) {
+				t.Fatalf("%s is listed as not a FrameWorks Go binary but reads BIND_ADDRS", serviceName)
+			}
+			continue
+		}
+		if !ReadsBindAddrs(serviceName) {
+			t.Fatalf("%s does not read BIND_ADDRS, so its native listeners bind every interface", serviceName)
+		}
+		if got := render(serviceName, meshHost, nil)["BIND_ADDRS"]; got != "127.0.0.1,10.88.0.1" {
+			t.Fatalf("%s BIND_ADDRS with mesh = %q, want 127.0.0.1,10.88.0.1", serviceName, got)
+		}
+		if got := render(serviceName, inventory.Host{Name: "single"}, nil)["BIND_ADDRS"]; got != "127.0.0.1" {
+			t.Fatalf("%s BIND_ADDRS on a single host without mesh = %q, want 127.0.0.1", serviceName, got)
+		}
+		if !LocalUpstreamOnLoopbackAndMesh(serviceName, "native") {
+			t.Fatalf("%s binds loopback and the mesh natively, but a docker-mode proxy would route it through the Docker gateway", serviceName)
+		}
+	}
+	explicit := map[string]string{"BIND_ADDRS": "127.0.0.1"}
+	if got := render("bridge", meshHost, explicit)["BIND_ADDRS"]; got != "127.0.0.1" {
+		t.Fatalf("BIND_ADDRS operator override = %q, want 127.0.0.1", got)
+	}
+}
 
-	if got := render(inventory.Host{Name: "regional-eu-1", WireguardIP: "10.88.0.1"}, nil)["BRIDGE_BIND_ADDRS"]; got != "127.0.0.1,10.88.0.1" {
-		t.Fatalf("BRIDGE_BIND_ADDRS with mesh = %q, want 127.0.0.1,10.88.0.1", got)
-	}
-	if got := render(inventory.Host{Name: "regional-eu-1"}, nil)["BRIDGE_BIND_ADDRS"]; got != "127.0.0.1" {
-		t.Fatalf("BRIDGE_BIND_ADDRS without mesh = %q, want 127.0.0.1", got)
-	}
-	explicit := map[string]string{"BRIDGE_BIND_ADDRS": "127.0.0.1"}
-	if got := render(inventory.Host{Name: "regional-eu-1", WireguardIP: "10.88.0.1"}, explicit)["BRIDGE_BIND_ADDRS"]; got != "127.0.0.1" {
-		t.Fatalf("BRIDGE_BIND_ADDRS operator override = %q, want 127.0.0.1", got)
-	}
-	vars, err := serviceNativeVars(context.Background(), ServiceRoleConfig{ServiceName: "commodore", DefaultPort: 18001},
+// A container must bind every interface of its own network namespace; the
+// published ports restrict the host addresses. BIND_ADDRS from shared env
+// would bind the container to addresses it does not have.
+func TestServiceComposeVarsDropsBindAddrs(t *testing.T) {
+	vars, err := serviceComposeVars(context.Background(), ServiceRoleConfig{ServiceName: "commodore", DefaultPort: 18001, DefaultImage: "ghcr.io/livepeer-frameworks/frameworks-commodore:test"},
 		inventory.Host{Name: "central-eu-1", WireguardIP: "10.88.0.2"},
-		ServiceConfig{Mode: "native", BinaryURL: "http://example.invalid/commodore.tar.gz", Metadata: map[string]any{}}, RoleBuildHelpers{})
+		ServiceConfig{Mode: "docker", EnvVars: map[string]string{"BIND_ADDRS": "127.0.0.1,10.88.0.2"}, Metadata: map[string]any{}}, RoleBuildHelpers{})
 	if err != nil {
-		t.Fatalf("serviceNativeVars commodore: %v", err)
+		t.Fatalf("serviceComposeVars: %v", err)
 	}
-	if got, ok := stringMapFromAny(vars["go_service_env"])["BRIDGE_BIND_ADDRS"]; ok {
-		t.Fatalf("commodore env carries BRIDGE_BIND_ADDRS=%q", got)
+	if got, ok := vars["compose_stack_env"].(map[string]any)["BIND_ADDRS"]; ok {
+		t.Fatalf("compose env carries BIND_ADDRS=%v", got)
 	}
 }
 
@@ -1151,6 +1177,11 @@ func TestServiceComposeVarsNeverPublishesOnEveryInterface(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.service, func(t *testing.T) {
 			for _, host := range []inventory.Host{{Name: "core-1", WireguardIP: "10.88.0.3"}, {Name: "core-1"}} {
+				// Metabase reaches the host's Postgres on the WireGuard
+				// address, so it needs one.
+				if tc.service == "metabase" && host.WireguardIP == "" {
+					continue
+				}
 				vars, err := serviceComposeVars(context.Background(), ServiceRoleConfig{
 					ServiceName:   tc.service,
 					DefaultPort:   tc.port,
@@ -1355,11 +1386,8 @@ func TestNetworkObserverBindsToLoopbackAndMesh(t *testing.T) {
 		t.Fatalf("serviceNativeVars: %v", err)
 	}
 	env := stringMapFromAny(native["go_service_env"])
-	if got := env["NETWORK_OBSERVER_BIND_ADDRS"]; got != "127.0.0.1,10.88.0.3" {
-		t.Fatalf("NETWORK_OBSERVER_BIND_ADDRS = %q, want 127.0.0.1,10.88.0.3", got)
-	}
-	if got, ok := env["BRIDGE_BIND_ADDRS"]; ok {
-		t.Fatalf("observer env carries BRIDGE_BIND_ADDRS=%q", got)
+	if got := env["BIND_ADDRS"]; got != "127.0.0.1,10.88.0.3" {
+		t.Fatalf("BIND_ADDRS = %q, want 127.0.0.1,10.88.0.3", got)
 	}
 
 	compose, err := serviceComposeVars(context.Background(), cfg, host, ServiceConfig{Mode: "docker", Metadata: map[string]any{}}, RoleBuildHelpers{})

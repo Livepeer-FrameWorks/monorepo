@@ -20,7 +20,8 @@ import (
 // the database layout (such as YugabyteDB colocation) adapts backup and restore here.
 //
 // Every command runs on a database host through ssh.StreamRunner, as the administrative role the provisioning roles
-// use: `postgres` over the local socket for PostgreSQL, and the `yugabyte` role over localhost for YugabyteDB.
+// use: `postgres` over the local socket for PostgreSQL, and the `yugabyte` role on the node's own YSQL listener
+// (fw_ysql_host) for YugabyteDB.
 
 // Suffixes of the databases a restore creates next to the live one.
 const (
@@ -49,7 +50,7 @@ func (s DatabaseServer) validate() error {
 // client returns the shell words that start the interactive client against database.
 func (s DatabaseServer) client(database string) string {
 	if s.Engine == backup.EngineYugabyte {
-		return fmt.Sprintf(`"$(fw_yb_bin ysqlsh)" -X -v ON_ERROR_STOP=1 -h localhost -p %d -U yugabyte -d %s`, s.Port, shellQuote(database))
+		return fmt.Sprintf(`"$(fw_yb_bin ysqlsh)" -X -v ON_ERROR_STOP=1 -h "$(fw_ysql_host %d)" -p %d -U yugabyte -d %s`, s.Port, s.Port, shellQuote(database))
 	}
 	return fmt.Sprintf("sudo -u postgres psql -X -v ON_ERROR_STOP=1 -p %d -d %s", s.Port, shellQuote(database))
 }
@@ -84,7 +85,7 @@ func DumpDatabaseSectionCommand(s DatabaseServer, database, section string) (str
 	}
 	if s.Engine == backup.EngineYugabyte {
 		return s.script(fmt.Sprintf(`err="$(mktemp)"; trap 'rm -f "$err"' EXIT
-if ! "$(fw_yb_bin ysql_dump)" -h localhost -p %d -U yugabyte -d %s --section=%s 2>"$err" | gzip -c; then
+if ! "$(fw_yb_bin ysql_dump)" -h "$(fw_ysql_host %[1]d)" -p %[1]d -U yugabyte -d %s --section=%s 2>"$err" | gzip -c; then
   echo "ysql_dump --section=%s failed:" >&2; tail -c 2000 "$err" >&2; exit 5
 fi
 if [ -s "$err" ]; then echo "ysql_dump --section=%s wrote to stderr:" >&2; tail -c 2000 "$err" >&2; exit 4; fi

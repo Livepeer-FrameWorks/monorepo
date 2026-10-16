@@ -215,10 +215,11 @@ func main() {
 	go registerWithQuartermaster(ctx, cfg, qmClient, logger)
 
 	if runErr := server.Run(ctx, server.RunSpec{
-		Service: "deckhand",
-		Logger:  logger,
-		Ready:   readiness,
-		HTTP:    []server.HTTPListener{{Name: "http", Port: cfg.HTTPListenPort(), Handler: router}},
+		Service:   "deckhand",
+		Logger:    logger,
+		Ready:     readiness,
+		BindAddrs: cfg.BindAddrs,
+		HTTP:      []server.HTTPListener{{Name: "http", Port: cfg.HTTPListenPort(), Handler: router}},
 		// The gRPC server is built after the port is bound, so HTTP health
 		// and the Chatwoot webhook serve while the TLS files are still being synced.
 		GRPC: []server.GRPCListener{{Name: "grpc", Port: cfg.GRPCPort, Build: func(ctx context.Context) (*grpc.Server, error) {

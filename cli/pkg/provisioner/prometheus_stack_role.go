@@ -44,6 +44,10 @@ func prometheusStackRoleVars(ctx context.Context, host inventory.Host, config Se
 	}
 	vars := map[string]any{
 		"prometheus_stack_components": components,
+		// VictoriaMetrics, vmauth and Alertmanager answer local callers on
+		// loopback and vmagents, vmalert, Grafana and Quartermaster on other
+		// hosts on the WireGuard address; vmagent and vmalert are loopback only.
+		"prometheus_stack_listen_addrs": loopbackAndMeshAddrs(host),
 	}
 
 	_, arch, err := helpers.DetectRemoteOS(ctx, host)

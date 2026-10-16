@@ -13,6 +13,7 @@ import "github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 //
 //configref:service lookout cmd=cmd/lookout
 type Lookout struct {
+	config.ListenAddrs
 	config.HTTPRuntime
 	config.Logging
 	config.GRPCMetadataPolicy

@@ -1,6 +1,11 @@
 ---
 node_baseline_extra_packages: []
 
+# Stock units a host image may ship that run platform software outside the
+# roles that own it, listening on every interface. Stopped and masked.
+node_baseline_masked_stock_services:
+  - mistserver.service
+
 # Apt sources the platform no longer installs. The Cloudsmith Caddy repo signs
 # InRelease with a subkey that expired on 2024-03-30; frameworks.infra.caddy
 # installs the checksum-verified GitHub release .deb instead.

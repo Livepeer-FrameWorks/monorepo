@@ -119,10 +119,11 @@ func main() {
 
 	server.RegisterEnvFileReload("decklog", logger)
 	if runErr := server.Run(ctx, server.RunSpec{
-		Service: "decklog",
-		Logger:  logger,
-		Ready:   readiness,
-		HTTP:    []server.HTTPListener{{Name: "metrics", Port: cfg.MetricsPort, Handler: router}},
+		Service:   "decklog",
+		Logger:    logger,
+		Ready:     readiness,
+		BindAddrs: cfg.BindAddrs,
+		HTTP:      []server.HTTPListener{{Name: "metrics", Port: cfg.MetricsPort, Handler: router}},
 		GRPC: []server.GRPCListener{{Name: "grpc", Port: cfg.GRPCPort, Build: func(ctx context.Context) (*googlegrpc.Server, error) {
 			return grpc.NewGRPCServer(ctx, grpcConfig)
 		}}},

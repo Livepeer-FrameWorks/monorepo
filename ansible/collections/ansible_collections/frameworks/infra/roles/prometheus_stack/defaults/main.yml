@@ -1,4 +1,11 @@
 ---
+# Addresses VictoriaMetrics, vmauth and Alertmanager listen on: loopback for
+# direct role use; cluster provisioning adds the host's WireGuard address,
+# where vmagents, vmalert, Grafana and Quartermaster on other hosts dial them.
+# vmagent and vmalert answer only their local scrape and listen on loopback.
+prometheus_stack_listen_addrs:
+  - 127.0.0.1
+
 # Prometheus server (uses prometheus.prometheus.prometheus role).
 prometheus_version: "2.54.1"
 prometheus_port: 9090

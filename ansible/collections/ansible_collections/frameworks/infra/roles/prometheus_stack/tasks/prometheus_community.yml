@@ -22,5 +22,5 @@
     apply:
       tags: [install, configure, service]
   vars:
-    prometheus_web_listen_address: "0.0.0.0:{{ prometheus_port }}"
+    prometheus_web_listen_address: "127.0.0.1:{{ prometheus_port }}"
   when: "'prometheus' in prometheus_stack_components"

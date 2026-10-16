@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1116,17 +1118,14 @@ func doctorSections(rc *resolvedCluster, pool *fwssh.Pool, sharedEnv map[string]
 					},
 				})
 		} else {
-			infra.checks = append(infra.checks, doctorCheck{name: "Postgres/Yugabyte", run: func(context.Context) doctorOutcome {
+			// PostgreSQL listens on loopback and the WireGuard address only, so
+			// the query runs from a shell on its host as the postgres user.
+			infra.checks = append(infra.checks, doctorCheck{name: "Postgres/Yugabyte", run: func(ctx context.Context) doctorOutcome {
 				host, ok := manifest.GetHost(pg.Host)
 				if !ok {
 					return doctorMissOutcome("Postgres/Yugabyte", fmt.Sprintf("host %q not found in manifest", pg.Host))
 				}
-				password, pwErr := resolveYugabytePassword(pg, sharedEnv)
-				if pwErr != nil {
-					return doctorMissOutcome("Postgres/Yugabyte", pwErr.Error())
-				}
-				checker := &health.PostgresChecker{User: postgresDoctorUser(pg), Password: password, Database: "postgres"}
-				return doctorInfraOutcome("Postgres/Yugabyte", checker.Check(host.ExternalIP, pg.EffectivePort()))
+				return doctorInfraOutcome("Postgres/Yugabyte", checkPostgresLocal(ctx, pool, host, pg.EffectivePort()))
 			}})
 		}
 	}
@@ -1157,9 +1156,14 @@ func doctorSections(rc *resolvedCluster, pool *fwssh.Pool, sharedEnv map[string]
 					infra.checks = append(infra.checks, doctorStaticCheck(brokerName, doctorMissOutcome(brokerName, fmt.Sprintf("host %q not found in manifest", broker.Host))))
 					continue
 				}
-				infra.checks = append(infra.checks, doctorCheck{name: brokerName, run: func(context.Context) doctorOutcome {
-					checker := &health.KafkaChecker{}
-					return doctorInfraOutcome(brokerName, checker.Check(host.ExternalIP, broker.Port))
+				// The broker listens on its host's WireGuard address only, so the
+				// probe runs from a shell on that host.
+				infra.checks = append(infra.checks, doctorCheck{name: brokerName, run: func(ctx context.Context) doctorOutcome {
+					port := broker.Port
+					if port == 0 {
+						port = 9092
+					}
+					return doctorInfraOutcome(brokerName, doctorKafkaBrokerProbe(ctx, pool, host, port))
 				}})
 			}
 			quorumName := "Kafka KRaft quorum" + label
@@ -1234,6 +1238,7 @@ func doctorSections(rc *resolvedCluster, pool *fwssh.Pool, sharedEnv map[string]
 	if len(manifest.Observability) > 0 {
 		sections = append(sections, doctorSection{title: "Observability Services", checks: serviceChecks(manifest.Observability)})
 	}
+	sections = append(sections, doctorSection{title: "Listener Exposure", checks: doctorListenerChecks(pool, manifest)})
 
 	if pg != nil && pg.Enabled {
 		sections = append(sections, doctorSection{title: "Database Migrations", checks: doctorDatabaseChecks(rc, pool, sharedEnv, doctorTarget, sshKey, deep)})
@@ -1416,6 +1421,40 @@ func checkClickHouseLocal(ctx context.Context, sshPool *fwssh.Pool, host invento
 	return result
 }
 
+// doctorKafkaBrokerProbe connects to a broker's listener from a shell on its
+// host, at the WireGuard address the listener binds; tests replace it.
+var doctorKafkaBrokerProbe = func(ctx context.Context, sshPool *fwssh.Pool, host inventory.Host, port int) *health.CheckResult {
+	return checkHostLocalTCPAt(ctx, sshPool, host, kafkaListenAddress(host), port)
+}
+
+// checkPostgresLocal runs SELECT 1 as the postgres user over the local socket
+// of the PostgreSQL server on host.
+func checkPostgresLocal(ctx context.Context, sshPool *fwssh.Pool, host inventory.Host, port int) *health.CheckResult {
+	result := &health.CheckResult{Name: "postgres", CheckedAt: time.Now(), Metadata: map[string]string{"access": "ssh-local-psql"}}
+	if sshPool == nil {
+		result.Status, result.Error = "unhealthy", "ssh pool is nil"
+		return result
+	}
+	runner, err := getRunner(host, sshPool)
+	if err != nil {
+		result.Status, result.Error = "unhealthy", fmt.Sprintf("ssh connect: %v", err)
+		return result
+	}
+	queryCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	start := time.Now()
+	var one int
+	exec := &provisioner.SSHExecutor{Runner: runner, UsePeerAuth: true}
+	if err := exec.QueryRow(queryCtx, provisioner.ConnParams{Port: port, User: "postgres", Database: "postgres"}, "SELECT 1", nil, &one); err != nil {
+		result.Status, result.Error = "unhealthy", fmt.Sprintf("local query failed: %v", err)
+		return result
+	}
+	result.Latency = time.Since(start)
+	result.OK, result.Status = true, "healthy"
+	result.Message = fmt.Sprintf("Local PostgreSQL query OK (latency: %v)", result.Latency)
+	return result
+}
+
 func checkYugabyteLocalYSQL(ctx context.Context, sshPool *fwssh.Pool, host inventory.Host, pg *inventory.PostgresConfig) *health.CheckResult {
 	result := &health.CheckResult{
 		Name:      "yugabyte",
@@ -1572,7 +1611,7 @@ var yugabyteHostSelectionProbeFn = checkYugabyteLocalYSQL
 
 // firstHealthyYugabyteHost returns the first candidate tserver that answers a
 // local YSQL probe (SELECT 1 via ysqlsh), so admin DB operations (e.g. migrations
-// applied through ysqlsh -h localhost on the node) target a node whose database
+// applied through ysqlsh on the node's own YSQL listener) target a node whose database
 // is actually up, not merely one reachable over SSH. Selection only; it does not
 // retry a mutation across nodes.
 func firstHealthyYugabyteHost(ctx context.Context, sshPool *fwssh.Pool, hosts []inventory.Host, pg *inventory.PostgresConfig) (inventory.Host, bool) {
@@ -1586,15 +1625,16 @@ func firstHealthyYugabyteHost(ctx context.Context, sshPool *fwssh.Pool, hosts []
 
 func checkServiceEndpoint(ctx context.Context, sshPool *fwssh.Pool, host inventory.Host, name string, svc inventory.ServiceConfig, port int) *health.CheckResult {
 	probe := doctorServiceProbe(name, svc)
+	address := doctorServiceProbeAddress(svc)
 	if probe.Protocol == "tcp" {
-		return checkHostLocalTCP(ctx, sshPool, host, port)
+		return checkHostLocalTCPAt(ctx, sshPool, host, address, port)
 	}
 	result := &health.CheckResult{
 		Name:      "http",
 		CheckedAt: time.Now(),
 		Metadata: map[string]string{
 			"access": "ssh-local-http",
-			"url":    fmt.Sprintf("http://127.0.0.1:%d%s", port, probe.Path),
+			"url":    "http://" + net.JoinHostPort(address, strconv.Itoa(port)) + probe.Path,
 		},
 	}
 	if sshPool == nil {
@@ -1608,7 +1648,7 @@ func checkServiceEndpoint(ctx context.Context, sshPool *fwssh.Pool, host invento
 		result.Status, result.Error = "unhealthy", fmt.Sprintf("ssh connect: %v", err)
 		return result
 	}
-	command := doctorHTTPProbeCommand(port, probe.Path)
+	command := doctorHTTPProbeCommandAt(address, port, probe.Path)
 	start := time.Now()
 	probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -1639,12 +1679,18 @@ func checkServiceEndpoint(ctx context.Context, sshPool *fwssh.Pool, host invento
 }
 
 func checkHostLocalTCP(ctx context.Context, sshPool *fwssh.Pool, host inventory.Host, port int) *health.CheckResult {
+	return checkHostLocalTCPAt(ctx, sshPool, host, "127.0.0.1", port)
+}
+
+// checkHostLocalTCPAt connects to address:port from a shell on host, for a
+// listener that binds the host's WireGuard address rather than loopback.
+func checkHostLocalTCPAt(ctx context.Context, sshPool *fwssh.Pool, host inventory.Host, address string, port int) *health.CheckResult {
 	result := &health.CheckResult{
 		Name:      "tcp",
 		CheckedAt: time.Now(),
 		Metadata: map[string]string{
 			"access":  "ssh-local-tcp",
-			"address": fmt.Sprintf("127.0.0.1:%d", port),
+			"address": net.JoinHostPort(address, strconv.Itoa(port)),
 		},
 	}
 	if sshPool == nil {
@@ -1658,7 +1704,7 @@ func checkHostLocalTCP(ctx context.Context, sshPool *fwssh.Pool, host inventory.
 		result.Status, result.Error = "unhealthy", fmt.Sprintf("ssh connect: %v", err)
 		return result
 	}
-	command := doctorTCPProbeCommand(port)
+	command := doctorTCPProbeCommandAt(address, port)
 	start := time.Now()
 	probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -1679,12 +1725,32 @@ func checkHostLocalTCP(ctx context.Context, sshPool *fwssh.Pool, host inventory.
 }
 
 func doctorTCPProbeCommand(port int) string {
-	return fmt.Sprintf("timeout 6 bash -c %s", fwssh.ShellQuote(fmt.Sprintf("exec 3<>/dev/tcp/127.0.0.1/%d", port)))
+	return doctorTCPProbeCommandAt("127.0.0.1", port)
+}
+
+func doctorTCPProbeCommandAt(address string, port int) string {
+	return fmt.Sprintf("timeout 6 bash -c %s", fwssh.ShellQuote(fmt.Sprintf("exec 3<>/dev/tcp/%s/%d", address, port)))
 }
 
 func doctorHTTPProbeCommand(port int, path string) string {
-	url := fmt.Sprintf("http://127.0.0.1:%d%s", port, path)
+	return doctorHTTPProbeCommandAt("127.0.0.1", port, path)
+}
+
+func doctorHTTPProbeCommandAt(address string, port int, path string) string {
+	url := "http://" + net.JoinHostPort(address, strconv.Itoa(port)) + path
 	return "curl -sS -o /dev/null -w '%{http_code}' --max-time 5 " + fwssh.ShellQuote(url)
+}
+
+// doctorServiceProbeAddress is where a service answers a shell on its own
+// host: loopback, except a Livepeer signer whose http_addr binds the host's
+// WireGuard address alone.
+func doctorServiceProbeAddress(svc inventory.ServiceConfig) string {
+	if host, _, err := net.SplitHostPort(strings.TrimSpace(svc.Config["http_addr"])); err == nil {
+		if ip := net.ParseIP(strings.Trim(host, "[]")); ip != nil && !ip.IsLoopback() && !ip.IsUnspecified() {
+			return ip.String()
+		}
+	}
+	return "127.0.0.1"
 }
 
 type doctorProbe struct {

@@ -7,7 +7,9 @@ Wants=network-online.target
 User={{ prometheus_stack_user }}
 Group={{ prometheus_stack_group }}
 ExecStart={{ vmauth_bin }} \
-  -httpListenAddr=:{{ vmauth_port }} \
+{% for addr in prometheus_stack_listen_addrs %}
+  -httpListenAddr={{ addr }}:{{ vmauth_port }} \
+{% endfor %}
   -auth.config={{ vmauth_config_path }}
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=always

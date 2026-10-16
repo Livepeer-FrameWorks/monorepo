@@ -11,14 +11,15 @@
   when: yugabyte_migrate_items | default([]) | length > 0
 
 # Mirror of postgres/tasks/migrate.yml for Yugabyte. Local admin traffic uses
-# the built-in yugabyte role, which the generated HBA trusts only from 127.0.0.1.
+# the built-in yugabyte role, which the generated HBA trusts only from this
+# node's own YSQL address.
 
 - name: Ensure YSQL Ansible module prerequisites
   ansible.builtin.import_tasks: ysql_prereqs.yml
 
 - name: Read applied migrations per database (Yugabyte)
   community.postgresql.postgresql_query:
-    login_host: 127.0.0.1
+    login_host: "{{ yugabyte_ysql_local_host }}"
     login_port: "{{ yugabyte_ysql_port }}"
     login_user: "{{ yugabyte_superuser_role }}"
     login_password: "{{ yugabyte_superuser_password }}"
@@ -102,7 +103,7 @@
 # catalog.
 - name: Plan application schema ownership before migrations (Yugabyte)
   community.postgresql.postgresql_query:
-    login_host: 127.0.0.1
+    login_host: "{{ yugabyte_ysql_local_host }}"
     login_port: "{{ yugabyte_ysql_port }}"
     login_user: "{{ yugabyte_superuser_role }}"
     login_password: "{{ yugabyte_superuser_password }}"
@@ -163,7 +164,7 @@
 
 - name: Reconcile application schema ownership before migrations (Yugabyte)
   community.postgresql.postgresql_query:
-    login_host: 127.0.0.1
+    login_host: "{{ yugabyte_ysql_local_host }}"
     login_port: "{{ yugabyte_ysql_port }}"
     login_user: "{{ yugabyte_superuser_role }}"
     login_password: "{{ yugabyte_superuser_password }}"
@@ -181,7 +182,7 @@
 
 - name: Ensure _migrations tracking table per database (Yugabyte)
   community.postgresql.postgresql_query:
-    login_host: 127.0.0.1
+    login_host: "{{ yugabyte_ysql_local_host }}"
     login_port: "{{ yugabyte_ysql_port }}"
     login_user: "{{ yugabyte_superuser_role }}"
     login_password: "{{ yugabyte_superuser_password }}"

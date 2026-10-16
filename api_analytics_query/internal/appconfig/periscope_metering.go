@@ -7,6 +7,7 @@ import "github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 //
 //configref:service periscope-metering cmd=cmd/periscope-metering
 type PeriscopeMetering struct {
+	config.ListenAddrs
 	config.HTTPListen
 	config.HTTPRuntime
 	config.Logging

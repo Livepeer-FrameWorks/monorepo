@@ -6,6 +6,12 @@
       "command": "api_webhooks/cmd/bosun",
       "variables": [
         {
+          "key": "BIND_ADDRS",
+          "type": "list",
+          "introduced": "v0.3.13",
+          "description": "Comma-separated addresses the service's listeners bind, one socket per address and port. Provisioning sets loopback and the host's WireGuard address, so only same-host callers such as the reverse proxy and vmagent, and mesh peers, reach the service. A listener that clients outside the mesh dial, such as Foghorn's external gRPC listener, and a listener with its own bind address setting keep their bind. Empty binds every interface."
+        },
+        {
           "key": "GIN_MODE",
           "type": "string",
           "default": "debug",
@@ -326,6 +332,12 @@
           "description": "Network observation environment."
         },
         {
+          "key": "BIND_ADDRS",
+          "type": "list",
+          "introduced": "v0.3.13",
+          "description": "Comma-separated addresses the service's listeners bind, one socket per address and port. Provisioning sets loopback and the host's WireGuard address, so only same-host callers such as the reverse proxy and vmagent, and mesh peers, reach the service. A listener that clients outside the mesh dial, such as Foghorn's external gRPC listener, and a listener with its own bind address setting keep their bind. Empty binds every interface."
+        },
+        {
           "key": "PORT",
           "type": "string",
           "default": "18000",
@@ -392,12 +404,6 @@
           "default": "bridge",
           "introduced": "v0.3.0",
           "description": "Host name this instance advertises when it registers with Quartermaster."
-        },
-        {
-          "key": "BRIDGE_BIND_ADDRS",
-          "type": "list",
-          "introduced": "v0.3.13",
-          "description": "Comma-separated addresses the HTTP listener on PORT binds, one listener per address. Provisioning sets loopback and the host's WireGuard address so only the local reverse proxy and mesh peers reach Bridge. Empty binds every interface."
         },
         {
           "key": "HOSTNAME",
@@ -776,6 +782,12 @@
       "service": "commodore",
       "command": "api_control/cmd/commodore",
       "variables": [
+        {
+          "key": "BIND_ADDRS",
+          "type": "list",
+          "introduced": "v0.3.13",
+          "description": "Comma-separated addresses the service's listeners bind, one socket per address and port. Provisioning sets loopback and the host's WireGuard address, so only same-host callers such as the reverse proxy and vmagent, and mesh peers, reach the service. A listener that clients outside the mesh dial, such as Foghorn's external gRPC listener, and a listener with its own bind address setting keep their bind. Empty binds every interface."
+        },
         {
           "key": "PORT",
           "type": "string",
@@ -1359,6 +1371,12 @@
       "service": "purser",
       "command": "api_billing/cmd/purser",
       "variables": [
+        {
+          "key": "BIND_ADDRS",
+          "type": "list",
+          "introduced": "v0.3.13",
+          "description": "Comma-separated addresses the service's listeners bind, one socket per address and port. Provisioning sets loopback and the host's WireGuard address, so only same-host callers such as the reverse proxy and vmagent, and mesh peers, reach the service. A listener that clients outside the mesh dial, such as Foghorn's external gRPC listener, and a listener with its own bind address setting keep their bind. Empty binds every interface."
+        },
         {
           "key": "PORT",
           "type": "string",
@@ -2120,6 +2138,12 @@
       "command": "api_tenants/cmd/quartermaster",
       "variables": [
         {
+          "key": "BIND_ADDRS",
+          "type": "list",
+          "introduced": "v0.3.13",
+          "description": "Comma-separated addresses the service's listeners bind, one socket per address and port. Provisioning sets loopback and the host's WireGuard address, so only same-host callers such as the reverse proxy and vmagent, and mesh peers, reach the service. A listener that clients outside the mesh dial, such as Foghorn's external gRPC listener, and a listener with its own bind address setting keep their bind. Empty binds every interface."
+        },
+        {
           "key": "PORT",
           "type": "string",
           "default": "18002",
@@ -2498,6 +2522,12 @@
       "command": "api_firehose/cmd/decklog",
       "variables": [
         {
+          "key": "BIND_ADDRS",
+          "type": "list",
+          "introduced": "v0.3.13",
+          "description": "Comma-separated addresses the service's listeners bind, one socket per address and port. Provisioning sets loopback and the host's WireGuard address, so only same-host callers such as the reverse proxy and vmagent, and mesh peers, reach the service. A listener that clients outside the mesh dial, such as Foghorn's external gRPC listener, and a listener with its own bind address setting keep their bind. Empty binds every interface."
+        },
+        {
           "key": "GIN_MODE",
           "type": "string",
           "default": "debug",
@@ -2661,6 +2691,12 @@
       "service": "signalman",
       "command": "api_realtime/cmd/signalman",
       "variables": [
+        {
+          "key": "BIND_ADDRS",
+          "type": "list",
+          "introduced": "v0.3.13",
+          "description": "Comma-separated addresses the service's listeners bind, one socket per address and port. Provisioning sets loopback and the host's WireGuard address, so only same-host callers such as the reverse proxy and vmagent, and mesh peers, reach the service. A listener that clients outside the mesh dial, such as Foghorn's external gRPC listener, and a listener with its own bind address setting keep their bind. Empty binds every interface."
+        },
         {
           "key": "PORT",
           "type": "string",
@@ -2851,6 +2887,12 @@
       "command": "api_network_observer/cmd/network-observer",
       "variables": [
         {
+          "key": "BIND_ADDRS",
+          "type": "list",
+          "introduced": "v0.3.13",
+          "description": "Comma-separated addresses the service's listeners bind, one socket per address and port. Provisioning sets loopback and the host's WireGuard address, so only same-host callers such as the reverse proxy and vmagent, and mesh peers, reach the service. A listener that clients outside the mesh dial, such as Foghorn's external gRPC listener, and a listener with its own bind address setting keep their bind. Empty binds every interface."
+        },
+        {
           "key": "GIN_MODE",
           "type": "string",
           "default": "debug",
@@ -2928,12 +2970,6 @@
           "default": "18034",
           "introduced": "v0.3.13",
           "description": "HTTPS port serving the same API to mesh callers such as Bridge with the internal-CA certificate in GRPC_TLS_CERT_PATH/GRPC_TLS_KEY_PATH; not opened when those are unset."
-        },
-        {
-          "key": "NETWORK_OBSERVER_BIND_ADDRS",
-          "type": "list",
-          "introduced": "v0.3.13",
-          "description": "Comma-separated addresses both observer ports bind, one listener per address and port. Provisioning sets loopback and the host's WireGuard address so only local probes and mesh peers such as Bridge and Quartermaster reach the observer. Empty binds every interface."
         },
         {
           "key": "NETWORK_OBSERVER_HOST",
@@ -3087,6 +3123,12 @@
           "description": "Local prober health and spool statistics HTTP port."
         },
         {
+          "key": "BIND_ADDRS",
+          "type": "list",
+          "introduced": "v0.3.13",
+          "description": "Comma-separated addresses the service's listeners bind, one socket per address and port. Provisioning sets loopback and the host's WireGuard address, so only same-host callers such as the reverse proxy and vmagent, and mesh peers, reach the service. A listener that clients outside the mesh dial, such as Foghorn's external gRPC listener, and a listener with its own bind address setting keep their bind. Empty binds every interface."
+        },
+        {
           "key": "LOG_LEVEL",
           "type": "string",
           "default": "info",
@@ -3191,6 +3233,12 @@
       "service": "periscope-ingest",
       "command": "api_analytics_ingest/cmd/periscope",
       "variables": [
+        {
+          "key": "BIND_ADDRS",
+          "type": "list",
+          "introduced": "v0.3.13",
+          "description": "Comma-separated addresses the service's listeners bind, one socket per address and port. Provisioning sets loopback and the host's WireGuard address, so only same-host callers such as the reverse proxy and vmagent, and mesh peers, reach the service. A listener that clients outside the mesh dial, such as Foghorn's external gRPC listener, and a listener with its own bind address setting keep their bind. Empty binds every interface."
+        },
         {
           "key": "PORT",
           "type": "string",
@@ -3385,6 +3433,12 @@
       "command": "api_analytics_query/cmd/periscope-metering",
       "variables": [
         {
+          "key": "BIND_ADDRS",
+          "type": "list",
+          "introduced": "v0.3.13",
+          "description": "Comma-separated addresses the service's listeners bind, one socket per address and port. Provisioning sets loopback and the host's WireGuard address, so only same-host callers such as the reverse proxy and vmagent, and mesh peers, reach the service. A listener that clients outside the mesh dial, such as Foghorn's external gRPC listener, and a listener with its own bind address setting keep their bind. Empty binds every interface."
+        },
+        {
           "key": "PORT",
           "type": "string",
           "default": "18021",
@@ -3528,6 +3582,12 @@
       "service": "periscope-query",
       "command": "api_analytics_query/cmd/periscope",
       "variables": [
+        {
+          "key": "BIND_ADDRS",
+          "type": "list",
+          "introduced": "v0.3.13",
+          "description": "Comma-separated addresses the service's listeners bind, one socket per address and port. Provisioning sets loopback and the host's WireGuard address, so only same-host callers such as the reverse proxy and vmagent, and mesh peers, reach the service. A listener that clients outside the mesh dial, such as Foghorn's external gRPC listener, and a listener with its own bind address setting keep their bind. Empty binds every interface."
+        },
         {
           "key": "PORT",
           "type": "string",
@@ -3678,6 +3738,12 @@
       "service": "chandler",
       "command": "api_assets/cmd/chandler",
       "variables": [
+        {
+          "key": "BIND_ADDRS",
+          "type": "list",
+          "introduced": "v0.3.13",
+          "description": "Comma-separated addresses the service's listeners bind, one socket per address and port. Provisioning sets loopback and the host's WireGuard address, so only same-host callers such as the reverse proxy and vmagent, and mesh peers, reach the service. A listener that clients outside the mesh dial, such as Foghorn's external gRPC listener, and a listener with its own bind address setting keep their bind. Empty binds every interface."
+        },
         {
           "key": "PORT",
           "type": "string",
@@ -3837,6 +3903,12 @@
       "command": "api_balancing/cmd/foghorn",
       "variables": [
         {
+          "key": "BIND_ADDRS",
+          "type": "list",
+          "introduced": "v0.3.13",
+          "description": "Comma-separated addresses the service's listeners bind, one socket per address and port. Provisioning sets loopback and the host's WireGuard address, so only same-host callers such as the reverse proxy and vmagent, and mesh peers, reach the service. A listener that clients outside the mesh dial, such as Foghorn's external gRPC listener, and a listener with its own bind address setting keep their bind. Empty binds every interface."
+        },
+        {
           "key": "PORT",
           "type": "string",
           "default": "18008",
@@ -3969,7 +4041,7 @@
           "key": "FOGHORN_PUBLIC_HTTP_BIND_ADDR",
           "type": "string",
           "introduced": "v0.3.0",
-          "description": "Bind address of the public HTTP listener on PORT that serves playback, ingest, and Livepeer webhook routes. Empty listens on all interfaces."
+          "description": "Bind address of the public HTTP listener on PORT that serves playback, ingest, and Livepeer webhook routes. Empty binds the BIND_ADDRS addresses, or every interface when BIND_ADDRS is empty."
         },
         {
           "key": "FOGHORN_INTERNAL_HTTP_PORT",
@@ -3990,14 +4062,14 @@
           "type": "string",
           "default": ":18019",
           "introduced": "v0.3.0",
-          "description": "host:port of the internal gRPC listener for mesh services, federation, and the HA command relay. It serves GRPC_TLS_CERT_PATH."
+          "description": "host:port of the internal gRPC listener for mesh services, federation, and the HA command relay. It serves GRPC_TLS_CERT_PATH. An empty host binds the BIND_ADDRS addresses, or every interface when BIND_ADDRS is empty."
         },
         {
           "key": "FOGHORN_EXTERNAL_GRPC_BIND_ADDR",
           "type": "string",
           "default": ":18029",
           "introduced": "v0.3.0",
-          "description": "host:port of the external gRPC listener for Helmsman control streams and edge provisioning. It serves Navigator-issued cluster certificates."
+          "description": "host:port of the external gRPC listener for Helmsman control streams and edge provisioning. It serves Navigator-issued cluster certificates. An empty host binds every interface whatever BIND_ADDRS says, since edges dial it from outside the mesh."
         },
         {
           "key": "FOGHORN_INTERNAL_GRPC_PORT",
@@ -5022,6 +5094,12 @@
       "command": "api_incidents/cmd/lookout",
       "variables": [
         {
+          "key": "BIND_ADDRS",
+          "type": "list",
+          "introduced": "v0.3.13",
+          "description": "Comma-separated addresses the service's listeners bind, one socket per address and port. Provisioning sets loopback and the host's WireGuard address, so only same-host callers such as the reverse proxy and vmagent, and mesh peers, reach the service. A listener that clients outside the mesh dial, such as Foghorn's external gRPC listener, and a listener with its own bind address setting keep their bind. Empty binds every interface."
+        },
+        {
           "key": "GIN_MODE",
           "type": "string",
           "default": "debug",
@@ -5329,6 +5407,12 @@
       "service": "navigator",
       "command": "api_dns/cmd/navigator",
       "variables": [
+        {
+          "key": "BIND_ADDRS",
+          "type": "list",
+          "introduced": "v0.3.13",
+          "description": "Comma-separated addresses the service's listeners bind, one socket per address and port. Provisioning sets loopback and the host's WireGuard address, so only same-host callers such as the reverse proxy and vmagent, and mesh peers, reach the service. A listener that clients outside the mesh dial, such as Foghorn's external gRPC listener, and a listener with its own bind address setting keep their bind. Empty binds every interface."
+        },
         {
           "key": "GIN_MODE",
           "type": "string",
@@ -5700,6 +5784,12 @@
       "command": "api_mesh/cmd/privateer",
       "variables": [
         {
+          "key": "BIND_ADDRS",
+          "type": "list",
+          "introduced": "v0.3.13",
+          "description": "Comma-separated addresses the service's listeners bind, one socket per address and port. Provisioning sets loopback and the host's WireGuard address, so only same-host callers such as the reverse proxy and vmagent, and mesh peers, reach the service. A listener that clients outside the mesh dial, such as Foghorn's external gRPC listener, and a listener with its own bind address setting keep their bind. Empty binds every interface."
+        },
+        {
           "key": "GIN_MODE",
           "type": "string",
           "default": "debug",
@@ -5943,6 +6033,12 @@
       "command": "api_ticketing/cmd/deckhand",
       "variables": [
         {
+          "key": "BIND_ADDRS",
+          "type": "list",
+          "introduced": "v0.3.13",
+          "description": "Comma-separated addresses the service's listeners bind, one socket per address and port. Provisioning sets loopback and the host's WireGuard address, so only same-host callers such as the reverse proxy and vmagent, and mesh peers, reach the service. A listener that clients outside the mesh dial, such as Foghorn's external gRPC listener, and a listener with its own bind address setting keep their bind. Empty binds every interface."
+        },
+        {
           "key": "GIN_MODE",
           "type": "string",
           "default": "debug",
@@ -6150,6 +6246,12 @@
       "service": "skipper",
       "command": "api_consultant/cmd/skipper",
       "variables": [
+        {
+          "key": "BIND_ADDRS",
+          "type": "list",
+          "introduced": "v0.3.13",
+          "description": "Comma-separated addresses the service's listeners bind, one socket per address and port. Provisioning sets loopback and the host's WireGuard address, so only same-host callers such as the reverse proxy and vmagent, and mesh peers, reach the service. A listener that clients outside the mesh dial, such as Foghorn's external gRPC listener, and a listener with its own bind address setting keep their bind. Empty binds every interface."
+        },
         {
           "key": "PORT",
           "type": "string",
@@ -6810,6 +6912,12 @@
       "service": "steward",
       "command": "api_forms/cmd/steward",
       "variables": [
+        {
+          "key": "BIND_ADDRS",
+          "type": "list",
+          "introduced": "v0.3.13",
+          "description": "Comma-separated addresses the service's listeners bind, one socket per address and port. Provisioning sets loopback and the host's WireGuard address, so only same-host callers such as the reverse proxy and vmagent, and mesh peers, reach the service. A listener that clients outside the mesh dial, such as Foghorn's external gRPC listener, and a listener with its own bind address setting keep their bind. Empty binds every interface."
+        },
         {
           "key": "PORT",
           "type": "string",

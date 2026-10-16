@@ -892,9 +892,10 @@ func main() {
 
 	server.RegisterEnvFileReload("skipper", logger)
 	if runErr := server.Run(ctx, server.RunSpec{
-		Service: "skipper",
-		Logger:  logger,
-		Ready:   readiness,
+		Service:   "skipper",
+		Logger:    logger,
+		Ready:     readiness,
+		BindAddrs: appCfg.BindAddrs,
 		HTTP: []server.HTTPListener{{
 			Name:    "http",
 			Port:    appCfg.HTTPListen.Port,

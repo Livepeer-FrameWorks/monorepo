@@ -15,6 +15,7 @@ import (
 //
 //configref:service signalman cmd=cmd/signalman
 type Signalman struct {
+	config.ListenAddrs
 	config.HTTPListen
 	config.GRPCListen
 	config.HTTPRuntime

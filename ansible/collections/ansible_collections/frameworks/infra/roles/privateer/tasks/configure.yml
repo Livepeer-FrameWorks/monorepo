@@ -121,3 +121,26 @@
     group: root
     mode: "0644"
   register: privateer_dns_socket_unit
+
+# Platform services on a mesh host bind its WireGuard address, which exists
+# only once Privateer brings wg0 up. Non-local binds let them (Postgres, Kafka,
+# YugabyteDB, VictoriaMetrics, vmauth, Alertmanager, Redis, ClickHouse) start
+# at boot before the mesh and accept once the address is up, instead of
+# failing their bind. Go services set FreeBind on their own sockets.
+- name: Allow binds to the mesh address before the mesh is up
+  ansible.builtin.copy:
+    dest: /etc/sysctl.d/90-frameworks-nonlocal-bind.conf
+    content: |
+      net.ipv4.ip_nonlocal_bind = 1
+      net.ipv6.ip_nonlocal_bind = 1
+    owner: root
+    group: root
+    mode: "0644"
+  register: privateer_nonlocal_bind
+
+- name: Apply the non-local bind sysctls # noqa: no-handler
+  ansible.builtin.command: sysctl --system
+  changed_when: true
+  when:
+    - privateer_nonlocal_bind is changed
+    - not ansible_check_mode

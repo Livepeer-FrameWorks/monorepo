@@ -3,7 +3,6 @@ package provisioner
 import (
 	"context"
 	"fmt"
-	"net"
 	"strings"
 	"time"
 
@@ -43,13 +42,10 @@ func clickhouseRoleVars(ctx context.Context, host inventory.Host, config Service
 	} else if listen, ok := config.Metadata["listen_host"].(string); ok && listen != "" {
 		vars["clickhouse_listen_host"] = listen
 	} else {
-		listenHosts := []string{"127.0.0.1"}
-		if advertised := strings.TrimSpace(metaString(config.Metadata, "advertised_host")); advertised != "" && advertised != "127.0.0.1" && advertised != "localhost" {
-			if ip := net.ParseIP(advertised); ip == nil || !ip.IsLoopback() {
-				listenHosts = append(listenHosts, advertised)
-			}
-		}
-		vars["clickhouse_listen_hosts"] = listenHosts
+		// Loopback for local clients and scrapes, the WireGuard address for
+		// services at <host>.internal, replicas and Keeper peers. A host
+		// without one is a single-host cluster and listens on loopback only.
+		vars["clickhouse_listen_hosts"] = loopbackAndMeshAddrs(host)
 	}
 	if httpPort, ok := config.Metadata["http_port"].(int); ok && httpPort > 0 {
 		vars["clickhouse_port_http"] = httpPort

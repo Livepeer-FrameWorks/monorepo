@@ -62,6 +62,10 @@ argument_specs:
         type: int
         required: false
         default: 3
+      yugabyte_hba_client_cidr:
+        type: str
+        required: false
+        description: CIDR allowed scram-sha-256 YSQL logins; the CLI passes the mesh CIDR.
       yugabyte_node_address:
         type: str
         required: false

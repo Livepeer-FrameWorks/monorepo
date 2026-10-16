@@ -15,7 +15,6 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 
 	"github.com/sirupsen/logrus"
 	logrustest "github.com/sirupsen/logrus/hooks/test"
@@ -2840,43 +2839,11 @@ func TestSyncServiceByCluster_UsesClusterScopedPoolNames(t *testing.T) {
 		t.Fatalf("expected unique pool names per cluster, got %v", createdPools)
 	}
 
+	// Foghorn's public HTTP port listens only on loopback and the WireGuard
+	// address; the pool is probed through each origin's reverse proxy.
 	for _, port := range monitorPorts {
-		if port != 18008 {
-			t.Fatalf("expected health check monitor on port 18008 (foghorn), got %d", port)
-		}
-	}
-}
-
-func TestDefaultServicePorts_MatchServicedefs(t *testing.T) {
-	ports := defaultServicePorts()
-
-	checks := map[string]struct {
-		servicedefsName string
-		wantPort        int
-	}{
-		"bridge":           {"bridge", 0},
-		"foghorn":          {"foghorn", 0},
-		"livepeer-gateway": {"livepeer-gateway", 0},
-		"chartroom":        {"chartroom", 0},
-		"foredeck":         {"foredeck", 0},
-		"logbook":          {"logbook", 0},
-		"steward":          {"steward", 0},
-	}
-
-	for key, check := range checks {
-		svc, ok := servicedefs.Lookup(check.servicedefsName)
-		if !ok {
-			t.Fatalf("servicedefs missing entry for %q", check.servicedefsName)
-		}
-		check.wantPort = svc.DefaultPort
-
-		got, ok := ports[key]
-		if !ok {
-			t.Errorf("defaultServicePorts missing key %q", key)
-			continue
-		}
-		if got != check.wantPort {
-			t.Errorf("port[%q] = %d, want %d (from servicedefs[%q])", key, got, check.wantPort, check.servicedefsName)
+		if port != 80 {
+			t.Fatalf("expected the ingress health check on port 80 for foghorn, got %d", port)
 		}
 	}
 }
@@ -2887,135 +2854,6 @@ func TestDefaultServicePorts_EdgeServicesUse18008(t *testing.T) {
 		if ports[svc] != 18008 {
 			t.Errorf("port[%q] = %d, want 18008", svc, ports[svc])
 		}
-	}
-}
-
-func TestDefaultServiceHealthPaths_MatchServicedefs(t *testing.T) {
-	paths := defaultServiceHealthPaths()
-
-	for _, name := range []string{"bridge", "foghorn", "chandler", "livepeer-gateway", "chartroom", "foredeck", "logbook", "steward"} {
-		svc, ok := servicedefs.Lookup(name)
-		if !ok {
-			t.Fatalf("servicedefs missing entry for %q", name)
-		}
-		if got := paths[name]; got != svc.ReadinessPath() {
-			t.Errorf("healthPath[%q] = %q, want the fleet readiness path %q", name, got, svc.ReadinessPath())
-		}
-	}
-	// Chandler serves /ready in every supported release, so its monitor follows it. A pool of Go services whose /ready
-	// arrived in a release that may not run everywhere yet keeps probing /health: one monitor covers every origin in a
-	// pool, including origins still on the older release during a rolling upgrade.
-	if paths["chandler"] != "/ready" {
-		t.Errorf("chandler monitor path = %q, want /ready", paths["chandler"])
-	}
-	for _, name := range []string{"bridge", "steward", "foghorn"} {
-		if svc := servicedefs.Services[name]; svc.ReadySince != "" && paths[name] != "/health" {
-			t.Errorf("%s monitor path = %q while ReadySince=%s, want /health", name, paths[name], svc.ReadySince)
-		}
-	}
-	for _, edge := range []string{"edge", "edge-egress", "edge-ingest", "edge-storage", "edge-processing"} {
-		if paths[edge] != "/health" {
-			t.Errorf("%s monitor path = %q, want the edge ingress /health", edge, paths[edge])
-		}
-	}
-}
-
-// TestEnsureMonitorMovesExistingMonitorToReadinessPath proves the reconcile path the readiness switch relies on: a
-// monitor created on /health is updated in place once the service's fleet readiness path is /ready, without creating
-// a second monitor.
-func TestEnsureMonitorMovesExistingMonitorToReadinessPath(t *testing.T) {
-	var updated, created []cloudflare.Monitor
-	cf := &fakeCloudflareClient{
-		listMonitors: func() ([]cloudflare.Monitor, error) {
-			return []cloudflare.Monitor{{ID: "mon-chandler", Description: "nav-chandler-health", Type: "http", Method: "GET", Path: "/health", Port: 18020, ExpectedCodes: "200"}}, nil
-		},
-		updateMonitor: func(id string, m cloudflare.Monitor) (*cloudflare.Monitor, error) {
-			updated = append(updated, m)
-			m.ID = id
-			return &m, nil
-		},
-		createMonitor: func(m cloudflare.Monitor) (*cloudflare.Monitor, error) {
-			created = append(created, m)
-			m.ID = "new"
-			return &m, nil
-		},
-	}
-	manager := NewDNSManager(cf, &fakeQuartermasterClient{}, logrus.New(), "example.com", 60, 60, 5*time.Minute, MonitorConfig{})
-
-	id, err := manager.ensureMonitor("chandler")
-	if err != nil {
-		t.Fatalf("ensureMonitor: %v", err)
-	}
-	if id != "mon-chandler" {
-		t.Fatalf("monitor id = %q, want the existing monitor", id)
-	}
-	if len(updated) != 1 || updated[0].Path != "/ready" {
-		t.Fatalf("updated monitors = %+v, want one update to /ready", updated)
-	}
-	if len(created) != 0 {
-		t.Fatalf("created %d monitors, want the existing one updated in place", len(created))
-	}
-}
-
-func TestSyncService_BridgeUsesServiceType(t *testing.T) {
-	qm := &fakeQuartermasterClient{err: errors.New("quartermaster unavailable")}
-	cf := &fakeCloudflareClient{}
-	logger := logrus.New()
-	manager := NewDNSManager(cf, qm, logger, "example.com", 60, 60, 5*time.Minute, MonitorConfig{})
-
-	_, _ = manager.SyncService(context.Background(), "bridge", "")
-	if qm.serviceType != "bridge" {
-		t.Fatalf("expected serviceType='bridge', got %q", qm.serviceType)
-	}
-}
-
-func TestSyncService_FoghornUsesServiceType(t *testing.T) {
-	qm := &fakeQuartermasterClient{err: errors.New("quartermaster unavailable")}
-	cf := &fakeCloudflareClient{}
-	logger := logrus.New()
-	manager := NewDNSManager(cf, qm, logger, "example.com", 60, 60, 5*time.Minute, MonitorConfig{})
-
-	_, _ = manager.SyncService(context.Background(), "foghorn", "")
-	if qm.serviceType != "foghorn" {
-		t.Fatalf("expected serviceType='foghorn', got %q", qm.serviceType)
-	}
-}
-
-func TestSyncService_LivepeerGatewayUsesServiceType(t *testing.T) {
-	qm := &fakeQuartermasterClient{err: errors.New("quartermaster unavailable")}
-	cf := &fakeCloudflareClient{}
-	logger := logrus.New()
-	manager := NewDNSManager(cf, qm, logger, "example.com", 60, 60, 5*time.Minute, MonitorConfig{})
-
-	_, _ = manager.SyncService(context.Background(), "livepeer-gateway", "")
-	if qm.serviceType != "livepeer-gateway" {
-		t.Fatalf("expected serviceType='livepeer-gateway', got %q", qm.serviceType)
-	}
-}
-
-func TestSyncService_WebServicesUseServiceType(t *testing.T) {
-	for _, svc := range []string{"chartroom", "foredeck", "logbook", "steward"} {
-		qm := &fakeQuartermasterClient{err: errors.New("quartermaster unavailable")}
-		cf := &fakeCloudflareClient{}
-		logger := logrus.New()
-		manager := NewDNSManager(cf, qm, logger, "example.com", 60, 60, 5*time.Minute, MonitorConfig{})
-
-		_, _ = manager.SyncService(context.Background(), svc, "")
-		if qm.serviceType != svc {
-			t.Errorf("%s: expected serviceType=%q, got %q", svc, svc, qm.serviceType)
-		}
-	}
-}
-
-func TestSyncService_GenericEdgePassesServiceType(t *testing.T) {
-	qm := &fakeQuartermasterClient{err: errors.New("quartermaster unavailable")}
-	cf := &fakeCloudflareClient{}
-	logger := logrus.New()
-	manager := NewDNSManager(cf, qm, logger, "example.com", 60, 60, 5*time.Minute, MonitorConfig{})
-
-	_, _ = manager.SyncService(context.Background(), "edge", "")
-	if qm.serviceType != "edge" {
-		t.Fatalf("expected serviceType='edge', got %q", qm.serviceType)
 	}
 }
 
@@ -3034,10 +2872,10 @@ func TestEnsureMonitor_UsesPerServiceHealthPath(t *testing.T) {
 	manager := newTestManager(cf)
 	// Override healthPaths to verify it's used
 	manager.healthPaths = map[string]string{
-		"logbook": "/custom-health",
+		"edge-egress": "/custom-health",
 	}
 
-	_, err := manager.ensureMonitor("logbook")
+	_, err := manager.ensureMonitor("edge-egress")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

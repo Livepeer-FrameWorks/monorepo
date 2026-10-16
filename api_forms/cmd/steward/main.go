@@ -132,11 +132,12 @@ func main() {
 
 	server.RegisterEnvFileReload("steward", logger)
 	if runErr := server.Run(context.Background(), server.RunSpec{
-		Service:  "steward",
-		Logger:   logger,
-		Ready:    readiness,
-		HTTP:     []server.HTTPListener{{Name: "http", Port: cfg.Port, Handler: app}},
-		OnReload: []server.ReloadCallback{liveBranding.Reload},
+		Service:   "steward",
+		Logger:    logger,
+		Ready:     readiness,
+		BindAddrs: cfg.BindAddrs,
+		HTTP:      []server.HTTPListener{{Name: "http", Port: cfg.Port, Handler: app}},
+		OnReload:  []server.ReloadCallback{liveBranding.Reload},
 	}); runErr != nil {
 		logger.WithError(runErr).Fatal("Server exited with error")
 	}

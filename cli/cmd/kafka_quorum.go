@@ -186,7 +186,7 @@ func checkKafkaQuorum(ctx context.Context, manifest *inventory.Manifest, cluster
 	}
 	controllers := kafkaQuorumControllers(cluster)
 	var problems []string
-	cmdResult, runErr := runner.Run(ctx, kafkaToolCommand(mode, port, "kafka-metadata-quorum", "describe --status"))
+	cmdResult, runErr := runner.Run(ctx, kafkaToolCommand(mode, kafkaLocalBootstrap(host, port), "kafka-metadata-quorum", "describe --status"))
 	if runErr != nil || cmdResult == nil || cmdResult.ExitCode != 0 {
 		problems = append(problems, "quorum status unreadable: "+diagnosticCommandError(cmdResult, runErr))
 	} else if status, parseErr := parseKafkaQuorumStatus(cmdResult.Stdout); parseErr != nil {

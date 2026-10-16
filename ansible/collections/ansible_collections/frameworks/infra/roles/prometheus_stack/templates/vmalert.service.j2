@@ -2,7 +2,7 @@
    restores alert state from it on restart (-remoteRead.url). Flags stay on one
    line so a notifier list never leaves a dangling continuation. #}
 {% set vmalert_args = [
-  '-httpListenAddr=:' ~ vmalert_port,
+  '-httpListenAddr=127.0.0.1:' ~ vmalert_port,
   '-rule=' ~ vmalert_rules_dir ~ '/*.yml',
   '-datasource.url=' ~ vmalert_datasource_url,
   '-remoteWrite.url=' ~ vmalert_datasource_url,

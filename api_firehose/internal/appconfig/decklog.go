@@ -11,6 +11,7 @@ import "github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 //
 //configref:service decklog cmd=cmd/decklog
 type Decklog struct {
+	config.ListenAddrs
 	config.HTTPRuntime
 	config.Logging
 	config.GRPCMetadataPolicy

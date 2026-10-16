@@ -6,9 +6,9 @@ Remote-signer-only gateways are therefore deferred until the go-livepeer fork ga
 
 ## Current protection
 
-- The gateway HTTP and CLI listeners bind loopback and are reached only through the configured reverse proxy or SSH.
+- The gateway HTTP and CLI listeners bind loopback and are reached only through the configured reverse proxy or SSH. In Docker mode the container binds every interface of its own network namespace on the same ports, and the host publishes the HTTP port on loopback and the WireGuard address (where a docker-mode proxy reaches it) and the CLI port on loopback alone.
 - Transaction routes are absent unless an operator temporarily sets `enable_cli_tx_routes: "true"`; upstream mutation handlers are POST-only and take form bodies.
-- The keystore is rendered only for Livepeer key-consuming services. The systemd unit uses a strict sandbox and mode-0600 key/password files.
+- The keystore is rendered only for Livepeer key-consuming services. The systemd unit uses a strict sandbox and mode-0600 key/password files. In Docker mode the keystore is a mode-0600 file in the Compose project mounted read-only into the container, the password sits in the mode-0600 Compose `.env` file, and every go-livepeer flag reaches the image's bare `livepeer` entrypoint as an `LP_<FLAG>` variable.
 - Purser owns routine TicketBroker deposit/reserve funding and enforces a durable daily cap. Gateways do not auto-deposit and receive no routine native ETH top-up.
 - `frameworks livepeer` reads wallet state directly from Arbitrum. Exceptional reserve/unlock/withdraw operations SSH to the selected gateway and call its loopback CLI; the maintenance flag must be removed afterward.
 - Public `/live/` ingest is restricted to POST/PUT, authenticates a Foghorn-signed job capability, binds the assigned edge node and source IP, and rejects client changes to the stored transcode specification.
@@ -19,10 +19,9 @@ The `livepeer-signer` service definition remains available for development of th
 
 When a signer service is provisioned for that future work, current validation already requires:
 
-- native deployment;
 - a loopback CLI listener;
 - a local keystore, password, and Ethereum RPC;
-- an explicit HTTP bind on the host WireGuard address unless an auth webhook is configured;
+- an explicit HTTP bind on the host WireGuard address unless an auth webhook is configured (the rollout gate and the local vmagent then reach it on that address);
 - `remote_signer_allow_no_auth` disabled; and
 - Privateer coverage for the signer host.
 

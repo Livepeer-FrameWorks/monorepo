@@ -3,7 +3,7 @@
   block:
     - name: Wait for Livepeer health endpoint
       ansible.builtin.uri:
-        url: "http://127.0.0.1:{{ go_service_port }}/healthz"
+        url: "http://{{ go_service_health_host }}:{{ go_service_port }}/healthz"
         method: GET
         status_code: 200
       register: go_service_validate_livepeer_health
@@ -18,7 +18,7 @@
     # Services without a readiness path use the TCP listener check below.
     - name: Wait for service readiness endpoint (HTTP)
       ansible.builtin.uri:
-        url: "http://127.0.0.1:{{ go_service_port }}{{ go_service_health_path }}"
+        url: "http://{{ go_service_health_host }}:{{ go_service_port }}{{ go_service_health_path }}"
         method: GET
         status_code: 200
       register: go_service_validate_readiness
@@ -33,7 +33,7 @@
 
     - name: Wait for service port (when defined)
       ansible.builtin.wait_for:
-        host: 127.0.0.1
+        host: "{{ go_service_health_host }}"
         port: "{{ go_service_port }}"
         timeout: "{{ go_service_validate_timeout }}"
       when:
@@ -139,7 +139,7 @@
     - name: Fail with go_service diagnostics
       ansible.builtin.fail:
         msg: |-
-          frameworks-{{ go_service_name }} did not listen on 127.0.0.1:{{ go_service_port }}
+          frameworks-{{ go_service_name }} did not listen on {{ go_service_health_host }}:{{ go_service_port }}
           systemctl status:
           {{ go_service_validate_status.stdout | default('(no output)') }}
 

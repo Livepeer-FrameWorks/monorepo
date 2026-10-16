@@ -12,7 +12,7 @@ EnvironmentFile={{ vmagent_env_path }}
 # EnvironmentFile (remoteWrite_basicAuth_<flag>), so it never appears in the
 # process command line.
 ExecStart={{ vmagent_bin }} \
-  -httpListenAddr=:{{ vmagent_port }} \
+  -httpListenAddr=127.0.0.1:{{ vmagent_port }} \
   -promscrape.config={{ vmagent_config_path }} \
   -remoteWrite.tmpDataPath={{ vmagent_tmp_data_path }} \
   -remoteWrite.maxDiskUsagePerURL=1GB \
@@ -21,7 +21,7 @@ ExecStart={{ vmagent_bin }} \
   -envflag.enable
 {% else %}
 ExecStart={{ vmagent_bin }} \
-  -httpListenAddr=:{{ vmagent_port }} \
+  -httpListenAddr=127.0.0.1:{{ vmagent_port }} \
   -promscrape.config={{ vmagent_config_path }} \
   -remoteWrite.tmpDataPath={{ vmagent_tmp_data_path }} \
   -remoteWrite.maxDiskUsagePerURL=1GB \

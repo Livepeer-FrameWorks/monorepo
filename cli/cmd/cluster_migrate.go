@@ -333,7 +333,7 @@ func runMigratePostgresBranch(ctx context.Context, cmd *cobra.Command, rc *resol
 	}
 	pgHost := hosts[0]
 	if pg.IsYugabyte() {
-		// Migrations run via ysqlsh -h localhost on the chosen node, so pick a
+		// Migrations run via ysqlsh against the chosen node's own YSQL listener, so pick a
 		// tserver whose local YSQL actually answers, not merely one reachable
 		// over SSH, and fail over to the next node otherwise.
 		h, ok := firstHealthyYugabyteHost(ctx, sshPool, hosts, pg)

@@ -205,7 +205,9 @@ func serviceComposeVars(_ context.Context, cfg ServiceRoleConfig, host inventory
 		}
 	}
 	if cfg.ServiceName == "metabase" {
-		applyMetabaseComposeDefaults(envMap)
+		if err = applyMetabaseComposeDefaults(envMap, host); err != nil {
+			return nil, err
+		}
 		composeFiles[metabaseLog4j2File] = metabaseLog4j2Config
 		composeVolumes = append(composeVolumes, "/var/lib/frameworks/metabase:/metabase-data", "./"+metabaseLog4j2File+":"+metabaseLog4j2MountPath+":ro")
 		composeStateDirs = append(composeStateDirs, map[string]string{
@@ -227,11 +229,30 @@ func serviceComposeVars(_ context.Context, cfg ServiceRoleConfig, host inventory
 			"mode":  "0750",
 		})
 	}
+	composeSecretFiles := map[string]string{}
+	var loopbackPorts []map[string]any
+	if cfg.ServiceName == "livepeer-gateway" || cfg.ServiceName == "livepeer-signer" {
+		livepeer, livepeerErr := applyLivepeerComposeEnv(cfg.ServiceName, envMap, cfg.StateDirs)
+		if livepeerErr != nil {
+			return nil, livepeerErr
+		}
+		composeVolumes = append(composeVolumes, livepeer.volumes...)
+		composeStateDirs = append(composeStateDirs, livepeer.stateDirs...)
+		composeSecretFiles = livepeer.secretFiles
+		loopbackPorts = livepeer.loopbackPorts
+		if httpPort := livepeerHTTPPort(envMap); httpPort > 0 {
+			containerPort = httpPort
+		}
+	}
 	processEnv := scopeProcessEnv(cfg.ServiceName, envMap)
+	// The container binds every interface of its own network namespace; the
+	// published ports decide which host addresses reach it.
+	delete(processEnv, BindAddrsEnv)
 	ports, bindOverrides, err := composePublishedPorts(cfg.ServiceName, host, port, containerPort, processEnv)
 	if err != nil {
 		return nil, err
 	}
+	ports = append(ports, loopbackPorts...)
 	maps.Copy(processEnv, bindOverrides)
 	pkiVolumes, pki := composeInternalPKI(processEnv, config.Metadata)
 	composeVolumes = append(composeVolumes, pkiVolumes...)
@@ -249,6 +270,7 @@ func serviceComposeVars(_ context.Context, cfg ServiceRoleConfig, host inventory
 		),
 		"compose_stack_require_registry_auth": composeRegistryAuthRequired(image),
 		"compose_stack_files":                 composeStackFiles(composeFiles),
+		"compose_stack_secret_files":          composeStackFiles(composeSecretFiles),
 		"compose_stack_service": map[string]any{
 			"image":          image,
 			"port":           port,
@@ -266,12 +288,16 @@ func serviceComposeVars(_ context.Context, cfg ServiceRoleConfig, host inventory
 	}, nil
 }
 
-func applyMetabaseComposeDefaults(env map[string]string) {
+func applyMetabaseComposeDefaults(env map[string]string, host inventory.Host) error {
 	if env["MB_DB_TYPE"] == "" {
 		env["MB_DB_TYPE"] = "postgres"
 	}
 	if env["MB_DB_HOST"] == "" {
-		env["MB_DB_HOST"] = rewriteLoopbackForDockerHost(firstNonEmpty(env["DATABASE_HOST"], "127.0.0.1"))
+		dbHost, err := dockerHostAddr(firstNonEmpty(env["DATABASE_HOST"], "127.0.0.1"), host)
+		if err != nil {
+			return fmt.Errorf("metabase Postgres: %w", err)
+		}
+		env["MB_DB_HOST"] = dbHost
 	}
 	if env["MB_DB_PORT"] == "" {
 		env["MB_DB_PORT"] = firstNonEmpty(env["DATABASE_PORT"], "5432")
@@ -289,6 +315,7 @@ func applyMetabaseComposeDefaults(env map[string]string) {
 	if !strings.Contains(env["JAVA_OPTS"], logConfig) {
 		env["JAVA_OPTS"] = strings.TrimSpace(env["JAVA_OPTS"] + " " + logConfig)
 	}
+	return nil
 }
 
 const (
@@ -403,8 +430,8 @@ func serviceNativeVars(ctx context.Context, cfg ServiceRoleConfig, host inventor
 		port = cfg.DefaultPort
 	}
 	envMap := buildServiceEnvMap(config)
-	if key := meshOnlyBindEnv[cfg.ServiceName]; key != "" && strings.TrimSpace(envMap[key]) == "" {
-		envMap[key] = strings.Join(meshOnlyHTTPAddrs(cfg.ServiceName, host), ",")
+	if ReadsBindAddrs(cfg.ServiceName) && strings.TrimSpace(envMap[BindAddrsEnv]) == "" {
+		envMap[BindAddrsEnv] = strings.Join(loopbackAndMeshAddrs(host), ",")
 	}
 	if cfg.ServiceName == "livepeer-gateway" || cfg.ServiceName == "livepeer-signer" {
 		applyLivepeerNativeEnvDefaults(cfg.ServiceName, envMap, cfg.StateDirs)
@@ -478,6 +505,9 @@ func serviceNativeVars(ctx context.Context, cfg ServiceRoleConfig, host inventor
 		"go_service_supports_sighup_reload":           servicedefs.SupportsSIGHUPReload(cfg.ServiceName),
 		"go_service_sandbox":                          cfg.ServiceName == "livepeer-gateway" || cfg.ServiceName == "livepeer-signer",
 	}
+	if probeHost := livepeerHTTPProbeHost(cfg.ServiceName, envMap); probeHost != "" {
+		vars["go_service_health_host"] = probeHost
+	}
 	if ca := metaString(config.Metadata, "internal_ca_bundle_pem"); ca != "" {
 		vars["go_service_internal_ca_bundle_pem"] = ca
 	}
@@ -488,6 +518,25 @@ func serviceNativeVars(ctx context.Context, cfg ServiceRoleConfig, host inventor
 		vars["go_service_internal_tls_key_pem"] = key
 	}
 	return vars, nil
+}
+
+// livepeerHTTPProbeHost is the address the rollout gate probes a go-livepeer
+// service on: the host its http_addr binds, when that is one specific
+// non-loopback address (a signer on its WireGuard address), so the probe does
+// not dial a loopback where nothing listens. Empty keeps loopback.
+func livepeerHTTPProbeHost(serviceName string, env map[string]string) string {
+	if serviceName != "livepeer-gateway" && serviceName != "livepeer-signer" {
+		return ""
+	}
+	host, _, err := net.SplitHostPort(strings.TrimSpace(env["http_addr"]))
+	if err != nil {
+		return ""
+	}
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	if ip == nil || ip.IsLoopback() || ip.IsUnspecified() {
+		return ""
+	}
+	return ip.String()
 }
 
 const (
@@ -710,35 +759,29 @@ func livepeerNativeArgs(serviceName string, env map[string]string, stateDirs []s
 	return args
 }
 
-// meshOnlyBindEnv names the variable through which each mesh-only service
-// receives its listen addresses in native mode.
-var meshOnlyBindEnv = map[string]string{
-	"bridge":           "BRIDGE_BIND_ADDRS",
-	"network-observer": "NETWORK_OBSERVER_BIND_ADDRS",
-}
+// BindAddrsEnv is the variable through which a FrameWorks Go service receives
+// the addresses its listeners bind (pkg/config ListenAddrs).
+const BindAddrsEnv = "BIND_ADDRS"
 
-// MeshOnlyHTTPService reports whether serviceName's HTTP port answers only on
-// loopback and the host's WireGuard address (meshOnlyHTTPAddrs).
-func MeshOnlyHTTPService(serviceName string) bool {
-	return meshOnlyBindEnv[serviceName] != ""
-}
-
-// meshOnlyHTTPAddrs is where a mesh-only service answers on a host: loopback
-// for local callers (native nginx, vmagent, rollout readiness), and the
-// WireGuard address for mesh peers. For Bridge those are a docker-mode proxy
-// on the same host, the peers' nginx upstream backups, Skipper's
-// bridge.internal MCP calls and Quartermaster's health probes; the LAN and
-// public interfaces stay closed so a client cannot bypass the proxy's TLS and
-// client-IP headers. The network observer has no public listener at all:
-// Bridge reaches its internal API and Quartermaster its health port over the
-// mesh, and external probers only through Bridge's relay.
-func meshOnlyHTTPAddrs(serviceName string, host inventory.Host) []string {
-	if !MeshOnlyHTTPService(serviceName) {
-		return nil
+// ReadsBindAddrs reports whether serviceName's process binds its listeners to
+// BIND_ADDRS, as its typed configuration declares.
+func ReadsBindAddrs(serviceName string) bool {
+	keys, err := serviceSchemaEnvKeys(serviceName)
+	if err != nil {
+		return false
 	}
-	return loopbackAndMeshAddrs(host)
+	_, ok := keys[BindAddrsEnv]
+	return ok
 }
 
+// loopbackAndMeshAddrs is where a service answers on a host: loopback for
+// local callers (the native reverse proxy, vmagent, the rollout gate), and the
+// WireGuard address for mesh peers (a docker-mode proxy on the same host, the
+// peers' proxy backups, gRPC clients at <service>.internal, Quartermaster's
+// health probes). The LAN and public interfaces stay closed, so no client
+// bypasses the reverse proxy's TLS and client-IP headers. A host without a
+// WireGuard address is a single-host cluster (validateProvisionMeshIdentity),
+// where every caller is on loopback.
 func loopbackAndMeshAddrs(host inventory.Host) []string {
 	addrs := []string{"127.0.0.1"}
 	if ip := strings.TrimSpace(host.WireguardIP); ip != "" {
@@ -772,14 +815,17 @@ var composeOnlyServices = []string{"listmonk", "chatwoot"}
 
 // LocalUpstreamOnLoopbackAndMesh reports whether serviceName, deployed in
 // mode, answers a proxy on its own host only on loopback and the host's
-// WireGuard address: a mesh-only service in either mode, and every service
-// deployed as a Compose stack (composePublishAddrs). A docker-mode proxy
-// cannot reach such an upstream through the Docker gateway.
+// WireGuard address: every service deployed as a Compose stack
+// (composePublishAddrs), and a native service that binds BIND_ADDRS. A
+// docker-mode proxy cannot reach such an upstream through the Docker gateway.
 func LocalUpstreamOnLoopbackAndMesh(serviceName, mode string) bool {
-	if MeshOnlyHTTPService(serviceName) || slices.Contains(composeOnlyServices, serviceName) {
+	if slices.Contains(composeOnlyServices, serviceName) {
 		return true
 	}
-	return isGenericServiceRole(serviceName) && (mode == "" || mode == "docker")
+	if !isGenericServiceRole(serviceName) {
+		return false
+	}
+	return mode == "" || mode == "docker" || ReadsBindAddrs(serviceName)
 }
 
 func buildServiceEnvMap(config ServiceConfig) map[string]string {

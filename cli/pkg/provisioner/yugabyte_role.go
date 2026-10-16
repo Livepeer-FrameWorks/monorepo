@@ -33,9 +33,18 @@ func yugabyteRoleVars(ctx context.Context, host inventory.Host, config ServiceCo
 	}
 	rf := metaIntOr(config.Metadata, "replication_factor", 3)
 	nodeID := metaIntOr(config.Metadata, "node_id", 0)
+	// Every YugabyteDB listener binds the node address: the WireGuard address,
+	// where peers, services at <node>.internal and the node's own admin tasks
+	// connect. A single host without one keeps them on loopback rather than
+	// on its external address.
+	nodeAddress := meshOrExternal(config.Metadata, host)
 	masterAddresses := metaString(config.Metadata, "master_addresses")
+	if strings.TrimSpace(host.WireguardIP) == "" {
+		nodeAddress = "127.0.0.1"
+		masterAddresses = fmt.Sprintf("127.0.0.1:%d", metaIntOr(config.Metadata, "master_rpc_port", 7100))
+	}
 	if masterAddresses == "" {
-		masterAddresses = fmt.Sprintf("%s:7100", meshOrExternal(config.Metadata, host))
+		masterAddresses = fmt.Sprintf("%s:7100", nodeAddress)
 	}
 	relayoutOperatorUser := strings.TrimSpace(host.User)
 	if relayoutOperatorUser == "" {
@@ -46,7 +55,7 @@ func yugabyteRoleVars(ctx context.Context, host inventory.Host, config ServiceCo
 		"yugabyte_artifact_url":           artifact.URL,
 		"yugabyte_artifact_checksum":      artifact.Checksum,
 		"yugabyte_version":                releaseVersion(config.Version, artifact.Version),
-		"yugabyte_node_address":           meshOrExternal(config.Metadata, host),
+		"yugabyte_node_address":           nodeAddress,
 		"yugabyte_master_addresses":       masterAddresses,
 		"yugabyte_replication_factor":     rf,
 		"yugabyte_ysql_port":              port,
@@ -58,6 +67,11 @@ func yugabyteRoleVars(ctx context.Context, host inventory.Host, config ServiceCo
 		"yugabyte_restart_scope":          yugabyteRestartScope(config.Metadata),
 		"yugabyte_allow_engine_change":    metaBool(config.Metadata, "allow_engine_change", false),
 		"yugabyte_relayout_operator_user": relayoutOperatorUser,
+	}
+	// YSQL accepts password logins from the mesh only: services at
+	// <node>.internal and on this node dial the WireGuard address.
+	if cidr := metaString(config.Metadata, "mesh_cidr"); cidr != "" && strings.TrimSpace(host.WireguardIP) != "" {
+		vars["yugabyte_hba_client_cidr"] = cidr
 	}
 	for _, field := range []string{"cloud", "region", "zone"} {
 		if value := metaString(config.Metadata, "placement_"+field); value != "" {

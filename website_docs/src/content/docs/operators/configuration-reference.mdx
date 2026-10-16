@@ -19,6 +19,7 @@ Read by `api_webhooks/cmd/bosun`.
 
 | Variable | Type | Default | Notes | Since | Description |
 | --- | --- | --- | --- | --- | --- |
+| `BIND_ADDRS` | list |  |  | v0.3.13 | Comma-separated addresses the service's listeners bind, one socket per address and port. Provisioning sets loopback and the host's WireGuard address, so only same-host callers such as the reverse proxy and vmagent, and mesh peers, reach the service. A listener that clients outside the mesh dial, such as Foghorn's external gRPC listener, and a listener with its own bind address setting keep their bind. Empty binds every interface. |
 | `GIN_MODE` | string | `debug` |  | v0.3.0 | Router mode. release enables Gin release mode and restricts CORS to ALLOWED_ORIGINS; any other value runs the router in development mode. |
 | `ALLOWED_ORIGINS` | list |  |  | v0.3.0 | Comma-separated browser origins accepted by CORS when GIN_MODE is release. |
 | `LOG_LEVEL` | string | `info` |  | v0.3.0 | Log level: debug, info, warn, or error. Any other value fails startup. |
@@ -73,6 +74,7 @@ Read by `api_gateway/cmd/bridge`.
 | `NETWORK_PUBLIC_TENANT_IDS` | list |  |  | v0.3.13 | Explicit platform-owned tenant scopes whose public Livepeer observations can be published. |
 | `LIVEPEER_NETWORK_ID` | string | `42161` |  | v0.3.13 | Livepeer production network namespace. |
 | `NETWORK_OBSERVER_ENVIRONMENT` | string | `production` |  | v0.3.13 | Network observation environment. |
+| `BIND_ADDRS` | list |  |  | v0.3.13 | Comma-separated addresses the service's listeners bind, one socket per address and port. Provisioning sets loopback and the host's WireGuard address, so only same-host callers such as the reverse proxy and vmagent, and mesh peers, reach the service. A listener that clients outside the mesh dial, such as Foghorn's external gRPC listener, and a listener with its own bind address setting keep their bind. Empty binds every interface. |
 | `PORT` | string | `18000` |  | v0.3.0 | TCP port for the HTTP listener that serves health, readiness, metrics, and HTTP APIs. |
 | `GIN_MODE` | string | `debug` |  | v0.3.0 | Router mode. release enables Gin release mode and restricts CORS to ALLOWED_ORIGINS; any other value runs the router in development mode. |
 | `ALLOWED_ORIGINS` | list |  |  | v0.3.0 | Comma-separated browser origins accepted by CORS when GIN_MODE is release. |
@@ -83,7 +85,6 @@ Read by `api_gateway/cmd/bridge`.
 | `NODE_ID` | string |  |  | v0.3.0 | Node the instance registers under in Quartermaster. |
 | `BUILD_ENV` | string |  |  | v0.3.0 | Runtime environment selector. Empty, dev, or development enables development-only behavior; production or prod marks a production process. |
 | `BRIDGE_HOST` | string | `bridge` |  | v0.3.0 | Host name this instance advertises when it registers with Quartermaster. |
-| `BRIDGE_BIND_ADDRS` | list |  |  | v0.3.13 | Comma-separated addresses the HTTP listener on PORT binds, one listener per address. Provisioning sets loopback and the host's WireGuard address so only the local reverse proxy and mesh peers reach Bridge. Empty binds every interface. |
 | `HOSTNAME` | string | `bridge` |  | v0.3.0 | Node name recorded as the source of API usage events. |
 | `REGION` | string |  |  | v0.3.0 | Region label attached to API usage events sent to Decklog. |
 | `COMMODORE_GRPC_ADDR` | string |  | required | v0.3.0 | Commodore gRPC address for authentication, streams, and tenant resources. |
@@ -148,6 +149,7 @@ Read by `api_control/cmd/commodore`.
 
 | Variable | Type | Default | Notes | Since | Description |
 | --- | --- | --- | --- | --- | --- |
+| `BIND_ADDRS` | list |  |  | v0.3.13 | Comma-separated addresses the service's listeners bind, one socket per address and port. Provisioning sets loopback and the host's WireGuard address, so only same-host callers such as the reverse proxy and vmagent, and mesh peers, reach the service. A listener that clients outside the mesh dial, such as Foghorn's external gRPC listener, and a listener with its own bind address setting keep their bind. Empty binds every interface. |
 | `PORT` | string | `18001` |  | v0.3.0 | TCP port for the HTTP listener that serves health, readiness, metrics, and HTTP APIs. |
 | `GRPC_PORT` | string | `19001` |  | v0.3.0 | TCP port for the gRPC listener. |
 | `GIN_MODE` | string | `debug` |  | v0.3.0 | Router mode. release enables Gin release mode and restricts CORS to ALLOWED_ORIGINS; any other value runs the router in development mode. |
@@ -254,6 +256,7 @@ Read by `api_billing/cmd/purser`.
 
 | Variable | Type | Default | Notes | Since | Description |
 | --- | --- | --- | --- | --- | --- |
+| `BIND_ADDRS` | list |  |  | v0.3.13 | Comma-separated addresses the service's listeners bind, one socket per address and port. Provisioning sets loopback and the host's WireGuard address, so only same-host callers such as the reverse proxy and vmagent, and mesh peers, reach the service. A listener that clients outside the mesh dial, such as Foghorn's external gRPC listener, and a listener with its own bind address setting keep their bind. Empty binds every interface. |
 | `PORT` | string | `18003` |  | v0.3.0 | TCP port for the HTTP listener that serves health, readiness, metrics, and HTTP APIs. |
 | `GRPC_PORT` | string | `19003` |  | v0.3.0 | TCP port for the gRPC listener. |
 | `GIN_MODE` | string | `debug` |  | v0.3.0 | Router mode. release enables Gin release mode and restricts CORS to ALLOWED_ORIGINS; any other value runs the router in development mode. |
@@ -392,6 +395,7 @@ Read by `api_tenants/cmd/quartermaster`.
 
 | Variable | Type | Default | Notes | Since | Description |
 | --- | --- | --- | --- | --- | --- |
+| `BIND_ADDRS` | list |  |  | v0.3.13 | Comma-separated addresses the service's listeners bind, one socket per address and port. Provisioning sets loopback and the host's WireGuard address, so only same-host callers such as the reverse proxy and vmagent, and mesh peers, reach the service. A listener that clients outside the mesh dial, such as Foghorn's external gRPC listener, and a listener with its own bind address setting keep their bind. Empty binds every interface. |
 | `PORT` | string | `18002` |  | v0.3.0 | TCP port for the HTTP listener that serves health, readiness, metrics, and HTTP APIs. |
 | `GRPC_PORT` | string | `19002` |  | v0.3.0 | TCP port for the gRPC listener. |
 | `GIN_MODE` | string | `debug` |  | v0.3.0 | Router mode. release enables Gin release mode and restricts CORS to ALLOWED_ORIGINS; any other value runs the router in development mode. |
@@ -461,6 +465,7 @@ Read by `api_firehose/cmd/decklog`.
 
 | Variable | Type | Default | Notes | Since | Description |
 | --- | --- | --- | --- | --- | --- |
+| `BIND_ADDRS` | list |  |  | v0.3.13 | Comma-separated addresses the service's listeners bind, one socket per address and port. Provisioning sets loopback and the host's WireGuard address, so only same-host callers such as the reverse proxy and vmagent, and mesh peers, reach the service. A listener that clients outside the mesh dial, such as Foghorn's external gRPC listener, and a listener with its own bind address setting keep their bind. Empty binds every interface. |
 | `GIN_MODE` | string | `debug` |  | v0.3.0 | Router mode. release enables Gin release mode and restricts CORS to ALLOWED_ORIGINS; any other value runs the router in development mode. |
 | `ALLOWED_ORIGINS` | list |  |  | v0.3.0 | Comma-separated browser origins accepted by CORS when GIN_MODE is release. |
 | `LOG_LEVEL` | string | `info` |  | v0.3.0 | Log level: debug, info, warn, or error. Any other value fails startup. |
@@ -492,6 +497,7 @@ Read by `api_realtime/cmd/signalman`.
 
 | Variable | Type | Default | Notes | Since | Description |
 | --- | --- | --- | --- | --- | --- |
+| `BIND_ADDRS` | list |  |  | v0.3.13 | Comma-separated addresses the service's listeners bind, one socket per address and port. Provisioning sets loopback and the host's WireGuard address, so only same-host callers such as the reverse proxy and vmagent, and mesh peers, reach the service. A listener that clients outside the mesh dial, such as Foghorn's external gRPC listener, and a listener with its own bind address setting keep their bind. Empty binds every interface. |
 | `PORT` | string | `18009` |  | v0.3.0 | TCP port for the HTTP listener that serves health, readiness, metrics, and HTTP APIs. |
 | `GRPC_PORT` | string | `19005` |  | v0.3.0 | TCP port for the gRPC listener. |
 | `GIN_MODE` | string | `debug` |  | v0.3.0 | Router mode. release enables Gin release mode and restricts CORS to ALLOWED_ORIGINS; any other value runs the router in development mode. |
@@ -526,6 +532,7 @@ Read by `api_network_observer/cmd/network-observer`.
 
 | Variable | Type | Default | Notes | Since | Description |
 | --- | --- | --- | --- | --- | --- |
+| `BIND_ADDRS` | list |  |  | v0.3.13 | Comma-separated addresses the service's listeners bind, one socket per address and port. Provisioning sets loopback and the host's WireGuard address, so only same-host callers such as the reverse proxy and vmagent, and mesh peers, reach the service. A listener that clients outside the mesh dial, such as Foghorn's external gRPC listener, and a listener with its own bind address setting keep their bind. Empty binds every interface. |
 | `GIN_MODE` | string | `debug` |  | v0.3.0 | Router mode. release enables Gin release mode and restricts CORS to ALLOWED_ORIGINS; any other value runs the router in development mode. |
 | `ALLOWED_ORIGINS` | list |  |  | v0.3.0 | Comma-separated browser origins accepted by CORS when GIN_MODE is release. |
 | `LOG_LEVEL` | string | `info` |  | v0.3.0 | Log level: debug, info, warn, or error. Any other value fails startup. |
@@ -538,7 +545,6 @@ Read by `api_network_observer/cmd/network-observer`.
 | `NODE_ID` | string |  |  | v0.3.0 | Node the instance registers under in Quartermaster. |
 | `NETWORK_OBSERVER_PORT` | string | `18024` |  | v0.3.13 | HTTP port for observer ingest, assignments and candidate feeds. |
 | `NETWORK_OBSERVER_INTERNAL_PORT` | string | `18034` |  | v0.3.13 | HTTPS port serving the same API to mesh callers such as Bridge with the internal-CA certificate in GRPC_TLS_CERT_PATH/GRPC_TLS_KEY_PATH; not opened when those are unset. |
-| `NETWORK_OBSERVER_BIND_ADDRS` | list |  |  | v0.3.13 | Comma-separated addresses both observer ports bind, one listener per address and port. Provisioning sets loopback and the host's WireGuard address so only local probes and mesh peers such as Bridge and Quartermaster reach the observer. Empty binds every interface. |
 | `NETWORK_OBSERVER_HOST` | string | `network-observer` |  | v0.3.13 | Host name this instance advertises when it registers with Quartermaster. |
 | `QUARTERMASTER_GRPC_ADDR` | string |  |  | v0.3.13 | Quartermaster gRPC address for service registration, which publishes the observer's mesh DNS name to Bridge. Empty skips registration. |
 | `QUARTERMASTER_GRPC_TLS_SERVER_NAME` | string |  |  | v0.3.13 | TLS server name override for the Quartermaster connection. Empty uses the canonical internal name. |
@@ -567,6 +573,7 @@ Read by `api_network_observer/cmd/network-prober`.
 | Variable | Type | Default | Notes | Since | Description |
 | --- | --- | --- | --- | --- | --- |
 | `NETWORK_PROBER_PORT` | string | `18025` |  | v0.3.13 | Local prober health and spool statistics HTTP port. |
+| `BIND_ADDRS` | list |  |  | v0.3.13 | Comma-separated addresses the service's listeners bind, one socket per address and port. Provisioning sets loopback and the host's WireGuard address, so only same-host callers such as the reverse proxy and vmagent, and mesh peers, reach the service. A listener that clients outside the mesh dial, such as Foghorn's external gRPC listener, and a listener with its own bind address setting keep their bind. Empty binds every interface. |
 | `LOG_LEVEL` | string | `info` |  | v0.3.0 | Log level: debug, info, warn, or error. Any other value fails startup. |
 | `NETWORK_OBSERVER_URL` | string |  | required | v0.3.13 | Verified HTTPS observer relay on the platform's public Bridge API, such as https://bridge.example.net/network-observer; the prober appends the observer's /v1 paths. |
 | `NETWORK_OBSERVER_SECRET` | string |  | required, secret | v0.3.13 | Shared observer ingest bearer secret. |
@@ -588,6 +595,7 @@ Read by `api_analytics_ingest/cmd/periscope`.
 
 | Variable | Type | Default | Notes | Since | Description |
 | --- | --- | --- | --- | --- | --- |
+| `BIND_ADDRS` | list |  |  | v0.3.13 | Comma-separated addresses the service's listeners bind, one socket per address and port. Provisioning sets loopback and the host's WireGuard address, so only same-host callers such as the reverse proxy and vmagent, and mesh peers, reach the service. A listener that clients outside the mesh dial, such as Foghorn's external gRPC listener, and a listener with its own bind address setting keep their bind. Empty binds every interface. |
 | `PORT` | string | `18005` |  | v0.3.0 | TCP port for the HTTP listener that serves health, readiness, metrics, and HTTP APIs. |
 | `GIN_MODE` | string | `debug` |  | v0.3.0 | Router mode. release enables Gin release mode and restricts CORS to ALLOWED_ORIGINS; any other value runs the router in development mode. |
 | `ALLOWED_ORIGINS` | list |  |  | v0.3.0 | Comma-separated browser origins accepted by CORS when GIN_MODE is release. |
@@ -622,6 +630,7 @@ Read by `api_analytics_query/cmd/periscope-metering`.
 
 | Variable | Type | Default | Notes | Since | Description |
 | --- | --- | --- | --- | --- | --- |
+| `BIND_ADDRS` | list |  |  | v0.3.13 | Comma-separated addresses the service's listeners bind, one socket per address and port. Provisioning sets loopback and the host's WireGuard address, so only same-host callers such as the reverse proxy and vmagent, and mesh peers, reach the service. A listener that clients outside the mesh dial, such as Foghorn's external gRPC listener, and a listener with its own bind address setting keep their bind. Empty binds every interface. |
 | `PORT` | string | `18021` |  | v0.3.0 | TCP port for the HTTP listener that serves health, readiness, metrics, and HTTP APIs. |
 | `GIN_MODE` | string | `debug` |  | v0.3.0 | Router mode. release enables Gin release mode and restricts CORS to ALLOWED_ORIGINS; any other value runs the router in development mode. |
 | `ALLOWED_ORIGINS` | list |  |  | v0.3.0 | Comma-separated browser origins accepted by CORS when GIN_MODE is release. |
@@ -649,6 +658,7 @@ Read by `api_analytics_query/cmd/periscope`.
 
 | Variable | Type | Default | Notes | Since | Description |
 | --- | --- | --- | --- | --- | --- |
+| `BIND_ADDRS` | list |  |  | v0.3.13 | Comma-separated addresses the service's listeners bind, one socket per address and port. Provisioning sets loopback and the host's WireGuard address, so only same-host callers such as the reverse proxy and vmagent, and mesh peers, reach the service. A listener that clients outside the mesh dial, such as Foghorn's external gRPC listener, and a listener with its own bind address setting keep their bind. Empty binds every interface. |
 | `PORT` | string | `18004` |  | v0.3.0 | TCP port for the HTTP listener that serves health, readiness, metrics, and HTTP APIs. |
 | `GRPC_PORT` | string | `19004` |  | v0.3.0 | TCP port for the gRPC listener. |
 | `GIN_MODE` | string | `debug` |  | v0.3.0 | Router mode. release enables Gin release mode and restricts CORS to ALLOWED_ORIGINS; any other value runs the router in development mode. |
@@ -677,6 +687,7 @@ Read by `api_assets/cmd/chandler`.
 
 | Variable | Type | Default | Notes | Since | Description |
 | --- | --- | --- | --- | --- | --- |
+| `BIND_ADDRS` | list |  |  | v0.3.13 | Comma-separated addresses the service's listeners bind, one socket per address and port. Provisioning sets loopback and the host's WireGuard address, so only same-host callers such as the reverse proxy and vmagent, and mesh peers, reach the service. A listener that clients outside the mesh dial, such as Foghorn's external gRPC listener, and a listener with its own bind address setting keep their bind. Empty binds every interface. |
 | `PORT` | string | `18020` |  | v0.3.0 | TCP port for the HTTP listener that serves health, readiness, metrics, and HTTP APIs. |
 | `GIN_MODE` | string | `debug` |  | v0.3.0 | Router mode. release enables Gin release mode and restricts CORS to ALLOWED_ORIGINS; any other value runs the router in development mode. |
 | `ALLOWED_ORIGINS` | list |  |  | v0.3.0 | Comma-separated browser origins accepted by CORS when GIN_MODE is release. |
@@ -707,6 +718,7 @@ Read by `api_balancing/cmd/foghorn`.
 
 | Variable | Type | Default | Notes | Since | Description |
 | --- | --- | --- | --- | --- | --- |
+| `BIND_ADDRS` | list |  |  | v0.3.13 | Comma-separated addresses the service's listeners bind, one socket per address and port. Provisioning sets loopback and the host's WireGuard address, so only same-host callers such as the reverse proxy and vmagent, and mesh peers, reach the service. A listener that clients outside the mesh dial, such as Foghorn's external gRPC listener, and a listener with its own bind address setting keep their bind. Empty binds every interface. |
 | `PORT` | string | `18008` |  | v0.3.0 | TCP port for the HTTP listener that serves health, readiness, metrics, and HTTP APIs. |
 | `GIN_MODE` | string | `debug` |  | v0.3.0 | Router mode. release enables Gin release mode and restricts CORS to ALLOWED_ORIGINS; any other value runs the router in development mode. |
 | `ALLOWED_ORIGINS` | list |  |  | v0.3.0 | Comma-separated browser origins accepted by CORS when GIN_MODE is release. |
@@ -727,11 +739,11 @@ Read by `api_balancing/cmd/foghorn`.
 | `REDIS_PASSWORD` | string |  | secret | v0.3.0 | Password for the Redis data connection when REDIS_MODE is set. |
 | `REDIS_SENTINEL_USERNAME` | string |  |  | v0.3.0 | Username for the Sentinel connection when REDIS_MODE is sentinel. |
 | `REDIS_SENTINEL_PASSWORD` | string |  | secret | v0.3.0 | Password for the Sentinel connection when REDIS_MODE is sentinel. |
-| `FOGHORN_PUBLIC_HTTP_BIND_ADDR` | string |  |  | v0.3.0 | Bind address of the public HTTP listener on PORT that serves playback, ingest, and Livepeer webhook routes. Empty listens on all interfaces. |
+| `FOGHORN_PUBLIC_HTTP_BIND_ADDR` | string |  |  | v0.3.0 | Bind address of the public HTTP listener on PORT that serves playback, ingest, and Livepeer webhook routes. Empty binds the BIND_ADDRS addresses, or every interface when BIND_ADDRS is empty. |
 | `FOGHORN_INTERNAL_HTTP_PORT` | string | `18027` |  | v0.3.0 | TCP port of the internal HTTP listener that serves node administration, the dashboard, debug routes, and authenticated Mist source lookups. |
 | `FOGHORN_INTERNAL_HTTP_BIND_ADDR` | string | `127.0.0.1` |  | v0.3.0 | Bind address of the internal HTTP listener. |
-| `FOGHORN_INTERNAL_GRPC_BIND_ADDR` | string | `:18019` |  | v0.3.0 | host:port of the internal gRPC listener for mesh services, federation, and the HA command relay. It serves GRPC_TLS_CERT_PATH. |
-| `FOGHORN_EXTERNAL_GRPC_BIND_ADDR` | string | `:18029` |  | v0.3.0 | host:port of the external gRPC listener for Helmsman control streams and edge provisioning. It serves Navigator-issued cluster certificates. |
+| `FOGHORN_INTERNAL_GRPC_BIND_ADDR` | string | `:18019` |  | v0.3.0 | host:port of the internal gRPC listener for mesh services, federation, and the HA command relay. It serves GRPC_TLS_CERT_PATH. An empty host binds the BIND_ADDRS addresses, or every interface when BIND_ADDRS is empty. |
+| `FOGHORN_EXTERNAL_GRPC_BIND_ADDR` | string | `:18029` |  | v0.3.0 | host:port of the external gRPC listener for Helmsman control streams and edge provisioning. It serves Navigator-issued cluster certificates. An empty host binds every interface whatever BIND_ADDRS says, since edges dial it from outside the mesh. |
 | `FOGHORN_INTERNAL_GRPC_PORT` | integer |  |  | v0.3.0 | gRPC port this instance registers with Quartermaster. 0 or unset uses the port of FOGHORN_INTERNAL_GRPC_BIND_ADDR. |
 | `FOGHORN_HOST` | string |  |  | v0.3.0 | Host name registered with Quartermaster, used for the HA relay address when FOGHORN_RELAY_ADVERTISE_HOST is empty, and a fallback host for Mist balancer URLs. |
 | `FOGHORN_RELAY_ADVERTISE_ADDR` | string |  |  | v0.3.0 | host:port other replicas use to relay commands to this one. Overrides FOGHORN_RELAY_ADVERTISE_HOST and the port derived from FOGHORN_INTERNAL_GRPC_BIND_ADDR. |
@@ -911,6 +923,7 @@ Read by `api_incidents/cmd/lookout`.
 
 | Variable | Type | Default | Notes | Since | Description |
 | --- | --- | --- | --- | --- | --- |
+| `BIND_ADDRS` | list |  |  | v0.3.13 | Comma-separated addresses the service's listeners bind, one socket per address and port. Provisioning sets loopback and the host's WireGuard address, so only same-host callers such as the reverse proxy and vmagent, and mesh peers, reach the service. A listener that clients outside the mesh dial, such as Foghorn's external gRPC listener, and a listener with its own bind address setting keep their bind. Empty binds every interface. |
 | `GIN_MODE` | string | `debug` |  | v0.3.0 | Router mode. release enables Gin release mode and restricts CORS to ALLOWED_ORIGINS; any other value runs the router in development mode. |
 | `ALLOWED_ORIGINS` | list |  |  | v0.3.0 | Comma-separated browser origins accepted by CORS when GIN_MODE is release. |
 | `LOG_LEVEL` | string | `info` |  | v0.3.0 | Log level: debug, info, warn, or error. Any other value fails startup. |
@@ -963,6 +976,7 @@ Read by `api_dns/cmd/navigator`.
 
 | Variable | Type | Default | Notes | Since | Description |
 | --- | --- | --- | --- | --- | --- |
+| `BIND_ADDRS` | list |  |  | v0.3.13 | Comma-separated addresses the service's listeners bind, one socket per address and port. Provisioning sets loopback and the host's WireGuard address, so only same-host callers such as the reverse proxy and vmagent, and mesh peers, reach the service. A listener that clients outside the mesh dial, such as Foghorn's external gRPC listener, and a listener with its own bind address setting keep their bind. Empty binds every interface. |
 | `GIN_MODE` | string | `debug` |  | v0.3.0 | Router mode. release enables Gin release mode and restricts CORS to ALLOWED_ORIGINS; any other value runs the router in development mode. |
 | `ALLOWED_ORIGINS` | list |  |  | v0.3.0 | Comma-separated browser origins accepted by CORS when GIN_MODE is release. |
 | `LOG_LEVEL` | string | `info` |  | v0.3.0 | Log level: debug, info, warn, or error. Any other value fails startup. |
@@ -1025,6 +1039,7 @@ Read by `api_mesh/cmd/privateer`.
 
 | Variable | Type | Default | Notes | Since | Description |
 | --- | --- | --- | --- | --- | --- |
+| `BIND_ADDRS` | list |  |  | v0.3.13 | Comma-separated addresses the service's listeners bind, one socket per address and port. Provisioning sets loopback and the host's WireGuard address, so only same-host callers such as the reverse proxy and vmagent, and mesh peers, reach the service. A listener that clients outside the mesh dial, such as Foghorn's external gRPC listener, and a listener with its own bind address setting keep their bind. Empty binds every interface. |
 | `GIN_MODE` | string | `debug` |  | v0.3.0 | Router mode. release enables Gin release mode and restricts CORS to ALLOWED_ORIGINS; any other value runs the router in development mode. |
 | `ALLOWED_ORIGINS` | list |  |  | v0.3.0 | Comma-separated browser origins accepted by CORS when GIN_MODE is release. |
 | `LOG_LEVEL` | string | `info` |  | v0.3.0 | Log level: debug, info, warn, or error. Any other value fails startup. |
@@ -1069,6 +1084,7 @@ Read by `api_ticketing/cmd/deckhand`.
 
 | Variable | Type | Default | Notes | Since | Description |
 | --- | --- | --- | --- | --- | --- |
+| `BIND_ADDRS` | list |  |  | v0.3.13 | Comma-separated addresses the service's listeners bind, one socket per address and port. Provisioning sets loopback and the host's WireGuard address, so only same-host callers such as the reverse proxy and vmagent, and mesh peers, reach the service. A listener that clients outside the mesh dial, such as Foghorn's external gRPC listener, and a listener with its own bind address setting keep their bind. Empty binds every interface. |
 | `GIN_MODE` | string | `debug` |  | v0.3.0 | Router mode. release enables Gin release mode and restricts CORS to ALLOWED_ORIGINS; any other value runs the router in development mode. |
 | `ALLOWED_ORIGINS` | list |  |  | v0.3.0 | Comma-separated browser origins accepted by CORS when GIN_MODE is release. |
 | `LOG_LEVEL` | string | `info` |  | v0.3.0 | Log level: debug, info, warn, or error. Any other value fails startup. |
@@ -1106,6 +1122,7 @@ Read by `api_consultant/cmd/skipper`.
 
 | Variable | Type | Default | Notes | Since | Description |
 | --- | --- | --- | --- | --- | --- |
+| `BIND_ADDRS` | list |  |  | v0.3.13 | Comma-separated addresses the service's listeners bind, one socket per address and port. Provisioning sets loopback and the host's WireGuard address, so only same-host callers such as the reverse proxy and vmagent, and mesh peers, reach the service. A listener that clients outside the mesh dial, such as Foghorn's external gRPC listener, and a listener with its own bind address setting keep their bind. Empty binds every interface. |
 | `PORT` | string | `18018` |  | v0.3.0 | TCP port for the HTTP listener that serves health, readiness, metrics, and HTTP APIs. |
 | `GRPC_PORT` | string | `19007` |  | v0.3.0 | TCP port for the gRPC listener. |
 | `GIN_MODE` | string | `debug` |  | v0.3.0 | Router mode. release enables Gin release mode and restricts CORS to ALLOWED_ORIGINS; any other value runs the router in development mode. |
@@ -1213,6 +1230,7 @@ Read by `api_forms/cmd/steward`.
 
 | Variable | Type | Default | Notes | Since | Description |
 | --- | --- | --- | --- | --- | --- |
+| `BIND_ADDRS` | list |  |  | v0.3.13 | Comma-separated addresses the service's listeners bind, one socket per address and port. Provisioning sets loopback and the host's WireGuard address, so only same-host callers such as the reverse proxy and vmagent, and mesh peers, reach the service. A listener that clients outside the mesh dial, such as Foghorn's external gRPC listener, and a listener with its own bind address setting keep their bind. Empty binds every interface. |
 | `PORT` | string | `18032` |  | v0.3.0 | TCP port for the HTTP listener that serves health, readiness, metrics, and HTTP APIs. |
 | `GIN_MODE` | string | `debug` |  | v0.3.0 | Router mode. release enables Gin release mode and restricts CORS to ALLOWED_ORIGINS; any other value runs the router in development mode. |
 | `ALLOWED_ORIGINS` | list |  |  | v0.3.0 | Comma-separated browser origins accepted by CORS when GIN_MODE is release. |

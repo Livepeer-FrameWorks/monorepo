@@ -454,7 +454,7 @@ run_sql() {
       "$SQL_BIN" -X -p "$PORT" -d "$db" -A -F '	' -P pager=off -c "$sql" 2>&1
     fi
   else
-    PGPASSWORD="$PASSWORD" "$SQL_BIN" -X -h 127.0.0.1 -p "$PORT" -U "$USER_NAME" -d "$db" -A -F '	' -P pager=off -c "$sql" 2>&1
+    PGPASSWORD="$PASSWORD" "$SQL_BIN" -X -h "$(fw_ysql_host "$PORT")" -p "$PORT" -U "$USER_NAME" -d "$db" -A -F '	' -P pager=off -c "$sql" 2>&1
   fi
 }
 run_section() {

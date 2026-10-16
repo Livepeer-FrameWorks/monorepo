@@ -11,6 +11,7 @@ import "github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 //
 //configref:service periscope-ingest cmd=cmd/periscope
 type PeriscopeIngest struct {
+	config.ListenAddrs
 	config.HTTPListen
 	config.HTTPRuntime
 	config.Logging

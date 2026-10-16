@@ -72,9 +72,10 @@ func yugabyteLocalQueriesScript(port int, user string, queries []YugabyteLocalQu
 	b.WriteString("fw_err=\"$(mktemp)\" || exit 1\ntrap 'rm -f \"$fw_err\"' EXIT\n")
 	b.WriteString(YugabyteBinaryResolverShell)
 	b.WriteString("\nyb_client=\"$(fw_yb_bin ysqlsh)\" || exit 1\n")
+	fmt.Fprintf(&b, "ysql_host=\"$(fw_ysql_host %d)\"\n", port)
 	fmt.Fprintf(&b, `fw_query() {
   printf '%%s%%s\n' '%s' "$1"
-  "$yb_client" -X -h localhost -p %d -U %s -d "$2" -v ON_ERROR_STOP=1 -tA -f - 2>"$fw_err"
+  "$yb_client" -X -h "$ysql_host" -p %d -U %s -d "$2" -v ON_ERROR_STOP=1 -tA -f - 2>"$fw_err"
   fw_rc=$?
   printf '\n%%s%%s %%s ' '%s' "$1" "$fw_rc"
   tr '\n' ' ' <"$fw_err"

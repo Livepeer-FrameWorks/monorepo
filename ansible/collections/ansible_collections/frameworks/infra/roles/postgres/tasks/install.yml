@@ -165,7 +165,10 @@
         value: "{{ postgres_shared_buffers }}"
       - option: password_encryption
         value: scram-sha-256
-    postgresql_hba_entries: "{{ postgres_hba_entries }}"
+    postgresql_hba_entries: >-
+      {{ postgres_hba_entries + ([{'type': 'host', 'database': 'all', 'user': 'all',
+      'address': postgres_hba_mesh_cidr, 'auth_method': 'scram-sha-256'}]
+      if (postgres_hba_mesh_cidr | length > 0) else []) }}
     # Seed the superuser password so init tasks can connect. geerlingguy
     # surfaces it as postgresql_users entries; we apply it via ALTER USER
     # after install so the password can rotate without a re-init.

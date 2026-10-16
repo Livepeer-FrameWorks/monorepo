@@ -3299,7 +3299,6 @@ func TestBuildServiceEnvVarsCoversRuntimeEnvDependencies(t *testing.T) {
 		{
 			serviceID: "foghorn",
 			want: map[string]string{
-				"FOGHORN_PUBLIC_HTTP_BIND_ADDR":   "0.0.0.0",
 				"FOGHORN_INTERNAL_HTTP_BIND_ADDR": "127.0.0.1",
 				"FOGHORN_INTERNAL_HTTP_PORT":      "18027",
 				"FOGHORN_INTERNAL_GRPC_BIND_ADDR": ":18019",
@@ -4784,8 +4783,9 @@ func TestBuildTaskConfigMarksBridgeProxySitesMeshOnly(t *testing.T) {
 	}
 }
 
-// A docker-mode nginx fronting a Compose-deployed Foghorn reaches it for
-// tenant-alias playback on the WireGuard address, where Foghorn listens.
+// A docker-mode nginx fronting Foghorn reaches it for tenant-alias playback on
+// the WireGuard address: Foghorn listens there and on loopback in both modes,
+// never on the Docker gateway.
 func TestBuildTaskConfigMarksTenantAliasPlaybackMeshOnlyForComposeFoghorn(t *testing.T) {
 	for _, mode := range []string{"docker", "native"} {
 		manifest := &inventory.Manifest{
@@ -4812,7 +4812,7 @@ func TestBuildTaskConfigMarksTenantAliasPlaybackMeshOnlyForComposeFoghorn(t *tes
 		if !ok {
 			t.Fatalf("%s: tenant_alias_playback missing: %#v", mode, cfg.Metadata)
 		}
-		if got, _ := tap["mesh_only"].(bool); got != (mode == "docker") {
+		if got, _ := tap["mesh_only"].(bool); !got {
 			t.Fatalf("%s foghorn: tenant_alias_playback mesh_only = %v", mode, got)
 		}
 	}

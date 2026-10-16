@@ -8,8 +8,10 @@ import (
 	"frameworks/cli/pkg/inventory"
 )
 
+// The host's Postgres and Redis listen on loopback and the WireGuard address
+// only, so the container reaches them on the WireGuard address.
 func TestChatwootEnvMapUsesNamedPostgresAndRedis(t *testing.T) {
-	env := chatwootEnvMap(ServiceConfig{
+	env, err := chatwootEnvMap(ServiceConfig{
 		EnvVars: map[string]string{
 			"DATABASE_HOST":              "yuga-eu-1.internal",
 			"DATABASE_PORT":              "5433",
@@ -22,7 +24,10 @@ func TestChatwootEnvMapUsesNamedPostgresAndRedis(t *testing.T) {
 			"REDIS_CHATWOOT_PASSWORD":    "redis secret",
 			"FROM_EMAIL":                 "support@frameworks.network",
 		},
-	})
+	}, inventory.Host{Name: "central-eu-1", WireguardIP: "10.88.0.5"})
+	if err != nil {
+		t.Fatalf("chatwootEnvMap: %v", err)
+	}
 
 	assertEnv := func(key string, want any) {
 		t.Helper()
@@ -31,12 +36,16 @@ func TestChatwootEnvMapUsesNamedPostgresAndRedis(t *testing.T) {
 		}
 	}
 
-	assertEnv("POSTGRES_HOST", "host.docker.internal")
+	assertEnv("POSTGRES_HOST", "10.88.0.5")
 	assertEnv("POSTGRES_PORT", "5432")
 	assertEnv("POSTGRES_DATABASE", "chatwoot")
 	assertEnv("POSTGRES_USERNAME", "chatwoot")
 	assertEnv("POSTGRES_PASSWORD", "chatwoot-secret")
-	assertEnv("REDIS_URL", "redis://:redis+secret@host.docker.internal:6380")
+	assertEnv("REDIS_URL", "redis://:redis+secret@10.88.0.5:6380")
+
+	if _, err := chatwootEnvMap(ServiceConfig{EnvVars: map[string]string{"POSTGRES_CHATWOOT_HOST": "127.0.0.1"}}, inventory.Host{Name: "single"}); err == nil {
+		t.Fatal("chatwootEnvMap on a host without wireguard_ip succeeded; the container could not reach the host's Postgres")
+	}
 	assertEnv("MAILER_SENDER_EMAIL", "support@frameworks.network")
 }
 
@@ -49,7 +58,7 @@ infrastructure:
     digest: sha256:chatwootdigest
 `)
 
-	vars, err := chatwootRoleVars(context.Background(), inventory.Host{}, ServiceConfig{
+	vars, err := chatwootRoleVars(context.Background(), inventory.Host{Name: "central-eu-1", WireguardIP: "10.88.0.5"}, ServiceConfig{
 		Version:  "stable",
 		Metadata: map[string]any{"gitops_repository": repo},
 	}, RoleBuildHelpers{})

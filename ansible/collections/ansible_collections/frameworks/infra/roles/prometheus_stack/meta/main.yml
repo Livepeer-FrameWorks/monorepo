@@ -25,6 +25,12 @@ argument_specs:
       prometheus_version:
         type: str
         required: false
+      prometheus_stack_listen_addrs:
+        type: list
+        elements: str
+        required: false
+        default: [127.0.0.1]
+        description: Addresses VictoriaMetrics, vmauth and Alertmanager listen on.
       vmagent_external_labels:
         type: dict
         required: false

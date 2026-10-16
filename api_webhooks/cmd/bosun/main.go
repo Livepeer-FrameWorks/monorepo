@@ -248,10 +248,11 @@ func main() {
 	}
 	server.RegisterEnvFileReload("bosun", logger)
 	if runErr := server.Run(context.Background(), server.RunSpec{
-		Service: "bosun",
-		Logger:  logger,
-		Ready:   readiness,
-		HTTP:    []server.HTTPListener{{Name: "http", Port: cfg.HTTPListenPort(), Handler: app}},
+		Service:   "bosun",
+		Logger:    logger,
+		Ready:     readiness,
+		BindAddrs: cfg.BindAddrs,
+		HTTP:      []server.HTTPListener{{Name: "http", Port: cfg.HTTPListenPort(), Handler: app}},
 		// The gRPC server is built after the port is bound, so HTTP health
 		// serves while the TLS files are still being synced.
 		GRPC: []server.GRPCListener{{Name: "grpc", Port: cfg.GRPCPort, Build: func(buildCtx context.Context) (*grpc.Server, error) {

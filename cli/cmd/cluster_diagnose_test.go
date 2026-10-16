@@ -12,7 +12,7 @@ import (
 )
 
 func TestKafkaDiagnosticCommandsUseNativeRuntimeByDefault(t *testing.T) {
-	checks := kafkaDiagnosticCommands("native", 19092)
+	checks := kafkaDiagnosticCommands("native", kafkaLocalBootstrap(inventory.Host{Name: "kafka-1", WireguardIP: "10.88.0.7"}, 19092))
 	if len(checks) != 4 {
 		t.Fatalf("checks = %d, want 4", len(checks))
 	}
@@ -20,8 +20,9 @@ func TestKafkaDiagnosticCommandsUseNativeRuntimeByDefault(t *testing.T) {
 		if !strings.HasPrefix(check.Command, "/opt/kafka/bin/") {
 			t.Fatalf("native diagnostic uses retired container path: %q", check.Command)
 		}
-		if !strings.Contains(check.Command, "--bootstrap-server localhost:19092") {
-			t.Fatalf("diagnostic ignores configured broker port: %q", check.Command)
+		// The broker listener binds the host's WireGuard address only.
+		if !strings.Contains(check.Command, "--bootstrap-server 10.88.0.7:19092") {
+			t.Fatalf("diagnostic does not dial the broker's WireGuard listener on its configured port: %q", check.Command)
 		}
 	}
 	if !strings.Contains(checks[2].Command, "--describe --all-groups") {
@@ -30,7 +31,7 @@ func TestKafkaDiagnosticCommandsUseNativeRuntimeByDefault(t *testing.T) {
 }
 
 func TestKafkaDiagnosticCommandsRetainExplicitDockerCompatibility(t *testing.T) {
-	checks := kafkaDiagnosticCommands("docker", 9092)
+	checks := kafkaDiagnosticCommands("docker", "127.0.0.1:9092")
 	for _, check := range checks {
 		args, ok := strings.CutPrefix(check.Command, "if docker version >/dev/null 2>&1; then docker ")
 		if !ok || !strings.HasPrefix(args, "compose -f /opt/frameworks/kafka/docker-compose.yml exec -T kafka ") {

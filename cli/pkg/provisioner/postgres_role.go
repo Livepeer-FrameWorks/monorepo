@@ -39,7 +39,7 @@ func postgresRoleVars(ctx context.Context, host inventory.Host, config ServiceCo
 		"postgres_port":             port,
 		"postgres_admin_password":   pwd,
 		"postgres_runtime_password": metaString(config.Metadata, "postgres_runtime_password"),
-		"postgres_listen_addresses": "*",
+		"postgres_listen_addresses": strings.Join(loopbackAndMeshAddrs(host), ","),
 		"postgres_instance_name":    sanitizePostgresInstanceName(firstNonEmpty(config.DeployName, "postgres")),
 	}
 
@@ -53,6 +53,11 @@ func postgresRoleVars(ctx context.Context, host inventory.Host, config ServiceCo
 	}
 	vars["postgres_exporter_artifact_url"] = exporter.URL
 	vars["postgres_exporter_artifact_checksum"] = exporter.Checksum
+	// Services reach Postgres at <host>.internal, the WireGuard address, from
+	// this host and from mesh peers.
+	if wireguardIP := strings.TrimSpace(host.WireguardIP); wireguardIP != "" {
+		vars["postgres_hba_mesh_cidr"] = firstNonEmpty(metaString(config.Metadata, "mesh_cidr"), wireguardIP+"/32")
+	}
 
 	if tuning, ok := config.Metadata["tuning"].(map[string]any); ok {
 		if v, ok := tuning["max_connections"].(int); ok {

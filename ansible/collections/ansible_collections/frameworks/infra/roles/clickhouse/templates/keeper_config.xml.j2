@@ -10,8 +10,11 @@
     <count>5</count>
   </logger>
 
+{# listen_host binds the client port; the Raft port binds interserver_listen_host
+   and listens on every interface without it. Peers reach it over the mesh. #}
 {% for listen_host in (clickhouse_listen_hosts if (clickhouse_listen_hosts | length > 0) else [clickhouse_listen_host]) %}
   <listen_host>{{ listen_host }}</listen_host>
+  <interserver_listen_host>{{ listen_host }}</interserver_listen_host>
 {% endfor %}
 
   <keeper_server>

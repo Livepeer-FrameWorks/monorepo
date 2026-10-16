@@ -253,7 +253,6 @@ func (c *relayoutContext) engine(ctx context.Context) (*provisioner.YugabyteRela
 	return &provisioner.YugabyteRelayout{
 		Primary:    primaryNode,
 		Nodes:      nodes,
-		YSQLHost:   "127.0.0.1",
 		YSQLPort:   c.pg.EffectivePort(),
 		Database:   c.database.Name,
 		Roles:      []string{c.database.Owner, c.database.RuntimeRole},

@@ -13,7 +13,9 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"frameworks/cli/pkg/health"
 	"frameworks/cli/pkg/inventory"
+	fwssh "frameworks/cli/pkg/ssh"
 )
 
 // lockedBuffer lets a test read doctor output while runDoctor is still writing it.
@@ -80,6 +82,13 @@ func refusedPort(t *testing.T) int {
 // startKafkaDoctor runs runDoctor against a cluster whose first broker hangs and whose second refuses connections.
 func startKafkaDoctor(t *testing.T) (*lockedBuffer, context.CancelFunc, <-chan error) {
 	t.Helper()
+	// The brokers run in-process on loopback, so the probe dials them directly
+	// with the Kafka protocol instead of from a shell on their host.
+	prevProbe := doctorKafkaBrokerProbe
+	doctorKafkaBrokerProbe = func(_ context.Context, _ *fwssh.Pool, host inventory.Host, port int) *health.CheckResult {
+		return (&health.KafkaChecker{}).Check(host.ExternalIP, port)
+	}
+	t.Cleanup(func() { doctorKafkaBrokerProbe = prevProbe })
 	manifest := &inventory.Manifest{
 		Type:  "cluster",
 		Hosts: map[string]inventory.Host{"kafka-1": {Name: "kafka-1", ExternalIP: "127.0.0.1"}},

@@ -98,6 +98,15 @@ func privateerEnv(host inventory.Host, config ServiceConfig) map[string]string {
 	if port, ok := config.Metadata["wireguard_port"].(int); ok && port > 0 && env["MESH_LISTEN_PORT"] == "" {
 		env["MESH_LISTEN_PORT"] = strconv.Itoa(port)
 	}
+	// Privateer's health and metrics listener answers the local vmagent and
+	// rollout gate on loopback and Quartermaster's health probes on the mesh.
+	if strings.TrimSpace(env[BindAddrsEnv]) == "" {
+		meshHost := host
+		if strings.TrimSpace(meshHost.WireguardIP) == "" {
+			meshHost.WireguardIP = env["MESH_WIREGUARD_IP"]
+		}
+		env[BindAddrsEnv] = strings.Join(loopbackAndMeshAddrs(meshHost), ",")
+	}
 	if env["PRIVATEER_STATIC_PEERS_FILE"] == "" {
 		env["PRIVATEER_STATIC_PEERS_FILE"] = "/etc/privateer/static-peers.json"
 	}

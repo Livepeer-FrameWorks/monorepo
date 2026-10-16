@@ -10,12 +10,12 @@ import (
 	fwssh "frameworks/cli/pkg/ssh"
 )
 
-// SSHYugabyteNode runs relayout SQL and scripts on one tserver over an SSH runner, connecting to the node's local
-// YSQL endpoint as the yugabyte superuser that the generated HBA trusts from the loopback address.
+// SSHYugabyteNode runs relayout SQL and scripts on one tserver over an SSH runner, connecting to the node's own YSQL
+// listener as the yugabyte superuser that the generated HBA trusts from that address.
 type SSHYugabyteNode struct {
 	NodeName string
 	Runner   fwssh.Runner
-	// Host is the local YSQL address; production nodes use 127.0.0.1.
+	// Host is the address the node's YSQL listener binds; empty resolves it on the node (fw_ysql_host).
 	Host string
 	Port int
 	// ApplicationName tags every connection; set it to RelayoutApplicationName of the invocation's lease owner so a
@@ -42,7 +42,7 @@ trap 'rm -f "$sql_file"' EXIT
 cat > "$sql_file" <<'%s'
 %s%s
 PGAPPNAME=%s "$(fw_yb_bin ysqlsh)" -X -h %s -p %d -U yugabyte -d %s -v ON_ERROR_STOP=1 -q -tA -f "$sql_file"
-`, YugabyteBinaryResolverShell, delimiter, sql, delimiter, shellQuote(n.applicationName()), shellQuote(n.host()), n.Port, shellQuote(database)))
+`, YugabyteBinaryResolverShell, delimiter, sql, delimiter, shellQuote(n.applicationName()), ysqlHostArg(n.Host, n.Port), n.Port, shellQuote(database)))
 }
 
 // Shell runs script on the node and returns its stdout; a non-zero exit is an error carrying stderr. With an
@@ -75,11 +75,15 @@ func (n *SSHYugabyteNode) applicationName() string {
 	return n.ApplicationName
 }
 
-func (n *SSHYugabyteNode) host() string {
-	if n.Host == "" {
-		return "127.0.0.1"
+// ysqlHostArg is the -h argument of a YSQL client on the node: host when set,
+// otherwise the address the node's running YSQL listener binds. That is the
+// host's WireGuard address under provisioning (tserver.conf.j2), or loopback
+// for a listener on every interface; the HBA trusts the superuser from it.
+func ysqlHostArg(host string, port int) string {
+	if strings.TrimSpace(host) != "" {
+		return shellQuote(host)
 	}
-	return n.Host
+	return fmt.Sprintf(`"$(fw_ysql_host %d)"`, port)
 }
 
 func relayoutRandomToken(prefix string, size int) (string, error) {

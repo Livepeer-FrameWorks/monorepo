@@ -96,10 +96,11 @@ func main() {
 
 	server.RegisterEnvFileReload("chandler", logger)
 	if runErr := server.Run(ctx, server.RunSpec{
-		Service: "chandler",
-		Logger:  logger,
-		Ready:   readiness,
-		HTTP:    []server.HTTPListener{{Name: "http", Port: cfg.Port, Handler: router}},
+		Service:   "chandler",
+		Logger:    logger,
+		Ready:     readiness,
+		BindAddrs: cfg.BindAddrs,
+		HTTP:      []server.HTTPListener{{Name: "http", Port: cfg.Port, Handler: router}},
 	}); runErr != nil {
 		logger.WithError(runErr).Fatal("Server exited with error")
 	}

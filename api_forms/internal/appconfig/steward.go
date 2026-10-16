@@ -14,6 +14,7 @@ const DefaultContactRecipient = "contact@frameworks.network"
 //
 //configref:service steward cmd=cmd/steward
 type Steward struct {
+	config.ListenAddrs
 	config.HTTPListen
 	config.HTTPRuntime
 	config.Logging

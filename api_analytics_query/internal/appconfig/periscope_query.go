@@ -9,6 +9,7 @@ import "github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 //
 //configref:service periscope-query cmd=cmd/periscope
 type PeriscopeQuery struct {
+	config.ListenAddrs
 	config.HTTPListen
 	config.GRPCListen
 	config.HTTPRuntime

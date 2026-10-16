@@ -24,7 +24,7 @@ func TestDumpDatabaseSectionCommand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"fw_yb_bin ysql_dump", "-h localhost -p 5433 -U yugabyte", "--section=pre-data", "wrote to stderr", "exit 4"} {
+	for _, want := range []string{"fw_yb_bin ysql_dump", `-h "$(fw_ysql_host 5433)" -p 5433 -U yugabyte`, "--section=pre-data", "wrote to stderr", "exit 4"} {
 		if !strings.Contains(yb, want) {
 			t.Fatalf("yugabyte dump command lacks %q:\n%s", want, yb)
 		}

@@ -25,6 +25,11 @@ type GRPCListen struct {
 	Port string `env:"GRPC_PORT" default:"@servicedefs.grpc_port" desc:"TCP port for the gRPC listener." introduced:"v0.3.0"`
 }
 
+// ListenAddrs restricts the addresses a service's listeners bind.
+type ListenAddrs struct {
+	BindAddrs []string `env:"BIND_ADDRS" desc:"Comma-separated addresses the service's listeners bind, one socket per address and port. Provisioning sets loopback and the host's WireGuard address, so only same-host callers such as the reverse proxy and vmagent, and mesh peers, reach the service. A listener that clients outside the mesh dial, such as Foghorn's external gRPC listener, and a listener with its own bind address setting keep their bind. Empty binds every interface." introduced:"v0.3.13"`
+}
+
 // HTTPRuntime configures the shared Gin router.
 type HTTPRuntime struct {
 	GinMode        string   `env:"GIN_MODE" default:"debug" desc:"Router mode. release enables Gin release mode and restricts CORS to ALLOWED_ORIGINS; any other value runs the router in development mode." introduced:"v0.3.0"`

@@ -65,8 +65,9 @@ func TestMirrorMakerTopicCoverageWarnsOnStalledTopic(t *testing.T) {
 		t.Fatalf("healthy link not reported:\n%s", got)
 	}
 	for _, command := range commands {
-		if !strings.Contains(command, "/opt/kafka/bin/kafka-get-offsets.sh --bootstrap-server localhost:9092 --time -1 --topic ") {
-			t.Fatalf("coverage check ran a non-offset command: %s", command)
+		// The broker listens on its host's WireGuard address only.
+		if !strings.Contains(command, "/opt/kafka/bin/kafka-get-offsets.sh --bootstrap-server 10.88.") || !strings.Contains(command, ":9092 --time -1 --topic ") {
+			t.Fatalf("coverage check ran a non-offset command or dialed a broker off its WireGuard listener: %s", command)
 		}
 	}
 	if len(commands) != 4 {
@@ -98,8 +99,8 @@ func TestParseKafkaEndOffsets(t *testing.T) {
 }
 
 func TestKafkaEndOffsetsCommandQuotesTopicRegex(t *testing.T) {
-	got := kafkaEndOffsetsCommand("native", 19092, []string{"domain.events", "us-east.domain.events"})
-	want := `/opt/kafka/bin/kafka-get-offsets.sh --bootstrap-server localhost:19092 --time -1 --topic '^(domain\.events|us-east\.domain\.events)$'`
+	got := kafkaEndOffsetsCommand("native", "10.88.0.7:19092", []string{"domain.events", "us-east.domain.events"})
+	want := `/opt/kafka/bin/kafka-get-offsets.sh --bootstrap-server 10.88.0.7:19092 --time -1 --topic '^(domain\.events|us-east\.domain\.events)$'`
 	if got != want {
 		t.Fatalf("command = %q, want %q", got, want)
 	}

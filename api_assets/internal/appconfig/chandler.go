@@ -15,6 +15,7 @@ import (
 //
 //configref:service chandler cmd=cmd/chandler
 type Chandler struct {
+	config.ListenAddrs
 	config.HTTPListen
 	config.HTTPRuntime
 	config.Logging

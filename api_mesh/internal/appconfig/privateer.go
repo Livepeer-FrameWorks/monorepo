@@ -16,6 +16,7 @@ import (
 //
 //configref:service privateer cmd=cmd/privateer
 type Privateer struct {
+	config.ListenAddrs
 	config.HTTPRuntime
 	config.Logging
 

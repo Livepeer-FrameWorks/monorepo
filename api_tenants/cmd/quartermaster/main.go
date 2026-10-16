@@ -476,9 +476,10 @@ func main() {
 
 	server.RegisterEnvFileReload("quartermaster", logger)
 	if runErr := server.Run(ctx, server.RunSpec{
-		Service: "quartermaster",
-		Logger:  logger,
-		Ready:   readiness,
+		Service:   "quartermaster",
+		Logger:    logger,
+		Ready:     readiness,
+		BindAddrs: cfg.BindAddrs,
 		HTTP: []server.HTTPListener{{
 			Name:        "http",
 			Port:        cfg.HTTPListen.Port,

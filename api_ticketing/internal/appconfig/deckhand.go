@@ -14,6 +14,7 @@ import (
 //
 //configref:service deckhand cmd=cmd/deckhand
 type Deckhand struct {
+	config.ListenAddrs
 	config.HTTPRuntime
 	config.Logging
 	config.GRPCMetadataPolicy

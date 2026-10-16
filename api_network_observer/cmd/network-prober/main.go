@@ -8,6 +8,7 @@ import (
 	"frameworks/api_network_observer/internal/prober"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/server"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/telemetryspool"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 	"net/http"
@@ -51,9 +52,13 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	p := &prober.Prober{URL: strings.TrimRight(cfg.CoordinatorURL, "/"), Secret: cfg.SharedSecret, ID: cfg.ObserverID, Region: cfg.Region, Client: &http.Client{Timeout: 20 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, Queue: queue, Probe: probe, Concurrency: cfg.Concurrency, Timeout: time.Duration(cfg.TimeoutSeconds) * time.Second}
-	health := &http.Server{Addr: ":" + cfg.HealthPort, Handler: p.Health(), ReadHeaderTimeout: 5 * time.Second}
+	healthListener, err := server.ListenAddrs(cfg.BindAddrs, cfg.HealthPort)
+	if err != nil {
+		logger.WithError(err).Fatal("Prober health listener failed")
+	}
+	health := &http.Server{Handler: p.Health(), ReadHeaderTimeout: 5 * time.Second}
 	go func() {
-		if serveErr := health.ListenAndServe(); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+		if serveErr := health.Serve(healthListener); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 			logger.WithError(serveErr).Error("Prober health listener failed")
 			cancel()
 		}

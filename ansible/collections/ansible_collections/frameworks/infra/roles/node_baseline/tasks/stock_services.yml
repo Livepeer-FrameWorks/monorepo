@@ -1,0 +1,20 @@
+---
+# A host image can ship a stock MistServer package whose mistserver.service
+# runs MistController with every connector (API, RTMP, RTSP, HTTP, DTSC) on
+# every interface. FrameWorks runs MistServer only as the edge role's
+# frameworks-mistserver unit, so the stock unit is stopped and masked on every
+# host; masking also keeps a package upgrade from starting it again.
+- name: Node_baseline | read service facts
+  ansible.builtin.service_facts:
+
+- name: Node_baseline | stop and mask stock services that listen on every interface
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: stopped
+    enabled: false
+    masked: true
+  loop: "{{ node_baseline_masked_stock_services }}"
+  when:
+    - not ansible_check_mode
+    - item in ansible_facts.services
+    - ansible_facts.services[item].status | default('') != 'masked'

@@ -49,6 +49,9 @@ kafka_log_appenders:
 kafka_quorum_fetch_timeout_ms: 10000
 kafka_quorum_election_timeout_ms: 5000
 
-kafka_broker_probe_host: "127.0.0.1"
+# Probes dial the address the listeners bind: the WireGuard address under
+# cluster provisioning, loopback when the role binds every interface.
+kafka_broker_probe_host: >-
+  {{ kafka_bind_host if (kafka_bind_host | default('0.0.0.0')) != '0.0.0.0' else '127.0.0.1' }}
 kafka_controller_probe_host: >-
   {{ kafka_bind_host if (kafka_bind_host | default('0.0.0.0')) != '0.0.0.0' else '127.0.0.1' }}

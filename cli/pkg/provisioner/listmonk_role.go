@@ -2,6 +2,7 @@ package provisioner
 
 import (
 	"context"
+	"fmt"
 
 	"frameworks/cli/pkg/detect"
 	"frameworks/cli/pkg/inventory"
@@ -22,11 +23,15 @@ func listmonkRoleVars(_ context.Context, host inventory.Host, config ServiceConf
 	dbHost := firstNonEmptyEnv(config.EnvVars, "POSTGRES_LISTMONK_HOST", "POSTGRES_SUPPORT_HOST", "POSTGRES_CHATWOOT_HOST", "DATABASE_HOST")
 	dbPort := firstNonEmptyEnv(config.EnvVars, "POSTGRES_LISTMONK_PORT", "POSTGRES_SUPPORT_PORT", "POSTGRES_CHATWOOT_PORT", "DATABASE_PORT")
 	dbPassword := firstNonEmptyEnv(config.EnvVars, "POSTGRES_LISTMONK_PASSWORD", "POSTGRES_SUPPORT_PASSWORD", "POSTGRES_CHATWOOT_PASSWORD", "DATABASE_PASSWORD")
+	env, err := listmonkEnvMap(config, host)
+	if err != nil {
+		return nil, err
+	}
 	return map[string]any{
 		"listmonk_image":         image,
 		"listmonk_port":          port,
 		"listmonk_publish_addrs": composePublishAddrs(host),
-		"listmonk_env":           listmonkEnvMap(config),
+		"listmonk_env":           env,
 		"listmonk_public_url":    firstNonEmptyEnv(config.EnvVars, "LISTMONK_FRONTEND_URL", "LISTMONK_PUBLIC_URL"),
 		"listmonk_db_host":       dbHost,
 		"listmonk_db_port":       dbPort,
@@ -49,14 +54,18 @@ func listmonkRoleDetect(ctx context.Context, host inventory.Host, config Service
 // create the Super Admin on first run. FrameWorks services authenticate with
 // Listmonk API-user credentials (LISTMONK_API_USERNAME / LISTMONK_API_TOKEN);
 // admin login credentials are intentionally not reused for API calls.
-func listmonkEnvMap(config ServiceConfig) map[string]any {
+func listmonkEnvMap(config ServiceConfig, host inventory.Host) (map[string]any, error) {
 	dbUser := orElse(config.EnvVars["DATABASE_USER"], "postgres")
 	dbHost := firstNonEmptyEnv(config.EnvVars, "POSTGRES_LISTMONK_HOST", "POSTGRES_SUPPORT_HOST", "POSTGRES_CHATWOOT_HOST", "DATABASE_HOST")
 	dbPort := firstNonEmptyEnv(config.EnvVars, "POSTGRES_LISTMONK_PORT", "POSTGRES_SUPPORT_PORT", "POSTGRES_CHATWOOT_PORT", "DATABASE_PORT")
 	dbPassword := firstNonEmptyEnv(config.EnvVars, "POSTGRES_LISTMONK_PASSWORD", "POSTGRES_SUPPORT_PASSWORD", "POSTGRES_CHATWOOT_PASSWORD", "DATABASE_PASSWORD")
+	containerDBHost, err := dockerHostAddr(dbHost, host)
+	if err != nil {
+		return nil, fmt.Errorf("listmonk Postgres: %w", err)
+	}
 	env := map[string]any{
 		"LISTMONK_app__address":   "0.0.0.0:9000",
-		"LISTMONK_db__host":       rewriteLoopbackForDockerHost(dbHost),
+		"LISTMONK_db__host":       containerDBHost,
 		"LISTMONK_db__port":       dbPort,
 		"LISTMONK_db__user":       dbUser,
 		"LISTMONK_db__password":   dbPassword,
@@ -85,5 +94,5 @@ func listmonkEnvMap(config ServiceConfig) map[string]any {
 	if v := config.EnvVars["FROM_EMAIL"]; v != "" {
 		env["LISTMONK_app__from_email"] = v
 	}
-	return env
+	return env, nil
 }

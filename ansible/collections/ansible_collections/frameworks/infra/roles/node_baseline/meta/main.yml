@@ -27,6 +27,11 @@ argument_specs:
   main:
     short_description: Install the FrameWorks node baseline package set.
     options:
+      node_baseline_masked_stock_services:
+        type: list
+        elements: str
+        required: false
+        description: Stock systemd units stopped and masked on every host.
       node_baseline_extra_packages:
         type: list
         elements: str

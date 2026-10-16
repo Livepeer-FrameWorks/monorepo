@@ -28,6 +28,7 @@ type QuartermasterClient struct {
 //
 //configref:service commodore cmd=cmd/commodore
 type Commodore struct {
+	config.ListenAddrs
 	config.HTTPListen
 	config.GRPCListen
 	config.HTTPRuntime

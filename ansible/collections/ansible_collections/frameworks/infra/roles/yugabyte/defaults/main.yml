@@ -62,7 +62,11 @@ yugabyte_application_password: ""
 yugabyte_runtime_password: ""
 
 # Superuser role used by local init/migrate/seed tasks. The generated YSQL HBA
-# trusts this role only from 127.0.0.1 so bootstrap does not need to know or set
-# the built-in admin password. Application roles still use password auth.
+# trusts this role only from this node's own YSQL address, so bootstrap does
+# not need to know or set the built-in admin password. Application roles still
+# use password auth.
 yugabyte_superuser_role: yugabyte
+# Clients YSQL accepts password logins from: services on this node and mesh
+# peers dial the node address. Cluster provisioning passes the mesh CIDR.
+yugabyte_hba_client_cidr: "{{ yugabyte_node_address }}/32"
 yugabyte_superuser_password: ""

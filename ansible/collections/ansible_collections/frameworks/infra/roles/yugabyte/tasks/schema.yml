@@ -29,7 +29,7 @@
 
 - name: Probe baseline schema state
   community.postgresql.postgresql_query:
-    login_host: 127.0.0.1
+    login_host: "{{ yugabyte_ysql_local_host }}"
     login_port: "{{ yugabyte_ysql_port }}"
     login_user: "{{ yugabyte_superuser_role }}"
     login_password: "{{ yugabyte_superuser_password }}"
@@ -111,7 +111,7 @@
     fi
     exec /bin/sh /tmp/frameworks-yugabyte-apply-baseline.sh "$ysqlsh" \
       {{ ('/tmp/frameworks-schema-' ~ (item.db | regex_replace('[^A-Za-z0-9_.-]', '_')) ~ '.sql') | quote }} \
-      -h 127.0.0.1 -p {{ yugabyte_ysql_port | quote }} -U {{ yugabyte_superuser_role | quote }} -d {{ item.db | quote }}
+      -h {{ yugabyte_ysql_local_host | quote }} -p {{ yugabyte_ysql_port | quote }} -U {{ yugabyte_superuser_role | quote }} -d {{ item.db | quote }}
   args:
     executable: /bin/bash
   environment:
@@ -132,7 +132,7 @@
 # MISMATCHED_SCHEMA. A statement that starts its own transaction reads the current catalog.
 - name: Plan baseline schema ownership changes
   community.postgresql.postgresql_query:
-    login_host: 127.0.0.1
+    login_host: "{{ yugabyte_ysql_local_host }}"
     login_port: "{{ yugabyte_ysql_port }}"
     login_user: "{{ yugabyte_superuser_role }}"
     login_password: "{{ yugabyte_superuser_password }}"
@@ -205,7 +205,7 @@
 
 - name: Grant baseline schema ownership to application role
   community.postgresql.postgresql_query:
-    login_host: 127.0.0.1
+    login_host: "{{ yugabyte_ysql_local_host }}"
     login_port: "{{ yugabyte_ysql_port }}"
     login_user: "{{ yugabyte_superuser_role }}"
     login_password: "{{ yugabyte_superuser_password }}"
@@ -223,7 +223,7 @@
 
 - name: Grant least-privilege runtime access to application schema
   community.postgresql.postgresql_query:
-    login_host: 127.0.0.1
+    login_host: "{{ yugabyte_ysql_local_host }}"
     login_port: "{{ yugabyte_ysql_port }}"
     login_user: "{{ yugabyte_superuser_role }}"
     login_password: "{{ yugabyte_superuser_password }}"

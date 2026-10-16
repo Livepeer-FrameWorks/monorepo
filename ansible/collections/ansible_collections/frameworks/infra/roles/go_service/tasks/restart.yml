@@ -6,7 +6,7 @@
 
 - name: Wait for port after restart {{ go_service_name }}
   ansible.builtin.wait_for:
-    host: 127.0.0.1
+    host: "{{ go_service_health_host }}"
     port: "{{ go_service_port }}"
     timeout: 60
   when: go_service_port | int > 0

@@ -477,11 +477,12 @@ func main() {
 
 	server.RegisterEnvFileReload("commodore", logger)
 	if runErr := server.Run(ctx, server.RunSpec{
-		Service: "commodore",
-		Logger:  logger,
-		Ready:   readiness,
-		HTTP:    []server.HTTPListener{{Name: "http", Port: cfg.HTTPListen.Port, Handler: app}},
-		GRPC:    []server.GRPCListener{{Name: "grpc", Port: cfg.GRPCListen.Port, Build: buildGRPCServer}},
+		Service:   "commodore",
+		Logger:    logger,
+		Ready:     readiness,
+		BindAddrs: cfg.BindAddrs,
+		HTTP:      []server.HTTPListener{{Name: "http", Port: cfg.HTTPListen.Port, Handler: app}},
+		GRPC:      []server.GRPCListener{{Name: "grpc", Port: cfg.GRPCListen.Port, Build: buildGRPCServer}},
 		// Only settings read through liveConfig follow a reload; everything
 		// copied from cfg above stays at its startup value.
 		OnReload:   []server.ReloadCallback{liveConfig.Reload},

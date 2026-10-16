@@ -420,9 +420,10 @@ func main() {
 
 	server.RegisterEnvFileReload("navigator", logger)
 	if runErr := server.Run(context.Background(), server.RunSpec{
-		Service: "navigator",
-		Logger:  logger,
-		Ready:   readiness,
+		Service:   "navigator",
+		Logger:    logger,
+		Ready:     readiness,
+		BindAddrs: cfg.BindAddrs,
 		HTTP: []server.HTTPListener{{
 			Name:        "http",
 			Port:        cfg.ListenHTTPPort(),

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -51,13 +52,17 @@ type HTTPListener struct {
 	// FreeBind lets BindAddr be an address no interface holds yet, so a
 	// listener on a mesh address binds before the mesh interface is up and
 	// accepts once it is. Linux only; elsewhere the bind is unchanged.
-	FreeBind     bool
-	Handler      http.Handler
-	TLSCertFile  string
-	TLSKeyFile   string
-	ReadTimeout  time.Duration
-	WriteTimeout time.Duration
-	IdleTimeout  time.Duration
+	FreeBind bool
+	// AllInterfaces keeps a listener without BindAddr on every interface when
+	// RunSpec.BindAddrs is set: one that clients outside the mesh dial
+	// directly.
+	AllInterfaces bool
+	Handler       http.Handler
+	TLSCertFile   string
+	TLSKeyFile    string
+	ReadTimeout   time.Duration
+	WriteTimeout  time.Duration
+	IdleTimeout   time.Duration
 }
 
 // GRPCListener is one gRPC server run by Run. Set exactly one of Server and
@@ -68,6 +73,8 @@ type GRPCListener struct {
 	Port     string
 	// Listener, when set, is served instead of binding BindAddr:Port.
 	Listener net.Listener
+	// AllInterfaces has the HTTPListener.AllInterfaces meaning.
+	AllInterfaces bool
 	// Server is served as soon as every listener is bound.
 	Server *grpc.Server
 	// Build constructs the server in the background after the port is bound,
@@ -83,6 +90,12 @@ type RunSpec struct {
 	Logger  logging.Logger
 	HTTP    []HTTPListener
 	GRPC    []GRPCListener
+	// BindAddrs are the addresses a listener without its own BindAddr,
+	// Listener or AllInterfaces binds, one socket per address served by the
+	// listener's single server, with FreeBind. Provisioning sets loopback and
+	// the host's WireGuard address (BIND_ADDRS), so only same-host callers and
+	// mesh peers reach the service. Empty binds every interface.
+	BindAddrs []string
 	// Ready flips to draining before any listener stops. Run also adds one
 	// check per Build listener that stays unhealthy until that server serves.
 	Ready *monitoring.ReadinessChecker
@@ -171,7 +184,7 @@ func Run(ctx context.Context, spec RunSpec) error {
 
 	errCh := make(chan error, len(httpRunning)+len(grpcRunning))
 	for _, r := range httpRunning {
-		spec.Logger.WithFields(logging.Fields{"service": spec.Service, "listener": r.cfg.Name, "address": r.lis.Addr().String()}).Info("Starting HTTP listener")
+		spec.Logger.WithFields(logging.Fields{"service": spec.Service, "listener": r.cfg.Name, "address": listenerAddress(r.lis)}).Info("Starting HTTP listener")
 		go func() {
 			var serveErr error
 			if r.cfg.TLSCertFile != "" {
@@ -318,7 +331,7 @@ func serveGRPC(buildCtx context.Context, spec RunSpec, r *runningGRPC, errCh cha
 	r.srv = srv
 	r.mu.Unlock()
 
-	spec.Logger.WithFields(logging.Fields{"service": spec.Service, "listener": r.cfg.Name, "address": r.lis.Addr().String()}).Info("Starting gRPC listener")
+	spec.Logger.WithFields(logging.Fields{"service": spec.Service, "listener": r.cfg.Name, "address": listenerAddress(r.lis)}).Info("Starting gRPC listener")
 	r.serving.Store(true)
 	if serveErr := srv.Serve(r.lis); serveErr != nil && !errors.Is(serveErr, grpc.ErrServerStopped) {
 		errCh <- fmt.Errorf("gRPC listener %s (%s): %w", r.cfg.Name, r.lis.Addr(), serveErr)
@@ -342,7 +355,7 @@ func bindListeners(spec RunSpec) ([]runningHTTP, []*runningGRPC, error) {
 		if (cfg.TLSCertFile == "") != (cfg.TLSKeyFile == "") {
 			return fail(fmt.Errorf("server: HTTP listener %q requires both certificate and key files", cfg.Name))
 		}
-		lis, err := listen(cfg.Listener, cfg.BindAddr, cfg.Port, cfg.FreeBind)
+		lis, err := spec.bind(cfg.Listener, cfg.BindAddr, cfg.Port, cfg.FreeBind, cfg.AllInterfaces)
 		if err != nil {
 			return fail(fmt.Errorf("server: HTTP listener %q: %w", cfg.Name, err))
 		}
@@ -360,7 +373,7 @@ func bindListeners(spec RunSpec) ([]runningHTTP, []*runningGRPC, error) {
 		if (cfg.Server == nil) == (cfg.Build == nil) {
 			return fail(fmt.Errorf("server: gRPC listener %q needs exactly one of Server or Build", cfg.Name))
 		}
-		lis, err := listen(cfg.Listener, cfg.BindAddr, cfg.Port, false)
+		lis, err := spec.bind(cfg.Listener, cfg.BindAddr, cfg.Port, false, cfg.AllInterfaces)
 		if err != nil {
 			return fail(fmt.Errorf("server: gRPC listener %q: %w", cfg.Name, err))
 		}
@@ -368,6 +381,29 @@ func bindListeners(spec RunSpec) ([]runningHTTP, []*runningGRPC, error) {
 		grpcRunning = append(grpcRunning, &runningGRPC{cfg: cfg, lis: lis})
 	}
 	return httpRunning, grpcRunning, nil
+}
+
+// bind opens one listener: the given Listener, BindAddr:Port, every
+// interface for an AllInterfaces listener, or else Port on each of
+// spec.BindAddrs (every interface when there are none).
+func (spec RunSpec) bind(existing net.Listener, bindAddr, port string, freeBind, allInterfaces bool) (net.Listener, error) {
+	if existing != nil || bindAddr != "" || allInterfaces {
+		return listen(existing, bindAddr, port, freeBind)
+	}
+	return listenAddrs(nil, spec.BindAddrs, port, freeBind)
+}
+
+// listenerAddress is every address lis accepts on, for logs.
+func listenerAddress(lis net.Listener) string {
+	if m, ok := lis.(*multiListener); ok {
+		addrs := m.Addrs()
+		parts := make([]string, 0, len(addrs))
+		for _, addr := range addrs {
+			parts = append(parts, addr.String())
+		}
+		return strings.Join(parts, ",")
+	}
+	return lis.Addr().String()
 }
 
 // ListenTCP binds bindAddr:port for a service that runs its own http.Server

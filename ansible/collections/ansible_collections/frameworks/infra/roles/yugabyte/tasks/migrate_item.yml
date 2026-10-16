@@ -7,7 +7,7 @@
 # no_log, so the refusal below carries the rows the operator needs.
 - name: Run migration precheck (Yugabyte)
   community.postgresql.postgresql_query:
-    login_host: 127.0.0.1
+    login_host: "{{ yugabyte_ysql_local_host }}"
     login_port: "{{ yugabyte_ysql_port }}"
     login_user: "{{ yugabyte_superuser_role }}"
     login_password: "{{ yugabyte_superuser_password }}"
@@ -55,7 +55,7 @@
 # after its statements the item checks every guarded index is valid and ready before it writes its ledger row.
 - name: Apply migration (Yugabyte)
   frameworks.infra.yugabyte_migration_apply:
-    login_host: 127.0.0.1
+    login_host: "{{ yugabyte_ysql_local_host }}"
     login_port: "{{ yugabyte_ysql_port }}"
     login_user: "{{ yugabyte_superuser_role }}"
     login_password: "{{ yugabyte_superuser_password }}"

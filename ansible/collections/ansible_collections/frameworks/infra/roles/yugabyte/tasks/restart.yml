@@ -35,7 +35,7 @@
 
 - name: Wait for YSQL after restart
   ansible.builtin.wait_for:
-    host: 127.0.0.1
+    host: "{{ yugabyte_node_address }}"
     port: "{{ yugabyte_ysql_port }}"
     timeout: 120
     sleep: 2

@@ -57,7 +57,7 @@ The coordinator has no public hostname. Bridge reads inventory over the WireGuar
 from `network-observer.<aggregator-region>.internal` on a second, internal-CA HTTPS
 listener, verifying the leaf as `network-observer.internal`; the plain listener serves
 health probes. Provisioning binds both listeners only to loopback and the host's WireGuard
-address (`NETWORK_OBSERVER_BIND_ADDRS` natively, the published ports in Docker), with
+address (`BIND_ADDRS` natively, the published ports in Docker), with
 FreeBind so the observer starts before the mesh interface exists; the LAN and public
 interfaces do not answer. The coordinator registers with Quartermaster so the runtime mesh DNS lists
 it, and the CLI-rendered Privateer seeds resolve and peer the alias on Bridge hosts.

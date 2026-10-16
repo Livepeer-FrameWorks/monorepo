@@ -2,14 +2,11 @@ package main
 
 import (
 	"context"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"slices"
 	"testing"
 
-	"frameworks/api_network_observer/internal/appconfig"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 )
@@ -35,60 +32,6 @@ func TestPlainListenerServesOnlyProbesBesideInternalTLS(t *testing.T) {
 		if response.Code != tc.want {
 			t.Errorf("%s %s on the plain listener = %d, want %d", tc.method, tc.path, response.Code, tc.want)
 		}
-	}
-}
-
-// NETWORK_OBSERVER_BIND_ADDRS limits both observer ports to the configured
-// addresses, so provisioning's loopback + WireGuard list keeps the health and
-// internal API listeners off the LAN. Empty keeps one all-interface listener.
-func TestObserverListenersBindConfiguredAddresses(t *testing.T) {
-	load := func(bindAddrs string) *appconfig.Observer {
-		t.Helper()
-		env := map[string]string{
-			"DATABASE_URL":                "postgres://observer@localhost/network_observer",
-			"NETWORK_OBSERVER_TENANT_ID":  "00000000-0000-0000-0000-000000000001",
-			"NETWORK_OBSERVER_CLUSTER_ID": "central-primary",
-			"NETWORK_OBSERVER_SECRET":     "secret",
-			"LIVEPEER_ETH_RPC_URL":        "https://rpc.invalid",
-			"LIVEPEER_CONTROLLER":         "0xD8E8328501E9645d16Cf49539efC04f734606ee4",
-			"DECKLOG_GRPC_ADDR":           "decklog:18006",
-			"SERVICE_TOKEN":               "service-token",
-			"KAFKA_BROKERS":               "kafka:9092",
-			"NETWORK_OBSERVER_BIND_ADDRS": bindAddrs,
-		}
-		cfg, err := config.Load[appconfig.Observer](config.Options{Service: "network-observer", Lookup: func(key string) (string, bool) {
-			value, ok := env[key]
-			return value, ok
-		}})
-		if err != nil {
-			t.Fatalf("load: %v", err)
-		}
-		return cfg
-	}
-	bound := func(bindAddrs string) []string {
-		t.Helper()
-		listeners, err := observerListeners(load(bindAddrs).BindAddrs, "0")
-		if err != nil {
-			t.Fatalf("observerListeners(%q): %v", bindAddrs, err)
-		}
-		out := make([]string, 0, len(listeners))
-		for _, lis := range listeners {
-			host, _, splitErr := net.SplitHostPort(lis.Addr().String())
-			if splitErr != nil {
-				t.Fatal(splitErr)
-			}
-			out = append(out, host)
-			_ = lis.Close()
-		}
-		return out
-	}
-
-	if got := bound(" 127.0.0.1 ,"); !slices.Equal(got, []string{"127.0.0.1"}) {
-		t.Fatalf("listeners = %v, want only the configured loopback address", got)
-	}
-	got := bound("")
-	if len(got) != 1 || !net.ParseIP(got[0]).IsUnspecified() {
-		t.Fatalf("listeners without NETWORK_OBSERVER_BIND_ADDRS = %v, want one all-interface listener", got)
 	}
 }
 

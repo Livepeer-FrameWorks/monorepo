@@ -132,12 +132,13 @@ func (t *directTxExecutor) Exec(ctx context.Context, sqlText string) error {
 //
 // Auth strategy:
 //   - UsePeerAuth=true (Postgres): sudo -u <user> psql via Unix socket (peer auth)
-//   - UsePeerAuth=false (YugabyteDB): ysqlsh -h localhost via TCP with .pgpass file
+//   - UsePeerAuth=false (YugabyteDB): ysqlsh via TCP to the node's own YSQL
+//     listener (fw_ysql_host) with a .pgpass file
 type SSHExecutor struct {
 	Runner           ssh.Runner
 	BinaryPath       string // defaults to "psql"
 	UseYugabyteTools bool   // resolve ysqlsh from the node's selected engine release
-	UsePeerAuth      bool   // true = sudo + Unix socket; false = TCP + -h localhost
+	UsePeerAuth      bool   // true = sudo + Unix socket; false = TCP to the local listener
 	Password         string // for TCP auth mode; passed through a temporary .pgpass file
 }
 
@@ -184,7 +185,7 @@ func (s *SSHExecutor) uploadSQL(ctx context.Context, sqlContent string) (remoteP
 // appears in any shell command string. Returns the remote path and cleanup func.
 // Cleanup removes both the local temp file and the remote .pgpass file.
 func (s *SSHExecutor) uploadPgpass(ctx context.Context, conn ConnParams) (string, func(), error) {
-	entry := fmt.Sprintf("localhost:%d:*:%s:%s\n", conn.Port, conn.User, s.Password)
+	entry := fmt.Sprintf("*:%d:*:%s:%s\n", conn.Port, conn.User, s.Password)
 
 	localFile, err := os.CreateTemp("", ".pgpass-*")
 	if err != nil {
@@ -255,10 +256,15 @@ func (s *SSHExecutor) buildCommand(conn ConnParams, remotePath, pgpassFile strin
 		pgpassEnv = fmt.Sprintf("PGPASSFILE=%s ", pgpassFile)
 	}
 
-	return fmt.Sprintf("%s; %s%s -X -h localhost -p %d -U %s -d %s -v ON_ERROR_STOP=1%s -f %s",
+	host := "localhost"
+	if s.UseYugabyteTools {
+		host = fmt.Sprintf(`"$(fw_ysql_host %d)"`, conn.Port)
+	}
+	return fmt.Sprintf("%s; %s%s -X -h %s -p %d -U %s -d %s -v ON_ERROR_STOP=1%s -f %s",
 		trap,
 		pgpassEnv,
 		binary,
+		host,
 		conn.Port,
 		shellQuote(conn.User),
 		shellQuote(conn.Database),

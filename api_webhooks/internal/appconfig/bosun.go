@@ -17,6 +17,7 @@ import (
 //
 //configref:service bosun cmd=cmd/bosun
 type Bosun struct {
+	config.ListenAddrs
 	config.HTTPRuntime
 	config.Logging
 	config.GRPCMetadataPolicy

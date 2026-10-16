@@ -215,10 +215,11 @@ func main() {
 		DebugConfigOptions: configOptions,
 	})
 	if err := server.Run(context.Background(), server.RunSpec{
-		Service: "privateer",
-		Logger:  logger,
-		Ready:   readiness,
-		HTTP:    []server.HTTPListener{{Name: "http", Port: cfg.ListenHTTPPort(), Handler: router}},
+		Service:   "privateer",
+		Logger:    logger,
+		Ready:     readiness,
+		BindAddrs: cfg.BindAddrs,
+		HTTP:      []server.HTTPListener{{Name: "http", Port: cfg.ListenHTTPPort(), Handler: router}},
 		// Stop is idempotent: after a signal it waits for the agent's own
 		// stop to finish, and after a listener failure it stops the agent.
 		OnShutdown: []func(context.Context){func(context.Context) { a.Stop() }},

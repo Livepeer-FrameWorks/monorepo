@@ -1,13 +1,13 @@
 ---
 # Seed runs locally as the built-in Yugabyte admin role. The generated HBA
-# trusts this role only from 127.0.0.1.
+# trusts this role only from this node's own YSQL address.
 
 - name: Ensure YSQL Ansible module prerequisites
   ansible.builtin.import_tasks: ysql_prereqs.yml
 
 - name: Apply SQL seeds via YSQL
   community.postgresql.postgresql_query:
-    login_host: 127.0.0.1
+    login_host: "{{ yugabyte_ysql_local_host }}"
     login_port: "{{ yugabyte_ysql_port }}"
     login_user: "{{ yugabyte_superuser_role }}"
     login_password: "{{ yugabyte_superuser_password }}"

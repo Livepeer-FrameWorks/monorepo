@@ -1,5 +1,8 @@
 ---
+# Plain-HTTP copy of every site, without TLS or the HTTPS redirect. It answers
+# local checks only; public clients use nginx_public_http_port and 443.
 nginx_http_port: 18090
+nginx_http_bind_address: 127.0.0.1
 nginx_public_http_port: 80
 nginx_sites: []
 nginx_package_by_family:

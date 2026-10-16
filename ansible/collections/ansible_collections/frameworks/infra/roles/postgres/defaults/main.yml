@@ -3,10 +3,10 @@
 postgres_version: "16"
 postgres_instance_name: postgres
 
-# Listener — bind publicly so cluster-internal reachability works without
-# fronting Postgres with a TCP proxy. Production restricts access via the
-# firewall layer, not via listen address.
-postgres_listen_addresses: "*"
+# Listener — loopback for direct role use. Cluster provisioning binds loopback
+# and the host's WireGuard address, where same-host containers and mesh peers
+# connect; the LAN and public interfaces stay closed.
+postgres_listen_addresses: "127.0.0.1"
 postgres_port: 5432
 
 # Pinned postgres-exporter release-manifest artifact; the CLI passes it.
@@ -72,6 +72,9 @@ postgres_hba_entries:
     user: all
     address: "172.16.0.0/12"
     auth_method: scram-sha-256
+# Mesh CIDR whose clients (services on this and other mesh hosts, which dial
+# <host>.internal) may authenticate with a password. Empty adds no entry.
+postgres_hba_mesh_cidr: ""
 
 # Performance defaults — overridable from the manifest's `tuning:` block.
 postgres_max_connections: 200

@@ -221,10 +221,11 @@ func main() {
 	incidentServer := &grpcserver.Server{Incidents: incidentService, Logger: logger}
 	server.RegisterEnvFileReload("lookout", logger)
 	if runErr := server.Run(ctx, server.RunSpec{
-		Service: "lookout",
-		Logger:  logger,
-		Ready:   readiness,
-		HTTP:    []server.HTTPListener{{Name: "http", Port: cfg.HTTPListenPort(), Handler: app}},
+		Service:   "lookout",
+		Logger:    logger,
+		Ready:     readiness,
+		BindAddrs: cfg.BindAddrs,
+		HTTP:      []server.HTTPListener{{Name: "http", Port: cfg.HTTPListenPort(), Handler: app}},
 		// The gRPC server is built after the port is bound, so HTTP health and
 		// the Alertmanager webhook serve while the TLS files are still being
 		// synced.

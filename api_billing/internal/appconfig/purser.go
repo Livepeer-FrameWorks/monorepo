@@ -26,6 +26,7 @@ type QuartermasterClient struct {
 //
 //configref:service purser cmd=cmd/purser
 type Purser struct {
+	config.ListenAddrs
 	config.HTTPListen
 	config.GRPCListen
 	config.HTTPRuntime

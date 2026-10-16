@@ -1,6 +1,7 @@
 ---
 # YSQL is PostgreSQL-wire-compatible. Init runs locally as the built-in
-# yugabyte admin role, which the generated HBA trusts only from 127.0.0.1.
+# yugabyte admin role, which the generated HBA trusts only from this node's
+# own YSQL address (yugabyte_node_address, where YSQL listens).
 # Application owners get the SOPS-backed password and connect over SCRAM.
 
 - name: Ensure YSQL Ansible module prerequisites
@@ -34,7 +35,7 @@
     name: "{{ item.owner | default(item.name, true) }}"
     password: "{{ item.password | default(yugabyte_application_password) }}"
     role_attr_flags: LOGIN
-    login_host: 127.0.0.1
+    login_host: "{{ yugabyte_ysql_local_host }}"
     login_port: "{{ yugabyte_ysql_port }}"
     login_user: "{{ yugabyte_superuser_role }}"
     login_password: "{{ yugabyte_superuser_password }}"
@@ -67,7 +68,7 @@
 
 - name: Read existing databases
   community.postgresql.postgresql_query:
-    login_host: 127.0.0.1
+    login_host: "{{ yugabyte_ysql_local_host }}"
     login_port: "{{ yugabyte_ysql_port }}"
     login_user: "{{ yugabyte_superuser_role }}"
     login_password: "{{ yugabyte_superuser_password }}"
@@ -80,7 +81,7 @@
 
 - name: Create colocated databases
   community.postgresql.postgresql_query:
-    login_host: 127.0.0.1
+    login_host: "{{ yugabyte_ysql_local_host }}"
     login_port: "{{ yugabyte_ysql_port }}"
     login_user: "{{ yugabyte_superuser_role }}"
     login_password: "{{ yugabyte_superuser_password }}"
@@ -102,7 +103,7 @@
   community.postgresql.postgresql_db:
     name: "{{ item.name }}"
     owner: "{{ item.owner }}"
-    login_host: 127.0.0.1
+    login_host: "{{ yugabyte_ysql_local_host }}"
     login_port: "{{ yugabyte_ysql_port }}"
     login_user: "{{ yugabyte_superuser_role }}"
     login_password: "{{ yugabyte_superuser_password }}"
@@ -119,7 +120,7 @@
     name: "{{ item.runtime_role | default((item.owner | default(item.name, true)) ~ '_runtime', true) }}"
     password: "{{ item.runtime_password | default(yugabyte_runtime_password) }}"
     role_attr_flags: LOGIN,NOSUPERUSER,NOCREATEDB,NOCREATEROLE,NOREPLICATION
-    login_host: 127.0.0.1
+    login_host: "{{ yugabyte_ysql_local_host }}"
     login_port: "{{ yugabyte_ysql_port }}"
     login_user: "{{ yugabyte_superuser_role }}"
     login_password: "{{ yugabyte_superuser_password }}"
@@ -141,7 +142,7 @@
 # invalidates every backend's catalog cache on the cluster, so a role is altered only when its settings differ.
 - name: Find runtime roles without session limits
   community.postgresql.postgresql_query:
-    login_host: 127.0.0.1
+    login_host: "{{ yugabyte_ysql_local_host }}"
     login_port: "{{ yugabyte_ysql_port }}"
     login_user: "{{ yugabyte_superuser_role }}"
     login_password: "{{ yugabyte_superuser_password }}"
@@ -174,7 +175,7 @@
 
 - name: Bound runtime role sessions
   community.postgresql.postgresql_query:
-    login_host: 127.0.0.1
+    login_host: "{{ yugabyte_ysql_local_host }}"
     login_port: "{{ yugabyte_ysql_port }}"
     login_user: "{{ yugabyte_superuser_role }}"
     login_password: "{{ yugabyte_superuser_password }}"
@@ -196,7 +197,7 @@
     login_db: "{{ item.name }}"
     new_owner: "{{ item.owner | default(item.name, true) }}"
     obj_type: database
-    login_host: 127.0.0.1
+    login_host: "{{ yugabyte_ysql_local_host }}"
     login_port: "{{ yugabyte_ysql_port }}"
     login_user: "{{ yugabyte_superuser_role }}"
     login_password: "{{ yugabyte_superuser_password }}"

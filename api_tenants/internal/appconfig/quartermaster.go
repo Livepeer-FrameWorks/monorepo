@@ -20,6 +20,7 @@ import (
 //
 //configref:service quartermaster cmd=cmd/quartermaster
 type Quartermaster struct {
+	config.ListenAddrs
 	config.HTTPListen
 	config.GRPCListen
 	config.HTTPRuntime

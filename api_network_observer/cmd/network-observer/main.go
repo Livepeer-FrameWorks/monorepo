@@ -25,12 +25,10 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/server"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 	"github.com/twmb/franz-go/pkg/kadm"
-	"net"
 	"net/http"
 	"net/netip"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 )
@@ -205,7 +203,7 @@ func main() {
 		}
 	}()
 	handler := api.Handler()
-	plainListeners, err := observerListeners(cfg.BindAddrs, cfg.HTTPPort)
+	plainListener, err := server.ListenAddrs(cfg.BindAddrs, cfg.HTTPPort)
 	if err != nil {
 		logger.WithError(err).Fatal("Observer HTTP listener failed")
 	}
@@ -232,7 +230,7 @@ func main() {
 			}
 		}
 	}()
-	if err = serveListeners(httpServer, plainListeners, false); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	if err = httpServer.Serve(plainListener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		logger.WithError(err).Fatal("Observer HTTP server failed")
 	}
 }
@@ -254,55 +252,6 @@ func newHTTPServer(handler http.Handler) *http.Server {
 	return &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
 }
 
-// observerListeners binds port once per NETWORK_OBSERVER_BIND_ADDRS entry, or
-// on every interface when none is set. Configured addresses bind with
-// FreeBind: provisioning includes the WireGuard address, which does not exist
-// until Privateer brings the mesh up, and the observer must not depend on that
-// order.
-func observerListeners(bindAddrs []string, port string) ([]net.Listener, error) {
-	var listeners []net.Listener
-	fail := func(err error) ([]net.Listener, error) {
-		for _, lis := range listeners {
-			_ = lis.Close()
-		}
-		return nil, err
-	}
-	for _, addr := range bindAddrs {
-		if addr = strings.TrimSpace(addr); addr == "" {
-			continue
-		}
-		lis, err := server.ListenTCP(addr, port, true)
-		if err != nil {
-			return fail(fmt.Errorf("bind %s port %s: %w", addr, port, err))
-		}
-		listeners = append(listeners, lis)
-	}
-	if len(listeners) == 0 {
-		lis, err := server.ListenTCP("", port, false)
-		if err != nil {
-			return fail(fmt.Errorf("bind port %s: %w", port, err))
-		}
-		listeners = append(listeners, lis)
-	}
-	return listeners, nil
-}
-
-// serveListeners serves srv on every listener until one stops; Shutdown
-// closes them all, so a clean stop returns http.ErrServerClosed.
-func serveListeners(srv *http.Server, listeners []net.Listener, useTLS bool) error {
-	errs := make(chan error, len(listeners))
-	for _, lis := range listeners {
-		go func(lis net.Listener) {
-			if useTLS {
-				errs <- srv.ServeTLS(lis, "", "")
-				return
-			}
-			errs <- srv.Serve(lis)
-		}(lis)
-	}
-	return <-errs
-}
-
 // serveInternalTLS serves the API to mesh callers with the internal-CA leaf.
 // Privateer may write the leaf after the process starts, so the listener opens
 // once the files exist; the plain listener keeps health probes answering
@@ -319,11 +268,11 @@ func serveInternalTLS(ctx context.Context, srv *http.Server, bindAddrs []string,
 		logger.WithError(err).Fatal("Observer internal TLS configuration invalid")
 	}
 	srv.TLSConfig = tlsConfig
-	listeners, err := observerListeners(bindAddrs, port)
+	listener, err := server.ListenAddrs(bindAddrs, port)
 	if err != nil {
 		logger.WithError(err).Fatal("Observer internal HTTPS listener failed")
 	}
-	if err := serveListeners(srv, listeners, true); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	if err := srv.ServeTLS(listener, "", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		logger.WithError(err).Fatal("Observer internal HTTPS server failed")
 	}
 }

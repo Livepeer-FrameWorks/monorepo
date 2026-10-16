@@ -112,10 +112,11 @@ func main() {
 
 	server.RegisterEnvFileReload("periscope-metering", logger)
 	if runErr := server.Run(context.Background(), server.RunSpec{
-		Service: "periscope-metering",
-		Logger:  logger,
-		Ready:   readiness,
-		HTTP:    []server.HTTPListener{{Name: "http", Port: cfg.Port, Handler: router}},
+		Service:   "periscope-metering",
+		Logger:    logger,
+		Ready:     readiness,
+		BindAddrs: cfg.BindAddrs,
+		HTTP:      []server.HTTPListener{{Name: "http", Port: cfg.Port, Handler: router}},
 	}); runErr != nil {
 		logger.WithError(runErr).Fatal("Periscope metering server failed")
 	}

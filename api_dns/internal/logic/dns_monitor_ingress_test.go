@@ -2,6 +2,7 @@ package logic
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"frameworks/api_dns/internal/provider/cloudflare"
@@ -77,5 +78,34 @@ func TestSyncService_CloudflareServicesProbeTheIngressNotTheServicePort(t *testi
 				}
 			}
 		})
+	}
+}
+
+// Without Bunny, a media cluster's service records fall back to Cloudflare
+// load balancers. Foghorn, Chandler, vmauth (telemetry) and the Livepeer
+// gateway listen only on loopback and the WireGuard address, so those pools
+// are probed through the ingress too; only edges are probed on the node.
+func TestEnsureMonitor_ClusterServicesProbeTheIngress(t *testing.T) {
+	for _, serviceType := range pkgdns.BunnyManagedServiceTypes() {
+		var created cloudflare.Monitor
+		cf := &fakeCloudflareClient{
+			listMonitors: func() ([]cloudflare.Monitor, error) { return nil, nil },
+			createMonitor: func(mon cloudflare.Monitor) (*cloudflare.Monitor, error) {
+				created = mon
+				mon.ID = mon.Description
+				return &mon, nil
+			},
+		}
+		m := newTestManager(cf)
+		if _, err := m.ensureMonitor(serviceType); err != nil {
+			t.Fatalf("ensureMonitor %s: %v", serviceType, err)
+		}
+		edge := strings.HasPrefix(serviceType, "edge")
+		if !edge && (created.Port != 80 || created.Path != "/health") {
+			t.Fatalf("%s monitor = :%d %s, want the ingress probe :80 /health", serviceType, created.Port, created.Path)
+		}
+		if edge && created.Port != 18008 {
+			t.Fatalf("%s monitor port = %d, want the edge probe on 18008", serviceType, created.Port)
+		}
 	}
 }

@@ -52,10 +52,10 @@ certificate ServerName is the logical service name, for example
 Foghorn is the exception because it is both an internal control-plane service and
 the public edge authority:
 
-| Listener | Default bind | Certificate           | ServerName                 | Audience                                                                 |
-| -------- | ------------ | --------------------- | -------------------------- | ------------------------------------------------------------------------ |
-| Internal | `:18019`     | Internal CA           | `foghorn.internal`         | Commodore control RPCs, Foghorn federation, HA relay, and gRPC health    |
-| External | `:18029`     | ACME cluster wildcard | `foghorn.<cluster>.<root>` | Helmsman control streams and the narrow edge bootstrap `PreRegisterEdge` |
+| Listener | Provisioned bind              | Certificate           | ServerName                 | Audience                                                                 |
+| -------- | ----------------------------- | --------------------- | -------------------------- | ------------------------------------------------------------------------ |
+| Internal | loopback + WireGuard `:18019` | Internal CA           | `foghorn.internal`         | Commodore control RPCs, Foghorn federation, HA relay, and gRPC health    |
+| External | every interface `:18029`      | ACME cluster wildcard | `foghorn.<cluster>.<root>` | Helmsman control streams and the narrow edge bootstrap `PreRegisterEdge` |
 
 The external listener must not serve the internal leaf. If Navigator cannot
 provide a cluster wildcard bundle in production, Foghorn fails startup.
@@ -65,24 +65,70 @@ its API on an internal-CA HTTPS listener (`:18034`, ServerName
 `network-observer.internal`), and its plain `:18024` listener then answers only health
 and readiness probes. Bridge dials it at its aggregator-region mesh alias and verifies
 that ServerName, as for gRPC clients. The observer has no public certificate; external
-probers reach it through Bridge. Both observer listeners bind only loopback and the
-host's WireGuard address, so neither answers on the LAN or public interfaces.
+probers reach it through Bridge.
 
 A service deployed in Docker mode reads the same paths: the `compose_stack` role
 bootstraps the CA bundle and leaf as `go_service` does, mounts their directories
 (`/etc/frameworks/pki`) read-only at the same path so Privateer's renewals reach the
 container, and adds the container to the host's `frameworks` group, which may read the
-leaf key. The render publishes every listener of the service (its HTTP, gRPC, metrics and
-internal HTTPS ports) on loopback and the host's WireGuard address only. Docker's
-forwarding rules sit ahead of the host firewall, so a port published without an address
-answers on the LAN and public interfaces and bypasses the reverse proxy's TLS and
-client-IP headers. Every caller of these listeners is on loopback (the host's native
-proxy, vmagent, the rollout gate) or the mesh (a docker-mode proxy, which reaches them on
-the WireGuard address rather than the Docker gateway, the peers' proxy backups, and gRPC
-clients at `<service>.internal`). Two listeners differ: Foghorn's internal HTTP listener
-is published on loopback alone, and Foghorn's external gRPC listener, which edges outside
-the mesh dial, on every interface. Listmonk and Chatwoot, which render their own Compose
-files, publish their ports the same way.
+leaf key.
+
+### Listener binds
+
+Every listener on a platform host binds loopback and the host's WireGuard address, or
+loopback alone. Its callers are on loopback (the host's native reverse proxy, the local
+vmagent, the rollout gate, the CLI's SSH sessions) or on the mesh (a docker-mode proxy,
+which reaches local services on the WireGuard address rather than the Docker gateway, the
+peers' proxy backups, gRPC and database clients at `<host>.internal` or
+`<service>.internal`, replication and Raft peers, and Quartermaster's health probes).
+A listener on the LAN or public interface would bypass the reverse proxy's TLS and
+client-IP headers, and the platform does not rely on a host firewall to close it. The only
+public listeners are the reverse proxy's 80 and 443, Foghorn's external gRPC listener,
+which edges outside the mesh dial, the WireGuard UDP port, SSH, and an edge's media
+ports (RTMP, SRT, WebRTC, RTSP and DTSC; edges do not join the mesh). An edge's
+MistController API, Helmsman and vmagent listen on loopback.
+
+| Listener                                                                  | Bind                                                                                                                                      | Set by                                                                                     |
+| ------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| Every FrameWorks Go service's HTTP, gRPC, metrics and internal HTTPS port | loopback + WireGuard                                                                                                                      | `BIND_ADDRS` (`pkg/config` `ListenAddrs`, `pkg/server` `RunSpec.BindAddrs`), with FreeBind |
+| Foghorn external gRPC `:18029`                                            | every interface                                                                                                                           | `AllInterfaces` on the listener                                                            |
+| Foghorn internal HTTP `:18027`                                            | loopback                                                                                                                                  | `FOGHORN_INTERNAL_HTTP_BIND_ADDR`                                                          |
+| Privateer DNS `:53`                                                       | loopback                                                                                                                                  | `privateer.socket`                                                                         |
+| Livepeer gateway HTTP / CLI                                               | loopback (Docker: HTTP published on loopback + WireGuard, CLI on loopback)                                                                | `http_addr`, `cli_addr`                                                                    |
+| Livepeer signer HTTP                                                      | WireGuard (the rollout gate and vmagent probe it there)                                                                                   | `http_addr`                                                                                |
+| PostgreSQL                                                                | loopback + WireGuard; HBA admits password logins from the mesh CIDR                                                                       | `postgres_listen_addresses`, `postgres_hba_mesh_cidr`                                      |
+| YugabyteDB master/tserver RPC, web UIs and YSQL                           | WireGuard (YSQL takes one address; node-local admin clients connect there, `fw_ysql_host`); HBA admits password logins from the mesh CIDR | `yugabyte_node_address`, `yugabyte_hba_client_cidr`                                        |
+| YugabyteDB YCQL                                                           | loopback                                                                                                                                  | `tserver.conf.j2`                                                                          |
+| ClickHouse server ports, Keeper client and Raft ports                     | loopback + WireGuard                                                                                                                      | `clickhouse_listen_hosts` (`listen_host`, `interserver_listen_host`)                       |
+| Redis / Valkey and Sentinel                                               | loopback + WireGuard                                                                                                                      | `bind`                                                                                     |
+| Kafka broker and controller listeners                                     | WireGuard (Kafka needs a distinct port per listener; local tools dial the WireGuard address)                                              | `kafka_bind_host`                                                                          |
+| Kafka and MirrorMaker JMX                                                 | none (remote JMX agent off; MirrorMaker's in-process exporter on loopback)                                                                | `KAFKA_JMX_OPTS` in the units                                                              |
+| VictoriaMetrics, vmauth, Alertmanager                                     | loopback + WireGuard                                                                                                                      | `prometheus_stack_listen_addrs`                                                            |
+| vmagent, vmalert, Prometheus, node_exporter                               | loopback                                                                                                                                  | `prometheus_stack` templates                                                               |
+| nginx plain-HTTP site copies `:18090`                                     | loopback                                                                                                                                  | `nginx_http_bind_address`                                                                  |
+| Docker-mode services, Listmonk, Chatwoot                                  | published on loopback + WireGuard (Foghorn external gRPC on every interface)                                                              | `composePublishAddrs`                                                                      |
+
+Docker's forwarding rules sit ahead of the host firewall, so a port published without an
+address answers on every interface; Compose-deployed services therefore publish each
+listener on explicit addresses while the container itself binds every interface of its
+own network namespace (it gets no `BIND_ADDRS`). A container reaches the host's PostgreSQL
+and Redis on the WireGuard address, since neither listens on the Docker gateway.
+
+The WireGuard address exists only once Privateer brings `wg0` up. Go services bind it with
+FreeBind, and the Privateer role sets `net.ipv4.ip_nonlocal_bind` and
+`net.ipv6.ip_nonlocal_bind` on every mesh host, so PostgreSQL, Kafka, YugabyteDB,
+ClickHouse, Redis and the metrics stack bind it at boot and accept once the mesh is up.
+
+A host image's stock `mistserver.service`, which runs every Mist connector on every
+interface, is stopped and masked on every host by `node_baseline`; MistServer runs only as
+an edge's `frameworks-mistserver` unit. `frameworks cluster doctor` lists, per host, every
+listener bound to every interface outside the public set (SSH, the reverse proxy's 80/443
+on a proxy host, Foghorn's 18029 on a Foghorn host, the WireGuard port), so an exposure
+does not go unnoticed.
+
+A host without a WireGuard address binds loopback alone. That is a single-host cluster:
+`cluster provision` refuses a manifest of more than one host without Privateer, since its
+hosts could not reach each other's services.
 
 Public HTTP remains a Caddy concern unless a service explicitly owns an HTTP
 endpoint. Foghorn's viewer redirect and MistServer pull-routing surfaces are
@@ -136,6 +182,7 @@ Foghorn through Quartermaster routing.
 | ------------------------------------------------------------- | -------------------------------------------------------------- |
 | `GRPC_TLS_CERT_PATH`, `GRPC_TLS_KEY_PATH`, `GRPC_TLS_CA_PATH` | Internal gRPC TLS files                                        |
 | `GRPC_ALLOW_INSECURE`                                         | Internal gRPC dev/test escape hatch only                       |
+| `BIND_ADDRS`                                                  | Addresses a Go service's listeners bind (empty: every one)     |
 | `<SERVICE>_GRPC_TLS_SERVER_NAME`                              | Per-client override at service entrypoints                     |
 | `FOGHORN_INTERNAL_GRPC_BIND_ADDR`                             | Foghorn internal listener, default `:18019`                    |
 | `FOGHORN_EXTERNAL_GRPC_BIND_ADDR`                             | Foghorn external listener, default `:18029`                    |

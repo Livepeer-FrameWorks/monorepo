@@ -9,7 +9,7 @@ import (
 )
 
 func TestListmonkEnvMapWiresAdminCredsFromGitOps(t *testing.T) {
-	env := listmonkEnvMap(ServiceConfig{
+	env, err := listmonkEnvMap(ServiceConfig{
 		EnvVars: map[string]string{
 			"DATABASE_HOST":             "yuga-eu-1.internal",
 			"DATABASE_PORT":             "5433",
@@ -23,7 +23,10 @@ func TestListmonkEnvMapWiresAdminCredsFromGitOps(t *testing.T) {
 			"LISTMONK_FRONTEND_URL":     "https://listmonk.frameworks.network",
 			"FROM_EMAIL":                "newsletter@frameworks.network",
 		},
-	})
+	}, inventory.Host{Name: "central-eu-1", WireguardIP: "10.88.0.5"})
+	if err != nil {
+		t.Fatalf("listmonkEnvMap: %v", err)
+	}
 
 	if got := env["LISTMONK_ADMIN_USER"]; got != "admin" {
 		t.Fatalf("LISTMONK_ADMIN_USER = %v, want %q", got, "admin")
@@ -31,8 +34,8 @@ func TestListmonkEnvMapWiresAdminCredsFromGitOps(t *testing.T) {
 	if got := env["LISTMONK_ADMIN_PASSWORD"]; got != "from-sops" {
 		t.Fatalf("LISTMONK_ADMIN_PASSWORD = %v, want %q", got, "from-sops")
 	}
-	if got := env["LISTMONK_db__host"]; got != "host.docker.internal" {
-		t.Fatalf("LISTMONK_db__host = %v, want host.docker.internal", got)
+	if got := env["LISTMONK_db__host"]; got != "10.88.0.5" {
+		t.Fatalf("LISTMONK_db__host = %v, want the host's WireGuard address 10.88.0.5", got)
 	}
 	if got := env["LISTMONK_db__port"]; got != "5432" {
 		t.Fatalf("LISTMONK_db__port = %v, want 5432", got)
@@ -49,7 +52,7 @@ func TestListmonkEnvMapWiresAdminCredsFromGitOps(t *testing.T) {
 }
 
 func TestListmonkRoleVarsWiresPublicURLReconcileDatabase(t *testing.T) {
-	vars, err := listmonkRoleVars(context.Background(), inventory.Host{}, ServiceConfig{
+	vars, err := listmonkRoleVars(context.Background(), inventory.Host{Name: "central-eu-1", WireguardIP: "10.88.0.5"}, ServiceConfig{
 		Image: "listmonk/listmonk:v6.1.0@sha256:test",
 		EnvVars: map[string]string{
 			"DATABASE_HOST":             "yuga-eu-1.internal",
@@ -89,7 +92,7 @@ infrastructure:
     digest: sha256:listmonxdigest
 `)
 
-	vars, err := listmonkRoleVars(context.Background(), inventory.Host{}, ServiceConfig{
+	vars, err := listmonkRoleVars(context.Background(), inventory.Host{Name: "central-eu-1", WireguardIP: "10.88.0.5"}, ServiceConfig{
 		Version:  "stable",
 		Metadata: map[string]any{"gitops_repository": repo},
 	}, RoleBuildHelpers{})
@@ -106,11 +109,14 @@ func TestListmonkEnvMapDoesNotSubstituteAdminCredsWhenMissing(t *testing.T) {
 	// are empty. The role itself must not invent fallbacks ("admin"/"admin"),
 	// because that would silently bypass the gate if preflight is skipped
 	// (--ignore-validation) or if a future caller stops checking.
-	env := listmonkEnvMap(ServiceConfig{
+	env, err := listmonkEnvMap(ServiceConfig{
 		EnvVars: map[string]string{
 			"DATABASE_HOST": "pg.frameworks",
 		},
-	})
+	}, inventory.Host{Name: "central-eu-1"})
+	if err != nil {
+		t.Fatalf("listmonkEnvMap: %v", err)
+	}
 
 	if got := env["LISTMONK_ADMIN_USER"]; got != "" {
 		t.Fatalf("LISTMONK_ADMIN_USER = %v, want empty (no silent fallback)", got)

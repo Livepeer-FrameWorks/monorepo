@@ -2,6 +2,7 @@ package provisioner
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -191,9 +192,18 @@ func TestClickHouseRoleVarsDefaultsListenHostsToLocalAndMesh(t *testing.T) {
 		},
 	}
 
-	vars, err := clickhouseRoleVars(context.Background(), inventory.Host{}, config, RoleBuildHelpers{})
+	vars, err := clickhouseRoleVars(context.Background(), inventory.Host{Name: "ch-1", WireguardIP: "10.66.0.12"}, config, RoleBuildHelpers{})
 	if err != nil {
 		t.Fatalf("clickhouseRoleVars: %v", err)
+	}
+	// A host without a WireGuard address must not bind its advertised name,
+	// which resolves to a LAN or public address.
+	single, err := clickhouseRoleVars(context.Background(), inventory.Host{Name: "ch-1"}, ServiceConfig{Version: "26.3.10.62", Metadata: map[string]any{"advertised_host": "ch-1"}}, RoleBuildHelpers{})
+	if err != nil {
+		t.Fatalf("clickhouseRoleVars without mesh: %v", err)
+	}
+	if got := single["clickhouse_listen_hosts"]; !reflect.DeepEqual(got, []string{"127.0.0.1"}) {
+		t.Fatalf("clickhouse_listen_hosts without mesh = %#v, want loopback only", got)
 	}
 	listenHosts, ok := vars["clickhouse_listen_hosts"].([]string)
 	if !ok {

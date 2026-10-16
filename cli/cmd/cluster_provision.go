@@ -567,6 +567,12 @@ func validateProvisionMeshIdentity(manifest *inventory.Manifest, remediation str
 	}
 	svc, ok := manifest.Services["privateer"]
 	if !ok || !svc.Enabled {
+		// Every platform listener binds loopback and the host's WireGuard
+		// address, and hosts reach each other only over the mesh, so a
+		// cluster without Privateer runs on a single host.
+		if len(manifest.Hosts) > 1 {
+			return fmt.Errorf("a cluster of %d hosts needs the WireGuard mesh: enable the privateer service and give every host a wireguard_ip. Services listen only on loopback and the WireGuard address, so hosts without the mesh cannot reach each other\n\n%s", len(manifest.Hosts), remediation)
+		}
 		return nil
 	}
 	hosts := orchestrator.EffectivePrivateerHostsForManifest(svc, manifest)
@@ -3543,6 +3549,11 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 			config.Metadata["advertised_host"] = manifest.MeshAddress(task.Host)
 		}
 	}
+	// PostgreSQL and YSQL accept password logins from the mesh, where
+	// services on this host and on peers dial <host>.internal.
+	if (task.Type == "postgres" || task.Type == "yugabyte") && manifest.WireGuard != nil && manifest.WireGuard.Enabled {
+		config.Metadata["mesh_cidr"] = strings.TrimSpace(manifest.WireGuard.MeshCIDR)
+	}
 
 	// Override for infrastructure (Redis uses manifest mode, not forced native)
 	if task.Phase == orchestrator.PhaseInfrastructure && task.Type != "redis" {
@@ -3652,9 +3663,6 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 
 	// Generate merged env vars for application/interface services.
 	// Infrastructure services (postgres, kafka, etc.) manage their own config.
-	if (baseName == "livepeer-gateway" || baseName == "livepeer-signer") && config.Mode != "native" {
-		return config, fmt.Errorf("service %s: livepeer services are native-only (compose renders no args)", task.Name)
-	}
 	if task.Phase != orchestrator.PhaseInfrastructure && manifest != nil {
 		envVars, err := buildServiceEnvVars(task, manifest, runtimeData, config.EnvFile, manifestDir, sharedEnv, clusterEnvs, config.Mode)
 		if err != nil {
@@ -3954,7 +3962,17 @@ func buildVMAgentScrapeTargets(manifest *inventory.Manifest, hostName string) []
 		if serviceID != name {
 			labels["frameworks_instance"] = name
 		}
-		addTarget(name, "127.0.0.1", port, spec.path, labels)
+		address := "127.0.0.1"
+		// A signer serves metrics on its http_addr, which binds the host's
+		// WireGuard address alone, not loopback.
+		if serviceID == "livepeer-signer" {
+			if host, _, splitErr := net.SplitHostPort(strings.TrimSpace(svc.Config["http_addr"])); splitErr == nil {
+				if ip := net.ParseIP(strings.Trim(host, "[]")); ip != nil && !ip.IsLoopback() && !ip.IsUnspecified() {
+					address = ip.String()
+				}
+			}
+		}
+		addTarget(name, address, port, spec.path, labels)
 	}
 
 	for name, svc := range manifest.Services {
@@ -4929,10 +4947,13 @@ func buildExtraProxyRoutesForHost(manifest *inventory.Manifest, hostName, cluste
 		if !ok || fqdn == "" {
 			continue
 		}
+		// vmauth listens on loopback and the WireGuard address only, so a
+		// docker-mode proxy reaches it on the WireGuard address.
 		routes = append(routes, map[string]any{
 			"name":         "telemetry-" + telemetryCluster,
 			"server_names": []string{fqdn},
 			"upstream":     fmt.Sprintf("127.0.0.1:%d", port),
+			"mesh_only":    true,
 		})
 	}
 	return routes
@@ -5062,6 +5083,9 @@ func buildProxySitesForHost(manifest *inventory.Manifest, hostName, clusterID st
 		if name, ok := route["name"].(string); ok && name != "" {
 			site["name"] = name
 			site["profile"] = proxyRouteProfileForService(name)
+		}
+		if meshOnly, ok := route["mesh_only"].(bool); ok && meshOnly {
+			site["mesh_only"] = true
 		}
 		copyProxySiteMetadata(site, stringMapFromAny(route["metadata"]))
 		appendSite(site)
@@ -6215,9 +6239,12 @@ func buildAnalyticsNamedCollections(manifest *inventory.Manifest, sharedEnv map[
 		} else if pg.IsYugabyte() && len(pg.Nodes) > 0 {
 			pgHostName = pg.Nodes[0].Host
 		}
-		// Loopback is valid only when every ClickHouse node shares the SQL host.
+		// Loopback is valid only when every ClickHouse node shares the SQL host,
+		// and only for PostgreSQL: YSQL takes a single bind address, the node's
+		// WireGuard address, and does not listen on loopback.
 		pgAddr := manifest.MeshAddress(pgHostName)
-		if ch := manifest.Infrastructure.ClickHouse; ch != nil && len(ch.AllHosts()) == 1 && ch.HasHost(pgHostName) {
+		yugabyteNode := inst == nil && pg.IsYugabyte()
+		if ch := manifest.Infrastructure.ClickHouse; ch != nil && !yugabyteNode && len(ch.AllHosts()) == 1 && ch.HasHost(pgHostName) {
 			pgAddr = "127.0.0.1"
 		}
 		if pgAddr == "" {
@@ -7036,7 +7063,9 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 	// Chandler no longer calls Foghorn: it serves thumbnails from a DETERMINISTIC static key, so it needs no
 	// FOGHORN_INTERNAL_URL (docs/architecture/thumbnails.md).
 	if baseName == "foghorn" {
-		env["FOGHORN_PUBLIC_HTTP_BIND_ADDR"] = "0.0.0.0"
+		// The public HTTP and internal gRPC listeners bind BIND_ADDRS: the
+		// local proxy fronts playback, and mesh peers dial the rest. The
+		// external gRPC listener stays on every interface for edges.
 		env["FOGHORN_INTERNAL_HTTP_BIND_ADDR"] = "127.0.0.1"
 		env["GRPC_METADATA_POLICY"] = "deny"
 		env["FOGHORN_INTERNAL_HTTP_PORT"] = strconv.Itoa(servicedefs.FoghornInternalHTTPPort)

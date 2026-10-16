@@ -30,6 +30,11 @@ argument_specs:
         type: int
         required: false
         default: 0
+      go_service_health_host:
+        type: str
+        required: false
+        default: 127.0.0.1
+        description: Address the rollout gate probes go_service_port on.
       go_service_validate_timeout:
         type: int
         required: false

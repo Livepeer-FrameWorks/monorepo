@@ -35,6 +35,9 @@ compose_stack_name: ""
 compose_stack_project_dir: "/opt/frameworks/{{ compose_stack_name }}"
 compose_stack_compose_content: ""
 compose_stack_files: {}
+# Project-relative files written with mode 0600, base64-encoded like
+# compose_stack_files.
+compose_stack_secret_files: {}
 compose_stack_service: {}
 compose_stack_publish_addrs: []
 compose_stack_pki: {}

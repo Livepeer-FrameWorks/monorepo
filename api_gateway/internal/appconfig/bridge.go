@@ -25,6 +25,7 @@ type Bridge struct {
 	NetworkID              string   `env:"LIVEPEER_NETWORK_ID" default:"42161" desc:"Livepeer production network namespace." introduced:"v0.3.13"`
 	NetworkEnvironment     string   `env:"NETWORK_OBSERVER_ENVIRONMENT" default:"production" desc:"Network observation environment." introduced:"v0.3.13"`
 
+	config.ListenAddrs
 	config.HTTPListen
 	config.HTTPRuntime
 	config.Logging
@@ -32,10 +33,9 @@ type Bridge struct {
 	config.Registration
 	config.BuildEnvironment
 
-	AdvertiseHost string   `env:"BRIDGE_HOST" default:"bridge" desc:"Host name this instance advertises when it registers with Quartermaster." introduced:"v0.3.0"`
-	BindAddrs     []string `env:"BRIDGE_BIND_ADDRS" desc:"Comma-separated addresses the HTTP listener on PORT binds, one listener per address. Provisioning sets loopback and the host's WireGuard address so only the local reverse proxy and mesh peers reach Bridge. Empty binds every interface." introduced:"v0.3.13"`
-	SourceNode    string   `env:"HOSTNAME" default:"bridge" desc:"Node name recorded as the source of API usage events." introduced:"v0.3.0"`
-	Region        string   `env:"REGION" desc:"Region label attached to API usage events sent to Decklog." introduced:"v0.3.0"`
+	AdvertiseHost string `env:"BRIDGE_HOST" default:"bridge" desc:"Host name this instance advertises when it registers with Quartermaster." introduced:"v0.3.0"`
+	SourceNode    string `env:"HOSTNAME" default:"bridge" desc:"Node name recorded as the source of API usage events." introduced:"v0.3.0"`
+	Region        string `env:"REGION" desc:"Region label attached to API usage events sent to Decklog." introduced:"v0.3.0"`
 
 	CommodoreGRPCAddr     string `env:"COMMODORE_GRPC_ADDR" required:"true" desc:"Commodore gRPC address for authentication, streams, and tenant resources." introduced:"v0.3.0"`
 	PeriscopeGRPCAddr     string `env:"PERISCOPE_GRPC_ADDR" required:"true" desc:"Periscope Query gRPC address for analytics queries." introduced:"v0.3.0"`

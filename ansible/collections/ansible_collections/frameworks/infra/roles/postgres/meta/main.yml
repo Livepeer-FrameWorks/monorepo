@@ -45,7 +45,13 @@ argument_specs:
       postgres_listen_addresses:
         type: str
         required: false
-        default: "*"
+        default: "127.0.0.1"
+        description: Comma-separated listen addresses; the CLI passes loopback and the host's WireGuard address.
+      postgres_hba_mesh_cidr:
+        type: str
+        required: false
+        default: ""
+        description: Mesh CIDR allowed scram-sha-256 password authentication.
       postgres_databases:
         type: list
         elements: dict

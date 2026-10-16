@@ -244,8 +244,8 @@ Local port 18025 exposes `/health` with spool counts, `successful_discovery_chec
 `last_discovery_success` and `admission_rejections`. `/ready` checks recent coordinator
 connectivity only. Verify a real successful discovery and its arrival in the inventory
 before retiring an old prober. Authentication and sender-reserve failures are recorded
-separately and do not count as worker downtime. Firewall that operational endpoint
-appropriately for the host.
+separately and do not count as worker downtime. The shipped example sets
+`BIND_ADDRS=127.0.0.1`, so that endpoint answers only on the prober host itself.
 Observer heartbeat and DNS-cycle reports disclose queue depth and lost observations.
 An unavailable prober does not make the orchestrator unavailable.
 

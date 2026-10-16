@@ -34,6 +34,9 @@ type YugabyteNode interface {
 
 // YugabyteBinaryResolverShell selects tools from the published native release, or from an in-place/container
 // installation not yet converted by the role. A broken published release must never fall back to older tools.
+// fw_ysql_host <port> is the -h of a node-local YSQL client: the address the running listener binds (the node's
+// WireGuard address), loopback while an older tserver still binds every interface, or the configured bind address
+// on a host without ss.
 const YugabyteBinaryResolverShell = `fw_yb_bin() {
   if [ -e /opt/yugabyte/current ] || [ -L /opt/yugabyte/current ]; then
     for dir in /opt/yugabyte/current/postgres/bin /opt/yugabyte/current/bin; do
@@ -46,6 +49,17 @@ const YugabyteBinaryResolverShell = `fw_yb_bin() {
     if [ -x "$dir/$1" ]; then echo "$dir/$1"; return 0; fi
   done
   command -v "$1"
+}
+fw_ysql_host() {
+  if command -v ss >/dev/null 2>&1; then
+    fw_ysql_addr="$(ss -Hltn "sport = :$1" 2>/dev/null | awk 'NR == 1 {print $4}' | sed -e 's/:[0-9]*$//' -e 's/^\[//' -e 's/\]$//')"
+  else
+    fw_ysql_addr="$(sed -n 's/^--pgsql_proxy_bind_address=\(.*\):[0-9]*$/\1/p' /opt/yugabyte/conf/tserver.conf 2>/dev/null)"
+  fi
+  case "$fw_ysql_addr" in
+    "" | "0.0.0.0" | "*" | "::") echo 127.0.0.1 ;;
+    *) echo "$fw_ysql_addr" ;;
+  esac
 }`
 
 // YugabyteMigrationLedgerDDL creates the migration ledger with the definition the yugabyte role's migrate tasks use.
@@ -257,7 +271,9 @@ var sha256HexPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 type YugabyteRelayout struct {
 	Primary YugabyteNode
 	// Nodes are every tserver. Sessions are local to a tserver, so fencing terminates and counts them on each node.
-	Nodes    []YugabyteNode
+	Nodes []YugabyteNode
+	// YSQLHost is the address the node's own YSQL listener binds; empty
+	// resolves it on the node (fw_ysql_host).
 	YSQLHost string
 	YSQLPort int
 	// Database is the physical database name, such as quartermaster or foghorn_eu.
@@ -356,8 +372,8 @@ func (r *YugabyteRelayout) validate() error {
 		return errors.New("relayout requires a lease owner")
 	case r.LeaseTTL != 0 && r.LeaseTTL < relayoutMinimumLeaseTTL:
 		return fmt.Errorf("relayout lease TTL %s is shorter than %s", r.LeaseTTL, relayoutMinimumLeaseTTL)
-	case strings.TrimSpace(r.YSQLHost) == "" || r.YSQLPort <= 0:
-		return errors.New("relayout requires the local YSQL host and port")
+	case r.YSQLPort <= 0:
+		return errors.New("relayout requires the local YSQL port")
 	case strings.TrimSpace(r.DumpDir) == "" || !path.IsAbs(r.DumpDir):
 		return fmt.Errorf("relayout dump directory %q must be an absolute path", r.DumpDir)
 	}
@@ -1528,7 +1544,7 @@ if [ -s %s ]; then
   echo "ysql_dump --section=%s wrote to stderr:" >&2; tail -c 1800 %s >&2; exit 4
 fi
 mv %s %s
-`, r.applicationName(), shellQuote(r.YSQLHost), r.YSQLPort, shellQuote(r.Database), section, shellQuote(file+".partial"), shellQuote(file+".stderr"),
+`, r.applicationName(), ysqlHostArg(r.YSQLHost, r.YSQLPort), r.YSQLPort, shellQuote(r.Database), section, shellQuote(file+".partial"), shellQuote(file+".stderr"),
 			section, shellQuote(file+".stderr"), shellQuote(file+".stderr"), section, shellQuote(file+".stderr"),
 			shellQuote(file+".partial"), shellQuote(file))
 	}
@@ -1750,7 +1766,7 @@ if grep -v -e 'WARNING:  ROWS_PER_TRANSACTION is not supported on table with non
   echo "restore wrote to stderr:" >&2; tail -c 1800 %s >&2; exit 4
 fi
 `, YugabyteBinaryResolverShell, shellQuote(file), shellQuote(wantSHA), path.Base(file), wantSHA,
-		r.applicationName(), shellQuote(pgOptions), shellQuote(r.YSQLHost), r.YSQLPort, shellQuote(database), shellQuote(file), shellQuote(stderr),
+		r.applicationName(), shellQuote(pgOptions), ysqlHostArg(r.YSQLHost, r.YSQLPort), r.YSQLPort, shellQuote(database), shellQuote(file), shellQuote(stderr),
 		shellQuote(stderr), shellQuote(stderr), shellQuote(stderr+".unexpected"), shellQuote(stderr+".unexpected"))); err != nil {
 		return fmt.Errorf("restore %s into %s: %w", file, database, err)
 	}

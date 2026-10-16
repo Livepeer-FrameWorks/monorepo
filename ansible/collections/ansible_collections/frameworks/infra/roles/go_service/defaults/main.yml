@@ -9,6 +9,9 @@ go_service_artifact_url: "" # pinned tarball/zip URL
 go_service_artifact_checksum: ""
 go_service_version: ""
 go_service_port: 0
+# Address the rollout gate probes the port on: loopback, where every service
+# answers, except a Livepeer signer bound to the WireGuard address alone.
+go_service_health_host: 127.0.0.1
 # Optional rollout readiness gate. HTTP readiness requires a 200 response from
 # the path; empty values use the port-only validation. The CLI passes the
 # readiness path of the release being deployed. The timeout matches the CLI's

@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -203,7 +205,7 @@ func diagnoseKafka(ctx context.Context, cmd *cobra.Command, manifest *inventory.
 			port = 9092
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "\nCluster: %s (broker: %s)\n", region, broker.Host)
-		for _, check := range kafkaDiagnosticCommands(manifest.Infrastructure.Kafka.Mode, port) {
+		for _, check := range kafkaDiagnosticCommands(manifest.Infrastructure.Kafka.Mode, kafkaLocalBootstrap(host, port)) {
 			fmt.Fprintf(cmd.OutOrStdout(), "\n%s:\n", check.Heading)
 			result, runErr := runner.Run(ctx, check.Command)
 			if runErr != nil || result == nil || result.ExitCode != 0 {
@@ -243,18 +245,34 @@ type kafkaDiagnosticCheck struct {
 	Heading, Command, Success, Failure string
 }
 
-// kafkaToolCommand runs a Kafka CLI tool against the broker on this host.
-func kafkaToolCommand(mode string, port int, tool, args string) string {
-	bootstrap := fmt.Sprintf("localhost:%d", port)
+// kafkaLocalBootstrap is the address of the broker on host as the host itself
+// dials it: the WireGuard address its listener binds (kafkaRoleVars), or
+// loopback on a single host without one.
+func kafkaLocalBootstrap(host inventory.Host, port int) string {
+	return net.JoinHostPort(kafkaListenAddress(host), strconv.Itoa(port))
+}
+
+// kafkaListenAddress is the address a broker on host binds: its WireGuard
+// address, or loopback on a single host without one (kafkaRoleVars).
+func kafkaListenAddress(host inventory.Host) string {
+	if address := strings.TrimSpace(host.WireguardIP); address != "" {
+		return address
+	}
+	return "127.0.0.1"
+}
+
+// kafkaToolCommand runs a Kafka CLI tool against the broker on this host at
+// bootstrap (kafkaLocalBootstrap).
+func kafkaToolCommand(mode, bootstrap, tool, args string) string {
 	if strings.EqualFold(strings.TrimSpace(mode), "docker") {
 		return system.DockerCommand(fmt.Sprintf("compose -f /opt/frameworks/kafka/docker-compose.yml exec -T kafka %s --bootstrap-server %s %s", tool, bootstrap, args))
 	}
 	return fmt.Sprintf("/opt/kafka/bin/%s.sh --bootstrap-server %s %s", tool, bootstrap, args)
 }
 
-func kafkaDiagnosticCommands(mode string, port int) []kafkaDiagnosticCheck {
+func kafkaDiagnosticCommands(mode, bootstrap string) []kafkaDiagnosticCheck {
 	command := func(tool, args string) string {
-		return kafkaToolCommand(mode, port, tool, args)
+		return kafkaToolCommand(mode, bootstrap, tool, args)
 	}
 	return []kafkaDiagnosticCheck{
 		{Heading: "Topics", Command: command("kafka-topics", "--list"), Failure: "Failed to list topics"},

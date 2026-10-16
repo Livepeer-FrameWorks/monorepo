@@ -2477,9 +2477,10 @@ func main() {
 	}
 	server.RegisterEnvFileReload("foghorn", logger)
 	runErr := server.Run(context.Background(), server.RunSpec{
-		Service: "foghorn",
-		Logger:  logger,
-		Ready:   readiness,
+		Service:   "foghorn",
+		Logger:    logger,
+		Ready:     readiness,
+		BindAddrs: cfg.BindAddrs,
 		HTTP: []server.HTTPListener{
 			{Name: "public", BindAddr: cfg.PublicHTTPBindAddr, Port: cfg.Port, Handler: publicRouter},
 			{Name: "internal", BindAddr: cfg.InternalHTTPBindAddr, Port: cfg.InternalHTTPPort, Handler: internalRouter},
@@ -2488,7 +2489,9 @@ func main() {
 			{Name: "internal", BindAddr: internalGRPCHost, Port: internalGRPCPort, Build: controlDrain.internalBuild(func(ctx context.Context) (*grpc.Server, error) {
 				return control.BuildInternalGRPCServer(ctx, grpcServerConfig)
 			})},
-			{Name: "external", BindAddr: externalGRPCHost, Port: externalGRPCPort, Build: controlDrain.externalBuild(func(ctx context.Context) (*grpc.Server, error) {
+			// Edge Helmsman control streams and PreRegisterEdge dial this
+			// listener from outside the mesh.
+			{Name: "external", BindAddr: externalGRPCHost, Port: externalGRPCPort, AllInterfaces: true, Build: controlDrain.externalBuild(func(ctx context.Context) (*grpc.Server, error) {
 				return control.BuildExternalGRPCServer(ctx, grpcServerConfig)
 			})},
 		},

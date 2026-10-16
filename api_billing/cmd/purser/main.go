@@ -421,6 +421,7 @@ func main() {
 		Service:    "purser",
 		Logger:     logger,
 		Ready:      readiness,
+		BindAddrs:  cfg.BindAddrs,
 		HTTP:       []server.HTTPListener{{Name: "http", Port: cfg.HTTPListen.Port, Handler: router}},
 		GRPC:       []server.GRPCListener{{Name: "grpc", Port: cfg.GRPCListen.Port, Build: buildGRPCServer}},
 		OnReload:   []server.ReloadCallback{runtimeConfig.Reload},

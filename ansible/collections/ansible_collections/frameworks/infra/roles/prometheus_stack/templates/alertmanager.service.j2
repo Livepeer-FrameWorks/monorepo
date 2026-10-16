@@ -8,7 +8,7 @@ Wants=network-online.target
 [Service]
 User={{ prometheus_stack_user }}
 Group={{ prometheus_stack_group }}
-ExecStart={{ alertmanager_bin }} --config.file={{ alertmanager_config_path }} --storage.path={{ alertmanager_storage_path }} --web.listen-address=:{{ alertmanager_port }} --cluster.listen-address=
+ExecStart={{ alertmanager_bin }} --config.file={{ alertmanager_config_path }} --storage.path={{ alertmanager_storage_path }} {% for addr in prometheus_stack_listen_addrs %}--web.listen-address={{ addr }}:{{ alertmanager_port }} {% endfor %}--cluster.listen-address=
 Restart=always
 RestartSec=5
 

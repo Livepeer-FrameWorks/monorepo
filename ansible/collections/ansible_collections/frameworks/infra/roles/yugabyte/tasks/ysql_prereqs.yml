@@ -23,3 +23,8 @@
   delay: 10
   async: 600
   poll: 5
+
+# Every task file that connects to YSQL imports this file first, so the local
+# admin connection address is resolved before any of them connects.
+- name: Resolve the local YSQL host
+  ansible.builtin.import_tasks: ysql_local_host.yml

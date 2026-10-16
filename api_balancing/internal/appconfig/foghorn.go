@@ -29,11 +29,11 @@ type FoghornRedis struct {
 
 // FoghornListeners are the HTTP and gRPC listeners beyond the public PORT.
 type FoghornListeners struct {
-	PublicHTTPBindAddr   string `env:"FOGHORN_PUBLIC_HTTP_BIND_ADDR" desc:"Bind address of the public HTTP listener on PORT that serves playback, ingest, and Livepeer webhook routes. Empty listens on all interfaces." introduced:"v0.3.0"`
+	PublicHTTPBindAddr   string `env:"FOGHORN_PUBLIC_HTTP_BIND_ADDR" desc:"Bind address of the public HTTP listener on PORT that serves playback, ingest, and Livepeer webhook routes. Empty binds the BIND_ADDRS addresses, or every interface when BIND_ADDRS is empty." introduced:"v0.3.0"`
 	InternalHTTPPort     string `env:"FOGHORN_INTERNAL_HTTP_PORT" default:"18027" desc:"TCP port of the internal HTTP listener that serves node administration, the dashboard, debug routes, and authenticated Mist source lookups." introduced:"v0.3.0"`
 	InternalHTTPBindAddr string `env:"FOGHORN_INTERNAL_HTTP_BIND_ADDR" default:"127.0.0.1" desc:"Bind address of the internal HTTP listener." introduced:"v0.3.0"`
-	InternalGRPCBindAddr string `env:"FOGHORN_INTERNAL_GRPC_BIND_ADDR" default:":18019" desc:"host:port of the internal gRPC listener for mesh services, federation, and the HA command relay. It serves GRPC_TLS_CERT_PATH." introduced:"v0.3.0"`
-	ExternalGRPCBindAddr string `env:"FOGHORN_EXTERNAL_GRPC_BIND_ADDR" default:":18029" desc:"host:port of the external gRPC listener for Helmsman control streams and edge provisioning. It serves Navigator-issued cluster certificates." introduced:"v0.3.0"`
+	InternalGRPCBindAddr string `env:"FOGHORN_INTERNAL_GRPC_BIND_ADDR" default:":18019" desc:"host:port of the internal gRPC listener for mesh services, federation, and the HA command relay. It serves GRPC_TLS_CERT_PATH. An empty host binds the BIND_ADDRS addresses, or every interface when BIND_ADDRS is empty." introduced:"v0.3.0"`
+	ExternalGRPCBindAddr string `env:"FOGHORN_EXTERNAL_GRPC_BIND_ADDR" default:":18029" desc:"host:port of the external gRPC listener for Helmsman control streams and edge provisioning. It serves Navigator-issued cluster certificates. An empty host binds every interface whatever BIND_ADDRS says, since edges dial it from outside the mesh." introduced:"v0.3.0"`
 	InternalGRPCPort     int    `env:"FOGHORN_INTERNAL_GRPC_PORT" desc:"gRPC port this instance registers with Quartermaster. 0 or unset uses the port of FOGHORN_INTERNAL_GRPC_BIND_ADDR." introduced:"v0.3.0"`
 
 	AdvertiseHost      string `env:"FOGHORN_HOST" desc:"Host name registered with Quartermaster, used for the HA relay address when FOGHORN_RELAY_ADVERTISE_HOST is empty, and a fallback host for Mist balancer URLs." introduced:"v0.3.0"`
@@ -133,6 +133,7 @@ type FoghornChandler struct {
 //
 //configref:service foghorn cmd=cmd/foghorn
 type Foghorn struct {
+	config.ListenAddrs
 	config.HTTPListen
 	config.HTTPRuntime
 	config.Logging

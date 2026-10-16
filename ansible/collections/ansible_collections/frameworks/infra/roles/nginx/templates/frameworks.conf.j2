@@ -132,7 +132,7 @@ upstream {{ site.upstream_group }} {
 {% endfor %}
 {% if nginx_sites | length == 0 %}
 server {
-    listen {{ nginx_http_port }} default_server;
+    listen {{ nginx_http_bind_address }}:{{ nginx_http_port }} default_server;
     server_name _;
     return 404;
 }
@@ -214,7 +214,7 @@ server {
 {% set profile_name = site.profile | default('api') %}
 {% set profile = nginx_route_profiles[profile_name] | default(nginx_route_profiles.api) %}
 server {
-    listen {{ nginx_http_port }};
+    listen {{ nginx_http_bind_address }}:{{ nginx_http_port }};
     server_name {{ site.domains | join(' ') }};
 
 {% if profile_name != 'media_ingest' %}

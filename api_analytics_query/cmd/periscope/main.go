@@ -148,11 +148,12 @@ func main() {
 
 	server.RegisterEnvFileReload("periscope-query", logger)
 	if runErr := server.Run(ctx, server.RunSpec{
-		Service: "periscope-query",
-		Logger:  logger,
-		Ready:   readiness,
-		HTTP:    []server.HTTPListener{{Name: "http", Port: cfg.HTTPListen.Port, Handler: router}},
-		GRPC:    []server.GRPCListener{{Name: "grpc", Port: cfg.GRPCListen.Port, Build: buildGRPCServer}},
+		Service:   "periscope-query",
+		Logger:    logger,
+		Ready:     readiness,
+		BindAddrs: cfg.BindAddrs,
+		HTTP:      []server.HTTPListener{{Name: "http", Port: cfg.HTTPListen.Port, Handler: router}},
+		GRPC:      []server.GRPCListener{{Name: "grpc", Port: cfg.GRPCListen.Port, Build: buildGRPCServer}},
 	}); runErr != nil {
 		logger.WithError(runErr).Fatal("Server exited with error")
 	}

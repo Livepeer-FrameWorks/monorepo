@@ -71,8 +71,18 @@ func kafkaRoleVarsFor(role string) RoleVarsBuilder {
 		if controllerQuorumVoters, ok := config.Metadata["controller_quorum_voters"].(string); ok && controllerQuorumVoters != "" {
 			vars["kafka_controller_quorum_voters"] = controllerQuorumVoters
 		}
+		// Every broker and controller listener binds the host's WireGuard
+		// address, where clients and peers dial it (<host>.internal and the
+		// advertised address); a single host without one binds loopback.
+		// Kafka listeners need distinct ports, so there is no second
+		// loopback listener; the role's probes dial the bind address.
 		if bindHost, ok := config.Metadata["bind_host"].(string); ok && bindHost != "" {
 			vars["kafka_bind_host"] = bindHost
+		} else if wireguardIP := strings.TrimSpace(host.WireguardIP); wireguardIP != "" {
+			vars["kafka_bind_host"] = wireguardIP
+		} else {
+			vars["kafka_bind_host"] = "127.0.0.1"
+			vars["kafka_advertised_host"] = "127.0.0.1"
 		}
 		if brokers, ok := config.Metadata["brokers"].([]map[string]any); ok {
 			vars["kafka_bootstrap_brokers"] = brokers
