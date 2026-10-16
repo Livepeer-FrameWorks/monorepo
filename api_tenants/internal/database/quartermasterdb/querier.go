@@ -211,6 +211,7 @@ type Querier interface {
 	// status changes between two non-admitting states leave it unchanged, so they
 	// wake no membership subscriber.
 	PlacementMembershipFingerprint(ctx context.Context) (string, error)
+	PurgeCompletedNavigatorTenantAliasOutbox(ctx context.Context, arg PurgeCompletedNavigatorTenantAliasOutboxParams) (int64, error)
 	RejectClusterSubscriptionRecord(ctx context.Context, arg RejectClusterSubscriptionRecordParams) error
 	ReleaseSupersededMediaAuthorityRefresh(ctx context.Context, arg ReleaseSupersededMediaAuthorityRefreshParams) (int64, error)
 	RepairTenantPrivateBaseURLBatch(ctx context.Context, batchSize int32) (int64, error)

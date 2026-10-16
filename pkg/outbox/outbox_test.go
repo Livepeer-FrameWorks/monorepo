@@ -529,6 +529,55 @@ func TestRunDrainsBacklogWithinOneTick(t *testing.T) {
 	}
 }
 
+// pruningStore is an empty outbox that keeps delivered rows; it cancels the run after `polls` claims, so the run loop
+// has gone through that many poll ticks by the time Run returns.
+type pruningStore struct {
+	polls  int
+	claims int
+	prunes int
+	cancel context.CancelFunc
+}
+
+func (s *pruningStore) ClaimBatch(context.Context, int, time.Duration) ([]Claim[string], error) {
+	s.claims++
+	if s.claims >= s.polls {
+		s.cancel()
+	}
+	return nil, nil
+}
+
+func (s *pruningStore) MarkCompleted(context.Context, string) error { return nil }
+
+func (s *pruningStore) RecordFailure(context.Context, string, int, []string, error, time.Duration) error {
+	return nil
+}
+
+func (s *pruningStore) PruneCompleted(context.Context) (int64, error) {
+	s.prunes++
+	return 0, nil
+}
+
+// A store that keeps delivered rows gets its retention pass from the worker loop: on the first pass, then not again
+// within the prune interval however often the worker polls.
+func TestRunPrunesDeliveredRowsOncePerInterval(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	store := &pruningStore{polls: 20, cancel: cancel}
+	w := newTestWorker(store, &cancelAfterDispatcher{after: 1 << 30, cancel: func() {}})
+	w.Config.PollPeriod = time.Millisecond
+
+	done := make(chan struct{})
+	go func() { w.Run(ctx); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("worker did not reach 20 polls within 5s")
+	}
+	if store.prunes != 1 {
+		t.Fatalf("prunes=%d over %d polls, want exactly 1 within the prune interval", store.prunes, store.claims)
+	}
+}
+
 // A full batch with any failed dispatch ends the pass: stores without a backoff column make a failed row due again
 // at once, so continuing would retry it batch after batch against a failing target instead of on the next tick.
 func TestDrainStopsAfterFullBatchWithFailure(t *testing.T) {

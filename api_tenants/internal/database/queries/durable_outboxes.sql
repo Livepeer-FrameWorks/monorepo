@@ -159,3 +159,17 @@ SET completed_at = NOW(),
     last_error = NULL,
     next_retry_at = NULL
 WHERE id = sqlc.arg(id)::uuid;
+
+-- name: PurgeCompletedNavigatorTenantAliasOutbox :execrows
+WITH old_completed AS (
+    SELECT o.id
+    FROM quartermaster.navigator_tenant_alias_outbox o
+    WHERE o.completed_at IS NOT NULL
+      AND o.completed_at < NOW() - sqlc.arg(retention_seconds)::bigint * INTERVAL '1 second'
+    ORDER BY o.completed_at
+    LIMIT sqlc.arg(batch_limit)
+    FOR UPDATE OF o SKIP LOCKED
+)
+DELETE FROM quartermaster.navigator_tenant_alias_outbox o
+USING old_completed c
+WHERE o.id = c.id;

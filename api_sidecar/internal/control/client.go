@@ -4842,6 +4842,21 @@ func handleThumbnailUploadResponse(logger logging.Logger, resp *ipcpb.ThumbnailU
 		SentAt:  timestamppb.Now(),
 		Payload: &ipcpb.ControlMessage_ThumbnailUploaded{ThumbnailUploaded: uploaded},
 	})
+	thumbnailConfirmedAt.Store(thumbnailKey, time.Now())
+}
+
+// thumbnailConfirmedAt holds, per thumbnail key, when this node last confirmed a complete thumbnail upload.
+var thumbnailConfirmedAt sync.Map
+
+// LastThumbnailUploadConfirmed reports when this node last confirmed a complete upload of the thumbnails of key
+// (an artifact hash or stream id), or the zero time when it never did.
+func LastThumbnailUploadConfirmed(key string) time.Time {
+	if v, ok := thumbnailConfirmedAt.Load(key); ok {
+		if at, ok := v.(time.Time); ok {
+			return at
+		}
+	}
+	return time.Time{}
 }
 
 // uploadThumbnailFile uploads one staged thumbnail file and reports whether object storage accepted it.

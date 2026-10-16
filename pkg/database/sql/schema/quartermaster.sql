@@ -1236,6 +1236,11 @@ CREATE INDEX IF NOT EXISTS idx_qm_navigator_tenant_alias_outbox_seq
     ON quartermaster.navigator_tenant_alias_outbox(seq ASC)
     WHERE completed_at IS NULL;
 
+-- Retention scan for delivered alias hand-offs, oldest-first by delivery.
+CREATE INDEX IF NOT EXISTS idx_qm_navigator_tenant_alias_outbox_completed_range
+    ON quartermaster.navigator_tenant_alias_outbox(completed_at ASC)
+    WHERE completed_at IS NOT NULL;
+
 -- Schema baseline identity marker. Records that this database was created from the
 -- consolidated baseline at this floor, so the migration min-version guard treats
 -- below-floor migrations as folded into the baseline (not missing). An existing

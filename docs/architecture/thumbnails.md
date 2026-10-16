@@ -277,6 +277,11 @@ swept, a `published`-but-unprojected attempt (crash between CAS and copy) is re-
 recovery phase so a persistently-failing source can't starve healthy projections — and a superseded version is GC'd only
 after a reader-safety horizon so an in-flight read of the old version can't 404.
 
+Recovery only re-drives attempts that exist. A published clip or VOD whose one processing run produced no
+attempt at all (the Thumbs process failed, the mint was refused, the upload never landed) is picked up by the
+thumbnail backfill, which queues a thumbnail-only processing job from the asset's stored media; see
+[processing-pipeline.md](processing-pipeline.md#thumbnail-jobs).
+
 ### S3 Key Layout
 
 The asset_key is a stable, immutable identifier (stream_id UUID or artifact_hash) — never `playback_id` (which

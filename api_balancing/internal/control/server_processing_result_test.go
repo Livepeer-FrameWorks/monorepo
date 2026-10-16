@@ -71,8 +71,8 @@ func TestProcessProcessingJobProgress_ConsumesPersistedMonotonicProgress(t *test
 	mock.ExpectBegin()
 	mock.ExpectQuery("UPDATE foghorn.processing_jobs SET progress = GREATEST").
 		WithArgs(int32(15), int64(0), "11111111-1111-1111-1111-111111111111", sql.NullString{String: "node-1", Valid: true}).
-		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "tenant_id", "progress"}).
-			AddRow("artifact-hash", "5eed517e-ba5e-da7a-517e-ba5eda7a0001", 80))
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "tenant_id", "progress", "job_type"}).
+			AddRow("artifact-hash", "5eed517e-ba5e-da7a-517e-ba5eda7a0001", 80, "process"))
 	mock.ExpectQuery("SELECT COALESCE\\(artifact_type").
 		WithArgs("artifact-hash").
 		WillReturnRows(sqlmock.NewRows([]string{"artifact_type", "stream_id", "stream_internal_name"}).AddRow("vod", "", ""))
@@ -92,12 +92,17 @@ func TestProcessProcessingJobProgress_ConsumesPersistedMonotonicProgress(t *test
 
 // A "completed" result with no output path is malformed: it must NOT bless the job as
 // completed (which would strand the artifact "processing" forever). It is failed atomically
-// instead — BEGIN → lock+resolve FOR UPDATE OF pj → mark job failed → COMMIT. Here the job
-// has no artifact row, so only the job flips.
+// instead: the completion transaction reads the job's type and rolls back, then BEGIN → lock+resolve
+// FOR UPDATE OF pj → mark job failed → COMMIT. Here the job has no artifact row, so only the job flips.
 func TestProcessProcessingJobResult_Completed_NoOutputFailsJob(t *testing.T) {
 	mock, _, _ := setupArtifactTestDeps(t)
 	logger := logging.NewLogger()
 
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT status, COALESCE.*FROM foghorn.processing_jobs WHERE job_id = \$1 FOR UPDATE`).
+		WithArgs("job-1").
+		WillReturnRows(sqlmock.NewRows([]string{"status", "processing_node_id", "job_type"}).AddRow("processing", "node-1", "process"))
+	mock.ExpectRollback()
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT pj.status.*FROM foghorn.processing_jobs pj\s+LEFT JOIN foghorn.artifacts a`).
 		WithArgs("job-1").
@@ -149,7 +154,7 @@ func TestProcessProcessingJobResult_Completed_RejectsForeignNode(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT status, COALESCE.*FROM foghorn.processing_jobs WHERE job_id = \$1 FOR UPDATE`).
 		WithArgs("job-1").
-		WillReturnRows(sqlmock.NewRows([]string{"status", "processing_node_id"}).AddRow("processing", "assigned-node"))
+		WillReturnRows(sqlmock.NewRows([]string{"status", "processing_node_id", "job_type"}).AddRow("processing", "assigned-node", "process"))
 	mock.ExpectRollback()
 
 	// Reporting node "attacker-node" != assigned "assigned-node": no readiness/complete write, just rollback.
@@ -188,7 +193,7 @@ func TestProcessProcessingJobResult_Completed_NonActiveJobIsNoop(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT status, COALESCE.*FROM foghorn.processing_jobs WHERE job_id = \$1 FOR UPDATE`).
 		WithArgs("job-1").
-		WillReturnRows(sqlmock.NewRows([]string{"status", "processing_node_id"}).AddRow("failed", ""))
+		WillReturnRows(sqlmock.NewRows([]string{"status", "processing_node_id", "job_type"}).AddRow("failed", "", "process"))
 	mock.ExpectRollback()
 
 	processProcessingJobResult(&ipcpb.ProcessingJobResult{JobId: "job-1", Status: "completed", OutputPath: "/data/out.mp4"}, "node-1", logger)
@@ -207,7 +212,7 @@ func TestProcessProcessingJobResult_Completed_ReadinessFailureRollsBack(t *testi
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT status, COALESCE.*FROM foghorn.processing_jobs WHERE job_id = \$1 FOR UPDATE`).
 		WithArgs("job-1").
-		WillReturnRows(sqlmock.NewRows([]string{"status", "processing_node_id"}).AddRow("processing", "node-1"))
+		WillReturnRows(sqlmock.NewRows([]string{"status", "processing_node_id", "job_type"}).AddRow("processing", "node-1", "process"))
 	mock.ExpectQuery(`FROM foghorn.processing_jobs pj\s+JOIN foghorn.artifacts a`).
 		WithArgs("job-1").
 		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "stream_id", "stream_internal_name", "s3_url", "format", "req_start", "req_stop"}).
@@ -237,7 +242,7 @@ func TestProcessProcessingJobResult_Completed_DeletedMidProcessingStillCompletes
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT status, COALESCE.*FROM foghorn.processing_jobs WHERE job_id = \$1 FOR UPDATE`).
 		WithArgs("job-1").
-		WillReturnRows(sqlmock.NewRows([]string{"status", "processing_node_id"}).AddRow("processing", "node-1"))
+		WillReturnRows(sqlmock.NewRows([]string{"status", "processing_node_id", "job_type"}).AddRow("processing", "node-1", "process"))
 	mock.ExpectQuery(`FROM foghorn.processing_jobs pj\s+JOIN foghorn.artifacts a`).
 		WithArgs("job-1").
 		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "stream_id", "stream_internal_name", "s3_url", "format", "req_start", "req_stop"}).
@@ -271,7 +276,7 @@ func TestProcessProcessingJobResult_Completed_MissingArtifactRollsBack(t *testin
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT status, COALESCE.*FROM foghorn.processing_jobs WHERE job_id = \$1 FOR UPDATE`).
 		WithArgs("job-1").
-		WillReturnRows(sqlmock.NewRows([]string{"status", "processing_node_id"}).AddRow("processing", "node-1"))
+		WillReturnRows(sqlmock.NewRows([]string{"status", "processing_node_id", "job_type"}).AddRow("processing", "node-1", "process"))
 	mock.ExpectQuery(`FROM foghorn.processing_jobs pj\s+JOIN foghorn.artifacts a`).
 		WithArgs("job-1").
 		WillReturnError(sql.ErrNoRows)
@@ -302,7 +307,7 @@ func TestProcessProcessingJobResult_Completed_ClipFullSuccess(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT status, COALESCE.*FROM foghorn.processing_jobs WHERE job_id = \$1 FOR UPDATE`).
 		WithArgs("job-clip-ok").
-		WillReturnRows(sqlmock.NewRows([]string{"status", "processing_node_id"}).AddRow("processing", "node-1"))
+		WillReturnRows(sqlmock.NewRows([]string{"status", "processing_node_id", "job_type"}).AddRow("processing", "node-1", "process"))
 	mock.ExpectQuery(`FROM foghorn.processing_jobs pj\s+JOIN foghorn.artifacts a`).
 		WithArgs("job-clip-ok").
 		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "stream_id", "stream_internal_name", "s3_url", "format", "req_start", "req_stop"}).

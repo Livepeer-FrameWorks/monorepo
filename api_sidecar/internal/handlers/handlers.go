@@ -2987,6 +2987,7 @@ func HandleThumbnailUpdated(c *gin.Context) {
 		"file_count":  len(filePaths),
 	}).Debug("Thumbnail updated, requesting upload URLs from Foghorn")
 
+	noteThumbnailUpdated(streamName, time.Now())
 	if err := control.SendThumbnailUploadRequest(streamName, filePaths); err != nil {
 		incMistWebhook("THUMBNAIL_UPDATED", "send_error")
 		logger.WithError(err).Error("Failed to send thumbnail upload request to Foghorn")

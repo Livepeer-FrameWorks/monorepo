@@ -222,19 +222,45 @@ Jobs live in `foghorn.processing_jobs`. The dispatcher is
 - **Request:** `ProcessingJobRequest{job_id, tenant_id, artifact_hash, source_url, job_type,
 internal_name, output_runtime_name, …}`. Crucially,
   **`output_runtime_name = "vod+" + internal_name`** (`processing_dispatcher.go`).
+- **Retention:** `HistoryRetentionJob` (`api_balancing/internal/jobs/history_retention.go`)
+  deletes `completed`/`failed` jobs 30 days after their last write, except a job another
+  job names as parent and a clip job whose creation outcome Commodore has not consumed
+  yet (its source params carry the clip's fulfilled range).
+
+#### Thumbnail jobs
+
+A clip or VOD gets its thumbnails from the one run that publishes it, where the Thumbs
+process is inconsequential: a lost thumbnail (failed Thumbs process, refused mint, upload
+that never landed) leaves the asset ready without thumbnails. `ThumbnailBackfillJob`
+(`api_balancing/internal/jobs/thumbnail_backfill.go`) finds such assets every 10 minutes:
+ready, locally stored and synced, at least an hour old, `has_thumbnails` false, no thumbnail
+attempt other than a failed one, and no active job. It queues a `thumbnail` job carrying
+only the Thumbs entries of the policy Commodore resolves for the lifecycle the asset was
+published under (`clip`, `dvr_finalize` for chapter VODs, `vod`); a policy without Thumbs
+records a failed job instead. An asset gets at most three thumbnail jobs inside the job
+retention window, six hours apart, and at most two run cluster-wide at a time.
+
+The dispatcher claims a thumbnail job although its asset is `ready` (and fails a queued one
+whose asset is no longer ready). Helmsman stages the stored media, runs it through
+`processing+<hash>` with only the Thumbs processes into a scratch recording, and waits until
+the thumbnails Mist last announced were uploaded, because Foghorn mints a processing
+stream's thumbnail upload only while its job is active. The result carries no output path;
+completing the job, its progress and its failure never touch the asset's media, placement
+or lifecycle.
 
 ### Helmsman execution
 
 `ProcessingJobHandler.Handle` (`api_sidecar/internal/handlers/processing.go`) branches by
 work kind:
 
-| Branch  | Condition                                                         | Handler                                           | Output                                         |
-| ------- | ----------------------------------------------------------------- | ------------------------------------------------- | ---------------------------------------------- |
-| Chapter | `job_type == "dvr_chapter_finalize"`                              | `handleChapterFinalize` (`processing_chapter.go`) | remux TS segments → `vod/<hash>.mkv`           |
-| Clip    | `isClipProcessingSource(req)` (source ∈ live/dvr_rolling/chapter) | `handleClip` (`processing_clip.go`)               | passthrough push → `clips/<stream>/<hash>.mkv` |
-| VOD     | else (default)                                                    | inline in `Handle`                                | transcode → processed file                     |
+| Branch    | Condition                                                         | Handler                                           | Output                                         |
+| --------- | ----------------------------------------------------------------- | ------------------------------------------------- | ---------------------------------------------- |
+| Chapter   | `job_type == "dvr_chapter_finalize"`                              | `handleChapterFinalize` (`processing_chapter.go`) | remux TS segments → `vod/<hash>.mkv`           |
+| Thumbnail | `job_type == "thumbnail"`                                         | `handleThumbnail` (`processing_thumbnail.go`)     | thumbnails only; scratch recording removed     |
+| Clip      | `isClipProcessingSource(req)` (source ∈ live/dvr_rolling/chapter) | `handleClip` (`processing_clip.go`)               | passthrough push → `clips/<stream>/<hash>.mkv` |
+| VOD       | else (default)                                                    | inline in `Handle`                                | transcode → processed file                     |
 
-All three mux under `processing+<artifact_hash>`, then **validate the `RECORDING_END`** (reject
+The chapter, clip and VOD branches mux under `processing+<artifact_hash>`, then **validate the `RECORDING_END`** (reject
 stale / failed / retired-generation events, verify output completeness against the authoritative
 source span), generate the `vod+<…>` DTSH sidecar, and return the result via `sendCompletedResult`.
 

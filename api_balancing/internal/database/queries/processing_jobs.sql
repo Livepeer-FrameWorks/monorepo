@@ -8,7 +8,8 @@ WITH claimed AS (
         LEFT JOIN foghorn.artifacts AS a ON pj.artifact_hash = a.artifact_hash
         WHERE pj.status = 'queued'
           AND (pj.next_attempt_at IS NULL OR pj.next_attempt_at <= NOW())
-          AND (a.status IS NULL OR a.status NOT IN ('ready', 'failed', 'deleted', 'expired', 'aborted'))
+          AND (a.status IS NULL OR a.status NOT IN ('ready', 'failed', 'deleted', 'expired', 'aborted')
+               OR (pj.job_type = 'thumbnail' AND a.status = 'ready'))
         ORDER BY CASE WHEN a.artifact_type = 'clip' THEN 0 ELSE 1 END, pj.updated_at, pj.created_at
         LIMIT 20
         FOR UPDATE OF pj SKIP LOCKED

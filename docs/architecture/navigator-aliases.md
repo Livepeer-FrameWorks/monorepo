@@ -58,7 +58,9 @@ Failure semantics: retry with backoff (2s base, 1h cap on the alias outbox;
 lease-expiry pacing on the custom-domain outbox), and rows are **never
 auto-completed on failure** — a poison alias row deliberately blocks its tenant's
 queue, and both workers alert after 12 attempts ("Navigator reachability
-degraded"). Dropping the row would silently drop intent.
+degraded"). Dropping the row would silently drop intent. Delivered alias rows are
+deleted a week after delivery by the drain worker's hourly prune (`pkg/outbox`
+`CompletedPruner`); the per-tenant claim order reads only undelivered rows.
 
 The paid/active decision is made at enqueue time; the drain worker dispatches purely
 from stored fields to Navigator's `EnsureTenantAlias` / `RemoveTenantAliasSubdomain`

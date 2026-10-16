@@ -121,6 +121,7 @@ type Querier interface {
 	ConsumeNodeAdmissionProofNonce(ctx context.Context, arg ConsumeNodeAdmissionProofNonceParams) (int64, error)
 	ConsumeTerminalArtifactCreationCommand(ctx context.Context, arg ConsumeTerminalArtifactCreationCommandParams) error
 	CountActiveTenantIngestSessions(ctx context.Context, tenantID string) (int32, error)
+	CountActiveThumbnailJobs(ctx context.Context) (int64, error)
 	CountDVRFinalSegments(ctx context.Context, artifactHash string) (CountDVRFinalSegmentsRow, error)
 	CountFederatedPointersWithUnnormalizedPurgeEligibility(ctx context.Context) (int64, error)
 	CountLegacyFederatedArtifactPointers(ctx context.Context) (int64, error)
@@ -218,6 +219,9 @@ type Querier interface {
 	FailExpiredThumbnailAttempt(ctx context.Context, attemptID string) (int64, error)
 	FailMainArtifactSync(ctx context.Context, arg FailMainArtifactSyncParams) error
 	FailOfflineEffect(ctx context.Context, arg FailOfflineEffectParams) error
+	// A queued thumbnail job is claimable only while its asset is published; one whose asset was deleted or
+	// unpublished meanwhile is failed so it neither waits forever nor holds a backfill slot.
+	FailOrphanedThumbnailJobs(ctx context.Context) (int64, error)
 	// Releases the lease on each listed row and schedules its retry after base * min(attempts + 1, 30), recording its
 	// error. Fenced on the lease token, so rows another worker re-claimed after this lease expired are left alone.
 	FailStagingCleanupItems(ctx context.Context, arg FailStagingCleanupItemsParams) (int64, error)
@@ -427,6 +431,10 @@ type Querier interface {
 	ListArtifactCachedNodes(ctx context.Context, artifactHash string) ([]ListArtifactCachedNodesRow, error)
 	ListArtifactNodeIDs(ctx context.Context, artifactHash string) ([]string, error)
 	ListArtifactsForCatalogProjection(ctx context.Context, arg ListArtifactsForCatalogProjectionParams) ([]ListArtifactsForCatalogProjectionRow, error)
+	// Published local clips and VODs that hold no thumbnail and have nothing that could still produce one: no live
+	// or published thumbnail attempt and no active processing job. Each asset gets at most max_attempts thumbnail
+	// jobs inside the processing-job retention window, spaced by retry_after_seconds.
+	ListArtifactsMissingThumbnails(ctx context.Context, arg ListArtifactsMissingThumbnailsParams) ([]ListArtifactsMissingThumbnailsRow, error)
 	ListAssetThumbnailObjectKeys(ctx context.Context, arg ListAssetThumbnailObjectKeysParams) ([]ListAssetThumbnailObjectKeysRow, error)
 	ListCapacityPendingPushTargetEffectsForRearm(ctx context.Context) ([]ListCapacityPendingPushTargetEffectsForRearmRow, error)
 	ListColdStorageUsage(ctx context.Context) ([]ListColdStorageUsageRow, error)
@@ -629,11 +637,20 @@ type Querier interface {
 	PropagateDVRChapterRetention(ctx context.Context, arg PropagateDVRChapterRetentionParams) (int64, error)
 	PruneMediaAuthorityApplyAudit(ctx context.Context, arg PruneMediaAuthorityApplyAuditParams) (int64, error)
 	PurgeAdmissionPushTargetRevisions(ctx context.Context, olderThanMs int64) (int64, error)
+	PurgeCompletedArtifactEvents(ctx context.Context, arg PurgeCompletedArtifactEventsParams) (int64, error)
+	// An ended generation stays while a recording still references it (the artifacts FK) or its
+	// admission obligation is still pending; every trigger path that resolves a generation by id
+	// runs within seconds of its end, far inside the retention horizon.
+	PurgeEndedIngestSessions(ctx context.Context, arg PurgeEndedIngestSessionsParams) (int64, error)
 	PurgeExpiredCloseTombstones(ctx context.Context, olderThanSeconds float64) (int64, error)
 	PurgeExpiredIngestAdmissionAbandonments(ctx context.Context, olderThanSeconds float64) (int64, error)
 	PurgeStaleArtifactNodes(ctx context.Context) (int64, error)
 	PurgeTerminalAdmissionEffects(ctx context.Context, olderThanMs int64) (int64, error)
 	PurgeTerminalOfflineEffects(ctx context.Context, olderThanMs int64) (int64, error)
+	// A terminal job stays while another job names it as parent, and a clip's job stays while the
+	// clip's creation outcome is unconsumed: the Commodore convergence sweep reads the fulfilled range
+	// from its source params until then.
+	PurgeTerminalProcessingJobs(ctx context.Context, arg PurgeTerminalProcessingJobsParams) (int64, error)
 	QuarantineCatalogProjection(ctx context.Context, arg QuarantineCatalogProjectionParams) error
 	QuarantineInvalidConfigSeedApplyAck(ctx context.Context, arg QuarantineInvalidConfigSeedApplyAckParams) (int64, error)
 	// A new restore invalidates confirmations begun before this raise.
@@ -667,6 +684,9 @@ type Querier interface {
 	RecordImportSourceStaged(ctx context.Context, arg RecordImportSourceStagedParams) (int64, error)
 	RecordIngestAdmissionAbandonment(ctx context.Context, arg RecordIngestAdmissionAbandonmentParams) error
 	RecordPublicationPair(ctx context.Context, arg RecordPublicationPairParams) error
+	// A thumbnail job that cannot run (the asset's process policy has no Thumbs process) is recorded terminal, so it
+	// counts as an attempt and the asset is not reconsidered every pass.
+	RecordSkippedThumbnailJob(ctx context.Context, arg RecordSkippedThumbnailJobParams) error
 	RefreshDVRArtifactNodeProgress(ctx context.Context, arg RefreshDVRArtifactNodeProgressParams) error
 	RejectArtifactCreationCommand(ctx context.Context, arg RejectArtifactCreationCommandParams) (int64, error)
 	ReleaseAdmissionEffectNotOwner(ctx context.Context, arg ReleaseAdmissionEffectNotOwnerParams) error

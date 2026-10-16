@@ -237,6 +237,10 @@ CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_dvr_backfill_pending_range
       AND dvr_chapter_backfill_complete = false;
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_stream_internal ON foghorn.artifacts(stream_internal_name);
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_ingest_generation ON foghorn.artifacts(ingest_generation) WHERE ingest_generation IS NOT NULL;
+-- Thumbnail backfill scan: published clips/VODs without a thumbnail, oldest first.
+CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_missing_thumbnails_range
+    ON foghorn.artifacts(created_at ASC)
+    WHERE status = 'ready' AND artifact_type IN ('vod', 'clip') AND has_thumbnails IS NOT TRUE;
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_federated_purge_recovery_range
     ON foghorn.artifacts(federated_purge_lease_until ASC)
     WHERE federated_pointer = true
@@ -1589,6 +1593,10 @@ CREATE INDEX IF NOT EXISTS idx_foghorn_processing_jobs_queued_attempt ON foghorn
 CREATE INDEX IF NOT EXISTS idx_foghorn_processing_jobs_node ON foghorn.processing_jobs(processing_node_id) WHERE processing_node_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_foghorn_processing_jobs_parent ON foghorn.processing_jobs(parent_job_id) WHERE parent_job_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_foghorn_processing_jobs_artifact_status ON foghorn.processing_jobs(artifact_hash, status);
+-- Retention scan for terminal jobs, oldest-first by their terminal write.
+CREATE INDEX IF NOT EXISTS idx_foghorn_processing_jobs_terminal_range
+    ON foghorn.processing_jobs(updated_at ASC)
+    WHERE status IN ('completed', 'failed');
 
 -- ============================================================================
 -- ARTIFACT EVENT OUTBOX
@@ -1637,6 +1645,11 @@ CREATE TABLE IF NOT EXISTS foghorn.artifact_event_outbox (
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifact_event_outbox_pending_range
     ON foghorn.artifact_event_outbox(created_at ASC)
     WHERE completed_at IS NULL;
+
+-- Retention scan for delivered rows, oldest-first by delivery.
+CREATE INDEX IF NOT EXISTS idx_foghorn_artifact_event_outbox_completed_range
+    ON foghorn.artifact_event_outbox(completed_at ASC)
+    WHERE completed_at IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifact_event_outbox_tenant
     ON foghorn.artifact_event_outbox(tenant_id, created_at DESC);
@@ -1744,6 +1757,11 @@ CREATE INDEX IF NOT EXISTS idx_foghorn_creation_commands_accepted_range
 CREATE INDEX IF NOT EXISTS idx_foghorn_creation_commands_terminal_gc_range
     ON foghorn.artifact_creation_commands(consumed_at ASC)
     WHERE status IN ('committed', 'rejected') AND consumed_at IS NOT NULL;
+
+-- Processing-job retention keeps a clip's job while its creation outcome is unconsumed; this answers that probe.
+CREATE INDEX IF NOT EXISTS idx_foghorn_creation_commands_unconsumed_artifact
+    ON foghorn.artifact_creation_commands(artifact_hash)
+    WHERE consumed_at IS NULL;
 
 -- ============================================================================
 -- DURABLE VERIFIED MEDIA AUTHORITY
@@ -1993,6 +2011,11 @@ CREATE INDEX IF NOT EXISTS idx_foghorn_ingest_sessions_open_trigger
 
 CREATE INDEX IF NOT EXISTS idx_foghorn_ingest_sessions_stream_lookup
     ON foghorn.ingest_sessions(stream_internal_name);
+
+-- Retention scan for ended generations (RetentionJob deletes them oldest-first past the horizon).
+CREATE INDEX IF NOT EXISTS idx_foghorn_ingest_sessions_ended_range
+    ON foghorn.ingest_sessions(ended_at ASC)
+    WHERE ended_at IS NOT NULL;
 
 -- Schema baseline identity marker. Records that this database was created from the
 -- consolidated baseline at this floor, so the migration min-version guard treats

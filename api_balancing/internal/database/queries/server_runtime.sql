@@ -32,7 +32,7 @@ WHERE artifact_hash = sqlc.arg(artifact_hash) AND dtsh_sync_request_id = sqlc.na
 -- name: UpdateProcessingJobCache :execrows
 UPDATE foghorn.processing_jobs SET processes_json = $3, updated_at = NOW() WHERE job_id = $1 AND artifact_hash = $2 AND processing_node_id = $4 AND status IN ('dispatched', 'processing');
 -- name: LockProcessingJobForCompletion :one
-SELECT status, COALESCE(processing_node_id, '') AS processing_node_id FROM foghorn.processing_jobs WHERE job_id = $1 FOR UPDATE;
+SELECT status, COALESCE(processing_node_id, '') AS processing_node_id, job_type FROM foghorn.processing_jobs WHERE job_id = $1 FOR UPDATE;
 -- name: LockProcessingArtifactForCompletion :one
 SELECT a.artifact_hash, COALESCE(a.artifact_type, '')::text AS artifact_type, COALESCE(a.tenant_id::text, '')::text AS tenant_id, COALESCE(a.stream_id::text, '')::text AS stream_id, COALESCE(a.stream_internal_name, '')::text AS stream_internal_name, COALESCE(a.s3_url, '')::text AS s3_url, COALESCE(a.format, '')::text AS format,
 COALESCE((pj.source_params->>'source_start_unix')::bigint, 0)::bigint AS requested_start_unix, COALESCE((pj.source_params->>'source_stop_unix')::bigint, 0)::bigint AS requested_stop_unix
@@ -65,7 +65,7 @@ UPDATE foghorn.processing_jobs SET progress = GREATEST(progress, sqlc.arg(progre
   progress_advanced_at = CASE WHEN sqlc.arg(progress)::int > COALESCE(progress, 0) OR sqlc.arg(last_ms)::bigint > progress_last_ms THEN NOW() ELSE progress_advanced_at END,
   source_stalled_since = CASE WHEN sqlc.arg(progress)::int > COALESCE(progress, 0) OR sqlc.arg(last_ms)::bigint > progress_last_ms THEN NULL ELSE source_stalled_since END,
   updated_at = NOW()
-WHERE job_id = sqlc.arg(job_id) AND status IN ('dispatched', 'processing') AND processing_node_id = sqlc.arg(processing_node_id) RETURNING artifact_hash, tenant_id::text, progress;
+WHERE job_id = sqlc.arg(job_id) AND status IN ('dispatched', 'processing') AND processing_node_id = sqlc.arg(processing_node_id) RETURNING artifact_hash, tenant_id::text, progress, job_type;
 -- name: RecordImportSourceStaged :execrows
 -- A URL import has no size until its processing node stages the source. The
 -- first staged report sizes the artifact; a later one (lease resend, retried

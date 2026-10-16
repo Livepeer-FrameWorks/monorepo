@@ -30,6 +30,12 @@ const (
 	ProcessingClassCPUHeavy       = "cpu_heavy"
 )
 
+// ProcessingJobTypeThumbnail is a processing job that regenerates the
+// thumbnails of an already published clip or VOD from its stored media. It
+// runs only Thumbs processes, never changes the asset's media or state, and
+// completes once a thumbnail upload of the asset was confirmed.
+const ProcessingJobTypeThumbnail = "thumbnail"
+
 // ProcessingResultRetryCause is the ProcessingJobResult output that names why a
 // "retryable" attempt failed. ProcessingRetryCauseSourceStall is an attempt whose
 // stream did not boot while its source read stalled in storage or upstream: a
@@ -92,6 +98,28 @@ func StripLivepeerProcesses(processesJSON string) string {
 	out, err := json.Marshal(filtered)
 	if err != nil {
 		return processesJSON
+	}
+	return string(out)
+}
+
+// ThumbnailProcesses keeps only the Thumbs entries of a process config, the
+// part a thumbnail-only run of an already published asset applies. It returns
+// "[]" when the config has none or does not parse, so a caller never runs an
+// encoder it did not ask for.
+func ThumbnailProcesses(processesJSON string) string {
+	var processes []map[string]interface{}
+	if err := json.Unmarshal([]byte(processesJSON), &processes); err != nil {
+		return "[]"
+	}
+	filtered := make([]map[string]interface{}, 0, len(processes))
+	for _, p := range processes {
+		if procType, ok := p["process"].(string); ok && procType == "Thumbs" {
+			filtered = append(filtered, p)
+		}
+	}
+	out, err := json.Marshal(filtered)
+	if err != nil {
+		return "[]"
 	}
 	return string(out)
 }

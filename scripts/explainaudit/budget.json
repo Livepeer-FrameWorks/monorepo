@@ -1117,6 +1117,30 @@
     "read_requests": 23,
     "rows_scanned": 23008
   },
+  "foghorn:PurgeCompletedArtifactEvents@declared": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 103,
+    "reason": "Batched retention delete over the completed-range index: one storage read per deleted row; 400 rows and 103 RPCs.",
+    "rows_scanned": 400
+  },
+  "foghorn:PurgeCompletedArtifactEvents@distributed": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 103,
+    "reason": "Batched retention delete over the completed-range index: one storage read per deleted row; 400 rows and 103 RPCs.",
+    "rows_scanned": 400
+  },
+  "foghorn:PurgeEndedIngestSessions@declared": {
+    "flags": ["MANY_READ_RPCS", "READ_AMPLIFICATION"],
+    "read_requests": 322,
+    "reason": "Batched retention delete over the ended-range index; the scan walks past ended generations a recording or pending admission still references, which the seed makes dense.",
+    "rows_scanned": 12598
+  },
+  "foghorn:PurgeEndedIngestSessions@distributed": {
+    "flags": ["MANY_READ_RPCS", "READ_AMPLIFICATION"],
+    "read_requests": 322,
+    "reason": "Batched retention delete over the ended-range index; the scan walks past ended generations a recording or pending admission still references, which the seed makes dense.",
+    "rows_scanned": 12598
+  },
   "foghorn:PurgeExpiredCloseTombstones@declared": {
     "flags": ["SEQ_SCAN_LARGE", "SLOW"],
     "read_requests": 20,
@@ -1156,6 +1180,18 @@
     "flags": ["SEQ_SCAN_LARGE", "SORT_LARGE"],
     "read_requests": 10,
     "rows_scanned": 9513
+  },
+  "foghorn:PurgeTerminalProcessingJobs@declared": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 307,
+    "reason": "Batched retention delete over the terminal-range index with indexed parent and unconsumed-creation anti-joins; one storage read per deleted row.",
+    "rows_scanned": 2448
+  },
+  "foghorn:PurgeTerminalProcessingJobs@distributed": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 307,
+    "reason": "Batched retention delete over the terminal-range index with indexed parent and unconsumed-creation anti-joins; one storage read per deleted row.",
+    "rows_scanned": 2448
   },
   "foghorn:ThumbnailResourceProducedByNode@declared": {
     "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION"],
@@ -2075,6 +2111,18 @@
     "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
     "read_requests": 8,
     "rows_scanned": 9782
+  },
+  "quartermaster:PurgeCompletedNavigatorTenantAliasOutbox@declared": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 103,
+    "reason": "Batched retention delete over the completed-range index: one storage read per deleted row; 400 rows and 103 RPCs.",
+    "rows_scanned": 400
+  },
+  "quartermaster:PurgeCompletedNavigatorTenantAliasOutbox@distributed": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 103,
+    "reason": "Batched retention delete over the completed-range index: one storage read per deleted row; 400 rows and 103 RPCs.",
+    "rows_scanned": 400
   },
   "quartermaster:ResolveTenantByCustomDomain@declared": {
     "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],

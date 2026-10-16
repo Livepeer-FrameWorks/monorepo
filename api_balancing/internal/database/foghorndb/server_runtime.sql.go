@@ -485,18 +485,19 @@ func (q *Queries) LockProcessingArtifactForCompletion(ctx context.Context, jobID
 }
 
 const lockProcessingJobForCompletion = `-- name: LockProcessingJobForCompletion :one
-SELECT status, COALESCE(processing_node_id, '') AS processing_node_id FROM foghorn.processing_jobs WHERE job_id = $1 FOR UPDATE
+SELECT status, COALESCE(processing_node_id, '') AS processing_node_id, job_type FROM foghorn.processing_jobs WHERE job_id = $1 FOR UPDATE
 `
 
 type LockProcessingJobForCompletionRow struct {
 	Status           sql.NullString `db:"status" json:"status"`
 	ProcessingNodeID string         `db:"processing_node_id" json:"processing_node_id"`
+	JobType          string         `db:"job_type" json:"job_type"`
 }
 
 func (q *Queries) LockProcessingJobForCompletion(ctx context.Context, jobID string) (LockProcessingJobForCompletionRow, error) {
 	row := q.db.QueryRowContext(ctx, lockProcessingJobForCompletion, jobID)
 	var i LockProcessingJobForCompletionRow
-	err := row.Scan(&i.Status, &i.ProcessingNodeID)
+	err := row.Scan(&i.Status, &i.ProcessingNodeID, &i.JobType)
 	return i, err
 }
 
@@ -849,7 +850,7 @@ UPDATE foghorn.processing_jobs SET progress = GREATEST(progress, $1::int), progr
   progress_advanced_at = CASE WHEN $1::int > COALESCE(progress, 0) OR $2::bigint > progress_last_ms THEN NOW() ELSE progress_advanced_at END,
   source_stalled_since = CASE WHEN $1::int > COALESCE(progress, 0) OR $2::bigint > progress_last_ms THEN NULL ELSE source_stalled_since END,
   updated_at = NOW()
-WHERE job_id = $3 AND status IN ('dispatched', 'processing') AND processing_node_id = $4 RETURNING artifact_hash, tenant_id::text, progress
+WHERE job_id = $3 AND status IN ('dispatched', 'processing') AND processing_node_id = $4 RETURNING artifact_hash, tenant_id::text, progress, job_type
 `
 
 type UpdateProcessingJobProgressParams struct {
@@ -863,6 +864,7 @@ type UpdateProcessingJobProgressRow struct {
 	ArtifactHash sql.NullString `db:"artifact_hash" json:"artifact_hash"`
 	TenantID     string         `db:"tenant_id" json:"tenant_id"`
 	Progress     sql.NullInt32  `db:"progress" json:"progress"`
+	JobType      string         `db:"job_type" json:"job_type"`
 }
 
 // updated_at is the lease; progress_advanced_at moves only when the reported percentage or
@@ -876,7 +878,12 @@ func (q *Queries) UpdateProcessingJobProgress(ctx context.Context, arg UpdatePro
 		arg.ProcessingNodeID,
 	)
 	var i UpdateProcessingJobProgressRow
-	err := row.Scan(&i.ArtifactHash, &i.TenantID, &i.Progress)
+	err := row.Scan(
+		&i.ArtifactHash,
+		&i.TenantID,
+		&i.Progress,
+		&i.JobType,
+	)
 	return i, err
 }
 

@@ -8300,6 +8300,9 @@ func processingSpeedFromOutputs(outputs map[string]string) (*ipcpb.ProcessingSpe
 // processProcessingJobResult handles job completion/failure results from Helmsman. deliveryErr is set when
 // the job's terminal or requeue transaction did not commit, so the result must be delivered again; ignored,
 // duplicate and chapter-finalize results (attempt-fenced, re-driven by their own sweep) settle with nil.
+// errCompletionWithoutOutput rolls back a completion that produced no output so the job is failed instead.
+var errCompletionWithoutOutput = errors.New("completed processing result carried no output path")
+
 func processProcessingJobResult(result *ipcpb.ProcessingJobResult, nodeID string, logger logging.Logger) (deliveryErr error) {
 	fields := logging.Fields{
 		"job_id":  result.GetJobId(),
@@ -8355,14 +8358,6 @@ func processProcessingJobResult(result *ipcpb.ProcessingJobResult, nodeID string
 		}
 		return
 	case "completed":
-		// A completed result MUST carry a produced output path. An empty one is a malformed
-		// report (truncated IPC, producer bug): blessing it as completed would strand the
-		// artifact "processing" forever with no file. Fail the job terminally instead — the
-		// artifact flips to failed and the lifecycle/UI reflect reality.
-		if result.GetOutputPath() == "" {
-			return failProcessingJobAtomic(ctx, result.GetJobId(), "completed processing result carried no output path", nodeID, logger, fields)
-		}
-
 		var outputMeta *string
 		if len(result.GetOutputs()) > 0 {
 			if b, mErr := json.Marshal(result.GetOutputs()); mErr == nil {
@@ -8421,6 +8416,21 @@ func processProcessingJobResult(result *ipcpb.ProcessingJobResult, nodeID string
 				logger.WithFields(fields).WithField("assigned_node", assignedNode).
 					Warn("Ignoring completion whose reporting node does not match the assigned processing node")
 				return errTxRollbackNoop
+			}
+			// A thumbnail job regenerates the thumbnails of a published asset; its output is the thumbnail
+			// publication, so completing it leaves the asset's media, placement and lifecycle untouched.
+			if job.JobType == mist.ProcessingJobTypeThumbnail {
+				var outputMetadata sql.NullString
+				if outputMeta != nil {
+					outputMetadata = sql.NullString{String: *outputMeta, Valid: true}
+				}
+				return q.CompleteProcessingJob(ctx, foghorndb.CompleteProcessingJobParams{JobID: result.GetJobId(), OutputMetadata: outputMetadata})
+			}
+			// Every other completed result MUST carry a produced output path. An empty one is a malformed
+			// report (truncated IPC, producer bug): blessing it as completed would strand the artifact
+			// "processing" forever with no file, so the job fails terminally instead.
+			if outputPath == "" {
+				return errCompletionWithoutOutput
 			}
 
 			if outputPath != "" {
@@ -8596,6 +8606,9 @@ func processProcessingJobResult(result *ipcpb.ProcessingJobResult, nodeID string
 			}
 			return nil
 		})
+		if errors.Is(txErr, errCompletionWithoutOutput) {
+			return failProcessingJobAtomic(ctx, result.GetJobId(), "completed processing result carried no output path", nodeID, logger, fields)
+		}
 		if txErr != nil {
 			if !errors.Is(txErr, errTxRollbackNoop) {
 				logger.WithError(txErr).WithFields(fields).Error("Processing job completion did not commit; will retry")
@@ -8911,6 +8924,11 @@ func processProcessingJobProgress(progress *ipcpb.ProcessingJobProgress, nodeID 
 		artifactHash, tenantID := updated.ArtifactHash, updated.TenantID
 		if updated.Progress.Valid {
 			progressPct = clampProgressPct(updated.Progress.Int32)
+		}
+		// A thumbnail job runs on an already published asset: its progress is the job's lease only,
+		// never a processing sample of the asset's lifecycle.
+		if updated.JobType == mist.ProcessingJobTypeThumbnail {
+			return nil
 		}
 
 		if artifactHash.Valid {

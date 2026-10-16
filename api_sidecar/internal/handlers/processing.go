@@ -968,6 +968,10 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 		h.handleChapterFinalize(req, send)
 		return
 	}
+	if req.GetJobType() == mist.ProcessingJobTypeThumbnail {
+		h.handleThumbnail(req, send)
+		return
+	}
 
 	// Clips are live artifacts: complete renditions already present or source
 	// passthrough, never a fresh transcode. Handled separately so the VOD path

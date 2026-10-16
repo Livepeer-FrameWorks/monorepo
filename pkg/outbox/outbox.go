@@ -55,6 +55,16 @@ type TokenFencedStore interface {
 	RecordFailureToken(ctx context.Context, id string, currentAttempts int, failedTargets []string, cause error, backoff time.Duration, leaseToken string) error
 }
 
+// CompletedPruner is an OPTIONAL interface a Store may also implement to delete its delivered rows once they are past
+// the store's retention. The worker calls it from its run loop at most once per pruneEvery; an implementation deletes
+// in bounded batches and reports how many rows it removed.
+type CompletedPruner interface {
+	PruneCompleted(ctx context.Context) (int64, error)
+}
+
+// pruneEvery spaces retention passes: delivered rows only need to stop accumulating, not vanish promptly.
+const pruneEvery = time.Hour
+
 type Dispatcher[P any] interface {
 	Dispatch(ctx context.Context, payload P) (failedTargets []string, err error)
 }
@@ -96,8 +106,15 @@ func (w *Worker[P]) Run(ctx context.Context) {
 	}
 	ticker := periodic.NewTicker(w.Config.PollPeriod)
 	defer ticker.Stop()
+	var nextPrune time.Time
 	for {
 		w.Drain(ctx)
+		if pruner, ok := w.Store.(CompletedPruner); ok && !time.Now().Before(nextPrune) && ctx.Err() == nil {
+			if _, err := pruner.PruneCompleted(ctx); err != nil && w.Logger != nil {
+				w.Logger.WithError(err).WithField("outbox", w.AlertLabel).Warn("prune delivered outbox rows failed")
+			}
+			nextPrune = time.Now().Add(pruneEvery)
+		}
 		select {
 		case <-ctx.Done():
 			return

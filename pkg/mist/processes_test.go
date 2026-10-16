@@ -847,6 +847,19 @@ func processNames(t *testing.T, processesJSON string) []string {
 // Livepeer entries are dropped while audio/thumbnail processes are kept, and
 // the function fails open (returns the input unchanged) on malformed JSON
 // rather than discarding a config it could not parse.
+func TestThumbnailProcesses(t *testing.T) {
+	vod := `[{"process":"AV","codec":"AAC"},{"process":"Livepeer","target_profiles":[{"name":"360p","height":360}]},` +
+		`{"process":"Thumbs","track_select":"video=maxbps","inconsequential":true}]`
+	if got := ThumbnailProcesses(vod); got != `[{"inconsequential":true,"process":"Thumbs","track_select":"video=maxbps"}]` {
+		t.Fatalf("ThumbnailProcesses(vod) = %s", got)
+	}
+	for _, input := range []string{`[{"process":"AV","codec":"AAC"}]`, `[]`, `not json`, ``} {
+		if got := ThumbnailProcesses(input); got != "[]" {
+			t.Fatalf("ThumbnailProcesses(%q) = %s, want []", input, got)
+		}
+	}
+}
+
 func TestStripLivepeerProcesses(t *testing.T) {
 	t.Run("drops only livepeer entries", func(t *testing.T) {
 		input := `[

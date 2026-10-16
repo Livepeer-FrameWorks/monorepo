@@ -2176,6 +2176,14 @@ func main() {
 	creationCommandExpiryJob.Start()
 	defer creationCommandExpiryJob.Stop()
 
+	historyRetentionJob := jobs.NewHistoryRetentionJob(db, logger)
+	historyRetentionJob.Start()
+	defer historyRetentionJob.Stop()
+
+	thumbnailBackfillJob := jobs.NewThumbnailBackfillJob(db, logger)
+	thumbnailBackfillJob.Start()
+	defer thumbnailBackfillJob.Stop()
+
 	// Start completing-VOD recovery job (converges uploads stranded in 'completing' after an ambiguous
 	// S3 completion error — see CompleteVodUpload). Needs S3 to probe object existence; skipped when
 	// no S3 is configured. Uses s3ForFederation (a *storage.S3Client with Exists + BuildS3URL).
