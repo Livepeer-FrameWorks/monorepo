@@ -83,6 +83,14 @@ func publicListenerPorts(manifest *inventory.Manifest, hostName string) (tcp, ud
 // parseWildcardListeners returns the listeners in `ss -Hltun[p]` output that
 // bind every interface and are not in the allowed public ports.
 func parseWildcardListeners(output string, tcpAllowed, udpAllowed map[int]bool) []exposedListener {
+	return parseWildcardListenersAllowing(output, func(l exposedListener) bool {
+		return (l.Proto == "tcp" && tcpAllowed[l.Port]) || (l.Proto == "udp" && udpAllowed[l.Port])
+	})
+}
+
+// parseWildcardListenersAllowing returns the listeners in `ss -Hltun[p]`
+// output that bind every interface and that allowed does not accept.
+func parseWildcardListenersAllowing(output string, allowed func(exposedListener) bool) []exposedListener {
 	var out []exposedListener
 	for line := range strings.SplitSeq(output, "\n") {
 		fields := strings.Fields(line)
@@ -108,9 +116,6 @@ func parseWildcardListeners(output string, tcpAllowed, udpAllowed map[int]bool) 
 		if err != nil {
 			continue
 		}
-		if (proto == "tcp" && tcpAllowed[port]) || (proto == "udp" && udpAllowed[port]) {
-			continue
-		}
 		process := ""
 		if start := strings.Index(line, `(("`); start >= 0 {
 			rest := line[start+3:]
@@ -118,7 +123,11 @@ func parseWildcardListeners(output string, tcpAllowed, udpAllowed map[int]bool) 
 				process = rest[:end]
 			}
 		}
-		out = append(out, exposedListener{Proto: proto, Address: address, Port: port, Process: process})
+		listener := exposedListener{Proto: proto, Address: address, Port: port, Process: process}
+		if allowed(listener) {
+			continue
+		}
+		out = append(out, listener)
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Port != out[j].Port {
@@ -170,17 +179,21 @@ func checkListenerExposure(ctx context.Context, pool *fwssh.Pool, manifest *inve
 	return result
 }
 
-// doctorListenerChecks audits every platform host's listeners.
-func doctorListenerChecks(pool *fwssh.Pool, manifest *inventory.Manifest) []doctorCheck {
-	names := make([]string, 0, len(manifest.Hosts))
-	for name := range manifest.Hosts {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	checks := make([]doctorCheck, 0, len(names))
-	for _, name := range names {
-		host, _ := manifest.GetHost(name)
-		label := "Listeners on " + name
+// doctorListenerChecks audits the listeners of every platform host and every
+// edge node in targets (diagnoseHostTargets).
+func doctorListenerChecks(pool *fwssh.Pool, manifest *inventory.Manifest, targets []diagnoseHost) []doctorCheck {
+	checks := make([]doctorCheck, 0, len(targets))
+	for _, target := range targets {
+		label := "Listeners on " + target.Name
+		if target.Edge {
+			edgeHost := target.Host
+			label += " (edge)"
+			checks = append(checks, doctorCheck{name: label, run: func(ctx context.Context) doctorOutcome {
+				return doctorInfraOutcome(label, checkEdgeListenerExposure(ctx, func() (fwssh.Runner, error) { return getRunner(edgeHost, pool) }))
+			}})
+			continue
+		}
+		host, _ := manifest.GetHost(target.Name)
 		checks = append(checks, doctorCheck{name: label, run: func(ctx context.Context) doctorOutcome {
 			return doctorInfraOutcome(label, checkListenerExposure(ctx, pool, manifest, host))
 		}})

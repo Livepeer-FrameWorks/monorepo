@@ -730,6 +730,9 @@ Default mode (read-only, no SOPS decryption):
   - Application services: HTTP /health endpoints.
   - Database migrations: embedded SQL migrations are compared against the
     PostgreSQL/YugabyteDB _migrations ledger when credentials are available.
+  - Listener exposure: every listener bound to every interface outside the
+    public set, on each cluster host and each node of the edge manifest
+    (edge.yaml beside the cluster manifest), read over SSH with ss.
   - Edge nodes: each edge's provisioned config version, read from the Foghorn
     serving that edge's own cluster. An edge whose health cannot be read is a
     warning, never a pass.
@@ -1238,7 +1241,7 @@ func doctorSections(rc *resolvedCluster, pool *fwssh.Pool, sharedEnv map[string]
 	if len(manifest.Observability) > 0 {
 		sections = append(sections, doctorSection{title: "Observability Services", checks: serviceChecks(manifest.Observability)})
 	}
-	sections = append(sections, doctorSection{title: "Listener Exposure", checks: doctorListenerChecks(pool, manifest)})
+	sections = append(sections, doctorSection{title: "Listener Exposure", checks: doctorListenerChecks(pool, manifest, diagnoseHostTargets(io.Discard, rc, ""))})
 
 	if pg != nil && pg.Enabled {
 		sections = append(sections, doctorSection{title: "Database Migrations", checks: doctorDatabaseChecks(rc, pool, sharedEnv, doctorTarget, sshKey, deep)})

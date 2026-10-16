@@ -27,9 +27,10 @@ comments; change that line, or set `COMPOSE_PROFILES` in your shell, to start a 
   and pinned MistServer and Caddy releases into `edge/dist/`. After changing Helmsman, run it again, then
   `docker compose up --build edge`. To test a local MistServer build, pass an install-tree tarball:
   `make edge-dev-dist EDGE_DEV_MIST_TAR=/path/to/mistserver.tar.gz` (`scripts/verify-mist-current-source.sh` writes one
-  when `MIST_INSTALL_TREE_OUT` is set). nginx routes `/view/`, `/hls/`, `/webrtc/` and `/mist/` to the edge; RTMP
-  (1935), SRT (8889/udp), RTSP (5554), DTSC (4200), WebRTC (18203/udp), Mist HTTP (8080) and the controller (4242)
-  are published on the host.
+  when `MIST_INSTALL_TREE_OUT` is set). nginx routes `/view/`, `/hls/` and `/webrtc/` to the edge's Mist HTTP
+  through `edge-proxy-a`; RTMP (1935), SRT (8889/udp), RTSP (5554), DTSC (4200) and WebRTC (18203/udp) are published
+  on the host. Mist HTTP (8080) and the controller (4242) listen on the edge's loopback; the Mist admin UI is the
+  edge's own `/_mist` route, opened from the webapp.
 - **Without the edge or support services.** nginx resolves upstreams per request, so their routes answer with the
   maintenance page. Deckhand, Commodore and Steward start without Chatwoot and Listmonk; they only call them while
   handling a support webhook or a newsletter subscription.

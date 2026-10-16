@@ -152,7 +152,11 @@ interface, is stopped and masked on every host by `node_baseline`; MistServer ru
 an edge's `frameworks-mistserver` unit. `frameworks cluster doctor` lists, per host, every
 listener bound to every interface outside the public set (SSH, the reverse proxy's 80/443
 on a proxy host, Foghorn's 18029 on a Foghorn host, the WireGuard port), so an exposure
-does not go unnoticed.
+does not go unnoticed. It audits every node of the edge manifest the same way against the
+edge's public set: SSH, Caddy's 80/443 (TCP and QUIC), and the RTMP, RTSP, DTSC, SRT and
+WebRTC ports the edge's MistServer config sets. MistOutWebRTC's outgoing sessions bind an
+ephemeral UDP port, so a MistOutWebRTC UDP socket inside the host's
+`net.ipv4.ip_local_port_range` is allowed too; Mist has no WebRTC port range of its own.
 
 A host without a WireGuard address binds loopback alone. That is a single-host cluster:
 `cluster provision` refuses a manifest of more than one host without Privateer, since its
