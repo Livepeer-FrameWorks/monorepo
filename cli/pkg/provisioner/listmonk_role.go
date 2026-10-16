@@ -10,7 +10,7 @@ import (
 // listmonkRoleVars turns the manifest's listmonk configuration into the
 // variable surface frameworks.infra.listmonk expects. The role owns compose
 // rendering via its own Jinja template; Go just hands over image, port, env.
-func listmonkRoleVars(_ context.Context, _ inventory.Host, config ServiceConfig, _ RoleBuildHelpers) (map[string]any, error) {
+func listmonkRoleVars(_ context.Context, host inventory.Host, config ServiceConfig, _ RoleBuildHelpers) (map[string]any, error) {
 	image, err := resolvePinnedImage("listmonk", config)
 	if err != nil {
 		return nil, err
@@ -23,15 +23,16 @@ func listmonkRoleVars(_ context.Context, _ inventory.Host, config ServiceConfig,
 	dbPort := firstNonEmptyEnv(config.EnvVars, "POSTGRES_LISTMONK_PORT", "POSTGRES_SUPPORT_PORT", "POSTGRES_CHATWOOT_PORT", "DATABASE_PORT")
 	dbPassword := firstNonEmptyEnv(config.EnvVars, "POSTGRES_LISTMONK_PASSWORD", "POSTGRES_SUPPORT_PASSWORD", "POSTGRES_CHATWOOT_PASSWORD", "DATABASE_PASSWORD")
 	return map[string]any{
-		"listmonk_image":       image,
-		"listmonk_port":        port,
-		"listmonk_env":         listmonkEnvMap(config),
-		"listmonk_public_url":  firstNonEmptyEnv(config.EnvVars, "LISTMONK_FRONTEND_URL", "LISTMONK_PUBLIC_URL"),
-		"listmonk_db_host":     dbHost,
-		"listmonk_db_port":     dbPort,
-		"listmonk_db_user":     orElse(config.EnvVars["DATABASE_USER"], "postgres"),
-		"listmonk_db_password": dbPassword,
-		"listmonk_db_database": "listmonk",
+		"listmonk_image":         image,
+		"listmonk_port":          port,
+		"listmonk_publish_addrs": composePublishAddrs(host),
+		"listmonk_env":           listmonkEnvMap(config),
+		"listmonk_public_url":    firstNonEmptyEnv(config.EnvVars, "LISTMONK_FRONTEND_URL", "LISTMONK_PUBLIC_URL"),
+		"listmonk_db_host":       dbHost,
+		"listmonk_db_port":       dbPort,
+		"listmonk_db_user":       orElse(config.EnvVars["DATABASE_USER"], "postgres"),
+		"listmonk_db_password":   dbPassword,
+		"listmonk_db_database":   "listmonk",
 	}, nil
 }
 

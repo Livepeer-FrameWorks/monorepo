@@ -58,6 +58,7 @@ import (
 	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/vodupload"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/x402"
 
 	"github.com/google/uuid"
@@ -3929,8 +3930,8 @@ func (s *FoghornGRPCServer) CompleteVodUpload(ctx context.Context, req *sharedpb
 	if req.UploadId == "" {
 		return nil, status.Error(codes.InvalidArgument, "upload_id is required")
 	}
-	if len(req.Parts) == 0 {
-		return nil, status.Error(codes.InvalidArgument, "parts are required")
+	if partsErr := vodupload.ValidateProtoParts(req.Parts); partsErr != nil {
+		return nil, status.Error(codes.InvalidArgument, partsErr.Error())
 	}
 	if s.s3Client == nil {
 		return nil, status.Error(codes.FailedPrecondition, "S3 storage not configured")

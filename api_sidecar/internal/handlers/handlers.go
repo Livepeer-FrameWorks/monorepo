@@ -1186,11 +1186,8 @@ func HandleStreamSource(c *gin.Context) {
 		metrics.InfrastructureEvents.WithLabelValues("source_resolved").Inc()
 	}
 
-	if ss := mistTrigger.GetStreamSource(); ss != nil && result.Response != "" &&
-		failProcessingSourceIfUnavailable(c.Request.Context(), ss.GetStreamName(), result.Response) {
-		incMistWebhook("STREAM_SOURCE", "source_unavailable")
-		respondMistAction(c, http.StatusOK, ipcpb.MistTriggerAction_MIST_TRIGGER_ACTION_OFFLINE, "source_unavailable", config.StreamSourceUnavailable)
-		return
+	if ss := mistTrigger.GetStreamSource(); ss != nil && result.Response != "" {
+		checkProcessingSourceInBackground(ss.GetStreamName(), result.Response)
 	}
 
 	// Acquire a primary disk lease for the local file Mist is about to open.

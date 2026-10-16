@@ -1,0 +1,8 @@
+fw-stg-core frameworks-commodore.service errors=1
+      1 "msg":"Failed to complete VOD upload via Foghorn
+fw-stg-eu-3 frameworks-foghorn.service errors=1
+      1 "msg":"Failed to complete S3 multipart upload
+fw-stg-us-2 frameworks-bridge.service errors=1
+      1 "msg":"GraphQL request failed
+fw-stg-edge-eu frameworks-helmsman.service errors=3
+      3 "msg":"relay server error

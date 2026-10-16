@@ -68,6 +68,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/restream"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/streamident"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/turnstile"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/vodupload"
 
 	fwserver "github.com/Livepeer-FrameWorks/monorepo/pkg/server"
 	"github.com/google/uuid"
@@ -10663,6 +10664,9 @@ func (s *CommodoreServer) CompleteVodUpload(ctx context.Context, req *sharedpb.C
 	_, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
+	}
+	if partsErr := vodupload.ValidateProtoParts(req.GetParts()); partsErr != nil {
+		return nil, status.Error(codes.InvalidArgument, partsErr.Error())
 	}
 
 	vodRoute, err := s.resolveVodUploadRoute(ctx, tenantID, req.GetUploadId())

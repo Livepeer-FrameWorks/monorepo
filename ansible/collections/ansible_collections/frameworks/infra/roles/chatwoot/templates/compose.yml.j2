@@ -40,7 +40,9 @@ services:
         bundle exec rails runner "Redis::Alfred.set(Redis::Alfred::CHATWOOT_INSTALLATION_ONBOARDING, true) if User.count.zero? && Account.count.zero?"
         exec bundle exec rails s -p 3000 -b '0.0.0.0'
     ports:
-      - "{{ chatwoot_port }}:3000"
+{% for addr in chatwoot_publish_addrs %}
+      - "{{ addr }}:{{ chatwoot_port }}:3000"
+{% endfor %}
     env_file:
       - .env
     extra_hosts:

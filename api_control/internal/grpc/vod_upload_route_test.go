@@ -105,7 +105,10 @@ func runVodUploadOwnerOperation(ctx context.Context, t *testing.T, operation str
 		mock.ExpectQuery("SELECT playback_id").WithArgs("tenant", "artifact").
 			WillReturnRows(sqlmock.NewRows([]string{"playback_id"}).AddRow("playback"))
 		var response *sharedpb.CompleteVodUploadResponse
-		response, err = s.CompleteVodUpload(ctx, &sharedpb.CompleteVodUploadRequest{UploadId: session})
+		response, err = s.CompleteVodUpload(ctx, &sharedpb.CompleteVodUploadRequest{
+			UploadId: session,
+			Parts:    []*sharedpb.VodCompletedPart{{PartNumber: 1, Etag: `"e1"`}},
+		})
 		if err == nil && response.GetAsset().GetPlaybackId() != "playback" {
 			t.Fatal("completion did not return the catalog playback identity")
 		}
@@ -135,6 +138,31 @@ func runVodUploadOwnerOperation(ctx context.Context, t *testing.T, operation str
 		t.Fatal(err)
 	}
 	return owner
+}
+
+// Staging v0.3.13-rc10: empty part ETags were forwarded to the upload owner and
+// failed inside S3 completion as Internal. Commodore refuses them as
+// InvalidArgument before resolving the owner or touching the catalog.
+func TestCompleteVodUploadRejectsMalformedPartsBeforeOwner(t *testing.T) {
+	for name, parts := range map[string][]*sharedpb.VodCompletedPart{
+		"no parts":         nil,
+		"empty etag":       {{PartNumber: 1, Etag: ""}},
+		"negative part":    {{PartNumber: -1, Etag: `"e"`}},
+		"duplicate number": {{PartNumber: 2, Etag: `"a"`}, {PartNumber: 2, Etag: `"b"`}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s, mock, done := newMockServer(t)
+			t.Cleanup(done)
+			_, err := s.CompleteVodUpload(ctxAs("user", "tenant", "owner"), &sharedpb.CompleteVodUploadRequest{
+				UploadId: vodUploadSessionID("artifact", "upload"),
+				Parts:    parts,
+			})
+			wantCode(t, err, codes.InvalidArgument)
+			if err = mock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
 }
 
 func TestVodUploadRouteRejectsInvalidOrUnownedSession(t *testing.T) {

@@ -31,6 +31,9 @@ type composeListener struct {
 	// needsLeaf is a listener the service opens only with an internal-CA leaf
 	// (GRPC_TLS_CERT_PATH and GRPC_TLS_KEY_PATH).
 	needsLeaf bool
+	// public is a listener that clients outside the mesh dial directly, so it
+	// is published on every interface.
+	public bool
 }
 
 // composeListeners lists, per generic service, every listener besides its
@@ -50,19 +53,22 @@ var composeListeners = map[string][]composeListener{
 	"network-observer": {{envKey: "NETWORK_OBSERVER_INTERNAL_PORT", needsLeaf: true}},
 	"foghorn": {
 		{envKey: "FOGHORN_INTERNAL_GRPC_BIND_ADDR", bindAddr: true, grpc: true},
-		{envKey: "FOGHORN_EXTERNAL_GRPC_BIND_ADDR", bindAddr: true},
+		// Edge Helmsman control streams and PreRegisterEdge reach Foghorn here
+		// from outside the mesh, on its public cluster certificate.
+		{envKey: "FOGHORN_EXTERNAL_GRPC_BIND_ADDR", bindAddr: true, public: true},
 		{envKey: "FOGHORN_INTERNAL_HTTP_PORT", loopbackBindEnv: "FOGHORN_INTERNAL_HTTP_BIND_ADDR"},
 	},
 }
 
 // composePublishedPorts lists every port the service listens on, with the host
-// addresses each is published on (none: every interface), bound as the native
-// render binds them: a mesh-only service on loopback and the mesh address, a
-// loopback listener on loopback. env is the process env; the returned env holds
-// the bind overrides docker mode needs.
+// addresses each is published on (none: every interface): loopback and the
+// mesh address (composePublishAddrs), loopback alone for a listener the native
+// binary binds to loopback, and every interface only for a public listener.
+// env is the process env; the returned env holds the bind overrides docker
+// mode needs.
 func composePublishedPorts(serviceName string, host inventory.Host, port, containerPort int, env map[string]string) ([]map[string]any, map[string]string, error) {
-	meshOnly := composePublishAddrs(serviceName, host)
-	ports := []map[string]any{{"port": port, "container_port": containerPort, "addrs": meshOnly}}
+	meshAddrs := composePublishAddrs(host)
+	ports := []map[string]any{{"port": port, "container_port": containerPort, "addrs": meshAddrs}}
 	overrides := map[string]string{}
 	seen := map[int]bool{port: true}
 	hasLeaf := strings.TrimSpace(env["GRPC_TLS_CERT_PATH"]) != "" && strings.TrimSpace(env["GRPC_TLS_KEY_PATH"]) != ""
@@ -78,8 +84,11 @@ func composePublishedPorts(serviceName string, host inventory.Host, port, contai
 			continue
 		}
 		seen[listenerPort] = true
-		addrs := meshOnly
-		if listener.loopbackBindEnv != "" {
+		addrs := meshAddrs
+		switch {
+		case listener.public:
+			addrs = []string{}
+		case listener.loopbackBindEnv != "":
 			addrs = []string{"127.0.0.1"}
 			overrides[listener.loopbackBindEnv] = "0.0.0.0"
 		}

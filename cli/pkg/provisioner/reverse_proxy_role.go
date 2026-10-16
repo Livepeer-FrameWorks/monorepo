@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"frameworks/cli/internal/composelog"
@@ -98,6 +99,9 @@ func reverseProxyComposeVars(serviceName string, defaultPort int, host inventory
 	var tap *tenantAliasPlayback
 	if serviceName == "nginx" {
 		tap = tenantAliasPlaybackFromMetadata(config.Metadata)
+		if err := tap.routeOverWireguard(host); err != nil {
+			return nil, err
+		}
 	}
 	containerPort := 80
 	httpsPort := metaInt(config.Metadata, "https_port")
@@ -383,6 +387,26 @@ type tenantAliasPlayback struct {
 	ZoneLabel    string
 	RootDomain   string
 	UpstreamPort int
+	// MeshOnly marks a local Foghorn that answers only on loopback and the
+	// host's WireGuard address (LocalUpstreamOnLoopbackAndMesh).
+	MeshOnly bool
+	// Upstream is where docker-mode nginx reaches the local Foghorn; empty
+	// means the Docker gateway alias at UpstreamPort.
+	Upstream string
+}
+
+// routeOverWireguard points a mesh-only Foghorn's tenant-alias upstream at the
+// host's WireGuard address, as routeMeshOnlySitesOverWireguard does for sites.
+func (tap *tenantAliasPlayback) routeOverWireguard(host inventory.Host) error {
+	if tap == nil || !tap.MeshOnly {
+		return nil
+	}
+	wireguardIP := strings.TrimSpace(host.WireguardIP)
+	if wireguardIP == "" {
+		return fmt.Errorf("nginx: tenant-alias playback fronts a Foghorn that listens only on loopback and the WireGuard address, and a docker-mode nginx cannot reach host loopback; host %s needs a wireguard_ip, or run nginx in native mode", host.Name)
+	}
+	tap.Upstream = net.JoinHostPort(wireguardIP, strconv.Itoa(tap.UpstreamPort))
+	return nil
 }
 
 func tenantAliasPlaybackFromMetadata(metadata map[string]any) *tenantAliasPlayback {
@@ -395,6 +419,7 @@ func tenantAliasPlaybackFromMetadata(metadata map[string]any) *tenantAliasPlayba
 		ZoneLabel:    stringValue(raw["zone_label"]),
 		RootDomain:   stringValue(raw["root_domain"]),
 		UpstreamPort: metaInt(raw, "upstream_port"),
+		MeshOnly:     boolValue(raw["mesh_only"]).value,
 	}
 	if tap.RootDomain == "" {
 		return nil
@@ -426,9 +451,12 @@ func writeNginxTenantAliasPlayback(b *strings.Builder, tap *tenantAliasPlayback)
 	fmt.Fprintf(b, "server {\n    listen 80;\n    server_name ~^%s$;\n\n    location / {\n        return 308 https://$host$request_uri;\n    }\n}\n\n", hostRe)
 	fmt.Fprintf(b, "server {\n    listen 443 ssl;\n    server_name ~^%s$;\n    http2 on;\n    ssl_certificate %s/$fw_tenant_alias_sub/tls.crt;\n    ssl_certificate_key %s/$fw_tenant_alias_sub/tls.key;\n",
 		hostRe, aliasCertDir, aliasCertDir)
-	// Docker-mode nginx reaches the host-native foghorn via the compose
+	// Docker-mode nginx reaches a host-native foghorn via the compose
 	// extra_hosts gateway alias, matching normalizeProxyUpstream's rewrite.
-	upstream := fmt.Sprintf("host.docker.internal:%d", tap.UpstreamPort)
+	upstream := tap.Upstream
+	if upstream == "" {
+		upstream = fmt.Sprintf("host.docker.internal:%d", tap.UpstreamPort)
+	}
 	aliasSite := proxySite{Upstream: upstream, Profile: "media_delivery"}
 	writeNginxCredentialPathLocation(b, aliasSite)
 	b.WriteString("\n    location / {\n")
@@ -888,7 +916,7 @@ type proxySite struct {
 	Domains  []string
 	Upstream string
 	// MeshOnly marks a local upstream that listens only on loopback and the
-	// host's WireGuard address (MeshOnlyHTTPService).
+	// host's WireGuard address (LocalUpstreamOnLoopbackAndMesh).
 	MeshOnly              bool
 	Profile               string
 	PathPrefixes          []string
@@ -1113,9 +1141,9 @@ func normalizeProxyUpstream(upstream, mode string) string {
 
 // routeMeshOnlySitesOverWireguard points a docker proxy's mesh-only sites at
 // the host's WireGuard address. The container reaches host loopback services
-// through the Docker gateway (host.docker.internal), and a mesh-only service
-// does not listen there; its WireGuard listener is reachable from the container
-// and, like loopback, is closed to the LAN.
+// through the Docker gateway (host.docker.internal), and a mesh-only or
+// Compose-deployed service does not listen there; its WireGuard listener is
+// reachable from the container and, like loopback, is closed to the LAN.
 func routeMeshOnlySitesOverWireguard(serviceName string, sites []proxySite, host inventory.Host) ([]proxySite, error) {
 	wireguardIP := strings.TrimSpace(host.WireguardIP)
 	for i := range sites {

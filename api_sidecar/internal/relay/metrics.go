@@ -20,7 +20,8 @@ var (
 	// relayRequests counts artifact serve requests by container format and
 	// the source the bytes came from. source: "local" (warm disk),
 	// "s3" (cold read-through), "peer" (cross-cluster relay grant).
-	// status: "served", "not_playable", "error".
+	// status: "served", "not_playable", "error", "client_gone" (the reader
+	// left before the relay finished answering).
 	relayRequests = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "helmsman",

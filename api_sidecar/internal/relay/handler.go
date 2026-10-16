@@ -196,7 +196,7 @@ func (s *Server) serveFileWithStream(c *gin.Context, kind, streamInternal string
 	}
 	res, err := s.resolveCached(rc)
 	if err != nil {
-		s.serverError(c, "relay resolve", err)
+		status = s.waitError(c, "relay resolve", err)
 		return
 	}
 	source = upstreamSourceLabel(res.PeerRelayGrantID)
@@ -271,7 +271,7 @@ func (s *Server) serveUpload(c *gin.Context) {
 	}
 	res, err := s.resolveCached(rc)
 	if err != nil {
-		s.serverError(c, "relay resolve upload", err)
+		s.waitError(c, "relay resolve upload", err)
 		return
 	}
 	if res.State != ipcpb.AssetState_ASSET_STATE_PLAYABLE || res.UpstreamURL() == "" {
@@ -355,8 +355,7 @@ func (s *Server) streamRangeNoCache(c *gin.Context, res *ResolveResult, onUpstre
 		if onUpstreamFailure != nil {
 			onUpstreamFailure(err)
 		}
-		s.serverError(c, "upstream fetch", err)
-		return "error"
+		return s.waitError(c, "upstream fetch", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= http.StatusBadRequest && onUpstreamFailure != nil {
@@ -398,6 +397,9 @@ func (s *Server) streamRangeNoCache(c *gin.Context, res *ResolveResult, onUpstre
 	c.Writer.WriteHeader(resp.StatusCode)
 	buf := make([]byte, 256*1024)
 	if _, copyErr := io.CopyBuffer(c.Writer, resp.Body, buf); copyErr != nil {
+		if readerGone(c) {
+			return statusClientGone
+		}
 		if s.logger != nil && !errors.Is(copyErr, context.Canceled) {
 			s.logger.WithError(copyErr).Debug("relay no-cache stream aborted")
 		}
@@ -435,6 +437,17 @@ func (s *Server) serverError(c *gin.Context, what string, err error) {
 		s.logger.WithError(err).WithField("op", what).Error("relay server error")
 	}
 	c.String(http.StatusInternalServerError, "%s: %v", what, err)
+}
+
+// waitError answers a failed wait on the control plane or an upstream and
+// returns the relay_requests_total status for it. The wait runs on the request
+// context, so a reader that already left gets no answer and no error log.
+func (s *Server) waitError(c *gin.Context, what string, err error) string {
+	if readerGone(c) {
+		return statusClientGone
+	}
+	s.serverError(c, what, err)
+	return "error"
 }
 
 func safeRelayPathSegment(seg string) bool {

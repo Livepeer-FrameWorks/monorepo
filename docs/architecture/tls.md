@@ -73,9 +73,16 @@ bootstraps the CA bundle and leaf as `go_service` does, mounts their directories
 (`/etc/frameworks/pki`) read-only at the same path so Privateer's renewals reach the
 container, and adds the container to the host's `frameworks` group, which may read the
 leaf key. The render publishes every listener of the service (its HTTP, gRPC, metrics and
-internal HTTPS ports) where the native binary binds it: a mesh-only service such as the
-observer on loopback and the WireGuard address, Foghorn's internal HTTP listener on
-loopback, every other listener on all interfaces.
+internal HTTPS ports) on loopback and the host's WireGuard address only. Docker's
+forwarding rules sit ahead of the host firewall, so a port published without an address
+answers on the LAN and public interfaces and bypasses the reverse proxy's TLS and
+client-IP headers. Every caller of these listeners is on loopback (the host's native
+proxy, vmagent, the rollout gate) or the mesh (a docker-mode proxy, which reaches them on
+the WireGuard address rather than the Docker gateway, the peers' proxy backups, and gRPC
+clients at `<service>.internal`). Two listeners differ: Foghorn's internal HTTP listener
+is published on loopback alone, and Foghorn's external gRPC listener, which edges outside
+the mesh dial, on every interface. Listmonk and Chatwoot, which render their own Compose
+files, publish their ports the same way.
 
 Public HTTP remains a Caddy concern unless a service explicitly owns an HTTP
 endpoint. Foghorn's viewer redirect and MistServer pull-routing surfaces are

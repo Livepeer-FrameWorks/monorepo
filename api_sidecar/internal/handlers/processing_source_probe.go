@@ -13,9 +13,10 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 )
 
-// processingSourceProbeTimeout bounds the source check inside the blocking
-// STREAM_SOURCE trigger. A probe that cannot complete in time is not a verdict:
-// Mist opens the source itself.
+// processingSourceProbeTimeout bounds the source check started at
+// STREAM_SOURCE. A probe that cannot complete in time is not a verdict: Mist
+// opens the source itself, and a relay source reports a refusal that arrives
+// later through the relay's shared size probe.
 const processingSourceProbeTimeout = 8 * time.Second
 
 var processingSourceProbeClient = &http.Client{Timeout: processingSourceProbeTimeout}
@@ -102,6 +103,19 @@ func transientSourceStatus(status int) bool {
 		return true
 	}
 	return false
+}
+
+// checkProcessingSourceInBackground probes the source Foghorn resolved for a
+// processing+ stream with an active job without holding up the STREAM_SOURCE
+// answer. Mist gives a blocking trigger 5 s and treats a later answer as a
+// failed trigger, while an import source may take longer than that to answer
+// at all; the job's readiness wait receives a refusal through its source
+// failure listener.
+func checkProcessingSourceInBackground(streamName, sourceURL string) {
+	if !strings.HasPrefix(streamName, "processing+") || !HasPendingJob(streamName) {
+		return
+	}
+	go failProcessingSourceIfUnavailable(context.Background(), streamName, sourceURL)
 }
 
 // failProcessingSourceIfUnavailable probes the source Foghorn resolved for a

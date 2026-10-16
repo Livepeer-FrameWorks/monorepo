@@ -1074,8 +1074,8 @@ func TestServiceComposeVarsPublishesBridgeOnLoopbackAndMesh(t *testing.T) {
 	if got := composePortSpecs(t, render("bridge", inventory.Host{Name: "regional-eu-1"})); !reflect.DeepEqual(got, []string{"127.0.0.1:18000:18000"}) {
 		t.Fatalf("bridge ports without mesh = %#v, want loopback", got)
 	}
-	if got := composePortSpecs(t, render("commodore", inventory.Host{Name: "central-eu-1", WireguardIP: "10.88.0.2"})); !reflect.DeepEqual(got, []string{"18000:18000", "19001:19001"}) {
-		t.Fatalf("commodore ports = %#v, want its HTTP and gRPC ports on every interface", got)
+	if got := composePortSpecs(t, render("commodore", inventory.Host{Name: "central-eu-1", WireguardIP: "10.88.0.2"})); !reflect.DeepEqual(got, []string{"127.0.0.1:18000:18000", "10.88.0.2:18000:18000", "127.0.0.1:19001:19001", "10.88.0.2:19001:19001"}) {
+		t.Fatalf("commodore ports = %#v, want its HTTP and gRPC ports on loopback and mesh", got)
 	}
 
 	tmpl := readRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/compose_stack/templates/generic-compose.yml.j2")
@@ -1114,6 +1114,113 @@ func composePortSpecs(t *testing.T, service map[string]any) []string {
 	return specs
 }
 
+// meshPublished is ports published on loopback and the test host's WireGuard
+// address 10.88.0.3.
+func meshPublished(ports ...int) []string {
+	var specs []string
+	for _, port := range ports {
+		specs = append(specs, fmt.Sprintf("127.0.0.1:%d:%d", port, port), fmt.Sprintf("10.88.0.3:%d:%d", port, port))
+	}
+	return specs
+}
+
+// Staging v0.3.13-rc10: docker-mode grafana :3000, metabase :3001 and the
+// chartroom, foredeck and logbook frontends answered on the LAN, and with no
+// host firewall in front of Docker's forwarding rules a public-IP host would
+// serve them past nginx/Caddy. Every Compose-deployed listener is published on
+// loopback (the host's proxy, vmagent, the rollout gate) and the WireGuard
+// address (a docker-mode proxy, peer backups, mesh clients), never on every
+// interface.
+func TestServiceComposeVarsNeverPublishesOnEveryInterface(t *testing.T) {
+	cases := []struct {
+		service       string
+		port          int
+		containerPort int
+		want          []string
+	}{
+		{"grafana", 3000, 0, meshPublished(3000)},
+		{"metabase", 3001, 3000, []string{"127.0.0.1:3001:3000", "10.88.0.3:3001:3000"}},
+		{"chartroom", 18030, 0, meshPublished(18030)},
+		{"foredeck", 18031, 0, meshPublished(18031)},
+		{"logbook", 18033, 0, meshPublished(18033)},
+		{"steward", 18032, 0, meshPublished(18032)},
+		{"chandler", 18020, 0, meshPublished(18020)},
+		{"periscope-ingest", 18005, 0, meshPublished(18005)},
+		{"periscope-metering", 18021, 0, meshPublished(18021)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.service, func(t *testing.T) {
+			for _, host := range []inventory.Host{{Name: "core-1", WireguardIP: "10.88.0.3"}, {Name: "core-1"}} {
+				vars, err := serviceComposeVars(context.Background(), ServiceRoleConfig{
+					ServiceName:   tc.service,
+					DefaultPort:   tc.port,
+					ContainerPort: tc.containerPort,
+					DefaultImage:  "ghcr.io/livepeer-frameworks/frameworks-" + tc.service + ":test",
+				}, host, ServiceConfig{Mode: "docker", Metadata: map[string]any{}}, RoleBuildHelpers{})
+				if err != nil {
+					t.Fatalf("serviceComposeVars: %v", err)
+				}
+				got := composePortSpecs(t, vars["compose_stack_service"].(map[string]any))
+				want := tc.want
+				if host.WireguardIP == "" {
+					want = nil
+					for _, spec := range tc.want {
+						if strings.HasPrefix(spec, "127.0.0.1:") {
+							want = append(want, spec)
+						}
+					}
+				}
+				if !reflect.DeepEqual(got, want) {
+					t.Fatalf("host %+v: ports = %#v, want %#v", host, got, want)
+				}
+			}
+		})
+	}
+}
+
+// Listmonk and Chatwoot render their own compose files; both publish their
+// port on loopback and the WireGuard address only, and tell compose_stack so
+// it enables the non-local binds the mesh address needs at boot.
+func TestSupportStacksPublishOnLoopbackAndMeshOnly(t *testing.T) {
+	host := inventory.Host{Name: "support-1", WireguardIP: "10.88.0.3"}
+	listmonk, err := listmonkRoleVars(context.Background(), host, ServiceConfig{Image: "listmonk/listmonk:v6.1.0@sha256:" + strings.Repeat("a", 64)}, RoleBuildHelpers{})
+	if err != nil {
+		t.Fatalf("listmonkRoleVars: %v", err)
+	}
+	chatwoot, err := chatwootRoleVars(context.Background(), host, ServiceConfig{Image: "chatwoot/chatwoot:v4.13.0@sha256:" + strings.Repeat("b", 64)}, RoleBuildHelpers{})
+	if err != nil {
+		t.Fatalf("chatwootRoleVars: %v", err)
+	}
+	want := []string{"127.0.0.1", "10.88.0.3"}
+	if got := listmonk["listmonk_publish_addrs"]; !reflect.DeepEqual(got, want) {
+		t.Fatalf("listmonk_publish_addrs = %#v, want %#v", got, want)
+	}
+	if got := chatwoot["chatwoot_publish_addrs"]; !reflect.DeepEqual(got, want) {
+		t.Fatalf("chatwoot_publish_addrs = %#v, want %#v", got, want)
+	}
+	for role, port := range map[string]string{"listmonk": "{{ listmonk_port }}:9000", "chatwoot": "{{ chatwoot_port }}:3000"} {
+		tmpl := readRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/"+role+"/templates/compose.yml.j2")
+		if strings.Contains(tmpl, `- "`+port+`"`) {
+			t.Errorf("%s compose publishes %s on every interface", role, port)
+		}
+		if !strings.Contains(tmpl, "{% for addr in "+role+"_publish_addrs %}") || !strings.Contains(tmpl, `- "{{ addr }}:`+port+`"`) {
+			t.Errorf("%s compose does not publish per address:\n%s", role, tmpl)
+		}
+		defaults := readRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/"+role+"/defaults/main.yml")
+		if !strings.Contains(defaults, role+`_publish_addrs: ["127.0.0.1"]`) {
+			t.Errorf("%s defaults must publish on loopback when no addresses are given", role)
+		}
+		tasks := readRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/"+role+"/tasks/main.yml")
+		if !strings.Contains(tasks, "compose_stack_publish_addrs: \"{{ "+role+"_publish_addrs }}\"") {
+			t.Errorf("%s does not hand its publish addresses to compose_stack", role)
+		}
+	}
+	install := readRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/compose_stack/tasks/install.yml")
+	if !strings.Contains(install, "compose_stack_publish_addrs | default([]) | length > 0") {
+		t.Fatal("compose_stack does not enable non-local binds for explicit-content stacks publishing on given addresses")
+	}
+}
+
 // A docker-mode service publishes every port its binary listens on, bound as
 // the native render binds them, and mounts the directories of its internal-CA
 // trust bundle and leaf read-only, so its internal TLS listeners serve and
@@ -1136,21 +1243,23 @@ func TestServiceComposeVarsPublishesEveryListenerAndMountsInternalPKI(t *testing
 		{"network-observer", 18024, map[string]string{"NETWORK_OBSERVER_PORT": "18024"}, []string{
 			"127.0.0.1:18024:18024", "10.88.0.3:18024:18024", "127.0.0.1:18034:18034", "10.88.0.3:18034:18034",
 		}},
-		{"commodore", 18001, nil, []string{"18001:18001", "19001:19001"}},
-		{"quartermaster", 18002, nil, []string{"18002:18002", "19002:19002"}},
-		{"purser", 18003, nil, []string{"18003:18003", "19003:19003"}},
-		{"periscope-query", 18004, nil, []string{"18004:18004", "19004:19004"}},
-		{"signalman", 18009, nil, []string{"18009:18009", "19005:19005"}},
-		{"skipper", 18018, nil, []string{"18018:18018", "19007:19007"}},
-		{"deckhand", 18015, nil, []string{"18015:18015", "19006:19006"}},
-		{"navigator", 18010, map[string]string{"NAVIGATOR_PORT": "18010", "NAVIGATOR_GRPC_PORT": "18011"}, []string{"18010:18010", "18011:18011"}},
-		{"lookout", 18022, nil, []string{"18022:18022", "19008:19008"}},
-		{"bosun", 18013, nil, []string{"18013:18013", "19009:19009"}},
-		{"decklog", 18006, nil, []string{"18006:18006", "18026:18026"}},
+		{"commodore", 18001, nil, meshPublished(18001, 19001)},
+		{"quartermaster", 18002, nil, meshPublished(18002, 19002)},
+		{"purser", 18003, nil, meshPublished(18003, 19003)},
+		{"periscope-query", 18004, nil, meshPublished(18004, 19004)},
+		{"signalman", 18009, nil, meshPublished(18009, 19005)},
+		{"skipper", 18018, nil, meshPublished(18018, 19007)},
+		{"deckhand", 18015, nil, meshPublished(18015, 19006)},
+		{"navigator", 18010, map[string]string{"NAVIGATOR_PORT": "18010", "NAVIGATOR_GRPC_PORT": "18011"}, meshPublished(18010, 18011)},
+		{"lookout", 18022, nil, meshPublished(18022, 19008)},
+		{"bosun", 18013, nil, meshPublished(18013, 19009)},
+		{"decklog", 18006, nil, meshPublished(18006, 18026)},
+		// Only Foghorn's external gRPC listener, which edges outside the mesh
+		// dial, is published on every interface.
 		{"foghorn", 18008, map[string]string{
 			"FOGHORN_INTERNAL_GRPC_BIND_ADDR": ":18019", "FOGHORN_EXTERNAL_GRPC_BIND_ADDR": ":18029",
 			"FOGHORN_INTERNAL_HTTP_PORT": "18027", "FOGHORN_INTERNAL_HTTP_BIND_ADDR": "127.0.0.1",
-		}, []string{"18008:18008", "18019:18019", "18029:18029", "127.0.0.1:18027:18027"}},
+		}, append(meshPublished(18008, 18019), "18029:18029", "127.0.0.1:18027:18027")},
 	}
 	for _, tc := range cases {
 		t.Run(tc.service, func(t *testing.T) {

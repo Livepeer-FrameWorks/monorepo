@@ -25,6 +25,12 @@ argument_specs:
         type: int
         required: false
         default: 18092
+      chatwoot_publish_addrs:
+        type: list
+        elements: str
+        required: false
+        default: ["127.0.0.1"]
+        description: Host addresses the Chatwoot port is published on (loopback and the WireGuard address).
       chatwoot_env:
         type: dict
         required: false

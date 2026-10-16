@@ -24,6 +24,12 @@ argument_specs:
         type: int
         required: false
         default: 9001
+      listmonk_publish_addrs:
+        type: list
+        elements: str
+        required: false
+        default: ["127.0.0.1"]
+        description: Host addresses the Listmonk port is published on (loopback and the WireGuard address).
       listmonk_env:
         type: dict
         required: true

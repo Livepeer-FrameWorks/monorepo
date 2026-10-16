@@ -257,7 +257,8 @@
     mode: "0644"
   register: compose_stack_nonlocal_bind
   when:
-    - compose_stack_service.ports | default([]) | map(attribute='addrs', default=[]) | flatten | length > 0
+    - (compose_stack_service.ports | default([]) | map(attribute='addrs', default=[]) | flatten | length > 0)
+      or (compose_stack_publish_addrs | default([]) | length > 0)
     - not (compose_stack_render_only | default(false) | bool)
 
 - name: Apply the non-local bind sysctls # noqa: no-handler

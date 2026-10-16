@@ -144,6 +144,22 @@ func TestCompleteVodUpload_ValidationGuards(t *testing.T) {
 	if got := status.Code(err); got != codes.InvalidArgument {
 		t.Fatalf("missing parts: expected InvalidArgument, got %s", got)
 	}
+
+	// Staging v0.3.13-rc10: an empty ETag reached S3 completion and was
+	// logged and returned as Internal.
+	for name, parts := range map[string][]*sharedpb.VodCompletedPart{
+		"empty etag":     {{PartNumber: 1, Etag: ""}},
+		"zero part":      {{PartNumber: 0, Etag: "et-1"}},
+		"duplicate part": {{PartNumber: 1, Etag: "et-1"}, {PartNumber: 1, Etag: "et-2"}},
+	} {
+		_, err = srv.CompleteVodUpload(context.Background(), &sharedpb.CompleteVodUploadRequest{
+			UploadId: "up-1",
+			Parts:    parts,
+		})
+		if got := status.Code(err); got != codes.InvalidArgument {
+			t.Fatalf("%s: expected InvalidArgument, got %s (%v)", name, got, err)
+		}
+	}
 }
 
 // Invariant: when no S3 client is configured the RPC fails closed with

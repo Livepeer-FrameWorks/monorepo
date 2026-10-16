@@ -22,6 +22,10 @@
 #                                  role renders compose from the packaged
 #                                  templates/generic-compose.yml.j2
 #
+# compose_stack_publish_addrs lists the host addresses an explicit-content
+# stack publishes its ports on, so the role enables the non-local binds a
+# WireGuard address needs before the mesh is up.
+#
 # compose_stack_pki {ca_path, cert_path, key_path, ca_bundle_pem, cert_pem,
 # key_pem} is the internal-CA material a generic service reads from the
 # directories it mounts read-only; the role bootstraps it as the go_service
@@ -32,6 +36,7 @@ compose_stack_project_dir: "/opt/frameworks/{{ compose_stack_name }}"
 compose_stack_compose_content: ""
 compose_stack_files: {}
 compose_stack_service: {}
+compose_stack_publish_addrs: []
 compose_stack_pki: {}
 compose_stack_pki_group: frameworks
 compose_stack_state_dirs: []

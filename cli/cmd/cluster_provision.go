@@ -3625,6 +3625,7 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 						"zone_label":    pkgdns.TenantAliasZoneLabel,
 						"root_domain":   manifest.RootDomain,
 						"upstream_port": foghornPort,
+						"mesh_only":     provisioner.LocalUpstreamOnLoopbackAndMesh("foghorn", proxyServiceConfig(manifest, "foghorn").Mode),
 					}
 				}
 			}
@@ -4881,9 +4882,10 @@ func buildProxySitesForHost(manifest *inventory.Manifest, hostName, clusterID st
 			profileService = serviceType
 		}
 		backupUpstreams := proxySiteBackupUpstreams(manifest, profileService, svc, hostName, port)
-		// A docker-mode proxy cannot reach a mesh-only service through the Docker
-		// gateway; the role routes these sites to the host's WireGuard address.
-		meshOnly := provisioner.MeshOnlyHTTPService(profileService)
+		// A docker-mode proxy cannot reach a service that answers only on
+		// loopback and the WireGuard address through the Docker gateway; the
+		// role routes these sites to the host's WireGuard address.
+		meshOnly := provisioner.LocalUpstreamOnLoopbackAndMesh(profileService, svc.Mode)
 		appendLocalSite := func(site map[string]any) {
 			if meshOnly {
 				site["mesh_only"] = true

@@ -19,6 +19,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/vodupload"
 )
 
 // =============================================================================
@@ -155,6 +156,20 @@ func (r *Resolver) DoImportVodAsset(ctx context.Context, input model.ImportVodAs
 }
 
 // DoCompleteVodUpload finalizes a multipart upload after all parts are uploaded
+// completedPartsValidationError answers malformed upload parts as a caller
+// input error, or nil when the parts are well formed.
+func completedPartsValidationError(parts []vodupload.Part) *model.ValidationError {
+	err := vodupload.ValidateCompletedParts(parts)
+	if err == nil {
+		return nil
+	}
+	return &model.ValidationError{
+		Message: err.Error(),
+		Field:   strPtr("parts"),
+		Code:    strPtr("INVALID_ARGUMENT"),
+	}
+}
+
 func (r *Resolver) DoCompleteVodUpload(ctx context.Context, input model.CompleteVodUploadInput) (model.CompleteVodUploadResult, error) {
 	if err := middleware.RequirePermission(ctx, "streams:write"); err != nil {
 		return nil, err
@@ -170,7 +185,16 @@ func (r *Resolver) DoCompleteVodUpload(ctx context.Context, input model.Complete
 		return nil, middleware.ErrTenantContextRequired
 	}
 
-	// Convert parts from GraphQL to proto
+	// Malformed parts are caller input errors, answered here without a
+	// Commodore/Foghorn round trip that would fail inside S3 completion.
+	parts := make([]vodupload.Part, len(input.Parts))
+	for i, p := range input.Parts {
+		parts[i] = vodupload.Part{Number: int64(p.PartNumber), ETag: p.Etag}
+	}
+	if invalid := completedPartsValidationError(parts); invalid != nil {
+		return invalid, nil
+	}
+
 	protoParts := make([]*sharedpb.VodCompletedPart, len(input.Parts))
 	for i, p := range input.Parts {
 		protoParts[i] = &sharedpb.VodCompletedPart{

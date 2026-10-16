@@ -306,6 +306,8 @@ func handleCompleteVodUpload(ctx context.Context, args CompleteVodUploadInput, r
 	switch r := result.(type) {
 	case *model.NotFoundError:
 		return toolError(r.Message)
+	case *model.ValidationError:
+		return toolError(r.Message)
 	case *model.VodAsset:
 		var sizeBytes *int64
 		if r.SizeBytes != nil {

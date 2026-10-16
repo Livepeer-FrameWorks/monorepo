@@ -87,8 +87,7 @@ func (s *Server) serveViaBlockCache(c *gin.Context, kind, hash, ext, localPath s
 		}
 		if err != nil {
 			noteUpstreamFailure(err)
-			s.respondColdFetchError(c, "upstream size probe", err)
-			return "error"
+			return s.respondColdFetchError(c, "upstream size probe", err)
 		}
 		totalSize = probedSize
 	}
@@ -158,8 +157,7 @@ func (s *Server) serveViaBlockCache(c *gin.Context, kind, hash, ext, localPath s
 		if err != nil {
 			noteUpstreamFailure(err)
 			s.cache.Delete(kind, hash)
-			s.respondColdFetchError(c, "upstream block preflight", err)
-			return "error"
+			return s.respondColdFetchError(c, "upstream block preflight", err)
 		}
 	}
 	// Disk-touching block-store setup happens only for CacheToDisk and after
@@ -264,7 +262,10 @@ func (s *Server) serveViaBlockCache(c *gin.Context, kind, hash, ext, localPath s
 			noteUpstreamFailure(err)
 			c.Writer.Header().Del("Content-Length")
 			c.Writer.Header().Del("Content-Range")
-			s.respondColdFetchError(c, "block span serve", err)
+			return s.respondColdFetchError(c, "block span serve", err)
+		}
+		if readerGone(c) {
+			return statusClientGone
 		}
 		if s.logger != nil && !isClientGone(err) {
 			s.logger.WithError(err).WithField("block_idx", span.Idx).Debug("blockcache: span serve aborted")
@@ -850,9 +851,18 @@ func (s *Server) preflightFirstColdSpan(ctx context.Context, httpc *http.Client,
 }
 
 // respondColdFetchError answers a cold fetch that failed before any body byte
-// reached the client. op names the phase that failed; an upstreamPhaseError in
-// err names it more precisely and replaces it.
-func (s *Server) respondColdFetchError(c *gin.Context, op string, err error) {
+// reached the client and returns the relay_requests_total status for it. op
+// names the phase that failed; an upstreamPhaseError in err names it more
+// precisely and replaces it. A reader that already left gets no answer.
+func (s *Server) respondColdFetchError(c *gin.Context, op string, err error) string {
+	if readerGone(c) {
+		return statusClientGone
+	}
+	s.writeColdFetchError(c, op, err)
+	return "error"
+}
+
+func (s *Server) writeColdFetchError(c *gin.Context, op string, err error) {
 	var statusErr upstreamStatusError
 	if errors.As(err, &statusErr) {
 		switch statusErr.StatusCode {
@@ -886,6 +896,19 @@ func (s *Server) respondColdFetchError(c *gin.Context, op string, err error) {
 		op, err = phaseErr.op, phaseErr.err
 	}
 	s.serverError(c, op, err)
+}
+
+// statusClientGone is the relay_requests_total status of a request whose
+// reader left before the relay finished answering it.
+const statusClientGone = "client_gone"
+
+// readerGone reports whether the request's reader has left: Mist abandoning a
+// source read past its read timeout, or a viewer closing the connection,
+// cancels the request context. Every upstream wait in a request runs on that
+// context, so an error after it ends is the reader's departure, not a relay or
+// upstream failure.
+func readerGone(c *gin.Context) bool {
+	return c.Request.Context().Err() != nil
 }
 
 func isClientGone(err error) bool {

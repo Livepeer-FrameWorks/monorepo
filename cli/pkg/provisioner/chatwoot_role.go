@@ -8,7 +8,7 @@ import (
 	"frameworks/cli/pkg/inventory"
 )
 
-func chatwootRoleVars(_ context.Context, _ inventory.Host, config ServiceConfig, _ RoleBuildHelpers) (map[string]any, error) {
+func chatwootRoleVars(_ context.Context, host inventory.Host, config ServiceConfig, _ RoleBuildHelpers) (map[string]any, error) {
 	image, err := resolvePinnedImage("chatwoot", config)
 	if err != nil {
 		return nil, err
@@ -18,9 +18,10 @@ func chatwootRoleVars(_ context.Context, _ inventory.Host, config ServiceConfig,
 		port = 18092
 	}
 	return map[string]any{
-		"chatwoot_image": image,
-		"chatwoot_port":  port,
-		"chatwoot_env":   chatwootEnvMap(config),
+		"chatwoot_image":         image,
+		"chatwoot_port":          port,
+		"chatwoot_publish_addrs": composePublishAddrs(host),
+		"chatwoot_env":           chatwootEnvMap(config),
 	}, nil
 }
 

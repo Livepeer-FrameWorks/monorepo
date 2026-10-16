@@ -97,6 +97,48 @@ func TestDockerProxyReachesMeshOnlyServicesOnTheWireguardAddress(t *testing.T) {
 	}
 }
 
+// A Compose-deployed Foghorn publishes on loopback and the WireGuard address,
+// not on the Docker gateway, so docker-mode nginx's tenant-alias playback goes
+// to the WireGuard address; a host-native Foghorn keeps the gateway.
+func TestDockerNginxTenantAliasPlaybackReachesComposeFoghornOnWireguard(t *testing.T) {
+	render := func(meshOnly bool, host inventory.Host) (string, error) {
+		vars, err := reverseProxyComposeVars("nginx", 18090, host, ServiceConfig{
+			Mode: "docker", Image: "nginx:test", Port: 18090,
+			Metadata: map[string]any{"tenant_alias_playback": map[string]any{
+				"root_domain": "example.com", "upstream_port": 18008, "mesh_only": meshOnly,
+			}},
+		})
+		if err != nil {
+			return "", err
+		}
+		var conf string
+		for _, content := range decodedComposeFilesAny(t, vars) {
+			if text, ok := content.(string); ok {
+				conf += text
+			}
+		}
+		return conf, nil
+	}
+	host := inventory.Host{Name: "regional-1", WireguardIP: "10.88.0.1"}
+	conf, err := render(true, host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(conf, "host.docker.internal:18008") || !strings.Contains(conf, "10.88.0.1:18008") {
+		t.Fatalf("tenant-alias playback must reach a Compose Foghorn on the WireGuard address:\n%s", conf)
+	}
+	conf, err = render(false, host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(conf, "host.docker.internal:18008") {
+		t.Fatalf("tenant-alias playback to a native Foghorn keeps the Docker gateway:\n%s", conf)
+	}
+	if _, err := render(true, inventory.Host{Name: "regional-1"}); err == nil || !strings.Contains(err.Error(), "wireguard") {
+		t.Fatalf("err = %v; without a WireGuard address docker nginx cannot reach a Compose Foghorn and must refuse", err)
+	}
+}
+
 func TestRenderCaddyfileRestrictsMediaIngestAndOverwritesForwardingHeaders(t *testing.T) {
 	content := renderCaddyfile([]proxySite{{
 		Domains: []string{"livepeer.example.com"}, Upstream: "127.0.0.1:8935", Profile: "media_ingest",

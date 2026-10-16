@@ -118,7 +118,7 @@ func TestDoCompleteVodUploadNotFound(t *testing.T) {
 			return nil, status.Error(codes.NotFound, "gone")
 		},
 	})
-	res, err := r.DoCompleteVodUpload(clientstest.AuthedCtx("t1"), model.CompleteVodUploadInput{UploadID: "up9"})
+	res, err := r.DoCompleteVodUpload(clientstest.AuthedCtx("t1"), model.CompleteVodUploadInput{UploadID: "up9", Parts: validCompletedParts()})
 	if err != nil {
 		t.Fatalf("not-found should be a typed result: %v", err)
 	}
@@ -136,12 +136,50 @@ func TestDoCompleteVodUploadInvalidArgumentCarriesReason(t *testing.T) {
 			return nil, status.Error(codes.InvalidArgument, reason)
 		},
 	})
-	res, err := r.DoCompleteVodUpload(clientstest.AuthedCtx("t1"), model.CompleteVodUploadInput{UploadID: "up1"})
+	res, err := r.DoCompleteVodUpload(clientstest.AuthedCtx("t1"), model.CompleteVodUploadInput{UploadID: "up1", Parts: validCompletedParts()})
 	if err != nil {
 		t.Fatalf("a refused completion should be a typed result: %v", err)
 	}
 	if ve, ok := res.(*model.ValidationError); !ok || ve.Message != reason || ve.Code == nil || *ve.Code != "UPLOAD_REJECTED" {
 		t.Fatalf("expected ValidationError carrying the reason, got %T %+v", res, res)
+	}
+}
+
+func validCompletedParts() []*model.VodUploadCompletedPart {
+	return []*model.VodUploadCompletedPart{{PartNumber: 1, Etag: `"e1"`}}
+}
+
+// Staging v0.3.13-rc10: completeVodUpload with empty part ETags reached S3
+// completion and surfaced as INTERNAL_ERROR with error logs in three services.
+// Malformed parts are a typed validation result that never reaches Commodore.
+func TestDoCompleteVodUploadRejectsMalformedPartsAtBoundary(t *testing.T) {
+	cases := map[string][]*model.VodUploadCompletedPart{
+		"no parts":         nil,
+		"empty etag":       {{PartNumber: 1, Etag: ""}},
+		"zero part number": {{PartNumber: 0, Etag: `"e"`}},
+		"duplicate part":   {{PartNumber: 1, Etag: `"a"`}, {PartNumber: 1, Etag: `"b"`}},
+		"above S3 maximum": {{PartNumber: 10001, Etag: `"e"`}},
+	}
+	for name, parts := range cases {
+		t.Run(name, func(t *testing.T) {
+			commo := &clientstest.FakeCommodore{
+				CompleteVodUploadFn: func(context.Context, *sharedpb.CompleteVodUploadRequest) (*sharedpb.CompleteVodUploadResponse, error) {
+					return nil, status.Error(codes.Internal, "failed to complete upload")
+				},
+			}
+			r := commoR(commo)
+			res, err := r.DoCompleteVodUpload(clientstest.AuthedCtx("t1"), model.CompleteVodUploadInput{UploadID: "up1", Parts: parts})
+			if err != nil {
+				t.Fatalf("malformed parts must be a typed result, got error: %v", err)
+			}
+			ve, ok := res.(*model.ValidationError)
+			if !ok || ve.Field == nil || *ve.Field != "parts" || ve.Code == nil || *ve.Code != "INVALID_ARGUMENT" {
+				t.Fatalf("expected parts ValidationError, got %T %+v", res, res)
+			}
+			if commo.Calls != 0 {
+				t.Fatalf("malformed parts reached Commodore (%d calls)", commo.Calls)
+			}
+		})
 	}
 }
 

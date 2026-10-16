@@ -1,6 +1,10 @@
 ---
 listmonk_image: "listmonk/listmonk:v6.1.0@sha256:179d00d9553c371b6fe88c9b145095d651e275bdd66db46b2e0b79daff316b6f"
 listmonk_port: 9001
+# Host addresses the port is published on: the local proxy reaches it on
+# loopback, mesh callers on the host's WireGuard address. Never empty: Docker
+# would publish on every interface, past the proxy.
+listmonk_publish_addrs: ["127.0.0.1"]
 listmonk_project_dir: /opt/frameworks/listmonk
 listmonk_wait_timeout: 300
 listmonk_env: {}

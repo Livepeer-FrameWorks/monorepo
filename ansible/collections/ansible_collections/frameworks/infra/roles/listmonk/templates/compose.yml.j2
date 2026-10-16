@@ -10,7 +10,9 @@ services:
         max-file: "5"
     entrypoint: ["sh", "-c", "./listmonk --install --idempotent --yes && ./listmonk --upgrade --yes && ./listmonk"]
     ports:
-      - "{{ listmonk_port }}:9000"
+{% for addr in listmonk_publish_addrs %}
+      - "{{ addr }}:{{ listmonk_port }}:9000"
+{% endfor %}
     env_file:
       - .env
     extra_hosts:

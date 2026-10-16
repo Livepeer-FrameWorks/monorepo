@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -735,6 +736,10 @@ func meshOnlyHTTPAddrs(serviceName string, host inventory.Host) []string {
 	if !MeshOnlyHTTPService(serviceName) {
 		return nil
 	}
+	return loopbackAndMeshAddrs(host)
+}
+
+func loopbackAndMeshAddrs(host inventory.Host) []string {
 	addrs := []string{"127.0.0.1"}
 	if ip := strings.TrimSpace(host.WireguardIP); ip != "" {
 		addrs = append(addrs, ip)
@@ -742,17 +747,39 @@ func meshOnlyHTTPAddrs(serviceName string, host inventory.Host) []string {
 	return addrs
 }
 
-// composePublishAddrs is meshOnlyHTTPAddrs in Compose ports syntax, which
-// needs IPv6 addresses bracketed. Empty publishes on every interface.
-func composePublishAddrs(serviceName string, host inventory.Host) []string {
-	out := []string{}
-	for _, addr := range meshOnlyHTTPAddrs(serviceName, host) {
+// composePublishAddrs is where a Compose-deployed service publishes its
+// listeners: loopback and the host's WireGuard address, in Compose ports
+// syntax, which needs IPv6 addresses bracketed. Docker publishes a port on
+// every interface unless it is given addresses, and its forwarding rules sit
+// ahead of the host firewall, so a port published without one answers on the
+// LAN and public interfaces and bypasses the reverse proxy's TLS and
+// client-IP headers. Every caller of these listeners is on loopback (the
+// host's native proxy, vmagent, the rollout gate) or the mesh (a docker-mode
+// proxy, the peers' proxy backups, gRPC clients at <service>.internal,
+// Quartermaster's health probes).
+func composePublishAddrs(host inventory.Host) []string {
+	addrs := loopbackAndMeshAddrs(host)
+	for i, addr := range addrs {
 		if ip := net.ParseIP(addr); ip != nil && ip.To4() == nil {
-			addr = "[" + addr + "]"
+			addrs[i] = "[" + addr + "]"
 		}
-		out = append(out, addr)
 	}
-	return out
+	return addrs
+}
+
+// composeOnlyServices are deployed only as Compose stacks, by their own roles.
+var composeOnlyServices = []string{"listmonk", "chatwoot"}
+
+// LocalUpstreamOnLoopbackAndMesh reports whether serviceName, deployed in
+// mode, answers a proxy on its own host only on loopback and the host's
+// WireGuard address: a mesh-only service in either mode, and every service
+// deployed as a Compose stack (composePublishAddrs). A docker-mode proxy
+// cannot reach such an upstream through the Docker gateway.
+func LocalUpstreamOnLoopbackAndMesh(serviceName, mode string) bool {
+	if MeshOnlyHTTPService(serviceName) || slices.Contains(composeOnlyServices, serviceName) {
+		return true
+	}
+	return isGenericServiceRole(serviceName) && (mode == "" || mode == "docker")
 }
 
 func buildServiceEnvMap(config ServiceConfig) map[string]string {

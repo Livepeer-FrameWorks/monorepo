@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/api_sidecar/internal/control"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"github.com/sirupsen/logrus"
@@ -57,6 +58,51 @@ func TestProcessingSourceProbeFailsJobOnHTTPError(t *testing.T) {
 	}
 	if time.Since(start) > time.Second {
 		t.Fatalf("readiness took %s to report the source failure", time.Since(start))
+	}
+}
+
+// Staging v0.3.13-rc10: STREAM_SOURCE probed a slow-404 import source before
+// answering, past Mist's 5 s trigger timeout ("Post to .../stream_source timed
+// out after 5014 ms", three boots). The trigger answers with the resolved
+// source at once, and the source's later 404 still fails the job promptly.
+func TestStreamSourceAnswersBeforeSlowSourceProbe(t *testing.T) {
+	setupTriggerTest(t, "tenant-probe")
+	const sourceDelay = 1500 * time.Millisecond
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-time.After(sourceDelay):
+			http.NotFound(w, r)
+		case <-r.Context().Done():
+		}
+	}))
+	defer source.Close()
+	const stream = "processing+probeslow404"
+	claimProbeJob(t, stream)
+	sourceURL := source.URL + "/import.mp4"
+	stubSendMistTrigger(t, func(*ipcpb.MistTrigger) (*control.MistTriggerResult, error) {
+		return &control.MistTriggerResult{Response: sourceURL}, nil
+	})
+
+	started := time.Now()
+	ctx, rec := newWebhookContext(stream)
+	HandleStreamSource(ctx)
+	if answered := time.Since(started); answered > sourceDelay/3 {
+		t.Fatalf("STREAM_SOURCE answered after %s; it waited on the source", answered)
+	}
+	assertOK(t, rec, sourceURL)
+
+	// The readiness wait reads this listener before anything else on each pass.
+	for {
+		if failure, ok := takeProcessingSourceFailure(stream); ok {
+			if !strings.Contains(failure, "source unavailable: 404") {
+				t.Fatalf("job failure = %q, want the source's 404", failure)
+			}
+			return
+		}
+		if elapsed := time.Since(started); elapsed > sourceDelay+time.Second {
+			t.Fatalf("no source failure for the job after %s", elapsed)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
 

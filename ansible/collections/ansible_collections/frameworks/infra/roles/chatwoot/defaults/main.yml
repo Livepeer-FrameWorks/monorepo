@@ -1,6 +1,10 @@
 ---
 chatwoot_image: "chatwoot/chatwoot:v4.13.0@sha256:4c96ec530e5f5dc81428357fd1c5b31a2b30f9e0ce84c5a59befb39031a7dace"
 chatwoot_port: 18092
+# Host addresses the port is published on: the local proxy reaches it on
+# loopback, mesh callers on the host's WireGuard address. Never empty: Docker
+# would publish on every interface, past the proxy.
+chatwoot_publish_addrs: ["127.0.0.1"]
 chatwoot_project_dir: /opt/frameworks/chatwoot
 chatwoot_secret_key_path: /etc/frameworks/.chatwoot_secret_key
 chatwoot_wait_timeout: 600
