@@ -85,8 +85,9 @@ ENV DEPLOY_MODE=container \
 # local endpoints (/node/mode) and is container-internal by contract.
 # Remote consumers of the artifact relay (peer helmsman pulls) come in
 # through Caddy's @artifact_relay route on 443, never 18007 directly —
-# advertising it would make `docker run -P` publish it.
-EXPOSE 80 443 1935 4200 5554 8080 8889/udp 18203/udp
+# advertising it would make `docker run -P` publish it. MistServer's HTTP
+# (8080) and controller (4242) listen on loopback behind Caddy.
+EXPOSE 80 443 1935 4200 5554 8889/udp 18203/udp
 
 VOLUME ["/opt/frameworks", "/etc/frameworks", "/etc/caddy", "/var/lib/caddy", "/data/storage", "/data/state"]
 

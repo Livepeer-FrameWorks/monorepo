@@ -88,7 +88,10 @@ Firewall policy should follow the manifest and service registry:
 - Backend nodes expose SSH/bootstrap access and the manifest's WireGuard listen
   port to other backend nodes.
 - Internal service ports stay private to the mesh or private network.
-- Edge nodes do not join the backend mesh.
+- Edge nodes do not join the backend mesh. An edge's public listeners are
+  Caddy's 80/443 and MistServer's RTMP (1935), RTSP (5554), DTSC (4200), SRT
+  (8889/udp) and WebRTC (18203/udp); MistServer's HTTP (8080) and API (4242),
+  Helmsman and vmagent listen on loopback.
 
 Run `frameworks cluster preflight` before provisioning and
 `frameworks edge preflight` for BYO edge hosts. For exact ports, use

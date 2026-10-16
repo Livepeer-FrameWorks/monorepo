@@ -1632,23 +1632,18 @@ func CalculateGeoDistance(lat1, lon1, lat2, lon2 float64) float64 {
 	return 6371.0 * angle
 }
 
-// DeriveMistHTTPBase converts a base URL to MistServer HTTP base
+// DeriveMistHTTPBase returns the base URL another node reads a node's
+// MistServer HTTP outputs at: the node's advertised public playback base
+// (EDGE_PUBLIC_URL, https://<edge domain>/view), which the edge's Caddy
+// routes to Mist over TLS. Mist's own HTTP listener is loopback-only. Returns
+// "" when base is not an absolute http(s) URL.
 func DeriveMistHTTPBase(base string) string {
-	u, err := url.Parse(base)
-	if err != nil || u.Host == "" {
-		host := strings.TrimPrefix(base, "http://")
-		host = strings.TrimPrefix(host, "https://")
-		parts := strings.Split(host, ":")
-		hostname := parts[0]
-		port := "8080"
-		return "http://" + hostname + ":" + port
+	u, err := url.Parse(strings.TrimSpace(base))
+	if err != nil || u.Host == "" || u.User != nil || (u.Scheme != "http" && u.Scheme != "https") {
+		return ""
 	}
-	hostname := u.Hostname()
-	port := u.Port()
-	if port == "" || port == "4242" {
-		port = "8080"
-	}
-	return u.Scheme + "://" + hostname + ":" + port
+	u.RawQuery, u.ForceQuery, u.Fragment, u.RawFragment = "", false, "", ""
+	return strings.TrimRight(u.String(), "/")
 }
 
 func isAuthorizedPeerCluster(clusterID string, peers []*clusterpeerpb.TenantClusterPeer) bool {

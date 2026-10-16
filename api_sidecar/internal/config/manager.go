@@ -1801,8 +1801,16 @@ func (m *Manager) ensureProtocols(current map[string]any) error {
 	return nil
 }
 
+// mistHTTPInterface is the address Mist's HTTP connector listens on.
+const mistHTTPInterface = "127.0.0.1"
+
 func managedProtocolDefinitions(httpPubURL, webrtcPubHost string) []map[string]any {
-	http := map[string]any{"connector": "HTTP", "default_track_sorting": "id_lth"}
+	// The HTTP connector serves only the bundle's Caddy and Helmsman, both on
+	// loopback; off-host HTTP reads go through Caddy's TLS (the /view route).
+	// RTMP, RTSP, DTSC, SRT and WebRTC stay on every interface: viewers,
+	// publishers and peer edges outside the mesh dial them directly, and Mist
+	// admits each connection through USER_NEW or PUSH_REWRITE.
+	http := map[string]any{"connector": "HTTP", "default_track_sorting": "id_lth", "interface": mistHTTPInterface}
 	if httpPubURL != "" {
 		// Mist's metrics reporter consumes a scalar public address; an array
 		// is serialized into its URL despite working for HTTP playback.

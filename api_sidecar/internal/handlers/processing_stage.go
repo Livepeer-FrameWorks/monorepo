@@ -90,7 +90,10 @@ func (h *ProcessingJobHandler) buildLocalProcessingSourceURL(req *ipcpb.Processi
 
 	base := deriveProcessingMistHTTPBase(h.mistServerURL)
 	if sourceBase := strings.TrimSpace(params["source_base_url"]); sourceBase != "" {
-		base = deriveProcessingMistHTTPBase(sourceBase)
+		// Another node's Mist: Foghorn sends that node's public playback base,
+		// whose proxy routes to Mist. It is used as given; Mist's own HTTP
+		// port listens only on that node's loopback.
+		base = strings.TrimRight(sourceBase, "/")
 	}
 	u, err := url.Parse(strings.TrimRight(base, "/"))
 	if err != nil || u.Host == "" {

@@ -525,25 +525,30 @@ func TestDeriveMistHTTPBase(t *testing.T) {
 		expected string
 	}{
 		{
-			name:     "default_port_from_4242",
-			input:    "https://example.com:4242",
-			expected: "https://example.com:8080",
+			// Production edges advertise https://<edge domain>/view; Caddy
+			// serves it on 443 and routes /view to Mist's loopback listener.
+			name:     "edge_public_url_keeps_tls_origin_and_view_path",
+			input:    "https://edge-a.media.example.com/view",
+			expected: "https://edge-a.media.example.com/view",
+		},
+		{
+			name:     "trailing_slash_trimmed",
+			input:    "https://edge-a.media.example.com/view/",
+			expected: "https://edge-a.media.example.com/view",
 		},
 		{
 			name:     "preserve_custom_port",
-			input:    "http://example.com:3000",
-			expected: "http://example.com:3000",
+			input:    "http://edge:8082",
+			expected: "http://edge:8082",
 		},
 		{
-			name:     "no_scheme",
-			input:    "example.com",
-			expected: "http://example.com:8080",
+			name:     "query_dropped",
+			input:    "https://edge.example.com/view?x=1#f",
+			expected: "https://edge.example.com/view",
 		},
-		{
-			name:     "no_scheme_with_port",
-			input:    "example.com:9090",
-			expected: "http://example.com:8080",
-		},
+		{name: "no_scheme", input: "example.com", expected: ""},
+		{name: "non_http_scheme", input: "dtsc://edge.example.com:4200", expected: ""},
+		{name: "userinfo", input: "https://u:p@edge.example.com/view", expected: ""},
 	}
 
 	for _, test := range tests {

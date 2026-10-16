@@ -215,11 +215,9 @@ endpoint must never take placement for a stream that may never start;
 
 ### Local WHIP endpoint (FrameWorks dev stack)
 
-If you’re using the monorepo dev stack, the dev compose stack runs MistServer with HTTP exposed on `http://localhost:8080`.
+If you’re using the monorepo dev stack, MistServer's HTTP listens on the edge container's loopback and the dev nginx serves it on `http://localhost:18090`.
 
-The shared playground (see `npm_player/playground/src/lib`) assumes MistServer WHIP ingest URLs of the form:
-
-- `http://localhost:8080/webrtc/<streamName>` (default stream name is `live`)
+The shared playground (see `npm_player/playground/src/lib`) builds MistServer WHIP ingest URLs of the form `<base>/webrtc/<streamName>` (default stream name is `live`). Its default base, `http://localhost:8080`, is a standalone local MistServer; against the dev stack set it to `http://localhost:18090`.
 
 ### Playground
 

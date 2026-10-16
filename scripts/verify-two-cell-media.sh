@@ -4,7 +4,7 @@
 # Cell A: the ordinary dev cell (control cell central-primary, media cluster demo-media,
 # edge-node-1 on the edge bundle, Mist on localhost:18090). Cell B: a second platform cell
 # (us-primary) whose Foghorn (foghorn-b) serves the tenant's virtual private cluster
-# demo-selfhosted (edge-node-b on edge-b, Mist on localhost:8081). Every Foghorn is platform-run; the two cells
+# demo-selfhosted (edge-node-b on edge-b, Mist behind edge-b:8082). Every Foghorn is platform-run; the two cells
 # federate. One Commodore and one Quartermaster serve both. The script resolves RTMP through
 # both cells under an ingest policy, publishes to the exact node they agree on, resolves
 # viewers through both cells onto the private edge and asserts real media there,
@@ -48,8 +48,7 @@ EDGE_B_HOST=edge-b:8082
 PUBLISHER=fw-two-cell-publisher
 # Cell A's Mist host ports move off the defaults so the proof coexists with a Mist
 # running natively on this host; nothing in the proof depends on those host ports.
-export MIST_CONTROLLER_HOST_PORT=${MIST_CONTROLLER_HOST_PORT:-14242} MIST_HTTP_HOST_PORT=${MIST_HTTP_HOST_PORT:-18081} \
-  MIST_RTMP_HOST_PORT=${MIST_RTMP_HOST_PORT:-11935} MIST_RTSP_HOST_PORT=${MIST_RTSP_HOST_PORT:-15554} \
+export MIST_RTMP_HOST_PORT=${MIST_RTMP_HOST_PORT:-11935} MIST_RTSP_HOST_PORT=${MIST_RTSP_HOST_PORT:-15554} \
   MIST_DTSC_HOST_PORT=${MIST_DTSC_HOST_PORT:-14200} MIST_SRT_HOST_PORT=${MIST_SRT_HOST_PORT:-18889} \
   MIST_WEBRTC_HOST_PORT=${MIST_WEBRTC_HOST_PORT:-28203}
 # Both edges enroll with bootstrap tokens: edge-node-1 with the demo token (the .env

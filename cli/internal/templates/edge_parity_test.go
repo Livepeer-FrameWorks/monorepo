@@ -178,6 +178,19 @@ func TestEdgeTemplateParity(t *testing.T) {
 	if strings.Contains(darwinCompose, "network_mode: host\n    shm_size") {
 		t.Error("darwin edge service must not use host networking")
 	}
+	// MistServer's HTTP and controller listen on the container's loopback
+	// behind Caddy; publishing them would only forward to a closed port, and
+	// a Mist bound wider would answer plain HTTP past Caddy's TLS.
+	for _, surface := range []struct{ name, content string }{
+		{"go darwin compose", darwinCompose},
+		{"jinja compose", jinjaCompose},
+	} {
+		for _, port := range []string{`"8080:8080"`, `"4242:4242"`} {
+			if strings.Contains(surface.content, port) {
+				t.Errorf("%s publishes %s", surface.name, port)
+			}
+		}
+	}
 }
 
 // TestEdgeVMAgentExternalLabelsParity pins the region/cluster external labels

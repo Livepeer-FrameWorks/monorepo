@@ -2062,8 +2062,8 @@ func TestEnsureMonitor_CreatesNew(t *testing.T) {
 	if created.Description != "nav-edge-egress-health" {
 		t.Fatalf("expected description nav-edge-health, got %s", created.Description)
 	}
-	if created.Port != 18008 {
-		t.Fatalf("expected port 18008, got %d", created.Port)
+	if created.Type != "https" || created.Port != 443 {
+		t.Fatalf("expected https on port 443, got %s :%d", created.Type, created.Port)
 	}
 	if created.Path != "/health" {
 		t.Fatalf("expected path /health, got %s", created.Path)
@@ -2634,7 +2634,7 @@ func TestSyncServiceByCluster_EdgeEgressDoesNotCreateNodeRecords(t *testing.T) {
 		lbTTL:         60,
 		staleAge:      5 * time.Minute,
 		monitorConfig: MonitorConfig{Interval: 60, Timeout: 5, Retries: 2},
-		servicePorts:  map[string]int{"edge-egress": 18008},
+		servicePorts:  map[string]int{"edge-egress": 443},
 	}
 
 	partialErrors, err := m.SyncServiceByCluster(context.Background(), "edge-egress")
@@ -2690,7 +2690,7 @@ func TestSyncServiceByCluster_EdgeEgressSkipsEdgePrefixedNodeIDs(t *testing.T) {
 		lbTTL:         60,
 		staleAge:      5 * time.Minute,
 		monitorConfig: MonitorConfig{Interval: 60, Timeout: 5, Retries: 2},
-		servicePorts:  map[string]int{"edge-egress": 18008},
+		servicePorts:  map[string]int{"edge-egress": 443},
 	}
 
 	partialErrors, err := m.SyncServiceByCluster(context.Background(), "edge-egress")
@@ -2848,11 +2848,11 @@ func TestSyncServiceByCluster_UsesClusterScopedPoolNames(t *testing.T) {
 	}
 }
 
-func TestDefaultServicePorts_EdgeServicesUse18008(t *testing.T) {
+func TestDefaultServicePorts_EdgeServicesProbeCaddyTLS(t *testing.T) {
 	ports := defaultServicePorts()
 	for _, svc := range []string{"edge", "edge-egress", "edge-ingest", "edge-storage", "edge-processing"} {
-		if ports[svc] != 18008 {
-			t.Errorf("port[%q] = %d, want 18008", svc, ports[svc])
+		if ports[svc] != 443 {
+			t.Errorf("port[%q] = %d, want 443", svc, ports[svc])
 		}
 	}
 }

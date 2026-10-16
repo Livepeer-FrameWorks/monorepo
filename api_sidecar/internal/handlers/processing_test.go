@@ -1296,6 +1296,26 @@ func TestBuildLocalProcessingSourceURL_DefaultsToMKV(t *testing.T) {
 	}
 }
 
+// A remote source node's Mist HTTP listens only on that node's loopback; the
+// read goes to the node's public playback base, whose Caddy serves TLS on 443
+// and routes /view to Mist.
+func TestBuildLocalProcessingSourceURL_RemoteSourceReadsThroughThePublicBase(t *testing.T) {
+	h := &ProcessingJobHandler{mistServerURL: "http://localhost:4242"}
+	req := &ipcpb.ProcessingJobRequest{Params: map[string]string{
+		"source_kind":        "live",
+		"source_stream_name": "live+stream-1",
+		"source_start_unix":  "100",
+		"source_stop_unix":   "130",
+		"source_base_url":    "https://edge-a.media.example.com/view",
+	}}
+
+	got := h.buildLocalProcessingSourceURL(req)
+
+	if !strings.HasPrefix(got, "https://edge-a.media.example.com/view/live+stream-1.mkv?") {
+		t.Fatalf("source URL = %q, want the source node's public /view base over TLS", got)
+	}
+}
+
 func TestBuildLocalProcessingSourceURL_CarriesProcessingSourceCredential(t *testing.T) {
 	h := &ProcessingJobHandler{mistServerURL: "http://mistserver:4242/api2"}
 	req := &ipcpb.ProcessingJobRequest{Params: map[string]string{

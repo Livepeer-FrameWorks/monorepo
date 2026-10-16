@@ -193,6 +193,12 @@ func TestRenderCaddyfile_EdgeHealthRouteIsHostMatched(t *testing.T) {
 	if strings.Contains(out, "handle /health") || strings.Contains(out, "handle_path /health") {
 		t.Fatalf("/health must be host-matched through @edge_health; got:\n%s", out)
 	}
+	// Navigator's Cloudflare monitor dials the origin IP over TLS; without
+	// SNI Caddy would have no certificate to offer and fail the handshake.
+	global := out[:strings.Index(out, "(common_handlers)")]
+	if !strings.Contains(global, "default_sni edge-us-1.media-us-1.frameworks.network") {
+		t.Fatalf("expected default_sni for the edge domain in the global options; got:\n%s", global)
+	}
 }
 
 func TestRenderCaddyfile_EdgeHealthAbsentWhenEdgeDomainEmpty(t *testing.T) {
@@ -203,7 +209,7 @@ func TestRenderCaddyfile_EdgeHealthAbsentWhenEdgeDomainEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RenderCaddyfile: %v", err)
 	}
-	if strings.Contains(out, "edge_health") || strings.Contains(out, "path /health") {
+	if strings.Contains(out, "edge_health") || strings.Contains(out, "path /health") || strings.Contains(out, "default_sni") {
 		t.Fatalf("did not expect edge health route without EdgeDomain; got:\n%s", out)
 	}
 }

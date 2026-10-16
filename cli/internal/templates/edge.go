@@ -151,7 +151,6 @@ func edgeNetworkBlock(edgeOS string) string {
       - "1935:1935"
       - "4200:4200"
       - "5554:5554"
-      - "8080:8080"
       - "8889:8889/udp"
       - "18203:18203/udp"
     sysctls:

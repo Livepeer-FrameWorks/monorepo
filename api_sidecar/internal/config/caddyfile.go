@@ -41,6 +41,12 @@ const caddyfileTmpl = `{
 	admin {{.CaddyAdminAddr}}
 	# The internal CA's root stays out of the host's system trust store.
 	skip_install_trust
+{{- if .EdgeDomain}}
+	# A TLS client that sends no SNI (a load-balancer health monitor dialing
+	# the origin IP) gets the node's own certificate; its Host header then
+	# selects the @edge_health route.
+	default_sni {{.EdgeDomain}}
+{{- end}}
 {{- if .AcmeEmail}}
 	email {{.AcmeEmail}}
 {{- end}}

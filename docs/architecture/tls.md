@@ -86,7 +86,35 @@ client-IP headers, and the platform does not rely on a host firewall to close it
 public listeners are the reverse proxy's 80 and 443, Foghorn's external gRPC listener,
 which edges outside the mesh dial, the WireGuard UDP port, SSH, and an edge's media
 ports (RTMP, SRT, WebRTC, RTSP and DTSC; edges do not join the mesh). An edge's
-MistController API, Helmsman and vmagent listen on loopback.
+MistController API, MistServer HTTP, Helmsman and vmagent listen on loopback.
+
+Edge listeners, with every off-host caller:
+
+| Listener                      | Bind            | Callers                                                                                                                                                                                                                                                                                                            |
+| ----------------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Caddy 80 / 443 (TCP and QUIC) | every interface | Viewers and players (HLS, DASH, WHEP/WHIP signalling, progressive, WebSocket outputs under `/view`); peer Helmsmans' artifact relay reads and another node's clip source reads (`/view`, Foghorn's `source_base_url`); Foghorn's activation probe; Cloudflare's edge-pool monitor (`https://<edge domain>/health`) |
+| MistServer RTMP 1935          | every interface | Publishers (RTMP ingest), RTMP viewers                                                                                                                                                                                                                                                                             |
+| MistServer RTSP 5554          | every interface | RTSP viewers                                                                                                                                                                                                                                                                                                       |
+| MistServer DTSC 4200          | every interface | Peer edges' Mist pulling a stream (`dtsc://<edge host>:4200`, from Foghorn's `STREAM_SOURCE` answer, same cell and cross-cell over the internet), DTSC viewers                                                                                                                                                     |
+| MistServer SRT 8889/udp       | every interface | Publishers (SRT ingest), SRT viewers                                                                                                                                                                                                                                                                               |
+| MistServer WebRTC 18203/udp   | every interface | WebRTC media for viewers and WHIP publishers (signalling goes through Caddy)                                                                                                                                                                                                                                       |
+| MistServer HTTP 8080          | loopback        | Caddy, Helmsman (`MISTSERVER_HTTP_URL`), `frameworks edge diagnose`                                                                                                                                                                                                                                                |
+| MistController API 4242       | loopback        | Helmsman, the edge vmagent, the CLI over SSH                                                                                                                                                                                                                                                                       |
+| Helmsman 18007 / 18017        | loopback        | Caddy (`/webhooks`, `/_mist`, `/health`, `/internal/artifact`) and Mist triggers on 18007; the local management API on 18017                                                                                                                                                                                       |
+
+The media listeners stay public because their callers have no other path: edges are not on
+the mesh, so a peer edge in another cell pulls DTSC from the source edge's public address,
+and media clients speak the protocol directly. Each connection is authorized by MistServer
+triggers that Helmsman answers through Foghorn and that fail closed when Foghorn is
+unreachable (`onfail: deny`): `USER_NEW` admits every viewer connection on every output,
+DTSC included (a peer's accepted origin pull is admitted as that pull, everything else as a
+viewer under the stream's playback policy), and `PUSH_REWRITE` admits an incoming push only
+with a valid stream key over an ingest protocol (RTMP, SRT, WHIP). The HTTP
+connector binds loopback because every HTTP caller goes through Caddy's TLS; a plain-HTTP
+listener on the public interface would bypass it. Helmsman sets the HTTP connector's
+`interface` when it reconciles Mist's protocols, on native and container edges alike, so an
+existing edge moves to loopback on its next config reconcile; a container edge on Docker
+Desktop publishes only the public set.
 
 | Listener                                                                  | Bind                                                                                                                                      | Set by                                                                                     |
 | ------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |

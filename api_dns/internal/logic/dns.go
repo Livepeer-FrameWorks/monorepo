@@ -110,6 +110,10 @@ type desiredPool struct {
 	Nodes       []dnsNode
 	Latitude    *float64
 	Longitude   *float64
+	// EdgeRootDomain is the cluster domain ({cluster_slug}.{root}) of an edge
+	// pool. Each origin then carries its node's edge domain as Host, which
+	// is the name the edge's Caddy serves /health and its certificate for.
+	EdgeRootDomain string
 }
 
 const (
@@ -208,11 +212,17 @@ func isGranularEdgeService(serviceType string) bool {
 // WireGuard address, so its monitor probes the ingress (ensureMonitor).
 var edgeMonitorServiceTypes = []string{"edge", "edge-egress", "edge-ingest", "edge-storage", "edge-processing"}
 
+// edgeMonitorPort is the port an edge pool's monitor probes: the edge's Caddy,
+// which answers /health over TLS for the node's own edge domain (the origin's
+// Host header, originsForNodes). Helmsman and Mist's HTTP listen on the edge's
+// loopback, and Caddy's :80 only redirects to HTTPS.
+const edgeMonitorPort = 443
+
 // defaultServicePorts returns the health check port for each edge service type.
 func defaultServicePorts() map[string]int {
 	ports := make(map[string]int, len(edgeMonitorServiceTypes))
 	for _, e := range edgeMonitorServiceTypes {
-		ports[e] = 18008
+		ports[e] = edgeMonitorPort
 	}
 	return ports
 }
@@ -503,7 +513,7 @@ func (m *DNSManager) syncOneCluster(
 	if useBunny {
 		svcPartial, syncErr = m.syncBunnyClusterService(ctx, svcFQDN, serviceType, rootDomain, nodes, decisionFields)
 	} else {
-		svcPartial, syncErr = m.syncClusterService(ctx, svcFQDN, serviceType, nodes)
+		svcPartial, syncErr = m.syncClusterService(ctx, svcFQDN, serviceType, rootDomain, nodes)
 	}
 	if syncErr != nil {
 		partialErrors[svcFQDN] = syncErr.Error()
@@ -1153,7 +1163,7 @@ func (m *DNSManager) clusterServiceFQDN(serviceType, rootDomain string) string {
 }
 
 // syncClusterService applies DNS for a cluster-scoped service using pre-fetched IPs.
-func (m *DNSManager) syncClusterService(ctx context.Context, fqdn, serviceType string, nodes []dnsNode) (map[string]string, error) {
+func (m *DNSManager) syncClusterService(ctx context.Context, fqdn, serviceType, rootDomain string, nodes []dnsNode) (map[string]string, error) {
 	if len(nodes) == 1 {
 		if err := m.applySingleNodeConfig(ctx, fqdn, nodes[0].ExternalIP, m.shouldProxy(serviceType)); err != nil {
 			return nil, err
@@ -1165,6 +1175,9 @@ func (m *DNSManager) syncClusterService(ctx context.Context, fqdn, serviceType s
 		Name:        poolName,
 		ServiceType: serviceType,
 		Nodes:       nodes,
+	}
+	if slices.Contains(edgeMonitorServiceTypes, serviceType) {
+		pool.EdgeRootDomain = rootDomain
 	}
 	pool.Latitude, pool.Longitude = centroid(nodes)
 	return m.applyLoadBalancerPools(ctx, fqdn, serviceType, []desiredPool{pool}, m.shouldProxy(serviceType), "")
@@ -1430,15 +1443,21 @@ func originName(node dnsNode) string {
 	return strings.NewReplacer(".", "-", ":", "-").Replace(node.ExternalIP)
 }
 
-func originsForNodes(nodes []dnsNode) []cloudflare.Origin {
+func originsForNodes(nodes []dnsNode, edgeRootDomain string) []cloudflare.Origin {
 	origins := make([]cloudflare.Origin, 0, len(nodes))
 	for _, node := range nodes {
-		origins = append(origins, cloudflare.Origin{
+		origin := cloudflare.Origin{
 			Name:    originName(node),
 			Address: node.ExternalIP,
 			Enabled: true,
 			Weight:  1.0,
-		})
+		}
+		if edgeRootDomain != "" && node.NodeID != "" {
+			// The monitor's HTTPS request uses the origin's Host header for
+			// SNI and Host; the edge answers /health only for its own domain.
+			origin.Header = &cloudflare.Header{Host: []string{edgeNodeRecordName(node.NodeID, edgeRootDomain)}}
+		}
+		origins = append(origins, origin)
 	}
 	return origins
 }
@@ -1753,10 +1772,11 @@ func (m *DNSManager) ensureMonitor(serviceType string) (string, error) {
 	if path == "" {
 		path = "/health"
 	}
-	monitorType := "http"
+	monitorType := "https"
 	expectedCodes := "200"
 	followRedirects := false
 	if serviceType == rootIngressPoolServiceType || !slices.Contains(edgeMonitorServiceTypes, serviceType) {
+		monitorType = "http"
 		// Probe the ingress /health endpoint, not "/": the root path is real
 		// traffic (redirected to HTTPS by the ingress), while /health answers
 		// 2xx directly on :80. A platform service's own port answers only on
@@ -1909,7 +1929,7 @@ func (m *DNSManager) ensureDesiredPool(desired desiredPool) (string, error) {
 			p.Enabled = true
 			p.MinimumOrigins = 1
 			p.Monitor = monitorID
-			p.Origins = originsForNodes(desired.Nodes)
+			p.Origins = originsForNodes(desired.Nodes, desired.EdgeRootDomain)
 			p.Latitude = desired.Latitude
 			p.Longitude = desired.Longitude
 			p.OriginSteering = &cloudflare.OriginSteering{Policy: "random"}
@@ -1928,7 +1948,7 @@ func (m *DNSManager) ensureDesiredPool(desired desiredPool) (string, error) {
 		Description:    "Managed by Navigator",
 		Enabled:        true,
 		MinimumOrigins: 1,
-		Origins:        originsForNodes(desired.Nodes),
+		Origins:        originsForNodes(desired.Nodes, desired.EdgeRootDomain),
 		Monitor:        monitorID,
 		Latitude:       desired.Latitude,
 		Longitude:      desired.Longitude,

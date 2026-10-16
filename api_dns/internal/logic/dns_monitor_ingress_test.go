@@ -104,8 +104,63 @@ func TestEnsureMonitor_ClusterServicesProbeTheIngress(t *testing.T) {
 		if !edge && (created.Port != 80 || created.Path != "/health") {
 			t.Fatalf("%s monitor = :%d %s, want the ingress probe :80 /health", serviceType, created.Port, created.Path)
 		}
-		if edge && created.Port != 18008 {
-			t.Fatalf("%s monitor port = %d, want the edge probe on 18008", serviceType, created.Port)
+		if edge && (created.Type != "https" || created.Port != 443 || created.Path != "/health") {
+			t.Fatalf("%s monitor = %s :%d %s, want the edge Caddy probe https :443 /health", serviceType, created.Type, created.Port, created.Path)
+		}
+	}
+}
+
+// An edge pool's monitor probes what the edge serves: Caddy on 443, which
+// answers /health over TLS only for the node's own edge domain. Each origin
+// carries that domain as its Host header so the probe's SNI and Host match.
+func TestSyncServiceByCluster_EdgePoolProbesCaddyWithTheNodeEdgeDomain(t *testing.T) {
+	qm := &fakeQuartermasterClient{
+		clustersResponse: &quartermasterpb.ListClustersResponse{Clusters: []*quartermasterpb.InfrastructureCluster{
+			{ClusterId: "media-eu", ClusterName: "Media EU", IsActive: true},
+		}},
+		response: &quartermasterpb.ListHealthyNodesForDNSResponse{Nodes: []*quartermasterpb.InfrastructureNode{
+			{NodeId: "fw-edge-eu-1", ClusterId: "media-eu", ExternalIp: strPtr("203.0.113.10")},
+			{NodeId: "edge-eu-2", ClusterId: "media-eu", ExternalIp: strPtr("203.0.113.11")},
+		}},
+	}
+	var monitors []cloudflare.Monitor
+	var created []cloudflare.Pool
+	cf := &fakeCloudflareClient{
+		listMonitors: func() ([]cloudflare.Monitor, error) { return monitors, nil },
+		createMonitor: func(mon cloudflare.Monitor) (*cloudflare.Monitor, error) {
+			mon.ID = mon.Description
+			monitors = append(monitors, mon)
+			return &mon, nil
+		},
+		listPools: func() ([]cloudflare.Pool, error) { return nil, nil },
+		createPool: func(p cloudflare.Pool) (*cloudflare.Pool, error) {
+			p.ID = p.Name
+			created = append(created, p)
+			return &p, nil
+		},
+		getPool:           func(id string) (*cloudflare.Pool, error) { return &cloudflare.Pool{ID: id}, nil },
+		listLoadBalancers: func() ([]cloudflare.LoadBalancer, error) { return nil, nil },
+	}
+	m := newTestManager(cf)
+	m.qmClient = qm
+
+	if _, err := m.SyncServiceByCluster(context.Background(), "edge-ingest"); err != nil {
+		t.Fatal(err)
+	}
+	if len(created) != 1 || len(monitors) != 1 {
+		t.Fatalf("pools = %d, monitors = %d, want one of each", len(created), len(monitors))
+	}
+	mon := monitors[0]
+	if mon.Type != "https" || mon.Port != 443 || mon.Path != "/health" || mon.ExpectedCodes != "200" {
+		t.Fatalf("edge monitor = %s :%d %s %s, want https :443 /health 200", mon.Type, mon.Port, mon.Path, mon.ExpectedCodes)
+	}
+	want := map[string]string{
+		"203.0.113.10": "edge-fw-edge-eu-1.media-eu.example.com",
+		"203.0.113.11": "edge-eu-2.media-eu.example.com",
+	}
+	for _, origin := range created[0].Origins {
+		if origin.Header == nil || len(origin.Header.Host) != 1 || origin.Header.Host[0] != want[origin.Address] {
+			t.Fatalf("origin %s Host header = %+v, want %s", origin.Address, origin.Header, want[origin.Address])
 		}
 	}
 }

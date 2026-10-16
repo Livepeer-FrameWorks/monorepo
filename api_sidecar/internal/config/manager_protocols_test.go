@@ -132,6 +132,16 @@ func TestEnsureProtocolsAddsRTMP(t *testing.T) {
 	if got := http["default_track_sorting"]; got != "id_lth" {
 		t.Fatalf("HTTP default_track_sorting = %v, want id_lth", got)
 	}
+	if got := http["interface"]; got != "127.0.0.1" {
+		t.Fatalf("HTTP interface = %v, want 127.0.0.1 (Caddy and Helmsman reach it on loopback)", got)
+	}
+	// Viewers, publishers and peer edges dial these directly; Mist admits
+	// each connection through USER_NEW or PUSH_REWRITE.
+	for _, connector := range []string{"RTMP", "RTSP", "DTSC", "TSSRT"} {
+		if got, set := findAddedProtocol(t, mist.addedProtocols, connector)["interface"]; set {
+			t.Fatalf("%s interface = %v, want Mist's every-interface default", connector, got)
+		}
+	}
 
 	webrtc := findAddedProtocol(t, mist.addedProtocols, "WebRTC")
 	if got := webrtc["bindhost"]; got != "0.0.0.0" {
@@ -249,10 +259,37 @@ func TestEnsureProtocolsRepairsArrayPublicAddressWithoutLosingListenerOptions(t 
 		t.Fatal(err)
 	}
 	update := findProtocolUpdate(t, mist.protocolUpdates, "HTTP")
-	if update.new["pubaddr"] != "https://edge.example/view/" || update.new["port"] != float64(18080) || update.new["interface"] != "0.0.0.0" {
+	if update.new["pubaddr"] != "https://edge.example/view/" || update.new["port"] != float64(18080) || update.new["interface"] != "127.0.0.1" {
 		t.Fatalf("public-address repair changed listener options: %+v", update.new)
 	}
 	if _, original := existing["pubaddr"].([]any); !original {
 		t.Fatal("protocol repair mutated the observed configuration")
+	}
+}
+
+// An edge whose HTTP connector still listens on every interface (the Mist
+// default) serves plain HTTP past Caddy's TLS; the next reconcile moves it to
+// loopback and keeps its other options.
+func TestEnsureProtocolsMovesWildcardHTTPListenerToLoopback(t *testing.T) {
+	appconfigtest.Setenv(t, "EDGE_PUBLIC_URL", "https://edge.example/view")
+	mist := &recordingMistAPI{}
+	manager := &Manager{mistClient: mist, logger: logging.NewLogger()}
+	existing := map[string]any{"connector": "HTTP", "default_track_sorting": "id_lth", "pubaddr": "https://edge.example/view/", "online": float64(1)}
+	if err := manager.ensureProtocols(map[string]any{"config": map[string]any{"protocols": []any{existing}}}); err != nil {
+		t.Fatal(err)
+	}
+	update := findProtocolUpdate(t, mist.protocolUpdates, "HTTP")
+	if update.new["interface"] != "127.0.0.1" || update.new["pubaddr"] != "https://edge.example/view/" || update.new["online"] != float64(1) {
+		t.Fatalf("HTTP update = %+v, want interface 127.0.0.1 with the other options kept", update.new)
+	}
+
+	mist.protocolUpdates = nil
+	if err := manager.ensureProtocols(map[string]any{"config": map[string]any{"protocols": []any{update.new}}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, u := range mist.protocolUpdates {
+		if u.old["connector"] == "HTTP" {
+			t.Fatalf("loopback HTTP connector updated again: %+v", u.new)
+		}
 	}
 }
