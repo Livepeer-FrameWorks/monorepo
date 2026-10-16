@@ -44,6 +44,11 @@ kafka_log_appenders:
   - { name: ControllerAppender, file: controller.log }
   - { name: AuthorizerAppender, file: kafka-authorizer.log }
 
+# KRaft voter timeouts; server.properties.j2 explains the sizing. The leader
+# resigns after 1.5 x fetch timeout without fetches from a majority.
+kafka_quorum_fetch_timeout_ms: 10000
+kafka_quorum_election_timeout_ms: 5000
+
 kafka_broker_probe_host: "127.0.0.1"
 kafka_controller_probe_host: >-
   {{ kafka_bind_host if (kafka_bind_host | default('0.0.0.0')) != '0.0.0.0' else '127.0.0.1' }}

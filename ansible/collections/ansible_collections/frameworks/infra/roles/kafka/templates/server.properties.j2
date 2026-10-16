@@ -33,3 +33,15 @@ log.retention.hours=168
 log.retention.bytes={{ kafka_log_retention_bytes }}
 log.segment.bytes={{ kafka_log_segment_bytes }}
 log.retention.check.interval.ms=300000
+{% if kafka_role != 'broker' %}
+# The KRaft I/O thread fsyncs the metadata log and quorum-state on every
+# append and vote, so a storage stall freezes the leader and every voter at
+# once. At the stock 2 s fetch / 1 s election timeouts a stall of a few
+# seconds makes every voter abandon a healthy leader, and the elections that
+# follow need the same stalled fsyncs, leaving the quorum leaderless. A crashed
+# leader is still replaced after fetch.timeout; a graceful shutdown resigns
+# immediately. Brokers keep the stock observer timeouts so they find a new
+# leader before broker.session.timeout.ms fences them.
+controller.quorum.fetch.timeout.ms={{ kafka_quorum_fetch_timeout_ms }}
+controller.quorum.election.timeout.ms={{ kafka_quorum_election_timeout_ms }}
+{% endif %}
