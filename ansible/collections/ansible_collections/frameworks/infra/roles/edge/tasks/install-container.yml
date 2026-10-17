@@ -94,6 +94,24 @@
     mode: "0644"
   when: edge_telemetry_url | length > 0
 
+# The edge container shares the host kernel, so host metrics and the host
+# crash scan (Mist child segfaults land in the host kernel log) come from the
+# same host-installed node_exporter a native edge runs. The host-networked
+# vmagent container scrapes it on loopback. Docker Desktop on macOS has no
+# host systemd and no Linux kernel log to scan.
+- name: Install node_exporter and the host crash scan (when telemetry enabled)
+  ansible.builtin.include_role:
+    name: frameworks.infra.prometheus_stack
+    tasks_from: node_exporter.yml
+  vars:
+    node_exporter_artifact_url: "{{ edge_node_exporter_artifact_url }}"
+    node_exporter_artifact_checksum: "{{ edge_node_exporter_artifact_checksum }}"
+    node_exporter_port: "{{ edge_node_exporter_port }}"
+  when:
+    - edge_telemetry_url | length > 0
+    - ansible_facts.os_family != 'Darwin'
+    - ansible_facts.service_mgr == 'systemd'
+
 # 0644: .edge.env carries no secrets (the enrollment token lives in the
 # write-once .edge-enroll.env, the Mist password in .edge-secrets.env), and
 # CLI management commands read it over SSH as the unprivileged operator user.

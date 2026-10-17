@@ -8,6 +8,7 @@ User=postgres
 Group=postgres
 Environment="DATA_SOURCE_NAME=postgresql://postgres@:{{ postgres_port }}/postgres?host=/var/run/postgresql&sslmode=disable"
 ExecStart={{ postgres_exporter_bin }} \
+  --config.file={{ postgres_exporter_config_path }} \
   --web.listen-address=127.0.0.1:{{ postgres_exporter_port }}
 Restart=always
 RestartSec=5

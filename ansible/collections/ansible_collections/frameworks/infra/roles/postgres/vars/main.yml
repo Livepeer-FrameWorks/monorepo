@@ -6,6 +6,9 @@ postgres_service_name: postgresql
 postgres_exporter_service_name: frameworks-postgres-exporter
 postgres_exporter_port: "{{ postgres_port | int + 10000 }}"
 postgres_exporter_bin: /usr/local/bin/postgres_exporter
+# postgres_exporter reads ./postgres_exporter.yml by default and warns at every
+# start when it is missing; the role gives it an explicit empty config.
+postgres_exporter_config_path: /etc/postgres_exporter.yml
 postgres_exporter_install_identity: "{{ postgres_exporter_artifact_checksum ~ ':' ~ postgres_exporter_artifact_url }}"
 postgres_exporter_install_sentinel: "/usr/local/bin/.frameworks-postgres-exporter-installed-{{ postgres_exporter_install_identity | hash('sha256') }}"
 

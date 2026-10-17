@@ -155,3 +155,31 @@ func (q *Queries) MarkServiceEventOutboxClaimed(ctx context.Context, arg MarkSer
 	_, err := q.db.ExecContext(ctx, markServiceEventOutboxClaimed, arg.LeaseToken, pq.Array(arg.Ids))
 	return err
 }
+
+const purgeCompletedServiceEventOutbox = `-- name: PurgeCompletedServiceEventOutbox :execrows
+WITH old_completed AS (
+    SELECT o.id
+    FROM commodore.service_event_outbox o
+    WHERE o.completed_at IS NOT NULL
+      AND o.completed_at < NOW() - $1::bigint * INTERVAL '1 second'
+    ORDER BY o.completed_at
+    LIMIT $2
+    FOR UPDATE OF o SKIP LOCKED
+)
+DELETE FROM commodore.service_event_outbox o
+USING old_completed c
+WHERE o.id = c.id
+`
+
+type PurgeCompletedServiceEventOutboxParams struct {
+	RetentionSeconds int64 `db:"retention_seconds" json:"retention_seconds"`
+	BatchLimit       int32 `db:"batch_limit" json:"batch_limit"`
+}
+
+func (q *Queries) PurgeCompletedServiceEventOutbox(ctx context.Context, arg PurgeCompletedServiceEventOutboxParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, purgeCompletedServiceEventOutbox, arg.RetentionSeconds, arg.BatchLimit)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}

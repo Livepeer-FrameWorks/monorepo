@@ -217,7 +217,7 @@ func TestInfrastructureAlertRulesCoverEveryTier(t *testing.T) {
 		"SystemdServiceRestarting", "SystemdServiceRestartLoop", "SystemdUnitFailed", "HostProcessCrashed", "HostCrashScanStale",
 		"KafkaQuorumNoLeader", "KafkaQuorumElectionChurn", "KafkaNoActiveController", "KafkaOfflinePartitions",
 		"KafkaUnderMinISRPartitions", "KafkaUnderReplicatedPartitions", "KafkaControllerEventQueueSlow",
-		"YugabyteTableLeaderless", "YugabyteFollowerLagHigh",
+		"YugabyteTableLeaderless", "YugabyteTabletLeaderless", "YugabyteFollowerLagHigh",
 		"RedisDown", "RedisReplicaMasterLinkDown", "RedisPrimaryCountWrong",
 		"PostgresDown", "PostgresReplicationLagHigh",
 		"ClickHouseReadonlyReplica", "ClickHouseKeeperSessionLost", "ClickHouseReplicationDelay",

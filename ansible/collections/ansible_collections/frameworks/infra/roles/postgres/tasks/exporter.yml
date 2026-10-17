@@ -73,6 +73,16 @@
         state: absent
       when: postgres_exporter_extract_dir.path is defined
 
+- name: Render postgres_exporter config
+  ansible.builtin.copy:
+    dest: "{{ postgres_exporter_config_path }}"
+    content: |
+      auth_modules: {}
+    owner: root
+    group: root
+    mode: "0644"
+  notify: postgres exporter restart
+
 - name: Render postgres_exporter systemd unit
   ansible.builtin.template:
     src: exporter.service.j2

@@ -1,0 +1,172 @@
+# vmalert-tool unit tests for the YugabyteDB leadership rules; run with
+# `make test-alert-rules`. The series shapes follow a three-node RF3
+# yugabytedb/yugabyte:2026.1.1.2-b9 universe: tablet metrics are aggregated
+# per table, followers report follower_lag_ms of a few hundred ms while they
+# hear their leader, and after two of the three nodes were killed the
+# survivor still reported is_raft_leader for the tablets it had led while its
+# follower lag grew without bound.
+rule_files:
+  - ../infrastructure.yml
+
+evaluation_interval: 1m
+
+tests:
+  # Healthy universe: every replica hears its leader.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="yugabyte-tserver",region="eu",yb_universe="primary",yb_replication_factor="3",yb_tservers="3",node_id="yb-1"}'
+        values: "1x10"
+      - series: 'up{job="yugabyte-tserver",region="eu",yb_universe="primary",yb_replication_factor="3",yb_tservers="3",node_id="yb-2"}'
+        values: "1x10"
+      - series: 'up{job="yugabyte-tserver",region="eu",yb_universe="primary",yb_replication_factor="3",yb_tservers="3",node_id="yb-3"}'
+        values: "1x10"
+      - series: 'follower_lag_ms{job="yugabyte-tserver",region="eu",yb_universe="primary",node_id="yb-1",namespace_name="frameworks",table_name="orders",table_id="t1"}'
+        values: "480x10"
+      - series: 'follower_lag_ms{job="yugabyte-tserver",region="eu",yb_universe="primary",node_id="yb-2",namespace_name="frameworks",table_name="orders",table_id="t1"}'
+        values: "520x10"
+      - series: 'follower_lag_ms{job="yugabyte-tserver",region="eu",yb_universe="primary",node_id="yb-3",namespace_name="frameworks",table_name="orders",table_id="t1"}'
+        values: "0x10"
+      - series: 'is_raft_leader{job="yugabyte-tserver",region="eu",yb_universe="primary",node_id="yb-1",namespace_name="frameworks",table_name="orders",table_id="t1"}'
+        values: "1x10"
+      - series: 'is_raft_leader{job="yugabyte-tserver",region="eu",yb_universe="primary",node_id="yb-3",namespace_name="frameworks",table_name="orders",table_id="t1"}'
+        values: "2x10"
+    alert_rule_test:
+      - eval_time: 9m
+        groupname: yugabyte.rules
+        alertname: YugabyteTabletLeaderless
+        exp_alerts: []
+      - eval_time: 9m
+        groupname: yugabyte.rules
+        alertname: YugabyteTableLeaderless
+        exp_alerts: []
+
+  # One orders tablet is stuck in elections on three live tservers: two of
+  # its replicas stop hearing a leader from 2m on while the table's other
+  # tablets keep theirs, so the per-table leader sum never reaches zero.
+  # A one-minute stall from 7m to 8m does not fire on its own.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="yugabyte-tserver",region="eu",yb_universe="primary",yb_replication_factor="3",yb_tservers="3",node_id="yb-1"}'
+        values: "1x10"
+      - series: 'up{job="yugabyte-tserver",region="eu",yb_universe="primary",yb_replication_factor="3",yb_tservers="3",node_id="yb-2"}'
+        values: "1x10"
+      - series: 'up{job="yugabyte-tserver",region="eu",yb_universe="primary",yb_replication_factor="3",yb_tservers="3",node_id="yb-3"}'
+        values: "1x10"
+      - series: 'follower_lag_ms{job="yugabyte-tserver",region="eu",yb_universe="primary",node_id="yb-1",namespace_name="frameworks",table_name="orders",table_id="t1"}'
+        values: "480 480 60000 120000 180000 240000 300000 360000 420000 480000 540000"
+      - series: 'follower_lag_ms{job="yugabyte-tserver",region="eu",yb_universe="primary",node_id="yb-2",namespace_name="frameworks",table_name="orders",table_id="t1"}'
+        values: "520 520 60000 120000 180000 240000 300000 360000 420000 480000 540000"
+      - series: 'is_raft_leader{job="yugabyte-tserver",region="eu",yb_universe="primary",node_id="yb-3",namespace_name="frameworks",table_name="orders",table_id="t1"}'
+        values: "3 3 2 2 2 2 2 2 2 2 2"
+      - series: 'follower_lag_ms{job="yugabyte-tserver",region="eu",yb_universe="primary",node_id="yb-1",namespace_name="frameworks",table_name="events",table_id="t2"}'
+        values: "400 400 400 400 400 400 400 60000 400 400 400"
+      - series: 'follower_lag_ms{job="yugabyte-tserver",region="eu",yb_universe="primary",node_id="yb-2",namespace_name="frameworks",table_name="events",table_id="t2"}'
+        values: "400 400 400 400 400 400 400 60000 400 400 400"
+      - series: 'is_raft_leader{job="yugabyte-tserver",region="eu",yb_universe="primary",node_id="yb-3",namespace_name="frameworks",table_name="events",table_id="t2"}'
+        values: "1x10"
+    alert_rule_test:
+      # Pending for the first two minutes.
+      - eval_time: 3m
+        groupname: yugabyte.rules
+        alertname: YugabyteTabletLeaderless
+        exp_alerts: []
+      - eval_time: 8m
+        groupname: yugabyte.rules
+        alertname: YugabyteTabletLeaderless
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              region: eu
+              yb_universe: primary
+              namespace_name: frameworks
+              table_name: orders
+              table_id: t1
+            exp_annotations:
+              summary: "YugabyteDB frameworks.orders has a tablet without a Raft leader in primary"
+              description: "2 replicas of orders have heard no leader for over 10s or sit on a missing tserver, a Raft majority; statements touching the leaderless tablet fail."
+      - eval_time: 8m
+        groupname: yugabyte.rules
+        alertname: YugabyteTableLeaderless
+        exp_alerts: []
+
+  # One replica is cut off from a healthy leader: a minority, so the tablet
+  # keeps serving and only the follower-lag warning applies.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="yugabyte-tserver",region="eu",yb_universe="primary",yb_replication_factor="3",yb_tservers="3",node_id="yb-1"}'
+        values: "1x10"
+      - series: 'up{job="yugabyte-tserver",region="eu",yb_universe="primary",yb_replication_factor="3",yb_tservers="3",node_id="yb-2"}'
+        values: "1x10"
+      - series: 'up{job="yugabyte-tserver",region="eu",yb_universe="primary",yb_replication_factor="3",yb_tservers="3",node_id="yb-3"}'
+        values: "1x10"
+      - series: 'follower_lag_ms{job="yugabyte-tserver",region="eu",yb_universe="primary",node_id="yb-1",namespace_name="frameworks",table_name="orders",table_id="t1"}'
+        values: "60000+60000x10"
+      - series: 'follower_lag_ms{job="yugabyte-tserver",region="eu",yb_universe="primary",node_id="yb-2",namespace_name="frameworks",table_name="orders",table_id="t1"}'
+        values: "500x10"
+    alert_rule_test:
+      - eval_time: 9m
+        groupname: yugabyte.rules
+        alertname: YugabyteTabletLeaderless
+        exp_alerts: []
+
+  # Two of three nodes die with their host-local scrapers, so their series
+  # vanish. The survivor keeps claiming the leadership it held, which hides
+  # the outage from the per-table leader sum, but its followed tablets hear
+  # no leader: one lagging replica plus two missing tservers is a majority.
+  # The vanished up series stay visible for the query lookback, so the alert
+  # is checked once it has passed.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="yugabyte-tserver",region="eu",yb_universe="primary",yb_replication_factor="3",yb_tservers="3",node_id="yb-1"}'
+        values: "1x10"
+      - series: 'up{job="yugabyte-tserver",region="eu",yb_universe="primary",yb_replication_factor="3",yb_tservers="3",node_id="yb-2"}'
+        values: "1 1"
+      - series: 'up{job="yugabyte-tserver",region="eu",yb_universe="primary",yb_replication_factor="3",yb_tservers="3",node_id="yb-3"}'
+        values: "1 1"
+      - series: 'follower_lag_ms{job="yugabyte-tserver",region="eu",yb_universe="primary",node_id="yb-1",namespace_name="yugabyte",table_name="split_t",table_id="t3"}'
+        values: "483 483 60000+60000x8"
+      - series: 'is_raft_leader{job="yugabyte-tserver",region="eu",yb_universe="primary",node_id="yb-1",namespace_name="yugabyte",table_name="split_t",table_id="t3"}'
+        values: "3x10"
+    alert_rule_test:
+      - eval_time: 9m
+        groupname: yugabyte.rules
+        alertname: YugabyteTabletLeaderless
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              region: eu
+              yb_universe: primary
+              namespace_name: yugabyte
+              table_name: split_t
+              table_id: t3
+            exp_annotations:
+              summary: "YugabyteDB yugabyte.split_t has a tablet without a Raft leader in primary"
+              description: "3 replicas of split_t have heard no leader for over 10s or sit on a missing tserver, a Raft majority; statements touching the leaderless tablet fail."
+      - eval_time: 9m
+        groupname: yugabyte.rules
+        alertname: YugabyteTableLeaderless
+        exp_alerts: []
+
+  # Every tablet of a table without a leader still raises the per-table
+  # alert, for tservers and the masters' sys.catalog alike.
+  - interval: 1m
+    input_series:
+      - series: 'is_raft_leader{job="yugabyte-tserver",region="eu",yb_universe="primary",node_id="yb-1",namespace_name="frameworks",table_name="orders",table_id="t1"}'
+        values: "0x10"
+      - series: 'is_raft_leader{job="yugabyte-tserver",region="eu",yb_universe="primary",node_id="yb-2",namespace_name="frameworks",table_name="orders",table_id="t1"}'
+        values: "0x10"
+    alert_rule_test:
+      - eval_time: 5m
+        groupname: yugabyte.rules
+        alertname: YugabyteTableLeaderless
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              region: eu
+              yb_universe: primary
+              namespace_name: frameworks
+              table_name: orders
+              table_id: t1
+            exp_annotations:
+              summary: "YugabyteDB frameworks.orders has no Raft leader in primary"
+              description: "No yb-master or yb-tserver leads any tablet of orders; statements touching it fail. A majority of its replicas is down or partitioned."

@@ -955,6 +955,10 @@ CREATE INDEX IF NOT EXISTS idx_qm_service_event_outbox_pending_range
 CREATE INDEX IF NOT EXISTS idx_qm_service_event_outbox_tenant
     ON quartermaster.service_event_outbox(tenant_id, created_at DESC);
 
+CREATE INDEX IF NOT EXISTS idx_qm_service_event_outbox_completed_range
+    ON quartermaster.service_event_outbox (completed_at ASC)
+    WHERE completed_at IS NOT NULL;
+
 -- ============================================================================
 -- DOMAIN EVENT OUTBOX
 -- pkg/events/outbox.TableDDL("quartermaster"), verbatim. Tenant, cluster,
@@ -1022,6 +1026,10 @@ CREATE TABLE IF NOT EXISTS quartermaster.navigator_custom_domain_outbox (
 CREATE INDEX IF NOT EXISTS idx_qm_navigator_custom_domain_outbox_pending_range
     ON quartermaster.navigator_custom_domain_outbox(created_at ASC)
     WHERE completed_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_qm_navigator_custom_domain_outbox_completed_range
+    ON quartermaster.navigator_custom_domain_outbox (completed_at ASC)
+    WHERE completed_at IS NOT NULL;
 
 -- ============================================================================
 -- NAVIGATOR TENANT-ALIAS OUTBOX

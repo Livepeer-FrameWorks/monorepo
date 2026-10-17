@@ -153,11 +153,12 @@ frameworks cluster doctor [flags]
 
 - **Infrastructure:** Postgres/Yugabyte, ClickHouse, and Kafka broker connectivity
   in every Kafka region. On YugabyteDB every tserver must answer a local YSQL
-  `SELECT 1` within one second (net of the SSH round trip) and be listed ALIVE by
-  the masters; vanilla PostgreSQL must answer `SELECT 1` within one second
+  `ysqlsh` connect and `SELECT 1` within one second, timed on the node itself,
+  and be listed ALIVE by the masters; vanilla PostgreSQL must answer `SELECT 1`
+  within one second
 - **Kafka KRaft quorum:** per Kafka cluster, a quorum leader, the manifest's voter
-  set, no voter more than 30 seconds behind, and no controller leadership loss in
-  the last hour
+  set, no voter more than 5 seconds behind, and no controller leadership loss in
+  the last hour (read from each controller's `controller.log`)
 - **Host crashes:** unit failures, automatic restarts, core dumps, segfaults, and
   OOM kills in the last 24 hours on every host and edge
   (`cluster diagnose crashes` lists them)
@@ -1475,7 +1476,11 @@ frameworks cluster diagnose ports [flags]
 For each host the planned ports come from the manifest: SQL, ClickHouse and
 Kafka (regional clusters included), Redis instances and Sentinels, and every
 enabled service, interface and observability component with its gRPC and
-auxiliary ports. Edges are checked for Caddy's 80 and 443. A planned port
+auxiliary ports. Edges are checked for every socket of the edge bundle, by
+protocol: Caddy (TCP 80 and 443, UDP 443, and the loopback admin port 2019 on
+native edges), Helmsman (18007 and management 18017), MistServer (HTTP 8080,
+API 4242, RTMP 1935, DTSC 4200, RTSP 5554, SRT UDP 8889, WebRTC UDP 18203),
+and node_exporter (9110) wherever the edge runs vmagent. A planned port
 without a listener fails. Catalog ports held on a host the manifest does not
 place them on are listed so a conflicting process is visible.
 
@@ -1525,9 +1530,11 @@ frameworks cluster diagnose kafka [flags]
 
 The quorum check reads `kafka-metadata-quorum.sh describe --status` and fails
 when there is no leader, when the voter set differs from the manifest's
-controllers, or when a voter lags the leader by more than 30 seconds. It also
-counts, in every controller's journal since `--since`, how often a controller
-gave up leadership with no successor; any such loss fails the check, and
+controllers, or when a voter has not caught up with the leader for more than
+5 seconds (2.5 times the controllers' 2-second fetch timeout). It also counts,
+in every controller's `controller.log` and its rotations under the unit's
+`LOG_DIR` since `--since`, how often a controller gave up leadership with no
+successor; any such loss fails the check, and
 exceptionally slow controller events are reported alongside. `cluster doctor`
 runs the same check per Kafka cluster over the last hour.
 

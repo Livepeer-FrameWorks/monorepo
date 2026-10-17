@@ -275,6 +275,19 @@ const (
 	HelmsmanManagementPort  = 18017
 )
 
+// MistServer listeners on a media node. The controller API and the protocol
+// ports are Mist's compiled-in defaults; Helmsman's managed protocol set pins
+// SRT and WebRTC to them because container edges publish those exact UDP
+// ports. Services["mistserver"].DefaultPort is the HTTP output.
+const (
+	MistAPIPort    = 4242
+	MistRTMPPort   = 1935
+	MistDTSCPort   = 4200
+	MistRTSPPort   = 5554
+	MistSRTPort    = 8889  // UDP
+	MistWebRTCPort = 18203 // UDP
+)
+
 var auxiliaryPorts = map[string][]PortSpec{
 	"foghorn":  {{Name: "foghorn-internal-http", Port: FoghornInternalHTTPPort}},
 	"helmsman": {{Name: "helmsman-management", Port: HelmsmanManagementPort}},

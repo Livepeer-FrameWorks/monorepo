@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -14,6 +15,7 @@ import (
 	"frameworks/api_sidecar/internal/appconfig/appconfigtest"
 	"frameworks/api_sidecar/internal/config"
 	"frameworks/api_sidecar/internal/control"
+	"frameworks/api_sidecar/internal/leases"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
@@ -274,6 +276,41 @@ func TestHandleStreamSourceUsesLocalSourceOverride(t *testing.T) {
 	}
 	if got := recorder.Body.String(); got != "/var/lib/frameworks/edge-storage/clips/stream/hash.mkv" {
 		t.Fatalf("expected local source override response, got %q", got)
+	}
+}
+
+// A local source override hands Mist a file it keeps open, so the stream must
+// hold a resolved source lease on that file and its sidecars, as a
+// Foghorn-resolved local or relay source does.
+func TestHandleStreamSourceLocalOverrideHoldsResolvedLease(t *testing.T) {
+	setupTriggerTest(t, "tenant-39b")
+	tracker := installTestTracker(t)
+	const streamName = "vod+override-lease-int"
+	output := filepath.Join(t.TempDir(), "override.mkv")
+	setProcessingSourceOverride(streamName, output)
+	t.Cleanup(func() { clearProcessingSourceOverride(streamName) })
+
+	stubSendMistTrigger(t, func(trigger *ipcpb.MistTrigger) (*control.MistTriggerResult, error) {
+		t.Fatalf("local source override should be resolved locally, forwarded trigger: %+v", trigger)
+		return nil, nil
+	})
+
+	ctx, recorder := newWebhookContext(streamName)
+	HandleStreamSource(ctx)
+
+	if recorder.Code != http.StatusOK || recorder.Body.String() != output {
+		t.Fatalf("expected 200 %q, got %d %q", output, recorder.Code, recorder.Body.String())
+	}
+	for _, p := range []string{output, output + ".dtsh", output + ".gop"} {
+		if !tracker.IsPathLeased(p) {
+			t.Fatalf("expected %q to be pinned by the stream's source lease", p)
+		}
+	}
+	if !tracker.IsAssetLeased(leases.AssetKey{Type: "vod", Hash: "override-lease-int"}) {
+		t.Fatal("expected the VOD asset to be leased")
+	}
+	if tracker.DegradedVodCleanupActive() {
+		t.Fatal("the override lease must be resolved, not degraded")
 	}
 }
 

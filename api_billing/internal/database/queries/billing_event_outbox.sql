@@ -57,3 +57,17 @@ SET attempts = attempts + 1, last_error = sqlc.arg(last_error),
 WHERE id = sqlc.arg(id)::text::uuid
   AND lease_token = sqlc.arg(lease_token)::text::uuid
   AND completed_at IS NULL;
+
+-- name: PurgeCompletedBillingEventOutbox :execrows
+WITH old_completed AS (
+    SELECT o.id
+    FROM purser.billing_event_outbox o
+    WHERE o.completed_at IS NOT NULL
+      AND o.completed_at < NOW() - sqlc.arg(retention_seconds)::bigint * INTERVAL '1 second'
+    ORDER BY o.completed_at
+    LIMIT sqlc.arg(batch_limit)
+    FOR UPDATE OF o SKIP LOCKED
+)
+DELETE FROM purser.billing_event_outbox o
+USING old_completed c
+WHERE o.id = c.id;

@@ -13,6 +13,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/placement"
 	placementpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_placement"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
+	goredis "github.com/redis/go-redis/v9"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -43,6 +44,17 @@ func TestPushPreparationViewerHerdSharesThePullWithoutRewritingIt(t *testing.T) 
 	}
 	t.Cleanup(media.Registry.DisableRedisSync)
 	destination.RetainPrepared = media.RetainPreparedSourceDemand
+	// The receipt client never retries, so any storage error fails a viewer.
+	// Its default pool (ten connections per CPU) lets the herd open more fresh
+	// connections at once than the in-process server's listen backlog holds
+	// while a loaded host starves its accept loop, and the overflow is reset
+	// as a broken pipe or EOF. A pool below the backlog makes the herd queue
+	// on the client, as it does behind a production pool, so only contention on
+	// the shared pull record can refuse a viewer here.
+	receipts := destination.Receipts
+	herdClient := goredis.NewClient(&goredis.Options{Addr: receipts.Client.(*goredis.Client).Options().Addr, MaxRetries: -1, PoolSize: 32})
+	t.Cleanup(func() { _ = herdClient.Close() })
+	receipts.Client = herdClient
 	request.Query.ClientLocation = &placementpb.Coordinates{Latitude: 52.37, Longitude: 4.89}
 	first, err := destination.PreparePlacement(ctx, request)
 	if err != nil {

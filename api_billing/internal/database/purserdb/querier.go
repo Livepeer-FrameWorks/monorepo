@@ -640,6 +640,7 @@ type Querier interface {
 	PrepaidUsageSettlementExists(ctx context.Context, reportID string) (bool, error)
 	PrepareProviderBillingPaymentAttemptRetry(ctx context.Context, arg PrepareProviderBillingPaymentAttemptRetryParams) error
 	PromotePrepaidTenantSubscription(ctx context.Context, arg PromotePrepaidTenantSubscriptionParams) (string, error)
+	PurgeCompletedBillingEventOutbox(ctx context.Context, arg PurgeCompletedBillingEventOutboxParams) (int64, error)
 	ReactivateFundedSubscription(ctx context.Context, tenantID string) (int64, error)
 	ReactivateSuspendedTenant(ctx context.Context, tenantID string) (int64, error)
 	ReadPlacementSnapshotTime(ctx context.Context) (time.Time, error)

@@ -21,7 +21,15 @@ import (
 // Runs the real outbox worker over the real commodore.sql schema; the SMTP
 // relay is the only fake.
 func TestAccountEmailOutbox_RetriesUntilDelivered_RealPG(t *testing.T) {
-	conn := startCommodoreRealPG(t)
+	verifyAccountEmailRetriesUntilDelivered(t, startCommodoreRealPG(t))
+}
+
+func TestAccountEmailOutbox_RetriesUntilDelivered_RealYugabyte(t *testing.T) {
+	verifyAccountEmailRetriesUntilDelivered(t, startPlacementDeliveryYugabyte(t, "account_email_retry"))
+}
+
+func verifyAccountEmailRetriesUntilDelivered(t *testing.T, conn *sql.DB) {
+	t.Helper()
 	ctx := context.Background()
 	const (
 		tenantID = "10000000-0000-4000-8000-00000000e001"
@@ -132,7 +140,15 @@ func TestAccountEmailOutbox_RetriesUntilDelivered_RealPG(t *testing.T) {
 // unknown) cannot accept a resend to the same address, so the request is
 // abandoned on that answer instead of being retried for the whole window.
 func TestAccountEmailOutbox_AbandonsRejectedRecipient_RealPG(t *testing.T) {
-	conn := startCommodoreRealPG(t)
+	verifyAccountEmailAbandonsRejectedRecipient(t, startCommodoreRealPG(t))
+}
+
+func TestAccountEmailOutbox_AbandonsRejectedRecipient_RealYugabyte(t *testing.T) {
+	verifyAccountEmailAbandonsRejectedRecipient(t, startPlacementDeliveryYugabyte(t, "account_email_rejected"))
+}
+
+func verifyAccountEmailAbandonsRejectedRecipient(t *testing.T, conn *sql.DB) {
+	t.Helper()
 	ctx := context.Background()
 	const (
 		tenantID = "10000000-0000-4000-8000-00000000e101"

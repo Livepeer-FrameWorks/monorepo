@@ -40,3 +40,9 @@
   ansible.builtin.systemd:
     daemon_reload: true
   when: redis_named_instance | bool
+
+- name: Redis | release memory overcommit once no server remains
+  ansible.builtin.script:
+    cmd: redis-release-overcommit.sh
+  register: redis_overcommit_release
+  changed_when: (redis_overcommit_release.stdout | default('') | trim) == 'removed'

@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"frameworks/cli/pkg/inventory"
+
+	"gopkg.in/yaml.v3"
 )
 
 const rolesDir = "ansible/collections/ansible_collections/frameworks/infra/roles/"
@@ -196,5 +198,103 @@ func TestNativeEdgeScrapesNodeExporter(t *testing.T) {
 	scrape := readRepoFile(t, rolesDir+"edge/templates/vmagent-edge.yml.j2")
 	if !strings.Contains(scrape, "  - job_name: edge-node-exporter\n") || !strings.Contains(scrape, `"127.0.0.1:{{ edge_node_exporter_port }}"`) {
 		t.Fatalf("edge vmagent does not scrape node_exporter:\n%s", scrape)
+	}
+}
+
+// A JVM exits 143 (128+SIGTERM) after a clean SIGTERM shutdown. Without
+// SuccessExitStatus=143 every systemctl stop or restart of a Kafka broker,
+// KRaft controller or MirrorMaker2 worker logs "Failed with result
+// 'exit-code'", which doctor's host crash check counts as a crash.
+func TestJVMUnitsTreatSIGTERMExitAsSuccess(t *testing.T) {
+	for _, unit := range []string{
+		"kafka/templates/kafka.service.j2",
+		"kafka_mirrormaker/templates/kafka-mirrormaker.service.j2",
+	} {
+		t.Run(unit, func(t *testing.T) {
+			text := readRepoFile(t, rolesDir+unit)
+			section := ""
+			found := false
+			for _, line := range strings.Split(text, "\n") {
+				line = strings.TrimSpace(line)
+				if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+					section = line
+					continue
+				}
+				if section == "[Service]" && line == "SuccessExitStatus=143" {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("%s [Service] lacks SuccessExitStatus=143:\n%s", unit, text)
+			}
+		})
+	}
+}
+
+// Container edges share the host kernel, so they install the same host
+// node_exporter and crash scan as native edges; the host-networked Linux
+// vmagent container scrapes it on loopback. Docker Desktop on macOS has no
+// host systemd, so a darwin container edge neither installs nor scrapes it.
+func TestContainerEdgeInstallsAndScrapesNodeExporter(t *testing.T) {
+	tasks := readRepoFile(t, rolesDir+"edge/tasks/install-container.yml")
+	var parsed []map[string]any
+	if err := yaml.Unmarshal([]byte(tasks), &parsed); err != nil {
+		t.Fatal(err)
+	}
+	var install map[string]any
+	for _, task := range parsed {
+		if role, ok := task["ansible.builtin.include_role"].(map[string]any); ok &&
+			role["name"] == "frameworks.infra.prometheus_stack" && role["tasks_from"] == "node_exporter.yml" {
+			install = task
+		}
+	}
+	if install == nil {
+		t.Fatalf("container edge does not install node_exporter and the host crash scan:\n%s", tasks)
+	}
+	when, _ := install["when"].([]any)
+	wantWhen := []any{"edge_telemetry_url | length > 0", "ansible_facts.os_family != 'Darwin'", "ansible_facts.service_mgr == 'systemd'"}
+	if !reflect.DeepEqual(when, wantWhen) {
+		t.Fatalf("container edge node_exporter install when = %#v, want %#v", when, wantWhen)
+	}
+
+	for _, tc := range []struct {
+		name    string
+		vars    map[string]any
+		scraped bool
+	}{
+		{"native", map[string]any{"edge_mode": "native"}, true},
+		{"container linux", map[string]any{"edge_mode": "container", "edge_container_flavor": "linux"}, true},
+		{"container darwin", map[string]any{"edge_mode": "container", "edge_container_flavor": "darwin"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			vars := map[string]any{"edge_node_id": "edge-1", "edge_node_exporter_port": NodeExporterPort}
+			for k, v := range tc.vars {
+				vars[k] = v
+			}
+			rendered := renderRoleTemplate(t, "edge/templates/vmagent-edge.yml.j2", vars)
+			var cfg struct {
+				ScrapeConfigs []struct {
+					JobName       string `yaml:"job_name"`
+					StaticConfigs []struct {
+						Targets []string `yaml:"targets"`
+					} `yaml:"static_configs"`
+				} `yaml:"scrape_configs"`
+			}
+			if err := yaml.Unmarshal([]byte(rendered), &cfg); err != nil {
+				t.Fatalf("rendered vmagent config is not YAML: %v\n%s", err, rendered)
+			}
+			var target string
+			for _, sc := range cfg.ScrapeConfigs {
+				if sc.JobName == "edge-node-exporter" {
+					target = sc.StaticConfigs[0].Targets[0]
+				}
+			}
+			if tc.scraped && target != "127.0.0.1:9110" {
+				t.Fatalf("edge-node-exporter target = %q, want 127.0.0.1:9110:\n%s", target, rendered)
+			}
+			if !tc.scraped && target != "" {
+				t.Fatalf("darwin container edge must not scrape node_exporter, got %q:\n%s", target, rendered)
+			}
+		})
 	}
 }

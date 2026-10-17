@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"frameworks/cli/pkg/gitops"
+	"frameworks/cli/pkg/provisioner"
 
 	"github.com/spf13/cobra"
 )
@@ -26,6 +27,9 @@ func newValidateReleaseManifestCmd() *cobra.Command {
 			}
 			if err := manifest.ValidateServiceArtifacts(); err != nil {
 				return fmt.Errorf("validate release artifacts: %w", err)
+			}
+			if err := provisioner.ValidateReleaseInfrastructureArtifacts(manifest); err != nil {
+				return err
 			}
 			return nil
 		},

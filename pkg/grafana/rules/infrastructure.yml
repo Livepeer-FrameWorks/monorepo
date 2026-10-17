@@ -319,13 +319,40 @@ groups:
       # every tablet without a Raft leader, so reads and writes to it fail.
       # Masters report the same for the sys.catalog tablet.
       - alert: YugabyteTableLeaderless
-        expr: sum by (region, cluster, namespace_name, table_name, table_id) (is_raft_leader{job=~"yugabyte-(master|tserver)"}) == 0
+        expr: sum by (region, yb_universe, namespace_name, table_name, table_id) (is_raft_leader{job=~"yugabyte-(master|tserver)"}) == 0
         for: 2m
         labels:
           severity: critical
         annotations:
-          summary: "YugabyteDB {{ $labels.namespace_name }}.{{ $labels.table_name }} has no Raft leader in {{ $labels.cluster }}"
+          summary: "YugabyteDB {{ $labels.namespace_name }}.{{ $labels.table_name }} has no Raft leader in {{ $labels.yb_universe }}"
           description: "No yb-master or yb-tserver leads any tablet of {{ $labels.table_name }}; statements touching it fail. A majority of its replicas is down or partitioned."
+
+      # A single leaderless tablet does not reach is_raft_leader: tservers
+      # aggregate it per table, and a leader cut off from its majority keeps
+      # reporting itself as leader. Its followers do notice: follower_lag_ms
+      # (the table's worst replica) is the time since a replica last heard
+      # from a leader, under a second while one exists. A tablet that keeps
+      # its leader loses at most a minority of replicas, so a Raft majority
+      # of replicas that hear no leader or sit on a missing tserver means a
+      # tablet of the table has none. The value is that replica count.
+      - alert: YugabyteTabletLeaderless
+        expr: |
+          (
+            count by (region, yb_universe, namespace_name, table_name, table_id) (follower_lag_ms{job="yugabyte-tserver"} > 10000)
+            + on (region, yb_universe) group_left ()
+            (
+              max by (region, yb_universe) (label_value(up{job="yugabyte-tserver"}, "yb_tservers"))
+              - count by (region, yb_universe) (up{job="yugabyte-tserver"} == 1)
+            )
+          )
+          >= on (region, yb_universe) group_left ()
+          (floor(max by (region, yb_universe) (label_value(up{job="yugabyte-tserver"}, "yb_replication_factor")) / 2) + 1)
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "YugabyteDB {{ $labels.namespace_name }}.{{ $labels.table_name }} has a tablet without a Raft leader in {{ $labels.yb_universe }}"
+          description: "{{ $value }} replicas of {{ $labels.table_name }} have heard no leader for over 10s or sit on a missing tserver, a Raft majority; statements touching the leaderless tablet fail."
 
       - alert: YugabyteFollowerLagHigh
         expr: max by (region, cluster, node_id, namespace_name, table_name) (follower_lag_ms{job="yugabyte-tserver"}) > 30000

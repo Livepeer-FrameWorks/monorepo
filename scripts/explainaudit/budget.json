@@ -363,6 +363,18 @@
     "reason": "Rejected deliveries are resolved with batched target, distribution and reset lookups; each rejected current delivery still costs a versions and a copy lookup, and the copy lookup reads every cell of that version (INDEX_SCAN_AMPLIFICATION). The fixture planner hashes the 1545-row current table.",
     "rows_scanned": 6748
   },
+  "commodore:PurgeCompletedServiceEventOutbox@declared": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 103,
+    "reason": "Batched retention delete over the completed-range index: one storage read per deleted row; 400 rows and 103 RPCs.",
+    "rows_scanned": 400
+  },
+  "commodore:PurgeCompletedServiceEventOutbox@distributed": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 103,
+    "reason": "Batched retention delete over the completed-range index: one storage read per deleted row; 400 rows and 103 RPCs.",
+    "rows_scanned": 400
+  },
   "commodore:RearmParkedMediaAuthorityObligations@declared": {
     "flags": ["MANY_READ_RPCS"],
     "read_requests": 103,
@@ -1854,6 +1866,18 @@
     "read_requests": 6,
     "rows_scanned": 20000
   },
+  "purser:PurgeCompletedBillingEventOutbox@declared": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 103,
+    "reason": "Batched retention delete over the completed-range index: one storage read per deleted row; 400 rows and 103 RPCs.",
+    "rows_scanned": 400
+  },
+  "purser:PurgeCompletedBillingEventOutbox@distributed": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 103,
+    "reason": "Batched retention delete over the completed-range index: one storage read per deleted row; 400 rows and 103 RPCs.",
+    "rows_scanned": 400
+  },
   "purser:ReadPlacementUsageCoverage@declared": {
     "flags": ["NESTED_LOOP_UNBATCHED", "READ_AMPLIFICATION", "SEQ_SCAN_LARGE", "SLOW"],
     "read_requests": 12,
@@ -2112,6 +2136,18 @@
     "read_requests": 8,
     "rows_scanned": 9782
   },
+  "quartermaster:PurgeCompletedNavigatorCustomDomainOutbox@declared": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 103,
+    "reason": "Batched retention delete over the completed-range index: one storage read per deleted row; 400 rows and 103 RPCs.",
+    "rows_scanned": 400
+  },
+  "quartermaster:PurgeCompletedNavigatorCustomDomainOutbox@distributed": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 103,
+    "reason": "Batched retention delete over the completed-range index: one storage read per deleted row; 400 rows and 103 RPCs.",
+    "rows_scanned": 400
+  },
   "quartermaster:PurgeCompletedNavigatorTenantAliasOutbox@declared": {
     "flags": ["MANY_READ_RPCS"],
     "read_requests": 103,
@@ -2119,6 +2155,18 @@
     "rows_scanned": 400
   },
   "quartermaster:PurgeCompletedNavigatorTenantAliasOutbox@distributed": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 103,
+    "reason": "Batched retention delete over the completed-range index: one storage read per deleted row; 400 rows and 103 RPCs.",
+    "rows_scanned": 400
+  },
+  "quartermaster:PurgeCompletedServiceEventOutbox@declared": {
+    "flags": ["MANY_READ_RPCS"],
+    "read_requests": 103,
+    "reason": "Batched retention delete over the completed-range index: one storage read per deleted row; 400 rows and 103 RPCs.",
+    "rows_scanned": 400
+  },
+  "quartermaster:PurgeCompletedServiceEventOutbox@distributed": {
     "flags": ["MANY_READ_RPCS"],
     "read_requests": 103,
     "reason": "Batched retention delete over the completed-range index: one storage read per deleted row; 400 rows and 103 RPCs.",

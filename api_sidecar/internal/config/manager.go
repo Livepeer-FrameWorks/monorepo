@@ -29,6 +29,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -1831,7 +1832,7 @@ func managedProtocolDefinitions(httpPubURL, webrtcPubHost string) []map[string]a
 		// publish this exact UDP port, so the value is a contract, not a
 		// preference. float64 because Mist's JSON round-trips numbers that
 		// way and protocolUpdateNeeded compares with DeepEqual.
-		"port": float64(18203),
+		"port": float64(servicedefs.MistWebRTCPort),
 	}
 	if webrtcPubHost != "" {
 		webrtc["pubhost"] = webrtcPubHost
@@ -1859,7 +1860,7 @@ func managedProtocolDefinitions(httpPubURL, webrtcPubHost string) []map[string]a
 		{"connector": "SubRip"},
 		// Port pinned to the Mist default; published 1:1 by container
 		// deployments (same contract as the WebRTC port below).
-		{"connector": "TSSRT", "port": float64(8889)},
+		{"connector": "TSSRT", "port": float64(servicedefs.MistSRTPort)},
 		{"connector": "WAV"},
 		webrtc,
 		{"connector": "JPG"},

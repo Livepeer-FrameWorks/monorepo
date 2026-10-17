@@ -1108,6 +1108,12 @@ func HandleStreamSource(c *gin.Context) {
 				"stream_name": ss.GetStreamName(),
 			}).Info("STREAM_SOURCE resolved to local source override")
 			incMistWebhook("STREAM_SOURCE", "local_source_override")
+			// Mist keeps this input open past the override's lifetime, so it
+			// holds a source lease until STREAM_END or reconciliation drops it,
+			// like a Foghorn-resolved source.
+			if !leaseLocalVODSource(ss.GetStreamName(), sourceURL) {
+				acquireSourceLeaseForStream(ss.GetStreamName(), sourceURL)
+			}
 			c.String(http.StatusOK, sourceURL)
 			return
 		}

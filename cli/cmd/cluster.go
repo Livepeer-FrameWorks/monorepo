@@ -1483,7 +1483,10 @@ func checkYugabyteLocalYSQL(ctx context.Context, sshPool *fwssh.Pool, host inven
 		result.Error = fmt.Sprintf("ssh connect: %v", err)
 		return result
 	}
+	return probeYugabyteLocalYSQL(ctx, runner, pg, result)
+}
 
+func probeYugabyteLocalYSQL(ctx context.Context, runner fwssh.Runner, pg *inventory.PostgresConfig, result *health.CheckResult) *health.CheckResult {
 	exec := &provisioner.SSHExecutor{Runner: runner, UseYugabyteTools: true}
 	conn := provisioner.ConnParams{
 		Port:     pg.EffectivePort(),
@@ -1493,22 +1496,23 @@ func checkYugabyteLocalYSQL(ctx context.Context, sshPool *fwssh.Pool, host inven
 	queryCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
-	// The probe runs over SSH; its own round trip is measured first and
-	// subtracted, so Latency is the node's ysqlsh connect-and-query time.
-	rttStart := time.Now()
-	_, _ = runner.Run(queryCtx, "true") //nolint:errcheck // timing only; the query below reports failures.
-	sshRTT := time.Since(rttStart)
-
-	start := time.Now()
-	var one int
-	if err := exec.QueryRow(queryCtx, conn, "SELECT 1", nil, &one); err != nil {
+	// ysqlsh is timed on the node: timing it from here would add the SQL file
+	// upload and several SSH round trips, which dwarf the database's answer.
+	out, err := runner.Run(queryCtx, yugabyteYSQLTimingProbe(conn))
+	if err != nil || out == nil || out.ExitCode != 0 {
 		result.OK = false
 		result.Status = "unhealthy"
-		result.Error = fmt.Sprintf("local YSQL query failed: %v", err)
+		result.Error = "local YSQL query failed: " + diagnosticCommandError(out, err)
 		return result
 	}
-	result.Latency = max(time.Since(start)-sshRTT, 0)
-	result.Metadata["ssh_rtt"] = sshRTT.String()
+	latency, err := parseYugabyteYSQLTiming(out.Stdout)
+	if err != nil {
+		result.OK = false
+		result.Status = "unhealthy"
+		result.Error = fmt.Sprintf("local YSQL query: %v", err)
+		return result
+	}
+	result.Latency = latency
 
 	var version string
 	if err := exec.QueryRow(queryCtx, conn, "SELECT version()", nil, &version); err == nil {
@@ -1520,8 +1524,34 @@ func checkYugabyteLocalYSQL(ctx context.Context, sshPool *fwssh.Pool, host inven
 
 	result.OK = true
 	result.Status = "healthy"
-	result.Message = fmt.Sprintf("Local YSQL query OK (latency: %v net of %v SSH round trip)", result.Latency, sshRTT)
+	result.Message = fmt.Sprintf("Local YSQL query OK (ysqlsh connect and SELECT 1 on the node: %v)", result.Latency.Round(time.Millisecond))
 	return result
+}
+
+// yugabyteYSQLTimingProbe runs ysqlsh's connect and SELECT 1 on the node with
+// the same client, address and role as SSHExecutor, and prints the elapsed
+// microseconds as ysql_elapsed_us=N.
+func yugabyteYSQLTimingProbe(conn provisioner.ConnParams) string {
+	return fmt.Sprintf(`%s
+yb_client="$(fw_yb_bin ysqlsh)" || exit 1
+start=$(date +%%s%%N)
+"$yb_client" -X -h localhost -p %d -U %s -d %s -v ON_ERROR_STOP=1 -tA -c 'SELECT 1' >/dev/null || exit 2
+end=$(date +%%s%%N)
+echo "ysql_elapsed_us=$(( (end - start) / 1000 ))"`,
+		provisioner.YugabyteBinaryResolverShell, conn.Port, fwssh.ShellQuote(conn.User), fwssh.ShellQuote(conn.Database))
+}
+
+func parseYugabyteYSQLTiming(output string) (time.Duration, error) {
+	for _, field := range strings.Fields(output) {
+		if value, ok := strings.CutPrefix(field, "ysql_elapsed_us="); ok {
+			us, err := strconv.ParseInt(value, 10, 64)
+			if err != nil || us < 0 {
+				return 0, fmt.Errorf("unreadable timing %q", value)
+			}
+			return time.Duration(us) * time.Microsecond, nil
+		}
+	}
+	return 0, fmt.Errorf("no timing in %q", strings.TrimSpace(output))
 }
 
 // postgresCandidateHosts returns the manifest hosts to probe for a
@@ -1545,8 +1575,9 @@ func postgresCandidateHosts(manifest *inventory.Manifest, pg *inventory.Postgres
 	return hosts
 }
 
-// yugabyteYSQLSlowThreshold is the local connect-and-query time past which a
-// tserver counts as degraded: a healthy node answers SELECT 1 in well under it.
+// yugabyteYSQLSlowThreshold is the node-local ysqlsh connect-and-SELECT-1 time
+// past which a tserver counts as degraded. Staging tservers answer in 26-33 ms
+// (SELECT 1 itself well under 2 ms), so this only trips on a stalled node.
 const yugabyteYSQLSlowThreshold = time.Second
 
 // checkYugabyteCluster probes YSQL on every tserver and asks the masters

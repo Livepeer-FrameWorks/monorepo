@@ -3020,6 +3020,10 @@ CREATE INDEX IF NOT EXISTS idx_purser_billing_event_outbox_pending_range
 CREATE INDEX IF NOT EXISTS idx_purser_billing_event_outbox_tenant
     ON purser.billing_event_outbox(tenant_id, created_at DESC);
 
+CREATE INDEX IF NOT EXISTS idx_purser_billing_event_outbox_completed_range
+    ON purser.billing_event_outbox (completed_at ASC)
+    WHERE completed_at IS NOT NULL;
+
 -- ============================================================================
 -- DOMAIN EVENT OUTBOX
 -- pkg/events/outbox.TableDDL("purser"), verbatim. Billing, subscription,

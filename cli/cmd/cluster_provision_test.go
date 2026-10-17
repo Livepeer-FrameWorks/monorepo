@@ -4180,8 +4180,23 @@ func TestBuildVMAgentScrapeTargetsIncludesYugabyte(t *testing.T) {
 	if !ok {
 		t.Fatalf("tserver params = %#v, want a metrics filter", tserver["params"])
 	}
-	if got := params["metrics"]; len(got) != 1 || !strings.Contains(got[0], "is_raft_leader") {
-		t.Fatalf("tserver metrics filter = %v, want is_raft_leader", got)
+	got := params["metrics"]
+	if len(got) != 1 {
+		t.Fatalf("tserver metrics filter = %v, want one comma-separated list", got)
+	}
+	for _, metric := range []string{"is_raft_leader", "follower_lag_ms"} {
+		if !slices.Contains(strings.Split(got[0], ","), metric) {
+			t.Fatalf("tserver metrics filter = %v, want %s", got, metric)
+		}
+	}
+	// YugabyteTabletLeaderless weighs the replicas that hear no leader plus
+	// the universe's missing tservers against a Raft majority, per universe.
+	labels := scrapeTargetLabels(t, tserver)
+	if labels["yb_universe"] != inventory.PrimaryDatabaseDeployment || labels["yb_replication_factor"] != "2" || labels["yb_tservers"] != "2" {
+		t.Fatalf("tserver labels = %v, want yb_universe=%s yb_replication_factor=2 yb_tservers=2", labels, inventory.PrimaryDatabaseDeployment)
+	}
+	if got := scrapeTargetLabels(t, master)["yb_universe"]; got != inventory.PrimaryDatabaseDeployment {
+		t.Fatalf("master yb_universe label = %q, want %s", got, inventory.PrimaryDatabaseDeployment)
 	}
 	if got := params["show_help"]; !slices.Equal(got, []string{"false"}) {
 		t.Fatalf("tserver show_help = %v, want false", got)

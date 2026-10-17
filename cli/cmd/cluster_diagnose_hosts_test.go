@@ -56,7 +56,7 @@ func replyRunnerFor(reply func(host, command string) (string, int), commands *[]
 
 func TestDiagnoseHostTargetsIncludeEdgeNodesBesideTheManifest(t *testing.T) {
 	dir := t.TempDir()
-	edgeYAML := "version: v1\nroot_domain: example.com\nnodes:\n  - name: edge-eu\n    ssh: ops@203.0.113.7\n"
+	edgeYAML := "version: v1\nroot_domain: example.com\nmode: docker\nnodes:\n  - name: edge-eu\n    ssh: ops@203.0.113.7\n  - name: edge-us\n    ssh: ops@203.0.113.8\n    mode: native\n"
 	if err := os.WriteFile(filepath.Join(dir, "edge.yaml"), []byte(edgeYAML), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -65,17 +65,25 @@ func TestDiagnoseHostTargetsIncludeEdgeNodesBesideTheManifest(t *testing.T) {
 		ManifestPath: filepath.Join(dir, "cluster.yaml"),
 	}
 	targets := diagnoseHostTargets(io.Discard, rc, "")
-	var edge *diagnoseHost
+	var edge, native *diagnoseHost
 	for i := range targets {
-		if targets[i].Name == "edge-eu" {
+		switch targets[i].Name {
+		case "edge-eu":
 			edge = &targets[i]
+		case "edge-us":
+			native = &targets[i]
 		}
 	}
-	if edge == nil {
-		t.Fatalf("edge node from edge.yaml missing from diagnose targets: %+v", targets)
+	if edge == nil || native == nil {
+		t.Fatalf("edge nodes from edge.yaml missing from diagnose targets: %+v", targets)
 	}
 	if !edge.Edge || edge.Host.ExternalIP != "203.0.113.7" || edge.Host.User != "ops" {
 		t.Fatalf("edge target = %+v, want edge host ops@203.0.113.7", *edge)
+	}
+	// The manifest's deprecated "docker" default resolves to container; the
+	// per-node override wins.
+	if edge.EdgeMode != "container" || native.EdgeMode != "native" {
+		t.Fatalf("edge modes = %q/%q, want container/native", edge.EdgeMode, native.EdgeMode)
 	}
 }
 
@@ -195,5 +203,106 @@ func TestDiagnoseResourcesPrintsEachMetricOnItsOwnLineAndChecksDataMounts(t *tes
 	}
 	if failures != 1 {
 		t.Fatalf("failures = %d, want 1 (the 95%% full data disk)\n%s", failures, out)
+	}
+}
+
+// stagingNativeEdgeListeners is `ss -Hltnu` from staging edge fw-stg-edge-eu
+// (native, vmagent installed) on 2026-10-16, before node_exporter rolled out.
+const stagingNativeEdgeListeners = `tcp   LISTEN 0      4096         0.0.0.0:22         0.0.0.0:*
+tcp   LISTEN 0      4096               *:1935             *:*
+tcp   LISTEN 0      4096               *:4200             *:*
+tcp   LISTEN 0      4096               *:443              *:*
+tcp   LISTEN 0      4096               *:5554             *:*
+tcp   LISTEN 0      4096               *:80               *:*
+tcp   LISTEN 0      4096               *:8080             *:*
+tcp   LISTEN 0      4096       127.0.0.1:18007      0.0.0.0:*
+tcp   LISTEN 0      4096       127.0.0.1:18017      0.0.0.0:*
+tcp   LISTEN 0      4096       127.0.0.1:2019       0.0.0.0:*
+tcp   LISTEN 0      4096       127.0.0.1:4242       0.0.0.0:*
+tcp   LISTEN 0      4096       127.0.0.1:8429       0.0.0.0:*
+udp   UNCONN 0      0      [::ffff:127.0.0.1]:4242          *:*
+udp   UNCONN 0      0                  *:443              *:*
+udp   UNCONN 0      0            0.0.0.0:18203      0.0.0.0:*
+udp   UNCONN 0      0            0.0.0.0:64142      0.0.0.0:*
+udp   UNCONN 0      0            0.0.0.0:8889       0.0.0.0:*
+`
+
+func TestDiagnosePortsChecksEveryEdgeBundleListener(t *testing.T) {
+	manifest := &inventory.Manifest{Hosts: map[string]inventory.Host{}}
+	cases := []struct {
+		name         string
+		mode         string
+		ss           string
+		wantFailures int
+		wantDown     []string
+		wantUp       []string
+	}{
+		{
+			name: "native edge with vmagent but no node_exporter",
+			mode: "native",
+			ss:   stagingNativeEdgeListeners,
+			// vmagent runs, so the node_exporter installed beside it must too.
+			wantFailures: 1,
+			wantDown:     []string{"9110 node-exporter (tcp)"},
+			wantUp: []string{
+				"1935 mist-rtmp (tcp)", "8889 mist-srt (udp)", "18203 mist-webrtc (udp)",
+				"18017 helmsman-management (tcp)", "4242 mist-api (tcp)", "2019 caddy-admin (tcp)", "443 caddy-http3 (udp)",
+			},
+		},
+		{
+			name:         "native edge without SRT",
+			mode:         "native",
+			ss:           strings.ReplaceAll(stagingNativeEdgeListeners, "udp   UNCONN 0      0            0.0.0.0:8889       0.0.0.0:*\n", "") + "tcp   LISTEN 0      4096       127.0.0.1:9110       0.0.0.0:*\n",
+			wantFailures: 1,
+			wantDown:     []string{"8889 mist-srt (udp)"},
+			wantUp:       []string{"9110 node-exporter (tcp)"},
+		},
+		{
+			name: "container edge where only Caddy and a Mist UDP socket on 4242 are up",
+			mode: "container",
+			ss: "tcp   LISTEN 0      4096               *:80               *:*\n" +
+				"tcp   LISTEN 0      4096               *:443              *:*\n" +
+				"udp   UNCONN 0      0                  *:443              *:*\n" +
+				"udp   UNCONN 0      0      [::ffff:127.0.0.1]:4242          *:*\n",
+			// Helmsman x2 and Mist HTTP, API, RTMP, DTSC, RTSP, SRT, WebRTC. No
+			// Caddy admin port (a unix socket in the image) and no vmagent, so
+			// no node_exporter either.
+			wantFailures: 9,
+			wantDown:     []string{"4242 mist-api (tcp)", "18007 helmsman (tcp)", "18203 mist-webrtc (udp)"},
+			wantUp:       []string{"80 caddy-http (tcp)", "443 caddy-http3 (udp)"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			targets := []diagnoseHost{{Name: "edge-eu", Host: inventory.Host{Name: "edge-eu", ExternalIP: "203.0.113.7"}, Edge: true, EdgeMode: tc.mode}}
+			reply := func(_, command string) (string, int) {
+				if strings.HasPrefix(command, "ss ") {
+					return tc.ss, 0
+				}
+				return "", 127
+			}
+			var stdout, stderr bytes.Buffer
+			failures := diagnosePorts(context.Background(), &stdout, &stderr, manifest, targets, replyRunnerFor(reply, nil))
+			out := stdout.String() + stderr.String()
+			if failures != tc.wantFailures {
+				t.Errorf("failures = %d, want %d", failures, tc.wantFailures)
+			}
+			for _, want := range tc.wantDown {
+				if !strings.Contains(out, want+": NOT LISTENING") {
+					t.Errorf("%q not reported down", want)
+				}
+			}
+			for _, want := range tc.wantUp {
+				if !strings.Contains(out, want+": listening") {
+					t.Errorf("%q not reported listening", want)
+				}
+			}
+			if tc.mode == "container" && strings.Contains(out, "caddy-admin") {
+				t.Errorf("container edge planned the Caddy admin TCP port; its admin API is a unix socket")
+			}
+			if t.Failed() {
+				t.Logf("output:\n%s", out)
+			}
+		})
 	}
 }

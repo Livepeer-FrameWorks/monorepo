@@ -467,6 +467,34 @@ func (q *Queries) MarkServiceEventOutboxClaimed(ctx context.Context, arg MarkSer
 	return err
 }
 
+const purgeCompletedNavigatorCustomDomainOutbox = `-- name: PurgeCompletedNavigatorCustomDomainOutbox :execrows
+WITH old_completed AS (
+    SELECT o.id
+    FROM quartermaster.navigator_custom_domain_outbox o
+    WHERE o.completed_at IS NOT NULL
+      AND o.completed_at < NOW() - $1::bigint * INTERVAL '1 second'
+    ORDER BY o.completed_at
+    LIMIT $2
+    FOR UPDATE OF o SKIP LOCKED
+)
+DELETE FROM quartermaster.navigator_custom_domain_outbox o
+USING old_completed c
+WHERE o.id = c.id
+`
+
+type PurgeCompletedNavigatorCustomDomainOutboxParams struct {
+	RetentionSeconds int64 `db:"retention_seconds" json:"retention_seconds"`
+	BatchLimit       int32 `db:"batch_limit" json:"batch_limit"`
+}
+
+func (q *Queries) PurgeCompletedNavigatorCustomDomainOutbox(ctx context.Context, arg PurgeCompletedNavigatorCustomDomainOutboxParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, purgeCompletedNavigatorCustomDomainOutbox, arg.RetentionSeconds, arg.BatchLimit)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const purgeCompletedNavigatorTenantAliasOutbox = `-- name: PurgeCompletedNavigatorTenantAliasOutbox :execrows
 WITH old_completed AS (
     SELECT o.id
@@ -489,6 +517,34 @@ type PurgeCompletedNavigatorTenantAliasOutboxParams struct {
 
 func (q *Queries) PurgeCompletedNavigatorTenantAliasOutbox(ctx context.Context, arg PurgeCompletedNavigatorTenantAliasOutboxParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, purgeCompletedNavigatorTenantAliasOutbox, arg.RetentionSeconds, arg.BatchLimit)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const purgeCompletedServiceEventOutbox = `-- name: PurgeCompletedServiceEventOutbox :execrows
+WITH old_completed AS (
+    SELECT o.id
+    FROM quartermaster.service_event_outbox o
+    WHERE o.completed_at IS NOT NULL
+      AND o.completed_at < NOW() - $1::bigint * INTERVAL '1 second'
+    ORDER BY o.completed_at
+    LIMIT $2
+    FOR UPDATE OF o SKIP LOCKED
+)
+DELETE FROM quartermaster.service_event_outbox o
+USING old_completed c
+WHERE o.id = c.id
+`
+
+type PurgeCompletedServiceEventOutboxParams struct {
+	RetentionSeconds int64 `db:"retention_seconds" json:"retention_seconds"`
+	BatchLimit       int32 `db:"batch_limit" json:"batch_limit"`
+}
+
+func (q *Queries) PurgeCompletedServiceEventOutbox(ctx context.Context, arg PurgeCompletedServiceEventOutboxParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, purgeCompletedServiceEventOutbox, arg.RetentionSeconds, arg.BatchLimit)
 	if err != nil {
 		return 0, err
 	}

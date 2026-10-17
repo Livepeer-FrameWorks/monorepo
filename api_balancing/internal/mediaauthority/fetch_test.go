@@ -311,9 +311,15 @@ func TestPlacementPairIsFetchedOnMissOrExpiry(t *testing.T) {
 func TestEveryFetchIsCountedOnce(t *testing.T) {
 	now := storeFixtureNow
 	store := fetchTestStore(&now)
-	outcomes := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "fetches_total"}, []string{"outcome"})
+	outcomes := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "fetches_total"}, []string{"outcome", "lookup"})
 	store.SetFetchOutcomeMetric(outcomes)
-	count := func(outcome string) float64 { return testutil.ToFloat64(outcomes.WithLabelValues(outcome)) }
+	count := func(outcome string) float64 {
+		total := 0.0
+		for _, lookup := range FetchLookups {
+			total += testutil.ToFloat64(outcomes.WithLabelValues(outcome, lookup))
+		}
+		return total
+	}
 
 	if _, err := store.Fetch(context.Background(), AuthorityLookup{AuthorityID: "a"}); err == nil {
 		t.Fatal("fetch without a fetcher succeeded")
@@ -353,6 +359,34 @@ func TestEveryFetchIsCountedOnce(t *testing.T) {
 	_, _ = store.Fetch(context.Background(), AuthorityLookup{PlaybackID: "scanner"})
 	if count("nothing") != 4 || count("unavailable") != 2 {
 		t.Fatalf("negative lookup counted as outage: nothing=%v unavailable=%v", count("nothing"), count("unavailable"))
+	}
+}
+
+// Each fetch is labelled with the kind of key it asked by, so a run of
+// "nothing" answers can be traced to playback IDs, internal names, authority
+// IDs or tenants. The key itself never becomes a label.
+func TestFetchCountsAreAttributedToTheLookupKind(t *testing.T) {
+	now := storeFixtureNow
+	store := fetchTestStore(&now)
+	outcomes := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "fetches_total"}, []string{"outcome", "lookup"})
+	store.SetFetchOutcomeMetric(outcomes)
+	store.SetAuthorityFetcher(func(context.Context, AuthorityLookup) ([][]byte, error) {
+		return nil, status.Error(codes.NotFound, "unknown")
+	})
+
+	for _, lookup := range []AuthorityLookup{
+		{PlaybackID: "scanner-1"}, {PlaybackID: "scanner-2"},
+		{InternalName: "stream"}, {AuthorityID: "authority"}, {TenantID: "tenant"},
+	} {
+		_, _ = store.Fetch(context.Background(), lookup) //nolint:errcheck // only the count matters
+	}
+	for lookup, want := range map[string]float64{"by_playback": 2, "by_internal_name": 1, "by_authority": 1, "by_tenant": 1} {
+		if got := testutil.ToFloat64(outcomes.WithLabelValues("nothing", lookup)); got != want {
+			t.Fatalf("nothing{lookup=%q} = %v, want %v", lookup, got, want)
+		}
+	}
+	if series := testutil.CollectAndCount(outcomes); series != 4 {
+		t.Fatalf("fetch counter has %d series, want one per lookup kind (4); a key leaked into a label", series)
 	}
 }
 

@@ -162,6 +162,15 @@ func (s *PurserServer) runBillingOutboxWorker(ctx context.Context) {
 	worker.Run(ctx)
 }
 
+// PruneCompleted deletes delivered billing_event_outbox rows past outbox.CompletedRetention; the claim reads only undelivered
+// rows, so a deleted delivered row changes no dispatch decision.
+func (st *billingOutboxStore) PruneCompleted(ctx context.Context) (int64, error) {
+	q := purserdb.New(st.server.db)
+	return outbox.PruneCompletedBatches(ctx, func(ctx context.Context, retentionSeconds int64, batchLimit int32) (int64, error) {
+		return q.PurgeCompletedBillingEventOutbox(ctx, purserdb.PurgeCompletedBillingEventOutboxParams{RetentionSeconds: retentionSeconds, BatchLimit: batchLimit})
+	})
+}
+
 func (s *PurserServer) claimBillingOutboxBatch(ctx context.Context) ([]billingOutboxRow, error) {
 	var out []billingOutboxRow
 	err := database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {

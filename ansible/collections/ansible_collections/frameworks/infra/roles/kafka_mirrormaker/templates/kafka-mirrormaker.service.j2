@@ -21,6 +21,8 @@ ExecStart={{ kafka_mm_bin_dir }}/connect-mirror-maker.sh {{ kafka_mm_properties_
 {% else %}
 ExecStart={{ kafka_mm_bin_dir }}/connect-mirror-maker.sh {{ kafka_mm_properties_path }}
 {% endif %}
+{# The JVM exits 128+SIGTERM after its shutdown hooks complete a clean stop. #}
+SuccessExitStatus=143
 Restart=always
 RestartSec=10
 LimitNOFILE=1048576

@@ -4017,13 +4017,20 @@ func buildVMAgentScrapeTargets(manifest *inventory.Manifest, hostName string) []
 				}
 				masterLabels := infraLabels("yugabyte")
 				masterLabels["port"] = "master"
+				masterLabels["yb_universe"] = deployment.Name
 				addTarget("yugabyte-master", address, 7000, "/prometheus-metrics", masterLabels)
 				// The full tserver endpoint carries every per-table series (tens
 				// of MB per scrape on a few hundred tables), so the scrape asks
 				// for the per-table Raft leadership and follower lag plus clock
-				// skew the alert rules read.
+				// skew the alert rules read. Leaderless-tablet detection counts
+				// the replicas of a table that hear no leader plus the universe's
+				// missing tservers against a Raft majority, so every tserver
+				// series carries its universe, replication factor and size.
 				tserverLabels := infraLabels("yugabyte")
 				tserverLabels["port"] = "tserver"
+				tserverLabels["yb_universe"] = deployment.Name
+				tserverLabels["yb_replication_factor"] = strconv.Itoa(pg.EffectiveReplicationFactor())
+				tserverLabels["yb_tservers"] = strconv.Itoa(len(pg.Nodes))
 				addParamTarget("yugabyte-tserver", address, 11000, "/prometheus-metrics", tserverLabels, map[string][]string{
 					"show_help": {"false"},
 					"metrics":   {yugabyteTServerScrapeMetrics},

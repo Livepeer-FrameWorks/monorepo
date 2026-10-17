@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"frameworks/cli/internal/templates"
 	"frameworks/cli/internal/ux"
 	"frameworks/cli/pkg/detect"
 	"frameworks/cli/pkg/inventory"
@@ -75,6 +76,9 @@ type logsSnapshotOptions struct {
 type logsSnapshotHost struct {
 	Name string
 	Host inventory.Host
+	// EdgeMode is the resolved install mode of an edge-manifest node; empty
+	// for cluster hosts.
+	EdgeMode string
 }
 
 func newClusterLogsSnapshotCmd() *cobra.Command {
@@ -529,7 +533,7 @@ func logsSnapshotHosts(manifest *inventory.Manifest, edgeManifestPath, ageKeyFil
 		if err != nil {
 			return nil, err
 		}
-		hosts = append(hosts, logsSnapshotHost{Name: node.Name, Host: host})
+		hosts = append(hosts, logsSnapshotHost{Name: node.Name, Host: host, EdgeMode: templates.NormalizeEdgeMode(node.ResolvedMode(edgeManifest.Mode))})
 		seen[node.Name] = struct{}{}
 	}
 	sort.SliceStable(hosts, func(i, j int) bool {

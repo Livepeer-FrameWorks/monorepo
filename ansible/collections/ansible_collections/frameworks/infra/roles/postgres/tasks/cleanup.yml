@@ -6,10 +6,13 @@
     enabled: false
   failed_when: false
 
-- name: Remove postgres exporter unit
+- name: Remove postgres exporter unit and config
   ansible.builtin.file:
-    path: "/etc/systemd/system/{{ postgres_exporter_service_name }}.service"
+    path: "{{ item }}"
     state: absent
+  loop:
+    - "/etc/systemd/system/{{ postgres_exporter_service_name }}.service"
+    - "{{ postgres_exporter_config_path }}"
 
 - name: Stop and disable postgresql
   ansible.builtin.systemd:

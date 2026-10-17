@@ -1174,10 +1174,12 @@ func main() {
 	mediaAuthorityFetches := metricsCollector.NewCounter(
 		"media_authority_fetches_total",
 		"Outcomes of asking the control plane for an authority a decision needed and the cell did not hold as valid",
-		[]string{"outcome"},
+		[]string{"outcome", "lookup"},
 	)
 	for _, outcome := range localauthority.FetchOutcomes {
-		mediaAuthorityFetches.WithLabelValues(outcome).Add(0)
+		for _, lookup := range localauthority.FetchLookups {
+			mediaAuthorityFetches.WithLabelValues(outcome, lookup).Add(0)
+		}
 	}
 	mediaAuthorityShadow := metricsCollector.NewCounter(
 		"media_authority_shadow_total",

@@ -114,34 +114,23 @@ func (st *aliasOutboxStore) RecordFailure(ctx context.Context, id string, attemp
 	return st.server.recordAliasOutboxFailure(ctx, id, attempts, cause, backoff)
 }
 
-// Delivered hand-offs are kept a week for inspection, then deleted in bounded batches. The per-tenant claim order
-// reads only undelivered rows, so a deleted delivered row changes no dispatch decision.
-const (
-	aliasOutboxCompletedRetention     = 7 * 24 * time.Hour
-	aliasOutboxPruneBatch             = 1000
-	aliasOutboxMaxPruneBatchesPerPass = 100
-)
-
+// PruneCompleted deletes alias hand-offs delivered past outbox.CompletedRetention. The per-tenant claim order reads
+// only undelivered rows, so a deleted delivered row changes no dispatch decision.
 func (st *aliasOutboxStore) PruneCompleted(ctx context.Context) (int64, error) {
 	return pruneCompletedAliasOutbox(ctx, quartermasterdb.New(st.server.db))
 }
 
 func pruneCompletedAliasOutbox(ctx context.Context, q *quartermasterdb.Queries) (int64, error) {
-	var total int64
-	for range aliasOutboxMaxPruneBatchesPerPass {
-		n, err := q.PurgeCompletedNavigatorTenantAliasOutbox(ctx, quartermasterdb.PurgeCompletedNavigatorTenantAliasOutboxParams{
-			RetentionSeconds: int64(aliasOutboxCompletedRetention.Seconds()),
-			BatchLimit:       aliasOutboxPruneBatch,
+	n, err := outbox.PruneCompletedBatches(ctx, func(ctx context.Context, retentionSeconds int64, batchLimit int32) (int64, error) {
+		return q.PurgeCompletedNavigatorTenantAliasOutbox(ctx, quartermasterdb.PurgeCompletedNavigatorTenantAliasOutboxParams{
+			RetentionSeconds: retentionSeconds,
+			BatchLimit:       batchLimit,
 		})
-		total += n
-		if err != nil {
-			return total, fmt.Errorf("prune delivered navigator tenant-alias outbox rows: %w", err)
-		}
-		if n < aliasOutboxPruneBatch {
-			break
-		}
+	})
+	if err != nil {
+		return n, fmt.Errorf("prune delivered navigator tenant-alias outbox rows: %w", err)
 	}
-	return total, nil
+	return n, nil
 }
 
 type aliasOutboxDispatcher struct {

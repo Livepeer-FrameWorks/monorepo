@@ -16,6 +16,8 @@ Environment="KAFKA_OPTS=-javaagent:{{ kafka_jmx_exporter_jar }}=127.0.0.1:{{ kaf
 Environment="KAFKA_JMX_OPTS=-Djava.awt.headless=true"
 ExecStart={{ kafka_bin_dir }}/kafka-server-start.sh {{ kafka_properties_path }}
 ExecStop={{ kafka_bin_dir }}/kafka-server-stop.sh
+{# The JVM exits 128+SIGTERM after its shutdown hooks complete a clean stop. #}
+SuccessExitStatus=143
 Restart=always
 RestartSec=5
 LimitNOFILE=1048576

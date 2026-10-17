@@ -125,6 +125,15 @@ func (s *QuartermasterServer) runNavigatorCustomDomainOutboxWorker(ctx context.C
 	worker.Run(ctx)
 }
 
+// PruneCompleted deletes delivered navigator_custom_domain_outbox rows past outbox.CompletedRetention; the claim reads only undelivered
+// rows, so a deleted delivered row changes no dispatch decision.
+func (st *navOutboxStore) PruneCompleted(ctx context.Context) (int64, error) {
+	q := quartermasterdb.New(st.server.db)
+	return outbox.PruneCompletedBatches(ctx, func(ctx context.Context, retentionSeconds int64, batchLimit int32) (int64, error) {
+		return q.PurgeCompletedNavigatorCustomDomainOutbox(ctx, quartermasterdb.PurgeCompletedNavigatorCustomDomainOutboxParams{RetentionSeconds: retentionSeconds, BatchLimit: batchLimit})
+	})
+}
+
 func (s *QuartermasterServer) claimNavOutboxBatch(ctx context.Context) ([]navOutboxRow, error) {
 	var out []navOutboxRow
 	err := database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {

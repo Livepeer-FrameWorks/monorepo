@@ -232,3 +232,31 @@ func (q *Queries) MarkBillingEventOutboxClaimed(ctx context.Context, arg MarkBil
 	_, err := q.db.ExecContext(ctx, markBillingEventOutboxClaimed, arg.LeaseToken, pq.Array(arg.Ids))
 	return err
 }
+
+const purgeCompletedBillingEventOutbox = `-- name: PurgeCompletedBillingEventOutbox :execrows
+WITH old_completed AS (
+    SELECT o.id
+    FROM purser.billing_event_outbox o
+    WHERE o.completed_at IS NOT NULL
+      AND o.completed_at < NOW() - $1::bigint * INTERVAL '1 second'
+    ORDER BY o.completed_at
+    LIMIT $2
+    FOR UPDATE OF o SKIP LOCKED
+)
+DELETE FROM purser.billing_event_outbox o
+USING old_completed c
+WHERE o.id = c.id
+`
+
+type PurgeCompletedBillingEventOutboxParams struct {
+	RetentionSeconds int64 `db:"retention_seconds" json:"retention_seconds"`
+	BatchLimit       int32 `db:"batch_limit" json:"batch_limit"`
+}
+
+func (q *Queries) PurgeCompletedBillingEventOutbox(ctx context.Context, arg PurgeCompletedBillingEventOutboxParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, purgeCompletedBillingEventOutbox, arg.RetentionSeconds, arg.BatchLimit)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}

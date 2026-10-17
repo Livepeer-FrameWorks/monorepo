@@ -84,6 +84,26 @@ func (l AuthorityLookup) String() string {
 	}
 }
 
+// FetchLookups are the lookup labels of media_authority_fetches_total: which
+// key a decision asked by, never the key itself.
+var FetchLookups = []string{"by_authority", "by_playback", "by_internal_name", "by_tenant", "none"}
+
+// kind is the bounded metric label for the field this lookup asks by.
+func (l AuthorityLookup) kind() string {
+	switch {
+	case l.AuthorityID != "":
+		return "by_authority"
+	case l.PlaybackID != "":
+		return "by_playback"
+	case l.InternalName != "":
+		return "by_internal_name"
+	case l.TenantID != "":
+		return "by_tenant"
+	default:
+		return "none"
+	}
+}
+
 func (l AuthorityLookup) empty() bool {
 	return l.AuthorityID == "" && l.PlaybackID == "" && l.InternalName == "" && l.TenantID == ""
 }
@@ -129,7 +149,7 @@ func (s *Store) SetAuthorityFetcher(fetch AuthorityFetcher) {
 func (s *Store) Fetch(ctx context.Context, lookup AuthorityLookup) (applied bool, err error) {
 	applied, err = s.fetch(ctx, lookup)
 	if s != nil && s.fetchOutcomes != nil {
-		s.fetchOutcomes.WithLabelValues(fetchOutcome(applied, err)).Inc()
+		s.fetchOutcomes.WithLabelValues(fetchOutcome(applied, err), lookup.kind()).Inc()
 	}
 	return applied, err
 }
@@ -154,7 +174,8 @@ func fetchOutcome(applied bool, err error) string {
 	}
 }
 
-// SetFetchOutcomeMetric installs the counter every fetch is recorded on.
+// SetFetchOutcomeMetric installs the counter every fetch is recorded on. Its
+// labels are outcome then lookup (FetchOutcomes, FetchLookups).
 func (s *Store) SetFetchOutcomeMetric(outcomes *prometheus.CounterVec) {
 	if s != nil {
 		s.fetchOutcomes = outcomes

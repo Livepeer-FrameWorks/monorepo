@@ -31,3 +31,17 @@ UPDATE commodore.service_event_outbox
 SET attempts = sqlc.arg(attempts), last_error = sqlc.arg(last_error), claimed_at = NULL
 WHERE id = sqlc.arg(id)::uuid
   AND lease_token = sqlc.arg(lease_token)::uuid;
+
+-- name: PurgeCompletedServiceEventOutbox :execrows
+WITH old_completed AS (
+    SELECT o.id
+    FROM commodore.service_event_outbox o
+    WHERE o.completed_at IS NOT NULL
+      AND o.completed_at < NOW() - sqlc.arg(retention_seconds)::bigint * INTERVAL '1 second'
+    ORDER BY o.completed_at
+    LIMIT sqlc.arg(batch_limit)
+    FOR UPDATE OF o SKIP LOCKED
+)
+DELETE FROM commodore.service_event_outbox o
+USING old_completed c
+WHERE o.id = c.id;

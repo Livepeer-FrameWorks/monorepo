@@ -13,10 +13,12 @@ import (
 	"frameworks/cli/pkg/ssh"
 )
 
-// kafkaQuorumFollowerLagLimit is how far behind the leader a voter may be
-// before the quorum counts as degraded: past it a further voter loss stalls
-// metadata commits.
-const kafkaQuorumFollowerLagLimit = 30 * time.Second
+// kafkaQuorumFollowerLagLimit is how long a voter may go without catching up
+// to the leader before the quorum counts as degraded. Healthy voters catch up
+// within one fetch (sub-second); past 2.5x controller.quorum.fetch.timeout.ms
+// (2 s, the Kafka default the kafka role keeps) the leader's quorum check no
+// longer counts the voter, so one more voter loss makes the leader resign.
+const kafkaQuorumFollowerLagLimit = 5 * time.Second
 
 // doctorKafkaQuorumWindow is how far back `cluster doctor` counts controller
 // leadership losses.
@@ -99,15 +101,26 @@ func (s kafkaQuorumStatus) problems(expectedVoters int) []string {
 	return out
 }
 
-// kafkaControllerJournalProbe counts, in a controller unit's journal since a
-// point in time, how often it gave up quorum leadership with no successor and
-// how many controller events were exceptionally slow.
-func kafkaControllerJournalProbe(unit, since string) string {
-	return fmt.Sprintf("journalctl -u %s --since %s --no-pager -o cat 2>/dev/null | awk '/Renouncing the leadership/ && /the leader is \\(none\\)/{r++} /Exceptionally slow controller event/{s++} END{printf \"renounced=%%d slow=%%d\\n\", r, s}'",
+// kafkaControllerLogProbe counts, in a controller unit's controller.log since
+// a point in time, how often it gave up quorum leadership with no successor
+// and how many controller events were exceptionally slow. The kafka role's
+// log4j config sends the QuorumController logger only to controller.log (and
+// its dated .gz rotations) under the unit's LOG_DIR, never to the journal.
+// since is a GNU date expression ("1 hour ago"); log4j stamps lines in host
+// local time, as does date, so the cutoff compares as text.
+func kafkaControllerLogProbe(unit, since string) string {
+	return fmt.Sprintf(`unit=%s
+cutoff=$(date -d %s '+%%Y-%%m-%%d %%H:%%M:%%S') || exit 3
+dir=$(systemctl show -p Environment --value "$unit" 2>/dev/null | tr ' ' '\n' | sed -n 's/^LOG_DIR=//p' | tail -n 1)
+[ -n "$dir" ] || dir=/var/log/kafka/$unit
+set -- "$dir"/controller.log*
+[ -e "$1" ] || { echo "no controller.log in $dir" >&2; exit 4; }
+for f in "$@"; do case "$f" in *.gz) gzip -dc "$f" ;; *) cat "$f" ;; esac; done 2>/dev/null |
+  awk -v cutoff="$cutoff" 'substr($0, 2, 19) >= cutoff && /Renouncing the leadership/ && /the leader is \(none\)/{r++} substr($0, 2, 19) >= cutoff && /Exceptionally slow controller event/{s++} END{printf "renounced=%%d slow=%%d\n", r, s}'`,
 		ssh.ShellQuote(unit), ssh.ShellQuote(since))
 }
 
-func parseKafkaControllerJournalProbe(output string) (renounced, slow int, err error) {
+func parseKafkaControllerLogProbe(output string) (renounced, slow int, err error) {
 	for _, field := range strings.Fields(output) {
 		key, value, ok := strings.Cut(field, "=")
 		if !ok {
@@ -125,7 +138,7 @@ func parseKafkaControllerJournalProbe(output string) (renounced, slow int, err e
 		}
 	}
 	if !strings.Contains(output, "renounced=") {
-		return 0, 0, fmt.Errorf("no journal counts in %q", strings.TrimSpace(output))
+		return 0, 0, fmt.Errorf("no controller log counts in %q", strings.TrimSpace(output))
 	}
 	return renounced, slow, nil
 }
@@ -159,7 +172,7 @@ func kafkaClusterLabel(cluster kafkaClusterView) string {
 }
 
 // checkKafkaQuorum reads the cluster's KRaft metadata quorum through its first
-// broker and counts leadership losses in every controller's journal since
+// broker and counts leadership losses in every controller's controller.log since
 // `since`. A missing leader, a voter set that differs from the manifest, a
 // lagging voter, or any leadership loss in the window makes it unhealthy;
 // slow controller events alone only annotate the message.
@@ -211,12 +224,12 @@ func checkKafkaQuorum(ctx context.Context, manifest *inventory.Manifest, cluster
 				problems = append(problems, fmt.Sprintf("controller %d on %s: connect: %v", ctrl.ID, ctrl.Host, connErr))
 				continue
 			}
-			out, probeErr := ctrlRunner.Run(ctx, kafkaControllerJournalProbe(ctrl.Unit, since))
-			if probeErr != nil || out == nil {
-				problems = append(problems, fmt.Sprintf("controller %d on %s: journal unreadable: %s", ctrl.ID, ctrl.Host, diagnosticCommandError(out, probeErr)))
+			out, probeErr := ctrlRunner.Run(ctx, kafkaControllerLogProbe(ctrl.Unit, since))
+			if probeErr != nil || out == nil || out.ExitCode != 0 {
+				problems = append(problems, fmt.Sprintf("controller %d on %s: controller log unreadable: %s", ctrl.ID, ctrl.Host, diagnosticCommandError(out, probeErr)))
 				continue
 			}
-			renounced, slow, parseErr := parseKafkaControllerJournalProbe(out.Stdout)
+			renounced, slow, parseErr := parseKafkaControllerLogProbe(out.Stdout)
 			if parseErr != nil {
 				problems = append(problems, fmt.Sprintf("controller %d on %s: %v", ctrl.ID, ctrl.Host, parseErr))
 				continue

@@ -4,12 +4,15 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 
+	"frameworks/cli/internal/templates"
 	"frameworks/cli/internal/ux"
 	"frameworks/cli/pkg/inventory"
+	"frameworks/cli/pkg/provisioner"
 	"frameworks/cli/pkg/ssh"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
@@ -21,6 +24,9 @@ type diagnoseHost struct {
 	Name string
 	Host inventory.Host
 	Edge bool
+	// EdgeMode is the edge node's resolved install mode ("container" or
+	// "native"); empty for cluster hosts.
+	EdgeMode string
 }
 
 // diagnoseHostTargets lists the cluster manifest's hosts and the nodes of the
@@ -40,7 +46,7 @@ func diagnoseHostTargets(errOut io.Writer, rc *resolvedCluster, edgeManifestFlag
 	out := make([]diagnoseHost, 0, len(targets))
 	for _, target := range targets {
 		_, inCluster := rc.Manifest.Hosts[target.Name]
-		out = append(out, diagnoseHost{Name: target.Name, Host: target.Host, Edge: !inCluster})
+		out = append(out, diagnoseHost{Name: target.Name, Host: target.Host, Edge: !inCluster, EdgeMode: target.EdgeMode})
 	}
 	return out
 }
@@ -341,9 +347,56 @@ func diagnoseResources(ctx context.Context, stdout, stderr io.Writer, targets []
 	return failures
 }
 
-// edgePlannedPorts are the listeners every edge serves on its host in both
-// native and container mode.
-var edgePlannedPorts = map[int]string{80: "caddy-http", 443: "caddy-https"}
+// plannedListener is one socket a host should hold. An empty Proto accepts a
+// TCP listener or a bound UDP socket on the port.
+type plannedListener struct {
+	Port  int
+	Proto string
+	Owner string
+}
+
+// edgeBundleListeners returns the sockets an edge holds on its host. Both
+// modes run Caddy (HTTP, HTTPS and HTTP/3), Helmsman (webhook and management
+// listeners) and MistServer (controller API, HTTP output and the RTMP, DTSC,
+// RTSP, SRT and WebRTC listeners of Helmsman's managed protocol set). Native
+// Caddy serves its admin API on loopback TCP; the edge image serves it on a
+// unix socket. vmagent is installed only with telemetry and node_exporter is
+// installed beside it, so a listening vmagent plans node_exporter.
+func edgeBundleListeners(mode string, vmagentRunning bool) []plannedListener {
+	listeners := []plannedListener{
+		{80, "tcp", "caddy-http"},
+		{443, "tcp", "caddy-https"},
+		{443, "udp", "caddy-http3"},
+		{servicedefs.Services["helmsman"].DefaultPort, "tcp", "helmsman"},
+		{servicedefs.HelmsmanManagementPort, "tcp", "helmsman-management"},
+		{servicedefs.Services["mistserver"].DefaultPort, "tcp", "mist-http"},
+		{servicedefs.MistAPIPort, "tcp", "mist-api"},
+		{servicedefs.MistRTMPPort, "tcp", "mist-rtmp"},
+		{servicedefs.MistDTSCPort, "tcp", "mist-dtsc"},
+		{servicedefs.MistRTSPPort, "tcp", "mist-rtsp"},
+		{servicedefs.MistSRTPort, "udp", "mist-srt"},
+		{servicedefs.MistWebRTCPort, "udp", "mist-webrtc"},
+	}
+	if templates.NormalizeEdgeMode(mode) == "native" {
+		listeners = append(listeners, plannedListener{edgeNativeCaddyAdminPort, "tcp", "caddy-admin"})
+	}
+	if vmagentRunning {
+		listeners = append(listeners,
+			plannedListener{servicedefs.Services["vmagent"].DefaultPort, "tcp", "vmagent"},
+			plannedListener{provisioner.NodeExporterPort, "tcp", "node-exporter"})
+	}
+	sort.SliceStable(listeners, func(i, j int) bool {
+		if listeners[i].Port != listeners[j].Port {
+			return listeners[i].Port < listeners[j].Port
+		}
+		return listeners[i].Proto < listeners[j].Proto
+	})
+	return listeners
+}
+
+// edgeNativeCaddyAdminPort is the admin listener of Caddyfile.native.j2
+// (admin localhost:2019).
+const edgeNativeCaddyAdminPort = 2019
 
 // diagnosePlannedPorts returns, per host, every port the manifest places
 // there and the owner that binds it: SQL, ClickHouse and Kafka (including
@@ -440,14 +493,29 @@ func diagnosePlannedPorts(manifest *inventory.Manifest) map[string]map[int]strin
 	return planned
 }
 
-// listeningPorts parses `ss -Hltnu` output into the set of ports with a TCP
-// listener or bound UDP socket.
-func listeningPorts(ssOutput string) map[int]bool {
-	ports := map[int]bool{}
+// listenerSet holds the bound sockets of a host, keyed by protocol then port.
+type listenerSet map[string]map[int]bool
+
+// has reports a socket on port for proto; an empty proto accepts either.
+func (s listenerSet) has(proto string, port int) bool {
+	if proto == "" {
+		return s["tcp"][port] || s["udp"][port]
+	}
+	return s[proto][port]
+}
+
+// listeningPorts parses `ss -Hltnu` output into the TCP listeners and bound
+// UDP sockets of a host.
+func listeningPorts(ssOutput string) listenerSet {
+	set := listenerSet{"tcp": {}, "udp": {}}
 	for _, line := range strings.Split(ssOutput, "\n") {
 		fields := strings.Fields(line)
 		// Netid State Recv-Q Send-Q Local:Port Peer:Port [Process]
 		if len(fields) < 5 {
+			continue
+		}
+		proto := strings.ToLower(fields[0])
+		if _, ok := set[proto]; !ok {
 			continue
 		}
 		local := fields[4]
@@ -456,10 +524,10 @@ func listeningPorts(ssOutput string) map[int]bool {
 			continue
 		}
 		if port, err := strconv.Atoi(local[idx+1:]); err == nil {
-			ports[port] = true
+			set[proto][port] = true
 		}
 	}
-	return ports
+	return set
 }
 
 // diagnosePorts compares each target's listeners with the ports the manifest
@@ -486,37 +554,46 @@ func diagnosePorts(ctx context.Context, stdout, stderr io.Writer, manifest *inve
 			continue
 		}
 		listening := listeningPorts(result.Stdout)
-		hostPlan := planned[target.Name]
+		var hostPlan []plannedListener
 		if target.Edge {
-			hostPlan = edgePlannedPorts
+			hostPlan = edgeBundleListeners(target.EdgeMode, listening.has("tcp", servicedefs.Services["vmagent"].DefaultPort))
+		} else {
+			for port, owner := range planned[target.Name] {
+				hostPlan = append(hostPlan, plannedListener{Port: port, Owner: owner})
+			}
+			sort.Slice(hostPlan, func(i, j int) bool { return hostPlan[i].Port < hostPlan[j].Port })
 		}
-		ports := make([]int, 0, len(hostPlan))
-		for port := range hostPlan {
-			ports = append(ports, port)
-		}
-		sort.Ints(ports)
-		if len(ports) == 0 {
+		if len(hostPlan) == 0 {
 			fmt.Fprintln(stdout, "  No ports placed on this host by the manifest.")
 		}
-		for _, port := range ports {
-			if listening[port] {
-				ux.Success(stdout, fmt.Sprintf("  %d %s: listening", port, hostPlan[port]))
+		mine := map[int]bool{}
+		for _, want := range hostPlan {
+			mine[want.Port] = true
+			label := fmt.Sprintf("%d %s", want.Port, want.Owner)
+			if want.Proto != "" {
+				label += " (" + want.Proto + ")"
+			}
+			if listening.has(want.Proto, want.Port) {
+				ux.Success(stdout, fmt.Sprintf("  %s: listening", label))
 				continue
 			}
 			failures++
-			ux.Fail(stdout, fmt.Sprintf("  %d %s: NOT LISTENING", port, hostPlan[port]))
+			ux.Fail(stdout, fmt.Sprintf("  %s: NOT LISTENING", label))
 		}
 		var others []string
-		for port := range listening {
-			if _, mine := hostPlan[port]; mine {
-				continue
-			}
-			if owner, ok := catalog[port]; ok {
-				others = append(others, fmt.Sprintf("%d (%s)", port, owner))
+		for _, proto := range []string{"tcp", "udp"} {
+			for port := range listening[proto] {
+				if mine[port] {
+					continue
+				}
+				if owner, ok := catalog[port]; ok {
+					others = append(others, fmt.Sprintf("%d (%s)", port, owner))
+				}
 			}
 		}
+		slices.Sort(others)
+		others = slices.Compact(others)
 		if len(others) > 0 {
-			sort.Strings(others)
 			fmt.Fprintf(stdout, "  Catalog ports held by something this host is not planned to run: %s\n", strings.Join(others, ", "))
 		}
 	}

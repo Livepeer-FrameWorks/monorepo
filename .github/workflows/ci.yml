@@ -84,6 +84,9 @@ jobs:
               - 'scripts/configref/**'
               - 'scripts/release-channel/**'
               - 'scripts/release-assets/**'
+              - 'pkg/grafana/rules/**'
+              - 'scripts/test-alert-rules.sh'
+              - 'config/infrastructure.yaml'
               - 'cli/internal/configschema/**'
               - 'cli/internal/releases/**'
               - '.github/workflows/release.yml'
@@ -555,6 +558,8 @@ jobs:
         run: make verify-release-channels
       - name: Release asset publisher
         run: make verify-release-assets
+      - name: Alert rule unit tests
+        run: make test-alert-rules
       - name: Public event GraphQL types match the event registry
         run: make verify-graphql-events
       - name: Swift GraphQL constants

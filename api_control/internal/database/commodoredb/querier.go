@@ -481,6 +481,7 @@ type Querier interface {
 	NormalizeArtifactPlaybackID(ctx context.Context, clipHash string) (string, error)
 	NoteArtifactCreationIntentAttempt(ctx context.Context, arg NoteArtifactCreationIntentAttemptParams) error
 	ParkMediaAuthorityObligation(ctx context.Context, arg ParkMediaAuthorityObligationParams) (int64, error)
+	PurgeCompletedServiceEventOutbox(ctx context.Context, arg PurgeCompletedServiceEventOutboxParams) (int64, error)
 	RearmMediaAuthorityObligationsAwaitingTenant(ctx context.Context, tenantID string) (int64, error)
 	// Puts parked targets back in the queue, up to batch_size per statement. A
 	// target parked after exhausting its transient attempts comes back with

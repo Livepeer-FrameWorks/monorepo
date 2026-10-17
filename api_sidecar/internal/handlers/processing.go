@@ -842,15 +842,26 @@ func getProcessingSourceOverride(streamName string) (string, bool) {
 // cleared, so the source lease on outputPath is installed up front; the
 // poller's reconciliation releases it once Mist drops the stream.
 func withLocalVODSource(vodStreamName, outputPath string, boot func() error) error {
-	if internalName, ok := leases.ParseVODInternalName(vodStreamName); ok && filepath.IsAbs(outputPath) {
-		leases.GlobalTracker().ReconcileResolvedSource(vodStreamName,
-			[]string{outputPath, outputPath + ".dtsh", outputPath + ".gop"},
-			leases.AssetKey{Type: "vod", Hash: internalName}, nil,
-			leases.SourceEntry{StreamName: vodStreamName, LocalPath: outputPath, AssetType: "vod", InternalName: internalName})
-	}
+	leaseLocalVODSource(vodStreamName, outputPath)
 	setProcessingSourceOverride(vodStreamName, outputPath)
 	defer clearProcessingSourceOverride(vodStreamName)
 	return boot()
+}
+
+// leaseLocalVODSource pins a vod+ stream's local source file and the sidecars
+// Mist writes next to it once the input opens. It reconciles rather than
+// replaces, so an already resolved lease for the stream is kept as is.
+// Returns false when the name or path is not a local VOD source.
+func leaseLocalVODSource(vodStreamName, outputPath string) bool {
+	internalName, ok := leases.ParseVODInternalName(vodStreamName)
+	if !ok || !filepath.IsAbs(outputPath) {
+		return false
+	}
+	leases.GlobalTracker().ReconcileResolvedSource(vodStreamName,
+		[]string{outputPath, outputPath + ".dtsh", outputPath + ".gop"},
+		leases.AssetKey{Type: "vod", Hash: internalName}, nil,
+		leases.SourceEntry{StreamName: vodStreamName, LocalPath: outputPath, AssetType: "vod", InternalName: internalName})
+	return true
 }
 
 func clearProcessingSourceOverride(streamName string) {

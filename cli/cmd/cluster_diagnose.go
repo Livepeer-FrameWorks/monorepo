@@ -515,13 +515,13 @@ func mediaDiagnosticPorts() []int {
 // frameworks-<name>.service for each.
 var mediaDiagnosticEdgeServices = []string{"caddy", "helmsman", "mistserver"}
 
-// mediaDiagnosticEdgePorts are the listeners of an edge: Caddy's public HTTP(S),
-// Helmsman with its management port, and MistServer's HTTP, API and RTMP.
+// mediaDiagnosticEdgePorts are the TCP listeners of the edge bundle, which the
+// media probe lists with `ss -ltnp`.
 func mediaDiagnosticEdgePorts() []int {
-	ports := []int{80, 443, servicedefs.HelmsmanManagementPort, 4242, 1935}
-	for _, id := range []string{"helmsman", "mistserver"} {
-		if svc, ok := servicedefs.Services[id]; ok && svc.DefaultPort != 0 {
-			ports = append(ports, svc.DefaultPort)
+	var ports []int
+	for _, l := range edgeBundleListeners("container", false) {
+		if l.Proto == "tcp" {
+			ports = append(ports, l.Port)
 		}
 	}
 	sort.Ints(ports)
