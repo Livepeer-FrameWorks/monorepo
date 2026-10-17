@@ -14,10 +14,6 @@ import (
 	fwssh "frameworks/cli/pkg/ssh"
 )
 
-// doctorListenerCommand lists every TCP and UDP listener on a host, with the
-// owning process when the doctor may run ss as root.
-const doctorListenerCommand = "sudo -n ss -Hltunp 2>/dev/null || ss -Hltun"
-
 // exposedListener is a socket bound to every interface of its host.
 type exposedListener struct {
 	Proto   string
@@ -158,13 +154,13 @@ func checkListenerExposure(ctx context.Context, pool *fwssh.Pool, manifest *inve
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	res, err := runner.Run(probeCtx, doctorListenerCommand)
+	res, err := runner.Run(probeCtx, hostListenerShell)
 	if err != nil || res == nil || res.ExitCode != 0 {
 		result.Status, result.Error = "unhealthy", "list listeners: "+diagnosticCommandError(res, err)
 		return result
 	}
 	tcp, udp := publicListenerPorts(manifest, host.Name)
-	exposed := parseWildcardListeners(res.Stdout, tcp, udp)
+	exposed := parseWildcardListeners(normalizeHostListeners(res.Stdout), tcp, udp)
 	if len(exposed) == 0 {
 		result.OK, result.Status = true, "healthy"
 		result.Message = "no listener outside the public set binds every interface"

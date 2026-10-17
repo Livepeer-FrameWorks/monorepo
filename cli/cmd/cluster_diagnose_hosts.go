@@ -547,13 +547,13 @@ func diagnosePorts(ctx context.Context, stdout, stderr io.Writer, manifest *inve
 			ux.Fail(stderr, fmt.Sprintf("%s: cannot connect: %v", target.Name, err))
 			continue
 		}
-		result, err := runner.Run(ctx, "ss -Hltnu")
+		result, err := runner.Run(ctx, hostListenerShell)
 		if err != nil || result == nil {
 			failures++
 			ux.Fail(stderr, fmt.Sprintf("%s: listing listeners failed: %s", target.Name, diagnosticCommandError(result, err)))
 			continue
 		}
-		listening := listeningPorts(result.Stdout)
+		listening := listeningPorts(normalizeHostListeners(result.Stdout))
 		var hostPlan []plannedListener
 		if target.Edge {
 			hostPlan = edgeBundleListeners(target.EdgeMode, listening.has("tcp", servicedefs.Services["vmagent"].DefaultPort))

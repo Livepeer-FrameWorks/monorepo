@@ -121,7 +121,7 @@ func portHostReply(listening map[int]bool) func(host, command string) (string, i
 			}
 			return "free\n", 0
 		}
-		if strings.HasPrefix(command, "ss ") {
+		if command == hostListenerShell {
 			var b strings.Builder
 			for port := range listening {
 				fmt.Fprintf(&b, "tcp   LISTEN 0      4096               *:%d            *:*\n", port)
@@ -276,7 +276,7 @@ func TestDiagnosePortsChecksEveryEdgeBundleListener(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			targets := []diagnoseHost{{Name: "edge-eu", Host: inventory.Host{Name: "edge-eu", ExternalIP: "203.0.113.7"}, Edge: true, EdgeMode: tc.mode}}
 			reply := func(_, command string) (string, int) {
-				if strings.HasPrefix(command, "ss ") {
+				if command == hostListenerShell {
 					return tc.ss, 0
 				}
 				return "", 127

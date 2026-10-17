@@ -15,7 +15,7 @@ import (
 // edgeListenerCommand prints an edge's listeners, then the host's ephemeral
 // port range, then the MistServer runtime config (the native unit's
 // /etc/mistserver.conf, or the edge container's /etc/frameworks/mistserver.conf).
-const edgeListenerCommand = `(sudo -n ss -Hltunp 2>/dev/null || ss -Hltun)
+const edgeListenerCommand = `(` + hostListenerShell + `)
 echo "` + edgePortRangeMarker + ` $(cat /proc/sys/net/ipv4/ip_local_port_range 2>/dev/null)"
 echo "` + edgeMistConfigMarker + `"
 fw_docker() { if docker version >/dev/null 2>&1; then docker "$@"; else sudo -n docker "$@"; fi; }
@@ -81,7 +81,7 @@ func parseEdgeListenerProbe(output string) (string, edgeListenerPolicy, error) {
 	if rangeAt < 0 || configAt < rangeAt {
 		return "", policy, fmt.Errorf("edge listener probe output is incomplete")
 	}
-	listeners := output[:rangeAt]
+	listeners := normalizeHostListeners(output[:rangeAt])
 	if fields := strings.Fields(output[rangeAt+len(edgePortRangeMarker) : configAt]); len(fields) == 2 {
 		low, lowErr := strconv.Atoi(fields[0])
 		high, highErr := strconv.Atoi(fields[1])
