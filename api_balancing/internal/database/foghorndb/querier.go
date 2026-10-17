@@ -51,6 +51,9 @@ type Querier interface {
 	BackfillFederatedArtifactLifecycleBatch(ctx context.Context, batchSize int32) (BackfillFederatedArtifactLifecycleBatchRow, error)
 	BackfillFederatedPointerPurgeEligibilityBatch(ctx context.Context, batchSize int32) (BackfillFederatedPointerPurgeEligibilityBatchRow, error)
 	BackfillOriginCluster(ctx context.Context, arg BackfillOriginClusterParams) (int64, error)
+	// Settles terminal artifacts that a writer left sync_status='in_progress' before
+	// the terminal trigger existed; the trigger settles every later transition.
+	BackfillTerminalSyncStatusBatch(ctx context.Context, batchSize int32) (BackfillTerminalSyncStatusBatchRow, error)
 	BackoffCatalogProjection(ctx context.Context, arg BackoffCatalogProjectionParams) error
 	BackoffThumbnailRecovery(ctx context.Context, arg BackoffThumbnailRecoveryParams) error
 	BeginMediaAuthorityConfirmation(ctx context.Context) (time.Time, error)
@@ -127,6 +130,7 @@ type Querier interface {
 	CountLegacyFederatedArtifactPointers(ctx context.Context) (int64, error)
 	CountOtherCompleteArtifactCopies(ctx context.Context, arg CountOtherCompleteArtifactCopiesParams) (int64, error)
 	CountStaleUnconsumedCreationCommands(ctx context.Context, retentionSeconds int64) (int64, error)
+	CountTerminalArtifactsWithSyncInProgress(ctx context.Context) (int64, error)
 	CountUnreclaimedDVRSegments(ctx context.Context, arg CountUnreclaimedDVRSegmentsParams) (int64, error)
 	CountUnverifiedThumbnailObjects(ctx context.Context, attemptID string) (int64, error)
 	DVRHasStoredSegments(ctx context.Context, artifactHash string) (bool, error)

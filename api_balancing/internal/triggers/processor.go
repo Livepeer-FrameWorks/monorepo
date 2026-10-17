@@ -34,6 +34,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/models"
 	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
@@ -173,6 +174,11 @@ type Processor struct {
 	nodeClusterCache  *cache.Cache // Cache node_id (logical) -> cluster_id
 	clusterOwnerCache *cache.Cache // Cache cluster_id -> owner_tenant_id
 	peerNotifier      PeerNotifier // demand-driven peer discovery (nil when federation disabled)
+
+	// admissionPeerWarnedAt holds, per media peer cluster, when admission
+	// last reported it as missing a Foghorn address.
+	admissionPeerWarnMu   sync.Mutex
+	admissionPeerWarnedAt map[string]time.Time
 
 	gatewayMu         sync.RWMutex
 	gatewayURLs       map[string]gatewayCacheEntry // cluster_id -> resolved gateway URLs (empty = no gateway), gatewayCacheTTL each
@@ -7993,11 +7999,20 @@ func (p *Processor) ingestClusterIDForNode(ctx context.Context, nodeID string) s
 	return strings.TrimSpace(p.resolveNodeClusterIDWithContext(ctx, nodeID))
 }
 
+// admissionPeerWarnInterval bounds how often admission reports one media peer
+// cluster that has no Foghorn address; the condition is per cluster, not per
+// stream.
+const admissionPeerWarnInterval = 10 * time.Minute
+
 // admissionPeerHints is the durable peer set an admission broadcasts its live
-// state to: every peer cluster except this one and the clusters it serves.
-// Quartermaster names a peer's Foghorn only while one is running and healthy
-// for that cluster; a peer without it cannot take the broadcast, and recording
-// it would poison the leg for every other peer.
+// state to: every peer cluster with a Foghorn, except this one and the clusters
+// it serves. Quartermaster names a peer's Foghorn only while one is running and
+// healthy for that cluster; a peer without it cannot take the broadcast, and
+// recording it would poison the leg for every other peer. A control-plane
+// cluster (non-edge cluster_type) without a Foghorn is not a media cell and is
+// skipped silently; a central cluster can still run the Foghorn of a cell, so
+// the type alone does not exclude a peer that has one. A media cluster without
+// a Foghorn is a misconfiguration and is reported.
 func (p *Processor) admissionPeerHints(internalName string, peers []*clusterpeerpb.TenantClusterPeer) []control.AdmissionPeerHint {
 	var hints []control.AdmissionPeerHint
 	for _, peer := range peers {
@@ -8010,10 +8025,9 @@ func (p *Processor) admissionPeerHints(internalName string, peers []*clusterpeer
 			continue
 		}
 		if clusterID == "" || addr == "" {
-			p.logger.WithFields(logging.Fields{
-				"internal_name": internalName,
-				"peer_cluster":  clusterID,
-			}).Warn("Admission skips a peer cluster with no Foghorn address")
+			if clusterType := strings.TrimSpace(peer.GetClusterType()); clusterType == "" || models.ClusterTypeCanOwnLiveIngest(clusterType) {
+				p.warnAdmissionPeerWithoutFoghorn(internalName, clusterID)
+			}
 			continue
 		}
 		role := strings.TrimSpace(peer.GetRole())
@@ -8025,4 +8039,24 @@ func (p *Processor) admissionPeerHints(internalName string, peers []*clusterpeer
 		})
 	}
 	return hints
+}
+
+// warnAdmissionPeerWithoutFoghorn reports a media peer cluster Quartermaster
+// names no Foghorn for at most once per admissionPeerWarnInterval.
+func (p *Processor) warnAdmissionPeerWithoutFoghorn(internalName, clusterID string) {
+	now := time.Now()
+	p.admissionPeerWarnMu.Lock()
+	if last, ok := p.admissionPeerWarnedAt[clusterID]; ok && now.Sub(last) < admissionPeerWarnInterval {
+		p.admissionPeerWarnMu.Unlock()
+		return
+	}
+	if p.admissionPeerWarnedAt == nil {
+		p.admissionPeerWarnedAt = make(map[string]time.Time)
+	}
+	p.admissionPeerWarnedAt[clusterID] = now
+	p.admissionPeerWarnMu.Unlock()
+	p.logger.WithFields(logging.Fields{
+		"internal_name": internalName,
+		"peer_cluster":  clusterID,
+	}).Warn("Admission skips a media peer cluster with no Foghorn address")
 }

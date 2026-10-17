@@ -9,7 +9,7 @@ FROM foghorn.dvr_segments
 WHERE artifact_hash = $1 AND segment_name = $2;
 
 -- name: HealLostDVRSegment :exec
-UPDATE foghorn.dvr_segments SET status = 'pending'
+UPDATE foghorn.dvr_segments SET status = 'pending', drop_reason = NULL, dropped_at = NULL
 WHERE artifact_hash = $1 AND segment_name = $2 AND status = 'lost_local';
 
 -- name: AnchorDVRStartAtFirstMedia :exec

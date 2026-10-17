@@ -108,6 +108,7 @@ func TestForwardCommand_AllCommandTypes(t *testing.T) {
 		{"apply_managed_stream", &foghornrelaypb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &foghornrelaypb.ForwardCommandRequest_ApplyManagedStream{ApplyManagedStream: &ipcpb.ApplyManagedStream{Name: "demo"}}}, "apply_managed_stream"},
 		{"retract_managed_stream", &foghornrelaypb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &foghornrelaypb.ForwardCommandRequest_RetractManagedStream{RetractManagedStream: &ipcpb.RetractManagedStream{Name: "demo"}}}, "retract_managed_stream"},
 		{"drain_stream", &foghornrelaypb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &foghornrelaypb.ForwardCommandRequest_DrainStream{DrainStream: &ipcpb.DrainStreamRequest{RuntimeName: "live+demo"}}}, "drain_stream_request"},
+		{"reclaim_dvr_segment", &foghornrelaypb.ForwardCommandRequest{TargetNodeId: "node-1", Command: &foghornrelaypb.ForwardCommandRequest_ReclaimDvrSegment{ReclaimDvrSegment: &ipcpb.ReclaimDVRSegment{DvrHash: "dvr1"}}}, "reclaim_dvr_segment"},
 	}
 
 	oneofFields := foghornrelaypb.File_foghorn_relay_proto.Messages().ByName("ForwardCommandRequest").Oneofs().ByName("command").Fields()

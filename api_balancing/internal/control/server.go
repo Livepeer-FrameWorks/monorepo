@@ -1151,6 +1151,8 @@ func RelayCommandType(req *foghornrelaypb.ForwardCommandRequest) string {
 		return "apply_managed_stream"
 	case *foghornrelaypb.ForwardCommandRequest_RetractManagedStream:
 		return "retract_managed_stream"
+	case *foghornrelaypb.ForwardCommandRequest_ReclaimDvrSegment:
+		return "reclaim_dvr_segment"
 	default:
 		return "unknown"
 	}
@@ -1174,6 +1176,8 @@ func RelayRequestID(req *foghornrelaypb.ForwardCommandRequest) string {
 		return cmd.ProcessingJob.GetJobId()
 	case *foghornrelaypb.ForwardCommandRequest_Freeze:
 		return cmd.Freeze.GetRequestId()
+	case *foghornrelaypb.ForwardCommandRequest_ReclaimDvrSegment:
+		return cmd.ReclaimDvrSegment.GetRequestId()
 	default:
 		return ""
 	}

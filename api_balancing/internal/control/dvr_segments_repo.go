@@ -151,6 +151,12 @@ func InsertDVRSegment(
 			// recording finished but this segment never made it to S3. Allowing
 			// the retry lets the seeded-completed-DVR + pending-segments case
 			// (and any post-finalize race) actually upload.
+			// A deleted recording keeps no segment: its bytes are being removed,
+			// so a retry is refused and the sidecar's drop report settles the
+			// row instead of reopening it as pending.
+			if artifactStatus == "deleted" {
+				return ErrDVRSegmentTerminal
+			}
 			switch existing.Status {
 			case "lost_local":
 				// Timing already validated above. Transition back to pending so

@@ -495,7 +495,15 @@ func (s *FoghornGRPCServer) deleteArtifactBytesAfterCommit(ref artifacts.Artifac
 		defer func() { <-artifactByteDeleteSlots }()
 		ctx, cancel := context.WithTimeout(context.Background(), artifactByteDeleteTimeout)
 		defer cancel()
-		if err := cleaner.Delete(ctx, ref); err != nil {
+		err := cleaner.Delete(ctx, ref)
+		switch {
+		case errors.Is(err, artifacts.ErrMissingTarget):
+			// No object key was ever recorded (an import whose source never
+			// loaded, a VOD that never reached storage): nothing was stored,
+			// and the purge job drops the row without a delete.
+			s.logger.WithFields(fields).Debug("Deleted artifact has no stored objects to delete")
+			return
+		case err != nil:
 			s.logger.WithError(err).WithFields(fields).Warn("Failed to delete a deleted artifact's objects; the purge job retries")
 			return
 		}

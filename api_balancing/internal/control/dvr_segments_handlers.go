@@ -12,6 +12,7 @@ import (
 	"frameworks/api_balancing/internal/state"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	foghornrelaypb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_relay"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -590,8 +591,25 @@ func SendRetryDVRSegmentUpload(nodeID string, req *ipcpb.RetryDVRSegmentUpload) 
 
 // SendReclaimDVRSegment asks the recording-origin Helmsman to delete
 // local TS segment files after every overlapping chapter has reached
-// state='frozen'. Idempotent on the sidecar side.
+// state='frozen', relaying to the replica that holds the node's stream
+// when this one does not. Idempotent on the sidecar side.
 func SendReclaimDVRSegment(nodeID string, req *ipcpb.ReclaimDVRSegment) error {
+	err := SendLocalReclaimDVRSegment(nodeID, req)
+	if nodeID == "" || !shouldRelay(nodeID, err) {
+		return err
+	}
+	if commandRelay == nil {
+		return ErrNotConnected
+	}
+	return relayFailure(err, commandRelay.forward(context.Background(), &foghornrelaypb.ForwardCommandRequest{
+		TargetNodeId: nodeID,
+		Command:      &foghornrelaypb.ForwardCommandRequest_ReclaimDvrSegment{ReclaimDvrSegment: req},
+	}))
+}
+
+// SendLocalReclaimDVRSegment delivers a ReclaimDVRSegment on this replica's
+// stream for nodeID, or returns ErrNotConnected.
+func SendLocalReclaimDVRSegment(nodeID string, req *ipcpb.ReclaimDVRSegment) error {
 	if nodeID == "" {
 		return ErrNotConnected
 	}

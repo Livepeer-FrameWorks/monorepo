@@ -808,6 +808,7 @@ func TestSendRelayCoverageMatchesForwardCommandOneof(t *testing.T) {
 		"drain_stream": func() error {
 			return SendDrainStream(context.Background(), "node-1", &ipcpb.DrainStreamRequest{RuntimeName: "live+demo"})
 		},
+		"reclaim_dvr_segment": func() error { return SendReclaimDVRSegment("node-1", &ipcpb.ReclaimDVRSegment{}) },
 	}
 
 	oneofFields := foghornrelaypb.File_foghorn_relay_proto.Messages().ByName("ForwardCommandRequest").Oneofs().ByName("command").Fields()
@@ -834,6 +835,33 @@ func TestSendRelayCoverageMatchesForwardCommandOneof(t *testing.T) {
 				t.Fatalf("send command mismatch: expected=%s got=%s", field, got)
 			}
 		})
+	}
+}
+
+// Staging rc10: the chapter reclaim sweep runs on every Foghorn replica, and
+// the replica that claimed a chapter (eu-2, eu-3) did not hold the recording
+// edge's control stream, so each tick logged "Helmsman send failed; node not
+// connected" and retried. The delete order reaches the edge through the
+// replica that owns its connection.
+func TestSendReclaimDVRSegmentRelaysToConnOwnerReplica(t *testing.T) {
+	ensureRegistry(t)
+	store, _ := newTestStore(t)
+	if ok, err := store.AcquireConnOwnerFenced(context.Background(), "fw-stg-edge-eu", "foghorn-eu-1", "10.0.0.17:18019", 1); err != nil || !ok {
+		t.Fatalf("AcquireConnOwnerFenced: ok=%v err=%v", ok, err)
+	}
+	fakeRelay := &fakeFoghornRelayClient{resp: &foghornrelaypb.ForwardCommandResponse{Delivered: true}}
+	setCommandRelay(t, buildRelay(t, store, "foghorn-eu-2", "10.0.0.18:18019", &mockRelayPool{client: &mockRelayClient{relay: fakeRelay}}))
+
+	req := &ipcpb.ReclaimDVRSegment{RequestId: "chapter-reclaim-c1-0", DvrHash: "dvr1", SegmentNames: []string{"42_1.ts"}}
+	if err := SendReclaimDVRSegment("fw-stg-edge-eu", req); err != nil {
+		t.Fatalf("reclaim from a replica without the edge's stream: %v", err)
+	}
+	if fakeRelay.last == nil || fakeRelay.last.GetTargetNodeId() != "fw-stg-edge-eu" {
+		t.Fatalf("reclaim was not forwarded to the connection owner: %+v", fakeRelay.last)
+	}
+	command := fakeRelay.last.ProtoReflect().WhichOneof(fakeRelay.last.ProtoReflect().Descriptor().Oneofs().ByName("command"))
+	if command == nil || command.Name() != "reclaim_dvr_segment" {
+		t.Fatalf("forwarded command = %v, want reclaim_dvr_segment", command)
 	}
 }
 

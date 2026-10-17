@@ -90,6 +90,30 @@ func TestVerifyFederatedPointerPurgeEligibilityRejectsResetAge(t *testing.T) {
 	}
 }
 
+func TestTerminalSyncStatusBatchesAndVerifies(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	mock.ExpectQuery("WITH batch AS").WithArgs(25).
+		WillReturnRows(sqlmock.NewRows([]string{"scanned", "changed"}).AddRow(int64(3), int64(3)))
+	progress, err := runTerminalSyncStatus(context.Background(), db, datamigrate.RunOptions{BatchSize: 25})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if progress.Scanned != 3 || progress.Changed != 3 || !progress.Done {
+		t.Fatalf("unexpected progress: %+v", progress)
+	}
+	mock.ExpectQuery("SELECT COUNT\\(\\*\\)").WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(1)))
+	if err := verifyTerminalSyncStatus(context.Background(), db); err == nil {
+		t.Fatal("verification accepted a terminal artifact still in progress")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRunBackgroundStopsOnlyAfterCellLocalVerification(t *testing.T) {
 	db, _, err := sqlmock.New()
 	if err != nil {

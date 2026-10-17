@@ -139,7 +139,7 @@ When the freeze pipeline observes the chapter artifact's `sync_status='synced' A
 
 Two phases; both gated by `MarkChapterReclaimStarted` (5-min freshness) so concurrent workers don't issue duplicate orders:
 
-- **Phase A — Helmsman-side local delete.** Foghorn sends `ReclaimDVRSegment(dvr_hash, segment_names)` to Helmsman. Helmsman deletes the local TS file (working both with an active DVR job and post-stop via a deterministic `storage/dvr/*/<dvr_hash>/segments` scan) and emits `DVRSegmentDropped(was_uploaded=true)`, which moves the ledger row to `deleted_local`.
+- **Phase A — Helmsman-side local delete.** Foghorn sends `ReclaimDVRSegment(dvr_hash, segment_names)` to Helmsman, through the HA command relay when the replica that claimed the chapter does not hold the recording node's stream. Helmsman deletes the local TS file (working both with an active DVR job and post-stop via a deterministic `storage/dvr/*/<dvr_hash>/segments` scan) and emits `DVRSegmentDropped(was_uploaded=true)`, which moves the ledger row to `deleted_local`.
 - **Phase B — Foghorn S3 delete.** For each segment now in `deleted_local` or `orphan_unreachable`, Foghorn deletes the temporary S3 segment object and transitions the row to `reclaimed`.
 
 When the recording origin is gone past the abandoned-node grace (`chapterReclaimAbandonNodeGrace`, anchored on `frozen_at`), Foghorn marks non-terminal segments `orphan_unreachable` — a separate authority from `deleted_local` (which only means Helmsman acknowledged the delete via `DVRSegmentDropped`). Phase B accepts both for S3 delete. On node rejoin, startup reconcile sees `orphan_unreachable + present file`, deletes the file, and emits `DVRSegmentDropped` so the row reconciles to `deleted_local` ahead of Phase B.

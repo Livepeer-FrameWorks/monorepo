@@ -18,6 +18,7 @@ import (
 const (
 	FederatedArtifactLifecycleID       = "foghorn_federated_artifact_lifecycle_v0_3_0"
 	FederatedPointerPurgeEligibilityID = "foghorn_federated_pointer_purge_eligibility_v0_3_0"
+	TerminalSyncStatusID               = "foghorn_terminal_sync_status_v0_3_13"
 )
 
 var registerOnce sync.Once
@@ -36,6 +37,12 @@ func Register() {
 			DependsOn:   []string{FederatedArtifactLifecycleID},
 			Run:         runFederatedPointerPurgeEligibility,
 			Verify:      verifyFederatedPointerPurgeEligibility,
+		})
+		datamigrate.Register(datamigrate.Migration{
+			ID: TerminalSyncStatusID, Service: "foghorn", IntroducedIn: "v0.3.13",
+			Description: "settle sync_status on artifacts that reached a terminal status while a sync was in progress",
+			Run:         runTerminalSyncStatus,
+			Verify:      verifyTerminalSyncStatus,
 		})
 	})
 }
@@ -102,16 +109,47 @@ func verifyFederatedArtifactLifecycle(ctx context.Context, db datamigrate.DB) er
 	return nil
 }
 
+func runTerminalSyncStatus(ctx context.Context, db datamigrate.DB, opts datamigrate.RunOptions) (datamigrate.Progress, error) {
+	batchSize := opts.BatchSize
+	if batchSize <= 0 {
+		batchSize = 1000
+	}
+	queries, err := generatedQueries(db)
+	if err != nil {
+		return datamigrate.Progress{}, err
+	}
+	row, err := queries.BackfillTerminalSyncStatusBatch(ctx, int32(batchSize))
+	if err != nil {
+		return datamigrate.Progress{}, fmt.Errorf("backfill terminal sync status: %w", err)
+	}
+	return datamigrate.Progress{Scanned: row.ScannedCount, Changed: row.ChangedCount, Done: row.ScannedCount < int64(batchSize)}, nil
+}
+
+func verifyTerminalSyncStatus(ctx context.Context, db datamigrate.DB) error {
+	queries, err := generatedQueries(db)
+	if err != nil {
+		return err
+	}
+	remaining, err := queries.CountTerminalArtifactsWithSyncInProgress(ctx)
+	if err != nil {
+		return fmt.Errorf("verify terminal sync status: %w", err)
+	}
+	if remaining != 0 {
+		return fmt.Errorf("terminal sync status has %d rows remaining", remaining)
+	}
+	return nil
+}
+
 func generatedQueries(db datamigrate.DB) (*foghorndb.Queries, error) {
 	queryDB, ok := db.(foghorndb.DBTX)
 	if !ok {
-		return nil, errors.New("federated artifact migration requires the generated Foghorn DB boundary")
+		return nil, errors.New("foghorn data migrations require the generated Foghorn DB boundary")
 	}
 	return foghorndb.New(queryDB), nil
 }
 
 var runRegisteredBackground = func(ctx context.Context, db *sql.DB, batchSize int) error {
-	for _, id := range []string{FederatedArtifactLifecycleID, FederatedPointerPurgeEligibilityID} {
+	for _, id := range []string{FederatedArtifactLifecycleID, FederatedPointerPurgeEligibilityID, TerminalSyncStatusID} {
 		if err := datamigrate.HandleRun(ctx, func() (*sql.DB, error) { return db, nil }, io.Discard, []string{
 			id, "--batch-size", strconv.Itoa(batchSize),
 		}); err != nil {
@@ -130,11 +168,11 @@ func RunBackground(ctx context.Context, db *sql.DB, logger logging.Logger) {
 	for {
 		err := runRegisteredBackground(ctx, db, 1000)
 		if err == nil {
-			logger.Info("Federated artifact lifecycle migration complete")
+			logger.Info("Foghorn data migrations complete")
 			return
 		}
 		if ctx.Err() == nil {
-			logger.WithError(err).Warn("Federated artifact lifecycle migration will retry")
+			logger.WithError(err).Warn("Foghorn data migrations will retry")
 		}
 		delay := 5 * time.Second
 		timer := time.NewTimer(delay)

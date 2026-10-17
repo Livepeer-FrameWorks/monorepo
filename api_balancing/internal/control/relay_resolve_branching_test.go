@@ -11,6 +11,8 @@ import (
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	"github.com/sirupsen/logrus"
+	logrustest "github.com/sirupsen/logrus/hooks/test"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -406,6 +408,64 @@ func TestFillFileArtifactResolveCrossClusterPeerRelayNeverAddressesRequester(t *
 				if resp.GetState() != ipcpb.AssetState_ASSET_STATE_SOURCE_MISSING {
 					t.Fatalf("state = %s, want source-missing so the relay answers 404 and Mist builds the index", resp.GetState())
 				}
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+// A chapter just finalized on the cell's only edge: its row has no s3_url yet,
+// its origin is this Foghorn's cluster, and the sole fresh origin copy is the
+// requesting node (Mist on that edge probing the .dtsh it is about to build).
+// Federation cannot prepare an artifact from the cluster asking for it, so the
+// resolve answers SOURCE_MISSING without a PrepareArtifact attempt or a
+// "not retrievable from origin" warning.
+func TestFillFileArtifactResolveLocalOriginNeverFederates(t *testing.T) {
+	cases := []struct {
+		name  string
+		s3URL string
+		sync  string
+	}{
+		{name: "just finalized, no s3_url", s3URL: "", sync: "pending"},
+		{name: "synced under another provider with a local origin", s3URL: "s3://other-bucket/key.mkv", sync: "synced"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			mock, _, _ := setupArtifactTestDeps(t)
+			entitlePlatformNode(t, "fw-stg-edge-eu")
+			prevLocal := localClusterID
+			localClusterID = "staging-media-eu"
+			t.Cleanup(func() { localClusterID = prevLocal })
+			previous := crossClusterDeps
+			t.Cleanup(func() { SetCrossClusterArtifactDeps(previous) })
+			fed := &fakeCrossClusterFedClient{}
+			deps := makeCCDeps(fed, map[string]string{"staging-media-eu": "foghorn:18019"})
+			deps.LocalClusterID = "staging-media-eu"
+			SetCrossClusterArtifactDeps(deps)
+
+			mock.ExpectQuery(`FROM foghorn.artifacts`).WithArgs("h").
+				WillReturnRows(fileArtifactRows().AddRow(
+					tc.s3URL, int64(1234), "mkv", false, "",
+					tc.sync, "staging-media-eu", "", "t1", "vod", "", false))
+			mock.ExpectQuery(`FROM foghorn.artifact_nodes`).WithArgs("h", "fw-stg-edge-eu").WillReturnError(sql.ErrNoRows)
+
+			logger, hook := logrustest.NewNullLogger()
+			resp := &ipcpb.RelayResolveResponse{State: ipcpb.AssetState_ASSET_STATE_SOURCE_MISSING}
+			fillFileArtifactResolve(ctx, &ipcpb.RelayResolveRequest{AssetHash: "h", AssetKind: "vod", Ext: ".mkv"}, resp, "fw-stg-edge-eu", logger)
+
+			if resp.GetState() != ipcpb.AssetState_ASSET_STATE_SOURCE_MISSING || resp.GetError() != "" {
+				t.Fatalf("state=%s err=%q, want source-missing without error", resp.GetState(), resp.GetError())
+			}
+			for _, e := range hook.AllEntries() {
+				if e.Level <= logrus.WarnLevel {
+					t.Fatalf("local-origin resolve logged %s %q (%v)", e.Level, e.Message, e.Data)
+				}
+			}
+			if len(fed.calls) != 0 {
+				t.Fatalf("PrepareArtifact called %d times for the local cluster", len(fed.calls))
 			}
 			if err := mock.ExpectationsWereMet(); err != nil {
 				t.Fatal(err)

@@ -53,6 +53,10 @@ message ForwardCommandRequest {
     // bidi stream; relay so the unload + session-disconnect lands on the
     // right Helmsman.
     helmsmancontrol.DrainStreamRequest drain_stream = 28;
+    // Chapter reclaim local-segment delete. Every replica runs the reclaim
+    // sweep and the replica that claims a chapter may not hold the
+    // recording node's stream.
+    helmsmancontrol.ReclaimDVRSegment reclaim_dvr_segment = 30;
   }
 }
 

@@ -165,22 +165,22 @@ func fillFileArtifactResolve(ctx context.Context, req *ipcpb.RelayResolveRequest
 		//   1. Local origin node has the canonical file on disk (hot but
 		//      unsynced) — serve via a peer-relay grant pointing at that node.
 		//   2. Bytes live on a peer cluster — federate via PrepareArtifact.
-		// Path (1) covers the case where the artifact was finalized here
-		// recently and the S3 sync just hasn't landed; without it the row
-		// would 404 via the cross-cluster path's "originClusterID ==
-		// LocalClusterID → ErrCrossClusterArtifactUnavailable" check.
+		// Path (1) covers an artifact finalized here whose S3 sync has not
+		// landed. It never names the requester, so when the requester is the
+		// only origin (the finalizing node probing the .dtsh it is about to
+		// generate) nothing serves it and the answer is SOURCE_MISSING: the
+		// relay's 404 is Mist's signal to build the index from its local copy.
 		if fillPeerRelayFromLocalOrigin(ctx, req, resp, nodeID, sizeBytes, format, streamName, logger) {
 			return
 		}
-		peerCluster := strings.TrimSpace(storageClusterID.String)
-		if peerCluster == "" {
-			peerCluster = strings.TrimSpace(originClusterID.String)
-		}
-		if peerCluster != "" {
+		if peerCluster := relayPeerCluster(storageClusterID, originClusterID); peerCluster != "" {
 			// nil authorizeRedirect: already-adopted row, allowlist-checked at
 			// adopt time; RelayResolve has no requesting-tenant peer set here.
 			fillCrossClusterArtifact(ctx, req, resp, logger, nodeID, peerCluster, tenantID, artifactType, nil)
+			return
 		}
+		logger.WithFields(logging.Fields{"asset_hash": req.GetAssetHash(), "node_id": nodeID}).
+			Debug("RelayResolve: local-origin artifact has no synced copy and no other fresh origin node")
 		return
 	}
 	// Post-processing race: when a job rewrites an artifact to a new
@@ -226,11 +226,7 @@ func fillFileArtifactResolve(ctx context.Context, req *ipcpb.RelayResolveRequest
 		if fillPeerRelayFromLocalOrigin(ctx, req, resp, nodeID, sizeBytes, format, streamName, logger) {
 			return
 		}
-		peerCluster := strings.TrimSpace(storageClusterID.String)
-		if peerCluster == "" {
-			peerCluster = strings.TrimSpace(originClusterID.String)
-		}
-		if peerCluster != "" {
+		if peerCluster := relayPeerCluster(storageClusterID, originClusterID); peerCluster != "" {
 			fillCrossClusterArtifact(ctx, req, resp, logger, nodeID, peerCluster, tenantID, artifactType, nil)
 		} else {
 			logger.WithField("asset_hash", req.GetAssetHash()).Debug("RelayResolve: synced row has a non-local s3_url and no peer cluster; not presigning locally")
@@ -276,6 +272,21 @@ func fillFileArtifactResolve(ctx context.Context, req *ipcpb.RelayResolveRequest
 	}
 
 	resp.PolicyHint = ipcpb.RelayResolveResponse_CACHE_HINT_PREFER_DISK
+}
+
+// relayPeerCluster returns the cluster holding an artifact row's bytes
+// (storage redirect first, else origin) when that cluster is another cell's,
+// or "" when it is this Foghorn's own cluster or unset. Federation cannot
+// prepare an artifact from the cluster that is asking for it.
+func relayPeerCluster(storageClusterID, originClusterID sql.NullString) string {
+	peer := strings.TrimSpace(storageClusterID.String)
+	if peer == "" {
+		peer = strings.TrimSpace(originClusterID.String)
+	}
+	if peer == "" || peer == strings.TrimSpace(GetLocalClusterID()) {
+		return ""
+	}
+	return peer
 }
 
 func fillUploadResolve(ctx context.Context, req *ipcpb.RelayResolveRequest, resp *ipcpb.RelayResolveResponse, nodeID string, logger logging.Logger) {

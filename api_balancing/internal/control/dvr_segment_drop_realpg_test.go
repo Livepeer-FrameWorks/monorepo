@@ -3,6 +3,7 @@
 package control
 
 import (
+	"errors"
 	"testing"
 	"time"
 )
@@ -68,5 +69,55 @@ func TestDVRSegmentDropChangesOnlyLiveRows_RealPG(t *testing.T) {
 	}
 	if drop("never-recorded.ts", 18000) {
 		t.Fatal("the recorded tombstone was reported as a new loss")
+	}
+}
+
+// Staging 10-07: a segment of a deleted recording sat 'pending' with
+// drop_reason=artifact_terminal while its siblings were lost_local. The
+// sidecar's retry of a refused segment healed the lost_local row back to
+// pending, and nothing settles a deleted recording's pending rows. A deleted
+// recording refuses every segment retry, so the drop report settles the row.
+func TestDeletedRecordingSegmentRetryKeepsItTerminal_RealPG(t *testing.T) {
+	conn := startRealPG(t)
+	prevDB := db
+	SetDB(conn)
+	t.Cleanup(func() { SetDB(prevDB) })
+	const tenant = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	const hash = "deleted-recording-segments"
+	start := time.Now().UTC().Add(-time.Hour).Truncate(time.Second).UnixMilli()
+	if _, err := conn.ExecContext(t.Context(), `INSERT INTO foghorn.artifacts
+		(artifact_hash, artifact_type, tenant_id, status, stream_internal_name, origin_cluster_id, dvr_start_dispatch)
+		VALUES ($1, 'dvr', $2, 'deleted', 'live-stream', 'cluster-eu', '{"node_id":"owner"}')`, hash, tenant); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.ExecContext(t.Context(), `INSERT INTO foghorn.dvr_segments
+		(artifact_hash, segment_name, sequence, media_start_ms, media_end_ms, duration_ms, s3_key, status, drop_reason, dropped_at)
+		VALUES ($1, 'lost.ts', 1, $2::bigint, $2::bigint + 6000, 6000, 'dvr/lost.ts', 'lost_local', 'artifact_terminal', NOW()),
+		       ($1, 'pending.ts', 2, $2::bigint + 6000, $2::bigint + 12000, 6000, 'dvr/pending.ts', 'pending', NULL, NULL)`, hash, start); err != nil {
+		t.Fatal(err)
+	}
+	status := func(name string) string {
+		t.Helper()
+		var s string
+		if err := conn.QueryRowContext(t.Context(), `SELECT status FROM foghorn.dvr_segments WHERE artifact_hash = $1 AND segment_name = $2`, hash, name).Scan(&s); err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+
+	if _, err := InsertDVRSegment(t.Context(), tenant, hash, "lost.ts", "dvr/lost.ts", start, start+6000, 6000, false); !errors.Is(err, ErrDVRSegmentTerminal) {
+		t.Fatalf("retry of a lost segment of a deleted recording: err = %v, want ErrDVRSegmentTerminal", err)
+	}
+	if got := status("lost.ts"); got != "lost_local" {
+		t.Fatalf("lost segment of a deleted recording reopened as %s", got)
+	}
+	if _, err := InsertDVRSegment(t.Context(), tenant, hash, "pending.ts", "dvr/pending.ts", start+6000, start+12000, 6000, false); !errors.Is(err, ErrDVRSegmentTerminal) {
+		t.Fatalf("retry of a pending segment of a deleted recording: err = %v, want ErrDVRSegmentTerminal", err)
+	}
+	if changed, err := MarkDVRSegmentDropped(t.Context(), tenant, hash, "pending.ts", "artifact_terminal", false, start+6000, start+12000, 6000, 0); err != nil || !changed {
+		t.Fatalf("drop report after the refusal: changed=%v err=%v", changed, err)
+	}
+	if got := status("pending.ts"); got != "lost_local" {
+		t.Fatalf("pending segment of a deleted recording settled as %s, want lost_local", got)
 	}
 }

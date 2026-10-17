@@ -298,6 +298,9 @@ FREEZE (warm -> cold, S3 upload):
      are durably enqueued for cleanup. The node's reported URL is not trusted.
   4. While the reporting node still has a warm copy, artifacts.storage_location remains 'local'
   5. If a remote-origin warm copy is evicted later, Foghorn removes that node cache and may mark the artifact S3-resident
+  6. An artifact that turns terminal (deleted, expired, aborted) while sync_status='in_progress' (an aborted
+     multipart upload, a delete during a freeze) is settled to sync_status='failed' by a database trigger,
+     for every terminal writer; retry selection reads only status='ready' rows, so it is never retried
 
 COLD PLAYBACK (no local copy, read-through from S3):
   1. Foghorn picks any storage-capable edge for the cold artifact
