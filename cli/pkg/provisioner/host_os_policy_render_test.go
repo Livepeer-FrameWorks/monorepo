@@ -85,7 +85,9 @@ func playbookTasksUnderTags(t *testing.T, playbookRel string, tags []string, ext
 	cmd := exec.CommandContext(t.Context(), "ansible-playbook", "-i", "localhost,", "--list-tasks",
 		"--tags", strings.Join(tags, ","), "-e", string(encoded), filepath.Join(root, playbookRel))
 	cmd.Dir = root
-	cmd.Env = append(os.Environ(), "ANSIBLE_COLLECTIONS_PATH="+filepath.Join(root, "collections"))
+	// Same search path as ansible.cfg: the source collection, then the galaxy
+	// cache that holds its dependencies (ansible.posix and the community ones).
+	cmd.Env = append(os.Environ(), "ANSIBLE_COLLECTIONS_PATH="+filepath.Join(root, "collections")+":"+filepath.Join(root, ".cache", "collections"))
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("ansible-playbook --list-tasks %s: %v\n%s", playbookRel, err, output)

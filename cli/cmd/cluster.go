@@ -1147,6 +1147,9 @@ func doctorSections(rc *resolvedCluster, pool *fwssh.Pool, sharedEnv map[string]
 	if kafka := manifest.Infrastructure.Kafka; kafka != nil && kafka.Enabled {
 		clusters := allKafkaClusters(manifest)
 		runnerFor := func(host inventory.Host) (fwssh.Runner, error) { return getRunner(host, pool) }
+		// Bound here, not read inside the check: an interrupted doctor returns
+		// while a hung probe is still running.
+		brokerProbe := doctorKafkaBrokerProbe
 		for _, cluster := range clusters {
 			label := ""
 			if len(clusters) > 1 {
@@ -1166,7 +1169,7 @@ func doctorSections(rc *resolvedCluster, pool *fwssh.Pool, sharedEnv map[string]
 					if port == 0 {
 						port = 9092
 					}
-					return doctorInfraOutcome(brokerName, doctorKafkaBrokerProbe(ctx, pool, host, port))
+					return doctorInfraOutcome(brokerName, brokerProbe(ctx, pool, host, port))
 				}})
 			}
 			quorumName := "Kafka KRaft quorum" + label
