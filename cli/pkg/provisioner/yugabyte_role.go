@@ -36,10 +36,12 @@ func yugabyteRoleVars(ctx context.Context, host inventory.Host, config ServiceCo
 	// Every YugabyteDB listener binds the node address: the WireGuard address,
 	// where peers, services at <node>.internal and the node's own admin tasks
 	// connect. A single host without one keeps them on loopback rather than
-	// on its external address.
-	nodeAddress := meshOrExternal(config.Metadata, host)
+	// on its external address. The address comes from the host, not from
+	// per-run metadata: every run (provision, migrate, init) must target the
+	// listener the node actually binds.
+	nodeAddress := strings.TrimSpace(host.WireguardIP)
 	masterAddresses := metaString(config.Metadata, "master_addresses")
-	if strings.TrimSpace(host.WireguardIP) == "" {
+	if nodeAddress == "" {
 		nodeAddress = "127.0.0.1"
 		masterAddresses = fmt.Sprintf("127.0.0.1:%d", metaIntOr(config.Metadata, "master_rpc_port", 7100))
 	}

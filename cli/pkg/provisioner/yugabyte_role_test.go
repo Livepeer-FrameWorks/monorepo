@@ -145,3 +145,24 @@ func TestYugabyteRoleBoundsLogsAndCores(t *testing.T) {
 		}
 	}
 }
+
+// cluster migrate and init build a ServiceConfig without advertised_host. The
+// node address must still be the WireGuard address the tserver binds, or the
+// role's migrate tasks dial the external address and are refused.
+func TestYugabyteRoleVarsNodeAddressIsTheMeshAddressWithoutAdvertisedHost(t *testing.T) {
+	host := nilHost()
+	host.ExternalIP = "192.168.10.17"
+	host.WireguardIP = "10.89.6.127"
+	for name, metadata := range map[string]map[string]any{
+		"migrate":   {"postgres_password": "secret", "yugabyte_migrate_items": []any{}},
+		"provision": {"advertised_host": "10.89.6.127"},
+	} {
+		vars, err := yugabyteRoleVars(context.Background(), host, ServiceConfig{Metadata: metadata}, mockPrivateerHelpers())
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if got := vars["yugabyte_node_address"]; got != "10.89.6.127" {
+			t.Errorf("%s run: yugabyte_node_address = %v, want the WireGuard address 10.89.6.127", name, got)
+		}
+	}
+}
