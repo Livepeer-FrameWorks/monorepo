@@ -272,6 +272,9 @@ type PortSpec struct {
 
 const (
 	FoghornInternalHTTPPort = 18027
+	// FoghornExternalGRPCPort is the listener edges dial from outside the mesh
+	// (FOGHORN_EXTERNAL_GRPC_BIND_ADDR).
+	FoghornExternalGRPCPort = 18029
 	HelmsmanManagementPort  = 18017
 )
 
@@ -289,7 +292,10 @@ const (
 )
 
 var auxiliaryPorts = map[string][]PortSpec{
-	"foghorn":  {{Name: "foghorn-internal-http", Port: FoghornInternalHTTPPort}},
+	"foghorn": {
+		{Name: "foghorn-internal-http", Port: FoghornInternalHTTPPort},
+		{Name: "foghorn-external-grpc", Port: FoghornExternalGRPCPort},
+	},
 	"helmsman": {{Name: "helmsman-management", Port: HelmsmanManagementPort}},
 }
 

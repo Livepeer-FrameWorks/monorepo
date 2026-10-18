@@ -160,10 +160,45 @@ for item in 'foghorn-eu:foghorn' 'foghorn-us:foghorn-b'; do
   healthy() { [ "$(curl -s -m 5 -o /dev/null -w '%{http_code}' "$base/health")" = 200 ]; }
   eventually 90 "$name serves /health after CLI restart" healthy
 done
-if result=$($CLI cluster diagnose ports --manifest "$STACK_CLI_MANIFEST" 2>&1); then
-  pass 'operator CLI cluster diagnose ports exited 0'
+# diagnose ports reads the listeners of the host the manifest places a service on.
+# A stack service listens inside its own container, so the CLI runs in the EU
+# Foghorn's network namespace, from the runner's image and mounts (neither image
+# ships ss), against a manifest that places only foghorn-eu on that host.
+diagnose_manifest="$STACK_STATE_DIR/cli-diagnose-foghorn-eu.yaml"
+cat >"$diagnose_manifest" <<'YAML'
+version: v1
+type: cluster
+profile: dev
+root_domain: frameworks.test
+hosts:
+  stack-eu:
+    external_ip: 127.0.0.1
+    cluster: media-eu
+clusters:
+  media-eu:
+    name: Stack Media EU
+    type: edge
+    cell: cell-eu
+    control_cell: cell-eu
+services:
+  foghorn-eu:
+    enabled: true
+    mode: native
+    deploy: foghorn
+    host: stack-eu
+    cluster: media-eu
+YAML
+runner=$(hostname)
+runner_image=$(docker inspect -f '{{.Config.Image}}' "$runner" 2>/dev/null || true)
+foghorn_container=$(container_of foghorn)
+if [ -z "$runner_image" ] || [ -z "$foghorn_container" ]; then
+  fail "diagnose ports needs the runner image ($runner_image) and the foghorn container ($foghorn_container)"
+elif result=$(docker run --rm --network "container:$foghorn_container" --volumes-from "$runner" \
+  -e HOME=/tmp -e XDG_CACHE_HOME=/tmp --entrypoint "$CLI" "$runner_image" \
+  cluster diagnose ports --manifest "$diagnose_manifest" 2>&1); then
+  pass 'operator CLI cluster diagnose ports finds every foghorn-eu listener in its network namespace'
 else
-  fail "operator CLI cluster diagnose ports: $result"
+  fail "operator CLI cluster diagnose ports in the foghorn-eu network namespace: $result"
 fi
 doctor_manifest="$STACK_STATE_DIR/cli-doctor-two-cell.yaml"
 cat >"$doctor_manifest" <<'YAML'
