@@ -193,3 +193,33 @@
           root stderr: {{ nginx_root_config_render.stderr | default('') }}
           validate stdout: {{ nginx_config_validate.stdout | default('') }}
           validate stderr: {{ nginx_config_validate.stderr | default('') }}
+
+# A reload keeps the running master's sockets: it cannot move a listener off
+# a wildcard address onto a specific one on the same port (bind fails with
+# EADDRINUSE and nginx keeps the old config). Any configured listen address
+# without a matching socket restarts nginx, which also repairs a reload that
+# failed this way on an earlier run.
+- name: Detect configured Nginx listen addresses without a socket
+  ansible.builtin.shell: |
+    set -o pipefail
+    have="$(ss -Hltn | awk '{print $4}')"
+    grep -hoE '^[[:space:]]*listen[[:space:]]+[^;[:space:]]+' {{ nginx_effective_config_path | quote }} | awk '{print $2}' | sort -u |
+    while read -r want; do
+      case "$want" in
+        unix:*) continue ;;
+        *:*) addr="$want" ;;
+        *) addr="0.0.0.0:$want" ;;
+      esac
+      port="${addr##*:}"
+      if printf '%s\n' "$have" | grep -qxF "$addr"; then continue; fi
+      if [ "${addr%:*}" = "0.0.0.0" ] && printf '%s\n' "$have" | grep -qxF "*:$port"; then continue; fi
+      echo "missing $addr"
+    done
+  args:
+    executable: /bin/bash
+  register: nginx_listen_drift
+  changed_when: nginx_listen_drift.stdout | length > 0
+  notify: nginx restart
+  when:
+    - not ansible_check_mode
+    - nginx_config_stat.stat.exists
