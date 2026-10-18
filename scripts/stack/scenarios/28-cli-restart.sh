@@ -193,12 +193,19 @@ runner_image=$(docker inspect -f '{{.Config.Image}}' "$runner" 2>/dev/null || tr
 foghorn_container=$(container_of foghorn)
 if [ -z "$runner_image" ] || [ -z "$foghorn_container" ]; then
   fail "diagnose ports needs the runner image ($runner_image) and the foghorn container ($foghorn_container)"
-elif result=$(docker run --rm --network "container:$foghorn_container" --volumes-from "$runner" \
-  -e HOME=/tmp -e XDG_CACHE_HOME=/tmp --entrypoint "$CLI" "$runner_image" \
-  cluster diagnose ports --manifest "$diagnose_manifest" 2>&1); then
-  pass 'operator CLI cluster diagnose ports finds every foghorn-eu listener in its network namespace'
 else
-  fail "operator CLI cluster diagnose ports in the foghorn-eu network namespace: $result"
+  # The state dir is not a volume, so the manifest is copied in; the CLI comes
+  # from the runner's mounts.
+  diagnose=$(docker create --network "container:$foghorn_container" --volumes-from "$runner" \
+    -e HOME=/tmp -e XDG_CACHE_HOME=/tmp --entrypoint "$CLI" "$runner_image" \
+    cluster diagnose ports --manifest /cli-diagnose.yaml)
+  docker cp "$diagnose_manifest" "$diagnose:/cli-diagnose.yaml" >/dev/null
+  if result=$(docker start -a "$diagnose" 2>&1); then
+    pass 'operator CLI cluster diagnose ports finds every foghorn-eu listener in its network namespace'
+  else
+    fail "operator CLI cluster diagnose ports in the foghorn-eu network namespace: $result"
+  fi
+  docker rm -f "$diagnose" >/dev/null 2>&1 || true
 fi
 doctor_manifest="$STACK_STATE_DIR/cli-doctor-two-cell.yaml"
 cat >"$doctor_manifest" <<'YAML'
