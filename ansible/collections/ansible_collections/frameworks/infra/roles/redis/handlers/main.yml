@@ -6,14 +6,6 @@
     state: restarted
   register: redis_restarted
 
-- name: Restart redis exporter
-  listen: redis exporter restart
-  ansible.builtin.systemd:
-    name: "{{ redis_exporter_service_name }}"
-    state: restarted
-    daemon_reload: true
-  when: not ansible_check_mode
-
 - name: Reload redis
   listen: redis reload
   ansible.builtin.systemd:

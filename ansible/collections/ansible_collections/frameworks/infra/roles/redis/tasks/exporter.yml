@@ -58,7 +58,7 @@
         owner: root
         group: root
         mode: "0755"
-      notify: redis exporter restart
+      register: redis_exporter_binary_installed
 
     - name: Record redis_exporter install sentinel
       ansible.builtin.file:
@@ -91,7 +91,7 @@
     group: root
     mode: "0600"
   no_log: true
-  notify: redis exporter restart
+  register: redis_exporter_env_rendered
 
 - name: Render redis_exporter systemd unit
   ansible.builtin.template:
@@ -100,12 +100,17 @@
     owner: root
     group: root
     mode: "0644"
-  notify: redis exporter restart
+  register: redis_exporter_unit_rendered
 
+# Restarted here rather than by a handler: a handler resolves this instance's
+# service name when it flushes, which in a play applying the role to several
+# instances can be another instance's.
 - name: Ensure redis_exporter service
   ansible.builtin.systemd:
     name: "{{ redis_exporter_service_name }}"
-    state: started
+    state: >-
+      {{ 'restarted' if (redis_exporter_binary_installed is changed or redis_exporter_env_rendered is changed
+      or redis_exporter_unit_rendered is changed) else 'started' }}
     enabled: true
     daemon_reload: true
   when: not ansible_check_mode

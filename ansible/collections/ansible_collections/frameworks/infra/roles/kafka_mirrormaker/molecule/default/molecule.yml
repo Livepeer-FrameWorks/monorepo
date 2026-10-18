@@ -50,6 +50,8 @@ provisioner:
             id: 1
         kafka_advertised_host: "127.0.0.1"
         kafka_heap_opts: "-Xmx768m -Xms768m"
+        kafka_jmx_exporter_artifact_url: https://github.com/prometheus/jmx_exporter/releases/download/1.6.0/jmx_prometheus_javaagent-1.6.0.jar
+        kafka_jmx_exporter_artifact_checksum: sha256:a95983fd96e865d2bcdf911cc500e7c82808c27ab9fd226bf96732b6c3d8c46e
         kafka_mm_version: "4.2.0"
         kafka_mm_artifact_url: "{{ kafka_mm_test_artifact_url }}"
         kafka_mm_artifact_checksum: "{{ kafka_mm_test_artifact_checksum }}"
