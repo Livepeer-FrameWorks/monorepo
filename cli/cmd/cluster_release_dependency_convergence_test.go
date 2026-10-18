@@ -116,11 +116,40 @@ func TestReleaseDependencyConvergencePlanLines(t *testing.T) {
 	var out bytes.Buffer
 	writeReleaseHostConvergencePlan(&out, "1. pre-upgrade host convergence", manifest, planReleaseHostConvergence(plan, manifest), "")
 	for _, line := range []string{
-		"· vmagent, vmalert, and vmauth (configs validated, then reloaded), one host at a time: vmagent@obs-1 -> vmagent@obs-2 -> vmalert@obs-1 -> vmauth@obs-1",
+		"· VictoriaMetrics, Alertmanager, vmagent, vmalert, and vmauth (configs validated, then reloaded; a changed unit restarts), one host at a time: vmagent@obs-1 -> vmagent@obs-2 -> vmalert@obs-1 -> vmauth@obs-1",
 		"· control-plane nginx and caddy (config tested, then reloaded), one host at a time: nginx@edge-1 -> nginx@edge-2",
 	} {
 		if !strings.Contains(out.String(), line) {
 			t.Fatalf("plan output missing %q:\n%s", line, out.String())
 		}
+	}
+}
+
+// A release changes the roles of VictoriaMetrics, Alertmanager, and support
+// PostgreSQL instances too (their listener binds, their pinned artifacts), so
+// release apply converges them: named PostgreSQL instances right after the
+// primary database (which the service database step owns, so it is not here),
+// VictoriaMetrics and Alertmanager before the agents that depend on them.
+func TestReleaseConvergenceIncludesMetricsStoreAlertmanagerAndPostgresInstances(t *testing.T) {
+	manifest := dependencyReleaseManifest()
+	manifest.Observability["victoriametrics"] = inventory.ServiceConfig{Enabled: true, Mode: "native", Host: "obs-1"}
+	manifest.Observability["alertmanager"] = inventory.ServiceConfig{Enabled: true, Mode: "native", Host: "obs-1", Config: map[string]string{
+		"LOOKOUT_ALERTMANAGER_TOKEN": "t", "ALERTMANAGER_HEARTBEAT_URL": "https://heartbeat.test", "ALERTMANAGER_EMAIL_TO": "ops@example.test",
+		"SMTP_HOST": "smtp.example.test", "SMTP_PORT": "587", "FROM_EMAIL": "alerts@example.test",
+	}}
+	manifest.Infrastructure.Postgres = &inventory.PostgresConfig{
+		Enabled: true, Engine: "postgres", Host: "obs-2", Port: 5432,
+		Instances: []inventory.PostgresInstance{{Name: "support", Host: "obs-2", Port: 5433}},
+	}
+	log := &serviceEventLog{}
+	fake := &serviceReleaseProvisioner{log: log, converged: map[string]bool{}}
+	run := runServiceConvergence(t, manifest, fake, &releaseServiceOps{}, false)
+	if run.err != nil {
+		t.Fatalf("run: %v\n%s", run.err, run.out)
+	}
+	got := dependencyEvents(run.events)
+	want := []string{"postgres:obs-2", "victoriametrics:obs-1", "alertmanager:obs-1", "vmagent:obs-1", "vmagent:obs-2", "vmalert:obs-1", "vmauth:obs-1", "nginx:edge-1", "nginx:edge-2"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("converged %v, want %v", got, want)
 	}
 }

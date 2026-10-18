@@ -28,6 +28,8 @@ const releaseHostStepService = "service"
 type releaseServiceStage struct {
 	name      string
 	taskTypes []string
+	// include narrows the stage to some tasks of its types; nil takes all.
+	include func(*orchestrator.Task) bool
 	// describe prints the stage's line of the release plan.
 	describe func(out io.Writer, tasks []*orchestrator.Task)
 	run      func(ctx context.Context, c *releaseHostConvergence, tasks []*orchestrator.Task, dryRun bool) error
@@ -36,12 +38,19 @@ type releaseServiceStage struct {
 func releaseServiceStages() []releaseServiceStage {
 	return []releaseServiceStage{
 		{name: "yugabyte", taskTypes: []string{"yugabyte"}, describe: describeYugabyteConvergence, run: runYugabyteConvergence},
+		// Named PostgreSQL instances (support databases such as Chatwoot's); the
+		// primary database's lifecycle runs through the service database step.
+		{name: "postgres", taskTypes: []string{"postgres"}, include: isPostgresInstanceTask, describe: describePostgresConvergence, run: runPostgresConvergence},
 		{name: "clickhouse", taskTypes: []string{"clickhouse"}, describe: describeClickHouseConvergence, run: runClickHouseConvergence},
 		{name: "kafka", taskTypes: []string{"kafka-controller", "kafka"}, describe: describeKafkaConvergence, run: runKafkaConvergence},
-		{name: "observability", taskTypes: []string{"vmagent", "vmalert", "vmauth"}, describe: describeObservabilityConvergence, run: runObservabilityConvergence},
+		{name: "observability", taskTypes: []string{"victoriametrics", "alertmanager", "vmagent", "vmalert", "vmauth"}, describe: describeObservabilityConvergence, run: runObservabilityConvergence},
 		{name: "proxies", taskTypes: []string{"nginx", "caddy"}, describe: describeProxyConvergence, run: runProxyConvergence},
 		{name: "compose dependencies", taskTypes: []string{"chatwoot", "listmonk", "metabase", "grafana"}, describe: describeComposeDependencyConvergence, run: runComposeDependencyConvergence},
 	}
+}
+
+func isPostgresInstanceTask(task *orchestrator.Task) bool {
+	return task.InstanceID != ""
 }
 
 // planReleaseServiceSteps returns one step per planner task of every service
@@ -62,7 +71,7 @@ func planReleaseServiceSteps(plan *orchestrator.ExecutionPlan) []releaseHostConv
 			if task == nil {
 				continue
 			}
-			if _, ok := rank[task.Type]; ok {
+			if _, ok := rank[task.Type]; ok && (stage.include == nil || stage.include(task)) {
 				tasks = append(tasks, task)
 			}
 		}

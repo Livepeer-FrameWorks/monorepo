@@ -33,7 +33,8 @@ func newClusterReleaseCmd() *cobra.Command {
 		Long: `Run a full cluster release as a single ordered plan:
 
   pre-upgrade host convergence (Privateer seeds, Redis servers and Sentinels,
-    Yugabyte, ClickHouse, Kafka controllers and brokers, vmagent/vmalert/vmauth,
+    Yugabyte, PostgreSQL instances, ClickHouse, Kafka controllers and brokers,
+    VictoriaMetrics/Alertmanager/vmagent/vmalert/vmauth,
     nginx/caddy, compose dependencies, declared Kafka topics, MirrorMaker2
     workers; unchanged hosts skipped, changed hosts gated one at a time)
   → service databases and expand migrations

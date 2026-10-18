@@ -19,7 +19,11 @@ import (
 // role's validation of a changed host must pass before the next host starts.
 
 func describeObservabilityConvergence(out io.Writer, tasks []*orchestrator.Task) {
-	describeDependencyConvergence(out, "vmagent, vmalert, and vmauth (configs validated, then reloaded)", tasks)
+	describeDependencyConvergence(out, "VictoriaMetrics, Alertmanager, vmagent, vmalert, and vmauth (configs validated, then reloaded; a changed unit restarts)", tasks)
+}
+
+func describePostgresConvergence(out io.Writer, tasks []*orchestrator.Task) {
+	describeDependencyConvergence(out, "PostgreSQL instances (a changed listener or server setting restarts the instance)", tasks)
 }
 
 func describeProxyConvergence(out io.Writer, tasks []*orchestrator.Task) {
@@ -39,7 +43,11 @@ func describeDependencyConvergence(out io.Writer, label string, tasks []*orchest
 }
 
 func runObservabilityConvergence(ctx context.Context, c *releaseHostConvergence, tasks []*orchestrator.Task, dryRun bool) error {
-	return c.runDependencyConvergence(ctx, "Observability agents", tasks, dryRun)
+	return c.runDependencyConvergence(ctx, "Observability", tasks, dryRun)
+}
+
+func runPostgresConvergence(ctx context.Context, c *releaseHostConvergence, tasks []*orchestrator.Task, dryRun bool) error {
+	return c.runDependencyConvergence(ctx, "PostgreSQL instances", tasks, dryRun)
 }
 
 func runProxyConvergence(ctx context.Context, c *releaseHostConvergence, tasks []*orchestrator.Task, dryRun bool) error {
