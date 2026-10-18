@@ -218,8 +218,9 @@
   args:
     executable: /bin/bash
   register: nginx_listen_drift
+  # Only reads sockets, so it runs under --check as well: the release precheck
+  # then sees the drift and converges the proxy instead of skipping it.
+  check_mode: false
   changed_when: nginx_listen_drift.stdout | length > 0
   notify: nginx restart
-  when:
-    - not ansible_check_mode
-    - nginx_config_stat.stat.exists
+  when: nginx_config_stat.stat.exists
