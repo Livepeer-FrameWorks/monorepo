@@ -295,7 +295,7 @@ run_probe() {
   elif [ "$PEER" = "1" ]; then
     "$SQL_BIN" -X -q -v ON_ERROR_STOP=1 -p "$PORT" -d "$db" -P pager=off -A -F ' | ' -f - 2>&1
   else
-    PGPASSWORD="$PASSWORD" "$SQL_BIN" -X -q -v ON_ERROR_STOP=1 -h 127.0.0.1 -p "$PORT" -U "$USER_NAME" -d "$db" -P pager=off -A -F ' | ' -f - 2>&1
+    PGPASSWORD="$PASSWORD" "$SQL_BIN" -X -q -v ON_ERROR_STOP=1 -h "$(fw_ysql_host "$PORT")" -p "$PORT" -U "$USER_NAME" -d "$db" -P pager=off -A -F ' | ' -f - 2>&1
   fi
 }
 FAILED=0
