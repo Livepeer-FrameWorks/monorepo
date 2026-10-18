@@ -48,12 +48,15 @@ func (r *slowSSHRunner) Upload(context.Context, ssh.UploadOptions) error {
 func (r *slowSSHRunner) Close() error { return nil }
 
 // TestYugabyteYSQLTimingProbeRunsOnTheNode runs the real probe shell with a
-// stub ysqlsh and a GNU-style date whose two reads are 28 ms apart.
+// stub ysqlsh, a GNU-style date whose two reads are 28 ms apart, and an ss
+// reporting YSQL bound to the node's WireGuard address only, as the yugabyte
+// role binds it: the probe must connect there, not to loopback.
 func TestYugabyteYSQLTimingProbeRunsOnTheNode(t *testing.T) {
 	bin := t.TempDir()
 	calls := filepath.Join(bin, "calls")
 	stubs := map[string]string{
 		"ysqlsh": "#!/bin/sh\necho \"$*\" >\"" + filepath.Join(bin, "args") + "\"\necho 1\n",
+		"ss":     "#!/bin/sh\necho 'LISTEN 0      4096   10.89.6.127:5433   0.0.0.0:*'\n",
 		"date":   "#!/bin/sh\n[ \"$1\" = '+%s%N' ] || exit 1\nif [ -e \"" + calls + "\" ]; then echo 1792179325028000000; else : >\"" + calls + "\"; echo 1792179325000000000; fi\n",
 	}
 	for name, body := range stubs {
@@ -73,7 +76,7 @@ func TestYugabyteYSQLTimingProbeRunsOnTheNode(t *testing.T) {
 		t.Fatalf("timing = %v, err %v from %q; want 28ms", got, err, out)
 	}
 	args, err := os.ReadFile(filepath.Join(bin, "args"))
-	if err != nil || !strings.Contains(string(args), "-h localhost -p 5433 -U yugabyte -d yugabyte") || !strings.Contains(string(args), "SELECT 1") {
+	if err != nil || !strings.Contains(string(args), "-h 10.89.6.127 -p 5433 -U yugabyte -d yugabyte") || !strings.Contains(string(args), "SELECT 1") {
 		t.Fatalf("ysqlsh args = %q (err %v)", args, err)
 	}
 }

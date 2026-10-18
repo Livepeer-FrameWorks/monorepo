@@ -1538,10 +1538,10 @@ func yugabyteYSQLTimingProbe(conn provisioner.ConnParams) string {
 	return fmt.Sprintf(`%s
 yb_client="$(fw_yb_bin ysqlsh)" || exit 1
 start=$(date +%%s%%N)
-"$yb_client" -X -h localhost -p %d -U %s -d %s -v ON_ERROR_STOP=1 -tA -c 'SELECT 1' >/dev/null || exit 2
+"$yb_client" -X -h "$(fw_ysql_host %d)" -p %d -U %s -d %s -v ON_ERROR_STOP=1 -tA -c 'SELECT 1' >/dev/null || exit 2
 end=$(date +%%s%%N)
 echo "ysql_elapsed_us=$(( (end - start) / 1000 ))"`,
-		provisioner.YugabyteBinaryResolverShell, conn.Port, fwssh.ShellQuote(conn.User), fwssh.ShellQuote(conn.Database))
+		provisioner.YugabyteBinaryResolverShell, conn.Port, conn.Port, fwssh.ShellQuote(conn.User), fwssh.ShellQuote(conn.Database))
 }
 
 func parseYugabyteYSQLTiming(output string) (time.Duration, error) {
