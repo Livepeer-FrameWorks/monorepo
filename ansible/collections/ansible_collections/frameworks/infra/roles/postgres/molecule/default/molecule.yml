@@ -48,7 +48,7 @@ provisioner:
         postgres_version: "16"
         postgres_admin_password: "molecule-test-password"
         postgres_runtime_password: "molecule-runtime-password"
-        postgres_exporter_artifact_url: "https://github.com/prometheus-community/postgres_exporter/releases/download/v0.20.1/postgres_exporter-0.20.1.linux-amd64.tar.gz"
+        postgres_exporter_artifact_url: "https://github.com/prometheus-community/postgres_exporter/releases/download/v0.20.1/postgres_exporter-0.20.1.linux-amd64.tar.gz" # yamllint disable-line rule:line-length
         postgres_exporter_artifact_checksum: "sha256:89d4f7e7920cad48fdc3133f789556ef5253c330a9f5fdace3bdb6344c0a8b5a"
         postgres_databases:
           - { name: periscope }

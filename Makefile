@@ -1,4 +1,4 @@
-.PHONY: verify-prepush verify-frontend-deps verify-go-lint verify-go-build verify-sdks verify-frontend-build verify-yugabyte-contracts verify-yugabyte-contracts-deps verify-frontend-lint verify-generated-contracts test-frontend-components buildbuild-images build-bin-commodore build-bin-quartermaster build-bin-purser build-bin-decklog build-bin-foghorn build-bin-helmsman build-bin-periscope-ingest build-bin-periscope-query build-bin-periscope-metering build-bin-signalman build-bin-bridge build-bin-navigator build-bin-privateer build-bin-deckhand build-bin-steward build-bin-skipper build-bin-chandler build-bin-lookout build-bin-bosun build-bin-cli cli-embed-assets \
+.PHONY: verify-prepush verify-frontend-deps verify-ansible-lint verify-go-lint verify-go-build verify-sdks verify-frontend-build verify-yugabyte-contracts verify-yugabyte-contracts-deps verify-frontend-lint verify-generated-contracts test-frontend-components buildbuild-images build-bin-commodore build-bin-quartermaster build-bin-purser build-bin-decklog build-bin-foghorn build-bin-helmsman build-bin-periscope-ingest build-bin-periscope-query build-bin-periscope-metering build-bin-signalman build-bin-bridge build-bin-navigator build-bin-privateer build-bin-deckhand build-bin-steward build-bin-skipper build-bin-chandler build-bin-lookout build-bin-bosun build-bin-cli cli-embed-assets \
 		build-image-commodore build-image-quartermaster build-image-purser build-image-decklog build-image-foghorn build-image-periscope-ingest build-image-periscope-query build-image-periscope-metering build-image-signalman build-image-bridge build-image-logbook test-logbook-image-health build-image-navigator build-image-deckhand build-image-steward build-image-skipper build-image-chandler build-image-lookout build-image-bosun \
 		proto proto-check sqlc sqlc-check graphql graphql-events verify-graphql-events graphql-frontend graphql-tray graphql-all clean version install-tools verify test test-cli test-pkg test-topology test-crypto-evm test-dashboards test-alert-rules test-commodore test-quartermaster test-purser test-decklog test-foghorn test-helmsman test-periscope-ingest test-periscope-query test-media-topology-real-clickhouse test-signalman test-bridge test-navigator test-privateer test-deckhand test-steward test-skipper test-chandler test-lookout test-bosun coverage env frontend-env tidy update outdated fmt format \
 		lint lint-go lint-frontend check-frontend-types lint-all lint-fix lint-report lint-analyze ci-local ci-local-go ci-local-frontend \
@@ -392,7 +392,7 @@ VERIFY_PREPUSH_JOBS := 3
 VERIFY_PREPUSH_STAGES := verify-yugabyte-contracts+verify-yugabyte-contracts-deps verify-migration-release-state verify-go-build verify-go-lint \
 	verify-sdks+verify-frontend-deps verify-generated-contracts+verify-frontend-deps verify-frontend-build+verify-frontend-deps \
 	verify-frontend-lint+verify-frontend-deps test-frontend-components+verify-frontend-deps verify-compose-profiles verify-feature-registry \
-	verify-pricing-catalog verify-yugabyte-explain-audit
+	verify-pricing-catalog verify-yugabyte-explain-audit verify-ansible-lint
 verify-prepush:
 	@MAKE='$(MAKE)' $(CURDIR)/scripts/verify-prepush.sh $(VERIFY_PREPUSH_JOBS) $(VERIFY_PREPUSH_STAGES)
 
@@ -400,6 +400,11 @@ verify-prepush:
 # node_modules left from an older lockfile lints and builds against the wrong dependencies.
 verify-frontend-deps:
 	pnpm install --frozen-lockfile
+
+# The CI "ansible-lint + yamllint" job, step for step.
+verify-ansible-lint:
+	$(MAKE) --no-print-directory ansible-lint
+	$(MAKE) --no-print-directory ansible-yamllint
 
 # The CI "Go lint" job, step for step.
 verify-go-lint:
