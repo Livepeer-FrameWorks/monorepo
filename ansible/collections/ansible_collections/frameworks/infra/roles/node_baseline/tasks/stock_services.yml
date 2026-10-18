@@ -7,6 +7,9 @@
 - name: Node_baseline | read service facts
   ansible.builtin.service_facts:
 
+# Runs in check mode too: the systemd module reports the stop and mask there
+# without making them, which is how the release precheck sees a host that
+# still runs a stock service and converges the baseline.
 - name: Node_baseline | stop and mask stock services that listen on every interface
   ansible.builtin.systemd:
     name: "{{ item }}"
@@ -15,6 +18,5 @@
     masked: true
   loop: "{{ node_baseline_masked_stock_services }}"
   when:
-    - not ansible_check_mode
     - item in ansible_facts.services
     - ansible_facts.services[item].status | default('') != 'masked'
