@@ -86,6 +86,39 @@
       retries: 30
       delay: 1
       when: fwlab_config is changed
+
+    # A host image's stock MistServer: a regular unit file under
+    # /etc/systemd/system, enabled and running, which systemctl mask refuses
+    # to replace. The stand-in process listens on nothing.
+    - name: Install a stock mistserver.service the way a host image does
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/mistserver.service
+        content: |
+          [Unit]
+          Description=MistServer
+          After=network.target
+
+          [Service]
+          Type=simple
+          ExecStart=/bin/sleep infinity
+          Restart=always
+
+          [Install]
+          WantedBy=multi-user.target
+        owner: root
+        group: root
+        mode: "0644"
+        # Once: after the baseline masked it, the path is a /dev/null link.
+        force: false
+      register: fwlab_stock_mist
+
+    - name: Start the stock mistserver.service # noqa: no-handler
+      ansible.builtin.systemd:
+        name: mistserver.service
+        state: started
+        enabled: true
+        daemon_reload: true
+      when: fwlab_stock_mist is changed
   tasks:
     - name: Apply frameworks.infra.node_baseline
       ansible.builtin.include_role:

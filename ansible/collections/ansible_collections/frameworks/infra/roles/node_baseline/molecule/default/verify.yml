@@ -4,6 +4,18 @@
   become: true
   gather_facts: true
   tasks:
+    - name: Read the stock mistserver.service state
+      ansible.builtin.command: systemctl show mistserver.service -p LoadState -p ActiveState
+      register: stock_mist_state
+      changed_when: false
+
+    - name: Assert the stock MistServer is stopped and masked
+      ansible.builtin.assert:
+        that:
+          - "'LoadState=masked' in stock_mist_state.stdout_lines"
+          - "'ActiveState=inactive' in stock_mist_state.stdout_lines"
+        fail_msg: "stock mistserver.service is not masked and stopped: {{ stock_mist_state.stdout_lines }}"
+
     - name: Read installed packages
       ansible.builtin.package_facts:
 

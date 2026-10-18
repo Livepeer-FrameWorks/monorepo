@@ -1,21 +1,48 @@
 ---
-# A host image can ship a stock MistServer package whose mistserver.service
-# runs MistController with every connector (API, RTMP, RTSP, HTTP, DTSC) on
-# every interface. FrameWorks runs MistServer only as the edge role's
+# A host image can ship a stock MistServer whose mistserver.service runs
+# MistController with every connector (API, RTMP, RTSP, HTTP, DTSC) on every
+# interface. FrameWorks runs MistServer only as the edge role's
 # frameworks-mistserver unit, so the stock unit is stopped and masked on every
 # host; masking also keeps a package upgrade from starting it again.
+#
+# These tasks run in check mode too: the modules report the stop, removal and
+# mask there without making them, which is how the release precheck sees a
+# host that still runs a stock service and converges the baseline.
 - name: Node_baseline | read service facts
   ansible.builtin.service_facts:
 
-# Runs in check mode too: the systemd module reports the stop and mask there
-# without making them, which is how the release precheck sees a host that
-# still runs a stock service and converges the baseline.
-- name: Node_baseline | stop and mask stock services that listen on every interface
+- name: Node_baseline | stop and disable stock services that listen on every interface
   ansible.builtin.systemd:
     name: "{{ item }}"
     state: stopped
     enabled: false
+  loop: "{{ node_baseline_masked_stock_services }}"
+  when:
+    - item in ansible_facts.services
+    - ansible_facts.services[item].status | default('') != 'masked'
+
+# systemctl mask links /etc/systemd/system/<unit> to /dev/null and refuses
+# when an image installed the unit there as a regular file.
+- name: Node_baseline | read stock unit files installed under /etc/systemd/system
+  ansible.builtin.stat:
+    path: "/etc/systemd/system/{{ item }}"
+  loop: "{{ node_baseline_masked_stock_services }}"
+  register: node_baseline_stock_unit_files
+
+- name: Node_baseline | remove stock unit files installed under /etc/systemd/system
+  ansible.builtin.file:
+    path: "/etc/systemd/system/{{ item.item }}"
+    state: absent
+  loop: "{{ node_baseline_stock_unit_files.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when: item.stat.isreg | default(false)
+
+- name: Node_baseline | mask stock services that listen on every interface
+  ansible.builtin.systemd:
+    name: "{{ item }}"
     masked: true
+    daemon_reload: true
   loop: "{{ node_baseline_masked_stock_services }}"
   when:
     - item in ansible_facts.services
