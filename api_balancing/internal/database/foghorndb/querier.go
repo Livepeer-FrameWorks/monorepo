@@ -181,10 +181,7 @@ type Querier interface {
 	// unrecorded, e.g. a reconnect adopted a recording whose push Mist had just ended.
 	// Detaching it lets ClaimUnstartedDVRIntents start the session a fresh recording;
 	// it returns the detached session.
-	// A writer also ends when Mist's buffer shuts down, and Mist closes the publisher's
-	// connection, which ends the session, only after its recordings ended. The session's
-	// intent is leased for settle_seconds so no claim records it before that close lands.
-	DetachEndedWriterFromLiveSession(ctx context.Context, arg DetachEndedWriterFromLiveSessionParams) (DetachEndedWriterFromLiveSessionRow, error)
+	DetachEndedWriterFromLiveSession(ctx context.Context, artifactHash string) (DetachEndedWriterFromLiveSessionRow, error)
 	DtshSyncedForArtifact(ctx context.Context, artifactHash string) (bool, error)
 	EndLapsedPendingIngestSession(ctx context.Context, arg EndLapsedPendingIngestSessionParams) (EndLapsedPendingIngestSessionRow, error)
 	EndSupersededNodeIngestSession(ctx context.Context, arg EndSupersededNodeIngestSessionParams) (string, error)

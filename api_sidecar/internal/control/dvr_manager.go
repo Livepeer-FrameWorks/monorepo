@@ -141,6 +141,9 @@ type DVRManager struct {
 	// writeDVRJobMeta; tests inject a per-manager stub for deterministic fault
 	// injection (avoids mutable package-global shared state under parallel tests).
 	metaWriter func(outputDir string, meta dvrJobMeta) error
+	// sourceState reads the recording's source stream state from Mist for the stop
+	// report. Nil reports DVR_SOURCE_STATE_UNSPECIFIED.
+	sourceState func(streamName string) ipcpb.DVRSourceState
 
 	// startupTimeout / pushMonitorInterval override the package defaults per
 	// manager. Zero means use the default. Kept per-manager (not a mutable
@@ -445,12 +448,14 @@ func initDVRManager() {
 		logger := logging.NewLoggerWithService("dvr-manager")
 		storagePath := sidecarcfg.GetStoragePath()
 
+		mistClient := mist.NewClient(logger, appconfig.MistClient())
 		dvrManager = &DVRManager{
 			logger:      logger,
 			jobs:        make(map[string]*DVRJob),
 			storagePath: storagePath,
 			storageCap:  sidecarcfg.GetStorageCapacityBytes(),
-			mistClient:  mist.NewClient(logger, appconfig.MistClient()),
+			mistClient:  mistClient,
+			sourceState: mistDVRSourceState(mistClient),
 		}
 
 		logger.WithField("storage_path", storagePath).Info("DVR manager initialized")
@@ -2847,8 +2852,13 @@ func (dm *DVRManager) sendCompletion(job *DVRJob, status string, errorMsg string
 	}
 
 	durationSeconds := int32(time.Since(job.StartTime).Seconds())
+	sourceState := ipcpb.DVRSourceState_DVR_SOURCE_STATE_UNSPECIFIED
+	if dm.sourceState != nil {
+		sourceState = dm.sourceState(job.StreamName)
+	}
 
 	stopped := &ipcpb.DVRStopped{
+		SourceState:     sourceState,
 		DvrHash:         job.DVRHash,
 		StartedAt:       job.StartTime.Unix(),
 		EndedAt:         time.Now().Unix(),

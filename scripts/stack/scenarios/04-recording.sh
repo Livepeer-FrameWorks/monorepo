@@ -168,7 +168,7 @@ fi
 # live; several streams stall at once so the race is hit. No session may be
 # recorded afresh on its gone source (staging rc11: a failed recording 30 s
 # after such a stop).
-STALLS=${STACK_STALLED_PUBLISHERS:-4}
+STALLS=4
 log "$STALLS stalled publishers end their streams without a failed recording"
 STALL_INTERNALS=()
 STALL_PUBS=()

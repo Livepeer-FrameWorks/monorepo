@@ -51,22 +51,17 @@ func TestDVRIntentRecovery_ReplaysStartFromIntent(t *testing.T) {
 	}
 }
 
-// A session whose recording ended while it stays live is recorded afresh once the settle
-// window passes: the job claims that one session's intent and replays StartDVR bound to
-// it, and claims nothing before the window ends.
+// A session whose recording ended while it stays live is recorded afresh at once: the
+// job claims that one session's intent and replays StartDVR bound to it.
 func TestDVRIntentRecovery_RecordSessionNow(t *testing.T) {
 	intentJSON, err := protojson.Marshal(&sharedpb.StartDVRRequest{TenantId: "t1", InternalName: "live+s1"})
 	if err != nil {
 		t.Fatalf("marshal intent: %v", err)
 	}
 	j := NewDVRIntentRecoveryJob(DVRIntentRecoveryConfig{Logger: logging.NewLogger()})
-	if j.settle != control.EndedWriterSettle {
-		t.Fatalf("settle = %v, want the detach's settle lease %v", j.settle, control.EndedWriterSettle)
-	}
-	j.settle = 300 * time.Millisecond
-	claims := make(chan string, 1)
+	var claimed string
 	j.claimSession = func(_ context.Context, sessionID string) ([]control.UnstartedDVRIntent, error) {
-		claims <- sessionID
+		claimed = sessionID
 		return []control.UnstartedDVRIntent{{
 			SessionID: sessionID, TenantID: "t1", InternalName: "live+s1", NodeID: "node-1", Intent: intentJSON, Attempts: 1,
 		}}, nil
@@ -77,48 +72,15 @@ func TestDVRIntentRecovery_RecordSessionNow(t *testing.T) {
 		return &sharedpb.StartDVRResponse{DvrHash: "h", Status: "requested"}, nil
 	}
 
-	called := time.Now()
 	j.RecordSessionNow("gen-2")
 
 	select {
-	case claimed := <-claims:
-		if waited := time.Since(called); waited < j.settle {
-			t.Fatalf("claimed after %v, before the %v settle window", waited, j.settle)
-		}
-		if claimed != "gen-2" {
-			t.Fatalf("claimed %q, want gen-2", claimed)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("the session was not claimed after the settle window")
-	}
-	select {
 	case req := <-started:
-		if req.GetIngestGeneration() != "gen-2" {
-			t.Fatalf("started generation %q, want gen-2", req.GetIngestGeneration())
+		if claimed != "gen-2" || req.GetIngestGeneration() != "gen-2" {
+			t.Fatalf("claimed %q, started generation %q; want gen-2 for both", claimed, req.GetIngestGeneration())
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("StartDVR was not replayed for the session")
-	}
-}
-
-// A job stopped inside the settle window claims nothing.
-func TestDVRIntentRecovery_RecordSessionNowStopsWithJob(t *testing.T) {
-	j := NewDVRIntentRecoveryJob(DVRIntentRecoveryConfig{Logger: logging.NewLogger()})
-	j.settle = time.Hour
-	claims := make(chan string, 1)
-	j.claimSession = func(_ context.Context, sessionID string) ([]control.UnstartedDVRIntent, error) {
-		claims <- sessionID
-		return nil, nil
-	}
-	j.startDVR = func(context.Context, *sharedpb.StartDVRRequest, string) (*sharedpb.StartDVRResponse, error) {
-		return &sharedpb.StartDVRResponse{}, nil
-	}
-	j.RecordSessionNow("gen-3")
-	close(j.stopCh)
-	select {
-	case claimed := <-claims:
-		t.Fatalf("claimed %q after the job stopped", claimed)
-	case <-time.After(200 * time.Millisecond):
 	}
 }
 

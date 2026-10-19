@@ -31,7 +31,6 @@ type DVRIntentRecoveryJob struct {
 	starter   DVRIntentStarter
 	interval  time.Duration
 	grace     time.Duration // only replay intents older than this (fast path goes first)
-	settle    time.Duration // RecordSessionNow waits this long, the detach's settle lease
 	batchSize int
 	stopCh    chan struct{}
 	wg        sync.WaitGroup
@@ -77,7 +76,6 @@ func NewDVRIntentRecoveryJob(cfg DVRIntentRecoveryConfig) *DVRIntentRecoveryJob 
 		starter:      cfg.Starter,
 		interval:     interval,
 		grace:        grace,
-		settle:       control.EndedWriterSettle,
 		batchSize:    batchSize,
 		stopCh:       make(chan struct{}),
 		claimIntents: control.ClaimUnstartedDVRIntents,
@@ -143,20 +141,14 @@ func (j *DVRIntentRecoveryJob) reconcile() {
 	}
 }
 
-// RecordSessionNow replays the DVR intent of one session whose recording ended without
-// waiting for the scan. It claims the session once the detach's settle lease has passed,
-// so a session the publisher's close ended meanwhile is not claimed. A replay that fails
+// RecordSessionNow replays the DVR intent of one live session without waiting for the
+// scan, for a session whose recording ended while it stays live. A replay that fails
 // leaves the intent leased, and the scan retries it after the lease.
 func (j *DVRIntentRecoveryJob) RecordSessionNow(sessionID string) {
 	if j.startDVR == nil || j.claimSession == nil || j.failIntent == nil {
 		return
 	}
 	go func() {
-		select {
-		case <-time.After(j.settle):
-		case <-j.stopCh:
-			return
-		}
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
 		intents, err := j.claimSession(ctx, sessionID)

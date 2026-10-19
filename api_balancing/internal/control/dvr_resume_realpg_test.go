@@ -13,6 +13,7 @@ import (
 	"frameworks/api_balancing/internal/database/foghorndb"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
 // A publisher that reconnects to the same Mist buffer continues the recording its
@@ -115,10 +116,10 @@ func TestAdoptResumedDVR_RealPG(t *testing.T) {
 }
 
 // A recording whose writer ended on its own while its session still looks live is
-// detached from that session. The session is recorded afresh only if it is still live
-// once the settle window has passed: when Mist's buffer shuts down it ends the recording
-// before it closes the publisher, and that close must win. A recording ended with its
-// session is left bound.
+// detached and its session recorded afresh at once, unless the recording node reported
+// that the recording's source ended: Mist's buffer ends its recordings when it shuts down
+// and closes the publisher only after them, and that close must end the session. A
+// recording ended with its session is left bound.
 func TestDetachEndedWriterFromLiveSession_RealPG(t *testing.T) {
 	conn := startRealPG(t)
 	prev := db
@@ -145,6 +146,14 @@ func TestDetachEndedWriterFromLiveSession_RealPG(t *testing.T) {
 		}
 		return gen
 	}
+	boundTo := func(t *testing.T, hash string) sql.NullString {
+		t.Helper()
+		var bound sql.NullString
+		if err := db.QueryRow(`SELECT ingest_generation::text FROM foghorn.artifacts WHERE artifact_hash=$1`, hash).Scan(&bound); err != nil {
+			t.Fatal(err)
+		}
+		return bound
+	}
 	scanClaims := func(t *testing.T, gen string) bool {
 		t.Helper()
 		got, err := ClaimUnstartedDVRIntents(ctx, time.Minute, 50)
@@ -166,12 +175,6 @@ func TestDetachEndedWriterFromLiveSession_RealPG(t *testing.T) {
 		}
 		return len(got) == 1 && got[0].SessionID == gen
 	}
-	settlePasses := func(t *testing.T, gen string) {
-		t.Helper()
-		if _, err := db.Exec(`UPDATE foghorn.ingest_sessions SET dvr_intent_lease_until = NOW() - INTERVAL '1 second' WHERE id = $1::uuid`, gen); err != nil {
-			t.Fatal(err)
-		}
-	}
 
 	// staging rc11 edge-eu: Mist's buffer hit its input timeout and ended the recording
 	// with "Live stream source shut down"; the stopped report reached Foghorn before the
@@ -179,57 +182,39 @@ func TestDetachEndedWriterFromLiveSession_RealPG(t *testing.T) {
 	// longer existed, leaving a failed recording.
 	t.Run("the source ended and its close lands after the stopped report", func(t *testing.T) {
 		gen := liveRecording(t, "live+srcend", "h-srcend", 310)
-		if got, err := ClaimUnstartedDVRIntents(ctx, time.Minute, 50); err != nil || len(got) != 0 {
-			t.Fatalf("a live session with an active recording must not be listed: %+v %v", got, err)
+		if scanClaims(t, gen) {
+			t.Fatal("a live session with an active recording must not be listed")
 		}
 
-		if detached := detachEndedWriterFromLiveSession(ctx, "h-srcend", lg); detached != gen {
-			t.Fatalf("detached session = %q, want %q", detached, gen)
+		if detached := detachEndedWriterFromLiveSession(ctx, "h-srcend", ipcpb.DVRSourceState_DVR_SOURCE_STATE_ENDED, lg); detached != "" {
+			t.Fatalf("a recording whose source ended was detached from session %q", detached)
 		}
-		if sessionClaims(t, gen) {
-			t.Fatal("the session was claimed for a fresh recording before its close could land")
+		if bound := boundTo(t, "h-srcend"); !bound.Valid || bound.String != gen {
+			t.Fatalf("a recording whose source ended must stay bound to %s, got %v", gen, bound)
 		}
-		if scanClaims(t, gen) {
-			t.Fatal("the recovery scan claimed the session before its close could land")
+		if sessionClaims(t, gen) || scanClaims(t, gen) {
+			t.Fatal("the session was claimed for a fresh recording before its close landed")
 		}
 
 		closed, err := FinalizeIngestSessionClose(ctx, ingA, "node-a", 310, 5000, "live+srcend", lg)
 		if err != nil || closed.EndedSessionID != gen {
 			t.Fatalf("PUSH_INPUT_CLOSE ended %q (%v), want %q", closed.EndedSessionID, err, gen)
 		}
-		settlePasses(t, gen)
 		if sessionClaims(t, gen) || scanClaims(t, gen) {
 			t.Fatal("a session its publisher's close ended was claimed for a fresh recording")
 		}
 	})
 
-	t.Run("a recorder that died while the source publishes is recorded afresh", func(t *testing.T) {
+	t.Run("a recorder that died while the source publishes is recorded afresh at once", func(t *testing.T) {
 		gen := liveRecording(t, "live+recdied", "h-recdied", 320)
-		if detached := detachEndedWriterFromLiveSession(ctx, "h-recdied", lg); detached != gen {
+		if detached := detachEndedWriterFromLiveSession(ctx, "h-recdied", ipcpb.DVRSourceState_DVR_SOURCE_STATE_LIVE, lg); detached != gen {
 			t.Fatalf("detached session = %q, want %q", detached, gen)
 		}
-		var bound sql.NullString
-		if err := db.QueryRow(`SELECT ingest_generation::text FROM foghorn.artifacts WHERE artifact_hash='h-recdied'`).Scan(&bound); err != nil {
-			t.Fatal(err)
-		}
-		if bound.Valid {
+		if bound := boundTo(t, "h-recdied"); bound.Valid {
 			t.Fatalf("recording still bound to %s", bound.String)
 		}
-		var leaseSeconds float64
-		if err := db.QueryRow(`SELECT EXTRACT(EPOCH FROM dvr_intent_lease_until - NOW()) FROM foghorn.ingest_sessions WHERE id = $1::uuid`, gen).Scan(&leaseSeconds); err != nil {
-			t.Fatal(err)
-		}
-		if want := EndedWriterSettle.Seconds(); leaseSeconds < want-2 || leaseSeconds > want {
-			t.Fatalf("settle lease ends in %.1fs, want about %.0fs", leaseSeconds, want)
-		}
-		if sessionClaims(t, gen) {
-			t.Fatal("the session was claimed inside the settle window")
-		}
-
 		// A session that reconnected seconds ago is inside the scan's grace, yet its
-		// recording already ended: once the settle window passes the session claim takes
-		// it without waiting for the grace.
-		settlePasses(t, gen)
+		// recording already ended: the immediate claim takes it without waiting.
 		if _, err := db.Exec(`UPDATE foghorn.ingest_sessions SET started_at = NOW() WHERE id = $1::uuid`, gen); err != nil {
 			t.Fatal(err)
 		}
@@ -237,26 +222,32 @@ func TestDetachEndedWriterFromLiveSession_RealPG(t *testing.T) {
 			t.Fatal("the scan must leave a session inside its grace")
 		}
 		if !sessionClaims(t, gen) {
-			t.Fatal("the live session must be claimed for a fresh recording after the settle window")
+			t.Fatal("the live session must be claimed for a fresh recording at once")
 		}
 		if sessionClaims(t, gen) {
 			t.Fatal("a claimed intent is leased and must not be claimed twice")
 		}
 	})
 
+	t.Run("an unreported source keeps the session-row decision", func(t *testing.T) {
+		gen := liveRecording(t, "live+unknown", "h-unknown", 330)
+		if detached := detachEndedWriterFromLiveSession(ctx, "h-unknown", ipcpb.DVRSourceState_DVR_SOURCE_STATE_UNSPECIFIED, lg); detached != gen {
+			t.Fatalf("detached session = %q, want %q", detached, gen)
+		}
+		if !sessionClaims(t, gen) {
+			t.Fatal("a live session whose source state is not known must be claimed for a fresh recording at once")
+		}
+	})
+
 	t.Run("a recording ended with its session stays bound", func(t *testing.T) {
-		gen := liveRecording(t, "live+ended", "h-ended", 330)
+		gen := liveRecording(t, "live+ended", "h-ended", 340)
 		if _, err := db.Exec(`UPDATE foghorn.ingest_sessions SET ended_at=NOW(), ended_at_unix_millis=2000 WHERE id=$1::uuid`, gen); err != nil {
 			t.Fatal(err)
 		}
-		if detached := detachEndedWriterFromLiveSession(ctx, "h-ended", lg); detached != "" {
+		if detached := detachEndedWriterFromLiveSession(ctx, "h-ended", ipcpb.DVRSourceState_DVR_SOURCE_STATE_LIVE, lg); detached != "" {
 			t.Fatalf("a recording ended with its session must not be detached, got session %q", detached)
 		}
-		var bound sql.NullString
-		if err := db.QueryRow(`SELECT ingest_generation::text FROM foghorn.artifacts WHERE artifact_hash='h-ended'`).Scan(&bound); err != nil {
-			t.Fatal(err)
-		}
-		if !bound.Valid || bound.String != gen {
+		if bound := boundTo(t, "h-ended"); !bound.Valid || bound.String != gen {
 			t.Fatalf("a recording ended with its session must stay bound, got %v", bound)
 		}
 	})

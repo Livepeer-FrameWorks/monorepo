@@ -5121,7 +5121,7 @@ func processDVRStopped(stopped *ipcpb.DVRStopped, session NodeSession, sentAt *t
 	// authoritative.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	unrecordedSession := detachEndedWriterFromLiveSession(ctx, dvrHash, logger)
+	unrecordedSession := detachEndedWriterFromLiveSession(ctx, dvrHash, stopped.GetSourceState(), logger)
 	final, err := FinalizeDVR(ctx, dvrHash, FinalizeOptions{
 		ReportedStatus:  status,
 		StartedAtUnix:   stopped.GetStartedAt(),
@@ -5157,37 +5157,38 @@ func processDVRStopped(stopped *ipcpb.DVRStopped, session NodeSession, sentAt *t
 	return nil
 }
 
-// unrecordedSessionHandler starts a fresh recording for a session whose recording ended,
-// once EndedWriterSettle has passed and only if the session is still live; DVR intent
-// recovery is the backstop when it is unset or fails.
+// unrecordedSessionHandler starts a fresh recording for a live session whose recording
+// ended; DVR intent recovery is the backstop when it is unset or fails.
 var unrecordedSessionHandler func(sessionID string)
 
 // SetUnrecordedSessionHandler registers the handler that records a live session afresh
 // once its ended recording is settled. Set once at startup.
 func SetUnrecordedSessionHandler(fn func(sessionID string)) { unrecordedSessionHandler = fn }
 
-// EndedWriterSettle is how long a live session whose recording ended on its own waits
-// before it is recorded afresh. When Mist's buffer shuts down it ends the recordings first
-// and closes the publisher's connection after them, so the stopped report can reach
-// Foghorn while the session still looks live; the close ends the session within this
-// window and the session is then never recorded again. A recorder that died while the
-// source keeps publishing gets no close, and its session is recorded afresh once the
-// window passes.
-const EndedWriterSettle = 10 * time.Second
-
 // detachEndedWriterFromLiveSession runs before FinalizeDVR settles a recording whose writer
 // ended. A recording that ends while still active (no stop was claimed) and bound to a
 // session that is still live leaves that session unrecorded; detaching it hands the session
-// to DVR intent recovery, which starts it a fresh recording after EndedWriterSettle. It
-// returns the detached session, or "" when nothing was detached. A failure is logged and
-// the finalize proceeds: the recording itself is complete either way.
-func detachEndedWriterFromLiveSession(ctx context.Context, dvrHash string, logger logging.Logger) string {
+// to DVR intent recovery, which starts it a fresh recording. It returns the detached
+// session, or "" when nothing was detached. A failure is logged and the finalize proceeds:
+// the recording itself is complete either way.
+//
+// The session row alone cannot tell a dead writer from an ended source: Mist's buffer ends
+// its recordings when it shuts down and closes the publisher (PUSH_INPUT_CLOSE, which ends
+// the session) only after them, so the stopped report can arrive while the session still
+// looks live. The reporting Helmsman reads the source from Mist when it reports the stop.
+// ENDED keeps the recording bound, so neither this path nor the recovery scan records the
+// session again, and the publisher's close ends it. LIVE is a writer that died while the
+// source publishes. UNSPECIFIED, from a Helmsman that does not report the source or whose
+// Mist read failed, keeps the session-row decision those Helmsmen always got.
+func detachEndedWriterFromLiveSession(ctx context.Context, dvrHash string, sourceState ipcpb.DVRSourceState, logger logging.Logger) string {
 	if db == nil {
 		return ""
 	}
-	row, err := foghorndb.New(db).DetachEndedWriterFromLiveSession(ctx, foghorndb.DetachEndedWriterFromLiveSessionParams{
-		ArtifactHash: dvrHash, SettleSeconds: int64(EndedWriterSettle / time.Second),
-	})
+	if sourceState == ipcpb.DVRSourceState_DVR_SOURCE_STATE_ENDED {
+		logger.WithField("dvr_hash", dvrHash).Info("Recording ended with its source; its session is left to the publisher's close")
+		return ""
+	}
+	row, err := foghorndb.New(db).DetachEndedWriterFromLiveSession(ctx, dvrHash)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return ""
@@ -5195,8 +5196,8 @@ func detachEndedWriterFromLiveSession(ctx context.Context, dvrHash string, logge
 		logger.WithError(err).WithField("dvr_hash", dvrHash).Error("Failed to detach a recording whose writer ended from its live session")
 		return ""
 	}
-	logger.WithFields(logging.Fields{"dvr_hash": dvrHash, "internal_name": row.StreamInternalName, "session_id": row.SessionID}).
-		Warn("Recording writer ended while its session is still live; the session will be recorded afresh unless it closes first")
+	logger.WithFields(logging.Fields{"dvr_hash": dvrHash, "internal_name": row.StreamInternalName, "session_id": row.SessionID, "source_state": sourceState.String()}).
+		Warn("Recording writer ended while its session is still live; the session will be recorded afresh")
 	return row.SessionID
 }
 

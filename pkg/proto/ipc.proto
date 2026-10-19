@@ -1320,6 +1320,21 @@ message DVRStopped {
   int32 duration_seconds = 7;    // Total duration of the recording
   uint64 size_bytes = 8;         // Total size of the recording
   string manifest_path = 9;      // Path to the m3u8 manifest for playback
+  // The recording's source stream on this node as Mist reported it when the stop was reported.
+  DVRSourceState source_state = 10;
+}
+
+// DVRSourceState is whether the stream a stopped recording read from still had a live buffer
+// on the recording node. Mist's buffer ends its recordings when it shuts down, so a recording
+// whose writer ended on its own reads ENDED when its source went away and LIVE when only the
+// writer died.
+enum DVRSourceState {
+  // Not known: a Helmsman that does not report it, or a Mist API read that failed.
+  DVR_SOURCE_STATE_UNSPECIFIED = 0;
+  // The stream is active and its buffer is online.
+  DVR_SOURCE_STATE_LIVE = 1;
+  // The stream is not active, or its buffer is shutting down or offline.
+  DVR_SOURCE_STATE_ENDED = 2;
 }
 
 message DVRStopRequest {
