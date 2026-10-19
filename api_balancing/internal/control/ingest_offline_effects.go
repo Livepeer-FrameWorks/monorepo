@@ -11,6 +11,7 @@ import (
 	"frameworks/api_balancing/internal/database/foghorndb"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
+	"github.com/google/uuid"
 )
 
 // OfflineEffectIntent describes the idempotent stream-offline work that must follow an authoritative
@@ -75,6 +76,29 @@ func FailExhaustedOfflineEffects(ctx context.Context) ([]OfflineEffectDeadLetter
 		})
 	}
 	return out, nil
+}
+
+// IngestSessionEndEventID returns the request/event id under which Foghorn forwards the end of the
+// ingest session a STREAM_END or an owner vanish observed at eventUnixMillis on nodeID closes: the
+// latest confirmed session of the stream on that node that started at or before the event. Mist's
+// STREAM_END and the end Foghorn infers from the vanish resolve the same session, so Periscope
+// dedupes them to one stream_end and one stream_sessions_final row. A session started after the
+// event belongs to a later Mist lifetime. ok is false when no confirmed session started on the node
+// by then, such as a pulled source.
+func IngestSessionEndEventID(ctx context.Context, tenantID, internalName, nodeID string, eventUnixMillis int64) (string, bool, error) {
+	if db == nil || eventUnixMillis <= 0 || strings.TrimSpace(tenantID) == "" || strings.TrimSpace(nodeID) == "" {
+		return "", false, nil
+	}
+	sessionID, err := foghorndb.New(db).ResolveEndedIngestSession(ctx, foghorndb.ResolveEndedIngestSessionParams{
+		TenantID: tenantID, StreamInternalName: internalName, NodeID: nodeID, EventUnixMillis: eventUnixMillis,
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("resolve ended ingest session: %w", err)
+	}
+	return uuid.NewSHA1(uuid.NameSpaceURL, []byte("frameworks:ingest-session-end:"+sessionID)).String(), true, nil
 }
 
 // ErrOfflineEffectSuperseded means a newer source transition already won the shared revision CAS.

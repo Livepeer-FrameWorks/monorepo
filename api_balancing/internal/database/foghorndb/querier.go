@@ -738,6 +738,7 @@ type Querier interface {
 	ResolveArtifactTenants(ctx context.Context, dollar_1 []string) ([]ResolveArtifactTenantsRow, error)
 	ResolveClipInternalNameByRequestID(ctx context.Context, requestID sql.NullString) (string, error)
 	ResolveDVRInternalNameByHash(ctx context.Context, artifactHash string) (string, error)
+	ResolveEndedIngestSession(ctx context.Context, arg ResolveEndedIngestSessionParams) (string, error)
 	ResolveThumbnailProcessingArtifact(ctx context.Context, artifactHash string) (ResolveThumbnailProcessingArtifactRow, error)
 	ResolveThumbnailVODArtifact(ctx context.Context, internalName sql.NullString) (ResolveThumbnailVODArtifactRow, error)
 	RestoreClaimedFederatedArtifactPointerAfterActiveAuthority(ctx context.Context, arg RestoreClaimedFederatedArtifactPointerAfterActiveAuthorityParams) (int64, error)

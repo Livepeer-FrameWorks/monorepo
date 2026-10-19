@@ -17,7 +17,8 @@ import (
 // same ended source. When the vanish takes the later revision, the STREAM_END
 // effect loses the revision CAS and none of its state legs may run, but its
 // stream_end analytics fact is the only one Periscope gets for the session and
-// must still reach Decklog. A superseded vanish carries no such fact.
+// must still reach Decklog. A superseded vanish forwards only an end inferred for a resolved ingest
+// session, and with no session store none resolves.
 func TestApplyOfflineEffect_SupersededStreamEndStillForwardsAnalytics(t *testing.T) {
 	reg := installRegistryForTest(t)
 	sm := state.ResetDefaultManagerForTests()

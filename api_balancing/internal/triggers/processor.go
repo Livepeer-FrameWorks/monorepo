@@ -4930,8 +4930,8 @@ func (p *Processor) ApplyOfflineEffect(ctx context.Context, effect control.Offli
 			p.logger.WithError(err).WithField("internal_name", effect.InternalName).
 				Error("Offline obligation: Decklog event undecodable; leg abandoned")
 			legs.DecklogDone = true
-		} else if err := p.sendTriggerToDecklogContext(ctx, &trigger); err != nil {
-			effectErr = errors.Join(effectErr, fmt.Errorf("forward offline trigger to Decklog: %w", err))
+		} else if err := p.forwardOfflineAnalytics(ctx, effect, &trigger); err != nil {
+			effectErr = errors.Join(effectErr, err)
 		} else {
 			legs.DecklogDone = true
 		}
@@ -4957,14 +4957,15 @@ func (p *Processor) ApplyOfflineEffect(ctx context.Context, effect control.Offli
 }
 
 // forwardSupersededStreamEnd runs the Decklog leg of an offline effect that lost the source revision
-// CAS. None of its state legs may run, but when it carries a STREAM_END, that trigger is the
-// session's only stream_end / stream_sessions_final fact: the poller's vanish for the same ended
-// source enqueues its own offline effect, and when the vanish takes the later revision it is the
-// one that applies, carrying only a lifecycle update. The caller confirmed under the stream lock
-// that no ingest session is active, and a live projection in the registry also skips the forward.
-// Periscope dedupes the fact by the trigger's stable event id and versions stream_state_current
-// by event time, so a retried or late forward cannot duplicate the session or regress newer state.
-// A Decklog failure is returned as a plain error so the durable row stays pending for retry.
+// CAS. None of its state legs may run, but the ended session's stream_end / stream_sessions_final
+// fact still must: STREAM_END and the poller's vanish for the same ended source each enqueue an
+// offline effect, and only the one holding the later revision applies. A superseded STREAM_END
+// forwards itself and a superseded vanish forwards the end inferred from it; the vanish lifecycle
+// update itself is not forwarded. The caller confirmed under the stream lock that no ingest session
+// is active, and a live projection in the registry also skips the forward. Periscope dedupes the
+// fact by the session end id and versions stream_state_current by event time, so a retried or late
+// forward cannot duplicate the session or regress newer state. A Decklog or session lookup failure
+// is returned as a plain error so the durable row stays pending for retry.
 func (p *Processor) forwardSupersededStreamEnd(ctx context.Context, registry *control.StreamRegistry, effect control.OfflineEffect) (control.OfflineEffectLegResults, error) {
 	var legs control.OfflineEffectLegResults
 	if effect.DecklogDone || len(effect.DecklogTrigger) == 0 {
@@ -4974,14 +4975,126 @@ func (p *Processor) forwardSupersededStreamEnd(ctx context.Context, registry *co
 		return legs, control.ErrOfflineEffectSuperseded
 	}
 	var trigger ipcpb.MistTrigger
-	if err := proto.Unmarshal(effect.DecklogTrigger, &trigger); err != nil || trigger.GetStreamEnd() == nil {
+	if err := proto.Unmarshal(effect.DecklogTrigger, &trigger); err != nil {
 		return legs, control.ErrOfflineEffectSuperseded
 	}
-	if err := p.sendTriggerToDecklogContext(ctx, &trigger); err != nil {
-		return legs, fmt.Errorf("forward superseded STREAM_END to Decklog: %w", err)
+	end, err := p.sessionEndFact(ctx, effect, &trigger)
+	if err != nil {
+		return legs, err
+	}
+	if end == nil {
+		return legs, control.ErrOfflineEffectSuperseded
+	}
+	if err := p.sendTriggerToDecklogContext(ctx, end); err != nil {
+		return legs, fmt.Errorf("forward superseded session end to Decklog: %w", err)
 	}
 	legs.DecklogDone = true
 	return legs, control.ErrOfflineEffectSuperseded
+}
+
+// forwardOfflineAnalytics runs the Decklog leg of an applied offline effect: the ended session's
+// stream_end fact first, then a vanish's own lifecycle update. The order keeps a retry after a
+// partial failure from forwarding the lifecycle row twice; a repeated end is deduped by its id.
+func (p *Processor) forwardOfflineAnalytics(ctx context.Context, effect control.OfflineEffect, trigger *ipcpb.MistTrigger) error {
+	end, err := p.sessionEndFact(ctx, effect, trigger)
+	if err != nil {
+		return err
+	}
+	if end != nil {
+		if err := p.sendTriggerToDecklogContext(ctx, end); err != nil {
+			return fmt.Errorf("forward session end to Decklog: %w", err)
+		}
+	}
+	if trigger.GetStreamEnd() != nil {
+		return nil
+	}
+	if err := p.sendTriggerToDecklogContext(ctx, trigger); err != nil {
+		return fmt.Errorf("forward offline trigger to Decklog: %w", err)
+	}
+	return nil
+}
+
+// sessionEndFact returns the trigger carrying the stream_end fact of the ingest session an offline
+// effect's Decklog payload ends, or nil when the payload carries none. A STREAM_END is returned
+// under the session end id (control.IngestSessionEndEventID) in both request_id and event_id. An
+// owner vanish yields the STREAM_END Foghorn infers for that session under the same id, so the
+// session still gets its end when Mist's STREAM_END never reached Helmsman; Periscope keeps Mist's
+// STREAM_END over the inferred one whichever arrives first. A STREAM_END whose session does not
+// resolve keeps its own request_id, and such a vanish yields nothing.
+func (p *Processor) sessionEndFact(ctx context.Context, effect control.OfflineEffect, trigger *ipcpb.MistTrigger) (*ipcpb.MistTrigger, error) {
+	lifecycle := trigger.GetStreamLifecycleUpdate()
+	if trigger.GetStreamEnd() == nil && (lifecycle == nil || lifecycle.GetStatus() != "offline") {
+		return nil, nil
+	}
+	eventMillis := offlineEventUnixMillis(trigger)
+	endID, resolved, err := control.IngestSessionEndEventID(ctx, effect.TenantID, effect.InternalName, effect.NodeID, eventMillis)
+	if err != nil {
+		return nil, err
+	}
+	if trigger.GetStreamEnd() != nil {
+		end, ok := proto.Clone(trigger).(*ipcpb.MistTrigger)
+		if !ok {
+			return nil, errors.New("clone STREAM_END for Decklog")
+		}
+		if resolved {
+			end.RequestId, end.EventId = endID, endID
+		}
+		return end, nil
+	}
+	if !resolved {
+		return nil, nil
+	}
+	return inferredStreamEnd(effect, trigger, lifecycle, endID, eventMillis), nil
+}
+
+// offlineEventUnixMillis is the edge-clock time of an offline trigger: Mist's event time when the
+// trigger carries it, otherwise the end of the second Helmsman stamped.
+func offlineEventUnixMillis(trigger *ipcpb.MistTrigger) int64 {
+	if millis := trigger.GetStreamEnd().GetTriggerUnixMillis(); millis > 0 {
+		return millis
+	}
+	if millis := trigger.GetTriggerUnixMillis(); millis > 0 {
+		return millis
+	}
+	ts := trigger.GetTimestamp()
+	switch {
+	case ts <= 0:
+		return 0
+	case ts < 1_000_000_000_000:
+		return ts*1000 + 999
+	default:
+		return ts
+	}
+}
+
+// inferredStreamEnd builds the STREAM_END for an ingest session whose end Foghorn learned only from
+// the owner's vanish. It carries the vanish's envelope and observation time and no counters, which
+// Mist reports only on its own STREAM_END.
+func inferredStreamEnd(effect control.OfflineEffect, vanish *ipcpb.MistTrigger, lifecycle *ipcpb.StreamLifecycleUpdate, endID string, eventMillis int64) *ipcpb.MistTrigger {
+	tenantID, nodeID := effect.TenantID, effect.NodeID
+	streamID := vanish.GetStreamId()
+	if streamID == "" {
+		streamID = lifecycle.GetStreamId()
+	}
+	timestamp := vanish.GetTimestamp()
+	if timestamp <= 0 {
+		timestamp = eventMillis / 1000
+	}
+	end := &ipcpb.StreamEndTrigger{
+		StreamName: "live+" + effect.InternalName, NodeId: &nodeID, TriggerUnixMillis: eventMillis, Inferred: true,
+	}
+	trigger := &ipcpb.MistTrigger{
+		TriggerType: "STREAM_END", NodeId: nodeID, Timestamp: timestamp, RequestId: endID, EventId: endID,
+		TenantId: &tenantID, ClusterId: vanish.ClusterId, OriginClusterId: vanish.OriginClusterId,
+		ControlCellId: vanish.ControlCellId, SourceRegion: vanish.GetSourceRegion(),
+		StreamOriginRegion: vanish.GetStreamOriginRegion(), SchemaVersion: vanish.GetSchemaVersion(),
+		TriggerUnixMillis: eventMillis,
+		TriggerPayload:    &ipcpb.MistTrigger_StreamEnd{StreamEnd: end},
+	}
+	if streamID != "" {
+		trigger.StreamId, end.StreamId = &streamID, &streamID
+	}
+	return trigger
 }
 
 // ApplyAdmissionEffect drives the owed legs of a confirmed generation's obligation one step, each

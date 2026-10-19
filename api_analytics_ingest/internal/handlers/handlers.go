@@ -488,6 +488,16 @@ func (h *AnalyticsHandler) HandleRawMistTriggerMessage(ctx context.Context, msg 
 		trigger.ClusterId = &clusterID
 	}
 
+	if trigger.GetStreamEnd().GetInferred() {
+		superseded, err := h.inferredStreamEndSuperseded(ctx, nodeID, sourceRequestID, msg.Value)
+		if err != nil {
+			return err
+		}
+		if superseded {
+			return nil
+		}
+	}
+
 	receivedAtMS := trigger.GetTimestamp()
 	if receivedAtMS == 0 {
 		receivedAtMS = time.Now().UnixMilli()
@@ -530,6 +540,34 @@ func (h *AnalyticsHandler) HandleRawMistTriggerMessage(ctx context.Context, msg 
 		return fmt.Errorf("project final fact: %w", err)
 	}
 	return nil
+}
+
+// inferredStreamEndSuperseded reports whether raw_mist_triggers already journals a different
+// STREAM_END under an inferred end's source id: Mist's own STREAM_END for the session, which keeps
+// its payload and final projection. A journaled copy of this same inferred end does not count, so a
+// redelivery after a failed projection still projects it.
+func (h *AnalyticsHandler) inferredStreamEndSuperseded(ctx context.Context, nodeID, sourceRequestID string, payload []byte) (bool, error) {
+	if err := h.flushBeforeRead(ctx, "raw_mist_triggers", func(pending any) bool {
+		row, ok := pending.(periscopeingestdb.RawMistTriggerRow)
+		return ok && row.NodeID == nodeID && row.TriggerType == "STREAM_END" && row.SourceRequestID == sourceRequestID
+	}); err != nil {
+		return false, err
+	}
+	rows, err := h.clickhouse.Query(ctx, `SELECT 1 FROM periscope.raw_mist_triggers
+		WHERE node_id = ? AND trigger_type = 'STREAM_END' AND source_request_id = ? AND payload != ?
+		LIMIT 1`, nodeID, sourceRequestID, string(payload))
+	if err != nil {
+		return false, fmt.Errorf("inferred STREAM_END journal lookup: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	if !rows.Next() {
+		return false, rows.Err()
+	}
+	h.logger.WithFields(logging.Fields{
+		"node_id":         nodeID,
+		"source_event_id": sourceRequestID,
+	}).Debug("Dropping inferred STREAM_END: the session's STREAM_END is already journaled")
+	return true, nil
 }
 
 func (h *AnalyticsHandler) skipEvent(event kafka.AnalyticsEvent, reason string) error {
@@ -1373,6 +1411,38 @@ func (h *AnalyticsHandler) isDuplicateEvent(ctx context.Context, table string, e
 		return true
 	}
 	return false
+}
+
+// hasStoredStreamEnd reports whether stream_event_log already holds a stream_end with event's id,
+// including one an earlier record of the same poll batch buffered. One ingest session's end can
+// arrive in two Kafka records under one event id, Mist's STREAM_END and Foghorn's end inferred from
+// the source vanishing, and the buffer's ingest_id dedupe only collapses redeliveries of the same
+// record, so this lookup runs under the write buffer as well.
+func (h *AnalyticsHandler) hasStoredStreamEnd(ctx context.Context, event kafka.AnalyticsEvent) (bool, error) {
+	eventID := parseUUID(event.EventID)
+	if eventID == uuid.Nil {
+		return false, nil
+	}
+	if err := h.flushBeforeRead(ctx, "stream_event_log", func(pending any) bool {
+		row, ok := pending.(periscopeingestdb.StreamEndEventRow)
+		return ok && row.EventID == eventID
+	}); err != nil {
+		return false, err
+	}
+	rows, err := h.clickhouse.Query(ctx, `SELECT 1 FROM stream_event_log
+		WHERE event_id = ? AND tenant_id = ? AND event_type = 'stream_end' LIMIT 1`,
+		eventID, parseUUID(event.TenantID))
+	if err != nil {
+		return false, fmt.Errorf("stream_end duplicate lookup: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	if !rows.Next() {
+		return false, rows.Err()
+	}
+	if h.metrics != nil && h.metrics.DuplicateEvents != nil {
+		h.metrics.DuplicateEvents.WithLabelValues(event.EventType).Inc()
+	}
+	return true, nil
 }
 
 func isValidUUIDString(value string) bool {
@@ -2775,8 +2845,9 @@ func (h *AnalyticsHandler) processStreamEnd(ctx context.Context, event kafka.Ana
 		return sendErr
 	}
 
-	if h.isDuplicateEvent(ctx, "stream_event_log", event) {
-		return nil
+	stored, err := h.hasStoredStreamEnd(ctx, event)
+	if err != nil || stored {
+		return err
 	}
 
 	// Write to ClickHouse stream_events table using ONLY end-specific fields

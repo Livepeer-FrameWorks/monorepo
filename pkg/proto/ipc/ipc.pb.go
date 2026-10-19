@@ -13234,7 +13234,13 @@ type StreamEndTrigger struct {
 	// two same-body STREAM_ENDs — otherwise two later events with identical metrics bodies collapse to
 	// one WAL record while Foghorn is unavailable, and replaying the older event time can miss the
 	// newer generation.
-	TriggerUuid   string `protobuf:"bytes,11,opt,name=trigger_uuid,json=triggerUuid,proto3" json:"trigger_uuid,omitempty"`
+	TriggerUuid string `protobuf:"bytes,11,opt,name=trigger_uuid,json=triggerUuid,proto3" json:"trigger_uuid,omitempty"`
+	// Set by Foghorn on the STREAM_END it infers for an ingest session whose end it learned only
+	// from the poller's vanish (Mist's own STREAM_END never reached Helmsman). It carries the same
+	// request_id/event_id a Mist STREAM_END for that session gets, and no counters. Periscope drops
+	// an inferred end once a different end with that id is journaled, so a Mist STREAM_END is never
+	// replaced by the inferred one.
+	Inferred      bool `protobuf:"varint,12,opt,name=inferred,proto3" json:"inferred,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -13344,6 +13350,13 @@ func (x *StreamEndTrigger) GetTriggerUuid() string {
 		return x.TriggerUuid
 	}
 	return ""
+}
+
+func (x *StreamEndTrigger) GetInferred() bool {
+	if x != nil {
+		return x.Inferred
+	}
+	return false
 }
 
 // StreamTrackListTrigger (formerly LIVE_TRACK_LIST) provides track inventory.
@@ -24441,7 +24454,7 @@ const file_ipc_proto_rawDesc = "" +
 	"\x10_max_keepaway_msB\f\n" +
 	"\n" +
 	"_stream_idB\r\n" +
-	"\v_buffer_pid\"\xd4\x04\n" +
+	"\v_buffer_pid\"\xf0\x04\n" +
 	"\x10StreamEndTrigger\x12\x1f\n" +
 	"\vstream_name\x18\x01 \x01(\tR\n" +
 	"streamName\x12.\n" +
@@ -24455,7 +24468,8 @@ const file_ipc_proto_rawDesc = "" +
 	"\tstream_id\x18\t \x01(\tH\aR\bstreamId\x88\x01\x01\x12.\n" +
 	"\x13trigger_unix_millis\x18\n" +
 	" \x01(\x03R\x11triggerUnixMillis\x12!\n" +
-	"\ftrigger_uuid\x18\v \x01(\tR\vtriggerUuidB\x13\n" +
+	"\ftrigger_uuid\x18\v \x01(\tR\vtriggerUuid\x12\x1a\n" +
+	"\binferred\x18\f \x01(\bR\binferredB\x13\n" +
 	"\x11_downloaded_bytesB\x11\n" +
 	"\x0f_uploaded_bytesB\x10\n" +
 	"\x0e_total_viewersB\x0f\n" +

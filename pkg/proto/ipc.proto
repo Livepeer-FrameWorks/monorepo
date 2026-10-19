@@ -2063,6 +2063,12 @@ message StreamEndTrigger {
   // one WAL record while Foghorn is unavailable, and replaying the older event time can miss the
   // newer generation.
   string trigger_uuid = 11;
+  // Set by Foghorn on the STREAM_END it infers for an ingest session whose end it learned only
+  // from the poller's vanish (Mist's own STREAM_END never reached Helmsman). It carries the same
+  // request_id/event_id a Mist STREAM_END for that session gets, and no counters. Periscope drops
+  // an inferred end once a different end with that id is journaled, so a Mist STREAM_END is never
+  // replaced by the inferred one.
+  bool inferred = 12;
 }
 
 // StreamTrackListTrigger (formerly LIVE_TRACK_LIST) provides track inventory.

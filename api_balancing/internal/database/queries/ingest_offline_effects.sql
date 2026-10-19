@@ -59,6 +59,16 @@ WHERE id = sqlc.arg(effect_id) AND state = 'pending'
   AND lease_token = sqlc.arg(lease_token)::text::uuid
 FOR UPDATE;
 
+-- name: ResolveEndedIngestSession :one
+SELECT id::text AS id FROM foghorn.ingest_sessions
+WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
+  AND stream_internal_name = sqlc.arg(stream_internal_name)
+  AND node_id = sqlc.arg(node_id)
+  AND projection_state = 'active'
+  AND started_at_unix_millis <= sqlc.arg(event_unix_millis)::bigint
+ORDER BY started_at_unix_millis DESC, id DESC
+LIMIT 1;
+
 -- name: HasActiveIngestSession :one
 SELECT EXISTS (
     SELECT 1 FROM foghorn.ingest_sessions

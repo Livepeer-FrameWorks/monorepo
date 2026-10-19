@@ -320,6 +320,36 @@ func (q *Queries) ReleaseOfflineEffectNotOwner(ctx context.Context, arg ReleaseO
 	return err
 }
 
+const resolveEndedIngestSession = `-- name: ResolveEndedIngestSession :one
+SELECT id::text AS id FROM foghorn.ingest_sessions
+WHERE tenant_id = $1::text::uuid
+  AND stream_internal_name = $2
+  AND node_id = $3
+  AND projection_state = 'active'
+  AND started_at_unix_millis <= $4::bigint
+ORDER BY started_at_unix_millis DESC, id DESC
+LIMIT 1
+`
+
+type ResolveEndedIngestSessionParams struct {
+	TenantID           string `db:"tenant_id" json:"tenant_id"`
+	StreamInternalName string `db:"stream_internal_name" json:"stream_internal_name"`
+	NodeID             string `db:"node_id" json:"node_id"`
+	EventUnixMillis    int64  `db:"event_unix_millis" json:"event_unix_millis"`
+}
+
+func (q *Queries) ResolveEndedIngestSession(ctx context.Context, arg ResolveEndedIngestSessionParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, resolveEndedIngestSession,
+		arg.TenantID,
+		arg.StreamInternalName,
+		arg.NodeID,
+		arg.EventUnixMillis,
+	)
+	var id string
+	err := row.Scan(&id)
+	return id, err
+}
+
 const reviveFailedOfflineTeardownDone = `-- name: ReviveFailedOfflineTeardownDone :execrows
 UPDATE foghorn.ingest_offline_effects
 SET teardown_done = TRUE,
