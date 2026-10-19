@@ -47,7 +47,9 @@ provisioner:
              default('sha256:488a106dd06d410df1d2414d468997e65abbcecd1f882373a4d39e74fc371b91', true) }}
         yugabyte_manage_timesync: false
         yugabyte_replication_factor: 1
-        yugabyte_node_address: "127.0.0.1"
+        # A node binds its WireGuard address only; the container's own address
+        # stands in for it, so nothing listens on loopback.
+        yugabyte_node_address: "{{ ansible_default_ipv4.address }}"
 
 verifier:
   name: ansible

@@ -21,11 +21,59 @@
           - ansible_facts.services['yb-tserver.service'].status == 'enabled'
         fail_msg: "yb-tserver not running/enabled"
 
-    - name: Confirm YSQL listener responds
+    - name: Confirm YSQL listener responds on the node address
+      ansible.builtin.wait_for:
+        host: "{{ yugabyte_node_address }}"
+        port: 5433
+        timeout: 30
+
+    - name: Confirm nothing listens for YSQL on loopback
       ansible.builtin.wait_for:
         host: 127.0.0.1
         port: 5433
-        timeout: 30
+        state: stopped
+        timeout: 1
+
+    # The post-expand report reads the quartermaster database.
+    - name: Create the database the post-expand report reads
+      ansible.builtin.shell: |
+        set -eu
+        ysqlsh=/opt/yugabyte/current/postgres/bin/ysqlsh
+        [ -x "$ysqlsh" ] || ysqlsh=/opt/yugabyte/current/bin/ysqlsh
+        "$ysqlsh" -X -h {{ yugabyte_node_address }} -p 5433 -U yugabyte -d yugabyte -tA \
+          -c "SELECT 'CREATE DATABASE quartermaster' WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = 'quartermaster')" \
+          -c '\gexec'
+      changed_when: false
+
+    - name: Copy the YSQL scripts the CLI runs on a node
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/cli-scripts/"
+        dest: /tmp/fw-cli-scripts/
+        mode: "0644"
+
+    - name: Run the CLI's YSQL scripts against the node's listener
+      ansible.builtin.command: sh /tmp/fw-cli-scripts/{{ item }}
+      loop:
+        - ysql-timing-probe.sh
+        - media-authority-probe.sh
+        - post-expand-report.sh
+        - postgres-snapshot.sh
+        - local-queries.sh
+      register: yugabyte_cli_scripts
+      changed_when: false
+      failed_when: false
+
+    - name: Assert every CLI YSQL script reached the listener
+      ansible.builtin.assert:
+        that:
+          - item.rc == 0
+          - item.item != 'ysql-timing-probe.sh' or 'ysql_elapsed_us=' in item.stdout
+          - item.item != 'post-expand-report.sh' or '"expand_applied":false' in item.stdout
+          - item.item != 'local-queries.sh' or '@@fw-done 0 0 ' in item.stdout
+        fail_msg: "{{ item.item }} exited {{ item.rc }}: {{ item.stdout }} {{ item.stderr }}"
+      loop: "{{ yugabyte_cli_scripts.results }}"
+      loop_control:
+        label: "{{ item.item }}"
 
     - name: Confirm yb-master binary is present and executable
       ansible.builtin.stat:
