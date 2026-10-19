@@ -4921,7 +4921,7 @@ func (p *Processor) ApplyOfflineEffect(ctx context.Context, effect control.Offli
 		return legs, fmt.Errorf("publish inactive source revision: %w", err)
 	}
 	if !applied {
-		return legs, control.ErrOfflineEffectSuperseded
+		return p.forwardSupersededStreamEnd(ctx, registry, effect)
 	}
 	var effectErr error
 	if !effect.DecklogDone && len(effect.DecklogTrigger) > 0 {
@@ -4954,6 +4954,34 @@ func (p *Processor) ApplyOfflineEffect(ctx context.Context, effect control.Offli
 		}
 	}
 	return legs, effectErr
+}
+
+// forwardSupersededStreamEnd runs the Decklog leg of an offline effect that lost the source revision
+// CAS. None of its state legs may run, but when it carries a STREAM_END, that trigger is the
+// session's only stream_end / stream_sessions_final fact: the poller's vanish for the same ended
+// source enqueues its own offline effect, and when the vanish takes the later revision it is the
+// one that applies, carrying only a lifecycle update. The caller confirmed under the stream lock
+// that no ingest session is active, and a live projection in the registry also skips the forward.
+// Periscope dedupes the fact by the trigger's stable event id and versions stream_state_current
+// by event time, so a retried or late forward cannot duplicate the session or regress newer state.
+// A Decklog failure is returned as a plain error so the durable row stays pending for retry.
+func (p *Processor) forwardSupersededStreamEnd(ctx context.Context, registry *control.StreamRegistry, effect control.OfflineEffect) (control.OfflineEffectLegResults, error) {
+	var legs control.OfflineEffectLegResults
+	if effect.DecklogDone || len(effect.DecklogTrigger) == 0 {
+		return legs, control.ErrOfflineEffectSuperseded
+	}
+	if _, active, ok := registry.SourceGenerationSnapshot(effect.InternalName, ""); ok && active {
+		return legs, control.ErrOfflineEffectSuperseded
+	}
+	var trigger ipcpb.MistTrigger
+	if err := proto.Unmarshal(effect.DecklogTrigger, &trigger); err != nil || trigger.GetStreamEnd() == nil {
+		return legs, control.ErrOfflineEffectSuperseded
+	}
+	if err := p.sendTriggerToDecklogContext(ctx, &trigger); err != nil {
+		return legs, fmt.Errorf("forward superseded STREAM_END to Decklog: %w", err)
+	}
+	legs.DecklogDone = true
+	return legs, control.ErrOfflineEffectSuperseded
 }
 
 // ApplyAdmissionEffect drives the owed legs of a confirmed generation's obligation one step, each
