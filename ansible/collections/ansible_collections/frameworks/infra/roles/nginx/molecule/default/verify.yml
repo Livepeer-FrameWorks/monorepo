@@ -1,0 +1,53 @@
+---
+- name: Verify the local listener moved to loopback
+  hosts: all
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Read nginx listening sockets
+      ansible.builtin.command: ss -Hltn sport = :18090
+      register: nginx_verify_sockets
+      changed_when: false
+
+    - name: Assert nginx listens on loopback only
+      ansible.builtin.assert:
+        that:
+          - "'127.0.0.1:18090' in nginx_verify_sockets.stdout"
+          - "'0.0.0.0:18090' not in nginx_verify_sockets.stdout"
+          - "'*:18090' not in nginx_verify_sockets.stdout"
+        fail_msg: "nginx still listens on {{ nginx_verify_sockets.stdout }}"
+
+    # The release precheck runs the role under --check; it must see a
+    # configured listener without a socket.
+    - name: Stop nginx so its configured listener has no socket
+      ansible.builtin.systemd:
+        name: nginx
+        state: stopped
+
+- name: Check the role under --check on a host whose listener is gone
+  hosts: all
+  become: true
+  gather_facts: true
+  check_mode: true
+  tasks:
+    - name: Run the nginx configure tasks in check mode
+      ansible.builtin.include_role:
+        name: frameworks.infra.nginx
+        tasks_from: configure
+
+- name: Assert check mode reported the listener drift
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Assert the drift check reported the missing listener
+      ansible.builtin.assert:
+        that:
+          - nginx_listen_drift is changed
+          - "'missing 127.0.0.1:18090' in nginx_listen_drift.stdout"
+        fail_msg: "check mode did not report the missing listener: {{ nginx_listen_drift }}"
+
+    - name: Start nginx again
+      ansible.builtin.systemd:
+        name: nginx
+        state: started

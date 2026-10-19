@@ -1,0 +1,16 @@
+---
+- name: Prepare apt cache
+  ansible.builtin.import_playbook: ../../../../molecule/prepare-apt.yml
+
+# A host provisioned before listeners were bound to specific addresses runs
+# nginx with its local HTTP listener on every interface.
+- name: Run nginx with its local listener on every interface
+  hosts: all
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Apply frameworks.infra.nginx with a wildcard local listener
+      ansible.builtin.include_role:
+        name: frameworks.infra.nginx
+      vars:
+        nginx_http_bind_address: 0.0.0.0
