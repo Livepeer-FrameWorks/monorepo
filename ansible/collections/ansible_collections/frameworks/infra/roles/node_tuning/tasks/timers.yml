@@ -14,6 +14,9 @@
   register: lvm_probe
   changed_when: false
   failed_when: false
+  # Read-only; it runs under --check so the release precheck sees the real
+  # LVM state instead of an empty probe that reads as "no LVM".
+  check_mode: false
   when: node_tuning_mask_e2scrub | bool
 
 - name: Node_tuning | mask e2scrub_all.timer when LVM absent

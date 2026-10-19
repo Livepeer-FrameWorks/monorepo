@@ -200,6 +200,9 @@
   register: frameworks_postgres_pgvector_installed
   changed_when: false
   failed_when: false
+  # Read-only; it runs under --check so the release precheck sees whether the
+  # package is installed instead of reporting a build every time.
+  check_mode: false
   when:
     - ansible_facts.os_family == "Archlinux"
     - postgres_pgvector_enabled | bool
