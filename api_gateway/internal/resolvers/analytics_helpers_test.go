@@ -140,6 +140,43 @@ func TestNormalizeVodHash(t *testing.T) {
 	}
 }
 
+// Artifact and clip hashes are 32 lowercase hex characters. Every hex
+// character is in the base64 alphabet, so such a hash can itself decode as a
+// "prefix:rest" pair; this one (chapterPlaybackArtifactHash("9")) does.
+const hashDecodingToColonPair = "8f050f485bcdfac7db979fc6606613c0"
+
+func TestNormalizeHex32Hashes(t *testing.T) {
+	const hash = "0123456789abcdef0123456789abcdef"
+
+	if typ, _, ok := globalid.Decode(hashDecodingToColonPair); !ok || globalid.IsKnownType(typ) {
+		t.Fatalf("fixture must decode to an unknown-type pair, got ok=%v typ=%q", ok, typ)
+	}
+
+	normalizers := map[string]struct {
+		fn  func(string) (string, error)
+		typ string
+	}{
+		"vod":  {fn: normalizeVodHash, typ: globalid.TypeVodAsset},
+		"clip": {fn: normalizeClipHash, typ: globalid.TypeClip},
+	}
+	for name, n := range normalizers {
+		t.Run(name+" relay id encoding a 32-hex hash is decoded", func(t *testing.T) {
+			got, err := n.fn(globalid.Encode(n.typ, hash))
+			assertNormalize(t, got, err, hash, false)
+		})
+		t.Run(name+" raw hash decoding to an unknown type passes through", func(t *testing.T) {
+			got, err := n.fn(hashDecodingToColonPair)
+			assertNormalize(t, got, err, hashDecodingToColonPair, false)
+		})
+		t.Run(name+" relay id encoding a dashed UUID is still rejected", func(t *testing.T) {
+			_, err := n.fn(globalid.Encode(n.typ, rawUUID))
+			if err == nil {
+				t.Fatal("expected legacy UUID relay id to be rejected")
+			}
+		})
+	}
+}
+
 // TestNormalizeExportedAliases pins that the public wrappers delegate to the
 // unexported implementations rather than re-implementing the logic.
 func TestNormalizeExportedAliases(t *testing.T) {

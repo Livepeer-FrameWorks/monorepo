@@ -12,7 +12,7 @@ func normalizeStreamID(streamID string) (string, error) {
 	if streamID == "" {
 		return streamID, nil
 	}
-	if typ, id, ok := globalid.Decode(streamID); ok {
+	if typ, id, ok := decodeKnownGlobalID(streamID); ok {
 		if typ != globalid.TypeStream {
 			return "", middleware.InvalidInput("invalid stream relay ID type: %s", typ)
 		}
@@ -32,15 +32,37 @@ func normalizeStreamIDPtr(streamID *string) (*string, error) {
 	return &rawID, nil
 }
 
+// decodeKnownGlobalID decodes input as a global ID only when the decoded type
+// is a known Node type. Raw 32-hex artifact and clip hashes are valid base64
+// and can decode into an arbitrary "prefix:rest" pair; those stay raw.
+func decodeKnownGlobalID(input string) (typ, id string, ok bool) {
+	typ, id, ok = globalid.Decode(input)
+	if !ok || !globalid.IsKnownType(typ) {
+		return "", "", false
+	}
+	return typ, id, true
+}
+
+// isCanonicalUUID matches only the dashed 36-character UUID form. uuid.Parse
+// also accepts 32 bare hex characters, which is the shape of every artifact
+// and clip hash.
+func isCanonicalUUID(id string) bool {
+	if len(id) != 36 {
+		return false
+	}
+	_, err := uuid.Parse(id)
+	return err == nil
+}
+
 func normalizeClipHash(input string) (string, error) {
 	if input == "" {
 		return input, nil
 	}
-	if typ, id, ok := globalid.Decode(input); ok {
+	if typ, id, ok := decodeKnownGlobalID(input); ok {
 		if typ != globalid.TypeClip {
 			return "", middleware.InvalidInput("invalid clip relay ID type: %s", typ)
 		}
-		if _, err := uuid.Parse(id); err == nil {
+		if isCanonicalUUID(id) {
 			return "", middleware.InvalidInput("clip relay IDs now encode clipHash; use clipHash instead")
 		}
 		return id, nil
@@ -52,11 +74,11 @@ func normalizeVodHash(input string) (string, error) {
 	if input == "" {
 		return input, nil
 	}
-	if typ, id, ok := globalid.Decode(input); ok {
+	if typ, id, ok := decodeKnownGlobalID(input); ok {
 		if typ != globalid.TypeVodAsset {
 			return "", middleware.InvalidInput("invalid VOD relay ID type: %s", typ)
 		}
-		if _, err := uuid.Parse(id); err == nil {
+		if isCanonicalUUID(id) {
 			return "", middleware.InvalidInput("VOD relay IDs now encode artifactHash; use artifactHash instead")
 		}
 		return id, nil

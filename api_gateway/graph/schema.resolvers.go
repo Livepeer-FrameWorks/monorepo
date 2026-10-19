@@ -3570,17 +3570,9 @@ func (r *queryResolver) Node(ctx context.Context, id string) (model.Node, error)
 	case globalid.TypeStream:
 		return r.DoGetStream(ctx, rawID)
 	case globalid.TypeClip:
-		normalized, err := resolvers.NormalizeClipHash(rawID)
-		if err != nil {
-			return nil, err
-		}
-		return r.DoGetClip(ctx, normalized)
+		return r.DoGetClip(ctx, rawID)
 	case globalid.TypeVodAsset:
-		normalized, err := resolvers.NormalizeVodHash(rawID)
-		if err != nil {
-			return nil, err
-		}
-		return r.DoGetVodAsset(ctx, normalized)
+		return r.DoGetVodAsset(ctx, rawID)
 	case globalid.TypeCluster:
 		return r.DoGetCluster(ctx, rawID)
 	case globalid.TypeInfrastructureNode:

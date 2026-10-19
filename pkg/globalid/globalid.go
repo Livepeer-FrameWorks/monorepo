@@ -46,6 +46,48 @@ const (
 
 const compositeDelimiter = "|"
 
+var knownTypes = map[string]struct{}{
+	TypeStream:                 {},
+	TypeClip:                   {},
+	TypeVodAsset:               {},
+	TypePushTarget:             {},
+	TypeCluster:                {},
+	TypeInfrastructureNode:     {},
+	TypeConversation:           {},
+	TypeMessage:                {},
+	TypeStreamEvent:            {},
+	TypeBufferEvent:            {},
+	TypeTrackListEvent:         {},
+	TypeStreamHealthMetric:     {},
+	TypeViewerSession:          {},
+	TypeStreamHealth5m:         {},
+	TypeNodePerformance5m:      {},
+	TypeViewerHoursHourly:      {},
+	TypeViewerGeoHourly:        {},
+	TypeTenantDailyStat:        {},
+	TypeStreamConnectionHourly: {},
+	TypeClientMetrics5m:        {},
+	TypeQualityTierDaily:       {},
+	TypeStorageUsageRecord:     {},
+	TypeStorageEvent:           {},
+	TypeProcessingUsageRecord:  {},
+	TypeStreamAnalyticsDaily:   {},
+	TypeConnectionEvent:        {},
+	TypeArtifactEvent:          {},
+	TypeNodeMetric:             {},
+	TypeNodeMetricHourly:       {},
+	TypeAPIUsageRecord:         {},
+}
+
+// IsKnownType reports whether typ is one of the Node type names declared in
+// this package. Raw identifiers made of base64-alphabet characters (hex hashes)
+// can decode into an arbitrary "prefix:rest" pair, so callers that accept both
+// raw IDs and global IDs use this to tell a real global ID from a raw one.
+func IsKnownType(typ string) bool {
+	_, ok := knownTypes[typ]
+	return ok
+}
+
 // Encode builds a Relay-style global ID (base64("Type:ID")).
 func Encode(typ, id string) string {
 	return base64.StdEncoding.EncodeToString([]byte(typ + ":" + id))
