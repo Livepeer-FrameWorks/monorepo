@@ -40,9 +40,10 @@
         set -eu
         ysqlsh=/opt/yugabyte/current/postgres/bin/ysqlsh
         [ -x "$ysqlsh" ] || ysqlsh=/opt/yugabyte/current/bin/ysqlsh
-        "$ysqlsh" -X -h {{ yugabyte_node_address }} -p 5433 -U yugabyte -d yugabyte -tA \
-          -c "SELECT 'CREATE DATABASE quartermaster' WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = 'quartermaster')" \
-          -c '\gexec'
+        ysql() { "$ysqlsh" -X -h {{ yugabyte_node_address }} -p 5433 -U yugabyte -d yugabyte -v ON_ERROR_STOP=1 -tA -c "$1"; }
+        if [ "$(ysql "SELECT 1 FROM pg_database WHERE datname = 'quartermaster'")" != "1" ]; then
+          ysql 'CREATE DATABASE quartermaster'
+        fi
       changed_when: false
 
     - name: Copy the YSQL scripts the CLI runs on a node
