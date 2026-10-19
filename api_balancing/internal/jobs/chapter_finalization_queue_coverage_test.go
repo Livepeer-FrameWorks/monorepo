@@ -135,6 +135,10 @@ func TestDispatchChapter_NoSegmentsFailsSourceMissing(t *testing.T) {
 	controlMock.ExpectQuery(`FROM foghorn\.dvr_segments`).
 		WithArgs("dvrhash", int64(0), int64(10000)).
 		WillReturnRows(sqlmock.NewRows(segCols))
+	// Later media exists, so the chapter is a hole and is not dropped.
+	controlMock.ExpectExec(`DELETE FROM foghorn\.dvr_chapters`).
+		WithArgs("dvrhash", "chap-empty").
+		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	// Terminal fail: failed_source_missing (tx: transition RETURNING NULL hash → commit).
 	controlMock.ExpectBegin()
@@ -162,6 +166,56 @@ func TestDispatchChapter_NoSegmentsFailsSourceMissing(t *testing.T) {
 	}
 	if err := controlMock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("control DB expectations unmet: %v", err)
+	}
+}
+
+// A stopped recording's chapter that starts after its last recorded segment
+// is a tail the sweeper closed while the writer outlived the publisher. It is
+// dropped, not surfaced as a failed VOD.
+func TestDispatchChapter_ChapterPastRecordedMediaIsDropped(t *testing.T) {
+	controlMock := withControlDB(t)
+
+	mockDB, qmock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer mockDB.Close()
+
+	parentCols := []string{
+		"tenant_id", "user_id", "stream_id", "stream_internal_name",
+		"origin_cluster_id", "storage_cluster_id", "retention_until", "recording_node",
+		"recording_active", "started_at_ms",
+	}
+	qmock.ExpectQuery(`FROM foghorn\.artifacts`).
+		WithArgs("dvrhash").
+		WillReturnRows(sqlmock.NewRows(parentCols).
+			AddRow("tenant-1", "user-1", "stream-1", "stream-int", "cluster-1", "cluster-1", nil, "", false, int64(0)))
+	segCols := []string{
+		"artifact_hash", "segment_name", "sequence",
+		"media_start_ms", "media_end_ms", "duration_ms",
+		"size_bytes", "s3_key", "status", "drop_reason",
+		"created_at", "uploaded_at", "deleted_local_at", "dropped_at",
+	}
+	controlMock.ExpectQuery(`FROM foghorn\.dvr_segments`).
+		WithArgs("dvrhash", int64(60000), int64(75000)).
+		WillReturnRows(sqlmock.NewRows(segCols))
+	controlMock.ExpectExec(`DELETE FROM foghorn\.dvr_chapters`).
+		WithArgs("dvrhash", "chap-tail").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	q := &ChapterFinalizationQueue{db: mockDB, logger: logging.NewLogger()}
+	c := control.DVRChapterRow{
+		ChapterID:    "chap-tail",
+		ArtifactHash: "dvrhash",
+		StartMs:      60000,
+		EndMs:        75000,
+		CreatedAt:    time.Now(),
+	}
+	if err := q.dispatchChapter(context.Background(), c); err != nil {
+		t.Fatalf("dispatchChapter returned error: %v", err)
+	}
+	if err := controlMock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("control DB expectations unmet (chapter must be dropped, not failed): %v", err)
 	}
 }
 

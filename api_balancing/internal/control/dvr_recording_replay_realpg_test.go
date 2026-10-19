@@ -72,6 +72,7 @@ func TestRecordingReadyRequiresChapters_RealPG(t *testing.T) {
 	insertReplayRecording(t, conn, replayRecording{hash: chaptered, status: "recording", segment: "uploaded", start: start, end: end,
 		mode: sql.NullString{String: ChapterModeWindowSized, Valid: true}})
 	insertReplayRecording(t, conn, replayRecording{hash: rewindOnly, status: "recording", segment: "uploaded", start: start, end: end})
+	insertReplaySegment(t, conn, chaptered, "tail.ts", 2, start.Add(144*time.Second), "uploaded")
 
 	for _, hash := range []string{chaptered, rewindOnly} {
 		res, err := FinalizeDVR(t.Context(), hash, FinalizeOptions{})
@@ -167,6 +168,7 @@ func TestTerminalChapterBackfill_RealPG(t *testing.T) {
 		deleted   = "dvrbackfill000000000000000000004"
 	)
 	insertReplayRecording(t, conn, replayRecording{hash: legacy, status: "completed", segment: "deleted_local", start: start, end: end})
+	insertReplaySegment(t, conn, legacy, "tail.ts", 2, start.Add(144*time.Second), "deleted_local")
 	insertReplayRecording(t, conn, replayRecording{hash: reclaimed, status: "completed", segment: "reclaimed", start: start, end: end})
 	insertReplayRecording(t, conn, replayRecording{hash: closed, status: "completed", segment: "uploaded", start: start, end: end,
 		mode: sql.NullString{String: ChapterModeWindowSized, Valid: true}, interval: sql.NullInt32{Int32: 7200, Valid: true}})
@@ -214,6 +216,82 @@ func TestTerminalChapterBackfill_RealPG(t *testing.T) {
 	}
 	if pending != 0 {
 		t.Fatalf("%d finalized recordings still pending terminal backfill", pending)
+	}
+}
+
+func insertReplaySegment(t *testing.T, conn *sql.DB, hash, name string, sequence int64, start time.Time, status string) {
+	t.Helper()
+	if _, err := conn.ExecContext(t.Context(), `INSERT INTO foghorn.dvr_segments
+		(artifact_hash, segment_name, sequence, media_start_ms, media_end_ms, duration_ms, s3_key, status)
+		VALUES ($1, $2, $3, $4::bigint, $4::bigint + 6000, 6000, 'test/' || $2, $5)`,
+		hash, name, sequence, start.UnixMilli(), status); err != nil {
+		t.Fatalf("insert segment %s/%s: %v", hash, name, err)
+	}
+}
+
+// The recording writer outlives the publisher for Mist's resume window, so
+// the stop lands after the last recorded media. Chapters that start after
+// the last recorded segment hold no media: neither the in-flight chapter nor
+// one the sweeper closed during the resume window survives the stop. A chapter
+// whose segments were lost still precedes a ledger row and stays, so its
+// finalize fails as source-missing.
+func TestTerminalChaptersEndAtRecordedMedia_RealPG(t *testing.T) {
+	conn := startRealPG(t)
+	prev := db
+	SetDB(conn)
+	t.Cleanup(func() { SetDB(prev) })
+
+	start := time.Now().UTC().Add(-10 * time.Minute).Truncate(time.Second)
+	stop := start.Add(135 * time.Second)
+	window := sql.NullString{String: ChapterModeWindowSized, Valid: true}
+	const ended, lost = "dvrtrailingchapter00000000000001", "dvrtrailingchapter00000000000002"
+	for _, hash := range []string{ended, lost} {
+		insertReplayRecording(t, conn, replayRecording{hash: hash, status: "recording", segment: "uploaded", mode: window, start: start, end: stop})
+		insertReplaySegment(t, conn, hash, "tail.ts", 2, start.Add(54*time.Second), "uploaded")
+	}
+	insertReplaySegment(t, conn, lost, "lost.ts", 3, start.Add(70*time.Second), "lost_local")
+
+	// The sweeper ran through the resume window: [0,60) and [60,120) closed,
+	// [120,180) open.
+	for _, hash := range []string{ended, lost} {
+		if err := BackfillChaptersThrough(t.Context(), hash, ChapterModeWindowSized, 60, start.UnixMilli(), start.Add(125*time.Second).UnixMilli()); err != nil {
+			t.Fatalf("sweep %s: %v", hash, err)
+		}
+		if _, err := conn.ExecContext(t.Context(), `UPDATE foghorn.artifacts SET status = 'finalizing' WHERE artifact_hash = $1`, hash); err != nil {
+			t.Fatal(err)
+		}
+		if err := CloseTerminalChapter(t.Context(), hash, stop.UnixMilli(), logging.NewLogger()); err != nil {
+			t.Fatalf("terminal close %s: %v", hash, err)
+		}
+	}
+	starts := func(hash string) []int64 {
+		t.Helper()
+		rows, err := conn.QueryContext(t.Context(), `SELECT start_ms - $2 FROM foghorn.dvr_chapters WHERE artifact_hash = $1 ORDER BY start_ms`, hash, start.UnixMilli())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = rows.Close() }()
+		var out []int64
+		for rows.Next() {
+			var s int64
+			if err := rows.Scan(&s); err != nil {
+				t.Fatal(err)
+			}
+			out = append(out, s)
+		}
+		return out
+	}
+	if got := starts(ended); fmt.Sprint(got) != "[0]" {
+		t.Fatalf("chapters of a recording whose media ends at 60s start at %v ms, want only [0]", got)
+	}
+	if got := starts(lost); fmt.Sprint(got) != "[0 60000]" {
+		t.Fatalf("chapters of a recording with a lost segment at 70s start at %v ms, want [0 60000]", got)
+	}
+	for hash, want := range map[string]int{ended: 1, lost: 2} {
+		listed, _, err := ListVirtualChaptersForArtifact(t.Context(), hash, "", 0, 0, 0, 100, "")
+		if err != nil || len(listed) != want {
+			t.Fatalf("chapter listing of %s: %d entries, %v; want %d", hash, len(listed), err, want)
+		}
 	}
 }
 

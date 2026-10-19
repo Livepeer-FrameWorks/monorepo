@@ -31,6 +31,46 @@ func (q *Queries) CloseOpenDVRChapterAt(ctx context.Context, arg CloseOpenDVRCha
 	return result.RowsAffected()
 }
 
+const deleteDVRChaptersPastRecordedMedia = `-- name: DeleteDVRChaptersPastRecordedMedia :execrows
+DELETE FROM foghorn.dvr_chapters c
+WHERE c.artifact_hash = $1
+  AND ($2::text IS NULL OR c.chapter_id = $2::text)
+  AND c.state IN ('open', 'closed')
+  AND c.playback_artifact_hash IS NULL
+  AND NOT EXISTS (
+      SELECT 1 FROM foghorn.artifacts pa
+      WHERE pa.origin_type = 'dvr_chapter' AND pa.origin_id = c.chapter_id
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM foghorn.dvr_segments s
+      WHERE s.artifact_hash = c.artifact_hash AND s.media_start_ms >= c.start_ms
+  )
+  AND EXISTS (
+      SELECT 1 FROM foghorn.artifacts a
+      WHERE a.artifact_hash = c.artifact_hash AND a.artifact_type = 'dvr'
+        AND a.status NOT IN ('requested', 'starting', 'recording', 'stopping')
+  )
+`
+
+type DeleteDVRChaptersPastRecordedMediaParams struct {
+	ArtifactHash string         `db:"artifact_hash" json:"artifact_hash"`
+	ChapterID    sql.NullString `db:"chapter_id" json:"chapter_id"`
+}
+
+// Drops unfinalized chapters of a stopped recording that start after its last
+// recorded segment. A chapter owns the segments that start inside it, so such
+// a chapter can hold no media: the writer outlives the publisher for Mist's
+// resume window and the stop lands past the media. Lost segments keep their
+// ledger rows, so a chapter whose media went missing is never dropped here.
+// chapter_id NULL applies to every chapter of the recording.
+func (q *Queries) DeleteDVRChaptersPastRecordedMedia(ctx context.Context, arg DeleteDVRChaptersPastRecordedMediaParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteDVRChaptersPastRecordedMedia, arg.ArtifactHash, arg.ChapterID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const deleteOpenDVRChapters = `-- name: DeleteOpenDVRChapters :exec
 DELETE FROM foghorn.dvr_chapters
 WHERE artifact_hash = $1 AND state = 'open'
@@ -83,6 +123,21 @@ func (q *Queries) GetDVRChapterPolicy(ctx context.Context, artifactHash string) 
 		&i.WindowSeconds,
 	)
 	return i, err
+}
+
+const getDVRLastSegmentStartMs = `-- name: GetDVRLastSegmentStartMs :one
+SELECT COALESCE(MAX(media_start_ms), -1)::bigint AS last_start_ms
+FROM foghorn.dvr_segments
+WHERE artifact_hash = $1
+`
+
+// The latest start among a recording's segment ledger rows, lost ones
+// included; -1 when nothing was recorded.
+func (q *Queries) GetDVRLastSegmentStartMs(ctx context.Context, artifactHash string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, getDVRLastSegmentStartMs, artifactHash)
+	var last_start_ms int64
+	err := row.Scan(&last_start_ms)
+	return last_start_ms, err
 }
 
 const getTenantDVRChapterMaxRange = `-- name: GetTenantDVRChapterMaxRange :one

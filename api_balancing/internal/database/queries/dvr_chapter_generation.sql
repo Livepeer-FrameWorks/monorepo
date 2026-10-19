@@ -9,6 +9,39 @@ UPDATE foghorn.dvr_chapters
 SET end_ms = sqlc.arg(end_ms), is_current = false, state = 'closed'
 WHERE chapter_id = sqlc.arg(chapter_id) AND state = 'open' AND sqlc.arg(end_ms)::bigint > start_ms;
 
+-- Drops unfinalized chapters of a stopped recording that start after its last
+-- recorded segment. A chapter owns the segments that start inside it, so such
+-- a chapter can hold no media: the writer outlives the publisher for Mist's
+-- resume window and the stop lands past the media. Lost segments keep their
+-- ledger rows, so a chapter whose media went missing is never dropped here.
+-- chapter_id NULL applies to every chapter of the recording.
+-- name: DeleteDVRChaptersPastRecordedMedia :execrows
+DELETE FROM foghorn.dvr_chapters c
+WHERE c.artifact_hash = sqlc.arg(artifact_hash)
+  AND (sqlc.narg(chapter_id)::text IS NULL OR c.chapter_id = sqlc.narg(chapter_id)::text)
+  AND c.state IN ('open', 'closed')
+  AND c.playback_artifact_hash IS NULL
+  AND NOT EXISTS (
+      SELECT 1 FROM foghorn.artifacts pa
+      WHERE pa.origin_type = 'dvr_chapter' AND pa.origin_id = c.chapter_id
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM foghorn.dvr_segments s
+      WHERE s.artifact_hash = c.artifact_hash AND s.media_start_ms >= c.start_ms
+  )
+  AND EXISTS (
+      SELECT 1 FROM foghorn.artifacts a
+      WHERE a.artifact_hash = c.artifact_hash AND a.artifact_type = 'dvr'
+        AND a.status NOT IN ('requested', 'starting', 'recording', 'stopping')
+  );
+
+-- The latest start among a recording's segment ledger rows, lost ones
+-- included; -1 when nothing was recorded.
+-- name: GetDVRLastSegmentStartMs :one
+SELECT COALESCE(MAX(media_start_ms), -1)::bigint AS last_start_ms
+FROM foghorn.dvr_segments
+WHERE artifact_hash = $1;
+
 -- name: InsertClosedDVRChapter :exec
 INSERT INTO foghorn.dvr_chapters (
     chapter_id, artifact_hash, mode, interval_seconds,

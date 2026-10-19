@@ -255,6 +255,23 @@ func (q *ChapterFinalizationQueue) dispatchChapter(ctx context.Context, c contro
 		return fmt.Errorf("list source segments: %w", err)
 	}
 	if len(segments) == 0 {
+		// A stopped recording's chapter with no segment at or after its start
+		// lies past the recorded media and is dropped; an empty chapter
+		// before later media is a hole and fails as source-missing.
+		dropped := false
+		if !parent.recordingActive {
+			var dropErr error
+			if dropped, dropErr = control.DropChapterPastRecordedMedia(ctx, c.ArtifactHash, c.ChapterID); dropErr != nil {
+				return dropErr
+			}
+		}
+		if dropped {
+			q.logger.WithFields(logging.Fields{
+				"chapter_id": c.ChapterID,
+				"dvr_hash":   c.ArtifactHash,
+			}).Info("Chapter finalize: dropped chapter past the recording's last segment")
+			return nil
+		}
 		return q.markChapterFailed(ctx, c,
 			control.ChapterStateFailedSourceMissing,
 			"chapter range has no segments", c.FinalizeNodeID.String, c.FinalizeAttempts)

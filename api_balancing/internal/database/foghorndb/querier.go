@@ -155,6 +155,13 @@ type Querier interface {
 	DeleteConsumedCreationCommands(ctx context.Context, arg DeleteConsumedCreationCommandsParams) (int64, error)
 	DeleteDVRChapter(ctx context.Context, chapterID string) error
 	DeleteDVRChapterRowsForTenant(ctx context.Context, arg DeleteDVRChapterRowsForTenantParams) error
+	// Drops unfinalized chapters of a stopped recording that start after its last
+	// recorded segment. A chapter owns the segments that start inside it, so such
+	// a chapter can hold no media: the writer outlives the publisher for Mist's
+	// resume window and the stop lands past the media. Lost segments keep their
+	// ledger rows, so a chapter whose media went missing is never dropped here.
+	// chapter_id NULL applies to every chapter of the recording.
+	DeleteDVRChaptersPastRecordedMedia(ctx context.Context, arg DeleteDVRChaptersPastRecordedMediaParams) (int64, error)
 	DeleteDeliveredManagedStreamPlacement(ctx context.Context, arg DeleteDeliveredManagedStreamPlacementParams) (int64, error)
 	DeleteDeliveredPushTargetStatus(ctx context.Context, arg DeleteDeliveredPushTargetStatusParams) (int64, error)
 	DeleteDeliveredSigningKeyUse(ctx context.Context, arg DeleteDeliveredSigningKeyUseParams) (int64, error)
@@ -298,6 +305,9 @@ type Querier interface {
 	GetDVREffectiveWindowSeconds(ctx context.Context, artifactHash string) (sql.NullInt32, error)
 	GetDVRForDeletion(ctx context.Context, arg GetDVRForDeletionParams) (GetDVRForDeletionRow, error)
 	GetDVRForStop(ctx context.Context, arg GetDVRForStopParams) (GetDVRForStopRow, error)
+	// The latest start among a recording's segment ledger rows, lost ones
+	// included; -1 when nothing was recorded.
+	GetDVRLastSegmentStartMs(ctx context.Context, artifactHash string) (int64, error)
 	GetDVRLifecycleContext(ctx context.Context, artifactHash string) (GetDVRLifecycleContextRow, error)
 	GetDVROwnerTenant(ctx context.Context, artifactHash string) (string, error)
 	GetDVRParentArtifactStatus(ctx context.Context, artifactHash string) (sql.NullString, error)

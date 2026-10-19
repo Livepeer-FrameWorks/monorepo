@@ -275,8 +275,8 @@ func TestRetrieveDVRChapter_NotFound(t *testing.T) {
 // overlays any materialized rows, and returns them in ascending order with
 // canonical IDs. Empty tenant_id is the internal bypass (no tenant query).
 //
-// Query order on this path: ReadDVRChapterPolicy, DVRArtifactStillRecording,
-// then chaptersByStart(ANY) for the overlay.
+// Query order on this path: ReadDVRChapterPolicy, the last recorded segment
+// start, DVRArtifactStillRecording, then chaptersByStart(ANY) for the overlay.
 func TestListDVRChapters_VirtualWindowPagination(t *testing.T) {
 	srv, mock := withControlDBRpcMore(t)
 
@@ -298,6 +298,12 @@ func TestListDVRChapters_VirtualWindowPagination(t *testing.T) {
 		}).AddRow(
 			control.ChapterModeWindowSized, int32(0), startedAtMs, endedAtMs, intervalSecs,
 		))
+
+	// A stopped recording lists chapters only through its last recorded
+	// segment, which here starts in the second window.
+	mock.ExpectQuery(`MAX\(media_start_ms\)`).
+		WithArgs(artifactID).
+		WillReturnRows(sqlmock.NewRows([]string{"last_start_ms"}).AddRow(endedAtMs - 6000))
 
 	// DVRArtifactStillRecording: report a finalized DVR so IsCurrent stays false
 	// (deterministic, independent of wall clock).

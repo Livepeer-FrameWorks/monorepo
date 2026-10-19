@@ -53,7 +53,8 @@ func OpenChapterAtBoundary(ctx context.Context, artifactHash, mode string, inter
 // recording's terminal stop time. The in-flight open chapter is truncated
 // to end_ms = terminalAtMs and closed in place, keeping its id; missing
 // ranges are inserted closed. Open rows that begin after the stop are
-// dropped.
+// dropped, as are unfinalized chapters that begin after the last recorded
+// segment.
 //
 // Idempotent: existing ranges are matched by start and skipped, and the
 // in-place close only applies to a row still open. No-op when chapters
@@ -147,7 +148,30 @@ func CloseTerminalChapterTx(ctx context.Context, tx foghorndb.DBTX, artifactHash
 	if err := q.DeleteOpenDVRChapters(ctx, artifactHash); err != nil {
 		return false, fmt.Errorf("drop open chapters beyond terminal close: %w", err)
 	}
+	// The stop is the writer's end, which trails the publisher by Mist's
+	// resume window; chapters that start after the last recorded segment
+	// hold no media and are dropped before any finalize sees them.
+	if _, err := q.DeleteDVRChaptersPastRecordedMedia(ctx, foghorndb.DeleteDVRChaptersPastRecordedMediaParams{ArtifactHash: artifactHash}); err != nil {
+		return false, fmt.Errorf("drop chapters past recorded media: %w", err)
+	}
 	return true, nil
+}
+
+// DropChapterPastRecordedMedia deletes one unfinalized chapter of a stopped
+// recording when no recorded segment starts at or after the chapter start,
+// and reports whether it did. Such a chapter is a tail the sweeper closed
+// while the writer outlived the publisher; it never held media.
+func DropChapterPastRecordedMedia(ctx context.Context, artifactHash, chapterID string) (bool, error) {
+	if db == nil {
+		return false, sql.ErrConnDone
+	}
+	n, err := foghorndb.New(db).DeleteDVRChaptersPastRecordedMedia(ctx, foghorndb.DeleteDVRChaptersPastRecordedMediaParams{
+		ArtifactHash: artifactHash, ChapterID: sql.NullString{String: chapterID, Valid: true},
+	})
+	if err != nil {
+		return false, fmt.Errorf("drop chapter past recorded media: %w", err)
+	}
+	return n == 1, nil
 }
 
 // BackfillTerminalChapters materializes the terminal chapter set for up to

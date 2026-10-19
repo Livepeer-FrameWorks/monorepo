@@ -1001,6 +1001,18 @@ func ListVirtualChaptersForArtifact(
 	if policy.EndedAtMs > 0 && endBound > policy.EndedAtMs {
 		endBound = policy.EndedAtMs
 	}
+	if policy.EndedAtMs > 0 {
+		// A stopped recording's chapters end with its media: a range that
+		// starts after the last recorded segment holds none, and the stop
+		// drops its row (CloseTerminalChapterTx).
+		lastStartMs, lastErr := foghorndb.New(db).GetDVRLastSegmentStartMs(ctx, artifactHash)
+		if lastErr != nil {
+			return nil, "", lastErr
+		}
+		if endBound > lastStartMs+1 {
+			endBound = lastStartMs + 1
+		}
+	}
 	if endBound <= startBound {
 		return nil, "", nil
 	}

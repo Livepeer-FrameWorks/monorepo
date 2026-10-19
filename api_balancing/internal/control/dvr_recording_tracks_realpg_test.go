@@ -28,6 +28,7 @@ func TestChapterFinalizeSetsRecordingTracks_RealPG(t *testing.T) {
 	const recording = "dvrrecordingtracks00000000000001"
 	insertReplayRecording(t, conn, replayRecording{hash: recording, status: "recording", segment: "uploaded", start: start, end: start.Add(150 * time.Second),
 		mode: sql.NullString{String: ChapterModeWindowSized, Valid: true}})
+	insertReplaySegment(t, conn, recording, "tail.ts", 2, start.Add(144*time.Second), "uploaded")
 	if res, err := FinalizeDVR(t.Context(), recording, FinalizeOptions{}); err != nil || res.ArtifactStatus != "completed" {
 		t.Fatalf("finalize recording: %+v, %v", res, err)
 	}
