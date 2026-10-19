@@ -8,7 +8,9 @@
 # upload truncated, chapters never freeze), R4 (finalize pinned at 1x), N16
 # (recording.ready at stop without a playback id; chapter id changed at stop),
 # N8 (cross-cell chapter replay refused on non-leaders), the origin edge's relay
-# fetching a fresh chapter's .dtsh from itself until its fetch deadline.
+# fetching a fresh chapter's .dtsh from itself until its fetch deadline, a
+# stalled publisher's session recorded afresh after Mist's buffer ended it (a
+# failed recording on every such stop).
 . "$(dirname "$0")/../lib.sh"
 
 WINDOW=${STACK_DVR_WINDOW_SECONDS:-120}
@@ -158,4 +160,60 @@ if [ "$FAIL" -gt "$F" ]; then
     WHERE s.artifact_hash = (SELECT artifact_hash FROM foghorn.dvr_chapters WHERE chapter_id = '$FIRST_ID') AND a.tenant_id = '$STACK_TENANT_ID'
     ORDER BY s.media_start_ms" | sed 's/^/      /'
 fi
+
+# Publishers that stall with their connection open: Mist's buffer reaches its
+# input timeout, ends the recording, and closes the publisher about 2 s later.
+# Helmsman reports the stopped recording on its 5 s push check, so for about
+# half the streams the report reaches Foghorn while the session still looks
+# live; several streams stall at once so the race is hit. No session may be
+# recorded afresh on its gone source (staging rc11: a failed recording 30 s
+# after such a stop).
+STALLS=${STACK_STALLED_PUBLISHERS:-4}
+log "$STALLS stalled publishers end their streams without a failed recording"
+STALL_INTERNALS=()
+STALL_PUBS=()
+for i in $(seq 1 "$STALLS"); do
+  SN=$(create_stream "stack-recording-stall-$i-$(date +%s)" true)
+  KN=$(echo "$SN" | jq -r '.streamKey // empty')
+  [ -n "$KN" ] || { fail "createStream: $SN"; finish; }
+  STALL_INTERNALS+=("$(internal_name_of_key "$KN")")
+  STALL_PUBS+=("$(publish "$EDGE_A_RTMP" "$KN" 854x480 15 600)")
+done
+trap 'kill "$PUB" 2>/dev/null; for p in "${STALL_PUBS[@]}"; do kill -CONT "$p" 2>/dev/null; kill "$p" 2>/dev/null; done' EXIT
+stall_dvrs() { # stall_dvrs <internal name>: "status|segments" per recording, oldest first
+  pg "$FOGHORN_A_DB" "SELECT a.status, (SELECT count(*) FROM foghorn.dvr_segments s WHERE s.artifact_hash = a.artifact_hash)
+    FROM foghorn.artifacts a WHERE a.tenant_id='$STACK_TENANT_ID' AND a.artifact_type='dvr'
+      AND a.stream_internal_name IN ('$1', 'live+$1') ORDER BY a.created_at"
+}
+stalls_recording() {
+  local n
+  for n in "${STALL_INTERNALS[@]}"; do stall_dvrs "$n" | grep -Eq '^recording\|[1-9]' || return 1; done
+}
+eventually 120 "every stalled stream's recording holds a segment" stalls_recording
+# Helmsman counts a recording's segments on its 30 s progress tick, and a writer
+# that vanishes before it counted one is recreated rather than reported stopped.
+sleep 40
+for p in "${STALL_PUBS[@]}"; do kill -STOP "$p"; done
+stalls_closed() {
+  local n open
+  for n in "${STALL_INTERNALS[@]}"; do
+    open=$(pg "$FOGHORN_A_DB" "SELECT count(*) FROM foghorn.ingest_sessions WHERE tenant_id='$STACK_TENANT_ID'
+      AND stream_internal_name IN ('$n', 'live+$n') AND ended_at IS NULL")
+    [ "$open" = 0 ] || return 1
+  done
+}
+eventually 120 "Mist ends every stalled publisher's session" stalls_closed
+# A fresh recording on a gone source fails once Helmsman's push retries run out.
+sleep 75
+STALL_BAD=""
+for n in "${STALL_INTERNALS[@]}"; do
+  rows=$(stall_dvrs "$n" | tr '\n' ' ')
+  echo "    recordings of ${n:0:8}: $rows"
+  [ "$(stall_dvrs "$n" | wc -l | tr -d ' ')" = 1 ] && ! stall_dvrs "$n" | grep -q '^failed|' || STALL_BAD="$STALL_BAD ${n:0:8}"
+done
+check "ending a stalled publisher started no second recording and left no failed one (bad:${STALL_BAD:- none})" [ -z "$STALL_BAD" ]
+for p in "${STALL_PUBS[@]}"; do
+  kill -CONT "$p" 2>/dev/null
+  kill "$p" 2>/dev/null
+done
 finish

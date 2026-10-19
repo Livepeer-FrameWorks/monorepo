@@ -5157,25 +5157,37 @@ func processDVRStopped(stopped *ipcpb.DVRStopped, session NodeSession, sentAt *t
 	return nil
 }
 
-// unrecordedSessionHandler starts a fresh recording for a live session whose recording
-// ended; DVR intent recovery is the backstop when it is unset or fails.
+// unrecordedSessionHandler starts a fresh recording for a session whose recording ended,
+// once EndedWriterSettle has passed and only if the session is still live; DVR intent
+// recovery is the backstop when it is unset or fails.
 var unrecordedSessionHandler func(sessionID string)
 
 // SetUnrecordedSessionHandler registers the handler that records a live session afresh
 // once its ended recording is settled. Set once at startup.
 func SetUnrecordedSessionHandler(fn func(sessionID string)) { unrecordedSessionHandler = fn }
 
+// EndedWriterSettle is how long a live session whose recording ended on its own waits
+// before it is recorded afresh. When Mist's buffer shuts down it ends the recordings first
+// and closes the publisher's connection after them, so the stopped report can reach
+// Foghorn while the session still looks live; the close ends the session within this
+// window and the session is then never recorded again. A recorder that died while the
+// source keeps publishing gets no close, and its session is recorded afresh once the
+// window passes.
+const EndedWriterSettle = 10 * time.Second
+
 // detachEndedWriterFromLiveSession runs before FinalizeDVR settles a recording whose writer
 // ended. A recording that ends while still active (no stop was claimed) and bound to a
 // session that is still live leaves that session unrecorded; detaching it hands the session
-// to DVR intent recovery, which starts it a fresh recording. It returns the detached
-// session, or "" when nothing was detached. A failure is logged and the finalize proceeds:
-// the recording itself is complete either way.
+// to DVR intent recovery, which starts it a fresh recording after EndedWriterSettle. It
+// returns the detached session, or "" when nothing was detached. A failure is logged and
+// the finalize proceeds: the recording itself is complete either way.
 func detachEndedWriterFromLiveSession(ctx context.Context, dvrHash string, logger logging.Logger) string {
 	if db == nil {
 		return ""
 	}
-	row, err := foghorndb.New(db).DetachEndedWriterFromLiveSession(ctx, dvrHash)
+	row, err := foghorndb.New(db).DetachEndedWriterFromLiveSession(ctx, foghorndb.DetachEndedWriterFromLiveSessionParams{
+		ArtifactHash: dvrHash, SettleSeconds: int64(EndedWriterSettle / time.Second),
+	})
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return ""
@@ -5184,7 +5196,7 @@ func detachEndedWriterFromLiveSession(ctx context.Context, dvrHash string, logge
 		return ""
 	}
 	logger.WithFields(logging.Fields{"dvr_hash": dvrHash, "internal_name": row.StreamInternalName, "session_id": row.SessionID}).
-		Warn("Recording writer ended while its session is still live; the session will be recorded afresh")
+		Warn("Recording writer ended while its session is still live; the session will be recorded afresh unless it closes first")
 	return row.SessionID
 }
 
