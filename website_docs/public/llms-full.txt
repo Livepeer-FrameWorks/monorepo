@@ -4262,10 +4262,13 @@ Implements [Node](/builders/api-schema/shared/#node).
 
 **enum**
 
+Mist&#39;s buffer state of a stream on one node.
+
 - `FULL`
 - `EMPTY`
 - `DRY`
 - `RECOVER`
+- `UNKNOWN` — No buffer state is known: the previous state of a stream&#39;s first buffer transition on a node, which has no earlier transition.
 
 ## CityMetric
 
@@ -4711,9 +4714,9 @@ Implements [Node](/builders/api-schema/shared/#node).
 - **stream**: `Stream` ([Stream](/builders/api-schema/shared/#stream))
 - **nodeId**: `String!`
 - **bufferState**: `BufferState!` ([BufferState](/builders/api-schema/analytics-types-a-r/#bufferstate))
-- **previousState**: `BufferState!` ([BufferState](/builders/api-schema/analytics-types-a-r/#bufferstate))
+- **previousState**: `BufferState!` ([BufferState](/builders/api-schema/analytics-types-a-r/#bufferstate)) — The state of the stream&#39;s previous buffer transition on the same node; UNKNOWN for the stream&#39;s first transition there.
 - **rebufferStart**: `Boolean!`
-- **rebufferEnd**: `Boolean!`
+- **rebufferEnd**: `Boolean!` — This transition ends a rebuffer: DRY to RECOVER when the buffer recovered, DRY to EMPTY when the stream ended while it was rebuffering.
 
 ## RebufferingEventEdge
 
@@ -8079,7 +8082,7 @@ orchestratorVantages(
 
 ### Query.orchestratorsConnection
 
-List orchestrators discovered by Livepeer gateways under this cluster owner tenant. Federation-map data source. Vantage-independent; the per-region table comes from `orchestratorVantages`.
+List orchestrators discovered by Livepeer gateways in the platform&#39;s published network inventory plus the clusters the caller can see. Federation-map data source. Vantage-independent; the per-region table comes from `orchestratorVantages`.
 
 ```graphql
 orchestratorsConnection(
@@ -27036,8 +27039,9 @@ these you depend on before cutting over.
 # Alerting and Incidents
 https://logbook.frameworks.network/operators/alerting
 
-vmalert evaluates the rules in `pkg/grafana/rules/frameworks.yml` and sends firing and resolved
-alerts to Alertmanager. Alertmanager groups them by `alertname`, `region`, and `cluster` and routes
+vmalert evaluates the rules in `pkg/grafana/rules/` (`frameworks.yml` for platform services,
+`infrastructure.yml` for hosts and data stores) and sends firing and resolved alerts to
+Alertmanager. Alertmanager groups them by `alertname`, `region`, and `cluster` and routes
 each group three ways:
 
 - **Lookout** receives every group. Lookout (`api_incidents`) turns groups into incidents, keeps a
@@ -27056,6 +27060,31 @@ channels remain independently controlled by their optional destination variables
 Lookout notifies operator channels only for platform incidents. Critical incidents go to every
 configured channel; other severities go to Slack and Discord. Notifications are sent when an
 incident opens and when it resolves.
+
+## Infrastructure coverage
+
+`frameworks cluster provision` installs the exporters behind the infrastructure rules from the
+release manifest's pinned artifacts. Each listens on loopback and is scraped by the vmagent on the
+same host; nothing needs adding to the cluster manifest.
+
+| Source                                                                | Where it runs                             | Port (loopback)              | Rules                                                                                                                                                                                      |
+| --------------------------------------------------------------------- | ----------------------------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| node_exporter with the systemd collector and the host crash scan      | every `vmagent` host and every Linux edge | 9110                         | filesystem space and inodes, disk I/O latency and saturation, iowait, memory and PSI pressure, OOM kills, load, clock sync, systemd restarts and failed units, process crashes             |
+| JMX exporter in each Kafka broker and KRaft controller                | Kafka hosts                               | 9405 broker, 9406 controller | quorum leader, election churn, unreachable voters, active controller count, offline / under-min-ISR / under-replicated partitions, fenced brokers, controller event queue, metadata errors |
+| YugabyteDB yb-master and yb-tserver `/prometheus-metrics`             | YugabyteDB nodes                          | 7000, 11000 (mesh)           | leaderless tablets and tables, follower lag                                                                                                                                                |
+| redis_exporter per Redis/Valkey server (Sentinels excluded)           | Redis hosts                               | instance port + 10000        | down, replica lost its primary, primary count per Sentinel set, failed background saves                                                                                                    |
+| postgres_exporter per PostgreSQL instance (peer auth over the socket) | PostgreSQL hosts                          | instance port + 10000        | down, replica lag                                                                                                                                                                          |
+| ClickHouse built-in Prometheus endpoint                               | ClickHouse hosts                          | 9363                         | read-only replicas, lost Keeper session, replication delay, part count, broken distributed inserts                                                                                         |
+
+`ServiceDown` fires for any of these scrape targets that stops answering.
+
+The host crash scan (`frameworks-host-crash-scan.timer`) runs every minute and counts the kernel's
+fatal-signal reports (`segfault at`, general protection and trap faults) and `systemd-coredump`
+dumps in the journal over the last fifteen minutes. It catches crashes of child processes, such
+as Mist's `MistProc*` workers, that never fail a systemd unit. `HostProcessCrashed` names the
+process; `journalctl -k` and `coredumpctl list` on the host hold the details.
+`SystemdServiceRestarting` fires on any restart systemd makes under `Restart=`; operator and deploy
+restarts do not count.
 
 ## Secrets
 
@@ -27424,21 +27453,21 @@ The FrameWorks platform is composed of specialized services, each responsible fo
 
 ### Infrastructure Components
 
-| Component                                    | Role                                                                                              | Plane                         | Port(s)                                           | Deploy Location                         |
-| -------------------------------------------- | ------------------------------------------------------------------------------------------------- | ----------------------------- | ------------------------------------------------- | --------------------------------------- |
-| MistServer                                   | Media processing, ingest, and edge delivery                                                       | Media                         | 4242, 8080, 1935, 5554, 4200, 8889/udp, 18203/udp | Edge                                    |
-| Livepeer Gateway                             | Transcoding gateway and compute-marketplace integration                                           | Media                         | 8935                                              | Regional (pool-assigned to clusters)    |
-| Livepeer Signer                              | Keystore-backed ETH transaction signer; keyless ticket-batch signing is not yet wired to gateways | Control / API                 | 18016                                             | Central (not included in local Compose) |
-| PostgreSQL-compatible DB (Postgres/Yugabyte) | Service-owned state and configuration database substrate                                          | Infrastructure                | Operator-defined                                  | Central                                 |
-| ClickHouse                                   | Time-series analytics database                                                                    | Event & Analytics             | 8123 (HTTP), 9000 (Native)                        | Central                                 |
-| Kafka                                        | Regional event backbone; canonical topics replicate to the aggregator region with MirrorMaker 2   | Event & Analytics             | 9092 (Int), 29092 (Ext)                           | One KRaft cluster per region            |
-| Foghorn Redis                                | Foghorn HA state sync                                                                             | Media                         | 6379                                              | Regional                                |
-| Nginx                                        | Reverse proxy and local development routing                                                       | Network & Trust               | 18090                                             | Central                                 |
-| Caddy                                        | Edge TLS termination and reverse proxy                                                            | Network & Trust               | 80, 443, 18090                                    | Edge                                    |
-| VictoriaMetrics + vmagent                    | Metrics collection and remote-write fan-in                                                        | Observability & Operations    | Operator-defined                                  | Central + every backend and edge host   |
-| Grafana                                      | Metrics visualization                                                                             | Observability & Operations    | Operator-defined                                  | Central                                 |
-| Metabase                                     | BI analytics                                                                                      | Observability & Operations    | Operator-defined                                  | Central                                 |
-| Listmonk                                     | Newsletter and mailing list manager                                                               | Support & Experience Services | 9000 (service), 9001 (docker-compose host)        | Central                                 |
+| Component                                    | Role                                                                                              | Plane                         | Port(s)                                                       | Deploy Location                         |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------- | ----------------------------- | ------------------------------------------------------------- | --------------------------------------- |
+| MistServer                                   | Media processing, ingest, and edge delivery                                                       | Media                         | 1935, 5554, 4200, 8889/udp, 18203/udp; 4242, 8080 on loopback | Edge                                    |
+| Livepeer Gateway                             | Transcoding gateway and compute-marketplace integration                                           | Media                         | 8935                                                          | Regional (pool-assigned to clusters)    |
+| Livepeer Signer                              | Keystore-backed ETH transaction signer; keyless ticket-batch signing is not yet wired to gateways | Control / API                 | 18016                                                         | Central (not included in local Compose) |
+| PostgreSQL-compatible DB (Postgres/Yugabyte) | Service-owned state and configuration database substrate                                          | Infrastructure                | Operator-defined                                              | Central                                 |
+| ClickHouse                                   | Time-series analytics database                                                                    | Event & Analytics             | 8123 (HTTP), 9000 (Native)                                    | Central                                 |
+| Kafka                                        | Regional event backbone; canonical topics replicate to the aggregator region with MirrorMaker 2   | Event & Analytics             | 9092 (Int), 29092 (Ext)                                       | One KRaft cluster per region            |
+| Foghorn Redis                                | Foghorn HA state sync                                                                             | Media                         | 6379                                                          | Regional                                |
+| Nginx                                        | Reverse proxy and local development routing                                                       | Network & Trust               | 18090                                                         | Central                                 |
+| Caddy                                        | Edge TLS termination and reverse proxy                                                            | Network & Trust               | 80, 443, 18090                                                | Edge                                    |
+| VictoriaMetrics + vmagent                    | Metrics collection and remote-write fan-in                                                        | Observability & Operations    | Operator-defined                                              | Central + every backend and edge host   |
+| Grafana                                      | Metrics visualization                                                                             | Observability & Operations    | Operator-defined                                              | Central                                 |
+| Metabase                                     | BI analytics                                                                                      | Observability & Operations    | Operator-defined                                              | Central                                 |
+| Listmonk                                     | Newsletter and mailing list manager                                                               | Support & Experience Services | 9000 (service), 9001 (docker-compose host)                    | Central                                 |
 
 **Livepeer integration**: The Livepeer Gateway is provisioned via the CLI and discovered via Quartermaster service discovery. MistServer sends segments to the gateway automatically when Livepeer transcoding is configured for a stream. Ingest auth stays in the media plane: the gateway calls Foghorn's internal `/webhooks/livepeer/auth` webhook, and wallet/top-up automation reads `wallet_address` from Quartermaster service-instance metadata.
 
@@ -28216,6 +28245,16 @@ frameworks cluster doctor [flags]
 **Checks:**
 
 - **Infrastructure:** Postgres/Yugabyte, ClickHouse, and Kafka broker connectivity
+  in every Kafka region. On YugabyteDB every tserver must answer a local YSQL
+  `ysqlsh` connect and `SELECT 1` within one second, timed on the node itself,
+  and be listed ALIVE by the masters; vanilla PostgreSQL must answer `SELECT 1`
+  within one second
+- **Kafka KRaft quorum:** per Kafka cluster, a quorum leader, the manifest's voter
+  set, no voter more than 5 seconds behind, and no controller leadership loss in
+  the last hour (read from each controller's `controller.log`)
+- **Host crashes:** unit failures, automatic restarts, core dumps, segfaults, and
+  OOM kills in the last 24 hours on every host and edge
+  (`cluster diagnose crashes` lists them)
 - **Applications:** Health endpoints for enabled services
 - **Interfaces:** Health endpoints for enabled interfaces
 - **Observability:** Health endpoints for enabled observability services
@@ -29217,8 +29256,6 @@ expand has been applied (including a `--dry-run` on such a cluster) it prints
 - `--skip-validation` - Skip health validation after each service upgrade
 - `--no-rollback` - Skip automatic rollback on a service health-check failure
 - `--complete-interrupted-baselines` - Reapply and verify baselines for inspected populated databases without migration provenance
-- `--edge-wait duration` - How long to wait for every edge to report the release after syncing the edge target (default 10m)
-- `--edge-manifest string` - Edge manifest whose enrolled edges get this CLI's edge config once they run the release (default: `edge.yaml` beside the cluster manifest)
 
 **Examples:**
 
@@ -29461,9 +29498,15 @@ frameworks cluster restore rollback --all
 
 ## Diagnostic Commands
 
+The host-level diagnostics (`network`, `resources`, `ports`, `crashes`, and
+`media`) probe every host of the cluster manifest and every node of the edge
+manifest: `--edge-manifest <path>`, or `edge.yaml` beside the cluster manifest.
+An edge manifest that cannot be loaded is reported and the cluster hosts are
+still probed. Each exits non-zero when any finding is a failure.
+
 ### frameworks cluster diagnose network
 
-Test network connectivity between all hosts in the cluster.
+Test network connectivity between all hosts and edges.
 
 **Usage:**
 
@@ -29473,10 +29516,8 @@ frameworks cluster diagnose network [flags]
 
 **Tests:**
 
-- Ping test from each host to every other host
-- Reports success/failure matrix
-
-The report shows host-to-host connectivity results for the manifest targets.
+- Ping test from each host to every other host, edges included
+- Any unreachable pair or host that cannot be reached over SSH fails the command
 
 **Examples:**
 
@@ -29488,7 +29529,7 @@ frameworks cluster diagnose network
 
 ### frameworks cluster diagnose resources
 
-Check CPU, memory, disk, and load average on all hosts.
+Check CPU, I/O wait, load, memory, and every data filesystem on all hosts and edges.
 
 **Usage:**
 
@@ -29496,14 +29537,14 @@ Check CPU, memory, disk, and load average on all hosts.
 frameworks cluster diagnose resources [flags]
 ```
 
-**Metrics:**
+**Metrics and thresholds:**
 
-- CPU usage (%)
-- Memory usage (used/total)
-- Disk usage (/)
-- Load average (1m, 5m, 15m)
-
-The report shows CPU, memory, disk, and load data for each manifest host.
+- CPU busy and I/O wait over a one-second sample; I/O wait of 20% or more warns
+- Load average (1m, 5m, 15m) per core; two or more per core warns
+- Memory available; under 10% warns, under 5% fails
+- Every mounted filesystem except tmpfs, overlay, and snap mounts (so data disks
+  such as `/var/lib/yugabyte` are included), with block and inode use; 80% warns,
+  90% fails
 
 **Examples:**
 
@@ -29515,7 +29556,7 @@ frameworks cluster diagnose resources
 
 ### frameworks cluster diagnose ports
 
-Check for port conflicts on all hosts.
+Check that every port the manifest places on a host has a listener.
 
 **Usage:**
 
@@ -29523,16 +29564,39 @@ Check for port conflicts on all hosts.
 frameworks cluster diagnose ports [flags]
 ```
 
-**Checks Standard Ports:**
-Uses the CLI's built-in port list for core services, interfaces, and gRPC endpoints. For the canonical port table, see [Architecture Overview](/operators/architecture#core-services).
-
-The report checks the CLI's built-in port set against each manifest host.
+For each host the planned ports come from the manifest: SQL, ClickHouse and
+Kafka (regional clusters included), Redis instances and Sentinels, and every
+enabled service, interface and observability component with its gRPC and
+auxiliary ports. Edges are checked for every socket of the edge bundle, by
+protocol: Caddy (TCP 80 and 443, UDP 443, and the loopback admin port 2019 on
+native edges), Helmsman (18007 and management 18017), MistServer (HTTP 8080,
+API 4242, RTMP 1935, DTSC 4200, RTSP 5554, SRT UDP 8889, WebRTC UDP 18203),
+and node_exporter (9110) wherever the edge runs vmagent. A planned port
+without a listener fails. Catalog ports held on a host the manifest does not
+place them on are listed so a conflicting process is visible.
 
 **Examples:**
 
 ```bash
 frameworks cluster diagnose ports
 ```
+
+---
+
+### frameworks cluster diagnose crashes
+
+Report processes that died unplanned since `--since` (default `4 hours ago`).
+
+```bash
+frameworks cluster diagnose crashes --since "24 hours ago"
+```
+
+Read from each host's journal: units that failed (by systemd result, such as
+`core-dump`, `signal`, `exit-code`, `oom-kill`) and units systemd restarted on
+its own, core dumps recorded by systemd-coredump, kernel-reported segfaults and
+general-protection faults, and OOM kills. Every finding fails the command.
+`cluster doctor` runs the same probe over the last 24 hours as its
+`Host crashes` check.
 
 ---
 
@@ -29552,7 +29616,18 @@ frameworks cluster diagnose kafka [flags]
 - List consumer groups
 - Broker API version check
 - Cluster responsiveness
+- KRaft metadata quorum and controller leadership losses since `--since`
 - MirrorMaker2 topic coverage
+
+The quorum check reads `kafka-metadata-quorum.sh describe --status` and fails
+when there is no leader, when the voter set differs from the manifest's
+controllers, or when a voter has not caught up with the leader for more than
+5 seconds (2.5 times the controllers' 2-second fetch timeout). It also counts,
+in every controller's `controller.log` and its rotations under the unit's
+`LOG_DIR` since `--since`, how often a controller gave up leadership with no
+successor; any such loss fails the check, and
+exceptionally slow controller events are reported alongside. `cluster doctor`
+runs the same check per Kafka cluster over the last hour.
 
 The report covers topic listing, consumer groups, a committed-offset lag
 snapshot, broker API reachability, and cluster responsiveness for one broker in
@@ -29585,7 +29660,12 @@ frameworks cluster diagnose media --stream-id <uuid> --tenant-id <uuid>
 frameworks cluster diagnose media --output json
 ```
 
-`--since` controls the journal window (default `4 hours ago`). JSON output is a
+Edges report their Caddy, Helmsman and MistServer units, or the
+`frameworks-edge` container on a container-mode edge.
+
+`--since` controls the journal window (default `4 hours ago`); the whole window
+is scanned and repeated lines are shown once with their count, most frequent
+first. JSON output is a
 single structured report containing every host's services, stdout, stderr, exit
 code, and connection/probe error. A missing host, SSH failure, or non-zero probe
 causes a non-zero command exit instead of a silent partial report.
@@ -30607,10 +30687,7 @@ frameworks cluster edges rollout status --cluster-id media-eu --wait 15m
 
 `--wait` polls (every `--interval`, default 15s) until every edge converges, a
 node fails, or the wait passes. The command exits non-zero only when a node's
-update failed; unconverged edges are a warning. `cluster release apply` runs
-the same check after syncing the edge target, bounded by `--edge-wait`, and
-re-renders the edge config of the edge manifest's enrolled edges once every edge
-reports the release.
+update failed; unconverged edges are a warning.
 
 ---
 
@@ -32766,6 +32843,7 @@ Read by `api_webhooks/cmd/bosun`.
 
 | Variable | Type | Default | Notes | Since | Description |
 | --- | --- | --- | --- | --- | --- |
+| `BIND_ADDRS` | list |  |  | v0.3.13 | Comma-separated addresses the service's listeners bind, one socket per address and port. Provisioning sets loopback and the host's WireGuard address, so only same-host callers such as the reverse proxy and vmagent, and mesh peers, reach the service. A listener that clients outside the mesh dial, such as Foghorn's external gRPC listener, and a listener with its own bind address setting keep their bind. Empty binds every interface. |
 | `GIN_MODE` | string | `debug` |  | v0.3.0 | Router mode. release enables Gin release mode and restricts CORS to ALLOWED_ORIGINS; any other value runs the router in development mode. |
 | `ALLOWED_ORIGINS` | list |  |  | v0.3.0 | Comma-separated browser origins accepted by CORS when GIN_MODE is release. |
 | `LOG_LEVEL` | string | `info` |  | v0.3.0 | Log level: debug, info, warn, or error. Any other value fails startup. |
@@ -32820,6 +32898,7 @@ Read by `api_gateway/cmd/bridge`.
 | `NETWORK_PUBLIC_TENANT_IDS` | list |  |  | v0.3.13 | Explicit platform-owned tenant scopes whose public Livepeer observations can be published. |
 | `LIVEPEER_NETWORK_ID` | string | `42161` |  | v0.3.13 | Livepeer production network namespace. |
 | `NETWORK_OBSERVER_ENVIRONMENT` | string | `production` |  | v0.3.13 | Network observation environment. |
+| `BIND_ADDRS` | list |  |  | v0.3.13 | Comma-separated addresses the service's listeners bind, one socket per address and port. Provisioning sets loopback and the host's WireGuard address, so only same-host callers such as the reverse proxy and vmagent, and mesh peers, reach the service. A listener that clients outside the mesh dial, such as Foghorn's external gRPC listener, and a listener with its own bind address setting keep their bind. Empty binds every interface. |
 | `PORT` | string | `18000` |  | v0.3.0 | TCP port for the HTTP listener that serves health, readiness, metrics, and HTTP APIs. |
 | `GIN_MODE` | string | `debug` |  | v0.3.0 | Router mode. release enables Gin release mode and restricts CORS to ALLOWED_ORIGINS; any other value runs the router in development mode. |
 | `ALLOWED_ORIGINS` | list |  |  | v0.3.0 | Comma-separated browser origins accepted by CORS when GIN_MODE is release. |
@@ -32830,7 +32909,6 @@ Read by `api_gateway/cmd/bridge`.
 | `NODE_ID` | string |  |  | v0.3.0 | Node the instance registers under in Quartermaster. |
 | `BUILD_ENV` | string |  |  | v0.3.0 | Runtime environment selector. Empty, dev, or development enables development-only behavior; production or prod marks a production process. |
 | `BRIDGE_HOST` | string | `bridge` |  | v0.3.0 | Host name this instance advertises when it registers with Quartermaster. |
-| `BRIDGE_BIND_ADDRS` | list |  |  | v0.3.13 | Comma-separated addresses the HTTP listener on PORT binds, one listener per address. Provisioning sets loopback and the host's WireGuard address so only the local reverse proxy and mesh peers reach Bridge. Empty binds every interface. |
 | `HOSTNAME` | string | `bridge` |  | v0.3.0 | Node name recorded as the source of API usage events. |
 | `REGION` | string |  |  | v0.3.0 | Region label attached to API usage events sent to Decklog. |
 | `COMMODORE_GRPC_ADDR` | string |  | required | v0.3.0 | Commodore gRPC address for authentication, streams, and tenant resources. |
@@ -32895,6 +32973,7 @@ Read by `api_control/cmd/commodore`.
 
 | Variable | Type | Default | Notes | Since | Description |
 | --- | --- | --- | --- | --- | --- |
+| `BIND_ADDRS` | list |  |  | v0.3.13 | Comma-separated addresses the service's listeners bind, one socket per address and port. Provisioning sets loopback and the host's WireGuard address, so only same-host callers such as the reverse proxy and vmagent, and mesh peers, reach the service. A listener that clients outside the mesh dial, such as Foghorn's external gRPC listener, and a listener with its own bind address setting keep their bind. Empty binds every interface. |
 | `PORT` | string | `18001` |  | v0.3.0 | TCP port for the HTTP listener that serves health, readiness, metrics, and HTTP APIs. |
 | `GRPC_PORT` | string | `19001` |  | v0.3.0 | TCP port for the gRPC listener. |
 | `GIN_MODE` | string | `debug` |  | v0.3.0 | Router mode. release enables Gin release mode and restricts CORS to ALLOWED_ORIGINS; any other value runs the router in development mode. |
@@ -33001,6 +33080,7 @@ Read by `api_billing/cmd/purser`.
 
 | Variable | Type | Default | Notes | Since | Description |
 | --- | --- | --- | --- | --- | --- |
+| `BIND_ADDRS` | list |  |  | v0.3.13 | Comma-separated addresses the service's listeners bind, one socket per address and port. Provisioning sets loopback and the host's WireGuard address, so only same-host callers such as the reverse proxy and vmagent, and mesh peers, reach the service. A listener that clients outside the mesh dial, such as Foghorn's external gRPC listener, and a listener with its own bind address setting keep their bind. Empty binds every interface. |
 | `PORT` | string | `18003` |  | v0.3.0 | TCP port for the HTTP listener that serves health, readiness, metrics, and HTTP APIs. |
 | `GRPC_PORT` | string | `19003` |  | v0.3.0 | TCP port for the gRPC listener. |
 | `GIN_MODE` | string | `debug` |  | v0.3.0 | Router mode. release enables Gin release mode and restricts CORS to ALLOWED_ORIGINS; any other value runs the router in development mode. |
@@ -33139,6 +33219,7 @@ Read by `api_tenants/cmd/quartermaster`.
 
 | Variable | Type | Default | Notes | Since | Description |
 | --- | --- | --- | --- | --- | --- |
+| `BIND_ADDRS` | list |  |  | v0.3.13 | Comma-separated addresses the service's listeners bind, one socket per address and port. Provisioning sets loopback and the host's WireGuard address, so only same-host callers such as the reverse proxy and vmagent, and mesh peers, reach the service. A listener that clients outside the mesh dial, such as Foghorn's external gRPC listener, and a listener with its own bind address setting keep their bind. Empty binds every interface. |
 | `PORT` | string | `18002` |  | v0.3.0 | TCP port for the HTTP listener that serves health, readiness, metrics, and HTTP APIs. |
 | `GRPC_PORT` | string | `19002` |  | v0.3.0 | TCP port for the gRPC listener. |
 | `GIN_MODE` | string | `debug` |  | v0.3.0 | Router mode. release enables Gin release mode and restricts CORS to ALLOWED_ORIGINS; any other value runs the router in development mode. |
@@ -33208,6 +33289,7 @@ Read by `api_firehose/cmd/decklog`.
 
 | Variable | Type | Default | Notes | Since | Description |
 | --- | --- | --- | --- | --- | --- |
+| `BIND_ADDRS` | list |  |  | v0.3.13 | Comma-separated addresses the service's listeners bind, one socket per address and port. Provisioning sets loopback and the host's WireGuard address, so only same-host callers such as the reverse proxy and vmagent, and mesh peers, reach the service. A listener that clients outside the mesh dial, such as Foghorn's external gRPC listener, and a listener with its own bind address setting keep their bind. Empty binds every interface. |
 | `GIN_MODE` | string | `debug` |  | v0.3.0 | Router mode. release enables Gin release mode and restricts CORS to ALLOWED_ORIGINS; any other value runs the router in development mode. |
 | `ALLOWED_ORIGINS` | list |  |  | v0.3.0 | Comma-separated browser origins accepted by CORS when GIN_MODE is release. |
 | `LOG_LEVEL` | string | `info` |  | v0.3.0 | Log level: debug, info, warn, or error. Any other value fails startup. |
@@ -33239,6 +33321,7 @@ Read by `api_realtime/cmd/signalman`.
 
 | Variable | Type | Default | Notes | Since | Description |
 | --- | --- | --- | --- | --- | --- |
+| `BIND_ADDRS` | list |  |  | v0.3.13 | Comma-separated addresses the service's listeners bind, one socket per address and port. Provisioning sets loopback and the host's WireGuard address, so only same-host callers such as the reverse proxy and vmagent, and mesh peers, reach the service. A listener that clients outside the mesh dial, such as Foghorn's external gRPC listener, and a listener with its own bind address setting keep their bind. Empty binds every interface. |
 | `PORT` | string | `18009` |  | v0.3.0 | TCP port for the HTTP listener that serves health, readiness, metrics, and HTTP APIs. |
 | `GRPC_PORT` | string | `19005` |  | v0.3.0 | TCP port for the gRPC listener. |
 | `GIN_MODE` | string | `debug` |  | v0.3.0 | Router mode. release enables Gin release mode and restricts CORS to ALLOWED_ORIGINS; any other value runs the router in development mode. |
@@ -33273,6 +33356,7 @@ Read by `api_network_observer/cmd/network-observer`.
 
 | Variable | Type | Default | Notes | Since | Description |
 | --- | --- | --- | --- | --- | --- |
+| `BIND_ADDRS` | list |  |  | v0.3.13 | Comma-separated addresses the service's listeners bind, one socket per address and port. Provisioning sets loopback and the host's WireGuard address, so only same-host callers such as the reverse proxy and vmagent, and mesh peers, reach the service. A listener that clients outside the mesh dial, such as Foghorn's external gRPC listener, and a listener with its own bind address setting keep their bind. Empty binds every interface. |
 | `GIN_MODE` | string | `debug` |  | v0.3.0 | Router mode. release enables Gin release mode and restricts CORS to ALLOWED_ORIGINS; any other value runs the router in development mode. |
 | `ALLOWED_ORIGINS` | list |  |  | v0.3.0 | Comma-separated browser origins accepted by CORS when GIN_MODE is release. |
 | `LOG_LEVEL` | string | `info` |  | v0.3.0 | Log level: debug, info, warn, or error. Any other value fails startup. |
@@ -33313,6 +33397,7 @@ Read by `api_network_observer/cmd/network-prober`.
 | Variable | Type | Default | Notes | Since | Description |
 | --- | --- | --- | --- | --- | --- |
 | `NETWORK_PROBER_PORT` | string | `18025` |  | v0.3.13 | Local prober health and spool statistics HTTP port. |
+| `BIND_ADDRS` | list |  |  | v0.3.13 | Comma-separated addresses the service's listeners bind, one socket per address and port. Provisioning sets loopback and the host's WireGuard address, so only same-host callers such as the reverse proxy and vmagent, and mesh peers, reach the service. A listener that clients outside the mesh dial, such as Foghorn's external gRPC listener, and a listener with its own bind address setting keep their bind. Empty binds every interface. |
 | `LOG_LEVEL` | string | `info` |  | v0.3.0 | Log level: debug, info, warn, or error. Any other value fails startup. |
 | `NETWORK_OBSERVER_URL` | string |  | required | v0.3.13 | Verified HTTPS observer relay on the platform's public Bridge API, such as https://bridge.example.net/network-observer; the prober appends the observer's /v1 paths. |
 | `NETWORK_OBSERVER_SECRET` | string |  | required, secret | v0.3.13 | Shared observer ingest bearer secret. |
@@ -33334,6 +33419,7 @@ Read by `api_analytics_ingest/cmd/periscope`.
 
 | Variable | Type | Default | Notes | Since | Description |
 | --- | --- | --- | --- | --- | --- |
+| `BIND_ADDRS` | list |  |  | v0.3.13 | Comma-separated addresses the service's listeners bind, one socket per address and port. Provisioning sets loopback and the host's WireGuard address, so only same-host callers such as the reverse proxy and vmagent, and mesh peers, reach the service. A listener that clients outside the mesh dial, such as Foghorn's external gRPC listener, and a listener with its own bind address setting keep their bind. Empty binds every interface. |
 | `PORT` | string | `18005` |  | v0.3.0 | TCP port for the HTTP listener that serves health, readiness, metrics, and HTTP APIs. |
 | `GIN_MODE` | string | `debug` |  | v0.3.0 | Router mode. release enables Gin release mode and restricts CORS to ALLOWED_ORIGINS; any other value runs the router in development mode. |
 | `ALLOWED_ORIGINS` | list |  |  | v0.3.0 | Comma-separated browser origins accepted by CORS when GIN_MODE is release. |
@@ -33368,6 +33454,7 @@ Read by `api_analytics_query/cmd/periscope-metering`.
 
 | Variable | Type | Default | Notes | Since | Description |
 | --- | --- | --- | --- | --- | --- |
+| `BIND_ADDRS` | list |  |  | v0.3.13 | Comma-separated addresses the service's listeners bind, one socket per address and port. Provisioning sets loopback and the host's WireGuard address, so only same-host callers such as the reverse proxy and vmagent, and mesh peers, reach the service. A listener that clients outside the mesh dial, such as Foghorn's external gRPC listener, and a listener with its own bind address setting keep their bind. Empty binds every interface. |
 | `PORT` | string | `18021` |  | v0.3.0 | TCP port for the HTTP listener that serves health, readiness, metrics, and HTTP APIs. |
 | `GIN_MODE` | string | `debug` |  | v0.3.0 | Router mode. release enables Gin release mode and restricts CORS to ALLOWED_ORIGINS; any other value runs the router in development mode. |
 | `ALLOWED_ORIGINS` | list |  |  | v0.3.0 | Comma-separated browser origins accepted by CORS when GIN_MODE is release. |
@@ -33395,6 +33482,7 @@ Read by `api_analytics_query/cmd/periscope`.
 
 | Variable | Type | Default | Notes | Since | Description |
 | --- | --- | --- | --- | --- | --- |
+| `BIND_ADDRS` | list |  |  | v0.3.13 | Comma-separated addresses the service's listeners bind, one socket per address and port. Provisioning sets loopback and the host's WireGuard address, so only same-host callers such as the reverse proxy and vmagent, and mesh peers, reach the service. A listener that clients outside the mesh dial, such as Foghorn's external gRPC listener, and a listener with its own bind address setting keep their bind. Empty binds every interface. |
 | `PORT` | string | `18004` |  | v0.3.0 | TCP port for the HTTP listener that serves health, readiness, metrics, and HTTP APIs. |
 | `GRPC_PORT` | string | `19004` |  | v0.3.0 | TCP port for the gRPC listener. |
 | `GIN_MODE` | string | `debug` |  | v0.3.0 | Router mode. release enables Gin release mode and restricts CORS to ALLOWED_ORIGINS; any other value runs the router in development mode. |
@@ -33423,6 +33511,7 @@ Read by `api_assets/cmd/chandler`.
 
 | Variable | Type | Default | Notes | Since | Description |
 | --- | --- | --- | --- | --- | --- |
+| `BIND_ADDRS` | list |  |  | v0.3.13 | Comma-separated addresses the service's listeners bind, one socket per address and port. Provisioning sets loopback and the host's WireGuard address, so only same-host callers such as the reverse proxy and vmagent, and mesh peers, reach the service. A listener that clients outside the mesh dial, such as Foghorn's external gRPC listener, and a listener with its own bind address setting keep their bind. Empty binds every interface. |
 | `PORT` | string | `18020` |  | v0.3.0 | TCP port for the HTTP listener that serves health, readiness, metrics, and HTTP APIs. |
 | `GIN_MODE` | string | `debug` |  | v0.3.0 | Router mode. release enables Gin release mode and restricts CORS to ALLOWED_ORIGINS; any other value runs the router in development mode. |
 | `ALLOWED_ORIGINS` | list |  |  | v0.3.0 | Comma-separated browser origins accepted by CORS when GIN_MODE is release. |
@@ -33453,6 +33542,7 @@ Read by `api_balancing/cmd/foghorn`.
 
 | Variable | Type | Default | Notes | Since | Description |
 | --- | --- | --- | --- | --- | --- |
+| `BIND_ADDRS` | list |  |  | v0.3.13 | Comma-separated addresses the service's listeners bind, one socket per address and port. Provisioning sets loopback and the host's WireGuard address, so only same-host callers such as the reverse proxy and vmagent, and mesh peers, reach the service. A listener that clients outside the mesh dial, such as Foghorn's external gRPC listener, and a listener with its own bind address setting keep their bind. Empty binds every interface. |
 | `PORT` | string | `18008` |  | v0.3.0 | TCP port for the HTTP listener that serves health, readiness, metrics, and HTTP APIs. |
 | `GIN_MODE` | string | `debug` |  | v0.3.0 | Router mode. release enables Gin release mode and restricts CORS to ALLOWED_ORIGINS; any other value runs the router in development mode. |
 | `ALLOWED_ORIGINS` | list |  |  | v0.3.0 | Comma-separated browser origins accepted by CORS when GIN_MODE is release. |
@@ -33473,11 +33563,11 @@ Read by `api_balancing/cmd/foghorn`.
 | `REDIS_PASSWORD` | string |  | secret | v0.3.0 | Password for the Redis data connection when REDIS_MODE is set. |
 | `REDIS_SENTINEL_USERNAME` | string |  |  | v0.3.0 | Username for the Sentinel connection when REDIS_MODE is sentinel. |
 | `REDIS_SENTINEL_PASSWORD` | string |  | secret | v0.3.0 | Password for the Sentinel connection when REDIS_MODE is sentinel. |
-| `FOGHORN_PUBLIC_HTTP_BIND_ADDR` | string |  |  | v0.3.0 | Bind address of the public HTTP listener on PORT that serves playback, ingest, and Livepeer webhook routes. Empty listens on all interfaces. |
+| `FOGHORN_PUBLIC_HTTP_BIND_ADDR` | string |  |  | v0.3.0 | Bind address of the public HTTP listener on PORT that serves playback, ingest, and Livepeer webhook routes. Empty binds the BIND_ADDRS addresses, or every interface when BIND_ADDRS is empty. |
 | `FOGHORN_INTERNAL_HTTP_PORT` | string | `18027` |  | v0.3.0 | TCP port of the internal HTTP listener that serves node administration, the dashboard, debug routes, and authenticated Mist source lookups. |
 | `FOGHORN_INTERNAL_HTTP_BIND_ADDR` | string | `127.0.0.1` |  | v0.3.0 | Bind address of the internal HTTP listener. |
-| `FOGHORN_INTERNAL_GRPC_BIND_ADDR` | string | `:18019` |  | v0.3.0 | host:port of the internal gRPC listener for mesh services, federation, and the HA command relay. It serves GRPC_TLS_CERT_PATH. |
-| `FOGHORN_EXTERNAL_GRPC_BIND_ADDR` | string | `:18029` |  | v0.3.0 | host:port of the external gRPC listener for Helmsman control streams and edge provisioning. It serves Navigator-issued cluster certificates. |
+| `FOGHORN_INTERNAL_GRPC_BIND_ADDR` | string | `:18019` |  | v0.3.0 | host:port of the internal gRPC listener for mesh services, federation, and the HA command relay. It serves GRPC_TLS_CERT_PATH. An empty host binds the BIND_ADDRS addresses, or every interface when BIND_ADDRS is empty. |
+| `FOGHORN_EXTERNAL_GRPC_BIND_ADDR` | string | `:18029` |  | v0.3.0 | host:port of the external gRPC listener for Helmsman control streams and edge provisioning. It serves Navigator-issued cluster certificates. An empty host binds every interface whatever BIND_ADDRS says, since edges dial it from outside the mesh. |
 | `FOGHORN_INTERNAL_GRPC_PORT` | integer |  |  | v0.3.0 | gRPC port this instance registers with Quartermaster. 0 or unset uses the port of FOGHORN_INTERNAL_GRPC_BIND_ADDR. |
 | `FOGHORN_HOST` | string |  |  | v0.3.0 | Host name registered with Quartermaster, used for the HA relay address when FOGHORN_RELAY_ADVERTISE_HOST is empty, and a fallback host for Mist balancer URLs. |
 | `FOGHORN_RELAY_ADVERTISE_ADDR` | string |  |  | v0.3.0 | host:port other replicas use to relay commands to this one. Overrides FOGHORN_RELAY_ADVERTISE_HOST and the port derived from FOGHORN_INTERNAL_GRPC_BIND_ADDR. |
@@ -33657,6 +33747,7 @@ Read by `api_incidents/cmd/lookout`.
 
 | Variable | Type | Default | Notes | Since | Description |
 | --- | --- | --- | --- | --- | --- |
+| `BIND_ADDRS` | list |  |  | v0.3.13 | Comma-separated addresses the service's listeners bind, one socket per address and port. Provisioning sets loopback and the host's WireGuard address, so only same-host callers such as the reverse proxy and vmagent, and mesh peers, reach the service. A listener that clients outside the mesh dial, such as Foghorn's external gRPC listener, and a listener with its own bind address setting keep their bind. Empty binds every interface. |
 | `GIN_MODE` | string | `debug` |  | v0.3.0 | Router mode. release enables Gin release mode and restricts CORS to ALLOWED_ORIGINS; any other value runs the router in development mode. |
 | `ALLOWED_ORIGINS` | list |  |  | v0.3.0 | Comma-separated browser origins accepted by CORS when GIN_MODE is release. |
 | `LOG_LEVEL` | string | `info` |  | v0.3.0 | Log level: debug, info, warn, or error. Any other value fails startup. |
@@ -33709,6 +33800,7 @@ Read by `api_dns/cmd/navigator`.
 
 | Variable | Type | Default | Notes | Since | Description |
 | --- | --- | --- | --- | --- | --- |
+| `BIND_ADDRS` | list |  |  | v0.3.13 | Comma-separated addresses the service's listeners bind, one socket per address and port. Provisioning sets loopback and the host's WireGuard address, so only same-host callers such as the reverse proxy and vmagent, and mesh peers, reach the service. A listener that clients outside the mesh dial, such as Foghorn's external gRPC listener, and a listener with its own bind address setting keep their bind. Empty binds every interface. |
 | `GIN_MODE` | string | `debug` |  | v0.3.0 | Router mode. release enables Gin release mode and restricts CORS to ALLOWED_ORIGINS; any other value runs the router in development mode. |
 | `ALLOWED_ORIGINS` | list |  |  | v0.3.0 | Comma-separated browser origins accepted by CORS when GIN_MODE is release. |
 | `LOG_LEVEL` | string | `info` |  | v0.3.0 | Log level: debug, info, warn, or error. Any other value fails startup. |
@@ -33771,6 +33863,7 @@ Read by `api_mesh/cmd/privateer`.
 
 | Variable | Type | Default | Notes | Since | Description |
 | --- | --- | --- | --- | --- | --- |
+| `BIND_ADDRS` | list |  |  | v0.3.13 | Comma-separated addresses the service's listeners bind, one socket per address and port. Provisioning sets loopback and the host's WireGuard address, so only same-host callers such as the reverse proxy and vmagent, and mesh peers, reach the service. A listener that clients outside the mesh dial, such as Foghorn's external gRPC listener, and a listener with its own bind address setting keep their bind. Empty binds every interface. |
 | `GIN_MODE` | string | `debug` |  | v0.3.0 | Router mode. release enables Gin release mode and restricts CORS to ALLOWED_ORIGINS; any other value runs the router in development mode. |
 | `ALLOWED_ORIGINS` | list |  |  | v0.3.0 | Comma-separated browser origins accepted by CORS when GIN_MODE is release. |
 | `LOG_LEVEL` | string | `info` |  | v0.3.0 | Log level: debug, info, warn, or error. Any other value fails startup. |
@@ -33815,6 +33908,7 @@ Read by `api_ticketing/cmd/deckhand`.
 
 | Variable | Type | Default | Notes | Since | Description |
 | --- | --- | --- | --- | --- | --- |
+| `BIND_ADDRS` | list |  |  | v0.3.13 | Comma-separated addresses the service's listeners bind, one socket per address and port. Provisioning sets loopback and the host's WireGuard address, so only same-host callers such as the reverse proxy and vmagent, and mesh peers, reach the service. A listener that clients outside the mesh dial, such as Foghorn's external gRPC listener, and a listener with its own bind address setting keep their bind. Empty binds every interface. |
 | `GIN_MODE` | string | `debug` |  | v0.3.0 | Router mode. release enables Gin release mode and restricts CORS to ALLOWED_ORIGINS; any other value runs the router in development mode. |
 | `ALLOWED_ORIGINS` | list |  |  | v0.3.0 | Comma-separated browser origins accepted by CORS when GIN_MODE is release. |
 | `LOG_LEVEL` | string | `info` |  | v0.3.0 | Log level: debug, info, warn, or error. Any other value fails startup. |
@@ -33852,6 +33946,7 @@ Read by `api_consultant/cmd/skipper`.
 
 | Variable | Type | Default | Notes | Since | Description |
 | --- | --- | --- | --- | --- | --- |
+| `BIND_ADDRS` | list |  |  | v0.3.13 | Comma-separated addresses the service's listeners bind, one socket per address and port. Provisioning sets loopback and the host's WireGuard address, so only same-host callers such as the reverse proxy and vmagent, and mesh peers, reach the service. A listener that clients outside the mesh dial, such as Foghorn's external gRPC listener, and a listener with its own bind address setting keep their bind. Empty binds every interface. |
 | `PORT` | string | `18018` |  | v0.3.0 | TCP port for the HTTP listener that serves health, readiness, metrics, and HTTP APIs. |
 | `GRPC_PORT` | string | `19007` |  | v0.3.0 | TCP port for the gRPC listener. |
 | `GIN_MODE` | string | `debug` |  | v0.3.0 | Router mode. release enables Gin release mode and restricts CORS to ALLOWED_ORIGINS; any other value runs the router in development mode. |
@@ -33959,6 +34054,7 @@ Read by `api_forms/cmd/steward`.
 
 | Variable | Type | Default | Notes | Since | Description |
 | --- | --- | --- | --- | --- | --- |
+| `BIND_ADDRS` | list |  |  | v0.3.13 | Comma-separated addresses the service's listeners bind, one socket per address and port. Provisioning sets loopback and the host's WireGuard address, so only same-host callers such as the reverse proxy and vmagent, and mesh peers, reach the service. A listener that clients outside the mesh dial, such as Foghorn's external gRPC listener, and a listener with its own bind address setting keep their bind. Empty binds every interface. |
 | `PORT` | string | `18032` |  | v0.3.0 | TCP port for the HTTP listener that serves health, readiness, metrics, and HTTP APIs. |
 | `GIN_MODE` | string | `debug` |  | v0.3.0 | Router mode. release enables Gin release mode and restricts CORS to ALLOWED_ORIGINS; any other value runs the router in development mode. |
 | `ALLOWED_ORIGINS` | list |  |  | v0.3.0 | Comma-separated browser origins accepted by CORS when GIN_MODE is release. |
@@ -36308,7 +36404,7 @@ S3 sees zero traffic on the live lane.
    clip / VOD /   ──▶│ Helmsman relay        │── stream ─▶ Mist ─▶ viewers
    finalized DVR    │   /internal/artifact/  │           (shm look-ahead)
    playback         │   S3 → disk cache      │
-                    │   stream-first tee     │
+                    │   shared block fill    │
                     └───────────────────────┘
                                 ▲
                                 │ S3 range GET (presigned)
@@ -37354,8 +37450,8 @@ Local port 18025 exposes `/health` with spool counts, `successful_discovery_chec
 `last_discovery_success` and `admission_rejections`. `/ready` checks recent coordinator
 connectivity only. Verify a real successful discovery and its arrival in the inventory
 before retiring an old prober. Authentication and sender-reserve failures are recorded
-separately and do not count as worker downtime. Firewall that operational endpoint
-appropriately for the host.
+separately and do not count as worker downtime. The shipped example sets
+`BIND_ADDRS=127.0.0.1`, so that endpoint answers only on the prober host itself.
 Observer heartbeat and DNS-cycle reports disclose queue depth and lost observations.
 An unavailable prober does not make the orchestrator unavailable.
 
@@ -37488,7 +37584,10 @@ Firewall policy should follow the manifest and service registry:
 - Backend nodes expose SSH/bootstrap access and the manifest's WireGuard listen
   port to other backend nodes.
 - Internal service ports stay private to the mesh or private network.
-- Edge nodes do not join the backend mesh.
+- Edge nodes do not join the backend mesh. An edge's public listeners are
+  Caddy's 80/443 and MistServer's RTMP (1935), RTSP (5554), DTSC (4200), SRT
+  (8889/udp) and WebRTC (18203/udp); MistServer's HTTP (8080) and API (4242),
+  Helmsman and vmagent listen on loopback.
 
 Run `frameworks cluster preflight` before provisioning and
 `frameworks edge preflight` for BYO edge hosts. For exact ports, use
@@ -37991,7 +38090,7 @@ For multi-host deployments, you need:
 
 2. **systemd-resolved** - Production backend hosts must run systemd-resolved so Privateer can route `.internal` names to the local DNS listener.
 
-3. **Firewall Rules** - Open the manifest's WireGuard listen port between backend nodes and keep internal service ports private to the mesh. Bridge is provisioned to listen only on loopback and the host's WireGuard address, so public API traffic and the Cloudflare load-balancer health check (`http://<origin>:80/health`, answered by the reverse proxy) reach it through the host's reverse proxy, never on port 18000. A native reverse proxy reaches Bridge on loopback; a `mode: docker` nginx or Caddy reaches it on the host's WireGuard address, so a host that runs Bridge behind a docker-mode proxy needs a `wireguard_ip`. The listener binds the WireGuard address even before the mesh interface is up and starts answering once it is.
+3. **Firewall Rules** - Open the manifest's WireGuard listen port between backend nodes. Provisioning binds every internal listener (the FrameWorks services, PostgreSQL, YugabyteDB, ClickHouse, Redis, Kafka and the metrics stack) to loopback and the host's WireGuard address only, so it never answers on the LAN or public interface. Public traffic and the Cloudflare load-balancer health check (`http://<origin>:80/health`, answered by the reverse proxy) reach services through the host's reverse proxy on 80/443; the only other public listeners on a backend host are Foghorn's external gRPC port (18029), which edges dial, the WireGuard port and SSH. A native reverse proxy reaches services on loopback; a `mode: docker` nginx or Caddy, and Docker-mode apps such as Chatwoot, Listmonk and Metabase, reach them on the host's WireGuard address, so such a host needs a `wireguard_ip`. Listeners bind the WireGuard address even before the mesh interface is up and start answering once it is. A cluster of more than one host requires the mesh: `cluster provision` refuses a multi-host manifest without Privateer. See [TLS architecture](https://github.com/Livepeer-FrameWorks/monorepo/blob/master/docs/architecture/tls.md#listener-binds) for the full bind table.
 
 4. **No DHCP search domains** - FrameWorks resolves only fully qualified names. A search domain from DHCP or a router advertisement makes the resolver retry a name under that suffix when the upstream drops a query, and a wildcard record there returns a wrong address. Provisioning sets `UseDomains=no` for DHCPv4, DHCPv6 and router advertisements on every systemd-networkd link (netplan included) on platform hosts and Linux edges; on hosts under another network manager, turn off DHCP-provided search domains yourself.
 
@@ -38384,10 +38483,9 @@ plan` and `release apply --dry-run` list every step and, per host, the role task
 
 After postdeploy, `release apply` checks that every replica of the auth services and the web app
 runs the release's version, since a readiness check cannot detect an older web app bundle. It
-then sets the edge release target, from which Foghorn rolls edge nodes (see [Edge nodes](#edge-nodes)), and waits up to
-`--edge-wait` (default 10 minutes) for every edge to report the release. Once they all do, it
-re-renders this CLI's edge configuration on the enrolled edges of the edge manifest (see
-[Edge configuration](#edge-configuration)). Contract migrations are printed, never run.
+then sets the edge release target, from which Foghorn rolls edge nodes through their own update
+flow (see [Edge nodes](#edge-nodes)); it does not wait for them. Contract migrations are printed,
+never run.
 
 A reconciliation transition is a Check, Apply, Verify step that converges a declared invariant
 against the authoritative state. On a rerun it is checked again and skipped when complete. A
@@ -38529,22 +38627,7 @@ identity and undelivered control acknowledgements.
 
 Foghorn rolls component versions; it does not change an edge's rendered configuration (env
 files, systemd units, the compose file). A new CLI carries the current edge configuration, and
-the edge provision rollout is how that configuration reaches the edges.
-
-`release apply` runs that rollout itself once every edge reports the release: it re-renders the
-enrolled edges of the edge manifest (`--edge-manifest`, by default `edge.yaml` beside the cluster
-manifest) against the release it applied, with the per-node plan, drain, and control-stream check
-described below. A node of the manifest that was never installed is listed and left for
-`edge provision`. When the edges have not all reported the release by the end of `--edge-wait`,
-or there is no edge manifest, `release apply` prints the command to run instead:
-
-```bash
-frameworks edge provision --manifest <edge-manifest> --version <release>
-```
-
-Edges outside the manifest, such as customer-enrolled ones, take the new configuration from their
-own `edge provision` run. To converge edge configuration on its own, for example after installing
-a new CLI without a new release:
+re-running `edge provision` with it is how that configuration reaches the edges:
 
 1. Install the new CLI.
 2. See which edges drifted and what would change:

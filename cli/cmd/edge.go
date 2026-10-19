@@ -1200,25 +1200,7 @@ type edgeManifestProvisionOptions struct {
 	NoDrain                 bool
 	SkipPreflight           bool
 	ForceReenroll           bool
-	// ReleaseTargetPinned skips the edge release target sync: the caller
-	// already pinned it (release apply pins it to the release it applied).
-	ReleaseTargetPinned bool
-	// EnrolledOnly converges only nodes that already carry an enrolled edge
-	// install; a fresh node is reported and left for `edge provision`.
-	EnrolledOnly bool
 }
-
-// Test seams for driving runEdgeProvisionFromManifest without hosts.
-// edgeManifestPrepareNodeFn receives the manifest node, the release selector
-// it renders with, and the real preparation.
-var (
-	edgeManifestDetectEnrollmentFn = func(ctx context.Context, sshTarget, sshKey string) (*provisioner.EdgeEnrollment, error) {
-		return detectExistingEdgeEnrollment(ctx, sshTarget, sshKey, false)
-	}
-	edgeManifestPrepareNodeFn = func(_ inventory.EdgeNode, _ string, prepare func() (edgeRolloutNode, error)) (edgeRolloutNode, error) {
-		return prepare()
-	}
-)
 
 // runEdgeProvisionFromManifest provisions multiple edge nodes from a manifest file
 func runEdgeProvisionFromManifest(cmd *cobra.Command, cliCtx fwcfg.Context, opts edgeManifestProvisionOptions) error {
@@ -1306,7 +1288,7 @@ func runEdgeProvisionFromManifest(cmd *cobra.Command, cliCtx fwcfg.Context, opts
 			return fmt.Errorf("load cluster manifest for edge telemetry: %w", ctxErr)
 		}
 	}
-	if !dryRun && !opts.ReleaseTargetPinned && needsControlPlane && clusterManifestPath != "" {
+	if !dryRun && needsControlPlane && clusterManifestPath != "" {
 		if err := syncEdgeManifestReleaseTarget(cmd, clusterManifestPath, ageKeyFile, effectiveVersion, opts.VersionSet); err != nil {
 			return err
 		}
@@ -1317,26 +1299,11 @@ func runEdgeProvisionFromManifest(cmd *cobra.Command, cliCtx fwcfg.Context, opts
 	// nodes first and order the applies.
 	var nodes []edgeRolloutNode
 	var prepareFailures []edgeRolloutResult
-	var notEnrolled []string
 	for _, n := range manifest.Nodes {
 		poolDomain := manifest.PoolDomain
 		clusterID := n.ResolvedCluster(manifest.ClusterID)
 		nodeDomain := edgeManifestNodeDomain(manifest.RootDomain, clusterID, n.Subdomain)
 		fmt.Fprintf(cmd.OutOrStdout(), "\n[%s] Resolving node...\n", n.Name)
-
-		if opts.EnrolledOnly {
-			enrollment, detectErr := edgeManifestDetectEnrollmentFn(cmd.Context(), n.SSH, opts.SSHKey)
-			if detectErr != nil {
-				fmt.Fprintf(cmd.OutOrStdout(), "[%s] FAILED: %v\n", n.Name, detectErr)
-				prepareFailures = append(prepareFailures, edgeRolloutResult{Name: n.Name, Err: detectErr})
-				continue
-			}
-			if enrollment == nil {
-				fmt.Fprintf(cmd.OutOrStdout(), "[%s] not enrolled; left for `frameworks edge provision`\n", n.Name)
-				notEnrolled = append(notEnrolled, n.Name)
-				continue
-			}
-		}
 
 		token := opts.EnrollmentToken
 		if token == "" {
@@ -1345,9 +1312,7 @@ func runEdgeProvisionFromManifest(cmd *cobra.Command, cliCtx fwcfg.Context, opts
 		nodeMode := modeFor(n)
 		nodeTelemetryURL := edgeManifestTelemetryWriteURL(manifest, clusterManifest, clusterID)
 		foghornAddr := edgeManifestNodeFoghornAddr(n, manifest.RootDomain, clusterID)
-		node, err := edgeManifestPrepareNodeFn(n, effectiveVersion, func() (edgeRolloutNode, error) {
-			return prepareManifestEdgeNode(cmd, controlCtx, n.SSH, opts.SSHKey, n.Name, nodeDomain, poolDomain, clusterID, n.Region, manifest.Email, token, n.ExternalIP, false, n.ApplyTune, n.RegisterQM, opts.SkipPreflight, opts.Timeout, nodeMode, effectiveVersion, opts.ONNXProfile, foghornAddr, n.FoghornTLSServerName, controlCABundlePEM, nodeTelemetryURL, "", n.TelemetryAddress, n.ResolvedCapabilities(manifest.Capabilities), n.ResolvedBandwidthMbps(manifest.BandwidthMbps), n.ResolvedMaxTranscodes(manifest.MaxTranscodes), n.ResolvedStorageBytes(manifest.StorageBytes), dryRun, opts.ForceReenroll)
-		})
+		node, err := prepareManifestEdgeNode(cmd, controlCtx, n.SSH, opts.SSHKey, n.Name, nodeDomain, poolDomain, clusterID, n.Region, manifest.Email, token, n.ExternalIP, false, n.ApplyTune, n.RegisterQM, opts.SkipPreflight, opts.Timeout, nodeMode, effectiveVersion, opts.ONNXProfile, foghornAddr, n.FoghornTLSServerName, controlCABundlePEM, nodeTelemetryURL, "", n.TelemetryAddress, n.ResolvedCapabilities(manifest.Capabilities), n.ResolvedBandwidthMbps(manifest.BandwidthMbps), n.ResolvedMaxTranscodes(manifest.MaxTranscodes), n.ResolvedStorageBytes(manifest.StorageBytes), dryRun, opts.ForceReenroll)
 		if err != nil {
 			fmt.Fprintf(cmd.OutOrStdout(), "[%s] FAILED: %v\n", n.Name, err)
 			prepareFailures = append(prepareFailures, edgeRolloutResult{Name: n.Name, Err: err})
@@ -1358,9 +1323,6 @@ func runEdgeProvisionFromManifest(cmd *cobra.Command, cliCtx fwcfg.Context, opts
 
 	results := runEdgeRolloutWith(cmd.Context(), cmd.OutOrStdout(), nodes, parallel, dryRun, opts.NoDrain)
 	summaryErr := summarizeEdgeRollout(cmd.OutOrStdout(), append(results, prepareFailures...), dryRun)
-	if len(notEnrolled) > 0 {
-		fmt.Fprintf(cmd.OutOrStdout(), "  not enrolled (install with `frameworks edge provision --manifest %s`): %s\n", manifestPath, strings.Join(notEnrolled, ", "))
-	}
 	return summaryErr
 }
 

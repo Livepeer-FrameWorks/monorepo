@@ -195,10 +195,9 @@ plan` and `release apply --dry-run` list every step and, per host, the role task
 
 After postdeploy, `release apply` checks that every replica of the auth services and the web app
 runs the release's version, since a readiness check cannot detect an older web app bundle. It
-then sets the edge release target, from which Foghorn rolls edge nodes (see [Edge nodes](#edge-nodes)), and waits up to
-`--edge-wait` (default 10 minutes) for every edge to report the release. Once they all do, it
-re-renders this CLI's edge configuration on the enrolled edges of the edge manifest (see
-[Edge configuration](#edge-configuration)). Contract migrations are printed, never run.
+then sets the edge release target, from which Foghorn rolls edge nodes through their own update
+flow (see [Edge nodes](#edge-nodes)); it does not wait for them. Contract migrations are printed,
+never run.
 
 A reconciliation transition is a Check, Apply, Verify step that converges a declared invariant
 against the authoritative state. On a rerun it is checked again and skipped when complete. A
@@ -340,22 +339,7 @@ identity and undelivered control acknowledgements.
 
 Foghorn rolls component versions; it does not change an edge's rendered configuration (env
 files, systemd units, the compose file). A new CLI carries the current edge configuration, and
-the edge provision rollout is how that configuration reaches the edges.
-
-`release apply` runs that rollout itself once every edge reports the release: it re-renders the
-enrolled edges of the edge manifest (`--edge-manifest`, by default `edge.yaml` beside the cluster
-manifest) against the release it applied, with the per-node plan, drain, and control-stream check
-described below. A node of the manifest that was never installed is listed and left for
-`edge provision`. When the edges have not all reported the release by the end of `--edge-wait`,
-or there is no edge manifest, `release apply` prints the command to run instead:
-
-```bash
-frameworks edge provision --manifest <edge-manifest> --version <release>
-```
-
-Edges outside the manifest, such as customer-enrolled ones, take the new configuration from their
-own `edge provision` run. To converge edge configuration on its own, for example after installing
-a new CLI without a new release:
+re-running `edge provision` with it is how that configuration reaches the edges:
 
 1. Install the new CLI.
 2. See which edges drifted and what would change:

@@ -22,7 +22,6 @@ import (
 const (
 	edgeRolloutStatusCommand   = "frameworks cluster edges rollout status"
 	edgeRolloutPollInterval    = 15 * time.Second
-	edgeRolloutReleaseWait     = 10 * time.Minute
 	edgeRolloutRPCTimeout      = 20 * time.Second
 	edgeRolloutComponentSchema = "config_schema"
 )
@@ -440,29 +439,6 @@ func openEdgeRolloutSource(cmd *cobra.Command, rc *resolvedCluster) (*liveEdgeRo
 		_ = qm.Close()
 		qmCleanup()
 	}, nil
-}
-
-// releaseVerifyEdgeRolloutFn waits for the edges after `release apply` synced
-// their target. It reports whether every edge converged; the error is non-nil
-// only when a node failed its update. Tests substitute it.
-var releaseVerifyEdgeRolloutFn = verifyReleaseEdgeRollout
-
-func verifyReleaseEdgeRollout(cmd *cobra.Command, rc *resolvedCluster, wait time.Duration) (bool, error) {
-	out := cmd.OutOrStdout()
-	if rc == nil || rc.Manifest == nil {
-		return false, nil
-	}
-	src, cleanup, err := openEdgeRolloutSource(cmd, rc)
-	if err != nil {
-		ux.Warn(out, fmt.Sprintf("EDGES NOT VERIFIED: %v. Check with `%s --wait 15m`.", err, edgeRolloutStatusCommand))
-		return false, nil
-	}
-	defer cleanup()
-	outcome := waitEdgeRollout(cmd.Context(), out, src, rc.Manifest.AllClusterIDs(), wait, edgeRolloutPollInterval)
-	if err := reportEdgeRollout(out, outcome, wait); err != nil {
-		return false, err
-	}
-	return outcome.Converged(), nil
 }
 
 func newClusterEdgesCmd() *cobra.Command {

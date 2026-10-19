@@ -38,10 +38,6 @@ const (
 	edgeConfigUnknown  edgeConfigState = "unknown"
 )
 
-// edgeConfigRenderHint names the commands that render this CLI's edge config
-// on an edge whose config is behind.
-const edgeConfigRenderHint = "`frameworks cluster release apply` re-renders the enrolled edges of the cluster's edge manifest once they run the release; `frameworks edge provision --manifest <edge-manifest>` re-renders them on their own"
-
 var edgeConfigReleasePattern = regexp.MustCompile(`^v\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$`)
 
 // classifyEdgeConfig compares the CLI release recorded in a node's
@@ -129,7 +125,6 @@ func evaluateEdgeConfigVersions(nodes []edgeConfigNode, cliVersion string) *heal
 		if len(notes) > 0 {
 			result.Message += "; " + strings.Join(notes, "; ")
 		}
-		result.Message += "; " + edgeConfigRenderHint
 		return result
 	}
 	current := len(nodes) - len(silent) - len(unknown)

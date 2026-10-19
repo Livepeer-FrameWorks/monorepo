@@ -69,10 +69,14 @@ func TestEvaluateEdgeConfigVersionsListsStaleEdges(t *testing.T) {
 	if result.OK || result.Status != "degraded" {
 		t.Fatalf("result = ok=%v status=%s, want failing degraded", result.OK, result.Status)
 	}
-	for _, want := range []string{"2/4", "edge-b (rendered by CLI v0.3.10, current CLI is v0.3.11)", "edge-c (no provisioned-config marker", "`frameworks cluster release apply` re-renders", "`frameworks edge provision --manifest <edge-manifest>`"} {
+	for _, want := range []string{"2/4", "edge-b (rendered by CLI v0.3.10, current CLI is v0.3.11)", "edge-c (no provisioned-config marker"} {
 		if !strings.Contains(result.Message, want) {
 			t.Fatalf("message %q missing %q", result.Message, want)
 		}
+	}
+	// Edges take config through their own flow; release apply never re-renders them.
+	if strings.Contains(result.Message, "release apply") {
+		t.Fatalf("message tells operators release apply re-renders edges: %q", result.Message)
 	}
 	if strings.Contains(result.Message, "edge-a") {
 		t.Fatalf("current edge listed as stale: %q", result.Message)
