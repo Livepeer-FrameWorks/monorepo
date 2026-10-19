@@ -419,6 +419,7 @@ verify-go-build:
 	$(MAKE) --no-print-directory sqlc-check
 	$(MAKE) --no-print-directory build
 	$(MAKE) --no-print-directory test-network-prober-install
+	$(MAKE) --no-print-directory verify-edge-caddy-tls
 
 # The CI "SDKs (TypeScript, Go, Python)" job, step for step.
 verify-sdks:
@@ -770,6 +771,13 @@ verify-mist-processing-recording:
 
 verify-mist-hls-realtime:
 	@$(MAKE) --no-print-directory test-pkg GO_TAG_FLAGS=-tags=media_verify GO_TEST_PACKAGES=./mist GO_TEST_FLAGS='-run TestHLSChapterRealtime_RealMist -v -timeout 150s'
+
+# The release-pinned Caddy serving the Caddyfile Helmsman renders: a TLS client
+# without SNI (the Cloudflare origin monitor) gets the edge domain's certificate
+# and reaches Helmsman's /health. Needs Docker.
+.PHONY: verify-edge-caddy-tls
+verify-edge-caddy-tls:
+	@$(MAKE) --no-print-directory test-helmsman GO_TAG_FLAGS=-tags=caddy_verify GO_TEST_PACKAGES=./internal/config GO_TEST_FLAGS='-run TestEdgeCaddyfile_NoSNIHandshake_RealCaddy -v -timeout 300s'
 
 # Two real cells on the dev compose stack (profiles edge and two-cell): publish into
 # cell A, resolve viewers through cell B, assert media at B, then private-only

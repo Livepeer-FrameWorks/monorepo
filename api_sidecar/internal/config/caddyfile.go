@@ -41,11 +41,12 @@ const caddyfileTmpl = `{
 	admin {{.CaddyAdminAddr}}
 	# The internal CA's root stays out of the host's system trust store.
 	skip_install_trust
-{{- if .EdgeDomain}}
+{{- with .ManagedNoSNIName}}
 	# A TLS client that sends no SNI (a load-balancer health monitor dialing
-	# the origin IP) gets the node's own certificate; its Host header then
-	# selects the @edge_health route.
-	default_sni {{.EdgeDomain}}
+	# the origin IP) gets the managed certificate of the edge domain's site.
+	# Caddy looks this name up as an exact certificate cache key, which is the
+	# site address the certificate was obtained for, wildcard included.
+	default_sni {{.}}
 {{- end}}
 {{- if .AcmeEmail}}
 	email {{.AcmeEmail}}
@@ -195,9 +196,30 @@ const caddyfileTmpl = `{
 {{- end}}
 	import common_handlers
 }
+{{end}}
+{{- with .LoadedNoSNIBundle}}
+# A TLS client that sends no SNI (a load-balancer health monitor dialing the
+# origin IP) gets the edge domain's loaded certificate from this site. Caddy
+# selects a loaded certificate only through its site's SNI-matched policy,
+# which default_sni does not reach. The Host header still routes the request
+# to the site serving that host; any other host gets 421.
+https:// {
+	tls {{.TLSCertPath}} {{.TLSKeyPath}}
+	respond 421
+}
 {{end}}`
 
 var parsedCaddyfileTmpl = template.Must(template.New("caddyfile").Parse(caddyfileTmpl))
+
+type caddyfileTemplateData struct {
+	CaddyfileParams
+	// LoadedNoSNIBundle is the bundle with loaded certificate files that
+	// serves EdgeDomain; it renders the catch-all site for SNI-less clients.
+	LoadedNoSNIBundle *CaddyfileBundle
+	// ManagedNoSNIName is the site address of the managed (ACME) bundle that
+	// serves EdgeDomain; it renders the global default_sni.
+	ManagedNoSNIName string
+}
 
 // RenderCaddyfile renders a production Caddyfile from the given parameters.
 // Requires at least one bundle.
@@ -210,9 +232,52 @@ func RenderCaddyfile(params CaddyfileParams) (string, error) {
 			return "", fmt.Errorf("bundle[%d]: SiteAddress is required", i)
 		}
 	}
+	data := caddyfileTemplateData{CaddyfileParams: params}
+	if bundle, address, ok := bundleServingHost(params.Bundles, params.EdgeDomain); ok {
+		if bundle.TLSCertPath != "" && bundle.TLSKeyPath != "" {
+			data.LoadedNoSNIBundle = &bundle
+		} else {
+			data.ManagedNoSNIName = address
+		}
+	}
 	var buf strings.Builder
-	if err := parsedCaddyfileTmpl.Execute(&buf, params); err != nil {
+	if err := parsedCaddyfileTmpl.Execute(&buf, data); err != nil {
 		return "", fmt.Errorf("rendering Caddyfile: %w", err)
 	}
 	return buf.String(), nil
+}
+
+// bundleServingHost returns the bundle whose site serves host and the site
+// address that matches it. An exact address wins over a wildcard, as it does
+// in Caddy's own certificate selection.
+func bundleServingHost(bundles []CaddyfileBundle, host string) (CaddyfileBundle, string, bool) {
+	host = strings.Trim(strings.TrimSpace(host), ".")
+	if host == "" {
+		return CaddyfileBundle{}, "", false
+	}
+	for _, wildcard := range []bool{false, true} {
+		for _, bundle := range bundles {
+			for _, addr := range strings.Fields(bundle.SiteAddress) {
+				if siteAddressMatchesHost(addr, host, wildcard) {
+					return bundle, addr, true
+				}
+			}
+		}
+	}
+	return CaddyfileBundle{}, "", false
+}
+
+// siteAddressMatchesHost reports whether addr is host itself or, when
+// wildcard is set, a one-label wildcard over host.
+func siteAddressMatchesHost(addr, host string, wildcard bool) bool {
+	addr = strings.Trim(strings.TrimSpace(addr), ".")
+	if !wildcard {
+		return addr == host
+	}
+	suffix, ok := strings.CutPrefix(addr, "*.")
+	if !ok {
+		return false
+	}
+	label, ok := strings.CutSuffix(host, "."+suffix)
+	return ok && label != "" && !strings.Contains(label, ".")
 }

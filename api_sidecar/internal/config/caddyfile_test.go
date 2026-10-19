@@ -193,11 +193,123 @@ func TestRenderCaddyfile_EdgeHealthRouteIsHostMatched(t *testing.T) {
 	if strings.Contains(out, "handle /health") || strings.Contains(out, "handle_path /health") {
 		t.Fatalf("/health must be host-matched through @edge_health; got:\n%s", out)
 	}
-	// Navigator's Cloudflare monitor dials the origin IP over TLS; without
-	// SNI Caddy would have no certificate to offer and fail the handshake.
-	global := out[:strings.Index(out, "(common_handlers)")]
-	if !strings.Contains(global, "default_sni edge-us-1.media-us-1.frameworks.network") {
-		t.Fatalf("expected default_sni for the edge domain in the global options; got:\n%s", global)
+}
+
+// noSNISite returns the body of the rendered catch-all "https://" site, or
+// false when none is rendered.
+func noSNISite(t *testing.T, caddyfile string) (string, bool) {
+	t.Helper()
+	if strings.Count(caddyfile, "\nhttps:// {") > 1 {
+		t.Fatalf("more than one catch-all site rendered:\n%s", caddyfile)
+	}
+	_, block, ok := strings.Cut(caddyfile, "\nhttps:// {\n")
+	if !ok {
+		return "", false
+	}
+	block, _, _ = strings.Cut(block, "\n}\n")
+	return block, true
+}
+
+func globalOptions(caddyfile string) string {
+	global, _, _ := strings.Cut(caddyfile, "\n}\n")
+	return global
+}
+
+// Navigator's Cloudflare monitor dials the origin IP over TLS without SNI.
+// Caddy picks a loaded certificate only through the SNI-matched policy of its
+// site, so the edge's loaded certificate must also be loaded by a catch-all
+// site; default_sni would never reach it. TestEdgeCaddyfile_NoSNIHandshake_RealCaddy
+// (caddy_verify) proves the handshake against real Caddy.
+func TestRenderCaddyfile_NoSNIClientGetsLoadedEdgeCertificate(t *testing.T) {
+	p := baseParams()
+	// The bundle serving the edge domain is not the first one.
+	p.Bundles[0], p.Bundles[1] = p.Bundles[1], p.Bundles[0]
+	p.EdgeDomain = "edge-us-1.media-us-1.frameworks.network"
+
+	out, err := RenderCaddyfile(p)
+	if err != nil {
+		t.Fatalf("RenderCaddyfile: %v", err)
+	}
+	site, ok := noSNISite(t, out)
+	if !ok {
+		t.Fatalf("no catch-all site for SNI-less clients:\n%s", out)
+	}
+	wantTLS := "tls /etc/frameworks/certs/bundles/cluster_media-us-1.crt /etc/frameworks/certs/bundles/cluster_media-us-1.key"
+	var lines []string
+	for line := range strings.SplitSeq(site, "\n") {
+		if line = strings.TrimSpace(line); line != "" && !strings.HasPrefix(line, "#") {
+			lines = append(lines, line)
+		}
+	}
+	if len(lines) != 2 || lines[0] != wantTLS || lines[1] != "respond 421" {
+		t.Fatalf("catch-all site = %q, want [%q \"respond 421\"]", lines, wantTLS)
+	}
+	if strings.Contains(globalOptions(out), "default_sni") {
+		t.Fatalf("default_sni cannot select a loaded certificate and must not be rendered:\n%s", globalOptions(out))
+	}
+}
+
+// An exact site address for the edge domain wins over a wildcard covering it,
+// as Caddy's own certificate selection does.
+func TestRenderCaddyfile_NoSNIPrefersExactEdgeDomainBundle(t *testing.T) {
+	p := baseParams()
+	p.EdgeDomain = "edge-us-1.media-us-1.frameworks.network"
+	p.Bundles = append(p.Bundles, CaddyfileBundle{
+		SiteAddress: p.EdgeDomain,
+		TLSCertPath: "/etc/frameworks/certs/bundles/edge.crt",
+		TLSKeyPath:  "/etc/frameworks/certs/bundles/edge.key",
+	})
+
+	out, err := RenderCaddyfile(p)
+	if err != nil {
+		t.Fatalf("RenderCaddyfile: %v", err)
+	}
+	site, ok := noSNISite(t, out)
+	if !ok || !strings.Contains(site, "tls /etc/frameworks/certs/bundles/edge.crt /etc/frameworks/certs/bundles/edge.key") {
+		t.Fatalf("catch-all site does not load the exact edge bundle:\n%s", out)
+	}
+}
+
+// A managed certificate is cached under the site address it was obtained for,
+// and default_sni is an exact cache lookup, so it names that address. A
+// catch-all site could never obtain a certificate of its own.
+func TestRenderCaddyfile_NoSNIClientGetsManagedEdgeCertificate(t *testing.T) {
+	for _, tc := range []struct {
+		name, siteAddress string
+	}{
+		{name: "edge domain site", siteAddress: "edge-us-1.media-us-1.frameworks.network"},
+		{name: "wildcard site", siteAddress: "*.media-us-1.frameworks.network"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := baseParams()
+			p.EdgeDomain = "edge-us-1.media-us-1.frameworks.network"
+			p.Bundles = []CaddyfileBundle{p.Bundles[1], {SiteAddress: tc.siteAddress}}
+
+			out, err := RenderCaddyfile(p)
+			if err != nil {
+				t.Fatalf("RenderCaddyfile: %v", err)
+			}
+			if _, ok := noSNISite(t, out); ok {
+				t.Fatalf("catch-all site rendered for a managed certificate:\n%s", out)
+			}
+			global := globalOptions(out)
+			if got := strings.Count(global, "default_sni"); got != 1 || !strings.Contains(global, "\tdefault_sni "+tc.siteAddress+"\n") {
+				t.Fatalf("global options want default_sni %s once; got:\n%s", tc.siteAddress, global)
+			}
+		})
+	}
+}
+
+func TestRenderCaddyfile_NoSNIUnchangedWhenNoBundleServesEdgeDomain(t *testing.T) {
+	p := baseParams()
+	p.EdgeDomain = "edge-us-1.media-eu-1.frameworks.network"
+
+	out, err := RenderCaddyfile(p)
+	if err != nil {
+		t.Fatalf("RenderCaddyfile: %v", err)
+	}
+	if _, ok := noSNISite(t, out); ok || strings.Contains(globalOptions(out), "default_sni") {
+		t.Fatalf("no bundle serves the edge domain, yet an SNI-less fallback is rendered:\n%s", out)
 	}
 }
 
@@ -209,8 +321,11 @@ func TestRenderCaddyfile_EdgeHealthAbsentWhenEdgeDomainEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RenderCaddyfile: %v", err)
 	}
-	if strings.Contains(out, "edge_health") || strings.Contains(out, "path /health") || strings.Contains(out, "default_sni") {
+	if strings.Contains(out, "edge_health") || strings.Contains(out, "path /health") {
 		t.Fatalf("did not expect edge health route without EdgeDomain; got:\n%s", out)
+	}
+	if _, ok := noSNISite(t, out); ok || strings.Contains(globalOptions(out), "default_sni") {
+		t.Fatalf("did not expect an SNI-less fallback without EdgeDomain; got:\n%s", out)
 	}
 }
 
