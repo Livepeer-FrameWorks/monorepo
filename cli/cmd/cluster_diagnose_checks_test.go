@@ -243,6 +243,36 @@ func TestHostCrashProbeParsesUnitFailuresCoreDumpsAndKernelFaults(t *testing.T) 
 	}
 }
 
+// A Restart=always unit whose main process exits 0 (Helmsman after a
+// self-update) is restarted by systemd without being a crash; a restart after
+// a failed exit still is, even later in the same window.
+func TestHostCrashProbeSkipsRestartsAfterCleanExit(t *testing.T) {
+	probe := hostCrashProbe("24 hours ago")
+	for _, pattern := range []string{"Deactivated successfully", "Succeeded"} {
+		if !strings.Contains(probe, pattern) {
+			t.Fatalf("crash probe does not collect %q lines:\n%s", pattern, probe)
+		}
+	}
+	output := strings.Join([]string{
+		"##systemd",
+		"frameworks-helmsman.service: Deactivated successfully.",
+		"frameworks-helmsman.service: Scheduled restart job, restart counter is at 1.",
+		"legacy.service: Succeeded.",
+		"legacy.service: Scheduled restart job, restart counter is at 1.",
+		"frameworks-helmsman.service: Failed with result 'exit-code'.",
+		"frameworks-helmsman.service: Scheduled restart job, restart counter is at 2.",
+		"frameworks-helmsman.service: Scheduled restart job, restart counter is at 3.",
+		"##coredump",
+		"##kernel",
+		"##end",
+	}, "\n")
+	findings := parseHostCrashProbe(output).findings()
+	want := []string{"frameworks-helmsman.service: failed 1 time(s) (exit-code x1), restarted automatically 2 time(s)"}
+	if strings.Join(findings, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("findings = %q, want %q", findings, want)
+	}
+}
+
 func TestDiagnoseCrashesProbesEdgesAndCountsFindings(t *testing.T) {
 	targets := []diagnoseHost{
 		{Name: "core", Host: inventory.Host{Name: "core"}},

@@ -17,15 +17,18 @@ import (
 )
 
 // hostCrashProbe reads, from the journal since SINCE, the systemd manager's
-// unit failures and automatic restarts, systemd-coredump's dumps, and the
-// kernel's segfault, general-protection and OOM-kill reports. It reads only;
-// sections are separated by ## markers.
+// unit failures, clean deactivations and automatic restarts, systemd-coredump's
+// dumps, and the kernel's segfault, general-protection and OOM-kill reports.
+// It reads only; sections are separated by ## markers. systemd logs
+// "Deactivated successfully." (248+) or "Succeeded." (240-247) when a unit's
+// process exited cleanly, and "Failed with result" otherwise, before it
+// schedules a restart.
 func hostCrashProbe(since string) string {
 	return fmt.Sprintf(`set +e
 SINCE=%s
 echo "##systemd"
 journalctl _PID=1 --since "$SINCE" --no-pager -o cat 2>/dev/null \
-  | grep -E '\.service: (Failed with result|Scheduled restart job|Main process exited, code=dumped)'
+  | grep -E '\.service: (Failed with result|Deactivated successfully|Succeeded\.|Scheduled restart job|Main process exited, code=dumped)'
 echo "##coredump"
 journalctl -t systemd-coredump --since "$SINCE" --no-pager -o cat 2>/dev/null \
   | grep -E '^Process [0-9]+ \(.*\) of user [0-9]+ (dumped core|terminated abnormally)'
@@ -38,6 +41,7 @@ echo "##end"
 
 var (
 	crashUnitFailed   = regexp.MustCompile(`^(\S+\.service): Failed with result '([^']+)'`)
+	crashUnitClean    = regexp.MustCompile(`^(\S+\.service): (?:Deactivated successfully|Succeeded)\.`)
 	crashUnitRestart  = regexp.MustCompile(`^(\S+\.service): Scheduled restart job`)
 	crashCoreDump     = regexp.MustCompile(`^Process [0-9]+ \((.*)\) of user [0-9]+ (dumped core|terminated abnormally)`)
 	crashKernelFault  = regexp.MustCompile(`(?:traps: )?([^\s\[]+)\[[0-9]+\]:? (segfault at|general protection)`)
@@ -63,6 +67,11 @@ func parseHostCrashProbe(output string) hostCrashReport {
 		KernelFaults: map[string]int{},
 		OOMKills:     map[string]int{},
 	}
+	// cleanExit tracks, per unit, whether the latest stop before a scheduled
+	// restart was a clean exit. A Restart=always unit that exits 0 is
+	// restarted by design and is not counted; a restart with no recorded
+	// clean exit before it is.
+	cleanExit := map[string]bool{}
 	section := ""
 	for _, raw := range strings.Split(output, "\n") {
 		line := strings.TrimSpace(raw)
@@ -80,8 +89,14 @@ func parseHostCrashProbe(output string) hostCrashReport {
 					report.UnitFailures[m[1]] = map[string]int{}
 				}
 				report.UnitFailures[m[1]][m[2]]++
+				cleanExit[m[1]] = false
+			} else if m := crashUnitClean.FindStringSubmatch(line); m != nil {
+				cleanExit[m[1]] = true
 			} else if m := crashUnitRestart.FindStringSubmatch(line); m != nil {
-				report.UnitRestarts[m[1]]++
+				if !cleanExit[m[1]] {
+					report.UnitRestarts[m[1]]++
+				}
+				cleanExit[m[1]] = false
 			}
 		case "##coredump":
 			if m := crashCoreDump.FindStringSubmatch(line); m != nil {
@@ -112,7 +127,8 @@ func countList(counts map[string]int) string {
 }
 
 // findings lists one line per crashed unit and per crash class. Every finding
-// is a failure: a unit that failed or restarted on its own, a core dump, a
+// is a failure: a unit that failed or was restarted after an exit that was not
+// clean, a core dump, a
 // kernel-reported fault or an OOM kill all mean a process died unplanned.
 func (r hostCrashReport) findings() []string {
 	var out []string
