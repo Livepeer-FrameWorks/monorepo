@@ -23,9 +23,12 @@ package orchestrator
 //     max_unavailable=ceil(N/3), region_stagger=true. Always keep one
 //     region fully healthy.
 //
-//   - Interface / per-host (nginx, caddy, vmagent, vmauth, chartroom,
-//     foredeck, logbook): max_unavailable=1, no stagger. Plenty of
-//     replicas, but reload-preferred means low-blast even at one host.
+//   - Front-door per-host (nginx, caddy): max_unavailable=1, no stagger.
+//     Reload-preferred means low-blast even at one host.
+//
+//   - Per-host telemetry and UI agents (vmagent, vmauth, chartroom, foredeck,
+//     logbook): max_unavailable=all, no stagger. They tolerate a brief pause
+//     on every host together.
 //
 //   - Singletons (commodore, quartermaster, purser, navigator, lookout, bosun, skipper,
 //     periscope-query, periscope-metering, deckhand, helmsman, livepeer-signer, mirrormaker

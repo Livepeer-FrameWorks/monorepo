@@ -153,7 +153,9 @@ the dependency order across services and rolls one service's replicas by the
 deploy's tier: CONTROL one at a time with the first as canary, MEDIA one per
 cell with cells in parallel, OTHER together. The effective `MaxUnavailable`
 (`DefaultStrategyFor` plus the manifest `update_strategy` override) caps the
-parallel lanes, and every built-in default is 1. Yugabyte keeps its master
+parallel lanes. The built-in default is 1 for front-door ingress, quorum and
+stateful tiers; stateless workers and per-host telemetry agents default to all
+replicas at once. Yugabyte keeps its master
 roll. Foghorn takes its cells one at a time (`cli/cmd/release_media_cell_gate.go`):
 a cell whose replicas all enforce signed placement refuses every tenant whose
 authority is still on schema 1, so after each cell the upgrade reads Commodore

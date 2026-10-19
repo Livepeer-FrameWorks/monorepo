@@ -38539,8 +38539,8 @@ service's tier:
 
 `max_unavailable` caps how many replicas of a media or other service are down at once. The
 built-in default is `1` for Foghorn, Chandler, and the control services. Stateless workers such as
-Signalman, Decklog, the Periscope services, Lookout, Bosun, Skipper, Deckhand, and Steward default
-to all replicas at once. Override it per service in the manifest:
+Signalman, Decklog, the Periscope services, Lookout, Bosun, Skipper, Deckhand, and Steward, and the
+per-host agents Logbook, vmagent, vmauth, Chartroom, and Foredeck, default to all replicas at once. Override it per service in the manifest:
 
 ```yaml
 services:
