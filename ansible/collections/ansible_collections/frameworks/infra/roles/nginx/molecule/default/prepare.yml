@@ -9,6 +9,15 @@
   become: true
   gather_facts: true
   tasks:
+    # Privateer owns the ingress reload trigger; its role creates the user
+    # before nginx runs on a provisioned host.
+    - name: Create the Privateer system user
+      ansible.builtin.user:
+        name: privateer
+        system: true
+        create_home: false
+        shell: /usr/sbin/nologin
+
     - name: Apply frameworks.infra.nginx with a wildcard local listener
       ansible.builtin.include_role:
         name: frameworks.infra.nginx
