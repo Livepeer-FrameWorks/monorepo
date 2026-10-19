@@ -215,7 +215,9 @@ func runMigrate(cmd *cobra.Command, rc *resolvedCluster, dryRun bool, phase stri
 	}
 
 	if dryRun {
-		fmt.Fprintln(out, "Dry-run complete; ansible check output above shows pending changes")
+		// Migration files exist for these databases; which of them are still unapplied is what each branch's
+		// check run above reports (a recap with changed=0 has none pending).
+		fmt.Fprintln(out, "Dry-run complete; the check output above lists any unapplied migrations (changed=0 means none are pending)")
 		return nil
 	}
 	if len(branchesWithItems) == 0 {
