@@ -394,3 +394,25 @@ func TestPlannedUpgradeTaskCarriesTheYugabyteNodeIdentity(t *testing.T) {
 		t.Fatal("a host outside the universe resolved a task")
 	}
 }
+
+// A replica already on the target artifact joins the upgrade only when its
+// precheck finds a configuration change; a dry run takes the same decision.
+func TestReplicaNeedsUpgradeConsultsThePrecheckOnlyOnTheTarget(t *testing.T) {
+	calls := 0
+	precheck := func(changed bool) func() (bool, error) {
+		return func() (bool, error) { calls++; return changed, nil }
+	}
+	if needed, err := replicaNeedsUpgrade(false, precheck(false)); err != nil || !needed || calls != 0 {
+		t.Fatalf("off-target replica: needed=%v err=%v precheck calls=%d; want upgrade without a precheck", needed, err, calls)
+	}
+	if needed, err := replicaNeedsUpgrade(true, precheck(false)); err != nil || needed || calls != 1 {
+		t.Fatalf("converged replica on target: needed=%v err=%v calls=%d; want skip after one precheck", needed, err, calls)
+	}
+	if needed, err := replicaNeedsUpgrade(true, precheck(true)); err != nil || !needed {
+		t.Fatalf("changed config on target: needed=%v err=%v; want converge", needed, err)
+	}
+	want := errors.New("precheck failed")
+	if _, err := replicaNeedsUpgrade(true, func() (bool, error) { return false, want }); !errors.Is(err, want) {
+		t.Fatalf("precheck error not returned: %v", err)
+	}
+}

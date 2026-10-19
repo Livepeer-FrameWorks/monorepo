@@ -983,15 +983,19 @@ func upgradeServiceOnHost(ctx context.Context, cmd *cobra.Command, rc *resolvedC
 	// A Docker tag is not an artifact identity. Release manifests pin an OCI digest, so a corrected image under the
 	// same version must still reconcile. A replica already on the target artifact converges only when the role's
 	// check-mode precheck finds its rendered config (env, secrets, role files) differs, so a rerun applies config
-	// fixes without redeploying unchanged replicas.
-	if deployedArtifactMatches(state, svcInfo) && !dryRun {
-		needed, precheckErr := currentArtifactNeedsConvergence(ctx, cmd.OutOrStdout(), prov, host, config, svcInfo.Version)
-		if precheckErr != nil {
-			return result, fmt.Errorf("%s on %s: %w", serviceName, host.ExternalIP, precheckErr)
-		}
-		if !needed {
-			return result, nil
-		}
+	// fixes without redeploying unchanged replicas. The precheck is itself check mode, so a dry run makes the same
+	// decision and reports a converged replica as one the release skips.
+	onTarget := deployedArtifactMatches(state, svcInfo)
+	needed, precheckErr := replicaNeedsUpgrade(onTarget, func() (bool, error) {
+		return currentArtifactNeedsConvergence(ctx, cmd.OutOrStdout(), prov, host, config, svcInfo.Version)
+	})
+	if precheckErr != nil {
+		return result, fmt.Errorf("%s on %s: %w", serviceName, host.ExternalIP, precheckErr)
+	}
+	if !needed {
+		return result, nil
+	}
+	if onTarget {
 		canRollback = false
 		rollbackDisabledReason = "the host already runs this version; only its configuration changed"
 	}
@@ -1124,6 +1128,15 @@ func upgradeTargetLabel(info *gitops.ServiceInfo) string {
 // currentArtifactNeedsConvergence runs the role's check-mode precheck for a replica that already runs the target
 // artifact and reports whether its rendered configuration differs, naming the role tasks that would change. A
 // precheck that cannot run fails the replica rather than leaving a configuration fix unapplied.
+// replicaNeedsUpgrade reports whether a replica takes part in the upgrade: one not on the target artifact always does,
+// one already on it only when precheck finds its configuration changed.
+func replicaNeedsUpgrade(onTarget bool, precheck func() (bool, error)) (bool, error) {
+	if !onTarget {
+		return true, nil
+	}
+	return precheck()
+}
+
 func currentArtifactNeedsConvergence(ctx context.Context, out io.Writer, prov provisioner.Provisioner, host inventory.Host, config provisioner.ServiceConfig, version string) (bool, error) {
 	inspection, err := provisionInspectChanges(ctx, prov, host, config, nil)
 	if err != nil {
