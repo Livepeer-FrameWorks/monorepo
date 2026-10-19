@@ -49,7 +49,7 @@ provisioner:
         yugabyte_replication_factor: 1
         # A node binds its WireGuard address only; the container's own address
         # stands in for it, so nothing listens on loopback.
-        yugabyte_node_address: "{{ ansible_default_ipv4.address }}"
+        yugabyte_node_address: "{{ ansible_facts.default_ipv4.address }}"
 
 verifier:
   name: ansible
