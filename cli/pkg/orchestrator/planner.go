@@ -751,6 +751,10 @@ func (p *Planner) addApplicationTasks(graph *DependencyGraph) error {
 	if signalmanErr != nil {
 		return signalmanErr
 	}
+	periscopeIngestTasks, ingestErr := p.taskNamesForDeploy("periscope-ingest")
+	if ingestErr != nil {
+		return ingestErr
+	}
 
 	for name, svc := range p.manifest.Services {
 		if !svc.Enabled {
@@ -804,6 +808,10 @@ func (p *Planner) addApplicationTasks(graph *DependencyGraph) error {
 				// warm Navigator, but a greenfield provision must start Navigator
 				// first or Foghorn exhausts its certificate wait and exits.
 				task.DependsOn = append(task.DependsOn, navigatorTasks...)
+				// Foghorn forwards stream ends it infers from a vanished stream;
+				// only a current Periscope Ingest dedupes them against Mist's own
+				// STREAM_END, so ingest rolls first.
+				task.DependsOn = append(task.DependsOn, periscopeIngestTasks...)
 			}
 			if name == "skipper" {
 				if bridge, ok := p.manifest.Services["bridge"]; ok && bridge.Enabled {

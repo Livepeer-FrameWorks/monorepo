@@ -1114,6 +1114,34 @@ func TestPlan_FoghornWaitsForNavigator(t *testing.T) {
 	}
 }
 
+func TestPlan_FoghornWaitsForPeriscopeIngest(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Hosts: map[string]inventory.Host{
+			"core":  {Roles: []string{"control"}},
+			"media": {Roles: []string{"control"}},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"periscope-ingest": {Enabled: true, Host: "core"},
+			"chandler-eu":      {Enabled: true, Deploy: "chandler", Cluster: "media-eu", Host: "media"},
+			"foghorn-eu":       {Enabled: true, Deploy: "foghorn", Cluster: "media-eu", Host: "media"},
+		},
+	}
+
+	plan, err := NewPlanner(manifest).Plan(context.Background(), ProvisionOptions{Phase: PhaseApplications})
+	if err != nil {
+		t.Fatal(err)
+	}
+	batchOf := map[string]int{}
+	for batchIndex, batch := range plan.Batches {
+		for _, task := range batch {
+			batchOf[task.Name] = batchIndex
+		}
+	}
+	if batchOf["foghorn-eu"] <= batchOf["periscope-ingest"] {
+		t.Fatalf("foghorn batch %d must follow Periscope Ingest batch %d: an older ingest projects Foghorn's inferred stream ends as real ones", batchOf["foghorn-eu"], batchOf["periscope-ingest"])
+	}
+}
+
 // A Foghorn whose cluster has no Chandler is rejected even if a Chandler exists in a DIFFERENT cluster.
 func TestPlan_FoghornChandlerDifferentClusterFails(t *testing.T) {
 	manifest := &inventory.Manifest{
