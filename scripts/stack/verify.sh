@@ -11,6 +11,7 @@
 #   STACK_REPEAT=N          repeat each selected scenario N times (default 1)
 #   STACK_DVR_WINDOW_SECONDS=N  the demo tier's DVR window, so the chapter length
 #                           scenarios 04 and 39 record (default 120; 39 needs >=1800)
+#   STACK_SWEEP=0           skip the post-run invariant sweep (sweep.sh)
 #
 # Exit status: 0 all passed; 1 a scenario or the log check failed; 2 nothing
 # failed but a scenario was BLOCKED (the stack lacked something it needs).
@@ -105,6 +106,16 @@ dead_containers() {
 
 failed=0 blocked=0
 summary=()
+# The sweep checks every entity created from here on, attributes each to the
+# scenario whose window it falls in, and counts container restarts against
+# what the containers had before the scenarios.
+run_since=$(date +%s)
+sweep_windows="$STACK_STATE_DIR/sweep-scenarios.tsv"
+sweep_baseline="$STACK_STATE_DIR/sweep-restarts.txt"
+: >"$sweep_windows"
+for id in $(stack_compose ps -a -q 2>/dev/null); do
+  docker inspect -f '{{index .Config.Labels "com.docker.compose.service"}} {{.RestartCount}}' "$id" 2>/dev/null
+done >"$sweep_baseline"
 dead="$(dead_containers)"
 if [ -n "$dead" ]; then
   printf 'containers down before the scenarios:\n%s\n' "$dead"
@@ -117,8 +128,10 @@ for path in "${scenarios[@]}"; do
     label="$name ($iteration/$repeat)"
     printf '\n==== %s ====\n' "$label"
     scenario_since="$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)"
+    window_start=$(date +%s)
     stack_compose exec -T -e STACK_DVR_WINDOW_SECONDS="${STACK_DVR_WINDOW_SECONDS:-120}" stack-runner bash "$path"
     rc=$?
+    printf '%s\t%s\t%s\n' "$name" "$window_start" "$(date +%s)" >>"$sweep_windows"
     case "$rc" in
       0) summary+=("PASS     $label") ;;
       2) summary+=("BLOCKED  $label"); blocked=1 ;;
@@ -146,6 +159,20 @@ if bash "$here/logcheck.sh" "$logs_since"; then
 else
   summary+=("FAIL     logcheck")
   failed=1
+fi
+
+if [ "${STACK_SWEEP:-1}" != 0 ]; then
+  printf '\n==== sweep ====\n'
+  sweep_started=$(date +%s)
+  stack_compose exec -T -e STACK_SWEEP_WAIT="${STACK_SWEEP_WAIT:-240}" stack-runner bash /repo/scripts/stack/sweep.sh \
+    "$run_since" "/repo/.stack/slot-$STACK_SLOT/sweep-scenarios.tsv" "/repo/.stack/slot-$STACK_SLOT/sweep-restarts.txt"
+  rc=$?
+  label="sweep ($(($(date +%s) - sweep_started))s)"
+  case "$rc" in
+    0) summary+=("PASS     $label") ;;
+    2) summary+=("BLOCKED  $label"); blocked=1 ;;
+    *) summary+=("FAIL     $label"); failed=1 ;;
+  esac
 fi
 
 printf '\n==== stack slot %s summary ====\n' "$STACK_SLOT"

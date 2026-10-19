@@ -273,10 +273,46 @@ gql_ok() { # gql_ok <response> <jq path to typename> <wanted typename>
 }
 
 create_stream() { # create_stream <name> <record:true|false> -> JSON {id streamId playbackId streamKey}
-  gql 'mutation($i:CreateStreamInput!){createStream(input:$i){__typename ... on Stream{id streamId playbackId streamKey record dvrChapterMode} ... on ValidationError{message}}}' \
-    "$(jq -cn --arg n "$1" --argjson r "$2" '{i:{name:$n,record:$r}}')" | jq -c '.data.createStream // .'
+  local r
+  r=$(gql 'mutation($i:CreateStreamInput!){createStream(input:$i){__typename ... on Stream{id streamId playbackId streamKey record dvrChapterMode} ... on ValidationError{message}}}' \
+    "$(jq -cn --arg n "$1" --argjson r "$2" '{i:{name:$n,record:$r}}')" | jq -c '.data.createStream // .')
+  sweep_ledger created "$(echo "$r" | jq -r '.id // empty')" "$(echo "$r" | jq -r '.streamId // empty')"
+  printf '%s\n' "$r"
 }
-delete_stream() { gql 'mutation($id:ID!){deleteStream(id:$id){__typename}}' "$(jq -cn --arg id "$1" '{id:$id}')" >/dev/null; }
+# Scenarios delete their streams before the sweep runs, so the stream's API
+# round-trip (scripts/stack/sweep.py, invariant "api") is captured here, just
+# before the deletion.
+delete_stream() {
+  sweep_ledger deleted "$1" ''
+  gql 'mutation($id:ID!){deleteStream(id:$id){__typename}}' "$(jq -cn --arg id "$1" '{id:$id}')" >/dev/null
+}
+
+# ---- post-run sweep ---------------------------------------------------------
+
+# sweep_ledger <created|deleted> <stream relay id> [stream uuid]: records a stream
+# for the sweep; a deletion carries the stream's stream(id) and node(id)
+# answers just before it.
+sweep_ledger() {
+  [ -n "$2" ] || return 0
+  local stream='null' node='null'
+  if [ "$1" = deleted ]; then
+    stream=$(gql 'query($id:ID!){stream(id:$id){id streamId}}' "$(jq -cn --arg id "$2" '{id:$id}')")
+    node=$(gql 'query($id:ID!){node(id:$id){id ... on Stream{streamId}}}' "$(jq -cn --arg id "$2" '{id:$id}')")
+  fi
+  jq -cn --arg k "$1" --arg id "$2" --arg u "${3:-}" --arg s "$STACK_SCENARIO" --argjson t "$(date +%s)" \
+    --argjson st "${stream:-null}" --argjson nd "${node:-null}" \
+    '{t:$t, scenario:$s, kind:$k, id:$id, stream_uuid:$u, stream:$st, node:$nd}' \
+    >>"$STACK_STATE_DIR/sweep-ledger.jsonl" 2>/dev/null || true
+}
+# sweep_allow <invariant> <entity> <detail regex> <reason>: a failure state this
+# scenario produces on purpose. Narrow by design: one invariant (analytics, api,
+# artifacts, dvr, host), one exact entity as the sweep names it (e.g.
+# "vod <artifact hash>", "container edge"), and a regex the failure detail must
+# match. Anything else about the entity still fails.
+sweep_allow() {
+  [ -n "$2" ] || return 0
+  printf '%s\t%s\t%s\t%s\t%s\n' "$STACK_SCENARIO" "$1" "$2" "$3" "$4" >>"$STACK_STATE_DIR/sweep-allow.tsv"
+}
 
 # ---- databases --------------------------------------------------------------
 

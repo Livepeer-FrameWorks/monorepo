@@ -137,6 +137,8 @@ log "import of a missing source fails fast"
 R=$(gql 'mutation($i:ImportVodAssetInput!){importVodAsset(input:$i){__typename ... on VodAsset{id artifactHash status} ... on ValidationError{message}}}' \
   "$(jq -cn --arg u "$MISSING_URL" '{i:{url:$u,filename:"missing.mp4",title:"stack missing"}}')")
 MID=$(echo "$R" | jq -r '.data.importVodAsset.id // empty')
+sweep_allow artifacts "vod $(echo "$R" | jq -r '.data.importVodAsset.artifactHash // empty')" '^status failed' \
+  'the import of a missing source must fail'
 if [ -n "$MID" ]; then
   failed_fast() { local s; s=$(vod_status "$MID"); [ "$s" = FAILED ] && return 0; [ "$s" = READY ] && return 2; return 1; }
   eventually 60 "missing-source import reaches FAILED within 60 s" failed_fast

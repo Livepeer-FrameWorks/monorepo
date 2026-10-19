@@ -30,6 +30,18 @@ KEY=$(echo "$S" | jq -r '.streamKey // empty')
 check "record:true without settings defaults to WINDOW_SIZED" json_has "$S" '.dvrChapterMode == "WINDOW_SIZED"'
 PUB=$(publish "$EDGE_A_RTMP" "$KEY" 854x480 15 "$PUSH")
 trap 'kill "$PUB" 2>/dev/null' EXIT
+# A second recording whose publisher stops 5 s before its first chapter
+# boundary: the writer outlives the publisher by Mist's resume window (about
+# 15 s) and crosses the boundary with no media after it. The post-run sweep
+# checks its chapters (scripts/stack/sweep.py, invariant "dvr"); staging left
+# such a tail as an empty chapter FAILED_SOURCE_MISSING.
+TAIL_KEY=$(create_stream "stack-recording-tail-$(date +%s)" true | jq -r '.streamKey // empty')
+if [ -n "$TAIL_KEY" ]; then
+  TAIL_PUB=$(publish "$EDGE_A_RTMP" "$TAIL_KEY" 640x360 15 $((WINDOW - 5)))
+  trap 'kill "$PUB" "$TAIL_PUB" 2>/dev/null' EXIT
+else
+  fail "createStream for the boundary-tail recording"
+fi
 
 dvr_id() { pg commodore "SELECT id FROM commodore.dvr_recordings WHERE tenant_id='$STACK_TENANT_ID' AND stream_id='$UUID' ORDER BY created_at DESC LIMIT 1"; }
 chapters() { gql 'query($d:ID!){dvrChapters(dvrId:$d){chapters{chapterId mode state isCurrent playbackId segmentCount startMs endMs}}}' "$(jq -cn --arg d "$DVR" '{d:$d}')" | jq -c '.data.dvrChapters.chapters // []'; }

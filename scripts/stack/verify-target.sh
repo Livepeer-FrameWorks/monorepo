@@ -75,6 +75,9 @@ if printf '%s\n' "${scenarios[@]}" | grep -Eq '/27-'; then
 fi
 
 run_since="$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)"
+sweep_since=$(date +%s)
+sweep_windows="$STACK_STATE_DIR/sweep-scenarios.tsv"
+: >"$sweep_windows"
 failed=0 blocked=0 summary=()
 for path in "${scenarios[@]}"; do
   name="$(basename "$path" .sh)"
@@ -82,8 +85,10 @@ for path in "${scenarios[@]}"; do
     label="$name ($iteration/$repeat)"
     printf '\n==== %s ====\n' "$label"
     scenario_since="$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)"
+    window_start=$(date +%s)
     bash "$path"
     rc=$?
+    printf '%s\t%s\t%s\n' "$name" "$window_start" "$(date +%s)" >>"$sweep_windows"
     case "$rc" in
       0) summary+=("PASS     $label") ;;
       2) summary+=("BLOCKED  $label"); blocked=1 ;;
@@ -101,6 +106,20 @@ if bash "$here/logcheck.sh" "$run_since"; then
   summary+=("PASS     logcheck")
 else
   summary+=("FAIL     logcheck"); failed=1
+fi
+# The same sweep as the stack's, read-only: API, ClickHouse and Postgres reads,
+# and the operator CLI's cluster doctor for host health.
+if [ "${STACK_SWEEP:-1}" != 0 ]; then
+  printf '\n==== sweep ====\n'
+  sweep_started=$(date +%s)
+  bash "$here/sweep.sh" "$sweep_since" "$sweep_windows"
+  rc=$?
+  label="sweep ($(($(date +%s) - sweep_started))s)"
+  case "$rc" in
+    0) summary+=("PASS     $label") ;;
+    2) summary+=("BLOCKED  $label"); blocked=1 ;;
+    *) summary+=("FAIL     $label"); failed=1 ;;
+  esac
 fi
 printf '\n==== staging summary ====\n'
 printf '%s\n' "${summary[@]}"
