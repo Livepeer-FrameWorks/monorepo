@@ -422,6 +422,7 @@ type Querier interface {
 	LatestActiveProcessingSourceURL(ctx context.Context, artifactHash sql.NullString) (sql.NullString, error)
 	LatestArtifactNodeID(ctx context.Context, artifactHash string) (string, error)
 	LatestArtifactNodeWithSize(ctx context.Context, artifactHash string) (LatestArtifactNodeWithSizeRow, error)
+	LatestEndedNodeIngestSession(ctx context.Context, arg LatestEndedNodeIngestSessionParams) (LatestEndedNodeIngestSessionRow, error)
 	LatestLiveOriginNode(ctx context.Context, artifactHash string) (LatestLiveOriginNodeRow, error)
 	LatestPlayableDVRChapterID(ctx context.Context, artifactHash string) (sql.NullString, error)
 	LatestRecordingNode(ctx context.Context, artifactHash string) (string, error)

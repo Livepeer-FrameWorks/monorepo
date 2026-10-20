@@ -98,7 +98,51 @@ func IngestSessionEndEventID(ctx context.Context, tenantID, internalName, nodeID
 	if err != nil {
 		return "", false, fmt.Errorf("resolve ended ingest session: %w", err)
 	}
-	return uuid.NewSHA1(uuid.NameSpaceURL, []byte("frameworks:ingest-session-end:"+sessionID)).String(), true, nil
+	return SessionEndEventID(sessionID), true, nil
+}
+
+// SessionEndEventID is the request/event id of the end of ingest session sessionID.
+func SessionEndEventID(sessionID string) string {
+	return uuid.NewSHA1(uuid.NameSpaceURL, []byte("frameworks:ingest-session-end:"+sessionID)).String()
+}
+
+// NodeConnectedSince returns when the node's current control connection to this replica began.
+func NodeConnectedSince(nodeID string) (time.Time, bool) {
+	if registry == nil {
+		return time.Time{}, false
+	}
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+	c, ok := registry.conns[strings.TrimSpace(nodeID)]
+	if !ok || c == nil || c.registeredAt.IsZero() {
+		return time.Time{}, false
+	}
+	return c.registeredAt, true
+}
+
+// EndedNodeIngestSession is the ingest session a node last carried for a stream.
+type EndedNodeIngestSession struct {
+	SessionID, TenantID, StreamID string
+}
+
+// LatestEndedNodeIngestSession returns the latest confirmed ingest session of the stream on nodeID
+// that started at or before listedUnixMillis and has ended, provided no session of the stream is
+// active anywhere. Node-scoped lookup over Foghorn's own schema: the caller holds only the node's
+// stream listing, and the returned row carries the tenant every later step is scoped to.
+func LatestEndedNodeIngestSession(ctx context.Context, nodeID, internalName string, listedUnixMillis int64) (EndedNodeIngestSession, bool, error) {
+	if db == nil || listedUnixMillis <= 0 || strings.TrimSpace(nodeID) == "" || strings.TrimSpace(internalName) == "" {
+		return EndedNodeIngestSession{}, false, nil
+	}
+	row, err := foghorndb.New(db).LatestEndedNodeIngestSession(ctx, foghorndb.LatestEndedNodeIngestSessionParams{
+		NodeID: nodeID, StreamInternalName: internalName, ListedUnixMillis: listedUnixMillis,
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return EndedNodeIngestSession{}, false, nil
+	}
+	if err != nil {
+		return EndedNodeIngestSession{}, false, fmt.Errorf("look up node's ended ingest session: %w", err)
+	}
+	return EndedNodeIngestSession{SessionID: row.ID, TenantID: row.TenantID, StreamID: row.StreamID}, true, nil
 }
 
 // ErrOfflineEffectSuperseded means a newer source transition already won the shared revision CAS.

@@ -136,6 +136,8 @@ type Processor struct {
 	quartermasterOutage       atomic.Pointer[federation.CentralOutageBackoff]
 	tenantAdmission           tenantAdmissionClient
 	decklogClient             *decklog.BatchedClient
+	lostEndsForwarded         sync.Map // session end ids forwardEndsLostAcrossReconnect sent, with when
+	nodeConnectedSince        func(nodeID string) (time.Time, bool)
 	loadBalancer              *balancer.LoadBalancer
 	geoipClient               *geoip.Reader
 	geoipCache                *cache.Cache
@@ -5047,6 +5049,78 @@ func (p *Processor) sessionEndFact(ctx context.Context, effect control.OfflineEf
 	return inferredStreamEnd(effect, trigger, lifecycle, endID, eventMillis), nil
 }
 
+// lostEndListingWindow bounds how long before a node's current control connection its last listing
+// of a stream may be for forwardEndsLostAcrossReconnect to treat the stream as having ended in the
+// gap between the connections.
+const lostEndListingWindow = 30 * time.Minute
+
+// forwardEndsLostAcrossReconnect forwards the inferred STREAM_END of an ingest session whose stream
+// ended while the node had no control connection to carry the news. Helmsman reports a vanished
+// stream by diffing consecutive Mist polls, and a restarted Helmsman starts with no previous poll,
+// so a stream that ended during the restart gets neither Mist's STREAM_END (Mist does not retry it)
+// nor a vanish report. The node's snapshot is Mist's full stream list: a stream its earlier
+// snapshots listed that no snapshot has listed since the current connection began ended in that
+// gap. Its last ended session on the node, with none active anywhere, gets the end under the same
+// session end id a Mist STREAM_END would carry, so Periscope keeps one end per session. Each id is
+// forwarded once per replica; a failed forward is retried on the next snapshot.
+func (p *Processor) forwardEndsLostAcrossReconnect(nodeID string, absent []state.AbsentNodeStream, now time.Time) {
+	connectedSinceFn := p.nodeConnectedSince
+	if connectedSinceFn == nil {
+		connectedSinceFn = control.NodeConnectedSince
+	}
+	connectedSince, ok := connectedSinceFn(nodeID)
+	if !ok {
+		return
+	}
+	p.lostEndsForwarded.Range(func(key, value any) bool {
+		if at, isTime := value.(time.Time); isTime && now.Sub(at) > lostEndListingWindow {
+			p.lostEndsForwarded.Delete(key)
+		}
+		return true
+	})
+	for _, stream := range absent {
+		listedAt := stream.SnapshotPresentAt
+		if listedAt.IsZero() || !listedAt.Before(connectedSince) || connectedSince.Sub(listedAt) > lostEndListingWindow {
+			continue
+		}
+		if err := p.forwardLostEnd(nodeID, stream.InternalName, listedAt, now); err != nil {
+			p.logger.WithError(err).WithFields(logging.Fields{
+				"node_id": nodeID, "internal_name": stream.InternalName,
+			}).Warn("Failed to forward the end of an ingest session that ended between control connections; the next snapshot retries")
+		}
+	}
+}
+
+func (p *Processor) forwardLostEnd(nodeID, internalName string, listedAt, now time.Time) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	session, found, err := control.LatestEndedNodeIngestSession(ctx, nodeID, internalName, listedAt.UnixMilli())
+	if err != nil || !found {
+		return err
+	}
+	eventMillis := now.UnixMilli()
+	endID := control.SessionEndEventID(session.SessionID)
+	if _, done := p.lostEndsForwarded.Load(endID); done {
+		return nil
+	}
+	tenantID, streamID := session.TenantID, session.StreamID
+	vanish := &ipcpb.MistTrigger{TriggerType: "STREAM_LIFECYCLE_UPDATE", NodeId: nodeID, Timestamp: now.Unix()}
+	if streamID != "" {
+		vanish.StreamId = &streamID
+	}
+	p.applyResolvedStreamContext(vanish, internalName, streamContext{TenantID: tenantID, StreamID: streamID})
+	lifecycle := &ipcpb.StreamLifecycleUpdate{NodeId: nodeID, InternalName: internalName, Status: "offline"}
+	end := inferredStreamEnd(control.OfflineEffect{TenantID: tenantID, InternalName: internalName, NodeID: nodeID}, vanish, lifecycle, endID, eventMillis)
+	if err := p.sendTriggerToDecklogContext(ctx, end); err != nil {
+		return fmt.Errorf("forward inferred STREAM_END to Decklog: %w", err)
+	}
+	p.lostEndsForwarded.Store(endID, now)
+	p.logger.WithFields(logging.Fields{
+		"node_id": nodeID, "internal_name": internalName, "ingest_generation": session.SessionID,
+	}).Info("Forwarded the end of an ingest session whose stream ended between control connections")
+	return nil
+}
+
 // offlineEventUnixMillis is the edge-clock time of an offline trigger: Mist's event time when the
 // trigger carries it, otherwise the end of the second Helmsman stamped.
 func offlineEventUnixMillis(trigger *ipcpb.MistTrigger) int64 {
@@ -6154,6 +6228,7 @@ func (p *Processor) handleNodeLifecycleUpdate(trigger *ipcpb.MistTrigger) (strin
 	// after the node's last listing has not been started by the destination
 	// yet, and a snapshot sampled before Mist asked for its source cannot list it.
 	if cleared := state.DefaultManager().ReconcileNodeStreamPresence(nu.GetNodeId(), observedStreams); len(cleared) > 0 {
+		p.forwardEndsLostAcrossReconnect(nu.GetNodeId(), cleared, time.Now())
 		for _, absent := range cleared {
 			if control.StreamRegistryInstance != nil && control.StreamRegistryInstance.ClearReplicatingForNode(absent.InternalName, nu.GetNodeId(), absent.SnapshotPresentAt) {
 				p.logger.WithFields(logging.Fields{

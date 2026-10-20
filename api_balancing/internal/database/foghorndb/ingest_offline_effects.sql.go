@@ -228,6 +228,41 @@ func (q *Queries) HasActiveIngestSession(ctx context.Context, arg HasActiveInges
 	return exists, err
 }
 
+const latestEndedNodeIngestSession = `-- name: LatestEndedNodeIngestSession :one
+SELECT s.id::text AS id, s.tenant_id::text AS tenant_id, COALESCE(s.stream_id::text, '')::text AS stream_id
+FROM foghorn.ingest_sessions s
+WHERE s.node_id = $1
+  AND s.stream_internal_name = $2
+  AND s.projection_state = 'active'
+  AND s.started_at_unix_millis <= $3::bigint
+  AND s.ended_at IS NOT NULL
+  AND NOT EXISTS (
+      SELECT 1 FROM foghorn.ingest_sessions a
+      WHERE a.tenant_id = s.tenant_id AND a.stream_internal_name = s.stream_internal_name AND a.ended_at IS NULL
+  )
+ORDER BY s.started_at_unix_millis DESC, s.id DESC
+LIMIT 1
+`
+
+type LatestEndedNodeIngestSessionParams struct {
+	NodeID             string `db:"node_id" json:"node_id"`
+	StreamInternalName string `db:"stream_internal_name" json:"stream_internal_name"`
+	ListedUnixMillis   int64  `db:"listed_unix_millis" json:"listed_unix_millis"`
+}
+
+type LatestEndedNodeIngestSessionRow struct {
+	ID       string `db:"id" json:"id"`
+	TenantID string `db:"tenant_id" json:"tenant_id"`
+	StreamID string `db:"stream_id" json:"stream_id"`
+}
+
+func (q *Queries) LatestEndedNodeIngestSession(ctx context.Context, arg LatestEndedNodeIngestSessionParams) (LatestEndedNodeIngestSessionRow, error) {
+	row := q.db.QueryRowContext(ctx, latestEndedNodeIngestSession, arg.NodeID, arg.StreamInternalName, arg.ListedUnixMillis)
+	var i LatestEndedNodeIngestSessionRow
+	err := row.Scan(&i.ID, &i.TenantID, &i.StreamID)
+	return i, err
+}
+
 const markOfflineTeardownDone = `-- name: MarkOfflineTeardownDone :execrows
 UPDATE foghorn.ingest_offline_effects
 SET teardown_done = TRUE,

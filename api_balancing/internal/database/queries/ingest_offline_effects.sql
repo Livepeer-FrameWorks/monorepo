@@ -69,6 +69,21 @@ WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
 ORDER BY started_at_unix_millis DESC, id DESC
 LIMIT 1;
 
+-- name: LatestEndedNodeIngestSession :one
+SELECT s.id::text AS id, s.tenant_id::text AS tenant_id, COALESCE(s.stream_id::text, '')::text AS stream_id
+FROM foghorn.ingest_sessions s
+WHERE s.node_id = sqlc.arg(node_id)
+  AND s.stream_internal_name = sqlc.arg(stream_internal_name)
+  AND s.projection_state = 'active'
+  AND s.started_at_unix_millis <= sqlc.arg(listed_unix_millis)::bigint
+  AND s.ended_at IS NOT NULL
+  AND NOT EXISTS (
+      SELECT 1 FROM foghorn.ingest_sessions a
+      WHERE a.tenant_id = s.tenant_id AND a.stream_internal_name = s.stream_internal_name AND a.ended_at IS NULL
+  )
+ORDER BY s.started_at_unix_millis DESC, s.id DESC
+LIMIT 1;
+
 -- name: HasActiveIngestSession :one
 SELECT EXISTS (
     SELECT 1 FROM foghorn.ingest_sessions

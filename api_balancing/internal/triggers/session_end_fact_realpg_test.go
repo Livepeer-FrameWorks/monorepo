@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"frameworks/api_balancing/internal/control"
+	"frameworks/api_balancing/internal/state"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
@@ -134,5 +135,89 @@ func TestVanishOnlyEndForwardsSessionEndFact_RealPG(t *testing.T) {
 	if late.GetRequestId() != wantID || late.GetEventId() != wantID || late.GetStreamEnd().GetInferred() ||
 		late.GetStreamEnd().GetUploadedBytes() != 4096 {
 		t.Fatalf("late STREAM_END = %v, want Mist's counters under the session end identity %s", late, wantID)
+	}
+}
+
+// A Helmsman that restarts while a stream ends loses both of the stream's end reports: Mist's
+// STREAM_END finds no listener and is not retried, and the restarted Helmsman's poller has no
+// previous poll to diff, so it never reports the vanish. Foghorn still sees the node's snapshots:
+// a stream the node listed before its current control connection and has not listed since ended in
+// the gap, and its last ended session gets its end. A stream that disappears while the connection
+// that listed it is up is left to Helmsman's own vanish report.
+func TestStreamEndedAcrossHelmsmanRestartForwardsSessionEnd_RealPG(t *testing.T) {
+	conn := startFoghornTriggersRealPG(t)
+	control.SetDB(conn)
+	t.Cleanup(func() { control.SetDB(nil) })
+	ctx := context.Background()
+	sm := state.ResetDefaultManagerForTests()
+	t.Cleanup(sm.Shutdown)
+	installRegistryForTest(t)
+
+	tenant := uuid.NewString()
+	const node = "edge-restart"
+	now := time.Now().UTC()
+	sessions := map[string]struct{ streamID, sessionID string }{}
+	for i, internal := range []string{"ended-during-restart", "ended-while-connected"} {
+		streamID, sessionID := uuid.NewString(), ""
+		if err := conn.QueryRowContext(ctx, `
+			INSERT INTO foghorn.ingest_sessions
+				(tenant_id, node_id, stream_internal_name, connector_pid, start_trigger_uuid, stream_id,
+				 started_at_unix_millis, ended_at, ended_at_unix_millis, ended_reason, projection_state, source_revision)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), $8, 'push_input_close', 'active', 1)
+			RETURNING id::text`,
+			tenant, node, internal, 5000+i, "start-"+internal, streamID,
+			now.Add(-10*time.Minute).UnixMilli(), now.Add(-time.Minute).UnixMilli()).Scan(&sessionID); err != nil {
+			t.Fatalf("seed ingest session %s: %v", internal, err)
+		}
+		sessions[internal] = struct{ streamID, sessionID string }{streamID, sessionID}
+	}
+
+	capture, client := startDecklogCapture(t)
+	p := newTestProcessor(t)
+	p.decklogClient = client
+	p.clusterID = "media-a"
+	connectedSince := now.Add(-time.Hour)
+	p.nodeConnectedSince = func(nodeID string) (time.Time, bool) { return connectedSince, nodeID == node }
+	snapshot := func(names ...string) {
+		t.Helper()
+		streams := map[string]*ipcpb.StreamData{}
+		for _, name := range names {
+			streams["live+"+name] = &ipcpb.StreamData{Total: 1, Inputs: 1}
+		}
+		if _, _, err := p.handleNodeLifecycleUpdate(nodeLifecycleTrigger(&ipcpb.NodeLifecycleUpdate{
+			NodeId: node, IsHealthy: true, EventType: "node_lifecycle_update", Timestamp: time.Now().Unix(), Streams: streams,
+		})); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ends := func() []*ipcpb.MistTrigger {
+		var out []*ipcpb.MistTrigger
+		for _, got := range capture.received() {
+			if got.GetStreamEnd() != nil {
+				out = append(out, got)
+			}
+		}
+		return out
+	}
+
+	snapshot("ended-during-restart")
+	time.Sleep(5 * time.Millisecond)
+	connectedSince = time.Now()
+	time.Sleep(5 * time.Millisecond)
+	snapshot("ended-while-connected")
+	snapshot()
+	snapshot()
+
+	got := ends()
+	if len(got) != 1 {
+		t.Fatalf("Decklog received %d STREAM_END(s), want the restart-gap session's end once: %v", len(got), got)
+	}
+	want := sessions["ended-during-restart"]
+	wantID := uuid.NewSHA1(uuid.NameSpaceURL, []byte("frameworks:ingest-session-end:"+want.sessionID)).String()
+	end := got[0]
+	if end.GetRequestId() != wantID || end.GetEventId() != wantID || end.GetTenantId() != tenant ||
+		end.GetStreamId() != want.streamID || end.GetNodeId() != node || end.GetClusterId() != "media-a" ||
+		!end.GetStreamEnd().GetInferred() || end.GetStreamEnd().GetStreamName() != "live+ended-during-restart" {
+		t.Fatalf("restart-gap end = %v, want inferred STREAM_END %s for stream %s", end, wantID, want.streamID)
 	}
 }

@@ -188,6 +188,9 @@ type Registry struct {
 type conn struct {
 	stream ipcpb.HelmsmanControl_ConnectServer
 	last   time.Time
+	// registeredAt is when this control connection began. A stream the node's snapshots have not
+	// listed since then may have ended while no connection carried Helmsman's own vanish report.
+	registeredAt time.Time
 	// rawNodeID is the registry key the node heartbeats under (the id it self-asserted at Register). Kept so the
 	// server-owned NodeSession (see nodeSession) can carry BOTH the raw and canonical ids without a registry
 	// reverse-lookup.
@@ -1908,6 +1911,7 @@ receiveLoop:
 				release:         release,
 				stream:          stream,
 				last:            time.Now(),
+				registeredAt:    time.Now(),
 				rawNodeID:       nodeID,
 				peerAddr:        peerAddr,
 				relayBaseURL:    strings.TrimRight(x.Register.GetRelayBaseUrl(), "/"),
