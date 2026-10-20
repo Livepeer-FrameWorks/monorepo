@@ -79,6 +79,9 @@ type blockFill struct {
 	mem []byte
 	// sourceURL is the upstream URL the fill started from.
 	sourceURL string
+	// object is the identity of the object the fill copies. A reader of
+	// another object does not join the fill.
+	object string
 
 	mu      sync.Mutex
 	written int64
@@ -159,6 +162,8 @@ func (e fillDiskError) Unwrap() error { return e.err }
 // fillSource is what a new fill fetches from and reports to.
 type fillSource struct {
 	target upstreamTarget
+	// object is the identity of the object target reads (objectIdentity).
+	object string
 	// renew replaces target when a mid-block resume is refused with 401/403.
 	renew   func() (upstreamTarget, bool)
 	defrost func(int64)
@@ -173,6 +178,9 @@ func (s *Server) claimBlockFill(ctx context.Context, store *BlockStore, span blo
 	s.fills.mu.Lock()
 	defer s.fills.mu.Unlock()
 	if f, ok := s.fills.inflight[key]; ok {
+		if !sameObject(f.object, src.object) {
+			return nil, fillDiskError{err: errors.New("block fill copies another object")}
+		}
 		coldfetchCoalesced.WithLabelValues("follower").Inc()
 		return f, nil
 	}
@@ -201,7 +209,7 @@ func (s *Server) claimBlockFill(ctx context.Context, store *BlockStore, span blo
 		_ = file.Close()
 		return nil, fillDiskError{err: err}
 	}
-	f := &blockFill{tmpPath: tmpPath, blockPath: store.BlockPath(span.Idx), sourceURL: src.target.url, written: have, changed: make(chan struct{})}
+	f := &blockFill{tmpPath: tmpPath, blockPath: store.BlockPath(span.Idx), sourceURL: src.target.url, object: src.object, written: have, changed: make(chan struct{})}
 	s.fills.inflight[key] = f
 	coldfetchCoalesced.WithLabelValues("leader").Inc()
 	s.fills.wg.Add(1)
@@ -229,6 +237,9 @@ func (s *Server) claimMemoryFill(ctx context.Context, store *BlockStore, span bl
 	s.fills.mu.Lock()
 	defer s.fills.mu.Unlock()
 	if f, ok := s.fills.inflight[key]; ok {
+		if !sameObject(f.object, src.object) {
+			return nil
+		}
 		coldfetchCoalesced.WithLabelValues("follower").Inc()
 		return f
 	}
@@ -236,12 +247,18 @@ func (s *Server) claimMemoryFill(ctx context.Context, store *BlockStore, span bl
 	var mem []byte
 	if prev, ok := s.fills.mem[key]; ok {
 		st := prev.state()
-		if !st.done || st.err == nil {
+		sameSource := sameObject(prev.object, src.object)
+		if sameSource && (!st.done || st.err == nil) {
 			coldfetchCoalesced.WithLabelValues("follower").Inc()
 			return prev
 		}
+		// A running fill of another object keeps its block for its own
+		// readers; this read streams without a fill.
+		if !st.done {
+			return nil
+		}
 		delete(s.fills.mem, key)
-		if int64(len(prev.mem)) == expected {
+		if sameSource && int64(len(prev.mem)) == expected {
 			mem, have = prev.mem, st.written
 		}
 	}
@@ -251,7 +268,7 @@ func (s *Server) claimMemoryFill(ctx context.Context, store *BlockStore, span bl
 	if mem == nil {
 		mem = make([]byte, expected)
 	}
-	f := &blockFill{mem: mem, sourceURL: src.target.url, written: have, changed: make(chan struct{})}
+	f := &blockFill{mem: mem, sourceURL: src.target.url, object: src.object, written: have, changed: make(chan struct{})}
 	s.fills.mem[key] = f
 	coldfetchCoalesced.WithLabelValues("leader").Inc()
 	s.fills.wg.Add(1)

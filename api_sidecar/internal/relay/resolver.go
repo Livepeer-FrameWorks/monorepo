@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -75,6 +76,34 @@ func (r *ResolveResult) UpstreamURL() string {
 // rather than platform storage or a peer.
 func (r *ResolveResult) fromTenantSource() bool {
 	return r != nil && r.PeerRelayURL == "" && r.MediaPresignedURL == "" && r.TenantSourceURL != ""
+}
+
+// objectIdentity names the object r's upstream bytes come from, or "" when r
+// does not say which object that is.
+//
+// A presigned storage URL without its query names the object key, and Foghorn
+// never rewrites the bytes under a key: an upload keeps its key and every
+// frozen version is published under a fresh per-attempt key
+// (FreezePublishKey). Renewing the signature for the same object therefore
+// keeps the identity, while a resolution that moved to another object (the
+// processed output after the upload) changes it. A peer-relay URL names the
+// artifact on an origin node, not the version its file holds, so it has no
+// identity; neither has a tenant import source, whose bytes the tenant owns.
+func (r *ResolveResult) objectIdentity() string {
+	if r == nil || r.PeerRelayURL != "" || r.MediaPresignedURL == "" {
+		return ""
+	}
+	u, err := url.Parse(r.MediaPresignedURL)
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	return u.Scheme + "://" + u.Host + u.EscapedPath()
+}
+
+// sameObject reports whether two object identities can name the same object:
+// equal, or at least one of them unknown.
+func sameObject(a, b string) bool {
+	return a == "" || b == "" || a == b
 }
 
 // IntentFromHint maps a Foghorn-provided CacheDecisionHint to the local

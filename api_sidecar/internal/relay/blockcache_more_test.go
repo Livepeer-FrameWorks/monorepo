@@ -115,3 +115,64 @@ func TestCleanTmps(t *testing.T) {
 		t.Fatal("completed block must survive CleanTmps")
 	}
 }
+
+// EnsureMeta keeps the blocks of the object it recorded, drops them for
+// another object, and records the first known object over an unknown one
+// without dropping anything.
+func TestEnsureMetaObjectIdentity(t *testing.T) {
+	cases := []struct {
+		name         string
+		recorded     string
+		resolved     string
+		keepBlocks   bool
+		wantRecorded string
+	}{
+		{name: "same object", recorded: "https://s3/b/k", resolved: "https://s3/b/k", keepBlocks: true, wantRecorded: "https://s3/b/k"},
+		{name: "another object", recorded: "https://s3/b/k", resolved: "https://s3/b/k.att-2", keepBlocks: false, wantRecorded: "https://s3/b/k.att-2"},
+		{name: "unknown resolved", recorded: "https://s3/b/k", resolved: "", keepBlocks: true, wantRecorded: "https://s3/b/k"},
+		{name: "unknown recorded", recorded: "", resolved: "https://s3/b/k", keepBlocks: true, wantRecorded: "https://s3/b/k"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := NewBlockStore(filepath.Join(t.TempDir(), "vod", "h.mkv"), 8)
+			if _, err := s.EnsureMeta("h", "mkv", tc.recorded, 16); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.WriteBlock(0, []byte("01234567")); err != nil {
+				t.Fatal(err)
+			}
+			m, err := s.EnsureMeta("h", "mkv", tc.resolved, 16)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if s.HasBlock(0) != tc.keepBlocks {
+				t.Fatalf("block kept=%v, want %v", s.HasBlock(0), tc.keepBlocks)
+			}
+			if m.Object != tc.wantRecorded {
+				t.Fatalf("returned object=%q, want %q", m.Object, tc.wantRecorded)
+			}
+			saved, err := s.LoadMeta()
+			if err != nil || saved.Object != tc.wantRecorded {
+				t.Fatalf("saved meta=%+v err=%v, want object %q", saved, err, tc.wantRecorded)
+			}
+		})
+	}
+}
+
+// A presigned URL's signature is not part of the object it names; a peer
+// relay URL names no object version.
+func TestObjectIdentity(t *testing.T) {
+	a := &ResolveResult{MediaPresignedURL: "https://s3.example/bucket/vod/t/h/h.mkv.att-1?X-Amz-Signature=aaa&X-Amz-Date=1"}
+	b := &ResolveResult{MediaPresignedURL: "https://s3.example/bucket/vod/t/h/h.mkv.att-1?X-Amz-Signature=bbb&X-Amz-Date=2"}
+	c := &ResolveResult{MediaPresignedURL: "https://s3.example/bucket/vod/t/h/h.mkv.att-2?X-Amz-Signature=aaa"}
+	peer := &ResolveResult{PeerRelayURL: "https://edge-1/internal/artifact/vod/h.mkv", MediaPresignedURL: a.MediaPresignedURL}
+	if a.objectIdentity() == "" || a.objectIdentity() != b.objectIdentity() {
+		t.Fatalf("re-signed URL changed identity: %q vs %q", a.objectIdentity(), b.objectIdentity())
+	}
+	if a.objectIdentity() == c.objectIdentity() {
+		t.Fatalf("another key kept identity %q", a.objectIdentity())
+	}
+	if got := peer.objectIdentity(); got != "" {
+		t.Fatalf("peer relay identity=%q, want none", got)
+	}
+}

@@ -18,10 +18,12 @@ package relay
 //	  0000000002.blk.tmp        in-flight block 2 (deleted on restart)
 //
 // Restart recovery is just: open meta.json, drop *.blk.tmp. If meta is
-// missing/unreadable or asset_hash doesn't match the relay's current
-// resolve, the entire dir is dropped — content-addressed artifact hash
-// is the source-of-truth identity (same hash → same bytes), so a meta
-// mismatch means the asset was reprocessed/replaced.
+// missing/unreadable or does not match the relay's current resolve, the
+// entire dir is dropped. One relay path (kind, hash, container) can resolve
+// to different objects over the artifact's life (the uploaded source, then
+// the processed output in the same container), so the meta records the
+// resolved object as well as the hash and size: a resolve that names
+// another object means the cached blocks are not its bytes.
 
 import (
 	"encoding/json"
@@ -42,14 +44,16 @@ import (
 // for random seeks.
 const DefaultBlockSize int64 = 32 * 1024 * 1024
 
-// BlockMeta is persisted to <asset>.blocks/meta.json. AssetHash is the
-// content-addressed identity check on restart: a different hash means
-// the asset was reprocessed and the cache is stale.
+// BlockMeta is persisted to <asset>.blocks/meta.json and names the bytes
+// the blocks hold. Object is the identity of the upstream object the blocks
+// were fetched from (ResolveResult.objectIdentity); "" until a resolve that
+// names its object served the asset.
 type BlockMeta struct {
 	AssetHash string `json:"asset_hash"`
 	TotalSize int64  `json:"total_size"`
 	BlockSize int64  `json:"block_size"`
 	Ext       string `json:"ext,omitempty"`
+	Object    string `json:"object,omitempty"`
 }
 
 // BlockStore is the per-asset block cache. Construct via NewBlockStore
@@ -131,13 +135,20 @@ func (s *BlockStore) SaveMeta(m *BlockMeta) error {
 	return os.Rename(tmp, s.MetaPath())
 }
 
-// EnsureMeta validates an existing meta against the given asset hash +
-// total size and rebuilds the dir from scratch when they don't match
-// (asset reprocessed → all blocks stale). Creates a fresh meta when
-// the dir is empty or unreadable.
-func (s *BlockStore) EnsureMeta(assetHash, ext string, totalSize int64) (*BlockMeta, error) {
+// EnsureMeta validates an existing meta against the given asset hash, total
+// size and upstream object, and rebuilds the dir from scratch when they
+// don't match (the blocks are another object's bytes). An unknown object on
+// either side matches; the first known one is recorded. Creates a fresh meta
+// when the dir is empty or unreadable.
+func (s *BlockStore) EnsureMeta(assetHash, ext, object string, totalSize int64) (*BlockMeta, error) {
 	m, err := s.LoadMeta()
-	if err == nil && m.AssetHash == assetHash && m.TotalSize == totalSize && m.BlockSize == s.blockSize {
+	if err == nil && m.AssetHash == assetHash && m.TotalSize == totalSize && m.BlockSize == s.blockSize && sameObject(m.Object, object) {
+		if m.Object == "" && object != "" {
+			m.Object = object
+			if saveErr := s.SaveMeta(m); saveErr != nil {
+				return nil, saveErr
+			}
+		}
 		return m, nil
 	}
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -152,6 +163,7 @@ func (s *BlockStore) EnsureMeta(assetHash, ext string, totalSize int64) (*BlockM
 		TotalSize: totalSize,
 		BlockSize: s.blockSize,
 		Ext:       ext,
+		Object:    object,
 	}
 	if err := s.SaveMeta(fresh); err != nil {
 		return nil, err

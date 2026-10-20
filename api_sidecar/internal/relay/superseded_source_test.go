@@ -323,3 +323,146 @@ func TestResolveRenewalIsSharedAcrossRequests(t *testing.T) {
 		t.Fatalf("resolver calls=%d, want 1 shared re-resolve", n)
 	}
 }
+
+// A re-resolve after the cached object was deleted can name another object of
+// the same size. The blocks cached from the deleted object are not that
+// object's bytes, so the relay drops them and serves every block from the
+// renewed object.
+func TestRelayBlockCacheDropsBlocksOfReplacedObjectOfEqualSize(t *testing.T) {
+	old := []byte("OLD-OBJECT-0123456789abcdefghijk")
+	current := []byte("CUR-OBJECT-ABCDEFGHIJKLMNOPQRSTU")
+	if len(old) != len(current) {
+		t.Fatalf("test objects must have equal size: %d vs %d", len(old), len(current))
+	}
+	store := &objectStore{objects: map[string][]byte{"a/old.mkv": old, "a/current.mkv": current}}
+	up := httptest.NewServer(store)
+	defer up.Close()
+	resolver := &extResolver{byExt: map[string][]*ResolveResult{".mkv": {storedObject(up.URL, "a/old.mkv", len(old)), storedObject(up.URL, "a/current.mkv", len(current))}}}
+	ts := newStaleTestRelay(t, resolver, admission.CacheToDisk)
+	defer ts.Close()
+	relayURL := ts.URL + "/internal/artifact/vod/h.mkv"
+
+	read := func(rng string) string {
+		t.Helper()
+		resp := relayRequest(t, http.MethodGet, relayURL, rng)
+		got, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusPartialContent && resp.StatusCode != http.StatusOK {
+			t.Fatalf("read %q: status=%d", rng, resp.StatusCode)
+		}
+		return string(got)
+	}
+	if got := read("bytes=0-7"); got != string(old[:8]) {
+		t.Fatalf("first read=%q, want %q", got, old[:8])
+	}
+	store.delete("a/old.mkv")
+	if got := read("bytes=8-15"); got != string(current[8:16]) {
+		t.Fatalf("read after the object was replaced=%q, want %q", got, current[8:16])
+	}
+	if got := read("bytes=0-7"); got != string(current[:8]) {
+		t.Fatalf("block cached from the replaced object served again: got %q, want %q", got, current[:8])
+	}
+	if got := read(""); got != string(current) {
+		t.Fatalf("full read=%q, want %q", got, current)
+	}
+}
+
+// A presigned URL renewed for the same object keeps the blocks cached through
+// the expired URL: they are served from disk without another upstream fetch.
+func TestRelayBlockCacheKeepsBlocksAcrossPresignRenewal(t *testing.T) {
+	body := []byte("0123456789ABCDEFGHIJKLMNOPQRSTUV")
+	store := &expiringStore{body: body}
+	up := httptest.NewServer(store)
+	defer up.Close()
+	resolver := &sequenceResolver{out: []*ResolveResult{presignedResult(up.URL, "old", len(body)), presignedResult(up.URL, "new", len(body))}}
+	ts := newStaleTestRelay(t, resolver, admission.CacheToDisk)
+	defer ts.Close()
+	relayURL := ts.URL + "/internal/artifact/vod/hrenew.mkv"
+
+	read := func(rng, want string) {
+		t.Helper()
+		resp := relayRequest(t, http.MethodGet, relayURL, rng)
+		got, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusPartialContent || string(got) != want {
+			t.Fatalf("read %q: status=%d body=%q, want 206 %q", rng, resp.StatusCode, got, want)
+		}
+	}
+	read("bytes=0-7", string(body[:8]))
+	store.expire("old")
+	read("bytes=8-15", string(body[8:16]))
+	if n := resolver.callCount(); n != 2 {
+		t.Fatalf("resolver calls=%d, want 2 (initial + renewal)", n)
+	}
+	hits := store.hits.Load()
+	read("bytes=0-7", string(body[:8]))
+	if n := store.hits.Load(); n != hits {
+		t.Fatalf("block cached before the renewal was fetched again: upstream hits %d -> %d", hits, n)
+	}
+}
+
+// A renewal in the middle of a response that names another object of the
+// same size cannot continue that response: its later blocks would be another
+// object's bytes after this object's. The response ends short instead, and
+// the next read serves the renewed object whole.
+func TestRelayMidResponseRenewalToAnotherObjectDoesNotSplice(t *testing.T) {
+	old := []byte("OLD-OBJECT-0123456789abcdefghijk")
+	current := []byte("CUR-OBJECT-ABCDEFGHIJKLMNOPQRSTU")
+	cases := []struct {
+		name     string
+		decision admission.CacheDecision
+		// block1Hit is the upstream request count once block 1 is requested:
+		// a disk read preflights block 0 before it fills it.
+		block1Hit int64
+	}{
+		{name: "memory-only", decision: admission.CacheMemoryOnly, block1Hit: 2},
+		{name: "disk", decision: admission.CacheToDisk, block1Hit: 3},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			oldStore := &expiringStore{body: old, laterBlocks: make(chan struct{})}
+			oldUp := httptest.NewServer(oldStore)
+			defer oldUp.Close()
+			curUp := httptest.NewServer(&expiringStore{body: current})
+			defer curUp.Close()
+			resolver := &sequenceResolver{out: []*ResolveResult{presignedResult(oldUp.URL, "s1", len(old)), presignedResult(curUp.URL, "s2", len(current))}}
+			ts := newStaleTestRelay(t, resolver, tc.decision)
+			defer ts.Close()
+			relayURL := ts.URL + "/internal/artifact/vod/hmid.mkv"
+
+			type result struct {
+				body []byte
+				err  error
+			}
+			done := make(chan result, 1)
+			go func() {
+				resp := relayRequest(t, http.MethodGet, relayURL, "")
+				got, err := io.ReadAll(resp.Body)
+				_ = resp.Body.Close()
+				done <- result{body: got, err: err}
+			}()
+			// Block 0 is served; the fetch of block 1 waits until the old
+			// URL is refused.
+			deadline := time.Now().Add(3 * time.Second)
+			for oldStore.hits.Load() < tc.block1Hit {
+				if time.Now().After(deadline) {
+					t.Fatal("block 1 was never requested")
+				}
+				time.Sleep(5 * time.Millisecond)
+			}
+			oldStore.expire("s1")
+			close(oldStore.laterBlocks)
+			r := <-done
+			if !strings.HasPrefix(string(old), string(r.body)) {
+				t.Fatalf("response mixed two objects: %q (old %q, current %q)", r.body, old, current)
+			}
+
+			resp := relayRequest(t, http.MethodGet, relayURL, "")
+			got, _ := io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			if resp.StatusCode != http.StatusOK || string(got) != string(current) {
+				t.Fatalf("read after the renewal: status=%d body=%q, want 200 %q", resp.StatusCode, got, current)
+			}
+		})
+	}
+}

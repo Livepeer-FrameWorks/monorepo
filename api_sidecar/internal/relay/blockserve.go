@@ -45,7 +45,8 @@ var slowFirstBodyByteAfter = mistSourceReadTimeout / 2
 // Every upstream fetch is its own request, so an upstream that refuses res's
 // credential (401/403: an expired presigned URL, a dead peer grant) is retried
 // once with the resolution renew supplies, including mid-response: a read that
-// outlives its presigned URL continues on the renewed one. A second refusal
+// outlives its presigned URL continues on the renewed one when that names the
+// same object (objectPin) and fails otherwise. A second refusal
 // before any fetch succeeds on the renewed resolution ends the request.
 //
 // An upstream that answers 404/410 before any body byte reached the client no
@@ -79,6 +80,54 @@ type sourceGone struct {
 	op  string
 	err error
 	res *ResolveResult
+}
+
+// objectPin is the upstream object a response, or a block fill, reads. Once
+// bytes of it went out or into a block, the rest must come from the same
+// object, so a renewal that names another object or another size is refused
+// and the next request starts over from a current resolution.
+type objectPin struct {
+	mu     sync.Mutex
+	object string
+	size   int64
+}
+
+// admit reports whether res can continue the pinned object, and pins the
+// object res names when none was known yet.
+func (p *objectPin) admit(res *ResolveResult) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if size := int64(res.ExpectedSizeBytes); size > 0 && p.size > 0 && size != p.size {
+		return false
+	}
+	id := res.objectIdentity()
+	if !sameObject(p.object, id) {
+		return false
+	}
+	if p.object == "" {
+		p.object = id
+	}
+	return true
+}
+
+func (p *objectPin) current() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.object
+}
+
+// renewer wraps renew so it answers only renewals of the pinned object.
+func (p *objectPin) renewer(renew func(*ResolveResult) (*ResolveResult, bool)) func(*ResolveResult) (*ResolveResult, bool) {
+	if renew == nil {
+		return nil
+	}
+	return func(stale *ResolveResult) (*ResolveResult, bool) {
+		fresh, ok := renew(stale)
+		if !ok || !p.admit(fresh) {
+			return nil, false
+		}
+		return fresh, true
+	}
 }
 
 // serveBlocksFrom serves the request from res through the block cache. It
@@ -131,6 +180,10 @@ func (s *Server) serveBlocksFrom(c *gin.Context, kind, hash, ext, localPath stri
 		}
 		totalSize = probedSize
 	}
+	// From here on the response's length is fixed and its bytes come from
+	// res's object; renewAfter reads renew at each call, so it is pinned too.
+	pin := &objectPin{object: res.objectIdentity(), size: totalSize}
+	renew = pin.renewer(renew)
 
 	// Build a BlockStore handle but defer disk-touching setup (mkdir,
 	// EnsureMeta) until after admission.
@@ -213,7 +266,7 @@ func (s *Server) serveBlocksFrom(c *gin.Context, kind, hash, ext, localPath stri
 		if _, cleaned := s.cleanedBlockDirs.LoadOrStore(store.Dir(), struct{}{}); !cleaned {
 			store.CleanTmps()
 		}
-		if _, err := store.EnsureMeta(hash, ext, totalSize); err != nil {
+		if _, err := store.EnsureMeta(hash, ext, pin.current(), totalSize); err != nil {
 			if strictCache {
 				c.Writer.Header().Set("Retry-After", "5")
 				s.serverError(c, "blockcache init", err)
@@ -265,15 +318,19 @@ func (s *Server) serveBlocksFrom(c *gin.Context, kind, hash, ext, localPath stri
 	if renew != nil {
 		fillRenew = s.resolveRenewer(context.WithoutCancel(c.Request.Context()), kind, hash, ext)
 	}
+	// A fill resumes its block on its renewal only from the object the block's
+	// first bytes came from.
 	fillFrom := func() fillSource {
 		src := fillSource{
 			target:  upstreamTarget{url: upstreamURL, grantID: res.PeerRelayGrantID, client: upstreamClient},
+			object:  pin.current(),
 			defrost: recordDefrost,
 		}
 		if fillRenew != nil {
 			fillRes := res
+			renewFill := (&objectPin{object: src.object, size: totalSize}).renewer(fillRenew)
 			src.renew = func() (upstreamTarget, bool) {
-				fresh, ok := fillRenew(fillRes)
+				fresh, ok := renewFill(fillRes)
 				if !ok {
 					return upstreamTarget{}, false
 				}
