@@ -336,14 +336,25 @@ func (cm *CleanupMonitor) getCleanupCandidates(dir string, assetType string) ([]
 		}
 
 		// Build candidate info
+		// A DVR candidate is its whole recording directory, so its size is the
+		// directory's bytes, not the manifest's; otherwise the freed-bytes
+		// target is never met and every durable DVR is evicted.
 		candidatePath := path
+		sizeBytes := uint64(info.Size())
 		if assetType == "dvr" {
 			candidatePath = filepath.Dir(path)
+			sizeBytes = 0
+			_ = filepath.Walk(candidatePath, func(_ string, fi os.FileInfo, walkErr error) error { //nolint:errcheck // size defaults to 0 on walk failure
+				if walkErr == nil && fi != nil && !fi.IsDir() {
+					sizeBytes += uint64(fi.Size())
+				}
+				return nil
+			})
 		}
 		candidate := ClipCleanupInfo{
 			ClipHash:     artifactHash,
 			FilePath:     candidatePath,
-			SizeBytes:    uint64(info.Size()),
+			SizeBytes:    sizeBytes,
 			CreatedAt:    info.ModTime(),
 			AccessCount:  0,
 			LastAccessed: info.ModTime(), // Default to creation time

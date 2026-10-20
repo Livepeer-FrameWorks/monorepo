@@ -522,12 +522,13 @@ func (sm *StorageManager) reclaimToTarget(clipsDir string, bytesToFree uint64) p
 
 	// 1. Block caches — cheapest, rebuildable, non-authoritative. They must lose
 	// before any full copy. RemoveAll is destructive, so gate on the boot pause.
+	// The orphan-sidecar sweep runs after block eviction so a sidecar whose
+	// .blocks dir this pass removed goes in the same pass.
 	if destructiveAllowed {
-		if freed := sm.evictBlockCaches(bytesToFree); freed > 0 {
-			res.freedBytes += freed
-			if res.freedBytes >= bytesToFree {
-				return res
-			}
+		res.freedBytes += sm.evictBlockCaches(bytesToFree)
+		res.freedBytes += sm.evictOrphanSidecars()
+		if res.freedBytes >= bytesToFree {
+			return res
 		}
 	}
 
@@ -832,10 +833,12 @@ func (sm *StorageManager) getFreezeCandidates(dir string, assetType AssetType) (
 				continue
 			}
 
-			// Extract hash from filename (remove extension)
+			// Same identity rule as scanVODDirectory: only <hex hash>.<ext> is an
+			// artifact. A sidecar <hash>.<ext>.dtsh/.gop/.partial would otherwise
+			// become a candidate named "<hash>.<ext>" that Foghorn never catalogs.
 			vodHash := strings.TrimSuffix(filename, ext)
-			if len(vodHash) < 18 {
-				continue // Not a valid artifact hash
+			if len(vodHash) < 18 || !isHex(vodHash) {
+				continue
 			}
 
 			info, err := entry.Info()
@@ -1140,7 +1143,76 @@ func (sm *StorageManager) endFreezeOfDeletedArtifact(requestID string, asset Fre
 	_ = sm.sendSyncComplete(requestID, asset.AssetHash, "failed", 0, reason, dtshIncluded, false) //nolint:errcheck // best-effort report; reconnect retries on stream loss
 }
 
-// evictBlockCaches walks vod/ and clips/ for *.blocks/ directories and
+// relayCacheRoots are the storage subdirectories the read-through relay
+// writes per-asset caches into (canonical file, .blocks/ dir, .dtsh/.gop
+// sidecars). Every one of them must be covered by pressure reclaim, or its
+// caches grow without bound.
+var relayCacheRoots = []string{"vod", "clips", "upload"}
+
+// evictOrphanSidecars removes .dtsh/.gop sidecars whose media is no longer on
+// this node: no canonical file, no .partial fill and no .blocks cache. The
+// relay caches a sidecar next to cold media, and evicting that media's .blocks
+// dir leaves the sidecar behind; it indexes bytes this node no longer holds, so
+// the relay refetches or Mist regenerates it on the next read. Sidecars younger
+// than the retention floor are kept because the relay fetches the .dtsh before
+// the first media block lands. Returns the bytes freed.
+func (sm *StorageManager) evictOrphanSidecars() uint64 {
+	minAge := time.Now().Add(-time.Duration(sm.minRetentionHours) * time.Hour)
+	tracker := leases.GlobalTracker()
+	var freed uint64
+	for _, sub := range relayCacheRoots {
+		root := filepath.Join(sm.basePath, sub)
+		_ = filepath.Walk(root, func(path string, info os.FileInfo, walkErr error) error { //nolint:errcheck // missing/unreadable dirs just mean no candidates
+			if walkErr != nil || info == nil {
+				return nil //nolint:nilerr // skip unreadable nodes, continue walking siblings
+			}
+			if info.IsDir() {
+				if strings.HasSuffix(path, ".blocks") {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			mediaPath, ok := sidecarMediaPath(path)
+			if !ok || info.ModTime().After(minAge) {
+				return nil
+			}
+			for _, p := range []string{mediaPath, mediaPath + ".partial", mediaPath + ".blocks"} {
+				if _, err := os.Stat(p); err == nil {
+					return nil
+				}
+			}
+			if tracker != nil && (tracker.IsPathLeased(path) || tracker.IsPathLeased(mediaPath)) {
+				return nil
+			}
+			if err := os.Remove(path); err != nil {
+				sm.logger.WithError(err).WithField("path", path).Warn("Failed to remove orphan media sidecar")
+				return nil
+			}
+			freed += uint64(info.Size())
+			sm.logger.WithFields(logging.Fields{
+				"path":  path,
+				"bytes": info.Size(),
+			}).Info("Removed orphan media sidecar under pressure")
+			return nil
+		})
+	}
+	if freed > 0 {
+		localEvictionBytes.Add(float64(freed))
+	}
+	return freed
+}
+
+// sidecarMediaPath returns the media file a .dtsh/.gop sidecar indexes.
+func sidecarMediaPath(path string) (string, bool) {
+	for _, suffix := range []string{".dtsh", ".gop"} {
+		if strings.HasSuffix(path, suffix) {
+			return strings.TrimSuffix(path, suffix), true
+		}
+	}
+	return "", false
+}
+
+// evictBlockCaches walks the relay cache roots for *.blocks/ directories and
 // RemoveAll's them in oldest-mtime-first order until bytesTarget is met
 // or the supply is exhausted. Returns the actual byte count freed.
 // Leased paths are skipped. Used by fallbackCleanupWithTarget as the
@@ -1153,7 +1225,7 @@ func (sm *StorageManager) evictBlockCaches(bytesTarget uint64) uint64 {
 		modTime time.Time
 	}
 	var candidates []blockDirCandidate
-	for _, sub := range []string{"vod", "clips"} {
+	for _, sub := range relayCacheRoots {
 		root := filepath.Join(sm.basePath, sub)
 		_ = filepath.Walk(root, func(path string, info os.FileInfo, walkErr error) error { //nolint:errcheck // missing/unreadable dirs just mean no candidates
 			if walkErr != nil || info == nil {
