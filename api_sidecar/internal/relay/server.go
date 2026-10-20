@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"golang.org/x/sync/singleflight"
 
 	"frameworks/api_sidecar/internal/admission"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -73,8 +74,11 @@ type Server struct {
 	// only reach public addresses.
 	tenantHTTPC *http.Client
 	cache       *resolveCache
-	blockSize   int64
-	fills       *blockFills
+	// renewals shares one Foghorn re-resolve per (kind, hash, ext) among the
+	// requests whose upstream refused or lost the cached resolution.
+	renewals  singleflight.Group
+	blockSize int64
+	fills     *blockFills
 	// sizeProbes shares one upstream size probe per object among its readers.
 	sizeProbes sizeProbeGroup
 	// sidecarFetches shares one upstream .dtsh fetch among concurrent readers.

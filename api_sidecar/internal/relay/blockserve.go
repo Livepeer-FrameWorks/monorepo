@@ -47,7 +47,44 @@ var slowFirstBodyByteAfter = mistSourceReadTimeout / 2
 // once with the resolution renew supplies, including mid-response: a read that
 // outlives its presigned URL continues on the renewed one. A second refusal
 // before any fetch succeeds on the renewed resolution ends the request.
+//
+// An upstream that answers 404/410 before any body byte reached the client no
+// longer holds the resolved object (a superseded upload deleted from storage).
+// The resolution is renewed once and the whole request served again from it,
+// size included, since the renewed object may be a different one; the request
+// answers 404 only when the renewed resolution lacks its object too.
 func (s *Server) serveViaBlockCache(c *gin.Context, kind, hash, ext, localPath string, res *ResolveResult, intent admission.StorageIntent, renew func(*ResolveResult) (*ResolveResult, bool)) string {
+	status, gone := s.serveBlocksFrom(c, kind, hash, ext, localPath, res, intent, renew)
+	if gone == nil {
+		return status
+	}
+	if renew != nil {
+		if fresh, ok := renew(gone.res); ok {
+			status, gone = s.serveBlocksFrom(c, kind, hash, ext, localPath, fresh, intent, renew)
+			if gone == nil {
+				return status
+			}
+		}
+	}
+	s.cache.Delete(kind, hash, ext)
+	if intent == admission.IntentProcessingInput {
+		noteProcessingInputFailure(hash, upstreamFailureCause(c.Request.Context(), gone.err))
+	}
+	return s.respondColdFetchError(c, gone.op, gone.err)
+}
+
+// sourceGone is a block-cache serve whose upstream answered 404/410 before any
+// body byte reached the client. res is the resolution the upstream answered.
+type sourceGone struct {
+	op  string
+	err error
+	res *ResolveResult
+}
+
+// serveBlocksFrom serves the request from res through the block cache. It
+// answers every outcome itself except an upstream that lost its object before
+// the body started, which it returns as sourceGone with nothing written.
+func (s *Server) serveBlocksFrom(c *gin.Context, kind, hash, ext, localPath string, res *ResolveResult, intent admission.StorageIntent, renew func(*ResolveResult) (*ResolveResult, bool)) (string, *sourceGone) {
 	strictCache := intent == admission.IntentProcessingInput
 	// A processing input whose upstream fails before Mist got a byte may keep
 	// its input from booting; the processing job reads this note to tell a
@@ -86,8 +123,11 @@ func (s *Server) serveViaBlockCache(c *gin.Context, kind, hash, ext, localPath s
 			probedSize, err = s.sharedProbeTotalSize(c.Request.Context(), upstreamClient, upstreamURL, res.PeerRelayGrantID, probeSettled)
 		}
 		if err != nil {
+			if isUpstreamMissingError(err) {
+				return "", &sourceGone{op: "upstream size probe", err: err, res: res}
+			}
 			noteUpstreamFailure(err)
-			return s.respondColdFetchError(c, "upstream size probe", err)
+			return s.respondColdFetchError(c, "upstream size probe", err), nil
 		}
 		totalSize = probedSize
 	}
@@ -113,12 +153,12 @@ func (s *Server) serveViaBlockCache(c *gin.Context, kind, hash, ext, localPath s
 	if cacheDecision == admission.CacheReject {
 		c.Writer.Header().Set("Retry-After", "5")
 		c.AbortWithStatus(http.StatusServiceUnavailable)
-		return "error"
+		return "error", nil
 	}
 	if strictCache && cacheDecision != admission.CacheToDisk {
 		c.Writer.Header().Set("Retry-After", "5")
 		c.String(http.StatusServiceUnavailable, "processing input block cache unavailable")
-		return "error"
+		return "error", nil
 	}
 	if strictCache {
 		recordProcessingInputSize(hash, totalSize)
@@ -132,7 +172,7 @@ func (s *Server) serveViaBlockCache(c *gin.Context, kind, hash, ext, localPath s
 	if rangeHeader != "" && !hasRange {
 		c.Writer.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", totalSize))
 		c.AbortWithStatus(http.StatusRequestedRangeNotSatisfiable)
-		return "error"
+		return "error", nil
 	}
 	if !hasRange {
 		start, end = 0, totalSize-1
@@ -140,13 +180,13 @@ func (s *Server) serveViaBlockCache(c *gin.Context, kind, hash, ext, localPath s
 	if start > totalSize-1 {
 		c.Writer.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", totalSize))
 		c.AbortWithStatus(http.StatusRequestedRangeNotSatisfiable)
-		return "error"
+		return "error", nil
 	}
 
 	spans := spansForRange(start, end, store.BlockSize())
 	if len(spans) == 0 {
 		c.AbortWithStatus(http.StatusRequestedRangeNotSatisfiable)
-		return "error"
+		return "error", nil
 	}
 	recordDefrost := s.defrostRecorderFor(kind, hash)
 	if cacheDecision == admission.CacheToDisk && !hasRange {
@@ -155,9 +195,12 @@ func (s *Server) serveViaBlockCache(c *gin.Context, kind, hash, ext, localPath s
 			err = s.preflightFirstColdSpan(c.Request.Context(), upstreamClient, store, spans[0], totalSize, upstreamURL, res.PeerRelayGrantID)
 		}
 		if err != nil {
+			if isUpstreamMissingError(err) {
+				return "", &sourceGone{op: "upstream block preflight", err: err, res: res}
+			}
 			noteUpstreamFailure(err)
-			s.cache.Delete(kind, hash)
-			return s.respondColdFetchError(c, "upstream block preflight", err)
+			s.cache.Delete(kind, hash, ext)
+			return s.respondColdFetchError(c, "upstream block preflight", err), nil
 		}
 	}
 	// Disk-touching block-store setup happens only for CacheToDisk and after
@@ -174,7 +217,7 @@ func (s *Server) serveViaBlockCache(c *gin.Context, kind, hash, ext, localPath s
 			if strictCache {
 				c.Writer.Header().Set("Retry-After", "5")
 				s.serverError(c, "blockcache init", err)
-				return "error"
+				return "error", nil
 			}
 			if s.logger != nil {
 				s.logger.WithError(err).WithField("local_path", localPath).Debug("blockcache: EnsureMeta failed; degrading to memory-only")
@@ -254,25 +297,33 @@ func (s *Server) serveViaBlockCache(c *gin.Context, kind, hash, ext, localPath s
 		// A refusal that renewal did not cure leaves no cached resolution
 		// behind, so the next request resolves again.
 		if res.renewable() && isUpstreamAuthError(err) {
-			s.cache.Delete(kind, hash)
+			s.cache.Delete(kind, hash, ext)
 		}
 		// Gin defers the status until the first body write. A failed cold
 		// fetch must not commit an empty 200/206 with an advertised length.
 		if !c.Writer.Written() {
-			noteUpstreamFailure(err)
 			c.Writer.Header().Del("Content-Length")
 			c.Writer.Header().Del("Content-Range")
-			return s.respondColdFetchError(c, "block span serve", err)
+			if isUpstreamMissingError(err) {
+				return "", &sourceGone{op: "block span serve", err: err, res: res}
+			}
+			noteUpstreamFailure(err)
+			return s.respondColdFetchError(c, "block span serve", err), nil
+		}
+		// An object the upstream lost after the body started leaves no cached
+		// resolution behind either.
+		if res.renewable() && isUpstreamMissingError(err) {
+			s.cache.Delete(kind, hash, ext)
 		}
 		if readerGone(c) {
-			return statusClientGone
+			return statusClientGone, nil
 		}
 		if s.logger != nil && !isClientGone(err) {
 			s.logger.WithError(err).WithField("block_idx", span.Idx).Debug("blockcache: span serve aborted")
 		}
-		return "error"
+		return "error", nil
 	}
-	return "served"
+	return "served", nil
 }
 
 // serveBlockSpan serves a single block's worth of bytes (clipped to
@@ -293,23 +344,37 @@ func (s *Server) serveBlockSpan(ctx context.Context, httpc *http.Client, w io.Wr
 	var (
 		fill *blockFill
 		err  error
+		pos  int64
 	)
-	if decision == admission.CacheToDisk {
-		fill, err = s.claimBlockFill(ctx, store, span, totalSize, fillFrom())
-		if err == nil && fill == nil {
-			// The block turned warm between the first look and the claim.
-			if served, warmErr := s.serveWarmBlock(w, store, span); served || warmErr != nil {
-				return warmErr
+	for attempt := 0; ; attempt++ {
+		fill, err = nil, nil
+		if decision == admission.CacheToDisk {
+			fill, err = s.claimBlockFill(ctx, store, span, totalSize, fillFrom())
+			if err == nil && fill == nil {
+				// The block turned warm between the first look and the claim.
+				if served, warmErr := s.serveWarmBlock(w, store, span); served || warmErr != nil {
+					return warmErr
+				}
 			}
+		} else if fill = s.claimMemoryFill(ctx, store, span, totalSize, fillFrom()); fill == nil {
+			return s.streamBlockFromS3(ctx, httpc, w, store, span, totalSize, mediaURL, grantID, defrost, renewMidBlock)
 		}
-	} else if fill = s.claimMemoryFill(ctx, store, span, totalSize, fillFrom()); fill == nil {
-		return s.streamBlockFromS3(ctx, httpc, w, store, span, totalSize, mediaURL, grantID, defrost, renewMidBlock)
-	}
-	pos := span.From
-	if err == nil && fill != nil {
+		pos = span.From
+		if err != nil || fill == nil {
+			break
+		}
 		pos, err = readBlockFill(ctx, w, fill, span)
 		if err == nil {
 			return nil
+		}
+		// A shared fill started from another request's resolution (one that
+		// was stale or superseded) answers that resolution's upstream status,
+		// not this request's. Before any byte of the span went out, the block
+		// is claimed once more; the failed fill has ended, so the claim starts
+		// a fill from this request's resolution.
+		var statusErr upstreamStatusError
+		if attempt > 0 || pos != span.From || fill.sourceURL == mediaURL || !errors.As(err, &statusErr) {
+			break
 		}
 	}
 	var diskErr fillDiskError
@@ -687,6 +752,19 @@ func (e upstreamStatusError) Error() string {
 // isAuthStatus reports an upstream refusing the request's credential.
 func isAuthStatus(code int) bool {
 	return code == http.StatusUnauthorized || code == http.StatusForbidden
+}
+
+// isMissingStatus reports an upstream that no longer has the object.
+func isMissingStatus(code int) bool {
+	return code == http.StatusNotFound || code == http.StatusGone
+}
+
+// isUpstreamMissingError reports whether err is an upstream 404/410: the
+// resolved object was deleted or superseded, which a fresh resolve may replace
+// with the artifact's current object.
+func isUpstreamMissingError(err error) bool {
+	var se upstreamStatusError
+	return errors.As(err, &se) && isMissingStatus(se.StatusCode)
 }
 
 // isUpstreamAuthError reports whether err is an upstream 401/403: an expired

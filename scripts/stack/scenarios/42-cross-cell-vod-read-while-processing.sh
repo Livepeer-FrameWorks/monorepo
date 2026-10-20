@@ -1,13 +1,17 @@
 #!/usr/bin/env bash
 # stack-scenario: default
 # The other cell plays a VOD while its origin cell is still processing it, and
-# keeps playing it once processing has replaced the uploaded source with its
-# output in another container.
+# the same edge keeps playing it once processing has replaced the uploaded
+# source with its output in another container and storage has deleted the
+# upload, while the edge still holds what it cached for the first read.
 # Catches: the staging edge-us defect after v0.3.13 (the US Foghorn adopted the
 # EU VOD with the uploaded source's format=mp4 while EU was processing it; the
 # adoption kept that format once EU's output was mkv and STREAM_SOURCE never
 # asked EU again, so every later .mp4 relay read through edge-us failed while
-# EU played it).
+# EU played it). Also catches the edge relay answering the processed .mkv from
+# the resolution it cached for the upload's .mp4 (same hash, other container),
+# and replaying that resolution's deleted upload URL as 404 until its TTL ran
+# out instead of resolving again.
 . "$(dirname "$0")/../lib.sh"
 
 need ffmpeg jq curl python3 || finish
@@ -45,7 +49,10 @@ read_while_processing() {
 }
 eventually 240 "the other cell plays the VOD while its origin is processing it" read_while_processing
 LAST_READ=$(utc_now)
+LAST_READ_EPOCH=$(date +%s)
 SOURCE_FORMAT=$(pointer_format)
+SOURCE_URL=$(pg "$ORIGIN_DB" "SELECT COALESCE(s3_url,'') FROM foghorn.artifacts WHERE tenant_id='$STACK_TENANT_ID' AND artifact_hash='$VHASH'")
+echo "    origin source object while processing: ${SOURCE_URL:-none}"
 INTERNAL=$(pg "$REMOTE_DB" "SELECT COALESCE(internal_name,'') FROM foghorn.artifacts WHERE tenant_id='$STACK_TENANT_ID' AND artifact_hash='$VHASH'")
 echo "    adopted while processing: format=${SOURCE_FORMAT:-none}"
 
@@ -68,14 +75,20 @@ echo "    origin format after processing: $FINAL_FORMAT (source format: ${SOURCE
 # has viewers.
 input_idle() { log_has "$LAST_READ" "Stream vod\\+$INTERNAL became inactive" "$REMOTE_EDGE"; }
 eventually 240 "the other cell's edge ($REMOTE_EDGE) closed the input of the read during processing" input_idle
-# The source read left the whole source file in the edge's relay cache, which
-# would keep serving it under its old name. A cold edge has to fetch through
-# the origin, as edge-us did on staging.
-echo "    cached on $REMOTE_EDGE: $(stack_exec "$REMOTE_EDGE" sh -c "ls /data/storage/vod/ | grep $VHASH" | tr '\n' ' ')"
-check "the other cell's edge drops its cached copy of the source" \
-  stack_exec "$REMOTE_EDGE" sh -c "rm -rf /data/storage/vod/$VHASH.*"
 
-log "the other cell plays the processed VOD"
+# Processing enqueues the superseded upload for deletion; the cleanup queue
+# drains every minute. The edge keeps its relay cache from the first read.
+SOURCE_OBJECT=${SOURCE_URL#s3://}
+if [ "$SOURCE_OBJECT" != "$SOURCE_URL" ] && [ "$SOURCE_URL" != "$(pg "$ORIGIN_DB" "SELECT COALESCE(s3_url,'') FROM foghorn.artifacts WHERE tenant_id='$STACK_TENANT_ID' AND artifact_hash='$VHASH'")" ]; then
+  upload_deleted() { python3 "$STACK_LIB_DIR/s3-prefix-empty.py" "${SOURCE_OBJECT%%/*}" "${SOURCE_OBJECT#*/}"; }
+  eventually 300 "storage deleted the superseded upload $SOURCE_URL" upload_deleted
+else
+  echo "    the origin still serves the source object; the deleted-upload read this scenario guards is not exercised"
+fi
+echo "    cached on $REMOTE_EDGE: $(stack_exec "$REMOTE_EDGE" sh -c "ls /data/storage/vod/ | grep $VHASH" | tr '\n' ' ')"
+echo "    $(($(date +%s) - LAST_READ_EPOCH))s since the read during processing (cross-cell relay resolutions are cached for about 11 minutes)"
+
+log "the same edge ($REMOTE_EDGE) plays the processed VOD"
 remote_plays_processed() {
   echo "    pointer format=$(pointer_format)"
   media_at "$REMOTE" "$VPB" && [ "$(pointer_format)" = "$FINAL_FORMAT" ]

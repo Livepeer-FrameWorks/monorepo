@@ -321,9 +321,11 @@ func (s *Server) fetchAndServeWithIntent(c *gin.Context, kind, hash, ext, localP
 // straight back, and never touches disk. Used for HEAD probes and memory-only
 // playback-cache outcomes. onUpstreamFailure, when set, receives an upstream
 // that failed or answered an error status. When the upstream refuses res's
-// credential with 401/403, renew (when set) supplies one replacement
-// resolution and the request is sent again; a refusal that remains is answered
-// as 502, so Mist never reads the store's authorization error as its own.
+// credential with 401/403 or no longer has its object (404/410), renew (when
+// set) supplies one replacement resolution and the request is sent again; a
+// refusal that remains is answered as 502, so Mist never reads the store's
+// authorization error as its own, and an object the fresh resolution still
+// lacks is answered as the upstream's status.
 func (s *Server) streamRangeNoCache(c *gin.Context, res *ResolveResult, onUpstreamFailure func(error), renew func(*ResolveResult) (*ResolveResult, bool)) string {
 	method := c.Request.Method
 	if method == http.MethodHead {
@@ -345,7 +347,7 @@ func (s *Server) streamRangeNoCache(c *gin.Context, res *ResolveResult, onUpstre
 		return s.upstreamClient(res).Do(req)
 	}
 	resp, err := send(res)
-	if err == nil && isAuthStatus(resp.StatusCode) && renew != nil {
+	if err == nil && (isAuthStatus(resp.StatusCode) || isMissingStatus(resp.StatusCode)) && renew != nil {
 		if fresh, ok := renew(res); ok {
 			_ = resp.Body.Close()
 			resp, err = send(fresh)

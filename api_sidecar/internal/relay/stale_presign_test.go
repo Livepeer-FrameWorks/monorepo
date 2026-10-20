@@ -239,12 +239,12 @@ func TestResolveCacheHonorsSignedPresignExpiry(t *testing.T) {
 		}
 	}
 	c := newResolveCache()
-	c.Put("vod", "fresh", result(time.Minute))
-	if _, ok := c.Get("vod", "fresh"); !ok {
+	c.Put("vod", "fresh", ".mkv", result(time.Minute))
+	if _, ok := c.Get("vod", "fresh", ".mkv"); !ok {
 		t.Fatal("cache dropped a presigned URL with 14 minutes left")
 	}
-	c.Put("vod", "expiring", result(15*time.Minute-20*time.Second))
-	if _, ok := c.Get("vod", "expiring"); ok {
+	c.Put("vod", "expiring", ".mkv", result(15*time.Minute-20*time.Second))
+	if _, ok := c.Get("vod", "expiring", ".mkv"); ok {
 		t.Fatalf("cache served a presigned URL that expires in 20 s (refresh margin %s)", presignRefreshMargin)
 	}
 }

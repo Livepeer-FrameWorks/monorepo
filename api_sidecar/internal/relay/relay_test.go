@@ -461,7 +461,7 @@ func TestDtshPutNoDirectUpload_UsesStagedHandoff(t *testing.T) {
 	fz := &fakeFreeze{}
 	s := newTestServer(t, dir, admission.CacheToDisk, &fakeResolver{}, fz)
 	// A cached resolve result carries NO writable .dtsh URL — the field is gone; the relay never uploads.
-	s.cache.Put("vod", hash, &ResolveResult{
+	s.cache.Put("vod", hash, ".mkv", &ResolveResult{
 		URLTTLSeconds: 60,
 		cachedAt:      time.Now(),
 	})

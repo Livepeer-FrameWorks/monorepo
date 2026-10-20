@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
+	"strings"
 	"sync"
 	"time"
 
@@ -161,7 +163,9 @@ func (r *ResolveResult) fresh(now time.Time) bool {
 }
 
 // resolveCache is a small in-memory cache of recent RelayResolve responses,
-// keyed by (kind, hash).
+// keyed by (kind, hash, ext). The extension is part of the identity: an
+// artifact whose container changed (an upload replaced by its processed
+// output) resolves to a different object, or to none, for each extension.
 type resolveCache struct {
 	mu      sync.RWMutex
 	entries map[string]*ResolveResult
@@ -171,97 +175,123 @@ func newResolveCache() *resolveCache {
 	return &resolveCache{entries: make(map[string]*ResolveResult)}
 }
 
-func cacheKey(kind, hash string) string {
-	return kind + "/" + hash
+func cacheKey(kind, hash, ext string) string {
+	return kind + "/" + hash + "/" + strings.ToLower(ext)
 }
 
-func (rc *resolveCache) Get(kind, hash string) (*ResolveResult, bool) {
+func (rc *resolveCache) Get(kind, hash, ext string) (*ResolveResult, bool) {
 	rc.mu.RLock()
 	defer rc.mu.RUnlock()
-	r, ok := rc.entries[cacheKey(kind, hash)]
+	r, ok := rc.entries[cacheKey(kind, hash, ext)]
 	if !ok || !r.fresh(time.Now()) {
 		return nil, false
 	}
 	return r, true
 }
 
-// successor returns the cached resolution that already replaced stale, when a
-// concurrent request renewed it. Otherwise it drops stale from the cache and
-// reports false.
-func (rc *resolveCache) successor(kind, hash string, stale *ResolveResult) (*ResolveResult, bool) {
-	rc.mu.Lock()
-	defer rc.mu.Unlock()
-	key := cacheKey(kind, hash)
-	cur, ok := rc.entries[key]
+// replacement returns the cached resolution that already replaced stale, when
+// a concurrent request renewed it.
+func (rc *resolveCache) replacement(kind, hash, ext string, stale *ResolveResult) (*ResolveResult, bool) {
+	rc.mu.RLock()
+	defer rc.mu.RUnlock()
+	cur, ok := rc.entries[cacheKey(kind, hash, ext)]
 	if ok && cur != stale && cur.fresh(time.Now()) {
 		return cur, true
-	}
-	if ok && cur == stale {
-		delete(rc.entries, key)
 	}
 	return nil, false
 }
 
-func (rc *resolveCache) Put(kind, hash string, r *ResolveResult) {
+// drop removes stale from the cache unless another resolution replaced it.
+func (rc *resolveCache) drop(kind, hash, ext string, stale *ResolveResult) {
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+	key := cacheKey(kind, hash, ext)
+	if cur, ok := rc.entries[key]; ok && cur == stale {
+		delete(rc.entries, key)
+	}
+}
+
+func (rc *resolveCache) Put(kind, hash, ext string, r *ResolveResult) {
 	if r == nil {
 		return
 	}
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
-	rc.entries[cacheKey(kind, hash)] = r
+	rc.entries[cacheKey(kind, hash, ext)] = r
 }
 
-func (rc *resolveCache) Delete(kind, hash string) {
+func (rc *resolveCache) Delete(kind, hash, ext string) {
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
-	delete(rc.entries, cacheKey(kind, hash))
+	delete(rc.entries, cacheKey(kind, hash, ext))
 }
 
 // resolveCached returns a cached resolve when fresh, otherwise issues a
 // fresh resolve via s.resolver and stores the result in the cache.
 func (s *Server) resolveCached(rc ResolveContext) (*ResolveResult, error) {
-	if r, ok := s.cache.Get(rc.AssetKind, rc.AssetHash); ok {
+	if r, ok := s.cache.Get(rc.AssetKind, rc.AssetHash, rc.Ext); ok {
 		return r, nil
 	}
 	res, err := s.resolver.Resolve(rc)
 	if err != nil {
 		return nil, err
 	}
-	s.cache.Put(rc.AssetKind, rc.AssetHash, res)
+	s.cache.Put(rc.AssetKind, rc.AssetHash, rc.Ext, res)
 	return res, nil
 }
 
 // resolveRenewer returns the function a request calls when its upstream
 // refused the resolution it holds (an expired presigned URL, a dead peer
-// grant). The function yields a playable replacement: the one a concurrent
-// request already fetched, else a fresh resolve through Foghorn. ok is false
-// when stale cannot be renewed or the fresh resolve is not playable; stale is
-// out of the cache either way.
+// grant) or no longer has its object (a superseded upload deleted from
+// storage). The function yields a playable replacement: the one a concurrent
+// request already fetched, else a fresh resolve through Foghorn. Concurrent
+// renewals of one (kind, hash, ext) share a single resolve. ok is false when
+// stale cannot be renewed or the fresh resolve is not playable; stale is out
+// of the cache either way.
 func (s *Server) resolveRenewer(ctx context.Context, kind, hash, ext string) func(stale *ResolveResult) (*ResolveResult, bool) {
 	return func(stale *ResolveResult) (*ResolveResult, bool) {
 		if !stale.renewable() {
 			return nil, false
 		}
-		if cur, ok := s.cache.successor(kind, hash, stale); ok {
-			return cur, true
-		}
-		res, err := s.resolver.Resolve(ResolveContext{
-			Ctx:       ctx,
-			AssetKind: kind,
-			AssetHash: hash,
-			Ext:       ext,
-			Hint:      ipcpb.RelayResolveRequest_RELAY_HINT_RANDOM_ACCESS,
-		})
-		if err != nil || res == nil || res.State != ipcpb.AssetState_ASSET_STATE_PLAYABLE || res.UpstreamURL() == "" {
-			if s.logger != nil {
-				s.logger.WithError(err).WithField("asset_hash", hash).Warn("relay: upstream refused the resolved credential and re-resolve gave no playable source")
+		// The shared resolve outlives a caller that leaves, so the callers
+		// still waiting on it get its answer; the control stream bounds each
+		// resolve on its own.
+		resolveCtx := context.WithoutCancel(ctx)
+		v, err, _ := s.renewals.Do(cacheKey(kind, hash, ext), func() (any, error) {
+			if cur, ok := s.cache.replacement(kind, hash, ext, stale); ok {
+				return cur, nil
 			}
+			// stale stays cached while the resolve runs, so a request that
+			// reads it meanwhile fails over to this shared resolve instead of
+			// resolving on its own; the answer overwrites it.
+			res, err := s.resolver.Resolve(ResolveContext{
+				Ctx:       resolveCtx,
+				AssetKind: kind,
+				AssetHash: hash,
+				Ext:       ext,
+				Hint:      ipcpb.RelayResolveRequest_RELAY_HINT_RANDOM_ACCESS,
+			})
+			if err != nil || res == nil || res.State != ipcpb.AssetState_ASSET_STATE_PLAYABLE || res.UpstreamURL() == "" {
+				if s.logger != nil {
+					s.logger.WithError(err).WithField("asset_hash", hash).WithField("ext", ext).Warn("relay: upstream refused or lost the resolved source and re-resolve gave no playable source")
+				}
+				s.cache.drop(kind, hash, ext, stale)
+				return nil, errNoPlayableRenewal
+			}
+			s.cache.Put(kind, hash, ext, res)
+			return res, nil
+		})
+		if err != nil {
 			return nil, false
 		}
-		s.cache.Put(kind, hash, res)
-		return res, true
+		res, ok := v.(*ResolveResult)
+		return res, ok && res != nil
 	}
 }
+
+// errNoPlayableRenewal is a shared re-resolve that produced no playable
+// resolution.
+var errNoPlayableRenewal = errors.New("relay re-resolve gave no playable source")
 
 func newRequestID() (string, error) {
 	var b [16]byte

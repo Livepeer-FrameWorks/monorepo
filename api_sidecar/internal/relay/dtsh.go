@@ -151,7 +151,7 @@ func (s *Server) serveSidecarGetWithStream(c *gin.Context, kind, hash, file, str
 		return
 	default:
 		if result.staleResolve {
-			s.cache.Delete(kind, hash)
+			s.cache.Delete(kind, hash, ext)
 		}
 		if s.logger != nil {
 			s.logger.WithField("asset_hash", hash).WithField("reason", result.reason).Warn("relay dtsh fetch failed; answering retry-later")

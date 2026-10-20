@@ -77,6 +77,8 @@ type blockFill struct {
 	blockPath string
 	// mem is the whole block of a memory fill; nil for a disk fill.
 	mem []byte
+	// sourceURL is the upstream URL the fill started from.
+	sourceURL string
 
 	mu      sync.Mutex
 	written int64
@@ -199,7 +201,7 @@ func (s *Server) claimBlockFill(ctx context.Context, store *BlockStore, span blo
 		_ = file.Close()
 		return nil, fillDiskError{err: err}
 	}
-	f := &blockFill{tmpPath: tmpPath, blockPath: store.BlockPath(span.Idx), written: have, changed: make(chan struct{})}
+	f := &blockFill{tmpPath: tmpPath, blockPath: store.BlockPath(span.Idx), sourceURL: src.target.url, written: have, changed: make(chan struct{})}
 	s.fills.inflight[key] = f
 	coldfetchCoalesced.WithLabelValues("leader").Inc()
 	s.fills.wg.Add(1)
@@ -249,7 +251,7 @@ func (s *Server) claimMemoryFill(ctx context.Context, store *BlockStore, span bl
 	if mem == nil {
 		mem = make([]byte, expected)
 	}
-	f := &blockFill{mem: mem, written: have, changed: make(chan struct{})}
+	f := &blockFill{mem: mem, sourceURL: src.target.url, written: have, changed: make(chan struct{})}
 	s.fills.mem[key] = f
 	coldfetchCoalesced.WithLabelValues("leader").Inc()
 	s.fills.wg.Add(1)
