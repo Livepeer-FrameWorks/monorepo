@@ -133,6 +133,20 @@ type artifactDescriptor struct {
 	// STREAM_SOURCE reauthorizes an already-adopted cross-cluster row against
 	// this before handing Mist a relay URL.
 	AuthoritativeCluster string
+	// FederatedPointer marks a row adopted from another cell. Its format is
+	// a copy of the origin's, which changes when the origin finishes
+	// processing, so STREAM_SOURCE re-asks the origin instead of trusting it.
+	FederatedPointer bool
+}
+
+// needsOriginResolve reports whether STREAM_SOURCE must ask the origin cell
+// for the artifact before building the relay URL: when no local row exists,
+// or when the local row is an adopted pointer whose metadata the origin owns.
+func needsOriginResolve(desc artifactDescriptor, originClusterID, tenantID string) bool {
+	if originClusterID == "" || tenantID == "" {
+		return false
+	}
+	return !desc.Found || desc.FederatedPointer
 }
 
 func selectArtifactRelayFormat(desc artifactDescriptor, warmFormat string) string {
@@ -160,6 +174,7 @@ func lookupArtifactDescriptor(ctx context.Context, artifactHash string) artifact
 		d.StreamInternal = row.StreamInternalName.String
 	}
 	d.AuthoritativeCluster = row.AuthoritativeCluster
+	d.FederatedPointer = row.FederatedPointer
 	return d
 }
 

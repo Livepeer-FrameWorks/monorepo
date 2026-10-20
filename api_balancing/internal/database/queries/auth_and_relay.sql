@@ -44,7 +44,8 @@ WHERE artifact_hash = $1 AND artifact_type = 'dvr';
 SELECT format,
        artifact_type,
        stream_internal_name,
-       COALESCE(storage_cluster_id, origin_cluster_id, '')::text AS authoritative_cluster
+       COALESCE(storage_cluster_id, origin_cluster_id, '')::text AS authoritative_cluster,
+       federated_pointer
 FROM foghorn.artifacts
 WHERE artifact_hash = $1 AND status != 'deleted'
 LIMIT 1;

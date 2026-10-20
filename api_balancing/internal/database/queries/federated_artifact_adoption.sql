@@ -20,7 +20,10 @@ ON CONFLICT (artifact_hash) DO UPDATE SET
     sync_status = CASE WHEN EXCLUDED.sync_status = 'synced' THEN 'synced' ELSE foghorn.artifacts.sync_status END,
     internal_name = CASE WHEN COALESCE(foghorn.artifacts.internal_name, '') = '' AND EXCLUDED.internal_name <> '' THEN EXCLUDED.internal_name ELSE foghorn.artifacts.internal_name END,
     stream_internal_name = CASE WHEN COALESCE(foghorn.artifacts.stream_internal_name, '') = '' AND EXCLUDED.stream_internal_name <> '' THEN EXCLUDED.stream_internal_name ELSE foghorn.artifacts.stream_internal_name END,
-    format = CASE WHEN COALESCE(foghorn.artifacts.format, '') = '' AND EXCLUDED.format <> '' THEN EXCLUDED.format ELSE foghorn.artifacts.format END,
+    -- The origin owns the container: processing replaces an uploaded source
+    -- (e.g. mp4) with its output (e.g. mkv), and the relay URL extension is
+    -- built from this column, so the origin's current answer always wins.
+    format = CASE WHEN EXCLUDED.format <> '' THEN EXCLUDED.format ELSE foghorn.artifacts.format END,
     origin_cluster_id = CASE WHEN COALESCE(foghorn.artifacts.origin_cluster_id, '') = '' THEN EXCLUDED.origin_cluster_id ELSE foghorn.artifacts.origin_cluster_id END,
     storage_cluster_id = CASE WHEN COALESCE(foghorn.artifacts.storage_cluster_id, '') = '' AND EXCLUDED.storage_cluster_id IS NOT NULL THEN EXCLUDED.storage_cluster_id ELSE foghorn.artifacts.storage_cluster_id END
 WHERE foghorn.artifacts.tenant_id = EXCLUDED.tenant_id

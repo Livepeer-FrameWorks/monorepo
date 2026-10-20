@@ -11,6 +11,27 @@ func TestSelectArtifactRelayFormatPrefersPersistedDescriptor(t *testing.T) {
 	}
 }
 
+func TestNeedsOriginResolveForAbsentRowsAndAdoptedPointers(t *testing.T) {
+	cases := []struct {
+		name   string
+		desc   artifactDescriptor
+		origin string
+		tenant string
+		want   bool
+	}{
+		{"no local row", artifactDescriptor{}, "origin-cell", "tenant", true},
+		{"adopted pointer", artifactDescriptor{Found: true, Format: "mp4", FederatedPointer: true}, "origin-cell", "tenant", true},
+		{"locally owned row", artifactDescriptor{Found: true, Format: "mkv"}, "origin-cell", "tenant", false},
+		{"unknown origin", artifactDescriptor{Found: true, FederatedPointer: true}, "", "tenant", false},
+		{"unknown tenant", artifactDescriptor{}, "origin-cell", "", false},
+	}
+	for _, tc := range cases {
+		if got := needsOriginResolve(tc.desc, tc.origin, tc.tenant); got != tc.want {
+			t.Errorf("%s: needsOriginResolve = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
 func TestSelectArtifactRelayFormatFallsBackToWarmStateWhenDescriptorEmpty(t *testing.T) {
 	got := selectArtifactRelayFormat(artifactDescriptor{}, "mkv")
 	if got != "mkv" {

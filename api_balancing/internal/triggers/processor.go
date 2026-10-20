@@ -3354,9 +3354,16 @@ func (p *Processor) handleStreamSource(trigger *ipcpb.MistTrigger) (string, bool
 	// peer allowlist, federate, and adopt the local pointer row. RelayResolve
 	// then serves from that row. xc.StreamInternalName gives clips their
 	// nested relay route (clip/<stream>/<hash>.<ext>).
-	if !desc.Found && originClusterID != "" && tenantID != "" {
+	// An already-adopted pointer is resolved again: the origin replaces an
+	// uploaded source with its processed output in another container, and a
+	// relay URL built from the adopted copy of the format names a file the
+	// origin no longer serves. When the origin cannot answer, the adopted row
+	// still routes the read.
+	if needsOriginResolve(desc, originClusterID, tenantID) {
 		if xc, err := control.ResolveAndAdoptRemoteArtifact(requestCtx, artifactHash, contentType, artifactInternal, originClusterID, tenantID, clusterPeers); err == nil && xc != nil {
-			format = xc.Format
+			if xc.Format != "" {
+				format = xc.Format
+			}
 			if xc.StreamInternalName != "" {
 				desc.StreamInternal = xc.StreamInternalName
 			}

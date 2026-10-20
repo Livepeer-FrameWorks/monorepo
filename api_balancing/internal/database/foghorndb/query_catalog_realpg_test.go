@@ -1363,6 +1363,49 @@ func TestMintArtifactShellRemainsRemoteParentPointer_RealPG(t *testing.T) {
 	}
 }
 
+// A cell that adopts another cell's VOD while the origin still serves the
+// uploaded source records the source's container. Once processing replaces it
+// with the output in another container, re-adoption must take the origin's
+// format: the relay URL extension is built from this row.
+func TestAdoptRemoteArtifactTakesOriginsCurrentFormat_RealPG(t *testing.T) {
+	db := startFoghornCatalogPostgres(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	const tenantID = "10000000-0000-0000-0000-000000000001"
+	const hash = "adopt-format-follows-origin"
+	adopt := func(format string) {
+		t.Helper()
+		rows, err := New(db).AdoptRemoteArtifact(ctx, AdoptRemoteArtifactParams{
+			ArtifactHash: hash, ArtifactType: "vod", TenantID: tenantID, InternalName: hash,
+			Format: format, OriginClusterID: "origin-cell", SyncStatus: "synced",
+		})
+		if err != nil || rows != 1 {
+			t.Fatalf("adopt format %q: rows=%d err=%v", format, rows, err)
+		}
+	}
+	format := func() string {
+		t.Helper()
+		var f sql.NullString
+		if err := db.QueryRowContext(ctx, `SELECT format FROM foghorn.artifacts WHERE artifact_hash=$1`, hash).Scan(&f); err != nil {
+			t.Fatal(err)
+		}
+		return f.String
+	}
+
+	adopt("mp4")
+	if got := format(); got != "mp4" {
+		t.Fatalf("first adoption format = %q, want mp4", got)
+	}
+	adopt("mkv")
+	if got := format(); got != "mkv" {
+		t.Fatalf("re-adoption after the origin's processing format = %q, want the origin's mkv", got)
+	}
+	adopt("")
+	if got := format(); got != "mkv" {
+		t.Fatalf("re-adoption without a reported format = %q, want mkv kept", got)
+	}
+}
+
 func TestFoghornGeneratedQueryCatalogPrepares_RealYugabyte(t *testing.T) {
 	prepareFoghornCatalog(t, startFoghornCatalogYugabyte(t))
 }

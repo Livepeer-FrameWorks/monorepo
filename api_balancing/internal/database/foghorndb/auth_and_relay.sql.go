@@ -14,7 +14,8 @@ const getArtifactRelayDescriptor = `-- name: GetArtifactRelayDescriptor :one
 SELECT format,
        artifact_type,
        stream_internal_name,
-       COALESCE(storage_cluster_id, origin_cluster_id, '')::text AS authoritative_cluster
+       COALESCE(storage_cluster_id, origin_cluster_id, '')::text AS authoritative_cluster,
+       federated_pointer
 FROM foghorn.artifacts
 WHERE artifact_hash = $1 AND status != 'deleted'
 LIMIT 1
@@ -25,6 +26,7 @@ type GetArtifactRelayDescriptorRow struct {
 	ArtifactType         string         `db:"artifact_type" json:"artifact_type"`
 	StreamInternalName   sql.NullString `db:"stream_internal_name" json:"stream_internal_name"`
 	AuthoritativeCluster string         `db:"authoritative_cluster" json:"authoritative_cluster"`
+	FederatedPointer     bool           `db:"federated_pointer" json:"federated_pointer"`
 }
 
 func (q *Queries) GetArtifactRelayDescriptor(ctx context.Context, artifactHash string) (GetArtifactRelayDescriptorRow, error) {
@@ -35,6 +37,7 @@ func (q *Queries) GetArtifactRelayDescriptor(ctx context.Context, artifactHash s
 		&i.ArtifactType,
 		&i.StreamInternalName,
 		&i.AuthoritativeCluster,
+		&i.FederatedPointer,
 	)
 	return i, err
 }
