@@ -233,6 +233,10 @@ func fillFileArtifactResolve(ctx context.Context, req *ipcpb.RelayResolveRequest
 		}
 		return
 	}
+	if !relayExtMatchesFormat(req, format.String) {
+		logRelayExtMismatch(logger, req, format.String)
+		return
+	}
 	mediaURL, err := GeneratePresignedGETForArtifact(ctx, s3URL)
 	if err != nil {
 		resp.Error = "mint media presigned"
@@ -379,6 +383,10 @@ func fillPeerRelayFromLocalOrigin(
 	logger logging.Logger,
 ) bool {
 	if db == nil {
+		return false
+	}
+	if !relayExtMatchesFormat(req, format.String) {
+		logRelayExtMismatch(logger, req, format.String)
 		return false
 	}
 	var (
@@ -643,6 +651,10 @@ func fillCrossClusterArtifact(ctx context.Context, req *ipcpb.RelayResolveReques
 		}
 		return
 	}
+	if !relayExtMatchesFormat(req, result.Format) {
+		logRelayExtMismatch(logger, req, result.Format)
+		return
+	}
 	if result.PeerRelayURL != "" && peerRelayAddressesNode(ctx, requestingNodeID, result.PeerRelayURL) {
 		if logger != nil {
 			logger.WithFields(logging.Fields{
@@ -694,6 +706,35 @@ func fillCrossClusterArtifact(ctx context.Context, req *ipcpb.RelayResolveReques
 		"storage_cluster_id": result.StorageClusterID,
 		"peer_relay":         result.PeerRelayURL != "",
 	}).Debug("RelayResolve: federated URL from peer cluster")
+}
+
+// relayExtMatchesFormat reports whether the container a vod/clip relay request
+// names is the artifact's current format. STREAM_SOURCE builds the relay path
+// from that format, so a different extension is a path built before the
+// artifact moved to another container (an upload replaced by its processed
+// output); its bytes are no longer the artifact, and the resolve answers
+// SOURCE_MISSING instead of handing out the other container under the old
+// name. Upload reads name the uploaded source's own extension and are not
+// compared. An empty extension or format has nothing to compare.
+func relayExtMatchesFormat(req *ipcpb.RelayResolveRequest, format string) bool {
+	if req.GetAssetKind() != "vod" && req.GetAssetKind() != "clip" {
+		return true
+	}
+	ext := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(req.GetExt()), "."))
+	format = strings.ToLower(strings.TrimPrefix(strings.TrimSpace(format), "."))
+	return ext == "" || format == "" || ext == format
+}
+
+func logRelayExtMismatch(logger logging.Logger, req *ipcpb.RelayResolveRequest, format string) {
+	if logger == nil {
+		return
+	}
+	logger.WithFields(logging.Fields{
+		"asset_hash": req.GetAssetHash(),
+		"asset_kind": req.GetAssetKind(),
+		"ext":        req.GetExt(),
+		"format":     format,
+	}).Info("RelayResolve: requested container is not the artifact's current format; source missing")
 }
 
 // contentTypeForFormat is a tiny map from artifact format strings to MIME
