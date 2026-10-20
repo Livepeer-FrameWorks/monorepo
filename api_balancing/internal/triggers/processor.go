@@ -5051,8 +5051,14 @@ func (p *Processor) sessionEndFact(ctx context.Context, effect control.OfflineEf
 
 // lostEndListingWindow bounds how long before a node's current control connection its last listing
 // of a stream may be for forwardEndsLostAcrossReconnect to treat the stream as having ended in the
-// gap between the connections.
-const lostEndListingWindow = 30 * time.Minute
+// gap between the connections. A node lists its streams every few seconds and a Helmsman restart
+// reconnects within seconds, so a listing older than this belongs to a stream that ended while an
+// earlier connection was up, whose end that connection carried.
+const lostEndListingWindow = time.Minute
+
+// lostEndRetryWindow is how long into a connection forwardEndsLostAcrossReconnect keeps retrying the
+// ends it found on the connection's first snapshots, and how long it remembers the ones it sent.
+const lostEndRetryWindow = 5 * time.Minute
 
 // forwardEndsLostAcrossReconnect forwards the inferred STREAM_END of an ingest session whose stream
 // ended while the node had no control connection to carry the news. Helmsman reports a vanished
@@ -5062,18 +5068,19 @@ const lostEndListingWindow = 30 * time.Minute
 // snapshots listed that no snapshot has listed since the current connection began ended in that
 // gap. Its last ended session on the node, with none active anywhere, gets the end under the same
 // session end id a Mist STREAM_END would carry, so Periscope keeps one end per session. Each id is
-// forwarded once per replica; a failed forward is retried on the next snapshot.
+// forwarded once per replica; a failed forward is retried on the next snapshots of the connection's
+// first lostEndRetryWindow.
 func (p *Processor) forwardEndsLostAcrossReconnect(nodeID string, absent []state.AbsentNodeStream, now time.Time) {
 	connectedSinceFn := p.nodeConnectedSince
 	if connectedSinceFn == nil {
 		connectedSinceFn = control.NodeConnectedSince
 	}
 	connectedSince, ok := connectedSinceFn(nodeID)
-	if !ok {
+	if !ok || now.Sub(connectedSince) > lostEndRetryWindow {
 		return
 	}
 	p.lostEndsForwarded.Range(func(key, value any) bool {
-		if at, isTime := value.(time.Time); isTime && now.Sub(at) > lostEndListingWindow {
+		if at, isTime := value.(time.Time); isTime && now.Sub(at) > 2*lostEndRetryWindow {
 			p.lostEndsForwarded.Delete(key)
 		}
 		return true
