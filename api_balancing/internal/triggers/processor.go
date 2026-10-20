@@ -136,7 +136,7 @@ type Processor struct {
 	quartermasterOutage       atomic.Pointer[federation.CentralOutageBackoff]
 	tenantAdmission           tenantAdmissionClient
 	decklogClient             *decklog.BatchedClient
-	lostEndsForwarded         sync.Map // session end ids forwardEndsLostAcrossReconnect sent, with when
+	lostEndsApplied           sync.Map // ingest session ids endStreamsLostAcrossReconnect ended, with when
 	nodeConnectedSince        func(nodeID string) (time.Time, bool)
 	loadBalancer              *balancer.LoadBalancer
 	geoipClient               *geoip.Reader
@@ -5050,27 +5050,26 @@ func (p *Processor) sessionEndFact(ctx context.Context, effect control.OfflineEf
 }
 
 // lostEndListingWindow bounds how long before a node's current control connection its last listing
-// of a stream may be for forwardEndsLostAcrossReconnect to treat the stream as having ended in the
+// of a stream may be for endStreamsLostAcrossReconnect to treat the stream as having ended in the
 // gap between the connections. A node lists its streams every few seconds and a Helmsman restart
 // reconnects within seconds, so a listing older than this belongs to a stream that ended while an
 // earlier connection was up, whose end that connection carried.
 const lostEndListingWindow = time.Minute
 
-// lostEndRetryWindow is how long into a connection forwardEndsLostAcrossReconnect keeps retrying the
-// ends it found on the connection's first snapshots, and how long it remembers the ones it sent.
+// lostEndRetryWindow is how long into a connection endStreamsLostAcrossReconnect keeps retrying the
+// ends it found on the connection's first snapshots, and how long it remembers the ones it applied.
 const lostEndRetryWindow = 5 * time.Minute
 
-// forwardEndsLostAcrossReconnect forwards the inferred STREAM_END of an ingest session whose stream
-// ended while the node had no control connection to carry the news. Helmsman reports a vanished
-// stream by diffing consecutive Mist polls, and a restarted Helmsman starts with no previous poll,
-// so a stream that ended during the restart gets neither Mist's STREAM_END (Mist does not retry it)
-// nor a vanish report. The node's snapshot is Mist's full stream list: a stream its earlier
-// snapshots listed that no snapshot has listed since the current connection began ended in that
-// gap. Its last ended session on the node, with none active anywhere, gets the end under the same
-// session end id a Mist STREAM_END would carry, so Periscope keeps one end per session. Each id is
-// forwarded once per replica; a failed forward is retried on the next snapshots of the connection's
-// first lostEndRetryWindow.
-func (p *Processor) forwardEndsLostAcrossReconnect(nodeID string, absent []state.AbsentNodeStream, now time.Time) {
+// endStreamsLostAcrossReconnect applies the owner vanish's offline path to a stream that ended while
+// its node had no control connection to carry the news. Helmsman reports a vanished stream by
+// diffing consecutive Mist polls, and a restarted Helmsman starts with no previous poll, so a stream
+// that ended during the restart gets neither Mist's STREAM_END (Mist does not retry it) nor a vanish
+// report. The node's snapshot is Mist's full stream list: a stream its earlier snapshots listed that
+// no snapshot has listed since the current connection began ended in that gap. When its last ended
+// session on the node has none active anywhere, endLostStream runs what that vanish would have run.
+// Each session is ended once per replica; a failure is retried on the next snapshots of the
+// connection's first lostEndRetryWindow.
+func (p *Processor) endStreamsLostAcrossReconnect(nodeID string, absent []state.AbsentNodeStream, now time.Time) {
 	connectedSinceFn := p.nodeConnectedSince
 	if connectedSinceFn == nil {
 		connectedSinceFn = control.NodeConnectedSince
@@ -5079,9 +5078,9 @@ func (p *Processor) forwardEndsLostAcrossReconnect(nodeID string, absent []state
 	if !ok || now.Sub(connectedSince) > lostEndRetryWindow {
 		return
 	}
-	p.lostEndsForwarded.Range(func(key, value any) bool {
+	p.lostEndsApplied.Range(func(key, value any) bool {
 		if at, isTime := value.(time.Time); isTime && now.Sub(at) > 2*lostEndRetryWindow {
-			p.lostEndsForwarded.Delete(key)
+			p.lostEndsApplied.Delete(key)
 		}
 		return true
 	})
@@ -5090,41 +5089,66 @@ func (p *Processor) forwardEndsLostAcrossReconnect(nodeID string, absent []state
 		if listedAt.IsZero() || !listedAt.Before(connectedSince) || connectedSince.Sub(listedAt) > lostEndListingWindow {
 			continue
 		}
-		if err := p.forwardLostEnd(nodeID, stream.InternalName, listedAt, now); err != nil {
+		if err := p.endLostStream(nodeID, stream.InternalName, listedAt, now); err != nil {
 			p.logger.WithError(err).WithFields(logging.Fields{
 				"node_id": nodeID, "internal_name": stream.InternalName,
-			}).Warn("Failed to forward the end of an ingest session that ended between control connections; the next snapshot retries")
+			}).Warn("Failed to end a stream that ended between control connections; the next snapshot retries")
 		}
 	}
 }
 
-func (p *Processor) forwardLostEnd(nodeID, internalName string, listedAt, now time.Time) error {
+// endLostStream runs the owner vanish's offline effects for a stream that ended between the node's
+// control connections: the node-keyed DVR stop backstop, and the durable offline transition whose
+// Decklog leg carries the vanish, from which sessionEndFact infers the session's STREAM_END under
+// the id a Mist STREAM_END would carry. The session was already ended by its close or by the
+// re-registration reconciliation, which queued the source-inactive, push-target and federation
+// legs; the transition reruns them idempotently. A close does not claim the recording's stop, and
+// the restarted Helmsman recovers only recordings whose Mist push is still live, so without the
+// backstop a recording whose push ended in the gap would stay active.
+func (p *Processor) endLostStream(nodeID, internalName string, listedAt, now time.Time) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	session, found, err := control.LatestEndedNodeIngestSession(ctx, nodeID, internalName, listedAt.UnixMilli())
 	if err != nil || !found {
 		return err
 	}
-	eventMillis := now.UnixMilli()
-	endID := control.SessionEndEventID(session.SessionID)
-	if _, done := p.lostEndsForwarded.Load(endID); done {
+	if _, done := p.lostEndsApplied.Load(session.SessionID); done {
 		return nil
 	}
+	registry := control.StreamRegistryInstance
+	if registry == nil {
+		return errors.New("stream registry unavailable")
+	}
 	tenantID, streamID := session.TenantID, session.StreamID
-	vanish := &ipcpb.MistTrigger{TriggerType: "STREAM_LIFECYCLE_UPDATE", NodeId: nodeID, Timestamp: now.Unix()}
+	lifecycle := &ipcpb.StreamLifecycleUpdate{TenantId: &tenantID, NodeId: nodeID, InternalName: internalName, Status: "offline"}
+	vanish := &ipcpb.MistTrigger{
+		TriggerType: "STREAM_LIFECYCLE_UPDATE", NodeId: nodeID, Timestamp: now.Unix(), TriggerUnixMillis: now.UnixMilli(),
+		TriggerPayload: &ipcpb.MistTrigger_StreamLifecycleUpdate{StreamLifecycleUpdate: lifecycle},
+	}
 	if streamID != "" {
-		vanish.StreamId = &streamID
+		vanish.StreamId, lifecycle.StreamId = &streamID, &streamID
 	}
 	p.applyResolvedStreamContext(vanish, internalName, streamContext{TenantID: tenantID, StreamID: streamID})
-	lifecycle := &ipcpb.StreamLifecycleUpdate{NodeId: nodeID, InternalName: internalName, Status: "offline"}
-	end := inferredStreamEnd(control.OfflineEffect{TenantID: tenantID, InternalName: internalName, NodeID: nodeID}, vanish, lifecycle, endID, eventMillis)
-	if err := p.sendTriggerToDecklogContext(ctx, end); err != nil {
-		return fmt.Errorf("forward inferred STREAM_END to Decklog: %w", err)
+	decklogPayload, err := proto.Marshal(vanish)
+	if err != nil {
+		return fmt.Errorf("encode inferred vanish: %w", err)
 	}
-	p.lostEndsForwarded.Store(endID, now)
+	if err = control.StopDVRForEndedSource(internalName, tenantID, nodeID, p.logger); err != nil {
+		return err
+	}
+	_, revision, err := control.FenceOfflineBackstop(ctx, registry, tenantID, nodeID, internalName, control.OfflineEffectIntent{
+		SetNodeOffline: true, TeardownStream: true, BroadcastOffline: true, DecklogTrigger: decklogPayload,
+	})
+	// A positive revision means the transition committed; the offline worker replays it even when
+	// the immediate projection publish failed.
+	if err != nil && revision <= 0 {
+		return fmt.Errorf("queue offline effect: %w", err)
+	}
+	p.lostEndsApplied.Store(session.SessionID, now)
 	p.logger.WithFields(logging.Fields{
 		"node_id": nodeID, "internal_name": internalName, "ingest_generation": session.SessionID,
-	}).Info("Forwarded the end of an ingest session whose stream ended between control connections")
+		"offline_queued": revision > 0,
+	}).Info("Applied the offline path to a stream that ended between control connections")
 	return nil
 }
 
@@ -6235,7 +6259,7 @@ func (p *Processor) handleNodeLifecycleUpdate(trigger *ipcpb.MistTrigger) (strin
 	// after the node's last listing has not been started by the destination
 	// yet, and a snapshot sampled before Mist asked for its source cannot list it.
 	if cleared := state.DefaultManager().ReconcileNodeStreamPresence(nu.GetNodeId(), observedStreams); len(cleared) > 0 {
-		p.forwardEndsLostAcrossReconnect(nu.GetNodeId(), cleared, time.Now())
+		p.endStreamsLostAcrossReconnect(nu.GetNodeId(), cleared, time.Now())
 		for _, absent := range cleared {
 			if control.StreamRegistryInstance != nil && control.StreamRegistryInstance.ClearReplicatingForNode(absent.InternalName, nu.GetNodeId(), absent.SnapshotPresentAt) {
 				p.logger.WithFields(logging.Fields{

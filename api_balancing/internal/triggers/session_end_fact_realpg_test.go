@@ -142,8 +142,11 @@ func TestVanishOnlyEndForwardsSessionEndFact_RealPG(t *testing.T) {
 // STREAM_END finds no listener and is not retried, and the restarted Helmsman's poller has no
 // previous poll to diff, so it never reports the vanish. Foghorn still sees the node's snapshots:
 // a stream the node listed before its current control connection and has not listed since ended in
-// the gap, and its last ended session gets its end. A stream that disappears while the connection
-// that listed it is up is left to Helmsman's own vanish report.
+// the gap, and it gets what the owner's vanish would have run: the stop of the recording its closed
+// session left running (the restarted Helmsman recovers only recordings whose Mist push is still
+// live, so nothing else would end it) and a durable offline transition whose Decklog leg carries
+// the session's end. A stream that disappears while the connection that listed it is up is left to
+// Helmsman's own vanish report.
 func TestStreamEndedAcrossHelmsmanRestartForwardsSessionEnd_RealPG(t *testing.T) {
 	conn := startFoghornTriggersRealPG(t)
 	control.SetDB(conn)
@@ -151,7 +154,7 @@ func TestStreamEndedAcrossHelmsmanRestartForwardsSessionEnd_RealPG(t *testing.T)
 	ctx := context.Background()
 	sm := state.ResetDefaultManagerForTests()
 	t.Cleanup(sm.Shutdown)
-	installRegistryForTest(t)
+	reg := installRegistryForTest(t)
 
 	tenant := uuid.NewString()
 	const node = "edge-restart"
@@ -170,12 +173,32 @@ func TestStreamEndedAcrossHelmsmanRestartForwardsSessionEnd_RealPG(t *testing.T)
 			t.Fatalf("seed ingest session %s: %v", internal, err)
 		}
 		sessions[internal] = struct{ streamID, sessionID string }{streamID, sessionID}
+		// The close's own offline transition already took the source inactive; the recording it
+		// leaves running for Mist's resume window is bound to the closed session.
+		projectSourceForTest(t, reg, internal, node, int64(5000+i), "start-"+internal, sessionID, 1)
+		markSourceInactiveForTest(t, reg, internal, node, sessionID, 2)
+		if _, err := conn.ExecContext(ctx, `
+			INSERT INTO foghorn.artifacts (artifact_hash, artifact_type, stream_internal_name, tenant_id, status, dvr_start_dispatch, ingest_generation)
+			VALUES ($1, 'dvr', $2, $3::uuid, 'recording',
+			        jsonb_build_object('state', 'recording', 'source_node_id', $4::text, 'node_id', ''), $5::uuid)`,
+			"dvr-"+internal, internal, tenant, node, sessionID); err != nil {
+			t.Fatalf("seed recording of %s: %v", internal, err)
+		}
+	}
+	dvrStatus := func(internal string) string {
+		t.Helper()
+		var status string
+		if err := conn.QueryRowContext(ctx, `SELECT status FROM foghorn.artifacts WHERE artifact_hash = $1`, "dvr-"+internal).Scan(&status); err != nil {
+			t.Fatalf("read recording status of %s: %v", internal, err)
+		}
+		return status
 	}
 
 	capture, client := startDecklogCapture(t)
 	p := newTestProcessor(t)
 	p.decklogClient = client
 	p.clusterID = "media-a"
+	p.sendDeactivatePushTargets = func(context.Context, string, *ipcpb.DeactivatePushTargets) error { return nil }
 	connectedSince := now.Add(-time.Hour)
 	p.nodeConnectedSince = func(nodeID string) (time.Time, bool) { return connectedSince, nodeID == node }
 	snapshot := func(names ...string) {
@@ -207,6 +230,34 @@ func TestStreamEndedAcrossHelmsmanRestartForwardsSessionEnd_RealPG(t *testing.T)
 	snapshot("ended-while-connected")
 	snapshot()
 	snapshot()
+
+	if got := dvrStatus("ended-during-restart"); got != "stopping" {
+		t.Fatalf("recording of the stream that ended during the restart is %q, want its stop claimed (stopping)", got)
+	}
+	if got := dvrStatus("ended-while-connected"); got != "recording" {
+		t.Fatalf("recording of the stream that ended while connected is %q, want it left to the vanish report", got)
+	}
+	var effects int
+	if err := conn.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM foghorn.ingest_offline_effects
+		WHERE tenant_id = $1::uuid AND decklog_trigger IS NOT NULL`, tenant).Scan(&effects); err != nil {
+		t.Fatalf("count offline transitions: %v", err)
+	}
+	if effects != 1 {
+		t.Fatalf("snapshots queued %d offline transition(s) carrying a Decklog trigger, want one for the restart-gap stream", effects)
+	}
+	claimed, err := control.ClaimOfflineEffects(ctx, 10, time.Minute, "")
+	if err != nil {
+		t.Fatalf("claim offline transitions: %v", err)
+	}
+	for _, effect := range claimed {
+		if effect.InternalName != "ended-during-restart" || effect.NodeID != node || effect.TenantID != tenant {
+			t.Fatalf("queued offline transition %+v, want only the restart-gap stream's on %s", effect, node)
+		}
+		if _, err := control.ApplyClaimedOfflineEffect(ctx, effect, p.ApplyOfflineEffect); err != nil {
+			t.Fatalf("apply offline transition: %v", err)
+		}
+	}
 
 	got := ends()
 	if len(got) != 1 {
