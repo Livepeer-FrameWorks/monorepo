@@ -70,6 +70,8 @@ for n in $(seq 1 20); do
     check "$direction $n: no lifecycle eviction of the arranged live pull" [ -z "$cleared" ]
     kill "$pid" 2>/dev/null
     delete_stream "$id"
+    # The exit cleanup deletes only streams still standing.
+    unset 'STREAMS[-1]'
   done
 done
 check "cross-cell origin pull arrangements were logged" log_has "$since" 'Origin-pull arranged' foghorn foghorn-2 foghorn-b foghorn-b-2
