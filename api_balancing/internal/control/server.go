@@ -9404,6 +9404,10 @@ func processCanDeleteRequest(req *ipcpb.CanDeleteRequest, nodeID string, stream 
 	}
 
 	terminal := info != nil && (info.LifecycleStatus == "deleted" || info.LifecycleStatus == "expired" || info.LifecycleStatus == "aborted")
+	durable, durableReason := false, ""
+	if !terminal {
+		durable, durableReason = verifyDurableArtifactCopy(ctx, info, logger)
+	}
 	if terminal {
 		response.SafeToDelete = true
 		response.Reason = "catalog_terminal"
@@ -9411,9 +9415,9 @@ func processCanDeleteRequest(req *ipcpb.CanDeleteRequest, nodeID string, stream 
 			"asset_hash": assetHash,
 			"status":     info.LifecycleStatus,
 		}).Info("Terminal catalog artifact is safe to remove locally")
-	} else if durable, reason := verifyDurableArtifactCopy(ctx, info, logger); durable {
+	} else if durable {
 		response.SafeToDelete = true
-		response.Reason = reason
+		response.Reason = durableReason
 
 		// Calculate warm duration (how long asset was cached before eviction)
 		cachedAt, err := artifactRepo.GetCachedAt(ctx, assetHash)
@@ -9441,7 +9445,7 @@ func processCanDeleteRequest(req *ipcpb.CanDeleteRequest, nodeID string, stream 
 		} else if info.SyncStatus == "failed" {
 			response.Reason = "sync_failed"
 		} else if info.SyncStatus == "synced" {
-			_, response.Reason = verifyDurableArtifactCopy(ctx, info, logger)
+			response.Reason = durableReason
 		} else {
 			response.Reason = "not_synced"
 		}
@@ -9474,6 +9478,9 @@ func verifyDurableArtifactCopy(ctx context.Context, info *state.ArtifactSyncInfo
 		}
 		return false, "s3_url_invalid"
 	}
+	if info.ArtifactType == "dvr" {
+		return verifyDurableDVRCopy(ctx, info, key, logger)
+	}
 	keys, err := s3Client.ListPrefix(ctx, key)
 	if err != nil {
 		if logger != nil {
@@ -9494,6 +9501,45 @@ func verifyDurableArtifactCopy(ctx context.Context, info *state.ArtifactSyncInfo
 			"asset_hash": info.ArtifactHash,
 			"s3_key":     key,
 		}).Warn("Artifact marked synced but durable object is missing")
+	}
+	return false, "s3_object_missing"
+}
+
+// verifyDurableDVRCopy proves a DVR recording durable. A DVR's s3_url is the
+// recording's key prefix, not one object: its durable copy is the segment
+// objects under <prefix>/segments/, one per ledger segment in uploaded or
+// deleted_local state. Segments reclaimed after their chapters froze leave
+// both the count and S3, so a fully reclaimed recording needs no objects; the
+// chapter VOD artifacts own its content then.
+func verifyDurableDVRCopy(ctx context.Context, info *state.ArtifactSyncInfo, prefix string, logger logging.Logger) (bool, string) {
+	uploaded, _, err := classifyFinalCounts(ctx, info.ArtifactHash)
+	if err != nil {
+		if logger != nil {
+			logger.WithError(err).WithField("asset_hash", info.ArtifactHash).Warn("Failed to read DVR segment ledger for durability check")
+		}
+		return false, "s3_verify_failed"
+	}
+	segmentPrefix := strings.TrimSuffix(prefix, "/") + "/segments/"
+	keys, err := s3Client.ListPrefix(ctx, segmentPrefix)
+	if err != nil {
+		if logger != nil {
+			logger.WithError(err).WithFields(logging.Fields{
+				"asset_hash": info.ArtifactHash,
+				"s3_prefix":  segmentPrefix,
+			}).Warn("Failed to verify synced DVR segments in S3")
+		}
+		return false, "s3_verify_failed"
+	}
+	if len(keys) >= uploaded {
+		return true, "synced_verified"
+	}
+	if logger != nil {
+		logger.WithFields(logging.Fields{
+			"asset_hash":        info.ArtifactHash,
+			"s3_prefix":         segmentPrefix,
+			"uploaded_segments": uploaded,
+			"s3_segments":       len(keys),
+		}).Warn("DVR marked synced but its uploaded segments are missing from S3")
 	}
 	return false, "s3_object_missing"
 }
