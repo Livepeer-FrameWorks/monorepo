@@ -89,6 +89,9 @@ echo "    cached on $REMOTE_EDGE: $(stack_exec "$REMOTE_EDGE" sh -c "ls /data/st
 echo "    $(($(date +%s) - LAST_READ_EPOCH))s since the read during processing (cross-cell relay resolutions are cached for about 11 minutes)"
 
 log "the same edge ($REMOTE_EDGE) plays the processed VOD"
+# The first viewer must play: a relay that answers from the resolution it
+# cached for the upload fails this read even when a later retry recovers.
+check "the same edge plays the processed VOD at the first attempt" media_at "$REMOTE" "$VPB"
 remote_plays_processed() {
   echo "    pointer format=$(pointer_format)"
   media_at "$REMOTE" "$VPB" && [ "$(pointer_format)" = "$FINAL_FORMAT" ]
