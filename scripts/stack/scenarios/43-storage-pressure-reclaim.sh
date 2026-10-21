@@ -1,17 +1,20 @@
 #!/usr/bin/env bash
 # stack-scenario: default
 # An edge over its freeze threshold reclaims everything it may: the relay's
-# block caches in every cache root (upload sources included), sidecars whose
-# media is gone, and a finished recording whose segments are durable in S3.
-# Foghorn refuses no eviction as s3_object_missing while S3 holds the bytes,
-# and the edge reports no candidate Foghorn cannot catalog because it is not
-# an artifact at all.
+# block caches in every cache root (upload sources included) and sidecars whose
+# media is gone, and its cleanup pass evicts the lowest-priority durable
+# artifacts, a finished recording among them, until usage of the whole store
+# is below the pass's target. Foghorn refuses no eviction as s3_object_missing
+# while S3 holds the bytes, and the edge reports no candidate Foghorn cannot
+# catalog because it is not an artifact at all.
 # Measures: the edge's storage and both cleanup loops' logs after a pass at a
 # logical capacity that puts the edge at 92% usage.
 # Catches: upload/*.blocks never reclaimed, a <hash>.<ext>.dtsh sidecar
 # enumerated as artifact "<hash>.<ext>" (not_found on every pass), a DVR's S3
 # prefix compared as one object key (s3_object_missing on every pass); together
-# they held staging edge-eu at 0.907 with a pass every 6 s freeing nothing.
+# they held staging edge-eu at 0.907 with a pass every 6 s freeing nothing; a
+# cleanup pass that reports the usage of clips/ alone (0 under a logical
+# capacity) instead of the whole store's.
 . "$(dirname "$0")/../lib.sh"
 
 EDGE_SERVICE=${STACK_EDGE_A_SERVICE:-edge}
@@ -103,14 +106,15 @@ as_helmsman "mkdir -p $STORE/vod && head -c 4096 /dev/urandom >$ORPHAN && touch 
 
 # cap_at <percent>: a logical capacity that puts the edge's storage at that
 # usage, applied by a Helmsman restart.
+store_bytes() { edge_sh "find $STORE -type f -exec stat -c %s {} + 2>/dev/null | awk '{s+=\$1} END {print s+0}'"; }
 cap_at() {
-  local used cap
+  local used
   edge_sh "[ ! -e $DVR_DIR/$DVR_HASH.m3u8 ] || touch -d @$OLD $DVR_DIR/$DVR_HASH.m3u8"
-  used=$(edge_sh "find $STORE -type f -exec stat -c %s {} + 2>/dev/null | awk '{s+=\$1} END {print s+0}'")
+  used=$(store_bytes)
   [ "${used:-0}" -gt 0 ] 2>/dev/null || return 1
-  cap=$((used * 100 / $1))
-  echo "    storage ${used} bytes, capacity ${cap} bytes"
-  edge_sh "printf 'HELMSMAN_STORAGE_CAPACITY_BYTES=%s\n' $cap >$EDGE_ENV && chmod 0644 $EDGE_ENV" || return 1
+  CAP=$((used * 100 / $1))
+  echo "    storage ${used} bytes, capacity ${CAP} bytes"
+  edge_sh "printf 'HELMSMAN_STORAGE_CAPACITY_BYTES=%s\n' $CAP >$EDGE_ENV && chmod 0644 $EDGE_ENV" || return 1
   CAPPED=1
   helmsman_restart
 }
@@ -137,8 +141,32 @@ blocks_left=$(upload_blocks)
 check "no upload block cache left after the pass (left: ${blocks_left:-none})" [ -z "$blocks_left" ]
 orphan_gone() { edge_sh "[ ! -e $ORPHAN ]"; }
 check "the orphan sidecar is reclaimed" orphan_gone
+# The cleanup monitor frees the lowest-priority evictable artifacts until usage
+# is below its target, so a recording is evicted only when the artifacts ahead
+# of it did not reach the target. Its pass is the first one after the monitor
+# start that the last capacity restart caused.
+PASS_SINCE=${T2:-$T1}
+init=$(log_json_at "$PASS_SINCE" 'select(.msg == "Cleanup monitor initialized") | "\(.at) \(.target_threshold)"' "$EDGE_SERVICE" | tail -n 1)
+INIT_AT=${init%% *}
+TARGET=${init#* }
+pass=$(log_json_at "$PASS_SINCE" "select(.msg == \"Cleanup completed\" and .at > \"$INIT_AT\") | \"\\(.at) \\(.final_usage)\"" "$EDGE_SERVICE" | head -n 1)
+DONE_AT=${pass%% *}
+FINAL=${pass#* }
+usage_now=$(awk -v u="$(store_bytes)" -v c="${CAP:-0}" 'BEGIN { if (c > 0) printf "%.4f", u / c; else print "" }')
+echo "    cleanup pass: target ${TARGET:-?} final_usage ${FINAL:-?} store usage now ${usage_now:-?}"
+below() { [ -n "$1" ] && [ -n "$2" ] && awk -v a="$1" -v b="$2" 'BEGIN { exit !(a < b) }'; }
+reached_target() { [ -n "$INIT_AT" ] && [ -n "$pass" ] && below "$FINAL" "$TARGET"; }
+check "the cleanup pass logged its completion below its target (target ${TARGET:-none}, final_usage ${FINAL:-none})" reached_target
+# Usage after the pass only falls, so the pass's final usage is at least the
+# store's usage now: a measurement of one artifact directory reads near zero.
+final_is_root_usage() { [ -n "$pass" ] && [ -n "$usage_now" ] && ! below "$FINAL" "$(awk -v n="$usage_now" 'BEGIN { print n - 0.05 }')"; }
+check "the pass's final usage measures the whole store (final_usage ${FINAL:-none}, store now ${usage_now:-none})" final_is_root_usage
+others=$(log_json_at "$PASS_SINCE" "select(((.msg == \"Cleaned up artifact\" and .at > \"$INIT_AT\" and .at <= \"${DONE_AT:-$INIT_AT}\") or ((.msg // \"\") | startswith(\"Evicted synced asset\"))) and ((.artifact_hash // .asset_hash) != \"$DVR_HASH\")) | (.artifact_hash // .asset_hash)" "$EDGE_SERVICE" | sort -u | wc -l | tr -d ' ')
+echo "    other artifacts evicted since the cleanup pass began: $others"
 dvr_gone() { [ -z "$(dvr_dir)" ]; }
-check "the durable recording's local copy is evicted" dvr_gone
+# A pass that evicted nothing else reaches its target only by evicting the recording.
+evicted_or_preempted() { dvr_gone || { [ "${others:-0}" -gt 0 ] && reached_target; }; }
+check "the durable recording's local copy is evicted, or lower-priority artifacts brought the pass below target first (others evicted: ${others:-0})" evicted_or_preempted
 missing=$(log_json "$T1" 'select(.reason == "s3_object_missing") | .asset_hash' foghorn foghorn-2 | sort -u | tr '\n' ' ')
 check "Foghorn refused no eviction as s3_object_missing (refused: ${missing:-none})" [ -z "$missing" ]
 bogus=$(log_json "$T1" 'select((.msg // "") | test("not cataloged")) | .sample_hashes[]? | select(test("^[0-9a-f]+$") | not)' "$EDGE_SERVICE" | sort -u | tr '\n' ' ')
