@@ -174,6 +174,22 @@ func (sm *StreamStateManager) AllReportedNodes(staleAfter time.Duration) []NodeD
 	return out
 }
 
+// HeartbeatingNodeIDs returns IDs of nodes with a heartbeat within the given
+// threshold, healthy or not: an unhealthy or draining node still holds its
+// disk.
+func (sm *StreamStateManager) HeartbeatingNodeIDs(staleThreshold time.Duration) []string {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	cutoff := time.Now().Add(-staleThreshold)
+	var ids []string
+	for id, n := range sm.nodes {
+		if n.LastHeartbeat.After(cutoff) {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
 func extractIPFromBaseURL(baseURL string) string {
 	if baseURL == "" {
 		return ""

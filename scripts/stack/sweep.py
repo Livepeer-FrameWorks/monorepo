@@ -11,7 +11,9 @@ properties of every entity the run created, whichever scenario created it:
   api        every VOD, DVR chapter VOD, clip and stream resolves through its
              type query and node(id) by the id the API returned for it
   artifacts  every artifact reaches its ready state; a thumbnail sprite covers
-             the whole asset; renditions exist where processing requested them
+             the whole asset; renditions exist where processing requested them;
+             no edge keeps a file of an artifact the run deleted (media,
+             sidecars, relay caches under vod/, clips/, upload/, DVR trees)
   dvr        each recording's chapters cover the recorded range contiguously
              and none failed
   doctor     the operator CLI's cluster doctor reports no unexplained FAIL
@@ -27,6 +29,7 @@ Subcommands:
   doctor <file>    FAIL lines of a doctor log not explained by the allowlist
   renditions <file> owed renditions of {"processes":[...],"tracks":[...]}
   listeners <file> wildcard listeners of {"proc":{...},"public":{...}}
+  leftovers <file> edge files of deleted artifacts in {"deleted":[...],"edges":{...}}
 
 Every check prints PASS/FAIL/ALLOW lines naming the entity and the scenario
 that created it. A scenario that produces a failure state on purpose declares
@@ -273,6 +276,25 @@ def wildcard_listeners(proc, public):
                 continue
             seen.add((p, port))
     return sorted(seen)
+
+
+def deleted_leftovers(deleted, edges):
+    """Edge paths still holding a deleted artifact, per "<kind> <hash>" entity.
+    deleted is [{"kind","hash"}]; edges maps an edge to the paths under its
+    storage root. A path belongs to an artifact when its name is the hash (a
+    DVR tree) or starts with "<hash>." (media, .partial, .dtsh, .gop, .blocks)."""
+    out = {}
+    for d in deleted:
+        h = d["hash"]
+        problems = []
+        for edge, paths in sorted(edges.items()):
+            hits = sorted(p for p in paths if os.path.basename(p.rstrip("/")) == h
+                          or os.path.basename(p.rstrip("/")).startswith(h + "."))
+            if hits:
+                problems.append(f"{edge} keeps {len(hits)} path(s): {' '.join(hits[:6])}")
+        if problems:
+            out[f"{d['kind']} {h}"] = problems
+    return out
 
 
 # ---- allowlist, scenario attribution, result lines ---------------------------
@@ -773,6 +795,10 @@ def run(args):
                 report.check("dvr", entity, chapter_violations(recording_range(src, foghorn_dbs, a["hash"]), chapters), at=at)
     report.note("artifacts", "checked " + (", ".join(f"{n} {k}" for k, n in sorted(kinds.items())) or "no artifacts"))
     report.note("dvr", f"checked the chapters of {recordings} ended recording(s)")
+    if staging:
+        report.note("artifacts", "staging edges' storage is not inspected for deleted artifacts")
+    else:
+        deleted_artifact_checks(report, src, foghorn_dbs, since, max(deadline, time.time() + 120))
 
     # ---- streams: round-trip captured before each deletion, plus live ones ----
     entries = ledger_entries(args.ledger, since)
@@ -814,6 +840,46 @@ def run(args):
     if report.fail:
         return 1
     return 2 if report.blocked else 0
+
+
+EDGE_STORAGE = "/data/storage"
+
+
+def deleted_artifact_checks(report, src, foghorn_dbs, since, deadline):
+    """No edge keeps a file of an artifact deleted during the run. A delete an
+    active read's lease defers completes when the read ends, so the check waits
+    until deadline for the edges to settle."""
+    when = {}
+    for db in foghorn_dbs:
+        rows = src.pg(db, f"""SELECT artifact_type, artifact_hash, extract(epoch FROM updated_at)::bigint
+            FROM foghorn.artifacts WHERE status = 'deleted' AND updated_at >= to_timestamp({int(since)})
+            AND artifact_type IN ('vod', 'clip', 'chapter', 'dvr')""")
+        if rows is None:
+            report.block("artifacts", f"{db}: deleted artifacts unreadable")
+            return
+        for kind, h, at in rows:
+            when.setdefault(h, (kind, int(at)))
+    deleted = [{"kind": kind, "hash": h} for h, (kind, _) in sorted(when.items())]
+    project = os.environ.get("COMPOSE_PROJECT_NAME", "")
+    while True:
+        edges = {}
+        for svc in ("edge", "edge-b"):
+            cid = (docker("compose", "-p", project, "ps", "-q", svc) or "").strip()
+            if not cid:
+                continue
+            listing = docker("exec", cid, "find", EDGE_STORAGE, "-maxdepth", "3")
+            if listing is None:
+                report.block("artifacts", f"container {svc}: storage listing failed")
+                return
+            edges[svc] = listing.split()
+        left = deleted_leftovers(deleted, edges)
+        if not left or time.time() >= deadline:
+            break
+        time.sleep(10)
+    for d in deleted:
+        entity = f"{d['kind']} {d['hash']}"
+        report.check("artifacts", entity, left.get(entity, []), at=when[d["hash"]][1])
+    report.note("artifacts", f"{len(deleted) - len(left)}/{len(deleted)} deleted artifacts left no file on {len(edges)} edge(s)")
 
 
 def list_stream_ids(src):
@@ -945,6 +1011,8 @@ def main(argv):
     rn.add_argument("file")
     li = sub.add_parser("listeners")
     li.add_argument("file")
+    lo = sub.add_parser("leftovers")
+    lo.add_argument("file")
     o = p.parse_args(argv)
 
     if o.cmd == "run":
@@ -978,6 +1046,9 @@ def main(argv):
     elif o.cmd == "listeners":
         doc = json.load(open(o.file))
         problems = [f"{p} {port}" for p, port in wildcard_listeners(doc["proc"], doc["public"])]
+    elif o.cmd == "leftovers":
+        doc = json.load(open(o.file))
+        problems = [f"{k}: {p}" for k, ps in sorted(deleted_leftovers(doc["deleted"], doc["edges"]).items()) for p in ps]
     for line in problems:
         print(line)
     return 1 if problems else 0

@@ -153,11 +153,54 @@ func TestReconcileErrorTolerance(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "node_id"}))
 	mock.ExpectQuery(`artifact_type = 'vod'`).WithArgs("30m0s").
 		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "node_id"}))
+	mock.ExpectQuery(`artifact_type IN \('clip', 'vod', 'chapter'\)`).WithArgs("24h0m0s").
+		WillReturnError(errors.New("fan-out query down"))
 	mock.ExpectExec(`DELETE FROM foghorn.artifact_nodes`).WillReturnResult(sqlmock.NewResult(0, 0))
 
 	j := NewOrphanCleanupJob(OrphanCleanupConfig{DB: mockDB, Logger: logging.NewLogger(), MaxAge: 30 * time.Minute})
 	j.reconcile()
 
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Every clip and VOD deleted within the relay cache window has its delete
+// fanned out to the cluster, whatever deleted it: the holder-driven passes
+// address only nodes that reported the artifact, never an edge holding only
+// relay caches of it.
+func TestFanOutRecentDeletes(t *testing.T) {
+	mockDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mockDB.Close()
+	mock.ExpectQuery(`status = 'deleted'`).WithArgs("24h0m0s").
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "artifact_type"}).
+			AddRow("vod-1", "vod").
+			AddRow("clip-1", "clip").
+			AddRow("chapter-1", "chapter"))
+
+	j := NewOrphanCleanupJob(OrphanCleanupConfig{DB: mockDB, Logger: logging.NewLogger()})
+	var got []string
+	j.fanOutDelete = func(artifactType, hash string, skip []string) map[string]error {
+		if skip != nil {
+			t.Errorf("fan-out of %s skips %v, want no node skipped", hash, skip)
+		}
+		got = append(got, artifactType+":"+hash)
+		return map[string]error{"edge-down": errors.New("not connected")}
+	}
+	j.fanOutRecentDeletes(context.Background())
+
+	want := []string{"vod:vod-1", "clip:clip-1", "chapter:chapter-1"}
+	if len(got) != len(want) {
+		t.Fatalf("fanned out %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("fanned out %v, want %v", got, want)
+		}
+	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
 	}

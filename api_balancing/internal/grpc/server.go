@@ -423,6 +423,21 @@ func (s *FoghornGRPCServer) forwardArtifactDeletionToFederation(ctx context.Cont
 	})
 }
 
+// sendDeleteToRelayCacheNodes sends a committed clip or VOD deletion to every
+// cluster node other than the catalog holders, which already got it: those
+// nodes can hold relay caches of the artifact that no inventory names. A node
+// that failed or was offline gets it from the orphan cleanup job's fan-out
+// pass.
+func (s *FoghornGRPCServer) sendDeleteToRelayCacheNodes(artifactType, hash string, holders []string) {
+	for nodeID, err := range control.SendArtifactDeleteToClusterNodes(artifactType, hash, holders) {
+		s.logger.WithFields(logging.Fields{
+			"artifact_hash": hash,
+			"node_id":       nodeID,
+			"error":         err,
+		}).Debug("Failed to send artifact delete to a relay cache node")
+	}
+}
+
 // retirePeerArtifactPointers tells every peer cell that this cell committed the
 // deletion of the given artifacts. A peer that adopted one as a federated pointer
 // routes its playback from that pointer until the signed tombstone reaches it,
@@ -1637,6 +1652,7 @@ func (s *FoghornGRPCServer) DeleteClip(ctx context.Context, req *sharedpb.Delete
 			}).Info("Sent clip delete request to storage node")
 		}
 	}
+	s.sendDeleteToRelayCacheNodes("clip", req.ClipHash, []string{nodeID})
 
 	s.deleteArtifactBytesAfterCommit(artifacts.ArtifactRef{
 		Hash:                req.ClipHash,
@@ -2706,6 +2722,9 @@ func (s *FoghornGRPCServer) DeleteDVR(ctx context.Context, req *sharedpb.DeleteD
 				"request_id": requestID,
 			}).Info("Sent DVR delete request to storage node")
 		}
+	}
+	for _, chapterHash := range childHashes {
+		s.sendDeleteToRelayCacheNodes("vod", chapterHash, nil)
 	}
 
 	s.deleteArtifactBytesAfterCommit(artifacts.ArtifactRef{
@@ -4640,6 +4659,7 @@ func (s *FoghornGRPCServer) DeleteVodAsset(ctx context.Context, req *sharedpb.De
 			}
 		}
 	}
+	s.sendDeleteToRelayCacheNodes("vod", req.ArtifactHash, nodeIDs)
 
 	// Delete from S3 (cross-cluster aware via the federation delete delegate). The cleaner derives
 	// the target from vod_metadata.s3_key, falling back to a.s3_url and finally to the deterministic

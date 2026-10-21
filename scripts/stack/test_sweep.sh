@@ -189,6 +189,28 @@ expect "  ...naming exactly those two" bash -c "[ \"\$(sort '$work/out' | tr '\n
 jq '.public.tcp += [18023] | .public.udp += [8888]' "$work/listeners.json" >"$work/listeners-ok.json"
 expect "the same listeners inside the public set pass" passes listeners "$work/listeners-ok.json"
 
+# ---- deleted artifacts' edge files ---------------------------------------------
+# Staging 2026-10-21: deleting a VOD removed vod/<hash>.mkv(.dtsh) on the edge
+# that cataloged it and left its upload/ relay cache there and the .mkv/.mp4
+# relay caches on the other edge.
+H=20261021093000a1b2c3d4
+cat >"$work/leftovers.json" <<JSON
+{"deleted": [{"kind": "vod", "hash": "$H"}, {"kind": "dvr", "hash": "20261021094500d4c3b2a1"}],
+ "edges": {
+  "edge": ["/data/storage/vod", "/data/storage/vod/${H}0.mkv", "/data/storage/upload/$H.mp4.blocks", "/data/storage/upload/$H.mp4.dtsh"],
+  "edge-b": ["/data/storage/vod/$H.mkv.blocks", "/data/storage/vod/$H.mkv.blocks/0000000000.blk", "/data/storage/upload/$H.mp4.dtsh",
+             "/data/storage/dvr/stream-a/20261021094500d4c3b2a1x/seg.ts"]}}
+JSON
+expect "relay caches of a deleted VOD left on both edges fail" fails leftovers "$work/leftovers.json"
+expect "  ...naming each edge's paths of that VOD only" bash -c "[ \"\$(cut -d: -f1 '$work/out' | sort | uniq -c | awk '{print \$1}' | tr '\n' ' ')\" = '2 ' ] && grep -q 'edge keeps 2 path' '$work/out' && grep -q 'edge-b keeps 2 path' '$work/out'"
+jq '.edges.edge |= map(select(test("upload") | not)) | .edges["edge-b"] |= map(select(test("'"$H"'\\.") | not))' "$work/leftovers.json" >"$work/leftovers-ok.json"
+expect "no file of a deleted artifact on any edge passes" passes leftovers "$work/leftovers-ok.json"
+cat >"$work/leftovers-dvr.json" <<JSON
+{"deleted": [{"kind": "dvr", "hash": "20261021094500d4c3b2a1"}],
+ "edges": {"edge": ["/data/storage/dvr/stream-a/20261021094500d4c3b2a1"]}}
+JSON
+expect "a deleted recording's tree left on an edge fails" fails leftovers "$work/leftovers-dvr.json"
+
 # ---- allowlist narrowness (Report) ------------------------------------------------
 narrow() {
   python3 - "$here" <<'PY'

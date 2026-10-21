@@ -27,6 +27,7 @@ type OrphanCleanupJob struct {
 	sendClipDelete func(nodeID string, req *ipcpb.ClipDeleteRequest) error
 	sendDVRDelete  func(nodeID string, req *ipcpb.DVRDeleteRequest) error
 	sendVodDelete  func(nodeID string, req *ipcpb.VodDeleteRequest) error
+	fanOutDelete   func(artifactType, hash string, skip []string) map[string]error
 }
 
 // OrphanCleanupConfig holds configuration for the cleanup job
@@ -56,6 +57,7 @@ func NewOrphanCleanupJob(cfg OrphanCleanupConfig) *OrphanCleanupJob {
 		sendClipDelete: control.SendClipDelete,
 		sendDVRDelete:  control.SendDVRDelete,
 		sendVodDelete:  control.SendVodDelete,
+		fanOutDelete:   control.SendArtifactDeleteToClusterNodes,
 	}
 }
 
@@ -159,8 +161,38 @@ func (j *OrphanCleanupJob) reconcile() {
 		}
 	}
 
+	j.fanOutRecentDeletes(ctx)
+
 	// Clean up stale orphaned registry entries (storage confirmed gone)
 	j.cleanupStaleRegistryEntries(ctx)
+}
+
+// fanOutRecentDeletes sends the delete of every clip and VOD deleted within
+// control.RelayCacheDeleteWindow to each node that has not received it yet.
+// Relay caches are on nodes the holder-driven passes above never address, and
+// this covers every way an artifact becomes deleted (API delete, retention,
+// DVR chapter cascade, failed-artifact expiry) plus nodes that were offline
+// when the deletion happened.
+func (j *OrphanCleanupJob) fanOutRecentDeletes(ctx context.Context) {
+	var rows []foghorndb.ListRecentlyDeletedRelayCacheableArtifactsRow
+	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		var err error
+		rows, err = foghorndb.New(j.db).ListRecentlyDeletedRelayCacheableArtifacts(ctx, control.RelayCacheDeleteWindow.String())
+		return err
+	})
+	if err != nil {
+		j.logger.WithError(err).Error("Failed to list recently deleted artifacts for the relay cache delete fan-out")
+		return
+	}
+	for _, row := range rows {
+		for nodeID, sendErr := range j.fanOutDelete(row.ArtifactType, row.ArtifactHash, nil) {
+			j.logger.WithFields(logging.Fields{
+				"artifact_hash": row.ArtifactHash,
+				"node_id":       nodeID,
+				"error":         sendErr,
+			}).Debug("Orphan cleanup: relay cache delete not delivered; next pass retries")
+		}
+	}
 }
 
 type orphanedClip struct {

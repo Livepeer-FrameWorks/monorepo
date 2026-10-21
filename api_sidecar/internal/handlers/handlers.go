@@ -335,79 +335,18 @@ func enqueueDeferredDelete(assetType, assetHash string) error {
 // to an active lease; callers that hit ErrLeaseHeld should enqueue.
 func (h *Handlers) deleteClipImmediate(clipHash string) (uint64, error) {
 	clipsDir := filepath.Join(h.storagePath, "clips")
-	var totalSize uint64
 
-	// Pattern match: look for files starting with clipHash
-	pattern := filepath.Join(clipsDir, clipHash+"*")
-	matches, err := filepath.Glob(pattern)
+	matches, err := h.assetLocalPaths(clipHash)
 	if err != nil {
-		return 0, fmt.Errorf("failed to glob clip files: %w", err)
+		return 0, err
 	}
-
-	// Also try nested directories (clips/{stream_name}/{clipHash}.*)
-	altPattern := filepath.Join(clipsDir, "*", clipHash+"*")
-	altMatches, _ := filepath.Glob(altPattern)
-	matches = append(matches, altMatches...)
 
 	if len(matches) == 0 {
 		logger.WithField("clip_hash", clipHash).Debug("No clip files found to delete")
 		return 0, nil // Not an error, just nothing to delete
 	}
 
-	var leaseHeld bool
-	for _, filePath := range matches {
-		info, err := os.Stat(filePath)
-		if err != nil {
-			logger.WithError(err).WithField("file", filePath).Warn("Failed to stat clip file")
-			continue
-		}
-
-		// Relay block-cache dir for this clip; recursive delete gated by
-		// the lease that covers the dir path.
-		if info.IsDir() && strings.HasSuffix(filePath, ".blocks") {
-			if tracker := leases.GlobalTracker(); tracker != nil && tracker.IsPathLeased(filePath) {
-				leaseHeld = true
-				logger.WithField("file", filePath).Info("Clip block dir skipped: lease held")
-				continue
-			}
-			var dirBytes uint64
-			_ = filepath.Walk(filePath, func(_ string, fi os.FileInfo, walkErr error) error { //nolint:errcheck // size defaults to 0 on walk failure
-				if walkErr == nil && fi != nil && !fi.IsDir() {
-					dirBytes += uint64(fi.Size())
-				}
-				return nil
-			})
-			if rmErr := os.RemoveAll(filePath); rmErr != nil {
-				logger.WithError(rmErr).WithField("file", filePath).Warn("Failed to remove clip block dir")
-				continue
-			}
-			totalSize += dirBytes
-			logger.WithFields(logging.Fields{
-				"clip_hash": clipHash,
-				"file":      filePath,
-				"size":      dirBytes,
-			}).Debug("Deleted clip block dir")
-			continue
-		}
-
-		fileSize := uint64(info.Size())
-		if err := leases.DeleteFileIfUnleased(filePath); err != nil {
-			if errors.Is(err, leases.ErrLeaseHeld) {
-				leaseHeld = true
-				logger.WithField("file", filePath).Info("Clip file skipped: lease held")
-				continue
-			}
-			logger.WithError(err).WithField("file", filePath).Warn("Failed to remove clip file")
-			continue
-		}
-
-		totalSize += fileSize
-		logger.WithFields(logging.Fields{
-			"clip_hash": clipHash,
-			"file":      filePath,
-			"size":      fileSize,
-		}).Debug("Deleted clip file")
-	}
+	totalSize, leaseHeld := deleteAssetPaths("clip", clipHash, matches)
 
 	// Symlinks: never lease-protected, but only remove when the primary delete
 	// for that hash succeeded (i.e. no lease held), to avoid stripping pointers
@@ -570,13 +509,9 @@ func (h *Handlers) DeleteVOD(vodHash string) (uint64, error) {
 }
 
 func (h *Handlers) deleteVODImmediate(vodHash string) (uint64, error) {
-	vodDir := filepath.Join(h.storagePath, "vod")
-	var totalSize uint64
-
-	pattern := filepath.Join(vodDir, vodHash+"*")
-	matches, err := filepath.Glob(pattern)
+	matches, err := h.assetLocalPaths(vodHash)
 	if err != nil {
-		return 0, fmt.Errorf("failed to glob VOD files: %w", err)
+		return 0, err
 	}
 
 	if len(matches) == 0 {
@@ -584,63 +519,7 @@ func (h *Handlers) deleteVODImmediate(vodHash string) (uint64, error) {
 		return 0, nil
 	}
 
-	var leaseHeld bool
-	for _, filePath := range matches {
-		info, err := os.Stat(filePath)
-		if err != nil {
-			logger.WithError(err).WithField("file", filePath).Warn("Failed to stat VOD file")
-			continue
-		}
-
-		// .blocks/ is the relay's block cache dir for the asset. Single
-		// file delete won't reclaim it (rm on non-empty dir fails);
-		// remove it recursively, gated by the lease that already covers
-		// the dir path. Size accounting walks the dir to total real
-		// disk usage.
-		if info.IsDir() && strings.HasSuffix(filePath, ".blocks") {
-			if tracker := leases.GlobalTracker(); tracker != nil && tracker.IsPathLeased(filePath) {
-				leaseHeld = true
-				logger.WithField("file", filePath).Info("VOD block dir skipped: lease held")
-				continue
-			}
-			var dirBytes uint64
-			_ = filepath.Walk(filePath, func(_ string, fi os.FileInfo, walkErr error) error { //nolint:errcheck // size defaults to 0 on walk failure
-				if walkErr == nil && fi != nil && !fi.IsDir() {
-					dirBytes += uint64(fi.Size())
-				}
-				return nil
-			})
-			if rmErr := os.RemoveAll(filePath); rmErr != nil {
-				logger.WithError(rmErr).WithField("file", filePath).Warn("Failed to remove VOD block dir")
-				continue
-			}
-			totalSize += dirBytes
-			logger.WithFields(logging.Fields{
-				"vod_hash": vodHash,
-				"file":     filePath,
-				"size":     dirBytes,
-			}).Debug("Deleted VOD block dir")
-			continue
-		}
-
-		fileSize := uint64(info.Size())
-		if err := leases.DeleteFileIfUnleased(filePath); err != nil {
-			if errors.Is(err, leases.ErrLeaseHeld) {
-				leaseHeld = true
-				logger.WithField("file", filePath).Info("VOD file skipped: lease held")
-				continue
-			}
-			logger.WithError(err).WithField("file", filePath).Warn("Failed to remove VOD file")
-			continue
-		}
-
-		totalSize += fileSize
-		logger.WithFields(logging.Fields{
-			"vod_hash": vodHash,
-			"file":     filePath,
-			"size":     fileSize,
-		}).Debug("Deleted VOD file")
-	}
+	totalSize, leaseHeld := deleteAssetPaths("vod", vodHash, matches)
 
 	if !leaseHeld {
 		forgetArtifact(vodHash)
@@ -657,6 +536,99 @@ func (h *Handlers) deleteVODImmediate(vodHash string) (uint64, error) {
 		return totalSize, leases.ErrLeaseHeld
 	}
 	return totalSize, nil
+}
+
+// assetLocalPaths returns every path on this node that holds bytes of the
+// artifact hash: the canonical file, its .partial fill, its .dtsh/.gop
+// sidecars and its .blocks cache, flat or one stream directory deep under each
+// relay cache root. The relay caches one artifact under more than one root (an
+// upload read as a processing input lands in upload/, its processed output in
+// vod/), so a delete that searched only its own kind's directory would leave
+// the other copies behind.
+func (h *Handlers) assetLocalPaths(hash string) ([]string, error) {
+	var matches []string
+	for _, root := range relayCacheRoots {
+		dir := filepath.Join(h.storagePath, root)
+		for _, pattern := range []string{
+			filepath.Join(dir, hash+".*"),
+			filepath.Join(dir, "*", hash+".*"),
+		} {
+			found, err := filepath.Glob(pattern)
+			if err != nil {
+				return nil, fmt.Errorf("failed to glob %s files: %w", root, err)
+			}
+			matches = append(matches, found...)
+		}
+	}
+	return matches, nil
+}
+
+// deleteAssetPaths removes the given paths of one artifact and returns the
+// bytes freed and whether a lease kept any of them. A leased path stays for
+// the caller's deferred delete to retry.
+func deleteAssetPaths(kind, hash string, paths []string) (uint64, bool) {
+	var totalSize uint64
+	var leaseHeld bool
+	for _, filePath := range paths {
+		info, err := os.Stat(filePath)
+		if err != nil {
+			logger.WithError(err).WithField("file", filePath).Warn("Failed to stat artifact file")
+			continue
+		}
+
+		// A .blocks dir is the relay's block cache; a plain remove fails on a
+		// non-empty dir, so it goes recursively, gated by the lease that
+		// covers the dir path.
+		if info.IsDir() && strings.HasSuffix(filePath, ".blocks") {
+			if tracker := leases.GlobalTracker(); tracker != nil && tracker.IsPathLeased(filePath) {
+				leaseHeld = true
+				logger.WithField("file", filePath).Info("Artifact block dir skipped: lease held")
+				continue
+			}
+			var dirBytes uint64
+			_ = filepath.Walk(filePath, func(_ string, fi os.FileInfo, walkErr error) error { //nolint:errcheck // size defaults to 0 on walk failure
+				if walkErr == nil && fi != nil && !fi.IsDir() {
+					dirBytes += uint64(fi.Size())
+				}
+				return nil
+			})
+			if rmErr := os.RemoveAll(filePath); rmErr != nil {
+				logger.WithError(rmErr).WithField("file", filePath).Warn("Failed to remove artifact block dir")
+				continue
+			}
+			totalSize += dirBytes
+			logger.WithFields(logging.Fields{
+				"kind": kind,
+				"hash": hash,
+				"file": filePath,
+				"size": dirBytes,
+			}).Debug("Deleted artifact block dir")
+			continue
+		}
+		if info.IsDir() {
+			continue
+		}
+
+		fileSize := uint64(info.Size())
+		if err := leases.DeleteFileIfUnleased(filePath); err != nil {
+			if errors.Is(err, leases.ErrLeaseHeld) {
+				leaseHeld = true
+				logger.WithField("file", filePath).Info("Artifact file skipped: lease held")
+				continue
+			}
+			logger.WithError(err).WithField("file", filePath).Warn("Failed to remove artifact file")
+			continue
+		}
+
+		totalSize += fileSize
+		logger.WithFields(logging.Fields{
+			"kind": kind,
+			"hash": hash,
+			"file": filePath,
+			"size": fileSize,
+		}).Debug("Deleted artifact file")
+	}
+	return totalSize, leaseHeld
 }
 
 // removeEmptyDir removes a directory only if it's empty

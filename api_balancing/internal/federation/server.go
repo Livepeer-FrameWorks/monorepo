@@ -2288,6 +2288,9 @@ func (s *FederationServer) retireArtifactPointer(ctx context.Context, artifactHa
 	}
 	if retired {
 		log.WithField("origin_cluster_id", origin).Info("Retired the federated pointer to an artifact its origin deleted")
+		// This cell's edges hold relay caches of the artifact that only this
+		// cell can tell to go.
+		control.SendArtifactDeleteToClusterNodes(pointer.ArtifactType, artifactHash, nil)
 	}
 	return &foghornfederationpb.ForwardArtifactCommandResponse{Handled: retired}, nil
 }

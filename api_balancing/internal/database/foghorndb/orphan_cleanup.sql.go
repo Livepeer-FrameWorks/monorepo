@@ -189,3 +189,44 @@ func (q *Queries) ListDeletedVODNodes(ctx context.Context, maxAge string) ([]Lis
 	}
 	return items, nil
 }
+
+const listRecentlyDeletedRelayCacheableArtifacts = `-- name: ListRecentlyDeletedRelayCacheableArtifacts :many
+SELECT artifact_hash, artifact_type
+FROM foghorn.artifacts
+WHERE artifact_type IN ('clip', 'vod', 'chapter')
+  AND status = 'deleted'
+  AND updated_at > NOW() - CAST($1 AS text)::interval
+ORDER BY updated_at DESC
+LIMIT 1000
+`
+
+type ListRecentlyDeletedRelayCacheableArtifactsRow struct {
+	ArtifactHash string `db:"artifact_hash" json:"artifact_hash"`
+	ArtifactType string `db:"artifact_type" json:"artifact_type"`
+}
+
+// Clips and VODs (DVR chapters are VODs) deleted within the window, newest
+// first. Any node may hold relay caches of them without having reported them,
+// so their deletes go to every node, not only to artifact_nodes holders.
+func (q *Queries) ListRecentlyDeletedRelayCacheableArtifacts(ctx context.Context, within string) ([]ListRecentlyDeletedRelayCacheableArtifactsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listRecentlyDeletedRelayCacheableArtifacts, within)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListRecentlyDeletedRelayCacheableArtifactsRow{}
+	for rows.Next() {
+		var i ListRecentlyDeletedRelayCacheableArtifactsRow
+		if err := rows.Scan(&i.ArtifactHash, &i.ArtifactType); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}

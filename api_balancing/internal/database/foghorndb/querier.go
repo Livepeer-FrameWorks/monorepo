@@ -510,6 +510,10 @@ type Querier interface {
 	ListPurgeableLocalArtifacts(ctx context.Context, arg ListPurgeableLocalArtifactsParams) ([]ListPurgeableLocalArtifactsRow, error)
 	ListRecentNodeLifecycles(ctx context.Context) ([]ListRecentNodeLifecyclesRow, error)
 	ListRecentProcessingJobs(ctx context.Context, limit int32) ([]ListRecentProcessingJobsRow, error)
+	// Clips and VODs (DVR chapters are VODs) deleted within the window, newest
+	// first. Any node may hold relay caches of them without having reported them,
+	// so their deletes go to every node, not only to artifact_nodes holders.
+	ListRecentlyDeletedRelayCacheableArtifacts(ctx context.Context, within string) ([]ListRecentlyDeletedRelayCacheableArtifactsRow, error)
 	ListReclaimableDVRSegments(ctx context.Context, arg ListReclaimableDVRSegmentsParams) ([]ListReclaimableDVRSegmentsRow, error)
 	// Recover every expired federated-pointer saga on the short cadence. The
 	// current signed-authority state selects the same guarded fence that ordinary

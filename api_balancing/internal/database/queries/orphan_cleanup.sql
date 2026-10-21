@@ -39,6 +39,18 @@ DELETE FROM foghorn.artifact_nodes
 WHERE is_orphaned = true
   AND last_seen_at < NOW() - INTERVAL '24 hours';
 
+-- Clips and VODs (DVR chapters are VODs) deleted within the window, newest
+-- first. Any node may hold relay caches of them without having reported them,
+-- so their deletes go to every node, not only to artifact_nodes holders.
+-- name: ListRecentlyDeletedRelayCacheableArtifacts :many
+SELECT artifact_hash, artifact_type
+FROM foghorn.artifacts
+WHERE artifact_type IN ('clip', 'vod', 'chapter')
+  AND status = 'deleted'
+  AND updated_at > NOW() - CAST(sqlc.arg(within) AS text)::interval
+ORDER BY updated_at DESC
+LIMIT 1000;
+
 -- The deletes a node still owes: soft-deleted clips, DVRs and VODs whose bytes
 -- it still holds. Re-driven when the node registers, since a delete sent to an
 -- earlier connection, or deferred in its sidecar's memory, did not survive it.
