@@ -283,6 +283,9 @@ create_stream() { # create_stream <name> <record:true|false> -> JSON {id streamI
 # round-trip (scripts/stack/sweep.py, invariant "api") is captured here, just
 # before the deletion.
 delete_stream() {
+  # A stream already deleted keeps the pre-deletion answer the ledger recorded;
+  # a second deletion (e.g. an EXIT cleanup) would record "not found" over it.
+  grep -qF "\"kind\":\"deleted\",\"id\":\"$1\"" "$STACK_STATE_DIR/sweep-ledger.jsonl" 2>/dev/null && return 0
   sweep_ledger deleted "$1" ''
   gql 'mutation($id:ID!){deleteStream(id:$id){__typename}}' "$(jq -cn --arg id "$1" '{id:$id}')" >/dev/null
 }
