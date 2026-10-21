@@ -6262,8 +6262,8 @@ func (p *Processor) handleNodeLifecycleUpdate(trigger *ipcpb.MistTrigger) (strin
 		}
 		state.DefaultManager().ObserveNodeSnapshotStream(internalName, nu.GetNodeId(), int(s.GetTotal()), int(s.GetInputs()), int64(s.GetBytesUp()), int64(s.GetBytesDown()), replicated)
 	}
-	// Absence clears only a pull the node was seen carrying: a pull arranged
-	// after the node's last listing has not been started by the destination
+	// Absence clears only a pull the node was seen carrying with no arrangement
+	// or viewer hand-out since: the destination has not started such a pull
 	// yet, and a snapshot sampled before Mist asked for its source cannot list it.
 	if cleared := state.DefaultManager().ReconcileNodeStreamPresence(nu.GetNodeId(), observedStreams); len(cleared) > 0 {
 		p.endStreamsLostAcrossReconnect(nu.GetNodeId(), cleared, time.Now())

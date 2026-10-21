@@ -71,6 +71,10 @@ func (f lifecyclePullFixture) snapshotFrom(t *testing.T, nodeID string, streams 
 // source pull after it was arranged.
 const abandonedPullAge = 10 * time.Minute
 
+// settledPullAge is past half the start grace but within it: every hand-out
+// of a pull this old is recorded, and the pull is not yet abandoned.
+const settledPullAge = 3 * time.Minute
+
 func (f lifecyclePullFixture) streamSource(t *testing.T) string {
 	t.Helper()
 	response, abort, err := f.processor.handleStreamSource(&ipcpb.MistTrigger{NodeId: "edge",
@@ -117,11 +121,34 @@ func TestLifecycleSnapshotKeepsPullArrangedAfterLastObservedPresence(t *testing.
 	}
 }
 
+// The destination's pull input goes idle and ends, a viewer is handed the
+// existing pull, and the snapshot that no longer lists the stream arrives
+// before the viewer's STREAM_SOURCE. A hand-out this soon after the pull's
+// arrangement leaves the record unchanged, so the snapshot cannot tell it
+// happened; the pull must stay for the viewer to restart it.
+func TestLifecycleSnapshotKeepsEndedPullHandedToViewer(t *testing.T) {
+	f := newLifecyclePullFixture(t)
+	pull := f.arrange(t)
+	time.Sleep(time.Millisecond)
+	f.snapshot(t, map[string]*ipcpb.StreamData{"live+stream": {Total: 1, Inputs: 1}})
+	f.state.SetOffline("stream", "edge")
+	time.Sleep(time.Millisecond)
+	if err := f.registry.RefreshInboundPullReuse(context.Background(), "stream", pull, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	f.snapshot(t, nil)
+
+	if got := f.streamSource(t); got != pull.DTSCURL {
+		t.Fatalf("STREAM_SOURCE for the viewer handed the ended pull = %q, want the pull %q", got, pull.DTSCURL)
+	}
+}
+
 // A node that carried the pulled stream and then stopped listing it has a
 // stale replica: the pull is cleared and STREAM_SOURCE refuses it.
 func TestLifecycleSnapshotClearsPullTheNodeStoppedCarrying(t *testing.T) {
 	f := newLifecyclePullFixture(t)
-	f.arrange(t)
+	f.arrangeAt(t, "edge", time.Now().Add(-settledPullAge))
 	time.Sleep(time.Millisecond)
 	f.snapshot(t, replicatedStreamSnapshot())
 
@@ -144,7 +171,7 @@ func TestLifecycleSnapshotClearsPullTheNodeStoppedCarrying(t *testing.T) {
 func TestLifecycleSnapshotClearsStoppedPullAfterNodeLocalEnd(t *testing.T) {
 	f := newLifecyclePullFixture(t)
 	logs := logrustest.NewLocal(f.processor.logger)
-	f.arrange(t)
+	f.arrangeAt(t, "edge", time.Now().Add(-settledPullAge))
 	time.Sleep(time.Millisecond)
 	f.snapshot(t, map[string]*ipcpb.StreamData{"live+stream": {Total: 1, Inputs: 1}})
 	f.state.UpdateNodeStats("stream", "edge", 1, 1, 0, 0, false)

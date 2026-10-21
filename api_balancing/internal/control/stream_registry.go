@@ -534,10 +534,15 @@ func (r *StreamRegistry) ClearReplicating(internalName string) {
 }
 
 // ClearReplicatingForNode unmarks the node's pull when the node reported the
-// stream absent after having been seen carrying it at presentAt. A pull
-// arranged after presentAt is the node's next copy, not the one that went
-// away: the destination has not started it yet, so it stays. A zero
-// presentAt clears nothing.
+// stream absent after having been seen carrying it at presentAt. The copy
+// that went away is the pull only when no arrangement, renewal or hand-out
+// can have followed presentAt: a viewer handed the pull since then has not
+// asked the destination for its source yet, and its STREAM_SOURCE restarts
+// the pull from this record. RefreshInboundPullReuse leaves the record
+// unchanged for hand-outs within half the start grace of the pull's latest
+// start, so only a listing at least that far past the latest start rules
+// them out. A pull that is spared is cleared once its start grace runs out
+// unlisted. A zero presentAt clears nothing.
 func (r *StreamRegistry) ClearReplicatingForNode(internalName, nodeID string, presentAt time.Time) bool {
 	nodeID = strings.TrimSpace(nodeID)
 	if nodeID == "" || presentAt.IsZero() {
@@ -547,9 +552,9 @@ func (r *StreamRegistry) ClearReplicatingForNode(internalName, nodeID string, pr
 }
 
 // clearReplicating clears active pulls, scoped to nodeID when set. With a
-// non-zero presentAt it skips pulls whose attempt was recorded after it;
-// CreatedAt is fixed per attempt, and ClearInboundPull is fenced to that
-// attempt.
+// non-zero presentAt it clears only pulls ClearReplicatingForNode may clear,
+// rechecked against the current record so a concurrent hand-out on another
+// replica keeps the pull.
 func (r *StreamRegistry) clearReplicating(internalName, nodeID string, presentAt time.Time) bool {
 	internalName = sourceInternalKey(internalName)
 	if internalName == "" {
@@ -562,15 +567,18 @@ func (r *StreamRegistry) clearReplicating(internalName, nodeID string, presentAt
 		pulls = activeInboundPulls(ce.entry.Locations[r.clusterID])
 	}
 	r.mu.RUnlock()
+	stopped := func(pull InboundPull) bool {
+		return presentAt.IsZero() || !presentAt.Before(inboundPullStartedAt(pull).Add(inboundPullStartGrace/2))
+	}
 	changed := false
 	for _, pull := range pulls {
 		if nodeID != "" && pull.DestNodeID != nodeID {
 			continue
 		}
-		if !presentAt.IsZero() && pull.CreatedAt.After(presentAt) {
+		if !stopped(pull) {
 			continue
 		}
-		cleared, err := r.ClearInboundPull(context.Background(), internalName, pull.DestNodeID, pull.AttemptID)
+		cleared, err := r.clearInboundPullIf(context.Background(), internalName, pull.DestNodeID, pull.AttemptID, stopped)
 		if err != nil && !errors.Is(err, ErrReplicationConflict) && r.redisLogger != nil {
 			r.redisLogger.WithError(err).WithField("internal_name", internalName).Warn("Failed to clear inbound pull")
 		}

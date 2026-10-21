@@ -369,11 +369,17 @@ func (r *StreamRegistry) MarkInboundDestinationObserved(ctx context.Context, int
 // ClearInboundPull is fenced to the observed attempt. A delayed revocation or
 // node disappearance from an earlier pull cannot remove its replacement.
 func (r *StreamRegistry) ClearInboundPull(ctx context.Context, internalName, nodeID, attemptID string) (bool, error) {
+	return r.clearInboundPullIf(ctx, internalName, nodeID, attemptID, nil)
+}
+
+// clearInboundPullIf clears the attempt only while the current record still
+// satisfies clearable; a nil clearable fences on the attempt alone.
+func (r *StreamRegistry) clearInboundPullIf(ctx context.Context, internalName, nodeID, attemptID string, clearable func(InboundPull) bool) (bool, error) {
 	if attemptID == "" || nodeID == "" {
 		return false, ErrReplicationConflict
 	}
 	_, err := r.mutateInboundPull(ctx, sourceInternalKey(internalName), nodeID, func(current InboundPull, exists bool) (InboundPull, error) {
-		if !exists || current.Cleared || current.AttemptID != attemptID {
+		if !exists || current.Cleared || current.AttemptID != attemptID || (clearable != nil && !clearable(current)) {
 			return InboundPull{}, ErrReplicationConflict
 		}
 		current.Cleared = true

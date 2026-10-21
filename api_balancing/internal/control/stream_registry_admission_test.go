@@ -193,7 +193,8 @@ func TestLocalReplicationAcceptsSourceRuntimeName(t *testing.T) {
 func TestClearReplicatingForNodeOnlyClearsPinnedNode(t *testing.T) {
 	r := NewStreamRegistry(nil, "cluster-A", time.Minute)
 	markReplicatingForTest(t, r, "stream-1", "cluster-B", "dtsc://origin/live+stream-1", "edge-a", "https://edge-a/view", "origin-node")
-	presentAt := time.Now()
+	// Listed once hand-outs of the pull are recorded, so none can follow unseen.
+	presentAt := time.Now().Add(inboundPullStartGrace / 2)
 
 	if cleared := r.ClearReplicatingForNode("stream-1", "edge-b", presentAt); cleared {
 		t.Fatal("expected wrong node not to clear replication")
@@ -213,6 +214,31 @@ func TestClearReplicatingForNodeOnlyClearsPinnedNode(t *testing.T) {
 	r.mu.RUnlock()
 	if loc.IsLiveNow {
 		t.Fatal("expected local liveness to clear with replication")
+	}
+}
+
+// A hand-out recorded after the node's last listing restarts the pull's
+// start grace; the absence of the copy that ended before it does not clear it.
+func TestClearReplicatingForNodeKeepsPullReusedAfterPresence(t *testing.T) {
+	r := NewStreamRegistry(nil, "cluster-A", time.Minute)
+	createdAt := time.Now().Add(-10 * time.Minute)
+	pull, err := r.RecordInboundPull(context.Background(), "stream-1", InboundPull{
+		SourceClusterID: "cluster-B", SourceNodeID: "origin-node", DestNodeID: "edge-a",
+		DTSCURL: "dtsc://origin/live+stream-1", CreatedAt: createdAt,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	presentAt := time.Now().Add(-time.Second)
+	if err := r.RefreshInboundPullReuse(context.Background(), "stream-1", pull, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	if cleared := r.ClearReplicatingForNode("stream-1", "edge-a", presentAt); cleared {
+		t.Fatal("absence observed before the pull was handed out again cleared it")
+	}
+	if _, ok := r.InboundPullForNode("stream-1", "edge-a"); !ok {
+		t.Fatal("expected the reused pull to remain")
 	}
 }
 
