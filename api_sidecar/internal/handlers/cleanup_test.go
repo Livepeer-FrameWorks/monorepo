@@ -256,9 +256,9 @@ func TestCheckAndCleanup_FinalUsageMeasuresMediaRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	logger, hook := logrustest.NewNullLogger()
+	nullLogger, hook := logrustest.NewNullLogger()
 	cm := &CleanupMonitor{
-		logger:            logger,
+		logger:            nullLogger,
 		basePath:          basePath,
 		cleanupThreshold:  0.90,
 		targetThreshold:   0.80,
