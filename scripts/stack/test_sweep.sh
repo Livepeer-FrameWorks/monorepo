@@ -119,6 +119,27 @@ expect "a generation Foghorn admitted without stream_start in ClickHouse fails" 
 jq '.sessions = null' "$work/analytics-noend.json" >"$work/analytics-chonly.json"
 expect "without Foghorn sessions the ClickHouse-only check still fails a missing end" fails analytics "$work/analytics-chonly.json"
 
+# ---- stream runtime ledger ----------------------------------------------------
+cat >"$work/runtime-ok.json" <<'JSON'
+{"finals": [{"stream": "s1", "started_ms": 1000000, "ended_ms": 1934000, "projected_ms": 1935000},
+            {"stream": "s2", "started_ms": 1000000, "ended_ms": 1133400, "projected_ms": 1134000},
+            {"stream": "s3", "started_ms": 1000000, "ended_ms": 1100000, "projected_ms": 9000000}],
+ "runtime": {"s1": {"seconds": 934, "windows": 5, "keys": 1},
+             "s2": {"seconds": 132, "windows": 2, "keys": 1},
+             "s3": {"seconds": 0, "windows": 0, "keys": 0}},
+ "processed_ms": 5000000, "live": []}
+JSON
+expect "ended streams whose ledger runtime matches their final sessions pass" passes runtime "$work/runtime-ok.json"
+# The staging defect: the live branch keyed the session from Mist's started_at,
+# one second off the final row's event-log start, so both sets of rows summed.
+jq '.runtime.s1 = {"seconds": 1418, "windows": 5, "keys": 2}' "$work/runtime-ok.json" >"$work/runtime-double.json"
+expect "a session counted under two keys fails" fails runtime "$work/runtime-double.json"
+expect "  ...naming both keys and both durations" said 's1: .*1418s under 2 session key.*ran 934s'
+jq '.runtime.s1.seconds = 600' "$work/runtime-ok.json" >"$work/runtime-short.json"
+expect "a ledger missing part of a session fails" fails runtime "$work/runtime-short.json"
+jq '.runtime.s2.seconds = 900 | .live = ["s2"]' "$work/runtime-ok.json" >"$work/runtime-live.json"
+expect "a stream live again is not judged" passes runtime "$work/runtime-live.json"
+
 # ---- renditions -----------------------------------------------------------------
 renditions() { # renditions <file> <source WxH...>: the stack's Livepeer ladder over the given video tracks
   local f=$1

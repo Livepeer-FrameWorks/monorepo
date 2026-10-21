@@ -638,7 +638,7 @@ func TestGetPlatformOverviewUsesCanonicalLedgers(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"delivery_bytes", "delivery_seconds"}).
 			AddRow(uint64(1610612736), uint64(180)))
 	mock.ExpectQuery(`(?s)sum\(active_seconds\).*FROM periscope\.stream_runtime_5m_v.*UNION ALL.*FROM periscope\.stream_state_current AS s FINAL`).
-		WithArgs("tenant-1", start, end, start, end, "tenant-1", "tenant-1", end, start).
+		WithArgs("tenant-1", start, end, start, end, "tenant-1", "tenant-1", "tenant-1", start, end, end, start).
 		WillReturnRows(sqlmock.NewRows([]string{"stream_hours", "peak_concurrent", "total_streams"}).AddRow(float64(9), int32(8), int32(2)))
 
 	resp, err := server.GetPlatformOverview(context.Background(), &periscopepb.GetPlatformOverviewRequest{

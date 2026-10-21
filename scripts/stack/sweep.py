@@ -6,7 +6,8 @@ properties of every entity the run created, whichever scenario created it:
 
   analytics  every stream that went live and ended has its stream_end event and
              a stream_sessions_final row; no analytics table holds a duplicate
-             row of the run's streams
+             row of the run's streams; an ended stream's stream_runtime_5m
+             runtime equals its final sessions' duration
   api        every VOD, DVR chapter VOD, clip and stream resolves through its
              type query and node(id) by the id the API returned for it
   artifacts  every artifact reaches its ready state; a thumbnail sprite covers
@@ -22,6 +23,7 @@ Subcommands:
   vtt <s> <file>   sprite coverage of a WebVTT file for an asset of <s> seconds
   chapters <file>  chapter coverage of {"recording":{...},"chapters":[...]}
   analytics <file> stream completeness of {"events":[...],"finals":[...],"sessions":[...]}
+  runtime <file>   runtime ledger of {"finals":[...],"runtime":{...},"processed_ms":N,"live":[...]}
   doctor <file>    FAIL lines of a doctor log not explained by the allowlist
   renditions <file> owed renditions of {"processes":[...],"tracks":[...]}
   listeners <file> wildcard listeners of {"proc":{...},"public":{...}}
@@ -181,6 +183,34 @@ def analytics_violations(events, finals, sessions):
         if problems:
             out[stream] = problems
     return out
+
+
+def runtime_violations(finals, runtime, processed_ms, live):
+    """Per ended stream whose final sessions the stream_runtime_5m rebuild has
+    processed: the ledger's runtime equals the sessions' summed duration. Each
+    5-minute window floors its seconds, so the ledger may fall short by one
+    second per window; it may never exceed the sessions.
+
+    finals:       [{"stream":uuid,"started_ms":int,"ended_ms":int,"projected_ms":int}]
+    runtime:      {stream: {"seconds":int,"windows":int,"keys":int}} from stream_runtime_5m_v
+    processed_ms: the stream_runtime_5m rebuild cursor
+    live:         streams stream_state_current holds live, whose open session is
+                  in the ledger without a final row
+    Returns ({stream: [violation, ...]}, number of streams judged)."""
+    by_stream = {}
+    for f in finals:
+        by_stream.setdefault(f["stream"], []).append(f)
+    out, judged = {}, 0
+    for stream, sessions in sorted(by_stream.items()):
+        if stream in live or any(f["projected_ms"] >= processed_ms for f in sessions):
+            continue
+        judged += 1
+        want = sum(max(0, f["ended_ms"] - f["started_ms"]) for f in sessions) // 1000
+        got = runtime.get(stream, {"seconds": 0, "windows": 0, "keys": 0})
+        if got["seconds"] > want + 1 or got["seconds"] < want - got["windows"] - 1:
+            out[stream] = [f"stream_runtime_5m_v holds {got['seconds']}s under {got['keys']} session key(s), "
+                           f"its {len(sessions)} final session(s) ran {want}s"]
+    return out, judged
 
 
 DOCTOR_FAIL_RE = re.compile(r"^\s*(?:\[FAIL\]|✗)\s*(.*?)\s*$")
@@ -602,6 +632,31 @@ def collect_analytics(src, since, foghorn_dbs, scope):
     return {"events": events, "finals": finals, "sessions": sessions}
 
 
+def collect_runtime(src, since, streams):
+    """Inputs of runtime_violations for the run's streams, or None when
+    ClickHouse is not reachable."""
+    if not streams:
+        return {"finals": [], "runtime": {}, "processed_ms": 0, "live": set()}
+    t = src.tenant
+    ids = ",".join(f"toUUID('{s}')" for s in sorted(streams))
+    rows = src.ch("SELECT max(last_processed_projection_ms) FROM periscope.ledger_rebuild_cursors_v2 "
+                  "WHERE ledger_name = 'stream_runtime_5m'")
+    if rows is None:
+        return None
+    processed_ms = int(rows[0][0] or 0) if rows else 0
+    rows = src.ch(f"SELECT toString(stream_id), source_started_at_ms, source_ended_at_ms, latest_projection_version_ms "
+                  f"FROM periscope.stream_sessions_final_v WHERE tenant_id = toUUID('{t}') AND stream_id IN ({ids}) "
+                  f"AND closed_reason = 'final' AND source_ended_at_ms >= {since * 1000}") or []
+    finals = [{"stream": r[0], "started_ms": int(r[1]), "ended_ms": int(r[2]), "projected_ms": int(r[3])} for r in rows]
+    rows = src.ch(f"SELECT toString(stream_id), sum(active_seconds), uniqExact(window_start), uniqExact(source_event_id) "
+                  f"FROM periscope.stream_runtime_5m_v WHERE tenant_id = toUUID('{t}') AND stream_id IN ({ids}) "
+                  f"GROUP BY stream_id") or []
+    runtime = {r[0]: {"seconds": int(r[1]), "windows": int(r[2]), "keys": int(r[3])} for r in rows}
+    rows = src.ch(f"SELECT toString(stream_id) FROM periscope.stream_state_current FINAL "
+                  f"WHERE tenant_id = toUUID('{t}') AND stream_id IN ({ids}) AND status = 'live'") or []
+    return {"finals": finals, "runtime": runtime, "processed_ms": processed_ms, "live": {r[0] for r in rows}}
+
+
 def duplicate_rows(src, streams):
     """count() - uniqExact(record key) per analytics table over the run's
     streams: a redelivered Kafka record written twice. The key is the table's
@@ -672,6 +727,22 @@ def run(args):
                          scenario="run")
         if dups:
             report.note("analytics", f"duplicate check over {len(dups)} tables, {len(streams)} streams")
+        # The runtime ledger rebuilds every five minutes behind a settlement
+        # lag, so a stream is judged once the rebuild cursor passed its finals.
+        while True:
+            rt = collect_runtime(src, since, streams)
+            if rt is None or time.time() >= deadline or all(
+                    f["stream"] in rt["live"] or f["projected_ms"] < rt["processed_ms"] for f in rt["finals"]):
+                break
+            time.sleep(10)
+        if rt is None:
+            report.block("analytics", "ClickHouse is not reachable for the stream runtime ledger")
+        else:
+            bad, judged = runtime_violations(**rt)
+            for stream, problems in sorted(bad.items()):
+                report.check("analytics", f"runtime {stream}", problems, at=first_seen.get(stream))
+            report.note("analytics", f"{judged - len(bad)}/{judged} ended streams the runtime ledger processed hold "
+                        f"their final sessions' runtime ({len({f['stream'] for f in rt['finals']})} with final sessions)")
 
     # ---- artifacts, api, dvr ----
     artifacts, err = list_artifacts(src, since)
@@ -865,6 +936,8 @@ def main(argv):
     c.add_argument("file")
     a = sub.add_parser("analytics")
     a.add_argument("file")
+    rt = sub.add_parser("runtime")
+    rt.add_argument("file")
     d = sub.add_parser("doctor")
     d.add_argument("file")
     d.add_argument("allow", nargs="?")
@@ -884,6 +957,10 @@ def main(argv):
     elif o.cmd == "analytics":
         doc = json.load(open(o.file))
         problems = [f"{k}: {p}" for k, ps in sorted(analytics_violations(doc["events"], doc["finals"], doc.get("sessions")).items()) for p in ps]
+    elif o.cmd == "runtime":
+        doc = json.load(open(o.file))
+        bad, _ = runtime_violations(doc["finals"], doc["runtime"], doc["processed_ms"], set(doc.get("live") or []))
+        problems = [f"{k}: {p}" for k, ps in sorted(bad.items()) for p in ps]
     elif o.cmd == "doctor":
         allow = []
         if o.allow:

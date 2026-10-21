@@ -1051,7 +1051,18 @@ func (h *AnalyticsHandler) rebuildStreamRuntime5m(ctx context.Context, windowSta
 		if clusterID == "" || isArtifactRuntimeStream(streamName) {
 			continue
 		}
-		sessionStartMS := startedAt.UTC().UnixMilli()
+		// The session key must equal the one the session's final row gets, so
+		// the final rows replace these live rows instead of adding to them. The
+		// final row's start comes from this resolver, which prefers the event
+		// log; stream_state_current.started_at is the Mist-reported start and
+		// can differ from it by a second.
+		sessionStartMS, lookupErr := h.lookupStreamRuntimeStartMS(ctx, tenantID, streamID, nodeID, clusterID, streamName, liveEndMS)
+		if lookupErr != nil {
+			return lookupErr
+		}
+		if sessionStartMS <= 0 {
+			sessionStartMS = startedAt.UTC().UnixMilli()
+		}
 		startMS := sessionStartMS
 		if windowStartMS := windowStart.UnixMilli(); startMS < windowStartMS {
 			startMS = windowStartMS

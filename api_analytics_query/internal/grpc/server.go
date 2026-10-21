@@ -172,11 +172,20 @@ func (s *PeriscopeServer) queryStreamRuntimeSummary(ctx context.Context, tenantI
 
 			UNION ALL
 
+			-- The ledger already holds a live session's runtime up to its last
+			-- rebuild, so a live stream adds only the time after that coverage.
 			SELECT
 				stream_id,
-				toFloat64(greatest(0, dateDiff('second', greatest(started_at, ?), least(now(), ?)))) AS active_seconds,
+				toFloat64(greatest(0, dateDiff('second', greatest(started_at, covered_until, ?), least(now(), ?)))) AS active_seconds,
 				toUInt32(current_viewers) AS peak_viewers
 			FROM (
+				SELECT
+					live.stream_id AS stream_id,
+					live.current_viewers AS current_viewers,
+					live.started_at AS started_at,
+					maxIf(greatest(ledger.window_start, live.started_at) + toIntervalSecond(ledger.active_seconds),
+						ledger.window_start >= toStartOfFiveMinute(live.started_at)) AS covered_until
+				FROM (
 				SELECT
 					s.stream_id AS stream_id,
 					s.current_viewers AS current_viewers,
@@ -206,11 +215,21 @@ func (s *PeriscopeServer) queryStreamRuntimeSummary(ctx context.Context, tenantI
 				WHERE s.tenant_id = ?
 				  AND s.status = 'live'
 				GROUP BY s.stream_id, s.current_viewers, s.started_at, s.updated_at, last_end.ended_at
+				) AS live
+				LEFT JOIN (
+					SELECT stream_id, window_start, active_seconds
+					FROM periscope.stream_runtime_5m_v
+					WHERE tenant_id = ?
+					  AND window_start >= ? - INTERVAL 5 MINUTE
+					  AND window_start <  ?
+				) AS ledger
+					ON ledger.stream_id = live.stream_id
+				GROUP BY live.stream_id, live.current_viewers, live.started_at
 			)
 			WHERE started_at < ?
 			  AND now() >= ?
 		)
-	`, tenantID, startTime, endTime, startTime, endTime, tenantID, tenantID, endTime, startTime).Scan(&streamHours, &peakConcurrent, &totalStreams)
+	`, tenantID, startTime, endTime, startTime, endTime, tenantID, tenantID, tenantID, startTime, endTime, endTime, startTime).Scan(&streamHours, &peakConcurrent, &totalStreams)
 	return streamHours, peakConcurrent, totalStreams, err
 }
 
@@ -7162,7 +7181,7 @@ func (s *PeriscopeServer) GetLiveUsageSummary(ctx context.Context, req *periscop
 		s.logger.WithError(err).Warn(message)
 	}
 
-	// Stream runtime combines closed 5-minute ledger rows with current live intervals.
+	// Stream runtime reads the 5-minute ledger plus live time it has not covered yet.
 	var maxViewers, totalStreams int32
 	var streamHours float64
 	queryCount++
