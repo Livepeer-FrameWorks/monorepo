@@ -396,11 +396,14 @@ because a node Foghorn cannot reach serves no routed traffic.
 Self-hosted single edges use the same path: `frameworks edge provision --ssh <user@host> --dry-run`,
 then without `--dry-run`, with the flags the node was provisioned with.
 
-Each provision writes a provisioned-config marker on the node (the CLI version and a digest of
-the rendered configuration). Helmsman reports it to Foghorn, which returns it in node health,
-and `frameworks cluster doctor` lists every edge whose configuration was rendered by an
-older CLI (or before markers existed). `frameworks edge doctor` shows the same for the node it
-runs on. The marker covers only the files provisioning renders (edge env and service units or
+Each provision writes a provisioned-config marker on the node: the CLI version, a digest of the
+rendered configuration, and the CLI's render digest (a digest of its edge playbook, the roles
+that playbook runs, and the maintenance page, independent of node inputs). Helmsman reports it
+to Foghorn, which returns it in node health, and `frameworks cluster doctor` lists every edge
+whose render digest differs from its own CLI's (or that has no marker yet). A new CLI release
+whose edge render did not change leaves every edge current. A marker written before the render
+digest existed is compared by CLI release instead, until the next provision rewrites it.
+`frameworks edge doctor` shows the same for the node it runs on. The marker covers only the files provisioning renders (edge env and service units or
 compose file, vmagent config, maintenance page): Helmsman, MistServer and Caddy follow the
 cluster's release target through the edge's rolling update, and Helmsman renders the production
 Caddyfile and MistServer config itself. An edge flagged by doctor needs `edge provision` only when

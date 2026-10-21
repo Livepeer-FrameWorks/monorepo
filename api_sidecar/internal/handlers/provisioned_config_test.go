@@ -24,8 +24,14 @@ func TestReadProvisionedConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := readProvisionedConfig(dir)
-	if got.GetCliVersion() != "v0.3.11" || got.GetDigest() != "sha256:abc" {
-		t.Fatalf("marker = %v, want cli v0.3.11 digest sha256:abc", got)
+	if got.GetCliVersion() != "v0.3.11" || got.GetDigest() != "sha256:abc" || got.GetRenderDigest() != "" {
+		t.Fatalf("marker = %v, want cli v0.3.11 digest sha256:abc and no render digest", got)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ProvisionedConfigFile), []byte("EDGE_CONFIG_CLI_VERSION=v0.3.12\nEDGE_CONFIG_DIGEST=sha256:abc\nEDGE_CONFIG_RENDER_DIGEST=sha256:def\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := readProvisionedConfig(dir); got.GetRenderDigest() != "sha256:def" {
+		t.Fatalf("marker = %v, want render digest sha256:def", got)
 	}
 	if got := readProvisionedConfig(""); got != nil {
 		t.Fatalf("empty state dir = %v, want nil", got)

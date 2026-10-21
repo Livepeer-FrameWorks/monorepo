@@ -176,6 +176,33 @@ func TestEnvOverrideWins(t *testing.T) {
 	}
 }
 
+// AnsibleFS reads the tree AnsibleRoot would run: the working-directory
+// checkout for a development build, the embedded tree (unextracted) for a
+// release build.
+func TestAnsibleFSReadsTheTreeAnsibleRootResolves(t *testing.T) {
+	cwd := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(cwd, "ansible"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cwd, "ansible", "ansible.cfg"), []byte("checkout"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ version, want string }{{"dev", "checkout"}, {"v1.2.3", "[defaults]\n"}} {
+		r := testResolver(t, miniAnsible(), nil, tc.version, cwd)
+		fsys, err := r.ansibleFS()
+		if err != nil {
+			t.Fatalf("%s: ansibleFS: %v", tc.version, err)
+		}
+		if got, err := fs.ReadFile(fsys, "ansible.cfg"); err != nil || string(got) != tc.want {
+			t.Fatalf("%s: ansible.cfg = %q, %v; want %q", tc.version, got, err, tc.want)
+		}
+	}
+	empty := testResolver(t, fstest.MapFS{}, nil, "v1.2.3", t.TempDir())
+	if _, err := empty.ansibleFS(); err == nil || !strings.Contains(err.Error(), "no embedded Ansible content") {
+		t.Fatalf("ansibleFS err = %v", err)
+	}
+}
+
 func TestMissingEmbeddedContentFailsClearly(t *testing.T) {
 	r := testResolver(t, fstest.MapFS{}, fstest.MapFS{}, "v1.2.3", t.TempDir())
 	if _, err := r.ansibleRoot(); err == nil || !strings.Contains(err.Error(), "no embedded Ansible content") {

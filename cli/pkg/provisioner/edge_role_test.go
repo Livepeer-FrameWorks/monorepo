@@ -88,6 +88,10 @@ func TestEdgeRoleVarsCarryCLIVersionForConfigMarker(t *testing.T) {
 	if vars["edge_cli_version"] != "v9.8.7" {
 		t.Fatalf("edge_cli_version = %#v, want v9.8.7", vars["edge_cli_version"])
 	}
+	want, digestErr := EdgeRenderDigest()
+	if got, ok := vars["edge_config_render_digest"]; digestErr == nil && got != want || digestErr != nil && ok {
+		t.Fatalf("edge_config_render_digest = %#v, want %q (digest error: %v)", got, want, digestErr)
+	}
 }
 
 func TestEdgeRoleVarsPrivateTelemetryResolution(t *testing.T) {

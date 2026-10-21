@@ -140,6 +140,10 @@ edge_config_schema_version: ""
 # CLI release that renders this config; stamped into the provisioned-config
 # marker (tasks/config-marker.yml) that Helmsman reports to Foghorn.
 edge_cli_version: ""
+# Digest of that CLI's edge render logic (playbook, roles, maintenance page),
+# computed by the CLI; doctors compare it with their own instead of the
+# release. Empty leaves them on the release comparison.
+edge_config_render_digest: ""
 
 # Remote filesystem layout. Shared by container + native modes.
 edge_base_dir: /opt/frameworks/edge

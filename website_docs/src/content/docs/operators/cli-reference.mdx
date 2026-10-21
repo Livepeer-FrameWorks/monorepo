@@ -171,9 +171,13 @@ frameworks cluster doctor [flags]
   index of each platform database, with distinct tablets and tablet peers. A database
   created before its colocated layout is reported as a warning; see
   [YugabyteDB Physical Layout](/operators/yugabyte-layout)
-- **Edge config version:** Every registered edge whose configuration was rendered
-  by an older CLI than the one running doctor, or that has no provisioned-config
-  marker yet, from the marker each node reports through Foghorn node health. Needs
+- **Edge config version:** Every registered edge whose provisioned files the CLI
+  running doctor renders differently, or that has no provisioned-config marker
+  yet, from the marker each node reports through Foghorn node health. The marker
+  records a render digest of the CLI that wrote it (its edge playbook, the roles
+  that playbook runs, and the maintenance page); an edge whose render digest
+  matches this CLI's is current whatever release wrote it. A marker written
+  before the render digest existed is compared by CLI release instead. Needs
   lifecycle access (Quartermaster and Foghorn) from the active context; without it
   the check is reported as not checked. The marker covers only the files
   provisioning renders (edge env and service units or compose file, vmagent
@@ -2898,7 +2902,7 @@ frameworks edge logs --follow --tail 500
 
 ### frameworks edge doctor
 
-Run comprehensive health checks on the edge node. The **Config Version** section reads the node's provisioned-config marker and reports whether its configuration was rendered by this CLI (`current`), an older one (`stale`), or before markers existed (`unmarked`). The last two come with next steps: `cluster edges rollout status` to see whether the edge's rolling update brought Helmsman, MistServer and Caddy to the cluster's release target (nothing is needed while it runs), `edge logs helmsman` when it stays behind, and `edge provision --dry-run` to repair the provisioned files the rolling update does not render.
+Run comprehensive health checks on the edge node. The **Config Version** section reads the node's provisioned-config marker and reports whether this CLI renders its provisioned files the same way as the CLI that wrote the marker (`current`, by comparing render digests), differently (`stale`), or whether the node predates markers (`unmarked`). A marker without a render digest is compared by CLI release: an older release is `stale`. The last two come with next steps: `cluster edges rollout status` to see whether the edge's rolling update brought Helmsman, MistServer and Caddy to the cluster's release target (nothing is needed while it runs), `edge logs helmsman` when it stays behind, and `edge provision --dry-run` to repair the provisioned files the rolling update does not render.
 
 ```bash
 frameworks edge doctor --domain edge1.example.com

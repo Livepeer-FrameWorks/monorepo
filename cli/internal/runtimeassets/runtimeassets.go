@@ -104,26 +104,60 @@ func (r *resolver) isRelease() bool {
 	return releaseVersionPattern.MatchString(r.version) && !strings.HasSuffix(r.version, "-dirty")
 }
 
+// AnsibleFS returns the same tree AnsibleRoot resolves, read in place: the
+// on-disk directory when AnsibleRoot would use one, otherwise the embedded
+// tree without extracting it.
+func AnsibleFS() (fs.FS, error) { return defaultRes().ansibleFS() }
+
 func (r *resolver) ansibleRoot() (string, error) {
+	dir, onDisk, err := r.diskAnsibleRoot()
+	if err != nil || onDisk {
+		return dir, err
+	}
+	if !embeddedHas(r.ansible, "ansible.cfg") {
+		return "", r.noEmbeddedAnsible()
+	}
+	return r.extractAnsible()
+}
+
+func (r *resolver) ansibleFS() (fs.FS, error) {
+	dir, onDisk, err := r.diskAnsibleRoot()
+	if err != nil {
+		return nil, err
+	}
+	if onDisk {
+		return os.DirFS(dir), nil
+	}
+	if !embeddedHas(r.ansible, "ansible.cfg") {
+		return nil, r.noEmbeddedAnsible()
+	}
+	return r.ansible, nil
+}
+
+// diskAnsibleRoot resolves $FRAMEWORKS_ANSIBLE_ROOT, then (development builds
+// only) an ansible/ directory above the working directory. onDisk is false
+// when the embedded tree applies.
+func (r *resolver) diskAnsibleRoot() (dir string, onDisk bool, err error) {
 	if override := r.getenv(AnsibleRootEnv); override != "" {
 		abs, err := filepath.Abs(override)
 		if err != nil {
-			return "", fmt.Errorf("resolve %s: %w", AnsibleRootEnv, err)
+			return "", false, fmt.Errorf("resolve %s: %w", AnsibleRootEnv, err)
 		}
 		if _, err := os.Stat(filepath.Join(abs, "ansible.cfg")); err != nil {
-			return "", fmt.Errorf("%s=%s: %w", AnsibleRootEnv, abs, err)
+			return "", false, fmt.Errorf("%s=%s: %w", AnsibleRootEnv, abs, err)
 		}
-		return abs, nil
+		return abs, true, nil
 	}
 	if !r.isRelease() {
 		if dir, ok := r.walkUp(filepath.Join("ansible", "ansible.cfg")); ok {
-			return filepath.Join(dir, "ansible"), nil
+			return filepath.Join(dir, "ansible"), true, nil
 		}
 	}
-	if !embeddedHas(r.ansible, "ansible.cfg") {
-		return "", fmt.Errorf("this CLI build (%s) has no embedded Ansible content; build it with `make build-bin-cli` or set %s", r.version, AnsibleRootEnv)
-	}
-	return r.extractAnsible()
+	return "", false, nil
+}
+
+func (r *resolver) noEmbeddedAnsible() error {
+	return fmt.Errorf("this CLI build (%s) has no embedded Ansible content; build it with `make build-bin-cli` or set %s", r.version, AnsibleRootEnv)
 }
 
 func (r *resolver) skipperSources() (fs.FS, error) {

@@ -5,8 +5,10 @@
 # `cluster doctor` compare it with the operator's CLI. The digest covers the
 # rendered edge env (and the compose file in container mode, the Caddy
 # maintenance page in native mode) plus the pinned native artifact checksums,
-# so it changes exactly when the rendered config does. It is written last,
-# after the stack converged.
+# so it changes exactly when the rendered config does. The render digest is
+# the CLI's (edge_config_render_digest): it covers the render logic and not
+# the node inputs, so a doctor on another host can compare it with the one its
+# own CLI would write. It is written last, after the stack converged.
 
 - name: Compute edge config digest
   ansible.builtin.set_fact:
@@ -39,6 +41,7 @@
     content: |
       EDGE_CONFIG_CLI_VERSION={{ edge_cli_version }}
       EDGE_CONFIG_DIGEST={{ edge_config_digest }}
+      EDGE_CONFIG_RENDER_DIGEST={{ edge_config_render_digest }}
     owner: "{{ edge_config_marker_owner | default(omit, true) }}"
     group: "{{ edge_config_marker_owner | default(omit, true) }}"
     mode: "0644"

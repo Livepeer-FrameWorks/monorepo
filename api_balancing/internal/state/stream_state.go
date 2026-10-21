@@ -411,27 +411,29 @@ type NodeState struct {
 	Arch                 string              `json:"arch,omitempty"`
 	ONNXProfile          string              `json:"onnx_profile,omitempty"`
 	// Edge config marker the node reports: the CLI release that rendered its
-	// config and the digest of that rendered set.
-	ProvisionedConfigCLIVersion string         `json:"provisioned_config_cli_version,omitempty"`
-	ProvisionedConfigDigest     string         `json:"provisioned_config_digest,omitempty"`
-	Latitude                    *float64       `json:"latitude,omitempty"`
-	Longitude                   *float64       `json:"longitude,omitempty"`
-	Location                    string         `json:"location,omitempty"`
-	Outputs                     map[string]any `json:"outputs,omitempty"`
-	OutputsRaw                  string         `json:"outputs_raw,omitempty"`
-	CPU                         float64        `json:"cpu,omitempty"`
-	RAMMax                      float64        `json:"ram_max,omitempty"`
-	RAMCurrent                  float64        `json:"ram_current,omitempty"`
-	UpSpeed                     float64        `json:"up_speed,omitempty"`
-	DownSpeed                   float64        `json:"down_speed,omitempty"`
-	BWLimit                     float64        `json:"bw_limit,omitempty"`
-	CapIngest                   bool           `json:"cap_ingest,omitempty"`
-	CapEdge                     bool           `json:"cap_edge,omitempty"`
-	CapStorage                  bool           `json:"cap_storage,omitempty"`
-	CapProcessing               bool           `json:"cap_processing,omitempty"`
-	Roles                       []string       `json:"roles,omitempty"`
-	StorageCapacityBytes        uint64         `json:"storage_capacity_bytes,omitempty"`
-	StorageUsedBytes            uint64         `json:"storage_used_bytes,omitempty"`
+	// config, the digest of that rendered set, and the digest of that CLI's
+	// render logic.
+	ProvisionedConfigCLIVersion   string         `json:"provisioned_config_cli_version,omitempty"`
+	ProvisionedConfigDigest       string         `json:"provisioned_config_digest,omitempty"`
+	ProvisionedConfigRenderDigest string         `json:"provisioned_config_render_digest,omitempty"`
+	Latitude                      *float64       `json:"latitude,omitempty"`
+	Longitude                     *float64       `json:"longitude,omitempty"`
+	Location                      string         `json:"location,omitempty"`
+	Outputs                       map[string]any `json:"outputs,omitempty"`
+	OutputsRaw                    string         `json:"outputs_raw,omitempty"`
+	CPU                           float64        `json:"cpu,omitempty"`
+	RAMMax                        float64        `json:"ram_max,omitempty"`
+	RAMCurrent                    float64        `json:"ram_current,omitempty"`
+	UpSpeed                       float64        `json:"up_speed,omitempty"`
+	DownSpeed                     float64        `json:"down_speed,omitempty"`
+	BWLimit                       float64        `json:"bw_limit,omitempty"`
+	CapIngest                     bool           `json:"cap_ingest,omitempty"`
+	CapEdge                       bool           `json:"cap_edge,omitempty"`
+	CapStorage                    bool           `json:"cap_storage,omitempty"`
+	CapProcessing                 bool           `json:"cap_processing,omitempty"`
+	Roles                         []string       `json:"roles,omitempty"`
+	StorageCapacityBytes          uint64         `json:"storage_capacity_bytes,omitempty"`
+	StorageUsedBytes              uint64         `json:"storage_used_bytes,omitempty"`
 	// ProcessingClasses is the scheduler's source of truth for load-aware
 	// routing: per-class capacity keyed by class name ("video_transcode", ...).
 	// Routing matches a job's processing_class against this; there is no flat
@@ -4190,6 +4192,7 @@ func (sm *StreamStateManager) SetNodeProvisionedConfig(nodeID string, cfg *ipcpb
 	}
 	n.ProvisionedConfigCLIVersion = strings.TrimSpace(cfg.GetCliVersion())
 	n.ProvisionedConfigDigest = strings.TrimSpace(cfg.GetDigest())
+	n.ProvisionedConfigRenderDigest = strings.TrimSpace(cfg.GetRenderDigest())
 }
 
 func (sm *StreamStateManager) queueNodeLifecycleWrite(update *ipcpb.NodeLifecycleUpdate) {

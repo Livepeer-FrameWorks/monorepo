@@ -37,9 +37,11 @@ func readProvisionedConfig(stateDir string) *ipcpb.EdgeProvisionedConfig {
 			cfg.CliVersion = strings.TrimSpace(value)
 		case "EDGE_CONFIG_DIGEST":
 			cfg.Digest = strings.TrimSpace(value)
+		case "EDGE_CONFIG_RENDER_DIGEST":
+			cfg.RenderDigest = strings.TrimSpace(value)
 		}
 	}
-	if cfg.GetCliVersion() == "" && cfg.GetDigest() == "" {
+	if cfg.GetCliVersion() == "" && cfg.GetDigest() == "" && cfg.GetRenderDigest() == "" {
 		return nil
 	}
 	return cfg

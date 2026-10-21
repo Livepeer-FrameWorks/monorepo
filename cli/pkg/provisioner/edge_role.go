@@ -156,6 +156,40 @@ func runEdgeRoleWith(ctx context.Context, pool *ssh.Pool, host inventory.Host, c
 // need pinned tarballs, container installs need the pinned edge image
 // digest.
 func edgeRoleVars(config *EdgeProvisionConfig, remoteOS, remoteArch string) (map[string]any, error) {
+	vars, err := edgeRoleVarsFrom(config, remoteOS, remoteArch, edgeReleaseSources())
+	if err != nil {
+		return nil, err
+	}
+	// The marker records this CLI's render digest so doctors compare render
+	// logic, not release numbers. A tree that cannot be read here fails the
+	// role run itself when it resolves the same tree.
+	if renderDigest, digestErr := EdgeRenderDigest(); digestErr == nil {
+		vars["edge_config_render_digest"] = renderDigest
+	}
+	return vars, nil
+}
+
+// edgeRoleSources supplies the release data edgeRoleVarsFrom reads: the
+// release manifest named by a version and the infrastructure artifacts
+// resolved from its channel.
+type edgeRoleSources struct {
+	manifest      func(version string) (*gitops.Manifest, error)
+	infraArtifact func(name, arch, version string) (*gitops.Artifact, error)
+}
+
+func edgeReleaseSources() edgeRoleSources {
+	return edgeRoleSources{
+		manifest: func(version string) (*gitops.Manifest, error) { return fetchEdgeManifestFn(version) },
+		infraArtifact: func(name, arch, version string) (*gitops.Artifact, error) {
+			return resolveInfraArtifactFromChannel(name, arch, version, nil)
+		},
+	}
+}
+
+// edgeRoleVarsFrom derives the role variables from config and the release
+// data in src without network or host access; EdgeRenderDigest evaluates it
+// on a fixed fixture.
+func edgeRoleVarsFrom(config *EdgeProvisionConfig, remoteOS, remoteArch string, src edgeRoleSources) (map[string]any, error) {
 	mode := config.resolvedMode()
 	profile := resolvedEdgeONNXProfile(config.ONNXProfile, mode, remoteOS, remoteArch)
 	// Provision defaults an empty Version to the stable channel; this guard
@@ -267,7 +301,7 @@ func edgeRoleVars(config *EdgeProvisionConfig, remoteOS, remoteArch string) (map
 	var manifest *gitops.Manifest
 	if strings.TrimSpace(config.Version) != "" {
 		var manifestErr error
-		manifest, manifestErr = fetchEdgeManifestFn(config.Version)
+		manifest, manifestErr = src.manifest(config.Version)
 		if manifestErr != nil {
 			return nil, manifestErr
 		}
@@ -304,7 +338,7 @@ func edgeRoleVars(config *EdgeProvisionConfig, remoteOS, remoteArch string) (map
 
 	if manifest == nil {
 		var manifestErr error
-		manifest, manifestErr = fetchEdgeManifestFn(config.Version)
+		manifest, manifestErr = src.manifest(config.Version)
 		if manifestErr != nil {
 			return nil, manifestErr
 		}
@@ -349,14 +383,14 @@ func edgeRoleVars(config *EdgeProvisionConfig, remoteOS, remoteArch string) (map
 	// token on disk, so reruns with the URL alone must still resolve and
 	// reconcile vmagent.
 	if strings.TrimSpace(config.TelemetryURL) != "" {
-		artifact, err := resolveInfraArtifactFromChannel("vmagent", arch, config.Version, nil)
+		artifact, err := src.infraArtifact("vmagent", arch, config.Version)
 		if err != nil {
 			return nil, fmt.Errorf("edge: resolve vmagent artifact: %w", err)
 		}
 		vars["edge_vmagent_artifact_url"] = artifact.URL
 		vars["edge_vmagent_artifact_checksum"] = artifact.Checksum
 		if remoteOS == "linux" {
-			nodeExporter, err := resolveInfraArtifactFromChannel(NodeExporterArtifact, arch, config.Version, nil)
+			nodeExporter, err := src.infraArtifact(NodeExporterArtifact, arch, config.Version)
 			if err != nil {
 				return nil, fmt.Errorf("edge: resolve node-exporter artifact: %w", err)
 			}

@@ -123,6 +123,7 @@ message GetNodeHealthResponse {
   // Empty when the node has not reported a provisioned-config marker.
   string provisioned_config_cli_version = 21;
   string provisioned_config_digest = 22;
+  string provisioned_config_render_digest = 23;
 }
 
 message NodeComponentVersion {

@@ -16078,10 +16078,15 @@ func (x *NodeLifecycleUpdate) GetProvisionedConfig() *EdgeProvisionedConfig {
 
 // EdgeProvisionedConfig identifies the rendered edge config on a node:
 // the CLI release that rendered it and a digest of the rendered config set.
+// render_digest identifies the render logic that CLI shipped (the edge
+// playbook and the roles it runs, plus the maintenance page) independent of
+// node inputs, so a doctor can tell whether its own CLI renders differently.
+// Empty for markers written before it existed.
 type EdgeProvisionedConfig struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	CliVersion    string                 `protobuf:"bytes,1,opt,name=cli_version,json=cliVersion,proto3" json:"cli_version,omitempty"`
 	Digest        string                 `protobuf:"bytes,2,opt,name=digest,proto3" json:"digest,omitempty"`
+	RenderDigest  string                 `protobuf:"bytes,3,opt,name=render_digest,json=renderDigest,proto3" json:"render_digest,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -16126,6 +16131,13 @@ func (x *EdgeProvisionedConfig) GetCliVersion() string {
 func (x *EdgeProvisionedConfig) GetDigest() string {
 	if x != nil {
 		return x.Digest
+	}
+	return ""
+}
+
+func (x *EdgeProvisionedConfig) GetRenderDigest() string {
+	if x != nil {
+		return x.RenderDigest
 	}
 	return ""
 }
@@ -24916,11 +24928,12 @@ const file_ipc_proto_rawDesc = "" +
 	"_tenant_idB\f\n" +
 	"\n" +
 	"_node_uuidB\x15\n" +
-	"\x13_mist_api_reachableJ\x04\b3\x104R\x1cartifacts_scan_started_at_ms\"P\n" +
+	"\x13_mist_api_reachableJ\x04\b3\x104R\x1cartifacts_scan_started_at_ms\"u\n" +
 	"\x15EdgeProvisionedConfig\x12\x1f\n" +
 	"\vcli_version\x18\x01 \x01(\tR\n" +
 	"cliVersion\x12\x16\n" +
-	"\x06digest\x18\x02 \x01(\tR\x06digest\"\xe0\v\n" +
+	"\x06digest\x18\x02 \x01(\tR\x06digest\x12#\n" +
+	"\rrender_digest\x18\x03 \x01(\tR\frenderDigest\"\xe0\v\n" +
 	"\x11LoadBalancingData\x12#\n" +
 	"\rselected_node\x18\x01 \x01(\tR\fselectedNode\x12\x1a\n" +
 	"\blatitude\x18\x02 \x01(\x01R\blatitude\x12\x1c\n" +

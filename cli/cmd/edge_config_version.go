@@ -17,6 +17,7 @@ import (
 	"frameworks/cli/internal/ux"
 	"frameworks/cli/internal/xexec"
 	"frameworks/cli/pkg/health"
+	"frameworks/cli/pkg/provisioner"
 
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 	foghorncontrolpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
@@ -40,14 +41,42 @@ const (
 
 var edgeConfigReleasePattern = regexp.MustCompile(`^v\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$`)
 
-// classifyEdgeConfig compares the CLI release recorded in a node's
-// provisioned-config marker with the running CLI. A node without a marker
-// was rendered by a CLI that predates markers, so it is behind as well.
-// Development builds (and markers they wrote) carry no comparable release.
-func classifyEdgeConfig(nodeCLIVersion, nodeDigest, cliVersion string) (edgeConfigState, string) {
+// edgeRenderDigest is this CLI's edge render digest, the value `edge
+// provision` writes as EDGE_CONFIG_RENDER_DIGEST.
+var edgeRenderDigest = provisioner.EdgeRenderDigest
+
+// currentEdgeRenderDigest returns this CLI's render digest, or "" when its
+// Ansible tree cannot be read, which leaves the release comparison.
+func currentEdgeRenderDigest() string {
+	digest, err := edgeRenderDigest()
+	if err != nil {
+		return ""
+	}
+	return digest
+}
+
+// classifyEdgeConfig compares a node's provisioned-config marker with the
+// running CLI. When both carry a render digest, equal digests mean this CLI
+// renders the node's provisioned files exactly as the CLI that wrote the
+// marker did, whatever their releases. A marker without one (written before
+// the render digest existed) falls back to comparing the CLI release it
+// records. A node without a marker was rendered by a CLI that predates
+// markers, so it is behind as well. Development builds (and markers they
+// wrote) carry no comparable release.
+func classifyEdgeConfig(nodeCLIVersion, nodeDigest, nodeRenderDigest, cliVersion, cliRenderDigest string) (edgeConfigState, string) {
 	nodeCLIVersion = strings.TrimSpace(nodeCLIVersion)
-	if nodeCLIVersion == "" && strings.TrimSpace(nodeDigest) == "" {
+	nodeRenderDigest = strings.TrimSpace(nodeRenderDigest)
+	if nodeCLIVersion == "" && strings.TrimSpace(nodeDigest) == "" && nodeRenderDigest == "" {
 		return edgeConfigUnmarked, "no provisioned-config marker (rendered before this CLI's edge config)"
+	}
+	if cliRenderDigest = strings.TrimSpace(cliRenderDigest); nodeRenderDigest != "" && cliRenderDigest != "" {
+		if nodeRenderDigest == cliRenderDigest {
+			return edgeConfigCurrent, fmt.Sprintf("rendered by CLI %s; this CLI renders the same provisioned files", nodeCLIVersion)
+		}
+		if newerEdgeConfigRelease(nodeCLIVersion, cliVersion) {
+			return edgeConfigCurrent, fmt.Sprintf("rendered by newer CLI %s", nodeCLIVersion)
+		}
+		return edgeConfigStale, fmt.Sprintf("rendered by CLI %s; CLI %s renders the provisioned files differently", nodeCLIVersion, cliVersion)
 	}
 	current := releases.StripGitDescribeSuffix(cliVersion)
 	if !edgeConfigReleasePattern.MatchString(current) {
@@ -63,11 +92,24 @@ func classifyEdgeConfig(nodeCLIVersion, nodeDigest, cliVersion string) (edgeConf
 	return edgeConfigCurrent, "rendered by CLI " + nodeCLIVersion
 }
 
+// newerEdgeConfigRelease reports whether the node's marker names a release
+// newer than this CLI. An older CLI renders differently from a newer one by
+// design, which is not drift on the node.
+func newerEdgeConfigRelease(nodeCLIVersion, cliVersion string) bool {
+	node := releases.StripGitDescribeSuffix(nodeCLIVersion)
+	current := releases.StripGitDescribeSuffix(cliVersion)
+	if !edgeConfigReleasePattern.MatchString(node) || !edgeConfigReleasePattern.MatchString(current) {
+		return false
+	}
+	return releases.CompareSemver(node, current) > 0
+}
+
 type edgeConfigNode struct {
-	Name       string
-	CLIVersion string
-	Digest     string
-	Reported   bool
+	Name         string
+	CLIVersion   string
+	Digest       string
+	RenderDigest string
+	Reported     bool
 	// Unreported is why an edge without health has none.
 	Unreported string
 }
@@ -77,7 +119,7 @@ type edgeConfigNode struct {
 // could not be read (not reporting) or whose config cannot be compared with
 // this CLI leaves the check unverified, which is a warning: the doctor only
 // reports healthy when every edge's config was read and is current.
-func evaluateEdgeConfigVersions(nodes []edgeConfigNode, cliVersion string) *health.CheckResult {
+func evaluateEdgeConfigVersions(nodes []edgeConfigNode, cliVersion, cliRenderDigest string) *health.CheckResult {
 	result := &health.CheckResult{Name: "edge_config_version", CheckedAt: time.Now(), Metadata: map[string]string{}}
 	if len(nodes) == 0 {
 		result.OK = true
@@ -95,7 +137,7 @@ func evaluateEdgeConfigVersions(nodes []edgeConfigNode, cliVersion string) *heal
 			silent = append(silent, entry)
 			continue
 		}
-		state, detail := classifyEdgeConfig(n.CLIVersion, n.Digest, cliVersion)
+		state, detail := classifyEdgeConfig(n.CLIVersion, n.Digest, n.RenderDigest, cliVersion, cliRenderDigest)
 		switch state {
 		case edgeConfigStale, edgeConfigUnmarked:
 			behind = append(behind, fmt.Sprintf("%s (%s)", n.Name, detail))
@@ -121,7 +163,7 @@ func evaluateEdgeConfigVersions(nodes []edgeConfigNode, cliVersion string) *heal
 	}
 	if len(behind) > 0 {
 		result.Status = "degraded"
-		result.Message = fmt.Sprintf("%d/%d edge(s) carry provisioned files rendered before this CLI: %s", len(behind), len(nodes), strings.Join(behind, "; "))
+		result.Message = fmt.Sprintf("%d/%d edge(s) carry provisioned files behind this CLI's render: %s", len(behind), len(nodes), strings.Join(behind, "; "))
 		if len(notes) > 0 {
 			result.Message += "; " + strings.Join(notes, "; ")
 		}
@@ -152,11 +194,12 @@ func edgeConfigNodesFromHealth(nodes []*quartermasterpb.InfrastructureNode, heal
 		name := firstNonEmpty(n.GetNodeName(), n.GetNodeId())
 		h := healthByID[n.GetNodeId()]
 		out = append(out, edgeConfigNode{
-			Name:       name,
-			CLIVersion: h.GetProvisionedConfigCliVersion(),
-			Digest:     h.GetProvisionedConfigDigest(),
-			Reported:   h != nil,
-			Unreported: unreported[n.GetNodeId()],
+			Name:         name,
+			CLIVersion:   h.GetProvisionedConfigCliVersion(),
+			Digest:       h.GetProvisionedConfigDigest(),
+			RenderDigest: h.GetProvisionedConfigRenderDigest(),
+			Reported:     h != nil,
+			Unreported:   unreported[n.GetNodeId()],
 		})
 	}
 	return out
@@ -179,14 +222,15 @@ func edgeConfigMarkerDirs(home string) []string {
 
 // edgeConfigMarker is a parsed provisioned-config marker.
 type edgeConfigMarker struct {
-	Path       string `json:"path,omitempty"`
-	CLIVersion string `json:"cli_version,omitempty"`
-	Digest     string `json:"digest,omitempty"`
-	State      string `json:"state"`
-	Detail     string `json:"detail,omitempty"`
+	Path         string `json:"path,omitempty"`
+	CLIVersion   string `json:"cli_version,omitempty"`
+	Digest       string `json:"digest,omitempty"`
+	RenderDigest string `json:"render_digest,omitempty"`
+	State        string `json:"state"`
+	Detail       string `json:"detail,omitempty"`
 }
 
-func parseEdgeConfigMarker(content string) (cliVersion, digest string) {
+func parseEdgeConfigMarker(content string) (cliVersion, digest, renderDigest string) {
 	for line := range strings.SplitSeq(content, "\n") {
 		key, value, ok := strings.Cut(strings.TrimSpace(line), "=")
 		if !ok {
@@ -197,9 +241,11 @@ func parseEdgeConfigMarker(content string) (cliVersion, digest string) {
 			cliVersion = strings.TrimSpace(value)
 		case "EDGE_CONFIG_DIGEST":
 			digest = strings.TrimSpace(value)
+		case "EDGE_CONFIG_RENDER_DIGEST":
+			renderDigest = strings.TrimSpace(value)
 		}
 	}
-	return cliVersion, digest
+	return cliVersion, digest, renderDigest
 }
 
 // localEdgeConfigMarker reads this host's marker. The container state dir is
@@ -223,11 +269,11 @@ func localEdgeConfigMarker(readFile func(string) ([]byte, error), sudoRead func(
 			}
 			content = sudoContent
 		}
-		version, digest := parseEdgeConfigMarker(content)
-		state, detail := classifyEdgeConfig(version, digest, fwversion.Version)
-		return edgeConfigMarker{Path: path, CLIVersion: version, Digest: digest, State: string(state), Detail: detail}
+		version, digest, renderDigest := parseEdgeConfigMarker(content)
+		state, detail := classifyEdgeConfig(version, digest, renderDigest, fwversion.Version, currentEdgeRenderDigest())
+		return edgeConfigMarker{Path: path, CLIVersion: version, Digest: digest, RenderDigest: renderDigest, State: string(state), Detail: detail}
 	}
-	state, detail := classifyEdgeConfig("", "", fwversion.Version)
+	state, detail := classifyEdgeConfig("", "", "", fwversion.Version, "")
 	return edgeConfigMarker{State: string(state), Detail: detail}
 }
 
@@ -236,6 +282,9 @@ func renderEdgeConfigMarker(w io.Writer, m edgeConfigMarker) {
 	line := fmt.Sprintf("%-18s %s", m.State+":", m.Detail)
 	if m.Digest != "" {
 		line += "  digest=" + m.Digest
+	}
+	if m.RenderDigest != "" {
+		line += "  render=" + m.RenderDigest
 	}
 	switch edgeConfigState(m.State) {
 	case edgeConfigCurrent:
@@ -290,8 +339,8 @@ func sudoReadEdgeConfigMarker(cmd *cobra.Command) func(string) (string, bool, er
 	}
 }
 
-// doctorEdgeConfigVersions lists the cluster's edges whose config is older
-// than this CLI's edge config. Endpoints resolve against the doctor's own
+// doctorEdgeConfigVersions lists the cluster's edges whose provisioned files
+// are behind this CLI's render (classifyEdgeConfig). Endpoints resolve against the doctor's own
 // manifest, and each edge's health is read from the Foghorn serving that
 // edge's cluster. It needs lifecycle (Quartermaster + Foghorn) access for that
 // manifest; without it the check reports a warning instead of guessing.
@@ -322,5 +371,5 @@ func doctorEdgeConfigVersions(ctx context.Context, rc *resolvedCluster) *health.
 		return notChecked("list edge nodes: %v", err)
 	}
 	healthByID, _, missing := collectNodeHealth(ctx, ctxCfg, resp.GetNodes(), foghornNodeHealthDialer(resolver, ctxCfg))
-	return evaluateEdgeConfigVersions(edgeConfigNodesFromHealth(resp.GetNodes(), healthByID, missing), fwversion.Version)
+	return evaluateEdgeConfigVersions(edgeConfigNodesFromHealth(resp.GetNodes(), healthByID, missing), fwversion.Version, currentEdgeRenderDigest())
 }
