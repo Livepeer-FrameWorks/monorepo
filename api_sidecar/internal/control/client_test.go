@@ -1445,6 +1445,9 @@ func TestApplyJitterBounds(t *testing.T) {
 
 func TestSendArtifactDeletedDisconnected(t *testing.T) {
 	clearConn()
+	// The disconnected send persists the row for reconnect; keep it out of the
+	// outbox that later tests drain.
+	appconfigtest.Setenv(t, "FRAMEWORKS_CONTROL_OUTBOX_DIR", t.TempDir())
 	err := SendArtifactDeleted("hash-1", "/path/file", "manual", "clip", 1024)
 	if err == nil {
 		t.Fatal("expected error for disconnected stream")

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/api_sidecar/internal/appconfig/appconfigtest"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
@@ -37,13 +38,13 @@ func TestStartRecordingPersistsInternalNameThenRecoveryResolves(t *testing.T) {
 	// before Mist has produced anything: StartRecording creates the directory
 	// fresh and writes the job.json identity sidecar. startAwareFakeMist makes
 	// the started push visible to the warmup PushList so StartRecording completes.
-	dm1 := &DVRManager{
+	dm1 := stopMonitorsAtCleanup(t, &DVRManager{
 		logger:      logging.NewLogger(),
 		jobs:        make(map[string]*DVRJob),
 		storagePath: storagePath,
 		mistClient:  &startAwareFakeMist{pushIDToReturn: 7},
 		diskCheck:   func(string, uint64) error { return nil },
-	}
+	})
 	if err := dm1.StartRecording(dvrHash, streamID, internalName, "live+"+internalName, "", &ipcpb.DVRConfig{SegmentDuration: 6}, nil); err != nil {
 		t.Fatalf("StartRecording: %v", err)
 	}
@@ -259,8 +260,8 @@ func TestStartRecordingAdoptsExactRetryWithLivePush(t *testing.T) {
 	}}}
 	const sourceURL = "dtsc://remote-node/live+" + internalName
 	ClearDVRSourceOverride("live+" + internalName)
-	dm := &DVRManager{logger: logging.NewLogger(), jobs: make(map[string]*DVRJob), storagePath: storagePath, mistClient: fake,
-		diskCheck: func(string, uint64) error { return nil }}
+	dm := stopMonitorsAtCleanup(t, &DVRManager{logger: logging.NewLogger(), jobs: make(map[string]*DVRJob), storagePath: storagePath, mistClient: fake,
+		diskCheck: func(string, uint64) error { return nil }})
 	if err := dm.StartRecording(dvrHash, streamID, internalName, "live+"+internalName, sourceURL, &ipcpb.DVRConfig{}, nil); err != nil {
 		t.Fatalf("exact retry with a live push must adopt idempotently, got %v", err)
 	}
@@ -508,13 +509,13 @@ func TestDVRRestartRecoversDescriptorAndRePinsOverride(t *testing.T) {
 	manifestPath := filepath.Join(outputDir, dvrHash+".m3u8")
 
 	// Start: persists the full descriptor sidecar and goes to recording.
-	dm1 := &DVRManager{
+	dm1 := stopMonitorsAtCleanup(t, &DVRManager{
 		logger:      logging.NewLogger(),
 		jobs:        make(map[string]*DVRJob),
 		storagePath: storagePath,
 		mistClient:  &startAwareFakeMist{pushIDToReturn: 7},
 		diskCheck:   func(string, uint64) error { return nil },
-	}
+	})
 	cfg := &ipcpb.DVRConfig{SegmentDuration: 6, DvrWindowSeconds: 3600, MaxEntries: 600}
 	if err := dm1.StartRecording(dvrHash, streamID, internalName, runtimeName, sourceURL, cfg, nil); err != nil {
 		t.Fatalf("StartRecording: %v", err)
@@ -617,13 +618,13 @@ func TestStartRecordingDoesNotAdoptForeignPushOnAmbiguousStart(t *testing.T) {
 	outputDir := filepath.Join(storagePath, "dvr", streamID, dvrHash)
 
 	fake := &foreignPushFakeMist{dvrHash: dvrHash}
-	dm := &DVRManager{
+	dm := stopMonitorsAtCleanup(t, &DVRManager{
 		logger:      logging.NewLogger(),
 		jobs:        make(map[string]*DVRJob),
 		storagePath: storagePath,
 		mistClient:  fake,
 		diskCheck:   func(string, uint64) error { return nil },
-	}
+	})
 	if err := dm.StartRecording(dvrHash, streamID, internalName, runtimeName, sourceURL, &ipcpb.DVRConfig{}, nil); err != nil {
 		t.Fatalf("accepted-but-unconfirmed start must not error, got %v", err)
 	}
@@ -671,13 +672,13 @@ func TestStartRecordingConfirmsAcceptedPushByExactIdentity(t *testing.T) {
 	// listEmptyAfterStart delays visibility so PushStart is accepted first, then
 	// the push appears under the exact runtime+target and is confirmed.
 	fake := &startAwareFakeMist{pushIDToReturn: 42, listEmptyAfterStart: 2}
-	dm := &DVRManager{
+	dm := stopMonitorsAtCleanup(t, &DVRManager{
 		logger:      logging.NewLogger(),
 		jobs:        make(map[string]*DVRJob),
 		storagePath: storagePath,
 		mistClient:  fake,
 		diskCheck:   func(string, uint64) error { return nil },
-	}
+	})
 	// The confirmation windows run on a test clock that only the poll waits
 	// advance, so how long the scheduler takes between polls cannot end them.
 	clock := time.Unix(1_000_000, 0)
@@ -764,13 +765,15 @@ func TestReadDVRJobMetaRejectsPartialSidecar(t *testing.T) {
 // live forever holding its job/override/leases.
 func TestMonitorStopsUnconfirmedStartingJobAfterTimeout(t *testing.T) {
 	clearConn()
+	// The stop reports DvrStopped durably; keep that row out of the shared outbox.
+	appconfigtest.Setenv(t, "FRAMEWORKS_CONTROL_OUTBOX_DIR", t.TempDir())
 	const dvrHash = "hash-stuck"
 	storagePath := t.TempDir()
 	outputDir := filepath.Join(storagePath, "dvr", "s", dvrHash)
 	if err := os.MkdirAll(filepath.Join(outputDir, "segments"), 0755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	dm := &DVRManager{
+	dm := stopMonitorsAtCleanup(t, &DVRManager{
 		logger: logging.NewLogger(), jobs: make(map[string]*DVRJob), storagePath: storagePath,
 		mistClient: &fakeMistClient{}, diskCheck: func(string, uint64) error { return nil },
 		// Per-manager (no global mutation → no race with other monitors). The push
@@ -778,7 +781,7 @@ func TestMonitorStopsUnconfirmedStartingJobAfterTimeout(t *testing.T) {
 		// elapse and stop the unconfirmed job.
 		startupTimeout:      200 * time.Millisecond,
 		pushMonitorInterval: 10 * time.Millisecond,
-	}
+	})
 	// The startup-deadline terminalization is gated on bounded-absence convergence (no push +
 	// no segment/byte progress over a real grace). This recording is empty (0 segments, 0
 	// bytes) and stays so, so advancing the injected clock by the grace on each observation
@@ -796,7 +799,7 @@ func TestMonitorStopsUnconfirmedStartingJobAfterTimeout(t *testing.T) {
 	dm.mutex.Lock()
 	dm.jobs[dvrHash] = job
 	dm.mutex.Unlock()
-	go dm.monitorJob(job)
+	dm.startMonitor(job)
 
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
@@ -855,10 +858,10 @@ func TestStartRecordingTreatsAmbiguousPushStartAsAccepted(t *testing.T) {
 	)
 	storagePath := t.TempDir()
 	fake := &ambiguousAcceptFakeMist{emptyAfterStart: 2}
-	dm := &DVRManager{
+	dm := stopMonitorsAtCleanup(t, &DVRManager{
 		logger: logging.NewLogger(), jobs: make(map[string]*DVRJob), storagePath: storagePath,
 		mistClient: fake, diskCheck: func(string, uint64) error { return nil },
-	}
+	})
 	if err := dm.StartRecording(dvrHash, streamID, internalName, "live+"+internalName, "", &ipcpb.DVRConfig{}, nil); err != nil {
 		t.Fatalf("ambiguous-but-accepted start must confirm, got %v", err)
 	}
@@ -887,14 +890,14 @@ func TestMonitorRetainsStartingJobWhenMistUnavailableAtTimeout(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(outputDir, "segments"), 0755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	dm := &DVRManager{
+	dm := stopMonitorsAtCleanup(t, &DVRManager{
 		logger: logging.NewLogger(), jobs: make(map[string]*DVRJob), storagePath: storagePath,
 		mistClient: &fakeMistClient{pushListErr: fmt.Errorf("mist unavailable")},
 		diskCheck:  func(string, uint64) error { return nil },
 		// Deadline fires quickly; Mist stays unavailable.
 		startupTimeout:      30 * time.Millisecond,
 		pushMonitorInterval: 10 * time.Millisecond,
-	}
+	})
 	job := &DVRJob{
 		DVRHash: dvrHash, InternalName: "x", StreamName: "live+x", OutputDir: outputDir,
 		Status: "starting", PushID: 0, MaxRetries: MaxDVRRetries,
@@ -903,7 +906,7 @@ func TestMonitorRetainsStartingJobWhenMistUnavailableAtTimeout(t *testing.T) {
 	dm.mutex.Lock()
 	dm.jobs[dvrHash] = job
 	dm.mutex.Unlock()
-	go dm.monitorJob(job)
+	dm.startMonitor(job)
 
 	// The deadline elapses several times while Mist is down; the job must remain.
 	time.Sleep(300 * time.Millisecond)

@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/api_sidecar/internal/appconfig/appconfigtest"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
@@ -62,15 +63,17 @@ func (f *endsFirstPushFakeMist) PushList() ([]mist.PushInfo, error) {
 // while confirming) at production timings.
 func TestStartRecordingReissuesPushAfterReportedWriterEnd(t *testing.T) {
 	clearConn()
+	// The recording reports DvrStopped durably; keep that row out of the shared outbox.
+	appconfigtest.Setenv(t, "FRAMEWORKS_CONTROL_OUTBOX_DIR", t.TempDir())
 	const (
 		dvrHash      = "hash-writer-end"
 		streamID     = "stream-writer-end"
 		internalName = "internal-writer-end"
 	)
-	dm := &DVRManager{
+	dm := stopMonitorsAtCleanup(t, &DVRManager{
 		logger: logging.NewLogger(), jobs: make(map[string]*DVRJob), storagePath: t.TempDir(),
 		diskCheck: func(string, uint64) error { return nil },
-	}
+	})
 	fake := &endsFirstPushFakeMist{dm: dm}
 	dm.mistClient = fake
 

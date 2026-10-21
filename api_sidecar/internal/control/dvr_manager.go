@@ -147,8 +147,8 @@ type DVRManager struct {
 
 	// startupTimeout / pushMonitorInterval override the package defaults per
 	// manager. Zero means use the default. Kept per-manager (not a mutable
-	// global) so tests can shorten them without racing monitor goroutines that
-	// other tests left running.
+	// global) so tests can shorten them without racing the monitor goroutines
+	// of other managers.
 	startupTimeout      time.Duration
 	pushMonitorInterval time.Duration
 
@@ -211,6 +211,14 @@ type DVRManager struct {
 
 	// afterFn schedules a deferred delete's next observation (nil = time.AfterFunc).
 	afterFn func(time.Duration, func())
+
+	// monitorStop ends every monitorJob goroutine once closed; monitors counts
+	// the running ones. Production leaves monitorStop nil, which never fires, so
+	// a monitor ends only when its job leaves the map. Tests close it at cleanup
+	// so a monitor cannot outlive its test and report on a later test's control
+	// stream or durable outbox.
+	monitorStop <-chan struct{}
+	monitors    sync.WaitGroup
 }
 
 const (
@@ -1109,7 +1117,7 @@ func (dm *DVRManager) StartRecording(dvrHash, streamID, internalName, sourceRunt
 	dm.jobs[dvrHash] = job
 
 	// Start progress monitoring
-	go dm.monitorJob(job)
+	dm.startMonitor(job)
 
 	job.Logger.Info("DVR recording job started")
 	return nil
@@ -1394,7 +1402,7 @@ func (dm *DVRManager) adoptExistingDVRJobLocked(dvrHash, internalName, outputDir
 	// re-register the source override BEFORE it is discoverable/monitored.
 	dm.reconcileDVRJobDescriptorLocked(job, sourceRuntimeName, sourceURL, config)
 	dm.jobs[dvrHash] = job
-	go dm.monitorJob(job)
+	dm.startMonitor(job)
 	dm.logger.WithFields(logging.Fields{
 		"dvr_hash":      dvrHash,
 		"internal_name": internalName,
@@ -1524,7 +1532,7 @@ func (dm *DVRManager) recoverOneDVRDir(dir localDVRDirectory, pushes []mist.Push
 		RegisterDVRSourceOverride(meta.SourceRuntimeName, meta.SourceURL)
 	}
 	dm.jobs[dir.dvrHash] = job
-	go dm.monitorJob(job)
+	dm.startMonitor(job)
 	logger.WithFields(logging.Fields{
 		"dvr_hash":      dir.dvrHash,
 		"stream_id":     dir.streamID,
@@ -2101,6 +2109,16 @@ func errString(err error) string {
 	return err.Error()
 }
 
+// startMonitor runs monitorJob for job in its own goroutine, counted in
+// dm.monitors.
+func (dm *DVRManager) startMonitor(job *DVRJob) {
+	dm.monitors.Add(1)
+	go func() {
+		defer dm.monitors.Done()
+		dm.monitorJob(job)
+	}()
+}
+
 // monitorJob monitors a DVR job's progress and performs incremental sync
 func (dm *DVRManager) monitorJob(job *DVRJob) {
 	pushInterval := dm.pushMonitorInterval
@@ -2125,6 +2143,9 @@ func (dm *DVRManager) monitorJob(job *DVRJob) {
 
 	for {
 		select {
+		case <-dm.monitorStop:
+			return
+
 		case <-progressTicker.C:
 			dm.mutex.RLock()
 			_, exists := dm.jobs[job.DVRHash]

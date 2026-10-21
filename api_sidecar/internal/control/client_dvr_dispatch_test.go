@@ -17,6 +17,7 @@ import (
 // the handler's own initDVRManager() call is a no-op and can't replace it.
 func withTestDVRManager(t *testing.T, dm *DVRManager) {
 	t.Helper()
+	stopMonitorsAtCleanup(t, dm)
 	dvrManagerOnce.Do(func() {})
 	prev := dvrManager
 	dvrManager = dm

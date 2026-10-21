@@ -22,14 +22,16 @@ var (
 	values map[string]string
 )
 
-// requiredValues fills every required Helmsman key.
-func requiredValues() map[string]string {
+// requiredValues fills every required Helmsman key. stateDir belongs to the
+// test process alone: state written under it (the durable control outbox, the
+// trigger WAL) must not reach another test process or a later run.
+func requiredValues(stateDir string) map[string]string {
 	return map[string]string{
 		"NODE_ID":              "edge-test",
 		"FOGHORN_CONTROL_ADDR": "foghorn:18019",
 		"MISTSERVER_URL":       "http://localhost:4242",
 		"EDGE_PUBLIC_URL":      "https://edge.test/view",
-		"HELMSMAN_STATE_DIR":   "/tmp/helmsman-test-state",
+		"HELMSMAN_STATE_DIR":   stateDir,
 	}
 }
 
@@ -49,15 +51,21 @@ func load(from map[string]string) (*config.Live[appconfig.Helmsman], error) {
 // package's tests, and exits with their status. A package whose code reads
 // the Helmsman configuration calls it from TestMain.
 func Main(m *testing.M) {
+	stateDir, err := os.MkdirTemp("", "helmsman-test-state-")
+	if err != nil {
+		panic("appconfigtest: " + err.Error())
+	}
 	mu.Lock()
-	values = requiredValues()
+	values = requiredValues(stateDir)
 	live, err := load(values)
 	mu.Unlock()
 	if err != nil {
 		panic("appconfigtest: " + err.Error())
 	}
 	appconfig.Install(live)
-	os.Exit(m.Run())
+	code := m.Run()
+	_ = os.RemoveAll(stateDir)
+	os.Exit(code)
 }
 
 // Setenv sets one Helmsman key on top of the configuration installed now and
@@ -70,7 +78,7 @@ func Setenv(t testing.TB, key, value string) {
 	defer mu.Unlock()
 	next := maps.Clone(values)
 	if next == nil {
-		next = requiredValues()
+		next = requiredValues(t.TempDir())
 	}
 	next[key] = value
 	live, err := load(next)

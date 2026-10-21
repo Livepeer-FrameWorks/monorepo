@@ -140,13 +140,29 @@ func (s *staleCleanupFakeMist) PushList() ([]mist.PushInfo, error) {
 
 func newDVRManagerWithMist(t *testing.T, mc DVRMistClient) *DVRManager {
 	t.Helper()
-	return &DVRManager{
+	return stopMonitorsAtCleanup(t, &DVRManager{
 		logger:      logging.NewLogger(),
 		jobs:        make(map[string]*DVRJob),
 		storagePath: t.TempDir(),
 		mistClient:  mc,
 		diskCheck:   func(string, uint64) error { return nil },
-	}
+	})
+}
+
+// stopMonitorsAtCleanup ends dm's job monitors when the test finishes and waits
+// for them to return. A monitor left running keeps polling Mist and sends
+// DvrProgress, DvrStopped and storage reports through whatever control stream
+// and durable outbox the package holds at that moment, which belong to a later
+// test. Call it before the test starts, adopts or recovers a recording.
+func stopMonitorsAtCleanup(t testing.TB, dm *DVRManager) *DVRManager {
+	t.Helper()
+	stop := make(chan struct{})
+	dm.monitorStop = stop
+	t.Cleanup(func() {
+		close(stop)
+		dm.monitors.Wait()
+	})
+	return dm
 }
 
 func useFastInitialPushRetry(t *testing.T) {

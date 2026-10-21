@@ -239,20 +239,15 @@ segments/seg0.ts
 		}},
 	}
 	// Recovery starts the job's monitor goroutine. Its push and startup checks
-	// are pushed past the package run, and the job leaves the map at cleanup so
-	// the monitor stops instead of writing into the removed TempDir.
-	dm := &DVRManager{
+	// are pushed past the test, and the monitor stops at cleanup instead of
+	// writing into the removed TempDir.
+	dm := stopMonitorsAtCleanup(t, &DVRManager{
 		logger:              logging.NewLogger(),
 		jobs:                make(map[string]*DVRJob),
 		storagePath:         storagePath,
 		mistClient:          fakeMist,
 		pushMonitorInterval: time.Hour,
 		startupTimeout:      time.Hour,
-	}
-	t.Cleanup(func() {
-		dm.mutex.Lock()
-		delete(dm.jobs, dvrHash)
-		dm.mutex.Unlock()
 	})
 
 	if err := dm.recoverActiveDVRJobsFromMist(storagePath, logging.NewLogger()); err != nil {
