@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -78,6 +79,16 @@ func TestEvaluateEdgeConfigVersionsListsStaleEdges(t *testing.T) {
 	if strings.Contains(result.Message, "release apply") {
 		t.Fatalf("message tells operators release apply re-renders edges: %q", result.Message)
 	}
+	// The rolling update is the edge's own path; provision only repairs the
+	// provisioned files and never implies a drain.
+	for _, want := range []string{"frameworks cluster edges rollout status", "frameworks edge provision --ssh <user@edge> --dry-run"} {
+		if !strings.Contains(result.Message, want) {
+			t.Fatalf("message %q missing hint %q", result.Message, want)
+		}
+	}
+	if strings.Contains(strings.ToLower(result.Message), "drain") {
+		t.Fatalf("message tells operators to drain: %q", result.Message)
+	}
 	if strings.Contains(result.Message, "edge-a") {
 		t.Fatalf("current edge listed as stale: %q", result.Message)
 	}
@@ -122,8 +133,29 @@ func TestLocalEdgeConfigMarkerAndDoctorOutput(t *testing.T) {
 	if !strings.Contains(out.String(), "rendered by CLI v0.3.11, current CLI is v0.3.12") || !strings.Contains(out.String(), "digest=sha256:abc") {
 		t.Fatalf("doctor output = %q", out.String())
 	}
-	if step, ok := edgeConfigMarkerNextStep(marker); !ok || !strings.Contains(step.Cmd, "edge provision") {
-		t.Fatalf("stale marker next step = %+v, %v", step, ok)
+	// The rolling update comes first; provision is the repair for the files
+	// it does not render, never a routine drain-and-reprovision.
+	steps := edgeConfigMarkerNextSteps(marker)
+	var cmds []string
+	for _, step := range steps {
+		cmds = append(cmds, step.Cmd)
+		if strings.Contains(strings.ToLower(step.Why), "drain") {
+			t.Fatalf("next step tells the operator to drain: %+v", step)
+		}
+	}
+	wantCmds := []string{
+		"frameworks cluster edges rollout status",
+		"frameworks edge logs helmsman",
+		"frameworks edge provision --ssh <user@this-node> --dry-run",
+	}
+	if !slices.Equal(cmds, wantCmds) {
+		t.Fatalf("stale marker next steps = %q, want %q", cmds, wantCmds)
+	}
+	if !strings.Contains(steps[0].Why, "nothing is needed") || !strings.Contains(steps[2].Why, "does not render") {
+		t.Fatalf("next steps do not separate the rolling update from the provisioned files: %+v", steps)
+	}
+	if got := edgeConfigMarkerNextSteps(edgeConfigMarker{State: string(edgeConfigCurrent)}); len(got) != 0 {
+		t.Fatalf("current marker next steps = %+v, want none", got)
 	}
 
 	refused := func(string) (string, bool, error) { return "", false, errors.New("sudo: a password is required") }

@@ -400,7 +400,11 @@ Each provision writes a provisioned-config marker on the node (the CLI version a
 the rendered configuration). Helmsman reports it to Foghorn, which returns it in node health,
 and `frameworks cluster doctor` lists every edge whose configuration was rendered by an
 older CLI (or before markers existed). `frameworks edge doctor` shows the same for the node it
-runs on.
+runs on. The marker covers only the files provisioning renders (edge env and service units or
+compose file, vmagent config, maintenance page): Helmsman, MistServer and Caddy follow the
+cluster's release target through the edge's rolling update, and Helmsman renders the production
+Caddyfile and MistServer config itself. An edge flagged by doctor needs `edge provision` only when
+this CLI renders those files differently, which `--dry-run` shows.
 
 ## Version selection
 

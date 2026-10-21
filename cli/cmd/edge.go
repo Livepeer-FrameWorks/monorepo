@@ -2889,9 +2889,7 @@ func newEdgeDoctorCmd() *cobra.Command {
 			}
 			steps = append(steps, ux.NextStep{Cmd: w.Remediation.Cmd, Why: w.Remediation.Why})
 		}
-		if step, ok := edgeConfigMarkerNextStep(configVersion); ok {
-			steps = append(steps, step)
-		}
+		steps = append(steps, edgeConfigMarkerNextSteps(configVersion)...)
 
 		if jsonMode {
 			payload := edgeDoctorJSONReport{

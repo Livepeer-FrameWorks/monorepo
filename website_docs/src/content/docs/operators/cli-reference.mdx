@@ -175,8 +175,12 @@ frameworks cluster doctor [flags]
   by an older CLI than the one running doctor, or that has no provisioned-config
   marker yet, from the marker each node reports through Foghorn node health. Needs
   lifecycle access (Quartermaster and Foghorn) from the active context; without it
-  the check is reported as not checked. Re-run `edge provision` (with `--dry-run`
-  first) to bring those edges current
+  the check is reported as not checked. The marker covers only the files
+  provisioning renders (edge env and service units or compose file, vmagent
+  config, maintenance page); Helmsman, MistServer and Caddy update through each
+  edge's rolling update, which `cluster edges rollout status` shows. Run
+  `edge provision --dry-run` to see whether this CLI renders those files
+  differently, and without `--dry-run` to repair them
 
 With `--deep`, doctor additionally executes every enabled database-backed binary's
 read-only schema capability pack against the live PostgreSQL/YugabyteDB and
@@ -2894,7 +2898,7 @@ frameworks edge logs --follow --tail 500
 
 ### frameworks edge doctor
 
-Run comprehensive health checks on the edge node. The **Config Version** section reads the node's provisioned-config marker and reports whether its configuration was rendered by this CLI (`current`), an older one (`stale`), or before markers existed (`unmarked`); the last two come with an `edge provision --dry-run` next step.
+Run comprehensive health checks on the edge node. The **Config Version** section reads the node's provisioned-config marker and reports whether its configuration was rendered by this CLI (`current`), an older one (`stale`), or before markers existed (`unmarked`). The last two come with next steps: `cluster edges rollout status` to see whether the edge's rolling update brought Helmsman, MistServer and Caddy to the cluster's release target (nothing is needed while it runs), `edge logs helmsman` when it stays behind, and `edge provision --dry-run` to repair the provisioned files the rolling update does not render.
 
 ```bash
 frameworks edge doctor --domain edge1.example.com

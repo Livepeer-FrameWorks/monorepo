@@ -121,10 +121,14 @@ func evaluateEdgeConfigVersions(nodes []edgeConfigNode, cliVersion string) *heal
 	}
 	if len(behind) > 0 {
 		result.Status = "degraded"
-		result.Message = fmt.Sprintf("%d/%d edge(s) run config older than this CLI: %s", len(behind), len(nodes), strings.Join(behind, "; "))
+		result.Message = fmt.Sprintf("%d/%d edge(s) carry provisioned files rendered before this CLI: %s", len(behind), len(nodes), strings.Join(behind, "; "))
 		if len(notes) > 0 {
 			result.Message += "; " + strings.Join(notes, "; ")
 		}
+		// Components never wait on the marker; only the provisioned files
+		// the rolling update leaves alone need the CLI.
+		result.Message += ". Each edge updates its components itself through its rolling update (`frameworks cluster edges rollout status` shows progress); " +
+			"`frameworks edge provision --ssh <user@edge> --dry-run` shows whether this CLI renders the provisioned files differently, and a run without --dry-run repairs them"
 		return result
 	}
 	current := len(nodes) - len(silent) - len(unknown)
@@ -243,17 +247,31 @@ func renderEdgeConfigMarker(w io.Writer, m edgeConfigMarker) {
 	}
 }
 
-// edgeConfigMarkerNextStep points a node whose config is behind the CLI at
-// the provision re-run that renders the current config.
-func edgeConfigMarkerNextStep(m edgeConfigMarker) (ux.NextStep, bool) {
+// edgeConfigMarkerNextSteps answers a node whose provisioned-config marker is
+// behind the CLI. Helmsman, MistServer and Caddy follow the cluster's release
+// target through the edge's rolling update, and Helmsman renders the
+// production Caddyfile and MistServer config itself, so none of that waits on
+// the marker. The marker moves only when provisioning re-renders the files
+// the rolling update leaves alone, which the last step covers.
+func edgeConfigMarkerNextSteps(m edgeConfigMarker) []ux.NextStep {
 	switch edgeConfigState(m.State) {
 	case edgeConfigStale, edgeConfigUnmarked:
-		return ux.NextStep{
-			Cmd: "frameworks edge provision --ssh <user@this-node> --dry-run",
-			Why: "This node runs config older than this CLI; the dry-run shows the drift, a run without --dry-run applies it (draining first when Mist or Caddy must restart).",
-		}, true
+		return []ux.NextStep{
+			{
+				Cmd: "frameworks cluster edges rollout status",
+				Why: "This edge updates Helmsman, MistServer and Caddy itself through its rolling update; nothing is needed while that runs. This shows whether it reached its cluster's release target.",
+			},
+			{
+				Cmd: "frameworks edge logs helmsman",
+				Why: "If the edge stays behind its release target, Helmsman's log shows why an update did not apply.",
+			},
+			{
+				Cmd: "frameworks edge provision --ssh <user@this-node> --dry-run",
+				Why: "The rolling update does not render the provisioned files (edge env and service units or compose file, vmagent config, maintenance page). The dry-run shows whether this CLI renders them differently; a run without --dry-run repairs them.",
+			},
+		}
 	}
-	return ux.NextStep{}, false
+	return nil
 }
 
 // sudoReadEdgeConfigMarker reads path with passwordless sudo. Exit 3 means
