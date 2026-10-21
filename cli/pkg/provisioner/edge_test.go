@@ -1,7 +1,9 @@
 package provisioner
 
 import (
+	"bytes"
 	"crypto/x509"
+	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -12,6 +14,8 @@ import (
 
 	"frameworks/cli/internal/templates"
 	"frameworks/cli/pkg/gitops"
+
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/maintenance"
 )
 
 func TestEdgeProvisionConfig_PrimaryDomain(t *testing.T) {
@@ -242,6 +246,13 @@ func TestEdgeRoleVarsNativeToleratesManifestWithoutEdgeImage(t *testing.T) {
 	}
 	if got := vars["edge_region"]; got != "eu-west" {
 		t.Fatalf("edge_region = %#v, want eu-west", got)
+	}
+	// Native Caddy serves the page the edge image seeds, so both edge
+	// layouts show the same maintenance page.
+	encoded, _ := vars["edge_maintenance_html_b64"].(string)
+	page, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil || len(page) == 0 || !bytes.Equal(page, maintenance.HTML) {
+		t.Fatalf("edge_maintenance_html_b64 does not decode to pkg/maintenance's page (err=%v, %d bytes)", err, len(page))
 	}
 }
 

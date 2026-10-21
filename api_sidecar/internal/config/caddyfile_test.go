@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"frameworks/api_sidecar/internal/appconfig/appconfigtest"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
@@ -25,6 +26,38 @@ func baseParams() CaddyfileParams {
 		HelmsmanUpstream: "localhost:18007",
 		ChandlerUpstream: "chandler:18020",
 		MistUpstream:     "mistserver:8080",
+		MaintenanceRoot:  "/etc/caddy",
+	}
+}
+
+// Native macOS edges keep the Caddyfile, and the maintenance page the edge
+// role installs beside it, outside /etc/caddy; the upstream error handler
+// must read the page from the Caddyfile's directory.
+func TestCaddyfileForSeedServesMaintenancePageFromCaddyfileDir(t *testing.T) {
+	appconfigtest.Setenv(t, "CADDY_CONFIG_PATH", "/usr/local/etc/frameworks/Caddyfile")
+	seed := &ipcpb.ConfigSeed{
+		Site:       &ipcpb.SiteConfig{SiteAddress: "*.media-eu.example.com", EdgeDomain: "edge-1.media-eu.example.com"},
+		TlsBundles: []*ipcpb.TLSCertBundle{{BundleId: "cluster_media-eu", SiteAddresses: []string{"*.media-eu.example.com"}}},
+	}
+	out, err := RenderCaddyfile(caddyfileParamsForSeed(seed, composeCaddyBundles(seed)))
+	if err != nil {
+		t.Fatalf("RenderCaddyfile: %v", err)
+	}
+	if want := "root * \"/usr/local/etc/frameworks\"\n\t\t\trewrite * /maintenance.html"; !strings.Contains(out, want) {
+		t.Fatalf("upstream error handler does not serve the page from the Caddyfile's directory:\n%s", out)
+	}
+
+	p := baseParams()
+	p.MaintenanceRoot = "/Users/edge op/.config/frameworks"
+	out, err = RenderCaddyfile(p)
+	if err != nil || !strings.Contains(out, `root * "/Users/edge op/.config/frameworks"`) {
+		t.Fatalf("a root with a space must render as one quoted token: err=%v", err)
+	}
+	for _, bad := range []string{"", "caddy", "/etc/{caddy}", "/etc/\"caddy"} {
+		p.MaintenanceRoot = bad
+		if _, err := RenderCaddyfile(p); err == nil {
+			t.Fatalf("maintenance root %q rendered; want an error", bad)
+		}
 	}
 }
 

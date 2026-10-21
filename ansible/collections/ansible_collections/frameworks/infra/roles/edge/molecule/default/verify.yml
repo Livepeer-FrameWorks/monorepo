@@ -28,6 +28,31 @@
         port: 443
         timeout: 30
 
+    # The production Caddyfile Helmsman renders after enrollment serves this
+    # page for upstream errors; the scenario never enrolls, so the serving
+    # itself is covered by make verify-edge-caddy-tls.
+    - name: Stat Caddy maintenance page
+      ansible.builtin.stat:
+        path: /etc/caddy/maintenance.html
+        checksum_algorithm: sha256
+      register: edge_maintenance_page
+
+    - name: Assert maintenance page is the provisioner's page
+      ansible.builtin.assert:
+        that:
+          - edge_maintenance_page.stat.exists
+          - edge_maintenance_page.stat.pw_name == 'frameworks'
+          - edge_maintenance_page.stat.gr_name == 'caddy'
+          - edge_maintenance_page.stat.mode == '0644'
+          - edge_maintenance_page.stat.checksum == (edge_maintenance_html_b64 | b64decode | hash('sha256'))
+        fail_msg: "/etc/caddy/maintenance.html missing, not the pkg/maintenance page, or wrongly owned: {{ edge_maintenance_page.stat }}"
+
+    - name: Read maintenance page as the Caddy user
+      ansible.builtin.command:
+        argv: [head, -c, "64", /etc/caddy/maintenance.html]
+      become_user: caddy
+      changed_when: false
+
     - name: Rerun role (idempotence)
       ansible.builtin.include_role:
         name: frameworks.infra.edge

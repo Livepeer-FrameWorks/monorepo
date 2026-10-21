@@ -190,6 +190,17 @@
     force: "{{ edge_force_bootstrap_caddyfile | bool }}"
   notify: edge caddy reload
 
+# The Caddyfile Helmsman renders serves this page from the Caddyfile's
+# directory for upstream 502/503/504; the edge role is its only writer on
+# native hosts. Caddy reads it per request, so no reload is needed.
+- name: Install Caddy maintenance page
+  ansible.builtin.copy:
+    dest: /etc/caddy/maintenance.html
+    content: "{{ edge_maintenance_html_b64 | b64decode }}"
+    owner: frameworks
+    group: caddy
+    mode: "0644"
+
 - name: Render edge caddy env
   ansible.builtin.copy:
     dest: /etc/frameworks/caddy.env

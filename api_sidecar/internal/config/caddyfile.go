@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"path"
 	"strings"
 	"text/template"
 )
@@ -31,6 +32,10 @@ type CaddyfileParams struct {
 	HelmsmanUpstream string // e.g. "helmsman:18007" or "localhost:18007"
 	ChandlerUpstream string // e.g. "chandler:18020" or "localhost:18020"
 	MistUpstream     string // e.g. "mistserver:8080" or "localhost:8080"
+	// MaintenanceRoot is the directory holding maintenance.html, the page
+	// served when an upstream answers 502/503/504: the Caddyfile's own
+	// directory, where the edge image or the edge role installs it.
+	MaintenanceRoot string
 	// EdgeDomain scopes the operator-only /_mist admin route to this exact
 	// host. Empty means the admin route is not rendered (the proxy stays
 	// off; tenant/customer hosts importing common_handlers cannot match).
@@ -171,7 +176,7 @@ const caddyfileTmpl = `{
 	handle_errors {
 		@upstream_down expression ` + "`" + `{err.status_code} in [502, 503, 504]` + "`" + `
 		handle @upstream_down {
-			root * /etc/caddy
+			root * "{{.MaintenanceRoot}}"
 			rewrite * /maintenance.html
 			file_server
 		}
@@ -226,6 +231,11 @@ type caddyfileTemplateData struct {
 func RenderCaddyfile(params CaddyfileParams) (string, error) {
 	if len(params.Bundles) == 0 {
 		return "", fmt.Errorf("at least one bundle is required")
+	}
+	// The root renders as one quoted Caddyfile token; braces would be read
+	// as placeholders.
+	if !path.IsAbs(params.MaintenanceRoot) || strings.ContainsAny(params.MaintenanceRoot, "\n\r{}\"\\") {
+		return "", fmt.Errorf("maintenance root %q must be an absolute path without braces, quotes, backslashes or line breaks", params.MaintenanceRoot)
 	}
 	for i, b := range params.Bundles {
 		if b.SiteAddress == "" {

@@ -107,6 +107,15 @@
     mode: "0644"
     force: "{{ edge_force_bootstrap_caddyfile | bool }}"
 
+# The Caddyfile Helmsman renders serves this page from the Caddyfile's
+# directory for upstream 502/503/504; the edge role is its only writer on
+# native hosts. Caddy reads it per request, so no reload is needed.
+- name: Install Caddy maintenance page (darwin)
+  ansible.builtin.copy:
+    dest: "{{ edge_darwin_conf_dir }}/maintenance.html"
+    content: "{{ edge_maintenance_html_b64 | b64decode }}"
+    mode: "0644"
+
 - name: Render caddy env file (darwin)
   ansible.builtin.copy:
     dest: "{{ edge_darwin_conf_dir }}/caddy.env"

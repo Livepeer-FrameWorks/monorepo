@@ -130,6 +130,18 @@
       edge_mist_api_password was not provided.
     quiet: true
 
+# Without the page, Caddy answers an upstream outage with a bare error. The
+# Go provisioner always passes it; direct role users must supply it.
+- name: Assert Caddy maintenance page provided (native)
+  ansible.builtin.assert:
+    that:
+      - edge_maintenance_html_b64 | length > 0
+    fail_msg: >-
+      edge_maintenance_html_b64 is empty: native installs need the base64 of
+      pkg/maintenance/maintenance.html for Caddy's upstream error page.
+    quiet: true
+  when: edge_mode == 'native'
+
 # Ownership only applies in native mode: container-only hosts have no
 # frameworks user (the accounts live inside the edge image, and the CA is
 # staged into the compose project dir by install-container.yml).

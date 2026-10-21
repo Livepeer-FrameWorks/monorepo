@@ -34,6 +34,12 @@ provisioner:
         edge_foghorn_grpc_addr: 127.0.0.1:9090
         edge_enrollment_token: molecule-test-token
         edge_mist_api_password: molecule-test-password
+        # The page the Go provisioner passes, read from the repository.
+        edge_maintenance_html_b64: >-
+          {{ lookup('ansible.builtin.file',
+                    lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY')
+                    ~ '/../../../../../../../pkg/maintenance/maintenance.html',
+                    rstrip=false) | b64encode }}
         # Pinned artifact URLs — the edge role requires concrete tarballs
         # for each sub-service. CI supplies them via env so a single
         # molecule invocation can swap release lines without YAML edits.

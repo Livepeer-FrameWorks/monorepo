@@ -201,6 +201,7 @@ func TestRenderCaddyfileMultiBundle(t *testing.T) {
 		HelmsmanUpstream: "helmsman:18007",
 		ChandlerUpstream: "chandler:18020",
 		MistUpstream:     "mistserver:8080",
+		MaintenanceRoot:  "/etc/caddy",
 	})
 	if err != nil {
 		t.Fatalf("render: %v", err)

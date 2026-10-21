@@ -775,7 +775,8 @@ verify-mist-hls-realtime:
 
 # The release-pinned Caddy serving the Caddyfile Helmsman renders: a TLS client
 # without SNI (the Cloudflare origin monitor) gets the edge domain's certificate
-# and reaches Helmsman's /health. Needs Docker.
+# and reaches Helmsman's /health, and a request MistServer cannot answer gets
+# the maintenance page. Needs Docker.
 .PHONY: verify-edge-caddy-tls
 verify-edge-caddy-tls:
 	@$(MAKE) --no-print-directory test-helmsman GO_TAG_FLAGS=-tags=caddy_verify GO_TEST_PACKAGES=./internal/config GO_TEST_FLAGS='-run TestEdgeCaddyfile_NoSNIHandshake_RealCaddy -v -timeout 300s'

@@ -2,6 +2,7 @@ package provisioner
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"maps"
 	"net"
@@ -17,6 +18,7 @@ import (
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/ssh"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/maintenance"
 	fwversion "github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 	goansible_result "github.com/apenella/go-ansible/v2/pkg/execute/result"
 )
@@ -294,6 +296,11 @@ func edgeRoleVars(config *EdgeProvisionConfig, remoteOS, remoteArch string) (map
 	if mode != "native" {
 		return vars, nil
 	}
+
+	// Native Caddy serves this page for upstream errors; the edge image seeds
+	// the same pkg/maintenance page itself. Base64 keeps Ansible from
+	// templating the HTML.
+	vars["edge_maintenance_html_b64"] = base64.StdEncoding.EncodeToString(maintenance.HTML)
 
 	if manifest == nil {
 		var manifestErr error

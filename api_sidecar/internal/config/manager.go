@@ -1420,6 +1420,7 @@ func caddyfileParamsForSeed(seed *ipcpb.ConfigSeed, bundles []CaddyfileBundle) C
 		HelmsmanUpstream: appconfig.Runtime().MistWebhookBaseURL,
 		ChandlerUpstream: appconfig.Runtime().ChandlerUpstream,
 		MistUpstream:     appconfig.Runtime().MistHTTPUpstream,
+		MaintenanceRoot:  filepath.Dir(caddyConfigPath()),
 	}
 	if site := seed.GetSite(); site != nil {
 		params.AcmeEmail = site.GetAcmeEmail()

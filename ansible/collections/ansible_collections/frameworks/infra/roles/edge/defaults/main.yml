@@ -27,6 +27,12 @@ edge_enrollment_token: ""
 edge_force_bootstrap_caddyfile: false
 edge_force_reenroll: false
 
+# Native installs: base64 of the maintenance page Caddy serves from the
+# Caddyfile's directory when MistServer or Helmsman answers 502/503/504. The
+# CLI passes pkg/maintenance/maintenance.html, the page the edge image seeds
+# in container mode.
+edge_maintenance_html_b64: ""
+
 # Optional: pre-staged wildcard cert (otherwise ConfigSeed writes it post-
 # enrollment). Both halves are required together.
 edge_cert_pem: ""

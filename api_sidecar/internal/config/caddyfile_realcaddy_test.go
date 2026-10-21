@@ -32,6 +32,9 @@ const (
 	realCaddyEdgeDomain = "edge-node-1.media-test.frameworks.test"
 	realCaddyTenantHost = "acme.cdn.frameworks.test"
 	realCaddyHealthBody = "helmsman-edge-health"
+	// realCaddyMaintenanceBody is the maintenance.html every startRealCaddy
+	// dir holds.
+	realCaddyMaintenanceBody = "edge-maintenance-page"
 )
 
 // An origin-IP TLS client (Navigator's Cloudflare monitor) sends no SNI. The
@@ -71,6 +74,11 @@ func TestEdgeCaddyfile_NoSNIHandshake_RealCaddy(t *testing.T) {
 		}
 		if _, status, _ := noSNIGet(t, addr, "unknown.example.test", "/health"); status != http.StatusMisdirectedRequest {
 			t.Fatalf("no-SNI request for an unserved host = %d, want 421", status)
+		}
+		// MistServer is down (nothing listens on its upstream), so the
+		// request falls through to the maintenance page in MaintenanceRoot.
+		if _, status, body := noSNIGet(t, addr, realCaddyEdgeDomain, "/live+stream/index.m3u8"); body != realCaddyMaintenanceBody {
+			t.Fatalf("GET with MistServer down = %d %q, want the maintenance page %q", status, body, realCaddyMaintenanceBody)
 		}
 	})
 
@@ -120,6 +128,7 @@ func realCaddyParams(helmsmanUpstream string, bundles []CaddyfileBundle) Caddyfi
 		HelmsmanUpstream: helmsmanUpstream,
 		ChandlerUpstream: "127.0.0.1:9",
 		MistUpstream:     "127.0.0.1:9",
+		MaintenanceRoot:  "/fw",
 		EdgeDomain:       realCaddyEdgeDomain,
 	}
 }
@@ -251,6 +260,9 @@ func startRealCaddy(t *testing.T, image, dir string, params CaddyfileParams, glo
 		rendered = strings.Replace(rendered, "{\n", "{\n\t"+globalOption+"\n", 1)
 	}
 	if err = os.WriteFile(filepath.Join(dir, "Caddyfile"), []byte(rendered), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(dir, "maintenance.html"), []byte(realCaddyMaintenanceBody), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	name := fmt.Sprintf("fw-edge-caddy-sni-%d", time.Now().UnixNano())
