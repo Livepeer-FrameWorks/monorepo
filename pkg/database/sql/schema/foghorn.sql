@@ -241,6 +241,10 @@ CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_ingest_generation ON foghorn.ar
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_missing_thumbnails_range
     ON foghorn.artifacts(created_at ASC)
     WHERE status = 'ready' AND artifact_type IN ('vod', 'clip') AND has_thumbnails IS NOT TRUE;
+-- Delete fan-out to relay caches: clips/VODs/chapters deleted within the window, newest first.
+CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_deleted_relay_cacheable_range
+    ON foghorn.artifacts(updated_at ASC)
+    WHERE status = 'deleted' AND artifact_type IN ('clip', 'vod', 'chapter');
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_federated_purge_recovery_range
     ON foghorn.artifacts(federated_purge_lease_until ASC)
     WHERE federated_pointer = true
