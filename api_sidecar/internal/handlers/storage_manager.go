@@ -412,10 +412,6 @@ func (sm *StorageManager) start() {
 
 // checkAndManageStorage checks storage usage and performs freeze/cleanup if needed
 func (sm *StorageManager) checkAndManageStorage() error {
-	// Check clips directory
-	clipsDir := filepath.Join(sm.basePath, "clips")
-
-	// Get current storage usage
 	usagePercent, usedBytes, totalBytes, err := sm.getStorageUsage()
 	if err != nil {
 		return fmt.Errorf("failed to get storage usage: %w", err)
@@ -432,7 +428,7 @@ func (sm *StorageManager) checkAndManageStorage() error {
 			"usage_percent":    usagePercent,
 			"delete_threshold": sm.deleteThreshold,
 		}).Warn("Storage above delete threshold, starting emergency cleanup")
-		return sm.fallbackCleanup(clipsDir, usedBytes, totalBytes)
+		return sm.fallbackCleanup(usedBytes, totalBytes)
 	}
 
 	// Check if freeze is needed
@@ -443,7 +439,7 @@ func (sm *StorageManager) checkAndManageStorage() error {
 	// Check if cold storage is available (requires Foghorn connection)
 	if !control.IsConnected() {
 		sm.logger.Warn("Storage above threshold but Foghorn not connected, falling back to cleanup")
-		return sm.fallbackCleanup(clipsDir, usedBytes, totalBytes)
+		return sm.fallbackCleanup(usedBytes, totalBytes)
 	}
 
 	sm.logger.WithFields(logging.Fields{
@@ -463,7 +459,7 @@ func (sm *StorageManager) checkAndManageStorage() error {
 	// it frees zero disk and never counts toward the target; unsynced candidates
 	// are uploaded (frozen) so a later pass can evict them once Foghorn reports
 	// them durable.
-	res := sm.reclaimToTarget(clipsDir, bytesToFree)
+	res := sm.reclaimToTarget(bytesToFree)
 
 	if res.uncatalogedCount > 0 {
 		sm.logger.WithFields(logging.Fields{
@@ -513,7 +509,7 @@ type pressureEvictionResult struct {
 // (block/DVR/clip/VOD deletion) are gated on IsDestructiveCleanupAllowed so the
 // boot pause cannot evict a file whose lease isn't established yet; the
 // non-destructive freeze-upload still proceeds under the pause.
-func (sm *StorageManager) reclaimToTarget(clipsDir string, bytesToFree uint64) pressureEvictionResult {
+func (sm *StorageManager) reclaimToTarget(bytesToFree uint64) pressureEvictionResult {
 	res := pressureEvictionResult{uncatalogedSamples: make([]string, 0, 5)}
 	if bytesToFree == 0 {
 		return res
@@ -567,7 +563,7 @@ func (sm *StorageManager) reclaimToTarget(clipsDir string, bytesToFree uint64) p
 	// 3. Full clip/VOD copies last — authoritative, CanDelete-gated. DVR is not
 	// a candidate here; whole-directory DVR freeze would recreate an edge-authored
 	// archive manifest, and DVR is reclaimed segment-wise in stage 2.
-	candidates, err := sm.getFreezeCandidates(clipsDir, AssetTypeClip)
+	candidates, err := sm.getFreezeCandidates(filepath.Join(sm.basePath, "clips"), AssetTypeClip)
 	if err != nil {
 		sm.logger.WithError(err).Warn("Failed to get clip freeze candidates")
 	}
@@ -1392,7 +1388,7 @@ func (sm *StorageManager) calculateFreezePriority(asset FreezeCandidate) float64
 
 // fallbackCleanup performs deletion-based cleanup when S3 is not configured
 // In dual-storage mode, it asks Foghorn before deleting to ensure asset is synced
-func (sm *StorageManager) fallbackCleanup(clipsDir string, usedBytes, totalBytes uint64) error {
+func (sm *StorageManager) fallbackCleanup(usedBytes, totalBytes uint64) error {
 	if !leases.IsDestructiveCleanupAllowed() {
 		sm.logger.Debug("fallbackCleanup skipped: destructive cleanup paused")
 		return nil
@@ -1402,7 +1398,7 @@ func (sm *StorageManager) fallbackCleanup(clipsDir string, usedBytes, totalBytes
 		return nil
 	}
 	bytesToFree := usedBytes - targetBytes
-	return sm.fallbackCleanupWithTarget(clipsDir, bytesToFree)
+	return sm.fallbackCleanupWithTarget(bytesToFree)
 }
 
 // fallbackCleanupWithTarget is the emergency/admission entry into the shared
@@ -1413,7 +1409,7 @@ func (sm *StorageManager) fallbackCleanup(clipsDir string, usedBytes, totalBytes
 // above the delete threshold. Unlike the normal-pressure path, this entry
 // hard-gates the WHOLE pass on the boot pause: admission callers fail fast and
 // pick a different node rather than partially reclaim during boot.
-func (sm *StorageManager) fallbackCleanupWithTarget(clipsDir string, bytesToFree uint64) error {
+func (sm *StorageManager) fallbackCleanupWithTarget(bytesToFree uint64) error {
 	if !leases.IsDestructiveCleanupAllowed() {
 		sm.logger.Debug("fallbackCleanupWithTarget skipped: destructive cleanup paused")
 		return nil
@@ -1422,7 +1418,7 @@ func (sm *StorageManager) fallbackCleanupWithTarget(clipsDir string, bytesToFree
 		return nil
 	}
 
-	res := sm.reclaimToTarget(clipsDir, bytesToFree)
+	res := sm.reclaimToTarget(bytesToFree)
 
 	if res.uncatalogedCount > 0 {
 		sm.logger.WithFields(logging.Fields{

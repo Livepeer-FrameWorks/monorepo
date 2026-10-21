@@ -14,19 +14,6 @@ import (
 	"frameworks/api_sidecar/internal/storage"
 )
 
-// Regression: cold playback-cache admission must read filesystem
-// stats even when the asset's <hash>.blocks dir doesn't exist yet.
-// The pre-fix code stat'd the leaf, hit ENOENT, and pinned every
-// cold asset to CacheMemoryOnly forever — the .blocks dir is created
-// only AFTER a CacheToDisk decision, so the disk cache could never
-// warm on first request.
-//
-// The fix routes IntentPlaybackCache through GetDiskSpaceWalk which
-// walks to the nearest existing ancestor (the storage root) and
-// returns real filesystem stats. We pin that contract here against
-// the walk helper directly — the end-to-end Decide() outcome also
-// depends on whether the dev volume is under pressure, which makes
-// the higher-level path environment-sensitive.
 // Pins every declared StorageIntent against the Decide switch so a
 // future enum addition can't silently fall through to "unknown
 // storage intent" — that was the bug that swallowed chapter
@@ -81,12 +68,15 @@ func TestAdmitDiskWrite_CapacityCountsWholeMediaRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := sm.admitDiskWrite(context.Background(), procDir, capacity/5)
+	err := sm.admitDiskWrite(context.Background(), capacity/5)
 	if !errors.Is(err, storage.ErrInsufficientSpace) {
 		t.Fatalf("admitDiskWrite = %v, want ErrInsufficientSpace: the media root holds 95%% of the capacity", err)
 	}
 }
 
+// A cold asset's <hash>.blocks dir does not exist until the first CacheToDisk
+// decision, so measuring a missing leaf must return its ancestor's filesystem
+// stats rather than ENOENT.
 func TestGetDiskSpaceWalk_ColdLeafReturnsAncestorStats(t *testing.T) {
 	root := t.TempDir()
 	coldBlocksDir := filepath.Join(root, "vod", "abc123.mkv.blocks")

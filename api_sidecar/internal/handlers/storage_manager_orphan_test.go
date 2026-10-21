@@ -82,7 +82,7 @@ func TestReclaimToTarget_RemovesOrphanSidecars(t *testing.T) {
 	youngOrphan := filepath.Join(vodDir, "20260927150000abcdef2345.mkv.dtsh")
 	writeAged(t, youngOrphan, 10, time.Minute)
 
-	res := sm.reclaimToTarget(clipsDir, 1<<20)
+	res := sm.reclaimToTarget(1 << 20)
 
 	for _, p := range []string{orphanVOD, orphanGop, orphanClip} {
 		if exists(p) {
@@ -106,7 +106,7 @@ func TestReclaimToTarget_EvictsUploadBlockCache(t *testing.T) {
 	blocksDir := filepath.Join(sm.basePath, "upload", "20260927120000abcdef0123.mp4.blocks")
 	writeAged(t, filepath.Join(blocksDir, "0000000000.blk"), 100, 24*time.Hour)
 
-	res := sm.reclaimToTarget(filepath.Join(sm.basePath, "clips"), 50)
+	res := sm.reclaimToTarget(50)
 
 	if exists(blocksDir) {
 		t.Fatalf("upload block cache %s must be evicted under pressure", blocksDir)

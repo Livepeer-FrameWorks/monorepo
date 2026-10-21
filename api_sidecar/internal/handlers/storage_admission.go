@@ -39,31 +39,28 @@ const criticalRelayThresholdDefault = 0.95
 // documented on the StorageIntent constants. Routes through the same
 // admitDiskWrite/ensureRoomForDiskWrite machinery for intents that require
 // disk, and short-circuits to CacheMemoryOnly/CacheReject for intents that
-// can or must avoid disk.
+// can or must avoid disk. Every intent is measured against the whole media
+// root, the space a logical capacity bounds, whatever directory the write
+// lands in.
 func (sm *StorageManager) Decide(
-	ctx context.Context, dir string, intent admission.StorageIntent, sizeBytes uint64,
+	ctx context.Context, _ string, intent admission.StorageIntent, sizeBytes uint64,
 ) (admission.CacheDecision, error) {
 	switch intent {
 	case admission.IntentProcessingInput:
-		if err := sm.admitDiskWrite(ctx, dir, sizeBytes); err != nil {
+		if err := sm.admitDiskWrite(ctx, sizeBytes); err != nil {
 			return admission.CacheReject, err
 		}
 		return admission.CacheToDisk, nil
 
 	case admission.IntentDVRRecording, admission.IntentProcessingOutput, admission.IntentProcessingSourceStage,
 		admission.IntentUnsafeImportStage, admission.IntentDVRChapterFinalization:
-		if err := sm.admitDiskWrite(ctx, dir, sizeBytes); err != nil {
+		if err := sm.admitDiskWrite(ctx, sizeBytes); err != nil {
 			return admission.CacheReject, err
 		}
 		return admission.CacheToDisk, nil
 
 	case admission.IntentPlaybackCache:
-		// Walk to the nearest existing ancestor: the block-cache leaf
-		// dir (<asset>.blocks) doesn't exist until first fill, so a raw
-		// Statfs on it would ENOENT for cold assets. The storage root
-		// always exists, so the parent-walk delivers real filesystem
-		// stats without pre-creating the leaf.
-		space, err := storage.GetDiskSpaceWalk(dir)
+		space, err := sm.mediaSpace()
 		if err != nil {
 			return admission.CacheMemoryOnly, nil //nolint:nilerr // safe fallback
 		}
@@ -74,14 +71,14 @@ func (sm *StorageManager) Decide(
 			}
 			if sizeBytes > 0 && sizeBytes > space.AvailableBytes {
 				if leases.IsDestructiveCleanupAllowed() {
-					if cleanupErr := sm.ensureRoomForDiskWrite(ctx, dir, sizeBytes); cleanupErr == nil {
+					if cleanupErr := sm.ensureRoomForDiskWrite(ctx, sizeBytes); cleanupErr == nil {
 						return admission.CacheToDisk, nil
 					}
 				}
 				return admission.CacheMemoryOnly, nil
 			}
 		}
-		if admitErr := sm.admitDiskWrite(ctx, dir, sizeBytes); admitErr != nil {
+		if admitErr := sm.admitDiskWrite(ctx, sizeBytes); admitErr != nil {
 			// Playback cache is opportunistic — failed admission means we
 			// still serve, just without writing through to disk.
 			return admission.CacheMemoryOnly, nil //nolint:nilerr // intentional graceful degradation
@@ -89,7 +86,7 @@ func (sm *StorageManager) Decide(
 		return admission.CacheToDisk, nil
 
 	case admission.IntentWarmCache:
-		space, err := storage.GetDiskSpace(dir)
+		space, err := sm.mediaSpace()
 		if err != nil {
 			// Warm cache is purely opportunistic; abort cleanly on any
 			// pressure signal including stat failure.
@@ -120,7 +117,7 @@ var backgroundCleanupRunning atomic.Bool
 // admitDiskWrite gates a disk write. Returns nil to allow the write to
 // proceed; returns storage.ErrInsufficientSpace when no amount of cleanup can
 // make room.
-func (sm *StorageManager) admitDiskWrite(ctx context.Context, dir string, sizeBytes uint64) error {
+func (sm *StorageManager) admitDiskWrite(ctx context.Context, sizeBytes uint64) error {
 	if sizeBytes == 0 {
 		// Unknown size: skip preflight admission. The write itself will
 		// hit ENOSPC if the disk is too tight; that path remains the
@@ -133,7 +130,7 @@ func (sm *StorageManager) admitDiskWrite(ctx context.Context, dir string, sizeBy
 		// The media root may not exist yet; HasSpaceForWithinCapacity creates it before measuring.
 		if err := storage.HasSpaceForWithinCapacity(sm.basePath, sizeBytes, sm.capacity); err != nil {
 			if errors.Is(err, storage.ErrInsufficientSpace) {
-				return sm.ensureRoomForDiskWrite(ctx, dir, sizeBytes)
+				return sm.ensureRoomForDiskWrite(ctx, sizeBytes)
 			}
 			return fmt.Errorf("admitDiskWrite statfs: %w", err)
 		}
@@ -142,7 +139,7 @@ func (sm *StorageManager) admitDiskWrite(ctx context.Context, dir string, sizeBy
 
 	// Tier 2 — blocking: no room right now.
 	if space.AvailableBytes < sizeBytes {
-		return sm.ensureRoomForDiskWrite(ctx, dir, sizeBytes)
+		return sm.ensureRoomForDiskWrite(ctx, sizeBytes)
 	}
 
 	// Tier 1 — proactive: room exists, but projected usage may cross the
@@ -161,7 +158,7 @@ func (sm *StorageManager) admitDiskWrite(ctx context.Context, dir string, sizeBy
 // already has less free space than sizeBytes. Runs fallbackCleanup with an
 // explicit byte target (sizeBytes + the storage reserve), then re-checks.
 // Returns storage.ErrInsufficientSpace on failure.
-func (sm *StorageManager) ensureRoomForDiskWrite(ctx context.Context, dir string, sizeBytes uint64) error {
+func (sm *StorageManager) ensureRoomForDiskWrite(ctx context.Context, sizeBytes uint64) error {
 	if !leases.IsDestructiveCleanupAllowed() {
 		// Boot pause: cannot safely evict yet. Fail fast so Foghorn picks a
 		// different node.
@@ -178,7 +175,7 @@ func (sm *StorageManager) ensureRoomForDiskWrite(ctx context.Context, dir string
 	}
 	bytesToFree := needed - space.AvailableBytes
 
-	if cleanupErr := sm.fallbackCleanupWithTarget(dir, bytesToFree); cleanupErr != nil {
+	if cleanupErr := sm.fallbackCleanupWithTarget(bytesToFree); cleanupErr != nil {
 		// Cleanup itself failed; propagate.
 		return fmt.Errorf("ensureRoomForDiskWrite cleanup: %w", cleanupErr)
 	}
@@ -209,8 +206,7 @@ func (sm *StorageManager) kickoffBackgroundCleanup(sizeBytes uint64) {
 			return
 		}
 
-		dir := sm.basePath
-		space, err := storage.GetDiskSpace(dir)
+		space, err := sm.mediaSpace()
 		if err != nil {
 			sm.logger.WithError(err).Warn("Background cleanup: statfs failed")
 			return
@@ -241,7 +237,7 @@ func (sm *StorageManager) kickoffBackgroundCleanup(sizeBytes uint64) {
 		}
 
 		sm.logger.WithField("bytes_to_free", bytesToFree).Info("Background cleanup starting (proactive)")
-		if err := sm.fallbackCleanupWithTarget(dir, bytesToFree); err != nil {
+		if err := sm.fallbackCleanupWithTarget(bytesToFree); err != nil {
 			sm.logger.WithError(err).Warn("Background cleanup failed")
 			return
 		}

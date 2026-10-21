@@ -871,7 +871,7 @@ func TestReclaimToTarget_BlockCacheReclaimedBeforeFullCopy(t *testing.T) {
 	blocksDir, clipPath := writeReclaimFixture(t, sm, 100, 200)
 
 	// Target is smaller than the block cache, so block eviction alone meets it.
-	res := sm.reclaimToTarget(filepath.Join(sm.basePath, "clips"), 50)
+	res := sm.reclaimToTarget(50)
 
 	if res.freedBytes != 100 {
 		t.Fatalf("expected 100 bytes freed from block cache, got %d", res.freedBytes)
@@ -906,7 +906,7 @@ func TestReclaimToTarget_FullCopyReclaimedOnlyAfterBlocks(t *testing.T) {
 
 	// Target exceeds the block cache, so the engine must fall through to the
 	// full copy after evicting blocks.
-	res := sm.reclaimToTarget(filepath.Join(sm.basePath, "clips"), 250)
+	res := sm.reclaimToTarget(250)
 
 	if res.freedBytes != 300 {
 		t.Fatalf("expected 300 bytes freed (100 blocks + 200 copy), got %d", res.freedBytes)
@@ -956,7 +956,7 @@ func TestReclaimToTarget_SingleActiveDVROvershootDoesNotUnderflow(t *testing.T) 
 	// full-copy stage would delete it.
 	_, clipPath := writeReclaimFixture(t, sm, 0, 200)
 
-	res := sm.reclaimToTarget(filepath.Join(sm.basePath, "clips"), 250)
+	res := sm.reclaimToTarget(250)
 
 	if atomic.LoadInt64(&dvrCalls) != 1 {
 		t.Fatalf("expected exactly one DVR eviction call, got %d", atomic.LoadInt64(&dvrCalls))
