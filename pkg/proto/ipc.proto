@@ -2186,7 +2186,10 @@ message StreamLifecycleUpdate {
   optional uint64 packets_retransmitted = 27;
 
   // Exact admitted runtime identity used by Helmsman's authoritative Mist inventory
-  // reconciliation. Ordinary lifecycle telemetry leaves these unset.
+  // reconciliation. Helmsman's ordinary lifecycle telemetry leaves these unset.
+  // Foghorn sets ingest_generation (never ingest_connector_pid) on a push source's
+  // report it forwards to Decklog, naming the ingest session Periscope keys the
+  // stream's runtime by.
   optional string ingest_generation = 39;
   optional int64 ingest_connector_pid = 40;
   MistStreamProcessObservation process_observation = 41;

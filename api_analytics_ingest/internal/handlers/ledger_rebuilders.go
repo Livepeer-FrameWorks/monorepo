@@ -940,14 +940,15 @@ func (h *AnalyticsHandler) rebuildStreamRuntime5m(ctx context.Context, windowSta
 				argMax(source_started_at_ms, projection_version_ms) AS source_started_at_ms,
 				argMax(source_ended_at_ms,   projection_version_ms) AS source_ended_at_ms,
 				argMax(total_viewers,        projection_version_ms) AS peak_viewers,
-				argMax(closed_reason,        projection_version_ms) AS closed_reason
+				argMax(closed_reason,        projection_version_ms) AS closed_reason,
+				argMax(ingest_session_id,    projection_version_ms) AS ingest_session_id
 			FROM periscope.stream_sessions_final
 			WHERE projection_version_ms >= ? AND projection_version_ms < ?
 			GROUP BY tenant_id, node_id, stream_id, source_event_id
 		)
 		SELECT
 			tenant_id, node_id, cluster_id, stream_id, stream_name, source_event_id,
-			source_started_at_ms, source_ended_at_ms, peak_viewers
+			source_started_at_ms, source_ended_at_ms, peak_viewers, ingest_session_id
 		FROM s
 		WHERE closed_reason = 'final'
 		  AND source_ended_at_ms > 0`,
@@ -959,20 +960,24 @@ func (h *AnalyticsHandler) rebuildStreamRuntime5m(ctx context.Context, windowSta
 
 	for rows.Next() {
 		var (
-			tenantID, nodeID, clusterID, streamID, streamName, sourceEventID string
-			startMS, endMS                                                   int64
-			peakViewers                                                      int64
+			tenantID, nodeID, clusterID, streamID, streamName, sourceEventID, sessionID string
+			startMS, endMS                                                              int64
+			peakViewers                                                                 int64
 		)
-		if scanErr := rows.Scan(&tenantID, &nodeID, &clusterID, &streamID, &streamName, &sourceEventID, &startMS, &endMS, &peakViewers); scanErr != nil {
+		if scanErr := rows.Scan(&tenantID, &nodeID, &clusterID, &streamID, &streamName, &sourceEventID, &startMS, &endMS, &peakViewers, &sessionID); scanErr != nil {
 			return fmt.Errorf("stream_runtime_5m scan: %w", scanErr)
 		}
+		sessionID = ingestSessionID(sessionID)
 		if startMS <= 0 || endMS <= startMS {
-			resolvedStartMS, lookupErr := h.lookupStreamRuntimeStartMS(ctx, tenantID, streamID, nodeID, clusterID, streamName, endMS)
+			resolved, lookupErr := h.lookupStreamRuntimeStart(ctx, tenantID, streamID, nodeID, clusterID, streamName, endMS)
 			if lookupErr != nil {
 				return lookupErr
 			}
-			if resolvedStartMS > 0 && resolvedStartMS < endMS {
-				startMS = resolvedStartMS
+			if resolved.startedAtMS > 0 && resolved.startedAtMS < endMS {
+				startMS = resolved.startedAtMS
+				if sessionID == "" {
+					sessionID = resolved.ingestSessionID
+				}
 			}
 		}
 		if startMS <= 0 || endMS <= startMS {
@@ -989,12 +994,19 @@ func (h *AnalyticsHandler) rebuildStreamRuntime5m(ctx context.Context, windowSta
 			}
 			continue
 		}
-		sourceEventID = streamRuntimeSessionKey(tenantID, nodeID, streamID, startMS)
+		sourceEventID = streamRuntimeKey(tenantID, nodeID, streamID, sessionID, startMS)
 		emitted, appendErr := appendStreamRuntimeSpan(batch, tenantID, clusterID, streamID, sourceEventID, startMS, endMS, peakViewers, projectionVersionMS)
 		if appendErr != nil {
 			return appendErr
 		}
 		rowsEmitted += emitted
+		if sessionID != "" {
+			cleared, clearErr := h.clearStartKeyedStreamRuntime(ctx, batch, tenantID, clusterID, streamID, streamRuntimeSessionKey(tenantID, nodeID, streamID, startMS), projectionVersionMS)
+			if clearErr != nil {
+				return clearErr
+			}
+			rowsEmitted += cleared
+		}
 	}
 	if rowsErr := rows.Err(); rowsErr != nil {
 		return fmt.Errorf("stream_runtime_5m iterate: %w", rowsErr)
@@ -1008,7 +1020,8 @@ func (h *AnalyticsHandler) rebuildStreamRuntime5m(ctx context.Context, windowSta
 			toString(s.stream_id) AS stream_id,
 			s.internal_name AS stream_name,
 			ifNull(s.started_at, s.updated_at) AS started_at,
-			toInt64(s.current_viewers) AS peak_viewers
+			toInt64(s.current_viewers) AS peak_viewers,
+			s.ingest_session_id AS ingest_session_id
 		FROM periscope.stream_state_current AS s FINAL
 		LEFT JOIN (
 			SELECT
@@ -1041,11 +1054,11 @@ func (h *AnalyticsHandler) rebuildStreamRuntime5m(ctx context.Context, windowSta
 	}
 	for liveRows.Next() {
 		var (
-			tenantID, nodeID, clusterID, streamID, streamName string
-			startedAt                                         time.Time
-			peakViewers                                       int64
+			tenantID, nodeID, clusterID, streamID, streamName, stateSessionID string
+			startedAt                                                         time.Time
+			peakViewers                                                       int64
 		)
-		if err := liveRows.Scan(&tenantID, &nodeID, &clusterID, &streamID, &streamName, &startedAt, &peakViewers); err != nil {
+		if err := liveRows.Scan(&tenantID, &nodeID, &clusterID, &streamID, &streamName, &startedAt, &peakViewers, &stateSessionID); err != nil {
 			return fmt.Errorf("stream_runtime_5m live scan: %w", err)
 		}
 		if clusterID == "" || isArtifactRuntimeStream(streamName) {
@@ -1053,16 +1066,17 @@ func (h *AnalyticsHandler) rebuildStreamRuntime5m(ctx context.Context, windowSta
 		}
 		// The session key must equal the one the session's final row gets, so
 		// the final rows replace these live rows instead of adding to them. The
-		// final row's start comes from this resolver, which prefers the event
-		// log; stream_state_current.started_at is the Mist-reported start and
-		// can differ from it by a second.
-		sessionStartMS, lookupErr := h.lookupStreamRuntimeStartMS(ctx, tenantID, streamID, nodeID, clusterID, streamName, liveEndMS)
+		// final row's start and ingest session come from this resolver, which
+		// prefers the event log; stream_state_current.started_at is the
+		// Mist-reported start and can differ from it by a second.
+		session, lookupErr := h.lookupStreamRuntimeStart(ctx, tenantID, streamID, nodeID, clusterID, streamName, liveEndMS)
 		if lookupErr != nil {
 			return lookupErr
 		}
-		if sessionStartMS <= 0 {
-			sessionStartMS = startedAt.UTC().UnixMilli()
+		if session.startedAtMS <= 0 {
+			session = streamStart{startedAtMS: startedAt.UTC().UnixMilli(), ingestSessionID: ingestSessionID(stateSessionID)}
 		}
+		sessionStartMS := session.startedAtMS
 		startMS := sessionStartMS
 		if windowStartMS := windowStart.UnixMilli(); startMS < windowStartMS {
 			startMS = windowStartMS
@@ -1070,7 +1084,7 @@ func (h *AnalyticsHandler) rebuildStreamRuntime5m(ctx context.Context, windowSta
 		if startMS <= 0 || liveEndMS <= startMS {
 			continue
 		}
-		sourceEventID := streamRuntimeSessionKey(tenantID, nodeID, streamID, sessionStartMS)
+		sourceEventID := streamRuntimeKey(tenantID, nodeID, streamID, session.ingestSessionID, sessionStartMS)
 		emitted, err := appendStreamRuntimeSpan(batch, tenantID, clusterID, streamID, sourceEventID, startMS, liveEndMS, peakViewers, projectionVersionMS)
 		if err != nil {
 			return err
@@ -1093,8 +1107,65 @@ func (h *AnalyticsHandler) rebuildStreamRuntime5m(ctx context.Context, windowSta
 	return nil
 }
 
+// streamRuntimeKey is the stream_runtime_5m key of one session. A push session
+// is keyed by its Foghorn ingest session id, which its live and final rows
+// both resolve whichever of its start events reached the event log first. A
+// session without one (a pulled stream, or a row written before the id was
+// recorded) is keyed by its resolved start.
+func streamRuntimeKey(tenantID, nodeID, streamID, ingestSessionID string, sourceStartedAtMS int64) string {
+	if ingestSessionID != "" {
+		return fmt.Sprintf("stream-runtime:%s:%s:ingest:%s", tenantID, streamID, ingestSessionID)
+	}
+	return streamRuntimeSessionKey(tenantID, nodeID, streamID, sourceStartedAtMS)
+}
+
 func streamRuntimeSessionKey(tenantID, nodeID, streamID string, sourceStartedAtMS int64) string {
 	return fmt.Sprintf("stream-runtime:%s:%s:%s:%d", tenantID, nodeID, streamID, sourceStartedAtMS)
+}
+
+// clearStartKeyedStreamRuntime zeroes the windows a session's live rows wrote
+// under its start key before the session's ingest session id was recorded, so
+// its final rows, keyed by the ingest session, are the only runtime it keeps.
+func (h *AnalyticsHandler) clearStartKeyedStreamRuntime(ctx context.Context, batch *periscopeingestdb.Writer[periscopeingestdb.StreamRuntime5mRow], tenantID, clusterID, streamID, startKey string, projectionVersionMS int64) (int, error) {
+	tenantUUID, err := uuid.Parse(tenantID)
+	if err != nil {
+		return 0, fmt.Errorf("stream_runtime_5m tenant_id %q: %w", tenantID, err)
+	}
+	streamUUID, err := uuid.Parse(streamID)
+	if err != nil {
+		return 0, fmt.Errorf("stream_runtime_5m stream_id %q: %w", streamID, err)
+	}
+	rows, err := h.clickhouse.Query(ctx, `
+		SELECT window_start, cluster_id
+		FROM periscope.stream_runtime_5m_v
+		WHERE tenant_id = ? AND stream_id = ? AND source_event_id = ? AND active_seconds > 0`,
+		tenantUUID, streamUUID, startKey)
+	if err != nil {
+		return 0, fmt.Errorf("stream_runtime_5m start-keyed rows query: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	cleared := 0
+	for rows.Next() {
+		var windowStart time.Time
+		var rowClusterID string
+		if err := rows.Scan(&windowStart, &rowClusterID); err != nil {
+			return cleared, fmt.Errorf("stream_runtime_5m start-keyed rows scan: %w", err)
+		}
+		if rowClusterID == "" {
+			rowClusterID = clusterID
+		}
+		if err := batch.Append(periscopeingestdb.StreamRuntime5mRow{
+			WindowStart: windowStart.UTC(), TenantID: tenantUUID, ClusterID: rowClusterID, StreamID: streamUUID,
+			SourceEventID: startKey, ProjectionVersionMS: projectionVersionMS,
+		}); err != nil {
+			return cleared, fmt.Errorf("stream_runtime_5m append: %w", err)
+		}
+		cleared++
+	}
+	if err := rows.Err(); err != nil {
+		return cleared, fmt.Errorf("stream_runtime_5m start-keyed rows iterate: %w", err)
+	}
+	return cleared, nil
 }
 
 func appendStreamRuntimeSpan(batch *periscopeingestdb.Writer[periscopeingestdb.StreamRuntime5mRow], tenantID, clusterID, streamID, sourceEventID string, startMS, endMS, peakViewers, projectionVersionMS int64) (int, error) {
@@ -1144,16 +1215,16 @@ func isArtifactRuntimeStream(streamName string) bool {
 	return false
 }
 
-func (h *AnalyticsHandler) lookupStreamRuntimeStartMS(ctx context.Context, tenantID, streamID, nodeID, clusterID, streamName string, fallbackEndedAtMS int64) (int64, error) {
+func (h *AnalyticsHandler) lookupStreamRuntimeStart(ctx context.Context, tenantID, streamID, nodeID, clusterID, streamName string, fallbackEndedAtMS int64) (streamStart, error) {
 	parsedTenantID, err := uuid.Parse(tenantID)
 	if err != nil {
-		return 0, fmt.Errorf("parse stream runtime tenant_id %q: %w", tenantID, err)
+		return streamStart{}, fmt.Errorf("parse stream runtime tenant_id %q: %w", tenantID, err)
 	}
 	parsedStreamID, err := uuid.Parse(streamID)
 	if err != nil {
-		return 0, fmt.Errorf("parse stream runtime stream_id %q: %w", streamID, err)
+		return streamStart{}, fmt.Errorf("parse stream runtime stream_id %q: %w", streamID, err)
 	}
-	return h.lookupStreamStartedAtMS(ctx, streamStartLookup{
+	return h.lookupStreamStart(ctx, streamStartLookup{
 		tenantID:     parsedTenantID,
 		streamID:     parsedStreamID,
 		nodeID:       nodeID,

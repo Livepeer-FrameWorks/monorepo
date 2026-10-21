@@ -83,7 +83,7 @@ const insertStreamLifecycleState = `INSERT INTO stream_state_current (
 	track_count, quality_tier, primary_width, primary_height,
 	primary_fps, primary_codec, primary_bitrate,
 	packets_sent, packets_lost, packets_retransmitted,
-	started_at, updated_at, cluster_id
+	started_at, updated_at, cluster_id, ingest_session_id
 )`
 
 type StreamLifecycleStateRow struct {
@@ -113,6 +113,7 @@ type StreamLifecycleStateRow struct {
 	PacketsRetransmitted *uint64
 	StartedAt            *time.Time
 	UpdatedAt            time.Time
+	IngestSessionID      string
 }
 
 func PrepareStreamLifecycleState(ctx context.Context, db BatchPreparer) (*Writer[StreamLifecycleStateRow], error) {
@@ -124,7 +125,7 @@ func PrepareStreamLifecycleState(ctx context.Context, db BatchPreparer) (*Writer
 			row.TrackCount, row.QualityTier, row.PrimaryWidth, row.PrimaryHeight,
 			row.PrimaryFPS, row.PrimaryCodec, row.PrimaryBitrate,
 			row.PacketsSent, row.PacketsLost, row.PacketsRetransmitted,
-			row.StartedAt, row.UpdatedAt, row.ClusterID,
+			row.StartedAt, row.UpdatedAt, row.ClusterID, row.IngestSessionID,
 		}
 	})
 }

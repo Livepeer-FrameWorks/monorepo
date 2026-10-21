@@ -5828,15 +5828,17 @@ func (p *Processor) handleStreamLifecycleUpdate(trigger *ipcpb.MistTrigger) (str
 	// counting the input and keeps serving the buffer after the publisher
 	// left; reporting that as live would keep the stream live until Mist's
 	// STREAM_END and restart its clock on the next report.
+	var pushGeneration string
 	if registry := control.StreamRegistryInstance; registry != nil {
-		if active, since, ok := registry.PushSourceSession(internal); ok {
-			if !since.IsZero() {
-				startedAt := since.Unix()
+		if source, ok := registry.PushSourceSession(internal); ok {
+			if !source.Since.IsZero() {
+				startedAt := source.Since.Unix()
 				slu.StartedAt = &startedAt
 			}
-			if !active && slu.GetStatus() == "live" {
+			if !source.Active && slu.GetStatus() == "live" {
 				slu.Status = "waiting"
 			}
+			pushGeneration = strings.TrimSpace(source.Generation)
 		}
 	}
 
@@ -5969,6 +5971,12 @@ func (p *Processor) handleStreamLifecycleUpdate(trigger *ipcpb.MistTrigger) (str
 	// verify — the load-balancer state update below still runs). stream_state_current holds one row per stream,
 	// so only the source's report may reach it; a relay copy would overwrite the source's node and tracks.
 	if !suppressUnverifiedForward && p.lifecycleIsStreamSource(internal, nodeID, slu.GetReplicated()) {
+		// Periscope keys the session's live runtime by its ingest session,
+		// the id its stream_start carries as event_id, so the report names it
+		// even when it reaches Periscope before that stream_start.
+		if pushGeneration != "" && slu.GetIngestGeneration() == "" {
+			slu.IngestGeneration = &pushGeneration
+		}
 		if err := p.sendTriggerToDecklog(trigger); err != nil {
 			p.logger.WithFields(logging.Fields{
 				"internal_name": internal,

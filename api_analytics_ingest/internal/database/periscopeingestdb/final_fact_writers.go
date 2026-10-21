@@ -178,7 +178,7 @@ const insertStreamSessionFinal = `INSERT INTO periscope.stream_sessions_final (
 	cluster_id, origin_cluster_id, control_cell_id, stream_name,
 	downloaded_bytes, uploaded_bytes, total_viewers, total_inputs, total_outputs, viewer_seconds,
 	source_started_at_ms, source_ended_at_ms, edge_received_at_ms, projection_version_ms,
-	closed_reason, payload_raw
+	closed_reason, payload_raw, ingest_session_id
 )`
 
 type StreamSessionFinalRow struct {
@@ -202,6 +202,7 @@ type StreamSessionFinalRow struct {
 	ProjectionVersionMS int64
 	ClosedReason        string
 	PayloadRaw          []byte
+	IngestSessionID     string
 }
 
 func PrepareStreamSessionFinal(ctx context.Context, db BatchPreparer) (*Writer[StreamSessionFinalRow], error) {
@@ -211,7 +212,7 @@ func PrepareStreamSessionFinal(ctx context.Context, db BatchPreparer) (*Writer[S
 			row.ClusterID, row.OriginClusterID, row.ControlCellID, row.StreamName,
 			row.DownloadedBytes, row.UploadedBytes, row.TotalViewers, row.TotalInputs, row.TotalOutputs, row.ViewerSeconds,
 			row.SourceStartedAtMS, row.SourceEndedAtMS, row.EdgeReceivedAtMS, row.ProjectionVersionMS,
-			row.ClosedReason, row.PayloadRaw,
+			row.ClosedReason, row.PayloadRaw, row.IngestSessionID,
 		}
 	})
 }

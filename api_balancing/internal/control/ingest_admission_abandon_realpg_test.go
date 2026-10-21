@@ -145,7 +145,7 @@ func TestAbandonIngestAdmission_EndsPendingAdmissionBeforeConfirmation_RealPG(t 
 	if err != nil || applied || resumed {
 		t.Fatalf("projection after the report: applied=%v resumed=%v err=%v, want a silent denial", applied, resumed, err)
 	}
-	if active, _, ok := registry.PushSourceSession(stream); ok && active {
+	if source, ok := registry.PushSourceSession(stream); ok && source.Active {
 		t.Fatal("the abandoned admission was projected as the stream's source")
 	}
 }

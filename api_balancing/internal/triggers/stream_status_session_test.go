@@ -51,6 +51,12 @@ func TestLifecycleStatusAndStartFollowIngestSession(t *testing.T) {
 	if got := live.GetStartedAt(); got < sessionStart.Unix() || got > sessionStart.Unix()+1 {
 		t.Fatalf("started_at = %d, want the session start %d", got, sessionStart.Unix())
 	}
+	if got := live.GetIngestGeneration(); got != "generation-1" {
+		t.Fatalf("forwarded ingest_generation = %q, want the session's generation-1", got)
+	}
+	if live.IngestConnectorPid != nil {
+		t.Fatalf("forwarded report carries ingest_connector_pid %d; only Helmsman's exact absence report sets it", live.GetIngestConnectorPid())
+	}
 
 	markSourceInactiveForTest(t, registry, internal, nodeID, "generation-1", 2)
 	ended := forwarded()
@@ -67,10 +73,17 @@ func TestLifecycleStatusAndStartFollowIngestSession(t *testing.T) {
 	if next.GetStatus() != "live" || next.GetStartedAt() < republished.Unix() {
 		t.Fatalf("republished session: status %q started_at %d, want live from %d", next.GetStatus(), next.GetStartedAt(), republished.Unix())
 	}
+	if got := next.GetIngestGeneration(); got != "generation-2" {
+		t.Fatalf("republished session ingest_generation = %q, want generation-2", got)
+	}
 
 	// A stream with no projected push session (pull, remote) keeps Mist's view.
 	control.StreamRegistryInstance = control.NewStreamRegistry(nil, "cluster-A", time.Minute)
-	if pulled := forwarded(); pulled.GetStatus() != "live" {
+	pulled := forwarded()
+	if pulled.GetStatus() != "live" {
 		t.Fatalf("stream without a push session reported %q", pulled.GetStatus())
+	}
+	if pulled.IngestGeneration != nil {
+		t.Fatalf("stream without a push session forwarded ingest_generation %q", pulled.GetIngestGeneration())
 	}
 }

@@ -412,13 +412,14 @@ func (h *AnalyticsHandler) projectStreamSessionFinal(ctx context.Context, trigge
 			return err
 		}
 	}
-	sourceStartedAtMS := h.lookupStreamStartedAtMS(ctx, streamStartLookup{
+	sessionStart := h.lookupStreamStart(ctx, streamStartLookup{
 		tenantID:     tenantID,
 		streamID:     streamID,
 		nodeID:       nodeID,
 		clusterID:    clusterID,
 		internalName: internalName,
 	}, sourceEndedAtMS)
+	sourceStartedAtMS := sessionStart.startedAtMS
 	if sourceStartedAtMS <= 0 || sourceStartedAtMS >= sourceEndedAtMS {
 		if err := h.projectStreamSessionAnomalous(ctx, tenantID, nodeID, streamID, clusterID, streamName, sourceEndedAtMS, projectionVersionMS, "missing_start", "STREAM_END start could not be resolved"); err != nil {
 			return err
@@ -463,6 +464,7 @@ func (h *AnalyticsHandler) projectStreamSessionFinal(ctx context.Context, trigge
 		projectionVersionMS: projectionVersionMS,
 		closedReason:        "final",
 		payloadRaw:          payloadRaw,
+		ingestSessionID:     sessionStart.ingestSessionID,
 	}
 	if divergenceErr := h.checkStreamSessionDivergence(ctx, row); divergenceErr != nil {
 		return fmt.Errorf("stream_sessions_final divergence guardrail: %w", divergenceErr)
@@ -480,7 +482,7 @@ func (h *AnalyticsHandler) projectStreamSessionFinal(ctx context.Context, trigge
 		TotalInputs: row.totalInputs, TotalOutputs: row.totalOutputs, ViewerSeconds: row.viewerSeconds,
 		SourceStartedAtMS: row.sourceStartedAtMS, SourceEndedAtMS: row.sourceEndedAtMS,
 		EdgeReceivedAtMS: row.edgeReceivedAtMS, ProjectionVersionMS: row.projectionVersionMS,
-		ClosedReason: row.closedReason, PayloadRaw: row.payloadRaw,
+		ClosedReason: row.closedReason, PayloadRaw: row.payloadRaw, IngestSessionID: row.ingestSessionID,
 	}); err != nil {
 		return fmt.Errorf("stream_sessions_final append: %w", err)
 	}
@@ -727,6 +729,7 @@ type streamSessionFinalRow struct {
 	projectionVersionMS int64
 	closedReason        string
 	payloadRaw          []byte
+	ingestSessionID     string
 }
 
 type restreamSessionFinalRow struct {
@@ -1232,15 +1235,38 @@ type streamStartLookup struct {
 	internalName string
 }
 
-func (h *AnalyticsHandler) lookupStreamStartedAtMS(ctx context.Context, lookup streamStartLookup, fallbackEndedAtMS int64) int64 {
-	startedFromEvents := h.lookupStreamStartedAtMSFromEventLog(ctx, lookup, fallbackEndedAtMS)
-	if startedFromEvents > 0 && startedFromEvents < fallbackEndedAtMS {
-		return startedFromEvents
-	}
+// streamStart is where a stream session's runtime begins and the Foghorn
+// ingest session it belongs to, empty when no push session is known.
+type streamStart struct {
+	startedAtMS     int64
+	ingestSessionID string
+}
 
+// lookupStreamStart resolves a session's start from the stream's event log,
+// then from its current state. The ingest session is the one whose
+// stream_start opens the event-log window the start came from; when that
+// window holds no stream_start yet, the current state's session stands in, as
+// the lifecycle reports that wrote it carry the same id.
+func (h *AnalyticsHandler) lookupStreamStart(ctx context.Context, lookup streamStartLookup, fallbackEndedAtMS int64) streamStart {
+	fromEvents := h.lookupStreamStartFromEventLog(ctx, lookup, fallbackEndedAtMS)
+	if fromEvents.startedAtMS > 0 && fromEvents.startedAtMS < fallbackEndedAtMS && fromEvents.ingestSessionID != "" {
+		return fromEvents
+	}
+	fromState := h.lookupStreamStartFromState(ctx, lookup, fallbackEndedAtMS)
+	if fromEvents.startedAtMS > 0 && fromEvents.startedAtMS < fallbackEndedAtMS {
+		fromEvents.ingestSessionID = fromState.ingestSessionID
+		return fromEvents
+	}
+	if fromState.startedAtMS <= 0 {
+		return streamStart{startedAtMS: fromEvents.startedAtMS}
+	}
+	return fromState
+}
+
+func (h *AnalyticsHandler) lookupStreamStartFromState(ctx context.Context, lookup streamStartLookup, fallbackEndedAtMS int64) streamStart {
 	endedAt := time.UnixMilli(fallbackEndedAtMS).UTC()
 	rows, err := h.clickhouse.Query(ctx, `
-		SELECT toUnixTimestamp64Milli(toDateTime64(ifNull(started_at, updated_at), 3))
+		SELECT toUnixTimestamp64Milli(toDateTime64(ifNull(started_at, updated_at), 3)), ingest_session_id
 		FROM periscope.stream_state_current FINAL
 		WHERE tenant_id = ? AND stream_id = ?
 		  AND started_at IS NOT NULL
@@ -1253,24 +1279,25 @@ func (h *AnalyticsHandler) lookupStreamStartedAtMS(ctx context.Context, lookup s
 		lookup.internalName, lookup.internalName)
 	if err != nil {
 		h.logger.WithError(err).Debug("Stream start current-state lookup failed")
-		return 0
+		return streamStart{}
 	}
 	defer func() { _ = rows.Close() }()
 	if !rows.Next() {
-		return 0
+		return streamStart{}
 	}
-	var startedAtMS int64
-	if err := rows.Scan(&startedAtMS); err != nil {
+	var start streamStart
+	if err := rows.Scan(&start.startedAtMS, &start.ingestSessionID); err != nil {
 		h.logger.WithError(err).Debug("Stream start current-state lookup scan failed")
-		return 0
+		return streamStart{}
 	}
-	if startedAtMS <= 0 || startedAtMS > fallbackEndedAtMS {
-		return startedFromEvents
+	if start.startedAtMS <= 0 || start.startedAtMS > fallbackEndedAtMS {
+		return streamStart{}
 	}
-	return startedAtMS
+	start.ingestSessionID = ingestSessionID(start.ingestSessionID)
+	return start
 }
 
-func (h *AnalyticsHandler) lookupStreamStartedAtMSFromEventLog(ctx context.Context, lookup streamStartLookup, fallbackEndedAtMS int64) int64 {
+func (h *AnalyticsHandler) lookupStreamStartFromEventLog(ctx context.Context, lookup streamStartLookup, fallbackEndedAtMS int64) streamStart {
 	type filterScope struct {
 		nodeID       string
 		clusterID    string
@@ -1292,14 +1319,18 @@ func (h *AnalyticsHandler) lookupStreamStartedAtMSFromEventLog(ctx context.Conte
 			continue
 		}
 		seen[scope] = struct{}{}
-		if startedAtMS := h.lookupStreamStartedAtMSFromEventLogScope(ctx, lookup, fallbackEndedAtMS, scope.nodeID, scope.clusterID, scope.internalName); startedAtMS > 0 && startedAtMS < fallbackEndedAtMS {
-			return startedAtMS
+		if start := h.lookupStreamStartFromEventLogScope(ctx, lookup, fallbackEndedAtMS, scope.nodeID, scope.clusterID, scope.internalName); start.startedAtMS > 0 && start.startedAtMS < fallbackEndedAtMS {
+			return start
 		}
 	}
-	return 0
+	return streamStart{}
 }
 
-func (h *AnalyticsHandler) lookupStreamStartedAtMSFromEventLogScope(ctx context.Context, lookup streamStartLookup, fallbackEndedAtMS int64, nodeID, clusterID, internalName string) int64 {
+// lookupStreamStartFromEventLogScope returns the first live event after the
+// stream's prior end and the ingest session of the window's first
+// stream_start: Foghorn stamps a push session's stream_start with its ingest
+// session id as event_id.
+func (h *AnalyticsHandler) lookupStreamStartFromEventLogScope(ctx context.Context, lookup streamStartLookup, fallbackEndedAtMS int64, nodeID, clusterID, internalName string) streamStart {
 	endedAt := time.UnixMilli(fallbackEndedAtMS).UTC()
 	// stream_event_log timestamps have one-second precision, while the durable
 	// raw trigger fence has millisecond precision. Without truncating the prior
@@ -1308,7 +1339,9 @@ func (h *AnalyticsHandler) lookupStreamStartedAtMSFromEventLogScope(ctx context.
 	// preceding session end, excluding every valid start.
 	priorEndBefore := endedAt.Truncate(time.Second)
 	rows, err := h.clickhouse.Query(ctx, `
-		SELECT toUnixTimestamp64Milli(toDateTime64(min(timestamp), 3))
+		SELECT
+			toUnixTimestamp64Milli(toDateTime64(min(timestamp), 3)),
+			argMinIf(toString(event_id), timestamp, event_type = 'stream_start')
 		FROM periscope.stream_event_log
 		WHERE tenant_id = ?
 		  AND stream_id = ?
@@ -1344,21 +1377,32 @@ func (h *AnalyticsHandler) lookupStreamStartedAtMSFromEventLogScope(ctx context.
 		priorEndBefore)
 	if err != nil {
 		h.logger.WithError(err).Debug("Stream start event-log lookup failed")
-		return 0
+		return streamStart{}
 	}
 	defer func() { _ = rows.Close() }()
 	if !rows.Next() {
-		return 0
+		return streamStart{}
 	}
-	var startedAtMS int64
-	if err := rows.Scan(&startedAtMS); err != nil {
+	var start streamStart
+	if err := rows.Scan(&start.startedAtMS, &start.ingestSessionID); err != nil {
 		h.logger.WithError(err).Debug("Stream start event-log lookup scan failed")
-		return 0
+		return streamStart{}
 	}
-	if startedAtMS <= 0 || startedAtMS > fallbackEndedAtMS {
-		return 0
+	if start.startedAtMS <= 0 || start.startedAtMS > fallbackEndedAtMS {
+		return streamStart{}
 	}
-	return startedAtMS
+	start.ingestSessionID = ingestSessionID(start.ingestSessionID)
+	return start
+}
+
+// ingestSessionID normalizes a Foghorn ingest session id, a UUID, and reads
+// anything else, including the zero UUID, as no session.
+func ingestSessionID(raw string) string {
+	id, err := uuid.Parse(strings.TrimSpace(raw))
+	if err != nil || id == uuid.Nil {
+		return ""
+	}
+	return id.String()
 }
 
 // normalizeCountryCode keys a session's country for the FixedString(2)

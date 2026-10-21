@@ -13921,7 +13921,10 @@ type StreamLifecycleUpdate struct {
 	// Additional packet stat (packretrans from MistServer active_streams API)
 	PacketsRetransmitted *uint64 `protobuf:"varint,27,opt,name=packets_retransmitted,json=packetsRetransmitted,proto3,oneof" json:"packets_retransmitted,omitempty"`
 	// Exact admitted runtime identity used by Helmsman's authoritative Mist inventory
-	// reconciliation. Ordinary lifecycle telemetry leaves these unset.
+	// reconciliation. Helmsman's ordinary lifecycle telemetry leaves these unset.
+	// Foghorn sets ingest_generation (never ingest_connector_pid) on a push source's
+	// report it forwards to Decklog, naming the ingest session Periscope keys the
+	// stream's runtime by.
 	IngestGeneration   *string                       `protobuf:"bytes,39,opt,name=ingest_generation,json=ingestGeneration,proto3,oneof" json:"ingest_generation,omitempty"`
 	IngestConnectorPid *int64                        `protobuf:"varint,40,opt,name=ingest_connector_pid,json=ingestConnectorPid,proto3,oneof" json:"ingest_connector_pid,omitempty"`
 	ProcessObservation *MistStreamProcessObservation `protobuf:"bytes,41,opt,name=process_observation,json=processObservation,proto3" json:"process_observation,omitempty"`

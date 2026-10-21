@@ -912,6 +912,7 @@ func (h *AnalyticsHandler) writeStreamLifecycleState(ctx context.Context, event 
 		PrimaryBitrate: optionalUint32(uint32(streamLifecycle.GetPrimaryBitrate())), PacketsSent: streamLifecycle.PacketsSent,
 		PacketsLost: streamLifecycle.PacketsLost, PacketsRetransmitted: streamLifecycle.PacketsRetransmitted,
 		StartedAt: startedAt, UpdatedAt: event.Timestamp,
+		IngestSessionID: ingestSessionID(streamLifecycle.GetIngestGeneration()),
 	}); appendErr != nil {
 		h.logger.Errorf("Failed to append to live_streams batch: %v", appendErr)
 		if h.metrics != nil {
@@ -1881,7 +1882,7 @@ func (h *AnalyticsHandler) processPushRewrite(ctx context.Context, event kafka.A
 		if appendErr := stateBatch.Append(periscopeingestdb.StreamLifecycleStateRow{
 			TenantID: uuid.MustParse(event.TenantID), StreamID: streamUUID, InternalName: internalName,
 			NodeID: mt.GetNodeId(), ClusterID: mt.GetClusterId(), Status: "live", BufferState: "UNKNOWN", TotalInputs: 1,
-			StartedAt: &startedAt, UpdatedAt: event.Timestamp,
+			StartedAt: &startedAt, UpdatedAt: event.Timestamp, IngestSessionID: ingestSessionID(mt.GetEventId()),
 		}); appendErr != nil {
 			return appendErr
 		}

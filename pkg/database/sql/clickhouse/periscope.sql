@@ -182,7 +182,10 @@ CREATE TABLE IF NOT EXISTS stream_state_current (
     packets_retransmitted Nullable(UInt64),
 
     started_at Nullable(DateTime),
-    updated_at DateTime
+    updated_at DateTime,
+    -- Foghorn ingest session id of the push session the row reports; empty
+    -- for pulled streams. Keys the session's live stream runtime rows.
+    ingest_session_id String DEFAULT ''
 ) ENGINE = ReplicatedReplacingMergeTree(updated_at)
 ORDER BY (tenant_id, stream_id);
 
@@ -2421,6 +2424,10 @@ CREATE TABLE IF NOT EXISTS stream_sessions_final (
     payload_raw String CODEC(ZSTD(3)),
     -- Kafka record identity; Periscope Ingest drops redelivered rows by it.
     ingest_id UUID,
+    -- Foghorn ingest session id of the stream_start the session's start
+    -- resolved from; empty when none did. Keys the session's final stream
+    -- runtime rows.
+    ingest_session_id String DEFAULT '',
     INDEX idx_ingest_id ingest_id TYPE bloom_filter(0.01) GRANULARITY 1
 ) ENGINE = ReplicatedMergeTree()
 PARTITION BY toYYYYMM(toDateTime(projection_version_ms / 1000))
