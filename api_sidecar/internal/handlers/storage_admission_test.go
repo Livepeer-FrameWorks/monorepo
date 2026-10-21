@@ -60,6 +60,33 @@ func TestStorageManager_Decide_HandlesEveryDeclaredIntent(t *testing.T) {
 	}
 }
 
+// TestAdmitDiskWrite_CapacityCountsWholeMediaRoot pins that write admission
+// under a logical capacity counts every byte under the media root. Measuring
+// only the write's own subdirectory sees it empty and admits a write the
+// capacity has no room for.
+func TestAdmitDiskWrite_CapacityCountsWholeMediaRoot(t *testing.T) {
+	const capacity = 1 << 20
+	sm := newTestStorageManager(t)
+	sm.capacity = capacity
+
+	vodDir := filepath.Join(sm.basePath, "vod")
+	procDir := filepath.Join(sm.basePath, "processing")
+	for _, dir := range []string{vodDir, procDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A fresh VOD copy is inside minRetention, so no cleanup can reclaim it.
+	if err := os.WriteFile(filepath.Join(vodDir, "202401011200abcdef1234.mp4"), make([]byte, capacity*95/100), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := sm.admitDiskWrite(context.Background(), procDir, capacity/5)
+	if !errors.Is(err, storage.ErrInsufficientSpace) {
+		t.Fatalf("admitDiskWrite = %v, want ErrInsufficientSpace: the media root holds 95%% of the capacity", err)
+	}
+}
+
 func TestGetDiskSpaceWalk_ColdLeafReturnsAncestorStats(t *testing.T) {
 	root := t.TempDir()
 	coldBlocksDir := filepath.Join(root, "vod", "abc123.mkv.blocks")

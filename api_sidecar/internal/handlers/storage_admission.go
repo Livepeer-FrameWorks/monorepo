@@ -128,10 +128,10 @@ func (sm *StorageManager) admitDiskWrite(ctx context.Context, dir string, sizeBy
 		return nil
 	}
 
-	space, err := storage.EffectiveDiskSpace(dir, sm.capacity)
+	space, err := sm.mediaSpace()
 	if err != nil {
-		// Path may not exist yet. Fall back to HasSpaceFor's stat-parent walk.
-		if err := storage.HasSpaceForWithinCapacity(dir, sizeBytes, sm.capacity); err != nil {
+		// The media root may not exist yet; HasSpaceForWithinCapacity creates it before measuring.
+		if err := storage.HasSpaceForWithinCapacity(sm.basePath, sizeBytes, sm.capacity); err != nil {
 			if errors.Is(err, storage.ErrInsufficientSpace) {
 				return sm.ensureRoomForDiskWrite(ctx, dir, sizeBytes)
 			}
@@ -168,7 +168,7 @@ func (sm *StorageManager) ensureRoomForDiskWrite(ctx context.Context, dir string
 		return fmt.Errorf("%w: destructive cleanup paused", storage.ErrInsufficientSpace)
 	}
 
-	space, err := storage.EffectiveDiskSpace(dir, sm.capacity)
+	space, err := sm.mediaSpace()
 	if err != nil {
 		return fmt.Errorf("ensureRoomForDiskWrite statfs: %w", err)
 	}
@@ -184,7 +184,7 @@ func (sm *StorageManager) ensureRoomForDiskWrite(ctx context.Context, dir string
 	}
 
 	// Re-check.
-	space, err = storage.EffectiveDiskSpace(dir, sm.capacity)
+	space, err = sm.mediaSpace()
 	if err != nil {
 		return fmt.Errorf("ensureRoomForDiskWrite recheck statfs: %w", err)
 	}

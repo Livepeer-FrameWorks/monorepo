@@ -112,8 +112,7 @@ func (cm *CleanupMonitor) start() {
 
 // checkAndCleanup checks storage usage and performs cleanup if needed
 func (cm *CleanupMonitor) checkAndCleanup() error {
-	// Get current storage usage (check base path - filesystem level)
-	usagePercent, usedBytes, totalBytes, err := cm.getStorageUsage(cm.basePath)
+	usagePercent, usedBytes, totalBytes, err := cm.mediaUsage()
 	if err != nil {
 		return fmt.Errorf("failed to get storage usage: %w", err)
 	}
@@ -205,8 +204,7 @@ func (cm *CleanupMonitor) checkAndCleanup() error {
 		}).Info("Cleaned up artifact")
 	}
 
-	// Final usage check
-	finalUsagePercent, finalUsedBytes, _, err := cm.getStorageUsage(clipsDir)
+	finalUsagePercent, finalUsedBytes, _, err := cm.mediaUsage()
 	if err != nil {
 		cm.logger.WithError(err).Error("Failed to check final storage usage")
 	} else {
@@ -222,9 +220,12 @@ func (cm *CleanupMonitor) checkAndCleanup() error {
 	return nil
 }
 
-// getStorageUsage returns storage usage percentage, used bytes, and total bytes
-func (cm *CleanupMonitor) getStorageUsage(path string) (float64, uint64, uint64, error) {
-	space, err := storage.EffectiveDiskSpace(path, sidecarcfg.GetStorageCapacityBytes())
+// mediaUsage returns the usage fraction, used bytes and total bytes of the
+// whole media root. A logical capacity counts every byte under basePath, so
+// both the pressure check and the completed pass measure the root, never one
+// artifact subdirectory.
+func (cm *CleanupMonitor) mediaUsage() (float64, uint64, uint64, error) {
+	space, err := storage.EffectiveDiskSpace(cm.basePath, sidecarcfg.GetStorageCapacityBytes())
 	if err != nil {
 		return 0, 0, 0, err
 	}

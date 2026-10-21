@@ -4,11 +4,15 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
 
+	"frameworks/api_sidecar/internal/appconfig/appconfigtest"
+
 	"github.com/sirupsen/logrus"
+	logrustest "github.com/sirupsen/logrus/hooks/test"
 )
 
 func newTestCleanupMonitor() *CleanupMonitor {
@@ -224,6 +228,63 @@ func TestIsArtifactFile_DVR(t *testing.T) {
 				t.Fatalf("isArtifactFile(%q, \"dvr\") = %v, want %v", tt.path, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestCheckAndCleanup_FinalUsageMeasuresMediaRoot pins that a cleanup pass
+// reports its final usage over the whole media root. Under a logical capacity
+// used bytes are the measured directory's size, so measuring clips/ alone
+// reports ~0 while vod/ still holds most of the capacity.
+func TestCheckAndCleanup_FinalUsageMeasuresMediaRoot(t *testing.T) {
+	const capacity = 1 << 20
+	appconfigtest.Setenv(t, "HELMSMAN_STORAGE_CAPACITY_BYTES", strconv.Itoa(capacity))
+
+	basePath := t.TempDir()
+	vodDir := filepath.Join(basePath, "vod")
+	if err := os.MkdirAll(filepath.Join(basePath, "clips"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(vodDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	vodPath := filepath.Join(vodDir, "202401011200abcdef1234.mp4")
+	if err := os.WriteFile(vodPath, make([]byte, capacity*95/100), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(vodPath, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	logger, hook := logrustest.NewNullLogger()
+	cm := &CleanupMonitor{
+		logger:            logger,
+		basePath:          basePath,
+		cleanupThreshold:  0.90,
+		targetThreshold:   0.80,
+		minRetentionHours: 1,
+	}
+	if err := cm.checkAndCleanup(); err != nil {
+		t.Fatalf("checkAndCleanup: %v", err)
+	}
+
+	var completed *logrus.Entry
+	for _, e := range hook.AllEntries() {
+		if e.Message == "Cleanup completed" {
+			completed = e
+		}
+	}
+	if completed == nil {
+		t.Fatal("cleanup pass did not log its completed usage")
+	}
+	initial, _ := completed.Data["initial_usage"].(float64)
+	final, _ := completed.Data["final_usage"].(float64)
+	if initial < 0.90 {
+		t.Fatalf("initial_usage = %v, want the pass to start above the cleanup threshold", initial)
+	}
+	// The VOD copy cannot be evicted without Foghorn, so the root's usage is unchanged.
+	if math.Abs(final-initial) > 0.01 {
+		t.Fatalf("final_usage = %v, want the media root's usage %v (the pass evicted nothing)", final, initial)
 	}
 }
 

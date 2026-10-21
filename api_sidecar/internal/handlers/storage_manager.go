@@ -416,7 +416,7 @@ func (sm *StorageManager) checkAndManageStorage() error {
 	clipsDir := filepath.Join(sm.basePath, "clips")
 
 	// Get current storage usage
-	usagePercent, usedBytes, totalBytes, err := sm.getStorageUsage(sm.basePath)
+	usagePercent, usedBytes, totalBytes, err := sm.getStorageUsage()
 	if err != nil {
 		return fmt.Errorf("failed to get storage usage: %w", err)
 	}
@@ -1325,8 +1325,15 @@ func parseHLSManifest(content string) (*ParsedManifest, error) {
 	return result, nil
 }
 
-func (sm *StorageManager) getStorageUsage(path string) (float64, uint64, uint64, error) {
-	space, err := storage.EffectiveDiskSpace(path, sm.capacity)
+// mediaSpace measures the whole media root. A logical capacity counts every
+// byte under basePath, so pressure checks and write admission measure the
+// root, never the subdirectory a write lands in.
+func (sm *StorageManager) mediaSpace() (*storage.DiskSpace, error) {
+	return storage.EffectiveDiskSpace(sm.basePath, sm.capacity)
+}
+
+func (sm *StorageManager) getStorageUsage() (float64, uint64, uint64, error) {
+	space, err := sm.mediaSpace()
 	if err != nil {
 		return 0, 0, 0, err
 	}

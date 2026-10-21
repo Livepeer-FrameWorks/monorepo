@@ -18,7 +18,7 @@ func TestStorageManagerUsageExcludesSystemReserve(t *testing.T) {
 		t.Skipf("test filesystem (%d bytes) is not larger than the reserve", raw.TotalBytes)
 	}
 	sm := &StorageManager{basePath: dir}
-	usage, used, total, err := sm.getStorageUsage(dir)
+	usage, used, total, err := sm.getStorageUsage()
 	if err != nil {
 		t.Fatalf("getStorageUsage: %v", err)
 	}
