@@ -7,6 +7,7 @@ package foghorndb
 
 import (
 	"context"
+	"time"
 )
 
 const deleteStaleOrphanedArtifactNodes = `-- name: DeleteStaleOrphanedArtifactNodes :execrows
@@ -195,7 +196,7 @@ SELECT artifact_hash, artifact_type
 FROM foghorn.artifacts
 WHERE artifact_type IN ('clip', 'vod', 'chapter')
   AND status = 'deleted'
-  AND updated_at > NOW() - CAST($1 AS text)::interval
+  AND updated_at > $1::timestamptz
 ORDER BY updated_at DESC
 LIMIT 1000
 `
@@ -208,8 +209,8 @@ type ListRecentlyDeletedRelayCacheableArtifactsRow struct {
 // Clips and VODs (DVR chapters are VODs) deleted within the window, newest
 // first. Any node may hold relay caches of them without having reported them,
 // so their deletes go to every node, not only to artifact_nodes holders.
-func (q *Queries) ListRecentlyDeletedRelayCacheableArtifacts(ctx context.Context, within string) ([]ListRecentlyDeletedRelayCacheableArtifactsRow, error) {
-	rows, err := q.db.QueryContext(ctx, listRecentlyDeletedRelayCacheableArtifacts, within)
+func (q *Queries) ListRecentlyDeletedRelayCacheableArtifacts(ctx context.Context, deletedAfter time.Time) ([]ListRecentlyDeletedRelayCacheableArtifactsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listRecentlyDeletedRelayCacheableArtifacts, deletedAfter)
 	if err != nil {
 		return nil, err
 	}

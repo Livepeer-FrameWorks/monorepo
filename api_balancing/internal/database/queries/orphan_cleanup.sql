@@ -47,7 +47,7 @@ SELECT artifact_hash, artifact_type
 FROM foghorn.artifacts
 WHERE artifact_type IN ('clip', 'vod', 'chapter')
   AND status = 'deleted'
-  AND updated_at > NOW() - CAST(sqlc.arg(within) AS text)::interval
+  AND updated_at > sqlc.arg(deleted_after)::timestamptz
 ORDER BY updated_at DESC
 LIMIT 1000;
 

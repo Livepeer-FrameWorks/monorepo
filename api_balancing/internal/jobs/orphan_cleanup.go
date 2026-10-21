@@ -177,7 +177,7 @@ func (j *OrphanCleanupJob) fanOutRecentDeletes(ctx context.Context) {
 	var rows []foghorndb.ListRecentlyDeletedRelayCacheableArtifactsRow
 	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
 		var err error
-		rows, err = foghorndb.New(j.db).ListRecentlyDeletedRelayCacheableArtifacts(ctx, control.RelayCacheDeleteWindow.String())
+		rows, err = foghorndb.New(j.db).ListRecentlyDeletedRelayCacheableArtifacts(ctx, time.Now().Add(-control.RelayCacheDeleteWindow))
 		return err
 	})
 	if err != nil {

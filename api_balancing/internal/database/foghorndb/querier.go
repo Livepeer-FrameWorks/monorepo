@@ -513,7 +513,7 @@ type Querier interface {
 	// Clips and VODs (DVR chapters are VODs) deleted within the window, newest
 	// first. Any node may hold relay caches of them without having reported them,
 	// so their deletes go to every node, not only to artifact_nodes holders.
-	ListRecentlyDeletedRelayCacheableArtifacts(ctx context.Context, within string) ([]ListRecentlyDeletedRelayCacheableArtifactsRow, error)
+	ListRecentlyDeletedRelayCacheableArtifacts(ctx context.Context, deletedAfter time.Time) ([]ListRecentlyDeletedRelayCacheableArtifactsRow, error)
 	ListReclaimableDVRSegments(ctx context.Context, arg ListReclaimableDVRSegmentsParams) ([]ListReclaimableDVRSegmentsRow, error)
 	// Recover every expired federated-pointer saga on the short cadence. The
 	// current signed-authority state selects the same guarded fence that ordinary

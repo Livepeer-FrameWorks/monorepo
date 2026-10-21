@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"context"
+	"database/sql/driver"
 	"errors"
 	"testing"
 	"time"
@@ -153,7 +154,7 @@ func TestReconcileErrorTolerance(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "node_id"}))
 	mock.ExpectQuery(`artifact_type = 'vod'`).WithArgs("30m0s").
 		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "node_id"}))
-	mock.ExpectQuery(`artifact_type IN \('clip', 'vod', 'chapter'\)`).WithArgs("24h0m0s").
+	mock.ExpectQuery(`artifact_type IN \('clip', 'vod', 'chapter'\)`).WithArgs(cutoffAgo(24 * time.Hour)).
 		WillReturnError(errors.New("fan-out query down"))
 	mock.ExpectExec(`DELETE FROM foghorn.artifact_nodes`).WillReturnResult(sqlmock.NewResult(0, 0))
 
@@ -175,7 +176,7 @@ func TestFanOutRecentDeletes(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer mockDB.Close()
-	mock.ExpectQuery(`status = 'deleted'`).WithArgs("24h0m0s").
+	mock.ExpectQuery(`status = 'deleted'`).WithArgs(cutoffAgo(24 * time.Hour)).
 		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "artifact_type"}).
 			AddRow("vod-1", "vod").
 			AddRow("clip-1", "clip").
@@ -204,4 +205,16 @@ func TestFanOutRecentDeletes(t *testing.T) {
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// cutoffAgo matches a timestamp bound the window before the query ran.
+type cutoffAgo time.Duration
+
+func (w cutoffAgo) Match(v driver.Value) bool {
+	ts, ok := v.(time.Time)
+	if !ok {
+		return false
+	}
+	ago := time.Since(ts)
+	return ago >= time.Duration(w) && ago < time.Duration(w)+time.Minute
 }
