@@ -2792,10 +2792,10 @@ func (f *fakeClickhouseConn) Select(ctx context.Context, dest any, query string,
 }
 func (f *fakeClickhouseConn) Query(ctx context.Context, query string, args ...any) (driver.Rows, error) {
 	table := tableFromQuery(query, "from")
-	if strings.Contains(query, "WITH changed_bounds AS") && strings.Contains(query, "FROM periscope.viewer_usage_5m") {
+	if strings.Contains(query, "WITH changed AS") && strings.Contains(query, "FROM periscope.viewer_usage_5m") {
 		table = "periscope.viewer_usage_5m"
 	}
-	if strings.Contains(query, "WITH changed_bounds AS") && strings.Contains(query, "FROM periscope.delivery_usage_5m") {
+	if strings.Contains(query, "WITH changed AS") && strings.Contains(query, "FROM periscope.delivery_usage_5m") {
 		table = "periscope.delivery_usage_5m"
 	}
 	f.queries = append(f.queries, fakeQuery{table: table, query: query, args: append([]any(nil), args...)})

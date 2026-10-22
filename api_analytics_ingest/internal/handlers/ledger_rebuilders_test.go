@@ -135,7 +135,7 @@ func TestDeliveryRebuilderBoundsEmissionBatchVolume(t *testing.T) {
 	window := time.Date(2026, 6, 5, 0, 0, 0, 0, time.UTC)
 	for i := 0; i < LedgerEmissionBatchSize+1; i++ {
 		conn.addQueryRow("periscope.viewer_sessions_final",
-			ledgerTestTenantID, "node-a", fmt.Sprintf("viewer-%d", i), fmt.Sprintf("event-%d", i),
+			ledgerTestTenantID, "node-a", fmt.Sprintf("viewer-%d", i), fmt.Sprintf("event-%d", i), window.UnixMilli(),
 			"cluster-a", ledgerTestStreamID, window.UnixMilli(), window.Add(5*time.Minute).UnixMilli(), uint64(0), uint64(1), "final")
 	}
 	if err := h.rebuildDeliveryUsage5m(context.Background(), window, window.Add(time.Hour)); err != nil {
@@ -152,7 +152,7 @@ func TestViewerRebuilderBoundsEmissionBatchVolume(t *testing.T) {
 	window := time.Date(2026, 6, 5, 0, 0, 0, 0, time.UTC)
 	for i := 0; i < LedgerEmissionBatchSize+1; i++ {
 		conn.addQueryRow("periscope.viewer_sessions_final",
-			ledgerTestTenantID, "node-a", fmt.Sprintf("viewer-%d", i), fmt.Sprintf("event-%d", i),
+			ledgerTestTenantID, "node-a", fmt.Sprintf("viewer-%d", i), window.UnixMilli(), fmt.Sprintf("event-%d", i),
 			"cluster-a", ledgerTestStreamID, window.UnixMilli(), window.Add(5*time.Minute).UnixMilli(),
 			uint32(300), uint64(0), uint64(1))
 	}
@@ -257,7 +257,7 @@ func TestOverSpanFactsDoNotScanOrEmitTombstones(t *testing.T) {
 	t.Run("viewer", func(t *testing.T) {
 		conn := newFakeClickhouseConn()
 		conn.addQueryRow("periscope.viewer_sessions_final",
-			ledgerTestTenantID, "node-a", "viewer-long", "viewer-event", "cluster-a", ledgerTestStreamID,
+			ledgerTestTenantID, "node-a", "viewer-long", start, "viewer-event", "cluster-a", ledgerTestStreamID,
 			start, end, uint32(0), uint64(1), uint64(1))
 		h := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
 		if err := h.rebuildViewerUsage5m(context.Background(), time.UnixMilli(start), time.UnixMilli(end)); err != nil {
@@ -271,7 +271,7 @@ func TestOverSpanFactsDoNotScanOrEmitTombstones(t *testing.T) {
 	t.Run("restream", func(t *testing.T) {
 		conn := newFakeClickhouseConn()
 		conn.addQueryRow("periscope.restream_sessions_final",
-			ledgerTestTenantID, "node-a", "restream-event", "restream", "restream-event", "cluster-a", ledgerTestStreamID,
+			ledgerTestTenantID, "node-a", "restream-event", "restream", "restream-event", start, "cluster-a", ledgerTestStreamID,
 			"youtube", "idle", start, end, uint64(0), uint64(1))
 		h := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
 		if err := h.rebuildDeliveryUsage5m(context.Background(), time.UnixMilli(start), time.UnixMilli(end)); err != nil {
@@ -363,10 +363,12 @@ func TestRebuildViewerUsage5mSplitsSessionAcrossWindows(t *testing.T) {
 	end := time.Date(2026, 6, 3, 12, 10, 0, 0, time.UTC).UnixMilli()
 	const upBytes, downBytes = uint64(7000), uint64(14000)
 
-	// viewer_sessions_final scan order: tenant, node, session, source_event_id,
-	// cluster, stream, started_ms, ended_ms, duration_seconds, up, down.
+	// viewer_sessions_final scan order: tenant, node, session, source version,
+	// source_event_id, cluster, stream, started_ms, ended_ms, duration_seconds,
+	// up, down.
+	sourceVersionMS := end + 90_000
 	conn.addQueryRow("periscope.viewer_sessions_final",
-		ledgerTestTenantID, "n1", "s1", "evt-1", "c1", ledgerTestStreamID,
+		ledgerTestTenantID, "n1", "s1", sourceVersionMS, "evt-1", "c1", ledgerTestStreamID,
 		start, end, uint32(420), upBytes, downBytes)
 
 	if err := handler.rebuildViewerUsage5m(context.Background(), time.UnixMilli(start), time.UnixMilli(end)); err != nil {
@@ -394,6 +396,9 @@ func TestRebuildViewerUsage5mSplitsSessionAcrossWindows(t *testing.T) {
 		if row[1] != uuid.MustParse(ledgerTestTenantID) || row[2] != "c1" || row[3] != uuid.MustParse(ledgerTestStreamID) || row[9] != "evt-1" {
 			t.Fatalf("identity/source_event mismatch in window %d: %#v", windowMS, row)
 		}
+		if row[10] != sourceVersionMS {
+			t.Fatalf("window %d projection_version_ms=%v, want the source version %d", windowMS, row[10], sourceVersionMS)
+		}
 		if got := row[6].(uint32); got != uint32(overlapMS/1000) {
 			t.Fatalf("window %d seconds_observed=%d, want %d", windowMS, got, overlapMS/1000)
 		}
@@ -417,10 +422,11 @@ func TestRebuildDeliveryUsage5mProjectsRestreamAndReconcilesPlayback(t *testing.
 	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
 	start := time.Date(2026, 6, 3, 12, 0, 0, 0, time.UTC).UnixMilli()
 	end := start + 60_000
+	restreamVersionMS, playbackVersionMS := end+1_000, end+2_000
 	conn.addQueryRow("periscope.restream_sessions_final",
-		ledgerTestTenantID, "edge-a", "restream-event", "restream", "restream-event",
+		ledgerTestTenantID, "edge-a", "restream-event", "restream", "restream-event", restreamVersionMS,
 		"cluster-a", ledgerTestStreamID, "youtube", "idle", start, end, uint64(0), uint64(300))
-	conn.addQueryRow("periscope.viewer_sessions_final", ledgerTestTenantID, "edge-a", "viewer-session", "viewer-event",
+	conn.addQueryRow("periscope.viewer_sessions_final", ledgerTestTenantID, "edge-a", "viewer-session", "viewer-event", playbackVersionMS,
 		"cluster-a", ledgerTestStreamID, start, end, uint64(10), uint64(20), "final")
 
 	if err := handler.rebuildDeliveryUsage5m(context.Background(), time.UnixMilli(start), time.UnixMilli(end+1)); err != nil {
@@ -439,6 +445,9 @@ func TestRebuildDeliveryUsage5mProjectsRestreamAndReconcilesPlayback(t *testing.
 	}
 	if byKind["playback"] == nil || byKind["playback"][6] != "viewer-session" || byKind["playback"][10] != uint64(20) {
 		t.Fatalf("playback reconciliation missing or malformed: %#v", batch.rows)
+	}
+	if byKind["restream"][12] != restreamVersionMS || byKind["playback"][12] != playbackVersionMS {
+		t.Fatalf("delivery rows must carry their source versions %d/%d: %#v", restreamVersionMS, playbackVersionMS, batch.rows)
 	}
 }
 
@@ -466,10 +475,10 @@ func TestDeliveryUsageTombstonesRetractMovedWindowsAndDimensions(t *testing.T) {
 	if got.windowStartMS != staleWindow || got.clusterID != "cluster-old" || got.platform != "youtube" || got.sourceEventID != "event-stale" {
 		t.Fatalf("unexpected delivery tombstone: %#v", got)
 	}
-	if len(conn.queries) != 1 || !strings.Contains(conn.queries[0].query, "scan_bounds AS") ||
-		!strings.Contains(conn.queries[0].query, "ledger.window_start >= (SELECT min_window_start FROM scan_bounds)") ||
-		!strings.Contains(conn.queries[0].query, "ledger.window_start < (SELECT max_window_start FROM scan_bounds)") {
-		t.Fatalf("delivery tombstone lookup is not pruned by scalar changed-window bounds: %#v", conn.queries)
+	if len(conn.queries) != 1 || !strings.Contains(conn.queries[0].query, "ledger.tenant_id IN (SELECT tenant_id FROM changed)") ||
+		!strings.Contains(conn.queries[0].query, "ledger.delivery_id IN (SELECT delivery_id FROM changed)") ||
+		strings.Contains(conn.queries[0].query, "ledger.window_start >=") {
+		t.Fatalf("delivery tombstone lookup must cover every window of a changed delivery, pruned by tenant and delivery_id: %#v", conn.queries)
 	}
 }
 
@@ -582,9 +591,10 @@ func TestRebuildProcessing5mPassesThroughAggregatedRow(t *testing.T) {
 	w := time.Date(2026, 6, 3, 12, 0, 0, 0, time.UTC)
 	// processing_segments_final result scan order: window_start, tenant,
 	// cluster, stream, process_type, output_codec, track_type, source_event_id,
-	// media_seconds.
+	// media_seconds, source version.
+	sourceVersionMS := w.Add(time.Minute).UnixMilli()
 	conn.addQueryRow("periscope.processing_segments_final",
-		w, ledgerTestTenantID, "c1", ledgerTestStreamID, "transcode", "h264", "video", "evt-1", float64(42.5))
+		w, ledgerTestTenantID, "c1", ledgerTestStreamID, "transcode", "h264", "video", "evt-1", float64(42.5), sourceVersionMS)
 
 	if err := handler.rebuildProcessing5m(context.Background(), w, w.Add(5*time.Minute)); err != nil {
 		t.Fatalf("rebuildProcessing5m: %v", err)
@@ -603,6 +613,9 @@ func TestRebuildProcessing5mPassesThroughAggregatedRow(t *testing.T) {
 	}
 	if row[8].(float64) != 42.5 {
 		t.Fatalf("media_seconds=%v, want 42.5", row[8])
+	}
+	if row[9] != sourceVersionMS {
+		t.Fatalf("projection_version_ms=%v, want the source version %d", row[9], sourceVersionMS)
 	}
 }
 
@@ -714,6 +727,7 @@ func TestStreamRuntimeRebuilderResolvesZeroDurationFinalFromEventLog(t *testing.
 		streamID,
 		"live+demo",
 		"source-event-1",
+		end.Add(time.Minute).UnixMilli(),
 		end.UnixMilli(),
 		end.UnixMilli(),
 		int64(7),
@@ -735,6 +749,9 @@ func TestStreamRuntimeRebuilderResolvesZeroDurationFinalFromEventLog(t *testing.
 	if got := row[4]; got != uint32(120) {
 		t.Fatalf("active_seconds = %#v, want 120", got)
 	}
+	if got := row[7]; got != end.Add(time.Minute).UnixMilli() {
+		t.Fatalf("projection_version_ms = %#v, want the final's source version %d", got, end.Add(time.Minute).UnixMilli())
+	}
 }
 
 func TestStreamRuntimeRebuilderSkipsMissingStartAndContinues(t *testing.T) {
@@ -754,6 +771,7 @@ func TestStreamRuntimeRebuilderSkipsMissingStartAndContinues(t *testing.T) {
 		"source-event-1",
 		end.UnixMilli(),
 		end.UnixMilli(),
+		end.UnixMilli(),
 		int64(7),
 	)
 	conn.addQueryRow(
@@ -764,6 +782,7 @@ func TestStreamRuntimeRebuilderSkipsMissingStartAndContinues(t *testing.T) {
 		validStreamID,
 		"live+valid",
 		"source-event-valid",
+		end.UnixMilli(),
 		validStart.UnixMilli(),
 		end.UnixMilli(),
 		int64(3),
@@ -836,6 +855,9 @@ func TestStreamRuntimeRebuilderEmitsLiveStateWindow(t *testing.T) {
 	if row[6] != wantKey {
 		t.Fatalf("source_event_id = %#v, want %q", row[6], wantKey)
 	}
+	if row[7] != windowStart.UnixMilli()-1 {
+		t.Fatalf("live projection_version_ms = %#v, want one below the chunk start %d", row[7], windowStart.UnixMilli()-1)
+	}
 }
 
 func TestStreamRuntimeRebuilderKeysLiveSessionByTheFinalSessionStart(t *testing.T) {
@@ -880,6 +902,7 @@ func TestStreamRuntimeRebuilderSkipsArtifactRuntimeWithoutStart(t *testing.T) {
 				uuid.NewString(),
 				streamName,
 				"source-event-1",
+				end.UnixMilli(),
 				end.UnixMilli(),
 				end.UnixMilli(),
 				int64(0),

@@ -24,6 +24,13 @@ import (
 // Re-running a window produces an identical row (deterministic from source
 // data); the projection table's argMax-on-read view collapses re-emissions.
 // See docs/architecture/meter-contracts.md for the projection model.
+//
+// A ledger row's projection_version_ms is the newest source version it was
+// computed from, never the write time. The ledger lease cannot fence
+// ClickHouse writes: a replica that lost its lease during a stall can still
+// write an old chunk after another replica wrote a newer one, and argMax must
+// then keep the projection of the newer source state whichever lands last.
+// storage_gb_seconds_5m is the exception; see rebuildStorageGBSeconds5m.
 
 const (
 	// LedgerRebuildInterval is how often each ledger worker wakes up to
@@ -114,7 +121,7 @@ func (h *AnalyticsHandler) rebuildDeliveryUsage5m(ctx context.Context, windowSta
 		if len(emissions) == 0 {
 			return nil
 		}
-		if err := h.writeDeliveryUsage5m(ctx, emissions, time.Now().UnixMilli()); err != nil {
+		if err := h.writeDeliveryUsage5m(ctx, emissions); err != nil {
 			return err
 		}
 		emissions = emissions[:0]
@@ -128,13 +135,15 @@ func (h *AnalyticsHandler) rebuildDeliveryUsage5m(ctx context.Context, windowSta
 		return nil
 	}
 	desiredByIdentity := make(map[deliveryUsageIdentity]map[deliveryUsageWindowKey]struct{})
-	if err := h.reconcilePlaybackDeliveryUsage5m(ctx, windowStart, windowEnd, desiredByIdentity, emit); err != nil {
+	sourceVersionByIdentity := make(map[deliveryUsageIdentity]int64)
+	if err := h.reconcilePlaybackDeliveryUsage5m(ctx, windowStart, windowEnd, desiredByIdentity, sourceVersionByIdentity, emit); err != nil {
 		return err
 	}
 	rows, err := h.clickhouse.Query(ctx, `
 		WITH delivery_sessions AS (
 			SELECT tenant_id, node_id, source_event_id AS delivery_id, 'restream' AS delivery_kind,
-				source_event_id, argMax(cluster_id, projection_version_ms) AS cluster_id,
+				source_event_id, max(projection_version_ms) AS source_version_ms,
+				argMax(cluster_id, projection_version_ms) AS cluster_id,
 				argMax(stream_id, projection_version_ms) AS stream_id,
 				argMax(platform, projection_version_ms) AS platform,
 				argMax(state, projection_version_ms) AS state,
@@ -146,7 +155,7 @@ func (h *AnalyticsHandler) rebuildDeliveryUsage5m(ctx context.Context, windowSta
 			WHERE projection_version_ms >= ? AND projection_version_ms < ?
 			GROUP BY tenant_id, node_id, source_event_id
 		)
-		SELECT toString(tenant_id), node_id, delivery_id, delivery_kind, source_event_id,
+		SELECT toString(tenant_id), node_id, delivery_id, delivery_kind, source_event_id, source_version_ms,
 		       cluster_id, toString(stream_id), platform, state, started_at_ms, ended_at_ms, up_bytes, down_bytes
 		FROM delivery_sessions`,
 		windowStart.UnixMilli(), windowEnd.UnixMilli())
@@ -157,6 +166,7 @@ func (h *AnalyticsHandler) rebuildDeliveryUsage5m(ctx context.Context, windowSta
 
 	type source struct {
 		tenantID, nodeID, deliveryID, kind, sourceEventID string
+		sourceVersionMS                                   int64
 		clusterID, streamID, platform                     string
 		state                                             string
 		startMS, endMS                                    int64
@@ -164,10 +174,11 @@ func (h *AnalyticsHandler) rebuildDeliveryUsage5m(ctx context.Context, windowSta
 	}
 	for rows.Next() {
 		var s source
-		if scanErr := rows.Scan(&s.tenantID, &s.nodeID, &s.deliveryID, &s.kind, &s.sourceEventID, &s.clusterID, &s.streamID, &s.platform, &s.state, &s.startMS, &s.endMS, &s.upBytes, &s.downBytes); scanErr != nil {
+		if scanErr := rows.Scan(&s.tenantID, &s.nodeID, &s.deliveryID, &s.kind, &s.sourceEventID, &s.sourceVersionMS, &s.clusterID, &s.streamID, &s.platform, &s.state, &s.startMS, &s.endMS, &s.upBytes, &s.downBytes); scanErr != nil {
 			return fmt.Errorf("delivery_usage_5m scan: %w", scanErr)
 		}
 		identity := deliveryUsageIdentity{tenantID: s.tenantID, nodeID: s.nodeID, kind: s.kind, deliveryID: s.deliveryID}
+		sourceVersionByIdentity[identity] = s.sourceVersionMS
 		if (s.state != "idle" && s.state != "failed") || s.startMS <= 0 || s.endMS <= s.startMS {
 			desiredByIdentity[identity] = map[deliveryUsageWindowKey]struct{}{}
 			continue
@@ -203,7 +214,7 @@ func (h *AnalyticsHandler) rebuildDeliveryUsage5m(ctx context.Context, windowSta
 				windowStartMS: windowMS, tenantID: s.tenantID, clusterID: s.clusterID, streamID: s.streamID,
 				nodeID: s.nodeID, kind: s.kind, deliveryID: s.deliveryID, platform: s.platform,
 				secondsObserved: uint32(overlapMS / 1000), upObserved: upObserved,
-				downObserved: downObserved, sourceEventID: s.sourceEventID,
+				downObserved: downObserved, sourceEventID: s.sourceEventID, projectionVersionMS: s.sourceVersionMS,
 			}); emitErr != nil {
 				return emitErr
 			}
@@ -218,10 +229,13 @@ func (h *AnalyticsHandler) rebuildDeliveryUsage5m(ctx context.Context, windowSta
 	}
 	for identity, identityTombstones := range tombstones {
 		for _, tombstone := range identityTombstones {
+			// A tombstone carries the version of the source state that no longer
+			// covers its window, so it cancels only projections of older state.
 			if err := emit(deliveryUsageEmission{
 				windowStartMS: tombstone.windowStartMS, tenantID: identity.tenantID, clusterID: tombstone.clusterID,
 				streamID: tombstone.streamID, nodeID: identity.nodeID, kind: identity.kind, deliveryID: identity.deliveryID,
 				platform: tombstone.platform, sourceEventID: tombstone.sourceEventID,
+				projectionVersionMS: sourceVersionByIdentity[identity],
 			}); err != nil {
 				return err
 			}
@@ -230,10 +244,11 @@ func (h *AnalyticsHandler) rebuildDeliveryUsage5m(ctx context.Context, windowSta
 	return flush()
 }
 
-func (h *AnalyticsHandler) reconcilePlaybackDeliveryUsage5m(ctx context.Context, windowStart, windowEnd time.Time, desiredByIdentity map[deliveryUsageIdentity]map[deliveryUsageWindowKey]struct{}, emit func(deliveryUsageEmission) error) error {
+func (h *AnalyticsHandler) reconcilePlaybackDeliveryUsage5m(ctx context.Context, windowStart, windowEnd time.Time, desiredByIdentity map[deliveryUsageIdentity]map[deliveryUsageWindowKey]struct{}, sourceVersionByIdentity map[deliveryUsageIdentity]int64, emit func(deliveryUsageEmission) error) error {
 	rows, err := h.clickhouse.Query(ctx, `
 		WITH sessions AS (
 			SELECT tenant_id, node_id, session_id,
+				max(projection_version_ms) AS source_version_ms,
 				argMax(source_event_id, projection_version_ms) AS source_event_id,
 				argMax(cluster_id, projection_version_ms) AS cluster_id,
 				argMax(stream_id, projection_version_ms) AS stream_id,
@@ -247,7 +262,7 @@ func (h *AnalyticsHandler) reconcilePlaybackDeliveryUsage5m(ctx context.Context,
 			GROUP BY tenant_id, node_id, session_id
 		)
 		SELECT
-			toString(tenant_id), node_id, session_id, source_event_id,
+			toString(tenant_id), node_id, session_id, source_event_id, source_version_ms,
 			cluster_id, toString(stream_id), source_started_at_ms,
 			source_ended_at_ms, uploaded_bytes, downloaded_bytes, closed_reason
 		FROM sessions`,
@@ -260,12 +275,13 @@ func (h *AnalyticsHandler) reconcilePlaybackDeliveryUsage5m(ctx context.Context,
 	for rows.Next() {
 		var tenantID, nodeID, sessionID, sourceEventID, clusterID, streamID string
 		var closedReason string
-		var startMS, endMS int64
+		var sourceVersionMS, startMS, endMS int64
 		var upBytes, downBytes uint64
-		if scanErr := rows.Scan(&tenantID, &nodeID, &sessionID, &sourceEventID, &clusterID, &streamID, &startMS, &endMS, &upBytes, &downBytes, &closedReason); scanErr != nil {
+		if scanErr := rows.Scan(&tenantID, &nodeID, &sessionID, &sourceEventID, &sourceVersionMS, &clusterID, &streamID, &startMS, &endMS, &upBytes, &downBytes, &closedReason); scanErr != nil {
 			return fmt.Errorf("delivery_usage_5m playback reconciliation scan: %w", scanErr)
 		}
 		identity := deliveryUsageIdentity{tenantID: tenantID, nodeID: nodeID, kind: "playback", deliveryID: sessionID}
+		sourceVersionByIdentity[identity] = sourceVersionMS
 		if closedReason != "final" || startMS <= 0 || endMS <= startMS {
 			desiredByIdentity[identity] = map[deliveryUsageWindowKey]struct{}{}
 			continue
@@ -291,7 +307,7 @@ func (h *AnalyticsHandler) reconcilePlaybackDeliveryUsage5m(ctx context.Context,
 			if emitErr := emit(deliveryUsageEmission{
 				windowStartMS: window.windowStartMS, tenantID: tenantID, clusterID: clusterID, streamID: streamID,
 				nodeID: nodeID, kind: "playback", deliveryID: sessionID, sourceEventID: sourceEventID,
-				secondsObserved: uint32(window.overlapMS / 1000),
+				projectionVersionMS: sourceVersionMS, secondsObserved: uint32(window.overlapMS / 1000),
 				upObserved: mulDivUint64(upBytes, uint64(cumulativeOverlapMS), uint64(totalMS)) -
 					mulDivUint64(upBytes, uint64(previousOverlapMS), uint64(totalMS)),
 				downObserved: mulDivUint64(downBytes, uint64(cumulativeOverlapMS), uint64(totalMS)) -
@@ -313,9 +329,10 @@ type deliveryUsageEmission struct {
 	secondsObserved                                                   uint32
 	upObserved, downObserved                                          uint64
 	sourceEventID                                                     string
+	projectionVersionMS                                               int64
 }
 
-func (h *AnalyticsHandler) writeDeliveryUsage5m(ctx context.Context, emissions []deliveryUsageEmission, projectionVersionMS int64) error {
+func (h *AnalyticsHandler) writeDeliveryUsage5m(ctx context.Context, emissions []deliveryUsageEmission) error {
 	if len(emissions) == 0 {
 		return nil
 	}
@@ -338,7 +355,7 @@ func (h *AnalyticsHandler) writeDeliveryUsage5m(ctx context.Context, emissions [
 			StreamID: streamID, NodeID: emission.nodeID, DeliveryKind: emission.kind, DeliveryID: emission.deliveryID,
 			Platform: emission.platform, SecondsObserved: emission.secondsObserved,
 			UpBytesObserved: emission.upObserved, DownBytesObserved: emission.downObserved,
-			SourceEventID: emission.sourceEventID, ProjectionVersionMS: projectionVersionMS,
+			SourceEventID: emission.sourceEventID, ProjectionVersionMS: emission.projectionVersionMS,
 		}); appendErr != nil {
 			return fmt.Errorf("delivery_usage_5m append: %w", appendErr)
 		}
@@ -373,36 +390,19 @@ func (h *AnalyticsHandler) deliveryUsageTombstonesForProjectionWindow(ctx contex
 	if len(desiredByIdentity) == 0 {
 		return out, nil
 	}
+	// Every retained window of a changed delivery is a candidate, wherever its
+	// earlier projections placed it: the newer state's span says nothing about
+	// how far an older, longer state reached. The scan is pruned by tenant and
+	// by the delivery_id bloom filter.
 	rows, err := h.clickhouse.Query(ctx, `
-		WITH changed_bounds AS (
-			SELECT tenant_id, node_id, delivery_kind, delivery_id,
-				greatest(minIf(source_started_at_ms, source_started_at_ms > 0 AND source_ended_at_ms > source_started_at_ms),
-					toUnixTimestamp64Milli(now64(3) - INTERVAL 90 DAY)) AS min_started_at_ms,
-				if(maxIf(source_ended_at_ms, source_started_at_ms > 0 AND source_ended_at_ms > source_started_at_ms) > 0,
-					maxIf(source_ended_at_ms, source_started_at_ms > 0 AND source_ended_at_ms > source_started_at_ms),
-					toUnixTimestamp64Milli(now64(3))) AS max_ended_at_ms,
-				countIf(source_started_at_ms <= 0 OR source_ended_at_ms <= source_started_at_ms) > 0 AS has_unbounded_retraction
-			FROM (
-				SELECT tenant_id, node_id, 'restream' AS delivery_kind, source_event_id AS delivery_id,
-					source_started_at_ms, source_ended_at_ms
-				FROM periscope.restream_sessions_final
-				WHERE projection_version_ms >= ? AND projection_version_ms < ?
-				UNION ALL
-				SELECT tenant_id, node_id, 'playback' AS delivery_kind, session_id AS delivery_id,
-					source_started_at_ms, source_ended_at_ms
-				FROM periscope.viewer_sessions_final
-				WHERE projection_version_ms >= ? AND projection_version_ms < ?
-			)
-			GROUP BY tenant_id, node_id, delivery_kind, delivery_id
-		), scan_bounds AS (
-			SELECT
-				if(countIf(has_unbounded_retraction) > 0,
-					toStartOfFiveMinute(now() - INTERVAL 90 DAY),
-					toDateTime(intDiv(min(min_started_at_ms), 1000)) - INTERVAL 5 MINUTE) AS min_window_start,
-				if(countIf(has_unbounded_retraction) > 0,
-					now(),
-					toDateTime(intDiv(max(max_ended_at_ms), 1000)) + INTERVAL 5 MINUTE) AS max_window_start
-			FROM changed_bounds
+		WITH changed AS (
+			SELECT DISTINCT tenant_id, node_id, 'restream' AS delivery_kind, source_event_id AS delivery_id
+			FROM periscope.restream_sessions_final
+			WHERE projection_version_ms >= ? AND projection_version_ms < ?
+			UNION DISTINCT
+			SELECT DISTINCT tenant_id, node_id, 'playback' AS delivery_kind, session_id AS delivery_id
+			FROM periscope.viewer_sessions_final
+			WHERE projection_version_ms >= ? AND projection_version_ms < ?
 		)
 		SELECT toString(ledger.tenant_id), ledger.node_id, ledger.delivery_kind, ledger.delivery_id,
 			toInt64(toUnixTimestamp(ledger.window_start)) * 1000 AS window_start_ms,
@@ -412,17 +412,11 @@ func (h *AnalyticsHandler) deliveryUsageTombstonesForProjectionWindow(ctx contex
 			argMax(ledger.up_bytes_observed, ledger.projection_version_ms) AS up_bytes_observed,
 			argMax(ledger.down_bytes_observed, ledger.projection_version_ms) AS down_bytes_observed
 		FROM periscope.delivery_usage_5m AS ledger
-		INNER JOIN changed_bounds AS changed
-		  ON ledger.tenant_id = changed.tenant_id
-		 AND ledger.node_id = changed.node_id
-		 AND ledger.delivery_kind = changed.delivery_kind
-		 AND ledger.delivery_id = changed.delivery_id
 		WHERE ledger.projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 90 DAY)
-		  AND ledger.window_start >= (SELECT min_window_start FROM scan_bounds)
-		  AND ledger.window_start < (SELECT max_window_start FROM scan_bounds)
-		  AND (changed.has_unbounded_retraction
-		    OR (ledger.window_start >= toDateTime(intDiv(changed.min_started_at_ms, 1000)) - INTERVAL 5 MINUTE
-		    AND ledger.window_start < toDateTime(intDiv(changed.max_ended_at_ms, 1000)) + INTERVAL 5 MINUTE))
+		  AND ledger.tenant_id IN (SELECT tenant_id FROM changed)
+		  AND ledger.delivery_id IN (SELECT delivery_id FROM changed)
+		  AND (ledger.tenant_id, ledger.node_id, ledger.delivery_kind, ledger.delivery_id) IN
+		      (SELECT tenant_id, node_id, delivery_kind, delivery_id FROM changed)
 		GROUP BY ledger.tenant_id, ledger.node_id, ledger.delivery_kind, ledger.delivery_id,
 			ledger.window_start, ledger.cluster_id, ledger.stream_id, ledger.platform`,
 		windowStart.UnixMilli(), windowEnd.UnixMilli(), windowStart.UnixMilli(), windowEnd.UnixMilli())
@@ -660,6 +654,7 @@ func (h *AnalyticsHandler) rebuildViewerUsage5m(ctx context.Context, windowStart
 		WITH sessions AS (
 			SELECT
 				tenant_id, node_id, session_id,
+				max(projection_version_ms)                          AS source_version_ms,
 				argMax(source_event_id,      projection_version_ms) AS source_event_id,
 				argMax(cluster_id,           projection_version_ms) AS cluster_id,
 				argMax(stream_id,            projection_version_ms) AS stream_id,
@@ -674,7 +669,7 @@ func (h *AnalyticsHandler) rebuildViewerUsage5m(ctx context.Context, windowStart
 			GROUP BY tenant_id, node_id, session_id
 		)
 		SELECT
-			tenant_id, node_id, session_id,
+			tenant_id, node_id, session_id, source_version_ms,
 			source_event_id, cluster_id, stream_id,
 			source_started_at_ms, source_ended_at_ms,
 			duration_seconds, uploaded_bytes, downloaded_bytes
@@ -690,6 +685,7 @@ func (h *AnalyticsHandler) rebuildViewerUsage5m(ctx context.Context, windowStart
 
 	type viewerSessionProjection struct {
 		tenantID, nodeID, sessionID        string
+		sourceVersionMS                    int64
 		sourceEventID, clusterID, streamID string
 		startMS, endMS                     int64
 		durationSeconds                    uint32
@@ -701,7 +697,7 @@ func (h *AnalyticsHandler) rebuildViewerUsage5m(ctx context.Context, windowStart
 		if len(emissions) == 0 {
 			return nil
 		}
-		if writeErr := h.writeViewerUsage5m(ctx, emissions, time.Now().UnixMilli()); writeErr != nil {
+		if writeErr := h.writeViewerUsage5m(ctx, emissions); writeErr != nil {
 			return writeErr
 		}
 		emissions = emissions[:0]
@@ -715,10 +711,11 @@ func (h *AnalyticsHandler) rebuildViewerUsage5m(ctx context.Context, windowStart
 		return nil
 	}
 	desiredByIdentity := make(map[viewerUsageIdentity]map[viewerUsageWindowKey]struct{})
+	sourceVersionByIdentity := make(map[viewerUsageIdentity]int64)
 	hadSessions := false
 	for rows.Next() {
 		var s viewerSessionProjection
-		if scanErr := rows.Scan(&s.tenantID, &s.nodeID, &s.sessionID, &s.sourceEventID, &s.clusterID, &s.streamID, &s.startMS, &s.endMS, &s.durationSeconds, &s.upBytes, &s.downBytes); scanErr != nil {
+		if scanErr := rows.Scan(&s.tenantID, &s.nodeID, &s.sessionID, &s.sourceVersionMS, &s.sourceEventID, &s.clusterID, &s.streamID, &s.startMS, &s.endMS, &s.durationSeconds, &s.upBytes, &s.downBytes); scanErr != nil {
 			return fmt.Errorf("viewer_usage_5m scan: %w", scanErr)
 		}
 		hadSessions = true
@@ -736,6 +733,7 @@ func (h *AnalyticsHandler) rebuildViewerUsage5m(ctx context.Context, windowStart
 		desiredKeys := map[viewerUsageWindowKey]struct{}{}
 		identity := viewerUsageIdentity{tenantID: s.tenantID, nodeID: s.nodeID, sessionID: s.sessionID}
 		desiredByIdentity[identity] = desiredKeys
+		sourceVersionByIdentity[identity] = s.sourceVersionMS
 		var cumulativeOverlapMS int64
 		for _, window := range orderedWindowsForSpan(s.startMS, s.endMS) {
 			windowMS, overlapMS := window.windowStartMS, window.overlapMS
@@ -754,16 +752,17 @@ func (h *AnalyticsHandler) rebuildViewerUsage5m(ctx context.Context, windowStart
 			downObserved := mulDivUint64(s.downBytes, uint64(cumulativeOverlapMS), uint64(totalSpanMS)) -
 				mulDivUint64(s.downBytes, uint64(previousOverlapMS), uint64(totalSpanMS))
 			if emitErr := emit(viewerUsageEmission{
-				windowStartMS:   windowMS,
-				tenantID:        s.tenantID,
-				clusterID:       s.clusterID,
-				streamID:        s.streamID,
-				nodeID:          s.nodeID,
-				sessionID:       s.sessionID,
-				sourceEventID:   s.sourceEventID,
-				secondsObserved: uint32(overlapMS / 1000),
-				upObserved:      upObserved,
-				downObserved:    downObserved,
+				windowStartMS:       windowMS,
+				tenantID:            s.tenantID,
+				clusterID:           s.clusterID,
+				streamID:            s.streamID,
+				nodeID:              s.nodeID,
+				sessionID:           s.sessionID,
+				sourceEventID:       s.sourceEventID,
+				secondsObserved:     uint32(overlapMS / 1000),
+				upObserved:          upObserved,
+				downObserved:        downObserved,
+				projectionVersionMS: s.sourceVersionMS,
 			}); emitErr != nil {
 				return emitErr
 			}
@@ -781,14 +780,17 @@ func (h *AnalyticsHandler) rebuildViewerUsage5m(ctx context.Context, windowStart
 	}
 	for identity, identityTombstones := range tombstones {
 		for _, t := range identityTombstones {
+			// A tombstone carries the version of the source state that no longer
+			// covers its window, so it cancels only projections of older state.
 			if err := emit(viewerUsageEmission{
-				windowStartMS: t.windowStartMS,
-				tenantID:      identity.tenantID,
-				clusterID:     t.clusterID,
-				streamID:      t.streamID,
-				nodeID:        identity.nodeID,
-				sessionID:     identity.sessionID,
-				sourceEventID: t.sourceEventID,
+				windowStartMS:       t.windowStartMS,
+				tenantID:            identity.tenantID,
+				clusterID:           t.clusterID,
+				streamID:            t.streamID,
+				nodeID:              identity.nodeID,
+				sessionID:           identity.sessionID,
+				sourceEventID:       t.sourceEventID,
+				projectionVersionMS: sourceVersionByIdentity[identity],
 			}); err != nil {
 				return err
 			}
@@ -803,9 +805,10 @@ type viewerUsageEmission struct {
 	nodeID, sessionID, sourceEventID string
 	secondsObserved                  uint32
 	upObserved, downObserved         uint64
+	projectionVersionMS              int64
 }
 
-func (h *AnalyticsHandler) writeViewerUsage5m(ctx context.Context, emissions []viewerUsageEmission, projectionVersionMS int64) error {
+func (h *AnalyticsHandler) writeViewerUsage5m(ctx context.Context, emissions []viewerUsageEmission) error {
 	batch, err := periscopeingestdb.PrepareViewerUsage5m(ctx, h.clickhouse)
 	if err != nil {
 		return fmt.Errorf("viewer_usage_5m prepare: %w", err)
@@ -825,7 +828,7 @@ func (h *AnalyticsHandler) writeViewerUsage5m(ctx context.Context, emissions []v
 			WindowStart: time.UnixMilli(e.windowStartMS).UTC(),
 			TenantID:    tenantUUID, ClusterID: e.clusterID, StreamID: streamUUID, NodeID: e.nodeID, SessionID: e.sessionID,
 			SecondsObserved: e.secondsObserved, UpBytesObserved: e.upObserved, DownBytesObserved: e.downObserved,
-			SourceEventID: e.sourceEventID, ProjectionVersionMS: projectionVersionMS,
+			SourceEventID: e.sourceEventID, ProjectionVersionMS: e.projectionVersionMS,
 		}); err != nil {
 			return fmt.Errorf("viewer_usage_5m append: %w", err)
 		}
@@ -859,18 +862,15 @@ func (h *AnalyticsHandler) viewerUsageTombstonesForProjectionWindow(ctx context.
 	if len(desiredByIdentity) == 0 {
 		return out, nil
 	}
+	// Every retained window of a changed session is a candidate, wherever its
+	// earlier projections placed it: the newer state's span says nothing about
+	// how far an older, longer state reached. The scan is pruned by tenant and
+	// by the session_id bloom filter.
 	rows, err := h.clickhouse.Query(ctx, `
-		WITH changed_bounds AS (
-			SELECT tenant_id, node_id, session_id,
-				greatest(minIf(source_started_at_ms, source_started_at_ms > 0 AND source_ended_at_ms > source_started_at_ms),
-					toUnixTimestamp64Milli(now64(3) - INTERVAL 90 DAY)) AS min_started_at_ms,
-				if(maxIf(source_ended_at_ms, source_started_at_ms > 0 AND source_ended_at_ms > source_started_at_ms) > 0,
-					maxIf(source_ended_at_ms, source_started_at_ms > 0 AND source_ended_at_ms > source_started_at_ms),
-					toUnixTimestamp64Milli(now64(3))) AS max_ended_at_ms,
-				countIf(source_started_at_ms <= 0 OR source_ended_at_ms <= source_started_at_ms) > 0 AS has_unbounded_retraction
+		WITH changed AS (
+			SELECT DISTINCT tenant_id, node_id, session_id
 			FROM periscope.viewer_sessions_final
 			WHERE projection_version_ms >= ? AND projection_version_ms < ?
-			GROUP BY tenant_id, node_id, session_id
 		)
 		SELECT toString(ledger.tenant_id), ledger.node_id, ledger.session_id,
 			toInt64(toUnixTimestamp(ledger.window_start)) * 1000 AS window_start_ms,
@@ -880,14 +880,11 @@ func (h *AnalyticsHandler) viewerUsageTombstonesForProjectionWindow(ctx context.
 			argMax(ledger.up_bytes_observed, ledger.projection_version_ms) AS up_bytes_observed,
 			argMax(ledger.down_bytes_observed, ledger.projection_version_ms) AS down_bytes_observed
 		FROM periscope.viewer_usage_5m AS ledger
-		INNER JOIN changed_bounds AS changed
-		  ON ledger.tenant_id = changed.tenant_id
-		 AND ledger.node_id = changed.node_id
-		 AND ledger.session_id = changed.session_id
 		WHERE ledger.projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 90 DAY)
-		  AND (changed.has_unbounded_retraction
-		    OR (ledger.window_start >= toDateTime(intDiv(changed.min_started_at_ms, 1000)) - INTERVAL 5 MINUTE
-		    AND ledger.window_start < toDateTime(intDiv(changed.max_ended_at_ms, 1000)) + INTERVAL 5 MINUTE))
+		  AND ledger.tenant_id IN (SELECT tenant_id FROM changed)
+		  AND ledger.session_id IN (SELECT session_id FROM changed)
+		  AND (ledger.tenant_id, ledger.node_id, ledger.session_id) IN
+		      (SELECT tenant_id, node_id, session_id FROM changed)
 		GROUP BY ledger.tenant_id, ledger.node_id, ledger.session_id, ledger.window_start, ledger.cluster_id, ledger.stream_id`,
 		windowStart.UnixMilli(), windowEnd.UnixMilli())
 	if err != nil {
@@ -922,8 +919,12 @@ func (h *AnalyticsHandler) viewerUsageTombstonesForProjectionWindow(ctx context.
 
 // --- stream_runtime_5m ---
 
+// rebuildStreamRuntime5m versions a final session's rows by its newest
+// stream_sessions_final projection, which lies in [windowStart, windowEnd).
+// Live rows have no source projection: they are versioned one millisecond
+// below windowStart, so a later chunk's live rows replace them and every
+// final row read by this or a later chunk outranks them.
 func (h *AnalyticsHandler) rebuildStreamRuntime5m(ctx context.Context, windowStart, windowEnd time.Time) error {
-	projectionVersionMS := time.Now().UnixMilli()
 	batch, err := periscopeingestdb.PrepareStreamRuntime5m(ctx, h.clickhouse)
 	if err != nil {
 		return fmt.Errorf("stream_runtime_5m prepare: %w", err)
@@ -935,6 +936,7 @@ func (h *AnalyticsHandler) rebuildStreamRuntime5m(ctx context.Context, windowSta
 		WITH s AS (
 			SELECT
 				tenant_id, node_id, stream_id, source_event_id,
+				max(projection_version_ms)                          AS source_version_ms,
 				argMax(cluster_id,           projection_version_ms) AS cluster_id,
 				argMax(stream_name,          projection_version_ms) AS stream_name,
 				argMax(source_started_at_ms, projection_version_ms) AS source_started_at_ms,
@@ -947,7 +949,7 @@ func (h *AnalyticsHandler) rebuildStreamRuntime5m(ctx context.Context, windowSta
 			GROUP BY tenant_id, node_id, stream_id, source_event_id
 		)
 		SELECT
-			tenant_id, node_id, cluster_id, stream_id, stream_name, source_event_id,
+			tenant_id, node_id, cluster_id, stream_id, stream_name, source_event_id, source_version_ms,
 			source_started_at_ms, source_ended_at_ms, peak_viewers, ingest_session_id
 		FROM s
 		WHERE closed_reason = 'final'
@@ -961,10 +963,10 @@ func (h *AnalyticsHandler) rebuildStreamRuntime5m(ctx context.Context, windowSta
 	for rows.Next() {
 		var (
 			tenantID, nodeID, clusterID, streamID, streamName, sourceEventID, sessionID string
-			startMS, endMS                                                              int64
+			projectionVersionMS, startMS, endMS                                         int64
 			peakViewers                                                                 int64
 		)
-		if scanErr := rows.Scan(&tenantID, &nodeID, &clusterID, &streamID, &streamName, &sourceEventID, &startMS, &endMS, &peakViewers, &sessionID); scanErr != nil {
+		if scanErr := rows.Scan(&tenantID, &nodeID, &clusterID, &streamID, &streamName, &sourceEventID, &projectionVersionMS, &startMS, &endMS, &peakViewers, &sessionID); scanErr != nil {
 			return fmt.Errorf("stream_runtime_5m scan: %w", scanErr)
 		}
 		sessionID = ingestSessionID(sessionID)
@@ -1052,6 +1054,7 @@ func (h *AnalyticsHandler) rebuildStreamRuntime5m(ctx context.Context, windowSta
 	if windowEndMS := windowEnd.UnixMilli(); liveEndMS > windowEndMS {
 		liveEndMS = windowEndMS
 	}
+	liveProjectionVersionMS := windowStart.UnixMilli() - 1
 	for liveRows.Next() {
 		var (
 			tenantID, nodeID, clusterID, streamID, streamName, stateSessionID string
@@ -1085,7 +1088,7 @@ func (h *AnalyticsHandler) rebuildStreamRuntime5m(ctx context.Context, windowSta
 			continue
 		}
 		sourceEventID := streamRuntimeKey(tenantID, nodeID, streamID, session.ingestSessionID, sessionStartMS)
-		emitted, err := appendStreamRuntimeSpan(batch, tenantID, clusterID, streamID, sourceEventID, startMS, liveEndMS, peakViewers, projectionVersionMS)
+		emitted, err := appendStreamRuntimeSpan(batch, tenantID, clusterID, streamID, sourceEventID, startMS, liveEndMS, peakViewers, liveProjectionVersionMS)
 		if err != nil {
 			return err
 		}
@@ -1426,6 +1429,11 @@ func (h *AnalyticsHandler) rebuildStorageGBSeconds5m(ctx context.Context, window
 		return nil
 	}
 
+	// Storage rows are versioned by write time, not by their snapshots'
+	// ingested_at_ms: billing discovers a storage bucket by its first
+	// projection version behind a two-minute settlement lag, and a version
+	// taken from snapshots ingested minutes earlier would land behind that
+	// cursor and never be billed.
 	projectionVersionMS := time.Now().UnixMilli()
 	batch, err := periscopeingestdb.PrepareStorageGBSeconds5m(ctx, h.clickhouse)
 	if err != nil {
@@ -1558,11 +1566,13 @@ func (h *AnalyticsHandler) rebuildProcessing5m(ctx context.Context, windowStart,
 	// whose projection_version_ms landed in the replay window. Process,
 	// codec, track, cluster, and media_seconds are materialized with
 	// argMax so a replay that fixes attribution replaces the prior shape
-	// instead of adding a second logical segment.
+	// instead of adding a second logical segment. Each row is versioned by
+	// its segment's newest projection.
 	rows, err := h.clickhouse.Query(ctx, `
 		WITH seg AS (
 			SELECT
 				tenant_id, node_id, stream_id, source_event_id,
+				max(projection_version_ms)                          AS source_version_ms,
 				argMax(process_type,        projection_version_ms) AS process_type,
 				argMax(output_codec,        projection_version_ms) AS output_codec,
 				argMax(track_type,          projection_version_ms) AS track_type,
@@ -1576,7 +1586,8 @@ func (h *AnalyticsHandler) rebuildProcessing5m(ctx context.Context, windowStart,
 		SELECT
 			toStartOfFiveMinute(toDateTime(intDiv(source_started_at_ms, 1000))) AS window_start,
 			tenant_id, cluster_id, stream_id, process_type, output_codec, track_type, source_event_id,
-			sum(media_seconds) AS media_seconds
+			sum(media_seconds) AS media_seconds,
+			max(source_version_ms) AS source_version_ms
 		FROM seg
 		WHERE source_started_at_ms > 0
 		GROUP BY window_start, tenant_id, cluster_id, stream_id, process_type, output_codec, track_type, source_event_id`,
@@ -1586,7 +1597,6 @@ func (h *AnalyticsHandler) rebuildProcessing5m(ctx context.Context, windowStart,
 	}
 	defer func() { _ = rows.Close() }()
 
-	projectionVersionMS := time.Now().UnixMilli()
 	batch, err := periscopeingestdb.PrepareProcessing5m(ctx, h.clickhouse)
 	if err != nil {
 		return fmt.Errorf("processing_5m prepare: %w", err)
@@ -1600,8 +1610,9 @@ func (h *AnalyticsHandler) rebuildProcessing5m(ctx context.Context, windowStart,
 			tenantID, clusterID, streamID, processType, outputCodec, trackType string
 			sourceEventID                                                      string
 			rawDurationSeconds                                                 float64
+			projectionVersionMS                                                int64
 		)
-		if err := rows.Scan(&windowStartT, &tenantID, &clusterID, &streamID, &processType, &outputCodec, &trackType, &sourceEventID, &rawDurationSeconds); err != nil {
+		if err := rows.Scan(&windowStartT, &tenantID, &clusterID, &streamID, &processType, &outputCodec, &trackType, &sourceEventID, &rawDurationSeconds, &projectionVersionMS); err != nil {
 			return fmt.Errorf("processing_5m scan: %w", err)
 		}
 		tenantUUID, tenantErr := uuid.Parse(tenantID)
@@ -1646,7 +1657,10 @@ func (h *AnalyticsHandler) rebuildApiUsage5m(ctx context.Context, windowStart, w
 	// destination column. The downstream hourly/daily MVs merge the
 	// states via uniqCombinedMergeState; query-time finalization uses
 	// uniqCombinedMerge.
-	projectionVersionMS := time.Now().UnixMilli()
+	//
+	// Each row is versioned by the newest ingested_at_ms among the source
+	// events it aggregates: a pass that saw more events for a row's window
+	// carries a newer version than one that saw fewer.
 	if err := h.clickhouse.Exec(ctx, `
 		INSERT INTO periscope.api_usage_5m
 			(window_start, tenant_id, auth_type, operation_type, operation_name, service,
@@ -1659,6 +1673,7 @@ func (h *AnalyticsHandler) rebuildApiUsage5m(ctx context.Context, windowStart, w
 			WHERE ingested_at_ms >= ? AND ingested_at_ms < ?
 		), dedup AS (
 			SELECT tenant_id, source_event_id,
+				max(ingested_at_ms) AS source_version_ms,
 				argMax(timestamp, ingested_at_ms) AS source_timestamp,
 				argMax(auth_type, ingested_at_ms) AS auth_type,
 				argMax(operation_type, ingested_at_ms) AS operation_type,
@@ -1699,12 +1714,12 @@ func (h *AnalyticsHandler) rebuildApiUsage5m(ctx context.Context, windowStart, w
 			sum(llm_output_tokens)                       AS llm_output_tokens,
 			uniqCombinedArrayState(user_hashes)          AS unique_users_state,
 			uniqCombinedArrayState(token_hashes)         AS unique_tokens_state,
-			?                                            AS projection_version_ms,
+			max(source_version_ms)                       AS projection_version_ms,
 			root_fields
 		FROM dedup
 		GROUP BY window_start, tenant_id, auth_type, operation_type, operation_name,
 		         service, llm_model, llm_provider, root_fields`,
-		windowStart.UnixMilli(), windowEnd.UnixMilli(), projectionVersionMS); err != nil {
+		windowStart.UnixMilli(), windowEnd.UnixMilli()); err != nil {
 		return fmt.Errorf("api_usage_5m insert: %w", err)
 	}
 	if h.metrics != nil && h.metrics.HandlerWrites != nil {

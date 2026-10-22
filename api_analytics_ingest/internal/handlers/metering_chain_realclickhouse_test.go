@@ -170,15 +170,20 @@ func TestSourceFactProjectionAndLedgerReplay_RealClickHouse(t *testing.T) {
 	if ledgerSeconds != 480 {
 		t.Fatalf("materialized ledger seconds=%d, want corrected 480", ledgerSeconds)
 	}
-	var physicalRows, logicalRows uint64
-	if err := conn.QueryRow(ctx, `SELECT count() FROM periscope.viewer_usage_5m WHERE tenant_id = ?`, tenantID).Scan(&physicalRows); err != nil {
+	// A replay derives its version from the same source projection, so it
+	// writes exactly the rows the first rebuild wrote.
+	var distinctProjections, logicalRows uint64
+	if err := conn.QueryRow(ctx, `SELECT count() FROM (
+		SELECT DISTINCT window_start, cluster_id, stream_id, node_id, session_id,
+			seconds_observed, up_bytes_observed, down_bytes_observed, source_event_id, projection_version_ms
+		FROM periscope.viewer_usage_5m WHERE tenant_id = ?)`, tenantID).Scan(&distinctProjections); err != nil {
 		t.Fatal(err)
 	}
 	if err := conn.QueryRow(ctx, `SELECT count() FROM periscope.viewer_usage_5m_v WHERE tenant_id = ?`, tenantID).Scan(&logicalRows); err != nil {
 		t.Fatal(err)
 	}
-	if physicalRows != 2*logicalRows {
-		t.Fatalf("ledger replay physical=%d logical=%d, want exact 2x collapse", physicalRows, logicalRows)
+	if logicalRows == 0 || distinctProjections != logicalRows {
+		t.Fatalf("ledger replay distinct projections=%d logical=%d, want the replay to repeat the first projection exactly", distinctProjections, logicalRows)
 	}
 	if err := h.rebuildDeliveryUsage5m(ctx, projectionStart, projectionEnd); err != nil {
 		t.Fatalf("first delivery ledger rebuild: %v", err)
