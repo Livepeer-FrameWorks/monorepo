@@ -56,7 +56,6 @@ type ClientConfig struct {
 // NewClient creates a new Decklog gRPC client
 func NewClient(cfg ClientConfig, logger logging.Logger) (*Client, error) {
 	var opts []grpc.DialOption
-	var connectParams *grpc.ConnectParams
 
 	transport, err := grpcutil.ClientTLS(grpcutil.ClientTLSConfig{
 		CACertFile:        cfg.CACertFile,
@@ -72,10 +71,7 @@ func NewClient(cfg ClientConfig, logger logging.Logger) (*Client, error) {
 
 	// Connect to server
 	if cfg.Timeout > 0 {
-		connectParams = &grpc.ConnectParams{MinConnectTimeout: cfg.Timeout}
-	}
-	if connectParams != nil {
-		opts = append(opts, grpc.WithConnectParams(*connectParams))
+		opts = append(opts, grpcutil.WithConnectParams(cfg.Timeout))
 	}
 	conn, err := grpc.NewClient(cfg.Target, opts...)
 	if err != nil {
@@ -165,7 +161,6 @@ func NewBatchedClient(cfg BatchedClientConfig, logger logging.Logger) (*BatchedC
 	}
 
 	var opts []grpc.DialOption
-	var connectParams *grpc.ConnectParams
 
 	transport, err := grpcutil.ClientTLS(grpcutil.ClientTLSConfig{
 		CACertFile:        cfg.CACertFile,
@@ -181,10 +176,7 @@ func NewBatchedClient(cfg BatchedClientConfig, logger logging.Logger) (*BatchedC
 
 	// Connect to server
 	if cfg.Timeout > 0 {
-		connectParams = &grpc.ConnectParams{MinConnectTimeout: cfg.Timeout}
-	}
-	if connectParams != nil {
-		opts = append(opts, grpc.WithConnectParams(*connectParams))
+		opts = append(opts, grpcutil.WithConnectParams(cfg.Timeout))
 	}
 	conn, err := grpc.NewClient(cfg.Target, opts...)
 	if err != nil {

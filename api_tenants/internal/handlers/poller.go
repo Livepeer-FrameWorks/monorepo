@@ -422,7 +422,7 @@ func (p healthProbe) check(inst serviceInstance, proto string) error {
 		if err != nil {
 			return fmt.Errorf("gRPC TLS config for %s: %w", addr, err)
 		}
-		conn, err := grpc.NewClient(addr, transport, grpc.WithConnectParams(grpc.ConnectParams{MinConnectTimeout: healthProbeTimeout}))
+		conn, err := grpc.NewClient(addr, transport, grpcutil.WithConnectParams(healthProbeTimeout))
 		if err != nil {
 			return fmt.Errorf("gRPC dial %s: %w", addr, err)
 		}
@@ -881,7 +881,7 @@ func (m *grpcWatchManager) watchGrpcInstance(ctx context.Context, inst serviceIn
 	conn, err := grpc.NewClient(
 		addr,
 		transport,
-		grpc.WithConnectParams(grpc.ConnectParams{MinConnectTimeout: dialTimeout}),
+		grpcutil.WithConnectParams(dialTimeout),
 	)
 	if err != nil {
 		logger.WithError(err).WithField("service", inst.serviceID).WithField("addr", addr).Debug("gRPC watch dial failed")

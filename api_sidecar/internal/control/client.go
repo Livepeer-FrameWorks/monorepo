@@ -1916,7 +1916,7 @@ func runClient(endpoint controlEndpoint, logger logging.Logger) error {
 
 	dialOpts := []grpc.DialOption{
 		grpc.WithTransportCredentials(creds),
-		grpc.WithConnectParams(grpc.ConnectParams{MinConnectTimeout: controlConnectTimeout}),
+		grpcutil.WithConnectParams(controlConnectTimeout),
 		grpc.WithKeepaliveParams(controlKeepalive),
 	}
 	// Under TLS the credentials' server name is the authority, so a resolved
