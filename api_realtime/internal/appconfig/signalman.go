@@ -37,7 +37,7 @@ type Signalman struct {
 
 	MaxConnectionsPerTenant int `env:"SIGNALMAN_MAX_CONNECTIONS_PER_TENANT" default:"0" desc:"Maximum concurrent Subscribe streams per tenant. 0 or less disables the limit." introduced:"v0.3.0"`
 
-	QuartermasterGRPCAddr          string `env:"QUARTERMASTER_GRPC_ADDR" default:"quartermaster:19002" desc:"Quartermaster gRPC address used for service registration." introduced:"v0.3.0"`
+	QuartermasterGRPCAddr          string `env:"QUARTERMASTER_GRPC_ADDR" default:"quartermaster:@port(quartermaster.grpc)" desc:"Quartermaster gRPC address used for service registration." introduced:"v0.3.0"`
 	QuartermasterGRPCTLSServerName string `env:"QUARTERMASTER_GRPC_TLS_SERVER_NAME" desc:"TLS server name override for the Quartermaster connection. Empty uses the canonical internal name." introduced:"v0.3.0"`
 	AdvertiseHost                  string `env:"SIGNALMAN_HOST" default:"signalman" desc:"Host name this instance advertises when it registers with Quartermaster." introduced:"v0.3.0"`
 }

@@ -34,15 +34,15 @@ type Skipper struct {
 	AdvertiseHost string `env:"SKIPPER_HOST" default:"skipper" desc:"Host name this instance advertises when it registers with Quartermaster." introduced:"v0.3.0"`
 	Region        string `env:"REGION" desc:"Region label attached to usage events sent to Decklog." introduced:"v0.3.0"`
 
-	PeriscopeGRPCAddr              string `env:"PERISCOPE_GRPC_ADDR" default:"periscope-query:19004" desc:"Periscope Query gRPC address for heartbeat diagnostics and infrastructure monitoring." introduced:"v0.3.0"`
+	PeriscopeGRPCAddr              string `env:"PERISCOPE_GRPC_ADDR" default:"periscope-query:@port(periscope-query.grpc)" desc:"Periscope Query gRPC address for heartbeat diagnostics and infrastructure monitoring." introduced:"v0.3.0"`
 	PeriscopeGRPCTLSServerName     string `env:"PERISCOPE_GRPC_TLS_SERVER_NAME" desc:"TLS server name override for the Periscope Query connection. Empty uses the canonical internal name." introduced:"v0.3.0"`
-	PurserGRPCAddr                 string `env:"PURSER_GRPC_ADDR" default:"purser:19003" desc:"Purser gRPC address for subscription tier checks and billing contacts." introduced:"v0.3.0"`
+	PurserGRPCAddr                 string `env:"PURSER_GRPC_ADDR" default:"purser:@port(purser.grpc)" desc:"Purser gRPC address for subscription tier checks and billing contacts." introduced:"v0.3.0"`
 	PurserGRPCTLSServerName        string `env:"PURSER_GRPC_TLS_SERVER_NAME" desc:"TLS server name override for the Purser connection. Empty uses the canonical internal name." introduced:"v0.3.0"`
-	CommodoreGRPCAddr              string `env:"COMMODORE_GRPC_ADDR" default:"commodore:19001" desc:"Commodore gRPC address for tenant notification contacts and stream monitoring." introduced:"v0.3.0"`
+	CommodoreGRPCAddr              string `env:"COMMODORE_GRPC_ADDR" default:"commodore:@port(commodore.grpc)" desc:"Commodore gRPC address for tenant notification contacts and stream monitoring." introduced:"v0.3.0"`
 	CommodoreGRPCTLSServerName     string `env:"COMMODORE_GRPC_TLS_SERVER_NAME" desc:"TLS server name override for the Commodore connection. Empty uses the canonical internal name." introduced:"v0.3.0"`
-	DecklogGRPCAddr                string `env:"DECKLOG_GRPC_ADDR" default:"decklog:18006" desc:"Decklog gRPC address for usage metering and websocket notifications." introduced:"v0.3.0"`
+	DecklogGRPCAddr                string `env:"DECKLOG_GRPC_ADDR" default:"decklog:@port(decklog.grpc)" desc:"Decklog gRPC address for usage metering and websocket notifications." introduced:"v0.3.0"`
 	DecklogGRPCTLSServerName       string `env:"DECKLOG_GRPC_TLS_SERVER_NAME" desc:"TLS server name override for the Decklog connection. Empty uses the canonical internal name." introduced:"v0.3.0"`
-	QuartermasterGRPCAddr          string `env:"QUARTERMASTER_GRPC_ADDR" default:"quartermaster:19002" desc:"Quartermaster gRPC address for tenant and cluster listings and service registration." introduced:"v0.3.0"`
+	QuartermasterGRPCAddr          string `env:"QUARTERMASTER_GRPC_ADDR" default:"quartermaster:@port(quartermaster.grpc)" desc:"Quartermaster gRPC address for tenant and cluster listings and service registration." introduced:"v0.3.0"`
 	QuartermasterGRPCTLSServerName string `env:"QUARTERMASTER_GRPC_TLS_SERVER_NAME" desc:"TLS server name override for the Quartermaster connection. Empty uses the canonical internal name." introduced:"v0.3.0"`
 	LookoutGRPCAddr                string `env:"LOOKOUT_GRPC_ADDR" desc:"Lookout gRPC address used to attach investigation reports to incidents. Lookout-triggered investigations run only when this and KAFKA_BROKERS are set." introduced:"v0.3.8"`
 	LookoutGRPCTLSServerName       string `env:"LOOKOUT_GRPC_TLS_SERVER_NAME" desc:"TLS server name override for the Lookout connection. Empty uses the canonical internal name." introduced:"v0.3.8"`

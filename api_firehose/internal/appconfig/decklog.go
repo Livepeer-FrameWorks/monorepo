@@ -19,7 +19,7 @@ type Decklog struct {
 	config.Registration
 
 	GRPCPort    string `env:"PORT" default:"@servicedefs.grpc_port" desc:"TCP port for the gRPC listener that receives events. Also the port registered with Quartermaster." introduced:"v0.3.0"`
-	MetricsPort string `env:"DECKLOG_METRICS_PORT" default:"18026" desc:"TCP port for the HTTP listener that serves health, readiness, and metrics." introduced:"v0.3.0"`
+	MetricsPort string `env:"DECKLOG_METRICS_PORT" default:"@port(decklog.metrics)" desc:"TCP port for the HTTP listener that serves health, readiness, and metrics." introduced:"v0.3.0"`
 
 	ServiceToken string `env:"SERVICE_TOKEN" required:"true" secret:"true" desc:"Service token required on incoming gRPC calls and sent on Quartermaster calls." introduced:"v0.3.0"`
 
@@ -33,7 +33,7 @@ type Decklog struct {
 	RegionID     string `env:"REGION_ID" desc:"Region label backfilled onto events without a source region when REGION is empty." introduced:"v0.3.0"`
 	SourceRegion string `env:"DECKLOG_SOURCE_REGION" desc:"Region label backfilled onto events without a source region when REGION and REGION_ID are empty." introduced:"v0.3.0"`
 
-	QuartermasterGRPCAddr          string `env:"QUARTERMASTER_GRPC_ADDR" default:"quartermaster:19002" desc:"Quartermaster gRPC address used for service registration." introduced:"v0.3.0"`
+	QuartermasterGRPCAddr          string `env:"QUARTERMASTER_GRPC_ADDR" default:"quartermaster:@port(quartermaster.grpc)" desc:"Quartermaster gRPC address used for service registration." introduced:"v0.3.0"`
 	QuartermasterGRPCTLSServerName string `env:"QUARTERMASTER_GRPC_TLS_SERVER_NAME" desc:"TLS server name override for the Quartermaster connection. Empty uses the canonical internal name." introduced:"v0.3.0"`
 	AdvertiseHost                  string `env:"DECKLOG_HOST" default:"decklog" desc:"Host name this instance advertises when it registers with Quartermaster." introduced:"v0.3.0"`
 }

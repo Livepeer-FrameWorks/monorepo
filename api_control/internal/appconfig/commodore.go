@@ -20,7 +20,7 @@ type FieldEncryptionRotation struct {
 // QuartermasterClient is the Quartermaster connection read by the server and
 // the bootstrap subcommand.
 type QuartermasterClient struct {
-	QuartermasterGRPCAddr          string `env:"QUARTERMASTER_GRPC_ADDR" default:"quartermaster:19002" desc:"Quartermaster gRPC address for tenant, cluster, and registration calls." introduced:"v0.3.0"`
+	QuartermasterGRPCAddr          string `env:"QUARTERMASTER_GRPC_ADDR" default:"quartermaster:@port(quartermaster.grpc)" desc:"Quartermaster gRPC address for tenant, cluster, and registration calls." introduced:"v0.3.0"`
 	QuartermasterGRPCTLSServerName string `env:"QUARTERMASTER_GRPC_TLS_SERVER_NAME" desc:"TLS server name override for the Quartermaster connection. Empty uses the canonical internal name." introduced:"v0.3.0"`
 }
 
@@ -61,8 +61,8 @@ type Commodore struct {
 	MediaAuthoritySealRecipients          string `env:"MEDIA_AUTHORITY_SEAL_RECIPIENTS" desc:"Rendered by the CLI. Maps control-cell IDs to X25519 recipient keys and enables sealed-secret delivery in media authority." introduced:"v0.3.0"`
 
 	NavigatorGRPCAddr string `env:"NAVIGATOR_GRPC_ADDR" desc:"Navigator gRPC address for tenant alias status. Empty disables tenant alias lookups." introduced:"v0.3.0"`
-	PurserGRPCAddr    string `env:"PURSER_GRPC_ADDR" default:"purser:19003" desc:"Purser gRPC address for billing and user-limit checks." introduced:"v0.3.0"`
-	DecklogGRPCAddr   string `env:"DECKLOG_GRPC_ADDR" default:"decklog:18006" desc:"Decklog gRPC address for service events." introduced:"v0.3.0"`
+	PurserGRPCAddr    string `env:"PURSER_GRPC_ADDR" default:"purser:@port(purser.grpc)" desc:"Purser gRPC address for billing and user-limit checks." introduced:"v0.3.0"`
+	DecklogGRPCAddr   string `env:"DECKLOG_GRPC_ADDR" default:"decklog:@port(decklog.grpc)" desc:"Decklog gRPC address for service events." introduced:"v0.3.0"`
 
 	FoghornGRPCTLSServerName   string `env:"FOGHORN_GRPC_TLS_SERVER_NAME" desc:"TLS server name override for Foghorn connections. Empty uses the canonical internal name." introduced:"v0.3.0"`
 	NavigatorGRPCTLSServerName string `env:"NAVIGATOR_GRPC_TLS_SERVER_NAME" desc:"TLS server name override for the Navigator connection. Empty uses the canonical internal name." introduced:"v0.3.0"`
@@ -144,7 +144,7 @@ type CommodoreBootstrap struct {
 	JWTSecret          string `env:"JWT_SECRET" secret:"true" desc:"Included as legacy field-encryption key material for pull-stream source URIs. Required when the desired state declares pull streams." introduced:"v0.3.0"`
 	FieldEncryptionKey string `env:"FIELD_ENCRYPTION_KEY" secret:"true" desc:"Active field-encryption master secret. Required when the desired state declares pull streams." introduced:"v0.3.0"`
 
-	PurserGRPCAddr           string `env:"PURSER_GRPC_ADDR" default:"purser:19003" desc:"Purser gRPC address for the node placement check that runs when a declared source location names nodes." introduced:"v0.3.8"`
+	PurserGRPCAddr           string `env:"PURSER_GRPC_ADDR" default:"purser:@port(purser.grpc)" desc:"Purser gRPC address for the node placement check that runs when a declared source location names nodes." introduced:"v0.3.8"`
 	PurserGRPCTLSServerName  string `env:"PURSER_GRPC_TLS_SERVER_NAME" desc:"TLS server name override for the Purser connection. Empty uses the canonical internal name." introduced:"v0.3.8"`
 	FoghornGRPCTLSServerName string `env:"FOGHORN_GRPC_TLS_SERVER_NAME" desc:"TLS server name override for the Foghorn connections of the node placement check. Empty uses the canonical internal name." introduced:"v0.3.8"`
 }

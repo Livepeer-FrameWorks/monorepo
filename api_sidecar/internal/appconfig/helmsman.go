@@ -48,8 +48,8 @@ type EdgeRuntime struct {
 	CapProcessing string `env:"HELMSMAN_CAP_PROCESSING" default:"true" desc:"Advertises the processing role. Registration treats a value that is not a boolean as true; node lifecycle updates count only true or 1 as enabled." introduced:"v0.3.0"`
 	MaxTranscodes string `env:"HELMSMAN_MAX_TRANSCODES" default:"0" desc:"Video transcode slots a processing node advertises. 0 or a value that is not an integer advertises no ceiling." introduced:"v0.3.0"`
 
-	MistWebhookBaseURL string `env:"HELMSMAN_WEBHOOK_URL" default:"http://localhost:18007" desc:"Base URL of the Helmsman webhook routes that the managed MistServer trigger configuration points at." introduced:"v0.3.0"`
-	RelayBaseURL       string `env:"HELMSMAN_RELAY_BASE_URL" default:"http://127.0.0.1:18007" desc:"URL MistServer on this node uses to reach the Helmsman artifact relay. Set it only when MistServer reaches Helmsman through a service name." introduced:"v0.3.0"`
+	MistWebhookBaseURL string `env:"HELMSMAN_WEBHOOK_URL" default:"http://localhost:@port(helmsman)" desc:"Base URL of the Helmsman webhook routes that the managed MistServer trigger configuration points at." introduced:"v0.3.0"`
+	RelayBaseURL       string `env:"HELMSMAN_RELAY_BASE_URL" default:"http://127.0.0.1:@port(helmsman)" desc:"URL MistServer on this node uses to reach the Helmsman artifact relay. Set it only when MistServer reaches Helmsman through a service name." introduced:"v0.3.0"`
 
 	GRPCTLSCAPath    string `env:"GRPC_TLS_CA_PATH" desc:"CA bundle that verifies Foghorn on the control connection and where Helmsman writes the CA bundle delivered in the config seed. Empty uses the system roots for the connection and /etc/frameworks/pki/ca.crt for the written bundle." introduced:"v0.3.0"`
 	EdgeTLSCertPath  string `env:"HELMSMAN_TLS_CERT_PATH" default:"/etc/frameworks/certs/cert.pem" desc:"Path where Helmsman writes the edge TLS certificate delivered in the config seed." introduced:"v0.3.0"`
@@ -60,8 +60,8 @@ type EdgeRuntime struct {
 	CaddyAdminSocket string `env:"CADDY_ADMIN_SOCKET" desc:"Unix socket of the Caddy admin API used for config reloads and restarts. Takes precedence over CADDY_ADMIN_URL." introduced:"v0.3.0"`
 	CaddyAdminURL    string `env:"CADDY_ADMIN_URL" desc:"Caddy admin API address used when CADDY_ADMIN_SOCKET is empty. Empty uses localhost:2019." introduced:"v0.3.0"`
 	CaddyConfigPath  string `env:"CADDY_CONFIG_PATH" default:"/etc/caddy/Caddyfile" desc:"Caddyfile that Helmsman writes and posts to the Caddy admin API on reload." introduced:"v0.3.0"`
-	ChandlerUpstream string `env:"CHANDLER_URL" default:"chandler:18020" desc:"Chandler host:port that the Caddyfile rendered from the config seed reverse-proxies to." introduced:"v0.3.0"`
-	MistHTTPUpstream string `env:"MISTSERVER_HTTP_URL" default:"http://mistserver:8080" desc:"MistServer HTTP output URL that the rendered Caddyfile reverse-proxies to. An http:// prefix is stripped." introduced:"v0.3.0"`
+	ChandlerUpstream string `env:"CHANDLER_URL" default:"chandler:@port(chandler)" desc:"Chandler host:port that the Caddyfile rendered from the config seed reverse-proxies to." introduced:"v0.3.0"`
+	MistHTTPUpstream string `env:"MISTSERVER_HTTP_URL" default:"http://mistserver:@port(mistserver)" desc:"MistServer HTTP output URL that the rendered Caddyfile reverse-proxies to. An http:// prefix is stripped." introduced:"v0.3.0"`
 
 	BandwidthLimitBytesPerSec string `env:"HELMSMAN_BW_LIMIT_BYTES_PER_SEC" desc:"Operator-pinned node bandwidth limit in bytes per second, written to MistServer and reported to Foghorn. Takes precedence over the other bandwidth limit keys." introduced:"v0.3.0"`
 	BandwidthLimitBytes       string `env:"HELMSMAN_BW_LIMIT_BYTES" desc:"Node bandwidth limit in bytes per second, used when HELMSMAN_BW_LIMIT_BYTES_PER_SEC is empty or 0." introduced:"v0.3.0"`
@@ -124,7 +124,7 @@ type Helmsman struct {
 	RequestedOperationalMode string `env:"HELMSMAN_OPERATIONAL_MODE" default:"normal" desc:"Operational mode requested at registration: normal, draining, or maintenance. Foghorn stays authoritative and may override it." introduced:"v0.3.0"`
 
 	PublicBindAddr     string `env:"HELMSMAN_BIND_ADDR" desc:"Bind address of the edge API, MistServer webhook, and artifact relay listener on PORT. Empty binds all interfaces." introduced:"v0.3.0"`
-	ManagementPort     string `env:"HELMSMAN_MANAGEMENT_PORT" default:"18017" desc:"TCP port of the management listener that serves node mode, trigger WAL, and Prometheus node routes." introduced:"v0.3.0"`
+	ManagementPort     string `env:"HELMSMAN_MANAGEMENT_PORT" default:"@port(helmsman.management)" desc:"TCP port of the management listener that serves node mode, trigger WAL, and Prometheus node routes." introduced:"v0.3.0"`
 	ManagementBindAddr string `env:"HELMSMAN_MANAGEMENT_BIND_ADDR" default:"127.0.0.1" desc:"Bind address of the management listener. Must be a loopback address or localhost." introduced:"v0.3.0"`
 }
 

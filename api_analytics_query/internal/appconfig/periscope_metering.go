@@ -23,7 +23,7 @@ type PeriscopeMetering struct {
 	MeteringWorkerID     string `env:"METERING_WORKER_ID" desc:"Lease owner ID of this replica. Empty uses the host name plus a random UUID, so the owner changes on restart." introduced:"v0.3.0"`
 	BillingKafkaTopic    string `env:"BILLING_KAFKA_TOPIC" default:"billing.usage_reports" desc:"Kafka topic that usage reports are published to." introduced:"v0.3.0"`
 
-	QuartermasterGRPCAddr          string `env:"QUARTERMASTER_GRPC_ADDR" default:"quartermaster:19002" desc:"Quartermaster gRPC address used to resolve a tenant's primary cluster." introduced:"v0.3.0"`
+	QuartermasterGRPCAddr          string `env:"QUARTERMASTER_GRPC_ADDR" default:"quartermaster:@port(quartermaster.grpc)" desc:"Quartermaster gRPC address used to resolve a tenant's primary cluster." introduced:"v0.3.0"`
 	QuartermasterGRPCTLSServerName string `env:"QUARTERMASTER_GRPC_TLS_SERVER_NAME" desc:"TLS server name override for the Quartermaster connection. Empty uses the canonical internal name." introduced:"v0.3.0"`
 	GRPCTLSCAPath                  string `env:"GRPC_TLS_CA_PATH" desc:"CA bundle used to verify the Quartermaster gRPC server." introduced:"v0.3.0"`
 	GRPCAllowInsecure              bool   `env:"GRPC_ALLOW_INSECURE" default:"false" desc:"Allows a plaintext Quartermaster connection when no TLS material is configured. Development only." introduced:"v0.3.0"`

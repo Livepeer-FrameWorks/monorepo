@@ -26,7 +26,7 @@ type Chandler struct {
 
 	QuartermasterGRPCAddr          string `env:"QUARTERMASTER_GRPC_ADDR" desc:"Quartermaster gRPC address for the cluster storage lookup and registration. Empty joins QUARTERMASTER_HOST and QUARTERMASTER_GRPC_PORT." introduced:"v0.3.0"`
 	QuartermasterHost              string `env:"QUARTERMASTER_HOST" default:"quartermaster" desc:"Quartermaster host used when QUARTERMASTER_GRPC_ADDR is empty." introduced:"v0.3.0"`
-	QuartermasterGRPCPort          string `env:"QUARTERMASTER_GRPC_PORT" default:"19002" desc:"Quartermaster gRPC port used when QUARTERMASTER_GRPC_ADDR is empty." introduced:"v0.3.0"`
+	QuartermasterGRPCPort          string `env:"QUARTERMASTER_GRPC_PORT" default:"@port(quartermaster.grpc)" desc:"Quartermaster gRPC port used when QUARTERMASTER_GRPC_ADDR is empty." introduced:"v0.3.0"`
 	QuartermasterGRPCTLSServerName string `env:"QUARTERMASTER_GRPC_TLS_SERVER_NAME" desc:"TLS server name override for the Quartermaster connection. Empty uses the canonical internal name." introduced:"v0.3.0"`
 	AdvertiseHost                  string `env:"CHANDLER_HOST" default:"chandler" desc:"Host name this instance advertises when it registers with Quartermaster." introduced:"v0.3.0"`
 

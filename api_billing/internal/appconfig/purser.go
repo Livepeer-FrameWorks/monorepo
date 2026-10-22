@@ -15,7 +15,7 @@ import (
 // QuartermasterClient is the Quartermaster connection read by the server and
 // the bootstrap subcommands.
 type QuartermasterClient struct {
-	QuartermasterGRPCAddr          string `env:"QUARTERMASTER_GRPC_ADDR" default:"quartermaster:19002" desc:"Quartermaster gRPC address for tenant, cluster access, and registration calls." introduced:"v0.3.0"`
+	QuartermasterGRPCAddr          string `env:"QUARTERMASTER_GRPC_ADDR" default:"quartermaster:@port(quartermaster.grpc)" desc:"Quartermaster gRPC address for tenant, cluster access, and registration calls." introduced:"v0.3.0"`
 	QuartermasterGRPCTLSServerName string `env:"QUARTERMASTER_GRPC_TLS_SERVER_NAME" desc:"TLS server name override for the Quartermaster connection. Empty uses the canonical internal name." introduced:"v0.3.0"`
 }
 
@@ -46,9 +46,9 @@ type Purser struct {
 
 	ClusterAccessMaterializationSecret string `env:"CLUSTER_ACCESS_MATERIALIZATION_SECRET" required:"true" secret:"true" desc:"Shared with Quartermaster. Signs the commercial and owner grant materialization and revocation envelopes Purser sends to Quartermaster. Read at startup; a rotation takes effect when Purser and Quartermaster restart." introduced:"v0.3.0"`
 
-	CommodoreGRPCAddr          string `env:"COMMODORE_GRPC_ADDR" default:"commodore:19001" desc:"Commodore gRPC address for stream termination and cache invalidation when balances or suspensions change." introduced:"v0.3.0"`
-	PeriscopeGRPCAddr          string `env:"PERISCOPE_GRPC_ADDR" default:"periscope-query:19004" desc:"Periscope Query gRPC address for invoice usage enrichment such as unique viewer counts and geographic breakdowns." introduced:"v0.3.0"`
-	DecklogGRPCAddr            string `env:"DECKLOG_GRPC_ADDR" default:"decklog:18006" desc:"Decklog gRPC address for service events." introduced:"v0.3.0"`
+	CommodoreGRPCAddr          string `env:"COMMODORE_GRPC_ADDR" default:"commodore:@port(commodore.grpc)" desc:"Commodore gRPC address for stream termination and cache invalidation when balances or suspensions change." introduced:"v0.3.0"`
+	PeriscopeGRPCAddr          string `env:"PERISCOPE_GRPC_ADDR" default:"periscope-query:@port(periscope-query.grpc)" desc:"Periscope Query gRPC address for invoice usage enrichment such as unique viewer counts and geographic breakdowns." introduced:"v0.3.0"`
+	DecklogGRPCAddr            string `env:"DECKLOG_GRPC_ADDR" default:"decklog:@port(decklog.grpc)" desc:"Decklog gRPC address for service events." introduced:"v0.3.0"`
 	CommodoreGRPCTLSServerName string `env:"COMMODORE_GRPC_TLS_SERVER_NAME" desc:"TLS server name override for the Commodore connection. Empty uses the canonical internal name." introduced:"v0.3.0"`
 	PeriscopeGRPCTLSServerName string `env:"PERISCOPE_GRPC_TLS_SERVER_NAME" desc:"TLS server name override for the Periscope Query connection. Empty uses the canonical internal name." introduced:"v0.3.0"`
 	DecklogGRPCTLSServerName   string `env:"DECKLOG_GRPC_TLS_SERVER_NAME" desc:"TLS server name override for the Decklog connection. Empty uses the canonical internal name." introduced:"v0.3.0"`
@@ -111,7 +111,7 @@ type PurserRuntime struct {
 
 	SMTPAllowInsecure bool `env:"SMTP_ALLOW_INSECURE" default:"false" desc:"Sends billing notification emails to an SMTP server that does not offer STARTTLS. For an isolated development or test relay only; never set it in production." introduced:"v0.3.10"`
 
-	KafkaBrokers      []string `env:"KAFKA_BROKERS" default:"kafka:9092" desc:"Comma-separated Kafka bootstrap brokers for the billing usage report consumer." introduced:"v0.3.0"`
+	KafkaBrokers      []string `env:"KAFKA_BROKERS" default:"kafka:@port(kafka)" desc:"Comma-separated Kafka bootstrap brokers for the billing usage report consumer." introduced:"v0.3.0"`
 	KafkaClusterID    string   `env:"KAFKA_CLUSTER_ID" default:"local" desc:"Kafka cluster identifier passed to the billing usage report consumer." introduced:"v0.3.0"`
 	KafkaClientID     string   `env:"KAFKA_CLIENT_ID" default:"purser" desc:"Kafka client ID of the billing usage report consumer." introduced:"v0.3.0"`
 	KafkaGroupID      string   `env:"KAFKA_GROUP_ID" default:"purser-ingest" desc:"Kafka consumer group of the billing usage report consumer." introduced:"v0.3.0"`

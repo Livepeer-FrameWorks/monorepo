@@ -46,11 +46,11 @@ type Quartermaster struct {
 	PlatformRootDomain           string `env:"BRAND_DOMAIN" default:"frameworks.network" desc:"Platform root domain used to build public service host names." introduced:"v0.3.0"`
 	PhysicalEndpointStaleSeconds int    `env:"NAVIGATOR_DNS_HEALTH_STALE_SECONDS" default:"300" desc:"Age in seconds after which a physical endpoint health report is too old to publish. Navigator reads the same key so both apply one freshness gate." introduced:"v0.3.0"`
 
-	QuartermasterGRPCAddr string `env:"QUARTERMASTER_GRPC_ADDR" default:"quartermaster:19002" desc:"gRPC address this instance advertises and dials for its own registration." introduced:"v0.3.0"`
+	QuartermasterGRPCAddr string `env:"QUARTERMASTER_GRPC_ADDR" default:"quartermaster:@port(quartermaster.grpc)" desc:"gRPC address this instance advertises and dials for its own registration." introduced:"v0.3.0"`
 	NavigatorGRPCAddr     string `env:"NAVIGATOR_GRPC_ADDR" desc:"Navigator gRPC address. Empty disables DNS features." introduced:"v0.3.0"`
-	DecklogGRPCAddr       string `env:"DECKLOG_GRPC_ADDR" default:"decklog:18006" desc:"Decklog gRPC address for service events." introduced:"v0.3.0"`
-	PurserGRPCAddr        string `env:"PURSER_GRPC_ADDR" default:"purser:19003" desc:"Purser gRPC address for billing status lookups." introduced:"v0.3.0"`
-	CommodoreGRPCAddr     string `env:"COMMODORE_GRPC_ADDR" default:"commodore:19001" desc:"Commodore gRPC address for media authority refresh delivery." introduced:"v0.3.0"`
+	DecklogGRPCAddr       string `env:"DECKLOG_GRPC_ADDR" default:"decklog:@port(decklog.grpc)" desc:"Decklog gRPC address for service events." introduced:"v0.3.0"`
+	PurserGRPCAddr        string `env:"PURSER_GRPC_ADDR" default:"purser:@port(purser.grpc)" desc:"Purser gRPC address for billing status lookups." introduced:"v0.3.0"`
+	CommodoreGRPCAddr     string `env:"COMMODORE_GRPC_ADDR" default:"commodore:@port(commodore.grpc)" desc:"Commodore gRPC address for media authority refresh delivery." introduced:"v0.3.0"`
 
 	QuartermasterGRPCTLSServerName  string `env:"QUARTERMASTER_GRPC_TLS_SERVER_NAME" desc:"TLS server name override for the self-registration connection and for gRPC health watches of Quartermaster instances. Empty uses the canonical internal name." introduced:"v0.3.0"`
 	NavigatorGRPCTLSServerName      string `env:"NAVIGATOR_GRPC_TLS_SERVER_NAME" desc:"TLS server name override for the Navigator connection and for gRPC health watches of Navigator instances. Empty uses the canonical internal name." introduced:"v0.3.0"`

@@ -32,10 +32,10 @@ type FoghornRedis struct {
 // FoghornListeners are the HTTP and gRPC listeners beyond the public PORT.
 type FoghornListeners struct {
 	PublicHTTPBindAddr   string `env:"FOGHORN_PUBLIC_HTTP_BIND_ADDR" desc:"Bind address of the public HTTP listener on PORT that serves playback, ingest, and Livepeer webhook routes. Empty binds the BIND_ADDRS addresses, or every interface when BIND_ADDRS is empty." introduced:"v0.3.0"`
-	InternalHTTPPort     string `env:"FOGHORN_INTERNAL_HTTP_PORT" default:"18027" desc:"TCP port of the internal HTTP listener that serves node administration, the dashboard, debug routes, and authenticated Mist source lookups." introduced:"v0.3.0"`
+	InternalHTTPPort     string `env:"FOGHORN_INTERNAL_HTTP_PORT" default:"@port(foghorn.internal-http)" desc:"TCP port of the internal HTTP listener that serves node administration, the dashboard, debug routes, and authenticated Mist source lookups." introduced:"v0.3.0"`
 	InternalHTTPBindAddr string `env:"FOGHORN_INTERNAL_HTTP_BIND_ADDR" default:"127.0.0.1" desc:"Bind address of the internal HTTP listener." introduced:"v0.3.0"`
-	InternalGRPCBindAddr string `env:"FOGHORN_INTERNAL_GRPC_BIND_ADDR" default:":18019" desc:"host:port of the internal gRPC listener for mesh services, federation, and the HA command relay. It serves GRPC_TLS_CERT_PATH. An empty host binds the BIND_ADDRS addresses, or every interface when BIND_ADDRS is empty." introduced:"v0.3.0"`
-	ExternalGRPCBindAddr string `env:"FOGHORN_EXTERNAL_GRPC_BIND_ADDR" default:":18029" desc:"host:port of the external gRPC listener for Helmsman control streams and edge provisioning. It serves Navigator-issued cluster certificates. An empty host binds every interface whatever BIND_ADDRS says, since edges dial it from outside the mesh." introduced:"v0.3.0"`
+	InternalGRPCBindAddr string `env:"FOGHORN_INTERNAL_GRPC_BIND_ADDR" default:":@port(foghorn.grpc)" desc:"host:port of the internal gRPC listener for mesh services, federation, and the HA command relay. It serves GRPC_TLS_CERT_PATH. An empty host binds the BIND_ADDRS addresses, or every interface when BIND_ADDRS is empty." introduced:"v0.3.0"`
+	ExternalGRPCBindAddr string `env:"FOGHORN_EXTERNAL_GRPC_BIND_ADDR" default:":@port(foghorn.external-grpc)" desc:"host:port of the external gRPC listener for Helmsman control streams and edge provisioning. It serves Navigator-issued cluster certificates. An empty host binds every interface whatever BIND_ADDRS says, since edges dial it from outside the mesh." introduced:"v0.3.0"`
 	InternalGRPCPort     int    `env:"FOGHORN_INTERNAL_GRPC_PORT" desc:"gRPC port this instance registers with Quartermaster. 0 or unset uses the port of FOGHORN_INTERNAL_GRPC_BIND_ADDR." introduced:"v0.3.0"`
 
 	AdvertiseHost      string `env:"FOGHORN_HOST" desc:"Host name registered with Quartermaster, used for the HA relay address when FOGHORN_RELAY_ADVERTISE_HOST is empty, and a fallback host for Mist balancer URLs." introduced:"v0.3.0"`
@@ -47,10 +47,10 @@ type FoghornListeners struct {
 
 // FoghornClients are the control-plane gRPC connections.
 type FoghornClients struct {
-	DecklogGRPCAddr       string `env:"DECKLOG_GRPC_ADDR" default:"decklog:18006" desc:"Decklog gRPC address for trigger, routing, artifact, and federation events." introduced:"v0.3.0"`
-	QuartermasterGRPCAddr string `env:"QUARTERMASTER_GRPC_ADDR" default:"quartermaster:19002" desc:"Quartermaster gRPC address for registration, cluster descriptors, served cluster assignments, and edge health." introduced:"v0.3.0"`
-	CommodoreGRPCAddr     string `env:"COMMODORE_GRPC_ADDR" default:"commodore:19001" desc:"Commodore gRPC address for stream resolution and media authority replay." introduced:"v0.3.0"`
-	PurserGRPCAddr        string `env:"PURSER_GRPC_ADDR" default:"purser:19003" desc:"Purser gRPC address for x402 settlement and billing checks." introduced:"v0.3.0"`
+	DecklogGRPCAddr       string `env:"DECKLOG_GRPC_ADDR" default:"decklog:@port(decklog.grpc)" desc:"Decklog gRPC address for trigger, routing, artifact, and federation events." introduced:"v0.3.0"`
+	QuartermasterGRPCAddr string `env:"QUARTERMASTER_GRPC_ADDR" default:"quartermaster:@port(quartermaster.grpc)" desc:"Quartermaster gRPC address for registration, cluster descriptors, served cluster assignments, and edge health." introduced:"v0.3.0"`
+	CommodoreGRPCAddr     string `env:"COMMODORE_GRPC_ADDR" default:"commodore:@port(commodore.grpc)" desc:"Commodore gRPC address for stream resolution and media authority replay." introduced:"v0.3.0"`
+	PurserGRPCAddr        string `env:"PURSER_GRPC_ADDR" default:"purser:@port(purser.grpc)" desc:"Purser gRPC address for x402 settlement and billing checks." introduced:"v0.3.0"`
 	NavigatorGRPCAddr     string `env:"NAVIGATOR_GRPC_ADDR" desc:"Navigator gRPC address for cluster TLS bundles and ConfigSeed apply acknowledgements. Empty disables TLS bundle seeding." introduced:"v0.3.0"`
 
 	DecklogGRPCTLSServerName       string `env:"DECKLOG_GRPC_TLS_SERVER_NAME" desc:"TLS server name override for the Decklog connection. Empty uses the canonical internal name." introduced:"v0.3.0"`
@@ -126,7 +126,7 @@ type FoghornChandler struct {
 	ChandlerBaseURL     string `env:"CHANDLER_BASE_URL" desc:"Single local Chandler origin for every asset URL. Empty derives per-cluster Chandler origins from Quartermaster." introduced:"v0.3.0"`
 	ChandlerInternalURL string `env:"CHANDLER_INTERNAL_URL" desc:"Comma-separated in-cell Chandler base URLs that receive thumbnail cache invalidations. Empty uses the Chandler base URL." introduced:"v0.3.0"`
 	ChandlerHost        string `env:"CHANDLER_HOST" default:"chandler" desc:"Chandler host for the http fallback origin when no base URL is configured or derived." introduced:"v0.3.0"`
-	ChandlerPort        string `env:"CHANDLER_PORT" default:"18020" desc:"Chandler port for the http fallback origin." introduced:"v0.3.0"`
+	ChandlerPort        string `env:"CHANDLER_PORT" default:"@port(chandler)" desc:"Chandler port for the http fallback origin." introduced:"v0.3.0"`
 }
 
 // Foghorn is the startup configuration of the Foghorn server. Main installs a

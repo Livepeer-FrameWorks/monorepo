@@ -32,7 +32,7 @@ type PeriscopeIngest struct {
 	RawTriggersTopic     string   `env:"RAW_MIST_TRIGGERS_KAFKA_TOPIC" default:"analytics.raw_mist_triggers" desc:"Kafka topic of raw MistTrigger envelopes projected into raw_mist_triggers. - disables consumption on this instance." introduced:"v0.3.0"`
 	MirrorRegionPrefixes []string `env:"MIRROR_REGION_PREFIXES" desc:"Comma-separated MirrorMaker2 source cluster aliases. The mirrored copy of every consumed topic, including the raw MistTrigger topic, is also consumed for each alias. Empty consumes only local topics." introduced:"v0.3.0"`
 
-	QuartermasterGRPCAddr          string `env:"QUARTERMASTER_GRPC_ADDR" default:"quartermaster:19002" desc:"Quartermaster gRPC address used for service registration." introduced:"v0.3.0"`
+	QuartermasterGRPCAddr          string `env:"QUARTERMASTER_GRPC_ADDR" default:"quartermaster:@port(quartermaster.grpc)" desc:"Quartermaster gRPC address used for service registration." introduced:"v0.3.0"`
 	QuartermasterGRPCTLSServerName string `env:"QUARTERMASTER_GRPC_TLS_SERVER_NAME" desc:"TLS server name override for the Quartermaster connection. Empty uses the canonical internal name." introduced:"v0.3.0"`
 	AdvertiseHost                  string `env:"PERISCOPE_INGEST_HOST" default:"periscope-ingest" desc:"Host name this instance advertises when it registers with Quartermaster." introduced:"v0.3.0"`
 

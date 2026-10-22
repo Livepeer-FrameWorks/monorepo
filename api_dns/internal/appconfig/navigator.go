@@ -38,10 +38,10 @@ type Navigator struct {
 	ServiceToken       string `env:"SERVICE_TOKEN" required:"true" secret:"true" desc:"Shared service-to-service bearer token. Authenticates gRPC callers, the internal TLS bundle endpoint, and Navigator calls to Quartermaster." introduced:"v0.3.0"`
 	FieldEncryptionKey string `env:"FIELD_ENCRYPTION_KEY" required:"true" secret:"true" desc:"Key material from which Navigator derives the encryption key for stored certificate and CA private keys." introduced:"v0.3.0"`
 
-	QuartermasterGRPCAddr          string `env:"QUARTERMASTER_GRPC_ADDR" default:"quartermaster:19002" desc:"Quartermaster gRPC address for cluster, node, and bootstrap token lookups and self-registration." introduced:"v0.3.0"`
+	QuartermasterGRPCAddr          string `env:"QUARTERMASTER_GRPC_ADDR" default:"quartermaster:@port(quartermaster.grpc)" desc:"Quartermaster gRPC address for cluster, node, and bootstrap token lookups and self-registration." introduced:"v0.3.0"`
 	QuartermasterGRPCTLSServerName string `env:"QUARTERMASTER_GRPC_TLS_SERVER_NAME" desc:"TLS server name override for the Quartermaster connection. Empty uses the canonical internal name." introduced:"v0.3.0"`
 
-	DecklogGRPCAddr          string `env:"DECKLOG_GRPC_ADDR" default:"decklog:18006" desc:"Decklog gRPC address that receives custom domain domain events from Navigator's outbox. Events wait in the outbox while Decklog is unreachable." introduced:"v0.3.11"`
+	DecklogGRPCAddr          string `env:"DECKLOG_GRPC_ADDR" default:"decklog:@port(decklog.grpc)" desc:"Decklog gRPC address that receives custom domain domain events from Navigator's outbox. Events wait in the outbox while Decklog is unreachable." introduced:"v0.3.11"`
 	DecklogGRPCTLSServerName string `env:"DECKLOG_GRPC_TLS_SERVER_NAME" desc:"TLS server name override for the Decklog connection. Empty uses the canonical internal name." introduced:"v0.3.11"`
 	Region                   string `env:"REGION" desc:"Region label attached to domain events sent to Decklog. Empty lets Decklog stamp its own region." introduced:"v0.3.11"`
 

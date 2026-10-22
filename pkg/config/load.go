@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"regexp"
 	"runtime"
 	"slices"
 	"sort"
@@ -239,6 +240,10 @@ func checkAnnotations(t reflect.Type, service string) error {
 	})
 }
 
+// portTokens matches an @port(<listener>) token inside a default; it expands
+// to the port servicedefs.ListenerPort registers for that listener.
+var portTokens = regexp.MustCompile(`@port\(([a-z0-9.-]+)\)`)
+
 // ResolveDefault returns the literal default for a field, resolving the
 // @servicedefs port placeholders for the given service.
 func ResolveDefault(spec FieldSpec, service string) (string, error) {
@@ -256,7 +261,20 @@ func ResolveDefault(spec FieldSpec, service string) (string, error) {
 		}
 		return strconv.Itoa(port), nil
 	default:
-		return spec.Default, nil
+		var unknown string
+		def := portTokens.ReplaceAllStringFunc(spec.Default, func(token string) string {
+			key := portTokens.FindStringSubmatch(token)[1]
+			port, ok := servicedefs.ListenerPort(key)
+			if !ok {
+				unknown = key
+				return token
+			}
+			return strconv.Itoa(port)
+		})
+		if unknown != "" {
+			return "", fmt.Errorf("config: %s default names listener %q, which servicedefs does not register", spec.Env, unknown)
+		}
+		return def, nil
 	}
 }
 

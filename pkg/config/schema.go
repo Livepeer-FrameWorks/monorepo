@@ -23,7 +23,9 @@ const (
 )
 
 // Default placeholders that resolve to the service's canonical port in
-// pkg/servicedefs, so a port number is declared in exactly one place.
+// pkg/servicedefs, so a port number is declared in exactly one place. Any
+// other default names a registered port with an @port(<listener>) token, e.g.
+// "quartermaster:@port(quartermaster.grpc)" (servicedefs.ListenerPort).
 const (
 	DefaultServiceHTTPPort = "@servicedefs.http_port"
 	DefaultServiceGRPCPort = "@servicedefs.grpc_port"

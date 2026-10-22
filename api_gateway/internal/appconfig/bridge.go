@@ -88,8 +88,8 @@ type Bridge struct {
 	PublicRateLimitBurst     int `env:"PUBLIC_RATE_LIMIT_BURST" default:"30" desc:"Burst allowance per client IP for unauthenticated callers. Values below 1 use 30. Re-read after an env-file reload." introduced:"v0.3.0"`
 	WebhookRateLimitPerMin   int `env:"WEBHOOK_RATE_LIMIT_PER_MIN" default:"300" desc:"Inbound payment-provider webhook requests allowed per minute per client IP. 0 or less disables the webhook rate limit." introduced:"v0.3.0"`
 
-	StreamingSRTPort   int    `env:"STREAMING_SRT_PORT" default:"8889" desc:"SRT ingest port reported in the streamingConfig GraphQL query. Re-read after an env-file reload." introduced:"v0.3.0"`
-	StreamingRTMPPort  int    `env:"STREAMING_RTMP_PORT" default:"1935" desc:"RTMP ingest port reported in the streamingConfig GraphQL query. Re-read after an env-file reload." introduced:"v0.3.0"`
+	StreamingSRTPort   int    `env:"STREAMING_SRT_PORT" default:"@port(mistserver.srt)" desc:"SRT ingest port reported in the streamingConfig GraphQL query. Re-read after an env-file reload." introduced:"v0.3.0"`
+	StreamingRTMPPort  int    `env:"STREAMING_RTMP_PORT" default:"@port(mistserver.rtmp)" desc:"RTMP ingest port reported in the streamingConfig GraphQL query. Re-read after an env-file reload." introduced:"v0.3.0"`
 	PlatformRootDomain string `env:"BRAND_DOMAIN" desc:"Platform root domain for global streaming host names when cluster routing carries no base URL. Re-read after an env-file reload." introduced:"v0.3.0"`
 
 	TrustedProxyCIDRs string `env:"TRUSTED_PROXY_CIDRS" desc:"Comma-separated CIDRs or IPs of reverse proxies whose forwarding headers identify the client. Re-read after an env-file reload." introduced:"v0.3.0"`
@@ -100,7 +100,7 @@ type Bridge struct {
 	GraphQLPlaygroundEnabled string `env:"GRAPHQL_PLAYGROUND_ENABLED" desc:"Serves the GraphQL playground at /graphql/playground when true. Empty enables it unless GIN_MODE is release." introduced:"v0.3.0"`
 
 	TelemetryTokenSecret string `env:"TELEMETRY_TOKEN_SECRET" secret:"true" desc:"Shared key that verifies player telemetry tokens. Empty drops serving-cluster attribution from player telemetry." introduced:"v0.3.0"`
-	SkipperSpokeURL      string `env:"SKIPPER_SPOKE_URL" default:"http://skipper:18018/mcp/spoke" desc:"Skipper MCP spoke URL that Bridge proxies the ask_consultant tool to." introduced:"v0.3.0"`
+	SkipperSpokeURL      string `env:"SKIPPER_SPOKE_URL" default:"http://skipper:@port(skipper)/mcp/spoke" desc:"Skipper MCP spoke URL that Bridge proxies the ask_consultant tool to." introduced:"v0.3.0"`
 	SkillFilesDir        string `env:"SKILL_FILES_DIR" desc:"Directory checked first for SKILL.md, skill.json, and the other agent discovery files." introduced:"v0.3.0"`
 	X402GasWalletAddress string `env:"X402_GAS_WALLET_ADDRESS" desc:"Wallet address substituted into did.json. Empty removes the verification method from did.json." introduced:"v0.3.0"`
 }

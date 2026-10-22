@@ -1,5 +1,7 @@
 package servicedefs
 
+import "strings"
+
 // Ports of the listeners the platform runs beside its services' primary and
 // gRPC ports: third-party data and observability components, their exporters,
 // and the auxiliary listeners of FrameWorks services. The CLI's provisioning,
@@ -95,6 +97,38 @@ func ClosingListenerAt(port int) (ClosingListener, bool) {
 		}
 	}
 	return ClosingListener{}, false
+}
+
+// namedListenerPorts are the listeners ListenerPort names that are neither a
+// service's primary, gRPC nor auxiliary port.
+var namedListenerPorts = map[string]int{
+	"mistserver.rtmp":    MistRTMPPort,
+	"mistserver.srt":     MistSRTPort,
+	"chatwoot.container": ChatwootContainerPort,
+}
+
+// ListenerPort returns the port of a registered listener named <service> (its
+// primary port), <service>.grpc (its gRPC port), <service>.<name> for its
+// auxiliary listener <service>-<name>, or one of namedListenerPorts.
+// Configuration defaults name ports this way (pkg/config @port tokens).
+func ListenerPort(key string) (int, bool) {
+	if port, ok := namedListenerPorts[key]; ok {
+		return port, true
+	}
+	service, listener, sub := strings.Cut(key, ".")
+	if !sub {
+		port, ok := DefaultPort(service)
+		return port, ok && port > 0
+	}
+	if listener == "grpc" {
+		return DefaultGRPCPort(service)
+	}
+	for _, aux := range auxiliaryPorts[service] {
+		if aux.Name == service+"-"+listener {
+			return aux.Port, true
+		}
+	}
+	return 0, false
 }
 
 // ExporterPort returns the exporter port of a Postgres or Redis instance

@@ -20,7 +20,7 @@ type PeriscopeQuery struct {
 	config.ClickHouse
 	config.Registration
 
-	QuartermasterGRPCAddr          string `env:"QUARTERMASTER_GRPC_ADDR" default:"quartermaster:19002" desc:"Quartermaster gRPC address used for service registration." introduced:"v0.3.0"`
+	QuartermasterGRPCAddr          string `env:"QUARTERMASTER_GRPC_ADDR" default:"quartermaster:@port(quartermaster.grpc)" desc:"Quartermaster gRPC address used for service registration." introduced:"v0.3.0"`
 	QuartermasterGRPCTLSServerName string `env:"QUARTERMASTER_GRPC_TLS_SERVER_NAME" desc:"TLS server name override for the Quartermaster connection. Empty uses the canonical internal name." introduced:"v0.3.0"`
 	AdvertiseHost                  string `env:"PERISCOPE_QUERY_HOST" default:"periscope-query" desc:"Host name this instance advertises when it registers with Quartermaster." introduced:"v0.3.0"`
 }
