@@ -34,6 +34,8 @@ type Querier interface {
 	AddX402TenantBalanceRollup(ctx context.Context, arg AddX402TenantBalanceRollupParams) error
 	AdoptLegacyUsageRecord(ctx context.Context, arg AdoptLegacyUsageRecordParams) (int64, error)
 	AdvanceConsumedX402Attempt(ctx context.Context, arg AdvanceConsumedX402AttemptParams) error
+	// scanned_at is when the cursor last reached the finalized head it was scanning
+	// toward; a batch that leaves blocks below that head does not move it.
 	AdvanceCryptoScanCursor(ctx context.Context, arg AdvanceCryptoScanCursorParams) (int64, error)
 	AdvanceSubscriptionBillingPeriod(ctx context.Context, arg AdvanceSubscriptionBillingPeriodParams) (int64, error)
 	AllocateCryptoDepositEvent(ctx context.Context, arg AllocateCryptoDepositEventParams) (int64, error)
@@ -648,6 +650,9 @@ type Querier interface {
 	ReadPlacementUsageCoverage(ctx context.Context, arg ReadPlacementUsageCoverageParams) (ReadPlacementUsageCoverageRow, error)
 	RecordAccountClosureCollectionWriteoffs(ctx context.Context, tenantID string) (int64, error)
 	RecordCryptoAccountingAnomaly(ctx context.Context, arg RecordCryptoAccountingAnomalyParams) error
+	// A cursor already past the finalized head is caught up: nothing finalized is
+	// left unscanned.
+	RecordCryptoScannerCaughtUp(ctx context.Context, arg RecordCryptoScannerCaughtUpParams) error
 	RecordCryptoScannerError(ctx context.Context, arg RecordCryptoScannerErrorParams) error
 	RecordCryptoSweepBroadcast(ctx context.Context, arg RecordCryptoSweepBroadcastParams) error
 	RecordCryptoSweepReconciliation(ctx context.Context, arg RecordCryptoSweepReconciliationParams) error
@@ -740,7 +745,6 @@ type Querier interface {
 	UpdateBootstrapTenantSubscription(ctx context.Context, arg UpdateBootstrapTenantSubscriptionParams) (int64, error)
 	UpdateCancelledClusterSubscription(ctx context.Context, arg UpdateCancelledClusterSubscriptionParams) error
 	UpdateClusterStripeSubscriptionStatus(ctx context.Context, arg UpdateClusterStripeSubscriptionStatusParams) (int64, error)
-	UpdateCryptoScannerLag(ctx context.Context, arg UpdateCryptoScannerLagParams) error
 	UpdateDraftInvoice(ctx context.Context, arg UpdateDraftInvoiceParams) (string, error)
 	UpdateMollieNextPaymentDate(ctx context.Context, arg UpdateMollieNextPaymentDateParams) error
 	UpdatePendingX402Receipt(ctx context.Context, arg UpdatePendingX402ReceiptParams) error

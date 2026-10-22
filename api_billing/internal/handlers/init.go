@@ -25,6 +25,7 @@ type PurserMetrics struct {
 	UsageQuarantine           *prometheus.CounterVec // labels: usage_type, reason
 	WebhookSignatureFailures  *prometheus.CounterVec
 	CryptoScannerBlocks       *prometheus.GaugeVec
+	CryptoScannerCaughtUp     *prometheus.GaugeVec // labels: network; unix time the cursor last reached the finalized head
 	CryptoScannerErrors       *prometheus.CounterVec
 	CryptoDepositReorgs       *prometheus.CounterVec
 	CryptoUnsweptBaseUnits    *prometheus.GaugeVec

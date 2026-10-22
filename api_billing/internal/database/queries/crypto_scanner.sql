@@ -34,6 +34,8 @@ SET canonical = TRUE, block_hash = EXCLUDED.block_hash,
     END,
     reorged_at = NULL;
 
+-- scanned_at is when the cursor last reached the finalized head it was scanning
+-- toward; a batch that leaves blocks below that head does not move it.
 -- name: AdvanceCryptoScanCursor :execrows
 UPDATE purser.crypto_scan_cursors
 SET next_block = sqlc.arg(last_scanned_block)::bigint + 1,
@@ -41,7 +43,12 @@ SET next_block = sqlc.arg(last_scanned_block)::bigint + 1,
     last_scanned_block_hash = sqlc.arg(last_scanned_block_hash),
     safe_head_block = sqlc.arg(safe_head_block)::bigint,
     lag_blocks = GREATEST(sqlc.arg(safe_head_block)::bigint - sqlc.arg(last_scanned_block)::bigint, 0),
-    last_error = NULL, error_count = 0, scanned_at = NOW(), updated_at = NOW()
+    last_error = NULL, error_count = 0,
+    scanned_at = CASE
+        WHEN sqlc.arg(last_scanned_block)::bigint >= sqlc.arg(safe_head_block)::bigint THEN NOW()
+        ELSE scanned_at
+    END,
+    updated_at = NOW()
 WHERE network = sqlc.arg(network) AND next_block = sqlc.arg(expected_next_block)::bigint;
 
 -- name: MarkCryptoDepositsReorgedFromBlock :exec
@@ -57,11 +64,13 @@ SET next_block = sqlc.arg(block_number), last_scanned_block = NULL,
     last_scanned_block_hash = NULL, updated_at = NOW()
 WHERE network = sqlc.arg(network);
 
--- name: UpdateCryptoScannerLag :exec
+-- A cursor already past the finalized head is caught up: nothing finalized is
+-- left unscanned.
+-- name: RecordCryptoScannerCaughtUp :exec
 UPDATE purser.crypto_scan_cursors
 SET safe_head_block = sqlc.arg(safe_head_block),
-    lag_blocks = GREATEST(sqlc.arg(lag_blocks), 0),
-    last_error = NULL, error_count = 0, updated_at = NOW()
+    lag_blocks = 0,
+    last_error = NULL, error_count = 0, scanned_at = NOW(), updated_at = NOW()
 WHERE network = sqlc.arg(network);
 
 -- name: RecordCryptoScannerError :exec

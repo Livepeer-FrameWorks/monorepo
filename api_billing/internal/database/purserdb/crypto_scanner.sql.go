@@ -18,7 +18,12 @@ SET next_block = $1::bigint + 1,
     last_scanned_block_hash = $2,
     safe_head_block = $3::bigint,
     lag_blocks = GREATEST($3::bigint - $1::bigint, 0),
-    last_error = NULL, error_count = 0, scanned_at = NOW(), updated_at = NOW()
+    last_error = NULL, error_count = 0,
+    scanned_at = CASE
+        WHEN $1::bigint >= $3::bigint THEN NOW()
+        ELSE scanned_at
+    END,
+    updated_at = NOW()
 WHERE network = $4 AND next_block = $5::bigint
 `
 
@@ -30,6 +35,8 @@ type AdvanceCryptoScanCursorParams struct {
 	ExpectedNextBlock    int64          `db:"expected_next_block" json:"expected_next_block"`
 }
 
+// scanned_at is when the cursor last reached the finalized head it was scanning
+// toward; a batch that leaves blocks below that head does not move it.
 func (q *Queries) AdvanceCryptoScanCursor(ctx context.Context, arg AdvanceCryptoScanCursorParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, advanceCryptoScanCursor,
 		arg.LastScannedBlock,
@@ -256,6 +263,26 @@ func (q *Queries) MarkCryptoDepositsReorgedFromBlock(ctx context.Context, arg Ma
 	return err
 }
 
+const recordCryptoScannerCaughtUp = `-- name: RecordCryptoScannerCaughtUp :exec
+UPDATE purser.crypto_scan_cursors
+SET safe_head_block = $1,
+    lag_blocks = 0,
+    last_error = NULL, error_count = 0, scanned_at = NOW(), updated_at = NOW()
+WHERE network = $2
+`
+
+type RecordCryptoScannerCaughtUpParams struct {
+	SafeHeadBlock sql.NullInt64 `db:"safe_head_block" json:"safe_head_block"`
+	Network       string        `db:"network" json:"network"`
+}
+
+// A cursor already past the finalized head is caught up: nothing finalized is
+// left unscanned.
+func (q *Queries) RecordCryptoScannerCaughtUp(ctx context.Context, arg RecordCryptoScannerCaughtUpParams) error {
+	_, err := q.db.ExecContext(ctx, recordCryptoScannerCaughtUp, arg.SafeHeadBlock, arg.Network)
+	return err
+}
+
 const recordCryptoScannerError = `-- name: RecordCryptoScannerError :exec
 INSERT INTO purser.crypto_scan_cursors (network, next_block, last_error, error_count)
 VALUES ($1, 0, $2, 1)
@@ -289,25 +316,6 @@ type RewindCryptoScanCursorParams struct {
 
 func (q *Queries) RewindCryptoScanCursor(ctx context.Context, arg RewindCryptoScanCursorParams) error {
 	_, err := q.db.ExecContext(ctx, rewindCryptoScanCursor, arg.BlockNumber, arg.Network)
-	return err
-}
-
-const updateCryptoScannerLag = `-- name: UpdateCryptoScannerLag :exec
-UPDATE purser.crypto_scan_cursors
-SET safe_head_block = $1,
-    lag_blocks = GREATEST($2, 0),
-    last_error = NULL, error_count = 0, updated_at = NOW()
-WHERE network = $3
-`
-
-type UpdateCryptoScannerLagParams struct {
-	SafeHeadBlock sql.NullInt64 `db:"safe_head_block" json:"safe_head_block"`
-	LagBlocks     sql.NullInt64 `db:"lag_blocks" json:"lag_blocks"`
-	Network       string        `db:"network" json:"network"`
-}
-
-func (q *Queries) UpdateCryptoScannerLag(ctx context.Context, arg UpdateCryptoScannerLagParams) error {
-	_, err := q.db.ExecContext(ctx, updateCryptoScannerLag, arg.SafeHeadBlock, arg.LagBlocks, arg.Network)
 	return err
 }
 

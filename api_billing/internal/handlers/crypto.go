@@ -47,6 +47,9 @@ type CryptoMonitor struct {
 	scanState *string
 	// networkFailures holds each failing network's last logged stage/reason.
 	networkFailures map[string]string
+	// caughtUpStamped holds the networks whose caught-up gauge this process
+	// has stamped at least once.
+	caughtUpStamped map[string]bool
 }
 
 // CryptoTransaction represents a blockchain transaction

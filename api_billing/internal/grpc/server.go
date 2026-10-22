@@ -2439,14 +2439,8 @@ func (s *PurserServer) cryptoDepositReadiness(ctx context.Context) error {
 			if err != nil {
 				return fmt.Errorf("crypto scanner for %s has no readiness state: %w", network.Name, err)
 			}
-			if !readiness.ScannedAt.Valid || time.Since(readiness.ScannedAt.Time) > time.Minute {
-				return fmt.Errorf("crypto scanner for %s has not committed a batch in the last minute", network.Name)
-			}
-			if readiness.LastError.Valid && strings.TrimSpace(readiness.LastError.String) != "" {
-				return fmt.Errorf("crypto scanner for %s is unhealthy: %s", network.Name, readiness.LastError.String)
-			}
-			if readiness.LagBlocks.Valid && readiness.LagBlocks.Int64 > 500 {
-				return fmt.Errorf("crypto scanner for %s is %d blocks behind", network.Name, readiness.LagBlocks.Int64)
+			if err := handlers.CryptoScannerReadinessError(readiness.ScannedAt, readiness.LastError, readiness.LagBlocks, time.Now()); err != nil {
+				return fmt.Errorf("crypto scanner for %s %w", network.Name, err)
 			}
 		}
 	}

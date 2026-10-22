@@ -40,7 +40,12 @@ incident record.
 
 ## RPC lag or missing finalized head
 
-1. Inspect `purser_crypto_scanner_block`, scanner error count, and cursor lag.
+1. Inspect `purser_crypto_scanner_caught_up_timestamp_seconds` (when the
+   cursor last reached the finalized head; readiness refuses new crypto
+   payments after five minutes without it), `purser_crypto_scanner_block`, and
+   the scanner error count. A finalized head that jumps by thousands of blocks,
+   as Arbitrum's does when L1 finalizes a batch, is normal and clears within a
+   tick or two.
 2. Verify the configured endpoint can return the chain's `finalized` block and
    the recorded block hash. Do not substitute `latest` or a guessed depth.
 3. Move to an approved RPC endpoint through configuration management.

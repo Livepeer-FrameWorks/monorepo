@@ -174,14 +174,10 @@ func (s *PurserServer) GetCryptoReadiness(ctx context.Context, _ *emptypb.Empty)
 
 		health, scannerErr := queries.GetCryptoScannerHealth(ctx, network.Name)
 		scannedAt, lastError, lag := health.ScannedAt, health.LastError, health.LagBlocks
-		if scannerErr == nil && (!scannedAt.Valid || time.Since(scannedAt.Time) > time.Minute) {
-			scannerErr = fmt.Errorf("scanner has not committed a batch in the last minute")
-		}
-		if scannerErr == nil && lastError.Valid && strings.TrimSpace(lastError.String) != "" {
-			scannerErr = fmt.Errorf("scanner error: %s", lastError.String)
-		}
-		if scannerErr == nil && lag.Valid && lag.Int64 > 500 {
-			scannerErr = fmt.Errorf("scanner is %d blocks behind", lag.Int64)
+		if scannerErr == nil {
+			if err := handlers.CryptoScannerReadinessError(scannedAt, lastError, lag, time.Now()); err != nil {
+				scannerErr = fmt.Errorf("scanner %w", err)
+			}
 		}
 		add(prefix+"scanner", scannerErr, fmt.Sprintf("healthy; lag=%d", lag.Int64))
 	}

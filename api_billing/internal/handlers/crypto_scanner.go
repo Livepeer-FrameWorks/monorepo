@@ -26,6 +26,24 @@ import (
 const cryptoScanBatchBlocks = int64(100)
 const cryptoScanTopicBatchSize = 100
 
+// One tick scans a network until its cursor reaches the finalized head, up to
+// 50 batches or 20 s. Arbitrum's finalized head advances in jumps of thousands
+// of blocks when L1 finalizes a batch; 50 batches (5,000 blocks) clear such a
+// jump in one tick, and the time bound keeps a slow provider on one network
+// from delaying the scans of the others, which run after it in the same tick.
+const cryptoScanTickMaxBatches = int64(50)
+
+const cryptoScanTickBudget = 20 * time.Second
+
+// CryptoScannerMaxCatchUpAge is how long a network's cursor may go without
+// reaching the finalized head before new crypto payments on it stop being
+// offered. It is a time, so it means the same on every chain. A healthy
+// scanner reaches the head every tick or within a few ticks of a finality
+// jump; five minutes rides out a provider rate limit without flapping and
+// bounds how long a finalized deposit can stay unobserved while payments are
+// still offered.
+const CryptoScannerMaxCatchUpAge = 5 * time.Minute
+
 type rpcBlock struct {
 	Number       string           `json:"number"`
 	Hash         string           `json:"hash"`
@@ -67,6 +85,13 @@ func (cm *CryptoMonitor) scanRPCDeposits(ctx context.Context) {
 	if cm.depositScanActive(ctx) {
 		for _, network := range DepositNetworks(cm.includeTestnets) {
 			var err error
+			if !cm.caughtUpStamped[network.Name] {
+				if cm.caughtUpStamped == nil {
+					cm.caughtUpStamped = map[string]bool{}
+				}
+				cm.caughtUpStamped[network.Name] = true
+				cm.noteCaughtUp(network.Name, time.Now())
+			}
 			if network.GetRPCEndpointWithDefault() == "" {
 				err = newCryptoScannerError("configuration", fmt.Errorf("%s is not configured", network.RPCEndpointEnv))
 			} else {
@@ -170,32 +195,48 @@ func (cm *CryptoMonitor) scanRPCNetwork(ctx context.Context, network NetworkConf
 		}
 	}
 	if next > safeHead {
-		return newCryptoScannerError("cursor_update", cm.updateScannerLag(ctx, network.Name, safeHead, latest-next))
+		return newCryptoScannerError("cursor_update", cm.recordCaughtUp(ctx, network.Name, safeHead))
 	}
-	end := next + cryptoScanBatchBlocks - 1
-	if end > safeHead {
-		end = safeHead
-	}
-
 	addresses, err := cm.knownDepositAddresses(ctx, network.Name)
 	if err != nil {
 		return newCryptoScannerError("deposit_addresses", err)
 	}
+	started := time.Now()
+	for batch := int64(0); next <= safeHead; batch++ {
+		if batch == cryptoScanTickMaxBatches || time.Since(started) >= cryptoScanTickBudget {
+			return nil
+		}
+		end, err := cm.scanBatch(ctx, network, next, safeHead, addresses)
+		if err != nil {
+			return err
+		}
+		next = end + 1
+	}
+	return nil
+}
+
+// scanBatch scans one batch from next toward safeHead and commits it, returning
+// the last block it covered.
+func (cm *CryptoMonitor) scanBatch(ctx context.Context, network NetworkConfig, next, safeHead int64, addresses map[string]struct{}) (int64, error) {
+	end := next + cryptoScanBatchBlocks - 1
+	if end > safeHead {
+		end = safeHead
+	}
 	if len(addresses) == 0 {
 		block, err := cm.rpcBlockByNumber(ctx, network, end, false)
 		if err != nil {
-			return newCryptoScannerError("empty_address_head", err)
+			return 0, newCryptoScannerError("empty_address_head", err)
 		}
-		return newCryptoScannerError("batch_commit", cm.commitScanBatch(ctx, network.Name, next, end, safeHead, block.Hash, nil))
+		return end, newCryptoScannerError("batch_commit", cm.commitScanBatch(ctx, network.Name, next, end, safeHead, block.Hash, nil))
 	}
 
 	events, err := cm.scanUSDCLogs(ctx, network, next, end, addresses)
 	if err != nil {
-		return newCryptoScannerError("usdc_logs", err)
+		return 0, newCryptoScannerError("usdc_logs", err)
 	}
 	blocks, err := cm.rpcBlocksByNumber(ctx, network, next, end, true)
 	if err != nil {
-		return newCryptoScannerError("block_batch", err)
+		return 0, newCryptoScannerError("block_batch", err)
 	}
 	for index := range blocks {
 		blockNumber := next + int64(index)
@@ -216,7 +257,7 @@ func (cm *CryptoMonitor) scanRPCNetwork(ctx context.Context, network NetworkConf
 			})
 		}
 	}
-	return newCryptoScannerError("batch_commit", cm.commitScanBatch(ctx, network.Name, next, end, safeHead, blocks[len(blocks)-1].Hash, events))
+	return end, newCryptoScannerError("batch_commit", cm.commitScanBatch(ctx, network.Name, next, end, safeHead, blocks[len(blocks)-1].Hash, events))
 }
 
 type cryptoScannerError struct {
@@ -453,6 +494,9 @@ func (cm *CryptoMonitor) commitScanBatch(ctx context.Context, network string, fr
 	if cm.metrics != nil && cm.metrics.CryptoScannerBlocks != nil {
 		cm.metrics.CryptoScannerBlocks.WithLabelValues(network, "cursor").Set(float64(to))
 	}
+	if to >= safeHead {
+		cm.noteCaughtUp(network, time.Now())
+	}
 	return nil
 }
 
@@ -526,11 +570,40 @@ func (cm *CryptoMonitor) rpcBlocksByNumber(ctx context.Context, network NetworkC
 	return blocks, nil
 }
 
-func (cm *CryptoMonitor) updateScannerLag(ctx context.Context, network string, safeHead, lag int64) error {
-	return purserdb.New(cm.db).UpdateCryptoScannerLag(ctx, purserdb.UpdateCryptoScannerLagParams{
-		SafeHeadBlock: sql.NullInt64{Int64: safeHead, Valid: true},
-		LagBlocks:     sql.NullInt64{Int64: lag, Valid: true}, Network: network,
+func (cm *CryptoMonitor) recordCaughtUp(ctx context.Context, network string, safeHead int64) error {
+	err := purserdb.New(cm.db).RecordCryptoScannerCaughtUp(ctx, purserdb.RecordCryptoScannerCaughtUpParams{
+		SafeHeadBlock: sql.NullInt64{Int64: safeHead, Valid: true}, Network: network,
 	})
+	if err == nil {
+		cm.noteCaughtUp(network, time.Now())
+	}
+	return err
+}
+
+// noteCaughtUp stamps the network's caught-up gauge. The first scan of a
+// network in this process stamps its start, so a scanner that never catches up
+// after a restart ages from then instead of exporting nothing.
+func (cm *CryptoMonitor) noteCaughtUp(network string, at time.Time) {
+	if cm.metrics != nil && cm.metrics.CryptoScannerCaughtUp != nil {
+		cm.metrics.CryptoScannerCaughtUp.WithLabelValues(network).Set(float64(at.Unix()))
+	}
+}
+
+// CryptoScannerReadinessError reports why a network's deposit scanner cannot
+// back new crypto payments, judged from its cursor row: its last scan failed,
+// or its cursor has not reached the finalized head (scanned_at) within
+// CryptoScannerMaxCatchUpAge. A stalled provider fails both.
+func CryptoScannerReadinessError(scannedAt sql.NullTime, lastError sql.NullString, lagBlocks sql.NullInt64, now time.Time) error {
+	if lastError.Valid && strings.TrimSpace(lastError.String) != "" {
+		return fmt.Errorf("is unhealthy: %s", lastError.String)
+	}
+	if !scannedAt.Valid {
+		return fmt.Errorf("has never reached the finalized head")
+	}
+	if age := now.Sub(scannedAt.Time); age > CryptoScannerMaxCatchUpAge {
+		return fmt.Errorf("has not reached the finalized head for %s (%d finalized blocks unscanned)", age.Round(time.Second), lagBlocks.Int64)
+	}
+	return nil
 }
 
 func (cm *CryptoMonitor) recordScannerError(ctx context.Context, network, stage, reason, message string) {

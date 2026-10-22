@@ -496,13 +496,12 @@ groups:
 
       # Crypto custody and scanner safety alerts
       - alert: CryptoScannerLagging
-        expr: max by (region, network) (purser_crypto_scanner_block{head="finalized"}) - on(region, network) max by (region, network) (purser_crypto_scanner_block{head="cursor"}) > 500
-        for: 2m
+        expr: time() - max by (region, network) (purser_crypto_scanner_caught_up_timestamp_seconds) > 300
         labels:
           severity: critical
         annotations:
           summary: "Crypto scanner is behind on {{ $labels.network }}"
-          description: "The durable deposit cursor is more than 500 finalized blocks behind. New production crypto methods should fail readiness."
+          description: "No Purser replica has seen the {{ $labels.network }} deposit cursor reach the finalized head for more than five minutes, so production readiness has stopped offering new crypto payments on it. Check purser_crypto_scanner_errors_total and the cursor's last_error."
 
       - alert: CryptoScannerErrors
         expr: sum by (region, cluster, network, stage, reason) (increase(purser_crypto_scanner_errors_total{stage!="", reason!=""}[5m])) > 0
