@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"slices"
 	"sync"
 	"testing"
 
@@ -15,9 +16,11 @@ import (
 
 // memoryTierStore holds one tier row and applies UpdateBillingTierStripeIDs
 // as its SQL does: only while the row holds the IDs the caller read.
+// recordedElsewhere are prices other tiers or cluster prices record.
 type memoryTierStore struct {
-	mu  sync.Mutex
-	row purserdb.ListActivePaidBillingTiersForStripeRow
+	mu                sync.Mutex
+	row               purserdb.ListActivePaidBillingTiersForStripeRow
+	recordedElsewhere []string
 }
 
 func (s *memoryTierStore) ListActivePaidBillingTiersForStripe(context.Context) ([]purserdb.ListActivePaidBillingTiersForStripeRow, error) {
@@ -37,8 +40,15 @@ func (s *memoryTierStore) UpdateBillingTierStripeIDs(_ context.Context, arg purs
 	return 1, nil
 }
 
-// racingCatalog hands each replica its own new price, as two creates that
-// Stripe did not deduplicate would, and records deactivations.
+func (s *memoryTierStore) IsStripePriceRecorded(_ context.Context, priceID string) (sql.NullBool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	recorded := s.row.StripePriceIDMonthly.String == priceID || slices.Contains(s.recordedElsewhere, priceID)
+	return sql.NullBool{Bool: recorded, Valid: true}, nil
+}
+
+// racingCatalog hands each replica the price it is set to sync to, created
+// by that replica's call, and records deactivations.
 type racingCatalog struct {
 	mu          sync.Mutex
 	prices      map[string]string
@@ -47,11 +57,11 @@ type racingCatalog struct {
 	release     map[string]chan struct{}
 }
 
-func (c *racingCatalog) SyncTier(ctx context.Context, knownProductID, _, _, _, _ string, _ decimal.Decimal, _ string) (string, string, error) {
+func (c *racingCatalog) SyncTier(ctx context.Context, knownProductID, _, _, _, _ string, _ decimal.Decimal, _ string) (string, string, bool, error) {
 	replica := ctx.Value(replicaKey{}).(string)
 	close(c.syncing[replica])
 	<-c.release[replica]
-	return knownProductID, c.prices[replica], nil
+	return knownProductID, c.prices[replica], true, nil
 }
 
 func (c *racingCatalog) DeactivatePrice(_ context.Context, priceID string) error {
@@ -63,17 +73,17 @@ func (c *racingCatalog) DeactivatePrice(_ context.Context, priceID string) error
 
 type replicaKey struct{}
 
-// Two replicas read the tier's recorded price before either records a new
-// one. The first to record wins; the other must neither overwrite the
-// recorded IDs nor deactivate the price the winner already replaced.
-func TestConcurrentTierSyncLoserDoesNotOverwriteOrDeactivate(t *testing.T) {
-	store := &memoryTierStore{row: purserdb.ListActivePaidBillingTiersForStripeRow{
+// raceTierSync runs replicas a and b over one tier recorded with price_old.
+// Both read the tier before either records a new price; a records first.
+func raceTierSync(t *testing.T, prices map[string]string, recordedElsewhere ...string) (*memoryTierStore, *racingCatalog) {
+	t.Helper()
+	store := &memoryTierStore{recordedElsewhere: recordedElsewhere, row: purserdb.ListActivePaidBillingTiersForStripeRow{
 		ID: uuid.New(), TierName: "pro", DisplayName: "Pro", BasePrice: "39.95", Currency: "EUR",
 		StripeProductID:      sql.NullString{String: "prod_pro", Valid: true},
 		StripePriceIDMonthly: sql.NullString{String: "price_old", Valid: true},
 	}}
 	catalog := &racingCatalog{
-		prices:  map[string]string{"a": "price_a", "b": "price_b"},
+		prices:  prices,
 		syncing: map[string]chan struct{}{"a": make(chan struct{}), "b": make(chan struct{})},
 		release: map[string]chan struct{}{"a": make(chan struct{}), "b": make(chan struct{})},
 	}
@@ -94,11 +104,35 @@ func TestConcurrentTierSyncLoserDoesNotOverwriteOrDeactivate(t *testing.T) {
 	if err := <-bDone; err != nil {
 		t.Fatal(err)
 	}
-
-	if got := store.row.StripePriceIDMonthly.String; got != "price_a" {
-		t.Fatalf("recorded price = %s, want the first recorder's price_a", got)
+	if got := store.row.StripePriceIDMonthly.String; got != prices["a"] {
+		t.Fatalf("recorded price = %s, want the first recorder's %s", got, prices["a"])
 	}
-	if len(catalog.deactivated) != 1 || catalog.deactivated[0] != "price_old" {
-		t.Fatalf("deactivated prices = %v, want only price_old, by the replica that recorded the new price", catalog.deactivated)
+	return store, catalog
+}
+
+// The replica that records second neither overwrites the recorded IDs nor
+// deactivates the price the first replica replaced; it retires only the
+// duplicate price it created itself.
+func TestConcurrentTierSyncLoserRetiresOnlyItsOwnPrice(t *testing.T) {
+	_, catalog := raceTierSync(t, map[string]string{"a": "price_a", "b": "price_b"})
+	if want := []string{"price_old", "price_b"}; !slices.Equal(catalog.deactivated, want) {
+		t.Fatalf("deactivated prices = %v, want %v: the winner's replaced price, then the loser's own duplicate", catalog.deactivated, want)
+	}
+}
+
+// Stripe replayed the winner's create for the loser, so the price the loser
+// holds is the recorded one: it must stay active.
+func TestConcurrentTierSyncLoserKeepsTheRecordedPrice(t *testing.T) {
+	_, catalog := raceTierSync(t, map[string]string{"a": "price_a", "b": "price_a"})
+	if want := []string{"price_old"}; !slices.Equal(catalog.deactivated, want) {
+		t.Fatalf("deactivated prices = %v, want only %v", catalog.deactivated, want)
+	}
+}
+
+// Another tier records the loser's price, so it is not the loser's to retire.
+func TestConcurrentTierSyncLoserKeepsAPriceRecordedElsewhere(t *testing.T) {
+	_, catalog := raceTierSync(t, map[string]string{"a": "price_a", "b": "price_b"}, "price_b")
+	if want := []string{"price_old"}; !slices.Equal(catalog.deactivated, want) {
+		t.Fatalf("deactivated prices = %v, want only %v", catalog.deactivated, want)
 	}
 }

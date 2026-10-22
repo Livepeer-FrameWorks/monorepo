@@ -63,4 +63,11 @@ func TestTierStripeSyncRepository_RealPG(t *testing.T) {
 	if productID != "prod_contract" || priceID != "price_contract" {
 		t.Fatalf("stored Stripe IDs = %q/%q", productID, priceID)
 	}
+
+	for price, want := range map[string]bool{"price_contract": true, "price_duplicate": false} {
+		recorded, err := queries.IsStripePriceRecorded(ctx, price)
+		if err != nil || !recorded.Valid || recorded.Bool != want {
+			t.Fatalf("IsStripePriceRecorded(%s) = %+v/%v, want %v", price, recorded, err, want)
+		}
+	}
 }

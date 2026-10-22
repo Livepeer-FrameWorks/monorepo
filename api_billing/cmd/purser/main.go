@@ -455,12 +455,32 @@ func syncBillingTiersWithStripe(ctx context.Context, db *sql.DB, stripeClient *s
 type tierStripeStore interface {
 	ListActivePaidBillingTiersForStripe(ctx context.Context) ([]purserdb.ListActivePaidBillingTiersForStripeRow, error)
 	UpdateBillingTierStripeIDs(ctx context.Context, arg purserdb.UpdateBillingTierStripeIDsParams) (int64, error)
+	IsStripePriceRecorded(ctx context.Context, priceID string) (sql.NullBool, error)
 }
 
 // tierStripeCatalog creates and retires a tier's Stripe product and price.
 type tierStripeCatalog interface {
-	SyncTier(ctx context.Context, knownProductID, knownPriceID, tierName, displayName, description string, basePrice decimal.Decimal, currency string) (productID, monthlyPriceID string, err error)
+	SyncTier(ctx context.Context, knownProductID, knownPriceID, tierName, displayName, description string, basePrice decimal.Decimal, currency string) (productID, monthlyPriceID string, createdPrice bool, err error)
 	DeactivatePrice(ctx context.Context, priceID string) error
+}
+
+// retireUnrecordedPrice deactivates priceID, a price this sync created but
+// did not record, unless a tier or cluster price records it: Stripe may have
+// replayed another replica's create and returned the price that replica
+// recorded.
+func retireUnrecordedPrice(ctx context.Context, queries tierStripeStore, stripeClient tierStripeCatalog, logger logging.Logger, tierName, priceID string) {
+	recorded, err := queries.IsStripePriceRecorded(ctx, priceID)
+	if err != nil || !recorded.Valid || recorded.Bool {
+		if err != nil {
+			logger.WithError(err).WithFields(map[string]any{"tier": tierName, "price_id": priceID}).Warn("Could not tell whether an unrecorded Stripe price is in use; left it active")
+		}
+		return
+	}
+	if err := stripeClient.DeactivatePrice(ctx, priceID); err != nil {
+		logger.WithError(err).WithFields(map[string]any{"tier": tierName, "price_id": priceID}).Warn("Failed to deactivate a duplicate Stripe price; reconcile manually if it remains active")
+		return
+	}
+	logger.WithFields(map[string]any{"tier": tierName, "price_id": priceID}).Info("Deactivated a duplicate Stripe price another replica's sync made redundant")
 }
 
 func syncBillingTiersWithStripeLocked(ctx context.Context, queries tierStripeStore, stripeClient tierStripeCatalog, logger logging.Logger) error {
@@ -475,7 +495,7 @@ func syncBillingTiersWithStripeLocked(ctx context.Context, queries tierStripeSto
 		if parseErr != nil {
 			return fmt.Errorf("parse tier %s base_price %q: %w", t.TierName, t.BasePrice, parseErr)
 		}
-		productID, priceID, err := stripeClient.SyncTier(ctx, t.StripeProductID.String, t.StripePriceIDMonthly.String, t.TierName, t.DisplayName, t.Description, basePrice, t.Currency)
+		productID, priceID, createdPrice, err := stripeClient.SyncTier(ctx, t.StripeProductID.String, t.StripePriceIDMonthly.String, t.TierName, t.DisplayName, t.Description, basePrice, t.Currency)
 		if err != nil {
 			logger.WithError(err).WithField("tier", t.TierName).Error("Failed to sync tier with Stripe")
 			continue
@@ -510,6 +530,9 @@ func syncBillingTiersWithStripeLocked(ctx context.Context, queries tierStripeSto
 				"tier":     t.TierName,
 				"price_id": priceID,
 			}).Warn("Tier Stripe IDs changed since this sync read them; left them and the previous price as recorded")
+			if createdPrice {
+				retireUnrecordedPrice(ctx, queries, stripeClient, logger, t.TierName, priceID)
+			}
 			continue
 		}
 

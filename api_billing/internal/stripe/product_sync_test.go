@@ -179,7 +179,7 @@ func TestConcurrentTierSyncsCreateOneProductAndPrice(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			productID, priceID, err := c.SyncTier(context.Background(), "", "", "pro", "Pro", "For teams", decimal.RequireFromString("29.95"), "EUR")
+			productID, priceID, _, err := c.SyncTier(context.Background(), "", "", "pro", "Pro", "For teams", decimal.RequireFromString("29.95"), "EUR")
 			if err != nil {
 				t.Errorf("sync %d: %v", i, err)
 			}
@@ -204,9 +204,12 @@ func TestTierPriceChangesCreateNewPrices(t *testing.T) {
 	c := &Client{logger: logging.NewLogger()}
 	recordedPrice := ""
 	for i, amount := range []string{"29.95", "39.95", "29.95"} {
-		_, priceID, err := c.SyncTier(context.Background(), "prod_known", recordedPrice, "pro", "Pro", "", decimal.RequireFromString(amount), "EUR")
+		_, priceID, created, err := c.SyncTier(context.Background(), "prod_known", recordedPrice, "pro", "Pro", "", decimal.RequireFromString(amount), "EUR")
 		if err != nil {
 			t.Fatal(err)
+		}
+		if !created {
+			t.Fatalf("sync %d at %s did not report the price it created", i, amount)
 		}
 		if want := fmt.Sprintf("price_%d", i+1); priceID != want {
 			t.Fatalf("sync %d at %s recorded %s, want the new %s", i, amount, priceID, want)

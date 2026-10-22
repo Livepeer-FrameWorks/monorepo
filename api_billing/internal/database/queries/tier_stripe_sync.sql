@@ -17,3 +17,15 @@ SET stripe_product_id = sqlc.arg(stripe_product_id),
 WHERE id = sqlc.arg(id)
   AND stripe_product_id IS NOT DISTINCT FROM sqlc.narg(read_stripe_product_id)
   AND stripe_price_id_monthly IS NOT DISTINCT FROM sqlc.narg(read_stripe_price_id_monthly);
+
+-- Whether any tier or cluster price records the Stripe price, so a sync
+-- only deactivates a price nothing records.
+-- name: IsStripePriceRecorded :one
+SELECT EXISTS (
+    SELECT 1 FROM purser.billing_tiers
+    WHERE stripe_price_id_monthly = sqlc.arg(price_id)::text
+       OR stripe_price_id_yearly = sqlc.arg(price_id)::text
+) OR EXISTS (
+    SELECT 1 FROM purser.cluster_pricing
+    WHERE stripe_price_id_monthly = sqlc.arg(price_id)::text
+) AS recorded;

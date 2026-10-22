@@ -580,8 +580,9 @@ func catalogCreateIdempotencyKey(kind string, fields ...string) string {
 }
 
 // FindOrCreatePrice finds an existing recurring price on a product matching the amount/currency/interval,
-// or creates a new one. replacedPriceID is the price the tier row records, or empty.
-func (c *Client) FindOrCreatePrice(ctx context.Context, productID, replacedPriceID string, amountCents int64, currency, interval string) (*stripe.Price, error) {
+// or creates a new one. replacedPriceID is the price the tier row records, or empty. created reports a
+// price this call created, which includes one Stripe returned for a replayed create.
+func (c *Client) FindOrCreatePrice(ctx context.Context, productID, replacedPriceID string, amountCents int64, currency, interval string) (price *stripe.Price, created bool, err error) {
 	listParams := &stripe.PriceListParams{
 		Product:  stripe.String(productID),
 		Active:   stripe.Bool(true),
@@ -599,11 +600,11 @@ func (c *Client) FindOrCreatePrice(ctx context.Context, productID, replacedPrice
 				"price_id":   p.ID,
 				"product_id": productID,
 			}).Debug("Found existing Stripe price")
-			return p, nil
+			return p, false, nil
 		}
 	}
 	if err := iter.Err(); err != nil {
-		return nil, fmt.Errorf("failed to list Stripe prices: %w", err)
+		return nil, false, fmt.Errorf("failed to list Stripe prices: %w", err)
 	}
 
 	createParams := &stripe.PriceParams{
@@ -617,7 +618,7 @@ func (c *Client) FindOrCreatePrice(ctx context.Context, productID, replacedPrice
 	createParams.SetIdempotencyKey(catalogCreateIdempotencyKey("tier-price", productID, replacedPriceID, strconv.FormatInt(amountCents, 10), strings.ToLower(currency), interval))
 	p, err := stripeprice.New(createParams)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create Stripe price: %w", err)
+		return nil, false, fmt.Errorf("failed to create Stripe price: %w", err)
 	}
 
 	c.logger.WithFields(map[string]any{
@@ -628,26 +629,26 @@ func (c *Client) FindOrCreatePrice(ctx context.Context, productID, replacedPrice
 		"interval":     interval,
 	}).Info("Created Stripe price")
 
-	return p, nil
+	return p, true, nil
 }
 
 // SyncTier ensures a Stripe product and monthly price exist for the given tier.
-// Returns the Stripe product ID and monthly price ID. Idempotent.
-// knownProductID and knownPriceID are the product and monthly price the tier
-// row already records, or empty.
-func (c *Client) SyncTier(ctx context.Context, knownProductID, knownPriceID, tierName, displayName, description string, basePrice decimal.Decimal, currency string) (productID, monthlyPriceID string, err error) {
+// Returns the Stripe product ID and monthly price ID, and whether this call
+// created the price. Idempotent. knownProductID and knownPriceID are the
+// product and monthly price the tier row already records, or empty.
+func (c *Client) SyncTier(ctx context.Context, knownProductID, knownPriceID, tierName, displayName, description string, basePrice decimal.Decimal, currency string) (productID, monthlyPriceID string, createdPrice bool, err error) {
 	prod, err := c.FindOrCreateProduct(ctx, knownProductID, tierName, displayName, description)
 	if err != nil {
-		return "", "", err
+		return "", "", false, err
 	}
 
 	amountCents := basePrice.Mul(decimal.NewFromInt(100)).Round(0).IntPart()
-	p, err := c.FindOrCreatePrice(ctx, prod.ID, knownPriceID, amountCents, currency, "month")
+	p, created, err := c.FindOrCreatePrice(ctx, prod.ID, knownPriceID, amountCents, currency, "month")
 	if err != nil {
-		return prod.ID, "", err
+		return prod.ID, "", false, err
 	}
 
-	return prod.ID, p.ID, nil
+	return prod.ID, p.ID, created, nil
 }
 
 // DeactivatePrice marks a Stripe price as inactive. Stripe prices are immutable,

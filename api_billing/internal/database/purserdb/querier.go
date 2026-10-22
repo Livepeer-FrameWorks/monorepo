@@ -455,6 +455,9 @@ type Querier interface {
 	InsertUsageReportQuarantine(ctx context.Context, arg InsertUsageReportQuarantineParams) error
 	InsertUsageReportReceipt(ctx context.Context, arg InsertUsageReportReceiptParams) error
 	InsertX402ReversalCreditNote(ctx context.Context, arg InsertX402ReversalCreditNoteParams) error
+	// Whether any tier or cluster price records the Stripe price, so a sync
+	// only deactivates a price nothing records.
+	IsStripePriceRecorded(ctx context.Context, priceID string) (sql.NullBool, error)
 	IsX402MutationCompleted(ctx context.Context, arg IsX402MutationCompletedParams) (bool, error)
 	LeaseInvoiceEmail(ctx context.Context, arg LeaseInvoiceEmailParams) (int64, error)
 	LinkBillingPaymentIntent(ctx context.Context, arg LinkBillingPaymentIntentParams) error

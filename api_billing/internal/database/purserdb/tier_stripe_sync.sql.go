@@ -12,6 +12,26 @@ import (
 	"github.com/google/uuid"
 )
 
+const isStripePriceRecorded = `-- name: IsStripePriceRecorded :one
+SELECT EXISTS (
+    SELECT 1 FROM purser.billing_tiers
+    WHERE stripe_price_id_monthly = $1::text
+       OR stripe_price_id_yearly = $1::text
+) OR EXISTS (
+    SELECT 1 FROM purser.cluster_pricing
+    WHERE stripe_price_id_monthly = $1::text
+) AS recorded
+`
+
+// Whether any tier or cluster price records the Stripe price, so a sync
+// only deactivates a price nothing records.
+func (q *Queries) IsStripePriceRecorded(ctx context.Context, priceID string) (sql.NullBool, error) {
+	row := q.db.QueryRowContext(ctx, isStripePriceRecorded, priceID)
+	var recorded sql.NullBool
+	err := row.Scan(&recorded)
+	return recorded, err
+}
+
 const listActivePaidBillingTiersForStripe = `-- name: ListActivePaidBillingTiersForStripe :many
 SELECT id, tier_name, display_name, COALESCE(description, '') AS description,
        base_price::text AS base_price, currency,
