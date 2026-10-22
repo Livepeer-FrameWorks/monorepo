@@ -1,21 +1,3 @@
--- name: TryArtifactReconcilerLock :one
-SELECT pg_try_advisory_lock(hashtext('artifact_reconciler'));
-
--- name: UnlockArtifactReconciler :exec
-SELECT pg_advisory_unlock(hashtext('artifact_reconciler'));
-
--- name: TryArtifactBillingAttributionLock :one
-SELECT pg_try_advisory_lock(hashtext('artifact_billing_attribution'));
-
--- name: UnlockArtifactBillingAttribution :exec
-SELECT pg_advisory_unlock(hashtext('artifact_billing_attribution'));
-
--- name: TryFreezePublicationLedgerLock :one
-SELECT pg_try_advisory_lock(hashtext('freeze_publication_ledger'));
-
--- name: UnlockFreezePublicationLedger :exec
-SELECT pg_advisory_unlock(hashtext('freeze_publication_ledger'));
-
 -- name: GetActiveObjectKeyBackfillCursor :one
 SELECT last_hash FROM foghorn.active_object_key_backfill_cursor WHERE id = true;
 

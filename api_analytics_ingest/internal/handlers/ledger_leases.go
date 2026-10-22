@@ -5,13 +5,16 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 )
 
 const ledgerLeaseNamespace = "periscope-ingest:"
 
 // LedgerLease serializes one named rebuild or stale-close pass across service
-// replicas. The returned release function owns a dedicated database session;
-// closing that session also releases the advisory lock after process failure.
+// replicas. The lease is a session advisory lock on a database session pinned
+// for the hold; it ends with that session when the process dies, and release
+// discards a session whose unlock did not cleanly drop the lock.
 type LedgerLease interface {
 	TryAcquire(context.Context, string) (release func(context.Context) error, acquired bool, err error)
 }
@@ -28,32 +31,19 @@ func (l *postgresLedgerLease) TryAcquire(ctx context.Context, worker string) (fu
 	if l == nil || l.db == nil {
 		return nil, false, errors.New("ledger lease database is unavailable")
 	}
-	conn, err := l.db.Conn(ctx)
+	release, acquired, err := database.TrySessionLock(ctx, l.db, database.HashtextLock(ledgerLeaseNamespace+worker))
 	if err != nil {
-		return nil, false, fmt.Errorf("reserve ledger lease connection: %w", err)
-	}
-	key := ledgerLeaseNamespace + worker
-	var acquired bool
-	if err := conn.QueryRowContext(ctx, `SELECT pg_try_advisory_lock(hashtext($1))`, key).Scan(&acquired); err != nil {
-		_ = conn.Close()
 		return nil, false, fmt.Errorf("acquire ledger advisory lock: %w", err)
 	}
 	if !acquired {
-		_ = conn.Close()
 		return nil, false, nil
 	}
-	release := func(releaseCtx context.Context) error {
-		defer func() { _ = conn.Close() }()
-		var unlocked bool
-		if err := conn.QueryRowContext(releaseCtx, `SELECT pg_advisory_unlock(hashtext($1))`, key).Scan(&unlocked); err != nil {
+	return func(releaseCtx context.Context) error {
+		if err := release(releaseCtx); err != nil {
 			return fmt.Errorf("release ledger advisory lock: %w", err)
 		}
-		if !unlocked {
-			return fmt.Errorf("release ledger advisory lock: lock was not held")
-		}
 		return nil
-	}
-	return release, true, nil
+	}, true, nil
 }
 
 // localLedgerLease keeps direct/unit construction deterministic. Production

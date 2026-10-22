@@ -286,6 +286,28 @@ func (r *ArtifactReconciler) reconcile() bool {
 	return r.reconcileUnderLock()
 }
 
+// tryCellLock takes the cell-wide single-flight advisory lock hashtext(key) on a session pinned for the
+// pass. It reports false when a peer holds the lock or the database could not be asked. release unlocks
+// with its own timeout, since the pass's context may have ended, and a session whose lock statement
+// failed is discarded rather than pooled, which also ends any lock it still holds.
+func (r *ArtifactReconciler) tryCellLock(ctx context.Context, key string) (release func(), acquired bool) {
+	unlock, acquired, err := database.TrySessionLock(ctx, r.db, database.HashtextLock(key))
+	if err != nil {
+		r.logger.WithError(err).WithField("lock", key).Warn("Failed to take reconciler advisory lock")
+		return nil, false
+	}
+	if !acquired {
+		return nil, false
+	}
+	return func() {
+		unlockCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := unlock(unlockCtx); err != nil {
+			r.logger.WithError(err).WithField("lock", key).Warn("Failed to release reconciler advisory lock; discarded its session")
+		}
+	}, true
+}
+
 // reconcileUnderLock runs the catalog projection and artifact repair section under the cell-wide
 // 'artifact_reconciler' advisory lock. It reports false when this replica did not get the lock (a
 // peer holds it, or the connection failed), so the caller can retry an owed pass.
@@ -293,19 +315,11 @@ func (r *ArtifactReconciler) reconcileUnderLock() bool {
 	ctx, cancel := stoppable(r.stopCh, 2*time.Minute)
 	defer cancel()
 
-	conn, err := r.db.Conn(ctx)
-	if err != nil {
-		r.logger.WithError(err).Warn("Failed to acquire DB connection for reconciler lock")
+	release, acquired := r.tryCellLock(ctx, "artifact_reconciler")
+	if !acquired {
 		return false
 	}
-	defer conn.Close()
-
-	queries := foghorndb.New(conn)
-	acquired, err := queries.TryArtifactReconcilerLock(ctx)
-	if err != nil || !acquired {
-		return false
-	}
-	defer func() { _ = queries.UnlockArtifactReconciler(ctx) }() //nolint:errcheck // best-effort session advisory unlock
+	defer release()
 
 	// Attribution must precede projection: a row with no origin_cluster_id is claimed by the cluster
 	// that physically owns it (holds an origin node copy in this cluster-local foghorn DB). The
@@ -367,19 +381,11 @@ func (r *ArtifactReconciler) reconcileBillingAttribution() {
 	ctx, cancel := stoppable(r.stopCh, 2*time.Minute)
 	defer cancel()
 
-	conn, err := r.db.Conn(ctx)
-	if err != nil {
-		r.logger.WithError(err).Warn("Failed to acquire DB connection for billing attribution lock")
+	release, acquired := r.tryCellLock(ctx, "artifact_billing_attribution")
+	if !acquired {
 		return
 	}
-	defer conn.Close()
-
-	queries := foghorndb.New(conn)
-	acquired, lErr := queries.TryArtifactBillingAttributionLock(ctx)
-	if lErr != nil || !acquired {
-		return
-	}
-	defer func() { _ = queries.UnlockArtifactBillingAttribution(ctx) }() //nolint:errcheck // best-effort session advisory unlock
+	defer release()
 
 	if marked, bErr := control.ReconcileBillingAttribution(ctx); bErr != nil {
 		r.logger.WithError(bErr).Warn("Billing attribution reconciliation failed")
@@ -396,19 +402,11 @@ func (r *ArtifactReconciler) reconcileFreezePublicationLedgerPass() {
 	ctx, cancel := stoppable(r.stopCh, 2*time.Minute)
 	defer cancel()
 
-	conn, err := r.db.Conn(ctx)
-	if err != nil {
-		r.logger.WithError(err).Warn("Failed to acquire DB connection for publication ledger lock")
+	release, acquired := r.tryCellLock(ctx, "freeze_publication_ledger")
+	if !acquired {
 		return
 	}
-	defer conn.Close()
-
-	queries := foghorndb.New(conn)
-	acquired, lErr := queries.TryFreezePublicationLedgerLock(ctx)
-	if lErr != nil || !acquired {
-		return
-	}
-	defer func() { _ = queries.UnlockFreezePublicationLedger(ctx) }() //nolint:errcheck // best-effort session advisory unlock
+	defer release()
 
 	if r.reconcileFreezePublicationLedger(ctx) {
 		r.triggerLedgerSweep() // a full batch means more remains — drain promptly rather than waiting a full interval

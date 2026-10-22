@@ -75,17 +75,21 @@ func TestSessionLeader_RealPG(t *testing.T) {
 	}
 
 	// B's session is terminated server-side, as when its host dies: the lock
-	// goes with it, A takes over, and B stops acting as leader on its next Lead.
-	// The timeout form waits until the backend has exited and released its
-	// locks; without it A's next Lead races the backend's shutdown.
+	// goes with it, A takes over, and B's next Lead reports the lost lock and
+	// follows from then on. The timeout form waits until the backend has exited
+	// and released its locks; without it A's next Lead races the backend's
+	// shutdown.
 	if _, err := admin.ExecContext(ctx, `SELECT pg_terminate_backend(pid, 5000) FROM pg_locks WHERE locktype = 'advisory' AND granted AND pid <> pg_backend_pid()`); err != nil {
 		t.Fatal(err)
 	}
 	if !lead(a) {
 		t.Fatal("A did not take over the lock of the terminated session")
 	}
+	if ok, err := b.Lead(ctx); ok || err == nil {
+		t.Fatalf("B's Lead after its session was terminated = %v, %v; want the lost lock reported", ok, err)
+	}
 	if lead(b) {
-		t.Fatal("B still leads after its session was terminated")
+		t.Fatal("B leads while A holds the lock")
 	}
 
 	held := make(chan struct{})
@@ -123,5 +127,48 @@ func TestSessionLeader_RealPG(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("second WithSessionLock never ran after the first released")
+	}
+
+	// A discarded session leaves the pool and ends on the server, taking its
+	// lock with it, so another replica can take the lock and this pool never
+	// hands that backend out again.
+	single := open()
+	single.SetMaxOpenConns(1)
+	holder, err := single.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var holderPID int
+	if err := holder.QueryRowContext(ctx, `SELECT pg_backend_pid()`).Scan(&holderPID); err != nil {
+		t.Fatal(err)
+	}
+	var took bool
+	if err := holder.QueryRowContext(ctx, tryLockSQL, sessionLockClass, "discarded").Scan(&took); err != nil || !took {
+		t.Fatalf("holder take = %v, %v", took, err)
+	}
+	DiscardSession(holder)
+	var nextPID int
+	if err := single.QueryRowContext(ctx, `SELECT pg_backend_pid()`).Scan(&nextPID); err != nil {
+		t.Fatal(err)
+	}
+	if nextPID == holderPID {
+		t.Fatal("the pool handed the discarded session out again")
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		release, acquired, err := TrySessionLock(ctx, replicaB, NamedLock("discarded"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if acquired {
+			if err := release(ctx); err != nil {
+				t.Fatal(err)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the discarded session's lock was never released")
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }

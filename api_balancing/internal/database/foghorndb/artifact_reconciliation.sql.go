@@ -644,66 +644,6 @@ func (q *Queries) SetLegacyActiveObjectKey(ctx context.Context, arg SetLegacyAct
 	return result.RowsAffected()
 }
 
-const tryArtifactBillingAttributionLock = `-- name: TryArtifactBillingAttributionLock :one
-SELECT pg_try_advisory_lock(hashtext('artifact_billing_attribution'))
-`
-
-func (q *Queries) TryArtifactBillingAttributionLock(ctx context.Context) (bool, error) {
-	row := q.db.QueryRowContext(ctx, tryArtifactBillingAttributionLock)
-	var pg_try_advisory_lock bool
-	err := row.Scan(&pg_try_advisory_lock)
-	return pg_try_advisory_lock, err
-}
-
-const tryArtifactReconcilerLock = `-- name: TryArtifactReconcilerLock :one
-SELECT pg_try_advisory_lock(hashtext('artifact_reconciler'))
-`
-
-func (q *Queries) TryArtifactReconcilerLock(ctx context.Context) (bool, error) {
-	row := q.db.QueryRowContext(ctx, tryArtifactReconcilerLock)
-	var pg_try_advisory_lock bool
-	err := row.Scan(&pg_try_advisory_lock)
-	return pg_try_advisory_lock, err
-}
-
-const tryFreezePublicationLedgerLock = `-- name: TryFreezePublicationLedgerLock :one
-SELECT pg_try_advisory_lock(hashtext('freeze_publication_ledger'))
-`
-
-func (q *Queries) TryFreezePublicationLedgerLock(ctx context.Context) (bool, error) {
-	row := q.db.QueryRowContext(ctx, tryFreezePublicationLedgerLock)
-	var pg_try_advisory_lock bool
-	err := row.Scan(&pg_try_advisory_lock)
-	return pg_try_advisory_lock, err
-}
-
-const unlockArtifactBillingAttribution = `-- name: UnlockArtifactBillingAttribution :exec
-SELECT pg_advisory_unlock(hashtext('artifact_billing_attribution'))
-`
-
-func (q *Queries) UnlockArtifactBillingAttribution(ctx context.Context) error {
-	_, err := q.db.ExecContext(ctx, unlockArtifactBillingAttribution)
-	return err
-}
-
-const unlockArtifactReconciler = `-- name: UnlockArtifactReconciler :exec
-SELECT pg_advisory_unlock(hashtext('artifact_reconciler'))
-`
-
-func (q *Queries) UnlockArtifactReconciler(ctx context.Context) error {
-	_, err := q.db.ExecContext(ctx, unlockArtifactReconciler)
-	return err
-}
-
-const unlockFreezePublicationLedger = `-- name: UnlockFreezePublicationLedger :exec
-SELECT pg_advisory_unlock(hashtext('freeze_publication_ledger'))
-`
-
-func (q *Queries) UnlockFreezePublicationLedger(ctx context.Context) error {
-	_, err := q.db.ExecContext(ctx, unlockFreezePublicationLedger)
-	return err
-}
-
 const upsertDiscoveredArtifactNode = `-- name: UpsertDiscoveredArtifactNode :exec
 INSERT INTO foghorn.artifact_nodes
     (artifact_hash, node_id, file_path, size_bytes, last_seen_at, is_orphaned, cached_at)

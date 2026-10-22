@@ -17,6 +17,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/testutil/fakesession"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -405,7 +406,7 @@ func TestFundingSignerLockIsSessionScoped(t *testing.T) {
 	defer db.Close()
 	monitor := &LivepeerDepositMonitor{db: db, logger: logging.NewLogger()}
 	mock.ExpectExec("pg_advisory_lock").WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec("pg_advisory_unlock").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery("pg_advisory_unlock").WillReturnRows(sqlmock.NewRows([]string{"pg_advisory_unlock"}).AddRow(true))
 
 	unlock, err := monitor.lockFundingSigner(context.Background())
 	if err != nil {
@@ -454,7 +455,7 @@ func TestFundTicketBrokerRereadsGatewayUnderSignerLock(t *testing.T) {
 	}
 	defer db.Close()
 	mock.ExpectExec("pg_advisory_lock").WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec("pg_advisory_unlock").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery("pg_advisory_unlock").WillReturnRows(sqlmock.NewRows([]string{"pg_advisory_unlock"}).AddRow(true))
 
 	monitor := &LivepeerDepositMonitor{
 		db: db, logger: logging.NewLogger(), rpcEndpoint: server.URL,
@@ -500,4 +501,48 @@ func stringPtr(v string) *string {
 
 func int32Ptr(v int32) *int32 {
 	return &v
+}
+
+// The funding signer lock pins one session. When that session cannot drop
+// the lock it is closed, so the lock ends with it instead of staying held by
+// a pooled connection.
+func TestFundingSignerLockDiscardsASessionThatCannotDropTheLock(t *testing.T) {
+	db, server := fakesession.New(func(_ int, query string) (bool, error) {
+		if strings.Contains(query, "pg_advisory_unlock") {
+			return false, fakesession.ExpiredSessionError()
+		}
+		return true, nil
+	})
+	defer db.Close()
+	monitor := &LivepeerDepositMonitor{db: db, logger: logging.NewLogger()}
+	unlock, err := monitor.lockFundingSigner(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	unlock()
+	if !server.Closed(1) {
+		t.Fatal("a session whose unlock failed went back to the pool still holding the signer lock")
+	}
+}
+
+func TestFundingSignerLockDiscardsASessionThatCannotTakeTheLock(t *testing.T) {
+	db, server := fakesession.New(func(session int, _ string) (bool, error) {
+		if session == 1 {
+			return false, fakesession.ExpiredSessionError()
+		}
+		return true, nil
+	})
+	defer db.Close()
+	monitor := &LivepeerDepositMonitor{db: db, logger: logging.NewLogger()}
+	if _, err := monitor.lockFundingSigner(context.Background()); err == nil {
+		t.Fatal("lockFundingSigner on the expired session succeeded")
+	}
+	unlock, err := monitor.lockFundingSigner(context.Background())
+	if err != nil {
+		t.Fatalf("lockFundingSigner after the expired session = %v; the pool handed the expired session back", err)
+	}
+	unlock()
+	if server.Opened() != 2 || !server.Closed(1) {
+		t.Fatalf("opened=%d closed(1)=%v; want the expired session closed and a second one opened", server.Opened(), server.Closed(1))
+	}
 }

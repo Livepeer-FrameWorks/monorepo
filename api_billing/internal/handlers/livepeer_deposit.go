@@ -487,7 +487,8 @@ func fundingAmounts(state *GatewayDepositState, topup *big.Int) ticketBrokerFund
 
 // lockFundingSigner serializes nonce allocation and submission across Purser
 // replicas that share the funding wallet. PostgreSQL releases this session lock
-// automatically if the process or connection disappears.
+// automatically if the process or connection disappears, so a session whose
+// lock or unlock statement fails is discarded rather than pooled.
 func (m *LivepeerDepositMonitor) lockFundingSigner(ctx context.Context) (func(), error) {
 	if m.db == nil {
 		return nil, fmt.Errorf("durable Livepeer funding signer lock unavailable")
@@ -497,17 +498,15 @@ func (m *LivepeerDepositMonitor) lockFundingSigner(ctx context.Context) (func(),
 		return nil, err
 	}
 	if _, err := conn.ExecContext(ctx, `SELECT pg_advisory_lock(hashtext('purser-livepeer-funding-signer'))`); err != nil {
-		_ = conn.Close()
+		database.DiscardSession(conn)
 		return nil, err
 	}
+	lock := database.AdvisoryLock{UnlockSQL: `SELECT pg_advisory_unlock(hashtext('purser-livepeer-funding-signer'))`}
 	return func() {
 		unlockCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if _, err := conn.ExecContext(unlockCtx, `SELECT pg_advisory_unlock(hashtext('purser-livepeer-funding-signer'))`); err != nil {
-			m.logger.WithError(err).Error("Failed to release Livepeer funding signer lock")
-		}
-		if err := conn.Close(); err != nil {
-			m.logger.WithError(err).Error("Failed to close Livepeer funding signer lock connection")
+		if err := database.ReleaseSessionLock(unlockCtx, conn, lock); err != nil {
+			m.logger.WithError(err).Error("Failed to release Livepeer funding signer lock; discarded its session")
 		}
 	}, nil
 }

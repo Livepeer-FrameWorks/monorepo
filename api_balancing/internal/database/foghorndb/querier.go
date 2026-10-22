@@ -812,12 +812,6 @@ type Querier interface {
 	TouchDVRRecordingNode(ctx context.Context, arg TouchDVRRecordingNodeParams) error
 	TouchStartedDVR(ctx context.Context, arg TouchStartedDVRParams) (int64, error)
 	TryAcquireRestreamCapacityRearmLock(ctx context.Context) (bool, error)
-	TryArtifactBillingAttributionLock(ctx context.Context) (bool, error)
-	TryArtifactReconcilerLock(ctx context.Context) (bool, error)
-	TryFreezePublicationLedgerLock(ctx context.Context) (bool, error)
-	UnlockArtifactBillingAttribution(ctx context.Context) error
-	UnlockArtifactReconciler(ctx context.Context) error
-	UnlockFreezePublicationLedger(ctx context.Context) error
 	UnprojectedThumbnailEligible(ctx context.Context, attemptID string) (bool, error)
 	UnprojectedThumbnailRecoveryBacklog(ctx context.Context, updatedAt time.Time) (int32, error)
 	UpdateArtifactReportMetadata(ctx context.Context, arg UpdateArtifactReportMetadataParams) error
