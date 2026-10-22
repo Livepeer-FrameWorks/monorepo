@@ -126,7 +126,7 @@ func TestDiagnoseKafkaFailsOnControllerLeadershipLossInWindow(t *testing.T) {
 		case strings.Contains(command, "kafka-metadata-quorum"):
 			return "LeaderId: 100\nLeaderEpoch: 9\nMaxFollowerLagTimeMs: 0\nCurrentVoters: [100]\n", 0
 		case strings.Contains(command, "controller.log"):
-			return "renounced=35 slow=198\n", 0
+			return "renounced=35 leaderless=4 slow=198 max_slow_ms=10327 election_timeout_ms=5000\n", 0
 		}
 		return "ok", 0
 	}
@@ -136,7 +136,8 @@ func TestDiagnoseKafkaFailsOnControllerLeadershipLossInWindow(t *testing.T) {
 	cmd.SetErr(&stderr)
 	err := diagnoseKafka(context.Background(), cmd, manifest, replyRunnerFor(reply, &commands), "48 hours ago")
 	out := stdout.String() + stderr.String()
-	if err == nil || !strings.Contains(out, "gave up leadership with no successor 35 time(s) since 48 hours ago") || !strings.Contains(out, "198 slow event(s)") {
+	if err == nil || !strings.Contains(out, "was left without a leader 4 time(s) since 48 hours ago") ||
+		!strings.Contains(out, "31 unplanned leader change(s) since 48 hours ago") || !strings.Contains(out, "198 slow event(s), largest stall 10327 ms") {
 		t.Fatalf("leadership losses not reported (err=%v):\n%s", err, out)
 	}
 	joined := strings.Join(commands, "\n")
@@ -145,70 +146,147 @@ func TestDiagnoseKafkaFailsOnControllerLeadershipLossInWindow(t *testing.T) {
 	}
 }
 
-// TestKafkaControllerLogProbeReadsControllerLogInTheWindow stands in for a
-// staging controller host: the QuorumController lines are only in LOG_DIR's
-// controller.log and its .gz rotations (log4j ControllerAppender), and the
-// unit journal holds none of them.
-func TestKafkaControllerLogProbeReadsControllerLogInTheWindow(t *testing.T) {
-	bin, logDir := t.TempDir(), t.TempDir()
+// runKafkaQuorumOnControllerLogs runs checkKafkaQuorum against one controller
+// host simulated locally: systemctl reports the unit's LOG_DIR and its
+// server.properties (election timeout 5000 ms, as the kafka role renders it),
+// date resolves "1 hour ago" to cutoff, and logs holds LOG_DIR's files (a
+// ".gz" name is written gzipped). The unit journal holds none of the
+// QuorumController lines: log4j sends them only to controller.log.
+func runKafkaQuorumOnControllerLogs(t *testing.T, cutoff string, logs map[string]string) *health.CheckResult {
+	t.Helper()
+	bin, logDir, confDir := t.TempDir(), t.TempDir(), t.TempDir()
+	props := filepath.Join(confDir, "frameworks-kafka-controller.properties")
+	if err := os.WriteFile(props, []byte("process.roles=controller\ncontroller.quorum.fetch.timeout.ms=10000\ncontroller.quorum.election.timeout.ms=5000\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	stubs := map[string]string{
-		// journald sees only the kafka-server-start.sh stdout, not ControllerAppender.
 		"journalctl": "#!/bin/sh\nexit 0\n",
-		"systemctl":  "#!/bin/sh\necho \"LOG_DIR=" + logDir + " KAFKA_LOG4J_OPTS=-Dlog4j2.configurationFile=/opt/kafka/config/x.yaml\"\n",
+		"systemctl": "#!/bin/sh\ncase \"$*\" in\n*ExecStart*) echo '{ path=/opt/kafka/bin/kafka-server-start.sh ; argv[]=/opt/kafka/bin/kafka-server-start.sh " + props + " ; ignore_errors=no }' ;;\n" +
+			"*) echo \"LOG_DIR=" + logDir + " KAFKA_LOG4J_OPTS=-Dlog4j2.configurationFile=/opt/kafka/config/x.yaml\" ;;\nesac\n",
 		// GNU date resolving "1 hour ago" on the host.
-		"date": "#!/bin/sh\n[ \"$2\" = '1 hour ago' ] || exit 1\necho '2026-10-16 18:30:00'\n",
+		"date": "#!/bin/sh\n[ \"$2\" = '1 hour ago' ] || exit 1\necho '" + cutoff + "'\n",
 	}
 	for name, body := range stubs {
 		if err := os.WriteFile(filepath.Join(bin, name), []byte(body), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
+	for name, content := range logs {
+		data := []byte(content)
+		if strings.HasSuffix(name, ".gz") {
+			var gz bytes.Buffer
+			zw := gzip.NewWriter(&gz)
+			if _, err := zw.Write(data); err != nil {
+				t.Fatal(err)
+			}
+			if err := zw.Close(); err != nil {
+				t.Fatal(err)
+			}
+			data = gz.Bytes()
+		}
+		if err := os.WriteFile(filepath.Join(logDir, name), data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	manifest := &inventory.Manifest{
+		Hosts: map[string]inventory.Host{"k1": {Name: "k1", ExternalIP: "10.0.0.5"}},
+		Infrastructure: inventory.InfrastructureConfig{Kafka: &inventory.KafkaConfig{
+			Enabled:     true,
+			ClusterID:   "c1",
+			Brokers:     []inventory.KafkaBroker{{Host: "k1", ID: 1, Port: 9092}},
+			Controllers: []inventory.KafkaController{{Host: "k1", ID: 201, Port: 9093}},
+		}},
+	}
+	reply := func(_, command string) (string, int) {
+		if strings.Contains(command, "kafka-metadata-quorum") {
+			return "LeaderId: 203\nLeaderEpoch: 1179\nMaxFollowerLagTimeMs: 0\nCurrentVoters: [201]\n", 0
+		}
+		cmd := exec.CommandContext(t.Context(), "sh", "-c", command)
+		cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+		out, err := cmd.Output()
+		if err != nil {
+			t.Logf("probe: %v: %s", err, stderr.String())
+			return string(out), 1
+		}
+		return string(out), 0
+	}
+	var commands []string
+	return checkKafkaQuorum(t.Context(), manifest, allKafkaClusters(manifest)[0], "native", "1 hour ago", replyRunnerFor(reply, &commands))
+}
+
+// TestKafkaControllerLogProbeReadsControllerLogInTheWindow reads the
+// QuorumController lines from LOG_DIR's controller.log and its .gz rotations
+// and the raft state transitions from server.log, counting only the window.
+func TestKafkaControllerLogProbeReadsControllerLogInTheWindow(t *testing.T) {
 	const leaderless = "WARN [QuorumController id=101] Renouncing the leadership due to a metadata log event. We were the leader at epoch 905, but in the new epoch 906, the leader is (none). Reverting to last stable offset 4370000. (org.apache.kafka.controller.QuorumController)"
 	const handover = "WARN [QuorumController id=101] Renouncing the leadership due to a metadata log event. We were the leader at epoch 906, but in the new epoch 907, the leader is 102. Reverting to last stable offset 4370100. (org.apache.kafka.controller.QuorumController)"
+	const laterLeaderless = "WARN [QuorumController id=101] Renouncing the leadership due to a metadata log event. We were the leader at epoch 907, but in the new epoch 908, the leader is (none). Reverting to last stable offset 4370200. (org.apache.kafka.controller.QuorumController)"
 	const slow = "INFO [QuorumController id=101] Exceptionally slow controller event writeNoOpRecord took 2100 ms. (org.apache.kafka.controller.QuorumController)"
 	current := strings.Join([]string{
 		"[2026-10-16 18:10:00,001] " + leaderless, // before the window
 		"[2026-10-16 18:12:00,001] " + slow,       // before the window
 		"[2026-10-16 18:45:00,001] " + leaderless,
-		"[2026-10-16 18:46:00,001] " + handover,
+		"[2026-10-16 18:46:00,001] " + handover, // a minute later: past the election timeout
 		"[2026-10-16 19:20:23,105] " + slow,
-		"[2026-10-16 19:20:24,000] " + leaderless,
+		"[2026-10-16 19:20:24,000] " + laterLeaderless,
 	}, "\n") + "\n"
-	if err := os.WriteFile(filepath.Join(logDir, "controller.log"), []byte(current), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	var gz bytes.Buffer
-	zw := gzip.NewWriter(&gz)
-	if _, err := zw.Write([]byte("[2026-10-15 05:24:00,000] " + leaderless + "\n")); err != nil {
-		t.Fatal(err)
-	}
-	if err := zw.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(logDir, "controller.log.2026-10-15-1.gz"), gz.Bytes(), 0o644); err != nil {
-		t.Fatal(err)
+	result := runKafkaQuorumOnControllerLogs(t, "2026-10-16 18:30:00", map[string]string{
+		"controller.log":                 current,
+		"controller.log.2026-10-15-1.gz": "[2026-10-15 05:24:00,000] " + leaderless + "\n",
+	})
+	if result.OK ||
+		!strings.Contains(result.Error, "controller 201 on k1 was left without a leader 2 time(s) since 1 hour ago") ||
+		!strings.Contains(result.Error, "controller 201 on k1 lost leadership in 1 unplanned leader change(s) since 1 hour ago") ||
+		!strings.Contains(result.Error, "controller 201: 1 slow event(s), largest stall 2100 ms") {
+		t.Errorf("want the 2 leaderless renouncements, 1 handover and 1 slow event after 18:30: %+v", result)
 	}
 
-	cmd := exec.CommandContext(t.Context(), "sh", "-c", kafkaControllerLogProbe("frameworks-kafka-controller", "1 hour ago"))
-	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("probe failed: %v\n%s", err, out)
+	// Staging us-2, 2026-10-22: a 10.3 s controller stall made the leader
+	// resign; it passed through Unattached ("the leader is (none)") and
+	// server.log shows it following the new leader 203 12 ms later.
+	const (
+		slow10s  = "[2026-10-22 20:23:18,195] ERROR [QuorumController id=201] Exceptionally slow controller event writeNoOpRecord(org.apache.kafka.controller.QuorumController$$Lambda/0x00007f3c2c4b1a30@6f1d3c2e) took 10327 ms. (org.apache.kafka.controller.QuorumController)"
+		slow6s   = "[2026-10-22 20:23:07,868] ERROR [QuorumController id=201] Exceptionally slow controller event maybeFenceStaleBroker took 6012 ms. (org.apache.kafka.controller.QuorumController)"
+		renounce = "[2026-10-22 20:23:18,892] WARN [QuorumController id=201] Renouncing the leadership due to a metadata log event. We were the leader at epoch 1178, but in the new epoch 1179, the leader is (none). Reverting to last stable offset 48211735. (org.apache.kafka.controller.QuorumController)"
+		follower = "[2026-10-22 20:23:18,904] INFO [RaftManager id=201] Completed transition to FollowerState(fetchTimeoutMs=10000, epoch=1179, leader=203, leaderEndpoints=Endpoints(endpoints={ListenerName(CONTROLLER)=/10.88.0.3:9093}), voters=[201, 202, 203], highWatermark=Optional[LogOffsetMetadata(offset=48211736, metadata=Optional.empty)], fetchingSnapshot=Optional.empty) from UnattachedState(epoch=1179, leaderId=OptionalInt.empty, votedKey=Optional.empty, voters=[201, 202, 203], electionTimeoutMs=5871, highWatermark=Optional[LogOffsetMetadata(offset=48211736, metadata=Optional.empty)]) (org.apache.kafka.raft.QuorumState)"
+		// The prior epoch's follower transition is no successor for epoch 1179.
+		staleFollower = "[2026-10-22 20:23:18,700] INFO [RaftManager id=201] Completed transition to FollowerState(fetchTimeoutMs=10000, epoch=1177, leader=202, leaderEndpoints=Endpoints(endpoints={}), voters=[201, 202, 203], highWatermark=Optional.empty, fetchingSnapshot=Optional.empty) from UnattachedState(epoch=1177, leaderId=OptionalInt.empty, votedKey=Optional.empty, voters=[201, 202, 203], electionTimeoutMs=5000, highWatermark=Optional.empty) (org.apache.kafka.raft.QuorumState)"
+		lateFollower  = "[2026-10-22 20:23:30,000] INFO [RaftManager id=201] Completed transition to FollowerState(fetchTimeoutMs=10000, epoch=1180, leader=203, leaderEndpoints=Endpoints(endpoints={}), voters=[201, 202, 203], highWatermark=Optional.empty, fetchingSnapshot=Optional.empty) from CandidateState(localId=201, epoch=1180, retries=2, voteStates={}, highWatermark=Optional.empty, electionTimeoutMs=5000) (org.apache.kafka.raft.QuorumState)"
+	)
+	controllerLog := slow6s + "\n" + slow10s + "\n" + renounce + "\n"
+	result = runKafkaQuorumOnControllerLogs(t, "2026-10-22 19:30:00", map[string]string{
+		"controller.log": controllerLog,
+		"server.log":     staleFollower + "\n" + follower + "\n",
+	})
+	if result.OK ||
+		!strings.Contains(result.Error, "controller 201 on k1 lost leadership in 1 unplanned leader change(s) since 1 hour ago") ||
+		!strings.Contains(result.Error, "controller 201: 2 slow event(s), largest stall 10327 ms") ||
+		strings.Contains(result.Error, "without a leader") || strings.Contains(result.Error, "no successor") {
+		t.Errorf("want 1 unplanned leader change with a successor after a 10327 ms stall, not a leaderless quorum: %+v", result)
 	}
-	renounced, slowEvents, err := parseKafkaControllerLogProbe(string(out))
-	if err != nil || renounced != 2 || slowEvents != 1 {
-		t.Fatalf("renounced=%d slow=%d err=%v from %q; want the 2 leaderless renouncements and 1 slow event after 18:30", renounced, slowEvents, err, out)
+
+	// No new leader within the 5000 ms election timeout: leaderless.
+	for name, serverLog := range map[string]string{
+		"no successor":    staleFollower + "\n",
+		"late successor":  staleFollower + "\n" + lateFollower + "\n",
+		"empty serverlog": "",
+	} {
+		result = runKafkaQuorumOnControllerLogs(t, "2026-10-22 19:30:00", map[string]string{
+			"controller.log": controllerLog,
+			"server.log":     serverLog,
+		})
+		if result.OK || !strings.Contains(result.Error, "controller 201 on k1 was left without a leader 1 time(s) since 1 hour ago") ||
+			strings.Contains(result.Error, "unplanned leader change") {
+			t.Errorf("%s: want a leaderless quorum: %+v", name, result)
+		}
 	}
 
 	// A host without the log fails the probe rather than reporting zero.
-	stubs["systemctl"] = "#!/bin/sh\necho LOG_DIR=" + filepath.Join(logDir, "missing") + "\n"
-	if err := os.WriteFile(filepath.Join(bin, "systemctl"), []byte(stubs["systemctl"]), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	cmd = exec.CommandContext(t.Context(), "sh", "-c", kafkaControllerLogProbe("frameworks-kafka-controller", "1 hour ago"))
-	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	if out, err := cmd.CombinedOutput(); err == nil {
-		t.Fatalf("probe succeeded without a controller.log: %q", out)
+	result = runKafkaQuorumOnControllerLogs(t, "2026-10-22 19:30:00", map[string]string{"server.log": follower + "\n"})
+	if result.OK || !strings.Contains(result.Error, "controller log unreadable") {
+		t.Fatalf("probe succeeded without a controller.log: %+v", result)
 	}
 }
 

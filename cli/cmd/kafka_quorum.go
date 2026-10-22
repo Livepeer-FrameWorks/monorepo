@@ -101,46 +101,112 @@ func (s kafkaQuorumStatus) problems(expectedVoters int) []string {
 	return out
 }
 
-// kafkaControllerLogProbe counts, in a controller unit's controller.log since
-// a point in time, how often it gave up quorum leadership with no successor
-// and how many controller events were exceptionally slow. The kafka role's
-// log4j config sends the QuorumController logger only to controller.log (and
-// its dated .gz rotations) under the unit's LOG_DIR, never to the journal.
-// since is a GNU date expression ("1 hour ago"); log4j stamps lines in host
-// local time, as does date, so the cutoff compares as text.
+// kafkaControllerLogProbe reads, in one pass over a controller unit's logs
+// since a point in time, how often it gave up quorum leadership, how many of
+// those were followed by no new leader within the election timeout, and the
+// count and largest duration of exceptionally slow controller events.
+//
+// The kafka role's log4j config sends the QuorumController logger only to
+// controller.log and raft state transitions only to server.log (each with
+// dated .gz rotations under the unit's LOG_DIR), never to the journal. A
+// leader that loses the quorum always logs "the leader is (none)": it passes
+// through Unattached before it learns the winner. Its successor is the first
+// leader the node sees for that epoch or a later one: a server.log
+// FollowerState with a leader or a Leader transition, or a controller.log
+// "In the new epoch N, the leader is X" / "Becoming the active controller".
+// Matching by epoch rather than line order holds while the controller event
+// queue is stalled and logs the renouncement after raft already followed.
+// Only files written since the cutoff can hold lines in the window.
+//
+// The election timeout is controller.quorum.election.timeout.ms from the
+// unit's server.properties (Kafka's 1000 ms default when unset). since is a
+// GNU date expression ("1 hour ago"); log4j stamps lines in host local time,
+// as does date, so the cutoff compares as text.
 func kafkaControllerLogProbe(unit, since string) string {
 	return fmt.Sprintf(`unit=%s
 cutoff=$(date -d %s '+%%Y-%%m-%%d %%H:%%M:%%S') || exit 3
 dir=$(systemctl show -p Environment --value "$unit" 2>/dev/null | tr ' ' '\n' | sed -n 's/^LOG_DIR=//p' | tail -n 1)
 [ -n "$dir" ] || dir=/var/log/kafka/$unit
+props=$(systemctl show -p ExecStart --value "$unit" 2>/dev/null | tr ' ' '\n' | grep '\.properties$' | tail -n 1)
+timeout=$(sed -n 's/^controller\.quorum\.election\.timeout\.ms=\([0-9]*\).*/\1/p' "$props" 2>/dev/null | tail -n 1)
+case "$timeout" in ''|*[!0-9]*) timeout=1000 ;; esac
 set -- "$dir"/controller.log*
 [ -e "$1" ] || { echo "no controller.log in $dir" >&2; exit 4; }
-for f in "$@"; do case "$f" in *.gz) gzip -dc "$f" ;; *) cat "$f" ;; esac; done 2>/dev/null |
-  awk -v cutoff="$cutoff" 'substr($0, 2, 19) >= cutoff && /Renouncing the leadership/ && /the leader is \(none\)/{r++} substr($0, 2, 19) >= cutoff && /Exceptionally slow controller event/{s++} END{printf "renounced=%%d slow=%%d\n", r, s}'`,
+files=$(find "$dir" -maxdepth 1 \( -name 'controller.log*' -o -name 'server.log*' \) -newermt "$cutoff") || { echo "cannot list the logs in $dir written since $cutoff" >&2; exit 5; }
+printf '%%s\n' "$files" | while IFS= read -r f; do [ -n "$f" ] || continue; case "$f" in *.gz) gzip -dc "$f" ;; *) cat "$f" ;; esac; done 2>/dev/null |
+  awk -v cutoff="$cutoff" -v timeout="$timeout" '
+function ms(ts,   y, m, d, a, days) {
+  y = substr(ts, 1, 4) + 0; m = substr(ts, 6, 2) + 0; d = substr(ts, 9, 2) + 0
+  a = (m <= 2); y -= a; m += 12 * a - 3
+  days = 365 * y + int(y / 4) - int(y / 100) + int(y / 400) + int((153 * m + 2) / 5) + d
+  return ((days * 24 + substr(ts, 12, 2)) * 60 + substr(ts, 15, 2)) * 60000 + substr(ts, 18, 2) * 1000 + substr(ts, 21, 3)
+}
+function num(s, re) { if (!match(s, re)) return -1; s = substr(s, RSTART, RLENGTH); gsub(/[^0-9]/, "", s); return s + 0 }
+function successor(epoch) { k++; sat[k] = ms(substr($0, 2, 23)); sepoch[k] = epoch }
+/Renouncing the leadership/ {
+  if (substr($0, 2, 19) < cutoff) next
+  r++
+  if (/the leader is \(none\)/) { n++; rat[n] = ms(substr($0, 2, 23)); repoch[n] = num($0, "new epoch [0-9]+") }
+  else successor(num($0, "new epoch [0-9]+"))
+  next
+}
+/Exceptionally slow controller event/ {
+  if (substr($0, 2, 19) < cutoff) next
+  s++; t = num($0, "took [0-9]+ ms"); if (t > maxslow) maxslow = t
+  next
+}
+/In the new epoch [0-9]+, the leader is [0-9]/ { successor(num($0, "new epoch [0-9]+")); next }
+/Becoming the active controller at epoch [0-9]/ { successor(num($0, "at epoch [0-9]+")); next }
+/Completed transition to (FollowerState|Leader|LeaderState)\(/ {
+  state = $0; sub(/ from .*/, "", state)
+  if (state ~ /FollowerState\(/ && state !~ /leader(Id)?=[0-9]/) next
+  successor(num(state, "epoch=[0-9]+"))
+}
+END {
+  for (i = 1; i <= n; i++) {
+    found = 0
+    for (j = 1; j <= k; j++) if (sepoch[j] >= repoch[i] && sat[j] <= rat[i] + timeout) { found = 1; break }
+    if (!found) l++
+  }
+  printf "renounced=%%d leaderless=%%d slow=%%d max_slow_ms=%%d election_timeout_ms=%%d\n", r, l, s, maxslow, timeout
+}'`,
 		ssh.ShellQuote(unit), ssh.ShellQuote(since))
 }
 
-func parseKafkaControllerLogProbe(output string) (renounced, slow int, err error) {
+// kafkaControllerLogCounts is one controller's parsed kafkaControllerLogProbe
+// output. Renounced counts every leadership loss; Leaderless is the subset no
+// new leader followed within ElectionTimeoutMs.
+type kafkaControllerLogCounts struct {
+	Renounced, Leaderless, Slow  int
+	MaxSlowMs, ElectionTimeoutMs int
+}
+
+func parseKafkaControllerLogProbe(output string) (kafkaControllerLogCounts, error) {
+	var counts kafkaControllerLogCounts
+	fields := map[string]*int{
+		"renounced":           &counts.Renounced,
+		"leaderless":          &counts.Leaderless,
+		"slow":                &counts.Slow,
+		"max_slow_ms":         &counts.MaxSlowMs,
+		"election_timeout_ms": &counts.ElectionTimeoutMs,
+	}
+	seen := map[string]bool{}
 	for _, field := range strings.Fields(output) {
 		key, value, ok := strings.Cut(field, "=")
-		if !ok {
+		target, known := fields[key]
+		if !ok || !known {
 			continue
 		}
 		n, convErr := strconv.Atoi(value)
 		if convErr != nil {
-			return 0, 0, fmt.Errorf("unreadable %s count %q", key, value)
+			return kafkaControllerLogCounts{}, fmt.Errorf("unreadable %s count %q", key, value)
 		}
-		switch key {
-		case "renounced":
-			renounced = n
-		case "slow":
-			slow = n
-		}
+		*target, seen[key] = n, true
 	}
-	if !strings.Contains(output, "renounced=") {
-		return 0, 0, fmt.Errorf("no controller log counts in %q", strings.TrimSpace(output))
+	if len(seen) != len(fields) {
+		return kafkaControllerLogCounts{}, fmt.Errorf("no controller log counts in %q", strings.TrimSpace(output))
 	}
-	return renounced, slow, nil
+	return counts, nil
 }
 
 type kafkaControllerTarget struct {
@@ -172,10 +238,13 @@ func kafkaClusterLabel(cluster kafkaClusterView) string {
 }
 
 // checkKafkaQuorum reads the cluster's KRaft metadata quorum through its first
-// broker and counts leadership losses in every controller's controller.log since
+// broker and counts leadership losses in every controller's logs since
 // `since`. A missing leader, a voter set that differs from the manifest, a
-// lagging voter, or any leadership loss in the window makes it unhealthy;
-// slow controller events alone only annotate the message.
+// lagging voter, or any leadership loss in the window makes it unhealthy, as
+// cluster doctor treats every self-recovered disruption in its window (a unit
+// that restarted automatically counts too); the message tells a failover with
+// a successor apart from a leaderless quorum. Slow controller events and the
+// largest stall alone only annotate the message.
 func checkKafkaQuorum(ctx context.Context, manifest *inventory.Manifest, cluster kafkaClusterView, mode, since string, runnerFor func(inventory.Host) (ssh.Runner, error)) *health.CheckResult {
 	result := &health.CheckResult{Name: "kafka_quorum", CheckedAt: time.Now(), Metadata: map[string]string{"cluster": kafkaClusterLabel(cluster)}}
 	if len(cluster.Brokers) == 0 {
@@ -229,16 +298,19 @@ func checkKafkaQuorum(ctx context.Context, manifest *inventory.Manifest, cluster
 				problems = append(problems, fmt.Sprintf("controller %d on %s: controller log unreadable: %s", ctrl.ID, ctrl.Host, diagnosticCommandError(out, probeErr)))
 				continue
 			}
-			renounced, slow, parseErr := parseKafkaControllerLogProbe(out.Stdout)
+			counts, parseErr := parseKafkaControllerLogProbe(out.Stdout)
 			if parseErr != nil {
 				problems = append(problems, fmt.Sprintf("controller %d on %s: %v", ctrl.ID, ctrl.Host, parseErr))
 				continue
 			}
-			if renounced > 0 {
-				problems = append(problems, fmt.Sprintf("controller %d on %s gave up leadership with no successor %d time(s) since %s", ctrl.ID, ctrl.Host, renounced, since))
+			if counts.Leaderless > 0 {
+				problems = append(problems, fmt.Sprintf("controller %d on %s was left without a leader %d time(s) since %s: it gave up leadership and saw no new leader within the %d ms election timeout", ctrl.ID, ctrl.Host, counts.Leaderless, since, counts.ElectionTimeoutMs))
 			}
-			if slow > 0 {
-				slowNotes = append(slowNotes, fmt.Sprintf("controller %d: %d slow event(s)", ctrl.ID, slow))
+			if handovers := counts.Renounced - counts.Leaderless; handovers > 0 {
+				problems = append(problems, fmt.Sprintf("controller %d on %s lost leadership in %d unplanned leader change(s) since %s, each followed by a new leader", ctrl.ID, ctrl.Host, handovers, since))
+			}
+			if counts.Slow > 0 {
+				slowNotes = append(slowNotes, fmt.Sprintf("controller %d: %d slow event(s), largest stall %d ms", ctrl.ID, counts.Slow, counts.MaxSlowMs))
 			}
 		}
 	}
