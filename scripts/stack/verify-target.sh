@@ -98,6 +98,10 @@ receiver_ssh=()
 receiver_dir=""
 cleanup_run() {
   local jwt code endpoint
+  # After the sweep: what the scenarios created, while the run's token still works.
+  if [ -n "$token_id" ]; then
+    cleanup_run_objects "$STACK_API_TOKEN" | tee "$STACK_STATE_DIR/cleanup.log"
+  fi
   endpoint=$(awk '{print $1}' "$STACK_STATE_DIR/webhook-endpoint" 2>/dev/null)
   if [ -n "$endpoint" ]; then
     jwt=$(refresh_session_token "$jar" 2>/dev/null) || jwt=$operator_jwt
@@ -121,6 +125,30 @@ cleanup_run() {
   rm -f "$jar"
 }
 trap cleanup_run EXIT
+
+# A run killed before its exit cleanup leaves its token, webhook endpoint and
+# objects behind; this run recovers them. A stack token used in the last 15
+# minutes belongs to a run still in progress, which this one must not disturb.
+stale_tokens=$(gql '{developerTokensConnection(page:{first:200}){nodes{id tokenName status lastUsedAt}}}' '{}' "$operator_jwt" |
+  jq -r --arg prefix "stack-$cluster-" --argjson now "$(date +%s)" '.data.developerTokensConnection.nodes[]?
+    | select(.status == "active" and (.tokenName | startswith($prefix)))
+    | [.id, .tokenName, (if .lastUsedAt then ($now - (.lastUsedAt | sub("\\.[0-9]+"; "") | fromdateiso8601)) else 999999 end)] | @tsv')
+while IFS=$'\t' read -r stale_id stale_name idle; do
+  [ -n "$stale_id" ] || continue
+  if [ "${idle%.*}" -lt 900 ]; then
+    echo "BLOCKED: another $cluster run is in progress (its token $stale_name was used ${idle%.*}s ago)" >&2
+    exit 2
+  fi
+  echo "recovering a killed run: revoking $stale_name $(gql 'mutation($id:ID!){revokeDeveloperToken(id:$id){__typename}}' \
+    "$(jq -cn --arg id "$stale_id" '{id:$id}')" "$operator_jwt" | jq -r '.data.revokeDeveloperToken.__typename // .errors[0].message // "?"')"
+done <<<"$stale_tokens"
+gql '{webhookEndpointsConnection(page:{first:200}){nodes{id description}}}' '{}' "$operator_jwt" |
+  jq -r '.data.webhookEndpointsConnection.nodes[]? | select(.description == "stack scenarios") | .id' |
+  while IFS= read -r stale_endpoint; do
+    echo "recovering a killed run: deleting webhook endpoint $stale_endpoint $(gql 'mutation($id:ID!){deleteWebhookEndpoint(id:$id){__typename}}' \
+      "$(jq -cn --arg id "$stale_endpoint" '{id:$id}')" "$operator_jwt" | jq -r '.data.deleteWebhookEndpoint.__typename // .errors[0].message // "?"')"
+  done
+
 created=$(gql 'mutation($i:CreateDeveloperTokenInput!){createDeveloperToken(input:$i){__typename ... on DeveloperToken{id tokenValue} ... on ValidationError{message} ... on AuthError{message}}}' \
   "$(jq -cn --arg n "stack-$cluster-$(date -u +%Y%m%dT%H%M%SZ)" \
     '{i:{name:$n, expiresIn:1, permissions:"streams:read,streams:write,analytics:read,developer:read,developer:write,account:read,infrastructure:read,placement:read"}}')" \
@@ -133,6 +161,8 @@ if [ -z "$token_id" ] || [ -z "$STACK_API_TOKEN" ]; then
 fi
 export STACK_TENANT_ID STACK_API_TOKEN
 echo "run API token $token_id for tenant $STACK_TENANT_ID"
+# Scenario objects a killed run left (its ledger died with it, so by name).
+cleanup_run_objects "$STACK_API_TOKEN" | sed 's/^cleanup:/recovering a killed run:/'
 
 # Webhook deliveries need a receiver the cluster can reach and this runner can
 # read: the development host (scripts/remote-dev.sh's inventory) serves

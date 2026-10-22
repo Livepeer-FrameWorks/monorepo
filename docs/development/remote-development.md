@@ -161,8 +161,12 @@ journal reads, and how each database and ClickHouse is read over SSH (with the
 owning service's credentials, read-only, never copied off the host). The run
 then logs in as the bootstrap overlay's platform operator, mints a one-day API
 token for its own test streams, serves the webhook receiver for the run from
-the development host (Bosun on staging reaches it), and on exit deletes its
-webhook endpoint, stops the receiver and revokes the token.
+the development host (Bosun on staging reaches it), and on exit, after the
+sweep, deletes every stream, VOD and clip it created, its webhook endpoint,
+stops the receiver and revokes the token. A run that was killed before that
+leaves them behind; the next run revokes its idle stack token, deletes its
+webhook endpoint and its `stack-` named objects before starting, and refuses
+to start while another run's token was used in the last 15 minutes.
 
 Only scenarios whose header declares `# staging: safe` run on staging. Every
 scenario declares it; one that restarts, stops, pauses or kills a service,

@@ -122,6 +122,37 @@ placement_setup_is_measured() {
 }
 expect "placement measures a live session after its first setup publisher is refused" placement_setup_is_measured
 
+# A deployed target keeps what a run leaves behind, so the run deletes its own
+# objects at exit: every stream its ledger created, and every stream, VOD and
+# clip of the tenant named as a scenario's ("stack-" streams, "stack " assets),
+# which also recovers what a killed earlier run left. Nothing else is touched.
+(
+  export STACK_STATE_DIR="$work/cleanup"
+  mkdir -p "$STACK_STATE_DIR"
+  printf '%s\n' '{"t":1,"scenario":"04-recording","kind":"created","id":"ledger-stream","stream_uuid":"u1"}' \
+    '{"t":2,"scenario":"05-clip","kind":"created","id":"gone-stream","stream_uuid":"u2"}' \
+    '{"t":3,"scenario":"05-clip","kind":"deleted","id":"gone-stream"}' >"$STACK_STATE_DIR/sweep-ledger.jsonl"
+  gql() {
+    case "$1" in
+    *streamsConnection*)
+      echo '{"data":{"streamsConnection":{"nodes":[{"id":"stale-stream","name":"stack-recording-1"},{"id":"user-stream","name":"my show"}],"pageInfo":{"hasNextPage":false}}}}'
+      ;;
+    *storageArtifactsConnection*)
+      echo '{"data":{"storageArtifactsConnection":{"nodes":[{"kind":"VOD","id":"stale-vod","title":"stack cross-cell vod"},{"kind":"CLIP","id":"stale-clip","title":"stack clip a"},{"kind":"VOD","id":"user-vod","title":"stacking chairs"},{"kind":"DVR","id":"stale-dvr","title":"stack-recording-1"}],"hasNextPage":false}}}'
+      ;;
+    *deleteStream*) echo "deleteStream $(jq -r .id <<<"$2")" >>"$work/cleanup-calls"; echo '{"data":{"deleteStream":{"__typename":"DeleteSuccess"}}}' ;;
+    *deleteVodAsset*) echo "deleteVodAsset $(jq -r .id <<<"$2")" >>"$work/cleanup-calls"; echo '{"data":{"deleteVodAsset":{"__typename":"DeleteSuccess"}}}' ;;
+    *deleteClip*) echo "deleteClip $(jq -r .id <<<"$2")" >>"$work/cleanup-calls"; echo '{"data":{"deleteClip":{"__typename":"DeleteSuccess"}}}' ;;
+    esac
+  }
+  cleanup_run_objects >"$work/cleanup.log" 2>&1
+) || true
+deleted_exactly_the_runs_objects() {
+  [ "$(sort "$work/cleanup-calls" 2>/dev/null | tr '\n' ' ')" = "deleteClip stale-clip deleteStream ledger-stream deleteStream stale-stream deleteVodAsset stale-vod " ] ||
+    { cat "$work/cleanup-calls" "$work/cleanup.log" >&2 2>/dev/null; return 1; }
+}
+expect "run cleanup deletes the ledger's and stack-named streams, VODs and clips, and nothing else" deleted_exactly_the_runs_objects
+
 if [ "$failures" -gt 0 ]; then
   echo "lib.sh checks: $failures failed"
   exit 1

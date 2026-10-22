@@ -296,6 +296,38 @@ delete_stream() {
   gql 'mutation($id:ID!){deleteStream(id:$id){__typename}}' "$(jq -cn --arg id "$1" '{id:$id}')" >/dev/null
 }
 
+# cleanup_run_objects [token]: deletes what scenario runs leave on a deployed
+# target, after its sweep: every stream the run's ledger created, and every
+# stream, VOD and clip of the tenant named as a scenario's ("stack-" streams,
+# "stack " assets), which also recovers objects a killed earlier run left.
+# Prints one line per deletion.
+cleanup_run_objects() {
+  local token=${1:-$STACK_API_TOKEN} ids id kind title r offset=0 page assets=''
+  ids=$(jq -rs '[.[] | select(.kind == "deleted") | .id] as $gone
+    | [.[] | select(.kind == "created" and .id != "" and (.id as $i | $gone | index($i) | not)) | .id] | unique[]' \
+    "$STACK_STATE_DIR/sweep-ledger.jsonl" 2>/dev/null)
+  r=$(gql '{streamsConnection(page:{first:500}){nodes{id name} pageInfo{hasNextPage}}}' '{}' "$token")
+  ids=$(printf '%s\n%s\n' "$ids" "$(jq -r '.data.streamsConnection.nodes[]? | select(.name | startswith("stack-")) | .id' <<<"$r")" | sed '/^$/d' | sort -u)
+  for id in $ids; do
+    echo "cleanup: stream $id $(gql 'mutation($id:ID!){deleteStream(id:$id){__typename}}' "$(jq -cn --arg id "$id" '{id:$id}')" "$token" | jq -r '.data.deleteStream.__typename // .errors[0].message // "?"')"
+  done
+  # The whole listing is read before deleting so the offset pages do not shift.
+  while :; do
+    page=$(gql 'query($i:StorageArtifactsInput){storageArtifactsConnection(input:$i){nodes{kind id title} hasNextPage}}' \
+      "$(jq -cn --argjson o "$offset" '{i:{first:100, offset:$o}}')" "$token")
+    assets+=$(jq -r '.data.storageArtifactsConnection.nodes[]? | select((.kind == "VOD" or .kind == "CLIP") and (.title | startswith("stack "))) | [.kind, .id, .title] | @tsv' <<<"$page")$'\n'
+    [ "$(jq -r '.data.storageArtifactsConnection.hasNextPage // false' <<<"$page")" = true ] || break
+    offset=$((offset + 100))
+  done
+  while IFS=$'\t' read -r kind id title; do
+    [ -n "$id" ] || continue
+    case "$kind" in
+      VOD) echo "cleanup: vod $id ($title) $(gql 'mutation($id:ID!){deleteVodAsset(id:$id){__typename}}' "$(jq -cn --arg id "$id" '{id:$id}')" "$token" | jq -r '.data.deleteVodAsset.__typename // .errors[0].message // "?"')" ;;
+      CLIP) echo "cleanup: clip $id ($title) $(gql 'mutation($id:ID!){deleteClip(id:$id){__typename}}' "$(jq -cn --arg id "$id" '{id:$id}')" "$token" | jq -r '.data.deleteClip.__typename // .errors[0].message // "?"')" ;;
+    esac
+  done <<<"$assets"
+}
+
 # ---- post-run sweep ---------------------------------------------------------
 
 # sweep_ledger <created|deleted> <stream relay id> [stream uuid]: records a stream
