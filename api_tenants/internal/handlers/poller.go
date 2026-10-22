@@ -715,31 +715,41 @@ type healthLeader interface {
 }
 
 // pollerLeadership wraps the election with the transition and refusal logs.
+// The poll loop and the gRPC watcher both ask it every tick, so a check that
+// keeps failing warns once for the run and then logs at debug level.
 type pollerLeadership struct {
 	lock interface {
 		Lead(ctx context.Context) (bool, error)
 	}
 	mu      sync.Mutex
 	leading bool
+	failing bool
 }
 
 func (p *pollerLeadership) lead() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	leading, err := p.lock.Lead(ctx)
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if err != nil {
-		logger.WithError(err).Warn("Health poller skipped: could not check the poller election")
+	lost := errors.Is(err, database.ErrLostLeadership)
+	switch {
+	case lost:
+		logger.WithError(err).Warn("Health poller stopped on this replica: it lost the election lock")
+	case err != nil && !p.failing:
+		logger.WithError(err).Warn("Health poller paused on this replica: could not check the poller election")
+	case err != nil:
+		logger.WithError(err).Debug("Health poller election check still failing")
+	case p.failing:
+		logger.Info("Health poller election check recovered")
 	}
+	p.failing = err != nil && !lost
 	if leading != p.leading {
 		p.leading = leading
 		switch {
 		case leading:
 			logger.Info("Health poller elected on this replica")
-		case err != nil:
-			logger.Warn("Health poller stopped on this replica: the election could not be checked")
-		default:
+		case err == nil:
 			logger.Info("Health poller stopped on this replica: another replica leads")
 		}
 	}

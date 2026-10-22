@@ -2,6 +2,7 @@ package grpc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -32,11 +33,13 @@ const (
 // mediaAuthoritySweepLeadership elects the replica that runs the whole-catalog
 // sweeps. The election is a session advisory lock held on one pinned
 // connection; a leader that stops or loses its session hands it to the next
-// replica that asks.
+// replica that asks. Every sweep asks it, so a check that keeps failing warns
+// once for the run and then logs at debug level.
 type mediaAuthoritySweepLeadership struct {
 	mu      sync.Mutex
 	lock    *database.SessionLeader
 	leading bool
+	failing bool
 }
 
 // leadsMediaAuthoritySweeps reports whether this replica runs the sweeps now,
@@ -59,9 +62,20 @@ func (s *CommodoreServer) leadsMediaAuthoritySweeps(ctx context.Context) bool {
 	cancel()
 	election.mu.Lock()
 	defer election.mu.Unlock()
-	if err != nil && ctx.Err() == nil && s.logger != nil {
-		s.logger.WithError(err).Warn("Media authority sweeps skipped: could not check the sweep election")
+	lost := errors.Is(err, database.ErrLostLeadership)
+	if s.logger != nil && ctx.Err() == nil {
+		switch {
+		case lost:
+			s.logger.WithError(err).Warn("Media authority sweeps stopped on this replica: it lost the sweep election lock")
+		case err != nil && !election.failing:
+			s.logger.WithError(err).Warn("Media authority sweeps skipped: could not check the sweep election")
+		case err != nil:
+			s.logger.WithError(err).Debug("Media authority sweep election check still failing")
+		case election.failing:
+			s.logger.Info("Media authority sweep election check recovered")
+		}
 	}
+	election.failing = err != nil && !lost
 	if leading != election.leading {
 		election.leading = leading
 		if s.logger != nil {

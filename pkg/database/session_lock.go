@@ -90,16 +90,38 @@ func TrySessionLock(ctx context.Context, db *sql.DB, lock AdvisoryLock) (release
 // unlock returns the session to the pool, and an unlock that failed or found
 // the lock not held discards the session, which ends the lock with it.
 func ReleaseSessionLock(ctx context.Context, conn *sql.Conn, lock AdvisoryLock) error {
+	if err := dropHold(ctx, conn, lock); err != nil {
+		DiscardSession(conn)
+		return err
+	}
+	return conn.Close()
+}
+
+// takeHold adds one hold of lock to conn's session. Advisory locks are
+// re-entrant per session, so a session that already holds lock always gets
+// another hold.
+func takeHold(ctx context.Context, conn *sql.Conn, lock AdvisoryLock) error {
+	var taken bool
+	if err := conn.QueryRowContext(ctx, lock.TrySQL, lock.Args...).Scan(&taken); err != nil {
+		return fmt.Errorf("take lock: %w", err)
+	}
+	if !taken {
+		return errors.New("take lock: another session holds the lock")
+	}
+	return nil
+}
+
+// dropHold removes one hold of lock from conn's session. The unlock yields
+// false, with no error, when the session holds the lock no more.
+func dropHold(ctx context.Context, conn *sql.Conn, lock AdvisoryLock) error {
 	var unlocked bool
 	if err := conn.QueryRowContext(ctx, lock.UnlockSQL, lock.Args...).Scan(&unlocked); err != nil {
-		DiscardSession(conn)
 		return fmt.Errorf("unlock: %w", err)
 	}
 	if !unlocked {
-		DiscardSession(conn)
 		return errors.New("unlock: the session did not hold the lock")
 	}
-	return conn.Close()
+	return nil
 }
 
 // WithSessionLock runs fn while holding the session advisory lock name,
@@ -151,6 +173,11 @@ type SessionLeader struct {
 	conn *sql.Conn
 }
 
+// ErrLostLeadership is the error Lead wraps when the session this replica led
+// on no longer proves it holds the lock. The session is discarded, and the
+// next Lead asks for the lock on a new one.
+var ErrLostLeadership = errors.New("lost the lock")
+
 // NewSessionLeader returns a leader election over the lock name. It takes
 // nothing until Lead is called.
 func NewSessionLeader(db *sql.DB, name string) *SessionLeader {
@@ -172,7 +199,7 @@ func (l *SessionLeader) Lead(ctx context.Context) (bool, error) {
 		}
 		DiscardSession(l.conn)
 		l.conn = nil
-		return false, fmt.Errorf("leader %s: lost the lock: %w", l.name, err)
+		return false, fmt.Errorf("leader %s: %w: %w", l.name, ErrLostLeadership, err)
 	}
 	conn, err := l.db.Conn(ctx)
 	if err != nil {
@@ -187,33 +214,27 @@ func (l *SessionLeader) Lead(ctx context.Context) (bool, error) {
 		_ = conn.Close()
 		return false, nil
 	}
+	if err := takeHold(ctx, conn, lock); err != nil {
+		DiscardSession(conn)
+		return false, fmt.Errorf("leader %s: second hold: %w", l.name, err)
+	}
 	l.conn = conn
 	return true, nil
 }
 
-// stillHolds asks the database whether conn's session still holds lock. A
-// live connection is not proof: YugabyteDB can expire the session's lock
-// transaction, dropping the lock while the connection answers pings. Advisory
-// locks are re-entrant per session, so a holder's re-take succeeds and the
-// matching unlock leaves the hold count at one. A session that lost the lock
-// without an error while nobody else took it re-takes and drops it here
-// unnoticed; once another session holds it, the next check fails.
+// stillHolds proves that conn's session still holds lock. A live connection
+// is not proof: YugabyteDB can expire the session's lock transaction, dropping
+// the lock while the connection still runs other statements. YugabyteDB's
+// pg_locks lists advisory locks without the holder's pid and only some time
+// after they were taken, so the session itself is asked: the leader holds the
+// lock twice, an unlock yields false once the session no longer holds the
+// lock, whether or not another session took it since, and the hold that
+// remains keeps the lock while the dropped one is taken again.
 func stillHolds(ctx context.Context, conn *sql.Conn, lock AdvisoryLock) error {
-	var retaken bool
-	if err := conn.QueryRowContext(ctx, lock.TrySQL, lock.Args...).Scan(&retaken); err != nil {
-		return fmt.Errorf("re-take: %w", err)
+	if err := dropHold(ctx, conn, lock); err != nil {
+		return err
 	}
-	if !retaken {
-		return errors.New("another session holds the lock")
-	}
-	var unlocked bool
-	if err := conn.QueryRowContext(ctx, lock.UnlockSQL, lock.Args...).Scan(&unlocked); err != nil {
-		return fmt.Errorf("unlock the re-take: %w", err)
-	}
-	if !unlocked {
-		return errors.New("the session did not hold its re-take")
-	}
-	return nil
+	return takeHold(ctx, conn, lock)
 }
 
 // Release gives up leadership so another replica can take it at once.
@@ -225,6 +246,11 @@ func (l *SessionLeader) Release() {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), sessionUnlockTimeout)
 	defer cancel()
-	_ = ReleaseSessionLock(ctx, l.conn, NamedLock(l.name)) //nolint:errcheck // a failed unlock discards the session, which ends the lock
+	lock := NamedLock(l.name)
+	if err := dropHold(ctx, l.conn, lock); err != nil {
+		DiscardSession(l.conn)
+	} else {
+		_ = ReleaseSessionLock(ctx, l.conn, lock) //nolint:errcheck // a failed unlock discards the session, which ends the lock
+	}
 	l.conn = nil
 }

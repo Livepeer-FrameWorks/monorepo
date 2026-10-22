@@ -1219,6 +1219,7 @@ FOGHORN_CONTROL_REALPG_TESTS_BASE := TestSyncCompletePlacementRespectsDeletionWa
 COMMODORE_INGEST_CLAIM_REALPG_TESTS := TestValidateStreamKey_SameClusterCannotStealLiveClaim_RealPG|TestValidateStreamKey_OwnerRefreshIsNotAReservation_RealPG|TestValidateStreamKey_LapsedClaimIsReservable_RealPG|TestSyncActiveIngestPlacement_ReleaseRequiresOwnership_RealPG|TestSyncActiveIngestPlacement_RenewalRequiresOwnership_RealPG|TestSyncActiveIngestPlacement_RenewalEstablishesUnheldClaim_RealPG|TestClearStreamActiveCluster_CannotClearPushClaim_RealPG|TestClearStreamActiveCluster_ReleasesManagedClaimAfterSoftDelete_RealPG|TestValidateStreamKey_OtherClusterClaimOwnerIsNotDisclosed_RealPG
 DOMAIN_EVENT_OUTBOX_REALPG_TESTS := TestDomainEventOutbox_RealPG
 PKG_DATABASE_REALPG_TESTS := TestSessionLeader_RealPG|TestPoolRetiresConnectionsAtTheirOwnLifetime_RealPG
+PKG_DATABASE_REALYB_TESTS := TestSessionLeader_RealYugabyte
 BOSUN_REALPG_TESTS := TestBosunMirroredDuplicatesCollapse_RealPG|TestBosunTenantIsolation_RealPG|TestBosunLeaseReclaimNoDoubleDelivery_RealPG|TestBosunBackoffAndAutoDisable_RealPG|TestBosunReplayKeepsID_RealPG|TestBosunPruning_RealPG|TestBosunEndpointLimitAndSecrets_RealPG|TestBosunOffsetsCommitAfterTransaction_RealPG|TestBosunDeliveryAgainstTLSReceiver_RealPG|TestBosunPolicyRefusalCountsTowardAutoDisable_RealPG|TestBosunInternalFailureSettles_RealPG|TestBosunPruneKeepsReplayedDelivery_RealPG|TestBosunClaimSkipsLockedEndpoint_RealPG|TestBosunWorkerClaimRunsOneRetryLayer_RealPG
 BOSUN_REALYB_TESTS := TestBosunLeaseReclaimNoDoubleDelivery_RealYugabyte|TestBosunBackoffAndAutoDisable_RealYugabyte|TestBosunInternalFailureSettles_RealYugabyte|TestBosunReplayKeepsID_RealYugabyte|TestBosunPruning_RealYugabyte
 PERISCOPE_DOMAIN_EVENTS_REALCH_TESTS := TestDomainEventProjection_RealClickHouse|TestAPIUsageRootFieldSignatures_RealClickHouse|TestArtifactReplayStaysOutOfTheStreamSeries_RealClickHouse|TestArtifactViewsStayOutOfStreamDailyAnalytics_RealClickHouse
@@ -1687,7 +1688,7 @@ yugabyte-lane-5:
 	@$(YUGABYTE_LANE) lane-5 $(YUGABYTE_FIXTURE) $(MAKE) --no-print-directory -k -j1 verify-schema-yugabyte-unit-quartermaster-compat verify-schema-yugabyte-unit-quartermaster-completion verify-yugabyte-quartermaster-contracts verify-schema-yugabyte-unit-bosun-compat verify-schema-yugabyte-unit-bosun-completion verify-schema-yugabyte-unit-bosun-preflight verify-schema-yugabyte-unit-lookout-compat verify-schema-yugabyte-unit-lookout-completion verify-schema-yugabyte-unit-lookout-preflight verify-schema-yugabyte-unit-navigator-compat verify-schema-yugabyte-unit-navigator-completion verify-schema-yugabyte-unit-navigator-preflight verify-yugabyte-distributed-foghorn
 
 yugabyte-lane-6:
-	@$(YUGABYTE_LANE) lane-6 $(YUGABYTE_FIXTURE) $(MAKE) --no-print-directory -k -j1 verify-schema-yugabyte-unit-periscope-compat verify-schema-yugabyte-unit-periscope-completion verify-schema-yugabyte-unit-periscope-preflight verify-schema-yugabyte-unit-skipper-compat verify-schema-yugabyte-unit-skipper-completion verify-schema-yugabyte-unit-skipper-preflight verify-yugabyte-commodore-contracts verify-yugabyte-purser-contracts verify-yugabyte-navigator-contracts verify-yugabyte-lookout-contracts verify-yugabyte-bosun-contracts verify-yugabyte-skipper-contracts verify-yugabyte-periscope-metering-contracts verify-yugabyte-network-observer-contracts
+	@$(YUGABYTE_LANE) lane-6 $(YUGABYTE_FIXTURE) $(MAKE) --no-print-directory -k -j1 verify-schema-yugabyte-unit-periscope-compat verify-schema-yugabyte-unit-periscope-completion verify-schema-yugabyte-unit-periscope-preflight verify-schema-yugabyte-unit-skipper-compat verify-schema-yugabyte-unit-skipper-completion verify-schema-yugabyte-unit-skipper-preflight verify-yugabyte-commodore-contracts verify-yugabyte-purser-contracts verify-yugabyte-navigator-contracts verify-yugabyte-lookout-contracts verify-yugabyte-bosun-contracts verify-yugabyte-skipper-contracts verify-yugabyte-periscope-metering-contracts verify-yugabyte-network-observer-contracts verify-yugabyte-session-lock-engine
 
 # Existing production databases stay distributed until an operator relays them out, so every service whose database
 # is declared colocated also runs its contracts on distributed databases, which receive the same layout-rewritten
@@ -1843,6 +1844,14 @@ verify-domain-outbox-engines:
 
 verify-yugabyte-domain-outbox-engine: verify-yugabyte-shared-fixture
 	@$(CONTRACT_GO_TEST) pkg yugabyte/domain-event-outbox -tags schema_verify -run 'TestDomainEventOutbox_RealYugabyte' -count=1 -timeout 600s ./events/outbox/
+
+.PHONY: verify-session-lock-engines verify-yugabyte-session-lock-engine
+verify-session-lock-engines:
+	@$(CONTRACT_GO_TEST) pkg postgres/session-lock -tags schema_verify -run '$(PKG_DATABASE_REALPG_TESTS)' -count=1 -timeout 600s ./database/
+	@$(YUGABYTE_FIXTURE) $(MAKE) --no-print-directory verify-yugabyte-session-lock-engine
+
+verify-yugabyte-session-lock-engine: verify-yugabyte-shared-fixture
+	@$(CONTRACT_GO_TEST) pkg yugabyte/session-lock -tags schema_verify -run '^($(PKG_DATABASE_REALYB_TESTS))$$' -count=1 -timeout 600s ./database/
 
 verify-yugabyte-bosun-contracts: verify-yugabyte-shared-fixture verify-yugabyte-domain-outbox-engine
 	@$(CONTRACT_GO_TEST) api_webhooks yugabyte/bosun-ledger -tags schema_verify -run '^($(BOSUN_REALYB_TESTS))$$' -count=1 -timeout 1200s ./internal/integration/

@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 
 	"frameworks/api_tenants/internal/database/quartermasterdb"
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 	"github.com/lib/pq"
@@ -185,6 +187,8 @@ func (f *fixedLeader) lead() bool { return f.leading }
 type scriptedElection struct {
 	answers []bool
 	err     error
+	// errs, when set, is the error of each answer in turn.
+	errs []error
 }
 
 func (s *scriptedElection) Lead(context.Context) (bool, error) {
@@ -192,7 +196,38 @@ func (s *scriptedElection) Lead(context.Context) (bool, error) {
 	if len(s.answers) > 1 {
 		s.answers = s.answers[1:]
 	}
+	if len(s.errs) > 0 {
+		err := s.errs[0]
+		s.errs = s.errs[1:]
+		return next, err
+	}
 	return next, s.err
+}
+
+// Both the poll loop and the gRPC watcher ask the election every tick. A
+// check that keeps failing warns once for the run of failures, and a lost
+// lock warns once as such, so a database outage does not log on every tick.
+func TestPollerLeadershipWarnsOncePerFailedElectionRun(t *testing.T) {
+	log, hook := logrustest.NewNullLogger()
+	Init(nil, log)
+	down := errors.New("db down")
+	lost := fmt.Errorf("leader quartermaster-health-poller: %w: unlock: the session did not hold the lock", database.ErrLostLeadership)
+	p := &pollerLeadership{lock: &scriptedElection{
+		answers: []bool{true, false, false, false, false, true, false},
+		errs:    []error{nil, lost, down, down, down, nil, down},
+	}}
+	for range 7 {
+		p.lead()
+	}
+	var warnings []string
+	for _, entry := range hook.AllEntries() {
+		if entry.Level <= logrus.WarnLevel {
+			warnings = append(warnings, entry.Message)
+		}
+	}
+	if len(warnings) != 3 || !strings.Contains(warnings[0], "lost") {
+		t.Fatalf("warnings = %q; want the lost lock, then one per run of failed checks", warnings)
+	}
 }
 
 // A replica that lost the election ends its gRPC health watches and opens

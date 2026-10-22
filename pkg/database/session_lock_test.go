@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -17,15 +18,16 @@ func TestSessionLeaderKeepsLeadingOnItsLiveSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	mock.ExpectQuery("pg_try_advisory_lock").WithArgs(sessionLockClass, "job").
-		WillReturnRows(sqlmock.NewRows([]string{"ok"}).AddRow(true))
-	// The second Lead proves the hold with a re-entrant re-take and its unlock.
-	mock.ExpectQuery("pg_try_advisory_lock").WithArgs(sessionLockClass, "job").
-		WillReturnRows(sqlmock.NewRows([]string{"ok"}).AddRow(true))
-	mock.ExpectQuery("pg_advisory_unlock").WithArgs(sessionLockClass, "job").
-		WillReturnRows(sqlmock.NewRows([]string{"ok"}).AddRow(true))
-	mock.ExpectQuery("pg_advisory_unlock").WithArgs(sessionLockClass, "job").
-		WillReturnRows(sqlmock.NewRows([]string{"ok"}).AddRow(true))
+	ok := func() *sqlmock.Rows { return sqlmock.NewRows([]string{"ok"}).AddRow(true) }
+	// The first Lead takes the lock and a second hold of it.
+	mock.ExpectQuery("pg_try_advisory_lock").WithArgs(sessionLockClass, "job").WillReturnRows(ok())
+	mock.ExpectQuery("pg_try_advisory_lock").WithArgs(sessionLockClass, "job").WillReturnRows(ok())
+	// The second Lead proves the hold by dropping the second hold and taking it again.
+	mock.ExpectQuery("pg_advisory_unlock").WithArgs(sessionLockClass, "job").WillReturnRows(ok())
+	mock.ExpectQuery("pg_try_advisory_lock").WithArgs(sessionLockClass, "job").WillReturnRows(ok())
+	// Release drops both holds.
+	mock.ExpectQuery("pg_advisory_unlock").WithArgs(sessionLockClass, "job").WillReturnRows(ok())
+	mock.ExpectQuery("pg_advisory_unlock").WithArgs(sessionLockClass, "job").WillReturnRows(ok())
 
 	leader := NewSessionLeader(db, "job")
 	for i := range 2 {
@@ -61,8 +63,9 @@ func TestSessionLeaderRetakesTheLockAfterItsSessionDies(t *testing.T) {
 	var tries int
 	db, server := fakesession.New(func(session int, query string) (bool, error) {
 		if session == 1 {
+			// The first Lead takes the lock and its second hold.
 			tries++
-			if tries == 1 {
+			if tries <= 2 {
 				return true, nil
 			}
 			return false, errors.New("connection reset by peer")
@@ -213,7 +216,7 @@ func TestSessionLeaderStopsLeadingWhenItsSessionExpired(t *testing.T) {
 		if session == 1 {
 			if strings.Contains(query, "pg_try_advisory_lock") {
 				tries++
-				if tries == 1 {
+				if tries <= 2 {
 					return true, nil
 				}
 			}
@@ -243,7 +246,7 @@ func TestSessionLeaderStopsLeadingWhenItsSessionNoLongerHoldsTheLock(t *testing.
 	db, server := fakesession.New(func(session int, query string) (bool, error) {
 		if session == 1 && strings.Contains(query, "pg_try_advisory_lock") {
 			tries++
-			return tries == 1, nil
+			return tries <= 2, nil
 		}
 		return true, nil
 	})
@@ -310,28 +313,73 @@ func TestTrySessionLockPoolsOnlySessionsWithACleanLockState(t *testing.T) {
 	})
 }
 
-// The leader's hold check must leave the session holding the lock exactly
-// once, so one unlock on Release frees it.
-func TestSessionLeaderHoldCheckKeepsOneHold(t *testing.T) {
-	db, server := fakesession.New(func(int, string) (bool, error) { return true, nil })
+// heldLocks answers lock statements the way a server keeps a re-entrant hold
+// count per session, and lets a test drop a session's holds without an error.
+type heldLocks struct {
+	mu    sync.Mutex
+	holds map[int]int
+}
+
+func (h *heldLocks) answer(session int, query string) (bool, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	switch {
+	case strings.Contains(query, "pg_try_advisory_lock"):
+		h.holds[session]++
+		return true, nil
+	case strings.Contains(query, "pg_advisory_unlock"):
+		if h.holds[session] == 0 {
+			return false, nil
+		}
+		h.holds[session]--
+		return true, nil
+	}
+	return false, errors.New("unexpected statement")
+}
+
+func (h *heldLocks) drop(session int) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.holds[session] = 0
+}
+
+// A session that lost its lock without an error while no other session took
+// it must not keep reporting leadership.
+func TestSessionLeaderStopsLeadingWhenItsSessionLostTheLockUnnoticed(t *testing.T) {
+	server := &heldLocks{holds: map[int]int{}}
+	db, sessions := fakesession.New(server.answer)
+	defer db.Close()
+	leader := NewSessionLeader(db, "job")
+	ctx := context.Background()
+	if lead, err := leader.Lead(ctx); !lead || err != nil {
+		t.Fatalf("first Lead = %v, %v; want the free lock", lead, err)
+	}
+	server.drop(1)
+	if lead, err := leader.Lead(ctx); lead || !errors.Is(err, ErrLostLeadership) {
+		t.Fatalf("Lead after the session lost its lock = %v, %v; want ErrLostLeadership", lead, err)
+	}
+	if !sessions.Closed(1) {
+		t.Fatal("the session that lost the lock went back to the pool")
+	}
+}
+
+// The leader's hold checks must leave the session holding the lock exactly
+// twice, so Release frees it and pools a session that holds nothing.
+func TestSessionLeaderHoldCheckKeepsItsTwoHolds(t *testing.T) {
+	server := &heldLocks{holds: map[int]int{}}
+	db, sessions := fakesession.New(server.answer)
 	defer db.Close()
 	leader := NewSessionLeader(db, "job")
 	for range 3 {
 		if lead, err := leader.Lead(context.Background()); !lead || err != nil {
 			t.Fatalf("Lead = %v, %v", lead, err)
 		}
-	}
-	leader.Release()
-	var takes, unlocks int
-	for _, q := range server.Statements(1) {
-		switch {
-		case strings.Contains(q, "pg_try_advisory_lock"):
-			takes++
-		case strings.Contains(q, "pg_advisory_unlock"):
-			unlocks++
+		if held := server.holds[1]; held != 2 {
+			t.Fatalf("the leader's session holds the lock %d times; want 2", held)
 		}
 	}
-	if takes != 3 || unlocks != 3 || server.Closed(1) {
-		t.Fatalf("takes=%d unlocks=%d closed=%v; want every take matched by an unlock and the session pooled", takes, unlocks, server.Closed(1))
+	leader.Release()
+	if held := server.holds[1]; held != 0 || sessions.Closed(1) {
+		t.Fatalf("after Release the session holds the lock %d times, closed=%v; want it free and pooled", held, sessions.Closed(1))
 	}
 }
