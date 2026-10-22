@@ -30,8 +30,10 @@ fi`
 const (
 	edgePortRangeMarker  = "@@ip_local_port_range"
 	edgeMistConfigMarker = "@@mistserver_config"
-	// mistWebRTCProcess binds WebRTC's configured UDP port and, for an
-	// outgoing session (a WHIP push out), a socket on an ephemeral port.
+	// mistWebRTCProcess binds WebRTC's configured UDP port, plus wildcard
+	// sockets on ephemeral ports: the listener's STUN forwarder (an unbound
+	// socket sending to 224.0.0.224, which the kernel binds to
+	// 0.0.0.0:<ephemeral> on its first send) and each WHIP push out session.
 	mistWebRTCProcess = "MistOutWebRTC"
 )
 
@@ -53,7 +55,8 @@ var mistPublicConnectors = map[string]struct {
 type edgeListenerPolicy struct {
 	tcp, udp map[int]bool
 	// ephemeralLow/High is the host's ip_local_port_range: MistOutWebRTC's
-	// outgoing sockets bind there. Zero when the range could not be read.
+	// STUN forwarder and WHIP push out sockets bind there. Zero when the range
+	// could not be read.
 	ephemeralLow, ephemeralHigh int
 }
 

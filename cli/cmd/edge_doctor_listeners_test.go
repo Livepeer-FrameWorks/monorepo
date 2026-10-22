@@ -13,8 +13,8 @@ import (
 
 // `sudo ss -Hltunp` on staging's fw-stg-edge-eu before Mist's HTTP connector
 // moved to loopback: MistOutHTTP on *:8080 answered plain HTTP past Caddy.
-// MistOutWebRTC holds its configured port 18203 and an outgoing session's
-// socket on ephemeral port 64142.
+// MistOutWebRTC holds its configured port 18203 and, on ephemeral port 64142,
+// the listener's STUN forwarder socket.
 const stagingEdgeListeners = `udp UNCONN 0      0                                0.0.0.0:8889  0.0.0.0:* users:(("MistOutTSSRT",pid=250550,fd=0))
 udp UNCONN 0      0                                0.0.0.0:18203 0.0.0.0:* users:(("MistOutWebRTC",pid=250549,fd=0))
 udp UNCONN 0      0                                0.0.0.0:64142 0.0.0.0:* users:(("MistOutWebRTC",pid=250549,fd=4))
