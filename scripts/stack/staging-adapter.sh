@@ -43,9 +43,9 @@ stack_logs() {
   while IFS= read -r target; do
     host=${target%%|*}; unit=${target#*|}
     if [ -n "$since" ]; then
-      ssh -o BatchMode=yes "$host" journalctl --no-pager --output=cat --unit "$unit" --since "$since" || return 1
+      ssh -n -o BatchMode=yes "$host" journalctl --no-pager --output=cat --unit "$unit" --since "$since" || return 1
     else
-      ssh -o BatchMode=yes "$host" journalctl --no-pager --output=cat --unit "$unit" || return 1
+      ssh -n -o BatchMode=yes "$host" journalctl --no-pager --output=cat --unit "$unit" || return 1
     fi
   done <<<"$targets"
 }
@@ -63,16 +63,16 @@ stack_ctl() {
     host=${target%%|*}; unit=${target#*|}
     case "$action" in
       start | stop | restart)
-        ssh -o BatchMode=yes "$host" sudo -n systemctl "$action" "$unit" || return 1
+        ssh -n -o BatchMode=yes "$host" sudo -n systemctl "$action" "$unit" || return 1
         ;;
       kill)
-        ssh -o BatchMode=yes "$host" sudo -n systemctl kill --signal=SIGKILL "$unit" || return 1
-        ssh -o BatchMode=yes "$host" sudo -n systemctl stop "$unit" || return 1
+        ssh -n -o BatchMode=yes "$host" sudo -n systemctl kill --signal=SIGKILL "$unit" || return 1
+        ssh -n -o BatchMode=yes "$host" sudo -n systemctl stop "$unit" || return 1
         ;;
       pause | unpause)
         local signal=STOP
         [ "$action" = unpause ] && signal=CONT
-        ssh -o BatchMode=yes "$host" "pid=\$(systemctl show --property=MainPID --value '$unit'); test \"\$pid\" -gt 1 && sudo -n kill -$signal \"\$pid\"" || return 1
+        ssh -n -o BatchMode=yes "$host" "pid=\$(systemctl show --property=MainPID --value '$unit'); test \"\$pid\" -gt 1 && sudo -n kill -$signal \"\$pid\"" || return 1
         ;;
       *) echo "unsupported staging service action: $action" >&2; return 2 ;;
     esac
@@ -136,7 +136,7 @@ log_json_at() {
     targets=$(staging_targets "$service") || return 1
     while IFS= read -r target; do
       host=${target%%|*}; unit=${target#*|}
-      ssh -o BatchMode=yes "$host" journalctl --no-pager --output=json --unit "$unit" --since "$since" || return 1
+      ssh -n -o BatchMode=yes "$host" journalctl --no-pager --output=json --unit "$unit" --since "$since" || return 1
     done <<<"$targets"
   done | jq -Rrc 'fromjson? | .__REALTIME_TIMESTAMP as $stamp | .MESSAGE | fromjson? | objects |
     ($stamp | tonumber) as $micros |
