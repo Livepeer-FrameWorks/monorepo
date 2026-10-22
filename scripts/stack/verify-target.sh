@@ -61,9 +61,11 @@ set +a
 # shellcheck source=/dev/null
 . "$target/operator.env"
 rm -f "$target/operator.env"
-# Scenarios that sign in (session_token) use the operator's login.
+# Scenarios that sign in (session_token) use the operator's login; object
+# listings (s3-prefix-empty.py) use cell A's store keys.
 export STACK_DEMO_EMAIL=$STACK_OPERATOR_EMAIL STACK_DEMO_PASSWORD=$STACK_OPERATOR_PASSWORD
 unset STACK_OPERATOR_PASSWORD
+[ -n "${STACK_S3_ACCESS_KEY:-}" ] && export STACK_S3_ACCESS_KEY STACK_S3_SECRET_KEY
 # lib.sh fills in the compose stack's receiver; only an explicit one counts here.
 receiver_override=${WEBHOOK_RECEIVER_URL:-}
 # shellcheck source=scripts/stack/lib.sh

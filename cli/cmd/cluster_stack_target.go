@@ -42,7 +42,8 @@ deployed cluster (STACK_TARGET=staging make verify-stack):
   target.env       public endpoints, cells, edges and database names
   service-map.txt  scenario-service|ssh-target|systemd-unit, one row per replica
   access-map.txt   how each database and ClickHouse is read over SSH
-  operator.env     the platform operator's login (mode 0600)
+  operator.env     the platform operator's login and cell A's artifact-store
+                   keys for read-only listings (mode 0600)
 
 Everything comes from the cluster manifest, its edge manifest, the bootstrap
 overlay and their SOPS files. No secret is written outside operator.env, and
@@ -86,6 +87,12 @@ func runClusterStackTarget(cmd *cobra.Command, rc *resolvedCluster, outDir strin
 	if err != nil {
 		return err
 	}
+	clusterEnvs, err := rc.ClusterEnvs()
+	if err != nil {
+		return err
+	}
+	secrets := append([][2]string{{"STACK_OPERATOR_EMAIL", email}, {"STACK_OPERATOR_PASSWORD", password}},
+		stackTargetS3Credentials(rc.Manifest, clusterEnvs)...)
 	if err = os.MkdirAll(outDir, 0o700); err != nil {
 		return err
 	}
@@ -103,7 +110,7 @@ func runClusterStackTarget(cmd *cobra.Command, rc *resolvedCluster, outDir strin
 		"target.env":      renderStackTargetEnv(target.env),
 		"service-map.txt": strings.Join(target.services, "\n") + "\n",
 		"access-map.txt":  strings.Join(target.access, "\n") + "\n",
-		"operator.env":    renderStackTargetEnv([][2]string{{"STACK_OPERATOR_EMAIL", email}, {"STACK_OPERATOR_PASSWORD", password}}),
+		"operator.env":    renderStackTargetEnv(secrets),
 	}
 	for name, content := range files {
 		mode := os.FileMode(0o644)
@@ -181,6 +188,11 @@ func buildStackTarget(m *inventory.Manifest, edges *inventory.EdgeManifest) (*st
 			// The scenarios' artifacts originate in cell A, whose Chandler serves their thumbnails.
 			if chandler, ok := pkgdns.ServiceFQDN("chandler", pkgdns.SanitizeLabel(cell)+"."+root); ok {
 				add("CHANDLER_URL", "https://"+chandler)
+			}
+			// Cell A's artifact store, for the scenarios' read-only object listings.
+			if c := m.Clusters[cell]; c.S3Endpoint != "" {
+				add("STACK_S3_ENDPOINT", strings.TrimRight(c.S3Endpoint, "/"))
+				add("STACK_S3_REGION", firstNonEmpty(c.S3Region, "us-east-1"))
 			}
 		}
 		user, addr, err := splitSSHTarget(node.SSH)
@@ -354,6 +366,20 @@ func stackTargetSSH(m *inventory.Manifest, hostName string) (string, error) {
 		return user + "@" + addr, nil
 	}
 	return addr, nil
+}
+
+// stackTargetS3Credentials are cell A's artifact-store keys, from that media
+// cluster's own env files, for the scenarios' object listings.
+func stackTargetS3Credentials(m *inventory.Manifest, clusterEnvs map[string]map[string]string) [][2]string {
+	cells := stackTargetMediaCells(m)
+	if len(cells) == 0 {
+		return nil
+	}
+	env := clusterEnvs[cells[0]]
+	if env["STORAGE_S3_ACCESS_KEY"] == "" || env["STORAGE_S3_SECRET_KEY"] == "" {
+		return nil
+	}
+	return [][2]string{{"STACK_S3_ACCESS_KEY", env["STORAGE_S3_ACCESS_KEY"]}, {"STACK_S3_SECRET_KEY", env["STORAGE_S3_SECRET_KEY"]}}
 }
 
 // stackTargetOperator is the bootstrap overlay's platform operator: the login

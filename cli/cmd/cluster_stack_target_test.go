@@ -22,7 +22,7 @@ func stackTargetTestManifest() (*inventory.Manifest, *inventory.EdgeManifest) {
 		Clusters: map[string]inventory.ClusterConfig{
 			"core-central": {Type: "central", Roles: []string{"control"}},
 			"media-us":     {Type: "edge", Roles: []string{"media"}},
-			"media-eu":     {Type: "edge", Roles: []string{"media"}, Default: true},
+			"media-eu":     {Type: "edge", Roles: []string{"media"}, Default: true, S3Endpoint: "https://objects.example.net", S3Region: "hel1"},
 		},
 		Infrastructure: inventory.InfrastructureConfig{
 			Postgres: &inventory.PostgresConfig{Enabled: true, Engine: "yugabyte",
@@ -85,6 +85,9 @@ func TestStackTargetDerivesEndpointsFromManifest(t *testing.T) {
 		"CHANDLER_URL":                 "https://chandler.media-eu.staging.example.net",
 		"STACK_FOGHORN_A_SERVICES":     "foghorn-eu",
 		"STACK_FOGHORN_B_SERVICES":     "foghorn-us",
+		// Cell A's artifact store, for the scenarios' read-only object listings.
+		"STACK_S3_ENDPOINT": "https://objects.example.net",
+		"STACK_S3_REGION":   "hel1",
 	}
 	for k, v := range want {
 		if env[k] != v {
@@ -168,6 +171,18 @@ func TestStackTargetOperatorFromBootstrapOverlay(t *testing.T) {
 	}
 	if email != "operator@example.net" || password != "s3cret" {
 		t.Fatalf("operator = %q/%q, want operator@example.net/s3cret", email, password)
+	}
+}
+
+func TestStackTargetS3CredentialsFromCellAEnv(t *testing.T) {
+	m, _ := stackTargetTestManifest()
+	got := stackTargetS3Credentials(m, map[string]map[string]string{
+		"media-eu": {"STORAGE_S3_ACCESS_KEY": "AK", "STORAGE_S3_SECRET_KEY": "SK"},
+		"media-us": {"STORAGE_S3_ACCESS_KEY": "other", "STORAGE_S3_SECRET_KEY": "other"},
+	})
+	want := [][2]string{{"STACK_S3_ACCESS_KEY", "AK"}, {"STACK_S3_SECRET_KEY", "SK"}}
+	if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("credentials = %v, want %v", got, want)
 	}
 }
 

@@ -30,11 +30,12 @@ def list_prefix(bucket, prefix):
     canonical = "\n".join(
         ["GET", path, query, "".join(f"{k}:{headers[k]}\n" for k in sorted(headers)), signed_headers, empty_hash]
     )
-    scope = f"{date}/us-east-1/s3/aws4_request"
+    region = os.environ.get("STACK_S3_REGION", "us-east-1")
+    scope = f"{date}/{region}/s3/aws4_request"
     to_sign = "\n".join(["AWS4-HMAC-SHA256", stamp, scope, hashlib.sha256(canonical.encode()).hexdigest()])
     secret = os.environ.get("STACK_S3_SECRET_KEY", "frameworks-secret")
     access = os.environ.get("STACK_S3_ACCESS_KEY", "frameworks")
-    key = sign(sign(sign(sign(("AWS4" + secret).encode(), date), "us-east-1"), "s3"), "aws4_request")
+    key = sign(sign(sign(sign(("AWS4" + secret).encode(), date), region), "s3"), "aws4_request")
     signature = hmac.new(key, to_sign.encode(), hashlib.sha256).hexdigest()
     request = urllib.request.Request(endpoint + path + "?" + query)
     request.add_header("x-amz-content-sha256", empty_hash)
