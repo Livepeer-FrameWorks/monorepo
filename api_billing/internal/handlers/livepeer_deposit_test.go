@@ -22,6 +22,8 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 const testFundingPrivateKey = "0000000000000000000000000000000000000000000000000000000000000001"
@@ -437,7 +439,7 @@ func TestReserveFundingAttemptRefusesWhileAnAttemptIsInFlight(t *testing.T) {
 	mock.ExpectQuery(`pg_try_advisory_xact_lock`).WillReturnRows(sqlmock.NewRows([]string{"locked"}).AddRow(true))
 	mock.ExpectExec("pg_advisory_xact_lock").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery("tx_hash IS NULL AND error_message IS NULL").
-		WithArgs(float64(180)).
+		WithArgs(float64(180), fundingUnconfirmedPattern).
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
 	mock.ExpectRollback()
 	if _, _, err := monitor.reserveFundingAttempt(context.Background(), db, "0x"+strings.Repeat("ab", 20), big.NewInt(40), big.NewInt(20)); !errors.Is(err, errFundingAttemptInFlight) {
@@ -493,6 +495,8 @@ func TestFundTicketBrokerRereadsGatewayUnderSignerLock(t *testing.T) {
 			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":"0xde0b6b3a7640000"}`))
 		case "eth_call":
 			_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":1,"result":%q}`, healthy)
+		case "eth_getTransactionCount":
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":"0x5"}`))
 		default:
 			t.Errorf("unexpected RPC method %q: a stale low reading must not fund", req.Method)
 		}
@@ -505,6 +509,7 @@ func TestFundTicketBrokerRereadsGatewayUnderSignerLock(t *testing.T) {
 	}
 	defer db.Close()
 	mock.ExpectExec("pg_advisory_lock").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery("SELECT id, tx_hash FROM purser.livepeer_funding_attempts").WillReturnRows(sqlmock.NewRows([]string{"id", "tx_hash"}))
 	mock.ExpectQuery("pg_advisory_unlock").WillReturnRows(sqlmock.NewRows([]string{"pg_advisory_unlock"}).AddRow(true))
 
 	monitor := &LivepeerDepositMonitor{
@@ -518,8 +523,61 @@ func TestFundTicketBrokerRereadsGatewayUnderSignerLock(t *testing.T) {
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("funding attempt reserved from a stale reading: %v", err)
 	}
-	if strings.Join(methods, ",") != "eth_getBalance,eth_call" {
-		t.Fatalf("RPC calls = %v, want only the re-read under the lock", methods)
+	if strings.Join(methods, ",") != "eth_getTransactionCount,eth_getTransactionCount,eth_getBalance,eth_call" {
+		t.Fatalf("RPC calls = %v, want only the wallet nonce check and the re-read under the lock", methods)
+	}
+}
+
+// The funding wallet's pending nonce runs ahead of its latest one: a top-up
+// from an earlier cycle is still unmined, so nothing is re-read, reserved or
+// sent.
+func TestFundTicketBrokerWaitsForThePendingTransaction(t *testing.T) {
+	var methods []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Method string            `json:"method"`
+			Params []json.RawMessage `json:"params"`
+		}
+		if decodeErr := json.NewDecoder(r.Body).Decode(&req); decodeErr != nil {
+			t.Errorf("decode RPC request: %v", decodeErr)
+			return
+		}
+		methods = append(methods, req.Method)
+		if req.Method != "eth_getTransactionCount" || len(req.Params) != 2 {
+			t.Errorf("unexpected RPC call %s %s while a transaction is pending", req.Method, req.Params)
+			return
+		}
+		nonce := "0x7"
+		if string(req.Params[1]) == `"pending"` {
+			nonce = "0x8"
+		}
+		_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":1,"result":%q}`, nonce)
+	}))
+	defer server.Close()
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	mock.ExpectExec("pg_advisory_lock").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery("pg_advisory_unlock").WillReturnRows(sqlmock.NewRows([]string{"pg_advisory_unlock"}).AddRow(true))
+
+	alerts := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "test_alerts"}, []string{"reason"})
+	monitor := &LivepeerDepositMonitor{
+		db: db, logger: logging.NewLogger(), rpcEndpoint: server.URL, alertCounter: alerts,
+		gasWalletPrivKey: testFundingPrivateKey, topupAmountWei: big.NewInt(1), dailyCapWei: big.NewInt(10),
+	}
+	gateway := "0x" + strings.Repeat("34", 20)
+	monitor.fundTicketBroker(context.Background(), &GatewayDepositState{Address: gateway, DepositLow: true}, gateway)
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("funding went on while the wallet had a pending transaction: %v", err)
+	}
+	if got := testutil.ToFloat64(alerts.WithLabelValues("pending_transaction")); got != 1 {
+		t.Fatalf("pending_transaction alerts = %v, want 1", got)
+	}
+	if strings.Join(methods, ",") != "eth_getTransactionCount,eth_getTransactionCount" {
+		t.Fatalf("RPC calls = %v, want only the wallet nonce check", methods)
 	}
 }
 

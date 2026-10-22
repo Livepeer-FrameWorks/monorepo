@@ -132,13 +132,21 @@ func (c *recordingConnector) first(t *testing.T) driver.Conn {
 // fundingChain is an Arbitrum RPC fake shared by two replicas, told apart by
 // URL path. Gateway readings stay low, as they do while a top-up is unmined.
 // A gate holds one replica's request for a method until the test releases it.
+// The funding wallet's sent transactions are mined at once unless holdMining
+// is set; hideMempool makes the pending nonce read as the latest one, as an
+// RPC node that has not seen the wallet's unmined transaction reports it.
 type fundingChain struct {
-	t      *testing.T
-	mu     sync.Mutex
-	sends  map[string]int
-	nonces map[string]int
-	gates  map[string]*fundingGate
-	all    []*fundingGate
+	t           *testing.T
+	mu          sync.Mutex
+	sends       map[string]int
+	gates       map[string]*fundingGate
+	all         []*fundingGate
+	latest      int
+	pending     int
+	unmined     []string
+	mined       map[string]bool
+	holdMining  bool
+	hideMempool bool
 }
 
 type fundingGate struct {
@@ -151,7 +159,18 @@ type fundingGate struct {
 func (g *fundingGate) open() { g.once.Do(func() { close(g.release) }) }
 
 func newFundingChain(t *testing.T) *fundingChain {
-	return &fundingChain{t: t, sends: map[string]int{}, nonces: map[string]int{"a": 0, "b": 0}, gates: map[string]*fundingGate{}}
+	return &fundingChain{t: t, sends: map[string]int{}, gates: map[string]*fundingGate{}, mined: map[string]bool{}}
+}
+
+// mine includes every unmined transaction of the wallet in a block.
+func (c *fundingChain) mine() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, hash := range c.unmined {
+		c.mined[hash] = true
+	}
+	c.unmined = nil
+	c.latest = c.pending
 }
 
 // gate holds the first request of method from replica until the gate opens.
@@ -206,8 +225,15 @@ func (c *fundingChain) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "eth_call":
 		reply(`"0x` + strings.Repeat("0", 4*64) + `"`)
 	case "eth_getTransactionCount":
+		var block string
+		if len(req.Params) == 2 {
+			_ = json.Unmarshal(req.Params[1], &block)
+		}
 		c.mu.Lock()
-		nonce := c.nonces[replica]
+		nonce := c.latest
+		if block == "pending" && !c.hideMempool {
+			nonce = c.pending
+		}
 		c.mu.Unlock()
 		reply(fmt.Sprintf(`"0x%x"`, nonce))
 	case "eth_gasPrice":
@@ -227,14 +253,26 @@ func (c *fundingChain) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		c.mu.Lock()
 		c.sends[replica]++
-		// The pending nonce now counts the unmined top-up for every replica
-		// sharing the funding wallet.
-		for name := range c.nonces {
-			c.nonces[name]++
-		}
+		c.pending++
+		c.unmined = append(c.unmined, tx.Hash().Hex())
+		hold := c.holdMining
 		c.mu.Unlock()
+		if !hold {
+			c.mine()
+		}
 		reply(fmt.Sprintf("%q", tx.Hash().Hex()))
 	case "eth_getTransactionReceipt":
+		var hash string
+		if len(req.Params) == 1 {
+			_ = json.Unmarshal(req.Params[0], &hash)
+		}
+		c.mu.Lock()
+		mined := c.mined[hash]
+		c.mu.Unlock()
+		if !mined {
+			reply(`null`)
+			return
+		}
 		reply(`{"status":"0x1"}`)
 	default:
 		c.t.Errorf("unexpected RPC method %q", req.Method)
@@ -244,7 +282,8 @@ func (c *fundingChain) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // runLostFundingSignerLockContract runs two Purser replicas that share one
 // funding wallet against one database. loseLock drops the signer lock of the
 // replica's session while that session stays usable for writes, as a
-// YugabyteDB lock transaction that expires during a storage stall does.
+// YugabyteDB lock transaction that expires during a storage stall does. It
+// also runs one replica whose receipt wait gives up on an unmined top-up.
 func runLostFundingSignerLockContract(t *testing.T, admin *sql.DB, dsn string, loseLock func(*testing.T, driver.Conn)) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -367,6 +406,59 @@ func runLostFundingSignerLockContract(t *testing.T, admin *sql.DB, dsn string, l
 		wait(t, bDone, "B to finish")
 		if chain.sent("b") != 1 || attempts(t) != 1 {
 			t.Fatalf("B, the signer lock holder, sent %d top-ups with %d attempts; want 1 and 1", chain.sent("b"), attempts(t))
+		}
+	})
+
+	// The receipt wait gives up while the top-up is still in the mempool. The
+	// next cycle reads the gateway as low again, but the wallet's pending
+	// nonce shows the unmined top-up, so it must not send another.
+	t.Run("receipt wait timed out while the top-up is pending", func(t *testing.T) {
+		reset(t)
+		chain := newFundingChain(t)
+		chain.holdMining = true
+		server := httptest.NewServer(chain)
+		defer server.Close()
+		a := newReplica(t, server, "a")
+		a.monitor.receiptTimeout = 200 * time.Millisecond
+		a.monitor.fundTicketBroker(ctx, low, "a")
+		if chain.sent("a") != 1 {
+			t.Fatalf("first cycle sent %d top-ups, want 1", chain.sent("a"))
+		}
+		a.monitor.fundTicketBroker(ctx, low, "a")
+		if chain.sent("a") != 1 {
+			t.Fatalf("top-ups sent = %d; the second cycle funded again while the first top-up was pending", chain.sent("a"))
+		}
+	})
+
+	// The RPC node does not show the pending top-up in the wallet's nonce,
+	// so only the attempt whose receipt wait timed out shows it is in flight.
+	// Once the top-up is mined, the next cycle records its receipt and the
+	// attempt no longer blocks funding.
+	t.Run("timed-out attempt stays in flight until its receipt is found", func(t *testing.T) {
+		reset(t)
+		chain := newFundingChain(t)
+		chain.holdMining, chain.hideMempool = true, true
+		server := httptest.NewServer(chain)
+		defer server.Close()
+		a := newReplica(t, server, "a")
+		a.monitor.receiptTimeout = 200 * time.Millisecond
+		a.monitor.fundTicketBroker(ctx, low, "a")
+		a.monitor.fundTicketBroker(ctx, low, "a")
+		if chain.sent("a") != 1 {
+			t.Fatalf("top-ups sent = %d; the second cycle funded again while the timed-out top-up had no receipt", chain.sent("a"))
+		}
+
+		chain.mine()
+		chain.mu.Lock()
+		chain.holdMining = false
+		chain.mu.Unlock()
+		a.monitor.fundTicketBroker(ctx, low, "a")
+		var unconfirmed int
+		if err := admin.QueryRowContext(ctx, `SELECT COUNT(*) FROM purser.livepeer_funding_attempts WHERE error_message IS NOT NULL`).Scan(&unconfirmed); err != nil {
+			t.Fatal(err)
+		}
+		if unconfirmed != 0 || chain.sent("a") != 2 {
+			t.Fatalf("after the top-up was mined: %d attempts still carry an error and %d top-ups were sent; want the receipt recorded and the next top-up sent", unconfirmed, chain.sent("a"))
 		}
 	})
 }

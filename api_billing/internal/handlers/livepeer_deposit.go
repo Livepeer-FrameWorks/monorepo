@@ -416,6 +416,12 @@ func (m *LivepeerDepositMonitor) fundTicketBroker(ctx context.Context, state *Ga
 		return
 	}
 	defer unlockSigner()
+	if idleErr := m.checkFundingWalletIdle(ctx); idleErr != nil {
+		m.alertCounter.WithLabelValues("pending_transaction").Inc()
+		m.logger.WithError(idleErr).WithField("gateway", label).Error("Livepeer TicketBroker funding skipped")
+		return
+	}
+	m.recheckUnconfirmedFundingAttempt(ctx)
 	// Every Purser replica runs this monitor. The low reading was taken before
 	// the lock, so another replica may have funded the gateway while this one
 	// waited; only a reading taken under the lock decides the top-up.
@@ -436,7 +442,11 @@ func (m *LivepeerDepositMonitor) fundTicketBroker(ctx context.Context, state *Ga
 	deposit, reserve, total := amounts.deposit, amounts.reserve, amounts.total
 	attemptID, repeated, err := m.reserveFundingAttempt(ctx, signer, state.Address, deposit, reserve)
 	if errors.Is(err, errFundingSignerLockLost) || errors.Is(err, errFundingAttemptInFlight) {
-		m.alertCounter.WithLabelValues("signer_lock").Inc()
+		reason := "signer_lock"
+		if errors.Is(err, errFundingAttemptInFlight) {
+			reason = "pending_transaction"
+		}
+		m.alertCounter.WithLabelValues(reason).Inc()
 		m.logger.WithError(err).WithField("gateway", label).Error("Livepeer TicketBroker funding skipped")
 		return
 	}
@@ -612,34 +622,107 @@ func (m *LivepeerDepositMonitor) waitForFundingReceipt(ctx context.Context, txHa
 	defer ticker.Stop()
 
 	for {
-		var raw json.RawMessage
-		if err := m.arbRPCCall(waitCtx, "eth_getTransactionReceipt", []interface{}{txHash}, &raw); err != nil {
+		mined, outcome, err := m.fundingReceipt(waitCtx, txHash)
+		if err != nil {
 			if waitCtx.Err() != nil {
-				return fmt.Errorf("confirm TicketBroker funding transaction %s: %w", txHash, waitCtx.Err())
+				return fmt.Errorf("%w: %s: %w", errFundingUnconfirmed, txHash, waitCtx.Err())
 			}
-			return fmt.Errorf("get TicketBroker funding receipt %s: %w", txHash, err)
+			return fmt.Errorf("%w: %s: %w", errFundingUnconfirmed, txHash, err)
 		}
-		if len(raw) > 0 && string(raw) != "null" {
-			var receipt struct {
-				Status string `json:"status"`
-			}
-			if err := json.Unmarshal(raw, &receipt); err != nil {
-				return fmt.Errorf("decode TicketBroker funding receipt %s: %w", txHash, err)
-			}
-			switch strings.ToLower(strings.TrimSpace(receipt.Status)) {
-			case "0x1":
-				return nil
-			case "0x0":
-				return fmt.Errorf("TicketBroker funding transaction %s reverted", txHash)
-			default:
-				return fmt.Errorf("TicketBroker funding transaction %s returned invalid receipt status %q", txHash, receipt.Status)
-			}
+		if mined {
+			return outcome
 		}
 		select {
 		case <-waitCtx.Done():
-			return fmt.Errorf("confirm TicketBroker funding transaction %s: %w", txHash, waitCtx.Err())
+			return fmt.Errorf("%w: %s: %w", errFundingUnconfirmed, txHash, waitCtx.Err())
 		case <-ticker.C:
 		}
+	}
+}
+
+// fundingReceipt reads txHash's receipt once. mined is false while the
+// transaction has no receipt; outcome is nil for a mined transaction that
+// succeeded and describes one that did not; err is a failed read.
+func (m *LivepeerDepositMonitor) fundingReceipt(ctx context.Context, txHash string) (mined bool, outcome, err error) {
+	var raw json.RawMessage
+	if err := m.arbRPCCall(ctx, "eth_getTransactionReceipt", []interface{}{txHash}, &raw); err != nil {
+		return false, nil, fmt.Errorf("get TicketBroker funding receipt: %w", err)
+	}
+	if len(raw) == 0 || string(raw) == "null" {
+		return false, nil, nil
+	}
+	var receipt struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(raw, &receipt); err != nil {
+		return false, nil, fmt.Errorf("decode TicketBroker funding receipt: %w", err)
+	}
+	switch strings.ToLower(strings.TrimSpace(receipt.Status)) {
+	case "0x1":
+		return true, nil, nil
+	case "0x0":
+		return true, fmt.Errorf("TicketBroker funding transaction %s reverted", txHash), nil
+	default:
+		return true, fmt.Errorf("TicketBroker funding transaction %s returned invalid receipt status %q", txHash, receipt.Status), nil
+	}
+}
+
+// checkFundingWalletIdle refuses while the funding wallet has a transaction
+// that is not mined yet: its pending nonce runs ahead of its latest one. A
+// top-up whose send or receipt wait failed can still be in the mempool, and
+// a new one would take the next nonce and fund the gateway twice.
+func (m *LivepeerDepositMonitor) checkFundingWalletIdle(ctx context.Context) error {
+	nonces := make(map[string]*big.Int, 2)
+	for _, block := range []string{"latest", "pending"} {
+		var nonceHex string
+		if err := m.arbRPCCall(ctx, "eth_getTransactionCount", []interface{}{m.gasWalletAddress, block}, &nonceHex); err != nil {
+			return fmt.Errorf("read the funding wallet's %s nonce: %w", block, err)
+		}
+		nonce, ok := new(big.Int).SetString(strings.TrimPrefix(nonceHex, "0x"), 16)
+		if !ok {
+			return fmt.Errorf("invalid %s nonce %q for the funding wallet", block, nonceHex)
+		}
+		nonces[block] = nonce
+	}
+	if nonces["pending"].Cmp(nonces["latest"]) > 0 {
+		return fmt.Errorf("%w: pending nonce %s, latest nonce %s", errFundingWalletPending, nonces["pending"], nonces["latest"])
+	}
+	return nil
+}
+
+// recheckUnconfirmedFundingAttempt reads the receipt of the most recent
+// attempt whose receipt wait ended without one, and records a receipt it now
+// finds, so a mined top-up stops counting as in flight. An attempt still
+// without a receipt is left as it is. Only attempts inside
+// fundingAttemptInFlightWindow are read, since only those block funding.
+func (m *LivepeerDepositMonitor) recheckUnconfirmedFundingAttempt(ctx context.Context) {
+	if m.db == nil {
+		return
+	}
+	var id int64
+	var txHash string
+	err := m.db.QueryRowContext(ctx, `SELECT id, tx_hash FROM purser.livepeer_funding_attempts WHERE funding_day IN ((CURRENT_TIMESTAMP AT TIME ZONE 'UTC')::date, (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')::date - 1) AND created_at > CURRENT_TIMESTAMP - make_interval(secs => $2::double precision) AND tx_hash IS NOT NULL AND error_message LIKE $1 ORDER BY created_at DESC LIMIT 1`, fundingUnconfirmedPattern, m.fundingAttemptInFlightWindow().Seconds()).Scan(&id, &txHash)
+	if errors.Is(err, sql.ErrNoRows) {
+		return
+	}
+	if err != nil {
+		m.logger.WithError(err).Warn("Failed to read the last unconfirmed Livepeer funding attempt")
+		return
+	}
+	mined, outcome, err := m.fundingReceipt(ctx, txHash)
+	if err != nil {
+		m.logger.WithError(err).WithField("tx_hash", txHash).Warn("Failed to re-read an unconfirmed Livepeer funding receipt")
+		return
+	}
+	if !mined {
+		return
+	}
+	result := ""
+	if outcome != nil {
+		result = outcome.Error()
+	}
+	if _, err := m.db.ExecContext(ctx, `UPDATE purser.livepeer_funding_attempts SET error_message = NULLIF($2, ''), updated_at = NOW() WHERE id = $1 AND error_message LIKE $3`, id, result, fundingUnconfirmedPattern); err != nil {
+		m.logger.WithError(err).WithField("attempt_id", id).Error("Failed to record a Livepeer funding receipt found on re-check")
 	}
 }
 
@@ -650,9 +733,20 @@ func fundDepositAndReserveForCallData(gateway string, deposit, reserve *big.Int)
 	return append(callData, common.LeftPadBytes(reserve.Bytes(), 32)...)
 }
 
+// fundingUnconfirmedMessage starts the recorded error of an attempt whose
+// transaction was sent without its receipt being read. The ledger has no
+// status column, so such an attempt is told apart from a finished one by
+// this prefix.
+const (
+	fundingUnconfirmedMessage = "TicketBroker funding transaction not confirmed"
+	fundingUnconfirmedPattern = fundingUnconfirmedMessage + "%"
+)
+
 var (
 	errFundingSignerLockLost  = errors.New("this session no longer holds the Livepeer funding signer lock")
-	errFundingAttemptInFlight = errors.New("another Livepeer funding attempt from the funding wallet has no recorded result yet")
+	errFundingAttemptInFlight = errors.New("another Livepeer funding attempt from the funding wallet may still be unmined")
+	errFundingWalletPending   = errors.New("the funding wallet has an unmined transaction")
+	errFundingUnconfirmed     = errors.New(fundingUnconfirmedMessage)
 )
 
 // reserveFundingAttempt records a funding attempt against the daily cap. It
@@ -662,9 +756,10 @@ var (
 // then takes the lock. Two guards keep a second top-up from the shared wallet
 // out: the transaction re-takes the signer key as a transaction lock, which
 // another session's signer lock refuses and which keeps another session from
-// taking the signer lock until the attempt is committed; and an attempt without
-// a recorded result inside fundingAttemptInFlightWindow blocks the next one,
-// since its transaction may still be unmined. Attempts carry no wallet column:
+// taking the signer lock until the attempt is committed; and an attempt inside
+// fundingAttemptInFlightWindow that has no recorded result, or whose
+// transaction was sent without a receipt, blocks the next one, since its
+// transaction may still be unmined. Attempts carry no wallet column:
 // the signer lock and the ledger serve the one funding wallet a deployment
 // configures.
 func (m *LivepeerDepositMonitor) reserveFundingAttempt(ctx context.Context, signer database.PostgresTxBeginner, gateway string, deposit, reserve *big.Int) (int64, bool, error) {
@@ -689,7 +784,7 @@ func (m *LivepeerDepositMonitor) reserveFundingAttempt(ctx context.Context, sign
 		// today's or yesterday's funding day; naming both days keeps the read
 		// on the funding day index.
 		var inFlight bool
-		if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM purser.livepeer_funding_attempts WHERE funding_day IN ((CURRENT_TIMESTAMP AT TIME ZONE 'UTC')::date, (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')::date - 1) AND created_at > CURRENT_TIMESTAMP - make_interval(secs => $1::double precision) AND tx_hash IS NULL AND error_message IS NULL)`, inFlightSeconds).Scan(&inFlight); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM purser.livepeer_funding_attempts WHERE funding_day IN ((CURRENT_TIMESTAMP AT TIME ZONE 'UTC')::date, (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')::date - 1) AND created_at > CURRENT_TIMESTAMP - make_interval(secs => $1::double precision) AND ((tx_hash IS NULL AND error_message IS NULL) OR (tx_hash IS NOT NULL AND error_message LIKE $2)))`, inFlightSeconds, fundingUnconfirmedPattern).Scan(&inFlight); err != nil {
 			return err
 		}
 		if inFlight {
