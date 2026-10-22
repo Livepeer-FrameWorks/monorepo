@@ -17,12 +17,26 @@
 . "$(dirname "$0")/../lib.sh"
 
 REPO=${STACK_REPO:-/repo}
-BRIDGE_2_WS_URL=${BRIDGE_2_WS_URL:-ws://bridge-2:18000/graphql/ws}
 BOUND_S=2
 need jq curl python3 || finish
-if ! stack_running bridge-2; then
-  blocked "bridge-2 is not running; the stack has a single Bridge replica"
-  finish
+if [ -n "${BRIDGE_REPLICA_ADDRS:-}" ]; then
+  # A deployed target's Bridge replicas share one public name; each URL pins
+  # its replica's address (scripts/stack/replica_pin.py). The revocation and
+  # the sign-out go through the first.
+  read -r BRIDGE_1_ADDR BRIDGE_2_ADDR _ <<<"$BRIDGE_REPLICA_ADDRS"
+  BRIDGE_1_URL="$BRIDGE_URL#$BRIDGE_1_ADDR"
+  BRIDGE_1_GRAPHQL_URL="$BRIDGE_URL/graphql#$BRIDGE_1_ADDR"
+  BRIDGE_1_WS_URL="$BRIDGE_WS_URL#$BRIDGE_1_ADDR"
+  BRIDGE_2_WS_URL="$BRIDGE_WS_URL#$BRIDGE_2_ADDR"
+else
+  BRIDGE_1_URL=$BRIDGE_URL
+  BRIDGE_1_GRAPHQL_URL=$BRIDGE_URL/graphql
+  BRIDGE_1_WS_URL=$BRIDGE_WS_URL
+  BRIDGE_2_WS_URL=${BRIDGE_2_WS_URL:-ws://bridge-2:18000/graphql/ws}
+  if ! stack_running bridge-2; then
+    blocked "bridge-2 is not running; the stack has a single Bridge replica"
+    finish
+  fi
 fi
 python3 -c 'import websockets' 2>/dev/null || {
   blocked "the scenario needs python websockets in stack-runner"
@@ -43,7 +57,7 @@ JWT=$(session_token) || {
   finish
 }
 
-OUT=$(python3 "$REPO/scripts/stack/ws-token-revocation.py" "$BRIDGE_URL/graphql" "$JWT" "$TID" "$TVAL" "$BRIDGE_WS_URL" "$BRIDGE_2_WS_URL" 2>&1)
+OUT=$(python3 "$REPO/scripts/stack/ws-token-revocation.py" "$BRIDGE_1_GRAPHQL_URL" "$JWT" "$TID" "$TVAL" "$BRIDGE_1_WS_URL" "$BRIDGE_2_WS_URL" 2>&1)
 log "result: $OUT"
 if ! json_has "$OUT" '.sockets | length == 2'; then
   fail "the WebSocket probe did not finish: $OUT"
@@ -66,7 +80,7 @@ done
 # sessions and unaffected.
 log "session sockets on both Bridge replicas, signed out through bridge"
 LOGIN=$(jq -cn --arg e "$STACK_DEMO_EMAIL" --arg p "$STACK_DEMO_PASSWORD" --argjson b "$(bot_fields)" '{email:$e, password:$p} + $b')
-OUT=$(python3 "$REPO/scripts/stack/ws-session-signout.py" "$BRIDGE_URL" "$LOGIN" "$BRIDGE_WS_URL" "$BRIDGE_2_WS_URL" 2>&1)
+OUT=$(python3 "$REPO/scripts/stack/ws-session-signout.py" "$BRIDGE_1_URL" "$LOGIN" "$BRIDGE_1_WS_URL" "$BRIDGE_2_WS_URL" 2>&1)
 log "result: $OUT"
 if ! json_has "$OUT" '.sockets | length == 2'; then
   fail "the sign-out probe did not finish: $OUT"

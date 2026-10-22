@@ -26,6 +26,8 @@ import urllib.request
 
 import websockets
 
+import replica_pin
+
 WAIT_S = 10
 CREATE_AFTER_S = 3
 SUBSCRIBE = "subscription { tenantEvents { id type } }"
@@ -33,8 +35,9 @@ SUBSCRIBE = "subscription { tenantEvents { id type } }"
 
 def login(bridge_url, body):
     jar = http.cookiejar.CookieJar()
-    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
-    req = urllib.request.Request(bridge_url + "/auth/login", data=body.encode(), headers={"Content-Type": "application/json"})
+    url = replica_pin.join(bridge_url, "/auth/login")
+    opener = replica_pin.build_opener(url, urllib.request.HTTPCookieProcessor(jar))
+    req = urllib.request.Request(replica_pin.split(url)[0], data=body.encode(), headers={"Content-Type": "application/json"})
     with opener.open(req, timeout=30) as resp:
         resp.read()
     for cookie in jar:
@@ -48,24 +51,27 @@ def post(url, jwt, body=None):
     req = urllib.request.Request(url, data=data, method="POST", headers={
         "Authorization": "Bearer " + jwt, "Content-Type": "application/json",
     })
-    with urllib.request.urlopen(req, timeout=30) as resp:
+    with replica_pin.urlopen(req, timeout=30) as resp:
         return resp.status, json.load(resp)
 
 
 def http_status(ws_url, jwt):
     """Status of a GraphQL POST with jwt to the Bridge replica serving ws_url."""
-    base = ws_url.replace("ws://", "http://", 1).replace("wss://", "https://", 1).rsplit("/graphql", 1)[0]
-    req = urllib.request.Request(base + "/graphql", data=json.dumps({"query": "{streamsConnection(page:{first:1}){totalCount}}"}).encode(),
+    uri, pin = replica_pin.split(ws_url)
+    base = uri.replace("ws://", "http://", 1).replace("wss://", "https://", 1).rsplit("/graphql", 1)[0]
+    url = base + "/graphql" + (f"#{pin}" if pin else "")
+    req = urllib.request.Request(url, data=json.dumps({"query": "{streamsConnection(page:{first:1}){totalCount}}"}).encode(),
                                  method="POST", headers={"Authorization": "Bearer " + jwt, "Content-Type": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with replica_pin.urlopen(req, timeout=30) as resp:
             return resp.status
     except urllib.error.HTTPError as exc:
         return exc.code
 
 
 async def open_socket(url, token):
-    ws = await websockets.connect(url, subprotocols=["graphql-transport-ws"], open_timeout=10)
+    uri, pin = replica_pin.ws_args(url)
+    ws = await websockets.connect(uri, subprotocols=["graphql-transport-ws"], open_timeout=10, **pin)
     await ws.send(json.dumps({"type": "connection_init", "payload": {"Authorization": "Bearer " + token}}))
     msg = json.loads(await asyncio.wait_for(ws.recv(), 10))
     if msg.get("type") != "connection_ack":
@@ -77,7 +83,8 @@ async def open_socket(url, token):
 async def init_outcome(url, token):
     """How connection_init with token is answered: the first message type,
     or "close" with its code."""
-    ws = await websockets.connect(url, subprotocols=["graphql-transport-ws"], open_timeout=10)
+    uri, pin = replica_pin.ws_args(url)
+    ws = await websockets.connect(uri, subprotocols=["graphql-transport-ws"], open_timeout=10, **pin)
     try:
         await ws.send(json.dumps({"type": "connection_init", "payload": {"Authorization": "Bearer " + token}}))
         msg = json.loads(await asyncio.wait_for(ws.recv(), 10))
@@ -113,7 +120,7 @@ async def watch(ws, result, signed_out):
 
 async def main():
     bridge_url, login_body, *ws_urls = sys.argv[1:]
-    graphql_url = bridge_url + "/graphql"
+    graphql_url = replica_pin.join(bridge_url, "/graphql")
     session = await asyncio.to_thread(login, bridge_url, login_body)
     sockets = [await open_socket(url, session) for url in ws_urls]
     results = [{"url": url, "code": None, "closed_at": None, "events_after_signout": []} for url in ws_urls]
@@ -126,7 +133,7 @@ async def main():
             raise RuntimeError(f"{r['url']} closed with {r['code']} before the sign-out")
 
     signed_out.set()
-    status, answer = await asyncio.to_thread(post, bridge_url + "/auth/logout", session)
+    status, answer = await asyncio.to_thread(post, replica_pin.join(bridge_url, "/auth/logout"), session)
     signed_out_at = time.time()
     if status != 200 or not answer.get("success"):
         raise RuntimeError(f"logout answered {status} {answer}")

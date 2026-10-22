@@ -18,6 +18,8 @@ import urllib.request
 
 import websockets
 
+import replica_pin
+
 WAIT_S = 10
 CREATE_AFTER_S = 3
 SUBSCRIBE = "subscription { tenantEvents { id type } }"
@@ -28,12 +30,13 @@ def gql(url, jwt, query, variables):
     req = urllib.request.Request(url, data=body, headers={
         "Authorization": "Bearer " + jwt, "Content-Type": "application/json",
     })
-    with urllib.request.urlopen(req, timeout=30) as resp:
+    with replica_pin.urlopen(req, timeout=30) as resp:
         return json.load(resp)
 
 
 async def open_socket(url, token):
-    ws = await websockets.connect(url, subprotocols=["graphql-transport-ws"], open_timeout=10)
+    uri, pin = replica_pin.ws_args(url)
+    ws = await websockets.connect(uri, subprotocols=["graphql-transport-ws"], open_timeout=10, **pin)
     await ws.send(json.dumps({"type": "connection_init", "payload": {"Authorization": "Bearer " + token}}))
     msg = json.loads(await asyncio.wait_for(ws.recv(), 10))
     if msg.get("type") != "connection_ack":

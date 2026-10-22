@@ -75,5 +75,20 @@ target_prepares_sdks() {
 }
 expect "a deployed-target run prepares the SDK smokes' prerequisites and removes its venv" target_prepares_sdks
 
+# Scenario 37's WebSocket probes import websockets, which the same venv carries.
+target_prepares_ws_probes() { grep -q "grep -qE '/(07|37)-'" "$here/verify-target.sh"; }
+expect "a deployed-target run running scenario 37 prepares the venv its WebSocket probes need" target_prepares_ws_probes
+
+# Scenario 37 signs out every session of the operator account the run signed
+# in with; the exit cleanup must sign in again to revoke the run's token.
+cleanup_signs_in_again() {
+  local fn
+  fn=$(sed -n '/^operator_session_jwt() {/,/^}/p' "$here/verify-target.sh")
+  [ -n "$fn" ] && grep -q 'refresh_session_token' <<<"$fn" && grep -q 'operator_login' <<<"$fn" &&
+    [ "$(grep -c 'jwt=$(operator_session_jwt)' "$here/verify-target.sh")" -ge 2 ] &&
+    ! grep -q 'jwt=$(refresh_session_token "$jar"' "$here/verify-target.sh"
+}
+expect "the run's exit cleanup signs in again when the operator session was signed out" cleanup_signs_in_again
+
 [ "$failures" -eq 0 ] && echo "sdk prerequisite checks: ok"
 exit "$failures"

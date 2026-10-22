@@ -155,6 +155,9 @@ func buildStackTarget(m *inventory.Manifest, edges *inventory.EdgeManifest) (*st
 	add("BRIDGE_URL", "https://"+bridge)
 	add("BRIDGE_GRAPHQL_URL", "https://"+bridge+"/graphql")
 	add("BRIDGE_WS_URL", "wss://"+bridge+"/graphql/ws")
+	if addrs := stackTargetBridgeReplicaAddrs(m); len(addrs) == 2 {
+		add("BRIDGE_REPLICA_ADDRS", strings.Join(addrs, " "))
+	}
 	add("STACK_EDGE_STORAGE_DIR", edgeNativeStorageDir)
 
 	edgeServices := []string{"edge", "edge-b"}
@@ -239,6 +242,38 @@ func buildStackTarget(m *inventory.Manifest, edges *inventory.EdgeManifest) (*st
 		}
 	}
 	return t, nil
+}
+
+// stackTargetBridgeReplicaAddrs picks two Bridge hosts the scenarios address
+// one by one under Bridge's public name: the first host, and the first host in
+// another cluster (else the second host), so a cross-replica check spans
+// regions where the manifest has them. Nil when fewer than two hosts run Bridge.
+func stackTargetBridgeReplicaAddrs(m *inventory.Manifest) []string {
+	cfg, ok := m.Services["bridge"]
+	if !ok || !cfg.Enabled {
+		return nil
+	}
+	var hosts []string
+	for _, name := range serviceHostNames(cfg) {
+		if host, ok := m.GetHost(name); ok && strings.TrimSpace(host.ExternalIP) != "" {
+			hosts = append(hosts, name)
+		}
+	}
+	if len(hosts) < 2 {
+		return nil
+	}
+	second := hosts[1]
+	for _, name := range hosts[1:] {
+		if m.HostCluster(name) != m.HostCluster(hosts[0]) {
+			second = name
+			break
+		}
+	}
+	addr := func(name string) string {
+		host, _ := m.GetHost(name)
+		return strings.TrimSpace(host.ExternalIP)
+	}
+	return []string{addr(hosts[0]), addr(second)}
 }
 
 func stackTargetMediaCells(m *inventory.Manifest) []string {

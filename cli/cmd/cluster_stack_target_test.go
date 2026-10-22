@@ -16,8 +16,9 @@ func stackTargetTestManifest() (*inventory.Manifest, *inventory.EdgeManifest) {
 		RootDomain: "staging.example.net",
 		Hosts: map[string]inventory.Host{
 			"core": {ExternalIP: "10.0.0.16", User: "ops"},
-			"eu-1": {ExternalIP: "10.0.0.17", User: "ops"},
-			"us-1": {ExternalIP: "10.0.0.20", User: "ops"},
+			"eu-1": {ExternalIP: "10.0.0.17", User: "ops", Cluster: "regional-eu"},
+			"eu-2": {ExternalIP: "10.0.0.18", User: "ops", Cluster: "regional-eu"},
+			"us-1": {ExternalIP: "10.0.0.20", User: "ops", Cluster: "regional-us"},
 		},
 		Clusters: map[string]inventory.ClusterConfig{
 			"core-central": {Type: "central", Roles: []string{"control"}},
@@ -29,6 +30,7 @@ func stackTargetTestManifest() (*inventory.Manifest, *inventory.EdgeManifest) {
 				Instances: []inventory.PostgresInstance{{Name: "local", Host: "core"}}},
 		},
 		Services: map[string]inventory.ServiceConfig{
+			"bridge":          {Enabled: true, Hosts: []string{"eu-1", "eu-2", "us-1"}},
 			"commodore":       {Enabled: true, Host: "core"},
 			"purser":          {Enabled: true, Host: "core"},
 			"periscope-query": {Enabled: true, Host: "core"},
@@ -85,6 +87,9 @@ func TestStackTargetDerivesEndpointsFromManifest(t *testing.T) {
 		"CHANDLER_URL":                 "https://chandler.media-eu.staging.example.net",
 		"STACK_FOGHORN_A_SERVICES":     "foghorn-eu",
 		"STACK_FOGHORN_B_SERVICES":     "foghorn-us",
+		// Two Bridge replicas the scenarios can address one by one: the
+		// first host and the first in another cluster.
+		"BRIDGE_REPLICA_ADDRS": "10.0.0.17 10.0.0.20",
 		// Cell A's artifact store, for the scenarios' read-only object listings.
 		"STACK_S3_ENDPOINT": "https://objects.example.net",
 		"STACK_S3_REGION":   "hel1",

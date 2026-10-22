@@ -86,8 +86,19 @@ fi
 # The run's own API token: the operator's tenant, revoked when the run ends.
 login=$(mktemp "$STACK_STATE_DIR/login.XXXXXX")
 jar="$STACK_STATE_DIR/operator.jar"
-code=$(curl -s -m 30 -c "$jar" -o "$login" -w '%{http_code}' "$BRIDGE_URL/auth/login" -H 'Content-Type: application/json' \
-  --data "$(jq -cn --arg e "$STACK_DEMO_EMAIL" --arg p "$STACK_DEMO_PASSWORD" --argjson b "$(bot_fields)" '{email:$e, password:$p} + $b')")
+# operator_login [body file]: a new operator session in $jar; prints its HTTP status.
+operator_login() {
+  curl -s -m 30 -c "$jar" -o "${1:-/dev/null}" -w '%{http_code}' "$BRIDGE_URL/auth/login" -H 'Content-Type: application/json' \
+    --data "$(jq -cn --arg e "$STACK_DEMO_EMAIL" --arg p "$STACK_DEMO_PASSWORD" --argjson b "$(bot_fields)" '{email:$e, password:$p} + $b')"
+}
+# operator_session_jwt: a live operator access token. Scenario 37 signs out
+# every session of the operator account, so a refused refresh signs in again.
+operator_session_jwt() {
+  refresh_session_token "$jar" 2>/dev/null && return 0
+  [ "$(operator_login)" = 200 ] || return 1
+  awk '$6 == "access_token" { print $7 }' "$jar" | tail -1
+}
+code=$(operator_login "$login")
 STACK_TENANT_ID=$(jq -r '.user.tenant_id // empty' "$login" 2>/dev/null)
 rm -f "$login"
 operator_jwt=$(awk '$6 == "access_token" { print $7 }' "$jar" | tail -1)
@@ -108,7 +119,7 @@ cleanup_run() {
   fi
   endpoint=$(awk '{print $1}' "$STACK_STATE_DIR/webhook-endpoint" 2>/dev/null)
   if [ -n "$endpoint" ]; then
-    jwt=$(refresh_session_token "$jar" 2>/dev/null) || jwt=$operator_jwt
+    jwt=$(operator_session_jwt) || jwt=$operator_jwt
     gql 'mutation($id:ID!){deleteWebhookEndpoint(id:$id){__typename}}' "$(jq -cn --arg id "$endpoint" '{id:$id}')" "$jwt" >/dev/null
     echo "run webhook endpoint $endpoint deleted"
   fi
@@ -116,7 +127,7 @@ cleanup_run() {
     "${receiver_ssh[@]}" "kill \$(cat $receiver_dir/pid) 2>/dev/null; rm -rf $receiver_dir" </dev/null
   fi
   if [ -n "$token_id" ]; then
-    jwt=$(refresh_session_token "$jar" 2>/dev/null) || jwt=$operator_jwt
+    jwt=$(operator_session_jwt) || jwt=$operator_jwt
     gql 'mutation($id:ID!){revokeDeveloperToken(id:$id){__typename}}' "$(jq -cn --arg id "$token_id" '{id:$id}')" "$jwt" >/dev/null
     code=$(curl -s -m 15 -o /dev/null -w '%{http_code}' "$BRIDGE_GRAPHQL_URL" -H "Authorization: Bearer $STACK_API_TOKEN" \
       -H 'Content-Type: application/json' --data '{"query":"{streamsConnection(page:{first:1}){totalCount}}"}')
@@ -210,16 +221,19 @@ if [ "$repeat" -lt 1 ] || [ "$repeat" -gt 100 ]; then
   exit 1
 fi
 
-# Scenario 07's SDK smokes run here, not in stack-runner: the TS smoke needs
-# npm_api's dist and the Python smoke a venv with the SDK's dependencies.
-if printf '%s\n' "${scenarios[@]}" | grep -q '/07-'; then
+# Scenario 07's SDK smokes and 37's WebSocket probes run here, not in
+# stack-runner: the TS smoke needs npm_api's dist, and the Python smoke and the
+# probes a venv with the Python SDK's dependencies (websockets among them).
+if printf '%s\n' "${scenarios[@]}" | grep -qE '/(07|37)-'; then
   # shellcheck source=scripts/stack/sdk-prereqs.sh
   . "$here/sdk-prereqs.sh"
-  build_npm_api_dist "$repo"
+  if printf '%s\n' "${scenarios[@]}" | grep -q '/07-'; then
+    build_npm_api_dist "$repo"
+  fi
   if sdk_bin=$(python_sdk_venv "$repo" "$sdk_venv"); then
     export PATH="$sdk_bin:$PATH"
   else
-    echo 'WARN: the Python SDK venv could not be built; the Python SDK smoke will report BLOCKED' >&2
+    echo 'WARN: the Python SDK venv could not be built; the Python SDK smoke and the WebSocket probes will report BLOCKED' >&2
   fi
 fi
 
