@@ -9,6 +9,14 @@
 . "$(dirname "$0")/../lib.sh"
 
 need ffmpeg jq curl || finish
+# The projection is null by design on a tier that does not price cold storage
+# (a deployed target's run tenant may be on such a tier); that is no verdict.
+tier=$(gql_session '{billingStatus{currentTier{tierName pricingRules{meter unitPrice}}}}' |
+  jq -r '.data.billingStatus.currentTier // empty
+    | if ([.pricingRules[]? | select(.meter == "storage_gb_seconds_cold") | .unitPrice | tonumber] | any(. > 0)) then "priced" else "unpriced \(.tierName)" end')
+case "$tier" in
+  unpriced*) blocked "the run's tenant tier (${tier#unpriced }) does not price cold storage"; finish ;;
+esac
 
 S=$(create_stream "stack-storage-cost-$(date +%s)" false)
 SID=$(echo "$S" | jq -r '.id // empty')

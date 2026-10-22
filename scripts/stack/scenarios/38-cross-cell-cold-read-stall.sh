@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # stack-scenario: default
-# staging: safe
+# staging: unsafe, stalls an edge's storage reads through an S3 fault proxy
 # A cell-B edge plays cell-A VODs whose first cold read stalls.
 #
 # One stall: the S3 proxy sends 64 KiB of the relay's block GET and then
