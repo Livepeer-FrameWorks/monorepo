@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # stack-scenario: default
 # staging: safe
+# tenant: test
 # Bridge runs two replicas (docker-compose.stack.yml: bridge-2). An API token
 # holds a tenantEvents WebSocket on each; revoking the token through bridge
 # closes both with 4403 within two seconds of the revocation's answer, and
@@ -79,7 +80,14 @@ done
 # included) no longer opens WebSockets or refreshes. Later logins are new
 # sessions and unaffected.
 log "session sockets on both Bridge replicas, signed out through bridge"
-LOGIN=$(jq -cn --arg e "$STACK_DEMO_EMAIL" --arg p "$STACK_DEMO_PASSWORD" --argjson b "$(bot_fields)" '{email:$e, password:$p} + $b')
+if [ -n "${STACK_WALLET_KEY_FILE:-}" ]; then
+  # A deployed target runs this as its wallet test tenant (test-tenant.sh), so
+  # the sign-out ends only that tenant's sessions; each sign-in is a fresh
+  # wallet challenge.
+  LOGIN="@bash $STACK_LIB_DIR/wallet-login.sh body"
+else
+  LOGIN=$(jq -cn --arg e "$STACK_DEMO_EMAIL" --arg p "$STACK_DEMO_PASSWORD" --argjson b "$(bot_fields)" '{email:$e, password:$p} + $b')
+fi
 OUT=$(python3 "$REPO/scripts/stack/ws-session-signout.py" "$BRIDGE_1_URL" "$LOGIN" "$BRIDGE_1_WS_URL" "$BRIDGE_2_WS_URL" 2>&1)
 log "result: $OUT"
 if ! json_has "$OUT" '.sockets | length == 2'; then

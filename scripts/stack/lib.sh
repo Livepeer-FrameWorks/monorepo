@@ -251,6 +251,18 @@ session_token() { # session_token: the demo user's access JWT from /auth/login (
     if [ "${exp:-0}" -gt $(($(date +%s) + 60)) ]; then cat "$cache"; return 0; fi
     rm -f "$cache"
   fi
+  # A wallet tenant (the deployed-target run's test tenant, test-tenant.sh) has
+  # no password: its session lives in the runner's cookie jar, and a jar a
+  # sign-out ended is signed in again with the wallet.
+  if [ -n "${STACK_SESSION_JAR:-}" ]; then
+    if ! refresh_session_token "$STACK_SESSION_JAR" >"$cache" 2>/dev/null; then
+      bash "$STACK_LIB_DIR/wallet-login.sh" jar "$STACK_SESSION_JAR" &&
+        awk '$6 == "access_token" { print $7 }' "$STACK_SESSION_JAR" | tail -1 >"$cache"
+    fi
+    [ -s "$cache" ] || { rm -f "$cache"; echo "test tenant session sign-in failed" >&2; return 1; }
+    cat "$cache"
+    return 0
+  fi
   jar=$(mktemp)
   curl -s -m 30 -c "$jar" -o /dev/null "$BRIDGE_URL/auth/login" -H 'Content-Type: application/json' \
     --data "$(jq -cn --arg e "$STACK_DEMO_EMAIL" --arg p "$STACK_DEMO_PASSWORD" --argjson b "$(bot_fields)" \

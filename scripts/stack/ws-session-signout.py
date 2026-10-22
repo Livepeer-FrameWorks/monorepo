@@ -3,7 +3,7 @@ replica with that session's access token, sign out through the first
 replica, and report how each socket ended and whether the signed-out token
 and a session started after the sign-out can still connect.
 
-    python3 ws-session-signout.py <bridge url> <login body json> <ws url>...
+    python3 ws-session-signout.py <bridge url> <login body json | @command> <ws url>...
 
 Prints one JSON object: {"stream_id", "sockets": [{"url", "code",
 "closed_after_s", "events_after_signout": [<event type>...]}],
@@ -19,6 +19,7 @@ sign-out with a new session, so a socket still open would deliver its events.
 import asyncio
 import http.cookiejar
 import json
+import subprocess
 import sys
 import time
 import urllib.error
@@ -34,8 +35,16 @@ SUBSCRIBE = "subscription { tenantEvents { id type } }"
 
 
 def login(bridge_url, body):
+    """Sign in and return the session's access token. body is the password
+    login's JSON, or "@<command>" for a tenant without a password: the command
+    prints {"path", "body"} for one sign-in (wallet-login.sh body), run anew per
+    sign-in because each needs a fresh challenge."""
+    path = "/auth/login"
+    if body.startswith("@"):
+        signed = json.loads(subprocess.run(body[1:], shell=True, check=True, capture_output=True, text=True).stdout)
+        path, body = signed["path"], json.dumps(signed["body"])
     jar = http.cookiejar.CookieJar()
-    url = replica_pin.join(bridge_url, "/auth/login")
+    url = replica_pin.join(bridge_url, path)
     opener = replica_pin.build_opener(url, urllib.request.HTTPCookieProcessor(jar))
     req = urllib.request.Request(replica_pin.split(url)[0], data=body.encode(), headers={"Content-Type": "application/json"})
     with opener.open(req, timeout=30) as resp:

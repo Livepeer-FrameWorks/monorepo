@@ -702,6 +702,7 @@ verify-stack-fixtures:
 	bash scripts/stack/test_list.sh
 	bash scripts/stack/test_staging_adapter.sh
 	bash scripts/stack/test_sdk_prereqs.sh
+	bash scripts/stack/test_test_tenant.sh
 
 clean:
 	rm -rf bin/

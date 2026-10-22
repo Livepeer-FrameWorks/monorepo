@@ -110,9 +110,12 @@ token_id=""
 receiver_ssh=()
 receiver_dir=""
 sdk_venv="$STACK_STATE_DIR/sdk-venv"
+# shellcheck source=scripts/stack/test-tenant.sh
+. "$here/test-tenant.sh"
 cleanup_run() {
   local jwt code endpoint
   rm -rf "$sdk_venv"
+  test_tenant_cleanup
   # After the sweep: what the scenarios created, while the run's token still works.
   if [ -n "$token_id" ]; then
     cleanup_run_objects "$STACK_API_TOKEN" | tee "$STACK_STATE_DIR/cleanup.log"
@@ -178,6 +181,14 @@ export STACK_TENANT_ID STACK_API_TOKEN
 echo "run API token $token_id for tenant $STACK_TENANT_ID"
 # Scenario objects a killed run left (its ledger died with it, so by name).
 cleanup_run_objects "$STACK_API_TOKEN" | sed 's/^cleanup:/recovering a killed run:/'
+# Scenarios declared "tenant: test" run as the wallet test tenant.
+for path in "${scenarios[@]}"; do
+  if scenario_needs_test_tenant "$path"; then
+    test_tenant_login "$gitops/secrets/$cluster.env" "$cluster" ||
+      echo "WARN: $TEST_BLOCKED_REASON; test tenant scenarios will report BLOCKED" >&2
+    break
+  fi
+done
 
 # Webhook deliveries need a receiver the cluster can reach and this runner can
 # read: the development host (scripts/remote-dev.sh's inventory) serves
@@ -249,7 +260,7 @@ for path in "${scenarios[@]}"; do
     printf '\n==== %s ====\n' "$label"
     scenario_since="$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)"
     window_start=$(date +%s)
-    bash "$path"
+    run_scenario_as_its_tenant "$path"
     rc=$?
     printf '%s\t%s\t%s\n' "$name" "$window_start" "$(date +%s)" >>"$sweep_windows"
     case "$rc" in
