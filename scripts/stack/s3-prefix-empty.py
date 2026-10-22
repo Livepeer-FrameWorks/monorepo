@@ -54,11 +54,18 @@ def list_prefix(bucket, prefix):
 def main():
     if len(sys.argv) != 3:
         sys.exit("usage: s3-prefix-empty.py <bucket> <prefix>")
+    # Exit 2 stops the caller's wait as a refusal, so it is reserved for a
+    # listing the store rejected (endpoint, bucket or keys are wrong). A read
+    # that timed out, a dropped connection or a 5xx is retried like a prefix
+    # that still has objects.
     try:
         keys, truncated = list_prefix(sys.argv[1], sys.argv[2])
-    except (OSError, ET.ParseError, urllib.error.HTTPError) as error:
+    except urllib.error.HTTPError as error:
         print(f"S3 prefix check failed: {error}", file=sys.stderr)
-        return 2
+        return 1 if error.code >= 500 else 2
+    except (OSError, ET.ParseError) as error:
+        print(f"S3 prefix check failed: {error}", file=sys.stderr)
+        return 1
     if keys or truncated:
         print(f"S3 prefix still has {len(keys)} object(s): {keys[:3]}", file=sys.stderr)
         return 1
