@@ -98,8 +98,10 @@ fi
 token_id=""
 receiver_ssh=()
 receiver_dir=""
+sdk_venv="$STACK_STATE_DIR/sdk-venv"
 cleanup_run() {
   local jwt code endpoint
+  rm -rf "$sdk_venv"
   # After the sweep: what the scenarios created, while the run's token still works.
   if [ -n "$token_id" ]; then
     cleanup_run_objects "$STACK_API_TOKEN" | tee "$STACK_STATE_DIR/cleanup.log"
@@ -206,6 +208,19 @@ esac
 if [ "$repeat" -lt 1 ] || [ "$repeat" -gt 100 ]; then
   echo 'STACK_REPEAT must be an integer from 1 to 100' >&2
   exit 1
+fi
+
+# Scenario 07's SDK smokes run here, not in stack-runner: the TS smoke needs
+# npm_api's dist and the Python smoke a venv with the SDK's dependencies.
+if printf '%s\n' "${scenarios[@]}" | grep -q '/07-'; then
+  # shellcheck source=scripts/stack/sdk-prereqs.sh
+  . "$here/sdk-prereqs.sh"
+  build_npm_api_dist "$repo"
+  if sdk_bin=$(python_sdk_venv "$repo" "$sdk_venv"); then
+    export PATH="$sdk_bin:$PATH"
+  else
+    echo 'WARN: the Python SDK venv could not be built; the Python SDK smoke will report BLOCKED' >&2
+  fi
 fi
 
 run_since="$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)"

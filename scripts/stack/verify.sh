@@ -59,18 +59,11 @@ else
   bash "$here/up.sh" || exit 1
 fi
 
-# The TS SDK smoke imports npm_api's built dist from the mounted checkout.
-if [ ! -f npm_api/dist/index.js ] || [ -n "$(find npm_api/src -newer npm_api/dist/index.js -print -quit 2>/dev/null)" ]; then
-  echo "building npm_api dist for the TS SDK smoke"
-  # A fresh remotedev workspace has no node_modules; install only
-  # what the API package needs.
-  if [ ! -d npm_api/node_modules ]; then
-    pnpm install --frozen-lockfile --filter '@livepeer-frameworks/api...' 2>&1 | tail -3 ||
-      echo "WARN: npm_api dependency install failed"
-  fi
-  pnpm --filter @livepeer-frameworks/api build 2>&1 | tail -5 ||
-    echo "WARN: npm_api build failed; the TS SDK smoke will report BLOCKED"
-fi
+# The TS SDK smoke in stack-runner imports npm_api's built dist from the
+# mounted checkout.
+# shellcheck source=scripts/stack/sdk-prereqs.sh
+. "$here/sdk-prereqs.sh"
+build_npm_api_dist "$stack_repo_root"
 
 scenarios=()
 while IFS= read -r path; do
