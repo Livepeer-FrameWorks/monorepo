@@ -10,6 +10,8 @@ import (
 
 	"frameworks/cli/pkg/health"
 	fwssh "frameworks/cli/pkg/ssh"
+
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 )
 
 // edgeListenerCommand prints an edge's listeners, then the host's ephemeral
@@ -40,11 +42,11 @@ var mistPublicConnectors = map[string]struct {
 	proto       string
 	defaultPort int
 }{
-	"RTMP":   {"tcp", 1935},
-	"RTSP":   {"tcp", 5554},
-	"DTSC":   {"tcp", 4200},
-	"TSSRT":  {"udp", 8889},
-	"WebRTC": {"udp", 18203},
+	"RTMP":   {"tcp", servicedefs.MistRTMPPort},
+	"RTSP":   {"tcp", servicedefs.MistRTSPPort},
+	"DTSC":   {"tcp", servicedefs.MistDTSCPort},
+	"TSSRT":  {"udp", servicedefs.MistSRTPort},
+	"WebRTC": {"udp", servicedefs.MistWebRTCPort},
 }
 
 // edgeListenerPolicy is what an edge may listen on with a wildcard address.

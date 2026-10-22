@@ -69,7 +69,7 @@ func publicListenerPorts(manifest *inventory.Manifest, hostName string) (tcp, ud
 		tcp[80], tcp[443] = true, true
 	}
 	if runs(manifest.Services, "foghorn") {
-		tcp[18029] = true
+		tcp[servicedefs.FoghornExternalGRPCPort] = true
 	}
 	return tcp, udp
 }

@@ -15,6 +15,7 @@ import (
 	"frameworks/cli/pkg/ssh"
 
 	repografana "github.com/Livepeer-FrameWorks/monorepo/pkg/grafana"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 )
 
 // NodeExporterArtifact is the release-manifest infrastructure entry pinning
@@ -24,7 +25,7 @@ const NodeExporterArtifact = "node-exporter"
 // NodeExporterPort is the loopback port node_exporter serves on; only the
 // host-local vmagent scrapes it. Not the upstream 9100, which is the
 // yb-tserver RPC port.
-const NodeExporterPort = 9110
+const NodeExporterPort = servicedefs.NodeExporterPort
 
 // prometheusStackRoleVars maps observability.* manifest entries into the
 // prometheus_stack role vars. The CLI passes one component per call

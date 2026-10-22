@@ -304,7 +304,9 @@ var auxiliaryPorts = map[string][]PortSpec{
 		{Name: "foghorn-internal-http", Port: FoghornInternalHTTPPort},
 		{Name: "foghorn-external-grpc", Port: FoghornExternalGRPCPort},
 	},
-	"helmsman": {{Name: "helmsman-management", Port: HelmsmanManagementPort}},
+	"helmsman":         {{Name: "helmsman-management", Port: HelmsmanManagementPort}},
+	"decklog":          {{Name: "decklog-metrics", Port: DecklogMetricsPort}},
+	"network-observer": {{Name: "network-observer-internal", Port: NetworkObserverInternalPort}},
 }
 
 // AuxiliaryPorts returns non-primary, non-gRPC listeners that a service binds.

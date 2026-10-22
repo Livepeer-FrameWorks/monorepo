@@ -137,9 +137,9 @@ func runDiagnose(cmd *cobra.Command, rc *resolvedCluster, component string, opts
 
 func buildStandardPorts() map[int]string {
 	standardPorts := map[int]string{
-		53:    "privateer-dns",
-		18019: "foghorn-control",
-		18029: "foghorn-external-grpc",
+		servicedefs.PrivateerDNSPort:        "privateer-dns",
+		servicedefs.FoghornInternalGRPCPort: "foghorn-control",
+		servicedefs.FoghornExternalGRPCPort: "foghorn-external-grpc",
 	}
 
 	ids := make([]string, 0, len(servicedefs.Services))
@@ -158,6 +158,11 @@ func buildStandardPorts() map[int]string {
 		if grpcPort, ok := servicedefs.DefaultGRPCPort(id); ok {
 			if _, exists := standardPorts[grpcPort]; !exists {
 				standardPorts[grpcPort] = fmt.Sprintf("%s-grpc", id)
+			}
+		}
+		for _, aux := range servicedefs.AuxiliaryPorts(id) {
+			if _, exists := standardPorts[aux.Port]; !exists {
+				standardPorts[aux.Port] = aux.Name
 			}
 		}
 	}
@@ -202,7 +207,7 @@ func diagnoseKafka(ctx context.Context, cmd *cobra.Command, manifest *inventory.
 		}
 		port := broker.Port
 		if port == 0 {
-			port = 9092
+			port = servicedefs.KafkaBrokerPort
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "\nCluster: %s (broker: %s)\n", region, broker.Host)
 		for _, check := range kafkaDiagnosticCommands(manifest.Infrastructure.Kafka.Mode, kafkaLocalBootstrap(host, port)) {

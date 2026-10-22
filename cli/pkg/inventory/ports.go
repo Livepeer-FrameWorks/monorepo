@@ -80,41 +80,34 @@ func (m *Manifest) registerInfrastructurePorts(addPort func(string, int, string)
 		for _, inst := range pg.Instances {
 			instPort := inst.Port
 			if instPort == 0 {
-				instPort = 5432
+				instPort = servicedefs.PostgresPort
 			}
 			if err := addPort(inst.Host, instPort, "postgres-"+inst.Name); err != nil {
 				return err
 			}
 		}
 		if pg.IsYugabyte() {
-			const (
-				yugabyteMasterRPCPort  = 7100
-				yugabyteMasterWebPort  = 7000
-				yugabyteTServerRPCPort = 9100
-				yugabyteTServerWebPort = 11000
-				yugabyteYCQLPort       = 9042
-			)
-
 			for _, node := range pg.Nodes {
 				owner := fmt.Sprintf("yugabyte-node-%d", node.ID)
 				masterRPCPort := node.RpcPort
 				if masterRPCPort == 0 {
-					masterRPCPort = yugabyteMasterRPCPort
+					masterRPCPort = servicedefs.YugabyteMasterRPCPort
 				}
-				if err := addPort(node.Host, masterRPCPort, owner+"-master-rpc"); err != nil {
-					return err
-				}
-				if err := addPort(node.Host, yugabyteMasterWebPort, owner+"-master-web"); err != nil {
-					return err
-				}
-				if err := addPort(node.Host, yugabyteTServerRPCPort, owner+"-tserver-rpc"); err != nil {
-					return err
-				}
-				if err := addPort(node.Host, yugabyteTServerWebPort, owner+"-tserver-web"); err != nil {
-					return err
-				}
-				if err := addPort(node.Host, yugabyteYCQLPort, owner+"-ycql"); err != nil {
-					return err
+				for _, listener := range []struct {
+					port int
+					name string
+				}{
+					{masterRPCPort, "-master-rpc"},
+					{servicedefs.YugabyteMasterWebPort, "-master-web"},
+					{servicedefs.YugabyteTServerRPCPort, "-tserver-rpc"},
+					{servicedefs.YugabyteTServerWebPort, "-tserver-web"},
+					{servicedefs.YugabyteYCQLPort, "-ycql"},
+					{servicedefs.YugabyteYCQLWebPort, "-ycql-web"},
+					{servicedefs.YugabyteYSQLWebPort, "-ysql-web"},
+				} {
+					if err := addPort(node.Host, listener.port, owner+listener.name); err != nil {
+						return err
+					}
 				}
 			}
 		}
@@ -152,7 +145,7 @@ func (m *Manifest) registerInfrastructurePorts(addPort func(string, int, string)
 		for _, ctrl := range m.Infrastructure.Kafka.Controllers {
 			port := ctrl.Port
 			if port == 0 {
-				port = 9093
+				port = servicedefs.KafkaControllerPort
 			}
 			owner := fmt.Sprintf("kafka-controller-%d", ctrl.ID)
 			if err := addPort(ctrl.Host, port, owner); err != nil {
@@ -164,7 +157,7 @@ func (m *Manifest) registerInfrastructurePorts(addPort func(string, int, string)
 		if len(m.Infrastructure.Kafka.Controllers) == 0 {
 			ctrlPort := m.Infrastructure.Kafka.ControllerPort
 			if ctrlPort == 0 {
-				ctrlPort = 9093
+				ctrlPort = servicedefs.KafkaControllerPort
 			}
 			for _, broker := range m.Infrastructure.Kafka.Brokers {
 				owner := fmt.Sprintf("kafka-broker-%d-controller", broker.ID)

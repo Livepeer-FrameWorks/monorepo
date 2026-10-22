@@ -1685,16 +1685,16 @@ func verifyYugabyteCluster(ctx context.Context, cmd *cobra.Command, manifest *in
 			continue
 		}
 
-		result, err = base.RunCommand(ctx, hostInfo, `
+		result, err = base.RunCommand(ctx, hostInfo, fmt.Sprintf(`
 for i in $(seq 1 30); do
-  if ss -ltn '( sport = :5433 )' 2>/dev/null | grep -q LISTEN; then
+  if ss -ltn '( sport = :%d )' 2>/dev/null | grep -q LISTEN; then
     echo READY
     exit 0
   fi
   sleep 2
 done
 echo NOT_READY
-exit 0`)
+exit 0`, servicedefs.YugabyteYSQLPort))
 		if err != nil {
 			failures = append(failures, fmt.Sprintf("%s: YSQL wait failed: %v", node.Host, err))
 			continue
@@ -1719,11 +1719,11 @@ done
 			if logErr != nil {
 				logResult.Stdout = fmt.Sprintf("(log probe failed: %v)", logErr)
 			}
-			failures = append(failures, fmt.Sprintf("%s: YSQL not listening on 5433 after cluster assembly\nsystemctl:\n%s\nlogs:\n%s", node.Host, strings.TrimSpace(statusResult.Stdout), strings.TrimSpace(logResult.Stdout)))
+			failures = append(failures, fmt.Sprintf("%s: YSQL not listening on %d after cluster assembly\nsystemctl:\n%s\nlogs:\n%s", node.Host, servicedefs.YugabyteYSQLPort, strings.TrimSpace(statusResult.Stdout), strings.TrimSpace(logResult.Stdout)))
 			continue
 		}
 
-		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("%s: yb-master/yb-tserver active, YSQL listening on :5433", node.Host))
+		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("%s: yb-master/yb-tserver active, YSQL listening on %d", node.Host, servicedefs.YugabyteYSQLPort))
 	}
 
 	if len(failures) > 0 {
@@ -3344,7 +3344,7 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 					config.Metadata["controller_quorum_voters"] = buildControllerQuorum(manifest, cluster)
 					controllerPort := cluster.ControllerPort
 					if controllerPort == 0 {
-						controllerPort = 9093
+						controllerPort = servicedefs.KafkaControllerPort
 					}
 					config.Metadata["controller_port"] = controllerPort
 				}
@@ -3421,7 +3421,7 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 								if ctrl.Port != 0 {
 									config.Port = ctrl.Port
 								} else {
-									config.Port = 9093
+									config.Port = servicedefs.KafkaControllerPort
 								}
 								break
 							}
@@ -3489,7 +3489,7 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 						}
 						port := inst.Port
 						if port == 0 {
-							port = 6379
+							port = servicedefs.RedisPort
 						}
 						config.Metadata["redis_primary_port"] = port
 					}
@@ -3644,7 +3644,7 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 		hasPKI := manifest.Services["navigator"].Enabled
 		if grpcAddr, ok := runtimeData["quartermaster_grpc_addr"].(string); ok && grpcAddr != "" {
 			if hasPKI {
-				config.Metadata["quartermaster_http_url"] = "https://quartermaster.internal:18002"
+				config.Metadata["quartermaster_http_url"] = "https://" + net.JoinHostPort("quartermaster.internal", strconv.Itoa(servicedefs.Services["quartermaster"].DefaultPort))
 				config.Metadata["quartermaster_http_ca_file"] = "/etc/frameworks/pki/ca.crt"
 			} else {
 				config.Metadata["quartermaster_http_url"] = quartermasterHTTPURL(grpcAddr)
@@ -3867,10 +3867,10 @@ func buildVMAgentScrapeTargets(manifest *inventory.Manifest, hostName string) []
 		"chandler":           {},
 		"commodore":          {},
 		"deckhand":           {},
-		"decklog":            {port: 18026, configKey: "metrics_port"},
+		"decklog":            {port: servicedefs.DecklogMetricsPort, configKey: "metrics_port"},
 		"foghorn":            {},
 		"helmsman":           {},
-		"livepeer-gateway":   {port: 7935, bindAddrKey: "cli_addr"},
+		"livepeer-gateway":   {port: servicedefs.LivepeerGatewayCLIPort, bindAddrKey: "cli_addr"},
 		"livepeer-signer":    {},
 		"mistserver":         {},
 		"lookout":            {},
@@ -4018,7 +4018,7 @@ func buildVMAgentScrapeTargets(manifest *inventory.Manifest, hostName string) []
 				masterLabels := infraLabels("yugabyte")
 				masterLabels["port"] = "master"
 				masterLabels["yb_universe"] = deployment.Name
-				addTarget("yugabyte-master", address, 7000, "/prometheus-metrics", masterLabels)
+				addTarget("yugabyte-master", address, servicedefs.YugabyteMasterWebPort, "/prometheus-metrics", masterLabels)
 				// The full tserver endpoint carries every per-table series (tens
 				// of MB per scrape on a few hundred tables), so the scrape asks
 				// for the per-table Raft leadership and follower lag plus clock
@@ -4031,7 +4031,7 @@ func buildVMAgentScrapeTargets(manifest *inventory.Manifest, hostName string) []
 				tserverLabels["yb_universe"] = deployment.Name
 				tserverLabels["yb_replication_factor"] = strconv.Itoa(pg.EffectiveReplicationFactor())
 				tserverLabels["yb_tservers"] = strconv.Itoa(len(pg.Nodes))
-				addParamTarget("yugabyte-tserver", address, 11000, "/prometheus-metrics", tserverLabels, map[string][]string{
+				addParamTarget("yugabyte-tserver", address, servicedefs.YugabyteTServerWebPort, "/prometheus-metrics", tserverLabels, map[string][]string{
 					"show_help": {"false"},
 					"metrics":   {yugabyteTServerScrapeMetrics},
 				}, 0)
@@ -4045,7 +4045,7 @@ func buildVMAgentScrapeTargets(manifest *inventory.Manifest, hostName string) []
 			}
 			port := inst.Port
 			if port == 0 {
-				port = 5432
+				port = servicedefs.PostgresPort
 			}
 			labels := infraLabels("postgres")
 			labels["frameworks_instance"] = inst.Name
@@ -4085,7 +4085,7 @@ func buildVMAgentScrapeTargets(manifest *inventory.Manifest, hostName string) []
 			}
 			port := inst.Port
 			if port == 0 {
-				port = 6379
+				port = servicedefs.RedisPort
 			}
 			labels := infraLabels("redis")
 			labels["frameworks_instance"] = inst.Name
@@ -4096,7 +4096,7 @@ func buildVMAgentScrapeTargets(manifest *inventory.Manifest, hostName string) []
 		}
 	}
 	if ch := manifest.Infrastructure.ClickHouse; ch != nil && ch.Enabled && ch.HasHost(hostName) {
-		addTarget("clickhouse", "127.0.0.1", 9363, "/metrics", map[string]string{
+		addTarget("clickhouse", "127.0.0.1", servicedefs.ClickHousePrometheusPort, "/metrics", map[string]string{
 			"frameworks_service": "clickhouse",
 			"frameworks_source":  "infrastructure",
 			"node_id":            hostName,
@@ -4891,15 +4891,23 @@ func internalGRPCLeafServicesForHost(manifest *inventory.Manifest, hostName stri
 	return services
 }
 
+// servicedefsGRPCPort is the registered gRPC port of service id, 0 if it has
+// none.
+func servicedefsGRPCPort(id string) int {
+	port, _ := servicedefs.DefaultGRPCPort(id)
+	return port
+}
+
 func quartermasterHTTPURL(grpcAddr string) string {
+	port := strconv.Itoa(servicedefs.Services["quartermaster"].DefaultPort)
 	host, _, err := net.SplitHostPort(grpcAddr)
 	if err == nil && host != "" {
-		return "http://" + host + ":18002"
+		return "http://" + net.JoinHostPort(host, port)
 	}
 	if idx := strings.LastIndex(grpcAddr, ":"); idx > 0 {
-		return "http://" + grpcAddr[:idx] + ":18002"
+		return "http://" + net.JoinHostPort(grpcAddr[:idx], port)
 	}
-	return "http://quartermaster:18002"
+	return "http://" + net.JoinHostPort("quartermaster", port)
 }
 
 var proxyRouteServiceNames = map[string]struct{}{
@@ -5460,7 +5468,7 @@ func resolvePostgresInstanceByID(instanceID string, manifest *inventory.Manifest
 
 func postgresInstancePort(inst *inventory.PostgresInstance) int {
 	if inst == nil || inst.Port == 0 {
-		return 5432
+		return servicedefs.PostgresPort
 	}
 	return inst.Port
 }
@@ -6013,7 +6021,7 @@ func buildControllerQuorum(manifest *inventory.Manifest, c *kafkaClusterView) st
 	}
 	port := c.ControllerPort
 	if port == 0 {
-		port = 9093
+		port = servicedefs.KafkaControllerPort
 	}
 	voters := make([]string, 0, len(c.Brokers))
 	for _, b := range c.Brokers {
@@ -6030,7 +6038,7 @@ func buildBootstrapServers(manifest *inventory.Manifest, c *kafkaClusterView) st
 	for _, ctrl := range c.Controllers {
 		port := ctrl.Port
 		if port == 0 {
-			port = 9093
+			port = servicedefs.KafkaControllerPort
 		}
 		servers = append(servers, fmt.Sprintf("%s:%d", manifest.MeshAddress(ctrl.Host), port))
 	}
@@ -6045,7 +6053,7 @@ func buildDedicatedControllerQuorum(manifest *inventory.Manifest, c *kafkaCluste
 	for _, ctrl := range c.Controllers {
 		port := ctrl.Port
 		if port == 0 {
-			port = 9093
+			port = servicedefs.KafkaControllerPort
 		}
 		voters = append(voters, fmt.Sprintf("%d@%s:%d", ctrl.ID, manifest.MeshAddress(ctrl.Host), port))
 	}
@@ -6060,7 +6068,7 @@ func kafkaControllersToMetadata(manifest *inventory.Manifest, c *kafkaClusterVie
 	for _, ctrl := range c.Controllers {
 		port := ctrl.Port
 		if port == 0 {
-			port = 9093
+			port = servicedefs.KafkaControllerPort
 		}
 		entry := map[string]any{
 			"host": manifest.MeshAddress(ctrl.Host),
@@ -6157,7 +6165,7 @@ func kafkaBrokersBootstrap(manifest *inventory.Manifest, c *kafkaClusterView) st
 	for _, broker := range c.Brokers {
 		port := broker.Port
 		if port == 0 {
-			port = 9092
+			port = servicedefs.KafkaBrokerPort
 		}
 		parts = append(parts, fmt.Sprintf("%s:%d", manifest.MeshAddress(broker.Host), port))
 	}
@@ -6172,7 +6180,7 @@ func kafkaBrokersToMetadata(manifest *inventory.Manifest, c *kafkaClusterView) [
 	for _, broker := range c.Brokers {
 		port := broker.Port
 		if port == 0 {
-			port = 9092
+			port = servicedefs.KafkaBrokerPort
 		}
 		brokers = append(brokers, map[string]any{
 			"host": manifest.MeshAddress(broker.Host),
@@ -6191,7 +6199,7 @@ func buildInitialControllers(manifest *inventory.Manifest, c *kafkaClusterView) 
 	for _, ctrl := range c.Controllers {
 		port := ctrl.Port
 		if port == 0 {
-			port = 9093
+			port = servicedefs.KafkaControllerPort
 		}
 		parts = append(parts, fmt.Sprintf("%d@%s:%d:%s", ctrl.ID, manifest.MeshAddress(ctrl.Host), port, ctrl.DirID))
 	}
@@ -6432,7 +6440,7 @@ func captureQuartermasterDiagnostics(ctx context.Context, out io.Writer, manifes
 func captureQuartermasterHostDiagnostics(ctx context.Context, out io.Writer, host inventory.Host, hostName string, pool *ssh.Pool) {
 	fmt.Fprintf(out, "\n  Quartermaster diagnostics on %s before rollback:\n", hostName)
 	base := provisioner.NewBaseProvisioner("quartermaster-diagnostics", pool)
-	result, err := base.RunCommand(ctx, host, `
+	result, err := base.RunCommand(ctx, host, fmt.Sprintf(`
 set +e
 echo "== systemctl status frameworks-quartermaster =="
 systemctl status frameworks-quartermaster --no-pager --full
@@ -6443,12 +6451,12 @@ echo
 echo "== service bootstrap failure artifacts =="
 ls -l /var/lib/frameworks/quartermaster/bootstrap-failed-*.yaml 2>/dev/null || true
 echo
-echo "== listeners 18002/19002 =="
-ss -ltnp 2>/dev/null | awk '$4 ~ /:(18002|19002)$/ { print }'
+echo "== listeners %[1]d/%[2]d =="
+ss -ltnp 2>/dev/null | awk '$4 ~ /:(%[1]d|%[2]d)$/ { print }'
 echo
 echo "== addresses =="
 ip -br addr show 2>/dev/null
-`)
+`, servicedefs.Services["quartermaster"].DefaultPort, servicedefsGRPCPort("quartermaster")))
 	if err != nil {
 		fmt.Fprintf(out, "    diagnostics failed: %v\n", err)
 		return
@@ -6469,7 +6477,7 @@ ip -br addr show 2>/dev/null
 func capturePrivateerDiagnostics(ctx context.Context, out io.Writer, host inventory.Host, pool *ssh.Pool) {
 	fmt.Fprintf(out, "\n  Privateer diagnostics for %s before rollback:\n", host.Name)
 	base := provisioner.NewBaseProvisioner("privateer-diagnostics", pool)
-	result, err := base.RunCommand(ctx, host, `
+	result, err := base.RunCommand(ctx, host, fmt.Sprintf(`
 set +e
 echo "== systemctl status frameworks-privateer =="
 systemctl status frameworks-privateer --no-pager --full
@@ -6480,15 +6488,15 @@ echo
 echo "== journalctl -u frameworks-privateer -n 200 =="
 journalctl -u frameworks-privateer -n 200 --no-pager -o short-iso
 echo
-echo "== listeners 18012/53 =="
-ss -ltnup 2>/dev/null | awk '$5 ~ /:(18012|53)$/ || $4 ~ /:(18012|53)$/ { print }'
+echo "== listeners %[1]d/%[2]d =="
+ss -ltnup 2>/dev/null | awk '$5 ~ /:(%[1]d|%[2]d)$/ || $4 ~ /:(%[1]d|%[2]d)$/ { print }'
 echo
 echo "== wg0 =="
 ip -br addr show wg0 2>/dev/null
 wg show wg0 2>/dev/null
 echo
 echo "== privateer health =="
-curl -fsS --max-time 3 http://127.0.0.1:18012/health 2>&1
+curl -fsS --max-time 3 http://127.0.0.1:%[1]d/health 2>&1
 echo
 echo "== .internal resolver =="
 resolvectl status wg0 2>/dev/null
@@ -6496,7 +6504,7 @@ getent hosts quartermaster.internal 2>&1
 echo
 echo "== privateer env keys =="
 test -f /etc/privateer/privateer.env && sed 's/=.*/=<redacted>/' /etc/privateer/privateer.env
-`)
+`, servicedefs.Services["privateer"].DefaultPort, servicedefs.PrivateerDNSPort))
 	if err != nil {
 		fmt.Fprintf(out, "    diagnostics failed: %v\n", err)
 		return
@@ -6932,7 +6940,7 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 			if brokerHost != "" {
 				port := b.Port
 				if port == 0 {
-					port = 9092
+					port = servicedefs.KafkaBrokerPort
 				}
 				brokers = append(brokers, fmt.Sprintf("%s:%d", brokerHost, port))
 			}
@@ -6986,7 +6994,7 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 			}
 			port := inst.Port
 			if port == 0 {
-				port = 6379
+				port = servicedefs.RedisPort
 			}
 			if strings.TrimSpace(inst.Host) == strings.TrimSpace(task.Host) {
 				rHost = "127.0.0.1"
@@ -7016,7 +7024,7 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 				for _, sn := range inst.Sentinels {
 					sp := sn.Port
 					if sp == 0 {
-						sp = 26379
+						sp = servicedefs.RedisSentinelPort
 					}
 					sh := manifestMeshHostname(manifest, sn.Host)
 					if sh == "" {
@@ -7195,7 +7203,7 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 		if lmInternalHost := manifestMeshHostname(manifest, lmHost); lmInternalHost != "" {
 			lmPort := listmonk.Port
 			if lmPort == 0 {
-				lmPort = 9001
+				lmPort = provisioner.ServicePorts["listmonk"]
 			}
 			env["LISTMONK_URL"] = fmt.Sprintf("http://%s:%d", lmInternalHost, lmPort)
 		}
@@ -7210,7 +7218,7 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 		if cwInternalHost := manifestMeshHostname(manifest, cwHost); cwInternalHost != "" {
 			cwPort := chatwoot.Port
 			if cwPort == 0 {
-				cwPort = 18092
+				cwPort = provisioner.ServicePorts["chatwoot"]
 			}
 			env["CHATWOOT_HOST"] = cwInternalHost
 			env["CHATWOOT_PORT"] = strconv.Itoa(cwPort)
@@ -8773,14 +8781,14 @@ func livepeerNetworkChainID(network string) (string, bool) {
 func applyLivepeerGatewayRuntimeDefaults(env map[string]string) {
 	defaults := map[string]string{
 		"network":             "arbitrum-one-mainnet",
-		"http_addr":           "127.0.0.1:8935",
+		"http_addr":           loopbackAddr(servicedefs.Services["livepeer-gateway"].DefaultPort),
 		"http_ingest":         "true",
-		"cli_addr":            "127.0.0.1:7935",
+		"cli_addr":            loopbackAddr(servicedefs.LivepeerGatewayCLIPort),
 		"trusted_proxy_cidrs": "127.0.0.1/32,::1/128",
 		// go-livepeer normalizes an empty RTMP address to 127.0.0.1:1935.
 		// Mist owns 1935 on media nodes, so keep the gateway's unused RTMP
 		// listener on a separate loopback-only port.
-		"rtmp_addr":              "127.0.0.1:1936",
+		"rtmp_addr":              loopbackAddr(servicedefs.LivepeerGatewayRTMPPort),
 		"max_sessions":           "500",
 		"max_price_per_unit":     "1200",
 		"pixels_per_unit":        "1",
@@ -8798,8 +8806,13 @@ func applyLivepeerGatewayRuntimeDefaults(env map[string]string) {
 
 func applyLivepeerSignerRuntimeDefaults(env map[string]string) {
 	if _, ok := env["cli_addr"]; !ok {
-		env["cli_addr"] = "127.0.0.1:3935"
+		env["cli_addr"] = loopbackAddr(servicedefs.LivepeerSignerCLIPort)
 	}
+}
+
+// loopbackAddr is 127.0.0.1:port.
+func loopbackAddr(port int) string {
+	return net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
 }
 
 func applyLivepeerRPCPool(env map[string]string, index int) {
@@ -8922,7 +8935,7 @@ func manifestHostRegion(manifest *inventory.Manifest, hostName string) string {
 	return ""
 }
 
-const defaultLivepeerGatewayAuthWebhookURL = "http://foghorn.internal:18008/webhooks/livepeer/auth"
+var defaultLivepeerGatewayAuthWebhookURL = "http://" + net.JoinHostPort("foghorn.internal", strconv.Itoa(servicedefs.Services["foghorn"].DefaultPort)) + "/webhooks/livepeer/auth"
 
 // servicesByDeploy returns every Services entry whose Deploy slug matches,
 // including entries that omit Deploy and rely on the manifest key being the
@@ -9668,7 +9681,7 @@ func verifyKafkaControllerMesh(ctx context.Context, cmd *cobra.Command, manifest
 			targetIP := manifest.MeshAddress(target.Host)
 			targetPort := target.Port
 			if targetPort == 0 {
-				targetPort = 9093
+				targetPort = servicedefs.KafkaControllerPort
 			}
 			checkCmd := fmt.Sprintf("timeout 3 bash -lc ':</dev/tcp/%s/%d'", targetIP, targetPort)
 			result, err := base.RunCommand(ctx, sourceHost, checkCmd)

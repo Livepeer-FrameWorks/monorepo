@@ -2,6 +2,8 @@ package services
 
 import (
 	"slices"
+	"strconv"
+	"strings"
 	"testing"
 
 	"frameworks/cli/pkg/provisioner"
@@ -20,6 +22,49 @@ func TestCatalogServicesHaveRegistryEntries(t *testing.T) {
 		}
 		if _, ok := provisioner.ServicePorts[name]; !ok {
 			t.Errorf("catalog service %q missing from provisioner ServicePorts", name)
+		}
+	}
+}
+
+// Catalog ports repeat servicedefs: every published or health-checked port of
+// a service is one servicedefs registers for it.
+func TestCatalogPortsAreRegisteredListeners(t *testing.T) {
+	catalog, err := LoadCatalog()
+	if err != nil {
+		t.Fatalf("failed to load catalog: %v", err)
+	}
+	for name, spec := range catalog.Services {
+		id := name
+		if spec.Deploy != "" {
+			id = spec.Deploy
+		}
+		registered := map[int]bool{}
+		if def, ok := servicedefs.Lookup(id); ok {
+			registered[def.DefaultPort] = true
+		}
+		if port, ok := servicedefs.DefaultGRPCPort(id); ok {
+			registered[port] = true
+		}
+		for _, aux := range servicedefs.AuxiliaryPorts(id) {
+			registered[aux.Port] = true
+		}
+		if port, ok := servicedefs.ContainerPorts[id]; ok {
+			registered[port] = true
+		}
+		if spec.Health.Port != 0 && !registered[spec.Health.Port] {
+			t.Errorf("%s: health port %d is not a listener servicedefs registers for %s", name, spec.Health.Port, id)
+		}
+		for _, mapping := range spec.Ports {
+			for _, side := range strings.Split(mapping, ":") {
+				port, err := strconv.Atoi(side)
+				if err != nil {
+					t.Errorf("%s: port mapping %q", name, mapping)
+					continue
+				}
+				if !registered[port] {
+					t.Errorf("%s: published port %d is not a listener servicedefs registers for %s", name, port, id)
+				}
+			}
 		}
 	}
 }

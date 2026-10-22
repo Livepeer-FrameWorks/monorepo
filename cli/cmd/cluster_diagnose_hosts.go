@@ -394,9 +394,8 @@ func edgeBundleListeners(mode string, vmagentRunning bool) []plannedListener {
 	return listeners
 }
 
-// edgeNativeCaddyAdminPort is the admin listener of Caddyfile.native.j2
-// (admin localhost:2019).
-const edgeNativeCaddyAdminPort = 2019
+// edgeNativeCaddyAdminPort is the admin listener of Caddyfile.native.j2.
+const edgeNativeCaddyAdminPort = servicedefs.CaddyAdminPort
 
 // diagnosePlannedPorts returns, per host, every port the manifest places
 // there and the owner that binds it: SQL, ClickHouse and Kafka (including
@@ -421,21 +420,21 @@ func diagnosePlannedPorts(manifest *inventory.Manifest) map[string]map[int]strin
 		for _, broker := range cluster.Brokers {
 			port := broker.Port
 			if port == 0 {
-				port = 9092
+				port = servicedefs.KafkaBrokerPort
 			}
 			add(broker.Host, port, fmt.Sprintf("kafka-broker-%d", broker.ID))
 		}
 		for _, ctrl := range cluster.Controllers {
 			port := ctrl.Port
 			if port == 0 {
-				port = 9093
+				port = servicedefs.KafkaControllerPort
 			}
 			add(ctrl.Host, port, fmt.Sprintf("kafka-controller-%d", ctrl.ID))
 		}
 		if len(cluster.Controllers) == 0 {
 			port := cluster.ControllerPort
 			if port == 0 {
-				port = 9093
+				port = servicedefs.KafkaControllerPort
 			}
 			for _, broker := range cluster.Brokers {
 				add(broker.Host, port, fmt.Sprintf("kafka-broker-%d-controller", broker.ID))
@@ -446,7 +445,7 @@ func diagnosePlannedPorts(manifest *inventory.Manifest) map[string]map[int]strin
 		for _, inst := range redis.Instances {
 			port := inst.Port
 			if port == 0 {
-				port = 6379
+				port = servicedefs.RedisPort
 			}
 			owner := "redis-" + inst.Name
 			add(inst.Host, port, owner)
@@ -456,7 +455,7 @@ func diagnosePlannedPorts(manifest *inventory.Manifest) map[string]map[int]strin
 			for _, sentinel := range inst.Sentinels {
 				sentinelPort := sentinel.Port
 				if sentinelPort == 0 {
-					sentinelPort = 26379
+					sentinelPort = servicedefs.RedisSentinelPort
 				}
 				add(sentinel.Host, sentinelPort, owner+"-sentinel")
 			}

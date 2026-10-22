@@ -10,6 +10,8 @@ import (
 	"frameworks/cli/pkg/detect"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/ssh"
+
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 )
 
 // redisRoleVars translates the manifest's redis.* config into the role's var
@@ -93,7 +95,7 @@ const redisExporterArtifact = "redis-exporter"
 // RedisExporterPort is the loopback port of the redis_exporter serving the
 // server on redisPort; the role derives the same value.
 func RedisExporterPort(redisPort int) int {
-	return redisPort + 10000
+	return servicedefs.ExporterPort(redisPort)
 }
 
 func redisRoleDetect(ctx context.Context, host inventory.Host, config ServiceConfig, helpers RoleBuildHelpers) (*detect.ServiceState, error) {

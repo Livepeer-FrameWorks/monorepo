@@ -9,6 +9,8 @@ import (
 	"frameworks/cli/pkg/detect"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/ssh"
+
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 )
 
 // postgresRoleVars turns the manifest shape into the variable surface the
@@ -119,7 +121,7 @@ const postgresExporterArtifact = "postgres-exporter"
 // PostgresExporterPort is the loopback port of the postgres_exporter serving
 // the instance on postgresPort; the role derives the same value.
 func PostgresExporterPort(postgresPort int) int {
-	return postgresPort + 10000
+	return servicedefs.ExporterPort(postgresPort)
 }
 
 func postgresMajorVersion(version string) string {

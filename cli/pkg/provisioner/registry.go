@@ -9,53 +9,22 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 )
 
-// ServicePorts maps service names to their default ports.
-var ServicePorts = map[string]int{
-	"postgres":           5432,
-	"kafka":              9092,
-	"kafka-controller":   9093,
-	"kafka-mirrormaker":  KafkaMirrorMakerRESTPort,
-	"clickhouse":         9000,
-	"listmonk":           9001,
-	"bridge":             18000,
-	"commodore":          18001,
-	"quartermaster":      18002,
-	"purser":             18003,
-	"periscope-query":    18004,
-	"periscope-ingest":   18005,
-	"periscope-metering": 18021,
-	"decklog":            18006,
-	"helmsman":           18007,
-	"foghorn":            18008,
-	"signalman":          18009,
-	"navigator":          18010,
-	"lookout":            18022,
-	"network-observer":   18024,
-	"bosun":              18013,
-	"prometheus":         9090,
-	"victoriametrics":    8428,
-	"vmauth":             8427,
-	"vmagent":            8429,
-	"vmalert":            8880,
-	"alertmanager":       9093,
-	"grafana":            3000,
-	"metabase":           3001,
-	"chartroom":          18030,
-	"foredeck":           18031,
-	"steward":            18032,
-	"logbook":            18033,
-	"skipper":            18018,
-	"caddy":              18090,
-	"nginx":              18090,
-	"mistserver":         8080,
-	"privateer":          18012,
-	"redis":              6379,
-	"chatwoot":           18092,
-	"yugabyte":           5433,
-	"deckhand":           18015,
-	"livepeer-gateway":   8935,
-	"livepeer-signer":    18016,
-	"chandler":           18020,
+// ServicePorts maps each service the CLI provisions to its default port:
+// servicedefs' FrameWorks services and the infrastructure components it
+// provisions beside them.
+var ServicePorts = servicePorts()
+
+func servicePorts() map[string]int {
+	ports := make(map[string]int, len(servicedefs.Services)+len(servicedefs.InfrastructurePorts))
+	for id, svc := range servicedefs.Services {
+		if svc.DefaultPort > 0 {
+			ports[id] = svc.DefaultPort
+		}
+	}
+	for id, port := range servicedefs.InfrastructurePorts {
+		ports[id] = port
+	}
+	return ports
 }
 
 // GetProvisioner returns the role-based provisioner for serviceName. Every
@@ -150,7 +119,7 @@ func genericServiceRoleConfig(serviceName string, port int) ServiceRoleConfig {
 	case "quartermaster", "commodore", "foghorn", "purser":
 		cfg.DataMigrations = true
 	case "metabase":
-		cfg.ContainerPort = 3000
+		cfg.ContainerPort = servicedefs.MetabaseContainerPort
 		cfg.HealthPath = "/api/health"
 	case "grafana":
 		cfg.HealthPath = "/api/health"

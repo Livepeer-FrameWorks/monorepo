@@ -9,11 +9,13 @@ import (
 	"frameworks/cli/pkg/detect"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/ssh"
+
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 )
 
 // KafkaMirrorMakerJMXPort is the loopback port each MirrorMaker2 worker's JMX
 // exporter serves connector metrics on; the host-local vmagent scrapes it.
-const KafkaMirrorMakerJMXPort = 9404
+const KafkaMirrorMakerJMXPort = servicedefs.KafkaMirrorMakerJMXPort
 
 // jmxExporterArtifact is the release-manifest infrastructure entry pinning the
 // Prometheus JMX exporter javaagent jar loaded by brokers, controllers and
@@ -21,7 +23,7 @@ const KafkaMirrorMakerJMXPort = 9404
 const jmxExporterArtifact = "jmx-prometheus-javaagent"
 
 // KafkaMirrorMakerRESTPort is the port of each worker's internal REST server.
-const KafkaMirrorMakerRESTPort = 8083
+const KafkaMirrorMakerRESTPort = servicedefs.KafkaMirrorMakerRESTPort
 
 // KafkaMirrorMakerRESTAddress is where a worker's internal REST server binds
 // and what it advertises to the other workers of its target: the WireGuard

@@ -11,6 +11,7 @@ import (
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/ssh"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/topology"
 )
 
@@ -18,8 +19,8 @@ import (
 // broker's and a KRaft controller's JMX exporter serve on. They differ because
 // a host runs both, next to MirrorMaker2's KafkaMirrorMakerJMXPort.
 const (
-	KafkaBrokerJMXPort     = 9405
-	KafkaControllerJMXPort = 9406
+	KafkaBrokerJMXPort     = servicedefs.KafkaBrokerJMXPort
+	KafkaControllerJMXPort = servicedefs.KafkaControllerJMXPort
 )
 
 // KafkaJMXPort returns the JMX exporter port for a kafka role ("broker" or

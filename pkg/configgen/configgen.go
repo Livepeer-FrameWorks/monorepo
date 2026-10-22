@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 )
 
 type Options struct {
@@ -239,10 +241,10 @@ func merge(dst map[string]string, src map[string]string) {
 
 func computeDerived(env map[string]string) error {
 	if strings.TrimSpace(env["WEBAPP_PORT"]) == "" {
-		env["WEBAPP_PORT"] = "18030"
+		env["WEBAPP_PORT"] = strconv.Itoa(servicedefs.Services["chartroom"].DefaultPort)
 	}
 	if strings.TrimSpace(env["WEBSITE_PORT"]) == "" {
-		env["WEBSITE_PORT"] = "18031"
+		env["WEBSITE_PORT"] = strconv.Itoa(servicedefs.Services["foredeck"].DefaultPort)
 	}
 
 	pgUser, err := require(env, "POSTGRES_USER")
@@ -381,7 +383,7 @@ func computeDerived(env map[string]string) error {
 	}
 	foghornExternalPort := env["FOGHORN_EXTERNAL_GRPC_PORT"]
 	if foghornExternalPort == "" {
-		foghornExternalPort = "18029"
+		foghornExternalPort = strconv.Itoa(servicedefs.FoghornExternalGRPCPort)
 	}
 	env["FOGHORN_INTERNAL_GRPC_BIND_ADDR"] = fmt.Sprintf(":%s", foghornInternalPort)
 	env["FOGHORN_EXTERNAL_GRPC_BIND_ADDR"] = fmt.Sprintf(":%s", foghornExternalPort)
