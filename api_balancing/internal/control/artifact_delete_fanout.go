@@ -40,6 +40,11 @@ type fanOutEntry struct {
 	nodes map[string]struct{}
 }
 
+// ArtifactDeleteFanOutNodeIDs returns the nodes a fan-out addresses.
+func ArtifactDeleteFanOutNodeIDs() []string {
+	return fanOutNodeIDs()
+}
+
 // SendArtifactDeleteToClusterNodes sends the delete command for a clip or VOD
 // to every heartbeating node except skip and the nodes it already reached. The
 // read-through relay caches an artifact on any edge that served or processed it

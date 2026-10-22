@@ -3,6 +3,7 @@ package jobs
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"sync"
 	"time"
 
@@ -28,7 +29,20 @@ type OrphanCleanupJob struct {
 	sendDVRDelete  func(nodeID string, req *ipcpb.DVRDeleteRequest) error
 	sendVodDelete  func(nodeID string, req *ipcpb.VodDeleteRequest) error
 	fanOutDelete   func(artifactType, hash string, skip []string) map[string]error
+	fanOutNodes    func() []string
 }
+
+// relayDeleteCommitSlack keeps a node's relay delete cursor this far behind the
+// instant the listing that covered it ran, so a deletion that commits late
+// with an earlier updated_at, or one stamped by a database clock ahead of this
+// replica's, is still sent. Deletes are idempotent on the node.
+const relayDeleteCommitSlack = 5 * time.Minute
+
+// relayDeletePageSize bounds one page of a node's relay delete catch-up.
+const relayDeletePageSize = 500
+
+// recentRelayDeleteLimit is the LIMIT of ListRecentlyDeletedRelayCacheableArtifacts.
+const recentRelayDeleteLimit = 1000
 
 // OrphanCleanupConfig holds configuration for the cleanup job
 type OrphanCleanupConfig struct {
@@ -58,6 +72,7 @@ func NewOrphanCleanupJob(cfg OrphanCleanupConfig) *OrphanCleanupJob {
 		sendDVRDelete:  control.SendDVRDelete,
 		sendVodDelete:  control.SendVodDelete,
 		fanOutDelete:   control.SendArtifactDeleteToClusterNodes,
+		fanOutNodes:    control.ArtifactDeleteFanOutNodeIDs,
 	}
 }
 
@@ -65,7 +80,8 @@ func NewOrphanCleanupJob(cfg OrphanCleanupConfig) *OrphanCleanupJob {
 // node's owed deletes.
 func (j *OrphanCleanupJob) Start() {
 	control.SetNodeDeletionRedriveHandler(func(nodeID string) {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		// A node far behind its relay delete cursor is sent many pages.
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer cancel()
 		j.RedriveNode(ctx, nodeID)
 	})
@@ -107,6 +123,88 @@ func (j *OrphanCleanupJob) RedriveNode(ctx context.Context, nodeID string) {
 			j.retryVODDeletion(ctx, orphanedVOD{VODHash: row.ArtifactHash, NodeID: nodeID})
 		}
 	}
+	j.sendRelayDeletesSinceCursor(ctx, nodeID)
+}
+
+// sendRelayDeletesSinceCursor sends nodeID the delete of every clip and VOD
+// (DVR chapters are VODs) deleted since its relay delete cursor, oldest first,
+// and advances the cursor past what it sent. The node may hold relay caches of
+// any of them without having cataloged them, and one that was offline past
+// control.RelayCacheDeleteWindow is no longer reached by the periodic fan-out.
+// A node without a cursor is sent every deleted one. On a send failure the
+// cursor stays at the failed delete for the next registration.
+func (j *OrphanCleanupJob) sendRelayDeletesSinceCursor(ctx context.Context, nodeID string) {
+	q := foghorndb.New(j.db)
+	var after time.Time
+	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		var err error
+		after, err = q.GetNodeRelayDeleteCursor(ctx, nodeID)
+		return err
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		after, err = time.Time{}, nil
+	}
+	if err != nil {
+		j.logger.WithError(err).WithField("node_id", nodeID).Warn("Failed to read a registering node's relay delete cursor")
+		return
+	}
+	advance := func(coveredThrough time.Time) bool {
+		err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+			return q.AdvanceNodeRelayDeleteCursor(ctx, foghorndb.AdvanceNodeRelayDeleteCursorParams{NodeID: nodeID, CoveredThrough: coveredThrough})
+		})
+		if err != nil {
+			j.logger.WithError(err).WithField("node_id", nodeID).Warn("Failed to advance a node's relay delete cursor")
+		}
+		return err == nil
+	}
+	afterHash := ""
+	for {
+		listedAt := time.Now()
+		var rows []foghorndb.ListDeletedRelayCacheableArtifactsAfterRow
+		err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+			var err error
+			rows, err = q.ListDeletedRelayCacheableArtifactsAfter(ctx, foghorndb.ListDeletedRelayCacheableArtifactsAfterParams{
+				AfterTime: after, AfterHash: afterHash, NodeID: nodeID, PageSize: relayDeletePageSize,
+			})
+			return err
+		})
+		if err != nil {
+			j.logger.WithError(err).WithField("node_id", nodeID).Warn("Failed to list the relay cache deletes a registering node owes")
+			return
+		}
+		for _, row := range rows {
+			if err := j.sendRelayCacheDelete(nodeID, row.ArtifactType, row.ArtifactHash); err != nil {
+				j.logger.WithFields(logging.Fields{
+					"artifact_hash": row.ArtifactHash,
+					"node_id":       nodeID,
+					"error":         err,
+				}).Warn("Relay cache delete not delivered to a registering node; its next registration resends it")
+				if row.UpdatedAt.Valid {
+					advance(row.UpdatedAt.Time)
+				}
+				return
+			}
+			after, afterHash = row.UpdatedAt.Time, row.ArtifactHash
+		}
+		if len(rows) < relayDeletePageSize {
+			if covered := listedAt.Add(-relayDeleteCommitSlack); covered.After(after) {
+				after = covered
+			}
+			advance(after)
+			return
+		}
+		if !advance(after) {
+			return
+		}
+	}
+}
+
+func (j *OrphanCleanupJob) sendRelayCacheDelete(nodeID, artifactType, hash string) error {
+	requestID := uuid.NewString()
+	if artifactType == "clip" {
+		return j.sendClipDelete(nodeID, &ipcpb.ClipDeleteRequest{ClipHash: hash, RequestId: requestID})
+	}
+	return j.sendVodDelete(nodeID, &ipcpb.VodDeleteRequest{VodHash: hash, RequestId: requestID})
 }
 
 func (j *OrphanCleanupJob) run() {
@@ -173,25 +271,53 @@ func (j *OrphanCleanupJob) reconcile() {
 // this covers every way an artifact becomes deleted (API delete, retention,
 // DVR chapter cascade, failed-artifact expiry) plus nodes that were offline
 // when the deletion happened.
+//
+// A pass that listed every delete in the window and reached a node moves that
+// node's relay delete cursor up to the pass, so its next registration starts
+// from there.
 func (j *OrphanCleanupJob) fanOutRecentDeletes(ctx context.Context) {
+	nodes := j.fanOutNodes()
+	listedAt := time.Now()
+	windowStart := listedAt.Add(-control.RelayCacheDeleteWindow)
 	var rows []foghorndb.ListRecentlyDeletedRelayCacheableArtifactsRow
 	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
 		var err error
-		rows, err = foghorndb.New(j.db).ListRecentlyDeletedRelayCacheableArtifacts(ctx, time.Now().Add(-control.RelayCacheDeleteWindow))
+		rows, err = foghorndb.New(j.db).ListRecentlyDeletedRelayCacheableArtifacts(ctx, windowStart)
 		return err
 	})
 	if err != nil {
 		j.logger.WithError(err).Error("Failed to list recently deleted artifacts for the relay cache delete fan-out")
 		return
 	}
+	failed := map[string]struct{}{}
 	for _, row := range rows {
 		for nodeID, sendErr := range j.fanOutDelete(row.ArtifactType, row.ArtifactHash, nil) {
+			failed[nodeID] = struct{}{}
 			j.logger.WithFields(logging.Fields{
 				"artifact_hash": row.ArtifactHash,
 				"node_id":       nodeID,
 				"error":         sendErr,
 			}).Debug("Orphan cleanup: relay cache delete not delivered; next pass retries")
 		}
+	}
+	if len(rows) >= recentRelayDeleteLimit {
+		return
+	}
+	reached := make([]string, 0, len(nodes))
+	for _, nodeID := range nodes {
+		if _, ok := failed[nodeID]; !ok {
+			reached = append(reached, nodeID)
+		}
+	}
+	if len(reached) == 0 {
+		return
+	}
+	if err := foghorndb.New(j.db).AdvanceCaughtUpNodeRelayDeleteCursors(ctx, foghorndb.AdvanceCaughtUpNodeRelayDeleteCursorsParams{
+		CoveredThrough: listedAt.Add(-relayDeleteCommitSlack),
+		NodeIds:        reached,
+		WindowStart:    windowStart,
+	}); err != nil {
+		j.logger.WithError(err).Warn("Failed to advance the relay delete cursors of the nodes the fan-out reached")
 	}
 }
 

@@ -2022,6 +2022,17 @@ CREATE TABLE IF NOT EXISTS foghorn.placement_membership_snapshot (
     confirmed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- How far each node has been sent the deletes of relay-cacheable artifacts
+-- (clips, VODs, DVR chapters). Every such artifact deleted before
+-- covered_through reached the node; the registration re-drive sends it the
+-- ones after, so a node that reconnects after the fan-out window still drops
+-- its relay caches of them. No row means the node has been sent none yet.
+CREATE TABLE IF NOT EXISTS foghorn.node_relay_delete_cursor (
+    node_id VARCHAR(100) PRIMARY KEY CHECK (btrim(node_id) <> ''),
+    covered_through TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE INDEX IF NOT EXISTS idx_foghorn_dvr_chapters_playback_artifact
     ON foghorn.dvr_chapters(playback_artifact_hash)
     WHERE playback_artifact_hash IS NOT NULL;

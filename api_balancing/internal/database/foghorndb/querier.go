@@ -33,7 +33,12 @@ type Querier interface {
 	AdvanceActiveSourceProjectionRevision(ctx context.Context, arg AdvanceActiveSourceProjectionRevisionParams) (int64, error)
 	AdvanceAdmissionEffectSourceRevision(ctx context.Context, arg AdvanceAdmissionEffectSourceRevisionParams) (int64, error)
 	AdvanceCatalogWatermark(ctx context.Context, arg AdvanceCatalogWatermarkParams) error
+	// Moves the cursors of nodes the fan-out pass reached up to covered_through,
+	// but only those already within the pass's window: a node further behind has
+	// deletes older than the window outstanding, which its re-drive sends.
+	AdvanceCaughtUpNodeRelayDeleteCursors(ctx context.Context, arg AdvanceCaughtUpNodeRelayDeleteCursorsParams) error
 	AdvanceNodeArtifactReportWatermark(ctx context.Context, arg AdvanceNodeArtifactReportWatermarkParams) (int64, error)
+	AdvanceNodeRelayDeleteCursor(ctx context.Context, arg AdvanceNodeRelayDeleteCursorParams) error
 	AdvanceVodToProcessing(ctx context.Context, arg AdvanceVodToProcessingParams) (int64, error)
 	AllocateArtifactNodeCopyVersion(ctx context.Context, arg AllocateArtifactNodeCopyVersionParams) (int64, error)
 	AllocateConfigSeedVersion(ctx context.Context, nodeID string) (int64, error)
@@ -358,6 +363,7 @@ type Querier interface {
 	GetNextDVRSegmentSequence(ctx context.Context, artifactHash string) (int64, error)
 	GetNodeAdmissionByFingerprint(ctx context.Context, fingerprintSha256 []byte) (GetNodeAdmissionByFingerprintRow, error)
 	GetNodeComponentVersion(ctx context.Context, arg GetNodeComponentVersionParams) (string, error)
+	GetNodeRelayDeleteCursor(ctx context.Context, nodeID string) (time.Time, error)
 	GetNodeUpdatePhase(ctx context.Context, nodeID string) (string, error)
 	GetNodeUpdatePhaseForRelease(ctx context.Context, arg GetNodeUpdatePhaseForReleaseParams) (string, error)
 	GetNodeUpdateProgress(ctx context.Context, nodeID string) (GetNodeUpdateProgressRow, error)
@@ -475,6 +481,11 @@ type Querier interface {
 	ListDeletedClipNodes(ctx context.Context, maxAge string) ([]ListDeletedClipNodesRow, error)
 	ListDeletedDVRNodes(ctx context.Context, maxAge string) ([]ListDeletedDVRNodesRow, error)
 	ListDeletedDVRParentsWithChapters(ctx context.Context, limit int32) ([]ListDeletedDVRParentsWithChaptersRow, error)
+	// Clips and VODs (DVR chapters are VODs) deleted after the (updated_at,
+	// artifact_hash) position, oldest first: one page of the deletes a node is
+	// sent from its relay delete cursor onwards. A federated pointer the node holds
+	// an origin copy of is left out, as in the holder passes above.
+	ListDeletedRelayCacheableArtifactsAfter(ctx context.Context, arg ListDeletedRelayCacheableArtifactsAfterParams) ([]ListDeletedRelayCacheableArtifactsAfterRow, error)
 	ListDeletedVODNodes(ctx context.Context, maxAge string) ([]ListDeletedVODNodesRow, error)
 	ListEvictableDVRSegments(ctx context.Context, arg ListEvictableDVRSegmentsParams) ([]string, error)
 	ListExhaustedProcessingJobIDs(ctx context.Context, arg ListExhaustedProcessingJobIDsParams) ([]string, error)

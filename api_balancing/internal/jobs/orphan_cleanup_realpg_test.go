@@ -3,6 +3,8 @@
 package jobs
 
 import (
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -89,8 +91,9 @@ func TestDeletedDVRDeferredOnEdgeIsRedriven_RealPG(t *testing.T) {
 // A node that registers again is sent, at once, every delete it still owes: a
 // clip, DVR or VOD soft-deleted moments ago whose bytes it still holds, which a
 // delete sent to its previous connection or deferred in its sidecar's memory
-// did not remove. Another node's deletes, a live artifact, a copy already gone
-// from the node and a federated pointer's origin copy are left alone.
+// did not remove, and another node's deleted clip, of which it may hold relay
+// caches. A live artifact, a DVR copy already gone from the node and a
+// federated pointer's origin copy are left alone.
 func TestRegisteredNodeIsSentTheDeletesItOwes_RealPG(t *testing.T) {
 	conn := startRealPGForCleanup(t)
 	const (
@@ -145,7 +148,7 @@ func TestRegisteredNodeIsSentTheDeletesItOwes_RealPG(t *testing.T) {
 	t.Cleanup(job.Stop)
 	control.RedriveNodeDeletions(node)
 
-	want := map[string]string{clip: "clip@" + node, dvr: "dvr@" + node, vod: "vod@" + node}
+	want := map[string]string{clip: "clip@" + node, dvr: "dvr@" + node, vod: "vod@" + node, foreign: "clip@" + node}
 	for hash, target := range want {
 		if sent[hash] != target {
 			t.Errorf("owed delete %s sent as %q, want %q", hash, sent[hash], target)
@@ -153,5 +156,125 @@ func TestRegisteredNodeIsSentTheDeletesItOwes_RealPG(t *testing.T) {
 	}
 	if len(sent) != len(want) {
 		t.Errorf("sent %v, want exactly %v", sent, want)
+	}
+}
+
+// A node that reconnects after the fan-out window is sent the deletes of every
+// clip, VOD and DVR chapter deleted since its relay delete cursor, though it
+// never cataloged them: its relay caches of them are on no holder list and the
+// periodic fan-out no longer lists them. A node without a cursor is sent every
+// one. Deletes before the cursor, live artifacts and DVRs (never relay-cached)
+// are not sent, and the cursor ends just behind the re-drive.
+func TestReconnectingNodeIsSentRelayDeletesSinceItsCursor_RealPG(t *testing.T) {
+	conn := startRealPGForCleanup(t)
+	const (
+		tenant  = "00000000-0000-4000-8000-0000000000d7"
+		behind  = "edge-offline-days"
+		fresh   = "edge-never-sent"
+		old     = "relayold00000000000000000000001"
+		clip    = "relayclip0000000000000000000001"
+		chapter = "relaychapter00000000000000000001"
+		vod     = "relayvod00000000000000000000001"
+		dvr     = "relaydvr00000000000000000000001"
+		live    = "relaylive0000000000000000000001"
+	)
+	seed := func(hash, kind, status string, deletedAgo time.Duration) {
+		t.Helper()
+		if _, err := conn.Exec(`INSERT INTO foghorn.artifacts (artifact_hash, artifact_type, tenant_id, status, updated_at)
+			VALUES ($1, $2, $3, $4, NOW() - $5::interval)`, hash, kind, tenant, status, deletedAgo.String()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seed(old, "vod", "deleted", 10*24*time.Hour)
+	seed(clip, "clip", "deleted", 3*24*time.Hour)
+	seed(chapter, "chapter", "deleted", 2*time.Hour)
+	seed(vod, "vod", "deleted", 30*time.Hour)
+	seed(dvr, "dvr", "deleted", 3*24*time.Hour)
+	seed(live, "clip", "ready", 3*24*time.Hour)
+	if _, err := conn.Exec(`INSERT INTO foghorn.node_relay_delete_cursor (node_id, covered_through)
+		VALUES ($1, NOW() - INTERVAL '5 days')`, behind); err != nil {
+		t.Fatal(err)
+	}
+
+	job := NewOrphanCleanupJob(OrphanCleanupConfig{DB: conn, Logger: logging.NewLogger()})
+	sent := map[string][]string{}
+	job.sendClipDelete = func(nodeID string, req *ipcpb.ClipDeleteRequest) error {
+		sent[nodeID] = append(sent[nodeID], "clip:"+req.GetClipHash())
+		return nil
+	}
+	job.sendVodDelete = func(nodeID string, req *ipcpb.VodDeleteRequest) error {
+		sent[nodeID] = append(sent[nodeID], "vod:"+req.GetVodHash())
+		return nil
+	}
+	job.sendDVRDelete = func(nodeID string, req *ipcpb.DVRDeleteRequest) error {
+		sent[nodeID] = append(sent[nodeID], "dvr:"+req.GetDvrHash())
+		return nil
+	}
+	job.RedriveNode(t.Context(), behind)
+	job.RedriveNode(t.Context(), fresh)
+
+	want := map[string][]string{
+		behind: {"clip:" + clip, "vod:" + vod, "vod:" + chapter},
+		fresh:  {"vod:" + old, "clip:" + clip, "vod:" + vod, "vod:" + chapter},
+	}
+	for node, w := range want {
+		if strings.Join(sent[node], ",") != strings.Join(w, ",") {
+			t.Errorf("%s was sent %v, want %v (oldest first)", node, sent[node], w)
+		}
+		var lag time.Duration
+		if err := conn.QueryRow(`SELECT EXTRACT(EPOCH FROM NOW() - covered_through)::bigint * 1000000000
+			FROM foghorn.node_relay_delete_cursor WHERE node_id = $1`, node).Scan(&lag); err != nil {
+			t.Fatalf("%s cursor: %v", node, err)
+		}
+		if lag > relayDeleteCommitSlack+time.Minute || lag < relayDeleteCommitSlack-time.Minute {
+			t.Errorf("%s cursor is %v behind now, want about %v", node, lag, relayDeleteCommitSlack)
+		}
+	}
+
+	// A second registration sends nothing new.
+	sent = map[string][]string{}
+	job.RedriveNode(t.Context(), behind)
+	if len(sent[behind]) != 0 {
+		t.Errorf("re-registration resent %v", sent[behind])
+	}
+}
+
+// The periodic fan-out moves the cursor of every node it reached that is
+// within its window, and leaves a node further behind for its re-drive.
+func TestFanOutPassAdvancesCaughtUpNodeCursors_RealPG(t *testing.T) {
+	conn := startRealPGForCleanup(t)
+	for node, ago := range map[string]string{"edge-current": "10 minutes", "edge-behind": "3 days", "edge-failed": "10 minutes"} {
+		if _, err := conn.Exec(`INSERT INTO foghorn.node_relay_delete_cursor (node_id, covered_through)
+			VALUES ($1, NOW() - $2::interval)`, node, ago); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := conn.Exec(`INSERT INTO foghorn.artifacts (artifact_hash, artifact_type, tenant_id, status, updated_at)
+		VALUES ('relayfanout000000000000000000001', 'clip', '00000000-0000-4000-8000-0000000000d8', 'deleted', NOW() - INTERVAL '1 hour')`); err != nil {
+		t.Fatal(err)
+	}
+	job := NewOrphanCleanupJob(OrphanCleanupConfig{DB: conn, Logger: logging.NewLogger()})
+	job.fanOutNodes = func() []string { return []string{"edge-current", "edge-behind", "edge-failed"} }
+	job.fanOutDelete = func(_, _ string, _ []string) map[string]error {
+		return map[string]error{"edge-failed": errors.New("not connected")}
+	}
+	job.fanOutRecentDeletes(t.Context())
+
+	lag := func(node string) time.Duration {
+		var secs int64
+		if err := conn.QueryRow(`SELECT EXTRACT(EPOCH FROM NOW() - covered_through)::bigint
+			FROM foghorn.node_relay_delete_cursor WHERE node_id = $1`, node).Scan(&secs); err != nil {
+			t.Fatal(err)
+		}
+		return time.Duration(secs) * time.Second
+	}
+	if got := lag("edge-current"); got > relayDeleteCommitSlack+time.Minute {
+		t.Errorf("reached node's cursor is %v behind, want about %v", got, relayDeleteCommitSlack)
+	}
+	if got := lag("edge-behind"); got < 71*time.Hour {
+		t.Errorf("node behind the window had its cursor moved to %v behind; its re-drive owes older deletes", got)
+	}
+	if got := lag("edge-failed"); got < 9*time.Minute {
+		t.Errorf("node the pass failed to reach had its cursor moved to %v behind", got)
 	}
 }

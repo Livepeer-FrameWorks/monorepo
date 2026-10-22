@@ -7,8 +7,52 @@ package foghorndb
 
 import (
 	"context"
+	"database/sql"
 	"time"
+
+	"github.com/lib/pq"
 )
+
+const advanceCaughtUpNodeRelayDeleteCursors = `-- name: AdvanceCaughtUpNodeRelayDeleteCursors :exec
+UPDATE foghorn.node_relay_delete_cursor
+SET covered_through = $1::timestamptz, updated_at = NOW()
+WHERE node_id = ANY($2::text[])
+  AND covered_through >= $3::timestamptz
+  AND covered_through < $1::timestamptz
+`
+
+type AdvanceCaughtUpNodeRelayDeleteCursorsParams struct {
+	CoveredThrough time.Time `db:"covered_through" json:"covered_through"`
+	NodeIds        []string  `db:"node_ids" json:"node_ids"`
+	WindowStart    time.Time `db:"window_start" json:"window_start"`
+}
+
+// Moves the cursors of nodes the fan-out pass reached up to covered_through,
+// but only those already within the pass's window: a node further behind has
+// deletes older than the window outstanding, which its re-drive sends.
+func (q *Queries) AdvanceCaughtUpNodeRelayDeleteCursors(ctx context.Context, arg AdvanceCaughtUpNodeRelayDeleteCursorsParams) error {
+	_, err := q.db.ExecContext(ctx, advanceCaughtUpNodeRelayDeleteCursors, arg.CoveredThrough, pq.Array(arg.NodeIds), arg.WindowStart)
+	return err
+}
+
+const advanceNodeRelayDeleteCursor = `-- name: AdvanceNodeRelayDeleteCursor :exec
+INSERT INTO foghorn.node_relay_delete_cursor (node_id, covered_through, updated_at)
+VALUES ($1, $2::timestamptz, NOW())
+ON CONFLICT (node_id) DO UPDATE SET
+    covered_through = EXCLUDED.covered_through,
+    updated_at = NOW()
+WHERE foghorn.node_relay_delete_cursor.covered_through < EXCLUDED.covered_through
+`
+
+type AdvanceNodeRelayDeleteCursorParams struct {
+	NodeID         string    `db:"node_id" json:"node_id"`
+	CoveredThrough time.Time `db:"covered_through" json:"covered_through"`
+}
+
+func (q *Queries) AdvanceNodeRelayDeleteCursor(ctx context.Context, arg AdvanceNodeRelayDeleteCursorParams) error {
+	_, err := q.db.ExecContext(ctx, advanceNodeRelayDeleteCursor, arg.NodeID, arg.CoveredThrough)
+	return err
+}
 
 const deleteStaleOrphanedArtifactNodes = `-- name: DeleteStaleOrphanedArtifactNodes :execrows
 DELETE FROM foghorn.artifact_nodes
@@ -22,6 +66,17 @@ func (q *Queries) DeleteStaleOrphanedArtifactNodes(ctx context.Context) (int64, 
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+const getNodeRelayDeleteCursor = `-- name: GetNodeRelayDeleteCursor :one
+SELECT covered_through FROM foghorn.node_relay_delete_cursor WHERE node_id = $1
+`
+
+func (q *Queries) GetNodeRelayDeleteCursor(ctx context.Context, nodeID string) (time.Time, error) {
+	row := q.db.QueryRowContext(ctx, getNodeRelayDeleteCursor, nodeID)
+	var covered_through time.Time
+	err := row.Scan(&covered_through)
+	return covered_through, err
 }
 
 const listDeletedArtifactsOnNode = `-- name: ListDeletedArtifactsOnNode :many
@@ -138,6 +193,66 @@ func (q *Queries) ListDeletedDVRNodes(ctx context.Context, maxAge string) ([]Lis
 	for rows.Next() {
 		var i ListDeletedDVRNodesRow
 		if err := rows.Scan(&i.ArtifactHash, &i.NodeID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDeletedRelayCacheableArtifactsAfter = `-- name: ListDeletedRelayCacheableArtifactsAfter :many
+SELECT a.artifact_hash, a.artifact_type, a.updated_at
+FROM foghorn.artifacts a
+WHERE a.artifact_type IN ('clip', 'vod', 'chapter')
+  AND a.status = 'deleted'
+  AND a.updated_at >= $1::timestamptz
+  AND (a.updated_at > $1::timestamptz OR a.artifact_hash > $2::text)
+  AND NOT (a.federated_pointer AND EXISTS (
+	SELECT 1 FROM foghorn.artifact_nodes an
+	WHERE an.artifact_hash = a.artifact_hash AND an.node_id = $3
+	  AND an.is_orphaned = false AND an.role = 'origin'))
+ORDER BY a.updated_at ASC, a.artifact_hash ASC
+LIMIT $4::int
+`
+
+type ListDeletedRelayCacheableArtifactsAfterParams struct {
+	AfterTime time.Time `db:"after_time" json:"after_time"`
+	AfterHash string    `db:"after_hash" json:"after_hash"`
+	NodeID    string    `db:"node_id" json:"node_id"`
+	PageSize  int32     `db:"page_size" json:"page_size"`
+}
+
+type ListDeletedRelayCacheableArtifactsAfterRow struct {
+	ArtifactHash string       `db:"artifact_hash" json:"artifact_hash"`
+	ArtifactType string       `db:"artifact_type" json:"artifact_type"`
+	UpdatedAt    sql.NullTime `db:"updated_at" json:"updated_at"`
+}
+
+// Clips and VODs (DVR chapters are VODs) deleted after the (updated_at,
+// artifact_hash) position, oldest first: one page of the deletes a node is
+// sent from its relay delete cursor onwards. A federated pointer the node holds
+// an origin copy of is left out, as in the holder passes above.
+func (q *Queries) ListDeletedRelayCacheableArtifactsAfter(ctx context.Context, arg ListDeletedRelayCacheableArtifactsAfterParams) ([]ListDeletedRelayCacheableArtifactsAfterRow, error) {
+	rows, err := q.db.QueryContext(ctx, listDeletedRelayCacheableArtifactsAfter,
+		arg.AfterTime,
+		arg.AfterHash,
+		arg.NodeID,
+		arg.PageSize,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListDeletedRelayCacheableArtifactsAfterRow{}
+	for rows.Next() {
+		var i ListDeletedRelayCacheableArtifactsAfterRow
+		if err := rows.Scan(&i.ArtifactHash, &i.ArtifactType, &i.UpdatedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
