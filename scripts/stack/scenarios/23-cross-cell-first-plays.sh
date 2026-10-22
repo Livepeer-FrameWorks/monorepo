@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # stack-scenario: manual
+# staging: safe
 # A new stream forces a new origin-pull arrangement. Twenty distinct streams
 # per direction make the first cross-cell segment, not a warmed viewer, the
 # assertion. This is manual because forty publishers and cleanup take time.

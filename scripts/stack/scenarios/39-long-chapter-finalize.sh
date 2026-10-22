@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # stack-scenario: manual
+# staging: safe
 # Scenario 04 with a chapter long enough for its finalize to run at the full
 # processing speed: a slot brought up with STACK_DVR_WINDOW_SECONDS of at least
 # 1800, the staging chapter length. Thumbs composes its sprite on a wall-clock

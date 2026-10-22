@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # stack-scenario: default
+# staging: safe
 # Clip from a live buffer: create -> ready -> plays through every replica of
 # both cells, clip.* webhooks signed, bytes and thumbnails in the origin cell.
 # Catches: F8 (clip assigned another cell's durable storage, thumbnails

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # stack-scenario: default
+# staging: unsafe, kills a control-plane replica
 # Commodore and Quartermaster each run two replicas behind one name
 # (docker-compose.stack.yml: commodore-2, quartermaster-2), as production runs
 # them on separate hosts. With one replica of either service killed, the API

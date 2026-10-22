@@ -9,8 +9,14 @@
 set -uo pipefail
 
 STACK_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-stack_endpoints_file=${STACK_ENDPOINTS_FILE:-$STACK_LIB_DIR/endpoints.sh}
-if [ -f "$stack_endpoints_file" ]; then
+# endpoints.sh holds the compose stack's in-network names; a deployed target's
+# endpoints come from the runner's environment (verify-target.sh).
+if [ "${STACK_TARGET:-stack}" = staging ]; then
+  stack_endpoints_file=${STACK_ENDPOINTS_FILE:-}
+else
+  stack_endpoints_file=${STACK_ENDPOINTS_FILE:-$STACK_LIB_DIR/endpoints.sh}
+fi
+if [ -n "$stack_endpoints_file" ] && [ -f "$stack_endpoints_file" ]; then
   # shellcheck source=/dev/null
   . "$stack_endpoints_file"
 fi

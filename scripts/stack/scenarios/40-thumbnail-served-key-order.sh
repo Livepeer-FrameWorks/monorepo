@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # stack-scenario: manual
+# staging: unsafe, stalls object copies through an S3 fault proxy
 # The object store applies copies to one key in order and finishes a copy its
 # client gave up on. A live stream projects every thumbnail publication to the
 # same served key, so once one copy to that key stalls, the copies of later

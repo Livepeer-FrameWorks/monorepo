@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # stack-scenario: default
+# staging: unsafe, stops a cell's Livepeer gateway
 # VOD processing through Livepeer, the CPU fallback with its config persisted,
 # and a fail-fast import of a missing source.
 # Catches: N2/F4 (processing+ manifest rejected by Livepeer auth), N12 (fallback

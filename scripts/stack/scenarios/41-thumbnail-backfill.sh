@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # stack-scenario: manual
+# staging: unsafe, rewrites Foghorn artifact rows to stage a backfill
 # A published clip whose one processing run left no thumbnail attempt (failed
 # Thumbs process, refused mint, upload that never landed) is ready without
 # thumbnails. The backfill must queue a thumbnail job for it, Helmsman must run

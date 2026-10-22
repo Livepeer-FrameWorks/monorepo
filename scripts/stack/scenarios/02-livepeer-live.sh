@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # stack-scenario: default
+# staging: unsafe, stops a cell's Livepeer gateway
 # Live ABR through the cell's offchain Livepeer gateway, then the CPU fallback
 # when the gateway dies. A 854x480@15 source keeps transcoding cheap: the 360p
 # rung is real work, the 480p rung is equal-area (kept), 720p/1080p are inhibited.

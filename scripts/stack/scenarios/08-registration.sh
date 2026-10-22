@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # stack-scenario: default
+# staging: unsafe, rejects SMTP with firewall rules on Commodore's host
 # Self-service signup end to end through the stack's Mailpit SMTP: register ->
 # verification email -> verify -> login -> first stream, plus delivery through
 # the account-email outbox when the first SMTP attempt fails.

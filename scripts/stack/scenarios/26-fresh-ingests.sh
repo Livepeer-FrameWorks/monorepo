@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # stack-scenario: manual
+# staging: safe
 # Fresh publisher admissions on both cells, followed by an active-session
 # check after each publisher exits. A timed-out admission must not leave an
 # open generation that later refuses a reconnect as a duplicate.

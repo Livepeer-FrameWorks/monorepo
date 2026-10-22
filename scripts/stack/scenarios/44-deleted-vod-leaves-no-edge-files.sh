@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # stack-scenario: default
+# staging: safe
 # A VOD processed in its origin cell and read through the other cell's edge is
 # deleted; afterwards no edge holds any file of it: not the origin edge's
 # canonical media, its .dtsh, or the upload/ relay cache processing read, and
@@ -13,7 +14,7 @@
 . "$(dirname "$0")/../lib.sh"
 
 need ffmpeg jq curl python3 || finish
-STORE=/data/storage
+STORE=${STACK_EDGE_STORAGE_DIR:-/data/storage}
 render_mp4 "$STACK_STATE_DIR/vod-delete-caches.mp4" 640x360 15 12 || { fail "render VOD source"; finish; }
 V=$(upload_vod "$STACK_STATE_DIR/vod-delete-caches.mp4" "stack deleted vod leaves no edge files")
 VID=$(echo "$V" | jq -r '.id // empty')

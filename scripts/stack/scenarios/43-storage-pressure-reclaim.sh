@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # stack-scenario: default
+# staging: unsafe, lowers an edge's logical capacity and restarts its Helmsman
 # An edge over its freeze threshold reclaims everything it may: the relay's
 # block caches in every cache root (upload sources included) and sidecars whose
 # media is gone, and its cleanup pass evicts the lowest-priority durable

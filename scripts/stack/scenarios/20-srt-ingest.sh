@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # stack-scenario: default
+# staging: safe
 # SRT ingest end to end. Mist advertises its TSSRT listener without the port
 # when it is the scheme default, so the edge must report the configured port:
 # the front door offers an SRT URL with a port, a direct SRT publish to the edge

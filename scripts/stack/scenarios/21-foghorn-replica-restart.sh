@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # stack-scenario: default
+# staging: unsafe, stops a Foghorn replica
 # A Foghorn replica of cell A is stopped and started again, once for each
 # replica, while one stream publishes into each cell. Every other replica of
 # both cells keeps resolving both streams on the first attempt: the stopped

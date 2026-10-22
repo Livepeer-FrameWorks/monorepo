@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # stack-scenario: default
+# staging: unsafe, restarts a Foghorn replica of the other cell
 # Both Foghorn replicas of cell B restart together, as in a rolling deploy of
 # the cell, while cell A has no live stream toward cell B. While they are down
 # Quartermaster names cell B with no healthy Foghorn address; cell A keeps B's

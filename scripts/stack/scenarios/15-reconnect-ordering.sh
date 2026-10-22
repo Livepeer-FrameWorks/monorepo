@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # stack-scenario: default
+# staging: unsafe, pauses an edge's Helmsman
 # An encoder reconnects on the same edge while its previous connection's
 # PUSH_INPUT_CLOSE is still undelivered in Helmsman's trigger WAL. Helmsman must
 # hold the new PUSH_REWRITE until Foghorn has acknowledged that runtime's close,

@@ -1,7 +1,16 @@
 #!/usr/bin/env bash
-# Run the stack scenarios against an already deployed target. Endpoint and
-# transport details come from the operator's private files; this runner never
-# provisions or tears down the deployment.
+# Run the stack scenarios against a deployed cluster: STACK_TARGET=staging make
+# verify-stack. `frameworks cluster stack-target` describes the cluster from the
+# gitops manifest (endpoints, edges, service journals, database access); the run
+# logs in as the platform operator, mints a short-lived API token for its own
+# test streams, and revokes it on exit. Only scenarios declared "staging: safe"
+# run (scenarios/list.sh); this runner never provisions, restarts, drains or
+# tears anything down.
+#
+#   STACK_TARGET_CLUSTER   gitops cluster to verify (default staging)
+#   FRAMEWORKS_GITOPS_DIR  gitops checkout (default: ../gitops beside the repo)
+#   STACK_CLI_CONTEXT      CLI context of that cluster (default staging)
+#   STACK_ENDPOINTS_FILE   optional overrides sourced after the derived target
 set -uo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -9,31 +18,58 @@ repo="$(cd "$here/../.." && pwd)"
 cd "$repo" || exit 1
 export STACK_TARGET=staging STACK_REPO="$repo"
 export STACK_ADAPTER_FILE=${STACK_ADAPTER_FILE:-$here/staging-adapter.sh}
-
-for file in "${STACK_ENDPOINTS_FILE:-}" "${STACK_ADAPTER_FILE:-}"; do
-  if [ -z "$file" ] || [ ! -f "$file" ]; then
-    echo 'BLOCKED: staging needs a private STACK_ENDPOINTS_FILE and a readable STACK_ADAPTER_FILE' >&2
-    exit 2
-  fi
-done
-set -a
-# shellcheck source=/dev/null
-. "$STACK_ENDPOINTS_FILE"
-# shellcheck source=/dev/null
-. "$STACK_ADAPTER_FILE"
-set +a
-for required in BRIDGE_URL FOGHORN_A_URLS FOGHORN_B_URLS EDGE_A_RTMP EDGE_B_RTMP STACK_TENANT_ID STACK_API_TOKEN; do
-  if [ -z "${!required:-}" ]; then
-    echo "BLOCKED: staging endpoint file lacks $required" >&2
-    exit 2
-  fi
-done
-if ! declare -F stack_services >/dev/null || ! declare -F stack_logs >/dev/null; then
-  echo 'BLOCKED: staging adapter must provide stack_services and stack_logs' >&2
+cluster=${STACK_TARGET_CLUSTER:-staging}
+gitops=${FRAMEWORKS_GITOPS_DIR:-$repo/../gitops}
+export STACK_CLI_CONTEXT=${STACK_CLI_CONTEXT:-staging}
+if [ ! -d "$gitops/clusters/$cluster" ]; then
+  echo "BLOCKED: no gitops cluster $cluster under $gitops (set FRAMEWORKS_GITOPS_DIR)" >&2
   exit 2
 fi
+
+if [ -z "${STACK_STATE_DIR:-}" ]; then
+  STACK_STATE_DIR="$repo/.stack/$cluster-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+fi
+mkdir -p "$STACK_STATE_DIR" || exit 1
+chmod 700 "$STACK_STATE_DIR"
+export STACK_STATE_DIR
+printf '%s evidence: %s\n' "$cluster" "$STACK_STATE_DIR"
+
+# Selection first: an unsafe scenario named for staging is refused before
+# anything touches the cluster.
+scenarios=()
+selection=$(STACK_SCENARIOS="${STACK_SCENARIOS:-default}" bash "$here/scenarios/list.sh") || exit 1
+while IFS= read -r path; do
+  [ -n "$path" ] && scenarios+=("$path")
+done <<<"$selection"
+[ "${#scenarios[@]}" -gt 0 ] || { echo 'no scenarios selected' >&2; exit 1; }
+
+make build-bin-cli >"$STACK_STATE_DIR/build-cli.log" 2>&1 || { echo "CLI build failed: $STACK_STATE_DIR/build-cli.log" >&2; exit 1; }
+target="$STACK_STATE_DIR/target"
+if ! "$repo/bin/cli" --context "$STACK_CLI_CONTEXT" cluster stack-target --gitops-dir "$gitops" --cluster "$cluster" \
+  --out-dir "$target" >"$STACK_STATE_DIR/stack-target.log" 2>&1; then
+  echo "BLOCKED: cluster stack-target failed: $STACK_STATE_DIR/stack-target.log" >&2
+  exit 2
+fi
+set -a
+# shellcheck source=/dev/null
+. "$target/target.env"
+if [ -n "${STACK_ENDPOINTS_FILE:-}" ]; then
+  # shellcheck source=/dev/null
+  . "$STACK_ENDPOINTS_FILE"
+fi
+set +a
+# shellcheck source=/dev/null
+. "$target/operator.env"
+rm -f "$target/operator.env"
+# Scenarios that sign in (session_token) use the operator's login.
+export STACK_DEMO_EMAIL=$STACK_OPERATOR_EMAIL STACK_DEMO_PASSWORD=$STACK_OPERATOR_PASSWORD
+unset STACK_OPERATOR_PASSWORD
+# lib.sh fills in the compose stack's receiver; only an explicit one counts here.
+receiver_override=${WEBHOOK_RECEIVER_URL:-}
+# shellcheck source=scripts/stack/lib.sh
+STACK_SCENARIO=verify-target . "$here/lib.sh"
 if ! stack_services >/dev/null; then
-  echo 'BLOCKED: staging service log map is unavailable' >&2
+  echo 'BLOCKED: the stack-target service map is empty' >&2
   exit 2
 fi
 if [ "${STACK_MAIL_MODE:-mailpit}" = imap ]; then
@@ -45,13 +81,91 @@ if [ "${STACK_MAIL_MODE:-mailpit}" = imap ]; then
   done
 fi
 
-if [ -z "${STACK_STATE_DIR:-}" ]; then
-  STACK_STATE_DIR="$repo/.stack/staging-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+# The run's own API token: the operator's tenant, revoked when the run ends.
+login=$(mktemp "$STACK_STATE_DIR/login.XXXXXX")
+jar="$STACK_STATE_DIR/operator.jar"
+code=$(curl -s -m 30 -c "$jar" -o "$login" -w '%{http_code}' "$BRIDGE_URL/auth/login" -H 'Content-Type: application/json' \
+  --data "$(jq -cn --arg e "$STACK_DEMO_EMAIL" --arg p "$STACK_DEMO_PASSWORD" --argjson b "$(bot_fields)" '{email:$e, password:$p} + $b')")
+STACK_TENANT_ID=$(jq -r '.user.tenant_id // empty' "$login" 2>/dev/null)
+rm -f "$login"
+operator_jwt=$(awk '$6 == "access_token" { print $7 }' "$jar" | tail -1)
+if [ "$code" != 200 ] || [ -z "$STACK_TENANT_ID" ] || [ -z "$operator_jwt" ]; then
+  echo "BLOCKED: operator login to $BRIDGE_URL failed (HTTP $code)" >&2
+  exit 2
 fi
-mkdir -p "$STACK_STATE_DIR" || exit 1
-chmod 700 "$STACK_STATE_DIR"
-export STACK_STATE_DIR
-printf 'staging evidence: %s\n' "$STACK_STATE_DIR"
+token_id=""
+receiver_ssh=()
+receiver_dir=""
+cleanup_run() {
+  local jwt code endpoint
+  endpoint=$(awk '{print $1}' "$STACK_STATE_DIR/webhook-endpoint" 2>/dev/null)
+  if [ -n "$endpoint" ]; then
+    jwt=$(refresh_session_token "$jar" 2>/dev/null) || jwt=$operator_jwt
+    gql 'mutation($id:ID!){deleteWebhookEndpoint(id:$id){__typename}}' "$(jq -cn --arg id "$endpoint" '{id:$id}')" "$jwt" >/dev/null
+    echo "run webhook endpoint $endpoint deleted"
+  fi
+  if [ -n "$receiver_dir" ]; then
+    "${receiver_ssh[@]}" "kill \$(cat $receiver_dir/pid) 2>/dev/null; rm -rf $receiver_dir" </dev/null
+  fi
+  if [ -n "$token_id" ]; then
+    jwt=$(refresh_session_token "$jar" 2>/dev/null) || jwt=$operator_jwt
+    gql 'mutation($id:ID!){revokeDeveloperToken(id:$id){__typename}}' "$(jq -cn --arg id "$token_id" '{id:$id}')" "$jwt" >/dev/null
+    code=$(curl -s -m 15 -o /dev/null -w '%{http_code}' "$BRIDGE_GRAPHQL_URL" -H "Authorization: Bearer $STACK_API_TOKEN" \
+      -H 'Content-Type: application/json' --data '{"query":"{streamsConnection(page:{first:1}){totalCount}}"}')
+    if [ "$code" = 401 ]; then
+      echo "run API token $token_id revoked (HTTP 401 after revocation)"
+    else
+      echo "WARN: run API token $token_id still answers HTTP $code after revocation" >&2
+    fi
+  fi
+  rm -f "$jar"
+}
+trap cleanup_run EXIT
+created=$(gql 'mutation($i:CreateDeveloperTokenInput!){createDeveloperToken(input:$i){__typename ... on DeveloperToken{id tokenValue} ... on ValidationError{message} ... on AuthError{message}}}' \
+  "$(jq -cn --arg n "stack-$cluster-$(date -u +%Y%m%dT%H%M%SZ)" \
+    '{i:{name:$n, expiresIn:1, permissions:"streams:read,streams:write,analytics:read,developer:read,developer:write,account:read,infrastructure:read,placement:read"}}')" \
+  "$operator_jwt")
+token_id=$(jq -r '.data.createDeveloperToken.id // empty' <<<"$created")
+STACK_API_TOKEN=$(jq -r '.data.createDeveloperToken.tokenValue // empty' <<<"$created")
+if [ -z "$token_id" ] || [ -z "$STACK_API_TOKEN" ]; then
+  echo "BLOCKED: createDeveloperToken failed: $(jq -c 'del(.data.createDeveloperToken.tokenValue)' <<<"$created" 2>/dev/null)" >&2
+  exit 2
+fi
+export STACK_TENANT_ID STACK_API_TOKEN
+echo "run API token $token_id for tenant $STACK_TENANT_ID"
+
+# Webhook deliveries need a receiver the cluster can reach and this runner can
+# read: the development host (scripts/remote-dev.sh's inventory) serves
+# webhook-receiver.py for the run. Without it the webhook checks fail.
+dev_inventory="$gitops/development/hosts.enc.yaml"
+receiver_ready=$receiver_override
+if [ -z "$receiver_override" ] && [ -f "$dev_inventory" ]; then
+  dev_host=${REMOTE_DEV_HOST:-$(sops --decrypt --extract '["hosts"]["remotedev"]["address"]' "$dev_inventory" 2>/dev/null)}
+  dev_port=${REMOTE_DEV_PORT:-$(sops --decrypt --extract '["hosts"]["remotedev"]["port"]' "$dev_inventory" 2>/dev/null)}
+  if [ -n "$dev_host" ]; then
+    receiver_ssh=(ssh -o BatchMode=yes -o ConnectTimeout=10 -p "${dev_port:-22}" "${REMOTE_DEV_USER:-$(id -un)}@$dev_host")
+    receiver_dir="/tmp/fw-stack-receiver-$cluster-$$"
+    for _ in 1 2 3 4 5; do
+      receiver_port=$((20000 + RANDOM % 10000))
+      "${receiver_ssh[@]}" "mkdir -p $receiver_dir && cat >$receiver_dir/receiver.py && cd $receiver_dir &&
+        (RECEIVER_DATA=$receiver_dir RECEIVER_PORT=$receiver_port nohup python3 receiver.py >receiver.log 2>&1 & echo \$! >pid)" \
+        <"$here/webhook-receiver.py" || break
+      up=0
+      for _ in 1 2 3 4 5; do
+        curl -fs -m 3 -o /dev/null "http://$dev_host:$receiver_port/requests" && { up=1; break; }
+        sleep 1
+      done
+      if [ "$up" = 1 ]; then
+        export WEBHOOK_RECEIVER_URL="http://$dev_host:$receiver_port" WEBHOOK_TARGET_URL="http://$dev_host:$receiver_port/hooks"
+        echo "webhook receiver for the run: $WEBHOOK_RECEIVER_URL"
+        receiver_ready=$WEBHOOK_RECEIVER_URL
+        break
+      fi
+      "${receiver_ssh[@]}" "kill \$(cat $receiver_dir/pid) 2>/dev/null" </dev/null
+    done
+  fi
+fi
+[ -n "$receiver_ready" ] || echo 'WARN: no webhook receiver for the run; webhook checks will fail' >&2
 
 repeat=${STACK_REPEAT:-1}
 case "$repeat" in
@@ -60,18 +174,6 @@ esac
 if [ "$repeat" -lt 1 ] || [ "$repeat" -gt 100 ]; then
   echo 'STACK_REPEAT must be an integer from 1 to 100' >&2
   exit 1
-fi
-
-scenarios=()
-while IFS= read -r path; do
-  [ -n "$path" ] && scenarios+=("$path")
-done < <(STACK_SCENARIOS="${STACK_SCENARIOS:-default}" bash "$here/scenarios/list.sh")
-[ "${#scenarios[@]}" -gt 0 ] || { echo 'no scenarios selected' >&2; exit 1; }
-if printf '%s\n' "${scenarios[@]}" | grep -Eq '/(27|28)-'; then
-  make build-bin-cli || exit 1
-fi
-if printf '%s\n' "${scenarios[@]}" | grep -Eq '/27-'; then
-  make build-stack-billing-runner || exit 1
 fi
 
 run_since="$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)"

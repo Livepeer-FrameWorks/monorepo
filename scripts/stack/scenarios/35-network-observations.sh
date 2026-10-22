@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # stack-scenario: manual
+# staging: unsafe, drives the stack's own Livepeer chain fixture
 # The Livepeer network-observation pipeline end to end. The coordinator reads
 # its catalog from the stack chain (scripts/stack/livepeer-chain.py: an
 # orchestrator with a documentation-range IP-literal URI, an unresolvable

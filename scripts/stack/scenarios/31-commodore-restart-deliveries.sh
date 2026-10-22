@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # stack-scenario: manual
+# staging: unsafe, kills and pauses Commodore
 # Both Commodore replicas are killed while a new stream's authority delivery to
 # cell A is in flight: cell A's Foghorns are paused, so the claimed attempt is
 # held open. The deliveries whose holders died must be made again within about

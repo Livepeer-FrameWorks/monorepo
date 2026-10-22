@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # stack-scenario: default
+# staging: safe
 # A recording stream stopped and published again. Inside Mist's 12 s resume
 # window the publisher resumes its tracks and its recording continues. After the
 # buffer unloads, the republish's buffer can come up just before its DVR push

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # stack-scenario: default
+# staging: safe
 # Bridge runs two replicas (docker-compose.stack.yml: bridge-2). An API token
 # holds a tenantEvents WebSocket on each; revoking the token through bridge
 # closes both with 4403 within two seconds of the revocation's answer, and

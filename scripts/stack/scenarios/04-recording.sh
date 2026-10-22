@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # stack-scenario: default
+# staging: safe
 # A default record:true stream, pushed past one DVR window and stopped:
 # chapters close, finalize faster than real time, freeze with an accepted
 # .dtsh, keep their id across the stop, announce recording.ready with the
@@ -60,9 +61,10 @@ log "stop after ${PUSH}s"
 wait_publisher "$PUB" $((PUSH + 60)) || fail "publisher still running $((PUSH + 60))s after it started"
 STOPPED=$(date +%s)
 eventually 60 "recording.stopped webhook" saw_event "$SINCE" recording.stopped
-# Before any chapter finalizes, recording.ready must not have fired.
+# Before any chapter finalizes, recording.ready must not have fired for this
+# recording. The tail recording above stops earlier and announces its own.
 if chapters | jq -e 'all(.state != "FINALIZED" and .state != "FROZEN")' >/dev/null; then
-  no_early_ready() { ! saw_event "$SINCE" recording.ready; }
+  no_early_ready() { ! saw_event "$SINCE" recording.ready "tostring | contains(\"$UUID\")"; }
   check "no recording.ready while chapters are still finalizing" no_early_ready
 fi
 

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # stack-scenario: default
+# staging: unsafe, rewrites an edge's control TLS config and restarts its Helmsman
 # Edge A's Helmsman reaches its cell the way a production edge does: over TLS,
 # by the cell's dotted control name, which resolves to every Foghorn instance of
 # the cell (FOGHORN_CONTROL_ADDR=foghorn.<cluster>.<root>:18029 with

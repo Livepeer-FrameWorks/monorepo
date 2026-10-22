@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # stack-scenario: default
+# staging: safe
 # A revoked signing key ends exactly the viewer sessions whose token it
 # signed, on the edge, whichever Foghorn replica applied the revocation and
 # whichever replica granted the edge. Viewers watch a JWT stream with tokens

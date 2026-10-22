@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # stack-scenario: manual
+# staging: unsafe, restarts and updates an edge
 # Node lifecycle faults (slow and disruptive, so manual only):
 #   1. Helmsman restarts with a processing job in flight: the job finishes or is
 #      re-dispatched within minutes, never after the 30-min lease.

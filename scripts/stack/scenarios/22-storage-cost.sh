@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # stack-scenario: default
+# staging: safe
 # A stored artifact of a tenant on a paid tier shows what keeping it costs: the
 # demo tenant's developer tier prices cold storage, so a ready clip's
 # storageCost is a positive per-month projection in the tier's currency.

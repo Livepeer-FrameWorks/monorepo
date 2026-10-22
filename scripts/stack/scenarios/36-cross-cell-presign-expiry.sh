@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # stack-scenario: default
+# staging: unsafe, routes a VOD's presigned reads through an S3 fault proxy
 # A cell-B edge keeps playing a cell-A VOD after the presigned GETs it cached
 # for it have expired. The S3 proxy answers every presigned GET of that VOD
 # signed before the arming second the way S3 answers an expired signature.

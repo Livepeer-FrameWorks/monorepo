@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # stack-scenario: default
+# staging: unsafe, stops a cell's Livepeer gateway
 # A VOD whose Livepeer gateway dies after the processing output has started:
 # the local fallback replaces the Livepeer producer after the recording header
 # froze its tracks. That attempt ends PROCESS_TRACKS_CHANGED, Helmsman reports

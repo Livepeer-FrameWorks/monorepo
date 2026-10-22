@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # stack-scenario: manual
+# staging: unsafe, routes thumbnail uploads through an S3 fault proxy
 # Two response-header stalls on one thumbnail key reproduce the historic
 # sequential-batch deadline. The other files must land independently, and
 # a retry of the stalled file must complete the same publication attempt.

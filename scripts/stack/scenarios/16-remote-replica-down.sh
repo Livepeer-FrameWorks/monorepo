@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # stack-scenario: default
+# staging: unsafe, kills a Foghorn replica of the other cell
 # A remote cell with one Foghorn replica dead still answers placement through
 # its other replica. The stream publishes into cell A and cell B's own edge is
 # stopped, so every viewer resolved through cell B must be placed on cell A's

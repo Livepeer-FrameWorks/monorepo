@@ -74,6 +74,28 @@ expect "a 403 for another stream than the refused one still fails" \
   fails "0 foghorn ${refusal//abcDEF123/otherStream9}
 0 edge $mist_403"
 
+# A deployed target runs only scenarios that inject no faults, so a service
+# logging at error level during the run is a finding there; on the stack the
+# fault scenarios cause error lines on purpose and only signatures count.
+cat >"$work/adapter.sh" <<'EOF'
+stack_services() { echo foghorn-eu; }
+stack_logs() { cat "$FIXTURE_DIR/staging.log"; }
+EOF
+run_staging_logcheck() { # run_staging_logcheck <log lines> [scenario]
+  printf '%s\n' "$1" >"$work/staging.log"
+  FIXTURE_DIR="$work" STACK_TARGET=staging STACK_ADAPTER_FILE="$work/adapter.sh" STACK_STATE_DIR="$work/state" \
+    bash "$here/logcheck.sh" '' "${2:-}" >"$work/out" 2>&1
+}
+error_line='{"level":"error","msg":"Failed to publish artifact report","node":"edge-1"}'
+info_line='{"level":"info","msg":"artifact report published"}'
+staging_fails_naming_error() { ! run_staging_logcheck "$1" && grep -qF 'Failed to publish artifact report' "$work/out"; }
+staging_passes() { run_staging_logcheck "$@"; }
+expect "an error-level line during a staging run fails the run's check" staging_fails_naming_error "$info_line
+$error_line"
+expect "info-level lines pass the staging run's check" staging_passes "$info_line"
+expect "a staging scenario's own check leaves error levels to the run's check" staging_passes "$error_line" 05-clip
+expect "an error-level line passes on the stack" passes "0 foghorn $error_line"
+
 if [ "$failures" -gt 0 ]; then
   echo "logcheck checks: $failures failed"
   exit 1

@@ -119,6 +119,15 @@ while IFS= read -r svc; do
     : >"$work/$svc.scenario"
   fi
   grep -E 'FAIL\|' "$work/log" | grep -vE "$mist_fail_allow" >"$work/$svc.mist"
+  # A deployed target runs only scenarios that inject no faults, so the run's
+  # whole-window check also fails on any service line logged at error level or
+  # above. On the stack, fault scenarios log those on purpose.
+  if [ "${STACK_TARGET:-stack}" = staging ] && [ -z "$scenario" ]; then
+    grep -E '"level":"(error|fatal|panic)"|level=(error|fatal|panic)' "$work/log" |
+      grep -oE '"msg":"[^"]{0,160}|msg="[^"]{0,160}' | sed -E 's/^"?msg"?[:=]"/error-level: /' >"$work/$svc.errors"
+  else
+    : >"$work/$svc.errors"
+  fi
 done <<<"$sources"
 
 ended_session_streams="$(stream_names_logged_by '^foghorn' 'livepeer auth: refused a transcode of an ended ingest session' \
@@ -132,16 +141,17 @@ for svc in ${read_services[@]+"${read_services[@]}"}; do
   scenario_hits="$(cat "$work/$svc.scenario")"
   [ -n "$scenario_hits" ] && hits="${hits}${hits:+$'\n'}${scenario_hits}"
   mist_fails="$(drop_designed_refusals <"$work/$svc.mist")"
-  if [ -n "$hits" ] || [ -n "$mist_fails" ]; then
+  error_levels="$(cat "$work/$svc.errors")"
+  if [ -n "$hits" ] || [ -n "$mist_fails" ] || [ -n "$error_levels" ]; then
     found=1
     printf '\n== %s\n' "$svc"
-    printf '%s\n' "$hits" "$mist_fails" | sed '/^$/d' | sort | uniq -c | sort -rn | head -20
+    printf '%s\n' "$hits" "$mist_fails" "$error_levels" | sed '/^$/d' | sort | uniq -c | sort -rn | head -20
   fi
 done
 
 if [ "$found" -ne 0 ]; then
   echo
-  echo "logcheck: FAIL (defect signatures above)"
+  echo "logcheck: FAIL (defect signatures or error-level lines above)"
   exit 1
 fi
 echo "logcheck: PASS"

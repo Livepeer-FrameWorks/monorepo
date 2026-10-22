@@ -144,58 +144,47 @@ plaintext addresses.
 
 ## Requested post-rollout staging smoke
 
-After the maintainer requests staging verification, run the same scenario
-scripts with `STACK_TARGET=staging` from an operator checkout on the private
-network. The target path does not provision or tear down staging. It runs the
-selected scenarios against the deployed service endpoints and reads native
-service journals through SSH. Keep endpoint credentials, the test tenant, and
-the service map in private operator files:
+Staging is verified with the same scenarios, sweep and log check as the stack.
+After the maintainer requests staging verification, run from an operator
+checkout on the private network with the GitOps checkout beside it:
 
 ```bash
-STACK_TARGET=staging \
-STACK_ENDPOINTS_FILE=/private/path/staging-stack-endpoints.sh \
-STAGING_SERVICE_MAP_FILE=/private/path/staging-service-map.txt \
-make verify-stack
+STACK_TARGET=staging make verify-stack
 ```
 
-The endpoint file exports the Bridge and every Foghorn replica URL,
-`EDGE_A_RTMP`/`EDGE_B_RTMP`, the isolated test tenant's ID and API token,
-database and ClickHouse connections, the webhook receiver, mailbox access,
-and `STACK_CLI_CONTEXT`/`STACK_CLI_MANIFEST`. Set `STACK_MAIL_MODE=imap`,
-`STACK_TEST_EMAIL_BASE`, and `STACK_MAIL_IMAP_HOST`/`USER`/`PASSWORD` when
-staging sends verification mail through its real SMTP provider. The inbox
-address receives unique plus-addressed test signups. Set `STACK_SMTP_PORT` to
-the staging SMTP port; the signup outbox check briefly rejects that port on
-Commodore's host and removes its own rules after the retry begins. The service
-map contains
-`scenario-service|ssh-host|systemd-unit` rows; repeat an alias across hosts
-for a replicated service that a fault scenario must stop together. For example,
-the Livepeer gateway alias maps to all three gateway hosts of its cell, while
-`foghorn` and `foghorn-2` map to individual EU replicas. Include every service
-whose logs the smoke must scan. The SSH user needs journal read access and
-noninteractive `systemctl` access for the selected restart and outage checks.
-Set `STACK_EDGE_A_LOCATION_PREFIX` to the EU edge's public scheme and
-authority (including its trailing slash) so remote-replica checks recognize
-the deployed playback redirect.
+Nothing else is configured by hand. `scripts/stack/verify-target.sh` builds the
+CLI from source and runs `frameworks --context staging cluster stack-target`,
+which derives the run's target from the cluster manifest, its edge manifest,
+the bootstrap overlay and their SOPS files: the public Bridge and per-cell
+Foghorn endpoints, each cell's edge, the service-to-host-and-unit map for
+journal reads, and how each database and ClickHouse is read over SSH (with the
+owning service's credentials, read-only, never copied off the host). The run
+then logs in as the bootstrap overlay's platform operator, mints a one-day API
+token for its own test streams, serves the webhook receiver for the run from
+the development host (Bosun on staging reaches it), and on exit deletes its
+webhook endpoint, stops the receiver and revokes the token.
 
-For billing scenario 27, export `STACK_BILLING_DATABASE_URL` for Purser's
-tenant-scoped fixture writes, `STACK_BILLING_QM_ADDR`, `SERVICE_TOKEN`, the
-deployed `SUPPLIER_*` identity, and Quartermaster client TLS settings
-(`GRPC_TLS_CA_PATH` and `QUARTERMASTER_GRPC_TLS_SERVER_NAME`). The driver runs
-on the operator runner against those same services. For manual scenario 29,
-`STACK_THUMBNAIL_FAULT_URL` must reach a private fixture proxy used by the
-isolated test tenant's storage; it must not reroute shared staging storage.
-Without that fixture, 29 reports BLOCKED. For scenario 09's auto-update,
-`STACK_EDGE_UPDATE_CMD` stages the release target. It goes with
-`STACK_EDGE_UPDATE_HELMSMAN_VERSION` and `STACK_EDGE_UPDATE_MIST_VERSION`, the
-versions that target rolls out. Without all three, that step reports BLOCKED.
+Only scenarios whose header declares `# staging: safe` run on staging. Every
+scenario declares it; one that restarts, stops, pauses or kills a service,
+injects network or storage faults, or reconfigures a host is
+`# staging: unsafe, <what it does>`. `STACK_SCENARIOS=default` (or `manual`,
+`all`) selects only the safe ones, and naming an unsafe scenario refuses the
+run before anything touches the cluster. The fault scenarios run on the stack.
 
-`STACK_SCENARIOS` and `STACK_REPEAT` have the same meaning in both target
-modes. The staging runner keeps its assertion evidence under a private
-`.stack/staging-...` directory and returns 1 for a failed assertion or log
-signature and 2 for a blocked check. A missing endpoint, inaccessible journal,
-or unavailable test fixture is not a green staging result. Do not run this
-target before a requested rollout verification.
+On staging the run's whole-window log check also fails on any service line
+logged at error level, since no safe scenario causes one on purpose. The sweep
+reads the doctor (`cluster doctor --deep`, including the Kafka quorum and host
+crash checks), the analytics, API, artifact and DVR invariants, and lists both
+edges' storage for files of artifacts deleted during the run.
+
+Optional overrides: `STACK_TARGET_CLUSTER` (default `staging`),
+`FRAMEWORKS_GITOPS_DIR` (default `../gitops`), `STACK_CLI_CONTEXT` (default
+`staging`), `WEBHOOK_RECEIVER_URL` for another receiver, and
+`STACK_ENDPOINTS_FILE`, sourced after the derived target. `STACK_SCENARIOS`
+and `STACK_REPEAT` mean the same in both target modes. Evidence stays under
+`.stack/staging-...`; the runner returns 1 for a failed assertion or log line
+and 2 for a blocked check. A blocked check is not a green staging result. Do
+not run this target before a requested rollout verification.
 
 ## Security boundary
 

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # stack-scenario: default
+# staging: unsafe, restarts services through the operator CLI
 # The real operator CLI plans both Foghorn cells. The harness replaces only
 # Ansible's host action with the stack's equivalent compose restart, so the
 # CLI's manifest selection, role render, and return status remain under test.

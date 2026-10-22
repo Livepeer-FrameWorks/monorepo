@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # stack-scenario: default
+# staging: safe
 # Placement stays correct across a Foghorn rehydrate tick: every viewer and
 # ingest resolve through every Foghorn replica of both cells succeeds on the
 # first attempt for longer than one 180 s reconcile interval.

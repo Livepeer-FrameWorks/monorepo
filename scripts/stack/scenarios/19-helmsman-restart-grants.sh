@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # stack-scenario: default
+# staging: unsafe, restarts an edge's Helmsman
 # A Helmsman restart does not turn its viewers into a burst of Foghorn calls.
 # Mist keeps the viewer sessions; the restarted Helmsman rebuilds its session
 # table from Mist's session list and fetches one playback grant per stream,

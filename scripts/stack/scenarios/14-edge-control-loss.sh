@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # stack-scenario: manual
+# staging: unsafe, cuts an edge's control connection with firewall rules
 # An edge that loses Foghorn while a publisher is live (slow: case B holds the
 # edge isolated past the 5-min lost-node window, so manual only).
 #   A. Only the control path is cut for 60 s. The ingest session stays open, the

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # stack-scenario: default
+# staging: safe
 # The other cell plays a VOD while its origin cell is still processing it, and
 # the same edge keeps playing it once processing has replaced the uploaded
 # source with its output in another container and storage has deleted the
@@ -85,7 +86,7 @@ if [ "$SOURCE_OBJECT" != "$SOURCE_URL" ] && [ "$SOURCE_URL" != "$(pg "$ORIGIN_DB
 else
   echo "    the origin still serves the source object; the deleted-upload read this scenario guards is not exercised"
 fi
-echo "    cached on $REMOTE_EDGE: $(stack_exec "$REMOTE_EDGE" sh -c "ls /data/storage/vod/ | grep $VHASH" | tr '\n' ' ')"
+echo "    cached on $REMOTE_EDGE: $(stack_exec "$REMOTE_EDGE" sh -c "ls ${STACK_EDGE_STORAGE_DIR:-/data/storage}/vod/ | grep $VHASH" | tr '\n' ' ')"
 echo "    $(($(date +%s) - LAST_READ_EPOCH))s since the read during processing (cross-cell relay resolutions are cached for about 11 minutes)"
 
 log "the same edge ($REMOTE_EDGE) plays the processed VOD"

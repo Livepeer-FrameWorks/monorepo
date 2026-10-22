@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # stack-scenario: default
+# staging: unsafe, posts synthetic Mist viewer triggers to edges and a 5,000-request herd
 # A viewer burst over many live streams is answered from each cell's local
 # state. STACK_BURST_STREAMS streams (default 80) publish, half into each cell.
 # Then two bursts, each spread over every stream and every Foghorn replica of

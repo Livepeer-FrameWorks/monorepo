@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # stack-scenario: manual
+# staging: unsafe, loads an edge's CPU
 # Placement under real edge CPU load: with the edge at ~45 % whole-system CPU,
 # 100 sequential viewer resolves through every replica still succeed.
 # Catches: N1 (Helmsman read Mist's per-mille CPU as percent, so a 4-core edge

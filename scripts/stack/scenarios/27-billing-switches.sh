@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # stack-scenario: default
+# staging: unsafe, creates tenants and changes their billing through the operator CLI
 # A disposable tenant crosses prepaid/postpaid boundaries through the operator
 # CLI while the tenant sees the resulting statements and invoices through
 # GraphQL and the billing document download API.

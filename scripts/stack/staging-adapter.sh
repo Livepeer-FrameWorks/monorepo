@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Native staging transport for the same scenario scripts. The operator's
-# private map has one pipe-separated row per service replica:
-#   scenario-service|ssh-host|systemd-unit
-# For example: foghorn|fw-stg-eu-1|frameworks-foghorn.service
+# Native staging transport for the same scenario scripts. The service map
+# (written by `frameworks cluster stack-target`) has one pipe-separated row per
+# service replica:
+#   scenario-service|ssh-target|systemd-unit
+# For example: foghorn-eu|ops@10.0.0.17|frameworks-foghorn.service
 
 staging_targets() {
   local service=$1 row
@@ -17,6 +18,11 @@ staging_target() {
   targets=$(staging_targets "$1") || return 1
   printf '%s\n' "${targets%%$'\n'*}"
 }
+
+# pg <db> <sql> / ch <sql>: the same read-only queries as on the stack, run
+# over SSH with the credentials of the service that owns the database.
+pg() { printf '%s' "$2" | bash "$STACK_LIB_DIR/staging-access.sh" pg "$1" 2>/dev/null; }
+ch() { printf '%s' "$1" | bash "$STACK_LIB_DIR/staging-access.sh" ch; }
 
 stack_services() {
   [ -s "${STAGING_SERVICE_MAP_FILE:-}" ] || return 1

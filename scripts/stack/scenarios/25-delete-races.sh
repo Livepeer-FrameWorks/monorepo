@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # stack-scenario: manual
+# staging: unsafe, injects relay commands through Foghorn's internal gRPC
 # A clip is deleted about two seconds after creation, then a late proactive
 # freeze is delivered for that deleted file to reproduce the queued command
 # race. Twenty ready child clips exercise the asynchronous cleanup path.

@@ -391,6 +391,10 @@ class Sources:
         self.tenant = env.get("STACK_TENANT_ID", "")
         self.ch_url = env.get("CLICKHOUSE_URL", "")
         self.chandler = env.get("CHANDLER_URL", "")
+        # A deployed target is read over SSH (staging-access.sh); the stack directly.
+        self.access_script = ""
+        if env.get("STACK_TARGET", "stack") == "staging":
+            self.access_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "staging-access.sh")
 
     def gql(self, query, variables=None):
         body = json.dumps({"query": query, "variables": variables or {}}).encode()
@@ -407,8 +411,25 @@ class Sources:
         except Exception as e:
             return {"errors": [{"message": f"{type(e).__name__}: {e}"}]}
 
+    def access(self, *args, stdin=""):
+        """Output of staging-access.sh (a deployed target's SSH reads), or None."""
+        try:
+            r = subprocess.run(["bash", self.access_script, *args], input=stdin, capture_output=True, text=True,
+                               timeout=120)
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        if r.returncode != 0:
+            print(f"    {args[0]}: {r.stderr.strip()[:160]}", file=sys.stderr)
+            return None
+        return r.stdout
+
     def ch(self, sql):
         """Rows of a TSV query, or None when ClickHouse is not reachable."""
+        if self.access_script:
+            text = self.access("ch", stdin=sql + " FORMAT TSV")
+            if text is None:
+                return None
+            return [line.split("\t") for line in text.splitlines() if line]
         if not self.ch_url:
             return None
         try:
@@ -422,6 +443,11 @@ class Sources:
 
     def pg(self, db, sql):
         """Rows of a psql query as the service's own role, or None."""
+        if self.access_script:
+            text = self.access("pg", db, stdin=sql)
+            if text is None:
+                return None
+            return [line.split("|") for line in text.splitlines() if line]
         cmd = ["psql", "-h", self.env.get("PG_HOST", "postgres"), "-p", self.env.get("PG_PORT", "5432"),
                "-U", db, "-d", db, "-v", "ON_ERROR_STOP=1", "-Atc", sql]
         try:
@@ -432,6 +458,18 @@ class Sources:
         if r.returncode != 0:
             return None
         return [line.split("|") for line in r.stdout.splitlines() if line]
+
+    def edge_listing(self, service, root):
+        """Paths under an edge's storage root, or None when unreadable."""
+        if self.access_script:
+            text = self.access("edge-ls", service, root, "3")
+            return None if text is None else text.split()
+        project = self.env.get("COMPOSE_PROJECT_NAME", "")
+        cid = (docker("compose", "-p", project, "ps", "-q", service) or "").strip()
+        if not cid:
+            return []
+        listing = docker("exec", cid, "find", root, "-maxdepth", "3")
+        return None if listing is None else listing.split()
 
     def fetch(self, url):
         candidates = [url]
@@ -795,10 +833,7 @@ def run(args):
                 report.check("dvr", entity, chapter_violations(recording_range(src, foghorn_dbs, a["hash"]), chapters), at=at)
     report.note("artifacts", "checked " + (", ".join(f"{n} {k}" for k, n in sorted(kinds.items())) or "no artifacts"))
     report.note("dvr", f"checked the chapters of {recordings} ended recording(s)")
-    if staging:
-        report.note("artifacts", "staging edges' storage is not inspected for deleted artifacts")
-    else:
-        deleted_artifact_checks(report, src, foghorn_dbs, since, max(deadline, time.time() + 120))
+    deleted_artifact_checks(report, src, foghorn_dbs, since, max(deadline, time.time() + 120))
 
     # ---- streams: round-trip captured before each deletion, plus live ones ----
     entries = ledger_entries(args.ledger, since)
@@ -860,18 +895,17 @@ def deleted_artifact_checks(report, src, foghorn_dbs, since, deadline):
         for kind, h, at in rows:
             when.setdefault(h, (kind, int(at)))
     deleted = [{"kind": kind, "hash": h} for h, (kind, _) in sorted(when.items())]
-    project = os.environ.get("COMPOSE_PROJECT_NAME", "")
+    services = [os.environ.get("STACK_EDGE_A_SERVICE", "edge"), os.environ.get("STACK_EDGE_B_SERVICE", "edge-b")]
+    root = os.environ.get("STACK_EDGE_STORAGE_DIR", EDGE_STORAGE)
     while True:
         edges = {}
-        for svc in ("edge", "edge-b"):
-            cid = (docker("compose", "-p", project, "ps", "-q", svc) or "").strip()
-            if not cid:
-                continue
-            listing = docker("exec", cid, "find", EDGE_STORAGE, "-maxdepth", "3")
+        for svc in services:
+            listing = src.edge_listing(svc, root)
             if listing is None:
-                report.block("artifacts", f"container {svc}: storage listing failed")
+                report.block("artifacts", f"edge {svc}: storage listing failed")
                 return
-            edges[svc] = listing.split()
+            if listing:
+                edges[svc] = listing
         left = deleted_leftovers(deleted, edges)
         if not left or time.time() >= deadline:
             break

@@ -697,6 +697,7 @@ verify-stack-fixtures:
 	bash scripts/stack/test_logcheck.sh
 	bash scripts/stack/test_sweep.sh
 	bash scripts/stack/test_slot_ownership.sh
+	bash scripts/stack/test_list.sh
 
 clean:
 	rm -rf bin/
@@ -808,6 +809,8 @@ verify-media-lifecycle:
 # selects (default | manual | all | 01,04,...); STACK_KEEP=1 keeps the slot.
 # Run it on a remote-dev slot before a release candidate goes to staging
 # (docs/development/remote-development.md); it is not a CI job.
+# STACK_TARGET=staging runs the staging-safe scenarios against the deployed
+# cluster instead, configured from the gitops manifest (cluster stack-target).
 .PHONY: verify-stack stack-up stack-down
 verify-stack: verify-stack-fixtures
 	@bash $(CURDIR)/scripts/stack/verify.sh

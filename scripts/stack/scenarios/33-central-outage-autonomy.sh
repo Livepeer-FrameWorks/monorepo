@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # stack-scenario: manual
+# staging: unsafe, stops Commodore and Quartermaster
 # Both Commodore and both Quartermaster replicas are stopped while one stream
 # publishes into each cell. The cells keep deciding on their signed local
 # state:

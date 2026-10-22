@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # stack-scenario: default
+# staging: safe
 # A VOD processed in its origin cell plays through every Foghorn replica of
 # both cells, first attempt, once it is ready and synced. It is synced together
 # with its .dtsh index, so the other cell's edge reads the stored index instead

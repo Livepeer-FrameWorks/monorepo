@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # stack-scenario: default
+# staging: safe
 # One viewer's HLS session reaches Foghorn once, not once per request. Mist
 # fires PLAY_REWRITE for the master playlist, every variant playlist and every
 # segment; Foghorn admits the session's first request and sends the serving
