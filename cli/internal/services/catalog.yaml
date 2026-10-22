@@ -67,6 +67,7 @@ profiles:
   support:
     - listmonk
     - chatwoot
+    - deckhand
 
 services:
   network-observer:
@@ -390,3 +391,14 @@ services:
       protocol: http
       path: /api
       port: 3000
+  deckhand:
+    name: deckhand
+    title: Deckhand (Support Tickets)
+    role: support
+    image: ghcr.io/livepeer-frameworks/frameworks-deckhand:latest
+    ports: ["18015:18015"]
+    health:
+      protocol: http
+      path: /health
+      port: 18015
+    dependencies: [chatwoot]

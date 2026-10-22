@@ -26,6 +26,47 @@ func TestCatalogServicesHaveRegistryEntries(t *testing.T) {
 	}
 }
 
+// notCentralCatalog are the servicedefs services `services plan` never
+// deploys as a central-tier container, each with the path that deploys it.
+var notCentralCatalog = map[string]string{
+	"helmsman":       "edge bundle, deployed by edge provision",
+	"mistserver":     "edge bundle, deployed by edge provision",
+	"privateer":      "mesh agent on every host, deployed by cluster provision",
+	"network-prober": "runs on external probe hosts through its own installer",
+	"postgres":       "data role of cluster provision",
+	"kafka":          "data role of cluster provision",
+	"clickhouse":     "data role of cluster provision",
+	"nginx":          "reverse-proxy role of cluster provision",
+	"caddy":          "reverse-proxy role of cluster provision",
+}
+
+// TestCatalogCoversEveryCentralService fails when servicedefs gains a service
+// that neither the central-tier catalog nor notCentralCatalog accounts for.
+func TestCatalogCoversEveryCentralService(t *testing.T) {
+	catalog, err := LoadCatalog()
+	if err != nil {
+		t.Fatalf("failed to load catalog: %v", err)
+	}
+	listed := map[string]bool{}
+	for name, spec := range catalog.Services {
+		listed[name] = true
+		if spec.Deploy != "" {
+			listed[spec.Deploy] = true
+		}
+	}
+	for id := range servicedefs.Services {
+		if listed[id] {
+			if reason, ok := notCentralCatalog[id]; ok {
+				t.Errorf("%s is in the catalog and also excluded (%s)", id, reason)
+			}
+			continue
+		}
+		if _, ok := notCentralCatalog[id]; !ok {
+			t.Errorf("servicedefs service %q is missing from catalog.yaml", id)
+		}
+	}
+}
+
 // Catalog ports repeat servicedefs: every published or health-checked port of
 // a service is one servicedefs registers for it.
 func TestCatalogPortsAreRegisteredListeners(t *testing.T) {
