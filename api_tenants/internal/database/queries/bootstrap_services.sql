@@ -27,6 +27,8 @@ WHERE services.service_id = input.service_id
       OR COALESCE(services.protocol, '') <> input.protocol
   );
 
+-- A running service's BootstrapService may create the row between the probe
+-- and this insert; the caller then converges that row with the update query.
 -- name: InsertBootstrapServiceCatalog :exec
 INSERT INTO quartermaster.services (
     service_id, name, plane, type, protocol, is_active, created_at, updated_at
@@ -37,7 +39,8 @@ INSERT INTO quartermaster.services (
     sqlc.arg(type)::text,
     sqlc.arg(protocol)::text,
     true, NOW(), NOW()
-);
+)
+ON CONFLICT (service_id) DO NOTHING;
 
 -- name: GetBootstrapNodeAdvertiseHost :one
 SELECT cluster_id,

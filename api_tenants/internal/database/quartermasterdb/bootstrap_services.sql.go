@@ -101,6 +101,7 @@ INSERT INTO quartermaster.services (
     $5::text,
     true, NOW(), NOW()
 )
+ON CONFLICT (service_id) DO NOTHING
 `
 
 type InsertBootstrapServiceCatalogParams struct {
@@ -111,6 +112,8 @@ type InsertBootstrapServiceCatalogParams struct {
 	Protocol  string `db:"protocol" json:"protocol"`
 }
 
+// A running service's BootstrapService may create the row between the probe
+// and this insert; the caller then converges that row with the update query.
 func (q *Queries) InsertBootstrapServiceCatalog(ctx context.Context, arg InsertBootstrapServiceCatalogParams) error {
 	_, err := q.db.ExecContext(ctx, insertBootstrapServiceCatalog,
 		arg.ServiceID,

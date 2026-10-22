@@ -6,11 +6,14 @@ SELECT service_id
 FROM quartermaster.services
 WHERE service_id = sqlc.arg(service_type) OR name = sqlc.arg(service_type);
 
+-- The provisioning reconciler writes the same row without the advisory lock,
+-- so a row it committed after FindServiceID ran is kept as it is.
 -- name: CreateServiceCatalogEntry :exec
 INSERT INTO quartermaster.services
     (service_id, name, plane, type, protocol, is_active, created_at, updated_at)
 VALUES (sqlc.arg(service_id)::text, sqlc.arg(name)::text, 'control',
-        sqlc.arg(service_type)::text, sqlc.arg(protocol)::text, true, NOW(), NOW());
+        sqlc.arg(service_type)::text, sqlc.arg(protocol)::text, true, NOW(), NOW())
+ON CONFLICT (service_id) DO NOTHING;
 
 -- name: LockServiceBootstrapToken :one
 SELECT kind, COALESCE(cluster_id, ''), expires_at

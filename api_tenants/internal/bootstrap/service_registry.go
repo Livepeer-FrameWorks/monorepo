@@ -76,10 +76,11 @@ func validateServiceEntry(e ServiceRegistryEntry) error {
 	return nil
 }
 
-// ensureServiceCatalogRow inserts the catalog row if missing and returns its
-// service_id. Mirrors the gRPC handler's ensureServiceExists semantics but uses
-// the bootstrap transaction directly (no advisory lock needed — bootstrap is
-// already serialized by being a single-process invocation).
+// ensureServiceCatalogRow inserts or converges the catalog row and returns its
+// service_id. A service that is both declared here and self-bootstrapping
+// (purser) can create the same row through BootstrapService while this runs,
+// so the insert keeps a concurrently committed row and the update then brings
+// that row to the declared plane, type and protocol.
 func ensureServiceCatalogRow(ctx context.Context, exec DBTX, e ServiceRegistryEntry) (string, error) {
 	queries := quartermasterdb.New(exec)
 	serviceID, err := queries.GetBootstrapServiceCatalog(ctx, e.ServiceName)
@@ -87,23 +88,23 @@ func ensureServiceCatalogRow(ctx context.Context, exec DBTX, e ServiceRegistryEn
 	if protocol == "" {
 		protocol = "http"
 	}
-	if err == nil {
-		if updateErr := queries.UpdateBootstrapServiceCatalog(ctx, quartermasterdb.UpdateBootstrapServiceCatalogParams{
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		serviceID = e.ServiceName
+		if insertErr := queries.InsertBootstrapServiceCatalog(ctx, quartermasterdb.InsertBootstrapServiceCatalogParams{
 			ServiceID: serviceID, Name: e.ServiceName, Plane: serviceEntryPlane(e), Type: e.Type, Protocol: protocol,
-		}); updateErr != nil {
-			return "", fmt.Errorf("update service catalog: %w", updateErr)
+		}); insertErr != nil {
+			return "", fmt.Errorf("insert service catalog: %w", insertErr)
 		}
-		return serviceID, nil
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
+	case err != nil:
 		return "", fmt.Errorf("probe service catalog: %w", err)
 	}
-	if err := queries.InsertBootstrapServiceCatalog(ctx, quartermasterdb.InsertBootstrapServiceCatalogParams{
-		ServiceID: e.ServiceName, Name: e.ServiceName, Plane: serviceEntryPlane(e), Type: e.Type, Protocol: protocol,
-	}); err != nil {
-		return "", fmt.Errorf("insert service catalog: %w", err)
+	if updateErr := queries.UpdateBootstrapServiceCatalog(ctx, quartermasterdb.UpdateBootstrapServiceCatalogParams{
+		ServiceID: serviceID, Name: e.ServiceName, Plane: serviceEntryPlane(e), Type: e.Type, Protocol: protocol,
+	}); updateErr != nil {
+		return "", fmt.Errorf("update service catalog: %w", updateErr)
 	}
-	return e.ServiceName, nil
+	return serviceID, nil
 }
 
 func serviceEntryPlane(e ServiceRegistryEntry) string {

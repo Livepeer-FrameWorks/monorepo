@@ -38,6 +38,8 @@ type Querier interface {
 	CountTenantOwnedClusters(ctx context.Context, tenantID string) (int64, error)
 	CreateClusterInviteRecord(ctx context.Context, arg CreateClusterInviteRecordParams) error
 	CreateInfrastructureCluster(ctx context.Context, arg CreateInfrastructureClusterParams) error
+	// The provisioning reconciler writes the same row without the advisory lock,
+	// so a row it committed after FindServiceID ran is kept as it is.
 	CreateServiceCatalogEntry(ctx context.Context, arg CreateServiceCatalogEntryParams) error
 	CreateTenantAttribution(ctx context.Context, arg CreateTenantAttributionParams) error
 	CreateTenantRecord(ctx context.Context, arg CreateTenantRecordParams) error
@@ -125,6 +127,8 @@ type Querier interface {
 	InsertBootstrapCluster(ctx context.Context, arg InsertBootstrapClusterParams) error
 	InsertBootstrapIngressSite(ctx context.Context, arg InsertBootstrapIngressSiteParams) error
 	InsertBootstrapNode(ctx context.Context, arg InsertBootstrapNodeParams) error
+	// A running service's BootstrapService may create the row between the probe
+	// and this insert; the caller then converges that row with the update query.
 	InsertBootstrapServiceCatalog(ctx context.Context, arg InsertBootstrapServiceCatalogParams) error
 	InsertBootstrapServiceInstance(ctx context.Context, arg InsertBootstrapServiceInstanceParams) error
 	InsertBootstrapTLSBundle(ctx context.Context, arg InsertBootstrapTLSBundleParams) error

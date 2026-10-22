@@ -840,7 +840,8 @@ func (s *QuartermasterServer) ensureServiceExists(ctx context.Context, serviceTy
 
 // ensureServiceExistsTx gets or creates a service catalog entry inside the caller's transaction. A transaction-scoped
 // advisory lock keyed on the service type serializes concurrent callers, so two of them cannot both see no row and
-// both insert; the lock is held until the caller's transaction ends.
+// both insert; the lock is held until the caller's transaction ends. The provisioning reconciler writes the same row
+// without that lock, so the insert keeps a row it committed in between.
 func (s *QuartermasterServer) ensureServiceExistsTx(ctx context.Context, tx *sql.Tx, serviceType, protocol string) (string, error) {
 	queries := quartermasterdb.New(tx)
 	if err := queries.LockServiceType(ctx, serviceType); err != nil {

@@ -30,6 +30,7 @@ INSERT INTO quartermaster.services
     (service_id, name, plane, type, protocol, is_active, created_at, updated_at)
 VALUES ($1::text, $2::text, 'control',
         $3::text, $4::text, true, NOW(), NOW())
+ON CONFLICT (service_id) DO NOTHING
 `
 
 type CreateServiceCatalogEntryParams struct {
@@ -39,6 +40,8 @@ type CreateServiceCatalogEntryParams struct {
 	Protocol    string `db:"protocol" json:"protocol"`
 }
 
+// The provisioning reconciler writes the same row without the advisory lock,
+// so a row it committed after FindServiceID ran is kept as it is.
 func (q *Queries) CreateServiceCatalogEntry(ctx context.Context, arg CreateServiceCatalogEntryParams) error {
 	_, err := q.db.ExecContext(ctx, createServiceCatalogEntry,
 		arg.ServiceID,
