@@ -155,7 +155,7 @@ func edgeNetworkBlock(edgeOS string) string {
       - "18203:18203/udp"
     sysctls:
       net.core.somaxconn: 16384
-      net.ipv4.ip_local_port_range: "10000 65535"
+      net.ipv4.ip_local_port_range: "32768 60999"
     depends_on:
       edge-tuning:
         condition: service_completed_successfully`
@@ -194,7 +194,7 @@ func edgeTuningService(edgeOS string) string {
         sysctl -w net.core.rmem_max=67108864
         sysctl -w net.core.wmem_max=67108864
         sysctl -w net.core.somaxconn=16384
-        sysctl -w net.ipv4.ip_local_port_range="10000 65535"
+        sysctl -w net.ipv4.ip_local_port_range="32768 60999"
         sysctl -w net.ipv4.tcp_notsent_lowat=16384
         sysctl -w net.core.default_qdisc=fq || true
         sysctl -w net.ipv4.tcp_congestion_control=bbr || true

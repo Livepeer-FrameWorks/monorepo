@@ -177,7 +177,7 @@ func newEdgeTuneCmd() *cobra.Command {
 net.core.rmem_max = 16777216
 net.core.wmem_max = 16777216
 net.core.somaxconn = 8192
-net.ipv4.ip_local_port_range = 16384 65535
+net.ipv4.ip_local_port_range = 32768 60999
 `
 		limits := `# Frameworks Edge recommended file limits
 * soft nofile 1048576

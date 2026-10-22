@@ -34,7 +34,10 @@ node_tuning_sysctl_core:
   fs.file-max: 2097152
   kernel.pid_max: 4194304
   vm.swappiness: 10
-  net.ipv4.ip_local_port_range: "10000 65535"
+  # The kernel default, written explicitly so hosts provisioned with a wider
+  # range return to it. Platform listen ports all sit below 32768, so
+  # automatic source ports never take a port a restarting service needs.
+  net.ipv4.ip_local_port_range: "32768 60999"
   net.core.rmem_max: 67108864
   net.core.wmem_max: 67108864
 

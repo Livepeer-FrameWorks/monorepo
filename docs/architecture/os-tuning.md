@@ -82,17 +82,17 @@ the role writing the later file (Yugabyte, Redis).
 
 ## Sysctl baseline (core profile)
 
-| Key                            | Value       | Why                                              |
-| ------------------------------ | ----------- | ------------------------------------------------ |
-| `net.core.somaxconn`           | 16384       | Default 4096 is small for any server workload.   |
-| `net.core.netdev_max_backlog`  | 16384       | Bursty NIC handling.                             |
-| `net.ipv4.tcp_max_syn_backlog` | 8192        | SYN flood resilience + listen() depth.           |
-| `fs.file-max`                  | 2097152     | System-wide fd ceiling.                          |
-| `kernel.pid_max`               | 4194304     | Linux max; allows container-heavy hosts.         |
-| `vm.swappiness`                | 10          | Reduce thrashing on memory-tight DB/cache hosts. |
-| `net.ipv4.ip_local_port_range` | 10000-65535 | Wider ephemeral range.                           |
-| `net.core.rmem_max`            | 67108864    | Larger socket receive buffer cap.                |
-| `net.core.wmem_max`            | 67108864    | Larger socket send buffer cap.                   |
+| Key                            | Value       | Why                                                                                                     |
+| ------------------------------ | ----------- | ------------------------------------------------------------------------------------------------------- |
+| `net.core.somaxconn`           | 16384       | Default 4096 is small for any server workload.                                                          |
+| `net.core.netdev_max_backlog`  | 16384       | Bursty NIC handling.                                                                                    |
+| `net.ipv4.tcp_max_syn_backlog` | 8192        | SYN flood resilience + listen() depth.                                                                  |
+| `fs.file-max`                  | 2097152     | System-wide fd ceiling.                                                                                 |
+| `kernel.pid_max`               | 4194304     | Linux max; allows container-heavy hosts.                                                                |
+| `vm.swappiness`                | 10          | Reduce thrashing on memory-tight DB/cache hosts.                                                        |
+| `net.ipv4.ip_local_port_range` | 32768-60999 | Kernel default; keeps automatic source ports clear of platform listen ports, which all sit below 32768. |
+| `net.core.rmem_max`            | 67108864    | Larger socket receive buffer cap.                                                                       |
+| `net.core.wmem_max`            | 67108864    | Larger socket send buffer cap.                                                                          |
 
 ## Sysctl additions (edge profile)
 

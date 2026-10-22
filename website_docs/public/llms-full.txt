@@ -28264,12 +28264,20 @@ frameworks cluster doctor [flags]
   index of each platform database, with distinct tablets and tablet peers. A database
   created before its colocated layout is reported as a warning; see
   [YugabyteDB Physical Layout](/operators/yugabyte-layout)
-- **Edge config version:** Every registered edge whose configuration was rendered
-  by an older CLI than the one running doctor, or that has no provisioned-config
-  marker yet, from the marker each node reports through Foghorn node health. Needs
+- **Edge config version:** Every registered edge whose provisioned files the CLI
+  running doctor renders differently, or that has no provisioned-config marker
+  yet, from the marker each node reports through Foghorn node health. The marker
+  records a render digest of the CLI that wrote it (its edge playbook, the roles
+  that playbook runs, and the maintenance page); an edge whose render digest
+  matches this CLI's is current whatever release wrote it. A marker written
+  before the render digest existed is compared by CLI release instead. Needs
   lifecycle access (Quartermaster and Foghorn) from the active context; without it
-  the check is reported as not checked. Re-run `edge provision` (with `--dry-run`
-  first) to bring those edges current
+  the check is reported as not checked. The marker covers only the files
+  provisioning renders (edge env and service units or compose file, vmagent
+  config, maintenance page); Helmsman, MistServer and Caddy update through each
+  edge's rolling update, which `cluster edges rollout status` shows. Run
+  `edge provision --dry-run` to see whether this CLI renders those files
+  differently, and without `--dry-run` to repair them
 
 With `--deep`, doctor additionally executes every enabled database-backed binary's
 read-only schema capability pack against the live PostgreSQL/YugabyteDB and
@@ -28976,6 +28984,33 @@ frameworks cluster logs snapshot [flags]
 frameworks cluster logs snapshot --since "2 hours ago"
 frameworks cluster logs snapshot --boot --tail 800 --edge-manifest ./clusters/production/edge.yaml
 frameworks cluster logs snapshot --output /tmp/fw-logs
+```
+
+### frameworks cluster stack-target
+
+Describe a deployed cluster for the stack scenario runner
+(`STACK_TARGET=staging make verify-stack`). Everything comes from the cluster
+manifest, its edge manifest, the bootstrap overlay and their SOPS files:
+
+- `target.env`: public Bridge and per-cell Foghorn endpoints, each cell's edge, database names
+- `service-map.txt`: one `service|ssh-target|systemd-unit` row per replica
+- `access-map.txt`: how each database and ClickHouse is read over SSH; credentials stay on the hosts
+- `operator.env` (mode 0600): the bootstrap overlay's platform operator login and cell A's artifact-store keys for read-only object listings
+
+**Usage:**
+
+```bash
+frameworks cluster stack-target --out-dir <dir> [flags]
+```
+
+**Flags:**
+
+- `--out-dir string` - Directory to write the target files into (created mode 0700)
+
+**Examples:**
+
+```bash
+frameworks cluster stack-target --gitops-dir ../gitops --cluster staging --out-dir .stack/staging/target
 ```
 
 ### frameworks cluster snapshot
@@ -30778,7 +30813,7 @@ frameworks edge tune --write
 - `net.core.rmem_max = 16777216`
 - `net.core.wmem_max = 16777216`
 - `net.core.somaxconn = 8192`
-- `net.ipv4.ip_local_port_range = 16384 65535`
+- `net.ipv4.ip_local_port_range = 32768 60999`
 - `* soft nofile = 1048576`
 - `* hard nofile = 1048576`
 
@@ -30987,7 +31022,7 @@ frameworks edge logs --follow --tail 500
 
 ### frameworks edge doctor
 
-Run comprehensive health checks on the edge node. The **Config Version** section reads the node's provisioned-config marker and reports whether its configuration was rendered by this CLI (`current`), an older one (`stale`), or before markers existed (`unmarked`); the last two come with an `edge provision --dry-run` next step.
+Run comprehensive health checks on the edge node. The **Config Version** section reads the node's provisioned-config marker and reports whether this CLI renders its provisioned files the same way as the CLI that wrote the marker (`current`, by comparing render digests), differently (`stale`), or whether the node predates markers (`unmarked`). A marker without a render digest is compared by CLI release: an older release is `stale`. The last two come with next steps: `cluster edges rollout status` to see whether the edge's rolling update brought Helmsman, MistServer and Caddy to the cluster's release target (nothing is needed while it runs), `edge logs helmsman` when it stays behind, and `edge provision --dry-run` to repair the provisioned files the rolling update does not render.
 
 ```bash
 frameworks edge doctor --domain edge1.example.com
@@ -37604,7 +37639,7 @@ The CLI applies these automatically with `frameworks edge tune --write`. For man
 net.core.rmem_max = 16777216
 net.core.wmem_max = 16777216
 net.core.somaxconn = 8192
-net.ipv4.ip_local_port_range = 16384 65535
+net.ipv4.ip_local_port_range = 32768 60999
 ```
 
 **File descriptors** (`/etc/security/limits.d/frameworks-edge.conf`):
@@ -38684,11 +38719,18 @@ because a node Foghorn cannot reach serves no routed traffic.
 Self-hosted single edges use the same path: `frameworks edge provision --ssh <user@host> --dry-run`,
 then without `--dry-run`, with the flags the node was provisioned with.
 
-Each provision writes a provisioned-config marker on the node (the CLI version and a digest of
-the rendered configuration). Helmsman reports it to Foghorn, which returns it in node health,
-and `frameworks cluster doctor` lists every edge whose configuration was rendered by an
-older CLI (or before markers existed). `frameworks edge doctor` shows the same for the node it
-runs on.
+Each provision writes a provisioned-config marker on the node: the CLI version, a digest of the
+rendered configuration, and the CLI's render digest (a digest of its edge playbook, the roles
+that playbook runs, and the maintenance page, independent of node inputs). Helmsman reports it
+to Foghorn, which returns it in node health, and `frameworks cluster doctor` lists every edge
+whose render digest differs from its own CLI's (or that has no marker yet). A new CLI release
+whose edge render did not change leaves every edge current. A marker written before the render
+digest existed is compared by CLI release instead, until the next provision rewrites it.
+`frameworks edge doctor` shows the same for the node it runs on. The marker covers only the files provisioning renders (edge env and service units or
+compose file, vmagent config, maintenance page): Helmsman, MistServer and Caddy follow the
+cluster's release target through the edge's rolling update, and Helmsman renders the production
+Caddyfile and MistServer config itself. An edge flagged by doctor needs `edge provision` only when
+this CLI renders those files differently, which `--dry-run` shows.
 
 ## Version selection
 
