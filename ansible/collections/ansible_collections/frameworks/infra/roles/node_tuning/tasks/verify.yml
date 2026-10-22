@@ -91,7 +91,7 @@
   ansible.builtin.set_fact:
     node_tuning_expected_sysctl: >-
       {{
-        node_tuning_sysctl_core
+        node_tuning_sysctl_core_effective
         | combine((node_tuning_profile == 'edge') | ternary(node_tuning_sysctl_edge, {}))
       }}
 
@@ -105,7 +105,7 @@
     that:
       - (item.key ~ ' = ' ~ (item.value | string)) in (node_tuning_core_sysctl_file.content | b64decode)
     fail_msg: "/etc/sysctl.d/90-frameworks-baseline.conf missing {{ item.key }} = {{ item.value }}"
-  loop: "{{ node_tuning_sysctl_core | dict2items }}"
+  loop: "{{ node_tuning_sysctl_core_effective | dict2items }}"
   loop_control:
     label: "{{ item.key }}"
 

@@ -1245,7 +1245,11 @@ func doctorSections(rc *resolvedCluster, pool *fwssh.Pool, sharedEnv map[string]
 	if len(manifest.Observability) > 0 {
 		sections = append(sections, doctorSection{title: "Observability Services", checks: serviceChecks(manifest.Observability)})
 	}
-	sections = append(sections, doctorSection{title: "Listener Exposure", checks: doctorListenerChecks(pool, manifest, diagnoseHostTargets(io.Discard, rc, ""))})
+	hostTargets := diagnoseHostTargets(io.Discard, rc, "")
+	sections = append(sections,
+		doctorSection{title: "Listener Exposure", checks: doctorListenerChecks(pool, manifest, hostTargets)},
+		doctorSection{title: "Source-Port Range", checks: doctorEphemeralRangeChecks(pool, manifest, hostTargets)},
+	)
 
 	if pg != nil && pg.Enabled {
 		sections = append(sections, doctorSection{title: "Database Migrations", checks: doctorDatabaseChecks(rc, pool, sharedEnv, doctorTarget, sshKey, deep)})

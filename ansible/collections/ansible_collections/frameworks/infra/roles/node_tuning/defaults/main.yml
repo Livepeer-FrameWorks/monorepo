@@ -41,6 +41,24 @@ node_tuning_sysctl_core:
   net.core.rmem_max: 67108864
   net.core.wmem_max: 67108864
 
+# Comma-separated fixed listener ports inside the ephemeral range that
+# automatic source-port assignment must skip: the CLI passes a mesh host's
+# WireGuard port. This role is the only writer of
+# net.ipv4.ip_local_reserved_ports (a write replaces the whole list); empty
+# leaves the key unset.
+node_tuning_reserved_ports: ""
+
+# The core baseline as written: node_tuning_sysctl_core plus the reserved
+# ports when there are any.
+node_tuning_sysctl_core_effective: >-
+  {{
+    node_tuning_sysctl_core
+    | combine(
+        (node_tuning_reserved_ports | string | length > 0)
+        | ternary({'net.ipv4.ip_local_reserved_ports': node_tuning_reserved_ports | string}, {})
+      )
+  }}
+
 # Edge sysctl additions. Merged on top of core when profile=edge.
 node_tuning_sysctl_edge:
   net.ipv4.tcp_notsent_lowat: 16384

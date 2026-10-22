@@ -41,10 +41,28 @@ func nodeHostRoles(pool *ssh.Pool, manifest *inventory.Manifest, host inventory.
 	if err != nil {
 		return nil, err
 	}
+	tuningMetadata := map[string]any{"profile": nodeTuningProfileForHost(manifest, host)}
+	if ports := nodeReservedPorts(manifest, host); len(ports) > 0 {
+		tuningMetadata["reserved_ports"] = ports
+	}
 	return []nodeHostRole{
 		{name: "node baseline", prov: baseline, config: provisioner.ServiceConfig{Mode: "native", Metadata: map[string]any{}, Force: force}},
-		{name: "node tuning", prov: tuning, config: provisioner.ServiceConfig{Mode: "native", Metadata: map[string]any{"profile": nodeTuningProfileForHost(manifest, host)}, Force: force}},
+		{name: "node tuning", prov: tuning, config: provisioner.ServiceConfig{Mode: "native", Metadata: tuningMetadata, Force: force}},
 	}, nil
+}
+
+// nodeReservedPorts returns the fixed listener ports of host that sit inside
+// the kernel's default ephemeral range and so must be kept from automatic
+// source-port assignment: the WireGuard port of a mesh member. Every other
+// platform listener is below 32768.
+func nodeReservedPorts(manifest *inventory.Manifest, host inventory.Host) []int {
+	if manifest == nil {
+		return nil
+	}
+	if port, ok := manifest.WireguardListenPort(host.Name); ok {
+		return []int{port}
+	}
+	return nil
 }
 
 // convergeNodeHost applies each node host role whose check-mode precheck

@@ -731,6 +731,24 @@ func (m *Manifest) GetHost(name string) (Host, bool) {
 	return host, ok
 }
 
+// WireguardListenPort returns the UDP port hostName's WireGuard interface
+// listens on: the host's wireguard_port, else the cluster's wireguard
+// listen_port, else servicedefs.WireGuardPort. ok is false for a host that is
+// not a mesh member (no wireguard_ip), which runs no WireGuard listener.
+func (m *Manifest) WireguardListenPort(hostName string) (port int, ok bool) {
+	h, found := m.Hosts[hostName]
+	if !found || h.WireguardIP == "" {
+		return 0, false
+	}
+	switch {
+	case h.WireguardPort > 0:
+		return h.WireguardPort, true
+	case m.WireGuard != nil && m.WireGuard.ListenPort > 0:
+		return m.WireGuard.ListenPort, true
+	}
+	return servicedefs.WireGuardPort, true
+}
+
 // MeshAddress returns the WireGuard mesh address for hostName, or hostName if
 // the host is unknown/unconfigured. Callers that need the SSH/bootstrap
 // address should use GetHost(...).ExternalIP instead.

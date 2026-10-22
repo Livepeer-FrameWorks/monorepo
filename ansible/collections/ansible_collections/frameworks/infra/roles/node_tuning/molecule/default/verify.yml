@@ -8,10 +8,24 @@
       ansible.builtin.include_role:
         name: frameworks.infra.node_tuning
         tasks_from: verify
+      vars:
+        node_tuning_reserved_ports: "51820"
+
+    - name: Read the reserved ports the kernel applies
+      ansible.builtin.command: sysctl -n net.ipv4.ip_local_reserved_ports
+      register: reserved_ports
+      changed_when: false
+
+    - name: Assert the WireGuard port is reserved
+      ansible.builtin.assert:
+        that: reserved_ports.stdout | trim == "51820"
+        fail_msg: "net.ipv4.ip_local_reserved_ports is {{ reserved_ports.stdout | trim }}, want 51820"
 
     - name: Rerun for idempotence
       ansible.builtin.include_role:
         name: frameworks.infra.node_tuning
+      vars:
+        node_tuning_reserved_ports: "51820"
       register: idem
 
     - name: Fail if second apply changed anything

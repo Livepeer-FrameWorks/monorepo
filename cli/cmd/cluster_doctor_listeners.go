@@ -12,6 +12,8 @@ import (
 	"frameworks/cli/pkg/health"
 	"frameworks/cli/pkg/inventory"
 	fwssh "frameworks/cli/pkg/ssh"
+
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 )
 
 // exposedListener is a socket bound to every interface of its host.
@@ -41,13 +43,9 @@ func publicListenerPorts(manifest *inventory.Manifest, hostName string) (tcp, ud
 	if manifest == nil {
 		return tcp, udp
 	}
-	host, _ := manifest.GetHost(hostName)
-	wgPort := host.WireguardPort
-	if wgPort == 0 && manifest.WireGuard != nil && manifest.WireGuard.ListenPort > 0 {
-		wgPort = manifest.WireGuard.ListenPort
-	}
-	if wgPort == 0 {
-		wgPort = 51820
+	wgPort, ok := manifest.WireguardListenPort(hostName)
+	if !ok {
+		wgPort = servicedefs.WireGuardPort
 	}
 	udp[wgPort] = true
 	runs := func(services map[string]inventory.ServiceConfig, deploy string) bool {

@@ -291,6 +291,10 @@ const (
 	MistWebRTCPort = 18203 // UDP
 )
 
+// WireGuardPort is the mesh's UDP listen port when neither the host nor the
+// cluster's wireguard block sets one.
+const WireGuardPort = 51820
+
 var auxiliaryPorts = map[string][]PortSpec{
 	"foghorn": {
 		{Name: "foghorn-internal-http", Port: FoghornInternalHTTPPort},

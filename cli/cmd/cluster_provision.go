@@ -4260,13 +4260,7 @@ func buildPrivateerStaticPeers(manifest *inventory.Manifest, selfHostName string
 				continue
 			}
 		}
-		port := h.WireguardPort
-		if port == 0 && manifest.WireGuard != nil {
-			port = manifest.WireGuard.ListenPort
-		}
-		if port == 0 {
-			port = 51820
-		}
+		port, _ := manifest.WireguardListenPort(name)
 		peer := map[string]any{
 			"name":        name,
 			"public_key":  h.WireguardPublicKey,

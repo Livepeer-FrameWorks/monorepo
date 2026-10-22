@@ -2,6 +2,9 @@ package provisioner
 
 import (
 	"context"
+	"slices"
+	"strconv"
+	"strings"
 
 	"frameworks/cli/pkg/detect"
 	"frameworks/cli/pkg/inventory"
@@ -22,7 +25,25 @@ func nodeTuningRoleVars(_ context.Context, _ inventory.Host, config ServiceConfi
 	if profile, ok := config.Metadata["profile"].(string); ok && profile != "" {
 		vars["node_tuning_profile"] = profile
 	}
+	vars["node_tuning_reserved_ports"] = reservedPortsSysctl(config.Metadata["reserved_ports"])
 	return vars, nil
+}
+
+// reservedPortsSysctl renders ports as the sorted, comma-separated value of
+// net.ipv4.ip_local_reserved_ports; an empty string leaves the key unset.
+func reservedPortsSysctl(raw any) string {
+	ports, ok := raw.([]int)
+	if !ok {
+		return ""
+	}
+	sorted := slices.Clone(ports)
+	slices.Sort(sorted)
+	sorted = slices.Compact(sorted)
+	parts := make([]string, 0, len(sorted))
+	for _, port := range sorted {
+		parts = append(parts, strconv.Itoa(port))
+	}
+	return strings.Join(parts, ",")
 }
 
 func nodeTuningRoleDetect(context.Context, inventory.Host, ServiceConfig, RoleBuildHelpers) (*detect.ServiceState, error) {
