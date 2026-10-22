@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/big"
 	"net/http"
@@ -386,12 +387,61 @@ func TestReserveFundingAttemptEnforcesDurableDailyCap(t *testing.T) {
 	defer db.Close()
 	monitor := &LivepeerDepositMonitor{db: db, dailyCapWei: big.NewInt(200)}
 	mock.ExpectBegin()
+	mock.ExpectQuery(`pg_try_advisory_xact_lock\(hashtext\('purser-livepeer-funding-signer'\)\)`).
+		WillReturnRows(sqlmock.NewRows([]string{"locked"}).AddRow(true))
 	mock.ExpectExec("pg_advisory_xact_lock").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery("tx_hash IS NULL AND error_message IS NULL").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 	mock.ExpectQuery("SELECT COALESCE\\(SUM\\(amount_wei\\), 0\\)::text").
 		WillReturnRows(sqlmock.NewRows([]string{"spent"}).AddRow("150"))
 	mock.ExpectRollback()
-	if _, _, err := monitor.reserveFundingAttempt(context.Background(), "0x"+strings.Repeat("ab", 20), big.NewInt(40), big.NewInt(20)); err == nil || !strings.Contains(err.Error(), "daily Livepeer funding cap exceeded") {
+	if _, _, err := monitor.reserveFundingAttempt(context.Background(), db, "0x"+strings.Repeat("ab", 20), big.NewInt(40), big.NewInt(20)); err == nil || !strings.Contains(err.Error(), "daily Livepeer funding cap exceeded") {
 		t.Fatalf("expected cap rejection, got %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Another session holds the signer lock, so this session lost it: nothing is
+// reserved and the transaction stops before the ledger is read.
+func TestReserveFundingAttemptRefusesWithoutTheSignerLock(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	monitor := &LivepeerDepositMonitor{db: db, dailyCapWei: big.NewInt(200)}
+	mock.ExpectBegin()
+	mock.ExpectQuery(`pg_try_advisory_xact_lock\(hashtext\('purser-livepeer-funding-signer'\)\)`).
+		WillReturnRows(sqlmock.NewRows([]string{"locked"}).AddRow(false))
+	mock.ExpectRollback()
+	if _, _, err := monitor.reserveFundingAttempt(context.Background(), db, "0x"+strings.Repeat("ab", 20), big.NewInt(40), big.NewInt(20)); !errors.Is(err, errFundingSignerLockLost) {
+		t.Fatalf("reserve without the signer lock = %v, want errFundingSignerLockLost", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// An attempt without a recorded result may still be unmined: a second one
+// would take the next nonce of the same wallet and fund the gateway twice.
+func TestReserveFundingAttemptRefusesWhileAnAttemptIsInFlight(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	monitor := &LivepeerDepositMonitor{db: db, dailyCapWei: big.NewInt(200), receiptTimeout: time.Minute}
+	mock.ExpectBegin()
+	mock.ExpectQuery(`pg_try_advisory_xact_lock`).WillReturnRows(sqlmock.NewRows([]string{"locked"}).AddRow(true))
+	mock.ExpectExec("pg_advisory_xact_lock").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery("tx_hash IS NULL AND error_message IS NULL").
+		WithArgs(float64(180)).
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	mock.ExpectRollback()
+	if _, _, err := monitor.reserveFundingAttempt(context.Background(), db, "0x"+strings.Repeat("ab", 20), big.NewInt(40), big.NewInt(20)); !errors.Is(err, errFundingAttemptInFlight) {
+		t.Fatalf("reserve while an attempt is in flight = %v, want errFundingAttemptInFlight", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
@@ -408,7 +458,7 @@ func TestFundingSignerLockIsSessionScoped(t *testing.T) {
 	mock.ExpectExec("pg_advisory_lock").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery("pg_advisory_unlock").WillReturnRows(sqlmock.NewRows([]string{"pg_advisory_unlock"}).AddRow(true))
 
-	unlock, err := monitor.lockFundingSigner(context.Background())
+	_, unlock, err := monitor.lockFundingSigner(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -515,7 +565,7 @@ func TestFundingSignerLockDiscardsASessionThatCannotDropTheLock(t *testing.T) {
 	})
 	defer db.Close()
 	monitor := &LivepeerDepositMonitor{db: db, logger: logging.NewLogger()}
-	unlock, err := monitor.lockFundingSigner(context.Background())
+	_, unlock, err := monitor.lockFundingSigner(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -534,10 +584,10 @@ func TestFundingSignerLockDiscardsASessionThatCannotTakeTheLock(t *testing.T) {
 	})
 	defer db.Close()
 	monitor := &LivepeerDepositMonitor{db: db, logger: logging.NewLogger()}
-	if _, err := monitor.lockFundingSigner(context.Background()); err == nil {
+	if _, _, err := monitor.lockFundingSigner(context.Background()); err == nil {
 		t.Fatal("lockFundingSigner on the expired session succeeded")
 	}
-	unlock, err := monitor.lockFundingSigner(context.Background())
+	_, unlock, err := monitor.lockFundingSigner(context.Background())
 	if err != nil {
 		t.Fatalf("lockFundingSigner after the expired session = %v; the pool handed the expired session back", err)
 	}

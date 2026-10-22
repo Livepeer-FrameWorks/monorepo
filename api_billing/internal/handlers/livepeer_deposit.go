@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
@@ -408,7 +409,7 @@ func (m *LivepeerDepositMonitor) fundTicketBroker(ctx context.Context, state *Ga
 	if fundingAmounts(state, m.topupAmountWei).total.Sign() <= 0 {
 		return
 	}
-	unlockSigner, err := m.lockFundingSigner(ctx)
+	signer, unlockSigner, err := m.lockFundingSigner(ctx)
 	if err != nil {
 		m.alertCounter.WithLabelValues("signer_lock").Inc()
 		m.logger.WithError(err).WithField("gateway", label).Error("Livepeer TicketBroker funding blocked by signer lock")
@@ -433,7 +434,12 @@ func (m *LivepeerDepositMonitor) fundTicketBroker(ctx context.Context, state *Ga
 		return
 	}
 	deposit, reserve, total := amounts.deposit, amounts.reserve, amounts.total
-	attemptID, repeated, err := m.reserveFundingAttempt(ctx, state.Address, deposit, reserve)
+	attemptID, repeated, err := m.reserveFundingAttempt(ctx, signer, state.Address, deposit, reserve)
+	if errors.Is(err, errFundingSignerLockLost) || errors.Is(err, errFundingAttemptInFlight) {
+		m.alertCounter.WithLabelValues("signer_lock").Inc()
+		m.logger.WithError(err).WithField("gateway", label).Error("Livepeer TicketBroker funding skipped")
+		return
+	}
 	if err != nil {
 		m.alertCounter.WithLabelValues("daily_cap_or_ledger").Inc()
 		m.logger.WithError(err).WithField("gateway", label).Error("Livepeer TicketBroker funding blocked by daily policy")
@@ -488,21 +494,23 @@ func fundingAmounts(state *GatewayDepositState, topup *big.Int) ticketBrokerFund
 // lockFundingSigner serializes nonce allocation and submission across Purser
 // replicas that share the funding wallet. PostgreSQL releases this session lock
 // automatically if the process or connection disappears, so a session whose
-// lock or unlock statement fails is discarded rather than pooled.
-func (m *LivepeerDepositMonitor) lockFundingSigner(ctx context.Context) (func(), error) {
+// lock or unlock statement fails is discarded rather than pooled. The returned
+// session is the one holding the lock; the funding attempt is reserved on it so
+// reserveFundingAttempt can prove the hold.
+func (m *LivepeerDepositMonitor) lockFundingSigner(ctx context.Context) (*sql.Conn, func(), error) {
 	if m.db == nil {
-		return nil, fmt.Errorf("durable Livepeer funding signer lock unavailable")
+		return nil, nil, fmt.Errorf("durable Livepeer funding signer lock unavailable")
 	}
 	conn, err := m.db.Conn(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if _, err := conn.ExecContext(ctx, `SELECT pg_advisory_lock(hashtext('purser-livepeer-funding-signer'))`); err != nil {
 		database.DiscardSession(conn)
-		return nil, err
+		return nil, nil, err
 	}
 	lock := database.AdvisoryLock{UnlockSQL: `SELECT pg_advisory_unlock(hashtext('purser-livepeer-funding-signer'))`}
-	return func() {
+	return conn, func() {
 		unlockCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := database.ReleaseSessionLock(unlockCtx, conn, lock); err != nil {
@@ -576,11 +584,24 @@ func (m *LivepeerDepositMonitor) sendTicketBrokerFunding(ctx context.Context, ga
 	return txHash, nil
 }
 
-func (m *LivepeerDepositMonitor) waitForFundingReceipt(ctx context.Context, txHash string) error {
-	timeout := m.receiptTimeout
-	if timeout <= 0 {
-		timeout = 2 * time.Minute
+func (m *LivepeerDepositMonitor) fundingReceiptTimeout() time.Duration {
+	if m.receiptTimeout <= 0 {
+		return 2 * time.Minute
 	}
+	return m.receiptTimeout
+}
+
+// fundingAttemptInFlightWindow is how long after its reservation an attempt
+// without a recorded result still counts as being submitted. It outlasts the
+// four 15 s RPC calls before the receipt wait, the wait itself and the result
+// write, so only an attempt whose holder died before recording a result
+// expires.
+func (m *LivepeerDepositMonitor) fundingAttemptInFlightWindow() time.Duration {
+	return m.fundingReceiptTimeout() + 2*time.Minute
+}
+
+func (m *LivepeerDepositMonitor) waitForFundingReceipt(ctx context.Context, txHash string) error {
+	timeout := m.fundingReceiptTimeout()
 	interval := m.receiptPollInterval
 	if interval <= 0 {
 		interval = 2 * time.Second
@@ -629,15 +650,50 @@ func fundDepositAndReserveForCallData(gateway string, deposit, reserve *big.Int)
 	return append(callData, common.LeftPadBytes(reserve.Bytes(), 32)...)
 }
 
-func (m *LivepeerDepositMonitor) reserveFundingAttempt(ctx context.Context, gateway string, deposit, reserve *big.Int) (int64, bool, error) {
-	if m.db == nil || m.dailyCapWei == nil || m.dailyCapWei.Sign() <= 0 {
+var (
+	errFundingSignerLockLost  = errors.New("this session no longer holds the Livepeer funding signer lock")
+	errFundingAttemptInFlight = errors.New("another Livepeer funding attempt from the funding wallet has no recorded result yet")
+)
+
+// reserveFundingAttempt records a funding attempt against the daily cap. It
+// runs on signer, the session lockFundingSigner returned. YugabyteDB can drop
+// that session lock, for one when its lock transaction expires in a storage
+// stall, while the session's ordinary writes keep working, and another replica
+// then takes the lock. Two guards keep a second top-up from the shared wallet
+// out: the transaction re-takes the signer key as a transaction lock, which
+// another session's signer lock refuses and which keeps another session from
+// taking the signer lock until the attempt is committed; and an attempt without
+// a recorded result inside fundingAttemptInFlightWindow blocks the next one,
+// since its transaction may still be unmined. Attempts carry no wallet column:
+// the signer lock and the ledger serve the one funding wallet a deployment
+// configures.
+func (m *LivepeerDepositMonitor) reserveFundingAttempt(ctx context.Context, signer database.PostgresTxBeginner, gateway string, deposit, reserve *big.Int) (int64, bool, error) {
+	if signer == nil || m.dailyCapWei == nil || m.dailyCapWei.Sign() <= 0 {
 		return 0, false, fmt.Errorf("durable Livepeer funding ledger unavailable")
 	}
+	inFlightSeconds := m.fundingAttemptInFlightWindow().Seconds()
 	var id int64
 	var repeated bool
-	err := database.WithRetryablePostgresTx(ctx, m.db, nil, func(tx *sql.Tx) error {
+	err := database.WithRetryablePostgresTxBeginner(ctx, signer, nil, func(tx *sql.Tx) error {
+		var holdsSigner bool
+		if err := tx.QueryRowContext(ctx, `SELECT pg_try_advisory_xact_lock(hashtext('purser-livepeer-funding-signer'))`).Scan(&holdsSigner); err != nil {
+			return err
+		}
+		if !holdsSigner {
+			return errFundingSignerLockLost
+		}
 		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext('purser-livepeer-funding-daily'))`); err != nil {
 			return err
+		}
+		// The window is minutes long, so an attempt inside it was reserved on
+		// today's or yesterday's funding day; naming both days keeps the read
+		// on the funding day index.
+		var inFlight bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM purser.livepeer_funding_attempts WHERE funding_day IN ((CURRENT_TIMESTAMP AT TIME ZONE 'UTC')::date, (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')::date - 1) AND created_at > CURRENT_TIMESTAMP - make_interval(secs => $1::double precision) AND tx_hash IS NULL AND error_message IS NULL)`, inFlightSeconds).Scan(&inFlight); err != nil {
+			return err
+		}
+		if inFlight {
+			return errFundingAttemptInFlight
 		}
 		var spentText string
 		if err := tx.QueryRowContext(ctx, `SELECT COALESCE(SUM(amount_wei), 0)::text FROM purser.livepeer_funding_attempts WHERE funding_day = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')::date`).Scan(&spentText); err != nil {
