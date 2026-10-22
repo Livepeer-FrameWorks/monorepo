@@ -532,7 +532,8 @@ func listeningPorts(ssOutput string) listenerSet {
 // diagnosePorts compares each target's listeners with the ports the manifest
 // places on it. A planned port with no listener is a failure; catalog ports
 // held by something the manifest does not place there are listed so a
-// conflicting process is visible.
+// conflicting process is visible. A closing listener (servicedefs.ClosingListeners)
+// is reported held or closed and never fails.
 func diagnosePorts(ctx context.Context, stdout, stderr io.Writer, manifest *inventory.Manifest, targets []diagnoseHost, runnerFor func(inventory.Host) (ssh.Runner, error)) int {
 	fmt.Fprintln(stdout, "Port Diagnostics (manifest placement versus listeners)")
 	planned := diagnosePlannedPorts(manifest)
@@ -571,6 +572,16 @@ func diagnosePorts(ctx context.Context, stdout, stderr io.Writer, manifest *inve
 			label := fmt.Sprintf("%d %s", want.Port, want.Owner)
 			if want.Proto != "" {
 				label += " (" + want.Proto + ")"
+			}
+			if _, closing := servicedefs.ClosingListenerAt(want.Port); closing && !target.Edge {
+				// Configuration turned it off; the process that holds it keeps
+				// it until it next starts.
+				if listening.has(want.Proto, want.Port) {
+					ux.Warn(stdout, fmt.Sprintf("  %s: closes at the next restart", label))
+				} else {
+					ux.Success(stdout, fmt.Sprintf("  %s: closed", label))
+				}
+				continue
 			}
 			if listening.has(want.Proto, want.Port) {
 				ux.Success(stdout, fmt.Sprintf("  %s: listening", label))

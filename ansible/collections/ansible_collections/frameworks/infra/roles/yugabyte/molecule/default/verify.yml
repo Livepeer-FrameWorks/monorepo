@@ -131,3 +131,63 @@
           - "'--max_log_size=256' in (yugabyte_rendered.results[1].content | b64decode)"
           - "'log_rotation_size=256MB' in (yugabyte_rendered.results[1].content | b64decode)"
           - "'core_pattern' not in (yugabyte_rendered.results[2].content | b64decode)"
+
+    - name: List the node's TCP listeners
+      ansible.builtin.command: ss -Hltn
+      register: yugabyte_listeners
+      changed_when: false
+
+    - name: Assert YCQL and its webserver are off while YSQL listens
+      ansible.builtin.assert:
+        that:
+          - "'--start_cql_proxy=false' in (yugabyte_rendered.results[1].content | b64decode)"
+          - yugabyte_listeners.stdout is not search(':9042\s')
+          - yugabyte_listeners.stdout is not search(':12000\s')
+          - yugabyte_listeners.stdout is search(':5433\s')
+        fail_msg: "YCQL listener state wrong: {{ yugabyte_listeners.stdout }}"
+
+    - name: Read the tserver's main PID and applied-configuration receipt
+      ansible.builtin.shell: |
+        set -eu
+        systemctl show -p MainPID --value yb-tserver
+        cat /var/lib/yugabyte/data/.frameworks-tserver-config-applied
+      register: yugabyte_tserver_before
+      changed_when: false
+
+    # A change to the flags after the deferred marker takes effect at the
+    # tserver's next start: the role rewrites the flagfile without restarting
+    # the tserver or changing its receipt.
+    - name: Apply the role with a changed deferred flag
+      ansible.builtin.include_role:
+        name: frameworks.infra.yugabyte
+      vars:
+        yugabyte_tserver_deferred_flags:
+          - --start_cql_proxy=false
+          - --cql_proxy_webserver_port=12001
+
+    - name: Flush handlers the role notified
+      ansible.builtin.meta: flush_handlers
+
+    - name: Read the tserver's main PID and receipt after the deferred change
+      ansible.builtin.shell: |
+        set -eu
+        systemctl show -p MainPID --value yb-tserver
+        cat /var/lib/yugabyte/data/.frameworks-tserver-config-applied
+      register: yugabyte_tserver_after
+      changed_when: false
+
+    - name: Read the re-rendered tserver flagfile
+      ansible.builtin.slurp:
+        src: /opt/yugabyte/conf/tserver.conf
+      register: yugabyte_tserver_rerendered
+
+    - name: Assert the deferred change neither restarted the tserver nor changed its receipt
+      ansible.builtin.assert:
+        that:
+          - yugabyte_tserver_after.stdout == yugabyte_tserver_before.stdout
+          - "'--cql_proxy_webserver_port=12001' in (yugabyte_tserver_rerendered.content | b64decode)"
+        fail_msg: "before: {{ yugabyte_tserver_before.stdout }} after: {{ yugabyte_tserver_after.stdout }}"
+
+    - name: Apply the role with the declared deferred flags again
+      ansible.builtin.include_role:
+        name: frameworks.infra.yugabyte

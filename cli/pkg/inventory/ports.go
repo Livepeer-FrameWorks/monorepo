@@ -101,6 +101,8 @@ func (m *Manifest) registerInfrastructurePorts(addPort func(string, int, string)
 					{servicedefs.YugabyteMasterWebPort, "-master-web"},
 					{servicedefs.YugabyteTServerRPCPort, "-tserver-rpc"},
 					{servicedefs.YugabyteTServerWebPort, "-tserver-web"},
+					// Closing listeners: a tserver started before the role
+					// turned YCQL off still holds them.
 					{servicedefs.YugabyteYCQLPort, "-ycql"},
 					{servicedefs.YugabyteYCQLWebPort, "-ycql-web"},
 					{servicedefs.YugabyteYSQLWebPort, "-ysql-web"},
@@ -121,6 +123,15 @@ func (m *Manifest) registerInfrastructurePorts(addPort func(string, int, string)
 		for _, chHost := range ch.AllHosts() {
 			for _, ps := range servicedefs.ClickHousePorts(ch.Port, clustered) {
 				if err := addPort(chHost, ps.Port, ps.Name); err != nil {
+					return err
+				}
+			}
+			// A server started before the role turned these off still holds them.
+			for _, closing := range servicedefs.ClosingListeners {
+				if closing.Component != "clickhouse" {
+					continue
+				}
+				if err := addPort(chHost, closing.Port, "clickhouse-"+closing.Name); err != nil {
 					return err
 				}
 			}

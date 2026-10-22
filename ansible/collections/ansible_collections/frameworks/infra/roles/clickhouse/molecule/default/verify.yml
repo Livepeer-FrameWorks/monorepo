@@ -61,3 +61,53 @@
         that:
           - clickhouse_shutdown_wait.stdout | trim == '60'
         fail_msg: "shutdown_wait_unfinished = {{ clickhouse_shutdown_wait.stdout }}, want 60"
+
+    - name: List the server's TCP listeners
+      ansible.builtin.command: ss -Hltn
+      register: clickhouse_listeners
+      changed_when: false
+
+    - name: Assert the MySQL and PostgreSQL protocol listeners are off
+      ansible.builtin.assert:
+        that:
+          - clickhouse_listeners.stdout is not search(':9004\s')
+          - clickhouse_listeners.stdout is not search(':9005\s')
+          - clickhouse_listeners.stdout is search(':9000\s')
+        fail_msg: "ClickHouse still binds a compatibility protocol listener: {{ clickhouse_listeners.stdout }}"
+
+    - name: Read the server's main PID before re-rendering the protocol drop-in
+      ansible.builtin.command: systemctl show -p MainPID --value clickhouse-server
+      register: clickhouse_pid_before
+      changed_when: false
+
+    # A changed protocol drop-in is applied at the server's next start; the
+    # role must not restart the server for it.
+    - name: Remove the protocol drop-in so the role renders it again
+      ansible.builtin.file:
+        path: /etc/clickhouse-server/config.d/no-compat-protocols.xml
+        state: absent
+
+    - name: Apply the role again
+      ansible.builtin.include_role:
+        name: frameworks.infra.clickhouse
+
+    - name: Flush handlers the role notified
+      ansible.builtin.meta: flush_handlers
+
+    - name: Read the server's main PID after the role rendered the drop-in
+      ansible.builtin.command: systemctl show -p MainPID --value clickhouse-server
+      register: clickhouse_pid_after
+      changed_when: false
+
+    - name: Read the re-rendered protocol drop-in
+      ansible.builtin.slurp:
+        src: /etc/clickhouse-server/config.d/no-compat-protocols.xml
+      register: clickhouse_compat_dropin
+
+    - name: Assert the drop-in was rendered without restarting the server
+      ansible.builtin.assert:
+        that:
+          - clickhouse_pid_after.stdout | trim == clickhouse_pid_before.stdout | trim
+          - '''<mysql_port remove="remove"/>'' in (clickhouse_compat_dropin.content | b64decode)'
+          - '''<postgresql_port remove="remove"/>'' in (clickhouse_compat_dropin.content | b64decode)'
+        fail_msg: "server PID {{ clickhouse_pid_before.stdout }} -> {{ clickhouse_pid_after.stdout }}; the protocol drop-in must not restart ClickHouse"

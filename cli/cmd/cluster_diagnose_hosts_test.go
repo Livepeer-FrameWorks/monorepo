@@ -14,6 +14,8 @@ import (
 
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/ssh"
+
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 )
 
 // hostReplyRunner answers each command through reply and records it, so a
@@ -159,6 +161,33 @@ func TestDiagnosePortsReportsPlannedPortsThatAreNotListening(t *testing.T) {
 	}
 	if failures != 2 {
 		t.Fatalf("failures = %d, want 2 (purser HTTP and gRPC down)\n%s", failures, out)
+	}
+}
+
+func TestDiagnosePortsReportsClosingListenersWithoutFailing(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Hosts: map[string]inventory.Host{"ch": {Name: "ch", ExternalIP: "10.0.0.3"}},
+		Infrastructure: inventory.InfrastructureConfig{
+			ClickHouse: &inventory.ClickHouseConfig{Enabled: true, Nodes: []inventory.ClickHouseNode{{Host: "ch", ID: 1}}},
+		},
+	}
+	targets := []diagnoseHost{{Name: "ch", Host: manifest.Hosts["ch"]}}
+	// A server started before the role removed the compatibility protocols
+	// still holds 9004; 9005 is already closed.
+	listening := map[int]bool{servicedefs.ClickHouseMySQLPort: true}
+	for _, spec := range servicedefs.ClickHousePorts(0, true) {
+		listening[spec.Port] = true
+	}
+	var stdout, stderr bytes.Buffer
+	failures := diagnosePorts(context.Background(), &stdout, &stderr, manifest, targets, replyRunnerFor(portHostReply(listening), nil))
+	out := stdout.String() + stderr.String()
+	if failures != 0 {
+		t.Fatalf("failures = %d, want 0: closing listeners are not failures\n%s", failures, out)
+	}
+	for _, want := range []string{"9004 clickhouse-mysql: closes at the next restart", "9005 clickhouse-postgresql: closed"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q\n%s", want, out)
+		}
 	}
 }
 

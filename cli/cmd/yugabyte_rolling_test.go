@@ -17,6 +17,7 @@ import (
 
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/orchestrator"
+	"frameworks/cli/pkg/provisioner"
 )
 
 // fakeUniverse is a three-node universe whose answers the tests steer. Each node runs one tserver and one master; a
@@ -957,6 +958,14 @@ func TestYugabyteProcessStateDetectsUnappliedConfiguration(t *testing.T) {
 		assertState("stale")
 		assertState("stale") // A new probe cannot consume the deferred restart.
 		recordApplied()
+		assertState("current")
+	}
+	// Flags after the deferred marker apply at the tserver's next start: adding
+	// or changing them does not make a running tserver stale.
+	for _, deferred := range []string{"--start_cql_proxy=false\n", "--start_cql_proxy=true\n"} {
+		if err := os.WriteFile(conf, []byte("new configuration\n"+provisioner.YugabyteTserverDeferredMarker+"\n"+deferred), 0o600); err != nil {
+			t.Fatal(err)
+		}
 		assertState("current")
 	}
 	if err := os.Remove(conf); err != nil {

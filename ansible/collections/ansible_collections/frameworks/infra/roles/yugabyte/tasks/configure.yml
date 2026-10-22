@@ -89,6 +89,14 @@
     mode: "0644"
   notify: yugabyte restart master
 
+- name: Read the current yb-tserver flagfile
+  ansible.builtin.slurp:
+    src: "{{ yugabyte_tserver_conf_path }}"
+  register: yugabyte_tserver_conf_current
+  failed_when: false
+
+# Only the flags above the deferred marker restart the tserver; the file is
+# still rewritten when only the deferred flags change.
 - name: Render yb-tserver flagfile
   ansible.builtin.template:
     src: tserver.conf.j2
@@ -96,6 +104,11 @@
     owner: "{{ yugabyte_user }}"
     group: "{{ yugabyte_group }}"
     mode: "0644"
+  register: yugabyte_tserver_conf_render
+  changed_when: >-
+    yugabyte_tserver_conf_render is changed and
+    (yugabyte_tserver_conf_current.content | default('') | b64decode).split(yugabyte_tserver_deferred_marker)[0]
+    != lookup('ansible.builtin.template', 'tserver.conf.j2').split(yugabyte_tserver_deferred_marker)[0]
   notify: yugabyte restart tserver
 
 - name: Render yb-master systemd unit

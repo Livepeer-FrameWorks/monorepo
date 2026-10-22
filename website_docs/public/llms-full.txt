@@ -29610,6 +29610,12 @@ and node_exporter (9110) wherever the edge runs vmagent. A planned port
 without a listener fails. Catalog ports held on a host the manifest does not
 place them on are listed so a conflicting process is visible.
 
+Some listeners are turned off by configuration without a restart: ClickHouse's
+MySQL (9004) and PostgreSQL (9005) protocols and Yugabyte's YCQL (9042) and
+its webserver (12000). A process started before that change keeps the socket
+until it next starts, so such a port is reported as `closes at the next
+restart` while held and `closed` once free; neither is a failure.
+
 **Examples:**
 
 ```bash

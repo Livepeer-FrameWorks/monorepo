@@ -19,3 +19,7 @@
 --placement_zone={{ yugabyte_placement_zone }}
 --callhome_enabled=false
 --max_log_size=256
+{{ yugabyte_tserver_deferred_marker }}
+{% for flag in yugabyte_tserver_deferred_flags %}
+{{ flag }}
+{% endfor %}

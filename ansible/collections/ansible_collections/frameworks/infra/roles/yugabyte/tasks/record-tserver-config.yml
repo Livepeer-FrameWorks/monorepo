@@ -1,13 +1,20 @@
 ---
 # Written only after starting/restarting the process, never when merely rendering its desired configuration.
 # A missing or mismatched receipt keeps a deferred restart visible across CLI and Ansible interruptions.
+# The flagfile is hashed only up to the deferred marker, in sha256sum's line format, so a flagfile without the
+# marker records the same receipt as before it existed.
 - name: Record the tserver configuration applied at startup
   ansible.builtin.shell: |
     set -euo pipefail
     receipt={{ (yugabyte_data_dir ~ '/.frameworks-tserver-config-applied') | quote }}
+    conf={{ yugabyte_tserver_conf_path | quote }}
     tmp="$(mktemp "${receipt}.XXXXXX")"
     trap 'rm -f "$tmp"' EXIT
-    sha256sum {{ yugabyte_tserver_conf_path | quote }} {{ yugabyte_tserver_unit_path | quote }} > "$tmp"
+    digest="$(awk -v marker={{ yugabyte_tserver_deferred_marker | quote }} '$0 == marker { exit } { print }' "$conf" | sha256sum)"
+    {
+      printf '%s  %s\n' "${digest%% *}" "$conf"
+      sha256sum {{ yugabyte_tserver_unit_path | quote }}
+    } > "$tmp"
     chmod 0644 "$tmp"
     mv -f "$tmp" "$receipt"
   args:

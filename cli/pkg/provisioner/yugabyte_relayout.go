@@ -62,6 +62,12 @@ fw_ysql_host() {
   esac
 }`
 
+// YugabyteTserverDeferredMarker is the tserver.conf line after which flags
+// take effect at the tserver's next start: the yugabyte role does not restart
+// for them and the applied-configuration receipt hashes only the lines before
+// it. It equals the role's yugabyte_tserver_deferred_marker.
+const YugabyteTserverDeferredMarker = "# Applied when the tserver next starts; a change below does not restart it."
+
 // YugabyteMigrationLedgerDDL creates the migration ledger with the definition the yugabyte role's migrate tasks use.
 const YugabyteMigrationLedgerDDL = `CREATE TABLE IF NOT EXISTS _migrations (
   version    TEXT NOT NULL,

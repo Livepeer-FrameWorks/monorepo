@@ -8,6 +8,15 @@ yugabyte_post_install_sentinel: "{{ yugabyte_release_dir }}/.post_install_done"
 yugabyte_current_link: "{{ yugabyte_install_dir }}/current"
 yugabyte_master_conf_path: "{{ yugabyte_conf_dir }}/master.conf"
 yugabyte_tserver_conf_path: "{{ yugabyte_conf_dir }}/tserver.conf"
+# Flags below this line of tserver.conf take effect when the tserver next
+# starts: changing them neither restarts it nor marks it stale. The applied
+# configuration receipt hashes only the lines above it; the CLI's tserver
+# state probe (cli/cmd/yugabyte_rolling.go) strips the same line.
+yugabyte_tserver_deferred_marker: "# Applied when the tserver next starts; a change below does not restart it."
+# YCQL (9042) and its webserver (12000) serve nothing of ours; YSQL does not
+# depend on the CQL proxy.
+yugabyte_tserver_deferred_flags:
+  - --start_cql_proxy=false
 yugabyte_master_unit_path: "/etc/systemd/system/{{ yugabyte_master_service }}.service"
 yugabyte_tserver_unit_path: "/etc/systemd/system/{{ yugabyte_tserver_service }}.service"
 yugabyte_master_tablet_id: "00000000000000000000000000000000"

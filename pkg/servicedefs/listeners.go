@@ -27,6 +27,11 @@ const (
 	KafkaMirrorMakerJMXPort  = 9404
 
 	ClickHousePrometheusPort = 9363
+	// ClickHouseMySQLPort and ClickHousePostgreSQLPort are the wire-protocol
+	// compatibility listeners the idealista config.xml renders; the
+	// clickhouse role removes them (see ClosingListeners).
+	ClickHouseMySQLPort      = 9004
+	ClickHousePostgreSQLPort = 9005
 
 	RedisPort         = 6379
 	RedisSentinelPort = 26379
@@ -62,6 +67,35 @@ const (
 	// PrivateerDNSPort is Privateer's loopback resolver for .internal names.
 	PrivateerDNSPort = 53
 )
+
+// ClosingListener is a listener the platform's configuration turns off without
+// restarting the process that holds it: the process keeps the socket until it
+// next starts for its own reasons. Placement keeps the port reserved meanwhile.
+type ClosingListener struct {
+	Port      int
+	Component string
+	// Name labels the port in placement, as <component>-<Name>.
+	Name string
+}
+
+// ClosingListeners are the closing listeners of the data services. Nothing
+// connects to them; the roles render them off and do not restart for it.
+var ClosingListeners = []ClosingListener{
+	{ClickHouseMySQLPort, "clickhouse", "mysql"},
+	{ClickHousePostgreSQLPort, "clickhouse", "postgresql"},
+	{YugabyteYCQLPort, "yugabyte", "ycql"},
+	{YugabyteYCQLWebPort, "yugabyte", "ycql-web"},
+}
+
+// ClosingListenerAt returns the closing listener on port, if any.
+func ClosingListenerAt(port int) (ClosingListener, bool) {
+	for _, listener := range ClosingListeners {
+		if listener.Port == port {
+			return listener, true
+		}
+	}
+	return ClosingListener{}, false
+}
 
 // ExporterPort returns the exporter port of a Postgres or Redis instance
 // listening on dbPort.
@@ -115,7 +149,7 @@ func RegisteredPorts() map[int]bool {
 		WireGuardPort, PostgresPort, YugabyteMasterRPCPort, YugabyteMasterWebPort, YugabyteTServerRPCPort,
 		YugabyteTServerWebPort, YugabyteYSQLPort, YugabyteYCQLPort, YugabyteYCQLWebPort, YugabyteYSQLWebPort,
 		KafkaBrokerPort, KafkaControllerPort, KafkaBrokerJMXPort, KafkaControllerJMXPort, KafkaMirrorMakerRESTPort,
-		KafkaMirrorMakerJMXPort, ClickHousePrometheusPort, RedisPort, RedisSentinelPort, ExporterPort(PostgresPort),
+		KafkaMirrorMakerJMXPort, ClickHousePrometheusPort, ClickHouseMySQLPort, ClickHousePostgreSQLPort, RedisPort, RedisSentinelPort, ExporterPort(PostgresPort),
 		ExporterPort(RedisPort), NodeExporterPort, DecklogMetricsPort, NetworkObserverInternalPort,
 		LivepeerGatewayCLIPort, LivepeerGatewayRTMPPort, LivepeerSignerCLIPort, CaddyAdminPort,
 	} {

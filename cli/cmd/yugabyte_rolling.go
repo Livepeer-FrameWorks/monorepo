@@ -347,7 +347,9 @@ const (
 // yugabyteProcessStateScript compares the inode of a running process's executable with the installed binary. An
 // install selects a separate artifact tree, so a process started before it still maps the old inode. The tserver receipt records
 // configuration only after a start/restart, making deferred config changes detectable even when the binary is unchanged.
-const yugabyteProcessStateScript = provisioner.YugabyteBinaryResolverShell + `
+// Like the receipt, the flagfile digest covers only the lines before provisioner.YugabyteTserverDeferredMarker.
+var yugabyteProcessStateScript = provisioner.YugabyteBinaryResolverShell + `
+deferred_marker=` + fwssh.ShellQuote(provisioner.YugabyteTserverDeferredMarker) + `
 set -u
 process=%s
 pid="$(systemctl show -p MainPID --value "$process" 2>/dev/null || true)"
@@ -357,7 +359,9 @@ binary="$(fw_yb_bin "$process")" || { echo "state=unknown"; exit 0; }
 installed="$(stat -L -c %%i "$binary" 2>/dev/null)" || { echo "state=unknown"; exit 0; }
 if [ "$running" != "$installed" ]; then echo "state=stale"; exit 0; fi
 if [ "$process" = yb-tserver ]; then
-  conf="$(sha256sum /opt/yugabyte/conf/tserver.conf)" || { echo "state=unknown"; exit 0; }
+  [ -r /opt/yugabyte/conf/tserver.conf ] || { echo "state=unknown"; exit 0; }
+  conf="$(awk -v marker="$deferred_marker" '$0 == marker { exit } { print }' /opt/yugabyte/conf/tserver.conf | sha256sum)" || { echo "state=unknown"; exit 0; }
+  conf="${conf%%%% *}  /opt/yugabyte/conf/tserver.conf"
   unit="$(sha256sum /etc/systemd/system/yb-tserver.service)" || { echo "state=unknown"; exit 0; }
   applied="$(cat /var/lib/yugabyte/data/.frameworks-tserver-config-applied 2>/dev/null)" || applied=
   if [ "$applied" != "$conf

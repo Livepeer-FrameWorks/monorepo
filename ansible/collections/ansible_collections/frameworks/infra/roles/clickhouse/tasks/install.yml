@@ -74,6 +74,22 @@
         <shutdown_wait_unfinished>60</shutdown_wait_unfinished>
       </clickhouse>
 
+# idealista.clickhouse's config.xml always renders the MySQL and PostgreSQL
+# wire-protocol listeners; nothing of ours connects to them. The drop-in
+# removes both and does not trigger a restart: a server already running keeps
+# them until it next starts for another reason.
+- name: Remove ClickHouse's MySQL and PostgreSQL protocol listeners
+  ansible.builtin.copy:
+    dest: /etc/clickhouse-server/config.d/no-compat-protocols.xml
+    owner: clickhouse
+    group: clickhouse
+    mode: "0644"
+    content: |
+      <clickhouse>
+        <mysql_port remove="remove"/>
+        <postgresql_port remove="remove"/>
+      </clickhouse>
+
 # idealista.clickhouse renders these two partition keys as
 # "{{ partition_by }}(event_date)" while its defaults already read
 # toYYYYMM(event_date). ClickHouse rejects the doubled expression on every
