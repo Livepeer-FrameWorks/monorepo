@@ -787,11 +787,8 @@ func SoftDeleteDVRAndChapters(ctx context.Context, dvrHash, tenantID, requestedB
 // rows (not a live joined child) means the pass also converges over rows with a NULL playback hash
 // or an already-deleted child — the idempotent cascade removes the ledger row regardless. Bounded;
 // a parent drops out of the candidate set once its chapter rows are removed. Returns parents repaired.
-func RepairDeletedDVRChildrenBatch(ctx context.Context, limit int) (int, error) {
-	if db == nil {
-		return 0, sql.ErrConnDone
-	}
-	rows, err := foghorndb.New(db).ListDeletedDVRParentsWithChapters(ctx, int32(limit))
+func RepairDeletedDVRChildrenBatch(ctx context.Context, foghornDB *sql.DB, limit int) (int, error) {
+	rows, err := foghorndb.New(foghornDB).ListDeletedDVRParentsWithChapters(ctx, int32(limit))
 	if err != nil {
 		return 0, fmt.Errorf("repair deleted dvr children: scan candidates: %w", err)
 	}
@@ -806,7 +803,7 @@ func RepairDeletedDVRChildrenBatch(ctx context.Context, limit int) (int, error) 
 		if cnd.tenant == "" {
 			continue // can't tenant-scope the cascade; skip rather than run an unscoped delete
 		}
-		if txErr := database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
+		if txErr := database.WithRetryablePostgresTx(ctx, foghornDB, nil, func(tx *sql.Tx) error {
 			_, cascadeErr := CascadeDVRChildrenTx(ctx, tx, cnd.hash, cnd.tenant)
 			return cascadeErr
 		}); txErr != nil {

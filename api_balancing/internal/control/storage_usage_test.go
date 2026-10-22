@@ -37,7 +37,7 @@ func TestReconcileBillingAttribution_BoundedKeysetCursor(t *testing.T) {
 		WithArgs("", "").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	marked, err := ReconcileBillingAttribution(context.Background())
+	marked, err := ReconcileBillingAttribution(context.Background(), db)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestReconcileBillingAttribution_FullPageAdvancesCursor(t *testing.T) {
 		WithArgs(lastTenant, lastCluster).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	marked, err := ReconcileBillingAttribution(context.Background())
+	marked, err := ReconcileBillingAttribution(context.Background(), db)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -119,7 +119,7 @@ func TestReconcileBillingAttribution_IgnoresCurrentBackingForHistoricalRows(t *t
 		WithArgs("", "").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	marked, err := ReconcileBillingAttribution(context.Background())
+	marked, err := ReconcileBillingAttribution(context.Background(), db)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

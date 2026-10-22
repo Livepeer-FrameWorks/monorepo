@@ -285,7 +285,7 @@ func TestRepairDeletedDVRChildrenBatch(t *testing.T) {
 	mock.ExpectExec(`INSERT INTO foghorn.artifact_event_outbox`).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
-	repaired, err := RepairDeletedDVRChildrenBatch(context.Background(), 200)
+	repaired, err := RepairDeletedDVRChildrenBatch(context.Background(), db, 200)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

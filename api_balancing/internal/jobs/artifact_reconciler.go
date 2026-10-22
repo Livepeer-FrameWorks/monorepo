@@ -387,7 +387,7 @@ func (r *ArtifactReconciler) reconcileBillingAttribution() {
 	}
 	defer release()
 
-	if marked, bErr := control.ReconcileBillingAttribution(ctx); bErr != nil {
+	if marked, bErr := control.ReconcileBillingAttribution(ctx, r.db); bErr != nil {
 		r.logger.WithError(bErr).Warn("Billing attribution reconciliation failed")
 	} else if marked > 0 {
 		r.logger.WithField("marked", marked).Info("Reconciled durable_backend_local billing attribution for historical local rows")
@@ -604,7 +604,7 @@ func (r *ArtifactReconciler) backfillOriginCluster(ctx context.Context) {
 // Delegates to the tenant-scoped batch repair; each cascaded child then projects its own deletion
 // to Commodore.
 func (r *ArtifactReconciler) repairDeletedDVRChildren(ctx context.Context) int {
-	n, err := control.RepairDeletedDVRChildrenBatch(ctx, dvrChildRepairBatch)
+	n, err := control.RepairDeletedDVRChildrenBatch(ctx, r.db, dvrChildRepairBatch)
 	if err != nil {
 		r.logger.WithError(err).Warn("Deleted-DVR child repair failed")
 		return n

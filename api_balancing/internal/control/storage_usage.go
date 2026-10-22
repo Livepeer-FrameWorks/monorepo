@@ -29,12 +29,9 @@ const billingAttributionBatch = 200
 // BOUNDED, DURABLE KEYSET PROGRESS: each pass reviews at most billingAttributionBatch DISTINCT (tenant, cluster)
 // pairs PAST a durable cursor and advances it, bounding per-pass scan/update volume on a large table; on reaching
 // the end the cursor wraps to re-review from the top (cheap: the marked pairs have left the unmarked set).
-func ReconcileBillingAttribution(ctx context.Context) (int, error) {
-	if db == nil {
-		return 0, nil
-	}
+func ReconcileBillingAttribution(ctx context.Context, foghornDB *sql.DB) (int, error) {
 	// Read the durable cursor (single-row table seeded by the migration; treat a missing row as the start).
-	queries := foghorndb.New(db)
+	queries := foghorndb.New(foghornDB)
 	cursor, cErr := queries.GetBillingAttributionCursor(ctx)
 	if cErr != nil && !errors.Is(cErr, sql.ErrNoRows) {
 		return 0, cErr
