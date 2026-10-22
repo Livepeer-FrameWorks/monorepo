@@ -207,44 +207,34 @@ func (q *Queries) ListDeletedDVRNodes(ctx context.Context, maxAge string) ([]Lis
 }
 
 const listDeletedRelayCacheableArtifactsAfter = `-- name: ListDeletedRelayCacheableArtifactsAfter :many
-SELECT a.artifact_hash, a.artifact_type, a.updated_at
-FROM foghorn.artifacts a
-WHERE a.artifact_type IN ('clip', 'vod', 'chapter')
-  AND a.status = 'deleted'
-  AND a.updated_at >= $1::timestamptz
-  AND (a.updated_at > $1::timestamptz OR a.artifact_hash > $2::text)
-  AND NOT (a.federated_pointer AND EXISTS (
-	SELECT 1 FROM foghorn.artifact_nodes an
-	WHERE an.artifact_hash = a.artifact_hash AND an.node_id = $3
-	  AND an.is_orphaned = false AND an.role = 'origin'))
-ORDER BY a.updated_at ASC, a.artifact_hash ASC
-LIMIT $4::int
+SELECT artifact_hash, artifact_type, updated_at, federated_pointer
+FROM foghorn.artifacts
+WHERE artifact_type IN ('clip', 'vod', 'chapter')
+  AND status = 'deleted'
+  AND updated_at >= $1::timestamptz
+  AND (updated_at > $1::timestamptz OR artifact_hash > $2::text)
+ORDER BY updated_at ASC, artifact_hash ASC
+LIMIT $3::int
 `
 
 type ListDeletedRelayCacheableArtifactsAfterParams struct {
 	AfterTime time.Time `db:"after_time" json:"after_time"`
 	AfterHash string    `db:"after_hash" json:"after_hash"`
-	NodeID    string    `db:"node_id" json:"node_id"`
 	PageSize  int32     `db:"page_size" json:"page_size"`
 }
 
 type ListDeletedRelayCacheableArtifactsAfterRow struct {
-	ArtifactHash string       `db:"artifact_hash" json:"artifact_hash"`
-	ArtifactType string       `db:"artifact_type" json:"artifact_type"`
-	UpdatedAt    sql.NullTime `db:"updated_at" json:"updated_at"`
+	ArtifactHash     string       `db:"artifact_hash" json:"artifact_hash"`
+	ArtifactType     string       `db:"artifact_type" json:"artifact_type"`
+	UpdatedAt        sql.NullTime `db:"updated_at" json:"updated_at"`
+	FederatedPointer bool         `db:"federated_pointer" json:"federated_pointer"`
 }
 
 // Clips and VODs (DVR chapters are VODs) deleted after the (updated_at,
 // artifact_hash) position, oldest first: one page of the deletes a node is
-// sent from its relay delete cursor onwards. A federated pointer the node holds
-// an origin copy of is left out, as in the holder passes above.
+// sent from its relay delete cursor onwards.
 func (q *Queries) ListDeletedRelayCacheableArtifactsAfter(ctx context.Context, arg ListDeletedRelayCacheableArtifactsAfterParams) ([]ListDeletedRelayCacheableArtifactsAfterRow, error) {
-	rows, err := q.db.QueryContext(ctx, listDeletedRelayCacheableArtifactsAfter,
-		arg.AfterTime,
-		arg.AfterHash,
-		arg.NodeID,
-		arg.PageSize,
-	)
+	rows, err := q.db.QueryContext(ctx, listDeletedRelayCacheableArtifactsAfter, arg.AfterTime, arg.AfterHash, arg.PageSize)
 	if err != nil {
 		return nil, err
 	}
@@ -252,7 +242,12 @@ func (q *Queries) ListDeletedRelayCacheableArtifactsAfter(ctx context.Context, a
 	items := []ListDeletedRelayCacheableArtifactsAfterRow{}
 	for rows.Next() {
 		var i ListDeletedRelayCacheableArtifactsAfterRow
-		if err := rows.Scan(&i.ArtifactHash, &i.ArtifactType, &i.UpdatedAt); err != nil {
+		if err := rows.Scan(
+			&i.ArtifactHash,
+			&i.ArtifactType,
+			&i.UpdatedAt,
+			&i.FederatedPointer,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -345,4 +340,26 @@ func (q *Queries) ListRecentlyDeletedRelayCacheableArtifacts(ctx context.Context
 		return nil, err
 	}
 	return items, nil
+}
+
+const nodeHoldsArtifactOrigin = `-- name: NodeHoldsArtifactOrigin :one
+SELECT EXISTS (
+    SELECT 1 FROM foghorn.artifact_nodes
+    WHERE artifact_hash = $1 AND node_id = $2
+      AND is_orphaned = false AND role = 'origin'
+)
+`
+
+type NodeHoldsArtifactOriginParams struct {
+	ArtifactHash string `db:"artifact_hash" json:"artifact_hash"`
+	NodeID       string `db:"node_id" json:"node_id"`
+}
+
+// A federated pointer's delete is not sent to a node holding an origin copy of
+// it, as in the holder passes above.
+func (q *Queries) NodeHoldsArtifactOrigin(ctx context.Context, arg NodeHoldsArtifactOriginParams) (bool, error) {
+	row := q.db.QueryRowContext(ctx, nodeHoldsArtifactOrigin, arg.ArtifactHash, arg.NodeID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
 }

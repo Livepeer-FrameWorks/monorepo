@@ -164,7 +164,7 @@ func (j *OrphanCleanupJob) sendRelayDeletesSinceCursor(ctx context.Context, node
 		err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
 			var err error
 			rows, err = q.ListDeletedRelayCacheableArtifactsAfter(ctx, foghorndb.ListDeletedRelayCacheableArtifactsAfterParams{
-				AfterTime: after, AfterHash: afterHash, NodeID: nodeID, PageSize: relayDeletePageSize,
+				AfterTime: after, AfterHash: afterHash, PageSize: relayDeletePageSize,
 			})
 			return err
 		})
@@ -173,7 +173,11 @@ func (j *OrphanCleanupJob) sendRelayDeletesSinceCursor(ctx context.Context, node
 			return
 		}
 		for _, row := range rows {
-			if err := j.sendRelayCacheDelete(nodeID, row.ArtifactType, row.ArtifactHash); err != nil {
+			skip, err := j.holdsFederatedPointerOrigin(ctx, q, nodeID, row.ArtifactHash, row.FederatedPointer)
+			if err == nil && !skip {
+				err = j.sendRelayCacheDelete(nodeID, row.ArtifactType, row.ArtifactHash)
+			}
+			if err != nil {
 				j.logger.WithFields(logging.Fields{
 					"artifact_hash": row.ArtifactHash,
 					"node_id":       nodeID,
@@ -197,6 +201,22 @@ func (j *OrphanCleanupJob) sendRelayDeletesSinceCursor(ctx context.Context, node
 			return
 		}
 	}
+}
+
+// holdsFederatedPointerOrigin reports whether a federated pointer's delete must
+// skip nodeID because the node holds an origin copy: remote authority never
+// turns into a hard delete of locally-originated bytes.
+func (j *OrphanCleanupJob) holdsFederatedPointerOrigin(ctx context.Context, q *foghorndb.Queries, nodeID, hash string, pointer bool) (bool, error) {
+	if !pointer {
+		return false, nil
+	}
+	var holds bool
+	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		var err error
+		holds, err = q.NodeHoldsArtifactOrigin(ctx, foghorndb.NodeHoldsArtifactOriginParams{ArtifactHash: hash, NodeID: nodeID})
+		return err
+	})
+	return holds, err
 }
 
 func (j *OrphanCleanupJob) sendRelayCacheDelete(nodeID, artifactType, hash string) error {

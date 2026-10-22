@@ -483,8 +483,7 @@ type Querier interface {
 	ListDeletedDVRParentsWithChapters(ctx context.Context, limit int32) ([]ListDeletedDVRParentsWithChaptersRow, error)
 	// Clips and VODs (DVR chapters are VODs) deleted after the (updated_at,
 	// artifact_hash) position, oldest first: one page of the deletes a node is
-	// sent from its relay delete cursor onwards. A federated pointer the node holds
-	// an origin copy of is left out, as in the holder passes above.
+	// sent from its relay delete cursor onwards.
 	ListDeletedRelayCacheableArtifactsAfter(ctx context.Context, arg ListDeletedRelayCacheableArtifactsAfterParams) ([]ListDeletedRelayCacheableArtifactsAfterRow, error)
 	ListDeletedVODNodes(ctx context.Context, maxAge string) ([]ListDeletedVODNodesRow, error)
 	ListEvictableDVRSegments(ctx context.Context, arg ListEvictableDVRSegmentsParams) ([]string, error)
@@ -654,6 +653,9 @@ type Querier interface {
 	// Commodore guarantees stream_internal_name is globally unique, which is why the corresponding
 	// Redis source projection can remain keyed by internal name alone.
 	NextSourceProjectionRevision(ctx context.Context, arg NextSourceProjectionRevisionParams) (int64, error)
+	// A federated pointer's delete is not sent to a node holding an origin copy of
+	// it, as in the holder passes above.
+	NodeHoldsArtifactOrigin(ctx context.Context, arg NodeHoldsArtifactOriginParams) (bool, error)
 	NodeHoldsLiveArtifactCopy(ctx context.Context, arg NodeHoldsLiveArtifactCopyParams) (bool, error)
 	OrphanGloballyStaleArtifactNodes(ctx context.Context) ([]OrphanGloballyStaleArtifactNodesRow, error)
 	OrphanNodeArtifacts(ctx context.Context, nodeID string) ([]OrphanNodeArtifactsRow, error)

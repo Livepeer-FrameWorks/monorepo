@@ -53,21 +53,25 @@ LIMIT 1000;
 
 -- Clips and VODs (DVR chapters are VODs) deleted after the (updated_at,
 -- artifact_hash) position, oldest first: one page of the deletes a node is
--- sent from its relay delete cursor onwards. A federated pointer the node holds
--- an origin copy of is left out, as in the holder passes above.
+-- sent from its relay delete cursor onwards.
 -- name: ListDeletedRelayCacheableArtifactsAfter :many
-SELECT a.artifact_hash, a.artifact_type, a.updated_at
-FROM foghorn.artifacts a
-WHERE a.artifact_type IN ('clip', 'vod', 'chapter')
-  AND a.status = 'deleted'
-  AND a.updated_at >= sqlc.arg(after_time)::timestamptz
-  AND (a.updated_at > sqlc.arg(after_time)::timestamptz OR a.artifact_hash > sqlc.arg(after_hash)::text)
-  AND NOT (a.federated_pointer AND EXISTS (
-	SELECT 1 FROM foghorn.artifact_nodes an
-	WHERE an.artifact_hash = a.artifact_hash AND an.node_id = sqlc.arg(node_id)
-	  AND an.is_orphaned = false AND an.role = 'origin'))
-ORDER BY a.updated_at ASC, a.artifact_hash ASC
+SELECT artifact_hash, artifact_type, updated_at, federated_pointer
+FROM foghorn.artifacts
+WHERE artifact_type IN ('clip', 'vod', 'chapter')
+  AND status = 'deleted'
+  AND updated_at >= sqlc.arg(after_time)::timestamptz
+  AND (updated_at > sqlc.arg(after_time)::timestamptz OR artifact_hash > sqlc.arg(after_hash)::text)
+ORDER BY updated_at ASC, artifact_hash ASC
 LIMIT sqlc.arg(page_size)::int;
+
+-- A federated pointer's delete is not sent to a node holding an origin copy of
+-- it, as in the holder passes above.
+-- name: NodeHoldsArtifactOrigin :one
+SELECT EXISTS (
+    SELECT 1 FROM foghorn.artifact_nodes
+    WHERE artifact_hash = sqlc.arg(artifact_hash) AND node_id = sqlc.arg(node_id)
+      AND is_orphaned = false AND role = 'origin'
+);
 
 -- name: GetNodeRelayDeleteCursor :one
 SELECT covered_through FROM foghorn.node_relay_delete_cursor WHERE node_id = $1;
