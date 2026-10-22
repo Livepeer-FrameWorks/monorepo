@@ -271,6 +271,10 @@ type PortSpec struct {
 }
 
 const (
+	// FoghornInternalGRPCPort is the internal-CA control listener mesh
+	// services dial (FOGHORN_INTERNAL_GRPC_BIND_ADDR); Foghorn registers it in
+	// Quartermaster with foghorn_listener=internal_control.
+	FoghornInternalGRPCPort = 18019
 	FoghornInternalHTTPPort = 18027
 	// FoghornExternalGRPCPort is the listener edges dial from outside the mesh
 	// (FOGHORN_EXTERNAL_GRPC_BIND_ADDR).

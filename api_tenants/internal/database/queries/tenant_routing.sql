@@ -92,16 +92,10 @@ WHERE sca.cluster_id = sqlc.arg(cluster_id)::text
   AND svc.type = 'foghorn'
   AND si.status = 'running'
   AND si.health_status = 'healthy'
-  AND (si.metadata->>'foghorn_listener' = 'internal_control' OR si.port = 18019 OR si.metadata->>'foghorn_listener' = 'control')
+  AND si.metadata->>'foghorn_listener' = 'internal_control'
   AND COALESCE(si.advertise_host, '') <> ''
   AND COALESCE(si.port, 0) > 0
-ORDER BY CASE
-             WHEN si.metadata->>'foghorn_listener' = 'internal_control' THEN 0
-             WHEN si.port = 18019 THEN 1
-             WHEN si.metadata->>'foghorn_listener' = 'control' THEN 2
-             ELSE 3
-         END,
-         CASE WHEN si.protocol = 'grpc' THEN 0 ELSE 1 END,
+ORDER BY CASE WHEN si.protocol = 'grpc' THEN 0 ELSE 1 END,
          si.updated_at DESC,
          si.id ASC
 LIMIT 1;
@@ -151,16 +145,10 @@ LEFT JOIN LATERAL (
       AND svc.type = 'foghorn'
       AND si.status = 'running'
       AND si.health_status = 'healthy'
-      AND (si.metadata->>'foghorn_listener' = 'internal_control' OR si.port = 18019 OR si.metadata->>'foghorn_listener' = 'control')
+      AND si.metadata->>'foghorn_listener' = 'internal_control'
       AND COALESCE(si.advertise_host, '') <> ''
       AND COALESCE(si.port, 0) > 0
-    ORDER BY CASE
-                 WHEN si.metadata->>'foghorn_listener' = 'internal_control' THEN 0
-                 WHEN si.port = 18019 THEN 1
-                 WHEN si.metadata->>'foghorn_listener' = 'control' THEN 2
-                 ELSE 3
-             END,
-             CASE WHEN si.protocol = 'grpc' THEN 0 ELSE 1 END,
+    ORDER BY CASE WHEN si.protocol = 'grpc' THEN 0 ELSE 1 END,
              si.updated_at DESC,
              si.id ASC
     LIMIT 1

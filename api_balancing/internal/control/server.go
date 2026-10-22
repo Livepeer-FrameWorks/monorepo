@@ -11047,7 +11047,7 @@ func (s *EdgeProvisioningServer) PreRegisterEdge(ctx context.Context, req *fogho
 
 	edgeDomain := pkgdns.EdgeNodeFQDN(nodeID, clusterSlug, rootDomain)
 	poolDomain := fmt.Sprintf("edge.%s.%s", clusterSlug, rootDomain)
-	foghornAddr := fmt.Sprintf("foghorn.%s.%s:18029", clusterSlug, rootDomain)
+	foghornAddr := net.JoinHostPort("foghorn."+clusterSlug+"."+rootDomain, strconv.Itoa(appconfig.Current().ExternalGRPCPort()))
 
 	resp := &foghornpb.PreRegisterEdgeResponse{
 		NodeId:           nodeID,

@@ -149,6 +149,11 @@ func (q *Queries) GetClusterPublicRootDomain(ctx context.Context, clusterID stri
 	return rootDomain, err
 }
 
+// foghornControlListenerFilter selects the registration of a Foghorn's internal
+// control listener, which Foghorn marks itself (cmd/foghorn
+// controlListenerMetadata), whatever port it binds.
+const foghornControlListenerFilter = `si.metadata->>'foghorn_listener' = 'internal_control'`
+
 func (q *Queries) GetClusterInternalFoghornGRPC(ctx context.Context, clusterID string) (string, error) {
 	var addr string
 	err := q.db.QueryRowContext(ctx, `
@@ -161,10 +166,33 @@ func (q *Queries) GetClusterInternalFoghornGRPC(ctx context.Context, clusterID s
 		  AND si.status = 'running'
 		  AND si.health_status = 'healthy'
 		  AND si.protocol = 'grpc'
-		  AND (si.metadata->>'foghorn_listener' = 'internal_control' OR si.port = 18019 OR si.metadata->>'foghorn_listener' = 'control')
+		  AND `+foghornControlListenerFilter+`
 		  AND svc.type = 'foghorn'
-		ORDER BY CASE WHEN si.metadata->>'foghorn_listener' = 'internal_control' THEN 0 WHEN si.port = 18019 THEN 1 WHEN si.metadata->>'foghorn_listener' = 'control' THEN 2 ELSE 3 END, si.updated_at DESC, si.id ASC
+		ORDER BY si.updated_at DESC, si.id ASC
 		LIMIT 1
 	`, clusterID).Scan(&addr)
 	return strings.TrimSpace(addr), err
+}
+
+// GetClusterFoghornExternalGRPCPort returns the external listener port the
+// cluster's assigned Foghorn registered with its control listener; NULL when
+// that Foghorn registered without one.
+func (q *Queries) GetClusterFoghornExternalGRPCPort(ctx context.Context, clusterID string) (sql.NullString, error) {
+	var port sql.NullString
+	err := q.db.QueryRowContext(ctx, `
+		SELECT si.metadata->>'external_grpc_port'
+		FROM quartermaster.service_instances si
+		JOIN quartermaster.service_cluster_assignments sca ON sca.service_instance_id = si.id
+		JOIN quartermaster.services svc ON svc.service_id = si.service_id
+		WHERE sca.cluster_id = $1
+		  AND sca.is_active = true
+		  AND si.status = 'running'
+		  AND si.health_status = 'healthy'
+		  AND si.protocol = 'grpc'
+		  AND `+foghornControlListenerFilter+`
+		  AND svc.type = 'foghorn'
+		ORDER BY si.updated_at DESC, si.id ASC
+		LIMIT 1
+	`, clusterID).Scan(&port)
+	return port, err
 }

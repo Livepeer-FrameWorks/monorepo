@@ -266,9 +266,9 @@ func TestLookupClusterFoghornGRPCRetriesRetryablePostgresError(t *testing.T) {
 			  AND si.status = 'running'
 			  AND si.health_status = 'healthy'
 			  AND si.protocol = 'grpc'
-			  AND (si.metadata->>'foghorn_listener' = 'internal_control' OR si.port = 18019 OR si.metadata->>'foghorn_listener' = 'control')
+			  AND si.metadata->>'foghorn_listener' = 'internal_control'
 			  AND svc.type = 'foghorn'
-			ORDER BY CASE WHEN si.metadata->>'foghorn_listener' = 'internal_control' THEN 0 WHEN si.port = 18019 THEN 1 WHEN si.metadata->>'foghorn_listener' = 'control' THEN 2 ELSE 3 END, si.updated_at DESC, si.id ASC
+			ORDER BY si.updated_at DESC, si.id ASC
 			LIMIT 1
 		`)
 
@@ -292,9 +292,38 @@ func TestLookupClusterFoghornGRPCRetriesRetryablePostgresError(t *testing.T) {
 }
 
 func TestPublicFoghornGRPCAddrUsesExternalEdgeListener(t *testing.T) {
-	addr := publicFoghornGRPCAddr("media-eu-1", "https://frameworks.network/")
-	if addr != "foghorn.media-eu-1.frameworks.network:18029" {
+	addr := publicFoghornGRPCAddr("media-eu-1", "https://frameworks.network/", 18129)
+	if addr != "foghorn.media-eu-1.frameworks.network:18129" {
 		t.Fatalf("addr = %q, want public Foghorn external listener", addr)
+	}
+}
+
+func TestLookupClusterPublicFoghornGRPCUsesRegisteredExternalPort(t *testing.T) {
+	for name, tc := range map[string]struct {
+		rows *sqlmock.Rows
+		want string
+	}{
+		"registered by the control listener": {rows: sqlmock.NewRows([]string{"port"}).AddRow("18129"), want: "foghorn.media-eu-1.frameworks.network:18129"},
+		// A Foghorn that registered before it carried the port.
+		"not registered": {rows: sqlmock.NewRows([]string{"port"}), want: "foghorn.media-eu-1.frameworks.network:18029"},
+	} {
+		srv, _, mock := newMockQuartermasterServer(t)
+		mock.ExpectQuery(`SELECT COALESCE\(NULLIF\(c\.base_url`).
+			WithArgs("media-eu-1").
+			WillReturnRows(sqlmock.NewRows([]string{"root"}).AddRow("frameworks.network"))
+		mock.ExpectQuery(`(?s)si\.metadata->>'external_grpc_port'.*si\.metadata->>'foghorn_listener' = 'internal_control'`).
+			WithArgs("media-eu-1").
+			WillReturnRows(tc.rows)
+		addr, err := srv.lookupClusterPublicFoghornGRPC(serviceCtx(), "media-eu-1")
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if addr != tc.want {
+			t.Errorf("%s: addr = %q, want %q", name, addr, tc.want)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("%s: unmet SQL expectations: %v", name, err)
+		}
 	}
 }
 

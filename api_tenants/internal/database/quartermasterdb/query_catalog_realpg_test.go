@@ -958,6 +958,9 @@ func runConvertedRuntimeWriteAdapters(t *testing.T, ctx context.Context, db *sql
 	if _, err := queries.GetClusterInternalFoghornGRPC(ctx, privateClusterID); err != nil {
 		t.Fatalf("get cluster internal foghorn: %v", err)
 	}
+	if _, err := queries.GetClusterFoghornExternalGRPCPort(ctx, privateClusterID); err != nil {
+		t.Fatalf("get cluster foghorn external port: %v", err)
+	}
 
 	if err := queries.UpdateReportedNodes(ctx, UpdateReportedNodesParams{NodeIDs: []string{"contract-runtime-node"}, ExternalIPs: []string{"192.0.2.22"}, RefreshHeartbeat: []bool{true}, HeartbeatRefreshAfterSeconds: 180}); err != nil {
 		t.Fatalf("update reported nodes: %v", err)

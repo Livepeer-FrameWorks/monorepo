@@ -25,17 +25,18 @@ ON CONFLICT (node_id) DO UPDATE SET
 INSERT INTO quartermaster.service_instances (
     id, instance_id, cluster_id, node_id, service_id,
     protocol, advertise_host, port, health_endpoint_override, status, health_status,
-    started_at, created_at, updated_at
+    metadata, started_at, created_at, updated_at
 ) VALUES
     ('5eedf0e1-00a1-da7a-f0e1-00a1da7a00a1', 'stack-livepeer-gateway-a', 'central-primary', 'stack-lp-a',
-     'livepeer-gateway', 'http', 'livepeer-proxy-a', 80, '/healthz', 'running', 'unknown', NOW(), NOW(), NOW()),
+     'livepeer-gateway', 'http', 'livepeer-proxy-a', 80, '/healthz', 'running', 'unknown', '{}', NOW(), NOW(), NOW()),
     ('5eedf0e1-00b1-da7a-f0e1-00b1da7a00b1', 'stack-livepeer-gateway-b', 'us-primary', 'stack-lp-b',
-     'livepeer-gateway', 'http', 'livepeer-proxy-b', 80, '/healthz', 'running', 'unknown', NOW(), NOW(), NOW()),
+     'livepeer-gateway', 'http', 'livepeer-proxy-b', 80, '/healthz', 'running', 'unknown', '{}', NOW(), NOW(), NOW()),
     ('5eedf0e1-000c-da7a-f0e1-000cda7a000c', 'foghorn-b-2', 'us-primary', 'us-node-1',
-     'foghorn', 'grpc', 'foghorn-b-2', 18019, NULL, 'running', 'unknown', NOW(), NOW(), NOW())
+     'foghorn', 'grpc', 'foghorn-b-2', 18019, NULL, 'running', 'unknown',
+     '{"foghorn_listener": "internal_control"}', NOW(), NOW(), NOW())
 ON CONFLICT (instance_id) DO UPDATE SET
     cluster_id = EXCLUDED.cluster_id, node_id = EXCLUDED.node_id, advertise_host = EXCLUDED.advertise_host,
-    port = EXCLUDED.port, health_endpoint_override = EXCLUDED.health_endpoint_override,
+    port = EXCLUDED.port, health_endpoint_override = EXCLUDED.health_endpoint_override, metadata = EXCLUDED.metadata,
     status = 'running', stopped_at = NULL, updated_at = NOW();
 
 -- Each gateway serves its cell's platform and media clusters; Foghorn asks for

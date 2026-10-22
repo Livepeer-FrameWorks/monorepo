@@ -7,7 +7,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/monitoring"
 )
 
-func TestControlPortFromBindAddr(t *testing.T) {
+func TestPortOfBindAddr(t *testing.T) {
 	tests := []struct {
 		name     string
 		bindAddr string
@@ -22,11 +22,20 @@ func TestControlPortFromBindAddr(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := controlPortFromBindAddr(tc.bindAddr, tc.fallback)
+			got := appconfig.PortOfBindAddr(tc.bindAddr, tc.fallback)
 			if got != tc.want {
-				t.Fatalf("controlPortFromBindAddr(%q)=%d, want %d", tc.bindAddr, got, tc.want)
+				t.Fatalf("PortOfBindAddr(%q)=%d, want %d", tc.bindAddr, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestControlListenerRegistrationCarriesExternalGRPCPort(t *testing.T) {
+	cfg := &appconfig.Foghorn{}
+	cfg.ExternalGRPCBindAddr = "0.0.0.0:18129"
+	md := controlListenerMetadata(cfg, "inst-1")
+	if md["foghorn_listener"] != "internal_control" || md["instance_id"] != "inst-1" || md["external_grpc_port"] != "18129" {
+		t.Fatalf("registration metadata %v, want internal_control, the instance id and external_grpc_port 18129", md)
 	}
 }
 

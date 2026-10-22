@@ -7070,12 +7070,10 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 		env["FOGHORN_INTERNAL_HTTP_BIND_ADDR"] = "127.0.0.1"
 		env["GRPC_METADATA_POLICY"] = "deny"
 		env["FOGHORN_INTERNAL_HTTP_PORT"] = strconv.Itoa(servicedefs.FoghornInternalHTTPPort)
-		internalPort := 18019
-		externalPort := 18029
+		internalPort := servicedefs.FoghornInternalGRPCPort
 		env["FOGHORN_INTERNAL_GRPC_BIND_ADDR"] = fmt.Sprintf(":%d", internalPort)
 		env["FOGHORN_INTERNAL_GRPC_PORT"] = strconv.Itoa(internalPort)
-		env["FOGHORN_EXTERNAL_GRPC_BIND_ADDR"] = fmt.Sprintf(":%d", externalPort)
-		env["FOGHORN_EXTERNAL_GRPC_PORT"] = strconv.Itoa(externalPort)
+		env["FOGHORN_EXTERNAL_GRPC_BIND_ADDR"] = fmt.Sprintf(":%d", servicedefs.FoghornExternalGRPCPort)
 		if relayHost := manifestMeshHostname(manifest, task.Host); relayHost != "" {
 			env["FOGHORN_RELAY_ADVERTISE_ADDR"] = fmt.Sprintf("%s:%d", relayHost, internalPort)
 		}

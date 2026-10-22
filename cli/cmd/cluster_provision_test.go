@@ -3304,7 +3304,6 @@ func TestBuildServiceEnvVarsCoversRuntimeEnvDependencies(t *testing.T) {
 				"FOGHORN_INTERNAL_GRPC_BIND_ADDR": ":18019",
 				"FOGHORN_INTERNAL_GRPC_PORT":      "18019",
 				"FOGHORN_EXTERNAL_GRPC_BIND_ADDR": ":18029",
-				"FOGHORN_EXTERNAL_GRPC_PORT":      "18029",
 				"CHANDLER_INTERNAL_URL":           "http://central-eu-1.internal:18020",
 				"COMMODORE_GRPC_ADDR":             "commodore.internal:19001",
 				"QUARTERMASTER_GRPC_ADDR":         "quartermaster.internal:19002",

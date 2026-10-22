@@ -44,7 +44,7 @@ func TestGetNodeOwnerReturnsFoghornControlListener(t *testing.T) {
 	}
 	defer db.Close()
 
-	controlListenerFilter := `(?s)\(si\.metadata->>'foghorn_listener' = 'internal_control' OR si\.port = 18019 OR si\.metadata->>'foghorn_listener' = 'control'\).*FROM quartermaster\.infrastructure_nodes`
+	controlListenerFilter := `(?s)AND si\.metadata->>'foghorn_listener' = 'internal_control' AND COALESCE.*ORDER BY si\.updated_at DESC.*FROM quartermaster\.infrastructure_nodes`
 	mock.ExpectQuery(controlListenerFilter).
 		WithArgs("edge-eu-1").
 		WillReturnRows(sqlmock.NewRows([]string{"node_id", "cluster_id", "cluster_name", "owner_tenant_id", "name", "advertise_host", "port"}).

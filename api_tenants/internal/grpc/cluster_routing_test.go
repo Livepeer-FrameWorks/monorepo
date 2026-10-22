@@ -644,7 +644,7 @@ func TestGetClusterRoutingReturnsFoghornControlListener(t *testing.T) {
 		"foghorn_advertise_host", "foghorn_port",
 		"media_allow_ingest", "media_allow_serve",
 	}
-	controlListenerFilter := `(?s)FROM quartermaster\.service_cluster_assignments.*\(si\.metadata->>'foghorn_listener' = 'internal_control' OR si\.port = 18019 OR si\.metadata->>'foghorn_listener' = 'control'\)`
+	controlListenerFilter := `(?s)FROM quartermaster\.service_cluster_assignments.*AND si\.metadata->>'foghorn_listener' = 'internal_control' AND COALESCE`
 
 	mock.ExpectQuery("FROM quartermaster.tenants").
 		WithArgs("11111111-1111-4111-8111-111111111111").

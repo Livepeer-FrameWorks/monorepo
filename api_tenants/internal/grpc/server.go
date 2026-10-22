@@ -138,8 +138,6 @@ type InstanceHealthProber func(ctx context.Context, rows []quartermasterdb.Servi
 const (
 	livepeerGatewayServiceType     = "livepeer-gateway"
 	foghornListenerInternalControl = "internal_control"
-	foghornInternalGRPCPort        = 18019
-	foghornExternalGRPCPort        = 18029
 	navigatorDNSSyncTimeout        = 30 * time.Second
 	tenantDNSEntitlementHandoffKey = billingentitlements.TenantDNSHandoffKey
 	navigatorDNSSyncConcurrency    = 4
@@ -1043,7 +1041,7 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *quarter
 			metadataJSON = &emptyMetadata
 		}
 		metadata := req.GetMetadata()
-		isFoghornControlListener = serviceID == "foghorn" && proto == "grpc" && (port == foghornInternalGRPCPort || metadata["foghorn_listener"] == foghornListenerInternalControl)
+		isFoghornControlListener = serviceID == "foghorn" && proto == "grpc" && metadata["foghorn_listener"] == foghornListenerInternalControl
 		requestedInstanceID := strings.TrimSpace(metadata["instance_id"])
 		if isFoghornControlListener && requestedInstanceID != "" {
 			instanceID = requestedInstanceID
@@ -1797,6 +1795,10 @@ func (s *QuartermasterServer) EnableSelfHosting(ctx context.Context, req *quarte
 	if err != nil {
 		return nil, err
 	}
+	foghornPort, err := s.clusterFoghornExternalGRPCPort(ctx, clusterID)
+	if err != nil {
+		return nil, err
+	}
 
 	return &quartermasterpb.EnableSelfHostingResponse{
 		Cluster: cluster,
@@ -1810,7 +1812,7 @@ func (s *QuartermasterServer) EnableSelfHosting(ctx context.Context, req *quarte
 			ExpiresAt: timestamppb.New(expiresAt),
 			CreatedAt: timestamppb.New(now),
 		},
-		FoghornAddr: publicFoghornGRPCAddr(clusterID, controlCell.baseURL),
+		FoghornAddr: publicFoghornGRPCAddr(clusterID, controlCell.baseURL, foghornPort),
 	}, nil
 }
 
@@ -7847,10 +7849,34 @@ func (s *QuartermasterServer) lookupClusterPublicFoghornGRPC(ctx context.Context
 	if err != nil {
 		return "", err
 	}
-	return publicFoghornGRPCAddr(clusterID, rootDomain), nil
+	port, err := s.clusterFoghornExternalGRPCPort(ctx, clusterID)
+	if err != nil {
+		return "", err
+	}
+	return publicFoghornGRPCAddr(clusterID, rootDomain, port), nil
 }
 
-func publicFoghornGRPCAddr(clusterID, baseURL string) string {
+// clusterFoghornExternalGRPCPort returns the port of the external listener
+// the cluster's Foghorn registered with its control listener.
+func (s *QuartermasterServer) clusterFoghornExternalGRPCPort(ctx context.Context, clusterID string) (int, error) {
+	var registered sql.NullString
+	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		var queryErr error
+		registered, queryErr = quartermasterdb.New(s.db).GetClusterFoghornExternalGRPCPort(ctx, clusterID)
+		return queryErr
+	})
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return 0, err
+	}
+	// A Foghorn that registered before it carried its external port listens
+	// on the default.
+	if parsed, convErr := strconv.Atoi(registered.String); convErr == nil && parsed > 0 && parsed <= 65535 {
+		return parsed, nil
+	}
+	return servicedefs.FoghornExternalGRPCPort, nil
+}
+
+func publicFoghornGRPCAddr(clusterID, baseURL string, port int) string {
 	rootDomain := dns.NormalizeDomainScope(baseURL)
 	clusterSlug := dns.SanitizeLabel(clusterID)
 	if rootDomain == "" || clusterSlug == "" {
@@ -7860,7 +7886,7 @@ func publicFoghornGRPCAddr(clusterID, baseURL string) string {
 	if !ok || host == "" {
 		return ""
 	}
-	return net.JoinHostPort(host, strconv.Itoa(foghornExternalGRPCPort))
+	return net.JoinHostPort(host, strconv.Itoa(port))
 }
 
 // lookupClusterFoghornGRPC returns the internal gRPC advertise addr of the

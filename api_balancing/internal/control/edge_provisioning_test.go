@@ -315,3 +315,22 @@ func TestPreRegisterEdge_EmptySanitizedClusterSlugFallsBackToDefault(t *testing.
 		t.Fatalf("expected fallback foghorn addr with default slug, got %q", resp.FoghornGrpcAddr)
 	}
 }
+
+func TestPreRegisterEdgeAdvertisesConfiguredExternalGRPCPort(t *testing.T) {
+	t.Setenv("CLUSTER_ID", "us_west_1")
+	cfg := &appconfig.Foghorn{PlatformRootDomain: "example.com"}
+	cfg.ExternalGRPCBindAddr = ":18129"
+	useFoghornConfig(t, cfg)
+	setMockValidator(t, &quartermasterpb.ValidateBootstrapTokenResponse{Valid: true, Kind: "edge_node", ClusterId: "us_west_1"})
+
+	resp, err := (&EdgeProvisioningServer{}).PreRegisterEdge(context.Background(), &foghornpb.PreRegisterEdgeRequest{
+		EnrollmentToken: "bt_validtoken",
+		ExternalIp:      "1.2.3.4",
+	})
+	if err != nil {
+		t.Fatalf("PreRegisterEdge: %v", err)
+	}
+	if resp.FoghornGrpcAddr != "foghorn.us-west-1.example.com:18129" {
+		t.Fatalf("foghorn_grpc_addr = %q, want the configured external listener port 18129", resp.FoghornGrpcAddr)
+	}
+}

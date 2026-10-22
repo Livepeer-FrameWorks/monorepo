@@ -72,16 +72,16 @@ ON CONFLICT (cluster_id, service_id) DO NOTHING;
 INSERT INTO quartermaster.service_instances (
     id, instance_id, cluster_id, node_id, service_id,
     protocol, advertise_host, port, status, health_status,
-    started_at, created_at, updated_at
+    metadata, started_at, created_at, updated_at
 ) VALUES (
     '5eedf0e1-000b-da7a-f0e1-000bda7a000b',
     'foghorn-b', 'us-primary', 'us-node-1', 'foghorn',
     'grpc', 'foghorn-b', 18019, 'running', 'unknown',
-    NOW(), NOW(), NOW()
+    '{"foghorn_listener": "internal_control"}', NOW(), NOW(), NOW()
 )
 ON CONFLICT (instance_id) DO UPDATE SET
     cluster_id = EXCLUDED.cluster_id, node_id = EXCLUDED.node_id, advertise_host = EXCLUDED.advertise_host,
-    port = EXCLUDED.port, status = 'running', health_status = 'unknown', stopped_at = NULL, updated_at = NOW();
+    port = EXCLUDED.port, metadata = EXCLUDED.metadata, status = 'running', health_status = 'unknown', stopped_at = NULL, updated_at = NOW();
 
 -- foghorn-b serves its own platform cluster and the tenant's virtual private cluster;
 -- ListPeers resolves demo-selfhosted's Foghorn address from this assignment.

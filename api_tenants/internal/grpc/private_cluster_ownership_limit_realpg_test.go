@@ -72,8 +72,8 @@ func verifyPrivateClusterOwnershipLimitSerializes(t *testing.T, db *sql.DB) {
 		VALUES ('owned-limit-cell', 'Owned limit cell', 'edge', 'owned-limit.example', 'platform_official', 'owned-limit-cell', 'owned-limit-cell', 'eu');
 		INSERT INTO quartermaster.services (service_id, name, plane, type, protocol)
 		VALUES ('owned-limit-foghorn', 'Owned limit Foghorn', 'control', 'foghorn', 'grpc');
-		INSERT INTO quartermaster.service_instances (instance_id, cluster_id, service_id, protocol, advertise_host, port, status, health_status)
-		VALUES ('owned-limit-foghorn-1', 'owned-limit-cell', 'owned-limit-foghorn', 'grpc', 'foghorn-1.internal', 18019, 'running', 'healthy');
+		INSERT INTO quartermaster.service_instances (instance_id, cluster_id, service_id, protocol, advertise_host, port, status, health_status, metadata)
+		VALUES ('owned-limit-foghorn-1', 'owned-limit-cell', 'owned-limit-foghorn', 'grpc', 'foghorn-1.internal', 18019, 'running', 'healthy', '{"foghorn_listener":"internal_control"}');
 		INSERT INTO quartermaster.service_cluster_assignments (service_instance_id, cluster_id, source)
 		SELECT id, 'owned-limit-cell', 'gitops_seed' FROM quartermaster.service_instances WHERE instance_id = 'owned-limit-foghorn-1';
 	`); err != nil {

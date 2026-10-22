@@ -24,7 +24,7 @@ WHERE svc.type = 'foghorn'
   AND si.status = 'running'
   AND si.health_status = 'healthy'
   AND si.protocol = 'grpc'
-  AND (si.metadata->>'foghorn_listener' = 'internal_control' OR si.port = 18019 OR si.metadata->>'foghorn_listener' = 'control')
+  AND si.metadata->>'foghorn_listener' = 'internal_control'
   AND sca.id IS NULL
 ORDER BY si.started_at ASC
 LIMIT $2

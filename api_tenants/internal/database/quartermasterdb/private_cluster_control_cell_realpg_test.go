@@ -60,11 +60,11 @@ func TestPrivateClusterControlCellFoghorns_RealPG(t *testing.T) {
 		       ('private-us', 'Private US', 'edge', 'https://us.example', 'tenant_private', 'private-us', 'cell-us');
 		INSERT INTO quartermaster.services (service_id, name, plane, type, protocol)
 		VALUES ('cell-foghorn', 'Cell Foghorn', 'control', 'foghorn', 'grpc');
-		INSERT INTO quartermaster.service_instances (instance_id, cluster_id, service_id, protocol, advertise_host, port, status, health_status)
-		VALUES ('foghorn-eu-1', 'cell-eu', 'cell-foghorn', 'grpc', 'eu-1.internal', 18019, 'running', 'healthy'),
-		       ('foghorn-eu-2', 'cell-eu', 'cell-foghorn', 'grpc', 'eu-2.internal', 18019, 'running', 'healthy'),
-		       ('foghorn-eu-3', 'cell-eu', 'cell-foghorn', 'grpc', 'eu-3.internal', 18019, 'running', 'healthy'),
-		       ('foghorn-us-1', 'cell-us', 'cell-foghorn', 'grpc', 'us-1.internal', 18019, 'running', 'healthy');
+		INSERT INTO quartermaster.service_instances (instance_id, cluster_id, service_id, protocol, advertise_host, port, status, health_status, metadata)
+		VALUES ('foghorn-eu-1', 'cell-eu', 'cell-foghorn', 'grpc', 'eu-1.internal', 18019, 'running', 'healthy', '{"foghorn_listener":"internal_control"}'),
+		       ('foghorn-eu-2', 'cell-eu', 'cell-foghorn', 'grpc', 'eu-2.internal', 18019, 'running', 'healthy', '{"foghorn_listener":"internal_control"}'),
+		       ('foghorn-eu-3', 'cell-eu', 'cell-foghorn', 'grpc', 'eu-3.internal', 18019, 'running', 'healthy', '{"foghorn_listener":"internal_control"}'),
+		       ('foghorn-us-1', 'cell-us', 'cell-foghorn', 'grpc', 'us-1.internal', 18019, 'running', 'healthy', '{"foghorn_listener":"internal_control"}');
 		INSERT INTO quartermaster.service_cluster_assignments (service_instance_id, cluster_id, source)
 		SELECT si.id, si.cluster_id, 'gitops_seed' FROM quartermaster.service_instances si;
 	`)
@@ -94,8 +94,8 @@ func TestPrivateClusterControlCellFoghorns_RealPG(t *testing.T) {
 	}
 
 	exec(`
-		INSERT INTO quartermaster.service_instances (instance_id, cluster_id, service_id, protocol, advertise_host, port, status, health_status)
-		VALUES ('foghorn-eu-4', 'cell-eu', 'cell-foghorn', 'grpc', 'eu-4.internal', 18019, 'running', 'healthy');
+		INSERT INTO quartermaster.service_instances (instance_id, cluster_id, service_id, protocol, advertise_host, port, status, health_status, metadata)
+		VALUES ('foghorn-eu-4', 'cell-eu', 'cell-foghorn', 'grpc', 'eu-4.internal', 18019, 'running', 'healthy', '{"foghorn_listener":"internal_control"}');
 		INSERT INTO quartermaster.service_cluster_assignments (service_instance_id, cluster_id, source)
 		SELECT id, 'cell-eu', 'gitops_seed' FROM quartermaster.service_instances WHERE instance_id = 'foghorn-eu-4';
 		DELETE FROM quartermaster.service_cluster_assignments

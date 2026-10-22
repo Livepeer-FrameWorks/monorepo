@@ -49,7 +49,7 @@ func (q *Queries) DiscoverServicesPage(ctx context.Context, filter ServiceDiscov
 	args := []any{filter.ServiceType}
 	where := "WHERE s.type = $1 AND si.status IN ('running','starting','active')"
 	if filter.ServiceType == "foghorn" {
-		where += " AND si.protocol = 'grpc' AND (si.metadata->>'foghorn_listener' = 'internal_control' OR si.port = 18019 OR si.metadata->>'foghorn_listener' = 'control')"
+		where += " AND si.protocol = 'grpc' AND " + foghornControlListenerFilter
 	}
 	switch filter.Scope {
 	case DiscoveryScopeTenant:

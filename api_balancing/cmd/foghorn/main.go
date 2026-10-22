@@ -59,6 +59,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/qmbootstrap"
 	pkgredis "github.com/Livepeer-FrameWorks/monorepo/pkg/redis"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/server"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus"
@@ -970,7 +971,7 @@ func main() {
 	if qmClient != nil {
 		grpcPort := cfg.InternalGRPCPort
 		if grpcPort <= 0 {
-			grpcPort = controlPortFromBindAddr(internalGRPCBindAddr, 18019)
+			grpcPort = appconfig.PortOfBindAddr(internalGRPCBindAddr, servicedefs.FoghornInternalGRPCPort)
 		}
 		bsReq, bsReqErr := qmbootstrap.NewServiceRequest(qmbootstrap.ServiceRegistration{
 			ServiceType:        "foghorn",
@@ -984,10 +985,7 @@ func main() {
 		if bsReqErr != nil {
 			logger.WithError(bsReqErr).Fatal("Invalid Foghorn service registration")
 		}
-		bsReq.Metadata = map[string]string{
-			"foghorn_listener": "internal_control",
-			"instance_id":      instanceID,
-		}
+		bsReq.Metadata = controlListenerMetadata(cfg, instanceID)
 
 		// Service discovery is a central-plane projection, not a prerequisite
 		// for serving from durable local authority. Give a healthy Quartermaster
@@ -2534,25 +2532,20 @@ func foghornRelayAdvertiseAddr(cfg *appconfig.Foghorn, fallbackAddr string) stri
 		}
 		relayHost = "127.0.0.1"
 	}
-	relayPort := controlPortFromBindAddr(cfg.InternalGRPCBindAddr, 18019)
+	relayPort := appconfig.PortOfBindAddr(cfg.InternalGRPCBindAddr, servicedefs.FoghornInternalGRPCPort)
 	return net.JoinHostPort(relayHost, strconv.Itoa(relayPort))
 }
 
-func controlPortFromBindAddr(bindAddr string, fallback int) int {
-	host, port, err := net.SplitHostPort(strings.TrimSpace(bindAddr))
-	if err != nil {
-		if trimmed, ok := strings.CutPrefix(bindAddr, ":"); ok {
-			port = trimmed
-		} else {
-			return fallback
-		}
+// controlListenerMetadata marks this instance's Quartermaster registration as
+// its internal control listener, which Quartermaster routes mesh clients to by
+// this marker, and carries the external listener's port that Quartermaster
+// hands enrolling edges.
+func controlListenerMetadata(cfg *appconfig.Foghorn, instanceID string) map[string]string {
+	return map[string]string{
+		"foghorn_listener":   "internal_control",
+		"instance_id":        instanceID,
+		"external_grpc_port": strconv.Itoa(cfg.ExternalGRPCPort()),
 	}
-	_ = host
-	parsed, err := strconv.Atoi(port)
-	if err != nil || parsed <= 0 {
-		return fallback
-	}
-	return parsed
 }
 
 func reconnectQuartermaster(

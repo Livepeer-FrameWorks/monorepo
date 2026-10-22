@@ -65,9 +65,9 @@ func TestClusterControlCellReassignment_RealPG(t *testing.T) {
 		       ('private-eu', 'Private EU', 'edge', 'https://eu.example', 'tenant_private', 'private-eu', 'cell-eu', ARRAY['cell-eu']);
 		INSERT INTO quartermaster.services (service_id, name, plane, type, protocol)
 		VALUES ('cell-foghorn', 'Cell Foghorn', 'control', 'foghorn', 'grpc');
-		INSERT INTO quartermaster.service_instances (instance_id, cluster_id, service_id, protocol, advertise_host, port, status, health_status)
-		VALUES ('foghorn-eu-1', 'cell-eu', 'cell-foghorn', 'grpc', 'eu-1.internal', 18019, 'running', 'healthy'),
-		       ('foghorn-us-1', 'cell-us', 'cell-foghorn', 'grpc', 'us-1.internal', 18019, 'running', 'healthy');
+		INSERT INTO quartermaster.service_instances (instance_id, cluster_id, service_id, protocol, advertise_host, port, status, health_status, metadata)
+		VALUES ('foghorn-eu-1', 'cell-eu', 'cell-foghorn', 'grpc', 'eu-1.internal', 18019, 'running', 'healthy', '{"foghorn_listener":"internal_control"}'),
+		       ('foghorn-us-1', 'cell-us', 'cell-foghorn', 'grpc', 'us-1.internal', 18019, 'running', 'healthy', '{"foghorn_listener":"internal_control"}');
 		INSERT INTO quartermaster.service_cluster_assignments (service_instance_id, cluster_id, source)
 		SELECT si.id, si.cluster_id, 'gitops_seed' FROM quartermaster.service_instances si;
 		INSERT INTO quartermaster.infrastructure_nodes (node_id, cluster_id, node_name, node_type)

@@ -8,10 +8,12 @@ import (
 	"fmt"
 	"net"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 )
 
 // FoghornRedis is the Redis connection that Foghorn replicas share state,
@@ -254,6 +256,31 @@ func (c *Foghorn) Validate() error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// ExternalGRPCPort is the port of FOGHORN_EXTERNAL_GRPC_BIND_ADDR, the
+// listener edges dial; servicedefs.FoghornExternalGRPCPort when unset.
+func (c *FoghornListeners) ExternalGRPCPort() int {
+	return PortOfBindAddr(c.ExternalGRPCBindAddr, servicedefs.FoghornExternalGRPCPort)
+}
+
+// PortOfBindAddr returns the port of a host:port or :port bind address, or
+// fallback when it has none.
+func PortOfBindAddr(bindAddr string, fallback int) int {
+	bindAddr = strings.TrimSpace(bindAddr)
+	_, port, err := net.SplitHostPort(bindAddr)
+	if err != nil {
+		trimmed, ok := strings.CutPrefix(bindAddr, ":")
+		if !ok {
+			return fallback
+		}
+		port = trimmed
+	}
+	parsed, err := strconv.Atoi(port)
+	if err != nil || parsed <= 0 || parsed > 65535 {
+		return fallback
+	}
+	return parsed
 }
 
 // FoghornDataMigrations is the configuration of `foghorn data-migrations`.

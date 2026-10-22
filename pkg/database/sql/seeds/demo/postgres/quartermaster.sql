@@ -253,21 +253,22 @@ ON CONFLICT (cluster_id, service_id) DO NOTHING;
 INSERT INTO quartermaster.service_instances (
     id, instance_id, cluster_id, node_id, service_id,
     protocol, advertise_host, port, status, health_status,
-    started_at, created_at, updated_at
+    metadata, started_at, created_at, updated_at
 ) VALUES
--- foghorn-1 gRPC (control plane + relay, docker-compose default 18019)
+-- foghorn-1 gRPC (control plane + relay, docker-compose default 18019),
+-- marked as the internal control listener the way Foghorn registers it
 (
     '5eedf0e1-0001-da7a-f0e1-0001da7a0001',
     'foghorn-1', 'central-primary', 'central-node-1', 'foghorn',
     'grpc', 'foghorn', 18019, 'running', 'unknown',
-    NOW(), NOW(), NOW()
+    '{"foghorn_listener": "internal_control"}', NOW(), NOW(), NOW()
 ),
 -- foghorn-2 gRPC (internal control plane + relay, docker-compose default 18019)
 (
     '5eedf0e1-0002-da7a-f0e1-0002da7a0002',
     'foghorn-2', 'central-primary', 'central-node-1', 'foghorn',
     'grpc', 'foghorn-2', 18019, 'running', 'unknown',
-    NOW(), NOW(), NOW()
+    '{"foghorn_listener": "internal_control"}', NOW(), NOW(), NOW()
 )
 ON CONFLICT (instance_id) DO UPDATE SET
     cluster_id = EXCLUDED.cluster_id,
@@ -276,6 +277,7 @@ ON CONFLICT (instance_id) DO UPDATE SET
     protocol = EXCLUDED.protocol,
     advertise_host = EXCLUDED.advertise_host,
     port = EXCLUDED.port,
+    metadata = EXCLUDED.metadata,
     status = 'running',
     health_status = 'unknown',
     stopped_at = NULL,

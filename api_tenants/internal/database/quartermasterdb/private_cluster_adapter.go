@@ -22,7 +22,7 @@ func (q *Queries) ListFoghornControlCells(ctx context.Context, clusterID, region
 			  AND si.status = 'running'
 			  AND si.health_status = 'healthy'
 			  AND si.protocol = 'grpc'
-			  AND (si.metadata->>'foghorn_listener' = 'internal_control' OR si.port = 18019 OR si.metadata->>'foghorn_listener' = 'control')
+			  AND ` + foghornControlListenerFilter + `
 			  AND ic.cluster_class = 'platform_official'
 			  AND ic.is_active = true`
 	if clusterID != "" {

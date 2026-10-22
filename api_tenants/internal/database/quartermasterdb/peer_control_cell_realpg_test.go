@@ -26,8 +26,8 @@ func TestPeerDiscoveryCanonicalControlCells_RealPG(t *testing.T) {
 		('peer-default', 'Default', 'edge', 'https://default.example', '', '');
 		INSERT INTO quartermaster.services (service_id, name, plane, type, protocol)
 		VALUES ('peer-foghorn', 'Peer Foghorn', 'control', 'foghorn', 'grpc');
-		INSERT INTO quartermaster.service_instances (instance_id, cluster_id, service_id, protocol, advertise_host, port, status, health_status)
-		VALUES ('peer-pool-instance', 'peer-source', 'peer-foghorn', 'grpc', 'foghorn.example', 18019, 'running', 'healthy');
+		INSERT INTO quartermaster.service_instances (instance_id, cluster_id, service_id, protocol, advertise_host, port, status, health_status, metadata)
+		VALUES ('peer-pool-instance', 'peer-source', 'peer-foghorn', 'grpc', 'foghorn.example', 18019, 'running', 'healthy', '{"foghorn_listener":"internal_control"}');
 		INSERT INTO quartermaster.service_cluster_assignments (service_instance_id, cluster_id)
 		SELECT si.id, ic.cluster_id FROM quartermaster.service_instances si
 		CROSS JOIN quartermaster.infrastructure_clusters ic
@@ -85,9 +85,9 @@ func TestPeerDiscoveryAddressIsStableAcrossReplicaHeartbeats_RealPG(t *testing.T
 		('stable-peer', 'Peer', 'edge', 'https://peer.example');
 		INSERT INTO quartermaster.services (service_id, name, plane, type, protocol)
 		VALUES ('stable-foghorn', 'Stable Foghorn', 'control', 'foghorn', 'grpc');
-		INSERT INTO quartermaster.service_instances (instance_id, cluster_id, service_id, protocol, advertise_host, port, status, health_status)
-		VALUES ('stable-peer-b', 'stable-peer', 'stable-foghorn', 'grpc', 'foghorn-b', 18019, 'running', 'healthy'),
-		('stable-peer-b-2', 'stable-peer', 'stable-foghorn', 'grpc', 'foghorn-b-2', 18019, 'running', 'healthy');
+		INSERT INTO quartermaster.service_instances (instance_id, cluster_id, service_id, protocol, advertise_host, port, status, health_status, metadata)
+		VALUES ('stable-peer-b', 'stable-peer', 'stable-foghorn', 'grpc', 'foghorn-b', 18019, 'running', 'healthy', '{"foghorn_listener":"internal_control"}'),
+		('stable-peer-b-2', 'stable-peer', 'stable-foghorn', 'grpc', 'foghorn-b-2', 18019, 'running', 'healthy', '{"foghorn_listener":"internal_control"}');
 		INSERT INTO quartermaster.service_cluster_assignments (service_instance_id, cluster_id)
 		SELECT si.id, 'stable-peer' FROM quartermaster.service_instances si
 		WHERE si.instance_id IN ('stable-peer-b', 'stable-peer-b-2');

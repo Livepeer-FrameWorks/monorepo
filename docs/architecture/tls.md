@@ -210,17 +210,16 @@ Foghorn through Quartermaster routing.
 
 ## Environment Knobs
 
-| Variable                                                      | Scope                                                          |
-| ------------------------------------------------------------- | -------------------------------------------------------------- |
-| `GRPC_TLS_CERT_PATH`, `GRPC_TLS_KEY_PATH`, `GRPC_TLS_CA_PATH` | Internal gRPC TLS files                                        |
-| `GRPC_ALLOW_INSECURE`                                         | Internal gRPC dev/test escape hatch only                       |
-| `BIND_ADDRS`                                                  | Addresses a Go service's listeners bind (empty: every one)     |
-| `<SERVICE>_GRPC_TLS_SERVER_NAME`                              | Per-client override at service entrypoints                     |
-| `FOGHORN_INTERNAL_GRPC_BIND_ADDR`                             | Foghorn internal listener, default `:18019`                    |
-| `FOGHORN_EXTERNAL_GRPC_BIND_ADDR`                             | Foghorn external listener, default `:18029`                    |
-| `FOGHORN_EXTERNAL_GRPC_PORT`                                  | Public edge listener port returned for edge bootstrap          |
-| `FOGHORN_RELAY_ADVERTISE_ADDR`                                | Internal HA relay address stored in Redis connection ownership |
-| `FRAMEWORKS_BOOTSTRAP_INSECURE`                               | Privateer HTTPS bootstrap dev/test escape hatch only           |
+| Variable                                                      | Scope                                                                                   |
+| ------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `GRPC_TLS_CERT_PATH`, `GRPC_TLS_KEY_PATH`, `GRPC_TLS_CA_PATH` | Internal gRPC TLS files                                                                 |
+| `GRPC_ALLOW_INSECURE`                                         | Internal gRPC dev/test escape hatch only                                                |
+| `BIND_ADDRS`                                                  | Addresses a Go service's listeners bind (empty: every one)                              |
+| `<SERVICE>_GRPC_TLS_SERVER_NAME`                              | Per-client override at service entrypoints                                              |
+| `FOGHORN_INTERNAL_GRPC_BIND_ADDR`                             | Foghorn internal listener, default `:18019`                                             |
+| `FOGHORN_EXTERNAL_GRPC_BIND_ADDR`                             | Foghorn external listener, default `:18029`; its port is the one edge bootstrap returns |
+| `FOGHORN_RELAY_ADVERTISE_ADDR`                                | Internal HA relay address stored in Redis connection ownership                          |
+| `FRAMEWORKS_BOOTSTRAP_INSECURE`                               | Privateer HTTPS bootstrap dev/test escape hatch only                                    |
 
 ## Open Items
 
