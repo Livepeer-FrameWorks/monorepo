@@ -83,8 +83,8 @@ opened() {
     [ -n "${VARIANT[$n]}" ] || return 1
     host=$(printf '%s' "$loc" | sed -E 's#^[a-z]+://([^/:]+).*#\1#')
     case "$host" in
-      *edge-b*) EDGE[$n]=$STACK_EDGE_B_SERVICE CELL_REPLICAS[$n]="foghorn-b foghorn-b-2" ;;
-      *) EDGE[$n]=$STACK_EDGE_A_SERVICE CELL_REPLICAS[$n]="foghorn foghorn-2" ;;
+      "${EDGE_B_HOST:-edge-b}" | *edge-b*) EDGE[$n]=$STACK_EDGE_B_SERVICE CELL_REPLICAS[$n]=${STACK_FOGHORN_B_SERVICES:-"foghorn-b foghorn-b-2"} ;;
+      *) EDGE[$n]=$STACK_EDGE_A_SERVICE CELL_REPLICAS[$n]=${STACK_FOGHORN_A_SERVICES:-"foghorn foghorn-2"} ;;
     esac
   done
 }

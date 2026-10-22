@@ -196,6 +196,8 @@ func buildStackTarget(m *inventory.Manifest, edges *inventory.EdgeManifest) (*st
 			return nil, err
 		}
 		t.access = append(t.access, stackTargetPGRow(m, "foghorn_"+strings.ToLower(letter), foghornService, host))
+		// The service-map name covering every replica of the cell's Foghorn.
+		add("STACK_FOGHORN_"+letter+"_SERVICES", foghornService)
 	}
 
 	services, err := stackTargetServiceRows(m)

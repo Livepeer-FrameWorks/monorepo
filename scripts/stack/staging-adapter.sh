@@ -29,9 +29,15 @@ stack_services() {
   awk -F '|' 'NF == 3 && $1 !~ /^#/ && !seen[$1]++ { print $1 }' "$STAGING_SERVICE_MAP_FILE"
 }
 
+# journal_since <since>: a scenario's --since as journalctl takes it. A bare
+# duration ("10m", "that long ago" to docker compose logs) needs a sign.
+journal_since() {
+  if [[ "$1" =~ ^[0-9]+(s|m|h|min)$ ]]; then printf -- '-%s' "$1"; else printf '%s' "$1"; fi
+}
+
 stack_logs() {
   local since='' service targets target host unit
-  if [ "${1:-}" = --since ]; then since=$2; shift 2; fi
+  if [ "${1:-}" = --since ]; then since=$(journal_since "$2"); shift 2; fi
   service=${1:-}
   targets=$(staging_targets "$service") || return 1
   while IFS= read -r target; do
@@ -123,7 +129,8 @@ netfault_stop() {
 }
 
 log_json_at() {
-  local since=$1 filter=$2 service targets target host unit
+  local since filter=$2 service targets target host unit
+  since=$(journal_since "$1")
   shift 2
   for service in "$@"; do
     targets=$(staging_targets "$service") || return 1

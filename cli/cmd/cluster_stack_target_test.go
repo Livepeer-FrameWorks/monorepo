@@ -83,6 +83,8 @@ func TestStackTargetDerivesEndpointsFromManifest(t *testing.T) {
 		"FOGHORN_B_DB":                 "foghorn_b",
 		"STACK_EDGE_STORAGE_DIR":       edgeNativeStorageDir,
 		"CHANDLER_URL":                 "https://chandler.media-eu.staging.example.net",
+		"STACK_FOGHORN_A_SERVICES":     "foghorn-eu",
+		"STACK_FOGHORN_B_SERVICES":     "foghorn-us",
 	}
 	for k, v := range want {
 		if env[k] != v {

@@ -698,6 +698,7 @@ verify-stack-fixtures:
 	bash scripts/stack/test_sweep.sh
 	bash scripts/stack/test_slot_ownership.sh
 	bash scripts/stack/test_list.sh
+	bash scripts/stack/test_staging_adapter.sh
 
 clean:
 	rm -rf bin/
