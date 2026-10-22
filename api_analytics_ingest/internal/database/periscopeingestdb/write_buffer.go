@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	pkgdatabase "github.com/Livepeer-FrameWorks/monorepo/pkg/database"
@@ -108,6 +109,9 @@ type pendingStatement struct {
 	table    string
 	identity *statementIdentity
 	rows     []pendingRow
+	// arrivalIndex is the position of the table's arrival column in each
+	// row's values, or -1.
+	arrivalIndex int
 }
 
 type pendingRow struct {
@@ -116,6 +120,94 @@ type pendingRow struct {
 	values []interface{}
 	id     uuid.UUID
 	scope  rowScope
+	// handledAtMS is the arrival column value the handler wrote.
+	handledAtMS int64
+}
+
+// arrivalColumns names, per table, the millisecond column that the ledger
+// rebuilders and the billing summarizer walk as the row's arrival: each
+// cursor reads [start, end) of it up to a settlement lag behind now and never
+// returns. A buffered row stamped when its record was handled could commit
+// after a cursor passed that stamp (a long poll batch, or a flush retried
+// across a ClickHouse outage) and would never be ledgered or billed, so
+// Flush restamps this column as each flush attempt starts.
+var arrivalColumns = map[string]string{
+	"viewer_sessions_final":     "projection_version_ms",
+	"restream_sessions_final":   "projection_version_ms",
+	"stream_sessions_final":     "projection_version_ms",
+	"processing_segments_final": "projection_version_ms",
+	"projection_divergences":    "observed_at_ms",
+	"storage_snapshots":         "ingested_at_ms",
+	"api_requests":              "ingested_at_ms",
+}
+
+// insertColumnIndex returns the position of column in an INSERT's column
+// list, or -1.
+func insertColumnIndex(query, column string) int {
+	open, closing := strings.Index(query, "("), strings.LastIndex(query, ")")
+	if open < 0 || closing < open {
+		return -1
+	}
+	for i, name := range strings.Split(query[open+1:closing], ",") {
+		if strings.TrimSpace(name) == column {
+			return i
+		}
+	}
+	return -1
+}
+
+// arrivalClock keeps restamped arrival values of this process increasing
+// across flushes: a later flush never stamps a row below an earlier flush's.
+var arrivalClock struct {
+	sync.Mutex
+	lastMS int64
+}
+
+// arrivalShift returns the offset that moves handled stamps in
+// [minMS, maxMS] to start at the current time, or just after the last stamp
+// an earlier flush issued, whichever is later. One offset per flush keeps the
+// order the handlers stamped, so a correction still outranks the projection
+// it corrects.
+func arrivalShift(minMS, maxMS int64) int64 {
+	arrivalClock.Lock()
+	defer arrivalClock.Unlock()
+	base := max(time.Now().UnixMilli(), arrivalClock.lastMS+1)
+	shift := max(base-minMS, 0)
+	arrivalClock.lastMS = max(arrivalClock.lastMS, maxMS+shift)
+	return shift
+}
+
+// restampArrivals moves every pending row's arrival column to this flush
+// attempt. A retried flush restamps again from the handled values.
+func (b *WriteBuffer) restampArrivals() {
+	var minMS, maxMS int64
+	found := false
+	for _, st := range b.statements {
+		if st.arrivalIndex < 0 {
+			continue
+		}
+		for _, r := range st.rows {
+			if !found || r.handledAtMS < minMS {
+				minMS = r.handledAtMS
+			}
+			if !found || r.handledAtMS > maxMS {
+				maxMS = r.handledAtMS
+			}
+			found = true
+		}
+	}
+	if !found {
+		return
+	}
+	shift := arrivalShift(minMS, maxMS)
+	for _, st := range b.statements {
+		if st.arrivalIndex < 0 {
+			continue
+		}
+		for i := range st.rows {
+			st.rows[i].values[st.arrivalIndex] = st.rows[i].handledAtMS + shift
+		}
+	}
 }
 
 // NewWriteBuffer returns an empty buffer that inserts through db.
@@ -163,13 +255,21 @@ func (b *WriteBuffer) add(query string, origin any, identity *statementIdentity,
 	}
 	st := b.byQuery[query]
 	if st == nil {
-		st = &pendingStatement{query: query, table: insertTable(query), identity: identity}
+		st = &pendingStatement{query: query, table: insertTable(query), identity: identity, arrivalIndex: -1}
+		if column, ok := arrivalColumns[st.table]; ok {
+			st.arrivalIndex = insertColumnIndex(query, column)
+		}
 		b.byQuery[query] = st
 		b.statements = append(b.statements, st)
 	}
 	recordIdentity, identified := origin.(RecordIdentity)
 	for i := range rows {
 		rows[i].origin = origin
+		if st.arrivalIndex >= 0 && st.arrivalIndex < len(rows[i].values) {
+			if handledAtMS, ok := rows[i].values[st.arrivalIndex].(int64); ok {
+				rows[i].handledAtMS = handledAtMS
+			}
+		}
 		if identity == nil || !identified {
 			continue
 		}
@@ -240,6 +340,7 @@ func (b *WriteBuffer) Flush(ctx context.Context) error {
 	if err := b.dropStoredRows(ctx); err != nil {
 		return err
 	}
+	b.restampArrivals()
 	for len(b.statements) > 0 {
 		st := b.statements[0]
 		if err := b.insertStatement(ctx, st); err != nil {
