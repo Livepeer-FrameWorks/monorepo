@@ -176,6 +176,26 @@ func VerifyEthSignature(address, message, signature string) (bool, error) {
 	return strings.EqualFold(recoveredAddr, address), nil
 }
 
+// SignWalletMessage signs message with a hex secp256k1 private key in the
+// EIP-191 personal_sign format VerifyEthSignature accepts, and returns the
+// key's checksummed address with the 0x-prefixed R|S|V signature (V 27/28).
+func SignWalletMessage(privateKeyHex, message string) (string, string, error) {
+	keyBytes, err := hex.DecodeString(strings.TrimPrefix(strings.TrimSpace(privateKeyHex), "0x"))
+	if err != nil {
+		return "", "", fmt.Errorf("invalid private key hex: %w", err)
+	}
+	if len(keyBytes) != 32 {
+		return "", "", fmt.Errorf("private key must be 32 bytes, got %d", len(keyBytes))
+	}
+	privKey, pubKey := btcec.PrivKeyFromBytes(keyBytes)
+	prefixedMessage := fmt.Sprintf("\x19Ethereum Signed Message:\n%d%s", len(message), message)
+	compact := ecdsa.SignCompact(privKey, keccak256([]byte(prefixedMessage)), false)
+	signature := make([]byte, 0, 65)
+	signature = append(signature, compact[1:65]...)
+	signature = append(signature, compact[0])
+	return pubKeyToEthAddress(pubKey), "0x" + hex.EncodeToString(signature), nil
+}
+
 // makeCompactSig creates a compact signature for btcec recovery
 // btcec expects: [V (1 byte, 27-30)] + [R (32 bytes)] + [S (32 bytes)]
 func makeCompactSig(r, s []byte, v byte) []byte {
