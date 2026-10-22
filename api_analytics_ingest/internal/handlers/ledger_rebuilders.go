@@ -26,10 +26,11 @@ import (
 // See docs/architecture/meter-contracts.md for the projection model.
 //
 // A ledger row's projection_version_ms is the newest source version it was
-// computed from, never the write time. The ledger lease cannot fence
-// ClickHouse writes: a replica that lost its lease during a stall can still
-// write an old chunk after another replica wrote a newer one, and argMax must
-// then keep the projection of the newer source state whichever lands last.
+// computed from, raised to the chunk's version floor (ledgerVersionFloorMS),
+// never the write time. The ledger lease cannot fence ClickHouse writes: a
+// replica that lost its lease during a stall can still write an old chunk
+// after another replica wrote a newer one, and argMax must then keep the
+// projection of the newer source state whichever lands last.
 // storage_gb_seconds_5m is the exception; see rebuildStorageGBSeconds5m.
 
 const (
@@ -69,7 +70,37 @@ const (
 	// LedgerMaxSpan bounds rows emitted by one corrupted or malicious source
 	// fact. Longer sessions must be split upstream or quarantined.
 	LedgerMaxSpan = 90 * 24 * time.Hour
+
+	// LedgerVersionFloorLag bounds how far a ledger row's version may trail
+	// the chunk's lease attempt. Rollups discover ledger changes by
+	// projection_version_ms within a horizon whose shortest is the two-hour
+	// tenant_usage_5m window; one hour plus the chunk timeout stays inside it.
+	LedgerVersionFloorLag = time.Hour
 )
+
+type ledgerLeaseAttemptKey struct{}
+
+// withLedgerLeaseAttempt records when the scheduler began the lease attempt
+// that the rebuild running under ctx holds.
+func withLedgerLeaseAttempt(ctx context.Context, attemptedAt time.Time) context.Context {
+	return context.WithValue(ctx, ledgerLeaseAttemptKey{}, attemptedAt)
+}
+
+// ledgerVersionFloorMS is the lowest version a rebuild under ctx writes. A
+// rebuild run outside the scheduler takes the current time as its attempt.
+//
+// Versions are max(source version, floor). A replica only acquires the lease
+// after the previous holder lost it, so its attempt, and therefore its floor,
+// follows the stale holder's; floors also rise chunk by chunk. A stale chunk
+// thus never outranks a newer one, and a chunk caught up long after its source
+// facts still carries a version every rollup discovers.
+func ledgerVersionFloorMS(ctx context.Context) int64 {
+	attemptedAt, ok := ctx.Value(ledgerLeaseAttemptKey{}).(time.Time)
+	if !ok {
+		attemptedAt = time.Now()
+	}
+	return attemptedAt.Add(-LedgerVersionFloorLag).UnixMilli()
+}
 
 // LedgerScheduler runs the six ledger rebuilders on independent goroutines.
 // Each runs at LedgerRebuildInterval with its own ticker.
@@ -136,7 +167,8 @@ func (h *AnalyticsHandler) rebuildDeliveryUsage5m(ctx context.Context, windowSta
 	}
 	desiredByIdentity := make(map[deliveryUsageIdentity]map[deliveryUsageWindowKey]struct{})
 	sourceVersionByIdentity := make(map[deliveryUsageIdentity]int64)
-	if err := h.reconcilePlaybackDeliveryUsage5m(ctx, windowStart, windowEnd, desiredByIdentity, sourceVersionByIdentity, emit); err != nil {
+	versionFloorMS := ledgerVersionFloorMS(ctx)
+	if err := h.reconcilePlaybackDeliveryUsage5m(ctx, windowStart, windowEnd, versionFloorMS, desiredByIdentity, sourceVersionByIdentity, emit); err != nil {
 		return err
 	}
 	rows, err := h.clickhouse.Query(ctx, `
@@ -177,6 +209,7 @@ func (h *AnalyticsHandler) rebuildDeliveryUsage5m(ctx context.Context, windowSta
 		if scanErr := rows.Scan(&s.tenantID, &s.nodeID, &s.deliveryID, &s.kind, &s.sourceEventID, &s.sourceVersionMS, &s.clusterID, &s.streamID, &s.platform, &s.state, &s.startMS, &s.endMS, &s.upBytes, &s.downBytes); scanErr != nil {
 			return fmt.Errorf("delivery_usage_5m scan: %w", scanErr)
 		}
+		s.sourceVersionMS = max(s.sourceVersionMS, versionFloorMS)
 		identity := deliveryUsageIdentity{tenantID: s.tenantID, nodeID: s.nodeID, kind: s.kind, deliveryID: s.deliveryID}
 		sourceVersionByIdentity[identity] = s.sourceVersionMS
 		if (s.state != "idle" && s.state != "failed") || s.startMS <= 0 || s.endMS <= s.startMS {
@@ -244,7 +277,7 @@ func (h *AnalyticsHandler) rebuildDeliveryUsage5m(ctx context.Context, windowSta
 	return flush()
 }
 
-func (h *AnalyticsHandler) reconcilePlaybackDeliveryUsage5m(ctx context.Context, windowStart, windowEnd time.Time, desiredByIdentity map[deliveryUsageIdentity]map[deliveryUsageWindowKey]struct{}, sourceVersionByIdentity map[deliveryUsageIdentity]int64, emit func(deliveryUsageEmission) error) error {
+func (h *AnalyticsHandler) reconcilePlaybackDeliveryUsage5m(ctx context.Context, windowStart, windowEnd time.Time, versionFloorMS int64, desiredByIdentity map[deliveryUsageIdentity]map[deliveryUsageWindowKey]struct{}, sourceVersionByIdentity map[deliveryUsageIdentity]int64, emit func(deliveryUsageEmission) error) error {
 	rows, err := h.clickhouse.Query(ctx, `
 		WITH sessions AS (
 			SELECT tenant_id, node_id, session_id,
@@ -280,6 +313,7 @@ func (h *AnalyticsHandler) reconcilePlaybackDeliveryUsage5m(ctx context.Context,
 		if scanErr := rows.Scan(&tenantID, &nodeID, &sessionID, &sourceEventID, &sourceVersionMS, &clusterID, &streamID, &startMS, &endMS, &upBytes, &downBytes, &closedReason); scanErr != nil {
 			return fmt.Errorf("delivery_usage_5m playback reconciliation scan: %w", scanErr)
 		}
+		sourceVersionMS = max(sourceVersionMS, versionFloorMS)
 		identity := deliveryUsageIdentity{tenantID: tenantID, nodeID: nodeID, kind: "playback", deliveryID: sessionID}
 		sourceVersionByIdentity[identity] = sourceVersionMS
 		if closedReason != "final" || startMS <= 0 || endMS <= startMS {
@@ -459,6 +493,9 @@ func (s *LedgerScheduler) runLoop(ctx context.Context, name string, run func(con
 		windowEnd := now.Add(-LedgerSettlementLag).Truncate(5 * time.Minute)
 		maxChunks := maxPasses * LedgerCatchupChunksPerPass
 		for chunk := 0; chunk < maxChunks; chunk++ {
+			// Taken before the attempt: a stall after acquiring must not move
+			// this holder's version floor past the next holder's.
+			attemptedAt := time.Now()
 			release, leader, leaderErr := s.lease.TryAcquire(ctx, "ledger:"+name)
 			if leaderErr != nil {
 				s.setLedgerLeader(name, false)
@@ -476,7 +513,7 @@ func (s *LedgerScheduler) runLoop(ctx context.Context, name string, run func(con
 				return
 			}
 			s.setLedgerLeader(name, true)
-			chunkCtx, chunkCancel := context.WithTimeout(ctx, s.chunkTimeout)
+			chunkCtx, chunkCancel := context.WithTimeout(withLedgerLeaseAttempt(ctx, attemptedAt), s.chunkTimeout)
 			caughtUp, passErr := s.runLedgerChunk(chunkCtx, name, windowEnd, run)
 			chunkCancel()
 			releaseCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -712,6 +749,7 @@ func (h *AnalyticsHandler) rebuildViewerUsage5m(ctx context.Context, windowStart
 	}
 	desiredByIdentity := make(map[viewerUsageIdentity]map[viewerUsageWindowKey]struct{})
 	sourceVersionByIdentity := make(map[viewerUsageIdentity]int64)
+	versionFloorMS := ledgerVersionFloorMS(ctx)
 	hadSessions := false
 	for rows.Next() {
 		var s viewerSessionProjection
@@ -719,6 +757,7 @@ func (h *AnalyticsHandler) rebuildViewerUsage5m(ctx context.Context, windowStart
 			return fmt.Errorf("viewer_usage_5m scan: %w", scanErr)
 		}
 		hadSessions = true
+		s.sourceVersionMS = max(s.sourceVersionMS, versionFloorMS)
 		totalSpanMS := s.endMS - s.startMS
 		if totalSpanMS <= 0 {
 			continue
@@ -920,11 +959,13 @@ func (h *AnalyticsHandler) viewerUsageTombstonesForProjectionWindow(ctx context.
 // --- stream_runtime_5m ---
 
 // rebuildStreamRuntime5m versions a final session's rows by its newest
-// stream_sessions_final projection, which lies in [windowStart, windowEnd).
-// Live rows have no source projection: they are versioned one millisecond
-// below windowStart, so a later chunk's live rows replace them and every
-// final row read by this or a later chunk outranks them.
+// stream_sessions_final projection, which lies in [windowStart, windowEnd),
+// raised to the version floor. Live rows have no source projection: they are
+// versioned one millisecond below the larger of windowStart and the floor,
+// so a later chunk's live rows replace them and every final row read by this
+// or a later chunk outranks them.
 func (h *AnalyticsHandler) rebuildStreamRuntime5m(ctx context.Context, windowStart, windowEnd time.Time) error {
+	versionFloorMS := ledgerVersionFloorMS(ctx)
 	batch, err := periscopeingestdb.PrepareStreamRuntime5m(ctx, h.clickhouse)
 	if err != nil {
 		return fmt.Errorf("stream_runtime_5m prepare: %w", err)
@@ -969,6 +1010,7 @@ func (h *AnalyticsHandler) rebuildStreamRuntime5m(ctx context.Context, windowSta
 		if scanErr := rows.Scan(&tenantID, &nodeID, &clusterID, &streamID, &streamName, &sourceEventID, &projectionVersionMS, &startMS, &endMS, &peakViewers, &sessionID); scanErr != nil {
 			return fmt.Errorf("stream_runtime_5m scan: %w", scanErr)
 		}
+		projectionVersionMS = max(projectionVersionMS, versionFloorMS)
 		sessionID = ingestSessionID(sessionID)
 		if startMS <= 0 || endMS <= startMS {
 			resolved, lookupErr := h.lookupStreamRuntimeStart(ctx, tenantID, streamID, nodeID, clusterID, streamName, endMS)
@@ -1054,7 +1096,7 @@ func (h *AnalyticsHandler) rebuildStreamRuntime5m(ctx context.Context, windowSta
 	if windowEndMS := windowEnd.UnixMilli(); liveEndMS > windowEndMS {
 		liveEndMS = windowEndMS
 	}
-	liveProjectionVersionMS := windowStart.UnixMilli() - 1
+	liveProjectionVersionMS := max(windowStart.UnixMilli(), versionFloorMS) - 1
 	for liveRows.Next() {
 		var (
 			tenantID, nodeID, clusterID, streamID, streamName, stateSessionID string
@@ -1562,6 +1604,7 @@ func (h *AnalyticsHandler) storageProjectionDiverged(
 // --- processing_5m ---
 
 func (h *AnalyticsHandler) rebuildProcessing5m(ctx context.Context, windowStart, windowEnd time.Time) error {
+	versionFloorMS := ledgerVersionFloorMS(ctx)
 	// Aggregate processing_segments_final by source_event_id for segments
 	// whose projection_version_ms landed in the replay window. Process,
 	// codec, track, cluster, and media_seconds are materialized with
@@ -1615,6 +1658,7 @@ func (h *AnalyticsHandler) rebuildProcessing5m(ctx context.Context, windowStart,
 		if err := rows.Scan(&windowStartT, &tenantID, &clusterID, &streamID, &processType, &outputCodec, &trackType, &sourceEventID, &rawDurationSeconds, &projectionVersionMS); err != nil {
 			return fmt.Errorf("processing_5m scan: %w", err)
 		}
+		projectionVersionMS = max(projectionVersionMS, versionFloorMS)
 		tenantUUID, tenantErr := uuid.Parse(tenantID)
 		if tenantErr != nil {
 			return fmt.Errorf("processing_5m tenant_id %q: %w", tenantID, tenantErr)
@@ -1659,8 +1703,8 @@ func (h *AnalyticsHandler) rebuildApiUsage5m(ctx context.Context, windowStart, w
 	// uniqCombinedMerge.
 	//
 	// Each row is versioned by the newest ingested_at_ms among the source
-	// events it aggregates: a pass that saw more events for a row's window
-	// carries a newer version than one that saw fewer.
+	// events it aggregates, raised to the version floor: a pass that saw more
+	// events for a row's window carries a newer version than one that saw fewer.
 	if err := h.clickhouse.Exec(ctx, `
 		INSERT INTO periscope.api_usage_5m
 			(window_start, tenant_id, auth_type, operation_type, operation_name, service,
@@ -1714,12 +1758,12 @@ func (h *AnalyticsHandler) rebuildApiUsage5m(ctx context.Context, windowStart, w
 			sum(llm_output_tokens)                       AS llm_output_tokens,
 			uniqCombinedArrayState(user_hashes)          AS unique_users_state,
 			uniqCombinedArrayState(token_hashes)         AS unique_tokens_state,
-			max(source_version_ms)                       AS projection_version_ms,
+			greatest(max(source_version_ms), ?)          AS projection_version_ms,
 			root_fields
 		FROM dedup
 		GROUP BY window_start, tenant_id, auth_type, operation_type, operation_name,
 		         service, llm_model, llm_provider, root_fields`,
-		windowStart.UnixMilli(), windowEnd.UnixMilli()); err != nil {
+		windowStart.UnixMilli(), windowEnd.UnixMilli(), ledgerVersionFloorMS(ctx)); err != nil {
 		return fmt.Errorf("api_usage_5m insert: %w", err)
 	}
 	if h.metrics != nil && h.metrics.HandlerWrites != nil {

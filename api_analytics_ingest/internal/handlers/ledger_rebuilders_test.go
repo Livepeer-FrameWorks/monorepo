@@ -16,9 +16,12 @@ type scriptedLedgerLease struct {
 	calls    int
 	releases int
 	cancel   context.CancelFunc
+	// stall delays each acquisition, as a lease call stuck on storage does.
+	stall time.Duration
 }
 
 func (l *scriptedLedgerLease) TryAcquire(context.Context, string) (func(context.Context) error, bool, error) {
+	time.Sleep(l.stall)
 	l.calls++
 	index := l.calls - 1
 	acquired := index < len(l.results) && l.results[index]
@@ -228,6 +231,27 @@ func TestLedgerRunLoopReacquiresLeasePerChunk(t *testing.T) {
 	}
 }
 
+// A chunk's version floor follows the time its lease attempt began, not the
+// time the lease call returned, so a holder stalled while acquiring cannot
+// floor its rows above the replica that acquires the lease after it.
+func TestLedgerRunLoopFloorsVersionsAtTheLeaseAttempt(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	lease := &scriptedLedgerLease{results: []bool{true}, stall: 50 * time.Millisecond}
+	conn := newFakeClickhouseConn()
+	scheduler := NewLedgerScheduler(NewAnalyticsHandler(conn, logging.NewLogger(), nil), lease)
+	before := time.Now()
+	var floorMS int64
+	scheduler.runLoop(ctx, "viewer_usage_5m", func(runCtx context.Context, _, _ time.Time) error {
+		floorMS = ledgerVersionFloorMS(runCtx)
+		cancel()
+		return nil
+	})
+	attempt := time.UnixMilli(floorMS).Add(LedgerVersionFloorLag)
+	if attempt.Before(before.Truncate(time.Millisecond)) || !attempt.Before(before.Add(lease.stall)) {
+		t.Fatalf("version floor follows %s, want the attempt start between %s and the end of the %s acquisition stall", attempt, before, lease.stall)
+	}
+}
+
 func TestLedgerRunLoopBoundsHungChunk(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -371,7 +395,8 @@ func TestRebuildViewerUsage5mSplitsSessionAcrossWindows(t *testing.T) {
 		ledgerTestTenantID, "n1", "s1", sourceVersionMS, "evt-1", "c1", ledgerTestStreamID,
 		start, end, uint32(420), upBytes, downBytes)
 
-	if err := handler.rebuildViewerUsage5m(context.Background(), time.UnixMilli(start), time.UnixMilli(end)); err != nil {
+	leaseCtx := withLedgerLeaseAttempt(context.Background(), time.UnixMilli(start))
+	if err := handler.rebuildViewerUsage5m(leaseCtx, time.UnixMilli(start), time.UnixMilli(end)); err != nil {
 		t.Fatalf("rebuildViewerUsage5m: %v", err)
 	}
 
@@ -429,7 +454,8 @@ func TestRebuildDeliveryUsage5mProjectsRestreamAndReconcilesPlayback(t *testing.
 	conn.addQueryRow("periscope.viewer_sessions_final", ledgerTestTenantID, "edge-a", "viewer-session", "viewer-event", playbackVersionMS,
 		"cluster-a", ledgerTestStreamID, start, end, uint64(10), uint64(20), "final")
 
-	if err := handler.rebuildDeliveryUsage5m(context.Background(), time.UnixMilli(start), time.UnixMilli(end+1)); err != nil {
+	leaseCtx := withLedgerLeaseAttempt(context.Background(), time.UnixMilli(start))
+	if err := handler.rebuildDeliveryUsage5m(leaseCtx, time.UnixMilli(start), time.UnixMilli(end+1)); err != nil {
 		t.Fatalf("rebuildDeliveryUsage5m: %v", err)
 	}
 	batch := conn.batches["periscope.delivery_usage_5m"]
@@ -596,7 +622,7 @@ func TestRebuildProcessing5mPassesThroughAggregatedRow(t *testing.T) {
 	conn.addQueryRow("periscope.processing_segments_final",
 		w, ledgerTestTenantID, "c1", ledgerTestStreamID, "transcode", "h264", "video", "evt-1", float64(42.5), sourceVersionMS)
 
-	if err := handler.rebuildProcessing5m(context.Background(), w, w.Add(5*time.Minute)); err != nil {
+	if err := handler.rebuildProcessing5m(withLedgerLeaseAttempt(context.Background(), w), w, w.Add(5*time.Minute)); err != nil {
 		t.Fatalf("rebuildProcessing5m: %v", err)
 	}
 
@@ -734,7 +760,7 @@ func TestStreamRuntimeRebuilderResolvesZeroDurationFinalFromEventLog(t *testing.
 	)
 	conn.addQueryRow("periscope.stream_event_log", start.UnixMilli())
 
-	if err := handler.rebuildStreamRuntime5m(context.Background(), end.Add(-5*time.Minute), end.Add(5*time.Minute)); err != nil {
+	if err := handler.rebuildStreamRuntime5m(withLedgerLeaseAttempt(context.Background(), end), end.Add(-5*time.Minute), end.Add(5*time.Minute)); err != nil {
 		t.Fatalf("rebuildStreamRuntime5m: %v", err)
 	}
 
@@ -822,7 +848,7 @@ func TestStreamRuntimeRebuilderEmitsLiveStateWindow(t *testing.T) {
 		int64(5),
 	)
 
-	if err := handler.rebuildStreamRuntime5m(context.Background(), windowStart, windowEnd); err != nil {
+	if err := handler.rebuildStreamRuntime5m(withLedgerLeaseAttempt(context.Background(), windowEnd), windowStart, windowEnd); err != nil {
 		t.Fatalf("rebuildStreamRuntime5m: %v", err)
 	}
 

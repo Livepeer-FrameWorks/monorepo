@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/testutil/dockerch"
 	"github.com/google/uuid"
@@ -26,19 +27,40 @@ func TestLedgerKeepsNewerSourceStateWhenStaleChunkLandsLast_RealClickHouse(t *te
 	}
 	conn := dockerch.StartCurrent(t, root, "fw-ledger-stale-chunk").Native
 	h := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+
+	// Each chunk runs under its own lease attempt. The stalled replica A
+	// attempted its lease before replica B took the lease over from it.
+	attemptA := time.Now()
+	for _, mode := range []struct {
+		name      string
+		sourceAge time.Duration
+	}{
+		// Sources newer than the version floor: rows carry source versions.
+		{"source versions", 30 * time.Minute},
+		// A catch-up on week-old sources: rows carry their chunk's floor.
+		{"version floors", 8 * 24 * time.Hour},
+	} {
+		t.Run(mode.name, func(t *testing.T) {
+			requireStaleChunkLosesToNewerChunk(t, conn, h, mode.sourceAge, attemptA, attemptA.Add(time.Second))
+		})
+	}
+}
+
+func requireStaleChunkLosesToNewerChunk(t *testing.T, conn database.ClickHouseNativeConn, h *AnalyticsHandler, sourceAge time.Duration, attemptA, attemptB time.Time) {
+	t.Helper()
 	ctx := context.Background()
 
 	tenantID, streamID := uuid.NewString(), uuid.NewString()
 	tenantUUID, streamUUID := uuid.MustParse(tenantID), uuid.MustParse(streamID)
 	const node, cluster = "edge-stale", "media-stale"
 
-	chunkN := time.Now().UTC().Add(-30 * time.Minute).Truncate(5 * time.Minute)
+	chunkN := time.Now().UTC().Add(-sourceAge).Truncate(5 * time.Minute)
 	chunkNext := chunkN.Add(5 * time.Minute)
 	chunkEnd := chunkNext.Add(5 * time.Minute)
 	olderVersionMS := chunkN.UnixMilli() + 1000
 	newerVersionMS := chunkNext.UnixMilli() + 1000
 
-	sessionStart := time.Now().UTC().Add(-2 * time.Hour).Truncate(5 * time.Minute)
+	sessionStart := chunkN.Add(-90 * time.Minute)
 	startMS := sessionStart.UnixMilli()
 	longEndMS := sessionStart.Add(15 * time.Minute).UnixMilli()
 	shortEndMS := sessionStart.Add(5 * time.Minute).UnixMilli()
@@ -116,10 +138,10 @@ func TestLedgerKeepsNewerSourceStateWhenStaleChunkLandsLast_RealClickHouse(t *te
 		{"stream_runtime_5m", h.rebuildStreamRuntime5m},
 		{"processing_5m", h.rebuildProcessing5m},
 	}
-	rebuild := func(who string, start, end time.Time) {
+	rebuild := func(who string, attempt, start, end time.Time) {
 		t.Helper()
 		for _, r := range rebuilders {
-			if err := r.run(ctx, start, end); err != nil {
+			if err := r.run(withLedgerLeaseAttempt(ctx, attempt), start, end); err != nil {
 				t.Fatalf("%s %s [%s, %s): %v", who, r.name, start, end, err)
 			}
 		}
@@ -182,10 +204,10 @@ func TestLedgerKeepsNewerSourceStateWhenStaleChunkLandsLast_RealClickHouse(t *te
 
 	// Replica B rebuilds chunk N and then chunk N+1; the stalled replica A
 	// finishes its chunk N projection afterwards.
-	rebuild("B", chunkN, chunkNext)
-	rebuild("B", chunkNext, chunkEnd)
+	rebuild("B", attemptB, chunkN, chunkNext)
+	rebuild("B", attemptB.Add(time.Second), chunkNext, chunkEnd)
 	requireNewerState("after B rebuilt chunk N+1")
-	rebuild("stale A", chunkN, chunkNext)
+	rebuild("stale A", attemptA, chunkN, chunkNext)
 	requireNewerState("after stale A rebuilt chunk N")
 }
 
