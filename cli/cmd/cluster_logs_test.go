@@ -14,7 +14,8 @@ func TestLogsSnapshotScriptIncludesPrivateerAndRedisDiagnostics(t *testing.T) {
 		"SyncMesh|sync infrastructure",
 		"http://127.0.0.1:18012/health",
 		"== durable trigger WAL diagnostics ==",
-		"http://127.0.0.1:18007/triggers/wal",
+		"HELMSMAN_MANAGEMENT_PORT=18017",
+		"http://127.0.0.1:${HELMSMAN_MANAGEMENT_PORT}/triggers/wal",
 		"trigger ack failure context",
 		"== telemetry remote write diagnostics ==",
 		"/etc/vmauth/config.yml",
@@ -40,5 +41,9 @@ func TestLogsSnapshotScriptIncludesPrivateerAndRedisDiagnostics(t *testing.T) {
 		if !strings.Contains(script, want) {
 			t.Fatalf("snapshot script missing %q", want)
 		}
+	}
+	// The trigger WAL routes live only on Helmsman's management listener.
+	if strings.Contains(script, ":18007/triggers/wal") {
+		t.Fatal("snapshot script reads the trigger WAL from Helmsman's data-plane port")
 	}
 }

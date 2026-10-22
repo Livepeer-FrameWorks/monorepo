@@ -21,6 +21,7 @@ import (
 	"frameworks/cli/pkg/ssh"
 	"frameworks/cli/pkg/system"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 	"github.com/spf13/cobra"
 	"golang.org/x/sync/errgroup"
 )
@@ -647,6 +648,7 @@ set +e
 SINCE=%s
 BOOT=%s
 TAIL=%d
+HELMSMAN_MANAGEMENT_PORT=%d
 run_journal() {
   if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
     sudo journalctl "$@"
@@ -760,7 +762,7 @@ if systemctl list-unit-files frameworks-helmsman.service --no-legend --no-pager 
   systemctl show frameworks-helmsman.service -p ActiveState -p SubState -p MainPID -p ExecMainStatus -p NRestarts --no-page 2>/dev/null || true
   echo "-- trigger WAL admin snapshot --"
   if command -v curl >/dev/null 2>&1; then
-    curl -fsS --max-time 2 http://127.0.0.1:18007/triggers/wal 2>&1 || true
+    curl -fsS --max-time 2 "http://127.0.0.1:${HELMSMAN_MANAGEMENT_PORT}/triggers/wal" 2>&1 || true
     echo
   fi
   echo "-- trigger ack failure context --"
@@ -896,7 +898,7 @@ if [ -d /etc/frameworks/pki/services ]; then
   done
 fi
 exit 0
-`, ssh.ShellQuote(opts.Since), boot, opts.Tail)
+`, ssh.ShellQuote(opts.Since), boot, opts.Tail, servicedefs.HelmsmanManagementPort)
 }
 
 func streamLogCommand(ctx context.Context, host inventory.Host, sshKey, command string) error {
