@@ -2,10 +2,13 @@ package stripe
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"maps"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -538,13 +541,15 @@ func (c *Client) FindOrCreateProduct(ctx context.Context, knownProductID, tierNa
 		return nil, fmt.Errorf("failed to search Stripe products: %w", err)
 	}
 
-	prod, err := stripeproduct.New(&stripe.ProductParams{
+	createParams := &stripe.ProductParams{
 		Name:        stripe.String(displayName),
 		Description: stripe.String(description),
 		Metadata: map[string]string{
 			"tier_name": tierName,
 		},
-	})
+	}
+	createParams.SetIdempotencyKey(catalogCreateIdempotencyKey("tier-product", knownProductID, tierName, displayName, description))
+	prod, err := stripeproduct.New(createParams)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Stripe product: %w", err)
 	}
@@ -557,9 +562,26 @@ func (c *Client) FindOrCreateProduct(ctx context.Context, knownProductID, tierNa
 	return prod, nil
 }
 
+// catalogCreateIdempotencyKey names one catalog object creation for Stripe.
+// Replicas that sync the same tier at once both miss the other's new object
+// in Stripe's eventually consistent search and list, and send the same create
+// with the same key, so Stripe creates the object once and answers both with
+// it. The key covers every field of the created object, so a changed field
+// creates a new object. It also covers the object the tier row records and
+// the create replaces: Stripe keeps a key for 24 hours and replays the first
+// response for it, so a tier that returns to an earlier amount within that
+// time, after the earlier price was deactivated, still gets a new price.
+func catalogCreateIdempotencyKey(kind string, fields ...string) string {
+	h := sha256.New()
+	for _, field := range fields {
+		_, _ = fmt.Fprintf(h, "%d:%s;", len(field), field)
+	}
+	return "frameworks-" + kind + "-" + hex.EncodeToString(h.Sum(nil))
+}
+
 // FindOrCreatePrice finds an existing recurring price on a product matching the amount/currency/interval,
-// or creates a new one.
-func (c *Client) FindOrCreatePrice(ctx context.Context, productID string, amountCents int64, currency, interval string) (*stripe.Price, error) {
+// or creates a new one. replacedPriceID is the price the tier row records, or empty.
+func (c *Client) FindOrCreatePrice(ctx context.Context, productID, replacedPriceID string, amountCents int64, currency, interval string) (*stripe.Price, error) {
 	listParams := &stripe.PriceListParams{
 		Product:  stripe.String(productID),
 		Active:   stripe.Bool(true),
@@ -584,14 +606,16 @@ func (c *Client) FindOrCreatePrice(ctx context.Context, productID string, amount
 		return nil, fmt.Errorf("failed to list Stripe prices: %w", err)
 	}
 
-	p, err := stripeprice.New(&stripe.PriceParams{
+	createParams := &stripe.PriceParams{
 		Product:    stripe.String(productID),
 		Currency:   stripe.String(strings.ToLower(currency)),
 		UnitAmount: stripe.Int64(amountCents),
 		Recurring: &stripe.PriceRecurringParams{
 			Interval: stripe.String(interval),
 		},
-	})
+	}
+	createParams.SetIdempotencyKey(catalogCreateIdempotencyKey("tier-price", productID, replacedPriceID, strconv.FormatInt(amountCents, 10), strings.ToLower(currency), interval))
+	p, err := stripeprice.New(createParams)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Stripe price: %w", err)
 	}
@@ -609,15 +633,16 @@ func (c *Client) FindOrCreatePrice(ctx context.Context, productID string, amount
 
 // SyncTier ensures a Stripe product and monthly price exist for the given tier.
 // Returns the Stripe product ID and monthly price ID. Idempotent.
-// knownProductID is the product the tier row already records, or empty.
-func (c *Client) SyncTier(ctx context.Context, knownProductID, tierName, displayName, description string, basePrice decimal.Decimal, currency string) (productID, monthlyPriceID string, err error) {
+// knownProductID and knownPriceID are the product and monthly price the tier
+// row already records, or empty.
+func (c *Client) SyncTier(ctx context.Context, knownProductID, knownPriceID, tierName, displayName, description string, basePrice decimal.Decimal, currency string) (productID, monthlyPriceID string, err error) {
 	prod, err := c.FindOrCreateProduct(ctx, knownProductID, tierName, displayName, description)
 	if err != nil {
 		return "", "", err
 	}
 
 	amountCents := basePrice.Mul(decimal.NewFromInt(100)).Round(0).IntPart()
-	p, err := c.FindOrCreatePrice(ctx, prod.ID, amountCents, currency, "month")
+	p, err := c.FindOrCreatePrice(ctx, prod.ID, knownPriceID, amountCents, currency, "month")
 	if err != nil {
 		return prod.ID, "", err
 	}

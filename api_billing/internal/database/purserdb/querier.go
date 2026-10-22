@@ -739,6 +739,9 @@ type Querier interface {
 	// A payment that becomes confirmed issues its receipt, which records the
 	// invoice's tenant and the supplier as they are at confirmation.
 	UpdateBillingPaymentProviderStatus(ctx context.Context, arg UpdateBillingPaymentProviderStatusParams) error
+	// Records the tier's Stripe IDs only while the row still holds the IDs the
+	// sync read, so a replica whose sync another replica already recorded changes
+	// nothing and affects no row.
 	UpdateBillingTierStripeIDs(ctx context.Context, arg UpdateBillingTierStripeIDsParams) (int64, error)
 	UpdateBootstrapBillingTier(ctx context.Context, arg UpdateBootstrapBillingTierParams) (int64, error)
 	UpdateBootstrapClusterPricing(ctx context.Context, arg UpdateBootstrapClusterPricingParams) error

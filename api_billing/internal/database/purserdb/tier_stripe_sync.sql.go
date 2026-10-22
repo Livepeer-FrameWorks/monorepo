@@ -70,16 +70,29 @@ SET stripe_product_id = $1,
     stripe_price_id_monthly = $2,
     updated_at = NOW()
 WHERE id = $3
+  AND stripe_product_id IS NOT DISTINCT FROM $4
+  AND stripe_price_id_monthly IS NOT DISTINCT FROM $5
 `
 
 type UpdateBillingTierStripeIDsParams struct {
-	StripeProductID      sql.NullString `db:"stripe_product_id" json:"stripe_product_id"`
-	StripePriceIDMonthly sql.NullString `db:"stripe_price_id_monthly" json:"stripe_price_id_monthly"`
-	ID                   uuid.UUID      `db:"id" json:"id"`
+	StripeProductID          sql.NullString `db:"stripe_product_id" json:"stripe_product_id"`
+	StripePriceIDMonthly     sql.NullString `db:"stripe_price_id_monthly" json:"stripe_price_id_monthly"`
+	ID                       uuid.UUID      `db:"id" json:"id"`
+	ReadStripeProductID      sql.NullString `db:"read_stripe_product_id" json:"read_stripe_product_id"`
+	ReadStripePriceIDMonthly sql.NullString `db:"read_stripe_price_id_monthly" json:"read_stripe_price_id_monthly"`
 }
 
+// Records the tier's Stripe IDs only while the row still holds the IDs the
+// sync read, so a replica whose sync another replica already recorded changes
+// nothing and affects no row.
 func (q *Queries) UpdateBillingTierStripeIDs(ctx context.Context, arg UpdateBillingTierStripeIDsParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, updateBillingTierStripeIDs, arg.StripeProductID, arg.StripePriceIDMonthly, arg.ID)
+	result, err := q.db.ExecContext(ctx, updateBillingTierStripeIDs,
+		arg.StripeProductID,
+		arg.StripePriceIDMonthly,
+		arg.ID,
+		arg.ReadStripeProductID,
+		arg.ReadStripePriceIDMonthly,
+	)
 	if err != nil {
 		return 0, err
 	}

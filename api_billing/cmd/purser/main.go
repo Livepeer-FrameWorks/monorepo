@@ -447,12 +447,23 @@ func syncBillingTiersWithStripe(ctx context.Context, db *sql.DB, stripeClient *s
 	lockCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 	return database.WithSessionLock(lockCtx, db, "purser-stripe-tier-sync", func() error {
-		return syncBillingTiersWithStripeLocked(ctx, db, stripeClient, logger)
+		return syncBillingTiersWithStripeLocked(ctx, purserdb.New(db), stripeClient, logger)
 	})
 }
 
-func syncBillingTiersWithStripeLocked(ctx context.Context, db *sql.DB, stripeClient *stripe.Client, logger logging.Logger) error {
-	queries := purserdb.New(db)
+// tierStripeStore reads the tiers to sync and records their Stripe IDs.
+type tierStripeStore interface {
+	ListActivePaidBillingTiersForStripe(ctx context.Context) ([]purserdb.ListActivePaidBillingTiersForStripeRow, error)
+	UpdateBillingTierStripeIDs(ctx context.Context, arg purserdb.UpdateBillingTierStripeIDsParams) (int64, error)
+}
+
+// tierStripeCatalog creates and retires a tier's Stripe product and price.
+type tierStripeCatalog interface {
+	SyncTier(ctx context.Context, knownProductID, knownPriceID, tierName, displayName, description string, basePrice decimal.Decimal, currency string) (productID, monthlyPriceID string, err error)
+	DeactivatePrice(ctx context.Context, priceID string) error
+}
+
+func syncBillingTiersWithStripeLocked(ctx context.Context, queries tierStripeStore, stripeClient tierStripeCatalog, logger logging.Logger) error {
 	tiers, err := queries.ListActivePaidBillingTiersForStripe(ctx)
 	if err != nil {
 		return fmt.Errorf("query billing tiers: %w", err)
@@ -464,7 +475,7 @@ func syncBillingTiersWithStripeLocked(ctx context.Context, db *sql.DB, stripeCli
 		if parseErr != nil {
 			return fmt.Errorf("parse tier %s base_price %q: %w", t.TierName, t.BasePrice, parseErr)
 		}
-		productID, priceID, err := stripeClient.SyncTier(ctx, t.StripeProductID.String, t.TierName, t.DisplayName, t.Description, basePrice, t.Currency)
+		productID, priceID, err := stripeClient.SyncTier(ctx, t.StripeProductID.String, t.StripePriceIDMonthly.String, t.TierName, t.DisplayName, t.Description, basePrice, t.Currency)
 		if err != nil {
 			logger.WithError(err).WithField("tier", t.TierName).Error("Failed to sync tier with Stripe")
 			continue
@@ -482,12 +493,23 @@ func syncBillingTiersWithStripeLocked(ctx context.Context, db *sql.DB, stripeCli
 		}
 
 		rows, updateErr := queries.UpdateBillingTierStripeIDs(ctx, purserdb.UpdateBillingTierStripeIDsParams{
-			StripeProductID:      sql.NullString{String: productID, Valid: true},
-			StripePriceIDMonthly: sql.NullString{String: priceID, Valid: true},
-			ID:                   t.ID,
+			StripeProductID:          sql.NullString{String: productID, Valid: true},
+			StripePriceIDMonthly:     sql.NullString{String: priceID, Valid: true},
+			ID:                       t.ID,
+			ReadStripeProductID:      t.StripeProductID,
+			ReadStripePriceIDMonthly: t.StripePriceIDMonthly,
 		})
-		if updateErr != nil || rows != 1 {
-			logger.WithError(updateErr).WithFields(map[string]any{"tier": t.TierName, "rows_affected": rows}).Error("Failed to update tier Stripe IDs")
+		if updateErr != nil {
+			logger.WithError(updateErr).WithField("tier", t.TierName).Error("Failed to update tier Stripe IDs")
+			continue
+		}
+		// Another replica recorded this tier's Stripe IDs since this sync
+		// read them, and retires the price it replaced itself.
+		if rows != 1 {
+			logger.WithFields(map[string]any{
+				"tier":     t.TierName,
+				"price_id": priceID,
+			}).Warn("Tier Stripe IDs changed since this sync read them; left them and the previous price as recorded")
 			continue
 		}
 

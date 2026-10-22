@@ -42,6 +42,16 @@ func TestTierStripeSyncRepository_RealPG(t *testing.T) {
 	if err != nil || rows != 1 {
 		t.Fatalf("update Stripe IDs rows/error = %d/%v", rows, err)
 	}
+	// A second sync that read the row before the first recorded its IDs
+	// changes nothing.
+	rows, err = queries.UpdateBillingTierStripeIDs(ctx, purserdb.UpdateBillingTierStripeIDsParams{
+		StripeProductID:      sql.NullString{String: "prod_duplicate", Valid: true},
+		StripePriceIDMonthly: sql.NullString{String: "price_duplicate", Valid: true},
+		ID:                   paidID,
+	})
+	if err != nil || rows != 0 {
+		t.Fatalf("stale Stripe ID update rows/error = %d/%v, want 0 rows", rows, err)
+	}
 
 	var productID, priceID string
 	if err := db.QueryRowContext(ctx, `
