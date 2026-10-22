@@ -31,7 +31,7 @@
 # Same contract as configure-linux.yml: a changed assignment restarts.
 - name: Report MistServer environment change
   ansible.builtin.debug:
-    msg: The MistServer environment changes; MistServer restarts to start with it
+    msg: Compared the MistServer environment with the installed one; a changed assignment (reported as changed) restarts MistServer
   changed_when: >-
     mistserver_current_env.content is defined
     and (mistserver_current_env.content | b64decode | regex_findall(mistserver_env_assignment_pattern))
@@ -79,7 +79,7 @@
 # process's environment, so a changed EnvironmentVariables dict restarts.
 - name: Report MistServer launchd environment change
   ansible.builtin.debug:
-    msg: The MistServer launchd environment changes; MistServer restarts to start with it
+    msg: Compared the MistServer launchd environment with the installed plist; a changed environment (reported as changed) restarts MistServer
   changed_when: >-
     mistserver_current_plist.content is defined
     and (mistserver_current_plist.content | b64decode | regex_findall(mistserver_plist_environment_pattern))

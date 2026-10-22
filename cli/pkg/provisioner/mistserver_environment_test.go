@@ -38,6 +38,25 @@ func environmentChangeTask(t *testing.T, file, name, pattern string) {
 	}
 }
 
+// The environment-change report tasks print their message on every run and
+// mark changed only when the environment differs, so the message may not
+// claim a change and a restart took place.
+func TestMistserverEnvironmentReportsDoNotClaimAChangeEveryRun(t *testing.T) {
+	claim := regexp.MustCompile(`(?i)environment changes; MistServer restarts`)
+	for _, c := range []struct{ file, name string }{
+		{"tasks/configure-linux.yml", "Report MistServer environment change"},
+		{"tasks/configure-linux.yml", "Report MistServer unit environment change"},
+		{"tasks/configure-darwin.yml", "Report MistServer environment change"},
+		{"tasks/configure-darwin.yml", "Report MistServer launchd environment change"},
+	} {
+		task := roleTaskByName(t, mistserverRoleDir+c.file, c.name)
+		debug, _ := task["ansible.builtin.debug"].(map[string]any)
+		if msg := stringValue(debug["msg"]); msg == "" || claim.MatchString(msg) {
+			t.Errorf("%s %q prints %q on every run, including runs where nothing changed", c.file, c.name, msg)
+		}
+	}
+}
+
 func environmentChanged(re *regexp.Regexp, installed, rendered string) bool {
 	return !slices.Equal(re.FindAllString(installed, -1), re.FindAllString(rendered, -1))
 }

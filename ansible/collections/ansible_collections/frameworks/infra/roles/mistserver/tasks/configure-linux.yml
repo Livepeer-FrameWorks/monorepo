@@ -87,7 +87,7 @@
 # MistServer; a change to the header comment alone waits for the next start.
 - name: Report MistServer environment change
   ansible.builtin.debug:
-    msg: The MistServer environment changes; MistServer restarts to start with it
+    msg: Compared the MistServer environment with the installed one; a changed assignment (reported as changed) restarts MistServer
   changed_when: >-
     mistserver_current_env.content is defined
     and (mistserver_current_env.content | b64decode | regex_findall(mistserver_env_assignment_pattern))
@@ -117,7 +117,7 @@
 # (ExecStart and friends) only matter at the next start.
 - name: Report MistServer unit environment change
   ansible.builtin.debug:
-    msg: The MistServer unit environment changes; MistServer restarts to start with it
+    msg: Compared the MistServer unit environment with the installed unit; a changed environment (reported as changed) restarts MistServer
   changed_when: >-
     mistserver_current_unit.content is defined
     and (mistserver_current_unit.content | b64decode | regex_findall(mistserver_unit_environment_pattern))
