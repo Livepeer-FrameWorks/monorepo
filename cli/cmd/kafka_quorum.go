@@ -15,9 +15,10 @@ import (
 
 // kafkaQuorumFollowerLagLimit is how long a voter may go without catching up
 // to the leader before the quorum counts as degraded. Healthy voters catch up
-// within one fetch (sub-second); past 2.5x controller.quorum.fetch.timeout.ms
-// (2 s, the Kafka default the kafka role keeps) the leader's quorum check no
-// longer counts the voter, so one more voter loss makes the leader resign.
+// within one fetch (sub-second), so 5 s flags a lagging voter well before the
+// leader's quorum check stops counting it, which happens only after 1.5x
+// controller.quorum.fetch.timeout.ms (10 s, set by the kafka role) without
+// its fetches.
 const kafkaQuorumFollowerLagLimit = 5 * time.Second
 
 // doctorKafkaQuorumWindow is how far back `cluster doctor` counts controller
