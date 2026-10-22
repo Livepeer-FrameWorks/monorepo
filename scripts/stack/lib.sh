@@ -313,9 +313,11 @@ cleanup_run_objects() {
   done
   # The whole listing is read before deleting so the offset pages do not shift.
   while :; do
-    page=$(gql 'query($i:StorageArtifactsInput){storageArtifactsConnection(input:$i){nodes{kind id title} hasNextPage}}' \
+    page=$(gql 'query($i:StorageArtifactsInput){storageArtifactsConnection(input:$i){nodes{kind hash title} hasNextPage}}' \
       "$(jq -cn --argjson o "$offset" '{i:{first:100, offset:$o}}')" "$token")
-    assets+=$(jq -r '.data.storageArtifactsConnection.nodes[]? | select((.kind == "VOD" or .kind == "CLIP") and (.title | startswith("stack "))) | [.kind, .id, .title] | @tsv' <<<"$page")$'\n'
+    # The deletes take the asset's relay id (VodAsset:/Clip:<hash>), not the storage artifact's id.
+    assets+=$(jq -r '.data.storageArtifactsConnection.nodes[]? | select((.kind == "VOD" or .kind == "CLIP") and (.title | startswith("stack ")))
+      | [.kind, ((if .kind == "VOD" then "VodAsset:" else "Clip:" end) + .hash | @base64), .title] | @tsv' <<<"$page")$'\n'
     [ "$(jq -r '.data.storageArtifactsConnection.hasNextPage // false' <<<"$page")" = true ] || break
     offset=$((offset + 100))
   done

@@ -138,7 +138,8 @@ expect "placement measures a live session after its first setup publisher is ref
       echo '{"data":{"streamsConnection":{"nodes":[{"id":"stale-stream","name":"stack-recording-1"},{"id":"user-stream","name":"my show"}],"pageInfo":{"hasNextPage":false}}}}'
       ;;
     *storageArtifactsConnection*)
-      echo '{"data":{"storageArtifactsConnection":{"nodes":[{"kind":"VOD","id":"stale-vod","title":"stack cross-cell vod"},{"kind":"CLIP","id":"stale-clip","title":"stack clip a"},{"kind":"VOD","id":"user-vod","title":"stacking chairs"},{"kind":"DVR","id":"stale-dvr","title":"stack-recording-1"}],"hasNextPage":false}}}'
+      # A storage artifact's id is not the asset's relay id; deletes take VodAsset:/Clip:<hash>.
+      echo '{"data":{"storageArtifactsConnection":{"nodes":[{"kind":"VOD","id":"a1","hash":"vodhash","title":"stack cross-cell vod"},{"kind":"CLIP","id":"a2","hash":"cliphash","title":"stack clip a"},{"kind":"VOD","id":"a3","hash":"userhash","title":"stacking chairs"},{"kind":"DVR","id":"a4","hash":"dvrhash","title":"stack-recording-1"}],"hasNextPage":false}}}'
       ;;
     *deleteStream*) echo "deleteStream $(jq -r .id <<<"$2")" >>"$work/cleanup-calls"; echo '{"data":{"deleteStream":{"__typename":"DeleteSuccess"}}}' ;;
     *deleteVodAsset*) echo "deleteVodAsset $(jq -r .id <<<"$2")" >>"$work/cleanup-calls"; echo '{"data":{"deleteVodAsset":{"__typename":"DeleteSuccess"}}}' ;;
@@ -148,7 +149,7 @@ expect "placement measures a live session after its first setup publisher is ref
   cleanup_run_objects >"$work/cleanup.log" 2>&1
 ) || true
 deleted_exactly_the_runs_objects() {
-  [ "$(sort "$work/cleanup-calls" 2>/dev/null | tr '\n' ' ')" = "deleteClip stale-clip deleteStream ledger-stream deleteStream stale-stream deleteVodAsset stale-vod " ] ||
+  [ "$(sort "$work/cleanup-calls" 2>/dev/null | tr '\n' ' ')" = "deleteClip $(printf 'Clip:cliphash' | base64) deleteStream ledger-stream deleteStream stale-stream deleteVodAsset $(printf 'VodAsset:vodhash' | base64) " ] ||
     { cat "$work/cleanup-calls" "$work/cleanup.log" >&2 2>/dev/null; return 1; }
 }
 expect "run cleanup deletes the ledger's and stack-named streams, VODs and clips, and nothing else" deleted_exactly_the_runs_objects
