@@ -893,6 +893,33 @@ frameworks cluster logs snapshot --boot --tail 800 --edge-manifest ./clusters/pr
 frameworks cluster logs snapshot --output /tmp/fw-logs
 ```
 
+### frameworks cluster stack-target
+
+Describe a deployed cluster for the stack scenario runner
+(`STACK_TARGET=staging make verify-stack`). Everything comes from the cluster
+manifest, its edge manifest, the bootstrap overlay and their SOPS files:
+
+- `target.env`: public Bridge and per-cell Foghorn endpoints, each cell's edge, database names
+- `service-map.txt`: one `service|ssh-target|systemd-unit` row per replica
+- `access-map.txt`: how each database and ClickHouse is read over SSH; credentials stay on the hosts
+- `operator.env` (mode 0600): the bootstrap overlay's platform operator login
+
+**Usage:**
+
+```bash
+frameworks cluster stack-target --out-dir <dir> [flags]
+```
+
+**Flags:**
+
+- `--out-dir string` - Directory to write the target files into (created mode 0700)
+
+**Examples:**
+
+```bash
+frameworks cluster stack-target --gitops-dir ../gitops --cluster staging --out-dir .stack/staging/target
+```
+
 ### frameworks cluster snapshot
 
 Collect a bounded incident bundle from the cluster manifest. The snapshot

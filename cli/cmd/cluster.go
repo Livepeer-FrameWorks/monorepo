@@ -71,6 +71,7 @@ invocation. Explicit flags always win over saved context defaults.`,
 	cluster.AddCommand(newClusterInitCmd())
 	cluster.AddCommand(newClusterClickHouseCmd())
 	cluster.AddCommand(newClusterLogsCmd())
+	cluster.AddCommand(newClusterStackTargetCmd())
 	cluster.AddCommand(newClusterSnapshotCmd())
 	cluster.AddCommand(newClusterRestartCmd())
 	cluster.AddCommand(newClusterStopCmd())

@@ -7118,7 +7118,7 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 		// HELMSMAN_STORAGE_LOCAL_PATH so Foghorn-issued DVR work never falls
 		// back to MistServer's historical /data path.
 		if env["FOGHORN_DEFAULT_STORAGE_BASE"] == "" {
-			env["FOGHORN_DEFAULT_STORAGE_BASE"] = "/var/lib/frameworks/edge-storage"
+			env["FOGHORN_DEFAULT_STORAGE_BASE"] = edgeNativeStorageDir
 		}
 	}
 	if baseName == "navigator" {
