@@ -36,7 +36,7 @@ run_as() { # run_as <scenario> [test token]: the tenant, token, session jar and 
     # shellcheck source=scripts/stack/test-tenant.sh
     . "$here/test-tenant.sh" || exit 1
     TEST_TENANT_ID=test-tenant TEST_API_TOKEN=${2-test-token}
-    TEST_BLOCKED_REASON='no STACK_PRICED_TENANT_WALLET_KEY in secrets/staging.env'
+    TEST_BLOCKED_REASON='no STACK_TEST_TENANT_WALLET_KEY in secrets/staging.env'
     run_scenario_as_its_tenant "$work/$1"
   )
 }
@@ -50,7 +50,7 @@ unavailable_blocks() {
   local out rc
   out=$(run_as test.sh '')
   rc=$?
-  [ "$rc" = 2 ] && [[ "$out" == BLOCKED*"no STACK_PRICED_TENANT_WALLET_KEY"* ]]
+  [ "$rc" = 2 ] && [[ "$out" == BLOCKED*"no STACK_TEST_TENANT_WALLET_KEY"* ]]
 }
 expect "without the test tenant its scenarios are BLOCKED, never run as the run's tenant" unavailable_blocks
 
@@ -103,6 +103,66 @@ body_is_fresh_wallet_login() {
     [ "$(jq -r '.body.address' <<<"$out")" = 0xabc ]
 }
 expect "wallet-login.sh body signs a fresh challenge for the sign-out probe" body_is_fresh_wallet_login
+
+# The sweep covers what test tenant scenarios created: a second pass over the
+# test tenant's own ledger with its own token, without repeating the doctor.
+mkdir -p "$work/sweeprepo/scripts/stack"
+cat >"$work/sweeprepo/scripts/stack/sweep.sh" <<'EOF'
+#!/usr/bin/env bash
+printf '%s|%s|%s|%s|%s|%s\n' "$STACK_TENANT_ID" "$STACK_API_TOKEN" "$STACK_STATE_DIR" "${STACK_SWEEP_DOCTOR:-1}" "$1" "$2" >>"$FIXTURE_DIR/sweeps"
+EOF
+sweep_as_test_tenant() { # sweep_as_test_tenant <test token> <ledger present 0|1>: the sweeps it ran
+  (
+    export STACK_STATE_DIR="$work/sweepstate" STACK_TENANT_ID=operator-tenant STACK_API_TOKEN=operator-token \
+      STACK_REPO="$work/sweeprepo" FIXTURE_DIR="$work"
+    rm -rf "$STACK_STATE_DIR" "$work/sweeps"
+    mkdir -p "$STACK_STATE_DIR/test-tenant"
+    [ "$2" = 1 ] && echo '{"kind":"created"}' >"$STACK_STATE_DIR/test-tenant/sweep-ledger.jsonl"
+    # shellcheck source=scripts/stack/test-tenant.sh
+    . "$here/test-tenant.sh" || exit 1
+    TEST_TENANT_ID=test-tenant TEST_API_TOKEN=$1
+    test_tenant_sweep 1700000000 "$work/windows.tsv"
+    cat "$work/sweeps" 2>/dev/null
+  )
+}
+sweeps_test_ledger() {
+  [ "$(sweep_as_test_tenant test-token 1)" = "test-tenant|test-token|$work/sweepstate/test-tenant|0|1700000000|$work/windows.tsv" ]
+}
+expect "the sweep checks the test tenant's ledger with its token, without a second doctor" sweeps_test_ledger
+no_test_sweep_without_ledger() { [ -z "$(sweep_as_test_tenant test-token 0)" ]; }
+expect "no test tenant sweep when no test tenant scenario created anything" no_test_sweep_without_ledger
+
+key_is_named_for_its_role() {
+  grep -q 'STACK_TEST_TENANT_WALLET_KEY' "$here/test-tenant.sh" && ! grep -q 'STACK_PRICED_TENANT_WALLET_KEY' "$here/test-tenant.sh"
+}
+expect "the wallet key is read as STACK_TEST_TENANT_WALLET_KEY" key_is_named_for_its_role
+
+# Credentials never outlive the run in its evidence directory.
+credentials_purged() {
+  local d="$work/evidence"
+  rm -rf "$d"
+  mkdir -p "$d/test-tenant" "$d/target"
+  for f in session-04.jwt operator.jar login.abc123 billing-cookies test-tenant/session-22.jwt test-tenant/session.jar \
+    test-tenant/wallet.key test-tenant/walletsign target/operator.env cli-restart.env; do echo secret >"$d/$f"; done
+  for f in sweep-ledger.jsonl cleanup.log target/target.env test-tenant/sweep-ledger.jsonl; do echo evidence >"$d/$f"; done
+  (
+    # shellcheck source=scripts/stack/run-credentials.sh
+    . "$here/run-credentials.sh" && purge_run_credentials "$d"
+  )
+  [ -z "$(find "$d" -type f -exec grep -l secret {} +)" ] && [ "$(find "$d" -type f | wc -l | tr -d ' ')" = 4 ]
+}
+expect "a run's credential files are removed and its evidence kept" credentials_purged
+purge_installed_before_first_credential() {
+  # The purge trap is set before the operator login writes its jar, so a run
+  # that stops at login (BLOCKED) leaves no credential behind either.
+  local trap_line jar_line
+  trap_line=$(grep -n "trap 'purge_run_credentials" "$here/verify-target.sh" | head -1 | cut -d: -f1)
+  jar_line=$(grep -n '^code=\$(operator_login' "$here/verify-target.sh" | head -1 | cut -d: -f1)
+  [ -n "$trap_line" ] && [ -n "$jar_line" ] && [ "$trap_line" -lt "$jar_line" ] &&
+    grep -q 'purge_run_credentials "$STACK_STATE_DIR"' "$here/verify-target.sh" &&
+    grep -q 'purge_run_credentials "$stale_dir"' "$here/verify-target.sh"
+}
+expect "verify-target purges credentials on every exit and a killed run's leftovers at start" purge_installed_before_first_credential
 
 [ "$failures" = 0 ] && echo "test tenant checks: ok"
 exit "$failures"

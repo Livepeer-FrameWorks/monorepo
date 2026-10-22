@@ -32,7 +32,11 @@ rc=0
 doctor_allow="$STACK_STATE_DIR/sweep-doctor-allow.tsv"
 cat >"$doctor_allow" <<'ALLOW'
 ALLOW
-if [ "$STACK_TARGET" = staging ]; then
+# STACK_SWEEP_DOCTOR=0: a second pass over another tenant's entities in the
+# same run (verify-target.sh's test tenant); host health was already judged.
+if [ "${STACK_SWEEP_DOCTOR:-1}" = 0 ]; then
+  :
+elif [ "$STACK_TARGET" = staging ]; then
   printf '\n-- sweep[doctor]\n'
   if [ -x "${STACK_REPO:-}/bin/cli" ] && [ -f "${STACK_CLI_MANIFEST:-}" ] && [ -n "${STACK_CLI_CONTEXT:-}" ]; then
     "$STACK_REPO/bin/cli" --context "$STACK_CLI_CONTEXT" cluster doctor --deep --manifest "$STACK_CLI_MANIFEST" \

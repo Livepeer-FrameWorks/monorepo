@@ -7,7 +7,7 @@
 #   (37 signs out every session of the account it uses).
 # The tenant was created once by wallet sign-in (no email or password) and put
 # on the developer tier with a zero-fee, usage-waived operator grant; its key
-# lives in the cluster's SOPS env as STACK_PRICED_TENANT_WALLET_KEY. A test
+# lives in the cluster's SOPS env as STACK_TEST_TENANT_WALLET_KEY. A test
 # tenant scenario keeps its own state directory, so its sweep ledger and
 # cleanup use the test tenant's token.
 
@@ -38,9 +38,9 @@ test_tenant_login() {
   local env_file=$1 cluster=$2 dir code created jwt
   dir=$(test_tenant_dir)
   mkdir -p "$dir" && chmod 700 "$dir"
-  (umask 077 && sops --decrypt "$env_file" 2>/dev/null | sed -n 's/^STACK_PRICED_TENANT_WALLET_KEY=//p' >"$dir/wallet.key")
+  (umask 077 && sops --decrypt "$env_file" 2>/dev/null | sed -n 's/^STACK_TEST_TENANT_WALLET_KEY=//p' >"$dir/wallet.key")
   if [ ! -s "$dir/wallet.key" ]; then
-    TEST_BLOCKED_REASON="no STACK_PRICED_TENANT_WALLET_KEY in $env_file"
+    TEST_BLOCKED_REASON="no STACK_TEST_TENANT_WALLET_KEY in $env_file"
     return 1
   fi
   if ! (cd "$STACK_REPO/scripts/stack/walletsign" && go build -o "$dir/walletsign" .) >"$dir/walletsign-build.log" 2>&1; then
@@ -92,6 +92,18 @@ run_scenario_as_its_tenant() {
   dir=$(test_tenant_dir)
   STACK_TENANT_ID=$TEST_TENANT_ID STACK_API_TOKEN=$TEST_API_TOKEN STACK_SESSION_JAR="$dir/session.jar" \
     STACK_WALLET_SIGNER="$dir/walletsign" STACK_WALLET_KEY_FILE="$dir/wallet.key" STACK_STATE_DIR="$dir" bash "$1"
+}
+
+# test_tenant_sweep <since epoch> <windows file>: the sweep's entity checks over
+# what test tenant scenarios created, read with the test tenant's own token
+# from its own ledger. The run's sweep already ran the doctor, so this pass
+# skips it. Nothing to check when no test tenant scenario created anything.
+test_tenant_sweep() {
+  local dir
+  dir=$(test_tenant_dir)
+  [ -n "$TEST_API_TOKEN" ] && [ -s "$dir/sweep-ledger.jsonl" ] || return 0
+  STACK_TENANT_ID=$TEST_TENANT_ID STACK_API_TOKEN=$TEST_API_TOKEN STACK_STATE_DIR="$dir" STACK_SWEEP_DOCTOR=0 \
+    bash "$STACK_REPO/scripts/stack/sweep.sh" "$1" "$2"
 }
 
 # test_tenant_cleanup: deletes what test tenant scenarios created and revokes

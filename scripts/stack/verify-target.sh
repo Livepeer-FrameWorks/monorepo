@@ -33,6 +33,11 @@ mkdir -p "$STACK_STATE_DIR" || exit 1
 chmod 700 "$STACK_STATE_DIR"
 export STACK_STATE_DIR
 printf '%s evidence: %s\n' "$cluster" "$STACK_STATE_DIR"
+# shellcheck source=scripts/stack/run-credentials.sh
+. "$here/run-credentials.sh"
+# Until cleanup_run takes over, any exit (a BLOCKED login included) still
+# removes the credentials written so far.
+trap 'purge_run_credentials "$STACK_STATE_DIR"' EXIT
 
 # Selection first: an unsafe scenario named for staging is refused before
 # anything touches the cluster.
@@ -141,6 +146,7 @@ cleanup_run() {
     fi
   fi
   rm -f "$jar"
+  purge_run_credentials "$STACK_STATE_DIR"
 }
 trap cleanup_run EXIT
 
@@ -160,6 +166,11 @@ while IFS=$'\t' read -r stale_id stale_name idle; do
   echo "recovering a killed run: revoking $stale_name $(gql 'mutation($id:ID!){revokeDeveloperToken(id:$id){__typename}}' \
     "$(jq -cn --arg id "$stale_id" '{id:$id}')" "$operator_jwt" | jq -r '.data.revokeDeveloperToken.__typename // .errors[0].message // "?"')"
 done <<<"$stale_tokens"
+# No other run is in progress, so earlier runs' evidence directories hold only
+# what a killed run could not remove.
+for stale_dir in "$repo/.stack/$cluster"-*/; do
+  [ "${stale_dir%/}" = "$STACK_STATE_DIR" ] || purge_run_credentials "$stale_dir"
+done
 gql '{webhookEndpointsConnection(page:{first:200}){nodes{id description}}}' '{}' "$operator_jwt" |
   jq -r '.data.webhookEndpointsConnection.nodes[]? | select(.description == "stack scenarios") | .id' |
   while IFS= read -r stale_endpoint; do
@@ -294,6 +305,18 @@ if [ "${STACK_SWEEP:-1}" != 0 ]; then
     2) summary+=("BLOCKED  $label"); blocked=1 ;;
     *) summary+=("FAIL     $label"); failed=1 ;;
   esac
+  if [ -n "$TEST_API_TOKEN" ] && [ -s "$(test_tenant_dir)/sweep-ledger.jsonl" ]; then
+    printf '\n==== sweep (test tenant) ====\n'
+    sweep_started=$(date +%s)
+    test_tenant_sweep "$sweep_since" "$sweep_windows"
+    rc=$?
+    label="sweep test tenant ($(($(date +%s) - sweep_started))s)"
+    case "$rc" in
+      0) summary+=("PASS     $label") ;;
+      2) summary+=("BLOCKED  $label"); blocked=1 ;;
+      *) summary+=("FAIL     $label"); failed=1 ;;
+    esac
+  fi
 fi
 printf '\n==== staging summary ====\n'
 printf '%s\n' "${summary[@]}"
