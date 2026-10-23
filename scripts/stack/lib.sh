@@ -49,6 +49,12 @@ export MAILPIT_API=${MAILPIT_API_URL%/api/v1}
 : "${STACK_LIVEPEER_GATEWAY_A:=${LIVEPEER_GATEWAY_A_SERVICE:-livepeer-gateway-a}}"
 : "${FOGHORN_A_CLUSTER:=${CELL_A_CLUSTER:-}}"
 : "${STACK_STATE_DIR:=/tmp/fw-stack}"
+# Wildcard listeners an edge container has in the stack and not in production,
+# as "<proto>/<port>" (sweep.py edge-listeners): 8082 is the stack edge proxy's
+# public HTTP port (80/443 in production), and Helmsman's 18007 binds every
+# interface because scenario 32 posts Mist webhooks to it from the runner
+# (production binds it to 127.0.0.1 through HELMSMAN_BIND_ADDR).
+export STACK_SWEEP_EDGE_INTERNAL_PORTS="${STACK_SWEEP_EDGE_INTERNAL_PORTS-tcp/8082 tcp/18007}"
 mkdir -p "$STACK_STATE_DIR"
 
 STACK_SCENARIO="$(basename "${0:-scenario}" .sh)"

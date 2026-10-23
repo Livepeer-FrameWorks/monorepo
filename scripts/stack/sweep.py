@@ -29,6 +29,7 @@ Subcommands:
   doctor <file>    FAIL lines of a doctor log not explained by the allowlist
   renditions <file> owed renditions of {"processes":[...],"tracks":[...]}
   listeners <file> wildcard listeners of {"proc":{...},"public":{...},"owners":{...}}
+  edge-listeners <container>  the same, read from a running stack edge container
   leftovers <file> edge files of deleted artifacts in {"deleted":[...],"edges":{...}}
 
 Every check prints PASS/FAIL/ALLOW lines naming the entity and the scenario
@@ -1014,22 +1015,27 @@ def host_checks(report, args):
             continue
         cores = docker("exec", cid, "sh", "-c", "find / -xdev \\( -name core -o -name 'core.[0-9]*' \\) -type f 2>/dev/null | head -5")
         report.check("host", f"container {svc}", [f"core dump {c}" for c in (cores or "").split()], scenario="run")
-        proc = {}
-        for table in ("tcp", "tcp6", "udp", "udp6"):
-            proc[table] = docker("exec", cid, "cat", f"/proc/net/{table}") or ""
-        public = dict(EDGE_PUBLIC)
-        public.update(edge_public_extra(cid))
-        rng = (docker("exec", cid, "cat", "/proc/sys/net/ipv4/ip_local_port_range") or "").split()
-        if len(rng) == 2:
-            public["udp_range"] = [int(rng[0]), int(rng[1])]
-        for allowed in os.environ.get("STACK_SWEEP_EDGE_INTERNAL_PORTS", "").split():
-            p, _, port = allowed.partition("/")
-            public.setdefault(p, []).append(int(port))
-        # Mist runs as frameworks; root may not read another user's
-        # /proc/<pid>/fd in the container without CAP_SYS_PTRACE.
-        owners = parse_socket_owners(docker("exec", "-u", "frameworks", cid, "sh", "-c", SOCKET_OWNERS_SH))
-        bad = wildcard_listeners(proc, public, owners)
-        report.check("host", f"container {svc}", [listener_problem(p, port, owner) for p, port, owner in bad], scenario="run")
+        report.check("host", f"container {svc}", edge_listener_problems(cid), scenario="run")
+
+
+def edge_listener_problems(cid):
+    """Wildcard listeners of an edge container outside its public set, plus
+    the ports STACK_SWEEP_EDGE_INTERNAL_PORTS (lib.sh) names."""
+    proc = {}
+    for table in ("tcp", "tcp6", "udp", "udp6"):
+        proc[table] = docker("exec", cid, "cat", f"/proc/net/{table}") or ""
+    public = dict(EDGE_PUBLIC)
+    public.update(edge_public_extra(cid))
+    rng = (docker("exec", cid, "cat", "/proc/sys/net/ipv4/ip_local_port_range") or "").split()
+    if len(rng) == 2:
+        public["udp_range"] = [int(rng[0]), int(rng[1])]
+    for allowed in os.environ.get("STACK_SWEEP_EDGE_INTERNAL_PORTS", "").split():
+        p, _, port = allowed.partition("/")
+        public.setdefault(p, []).append(int(port))
+    # Mist runs as frameworks; root may not read another user's
+    # /proc/<pid>/fd in the container without CAP_SYS_PTRACE.
+    owners = parse_socket_owners(docker("exec", "-u", "frameworks", cid, "sh", "-c", SOCKET_OWNERS_SH))
+    return [listener_problem(p, port, owner) for p, port, owner in wildcard_listeners(proc, public, owners)]
 
 
 def listener_problem(proto, port, owner):
@@ -1083,6 +1089,8 @@ def main(argv):
     rn.add_argument("file")
     li = sub.add_parser("listeners")
     li.add_argument("file")
+    el = sub.add_parser("edge-listeners")
+    el.add_argument("container")
     lo = sub.add_parser("leftovers")
     lo.add_argument("file")
     o = p.parse_args(argv)
@@ -1119,6 +1127,8 @@ def main(argv):
         doc = json.load(open(o.file))
         problems = [f"{p} {port}" + (f" {owner}" if owner else "")
                     for p, port, owner in wildcard_listeners(doc["proc"], doc["public"], doc.get("owners"))]
+    elif o.cmd == "edge-listeners":
+        problems = edge_listener_problems(o.container)
     elif o.cmd == "leftovers":
         doc = json.load(open(o.file))
         problems = [f"{k}: {p}" for k, ps in sorted(deleted_leftovers(doc["deleted"], doc["edges"]).items()) for p in ps]

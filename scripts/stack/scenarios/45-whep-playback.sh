@@ -6,14 +6,15 @@
 # pion client (scripts/stack/whep) POSTs its offer there, connects ICE and
 # DTLS through Mist's shared WebRTC UDP port, counts the RTP that arrives and
 # DELETEs the session.
-# Measures: per edge, the WHEP redirect, video RTP packets received within 30 s
-# and the DELETE status.
-# Catches: WHEP placement or signalling regressions, and (through the sweep's
-# listener invariant, scripts/stack/sweep.py) a socket the WebRTC listener's
-# STUN relay leaves on the wildcard address once STUN has passed through it.
+# Measures: per edge, the WHEP redirect, video RTP packets received within 30 s,
+# the DELETE status, and the edge's wildcard sockets outside its public set
+# right after the session (sweep.py edge-listeners; the doctor on staging).
+# Catches: WHEP placement or signalling regressions, and a socket the WebRTC
+# listener's STUN relay leaves on 0.0.0.0:<ephemeral> once STUN has passed
+# through it (staging doctor on edge-eu, MistServer before a16851c86).
 . "$(dirname "$0")/../lib.sh"
 
-need ffmpeg jq curl go || finish
+need ffmpeg jq curl go python3 || finish
 
 WHEP_BIN="$STACK_STATE_DIR/whep"
 # The checkout is mounted read-only and has no .git in stack-runner; the binary
@@ -51,6 +52,23 @@ for base in "${FOGHORN_A_URLS%% *}" "${FOGHORN_B_URLS%% *}"; do
   deleted=$(jq -r '.delete_status // 0' <<<"$OUT" 2>/dev/null)
   check "video RTP arrives over WHEP from $EDGE (${video:-0} packets)" [ "${video:-0}" -ge 50 ]
   check "the WHEP session on $EDGE is deleted (HTTP ${deleted:-0})" test "${deleted:-0}" -ge 200 -a "${deleted:-0}" -le 299
+  # Read right after the session: a connector restart replaces the listener
+  # and its relay socket, so the end-of-run sweep alone can miss it.
+  if [ "${STACK_TARGET:-stack}" = staging ]; then
+    echo "    staging: the doctor's edge Listeners check judges $EDGE's sockets"
+  else
+    case "$EDGE" in
+      *edge-b*) SERVICE=$STACK_EDGE_B_SERVICE ;;
+      *) SERVICE=$STACK_EDGE_A_SERVICE ;;
+    esac
+    if CID=$(container_of "$SERVICE") && [ -n "$CID" ]; then
+      SOCKETS=$(python3 "$STACK_LIB_DIR/sweep.py" edge-listeners "$CID")
+      [ -z "$SOCKETS" ] || printf '%s\n' "$SOCKETS" | sed 's/^/    /'
+      check "no socket on $EDGE listens on every interface outside its public set after the WHEP session" test -z "$SOCKETS"
+    else
+      blocked "reading $SERVICE's sockets needs docker access to the slot in stack-runner"
+    fi
+  fi
   EDGES_PLAYED+=("$EDGE")
 done
 distinct=$(printf '%s\n' "${EDGES_PLAYED[@]}" | sort -u | sed '/^$/d' | wc -l | tr -d ' ')

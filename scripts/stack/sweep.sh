@@ -52,12 +52,6 @@ elif [ "$STACK_TARGET" = staging ]; then
     rc=2
   fi
 else
-  # Wildcard listeners an edge container has in the stack and not in
-  # production, as "<proto>/<port>": 8082 is the stack edge proxy's public HTTP
-  # port (80/443 in production), and Helmsman's 18007 binds every interface
-  # because scenario 32 posts Mist webhooks to it from the runner (production
-  # binds it to 127.0.0.1 through HELMSMAN_BIND_ADDR).
-  export STACK_SWEEP_EDGE_INTERNAL_PORTS="${STACK_SWEEP_EDGE_INTERNAL_PORTS-tcp/8082 tcp/18007}"
   # The compose stack has no SSH hosts for the doctor to read; scenario 28 runs
   # the CLI doctor against the stack's Foghorns, and sweep.py reads the
   # containers' restarts, core dumps and listeners directly.
