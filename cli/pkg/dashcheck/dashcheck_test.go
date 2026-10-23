@@ -2,6 +2,7 @@ package dashcheck
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -463,20 +464,7 @@ func loadDeclaredMetrics(t *testing.T, repoRoot string) map[string]bool {
 		metrics[name] = true
 	}
 
-	err := filepath.WalkDir(repoRoot, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			switch d.Name() {
-			case ".git", "node_modules", "vendor", "dist", "build", ".svelte-kit":
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
+	err := walkRepoGoSources(repoRoot, func(path string) error {
 		contentBytes, err := os.ReadFile(path)
 		if err != nil {
 			return err
@@ -522,6 +510,36 @@ func loadDeclaredMetrics(t *testing.T, repoRoot string) map[string]bool {
 		t.Fatal(err)
 	}
 	return metrics
+}
+
+// walkRepoGoSources calls fn for every non-test Go file of the repository.
+// It skips the process temp directory, which a checkout may contain when
+// TMPDIR points inside it: other test packages create and remove files there
+// concurrently, and none of them declare platform metrics.
+func walkRepoGoSources(root string, fn func(path string) error) error {
+	tempDir, _ := filepath.Abs(os.TempDir())
+	return filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil
+			}
+			return err
+		}
+		if d.IsDir() {
+			switch d.Name() {
+			case ".git", "node_modules", "vendor", "dist", "build", ".svelte-kit":
+				return filepath.SkipDir
+			}
+			if abs, absErr := filepath.Abs(path); absErr == nil && abs == tempDir && path != root {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		return fn(path)
+	})
 }
 
 var collectorPrefixRe = regexp.MustCompile(`NewMetricsCollector\(\s*"([^"]+)"`)
