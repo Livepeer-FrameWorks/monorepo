@@ -131,8 +131,20 @@ if [ -n "${MIST_SOURCE_DIR:-}" ]; then
     --output "type=local,dest=$STACK_STATE_DIR/mist" "$ctx"
   export EDGE_DEV_MIST_TAR="$STACK_STATE_DIR/mist/mist.tar.gz"
 fi
+# edge/dist is one staging directory per checkout. Slots brought up at once
+# from the same checkout stage and build their edge image from it in turn;
+# interleaved, one slot's image would carry another slot's Mist and Helmsman.
+mkdir -p "$stack_repo_root/.stack"
+exec 8>>"$stack_repo_root/.stack/edge-dist.lock" || fail "cannot open the edge staging lock"
+if command -v flock >/dev/null 2>&1; then
+  flock 8 || fail "could not take the edge staging lock"
+else
+  perl -MFcntl=:flock -e 'open(my $fh, ">>&=8") or exit 1; flock($fh, LOCK_EX) or exit 1' ||
+    fail "could not take the edge staging lock"
+fi
 make --no-print-directory edge-dev-dist
 stack_compose build edge
+exec 8>&-
 
 log "2/7 databases and control plane"
 stack_compose up -d --build postgres foghorn-redis foghorn-redis-b quartermaster purser commodore bridge decklog storage-init "s3-$STACK_S3" s3-proxy
