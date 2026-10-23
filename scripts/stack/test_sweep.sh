@@ -176,18 +176,47 @@ expect "every FAIL allowlisted passes" passes doctor "$work/doctor.log" "$work/d
 # ---- edge listeners -------------------------------------------------------------
 # /proc/net rows: wildcard RTMP 1935 and the stack's Helmsman 18007 listening;
 # an SRT UDP socket on 8888 bound to every interface (the staging finding); a
-# loopback-only Mist HTTP 4242; WebRTC's outgoing UDP socket in the ephemeral range.
+# loopback-only Mist HTTP 4242; a WHIP push out's UDP socket in the ephemeral
+# range; the WebRTC listener's STUN relay on 0.0.0.0:18463 (staging doctor on
+# edge-eu, MistServer before a16851c86). owners maps socket inodes to processes.
 cat >"$work/listeners.json" <<'JSON'
 {"proc": {
   "tcp": "  sl  local_address rem_address   st\n   0: 00000000:078F 00000000:0000 0A\n   1: 0100007F:1092 00000000:0000 0A\n   2: 00000000:4667 00000000:0000 0A\n   3: 0A000002:078F 0A000003:D431 01\n",
-  "udp": "  sl  local_address rem_address   st\n   0: 00000000:22B8 00000000:0000 07\n   1: 00000000:A000 00000000:0000 07\n",
+  "udp": "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n   0: 00000000:22B8 00000000:0000 07 00000000:00000000 00:00000000 00000000  1001        0 101\n   1: 00000000:A000 00000000:0000 07 00000000:00000000 00:00000000 00000000  1001        0 102\n   2: 00000000:481F 00000000:0000 07 00000000:00000000 00:00000000 00000000  1001        0 103\n",
   "tcp6": "", "udp6": ""},
- "public": {"tcp": [22, 80, 443, 1935], "udp": [443, 8889], "udp_range": [32768, 60999]}}
+ "public": {"tcp": [22, 80, 443, 1935], "udp": [443, 8889], "udp_range": [10000, 60999]},
+ "owners": {"101": {"comm": "MistOutTSSRT", "whip": false}, "102": {"comm": "MistOutWebRTC", "whip": true},
+            "103": {"comm": "MistOutWebRTC", "whip": false}}}
 JSON
-expect "a wildcard SRT socket on 8888 and an internal TCP port outside the public set fail" fails listeners "$work/listeners.json"
-expect "  ...naming exactly those two" bash -c "[ \"\$(sort '$work/out' | tr '\n' ' ')\" = 'tcp 18023 udp 8888 ' ]"
-jq '.public.tcp += [18023] | .public.udp += [8888]' "$work/listeners.json" >"$work/listeners-ok.json"
-expect "the same listeners inside the public set pass" passes listeners "$work/listeners-ok.json"
+expect "a wildcard SRT socket on 8888, the wildcard STUN relay and an internal TCP port outside the public set fail" fails listeners "$work/listeners.json"
+expect "  ...naming exactly those three and their processes" bash -c "[ \"\$(sort '$work/out' | tr '\n' ' ')\" = 'tcp 18023 udp 18463 MistOutWebRTC udp 8888 MistOutTSSRT ' ]"
+# MistServer a16851c86 connects the relay to 224.0.0.224:18203: ESTABLISHED, no listener.
+jq '.public.tcp += [18023] | .public.udp += [8888]
+  | .proc.udp |= sub("00000000:481F 00000000:0000 07"; "0A000002:481F E00000E0:471B 01")' "$work/listeners.json" >"$work/listeners-ok.json"
+expect "the same listeners inside the public set, with the relay connected, pass" passes listeners "$work/listeners-ok.json"
+jq '.owners["102"].whip = false' "$work/listeners-ok.json" >"$work/listeners-session.json"
+expect "an ephemeral wildcard socket of a MistOutWebRTC that is not a WHIP push out fails" fails listeners "$work/listeners-session.json"
+expect "  ...naming it" bash -c "[ \"\$(cat '$work/out')\" = 'udp 40960 MistOutWebRTC' ]"
+jq 'del(.owners)' "$work/listeners-ok.json" >"$work/listeners-unowned.json"
+expect "an ephemeral wildcard socket whose owner is unknown fails" fails listeners "$work/listeners-unowned.json"
+expect "  ...naming it without an owner" bash -c "[ \"\$(cat '$work/out')\" = 'udp 40960' ]"
+jq '.public.udp_range = [32768, 39999]' "$work/listeners-ok.json" >"$work/listeners-range.json"
+expect "a WHIP push out's wildcard socket outside the ephemeral range fails" fails listeners "$work/listeners-range.json"
+
+# The owner listing reads socket inodes from /proc/<pid>/fd (Linux only).
+if [ -d /proc/self/fd ] && [ -r /proc/self/cmdline ]; then
+  python3 - "$here" >"$work/owners.out" 2>&1 <<'PY'
+import os, socket, subprocess, sys
+sys.path.insert(0, sys.argv[1])
+import sweep
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+s.bind(("0.0.0.0", 0))
+inode = os.stat(f"/proc/self/fd/{s.fileno()}").st_ino
+owners = sweep.parse_socket_owners(subprocess.run(["sh", "-c", sweep.SOCKET_OWNERS_SH], capture_output=True, text=True).stdout)
+print("ok" if owners.get(str(inode), {}).get("comm") else f"missing inode {inode}")
+PY
+  expect "the owner listing names the process of a socket this test opens" grep -qx ok "$work/owners.out"
+fi
 
 # ---- deleted artifacts' edge files ---------------------------------------------
 # Staging 2026-10-21: deleting a VOD removed vod/<hash>.mkv(.dtsh) on the edge

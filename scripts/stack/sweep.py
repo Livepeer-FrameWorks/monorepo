@@ -28,7 +28,7 @@ Subcommands:
   runtime <file>   runtime ledger of {"finals":[...],"runtime":{...},"processed_ms":N,"live":[...]}
   doctor <file>    FAIL lines of a doctor log not explained by the allowlist
   renditions <file> owed renditions of {"processes":[...],"tracks":[...]}
-  listeners <file> wildcard listeners of {"proc":{...},"public":{...}}
+  listeners <file> wildcard listeners of {"proc":{...},"public":{...},"owners":{...}}
   leftovers <file> edge files of deleted artifacts in {"deleted":[...],"edges":{...}}
 
 Every check prints PASS/FAIL/ALLOW lines naming the entity and the scenario
@@ -238,8 +238,8 @@ def doctor_failures(text, allow):
 
 def parse_proc_net(text, proto):
     """Listening sockets of a /proc/net/{tcp,tcp6,udp,udp6} table as
-    (proto, address, port). TCP listens in state 0A; a bound UDP socket with
-    no remote end is a listener."""
+    (proto, address, port, inode). TCP listens in state 0A; a bound UDP socket
+    with no remote end is a listener (a connected one is not)."""
     out = []
     for line in text.splitlines()[1:]:
         f = line.split()
@@ -251,30 +251,60 @@ def parse_proc_net(text, proto):
         if proto == "udp" and not remote.endswith(":0000"):
             continue
         addr, port = local.split(":")
-        out.append((proto, addr, int(port, 16)))
+        out.append((proto, addr, int(port, 16), f[9] if len(f) > 9 else ""))
     return out
 
 
 WILDCARD_ADDRS = {"00000000", "00000000000000000000000000000000", "0000000000000000FFFF000000000000"}
 
+# socket_owners' shell: "<socket inode>\t<pid>\t<comm>\t<1 when an argument is
+# a whip:// or whips:// target>" per socket descriptor of every process whose
+# /proc/<pid>/fd the caller may read. Mist starts a push out with its target as
+# an argument.
+SOCKET_OWNERS_SH = r"""for p in /proc/[0-9]*; do
+  c=$(cat "$p/comm" 2>/dev/null) || continue
+  w=0
+  tr '\0' '\n' <"$p/cmdline" 2>/dev/null | grep -Eq '^whips?://' && w=1
+  for f in "$p"/fd/*; do
+    l=$(readlink "$f" 2>/dev/null) || continue
+    case "$l" in "socket:["*"]") i=${l#socket:[}; printf '%s\t%s\t%s\t%s\n' "${i%]}" "${p#/proc/}" "$c" "$w" ;; esac
+  done
+done; true"""
 
-def wildcard_listeners(proc, public):
-    """Wildcard listeners outside the public set. proc maps tcp/tcp6/udp/udp6
-    to the /proc/net table text; public maps tcp/udp to allowed ports, and
-    udp_range to an allowed [low, high] (the ephemeral range WebRTC's outgoing
-    sockets bind in)."""
+
+def parse_socket_owners(text):
+    """SOCKET_OWNERS_SH output as {inode: {"comm": name, "whip": bool}}."""
+    owners = {}
+    for line in (text or "").splitlines():
+        f = line.split("\t")
+        if len(f) == 4 and f[0].isdigit():
+            owners.setdefault(f[0], {"comm": f[2], "whip": f[3] == "1"})
+    return owners
+
+
+def wildcard_listeners(proc, public, owners=None):
+    """Wildcard listeners outside the public set, as (proto, port, owner).
+    proc maps tcp/tcp6/udp/udp6 to the /proc/net table text; public maps
+    tcp/udp to allowed ports, and udp_range to the ephemeral [low, high]. owners
+    maps a socket inode to its process ({"comm", "whip"}). In the ephemeral
+    range only a MistOutWebRTC push out to a WHIP target may hold a wildcard
+    UDP socket: the WebRTC listener's STUN relay is connected to 224.0.0.224,
+    and a WHEP or WHIP session's sockets are bound to 224.0.0.224 or connected
+    to the peer. owner is the process name, or "" when it is unknown."""
+    owners = owners or {}
     seen = set()
     for table, text in proc.items():
         proto = "tcp" if table.startswith("tcp") else "udp"
-        for p, addr, port in parse_proc_net(text, proto):
+        for p, addr, port, inode in parse_proc_net(text, proto):
             if addr.upper() not in WILDCARD_ADDRS:
                 continue
             if port in set(public.get(p, [])):
                 continue
+            owner = owners.get(inode) or {}
             low, high = (public.get(f"{p}_range") or [0, -1])
-            if low <= port <= high:
+            if p == "udp" and low <= port <= high and owner.get("comm") == "MistOutWebRTC" and owner.get("whip"):
                 continue
-            seen.add((p, port))
+            seen.add((p, port, owner.get("comm", "")))
     return sorted(seen)
 
 
@@ -995,8 +1025,16 @@ def host_checks(report, args):
         for allowed in os.environ.get("STACK_SWEEP_EDGE_INTERNAL_PORTS", "").split():
             p, _, port = allowed.partition("/")
             public.setdefault(p, []).append(int(port))
-        bad = wildcard_listeners(proc, public)
-        report.check("host", f"container {svc}", [f"{p} port {port} listens on every interface outside the edge's public set" for p, port in bad], scenario="run")
+        # Mist runs as frameworks; root may not read another user's
+        # /proc/<pid>/fd in the container without CAP_SYS_PTRACE.
+        owners = parse_socket_owners(docker("exec", "-u", "frameworks", cid, "sh", "-c", SOCKET_OWNERS_SH))
+        bad = wildcard_listeners(proc, public, owners)
+        report.check("host", f"container {svc}", [listener_problem(p, port, owner) for p, port, owner in bad], scenario="run")
+
+
+def listener_problem(proto, port, owner):
+    who = f" ({owner})" if owner else " (owner unknown)"
+    return f"{proto} port {port}{who} listens on every interface outside the edge's public set"
 
 
 def edge_public_extra(cid):
@@ -1079,7 +1117,8 @@ def main(argv):
         problems = rendition_violations(doc["processes"], doc["tracks"])
     elif o.cmd == "listeners":
         doc = json.load(open(o.file))
-        problems = [f"{p} {port}" for p, port in wildcard_listeners(doc["proc"], doc["public"])]
+        problems = [f"{p} {port}" + (f" {owner}" if owner else "")
+                    for p, port, owner in wildcard_listeners(doc["proc"], doc["public"], doc.get("owners"))]
     elif o.cmd == "leftovers":
         doc = json.load(open(o.file))
         problems = [f"{k}: {p}" for k, ps in sorted(deleted_leftovers(doc["deleted"], doc["edges"]).items()) for p in ps]
