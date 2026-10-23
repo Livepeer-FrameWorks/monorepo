@@ -8,8 +8,10 @@ trap 'rm -rf -- "$fixture"' EXIT
 umask 077
 
 fail() { echo "$*" >&2; exit 1; }
+# Permission bits only, on both platforms: a setgid TMPDIR (a shared workspace)
+# passes its setgid bit on to every directory the installer creates under it.
 mode() {
-  if [[ $(uname -s) == Darwin ]]; then stat -f '%Lp' "$1"; else stat -c '%a' "$1"; fi
+  if [[ $(uname -s) == Darwin ]]; then stat -f '%Lp' "$1"; else printf '%o\n' $((0$(stat -c '%a' "$1") & 0777)); fi
 }
 
 "$repo/api_network_observer/deploy/package-network-prober.sh" "$binary" "$fixture/prober.tar.gz"
