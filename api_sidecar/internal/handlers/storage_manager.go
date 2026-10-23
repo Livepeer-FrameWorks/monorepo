@@ -97,6 +97,10 @@ type StorageManager struct {
 	// reclaimToTarget without a live control-plane DVR manager. Default to the real control globals.
 	activeDVRHashes    func() map[string]bool
 	evictDVRSegmentsFn func(dvrHash string, targetBytes uint64) (segments int, freedBytes uint64)
+	// statDiskSpace reads the raw filesystem stats under the media root; nil
+	// reads the real filesystem. Tests set it so verdicts do not depend on the
+	// free space of the host running them.
+	statDiskSpace storage.DiskStatFunc
 
 	// Thresholds
 	freezeThreshold      float64       // Start freezing at this % (default: 85%)
@@ -1325,6 +1329,9 @@ func parseHLSManifest(content string) (*ParsedManifest, error) {
 // byte under basePath, so pressure checks and write admission measure the
 // root, never the subdirectory a write lands in.
 func (sm *StorageManager) mediaSpace() (*storage.DiskSpace, error) {
+	if sm.statDiskSpace != nil {
+		return storage.EffectiveDiskSpaceWith(sm.statDiskSpace, sm.basePath, sm.capacity)
+	}
 	return storage.EffectiveDiskSpace(sm.basePath, sm.capacity)
 }
 

@@ -55,6 +55,7 @@ func TestAdmitDiskWrite_CapacityCountsWholeMediaRoot(t *testing.T) {
 	const capacity = 1 << 20
 	sm := newTestStorageManager(t)
 	sm.capacity = capacity
+	sm.statDiskSpace = roomyFilesystem
 
 	vodDir := filepath.Join(sm.basePath, "vod")
 	procDir := filepath.Join(sm.basePath, "processing")

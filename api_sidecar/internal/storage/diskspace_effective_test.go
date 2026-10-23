@@ -44,16 +44,17 @@ func TestDirectorySize(t *testing.T) {
 	}
 }
 
-// EffectiveDiskSpace overlays an optional logical capacity cap on the real
-// filesystem stats. TotalBytes is stable across calls (Available can fluctuate),
-// so assertions key off Total plus the capacity arithmetic.
+// EffectiveDiskSpace overlays an optional logical capacity cap on the
+// filesystem stats minus the system reserve. The stats come from the roomy
+// stub, so the arithmetic does not depend on the host running the tests.
 func TestEffectiveDiskSpace(t *testing.T) {
 	dir := t.TempDir()
 	writeSizedFile(t, filepath.Join(dir, "used.bin"), 1000)
+	useRoomyFilesystem(t)
 
-	raw, err := GetDiskSpaceWalk(dir)
+	raw, err := statDiskSpace(dir)
 	if err != nil {
-		t.Fatalf("GetDiskSpaceWalk: %v", err)
+		t.Fatalf("statDiskSpace: %v", err)
 	}
 
 	t.Run("capacity zero returns filesystem space minus the system reserve", func(t *testing.T) {
@@ -61,8 +62,11 @@ func TestEffectiveDiskSpace(t *testing.T) {
 		if err != nil {
 			t.Fatalf("EffectiveDiskSpace: %v", err)
 		}
-		if want := saturatingSub(raw.TotalBytes, SystemReserveBytes); eff.TotalBytes != want {
+		if want := raw.TotalBytes - SystemReserveBytes; eff.TotalBytes != want {
 			t.Fatalf("TotalBytes = %d, want raw %d minus reserve = %d", eff.TotalBytes, raw.TotalBytes, want)
+		}
+		if want := raw.AvailableBytes - SystemReserveBytes; eff.AvailableBytes != want {
+			t.Fatalf("AvailableBytes = %d, want raw %d minus reserve = %d", eff.AvailableBytes, raw.AvailableBytes, want)
 		}
 	})
 
@@ -80,22 +84,16 @@ func TestEffectiveDiskSpace(t *testing.T) {
 		}
 	})
 
-	t.Run("huge capacity does not raise reported total above the filesystem", func(t *testing.T) {
+	t.Run("huge capacity does not raise reported space above the filesystem", func(t *testing.T) {
 		eff, err := EffectiveDiskSpace(dir, 1<<60)
 		if err != nil {
 			t.Fatalf("EffectiveDiskSpace: %v", err)
 		}
-		if want := saturatingSub(raw.TotalBytes, SystemReserveBytes); eff.TotalBytes != want {
+		if want := raw.TotalBytes - SystemReserveBytes; eff.TotalBytes != want {
 			t.Fatalf("TotalBytes = %d, want filesystem total minus reserve %d", eff.TotalBytes, want)
 		}
-		// Available disk is non-monotonic between the raw snapshot above and
-		// this call, so a strict <= would flake. The invariant under test is
-		// that a huge cap does not balloon available toward the cap; tolerate
-		// ordinary fluctuation while still catching that (a regression would
-		// report ~1<<60, dwarfing any tolerance).
-		const fluctuationTol = uint64(64 << 20)
-		if eff.AvailableBytes > raw.AvailableBytes+fluctuationTol {
-			t.Fatalf("AvailableBytes = %d exceeds filesystem available %d (+tol)", eff.AvailableBytes, raw.AvailableBytes)
+		if want := raw.AvailableBytes - SystemReserveBytes; eff.AvailableBytes != want {
+			t.Fatalf("AvailableBytes = %d, want filesystem available minus reserve %d", eff.AvailableBytes, want)
 		}
 	})
 }

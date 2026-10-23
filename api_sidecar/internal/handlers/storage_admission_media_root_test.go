@@ -8,16 +8,26 @@ import (
 	"time"
 
 	"frameworks/api_sidecar/internal/admission"
+	"frameworks/api_sidecar/internal/storage"
 )
 
 const mediaRootTestCapacity = 1 << 20
 
+// roomyFilesystem reports a 1 TiB filesystem with 500 GiB free, far above
+// storage.SystemReserveBytes, so a logical capacity alone bounds the media
+// space whatever the free space of the host running the tests.
+func roomyFilesystem(string) (*storage.DiskSpace, error) {
+	return &storage.DiskSpace{TotalBytes: 1 << 40, AvailableBytes: 500 << 30}, nil
+}
+
 // newCapacityStorageManager returns a storage manager whose media root is
-// bounded by a 1 MiB logical capacity, with the given subdirectories created.
+// bounded by a 1 MiB logical capacity on a roomy filesystem, with the given
+// subdirectories created.
 func newCapacityStorageManager(t *testing.T, subdirs ...string) *StorageManager {
 	t.Helper()
 	sm := newTestStorageManager(t)
 	sm.capacity = mediaRootTestCapacity
+	sm.statDiskSpace = roomyFilesystem
 	for _, sub := range subdirs {
 		if err := os.MkdirAll(filepath.Join(sm.basePath, sub), 0o755); err != nil {
 			t.Fatal(err)

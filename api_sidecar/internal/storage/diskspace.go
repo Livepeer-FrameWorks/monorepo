@@ -66,15 +66,24 @@ func GetDiskSpaceWalk(path string) (*DiskSpace, error) {
 // MiB for all of them.
 const SystemReserveBytes uint64 = 10 << 30
 
+// DiskStatFunc reads the raw filesystem stats for path.
+type DiskStatFunc func(path string) (*DiskSpace, error)
+
 // statDiskSpace reads the raw filesystem stats EffectiveDiskSpace starts from.
-var statDiskSpace = GetDiskSpaceWalk
+var statDiskSpace DiskStatFunc = GetDiskSpaceWalk
 
 // EffectiveDiskSpace returns the space media storage may use at path: the
 // filesystem minus SystemReserveBytes, further capped by capacityBytes when
 // it is non-zero. Freeze, eviction and admission thresholds are fractions of
 // the returned total, so they are computed against capacity minus reserve.
 func EffectiveDiskSpace(path string, capacityBytes uint64) (*DiskSpace, error) {
-	space, err := statDiskSpace(path)
+	return EffectiveDiskSpaceWith(statDiskSpace, path, capacityBytes)
+}
+
+// EffectiveDiskSpaceWith is EffectiveDiskSpace over the raw filesystem stats
+// stat reports for path.
+func EffectiveDiskSpaceWith(stat DiskStatFunc, path string, capacityBytes uint64) (*DiskSpace, error) {
+	space, err := stat(path)
 	if err != nil {
 		return nil, err
 	}
