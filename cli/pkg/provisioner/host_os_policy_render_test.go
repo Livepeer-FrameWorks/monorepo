@@ -15,10 +15,49 @@ import (
 
 const testRolesDir = "ansible/collections/ansible_collections/frameworks/infra/roles/"
 
+// skipUnlessCI skips the test on a host without an optional tool dependency.
+// CI installs every one of them before the Go tests run, so there a missing
+// dependency fails the test instead of hiding it behind a skip.
+func skipUnlessCI(t *testing.T, format string, args ...any) {
+	t.Helper()
+	if strings.TrimSpace(os.Getenv("CI")) != "" {
+		t.Fatalf(format, args...)
+	}
+	t.Skipf(format, args...)
+}
+
 func requireAnsiblePlaybook(t *testing.T) {
 	t.Helper()
 	if _, err := exec.LookPath("ansible-playbook"); err != nil {
-		t.Skip("ansible-playbook not available")
+		skipUnlessCI(t, "ansible-playbook not available")
+	}
+}
+
+// requirePinnedCollections requires every collection ansible/requirements.yml
+// pins to be installed in the galaxy cache under the repo's ansible dir.
+func requirePinnedCollections(t *testing.T, ansibleDir string) {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(ansibleDir, "requirements.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var requirements struct {
+		Collections []struct {
+			Name string `yaml:"name"`
+		} `yaml:"collections"`
+	}
+	if err = yaml.Unmarshal(raw, &requirements); err != nil {
+		t.Fatalf("parse requirements.yml: %v", err)
+	}
+	var missing []string
+	for _, collection := range requirements.Collections {
+		namespace, name, _ := strings.Cut(collection.Name, ".")
+		if _, statErr := os.Stat(filepath.Join(ansibleDir, ".cache", "collections", "ansible_collections", namespace, name)); statErr != nil {
+			missing = append(missing, collection.Name)
+		}
+	}
+	if len(missing) > 0 {
+		skipUnlessCI(t, "collections %s are not installed under ansible/.cache/collections; run make ansible-galaxy-install", strings.Join(missing, ", "))
 	}
 }
 
@@ -78,6 +117,7 @@ func playbookTasksUnderTags(t *testing.T, playbookRel string, tags []string, ext
 	t.Helper()
 	requireAnsiblePlaybook(t)
 	root := repoAnsibleDir(t)
+	requirePinnedCollections(t, root)
 	encoded, err := json.Marshal(extraVars)
 	if err != nil {
 		t.Fatal(err)
@@ -87,7 +127,11 @@ func playbookTasksUnderTags(t *testing.T, playbookRel string, tags []string, ext
 	cmd.Dir = root
 	// Same search path as ansible.cfg: the source collection, then the galaxy
 	// cache that holds its dependencies (ansible.posix and the community ones).
-	cmd.Env = append(os.Environ(), "ANSIBLE_COLLECTIONS_PATH="+filepath.Join(root, "collections")+":"+filepath.Join(root, ".cache", "collections"))
+	// Collections bundled with the ansible install are not searched, so the
+	// listing resolves the pinned versions or fails.
+	cmd.Env = append(os.Environ(),
+		"ANSIBLE_COLLECTIONS_PATH="+filepath.Join(root, "collections")+":"+filepath.Join(root, ".cache", "collections"),
+		"ANSIBLE_COLLECTIONS_SCAN_SYS_PATH=False")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("ansible-playbook --list-tasks %s: %v\n%s", playbookRel, err, output)
