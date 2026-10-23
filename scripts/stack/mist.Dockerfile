@@ -6,10 +6,17 @@
 # processing on, pinned MbedTLS/usrsctp/libav/x264 fallbacks, RIST off. ONNX is
 # off, and dav1d/SVT-AV1 come from Ubuntu instead of the fork's static builds:
 # the ffmpeg subproject requires both, the stack does not exercise AV1, and
-# those builds dominate the first-run time.
+# those builds dominate the first-run time. Like the fork's build, the image has
+# no system libsrtp2 or libsrt: Mist then builds the pinned libsrtp 2.6.0 and
+# patched libsrt 1.5.6 wraps against the bundled MbedTLS. Ubuntu's libsrtp2
+# (OpenSSL backend) fails its cipher self-test when statically linked here, so
+# every WebRTC session fails SRTP setup, and its libsrt lacks SRTS_SHUTDOWN.
 #
 # The source tree, extracted subprojects and build directory live in BuildKit
 # cache mounts, so a rerun recompiles only what changed since the last build.
+# A rerun clears the cached build directory's dependency cache and reconfigures
+# it with this file's options, so a changed option or package set re-resolves
+# Mist's dependencies.
 # The cached tree is updated by content, and a changed file takes the time of
 # the copy: a checkout whose edited header is older than objects built from
 # another tree would otherwise leave those objects stale and link old symbols.
@@ -20,7 +27,7 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       build-essential ca-certificates cmake git nasm ninja-build pkg-config python3 python3-pip rsync yasm \
       libaom-dev libcjson-dev libdav1d-dev libjpeg-dev liblzma-dev libmp3lame-dev libnuma-dev libopus-dev libpng-dev libsvtav1enc-dev \
-      libsrt-openssl-dev libsrtp2-dev libvpx-dev libx265-dev libxml2-dev zlib1g-dev \
+      libvpx-dev libx265-dev libxml2-dev zlib1g-dev \
  && python3 -m pip install --break-system-packages 'meson>=1.6.0' \
  && rm -rf /var/lib/apt/lists/*
 
@@ -30,17 +37,15 @@ RUN --mount=type=cache,id=fw-stack-mist-work,target=/work,sharing=locked \
     set -eu; \
     mkdir -p /work/src; \
     rsync -rlpD --checksum --delete --filter='P /subprojects/*/' /src/ /work/src/; \
-    if [ ! -f /work/build/build.ninja ]; then \
-      meson setup /work/build /work/src \
-        --buildtype=debugoptimized \
-        --default-library=static --wrap-mode=default --prefer-static \
-        --force-fallback-for=mbedtls,usrsctp,libavcodec,libavfilter,libavformat,libavutil,libswscale,libswresample,x264 \
-        -DWITH_AV=true -DONNX=disabled -DNORIST=true -DNOUPDATE=true -DDEBUG=3 \
-        -DVERSION=${MIST_SOURCE_REVISION} -DRELEASE=FrameWorks_stack \
-        --prefix=/opt/mist-install; \
-    else \
-      meson configure /work/build -Dbuildtype=debugoptimized -DVERSION=${MIST_SOURCE_REVISION}; \
-    fi; \
+    reconfigure=; \
+    if [ -f /work/build/build.ninja ]; then meson configure --clearcache /work/build; reconfigure=--reconfigure; fi; \
+    meson setup $reconfigure /work/build /work/src \
+      --buildtype=debugoptimized \
+      --default-library=static --wrap-mode=default --prefer-static \
+      --force-fallback-for=mbedtls,usrsctp,libavcodec,libavfilter,libavformat,libavutil,libswscale,libswresample,x264 \
+      -DWITH_AV=true -DONNX=disabled -DNORIST=true -DNOUPDATE=true -DDEBUG=3 \
+      -DVERSION=${MIST_SOURCE_REVISION} -DRELEASE=FrameWorks_stack \
+      --prefix=/opt/mist-install; \
     ninja -C /work/build; \
     rm -rf /opt/mist-install; \
     meson install -C /work/build --no-rebuild >/dev/null; \
