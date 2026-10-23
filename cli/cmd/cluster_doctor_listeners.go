@@ -22,6 +22,8 @@ type exposedListener struct {
 	Address string
 	Port    int
 	Process string
+	// PID is the first owning process's ID, 0 when ss could not name it.
+	PID int
 }
 
 func (l exposedListener) String() string {
@@ -110,14 +112,20 @@ func parseWildcardListenersAllowing(output string, allowed func(exposedListener)
 		if err != nil {
 			continue
 		}
-		process := ""
+		process, pid := "", 0
 		if start := strings.Index(line, `(("`); start >= 0 {
 			rest := line[start+3:]
 			if end := strings.Index(rest, `"`); end >= 0 {
 				process = rest[:end]
+				if _, after, ok := strings.Cut(rest[end:], ",pid="); ok {
+					digits := after[:len(after)-len(strings.TrimLeft(after, "0123456789"))]
+					if n, err := strconv.Atoi(digits); err == nil {
+						pid = n
+					}
+				}
 			}
 		}
-		listener := exposedListener{Proto: proto, Address: address, Port: port, Process: process}
+		listener := exposedListener{Proto: proto, Address: address, Port: port, Process: process, PID: pid}
 		if allowed(listener) {
 			continue
 		}

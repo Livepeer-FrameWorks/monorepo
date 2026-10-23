@@ -15,10 +15,15 @@ import (
 )
 
 // edgeListenerCommand prints an edge's listeners, then the host's ephemeral
-// port range, then the MistServer runtime config (the native unit's
-// /etc/mistserver.conf, or the edge container's /etc/frameworks/mistserver.conf).
+// port range, then the PIDs of the MistOutWebRTC processes pushing to a WHIP
+// target (Mist starts a push out with the target as an argument), then the
+// MistServer runtime config (the native unit's /etc/mistserver.conf, or the
+// edge container's /etc/frameworks/mistserver.conf). The PIDs are read from
+// the host's /proc, the same PID namespace ss reports a container edge's
+// processes in.
 const edgeListenerCommand = `(` + hostListenerShell + `)
 echo "` + edgePortRangeMarker + ` $(cat /proc/sys/net/ipv4/ip_local_port_range 2>/dev/null)"
+echo "` + edgeWHIPPushMarker + ` $(` + whipPushPIDsShell + `)"
 echo "` + edgeMistConfigMarker + `"
 fw_docker() { if docker version >/dev/null 2>&1; then docker "$@"; else sudo -n docker "$@"; fi; }
 if command -v docker >/dev/null 2>&1 && fw_docker inspect frameworks-edge >/dev/null 2>&1; then
@@ -27,13 +32,20 @@ else
   sudo -n cat /etc/mistserver.conf 2>/dev/null || cat /etc/mistserver.conf
 fi`
 
+// whipPushPIDsShell prints the PIDs of the MistOutWebRTC processes with a
+// whip:// or whips:// argument, space-separated.
+const whipPushPIDsShell = `for p in /proc/[0-9]*; do [ "$(cat "$p/comm" 2>/dev/null)" = ` + mistWebRTCProcess + ` ] && tr '\0' '\n' <"$p/cmdline" 2>/dev/null | grep -Eq '^whips?://' && printf '%s ' "${p#/proc/}"; done; true`
+
 const (
 	edgePortRangeMarker  = "@@ip_local_port_range"
+	edgeWHIPPushMarker   = "@@whip_push_pids"
 	edgeMistConfigMarker = "@@mistserver_config"
-	// mistWebRTCProcess binds WebRTC's configured UDP port, plus wildcard
-	// sockets on ephemeral ports: the listener's STUN forwarder (an unbound
-	// socket sending to 224.0.0.224, which the kernel binds to
-	// 0.0.0.0:<ephemeral> on its first send) and each WHIP push out session.
+	// mistWebRTCProcess is both the WebRTC listener on the configured UDP port
+	// and every WebRTC session. The listener relays STUN to the sessions
+	// through a socket connected to 224.0.0.224, never a wildcard one; a WHEP
+	// or WHIP session's sockets are bound to 224.0.0.224 or connected to the
+	// peer. Only a push out to a WHIP target binds a wildcard socket on an
+	// ephemeral port, to receive its peer's STUN and media.
 	mistWebRTCProcess = "MistOutWebRTC"
 )
 
@@ -54,10 +66,11 @@ var mistPublicConnectors = map[string]struct {
 // edgeListenerPolicy is what an edge may listen on with a wildcard address.
 type edgeListenerPolicy struct {
 	tcp, udp map[int]bool
-	// ephemeralLow/High is the host's ip_local_port_range: MistOutWebRTC's
-	// STUN forwarder and WHIP push out sockets bind there. Zero when the range
-	// could not be read.
+	// ephemeralLow/High is the host's ip_local_port_range, where a WHIP push
+	// out's socket binds. Zero when the range could not be read.
 	ephemeralLow, ephemeralHigh int
+	// whipPushPIDs are the MistOutWebRTC processes pushing to a WHIP target.
+	whipPushPIDs map[int]bool
 }
 
 func (p edgeListenerPolicy) allows(l exposedListener) bool {
@@ -68,7 +81,8 @@ func (p edgeListenerPolicy) allows(l exposedListener) bool {
 		if p.udp[l.Port] {
 			return true
 		}
-		return l.Process == mistWebRTCProcess && p.ephemeralLow > 0 && l.Port >= p.ephemeralLow && l.Port <= p.ephemeralHigh
+		return l.Process == mistWebRTCProcess && p.whipPushPIDs[l.PID] &&
+			p.ephemeralLow > 0 && l.Port >= p.ephemeralLow && l.Port <= p.ephemeralHigh
 	}
 	return false
 }
@@ -78,16 +92,23 @@ func (p edgeListenerPolicy) allows(l exposedListener) bool {
 // public Mist connectors on the ports the Mist config sets.
 func parseEdgeListenerProbe(output string) (string, edgeListenerPolicy, error) {
 	policy := edgeListenerPolicy{
-		tcp: map[int]bool{22: true, 80: true, 443: true},
-		udp: map[int]bool{443: true},
+		tcp:          map[int]bool{22: true, 80: true, 443: true},
+		udp:          map[int]bool{443: true},
+		whipPushPIDs: map[int]bool{},
 	}
 	rangeAt := strings.Index(output, edgePortRangeMarker)
+	pushAt := strings.Index(output, edgeWHIPPushMarker)
 	configAt := strings.Index(output, edgeMistConfigMarker)
-	if rangeAt < 0 || configAt < rangeAt {
+	if rangeAt < 0 || pushAt < rangeAt || configAt < pushAt {
 		return "", policy, fmt.Errorf("edge listener probe output is incomplete")
 	}
 	listeners := normalizeHostListeners(output[:rangeAt])
-	if fields := strings.Fields(output[rangeAt+len(edgePortRangeMarker) : configAt]); len(fields) == 2 {
+	for _, field := range strings.Fields(output[pushAt+len(edgeWHIPPushMarker) : configAt]) {
+		if pid, err := strconv.Atoi(field); err == nil && pid > 0 {
+			policy.whipPushPIDs[pid] = true
+		}
+	}
+	if fields := strings.Fields(output[rangeAt+len(edgePortRangeMarker) : pushAt]); len(fields) == 2 {
 		low, lowErr := strconv.Atoi(fields[0])
 		high, highErr := strconv.Atoi(fields[1])
 		if lowErr == nil && highErr == nil && low > 0 && low <= high {

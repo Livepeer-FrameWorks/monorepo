@@ -58,7 +58,7 @@ func TestNormalizeHostListenersDecodesProcNetTables(t *testing.T) {
 	}
 
 	edge := edgeListenerExposureResult(&health.CheckResult{}, procNetSample+
-		edgePortRangeMarker+" 32768 60999\n"+edgeMistConfigMarker+"\n"+`{"config":{"protocols":[]}}`)
+		edgePortRangeMarker+" 32768 60999\n"+edgeWHIPPushMarker+" \n"+edgeMistConfigMarker+"\n"+`{"config":{"protocols":[]}}`)
 	if edge.OK || !strings.Contains(edge.Error, "9100") {
 		t.Fatalf("edge doctor from /proc/net: ok=%v err=%q, want the wildcard 9100 listener reported", edge.OK, edge.Error)
 	}
