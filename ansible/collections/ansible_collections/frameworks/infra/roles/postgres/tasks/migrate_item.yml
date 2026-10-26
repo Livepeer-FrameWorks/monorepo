@@ -45,6 +45,10 @@
 # timeouts and resets them before the concurrent build that follows (DROP INDEX CONCURRENTLY cannot run inside the
 # conditional block). The timeouts are set before the repair statement, because a statement's timeout is armed when
 # it starts. The item timeouts are set after the advisory lock so a concurrent migrator still waits for it.
+# A .notx.sql item runs as an async job polled every 15s: the poll lines are the only output while a build runs, and
+# the CLI's migration watchdog cancels a run that prints nothing for its stall window. The job is killed after 24
+# hours, and the rerun repairs the index that build left invalid. A transactional item stays synchronous, because an
+# async item takes at least one poll interval; it is bounded by statement_timeout.
 - name: Apply migration
   become: true
   become_user: postgres
@@ -82,6 +86,8 @@
     or 'canceling statement due to lock timeout' not in (postgres_migration_apply.msg | default(''))
   retries: 6
   delay: 10
+  async: "{{ (item.transactional | default(true)) | ternary(0, 86400) }}"
+  poll: 15
   when: not ansible_check_mode
   vars:
     invalid_index_repair_sql: >-

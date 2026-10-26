@@ -78,6 +78,34 @@ func TestPoolRunRetriesOnceAfterConnectionError(t *testing.T) {
 	}
 }
 
+// TestPoolRunStreamRetriesOnlyWithoutStdin pins that a streamed command keeps Run's one retry after a reset
+// connection, except when it reads stdin, which the failed attempt already consumed.
+func TestPoolRunStreamRetriesOnlyWithoutStdin(t *testing.T) {
+	config := &ConnectionConfig{Address: "1.2.3.4", Port: 22, User: "root"}
+
+	spawned := countSSHProcesses(t, 1)
+	created := 0
+	var out strings.Builder
+	if _, err := newTestPool(&created).RunStream(context.Background(), config, "true", nil, &out); err != nil {
+		t.Fatalf("RunStream after a reset connection: %v", err)
+	}
+	if !strings.Contains(out.String(), "sh -c 'true'") {
+		t.Fatalf("retried RunStream stdout = %q, want the command's output", out.String())
+	}
+	if len(*spawned) != 2 || created != 2 {
+		t.Fatalf("spawned %v with %d clients, want the failed attempt and one retry on a new client", *spawned, created)
+	}
+
+	spawned = countSSHProcesses(t, 1)
+	created = 0
+	if _, err := newTestPool(&created).RunStream(context.Background(), config, "cat", strings.NewReader("input"), &out); err == nil {
+		t.Fatal("RunStream with stdin succeeded after a reset connection; want the error, not a retry without its input")
+	}
+	if len(*spawned) != 1 {
+		t.Fatalf("spawned %v, want no retry of a command that read stdin", *spawned)
+	}
+}
+
 // TestPoolLimitPerHostSharesSlotsAcrossClientsOfOneAddress proves the per-host bound covers every client of one
 // address, whatever user or key it connects with, and leaves other addresses alone.
 func TestPoolLimitPerHostSharesSlotsAcrossClientsOfOneAddress(t *testing.T) {

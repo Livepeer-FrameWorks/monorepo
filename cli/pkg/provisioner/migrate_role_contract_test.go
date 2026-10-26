@@ -216,6 +216,56 @@ func TestYugabyteMigrationRoleAppliesStatementByStatement(t *testing.T) {
 	}
 }
 
+// TestMigrationApplyTasksWithoutStatementTimeoutReportWhileRunning pins that every migration apply that can run longer
+// than the CLI's migrate stall window prints while it runs: a .notx.sql item (no statement timeout; a concurrent index
+// build waits for older transactions) and every ClickHouse item run as async jobs whose poll lines reach the watchdog,
+// while a transactional item stays synchronous. Check mode never starts the job.
+func TestMigrationApplyTasksWithoutStatementTimeoutReportWhileRunning(t *testing.T) {
+	const maxPoll = 60
+	for _, tc := range []struct {
+		role, file, task, async string
+	}{
+		{"postgres", "migrate_item.yml", "Apply migration", "{{ (item.transactional | default(true)) | ternary(0, 86400) }}"},
+		{"yugabyte", "migrate_item.yml", "Apply migration (Yugabyte)", "{{ (item.transactional | default(true)) | ternary(0, 86400) }}"},
+		{"clickhouse", "migrate.yml", "Apply pending ClickHouse migrations via clickhouse-client", "86400"},
+	} {
+		t.Run(tc.role, func(t *testing.T) {
+			task := namedRoleTask(t, tc.role, tc.file, tc.task)
+			if got := fmt.Sprint(task["async"]); got != tc.async {
+				t.Fatalf("%q async = %q, want %q", tc.task, got, tc.async)
+			}
+			if poll, _ := task["poll"].(int); poll <= 0 || poll > maxPoll {
+				t.Fatalf("%q poll = %v, want a poll line at least every %ds", tc.task, task["poll"], maxPoll)
+			}
+			if !strings.Contains(fmt.Sprint(task["when"]), "not ansible_check_mode") {
+				t.Fatalf("%q runs in check mode: when %v", tc.task, task["when"])
+			}
+		})
+	}
+
+	// A killed async job has no rc; the ClickHouse error task must still fail on it.
+	errorTask := namedRoleTask(t, "clickhouse", "migrate.yml", "Fail on ClickHouse migration errors")
+	if when := fmt.Sprint(errorTask["when"]); !strings.Contains(when, "map(attribute='rc', default=-1) | reject('eq', 0)") {
+		t.Fatalf("ClickHouse error task ignores items that ended without an rc: when %s", when)
+	}
+}
+
+// namedRoleTask returns the task called name in a role task file, parsed without a fixed shape.
+func namedRoleTask(t *testing.T, role, file, name string) map[string]any {
+	t.Helper()
+	var tasks []map[string]any
+	if err := yaml.Unmarshal([]byte(databaseRoleTaskFile(t, role, file)), &tasks); err != nil {
+		t.Fatalf("parse %s/%s: %v", role, file, err)
+	}
+	for _, task := range tasks {
+		if task["name"] == name {
+			return task
+		}
+	}
+	t.Fatalf("%s/%s has no %q task", role, file, name)
+	return nil
+}
+
 func yugabyteMigrationModuleSource(t *testing.T) string {
 	t.Helper()
 	_, current, _, ok := runtime.Caller(0)

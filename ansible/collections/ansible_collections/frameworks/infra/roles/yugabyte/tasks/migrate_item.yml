@@ -53,6 +53,10 @@
 # YugabyteDB a CREATE ROLE or other shared-catalog DDL anywhere on the cluster during the build aborts it, and the
 # engine's own retry of CREATE INDEX CONCURRENTLY IF NOT EXISTS then finds the aborted index and reports success, so
 # after its statements the item checks every guarded index is valid and ready before it writes its ledger row.
+# A .notx.sql item runs as an async job polled every 15s: the poll lines are the only output while a build runs, and
+# the CLI's migration watchdog cancels a run that prints nothing for its stall window. The job is killed after 24
+# hours, and the rerun repairs the index that build left invalid. A transactional item stays synchronous, because an
+# async item takes at least one poll interval; its statements are each bounded by statement_timeout.
 - name: Apply migration (Yugabyte)
   frameworks.infra.yugabyte_migration_apply:
     login_host: "{{ yugabyte_ysql_local_host }}"
@@ -72,6 +76,8 @@
     invalid_index_verify: "{{ (item.invalid_index_guards | default([]) | length > 0) | ternary(invalid_index_verify_sql, '') }}"
     ledger_insert: "{{ migration_ledger_sql }}"
   register: yugabyte_migration_apply
+  async: "{{ (item.transactional | default(true)) | ternary(0, 86400) }}"
+  poll: 15
   when: not ansible_check_mode
   vars:
     # A query that returns one DROP INDEX per row; the module runs each in its own transaction. Within one

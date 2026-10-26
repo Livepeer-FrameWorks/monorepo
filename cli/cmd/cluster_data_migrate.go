@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/preflight"
 	"frameworks/cli/pkg/ssh"
+	"frameworks/cli/pkg/watchdog"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/datamigrate"
 
 	"github.com/spf13/cobra"
@@ -295,8 +297,14 @@ func runDataMigrateRun(cmd *cobra.Command, rc *resolvedCluster, service, id stri
 	return runDataMigrateRemoteFn(cmd, rc, service, remoteArgs)
 }
 
-// runDataMigrateRemote SSHes into service's host, detects mode, and invokes
-// the service binary with the given args. Streams stdout/stderr through.
+// dataMigrateStallWindow is how long a data-migrations command may go without printing a line before it is
+// cancelled. A run prints its cumulative totals after the first checkpoint that follows 10s without a line
+// (pkg/datamigrate), so it runs as long as its batches keep completing; a command that prints nothing until it ends,
+// such as a verify or a binary without progress lines, is bounded by the window as a whole.
+var dataMigrateStallWindow = 10 * time.Minute
+
+// runDataMigrateRemote SSHes into service's host, detects mode, and invokes the service binary with the given args.
+// Its stdout is streamed through as it arrives and its stderr is printed when it ends.
 func runDataMigrateRemote(cmd *cobra.Command, rc *resolvedCluster, service string, args []string) error {
 	host, ok := manifestHostFor(rc.Manifest)(service)
 	if !ok {
@@ -308,9 +316,66 @@ func runDataMigrateRemote(cmd *cobra.Command, rc *resolvedCluster, service strin
 	pool := ssh.NewPool(30*time.Second, sshKey)
 	defer pool.Close()
 
-	ctx, cancel := context.WithTimeout(cmd.Context(), 10*time.Minute)
-	defer cancel()
+	parent := cmd.Context()
+	if parent == nil {
+		parent = context.Background()
+	}
+	what := service + " " + strings.Join(args, " ")
+	return runDataMigrateBounded(parent, what, func(ctx context.Context) error {
+		return runDataMigrateOnHost(ctx, cmd, pool, host, runtime, service, args)
+	})
+}
 
+// runDataMigrateBounded runs fn under a watchdog that cancels it after dataMigrateStallWindow without an output line,
+// and names the stalled command in the error.
+func runDataMigrateBounded(parent context.Context, what string, fn func(context.Context) error) error {
+	ctx, w := watchdog.Start(parent, what, dataMigrateStallWindow)
+	defer w.Stop()
+	return w.Err(fn(ctx))
+}
+
+// streamDataMigrateCommand runs shellCmd through runner, copying its stdout to out as it arrives and counting every
+// line as progress for the watchdog in ctx. The command's stderr is written to errOut when it ends.
+func streamDataMigrateCommand(ctx context.Context, runner ssh.StreamRunner, shellCmd string, out, errOut io.Writer) (*ssh.CommandResult, error) {
+	stdout := newlineTracker{w: out}
+	var sink io.Writer = &stdout
+	if progress := watchdog.WriterFrom(ctx); progress != nil {
+		sink = io.MultiWriter(&stdout, progress)
+	}
+	result, err := runner.RunStream(ctx, shellCmd, nil, sink)
+	if stdout.open {
+		fmt.Fprintln(out)
+	}
+	if result != nil && strings.TrimSpace(result.Stderr) != "" {
+		fmt.Fprintln(errOut, result.Stderr)
+	}
+	return result, err
+}
+
+// newlineTracker forwards writes and records whether the output so far ends inside a line.
+type newlineTracker struct {
+	w    io.Writer
+	open bool
+}
+
+func (t *newlineTracker) Write(p []byte) (int, error) {
+	if len(p) > 0 {
+		t.open = p[len(p)-1] != '\n'
+	}
+	return t.w.Write(p)
+}
+
+// poolStreamRunner runs streamed commands on one host through the pool.
+type poolStreamRunner struct {
+	pool *ssh.Pool
+	cfg  *ssh.ConnectionConfig
+}
+
+func (r poolStreamRunner) RunStream(ctx context.Context, command string, stdin io.Reader, stdout io.Writer) (*ssh.CommandResult, error) {
+	return r.pool.RunStream(ctx, r.cfg, command, stdin, stdout)
+}
+
+func runDataMigrateOnHost(ctx context.Context, cmd *cobra.Command, pool *ssh.Pool, host inventory.Host, runtime, service string, args []string) error {
 	adopted, err := remoteDataMigrationsAdopted(ctx, pool, host, runtime)
 	if err != nil {
 		return fmt.Errorf("check data-migrations adoption for %s: %w", runtime, err)
@@ -337,8 +402,7 @@ func runDataMigrateRemote(cmd *cobra.Command, rc *resolvedCluster, service strin
 		HostName: host.Name,
 		Timeout:  30 * time.Second,
 	}
-	result, err := pool.Run(ctx, cfg, shellCmd)
-	writeDataMigrateResult(cmd, result)
+	result, err := streamDataMigrateCommand(ctx, poolStreamRunner{pool: pool, cfg: cfg}, shellCmd, cmd.OutOrStdout(), cmd.ErrOrStderr())
 	if err != nil {
 		return fmt.Errorf("ssh run: %w", err)
 	}
@@ -346,24 +410,6 @@ func runDataMigrateRemote(cmd *cobra.Command, rc *resolvedCluster, service strin
 		return fmt.Errorf("%s data-migrations exit %d", service, result.ExitCode)
 	}
 	return nil
-}
-
-func writeDataMigrateResult(cmd *cobra.Command, result *ssh.CommandResult) {
-	if result == nil {
-		return
-	}
-	if strings.TrimSpace(result.Stdout) != "" {
-		fmt.Fprint(cmd.OutOrStdout(), result.Stdout)
-		if !strings.HasSuffix(result.Stdout, "\n") {
-			fmt.Fprintln(cmd.OutOrStdout())
-		}
-	}
-	if strings.TrimSpace(result.Stderr) != "" {
-		fmt.Fprint(cmd.ErrOrStderr(), result.Stderr)
-		if !strings.HasSuffix(result.Stderr, "\n") {
-			fmt.Fprintln(cmd.ErrOrStderr())
-		}
-	}
 }
 
 func remoteDataMigrationsAdopted(ctx context.Context, pool *ssh.Pool, host inventory.Host, runtime string) (bool, error) {

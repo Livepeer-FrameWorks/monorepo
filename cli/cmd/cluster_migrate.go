@@ -115,8 +115,9 @@ reach an operator cluster.`,
 
 // migrateStallWindow is how long one migrate step may go without progress before it is cancelled. Progress is every
 // ansible-playbook output line of a migrate role (each task and loop item) and each preflight check that finished, so
-// a step runs as long as it keeps moving. The window must outlast the longest single silent task: a .notx.sql
-// concurrent index build runs without a statement timeout and prints nothing until it finishes.
+// a step runs as long as it keeps moving. The window must outlast the longest single silent task: a transactional
+// migration statement, bounded by its 15-minute statement_timeout. A .notx.sql item and a ClickHouse item, which have
+// no statement timeout, run as async jobs whose poll lines keep reporting while they run.
 var migrateStallWindow = 30 * time.Minute
 
 func runMigrate(cmd *cobra.Command, rc *resolvedCluster, dryRun bool, phase string, yes bool, toVersion string, skipDataMigrationCheck, completeInterruptedBaselines bool) error {

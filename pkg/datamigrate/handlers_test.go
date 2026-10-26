@@ -168,6 +168,33 @@ func TestRunScopeDoesNotCompleteWhenVerificationFails(t *testing.T) {
 }
 
 func TestRunScopePersistsCumulativeProgressAcrossBatchesAndResume(t *testing.T) {
+	out := runCumulativeScope(t, time.Hour)
+	if !bytes.Contains(out, []byte("scanned=15 changed=7 errors=5")) {
+		t.Fatalf("completion did not report cumulative totals: %q", out)
+	}
+	if bytes.Contains(out, []byte("progress:")) {
+		t.Fatalf("progress line printed before its interval passed: %q", out)
+	}
+}
+
+// A run prints its cumulative totals after a persisted checkpoint once the progress interval passed, so a caller
+// streaming the output sees a long run move between scope completions.
+func TestRunScopePrintsCheckpointProgressOncePerInterval(t *testing.T) {
+	out := runCumulativeScope(t, 0)
+	if !bytes.Contains(out, []byte("cumulative/<whole-job> progress: scanned=13 changed=6 errors=3\n")) {
+		t.Fatalf("no progress line for the persisted checkpoint: %q", out)
+	}
+	if n := bytes.Count(out, []byte("progress:")); n != 1 {
+		t.Fatalf("got %d progress lines, want one for the one unfinished batch: %q", n, out)
+	}
+}
+
+func runCumulativeScope(t *testing.T, interval time.Duration) []byte {
+	t.Helper()
+	previous := scopeProgressInterval
+	scopeProgressInterval = interval
+	t.Cleanup(func() { scopeProgressInterval = previous })
+
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("sqlmock.New: %v", err)
@@ -224,10 +251,8 @@ func TestRunScopePersistsCumulativeProgressAcrossBatchesAndResume(t *testing.T) 
 	if err := runScope(context.Background(), db, &out, migration, migration.ID, ScopeKey{}, 100, false, true); err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Contains(out.Bytes(), []byte("scanned=15 changed=7 errors=5")) {
-		t.Fatalf("completion did not report cumulative totals: %q", out.String())
-	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
 	}
+	return out.Bytes()
 }

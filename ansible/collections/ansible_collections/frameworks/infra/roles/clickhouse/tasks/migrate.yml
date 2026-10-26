@@ -219,6 +219,12 @@
   register: clickhouse_migrate_apply
   failed_when: false
   changed_when: true
+  # Each item runs as an async job polled every 10s: the poll lines are the
+  # only output while a long ALTER or backfill runs, and the CLI's migration
+  # watchdog cancels a run that prints nothing for its stall window. A job
+  # still running after 24 hours is killed and reported without an rc.
+  async: 86400
+  poll: 10
   vars:
     migration_key: "{{ item.version ~ ':' ~ item.phase ~ ':' ~ (item.sequence | string) }}"
   when:
@@ -241,18 +247,19 @@
     - not ansible_check_mode
 
 # Surfaces the clickhouse-client error that the redacted apply task above
-# swallowed. stderr does not include the environment password.
+# swallowed, and any item that ran without an rc of 0, such as a killed async
+# job. stderr does not include the environment password.
 - name: Fail on ClickHouse migration errors
   ansible.builtin.fail:
     msg: |-
       ClickHouse migration(s) failed:
-      {% for result in clickhouse_migrate_apply.results | default([]) %}
-      {% if (result.rc | default(0)) != 0 %}
-      - {{ result.item.db }}/{{ result.item.version }}/{{ result.item.phase }}/{{ result.item.filename }} (rc={{ result.rc }}):
-        {{ result.stderr | default('') | indent(2) }}
+      {% for result in clickhouse_migrate_apply.results | default([]) | reject('skipped') %}
+      {% if (result.rc | default(-1)) != 0 %}
+      - {{ result.item.db }}/{{ result.item.version }}/{{ result.item.phase }}/{{ result.item.filename }} (rc={{ result.rc | default('none') }}):
+        {{ result.stderr | default(result.msg | default('')) | indent(2) }}
       {% endif %}
       {% endfor %}
   when: >-
     clickhouse_migrate_apply.results | default([])
-    | selectattr('rc', 'defined') | selectattr('rc', 'ne', 0)
+    | reject('skipped') | map(attribute='rc', default=-1) | reject('eq', 0)
     | list | length > 0

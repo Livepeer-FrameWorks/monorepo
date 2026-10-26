@@ -167,6 +167,28 @@ func (p *Pool) Run(ctx context.Context, config *ConnectionConfig, command string
 	return result, err
 }
 
+// RunStream runs a command on a host with its stdout copied to stdout as it arrives (Client.RunStream). Without stdin
+// it retries a command whose connection drops once on a freshly resolved client, as Run does; a command reading stdin
+// is not retried, because its input was already consumed.
+func (p *Pool) RunStream(ctx context.Context, config *ConnectionConfig, command string, stdin io.Reader, stdout io.Writer) (*CommandResult, error) {
+	client, err := p.Get(config)
+	if err != nil {
+		return nil, err
+	}
+
+	result, err := client.RunStream(ctx, command, stdin, stdout)
+	if err != nil && stdin == nil && isConnectionError(err) {
+		_ = p.CloseHost(config) //nolint:errcheck // the retry resolves a fresh client either way
+		client, retryErr := p.Get(config)
+		if retryErr != nil {
+			return result, retryErr
+		}
+		return client.RunStream(ctx, command, nil, stdout)
+	}
+
+	return result, err
+}
+
 // Upload transfers a file to a host (creates/reuses connection)
 func (p *Pool) Upload(ctx context.Context, config *ConnectionConfig, opts UploadOptions) error {
 	client, err := p.Get(config)

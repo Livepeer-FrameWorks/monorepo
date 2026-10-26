@@ -273,6 +273,12 @@ func HandleRun(ctx context.Context, openDB func() (*sql.DB, error), out io.Write
 	return nil
 }
 
+// scopeProgressInterval is the least time between two progress lines of one scope run. A batch persists its
+// checkpoint and then prints the cumulative totals once this long has passed since the run started or since the last
+// line, so a caller that streams the output (the CLI bounds a run by a progress watchdog) can tell a long run from a
+// stalled one.
+var scopeProgressInterval = 10 * time.Second
+
 func runScope(ctx context.Context, db *sql.DB, out io.Writer, m *Migration, id string, scope ScopeKey, batchSize int, dryRun, verifyBeforeCompletion bool) error {
 	if dryRun {
 		return runDryScope(ctx, db, out, m, id, scope, batchSize)
@@ -305,6 +311,7 @@ func runScope(ctx context.Context, db *sql.DB, out io.Writer, m *Migration, id s
 		Scanned: runState.Scanned, Changed: runState.Changed,
 		Skipped: runState.Skipped, Errors: runState.Errors,
 	}
+	lastProgress := time.Now()
 	for {
 		prog, runErr := m.Run(ctx, db, RunOptions{BatchSize: batchSize, DryRun: dryRun, Scope: scope, Checkpoint: checkpoint})
 		if runErr != nil {
@@ -322,6 +329,11 @@ func runScope(ctx context.Context, db *sql.DB, out io.Writer, m *Migration, id s
 			return cpErr
 		}
 		checkpoint = prog.Checkpoint
+		if !prog.Done && time.Since(lastProgress) >= scopeProgressInterval {
+			fmt.Fprintf(out, "%s/%s progress: scanned=%d changed=%d errors=%d\n",
+				id, scope, cumulative.Scanned, cumulative.Changed, cumulative.Errors)
+			lastProgress = time.Now()
+		}
 		if prog.Done {
 			// A short SKIP LOCKED batch is only a hint that this worker saw no
 			// more rows. A concurrent transaction may have hidden work from the
