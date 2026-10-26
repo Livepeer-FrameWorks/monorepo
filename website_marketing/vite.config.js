@@ -16,10 +16,22 @@ export default defineConfig(({ mode, command }) => {
     if (!proxyGatewayUrl) {
       throw new Error("DEV_PROXY_GATEWAY_URL is required for website_marketing dev proxying");
     }
+    const runtimeConfigURL = env.DEV_PROXY_RUNTIME_CONFIG_URL
+      ? new URL(env.DEV_PROXY_RUNTIME_CONFIG_URL)
+      : undefined;
     devServer = {
       host,
       port,
       proxy: {
+        ...(runtimeConfigURL
+          ? {
+              "/runtime-config.js": {
+                target: runtimeConfigURL.origin,
+                changeOrigin: true,
+                rewrite: () => runtimeConfigURL.pathname + runtimeConfigURL.search,
+              },
+            }
+          : {}),
         // Proxy API routes to backend to avoid CORS in dev
         "/auth": {
           target: proxyGatewayUrl,

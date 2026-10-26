@@ -132,9 +132,9 @@ describe("shared public network evidence", () => {
     );
     const inspector = await openWorker(container);
     tab(inspector, "Work");
-    expect(inspector.textContent).toContain("Ticket-credit totals exceed the query bound");
+    expect(inspector.textContent).toContain("Ticket totals are incomplete");
     expect(fact(inspector, "Accepted source minutes")).toBe("1.00");
-    expect(fact(inspector, "Expected ticket credit sent")).toBe("Unknown: query bound");
+    expect(fact(inspector, "Expected ticket credit sent")).toBe("Incomplete");
   });
   it("does not present missing media duration as zero minutes", async () => {
     const { container } = mount(
@@ -149,9 +149,9 @@ describe("shared public network evidence", () => {
     );
     const inspector = await openWorker(container);
     tab(inspector, "Work");
-    expect(fact(inspector, "Accepted source minutes")).toBe("Not accounted");
-    expect(fact(inspector, "Submitted source minutes")).toBe("Not accounted");
-    expect(inspector.textContent).toContain("Partial accounting");
+    expect(fact(inspector, "Accepted source minutes")).toBe("No data");
+    expect(fact(inspector, "Submitted source minutes")).toBe("No data");
+    expect(inspector.textContent).toContain("Some work data is missing");
   });
   it("narrows the server-side work query when the observer region changes", async () => {
     const { container, fetch } = mount(withWork([], { truncated: true }));
@@ -176,8 +176,8 @@ describe("shared public network evidence", () => {
     )!;
     expect(fact(total, "Accepted source minutes")).toBe("3.00");
     expect(total.textContent).toContain("18014398509481986");
-    expect(total.textContent).toContain("Partial accounting");
-    expect(inspector.textContent).toContain("redeemed earnings");
+    expect(total.textContent).toContain("Some work data is missing");
+    expect(inspector.textContent).toContain("confirmed earnings");
   });
   it("uses window summary failures instead of unrelated events or bounded chart samples", async () => {
     const data = fixture();
@@ -378,24 +378,66 @@ describe("shared public network evidence", () => {
     expect(window.location.search).toContain("lp_metric=errors");
     expect(container.querySelector(".worker-inspector")?.textContent).toContain("192.0.2.1");
   });
-  it("requires one region and profile before charting transcoding latency", async () => {
+  it("shows worker performance immediately with local profile and region controls", async () => {
     const data = fixture();
-    data.history.cohorts.push({ ...data.history.cohorts[0], kind: "attempt" });
+    data.history.truncated = false;
+    data.history.cohorts.push({ ...data.history.cohorts[0], region: "us", p95_ms: 450 });
+    data.history.summaries.push({ ...data.history.summaries[0], region: "us", p95_ms: 450 });
     const { container } = mount(data);
     const inspector = await openWorker(container);
-    tab(inspector, "Observations");
-    expect(inspector.textContent).toContain("Choose one measurement region and output profile");
-    const region = container.querySelector('[aria-label="History region"]') as HTMLSelectElement;
-    region.value = "eu";
-    region.dispatchEvent(new Event("change"));
-    await vi.waitFor(() =>
-      expect(container.querySelector(".map-status")?.textContent).toContain("Updated")
-    );
-    const profile = container.querySelector('[aria-label="Output profile"]') as HTMLSelectElement;
-    profile.value = "720p";
-    profile.dispatchEvent(new Event("change"));
-    expect(inspector.textContent).not.toContain("Choose one measurement region and output profile");
+    expect(inspector.textContent).toContain("Transcoding performance");
+    expect(inspector.textContent).not.toContain("Choose one measurement region");
+    const profile = inspector.querySelector(
+      '[aria-label="Worker performance profile"]'
+    ) as HTMLSelectElement;
+    expect(profile.value).toBe("720p");
+    const region = inspector.querySelector(
+      '[aria-label="Worker performance region"]'
+    ) as HTMLSelectElement;
+    expect(region.value).toBe("eu");
+    expect(fact(inspector, "p95 response time")).toBe("150 ms");
+    expect(inspector.querySelector('[aria-label="Response time (ms)"]')).not.toBeNull();
+    expect(inspector.querySelector('[aria-label="Time (local)"]')).not.toBeNull();
     expect(inspector.querySelector("svg.observation-chart")).not.toBeNull();
+    region.value = "us";
+    region.dispatchEvent(new Event("change"));
+    expect(fact(inspector, "p95 response time")).toBe("450 ms");
+    expect(
+      (container.querySelector('[aria-label="History region"]') as HTMLSelectElement).value
+    ).toBe("");
+  });
+  it("keeps response timing visible when source duration was not reported", async () => {
+    const data = fixture();
+    data.history.cohorts[0].duration_samples = 0;
+    data.history.summaries[0].duration_samples = 0;
+    const { container } = mount(data);
+    const inspector = await openWorker(container);
+    expect(fact(inspector, "p95 response time")).toBe("150 ms");
+    expect(fact(inspector, "Video time used (p95)")).toBe("No duration samples");
+    expect(inspector.querySelector("svg.observation-chart")).not.toBeNull();
+  });
+  it("separates output profiles in the worker's own performance controls", async () => {
+    const data = fixture();
+    data.history.cohorts.push({ ...data.history.cohorts[0], profile_key: "1080p", p95_ms: 900 });
+    data.history.summaries.push({
+      ...data.history.summaries[0],
+      profile_key: "1080p",
+      p95_ms: 900,
+    });
+    const { container } = mount(data);
+    const inspector = await openWorker(container);
+    const profile = inspector.querySelector(
+      '[aria-label="Worker performance profile"]'
+    ) as HTMLSelectElement;
+    profile.value = "1080p";
+    profile.dispatchEvent(new Event("change"));
+    expect(fact(inspector, "p95 response time")).toBe("900 ms");
+    const next = inspector.querySelector(
+      '[aria-label="Worker performance profile"]'
+    ) as HTMLSelectElement;
+    next.value = "720p";
+    next.dispatchEvent(new Event("change"));
+    expect(fact(inspector, "p95 response time")).toBe("150 ms");
   });
   it("uses window totals independently of truncated samples and loads selected history", async () => {
     const { container, fetch } = mount(fixture());
@@ -407,7 +449,7 @@ describe("shared public network evidence", () => {
     expect(url.searchParams.get("resource")).toBe("0xabc");
     expect(url.searchParams.get("ip")).toBe("192.0.2.1");
     tab(inspector, "Observations");
-    expect(inspector.textContent).toContain("truncated");
+    expect(inspector.textContent).toContain("Some history was left out");
   });
   it("keeps inventory browsable when history is unavailable", async () => {
     const data = fixture();
@@ -450,9 +492,9 @@ describe("shared public network evidence", () => {
     profile.dispatchEvent(new Event("change"));
     tab(inspector, "Observations");
     expect(inspector.textContent).toContain("Regional discovery latency");
-    expect(inspector.querySelector(".timeline span.up")).not.toBeNull();
-    expect(inspector.querySelector(".timeline span.up")?.getAttribute("title")).toContain(
-      "10 checks · 9 successful"
+    expect(inspector.querySelector(".timeline span.mixed")).not.toBeNull();
+    expect(inspector.querySelector(".timeline span.mixed")?.getAttribute("title")).toContain(
+      "9 passed · 1 failed · 10 checks"
     );
   });
 });

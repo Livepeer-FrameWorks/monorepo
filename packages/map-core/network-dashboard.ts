@@ -1,3 +1,4 @@
+import { renderLatencyChart, renderCheckTimeline, type CheckBucket } from "./network-charts";
 import {
   addRequiredAttribution,
   basemapMapOptions,
@@ -7,7 +8,6 @@ import {
 } from "./index";
 import { bindExplorerViewport } from "./network-explorer";
 import {
-  associationPath,
   observingRegions,
   orchestratorGroups,
   regionalEvidence,
@@ -225,13 +225,7 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
   const mapNotice = node("div", undefined, "map-notice");
   mapNotice.hidden = true;
   mapNotice.setAttribute("role", "status");
-  const associationNote = node(
-    "span",
-    "Regional associations · approximate anchors, not individual site connections",
-    "map-association-note"
-  );
-  associationNote.hidden = true;
-  viewport.append(mapContainer, mapControls, legend, zoomHint, tooltip, mapNotice, associationNote);
+  viewport.append(mapContainer, mapControls, legend, zoomHint, tooltip, mapNotice);
   const rail = node("div", undefined, "map-rail");
   const overview = node("aside", undefined, "network-overview");
   overview.setAttribute("aria-label", "Network overview");
@@ -264,7 +258,7 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
   foot.append(
     node(
       "p",
-      "Current reachability uses all measurement regions. History region and profile filters narrow returned errors, work and performance samples. An error in one region does not establish a global failure. Grey means unknown coverage. IP addresses identify observed endpoints, not physical GPU counts. Prices are observed offers; work is FrameWorks traffic."
+      "Reachable means at least one location can connect. Grey means no recent result. Use the filters for regional history. Workers are network addresses, not GPU counts. Prices are quotes; work totals come from FrameWorks gateways."
     )
   );
   root.append(header, toolbar, workspace, foot);
@@ -279,6 +273,7 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
     explorerSelection = { kind: focusKind as ExplorerSelection["kind"], id: focusId };
   let directoryIDs: Set<string> | undefined;
   let detailTab = "overview";
+  const performanceSelection = new Map<string, { region: string; profile: string }>();
   let restoreFilters = true;
   let disposed = false;
   let map: MapLibreMap | undefined;
@@ -412,8 +407,7 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
       .filter((o) => !o.success && o.failure_kind)
       .sort((a, b) => Date.parse(b.timestamp) - Date.parse(a.timestamp));
     const rows = node("div", undefined, "observation-events");
-    if (!errors.length)
-      rows.append(node("p", "No error samples returned for this selection.", "muted"));
+    if (!errors.length) rows.append(node("p", "No errors in the returned data.", "muted"));
     for (const error of errors.slice(0, 6)) {
       const row = node("div", undefined, "observation-event");
       const title = node("div");
@@ -425,7 +419,7 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
         title,
         node(
           "p",
-          `${time(error.timestamp)} · ${error.kind}${error.qualifying ? " · qualifying check" : " · not counted as worker downtime"}`,
+          `${time(error.timestamp)} · ${error.kind}${error.qualifying ? " · failed check" : " · not counted as downtime"}`,
           "muted"
         )
       );
@@ -580,13 +574,7 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
         `${missing.length} identities without an observed worker`,
         "catalog-unknown"
       );
-      entries.append(
-        node(
-          "p",
-          "These identities are in the catalog; no visible endpoint has been observed. Availability is unknown.",
-          "muted"
-        )
-      );
+      entries.append(node("p", "Listed onchain, but no worker found yet.", "muted"));
       for (const resource of missing) entries.append(node("code", short(resource.id)));
       list.append(entries);
     }
@@ -595,7 +583,7 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
     const section = node("section", undefined, "inspector-section");
     section.append(node("h4", title));
     if (!total) {
-      section.append(node("p", "No work accounting observations for this selection.", "muted"));
+      section.append(node("p", "No work data for this selection.", "muted"));
       target.append(section);
       return;
     }
@@ -608,11 +596,11 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
       facts([
         [
           "Accepted source minutes",
-          acceptedKnown ? workMinutes(total.accepted_source_ms) : "Not accounted",
+          acceptedKnown ? workMinutes(total.accepted_source_ms) : "No data",
         ],
         [
           "Submitted source minutes",
-          dispatchedKnown ? workMinutes(total.dispatched_source_ms) : "Not accounted",
+          dispatchedKnown ? workMinutes(total.dispatched_source_ms) : "No data",
         ],
         ["Accepted segments", String(total.accepted_segments)],
         [
@@ -622,19 +610,13 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
         ["Known service charges", workAmount(total.service_charge)],
         [
           "Expected ticket credit sent",
-          total.ticket_credit_incomplete
-            ? "Unknown: query bound"
-            : workAmount(total.ticket_credit_sent),
+          total.ticket_credit_incomplete ? "Incomplete" : workAmount(total.ticket_credit_sent),
         ],
       ])
     );
     if (isPartialWork(total))
       section.append(
-        node(
-          "p",
-          "Partial accounting. Missing duration, output or pricing is unknown, not zero.",
-          "evidence-note"
-        )
+        node("p", "Some work data is missing. Totals may be incomplete.", "evidence-note")
       );
     target.append(section);
   }
@@ -712,8 +694,8 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
           node(
             "p",
             work?.truncated
-              ? "Work totals exceed the query bound. Narrow the period or measurement region."
-              : "Work accounting is unavailable for this selection.",
+              ? "Too much work history to load. Try a shorter period or one region."
+              : "No work data available.",
             "evidence-note"
           )
         );
@@ -729,22 +711,30 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
         content.append(
           node(
             "p",
-            "Ticket-credit totals exceed the query bound. Work and service charges remain available.",
+            "Ticket totals are incomplete. Work and charges are still available.",
             "evidence-note"
           )
         );
       appendWork(content, "This worker", sumWork(values.filter((v) => v.ip === p.ip)));
-      appendWork(content, "Orchestrator across all observed workers", sumWork(values));
+      const allWorkers = disclosure("All workers on this orchestrator", "inspector-disclosure");
+      appendWork(allWorkers, "Orchestrator across all observed workers", sumWork(values));
+      content.append(allWorkers);
       content.append(
+        node("p", `FrameWorks traffic · ${time(work.start)} – ${time(work.end)}`, "evidence-note")
+      );
+      const counting = disclosure("How work is counted", "inspector-disclosure");
+      counting.append(
         node(
           "p",
-          `FrameWorks gateway traffic · ${time(work.start)} – ${time(work.end)}. Accepted work excludes discarded results. Submitted work includes retries and hedges. Charges and ticket credit do not establish redeemed earnings.`,
+          "Accepted work counts results we used. Submitted work includes retries and parallel attempts. Charges and ticket credit aren’t confirmed earnings.",
           "evidence-note"
         )
       );
+      content.append(counting);
       return;
     }
     if (detailTab === "overview") {
+      renderPerformance(content, p);
       content.append(
         facts([
           [
@@ -804,21 +794,17 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
       const chips = node("div", undefined, "region-chips");
       for (const region of regions)
         chips.append(button(region, () => chooseRegion(region), "region-chip"));
-      if (!regions.length) chips.append(node("p", "No regional history returned.", "muted"));
+      if (!regions.length) chips.append(node("p", "No regional history yet.", "muted"));
       content.append(
         chips,
-        node(
-          "p",
-          "Reachability is sampled from measurement sites. Missing coverage does not establish downtime; a regional failure is not a global performance verdict.",
-          "evidence-note"
-        )
+        node("p", "Results vary by region. No data doesn’t mean offline.", "evidence-note")
       );
       return;
     }
     content.append(node("h4", "Recent errors"));
     renderErrors(content, p);
     content.append(node("h4", "Discovery over time"));
-    const timeline = node("div", undefined, "timeline");
+    const timelineBuckets: CheckBucket[] = [];
     const start = Date.parse(history.start),
       end = Date.parse(history.end);
     const checks = observations(p).filter((o) => o.kind === "discovery");
@@ -834,51 +820,28 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
       const successes = history.rolled_up
         ? buckets.reduce((n, c) => n + c.successes, 0)
         : raw.filter((c) => c.success).length;
-      const qualified = history.rolled_up
-        ? buckets.reduce((n, c) => n + c.qualified_samples, 0)
-        : raw.filter((c) => c.qualifying).length;
-      const cell = node(
-        "span",
-        undefined,
-        successes ? "up" : samples > 0 && samples === qualified ? "unavailable" : "unknown"
-      );
-      cell.title = `${time(new Date(a).toISOString())}: ${samples} checks · ${successes} successful`;
-      timeline.append(cell);
+      const failures = history.rolled_up
+        ? buckets.reduce((n, c) => n + c.failures, 0)
+        : raw.filter((c) => !c.success && c.qualifying).length;
+      timelineBuckets.push({
+        start: new Date(a).toISOString(),
+        end: new Date(b).toISOString(),
+        samples,
+        successes,
+        failures,
+      });
     }
-    content.append(
-      timeline,
-      node(
-        "p",
-        "Green: successful checks · red: qualifying failures · grey: unknown. This is sampled coverage, not continuous uptime.",
-        "evidence-note"
-      )
-    );
+    renderCheckTimeline(content, timelineBuckets);
     content.append(node("h4", "Regional discovery latency"));
     drawChart(
       content,
-      cohorts.filter((c) => c.kind === "discovery")
+      cohorts.filter((c) => c.kind === "discovery"),
+      history
     );
-    content.append(node("h4", "Transcoding response time"));
-    if (regionChoice.input.value && profileChoice.input.value)
-      drawChart(
-        content,
-        cohorts.filter((c) => c.kind === "attempt")
-      );
-    else
-      content.append(
-        node(
-          "p",
-          "Choose one measurement region and output profile in Layers & filters to inspect transcoding latency. Different paths and profiles are not comparable.",
-          "evidence-note"
-        )
-      );
+    renderPerformance(content, p);
     if (history.truncated)
       content.append(
-        node(
-          "p",
-          "Returned chart and error samples are truncated. Narrow the period or measurement region.",
-          "evidence-note"
-        )
+        node("p", "Some history was left out. Try a shorter period or one region.", "evidence-note")
       );
     if (options.headers && history.details?.length) {
       const diagnostics = disclosure("Operator diagnostics", "inspector-disclosure");
@@ -896,78 +859,129 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
       content.append(diagnostics);
     }
   }
-  function drawChart(target: HTMLElement, cohorts: Cohort[]) {
-    if (!cohorts.length) {
-      target.append(node("p", "No latency samples returned for this selection.", "evidence-note"));
-      return;
-    }
-    const ns = "http://www.w3.org/2000/svg";
-    const svg = document.createElementNS(ns, "svg");
-    svg.setAttribute("viewBox", "0 0 300 140");
-    svg.setAttribute("class", "observation-chart");
-    svg.setAttribute("role", "img");
-    svg.setAttribute(
-      "aria-label",
-      "Regional p95 response latency over time; gaps mean missing observations"
-    );
-    const start = Date.parse(data!.history.start),
-      end = Date.parse(data!.history.end),
-      max = Math.max(1, ...cohorts.map((c) => c.p95_ms));
-    const groups = new Map<string, Cohort[]>();
-    for (const c of cohorts) {
-      const key = `${c.region} · ${c.profile_key || "discovery"}`;
-      groups.set(key, [...(groups.get(key) ?? []), c]);
-    }
-    const colors = ["#7aa2f7", "#9ece6a", "#e0af68", "#7dcfff"];
-    const legend = node("div", undefined, "chart-key");
-    let index = 0;
-    for (const [label, values] of groups) {
-      const color = colors[index++ % colors.length];
-      let previous: Cohort | undefined;
-      for (const c of values.sort((a, b) => Date.parse(a.bucket) - Date.parse(b.bucket))) {
-        const x = 8 + (284 * (Date.parse(c.bucket) - start)) / Math.max(1, end - start),
-          y = 120 - (100 * c.p95_ms) / max;
-        if (
-          previous &&
-          Date.parse(c.bucket) - Date.parse(previous.bucket) <=
-            data!.history.interval_seconds * 1500
-        ) {
-          const line = document.createElementNS(ns, "line");
-          for (const [key, value] of Object.entries({
-            x1: 8 + (284 * (Date.parse(previous.bucket) - start)) / Math.max(1, end - start),
-            y1: 120 - (100 * previous.p95_ms) / max,
-            x2: x,
-            y2: y,
-          }))
-            line.setAttribute(key, String(value));
-          line.setAttribute("stroke", color);
-          line.setAttribute("stroke-width", "2");
-          svg.append(line);
-        }
-        const dot = document.createElementNS(ns, "circle");
-        dot.setAttribute("cx", String(x));
-        dot.setAttribute("cy", String(y));
-        dot.setAttribute("r", "2.5");
-        dot.setAttribute("fill", color);
-        const title = document.createElementNS(ns, "title");
-        title.textContent = `${label}: ${Math.round(c.p95_ms)} ms · ${c.samples} samples · ${time(c.bucket)}`;
-        dot.append(title);
-        svg.append(dot);
-        previous = c;
+  function renderPerformance(target: HTMLElement, p: Endpoint) {
+    const section = node("section", undefined, "worker-performance");
+    target.append(section);
+    const history = endpointHistoryFor(p);
+    const matches = (c: Cohort) =>
+      c.resource_id.toLowerCase() === p.resource.id.toLowerCase() &&
+      c.ip === p.ip &&
+      (c.kind === "attempt" || c.kind === "segment") &&
+      c.samples > 0;
+    const samples = history.cohorts.filter(matches);
+    const summaries = history.summaries.filter(matches);
+    const available = [...summaries, ...samples];
+    const draw = () => {
+      section.replaceChildren(node("h4", "Transcoding performance"));
+      if (!available.length) {
+        section.append(
+          node(
+            "p",
+            "No transcoding data for this period. Discovery checks only tell us whether we can connect.",
+            "evidence-note"
+          )
+        );
+        return;
       }
-      const key = node("span", label);
-      key.style.color = color;
-      legend.append(key);
-    }
-    target.append(
-      node(
-        "p",
-        `p95 · 0–${Math.round(max)} ms · ${time(data!.history.start)} – ${time(data!.history.end)}`,
-        "chart-scale"
-      ),
-      svg,
-      legend
-    );
+      const saved = performanceSelection.get(p.id);
+      const profiles = [...new Set(available.map((c) => c.profile_key))].sort();
+      const profile = select(
+        "Worker performance profile",
+        profiles.map((value) => [value, value || "Unspecified profile"])
+      );
+      profile.wrapper.querySelector("span")!.textContent = "Output profile";
+      profile.input.value = saved && profiles.includes(saved.profile) ? saved.profile : profiles[0];
+      const regions = [
+        ...new Set(
+          available.filter((c) => c.profile_key === profile.input.value).map((c) => c.region)
+        ),
+      ].sort();
+      const region = select(
+        "Worker performance region",
+        regions.map((value) => [value, value || "Region unknown"])
+      );
+      region.wrapper.querySelector("span")!.textContent = "Measured from";
+      region.input.value = saved && regions.includes(saved.region) ? saved.region : regions[0];
+      performanceSelection.set(p.id, { region: region.input.value, profile: profile.input.value });
+      const controls = node("div", undefined, "performance-controls");
+      controls.append(profile.wrapper, region.wrapper);
+      section.append(controls);
+      for (const input of [profile.input, region.input])
+        input.onchange = () => {
+          performanceSelection.set(p.id, {
+            region: region.input.value,
+            profile: profile.input.value,
+          });
+          const label = input.getAttribute("aria-label");
+          draw();
+          section
+            .querySelector<HTMLSelectElement>(`[aria-label="${label}"]`)
+            ?.focus({ preventScroll: true });
+        };
+      const path = (c: Cohort) =>
+        c.region === region.input.value && c.profile_key === profile.input.value;
+      const rows = samples.filter(path);
+      const totals = summaries.filter(path);
+      const kind = [...totals, ...rows].some((c) => c.kind === "attempt") ? "attempt" : "segment";
+      const summary = totals.find((c) => c.kind === kind);
+      const latest = rows
+        .filter((c) => c.kind === kind)
+        .sort((a, b) => Date.parse(b.bucket) - Date.parse(a.bucket))[0];
+      const value = summary ?? latest;
+      if (value) {
+        section.append(
+          facts(
+            [
+              [
+                "p95 response time",
+                value.qualified_samples > 0 ? Math.round(value.p95_ms) + " ms" : "No timed samples",
+              ],
+              [
+                "Video time used (p95)",
+                value.duration_samples > 0
+                  ? (value.p95_duration_ratio * 100).toFixed(1) + "%"
+                  : "No duration samples",
+              ],
+              ["Successful results", value.successes + " / " + value.samples],
+              ["Errors", String(value.failures)],
+              ["Missed deadlines", String(value.deadline_misses)],
+              ["Retries", String(value.retries)],
+            ],
+            "performance-metrics"
+          )
+        );
+        section.append(
+          node(
+            "p",
+            (summary ? "Selected period" : "Latest measured interval: " + time(value.bucket)) +
+              " · " +
+              quantity(value.samples, "sample") +
+              " · lower times are better",
+            "evidence-note"
+          )
+        );
+      }
+      drawChart(
+        section,
+        rows.filter((c) => c.kind === kind && c.qualified_samples > 0),
+        history
+      );
+      const explanation = disclosure("How to read performance", "inspector-disclosure");
+      explanation.append(
+        node(
+          "p",
+          "p95: 95% of measured requests finished within this time. Video time: 100% means processing took as long as the video itself. Lower is faster. Times include the network trip from FrameWorks gateways.",
+          "evidence-note"
+        )
+      );
+      section.append(explanation);
+      if (history.truncated)
+        section.append(node("p", "Some chart points are missing.", "evidence-note"));
+    };
+    draw();
+  }
+  function drawChart(target: HTMLElement, cohorts: Cohort[], history: Response["history"]) {
+    renderLatencyChart(target, cohorts, history);
   }
   function pick(id: string, locate = false) {
     if (!data) return;
@@ -1160,11 +1174,7 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
               : "Location unknown",
           ],
         ]),
-        node(
-          "p",
-          "Public results are attributed to this region, not to this individual site.",
-          "evidence-note"
-        )
+        node("p", "Results below cover this region.", "evidence-note")
       );
     content.append(
       node(
@@ -1181,14 +1191,14 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
         [
           site ? "Regional accepted segments" : "Accepted segments",
           data.history.work?.truncated
-            ? "Unknown: query bound"
+            ? "Incomplete"
             : work
               ? String(work.accepted_segments)
-              : "No accounted work returned",
+              : "No work data",
         ],
         [
           "Accepted source minutes",
-          work?.accepted_duration_samples ? workMinutes(work.accepted_source_ms) : "Not accounted",
+          work?.accepted_duration_samples ? workMinutes(work.accepted_source_ms) : "No data",
         ],
       ])
     );
@@ -1206,9 +1216,7 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
         content.append(row);
       }
       if (!region.sites.length)
-        content.append(
-          node("p", "Measurements returned without a published site location.", "evidence-note")
-        );
+        content.append(node("p", "Site location unavailable.", "evidence-note"));
       if (region.id)
         content.append(
           button("Filter history to " + region.id, () => chooseRegion(region.id), "text-action")
@@ -1218,7 +1226,7 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
         node("code", identity!.id),
         node(
           "p",
-          "An onchain identity can advertise several endpoints. These are observed addresses, not a count of physical GPUs.",
+          "One orchestrator can run several workers. Worker addresses don’t tell us how many GPUs it has.",
           "evidence-note"
         )
       );
@@ -1235,19 +1243,11 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
       )
     );
     content.append(
-      node(
-        "p",
-        "Work is observed FrameWorks traffic in the selected period. Regional paths are associations; they do not identify the particular site that checked a worker.",
-        "evidence-note"
-      )
+      node("p", "Work totals cover FrameWorks traffic for this period.", "evidence-note")
     );
     if (data.history.truncated)
       content.append(
-        node(
-          "p",
-          "Returned regional coverage is bounded. Narrow the period or history region for more complete detail.",
-          "evidence-note"
-        )
+        node("p", "Some history was left out. Try a shorter period or one region.", "evidence-note")
       );
     detail.replaceChildren(top, heading, content);
     if (restoreFocus) {
@@ -1451,129 +1451,6 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
             : [];
     const focusedIDs = new Set(focusedEndpoints.map((p) => p.id));
     const focused = !!selected || !!explorerSelection || !!directoryIDs;
-    const links: GeoJSON.Feature[] = [];
-    const anchors: GeoJSON.Feature[] = [];
-    if (focused)
-      for (const group of groups) {
-        if (
-          !group.anchor ||
-          (focusedRegion && group.id !== focusedRegion) ||
-          (regionChoice.input.value && group.id !== regionChoice.input.value)
-        )
-          continue;
-        let linked = false;
-        for (const endpoint of group.endpoints) {
-          if (
-            !focusedIDs.has(endpoint.id) ||
-            !endpoint.location.known ||
-            !Number.isFinite(endpoint.location.latitude) ||
-            !Number.isFinite(endpoint.location.longitude)
-          )
-            continue;
-          const evidence = regionalEvidence(mapData, group.id, endpoint, profileChoice.input.value);
-          const samples = observations(endpoint).filter(
-            (o) =>
-              o.region === group.id &&
-              (!profileChoice.input.value ||
-                ["discovery", "state", "coverage"].includes(o.kind) ||
-                o.profile_key === profileChoice.input.value)
-          );
-          if (!evidence.some((c) => c.samples > 0) && !samples.length) continue;
-          const failures = evidence.reduce((n, c) => n + c.failures, 0);
-          const successes = evidence.reduce((n, c) => n + c.successes, 0);
-          links.push({
-            type: "Feature",
-            properties: {
-              region: group.id,
-              endpoint: endpoint.id,
-              color: failures && !successes ? "#e0af68" : "#7dcfff",
-            },
-            geometry: {
-              type: "LineString",
-              coordinates: associationPath(group.anchor, [
-                endpoint.location.longitude,
-                endpoint.location.latitude,
-              ]),
-            },
-          });
-          linked = true;
-        }
-        if (linked) anchors.push(point(group.anchor[0], group.anchor[1], { region: group.id }));
-      }
-    const collection: GeoJSON.FeatureCollection = {
-      type: "FeatureCollection",
-      features: layerControls.get("livepeer-endpoints")?.checked ? links : [],
-    };
-    const linkSource = map.getSource("regional-links") as GeoJSONSource | undefined;
-    if (linkSource) linkSource.setData(collection);
-    else {
-      map.addSource("regional-links", { type: "geojson", data: collection });
-      map.addLayer(
-        {
-          id: "regional-links",
-          source: "regional-links",
-          type: "line",
-          paint: {
-            "line-color": ["get", "color"],
-            "line-width": 1.5,
-            "line-opacity": 0.6,
-            "line-dasharray": [3, 3],
-          },
-        },
-        map.getLayer("livepeer-endpoints") ? "livepeer-endpoints" : undefined
-      );
-      map.on("click", "regional-links", (event) => {
-        const id = event.features?.[0]?.properties?.endpoint;
-        if (id) pick(String(id), true);
-      });
-      map.on("mousemove", "regional-links", (event) => {
-        const association = event.features?.[0]?.properties;
-        const endpoint = data?.inventory.endpoints.find((p) => p.id === association?.endpoint);
-        if (endpoint)
-          showTooltip(event, `${association?.region} → ${endpoint.ip}`, [
-            "Regional measurement association",
-            formatPrice(endpoint),
-            "Click to inspect worker",
-          ]);
-      });
-      map.on("mouseleave", "regional-links", () => {
-        tooltip.hidden = true;
-      });
-    }
-    put(
-      "region-anchors",
-      anchors,
-      {
-        "circle-radius": 18,
-        "circle-color": "#7dcfff",
-        "circle-opacity": 0.07,
-        "circle-stroke-width": 1,
-        "circle-stroke-color": "#7dcfff",
-      },
-      () => {
-        map!.on("click", "region-anchors", (event) => {
-          const region = event.features?.[0]?.properties?.region;
-          if (region) explore("region", String(region));
-        });
-        map!.on("mousemove", "region-anchors", (event) => {
-          const region = event.features?.[0]?.properties?.region;
-          if (region)
-            showTooltip(event, String(region), [
-              "Approximate regional anchor",
-              "Aggregated measurement associations",
-            ]);
-        });
-        map!.on("mouseleave", "region-anchors", () => {
-          tooltip.hidden = true;
-        });
-      }
-    );
-    map.setLayoutProperty(
-      "region-anchors",
-      "visibility",
-      collection.features.length ? "visible" : "none"
-    );
-    associationNote.hidden = !collection.features.length;
     const metric = metricChoice.input.value;
     const endpoints = data.inventory.endpoints.filter(
       (p) =>
@@ -1690,7 +1567,6 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
         "legend-count"
       )
     );
-    legend.append(associationNote);
   }
   function fillOptions(input: HTMLSelectElement, values: string[], label: string) {
     const current = input.value;
