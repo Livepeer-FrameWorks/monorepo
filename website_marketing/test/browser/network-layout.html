@@ -71,6 +71,16 @@
             !doc.querySelector(".fw-network table"),
             "Worker details are contextual"
           );
+          const note = doc.querySelector(".map-association-note");
+          const attribution = rect(".frameworks-map-attribution");
+          if (note && !note.hidden && attribution) {
+            const bounds = note.getBoundingClientRect();
+            check(
+              "Association note clears attribution",
+              bounds.bottom <= attribution.top - 1,
+              `${Math.round(attribution.top - bounds.bottom)}px clearance`
+            );
+          }
           if (width <= 640) {
             const period = rect(".map-toolbar > .map-filter:first-child");
             const metric = rect(".map-toolbar > .map-filter:nth-child(3)");

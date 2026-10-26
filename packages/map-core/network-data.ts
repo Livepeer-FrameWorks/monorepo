@@ -50,6 +50,7 @@ export type Cohort = {
   deadline_misses: number;
 };
 export type Observation = {
+  profile_key?: string;
   timestamp: string;
   kind: string;
   region: string;

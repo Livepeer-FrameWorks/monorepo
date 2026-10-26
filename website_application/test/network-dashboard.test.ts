@@ -265,6 +265,13 @@ describe("shared public network evidence", () => {
         });
       }
       addLayer() {}
+      getLayer() {
+        return undefined;
+      }
+      hasImage() {
+        return false;
+      }
+      addImage() {}
       setLayoutProperty = visibility;
       remove() {}
     }
@@ -321,10 +328,8 @@ describe("shared public network evidence", () => {
     });
     await vi.waitFor(() => expect(sources.get("gateway-clusters")?.data.features).toHaveLength(1));
     expect(sources.get("prober-sites")?.data.features).toHaveLength(1);
-    const unknown = Array.from(
-      container.querySelectorAll<HTMLButtonElement>(".measurement-site")
-    ).find((b) => b.textContent === "Prober · us")!;
-    unknown.click();
+    (container.querySelector('[data-region="us"]') as HTMLButtonElement).click();
+    (container.querySelector(".site-row") as HTMLButtonElement).click();
     expect(container.querySelector(".worker-inspector")?.textContent).toContain("Location unknown");
     const toggle = container.querySelector(".map-check input") as HTMLInputElement;
     const label = Array.from(container.querySelectorAll("label")).find(

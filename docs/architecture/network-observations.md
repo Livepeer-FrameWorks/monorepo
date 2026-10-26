@@ -246,6 +246,19 @@ Current inventory reachability is explicitly across all measurement regions. The
 history-region control scopes returned observations and work; it does not turn a
 regional failure into a global endpoint availability verdict.
 
+The overview offers two independent hierarchies: observing regions contain gateway
+and prober measurement sites; onchain orchestrator identities contain discovered
+worker endpoints. Gateways use cyan square markers, probers amber diamonds and
+workers status-coloured circles. Region and identity selection highlights associated
+endpoints and opens contextual regional work totals or sibling-worker navigation.
+Worker selection draws curved regional associations only where returned observations
+and published site geography support them. Origins are approximate regional anchors,
+not an assertion that any individual gateway or prober contacted the endpoint.
+Unknown locations receive no fabricated coordinates. The public projection removes
+individual observer attribution, so exact site-to-worker traffic paths are not drawn.
+Fifteen-minute and one-hour periods support recent activity; twenty-four hours remains
+the default. Prices in worker hover details retain their observed/stale distinction.
+
 The inspector separates overview, observations and FrameWorks work accounting. Discovery
 charts retain separate regional series; transcoding latency requires one measurement
 region and output profile. Window summaries supply counts independently of bounded chart

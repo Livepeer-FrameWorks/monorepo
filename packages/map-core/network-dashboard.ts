@@ -6,6 +6,13 @@ import {
   readRuntimePublicConfig,
 } from "./index";
 import { bindExplorerViewport } from "./network-explorer";
+import {
+  associationPath,
+  observingRegions,
+  orchestratorGroups,
+  regionalEvidence,
+  roleImage,
+} from "./network-map-model";
 import { sumWork, workMinutes, workAmount, isPartialWork, type WorkSummary } from "./network-work";
 import type {
   Map as MapLibreMap,
@@ -45,6 +52,9 @@ function time(value?: string) {
 }
 function short(value: string) {
   return value.length > 22 ? `${value.slice(0, 10)}…${value.slice(-6)}` : value;
+}
+function quantity(value: number, noun: string) {
+  return `${value} ${noun}${value === 1 ? "" : "s"}`;
 }
 function button(label: string, action: () => void, className = "") {
   const result = node("button", label, className);
@@ -145,6 +155,8 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
   header.append(title, message, refresh);
   const toolbar = node("div", undefined, "map-toolbar");
   const windowChoice = select("Period", [
+    ["0.25", "15 minutes"],
+    ["1", "1 hour"],
     ["24", "24 hours"],
     ["168", "7 days"],
     ["720", "30 days"],
@@ -152,6 +164,7 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
     ["8760", "1 year"],
     ["17520", "2 years"],
   ]);
+  windowChoice.input.value = "24";
   const regionChoice = select("History region", [["", "All regions"]]);
   const metricChoice = select("Map shows", [
     ["availability", "Availability"],
@@ -212,7 +225,13 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
   const mapNotice = node("div", undefined, "map-notice");
   mapNotice.hidden = true;
   mapNotice.setAttribute("role", "status");
-  viewport.append(mapContainer, mapControls, legend, zoomHint, tooltip, mapNotice);
+  const associationNote = node(
+    "span",
+    "Regional associations · approximate anchors, not individual site connections",
+    "map-association-note"
+  );
+  associationNote.hidden = true;
+  viewport.append(mapContainer, mapControls, legend, zoomHint, tooltip, mapNotice, associationNote);
   const rail = node("div", undefined, "map-rail");
   const overview = node("aside", undefined, "network-overview");
   overview.setAttribute("aria-label", "Network overview");
@@ -252,6 +271,12 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
   container.replaceChildren(root);
   let data: Response | undefined;
   let selected = initial.get("lp_endpoint") ?? "";
+  type ExplorerSelection = { kind: "region" | "orchestrator" | "site"; id: string };
+  let explorerSelection: ExplorerSelection | undefined;
+  const focusKind = initial.get("lp_focus");
+  const focusId = initial.get("lp_focus_id");
+  if (["region", "orchestrator", "site"].includes(focusKind || "") && focusId && !selected)
+    explorerSelection = { kind: focusKind as ExplorerSelection["kind"], id: focusId };
   let directoryIDs: Set<string> | undefined;
   let detailTab = "overview";
   let restoreFilters = true;
@@ -287,6 +312,8 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
       lp_inactive: String(inactive.checked),
       lp_endpoint: selected,
       lp_metric: metricChoice.input.value,
+      lp_focus: explorerSelection?.kind || "",
+      lp_focus_id: explorerSelection?.id || "",
     })) {
       if (value) query.set(key, value);
       else query.delete(key);
@@ -312,6 +339,7 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
     map?.resize();
   }
   function closeSelection() {
+    explorerSelection = undefined;
     selected = "";
     directoryIDs = undefined;
     detail.hidden = directory.hidden = true;
@@ -319,8 +347,10 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
     tooltip.hidden = true;
     persist();
     updateMap();
+    browse.focus({ preventScroll: true });
   }
   function showDirectory(ids?: string[], title?: string) {
+    explorerSelection = undefined;
     selected = "";
     directoryIDs = ids ? new Set(ids) : undefined;
     directoryHeader.querySelector("h3")!.textContent =
@@ -331,6 +361,7 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
     directory.hidden = false;
     rail.scrollTop = 0;
     renderList();
+    updateMap();
   }
   function escape(event: KeyboardEvent) {
     if (event.key !== "Escape") return;
@@ -404,7 +435,9 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
             e.resource.id.toLowerCase() === error.resource_id.toLowerCase() && e.ip === error.ip
         );
         if (endpoint)
-          row.append(button(`${endpoint.ip} →`, () => pick(endpoint.id), "observation-worker"));
+          row.append(
+            button(`${endpoint.ip} →`, () => pick(endpoint.id, true), "observation-worker")
+          );
         else row.append(node("code", error.uri || short(error.resource_id), "observation-target"));
       }
       rows.append(row);
@@ -413,6 +446,12 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
   }
   function renderOverview() {
     if (!data) return;
+    const regionsOpen =
+      overviewBody.querySelector<HTMLDetailsElement>('[aria-label="Observing regions"]')?.open ??
+      true;
+    const identitiesOpen =
+      overviewBody.querySelector<HTMLDetailsElement>('[aria-label="Orchestrator identities"]')
+        ?.open ?? false;
     overviewBody.replaceChildren();
     const endpoints = data.inventory.endpoints;
     const summary = facts(
@@ -441,22 +480,37 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
         "muted"
       )
     );
-    const sitesPanel = disclosure(`${sites.length} gateways & probers`, "measurement-sites");
-    for (const site of sites) {
-      const row = button(
-        `${site.kind === "prober" ? "Prober" : "Gateway"} · ${site.region || "Region unknown"}`,
-        () =>
-          showMeasurement(
-            site.region,
-            site.kind === "prober" ? "Prober" : "Gateway",
-            site.last_seen,
-            site.location.known
-          ),
-        "measurement-site"
+    const navigation = node("nav", undefined, "network-hierarchy");
+    const regionsPanel = disclosure("Observing regions", "hierarchy-section");
+    regionsPanel.setAttribute("aria-label", "Observing regions");
+    regionsPanel.open = regionsOpen;
+    for (const group of observingRegions(data)) {
+      const row = hierarchyRow(
+        group.id || "Region unknown",
+        quantity(group.sites.filter((s) => s.kind === "gateway").length, "gateway") +
+          " · " +
+          quantity(group.sites.filter((s) => s.kind === "prober").length, "prober"),
+        quantity(group.endpoints.length, "worker") + " observed",
+        () => explore("region", group.id)
       );
-      sitesPanel.append(row);
+      row.dataset.region = group.id;
+      regionsPanel.append(row);
     }
-    coverage.append(sitesPanel);
+    const identities = disclosure("Orchestrator identities", "hierarchy-section");
+    identities.setAttribute("aria-label", "Orchestrator identities");
+    identities.open = identitiesOpen;
+    for (const group of orchestratorGroups(data)) {
+      const row = hierarchyRow(
+        short(group.id),
+        hostname(group.uri),
+        quantity(group.endpoints.length, "worker endpoint"),
+        () => explore("orchestrator", group.id)
+      );
+      row.dataset.orchestrator = group.id;
+      identities.append(row);
+    }
+    navigation.append(regionsPanel, identities);
+    overviewBody.append(navigation);
     const unknown = endpoints.filter((p) => !p.location.known).length;
     if (unknown)
       coverage.append(
@@ -492,7 +546,7 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
   function renderList() {
     list.replaceChildren();
     for (const p of visibleEndpoints()) {
-      const row = button("", () => pick(p.id), "worker-row");
+      const row = button("", () => pick(p.id, true), "worker-row");
       row.dataset.endpoint = p.id;
       const identity = node("div");
       identity.append(node("strong", p.ip || "Unknown IP"), node("code", short(p.resource.id)));
@@ -585,6 +639,7 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
     target.append(section);
   }
   function renderDetail(p: Endpoint) {
+    detail.setAttribute("aria-label", "Selected worker");
     const focusedTab = detail.querySelector<HTMLButtonElement>('[role="tab"]:focus')?.id;
     detail.hidden = false;
     overview.hidden = directory.hidden = true;
@@ -733,7 +788,7 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
         address.append(
           button(
             `${sibling.ip} · ${statusLabel(sibling.status)}`,
-            () => pick(sibling.id),
+            () => pick(sibling.id, true),
             "measurement-site"
           )
         );
@@ -914,12 +969,13 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
       legend
     );
   }
-  function pick(id: string) {
+  function pick(id: string, locate = false) {
     if (!data) return;
     if (selected !== id) {
       detailTab = "overview";
       rail.scrollTop = 0;
     }
+    explorerSelection = undefined;
     selected = id;
     tooltip.hidden = true;
     persist();
@@ -928,6 +984,16 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
       closeSelection();
       return;
     }
+    if (
+      locate &&
+      endpoint.location.known &&
+      Number.isFinite(endpoint.location.latitude) &&
+      Number.isFinite(endpoint.location.longitude)
+    )
+      map?.easeTo({
+        center: [endpoint.location.longitude, endpoint.location.latitude],
+        duration: 500,
+      });
     renderDetail(endpoint);
     updateMap();
     const key = historyKey(id);
@@ -965,33 +1031,232 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
         if (version === fetchVersion) pendingHistory.delete(key);
       });
   }
-  function showMeasurement(region: string, kind: string, lastSeen?: string, known = true) {
+  function hostname(uri: string) {
+    try {
+      return new URL(uri).host;
+    } catch {
+      return uri;
+    }
+  }
+  function hierarchyRow(title: string, subtitle: string, value: string, action: () => void) {
+    const row = button("", action, "hierarchy-row");
+    const top = node("div");
+    top.append(node("strong", title), node("span", "↗", "hierarchy-arrow"));
+    row.append(top, node("span", subtitle, "muted"), node("span", value, "hierarchy-value"));
+    return row;
+  }
+  function explore(kind: ExplorerSelection["kind"], id: string) {
     selected = "";
+    explorerSelection = { kind, id };
+    tooltip.hidden = true;
+    rail.scrollTop = 0;
+    renderExplorerSelection();
+    const heading = detail.querySelector<HTMLElement>("h3");
+    if (heading) {
+      heading.tabIndex = -1;
+      heading.focus({ preventScroll: true });
+    }
     persist();
-    detail.hidden = false;
+    updateMap();
+    const group = kind === "region" ? observingRegions(data!).find((g) => g.id === id) : undefined;
+    if (group?.anchor) map?.easeTo({ center: group.anchor, zoom: 3, duration: 500 });
+  }
+  function regionalWork(ids: Set<string>, region?: string) {
+    if (!data?.history.work || data.history.work.truncated) return undefined;
+    const rows = data.history.work.summaries.filter(
+      (w) =>
+        (!region || w.region === region) &&
+        (!profileChoice.input.value || w.profile_key === profileChoice.input.value) &&
+        data!.inventory.endpoints.some(
+          (e) =>
+            ids.has(e.id) &&
+            e.resource.id.toLowerCase() === w.resource_id.toLowerCase() &&
+            e.ip === w.ip
+        )
+    );
+    return sumWork(rows);
+  }
+  function renderExplorerSelection() {
+    if (!data || !explorerSelection) return;
+    const restoreFocus = detail.contains(document.activeElement);
+    const focus = explorerSelection;
+    const region =
+      focus.kind === "region"
+        ? observingRegions(data).find((g) => g.id === focus.id)
+        : focus.kind === "site"
+          ? observingRegions(data).find((g) => g.sites.some((s) => s.id === focus.id))
+          : undefined;
+    const site =
+      focus.kind === "site" ? data.inventory.observers?.find((s) => s.id === focus.id) : undefined;
+    const identity =
+      focus.kind === "orchestrator"
+        ? orchestratorGroups(data).find((g) => g.id === focus.id)
+        : undefined;
+    if (!region && !identity) {
+      closeSelection();
+      return;
+    }
+    const endpoints = region?.endpoints ?? identity!.endpoints;
+    detail.setAttribute(
+      "aria-label",
+      site
+        ? "Selected measurement site"
+        : region
+          ? "Selected observing region"
+          : "Selected orchestrator"
+    );
     overview.hidden = directory.hidden = true;
+    detail.hidden = false;
     const top = node("div", undefined, "inspector-header");
     top.append(
-      node("h3", `${kind} measurement site`),
-      iconButton("Close measurement details", "close", closeSelection)
+      node(
+        "span",
+        site
+          ? site.kind === "prober"
+            ? "PROBER"
+            : "GATEWAY"
+          : region
+            ? "Observing region"
+            : "ORCHESTRATOR",
+        "map-eyebrow"
+      ),
+      iconButton("Close exploration details", "close", closeSelection)
     );
-    detail.replaceChildren(
-      top,
-      facts([
-        ["Region", region || "Unknown"],
-        ["Location", known ? "Published location" : "Location unknown"],
-        ["Last seen", time(lastSeen)],
-      ]),
+    const heading = node("div", undefined, "worker-heading");
+    heading.append(
+      node(
+        "h3",
+        site
+          ? site.kind === "prober"
+            ? "Prober"
+            : "Gateway"
+          : region
+            ? region.id || "Region unknown"
+            : short(identity!.id)
+      ),
       node(
         "p",
-        "Measurements describe the path from this region. Reporting sites supply their locations; gateway-cluster markers show cluster centres.",
+        site
+          ? site.kind === "prober"
+            ? "Checks discovery and reachability"
+            : "Reports real transcoding traffic"
+          : region
+            ? "Where observations originate"
+            : hostname(identity!.uri),
+        "muted"
+      )
+    );
+    const content = node("div", undefined, "inspector-content");
+    if (site)
+      content.append(
+        facts([
+          ["Region", site.region || "Unknown"],
+          ["Last seen", time(site.last_seen)],
+          [
+            "Location",
+            site.location.known
+              ? [site.location.city, site.location.country].filter(Boolean).join(", ") ||
+                "Published location"
+              : "Location unknown",
+          ],
+        ]),
+        node(
+          "p",
+          "Public results are attributed to this region, not to this individual site.",
+          "evidence-note"
+        )
+      );
+    content.append(
+      node(
+        "h4",
+        endpoints.length + (endpoints.length === 1 ? " worker observed" : " workers observed")
+      )
+    );
+    const work = regionalWork(
+      new Set(endpoints.map((e) => e.id)),
+      region?.id || regionChoice.input.value
+    );
+    content.append(
+      facts([
+        [
+          site ? "Regional accepted segments" : "Accepted segments",
+          data.history.work?.truncated
+            ? "Unknown: query bound"
+            : work
+              ? String(work.accepted_segments)
+              : "No accounted work returned",
+        ],
+        [
+          "Accepted source minutes",
+          work?.accepted_duration_samples ? workMinutes(work.accepted_source_ms) : "Not accounted",
+        ],
+      ])
+    );
+    if (region) {
+      content.append(node("h4", "Measurement sites"));
+      for (const item of region.sites) {
+        const role = item.kind === "prober" ? "Prober" : "Gateway";
+        const row = button("", () => explore("site", item.id), "site-row");
+        row.append(
+          node("span", "", "role-mark role-" + item.kind),
+          node("strong", role),
+          node("span", time(item.last_seen), "muted")
+        );
+        if (site?.id === item.id) row.setAttribute("aria-current", "true");
+        content.append(row);
+      }
+      if (!region.sites.length)
+        content.append(
+          node("p", "Measurements returned without a published site location.", "evidence-note")
+        );
+      if (region.id)
+        content.append(
+          button("Filter history to " + region.id, () => chooseRegion(region.id), "text-action")
+        );
+    } else {
+      content.append(
+        node("code", identity!.id),
+        node(
+          "p",
+          "An onchain identity can advertise several endpoints. These are observed addresses, not a count of physical GPUs.",
+          "evidence-note"
+        )
+      );
+    }
+    content.append(
+      button(
+        "Browse these workers →",
+        () =>
+          showDirectory(
+            endpoints.map((e) => e.id),
+            region ? region.id + " workers" : "Orchestrator workers"
+          ),
+        "text-action"
+      )
+    );
+    content.append(
+      node(
+        "p",
+        "Work is observed FrameWorks traffic in the selected period. Regional paths are associations; they do not identify the particular site that checked a worker.",
         "evidence-note"
       )
     );
-    if (region)
-      detail.append(
-        button(`Show observations from ${region}`, () => chooseRegion(region), "rail-action")
+    if (data.history.truncated)
+      content.append(
+        node(
+          "p",
+          "Returned regional coverage is bounded. Narrow the period or history region for more complete detail.",
+          "evidence-note"
+        )
       );
+    detail.replaceChildren(top, heading, content);
+    if (restoreFocus) {
+      const title = heading.querySelector<HTMLElement>("h3");
+      if (title) {
+        title.tabIndex = -1;
+        title.focus({ preventScroll: true });
+      }
+    }
   }
   function chooseRegion(region: string) {
     regionChoice.input.value = region;
@@ -1002,6 +1267,7 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
     renderOverview();
     renderList();
     if (selected) pick(selected);
+    else if (explorerSelection) renderExplorerSelection();
     message.textContent =
       data.history_status === "unavailable"
         ? "History unavailable · inventory visible"
@@ -1063,17 +1329,16 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
         id,
         features,
         {
-          "circle-radius": 11,
+          "circle-radius": 14,
           "circle-color": color,
-          "circle-opacity": 0.18,
-          "circle-stroke-width": 2,
+          "circle-opacity": 0.08,
+          "circle-stroke-width": 0,
           "circle-stroke-color": color,
         },
         () => {
           map!.on("click", id, (event) => {
             const p = event.features?.[0]?.properties;
-            if (p)
-              showMeasurement(String(p.region || ""), String(p.name), String(p.last_seen || ""));
+            if (p) explore(p.site_id ? "site" : "region", String(p.site_id || p.region || ""));
           });
           map!.on("mousemove", id, (event) => {
             const p = event.features?.[0]?.properties;
@@ -1087,6 +1352,27 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
             tooltip.hidden = true;
           });
         }
+      );
+      const role = id === "gateway-clusters" ? "gateway" : "prober";
+      const image = "network-role-" + role;
+      if (!map!.hasImage(image)) map!.addImage(image, roleImage(role), { pixelRatio: 2 });
+      const symbolId = id + "-role";
+      if (!map!.getLayer(symbolId))
+        map!.addLayer({
+          id: symbolId,
+          source: id,
+          type: "symbol",
+          layout: {
+            "icon-image": image,
+            "icon-size": 1.5,
+            "icon-allow-overlap": true,
+            "icon-ignore-placement": true,
+          },
+        });
+      map!.setLayoutProperty(
+        symbolId,
+        "visibility",
+        layerControls.get(id)?.checked ? "visible" : "none"
       );
     };
     const reportingGateways = (data.inventory.observers ?? []).filter(
@@ -1102,6 +1388,7 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
         ...reportingGateways.map((p) =>
           point(p.location.longitude, p.location.latitude, {
             name: "Gateway",
+            site_id: p.id,
             region: p.region,
             last_seen: p.last_seen,
           })
@@ -1133,12 +1420,160 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
         .map((p) =>
           point(p.location.longitude, p.location.latitude, {
             name: "Prober",
+            site_id: p.id,
             region: p.region,
             last_seen: p.last_seen,
           })
         ),
       "#e0af68"
     );
+    const selectedEndpoint = data.inventory.endpoints.find((p) => p.id === selected);
+    const mapData = selectedEndpoint
+      ? { ...data, history: endpointHistoryFor(selectedEndpoint) }
+      : data;
+    const groups = observingRegions(mapData);
+    const focusedRegion =
+      explorerSelection?.kind === "region"
+        ? explorerSelection.id
+        : explorerSelection?.kind === "site"
+          ? data.inventory.observers?.find((s) => s.id === explorerSelection?.id)?.region
+          : undefined;
+    const focusedIdentity =
+      explorerSelection?.kind === "orchestrator" ? explorerSelection.id : undefined;
+    const focusedEndpoints = selected
+      ? data.inventory.endpoints.filter((p) => p.id === selected)
+      : focusedIdentity
+        ? data.inventory.endpoints.filter((p) => p.resource.id.toLowerCase() === focusedIdentity)
+        : focusedRegion
+          ? (groups.find((g) => g.id === focusedRegion)?.endpoints ?? [])
+          : directoryIDs
+            ? data.inventory.endpoints.filter((p) => directoryIDs?.has(p.id))
+            : [];
+    const focusedIDs = new Set(focusedEndpoints.map((p) => p.id));
+    const focused = !!selected || !!explorerSelection || !!directoryIDs;
+    const links: GeoJSON.Feature[] = [];
+    const anchors: GeoJSON.Feature[] = [];
+    if (focused)
+      for (const group of groups) {
+        if (
+          !group.anchor ||
+          (focusedRegion && group.id !== focusedRegion) ||
+          (regionChoice.input.value && group.id !== regionChoice.input.value)
+        )
+          continue;
+        let linked = false;
+        for (const endpoint of group.endpoints) {
+          if (
+            !focusedIDs.has(endpoint.id) ||
+            !endpoint.location.known ||
+            !Number.isFinite(endpoint.location.latitude) ||
+            !Number.isFinite(endpoint.location.longitude)
+          )
+            continue;
+          const evidence = regionalEvidence(mapData, group.id, endpoint, profileChoice.input.value);
+          const samples = observations(endpoint).filter(
+            (o) =>
+              o.region === group.id &&
+              (!profileChoice.input.value ||
+                ["discovery", "state", "coverage"].includes(o.kind) ||
+                o.profile_key === profileChoice.input.value)
+          );
+          if (!evidence.some((c) => c.samples > 0) && !samples.length) continue;
+          const failures = evidence.reduce((n, c) => n + c.failures, 0);
+          const successes = evidence.reduce((n, c) => n + c.successes, 0);
+          links.push({
+            type: "Feature",
+            properties: {
+              region: group.id,
+              endpoint: endpoint.id,
+              color: failures && !successes ? "#e0af68" : "#7dcfff",
+            },
+            geometry: {
+              type: "LineString",
+              coordinates: associationPath(group.anchor, [
+                endpoint.location.longitude,
+                endpoint.location.latitude,
+              ]),
+            },
+          });
+          linked = true;
+        }
+        if (linked) anchors.push(point(group.anchor[0], group.anchor[1], { region: group.id }));
+      }
+    const collection: GeoJSON.FeatureCollection = {
+      type: "FeatureCollection",
+      features: layerControls.get("livepeer-endpoints")?.checked ? links : [],
+    };
+    const linkSource = map.getSource("regional-links") as GeoJSONSource | undefined;
+    if (linkSource) linkSource.setData(collection);
+    else {
+      map.addSource("regional-links", { type: "geojson", data: collection });
+      map.addLayer(
+        {
+          id: "regional-links",
+          source: "regional-links",
+          type: "line",
+          paint: {
+            "line-color": ["get", "color"],
+            "line-width": 1.5,
+            "line-opacity": 0.6,
+            "line-dasharray": [3, 3],
+          },
+        },
+        map.getLayer("livepeer-endpoints") ? "livepeer-endpoints" : undefined
+      );
+      map.on("click", "regional-links", (event) => {
+        const id = event.features?.[0]?.properties?.endpoint;
+        if (id) pick(String(id), true);
+      });
+      map.on("mousemove", "regional-links", (event) => {
+        const association = event.features?.[0]?.properties;
+        const endpoint = data?.inventory.endpoints.find((p) => p.id === association?.endpoint);
+        if (endpoint)
+          showTooltip(event, `${association?.region} → ${endpoint.ip}`, [
+            "Regional measurement association",
+            formatPrice(endpoint),
+            "Click to inspect worker",
+          ]);
+      });
+      map.on("mouseleave", "regional-links", () => {
+        tooltip.hidden = true;
+      });
+    }
+    put(
+      "region-anchors",
+      anchors,
+      {
+        "circle-radius": 18,
+        "circle-color": "#7dcfff",
+        "circle-opacity": 0.07,
+        "circle-stroke-width": 1,
+        "circle-stroke-color": "#7dcfff",
+      },
+      () => {
+        map!.on("click", "region-anchors", (event) => {
+          const region = event.features?.[0]?.properties?.region;
+          if (region) explore("region", String(region));
+        });
+        map!.on("mousemove", "region-anchors", (event) => {
+          const region = event.features?.[0]?.properties?.region;
+          if (region)
+            showTooltip(event, String(region), [
+              "Approximate regional anchor",
+              "Aggregated measurement associations",
+            ]);
+        });
+        map!.on("mouseleave", "region-anchors", () => {
+          tooltip.hidden = true;
+        });
+      }
+    );
+    map.setLayoutProperty(
+      "region-anchors",
+      "visibility",
+      collection.features.length ? "visible" : "none"
+    );
+    associationNote.hidden = !collection.features.length;
     const metric = metricChoice.input.value;
     const endpoints = data.inventory.endpoints.filter(
       (p) =>
@@ -1166,6 +1601,7 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
         id: p.id,
         color,
         selected: p.id === selected,
+        opacity: focused && !focusedIDs.has(p.id) ? 0.18 : 0.95,
         radius:
           metric === "availability"
             ? p.last_success && Date.now() - Date.parse(p.last_success) < 7 * 86400000
@@ -1181,7 +1617,7 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
       {
         "circle-radius": ["get", "radius"],
         "circle-color": ["get", "color"],
-        "circle-opacity": 0.9,
+        "circle-opacity": ["get", "opacity"],
         "circle-stroke-width": ["case", ["get", "selected"], 3, 1.5],
         "circle-stroke-color": ["case", ["get", "selected"], "#c0caf5", "#16161e"],
       },
@@ -1196,7 +1632,7 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
           ];
           tooltip.hidden = true;
           if (ids.length > 1) showDirectory(ids);
-          else if (ids[0]) pick(ids[0]);
+          else if (ids[0]) pick(ids[0], true);
         });
         map!.on("mousemove", "livepeer-endpoints", (event) => {
           const p = data?.inventory.endpoints.find(
@@ -1205,6 +1641,7 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
           if (p)
             showTooltip(event, p.ip, [
               statusLabel(p.status),
+              formatPrice(p) + (p.price && !freshPrice(p) ? " · stale quote" : ""),
               `${p.location.country || "Location known"} · ${segments(p)} observed segments`,
               (event.features?.length ?? 0) > 1
                 ? `${event.features!.length} workers here · click to choose`
@@ -1253,6 +1690,7 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
         "legend-count"
       )
     );
+    legend.append(associationNote);
   }
   function fillOptions(input: HTMLSelectElement, values: string[], label: string) {
     const current = input.value;
@@ -1275,7 +1713,7 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
       new Date(end - Number(windowChoice.input.value) * 3600000).toISOString()
     );
     api.searchParams.set("include_inactive", String(inactive.checked));
-    api.searchParams.set("interval", windowChoice.input.value === "24" ? "5m" : "1h");
+    api.searchParams.set("interval", Number(windowChoice.input.value) <= 24 ? "5m" : "1h");
     return api;
   }
   async function fetchData() {

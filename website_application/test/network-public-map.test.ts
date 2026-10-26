@@ -8,6 +8,8 @@ const harness = vi.hoisted(() => ({
   events: new Map<string, (event: unknown) => void>(),
   scroll: vi.fn(() => vi.fn()),
   sources: new Map<string, { features: unknown[] }>(),
+  layers: new Map<string, Record<string, unknown>>(),
+  moves: vi.fn(),
 }));
 vi.mock("../../packages/map-core/index", () => ({
   loadMapLibre: async () => ({
@@ -38,10 +40,18 @@ vi.mock("../../packages/map-core/index", () => ({
           },
         });
       }
-      addLayer() {}
+      addLayer(layer: { id: string } & Record<string, unknown>) {
+        harness.layers.set(layer.id, layer);
+      }
+      hasImage() {
+        return false;
+      }
+      addImage() {}
       setLayoutProperty() {}
       resize() {}
-      easeTo() {}
+      easeTo(options: unknown) {
+        harness.moves(options);
+      }
       getCanvas() {
         return document.createElement("canvas");
       }
@@ -60,6 +70,8 @@ afterEach(() => {
   vi.unstubAllGlobals();
   harness.events.clear();
   harness.sources.clear();
+  harness.layers.clear();
+  harness.moves.mockClear();
   harness.scroll.mockClear();
   document.body.replaceChildren();
   window.history.replaceState({}, "", "/");
@@ -124,6 +136,145 @@ function mount(workerCount = 1, observers: NonNullable<Response["inventory"]["ob
   return container;
 }
 describe("public network map", () => {
+  it("locates a worker chosen from the directory without moving the camera again on refresh", async () => {
+    const container = mount();
+    await vi.waitFor(() => expect(harness.events.has("click:livepeer-endpoints")).toBe(true));
+    Array.from(container.querySelectorAll("button"))
+      .find((b) => b.textContent === "Browse workers")!
+      .click();
+    (container.querySelector('[data-endpoint="worker-a"]') as HTMLButtonElement).click();
+    expect(harness.moves).toHaveBeenCalledWith(expect.objectContaining({ center: [5, 52] }));
+    const count = harness.moves.mock.calls.length;
+    (container.querySelector('[aria-label="Refresh observations"]') as HTMLButtonElement).click();
+    await vi.waitFor(() =>
+      expect(
+        (container.querySelector('[aria-label="Refresh observations"]') as HTMLButtonElement)
+          .disabled
+      ).toBe(false)
+    );
+    expect(harness.moves).toHaveBeenCalledTimes(count);
+  });
+  it("restores an orchestrator group deep link without treating it as a worker", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/network?view=livepeer&lp_focus=orchestrator&lp_focus_id=0xabc"
+    );
+    const container = mount(2);
+    await vi.waitFor(() =>
+      expect(container.querySelector(".worker-inspector")?.textContent).toContain("ORCHESTRATOR")
+    );
+    expect(container.querySelector(".worker-inspector")?.textContent).toContain(
+      "2 workers observed"
+    );
+    expect(container.querySelector(".worker-inspector")?.textContent).toContain(
+      "not a count of physical GPUs"
+    );
+  });
+  it("preserves expanded hierarchy sections across observation refreshes", async () => {
+    const container = mount();
+    await vi.waitFor(() =>
+      expect(container.querySelector('[aria-label="Orchestrator identities"]')).not.toBeNull()
+    );
+    (container.querySelector('[aria-label="Orchestrator identities"]') as HTMLDetailsElement).open =
+      true;
+    (container.querySelector('[aria-label="Refresh observations"]') as HTMLButtonElement).click();
+    await vi.waitFor(() =>
+      expect(
+        (container.querySelector('[aria-label="Refresh observations"]') as HTMLButtonElement)
+          .disabled
+      ).toBe(false)
+    );
+    expect(
+      (container.querySelector('[aria-label="Orchestrator identities"]') as HTMLDetailsElement).open
+    ).toBe(true);
+  });
+  it("does not invent regional paths when measurement locations are unknown", async () => {
+    mount();
+    await vi.waitFor(() => expect(harness.events.has("click:livepeer-endpoints")).toBe(true));
+    harness.events.get("click:livepeer-endpoints")!({
+      features: [{ properties: { id: "worker-a" } }],
+    });
+    expect(harness.sources.get("regional-links")?.features).toHaveLength(0);
+  });
+  it("hides regional paths when workers are hidden and restores them when enabled", async () => {
+    const container = mount(1, [
+      {
+        id: "site",
+        kind: "gateway",
+        region: "eu-west",
+        last_seen: new Date().toISOString(),
+        location: { known: true, latitude: 40, longitude: -74, source: "lookup" },
+      },
+    ]);
+    await vi.waitFor(() => expect(harness.events.has("click:livepeer-endpoints")).toBe(true));
+    harness.events.get("click:livepeer-endpoints")!({
+      features: [{ properties: { id: "worker-a" } }],
+    });
+    const workers = Array.from(container.querySelectorAll("label"))
+      .find((label) => label.textContent === "Workers")!
+      .querySelector("input")!;
+    workers.checked = false;
+    workers.dispatchEvent(new Event("change"));
+    expect(harness.sources.get("regional-links")?.features).toHaveLength(0);
+    workers.checked = true;
+    workers.dispatchEvent(new Event("change"));
+    expect(harness.sources.get("regional-links")?.features).toHaveLength(1);
+  });
+  it("groups observing regions separately from orchestrator identities", async () => {
+    const container = mount(2, [
+      {
+        id: "site",
+        kind: "gateway",
+        region: "eu-west",
+        last_seen: new Date().toISOString(),
+        location: { known: true, latitude: 52, longitude: 5, source: "node" },
+      },
+    ]);
+    await vi.waitFor(() => expect(container.querySelector(".network-counts")).not.toBeNull());
+    expect(container.querySelector('[aria-label="Observing regions"]')).not.toBeNull();
+    expect(container.querySelector('[aria-label="Orchestrator identities"]')).not.toBeNull();
+    (container.querySelector('[data-region="eu-west"]') as HTMLButtonElement).click();
+    expect(container.querySelector(".worker-inspector")?.textContent).toContain("Observing region");
+    expect(container.querySelector(".worker-inspector")?.textContent).toContain("Gateway");
+    expect(container.querySelector(".worker-inspector")?.textContent).toContain(
+      "1 worker observed"
+    );
+  });
+  it("uses distinct map symbols for gateways and probers", async () => {
+    mount(1, [
+      {
+        id: "site",
+        kind: "gateway",
+        region: "eu-west",
+        last_seen: new Date().toISOString(),
+        location: { known: true, latitude: 52, longitude: 5, source: "node" },
+      },
+    ]);
+    await vi.waitFor(() => expect(harness.events.has("click:livepeer-endpoints")).toBe(true));
+    expect(harness.layers.get("gateway-clusters-role")?.type).toBe("symbol");
+    expect(harness.layers.get("prober-sites-role")?.type).toBe("symbol");
+    expect(harness.layers.get("gateway-clusters-role")?.layout).not.toEqual(
+      harness.layers.get("prober-sites-role")?.layout
+    );
+  });
+  it("draws regional associations only for endpoints with observations and a located region", async () => {
+    const container = mount(2, [
+      {
+        id: "site",
+        kind: "prober",
+        region: "eu-west",
+        last_seen: new Date().toISOString(),
+        location: { known: true, latitude: 40, longitude: -74, source: "lookup" },
+      },
+    ]);
+    await vi.waitFor(() => expect(harness.events.has("click:livepeer-endpoints")).toBe(true));
+    harness.events.get("click:livepeer-endpoints")!({
+      features: [{ properties: { id: "worker-a" } }],
+    });
+    expect(harness.sources.get("regional-links")?.features).toHaveLength(1);
+    expect(container.querySelector(".map-association-note")?.textContent).toContain("Regional");
+  });
   it("keeps current any-region reachability distinct from a regional history filter", async () => {
     window.history.replaceState({}, "", "/network?view=livepeer&lp_region=us-east");
     const container = mount();
