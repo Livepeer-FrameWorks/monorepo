@@ -9,11 +9,11 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/provisioner"
 	"frameworks/cli/pkg/ssh"
+	"frameworks/cli/pkg/watchdog"
 
 	"github.com/spf13/cobra"
 )
@@ -469,32 +469,31 @@ func TestRunMigrateCarriesDryRunCreatedDatabasesThroughTheRelease(t *testing.T) 
 	}
 }
 
-func TestRunMigrateStartsItsBudgetAfterServiceDatabaseBaselines(t *testing.T) {
+func TestRunMigrateStartsItsWatchdogAfterServiceDatabaseBaselines(t *testing.T) {
 	origEnsure, origGuard := ensureServiceDatabasesFn, migrateBelowFloorGuardFn
 	t.Cleanup(func() { ensureServiceDatabasesFn, migrateBelowFloorGuardFn = origEnsure, origGuard })
 
-	var ensureHadDeadline bool
-	var ensureReturned time.Time
+	var ensureBounded bool
 	ensureServiceDatabasesFn = func(ctx context.Context, _ *cobra.Command, _ *resolvedCluster, _ *ssh.Pool, _, _ bool) ([]provisioner.SchemaDatabase, error) {
-		_, ensureHadDeadline = ctx.Deadline()
-		time.Sleep(50 * time.Millisecond)
-		ensureReturned = time.Now()
+		_, hasDeadline := ctx.Deadline()
+		ensureBounded = hasDeadline || watchdog.From(ctx) != nil
 		return nil, nil
 	}
-	var guardDeadline time.Time
+	var guardWatched, guardHasDeadline bool
 	migrateBelowFloorGuardFn = func(ctx context.Context, _ *resolvedCluster, _ *ssh.Pool, _ map[string]struct{}) error {
-		guardDeadline, _ = ctx.Deadline()
+		guardWatched = watchdog.From(ctx) != nil
+		_, guardHasDeadline = ctx.Deadline()
 		return nil
 	}
 	cmd, _ := commandWithOutput()
 	if err := runMigrate(cmd, &resolvedCluster{Manifest: &inventory.Manifest{}}, false, "expand", true, "v0.3.8", true, false); err != nil {
 		t.Fatal(err)
 	}
-	if ensureHadDeadline {
-		t.Fatal("service database baselines ran under the migrate budget; a long completion would be cancelled by it")
+	if ensureBounded {
+		t.Fatal("service database baselines ran under the migrate watchdog or a deadline; a long completion would be cancelled by it")
 	}
-	if guardDeadline.IsZero() || guardDeadline.Before(ensureReturned.Add(migrateTimeout)) {
-		t.Fatalf("guard deadline = %v, ensure returned = %v; the migrate budget must start after the baselines", guardDeadline, ensureReturned)
+	if !guardWatched || guardHasDeadline {
+		t.Fatalf("floor guard watched=%t deadline=%t, want it under the preflight watchdog with no wall-clock deadline", guardWatched, guardHasDeadline)
 	}
 }
 

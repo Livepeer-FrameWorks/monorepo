@@ -12,6 +12,7 @@ import (
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/provisioner"
 	"frameworks/cli/pkg/ssh"
+	"frameworks/cli/pkg/watchdog"
 
 	"github.com/spf13/cobra"
 )
@@ -58,13 +59,17 @@ Existing databases/topics/tables will be skipped.`,
 	return cmd
 }
 
+// initStallWindow bounds silence in `cluster init`: every init role output line is progress.
+const initStallWindow = 10 * time.Minute
+
 // runInit executes the init command against an already-loaded manifest.
-func runInit(cmd *cobra.Command, rc *resolvedCluster, service string) error {
+func runInit(cmd *cobra.Command, rc *resolvedCluster, service string) (err error) {
 	out := cmd.OutOrStdout()
 	ux.Heading(out, fmt.Sprintf("Initializing %s from manifest: %s", service, rc.ManifestPath))
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
+	ctx, progress := watchdog.Start(context.Background(), "init "+service, initStallWindow)
+	defer progress.Stop()
+	defer func() { err = progress.Err(err) }()
 
 	sshKey := stringFlag(cmd, "ssh-key").Value
 	sshPool := ssh.NewPool(30*time.Second, sshKey)

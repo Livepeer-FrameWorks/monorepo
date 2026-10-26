@@ -18,6 +18,7 @@ import (
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/ssh"
 	"frameworks/cli/pkg/system"
+	"frameworks/cli/pkg/watchdog"
 
 	"github.com/spf13/cobra"
 )
@@ -73,10 +74,13 @@ Sources:
 	return cmd
 }
 
-func runSyncGeoIP(cmd *cobra.Command, rc *resolvedCluster, licenseKey, source, filePath, remotePath string, services []string, restart bool) error {
+func runSyncGeoIP(cmd *cobra.Command, rc *resolvedCluster, licenseKey, source, filePath, remotePath string, services []string, restart bool) (err error) {
 	ux.Heading(cmd.OutOrStdout(), fmt.Sprintf("Syncing GeoIP MMDB to %d service(s) via %s", len(services), source))
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
+	// Bounded by silence, not by a total that grows with the host count: each host's upload starting is progress, so
+	// the window covers the download and one host's upload and restart.
+	ctx, progress := watchdog.Start(context.Background(), "geoip sync", 10*time.Minute)
+	defer progress.Stop()
+	defer func() { err = progress.Err(err) }()
 
 	manifest := rc.Manifest
 	manifestDir := filepath.Dir(rc.ManifestPath)
@@ -89,9 +93,9 @@ func runSyncGeoIP(cmd *cobra.Command, rc *resolvedCluster, licenseKey, source, f
 	// source=maxmind AND no explicit --license-key. This preserves --source=file
 	// and --license-key override flows when SOPS state is unavailable.
 	if licenseKey == "" && source == "maxmind" {
-		sharedEnv, err := rc.SharedEnv()
-		if err != nil {
-			return fmt.Errorf("load manifest env_files: %w", err)
+		sharedEnv, envErr := rc.SharedEnv()
+		if envErr != nil {
+			return fmt.Errorf("load manifest env_files: %w", envErr)
 		}
 		licenseKey = effectiveGeoIPLicenseKey(sharedEnv, licenseKey)
 	}
@@ -350,6 +354,7 @@ func uploadGeoIPToHosts(ctx context.Context, manifest *inventory.Manifest, pool 
 		}
 
 		fmt.Fprintf(out, "Uploading GeoIP MMDB to %s (%s)...\n", hostName, host.ExternalIP)
+		watchdog.Reportf(ctx, "uploading GeoIP MMDB to %s", hostName)
 		remoteTmpPath := geoIPRemoteTempPath(remotePath, hostName)
 		if err := pool.Upload(ctx, connCfg, ssh.UploadOptions{
 			LocalPath:  mmdbPath,

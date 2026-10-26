@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 
+	"frameworks/cli/pkg/watchdog"
+
 	goansible_execute "github.com/apenella/go-ansible/v2/pkg/execute"
 	goansible_result "github.com/apenella/go-ansible/v2/pkg/execute/result"
 	goansible_playbook "github.com/apenella/go-ansible/v2/pkg/playbook"
@@ -214,10 +216,16 @@ func (e *Executor) Execute(ctx context.Context, opts ExecuteOptions) error {
 		execOpts = append(execOpts, goansible_execute.WithEnvVars(opts.EnvVars))
 	}
 	failureTail := newTailWriter(ansibleFailureTailBytes)
+	// Under a watchdog context every output line (task, loop item, recap) counts as progress, so a playbook is
+	// bounded by silence rather than by its total run time.
+	observed := io.Writer(failureTail)
+	if progress := watchdog.WriterFrom(ctx); progress != nil {
+		observed = io.MultiWriter(failureTail, progress)
+	}
 	if opts.Outputer != nil {
 		execOpts = append(execOpts, goansible_execute.WithOutput(&tailCapturingOutputer{
 			delegate: opts.Outputer,
-			tail:     failureTail,
+			tail:     observed,
 		}))
 	} else {
 		stdout, stderr := io.Writer(os.Stdout), io.Writer(os.Stderr)
@@ -225,8 +233,8 @@ func (e *Executor) Execute(ctx context.Context, opts ExecuteOptions) error {
 			stdout, stderr = w, w
 		}
 		execOpts = append(execOpts,
-			goansible_execute.WithWrite(io.MultiWriter(stdout, failureTail)),
-			goansible_execute.WithWriteError(io.MultiWriter(stderr, failureTail)),
+			goansible_execute.WithWrite(io.MultiWriter(stdout, observed)),
+			goansible_execute.WithWriteError(io.MultiWriter(stderr, observed)),
 		)
 	}
 	runner := goansible_execute.NewDefaultExecute(execOpts...)

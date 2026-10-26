@@ -12,6 +12,7 @@ import (
 	"frameworks/cli/pkg/orchestrator"
 	"frameworks/cli/pkg/provisioner"
 	"frameworks/cli/pkg/ssh"
+	"frameworks/cli/pkg/watchdog"
 
 	"github.com/spf13/cobra"
 )
@@ -302,16 +303,16 @@ func resolveServiceHost(manifest *inventory.Manifest, serviceName string) (inven
 	return inventory.Host{}, false
 }
 
-// yugabyteRollingRestartDeadline bounds a rolling restart of nodes nodes. Each node may wait for the masters to allow
-// its restart and then for its own recovery, each up to the roll's recovery timeout, on top of the restart itself.
-func yugabyteRollingRestartDeadline(nodes int) time.Duration {
-	return time.Duration(nodes) * (2*yugabyteRollRecoveryTimeout + 5*time.Minute)
-}
+// yugabyteRollingRestartStallWindow bounds silence in a rolling restart. Each node may wait for the masters to allow
+// its restart and then for its own recovery, each up to the roll's recovery timeout, on top of the restart itself;
+// every node that finished and every restart role output line is progress, so the roll's length scales with the
+// number of nodes without a total cap.
+const yugabyteRollingRestartStallWindow = 2*yugabyteRollRecoveryTimeout + 5*time.Minute
 
 // runYugabyteRollingRestart restarts every Yugabyte node, one at a time, through the roll's gate: nodes that are down
 // first, each serving node only once the masters confirm the universe survives losing it, and the next node only after
 // the restarted one has recovered. The first failure stops the restart.
-func runYugabyteRollingRestart(cmd *cobra.Command, rc *resolvedCluster, deployName string, validate bool) error {
+func runYugabyteRollingRestart(cmd *cobra.Command, rc *resolvedCluster, deployName string, validate bool) (err error) {
 	manifest := rc.Manifest
 	sshKey := stringFlag(cmd, "ssh-key").Value
 	sshPool := ssh.NewPool(30*time.Second, sshKey)
@@ -321,8 +322,9 @@ func runYugabyteRollingRestart(cmd *cobra.Command, rc *resolvedCluster, deployNa
 	if roll == nil {
 		return fmt.Errorf("service yugabyte not found or not enabled in manifest")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), yugabyteRollingRestartDeadline(len(roll.hosts)))
-	defer cancel()
+	ctx, progress := watchdog.Start(context.Background(), "yugabyte rolling restart", yugabyteRollingRestartStallWindow)
+	defer progress.Stop()
+	defer func() { err = progress.Err(err) }()
 
 	prov, err := provisioner.GetProvisioner(deployName, sshPool)
 	if err != nil {

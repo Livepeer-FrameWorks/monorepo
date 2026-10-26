@@ -44,6 +44,7 @@ import (
 	"frameworks/cli/pkg/provisioner"
 	"frameworks/cli/pkg/remoteaccess"
 	"frameworks/cli/pkg/ssh"
+	"frameworks/cli/pkg/watchdog"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/countries"
 	pkgdatabase "github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	pkgdns "github.com/Livepeer-FrameWorks/monorepo/pkg/dns"
@@ -1431,7 +1432,7 @@ func provisionInspectChanges(ctx context.Context, prov provisioner.Provisioner, 
 		return provisioner.ChangeInspection{Changed: true}, fmt.Errorf("%s provisioner does not implement change precheck", prov.GetName())
 	}
 	var inspection provisioner.ChangeInspection
-	if err := runProvisionPhase(ctx, provisionApplyTimeout, "provision precheck", func(phaseCtx context.Context) error {
+	if err := runProvisionWatchedPhase(ctx, provisionApplyStallWindow, "provision precheck", func(phaseCtx context.Context) error {
 		var err error
 		if canInspect {
 			inspection, err = inspector.InspectChanges(phaseCtx, host, config, tags)
@@ -6311,16 +6312,43 @@ func startTaskProgressLogger(cmd *cobra.Command, task *orchestrator.Task, interv
 
 const (
 	provisionDetectTimeout = 10 * time.Second
-	// Fresh hosts may need to download large infrastructure archives from
-	// upstream mirrors before Ansible can configure them.
-	provisionApplyTimeout      = 20 * time.Minute
-	provisionValidateTimeout   = 75 * time.Second
-	provisionInitializeTimeout = 2 * time.Minute
+	// provisionApplyStallWindow is how long a role run (provision, precheck,
+	// deploy, restart) may print no ansible output before it is cancelled.
+	// Fresh hosts may download large infrastructure archives from upstream
+	// mirrors in one silent task before Ansible can configure them.
+	provisionApplyStallWindow = 20 * time.Minute
+	// provisionInitializeStallWindow bounds silence in a role's init run.
+	provisionInitializeStallWindow = 2 * time.Minute
+	provisionValidateTimeout       = 75 * time.Second
+	provisionInitializeTimeout     = 2 * time.Minute
 	// Quartermaster clients use WaitForReady. Allow a newly established
 	// port-forward to become ready without consuming the two-minute phase.
 	quartermasterRPCTimeout = 30 * time.Second
 	nodeBaselineConcurrency = 8
 )
+
+// runProvisionWatchedPhase runs a role-backed phase under a progress watchdog:
+// every ansible output line of the run is progress, so the phase runs as long
+// as the role keeps moving and is cancelled only after stall without output.
+func runProvisionWatchedPhase(parent context.Context, stall time.Duration, phase string, fn func(context.Context) error) error {
+	phaseCtx, w := watchdog.Start(parent, phase, stall)
+	defer w.Stop()
+
+	err := fn(phaseCtx)
+	if parent.Err() != nil {
+		if err == nil {
+			return parent.Err()
+		}
+		return fmt.Errorf("%s interrupted by parent context: %w", phase, err)
+	}
+	if stallErr := w.Stalled(); stallErr != nil {
+		if err == nil {
+			return stallErr
+		}
+		return w.Err(err)
+	}
+	return err
+}
 
 func runProvisionPhase(parent context.Context, timeout time.Duration, phase string, fn func(context.Context) error) error {
 	phaseCtx, cancel := context.WithTimeout(parent, timeout)
@@ -6564,7 +6592,7 @@ func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.
 				return nil, err
 			}
 		}
-		if err := runProvisionPhase(ctx, provisionApplyTimeout, "provision", func(phaseCtx context.Context) error {
+		if err := runProvisionWatchedPhase(ctx, provisionApplyStallWindow, "provision", func(phaseCtx context.Context) error {
 			return prov.Provision(phaseCtx, host, config)
 		}); err != nil {
 			return nil, err
@@ -6606,7 +6634,7 @@ func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.
 				}
 			}
 			if !initSkipped {
-				if initErr := runProvisionPhase(ctx, provisionInitializeTimeout, "initialize", func(phaseCtx context.Context) error {
+				if initErr := runProvisionWatchedPhase(ctx, provisionInitializeStallWindow, "initialize", func(phaseCtx context.Context) error {
 					return prov.Initialize(phaseCtx, host, config)
 				}); initErr != nil {
 					return nil, fmt.Errorf("initialization failed for %s: %w", task.Name, initErr)

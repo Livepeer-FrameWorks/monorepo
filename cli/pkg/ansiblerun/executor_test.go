@@ -2,11 +2,15 @@ package ansiblerun
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"time"
+
+	"frameworks/cli/pkg/watchdog"
 )
 
 func TestWriteExtraVarsFileUsesPrivateAtFile(t *testing.T) {
@@ -126,6 +130,42 @@ func TestExecutorStreamsToContextOutputWriter(t *testing.T) {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("context writer missing %q: %q", want, out.String())
 		}
+	}
+}
+
+// Under a watchdog context a playbook that keeps printing runs past the stall window, and one that goes silent is
+// cancelled with the stall as the cause.
+func TestExecutorOutputFeedsWatchdog(t *testing.T) {
+	dir := t.TempDir()
+	chatty := filepath.Join(dir, "chatty")
+	script := "#!/bin/sh\nfor i in 1 2 3 4 5 6 7 8; do echo \"TASK [step $i]\"; sleep 0.05; done\n"
+	if err := os.WriteFile(chatty, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake ansible-playbook: %v", err)
+	}
+	silent := filepath.Join(dir, "silent")
+	if err := os.WriteFile(silent, []byte("#!/bin/sh\necho \"TASK [last task]\"\nexec sleep 5\n"), 0o755); err != nil {
+		t.Fatalf("write fake ansible-playbook: %v", err)
+	}
+	opts := ExecuteOptions{Playbook: filepath.Join(dir, "playbook.yml"), Inventory: filepath.Join(dir, "inventory.yml")}
+
+	ctx, w := watchdog.Start(WithOutputWriter(context.Background(), io.Discard), "chatty playbook", 200*time.Millisecond)
+	defer w.Stop()
+	if err := (&Executor{Binary: chatty}).Execute(ctx, opts); err != nil {
+		t.Fatalf("playbook printing every 50ms under a 200ms stall window failed: %v", w.Err(err))
+	}
+
+	ctx, w = watchdog.Start(WithOutputWriter(context.Background(), io.Discard), "silent playbook", 200*time.Millisecond)
+	defer w.Stop()
+	started := time.Now()
+	err := w.Err((&Executor{Binary: silent}).Execute(ctx, opts))
+	if err == nil {
+		t.Fatal("silent playbook passed under a 200ms stall window")
+	}
+	if time.Since(started) > 4*time.Second {
+		t.Fatalf("silent playbook ran %s; the watchdog did not stop it", time.Since(started))
+	}
+	if !strings.Contains(err.Error(), "silent playbook stalled") || !strings.Contains(err.Error(), "TASK [last task]") {
+		t.Fatalf("stall error %q does not name the playbook and its last task", err)
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/provisioner"
 	"frameworks/cli/pkg/ssh"
+	"frameworks/cli/pkg/watchdog"
 
 	"github.com/spf13/cobra"
 )
@@ -48,7 +49,7 @@ Seed operations are idempotent (ON CONFLICT guards).`,
 	return cmd
 }
 
-func runSeed(cmd *cobra.Command, rc *resolvedCluster, demo, force bool) error {
+func runSeed(cmd *cobra.Command, rc *resolvedCluster, demo, force bool) (err error) {
 	if hasUnscopedDatabaseDeployments(rc.Manifest) {
 		if demo {
 			return fmt.Errorf("select a database deployment before applying demo seeds")
@@ -68,8 +69,8 @@ func runSeed(cmd *cobra.Command, rc *resolvedCluster, demo, force bool) error {
 	if demo && !force {
 		fmt.Fprint(cmd.OutOrStdout(), "This will insert demo data (sample tenant, user, stream). Continue? [y/N] ")
 		var answer string
-		if _, err := fmt.Scanln(&answer); err != nil {
-			return fmt.Errorf("reading input: %w", err)
+		if _, scanErr := fmt.Scanln(&answer); scanErr != nil {
+			return fmt.Errorf("reading input: %w", scanErr)
 		}
 		if answer != "y" && answer != "Y" {
 			fmt.Fprintln(cmd.OutOrStdout(), "Aborted.")
@@ -77,8 +78,10 @@ func runSeed(cmd *cobra.Command, rc *resolvedCluster, demo, force bool) error {
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
+	// Bounded by silence, not duration: every seed role output line is progress.
+	ctx, progress := watchdog.Start(context.Background(), "cluster seed", 5*time.Minute)
+	defer progress.Stop()
+	defer func() { err = progress.Err(err) }()
 
 	sshKey := stringFlag(cmd, "ssh-key").Value
 	sshPool := ssh.NewPool(30*time.Second, sshKey)

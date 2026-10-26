@@ -315,7 +315,7 @@ func (o sshYugabyteReleaseOps) Restart(ctx context.Context, node *orchestrator.T
 	if !ok {
 		return fmt.Errorf("the %s provisioner cannot restart a single process", prov.GetName())
 	}
-	return runProvisionPhase(ctx, provisionApplyTimeout, "restart", func(phaseCtx context.Context) error {
+	return runProvisionWatchedPhase(ctx, provisionApplyStallWindow, "restart", func(phaseCtx context.Context) error {
 		return restarter.Restart(phaseCtx, host, config)
 	})
 }
@@ -327,7 +327,7 @@ func (o sshYugabyteReleaseOps) InstallEngine(ctx context.Context, node *orchestr
 	if err != nil {
 		return err
 	}
-	return runProvisionPhase(ctx, provisionApplyTimeout, "deploy", func(phaseCtx context.Context) error {
+	return runProvisionWatchedPhase(ctx, provisionApplyStallWindow, "deploy", func(phaseCtx context.Context) error {
 		return prov.Deploy(phaseCtx, host, config)
 	})
 }

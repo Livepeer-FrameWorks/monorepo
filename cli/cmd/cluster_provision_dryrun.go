@@ -10,6 +10,7 @@ import (
 	"frameworks/cli/pkg/orchestrator"
 	"frameworks/cli/pkg/provisioner"
 	fwssh "frameworks/cli/pkg/ssh"
+	"frameworks/cli/pkg/watchdog"
 
 	"github.com/spf13/cobra"
 )
@@ -75,10 +76,11 @@ func buildDryRunTaskCompare(ctx context.Context, cmd *cobra.Command, rc *resolve
 		}
 		rc.applyReleaseMetadata(cfg.Metadata)
 
-		subCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-		defer cancel()
+		// The check-mode run is bounded by silence: each of its output lines is progress.
+		subCtx, progress := watchdog.Start(ctx, "check diff of "+task.Name, 2*time.Minute)
+		defer progress.Stop()
 		if err := checker.CheckDiff(subCtx, host, cfg); err != nil {
-			return fmt.Sprintf(" | would change (ansible --check --diff: %v)", err)
+			return fmt.Sprintf(" | would change (ansible --check --diff: %v)", progress.Err(err))
 		}
 		return " | no-op (ansible --check: nothing to change)"
 	}

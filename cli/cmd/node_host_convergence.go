@@ -95,7 +95,7 @@ func convergeNodeHost(ctx context.Context, out io.Writer, pool *ssh.Pool, manife
 			fmt.Fprintf(out, "    [DRY-RUN] %s would converge (forced)\n", role.name)
 			continue
 		}
-		if err := runProvisionPhase(ctx, provisionApplyTimeout, role.name, func(phaseCtx context.Context) error {
+		if err := runProvisionWatchedPhase(ctx, provisionApplyStallWindow, role.name, func(phaseCtx context.Context) error {
 			return role.prov.Provision(phaseCtx, host, role.config)
 		}); err != nil {
 			return fmt.Errorf("%s: %w", role.name, err)

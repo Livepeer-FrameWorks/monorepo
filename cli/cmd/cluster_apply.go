@@ -15,6 +15,7 @@ import (
 	"frameworks/cli/pkg/orchestrator"
 	"frameworks/cli/pkg/provisioner"
 	fwssh "frameworks/cli/pkg/ssh"
+	"frameworks/cli/pkg/watchdog"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 	"github.com/spf13/cobra"
@@ -89,7 +90,7 @@ type clusterApplyReport struct {
 	Skipped  []clusterDiffEntry    `json:"skipped,omitempty"`
 }
 
-func runClusterApply(cmd *cobra.Command, rc *resolvedCluster) error {
+func runClusterApply(cmd *cobra.Command, rc *resolvedCluster) (err error) {
 	manifest := rc.Manifest
 
 	outputFmt := stringFlag(cmd, "output").Value
@@ -106,16 +107,16 @@ func runClusterApply(cmd *cobra.Command, rc *resolvedCluster) error {
 		return fmt.Errorf("--output json is only supported for dry-run plans")
 	}
 
-	// Confirm runs can take much longer than dry-runs — every host
-	// restart + gate wait is N×30s in the worst case. Lift the timeout
-	// generously; the gate per-host timeout still bounds individual host
-	// progress, and ctrl-C cancels the whole rollout cleanly.
-	timeout := clusterDiffTimeout
+	// The run is bounded by silence, not by a total that grows with the host count: every role output line is
+	// progress. A confirm run's window also covers one host's restart and readiness gate wait; the gate's per-host
+	// timeout bounds each host, and ctrl-C cancels the whole rollout cleanly.
+	stall := clusterDiffTimeout
 	if confirm {
-		timeout = 45 * time.Minute
+		stall = 45 * time.Minute
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
+	ctx, progress := watchdog.Start(context.Background(), "cluster apply", stall)
+	defer progress.Stop()
+	defer func() { err = progress.Err(err) }()
 
 	sshKey := stringFlag(cmd, "ssh-key").Value
 	sshPool := fwssh.NewPool(30*time.Second, sshKey)

@@ -21,6 +21,7 @@ import (
 	"frameworks/cli/pkg/provisioner"
 	"frameworks/cli/pkg/remoteaccess"
 	"frameworks/cli/pkg/ssh"
+	"frameworks/cli/pkg/watchdog"
 	fwv "github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 
 	"github.com/spf13/cobra"
@@ -956,9 +957,12 @@ func runReleaseUpgradesInterleaved(cmd *cobra.Command, rc *resolvedCluster, env 
 	return installed, nil
 }
 
+// releaseTransitionStallWindow bounds one reconciliation's silence: a scope's check, or its apply and verify.
+var releaseTransitionStallWindow = 5 * time.Minute
+
 // runReleaseTransition runs one transition's Check across its scopes and, for Pending scopes, Apply + Verify (unless
 // dry-run). A Blocked scope halts the release.
-func runReleaseTransition(cmd *cobra.Command, env *reconcileEnv, t ReleaseTransition, dryRun bool) error {
+func runReleaseTransition(cmd *cobra.Command, env *reconcileEnv, t ReleaseTransition, dryRun bool) (err error) {
 	if env == nil {
 		return fmt.Errorf("reconciliation %q required but no Quartermaster client was built", t.ID())
 	}
@@ -967,8 +971,10 @@ func runReleaseTransition(cmd *cobra.Command, env *reconcileEnv, t ReleaseTransi
 	if baseCtx == nil {
 		baseCtx = context.Background()
 	}
-	ctx, cancel := context.WithTimeout(baseCtx, 5*time.Minute)
-	defer cancel()
+	// Bounded by silence, not by the scope count: each scope checked, and each scope applied and verified, is progress.
+	ctx, progress := watchdog.Start(baseCtx, "reconciliation "+t.ID(), releaseTransitionStallWindow)
+	defer progress.Stop()
+	defer func() { err = progress.Err(err) }()
 
 	scopes, err := t.Scopes(env)
 	if err != nil {
@@ -982,6 +988,7 @@ func runReleaseTransition(cmd *cobra.Command, env *reconcileEnv, t ReleaseTransi
 	for _, scope := range scopes {
 		chk := t.Check(ctx, env, scope)
 		fmt.Fprintf(out, "  %s: %s — %s\n", scope.Label, chk.Status, chk.Detail)
+		progress.Report(fmt.Sprintf("checked %s: %s", scope.Label, chk.Status))
 		switch chk.Status {
 		case ReconcileNotApplicable:
 			continue
@@ -1020,6 +1027,7 @@ func runReleaseTransition(cmd *cobra.Command, env *reconcileEnv, t ReleaseTransi
 				return fmt.Errorf("reconciliation %q verify for %s: %w", t.ID(), scope.Label, err)
 			}
 			fmt.Fprintf(out, "    ✓ applied and verified\n")
+			progress.Report("applied and verified " + scope.Label)
 		default:
 			return fmt.Errorf("reconciliation %q returned unknown status %q for %s", t.ID(), chk.Status, scope.Label)
 		}

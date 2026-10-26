@@ -18,6 +18,7 @@ import (
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/orchestrator"
 	"frameworks/cli/pkg/provisioner"
+	"frameworks/cli/pkg/watchdog"
 )
 
 // fakeUniverse is a three-node universe whose answers the tests steer. Each node runs one tserver and one master; a
@@ -767,9 +768,27 @@ func TestYugabyteFinalizeUpgradeReportsFailure(t *testing.T) {
 	}
 }
 
-func TestYugabyteRollingRestartDeadlineCoversBothWaits(t *testing.T) {
-	if got, least := yugabyteRollingRestartDeadline(3), 3*2*yugabyteRollRecoveryTimeout; got <= least {
-		t.Fatalf("a three-node restart gets %s, want more than %s so each node can wait for permission and for recovery", got, least)
+func TestYugabyteRollingRestartStallWindowCoversBothWaits(t *testing.T) {
+	if got, least := time.Duration(yugabyteRollingRestartStallWindow), 2*yugabyteRollRecoveryTimeout; got <= least {
+		t.Fatalf("a node's restart gets %s of silence, want more than %s so it can wait for permission and for recovery", got, least)
+	}
+}
+
+// Each node a roll changed and recovered is progress for the watchdog bounding the roll, so a roll over many nodes is
+// not cut short by a total cap.
+func TestYugabyteRollReportsEachRecoveredNodeAsProgress(t *testing.T) {
+	universe := &fakeUniverse{serving: servingAll()}
+	roll := universe.roll("yb-1", "yb-2", "yb-3")
+	roll.setOrder([]string{"yb-1", "yb-2", "yb-3"})
+	ctx, w := watchdog.Start(context.Background(), "yugabyte rolling restart", time.Hour)
+	defer w.Stop()
+	for _, name := range roll.order {
+		if err := roll.changeMaster(ctx, inventory.Host{Name: name}, func(gate func() error) error { return gate() }); err != nil {
+			t.Fatalf("change %s: %v", name, err)
+		}
+		if last, _ := w.LastProgress(); last != "yugabyte node "+name+" changed and recovered" {
+			t.Fatalf("last progress after %s = %q, want that node reported", name, last)
+		}
 	}
 }
 

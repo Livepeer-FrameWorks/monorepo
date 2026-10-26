@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"maps"
 	"net/url"
 	"os"
@@ -27,6 +28,7 @@ import (
 	"frameworks/cli/pkg/orchestrator"
 	"frameworks/cli/pkg/provisioner"
 	"frameworks/cli/pkg/remoteaccess"
+	"frameworks/cli/pkg/watchdog"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ingress"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
@@ -544,6 +546,34 @@ func TestRunProvisionPhaseReportsOwnTimeout(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "provision timed out after") {
 		t.Fatalf("expected phase timeout error, got %v", err)
+	}
+}
+
+// A role phase keeps running past its stall window while the role prints output, and a silent role is cancelled
+// with an error naming the phase and its last output line.
+func TestRunProvisionWatchedPhaseBoundsSilenceNotDuration(t *testing.T) {
+	err := runProvisionWatchedPhase(context.Background(), 60*time.Millisecond, "provision", func(ctx context.Context) error {
+		out := watchdog.WriterFrom(ctx)
+		for i := 0; i < 40; i++ {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			fmt.Fprintf(out, "TASK [install %d]\n", i)
+			time.Sleep(5 * time.Millisecond)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("role printing output every 5ms for 200ms under a 60ms stall window failed: %v", err)
+	}
+
+	err = runProvisionWatchedPhase(context.Background(), 60*time.Millisecond, "provision", func(ctx context.Context) error {
+		fmt.Fprintln(watchdog.WriterFrom(ctx), "TASK [download archive]")
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	if err == nil || !strings.Contains(err.Error(), "provision stalled") || !strings.Contains(err.Error(), "TASK [download archive]") {
+		t.Fatalf("silent role phase error = %v, want a stall naming the phase and its last output", err)
 	}
 }
 

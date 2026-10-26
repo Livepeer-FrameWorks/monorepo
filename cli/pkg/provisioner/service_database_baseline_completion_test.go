@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	"frameworks/cli/pkg/watchdog"
 )
 
 const testReferenceSuffix = "0123456789abcdef"
@@ -237,11 +240,10 @@ func TestInitializeServiceDatabasesTimedOutCompletionFailsClosed(t *testing.T) {
 	probe := &completionProbe{existing: map[string]struct{}{"lookout": {}}}
 	const bound = 50 * time.Millisecond
 	var applyCalls int
-	var applyDeadline, applyStarted time.Time
+	var applyWatched bool
 	blocking := func(ctx context.Context, _ []SchemaDatabase) error {
 		applyCalls++
-		applyStarted = time.Now()
-		applyDeadline, _ = ctx.Deadline()
+		applyWatched = watchdog.From(ctx) != nil
 		<-ctx.Done()
 		return errors.New("ansible killed")
 	}
@@ -250,11 +252,11 @@ func TestInitializeServiceDatabasesTimedOutCompletionFailsClosed(t *testing.T) {
 		"lookout":   {Exists: true, HasTables: true},
 		"commodore": {},
 	}, blocking, fixedReferenceSuffix, bound)
-	if err == nil || !strings.Contains(err.Error(), "lookout: baseline completion exceeded its 50ms per-database bound") {
-		t.Fatalf("err = %v, want the per-database bound named", err)
+	if err == nil || !strings.Contains(err.Error(), "lookout: baseline completion made no progress within its 50ms per-database stall window") {
+		t.Fatalf("err = %v, want the per-database stall window named", err)
 	}
-	if applyDeadline.IsZero() || applyDeadline.Sub(applyStarted) > bound {
-		t.Fatalf("apply deadline = %v started = %v; the completion must run within its own bound", applyDeadline, applyStarted)
+	if !applyWatched {
+		t.Fatal("the completion's baseline apply ran without the per-database watchdog")
 	}
 	dropped := probe.indexOf(t, `postgres: DROP DATABASE IF EXISTS "`+reference+`"`)
 	if dropped < 0 || probe.contextErrs[dropped] != nil {
@@ -270,27 +272,51 @@ func TestInitializeServiceDatabasesTimedOutCompletionFailsClosed(t *testing.T) {
 
 func TestInitializeServiceDatabasesBoundsEachDatabaseSeparately(t *testing.T) {
 	const bound = time.Hour
-	var remaining []time.Duration
+	var watchdogs []*watchdog.Watchdog
 	slow := func(ctx context.Context, _ []SchemaDatabase) error {
-		deadline, ok := ctx.Deadline()
-		if !ok {
-			t.Fatal("baseline apply ran without a deadline")
+		w := watchdog.From(ctx)
+		if w == nil {
+			t.Fatal("baseline apply ran without a watchdog")
 		}
-		remaining = append(remaining, time.Until(deadline))
+		if _, hasDeadline := ctx.Deadline(); hasDeadline {
+			t.Fatal("baseline apply ran under a wall-clock deadline")
+		}
+		watchdogs = append(watchdogs, w)
 		time.Sleep(100 * time.Millisecond)
 		return nil
 	}
-	parent, cancel := context.WithTimeout(context.Background(), 2*bound)
-	defer cancel()
-	err := initializeServiceDatabases(parent, nil, completionDatabases, map[string]ServiceDatabaseState{
+	err := initializeServiceDatabases(context.Background(), nil, completionDatabases, map[string]ServiceDatabaseState{
 		"commodore": {},
 		"lookout":   {},
 	}, slow, fixedReferenceSuffix, bound)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(remaining) != 2 || remaining[1] < bound-50*time.Millisecond {
-		t.Fatalf("remaining time per apply = %v; each database must start with its full bound", remaining)
+	if len(watchdogs) != 2 || watchdogs[0] == watchdogs[1] {
+		t.Fatalf("watchdogs per apply = %v; each database must run under its own watchdog", watchdogs)
+	}
+}
+
+// A baseline apply whose schema role keeps printing output runs past the per-database stall window: a large
+// YugabyteDB baseline is bounded by silence, not by its duration.
+func TestInitializeServiceDatabasesApplyRunsPastWindowWhileProgressing(t *testing.T) {
+	const window = 60 * time.Millisecond
+	chatty := func(ctx context.Context, _ []SchemaDatabase) error {
+		out := watchdog.WriterFrom(ctx)
+		for i := 0; i < 40; i++ {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if out != nil {
+				fmt.Fprintf(out, "TASK [apply baseline statement %d]\n", i)
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		return nil
+	}
+	err := initializeServiceDatabases(context.Background(), nil, completionDatabases[:1], map[string]ServiceDatabaseState{"commodore": {}}, chatty, fixedReferenceSuffix, window)
+	if err != nil {
+		t.Fatalf("baseline apply printing output every 5ms for 200ms under a 60ms stall window failed: %v", err)
 	}
 }
 
@@ -301,7 +327,7 @@ func TestInitializeServiceDatabasesReportsCallerCancellationUnwrapped(t *testing
 		return context.Canceled
 	}
 	err := initializeServiceDatabases(parent, nil, completionDatabases[:1], map[string]ServiceDatabaseState{"commodore": {}}, cancelled, fixedReferenceSuffix, time.Hour)
-	if !errors.Is(err, context.Canceled) || strings.Contains(err.Error(), "per-database bound") {
+	if !errors.Is(err, context.Canceled) || strings.Contains(err.Error(), "per-database stall window") {
 		t.Fatalf("err = %v; a cancelled caller is not a per-database timeout", err)
 	}
 }

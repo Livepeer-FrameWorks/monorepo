@@ -16,6 +16,7 @@ import (
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/provisioner"
 	fwssh "frameworks/cli/pkg/ssh"
+	"frameworks/cli/pkg/watchdog"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/sync/errgroup"
@@ -127,9 +128,19 @@ packages, try-restarts affected services, and reboots if required. Honors
 	return cmd
 }
 
-func runOSUpdateCheck(cmd *cobra.Command, rc *resolvedCluster, hostsCSV string, refresh, jsonMode bool) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
+// The OS update runs are bounded by silence, not by their total duration, which grows with the fleet: every playbook
+// output line and every Yugabyte node that finished its roll is progress. The apply window covers one silent apt
+// upgrade and reboot of a host, and a Yugabyte node waiting for the masters to confirm it can go down and then for its
+// own recovery, each up to the roll's recovery timeout.
+const (
+	osUpdateCheckStallWindow = 10 * time.Minute
+	osUpdateApplyStallWindow = 60 * time.Minute
+)
+
+func runOSUpdateCheck(cmd *cobra.Command, rc *resolvedCluster, hostsCSV string, refresh, jsonMode bool) (err error) {
+	ctx, progress := watchdog.Start(context.Background(), "os update check", osUpdateCheckStallWindow)
+	defer progress.Stop()
+	defer func() { err = progress.Err(err) }()
 
 	ux.Heading(cmd.OutOrStdout(), "Checking OS update state across fleet")
 
@@ -201,18 +212,10 @@ func runOSUpdateCheck(cmd *cobra.Command, rc *resolvedCluster, hostsCSV string, 
 	return nil
 }
 
-func runOSUpdateApply(cmd *cobra.Command, rc *resolvedCluster, hostsCSV, mode string, noReboot bool, serial int, continueOnErr bool) error {
-	deadline := 60 * time.Minute
-	for _, deployment := range rc.Manifest.SQLDeployments() {
-		pg := deployment.Config
-		if !pg.IsYugabyte() {
-			continue
-		}
-		// Each Yugabyte node may wait for the masters to confirm it can go down and then for its own recovery.
-		deadline += time.Duration(len(pg.Nodes)) * 2 * yugabyteRollRecoveryTimeout
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), deadline)
-	defer cancel()
+func runOSUpdateApply(cmd *cobra.Command, rc *resolvedCluster, hostsCSV, mode string, noReboot bool, serial int, continueOnErr bool) (err error) {
+	ctx, progress := watchdog.Start(context.Background(), "os update apply", osUpdateApplyStallWindow)
+	defer progress.Stop()
+	defer func() { err = progress.Err(err) }()
 
 	if mode != "safe" && mode != "full" {
 		return fmt.Errorf("--mode must be 'safe' or 'full', got %q", mode)

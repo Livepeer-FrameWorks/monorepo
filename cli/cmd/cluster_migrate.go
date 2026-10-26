@@ -13,6 +13,7 @@ import (
 	"frameworks/cli/internal/ux"
 	"frameworks/cli/pkg/provisioner"
 	"frameworks/cli/pkg/ssh"
+	"frameworks/cli/pkg/watchdog"
 
 	"github.com/spf13/cobra"
 )
@@ -112,10 +113,11 @@ reach an operator cluster.`,
 	}
 }
 
-// migrateTimeout bounds the data-migration gate, the floor guard, and the
-// ledger migrations of one runMigrate call. It does not include the service
-// database baselines, which ensureServiceDatabases bounds per database.
-const migrateTimeout = 10 * time.Minute
+// migrateStallWindow is how long one migrate step may go without progress before it is cancelled. Progress is every
+// ansible-playbook output line of a migrate role (each task and loop item) and each preflight check that finished, so
+// a step runs as long as it keeps moving. The window must outlast the longest single silent task: a .notx.sql
+// concurrent index build runs without a statement timeout and prints nothing until it finishes.
+var migrateStallWindow = 30 * time.Minute
 
 func runMigrate(cmd *cobra.Command, rc *resolvedCluster, dryRun bool, phase string, yes bool, toVersion string, skipDataMigrationCheck, completeInterruptedBaselines bool) error {
 	switch phase {
@@ -145,9 +147,9 @@ func runMigrate(cmd *cobra.Command, rc *resolvedCluster, dryRun bool, phase stri
 	// created, so the planned databases are excluded from those ledger reads,
 	// and recorded on rc so the dry-run gates and postdeploy step of the same
 	// release skip them too.
-	// Baseline work is bounded per database inside the step, not by the
-	// migrate budget: completing a large YugabyteDB database alone can outlast
-	// that budget, and cancelling it midway only leaves it unverified again.
+	// Baseline work runs before the migrate watchdogs start and is bounded per
+	// database inside the step: completing a large YugabyteDB database alone
+	// runs long, and cancelling it midway only leaves it unverified again.
 	var plannedDatabases map[string]struct{}
 	if dryRun {
 		plannedDatabases = rc.dryRunCreatedDatabases
@@ -167,40 +169,51 @@ func runMigrate(cmd *cobra.Command, rc *resolvedCluster, dryRun bool, phase stri
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), migrateTimeout)
-	defer cancel()
+	// The preflight checks and each engine branch run under their own watchdog, so a slow step is never cut short by
+	// a budget an earlier step used up, and one branch cannot starve the next.
+	preflightCtx, preflight := watchdog.Start(context.Background(), "migration preflight checks", migrateStallWindow)
+	defer preflight.Stop()
 
 	if phase == "postdeploy" || phase == "contract" {
-		if err := runPhaseDataMigrationGate(ctx, cmd, rc, sshPool, phase, target, skipDataMigrationCheck); err != nil {
-			return err
+		if err := runPhaseDataMigrationGate(preflightCtx, cmd, rc, sshPool, phase, target, skipDataMigrationCheck); err != nil {
+			return preflight.Err(err)
 		}
+		preflight.Report("data-migration gate passed")
 	}
 	// Contract migrations drop what a rollback would need, so they require a fresh backup that matches the live
 	// ledgers of the databases they change.
 	if phase == "contract" {
-		if err := requireContractBackup(ctx, cmd, rc, sshPool, target); err != nil {
-			return err
+		if err := requireContractBackup(preflightCtx, cmd, rc, sshPool, target); err != nil {
+			return preflight.Err(err)
 		}
+		preflight.Report("contract backup gate passed")
 	}
 
 	// Minimum-upgrade-version guard: refuse if the cluster is missing any migration
 	// folded below the baseline floor (it would be silently skipped). Runs before
 	// any migration is applied. See docs/standards/schema-migrations.md.
-	if err := migrateBelowFloorGuardFn(ctx, rc, sshPool, plannedDatabases); err != nil {
-		return err
+	if err := migrateBelowFloorGuardFn(preflightCtx, rc, sshPool, plannedDatabases); err != nil {
+		return preflight.Err(err)
 	}
+	preflight.Stop()
 
 	branchesRun := []string{}
 	branchesWithItems := []string{}
 	branchErrors := map[string]error{}
 
-	if pgErr := runMigratePostgresBranch(ctx, cmd, rc, sshPool, dryRun, phase, target, plannedDatabases, &branchesRun, &branchesWithItems); pgErr != nil {
-		branchErrors["postgres"] = pgErr
+	runBranch := func(engine string, branch func(context.Context) error) {
+		branchCtx, w := watchdog.Start(context.Background(), engine+" migrations", migrateStallWindow)
+		defer w.Stop()
+		if err := w.Err(branch(branchCtx)); err != nil {
+			branchErrors[engine] = err
+		}
 	}
-
-	if chErr := runMigrateClickHouseBranch(ctx, cmd, rc, sshPool, dryRun, phase, target, &branchesRun, &branchesWithItems); chErr != nil {
-		branchErrors["clickhouse"] = chErr
-	}
+	runBranch("postgres", func(ctx context.Context) error {
+		return runMigratePostgresBranch(ctx, cmd, rc, sshPool, dryRun, phase, target, plannedDatabases, &branchesRun, &branchesWithItems)
+	})
+	runBranch("clickhouse", func(ctx context.Context) error {
+		return runMigrateClickHouseBranch(ctx, cmd, rc, sshPool, dryRun, phase, target, &branchesRun, &branchesWithItems)
+	})
 
 	if len(branchesRun) == 0 {
 		fmt.Fprintln(out, "No migration-capable databases configured in manifest.")

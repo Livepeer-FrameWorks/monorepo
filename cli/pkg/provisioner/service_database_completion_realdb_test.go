@@ -413,7 +413,7 @@ func TestYugabyteServiceBaselineReapplyAndCompletion(t *testing.T) {
 					t.Fatal(err)
 				}
 				if elapsed := time.Since(started); elapsed > serviceBaselineTimeout/2 {
-					t.Fatalf("completing %s took %s, over half of its %s per-database bound", source, elapsed, serviceBaselineTimeout)
+					t.Fatalf("completing %s took %s, over half of its %s per-database stall window", source, elapsed, serviceBaselineTimeout)
 				} else {
 					t.Logf("completed %s (%s) in %s (bound %s)", source, shape, elapsed.Round(time.Second), serviceBaselineTimeout)
 				}

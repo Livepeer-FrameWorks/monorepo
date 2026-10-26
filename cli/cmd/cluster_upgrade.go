@@ -20,6 +20,7 @@ import (
 	"frameworks/cli/pkg/orchestrator"
 	"frameworks/cli/pkg/provisioner"
 	"frameworks/cli/pkg/ssh"
+	"frameworks/cli/pkg/watchdog"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 	fwversion "github.com/Livepeer-FrameWorks/monorepo/pkg/version"
@@ -386,24 +387,22 @@ func classifyUpgradeFirstInstall(state *detect.ServiceState, withinRelease bool,
 	return true, nil
 }
 
-func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version string, dryRun, skipValidation, yes, noRollback, skipMigrationCheck, skipDataMigrationCheck, withinRelease bool) (upgradeResult, error) {
+func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version string, dryRun, skipValidation, yes, noRollback, skipMigrationCheck, skipDataMigrationCheck, withinRelease bool) (result upgradeResult, err error) {
 	if (serviceName == "yugabyte" || serviceName == "postgres") && hasUnscopedDatabaseDeployments(rc.Manifest) {
 		var combined upgradeResult
-		err := forEachDatabaseDeployment(rc.Manifest, func(view *inventory.Manifest) error {
+		deploymentsErr := forEachDatabaseDeployment(rc.Manifest, func(view *inventory.Manifest) error {
 			if (serviceName == "yugabyte") != view.Infrastructure.Postgres.IsYugabyte() {
 				return nil
 			}
-			result, err := runUpgrade(cmd, rc.withDatabaseManifest(view), serviceName, version, dryRun, skipValidation, yes, noRollback, skipMigrationCheck, skipDataMigrationCheck, withinRelease)
-			combined.changed = combined.changed || result.changed
-			combined.installed = combined.installed || result.installed
-			return err
+			viewResult, viewErr := runUpgrade(cmd, rc.withDatabaseManifest(view), serviceName, version, dryRun, skipValidation, yes, noRollback, skipMigrationCheck, skipDataMigrationCheck, withinRelease)
+			combined.changed = combined.changed || viewResult.changed
+			combined.installed = combined.installed || viewResult.installed
+			return viewErr
 		})
-		return combined, err
+		return combined, deploymentsErr
 	}
-	var result upgradeResult
 	manifest := rc.Manifest
 	manifestPath := rc.ManifestPath
-	var err error
 	version = defaultUpgradeVersion(manifest, version)
 
 	if serviceName == "redis" {
@@ -441,27 +440,20 @@ func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version st
 
 	ux.Heading(cmd.OutOrStdout(), fmt.Sprintf("Reconciling %s (%d host(s)) to version: %s", serviceName, len(hosts), version))
 
-	// Scale the deadline with replica count — each host runs the full
-	// provision+health cycle sequentially.
-	perHost := 10 * time.Minute
+	// The upgrade is bounded by silence, not by a total that grows with the replica count: every role output line and
+	// every Yugabyte node that finished its roll is progress. The window covers the longest silent stretch of one
+	// host: its provision and health cycle, a Yugabyte node waiting for the masters to confirm it can go down and then
+	// for its own recovery, and a Foghorn cell waiting for its tenants' schema-2 authority (gatedMediaCellWaves).
+	stall := 10 * time.Minute
 	if serviceName == "yugabyte" {
-		// Each node may wait for the masters to confirm it can go down and then for its own recovery.
-		perHost += 2 * yugabyteRollRecoveryTimeout
-	}
-	deadline := time.Duration(len(hosts)) * perHost
-	if serviceName == "yugabyte" {
-		// After installing the engine and restarting the masters, the tservers restart in a second pass through the
-		// same gate (and any master an interruption left on the old binary in a first one), each node waiting for
-		// permission and for recovery. Finalizing then waits for the universe to settle and rewrites the YSQL catalog.
-		deadline += 2*time.Duration(len(hosts))*(2*yugabyteRollRecoveryTimeout+5*time.Minute) +
-			yugabyteRollRecoveryTimeout + yugabyteFinalizeTimeout + time.Minute
+		stall += 2*yugabyteRollRecoveryTimeout + 5*time.Minute
 	}
 	if deployName == "foghorn" {
-		// Each cell may wait for its tenants' schema-2 authority (gatedMediaCellWaves).
-		deadline += time.Duration(len(hosts)) * mediaCellGateTimeout
+		stall += mediaCellGateTimeout
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), deadline)
-	defer cancel()
+	ctx, progress := watchdog.Start(context.Background(), "upgrade "+serviceName, stall)
+	defer progress.Stop()
+	defer func() { err = progress.Err(err) }()
 
 	// Create SSH pool
 	sshKey := stringFlag(cmd, "ssh-key").Value
@@ -692,6 +684,8 @@ func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version st
 // (replicas, then Sentinels, then the live primary after a failover). Redis is
 // not a release artifact, so there is no version detection or rollback: each
 // host's role precheck decides whether it changes.
+const redisUpgradeStallWindow = 10 * time.Minute
+
 func runUpgradeRedis(cmd *cobra.Command, rc *resolvedCluster, version string, dryRun, yes bool) error {
 	out := cmd.OutOrStdout()
 	plan, err := orchestrator.NewPlanner(rc.Manifest).Plan(context.Background(), orchestrator.ProvisionOptions{Phase: orchestrator.PhaseAll})
@@ -733,10 +727,11 @@ func runUpgradeRedis(cmd *cobra.Command, rc *resolvedCluster, version string, dr
 	if err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(len(steps))*10*time.Minute)
-	defer cancel()
+	// Each Redis step's role output is progress, so the run is bounded by a silent step, not by the step count.
+	ctx, progress := watchdog.Start(context.Background(), "redis upgrade", redisUpgradeStallWindow)
+	defer progress.Stop()
 	if err := convergence.runRedis(ctx, steps, dryRun); err != nil {
-		return err
+		return progress.Err(err)
 	}
 	if dryRun {
 		fmt.Fprintln(out, "\nDry-run complete. Use without --dry-run to execute.")

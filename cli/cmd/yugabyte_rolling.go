@@ -17,6 +17,7 @@ import (
 	"frameworks/cli/pkg/orchestrator"
 	"frameworks/cli/pkg/provisioner"
 	fwssh "frameworks/cli/pkg/ssh"
+	"frameworks/cli/pkg/watchdog"
 )
 
 const (
@@ -696,6 +697,9 @@ func (y *yugabyteRoll) changeWithChecks(ctx context.Context, host inventory.Host
 		err = recoverNode(ctx, host)
 	}
 	y.release(host, err)
+	if err == nil {
+		watchdog.Reportf(ctx, "yugabyte node %s changed and recovered", host.Name)
+	}
 	return err
 }
 

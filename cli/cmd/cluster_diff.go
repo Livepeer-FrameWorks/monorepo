@@ -18,10 +18,13 @@ import (
 	"frameworks/cli/pkg/orchestrator"
 	"frameworks/cli/pkg/provisioner"
 	fwssh "frameworks/cli/pkg/ssh"
+	"frameworks/cli/pkg/watchdog"
 
 	"github.com/spf13/cobra"
 )
 
+// clusterDiffTimeout is the stall window of `cluster diff` and of an apply dry-run: every check-mode role output line
+// is progress, so a survey of a large fleet runs as long as it keeps moving.
 const clusterDiffTimeout = 30 * time.Minute
 
 func newClusterDiffCmd() *cobra.Command {
@@ -81,7 +84,7 @@ type clusterDiffReport struct {
 	Summary clusterDiffSummary `json:"summary"`
 }
 
-func runClusterDiff(cmd *cobra.Command, rc *resolvedCluster) error {
+func runClusterDiff(cmd *cobra.Command, rc *resolvedCluster) (err error) {
 	manifest := rc.Manifest
 
 	outputFmt := stringFlag(cmd, "output").Value
@@ -94,8 +97,9 @@ func runClusterDiff(cmd *cobra.Command, rc *resolvedCluster) error {
 	onlyHosts := stringSliceFlag(cmd, "only-hosts")
 	onlyServices := stringSliceFlag(cmd, "only-services")
 
-	ctx, cancel := context.WithTimeout(context.Background(), clusterDiffTimeout)
-	defer cancel()
+	ctx, progress := watchdog.Start(context.Background(), "cluster diff", clusterDiffTimeout)
+	defer progress.Stop()
+	defer func() { err = progress.Err(err) }()
 
 	sshKey := stringFlag(cmd, "ssh-key").Value
 	sshPool := fwssh.NewPool(30*time.Second, sshKey)

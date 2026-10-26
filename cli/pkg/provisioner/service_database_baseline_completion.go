@@ -13,6 +13,7 @@ import (
 
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/ssh"
+	"frameworks/cli/pkg/watchdog"
 
 	"github.com/lib/pq"
 )
@@ -27,8 +28,10 @@ const (
 	// completed schema against its baseline: <database>__baseline_check_<hex>.
 	baselineReferenceInfix     = "__baseline_check_"
 	maxPostgresIdentifierBytes = 63
-	// Yugabyte baseline completion can take several minutes because DDL is
-	// replicated and both the target and reference receive the baseline.
+	// serviceBaselineTimeout is the per-database stall window of a baseline
+	// apply or completion: every schema role output line is progress, so a
+	// large YugabyteDB baseline, whose DDL is replicated and which both the
+	// target and reference receive, runs as long as it keeps moving.
 	serviceBaselineTimeout = 30 * time.Minute
 )
 
@@ -86,29 +89,29 @@ func initializeServiceDatabases(ctx context.Context, probe serviceDatabaseProbe,
 }
 
 func applyBaselineWithin(parent context.Context, timeout time.Duration, apply BaselineApplier, database SchemaDatabase) error {
-	ctx, cancel := context.WithTimeout(parent, timeout)
-	defer cancel()
+	ctx, progress := watchdog.Start(parent, database.Name+" baseline apply", timeout)
+	defer progress.Stop()
 	err := apply(ctx, []SchemaDatabase{database})
-	if err != nil && baselineDeadlineReached(ctx, parent) {
-		return fmt.Errorf("%s: baseline apply exceeded its %s per-database bound: %w", database.Name, timeout, err)
+	if err != nil && baselineStalled(progress, parent) {
+		return fmt.Errorf("%s: baseline apply made no progress within its %s per-database stall window: %w", database.Name, timeout, progress.Err(err))
 	}
 	return err
 }
 
-// completeServiceDatabase completes and verifies one unverified database
-// within timeout. A schema that differs from its reference is returned as
+// completeServiceDatabase completes and verifies one unverified database,
+// cancelled when it makes no progress for timeout. A schema that differs from its reference is returned as
 // divergence; every other failure, including the timeout, is returned as err
 // and stops the release step.
 func completeServiceDatabase(parent context.Context, probe serviceDatabaseProbe, database SchemaDatabase, apply BaselineApplier, referenceSuffix func() (string, error), timeout time.Duration) (divergence, err error) {
-	ctx, cancel := context.WithTimeout(parent, timeout)
-	defer cancel()
+	ctx, progress := watchdog.Start(parent, database.Name+" baseline completion", timeout)
+	defer progress.Stop()
 	// The reference is dropped with a context that outlives the completion
-	// deadline, so a timed-out completion still removes it; the probe bounds
+	// watchdog, so a stalled completion still removes it; the probe bounds
 	// each statement itself.
 	cleanup := context.WithoutCancel(parent)
 	defer func() {
-		if err != nil && baselineDeadlineReached(ctx, parent) {
-			err = fmt.Errorf("%s: baseline completion exceeded its %s per-database bound; the database keeps its verification-pending marker and the next release completes it again: %w", database.Name, timeout, err)
+		if err != nil && baselineStalled(progress, parent) {
+			err = fmt.Errorf("%s: baseline completion made no progress within its %s per-database stall window; the database keeps its verification-pending marker and the next release completes it again: %w", database.Name, timeout, progress.Err(err))
 		}
 	}()
 
@@ -154,10 +157,10 @@ func completeServiceDatabase(parent context.Context, probe serviceDatabaseProbe,
 	return verifyErr, nil
 }
 
-// baselineDeadlineReached reports that the per-database bound, and not the
+// baselineStalled reports that the per-database watchdog, and not the
 // caller's context, ended the work.
-func baselineDeadlineReached(ctx, parent context.Context) bool {
-	return errors.Is(ctx.Err(), context.DeadlineExceeded) && parent.Err() == nil
+func baselineStalled(progress *watchdog.Watchdog, parent context.Context) bool {
+	return progress.Stalled() != nil && parent.Err() == nil
 }
 
 func verifyBaselineCompletion(ctx, cleanup context.Context, probe serviceDatabaseProbe, completion baselineCompletion) error {
