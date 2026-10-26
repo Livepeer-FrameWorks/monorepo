@@ -12,6 +12,7 @@ vi.mock("../../packages/map-core/index", () => ({
   readRuntimePublicConfig: () => ({}),
   basemapMapOptions: () => ({}),
   addRequiredAttribution: () => {},
+  bindModifierScrollZoom: () => () => {},
 }));
 let stop: (() => void) | undefined;
 afterEach(() => {
@@ -86,210 +87,159 @@ function mount(data: ReturnType<typeof fixture>) {
   stop = mountNetworkDashboard(container, { apiURL: "https://api.example/v1/network/livepeer" });
   return { container, fetch };
 }
-describe("shared network dashboard", () => {
-  it("keeps work totals visible when ticket credit exceeds its independent query bound", async () => {
-    const base = fixture();
-    const data = {
-      ...base,
-      history: {
-        ...base.history,
-        work: {
-          scope: "frameworks-gateways",
-          start: base.history.start,
-          end: base.history.end,
-          interval_seconds: 0,
-          truncated: false,
-          ticket_credit_truncated: true,
-          summaries: [
-            workFixture({ ticket_credit_sent: undefined, ticket_credit_incomplete: true }),
-          ],
-        },
+async function openWorker(container: HTMLElement, id = "endpoint") {
+  await vi.waitFor(() => expect(container.querySelector(".network-counts")).not.toBeNull());
+  Array.from(container.querySelectorAll("button"))
+    .find((b) => b.textContent === "Browse workers")!
+    .click();
+  (container.querySelector(`[data-endpoint="${id}"]`) as HTMLButtonElement).click();
+  return container.querySelector(".worker-inspector") as HTMLElement;
+}
+function tab(inspector: HTMLElement, name: string) {
+  Array.from(inspector.querySelectorAll("button"))
+    .find((b) => b.textContent === name)!
+    .click();
+}
+function withWork(summaries = [workFixture()], extra = {}) {
+  const base = fixture();
+  return {
+    ...base,
+    history: {
+      ...base.history,
+      work: {
+        scope: "frameworks-gateways",
+        start: base.history.start,
+        end: base.history.end,
+        interval_seconds: 0,
+        truncated: false,
+        summaries,
+        ...extra,
       },
-    };
-    const { container } = mount(data);
-    await vi.waitFor(() =>
-      expect(
-        container.querySelector('[aria-label="Orchestrator workload totals"] tbody tr')
-      ).not.toBeNull()
+    },
+  };
+}
+function fact(container: Element, name: string) {
+  return Array.from(container.querySelectorAll("dl > div"))
+    .find((row) => row.querySelector("dt")?.textContent === name)
+    ?.querySelector("dd")?.textContent;
+}
+describe("shared public network evidence", () => {
+  it("keeps work totals visible when ticket credit exceeds its independent query bound", async () => {
+    const { container } = mount(
+      withWork([workFixture({ ticket_credit_sent: undefined, ticket_credit_incomplete: true })], {
+        ticket_credit_truncated: true,
+      })
     );
-    expect(container.textContent).toContain("Ticket-credit totals exceed the query bound");
-    const row = container.querySelector('[aria-label="Orchestrator workload totals"] tbody tr')!;
-    expect(row.textContent).toContain("1.00");
-    (row.querySelector("button") as HTMLButtonElement).click();
-    await vi.waitFor(() =>
-      expect(container.querySelector("aside")?.textContent).toContain(
-        "Expected ticket credit sent: Unknown: query bound"
-      )
-    );
+    const inspector = await openWorker(container);
+    tab(inspector, "Work");
+    expect(inspector.textContent).toContain("Ticket-credit totals exceed the query bound");
+    expect(fact(inspector, "Accepted source minutes")).toBe("1.00");
+    expect(fact(inspector, "Expected ticket credit sent")).toBe("Unknown: query bound");
   });
   it("does not present missing media duration as zero minutes", async () => {
-    const base = fixture();
-    const data = {
-      ...base,
-      history: {
-        ...base.history,
-        work: {
-          scope: "frameworks-gateways",
-          start: base.history.start,
-          end: base.history.end,
-          interval_seconds: 0,
-          truncated: false,
-          summaries: [
-            workFixture({
-              accepted_source_ms: "0",
-              dispatched_source_ms: "0",
-              accepted_duration_samples: 0,
-              dispatched_duration_samples: 0,
-            }),
-          ],
-        },
-      },
-    };
-    const { container } = mount(data);
-    await vi.waitFor(() =>
-      expect(
-        container.querySelector('[aria-label="Orchestrator workload totals"] tbody tr')
-      ).not.toBeNull()
+    const { container } = mount(
+      withWork([
+        workFixture({
+          accepted_source_ms: "0",
+          dispatched_source_ms: "0",
+          accepted_duration_samples: 0,
+          dispatched_duration_samples: 0,
+        }),
+      ])
     );
-    const row = container.querySelector(
-      '[aria-label="Orchestrator workload totals"] tbody tr'
-    ) as HTMLTableRowElement;
-    expect(row.cells[1].textContent).toBe("Not accounted");
-    expect(row.cells[2].textContent).toBe("Not accounted");
-    expect(row.textContent).toContain("Partial accounting");
+    const inspector = await openWorker(container);
+    tab(inspector, "Work");
+    expect(fact(inspector, "Accepted source minutes")).toBe("Not accounted");
+    expect(fact(inspector, "Submitted source minutes")).toBe("Not accounted");
+    expect(inspector.textContent).toContain("Partial accounting");
   });
   it("narrows the server-side work query when the observer region changes", async () => {
-    const base = fixture();
-    const data = {
-      ...base,
-      history: {
-        ...base.history,
-        work: {
-          scope: "frameworks-gateways",
-          start: base.history.start,
-          end: base.history.end,
-          interval_seconds: 0,
-          truncated: true,
-          summaries: [],
-        },
-      },
-    };
-    const { container, fetch } = mount(data);
-    await vi.waitFor(() => expect(container.querySelector("tbody button")).not.toBeNull());
-    const region = container.querySelectorAll("select")[1] as HTMLSelectElement;
+    const { container, fetch } = mount(withWork([], { truncated: true }));
+    await vi.waitFor(() => expect(container.querySelector(".network-counts")).not.toBeNull());
+    const region = container.querySelector('[aria-label="History region"]') as HTMLSelectElement;
     region.value = "eu";
     region.dispatchEvent(new Event("change"));
     await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
     expect((fetch.mock.calls[1][0] as URL).searchParams.get("region")).toBe("eu");
   });
-  it("aggregates orchestrator work across sibling endpoints independently of truncated charts", async () => {
-    const base = fixture();
+  it("aggregates orchestrator work across siblings independently of truncated charts", async () => {
+    const { container } = mount(
+      withWork([
+        workFixture(),
+        workFixture({ ip: "192.0.2.2", accepted_source_ms: "120000", unaccounted_samples: 3 }),
+      ])
+    );
+    const inspector = await openWorker(container);
+    tab(inspector, "Work");
+    const total = Array.from(inspector.querySelectorAll("section")).find((s) =>
+      s.textContent?.includes("Orchestrator across all observed workers")
+    )!;
+    expect(fact(total, "Accepted source minutes")).toBe("3.00");
+    expect(total.textContent).toContain("18014398509481986");
+    expect(total.textContent).toContain("Partial accounting");
+    expect(inspector.textContent).toContain("redeemed earnings");
+  });
+  it("uses window summary failures instead of unrelated events or bounded chart samples", async () => {
+    const data = fixture();
+    data.history.summaries[0] = {
+      ...data.history.summaries[0],
+      samples: 100,
+      qualified_samples: 10,
+      failures: 5,
+    };
+    const { container } = mount(data);
+    const inspector = await openWorker(container);
+    expect(fact(inspector, "Observed segments")).toBe("100");
+    expect(fact(inspector, "Observed errors")).toBe("5");
+  });
+  it("formats a large rational price without floating-point rounding and marks stale quotes", async () => {
     const data = {
-      ...base,
-      history: {
-        ...base.history,
-        work: {
-          scope: "frameworks-gateways",
-          start: base.history.start,
-          end: base.history.end,
-          interval_seconds: 0,
-          truncated: false,
-          summaries: [
-            workFixture(),
-            workFixture({ ip: "192.0.2.2", accepted_source_ms: "120000", unaccounted_samples: 3 }),
-          ],
-        },
+      ...fixture(),
+      inventory: {
+        ...fixture().inventory,
+        endpoints: [
+          {
+            ...fixture().inventory.endpoints[0],
+            price: {
+              numerator: "9007199254740993",
+              denominator: "3",
+              currency: "WEI",
+              unit: "pixel",
+              observed_at: new Date(Date.now() - 86400000).toISOString(),
+            },
+          },
+        ],
       },
     };
     const { container } = mount(data);
-    await vi.waitFor(() =>
-      expect(
-        container.querySelector('[aria-label="Orchestrator workload totals"] tbody tr')
-      ).not.toBeNull()
-    );
-    const row = container.querySelector('[aria-label="Orchestrator workload totals"] tbody tr')!;
-    expect(row.textContent).toContain("3.00");
-    expect(row.textContent).toContain("18014398509481986");
-    expect(row.textContent).toContain("Partial accounting");
-    (row.querySelector("button") as HTMLButtonElement).click();
-    await vi.waitFor(() =>
-      expect(container.querySelector("aside")?.textContent).toContain(
-        "Orchestrator work across all observed endpoints"
-      )
-    );
-    expect(container.querySelector("aside")?.textContent).toContain(
-      "Accepted source minutes: 3.00"
-    );
-    expect(container.querySelector("aside")?.textContent).toContain("redeemed earnings");
+    const inspector = await openWorker(container);
+    expect(fact(inspector, "Advertised price")).toBe("3002399751580.331 gwei / MP");
+    expect(inspector.textContent).toContain("Stale / undated quote");
   });
-  it("ranks failures by qualifying outcomes rather than unrelated recorded events", async () => {
-    const data = fixture();
-    data.inventory.endpoints.push({
-      ...data.inventory.endpoints[0],
-      id: "reliable",
-      ip: "192.0.2.2",
-      resource: { ...data.inventory.endpoints[0].resource, id: "0xdef" },
-    });
-    data.history.summaries = [
-      { ...data.history.summaries[0], samples: 100, qualified_samples: 10, failures: 5 },
-      {
-        ...data.history.summaries[0],
-        resource_id: "0xdef",
-        ip: "192.0.2.2",
-        samples: 20,
-        qualified_samples: 20,
-        failures: 2,
+  it("does not label a tiny positive quote as free", async () => {
+    const data = {
+      ...fixture(),
+      inventory: {
+        ...fixture().inventory,
+        endpoints: [
+          {
+            ...fixture().inventory.endpoints[0],
+            price: {
+              numerator: "1",
+              denominator: "1000000",
+              currency: "wei",
+              unit: "pixel",
+              observed_at: new Date().toISOString(),
+            },
+          },
+        ],
       },
-    ];
-    window.history.replaceState(
-      {},
-      "",
-      "/network?view=livepeer&lp_region=eu&lp_profile=720p&lp_sort=failures"
-    );
+    };
     const { container } = mount(data);
-    await vi.waitFor(() => expect(container.querySelector("tbody button")).not.toBeNull());
-    expect(container.querySelector("tbody button")?.textContent).toBe("192.0.2.2");
+    const inspector = await openWorker(container);
+    expect(fact(inspector, "Advertised price")).toBe("<0.0001 gwei / MP");
   });
-  it("keeps fresh price ordering exact above JavaScript's integer precision", async () => {
-    const data = fixture();
-    const q = {
-      numerator: "9007199254740993",
-      denominator: "3",
-      currency: "WEI",
-      unit: "pixel",
-      observed_at: new Date().toISOString(),
-    };
-    const expensive = { ...data.inventory.endpoints[0], price: q };
-    const cheap = {
-      ...expensive,
-      id: "cheap",
-      ip: "192.0.2.2",
-      resource: { ...expensive.resource, id: "0xdef" },
-      price: { ...q, numerator: "9007199254740992" },
-    };
-    const stale = {
-      ...cheap,
-      id: "stale",
-      ip: "192.0.2.3",
-      price: { ...q, numerator: "1", observed_at: new Date(Date.now() - 86400000).toISOString() },
-    };
-    data.inventory.endpoints = [expensive, stale, cheap];
-    const { container } = mount(data);
-    await vi.waitFor(() => expect(container.querySelector("tbody button")).not.toBeNull());
-    const order = container.querySelector(
-      'select[aria-label="Sort endpoints"]'
-    ) as HTMLSelectElement;
-    order.value = "price";
-    order.dispatchEvent(new Event("change"));
-    const rows = Array.from(container.querySelectorAll(".list tbody tr"));
-    expect(rows.map((row) => row.querySelector("button")?.textContent)).toEqual([
-      "192.0.2.2",
-      "192.0.2.1",
-      "192.0.2.3",
-    ]);
-    expect(rows[2].textContent).toContain("Stale / undated quote");
-  });
-  it("renders independently toggleable gateway and prober layers without inventing unknown locations", async () => {
+  it("toggles gateway and prober layers independently without inventing unknown locations", async () => {
     const sources = new Map<
       string,
       { data: { features: unknown[] }; setData: (data: { features: unknown[] }) => void }
@@ -371,19 +321,22 @@ describe("shared network dashboard", () => {
     });
     await vi.waitFor(() => expect(sources.get("gateway-clusters")?.data.features).toHaveLength(1));
     expect(sources.get("prober-sites")?.data.features).toHaveLength(1);
-    expect(container.querySelector(".observation-sites")?.textContent).toContain(
-      "Location unknown"
-    );
+    const unknown = Array.from(
+      container.querySelectorAll<HTMLButtonElement>(".measurement-site")
+    ).find((b) => b.textContent === "Prober · us")!;
+    unknown.click();
+    expect(container.querySelector(".worker-inspector")?.textContent).toContain("Location unknown");
+    const toggle = container.querySelector(".map-check input") as HTMLInputElement;
     const label = Array.from(container.querySelectorAll("label")).find(
-      (entry) => entry.textContent === "Probers"
-    );
-    const toggle = label?.querySelector("input") as HTMLInputElement;
-    toggle.checked = false;
-    toggle.dispatchEvent(new Event("change"));
+      (l) => l.textContent === "Probers"
+    )!;
+    (label.querySelector("input") as HTMLInputElement).checked = false;
+    label.querySelector("input")!.dispatchEvent(new Event("change"));
+    expect(toggle).not.toBeNull();
     expect(visibility).toHaveBeenCalledWith("prober-sites", "visibility", "none");
     expect(visibility).toHaveBeenCalledWith("gateway-clusters", "visibility", "visible");
   });
-  it("starts the new regional history query while the previous region is still pending", async () => {
+  it("starts the new regional query while previous worker history is pending", async () => {
     const data = fixture();
     data.history.summaries.push({ ...data.history.summaries[0], region: "us" });
     const fetch = vi
@@ -394,17 +347,15 @@ describe("shared network dashboard", () => {
     const container = document.createElement("div");
     document.body.append(container);
     stop = mountNetworkDashboard(container, { apiURL: "https://api.example/v1/network/livepeer" });
-    await vi.waitFor(() => expect(container.querySelector("tbody button")).not.toBeNull());
-    (container.querySelector("tbody button") as HTMLButtonElement).click();
+    await openWorker(container);
     expect(fetch).toHaveBeenCalledTimes(2);
-    const region = container.querySelectorAll("select")[1] as HTMLSelectElement;
+    const region = container.querySelector('[aria-label="History region"]') as HTMLSelectElement;
     region.value = "us";
     region.dispatchEvent(new Event("change"));
     expect(fetch).toHaveBeenCalledTimes(3);
     expect((fetch.mock.calls[2][0] as URL).searchParams.get("region")).toBe("us");
-    expect(container.querySelector("aside")?.textContent).not.toContain("eu / 720p");
   });
-  it("restores a shared Livepeer view and switches presentation without refetching", async () => {
+  it("restores a shared worker and changes map emphasis without refetching", async () => {
     window.history.replaceState(
       {},
       "",
@@ -412,85 +363,67 @@ describe("shared network dashboard", () => {
     );
     const { container, fetch } = mount(fixture());
     await vi.waitFor(() =>
-      expect(container.querySelector("aside.detail")?.textContent).toContain("192.0.2.1")
+      expect(container.querySelector(".worker-inspector")?.textContent).toContain("192.0.2.1")
     );
-    const mapButton = Array.from(container.querySelectorAll("button")).find(
-      (button) => button.textContent === "Map"
-    );
-    expect(mapButton?.getAttribute("aria-pressed")).toBe("true");
-    const count = fetch.mock.calls.length;
-    const compare = Array.from(container.querySelectorAll("button")).find(
-      (button) => button.textContent === "Compare"
-    );
-    compare?.click();
-    expect(container.querySelector(".map")?.getAttribute("data-mode")).toBe("compare");
-    expect(fetch).toHaveBeenCalledTimes(count);
-    expect(container.querySelector("aside.detail")?.textContent).toContain("192.0.2.1");
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+    const metric = container.querySelector('[aria-label="Map shows"]') as HTMLSelectElement;
+    metric.value = "errors";
+    metric.dispatchEvent(new Event("change"));
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(window.location.search).toContain("lp_metric=errors");
+    expect(container.querySelector(".worker-inspector")?.textContent).toContain("192.0.2.1");
   });
-  it("compares performance only within one region and output profile", async () => {
+  it("requires one region and profile before charting transcoding latency", async () => {
     const data = fixture();
-    data.inventory.endpoints.push({
-      ...data.inventory.endpoints[0],
-      id: "faster",
-      ip: "192.0.2.2",
-      resource: { ...data.inventory.endpoints[0].resource, id: "0xdef" },
-    });
-    const attempt = { ...data.history.summaries[0], kind: "attempt" };
-    data.history.summaries.push(
-      { ...attempt, p95_ms: 300 },
-      { ...attempt, resource_id: "0xdef", ip: "192.0.2.2", p95_ms: 100 }
-    );
+    data.history.cohorts.push({ ...data.history.cohorts[0], kind: "attempt" });
     const { container } = mount(data);
-    await vi.waitFor(() => expect(container.querySelector("tbody button")).not.toBeNull());
-    const sort = container.querySelector(
-      'select[aria-label="Sort endpoints"]'
-    ) as HTMLSelectElement;
-    expect(sort).not.toBeNull();
-    sort.value = "latency";
-    sort.dispatchEvent(new Event("change"));
-    expect(container.textContent).toContain("Choose one observer region and profile");
-    const selects = container.querySelectorAll("select");
-    const region = selects[1] as HTMLSelectElement;
-    const profiles = selects[2] as HTMLSelectElement;
+    const inspector = await openWorker(container);
+    tab(inspector, "Observations");
+    expect(inspector.textContent).toContain("Choose one measurement region and output profile");
+    const region = container.querySelector('[aria-label="History region"]') as HTMLSelectElement;
     region.value = "eu";
     region.dispatchEvent(new Event("change"));
-    profiles.value = "720p";
-    profiles.dispatchEvent(new Event("change"));
-    expect(container.querySelector("tbody button")?.textContent).toBe("192.0.2.2");
-  });
-  it("uses window totals instead of bounded chart samples and loads endpoint history", async () => {
-    const { container, fetch } = mount(fixture());
     await vi.waitFor(() =>
-      expect(container.querySelector("tbody tr")?.textContent).toContain("10")
+      expect(container.querySelector(".map-status")?.textContent).toContain("Updated")
     );
-    expect(container.textContent).toContain("Geography unknown");
-    expect(container.textContent).toContain("truncated");
-    (container.querySelector("tbody button") as HTMLButtonElement).click();
+    const profile = container.querySelector('[aria-label="Output profile"]') as HTMLSelectElement;
+    profile.value = "720p";
+    profile.dispatchEvent(new Event("change"));
+    expect(inspector.textContent).not.toContain("Choose one measurement region and output profile");
+    expect(inspector.querySelector("svg.observation-chart")).not.toBeNull();
+  });
+  it("uses window totals independently of truncated samples and loads selected history", async () => {
+    const { container, fetch } = mount(fixture());
+    const inspector = await openWorker(container);
+    expect(fact(inspector, "Observed segments")).toBe("10");
+    expect(inspector.textContent).toContain("Location unknown");
     await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
     const url = fetch.mock.calls[1][0] as URL;
     expect(url.searchParams.get("resource")).toBe("0xabc");
     expect(url.searchParams.get("ip")).toBe("192.0.2.1");
+    tab(inspector, "Observations");
+    expect(inspector.textContent).toContain("truncated");
   });
-  it("keeps current inventory visible when history is unavailable", async () => {
+  it("keeps inventory browsable when history is unavailable", async () => {
     const data = fixture();
     data.history_status = "unavailable";
     data.history.cohorts = [];
     data.history.summaries = [];
     const { container } = mount(data);
-    await vi.waitFor(() =>
-      expect(container.textContent).toContain("History is temporarily unavailable")
-    );
-    expect(container.textContent).toContain("192.0.2.1");
-    expect(container.textContent).toContain("Unknown");
+    await vi.waitFor(() => expect(container.textContent).toContain("History unavailable"));
+    const inspector = await openWorker(container);
+    expect(inspector.textContent).toContain("192.0.2.1");
+    expect(fact(inspector, "Observed segments")).toBe("No returned samples");
   });
-  it("renders public resource metadata as text", async () => {
+  it("renders public metadata as text", async () => {
     const data = fixture();
     data.inventory.endpoints[0].resource.id = '<img src=x onerror="alert(1)">';
     const { container } = mount(data);
-    await vi.waitFor(() => expect(container.textContent).toContain("<img src=x"));
+    const inspector = await openWorker(container);
+    expect(inspector.textContent).toContain("<img src=x");
     expect(container.querySelector("img")).toBeNull();
   });
-  it("shows retained discovery cohorts and coverage while filtering workload profiles", async () => {
+  it("retains discovery coverage when filtering workload profiles", async () => {
     const data = fixture();
     const discovery = {
       ...data.history.cohorts[0],
@@ -506,13 +439,15 @@ describe("shared network dashboard", () => {
     data.history.cohorts.push(discovery);
     data.history.summaries.push(discovery);
     const { container } = mount(data);
-    await vi.waitFor(() => expect(container.querySelector("tbody button")).not.toBeNull());
-    const profiles = container.querySelectorAll("select")[2] as HTMLSelectElement;
-    profiles.value = "720p";
-    profiles.dispatchEvent(new Event("change"));
-    (container.querySelector("tbody button") as HTMLButtonElement).click();
-    await vi.waitFor(() => expect(container.textContent).toContain("Regional discovery latency"));
-    expect(container.querySelector("aside.detail")?.textContent).toContain("9 / 10");
-    expect(container.querySelector(".timeline span.up")).not.toBeNull();
+    const inspector = await openWorker(container);
+    const profile = container.querySelector('[aria-label="Output profile"]') as HTMLSelectElement;
+    profile.value = "720p";
+    profile.dispatchEvent(new Event("change"));
+    tab(inspector, "Observations");
+    expect(inspector.textContent).toContain("Regional discovery latency");
+    expect(inspector.querySelector(".timeline span.up")).not.toBeNull();
+    expect(inspector.querySelector(".timeline span.up")?.getAttribute("title")).toContain(
+      "10 checks · 9 successful"
+    );
   });
 });

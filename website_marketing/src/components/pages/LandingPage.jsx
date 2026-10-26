@@ -104,12 +104,16 @@ function DeferredNetworkMap() {
       className={`network-viz-deferred${NetworkMapComponent ? "" : " network-viz-pending"}`}
     >
       {NetworkMapComponent ? <NetworkMapComponent /> : null}
-      <a href="/network" className="network-viz-link">
-        Explore FrameWorks topology →
-      </a>
-      <a href="/network?view=livepeer" className="network-viz-link">
-        Compare Livepeer compute →
-      </a>
+      <nav className="network-viz-actions" aria-label="Explore the network">
+        <a href="/network">
+          <span>FrameWorks topology</span>
+          <span aria-hidden="true">↗</span>
+        </a>
+        <a href="/network?view=livepeer">
+          <span>Livepeer network</span>
+          <span aria-hidden="true">↗</span>
+        </a>
+      </nav>
     </div>
   );
 }
@@ -904,7 +908,12 @@ const LandingPage = () => {
 
         <Section id="experience" className="bg-brand-surface landing-section--experience">
           <SectionContainer>
-            <MarketingBand preset="foundation" texturePattern="seams" textureNoise="film">
+            <MarketingBand
+              preset="foundation"
+              texturePattern="seams"
+              textureNoise="film"
+              contentClassName="journey-timeline"
+            >
               <HeadlineStack
                 eyebrow="03–05 · Play it / Keep it / Know it"
                 title="Live, replay, and insight stay on one timeline"

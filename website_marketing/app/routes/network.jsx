@@ -63,12 +63,12 @@ export default function NetworkPage() {
     document.getElementById(`network-tab-${next}`)?.focus();
   };
   return (
-    <div className="pt-24 pb-12 px-4 mx-auto max-w-7xl">
-      <h1 className="text-3xl font-semibold mb-3">Network explorer</h1>
-      <p className="text-muted-foreground mb-6">
-        Explore our infrastructure and the Livepeer compute network.
-      </p>
-      <div role="tablist" aria-label="Network view" className="flex border border-border mb-6">
+    <div className="network-explorer">
+      <header className="network-explorer__heading">
+        <h1>Network explorer</h1>
+        <p>Infrastructure, compute and the paths between them.</p>
+      </header>
+      <div role="tablist" aria-label="Network view" className="network-explorer__tabs">
         {[
           ["frameworks", "FrameWorks"],
           ["livepeer", "Livepeer"],
@@ -83,7 +83,7 @@ export default function NetworkPage() {
             tabIndex={view === key ? 0 : -1}
             onKeyDown={onTabKey}
             onClick={() => choose(key)}
-            className={`flex-1 px-4 py-3 border-r border-border last:border-r-0 ${view === key ? "bg-brand-surface text-foreground" : "text-muted-foreground"}`}
+            className="network-explorer__tab"
           >
             {label}
           </button>

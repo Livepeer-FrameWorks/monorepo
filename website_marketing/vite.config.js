@@ -34,6 +34,10 @@ export default defineConfig(({ mode, command }) => {
           target: proxyGatewayUrl,
           changeOrigin: true,
         },
+        "/v1": {
+          target: proxyGatewayUrl,
+          changeOrigin: true,
+        },
       },
     };
   }
