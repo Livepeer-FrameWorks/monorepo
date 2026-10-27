@@ -36,6 +36,7 @@ func TestGeneratedQueryCatalogPrepares_RealPG(t *testing.T) {
 	assertTenantAdmissionQueryExecution(t, db)
 	assertTenantAdmissionQueryPlan(t, db)
 	assertMediaAuthorityRefreshTriggers(t, db)
+	assertStripeSyncPreservesBillingPhase(t, db)
 	assertDNSSweepMatchesTenantEntitlements(t, db)
 
 	ctx := context.Background()

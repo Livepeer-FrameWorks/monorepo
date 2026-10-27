@@ -4,6 +4,7 @@ package database
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"math/rand/v2"
 	"os/exec"
@@ -33,7 +34,7 @@ func TestPoolRetiresConnectionsAtTheirOwnLifetime_RealPG(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dsn := fmt.Sprintf("postgres://postgres:harness@127.0.0.1:%s/postgres?sslmode=disable", port)
+	dsn := fmt.Sprintf("postgres://postgres:harness@127.0.0.1:%s/postgres?sslmode=disable&TimeZone=Europe%%2FAmsterdam", port)
 
 	const maxLifetime = 8 * time.Second
 	// The largest jitter retires the connection just after three quarters of ConnMaxLifetime.
@@ -52,6 +53,36 @@ func TestPoolRetiresConnectionsAtTheirOwnLifetime_RealPG(t *testing.T) {
 		time.Sleep(time.Second)
 	}
 	t.Cleanup(func() { _ = db.Close() })
+
+	// Each physical connection must use UTC even when the DSN asks for a local
+	// timezone; timestamp/timestamptz conversions represent UTC ledger instants.
+	db.SetMaxOpenConns(2)
+	firstConn, err := db.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer firstConn.Close()
+	secondConn, err := db.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer secondConn.Close()
+	for _, conn := range []*sql.Conn{firstConn, secondConn} {
+		var zone string
+		if err := conn.QueryRowContext(context.Background(), "SHOW TimeZone").Scan(&zone); err != nil {
+			t.Fatal(err)
+		}
+		if zone != "UTC" {
+			t.Fatalf("physical connection timezone=%s, want UTC", zone)
+		}
+	}
+	if err := firstConn.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := secondConn.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db.SetMaxOpenConns(1)
 
 	backend := func() int {
 		t.Helper()

@@ -541,7 +541,7 @@ func (s *Service) activateTenantSubscriptionFromStripe(ctx context.Context, exec
 		if value == nil {
 			return sql.NullTime{}
 		}
-		return sql.NullTime{Time: *value, Valid: true}
+		return sql.NullTime{Time: value.UTC(), Valid: true}
 	}
 	rows, err := purserdb.New(exec).ActivateTenantSubscriptionFromStripe(ctx, purserdb.ActivateTenantSubscriptionFromStripeParams{
 		CustomerID: customerID, SubscriptionID: subscriptionID, TierID: tierID,

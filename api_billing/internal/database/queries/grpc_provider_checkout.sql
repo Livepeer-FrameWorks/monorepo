@@ -60,10 +60,10 @@ WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid;
 -- name: UpdateTenantStripeSubscriptionSync :exec
 UPDATE purser.tenant_subscriptions
 SET stripe_subscription_status = sqlc.arg(status),
-    stripe_current_period_end = sqlc.narg(period_end)::timestamptz,
-    billing_period_start = COALESCE(sqlc.narg(period_start)::timestamp, billing_period_start),
-    billing_period_end = COALESCE(sqlc.narg(period_end)::timestamp, billing_period_end),
-    next_billing_date = COALESCE(sqlc.narg(period_end)::timestamp, next_billing_date),
+    stripe_current_period_end = CASE WHEN sqlc.narg(period_end)::timestamptz IS NULL THEN stripe_current_period_end WHEN billing_period_start IS NULL OR sqlc.narg(period_start)::timestamp >= billing_period_start THEN sqlc.narg(period_end)::timestamptz ELSE stripe_current_period_end END,
+    billing_period_start = GREATEST(sqlc.narg(period_start)::timestamp, billing_period_start),
+    billing_period_end = CASE WHEN billing_period_start IS NULL OR sqlc.narg(period_start)::timestamp >= billing_period_start THEN COALESCE(sqlc.narg(period_end)::timestamp, billing_period_end) ELSE billing_period_end END,
+    next_billing_date = CASE WHEN billing_period_start IS NULL OR sqlc.narg(period_start)::timestamp >= billing_period_start THEN COALESCE(sqlc.narg(period_end)::timestamp, next_billing_date) ELSE next_billing_date END,
     updated_at = NOW()
 WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid;
 

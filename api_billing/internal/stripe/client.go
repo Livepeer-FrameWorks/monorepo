@@ -490,10 +490,10 @@ func (c *Client) ExtractSubscriptionInfo(sub *stripe.Subscription) SubscriptionI
 	// CurrentPeriodEnd is on SubscriptionItem in v82
 	if sub.Items != nil && len(sub.Items.Data) > 0 {
 		if sub.Items.Data[0].CurrentPeriodStart > 0 {
-			info.CurrentPeriodStart = time.Unix(sub.Items.Data[0].CurrentPeriodStart, 0)
+			info.CurrentPeriodStart = time.Unix(sub.Items.Data[0].CurrentPeriodStart, 0).UTC()
 		}
 		if sub.Items.Data[0].CurrentPeriodEnd > 0 {
-			info.CurrentPeriodEnd = time.Unix(sub.Items.Data[0].CurrentPeriodEnd, 0)
+			info.CurrentPeriodEnd = time.Unix(sub.Items.Data[0].CurrentPeriodEnd, 0).UTC()
 		}
 	}
 

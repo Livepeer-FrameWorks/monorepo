@@ -38,10 +38,10 @@ SET stripe_customer_id = COALESCE(NULLIF($1::text, ''), stripe_customer_id),
         WHEN pending_reason = 'stripe_checkout'
          AND (NULLIF($3::text, '') IS NULL OR pending_tier_id = NULLIF($3::text, '')::uuid)
         THEN NULL ELSE pending_intent_id END,
-    stripe_current_period_end = COALESCE($4, stripe_current_period_end),
-    billing_period_start = COALESCE($5, billing_period_start),
-    billing_period_end = COALESCE($4, billing_period_end),
-    next_billing_date = COALESCE($4, next_billing_date),
+    stripe_current_period_end = CASE WHEN $4::timestamptz IS NULL THEN stripe_current_period_end WHEN billing_period_start IS NULL OR $5::timestamp >= billing_period_start THEN $4::timestamptz ELSE stripe_current_period_end END,
+    billing_period_start = GREATEST($5::timestamp, billing_period_start),
+    billing_period_end = CASE WHEN billing_period_start IS NULL OR $5::timestamp >= billing_period_start THEN COALESCE($4::timestamp, billing_period_end) ELSE billing_period_end END,
+    next_billing_date = CASE WHEN billing_period_start IS NULL OR $5::timestamp >= billing_period_start THEN COALESCE($4::timestamp, next_billing_date) ELSE next_billing_date END,
     updated_at = NOW()
 WHERE tenant_id = $6::text::uuid
 `

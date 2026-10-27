@@ -80,6 +80,9 @@ func TestExtractSubscriptionInfo(t *testing.T) {
 		if got.TenantID != "tenant-1" || got.TierID != "pro" {
 			t.Errorf("metadata: %+v", got)
 		}
+		if got.CurrentPeriodStart.Location() != time.UTC || got.CurrentPeriodEnd.Location() != time.UTC {
+			t.Fatal("provider timestamps must use UTC")
+		}
 		if !got.CurrentPeriodStart.Equal(time.Unix(start, 0)) || !got.CurrentPeriodEnd.Equal(time.Unix(end, 0)) {
 			t.Errorf("periods: %+v", got)
 		}

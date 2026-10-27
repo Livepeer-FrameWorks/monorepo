@@ -333,10 +333,10 @@ func (q *Queries) TenantSubscriptionExists(ctx context.Context, tenantID string)
 const updateTenantStripeSubscriptionSync = `-- name: UpdateTenantStripeSubscriptionSync :exec
 UPDATE purser.tenant_subscriptions
 SET stripe_subscription_status = $1,
-    stripe_current_period_end = $2::timestamptz,
-    billing_period_start = COALESCE($3::timestamp, billing_period_start),
-    billing_period_end = COALESCE($2::timestamp, billing_period_end),
-    next_billing_date = COALESCE($2::timestamp, next_billing_date),
+    stripe_current_period_end = CASE WHEN $2::timestamptz IS NULL THEN stripe_current_period_end WHEN billing_period_start IS NULL OR $3::timestamp >= billing_period_start THEN $2::timestamptz ELSE stripe_current_period_end END,
+    billing_period_start = GREATEST($3::timestamp, billing_period_start),
+    billing_period_end = CASE WHEN billing_period_start IS NULL OR $3::timestamp >= billing_period_start THEN COALESCE($2::timestamp, billing_period_end) ELSE billing_period_end END,
+    next_billing_date = CASE WHEN billing_period_start IS NULL OR $3::timestamp >= billing_period_start THEN COALESCE($2::timestamp, next_billing_date) ELSE next_billing_date END,
     updated_at = NOW()
 WHERE tenant_id = $4::text::uuid
 `

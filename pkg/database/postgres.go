@@ -194,6 +194,15 @@ func Connect(cfg Config, logger logging.Logger) (PostgresConn, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse database configuration: %w", err)
 	}
+	// Ledger timestamps without a timezone represent UTC instants. Set this in
+	// the startup parameters so every physical connection, including failover
+	// connections, casts timestamps consistently regardless of server defaults.
+	for key := range pgxConfig.RuntimeParams {
+		if strings.EqualFold(key, "timezone") {
+			delete(pgxConfig.RuntimeParams, key)
+		}
+	}
+	pgxConfig.RuntimeParams["timezone"] = "UTC"
 	if cfg.ServiceName != "" {
 		pgxConfig.Tracer = postgresContractTracer{service: cfg.ServiceName}
 	}

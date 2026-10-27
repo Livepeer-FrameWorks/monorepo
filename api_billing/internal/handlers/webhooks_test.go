@@ -168,7 +168,7 @@ func expectStripeSubscriptionActivation(mock sqlmock.Sqlmock, tenantID, subscrip
 	mock.ExpectBegin()
 	// active routes through the activation helper: applies the tier, sets
 	// payment_method=stripe, clears staged state, and backfills the period.
-	mock.ExpectExec(`UPDATE purser\.tenant_subscriptions[\s\S]*payment_method = 'stripe'[\s\S]*billing_period_start = COALESCE\(\$5, billing_period_start\)[\s\S]*WHERE tenant_id = \$6::text::uuid`).
+	mock.ExpectExec(`UPDATE purser\.tenant_subscriptions[\s\S]*payment_method = 'stripe'[\s\S]*billing_period_start = GREATEST\(\$5::timestamp, billing_period_start\)[\s\S]*WHERE tenant_id = \$6::text::uuid`).
 		WithArgs("cus_test", subscriptionID, "", sqlmock.AnyArg(), sqlmock.AnyArg(), tenantID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`UPDATE purser\.payment_provider_intents[\s\S]*provider_subscription_id = \$1`).

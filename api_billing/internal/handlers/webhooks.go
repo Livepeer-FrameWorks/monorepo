@@ -741,11 +741,11 @@ func (s *Service) handleStripeSubscriptionEvent(payload StripeWebhookPayload) er
 	var periodEnd *time.Time
 	if len(obj.Items.Data) > 0 {
 		if obj.Items.Data[0].CurrentPeriodStart > 0 {
-			t := time.Unix(obj.Items.Data[0].CurrentPeriodStart, 0)
+			t := time.Unix(obj.Items.Data[0].CurrentPeriodStart, 0).UTC()
 			periodStart = &t
 		}
 		if obj.Items.Data[0].CurrentPeriodEnd > 0 {
-			t := time.Unix(obj.Items.Data[0].CurrentPeriodEnd, 0)
+			t := time.Unix(obj.Items.Data[0].CurrentPeriodEnd, 0).UTC()
 			periodEnd = &t
 		}
 	}
@@ -799,7 +799,7 @@ func (s *Service) handleStripeSubscriptionEvent(payload StripeWebhookPayload) er
 				if value == nil {
 					return sql.NullTime{}
 				}
-				return sql.NullTime{Time: *value, Valid: true}
+				return sql.NullTime{Time: value.UTC(), Valid: true}
 			}
 			if _, updateErr := queries.UpdateTenantStripeSubscriptionStatus(ctx, purserdb.UpdateTenantStripeSubscriptionStatusParams{
 				StripeStatus: sql.NullString{String: obj.Status, Valid: obj.Status != ""}, Status: ourStatus,
