@@ -1,133 +1,34 @@
+import { renderLatencyChart, renderCheckTimeline, type CheckBucket } from "./network-charts";
 import {
   addRequiredAttribution,
   basemapMapOptions,
+  bindModifierScrollZoom,
   loadMapLibre,
   readRuntimePublicConfig,
 } from "./index";
-import type { Map as MapLibreMap, GeoJSONSource } from "maplibre-gl";
-import { bindExplorerViewport, type ExplorerViewport } from "./network-explorer";
+import { bindExplorerViewport } from "./network-explorer";
 import {
-  sumWork,
-  workMinutes,
-  workAmount,
-  compareWorkAmounts,
-  isPartialWork,
-  type WorkHistory,
-  type WorkSummary,
-} from "./network-work";
-
-type Location = {
-  known: boolean;
-  latitude: number;
-  longitude: number;
-  source: string;
-  country?: string;
-};
-type Endpoint = {
-  id: string;
-  resource: { id: string; uri: string; active: boolean };
-  ip: string;
-  status: string;
-  location: Location;
-  last_success: string;
-  last_check: string;
-  cadence_seconds: number;
-  capabilities?: string[];
-  hardware?: string;
-  price?: {
-    numerator: string;
-    denominator: string;
-    currency: string;
-    unit: string;
-    observed_at: string;
-  };
-};
-type Cohort = {
-  bucket: string;
-  kind: string;
-  resource_id: string;
-  ip: string;
-  region: string;
-  profile_key: string;
-  samples: number;
-  qualified_samples: number;
-  successes: number;
-  failures: number;
-  p50_ms: number;
-  p95_ms: number;
-  p99_ms: number;
-  duration_samples: number;
-  p95_duration_ratio: number;
-  retries: number;
-  fallbacks: number;
-  deadline_misses: number;
-};
-type Observation = {
-  timestamp: string;
-  kind: string;
-  region: string;
-  resource_id: string;
-  ip: string;
-  failure_kind?: string;
-  disposition?: string;
-  success: boolean;
-  qualifying: boolean;
-  cadence_seconds: number;
-  price?: Endpoint["price"];
-};
-type Response = {
-  history_status?: string;
-  inventory: {
-    generated_at: string;
-    endpoints: Endpoint[];
-    resources: Array<{ id: string; uri: string; active: boolean }>;
-    observers?: Array<{
-      id: string;
-      kind: string;
-      region: string;
-      location: Location;
-      last_seen: string;
-    }>;
-  };
-  history: {
-    work?: WorkHistory;
-    generated_at: string;
-    start: string;
-    end: string;
-    interval_seconds: number;
-    cohorts: Cohort[];
-    summaries: Cohort[];
-    truncated: boolean;
-    rolled_up: boolean;
-    details?: Array<Record<string, unknown>>;
-    observations: Observation[];
-  };
-};
-type Options = {
-  apiURL: string;
-  infrastructureURL?: string;
-  graphqlURL?: string;
-  headers?: () => Record<string, string>;
-  viewport?: ExplorerViewport;
-  onQueryChange?: (query: URLSearchParams) => void;
-};
-type InfrastructureNode = {
-  nodeId: string;
-  name: string;
-  latitude: number | null;
-  longitude: number | null;
-  status: string;
-};
-type GatewayCluster = {
-  clusterId: string;
-  name: string;
-  region: string;
-  latitude: number;
-  longitude: number;
-  services: string[];
-};
-
-const styles = `.fw-network{color:#c0caf5;background:#16161e;font:14px/1.5 Inter,system-ui,sans-serif;border:1px solid #414868}.fw-network *{box-sizing:border-box}.fw-network header,.fw-network .toolbar,.fw-network .summary,.fw-network .detail{padding:16px;border-bottom:1px solid #414868}.fw-network h2,.fw-network h3{margin:0 0 12px;font-weight:600}.fw-network button,.fw-network select,.fw-network input{color:inherit;background:#24283b;border:1px solid #414868;border-radius:0;padding:8px}.fw-network button{cursor:pointer}.fw-network button:focus-visible,.fw-network select:focus-visible{outline:2px solid #7aa2f7}.fw-network .toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:12px}.fw-network .toolbar label{display:flex;align-items:center;gap:6px}.fw-network .summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr))}.fw-network .summary strong{display:block;font-size:24px}.fw-network .map{height:420px}.fw-network .body{display:grid;grid-template-columns:minmax(0,2fr) minmax(320px,1fr)}.fw-network .list{overflow:auto;max-height:620px;border-right:1px solid #414868}.fw-network table{width:100%;border-collapse:collapse}.fw-network th,.fw-network td{text-align:left;padding:10px;border-bottom:1px solid #414868;vertical-align:top}.fw-network th{color:#a9b1d6;font-size:12px;text-transform:uppercase}.fw-network .muted{color:#a9b1d6}.fw-network .good{color:#9ece6a}.fw-network .bad{color:#f7768e}.fw-network code{font-size:11px;overflow-wrap:anywhere}.fw-network svg.chart{width:100%;height:190px}.fw-network .chart-key{display:flex;gap:16px;color:#a9b1d6}.fw-network .timeline{display:flex;gap:2px;min-height:18px;overflow:hidden;margin:8px 0}.fw-network .timeline span{flex:1;min-width:2px;height:18px;background:#414868}.fw-network .timeline span.up{background:#9ece6a}.fw-network .timeline span.unavailable{background:#f7768e}.fw-network .detail{overflow:auto}.fw-network .detail pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px}.fw-network a{color:#7aa2f7}.fw-network [hidden]{display:none!important}@media(max-width:1000px){.fw-network .summary{grid-template-columns:repeat(2,minmax(0,1fr))}.fw-network .body{grid-template-columns:1fr}.fw-network .list{border-right:0;max-height:420px}}`;
+  observingRegions,
+  orchestratorGroups,
+  regionalEvidence,
+  roleImage,
+} from "./network-map-model";
+import { sumWork, workMinutes, workAmount, isPartialWork, type WorkSummary } from "./network-work";
+import type {
+  Map as MapLibreMap,
+  GeoJSONSource,
+  MapLayerMouseEvent,
+  CircleLayerSpecification,
+} from "maplibre-gl";
+import type {
+  Endpoint,
+  Cohort,
+  Response,
+  Options,
+  GatewayCluster,
+  InfrastructureNode,
+} from "./network-data";
+import "./network-dashboard.css";
 
 function node<K extends keyof HTMLElementTagNameMap>(
   name: K,
@@ -140,43 +41,122 @@ function node<K extends keyof HTMLElementTagNameMap>(
   return element;
 }
 function time(value?: string) {
-  if (!value || value.startsWith("0001-")) return "Never observed";
-  return new Date(value).toLocaleString();
+  if (!value || value.startsWith("0001-") || !Number.isFinite(Date.parse(value)))
+    return "Not observed";
+  return new Date(value).toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
-function price(endpoint: Endpoint) {
-  const q = endpoint.price;
-  return q ? `${q.numerator} / ${q.denominator} ${q.currency}/${q.unit}` : "Not observed";
+function short(value: string) {
+  return value.length > 22 ? `${value.slice(0, 10)}…${value.slice(-6)}` : value;
+}
+function quantity(value: number, noun: string) {
+  return `${value} ${noun}${value === 1 ? "" : "s"}`;
+}
+function button(label: string, action: () => void, className = "") {
+  const result = node("button", label, className);
+  result.type = "button";
+  result.onclick = () => action();
+  return result;
+}
+const icons = {
+  refresh:
+    '<path d="M20 7v5h-5M4 17v-5h5"/><path d="M6 7a7 7 0 0 1 12-1l2 3M4 15l2 3a7 7 0 0 0 12-1"/>',
+  reset: '<path d="m3 10 9-7 9 7v10H3Z"/><path d="M9 20v-7h6v7"/>',
+  expand: '<path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5"/>',
+  close: '<path d="m6 6 12 12M6 18 18 6"/>',
+};
+function iconButton(label: string, icon: keyof typeof icons, action: () => void) {
+  const result = button("", action, "map-icon-button");
+  result.setAttribute("aria-label", label);
+  result.title = label;
+  // These paths are static UI assets; response data always goes through textContent.
+  result.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icons[icon]}</svg>`;
+  return result;
 }
 function select(label: string, entries: Array<[string, string]>) {
-  const wrapper = node("label", label);
+  const wrapper = node("label", undefined, "map-filter");
   const input = node("select");
-  for (const [value, text] of entries) {
-    const option = node("option", text);
+  input.setAttribute("aria-label", label);
+  for (const [value, title] of entries) {
+    const option = node("option", title);
     option.value = value;
     input.append(option);
   }
-  wrapper.append(input);
+  wrapper.append(node("span", label, "filter-label"), input);
   return { wrapper, input };
 }
-
-// Both frontends mount the same public renderer and consume the same server definitions.
-export function mountNetworkDashboard(container: HTMLElement, options: Options): () => void {
-  const initialQuery = new URLSearchParams(window.location.search);
-  const root = node("section", undefined, "fw-network");
-  const style = node("style", styles);
-  root.append(style);
-  const header = node("header");
-  header.append(
-    node("h2", "Livepeer network"),
-    node(
-      "p",
-      "Public onchain inventory, discovery coverage and real transcoding workloads. Results are specific to their observer region and output profiles.",
-      "muted"
-    )
+function disclosure(label: string, className = "") {
+  const element = node("details", undefined, className);
+  element.append(node("summary", label));
+  return element;
+}
+function facts(entries: Array<[string, string]>, className = "map-facts") {
+  const list = node("dl", undefined, className);
+  for (const [label, value] of entries) {
+    const row = node("div");
+    row.append(node("dt", label), node("dd", value));
+    list.append(row);
+  }
+  return list;
+}
+function statusLabel(status: string) {
+  return status === "up"
+    ? "Reachable"
+    : status === "unavailable"
+      ? "Unreachable"
+      : "Coverage unknown";
+}
+function formatPrice(p: Endpoint) {
+  const q = p.price;
+  if (!q) return "No price observed";
+  if (
+    !/^\d{1,20}$/.test(q.numerator) ||
+    !/^\d{1,20}$/.test(q.denominator) ||
+    BigInt(q.denominator) === 0n
+  )
+    return "Price unavailable";
+  const n = BigInt(q.numerator),
+    d = BigInt(q.denominator);
+  if (q.currency.toLowerCase() === "wei" && q.unit === "pixel") {
+    const scaled = (n * 10000n) / (d * 1000n);
+    if (n > 0n && scaled === 0n) return "<0.0001 gwei / MP";
+    return `${scaled / 10000n}.${
+      String(scaled % 10000n)
+        .padStart(4, "0")
+        .replace(/0+$/, "") || "0"
+    } gwei / MP`;
+  }
+  return `${q.numerator} / ${q.denominator} ${q.currency}/${q.unit}`;
+}
+function freshPrice(p: Endpoint) {
+  if (!p.price) return false;
+  const age = Date.now() - Date.parse(p.price.observed_at);
+  return (
+    Number.isFinite(age) && age >= -60000 && age <= Math.max(180, 2 * p.cadence_seconds) * 1000
   );
-  root.append(header);
-  const toolbar = node("div", undefined, "toolbar");
-  const windowChoice = select("Window", [
+}
+
+// React and Svelte mount the same public view so map behavior and evidence stay consistent.
+export function mountNetworkDashboard(container: HTMLElement, options: Options): () => void {
+  const initial = new URLSearchParams(window.location.search);
+  const root = node("section", undefined, "fw-network");
+  root.setAttribute("aria-label", "Livepeer network observations");
+  const header = node("header", undefined, "network-map-header");
+  const title = node("div");
+  title.append(node("span", "PUBLIC NETWORK", "map-eyebrow"), node("h2", "Livepeer"));
+  const message = node("span", "Loading observations…", "map-status");
+  message.setAttribute("role", "status");
+  message.setAttribute("aria-live", "polite");
+  const refresh = iconButton("Refresh observations", "refresh", () => void fetchData());
+  header.append(title, message, refresh);
+  const toolbar = node("div", undefined, "map-toolbar");
+  const windowChoice = select("Period", [
+    ["0.25", "15 minutes"],
+    ["1", "1 hour"],
     ["24", "24 hours"],
     ["168", "7 days"],
     ["720", "30 days"],
@@ -184,154 +164,152 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
     ["8760", "1 year"],
     ["17520", "2 years"],
   ]);
-  const regionChoice = select("Observer region", [["", "All regions"]]);
-  const profileChoice = select("Profiles", [["", "All profiles"]]);
-  const orderChoice = select("Order", [
-    ["identity", "Orchestrator / endpoint"],
-    ["availability", "Available first"],
-    ["samples", "Most observed segments"],
-    ["latency", "Lowest regional p95"],
-    ["failures", "Lowest final failure rate"],
-    ["price", "Lowest fresh price (within currency/unit)"],
+  windowChoice.input.value = "24";
+  const regionChoice = select("History region", [["", "All regions"]]);
+  const metricChoice = select("Map shows", [
+    ["availability", "Availability"],
+    ["errors", "Observed errors"],
+    ["activity", "Transcoding activity"],
   ]);
-  orderChoice.input.setAttribute("aria-label", "Sort endpoints");
-  if (
-    Array.from(orderChoice.input.options).some(
-      (entry) => entry.value === initialQuery.get("lp_sort")
-    )
-  )
-    orderChoice.input.value = initialQuery.get("lp_sort")!;
-  if (
-    Array.from(windowChoice.input.options).some(
-      (entry) => entry.value === initialQuery.get("lp_window")
-    )
-  )
-    windowChoice.input.value = initialQuery.get("lp_window")!;
-  const inactiveLabel = node("label", "Show inactive");
-  const inactive = node("input");
-  inactive.type = "checkbox";
-  inactive.checked = initialQuery.get("lp_inactive") === "true";
-  inactiveLabel.append(inactive);
-  const refresh = node("button", "Refresh");
-  refresh.type = "button";
-  const maximize = node("button", "Maximize");
-  maximize.type = "button";
-  toolbar.append(
-    windowChoice.wrapper,
-    regionChoice.wrapper,
-    profileChoice.wrapper,
-    orderChoice.wrapper,
-    inactiveLabel,
-    refresh,
-    maximize
-  );
-  root.append(toolbar);
-  const presentation = node("div", undefined, "toolbar");
-  const compareButton = node("button", "Compare");
-  const mapButton = node("button", "Map");
-  const comparisonNote = node("p", undefined, "muted");
-  compareButton.type = mapButton.type = "button";
-  presentation.append(compareButton, mapButton, comparisonNote);
-  root.append(presentation);
-  const message = node("p", "Loading network observations…", "summary muted");
-  message.setAttribute("role", "status");
-  message.setAttribute("aria-live", "polite");
-  const summary = node("div", undefined, "summary");
-  root.append(message, summary);
-  const diagnostics = node("details", undefined, "detail");
-  diagnostics.hidden = true;
-  root.append(diagnostics);
-  const mapContainer = node("div", undefined, "map");
-  mapContainer.setAttribute("aria-label", "Map of observed Livepeer endpoints");
-  root.append(mapContainer);
-  const layers = node("div", undefined, "toolbar");
+  const profileChoice = select("Output profile", [["", "All profiles"]]);
+  const settings = disclosure("Layers & filters", "map-settings");
+  const settingsBody = node("div", undefined, "map-settings-body");
   const layerControls = new Map<string, HTMLInputElement>();
-  for (const [id, label, checked] of [
-    ["livepeer-endpoints", "Endpoints", true],
-    ["gateway-clusters", "Gateway clusters", true],
+  for (const [id, label, enabled] of [
+    ["livepeer-endpoints", "Workers", true],
+    ["gateway-clusters", "Gateways", true],
     ["prober-sites", "Probers", true],
     ["frameworks-nodes", "FrameWorks nodes", false],
   ] as const) {
-    const wrapper = node("label", label);
-    const checkbox = node("input");
-    checkbox.type = "checkbox";
-    checkbox.checked = initialQuery.has(`lp_layer_${id}`)
-      ? initialQuery.get(`lp_layer_${id}`) === "true"
-      : checked;
-    checkbox.onchange = () => {
+    const field = node("label", undefined, "map-check");
+    const input = node("input");
+    input.type = "checkbox";
+    input.checked = initial.has(`lp_layer_${id}`)
+      ? initial.get(`lp_layer_${id}`) === "true"
+      : enabled;
+    field.append(input, node("span", label));
+    settingsBody.append(field);
+    layerControls.set(id, input);
+    input.onchange = () => {
       updateMap();
       persist();
     };
-    layerControls.set(id, checkbox);
-    wrapper.append(checkbox);
-    layers.append(wrapper);
   }
-  root.append(layers);
-  const workPanel = node("section", undefined, "detail work-accounting");
-  const workOrder = select("Work order", [
-    ["minutes", "Most accepted minutes"],
-    ["cost", "Highest service charges"],
-    ["attempts", "Most submitted attempts"],
-  ]);
-  workOrder.input.setAttribute("aria-label", "Sort orchestrator work");
-  workOrder.input.onchange = () => renderWork();
-  root.append(workPanel);
-  const observationSites = node("details", undefined, "detail observation-sites");
-  root.append(observationSites);
-  const body = node("div", undefined, "body");
-  const list = node("div", undefined, "list");
-  const detail = node("aside", undefined, "detail");
-  detail.append(
-    node(
-      "p",
-      "Select an endpoint to inspect its regional performance, price and discovery coverage."
-    )
+  const inactive = node("input");
+  inactive.type = "checkbox";
+  inactive.checked = initial.get("lp_inactive") === "true";
+  const inactiveLabel = node("label", undefined, "map-check");
+  inactiveLabel.append(inactive, node("span", "Include inactive workers"));
+  settingsBody.append(profileChoice.wrapper, inactiveLabel);
+  settings.append(settingsBody);
+  toolbar.append(windowChoice.wrapper, regionChoice.wrapper, metricChoice.wrapper, settings);
+  const workspace = node("div", undefined, "map-workspace");
+  const viewport = node("div", undefined, "map-viewport");
+  const mapContainer = node("div", undefined, "map");
+  mapContainer.dataset.mode = "map";
+  mapContainer.setAttribute("aria-label", "Map of Livepeer workers and measurement locations");
+  const mapControls = node("div", undefined, "map-controls");
+  const reset = iconButton("Reset map view", "reset", () =>
+    map?.easeTo({ center: [10, 25], zoom: 2, duration: 400 })
   );
-  body.append(list, detail);
-  root.append(body);
-  const foot = node("footer", undefined, "detail");
+  const maximize = iconButton("Open fullscreen map", "expand", () =>
+    fullscreen(!root.classList.contains("is-fullscreen"))
+  );
+  mapControls.append(reset, maximize);
+  const legend = node("div", undefined, "map-legend");
+  legend.setAttribute("aria-label", "Map legend");
+  const zoomHint = node("span", "Hold Alt or Ctrl + scroll to zoom", "map-zoom-hint");
+  const tooltip = node("div", undefined, "map-tooltip");
+  tooltip.hidden = true;
+  tooltip.setAttribute("role", "tooltip");
+  const mapNotice = node("div", undefined, "map-notice");
+  mapNotice.hidden = true;
+  mapNotice.setAttribute("role", "status");
+  viewport.append(mapContainer, mapControls, legend, zoomHint, tooltip, mapNotice);
+  const rail = node("div", undefined, "map-rail");
+  const overview = node("aside", undefined, "network-overview");
+  overview.setAttribute("aria-label", "Network overview");
+  const overviewBody = node("div");
+  const browse = button("Browse workers", () => showDirectory(), "rail-action");
+  overview.append(overviewBody, browse);
+  const directory = node("aside", undefined, "worker-directory");
+  directory.hidden = true;
+  directory.setAttribute("aria-label", "Worker directory");
+  const directoryHeader = node("div", undefined, "inspector-header");
+  directoryHeader.append(
+    node("h3", "Workers"),
+    iconButton("Back to network overview", "close", closeSelection)
+  );
+  const searchLabel = node("label", undefined, "worker-search");
+  searchLabel.append(node("span", "Find a worker", "filter-label"));
+  const search = node("input");
+  search.type = "search";
+  search.placeholder = "Address, IP or hostname";
+  search.setAttribute("aria-label", "Find a worker");
+  searchLabel.append(search);
+  const list = node("div", undefined, "worker-list");
+  directory.append(directoryHeader, searchLabel, list);
+  const detail = node("aside", undefined, "worker-inspector detail");
+  detail.hidden = true;
+  detail.setAttribute("aria-label", "Selected worker");
+  rail.append(overview, directory, detail);
+  workspace.append(viewport, rail);
+  const foot = disclosure("About these observations", "map-methodology");
   foot.append(
     node(
       "p",
-      "An IP identifies an observed endpoint. Shared proxies do not establish physical worker identity. Unknown geography stays in the list; gaps in observation coverage are unknown availability.",
-      "muted"
+      "Reachable means at least one location can connect. Grey means no recent result. Use the filters for regional history. Workers are network addresses, not GPU counts. Prices are quotes; work totals come from FrameWorks gateways."
     )
   );
-  if (options.infrastructureURL) {
-    const link = node("a", "Explore FrameWorks infrastructure");
-    link.href = options.infrastructureURL;
-    foot.append(link);
-  }
-  root.append(foot);
+  root.append(header, toolbar, workspace, foot);
   container.replaceChildren(root);
   let data: Response | undefined;
-  let selected = initialQuery.get("lp_endpoint") ?? "";
-  let mode = initialQuery.get("lp_mode") === "map" ? "map" : "compare";
+  let selected = initial.get("lp_endpoint") ?? "";
+  type ExplorerSelection = { kind: "region" | "orchestrator" | "site"; id: string };
+  let explorerSelection: ExplorerSelection | undefined;
+  const focusKind = initial.get("lp_focus");
+  const focusId = initial.get("lp_focus_id");
+  if (["region", "orchestrator", "site"].includes(focusKind || "") && focusId && !selected)
+    explorerSelection = { kind: focusKind as ExplorerSelection["kind"], id: focusId };
+  let directoryIDs: Set<string> | undefined;
+  let detailTab = "overview";
+  const performanceSelection = new Map<string, { region: string; profile: string }>();
   let restoreFilters = true;
-  let map: MapLibreMap | undefined;
   let disposed = false;
+  let map: MapLibreMap | undefined;
   let controller: AbortController | undefined;
   let fetchVersion = 0;
   let infrastructure: InfrastructureNode[] = [];
   let gatewayClusters: GatewayCluster[] = [];
   let unbindViewport = () => {};
+  let unbindScroll = () => {};
+  let oldOverflow: string | undefined;
   const infrastructureController = new AbortController();
   const endpointHistory = new Map<string, Response["history"]>();
   const pendingHistory = new Set<string>();
-  const knownRegions = new Set<string>();
+  const knownRegions = new Set<string>(initial.get("lp_region") ? [initial.get("lp_region")!] : []);
+  for (const [input, key] of [
+    [windowChoice.input, "lp_window"],
+    [metricChoice.input, "lp_metric"],
+  ] as const) {
+    const value = initial.get(key);
+    if (value && Array.from(input.options).some((o) => o.value === value)) input.value = value;
+  }
   function persist() {
     const query = new URLSearchParams(window.location.search);
     query.set("view", "livepeer");
-    const fields = {
+    query.set("lp_mode", "map");
+    query.delete("lp_sort");
+    for (const [key, value] of Object.entries({
       lp_window: windowChoice.input.value,
       lp_region: regionChoice.input.value,
       lp_profile: profileChoice.input.value,
       lp_inactive: String(inactive.checked),
-      lp_mode: mode,
-      lp_sort: orderChoice.input.value,
       lp_endpoint: selected,
-    };
-    for (const [key, value] of Object.entries(fields)) {
+      lp_metric: metricChoice.input.value,
+      lp_focus: explorerSelection?.kind || "",
+      lp_focus_id: explorerSelection?.id || "",
+    })) {
       if (value) query.set(key, value);
       else query.delete(key);
     }
@@ -340,52 +318,273 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
     if (options.onQueryChange) options.onQueryChange(query);
     else window.history.replaceState(window.history.state, "", `?${query}`);
   }
-  function present(next: string) {
-    mode = next;
-    mapContainer.dataset.mode = mode;
-    mapContainer.style.height = mode === "map" ? "min(68vh, 760px)" : "260px";
-    compareButton.setAttribute("aria-pressed", String(mode === "compare"));
-    mapButton.setAttribute("aria-pressed", String(mode === "map"));
+  function fullscreen(enabled: boolean) {
+    root.classList.toggle("is-fullscreen", enabled);
+    maximize.setAttribute("aria-label", enabled ? "Exit fullscreen map" : "Open fullscreen map");
+    maximize.title = enabled ? "Exit fullscreen map" : "Open fullscreen map";
+    if (enabled) {
+      oldOverflow = document.body.style.overflow;
+      document.body.style.overflow = "hidden";
+      root.tabIndex = -1;
+      root.focus();
+    } else if (oldOverflow !== undefined) {
+      document.body.style.overflow = oldOverflow;
+      oldOverflow = undefined;
+    }
     map?.resize();
   }
-  compareButton.onclick = () => {
-    present("compare");
+  function closeSelection() {
+    explorerSelection = undefined;
+    selected = "";
+    directoryIDs = undefined;
+    detail.hidden = directory.hidden = true;
+    overview.hidden = false;
+    tooltip.hidden = true;
     persist();
-  };
-  mapButton.onclick = () => {
-    present("map");
+    updateMap();
+    browse.focus({ preventScroll: true });
+  }
+  function showDirectory(ids?: string[], title?: string) {
+    explorerSelection = undefined;
+    selected = "";
+    directoryIDs = ids ? new Set(ids) : undefined;
+    directoryHeader.querySelector("h3")!.textContent =
+      title || (ids ? `${ids.length} workers here` : "Workers");
     persist();
-  };
-  present(mode);
-  const filtered = (values = data?.history.cohorts ?? []): Cohort[] =>
+    search.value = "";
+    detail.hidden = overview.hidden = true;
+    directory.hidden = false;
+    rail.scrollTop = 0;
+    renderList();
+    updateMap();
+  }
+  function escape(event: KeyboardEvent) {
+    if (event.key !== "Escape") return;
+    if (settings.open) settings.open = false;
+    else if (!detail.hidden || !directory.hidden) closeSelection();
+    else if (root.classList.contains("is-fullscreen")) fullscreen(false);
+  }
+  container.addEventListener("keydown", escape);
+  const filtered = (values: Cohort[] = data?.history.cohorts ?? []) =>
     values.filter(
       (c) =>
         (!regionChoice.input.value || c.region === regionChoice.input.value) &&
         (!profileChoice.input.value ||
-          c.kind === "discovery" ||
-          c.kind === "state" ||
-          c.kind === "coverage" ||
+          ["discovery", "state", "coverage"].includes(c.kind) ||
           c.profile_key === profileChoice.input.value)
     );
-  const endpointCohorts = (p: Endpoint, summaries = false) =>
-    filtered(
-      summaries
-        ? ((endpointHistory.get(historyKey(p.id)) ?? data?.history)?.summaries ?? [])
-        : ((endpointHistory.get(historyKey(p.id)) ?? data?.history)?.cohorts ?? [])
-    ).filter((c) => c.resource_id.toLowerCase() === p.resource.id.toLowerCase() && c.ip === p.ip);
-  function workSummaries(): WorkSummary[] {
-    const work = data?.history.work;
-    if (!work || work.truncated) return [];
-    return work.summaries.filter(
-      (entry) =>
-        (!regionChoice.input.value || entry.region === regionChoice.input.value) &&
-        (!profileChoice.input.value || entry.profile_key === profileChoice.input.value)
+  function historyKey(id: string) {
+    return `${id}|${regionChoice.input.value}`;
+  }
+  function endpointHistoryFor(p: Endpoint) {
+    return endpointHistory.get(historyKey(p.id)) ?? data!.history;
+  }
+  function endpointCohorts(p: Endpoint, summaries = false) {
+    const history = endpointHistoryFor(p);
+    return filtered(summaries ? history.summaries : history.cohorts).filter(
+      (c) => c.resource_id.toLowerCase() === p.resource.id.toLowerCase() && c.ip === p.ip
     );
   }
-  function appendWorkDetail(target: HTMLElement, title: string, total?: WorkSummary) {
-    target.append(node("h3", title));
+  function endpointErrors(p: Endpoint) {
+    return endpointCohorts(p, true)
+      .filter((c) => c.kind === "segment" || c.kind === "discovery")
+      .reduce((n, c) => n + c.failures, 0);
+  }
+  function segments(p: Endpoint) {
+    return endpointCohorts(p, true)
+      .filter((c) => c.kind === "segment")
+      .reduce((n, c) => n + c.samples, 0);
+  }
+  function observations(p?: Endpoint) {
+    return (p ? endpointHistoryFor(p).observations : (data?.history.observations ?? [])).filter(
+      (o) =>
+        (!p || (o.resource_id.toLowerCase() === p.resource.id.toLowerCase() && o.ip === p.ip)) &&
+        (!regionChoice.input.value || o.region === regionChoice.input.value)
+    );
+  }
+  function renderErrors(target: HTMLElement, p?: Endpoint) {
+    const errors = observations(p)
+      .filter((o) => !o.success && o.failure_kind)
+      .sort((a, b) => Date.parse(b.timestamp) - Date.parse(a.timestamp));
+    const rows = node("div", undefined, "observation-events");
+    if (!errors.length) rows.append(node("p", "No errors in the returned data.", "muted"));
+    for (const error of errors.slice(0, 6)) {
+      const row = node("div", undefined, "observation-event");
+      const title = node("div");
+      title.append(
+        node("strong", error.failure_kind!.replace(/_/g, " ")),
+        node("span", error.region || "Region unknown", "region-label")
+      );
+      row.append(
+        title,
+        node(
+          "p",
+          `${time(error.timestamp)} · ${error.kind}${error.qualifying ? " · failed check" : " · not counted as downtime"}`,
+          "muted"
+        )
+      );
+      if (!p) {
+        const endpoint = data?.inventory.endpoints.find(
+          (e) =>
+            e.resource.id.toLowerCase() === error.resource_id.toLowerCase() && e.ip === error.ip
+        );
+        if (endpoint)
+          row.append(
+            button(`${endpoint.ip} →`, () => pick(endpoint.id, true), "observation-worker")
+          );
+        else row.append(node("code", error.uri || short(error.resource_id), "observation-target"));
+      }
+      rows.append(row);
+    }
+    target.append(rows);
+  }
+  function renderOverview() {
+    if (!data) return;
+    const regionsOpen =
+      overviewBody.querySelector<HTMLDetailsElement>('[aria-label="Observing regions"]')?.open ??
+      true;
+    const identitiesOpen =
+      overviewBody.querySelector<HTMLDetailsElement>('[aria-label="Orchestrator identities"]')
+        ?.open ?? false;
+    overviewBody.replaceChildren();
+    const endpoints = data.inventory.endpoints;
+    const summary = facts(
+      [
+        ["Observed workers", String(endpoints.length)],
+        ["Reachable", String(endpoints.filter((p) => p.status === "up").length)],
+        ["Unreachable", String(endpoints.filter((p) => p.status === "unavailable").length)],
+        [
+          "Coverage unknown",
+          String(endpoints.filter((p) => !["up", "unavailable"].includes(p.status)).length),
+        ],
+      ],
+      "network-counts"
+    );
+    const heading = node("div", undefined, "rail-heading");
+    heading.append(node("span", "NETWORK OVERVIEW", "map-eyebrow"), node("h3", "Livepeer workers"));
+    overviewBody.append(heading, summary);
+    const coverage = node("section", undefined, "rail-section");
+    const sites = data.inventory.observers ?? [];
+    const regions = new Set(sites.map((site) => site.region).filter(Boolean));
+    coverage.append(
+      node("h4", "Measurement coverage"),
+      node(
+        "p",
+        `${new Set(data.inventory.resources.map((r) => r.id)).size} catalog identities · ${regions.size} reporting regions`,
+        "muted"
+      )
+    );
+    const navigation = node("nav", undefined, "network-hierarchy");
+    const regionsPanel = disclosure("Observing regions", "hierarchy-section");
+    regionsPanel.setAttribute("aria-label", "Observing regions");
+    regionsPanel.open = regionsOpen;
+    for (const group of observingRegions(data)) {
+      const row = hierarchyRow(
+        group.id || "Region unknown",
+        quantity(group.sites.filter((s) => s.kind === "gateway").length, "gateway") +
+          " · " +
+          quantity(group.sites.filter((s) => s.kind === "prober").length, "prober"),
+        quantity(group.endpoints.length, "worker") + " observed",
+        () => explore("region", group.id)
+      );
+      row.dataset.region = group.id;
+      regionsPanel.append(row);
+    }
+    const identities = disclosure("Orchestrator identities", "hierarchy-section");
+    identities.setAttribute("aria-label", "Orchestrator identities");
+    identities.open = identitiesOpen;
+    for (const group of orchestratorGroups(data)) {
+      const row = hierarchyRow(
+        short(group.id),
+        hostname(group.uri),
+        quantity(group.endpoints.length, "worker endpoint"),
+        () => explore("orchestrator", group.id)
+      );
+      row.dataset.orchestrator = group.id;
+      identities.append(row);
+    }
+    navigation.append(regionsPanel, identities);
+    overviewBody.append(navigation);
+    const unknown = endpoints.filter((p) => !p.location.known).length;
+    if (unknown)
+      coverage.append(
+        button(
+          `${unknown} ${unknown === 1 ? "worker" : "workers"} without a known location →`,
+          () =>
+            showDirectory(
+              endpoints.filter((p) => !p.location.known).map((p) => p.id),
+              "Location unknown"
+            ),
+          "text-action"
+        )
+      );
+    overviewBody.append(coverage);
+    const activity = node("section", undefined, "rail-section");
+    activity.append(node("h4", "Recent error observations"));
+    renderErrors(activity);
+    overviewBody.append(activity);
+  }
+  function visibleEndpoints() {
+    const query = search.value.trim().toLowerCase();
+    return [...(data?.inventory.endpoints ?? [])]
+      .filter((p) => !directoryIDs || directoryIDs.has(p.id))
+      .filter(
+        (p) =>
+          !query ||
+          `${p.ip} ${p.resource.id} ${p.resource.uri} ${p.location.country ?? ""}`
+            .toLowerCase()
+            .includes(query)
+      )
+      .sort((a, b) => a.resource.id.localeCompare(b.resource.id) || a.ip.localeCompare(b.ip));
+  }
+  function renderList() {
+    list.replaceChildren();
+    for (const p of visibleEndpoints()) {
+      const row = button("", () => pick(p.id, true), "worker-row");
+      row.dataset.endpoint = p.id;
+      const identity = node("div");
+      identity.append(node("strong", p.ip || "Unknown IP"), node("code", short(p.resource.id)));
+      const address = node("span", p.authority || p.resource.uri, "worker-address");
+      const signal = node("div");
+      signal.append(
+        node("span", statusLabel(p.status), `worker-status status-${p.status}`),
+        node(
+          "span",
+          p.location.known ? p.location.country || "Location known" : "Location unknown",
+          "muted"
+        )
+      );
+      row.append(identity, address, signal);
+      list.append(row);
+    }
+    if (!list.childElementCount)
+      list.append(
+        node(
+          "p",
+          data ? "No workers match this search." : "Waiting for network observations…",
+          "rail-section muted"
+        )
+      );
+    const discovered = new Set(data?.inventory.endpoints.map((p) => p.resource.id.toLowerCase()));
+    const missing =
+      data?.inventory.resources.filter((r) => r.active && !discovered.has(r.id.toLowerCase())) ??
+      [];
+    if (missing.length && !search.value && !directoryIDs) {
+      const entries = disclosure(
+        `${missing.length} identities without an observed worker`,
+        "catalog-unknown"
+      );
+      entries.append(node("p", "Listed onchain, but no worker found yet.", "muted"));
+      for (const resource of missing) entries.append(node("code", short(resource.id)));
+      list.append(entries);
+    }
+  }
+  function appendWork(target: HTMLElement, title: string, total?: WorkSummary) {
+    const section = node("section", undefined, "inspector-section");
+    section.append(node("h4", title));
     if (!total) {
-      target.append(node("p", "No work accounting observations for this selection.", "muted"));
+      section.append(node("p", "No work data for this selection.", "muted"));
+      target.append(section);
       return;
     }
     const known = total.accounted_attempts > 0 || total.accepted_segments > 0;
@@ -393,704 +592,728 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
     const dispatchedKnown = total.dispatched_attempts
       ? total.dispatched_duration_samples > 0
       : known;
-    const outputKnown = total.accepted_segments ? total.accepted_output_samples > 0 : known;
-    target.append(
-      node(
-        "p",
-        `Accepted source minutes: ${acceptedKnown ? workMinutes(total.accepted_source_ms) : "Not accounted"} · accepted segments: ${total.accepted_segments} · duration samples: ${total.accepted_duration_samples}`
-      ),
-      node(
-        "p",
-        `Accepted rendition minutes: ${outputKnown && acceptedKnown ? workMinutes(total.accepted_rendition_ms) : "Not accounted"} · accepted output pixels: ${outputKnown ? total.accepted_pixels : "Not accounted"}`
-      ),
-      node(
-        "p",
-        `Submitted source minutes: ${dispatchedKnown ? workMinutes(total.dispatched_source_ms) : "Not accounted"} · submitted attempts: ${total.dispatched_attempts} · duration samples: ${total.dispatched_duration_samples}`
-      ),
-      node(
-        "p",
-        `Returned output pixels: ${total.returned_pixels} from ${total.returned_attempts} responses`
-      ),
-      node(
-        "p",
-        `Known service charges: ${workAmount(total.service_charge)} · priced responses: ${total.service_charge_samples}/${total.returned_attempts}`
-      ),
-      node(
-        "p",
-        `Expected ticket credit sent: ${total.ticket_credit_incomplete ? "Unknown: query bound" : workAmount(total.ticket_credit_sent)} · tickets: ${total.tickets_sent} · payment observations: ${total.ticket_credit_samples}`
-      ),
-      node(
-        "p",
-        "Accepted work is the final result accepted by the gateway. Submitted work includes retries and hedges. Service charges use execution-time session prices; ticket credit is separate and does not establish redeemed earnings.",
-        "muted"
-      )
+    section.append(
+      facts([
+        [
+          "Accepted source minutes",
+          acceptedKnown ? workMinutes(total.accepted_source_ms) : "No data",
+        ],
+        [
+          "Submitted source minutes",
+          dispatchedKnown ? workMinutes(total.dispatched_source_ms) : "No data",
+        ],
+        ["Accepted segments", String(total.accepted_segments)],
+        [
+          "Returned output pixels",
+          total.returned_attempts ? total.returned_pixels : "Not observed",
+        ],
+        ["Known service charges", workAmount(total.service_charge)],
+        [
+          "Expected ticket credit sent",
+          total.ticket_credit_incomplete ? "Incomplete" : workAmount(total.ticket_credit_sent),
+        ],
+      ])
     );
     if (isPartialWork(total))
-      target.append(
-        node(
-          "p",
-          `${total.unaccounted_samples} observations have no work accounting. Missing duration, output or pricing evidence makes these totals partial; missing amounts are unknown.`,
-          "muted"
-        )
+      section.append(
+        node("p", "Some work data is missing. Totals may be incomplete.", "evidence-note")
       );
-  }
-  function renderWork() {
-    workPanel.replaceChildren(node("h3", "Orchestrator work through FrameWorks"));
-    const work = data?.history.work;
-    if (!work || work.truncated) {
-      workPanel.append(
-        node(
-          "p",
-          work?.truncated
-            ? "Work totals exceed the query bound. Narrow the time window or observer region; partial totals are not shown."
-            : "Work accounting is unavailable for this response.",
-          "muted"
-        )
-      );
-      return;
-    }
-    workPanel.append(
-      node(
-        "p",
-        `Observed work from ${time(work.start)} to ${time(work.end)}${work.interval_seconds ? "; retained totals cover whole hours within the selected window" : ""}. Region and profile filters apply. This is FrameWorks traffic, not total Livepeer network activity.`,
-        "muted"
-      ),
-      workOrder.wrapper
-    );
-    const groups = new Map<string, WorkSummary[]>();
-    if (work.ticket_credit_truncated)
-      workPanel.append(
-        node(
-          "p",
-          "Ticket-credit totals exceed the query bound. Narrow the time window or select an orchestrator for credit totals. Work and service-charge totals remain available.",
-          "muted"
-        )
-      );
-    for (const entry of workSummaries()) {
-      const id = entry.resource_id.toLowerCase();
-      groups.set(id, [...(groups.get(id) ?? []), entry]);
-    }
-    const totals = [...groups.values()].map((group) => sumWork(group)!);
-    totals.sort((a, b) => {
-      if (workOrder.input.value === "cost")
-        return (
-          compareWorkAmounts(a.service_charge, b.service_charge) ||
-          a.resource_id.localeCompare(b.resource_id)
-        );
-      if (workOrder.input.value === "attempts")
-        return (
-          b.dispatched_attempts - a.dispatched_attempts ||
-          a.resource_id.localeCompare(b.resource_id)
-        );
-      const delta = BigInt(b.accepted_source_ms) - BigInt(a.accepted_source_ms);
-      return delta < 0n ? -1 : delta > 0n ? 1 : a.resource_id.localeCompare(b.resource_id);
-    });
-    if (!totals.length) {
-      workPanel.append(
-        node(
-          "p",
-          "No work observations in the selected window and cohorts. This does not establish zero orchestrator activity.",
-          "muted"
-        )
-      );
-      return;
-    }
-    const accepted = totals.reduce((sum, total) => sum + BigInt(total.accepted_source_ms), 0n);
-    const table = node("table"),
-      heading = node("tr"),
-      thead = node("thead"),
-      tbody = node("tbody");
-    table.setAttribute("aria-label", "Orchestrator workload totals");
-    for (const label of [
-      "Orchestrator",
-      "Accepted source minutes",
-      "Submitted source minutes",
-      "Returned output pixels",
-      "Known service charges",
-      "Share of observed accepted work",
-      "Coverage",
-    ])
-      heading.append(node("th", label));
-    thead.append(heading);
-    for (const total of totals) {
-      const row = node("tr"),
-        identity = node("td");
-      const endpoint = data!.inventory.endpoints.find(
-        (entry) => entry.resource.id.toLowerCase() === total.resource_id
-      );
-      if (endpoint) {
-        const button = node("button", total.resource_id);
-        button.type = "button";
-        button.onclick = () => pick(endpoint.id);
-        identity.append(button);
-      } else identity.append(node("code", total.resource_id || "Unattributed"));
-      row.append(identity);
-      const known = total.accounted_attempts > 0 || total.accepted_segments > 0;
-      const acceptedKnown = total.accepted_segments ? total.accepted_duration_samples > 0 : known;
-      const dispatchedKnown = total.dispatched_attempts
-        ? total.dispatched_duration_samples > 0
-        : known;
-      const hundredths =
-        accepted > 0n ? (BigInt(total.accepted_source_ms) * 10000n) / accepted : undefined;
-      for (const value of [
-        acceptedKnown ? workMinutes(total.accepted_source_ms) : "Not accounted",
-        dispatchedKnown ? workMinutes(total.dispatched_source_ms) : "Not accounted",
-        total.returned_attempts ? total.returned_pixels : "Not observed",
-        workAmount(total.service_charge),
-        hundredths === undefined
-          ? "Unknown"
-          : `${hundredths / 100n}.${String(hundredths % 100n).padStart(2, "0")}%`,
-        isPartialWork(total) ? "Partial accounting" : "Observed totals",
-      ])
-        row.append(node("td", value));
-      if (total.service_charge)
-        row.cells[4].title = `${total.service_charge.numerator}/${total.service_charge.denominator} wei; service charges, not redeemed earnings`;
-      tbody.append(row);
-    }
-    table.append(thead, tbody);
-    workPanel.append(table);
+    target.append(section);
   }
   function renderDetail(p: Endpoint) {
-    detail.replaceChildren(
+    detail.setAttribute("aria-label", "Selected worker");
+    const focusedTab = detail.querySelector<HTMLButtonElement>('[role="tab"]:focus')?.id;
+    detail.hidden = false;
+    overview.hidden = directory.hidden = true;
+    const top = node("div", undefined, "inspector-header");
+    top.append(
+      node("span", "WORKER", "map-eyebrow"),
+      iconButton("Close worker details", "close", closeSelection)
+    );
+    const heading = node("div", undefined, "worker-heading");
+    heading.append(
       node("h3", p.ip || "Unknown endpoint"),
-      node("code", p.resource.id),
-      node("p", p.resource.uri),
-      node("p", `Availability: ${p.status}`),
-      node("p", `Last success: ${time(p.last_success)}`),
-      node("p", `Last check: ${time(p.last_check)} · scheduled cadence ${p.cadence_seconds}s`),
-      node(
-        "p",
-        `Geography: ${p.location.known ? `${p.location.country ?? ""} · ${p.location.source}` : "unknown"}`
-      ),
-      node("p", `Current price: ${price(p)}`)
+      node("span", statusLabel(p.status), `worker-status status-${p.status}`),
+      node("code", p.resource.id)
     );
-    const siblings = data!.inventory.endpoints.filter(
-      (endpoint) => endpoint.resource.id.toLowerCase() === p.resource.id.toLowerCase()
-    );
-    const instances = node("details");
-    instances.append(
-      node("summary", `${siblings.length} discovered endpoints for this orchestrator`)
-    );
-    for (const endpoint of siblings) {
-      const button = node("button", `${endpoint.ip} · ${endpoint.status}`);
-      button.type = "button";
-      button.onclick = () => {
-        pick(endpoint.id);
-        persist();
-      };
-      instances.append(button);
-    }
-    detail.append(instances);
-    const orchestratorWork = sumWork(
-      workSummaries().filter(
-        (entry) => entry.resource_id.toLowerCase() === p.resource.id.toLowerCase()
-      )
-    );
-    const endpointWork = sumWork(
-      workSummaries().filter(
-        (entry) =>
-          entry.resource_id.toLowerCase() === p.resource.id.toLowerCase() && entry.ip === p.ip
-      )
-    );
-    appendWorkDetail(detail, "This endpoint's work", endpointWork);
-    appendWorkDetail(detail, "Orchestrator work across all observed endpoints", orchestratorWork);
-    const cohorts = endpointCohorts(p);
-    const paths = new Set(cohorts.map((c) => `${c.region} | ${c.profile_key || "discovery"}`));
-    detail.append(
-      node(
-        "p",
-        `${paths.size} observed region/profile cohorts. No production samples means workload performance is unknown.`,
-        "muted"
-      )
-    );
-    const production = cohorts.filter((c) => c.kind === "attempt" || c.kind === "segment");
-    const totals = endpointCohorts(p, true).filter(
-      (c) => c.kind === "attempt" || c.kind === "segment" || c.kind === "discovery"
-    );
-    const history = endpointHistory.get(historyKey(p.id)) ?? data!.history;
-    const table = node("table");
-    const heading = node("tr");
-    for (const text of [
-      "Region / profiles",
-      "Kind",
-      "Qualifying / recorded",
-      "Successful checks / qualifying",
-      "p50 / p95 / p99 ms",
-      "p95 / duration",
+    const tabs = node("div", undefined, "inspector-tabs");
+    tabs.setAttribute("role", "tablist");
+    tabs.setAttribute("aria-label", "Worker information");
+    for (const [id, label] of [
+      ["overview", "Overview"],
+      ["observations", "Observations"],
+      ["work", "Work"],
     ]) {
-      heading.append(node("th", text));
-    }
-    const thead = node("thead");
-    thead.append(heading);
-    table.append(thead);
-    const tbody = node("tbody");
-    for (const c of totals) {
-      const row = node("tr");
-      for (const value of [
-        `${c.region} / ${c.profile_key}`,
-        c.kind,
-        `${c.qualified_samples} / ${c.samples}`,
-        `${c.successes} / ${c.qualified_samples}`,
-        `${Math.round(c.p50_ms)} / ${Math.round(c.p95_ms)} / ${Math.round(c.p99_ms)}`,
-        c.duration_samples ? c.p95_duration_ratio.toFixed(2) : "Unknown",
-      ]) {
-        row.append(node("td", value));
-      }
-      tbody.append(row);
-    }
-    table.append(tbody);
-    detail.append(
-      table,
-      node(
-        "p",
-        "Percentiles cover the selected window for each region/profile cohort. Discovery success is sampled reachability from that region. Response headers/body timings include transport and waiting; they are not GPU compute time.",
-        "muted"
-      )
-    );
-    const chart = node("div");
-    drawChart(chart, production);
-    detail.append(chart);
-    detail.append(node("h3", "Regional discovery latency"));
-    const discoveryChart = node("div");
-    drawChart(
-      discoveryChart,
-      cohorts.filter((c) => c.kind === "discovery")
-    );
-    detail.append(discoveryChart);
-    detail.append(node("h3", "Discovery timeline"));
-    const timeline = node("div", undefined, "timeline");
-    const observations = (history.observations ?? []).filter(
-      (o) =>
-        o.kind === "discovery" &&
-        o.resource_id.toLowerCase() === p.resource.id.toLowerCase() &&
-        o.ip === p.ip &&
-        (!regionChoice.input.value || o.region === regionChoice.input.value)
-    );
-    const start = Date.parse(data!.history.start),
-      end = Date.parse(data!.history.end);
-    for (let i = 0; i < 96; i++) {
-      const a = start + ((end - start) * i) / 96,
-        b = start + ((end - start) * (i + 1)) / 96;
-      const points = observations.filter(
-        (o) => Date.parse(o.timestamp) >= a && Date.parse(o.timestamp) < b
+      const tab = button(
+        label,
+        () => {
+          detailTab = id;
+          renderDetail(p);
+          detail.querySelector<HTMLButtonElement>(`#worker-tab-${id}`)?.focus();
+        },
+        "inspector-tab"
       );
-      const cell = node("span");
-      const buckets = history.rolled_up
-        ? cohorts.filter(
-            (c) => c.kind === "discovery" && Date.parse(c.bucket) >= a && Date.parse(c.bucket) < b
+      tab.setAttribute("role", "tab");
+      tab.setAttribute("aria-selected", String(detailTab === id));
+      tab.id = `worker-tab-${id}`;
+      tab.setAttribute("aria-controls", "worker-tab-content");
+      tab.tabIndex = detailTab === id ? 0 : -1;
+      tab.onkeydown = (event) => {
+        const keys = ["overview", "observations", "work"];
+        const next =
+          event.key === "Home"
+            ? 0
+            : event.key === "End"
+              ? 2
+              : event.key === "ArrowRight"
+                ? (keys.indexOf(id) + 1) % 3
+                : event.key === "ArrowLeft"
+                  ? (keys.indexOf(id) + 2) % 3
+                  : -1;
+        if (next < 0) return;
+        event.preventDefault();
+        detailTab = keys[next];
+        renderDetail(p);
+        detail.querySelector<HTMLButtonElement>(`#worker-tab-${detailTab}`)?.focus();
+      };
+      tabs.append(tab);
+    }
+    const content = node("div", undefined, "inspector-content");
+    content.id = "worker-tab-content";
+    content.setAttribute("role", "tabpanel");
+    content.setAttribute("aria-labelledby", `worker-tab-${detailTab}`);
+    content.tabIndex = 0;
+    detail.replaceChildren(top, heading, tabs, content);
+    if (focusedTab)
+      detail.querySelector<HTMLButtonElement>(`#${focusedTab}`)?.focus({ preventScroll: true });
+    const history = endpointHistoryFor(p);
+    if (detailTab === "work") {
+      const work = data?.history.work;
+      if (!work || work.truncated) {
+        content.append(
+          node(
+            "p",
+            work?.truncated
+              ? "Too much work history to load. Try a shorter period or one region."
+              : "No work data available.",
+            "evidence-note"
           )
-        : [];
-      const sampleCount = history.rolled_up
-        ? buckets.reduce((sum, c) => sum + c.samples, 0)
-        : points.length;
-      const successes = history.rolled_up
-        ? buckets.reduce((sum, c) => sum + c.successes, 0)
-        : points.filter((o) => o.success).length;
-      const qualified = history.rolled_up
-        ? buckets.reduce((sum, c) => sum + c.qualified_samples, 0)
-        : points.filter((o) => o.qualifying).length;
-      cell.className =
-        successes > 0
-          ? "up"
-          : sampleCount > 0 && qualified === sampleCount
-            ? "unavailable"
-            : "unknown";
-      cell.title = `${new Date(a).toLocaleString()}: ${sampleCount} checks, ${cell.className} from sampled locations`;
-      timeline.append(cell);
-    }
-    detail.append(
-      timeline,
-      node(
-        "p",
-        "Green: successful discovery observed. Red: qualifying failed checks in this bucket. Grey: unknown or missing coverage. Raw checks and prices are retained for 30 days; this sampled timeline is not continuous uptime.",
-        "muted"
-      )
-    );
-    const prices = (history.observations ?? []).filter(
-      (o) =>
-        o.kind === "state" &&
-        o.price &&
-        o.resource_id.toLowerCase() === p.resource.id.toLowerCase() &&
-        o.ip === p.ip
-    );
-    detail.append(node("h3", "Observed prices"));
-    for (const o of prices.slice(0, 20)) {
-      const q = o.price!;
-      detail.append(
-        node(
-          "p",
-          `${time(o.timestamp)} · ${q.numerator} / ${q.denominator} ${q.currency}/${q.unit}`
-        )
-      );
-    }
-    const errors = new Map<string, number>();
-    for (const o of history.observations ?? []) {
-      if (
-        o.resource_id.toLowerCase() !== p.resource.id.toLowerCase() ||
-        (o.ip !== p.ip && !(o.kind === "decision" && !o.ip)) ||
-        o.success ||
-        !o.failure_kind
-      )
-        continue;
-      const key = `${o.region}: ${o.failure_kind} (${o.disposition || o.kind})`;
-      errors.set(key, (errors.get(key) ?? 0) + 1);
-    }
-    detail.append(node("h3", "Observed errors"));
-    for (const [kind, count] of errors)
-      detail.append(node("p", `${kind}: ${count} returned samples`));
-    if (history.truncated)
-      detail.append(
-        node(
-          "p",
-          "Chart, timeline, prices and error samples are truncated. Narrow the window or observer region for more detail.",
-          "muted"
-        )
-      );
-    if (p.capabilities?.length) {
-      detail.append(node("h3", "Capabilities"), node("pre", p.capabilities.join("\n")));
-    }
-    if (p.hardware) {
-      detail.append(node("h3", "Advertised hardware"), node("pre", p.hardware));
-    }
-    if (history.details?.length) {
-      detail.append(node("h3", "Operator diagnostics"));
-      for (let i = 0; i < history.observations.length; i++) {
-        const extra = history.details[i];
-        if (extra && Object.keys(extra).length)
-          detail.append(
-            node(
-              "pre",
-              JSON.stringify({ event: history.observations[i], correlation: extra }, null, 2)
-            )
-          );
-      }
-    }
-  }
-  function drawChart(target: HTMLElement, cohorts: Cohort[]) {
-    const ns = "http://www.w3.org/2000/svg";
-    const svg = document.createElementNS(ns, "svg");
-    svg.setAttribute("viewBox", "0 0 600 190");
-    svg.setAttribute("class", "chart");
-    svg.setAttribute("role", "img");
-    svg.setAttribute(
-      "aria-label",
-      "p95 latency by region, profile and outcome type; gaps indicate missing samples"
-    );
-    const groups = new Map<string, Cohort[]>();
-    for (const c of cohorts) {
-      const key = `${c.kind} / ${c.region} / ${c.profile_key}`;
-      groups.set(key, [...(groups.get(key) ?? []), c]);
-    }
-    const max = Math.max(1, ...cohorts.map((c) => c.p95_ms));
-    const start = Date.parse(data!.history.start),
-      end = Date.parse(data!.history.end);
-    const colors = ["#7aa2f7", "#9ece6a", "#e0af68", "#bb9af7", "#7dcfff"];
-    let index = 0;
-    const axis = document.createElementNS(ns, "text");
-    axis.setAttribute("x", "0");
-    axis.setAttribute("y", "14");
-    axis.setAttribute("fill", "#a9b1d6");
-    axis.textContent = `p95 latency · 0–${Math.round(max)} ms`;
-    svg.append(axis);
-    for (const [name, series] of groups) {
-      const color = colors[index++ % colors.length];
-      const ordered = series.sort((a, b) => Date.parse(a.bucket) - Date.parse(b.bucket));
-      let previous: Cohort | undefined;
-      for (const c of ordered) {
-        if (
-          previous &&
-          Date.parse(c.bucket) - Date.parse(previous.bucket) <=
-            data!.history.interval_seconds * 1500
-        ) {
-          const line = document.createElementNS(ns, "line");
-          line.setAttribute(
-            "x1",
-            String(10 + (580 * (Date.parse(previous.bucket) - start)) / (end - start))
-          );
-          line.setAttribute("y1", String(180 - (150 * previous.p95_ms) / max));
-          line.setAttribute(
-            "x2",
-            String(10 + (580 * (Date.parse(c.bucket) - start)) / (end - start))
-          );
-          line.setAttribute("y2", String(180 - (150 * c.p95_ms) / max));
-          line.setAttribute("stroke", color);
-          line.setAttribute("stroke-width", "2");
-          svg.append(line);
-        }
-        const point = document.createElementNS(ns, "circle");
-        point.setAttribute(
-          "cx",
-          String(10 + (580 * (Date.parse(c.bucket) - start)) / (end - start))
         );
-        point.setAttribute("cy", String(180 - (150 * c.p95_ms) / max));
-        point.setAttribute("r", "2");
-        point.setAttribute("fill", color);
-        const title = document.createElementNS(ns, "title");
-        title.textContent = `${name}: ${Math.round(c.p95_ms)} ms, ${c.samples} samples at ${time(c.bucket)}`;
-        point.append(title);
-        svg.append(point);
-        previous = c;
+        return;
       }
-      const legend = node("p", name, "muted");
-      legend.style.color = color;
-      target.append(legend);
+      const values = work.summaries.filter(
+        (v) =>
+          v.resource_id.toLowerCase() === p.resource.id.toLowerCase() &&
+          (!regionChoice.input.value || v.region === regionChoice.input.value) &&
+          (!profileChoice.input.value || v.profile_key === profileChoice.input.value)
+      );
+      if (work.ticket_credit_truncated)
+        content.append(
+          node(
+            "p",
+            "Ticket totals are incomplete. Work and charges are still available.",
+            "evidence-note"
+          )
+        );
+      appendWork(content, "This worker", sumWork(values.filter((v) => v.ip === p.ip)));
+      const allWorkers = disclosure("All workers on this orchestrator", "inspector-disclosure");
+      appendWork(allWorkers, "Orchestrator across all observed workers", sumWork(values));
+      content.append(allWorkers);
+      content.append(
+        node("p", `FrameWorks traffic · ${time(work.start)} – ${time(work.end)}`, "evidence-note")
+      );
+      const counting = disclosure("How work is counted", "inspector-disclosure");
+      counting.append(
+        node(
+          "p",
+          "Accepted work counts results we used. Submitted work includes retries and parallel attempts. Charges and ticket credit aren’t confirmed earnings.",
+          "evidence-note"
+        )
+      );
+      content.append(counting);
+      return;
     }
-    target.prepend(svg);
-    if (!cohorts.length)
-      target.append(node("p", "No samples for this chart in the selected window.", "muted"));
+    if (detailTab === "overview") {
+      renderPerformance(content, p);
+      content.append(
+        facts([
+          [
+            "Location",
+            p.location.known
+              ? [p.location.city, p.location.country].filter(Boolean).join(", ") || "Known location"
+              : "Location unknown",
+          ],
+          ["Last successful check", time(p.last_success)],
+          ["Last checked", time(p.last_check)],
+          ["Observed segments", segments(p) ? String(segments(p)) : "No returned samples"],
+          [
+            "Observed errors",
+            endpointCohorts(p, true).some((c) => c.kind === "segment" || c.kind === "discovery")
+              ? String(endpointErrors(p))
+              : "No returned samples",
+          ],
+          ["Advertised price", formatPrice(p)],
+        ])
+      );
+      if (p.price)
+        content.append(
+          node(
+            "p",
+            `${freshPrice(p) ? "Price observed" : "Stale / undated quote"} ${time(p.price.observed_at)}`,
+            "evidence-note"
+          )
+        );
+      const address = disclosure("Orchestrator & discovery", "inspector-disclosure");
+      address.append(
+        facts([
+          ["Onchain identity", p.resource.id],
+          ["Advertised URI", p.resource.uri],
+          ["Scheduled checks", `${p.cadence_seconds}s`],
+        ])
+      );
+      const siblings = data!.inventory.endpoints.filter(
+        (entry) => entry.resource.id.toLowerCase() === p.resource.id.toLowerCase()
+      );
+      for (const sibling of siblings)
+        address.append(
+          button(
+            `${sibling.ip} · ${statusLabel(sibling.status)}`,
+            () => pick(sibling.id, true),
+            "measurement-site"
+          )
+        );
+      content.append(address);
+      const regions = [
+        ...new Set(
+          endpointCohorts(p, true)
+            .map((c) => c.region)
+            .filter(Boolean)
+        ),
+      ];
+      content.append(node("h4", "Observed from"));
+      const chips = node("div", undefined, "region-chips");
+      for (const region of regions)
+        chips.append(button(region, () => chooseRegion(region), "region-chip"));
+      if (!regions.length) chips.append(node("p", "No regional history yet.", "muted"));
+      content.append(
+        chips,
+        node("p", "Results vary by region. No data doesn’t mean offline.", "evidence-note")
+      );
+      return;
+    }
+    content.append(node("h4", "Recent errors"));
+    renderErrors(content, p);
+    content.append(node("h4", "Discovery over time"));
+    const timelineBuckets: CheckBucket[] = [];
+    const start = Date.parse(history.start),
+      end = Date.parse(history.end);
+    const checks = observations(p).filter((o) => o.kind === "discovery");
+    const cohorts = endpointCohorts(p);
+    for (let i = 0; i < 48; i++) {
+      const a = start + ((end - start) * i) / 48,
+        b = start + ((end - start) * (i + 1)) / 48;
+      const raw = checks.filter((c) => Date.parse(c.timestamp) >= a && Date.parse(c.timestamp) < b);
+      const buckets = cohorts.filter(
+        (c) => c.kind === "discovery" && Date.parse(c.bucket) >= a && Date.parse(c.bucket) < b
+      );
+      const samples = history.rolled_up ? buckets.reduce((n, c) => n + c.samples, 0) : raw.length;
+      const successes = history.rolled_up
+        ? buckets.reduce((n, c) => n + c.successes, 0)
+        : raw.filter((c) => c.success).length;
+      const failures = history.rolled_up
+        ? buckets.reduce((n, c) => n + c.failures, 0)
+        : raw.filter((c) => !c.success && c.qualifying).length;
+      timelineBuckets.push({
+        start: new Date(a).toISOString(),
+        end: new Date(b).toISOString(),
+        samples,
+        successes,
+        failures,
+      });
+    }
+    renderCheckTimeline(content, timelineBuckets);
+    content.append(node("h4", "Regional discovery latency"));
+    drawChart(
+      content,
+      cohorts.filter((c) => c.kind === "discovery"),
+      history
+    );
+    renderPerformance(content, p);
+    if (history.truncated)
+      content.append(
+        node("p", "Some history was left out. Try a shorter period or one region.", "evidence-note")
+      );
+    if (options.headers && history.details?.length) {
+      const diagnostics = disclosure("Operator diagnostics", "inspector-disclosure");
+      for (let i = 0; i < history.observations.length; i++) {
+        const event = history.observations[i],
+          extra = history.details[i];
+        if (
+          event.resource_id.toLowerCase() === p.resource.id.toLowerCase() &&
+          event.ip === p.ip &&
+          extra &&
+          Object.keys(extra).length
+        )
+          diagnostics.append(node("pre", JSON.stringify({ event, correlation: extra }, null, 2)));
+      }
+      content.append(diagnostics);
+    }
   }
-  function pick(id: string) {
+  function renderPerformance(target: HTMLElement, p: Endpoint) {
+    const section = node("section", undefined, "worker-performance");
+    target.append(section);
+    const history = endpointHistoryFor(p);
+    const matches = (c: Cohort) =>
+      c.resource_id.toLowerCase() === p.resource.id.toLowerCase() &&
+      c.ip === p.ip &&
+      (c.kind === "attempt" || c.kind === "segment") &&
+      c.samples > 0;
+    const samples = history.cohorts.filter(matches);
+    const summaries = history.summaries.filter(matches);
+    const available = [...summaries, ...samples];
+    const draw = () => {
+      section.replaceChildren(node("h4", "Transcoding performance"));
+      if (!available.length) {
+        section.append(
+          node(
+            "p",
+            "No transcoding data for this period. Discovery checks only tell us whether we can connect.",
+            "evidence-note"
+          )
+        );
+        return;
+      }
+      const saved = performanceSelection.get(p.id);
+      const profiles = [...new Set(available.map((c) => c.profile_key))].sort();
+      const profile = select(
+        "Worker performance profile",
+        profiles.map((value) => [value, value || "Unspecified profile"])
+      );
+      profile.wrapper.querySelector("span")!.textContent = "Output profile";
+      profile.input.value = saved && profiles.includes(saved.profile) ? saved.profile : profiles[0];
+      const regions = [
+        ...new Set(
+          available.filter((c) => c.profile_key === profile.input.value).map((c) => c.region)
+        ),
+      ].sort();
+      const region = select(
+        "Worker performance region",
+        regions.map((value) => [value, value || "Region unknown"])
+      );
+      region.wrapper.querySelector("span")!.textContent = "Measured from";
+      region.input.value = saved && regions.includes(saved.region) ? saved.region : regions[0];
+      performanceSelection.set(p.id, { region: region.input.value, profile: profile.input.value });
+      const controls = node("div", undefined, "performance-controls");
+      controls.append(profile.wrapper, region.wrapper);
+      section.append(controls);
+      for (const input of [profile.input, region.input])
+        input.onchange = () => {
+          performanceSelection.set(p.id, {
+            region: region.input.value,
+            profile: profile.input.value,
+          });
+          const label = input.getAttribute("aria-label");
+          draw();
+          section
+            .querySelector<HTMLSelectElement>(`[aria-label="${label}"]`)
+            ?.focus({ preventScroll: true });
+        };
+      const path = (c: Cohort) =>
+        c.region === region.input.value && c.profile_key === profile.input.value;
+      const rows = samples.filter(path);
+      const totals = summaries.filter(path);
+      const kind = [...totals, ...rows].some((c) => c.kind === "attempt") ? "attempt" : "segment";
+      const summary = totals.find((c) => c.kind === kind);
+      const latest = rows
+        .filter((c) => c.kind === kind)
+        .sort((a, b) => Date.parse(b.bucket) - Date.parse(a.bucket))[0];
+      const value = summary ?? latest;
+      if (value) {
+        section.append(
+          facts(
+            [
+              [
+                "p95 response time",
+                value.qualified_samples > 0 ? Math.round(value.p95_ms) + " ms" : "No timed samples",
+              ],
+              [
+                "Video time used (p95)",
+                value.duration_samples > 0
+                  ? (value.p95_duration_ratio * 100).toFixed(1) + "%"
+                  : "No duration samples",
+              ],
+              ["Successful results", value.successes + " / " + value.samples],
+              ["Errors", String(value.failures)],
+              ["Missed deadlines", String(value.deadline_misses)],
+              ["Retries", String(value.retries)],
+            ],
+            "performance-metrics"
+          )
+        );
+        section.append(
+          node(
+            "p",
+            (summary ? "Selected period" : "Latest measured interval: " + time(value.bucket)) +
+              " · " +
+              quantity(value.samples, "sample") +
+              " · lower times are better",
+            "evidence-note"
+          )
+        );
+      }
+      drawChart(
+        section,
+        rows.filter((c) => c.kind === kind && c.qualified_samples > 0),
+        history
+      );
+      const explanation = disclosure("How to read performance", "inspector-disclosure");
+      explanation.append(
+        node(
+          "p",
+          "p95: 95% of measured requests finished within this time. Video time: 100% means processing took as long as the video itself. Lower is faster. Times include the network trip from FrameWorks gateways.",
+          "evidence-note"
+        )
+      );
+      section.append(explanation);
+      if (history.truncated)
+        section.append(node("p", "Some chart points are missing.", "evidence-note"));
+    };
+    draw();
+  }
+  function drawChart(target: HTMLElement, cohorts: Cohort[], history: Response["history"]) {
+    renderLatencyChart(target, cohorts, history);
+  }
+  function pick(id: string, locate = false) {
+    if (!data) return;
+    if (selected !== id) {
+      detailTab = "overview";
+      rail.scrollTop = 0;
+    }
+    explorerSelection = undefined;
     selected = id;
+    tooltip.hidden = true;
     persist();
-    const endpoint = data?.inventory.endpoints.find((p) => p.id === id);
-    if (endpoint) renderDetail(endpoint);
+    const endpoint = data.inventory.endpoints.find((p) => p.id === id);
+    if (!endpoint) {
+      closeSelection();
+      return;
+    }
+    if (
+      locate &&
+      endpoint.location.known &&
+      Number.isFinite(endpoint.location.latitude) &&
+      Number.isFinite(endpoint.location.longitude)
+    )
+      map?.easeTo({
+        center: [endpoint.location.longitude, endpoint.location.latitude],
+        duration: 500,
+      });
+    renderDetail(endpoint);
+    updateMap();
     const key = historyKey(id);
-    if (endpoint && !endpointHistory.has(key) && !pendingHistory.has(key)) {
-      const version = fetchVersion;
-      pendingHistory.add(key);
-      const api = requestURL();
-      api.searchParams.set("resource", endpoint.resource.id);
-      api.searchParams.set("ip", endpoint.ip);
-      if (regionChoice.input.value) api.searchParams.set("region", regionChoice.input.value);
-      void fetch(api, { signal: controller?.signal, headers: options.headers?.() })
-        .then(async (response) => {
-          if (!response.ok) throw new Error("Endpoint history unavailable");
-          const next = (await response.json()) as Response;
-          if (disposed || version !== fetchVersion) return;
-          if (next.history_status === "unavailable")
-            throw new Error("Endpoint history unavailable");
-          endpointHistory.set(key, next.history);
-          if (selected === id && historyKey(id) === key) renderDetail(endpoint);
-        })
-        .catch(() => {
-          if (!disposed && version === fetchVersion && selected === id && historyKey(id) === key)
-            detail.append(
+    if (endpointHistory.has(key) || pendingHistory.has(key)) return;
+    const version = fetchVersion;
+    pendingHistory.add(key);
+    const api = requestURL();
+    api.searchParams.set("resource", endpoint.resource.id);
+    api.searchParams.set("ip", endpoint.ip);
+    void fetch(api, { signal: controller?.signal, headers: options.headers?.() })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("History unavailable");
+        const next = (await response.json()) as Response;
+        if (disposed || version !== fetchVersion) return;
+        if (next.history_status === "unavailable") throw new Error("History unavailable");
+        endpointHistory.set(key, next.history);
+        if (selected === id && historyKey(id) === key) {
+          renderDetail(endpoint);
+          updateMap();
+        }
+      })
+      .catch(() => {
+        if (!disposed && version === fetchVersion && selected === id && historyKey(id) === key)
+          detail
+            .querySelector(".inspector-content")
+            ?.append(
               node(
                 "p",
-                "Endpoint history unavailable; showing samples from the network response.",
-                "muted"
+                "Worker history is unavailable; showing returned network samples.",
+                "evidence-note"
               )
             );
-        })
-        .finally(() => {
-          if (version === fetchVersion) pendingHistory.delete(key);
-        });
+      })
+      .finally(() => {
+        if (version === fetchVersion) pendingHistory.delete(key);
+      });
+  }
+  function hostname(uri: string) {
+    try {
+      return new URL(uri).host;
+    } catch {
+      return uri;
     }
   }
-  function historyKey(id: string) {
-    return `${id}|${regionChoice.input.value}`;
+  function hierarchyRow(title: string, subtitle: string, value: string, action: () => void) {
+    const row = button("", action, "hierarchy-row");
+    const top = node("div");
+    top.append(node("strong", title), node("span", "↗", "hierarchy-arrow"));
+    row.append(top, node("span", subtitle, "muted"), node("span", value, "hierarchy-value"));
+    return row;
   }
-  function freshPrice(p: Endpoint) {
-    const q = p.price;
-    if (
-      !q ||
-      !/^\d{1,20}$/.test(q.numerator) ||
-      !/^\d{1,20}$/.test(q.denominator) ||
-      BigInt(q.denominator) === 0n
-    )
-      return;
-    const age = Date.now() - Date.parse(q.observed_at);
-    if (!Number.isFinite(age) || age < -60000 || age > Math.max(180, 2 * p.cadence_seconds) * 1000)
-      return;
-    return {
-      numerator: BigInt(q.numerator),
-      denominator: BigInt(q.denominator),
-      unit: `${q.currency}/${q.unit}`,
-    };
+  function explore(kind: ExplorerSelection["kind"], id: string) {
+    selected = "";
+    explorerSelection = { kind, id };
+    tooltip.hidden = true;
+    rail.scrollTop = 0;
+    renderExplorerSelection();
+    const heading = detail.querySelector<HTMLElement>("h3");
+    if (heading) {
+      heading.tabIndex = -1;
+      heading.focus({ preventScroll: true });
+    }
+    persist();
+    updateMap();
+    const group = kind === "region" ? observingRegions(data!).find((g) => g.id === id) : undefined;
+    if (group?.anchor) map?.easeTo({ center: group.anchor, zoom: 3, duration: 500 });
   }
-  function orderedEndpoints() {
-    const singleCohort = !!regionChoice.input.value && !!profileChoice.input.value;
-    const order = orderChoice.input.value;
-    comparisonNote.textContent =
-      (order === "latency" || order === "failures") && !singleCohort
-        ? "Choose one observer region and profile to rank performance. Showing identity order."
-        : "Sample counts describe observed traffic. Availability gaps remain unknown; price groups keep currency and unit separate.";
-    const identity = (a: Endpoint, b: Endpoint) =>
-      a.resource.id.localeCompare(b.resource.id) ||
-      a.ip.localeCompare(b.ip) ||
-      a.id.localeCompare(b.id);
-    const metric = (p: Endpoint): number | undefined => {
-      if (order === "availability")
-        return p.status === "up" ? 0 : p.status === "unavailable" ? 2 : 1;
-      const segments = endpointCohorts(p, true).filter((c) => c.kind === "segment");
-      if (order === "samples")
-        return segments.length ? -segments.reduce((n, c) => n + c.samples, 0) : undefined;
-      if (!singleCohort) return;
-      if (order === "latency") {
-        const attempts = endpointCohorts(p, true).filter(
-          (c) => c.kind === "attempt" && c.qualified_samples > 0
-        );
-        return attempts.length === 1 && Number.isFinite(attempts[0].p95_ms)
-          ? attempts[0].p95_ms
-          : undefined;
-      }
-      if (order === "failures" && segments.length === 1 && segments[0].qualified_samples > 0)
-        return segments[0].failures / segments[0].qualified_samples;
-    };
-    return [...data!.inventory.endpoints].sort((a, b) => {
-      if (order === "identity") return identity(a, b);
-      if (order === "price") {
-        const left = freshPrice(a),
-          right = freshPrice(b);
-        if (!left || !right) return left ? -1 : right ? 1 : identity(a, b);
-        const unit = left.unit.localeCompare(right.unit);
-        if (unit) return unit;
-        const difference = left.numerator * right.denominator - right.numerator * left.denominator;
-        return difference < 0n ? -1 : difference > 0n ? 1 : identity(a, b);
-      }
-      const left = metric(a),
-        right = metric(b);
-      if (left === undefined || right === undefined)
-        return left === undefined ? (right === undefined ? identity(a, b) : 1) : -1;
-      return left - right || identity(a, b);
-    });
-  }
-  function render(loadSelectedHistory = true) {
-    if (!data) return;
-    renderWork();
-    const endpoints = orderedEndpoints();
-    observationSites.replaceChildren(
-      node(
-        "summary",
-        `Measurement locations · ${data.inventory.observers?.length ?? 0} reporting observers`
-      )
+  function regionalWork(ids: Set<string>, region?: string) {
+    if (!data?.history.work || data.history.work.truncated) return undefined;
+    const rows = data.history.work.summaries.filter(
+      (w) =>
+        (!region || w.region === region) &&
+        (!profileChoice.input.value || w.profile_key === profileChoice.input.value) &&
+        data!.inventory.endpoints.some(
+          (e) =>
+            ids.has(e.id) &&
+            e.resource.id.toLowerCase() === w.resource_id.toLowerCase() &&
+            e.ip === w.ip
+        )
     );
-    observationSites.append(
+    return sumWork(rows);
+  }
+  function renderExplorerSelection() {
+    if (!data || !explorerSelection) return;
+    const restoreFocus = detail.contains(document.activeElement);
+    const focus = explorerSelection;
+    const region =
+      focus.kind === "region"
+        ? observingRegions(data).find((g) => g.id === focus.id)
+        : focus.kind === "site"
+          ? observingRegions(data).find((g) => g.sites.some((s) => s.id === focus.id))
+          : undefined;
+    const site =
+      focus.kind === "site" ? data.inventory.observers?.find((s) => s.id === focus.id) : undefined;
+    const identity =
+      focus.kind === "orchestrator"
+        ? orchestratorGroups(data).find((g) => g.id === focus.id)
+        : undefined;
+    if (!region && !identity) {
+      closeSelection();
+      return;
+    }
+    const endpoints = region?.endpoints ?? identity!.endpoints;
+    detail.setAttribute(
+      "aria-label",
+      site
+        ? "Selected measurement site"
+        : region
+          ? "Selected observing region"
+          : "Selected orchestrator"
+    );
+    overview.hidden = directory.hidden = true;
+    detail.hidden = false;
+    const top = node("div", undefined, "inspector-header");
+    top.append(
+      node(
+        "span",
+        site
+          ? site.kind === "prober"
+            ? "PROBER"
+            : "GATEWAY"
+          : region
+            ? "Observing region"
+            : "ORCHESTRATOR",
+        "map-eyebrow"
+      ),
+      iconButton("Close exploration details", "close", closeSelection)
+    );
+    const heading = node("div", undefined, "worker-heading");
+    heading.append(
+      node(
+        "h3",
+        site
+          ? site.kind === "prober"
+            ? "Prober"
+            : "Gateway"
+          : region
+            ? region.id || "Region unknown"
+            : short(identity!.id)
+      ),
       node(
         "p",
-        "Gateway markers show published cluster locations. Probers show their known locations. Clicking a measurement marker selects its observer region; results still describe all observers in that region.",
+        site
+          ? site.kind === "prober"
+            ? "Checks discovery and reachability"
+            : "Reports real transcoding traffic"
+          : region
+            ? "Where observations originate"
+            : hostname(identity!.uri),
         "muted"
       )
     );
-    for (const observer of data.inventory.observers ?? [])
-      observationSites.append(
+    const content = node("div", undefined, "inspector-content");
+    if (site)
+      content.append(
+        facts([
+          ["Region", site.region || "Unknown"],
+          ["Last seen", time(site.last_seen)],
+          [
+            "Location",
+            site.location.known
+              ? [site.location.city, site.location.country].filter(Boolean).join(", ") ||
+                "Published location"
+              : "Location unknown",
+          ],
+        ]),
+        node("p", "Results below cover this region.", "evidence-note")
+      );
+    content.append(
+      node(
+        "h4",
+        endpoints.length + (endpoints.length === 1 ? " worker observed" : " workers observed")
+      )
+    );
+    const work = regionalWork(
+      new Set(endpoints.map((e) => e.id)),
+      region?.id || regionChoice.input.value
+    );
+    content.append(
+      facts([
+        [
+          site ? "Regional accepted segments" : "Accepted segments",
+          data.history.work?.truncated
+            ? "Incomplete"
+            : work
+              ? String(work.accepted_segments)
+              : "No work data",
+        ],
+        [
+          "Accepted source minutes",
+          work?.accepted_duration_samples ? workMinutes(work.accepted_source_ms) : "No data",
+        ],
+      ])
+    );
+    if (region) {
+      content.append(node("h4", "Measurement sites"));
+      for (const item of region.sites) {
+        const role = item.kind === "prober" ? "Prober" : "Gateway";
+        const row = button("", () => explore("site", item.id), "site-row");
+        row.append(
+          node("span", "", "role-mark role-" + item.kind),
+          node("strong", role),
+          node("span", time(item.last_seen), "muted")
+        );
+        if (site?.id === item.id) row.setAttribute("aria-current", "true");
+        content.append(row);
+      }
+      if (!region.sites.length)
+        content.append(node("p", "Site location unavailable.", "evidence-note"));
+      if (region.id)
+        content.append(
+          button("Filter history to " + region.id, () => chooseRegion(region.id), "text-action")
+        );
+    } else {
+      content.append(
+        node("code", identity!.id),
         node(
           "p",
-          `${observer.kind} · ${observer.region || "Region unknown"} · ${observer.location.known ? observer.location.source : "Location unknown"} · last seen ${time(observer.last_seen)}`
+          "One orchestrator can run several workers. Worker addresses don’t tell us how many GPUs it has.",
+          "evidence-note"
         )
       );
-    diagnostics.hidden = !data.history.details?.length;
-    diagnostics.replaceChildren(node("summary", "Latest gateway diagnostics"));
-    for (let i = 0; i < Math.min(100, data.history.observations.length); i++) {
-      const extra = data.history.details?.[i];
-      if (extra && Object.keys(extra).length)
-        diagnostics.append(
-          node(
-            "pre",
-            JSON.stringify({ event: data.history.observations[i], correlation: extra }, null, 2)
-          )
-        );
     }
-    summary.replaceChildren();
-    const counts = [
-      ["Catalog identities", new Set(data.inventory.resources.map((r) => r.id)).size],
-      ["Observed endpoints", endpoints.length],
-      ["Available now", endpoints.filter((p) => p.status === "up").length],
-      ["Unknown geography", endpoints.filter((p) => !p.location.known).length],
-    ];
-    for (const [name, count] of counts) {
-      const slab = node("div", String(name));
-      slab.append(node("strong", String(count)));
-      summary.append(slab);
-    }
-    const table = node("table");
-    const thead = node("thead");
-    const heading = node("tr");
-    for (const label of [
-      "Endpoint / identity",
-      "Availability",
-      "Observed segments",
-      "Final failures / budget misses",
-      "Regional p95 / media duration",
-      "Price",
-    ]) {
-      heading.append(node("th", label));
-    }
-    thead.append(heading);
-    table.append(thead);
-    const tbody = node("tbody");
-    for (const p of endpoints) {
-      const row = node("tr");
-      const identity = node("td");
-      const button = node("button", p.ip || "Unknown IP");
-      button.type = "button";
-      button.onclick = () => pick(p.id);
-      identity.append(
-        button,
-        node("br"),
-        node("code", p.resource.id),
-        node(
-          "p",
-          p.location.known ? (p.location.country ?? p.location.source) : "Geography unknown",
-          "muted"
-        )
+    content.append(
+      button(
+        "Browse these workers →",
+        () =>
+          showDirectory(
+            endpoints.map((e) => e.id),
+            region ? region.id + " workers" : "Orchestrator workers"
+          ),
+        "text-action"
+      )
+    );
+    content.append(
+      node("p", "Work totals cover FrameWorks traffic for this period.", "evidence-note")
+    );
+    if (data.history.truncated)
+      content.append(
+        node("p", "Some history was left out. Try a shorter period or one region.", "evidence-note")
       );
-      row.append(
-        identity,
-        node(
-          "td",
-          p.status,
-          p.status === "up" ? "good" : p.status === "unavailable" ? "bad" : "muted"
-        )
-      );
-      const segments = endpointCohorts(p, true).filter((c) => c.kind === "segment");
-      const samples = segments.reduce((n, c) => n + c.samples, 0);
-      row.append(
-        node("td", samples ? String(samples) : "No returned samples"),
-        node(
-          "td",
-          samples
-            ? `${segments.reduce((n, c) => n + c.failures, 0)} / ${segments.reduce((n, c) => n + c.deadline_misses, 0)}`
-            : "Unknown"
-        )
-      );
-      const latency = node("td");
-      const attempts = endpointCohorts(p, true).filter(
-        (c) => c.kind === "attempt" && c.qualified_samples > 0
-      );
-      for (const c of attempts)
-        latency.append(
-          node(
-            "p",
-            `${c.region} / ${c.profile_key || "unspecified"}: ${Math.round(c.p95_ms)} ms${c.duration_samples ? ` / ${c.p95_duration_ratio.toFixed(2)}×` : ""}`
-          )
-        );
-      if (!attempts.length) latency.textContent = "Unknown";
-      const quote = node("td", price(p));
-      if (p.price)
-        quote.append(
-          node(
-            "p",
-            `${freshPrice(p) ? "Observed" : "Stale / undated quote"}: ${time(p.price.observed_at)}`,
-            "muted"
-          )
-        );
-      row.append(latency, quote);
-      tbody.append(row);
+    detail.replaceChildren(top, heading, content);
+    if (restoreFocus) {
+      const title = heading.querySelector<HTMLElement>("h3");
+      if (title) {
+        title.tabIndex = -1;
+        title.focus({ preventScroll: true });
+      }
     }
-    table.append(tbody);
-    list.replaceChildren(table);
-    const discovered = new Set(endpoints.map((p) => p.resource.uri));
-    const undiscovered = data.inventory.resources.filter((r) => r.active && !discovered.has(r.uri));
-    if (undiscovered.length) {
-      list.append(node("h3", "Catalog entries without a visible endpoint", "detail"));
-      for (const r of undiscovered)
-        list.append(node("p", `${r.id} · ${r.uri} · availability unknown`, "detail muted"));
-    }
-    if (!endpoints.length) list.append(node("p", "No endpoints discovered yet.", "detail muted"));
-    if (selected && loadSelectedHistory) pick(selected);
-    else if (selected) {
-      const endpoint = data.inventory.endpoints.find((entry) => entry.id === selected);
-      if (endpoint) renderDetail(endpoint);
-    }
+  }
+  function chooseRegion(region: string) {
+    regionChoice.input.value = region;
+    regionChoice.input.dispatchEvent(new Event("change"));
+  }
+  function render() {
+    if (!data) return;
+    renderOverview();
+    renderList();
+    if (selected) pick(selected);
+    else if (explorerSelection) renderExplorerSelection();
+    message.textContent =
+      data.history_status === "unavailable"
+        ? "History unavailable · inventory visible"
+        : `Updated ${time(data.inventory.generated_at)}`;
+    message.classList.toggle("is-warning", data.history_status === "unavailable");
     updateMap();
-    message.textContent = `Updated ${time(data.inventory.generated_at)}. ${data.history_status === "unavailable" ? "History is temporarily unavailable; current inventory remains visible." : `History ${time(data.history.start)} – ${time(data.history.end)}. ${data.history.rolled_up ? "Hourly rollups refresh every five minutes. Discovery history expires after one year; workload history after two years." : "Comparison totals cover this window."} ${data.history.truncated ? "Returned cohorts and observation samples are truncated; select an endpoint to load its history." : ""}`}`;
+  }
+  function showTooltip(event: MapLayerMouseEvent, title: string, lines: string[]) {
+    tooltip.replaceChildren(node("strong", title));
+    for (const line of lines) tooltip.append(node("span", line));
+    const x = event.point?.x ?? 12,
+      y = event.point?.y ?? 12;
+    tooltip.style.left = `${Math.max(8, Math.min(x + 14, (viewport.clientWidth || 800) - 254))}px`;
+    tooltip.style.top = `${Math.max(8, Math.min(y + 14, (viewport.clientHeight || 600) - 132))}px`;
+    tooltip.hidden = false;
   }
   function updateMap() {
-    if (!map?.isStyleLoaded() || !data) return;
-    const infrastructureData = {
-      type: "FeatureCollection" as const,
-      features: infrastructure
+    if (!data || !map?.isStyleLoaded()) return;
+    const put = (
+      id: string,
+      features: GeoJSON.Feature[],
+      paint: CircleLayerSpecification["paint"],
+      setup?: () => void
+    ) => {
+      const collection: GeoJSON.FeatureCollection = { type: "FeatureCollection", features };
+      const source = map!.getSource(id) as GeoJSONSource | undefined;
+      if (source) source.setData(collection);
+      else {
+        map!.addSource(id, { type: "geojson", data: collection });
+        map!.addLayer({ id, source: id, type: "circle", paint });
+        setup?.();
+      }
+      map!.setLayoutProperty(id, "visibility", layerControls.get(id)?.checked ? "visible" : "none");
+    };
+    const point = (
+      longitude: number,
+      latitude: number,
+      properties: Record<string, unknown>
+    ): GeoJSON.Feature => ({
+      type: "Feature",
+      geometry: { type: "Point", coordinates: [longitude, latitude] },
+      properties,
+    });
+    put(
+      "frameworks-nodes",
+      infrastructure
         .filter(
           (p) =>
             p.latitude !== null &&
@@ -1098,179 +1321,276 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
             Number.isFinite(p.latitude) &&
             Number.isFinite(p.longitude)
         )
-        .map((p) => ({
-          type: "Feature" as const,
-          geometry: { type: "Point" as const, coordinates: [p.longitude!, p.latitude!] },
-          properties: { name: p.name, status: p.status },
-        })),
-    };
-    const infrastructureSource = map.getSource("frameworks-nodes") as GeoJSONSource | undefined;
-    if (infrastructureSource) infrastructureSource.setData(infrastructureData);
-    else {
-      map.addSource("frameworks-nodes", { type: "geojson", data: infrastructureData });
-      map.addLayer({
-        id: "frameworks-nodes",
-        type: "circle",
-        source: "frameworks-nodes",
-        paint: {
-          "circle-radius": 10,
-          "circle-color": "#7aa2f7",
-          "circle-opacity": 0.6,
-          "circle-stroke-width": 2,
-          "circle-stroke-color": "#7aa2f7",
+        .map((p) => point(p.longitude!, p.latitude!, { name: p.name, status: p.status })),
+      { "circle-radius": 4, "circle-color": "#7aa2f7", "circle-opacity": 0.55 }
+    );
+    const siteLayer = (id: string, features: GeoJSON.Feature[], color: string) => {
+      put(
+        id,
+        features,
+        {
+          "circle-radius": 14,
+          "circle-color": color,
+          "circle-opacity": 0.08,
+          "circle-stroke-width": 0,
+          "circle-stroke-color": color,
         },
-      });
-    }
-    function measurementLayer(
-      id: string,
-      features: Array<{
-        type: "Feature";
-        geometry: { type: "Point"; coordinates: number[] };
-        properties: { region: string };
-      }>,
-      color: string
-    ) {
-      const geo = { type: "FeatureCollection" as const, features };
-      const source = map!.getSource(id) as GeoJSONSource | undefined;
-      if (source) source.setData(geo);
-      else {
-        map!.addSource(id, { type: "geojson", data: geo });
+        () => {
+          map!.on("click", id, (event) => {
+            const p = event.features?.[0]?.properties;
+            if (p) explore(p.site_id ? "site" : "region", String(p.site_id || p.region || ""));
+          });
+          map!.on("mousemove", id, (event) => {
+            const p = event.features?.[0]?.properties;
+            if (p)
+              showTooltip(event, String(p.name), [
+                String(p.region || "Region unknown"),
+                "Click to inspect measurement coverage",
+              ]);
+          });
+          map!.on("mouseleave", id, () => {
+            tooltip.hidden = true;
+          });
+        }
+      );
+      const role = id === "gateway-clusters" ? "gateway" : "prober";
+      const image = "network-role-" + role;
+      if (!map!.hasImage(image)) map!.addImage(image, roleImage(role), { pixelRatio: 2 });
+      const symbolId = id + "-role";
+      if (!map!.getLayer(symbolId))
         map!.addLayer({
-          id,
-          type: "circle",
+          id: symbolId,
           source: id,
-          paint: {
-            "circle-radius": 11,
-            "circle-color": color,
-            "circle-opacity": 0.3,
-            "circle-stroke-width": 3,
-            "circle-stroke-color": color,
+          type: "symbol",
+          layout: {
+            "icon-image": image,
+            "icon-size": 1.5,
+            "icon-allow-overlap": true,
+            "icon-ignore-placement": true,
           },
         });
-        map!.on("click", id, (event) => {
-          const region = event.features?.[0]?.properties?.region;
-          if (
-            typeof region === "string" &&
-            Array.from(regionChoice.input.options).some((entry) => entry.value === region)
-          ) {
-            regionChoice.input.value = region;
-            endpointHistory.clear();
-            persist();
-            render();
-          }
-          observationSites.open = true;
-        });
-        map!.on("mouseenter", id, () => {
-          map!.getCanvas().style.cursor = "pointer";
-        });
-        map!.on("mouseleave", id, () => {
-          map!.getCanvas().style.cursor = "";
-        });
-      }
-    }
-    measurementLayer(
+      map!.setLayoutProperty(
+        symbolId,
+        "visibility",
+        layerControls.get(id)?.checked ? "visible" : "none"
+      );
+    };
+    const reportingGateways = (data.inventory.observers ?? []).filter(
+      (p) =>
+        p.kind === "gateway" &&
+        p.location.known &&
+        Number.isFinite(p.location.latitude) &&
+        Number.isFinite(p.location.longitude)
+    );
+    siteLayer(
       "gateway-clusters",
-      gatewayClusters
-        .filter(
-          (cluster) =>
-            Number.isFinite(cluster.latitude) &&
-            Number.isFinite(cluster.longitude) &&
-            !(cluster.latitude === 0 && cluster.longitude === 0)
-        )
-        .map((cluster) => ({
-          type: "Feature",
-          geometry: { type: "Point", coordinates: [cluster.longitude, cluster.latitude] },
-          properties: { region: cluster.region },
-        })),
+      [
+        ...reportingGateways.map((p) =>
+          point(p.location.longitude, p.location.latitude, {
+            name: "Gateway",
+            site_id: p.id,
+            region: p.region,
+            last_seen: p.last_seen,
+          })
+        ),
+        ...gatewayClusters
+          .filter(
+            (p) =>
+              !reportingGateways.some((site) => site.region === p.region) &&
+              Number.isFinite(p.latitude) &&
+              Number.isFinite(p.longitude) &&
+              (p.latitude !== 0 || p.longitude !== 0)
+          )
+          .map((p) =>
+            point(p.longitude, p.latitude, { name: `${p.name} gateway cluster`, region: p.region })
+          ),
+      ],
       "#7dcfff"
     );
-    measurementLayer(
+    siteLayer(
       "prober-sites",
       (data.inventory.observers ?? [])
         .filter(
-          (observer) =>
-            observer.kind === "prober" &&
-            observer.location.known &&
-            Number.isFinite(observer.location.latitude) &&
-            Number.isFinite(observer.location.longitude)
+          (p) =>
+            p.kind === "prober" &&
+            p.location.known &&
+            Number.isFinite(p.location.latitude) &&
+            Number.isFinite(p.location.longitude)
         )
-        .map((observer) => ({
-          type: "Feature",
-          geometry: {
-            type: "Point",
-            coordinates: [observer.location.longitude, observer.location.latitude],
-          },
-          properties: { region: observer.region },
-        })),
-      "#bb9af7"
+        .map((p) =>
+          point(p.location.longitude, p.location.latitude, {
+            name: "Prober",
+            site_id: p.id,
+            region: p.region,
+            last_seen: p.last_seen,
+          })
+        ),
+      "#e0af68"
     );
-    const features = data.inventory.endpoints
-      .filter(
-        (p) =>
-          p.location.known &&
-          Number.isFinite(p.location.latitude) &&
-          Number.isFinite(p.location.longitude)
-      )
-      .map((p) => ({
-        type: "Feature" as const,
-        geometry: {
-          type: "Point" as const,
-          coordinates: [p.location.longitude, p.location.latitude],
-        },
-        properties: {
-          id: p.id,
-          status: p.status,
-          stale: !p.last_success || Date.now() - Date.parse(p.last_success) > 7 * 86400000,
-        },
-      }));
-    const source = map.getSource("livepeer-endpoints") as GeoJSONSource | undefined;
-    const geo = { type: "FeatureCollection" as const, features };
-    if (source) source.setData(geo);
-    else {
-      map.addSource("livepeer-endpoints", { type: "geojson", data: geo });
-      map.addLayer({
-        id: "livepeer-endpoints",
-        type: "circle",
-        source: "livepeer-endpoints",
-        paint: {
-          "circle-radius": ["case", ["get", "stale"], 3, 7],
-          "circle-color": [
-            "match",
-            ["get", "status"],
-            "up",
-            "#9ece6a",
-            "unavailable",
-            "#f7768e",
-            "#737aa2",
-          ],
-          "circle-opacity": 0.85,
-          "circle-stroke-color": "#16161e",
-          "circle-stroke-width": 1,
-        },
+    const selectedEndpoint = data.inventory.endpoints.find((p) => p.id === selected);
+    const mapData = selectedEndpoint
+      ? { ...data, history: endpointHistoryFor(selectedEndpoint) }
+      : data;
+    const groups = observingRegions(mapData);
+    const focusedRegion =
+      explorerSelection?.kind === "region"
+        ? explorerSelection.id
+        : explorerSelection?.kind === "site"
+          ? data.inventory.observers?.find((s) => s.id === explorerSelection?.id)?.region
+          : undefined;
+    const focusedIdentity =
+      explorerSelection?.kind === "orchestrator" ? explorerSelection.id : undefined;
+    const focusedEndpoints = selected
+      ? data.inventory.endpoints.filter((p) => p.id === selected)
+      : focusedIdentity
+        ? data.inventory.endpoints.filter((p) => p.resource.id.toLowerCase() === focusedIdentity)
+        : focusedRegion
+          ? (groups.find((g) => g.id === focusedRegion)?.endpoints ?? [])
+          : directoryIDs
+            ? data.inventory.endpoints.filter((p) => directoryIDs?.has(p.id))
+            : [];
+    const focusedIDs = new Set(focusedEndpoints.map((p) => p.id));
+    const focused = !!selected || !!explorerSelection || !!directoryIDs;
+    const metric = metricChoice.input.value;
+    const endpoints = data.inventory.endpoints.filter(
+      (p) =>
+        p.location.known &&
+        Number.isFinite(p.location.latitude) &&
+        Number.isFinite(p.location.longitude)
+    );
+    const features = endpoints.map((p) => {
+      const count = metric === "activity" ? segments(p) : endpointErrors(p);
+      const color =
+        metric === "errors"
+          ? count
+            ? "#f7768e"
+            : "#737aa2"
+          : metric === "activity"
+            ? count
+              ? "#7aa2f7"
+              : "#737aa2"
+            : p.status === "up"
+              ? "#9ece6a"
+              : p.status === "unavailable"
+                ? "#f7768e"
+                : "#737aa2";
+      return point(p.location.longitude, p.location.latitude, {
+        id: p.id,
+        color,
+        selected: p.id === selected,
+        opacity: focused && !focusedIDs.has(p.id) ? 0.18 : 0.95,
+        radius:
+          metric === "availability"
+            ? p.last_success && Date.now() - Date.parse(p.last_success) < 7 * 86400000
+              ? 6
+              : 3
+            : Math.min(13, 5 + Math.log2(1 + count)),
+        status: p.status,
       });
-      map.on("click", "livepeer-endpoints", (event) => {
-        const id = event.features?.[0]?.properties?.id;
-        if (id) pick(String(id));
-      });
-      map.on("mouseenter", "livepeer-endpoints", () => {
-        map!.getCanvas().style.cursor = "pointer";
-      });
-      map.on("mouseleave", "livepeer-endpoints", () => {
-        map!.getCanvas().style.cursor = "";
-      });
+    });
+    put(
+      "livepeer-endpoints",
+      features,
+      {
+        "circle-radius": ["get", "radius"],
+        "circle-color": ["get", "color"],
+        "circle-opacity": ["get", "opacity"],
+        "circle-stroke-width": ["case", ["get", "selected"], 3, 1.5],
+        "circle-stroke-color": ["case", ["get", "selected"], "#c0caf5", "#16161e"],
+      },
+      () => {
+        map!.on("click", "livepeer-endpoints", (event) => {
+          const ids = [
+            ...new Set(
+              (event.features ?? [])
+                .map((feature) => String(feature.properties?.id || ""))
+                .filter(Boolean)
+            ),
+          ];
+          tooltip.hidden = true;
+          if (ids.length > 1) showDirectory(ids);
+          else if (ids[0]) pick(ids[0], true);
+        });
+        map!.on("mousemove", "livepeer-endpoints", (event) => {
+          const p = data?.inventory.endpoints.find(
+            (p) => p.id === event.features?.[0]?.properties?.id
+          );
+          if (p)
+            showTooltip(event, p.ip, [
+              statusLabel(p.status),
+              formatPrice(p) + (p.price && !freshPrice(p) ? " · stale quote" : ""),
+              `${p.location.country || "Location known"} · ${segments(p)} observed segments`,
+              (event.features?.length ?? 0) > 1
+                ? `${event.features!.length} workers here · click to choose`
+                : `${endpointErrors(p)} error observations · click to inspect`,
+            ]);
+        });
+        map!.on("mouseenter", "livepeer-endpoints", () => {
+          map!.getCanvas().style.cursor = "pointer";
+        });
+        map!.on("mouseleave", "livepeer-endpoints", () => {
+          tooltip.hidden = true;
+          map!.getCanvas().style.cursor = "";
+        });
+      }
+    );
+    legend.replaceChildren();
+    const entries =
+      metric === "availability"
+        ? [
+            ["good", "Reachable (any region)"],
+            ["bad", "Unreachable"],
+            ["unknown", "Unknown"],
+          ]
+        : metric === "errors"
+          ? [
+              ["bad", "Observed errors"],
+              ["unknown", "No returned errors"],
+            ]
+          : [
+              ["activity", "Observed segments"],
+              ["unknown", "No returned work"],
+            ];
+    for (const [kind, label] of entries)
+      legend.append(node("span", label, `legend-key legend-${kind}`));
+    for (const [id, kind, label] of [
+      ["gateway-clusters", "gateway", "Gateways"],
+      ["prober-sites", "prober", "Probers"],
+    ]) {
+      if (layerControls.get(id)?.checked)
+        legend.append(node("span", label, `legend-key legend-${kind}`));
     }
-    for (const [id, control] of layerControls)
-      map.setLayoutProperty(id, "visibility", control.checked ? "visible" : "none");
+    legend.append(
+      node(
+        "span",
+        `${endpoints.length} mapped / ${data.inventory.endpoints.length} observed`,
+        "legend-count"
+      )
+    );
   }
-  function fillOptions(input: HTMLSelectElement, values: string[], emptyLabel: string) {
+  function fillOptions(input: HTMLSelectElement, values: string[], label: string) {
     const current = input.value;
     input.replaceChildren();
     for (const value of ["", ...values]) {
-      const option = node("option", value || emptyLabel);
+      const option = node("option", value || label);
       option.value = value;
       input.append(option);
     }
     if (values.includes(current)) input.value = current;
+  }
+  function requestURL() {
+    const api = new URL(options.apiURL, window.location.origin);
+    const region = regionChoice.input.value || (restoreFilters ? initial.get("lp_region") : "");
+    if (region) api.searchParams.set("region", region);
+    const end = Date.now();
+    api.searchParams.set("end", new Date(end).toISOString());
+    api.searchParams.set(
+      "start",
+      new Date(end - Number(windowChoice.input.value) * 3600000).toISOString()
+    );
+    api.searchParams.set("include_inactive", String(inactive.checked));
+    api.searchParams.set("interval", Number(windowChoice.input.value) <= 24 ? "5m" : "1h");
+    return api;
   }
   async function fetchData() {
     const version = ++fetchVersion;
@@ -1281,13 +1601,11 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
     pendingHistory.clear();
     message.textContent = "Refreshing network observations…";
     try {
-      const api = requestURL();
-      const response = await fetch(api, {
+      const response = await fetch(requestURL(), {
         signal: controller.signal,
         headers: options.headers?.(),
       });
-      if (!response.ok)
-        throw new Error(`Network observations unavailable (HTTP ${response.status})`);
+      if (!response.ok) throw new Error(`Observations unavailable (HTTP ${response.status})`);
       const next = (await response.json()) as Response;
       if (disposed || version !== fetchVersion) return;
       if (!Array.isArray(next.inventory?.endpoints) || !Array.isArray(next.history?.cohorts))
@@ -1317,8 +1635,8 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
           [regionChoice.input, "lp_region"],
           [profileChoice.input, "lp_profile"],
         ] as const) {
-          const value = initialQuery.get(key);
-          if (value && Array.from(input.options).some((entry) => entry.value === value))
+          const value = initial.get(key);
+          if (value && Array.from(input.options).some((o) => o.value === value))
             input.value = value;
         }
         restoreFilters = false;
@@ -1326,54 +1644,44 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
       render();
     } catch (error) {
       if (disposed || version !== fetchVersion || controller.signal.aborted) return;
-      message.textContent =
-        error instanceof Error ? error.message : "Network observations unavailable";
+      message.textContent = error instanceof Error ? error.message : "Observations unavailable";
+      message.classList.add("is-warning");
+      if (!data) {
+        overviewBody.replaceChildren(
+          node(
+            "div",
+            "Network observations are temporarily unavailable. Use Refresh to try again.",
+            "rail-section evidence-note"
+          )
+        );
+      }
     } finally {
       if (!disposed && version === fetchVersion) refresh.disabled = false;
     }
   }
-  function requestURL() {
-    const api = new URL(options.apiURL, window.location.origin);
-    const region =
-      regionChoice.input.value || (restoreFilters ? initialQuery.get("lp_region") : "");
-    if (region) api.searchParams.set("region", region);
-    const end = Date.now();
-    api.searchParams.set("end", new Date(end).toISOString());
-    api.searchParams.set(
-      "start",
-      new Date(end - Number(windowChoice.input.value) * 3600000).toISOString()
-    );
-    api.searchParams.set("include_inactive", String(inactive.checked));
-    api.searchParams.set("interval", windowChoice.input.value === "24" ? "5m" : "1h");
-    return api;
-  }
-  refresh.onclick = () => void fetchData();
-  windowChoice.input.onchange = () => {
-    persist();
-    void fetchData();
-  };
-  inactive.onchange = () => {
+  search.oninput = renderList;
+  windowChoice.input.onchange = inactive.onchange = () => {
     persist();
     void fetchData();
   };
   regionChoice.input.onchange = () => {
-    endpointHistory.clear();
     persist();
-    render(false);
     void fetchData();
+    if (data) {
+      renderOverview();
+      renderList();
+      const p = data.inventory.endpoints.find((p) => p.id === selected);
+      if (p) renderDetail(p);
+      updateMap();
+    }
   };
   profileChoice.input.onchange = () => {
     persist();
     render();
   };
-  orderChoice.input.onchange = () => {
+  metricChoice.input.onchange = () => {
     persist();
-    render();
-  };
-  maximize.onclick = async () => {
-    if (document.fullscreenElement === root) await document.exitFullscreen();
-    else await root.requestFullscreen();
-    map?.resize();
+    updateMap();
   };
   void loadMapLibre()
     .then((module) => {
@@ -1385,26 +1693,29 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
         center: [10, 25],
         zoom: 2,
         minZoom: 2,
-        maxZoom: 8,
+        maxZoom: 10,
+        scrollZoom: false,
+        doubleClickZoom: false,
         ...options.viewport?.camera,
       });
       unbindViewport = bindExplorerViewport(map, options.viewport);
+      unbindScroll = bindModifierScrollZoom(map, () => {
+        zoomHint.hidden = true;
+      });
       map.addControl(new module.NavigationControl({ showCompass: false }));
       addRequiredAttribution(map, basemap);
       map.on("load", updateMap);
     })
-    .catch((error) => {
+    .catch(() => {
       if (!disposed) {
-        mapContainer.replaceChildren(
-          node(
-            "p",
-            `Map unavailable: ${error instanceof Error ? error.message : "unknown error"}. Endpoints remain in the list.`,
-            "detail muted"
-          )
+        mapNotice.hidden = false;
+        mapNotice.append(
+          node("strong", "Map temporarily unavailable"),
+          node("p", "Worker observations are still available in the directory."),
+          button("Browse workers", showDirectory, "text-action")
         );
       }
     });
-  void fetchData();
   async function fetchInfrastructure() {
     if (!options.graphqlURL) return;
     try {
@@ -1422,22 +1733,16 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
       const next = await response.json();
       if (!disposed && Array.isArray(next.data?.networkStatus?.nodes)) {
         infrastructure = next.data.networkStatus.nodes;
-        gatewayClusters = (next.data.networkStatus.clusters ?? []).filter(
-          (cluster: GatewayCluster) => cluster.services?.includes("livepeer-gateway")
+        gatewayClusters = (next.data.networkStatus.clusters ?? []).filter((c: GatewayCluster) =>
+          c.services?.some((s) => s === "livepeer-gateway" || s.startsWith("livepeer-gateway-"))
         );
         updateMap();
       }
     } catch {
-      /* Public infrastructure and Livepeer have independent availability. */
+      /* Infrastructure and worker observations have independent availability. */
     }
   }
-  foot.append(
-    node(
-      "p",
-      "Map: cyan rings show gateway clusters; purple rings show probers; green/red/grey circles show Livepeer endpoints. Optional blue circles show other published FrameWorks nodes.",
-      "muted"
-    )
-  );
+  void fetchData();
   void fetchInfrastructure();
   const timer = setInterval(() => void fetchData(), 60000);
   const infrastructureTimer = setInterval(() => void fetchInfrastructure(), 60000);
@@ -1447,6 +1752,9 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
     clearInterval(infrastructureTimer);
     infrastructureController.abort();
     controller?.abort();
+    container.removeEventListener("keydown", escape);
+    if (oldOverflow !== undefined) document.body.style.overflow = oldOverflow;
+    unbindScroll();
     unbindViewport();
     map?.remove();
     container.replaceChildren();

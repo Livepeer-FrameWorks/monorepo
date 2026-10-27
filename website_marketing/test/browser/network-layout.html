@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" />
+  <title>Public network layout regression</title>
+  <style>
+    body {
+      margin: 16px;
+      color: #c0caf5;
+      background: #1a1b26;
+      font: 14px system-ui;
+    }
+    iframe {
+      display: block;
+      border: 1px solid #3b4261;
+      background: #16161e;
+    }
+    output {
+      display: block;
+      margin-block: 16px;
+      white-space: pre-wrap;
+    }
+    [data-status="fail"] {
+      color: #f7768e;
+    }
+    [data-status="pass"] {
+      color: #9ece6a;
+    }
+  </style>
+  <h1>Public network layout regression</h1>
+  <p>Use ?width=390, ?width=768 or ?width=1280. The embedded page runs at that CSS viewport.</p>
+  <output aria-live="polite">Waiting for the page…</output>
+  <iframe title="Marketing layout under test" height="844"></iframe>
+  <script type="module">
+    const query = new URLSearchParams(location.search);
+    const width = [390, 768, 1280].includes(Number(query.get("width")))
+      ? Number(query.get("width"))
+      : 390;
+    const frame = document.querySelector("iframe");
+    frame.width = String(width);
+    frame.src = query.get("view") === "network" ? "/network?view=livepeer" : "/#experience";
+    frame.addEventListener("load", () => {
+      const doc = frame.contentDocument;
+      const report = document.querySelector("output");
+      function inspect() {
+        const rect = (selector) => doc.querySelector(selector)?.getBoundingClientRect();
+        const checks = [];
+        const check = (label, pass, detail) => checks.push({ label, pass, detail });
+        check(
+          "No page overflow",
+          doc.documentElement.scrollWidth <= frame.contentWindow.innerWidth,
+          `${doc.documentElement.scrollWidth}px / ${frame.contentWindow.innerWidth}px`
+        );
+        if (query.get("view") === "network") {
+          const viewport = rect(".map-viewport"),
+            rail = rect(".map-rail");
+          if (!viewport || !rail) return;
+          check(
+            "Map remains visible",
+            viewport.height >= 260,
+            `${viewport.width} × ${viewport.height}`
+          );
+          check(
+            "Connected map and inspector",
+            width <= 640
+              ? Math.abs(rail.top - viewport.bottom) <= 1
+              : Math.abs(rail.left - viewport.right) <= 1,
+            width <= 640 ? "stacked" : "side by side"
+          );
+          check(
+            "No public accounting table",
+            !doc.querySelector(".fw-network table"),
+            "Worker details are contextual"
+          );
+          const note = doc.querySelector(".map-association-note");
+          const attribution = rect(".frameworks-map-attribution");
+          if (note && !note.hidden && attribution) {
+            const bounds = note.getBoundingClientRect();
+            check(
+              "Association note clears attribution",
+              bounds.bottom <= attribution.top - 1,
+              `${Math.round(attribution.top - bounds.bottom)}px clearance`
+            );
+          }
+          if (width <= 640) {
+            const period = rect(".map-toolbar > .map-filter:first-child");
+            const metric = rect(".map-toolbar > .map-filter:nth-child(3)");
+            const toolbar = rect(".map-toolbar");
+            check(
+              "Mobile controls use two columns",
+              Math.abs(period.width - toolbar.width / 2) <= 1 && metric.top >= period.bottom - 1,
+              `${period.width}px per control`
+            );
+          }
+        } else {
+          const preview = rect(".media-control-preview"),
+            column = rect("#media .marketing-grid-split__secondary"),
+            cell = rect(".journey-outcome"),
+            action = rect(".journey-outcome__action"),
+            outcomes = rect(".journey-outcomes"),
+            insights = rect(".journey-insights");
+          if (!preview || !column || !cell || !action || !outcomes || !insights) return;
+          check(
+            "Pipeline fills its column",
+            Math.abs(column.width - preview.width) <= 1,
+            `${preview.width}px / ${column.width}px`
+          );
+          check(
+            "Actions meet slab edges",
+            Math.abs(cell.left - action.left) <= 1 && Math.abs(cell.width - action.width) <= 1,
+            `inset ${action.left - cell.left}px`
+          );
+          check(
+            "Timeline seams connect",
+            Math.abs(insights.top - outcomes.bottom) <= 1,
+            `gap ${insights.top - outcomes.bottom}px`
+          );
+        }
+        report.dataset.status = checks.every((c) => c.pass) ? "pass" : "fail";
+        report.textContent = checks
+          .map((c) => `${c.pass ? "PASS" : "FAIL"} ${c.label}: ${c.detail}`)
+          .join("\n");
+      }
+      new MutationObserver(inspect).observe(doc.body, { subtree: true, childList: true });
+      doc.fonts.ready.then(inspect);
+      inspect();
+    });
+  </script>
+</html>

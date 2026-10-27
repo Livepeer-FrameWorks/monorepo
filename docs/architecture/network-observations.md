@@ -180,7 +180,7 @@ fractions using exact rational arithmetic.
 `history.work` supplies full-window summaries by identity, observed IP, region and
 profile independently of bounded chart samples. Consumers can sum sibling endpoints
 for identity totals. Counters that can exceed JavaScript integer precision are decimal
-strings. The shared dashboard uses integer arithmetic for aggregation and sorting.
+strings. The shared explorer uses integer arithmetic for aggregation and price formatting.
 If more than 10,000 work cohort/service-rate groups are required, `work.truncated=true`
 returns no work summaries rather than incomplete totals. Exact ticket-credit values
 have a separate 10,000-group bound: `work.ticket_credit_truncated=true` preserves all
@@ -234,16 +234,54 @@ inventory metadata.
 
 ## Network explorer
 
-FrameWorks and Livepeer share a tabbed `/network` shell and preserve the map camera when
-switching. Livepeer offers Compare and Map modes with shared filters, endpoint selection
-and query-string deep links. Compare defaults to a compact map and sortable endpoint
-table. Latency and failure rankings require one observer region and profile; they never
-merge incompatible cohorts. Quotes sort by their exact rational price within matching
-currency/unit groups; stale or missing quotes follow fresh ones. Quotes reflect the
-observing broadcaster's offered price, not a guaranteed price for every broadcaster.
+FrameWorks and Livepeer share a tabbed `/network` shell, basemap, modifier-scroll zoom
+policy and camera state when switching. Livepeer opens on a map with a connected network
+overview. Visitors can emphasize availability, returned error outcomes or transcoding
+activity; hover reveals endpoint context, and selection opens a worker inspector. When
+markers overlap, selection opens a list of the endpoints under the pointer. The worker
+directory also exposes endpoints without known coordinates and distinguishes advertised
+authorities sharing an IP. Period, region, profile, layers and selected endpoint are
+retained in query-string deep links.
+Current inventory reachability is explicitly across all measurement regions. The
+history-region control scopes returned observations and work; it does not turn a
+regional failure into a global endpoint availability verdict.
+
+The overview offers two independent hierarchies: observing regions contain gateway
+and prober measurement sites; onchain orchestrator identities contain discovered
+worker endpoints. Gateways use cyan square markers, probers amber diamonds and
+workers status-coloured circles. Region and identity selection highlights associated
+endpoints and opens contextual regional work totals or sibling-worker navigation.
+The map displays actual published measurement sites and located worker endpoints.
+Unknown locations receive no fabricated coordinates. The public projection removes
+individual observer attribution, so site-to-worker traffic paths and simulated regional
+connection origins are not drawn. Regional associations remain available in the inspector.
+Fifteen-minute and one-hour periods support recent activity; twenty-four hours remains
+the default. Prices in worker hover details retain their observed/stale distinction.
+
+The inspector separates overview, observations and FrameWorks work accounting. Worker
+overview shows transcoding performance immediately with local output-profile and
+measurement-region controls, independent of global filters. It selects an available
+profile and region, displays response latency, duration ratio, outcomes and missed
+deadlines, and charts that region/profile separately. Discovery charts retain separate
+regional series. Window summaries supply metrics independently of bounded chart samples;
+when unavailable, the latest chart interval is explicitly labelled. Missing evidence stays unknown, and truncation is reported alongside the
+affected details. Quotes use exact rational arithmetic and identify stale observations.
+They reflect the observing broadcaster's offered price, not a guaranteed price for every
+broadcaster. Work and charge totals are contextual rather than a public comparison table.
+Raw correlation diagnostics remain restricted to the operator-authenticated view.
+
+Latency charts use a zero baseline, labelled millisecond and local-time axes, and
+separate regional series. Hover, touch or arrow-key navigation exposes each plotted
+sample’s time, value, region/profile and outcome counts. Missing intervals stay gaps.
+Discovery history has a time scale, inspectable check counts, and distinct passed,
+mixed, failed and unknown states; a bucket with both successful and failed checks
+is amber rather than green. Longer metric and accounting definitions sit in disclosures.
 
 The Livepeer map has independent endpoint, gateway-cluster, prober and infrastructure
-layers. Gateway telemetry carries no address of the gateway host, so the coordinator
+layers. Reporting gateway positions come directly from observation inventory. The
+topology API supplies gateway-cluster positions where a region has no located reporting
+gateway and provides the optional FrameWorks infrastructure layer. Gateway telemetry
+carries no address of the gateway host, so the coordinator
 places each gateway observer from Quartermaster once per catalog interval: at its node's
 position (GeoIP of the node's external IP), or else at the centroid of the located nodes
 in that node's cluster, the position the cluster layer draws. A gateway whose node and
@@ -252,6 +290,14 @@ unknown; region labels never become coordinates. A location in `NETWORK_OBSERVER
 takes precedence. Registered probers with known coordinates appear individually;
 unknown locations remain in coverage listings. The detail panel lists sibling endpoints
 under the same onchain identity and retains regional discovery and performance history.
+
+`website_marketing/test/browser/network-layout.html` is a local Vite browser fixture for
+the actual marketing routes. Open it through Vite's `/@fs/` path with `?width=390`,
+`?width=768` or `?width=1280`; add `&view=network` for the explorer. It asserts pipeline
+width, flush timeline actions, shared seams and map/inspector placement at the embedded
+viewport. The fixture is outside the public and build directories. DOM regressions in
+the webapp cover shared rendering, regional queries, exact accounting, marker selection
+and the common scroll policy.
 
 V3 gateway state/discovery also refresh the existing non-additive current views, using
 observation time as the replacement version. V3 samples do not enter legacy additive
