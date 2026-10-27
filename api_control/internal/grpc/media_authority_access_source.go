@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -75,5 +76,8 @@ func bindPlaybackAccessSource(ctx context.Context, digest []byte, revisions []*m
 		digest = hash.Sum(nil)
 	}
 	revisions = append(append([]*mediapb.AuthoritySourceRevision(nil), revisions...), &mediapb.AuthoritySourceRevision{Service: "commodore-playback-access", Revision: source.revision})
+	slices.SortFunc(revisions, func(left, right *mediapb.AuthoritySourceRevision) int {
+		return strings.Compare(left.GetService(), right.GetService())
+	})
 	return digest, revisions
 }

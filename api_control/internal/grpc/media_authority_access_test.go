@@ -364,3 +364,15 @@ func TestCompileFailurePlaybackReadFailureStillChecksPlacement(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestPlaybackSourceKeepsCommercialProvenanceCanonical(t *testing.T) {
+	ctx := withPlaybackAccessSource(context.Background(), false, "", "")
+	original := []*mediapb.AuthoritySourceRevision{{Service: "commodore", Revision: "stream"}, {Service: "purser", Revision: "quote"}}
+	_, revisions := bindPlaybackAccessSource(ctx, []byte{1}, original)
+	if len(revisions) != 3 || revisions[0].Service != "commodore" || revisions[1].Service != "commodore-playback-access" || revisions[2].Service != "purser" {
+		t.Fatalf("non-canonical source revisions: %v", revisions)
+	}
+	if len(original) != 2 || original[1].Service != "purser" {
+		t.Fatal("modified caller provenance")
+	}
+}
