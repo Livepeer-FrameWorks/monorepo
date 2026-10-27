@@ -15,8 +15,9 @@ Environment="KAFKA_OPTS=-javaagent:{{ kafka_jmx_exporter_jar }}=127.0.0.1:{{ kaf
    as a javaagent bound to loopback, so the JVM starts without the remote agent. #}
 Environment="KAFKA_JMX_OPTS=-Djava.awt.headless=true"
 ExecStart={{ kafka_bin_dir }}/kafka-server-start.sh {{ kafka_properties_path }}
-ExecStop={{ kafka_bin_dir }}/kafka-server-stop.sh
-{# The JVM exits 128+SIGTERM after its shutdown hooks complete a clean stop. #}
+{# systemd stops the unit with SIGTERM to its own process. kafka-server-stop.sh would signal
+   every Kafka JVM on the host, so stopping the controller would also stop the broker.
+   The JVM exits 128+SIGTERM after its shutdown hooks complete a clean stop. #}
 SuccessExitStatus=143
 Restart=always
 RestartSec=5
