@@ -12,6 +12,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/twmb/franz-go/pkg/kfake"
 	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
 const shutdownTestTopic = "service_events"
@@ -149,5 +150,60 @@ func TestConsumerStartReleasesRebalanceBlockOnReturn(t *testing.T) {
 	defer poller.mu.Unlock()
 	if poller.blocking != 0 {
 		t.Fatalf("Start returned with %d poll(s) blocking rebalances", poller.blocking)
+	}
+}
+
+// A JoinGroup the coordinator holds open, as it does while a rebalance waits
+// for the other members of the group to rejoin, keeps kgo's Client.Close
+// waiting for up to the rebalance timeout plus the request overhead (70 s by
+// default). Close must still return within its own per-step bound.
+func TestConsumerCloseReturnsWhileJoinGroupIsHeld(t *testing.T) {
+	cluster, err := kfake.NewCluster(kfake.NumBrokers(1), kfake.SeedTopics(1, shutdownTestTopic))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(cluster.Close)
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	joinSeen := make(chan struct{}, 1)
+	cluster.ControlKey(int16(kmsg.JoinGroup), func(kmsg.Request) (kmsg.Response, error, bool) {
+		cluster.KeepControl()
+		select {
+		case joinSeen <- struct{}{}:
+		default:
+		}
+		cluster.SleepControl(func() { <-release })
+		return nil, nil, false
+	})
+
+	logger := logrus.New()
+	logger.SetOutput(io.Discard)
+	consumer, err := NewConsumer(cluster.ListenAddrs(), "held-join", "test", "held-join", logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	consumer.AddHandler(shutdownTestTopic, func(context.Context, Message) error { return nil })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = consumer.Start(ctx) }()
+	select {
+	case <-joinSeen:
+	case <-time.After(20 * time.Second):
+		t.Fatal("consumer never sent JoinGroup")
+	}
+
+	limit := 3*consumerCloseTimeout + 2*time.Second
+	closed := make(chan struct{})
+	started := time.Now()
+	go func() {
+		cancel()
+		_ = consumer.Close()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+		t.Logf("Close returned after %s", time.Since(started).Round(time.Millisecond))
+	case <-time.After(limit):
+		t.Fatalf("Close did not return within %s while the coordinator held a JoinGroup", limit)
 	}
 }

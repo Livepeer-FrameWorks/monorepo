@@ -22,6 +22,7 @@ require (
 	github.com/twmb/franz-go v1.21.0
 	github.com/twmb/franz-go/pkg/kadm v1.18.0
 	github.com/twmb/franz-go/pkg/kfake v0.0.0-20260421212619-897f85bae559
+	github.com/twmb/franz-go/pkg/kmsg v1.13.1
 	github.com/x402-foundation/x402/go/v2 v2.23.0
 	github.com/yugabyte/pgx/v5 v5.7.6-yb-1
 	golang.org/x/crypto v0.50.0
@@ -85,7 +86,6 @@ require (
 	github.com/shopspring/decimal v1.4.0 // indirect
 	github.com/supranational/blst v0.3.16 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
-	github.com/twmb/franz-go/pkg/kmsg v1.13.1 // indirect
 	github.com/ugorji/go/codec v1.3.1 // indirect
 	go.mongodb.org/mongo-driver/v2 v2.5.1 // indirect
 	go.opentelemetry.io/otel v1.43.0 // indirect

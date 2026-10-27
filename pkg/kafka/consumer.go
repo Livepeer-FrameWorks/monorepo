@@ -67,8 +67,9 @@ type Consumer struct {
 	runDone chan struct{}
 }
 
-// consumerCloseTimeout bounds each step of Close: waiting for Start to return
-// and leaving the consumer group.
+// consumerCloseTimeout bounds each step of a consumer's or producer's Close:
+// waiting for Start to return, leaving the consumer group and closing the
+// client.
 const consumerCloseTimeout = 5 * time.Second
 
 // ConsumerOption configures a Consumer at construction time. Callers wanting
@@ -184,9 +185,11 @@ func (c *Consumer) AddHandler(topic string, handler Handler) {
 
 // Close stops Start, leaves the consumer group and closes the client. Leaving
 // the group waits until no poll blocks rebalancing, so Start is stopped first
-// and every step is bounded by consumerCloseTimeout: a handler that ignores
-// cancellation or an unreachable broker cannot hold shutdown. A member that
-// could not leave in time is expired by the broker after the session timeout.
+// and every step, closing the client included, is bounded by
+// consumerCloseTimeout: a handler that ignores cancellation, an unreachable
+// broker or a coordinator holding a JoinGroup cannot hold shutdown. A member
+// that could not leave in time is expired by the broker after the session
+// timeout.
 func (c *Consumer) Close() error {
 	c.runMu.Lock()
 	stop, done := c.stopRun, c.runDone
@@ -208,8 +211,29 @@ func (c *Consumer) Close() error {
 	if err := c.client.LeaveGroupContext(leaveCtx); err != nil {
 		c.logger.WithError(err).WithField("group", c.groupID).Warn("Kafka consumer did not leave its group before close")
 	}
-	c.client.Close()
+	closeClient(c.client, c.logger, logrus.Fields{"group": c.groupID})
 	return nil
+}
+
+// closeClient closes client, waiting at most consumerCloseTimeout. kgo's
+// Close cannot be cancelled: it waits for the group lifecycle goroutine and
+// in-flight requests on their own timeouts, and a JoinGroup the coordinator
+// holds during a rebalance lasts up to the rebalance timeout plus the request
+// overhead (70 s by default). Past the bound the client keeps closing in the
+// background while shutdown continues.
+func closeClient(client *kgo.Client, logger *logrus.Logger, fields logrus.Fields) {
+	done := make(chan struct{})
+	go func() {
+		client.Close()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(consumerCloseTimeout):
+		if logger != nil {
+			logger.WithFields(fields).Warn("Kafka client still closing at the close timeout; continuing shutdown without waiting for it")
+		}
+	}
 }
 
 // lagFetcher is the minimal slice of kadm.Client used by the lag tracker.

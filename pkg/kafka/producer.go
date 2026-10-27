@@ -41,8 +41,10 @@ func NewKafkaProducer(brokers []string, defaultTopic string, clusterID string, l
 	}, nil
 }
 
+// Close closes the client within consumerCloseTimeout, so a broker that
+// stopped answering cannot hold shutdown.
 func (p *KafkaProducer) Close() error {
-	p.client.Close()
+	closeClient(p.client, p.logger, logrus.Fields{"client": "producer"})
 	return nil
 }
 
