@@ -688,6 +688,17 @@ func TestExpandMigrationSeparatesStoredRoutineDefinitionFromExecution(t *testing
 		wantError bool
 	}{
 		{"registered trigger function", registered, false},
+		{"identity table alongside registered trigger", registered + `CREATE TABLE purser.ids(id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY);`, false},
+		{"table-returning routine alongside registered trigger", registered + `CREATE FUNCTION purser.ids() RETURNS TABLE(id BIGINT) LANGUAGE SQL AS $$SELECT 1::bigint$$;`, false},
+		{"bounded literal catalog seed", `INSERT INTO purser.meter_definitions(meter,allowed_dimensions) VALUES('x','{kind}') ON CONFLICT(meter) DO UPDATE SET allowed_dimensions=EXCLUDED.allowed_dimensions;`, false},
+		{"new destination does not hide source merge", `CREATE TABLE purser.new_tiers(id BIGINT); WITH changed AS (MERGE INTO purser.billing_tiers t USING purser.copy c ON t.id=c.id WHEN MATCHED THEN DELETE RETURNING t.id) INSERT INTO purser.new_tiers SELECT id FROM changed ON CONFLICT(id) DO UPDATE SET id=EXCLUDED.id;`, true},
+		{"unbounded upsert", `INSERT INTO purser.billing_tiers SELECT * FROM purser.copy ON CONFLICT(tier_name) DO UPDATE SET base_price=EXCLUDED.base_price;`, true},
+		{"seed initialized table", `CREATE TABLE purser.counters(id BIGINT PRIMARY KEY,value BIGINT); INSERT INTO purser.counters SELECT id,MAX(value) FROM purser.old_counters GROUP BY id ON CONFLICT(id) DO UPDATE SET value=GREATEST(purser.counters.value,EXCLUDED.value);`, false},
+		{"upsert rewrites rows", `INSERT INTO purser.billing_tiers(tier_name) VALUES('x') ON CONFLICT(tier_name) DO UPDATE SET base_price=0;`, true},
+		{"merge updates rows", `MERGE INTO purser.billing_tiers AS t USING purser.copy AS c ON t.id=c.id WHEN MATCHED THEN UPDATE SET base_price=0;`, true},
+		{"merge deletes rows", `MERGE INTO purser.billing_tiers AS t USING purser.copy AS c ON t.id=c.id WHEN MATCHED THEN DELETE;`, true},
+		{"truncate rows", `TRUNCATE TABLE purser.billing_tiers;`, true},
+		{"execute literal rewrite", `DO $$BEGIN EXECUTE 'UPDATE purser.billing_tiers SET base_price=0'; END;$$;`, true},
 		{"CTAS fires registered trigger", registered + `CREATE TABLE purser.copy AS WITH w AS (INSERT INTO purser.subscription_operator_grants DEFAULT VALUES RETURNING *) SELECT * FROM w;`, true},
 		{"materialized view executes a trigger", registered + `CREATE MATERIALIZED VIEW purser.copy AS WITH w AS (INSERT INTO purser.subscription_operator_grants DEFAULT VALUES RETURNING *) SELECT * FROM w;`, true},
 		{"SELECT INTO fires trigger", registered + `WITH w AS (INSERT INTO purser.subscription_operator_grants DEFAULT VALUES RETURNING *) SELECT * INTO purser.copy FROM w;`, true},

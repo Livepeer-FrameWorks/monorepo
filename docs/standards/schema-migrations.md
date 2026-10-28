@@ -177,6 +177,15 @@ listed with the file's checksum in `yugabyteRerunGuards`
 with the same effect; the validator rejects a guard whose file changed, whose statement no
 longer matches, or whose statement is already safe.
 
+The expand SQL validator guards against common authoring mistakes, not hostile
+SQL. It inspects direct updates, deletes, upserts, merges and truncation, including
+routine bodies that a migration calls, CTAS queries and literal EXECUTE bodies.
+Stored definitions alone do not execute their bodies. Initialization of a table
+declared by the same migration and finite literal catalog seeds that only copy
+EXCLUDED fields are additive operations; unbounded upserts into existing tables
+and updates computed from existing rows require service-owned data migration.
+Encoded strings and constructed dynamic SQL still require code review.
+
 ## Dry-run safety
 
 Migration dry-runs inspect the live `_migrations` ledgers and report pending files,
