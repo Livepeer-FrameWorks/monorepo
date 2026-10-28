@@ -180,11 +180,16 @@ longer matches, or whose statement is already safe.
 The expand SQL validator guards against common authoring mistakes, not hostile
 SQL. It inspects direct updates, deletes, upserts, merges and truncation, including
 routine bodies that a migration calls, CTAS queries and literal EXECUTE bodies.
-Stored definitions alone do not execute their bodies. Initialization of a table
-declared by the same migration and finite literal catalog seeds that only copy
-EXCLUDED fields are additive operations; unbounded upserts into existing tables
-and updates computed from existing rows require service-owned data migration.
-Encoded strings and constructed dynamic SQL still require code review.
+Stored definitions alone do not execute their bodies. Initialization of a table unconditionally created earlier in the same migration
+is additive; `CREATE TABLE IF NOT EXISTS` does not prove a table is new. Upserts
+that update existing tables, including literal price seeds, require service-owned
+data migration. `DO NOTHING` seeds remain additive. Encoded strings, constructed
+dynamic SQL and volatile functions in `DEFAULT` expressions require code review.
+Three immutable v0.3.0 files already shipped with upserts: Foghorn ordering-counter
+initialization and Purser usage/dimension catalog seeds. Their original paths and
+exact contents are pinned in `migrate_shipped_upserts.go`; edits or copies into a
+new release receive no exception. This preserves shipped checksums without
+allowing the same rewrites in new migrations.
 
 ## Dry-run safety
 

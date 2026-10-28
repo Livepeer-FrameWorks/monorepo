@@ -101,11 +101,13 @@ var expandUnsafeSQLPatterns = []struct {
 	{regexp.MustCompile(`(?is)\bDELETE\s+FROM\s+[A-Za-z_][A-Za-z0-9_.]*\b`), "bulk deletes belong in service-owned background data migrations or contract"},
 }
 
+var expandUpsertSQLPattern = regexp.MustCompile(`(?is)\bON\s+CONFLICT\b[^;]*?\bDO\s+UPDATE\s+SET\b`)
+
 var expandExecutingSQLPatterns = []struct {
 	re      *regexp.Regexp
 	message string
 }{
-	{regexp.MustCompile(`(?is)\bON\s+CONFLICT\b[^;]*?\bDO\s+UPDATE\s+SET\b`), "bulk upserts belong in service-owned background data migrations"},
+	{expandUpsertSQLPattern, "bulk upserts belong in service-owned background data migrations"},
 	{regexp.MustCompile(`(?is)\bMERGE\s+INTO\b`), "bulk merges belong in service-owned background data migrations"},
 	{regexp.MustCompile(`(?is)\bTRUNCATE\b`), "truncate operations belong in contract migrations"},
 }
@@ -405,6 +407,9 @@ func validatePostgresMigrationSet(migrations []Migration) error {
 		if migration.Phase == "expand" && enforcesMigrationPhaseSafety(migration) {
 			executingSQL := executingMigrationSQL(content)
 			for _, pattern := range expandExecutingSQLPatterns {
+				if pattern.re == expandUpsertSQLPattern && immutableShippedUpsert(migration) {
+					continue
+				}
 				if pattern.re.MatchString(executingSQL) {
 					issues = append(issues, MigrationValidationIssue{Path: migration.Path, Message: pattern.message})
 				}
@@ -638,18 +643,6 @@ func executingMigrationSQL(content string) string {
 		}
 	}
 	created := map[string]bool{}
-	for _, statement := range statements {
-		if len(statement) < 3 || !isSQLWord(statement[0], "create") || !isSQLWord(statement[1], "table") {
-			continue
-		}
-		i := 2
-		if i+2 < len(statement) && isSQLWord(statement[i], "if") && isSQLWord(statement[i+1], "not") && isSQLWord(statement[i+2], "exists") {
-			i += 3
-		}
-		if name, _, ok := qualifiedName(statement, i); ok {
-			created[name] = true
-		}
-	}
 	var direct strings.Builder
 	for _, statement := range statements {
 		if len(statement) == 0 {
@@ -657,6 +650,13 @@ func executingMigrationSQL(content string) string {
 		}
 		if !executable && isSQLWord(statement[0], "create") && (hasSQLWord(statement, "function") || hasSQLWord(statement, "procedure")) {
 			continue
+		}
+		// IF NOT EXISTS may name a live table. Only an unconditional creation
+		// proves the destination is new, and only for subsequent statements.
+		if len(statement) > 2 && isSQLWord(statement[0], "create") && isSQLWord(statement[1], "table") && !isSQLWord(statement[2], "if") {
+			if name, _, ok := qualifiedName(statement, 2); ok {
+				created[name] = true
+			}
 		}
 		insertAt := -1
 		for i, tok := range statement {
@@ -670,18 +670,13 @@ func executingMigrationSQL(content string) string {
 		}
 		if insertAt >= 0 && insertAt+2 < len(statement) && isSQLWord(statement[insertAt+1], "into") {
 			target, _, ok := qualifiedName(statement, insertAt+2)
-			if (ok && created[target]) || boundedCatalogUpsert(statement) {
-				// Only the destination's conflict action is initialization. Its source
-				// CTEs still execute and must retain their own data-operation checks.
-				conflict := -1
-				for i := insertAt + 1; i+1 < len(statement); i++ {
-					if isSQLWord(statement[i], "on") && isSQLWord(statement[i+1], "conflict") {
-						conflict = i
-						break
-					}
-				}
+			if ok && created[target] {
+				conflict, end := initializationConflictClause(statement, insertAt)
 				if conflict >= 0 {
 					direct.WriteString(content[statement[0].start:statement[conflict].start])
+					if end < len(statement) {
+						direct.WriteString(content[statement[end].start:statement[len(statement)-1].end])
+					}
 					direct.WriteByte(';')
 					continue
 				}
@@ -693,53 +688,26 @@ func executingMigrationSQL(content string) string {
 	return expandMigrationSafetySQL(direct.String())
 }
 
-// boundedCatalogUpsert permits finite literal seed rows whose conflict action
-// only copies those rows' EXCLUDED fields. The affected keys are bounded by
-// literals; the seed cannot scan a source table, compute from existing data,
-// or call a seed-producing function.
-func boundedCatalogUpsert(statement []sqlToken) bool {
-	values, on, set := -1, -1, -1
-	for i, tok := range statement {
-		if isSQLWord(tok, "select") || isSQLWord(tok, "with") {
-			return false
+// initializationConflictClause bounds only the destination's ON CONFLICT action.
+// RETURNING expressions, enclosing CTEs and the main statement remain inspected.
+func initializationConflictClause(statement []sqlToken, insertAt int) (int, int) {
+	depth, conflict, conflictDepth := 0, -1, 0
+	for i := insertAt; i < len(statement); i++ {
+		tok := statement[i]
+		if conflict >= 0 && depth == conflictDepth && (tok.text == ")" || isSQLWord(tok, "returning")) {
+			return conflict, i
 		}
-		if isSQLWord(tok, "values") && values < 0 {
-			values = i
+		if tok.text == "(" {
+			depth++
 		}
-		if i+1 < len(statement) && isSQLWord(tok, "on") && isSQLWord(statement[i+1], "conflict") {
-			on = i
+		if tok.text == ")" {
+			depth--
 		}
-		if i+2 < len(statement) && isSQLWord(tok, "do") && isSQLWord(statement[i+1], "update") && isSQLWord(statement[i+2], "set") {
-			set = i + 3
-			break
+		if conflict < 0 && i+1 < len(statement) && isSQLWord(tok, "on") && isSQLWord(statement[i+1], "conflict") {
+			conflict, conflictDepth = i, depth
 		}
 	}
-	if values < 0 || on <= values || set < 0 {
-		return false
-	}
-	for _, tok := range statement[values+1 : on] {
-		if tok.kind == sqlTokenWord && !isSQLWord(tok, "true") && !isSQLWord(tok, "false") && !isSQLWord(tok, "null") {
-			return false
-		}
-	}
-	for i := set; i < len(statement); {
-		_, next, ok := qualifiedName(statement, i)
-		if !ok || next >= len(statement) || statement[next].text != "=" {
-			return false
-		}
-		rhs, next, ok := qualifiedName(statement, next+1)
-		if !ok || !strings.HasPrefix(rhs, "excluded.") {
-			return false
-		}
-		if next == len(statement) {
-			return true
-		}
-		if statement[next].text != "," {
-			return false
-		}
-		i = next + 1
-	}
-	return false
+	return conflict, len(statement)
 }
 
 // migrationCreatesRelationAsQuery distinguishes an executing CREATE ... AS query
@@ -787,7 +755,7 @@ func migrationCreatesRelationAsQuery(statement []sqlToken) bool {
 // literals and diagnostics out of the rewrite checks. Quoted identifiers become
 // ordinary identifier tokens so quoting cannot hide a write target. This is an
 // authoring-mistake guard, not a sandbox for hostile SQL: encoded strings and
-// constructed EXECUTE expressions require code review.
+// constructed EXECUTE expressions and volatile DEFAULT functions require code review.
 func expandMigrationSafetySQL(content string) string {
 	content = immediateMigrationSQL(content)
 	statements, err := sqlStatements(content)
@@ -802,7 +770,6 @@ func expandMigrationSafetySQL(content string) string {
 			switch tok.kind {
 			case sqlTokenString, sqlTokenDollarBody:
 				body := routine && (isSQLWord(statement[0], "do") || (i > 0 && isSQLWord(statement[i-1], "as"))) || (i > 0 && isSQLWord(statement[i-1], "execute"))
-
 				if body {
 					code := tok.text
 					if tok.kind == sqlTokenString {

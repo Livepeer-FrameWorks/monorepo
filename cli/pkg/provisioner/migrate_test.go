@@ -690,10 +690,12 @@ func TestExpandMigrationSeparatesStoredRoutineDefinitionFromExecution(t *testing
 		{"registered trigger function", registered, false},
 		{"identity table alongside registered trigger", registered + `CREATE TABLE purser.ids(id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY);`, false},
 		{"table-returning routine alongside registered trigger", registered + `CREATE FUNCTION purser.ids() RETURNS TABLE(id BIGINT) LANGUAGE SQL AS $$SELECT 1::bigint$$;`, false},
-		{"bounded literal catalog seed", `INSERT INTO purser.meter_definitions(meter,allowed_dimensions) VALUES('x','{kind}') ON CONFLICT(meter) DO UPDATE SET allowed_dimensions=EXCLUDED.allowed_dimensions;`, false},
+		{"literal seed cannot rewrite live rows", `INSERT INTO purser.meter_definitions(meter,allowed_dimensions) VALUES('x','{kind}') ON CONFLICT(meter) DO UPDATE SET allowed_dimensions=EXCLUDED.allowed_dimensions;`, true},
 		{"new destination does not hide source merge", `CREATE TABLE purser.new_tiers(id BIGINT); WITH changed AS (MERGE INTO purser.billing_tiers t USING purser.copy c ON t.id=c.id WHEN MATCHED THEN DELETE RETURNING t.id) INSERT INTO purser.new_tiers SELECT id FROM changed ON CONFLICT(id) DO UPDATE SET id=EXCLUDED.id;`, true},
 		{"unbounded upsert", `INSERT INTO purser.billing_tiers SELECT * FROM purser.copy ON CONFLICT(tier_name) DO UPDATE SET base_price=EXCLUDED.base_price;`, true},
 		{"seed initialized table", `CREATE TABLE purser.counters(id BIGINT PRIMARY KEY,value BIGINT); INSERT INTO purser.counters SELECT id,MAX(value) FROM purser.old_counters GROUP BY id ON CONFLICT(id) DO UPDATE SET value=GREATEST(purser.counters.value,EXCLUDED.value);`, false},
+		{"existing table declaration is not initialization", `CREATE TABLE IF NOT EXISTS purser.billing_tiers(tier_name TEXT,base_price NUMERIC); INSERT INTO purser.billing_tiers VALUES('pro',0) ON CONFLICT(tier_name) DO UPDATE SET base_price=EXCLUDED.base_price;`, true},
+		{"upsert CTE does not hide following merge", `CREATE TABLE purser.new_tiers(id BIGINT PRIMARY KEY); WITH seeded AS (INSERT INTO purser.new_tiers VALUES(1) ON CONFLICT(id) DO UPDATE SET id=EXCLUDED.id RETURNING id) MERGE INTO purser.billing_tiers t USING seeded s ON t.id=s.id WHEN MATCHED THEN DELETE;`, true},
 		{"upsert rewrites rows", `INSERT INTO purser.billing_tiers(tier_name) VALUES('x') ON CONFLICT(tier_name) DO UPDATE SET base_price=0;`, true},
 		{"merge updates rows", `MERGE INTO purser.billing_tiers AS t USING purser.copy AS c ON t.id=c.id WHEN MATCHED THEN UPDATE SET base_price=0;`, true},
 		{"merge deletes rows", `MERGE INTO purser.billing_tiers AS t USING purser.copy AS c ON t.id=c.id WHEN MATCHED THEN DELETE;`, true},
@@ -722,5 +724,35 @@ func TestExpandMigrationSeparatesStoredRoutineDefinitionFromExecution(t *testing
 				t.Fatalf("migration error=%v, wantError=%v", err, test.wantError)
 			}
 		})
+	}
+}
+
+func TestShippedUpsertExceptionsAreExactAndCannotMove(t *testing.T) {
+	migrations, err := discoverAllPostgresMigrationsForValidation()
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := 0
+	for _, m := range migrations {
+		if _, ok := shippedExpandUpserts[m.Path]; !ok {
+			continue
+		}
+		seen++
+		if !immutableShippedUpsert(m) {
+			t.Fatalf("shipped checksum changed: %s", m.Path)
+		}
+		altered := m
+		altered.content += " INSERT INTO purser.billing_tiers(tier_name) VALUES('free') ON CONFLICT(tier_name) DO UPDATE SET base_price=0;"
+		if immutableShippedUpsert(altered) {
+			t.Fatal("modified shipped file retained exemption")
+		}
+		moved := m
+		moved.Path = "migrations/purser/v0.3.14/expand/999_copy.sql"
+		if immutableShippedUpsert(moved) {
+			t.Fatal("copy to a new release retained exemption")
+		}
+	}
+	if seen != len(shippedExpandUpserts) {
+		t.Fatalf("found %d pinned files, want %d", seen, len(shippedExpandUpserts))
 	}
 }
