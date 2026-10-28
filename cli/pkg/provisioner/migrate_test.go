@@ -688,6 +688,14 @@ func TestExpandMigrationSeparatesStoredRoutineDefinitionFromExecution(t *testing
 		wantError bool
 	}{
 		{"registered trigger function", registered, false},
+		{"CTAS fires registered trigger", registered + `CREATE TABLE purser.copy AS WITH w AS (INSERT INTO purser.subscription_operator_grants DEFAULT VALUES RETURNING *) SELECT * FROM w;`, true},
+		{"materialized view executes a trigger", registered + `CREATE MATERIALIZED VIEW purser.copy AS WITH w AS (INSERT INTO purser.subscription_operator_grants DEFAULT VALUES RETURNING *) SELECT * FROM w;`, true},
+		{"SELECT INTO fires trigger", registered + `WITH w AS (INSERT INTO purser.subscription_operator_grants DEFAULT VALUES RETURNING *) SELECT * INTO purser.copy FROM w;`, true},
+		{"single quoted function called", `CREATE FUNCTION purser.rewrite() RETURNS void LANGUAGE SQL AS 'UPDATE purser.billing_tiers SET base_price=0'; SELECT purser.rewrite();`, true},
+		{"single quoted DO", `DO 'BEGIN UPDATE purser.billing_tiers SET base_price=0; END';`, true},
+		{"quoted update table", `UPDATE "purser"."billing_tiers" SET base_price=0;`, true},
+		{"quoted delete table", `DELETE FROM "purser"."billing_tiers";`, true},
+		{"diagnostic string", `DO 'BEGIN RAISE NOTICE ''UPDATE "purser"."billing_tiers" SET base_price=0''; END';`, false},
 		{"unregistered trigger function", routine, true},
 		{"stored procedure", procedure, true},
 		{"defined then selected", function + `SELECT purser.rewrite();`, true},

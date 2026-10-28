@@ -394,7 +394,7 @@ func validatePostgresMigrationSet(migrations []Migration) error {
 		content := stripSQLComments(migration.content)
 		structuralContent := stripSQLSingleQuotedLiterals(content)
 		if migration.Phase == "expand" && enforcesMigrationPhaseSafety(migration) {
-			immediateSQL := immediateMigrationSQL(structuralContent)
+			immediateSQL := expandMigrationSafetySQL(content)
 			for _, pattern := range expandUnsafeSQLPatterns {
 				if pattern.re.MatchString(immediateSQL) {
 					issues = append(issues, MigrationValidationIssue{
@@ -564,6 +564,12 @@ func immediateMigrationSQL(content string) string {
 		if !isSQLWord(statement[0], "create") && !isSQLWord(statement[0], "alter") && !isSQLWord(statement[0], "comment") && !isSQLWord(statement[0], "grant") && !isSQLWord(statement[0], "revoke") {
 			return content
 		}
+
+		// CREATE ... AS executes its query, which can fire registered triggers.
+		if isSQLWord(statement[0], "create") && hasSQLWord(statement, "as") &&
+			(hasSQLWord(statement, "table") || hasWordPair(statement, "materialized", "view")) {
+			return content
+		}
 		i := 1
 		if len(statement) > 3 && isSQLWord(statement[1], "or") && isSQLWord(statement[2], "replace") {
 			i = 3
@@ -597,6 +603,53 @@ func immediateMigrationSQL(content string) string {
 		}
 	}
 	return executed.String()
+}
+
+// expandMigrationSafetySQL exposes executable routine bodies while keeping data
+// literals and diagnostics out of the rewrite checks. Quoted identifiers become
+// ordinary identifier tokens so quoting cannot hide a write target.
+func expandMigrationSafetySQL(content string) string {
+	content = immediateMigrationSQL(content)
+	statements, err := sqlStatements(content)
+	if err != nil {
+		return content
+	}
+	var out strings.Builder
+	for _, statement := range statements {
+		routine := len(statement) > 0 && (isSQLWord(statement[0], "do") ||
+			(isSQLWord(statement[0], "create") && (hasSQLWord(statement, "function") || hasSQLWord(statement, "procedure"))))
+		for i, tok := range statement {
+			switch tok.kind {
+			case sqlTokenString, sqlTokenDollarBody:
+				body := routine && (isSQLWord(statement[0], "do") || (i > 0 && isSQLWord(statement[i-1], "as")))
+				if body {
+					code := tok.text
+					if tok.kind == sqlTokenString {
+						raw := content[tok.start:tok.end]
+						start := strings.IndexByte(raw, '\'')
+						code = strings.ReplaceAll(raw[start+1:len(raw)-1], "''", "'")
+					}
+					out.WriteString(expandMigrationSafetySQL(code))
+				}
+			case sqlTokenQuotedIdentifier:
+				out.WriteString("quoted_identifier")
+			default:
+				out.WriteString(tok.text)
+			}
+			out.WriteByte(' ')
+		}
+		out.WriteByte(';')
+	}
+	return out.String()
+}
+
+func hasSQLWord(tokens []sqlToken, word string) bool {
+	for _, tok := range tokens {
+		if isSQLWord(tok, word) {
+			return true
+		}
+	}
+	return false
 }
 
 // stripSQLSingleQuotedLiterals prevents comments, diagnostics, or dynamic SQL
