@@ -675,3 +675,33 @@ func TestValidateMigrationSet_RejectsContractValidationEvenWhenExpandIsValidated
 		t.Fatalf("validation error = %v, want contract-phase validation rejection", err)
 	}
 }
+
+func TestExpandMigrationSeparatesStoredRoutineDefinitionFromExecution(t *testing.T) {
+	routine := `CREATE OR REPLACE FUNCTION purser.fence() RETURNS TRIGGER LANGUAGE plpgsql AS $body$
+ BEGIN UPDATE purser.billing_tiers SET updated_at=clock_timestamp() WHERE id=NEW.fallback_tier_id; RETURN NEW; END;
+ $body$;`
+	registered := routine + `CREATE OR REPLACE TRIGGER fallback_fence BEFORE INSERT ON purser.subscription_operator_grants FOR EACH ROW EXECUTE FUNCTION purser.fence();`
+	function := `CREATE OR REPLACE FUNCTION purser.rewrite() RETURNS void LANGUAGE SQL AS $$UPDATE purser.billing_tiers SET updated_at=NOW();$$;`
+	procedure := `CREATE OR REPLACE PROCEDURE purser.touch_tiers() LANGUAGE SQL AS $$UPDATE purser.billing_tiers SET updated_at=NOW();$$;`
+	for _, test := range []struct {
+		name, sql string
+		wantError bool
+	}{
+		{"registered trigger function", registered, false},
+		{"unregistered trigger function", routine, true},
+		{"stored procedure", procedure, true},
+		{"defined then selected", function + `SELECT purser.rewrite();`, true},
+		{"defined then called", procedure + `CALL purser.touch_tiers();`, true},
+		{"defined then called in DO", function + `DO $$BEGIN PERFORM purser.rewrite(); END;$$;`, true},
+		{"trigger fired during expansion", registered + `INSERT INTO purser.subscription_operator_grants DEFAULT VALUES;`, true},
+		{"executed DO", `DO $$BEGIN UPDATE purser.billing_tiers SET updated_at=NOW(); END;$$;`, true},
+		{"rewrite after definition", registered + `UPDATE purser.billing_tiers SET updated_at=NOW();`, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := validatePostgresMigrationSet([]Migration{{Database: "purser", Version: "v0.3.14", Phase: "expand", Sequence: 1, Path: "migrations/purser/v0.3.14/expand/001_fence.sql", Transactional: true, content: test.sql}})
+			if (err != nil) != test.wantError {
+				t.Fatalf("migration error=%v, wantError=%v", err, test.wantError)
+			}
+		})
+	}
+}

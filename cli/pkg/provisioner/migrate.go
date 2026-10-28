@@ -394,8 +394,9 @@ func validatePostgresMigrationSet(migrations []Migration) error {
 		content := stripSQLComments(migration.content)
 		structuralContent := stripSQLSingleQuotedLiterals(content)
 		if migration.Phase == "expand" && enforcesMigrationPhaseSafety(migration) {
+			immediateSQL := immediateMigrationSQL(structuralContent)
 			for _, pattern := range expandUnsafeSQLPatterns {
-				if pattern.re.MatchString(structuralContent) {
+				if pattern.re.MatchString(immediateSQL) {
 					issues = append(issues, MigrationValidationIssue{
 						Path:    migration.Path,
 						Message: pattern.message,
@@ -545,6 +546,57 @@ func constraintNames(pattern *regexp.Regexp, content string) []string {
 		}
 	}
 	return names
+}
+
+// immediateMigrationSQL hides only registered trigger routines in a DDL-only
+// migration. Any executable statement keeps bodies visible: it could invoke a
+// routine directly or fire a newly installed trigger.
+func immediateMigrationSQL(content string) string {
+	statements, err := sqlStatements(content)
+	if err != nil {
+		return content
+	}
+	registered := map[string]bool{}
+	for _, statement := range statements {
+		if len(statement) == 0 {
+			continue
+		}
+		if !isSQLWord(statement[0], "create") && !isSQLWord(statement[0], "alter") && !isSQLWord(statement[0], "comment") && !isSQLWord(statement[0], "grant") && !isSQLWord(statement[0], "revoke") {
+			return content
+		}
+		i := 1
+		if len(statement) > 3 && isSQLWord(statement[1], "or") && isSQLWord(statement[2], "replace") {
+			i = 3
+		}
+		if len(statement) <= i || !isSQLWord(statement[0], "create") || !isSQLWord(statement[i], "trigger") {
+			continue
+		}
+		for j := i + 1; j+2 < len(statement); j++ {
+			if isSQLWord(statement[j], "execute") && (isSQLWord(statement[j+1], "function") || isSQLWord(statement[j+1], "procedure")) {
+				if name, _, ok := qualifiedName(statement, j+2); ok {
+					registered[name] = true
+				}
+			}
+		}
+	}
+	var executed strings.Builder
+	for _, statement := range statements {
+		i := 1
+		if len(statement) > 3 && isSQLWord(statement[1], "or") && isSQLWord(statement[2], "replace") {
+			i = 3
+		}
+		if len(statement) > i && isSQLWord(statement[0], "create") && isSQLWord(statement[i], "function") {
+			name, _, ok := qualifiedName(statement, i+1)
+			if ok && registered[name] && hasWordPair(statement, "returns", "trigger") {
+				continue
+			}
+		}
+		if len(statement) > 0 {
+			executed.WriteString(content[statement[0].start:statement[len(statement)-1].end])
+			executed.WriteByte(';')
+		}
+	}
+	return executed.String()
 }
 
 // stripSQLSingleQuotedLiterals prevents comments, diagnostics, or dynamic SQL
