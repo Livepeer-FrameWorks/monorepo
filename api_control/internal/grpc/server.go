@@ -9644,9 +9644,11 @@ func (s *CommodoreServer) CreateClip(ctx context.Context, req *sharedpb.CreateCl
 		return nil, status.Errorf(codes.Internal, "marshal clip params: %v", err)
 	}
 
-	// Build Foghorn request with pre-generated hash
+	// Carry the logical media cluster as well as the generated hash: the
+	// selected control service can serve several private clusters.
 	foghornReq := &sharedpb.CreateClipRequest{
 		TenantId:           tenantID,
+		ClusterId:          clipClusterID,
 		StreamInternalName: source.InternalName,
 		ClipHash:           &clipHash, // Pass the hash we generated
 		PlaybackId:         &playbackID,

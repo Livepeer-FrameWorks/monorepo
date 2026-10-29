@@ -45,7 +45,7 @@ tenant_request_clip() {
   echo "$response"; return 2
 }
 tenant_live_artifacts() {
-  local base=$1 location
+  local base=$1 location origin
   eventually 90 "$class Free DVR starts automatically" tenant_dvr_started || return 1
   eventually 90 "$class signed recording.started names this stream" saw_event "$since" recording.started ".artifact.streamId == \"$uuid\"" || return 1
   # Consume enough HLS to produce an actual viewer session and buffer history.
@@ -56,6 +56,12 @@ tenant_live_artifacts() {
     fail "$class Free viewer cannot decode HLS"; return 1
   fi
   eventually 90 "$class Free tenant requests a clip from its live stream" tenant_request_clip || return 1
+  origin=$(pg "$cell" "SELECT origin_cluster_id FROM foghorn.artifacts WHERE tenant_id='$tenant' AND artifact_hash='$clip_hash'")
+  if [ "$origin" != "$cluster" ]; then
+    fail "$class clip origin $origin does not match its admitted cluster $cluster"
+    return 1
+  fi
+  pass "$class clip origin matches its admitted cluster"
   eventually 240 "$class Free clip finishes" tenant_clip_ready || return 1
   eventually 90 "$class signed clip.ready names this clip" saw_event "$since" clip.ready ".artifact.artifactId == \"$clip_hash\"" || return 1
   every_replica "$class Free clip serves real media" "$clip_pb" media_at
