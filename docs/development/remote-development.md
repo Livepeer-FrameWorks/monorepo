@@ -158,7 +158,11 @@ validly signed stream, recording and clip lifecycle events for these exact
 objects. Final analytics must match the admitted session's node, cluster and
 timestamps and contain ingest bytes; tenant GraphQL analytics must report
 nonzero viewer sessions, hours and egress. A separate sweep runs under this
-fresh tenant's credentials, rather than the demo account.
+fresh tenant's credentials, rather than the demo account. All four ended
+streams must also pass runtime accounting after the ledger cursor has
+processed their final sessions; an unprocessed stream cannot count as a pass.
+The scenario allows fifteen minutes for the normal five-minute workers and
+two-minute settlement lag, without forcing ledger refreshes.
 This exercises the unchanged Free entitlements. Scenarios 04 and 05 cover
 additional DVR and clip behavior on the demo tenant, and scenario 27 covers
 billing phase switches. These checks do not establish a complete end-to-end

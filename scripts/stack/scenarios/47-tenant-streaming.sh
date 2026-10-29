@@ -20,11 +20,13 @@ password="Stack-$(openssl rand -hex 8)"
 cookies="$STACK_STATE_DIR/$run.cookies"
 tenant="" stream="" publisher="" edge="$COMPOSE_PROJECT_NAME-$run" proxy="$COMPOSE_PROJECT_NAME-$run-proxy"
 endpoint="" clip="" dvr_hash=""
+streams=()
 cleanup() {
   [ "${cleaned:-0}" = 0 ] || return 0
   cleaned=1
   [ -z "$publisher" ] || kill "$publisher" 2>/dev/null
   [ -z "$stream" ] || delete_stream "$stream"
+  for id in "${streams[@]}"; do delete_stream "$id"; done
   [ -z "$clip" ] || gql 'mutation($id:ID!){deleteClip(id:$id){__typename}}' "$(jq -cn --arg id "$clip" '{id:$id}')" >/dev/null
   [ -z "$dvr_hash" ] || gql 'mutation($id:ID!){deleteDVR(dvrHash:$id){__typename}}' "$(jq -cn --arg id "$dvr_hash" '{id:$id}')" >/dev/null
   [ -z "$endpoint" ] || gql 'mutation($id:ID!){deleteWebhookEndpoint(id:$id){__typename}}' "$(jq -cn --arg id "$endpoint" '{id:$id}')" >/dev/null
@@ -139,6 +141,7 @@ PY
 stream_flow() {
   local class=$1 host=$2 cell=$3 node=$4 cluster=$5 protocol=$6 base=$7 s pb key internal uuid viewer record=false
   STACK_API_TOKEN=$(refresh_session_token "$cookies") || { fail 'refresh normal tenant session'; return 1; }
+  export next_session_refresh=$(($(date +%s) + 300))
   [ "$protocol" != rtmp ] || record=true
   s=$(create_stream "stack-$run-$class-$protocol" "$record")
   stream=$(echo "$s" | jq -r '.id // empty')
@@ -146,6 +149,7 @@ stream_flow() {
   key=$(echo "$s" | jq -r '.streamKey // empty')
   uuid=$(echo "$s" | jq -r '.streamId // empty')
   [ -n "$stream" ] || { fail 'create stream as normal tenant'; return 1; }
+  streams+=("$stream")
   internal=$(internal_name_of "$uuid")
   if ! set_placement "$class" "$uuid"; then fail "$class $protocol placement policy applies"; return 1; fi
   pass "$class $protocol placement policy applies"
@@ -181,7 +185,7 @@ stream_flow() {
   if [ "$record" = true ]; then
     tenant_replay_artifacts || return 1
   fi
-  delete_stream "$stream"
+  printf '%s\t%s\t%s\t%s\n' "$class" "$protocol" "$stream" "$uuid" >>"$STACK_STATE_DIR/analytics-flows.tsv"
   stream=""
 }
 
@@ -235,5 +239,9 @@ for protocol in rtmp srt; do
   stream_flow TENANT_PRIVATE "$edge" "$FOGHORN_A_DB" "$node" "$cluster" "$protocol" "${FOGHORN_A_URLS%% *}" || end_scenario
 done
 check 'streaming did not change the Free plan' free_plan
+# Ledger workers run every five minutes with a two-minute settlement lag and
+# a five-minute cursor boundary. Do not refresh them artificially for this test.
+eventually 900 'all four ended Free streams settle with exact runtime and nonzero viewer analytics' tenant_all_analytics
+for id in "${streams[@]}"; do delete_stream "$id"; done
 check 'fresh Free tenant passes its own analytics, runtime, API and artifact sweep' env STACK_SWEEP_DOCTOR=0 bash "$STACK_LIB_DIR/sweep.sh" "$since"
 end_scenario

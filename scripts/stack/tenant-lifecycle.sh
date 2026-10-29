@@ -71,11 +71,36 @@ tenant_replay_artifacts() {
   playback=$(tenant_chapters | jq -r '.[0].playbackId')
   eventually 90 "$class signed recording.ready names a replayable chapter" saw_event "$since" recording.ready ".artifact.streamId == \"$uuid\" and .artifact.playbackId == \"$playback\"" || return 1
   every_replica "$class Free DVR chapter replays real media" "$playback" media_at
-  eventually 240 "$class Free tenant sees nonzero viewer analytics through GraphQL" tenant_viewer_analytics || return 1
   gql 'mutation($id:ID!){deleteClip(id:$id){__typename}}' "$(jq -cn --arg id "$clip" '{id:$id}')" >/dev/null
   clip=""
   gql 'mutation($id:ID!){deleteDVR(dvrHash:$id){__typename}}' "$(jq -cn --arg id "$dvr_hash" '{id:$id}')" >/dev/null
   dvr_hash=""
+}
+tenant_all_analytics() {
+  local class protocol stream uuid
+  if [ "$(date +%s)" -ge "$next_session_refresh" ]; then
+    STACK_API_TOKEN=$(refresh_session_token "$cookies") || return 1
+    export STACK_API_TOKEN
+    next_session_refresh=$(($(date +%s) + 300))
+  fi
+  while IFS=$'\t' read -r class protocol stream uuid; do
+    [ "$protocol" != rtmp ] || tenant_viewer_analytics || return 1
+  done <"$STACK_STATE_DIR/analytics-flows.tsv"
+  python3 - "$STACK_LIB_DIR" "$STACK_STATE_DIR/analytics-flows.tsv" "$since" <<'PY'
+import os, sys
+
+sys.path.insert(0, sys.argv[1])
+from sweep import Sources, collect_runtime, runtime_violations
+
+with open(sys.argv[2]) as flows:
+    streams = {line.rstrip().split('\t')[3] for line in flows}
+runtime = collect_runtime(Sources(os.environ), int(sys.argv[3]), streams)
+if runtime is None or len(streams) != 4:
+    sys.exit(1)
+bad, judged = runtime_violations(**runtime)
+final_streams = {row['stream'] for row in runtime['finals']}
+sys.exit(0 if not bad and judged == 4 and final_streams == streams and not runtime['live'] else 1)
+PY
 }
 tenant_viewer_analytics() {
   local response
@@ -90,5 +115,6 @@ tenant_final_analytics() {
   rows=$(ch "SELECT node_id,cluster_id,source_started_at_ms,source_ended_at_ms,downloaded_bytes FROM periscope.stream_sessions_final_v WHERE tenant_id=toUUID('$tenant') AND stream_id=toUUID('$uuid') AND closed_reason='final' FORMAT JSONEachRow")
   printf '%s\n' "$rows" >"$STACK_STATE_DIR/$class-$protocol-final.jsonl"
   echo "$rows" | jq -se --arg n "$node" --arg c "$cluster" --argjson s "$start" --argjson e "$end" \
-    'length == 1 and all(.node_id == $n and .cluster_id == $c and (.source_started_at_ms - $s | fabs) < 5000 and (.source_ended_at_ms - $e | fabs) < 5000 and .source_ended_at_ms > .source_started_at_ms and (.downloaded_bytes | tonumber) > 0)' >/dev/null
+    'length == 1 and all((.source_started_at_ms | tonumber) as $start | (.source_ended_at_ms | tonumber) as $end |
+      .node_id == $n and .cluster_id == $c and ($start - $s | fabs) < 5000 and ($end - $e | fabs) < 5000 and $end > $start and (.downloaded_bytes | tonumber) > 0)' >/dev/null
 }
