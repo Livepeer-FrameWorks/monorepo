@@ -4,20 +4,30 @@
 # A normal Free tenant publishes RTMP and SRT on platform capacity and its own
 # newly created private cluster. No seeded tenant, cluster health override,
 # operator billing grant or synthetic publisher trigger may supply admission.
+# RTMP also records DVR, exports/replays a clip and checks tenant analytics
+# and signed lifecycle webhooks. SRT independently proves admission/playback.
 . "$(dirname "$0")/../lib.sh"
 
-need ffmpeg jq curl python3 docker openssl psql || finish
+need ffmpeg jq curl python3 docker openssl psql timeout || finish
 [ -S /var/run/docker.sock ] || { blocked 'private edge enrollment needs the stack Docker socket'; finish; }
 run="tenant47-$(date +%s)-$RANDOM"
+# Keep this tenant's ledger and webhook secret separate from the demo account.
+export STACK_STATE_DIR="$STACK_STATE_DIR/$run"
+mkdir -p "$STACK_STATE_DIR"
+since=$(date +%s)
 email=$(test_email "$run")
 password="Stack-$(openssl rand -hex 8)"
 cookies="$STACK_STATE_DIR/$run.cookies"
 tenant="" stream="" publisher="" edge="$COMPOSE_PROJECT_NAME-$run" proxy="$COMPOSE_PROJECT_NAME-$run-proxy"
+endpoint="" clip="" dvr_hash=""
 cleanup() {
   [ "${cleaned:-0}" = 0 ] || return 0
   cleaned=1
   [ -z "$publisher" ] || kill "$publisher" 2>/dev/null
   [ -z "$stream" ] || delete_stream "$stream"
+  [ -z "$clip" ] || gql 'mutation($id:ID!){deleteClip(id:$id){__typename}}' "$(jq -cn --arg id "$clip" '{id:$id}')" >/dev/null
+  [ -z "$dvr_hash" ] || gql 'mutation($id:ID!){deleteDVR(dvrHash:$id){__typename}}' "$(jq -cn --arg id "$dvr_hash" '{id:$id}')" >/dev/null
+  [ -z "$endpoint" ] || gql 'mutation($id:ID!){deleteWebhookEndpoint(id:$id){__typename}}' "$(jq -cn --arg id "$endpoint" '{id:$id}')" >/dev/null
   docker logs "$edge" >"$STACK_STATE_DIR/$run-edge.log" 2>&1 || true
   docker rm -fv "$proxy" "$edge" >/dev/null 2>&1 || true
   # The account is disposable with this stack's volumes, like scenario 08.
@@ -53,6 +63,9 @@ PY
 export STACK_API_TOKEN STACK_TENANT_ID="$tenant"
 free_plan() { [ "$(pg purser "SELECT bt.tier_name FROM purser.tenant_subscriptions ts JOIN purser.billing_tiers bt ON bt.id=ts.tier_id WHERE ts.tenant_id='$tenant' AND ts.status='active'")" = free ]; }
 eventually 90 'ordinary signup has an active Free plan' free_plan || end_scenario
+. "$STACK_LIB_DIR/tenant-lifecycle.sh"
+setup_tenant_webhooks || { fail 'Free tenant creates its own webhook endpoint'; end_scenario; }
+pass 'Free tenant creates its own webhook endpoint'
 
 # Constrain both publishing and viewing through the user-facing review/apply
 # contract. A successful private test must not silently use a platform edge.
@@ -124,8 +137,10 @@ sys.exit(1)
 PY
 }
 stream_flow() {
-  local class=$1 host=$2 cell=$3 node=$4 cluster=$5 protocol=$6 base=$7 s pb key internal uuid viewer
-  s=$(create_stream "stack-$run-$class-$protocol" false)
+  local class=$1 host=$2 cell=$3 node=$4 cluster=$5 protocol=$6 base=$7 s pb key internal uuid viewer record=false
+  STACK_API_TOKEN=$(refresh_session_token "$cookies") || { fail 'refresh normal tenant session'; return 1; }
+  [ "$protocol" != rtmp ] || record=true
+  s=$(create_stream "stack-$run-$class-$protocol" "$record")
   stream=$(echo "$s" | jq -r '.id // empty')
   pb=$(echo "$s" | jq -r '.playbackId // empty')
   key=$(echo "$s" | jq -r '.streamKey // empty')
@@ -154,9 +169,18 @@ stream_flow() {
     eventually 60 "$class $protocol serves real HLS media" media_at "$base" "$pb" || return 1
   fi
   check "$class $protocol publisher stays connected" kill -0 "$publisher"
+  eventually 90 "$class $protocol signed stream.live webhook belongs to this stream" saw_event "$since" stream.live ".streamId == \"$uuid\"" || return 1
+  if [ "$record" = true ]; then
+    tenant_live_artifacts "$base" || return 1
+  fi
   kill "$publisher" 2>/dev/null
   publisher=""
   eventually 90 "$class $protocol session ends on disconnect" stream_ended "$cell" || return 1
+  eventually 90 "$class $protocol signed stream.idle webhook belongs to this stream" saw_event "$since" stream.idle ".streamId == \"$uuid\"" || return 1
+  eventually 180 "$class $protocol final analytics match the admitted session and carry media bytes" tenant_final_analytics "$cell" "$node" "$cluster" || return 1
+  if [ "$record" = true ]; then
+    tenant_replay_artifacts || return 1
+  fi
   delete_stream "$stream"
   stream=""
 }
@@ -211,4 +235,5 @@ for protocol in rtmp srt; do
   stream_flow TENANT_PRIVATE "$edge" "$FOGHORN_A_DB" "$node" "$cluster" "$protocol" "${FOGHORN_A_URLS%% *}" || end_scenario
 done
 check 'streaming did not change the Free plan' free_plan
+check 'fresh Free tenant passes its own analytics, runtime, API and artifact sweep' env STACK_SWEEP_DOCTOR=0 bash "$STACK_LIB_DIR/sweep.sh" "$since"
 end_scenario

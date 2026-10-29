@@ -151,8 +151,21 @@ the expected node and cluster in a durable active ingest session, real HLS
 segments, a connected publisher and session cleanup after disconnect. Private
 playback runs through every Foghorn replica in both cells and requires the
 redirect, each HLS manifest and the media bytes to stay on the private edge.
-It uses
-no billing grant or cluster-health override. The stack's loopback-Mist HTTP
+The RTMP flow on each capacity class enables DVR, decodes twenty seconds of
+HLS as a viewer, exports a clip, and replays both the clip and the finalized
+DVR chapter through every replica. Its own webhook endpoint must receive
+validly signed stream, recording and clip lifecycle events for these exact
+objects. Final analytics must match the admitted session's node, cluster and
+timestamps and contain ingest bytes; tenant GraphQL analytics must report
+nonzero viewer sessions, hours and egress. A separate sweep runs under this
+fresh tenant's credentials, rather than the demo account.
+This exercises the unchanged Free entitlements. Scenarios 04 and 05 cover
+additional DVR and clip behavior on the demo tenant, and scenario 27 covers
+billing phase switches. These checks do not establish a complete end-to-end
+matrix of custom entitlement overrides and their expiry across media paths.
+Public webhooks report stream and artifact lifecycle events; periodic stream
+statistics are read through analytics rather than a stats webhook event.
+It uses no billing grant or cluster-health override. The stack's loopback-Mist HTTP
 adapter supplies playback transport; public DNS and Navigator certificate
 issuance remain outside this scenario. As in stack bring-up, the newly enrolled
 Helmsman reconnects after persisting ConfigSeed because the stack cannot probe
