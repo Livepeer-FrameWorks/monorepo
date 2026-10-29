@@ -1,4 +1,4 @@
-import { forwardRef, useState, useEffect, useCallback, useRef } from "react";
+import { forwardRef, useState, useEffect, useCallback, useRef, useId } from "react";
 import { cn } from "@/lib/utils";
 import config from "../../../config";
 
@@ -159,6 +159,7 @@ const CitationIcon = () => (
 );
 
 const SkipperConversationPreview = forwardRef(({ className, ...props }, ref) => {
+  const panelId = useId();
   const [active, setActive] = useState(0);
   const [paused, setPaused] = useState(false);
   const genRef = useRef(0);
@@ -193,8 +194,6 @@ const SkipperConversationPreview = forwardRef(({ className, ...props }, ref) => 
     return () => clearInterval(id);
   }, [paused, advance]);
 
-  const convo = conversations[active];
-
   return (
     <div
       ref={ref}
@@ -213,6 +212,8 @@ const SkipperConversationPreview = forwardRef(({ className, ...props }, ref) => 
             <button
               key={c.tab}
               role="tab"
+              id={`${panelId}-tab-${i}`}
+              aria-controls={`${panelId}-panel-${i}`}
               aria-selected={i === active}
               className={cn("skipper-preview__tab", i === active && "skipper-preview__tab--active")}
               onClick={() => handleTabClick(i)}
@@ -223,43 +224,58 @@ const SkipperConversationPreview = forwardRef(({ className, ...props }, ref) => 
         </div>
       </div>
 
-      <div className="skipper-preview__body" role="tabpanel">
-        {convo.messages.map((msg, i) =>
-          msg.role === "tool" ? (
-            <div key={i} className="skipper-preview__tool-group">
-              {msg.tools.map((t, j) => (
-                <div key={j} className="skipper-preview__tool-step">
-                  <ToolCheckIcon />
-                  <span>{t.label}</span>
+      <div className="skipper-preview__panels">
+        {conversations.map((convo, panelIndex) => (
+          <div
+            key={convo.tab}
+            className="skipper-preview__body"
+            role="tabpanel"
+            id={`${panelId}-panel-${panelIndex}`}
+            aria-labelledby={`${panelId}-tab-${panelIndex}`}
+            aria-hidden={panelIndex !== active}
+            inert={panelIndex !== active}
+          >
+            {convo.messages.map((msg, i) =>
+              msg.role === "tool" ? (
+                <div key={i} className="skipper-preview__tool-group">
+                  {msg.tools.map((t, j) => (
+                    <div key={j} className="skipper-preview__tool-step">
+                      <ToolCheckIcon />
+                      <span>{t.label}</span>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-          ) : (
-            <div
-              key={i}
-              className={cn("skipper-preview__bubble", `skipper-preview__bubble--${msg.role}`)}
-            >
-              {msg.badge && (
-                <span
-                  className={cn("skipper-preview__badge", `skipper-preview__badge--${msg.badge}`)}
-                  data-tooltip={badgeTooltips[msg.badge]}
-                >
-                  {msg.badge.replace("_", " ")}
-                </span>
-              )}
-              {msg.code ? (
-                <pre className="skipper-preview__code">{msg.text}</pre>
               ) : (
-                <p>{msg.text}</p>
-              )}
-            </div>
-          )
-        )}
+                <div
+                  key={i}
+                  className={cn("skipper-preview__bubble", `skipper-preview__bubble--${msg.role}`)}
+                >
+                  {msg.badge && (
+                    <span
+                      className={cn(
+                        "skipper-preview__badge",
+                        `skipper-preview__badge--${msg.badge}`
+                      )}
+                      data-tooltip={badgeTooltips[msg.badge]}
+                    >
+                      {msg.badge.replace("_", " ")}
+                    </span>
+                  )}
+                  {msg.code ? (
+                    <pre className="skipper-preview__code">{msg.text}</pre>
+                  ) : (
+                    <p>{msg.text}</p>
+                  )}
+                </div>
+              )
+            )}
 
-        <div className="skipper-preview__citation">
-          <CitationIcon />
-          <span>{convo.source}</span>
-        </div>
+            <div className="skipper-preview__citation">
+              <CitationIcon />
+              <span>{convo.source}</span>
+            </div>
+          </div>
+        ))}
       </div>
 
       <div className="skipper-preview__footer">

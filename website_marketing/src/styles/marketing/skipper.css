@@ -98,13 +98,28 @@
     background: rgba(var(--brand-cyan-rgb) / 0.1);
   }
 
+  .skipper-preview__panels {
+    /* Every conversation contributes its wrapped height to the shared row. */
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    flex: 1;
+    min-height: 0;
+  }
+
   .skipper-preview__body {
+    grid-area: 1 / 1;
+    min-width: 0;
     padding: 1.25rem;
     display: flex;
     flex-direction: column;
     gap: 0.65rem;
     flex: 1;
     overflow-y: auto;
+  }
+
+  .skipper-preview__body[aria-hidden="true"] {
+    visibility: hidden;
+    pointer-events: none;
   }
 
   .skipper-preview__bubble {

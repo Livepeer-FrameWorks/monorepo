@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" />
+  <title>Skipper mode height regression</title>
+  <style>
+    body {
+      margin: 16px;
+      font: 14px system-ui;
+    }
+    iframe {
+      display: block;
+      border: 1px solid #888;
+    }
+    output {
+      display: block;
+      margin-block: 16px;
+      white-space: pre-wrap;
+    }
+    [data-status="fail"] {
+      color: #b00;
+    }
+    [data-status="pass"] {
+      color: #080;
+    }
+  </style>
+  <h1>Skipper mode height regression</h1>
+  <p>Use ?width=320, ?width=390, ?width=768 or ?width=1280.</p>
+  <output aria-live="polite" data-status="running">Waiting for the page…</output>
+  <iframe title="Marketing page under test" height="900"></iframe>
+  <script type="module">
+    const width = Number(new URLSearchParams(location.search).get("width")) || 390;
+    document.title = `Skipper mode height regression (${width}px)`;
+    const frame = document.querySelector("iframe");
+    const report = document.querySelector("output");
+    frame.width = String(width);
+    frame.src = "/#operate";
+    const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    async function until(check, timeout = 15000) {
+      const end = Date.now() + timeout;
+      while (!check()) {
+        if (Date.now() >= end) throw new Error("Timed out waiting for the Skipper mode");
+        await wait(50);
+      }
+    }
+    frame.addEventListener("load", async () => {
+      try {
+        const doc = frame.contentDocument;
+        await until(() => doc.querySelector(".skipper-preview"));
+        await doc.fonts.ready;
+        const preview = doc.querySelector(".skipper-preview");
+        const tabs = [...preview.querySelectorAll('[role="tab"]')];
+        const active = () => tabs.find((tab) => tab.getAttribute("aria-selected") === "true");
+        preview.scrollIntoView({ block: "center" });
+        await wait(700);
+        const samples = [];
+        const capture = (mode) => {
+          const rect = preview.getBoundingClientRect();
+          samples.push({
+            mode,
+            height: rect.height,
+            parent: preview.parentElement.getBoundingClientRect().height,
+            below:
+              doc.querySelector(".skipper-agent-strip").getBoundingClientRect().top +
+              frame.contentWindow.scrollY,
+            page: doc.documentElement.scrollHeight,
+            visiblePanels: [...preview.querySelectorAll('[role="tabpanel"]')].filter(
+              (panel) => frame.contentWindow.getComputedStyle(panel).visibility === "visible"
+            ).length,
+          });
+          report.textContent = JSON.stringify(samples, null, 2);
+        };
+        for (const name of ["Manage", "Troubleshoot", "Build", "Manage"]) {
+          const tab = tabs.find((item) => item.textContent.trim() === name);
+          tab.click();
+          await until(() => active() === tab);
+          await wait(100);
+          capture(name);
+        }
+        const previous = active();
+        report.textContent += "\nChecking automatic rotation…";
+        preview.dispatchEvent(
+          new frame.contentWindow.MouseEvent("mouseout", {
+            bubbles: true,
+            relatedTarget: doc.body,
+          })
+        );
+        await until(() => active() !== previous, 13000);
+        await wait(100);
+        capture("automatic " + active().textContent.trim());
+        const stable = (key) =>
+          Math.max(...samples.map((sample) => sample[key])) -
+            Math.min(...samples.map((sample) => sample[key])) <=
+          1;
+        const checks = [
+          ["Panel height stays fixed", stable("height")],
+          ["Parent height stays fixed", stable("parent")],
+          ["Content below stays in place", stable("below")],
+          ["Page height stays fixed", stable("page")],
+          [
+            "Only the selected conversation is visible",
+            samples.every((sample) => sample.visiblePanels === 1),
+          ],
+          [
+            "Page has no horizontal overflow",
+            doc.documentElement.scrollWidth <= frame.contentWindow.innerWidth,
+          ],
+        ];
+        report.dataset.status = checks.every(([, pass]) => pass) ? "pass" : "fail";
+        report.textContent =
+          checks.map(([label, pass]) => `${pass ? "PASS" : "FAIL"} ${label}`).join("\n") +
+          "\n" +
+          JSON.stringify(samples, null, 2);
+      } catch (error) {
+        report.dataset.status = "fail";
+        report.textContent += "\nFAIL " + error.message;
+      }
+    });
+  </script>
+</html>
