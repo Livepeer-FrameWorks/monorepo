@@ -503,6 +503,9 @@ func TestReportAliveNodesUpsertsEdgeCapabilities(t *testing.T) {
 			WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), int32(180)).
 			WillReturnResult(sqlmock.NewResult(0, 1))
 	}
+	mock.ExpectQuery(`(?s)UPDATE quartermaster\.infrastructure_clusters c.*c.health_status = 'unknown'.*n.node_id = ANY`).
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "tenant_id"}))
 	mock.ExpectCommit()
 
 	_, err = server.ReportAliveNodes(serviceCtx(), &quartermasterpb.ReportAliveNodesRequest{

@@ -142,6 +142,19 @@ registration, failover when the holding instance and its front are killed,
 and that the connection and a live stream survive. At the end it restores the
 plaintext addresses.
 
+Default scenario 47 signs up and verifies a new Free tenant, then publishes
+RTMP and SRT on platform capacity and on a private cluster created through the
+tenant API. It starts an independent edge from the stack's edge image and
+enrolls it with the returned token. User-facing placement review/apply requests
+restrict publishing and viewing to the tested capacity class. The checks require
+the expected node and cluster in a durable active ingest session, real HLS
+segments, a connected publisher and session cleanup after disconnect. It uses
+no billing grant or cluster-health override. The stack's loopback-Mist HTTP
+adapter supplies playback transport; public DNS and Navigator certificate
+issuance remain outside this scenario. As in stack bring-up, the newly enrolled
+Helmsman reconnects after persisting ConfigSeed because the stack cannot probe
+a public edge TLS hostname. Its identity and configuration remain intact.
+
 ## Requested post-rollout staging smoke
 
 Staging is verified with the same scenarios, sweep and log check as the stack.

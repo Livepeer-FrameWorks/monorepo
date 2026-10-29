@@ -173,4 +173,5 @@ func verifyPrivateClusterOwnershipLimitSerializes(t *testing.T, db *sql.DB) {
 	if got := ownedClusters(providerOwner); got != 2 {
 		t.Fatalf("provider owns %d clusters, want 2", got)
 	}
+	verifyOwnedPrivateClusterReadiness(t, db, s, racingTenant)
 }

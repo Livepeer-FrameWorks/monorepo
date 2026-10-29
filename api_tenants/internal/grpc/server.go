@@ -5704,7 +5704,7 @@ func (s *QuartermasterServer) ReportAliveNodes(ctx context.Context, req *quarter
 				}
 			}
 		}
-		return nil
+		return s.activateReportedPrivateClusters(ctx, tx, nodes)
 	})
 	if err != nil {
 		// A failed write may be a missing catalog row; ensure the types again
