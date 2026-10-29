@@ -304,10 +304,9 @@ func (s *FederationServer) federationMutationsDisabled() bool {
 
 // canLocallyMintFor reports whether this Foghorn pool can mint presigned
 // URLs against the named storage cluster's S3 for the given tenant.
-// Requires: the cluster is served locally AND the local S3 client's backing
-// tuple matches the cluster's advertised backing per Quartermaster's
-// cluster_peers metadata for this tenant. Returns false for empty inputs or
-// when ownership inputs aren't configured (tests).
+// A served cluster without dedicated backing uses the pool's configured S3,
+// as ResolveOriginDurable does for freeze writes. An advertised backing must
+// match the local client's full tuple. Unconfigured authority fails closed.
 //
 // Unified ownership rule used by both PrepareArtifact (redirect emit when
 // remote owns) and MintStorageURLs (callee validation that we actually own
@@ -322,12 +321,12 @@ func (s *FederationServer) canLocallyMintFor(ctx context.Context, tenantID, targ
 	if s.isServedCluster == nil || !s.isServedCluster(target) {
 		return false
 	}
-	if s.advertisedBacking == nil {
+	if s.advertisedBacking == nil || s.s3Client == nil {
 		return false
 	}
 	advertised, ok := s.advertisedBacking(ctx, tenant, target)
 	if !ok || strings.TrimSpace(advertised.Bucket) == "" {
-		return false
+		return true
 	}
 	return s.localS3Backing.Equal(advertised)
 }
