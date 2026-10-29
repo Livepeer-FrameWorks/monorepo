@@ -94,8 +94,37 @@ preview_ready() {
     [ "$(echo "$preview" | jq -r '.data.previewMediaPlacement.selected.nodeId')" = "$3" ]
   fi
 }
+private_media_at() {
+  local location
+  location=$(location_at "$1" "$2")
+  [ -n "$location" ] || return 1
+  python3 - "$location" "$3:8082" <<'PY'
+import sys, urllib.parse, urllib.request
+
+url, expected_host = sys.argv[1:]
+try:
+    for _ in range(4):
+        if urllib.parse.urlsplit(url).netloc != expected_host:
+            sys.exit(1)
+        with urllib.request.urlopen(url, timeout=10) as response:
+            if response.status != 200 or urllib.parse.urlsplit(response.geturl()).netloc != expected_host:
+                sys.exit(1)
+            body = response.read()
+        if urllib.parse.urlsplit(url).path.endswith('.m3u8'):
+            entries = [line.strip() for line in body.decode().splitlines() if line.strip() and not line.startswith('#')]
+            if not entries:
+                sys.exit(1)
+            url = urllib.parse.urljoin(url, entries[0])
+            continue
+        valid = len(body) >= 3 * 188 and all(body[offset] == 0x47 for offset in (0, 188, 376))
+        sys.exit(0 if valid else 1)
+except Exception:
+    sys.exit(1)
+sys.exit(1)
+PY
+}
 stream_flow() {
-  local class=$1 host=$2 cell=$3 node=$4 cluster=$5 protocol=$6 base=$7 s pb key internal uuid
+  local class=$1 host=$2 cell=$3 node=$4 cluster=$5 protocol=$6 base=$7 s pb key internal uuid viewer
   s=$(create_stream "stack-$run-$class-$protocol" false)
   stream=$(echo "$s" | jq -r '.id // empty')
   pb=$(echo "$s" | jq -r '.playbackId // empty')
@@ -108,16 +137,22 @@ stream_flow() {
   eventually 90 "$class $protocol placement revision is effective" policy_effective || return 1
   eventually 60 "$class $protocol preview has fresh placement evidence" preview_ready "$protocol" "$class" "$node" || return 1
   if [ "$protocol" = rtmp ]; then
-    publisher=$(publish "rtmp://$host:1935/live" "$key" 320x240 10 180)
+    publisher=$(publish "rtmp://$host:1935/live" "$key" 320x240 10 600)
   else
     ffmpeg -hide_banner -loglevel error -re -f lavfi -i 'testsrc2=size=320x240:rate=10' \
-      -f lavfi -i 'sine=frequency=440:sample_rate=48000' -t 180 -c:v libx264 -preset veryfast -g 20 \
+      -f lavfi -i 'sine=frequency=440:sample_rate=48000' -t 600 -c:v libx264 -preset veryfast -g 20 \
       -pix_fmt yuv420p -c:a aac -b:a 96k -f mpegts "srt://$host:8889?mode=caller&streamid=$key" \
       >"$STACK_STATE_DIR/$run-srt.log" 2>&1 &
     publisher=$!
   fi
   eventually 90 "$class $protocol first publisher admits to the expected node and cluster" stream_active "$cell" "$node" "$cluster" || return 1
-  eventually 60 "$class $protocol serves real HLS media" media_at "$base" "$pb" || return 1
+  if [ "$class" = TENANT_PRIVATE ]; then
+    for viewer in $FOGHORN_A_URLS $FOGHORN_B_URLS; do
+      eventually 60 "$class $protocol HLS manifests and media via $viewer stay on the private edge" private_media_at "$viewer" "$pb" "$host" || return 1
+    done
+  else
+    eventually 60 "$class $protocol serves real HLS media" media_at "$base" "$pb" || return 1
+  fi
   check "$class $protocol publisher stays connected" kill -0 "$publisher"
   kill "$publisher" 2>/dev/null
   publisher=""

@@ -795,11 +795,26 @@ func runConvertedRuntimeWriteAdapters(t *testing.T, ctx context.Context, db *sql
 	if _, err := queries.UpdateClusterFields(ctx, "demo-media", ClusterUpdate{HealthStatus: &unknownHealth}); err != nil {
 		t.Fatalf("prepare private cluster readiness: %v", err)
 	}
-	readyClusters, err := queries.ActivateReportedPrivateClusters(ctx, []string{"contract-runtime-node"})
-	if err != nil || len(readyClusters) != 1 || readyClusters[0].ClusterID != "demo-media" || readyClusters[0].TenantID != tenantID {
+	platformReadiness, err := queries.ActivateReportedPrivateClusters(ctx, []string{"contract-runtime-node"})
+	if err != nil || len(platformReadiness) != 0 {
+		t.Fatalf("platform cluster must not be activated by a private readiness report: %+v, %v", platformReadiness, err)
+	}
+	if _, err := queries.UpdateClusterFields(ctx, "demo-media", ClusterUpdate{HealthStatus: &health}); err != nil {
+		t.Fatalf("restore platform cluster health: %v", err)
+	}
+	if err := queries.UpsertInfrastructureNode(ctx, UpsertInfrastructureNodeParams{
+		NodeID: "contract-private-ready-node", ClusterID: "demo-selfhosted", NodeName: "Contract private edge", NodeType: "edge", Now: now,
+	}); err != nil {
+		t.Fatalf("seed private readiness node: %v", err)
+	}
+	if _, err := queries.UpdateClusterFields(ctx, "demo-selfhosted", ClusterUpdate{HealthStatus: &unknownHealth}); err != nil {
+		t.Fatalf("prepare owned cluster readiness: %v", err)
+	}
+	readyClusters, err := queries.ActivateReportedPrivateClusters(ctx, []string{"contract-private-ready-node"})
+	if err != nil || len(readyClusters) != 1 || readyClusters[0].ClusterID != "demo-selfhosted" || readyClusters[0].TenantID != tenantID {
 		t.Fatalf("activate private cluster: %+v, %v", readyClusters, err)
 	}
-	repeatedReadiness, err := queries.ActivateReportedPrivateClusters(ctx, []string{"contract-runtime-node"})
+	repeatedReadiness, err := queries.ActivateReportedPrivateClusters(ctx, []string{"contract-private-ready-node"})
 	if err != nil || len(repeatedReadiness) != 0 {
 		t.Fatalf("repeat private cluster readiness: %+v, %v", repeatedReadiness, err)
 	}

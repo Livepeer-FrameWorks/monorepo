@@ -148,7 +148,10 @@ tenant API. It starts an independent edge from the stack's edge image and
 enrolls it with the returned token. User-facing placement review/apply requests
 restrict publishing and viewing to the tested capacity class. The checks require
 the expected node and cluster in a durable active ingest session, real HLS
-segments, a connected publisher and session cleanup after disconnect. It uses
+segments, a connected publisher and session cleanup after disconnect. Private
+playback runs through every Foghorn replica in both cells and requires the
+redirect, each HLS manifest and the media bytes to stay on the private edge.
+It uses
 no billing grant or cluster-health override. The stack's loopback-Mist HTTP
 adapter supplies playback transport; public DNS and Navigator certificate
 issuance remain outside this scenario. As in stack bring-up, the newly enrolled
