@@ -73,6 +73,8 @@ set_placement() {
   input=$(echo "$input" | jq -c --arg t "$token" --arg k "$run-$class-$(date +%s)" --argjson w "$warnings" '.+{reviewToken:$t,idempotencyKey:$k,acknowledgedWarningIds:$w}')
   applied=$(gql 'mutation($i:ApplyMediaPlacementChangeInput!){applyMediaPlacementChange(input:$i){__typename ... on MediaPlacementChange{revision} ... on MediaPlacementError{message}}}' "$(jq -cn --argjson i "$input" '{i:$i}')")
   json_has "$applied" '.data.applyMediaPlacementChange.__typename == "MediaPlacementChange"' || { echo "$applied"; return 1; }
+  policy_revision=$(echo "$applied" | jq -r '.data.applyMediaPlacementChange.revision')
+  policy_parent=$parent
 }
 stream_ended() { [ "$(pg "$1" "SELECT count(*) FROM foghorn.ingest_sessions WHERE tenant_id='$tenant' AND stream_internal_name IN ('$internal','live+$internal') AND ended_at IS NULL")" = 0 ]; }
 stream_active() { [ "$(pg "$1" "SELECT count(*) FROM foghorn.ingest_sessions WHERE tenant_id='$tenant' AND stream_internal_name IN ('$internal','live+$internal') AND ended_at IS NULL AND projection_state='active' AND node_id='$2' AND ingest_cluster_id='$3'")" = 1 ]; }
@@ -83,9 +85,14 @@ policy_effective() {
 }
 preview_ready() {
   local preview
-  preview=$(gql 'query($i:PreviewMediaPlacementInput!){previewMediaPlacement(input:$i){__typename ... on MediaPlacementPreview{complete selected{nodeId} reason} ... on MediaPlacementError{message}}}' \
-    "$(jq -cn --argjson s "$scope" --arg p "$1" '{i:{scope:$s,verb:"INGEST",protocol:$p}}')")
-  json_has "$preview" '.data.previewMediaPlacement | .__typename == "MediaPlacementPreview" and .complete and .selected.nodeId != null'
+  preview=$(gql 'query($i:PreviewMediaPlacementInput!){previewMediaPlacement(input:$i){__typename ... on MediaPlacementPreview{complete selected{nodeId clusterId} reason} ... on MediaPlacementError{message}}}' \
+    "$(jq -cn --argjson s "$scope" --arg p "$1" --arg r "$policy_revision" --arg a "$policy_parent" '{i:{scope:$s,verb:"INGEST",protocol:$p,expectedRevision:$r,expectedParentRevision:$a}}')")
+  printf '%s\n' "$preview" >"$STACK_STATE_DIR/$run-preview.json"
+  json_has "$preview" '.data.previewMediaPlacement | .__typename == "MediaPlacementPreview" and .complete and .selected.clusterId != null' || return 1
+  # Platform node identities are intentionally hidden from ordinary tenants.
+  if [ "$2" = TENANT_PRIVATE ]; then
+    [ "$(echo "$preview" | jq -r '.data.previewMediaPlacement.selected.nodeId')" = "$3" ]
+  fi
 }
 stream_flow() {
   local class=$1 host=$2 cell=$3 node=$4 cluster=$5 protocol=$6 base=$7 s pb key internal uuid
@@ -99,7 +106,7 @@ stream_flow() {
   if ! set_placement "$class" "$uuid"; then fail "$class $protocol placement policy applies"; return 1; fi
   pass "$class $protocol placement policy applies"
   eventually 90 "$class $protocol placement revision is effective" policy_effective || return 1
-  eventually 60 "$class $protocol preview has fresh placement evidence" preview_ready "$protocol" || return 1
+  eventually 60 "$class $protocol preview has fresh placement evidence" preview_ready "$protocol" "$class" "$node" || return 1
   if [ "$protocol" = rtmp ]; then
     publisher=$(publish "rtmp://$host:1935/live" "$key" 320x240 10 180)
   else
