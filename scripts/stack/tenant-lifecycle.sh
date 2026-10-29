@@ -115,6 +115,6 @@ tenant_final_analytics() {
   rows=$(ch "SELECT node_id,cluster_id,source_started_at_ms,source_ended_at_ms,downloaded_bytes FROM periscope.stream_sessions_final_v WHERE tenant_id=toUUID('$tenant') AND stream_id=toUUID('$uuid') AND closed_reason='final' FORMAT JSONEachRow")
   printf '%s\n' "$rows" >"$STACK_STATE_DIR/$class-$protocol-final.jsonl"
   echo "$rows" | jq -se --arg n "$node" --arg c "$cluster" --argjson s "$start" --argjson e "$end" \
-    'length == 1 and all((.source_started_at_ms | tonumber) as $start | (.source_ended_at_ms | tonumber) as $end |
-      .node_id == $n and .cluster_id == $c and ($start - $s | fabs) < 5000 and ($end - $e | fabs) < 5000 and $end > $start and (.downloaded_bytes | tonumber) > 0)' >/dev/null
+    'length == 1 and all((.source_started_at_ms | tonumber) as $started | (.source_ended_at_ms | tonumber) as $ended |
+      .node_id == $n and .cluster_id == $c and ($started - $s | fabs) < 5000 and ($ended - $e | fabs) < 5000 and $ended > $started and (.downloaded_bytes | tonumber) > 0)' >/dev/null
 }
