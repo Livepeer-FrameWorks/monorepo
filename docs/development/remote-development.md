@@ -154,6 +154,8 @@ adapter supplies playback transport; public DNS and Navigator certificate
 issuance remain outside this scenario. As in stack bring-up, the newly enrolled
 Helmsman reconnects after persisting ConfigSeed because the stack cannot probe
 a public edge TLS hostname. Its identity and configuration remain intact.
+Enrollment allows Foghorn's existing five-minute served-cluster assignment
+refresh and the edge's retry backoff to converge before checking readiness.
 
 ## Requested post-rollout staging smoke
 

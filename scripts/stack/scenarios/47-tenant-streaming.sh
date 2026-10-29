@@ -164,7 +164,9 @@ docker start "$edge" "$proxy" >/dev/null || { fail 'start private edge'; end_sce
 # Match up.sh's enrollment transport: the stack has no public DNS/TLS issuer,
 # so reconnect the enrolled identity after ConfigSeed, before testing media.
 private_seeded() { docker exec "$edge" test -s /data/state/config-seed.pb; }
-eventually 90 'private edge enrolls and persists ConfigSeed' private_seeded || end_scenario
+# Foghorn refreshes served-cluster assignments every five minutes; enrollment
+# retries and ConfigSeed delivery need another bounded window after that tick.
+eventually 420 'private edge enrolls and persists ConfigSeed' private_seeded || end_scenario
 docker exec "$edge" /command/s6-svc -r /run/service/helmsman || { fail 'reconnect enrolled private edge'; end_scenario; }
 private_ready() {
   [ "$(pg quartermaster "SELECT count(*) FROM quartermaster.infrastructure_clusters c JOIN quartermaster.infrastructure_nodes n ON n.cluster_id=c.cluster_id WHERE c.owner_tenant_id='$tenant' AND c.cluster_id='$cluster' AND c.health_status='healthy' AND n.node_id='$node' AND n.status='active'")" = 1 ]

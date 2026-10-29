@@ -791,6 +791,18 @@ func runConvertedRuntimeWriteAdapters(t *testing.T, ctx context.Context, db *sql
 	if _, err := queries.UpdateNodeStatus(ctx, UpdateNodeStatusParams{NodeID: "contract-runtime-node", Status: "active", ExpectedClusterID: "demo-media", Scope: NodeStatusScopeTenantOwner, TenantID: tenantID}); err != nil {
 		t.Fatalf("update node status: %v", err)
 	}
+	unknownHealth := "unknown"
+	if _, err := queries.UpdateClusterFields(ctx, "demo-media", ClusterUpdate{HealthStatus: &unknownHealth}); err != nil {
+		t.Fatalf("prepare private cluster readiness: %v", err)
+	}
+	readyClusters, err := queries.ActivateReportedPrivateClusters(ctx, []string{"contract-runtime-node"})
+	if err != nil || len(readyClusters) != 1 || readyClusters[0].ClusterID != "demo-media" || readyClusters[0].TenantID != tenantID {
+		t.Fatalf("activate private cluster: %+v, %v", readyClusters, err)
+	}
+	repeatedReadiness, err := queries.ActivateReportedPrivateClusters(ctx, []string{"contract-runtime-node"})
+	if err != nil || len(repeatedReadiness) != 0 {
+		t.Fatalf("repeat private cluster readiness: %+v, %v", repeatedReadiness, err)
+	}
 	if _, err := queries.TenantIsProvider(ctx, tenantID); err != nil {
 		t.Fatalf("tenant provider authorization: %v", err)
 	}
