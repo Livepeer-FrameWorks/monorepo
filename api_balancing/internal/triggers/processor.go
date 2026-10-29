@@ -7192,14 +7192,15 @@ func (p *Processor) applyResolvedStreamContext(trigger *ipcpb.MistTrigger, strea
 // stampDeniedContentIdentity names the content of a report Mist sends while it
 // winds down a stream or artifact whose local authority is now denied (deleted,
 // or its tenant suspended): viewers closing, buffers draining. The denied
-// authority still identifies that content; only the trigger is stamped, so the
-// returned context, which admission reads, stays unresolved.
+// authority still identifies that content and its owner, overriding the node's
+// tenant assertion. Only the trigger is stamped, so the returned context,
+// which admission reads, stays unresolved.
 func stampDeniedContentIdentity(trigger *ipcpb.MistTrigger, streamName string, authority *mediaauthoritypb.MediaObjectAuthority) {
 	if trigger == nil || authority == nil || trigger.GetStreamId() != "" || trigger.GetArtifactHash() != "" {
 		return
 	}
 	tenantID := authority.GetTenantId()
-	if tenantID == "" || (trigger.GetTenantId() != "" && trigger.GetTenantId() != tenantID) {
+	if tenantID == "" {
 		return
 	}
 	streamID, artifactHash := authority.GetLiveStream().GetStreamId(), ""
