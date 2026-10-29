@@ -112,9 +112,20 @@ tenant_final_analytics() {
   local db=$1 node=$2 cluster=$3 start end rows
   IFS='|' read -r start end <<<"$(pg "$db" "SELECT floor(EXTRACT(EPOCH FROM started_at)*1000)::bigint,floor(EXTRACT(EPOCH FROM ended_at)*1000)::bigint FROM foghorn.ingest_sessions WHERE tenant_id='$tenant' AND stream_internal_name IN ('$internal','live+$internal') AND projection_state <> 'pending'")"
   [ -n "$start" ] && [ -n "$end" ] || return 1
-  rows=$(ch "SELECT node_id,cluster_id,source_started_at_ms,source_ended_at_ms,downloaded_bytes FROM periscope.stream_sessions_final_v WHERE tenant_id=toUUID('$tenant') AND stream_id=toUUID('$uuid') AND closed_reason='final' FORMAT JSONEachRow")
+  # Publisher admission closes on disconnect; STREAM_END follows the live
+  # buffer draining. Final accounting must match that media lifecycle.
+  rows=$(ch "SELECT f.node_id,f.cluster_id,f.source_started_at_ms,f.source_ended_at_ms,f.downloaded_bytes,e.event_started_ms,e.event_ended_ms
+    FROM periscope.stream_sessions_final_v f CROSS JOIN (
+      SELECT minIf(toInt64(toUnixTimestamp(timestamp))*1000,event_type='stream_start') AS event_started_ms,
+        maxIf(toInt64(toUnixTimestamp(timestamp))*1000,event_type='stream_end') AS event_ended_ms
+      FROM periscope.stream_event_log WHERE tenant_id=toUUID('$tenant') AND stream_id=toUUID('$uuid')
+        AND internal_name IN ('$internal','live+$internal')) e
+    WHERE f.tenant_id=toUUID('$tenant') AND f.stream_id=toUUID('$uuid') AND f.closed_reason='final' FORMAT JSONEachRow")
   printf '%s\n' "$rows" >"$STACK_STATE_DIR/$class-$protocol-final.jsonl"
   echo "$rows" | jq -se --arg n "$node" --arg c "$cluster" --argjson s "$start" --argjson e "$end" \
     'length == 1 and all((.source_started_at_ms | tonumber) as $started | (.source_ended_at_ms | tonumber) as $ended |
-      .node_id == $n and .cluster_id == $c and ($started - $s | fabs) < 5000 and ($ended - $e | fabs) < 5000 and $ended > $started and (.downloaded_bytes | tonumber) > 0)' >/dev/null
+      .node_id == $n and .cluster_id == $c and ($started - $s | fabs) < 5000 and $ended >= ($e - 5000) and
+      (.event_started_ms | tonumber) > 0 and (.event_ended_ms | tonumber) > 0 and
+      ($started - (.event_started_ms | tonumber) | fabs) < 5000 and ($ended - (.event_ended_ms | tonumber) | fabs) < 5000 and
+      $ended > $started and (.downloaded_bytes | tonumber) > 0)' >/dev/null
 }

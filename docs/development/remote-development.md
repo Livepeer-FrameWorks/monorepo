@@ -155,8 +155,10 @@ The RTMP flow on each capacity class enables DVR, decodes twenty seconds of
 HLS as a viewer, exports a clip, and replays both the clip and the finalized
 DVR chapter through every replica. Its own webhook endpoint must receive
 validly signed stream, recording and clip lifecycle events for these exact
-objects. Final analytics must match the admitted session's node, cluster and
-timestamps and contain ingest bytes; tenant GraphQL analytics must report
+objects. Final analytics must match the admitted node/cluster and the stream
+start/end events and contain ingest bytes. The accounting end follows publisher
+disconnect because Mist drains its live buffer before `STREAM_END`.
+Tenant GraphQL analytics must report
 nonzero viewer sessions, hours and egress. A separate sweep runs under this
 fresh tenant's credentials, rather than the demo account. All four ended
 streams must also pass runtime accounting after the ledger cursor has

@@ -181,7 +181,7 @@ stream_flow() {
   publisher=""
   eventually 90 "$class $protocol session ends on disconnect" stream_ended "$cell" || return 1
   eventually 90 "$class $protocol signed stream.idle webhook belongs to this stream" saw_event "$since" stream.idle ".streamId == \"$uuid\"" || return 1
-  eventually 180 "$class $protocol final analytics match the admitted session and carry media bytes" tenant_final_analytics "$cell" "$node" "$cluster" || return 1
+  eventually 180 "$class $protocol final analytics match the node, cluster and media lifecycle with ingest bytes" tenant_final_analytics "$cell" "$node" "$cluster" || return 1
   if [ "$record" = true ]; then
     tenant_replay_artifacts || return 1
   fi
