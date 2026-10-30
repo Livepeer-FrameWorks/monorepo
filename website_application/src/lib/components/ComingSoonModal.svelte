@@ -93,10 +93,10 @@
           <div class="space-y-3">
             <h3 class="text-sm font-semibold text-foreground">What to expect</h3>
             <ul class="space-y-2 text-sm text-muted-foreground">
-              {#if item.name === "Composer"}
+              {#if item.name === "StreamCrafter"}
                 <li class="flex gap-2">
-                  <span class="text-primary">•</span> Compose multiple input streams with picture-in-picture
-                  layouts.
+                  <span class="text-primary">•</span> Mix and switch multiple live sources on the server,
+                  with picture-in-picture layouts.
                 </li>
                 <li class="flex gap-2">
                   <span class="text-primary">•</span> Visual editor for stream overlays and scenes.

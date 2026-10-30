@@ -192,10 +192,10 @@ const About = () => {
       statusNote: "In the pipeline: in active development, not generally available yet.",
     },
     {
-      title: "Multi-stream Compositing",
+      title: "StreamCrafter Cloud Production",
       tone: "yellow",
       description:
-        "In the pipeline: combine multiple input streams into one composite output with picture-in-picture, overlays, and mixing.",
+        "In the pipeline: mix and switch multiple live sources on the server, with picture-in-picture, overlays, and scene changes.",
       status: "pipeline",
       statusNote: "In the pipeline. Browser mixing is available today through StreamCrafter.",
     },

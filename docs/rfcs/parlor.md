@@ -62,7 +62,7 @@ Tenant membership, invitations, and roles (`team-rbac`). Moderators, producers, 
 
 ### Phase 2a: Remote contribution / conferencing
 
-Built on room core plus multistream compositing.
+Built on room core plus composition.
 
 - A host invites a guest into a room; Parlor issues a short-lived, room-scoped WHIP publish grant bound to the participant and role.
 - Guest media is ingested through the normal Foghorn/Mist path; compositing mixes it into the room's program stream.

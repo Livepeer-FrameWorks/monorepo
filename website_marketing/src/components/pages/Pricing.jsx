@@ -197,8 +197,8 @@ const processingFeatureMatrix = [
     },
   },
   {
-    feature: "Multi-stream compositing",
-    description: "In the pipeline: combine multiple streams with studio-style mixing and effects.",
+    feature: "StreamCrafter cloud production",
+    description: "In the pipeline: mix and switch multiple live sources on the server.",
     status: "pipeline",
     statusNote: "In the pipeline. Browser mixing is available today through StreamCrafter.",
     tiers: {
@@ -726,7 +726,7 @@ const Pricing = () => {
               <HeadlineStack
                 eyebrow="Advanced processing"
                 title="Advanced processing capabilities"
-                subtitle="Run processing on FrameWorks edges for dedicated capacity, use Livepeer for low-cost capacity that is quick to scale, or process on your own edge with no FrameWorks processing charge. AI workloads and multi-stream compositing are in the pipeline."
+                subtitle="Run processing on FrameWorks edges for dedicated capacity, use Livepeer for low-cost capacity that is quick to scale, or process on your own edge with no FrameWorks processing charge. AI workloads and StreamCrafter cloud production are in the pipeline."
                 align="left"
                 underlineAlign="start"
                 actionsPlacement="inline"

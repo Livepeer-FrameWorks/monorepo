@@ -238,11 +238,11 @@ export const navigationConfig: Record<string, NavigationItem> = {
         description: "Stream directly from your browser with WebRTC",
       },
       composer: {
-        name: "Composer",
+        name: "StreamCrafter",
         href: "/composer",
         icon: "Clapperboard",
         active: "soon",
-        description: "Compose multiple input streams with picture-in-picture layouts",
+        description: "Mix and switch multiple live sources on the server",
       },
     },
   },
