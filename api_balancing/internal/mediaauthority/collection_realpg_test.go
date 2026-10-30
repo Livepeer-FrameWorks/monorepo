@@ -192,5 +192,59 @@ func TestMediaAuthorityCollectionAndFetch_RealPG(t *testing.T) {
 		if err != nil || !set.Marked || !set.Complete || len(set.Rows) != 1 || !set.Rows[0].GetAlwaysOn() || set.Rows[0].GetSourceSpec() != secret.GetNativeSourceSpec() {
 			t.Fatalf("offline restart lost managed source: %+v, %v", set, err)
 		}
+
+		// A complete set retracts what it omits, which stops a running source. A
+		// spent prepaid balance leaves the set incomplete so nothing is retracted;
+		// suspension is what ends the source.
+		for version, billing := range []struct {
+			decision mediaauthoritypb.TenantBillingDecision
+			reason   string
+			complete bool
+		}{
+			{mediaauthoritypb.TenantBillingDecision_TENANT_BILLING_DECISION_PAYMENT_REQUIRED, sharedauthority.ReasonPrepaidBalanceUnavailable, false},
+			{mediaauthoritypb.TenantBillingDecision_TENANT_BILLING_DECISION_SUSPENDED, "tenant_suspended", true},
+		} {
+			tenant := signedTenantBilling(t, uint64(50+version), billing.decision, billing.reason)
+			if _, err := restarted.Apply(ctx, tenant); err != nil {
+				t.Fatal(err)
+			}
+			set, err := restarted.ManagedStreams(ctx, "cell-a")
+			if err != nil || set.Complete != billing.complete || len(set.Rows) != 0 {
+				t.Fatalf("%s: complete=%v with %d rows (err %v), want complete=%v", billing.reason, set.Complete, len(set.Rows), err, billing.complete)
+			}
+		}
 	})
+}
+
+// signedTenantBilling re-signs the store fixture's tenant authority at version
+// with a billing decision.
+func signedTenantBilling(t *testing.T, version uint64, decision mediaauthoritypb.TenantBillingDecision, reason string) []byte {
+	t.Helper()
+	_, _, fixture := storeFixture(t, "cell-a")
+	payload := &mediaauthoritypb.TenantAuthority{}
+	if err := proto.Unmarshal(fixture.GetEnvelope().GetPayload(), payload); err != nil {
+		t.Fatal(err)
+	}
+	payload.BillingDecision = decision
+	payload.DecisionReason = reason
+	payload.AllowPlatformSharedPlayback = false
+	payload.EffectiveClusterGrants = nil
+	envelope, err := sharedauthority.NewEnvelope(mediaauthoritypb.AuthorityKind_AUTHORITY_KIND_TENANT, payload.GetTenantId(), version,
+		storeFixtureNow, storeFixtureNow.Add(time.Hour), storeFixtureNow.Add(24*time.Hour), "signer-1", "cell-a", payload, fixture.GetEnvelope().GetSourceRevisions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed := make([]byte, ed25519.SeedSize)
+	for i := range seed {
+		seed[i] = byte(i)
+	}
+	signed, err := sharedauthority.Sign(envelope, ed25519.NewKeyFromSeed(seed))
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := proto.MarshalOptions{Deterministic: true}.Marshal(signed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encoded
 }

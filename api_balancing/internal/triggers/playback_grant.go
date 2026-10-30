@@ -11,6 +11,7 @@ import (
 	localauthority "frameworks/api_balancing/internal/mediaauthority"
 	"frameworks/api_balancing/internal/state"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	sharedauthority "github.com/Livepeer-FrameWorks/monorepo/pkg/mediaauthority"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	mediaauthoritypb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_authority"
 
@@ -135,11 +136,19 @@ func (p *Processor) offerPlaybackGrant(nodeID, requested string, local localPlay
 }
 
 // PlaybackGrantForStream answers an edge's grant fetch for one Mist stream.
-// A denial by the signed authority is returned as a revoked grant; a cell
-// holding no current authority returns an error and issues nothing.
+// A denial by the signed authority is returned as a revoked grant, except a
+// spent prepaid balance, which blocks new sessions and leaves running ones; a
+// cell holding no current authority returns an error and issues nothing.
 func (p *Processor) PlaybackGrantForStream(ctx context.Context, _ string, internalName string) (*ipcpb.PlaybackGrant, error) {
 	local, found, err := p.resolveReadyLocalPlayback(ctx, internalName, false)
 	if IsLocalAuthorityDenied(err) {
+		if local.object.Authority.GetLifecycle() == mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE &&
+			sharedauthority.PrepaidBalanceSpent(local.tenant.Authority) {
+			local.target = localStreamTarget(local.object.Authority, local.tenant.Authority)
+			grant := playbackGrantFromLocal(local, "")
+			grant.NewSessionsBlocked = true
+			return grant, nil
+		}
 		return &ipcpb.PlaybackGrant{InternalName: internalName, Revoked: true, RevokedReason: "signed authority denies playback"}, nil
 	}
 	if err != nil {

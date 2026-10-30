@@ -327,3 +327,39 @@ func TestJWTSessionOnGrantChecksTokenAndOrigin(t *testing.T) {
 		}
 	}
 }
+
+// A spent prepaid balance ends admission, not the show: running sessions stay
+// up and keep their local answers, new sessions are refused, and a top-up
+// lifts the block.
+func TestSpentPrepaidBalanceKeepsRunningSessionsAndRefusesNewOnes(t *testing.T) {
+	m := &recordingMist{live: []mist.ViewerSession{{SessionID: "s1", Host: "192.0.2.1", Stream: "live+s", Protocol: "HLS"}}}
+	store, _ := newTestStore(t, m, nil)
+	public := ipcpb.PlaybackGrantPolicyKind_PLAYBACK_GRANT_POLICY_KIND_PUBLIC
+	store.ApplyGrant(playbackgranttest.Grant("live+s", public, nil, "pb"))
+	store.AdmitSession(viewer("live+s", "192.0.2.1", "t1", "s1"), false)
+
+	blocked := playbackgranttest.Grant("live+s", public, nil, "pb")
+	blocked.NewSessionsBlocked = true
+	store.ApplyGrant(blocked)
+
+	if stopped, invalidated := m.stoppedStreams(), m.invalidated(); len(stopped) != 0 || len(invalidated) != 0 {
+		t.Fatalf("spent balance touched running sessions: stopped %v, invalidated %v", stopped, invalidated)
+	}
+	if _, refused := store.Refused("s1"); refused {
+		t.Fatal("the running session is refused on a re-run")
+	}
+	if _, ok := store.ServeAdmitted("pb", "192.0.2.1", "HLS", "http://e/hls/pb/0.ts?tkn=t1"); !ok {
+		t.Fatal("the running session lost its local answer")
+	}
+	if d := store.DecideNewRequest("pb"); d.Allow {
+		t.Fatal("a new request was admitted on a blocked grant")
+	}
+	if d := store.DecideNewSession(viewer("live+s", "192.0.2.2", "t2", "s2")); d.Allow {
+		t.Fatal("a new session was admitted on a blocked grant")
+	}
+
+	store.ApplyGrant(playbackgranttest.Grant("live+s", public, nil, "pb"))
+	if d := store.DecideNewSession(viewer("live+s", "192.0.2.2", "t2", "s2")); !d.Allow {
+		t.Fatalf("a top-up did not lift the block: %s", d.Reason)
+	}
+}

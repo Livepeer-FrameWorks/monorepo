@@ -64,6 +64,8 @@ const (
 	mistCallTimeout        = 5 * time.Second
 )
 
+const newSessionsBlockedReason = "stream owner's prepaid balance is spent"
+
 var errNoFetcher = errors.New("no playback grant fetcher")
 
 // MistSessions is the part of Mist's API the store drives.
@@ -309,6 +311,9 @@ func (s *Store) DecideNewRequest(requested string) Decision {
 	if g == nil || !now.Before(g.validUntil) {
 		return Decision{Reason: "playback grant expired"}
 	}
+	if g.msg.GetNewSessionsBlocked() {
+		return Decision{Reason: newSessionsBlockedReason}
+	}
 	if g.msg.GetPolicy().GetKind() == ipcpb.PlaybackGrantPolicyKind_PLAYBACK_GRANT_POLICY_KIND_CONNECTED {
 		return Decision{Reason: "stream policy decides every new session in Foghorn"}
 	}
@@ -328,6 +333,9 @@ func (s *Store) DecideNewSession(vc *ipcpb.ViewerConnectTrigger) Decision {
 	}
 	if !now.Before(g.validUntil) {
 		return Decision{Reason: "playback grant expired"}
+	}
+	if g.msg.GetNewSessionsBlocked() {
+		return Decision{Reason: newSessionsBlockedReason}
 	}
 	if g.msg.GetPolicy().GetKind() == ipcpb.PlaybackGrantPolicyKind_PLAYBACK_GRANT_POLICY_KIND_CONNECTED {
 		return Decision{Reason: "stream policy decides every new session in Foghorn"}

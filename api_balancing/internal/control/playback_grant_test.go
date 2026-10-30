@@ -9,6 +9,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -156,5 +157,20 @@ func TestPlaybackGrantRequestIsAnsweredAndRecorded(t *testing.T) {
 	}
 	if holders := PlaybackGrantHolders("live+s1"); len(holders) != 1 {
 		t.Fatalf("a fetched grant does not make the edge a holder: %v", holders)
+	}
+}
+
+// The edge must learn of a spent balance and of the top-up that lifts it even
+// when the grant's validity has not moved.
+func TestPlaybackGrantBlockChangeIsNeverARenewal(t *testing.T) {
+	now := time.Now()
+	held := &ipcpb.PlaybackGrant{InternalName: "live+s", ValidUntil: timestamppb.New(now.Add(24 * time.Hour))}
+	blocked := proto.CloneOf(held)
+	blocked.NewSessionsBlocked = true
+	if playbackGrantRedundant(held, blocked, now) {
+		t.Fatal("blocking new sessions was treated as redundant")
+	}
+	if playbackGrantRedundant(blocked, held, now) {
+		t.Fatal("lifting the block was treated as redundant")
 	}
 }

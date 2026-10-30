@@ -93,6 +93,14 @@ func (s *Store) ManagedStreams(ctx context.Context, clusterID string) (ManagedSt
 			s.refreshAsync(AuthorityLookup{AuthorityID: row.AuthorityID})
 			continue
 		}
+		// A spent prepaid balance is signed without cluster grants, so this set
+		// cannot say where the source runs, and omitting it would retract a running
+		// source. Incomplete, the set retracts nothing and the control plane answers.
+		if authority.GetLifecycle() == mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE &&
+			sharedauthority.PrepaidBalanceSpent(tenant.Authority) {
+			result.Complete = false
+			continue
+		}
 		if authority.GetLifecycle() != mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE ||
 			tenant.Authority.GetLifecycle() != mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE ||
 			tenant.Authority.GetBillingDecision() != mediaauthoritypb.TenantBillingDecision_TENANT_BILLING_DECISION_ALLOW {

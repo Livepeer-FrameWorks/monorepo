@@ -5425,8 +5425,11 @@ type PlaybackGrant struct {
 	// sessions with Foghorn.
 	Revoked       bool   `protobuf:"varint,8,opt,name=revoked,proto3" json:"revoked,omitempty"`
 	RevokedReason string `protobuf:"bytes,9,opt,name=revoked_reason,json=revokedReason,proto3" json:"revoked_reason,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// The tenant's prepaid balance is spent. Running sessions keep playing on
+	// this grant; Helmsman refuses every new session it would decide locally.
+	NewSessionsBlocked bool `protobuf:"varint,10,opt,name=new_sessions_blocked,json=newSessionsBlocked,proto3" json:"new_sessions_blocked,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *PlaybackGrant) Reset() {
@@ -5520,6 +5523,13 @@ func (x *PlaybackGrant) GetRevokedReason() string {
 		return x.RevokedReason
 	}
 	return ""
+}
+
+func (x *PlaybackGrant) GetNewSessionsBlocked() bool {
+	if x != nil {
+		return x.NewSessionsBlocked
+	}
+	return false
 }
 
 // PlaybackGrantPolicy is the edge-checkable part of a playback policy. A
@@ -23477,7 +23487,7 @@ const file_ipc_proto_rawDesc = "" +
 	"\x19InvalidateSessionsRequest\x12!\n" +
 	"\fstream_names\x18\x01 \x03(\tR\vstreamNames\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12\x16\n" +
-	"\x06reason\x18\x03 \x01(\tR\x06reason\"\xaa\x03\n" +
+	"\x06reason\x18\x03 \x01(\tR\x06reason\"\xdc\x03\n" +
 	"\rPlaybackGrant\x12#\n" +
 	"\rinternal_name\x18\x01 \x01(\tR\finternalName\x12'\n" +
 	"\x0frequested_names\x18\x02 \x03(\tR\x0erequestedNames\x12\x1b\n" +
@@ -23488,7 +23498,9 @@ const file_ipc_proto_rawDesc = "" +
 	"\vvalid_until\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"validUntil\x12\x18\n" +
 	"\arevoked\x18\b \x01(\bR\arevoked\x12%\n" +
-	"\x0erevoked_reason\x18\t \x01(\tR\rrevokedReason\"\xc9\x03\n" +
+	"\x0erevoked_reason\x18\t \x01(\tR\rrevokedReason\x120\n" +
+	"\x14new_sessions_blocked\x18\n" +
+	" \x01(\bR\x12newSessionsBlocked\"\xc9\x03\n" +
 	"\x13PlaybackGrantPolicy\x12<\n" +
 	"\x04kind\x18\x01 \x01(\x0e2(.helmsmancontrol.PlaybackGrantPolicyKindR\x04kind\x12'\n" +
 	"\x0fallowed_origins\x18\x02 \x03(\tR\x0eallowedOrigins\x12!\n" +

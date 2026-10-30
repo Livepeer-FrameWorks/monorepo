@@ -657,6 +657,9 @@ message PlaybackGrant {
   // sessions with Foghorn.
   bool revoked = 8;
   string revoked_reason = 9;
+  // The tenant's prepaid balance is spent. Running sessions keep playing on
+  // this grant; Helmsman refuses every new session it would decide locally.
+  bool new_sessions_blocked = 10;
 }
 
 enum PlaybackGrantPolicyKind {

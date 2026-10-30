@@ -9,6 +9,7 @@ import (
 
 	localauthority "frameworks/api_balancing/internal/mediaauthority"
 	"frameworks/api_balancing/internal/state"
+	sharedauthority "github.com/Livepeer-FrameWorks/monorepo/pkg/mediaauthority"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	mediaauthoritypb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_authority"
 
@@ -201,5 +202,55 @@ func TestTenantApplyPushesEachGrantedStream(t *testing.T) {
 	p.onPlaybackAuthorityApplied(localauthority.ApplyResult{Kind: "tenant", TenantID: "10000000-0000-0000-0000-000000000001"})
 	if offers := delivery.waitOffers(t, 1); offers[0].grant.GetInternalName() != "live+stream-internal" {
 		t.Fatalf("tenant apply pushed %+v", offers[0].grant)
+	}
+}
+
+func withTenantBilling(t *testing.T, tenantBytes []byte, decision mediaauthoritypb.TenantBillingDecision, reason string) []byte {
+	t.Helper()
+	tenant := &mediaauthoritypb.TenantAuthority{}
+	if err := proto.Unmarshal(tenantBytes, tenant); err != nil {
+		t.Fatal(err)
+	}
+	tenant.BillingModel = mediaauthoritypb.TenantBillingModel_TENANT_BILLING_MODEL_PREPAID
+	tenant.BillingDecision = decision
+	tenant.DecisionReason = reason
+	out, err := proto.MarshalOptions{Deterministic: true}.Marshal(tenant)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// A spent prepaid balance keeps the stream's grant with new sessions blocked,
+// so running viewers stay up. Every other billing denial still revokes it.
+func TestPlaybackGrantForStreamOnBillingDenial(t *testing.T) {
+	cases := []struct {
+		name     string
+		decision mediaauthoritypb.TenantBillingDecision
+		reason   string
+		revoked  bool
+	}{
+		{"spent prepaid balance", mediaauthoritypb.TenantBillingDecision_TENANT_BILLING_DECISION_PAYMENT_REQUIRED, sharedauthority.ReasonPrepaidBalanceUnavailable, false},
+		{"expired operator grant", mediaauthoritypb.TenantBillingDecision_TENANT_BILLING_DECISION_PAYMENT_REQUIRED, sharedauthority.ReasonOperatorGrantExpired, true},
+		{"suspended", mediaauthoritypb.TenantBillingDecision_TENANT_BILLING_DECISION_SUSPENDED, "tenant_suspended", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			validUntil := time.Now().Add(time.Hour).Truncate(time.Second)
+			p, mock, closeDB, tenantBytes, objectBytes := localAuthorityFixture(t)
+			defer closeDB()
+			expectLocalPair(mock, objectBytes, withTenantBilling(t, tenantBytes, c.decision, c.reason), validUntil, validUntil, true)
+
+			grant, err := p.PlaybackGrantForStream(context.Background(), "", "live+stream-internal")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if grant.GetRevoked() != c.revoked || grant.GetNewSessionsBlocked() == c.revoked {
+				t.Fatalf("grant revoked=%v blocked=%v, want revoked=%v", grant.GetRevoked(), grant.GetNewSessionsBlocked(), c.revoked)
+			}
+			if !c.revoked && (grant.GetInternalName() != "live+stream-internal" || !grant.GetValidUntil().AsTime().Equal(validUntil)) {
+				t.Fatalf("held grant %+v does not carry the stream and its validity", grant)
+			}
+		})
 	}
 }
