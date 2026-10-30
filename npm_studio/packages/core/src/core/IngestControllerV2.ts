@@ -252,6 +252,33 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
     this.emit("stateChange", { state: this.state, context: this.stateContext });
   }
 
+  private isSessionActive(): boolean {
+    return ["connecting", "streaming", "reconnecting"].includes(this.state);
+  }
+
+  /**
+   * Report capture progress. Sources can be added during a session, and the
+   * session state drives reconnection and the go-live controls, so capture
+   * must not replace it.
+   */
+  private setCaptureState(newState: IngestState, context?: Partial<IngestStateContextV2>): void {
+    this.setState(this.isSessionActive() ? this.state : newState, context);
+  }
+
+  /**
+   * Report a failed capture. A refused device leaves an active session running,
+   * so the caller gets the rejection and the session keeps its state.
+   */
+  private failCapture(error: unknown): void {
+    if (this.isSessionActive()) {
+      this.log("Capture failed during active session", error);
+      return;
+    }
+    this.setState("error", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
   /**
    * Initialize audio mixer if needed
    */
@@ -529,7 +556,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
    */
   async startCamera(options: CaptureOptions = {}): Promise<MediaSource> {
     this.log("Starting camera capture", options);
-    this.setState("requesting_permissions");
+    this.setCaptureState("requesting_permissions");
 
     try {
       await this.ensureAudioMixer();
@@ -564,16 +591,14 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
       const label = await this.getCameraLabel(stream);
       const source = this.addMediaSource("camera", stream, label);
 
-      this.setState("capturing", {
+      this.setCaptureState("capturing", {
         hasVideo: stream.getVideoTracks().length > 0,
         hasAudio: stream.getAudioTracks().length > 0,
       });
 
       return source;
     } catch (error) {
-      this.setState("error", {
-        error: error instanceof Error ? error.message : String(error),
-      });
+      this.failCapture(error);
       throw error;
     }
   }
@@ -594,7 +619,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
    */
   async startScreenShare(options: ScreenCaptureOptions = {}): Promise<MediaSource | null> {
     this.log("Starting screen share", options);
-    this.setState("requesting_permissions");
+    this.setCaptureState("requesting_permissions");
 
     try {
       await this.ensureAudioMixer();
@@ -623,7 +648,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
 
         const source = this.addMediaSource("screen", stream, label);
 
-        this.setState("capturing", {
+        this.setCaptureState("capturing", {
           hasVideo: true,
           isScreenShare: true,
         });
@@ -632,16 +657,14 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
       } else {
         // User cancelled
         if (this.sources.size > 0) {
-          this.setState("capturing");
+          this.setCaptureState("capturing");
         } else {
-          this.setState("idle");
+          this.setCaptureState("idle");
         }
         return null;
       }
     } catch (error) {
-      this.setState("error", {
-        error: error instanceof Error ? error.message : String(error),
-      });
+      this.failCapture(error);
       throw error;
     }
   }
