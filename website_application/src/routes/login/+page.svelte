@@ -169,11 +169,15 @@
       <div class="space-y-3 text-sm">
         <div class="flex items-center gap-3">
           <SvelteComponent class="w-5 h-5 text-tokyo-night-blue" />
-          <span class="text-muted-foreground">Multi-stream compositing with PiP and overlays</span>
+          <span class="text-muted-foreground"
+            >In the pipeline: multi-stream compositing with PiP and overlays</span
+          >
         </div>
         <div class="flex items-center gap-3">
           <SvelteComponent_1 class="w-5 h-5 text-tokyo-night-cyan" />
-          <span class="text-muted-foreground">Real-time AI processing and analytics</span>
+          <span class="text-muted-foreground"
+            >Real-time analytics, with live AI processing in the pipeline</span
+          >
         </div>
         <div class="flex items-center gap-3">
           <SvelteComponent_2 class="w-5 h-5 text-tokyo-night-purple" />

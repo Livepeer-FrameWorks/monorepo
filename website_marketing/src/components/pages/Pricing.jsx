@@ -188,27 +188,26 @@ const processingFeatureMatrix = [
   {
     feature: "Live AI Processing",
     description:
-      "AI transcription, video analysis, automated highlights, and real-time V2V transformations.",
+      "In the pipeline: AI transcription, video analysis, automated highlights, and real-time V2V transformations.",
     status: "pipeline",
-    statusNote: "Internal and pilot workloads only. Request access via Contact.",
+    statusNote: "In the pipeline: in development with the MistServer team.",
     tiers: {
-      free: "Only self-hosting",
-      supporter: "Only self-hosting",
-      developer: "Rate-limited access",
-      production: "Dedicated allocation",
+      free: "In the pipeline",
+      supporter: "In the pipeline",
+      developer: "In the pipeline",
+      production: "In the pipeline",
     },
   },
   {
     feature: "Multi-stream compositing",
-    description:
-      "Combine multiple streams with studio-style mixing and effects. Bundled in delivered minutes.",
+    description: "In the pipeline: combine multiple streams with studio-style mixing and effects.",
     status: "pipeline",
-    statusNote: "Internal and pilot workloads only. Request access via Contact.",
+    statusNote: "In the pipeline. Browser mixing is available today through StreamCrafter.",
     tiers: {
-      free: "Only self-hosting",
-      supporter: "Only self-hosting",
-      developer: "Rate-limited access",
-      production: "Dedicated allocation",
+      free: "In the pipeline",
+      supporter: "In the pipeline",
+      developer: "In the pipeline",
+      production: "In the pipeline",
     },
   },
 ];
@@ -719,7 +718,7 @@ const Pricing = () => {
               <HeadlineStack
                 eyebrow="Advanced processing"
                 title="Advanced processing capabilities"
-                subtitle="Run processing on FrameWorks edges for SLA-backed capacity, use Livepeer for low-cost capacity that is quick to scale, or process on your own edge with no FrameWorks processing charge. AI workloads and multi-stream compositing remain in pilot."
+                subtitle="Run processing on FrameWorks edges for SLA-backed capacity, use Livepeer for low-cost capacity that is quick to scale, or process on your own edge with no FrameWorks processing charge. AI workloads and multi-stream compositing are in the pipeline."
                 align="left"
                 underlineAlign="start"
                 actionsPlacement="inline"

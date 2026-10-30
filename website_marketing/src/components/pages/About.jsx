@@ -189,23 +189,23 @@ const About = () => {
       description:
         "A drop-in app that auto-discovers IP cameras, VISCA PTZ controls, NDI sources, USB webcams, and HDMI inputs.",
       status: "pipeline",
-      statusNote: "Internal and pilot workloads only. Request access via Contact.",
+      statusNote: "In the pipeline: in active development, not generally available yet.",
     },
     {
       title: "Multi-stream Compositing",
       tone: "yellow",
       description:
-        "Combine multiple input streams into one composite output with picture-in-picture, overlays, and mixing.",
+        "In the pipeline: combine multiple input streams into one composite output with picture-in-picture, overlays, and mixing.",
       status: "pipeline",
-      statusNote: "Internal and pilot workloads only. Request access via Contact.",
+      statusNote: "In the pipeline. Browser mixing is available today through StreamCrafter.",
     },
     {
       title: "Live AI Processing",
       tone: "orange",
       description:
-        "AI-native live video: transcribe, analyze, automate, and transform streams in real time.",
+        "In the pipeline: transcribe, analyze, automate, and transform streams in real time with AI.",
       status: "pipeline",
-      statusNote: "Internal and pilot workloads only. Request access via Contact.",
+      statusNote: "In the pipeline: in development with the MistServer team.",
     },
     {
       title: "DRM Content Protection",
