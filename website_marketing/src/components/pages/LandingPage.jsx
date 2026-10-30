@@ -518,7 +518,7 @@ const LandingPage = () => {
           className: "cta-motion",
           variant: "secondary",
         }}
-        footnote="Built by the MistServer team. Employee-owned and engineer-led. Not a resale of hyperscaler media APIs. One video stack, operated your way."
+        footnote="Built by the MistServer team, running our own media server on bare metal. One video stack, operated your way."
         mediaSurface="none"
         media={
           <motion.div
