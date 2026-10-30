@@ -1503,7 +1503,7 @@
           "audience": "product",
           "description": "ONNX models running directly on the in-memory stream buffer of media edge nodes — detection, transcription, moderation, audio tagging, and embeddings for semantic search.",
           "status": "roadmap",
-          "gap_reason": "The media-engine ONNX runtime is in active development: ultralight CPU models run directly on the in-memory stream\nbuffer on edge nodes. Tested so far: object detection and segmentation (YOLO) and audio transcription (Parakeet,\nheavily quantized for CPU). Candidate workloads: content moderation (NSFW / violence), audio event tagging and\nspeaker identification, and frame/text embeddings for semantic search. Heavy models defer to dedicated compute via\nthe Livepeer network. The FrameWorks product layer — model selection, per-stream enablement, output routing to\nanalytics and webhooks, and billing meters — is not designed yet. Pilot access exists via contact-sales.\n",
+          "gap_reason": "The media-engine ONNX runtime is in active development: ultralight CPU models run directly on the in-memory stream\nbuffer on edge nodes. Tested so far: object detection and segmentation (YOLO) and audio transcription (Parakeet,\nheavily quantized for CPU). Candidate workloads: content moderation (NSFW / violence), audio event tagging and\nspeaker identification, and frame/text embeddings for semantic search. Heavy models defer to dedicated compute via\nthe Livepeer network. The FrameWorks product layer — model selection, per-stream enablement, output routing to\nanalytics and webhooks, and billing meters — is not designed yet.\n",
           "required_surfaces": {
             "docs": {
               "required": true

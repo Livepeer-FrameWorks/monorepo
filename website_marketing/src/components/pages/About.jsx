@@ -171,7 +171,7 @@ const About = () => {
     {
       title: "Processing has three paths",
       description:
-        "Use FrameWorks edges for SLA-backed capacity, Livepeer for low-cost capacity that is quick to scale, or your own edge with no FrameWorks processing charge.",
+        "Use FrameWorks edges for reserved capacity, Livepeer for low-cost capacity that is quick to scale, or your own edge with no FrameWorks processing charge.",
       tone: "cyan",
     },
     {

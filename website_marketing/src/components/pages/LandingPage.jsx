@@ -193,7 +193,7 @@ export const HOME_FAQS = [
   {
     question: "What do MistServer and Livepeer do in FrameWorks?",
     answer:
-      "FrameWorks and MistServer are developed by the same team. MistServer is the media engine at the heart of FrameWorks, handling ingest, protocol translation, delivery, recording, and playback. Processing can run on FrameWorks edges with SLA-backed capacity, on Livepeer for low-cost capacity that is quick to scale, or on your own edge with no FrameWorks processing charge.",
+      "FrameWorks and MistServer are developed by the same team. MistServer is the media engine at the heart of FrameWorks, handling ingest, protocol translation, delivery, recording, and playback. Processing can run on FrameWorks edges with reserved capacity, on Livepeer for low-cost capacity that is quick to scale, or on your own edge with no FrameWorks processing charge.",
   },
   {
     question: "Who should use sovereign streaming infrastructure?",
@@ -360,7 +360,7 @@ const LandingPage = () => {
     {
       title: "Processing on your terms",
       description:
-        "Use FrameWorks edges for SLA-backed capacity, Livepeer for low-cost capacity that is quick to scale, or your own edge with no FrameWorks processing charge.",
+        "Use FrameWorks edges for reserved capacity, Livepeer for low-cost capacity that is quick to scale, or your own edge with no FrameWorks processing charge.",
       tone: "cyan",
     },
   ];
@@ -399,7 +399,7 @@ const LandingPage = () => {
     "Custom subdomains and hosted load balancers",
     "Reserved processing capacity and bandwidth pools",
     "Team collaboration and advanced analytics",
-    "Priority support with 24/7 options",
+    "Priority support from the engineers who build it",
   ];
 
   const pricingPlans = [
@@ -822,7 +822,7 @@ const LandingPage = () => {
                         {
                           title: "Process where it makes sense",
                           description:
-                            "Use FrameWorks edges for SLA-backed processing, Livepeer for low-cost capacity that is quick to scale, or your own edge with no FrameWorks processing charge.",
+                            "Use FrameWorks edges for reserved processing, Livepeer for low-cost capacity that is quick to scale, or your own edge with no FrameWorks processing charge.",
                         },
                         {
                           title: "Grow into physical production",

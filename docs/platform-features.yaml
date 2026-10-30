@@ -775,7 +775,7 @@ features:
           heavily quantized for CPU). Candidate workloads: content moderation (NSFW / violence), audio event tagging and
           speaker identification, and frame/text embeddings for semantic search. Heavy models defer to dedicated compute via
           the Livepeer network. The FrameWorks product layer — model selection, per-stream enablement, output routing to
-          analytics and webhooks, and billing meters — is not designed yet. Pilot access exists via contact-sales.
+          analytics and webhooks, and billing meters — is not designed yet.
         depends_on: [processing, edge-clusters]
         aliases: [composer-ai]
         required_surfaces:
