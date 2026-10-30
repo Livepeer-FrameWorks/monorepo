@@ -8,8 +8,8 @@ Draft
 
 - Parlor is the room layer: tenant-owned rooms with participants, stage roles, and realtime presence. Chat and conferencing are both products built on it; neither owns its own session model.
 - Moderators and producers are tenant team members, so Parlor builds on Teams & RBAC (`team-rbac`). Room roles (host, guest, viewer, moderator) are room-scoped and separate from tenant roles.
-- Media never passes through Parlor. For conferencing, Parlor authorizes a guest and issues a room-scoped WHIP publish grant; Mist/Foghorn carry the media and multistream compositing mixes it into the program stream.
-- Stream-synced events use in-band timeline cues carried in the stream itself, not a per-viewer latency feed. SCTE-35 is the same kind of cue, so this phase starts by merging SCTE-35 support into our MistServer fork.
+- Media never passes through Parlor. For conferencing, Parlor authorizes a guest and issues a room-scoped WHIP publish grant; Mist/Foghorn carry the media and composition mixes it into the program stream.
+- Stream-synced events use in-band timeline cues carried in the stream itself, not a per-viewer latency feed. SCTE-35 is the same kind of cue, so this phase starts by extending MistServer's SCTE-35 support.
 - The viewer engagement economy (channel points, hype trains, leaderboards, flair) comes last, on top of timeline cues and stream-level balances.
 
 ## Current State
@@ -19,7 +19,7 @@ Draft
 - Signalman's hub fans out five channel types (STREAMS/ANALYTICS/SYSTEM/MESSAGING/AI); it has no presence/room channel type. The realtime substrate Phase 1 needs does not exist yet.
 - Tenants are single-user; there is no membership or role model to hang moderator/producer permissions on (`team-rbac` is roadmap).
 - WHIP ingest and WHEP playback ship as single-source paths; there is no multi-participant session model or participant-scoped publish authorization.
-- SCTE-35 support exists only on unmerged MistServer branches. The most recent is `upstream/EFG/SCTE35` (last commit 2025-06-30, 105 commits ahead of our fork's `master`, including an `inject_scte35` API call). It is feature-complete but untested in our stack.
+- MistServer `master` carries SCTE-35 tracks through JSON input and TS-based outputs, which include HLS with TS segments. HLS playlists have no cue tags, CMAF has no SCTE-35 handling, and the `inject_scte35` API call exists only on the unmerged `upstream/EFG/SCTE35` branch (last commit 2025-06-30).
 
 Evidence:
 
@@ -80,7 +80,7 @@ Built on room core plus multistream compositing.
 
 Events bind to a stream timeline position and are carried in-band as timed metadata, so the player fires each event when its own playback reaches that position. This handles every viewer's distance from the live edge without a per-viewer latency feed; a single global delay offset would be wrong for everyone except the average viewer.
 
-- **First step: merge SCTE-35 into our MistServer fork (`../mistserver`).** SCTE-35 splice markers are timeline cues, so Parlor cues and ad markers share one carriage path from the start. If upstream has merged SCTE-35 by then, rebase onto upstream instead. Otherwise merge `upstream/EFG/SCTE35` (or its successor) into the fork, then add tests for passthrough (ingest → HLS/CMAF output), `inject_scte35`, and timestamp rollover.
+- **First step: extend SCTE-35 in MistServer (`../mistserver`).** SCTE-35 splice markers are timeline cues, so Parlor cues and ad markers share one carriage path from the start. Bring `inject_scte35` over from `upstream/EFG/SCTE35` (or its successor) onto `master`, add HLS and CMAF cue carriage, then add tests for passthrough (ingest → HLS/CMAF output), `inject_scte35`, and timestamp rollover.
 - Parlor emits cues through Mist's cue injection; the player SDK exposes them as timeline events.
 - Competitive or transactional interactions (auctions, timed drops) need the same delivery plus one authoritative server-side truth; see `docs/rfcs/live-commerce.md` (Latency fairness).
 
@@ -103,8 +103,8 @@ Hype train levels, redemptions, and flair reveals fire as Phase 3 timeline event
 - **Signalman (`api_realtime`)** - presence/room channel type (Phase 1), chat fan-out (Phase 2b).
 - **Bridge (`api_gateway`)** - GraphQL surface and subscriptions.
 - **Foghorn (`api_balancing`) / Mist** - validate room-scoped WHIP publish grants (Phase 2a); carry timeline cues (Phase 3).
-- **Multistream compositing** - mixes guest media into the program stream (Phase 2a).
-- **MistServer fork (`../mistserver`)** - SCTE-35 merge and cue injection (Phase 3).
+- **Composition** - mixes guest media into the program stream (Phase 2a).
+- **MistServer (`../mistserver`)** - SCTE-35 cue injection and HLS/CMAF carriage (Phase 3).
 - **Player SDK** - timeline event API (Phase 3), overlay rendering (Phase 4).
 - **Purser** - stream-level balances, donations/subs (Phase 4).
 
@@ -127,14 +127,14 @@ Hype train levels, redemptions, and flair reveals fire as Phase 3 timeline event
 - Risk: scope creep. Mitigation: phases gated on the previous phase; economy last.
 - Risk: realtime scalability. Mitigation: Signalman-backed presence.
 - Risk: guest-to-guest talkback latency. Mitigation: settle the media topology in Phase 2a planning; this choice sets most of 2a's cost. Mist's WebRTC is server-side, not a room: server-relayed talkback (each guest publishes once over WHIP and pulls the others over WHEP) reuses the ingest path and avoids NAT issues but adds a server hop, while a direct P2P mesh with Parlor as signaling lowers talkback latency but needs NAT traversal, with Mist as relay fallback and hole-punching coordinator (`docs/rfcs/nat-traversal.md`).
-- Risk: SCTE-35 branch diverges further from upstream. Mitigation: prefer upstream if merged by Phase 3; otherwise merge with its own test coverage before Parlor depends on it.
+- Risk: `upstream/EFG/SCTE35` diverges further from `master`. Mitigation: bring over only the injection work, with its own test coverage, before Parlor depends on it.
 
 ## Migration / Rollout
 
 1. Teams & RBAC.
 2. Room core (CRUD, participants, roles, presence).
 3. Conferencing (audio first) and chat with moderation, in either order.
-4. SCTE-35 merge in the Mist fork, then timeline cues end to end.
+4. SCTE-35 injection and HLS/CMAF carriage in MistServer, then timeline cues end to end.
 5. Engagement economy.
 
 ## Open Questions
