@@ -29,7 +29,7 @@ StreamCrafter lets a browser user publish live video/audio to a **WHIP endpoint*
   - Default: browser WebRTC encoders (works everywhere WebRTC works)
   - Optional: WebCodecs encoding + `RTCRtpScriptTransform` injection (Chrome/Chromium-family first)
 - **Compositor (optional):** OffscreenCanvas worker with `webgpu` / `webgl` / `canvas2d` renderers
-- **Framework wrappers:** React + Svelte 5
+- **Framework wrappers:** React + Svelte 5 + Web Components (Lit)
 - **Quality profiles:** runtime switching + encoder overrides
 
 ### Not supported / non-goals
@@ -54,14 +54,14 @@ npm_studio/
 
 Framework-agnostic engine + types:
 
-- Orchestration: `npm_studio/packages/core/src/core`
-- WHIP/WebRTC client: `npm_studio/packages/core/src/core`
-- Capture helpers: `npm_studio/packages/core/src/core`, `npm_studio/packages/core/src/core`
-- Audio mixing: `npm_studio/packages/core/src/core`
-- Reconnect loop: `npm_studio/packages/core/src/core`
-- Compositor coordinator: `npm_studio/packages/core/src/core` (+ `npm_studio/packages/core/src/core/renderers/*`)
-- WebCodecs: `npm_studio/packages/core/src/core` (+ worker)
-- Gateway endpoint resolution: `npm_studio/packages/core/src/core`
+- Orchestration: `npm_studio/packages/core/src/core/IngestControllerV2.ts`
+- WHIP/WebRTC client: `npm_studio/packages/core/src/core/WhipClient.ts`
+- Capture helpers: `npm_studio/packages/core/src/core/DeviceManager.ts`, `npm_studio/packages/core/src/core/ScreenCapture.ts`
+- Audio mixing: `npm_studio/packages/core/src/core/AudioMixer.ts`
+- Reconnect loop: `npm_studio/packages/core/src/core/ReconnectionManager.ts`
+- Compositor coordinator: `npm_studio/packages/core/src/core/SceneManager.ts` (+ `npm_studio/packages/core/src/core/renderers/*`)
+- WebCodecs: `npm_studio/packages/core/src/core/EncoderManager.ts` (+ worker)
+- Gateway endpoint resolution: `npm_studio/packages/core/src/core/IngestClient.ts`
 - Styling: `npm_studio/packages/core/src/styles/streamcrafter.css`
 
 Worker bundles are emitted into `npm_studio/packages/core/dist/workers` by Rollup (see `npm_studio/packages/core`).
@@ -70,29 +70,29 @@ Worker bundles are emitted into `npm_studio/packages/core/dist/workers` by Rollu
 
 React integration:
 
-- Main hook: `npm_studio/packages/react/src/hooks`
-- Drop-in UI: `npm_studio/packages/react/src/components`
+- Main hook: `npm_studio/packages/react/src/hooks/useStreamCrafterV2.ts`
+- Drop-in UI: `npm_studio/packages/react/src/components/StreamCrafter.tsx`
 - Optional extras:
-  - Compositor controls: `npm_studio/packages/react/src/hooks`
-  - Gateway resolution: `npm_studio/packages/react/src/hooks`
+  - Compositor controls: `npm_studio/packages/react/src/hooks/useCompositor.ts`
+  - Gateway resolution: `npm_studio/packages/react/src/hooks/useIngestEndpoints.ts`
 
 ### `@livepeer-frameworks/streamcrafter-svelte`
 
 Svelte 5 integration:
 
-- Main store: `npm_studio/packages/svelte/src/stores`
-- Drop-in UI: `npm_studio/packages/svelte/src`
+- Main store: `npm_studio/packages/svelte/src/stores/streamCrafterContextV2.ts`
+- Drop-in UI: `npm_studio/packages/svelte/src/StreamCrafter.svelte`
 - Optional extras:
-  - Compositor store: `npm_studio/packages/svelte/src/stores`
-  - Gateway resolution store: `npm_studio/packages/svelte/src/stores`
+  - Compositor store: `npm_studio/packages/svelte/src/stores/compositor.ts`
+  - Gateway resolution store: `npm_studio/packages/svelte/src/stores/ingestEndpoints.ts`
 
 ### `@livepeer-frameworks/streamcrafter-wc`
 
 Lit Web Components integration + UI (Shadow DOM encapsulation):
 
-- Main element: `npm_studio/packages/wc/src/components`
-- ReactiveController: `npm_studio/packages/wc/src/controllers`
-- 6 child components matching React/Svelte UI parity
+- Main element: `npm_studio/packages/wc/src/components/fw-streamcrafter.ts`
+- ReactiveController: `npm_studio/packages/wc/src/controllers/ingest-controller-host.ts`
+- 5 child components matching React/Svelte UI parity
 - Three build outputs: ESM, CJS, IIFE (CDN)
 
 ## Architecture (mental model)
@@ -143,13 +143,13 @@ When connected and streaming, if the WHIP/WebRTC connection fails:
 When enabled (`IngestControllerV2.enableCompositor(...)`):
 
 - `SceneManager` creates an output `HTMLCanvasElement`, transfers it to an `OffscreenCanvas`, and spawns the compositor worker
-- Each media source’s video track is read using `MediaStreamTrackProcessor` and forwarded to the worker as `VideoFrame`s
+- Each media source’s video track is read using `MediaStreamTrackProcessor`, or through a `<video>` element where that API is missing, and forwarded to the worker as `VideoFrame`s
 - The worker renders layers using the selected renderer (`webgpu`/`webgl`/`canvas2d`)
 - The final canvas is exposed as a single video track via `canvas.captureStream(frameRate)`
 
 This is intentionally separated from publishing: compositor output is “just another video track”.
 
-**Requirements:** `MediaStreamTrackProcessor` + `OffscreenCanvas` (Chromium-family today). If either is missing, the compositor warns and won’t initialize.
+**Requirements:** Web Workers and `OffscreenCanvas`. `SceneManager.bindSource()` falls back to `bindSourceViaVideoElement()` when `MediaStreamTrackProcessor` is missing. There is no capability check before initialization: if worker or canvas setup fails, `enableCompositor()` rejects.
 
 ### 6) Optional: WebCodecs encoding path (“Path C”)
 

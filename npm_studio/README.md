@@ -267,13 +267,15 @@ studio.masterVolume = 0.5;
 
 ### Compositor
 
-Scene-based multi-source composition with layouts, transitions, and GPU renderers. **Enabled by default** — works with a single source (solo layout) and scales to multi-source layouts automatically.
+Scene-based multi-source composition with layouts and GPU renderers. **Enabled by default in the React, Svelte, and Web Component drop-ins**; `createStreamCrafter()` leaves it off until you call `enableCompositor()`. It works with a single source (solo layout). The layout does not change when you add sources: apply one with the compositor controls or `applyLayout()`. Scene switches are hard cuts.
 
 ```ts
 const studio = createStreamCrafter({
   whipUrl: "...",
   compositor: { renderer: "auto", width: 1920, height: 1080 },
 });
+
+await studio.enableCompositor();
 ```
 
 Available renderers: `canvas2d`, `webgl`, `webgpu`, `auto` (default — auto-selects WebGPU → WebGL → Canvas2D).
@@ -391,6 +393,8 @@ studio.t("goLive"); // "Transmitir"
 ---
 
 ## Configurable Hotkeys
+
+Hotkeys are wired only in the vanilla `createStreamCrafter()` facade, on the container it mounts into. The React, Svelte, and Web Component drop-ins do not bind them.
 
 | Key           | Action                            |
 | ------------- | --------------------------------- |
@@ -558,19 +562,9 @@ Hides all built-in UI. Access the controller via the `.controller` property.
 </script>
 ```
 
-#### Standalone sub-components with `for` attribute
+#### Standalone sub-components
 
-Sub-components can be placed anywhere in the DOM and bind to a studio by ID.
-
-```html
-<fw-streamcrafter id="studio" whip-url="..." controls="false"></fw-streamcrafter>
-
-<div class="my-custom-layout">
-  <fw-sc-volume for="studio" value="1"></fw-sc-volume>
-  <fw-sc-compositor for="studio"></fw-sc-compositor>
-  <fw-sc-scene-switcher for="studio"></fw-sc-scene-switcher>
-</div>
-```
+The `fw-sc-*` sub-components are presentational. They declare a `for` attribute, but it does not bind them to a `<fw-streamcrafter>`. Set their data through JS properties and handle their events or callbacks. See [Standalone Sub-Components](https://logbook.frameworks.network/builders/ingest-wc/#standalone-sub-components) for the wiring.
 
 ### Vanilla (`createStreamCrafter`)
 

@@ -1,17 +1,18 @@
 ---
 title: "StreamCrafter — Compositor"
-description: "Multi-source compositing with scenes, layers, layouts, and transitions."
+description: "Multi-source compositing with scenes, layers, and layouts."
 ---
 
 import { Aside } from "@astrojs/starlight/components";
 
-The compositor enables multi-source layout control — arrange camera and screen share into layouts with scenes, layers, and animated transitions.
+The compositor enables multi-source layout control — arrange camera and screen share into layouts with scenes and layers.
 
 <Aside type="tip" title="On by Default in the Drop-in Components">
   The React, Svelte, and Web Component drop-in components enable the compositor by default. It works
-  with a single source (fullscreen solo layout) and scales to multi-source layouts automatically.
-  The vanilla `createStreamCrafter()` facade and the headless controllers leave it off until you
-  call `enableCompositor()`.
+  with a single source (fullscreen solo layout). The layout does not change when you add sources: a
+  new source starts full-frame on top until you pick a layout in the compositor controls or call
+  `applyLayout()`. The vanilla `createStreamCrafter()` facade and the headless controllers leave it
+  off until you call `enableCompositor()`.
 </Aside>
 
 ## Enabling and Disabling the Compositor
@@ -138,7 +139,7 @@ Each layout supports three scaling modes that control how sources fill their all
 
 ## Scenes
 
-Scenes are named collections of layers with their own layout configurations. Switch between scenes for different broadcast segments.
+Scenes are named collections of layers. Switch between scenes for different broadcast segments. A scene has no layout of its own: the compositor keeps one current layout, and `applyLayout()` arranges the active scene's layers with it.
 
 ```ts
 // React useCompositor hook or Svelte createCompositorStore
@@ -146,11 +147,7 @@ const interview = compositor.createScene("interview");
 const soloCam = compositor.createScene("solo-cam");
 
 if (interview) {
-  await compositor.transitionTo(interview.id, {
-    type: "fade",
-    durationMs: 500,
-    easing: "ease-in-out",
-  });
+  compositor.setActiveScene(interview.id);
 }
 ```
 
@@ -163,30 +160,22 @@ const sceneManager = studio.sceneManager;
 const interview = sceneManager?.createScene("interview");
 sceneManager?.createScene("solo-cam");
 
-// Switch to a scene with a transition
+// Switch to a scene
 if (interview) {
-  await sceneManager?.transitionTo(interview.id, {
-    type: "fade",
-    durationMs: 500,
-    easing: "ease-in-out",
-  });
+  sceneManager?.setActiveScene(interview.id);
 }
 ```
 
-### Transition Types
+### Scene Transitions
 
-| Type          | Description                     |
-| ------------- | ------------------------------- |
-| `cut`         | Instant switch (0ms)            |
-| `fade`        | Cross-fade between scenes       |
-| `slide-left`  | New scene slides in from right  |
-| `slide-right` | New scene slides in from left   |
-| `slide-up`    | New scene slides in from bottom |
-| `slide-down`  | New scene slides in from top    |
+Every scene switch is a hard cut today. `transitionTo()` accepts the `cut`, `fade`, `slide-left`,
+`slide-right`, `slide-up`, and `slide-down` types with a duration and easing, but the output still
+cuts to the new scene whichever values you pass.
 
 ## Layers
 
-Each source in a scene becomes a layer with independent controls:
+A new source becomes a layer in the active scene only. To show it in another scene, call
+`addLayer(sceneId, sourceId)` for that scene. Each layer has independent controls:
 
 | Property            | Type      | Description                   |
 | ------------------- | --------- | ----------------------------- |
@@ -199,6 +188,7 @@ Each source in a scene becomes a layer with independent controls:
 ### Layer Operations
 
 ```ts
+// React useCompositor hook. With the Svelte store, read $compositor.activeSceneId instead.
 const sceneId = compositor.activeSceneId;
 if (!sceneId) return;
 

@@ -10,7 +10,7 @@ Browser-based broadcasting — camera, screen share, or both with audio mixing. 
 <Aside type="tip" title="When to use StreamCrafter vs OBS">
 
 Use StreamCrafter for browser-based streaming, screen shares, webcam broadcasts, and interactive apps.
-Use OBS or a hardware encoder for scene switching, complex overlays, and fine control over encoding quality.
+Use OBS or a hardware encoder for animated scene transitions, complex overlays, and fine control over encoding quality. StreamCrafter's drop-in UI has no scene switcher; scenes are available through the compositor API.
 
 </Aside>
 
@@ -217,11 +217,11 @@ See [Advanced Features](/builders/ingest-advanced/) for audio mixing details.
 
 ## Compositor
 
-The compositor is **enabled by default** — multi-source layout control with scenes, layers, and transitions:
+The compositor is **enabled by default** — multi-source layout control with scenes and layers:
 
 - 17 layout presets (solo, PiP, split, grid, featured, and more)
-- Drag-and-drop layer ordering
-- Scene switching with animated transitions
+- Layer ordering through `reorderLayers()` or the optional `LayerList` component, which the drop-in UI does not render
+- Scenes through the compositor API, with hard cuts between them
 - GPU-accelerated rendering (WebGPU, WebGL, Canvas2D fallback)
 
 See [Compositor](/builders/ingest-compositor/) for full details.
@@ -241,12 +241,15 @@ See [Compositor](/builders/ingest-compositor/) for full details.
 
 ## Browser Support
 
-| Browser      | Tested       |
-| ------------ | ------------ |
-| Chrome 90+   | Full support |
-| Firefox 90+  | Full support |
-| Safari 14.1+ | Full support |
-| Edge 90+     | Full support |
+StreamCrafter publishes no minimum browser versions. What runs depends on the browser APIs below:
+
+| Capability               | Browser APIs                                                                   |
+| ------------------------ | ------------------------------------------------------------------------------ |
+| Publishing               | `RTCPeerConnection`                                                            |
+| Camera and microphone    | `getUserMedia`, which requires a secure context                                |
+| Screen share             | `getDisplayMedia`                                                              |
+| Compositor               | Web Workers and `OffscreenCanvas`; `enableCompositor()` rejects if setup fails |
+| Background-safe encoding | WebCodecs and `RTCRtpScriptTransform`                                          |
 
 <Aside type="note" title="Background Tab Behavior">
   Background-safe encoding requires WebCodecs **and** RTCRtpScriptTransform support
