@@ -370,7 +370,7 @@ const LandingPage = () => {
       id: "push",
       title: "Native RTMP and SRT push",
       description:
-        "MistServer pushes from the origin node itself, so there is no relay hop, no added latency, and no proxy bandwidth bill.",
+        "MistServer pushes from the origin node that holds your stream. Each destination reports its own status and errors, and its usage counts as delivered minutes.",
     },
     {
       id: "presets",
@@ -518,7 +518,7 @@ const LandingPage = () => {
           className: "cta-motion",
           variant: "secondary",
         }}
-        footnote="Not a resale of hyperscaler media APIs. One video stack, operated your way."
+        footnote="Built by the MistServer team. Employee-owned and engineer-led. Not a resale of hyperscaler media APIs. One video stack, operated your way."
         mediaSurface="none"
         media={
           <motion.div

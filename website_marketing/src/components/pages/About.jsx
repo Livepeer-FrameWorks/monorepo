@@ -31,7 +31,7 @@ const About = () => {
       name: "MistServer Team",
       role: "Video Infrastructure Pioneers",
       description:
-        "The same team building FrameWorks has developed MistServer for more than 15 years. It is the media engine at the core of FrameWorks, not a third-party service hidden behind our API.",
+        "Built by the MistServer team. Employee-owned and engineer-led. We have developed MistServer for more than 15 years, and it is the media engine at the core of FrameWorks, not a third-party service hidden behind our API.",
       avatar: "/mist.svg",
       href: "https://www.mistserver.com/",
     },
