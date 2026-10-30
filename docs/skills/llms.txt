@@ -16,6 +16,8 @@
 - [Skill File](https://frameworks.network/SKILL.md): Agent quick-start guide
 - [Agent Overview](https://logbook.frameworks.network/agents/overview): Discovery, auth, and capabilities
 - [Skipper Video Consultant](https://logbook.frameworks.network/agents/skipper): RAG-grounded streaming expertise
+- [StreamCrafter](https://logbook.frameworks.network/builders/ingest): Browser publishing over WHIP from camera and screen share, with a client-side compositor and audio mixing. React, Svelte, Web Components, and vanilla packages
+- [Multistreaming](https://logbook.frameworks.network/builders/multistreaming): Native MistServer push from the origin node to Twitch, YouTube, Kick, Facebook, X, and custom RTMP, RTMPS, or SRT destinations, with per-destination status and errors
 
 ## Migrating
 
