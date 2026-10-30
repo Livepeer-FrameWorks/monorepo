@@ -13,6 +13,7 @@ const routes = [
   ["analytics/index.html", "FrameWorks Analytics - Real-Time Streaming Telemetry"],
   ["pricing/index.html", "FrameWorks Pricing - Hosted, Hybrid, and Self-Hosted Video Cloud"],
   ["about/index.html", "About FrameWorks - Built by the Team Behind MistServer"],
+  ["showcase/index.html", "FrameWorks Showcase - What Ships Today and What Comes Next"],
   ["contact/index.html", "Contact FrameWorks - Streaming Infrastructure Support"],
   [
     "network/index.html",

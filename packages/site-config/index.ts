@@ -55,6 +55,13 @@ export const MARKETING_ROUTES: MarketingRouteSeo[] = [
       "FrameWorks is a complete video cloud built on more than 15 years of MistServer media engineering, with hosted, hybrid, and fully self-hosted deployment.",
   },
   {
+    id: "showcase",
+    path: "/showcase",
+    title: "FrameWorks Showcase - What Ships Today and What Comes Next",
+    description:
+      "What you can use on FrameWorks today, what is in the pipeline, and what is further out on the roadmap.",
+  },
+  {
     id: "contact",
     path: "/contact",
     title: "Contact FrameWorks - Streaming Infrastructure Support",

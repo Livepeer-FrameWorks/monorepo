@@ -5,6 +5,7 @@ export default [
   route("analytics", "./routes/analytics.jsx"),
   route("pricing", "./routes/pricing.jsx"),
   route("about", "./routes/about.jsx"),
+  route("showcase", "./routes/showcase.jsx"),
   route("contact", "./routes/contact.jsx"),
   route("network", "./routes/network.jsx"),
   route("status", "./routes/status.jsx"),
