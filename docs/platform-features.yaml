@@ -159,6 +159,25 @@ features:
           docs:
             pages: [builders/multistreaming.mdx]
 
+      - slug: scte35-cues
+        name: SCTE-35 cue markers
+        description: SCTE-35 splice cues in the media engine, with MistServer reading them from MPEG-TS input and inserting them into MPEG-TS outputs. Platform controls are expanding.
+        status: partial
+        gap_reason: |
+          The media engine ships this: MistServer parses SCTE-35 from MPEG-TS input, accepts cues as JSON metadata, and
+          writes them into its HTTP TS and TS-over-SRT outputs. The FrameWorks platform has no cue surface yet, so GraphQL,
+          MCP, and the dashboard cannot insert or inspect cues, and the only documentation is the managed-platform gap
+          listed in the MistServer migration guide.
+        depends_on: [streams]
+        required_surfaces:
+          graphql: { required: true }
+          mcp: { required: true }
+          webapp: { required: true }
+          docs: { required: true }
+        surfaces:
+          docs:
+            pages: [migrate/mistserver.mdx]
+
   - slug: streamcrafter
     name: StreamCrafter (browser studio)
     area: streaming

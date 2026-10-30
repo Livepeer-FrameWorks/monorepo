@@ -13,6 +13,7 @@ This broader inventory includes the [product capability matrix](/platform/featur
 | ↳ Stream keys *(foundation)* | Available | API, Agents (MCP), Dashboard, Docs | Per-stream ingest credentials with rotation. |
 | ↳ Pull streams | Expanding | API, Agents (MCP), Dashboard, Docs | Stream inputs pulled from upstream sources (RTSP, SRT, RIST, HLS, etc.) instead of pushed, with resolution-stage lifecycle audit. |
 | ↳ Multistream push targets | Available | API, Agents (MCP), Dashboard, Docs | Forward live streams to RTMP/SRT destinations with per-target video choice and an optional per-stream live video ABR switch. |
+| ↳ SCTE-35 cue markers | Expanding | Docs | SCTE-35 splice cues in the media engine, with MistServer reading them from MPEG-TS input and inserting them into MPEG-TS outputs. Platform controls are expanding. |
 | **StreamCrafter (browser studio)** | Available | API, Dashboard, Docs | Browser-based broadcasting studio — WHIP/WebRTC ingest, compositing, and multi-source mixing. Ships as npm packages @livepeer-frameworks/streamcrafter-&#123;core,react,svelte,wc&#125; and powers the dashboard's Go Live page. |
 | **Device discovery and contribution inputs** | Planned | — | Edge-local discovery for cameras, PTZ devices, NDI sources, USB capture, HDMI inputs, and local contribution paths. |
 

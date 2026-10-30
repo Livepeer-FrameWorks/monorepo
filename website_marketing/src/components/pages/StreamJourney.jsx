@@ -65,7 +65,7 @@ const workflows = [
         features: [
           { label: "Routing telemetry", status: "available" },
           { label: "Viewer QoE", status: "expanding" },
-          { label: "Incidents + alerts", status: "next" },
+          { label: "Incidents + alerts", status: "expanding" },
         ],
       },
     ],
@@ -156,7 +156,7 @@ const workflows = [
         features: [
           { label: "GraphQL API", status: "expanding" },
           { label: "React · Svelte · Web Components", status: "available" },
-          { label: "Backend SDKs", status: "next" },
+          { label: "Backend SDKs", status: "available" },
         ],
       },
       {
