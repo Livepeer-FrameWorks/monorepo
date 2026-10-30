@@ -285,6 +285,11 @@ export const PRICING_FAQS = [
       "Enterprise engagements add private deployments, custom SLAs, security reviews, and co-managed operations. We scope the stack with you so you retain control while leaning on our crews.",
   },
   {
+    question: "What happens when a prepaid balance runs out?",
+    answer:
+      "Running streams and their viewers keep going. At €0 new streams and new viewers are blocked, so a viewer or encoder that disconnects cannot reconnect until you top up. Below -€10 the account is suspended and streams stop.",
+  },
+  {
     question: "What is pay-as-you-go billing?",
     answer:
       "Add funds to your account via card or crypto. Delivered minutes and storage are deducted automatically; ingest, transcoding, and bandwidth are included. No invoices or monthly commitment. Top up again when your balance runs low.",
