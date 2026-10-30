@@ -72,7 +72,8 @@ const freeTier = {
     `Self-hosted video stack, ${compactMinutes(freeCatalog)} delivered min/mo, ${freeCatalog.limits.storageGiB} GB storage, ${freeCatalog.limits.maxConcurrentStreams} streams / ${freeCatalog.limits.maxConcurrentViewers} viewers, ${freeCatalog.limits.retentionDays}-day retention`,
   ],
   limitations: [
-    "No SLA during beta, no advanced processing (AI workloads), fair-use admission caps burst above quota",
+    `${freeCatalog.limits.maxConcurrentStreams} streams, ${freeCatalog.limits.maxConcurrentViewers} viewers, and ${freeCatalog.limits.storageGiB} GB storage are hard limits at any load`,
+    "Delivered minutes above the allowance are served only while cluster capacity allows, and at peak load paying tenants take priority",
   ],
   badge: "No Surprise Bills",
   ctaLabel: "Start Free",
@@ -95,10 +96,7 @@ const paidTiers = [
       "Custom subdomain (*.frameworks.network)",
       "Transparent usage reporting",
     ],
-    limitations: [
-      "Suitable for ~100–300 concurrent viewers (adaptive)",
-      "Best-effort; no SLA during beta",
-    ],
+    limitations: ["Suitable for ~100–300 concurrent viewers (adaptive)"],
     note: "Includes hosted LB + subdomain",
     ctaLabel: "Get Started",
     ctaLink: config.appUrl,
@@ -118,7 +116,7 @@ const paidTiers = [
       "Advanced analytics",
       "Priority support",
     ],
-    limitations: ["Suitable for ~500–1,000 concurrent viewers (adaptive)", "Standard SLA at GA"],
+    limitations: ["Suitable for ~500–1,000 concurrent viewers (adaptive)"],
     note: "Priority support & analytics included",
     ctaLabel: "Get Started",
     ctaLink: config.appUrl,
@@ -130,16 +128,16 @@ const paidTiers = [
     price: productionPricing.price,
     period: "/month",
     dailyCost: productionPricing.dailyCost,
-    description: `${compactMinutes(catalogTier.production)} delivered minutes, SLA-backed 24/7 support, and dedicated capacity options.`,
+    description: `${compactMinutes(catalogTier.production)} delivered minutes, business-hours support, and dedicated capacity options.`,
     features: [
       productionPricing.delivery,
       productionPricing.storage,
-      "SLA & 24/7 support",
+      "Business-hours support, on-call by Enterprise agreement",
       "Dedicated capacity options",
       "Live dashboard",
     ],
     limitations: ["Suitable for ~2,000–5,000 concurrent viewers (adaptive)"],
-    note: "Reserved capacity & SLA coverage available",
+    note: "Reserved capacity available",
     ctaLabel: "Talk to us",
     ctaLink: "/contact",
   },
@@ -177,7 +175,7 @@ const processingFeatureMatrix = [
   {
     feature: "Transcoding",
     description:
-      "Real-time transcoding on FrameWorks edges for SLA-backed capacity, on Livepeer for low-cost capacity that is quick to scale, or on your own edge with no FrameWorks processing charge.",
+      "Real-time transcoding on FrameWorks edges for dedicated capacity, on Livepeer for low-cost capacity that is quick to scale, or on your own edge with no FrameWorks processing charge.",
     tiers: {
       free: "Powered by Livepeer network",
       supporter: "Powered by Livepeer network",
@@ -254,7 +252,7 @@ export const PRICING_FAQS = [
   {
     question: "Why can FrameWorks price video differently from hyperscaler-based platforms?",
     answer:
-      "Our team develops the core MistServer media engine and can operate the live path directly on infrastructure including bare metal. For processing, use FrameWorks edges when you need SLA-backed capacity, Livepeer when you want low-cost capacity that is quick to scale, or your own edge with no FrameWorks processing charge.",
+      "Our team develops the core MistServer media engine and can operate the live path directly on infrastructure including bare metal. For processing, use FrameWorks edges when you need dedicated capacity, Livepeer when you want low-cost capacity that is quick to scale, or your own edge with no FrameWorks processing charge.",
   },
   {
     question: "What does beta pricing include?",
@@ -264,12 +262,12 @@ export const PRICING_FAQS = [
   {
     question: "Can I mix self-hosted and hosted workloads?",
     answer:
-      "Yes. Every tier includes self-hosting. You can process on your own edge with no FrameWorks processing charge, use Livepeer for low-cost capacity that is quick to scale, or move SLA-sensitive workloads onto FrameWorks edges.",
+      "Yes. Every tier includes self-hosting. You can process on your own edge with no FrameWorks processing charge, use Livepeer for low-cost capacity that is quick to scale, or move workloads that need dedicated capacity onto FrameWorks edges.",
   },
   {
     question: "When should I upgrade to Production?",
     answer:
-      "Upgrade once you have steady audiences, need dedicated processing capacity, or require SLA-backed response. Production is tuned for 2,000–5,000 concurrent viewers with reserved capacity.",
+      "Upgrade once you have steady audiences or need dedicated processing capacity. Production is tuned for 2,000–5,000 concurrent viewers with reserved capacity.",
   },
   {
     question: "How does the hosted load balancer work?",
@@ -519,7 +517,7 @@ const Pricing = () => {
                   items: freeTier.features,
                 },
                 {
-                  title: "What you don’t",
+                  title: "Limits",
                   items: freeTier.limitations,
                   bullet: "dash",
                 },
@@ -548,7 +546,7 @@ const Pricing = () => {
               <HeadlineStack
                 eyebrow="Paid tiers"
                 title="Add managed infrastructure without changing stacks"
-                subtitle="Move workloads onto FrameWorks infrastructure, reserve capacity, and add operational support while keeping the same media engine and APIs."
+                subtitle="Move workloads onto FrameWorks infrastructure, reserve capacity, and add operational support while keeping the same media engine and APIs. All hosted plans run on the same redundant infrastructure, and running streams continue through a control-plane outage."
                 align="left"
                 underlineAlign="start"
                 actionsPlacement="inline"
@@ -718,7 +716,7 @@ const Pricing = () => {
               <HeadlineStack
                 eyebrow="Advanced processing"
                 title="Advanced processing capabilities"
-                subtitle="Run processing on FrameWorks edges for SLA-backed capacity, use Livepeer for low-cost capacity that is quick to scale, or process on your own edge with no FrameWorks processing charge. AI workloads and multi-stream compositing are in the pipeline."
+                subtitle="Run processing on FrameWorks edges for dedicated capacity, use Livepeer for low-cost capacity that is quick to scale, or process on your own edge with no FrameWorks processing charge. AI workloads and multi-stream compositing are in the pipeline."
                 align="left"
                 underlineAlign="start"
                 actionsPlacement="inline"
