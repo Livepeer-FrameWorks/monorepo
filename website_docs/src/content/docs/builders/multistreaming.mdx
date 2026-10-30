@@ -14,9 +14,11 @@ Each enabled live destination uses one slot from your existing viewer-capacity l
 Playback policy, DVR, and analytics stay on the single ingest; only distribution fans out.
 
 <Aside type="tip">
-  Multistreaming uses native MistServer push, so FrameWorks does not add a re-encoding step. Each
-  target receives the source bitstream from the origin node. Destination platforms can still add
-  their own buffering and latency.
+  Multistreaming uses native MistServer push from the origin node. Each destination receives your
+  source video whenever its codec and settings fit, with no re-encoding. If a destination's hard
+  limit rules out the source, Mist sends one compatible rendition instead. Renditions above your
+  source's resolution, and audio conversions to a codec your source already uses, are skipped, so no
+  processing runs for them. Destination platforms can still add their own buffering and latency.
 </Aside>
 
 ```mermaid
