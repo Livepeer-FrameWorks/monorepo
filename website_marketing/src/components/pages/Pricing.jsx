@@ -793,6 +793,26 @@ const Pricing = () => {
 
       <SectionDivider />
 
+      <Section>
+        <SectionContainer>
+          <MarketingBand preset="quiet">
+            <HeadlineStack
+              eyebrow="Talk to the engineers"
+              title="Trials, custom pricing, and a shared channel"
+              subtitle="Reach out for trial usage, custom pricing, or a shared Slack or WhatsApp channel. You talk directly with the video engineers who build the platform."
+              align="left"
+              underlineAlign="start"
+              actionsPlacement="inline"
+              actions={
+                <MarketingCTAButton intent="primary" to="/contact" label="Talk to the engineers" />
+              }
+            />
+          </MarketingBand>
+        </SectionContainer>
+      </Section>
+
+      <SectionDivider />
+
       <Section className="bg-brand-surface">
         <SectionContainer>
           <motion.div
