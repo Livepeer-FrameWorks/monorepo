@@ -70,7 +70,7 @@ const About = () => {
         "FrameWorks brings a multi-tenant control plane, routing, analytics, billing, and automation to the proven MistServer media layer.",
       points: [
         "IBC showcase highlights CDN + hosted processing pipelines with telemetry.",
-        "Sales-engineering loop; from demo interest into structured pilots.",
+        "Sales-engineering loop; from demo interest into early deployments.",
         "Partner roadmap aligned with MistServer + Livepeer field feedback captured during the conference.",
       ],
     },

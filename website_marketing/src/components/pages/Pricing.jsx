@@ -275,6 +275,11 @@ export const PRICING_FAQS = [
       "From Supporter tier onward, we run Foghorn load balancers for you. They handle routing, failover, certificates, and scaling so your ingest infrastructure stays resilient without extra ops.",
   },
   {
+    question: "Who answers when we need support?",
+    answer:
+      "Video engineers. You work directly with the people who have built MistServer for more than 15 years. That experience covers your whole pipeline, not just our part of it: encoders and contribution before FrameWorks, players and delivery after it.",
+  },
+  {
     question: "What if we outgrow the published tiers?",
     answer:
       "Enterprise engagements add private deployments, custom SLAs, security reviews, and co-managed operations. We scope the stack with you so you retain control while leaning on our crews.",

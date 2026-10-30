@@ -399,7 +399,7 @@ const LandingPage = () => {
     "Custom subdomains and hosted load balancers",
     "Reserved processing capacity and bandwidth pools",
     "Team collaboration and advanced analytics",
-    "Priority support from the engineers who build it",
+    "Support from the video engineers who build it",
   ];
 
   const pricingPlans = [
@@ -1154,6 +1154,23 @@ const LandingPage = () => {
                 ))}
               </Accordion>
             </MarketingSlab>
+          </SectionContainer>
+        </Section>
+
+        <SectionDivider />
+
+        {/* Support */}
+        <Section>
+          <SectionContainer>
+            <MarketingBand preset="quiet">
+              <HeadlineStack
+                eyebrow="Support"
+                title="Support from video engineers"
+                subtitle="You work directly with the people who have built MistServer for more than 15 years. That experience covers your whole pipeline, not just our part of it: encoders and contribution before FrameWorks, players and delivery after it."
+                align="left"
+                underlineAlign="start"
+              />
+            </MarketingBand>
           </SectionContainer>
         </Section>
 
