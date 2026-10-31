@@ -103,8 +103,10 @@ source_visible() {
   cell=$(jq -r '.local_cluster_id' <<<"$response")
   # The compact registry endpoint omits edge playability. Read the disposable
   # stack's credential-free source advertisement to wait for a playable origin.
-  stack_exec "$REDIS" valkey-cli --raw get "{$cell}:registry:source:$IN" |
-    jq -e --arg cell "$cell" '[.Locations | to_entries[] | select(.key != $cell and .value.IsLiveNow) | .value.EdgeCandidates[]? | select(.IsOrigin and .Playable and .DTSCURL != "")] | length > 0' >/dev/null
+  response=$(stack_exec "$REDIS" valkey-cli --raw get "{$cell}:registry:source:$IN") || return 1
+  # jq versions used by the runner can exit zero for empty input with -e.
+  # Slurping makes a missing key an explicit false readiness result.
+  jq -es --arg cell "$cell" --arg tenant "$TENANT" 'length == 1 and (.[0] | .TenantID == $tenant and ([.Locations | to_entries[] | select(.key != $cell and .value.IsLiveNow) | .value.EdgeCandidates[]? | select(.IsOrigin and .Playable and .DTSCURL != "")] | length > 0))' <<<"$response" >/dev/null
 }
 cleared() { local current; current=$(replication) && [ -z "$current" ]; }
 has_ts() {
