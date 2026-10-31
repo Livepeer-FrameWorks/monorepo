@@ -226,8 +226,8 @@ This applies to each `ADD` clause even when another clause adds a valid table
 constraint, including statements inside executed `DO` blocks. Data literals,
 including dollar-quoted text, cannot hide a later constrained column. Commas
 inside array expressions do not split ADD clauses. Three already-shipped files
-are exempted by their exact path and SHA-256 in `migrate_shipped_constraints.go`; moved or edited copies are
-validated normally. New migrations cannot add an exemption.
+are exempted by their exact path and SHA-256 in
+`migrate_shipped_constraints.go`; moved or edited copies are validated normally. New migrations cannot add an exemption.
 
 `make verify-schema-migrations` supplies the complete local schema proof that version checks cannot.
 For PostgreSQL it compares both current-baseline replay and the latest tagged

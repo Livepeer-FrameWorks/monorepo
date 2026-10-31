@@ -21,6 +21,8 @@ age_synced_pressure_fixture_cache() {
 pressure_dvr_durability_verified() {
   local since=$1 hash=$2 verdict
   case "$hash" in ''|*[!a-zA-Z0-9_-]*) return 1 ;; esac
-  verdict=$(log_json "$since" "select(.asset_hash == \"$hash\" and ((.msg // \"\") | startswith(\"Asset durable copy verified, safe to delete local copy\"))) | .asset_hash" foghorn foghorn-2) || return 1
+  verdict=$(log_json "$since" \
+    "select(.asset_hash == \"$hash\" and ((.msg // \"\") | startswith(\"Asset durable copy verified, safe to delete local copy\"))) | .asset_hash" \
+    foghorn foghorn-2) || return 1
   [ -n "$verdict" ]
 }

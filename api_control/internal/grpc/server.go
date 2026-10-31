@@ -11201,7 +11201,9 @@ func (s *CommodoreServer) TerminateTenantStreams(ctx context.Context, req *fogho
 		failures++
 		lastErr = inventoryErr
 	}
-	results := dispatchTenantControl(ctx, s, targets, func(callCtx context.Context, client *foghornclient.GRPCClient) (*foghorncontrolpb.TerminateTenantStreamsResponse, error) {
+	results := dispatchTenantControl(ctx, s, targets, func(
+		callCtx context.Context, client *foghornclient.GRPCClient,
+	) (*foghorncontrolpb.TerminateTenantStreamsResponse, error) {
 		response, _, callErr := client.TerminateTenantStreams(callCtx, req.TenantId, req.Reason)
 		return response, callErr
 	})
@@ -11265,7 +11267,9 @@ func (s *CommodoreServer) InvalidateTenantCache(ctx context.Context, req *foghor
 		failures++
 		lastErr = inventoryErr
 	}
-	results := dispatchTenantControl(ctx, s, targets, func(callCtx context.Context, client *foghornclient.GRPCClient) (*foghorncontrolpb.InvalidateTenantCacheResponse, error) {
+	results := dispatchTenantControl(ctx, s, targets, func(
+		callCtx context.Context, client *foghornclient.GRPCClient,
+	) (*foghorncontrolpb.InvalidateTenantCacheResponse, error) {
 		response, _, callErr := client.InvalidateTenantCache(callCtx, req.TenantId, req.Reason)
 		return response, callErr
 	})
