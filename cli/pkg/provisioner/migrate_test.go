@@ -399,6 +399,9 @@ func TestValidateMigrationSet_NotValidConstraintWithPostdeployValidation(t *test
 
 func TestValidateMigrationSet_InlineAddedColumnConstraint(t *testing.T) {
 	for _, definition := range []string{
+		`ADD COLUMN samples INT[] DEFAULT ARRAY[1,2] CHECK (cardinality(samples) > 0)`,
+		`ADD COLUMN samples INT[][] DEFAULT ARRAY[[1,2],[3,4]] CHECK (cardinality(samples) > 0)`,
+		`ADD CONSTRAINT safe CHECK (true) NOT VALID, ADD COLUMN samples INT[] DEFAULT ARRAY[1,2] CHECK (cardinality(samples) > 0)`,
 		`ADD COLUMN reason TEXT CHECK (reason <> '')`,
 		`ADD COLUMN reason TEXT CONSTRAINT reason_valid CHECK (reason <> '')`,
 		`ADD COLUMN owner UUID REFERENCES purser.owners(id)`,
@@ -438,6 +441,8 @@ END $$;`,
 
 func TestValidateMigrationSet_ExecutableConstraintControls(t *testing.T) {
 	for _, content := range []string{
+		`ALTER TABLE purser.a ADD COLUMN samples INT[] DEFAULT ARRAY[1,2], ADD CONSTRAINT safe CHECK (cardinality(samples) > 0) NOT VALID;`,
+		`ALTER TABLE purser.a ADD COLUMN samples INT[][] DEFAULT ARRAY[[1,2],[3,4]], ADD CONSTRAINT safe CHECK (cardinality(samples) > 0) NOT VALID;`,
 		`DO $$ BEGIN ALTER TABLE purser.a ADD CONSTRAINT safe CHECK (reason <> $q$($q$) NOT VALID; ALTER TABLE purser.a ADD COLUMN owner UUID; END $$;`,
 		`DO $$ BEGIN RAISE NOTICE 'ALTER TABLE purser.a ADD COLUMN owner UUID REFERENCES purser.owners(id)'; ALTER TABLE purser.a ADD CONSTRAINT safe CHECK (true) NOT VALID; END $$;`,
 		`ALTER TABLE purser.a ADD CONSTRAINT safe CHECK (reason <> '\') NOT VALID, ADD COLUMN owner UUID;`,

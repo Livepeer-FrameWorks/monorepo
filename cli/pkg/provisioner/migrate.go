@@ -905,9 +905,9 @@ func splitSQLAlterClauses(statement string) []string {
 		switch c {
 		case '\'', '"':
 			quote = c
-		case '(':
+		case '(', '[':
 			depth++
-		case ')':
+		case ')', ']':
 			if depth > 0 {
 				depth--
 			}
