@@ -12,7 +12,37 @@ WORK="$STACK_STATE_DIR/direct-reopen-$(date +%s)"
 mkdir -p "$WORK"
 FIXTURES=0
 BILLING_FIXTURE=0
+ACCESS_FIXTURES=0
 SOURCE_PID=""
+snapshot_cluster_access_fixture() { # tenant cluster snapshot-file
+  pg quartermaster "SELECT replace(encode(convert_to(row_to_json(access)::text,'UTF8'),'base64'), E'\\n','')
+    FROM quartermaster.tenant_cluster_access access WHERE tenant_id='$1' AND cluster_id='$2'" >"$3"
+}
+restore_cluster_access_fixture() { # tenant cluster snapshot-file
+  local tenant=$1 cluster=$2 snapshot=$3 prior current
+  [ -f "$snapshot" ] || return 1
+  prior=$(cat "$snapshot")
+  if [ -z "$prior" ]; then
+    pg quartermaster "DELETE FROM quartermaster.tenant_cluster_access WHERE tenant_id='$tenant' AND cluster_id='$cluster'" >/dev/null || return 1
+  else
+    # The isolated fixture owns this tenant/cluster pair. Restore every field,
+    # including provenance and expiry, after billing cleanup reconciles access.
+    pg quartermaster "INSERT INTO quartermaster.tenant_cluster_access
+      SELECT restored.* FROM json_populate_record(NULL::quartermaster.tenant_cluster_access,
+        convert_from(decode('$prior','base64'),'UTF8')::json) AS restored
+      WHERE restored.tenant_id='$tenant' AND restored.cluster_id='$cluster'
+      ON CONFLICT (tenant_id,cluster_id) DO UPDATE SET
+        id=EXCLUDED.id,access_level=EXCLUDED.access_level,access_source=EXCLUDED.access_source,
+        resource_limits=EXCLUDED.resource_limits,subscription_status=EXCLUDED.subscription_status,
+        requested_at=EXCLUDED.requested_at,approved_at=EXCLUDED.approved_at,approved_by=EXCLUDED.approved_by,
+        rejection_reason=EXCLUDED.rejection_reason,invite_token=EXCLUDED.invite_token,
+        is_active=EXCLUDED.is_active,granted_at=EXCLUDED.granted_at,expires_at=EXCLUDED.expires_at,
+        created_at=EXCLUDED.created_at,updated_at=EXCLUDED.updated_at" >/dev/null || return 1
+  fi
+  current=$(pg quartermaster "SELECT replace(encode(convert_to(row_to_json(access)::text,'UTF8'),'base64'), E'\\n','')
+    FROM quartermaster.tenant_cluster_access access WHERE tenant_id='$tenant' AND cluster_id='$cluster'") || return 1
+  [ "$current" = "$prior" ]
+}
 cleanup() {
   if [ "$FIXTURES" = 1 ]; then
     stack_exec commodore /app/commodore bootstrap --file /dev/stdin <"$STACK_LIB_DIR/bootstrap.yaml" >/dev/null || fail 'remove managed playback fixtures'
@@ -20,6 +50,16 @@ cleanup() {
   if [ "$BILLING_FIXTURE" = 1 ]; then
     FW_USER_TOKEN="$OPERATOR_TOKEN" "$STACK_REPO/bin/cli" admin billing grant revoke --tenant-id "$TENANT" --tier free --reason 'stack managed playback cleanup' >/dev/null || fail 'remove managed playback billing grant'
     BILLING_FIXTURE=0
+  fi
+  if [ "$ACCESS_FIXTURES" = 1 ]; then
+    local cluster restored=1
+    for cluster in "$CELL_A_CLUSTER" "$CELL_B_CLUSTER"; do
+      if ! restore_cluster_access_fixture "$TENANT" "$cluster" "$WORK/access-$cluster.before"; then
+        fail "restore original cluster access for $cluster"
+        restored=0
+      fi
+    done
+    [ "$restored" = 0 ] || ACCESS_FIXTURES=0
   fi
   [ -z "$SOURCE_PID" ] || kill "$SOURCE_PID" 2>/dev/null
   SOURCE_PID=""
@@ -44,7 +84,12 @@ PY
 
 . "$STACK_LIB_DIR/cli-context.sh"
 OPERATOR_TOKEN=$(awk '$6=="access_token"{print $7}' "$WORK/cookies" | tail -1)
-EXPIRES=$(date -u -d '+30 minutes' +%Y-%m-%dT%H:%M:%SZ)
+EXPIRES=$(python3 -c 'import datetime; print((datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ"))')
+for cluster in "$CELL_A_CLUSTER" "$CELL_B_CLUSTER"; do
+  snapshot_cluster_access_fixture "$TENANT" "$cluster" "$WORK/access-$cluster.before" ||
+    { fail "snapshot original cluster access for $cluster"; finish; }
+done
+ACCESS_FIXTURES=1
 # The account-only stack bootstrap creates no billing subscription for the
 # system operator. Use a real temporary grant so billing admits its viewers.
 FW_USER_TOKEN="$OPERATOR_TOKEN" "$STACK_REPO/bin/cli" admin billing grant set --tenant-id "$TENANT" --tier enterprise --base-fee 0 --waive-usage --until "$EXPIRES" --fallback-tier free --reason 'stack managed playback fixture' >/dev/null ||

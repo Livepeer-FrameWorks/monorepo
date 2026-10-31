@@ -9,6 +9,15 @@ import sys
 processes = set()
 
 
+def stop_process(process):
+    process.terminate()
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+
+
 class Source(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path != "/loop.ts":
@@ -33,9 +42,10 @@ class Source(http.server.BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
         finally:
-            process.terminate()
-            process.wait(timeout=5)
-            processes.discard(process)
+            try:
+                stop_process(process)
+            finally:
+                processes.discard(process)
 
 
 signal.signal(signal.SIGTERM, lambda *_args: sys.exit(0))
@@ -43,5 +53,4 @@ try:
     http.server.ThreadingHTTPServer(("0.0.0.0", 18948), Source).serve_forever()
 finally:
     for child in tuple(processes):
-        child.terminate()
-        child.wait(timeout=5)
+        stop_process(child)

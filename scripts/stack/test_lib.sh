@@ -262,6 +262,25 @@ expired_publisher_does_not_prove_termination() {
 }
 expect 'a naturally expired publisher cannot prove termination' expired_publisher_does_not_prove_termination
 
+managed_access_cleanup_restores_the_snapshot() (
+  trap - EXIT
+  export FIXTURES=0 BILLING_FIXTURE=0 ACCESS_FIXTURES=1 SOURCE_PID=""
+  export TENANT=fixture-tenant CELL_A_CLUSTER=cell-a CELL_B_CLUSTER=cell-b WORK="$work/access-cleanup"
+  mkdir -p "$WORK"
+  printf 'original-source-and-expiry\n' >"$WORK/access-cell-a.before"
+  : >"$WORK/access-cell-b.before"
+  printf 'changed-by-fixture\n' >"$WORK/current-cell-a"
+  printf 'new-fixture-row\n' >"$WORK/current-cell-b"
+  restore_cluster_access_fixture() {
+    local cluster=$2 snapshot=$3
+    if [ -s "$snapshot" ]; then cp "$snapshot" "$WORK/current-$cluster"; else rm "$WORK/current-$cluster"; fi
+  }
+  eval "$(sed -n '/^cleanup() {$/,/^}$/p' "$here/scenarios/48-direct-replica-reopen.sh")"
+  cleanup
+  [ "$(cat "$WORK/current-cell-a")" = original-source-and-expiry ] && [ ! -e "$WORK/current-cell-b" ]
+)
+expect 'managed playback cleanup restores the prior access row and removes only its new fixture' managed_access_cleanup_restores_the_snapshot
+
 if [ "$failures" -gt 0 ]; then
   echo "lib.sh checks: $failures failed"
   exit 1
