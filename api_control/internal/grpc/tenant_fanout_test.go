@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DATA-DOG/go-sqlmock"
 	foghornclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/foghorn"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
@@ -22,10 +23,88 @@ type testTenantControlServer struct {
 	terminateResp  *foghorncontrolpb.TerminateTenantStreamsResponse
 	invalidateResp *foghorncontrolpb.InvalidateTenantCacheResponse
 	invalidateErr  error
+	terminateWait  bool
+	terminated     chan struct{}
 }
 
-func (s *testTenantControlServer) TerminateTenantStreams(context.Context, *foghorncontrolpb.TerminateTenantStreamsRequest) (*foghorncontrolpb.TerminateTenantStreamsResponse, error) {
+func (s *testTenantControlServer) TerminateTenantStreams(ctx context.Context, _ *foghorncontrolpb.TerminateTenantStreamsRequest) (*foghorncontrolpb.TerminateTenantStreamsResponse, error) {
+	if s.terminateWait {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	if s.terminated != nil {
+		close(s.terminated)
+	}
 	return s.terminateResp, nil
+}
+
+func TestTerminateTenantStreams_HangingCellDoesNotStarveHealthyCell(t *testing.T) {
+	hanging := startTenantControlTestServer(t, &testTenantControlServer{terminateWait: true})
+	terminated := make(chan struct{})
+	healthy := startTenantControlTestServer(t, &testTenantControlServer{
+		terminated:    terminated,
+		terminateResp: &foghorncontrolpb.TerminateTenantStreamsResponse{StreamsTerminated: 2, SessionsTerminated: 3},
+	})
+	server := newTenantFanoutTestServer(t, &clusterRoute{
+		clusterID: "hanging", foghornAddr: hanging,
+		clusterPeers: []*clusterpeerpb.TenantClusterPeer{{ClusterId: "healthy", FoghornGrpcAddr: healthy}},
+		resolvedAt:   time.Now(),
+	})
+	ctx, cancel := context.WithTimeout(serviceCtx(), 250*time.Millisecond)
+	defer cancel()
+	_, err := server.TerminateTenantStreams(ctx, &foghorncontrolpb.TerminateTenantStreamsRequest{TenantId: "tenant-1"})
+	select {
+	case <-terminated:
+	default:
+		t.Fatal("healthy cell was never stopped because the first cell consumed the caller deadline")
+	}
+	progress := grpcutil.StreamStopProgress(err)
+	if status.Code(err) != codes.Unavailable || progress.GetStreamsTerminated() != 2 || progress.GetSessionsTerminated() != 3 {
+		t.Fatalf("pending stop lost healthy-cell progress: response=%v err=%v", progress, err)
+	}
+}
+
+func TestTerminateTenantStreams_IncludesRecordedDeentitledCells(t *testing.T) {
+	for _, reachable := range []bool{true, false} {
+		t.Run(map[bool]string{true: "reachable", false: "missing address"}[reachable], func(t *testing.T) {
+			primary := startTenantControlTestServer(t, &testTenantControlServer{terminateResp: &foghorncontrolpb.TerminateTenantStreamsResponse{StreamsTerminated: 1}})
+			server := newTenantFanoutTestServer(t, &clusterRoute{clusterID: "current", foghornAddr: primary, resolvedAt: time.Now()})
+			db, mock, err := sqlmock.New()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			server.db = db
+			mock.ExpectQuery("ListAccountIngestCells").WithArgs("tenant-1", "").WillReturnRows(sqlmock.NewRows([]string{"cell_id"}).AddRow("historical"))
+			stopped := make(chan struct{})
+			entry := &foghornDiscoveryEntry{at: time.Now()}
+			if reachable {
+				entry.addrs = []string{startTenantControlTestServer(t, &testTenantControlServer{terminated: stopped, terminateResp: &foghorncontrolpb.TerminateTenantStreamsResponse{StreamsTerminated: 1}})}
+			}
+			server.foghornDiscovery.Store("historical", entry)
+			response, callErr := server.TerminateTenantStreams(serviceCtx(), &foghorncontrolpb.TerminateTenantStreamsRequest{TenantId: "tenant-1"})
+			if reachable {
+				select {
+				case <-stopped:
+				default:
+					t.Fatal("recorded cell lost from entitlement route was never stopped")
+				}
+				if callErr != nil || response.GetStreamsTerminated() != 2 {
+					t.Fatalf("historical stop response=%v err=%v", response, callErr)
+				}
+			} else {
+				if status.Code(callErr) != codes.Unavailable || grpcutil.StreamStopProgress(callErr).GetStreamsTerminated() != 1 {
+					t.Fatalf("missing historical cell was acknowledged: %v", callErr)
+				}
+				if _, cached := server.routeCache["tenant-1"]; cached {
+					t.Fatal("failed delivery retained the stale tenant route")
+				}
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
 }
 
 func (s *testTenantControlServer) InvalidateTenantCache(context.Context, *foghorncontrolpb.InvalidateTenantCacheRequest) (*foghorncontrolpb.InvalidateTenantCacheResponse, error) {
@@ -55,10 +134,17 @@ func startTenantControlTestServer(t *testing.T, svc foghornpb.TenantControlServi
 
 func newTenantFanoutTestServer(t *testing.T, route *clusterRoute) *CommodoreServer {
 	t.Helper()
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	mock.ExpectQuery("ListAccountIngestCells").WillReturnRows(sqlmock.NewRows([]string{"cell_id"}))
 	pool := foghornclient.NewPool(foghornclient.PoolConfig{Logger: logrus.New()})
 	t.Cleanup(func() { _ = pool.Close() })
 
 	return &CommodoreServer{
+		db:            db,
 		logger:        logrus.New(),
 		foghornPool:   pool,
 		routeCache:    map[string]*clusterRoute{"tenant-1": route},

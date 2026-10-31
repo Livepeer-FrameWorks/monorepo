@@ -11105,44 +11105,76 @@ func (s *CommodoreServer) TerminateTenantStreams(ctx context.Context, req *fogho
 	}
 
 	targets := buildClusterFanoutTargets(route)
+	cells, err := commodoredb.New(s.db).ListAccountIngestCells(ctx, commodoredb.ListAccountIngestCellsParams{TenantID: req.TenantId, StreamID: ""})
+	if err != nil {
+		return nil, status.Errorf(codes.Unavailable, "read recorded ingest cells: %v", err)
+	}
+	seen := make(map[string]bool, len(targets))
+	for _, target := range targets {
+		seen[target.clusterID] = true
+	}
+	missing := missingTenantFanoutCells(route, targets)
+	for _, cell := range cells {
+		missing[cell] = true
+	}
+	for cell := range missing {
+		if !seen[cell] {
+			targets = append(targets, clusterFanoutTarget{clusterID: cell})
+			seen[cell] = true
+		}
+	}
 
 	var totalStreams, totalSessions int32
 	var allStreamNames []string
 	var lastErr error
 	failures := 0
-	missing := missingTenantFanoutCells(route, targets)
-	for id := range missing {
-		failures++
-		lastErr = status.Errorf(codes.Unavailable, "configured cell %s has no Foghorn address", id)
+	type stopResult struct {
+		response *foghorncontrolpb.TerminateTenantStreamsResponse
+		err      error
 	}
-	for _, target := range targets {
-		client, dialErr := s.foghornPool.GetOrCreate(foghornPoolKey(target.clusterID, target.addr), target.addr)
-		if dialErr != nil {
-			s.logger.WithError(dialErr).WithField("cluster_id", target.clusterID).Warn("Failed to connect to cluster for tenant termination")
-			lastErr = dialErr
-			failures++
-			continue
+	results := make([]stopResult, len(targets))
+	var calls sync.WaitGroup
+	for i, target := range targets {
+		calls.Add(1)
+		go func() {
+			defer calls.Done()
+			var client *foghornclient.GRPCClient
+			var dialErr error
+			if target.addr == "" {
+				client, dialErr = s.resolveFoghornForClusterDirect(ctx, target.clusterID)
+			} else {
+				client, dialErr = s.foghornPool.GetOrCreate(foghornPoolKey(target.clusterID, target.addr), target.addr)
+			}
+			if dialErr != nil {
+				results[i].err = dialErr
+				return
+			}
+			results[i].response, _, results[i].err = client.TerminateTenantStreams(ctx, req.TenantId, req.Reason)
+		}()
+	}
+	calls.Wait()
+	for i, result := range results {
+		if result.response != nil {
+			totalStreams += result.response.StreamsTerminated
+			totalSessions += result.response.SessionsTerminated
+			allStreamNames = append(allStreamNames, result.response.StreamNames...)
 		}
-		foghornResp, _, callErr := client.TerminateTenantStreams(ctx, req.TenantId, req.Reason)
-		if foghornResp != nil {
-			totalStreams += foghornResp.StreamsTerminated
-			totalSessions += foghornResp.SessionsTerminated
-			allStreamNames = append(allStreamNames, foghornResp.StreamNames...)
-		}
-		if callErr != nil {
-			s.logger.WithError(callErr).WithFields(logging.Fields{
-				"tenant_id":  req.TenantId,
-				"cluster_id": target.clusterID,
+		if result.err != nil {
+			s.logger.WithError(result.err).WithFields(logging.Fields{
+				"tenant_id": req.TenantId, "cluster_id": targets[i].clusterID,
 			}).Warn("Failed to terminate tenant streams on cluster")
-			lastErr = callErr
+			s.routeCacheMu.Lock()
+			delete(s.routeCache, req.TenantId)
+			s.routeCacheMu.Unlock()
+			s.forgetFoghornDiscovery(targets[i].clusterID)
+			lastErr = result.err
 			failures++
-			continue
 		}
 	}
 
 	progress := &foghorncontrolpb.TerminateTenantStreamsResponse{StreamsTerminated: totalStreams, SessionsTerminated: totalSessions, StreamNames: allStreamNames}
 	if failures > 0 {
-		s.logger.WithError(lastErr).WithFields(logging.Fields{"tenant_id": req.TenantId, "clusters_failed": failures, "clusters_total": len(targets) + len(missing)}).Warn("Tenant termination remains pending on unreachable clusters")
+		s.logger.WithError(lastErr).WithFields(logging.Fields{"tenant_id": req.TenantId, "clusters_failed": failures, "clusters_total": len(targets)}).Warn("Tenant termination remains pending on unreachable clusters")
 		return nil, grpcutil.PendingStreamStop(progress)
 	}
 
