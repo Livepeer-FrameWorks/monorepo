@@ -46,6 +46,7 @@ func TestOperatorTrialLifecycle_RealPG(t *testing.T) {
   VALUES ($1,$2,'prepaid','active',NOW()-INTERVAL '1 hour',NOW()+INTERVAL '30 days','EUR')`, tenantID, paygID); writeErr != nil {
 		t.Fatal(writeErr)
 	}
+	t.Run("new postpaid subscription periods", func(t *testing.T) { assertDefaultSubscriptionPeriods(t, db, enterpriseID, "postpaid") })
 	server := &PurserServer{db: db, logger: logging.NewLogger(), tierReconciler: &assignTierReconciler{}, commodoreClient: &recordingCommodoreCache{}}
 	op := operatorAssignCtx(uuid.NewString())
 	zero := "0"

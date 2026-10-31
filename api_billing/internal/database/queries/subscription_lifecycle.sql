@@ -132,11 +132,18 @@ ORDER BY tier_level, id
 LIMIT 1;
 
 -- name: EnsureDefaultTenantSubscription :execrows
+-- A new account's billing interval starts when it exists, not at the month's
+-- beginning. UTC calendar arithmetic caps renewal on the next month's last day.
 INSERT INTO purser.tenant_subscriptions (
-    id, tenant_id, tier_id, billing_model, status, created_at, updated_at
+    id, tenant_id, tier_id, billing_model, status,
+    billing_period_start, billing_period_end, next_billing_date, created_at, updated_at
 ) VALUES (
     sqlc.arg(id), sqlc.arg(tenant_id)::text::uuid, sqlc.arg(tier_id),
-    sqlc.arg(billing_model), 'active', sqlc.arg(now), sqlc.arg(now)
+    sqlc.arg(billing_model), 'active',
+    sqlc.narg(now)::timestamptz AT TIME ZONE 'UTC',
+    (sqlc.narg(now)::timestamptz AT TIME ZONE 'UTC') + INTERVAL '1 month',
+    (sqlc.narg(now)::timestamptz AT TIME ZONE 'UTC') + INTERVAL '1 month',
+    sqlc.narg(now), sqlc.narg(now)
 )
 ON CONFLICT (tenant_id) DO NOTHING;
 

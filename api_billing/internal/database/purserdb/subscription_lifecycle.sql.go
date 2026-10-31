@@ -78,10 +78,15 @@ func (q *Queries) DeleteSubscriptionPricingOverrides(ctx context.Context, subscr
 
 const ensureDefaultTenantSubscription = `-- name: EnsureDefaultTenantSubscription :execrows
 INSERT INTO purser.tenant_subscriptions (
-    id, tenant_id, tier_id, billing_model, status, created_at, updated_at
+    id, tenant_id, tier_id, billing_model, status,
+    billing_period_start, billing_period_end, next_billing_date, created_at, updated_at
 ) VALUES (
     $1, $2::text::uuid, $3,
-    $4, 'active', $5, $5
+    $4, 'active',
+    $5::timestamptz AT TIME ZONE 'UTC',
+    ($5::timestamptz AT TIME ZONE 'UTC') + INTERVAL '1 month',
+    ($5::timestamptz AT TIME ZONE 'UTC') + INTERVAL '1 month',
+    $5, $5
 )
 ON CONFLICT (tenant_id) DO NOTHING
 `
@@ -94,6 +99,8 @@ type EnsureDefaultTenantSubscriptionParams struct {
 	Now          sql.NullTime `db:"now" json:"now"`
 }
 
+// A new account's billing interval starts when it exists, not at the month's
+// beginning. UTC calendar arithmetic caps renewal on the next month's last day.
 func (q *Queries) EnsureDefaultTenantSubscription(ctx context.Context, arg EnsureDefaultTenantSubscriptionParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, ensureDefaultTenantSubscription,
 		arg.ID,

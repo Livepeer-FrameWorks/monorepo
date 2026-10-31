@@ -4,8 +4,12 @@ package grpc
 
 import (
 	"context"
+	"database/sql"
 	"sync"
 	"testing"
+	"time"
+
+	"frameworks/api_billing/internal/database/purserdb"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
@@ -28,6 +32,7 @@ func TestAccountOnboardingConvergence_RealPG(t *testing.T) {
 	`, prepaidTierID, postpaidTierID, "onboarding-prepaid-"+uuid.NewString(), "onboarding-postpaid-"+uuid.NewString()); err != nil {
 		t.Fatal(err)
 	}
+	t.Run("new prepaid subscription periods", func(t *testing.T) { assertDefaultSubscriptionPeriods(t, db, prepaidTierID, "prepaid") })
 	server := &PurserServer{db: db, logger: logging.NewLogger()}
 	tenantID := uuid.NewString()
 
@@ -173,5 +178,58 @@ func TestSubscriptionLifecycleRepository_RealPG(t *testing.T) { //nolint:funlen 
 	}
 	if subscriptionStatus != "cancelled" || balance != 0 || writeoff != 73 || eventCount != 3 {
 		t.Fatalf("cancel state = %q balance=%d writeoff=%d events=%d", subscriptionStatus, balance, writeoff, eventCount)
+	}
+}
+
+func assertDefaultSubscriptionPeriods(t *testing.T, db *sql.DB, tierID, model string) {
+	t.Helper()
+	tier, err := uuid.Parse(tierID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ name, at, end string }{
+		{"January nonleap", "2025-01-31T12:30:00Z", "2025-02-28T12:30:00Z"},
+		{"January leap", "2024-01-31T12:30:00Z", "2024-02-29T12:30:00Z"},
+		{"October month end", "2026-10-31T12:30:00Z", "2026-11-30T12:30:00Z"},
+		{"UTC rollover", "2025-01-31T23:30:00-05:00", "2025-03-01T04:30:00Z"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			at, parseErr := time.Parse(time.RFC3339, tc.at)
+			if parseErr != nil {
+				t.Fatal(parseErr)
+			}
+			wantEnd, parseErr := time.Parse(time.RFC3339, tc.end)
+			if parseErr != nil {
+				t.Fatal(parseErr)
+			}
+			tenant := uuid.NewString()
+			q := purserdb.New(db)
+			params := purserdb.EnsureDefaultTenantSubscriptionParams{ID: uuid.New(), TenantID: tenant, TierID: tier, BillingModel: model, Now: sql.NullTime{Time: at, Valid: true}}
+			rows, writeErr := q.EnsureDefaultTenantSubscription(t.Context(), params)
+			if writeErr != nil || rows != 1 {
+				t.Fatalf("create initial subscription: rows=%d err=%v", rows, writeErr)
+			}
+			var start, end, next sql.NullTime
+			read := func() {
+				t.Helper()
+				if readErr := db.QueryRowContext(t.Context(), `SELECT billing_period_start,billing_period_end,next_billing_date FROM purser.tenant_subscriptions WHERE tenant_id=$1`, tenant).Scan(&start, &end, &next); readErr != nil {
+					t.Fatal(readErr)
+				}
+			}
+			read()
+			if !start.Valid || !start.Time.Equal(at) || !end.Valid || !end.Time.Equal(wantEnd) || !next.Valid || !next.Time.Equal(wantEnd) {
+				t.Fatalf("initial billing period is missing or not the capped UTC month: start=%v end=%v next=%v want=%s/%s", start, end, next, at.UTC(), wantEnd)
+			}
+			params.ID = uuid.New()
+			params.Now = sql.NullTime{Time: at.AddDate(2, 0, 0), Valid: true}
+			rows, writeErr = q.EnsureDefaultTenantSubscription(t.Context(), params)
+			if writeErr != nil || rows != 0 {
+				t.Fatalf("existing subscription not a no-op: rows=%d err=%v", rows, writeErr)
+			}
+			read()
+			if !start.Time.Equal(at) || !end.Time.Equal(wantEnd) || !next.Time.Equal(wantEnd) {
+				t.Fatalf("replay rewrote an existing billing period: start=%v end=%v next=%v", start, end, next)
+			}
+		})
 	}
 }
