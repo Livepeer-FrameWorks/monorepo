@@ -416,6 +416,11 @@ pg() { # pg <db> <sql>: the service's own role, read-only use
   need psql || return 1
   PGPASSWORD="${POSTGRES_PASSWORD:-}" psql -h "$PG_HOST" -p "$PG_PORT" -U "$1" -d "$1" -v ON_ERROR_STOP=1 -Atc "$2" 2>/dev/null </dev/null
 }
+pg_fixture() { # pg_fixture <db> <sql>: isolated-stack fixture writes only
+  [ "${STACK_TARGET:-stack}" != staging ] || { echo 'fixture SQL is forbidden on staging' >&2; return 1; }
+  need psql || return 1
+  PGPASSWORD="${POSTGRES_PASSWORD:-}" psql -h "$PG_HOST" -p "$PG_PORT" -U "$1" -d "$1" -v ON_ERROR_STOP=1 -Atc "$2" 2>/dev/null </dev/null
+}
 ch() { # ch <sql>: CLICKHOUSE_URL carries the credentials as query parameters
   curl -s -m 20 "$CLICKHOUSE_URL" --data-binary "$1"
 }

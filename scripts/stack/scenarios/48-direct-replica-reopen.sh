@@ -23,11 +23,11 @@ restore_cluster_access_fixture() { # tenant cluster snapshot-file
   [ -f "$snapshot" ] || return 1
   prior=$(cat "$snapshot")
   if [ -z "$prior" ]; then
-    pg quartermaster "DELETE FROM quartermaster.tenant_cluster_access WHERE tenant_id='$tenant' AND cluster_id='$cluster'" >/dev/null || return 1
+    pg_fixture quartermaster "DELETE FROM quartermaster.tenant_cluster_access WHERE tenant_id='$tenant' AND cluster_id='$cluster'" >/dev/null || return 1
   else
-    # The isolated fixture owns this tenant/cluster pair. Restore every field,
+    # This system-tenant access row is shared with other scenarios. Restore every field,
     # including provenance and expiry, after billing cleanup reconciles access.
-    pg quartermaster "INSERT INTO quartermaster.tenant_cluster_access
+    pg_fixture quartermaster "INSERT INTO quartermaster.tenant_cluster_access
       SELECT restored.* FROM json_populate_record(NULL::quartermaster.tenant_cluster_access,
         convert_from(decode('$prior','base64'),'UTF8')::json) AS restored
       WHERE restored.tenant_id='$tenant' AND restored.cluster_id='$cluster'

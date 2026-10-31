@@ -17,6 +17,7 @@
 # cleanup pass that reports the usage of clips/ alone (0 under a logical
 # capacity) instead of the whole store's.
 . "$(dirname "$0")/../lib.sh"
+. "$STACK_LIB_DIR/storage-pressure-fixture.sh"
 
 EDGE_SERVICE=${STACK_EDGE_A_SERVICE:-edge}
 STORE=/data/storage
@@ -104,6 +105,7 @@ OLD=$(($(date +%s) - 7200))
 ORPHAN="$STORE/vod/$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n').mkv.dtsh"
 as_helmsman "mkdir -p $STORE/vod && head -c 4096 /dev/urandom >$ORPHAN && touch -d @$OLD $ORPHAN" ||
   { fail "arrange: plant an orphan sidecar"; finish; }
+age_synced_pressure_fixture_cache || { fail "arrange: age durable completed fixture media"; finish; }
 
 # cap_at <percent>: a logical capacity that puts the edge's storage at that
 # usage, applied by a Helmsman restart.
