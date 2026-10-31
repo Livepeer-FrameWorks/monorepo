@@ -11106,7 +11106,10 @@ func (s *CommodoreServer) tenantControlFanoutTargets(ctx context.Context, tenant
 	var routeErr, cellsErr error
 	var sources sync.WaitGroup
 	sources.Add(2)
-	go func() { defer sources.Done(); route, routeErr = s.resolveClusterRouteForTenant(lookupCtx, tenantID) }()
+	go func() {
+		defer sources.Done()
+		route, routeErr = s.resolveClusterRouteForTenant(lookupCtx, tenantID)
+	}()
 	go func() {
 		defer sources.Done()
 		cells, cellsErr = commodoredb.New(s.db).ListAccountIngestCells(lookupCtx, commodoredb.ListAccountIngestCellsParams{TenantID: tenantID, StreamID: ""})
@@ -11145,7 +11148,10 @@ type tenantControlDelivery[T any] struct {
 	err      error
 }
 
-func dispatchTenantControl[T any](ctx context.Context, s *CommodoreServer, targets []clusterFanoutTarget, deliver func(context.Context, *foghornclient.GRPCClient) (T, error)) []tenantControlDelivery[T] {
+func dispatchTenantControl[T any](
+	ctx context.Context, s *CommodoreServer, targets []clusterFanoutTarget,
+	deliver func(context.Context, *foghornclient.GRPCClient) (T, error),
+) []tenantControlDelivery[T] {
 	results := make([]tenantControlDelivery[T], len(targets))
 	var calls sync.WaitGroup
 	for i, target := range targets {
