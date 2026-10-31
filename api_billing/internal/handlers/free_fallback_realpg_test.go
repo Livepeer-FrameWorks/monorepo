@@ -186,7 +186,7 @@ func TestGraceNeverStartsOnFreeOrPrepaidTenants_RealPG(t *testing.T) {
 	if started, err := subscriptions.StartPaymentFailureGrace(context.Background(), db, prepaid.id, now); err != nil || started {
 		t.Fatalf("prepaid tenant started grace: %v, %v", started, err)
 	}
-	if _, err := db.Exec(`UPDATE purser.billing_tiers SET tier_name='free' WHERE id=$1`, prepaid.supporterID); err != nil {
+	if _, err := db.Exec(`UPDATE purser.billing_tiers SET tier_name='community',base_price=0,is_default_postpaid=true WHERE id=$1`, prepaid.supporterID); err != nil {
 		t.Fatal(err)
 	}
 	free := prepaid.id

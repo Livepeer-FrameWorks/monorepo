@@ -73,14 +73,25 @@ func TestFreeFallbackProviderFailureKeepsDurableFence_RealPG(t *testing.T) {
 	t.Run("pricing holds clear stale move alerts", func(t *testing.T) {
 		db := startOperatorGrantDatabase(t)
 		tenant, _, _ := seedFallbackLifecycle(t, db)
-		if _, err := db.Exec(`UPDATE purser.tenant_subscriptions SET pending_reason='tier_upgrade',free_fallback_failures=2,free_fallback_error='temporary outage' WHERE tenant_id=$1`, tenant); err != nil {
+		target, id := uuid.NewString(), uuid.NewString()
+		if _, err := db.Exec(`INSERT INTO purser.billing_tiers(id,tier_name,display_name,tier_level,base_price,currency) VALUES($1::uuid,$1::text,'Replacement',3,50,'EUR')`, target); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(`INSERT INTO purser.subscription_tier_upgrades(id,tenant_id,old_tier_id,tier_id,actor_id,old_period_start,old_period_end,requested_at,provider,collection_provider,customer_id,provider_subscription_id,stripe_price_id,old_base_cents,base_cents)
+SELECT $1,tenant_id,tier_id,$3,'customer',billing_period_start,billing_period_end,NOW()-INTERVAL '2 hours','stripe','stripe','customer','subscription','replacement-price',2000,5000 FROM purser.tenant_subscriptions WHERE tenant_id=$2`, id, tenant, target); err != nil {
+			t.Fatal(err)
+		}
+		if err := purserdb.New(db).EnqueueTierUpgrade(t.Context(), purserdb.EnqueueTierUpgradeParams{ID: id, TenantID: tenant}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(`UPDATE purser.tenant_subscriptions SET pending_reason='tier_upgrade',pending_tier_id=$2,pending_effective_at=NOW()-INTERVAL '2 hours',free_fallback_failures=2,free_fallback_error='temporary outage' WHERE tenant_id=$1`, tenant, target); err != nil {
 			t.Fatal(err)
 		}
 		server := fallbackLifecycleServer(db, &fallbackLifecycleProvider{call: func(context.Context, billing.SubscriptionEndRequest) (billing.SubscriptionEndResult, error) {
 			t.Fatal("held upgrade stopped its provider")
 			return billing.SubscriptionEndResult{}, nil
 		}})
-		if err := server.moveTenantToFree(t.Context(), tenant); !errors.Is(err, errFreeFallbackHeld) {
+		if err := server.moveTenantToFree(t.Context(), tenant); !errors.Is(err, errFreeFallbackHeld) && !errors.Is(err, subscriptions.ErrPendingTierUpgrade) {
 			t.Fatal(err)
 		}
 		counts, err := purserdb.New(db).CountRepeatedFreeFallbackFailures(t.Context())
@@ -88,7 +99,7 @@ func TestFreeFallbackProviderFailureKeepsDurableFence_RealPG(t *testing.T) {
 			t.Fatalf("held upgrade retained old move alert: %+v %v", counts, err)
 		}
 		items, err := server.AdminListCheckoutRecovery(operatorAssignCtx(uuid.NewString()), &purserpb.AdminListCheckoutRecoveryRequest{TenantId: tenant})
-		if err != nil || len(items.GetItems()) != 1 || items.Items[0].Provider != "free_fallback" {
+		if err != nil || len(items.GetItems()) != 2 || items.Items[0].Provider != "free_fallback" || items.Items[1].Provider != "tier_upgrade" {
 			t.Fatalf("fallback not inspectable: %+v %v", items, err)
 		}
 	})
