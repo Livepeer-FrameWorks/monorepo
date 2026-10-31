@@ -55,24 +55,25 @@ type ApplyResult struct {
 }
 
 type Store struct {
-	db             *sql.DB
-	cellID         string
-	trust          sharedauthority.TrustSet
-	now            func() time.Time
-	sealKeyID      string
-	sealPrivateKey *ecdh.PrivateKey
-	refresh        *refreshCoordinator
-	fetcher        *fetchCoordinator
-	uses           *useRecorder
-	fence          *restoreFence
-	pairs          *pairCache
-	recovery       recoveryCoordinator
-	fetchOutcomes  *prometheus.CounterVec
-	runtimePeers   RuntimePeerResolver
-	servedCluster  func(clusterID string) bool
-	applyOutcomes  *prometheus.CounterVec
-	applyObserver  func(context.Context, ApplyResult) error
-	logger         logging.Logger
+	db                *sql.DB
+	cellID            string
+	trust             sharedauthority.TrustSet
+	now               func() time.Time
+	sealKeyID         string
+	sealPrivateKey    *ecdh.PrivateKey
+	refresh           *refreshCoordinator
+	fetcher           *fetchCoordinator
+	uses              *useRecorder
+	fence             *restoreFence
+	pairs             *pairCache
+	recovery          recoveryCoordinator
+	fetchOutcomes     *prometheus.CounterVec
+	managedStreamSets *prometheus.CounterVec
+	runtimePeers      RuntimePeerResolver
+	servedCluster     func(clusterID string) bool
+	applyOutcomes     *prometheus.CounterVec
+	applyObserver     func(context.Context, ApplyResult) error
+	logger            logging.Logger
 }
 
 // SetLogger installs the logger used for rejected applies. Accepted and

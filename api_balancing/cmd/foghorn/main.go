@@ -1169,6 +1169,14 @@ func main() {
 			mediaAuthorityLocalReads.WithLabelValues(index, outcome).Add(0)
 		}
 	}
+	mediaAuthorityManagedSets := metricsCollector.NewCounter(
+		"media_authority_managed_stream_sets_total",
+		"Outcomes of cell-local managed-stream desired-set reads",
+		[]string{"outcome"},
+	)
+	for _, outcome := range localauthority.ManagedStreamSetOutcomes {
+		mediaAuthorityManagedSets.WithLabelValues(outcome).Add(0)
+	}
 	mediaAuthorityFetches := metricsCollector.NewCounter(
 		"media_authority_fetches_total",
 		"Outcomes of asking the control plane for an authority a decision needed and the cell did not hold as valid",
@@ -1548,6 +1556,7 @@ func main() {
 		}
 		authorityStore.SetPlacementPairReadMetric(placementPairReads)
 		authorityStore.SetFetchOutcomeMetric(mediaAuthorityFetches)
+		authorityStore.SetManagedStreamSetMetric(mediaAuthorityManagedSets)
 		authorityStore.SetLogger(logger)
 		// Read the local restore marker before serving. Ordinary restart is
 		// independent of core availability; restored state requires confirmation.

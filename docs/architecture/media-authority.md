@@ -650,7 +650,10 @@ plan orders Commodore before Foghorn; v0.3.11 prohibits Commodore rollback.
 
 A managed-stream object whose parent is missing makes the local set incomplete,
 requests the pair, and permits connected recovery. Incomplete local sets never
-authorize retraction of the cluster's other managed streams.
+authorize retraction of the cluster's other managed streams. Corrupt rows, expired
+keys and unreadable parents are isolated to their own object; caller cancellation
+ends the read immediately. `foghorn_media_authority_managed_stream_sets_total`
+counts one outcome per set, including incomplete and cancelled reads.
 
 Use wins every race with dormancy. Recording use and reviving the renewal commit
 together, and the renewal is revived even when the use was already recorded that

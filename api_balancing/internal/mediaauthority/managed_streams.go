@@ -13,6 +13,7 @@ import (
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	mediaauthoritypb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_authority"
 	tenantlimitspb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/tenant_limits"
+	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -31,11 +32,38 @@ const (
 	ManagedStreamPromotionMismatch ManagedStreamPromotion = "mismatch"
 )
 
+// ManagedStreamSetOutcomes are the bounded outcomes counted for each desired-set read.
+var ManagedStreamSetOutcomes = []string{"complete", "incomplete", "unmarked", "error", "cancelled"}
+
+// SetManagedStreamSetMetric records one outcome for each desired-set read.
+func (s *Store) SetManagedStreamSetMetric(metric *prometheus.CounterVec) {
+	if s != nil {
+		s.managedStreamSets = metric
+	}
+}
+
 // ManagedStreams returns a complete desired-state view only when every
 // locally known mist_native object and its tenant projection carry the exact
 // source-readiness marker. A partial set is never used for retract decisions.
-func (s *Store) ManagedStreams(ctx context.Context, clusterID string) (ManagedStreamSet, error) {
-	result := ManagedStreamSet{Contexts: make(map[string]*commodorepb.ResolveStreamContextResponse)}
+func (s *Store) ManagedStreams(ctx context.Context, clusterID string) (result ManagedStreamSet, resultErr error) {
+	result = ManagedStreamSet{Contexts: make(map[string]*commodorepb.ResolveStreamContextResponse)}
+	defer func() {
+		if s.managedStreamSets == nil {
+			return
+		}
+		outcome := "complete"
+		switch {
+		case ctx.Err() != nil:
+			outcome = "cancelled"
+		case resultErr != nil:
+			outcome = "error"
+		case !result.Marked:
+			outcome = "unmarked"
+		case !result.Complete:
+			outcome = "incomplete"
+		}
+		s.managedStreamSets.WithLabelValues(outcome).Inc()
+	}()
 	rows, err := foghorndb.New(s.db).ListLocalManagedStreamAuthorities(ctx)
 	if err != nil {
 		return result, fmt.Errorf("list local managed-stream authorities: %w", err)
@@ -47,11 +75,14 @@ func (s *Store) ManagedStreams(ctx context.Context, clusterID string) (ManagedSt
 	rowUnavailable := func(authorityID string, cause error) {
 		result.Complete = false
 		if s.logger != nil {
-			s.logger.WithError(cause).WithField("authority_id", authorityID).Warn("Managed source authority unavailable; preserving other tenants and disabling retraction")
+			s.logger.WithError(cause).WithField("authority_id", authorityID).Debug("Managed source authority unavailable; preserving other tenants and disabling retraction")
 		}
 		s.refreshAsync(AuthorityLookup{AuthorityID: authorityID})
 	}
 	for _, row := range rows {
+		if err := ctx.Err(); err != nil {
+			return result, err
+		}
 		result.Marked = result.Marked || row.LocalSourceReady
 		object, err := decodeMediaObjectSnapshot(row.Payload, row.PayloadSha256, row.AuthorityID, row.AuthorityVersion, false, row.RefreshAfter, row.ValidUntil, s.now().UTC())
 		if err != nil {
@@ -85,6 +116,9 @@ func (s *Store) ManagedStreams(ctx context.Context, clusterID string) (ManagedSt
 			continue
 		}
 		tenant, err := s.TenantSourceForObject(ctx, object)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return result, ctxErr
+		}
 		if errors.Is(err, sql.ErrNoRows) {
 			result.Complete = false
 			s.refreshAsync(AuthorityLookup{AuthorityID: row.AuthorityID})

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"errors"
 	"testing"
 	"time"
 
@@ -11,12 +12,16 @@ import (
 	sharedauthority "github.com/Livepeer-FrameWorks/monorepo/pkg/mediaauthority"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	mediapb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_authority"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"google.golang.org/protobuf/proto"
 )
 
 func TestManagedSourceMissingTenantIsIncompleteAndFetched(t *testing.T) {
 	store, mock, closeDB := newFixtureStore(t, "cell-a")
 	defer closeDB()
+	metric := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "test_managed_sets_total", Help: "test"}, []string{"outcome"})
+	store.SetManagedStreamSetMetric(metric)
 	object := &mediapb.MediaObjectAuthority{TenantId: "tenant", InternalName: "internal",
 		Object: &mediapb.MediaObjectAuthority_LiveStream{LiveStream: &mediapb.LiveStreamAuthority{StreamId: "stream", IngestMode: "mist_native"}}}
 	payload, err := proto.Marshal(object)
@@ -48,6 +53,9 @@ func TestManagedSourceMissingTenantIsIncompleteAndFetched(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("missing managed-stream parent was not fetched")
 	}
+	if got := testutil.ToFloat64(metric.WithLabelValues("incomplete")); got != 1 {
+		t.Fatalf("incomplete sets = %v, want 1", got)
+	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
 	}
@@ -56,6 +64,8 @@ func TestManagedSourceMissingTenantIsIncompleteAndFetched(t *testing.T) {
 func TestManagedSourceExpiredTombstoneIsCompleteWithoutParentOrFetch(t *testing.T) {
 	store, mock, closeDB := newFixtureStore(t, "cell-a")
 	defer closeDB()
+	metric := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "test_managed_sets_total", Help: "test"}, []string{"outcome"})
+	store.SetManagedStreamSetMetric(metric)
 	object := &mediapb.MediaObjectAuthority{
 		TenantId: "tenant", Lifecycle: mediapb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_TOMBSTONE,
 		Object: &mediapb.MediaObjectAuthority_LiveStream{LiveStream: &mediapb.LiveStreamAuthority{StreamId: "stream", IngestMode: "mist_native"}},
@@ -73,6 +83,9 @@ func TestManagedSourceExpiredTombstoneIsCompleteWithoutParentOrFetch(t *testing.
 	set, err := store.ManagedStreams(context.Background(), "cluster")
 	if err != nil || !set.Marked || !set.Complete || len(set.Rows) != 0 {
 		t.Fatalf("expired tombstone must be a complete empty desired set: %+v, %v", set, err)
+	}
+	if got := testutil.ToFloat64(metric.WithLabelValues("complete")); got != 1 {
+		t.Fatalf("complete sets = %v, want 1", got)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
@@ -107,5 +120,37 @@ func TestManagedSourceShadowRejectsPlacementSchemaBeforeSecrets(t *testing.T) {
 		if err := mock.ExpectationsWereMet(); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestManagedSourceCancellationStopsTenantReads(t *testing.T) {
+	store, mock, closeDB := newFixtureStore(t, "cell-a")
+	defer closeDB()
+	metric := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "test_managed_sets_total", Help: "test"}, []string{"outcome"})
+	store.SetManagedStreamSetMetric(metric)
+	object := &mediapb.MediaObjectAuthority{TenantId: "tenant", InternalName: "internal",
+		Object: &mediapb.MediaObjectAuthority_LiveStream{LiveStream: &mediapb.LiveStreamAuthority{StreamId: "stream", IngestMode: "mist_native"}}}
+	payload, err := proto.Marshal(object)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(payload)
+	until := store.now().Add(time.Hour)
+	mock.ExpectQuery("ListLocalManagedStreamAuthorities").WillReturnRows(sqlmock.NewRows([]string{
+		"authority_id", "authority_version", "payload", "payload_sha256", "refresh_after", "valid_until",
+		"local_source_ready", "withheld_by_tenant_revival", "tenant_authority_version",
+	}).AddRow("stream", 2, payload, digest[:], until, until, true, false, 0))
+	mock.ExpectQuery("GetLocalTenantSourceAuthority").WithArgs("tenant").WillDelayFor(time.Second).WillReturnError(context.Canceled)
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	_, err = store.ManagedStreams(ctx, "cluster")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("cancelled tenant read returned %v, want caller deadline", err)
+	}
+	if got := testutil.ToFloat64(metric.WithLabelValues("cancelled")); got != 1 {
+		t.Fatalf("cancelled sets = %v, want 1", got)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }
