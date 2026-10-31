@@ -1299,24 +1299,27 @@ func (q *Queries) ResolveMolliePaymentObservation(ctx context.Context, arg Resol
 }
 
 const resolveMollieSubscriptionInvoice = `-- name: ResolveMollieSubscriptionInvoice :one
+WITH owners AS MATERIALIZED (
+    SELECT tenant_id FROM purser.tenant_subscriptions
+    WHERE mollie_subscription_id = $2
+)
 SELECT invoice.id::text AS invoice_id
 FROM purser.billing_invoices invoice
-JOIN purser.tenant_subscriptions subscription ON subscription.tenant_id = invoice.tenant_id
-WHERE subscription.mollie_subscription_id = $1
-  AND $2::timestamptz::date >= invoice.period_start::date
-  AND $2::timestamptz::date <= invoice.period_end::date
+WHERE invoice.tenant_id = ANY (ARRAY(SELECT tenant_id FROM owners))
+  AND invoice.period_start < ($1::timestamptz::date + 1)::timestamptz
+  AND invoice.period_end >= $1::timestamptz::date::timestamptz
   AND invoice.status IN ('pending', 'overdue')
 ORDER BY invoice.created_at DESC
 LIMIT 1
 `
 
 type ResolveMollieSubscriptionInvoiceParams struct {
-	MollieSubscriptionID sql.NullString `db:"mollie_subscription_id" json:"mollie_subscription_id"`
 	PaymentCreatedAt     time.Time      `db:"payment_created_at" json:"payment_created_at"`
+	MollieSubscriptionID sql.NullString `db:"mollie_subscription_id" json:"mollie_subscription_id"`
 }
 
 func (q *Queries) ResolveMollieSubscriptionInvoice(ctx context.Context, arg ResolveMollieSubscriptionInvoiceParams) (string, error) {
-	row := q.db.QueryRowContext(ctx, resolveMollieSubscriptionInvoice, arg.MollieSubscriptionID, arg.PaymentCreatedAt)
+	row := q.db.QueryRowContext(ctx, resolveMollieSubscriptionInvoice, arg.PaymentCreatedAt, arg.MollieSubscriptionID)
 	var invoice_id string
 	err := row.Scan(&invoice_id)
 	return invoice_id, err

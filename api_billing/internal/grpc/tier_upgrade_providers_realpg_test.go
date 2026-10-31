@@ -106,7 +106,7 @@ func (f *upgradeProviderFixture) serve(t *testing.T, w http.ResponseWriter, r *h
 		}
 		respond(map[string]any{"id": "sub", "object": "subscription", "customer": "customer", "status": "active", "metadata": f.stripeMetadata,
 			"latest_invoice": map[string]any{"id": "old-invoice", "object": "invoice", "status": invoiceStatus, "amount_paid": 2000},
-			"items":          map[string]any{"object": "list", "data": []any{map[string]any{"id": "item", "object": "subscription_item", "price": map[string]any{"id": price, "object": "price", "unit_amount": 2000, "currency": "eur", "recurring": map[string]any{"interval": "month", "interval_count": 1}}, "current_period_start": f.start.Unix(), "current_period_end": f.end.Unix()}}}})
+			"items":          map[string]any{"object": "list", "data": []any{map[string]any{"id": "item", "object": "subscription_item", "quantity": 1, "price": map[string]any{"id": price, "object": "price", "unit_amount": 2000, "currency": "eur", "recurring": map[string]any{"interval": "month", "interval_count": 1}}, "current_period_start": f.start.Unix(), "current_period_end": f.end.Unix()}}}})
 	case "POST /v1/payment_intents":
 		if err := r.ParseForm(); err != nil {
 			t.Error(err)

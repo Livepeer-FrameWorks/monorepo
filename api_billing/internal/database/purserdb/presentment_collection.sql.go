@@ -37,7 +37,6 @@ SET status = 'active',
     updated_at = NOW()
 FROM (
     SELECT (ts.status = 'active'
-            AND ts.payment_method = $1::text
             AND ts.billing_period_start IS NOT NULL
             AND ts.billing_period_end > NOW()
             AND ts.tier_id = COALESCE(

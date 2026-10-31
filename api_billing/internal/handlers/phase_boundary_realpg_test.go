@@ -658,10 +658,9 @@ func TestEarlyClosedPeriodKeepsItsInvoiceCreditFromTheNextDraft_RealPG(t *testin
 }
 
 // A tenant billed its base fee in advance that switches to prepaid gets the
-// unused share of that period's base fee back on its prepaid balance once:
-// from the switch the prepaid tier runs, and the prepaid statement charges
-// its own base fee for that time.
-func TestSwitchToPrepaidReturnsTheUnusedAdvanceBaseFee_RealPG(t *testing.T) {
+// unused share of that period's base fee recorded as forfeited. It cannot
+// become spendable prepaid funds or be credited by another purchase.
+func TestSwitchToPrepaidForfeitsTheUnusedAdvanceBaseFee_RealPG(t *testing.T) {
 	appconfigtest.Set(t, "WAIVE_USAGE_CHARGES", "false")
 	f := newTierChangeFixture(t, "30.00", firstBaseFeePaid)
 	ctx := context.Background()
@@ -694,9 +693,14 @@ func TestSwitchToPrepaidReturnsTheUnusedAdvanceBaseFee_RealPG(t *testing.T) {
 	if err = f.db.QueryRowContext(ctx, `SELECT balance_cents FROM purser.prepaid_balances WHERE tenant_id = $1 AND currency = $2`, f.tenantID, billing.LedgerCurrency).Scan(&balance); err != nil {
 		t.Fatal(err)
 	}
-	if rows != 1 || credited != wantCents || balance != wantCents {
-		t.Fatalf("unused base fee returned = %d cents in %d ledger rows, balance %d; want %d once", credited, rows, balance, wantCents)
+	var auditCredited, auditForfeited string
+	if err = f.db.QueryRowContext(ctx, `SELECT COALESCE(usage_details#>>'{unused_share_returned,credited}','missing'),COALESCE(usage_details#>>'{unused_share_returned,forfeited}','missing') FROM purser.billing_invoices WHERE tenant_id=$1 AND id=$2`, f.tenantID, first.id).Scan(&auditCredited, &auditForfeited); err != nil {
+		t.Fatal(err)
 	}
+	if rows != 0 || credited != 0 || balance != 0 || auditCredited != "0.00" || auditForfeited != decimal.New(wantCents, -2).StringFixed(2) {
+		t.Fatalf("prepaid move made paid time spendable or lost forfeiture audit: ledger=%d/%d balance=%d audit=%s/%s want forfeited=%d", credited, rows, balance, auditCredited, auditForfeited, wantCents)
+	}
+
 	if _, err = purserdb.New(f.db).FindOverlappedBaseFeeInvoice(ctx, purserdb.FindOverlappedBaseFeeInvoiceParams{
 		TenantID: f.tenantID, PeriodStart: switchAt.Add(time.Hour),
 	}); !errors.Is(err, sql.ErrNoRows) {

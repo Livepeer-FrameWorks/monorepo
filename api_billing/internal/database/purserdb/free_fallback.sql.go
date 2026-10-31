@@ -233,14 +233,16 @@ func (q *Queries) GetFreeFallbackTier(ctx context.Context) (string, error) {
 }
 
 const getOpenRetainedProviderPaidTerm = `-- name: GetOpenRetainedProviderPaidTerm :one
-SELECT GREATEST(free_fallback_at, billing_period_end AT TIME ZONE 'UTC',
-                stripe_current_period_end, mollie_next_payment_date::timestamp AT TIME ZONE 'UTC')::timestamptz AS paid_until
+SELECT GREATEST(free_fallback_at, stripe_current_period_end,
+                CASE WHEN free_fallback_at IS NULL THEN
+                    GREATEST(billing_period_end AT TIME ZONE 'UTC', mollie_next_payment_date::timestamp AT TIME ZONE 'UTC') END)::timestamptz AS paid_until
 FROM purser.tenant_subscriptions
 WHERE tenant_id = $1::text::uuid
   AND free_fallback_provider_ended_at IS NOT NULL
   AND (NULLIF(stripe_subscription_id, '') IS NOT NULL OR NULLIF(mollie_subscription_id, '') IS NOT NULL)
-  AND GREATEST(free_fallback_at, billing_period_end AT TIME ZONE 'UTC',
-               stripe_current_period_end, mollie_next_payment_date::timestamp AT TIME ZONE 'UTC') > NOW()
+  AND GREATEST(free_fallback_at, stripe_current_period_end,
+               CASE WHEN free_fallback_at IS NULL THEN
+                   GREATEST(billing_period_end AT TIME ZONE 'UTC', mollie_next_payment_date::timestamp AT TIME ZONE 'UTC') END) > NOW()
 `
 
 // Retained native identities exclude an already-paid fee from Purser invoices.

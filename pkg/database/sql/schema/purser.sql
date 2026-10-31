@@ -2318,6 +2318,11 @@ CREATE INDEX IF NOT EXISTS idx_mollie_observations_invoice
     ON purser.mollie_payment_observations(invoice_id)
     WHERE invoice_id IS NOT NULL;
 
+CREATE INDEX IF NOT EXISTS idx_mollie_observations_attached_subscription
+    ON purser.mollie_payment_observations (tenant_id ASC, mollie_subscription_id ASC)
+    INCLUDE (invoice_id, resolved_at)
+    WHERE resolution = 'attached' AND resolved_at IS NOT NULL;
+
 -- ============================================================================
 -- IDEMPOTENT EXTENSIONS for existing payment tables
 -- ============================================================================
@@ -3694,6 +3699,7 @@ CREATE INDEX IF NOT EXISTS idx_subscription_fallback_notice_retry
         free_fallback_at ASC,
         tenant_id ASC
     )
+    INCLUDE (id, free_fallback_notice_failures)
     WHERE free_fallback_at IS NOT NULL
       AND (free_fallback_moved_at IS NOT NULL OR free_fallback_notified_at IS NULL)
       AND free_fallback_notice_abandoned_at IS NULL;

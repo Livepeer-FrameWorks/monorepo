@@ -615,6 +615,8 @@ func TestProviderReservationLifecycle_RealYugabyte(t *testing.T) {
 	}{
 		{"AdvanceActivationStartsOneCappedCalendarMonth", TestAdvanceActivationStartsOneCappedCalendarMonth_RealPG},
 		{"AdvanceSetupRefusesMidPeriodTierChange", TestAdvanceSetupRefusesMidPeriodTierChange_RealPG},
+		{"IneligibleCheckoutCompensates", TestIneligibleCheckoutCompensates_RealPG},
+		{"SwitchToPrepaidForfeitsUnusedBaseFee", TestSwitchToPrepaidForfeitsTheUnusedAdvanceBaseFee_RealPG},
 		{"AdvanceBaseFeeCreditIsCappedAndAudited", TestAdvanceBaseFeeCreditIsCappedAndAudited_RealPG},
 		{"ReplacementBaseFeeCannotBeCreditedTwice", TestReplacementBaseFeeCannotBeCreditedTwice_RealPG},
 		{"CheckoutRefundSettlementAndOperatorCredit", TestCheckoutRefundSettlementAndOperatorCredit_RealPG},

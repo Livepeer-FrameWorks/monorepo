@@ -2347,6 +2347,18 @@ actual anchor. Repair missing metering before retrying a stalled purchase. It re
 the durable state, including work that still needs provider or metering repair.
 The command requires a platform-operator JWT.
 
+#### frameworks admin billing recovery notice
+
+`frameworks admin billing recovery notice --tenant-id <UUID> --reason "Billing email repaired"`
+previews an abandoned Free-fallback notification, then requires interactive
+`yes` or `--yes` to requeue it. Repair `billing_email` first. It handles both
+the grace warning and the completed-move notice; delivery retries through the
+email worker. It records the operator and reason on `billing.subscription_updated`
+without changing the tier, collection or payments. Confirmation is fenced to
+the displayed deadline and notice phase. Older servers return `Unimplemented`;
+the CLI never invokes checkout recovery as a fallback. Requires a
+platform-operator JWT.
+
 #### frameworks admin billing grant set
 
 Record an arrangement, optionally assigning `--tier` in the same transaction. An initial tier

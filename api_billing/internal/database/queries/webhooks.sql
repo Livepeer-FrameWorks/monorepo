@@ -547,12 +547,15 @@ SET resolved_at = NOW(), resolution = 'attached',
 WHERE mollie_payment_id = sqlc.arg(mollie_payment_id);
 
 -- name: ResolveMollieSubscriptionInvoice :one
+WITH owners AS MATERIALIZED (
+    SELECT tenant_id FROM purser.tenant_subscriptions
+    WHERE mollie_subscription_id = sqlc.arg(mollie_subscription_id)
+)
 SELECT invoice.id::text AS invoice_id
 FROM purser.billing_invoices invoice
-JOIN purser.tenant_subscriptions subscription ON subscription.tenant_id = invoice.tenant_id
-WHERE subscription.mollie_subscription_id = sqlc.arg(mollie_subscription_id)
-  AND sqlc.arg(payment_created_at)::timestamptz::date >= invoice.period_start::date
-  AND sqlc.arg(payment_created_at)::timestamptz::date <= invoice.period_end::date
+WHERE invoice.tenant_id = ANY (ARRAY(SELECT tenant_id FROM owners))
+  AND invoice.period_start < (sqlc.arg(payment_created_at)::timestamptz::date + 1)::timestamptz
+  AND invoice.period_end >= sqlc.arg(payment_created_at)::timestamptz::date::timestamptz
   AND invoice.status IN ('pending', 'overdue')
 ORDER BY invoice.created_at DESC
 LIMIT 1;

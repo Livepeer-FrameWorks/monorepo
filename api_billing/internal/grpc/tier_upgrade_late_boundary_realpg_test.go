@@ -7,6 +7,9 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+
+	billingmollie "frameworks/api_billing/internal/mollie"
 	"strings"
 	"testing"
 	"time"
@@ -22,7 +25,7 @@ import (
 
 func assertLateTierUpgradeRetryRefusesPurchase(t *testing.T, db *sql.DB) {
 	t.Helper()
-	for _, provider := range []string{"stripe", "advance", "invoice"} {
+	for _, provider := range []string{"stripe", "mollie", "advance", "invoice"} {
 		t.Run("late boundary/"+provider, func(t *testing.T) {
 			ctx := t.Context()
 			tenant, old, target, id := uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
@@ -45,15 +48,29 @@ VALUES($1::uuid,$1::text,'Old',2,20,false,'old-price'),($2::uuid,$2::text,'Targe
 VALUES($1,$2,'active','postpaid','stripe','customer',NULLIF($3,''),'Customer','billing@example.com','{"street":"Street 1","city":"Leiden","postal_code":"2332ED","country":"NL"}','EUR',$4,$5,NULL,NULL)`, tenant, old, subscription, start, end)
 			exec(`INSERT INTO purser.billing_invoices(tenant_id,status,amount,base_amount,due_date,base_fee_period_start,base_fee_period_end,presentment_amount_cents,presentment_currency,presentment_units_per_eur,presentment_reference_date,finalized_at)
 VALUES($1,'paid',20,20,NOW(),$2,$3,2000,'EUR',1,CURRENT_DATE,NOW())`, tenant, start, end)
-			fixture := &upgradeProviderFixture{tenant: tenant, oldTier: old, start: start, end: end, stripeMetadata: map[string]string{"tenant_id": tenant, "tier_id": old}}
+			fixture := &upgradeProviderFixture{tenant: tenant, oldTier: old, start: start, end: end, metadata: map[string]any{"tenant_id": tenant}, stripeMetadata: map[string]string{"tenant_id": tenant, "tier_id": old}}
 			httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fixture.serve(t, w, r) }))
 			defer httpServer.Close()
 			oldBackend := stripeapi.GetBackend(stripeapi.APIBackend)
 			stripeapi.SetBackend(stripeapi.APIBackend, stripeapi.GetBackendWithConfig(stripeapi.APIBackend, &stripeapi.BackendConfig{URL: stripeapi.String(httpServer.URL), HTTPClient: httpServer.Client(), MaxNetworkRetries: stripeapi.Int64(0)}))
 			defer stripeapi.SetBackend(stripeapi.APIBackend, oldBackend)
+			var mollieClient *billingmollie.Client
+			if provider == "mollie" {
+				endpoint, err := url.Parse(httpServer.URL)
+				if err != nil {
+					t.Fatal(err)
+				}
+				mollieClient, err = billingmollie.NewClient(billingmollie.Config{APIKey: "test_fixture", Logger: logging.NewLogger(), HTTPClient: &http.Client{Transport: upgradeMollieTransport{base: http.DefaultTransport, endpoint: endpoint}}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				subscription = "sub"
+				exec(`UPDATE purser.tenant_subscriptions SET payment_method='mollie',stripe_subscription_id=NULL,mollie_subscription_id='sub' WHERE tenant_id=$1`, tenant)
+				exec(`INSERT INTO purser.mollie_customers(tenant_id,mollie_customer_id) VALUES($1,'customer')`, tenant)
+			}
 			logger := logging.NewLogger()
 			client := billingstripe.NewClient(billingstripe.Config{SecretKey: "sk_fixture", Logger: logger})
-			service := handlers.NewService(db, logger, nil, nil, nil, client, nil)
+			service := handlers.NewService(db, logger, nil, nil, mollieClient, client, nil)
 			handlers.NewJobManager(db, logger, nil, nil, nil, nil, service, nil)
 			stageErr := database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
 				_, err := service.StageTierUpgradeTx(ctx, tx, tenant, target, start, end)

@@ -18,7 +18,6 @@ import (
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 )
 
@@ -70,7 +69,7 @@ func (s *Service) activateAdvanceBilledTenant(ctx context.Context, tenantID, tie
 }
 
 func (s *Service) activateAdvanceBilledTenantWithMandate(ctx context.Context, tenantID, tierID, provider, stripeCustomerID string, now time.Time, receiptID string, mandate *purserdb.UpsertMollieMandateParams) error {
-	if _, policyErr := subscriptions.TransitionProvider(ctx, s.db, subscriptions.ProviderChange{TenantID: tenantID, Operation: subscriptions.ProviderCheckout}); policyErr != nil {
+	if _, policyErr := subscriptions.TransitionProvider(ctx, s.db, subscriptions.ProviderChange{TenantID: tenantID, Operation: subscriptions.ProviderCheckout, ReceiptIntentID: receiptID, Advance: purserdb.ActivateAdvanceBilledSubscriptionParams{TierID: tierID, PaymentMethod: provider}}); policyErr != nil {
 		return policyErr
 	}
 	periodStart := now.UTC().Truncate(time.Microsecond)
@@ -79,13 +78,7 @@ func (s *Service) activateAdvanceBilledTenantWithMandate(ctx context.Context, te
 		return fmt.Errorf("load collection profile before activation: %w", err)
 	}
 	var closing *PostpaidPhaseClose
-	if err == nil && advanceBilledPeriodChanges(profile, tierID, provider, periodStart) {
-		if eligibilityErr := subscriptions.CheckSelfServiceCheckout(ctx, s.db, tenantID, tierID, provider); eligibilityErr != nil {
-			if errors.Is(eligibilityErr, subscriptions.ErrSelfServiceTier) || errors.Is(eligibilityErr, subscriptions.ErrSelfServiceTierChange) {
-				return errors.Join(subscriptions.ErrCheckoutExpired, eligibilityErr)
-			}
-			return eligibilityErr
-		}
+	if err == nil && advanceBilledPeriodChanges(profile, tierID, periodStart) {
 		var prepareErr error
 		closing, prepareErr = PrepareProviderBillingBoundary(ctx, s.db, s.logger, s, tenantID, periodStart)
 		if prepareErr != nil {
@@ -122,11 +115,11 @@ func (s *Service) activateAdvanceBilledTenantWithMandate(ctx context.Context, te
 	return nil
 }
 
-// advanceBilledPeriodChanges reports whether activating tierID through
-// provider ends a running advance-billed period: the tenant is active and
+// advanceBilledPeriodChanges reports whether activating tierID
+// ends a running advance-billed period: the tenant is active and
 // postpaid without a provider subscription, now falls inside its period, and
-// the tier or provider differs. An empty tierID keeps the current tier.
-func advanceBilledPeriodChanges(profile purserdb.GetTenantCollectionProfileRow, tierID, provider string, now time.Time) bool {
+// the tier differs. An empty tierID keeps the current tier.
+func advanceBilledPeriodChanges(profile purserdb.GetTenantCollectionProfileRow, tierID string, now time.Time) bool {
 	if profile.Status != "active" || profile.BillingModel != "postpaid" ||
 		profile.StripeSubscriptionID.Valid || profile.MollieSubscriptionID.Valid ||
 		!profile.BillingPeriodStart.Valid || !profile.BillingPeriodEnd.Valid {
@@ -136,7 +129,7 @@ func advanceBilledPeriodChanges(profile purserdb.GetTenantCollectionProfileRow, 
 		return false
 	}
 	sameTier := tierID == "" || tierID == profile.TierID
-	return !sameTier || profile.PaymentMethod.String != provider
+	return !sameTier
 }
 
 // handleStripeSetupCheckoutCompleted saves the payment method a setup-mode
@@ -447,20 +440,14 @@ var ErrBaseFeePaymentPending = errPreviousBaseFeePaymentPending
 // unusedBaseFeeReturn is what a switch to prepaid returned of the advance
 // base-fee invoice whose period it cut short.
 type unusedBaseFeeReturn struct {
-	invoiceID     string
-	reducedCents  int64
-	creditedCents int64
+	invoiceID      string
+	reducedCents   int64
+	forfeitedCents int64
 }
 
-// returnUnusedBaseFeeTx returns the unused share of the advance base-fee
-// invoice whose period a switch to prepaid at switchAt cuts short: the
-// prepaid tenant no longer runs on the postpaid tier from the switch, and
-// the prepaid statement charges the prepaid tier's base fee for that time.
-// The share is settled the way a tier change settles it (planPreviousBaseFee):
-// a paid invoice's unused share is credited to the prepaid balance; an unpaid
-// one is reduced to its used share, and only what it no longer owes beyond
-// that is credited. The invoice records the return, so it is returned once
-// and no later base-fee invoice of the period credits it again.
+// returnUnusedBaseFeeTx settles the old invoice when an operator moves to
+// prepaid. Unpaid fees are reduced to their used share; retained paid fees are
+// forfeited, recorded on the invoice, and never become spendable balance.
 func returnUnusedBaseFeeTx(ctx context.Context, tx *sql.Tx, tenantID string, switchAt, now time.Time) (unusedBaseFeeReturn, error) {
 	queries := purserdb.New(tx)
 	plan, err := planPreviousBaseFee(ctx, queries, tenantID, switchAt)
@@ -470,40 +457,18 @@ func returnUnusedBaseFeeTx(ctx context.Context, tx *sql.Tx, tenantID string, swi
 	if !plan.found || plan.credit.invoiceID == "" {
 		return unusedBaseFeeReturn{}, nil
 	}
-	returned := unusedBaseFeeReturn{invoiceID: plan.credit.invoiceID, creditedCents: plan.credit.cents}
+	returned := unusedBaseFeeReturn{invoiceID: plan.credit.invoiceID, forfeitedCents: plan.credit.cents}
 	if plan.reduction != nil {
 		if err = reducePreviousBaseFeeInvoiceTx(ctx, tx, tenantID, *plan.reduction, now); err != nil {
 			return unusedBaseFeeReturn{}, err
 		}
 		returned.reducedCents = plan.reduction.reducedCents
 	}
-	if returned.creditedCents > 0 {
-		if err = queries.EnsurePrepaidBalanceRow(ctx, purserdb.EnsurePrepaidBalanceRowParams{TenantID: tenantID, Currency: billing.LedgerCurrency}); err != nil {
-			return unusedBaseFeeReturn{}, fmt.Errorf("initialize prepaid balance: %w", err)
-		}
-		balance, addErr := queries.AddPrepaidBalance(ctx, purserdb.AddPrepaidBalanceParams{
-			AmountCents: returned.creditedCents, TenantID: tenantID, Currency: billing.LedgerCurrency,
-		})
-		if addErr != nil {
-			return unusedBaseFeeReturn{}, fmt.Errorf("credit prepaid balance: %w", addErr)
-		}
-		if err = queries.InsertBalanceTransaction(ctx, purserdb.InsertBalanceTransactionParams{
-			ID: uuid.New(), TenantID: tenantID, AmountCents: returned.creditedCents, BalanceAfterCents: balance,
-			TransactionType: "adjustment",
-			Description: sql.NullString{String: fmt.Sprintf("Unused base subscription %s to %s, returned at the switch to prepaid",
-				switchAt.UTC().Format(time.DateOnly), plan.credit.periodEnd.UTC().Format(time.DateOnly)), Valid: true},
-			ReferenceID:   sql.NullString{String: returned.invoiceID, Valid: true},
-			ReferenceType: sql.NullString{String: "base_fee_unused_share", Valid: true},
-			ActorKind:     sql.NullString{String: "system", Valid: true},
-			CreatedAt:     sql.NullTime{Time: now, Valid: true},
-		}); err != nil {
-			return unusedBaseFeeReturn{}, fmt.Errorf("record returned base subscription share: %w", err)
-		}
-	}
 	details, err := json.Marshal(map[string]any{
 		"returned_from": switchAt,
 		"reduced":       decimal.New(returned.reducedCents, -2).StringFixed(2),
-		"credited":      decimal.New(returned.creditedCents, -2).StringFixed(2),
+		"credited":      decimal.Zero.StringFixed(2),
+		"forfeited":     decimal.New(returned.forfeitedCents, -2).StringFixed(2),
 	})
 	if err != nil {
 		return unusedBaseFeeReturn{}, fmt.Errorf("marshal base-fee return: %w", err)

@@ -191,7 +191,7 @@ func newAdminBillingRecoveryCmd() *cobra.Command {
 	recoverCmd.Flags().StringVar(&req.TenantId, "tenant-id", "", "owning tenant UUID (required)")
 	recoverCmd.Flags().StringVar(&req.ReservationId, "reservation-id", "", "checkout reservation UUID (required)")
 	recoverCmd.Flags().StringVar(&req.Reason, "reason", "", "operator reason, retained with the recovery request (required)")
-	parent.AddCommand(list, recoverCmd, newAdminTierUpgradeRecoveryCmd())
+	parent.AddCommand(list, recoverCmd, newAdminTierUpgradeRecoveryCmd(), newAdminFallbackNoticeRecoveryCmd())
 	return parent
 }
 

@@ -29,9 +29,9 @@ class CreateMollieFirstPayment(BaseModel):
         OpenUnion(),
     ] = Field(
         alias="createMollieFirstPayment",
-        description="Create a Mollie first payment to establish a mandate.\nFor iDEAL: User pays via bank → SEPA Direct Debit mandate is created.\nFor card: User enters card → card mandate is created.\nAfter successful payment, call createMollieSubscription to start recurring billing.",
+        description="Create a Mollie first payment to establish a mandate.\nFor iDEAL: User pays via bank → SEPA Direct Debit mandate is created.\nFor card: User enters card → card mandate is created.\nRequires an active, non-Enterprise postpaid tier with tier_level >= 1.\nExisting native subscriptions use changeBillingTier. A same-tier advance\ncollection switch preserves the paid term.\nAfter successful payment, call createMollieSubscription to start recurring billing.",
     )
-    "Create a Mollie first payment to establish a mandate.\nFor iDEAL: User pays via bank → SEPA Direct Debit mandate is created.\nFor card: User enters card → card mandate is created.\nAfter successful payment, call createMollieSubscription to start recurring billing."
+    "Create a Mollie first payment to establish a mandate.\nFor iDEAL: User pays via bank → SEPA Direct Debit mandate is created.\nFor card: User enters card → card mandate is created.\nRequires an active, non-Enterprise postpaid tier with tier_level >= 1.\nExisting native subscriptions use changeBillingTier. A same-tier advance\ncollection switch preserves the paid term.\nAfter successful payment, call createMollieSubscription to start recurring billing."
 
 
 class CreateMollieFirstPaymentCreateMollieFirstPaymentMollieFirstPayment(

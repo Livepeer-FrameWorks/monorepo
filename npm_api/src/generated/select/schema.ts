@@ -2911,6 +2911,9 @@ export interface Mutation {
      * Create a Mollie first payment to establish a mandate.
      * For iDEAL: User pays via bank → SEPA Direct Debit mandate is created.
      * For card: User enters card → card mandate is created.
+     * Requires an active, non-Enterprise postpaid tier with tier_level >= 1.
+     * Existing native subscriptions use changeBillingTier. A same-tier advance
+     * collection switch preserves the paid term.
      * After successful payment, call createMollieSubscription to start recurring billing.
      */
     createMollieFirstPayment: MollieFirstPaymentResult
@@ -3090,9 +3093,11 @@ export interface Mutation {
      */
     promoteToPaid: PromoteToPaidResult
     /**
-     * Change the postpaid billing tier. Upgrades start a fresh month and credit
-     * the unused paid fee; provider or metering reconciliation can leave them pending.
-     * Enterprise and upgrades to a lower base price require an operator arrangement.
+     * Change the postpaid billing tier. Upgrades start a fresh month and offset the
+     * replacement fee with the unused retained paid old fee, capped at the replacement
+     * price, without cash refund or spendable balance. Provider or metering
+     * reconciliation can leave them pending.
+     * Enterprise purchases and moves to a higher tier with a lower base price require an operator arrangement.
      * Downgrades take effect at the current billing period end.
      */
     changeBillingTier: ChangeBillingTierResult
@@ -10309,6 +10314,9 @@ export interface MutationGenqlSelection{
      * Create a Mollie first payment to establish a mandate.
      * For iDEAL: User pays via bank → SEPA Direct Debit mandate is created.
      * For card: User enters card → card mandate is created.
+     * Requires an active, non-Enterprise postpaid tier with tier_level >= 1.
+     * Existing native subscriptions use changeBillingTier. A same-tier advance
+     * collection switch preserves the paid term.
      * After successful payment, call createMollieSubscription to start recurring billing.
      */
     createMollieFirstPayment?: (MollieFirstPaymentResultGenqlSelection & { __args: {
@@ -10581,12 +10589,17 @@ export interface MutationGenqlSelection{
      * balance is carried forward as account credit.
      */
     promoteToPaid?: (PromoteToPaidResultGenqlSelection & { __args: {
-    /** The billing tier to subscribe to. */
+    /**
+     * Active, non-Enterprise postpaid tier with tier_level >= 1. Already-postpaid
+     * tenants on this tier are unchanged, including a tier retired after purchase.
+     */
     tierId: Scalars['ID']} })
     /**
-     * Change the postpaid billing tier. Upgrades start a fresh month and credit
-     * the unused paid fee; provider or metering reconciliation can leave them pending.
-     * Enterprise and upgrades to a lower base price require an operator arrangement.
+     * Change the postpaid billing tier. Upgrades start a fresh month and offset the
+     * replacement fee with the unused retained paid old fee, capped at the replacement
+     * price, without cash refund or spendable balance. Provider or metering
+     * reconciliation can leave them pending.
+     * Enterprise purchases and moves to a higher tier with a lower base price require an operator arrangement.
      * Downgrades take effect at the current billing period end.
      */
     changeBillingTier?: (ChangeBillingTierResultGenqlSelection & { __args: {

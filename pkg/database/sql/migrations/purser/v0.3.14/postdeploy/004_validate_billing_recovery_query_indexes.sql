@@ -39,6 +39,7 @@ BEGIN
           AND pg_get_indexdef(state.indexrelid) ~ '[(]free_fallback_notice_attempted_at( ASC)? NULLS FIRST,'
           AND pg_get_indexdef(state.indexrelid, 2, true) IN ('free_fallback_at', 'free_fallback_at ASC')
           AND pg_get_indexdef(state.indexrelid, 3, true) IN ('tenant_id', 'tenant_id ASC')
+          AND pg_get_indexdef(state.indexrelid) LIKE '% INCLUDE (id, free_fallback_notice_failures)%'
           AND regexp_replace(pg_get_expr(state.indpred, state.indrelid), '[[:space:]]', '', 'g') =
               '((free_fallback_atISNOTNULL)AND((free_fallback_moved_atISNOTNULL)OR(free_fallback_notified_atISNULL))AND(free_fallback_notice_abandoned_atISNULL))'
     ) THEN
@@ -120,6 +121,19 @@ BEGIN
           AND pg_get_indexdef(state.indexrelid) !~ ' HASH([, )])'
     ) THEN
         RAISE EXCEPTION 'idx_subscription_stripe_customer_latest is absent, invalid, or hash-sharded';
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_index state
+        WHERE state.indexrelid = to_regclass('purser.idx_mollie_observations_attached_subscription')
+          AND state.indrelid = 'purser.mollie_payment_observations'::regclass
+          AND state.indisvalid AND state.indisready
+          AND pg_get_indexdef(state.indexrelid) !~ ' HASH([, )])'
+          AND pg_get_indexdef(state.indexrelid, 1, true) IN ('tenant_id', 'tenant_id ASC')
+          AND pg_get_indexdef(state.indexrelid, 2, true) IN ('mollie_subscription_id', 'mollie_subscription_id ASC')
+          AND pg_get_indexdef(state.indexrelid) LIKE '% INCLUDE (invoice_id, resolved_at)%'
+          AND pg_get_expr(state.indpred, state.indrelid) LIKE '%resolution%attached%resolved_at IS NOT NULL%'
+    ) THEN
+        RAISE EXCEPTION 'idx_mollie_observations_attached_subscription is absent, invalid, or has different funding keys/covering columns';
     END IF;
 END;
 $$;

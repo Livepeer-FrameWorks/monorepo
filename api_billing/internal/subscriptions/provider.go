@@ -65,6 +65,8 @@ type ProviderResult struct {
 	PreviousMollieSubscriptionID string
 	// Status is the local status a StripeStatus change applied.
 	Status string
+	// Refusal is a committed recovery decision; transaction callers must commit it.
+	Refusal error
 }
 
 // TransitionProvider serializes every provider tier/model change with grant writes.
@@ -73,7 +75,7 @@ type ProviderResult struct {
 // A provider callback for a missing local subscription is a no-op.
 func TransitionProvider(ctx context.Context, exec purserdb.DBTX, change ProviderChange) (ProviderResult, error) {
 	if tx, ok := exec.(*sql.Tx); ok {
-		return transitionProviderTx(ctx, tx, change)
+		return transitionProviderWithRecoveryTx(ctx, tx, change)
 	}
 	db, ok := exec.(*sql.DB)
 	if !ok {
@@ -81,36 +83,56 @@ func TransitionProvider(ctx context.Context, exec purserdb.DBTX, change Provider
 	}
 	var result ProviderResult
 	err := database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
-		var transitionErr error
-		result, transitionErr = transitionProviderTx(ctx, tx, change)
-		return transitionErr
+		var err error
+		result, err = transitionProviderWithRecoveryTx(ctx, tx, change)
+		return err
 	})
-	if errors.Is(err, ErrCheckoutExpired) && IsPricingRefusal(err) && change.ReceiptIntentID != "" {
-		queueErr := database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
-			locked, lockErr := LockChange(ctx, tx, change.TenantID, PreservePricing)
-			if lockErr != nil {
-				return lockErr
-			}
-			q := purserdb.New(tx)
-			reservation, readErr := q.GetProviderCheckoutReservation(ctx, purserdb.GetProviderCheckoutReservationParams{TenantID: change.TenantID, IntentID: change.ReceiptIntentID})
-			if readErr != nil {
-				return readErr
-			}
-			// A stale callback must never turn an established subscription into a refund.
-			if reservation.ActivatedAt.Valid || reservation.ProviderSubscriptionID.String != "" &&
-				(reservation.Provider == "stripe" && reservation.ProviderSubscriptionID.String == locked.Current.StripeSubscriptionID.String || reservation.Provider == "mollie" && reservation.ProviderSubscriptionID.String == locked.Current.MollieSubscriptionID.String) {
-				return nil
-			}
-			if latchErr := q.StartCheckoutCompensation(ctx, purserdb.StartCheckoutCompensationParams{TenantID: change.TenantID, IntentID: change.ReceiptIntentID}); latchErr != nil {
-				return latchErr
-			}
-			return q.RequestCheckoutRecovery(ctx, purserdb.RequestCheckoutRecoveryParams{TenantID: change.TenantID, IntentID: change.ReceiptIntentID, Reason: err.Error()})
-		})
-		if queueErr != nil {
+	if err != nil {
+		return result, err
+	}
+	return result, result.Refusal
+}
+
+func transitionProviderWithRecoveryTx(ctx context.Context, tx *sql.Tx, change ProviderChange) (ProviderResult, error) {
+	result, err := transitionProviderTx(ctx, tx, change)
+	if err == nil || change.ReceiptIntentID == "" || !IsPricingRefusal(err) {
+		return result, err
+	}
+	locked, lockErr := LockChange(ctx, tx, change.TenantID, PreservePricing)
+	if lockErr != nil {
+		return result, lockErr
+	}
+	q := purserdb.New(tx)
+	reservation, readErr := q.GetProviderCheckoutReservation(ctx, purserdb.GetProviderCheckoutReservationParams{TenantID: change.TenantID, IntentID: change.ReceiptIntentID})
+	if readErr != nil {
+		return result, readErr
+	}
+	established := reservation.ProviderSubscriptionID.String != "" &&
+		((reservation.Provider == "stripe" && reservation.ProviderSubscriptionID.String == locked.Current.StripeSubscriptionID.String) ||
+			(reservation.Provider == "mollie" && reservation.ProviderSubscriptionID.String == locked.Current.MollieSubscriptionID.String))
+	if reservation.ActivatedAt.Valid || established {
+		return result, err
+	}
+	subscriptionID := change.Stripe.SubscriptionID
+	if reservation.Provider == "mollie" {
+		subscriptionID = change.Mollie.SubscriptionID.String
+	}
+	if bindErr := q.BindProviderCheckoutReceipt(ctx, purserdb.BindProviderCheckoutReceiptParams{TenantID: change.TenantID, IntentID: reservation.ID, Provider: reservation.Provider, SubscriptionID: subscriptionID}); bindErr != nil {
+		return result, bindErr
+	}
+	for _, id := range []string{reservation.ID, reservation.FundingIntentID} {
+		if id == "" {
+			continue
+		}
+		if latchErr := q.StartCheckoutCompensation(ctx, purserdb.StartCheckoutCompensationParams{TenantID: change.TenantID, IntentID: id}); latchErr != nil {
+			return result, latchErr
+		}
+		if queueErr := q.RequestCheckoutRecovery(ctx, purserdb.RequestCheckoutRecoveryParams{TenantID: change.TenantID, IntentID: id, Reason: err.Error()}); queueErr != nil {
 			return result, queueErr
 		}
 	}
-	return result, err
+	result.Refusal = errors.Join(ErrCheckoutExpired, err)
+	return result, nil
 }
 
 func transitionProviderTx(ctx context.Context, tx *sql.Tx, change ProviderChange) (ProviderResult, error) {
@@ -243,7 +265,7 @@ func transitionProviderTx(ctx context.Context, tx *sql.Tx, change ProviderChange
 		}
 	case MollieActivation:
 		targetID, provider, incomingID = change.Mollie.TierID, "mollie", change.Mollie.SubscriptionID.String
-	case AdvanceActivation:
+	case ProviderCheckout, AdvanceActivation:
 		targetID, provider = change.Advance.TierID, change.Advance.PaymentMethod
 	}
 	if provider != "" {

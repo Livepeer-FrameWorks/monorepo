@@ -586,6 +586,9 @@ func (s *Service) activateTenantSubscriptionFromStripe(ctx context.Context, exec
 	if err == nil && result.Rows == 0 && s.logger != nil {
 		s.logger.WithField("tenant_id", tenantID).Warn("Skipping Stripe renewal: local subscription is missing")
 	}
+	if err == nil {
+		err = result.Refusal
+	}
 	return result.Rows, err
 }
 

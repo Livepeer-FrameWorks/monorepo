@@ -52,6 +52,18 @@ func (s *Service) settlePurchaseRefund(ctx context.Context, plan billing.RefundS
 	if plan.PaymentID == "" || plan.AmountCents <= 0 || len(plan.Currency) != 3 {
 		return errors.New("invalid purchase refund settlement")
 	}
+	// Refund inspection can retry a failed bank return. Validate its durable
+	// purchase ownership before that I/O, then recheck before storing receipts.
+	if err := database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
+		if _, lockErr := subscriptions.LockChange(ctx, tx, plan.TenantID, subscriptions.PreservePricing); lockErr != nil {
+			return lockErr
+		}
+		_, checkErr := validateRefundPurchase(ctx, purserdb.New(tx), plan)
+		return checkErr
+	}); err != nil {
+		return err
+	}
+
 	var receipts []billing.SettledRefund
 	var inspection error
 	switch plan.Provider {
@@ -73,28 +85,11 @@ func (s *Service) settlePurchaseRefund(ctx context.Context, plan billing.RefundS
 			return err
 		}
 		q := purserdb.New(tx)
-		intent := sql.NullString{}
-		switch plan.ReferenceKind {
-		case "checkout":
-			row, err := q.GetProviderCheckoutReservation(ctx, purserdb.GetProviderCheckoutReservationParams{TenantID: plan.TenantID, IntentID: plan.ReferenceID})
-			if err != nil {
-				return err
-			}
-			if row.Provider != plan.Provider || !row.RecoveryStartedAt.Valid {
-				return errors.New("refund has no matching purchase compensation")
-			}
-			intent = sql.NullString{String: plan.ReferenceID, Valid: true}
-		case "tier_upgrade":
-			row, err := q.GetTierUpgrade(ctx, purserdb.GetTierUpgradeParams{TenantID: plan.TenantID, ID: plan.ReferenceID})
-			if err != nil {
-				return err
-			}
-			if row.Provider != plan.Provider || row.State != "cancelled" {
-				return errors.New("refund does not belong to a cancelled upgrade")
-			}
-		default:
-			return errors.New("invalid refund purchase kind")
+		intent, validationErr := validateRefundPurchase(ctx, q, plan)
+		if validationErr != nil {
+			return validationErr
 		}
+
 		for _, receipt := range receipts {
 			if (receipt.ObjectType != "refund" && receipt.ObjectType != "dispute" && receipt.ObjectType != "chargeback") || receipt.ID == "" || receipt.AmountCents <= 0 || !strings.EqualFold(receipt.Currency, plan.Currency) {
 				return errors.New("invalid settled refund evidence")
@@ -123,4 +118,30 @@ func (s *Service) settlePurchaseRefund(ctx context.Context, plan billing.RefundS
 		return fmt.Errorf("%w: %w", ErrAwaitingProviderSettlement, inspection)
 	}
 	return inspection
+}
+
+func validateRefundPurchase(ctx context.Context, q *purserdb.Queries, plan billing.RefundSettlement) (sql.NullString, error) {
+	intent := sql.NullString{}
+	switch plan.ReferenceKind {
+	case "checkout":
+		row, err := q.GetProviderCheckoutReservation(ctx, purserdb.GetProviderCheckoutReservationParams{TenantID: plan.TenantID, IntentID: plan.ReferenceID})
+		if err != nil {
+			return sql.NullString{}, err
+		}
+		if row.Provider != plan.Provider || !row.RecoveryStartedAt.Valid {
+			return sql.NullString{}, errors.New("refund has no matching purchase compensation")
+		}
+		intent = sql.NullString{String: plan.ReferenceID, Valid: true}
+	case "tier_upgrade":
+		row, err := q.GetTierUpgrade(ctx, purserdb.GetTierUpgradeParams{TenantID: plan.TenantID, ID: plan.ReferenceID})
+		if err != nil {
+			return sql.NullString{}, err
+		}
+		if row.Provider != plan.Provider || row.State != "cancelled" {
+			return sql.NullString{}, errors.New("refund does not belong to a cancelled upgrade")
+		}
+	default:
+		return sql.NullString{}, errors.New("invalid refund purchase kind")
+	}
+	return intent, nil
 }

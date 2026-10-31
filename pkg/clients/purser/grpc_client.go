@@ -835,6 +835,11 @@ func (c *GRPCClient) AdminRecoverCheckout(ctx context.Context, r *purserpb.Admin
 	return c.prepaid.AdminRecoverCheckout(ctx, r)
 }
 
+// AdminResendFreeFallbackNotice previews or requeues an abandoned billing email.
+func (c *GRPCClient) AdminResendFreeFallbackNotice(ctx context.Context, r *purserpb.AdminResendFreeFallbackNoticeRequest) (*purserpb.AdminResendFreeFallbackNoticeResponse, error) {
+	return c.prepaid.AdminResendFreeFallbackNotice(ctx, r)
+}
+
 // AdminRetainDeliveredCheckout attests historical delivery without refunding.
 func (c *GRPCClient) AdminRetainDeliveredCheckout(ctx context.Context, r *purserpb.AdminRecoverCheckoutRequest) (*purserpb.AdminRecoverCheckoutResponse, error) {
 	return c.prepaid.AdminRetainDeliveredCheckout(ctx, r)

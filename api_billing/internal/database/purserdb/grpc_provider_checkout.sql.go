@@ -639,48 +639,6 @@ func (q *Queries) GetTenantStripeSubscriptionID(ctx context.Context, tenantID st
 	return stripe_subscription_id, err
 }
 
-const hasHistoricalMollieActivation = `-- name: HasHistoricalMollieActivation :one
-SELECT (
-    (SELECT COUNT(*) FROM purser.payment_provider_intents funding
-     WHERE funding.tenant_id = $1::text::uuid AND funding.provider = 'mollie'
-       AND funding.purpose = 'mollie_first_payment'
-       AND (funding.status = 'succeeded' OR funding.succeeded_at IS NOT NULL)
-       AND funding.provider_customer_id = $2::text) = 1
-    AND (
-        EXISTS (SELECT 1 FROM purser.tenant_subscriptions subscription
-                WHERE subscription.tenant_id = $1::text::uuid
-                  AND subscription.mollie_subscription_id = $3::text)
-        OR EXISTS (SELECT 1 FROM purser.payment_provider_intents native
-                   WHERE native.tenant_id = $1::text::uuid AND native.provider = 'mollie'
-                     AND native.purpose = 'mollie_subscription_create'
-                     AND native.provider_subscription_id = $3::text
-                     AND (native.activated_at IS NOT NULL OR native.succeeded_at IS NOT NULL))
-        OR EXISTS (SELECT 1 FROM purser.mollie_payment_observations observation
-                   JOIN purser.billing_invoices invoice ON invoice.id = observation.invoice_id
-                     AND invoice.tenant_id = observation.tenant_id
-                   WHERE observation.tenant_id = $1::text::uuid
-                     AND observation.mollie_subscription_id = $3::text
-                     AND observation.resolution = 'attached' AND observation.resolved_at IS NOT NULL
-                     AND invoice.status NOT IN ('draft', 'manual_review'))
-    )
-)::boolean AS activated
-`
-
-type HasHistoricalMollieActivationParams struct {
-	TenantID       string `db:"tenant_id" json:"tenant_id"`
-	CustomerID     string `db:"customer_id" json:"customer_id"`
-	SubscriptionID string `db:"subscription_id" json:"subscription_id"`
-}
-
-// A provider-created subscription is not evidence of delivered local service.
-// Without exact funding links, only a sole initial receipt can be associated.
-func (q *Queries) HasHistoricalMollieActivation(ctx context.Context, arg HasHistoricalMollieActivationParams) (bool, error) {
-	row := q.db.QueryRowContext(ctx, hasHistoricalMollieActivation, arg.TenantID, arg.CustomerID, arg.SubscriptionID)
-	var activated bool
-	err := row.Scan(&activated)
-	return activated, err
-}
-
 const hasPendingMollieFundingCheckout = `-- name: HasPendingMollieFundingCheckout :one
 SELECT EXISTS (
     SELECT 1 FROM purser.payment_provider_intents native

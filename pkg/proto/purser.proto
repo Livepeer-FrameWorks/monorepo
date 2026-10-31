@@ -1198,6 +1198,8 @@ service PrepaidService {
   rpc AdminRetainDeliveredCheckout(AdminRecoverCheckoutRequest) returns (AdminRecoverCheckoutResponse);
   // Inspect a paid upgrade or cancel its unapplied request without starting a purchase.
   rpc AdminRecoverTierUpgrade(AdminRecoverTierUpgradeRequest) returns (AdminRecoverTierUpgradeResponse);
+  // Requeues an abandoned fallback email without changing billing or recovering a purchase.
+  rpc AdminResendFreeFallbackNotice(AdminResendFreeFallbackNoticeRequest) returns (AdminResendFreeFallbackNoticeResponse);
 
   // Operator billing arrangement for one tenant: a base fee in place of the
   // tier's, usage rated at zero, invoices the operator collects by hand, and
@@ -2157,6 +2159,24 @@ message AdminRecoverCheckoutRequest {
   string reservation_id = 2; // Reservation UUID from recovery list.
   string reason = 3; // Required operator reason, retained with the recovery request.
   bool confirmed = 4; // False returns a read-only preview; true permits the selected RPC action.
+}
+
+// AdminResendFreeFallbackNoticeRequest fences confirmation to the displayed email lifecycle.
+message AdminResendFreeFallbackNoticeRequest {
+  string tenant_id = 1; // Owning tenant UUID; platform operator authentication is required.
+  string reason = 2; // Required on confirmation and recorded on the billing audit event.
+  bool confirmed = 3; // False previews the abandoned notice; true requeues it.
+  google.protobuf.Timestamp scheduled_at = 4; // Exact preview deadline required on confirmation.
+  bool moved = 5; // Exact preview lifecycle: grace warning or completed-move notification.
+}
+
+// AdminResendFreeFallbackNoticeResponse describes notification work only, never payment actions.
+message AdminResendFreeFallbackNoticeResponse {
+  string status = 1; // notice_abandoned on preview, queued after confirmation.
+  string recipient = 2; // Current billing email; repair it before requesting a retry.
+  google.protobuf.Timestamp scheduled_at = 3; // Deadline that identifies this fallback lifecycle.
+  bool moved = 4; // True for a completed-move notification.
+  string detail = 5; // Last delivery failure on preview, durable queue state on confirmation.
 }
 
 // AdminRecoverCheckoutResponse reports a preview or the reservation's durable recovery state.

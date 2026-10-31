@@ -9,9 +9,7 @@ SELECT EXISTS (
       AND NULLIF(subscription.mollie_subscription_id, '') IS NULL
       AND tier.base_price > 0
       AND subscription.billing_period_start < NOW() AND subscription.billing_period_end > NOW()
-      AND (subscription.tier_id <> sqlc.arg(tier_id)::text::uuid
-           OR (subscription.payment_method IN ('stripe', 'mollie')
-               AND subscription.payment_method <> sqlc.arg(provider)::text))
+      AND subscription.tier_id <> sqlc.arg(tier_id)::text::uuid
 )::boolean AS changing;
 
 -- name: GetSelfServiceCheckoutTier :one

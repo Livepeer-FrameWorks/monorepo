@@ -10030,9 +10030,11 @@ func (v *ChangeBillingTierPayloadDefaultFieldsPendingTierBillingTierPricingRules
 
 // ChangeBillingTierResponse is returned by ChangeBillingTier on success.
 type ChangeBillingTierResponse struct {
-	// Change the postpaid billing tier. Upgrades start a fresh month and credit
-	// the unused paid fee; provider or metering reconciliation can leave them pending.
-	// Enterprise and upgrades to a lower base price require an operator arrangement.
+	// Change the postpaid billing tier. Upgrades start a fresh month and offset the
+	// replacement fee with the unused retained paid old fee, capped at the replacement
+	// price, without cash refund or spendable balance. Provider or metering
+	// reconciliation can leave them pending.
+	// Enterprise purchases and moves to a higher tier with a lower base price require an operator arrangement.
 	// Downgrades take effect at the current billing period end.
 	ChangeBillingTier ChangeBillingTierChangeBillingTierChangeBillingTierResult `json:"-"`
 }
@@ -19085,6 +19087,9 @@ type CreateMollieFirstPaymentResponse struct {
 	// Create a Mollie first payment to establish a mandate.
 	// For iDEAL: User pays via bank → SEPA Direct Debit mandate is created.
 	// For card: User enters card → card mandate is created.
+	// Requires an active, non-Enterprise postpaid tier with tier_level >= 1.
+	// Existing native subscriptions use changeBillingTier. A same-tier advance
+	// collection switch preserves the paid term.
 	// After successful payment, call createMollieSubscription to start recurring billing.
 	CreateMollieFirstPayment CreateMollieFirstPaymentCreateMollieFirstPaymentMollieFirstPaymentResult `json:"-"`
 }
@@ -125969,9 +125974,11 @@ fragment AuthErrorDefaultFields on AuthError {
 
 // ChangeBillingTier executes the corresponding GraphQL operation.
 //
-// Change the postpaid billing tier. Upgrades start a fresh month and credit
-// the unused paid fee; provider or metering reconciliation can leave them pending.
-// Enterprise and upgrades to a lower base price require an operator arrangement.
+// Change the postpaid billing tier. Upgrades start a fresh month and offset the
+// replacement fee with the unused retained paid old fee, capped at the replacement
+// price, without cash refund or spendable balance. Provider or metering
+// reconciliation can leave them pending.
+// Enterprise purchases and moves to a higher tier with a lower base price require an operator arrangement.
 // Downgrades take effect at the current billing period end.
 func ChangeBillingTier(
 	ctx_ context.Context,
@@ -126765,6 +126772,9 @@ fragment AuthErrorDefaultFields on AuthError {
 // Create a Mollie first payment to establish a mandate.
 // For iDEAL: User pays via bank → SEPA Direct Debit mandate is created.
 // For card: User enters card → card mandate is created.
+// Requires an active, non-Enterprise postpaid tier with tier_level >= 1.
+// Existing native subscriptions use changeBillingTier. A same-tier advance
+// collection switch preserves the paid term.
 // After successful payment, call createMollieSubscription to start recurring billing.
 func CreateMollieFirstPayment(
 	ctx_ context.Context,

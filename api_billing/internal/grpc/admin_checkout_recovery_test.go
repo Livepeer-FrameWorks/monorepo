@@ -67,8 +67,8 @@ func TestCheckoutRecoveryReportsPendingForMissingCustomer(t *testing.T) {
 			m.ExpectExec("RequestCheckoutRecovery").WillReturnResult(sqlmock.NewResult(0, 1))
 			m.ExpectCommit()
 		} else {
+			m.ExpectCommit()
 			m.ExpectQuery("GetMollieCustomerID").WillReturnError(sql.ErrNoRows)
-			m.ExpectRollback()
 			m.ExpectQuery("SELECT pg_advisory_unlock").WillReturnRows(sqlmock.NewRows([]string{"unlocked"}).AddRow(true))
 		}
 	}

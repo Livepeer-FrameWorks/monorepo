@@ -382,7 +382,7 @@ func TestFreeFallbackLifecycle_RealYugabyte(t *testing.T) {
 	if !t.Run("selection parity", func(t *testing.T) {
 		selection := os.Getenv("FRAMEWORKS_FREE_FALLBACK_TESTS")
 		if selection == "" {
-			t.Skip("selection parity requires the Makefile's canonical test list")
+			t.Fatal("selection parity requires the Makefile's canonical test list; run the registered Make target")
 		}
 		selected := make(map[string]bool)
 		for _, name := range strings.Split(selection, "|") {

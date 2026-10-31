@@ -288,3 +288,9 @@ reason and detail. Durable `checkout_recovery_audit` rows preserve separate
 requests and are readable with `admin billing recovery list --tenant-id <uuid>
 --history`. Provider settlement waits remain pending and keep the original actor
 when the worker later emits the terminal outcome.
+
+An operator's confirmed abandoned-fallback email retry emits
+`billing.subscription_updated` with `free_fallback_notice_retry` in
+`changed_fields`, the authenticated actor in the envelope and the operator
+reason in the payload. It requeues only the displayed notification lifecycle;
+it never emits a checkout-recovery action or changes payment objects.

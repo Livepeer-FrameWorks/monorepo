@@ -467,6 +467,26 @@ func PrepareProviderBillingBoundary(ctx context.Context, db *sql.DB, logger logg
 // PrepareFreeFallbackBoundary closes at most one stored monthly period. The
 // final partial period ends at cutoff; complete months keep separate allowances.
 func PrepareFreeFallbackBoundary(ctx context.Context, db *sql.DB, logger logging.Logger, svc *Service, tenantID string, cutoff time.Time) (*PostpaidPhaseClose, bool, error) {
+	return prepareMonthlyPostpaidBoundary(ctx, db, logger, svc, tenantID, cutoff, false, false)
+}
+
+// PrepareRetainedProviderBoundary keeps overdue monthly allowances separate
+// when changing a retained provider's billing phase. Only the final partial
+// phase can switch billing model; a grant keeps its historical pricing cutoff.
+func PrepareRetainedProviderBoundary(ctx context.Context, db *sql.DB, logger logging.Logger, svc *Service, tenantID string, cutoff time.Time, toPrepaid, grantBoundary bool) (*PostpaidPhaseClose, bool, error) {
+	closing, final, err := prepareMonthlyPostpaidBoundary(ctx, db, logger, svc, tenantID, cutoff, toPrepaid, grantBoundary)
+	if err != nil {
+		return nil, false, err
+	}
+	if (toPrepaid || grantBoundary) && closing != nil && closing.run != nil && closing.tier.MeteringEnabled {
+		if err = closing.jobs.assertMeteringComplete(ctx, tenantID, closing.phase.start, closing.phase.end); err != nil {
+			return nil, false, fmt.Errorf("wait for complete metering before changing the retained provider billing phase: %w", err)
+		}
+	}
+	return closing, final, nil
+}
+
+func prepareMonthlyPostpaidBoundary(ctx context.Context, db *sql.DB, logger logging.Logger, svc *Service, tenantID string, cutoff time.Time, toPrepaid, grantBoundary bool) (*PostpaidPhaseClose, bool, error) {
 	subscription, err := purserdb.New(db).GetSubscriptionForPhaseClose(ctx, tenantID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, true, nil
@@ -480,13 +500,23 @@ func PrepareFreeFallbackBoundary(ctx context.Context, db *sql.DB, logger logging
 	if end.After(start) && end.Before(cutoff) {
 		boundary, final = end, false
 	}
-	closing, err := PrepareProviderBillingBoundary(ctx, db, logger, svc, tenantID, boundary)
+	var closing *PostpaidPhaseClose
+	if grantBoundary || toPrepaid {
+		closing, err = preparePostpaidPhaseClose(ctx, db, logger, svc, tenantID, boundary, toPrepaid && final, grantBoundary)
+	} else {
+		closing, err = PrepareProviderBillingBoundary(ctx, db, logger, svc, tenantID, boundary)
+	}
 	if err != nil || closing == nil {
 		return closing, final, err
 	}
 	if !final {
 		closing.monthlyCatchup = true
 		closing.nextPeriodEnd = nextBillingPeriodEnd(closing.phase.chainFrom, boundary)
+	}
+	if closing.run != nil && boundary.Equal(end) {
+		// A full month ends late-arrival lineage, including a pricing change
+		// exactly on its anniversary. A midmonth split keeps that lineage.
+		delete(closing.run.usageDetails, closesPostpaidPhaseKey)
 	}
 	return closing, final, nil
 }
@@ -598,8 +628,8 @@ func (c *PostpaidPhaseClose) unchangedSince(current purserdb.GetSubscriptionForP
 // CommitTx writes the closing invoice and starts the next billing phase inside
 // the arrangement's transaction. The caller holds the subscription row lock.
 // Changed subscription/pricing/received usage returns ErrPostpaidPhaseChanged.
-// A move to prepaid returns unused advance fees; a postpaid grant boundary
-// keeps them available for planPreviousBaseFee's postpaid netting.
+// A move to prepaid settles the unused advance fee without wallet credit.
+// A postpaid grant boundary retains it for postpaid fee netting.
 func (c *PostpaidPhaseClose) CommitTx(ctx context.Context, tx *sql.Tx) (bool, error) {
 	if c == nil {
 		return false, nil
@@ -711,8 +741,9 @@ func (c *PostpaidPhaseClose) AfterCommit(ctx context.Context) {
 			"tenant_id":        c.tenantID,
 			"base_fee_invoice": c.baseFeeReturn.invoiceID,
 			"reduced_cents":    c.baseFeeReturn.reducedCents,
-			"credited_cents":   c.baseFeeReturn.creditedCents,
-		}).Info("Returned the unused share of the advance base fee at the switch to prepaid")
+			"credited_cents":   int64(0),
+			"forfeited_cents":  c.baseFeeReturn.forfeitedCents,
+		}).Info("Settled the unused advance base fee at the switch to prepaid")
 	}
 	c.jobs.logger.WithFields(logging.Fields{
 		"tenant_id":        c.tenantID,

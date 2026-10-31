@@ -6639,7 +6639,7 @@ usageRecordsConnection(
 
 ### Mutation.changeBillingTier
 
-Change the postpaid billing tier. Upgrades start a fresh month and credit the unused paid fee; provider or metering reconciliation can leave them pending. Downgrades take effect at the current billing period end.
+Change the postpaid billing tier. Upgrades start a fresh month and offset the replacement fee with the unused retained paid old fee, capped at the replacement price, without cash refund or spendable balance. Provider or metering reconciliation can leave them pending. Enterprise purchases and moves to a higher tier with a lower base price require an operator arrangement. Downgrades take effect at the current billing period end.
 
 ```graphql
 changeBillingTier(
@@ -6651,7 +6651,7 @@ changeBillingTier(
 
 **Arguments**
 
-- `tierId`: `ID!` — The target billing tier. Must be an active postpaid tier (tier_level &gt;= 1).
+- `tierId`: `ID!` — The target billing tier. Must be active, non-Enterprise and postpaid (tier_level &gt;= 1).
 
 **SDK**
 
@@ -6705,7 +6705,7 @@ createCryptoTopup(
 
 ### Mutation.createMollieFirstPayment
 
-Create a Mollie first payment to establish a mandate. For iDEAL: User pays via bank → SEPA Direct Debit mandate is created. For card: User enters card → card mandate is created. After successful payment, call createMollieSubscription to start recurring billing.
+Create a Mollie first payment to establish a mandate. For iDEAL: User pays via bank → SEPA Direct Debit mandate is created. For card: User enters card → card mandate is created. Requires an active, non-Enterprise postpaid tier with tier_level &gt;= 1. Existing native subscriptions use changeBillingTier. A same-tier advance collection switch preserves the paid term. After successful payment, call createMollieSubscription to start recurring billing.
 
 ```graphql
 createMollieFirstPayment(
@@ -6816,7 +6816,7 @@ createStripeCheckout(
 
 **Arguments**
 
-- `tierId`: `ID!` — The billing tier to subscribe to.
+- `tierId`: `ID!` — The active, non-Enterprise postpaid tier to subscribe to (tier_level &gt;= 1).
 - `billingPeriod`: `String!` — Billing period: &#39;monthly&#39; or &#39;yearly&#39;.
 - `successUrl`: `String!` — URL to redirect to after successful checkout.
 - `cancelUrl`: `String!` — URL to redirect to if user cancels.
@@ -6863,7 +6863,7 @@ promoteToPaid(
 
 **Arguments**
 
-- `tierId`: `ID!` — The billing tier to subscribe to.
+- `tierId`: `ID!` — Active, non-Enterprise postpaid tier with tier_level &gt;= 1. Already-postpaid tenants on this tier are unchanged, including a tier retired after purchase.
 
 **SDK**
 
@@ -30452,6 +30452,18 @@ actual anchor. Repair missing metering before retrying a stalled purchase. It re
 the durable state, including work that still needs provider or metering repair.
 The command requires a platform-operator JWT.
 
+#### frameworks admin billing recovery notice
+
+`frameworks admin billing recovery notice --tenant-id <UUID> --reason "Billing email repaired"`
+previews an abandoned Free-fallback notification, then requires interactive
+`yes` or `--yes` to requeue it. Repair `billing_email` first. It handles both
+the grace warning and the completed-move notice; delivery retries through the
+email worker. It records the operator and reason on `billing.subscription_updated`
+without changing the tier, collection or payments. Confirmation is fenced to
+the displayed deadline and notice phase. Older servers return `Unimplemented`;
+the CLI never invokes checkout recovery as a fallback. Requires a
+platform-operator JWT.
+
 #### frameworks admin billing grant set
 
 Record an arrangement, optionally assigning `--tier` in the same transaction. An initial tier
@@ -37190,8 +37202,12 @@ tenant's primary cluster. This uses a **push+forward** model:
    unavailable peer does not consume the next peer's timeout window.
 
 **Tenant suspension** (`TerminateTenantStreams`, `InvalidateTenantCache`) fans out
-to **all clusters** the tenant has access to, ensuring streams are terminated and
-caches invalidated everywhere.
+concurrently to entitled cells and cells recorded on the tenant's streams. Each
+recipient source is independent: a missing entitlement cannot hide a recorded
+publisher, and an inventory failure still permits delivery to known route cells.
+Incomplete discovery or delivery remains pending. Recorded cells stay targets
+after entitlement ends; without cluster retirement, a permanently removed cell
+keeps its stop and the aggregated alert pending.
 
 ---
 
@@ -40020,17 +40036,19 @@ reconciliation finished, or work remains pending. An accepted refund request
 can still await bank settlement. Refund work remains visible in `recovery list`
 until Stripe or Mollie confirms the returned amount; a failed bank return raises
 `PurserProviderWebhookInboxStuck`. Inspect the exact provider payment and repair
-the missing return in that provider's console. Settlement polling only reads
-provider receipts and never sends another refund. For cluster purchases, only
+the missing return in that provider's console. Settlement polling reads provider
+receipts. A confirmed failed Stripe refund re-enters the same capped compensation with a failure-bound idempotency key;
+pending refunds keep waiting without another request. For cluster purchases, only
 the initial unactivated purchase is returned; its corresponding operator credit
 is voided without reversing credit for delivered recurring service. Every request retains its operator identity,
 reason and outcome in history and emits audit events; a later request does not
 overwrite it.
 
 Historical Mollie first payments are linked to local activation records during
-recovery after verifying the provider mandate. If multiple receipts cannot be
-linked safely, inspect the exact receipt and service history. A platform
-operator can attest delivered service without refunding it:
+recovery after verifying the provider mandate. When recovery cannot prove delivery
+from local activation or an attached invoice, it records ambiguous delivery.
+Inspect the exact receipt and service history. A platform operator can then
+attest delivered service without refunding it:
 
 ```bash
 frameworks admin billing recovery checkout --tenant-id <uuid> --reservation-id <uuid> --retain-delivered --reason "Verified delivered service from historical records"
@@ -40038,7 +40056,8 @@ frameworks admin billing recovery checkout --tenant-id <uuid> --reservation-id <
 
 This action previews first and requires confirmation. It records the operator,
 reason and `delivered` outcome, retains the payment, and creates no subscription
-or access. It refuses current checkout flows and any payment already owed a
+or access. It requires the recorded ambiguous-delivery state and refuses
+current checkout flows, previously retained receipts, and any payment already owed a
 refund or returned by the provider. It shares the compensation lock with the
 worker, so a concurrent refund cannot race the decision.
 
@@ -40215,16 +40234,25 @@ A scheduled automatic fallback can be inspected with
 `set-tier` abort restores invoicing and detaches only proven-ended native
 subscriptions after their paid term ends. Tier assignment and grant changes
 refuse while an ended subscription still has paid service time remaining.
-Automatic expiry can end a same-tier waiver at its deadline while preserving
-the paid-term evidence and cancellation schedule.
+A cancelled tenant moves to Free when its paid term ends. An outstanding grant
+holds that move until the grant ends. Setting, renewing or ending a grant
+preserves the cancellation schedule even if the paid term has already ended;
+it never reactivates the cancelled paid subscription. An unchanged `set-tier`
+request refuses an outstanding grant: end it first, or make an explicit
+assignment to a different tier. Explicit assignment finalizes the
+ended provider-managed periods before detaching their identities, keeping each
+monthly allowance separate and excluding the base fee already collected.
 A live native subscription or a stop already in flight must
 finish reconciliation first; the command returns a precondition error.
 
 Fallback email delivery stops after five failures. The `notice_abandoned`
 recovery row retains the reason and delivery error, and leaves the automatic
-stuck alert. Correct `billing_email` for the next fallback or completed-move
-notice, or use `set-tier` to cancel the fallback as an explicit billing decision.
-Email failure never blocks the billing move.
+stuck alert. Correct `billing_email`, then run
+`frameworks admin billing recovery notice --tenant-id <UUID> --reason "Billing email repaired"`.
+The command previews the recipient and requires confirmation before requeuing
+the abandoned grace or completed-move notice. The billing audit records the
+operator and reason. It does not change the tier, restore collection or refund
+anything. Email failure never blocks the billing move.
 
 
 ---

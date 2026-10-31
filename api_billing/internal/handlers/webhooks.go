@@ -830,6 +830,10 @@ func (s *Service) handleStripeSubscriptionEvent(payload StripeWebhookPayload) er
 			// Activation authority for an async tenant subscription: apply the
 			// purchased tier and clear staged checkout state once funds settle.
 			rows, actErr := s.activateTenantSubscriptionFromStripe(ctx, tx, tenantID, obj.CustomerID, obj.ID, obj.Metadata.TierID, periodStart, periodEnd, obj.Metadata.ReservationID)
+			if errors.Is(actErr, subscriptions.ErrCheckoutExpired) {
+				matched = false
+				return nil
+			}
 			if actErr != nil {
 				return actErr
 			}

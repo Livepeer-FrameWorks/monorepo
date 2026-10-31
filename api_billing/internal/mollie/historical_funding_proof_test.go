@@ -28,12 +28,12 @@ func TestHistoricalMollieProvenFundingSurvivesOtherUnprovenSubscription(t *testi
 					return nil, fmt.Errorf("unexpected provider operation: %s %s", r.Method, r.URL.Path)
 				}
 			})
-			funded, err := client.FirstPaymentFundedSubscription(t.Context(), "customer", "initial", "delivered", func(id string) (bool, error) { return id == "delivered", nil })
+			funded, orphans, err := client.InspectFirstPaymentFunding(t.Context(), "customer", "initial", "delivered", func(id string) (bool, error) { return id == "delivered", nil })
 			if err != nil || !funded {
 				t.Fatalf("proven delivered service was blocked by unrelated history: funded=%v err=%v", funded, err)
 			}
-			if cancels != 1 {
-				t.Fatalf("orphan subscription cancellations=%d want=1", cancels)
+			if cancels != 0 || len(orphans) != 1 || orphans[0] != "unproven" {
+				t.Fatalf("read-only orphan inspection: cancellations=%d orphans=%v", cancels, orphans)
 			}
 		})
 	}

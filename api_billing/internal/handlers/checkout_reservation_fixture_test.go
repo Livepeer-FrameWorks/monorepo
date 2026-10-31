@@ -13,7 +13,7 @@ import (
 
 func checkoutReservationTestRows(values ...driver.Value) *sqlmock.Rows {
 	cols := []string{"id", "tenant_id", "provider", "purpose", "provider_customer_id", "provider_session_id", "provider_payment_id", "provider_subscription_id", "status", "expires_at", "attempt_count", "checkout_completed_at", "recovery_started_at", "created_at", "amount_cents", "currency", "provider_deadline", "recovery_outcome", "provider_request", "submission_state", "succeeded_at", "activated_at", "funding_intent_id", "provider_mandate_id", "compensation_current"}
-	values = append(values, nil, nil, time.Now(), int64(0), "EUR", values[9], nil, nil, "unknown", nil, nil, "", nil, false)
+	values = append(values, nil, nil, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), int64(0), "EUR", values[9], nil, nil, "unknown", nil, nil, "", nil, false)
 	return sqlmock.NewRows(cols).AddRow(values...)
 }
 

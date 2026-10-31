@@ -13,8 +13,8 @@ import (
 	"github.com/stripe/stripe-go/v85/refund"
 )
 
-// InspectRefundSettlement reads bank outcomes without creating or retrying a refund.
-// A successful replacement refund can resolve an earlier failed refund request.
+// InspectRefundSettlement reads bank outcomes and retries a confirmed failed
+// refund through the original purchase compensation and its idempotency keys.
 func (c *Client) InspectRefundSettlement(ctx context.Context, plan billing.RefundSettlement) ([]billing.SettledRefund, error) {
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
@@ -67,12 +67,27 @@ func (c *Client) InspectRefundSettlement(ctx context.Context, plan billing.Refun
 	if total >= plan.AmountCents {
 		return receipts, nil
 	}
-	if failed {
-		return receipts, fmt.Errorf("refund for charge %s failed before the purchase was returned; inspect the provider and issue the missing refund", plan.ChargeID)
-	}
 	if waiting {
 		return receipts, billing.ErrRefundSettling
 	}
+	if failed {
+		key := ""
+		switch plan.ReferenceKind {
+		case "checkout":
+			key = "checkout-expiry-refund:" + plan.ReferenceID
+		case "tier_upgrade":
+			key = "unapplied-upgrade-refund:" + plan.ReferenceID
+		}
+		if key == "" || plan.InvoiceID == "" {
+			return receipts, fmt.Errorf("failed refund for charge %s has no original purchase invoice", plan.ChargeID)
+		}
+		var retried billing.CheckoutRecoveryResult
+		if err := c.refundInvoicePayments(ctx, plan.InvoiceID, key, &retried, plan.ReferenceKind, plan.ReferenceID); err != nil {
+			return receipts, err
+		}
+		return receipts, billing.ErrRefundSettling
+	}
+
 	return receipts, fmt.Errorf("purchase %s has no bank return in progress; inspect the provider and issue its missing refund", plan.ReferenceID)
 }
 

@@ -65,7 +65,7 @@ func (b *tierUpgradeBackend) CallRaw(method, path, key string, body []byte, p *a
 func TestTierUpgradeStripeStartsMonthOnce(t *testing.T) {
 	b := &tierUpgradeBackend{current: &api.Subscription{ID: "sub", Customer: &api.Customer{ID: "customer"}, Status: api.SubscriptionStatusActive,
 		Metadata: map[string]string{"tenant_id": "tenant"}, LatestInvoice: &api.Invoice{Status: api.InvoiceStatusPaid},
-		Items: &api.SubscriptionItemList{Data: []*api.SubscriptionItem{{ID: "item", Price: &api.Price{ID: "old", Currency: api.CurrencyEUR, Recurring: &api.PriceRecurring{Interval: api.PriceRecurringIntervalMonth, IntervalCount: 1}}}}}}, loseResponse: true}
+		Items: &api.SubscriptionItemList{Data: []*api.SubscriptionItem{{ID: "item", Quantity: 1, Price: &api.Price{ID: "old", Currency: api.CurrencyEUR, Recurring: &api.PriceRecurring{Interval: api.PriceRecurringIntervalMonth, IntervalCount: 1}}}}}}, loseResponse: true}
 	installBackend(t, b)
 	request := billing.TierUpgradeRequest{ID: "upgrade", TenantID: "tenant", TierID: "new-tier", CustomerID: "customer", SubscriptionID: "sub", PriceID: "new-price", BaseCents: 5000}
 	c := newStripeClient()
@@ -85,7 +85,7 @@ func TestTierUpgradeStripeStartsMonthOnce(t *testing.T) {
 func TestTierUpgradeStripeDoesNotCreditUnpaidMonth(t *testing.T) {
 	b := &tierUpgradeBackend{current: &api.Subscription{ID: "sub", Customer: &api.Customer{ID: "customer"}, Status: api.SubscriptionStatusActive,
 		Metadata: map[string]string{"tenant_id": "tenant"}, LatestInvoice: &api.Invoice{Status: api.InvoiceStatusOpen},
-		Items: &api.SubscriptionItemList{Data: []*api.SubscriptionItem{{ID: "item", Price: &api.Price{ID: "old", Currency: api.CurrencyEUR, Recurring: &api.PriceRecurring{Interval: api.PriceRecurringIntervalMonth, IntervalCount: 1}}}}}}}
+		Items: &api.SubscriptionItemList{Data: []*api.SubscriptionItem{{ID: "item", Quantity: 1, Price: &api.Price{ID: "old", Currency: api.CurrencyEUR, Recurring: &api.PriceRecurring{Interval: api.PriceRecurringIntervalMonth, IntervalCount: 1}}}}}}}
 	installBackend(t, b)
 	_, err := newStripeClient().UpgradeMonthlySubscription(t.Context(), billing.TierUpgradeRequest{ID: "upgrade", TenantID: "tenant", CustomerID: "customer", SubscriptionID: "sub", PriceID: "new"})
 	if !errors.Is(err, billing.ErrTierUpgradeUnsettled) || b.updates != 0 {
@@ -96,7 +96,7 @@ func TestTierUpgradeStripeDoesNotCreditUnpaidMonth(t *testing.T) {
 func TestTierUpgradeStripeRequiresRetainedBasisBehindZeroInvoice(t *testing.T) {
 	b := &tierUpgradeBackend{feeRefunded: 2000, current: &api.Subscription{ID: "sub", Customer: &api.Customer{ID: "customer"}, Status: api.SubscriptionStatusActive,
 		Metadata: map[string]string{"tenant_id": "tenant"}, LatestInvoice: &api.Invoice{ID: "zero-adjustment", Status: api.InvoiceStatusPaid},
-		Items: &api.SubscriptionItemList{Data: []*api.SubscriptionItem{{ID: "item", Price: &api.Price{ID: "old", UnitAmount: 2000, Currency: api.CurrencyEUR, Recurring: &api.PriceRecurring{Interval: api.PriceRecurringIntervalMonth, IntervalCount: 1}}}}}}}
+		Items: &api.SubscriptionItemList{Data: []*api.SubscriptionItem{{ID: "item", Quantity: 1, Price: &api.Price{ID: "old", UnitAmount: 2000, Currency: api.CurrencyEUR, Recurring: &api.PriceRecurring{Interval: api.PriceRecurringIntervalMonth, IntervalCount: 1}}}}}}}
 	installBackend(t, b)
 	_, err := newStripeClient().UpgradeMonthlySubscription(t.Context(), billing.TierUpgradeRequest{ID: "upgrade", TenantID: "tenant", CustomerID: "customer", SubscriptionID: "sub", PriceID: "new-price", BaseCents: 5000, OldBaseCents: 2000})
 	if !errors.Is(err, billing.ErrTierUpgradeRejected) || b.updates != 0 {
@@ -107,7 +107,7 @@ func TestTierUpgradeStripeRequiresRetainedBasisBehindZeroInvoice(t *testing.T) {
 func TestTierUpgradeStripeRefusesWrongPrice(t *testing.T) {
 	b := &tierUpgradeBackend{current: &api.Subscription{ID: "sub", Customer: &api.Customer{ID: "customer"}, Status: api.SubscriptionStatusActive,
 		Metadata: map[string]string{"tenant_id": "tenant"}, LatestInvoice: &api.Invoice{Status: api.InvoiceStatusPaid},
-		Items: &api.SubscriptionItemList{Data: []*api.SubscriptionItem{{ID: "item", Price: &api.Price{ID: "old", Currency: api.CurrencyEUR, Recurring: &api.PriceRecurring{Interval: api.PriceRecurringIntervalMonth, IntervalCount: 1}}}}}}}
+		Items: &api.SubscriptionItemList{Data: []*api.SubscriptionItem{{ID: "item", Quantity: 1, Price: &api.Price{ID: "old", Currency: api.CurrencyEUR, Recurring: &api.PriceRecurring{Interval: api.PriceRecurringIntervalMonth, IntervalCount: 1}}}}}}}
 	installBackend(t, b)
 	_, err := newStripeClient().UpgradeMonthlySubscription(t.Context(), billing.TierUpgradeRequest{ID: "upgrade", TenantID: "tenant", CustomerID: "customer", SubscriptionID: "sub", PriceID: "new-price", BaseCents: 6000})
 	if !errors.Is(err, billing.ErrTierUpgradeRejected) || b.updates != 0 {
@@ -128,7 +128,7 @@ func TestTierUpgradeStripeRefusesUnmatchedOldPrice(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			b := &tierUpgradeBackend{current: &api.Subscription{ID: "sub", Customer: &api.Customer{ID: "customer"}, Status: api.SubscriptionStatusActive,
 				Metadata: map[string]string{"tenant_id": "tenant"}, LatestInvoice: &api.Invoice{ID: "paid-old", Status: api.InvoiceStatusPaid, AmountPaid: 2000},
-				Items: &api.SubscriptionItemList{Data: []*api.SubscriptionItem{{ID: "item", Price: &tc.old}}}}}
+				Items: &api.SubscriptionItemList{Data: []*api.SubscriptionItem{{ID: "item", Quantity: 1, Price: &tc.old}}}}}
 			installBackend(t, b)
 			_, err := newStripeClient().UpgradeMonthlySubscription(t.Context(), billing.TierUpgradeRequest{ID: "upgrade", TenantID: "tenant", CustomerID: "customer", SubscriptionID: "sub", PriceID: "new-price", OldBaseCents: 2000, BaseCents: 5000})
 			if !errors.Is(err, billing.ErrTierUpgradeRejected) || b.updates != 0 {
@@ -141,7 +141,7 @@ func TestTierUpgradeStripeRefusesUnmatchedOldPrice(t *testing.T) {
 func TestTierUpgradeStripeRefusesRefundedOrDisputedFeeAndPendingCancellation(t *testing.T) {
 	for _, mode := range []string{"refunded", "disputed", "pending cancellation"} {
 		t.Run(mode, func(t *testing.T) {
-			b := &tierUpgradeBackend{current: &api.Subscription{ID: "sub", Customer: &api.Customer{ID: "customer"}, Status: api.SubscriptionStatusActive, Metadata: map[string]string{"tenant_id": "tenant"}, LatestInvoice: &api.Invoice{ID: "old", Status: api.InvoiceStatusPaid, AmountPaid: 2000}, Items: &api.SubscriptionItemList{Data: []*api.SubscriptionItem{{ID: "item", Price: &api.Price{ID: "old", Currency: api.CurrencyEUR, Recurring: &api.PriceRecurring{Interval: api.PriceRecurringIntervalMonth, IntervalCount: 1}}}}}}}
+			b := &tierUpgradeBackend{current: &api.Subscription{ID: "sub", Customer: &api.Customer{ID: "customer"}, Status: api.SubscriptionStatusActive, Metadata: map[string]string{"tenant_id": "tenant"}, LatestInvoice: &api.Invoice{ID: "old", Status: api.InvoiceStatusPaid, AmountPaid: 2000}, Items: &api.SubscriptionItemList{Data: []*api.SubscriptionItem{{ID: "item", Quantity: 1, Price: &api.Price{ID: "old", Currency: api.CurrencyEUR, Recurring: &api.PriceRecurring{Interval: api.PriceRecurringIntervalMonth, IntervalCount: 1}}}}}}}
 			if mode == "refunded" {
 				b.feeRefunded = 100
 			}
@@ -161,7 +161,7 @@ func TestTierUpgradeStripeRefusesRefundedOrDisputedFeeAndPendingCancellation(t *
 }
 
 func TestTierUpgradeStripeReplayUsesOriginalInvoiceAfterRenewalAndDunning(t *testing.T) {
-	b := &tierUpgradeBackend{current: &api.Subscription{ID: "sub", Customer: &api.Customer{ID: "customer"}, Status: api.SubscriptionStatusActive, Metadata: map[string]string{"tenant_id": "tenant"}, LatestInvoice: &api.Invoice{Status: api.InvoiceStatusPaid}, Items: &api.SubscriptionItemList{Data: []*api.SubscriptionItem{{ID: "item", Price: &api.Price{ID: "old", Currency: api.CurrencyEUR, Recurring: &api.PriceRecurring{Interval: api.PriceRecurringIntervalMonth, IntervalCount: 1}}}}}}, loseResponse: true}
+	b := &tierUpgradeBackend{current: &api.Subscription{ID: "sub", Customer: &api.Customer{ID: "customer"}, Status: api.SubscriptionStatusActive, Metadata: map[string]string{"tenant_id": "tenant"}, LatestInvoice: &api.Invoice{Status: api.InvoiceStatusPaid}, Items: &api.SubscriptionItemList{Data: []*api.SubscriptionItem{{ID: "item", Quantity: 1, Price: &api.Price{ID: "old", Currency: api.CurrencyEUR, Recurring: &api.PriceRecurring{Interval: api.PriceRecurringIntervalMonth, IntervalCount: 1}}}}}}, loseResponse: true}
 	installBackend(t, b)
 	request := billing.TierUpgradeRequest{ID: "upgrade", TenantID: "tenant", CustomerID: "customer", SubscriptionID: "sub", PriceID: "new-price", BaseCents: 5000, RequestedAt: time.Now()}
 	if _, err := newStripeClient().UpgradeMonthlySubscription(t.Context(), request); err == nil {
@@ -175,5 +175,16 @@ func TestTierUpgradeStripeReplayUsesOriginalInvoiceAfterRenewalAndDunning(t *tes
 	receipt, err := newStripeClient().UpgradeMonthlySubscription(t.Context(), request)
 	if err != nil || receipt.PeriodStart.Unix() != original || receipt.PaidReceiptID != "upgrade-invoice" || b.updates != 1 {
 		t.Fatalf("replay substituted renewal for purchase: receipt=%+v updates=%d err=%v", receipt, b.updates, err)
+	}
+}
+
+func TestTierUpgradeStripeRefusesMultipleOldUnits(t *testing.T) {
+	b := &tierUpgradeBackend{current: &api.Subscription{ID: "sub", Customer: &api.Customer{ID: "customer"}, Status: api.SubscriptionStatusActive,
+		Metadata: map[string]string{"tenant_id": "tenant"}, LatestInvoice: &api.Invoice{ID: "old", Status: api.InvoiceStatusPaid, AmountPaid: 4000},
+		Items: &api.SubscriptionItemList{Data: []*api.SubscriptionItem{{ID: "item", Quantity: 2, Price: &api.Price{ID: "old", UnitAmount: 2000, Currency: api.CurrencyEUR, Recurring: &api.PriceRecurring{Interval: api.PriceRecurringIntervalMonth, IntervalCount: 1}}}}}}}
+	installBackend(t, b)
+	_, err := newStripeClient().UpgradeMonthlySubscription(t.Context(), billing.TierUpgradeRequest{ID: "upgrade", TenantID: "tenant", CustomerID: "customer", SubscriptionID: "sub", PriceID: "new-price", OldBaseCents: 2000, BaseCents: 5000})
+	if !errors.Is(err, billing.ErrTierUpgradeRejected) || b.updates != 0 {
+		t.Fatalf("multiple old units credited during a one-unit upgrade: updates=%d err=%v", b.updates, err)
 	}
 }

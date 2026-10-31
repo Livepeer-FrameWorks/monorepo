@@ -60,7 +60,7 @@ billing_name='Customer',billing_address='{"street":"Street 1","city":"Leiden","p
 					invoiceID = "upgrade-invoice"
 				}
 				return map[string]any{"id": "subscription", "object": "subscription", "customer": "customer", "status": state, "metadata": metadata, "latest_invoice": map[string]any{"id": invoiceID, "status": "paid", "amount_paid": 2000},
-					"items": map[string]any{"data": []any{map[string]any{"id": "item", "price": map[string]any{"id": price, "unit_amount": 2000, "currency": "eur", "recurring": map[string]any{"interval": "month", "interval_count": 1}}, "current_period_start": providerStart.Unix(), "current_period_end": providerEnd.Unix()}}}}
+					"items": map[string]any{"data": []any{map[string]any{"id": "item", "quantity": 1, "price": map[string]any{"id": price, "unit_amount": 2000, "currency": "eur", "recurring": map[string]any{"interval": "month", "interval_count": 1}}, "current_period_start": providerStart.Unix(), "current_period_end": providerEnd.Unix()}}}}
 			}
 			fixture.route("GET", "/v1/customers/customer", func(recordedProviderRequest) (int, any) {
 				return 200, map[string]any{"id": "customer", "invoice_settings": map[string]any{"default_payment_method": "pm"}}

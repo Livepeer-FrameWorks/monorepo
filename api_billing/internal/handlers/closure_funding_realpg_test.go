@@ -28,7 +28,7 @@ func assertClosureRefundsOnlyUnactivatedFirstPayment(t *testing.T) {
 	t.Helper()
 	t.Run("multiple historically delivered first payments", assertHistoricalMollieMultipleDeliveredPayments)
 	t.Run("delivery decision guards", assertHistoricalDeliveryDecisionGuards)
-	for _, kind := range []string{"unactivated current", "unactivated zero mandate", "unactivated legacy", "delivered legacy", "delivered legacy with reopened receipt", "cancelled create without activation", "cancelled create already refunded"} {
+	for _, kind := range []string{"unactivated current", "unactivated zero mandate", "unactivated legacy", "delivered legacy", "delivered legacy with reopened receipt", "delivered legacy without native receipt", "cancelled create without activation", "cancelled create already refunded"} {
 		t.Run(kind, func(t *testing.T) {
 			db := startProviderReservationDatabase(t)
 			now := time.Now().UTC().Truncate(time.Second)
@@ -52,7 +52,15 @@ func assertClosureRefundsOnlyUnactivatedFirstPayment(t *testing.T) {
 				t.Fatal(err)
 			}
 			if strings.HasPrefix(kind, "delivered legacy") {
-				if _, err := db.ExecContext(t.Context(), `INSERT INTO purser.payment_provider_intents(tenant_id,provider,purpose,status,currency,idempotency_key,provider_customer_id,provider_subscription_id,succeeded_at) VALUES($1,'mollie','mollie_subscription_create','provider_open','EUR','historical-native','customer','historical',NOW())`, tenant.id); err != nil {
+				if kind != "delivered legacy without native receipt" {
+					if _, err := db.ExecContext(t.Context(), `INSERT INTO purser.payment_provider_intents(tenant_id,provider,purpose,status,currency,idempotency_key,provider_customer_id,provider_subscription_id) VALUES($1,'mollie','mollie_subscription_create','provider_open','EUR','historical-native','customer','historical')`, tenant.id); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if _, err := db.ExecContext(t.Context(), `INSERT INTO purser.mollie_customers(tenant_id,mollie_customer_id) VALUES($1,'customer')`, tenant.id); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := db.ExecContext(t.Context(), `UPDATE purser.tenant_subscriptions SET mollie_subscription_id='historical',payment_method='mollie' WHERE tenant_id=$1`, tenant.id); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -132,9 +140,17 @@ func assertClosureRefundsOnlyUnactivatedFirstPayment(t *testing.T) {
 						t.Fatalf("delivered funding did not resolve through activation proof: %+v %v", activated, err)
 					}
 				}
+				if strings.HasPrefix(kind, "delivered legacy") {
+					if err := tenant.svc.expireCheckoutReservation(t.Context(), checkoutReservationExpiry{TenantID: tenant.id, IntentID: id, Force: true}); err != nil {
+						t.Fatal(err)
+					}
+					if refunded {
+						t.Fatal("a replay refunded previously proven delivered service")
+					}
+				}
 				var detail string
 				if kind == "cancelled create without activation" {
-					if err := db.QueryRowContext(t.Context(), `SELECT last_error FROM purser.provider_webhook_inbox WHERE provider='checkout_recovery' AND headers->>'tenant_id'=$1`, tenant.id).Scan(&detail); err != nil || !strings.Contains(detail, "cannot prove activation") {
+					if err := db.QueryRowContext(t.Context(), `SELECT last_error FROM purser.provider_webhook_inbox WHERE provider='checkout_recovery' AND headers->>'tenant_id'=$1`, tenant.id).Scan(&detail); err != nil || !strings.Contains(detail, "historical Mollie delivery cannot be proven") {
 						t.Fatalf("ambiguous activation history silently settled: detail=%s err=%v", detail, err)
 					}
 					preview, previewErr := tenant.svc.PreviewRetainDeliveredCheckout(t.Context(), tenant.id, id)
@@ -170,7 +186,7 @@ func assertClosureRefundsOnlyUnactivatedFirstPayment(t *testing.T) {
 }
 
 func assertHistoricalDeliveryDecisionGuards(t *testing.T) {
-	for _, kind := range []string{"current mandate", "unpaid", "refund promised", "provider refunded", "another tenant refund", "recovery owns intent"} {
+	for _, kind := range []string{"current mandate", "unpaid", "refund promised", "provider refunded", "another tenant refund", "recovery owns intent", "no ambiguous history", "already retained"} {
 		t.Run(kind, func(t *testing.T) {
 			db := startProviderReservationDatabase(t)
 			now := time.Now().UTC()
@@ -181,7 +197,16 @@ func assertHistoricalDeliveryDecisionGuards(t *testing.T) {
 			if _, err := db.ExecContext(t.Context(), `INSERT INTO purser.payment_provider_intents(id,tenant_id,provider,purpose,status,currency,amount_cents,idempotency_key,provider_customer_id,provider_payment_id,succeeded_at) VALUES($1::uuid,$2::uuid,'mollie','mollie_first_payment','succeeded','EUR',2000,$1::text,'customer','initial',NOW())`, id, tenant.id); err != nil {
 				t.Fatal(err)
 			}
+			if kind != "no ambiguous history" {
+				if _, err := db.ExecContext(t.Context(), `UPDATE purser.payment_provider_intents SET recovery_outcome='ambiguous_delivery' WHERE tenant_id=$1 AND id=$2`, tenant.id, id); err != nil {
+					t.Fatal(err)
+				}
+			}
 			switch kind {
+			case "already retained":
+				if _, err := db.ExecContext(t.Context(), `UPDATE purser.payment_provider_intents SET activated_at=NOW(),recovery_outcome='delivered' WHERE tenant_id=$1 AND id=$2`, tenant.id, id); err != nil {
+					t.Fatal(err)
+				}
 			case "current mandate":
 				if _, err := db.ExecContext(t.Context(), `UPDATE purser.payment_provider_intents SET provider_mandate_id='mandate' WHERE tenant_id=$1 AND id=$2`, tenant.id, id); err != nil {
 					t.Fatal(err)
@@ -262,10 +287,27 @@ func assertHistoricalMollieMultipleDeliveredPayments(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, err = db.ExecContext(t.Context(), `INSERT INTO purser.payment_provider_intents(tenant_id,provider,purpose,status,currency,idempotency_key,provider_customer_id,provider_subscription_id,created_at,succeeded_at) VALUES($1,'mollie','mollie_subscription_create','provider_open','EUR',$2,'customer',$2,$3,$3)`, tenant.id, subscriptionID, nativeAt)
+		_, err = db.ExecContext(t.Context(), `INSERT INTO purser.payment_provider_intents(tenant_id,provider,purpose,status,currency,idempotency_key,provider_customer_id,provider_subscription_id,created_at) VALUES($1,'mollie','mollie_subscription_create','provider_open','EUR',$2,'customer',$2,$3)`, tenant.id, subscriptionID, nativeAt)
 		if err != nil {
 			t.Fatal(err)
 		}
+		if i == 0 {
+			invoice := uuid.NewString()
+			if _, err = db.ExecContext(t.Context(), `INSERT INTO purser.billing_invoices(id,tenant_id,status,amount,base_amount,due_date) VALUES($1,$2,'paid',20,20,NOW())`, invoice, tenant.id); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = db.ExecContext(t.Context(), `INSERT INTO purser.mollie_payment_observations(tenant_id,mollie_payment_id,mollie_subscription_id,status,amount_cents,currency,invoice_id,resolution,resolved_at) VALUES($1,'delivered-renewal',$2,'paid',2000,'EUR',$3,'attached',$4)`, tenant.id, subscriptionID, invoice, nativeAt.Add(time.Hour)); err != nil {
+				t.Fatal(err)
+			}
+		} else {
+			if _, err = db.ExecContext(t.Context(), `INSERT INTO purser.mollie_customers(tenant_id,mollie_customer_id) VALUES($1,'customer')`, tenant.id); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = db.ExecContext(t.Context(), `UPDATE purser.tenant_subscriptions SET billing_model='postpaid',tier_id=$2,payment_method='mollie',mollie_subscription_id=$3 WHERE tenant_id=$1`, tenant.id, tenant.supporterID, subscriptionID); err != nil {
+				t.Fatal(err)
+			}
+		}
+
 		subscriptions = append(subscriptions, map[string]any{"id": subscriptionID, "mandateId": mandateID, "createdAt": nativeAt.Format(time.RFC3339), "status": "active"})
 		fixture.route("GET", "/v2/payments/"+paymentID, func(recordedProviderRequest) (int, any) {
 			return 200, map[string]any{"id": paymentID, "customerId": "customer", "mandateId": mandateID, "status": "paid", "sequenceType": "first", "createdAt": created.Format(time.RFC3339), "amount": map[string]string{"value": "20.00", "currency": "EUR"}}

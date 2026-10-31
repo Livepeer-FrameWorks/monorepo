@@ -5967,7 +5967,7 @@ func (s *PurserServer) promoteToPaidOnce(ctx context.Context, req *purserpb.Prom
 			if requestedTierID != "" && requestedTierID != subscription.TierID {
 				return status.Error(codes.FailedPrecondition, "already postpaid on a different tier; use changeBillingTier")
 			}
-			requestedTierID = subscription.TierID
+			return nil
 		}
 
 		tier, err := queries.GetPostpaidPromotionTier(ctx, purserdb.GetPostpaidPromotionTierParams{

@@ -297,7 +297,7 @@ func TestHandleSubscriptionCheckoutCompletedPersistsTierAndPaymentMethod(t *test
 	expectProviderSubscriptionLock(mock, checkoutTenantID)
 	mock.ExpectQuery("HasPendingTierUpgrade").WillReturnRows(sqlmock.NewRows([]string{"pending"}).AddRow(false))
 	mock.ExpectQuery("GetTierForBillingChange").WithArgs("tier-pro").WillReturnRows(sqlmock.NewRows([]string{"tier_level", "tier_name", "is_default_prepaid", "is_active", "is_enterprise"}).AddRow(2, "pro", false, true, false))
-	mock.ExpectQuery("SelfServiceAdvanceTierChange").WithArgs(checkoutTenantID, "tier-pro", "stripe").WillReturnRows(sqlmock.NewRows([]string{"changing"}).AddRow(false))
+	mock.ExpectQuery("SelfServiceAdvanceTierChange").WithArgs(checkoutTenantID, "tier-pro").WillReturnRows(sqlmock.NewRows([]string{"changing"}).AddRow(false))
 	mock.ExpectQuery("GetSelfServiceNativeSubscriptions").WithArgs(checkoutTenantID).WillReturnRows(sqlmock.NewRows([]string{"stripe_id", "mollie_id", "paid_cancellation_term"}).AddRow("", "", false))
 	mock.ExpectExec(subscriptionCheckoutUpdatePattern()).
 		WithArgs("cus_123", "sub_456", "tier-pro", nil, nil, checkoutTenantID).
@@ -395,7 +395,7 @@ func TestHandleSubscriptionCheckoutCompletedStagesWhenUnpaid(t *testing.T) {
 	expectProviderSubscriptionLock(mock, checkoutTenantID)
 	mock.ExpectQuery("HasPendingTierUpgrade").WillReturnRows(sqlmock.NewRows([]string{"pending"}).AddRow(false))
 	mock.ExpectQuery("GetTierForBillingChange").WithArgs("tier-pro").WillReturnRows(sqlmock.NewRows([]string{"tier_level", "tier_name", "is_default_prepaid", "is_active", "is_enterprise"}).AddRow(2, "pro", false, true, false))
-	mock.ExpectQuery("SelfServiceAdvanceTierChange").WithArgs(checkoutTenantID, "tier-pro", "stripe").WillReturnRows(sqlmock.NewRows([]string{"changing"}).AddRow(false))
+	mock.ExpectQuery("SelfServiceAdvanceTierChange").WithArgs(checkoutTenantID, "tier-pro").WillReturnRows(sqlmock.NewRows([]string{"changing"}).AddRow(false))
 	mock.ExpectQuery("GetSelfServiceNativeSubscriptions").WithArgs(checkoutTenantID).WillReturnRows(sqlmock.NewRows([]string{"stripe_id", "mollie_id", "paid_cancellation_term"}).AddRow("", "", false))
 	mock.ExpectExec("StageTenantSubscriptionPendingStripe").WithArgs("cus_123", checkoutTenantID).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("LinkStripeIntentSubscription").WithArgs("sub_456", checkoutTenantID, "cs_test_session").WillReturnResult(sqlmock.NewResult(0, 1))

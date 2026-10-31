@@ -2,6 +2,7 @@ package subscriptions
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 
 	"frameworks/api_billing/internal/database/purserdb"
@@ -35,13 +36,16 @@ func CheckSelfServiceCheckout(ctx context.Context, exec purserdb.DBTX, tenantID,
 func CheckSelfServiceActivation(ctx context.Context, exec purserdb.DBTX, tenantID, tierID, provider, incomingID string) error {
 	q := purserdb.New(exec)
 	tier, err := q.GetTierForBillingChange(ctx, tierID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrSelfServiceTier
+	}
 	if err != nil {
 		return err
 	}
 	if err = ValidateSelfServiceTier(tier); err != nil {
 		return err
 	}
-	changing, err := q.SelfServiceAdvanceTierChange(ctx, purserdb.SelfServiceAdvanceTierChangeParams{TenantID: tenantID, TierID: tierID, Provider: provider})
+	changing, err := q.SelfServiceAdvanceTierChange(ctx, purserdb.SelfServiceAdvanceTierChangeParams{TenantID: tenantID, TierID: tierID})
 	if err != nil {
 		return err
 	}

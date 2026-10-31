@@ -51,17 +51,19 @@ reconciliation finished, or work remains pending. An accepted refund request
 can still await bank settlement. Refund work remains visible in `recovery list`
 until Stripe or Mollie confirms the returned amount; a failed bank return raises
 `PurserProviderWebhookInboxStuck`. Inspect the exact provider payment and repair
-the missing return in that provider's console. Settlement polling only reads
-provider receipts and never sends another refund. For cluster purchases, only
+the missing return in that provider's console. Settlement polling reads provider
+receipts. A confirmed failed Stripe refund re-enters the same capped compensation with a failure-bound idempotency key;
+pending refunds keep waiting without another request. For cluster purchases, only
 the initial unactivated purchase is returned; its corresponding operator credit
 is voided without reversing credit for delivered recurring service. Every request retains its operator identity,
 reason and outcome in history and emits audit events; a later request does not
 overwrite it.
 
 Historical Mollie first payments are linked to local activation records during
-recovery after verifying the provider mandate. If multiple receipts cannot be
-linked safely, inspect the exact receipt and service history. A platform
-operator can attest delivered service without refunding it:
+recovery after verifying the provider mandate. When recovery cannot prove delivery
+from local activation or an attached invoice, it records ambiguous delivery.
+Inspect the exact receipt and service history. A platform operator can then
+attest delivered service without refunding it:
 
 ```bash
 frameworks admin billing recovery checkout --tenant-id <uuid> --reservation-id <uuid> --retain-delivered --reason "Verified delivered service from historical records"
@@ -69,7 +71,8 @@ frameworks admin billing recovery checkout --tenant-id <uuid> --reservation-id <
 
 This action previews first and requires confirmation. It records the operator,
 reason and `delivered` outcome, retains the payment, and creates no subscription
-or access. It refuses current checkout flows and any payment already owed a
+or access. It requires the recorded ambiguous-delivery state and refuses
+current checkout flows, previously retained receipts, and any payment already owed a
 refund or returned by the provider. It shares the compensation lock with the
 worker, so a concurrent refund cannot race the decision.
 
@@ -246,13 +249,22 @@ A scheduled automatic fallback can be inspected with
 `set-tier` abort restores invoicing and detaches only proven-ended native
 subscriptions after their paid term ends. Tier assignment and grant changes
 refuse while an ended subscription still has paid service time remaining.
-Automatic expiry can end a same-tier waiver at its deadline while preserving
-the paid-term evidence and cancellation schedule.
+A cancelled tenant moves to Free when its paid term ends. An outstanding grant
+holds that move until the grant ends. Setting, renewing or ending a grant
+preserves the cancellation schedule even if the paid term has already ended;
+it never reactivates the cancelled paid subscription. An unchanged `set-tier`
+request refuses an outstanding grant: end it first, or make an explicit
+assignment to a different tier. Explicit assignment finalizes the
+ended provider-managed periods before detaching their identities, keeping each
+monthly allowance separate and excluding the base fee already collected.
 A live native subscription or a stop already in flight must
 finish reconciliation first; the command returns a precondition error.
 
 Fallback email delivery stops after five failures. The `notice_abandoned`
 recovery row retains the reason and delivery error, and leaves the automatic
-stuck alert. Correct `billing_email` for the next fallback or completed-move
-notice, or use `set-tier` to cancel the fallback as an explicit billing decision.
-Email failure never blocks the billing move.
+stuck alert. Correct `billing_email`, then run
+`frameworks admin billing recovery notice --tenant-id <UUID> --reason "Billing email repaired"`.
+The command previews the recipient and requires confirmation before requeuing
+the abandoned grace or completed-move notice. The billing audit records the
+operator and reason. It does not change the tier, restore collection or refund
+anything. Email failure never blocks the billing move.

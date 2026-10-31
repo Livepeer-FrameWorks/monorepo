@@ -66,12 +66,17 @@ func testCheckoutRecoveryBoundsProviderCalls(t *testing.T, paid bool) {
 	previous := stripeapi.GetBackend(stripeapi.APIBackend)
 	stripeapi.SetBackend(stripeapi.APIBackend, stripeapi.GetBackendWithConfig(stripeapi.APIBackend, &stripeapi.BackendConfig{HTTPClient: &http.Client{Transport: transport}, MaxNetworkRetries: stripeapi.Int64(0)}))
 	t.Cleanup(func() { stripeapi.SetBackend(stripeapi.APIBackend, previous) })
+	deadline := time.Now().Add(-time.Hour)
 	svc := &Service{db: db, logger: logging.NewLogger(), stripeClient: billingstripe.NewClient(billingstripe.Config{SecretKey: "sk_test", Logger: logging.NewLogger()})}
 	expectCheckoutRecoverySessionLock(m)
 	m.ExpectBegin()
 	expectProviderSubscriptionLock(m, "tenant")
-	m.ExpectQuery("GetProviderCheckoutReservation").WillReturnRows(checkoutReservationTestRows("intent", "tenant", "stripe", "tenant_subscription_checkout", "customer", "session", nil, nil, "pending", time.Now().Add(-time.Minute), 0))
+	m.ExpectQuery("GetProviderCheckoutReservation").WillReturnRows(checkoutReservationTestRows("intent", "tenant", "stripe", "tenant_subscription_checkout", "customer", "session", nil, nil, "pending", deadline, 0))
+	m.ExpectCommit()
 	m.ExpectQuery("GetSelfServiceCheckoutTier").WithArgs("tenant", "intent").WillReturnRows(sqlmock.NewRows([]string{"tier_id"}).AddRow("tier"))
+	m.ExpectBegin()
+	expectProviderSubscriptionLock(m, "tenant")
+	m.ExpectQuery("GetProviderCheckoutReservation").WillReturnRows(checkoutReservationTestRows("intent", "tenant", "stripe", "tenant_subscription_checkout", "customer", "session", nil, nil, "pending", deadline, 0))
 	m.ExpectExec("StartCheckoutCompensation").WillReturnResult(sqlmock.NewResult(0, 1))
 	m.ExpectCommit()
 	m.ExpectQuery("FinishCheckoutCompensation").WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(1)))
@@ -79,7 +84,7 @@ func testCheckoutRecoveryBoundsProviderCalls(t *testing.T, paid bool) {
 	if err = svc.expireCheckoutReservation(context.Background(), checkoutReservationExpiry{TenantID: "tenant", IntentID: "intent"}); err != nil {
 		t.Fatal(err)
 	}
-	expected := 4
+	expected := 3
 	if paid {
 		expected = 5
 	}
@@ -101,12 +106,17 @@ func TestRecoveryClosesBoundSessionWithoutCustomerMapping(t *testing.T) {
 	previous := stripeapi.GetBackend(stripeapi.APIBackend)
 	stripeapi.SetBackend(stripeapi.APIBackend, stripeapi.GetBackendWithConfig(stripeapi.APIBackend, &stripeapi.BackendConfig{HTTPClient: &http.Client{Transport: transport}, MaxNetworkRetries: stripeapi.Int64(0)}))
 	t.Cleanup(func() { stripeapi.SetBackend(stripeapi.APIBackend, previous) })
+	deadline := time.Now().Add(-time.Hour)
 	svc := &Service{db: db, logger: logging.NewLogger(), stripeClient: billingstripe.NewClient(billingstripe.Config{SecretKey: "sk_test", Logger: logging.NewLogger()})}
 	expectCheckoutRecoverySessionLock(m)
 	m.ExpectBegin()
 	expectProviderSubscriptionLock(m, "tenant")
-	m.ExpectQuery("GetProviderCheckoutReservation").WillReturnRows(checkoutReservationTestRows("intent", "tenant", "stripe", "tenant_subscription_checkout", nil, "session", nil, nil, "pending", time.Now().Add(-time.Hour), 0))
+	m.ExpectQuery("GetProviderCheckoutReservation").WillReturnRows(checkoutReservationTestRows("intent", "tenant", "stripe", "tenant_subscription_checkout", nil, "session", nil, nil, "pending", deadline, 0))
+	m.ExpectCommit()
 	m.ExpectQuery("GetSelfServiceCheckoutTier").WithArgs("tenant", "intent").WillReturnRows(sqlmock.NewRows([]string{"tier_id"}).AddRow("tier"))
+	m.ExpectBegin()
+	expectProviderSubscriptionLock(m, "tenant")
+	m.ExpectQuery("GetProviderCheckoutReservation").WillReturnRows(checkoutReservationTestRows("intent", "tenant", "stripe", "tenant_subscription_checkout", nil, "session", nil, nil, "pending", deadline, 0))
 	m.ExpectExec("StartCheckoutCompensation").WillReturnResult(sqlmock.NewResult(0, 1))
 	m.ExpectCommit()
 	m.ExpectQuery("FinishCheckoutCompensation").WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(1)))

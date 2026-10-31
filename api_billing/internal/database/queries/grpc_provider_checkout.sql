@@ -564,31 +564,3 @@ UPDATE purser.payment_provider_intents
 SET activated_at = COALESCE(activated_at, NOW()), updated_at = NOW()
 WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid AND id = sqlc.arg(intent_id)::text::uuid
   AND provider = 'mollie' AND purpose = 'mollie_first_payment';
-
--- name: HasHistoricalMollieActivation :one
--- A provider-created subscription is not evidence of delivered local service.
--- Without exact funding links, only a sole initial receipt can be associated.
-SELECT (
-    (SELECT COUNT(*) FROM purser.payment_provider_intents funding
-     WHERE funding.tenant_id = sqlc.arg(tenant_id)::text::uuid AND funding.provider = 'mollie'
-       AND funding.purpose = 'mollie_first_payment'
-       AND (funding.status = 'succeeded' OR funding.succeeded_at IS NOT NULL)
-       AND funding.provider_customer_id = sqlc.arg(customer_id)::text) = 1
-    AND (
-        EXISTS (SELECT 1 FROM purser.tenant_subscriptions subscription
-                WHERE subscription.tenant_id = sqlc.arg(tenant_id)::text::uuid
-                  AND subscription.mollie_subscription_id = sqlc.arg(subscription_id)::text)
-        OR EXISTS (SELECT 1 FROM purser.payment_provider_intents native
-                   WHERE native.tenant_id = sqlc.arg(tenant_id)::text::uuid AND native.provider = 'mollie'
-                     AND native.purpose = 'mollie_subscription_create'
-                     AND native.provider_subscription_id = sqlc.arg(subscription_id)::text
-                     AND (native.activated_at IS NOT NULL OR native.succeeded_at IS NOT NULL))
-        OR EXISTS (SELECT 1 FROM purser.mollie_payment_observations observation
-                   JOIN purser.billing_invoices invoice ON invoice.id = observation.invoice_id
-                     AND invoice.tenant_id = observation.tenant_id
-                   WHERE observation.tenant_id = sqlc.arg(tenant_id)::text::uuid
-                     AND observation.mollie_subscription_id = sqlc.arg(subscription_id)::text
-                     AND observation.resolution = 'attached' AND observation.resolved_at IS NOT NULL
-                     AND invoice.status NOT IN ('draft', 'manual_review'))
-    )
-)::boolean AS activated;

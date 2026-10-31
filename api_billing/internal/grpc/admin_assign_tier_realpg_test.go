@@ -51,6 +51,9 @@ func operatorAssignCtx(userID string) context.Context {
 func TestAdminAssignTier_RealPG(t *testing.T) { //nolint:funlen // One database carries the whole assignment matrix.
 	db := startOperatorGrantDatabase(t)
 	ctx := context.Background()
+	if _, err := db.ExecContext(ctx, `INSERT INTO purser.fx_rates(currency,reference_date,units_per_eur,source) VALUES('USD',CURRENT_DATE,1.25,'ecb') ON CONFLICT DO NOTHING`); err != nil {
+		t.Fatal(err)
+	}
 	tiers := map[string]string{}
 	for _, tier := range []struct {
 		name            string
@@ -114,7 +117,7 @@ func TestAdminAssignTier_RealPG(t *testing.T) { //nolint:funlen // One database 
 				t.Fatal(err)
 			}
 			if before == "pending_cancellation" {
-				if _, err := db.ExecContext(ctx, `UPDATE purser.tenant_subscriptions SET free_fallback_at=NOW()-INTERVAL '1 hour',free_fallback_reason='cancelled',stripe_subscription_id='ended-subscription',stripe_subscription_status='canceled',stripe_current_period_end=NOW()-INTERVAL '1 hour',mollie_subscription_id='ended-mollie',mollie_next_payment_date=CURRENT_DATE,free_fallback_provider_ended_at=NOW() WHERE tenant_id=$1`, tenant); err != nil {
+				if _, err := db.ExecContext(ctx, `UPDATE purser.tenant_subscriptions SET free_fallback_at=NOW()-INTERVAL '1 hour',free_fallback_reason='cancelled',stripe_subscription_id='ended-subscription',stripe_subscription_status='canceled',stripe_current_period_end=NOW()-INTERVAL '1 hour',free_fallback_provider_ended_at=NOW() WHERE tenant_id=$1`, tenant); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -130,7 +133,7 @@ func TestAdminAssignTier_RealPG(t *testing.T) { //nolint:funlen // One database 
 			if state != "active" || scheduled.Valid || ended.Valid || stripe.Valid || mollie.Valid {
 				t.Fatalf("abort left unbillable subscription: status=%s scheduled=%v ended=%v stripe=%v mollie=%v", state, scheduled, ended, stripe, mollie)
 			}
-			due, err := purserdb.New(db).ListSubscriptionsDueForInvoice(ctx, time.Now())
+			due, err := purserdb.New(db).ListSubscriptionsDueForInvoice(ctx, time.Now().AddDate(0, 2, 0))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -190,6 +193,7 @@ func TestAdminAssignTier_RealPG(t *testing.T) { //nolint:funlen // One database 
 			})
 		}
 	}
+	testEndedProviderAssignmentBilling(t, db, server, operatorID)
 	t.Run("automatic same-tier waiver expiry preserves the native paid term", func(t *testing.T) {
 		tenant := seed(t, "production", "postpaid", "pending_cancellation")
 		if _, err := db.ExecContext(ctx, `UPDATE purser.tenant_subscriptions SET presentment_currency='EUR' WHERE tenant_id=$1`, tenant); err != nil {

@@ -309,7 +309,27 @@ func TestAdvanceBilledTierUpgradeClosesThePeriodAndProratesTheBaseFee_RealPG(t *
 }
 
 func TestAdvanceSetupRefusesMidPeriodTierChange_RealPG(t *testing.T) {
-	assertIneligibleCheckoutCompensates(t)
+	t.Run("same paid tier collection switch", func(t *testing.T) {
+		f := newTierChangeFixture(t, "50.00", firstBaseFeePaid)
+		var tier string
+		if err := f.db.QueryRowContext(t.Context(), `SELECT tier_id::text FROM purser.tenant_subscriptions WHERE tenant_id=$1`, f.tenantID).Scan(&tier); err != nil {
+			t.Fatal(err)
+		}
+		for _, provider := range []string{"mollie", "stripe"} {
+			if err := f.service.activateAdvanceBilledTenant(t.Context(), f.tenantID, tier, provider, "cus_change", time.Now(), ""); err != nil {
+				t.Fatalf("same-tier collection switch to %s: %v", provider, err)
+			}
+			var start, end time.Time
+			var method string
+			var baseInvoices, balanceEntries int
+			if err := f.db.QueryRowContext(t.Context(), `SELECT billing_period_start,billing_period_end,payment_method,(SELECT count(*) FROM purser.billing_invoices i WHERE i.tenant_id=s.tenant_id AND i.base_fee_period_start IS NOT NULL),(SELECT count(*) FROM purser.balance_transactions b WHERE b.tenant_id=s.tenant_id) FROM purser.tenant_subscriptions s WHERE s.tenant_id=$1`, f.tenantID).Scan(&start, &end, &method, &baseInvoices, &balanceEntries); err != nil {
+				t.Fatal(err)
+			}
+			if !start.Equal(f.start) || !end.Equal(f.end) || method != provider || baseInvoices != 1 || balanceEntries != 0 || len(f.stripe.matching("POST", "/v1/payment_intents")) != 1 {
+				t.Fatalf("collection switch changed paid term: period=%s/%s provider=%s invoices=%d balanceEntries=%d", start, end, method, baseInvoices, balanceEntries)
+			}
+		}
+	})
 	for _, mode := range []string{"cheaper", "enterprise", "inactive", "prepaid", "upgrade"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newTierChangeFixture(t, "50.00", firstBaseFeePaid)

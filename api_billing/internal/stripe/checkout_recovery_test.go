@@ -2,6 +2,7 @@ package stripe
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -53,6 +54,12 @@ func (b *checkoutRecoveryBackend) Call(method, path, key string, p api.ParamsCon
 		}
 	case *api.Subscription:
 		*v = api.Subscription{ID: "sub_reserved", Status: api.SubscriptionStatusActive}
+	case *api.Charge:
+		*v = api.Charge{ID: "ch_reserved", Currency: api.CurrencyEUR, Amount: 2000}
+		if b.chargeOverride != nil {
+			*v = *b.chargeOverride
+		}
+
 	case *api.Invoice:
 		*v = api.Invoice{ID: "in_reserved", Status: api.InvoiceStatusVoid}
 	case *api.PaymentIntent:
@@ -78,6 +85,11 @@ func (b *checkoutRecoveryBackend) Call(method, path, key string, p api.ParamsCon
 		if v.Status == "" {
 			v.Status = api.RefundStatusPending
 		}
+
+		v.Amount = api.Int64Value(params.Amount)
+		v.Currency = api.CurrencyEUR
+		stored := *v
+		b.existingRefunds = append(b.existingRefunds, &stored)
 		if v.Status != api.RefundStatusFailed && v.Status != api.RefundStatusCanceled {
 			b.refunded = true
 		}
@@ -317,20 +329,24 @@ func TestCheckoutCompensationClosesUnpaidInvoiceBeforeReleasingReservation(t *te
 }
 
 func TestCheckoutRefundRetryUsesAmountBoundIdentity(t *testing.T) {
-	b := &checkoutRecoveryBackend{}
+	b := &checkoutRecoveryBackend{refundStatus: api.RefundStatusFailed}
 	installBackend(t, b)
 	c := NewClient(Config{SecretKey: "sk_test", Logger: logging.NewLogger()})
 	var result billing.CheckoutRecoveryResult
-	if err := c.refundInvoicePayments(t.Context(), "in_reserved", "reservation", &result, "checkout", "intent"); err != nil {
-		t.Fatal(err)
+	if err := c.refundInvoicePayments(t.Context(), "in_reserved", "reservation", &result, "checkout", "intent"); err == nil {
+		t.Fatal("failed first refund reported accepted")
 	}
-	b.refunded = false
+	b.existingRefunds = append(b.existingRefunds, &api.Refund{ID: "partial-bank-return", Amount: 500, Currency: api.CurrencyEUR, Status: api.RefundStatusSucceeded})
+	b.refundStatus = api.RefundStatusPending
 	b.chargeOverride = &api.Charge{ID: "ch_reserved", Currency: api.CurrencyEUR, Amount: 2000, AmountRefunded: 500}
 	if err := c.refundInvoicePayments(t.Context(), "in_reserved", "reservation", &result, "checkout", "intent"); err != nil {
 		t.Fatal(err)
 	}
 	if len(b.refundParams) != 2 || *b.refundParams[0].Amount != 2000 || *b.refundParams[1].Amount != 1500 || *b.refundParams[0].IdempotencyKey == *b.refundParams[1].IdempotencyKey {
 		t.Fatalf("different amounts reused one provider identity: %+v", b.refundParams)
+	}
+	if err := c.refundInvoicePayments(t.Context(), "in_reserved", "reservation", &result, "checkout", "intent"); err != nil || len(b.refundParams) != 2 {
+		t.Fatalf("listed replacement refund was retried: calls=%d err=%v", len(b.refundParams), err)
 	}
 }
 
@@ -457,5 +473,24 @@ func TestCheckoutRefundLostResponseDoesNotRepeatPendingReturn(t *testing.T) {
 	}
 	if len(b.refundParams) != 0 {
 		t.Fatal("a stale charge snapshot caused a second refund despite an existing bank return")
+	}
+}
+
+func TestRefundSettlementRetriesAsynchronousFailure(t *testing.T) {
+	b := &checkoutRecoveryBackend{existingRefunds: []*api.Refund{{ID: "initial-refund", Amount: 2000, Currency: api.CurrencyEUR, Status: api.RefundStatusPending}}}
+	installBackend(t, b)
+	c := NewClient(Config{SecretKey: "sk_test", Logger: logging.NewLogger()})
+	plan := billing.RefundSettlement{Provider: "stripe", ReferenceKind: "checkout", ReferenceID: "reservation", InvoiceID: "in_reserved", PaymentID: "pi_reserved", ChargeID: "ch_reserved", AmountCents: 2000, Currency: "EUR"}
+	if _, err := c.InspectRefundSettlement(t.Context(), plan); !errors.Is(err, billing.ErrRefundSettling) || len(b.refundParams) != 0 {
+		t.Fatalf("pending refund retried: calls=%d err=%v", len(b.refundParams), err)
+	}
+	b.existingRefunds[0].Status = api.RefundStatusFailed
+	if _, err := c.InspectRefundSettlement(t.Context(), plan); !errors.Is(err, billing.ErrRefundSettling) || len(b.refundParams) != 1 {
+		t.Fatalf("asynchronous failure did not re-enter compensation: calls=%d err=%v", len(b.refundParams), err)
+	}
+	b.existingRefunds[len(b.existingRefunds)-1].Status = api.RefundStatusSucceeded
+	receipts, err := c.InspectRefundSettlement(t.Context(), plan)
+	if err != nil || len(receipts) != 1 || receipts[0].AmountCents != 2000 || len(b.refundParams) != 1 {
+		t.Fatalf("replacement refund did not settle once: receipts=%+v calls=%d err=%v", receipts, len(b.refundParams), err)
 	}
 }

@@ -38,7 +38,7 @@ func (p *fallbackLifecycleProvider) EndSubscriptionForFallback(ctx context.Conte
 func seedFallbackLifecycle(t *testing.T, db *sql.DB) (tenant, paid, free string) {
 	t.Helper()
 	tenant, paid, free = uuid.NewString(), uuid.NewString(), uuid.NewString()
-	if _, err := db.Exec(`INSERT INTO purser.billing_tiers(id,tier_name,display_name,base_price,currency,metering_enabled) VALUES($1::text::uuid,$1::text,'Paid',20,'EUR',false),($2::text::uuid,$2::text,'Free fixture',0,'EUR',false)`, paid, free); err != nil {
+	if _, err := db.Exec(`INSERT INTO purser.billing_tiers(id,tier_name,display_name,base_price,currency,metering_enabled,tier_level) VALUES($1::text::uuid,$1::text,'Paid',20,'EUR',false,1),($2::text::uuid,$2::text,'Free fixture',0,'EUR',false,0)`, paid, free); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`UPDATE purser.billing_tiers SET tier_name='free',is_default_postpaid=true WHERE id=$1`, free); err != nil {
@@ -57,8 +57,9 @@ func fallbackLifecycleServer(db *sql.DB, p *fallbackLifecycleProvider) *PurserSe
 }
 
 func TestFreeFallbackProviderFailureKeepsDurableFence_RealPG(t *testing.T) {
+	testAbandonedFallbackNoticeRetry(t)
 	t.Run("postdeploy validates the notice retry index contract", func(t *testing.T) {
-		for _, defect := range []string{"key", "predicate"} {
+		for _, defect := range []string{"key", "predicate", "covering"} {
 			t.Run(defect, func(t *testing.T) {
 				db := startOperatorGrantDatabase(t)
 				validation, err := dbsql.Content.ReadFile("migrations/purser/v0.3.14/postdeploy/004_validate_billing_recovery_query_indexes.sql")
@@ -75,6 +76,9 @@ func TestFreeFallbackProviderFailureKeepsDurableFence_RealPG(t *testing.T) {
 				definition := `CREATE INDEX idx_subscription_fallback_notice_retry ON purser.tenant_subscriptions (tenant_id,free_fallback_at) WHERE free_fallback_at IS NOT NULL AND (free_fallback_moved_at IS NOT NULL OR free_fallback_notified_at IS NULL) AND free_fallback_notice_abandoned_at IS NULL`
 				if defect == "predicate" {
 					definition = `CREATE INDEX idx_subscription_fallback_notice_retry ON purser.tenant_subscriptions (free_fallback_notice_attempted_at ASC NULLS FIRST,free_fallback_at,tenant_id) WHERE free_fallback_at IS NOT NULL`
+				}
+				if defect == "covering" {
+					definition = `CREATE INDEX idx_subscription_fallback_notice_retry ON purser.tenant_subscriptions (free_fallback_notice_attempted_at ASC NULLS FIRST,free_fallback_at,tenant_id) WHERE free_fallback_at IS NOT NULL AND (free_fallback_moved_at IS NOT NULL OR free_fallback_notified_at IS NULL) AND free_fallback_notice_abandoned_at IS NULL`
 				}
 				if _, err = db.ExecContext(t.Context(), `DROP INDEX purser.idx_subscription_fallback_notice_retry; `+definition); err != nil {
 					t.Fatal(err)

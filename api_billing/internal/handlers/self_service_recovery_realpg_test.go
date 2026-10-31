@@ -3,20 +3,23 @@
 package handlers
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
+
+	"frameworks/api_billing/internal/subscriptions"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 )
 
-// Recovery must compensate a completed, unactivated purchase that admission rejects.
-func assertIneligibleCheckoutCompensates(t *testing.T) {
-	t.Helper()
-	for _, mode := range []string{"stripe", "mollie", "native duplicate"} {
+// TestIneligibleCheckoutCompensates exercises production recovery and its provider lock boundary.
+func TestIneligibleCheckoutCompensates_RealPG(t *testing.T) {
+	for _, mode := range []string{"stripe", "mollie", "native duplicate", "async Stripe refusal", "advance refusal", "concurrent subscription change"} {
 		t.Run("ineligible recovery/"+mode, func(t *testing.T) {
 			provider := mode
-			if mode == "native duplicate" {
+			if mode == "native duplicate" || mode == "async Stripe refusal" || mode == "advance refusal" || mode == "concurrent subscription change" {
 				provider = "stripe"
 			}
 			db := startProviderReservationDatabase(t)
@@ -30,8 +33,19 @@ func assertIneligibleCheckoutCompensates(t *testing.T) {
 					t.Fatal(err)
 				}
 				wantModel = "postpaid"
-			} else if _, err := db.ExecContext(t.Context(), `UPDATE purser.billing_tiers SET is_enterprise=true WHERE id=$1`, target); err != nil {
-				t.Fatal(err)
+			} else if mode == "advance refusal" {
+				target = insertTierChangeTier(t, db, "50")
+				if _, err := db.ExecContext(t.Context(), `UPDATE purser.tenant_subscriptions SET tier_id=$2,billing_model='postpaid',payment_method='stripe',stripe_customer_id='customer' WHERE tenant_id=$1`, tenant.id, tenant.supporterID); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := db.ExecContext(t.Context(), `UPDATE purser.billing_tiers SET base_price=20 WHERE id=$1`, tenant.supporterID); err != nil {
+					t.Fatal(err)
+				}
+				wantModel = "postpaid"
+			} else if mode != "concurrent subscription change" {
+				if _, err := db.ExecContext(t.Context(), `UPDATE purser.billing_tiers SET is_enterprise=true WHERE id=$1`, target); err != nil {
+					t.Fatal(err)
+				}
 			}
 
 			id := uuid.NewString()
@@ -47,6 +61,12 @@ VALUES($1::uuid,$2,$3,$4,'billing_tiers',$5,'provider_open','EUR',2000,$1::text,
 			if provider == "stripe" {
 				tenant.svc.stripeClient = client
 				fixture.route("GET", "/v1/checkout/sessions/ineligible", func(recordedProviderRequest) (int, any) {
+					assertSubscriptionUnlockedDuringProviderCall(t, db, tenant.id)
+					if mode == "concurrent subscription change" {
+						if _, err := db.ExecContext(t.Context(), `UPDATE purser.tenant_subscriptions SET status='past_due' WHERE tenant_id=$1`, tenant.id); err != nil {
+							t.Fatal(err)
+						}
+					}
 					return 200, map[string]any{"id": "ineligible", "status": "complete", "expires_at": now.Add(time.Hour).Unix(), "customer": "customer", "subscription": "unactivated", "payment_status": "paid", "metadata": map[string]string{"tenant_id": tenant.id, "purpose": "subscription", "reference_id": target, "checkout_reservation_id": id}}
 				})
 				fixture.route("GET", "/v1/subscriptions/unactivated", func(recordedProviderRequest) (int, any) {
@@ -79,6 +99,7 @@ VALUES($1::uuid,$2,$3,$4,'billing_tiers',$5,'provider_open','EUR',2000,$1::text,
 			} else {
 				fixture, tenant.svc.mollieClient = installMollieFixture(t)
 				fixture.route("GET", "/v2/payments/initial", func(recordedProviderRequest) (int, any) {
+					assertSubscriptionUnlockedDuringProviderCall(t, db, tenant.id)
 					return 200, map[string]any{"id": "initial", "status": "paid", "sequenceType": "first", "customerId": "customer", "mandateId": "mandate", "paidAt": now.Format(time.RFC3339), "createdAt": now.Add(-time.Minute).Format(time.RFC3339), "amount": map[string]string{"value": "20.00", "currency": "EUR"}, "metadata": map[string]string{"tenant_id": tenant.id, "tier_id": target, "payment_type": "first_payment", "checkout_reservation_id": id}}
 				})
 				fixture.route("GET", "/v2/customers/customer/mandates/mandate", func(recordedProviderRequest) (int, any) {
@@ -93,10 +114,27 @@ VALUES($1::uuid,$2,$3,$4,'billing_tiers',$5,'provider_open','EUR',2000,$1::text,
 			}
 
 			expiry := checkoutReservationExpiry{TenantID: tenant.id, IntentID: id, Force: true}
+			if mode == "async Stripe refusal" {
+				var event StripeWebhookPayload
+				raw, _ := json.Marshal(map[string]any{"id": "event", "created": now.Unix(), "type": "customer.subscription.updated", "data": map[string]any{"object": map[string]any{"id": "unactivated", "customer": "customer", "status": "active", "metadata": map[string]string{"tenant_id": tenant.id, "tier_id": target, "checkout_reservation_id": id}}}})
+				if err := json.Unmarshal(raw, &event); err != nil {
+					t.Fatal(err)
+				}
+				if err := tenant.svc.handleStripeSubscriptionEvent(event); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if mode == "advance refusal" {
+				if err := tenant.svc.activateAdvanceBilledTenant(t.Context(), tenant.id, target, "stripe", "customer", now.Add(time.Second), id); !errors.Is(err, subscriptions.ErrCheckoutExpired) {
+					t.Fatalf("advance refusal did not classify compensation: %v", err)
+				}
+			}
 			if mode == "native duplicate" {
 				if err := tenant.svc.handleSubscriptionCheckoutCompleted(t.Context(), session, tenant.id, target, "customer", "unactivated", true, id); err != nil {
 					t.Fatal(err)
 				}
+			}
+			if mode == "native duplicate" || mode == "async Stripe refusal" || mode == "advance refusal" {
 				var payload []byte
 				var latched bool
 				if err := db.QueryRowContext(t.Context(), `SELECT i.raw_payload,p.recovery_started_at IS NOT NULL FROM purser.provider_webhook_inbox i JOIN purser.payment_provider_intents p ON i.event_key='checkout-expiry:'||p.id::text WHERE p.tenant_id=$1 AND p.id=$2 AND i.provider='checkout_recovery'`, tenant.id, id).Scan(&payload, &latched); err != nil || !latched {
@@ -105,6 +143,13 @@ VALUES($1::uuid,$2,$3,$4,'billing_tiers',$5,'provider_open','EUR',2000,$1::text,
 				if err := json.Unmarshal(payload, &expiry); err != nil || !expiry.Force {
 					t.Fatalf("compensation retained original 23h deadline: expiry=%+v err=%v", expiry, err)
 				}
+			}
+			if mode == "concurrent subscription change" {
+				err := tenant.svc.expireCheckoutReservation(t.Context(), expiry)
+				if !errors.Is(err, ErrAwaitingProviderSettlement) || len(fixture.matching("POST", "/v1/refunds")) != 0 || len(fixture.matching("DELETE", "/v1/subscriptions/unactivated")) != 0 {
+					t.Fatalf("recovery acted on stale subscription snapshot: err=%v", err)
+				}
+				return
 			}
 			if err := tenant.svc.expireCheckoutReservation(t.Context(), expiry); err != nil {
 				t.Fatal(err)
@@ -134,5 +179,19 @@ VALUES($1::uuid,$2,$3,$4,'billing_tiers',$5,'provider_open','EUR',2000,$1::text,
 				t.Fatalf("compensation repeated: %d", count)
 			}
 		})
+	}
+}
+
+func assertSubscriptionUnlockedDuringProviderCall(t *testing.T, db *sql.DB, tenantID string) {
+	t.Helper()
+	tx, err := db.BeginTx(t.Context(), nil)
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	defer tx.Rollback()
+	var id string
+	if err := tx.QueryRowContext(t.Context(), `SELECT tenant_id::text FROM purser.tenant_subscriptions WHERE tenant_id=$1 FOR UPDATE NOWAIT`, tenantID).Scan(&id); err != nil {
+		t.Errorf("provider call held the subscription row lock: %v", err)
 	}
 }

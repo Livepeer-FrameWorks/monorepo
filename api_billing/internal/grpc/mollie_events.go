@@ -49,14 +49,17 @@ func (s *PurserServer) recordMollieFirstPaymentOpen(ctx context.Context, tenantI
 // subscription row. Checkout reference binding and settlement commit with the activation.
 func (s *PurserServer) activateMollieSubscription(ctx context.Context, params purserdb.ActivateMollieTenantSubscriptionParams, intentID string) (int64, error) {
 	var rows int64
+	var refusal error
 	err := database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
 		rows = 0
+		refusal = nil
 		result, err := subscriptions.TransitionProvider(ctx, tx, subscriptions.ProviderChange{TenantID: params.TenantID, Operation: subscriptions.MollieActivation, Mollie: params, ReceiptIntentID: intentID})
 		if err != nil {
 			return err
 		}
+		refusal = result.Refusal
 		rows = result.Rows
-		if rows > 0 {
+		if refusal == nil && rows > 0 {
 			if err = purserdb.New(tx).SetProviderIntentSubscriptionOpen(ctx, purserdb.SetProviderIntentSubscriptionOpenParams{TenantID: params.TenantID, SubscriptionID: params.SubscriptionID, IntentID: intentID}); err != nil {
 				return err
 			}
@@ -65,7 +68,7 @@ func (s *PurserServer) activateMollieSubscription(ctx context.Context, params pu
 			}
 		}
 
-		if rows > 0 && result.PreviousMollieSubscriptionID != params.SubscriptionID.String {
+		if refusal == nil && rows > 0 && result.PreviousMollieSubscriptionID != params.SubscriptionID.String {
 			if err := billingevents.NewAndEnqueue(ctx, tx, params.TenantID, result.SubscriptionID, &internalv1.SubscriptionCreated{
 				SubscriptionId: result.SubscriptionID, TierId: params.TierID, Status: "active",
 			}, s.domainActor(ctx)); err != nil {
@@ -74,5 +77,8 @@ func (s *PurserServer) activateMollieSubscription(ctx context.Context, params pu
 		}
 		return nil
 	})
+	if err == nil {
+		err = refusal
+	}
 	return rows, err
 }

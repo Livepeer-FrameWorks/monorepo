@@ -319,15 +319,11 @@ func TestPromoteToPaidNotFoundAndAlreadyPostpaid(t *testing.T) {
 			t.Fatalf("err = %v, want NotFound", err)
 		}
 	})
-	t.Run("same postpaid tier is idempotent", func(t *testing.T) {
+	t.Run("retired postpaid tier is idempotent", func(t *testing.T) {
 		s, mock := newReadServer(t, true)
 		expectPrepaidPhaseRead(mock, "tenant-1", "postpaid")
 		mock.ExpectBegin()
 		expectLockedPromotionSubscription(mock, "tenant-1", "postpaid", "tier-free", nil, nil, nil, nil, nil)
-		mock.ExpectQuery(`SELECT id::text AS id, tier_level, tier_name, is_default_prepaid, is_active`).
-			WithArgs(true, "tier-free").
-			WillReturnRows(sqlmock.NewRows([]string{"id", "tier_level", "tier_name", "is_default_prepaid", "is_active"}).AddRow("tier-free", int32(1), "free", false, true))
-		expectSelfServiceTier(mock, "tier-free", 1, false, true, false)
 		mock.ExpectCommit()
 		expectCanonicalPromotion(mock, "tenant-1", "sub-1", "tier-free", int32(1), "free", 1500)
 		response, err := s.PromoteToPaid(context.Background(), &purserpb.PromoteToPaidRequest{TenantId: "tenant-1"})
@@ -692,6 +688,6 @@ func expectSelfServiceTier(mock sqlmock.Sqlmock, tierID string, level int32, pre
 
 func expectSelfServiceCheckout(mock sqlmock.Sqlmock, tenantID, tierID, provider string) {
 	expectSelfServiceTier(mock, tierID, 2, false, true, false)
-	mock.ExpectQuery("SelfServiceAdvanceTierChange").WithArgs(tenantID, tierID, provider).WillReturnRows(sqlmock.NewRows([]string{"changing"}).AddRow(false))
+	mock.ExpectQuery("SelfServiceAdvanceTierChange").WithArgs(tenantID, tierID).WillReturnRows(sqlmock.NewRows([]string{"changing"}).AddRow(false))
 	mock.ExpectQuery("GetSelfServiceNativeSubscriptions").WithArgs(tenantID).WillReturnRows(sqlmock.NewRows([]string{"stripe_id", "mollie_id", "paid_cancellation_term"}).AddRow("", "", false))
 }

@@ -4621,8 +4621,8 @@ export type ChangeBillingTierMutationVariables = Exact<{
 }>;
 
 
-/** Change the postpaid billing tier. Upgrades start a fresh month and credit the unused paid fee; provider or metering reconciliation can leave them pending. Enterprise and upgrades to a lower base price require an operator arrangement. Downgrades take effect at the current billing period end. */
-export type ChangeBillingTierMutation = { /** Change the postpaid billing tier. Upgrades start a fresh month and credit the unused paid fee; provider or metering reconciliation can leave them pending. Enterprise and upgrades to a lower base price require an operator arrangement. Downgrades take effect at the current billing period end. */
+/** Change the postpaid billing tier. Upgrades start a fresh month and offset the replacement fee with the unused retained paid old fee, capped at the replacement price, without cash refund or spendable balance. Provider or metering reconciliation can leave them pending. Enterprise purchases and moves to a higher tier with a lower base price require an operator arrangement. Downgrades take effect at the current billing period end. */
+export type ChangeBillingTierMutation = { /** Change the postpaid billing tier. Upgrades start a fresh month and offset the replacement fee with the unused retained paid old fee, capped at the replacement price, without cash refund or spendable balance. Provider or metering reconciliation can leave them pending. Enterprise purchases and moves to a higher tier with a lower base price require an operator arrangement. Downgrades take effect at the current billing period end. */
 changeBillingTier:
     | { __typename: 'AuthError', message: string, code: string | null }
     | { __typename: 'ChangeBillingTierPayload', /** Whether the request was accepted. */
@@ -4845,8 +4845,8 @@ export type CreateMollieFirstPaymentMutationVariables = Exact<{
 }>;
 
 
-/** Create a Mollie first payment to establish a mandate. For iDEAL: User pays via bank → SEPA Direct Debit mandate is created. For card: User enters card → card mandate is created. After successful payment, call createMollieSubscription to start recurring billing. */
-export type CreateMollieFirstPaymentMutation = { /** Create a Mollie first payment to establish a mandate. For iDEAL: User pays via bank → SEPA Direct Debit mandate is created. For card: User enters card → card mandate is created. After successful payment, call createMollieSubscription to start recurring billing. */
+/** Create a Mollie first payment to establish a mandate. For iDEAL: User pays via bank → SEPA Direct Debit mandate is created. For card: User enters card → card mandate is created. Requires an active, non-Enterprise postpaid tier with tier_level >= 1. Existing native subscriptions use changeBillingTier. A same-tier advance collection switch preserves the paid term. After successful payment, call createMollieSubscription to start recurring billing. */
+export type CreateMollieFirstPaymentMutation = { /** Create a Mollie first payment to establish a mandate. For iDEAL: User pays via bank → SEPA Direct Debit mandate is created. For card: User enters card → card mandate is created. Requires an active, non-Enterprise postpaid tier with tier_level >= 1. Existing native subscriptions use changeBillingTier. A same-tier advance collection switch preserves the paid term. After successful payment, call createMollieSubscription to start recurring billing. */
 createMollieFirstPayment:
     | { __typename: 'AuthError', message: string, code: string | null }
     | { __typename: 'MollieFirstPayment', /** Mollie payment ID (tr_xxx). */
@@ -17324,7 +17324,7 @@ fragment ValidationErrorDefaultFields on ValidationError {
   field
   constraint
 }`) as unknown as TypedDocumentString<BootstrapEdgeMutation, BootstrapEdgeMutationVariables>;
-/** Change the postpaid billing tier. Upgrades start a fresh month and credit the unused paid fee; provider or metering reconciliation can leave them pending. Enterprise and upgrades to a lower base price require an operator arrangement. Downgrades take effect at the current billing period end. */
+/** Change the postpaid billing tier. Upgrades start a fresh month and offset the replacement fee with the unused retained paid old fee, capped at the replacement price, without cash refund or spendable balance. Provider or metering reconciliation can leave them pending. Enterprise purchases and moves to a higher tier with a lower base price require an operator arrangement. Downgrades take effect at the current billing period end. */
 export const ChangeBillingTierDocument = /*#__PURE__*/ new TypedDocumentString(`
     mutation ChangeBillingTier($tierId: ID!) {
   changeBillingTier(tierId: $tierId) {
@@ -17642,7 +17642,7 @@ fragment ValidationErrorDefaultFields on ValidationError {
   field
   constraint
 }`) as unknown as TypedDocumentString<CreateEnrollmentTokenMutation, CreateEnrollmentTokenMutationVariables>;
-/** Create a Mollie first payment to establish a mandate. For iDEAL: User pays via bank → SEPA Direct Debit mandate is created. For card: User enters card → card mandate is created. After successful payment, call createMollieSubscription to start recurring billing. */
+/** Create a Mollie first payment to establish a mandate. For iDEAL: User pays via bank → SEPA Direct Debit mandate is created. For card: User enters card → card mandate is created. Requires an active, non-Enterprise postpaid tier with tier_level >= 1. Existing native subscriptions use changeBillingTier. A same-tier advance collection switch preserves the paid term. After successful payment, call createMollieSubscription to start recurring billing. */
 export const CreateMollieFirstPaymentDocument = /*#__PURE__*/ new TypedDocumentString(`
     mutation CreateMollieFirstPayment($tierId: ID!, $method: String!, $redirectUrl: String!) {
   createMollieFirstPayment(

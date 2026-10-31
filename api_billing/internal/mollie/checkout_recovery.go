@@ -312,31 +312,35 @@ func (c *Client) ReservedSubscription(ctx context.Context, customerID, intentID,
 	}
 }
 
-// FirstPaymentFundedSubscription resolves activation history for a funding
+// InspectFirstPaymentFunding resolves activation history for a funding
 // receipt that predates local funding links. Provider creation alone does not
 // prove local activation; ambiguous history retains the payment for reconciliation.
-func (c *Client) FirstPaymentFundedSubscription(ctx context.Context, customerID, paymentID, retainedSubscriptionID string, locallyActivated func(string) (bool, error)) (bool, error) {
+// ErrHistoricalFundingAmbiguous requires an operator to decide delivery from external evidence.
+var ErrHistoricalFundingAmbiguous = errors.New("historical Mollie delivery cannot be proven")
+
+func (c *Client) InspectFirstPaymentFunding(ctx context.Context, customerID, paymentID, retainedSubscriptionID string, locallyActivated func(string) (bool, error)) (bool, []string, error) {
 	payment, err := c.GetPayment(ctx, paymentID)
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 	if customerID == "" {
 		customerID = payment.CustomerID
 	}
 	if customerID == "" || payment.CustomerID != "" && payment.CustomerID != customerID {
-		return false, errors.New("first payment has no matching provider customer")
+		return false, nil, errors.New("first payment has no matching provider customer")
 	}
 	retained, amountErr := retainedFallbackPayment(payment)
 	if amountErr != nil {
-		return false, amountErr
+		return false, nil, amountErr
 	}
 	funded := false
+	var orphans []string
 	ambiguousID := ""
 	from := ""
 	for {
 		u, err := c.mollieURL("v2/customers/" + url.PathEscape(customerID) + "/subscriptions")
 		if err != nil {
-			return false, err
+			return false, nil, err
 		}
 		query := u.Query()
 		query.Set("limit", "250")
@@ -346,7 +350,7 @@ func (c *Client) FirstPaymentFundedSubscription(ctx context.Context, customerID,
 		u.RawQuery = query.Encode()
 		raw, err := c.getJSON(ctx, u.String())
 		if err != nil {
-			return false, err
+			return false, nil, err
 		}
 		var page struct {
 			Embedded struct {
@@ -359,22 +363,22 @@ func (c *Client) FirstPaymentFundedSubscription(ctx context.Context, customerID,
 			} `json:"_links"`
 		}
 		if err = json.Unmarshal(raw, &page); err != nil {
-			return false, err
+			return false, nil, err
 		}
 		for _, subscription := range page.Embedded.Subscriptions {
 			if payment.CreatedAt == nil || subscription.CreatedAT == nil {
-				return false, errors.New("provider funding history has no creation timestamps")
+				return false, nil, errors.New("provider funding history has no creation timestamps")
 			}
 			if subscription.CreatedAT.Before(*payment.CreatedAt) {
 				continue
 			}
 			if payment.MandateID == "" || subscription.MandateID == "" {
-				return false, errors.New("provider funding history cannot identify the initial payment mandate")
+				return false, nil, errors.New("provider funding history cannot identify the initial payment mandate")
 			}
 			if subscription.MandateID == payment.MandateID {
 				activated, proofErr := locallyActivated(subscription.ID)
 				if proofErr != nil {
-					return false, proofErr
+					return false, nil, proofErr
 				}
 				if activated {
 					funded = true
@@ -382,25 +386,23 @@ func (c *Client) FirstPaymentFundedSubscription(ctx context.Context, customerID,
 					ambiguousID = subscription.ID
 				}
 				if subscription.ID != retainedSubscriptionID {
-					if cancelErr := c.CancelEstablishedSubscription(ctx, customerID, subscription.ID); cancelErr != nil {
-						return false, cancelErr
-					}
+					orphans = append(orphans, subscription.ID)
 				}
 			}
 		}
 		if page.Links.Next == nil || page.Links.Next.Href == "" {
 			if !funded && ambiguousID != "" && retained {
-				return false, fmt.Errorf("cannot prove activation of historical Mollie subscription %s for initial payment %s; provider renewal is cancelled, but its initial collection requires reconciliation", ambiguousID, paymentID)
+				return false, orphans, fmt.Errorf("%w: subscription %s, initial payment %s; use frameworks admin billing recovery checkout --tenant-id TENANT --reservation-id RESERVATION --reason REASON --retain-delivered only after confirming delivered service", ErrHistoricalFundingAmbiguous, ambiguousID, paymentID)
 			}
-			return funded, nil
+			return funded, orphans, nil
 		}
 		next, err := url.Parse(page.Links.Next.Href)
 		if err != nil {
-			return false, err
+			return false, nil, err
 		}
 		cursor := next.Query().Get("from")
 		if cursor == "" || cursor == from {
-			return false, errors.New("provider subscription history has no advancing cursor")
+			return false, nil, errors.New("provider subscription history has no advancing cursor")
 		}
 		from = cursor
 	}

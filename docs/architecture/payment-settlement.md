@@ -168,6 +168,18 @@ routed through `updateInvoicePaymentStatus`, observation marked
 `resolution='attached'`. A currency mismatch refuses to settle and leaves the
 observation unresolved for operator review rather than silently dropping it.
 
+## Paid-term changes
+
+A self-service upgrade starts a fresh month. The unused retained paid old base
+fee offsets only the replacement fee, capped at that fee; it creates no cash
+refund or spendable balance. An operator move to prepaid forfeits any retained
+unused paid share and records that amount on the old invoice. Reducing an unpaid
+old fee to its used share remains part of the closing boundary.
+
+Changing collection provider on the same paid advance tier preserves the current
+period and its paid invoice. A native provider subscription must use the tier
+change flow instead of creating a second checkout.
+
 ## End of a provider subscription
 
 A subscription that ends never becomes `cancelled` while it has paid service to
@@ -197,9 +209,13 @@ Moves and notices use separate workers and durable claims. Moves retry after
 five minutes; failed notices back off exponentially to a twelve-hour maximum.
 After five failures, delivery stops in the terminal `notice_abandoned` state.
 The abandoned notice leaves the automatic stuck gauge but remains in recovery
-inventory with its delivery error; a new fallback or completed move starts a
-new notice lifecycle. Correct `billing_email` before the next lifecycle, or use
-`set-tier` to cancel the fallback when that is the intended billing decision.
+inventory with its delivery error. Correct `billing_email`, then use
+`admin billing recovery notice --tenant-id <UUID> --reason "Billing email repaired"`.
+A separate operator-only RPC previews the abandoned notice and fences its
+confirmed retry to the same deadline and grace/moved phase. The transaction
+requeues delivery and records the operator and reason in a billing event; it
+never invokes purchase recovery or changes billing. Repeated confirmation of
+the same queued lifecycle does not duplicate the audit event.
 Failed final invoices cannot starve later tenants, and notification failure does
 not block a billing move. SMTP runs after its claim commits, outside the billing
 transaction; acknowledgement is fenced against a newer move or fallback. The
@@ -208,11 +224,18 @@ read errors, using the maximum across replicas. An operator grant or a pending
 tier upgrade holds the move. A platform operator can inspect its schedule and
 errors with `admin billing recovery list --tenant-id <UUID>`. An audited
 `admin billing set-tier` cancels a scheduled fallback before provider stopping
-begins when no live native collector remains. The abort restores `active`
-invoicing and atomically detaches proven-ended native subscription identities.
+begins when no live native collector remains. The abort finalizes the ended provider-managed periods before atomically
+restoring `active` invoicing and detaching native subscription identities.
+Complete overdue months retain separate allowances; the final partial close
+commits with detachment. Every old closing document excludes the native base
+fee, which the provider already collected.
 An ended native subscription retains its fee-exclusion identity until its paid
 term ends. Tier assignment, grant set and explicit grant revoke refuse during
-that term, including while overdue monthly phases are still catching up.
+that term. Grant creation, renewal, expiry and revoke preserve the customer's
+cancellation, including when a grant held the move past the paid deadline.
+A same-tier fallback abort with an outstanding grant is refused; the operator
+must end it or make an explicit assignment to a different tier. Cancellation moves
+the tenant to Free at the paid-term end once the grant no longer holds it.
 Automatic same-tier grant expiry still ends its waiver at the grant deadline,
 preserving the native identity, ended-provider evidence and fallback schedule.
 A live native collector or an in-flight stop must finish reconciliation before

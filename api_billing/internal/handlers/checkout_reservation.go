@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 
@@ -52,25 +53,18 @@ func (s *Service) expireCheckoutReservation(ctx context.Context, expiry checkout
 	return s.expireClaimedCheckoutReservation(ctx, expiry)
 }
 
-// The intent lock spans provider I/O for both operator and inbox execution.
-// Provider inspection currently runs under the subscription lock so activation
-// cannot race recovery. The outer deadline bounds those calls and lock duration.
+// The intent lock spans provider I/O. Subscription row locks protect only the
+// durable decision before and after inspection; provider calls never run in a
+// retryable subscription transaction.
 func (s *Service) expireClaimedCheckoutReservation(ctx context.Context, expiry checkoutReservationExpiry) error {
 	q := purserdb.New(s.db)
-
 	var r purserdb.GetProviderCheckoutReservationRow
-	complete := false
-	preCall := false
-	delivered := false
-	var reconcile func() error
-	var waiting error
+	var snapshot subscriptions.LockedSubscription
+	complete, preCall, delivered, historical, inspect := false, false, false, false, false
 	err := database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
-		complete = false
-		preCall = false
-		delivered = false
-		reconcile = nil
-		waiting = nil
-		locked, err := subscriptions.LockChange(ctx, tx, expiry.TenantID, subscriptions.PreservePricing)
+		complete, preCall, delivered, historical, inspect = false, false, false, false, false
+		var err error
+		snapshot, err = subscriptions.LockChange(ctx, tx, expiry.TenantID, subscriptions.PreservePricing)
 		if err != nil {
 			return err
 		}
@@ -87,102 +81,167 @@ func (s *Service) expireClaimedCheckoutReservation(ctx context.Context, expiry c
 			complete = true
 			return nil
 		}
-		established := r.ProviderSubscriptionID.String != "" && (r.Provider == "stripe" && locked.Current.StripeSubscriptionID.String == r.ProviderSubscriptionID.String || r.Provider == "mollie" && locked.Current.MollieSubscriptionID.String == r.ProviderSubscriptionID.String)
+		established := r.ProviderSubscriptionID.String != "" &&
+			((r.Provider == "stripe" && snapshot.Current.StripeSubscriptionID.String == r.ProviderSubscriptionID.String) ||
+				(r.Provider == "mollie" && snapshot.Current.MollieSubscriptionID.String == r.ProviderSubscriptionID.String))
 		if established {
 			complete = true
 			return tq.CompleteProviderCheckoutReservation(ctx, purserdb.CompleteProviderCheckoutReservationParams{TenantID: r.TenantID, IntentID: r.ID})
 		}
 		delivered = r.Provider == "stripe" && r.SucceededAt.Valid
-		if r.Provider == "mollie" && r.Purpose == "mollie_first_payment" && !r.ActivatedAt.Valid && (r.Status == "succeeded" || r.SucceededAt.Valid) && (r.RecoveryStartedAt.Valid || expiry.Force) {
-			pending, readErr := tq.HasPendingMollieFundingCheckout(ctx, purserdb.HasPendingMollieFundingCheckoutParams{TenantID: r.TenantID, FundingID: r.ID})
-			if readErr != nil {
-				return readErr
+		if r.Provider == "mollie" && r.Purpose == "mollie_first_payment" && !r.ActivatedAt.Valid &&
+			(r.Status == "succeeded" || r.SucceededAt.Valid) && (r.RecoveryStartedAt.Valid || expiry.Force) {
+			pending, err := tq.HasPendingMollieFundingCheckout(ctx, purserdb.HasPendingMollieFundingCheckoutParams{TenantID: r.TenantID, FundingID: r.ID})
+			if err != nil {
+				return err
 			}
 			if pending {
 				return fmt.Errorf("%w: reconcile the linked native subscription checkout before its initial payment", ErrAwaitingProviderSettlement)
 			}
-			if !r.ProviderMandateID.Valid {
-				if s.mollieClient == nil {
-					return errors.New("mollie activation history requires its configured provider client")
-				}
-				obligated, readErr := tq.HasMollieCheckoutRefundObligation(ctx, purserdb.HasMollieCheckoutRefundObligationParams{TenantID: r.TenantID, PaymentID: r.ProviderPaymentID.String})
-				if readErr != nil {
-					return readErr
-				}
-				if obligated {
-					return tq.StartCheckoutCompensation(ctx, purserdb.StartCheckoutCompensationParams{TenantID: r.TenantID, IntentID: r.ID})
-				}
-				provenSubscription := ""
-				activated, historyErr := s.mollieClient.FirstPaymentFundedSubscription(ctx, r.ProviderCustomerID.String, r.ProviderPaymentID.String, locked.Current.MollieSubscriptionID.String, func(subscriptionID string) (bool, error) {
-					proven, err := tq.HasHistoricalMollieFundingActivation(ctx, purserdb.HasHistoricalMollieFundingActivationParams{TenantID: r.TenantID, IntentID: r.ID, SubscriptionID: subscriptionID})
-					if err != nil {
-						return false, err
-					}
-					if !proven {
-						proven, err = tq.HasHistoricalMollieActivation(ctx, purserdb.HasHistoricalMollieActivationParams{TenantID: r.TenantID, CustomerID: r.ProviderCustomerID.String, SubscriptionID: subscriptionID})
-					}
-					if proven {
-						provenSubscription = subscriptionID
-					}
-					return proven, err
-				})
-				if historyErr != nil {
-					return historyErr
-				}
-				if activated {
-					if err := tq.BackfillHistoricalMollieCheckoutFunding(ctx, purserdb.BackfillHistoricalMollieCheckoutFundingParams{TenantID: r.TenantID, IntentID: r.ID, SubscriptionID: provenSubscription}); err != nil {
-						return err
-					}
-					complete = true
-					return tq.MarkMollieFirstPaymentActivated(ctx, purserdb.MarkMollieFirstPaymentActivatedParams{TenantID: r.TenantID, IntentID: r.ID})
-				}
+			obligated, err := tq.HasMollieCheckoutRefundObligation(ctx, purserdb.HasMollieCheckoutRefundObligationParams{TenantID: r.TenantID, PaymentID: r.ProviderPaymentID.String})
+			if err != nil {
+				return err
 			}
-			// Claim the paid funding before provider I/O so a concurrent native
-			// checkout cannot consume a payment whose refund is being reconciled.
-			return tq.StartCheckoutCompensation(ctx, purserdb.StartCheckoutCompensationParams{TenantID: r.TenantID, IntentID: r.ID})
+			historical = !r.ProviderMandateID.Valid && !obligated
+			// Claim funding before inspection so native activation cannot consume it.
+			if latchErr := tq.StartCheckoutCompensation(ctx, purserdb.StartCheckoutCompensationParams{TenantID: r.TenantID, IntentID: r.ID}); latchErr != nil {
+				return latchErr
+			}
+			r, err = tq.GetProviderCheckoutReservation(ctx, purserdb.GetProviderCheckoutReservationParams{TenantID: r.TenantID, IntentID: r.ID})
+			return err
 		}
 		if r.Status == "succeeded" && (r.Purpose != "mollie_first_payment" || r.ActivatedAt.Valid || (!r.RecoveryStartedAt.Valid && !expiry.Force)) {
 			complete = true
 			return nil
 		}
-		if delivered {
-			return tq.StartCheckoutCompensation(ctx, purserdb.StartCheckoutCompensationParams{TenantID: r.TenantID, IntentID: r.ID})
-		}
-		if !r.ExpiresAt.Valid {
-			return errors.New("checkout reservation has no deadline")
-		}
-		if !expiry.Force && time.Now().Before(r.ExpiresAt.Time) {
-			return errors.New("checkout reservation deadline has not elapsed")
-		}
-		if r.SubmissionState == "prepared" && len(r.ProviderRequest) == 0 && !r.ProviderSessionID.Valid && !r.ProviderPaymentID.Valid && !r.ProviderSubscriptionID.Valid {
-			preCall = true
-			return tq.StartCheckoutCompensation(ctx, purserdb.StartCheckoutCompensationParams{TenantID: r.TenantID, IntentID: r.ID})
-		}
-		if r.Provider == "mollie" && r.ProviderSubscriptionID.String != "" && r.ProviderCustomerID.String == "" {
-			customerID, readErr := tq.GetMollieCustomerID(ctx, r.TenantID)
-			if readErr != nil {
-				return fmt.Errorf("read customer for bound Mollie subscription: %w", readErr)
+		if !delivered {
+			if !r.ExpiresAt.Valid {
+				return errors.New("checkout reservation has no deadline")
 			}
-			r.ProviderCustomerID = sql.NullString{String: customerID, Valid: true}
+			if !expiry.Force && time.Now().Before(r.ExpiresAt.Time) {
+				return errors.New("checkout reservation deadline has not elapsed")
+			}
+			preCall = r.SubmissionState == "prepared" && len(r.ProviderRequest) == 0 && !hasCheckoutProviderReference(r)
+			inspect = !preCall && !r.RecoveryStartedAt.Valid && r.Status != "expired" && r.Status != "cancelled" && r.Status != "terminal_failed"
 		}
-		if !r.RecoveryStartedAt.Valid && r.Status != "expired" && r.Status != "cancelled" && r.Status != "terminal_failed" {
-			var inspectErr error
-			reconcile, inspectErr = s.inspectCheckoutForRecovery(ctx, tx, r, locked)
-			if errors.Is(inspectErr, ErrAwaitingProviderSettlement) || errors.Is(inspectErr, billingmollie.ErrPaymentSettling) {
-				waiting = inspectErr
-				return nil
-			}
-			if inspectErr != nil {
-				return inspectErr
-			}
-			if reconcile != nil {
-				return nil
-			}
-		}
-		return tq.StartCheckoutCompensation(ctx, purserdb.StartCheckoutCompensationParams{TenantID: expiry.TenantID, IntentID: expiry.IntentID})
+		return nil
 	})
 	if err != nil || complete {
 		return err
+	}
+	stored := r
+	if r.Provider == "mollie" && r.ProviderSubscriptionID.String != "" && r.ProviderCustomerID.String == "" {
+		customerID, customerErr := q.GetMollieCustomerID(ctx, r.TenantID)
+		if customerErr != nil {
+			return fmt.Errorf("read customer for bound Mollie subscription: %w", customerErr)
+		}
+		r.ProviderCustomerID = sql.NullString{String: customerID, Valid: true}
+	}
+	var reconcile func() error
+	var waiting error
+	var completedAt time.Time
+	incomingSubscriptionID := r.ProviderSubscriptionID.String
+	var historySubscription string
+	var historyProof purserdb.GetHistoricalMollieFundingActivationRow
+	var historyOrphans []string
+	historicalActivated := false
+	if historical {
+		if s.mollieClient == nil {
+			return errors.New("mollie activation history requires its configured provider client")
+		}
+		historicalActivated, historyOrphans, waiting = s.mollieClient.InspectFirstPaymentFunding(ctx, r.ProviderCustomerID.String, r.ProviderPaymentID.String, snapshot.Current.MollieSubscriptionID.String, func(subscriptionID string) (bool, error) {
+			proof, proofErr := q.GetHistoricalMollieFundingActivation(ctx, purserdb.GetHistoricalMollieFundingActivationParams{TenantID: r.TenantID, IntentID: r.ID, SubscriptionID: subscriptionID})
+			if errors.Is(proofErr, sql.ErrNoRows) {
+				return false, nil
+			}
+			if proofErr != nil {
+				return false, proofErr
+			}
+			historySubscription, historyProof = subscriptionID, proof
+			return true, nil
+		})
+		if waiting != nil && !errors.Is(waiting, billingmollie.ErrHistoricalFundingAmbiguous) {
+			return waiting
+		}
+	} else if inspect {
+		reconcile, waiting = s.inspectCheckoutForRecovery(ctx, s.db, r, snapshot, &completedAt, &incomingSubscriptionID)
+		if waiting != nil && !errors.Is(waiting, ErrAwaitingProviderSettlement) && !errors.Is(waiting, billingmollie.ErrPaymentSettling) {
+			return waiting
+		}
+	}
+	inspectionReconcile, inspectionWaiting := reconcile, waiting
+	err = database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
+		complete = false
+		reconcile, waiting = inspectionReconcile, inspectionWaiting
+		locked, lockErr := subscriptions.LockChange(ctx, tx, r.TenantID, subscriptions.PreservePricing)
+		if lockErr != nil {
+			return lockErr
+		}
+		tq := purserdb.New(tx)
+		current, readErr := tq.GetProviderCheckoutReservation(ctx, purserdb.GetProviderCheckoutReservationParams{TenantID: r.TenantID, IntentID: r.ID})
+		if readErr != nil {
+			return readErr
+		}
+		if !reflect.DeepEqual(locked, snapshot) || !reflect.DeepEqual(current, stored) {
+			return ErrAwaitingProviderSettlement
+		}
+		if historicalActivated {
+			proof, proofErr := tq.GetHistoricalMollieFundingActivation(ctx, purserdb.GetHistoricalMollieFundingActivationParams{TenantID: r.TenantID, IntentID: r.ID, SubscriptionID: historySubscription})
+			if proofErr != nil {
+				return proofErr
+			}
+			if !reflect.DeepEqual(proof, historyProof) {
+				return ErrAwaitingProviderSettlement
+			}
+			if proof.NativeID != "" {
+				if backfillErr := tq.BackfillHistoricalMollieCheckoutFunding(ctx, purserdb.BackfillHistoricalMollieCheckoutFundingParams{TenantID: r.TenantID, IntentID: r.ID, NativeID: proof.NativeID, ActivatedAt: proof.ActivatedAt}); backfillErr != nil {
+					return backfillErr
+				}
+			}
+			complete = true
+			return tq.CompleteProviderCheckoutReservation(ctx, purserdb.CompleteProviderCheckoutReservationParams{TenantID: r.TenantID, IntentID: r.ID})
+		}
+		if errors.Is(waiting, billingmollie.ErrHistoricalFundingAmbiguous) {
+			return tq.MarkHistoricalMollieDeliveryAmbiguous(ctx, purserdb.MarkHistoricalMollieDeliveryAmbiguousParams{TenantID: r.TenantID, IntentID: r.ID})
+		}
+		if inspect && reconcile != nil {
+			tierID, tierErr := tq.GetSelfServiceCheckoutTier(ctx, purserdb.GetSelfServiceCheckoutTierParams{TenantID: r.TenantID, IntentID: r.ID})
+			if tierErr != nil && !errors.Is(tierErr, sql.ErrNoRows) {
+				return tierErr
+			}
+			if tierID != "" {
+				eligibilityErr := subscriptions.CheckSelfServiceActivation(ctx, tx, r.TenantID, tierID, r.Provider, incomingSubscriptionID)
+				if eligibilityErr != nil && !subscriptions.IsPricingRefusal(eligibilityErr) {
+					return eligibilityErr
+				}
+				if eligibilityErr != nil {
+					reconcile = nil
+					waiting = nil
+				}
+			}
+		}
+		if !completedAt.IsZero() {
+			if completionErr := tq.MarkCheckoutCompleted(ctx, purserdb.MarkCheckoutCompletedParams{TenantID: r.TenantID, IntentID: r.ID, CompletedAt: completedAt}); completionErr != nil {
+				return completionErr
+			}
+		}
+		if waiting == nil && reconcile == nil {
+			return tq.StartCheckoutCompensation(ctx, purserdb.StartCheckoutCompensationParams{TenantID: r.TenantID, IntentID: r.ID})
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	// Orphan renewal cancellation follows the durable delivery decision and runs
+	// outside retryable transactions. A retry can safely repeat provider deletion.
+	for _, id := range historyOrphans {
+		if cancelErr := s.mollieClient.CancelEstablishedSubscription(ctx, r.ProviderCustomerID.String, id); cancelErr != nil {
+			return cancelErr
+		}
+	}
+	if complete {
+		return nil
 	}
 	if waiting != nil {
 		return waiting
@@ -245,6 +304,24 @@ func (s *Service) bindCheckoutReceipt(ctx context.Context, tenantID, intentID, p
 	if err := q.BindProviderCheckoutReceipt(ctx, purserdb.BindProviderCheckoutReceiptParams{TenantID: tenantID, IntentID: intentID, Provider: provider, SessionID: sessionID, PaymentID: paymentID, SubscriptionID: subscriptionID}); err != nil {
 		return false, err
 	}
+	var session *stripeapi.CheckoutSession
+	at, hasCompletion := subscriptions.ProviderCompletion(ctx)
+	if !hasCompletion {
+		at = time.Now()
+	}
+	if provider == "stripe" && s.stripeClient != nil {
+		receipt, err := q.GetProviderCheckoutReservation(ctx, purserdb.GetProviderCheckoutReservationParams{TenantID: tenantID, IntentID: intentID})
+		if err != nil {
+			return false, err
+		}
+		if !receipt.CheckoutCompletedAt.Valid && !receipt.RecoveryStartedAt.Valid && receipt.Status != "succeeded" &&
+			receipt.ExpiresAt.Valid && (at.IsZero() || at.After(receipt.ExpiresAt.Time)) {
+			session, err = s.stripeClient.ReservedCheckout(ctx, receipt.ProviderCustomerID.String, receipt.ID, receipt.ProviderSessionID.String)
+			if err != nil {
+				return false, err
+			}
+		}
+	}
 	var r purserdb.GetProviderCheckoutReservationRow
 	err := database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
 		if _, err := subscriptions.LockChange(ctx, tx, tenantID, subscriptions.PreservePricing); err != nil {
@@ -259,21 +336,15 @@ func (s *Service) bindCheckoutReceipt(ctx context.Context, tenantID, intentID, p
 		if provider != "stripe" || r.CheckoutCompletedAt.Valid || r.RecoveryStartedAt.Valid || r.Status == "expired" || r.Status == "cancelled" || r.Status == "terminal_failed" || r.Status == "succeeded" {
 			return nil
 		}
-		at, ok := subscriptions.ProviderCompletion(ctx)
+		completion, ok := subscriptions.ProviderCompletion(ctx)
 		if !ok {
-			at = time.Now()
+			completion = time.Now()
 		}
-		if r.ExpiresAt.Valid && !at.IsZero() && !at.After(r.ExpiresAt.Time) {
-			r.CheckoutCompletedAt = sql.NullTime{Time: at, Valid: true}
-		} else if s.stripeClient != nil {
-			sess, err := s.stripeClient.ReservedCheckout(ctx, r.ProviderCustomerID.String, r.ID, r.ProviderSessionID.String)
-			if err != nil {
-				return err
-			}
-			if sess != nil {
-				if at, valid := stripeCheckoutCompletion(r, sess); valid {
-					r.CheckoutCompletedAt = sql.NullTime{Time: at, Valid: true}
-				}
+		if r.ExpiresAt.Valid && !completion.IsZero() && !completion.After(r.ExpiresAt.Time) {
+			r.CheckoutCompletedAt = sql.NullTime{Time: completion, Valid: true}
+		} else if session != nil {
+			if completed, valid := stripeCheckoutCompletion(r, session); valid {
+				r.CheckoutCompletedAt = sql.NullTime{Time: completed, Valid: true}
 			}
 		}
 		if r.CheckoutCompletedAt.Valid {
@@ -287,7 +358,7 @@ func (s *Service) bindCheckoutReceipt(ctx context.Context, tenantID, intentID, p
 	if r.Status == "succeeded" {
 		return false, nil
 	}
-	at, hasCompletion := subscriptions.ProviderCompletion(ctx)
+	at, hasCompletion = subscriptions.ProviderCompletion(ctx)
 	if !hasCompletion {
 		at = time.Now()
 	}
@@ -303,18 +374,16 @@ func (s *Service) bindCheckoutReceipt(ctx context.Context, tenantID, intentID, p
 // ErrAwaitingProviderSettlement keeps normal bank-transfer settlement out of failure alerts.
 var ErrAwaitingProviderSettlement = billing.ErrCheckoutSettlementPending
 
-// inspectCheckoutForRecovery runs under the subscription lock. An open Stripe
-// session is closed atomically at the provider before its local receipt expires.
-// An eligible on-time purchase reconciles after releasing the lock. An
-// ineligible unactivated purchase continues into provider compensation.
-func (s *Service) inspectCheckoutForRecovery(ctx context.Context, tx *sql.Tx, r purserdb.GetProviderCheckoutReservationRow, locked subscriptions.LockedSubscription) (func() error, error) {
+// inspectCheckoutForRecovery reads provider state without holding a subscription
+// lock. The caller rechecks its durable snapshot before activation or compensation.
+func (s *Service) inspectCheckoutForRecovery(ctx context.Context, exec purserdb.DBTX, r purserdb.GetProviderCheckoutReservationRow, locked subscriptions.LockedSubscription, completedAt *time.Time, incomingSubscriptionID *string) (func() error, error) {
 	if !hasCheckoutProviderReference(r) {
 		return nil, nil
 	}
 	tierID := ""
 	if r.Purpose == "tenant_subscription_checkout" || r.Purpose == "mollie_first_payment" || r.Purpose == "mollie_subscription_create" {
 		var readErr error
-		tierID, readErr = purserdb.New(tx).GetSelfServiceCheckoutTier(ctx, purserdb.GetSelfServiceCheckoutTierParams{TenantID: r.TenantID, IntentID: r.ID})
+		tierID, readErr = purserdb.New(exec).GetSelfServiceCheckoutTier(ctx, purserdb.GetSelfServiceCheckoutTierParams{TenantID: r.TenantID, IntentID: r.ID})
 		if readErr != nil {
 			return nil, readErr
 		}
@@ -339,7 +408,7 @@ func (s *Service) inspectCheckoutForRecovery(ctx context.Context, tx *sql.Tx, r 
 			return nil, nil
 		}
 		if sess.Status == "open" {
-			return nil, s.stripeClient.ExpireCheckoutSession(ctx, sess.ID)
+			return nil, nil
 		}
 		if sess.Status != "complete" {
 			return nil, nil
@@ -351,14 +420,13 @@ func (s *Service) inspectCheckoutForRecovery(ctx context.Context, tx *sql.Tx, r 
 		if !valid {
 			return nil, nil
 		}
-		if completionErr := purserdb.New(tx).MarkCheckoutCompleted(ctx, purserdb.MarkCheckoutCompletedParams{TenantID: r.TenantID, IntentID: r.ID, CompletedAt: at}); completionErr != nil {
-			return nil, completionErr
-		}
+		*completedAt = at
 		incomingID := ""
 		if sess.Subscription != nil {
 			incomingID = sess.Subscription.ID
+			*incomingSubscriptionID = incomingID
 		}
-		conflict, conflictErr := s.checkoutHasConflictingSubscription(ctx, tx, r.TenantID, locked, "stripe", incomingID)
+		conflict, conflictErr := s.checkoutHasConflictingSubscription(ctx, exec, r.TenantID, locked, "stripe", incomingID)
 		if conflictErr != nil {
 			return nil, conflictErr
 		}
@@ -366,7 +434,7 @@ func (s *Service) inspectCheckoutForRecovery(ctx context.Context, tx *sql.Tx, r 
 			return nil, nil
 		}
 		if tierID != "" {
-			if eligibilityErr := subscriptions.CheckSelfServiceActivation(ctx, tx, r.TenantID, tierID, "stripe", incomingID); eligibilityErr != nil {
+			if eligibilityErr := subscriptions.CheckSelfServiceActivation(ctx, exec, r.TenantID, tierID, "stripe", incomingID); eligibilityErr != nil {
 				if errors.Is(eligibilityErr, sql.ErrNoRows) || subscriptions.IsPricingRefusal(eligibilityErr) {
 					return nil, nil
 				}
@@ -436,7 +504,7 @@ func (s *Service) inspectCheckoutForRecovery(ctx context.Context, tx *sql.Tx, r 
 			}
 			return nil, nil
 		}
-		conflict, conflictErr := s.checkoutHasConflictingSubscription(ctx, tx, r.TenantID, locked, "mollie", "")
+		conflict, conflictErr := s.checkoutHasConflictingSubscription(ctx, exec, r.TenantID, locked, "mollie", "")
 		if conflictErr != nil {
 			return nil, conflictErr
 		}
@@ -444,7 +512,7 @@ func (s *Service) inspectCheckoutForRecovery(ctx context.Context, tx *sql.Tx, r 
 			return nil, nil
 		}
 		if tierID != "" {
-			if eligibilityErr := subscriptions.CheckSelfServiceActivation(ctx, tx, r.TenantID, tierID, "mollie", ""); eligibilityErr != nil {
+			if eligibilityErr := subscriptions.CheckSelfServiceActivation(ctx, exec, r.TenantID, tierID, "mollie", ""); eligibilityErr != nil {
 				if errors.Is(eligibilityErr, sql.ErrNoRows) || subscriptions.IsPricingRefusal(eligibilityErr) {
 					return nil, nil
 				}
@@ -452,9 +520,7 @@ func (s *Service) inspectCheckoutForRecovery(ctx context.Context, tx *sql.Tx, r 
 			}
 		}
 		if at, completed := mollieCheckoutCompletion(r, payment); completed {
-			if err := purserdb.New(tx).MarkCheckoutCompleted(ctx, purserdb.MarkCheckoutCompletedParams{TenantID: r.TenantID, IntentID: r.ID, CompletedAt: at}); err != nil {
-				return nil, err
-			}
+			*completedAt = at
 			if payment.Status != "paid" {
 				return nil, ErrAwaitingProviderSettlement
 			}
@@ -469,7 +535,7 @@ func (s *Service) inspectCheckoutForRecovery(ctx context.Context, tx *sql.Tx, r 
 		if !payment.IsCancelable {
 			return nil, billingmollie.ErrPaymentSettling
 		}
-		return nil, s.mollieClient.CancelReservedCheckout(ctx, r.ProviderCustomerID.String, r.ID, payment.ID, "")
+		return nil, nil
 	}
 	return nil, nil
 }
@@ -802,7 +868,7 @@ func (s *Service) reconcileRecoveredMollieCheckout(ctx context.Context, r purser
 
 // A cancelled local status also represents Stripe's recoverable unpaid state.
 // Probe such references before treating them as either live or safely replaceable.
-func (s *Service) checkoutHasConflictingSubscription(ctx context.Context, tx *sql.Tx, tenantID string, locked subscriptions.LockedSubscription, provider, incomingID string) (bool, error) {
+func (s *Service) checkoutHasConflictingSubscription(ctx context.Context, exec purserdb.DBTX, tenantID string, locked subscriptions.LockedSubscription, provider, incomingID string) (bool, error) {
 	current := locked.Current
 	if locked.AccountClosed || locked.HasGrant {
 		return true, nil
@@ -826,7 +892,7 @@ func (s *Service) checkoutHasConflictingSubscription(ctx context.Context, tx *sq
 		if s.mollieClient == nil {
 			return false, errors.New("mollie client is required to inspect the previous subscription")
 		}
-		customerID, err := purserdb.New(tx).GetMollieCustomerID(ctx, tenantID)
+		customerID, err := purserdb.New(exec).GetMollieCustomerID(ctx, tenantID)
 		if err != nil {
 			return false, err
 		}

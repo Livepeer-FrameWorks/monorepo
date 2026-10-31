@@ -25,6 +25,7 @@ import (
 // Existing checkouts must recheck catalog eligibility when their provider completes.
 func assertSelfServiceCheckoutEligibility(t *testing.T, db *sql.DB) {
 	t.Helper()
+	t.Run("Mollie refused activation queues linked funding", func(t *testing.T) { assertRefusedMollieActivationQueuesFunding(t, db) })
 	for _, mode := range []string{"enterprise", "inactive", "zero level", "paid advance", "past due advance", "native Stripe", "native Mollie"} {
 		t.Run("checkout eligibility/"+mode, func(t *testing.T) {
 			tenant, current, target := uuid.NewString(), uuid.NewString(), uuid.NewString()
@@ -148,4 +149,34 @@ func (f *eligibilityMollieClient) GetMandate(context.Context, string, string) (*
 func (f *eligibilityMollieClient) CreateSubscription(context.Context, billingmollie.SubscriptionParams) (*mollielib.Subscription, error) {
 	f.calls++
 	return nil, errors.New("ineligible checkout reached Mollie subscription")
+}
+
+func assertRefusedMollieActivationQueuesFunding(t *testing.T, db *sql.DB) {
+	t.Helper()
+	ctx := t.Context()
+	tenant, current, target, funding, native := uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
+	for _, statement := range []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO purser.billing_tiers(id,tier_name,display_name,tier_level,base_price,is_enterprise) VALUES($1::uuid,$1::text,'Current',1,0,false),($2::uuid,$2::text,'Enterprise',3,20,true)`, []any{current, target}},
+		{`INSERT INTO purser.tenant_subscriptions(tenant_id,tier_id,status,billing_model,payment_method,presentment_currency) VALUES($1,$2,'active','prepaid','mollie','EUR')`, []any{tenant, current}},
+		{`INSERT INTO purser.payment_provider_intents(id,tenant_id,provider,purpose,local_reference_type,local_reference_id,status,currency,amount_cents,idempotency_key,provider_customer_id,provider_payment_id,provider_mandate_id,succeeded_at,expires_at) VALUES($1::uuid,$2,'mollie','mollie_first_payment','billing_tiers',$3,'succeeded','EUR',2000,$1::text,'customer','paid-first','mandate',NOW(),NOW()+INTERVAL '1 hour')`, []any{funding, tenant, target}},
+		{`INSERT INTO purser.payment_provider_intents(id,tenant_id,provider,purpose,local_reference_type,local_reference_id,status,currency,amount_cents,idempotency_key,provider_customer_id,provider_subscription_id,funding_intent_id,expires_at) VALUES($1::uuid,$2,'mollie','mollie_subscription_create','billing_tiers',$3,'provider_open','EUR',2000,$1::text,'customer','refused-native',$4,NOW()+INTERVAL '1 hour')`, []any{native, tenant, target, funding}},
+	} {
+		if _, err := db.ExecContext(ctx, statement.query, statement.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	server := &PurserServer{db: db, logger: logging.NewLogger()}
+	rows, err := server.activateMollieSubscription(ctx, purserdb.ActivateMollieTenantSubscriptionParams{TenantID: tenant, TierID: target, SubscriptionID: sql.NullString{String: "refused-native", Valid: true}, NextPaymentDate: time.Now().Add(30 * 24 * time.Hour)}, native)
+	if rows != 0 || !errors.Is(err, subscriptions.ErrCheckoutExpired) {
+		t.Fatalf("native refusal classification: rows=%d err=%v", rows, err)
+	}
+	for _, id := range []string{native, funding} {
+		var latched, forced bool
+		if err := db.QueryRowContext(ctx, `SELECT p.recovery_started_at IS NOT NULL,convert_from(i.raw_payload,'UTF8')::jsonb->>'force'='true' FROM purser.payment_provider_intents p JOIN purser.provider_webhook_inbox i ON i.provider='checkout_recovery' AND i.event_key='checkout-expiry:'||p.id::text WHERE p.tenant_id=$1 AND p.id=$2`, tenant, id).Scan(&latched, &forced); err != nil || !latched || !forced {
+			t.Fatalf("refused native/funding did not queue immediate compensation: id=%s latch=%t force=%t err=%v", id, latched, forced, err)
+		}
+	}
 }

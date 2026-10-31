@@ -69,17 +69,18 @@ func TestRecoveryDistinguishesCancelledReferenceFromEstablishedSubscription(t *t
 				t.Fatal(err)
 			}
 			m.ExpectQuery("GetSelfServiceCheckoutTier").WithArgs("tenant", "receipt").WillReturnRows(sqlmock.NewRows([]string{"tier_id"}).AddRow("tier"))
-			m.ExpectExec("MarkCheckoutCompleted").WillReturnResult(sqlmock.NewResult(0, 1))
 			if tc.previous == "canceled" {
 				m.ExpectQuery("GetTierForBillingChange").WithArgs("tier").WillReturnRows(sqlmock.NewRows([]string{"tier_level", "tier_name", "is_default_prepaid", "is_active", "is_enterprise"}).AddRow(2, "pro", false, true, false))
-				m.ExpectQuery("SelfServiceAdvanceTierChange").WithArgs("tenant", "tier", "stripe").WillReturnRows(sqlmock.NewRows([]string{"changing"}).AddRow(false))
+				m.ExpectQuery("SelfServiceAdvanceTierChange").WithArgs("tenant", "tier").WillReturnRows(sqlmock.NewRows([]string{"changing"}).AddRow(false))
 				m.ExpectQuery("GetSelfServiceNativeSubscriptions").WithArgs("tenant").WillReturnRows(sqlmock.NewRows([]string{"stripe_id", "mollie_id", "paid_cancellation_term"}).AddRow("", "", false))
 			}
 			receipt := purserdb.GetProviderCheckoutReservationRow{ID: "receipt", TenantID: "tenant", Provider: "stripe", Purpose: "tenant_subscription_checkout", ProviderSessionID: sql.NullString{String: "new-session", Valid: true}, ProviderDeadline: sql.NullTime{Time: deadline, Valid: true}, ExpiresAt: sql.NullTime{Time: deadline, Valid: true}}
 			current := purserdb.LockTenantSubscriptionForProviderChangeRow{Status: "cancelled", StripeSubscriptionID: sql.NullString{String: "previous", Valid: true}}
 			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 			defer cancel()
-			reconcile, err := svc.inspectCheckoutForRecovery(ctx, tx, receipt, subscriptions.LockedSubscription{Current: current})
+			var completedAt time.Time
+			incomingID := ""
+			reconcile, err := svc.inspectCheckoutForRecovery(ctx, tx, receipt, subscriptions.LockedSubscription{Current: current}, &completedAt, &incomingID)
 			if (reconcile != nil) != tc.reconcile || errors.Is(err, ErrAwaitingProviderSettlement) != tc.wait || err != nil && !tc.wait {
 				t.Fatalf("previous=%s incoming=%s: reconcile=%v err=%v", tc.previous, tc.incoming, reconcile != nil, err)
 			}

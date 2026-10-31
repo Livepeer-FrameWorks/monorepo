@@ -120,6 +120,10 @@ var errPhaseChangedWhileRated = status.Error(codes.Aborted, "the billing phase c
 
 func (s *PurserServer) adminAssignTierOnce(ctx context.Context, tenantID, tierName, requestedModel, reason string, grant *operatorGrantMutation) (*purserpb.AdminAssignTierResponse, error) {
 	userID := middleware.GetUserID(ctx)
+	retainedProvider, retainedErr := s.prepareRetainedProviderAssignment(ctx, tenantID, tierName, requestedModel, grant)
+	if retainedErr != nil {
+		return nil, retainedErr
+	}
 
 	// A move between prepaid and postpaid closes the current phase: from
 	// prepaid with its statement, from postpaid with its invoice. The closing
@@ -179,6 +183,15 @@ func (s *PurserServer) adminAssignTierOnce(ctx context.Context, tenantID, tierNa
 
 	if grant != nil && postpaidPhase != nil {
 		grant.at = postpaidPhase.BoundaryAt()
+	}
+	if grant != nil && grant.pricingBoundary && retainedProvider == nil {
+		retainedProvider, prepareErr = s.prepareRetainedProviderChange(ctx, tenantID, tierName, requestedModel, grant)
+		if prepareErr != nil {
+			return nil, prepareErr
+		}
+	}
+	if retainedProvider != nil {
+		postpaidPhase = retainedProvider.phase
 	}
 	var resp *purserpb.AdminAssignTierResponse
 	var creditReturns []handlers.InvoiceCreditReturn
@@ -263,12 +276,21 @@ func (s *PurserServer) adminAssignTierOnce(ctx context.Context, tenantID, tierNa
 		if lockErr != nil {
 			return txStatusErrorf(lockErr, codes.Internal, "read fallback stop fence: %v", lockErr)
 		}
-		preservePaidTerm := false
+		retainedNative := pricing.StripeSubscriptionID.String != "" || pricing.MollieSubscriptionID.String != ""
+		preserveCancellation := grant != nil && !grant.clearFallback && retainedNative
 		if pricing.FreeFallbackProviderEndedAt.Valid &&
-			(pricing.StripeSubscriptionID.String != "" || pricing.MollieSubscriptionID.String != "") {
-			paidUntil, paidErr := queries.GetOpenRetainedProviderPaidTerm(ctx, tenantID)
+			retainedNative {
+			var paidUntil time.Time
+			paidErr := sql.ErrNoRows
+			if retainedProvider != nil {
+				if proofErr := retainedProvider.unchanged(ctx, queries, tenantID); proofErr != nil {
+					return proofErr
+				}
+			} else {
+				paidUntil, paidErr = queries.GetOpenRetainedProviderPaidTerm(ctx, tenantID)
+			}
 			if paidErr == nil {
-				preservePaidTerm = grant != nil && grant.expiredOnly && grant.change == nil && grant.keepTier &&
+				preservePaidTerm := preserveCancellation && grant.change == nil && grant.keepTier &&
 					current.TierID == tier.ID && current.BillingModel == model
 				if !preservePaidTerm {
 					return status.Errorf(codes.FailedPrecondition,
@@ -279,10 +301,11 @@ func (s *PurserServer) adminAssignTierOnce(ctx context.Context, tenantID, tierNa
 				return txStatusErrorf(paidErr, codes.Internal, "read retained provider paid term: %v", paidErr)
 			}
 		}
-		// Expiry removes only the same-tier waiver; its native fee evidence and
-		// cancellation schedule must survive until the already-paid term ends.
-		clearFallback := !preservePaidTerm && (grant == nil || grant.clearFallback ||
-			(model == "postpaid" && tier.TierLevel > 0 && pricing.FreeFallbackProviderEndedAt.Valid))
+		// Ending a grant does not undo the customer's cancellation, even when
+		// the grant held the move beyond the paid term. Detached provider metadata
+		// can be cleared when a paid arrangement starts after a completed move.
+		clearFallback := !preserveCancellation && (grant == nil || grant.clearFallback ||
+			(model == "postpaid" && tier.TierLevel > 0 && pricing.FreeFallbackProviderEndedAt.Valid && !retainedNative))
 		if clearFallback {
 			if pricing.FreeFallbackProviderStopping {
 				return status.Error(codes.FailedPrecondition, subscriptions.ErrPendingFreeFallback.Error())
@@ -337,7 +360,7 @@ func (s *PurserServer) adminAssignTierOnce(ctx context.Context, tenantID, tierNa
 			if grantErr := grant.checkUnchanged(ctx, queries, tenantID); grantErr != nil {
 				return grantErr
 			}
-			if !created && current.BillingModel == "postpaid" && grant.pricingBoundary {
+			if !created && current.BillingModel == "postpaid" && (grant.pricingBoundary || retainedProvider != nil) {
 				if postpaidPhaseClosed, err = commitPostpaidPhaseClose(ctx, tx, postpaidPhase); err != nil {
 					return err
 				}
@@ -348,7 +371,7 @@ func (s *PurserServer) adminAssignTierOnce(ctx context.Context, tenantID, tierNa
 				return err
 			}
 		}
-		if grant == nil && !created && current.BillingModel == "postpaid" && model == "prepaid" {
+		if grant == nil && !created && current.BillingModel == "postpaid" && (model == "prepaid" || retainedProvider != nil) {
 			if postpaidPhaseClosed, err = commitPostpaidPhaseClose(ctx, tx, postpaidPhase); err != nil {
 				return err
 			}
@@ -359,6 +382,9 @@ func (s *PurserServer) adminAssignTierOnce(ctx context.Context, tenantID, tierNa
 			}
 		}
 		if clearFallback {
+			if pricing.FreeFallbackProviderEndedAt.Valid && retainedNative && retainedProvider == nil {
+				return errPhaseChangedWhileRated
+			}
 			cleared, clearErr := queries.ClearSubscriptionFreeFallback(ctx, tenantID)
 			if clearErr != nil {
 				return txStatusErrorf(clearErr, codes.Internal, "cancel scheduled fallback: %v", clearErr)

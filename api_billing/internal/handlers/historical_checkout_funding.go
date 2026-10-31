@@ -23,11 +23,12 @@ import (
 
 // ErrCheckoutDeliveryDecisionNotAllowed prevents an attestation from suppressing
 // an existing refund obligation or replacing normal checkout activation.
-var ErrCheckoutDeliveryDecisionNotAllowed = errors.New("only a paid historical Mollie first payment without a refund obligation can be retained as delivered")
+var ErrCheckoutDeliveryDecisionNotAllowed = errors.New("only an ambiguous historical Mollie delivery without a refund obligation can be retained as delivered")
 
 func historicalDeliveryCandidate(row purserdb.GetProviderCheckoutReservationRow) bool {
 	return row.Provider == "mollie" && row.Purpose == "mollie_first_payment" &&
-		!row.ProviderMandateID.Valid && row.ProviderPaymentID.String != "" && row.SucceededAt.Valid
+		!row.ProviderMandateID.Valid && row.ProviderPaymentID.String != "" && row.SucceededAt.Valid &&
+		!row.ActivatedAt.Valid && row.RecoveryOutcome.String == "ambiguous_delivery"
 }
 
 func checkHistoricalDeliveryDecision(ctx context.Context, q *purserdb.Queries, tenantID, intentID string) (purserdb.GetProviderCheckoutReservationRow, error) {
@@ -122,8 +123,12 @@ func (s *Service) RetainDeliveredCheckout(ctx context.Context, tenantID, intentI
 		if err != nil {
 			return err
 		}
-		if err = q.RetainDeliveredHistoricalMollieCheckout(ctx, purserdb.RetainDeliveredHistoricalMollieCheckoutParams{TenantID: tenantID, IntentID: intentID}); err != nil {
-			return err
+		rows, retainErr := q.RetainDeliveredHistoricalMollieCheckout(ctx, purserdb.RetainDeliveredHistoricalMollieCheckoutParams{TenantID: tenantID, IntentID: intentID})
+		if retainErr != nil {
+			return retainErr
+		}
+		if rows != 1 {
+			return ErrCheckoutDeliveryDecisionNotAllowed
 		}
 		const detail = "Operator attested delivered service; payment retained without refund."
 		if err = q.FinishCheckoutRecoveryAudit(ctx, purserdb.FinishCheckoutRecoveryAuditParams{TenantID: tenantID, ID: auditID, Outcome: "delivered", Detail: detail}); err != nil {

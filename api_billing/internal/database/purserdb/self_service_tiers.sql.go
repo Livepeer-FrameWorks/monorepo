@@ -66,21 +66,18 @@ SELECT EXISTS (
       AND NULLIF(subscription.mollie_subscription_id, '') IS NULL
       AND tier.base_price > 0
       AND subscription.billing_period_start < NOW() AND subscription.billing_period_end > NOW()
-      AND (subscription.tier_id <> $2::text::uuid
-           OR (subscription.payment_method IN ('stripe', 'mollie')
-               AND subscription.payment_method <> $3::text))
+      AND subscription.tier_id <> $2::text::uuid
 )::boolean AS changing
 `
 
 type SelfServiceAdvanceTierChangeParams struct {
 	TenantID string `db:"tenant_id" json:"tenant_id"`
 	TierID   string `db:"tier_id" json:"tier_id"`
-	Provider string `db:"provider" json:"provider"`
 }
 
 // Paid advance changes need the durable upgrade boundary instead of another setup.
 func (q *Queries) SelfServiceAdvanceTierChange(ctx context.Context, arg SelfServiceAdvanceTierChangeParams) (bool, error) {
-	row := q.db.QueryRowContext(ctx, selfServiceAdvanceTierChange, arg.TenantID, arg.TierID, arg.Provider)
+	row := q.db.QueryRowContext(ctx, selfServiceAdvanceTierChange, arg.TenantID, arg.TierID)
 	var changing bool
 	err := row.Scan(&changing)
 	return changing, err

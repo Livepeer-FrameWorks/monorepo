@@ -42,7 +42,7 @@ func (c *Client) UpgradeMonthlySubscription(ctx context.Context, request billing
 	if request.LocateOnly {
 		return billing.TierUpgradeReceipt{}, fmt.Errorf("%w: no provider update exists for this purchase", billing.ErrTierUpgradeRejected)
 	}
-	if item.Price == nil || item.Price.UnitAmount != request.OldBaseCents ||
+	if item.Quantity != 1 || item.Price == nil || item.Price.UnitAmount != request.OldBaseCents ||
 		item.Price.Currency != stripe.CurrencyEUR || item.Price.Recurring == nil ||
 		item.Price.Recurring.Interval != stripe.PriceRecurringIntervalMonth || item.Price.Recurring.IntervalCount != 1 {
 		return billing.TierUpgradeReceipt{}, fmt.Errorf("%w: the previous Stripe price differs from the accepted monthly EUR fee", billing.ErrTierUpgradeRejected)

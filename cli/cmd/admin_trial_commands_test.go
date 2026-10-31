@@ -115,6 +115,22 @@ func (s *trialCommandServer) AdminRecoverTierUpgrade(ctx context.Context, r *pur
 	return &purserpb.AdminRecoverTierUpgradeResponse{UpgradeId: r.GetUpgradeId(), State: state, Provider: "stripe", RequestedBy: "operator", Detail: "No new purchase started"}, nil
 }
 
+func (s *trialCommandServer) AdminResendFreeFallbackNotice(ctx context.Context, r *purserpb.AdminResendFreeFallbackNoticeRequest) (*purserpb.AdminResendFreeFallbackNoticeResponse, error) {
+	s.readJWT(ctx)
+	if s.retainUnsupported {
+		return nil, status.Error(codes.Unimplemented, "notification retry unavailable")
+	}
+	deadline := timestamppb.New(time.Date(2026, 10, 29, 10, 0, 0, 0, time.UTC))
+	if r.GetConfirmed() {
+		if r.GetReason() != "email repaired" || r.GetScheduledAt().GetSeconds() != deadline.GetSeconds() || !r.GetMoved() {
+			return nil, status.Error(codes.InvalidArgument, "notice confirmation fence lost")
+		}
+		s.recoveryCalls++
+		return &purserpb.AdminResendFreeFallbackNoticeResponse{Status: "queued", Recipient: "repaired@example.test", ScheduledAt: deadline, Moved: true, Detail: "Email retry queued"}, nil
+	}
+	return &purserpb.AdminResendFreeFallbackNoticeResponse{Status: "notice_abandoned", Recipient: "repaired@example.test", ScheduledAt: deadline, Moved: true, Detail: "delivery rejected"}, nil
+}
+
 func (s *trialCommandServer) readJWT(ctx context.Context) {
 	md, _ := metadata.FromIncomingContext(ctx)
 	s.jwt = strings.Join(md.Get("authorization"), ",")
@@ -183,6 +199,11 @@ func TestTrialAccountCommandsUseRealRPCs(t *testing.T) {
 		{"recover upgrade", []string{"admin", "billing", "recovery", "upgrade", "--tenant-id", id, "--upgrade-id", id, "--reason", "reconcile", "--yes"}, "Tier upgrade recovery: cancelled", false},
 		{"recover upgrade json", []string{"--output", "json", "admin", "billing", "recovery", "upgrade", "--tenant-id", id, "--upgrade-id", id, "--reason", "reconcile", "--yes"}, `"state": "cancelled"`, false},
 		{"recover upgrade interactive yes", []string{"admin", "billing", "recovery", "upgrade", "--tenant-id", id, "--upgrade-id", id, "--reason", "reconcile"}, "Tier upgrade recovery: cancelled", false},
+		{"notice unconfirmed", []string{"admin", "billing", "recovery", "notice", "--tenant-id", id, "--reason", "email repaired"}, "retry declined", true},
+		{"notice older server", []string{"admin", "billing", "recovery", "notice", "--tenant-id", id, "--reason", "email repaired", "--yes"}, "notification retry unavailable", true},
+		{"notice retry", []string{"admin", "billing", "recovery", "notice", "--tenant-id", id, "--reason", "email repaired", "--yes"}, "Fallback notification: queued", false},
+		{"notice retry json", []string{"--output", "json", "admin", "billing", "recovery", "notice", "--tenant-id", id, "--reason", "email repaired", "--yes"}, `"status": "queued"`, false},
+		{"notice retry interactive yes", []string{"admin", "billing", "recovery", "notice", "--tenant-id", id, "--reason", "email repaired"}, "Fallback notification: queued", false},
 		{"recovery error", []string{"admin", "billing", "recovery", "list"}, "recovery unavailable", true},
 		{"empty grants", []string{"admin", "billing", "grant", "list"}, "No operator grants found.", false},
 		{"lookup error", []string{"admin", "tenants", "get", id}, "tenant absent", true},
@@ -190,7 +211,7 @@ func TestTrialAccountCommandsUseRealRPCs(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			service.failure = tc.fail
-			service.retainUnsupported = tc.name == "retain delivered older server"
+			service.retainUnsupported = (tc.name == "retain delivered older server" || tc.name == "notice older server")
 			service.recoveryOutcome = ""
 			if tc.name == "recover checkout pending" {
 				service.recoveryOutcome = "pending"
@@ -201,12 +222,12 @@ func TestTrialAccountCommandsUseRealRPCs(t *testing.T) {
 			command.SetOut(&out)
 			command.SetErr(&out)
 			command.SetIn(strings.NewReader("no\n"))
-			if tc.name == "recover checkout interactive yes" || tc.name == "recover upgrade interactive yes" {
+			if tc.name == "recover checkout interactive yes" || tc.name == "recover upgrade interactive yes" || tc.name == "notice retry interactive yes" {
 				command.SetIn(strings.NewReader("yes\n"))
 			}
 			command.SetArgs(tc.args)
 			err := command.Execute()
-			if (tc.name == "recover checkout refuses unconfirmed" || tc.name == "recover upgrade unconfirmed" || tc.name == "retain delivered unconfirmed" || tc.name == "retain delivered older server") && service.recoveryCalls != callsBefore {
+			if (tc.name == "recover checkout refuses unconfirmed" || tc.name == "recover upgrade unconfirmed" || tc.name == "retain delivered unconfirmed" || tc.name == "notice unconfirmed" || (tc.name == "retain delivered older server" || tc.name == "notice older server")) && service.recoveryCalls != callsBefore {
 				t.Fatal("unconfirmed request moved money")
 			}
 			if tc.fail {
