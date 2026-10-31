@@ -40,8 +40,8 @@ func TestOperatorBillingGrant_RealPG(t *testing.T) { //nolint:funlen // One data
 		t.Helper()
 		tenantID := uuid.NewString()
 		if _, err := db.ExecContext(ctx, `
-			INSERT INTO purser.tenant_subscriptions (id, tenant_id, tier_id, billing_model, status, payment_method, stripe_customer_id, stripe_subscription_id)
-			VALUES ($1, $2, $3, 'postpaid', 'active', NULLIF($4, ''), NULLIF($5, ''), NULLIF($6, ''))
+			INSERT INTO purser.tenant_subscriptions (id, tenant_id, tier_id, billing_model, status, payment_method, stripe_customer_id, stripe_subscription_id, presentment_currency, billing_period_start, billing_period_end)
+			VALUES ($1, $2, $3, 'postpaid', 'active', NULLIF($4, ''), NULLIF($5, ''), NULLIF($6, ''), 'EUR', NOW(), NOW()+INTERVAL '1 month')
 		`, uuid.NewString(), tenantID, supporterID, paymentMethod, stripeCustomer, stripeSub); err != nil {
 			t.Fatal(err)
 		}

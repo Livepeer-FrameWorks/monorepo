@@ -142,3 +142,18 @@ func TestTenantPlacementSourceRevisionsAreCanonicalWithoutReorderingInput(t *tes
 		t.Fatalf("legacy publication gained policy provenance: %v", err)
 	}
 }
+
+func TestClosedTenantPlacementKeepsOneCommodoreSourceRevision(t *testing.T) {
+	tenant, _ := commercialAuthorityFixture()
+	sources := []*mediapb.AuthoritySourceRevision{{Service: "commodore", Revision: "account_closed"}}
+	got, err := tenantPlacementSourceRevisions(tenant, sources)
+	if err != nil || len(got) != 1 || got[0].Service != "commodore" {
+		t.Fatalf("closure provenance=%v err=%v, want one Commodore revision", got, err)
+	}
+	if got[0].Revision == "account_closed" {
+		t.Fatal("closure provenance omitted placement")
+	}
+	if sources[0].Revision != "account_closed" {
+		t.Fatal("source revision mutated")
+	}
+}

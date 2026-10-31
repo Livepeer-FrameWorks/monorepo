@@ -503,7 +503,9 @@ CREATE TABLE IF NOT EXISTS purser.billing_tiers (
     processes_vod JSONB DEFAULT '[]',
 
     created_at TIMESTAMP DEFAULT NOW(),
-    updated_at TIMESTAMP DEFAULT NOW()
+    updated_at TIMESTAMP DEFAULT NOW(),
+    -- Internal MVCC fence for fallback retirement; catalog timestamps stay unchanged.
+    operator_grant_fallback_revision BIGINT NOT NULL DEFAULT 0
 );
 
 -- ============================================================================
@@ -636,6 +638,27 @@ CREATE TABLE IF NOT EXISTS purser.tenant_subscriptions (
     pending_effective_at TIMESTAMPTZ,
     pending_reason VARCHAR(50),
 
+    -- ===== MOVE TO FREE =====
+    -- Set when a provider subscription ends: a payment failure gets a grace
+    -- period, a voluntary cancellation moves at period end. The sweep in
+    -- api_billing/internal/grpc/free_fallback.go issues the final invoice, moves
+    -- the tenant to Free, sends the notices, and clears these columns.
+    free_fallback_at TIMESTAMPTZ,
+    free_fallback_reason VARCHAR(24)
+        CONSTRAINT chk_subscription_free_fallback_reason CHECK (free_fallback_reason IN ('payment_failed', 'cancelled')),
+    free_fallback_notified_at TIMESTAMPTZ,
+    free_fallback_moved_at TIMESTAMPTZ,
+    free_fallback_provider_stopping BOOLEAN NOT NULL DEFAULT FALSE,
+    free_fallback_wait_since TIMESTAMPTZ,
+    free_fallback_unbilled_through TIMESTAMPTZ,
+    free_fallback_provider_ended_at TIMESTAMPTZ,
+    free_fallback_attempted_at TIMESTAMPTZ,
+    free_fallback_failures INTEGER NOT NULL DEFAULT 0,
+    free_fallback_error TEXT,
+    free_fallback_notice_attempted_at TIMESTAMPTZ,
+    free_fallback_notice_failures INTEGER NOT NULL DEFAULT 0,
+    free_fallback_notice_error TEXT,
+
     -- ===== PAYMENT & BILLING =====
     payment_method VARCHAR(50),
     payment_reference VARCHAR(255),
@@ -676,6 +699,10 @@ CREATE INDEX IF NOT EXISTS idx_tenant_subscriptions_pending_due_range
     ON purser.tenant_subscriptions(pending_effective_at ASC)
     WHERE pending_tier_id IS NOT NULL;
 
+CREATE INDEX IF NOT EXISTS idx_tenant_subscriptions_free_fallback
+    ON purser.tenant_subscriptions(free_fallback_at ASC)
+    WHERE free_fallback_at IS NOT NULL;
+
 -- ============================================================================
 -- SUBSCRIPTION OVERRIDES
 -- ============================================================================
@@ -708,7 +735,8 @@ CREATE TABLE IF NOT EXISTS purser.subscription_entitlement_overrides (
 -- base_price overrides the tier's base fee (NULL keeps the tier price),
 -- waive_usage rates metered usage at zero, and collection 'invoice' means the
 -- operator collects invoices by hand. A grant past expires_at no longer
--- applies; the row stays as the record of what was granted.
+-- applies to admission; the expiry sweep closes its phase, restores its fallback
+-- and archives it in subscription_operator_grant_history.
 CREATE TABLE IF NOT EXISTS purser.subscription_operator_grants (
     subscription_id UUID PRIMARY KEY REFERENCES purser.tenant_subscriptions(id) ON DELETE CASCADE,
     base_price NUMERIC(10,2),
@@ -718,6 +746,11 @@ CREATE TABLE IF NOT EXISTS purser.subscription_operator_grants (
     reason TEXT NOT NULL,
     granted_by TEXT,
     granted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    fallback_tier_id UUID REFERENCES purser.billing_tiers(id),
+    assigned_tier_id UUID REFERENCES purser.billing_tiers(id),
+    expiry_attempted_at TIMESTAMPTZ,
+    expiry_error TEXT,
+    expiry_failures INTEGER NOT NULL DEFAULT 0,
     CONSTRAINT chk_subscription_operator_grant_collection CHECK (collection IN ('provider', 'invoice')),
     CONSTRAINT chk_subscription_operator_grant_base_price CHECK (base_price IS NULL OR base_price >= 0)
 );
@@ -3448,6 +3481,190 @@ AS $$
     LEFT JOIN purser.tenant_subscriptions AS subscription ON subscription.tenant_id = document_tenant_id
     LIMIT 1;
 $$;
+
+-- Immutable pricing phases preserve the arrangement used to rate past usage.
+CREATE TABLE IF NOT EXISTS purser.subscription_operator_grant_history (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id UUID NOT NULL,
+    subscription_id UUID NOT NULL REFERENCES purser.tenant_subscriptions(id) ON DELETE CASCADE,
+    tier_id UUID NOT NULL REFERENCES purser.billing_tiers(id),
+    fallback_tier_id UUID REFERENCES purser.billing_tiers(id),
+    base_price NUMERIC(10,2),
+    waive_usage BOOLEAN NOT NULL,
+    collection VARCHAR(16) NOT NULL,
+    expires_at TIMESTAMPTZ,
+    reason TEXT NOT NULL,
+    granted_by TEXT,
+    granted_at TIMESTAMPTZ NOT NULL,
+    ended_at TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_operator_grant_history_tenant_time
+ON purser.subscription_operator_grant_history(tenant_id, granted_at, ended_at);
+CREATE INDEX IF NOT EXISTS idx_operator_grants_expiry
+ON purser.subscription_operator_grants(expires_at ASC) WHERE expires_at IS NOT NULL;
+
+-- The transaction-local frameworks.operator_grant_boundary carries a late expiry
+-- deadline to this trigger so historical prices end at the deadline, not sweep time.
+CREATE OR REPLACE FUNCTION purser.archive_operator_grant()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+    INSERT INTO purser.subscription_operator_grant_history
+        (tenant_id, subscription_id, tier_id, fallback_tier_id, base_price, waive_usage,
+         collection, expires_at, reason, granted_by, granted_at, ended_at)
+    SELECT ts.tenant_id, OLD.subscription_id, ts.tier_id,
+           OLD.fallback_tier_id, OLD.base_price, OLD.waive_usage, OLD.collection,
+           OLD.expires_at, OLD.reason, OLD.granted_by, OLD.granted_at,
+           CASE WHEN ts.status='cancelled' THEN NOW() ELSE LEAST(COALESCE(OLD.expires_at, 'infinity'::timestamptz),
+               CASE WHEN TG_OP = 'UPDATE' THEN NEW.granted_at
+               ELSE COALESCE(NULLIF(current_setting('frameworks.operator_grant_boundary', true), '')::timestamptz, NOW()) END) END
+    FROM purser.tenant_subscriptions ts WHERE ts.id = OLD.subscription_id;
+    RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
+END;
+$$;
+CREATE OR REPLACE TRIGGER trg_operator_grant_history
+BEFORE UPDATE OF base_price, waive_usage, collection, expires_at, reason, granted_by, granted_at, fallback_tier_id, assigned_tier_id OR DELETE ON purser.subscription_operator_grants
+FOR EACH ROW EXECUTE FUNCTION purser.archive_operator_grant();
+
+CREATE OR REPLACE FUNCTION purser.operator_grant_authority_changed()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+DECLARE affected UUID;
+BEGIN
+    SELECT tenant_id INTO affected FROM purser.tenant_subscriptions
+    WHERE id = CASE WHEN TG_OP = 'DELETE' THEN OLD.subscription_id ELSE NEW.subscription_id END;
+    IF affected IS NOT NULL THEN
+        PERFORM purser.enqueue_media_authority_refresh(affected, 'subscription_authority_changed');
+    END IF;
+    RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
+END;
+$$;
+CREATE OR REPLACE TRIGGER trg_operator_grant_authority
+AFTER INSERT OR UPDATE OF base_price, waive_usage, collection, expires_at, reason, granted_by, granted_at, fallback_tier_id, assigned_tier_id OR DELETE ON purser.subscription_operator_grants
+FOR EACH ROW EXECUTE FUNCTION purser.operator_grant_authority_changed();
+
+
+CREATE INDEX IF NOT EXISTS idx_operator_grant_history_listing
+ON purser.subscription_operator_grant_history(granted_at DESC, subscription_id, ended_at ASC);
+CREATE INDEX IF NOT EXISTS idx_operator_grants_listing
+ON purser.subscription_operator_grants(granted_at DESC, subscription_id);
+
+CREATE INDEX IF NOT EXISTS idx_operator_grant_history_expiry
+ON purser.subscription_operator_grant_history(expires_at ASC) WHERE expires_at IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_operator_grants_expiry_retry
+ON purser.subscription_operator_grants(expiry_attempted_at ASC NULLS FIRST, expires_at ASC)
+WHERE expires_at IS NOT NULL;
+
+-- Binding a fallback writes its parent row as well as locking it. Yugabyte's
+-- Read Committed retirement statement must restart its snapshot after waiting
+-- on a concurrent binding, so its guard sees the newly committed grant.
+CREATE OR REPLACE FUNCTION purser.fence_operator_grant_fallback_binding()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+    IF NEW.fallback_tier_id IS NOT NULL AND
+       (TG_OP = 'INSERT' OR NEW.fallback_tier_id IS DISTINCT FROM OLD.fallback_tier_id) THEN
+        UPDATE purser.billing_tiers SET operator_grant_fallback_revision = operator_grant_fallback_revision + 1
+        WHERE id = NEW.fallback_tier_id;
+    END IF;
+    RETURN NEW;
+END;
+$$;
+CREATE OR REPLACE TRIGGER trg_fence_operator_grant_fallback_binding
+BEFORE INSERT OR UPDATE OF fallback_tier_id ON purser.subscription_operator_grants
+FOR EACH ROW EXECUTE FUNCTION purser.fence_operator_grant_fallback_binding();
+
+CREATE OR REPLACE FUNCTION purser.guard_operator_grant_fallback_retirement()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+    IF COALESCE(OLD.is_active, true) AND NOT COALESCE(NEW.is_active, true)
+       AND EXISTS (SELECT 1 FROM purser.subscription_operator_grants grant_row
+                   WHERE grant_row.fallback_tier_id=OLD.id) THEN
+        RAISE EXCEPTION 'billing tier is the fallback of an outstanding operator grant' USING ERRCODE='23514';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+CREATE OR REPLACE TRIGGER trg_guard_operator_grant_fallback_retirement
+BEFORE UPDATE OF is_active ON purser.billing_tiers
+FOR EACH ROW EXECUTE FUNCTION purser.guard_operator_grant_fallback_retirement();
+
+ALTER TABLE purser.payment_provider_intents
+    ADD COLUMN IF NOT EXISTS checkout_completed_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS recovery_started_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS recovery_outcome TEXT;
+
+CREATE TABLE IF NOT EXISTS purser.checkout_recovery_audit (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id UUID NOT NULL,
+    intent_id UUID NOT NULL REFERENCES purser.payment_provider_intents(id),
+    actor_id TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    outcome TEXT NOT NULL DEFAULT 'requested',
+    detail TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    completed_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_checkout_recovery_audit_tenant
+    ON purser.checkout_recovery_audit(tenant_id, created_at DESC);
+
+ALTER TABLE purser.provider_webhook_inbox
+    ADD COLUMN IF NOT EXISTS wait_attempts INTEGER NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS unresolved_since TIMESTAMPTZ;
+
+ALTER TABLE purser.payment_provider_intents
+    ADD COLUMN IF NOT EXISTS provider_request BYTEA;
+
+ALTER TABLE purser.payment_provider_intents ADD COLUMN IF NOT EXISTS submission_state VARCHAR(12) NOT NULL DEFAULT 'unknown';
+ALTER TABLE purser.payment_provider_intents ADD COLUMN IF NOT EXISTS reconciled_references JSONB;
+
+CREATE INDEX IF NOT EXISTS idx_provider_checkout_unresolved
+ON purser.payment_provider_intents(created_at ASC, id ASC)
+WHERE purpose IN ('tenant_subscription_checkout', 'mollie_first_payment', 'mollie_subscription_create')
+  AND status IN ('pending', 'provider_open', 'provider_call_failed');
+
+CREATE TABLE IF NOT EXISTS purser.tenant_billing_closures (
+    tenant_id UUID PRIMARY KEY,
+    closed_at TIMESTAMPTZ NOT NULL,
+    source_event_id TEXT NOT NULL,
+    provider_subscriptions JSONB NOT NULL DEFAULT '[]'::jsonb,
+    providers_cancelled_at TIMESTAMPTZ,
+    finalized_at TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS purser.subscription_tier_upgrades (
+    id UUID PRIMARY KEY,
+    tenant_id UUID NOT NULL,
+    old_tier_id UUID NOT NULL,
+    tier_id UUID NOT NULL,
+    actor_id TEXT NOT NULL,
+    old_period_start TIMESTAMPTZ NOT NULL,
+    old_period_end TIMESTAMPTZ NOT NULL,
+    requested_at TIMESTAMPTZ NOT NULL,
+    provider TEXT NOT NULL,
+    collection_provider TEXT NOT NULL,
+    customer_id TEXT NOT NULL,
+    provider_subscription_id TEXT NOT NULL,
+    stripe_price_id TEXT NOT NULL,
+    old_base_cents BIGINT NOT NULL,
+    base_cents BIGINT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'requested',
+    provider_receipt JSONB NOT NULL DEFAULT '{}',
+    recovery_requested_at TIMESTAMPTZ,
+    recovery_actor_id TEXT,
+    recovery_reason TEXT,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT chk_tier_upgrade_state CHECK (state IN ('requested','provider_applied','pricing_applied','completed','cancelled')),
+    CONSTRAINT chk_tier_upgrade_provider CHECK (provider IN ('stripe','mollie','advance','invoice')),
+    CONSTRAINT chk_tier_upgrade_period CHECK (old_period_end > old_period_start)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_subscription_tier_upgrade_pending
+    ON purser.subscription_tier_upgrades (tenant_id)
+    WHERE state IN ('requested','provider_applied');
+CREATE INDEX IF NOT EXISTS idx_subscription_tier_upgrades_tenant
+    ON purser.subscription_tier_upgrades (tenant_id,provider_subscription_id,requested_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_provider_refund_settlement_payment
+    ON purser.provider_webhook_inbox ((headers->>'provider') ASC, (headers->>'provider_payment_id') ASC)
+    WHERE provider = 'refund_settlement';
 
 -- Schema baseline identity marker. Records that this database was created from the
 -- consolidated baseline at this floor, so the migration min-version guard treats

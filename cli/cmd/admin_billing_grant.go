@@ -8,19 +8,21 @@ import (
 	"time"
 
 	"frameworks/cli/internal/ux"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 	"github.com/spf13/cobra"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type billingGrantRequest struct {
-	Target     billingTenantTarget
-	Tier       string
-	BaseFee    string
-	WaiveUsage bool
-	Collection string
-	Until      string
-	Reason     string
+	Target       billingTenantTarget
+	Tier         string
+	FallbackTier string
+	BaseFee      string
+	WaiveUsage   bool
+	Collection   string
+	Until        string
+	Reason       string
 }
 
 // parseGrantUntil reads --until: a date means through that day (the grant
@@ -30,12 +32,8 @@ func parseGrantUntil(value string, now time.Time) (*timestamppb.Timestamp, error
 	if value == "" {
 		return nil, nil
 	}
-	var until time.Time
-	if day, err := time.Parse(time.DateOnly, value); err == nil {
-		until = day.AddDate(0, 0, 1)
-	} else if at, err := time.Parse(time.RFC3339, value); err == nil {
-		until = at
-	} else {
+	until, err := (billing.OperatorGrantSpec{Until: value}).Expiry()
+	if err != nil {
 		return nil, fmt.Errorf("--until %q is not a date (2026-12-31) or an RFC 3339 time", value)
 	}
 	if !until.After(now) {
@@ -57,9 +55,13 @@ func (r billingGrantRequest) toProto(tenantID string, now time.Time) (*purserpb.
 		TenantId: tenantID, TierName: strings.TrimSpace(r.Tier), WaiveUsage: r.WaiveUsage,
 		Collection: collection, Reason: reason,
 	}
+	if r.FallbackTier != "" {
+		value := strings.TrimSpace(r.FallbackTier)
+		req.FallbackTierName = &value
+	}
 	if base := strings.TrimSpace(r.BaseFee); base != "" {
-		if m := billingAmountPattern.FindStringSubmatch(base); m == nil || m[1] != "" || len(m[3]) > 2 {
-			return nil, fmt.Errorf("--base-fee %q is not a non-negative EUR amount with at most two decimals, like 0 or 9.50", r.BaseFee)
+		if _, err := billing.ParseOperatorGrantAmount(base); err != nil {
+			return nil, fmt.Errorf("--base-fee %q: %w", r.BaseFee, err)
 		}
 		req.BasePrice = &base
 	}
@@ -115,7 +117,7 @@ func runBillingGrantShow(ctx context.Context, w io.Writer, p adminBillingClient,
 	return writeBillingGrant(w, "Billing arrangement of tenant "+tenantID, tenantID, email, resp, outputJSON)
 }
 
-func runBillingGrantRevoke(ctx context.Context, w io.Writer, p adminBillingClient, lookup adminUserLookupClient, jwt string, target billingTenantTarget, reason string, outputJSON bool) error {
+func runBillingGrantRevoke(ctx context.Context, w io.Writer, p adminBillingClient, lookup adminUserLookupClient, jwt string, target billingTenantTarget, reason string, recoveryTier string, outputJSON bool) error {
 	if err := target.validate(); err != nil {
 		return err
 	}
@@ -129,7 +131,7 @@ func runBillingGrantRevoke(ctx context.Context, w io.Writer, p adminBillingClien
 	}
 	cctx, cancel := adminRPCContextTimeout(ctx, jwt, 30*time.Second)
 	defer cancel()
-	resp, err := p.AdminRevokeBillingGrant(cctx, tenantID, reason)
+	resp, err := p.AdminRevokeBillingGrant(cctx, tenantID, reason, recoveryTier)
 	if err != nil {
 		return fmt.Errorf("revoke billing grant for tenant %s: %w", tenantID, err)
 	}
@@ -172,8 +174,14 @@ func writeBillingGrant(w io.Writer, headline, tenantID, email string, resp *purs
 			ux.ResultField{Key: "expires", OK: grant.GetActive(), Detail: until},
 			ux.ResultField{Key: "reason", OK: true, Detail: grant.GetReason()},
 		)
+		if grant.GetExpiryFailures() > 0 {
+			fields = append(fields, ux.ResultField{Key: "expiry failure", OK: false, Detail: fmt.Sprintf("%d attempts: %s", grant.GetExpiryFailures(), grant.GetExpiryError())})
+		}
+		if grant.GetFallbackTierName() != "" {
+			fields = append(fields, ux.ResultField{Key: "fallback tier", OK: true, Detail: grant.GetFallbackTierName()})
+		}
 		if !grant.GetActive() {
-			fields = append(fields, ux.ResultField{Key: "state", OK: false, Detail: "expired; the tier and the tenant's own payment setup apply"})
+			fields = append(fields, ux.ResultField{Key: "state", OK: false, Detail: "expired; the expiry worker closes the phase and restores an eligible fallback"})
 		}
 	} else {
 		fields = append(fields, ux.ResultField{Key: "grant", OK: true, Detail: "none"})
@@ -204,13 +212,15 @@ running under it, so invoices still show what the tenant used.
                   invoices by hand and record payments with
                   'frameworks admin billing record-payment'.
   --until         end of the arrangement: a date (through that day, UTC) or an
-                  RFC 3339 time. After it the tier and the tenant's own payment
-                  setup apply again.
+                  RFC 3339 time. Expiry closes the granted billing phase and restores
+                  its fallback while the granted tier is still current.
+  --fallback-tier active tier to restore when the grant ends; an initial tier
+                  change otherwise remembers the previous tier.
 
 A tenant that owes nothing (no base fee and usage waived) needs no collection
 setup. Setting a grant replaces the previous one.`,
 	}
-	cmd.AddCommand(newAdminBillingGrantSetCmd(), newAdminBillingGrantShowCmd(), newAdminBillingGrantRevokeCmd())
+	cmd.AddCommand(newAdminBillingGrantSetCmd(), newAdminBillingGrantShowCmd(), newAdminBillingGrantRevokeCmd(), newAdminBillingGrantListCmd())
 	return cmd
 }
 
@@ -242,7 +252,8 @@ func newAdminBillingGrantSetCmd() *cobra.Command {
 	cmd.Flags().StringVar(&req.BaseFee, "base-fee", "", "EUR base fee in place of the tier's, e.g. 0")
 	cmd.Flags().BoolVar(&req.WaiveUsage, "waive-usage", false, "rate usage at zero")
 	cmd.Flags().StringVar(&req.Collection, "collection", "", "provider (default) or invoice")
-	cmd.Flags().StringVar(&req.Until, "until", "", "end of the arrangement: 2026-12-31 (through that day, UTC) or an RFC 3339 time")
+	cmd.Flags().StringVar(&req.Until, "until", "", "absolute deadline: date includes that UTC day; RFC3339 names an instant; expiry restores the fallback")
+	cmd.Flags().StringVar(&req.FallbackTier, "fallback-tier", "", "tier restored when the grant ends (default: the original tier)")
 	cmd.Flags().StringVar(&req.Reason, "reason", "", "why; recorded on the grant and the audit event (required)")
 	return cmd
 }
@@ -271,7 +282,7 @@ func newAdminBillingGrantShowCmd() *cobra.Command {
 
 func newAdminBillingGrantRevokeCmd() *cobra.Command {
 	var target billingTenantTarget
-	var reason string
+	var reason, tier string
 	cmd := &cobra.Command{
 		Use:   "revoke",
 		Short: "Remove a tenant's billing arrangement",
@@ -284,12 +295,13 @@ func newAdminBillingGrantRevokeCmd() *cobra.Command {
 				return err
 			}
 			defer cleanup()
-			return runBillingGrantRevoke(cmd.Context(), cmd.OutOrStdout(), p, lookup, jwt, target, reason, output == "json")
+			return runBillingGrantRevoke(cmd.Context(), cmd.OutOrStdout(), p, lookup, jwt, target, reason, tier, output == "json")
 		},
 	}
 	cmd.Flags().StringVar(&target.TenantID, "tenant-id", "", "tenant UUID")
 	cmd.Flags().StringVar(&target.Email, "email", "", "email of a user in the tenant (needs a platform-operator session)")
 	cmd.Flags().StringVar(&reason, "reason", "", "why; recorded on the audit event (required)")
+	cmd.Flags().StringVar(&tier, "tier", "", "active tier to restore instead of the recorded fallback")
 	return cmd
 }
 
@@ -372,5 +384,81 @@ full open balance in the currency it was presented in, and marks it paid.`,
 	cmd.Flags().StringVar(&req.InvoiceID, "invoice-id", "", "invoice UUID (required)")
 	cmd.Flags().StringVar(&req.Reference, "reference", "", "the reference the payment arrived with (required)")
 	cmd.Flags().StringVar(&req.Reason, "reason", "", "why; recorded on the audit event (required)")
+	return cmd
+}
+
+type billingGrantListClient interface {
+	AdminListBillingGrants(context.Context, *purserpb.AdminListBillingGrantsRequest) (*purserpb.AdminListBillingGrantsResponse, error)
+}
+
+func runBillingGrantList(ctx context.Context, w io.Writer, client billingGrantListClient, jwt string, req *purserpb.AdminListBillingGrantsRequest, jsonOutput bool) error {
+	callCtx, cancel := adminRPCContext(ctx, jwt)
+	defer cancel()
+	response, err := client.AdminListBillingGrants(callCtx, req)
+	if err != nil {
+		return err
+	}
+	if jsonOutput {
+		return writeProtoJSON(w, response)
+	}
+	if len(response.GetGrants()) == 0 {
+		fmt.Fprintln(w, "No operator grants found.")
+	}
+	if len(response.GetGrants()) > 0 {
+		fmt.Fprintln(w, "TENANT  TIER  FALLBACK  BASE FEE  USAGE WAIVED  EXPIRES  STATE  REASON  EXPIRY FAILURES  EXPIRY ERROR")
+	}
+	for _, entry := range response.GetGrants() {
+		grant := entry.GetGrant()
+		until := "until revoked"
+		state := "active"
+		if grant.GetExpiresAt() != nil {
+			until = grant.GetExpiresAt().AsTime().UTC().Format(time.RFC3339)
+		}
+		if !grant.GetActive() {
+			state = "ended"
+		}
+		fallback := ""
+		if grant.GetFallbackTierName() != "" {
+			fallback = grant.GetFallbackTierName()
+		}
+		base := "tier price"
+		if grant.BasePrice != nil {
+			base = "EUR " + grant.GetBasePrice()
+		}
+		fmt.Fprintf(w, "%s  %s  %s  %s  %t  %s  %s  %q  %d  %q\n", entry.GetTenantId(), entry.GetTierName(), fallback, base, grant.GetWaiveUsage(), until, state, grant.GetReason(), grant.GetExpiryFailures(), grant.GetExpiryError())
+	}
+	if response.GetHasMore() {
+		fmt.Fprintln(w, "More grants available; increase --offset for the next page.")
+	}
+	return nil
+}
+
+func newAdminBillingGrantListCmd() *cobra.Command {
+	var expiring string
+	req := &purserpb.AdminListBillingGrantsRequest{}
+	cmd := &cobra.Command{Use: "list", Short: "List operator grants and retained grant history", RunE: func(cmd *cobra.Command, _ []string) error {
+		if expiring != "" {
+			normalized, err := normalizeDuration(expiring)
+			if err != nil {
+				return err
+			}
+			duration, err := time.ParseDuration(normalized)
+			if err != nil || duration <= 0 {
+				return fmt.Errorf("--expiring must be a positive duration")
+			}
+			req.ExpiringWithinSeconds = int64(duration / time.Second)
+		}
+		client, cfg, cleanup, err := purserGRPCClientFromContext(cmd.Context())
+		if err != nil {
+			return err
+		}
+		defer cleanup()
+		defer client.Close()
+		return runBillingGrantList(cmd.Context(), cmd.OutOrStdout(), client, cfg.Auth.JWT, req, output == "json")
+	}}
+	cmd.Flags().StringVar(&expiring, "expiring", "", "only grants expiring within this duration, e.g. 7d")
+	cmd.Flags().BoolVar(&req.IncludeExpired, "include-expired", false, "include expired and replaced grants")
+	cmd.Flags().Int32Var(&req.Limit, "limit", 100, "page size (1..500)")
+	cmd.Flags().Int32Var(&req.Offset, "offset", 0, "rows to skip")
 	return cmd
 }

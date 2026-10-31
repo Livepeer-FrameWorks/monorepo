@@ -54,6 +54,9 @@ func newStickyOriginFixture(t *testing.T, db *sql.DB) *stickyOriginFixture {
 	if err := f.compiler.persistTenantAuthority(withMediaAuthorityInUse(ctx, true), tenant, []string{"cell-a"}, revisions, now, now.Add(24*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO commodore.users(id,tenant_id,email,is_active,verified) VALUES($1,$1,'sticky-owner@fixture.test',true,true) ON CONFLICT(id) DO NOTHING`, obligationTenantID); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := db.ExecContext(ctx, `
 		INSERT INTO commodore.streams (id, tenant_id, user_id, stream_key, playback_id, internal_name, title, ingest_mode, requires_auth, created_at)
 		VALUES ($1, $2, $2, $3, 'sticky-playback', 'sticky-internal', 'sticky', 'push', FALSE, NOW() - INTERVAL '60 days')`,

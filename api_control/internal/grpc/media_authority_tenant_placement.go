@@ -48,7 +48,18 @@ func tenantPlacementSourceRevisions(payload *mediapb.TenantAuthority, revisions 
 	if err != nil {
 		return nil, err
 	}
-	out := append([]*mediapb.AuthoritySourceRevision(nil), revisions...)
+	out := make([]*mediapb.AuthoritySourceRevision, 0, len(revisions)+1)
+	for _, source := range revisions {
+		if source.GetService() == "commodore" {
+			// Local account state and placement share one owner revision.
+			revision, err = hashProtoMessages(source, payload.GetMediaPlacement())
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			out = append(out, source)
+		}
+	}
 	out = append(out, &mediapb.AuthoritySourceRevision{Service: "commodore", Revision: revision})
 	sort.Slice(out, func(i, j int) bool { return out[i].GetService() < out[j].GetService() })
 	return out, nil

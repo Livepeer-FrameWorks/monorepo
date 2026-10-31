@@ -166,13 +166,17 @@ func expectStripeSubscriptionActivation(mock sqlmock.Sqlmock, tenantID, subscrip
 		WithArgs(subscriptionID).
 		WillReturnRows(sqlmock.NewRows([]string{"tenant_id"}).AddRow(tenantID))
 	mock.ExpectBegin()
+	mock.ExpectQuery("LockTenantSubscriptionForProviderChange").WithArgs(tenantID).WillReturnRows(sqlmock.NewRows([]string{"subscription_id", "tier_id", "status", "billing_model", "stripe_subscription_id", "mollie_subscription_id", "pending_reason", "free_fallback_provider_stopping", "free_fallback_provider_ended_at"}).AddRow("sub-local-1", "tier", "active", "postpaid", subscriptionID, nil, nil, false, nil))
+	mock.ExpectQuery("IsTenantBillingClosed").WithArgs(tenantID).WillReturnRows(sqlmock.NewRows([]string{"closed"}).AddRow(false))
+	mock.ExpectQuery("GetSubscriptionOperatorGrant").WithArgs(tenantID).WillReturnRows(sqlmock.NewRows([]string{"subscription_id"}))
+	mock.ExpectQuery("GetStripeUpgradeBoundary").WithArgs(tenantID, subscriptionID).WillReturnRows(sqlmock.NewRows([]string{"boundary", "tier_id"}))
 	// active routes through the activation helper: applies the tier, sets
 	// payment_method=stripe, clears staged state, and backfills the period.
-	mock.ExpectExec(`UPDATE purser\.tenant_subscriptions[\s\S]*payment_method = 'stripe'[\s\S]*billing_period_start = GREATEST\(\$5::timestamp, billing_period_start\)[\s\S]*WHERE tenant_id = \$6::text::uuid`).
+	mock.ExpectExec(`UPDATE purser\.tenant_subscriptions[\s\S]*payment_method = 'stripe'[\s\S]*billing_period_start = CASE WHEN[\s\S]*THEN billing_period_start ELSE GREATEST\(\$5::timestamp, billing_period_start\) END[\s\S]*WHERE tenant_id = \$6::text::uuid`).
 		WithArgs("cus_test", subscriptionID, "", sqlmock.AnyArg(), sqlmock.AnyArg(), tenantID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`UPDATE purser\.payment_provider_intents[\s\S]*provider_subscription_id = \$1`).
-		WithArgs(subscriptionID).
+		WithArgs(subscriptionID, tenantID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(`SELECT id::text AS id`).
 		WithArgs(tenantID).
@@ -323,15 +327,15 @@ func TestHandleStripeCheckoutExpiredSubscription(t *testing.T) {
 	}
 
 	// expireStripeCheckoutIntent(sess.ID)
-	mock.ExpectExec(`UPDATE purser\.payment_provider_intents\s+SET status = 'expired'.*provider_session_id = \$1`).
-		WithArgs("cs_1").
+	mock.ExpectExec(`UPDATE purser\.payment_provider_intents\s+SET status = 'expired'.*provider_session_id = \$2`).
+		WithArgs("t1", "cs_1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	// clearStagedStripeCheckout: expire intent by subscription, then clear tier state
-	mock.ExpectExec(`UPDATE purser\.payment_provider_intents\s+SET status = 'expired'.*provider_subscription_id = \$1`).
-		WithArgs("sub_1").
+	mock.ExpectExec(`UPDATE purser\.payment_provider_intents\s+SET status = 'expired'.*provider_subscription_id = \$2`).
+		WithArgs("t1", "sub_1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`UPDATE purser\.tenant_subscriptions\s+SET pending_tier_id = NULL.*WHERE tenant_id = \$1::text::uuid AND pending_reason = 'stripe_checkout'`).
-		WithArgs("t1").
+		WithArgs("t1", "cs_1", "sub_1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	if err := s.handleStripeCheckoutExpired(payload); err != nil {
@@ -360,12 +364,12 @@ func TestHandleStripeCheckoutExpiredCluster(t *testing.T) {
 		Data: struct {
 			Object json.RawMessage `json:"object"`
 		}{
-			Object: json.RawMessage(`{"id":"cs_2","subscription":"sub_2","metadata":{"purpose":"cluster_subscription"}}`),
+			Object: json.RawMessage(`{"id":"cs_2","subscription":"sub_2","metadata":{"purpose":"cluster_subscription","tenant_id":"t2"}}`),
 		},
 	}
 
-	mock.ExpectExec(`UPDATE purser\.payment_provider_intents\s+SET status = 'expired'.*provider_session_id = \$1`).
-		WithArgs("cs_2").
+	mock.ExpectExec(`UPDATE purser\.payment_provider_intents\s+SET status = 'expired'.*provider_session_id = \$2`).
+		WithArgs("t2", "cs_2").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`UPDATE purser\.cluster_subscriptions\s+SET status = 'cancelled'.*WHERE status = 'pending_payment'`).
 		WithArgs("cs_2", "sub_2").

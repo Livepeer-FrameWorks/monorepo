@@ -51,7 +51,9 @@ var catalogYAML []byte
 
 // Release is one platform release entry from the catalog.
 type Release struct {
-	Version                string                     `yaml:"version"`
+	Version string `yaml:"version"`
+	// Capabilities introduces named release features from this version onward.
+	Capabilities           []string                   `yaml:"capabilities,omitempty"`
 	MinCLIVersion          string                     `yaml:"min_cli_version,omitempty"`
 	RequiredDataMigrations []DataMigrationRequirement `yaml:"required_data_migrations,omitempty"`
 	// RollbackDisabled lists deploy names whose readiness contract changed in THIS release such that a restored
@@ -240,6 +242,13 @@ func validateCatalog(cf *catalogFile) error {
 	// rollback/min-CLI policy. One entry per release line, period. (This also rejects exact-string duplicates.)
 	seenBase := map[string]bool{}
 	for _, rel := range cf.Releases {
+		seenCapabilities := map[string]bool{}
+		for _, capability := range rel.Capabilities {
+			if capability != CapabilityAccountsBootstrap || seenCapabilities[capability] {
+				return fmt.Errorf("release %s: unknown or duplicate capability %q", rel.Version, capability)
+			}
+			seenCapabilities[capability] = true
+		}
 		if err := validVersion("release version", rel.Version); err != nil {
 			return err
 		}
@@ -410,6 +419,21 @@ func RequiredTransitionIDs(target string) ([]string, error) {
 		ids = append(ids, r.ID)
 	}
 	return ids, nil
+}
+
+// CapabilityAccountsBootstrap identifies the accounts-only release reconciliation step.
+const CapabilityAccountsBootstrap = "accounts_bootstrap"
+
+// Supports reports whether the target includes a capability introduced in the catalog.
+func Supports(target, capability string) bool {
+	for _, release := range embedded.releases {
+		for _, known := range release.Capabilities {
+			if known == capability && CompareSemver(BaseVersion(target), release.Version) >= 0 {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // MinCLIVersionFor returns the declared minimum CLI version for a concrete release version, or "" when the catalog

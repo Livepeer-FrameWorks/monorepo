@@ -104,18 +104,21 @@ LIMIT 1;
 UPDATE purser.payment_provider_intents
 SET provider_subscription_id = COALESCE(provider_subscription_id, NULLIF(sqlc.arg(subscription_id), '')),
     status = 'succeeded', succeeded_at = COALESCE(succeeded_at, NOW()), updated_at = NOW()
-WHERE provider = 'stripe' AND provider_subscription_id = sqlc.arg(subscription_id);
+WHERE tenant_id=sqlc.arg(tenant_id)::text::uuid AND provider = 'stripe' AND provider_subscription_id = sqlc.arg(subscription_id);
 
 -- name: UpdateTenantStripeSubscriptionStatus :execrows
 UPDATE purser.tenant_subscriptions
-SET stripe_subscription_status = sqlc.arg(stripe_status),
+SET stripe_subscription_status = sqlc.narg(stripe_status)::text,
     status = sqlc.arg(status),
-    stripe_current_period_end = CASE WHEN sqlc.narg(period_end)::timestamptz IS NULL THEN stripe_current_period_end WHEN billing_period_start IS NULL OR sqlc.narg(period_start)::timestamp >= billing_period_start THEN sqlc.narg(period_end)::timestamptz ELSE stripe_current_period_end END,
-    billing_period_start = GREATEST(sqlc.narg(period_start)::timestamp, billing_period_start),
-    billing_period_end = CASE WHEN billing_period_start IS NULL OR sqlc.narg(period_start)::timestamp >= billing_period_start THEN COALESCE(sqlc.narg(period_end)::timestamp, billing_period_end) ELSE billing_period_end END,
-    next_billing_date = CASE WHEN billing_period_start IS NULL OR sqlc.narg(period_start)::timestamp >= billing_period_start THEN COALESCE(sqlc.narg(period_end)::timestamp, next_billing_date) ELSE next_billing_date END,
+    stripe_current_period_end = CASE WHEN sqlc.narg(period_end)::timestamptz IS NULL THEN stripe_current_period_end WHEN sqlc.narg(period_end)::timestamptz IS NOT NULL AND (billing_period_start IS NULL OR sqlc.narg(period_start)::timestamp >= billing_period_start) THEN sqlc.narg(period_end)::timestamptz WHEN billing_period_start IS NULL OR sqlc.narg(period_end)::timestamp > billing_period_start THEN GREATEST(sqlc.narg(period_end)::timestamptz, stripe_current_period_end) ELSE stripe_current_period_end END,
+    billing_period_start = CASE WHEN ((free_fallback_at IS NOT NULL OR billing_period_start <= free_fallback_unbilled_through AT TIME ZONE 'UTC') OR sqlc.narg(stripe_status)::text IN ('past_due', 'unpaid', 'canceled')) THEN billing_period_start ELSE GREATEST(sqlc.narg(period_start)::timestamp, billing_period_start) END,
+    billing_period_end = CASE WHEN ((free_fallback_at IS NOT NULL OR billing_period_start <= free_fallback_unbilled_through AT TIME ZONE 'UTC') OR sqlc.narg(stripe_status)::text IN ('past_due', 'unpaid', 'canceled')) THEN billing_period_end ELSE CASE WHEN sqlc.narg(period_end)::timestamptz IS NOT NULL AND (billing_period_start IS NULL OR sqlc.narg(period_start)::timestamp >= billing_period_start) THEN sqlc.narg(period_end)::timestamp WHEN billing_period_start IS NULL OR sqlc.narg(period_end)::timestamp > billing_period_start THEN GREATEST(sqlc.narg(period_end)::timestamp, billing_period_end) ELSE billing_period_end END END,
+    next_billing_date = CASE WHEN ((free_fallback_at IS NOT NULL OR billing_period_start <= free_fallback_unbilled_through AT TIME ZONE 'UTC') OR sqlc.narg(stripe_status)::text IN ('past_due', 'unpaid', 'canceled')) THEN next_billing_date ELSE CASE WHEN sqlc.narg(period_end)::timestamptz IS NOT NULL AND (billing_period_start IS NULL OR sqlc.narg(period_start)::timestamp >= billing_period_start) THEN sqlc.narg(period_end)::timestamp WHEN billing_period_start IS NULL OR sqlc.narg(period_end)::timestamp > billing_period_start THEN GREATEST(sqlc.narg(period_end)::timestamp, next_billing_date) ELSE next_billing_date END END,
+    free_fallback_unbilled_through = CASE WHEN sqlc.narg(stripe_status)::text IN ('past_due', 'unpaid', 'canceled') THEN GREATEST(free_fallback_unbilled_through, NOW(), sqlc.narg(period_start)::timestamptz - INTERVAL '1 microsecond') WHEN (free_fallback_at IS NOT NULL OR billing_period_start <= free_fallback_unbilled_through AT TIME ZONE 'UTC') THEN GREATEST(free_fallback_unbilled_through, sqlc.narg(period_start)::timestamptz - INTERVAL '1 microsecond') ELSE free_fallback_unbilled_through END,
     updated_at = NOW()
-WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid;
+WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
+ AND stripe_subscription_id=sqlc.arg(subscription_id)::text
+  AND NOT EXISTS (SELECT 1 FROM purser.tenant_billing_closures closure WHERE closure.tenant_id = tenant_subscriptions.tenant_id);
 
 -- name: GetInternalSubscriptionID :one
 SELECT id::text AS id
@@ -145,7 +148,8 @@ SET stripe_subscription_status = sqlc.arg(stripe_status),
     status = sqlc.arg(status),
     stripe_current_period_end = sqlc.narg(period_end),
     updated_at = NOW()
-WHERE stripe_subscription_id = sqlc.arg(stripe_subscription_id);
+WHERE stripe_subscription_id = sqlc.arg(stripe_subscription_id)
+  AND NOT EXISTS (SELECT 1 FROM purser.tenant_billing_closures closure WHERE closure.tenant_id = cluster_subscriptions.tenant_id);
 
 -- name: AttachAndUpdateClusterStripeSubscription :execrows
 UPDATE purser.cluster_subscriptions
@@ -155,7 +159,8 @@ SET stripe_subscription_id = sqlc.arg(stripe_subscription_id),
     stripe_current_period_end = sqlc.narg(period_end),
     updated_at = NOW()
 WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
-  AND cluster_id = sqlc.arg(cluster_id);
+  AND cluster_id = sqlc.arg(cluster_id)
+  AND NOT EXISTS (SELECT 1 FROM purser.tenant_billing_closures closure WHERE closure.tenant_id = cluster_subscriptions.tenant_id);
 
 -- name: UpsertMollieCustomer :exec
 INSERT INTO purser.mollie_customers (tenant_id, mollie_customer_id)
@@ -186,8 +191,10 @@ ON CONFLICT DO NOTHING;
 
 -- name: UpdateMollieNextPaymentDate :exec
 UPDATE purser.tenant_subscriptions
-SET mollie_next_payment_date = sqlc.arg(next_payment_date)::text::date, updated_at = NOW()
-WHERE mollie_subscription_id = sqlc.arg(mollie_subscription_id);
+SET mollie_next_payment_date = CASE WHEN (free_fallback_at IS NOT NULL OR billing_period_start <= free_fallback_unbilled_through AT TIME ZONE 'UTC') THEN mollie_next_payment_date ELSE sqlc.arg(next_payment_date)::text::date END, updated_at = NOW()
+WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
+  AND mollie_subscription_id = sqlc.arg(mollie_subscription_id)
+  AND NOT EXISTS (SELECT 1 FROM purser.tenant_billing_closures closure WHERE closure.tenant_id = tenant_subscriptions.tenant_id);
 
 -- name: AttachMollieBillingPayment :execrows
 UPDATE purser.billing_payments

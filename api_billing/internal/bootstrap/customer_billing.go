@@ -10,7 +10,10 @@ import (
 	"strings"
 
 	"frameworks/api_billing/internal/database/purserdb"
+	"frameworks/api_billing/internal/handlers"
+	"frameworks/api_billing/internal/subscriptions"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 
 	"github.com/google/uuid"
 )
@@ -55,7 +58,7 @@ import (
 //   - "none"          — local DB writes only; no QM calls.
 //
 // Anything else is a configuration error.
-func ReconcileCustomerBilling(ctx context.Context, exec DBTX, entries []CustomerBilling, qm QMBootstrapClient) (Result, []PostCommitOp, error) {
+func ReconcileCustomerBilling(ctx context.Context, exec DBTX, entries []CustomerBilling, qm QMBootstrapClient, prepared map[string]*PreparedCustomerGrant) (Result, []PostCommitOp, error) {
 	if exec == nil {
 		return Result{}, nil, errors.New("ReconcileCustomerBilling: nil executor")
 	}
@@ -64,6 +67,21 @@ func ReconcileCustomerBilling(ctx context.Context, exec DBTX, entries []Customer
 	}
 	if len(entries) == 0 {
 		return Result{}, nil, nil
+	}
+
+	if db, ok := exec.(*sql.DB); ok {
+		var result Result
+		var post []PostCommitOp
+		err := database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
+			var err error
+			result, post, err = ReconcileCustomerBilling(ctx, tx, entries, qm, prepared)
+			return err
+		})
+		return result, post, err
+	}
+	tx, ok := exec.(*sql.Tx)
+	if !ok {
+		return Result{}, nil, errors.New("customer billing requires a transaction")
 	}
 
 	// Cache the platform-official set once per reconcile run. Bounded (a
@@ -94,18 +112,114 @@ func ReconcileCustomerBilling(ctx context.Context, exec DBTX, entries []Customer
 		if err != nil {
 			return Result{}, nil, fmt.Errorf("customer_billing: %w", err)
 		}
-		tenantID, err := qm.Resolve(ctx, alias)
-		if err != nil {
-			return Result{}, nil, fmt.Errorf("customer_billing[%s]: %w", alias, err)
+		boundary := prepared[alias]
+		if boundary != nil {
+			boundary.applied = false
+		}
+		if boundary != nil && boundary.deferred != nil {
+			res.Deferred = append(res.Deferred, DeferredCustomer{Alias: alias, Reason: boundary.deferred.Error()})
+			continue
+		}
+		tenantID := ""
+		if boundary != nil {
+			tenantID = boundary.tenantID
+		}
+		if tenantID == "" {
+			tenantID, err = qm.Resolve(ctx, alias)
+			if err != nil {
+				return Result{}, nil, fmt.Errorf("customer_billing[%s]: %w", alias, err)
+			}
+		}
+		locked, lockErr := subscriptions.LockChange(ctx, tx, tenantID, subscriptions.PreservePricing)
+		if lockErr != nil && !errors.Is(lockErr, sql.ErrNoRows) {
+			return Result{}, nil, lockErr
+		}
+		preserved := lockErr == nil && locked.HasGrant && (boundary == nil || !boundary.checkGrant) && locked.Current.Status != "cancelled"
+		if preserved {
+			current, currentErr := purserdb.New(tx).GetSubscriptionTierForGrant(ctx, tenantID)
+			if currentErr != nil {
+				return Result{}, nil, currentErr
+			}
+			e.Tier, e.Model = current.TierName, current.BillingModel
 		}
 		tierID, tierLevel, currency, err := resolveTier(ctx, exec, e.Tier)
 		if err != nil {
 			return Result{}, nil, fmt.Errorf("customer_billing[%s]: %w", alias, err)
 		}
+		if lockErr == nil {
+			var businessErr error
+			if locked.AccountClosed {
+				businessErr = subscriptions.ErrTenantBillingClosed
+			} else if locked.Current.FreeFallbackProviderStopping {
+				businessErr = subscriptions.ErrPendingFreeFallback
+			} else if locked.Current.PendingReason.String == "tier_upgrade" {
+				businessErr = subscriptions.ErrPendingTierUpgrade
+			} else if locked.Current.Status == "cancelled" {
+				businessErr = fmt.Errorf("tenant %s subscription is cancelled: revoke its outstanding grant before starting provider checkout", tenantID)
+			} else if locked.Current.BillingModel != e.Model {
+				businessErr = fmt.Errorf("tenant %s runs %s billing; desired state declares %s: use frameworks admin billing set-tier to close its current period first", tenantID, locked.Current.BillingModel, e.Model)
+			}
+			if businessErr != nil {
+				res.Deferred = append(res.Deferred, DeferredCustomer{Alias: alias, Reason: businessErr.Error()})
+				continue
+			}
+		}
+		if boundary != nil && boundary.checkGrant && e.OperatorGrant != nil {
+			if checkoutErr := subscriptions.CheckGrantCheckout(ctx, tx, tenantID); checkoutErr != nil {
+				if !errors.Is(checkoutErr, subscriptions.ErrPendingCheckout) && !subscriptions.IsPricingRefusal(checkoutErr) {
+					return Result{}, nil, checkoutErr
+				}
+				res.Deferred = append(res.Deferred, DeferredCustomer{Alias: alias, Reason: checkoutErr.Error()})
+				continue
+			}
+		}
 
+		if boundary != nil {
+			if boundaryErr := boundary.CheckUnchanged(ctx, exec, tenantID); boundaryErr != nil {
+				if !errors.Is(boundaryErr, errCustomerGrantChanged) {
+					return Result{}, nil, boundaryErr
+				}
+				res.Deferred = append(res.Deferred, DeferredCustomer{Alias: alias, Reason: boundaryErr.Error()})
+				continue
+			}
+			if phaseErr := commitCustomerGrantPhases(ctx, exec, boundary); phaseErr != nil {
+				if !errors.Is(phaseErr, handlers.ErrPrepaidPhaseChanged) && !errors.Is(phaseErr, handlers.ErrPostpaidPhaseChanged) {
+					return Result{}, nil, phaseErr
+				}
+				res.Deferred = append(res.Deferred, DeferredCustomer{Alias: alias, Reason: phaseErr.Error()})
+				continue
+			}
+		}
+		grantChanged := false
+		grantBeforeTier := boundary != nil && (boundary.close != nil || boundary.prepaid != nil)
+		if grantBeforeTier {
+			// The history trigger reads ts.tier_id, so archive the grant before
+			// changing the subscription to the newly declared tier.
+			grantChanged, err = reconcileCustomerGrant(ctx, exec, tenantID, tierID, e, boundary)
+			if err != nil {
+				return Result{}, nil, fmt.Errorf("customer_billing[%s]: %w", alias, err)
+			}
+		}
 		subAction, err := upsertTenantSubscription(ctx, exec, tenantID, tierID, e)
 		if err != nil {
-			return Result{}, nil, fmt.Errorf("customer_billing[%s]: %w", alias, err)
+			var deferred *customerDeclarationDeferred
+			if !errors.As(err, &deferred) {
+				return Result{}, nil, fmt.Errorf("customer_billing[%s]: %w", alias, err)
+			}
+			res.Deferred = append(res.Deferred, DeferredCustomer{Alias: alias, Reason: err.Error()})
+			continue
+		}
+		if !grantBeforeTier && !preserved {
+			grantChanged, err = reconcileCustomerGrant(ctx, exec, tenantID, tierID, e, boundary)
+			if err != nil {
+				return Result{}, nil, fmt.Errorf("customer_billing[%s]: %w", alias, err)
+			}
+		}
+		if grantChanged {
+			post = append(post, PostCommitOp{Kind: PostCommitInvalidateTenantCache, TenantID: tenantID, Alias: alias})
+		}
+		if grantChanged && subAction == "noop" {
+			subAction = "updated"
 		}
 		if err := reconcileEntitlementOverrides(ctx, exec, tenantID, e.EntitlementOverrides); err != nil {
 			return Result{}, nil, fmt.Errorf("customer_billing[%s]: %w", alias, err)
@@ -158,9 +272,46 @@ func ReconcileCustomerBilling(ctx context.Context, exec DBTX, entries []Customer
 		default:
 			return Result{}, nil, fmt.Errorf("customer_billing[%s]: cluster_access %q invalid (expected \"\"|\"derived\"|\"none\")", alias, e.ClusterAccess)
 		}
+		if boundary != nil {
+			boundary.applied = true
+		}
 	}
 
 	return res, post, nil
+}
+
+// commitCustomerGrantPhases isolates a tenant whose rated closing document changed.
+// Storage errors must escape to the outer transaction retry, especially 40001.
+func commitCustomerGrantPhases(ctx context.Context, exec DBTX, boundary *PreparedCustomerGrant) error {
+	if boundary.prepaid == nil && boundary.close == nil {
+		return nil
+	}
+	tx, ok := exec.(*sql.Tx)
+	if !ok {
+		return errors.New("prepared grants require a transaction")
+	}
+	if err := purserdb.New(tx).BeginBootstrapGrantPhase(ctx); err != nil {
+		return err
+	}
+	var err error
+	if boundary.prepaid != nil {
+		_, err = boundary.prepaid.CommitTx(ctx, tx)
+	}
+	if err == nil && boundary.close != nil {
+		_, err = boundary.close.CommitTx(ctx, tx)
+	}
+	if err != nil {
+		if !errors.Is(err, handlers.ErrPrepaidPhaseChanged) && !errors.Is(err, handlers.ErrPostpaidPhaseChanged) {
+			return err
+		}
+		if rollbackErr := purserdb.New(tx).RollbackBootstrapGrantPhase(ctx); rollbackErr != nil {
+			return rollbackErr
+		}
+	}
+	if releaseErr := purserdb.New(tx).ReleaseBootstrapGrantPhase(ctx); releaseErr != nil {
+		return releaseErr
+	}
+	return err
 }
 
 // PostCommitOp is cross-service work the dispatcher executes after the local
@@ -179,6 +330,8 @@ type PostCommitOp struct {
 type PostCommitKind string
 
 const (
+	// PostCommitInvalidateTenantCache refreshes Commodore and Gateway billing caches.
+	PostCommitInvalidateTenantCache PostCommitKind = "invalidate_tenant_cache"
 	// PostCommitGrantClusterAccess invokes Quartermaster's
 	// BootstrapClusterAccess RPC — the service-token-gated entitlement entry
 	// point a bootstrap caller (no tenant session) is allowed to use.
@@ -208,6 +361,11 @@ type QMBootstrapClient interface {
 }
 
 func validateCustomerBilling(e CustomerBilling) error {
+	if e.OperatorGrant != nil {
+		if err := e.OperatorGrant.Validate(); err != nil {
+			return err
+		}
+	}
 	if e.Tenant.Ref == "" {
 		return errors.New("tenant.ref required")
 	}
@@ -275,10 +433,8 @@ func upsertTenantSubscription(ctx context.Context, exec DBTX, tenantID, tierID s
 	if current.TierID == tierUUID && current.BillingModel == e.Model {
 		return "noop", nil
 	}
-	// A switch between prepaid and postpaid closes the running phase with its
-	// statement or invoice, which only AdminAssignTier rates and writes.
 	if current.BillingModel != e.Model {
-		return "", fmt.Errorf("tenant %s runs %s billing; desired state declares %s, and a switch between billing models closes the current period with a billing document, so make it with `frameworks admin billing set-tier` and then update the desired state", tenantID, current.BillingModel, e.Model)
+		return "", &customerDeclarationDeferred{fmt.Errorf("tenant %s runs %s billing; desired state declares %s, and a switch between billing models closes the current period with a billing document, so make it with `frameworks admin billing set-tier` and then update the desired state", tenantID, current.BillingModel, e.Model)}
 	}
 	affected, err := queries.UpdateBootstrapTenantSubscription(ctx, purserdb.UpdateBootstrapTenantSubscriptionParams{
 		TierID: tierUUID, BillingModel: e.Model, TenantID: tenantID,

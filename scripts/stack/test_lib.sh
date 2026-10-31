@@ -26,6 +26,7 @@ expect() { # expect <description> <command...>
 # the ingest sessions is one second of the stubbed publish.
 sleep() { :; }
 publish() {
+  printf 'Sending publish command\n' >"$STACK_STATE_DIR/publish-${2:-key}.log"
   command sleep 300 >/dev/null 2>&1 &
   echo $! >>"$work/pids"
   echo $!
@@ -153,6 +154,114 @@ deleted_exactly_the_runs_objects() {
     { cat "$work/cleanup-calls" "$work/cleanup.log" >&2 2>/dev/null; return 1; }
 }
 expect "run cleanup deletes the ledger's and stack-named streams, VODs and clips, and nothing else" deleted_exactly_the_runs_objects
+
+refusal_history_probe() (
+  local admitted=$1 after_poll=${2:-8}
+  echo 0 >"$work/refusal-polls"
+  pg() {
+    local n=$(($(cat "$work/refusal-polls") + 1))
+    echo "$n" >"$work/refusal-polls"
+    # Once admitted, its history remains after the 60-second publisher ends.
+    if [ "$admitted" = yes ] && [ "$n" -ge "$after_poll" ]; then echo 1; else echo 0; fi
+  }
+  publish_refused "$FOGHORN_A_DB" internal-1 "$EDGE_A_RTMP" key
+)
+refusal_rejects_admitted() { ! refusal_history_probe yes; }
+expect 'historically admitted publisher is never called refused' refusal_rejects_admitted
+refusal_rejects_late_admission() { ! refusal_history_probe yes 31; }
+expect 'refusal probe observes admissions at the end of the 35-second admission budget' refusal_rejects_late_admission
+expect 'refusal probe accepts a negotiated publisher that creates no admission history' refusal_history_probe no
+refusal_rejects_unreachable_edge() (
+  publish() { command sleep 300 >/dev/null 2>&1 & echo $! >>"$work/pids"; echo $!; printf 'Connection refused\n' >"$STACK_STATE_DIR/publish-key.log"; }
+  ! refusal_history_probe no
+)
+expect 'refusal probe rejects an attempt that never negotiated with the edge' refusal_rejects_unreachable_edge
+
+operator_calls_refresh_auth() (
+  # Read by the scenario function loaded through eval below.
+  # shellcheck disable=SC2034
+  local logins=0 operator_jwt="" CLI="$work/operator-cli"
+  printf '#!/bin/sh\nprintf "%%s\\n" "$FW_USER_TOKEN"\n' >"$CLI"
+  chmod +x "$CLI"
+  # The evaluated cli_json reads operator_jwt.
+  # shellcheck disable=SC2034
+  operator_login() { logins=$((logins+1)); operator_jwt="fresh-$logins"; }
+  eval "$(sed -n '/^cli_json() {$/,/^}$/p' "$here/scenarios/46-operator-grant-trial.sh")"
+  cli_json admin >"$work/operator-call-1"
+  cli_json admin >"$work/operator-call-2"
+  [ "$(cat "$work/operator-call-1")" = fresh-1 ] && [ "$(cat "$work/operator-call-2")" = fresh-2 ]
+)
+expect 'every operator CLI invocation refreshes its JWT' operator_calls_refresh_auth
+cleanup_failure_is_red() (
+  cleanup() { return 1; }
+  eval "$(sed -n '/^on_exit() {$/,/^}$/p' "$here/scenarios/46-operator-grant-trial.sh")"
+  trap on_exit EXIT
+  exit 0
+)
+if cleanup_failure_is_red; then printf 'FAIL cleanup failure exited green\n'; failures=$((failures+1)); else printf 'ok cleanup failure is red\n'; fi
+
+# Use scenario 46's actual predicate: a route 404 must never count as revocation,
+# while the signed inactive-object response intentionally hides the view key.
+trial_playback_probe() (
+  local probe_code=$1 probe_body=$2
+  # Read by playback_denied loaded through eval below.
+  # shellcheck disable=SC2034
+  tenant=tenant-fixture id=stream-fixture pb=playback-fixture internal=internal-fixture
+  curl() { printf '%s\n%s' "$probe_body" "$probe_code"; }
+  pg() { echo 1; }
+  eval "$(sed -n '/^playback_denied() {$/,/^}$/p' "$here/scenarios/46-operator-grant-trial.sh")"
+  playback_denied
+)
+trial_rejects_route_404() { ! trial_playback_probe 404 '404 page not found'; }
+trial_rejects_offline() { ! trial_playback_probe 404 '{"code":"STREAM_OFFLINE"}'; }
+trial_accepts_signed_denial() { trial_playback_probe 404 '{"code":"VIEW_KEY_NOT_FOUND"}'; }
+expect 'trial playback refusal rejects an unknown-route 404' trial_rejects_route_404
+expect 'trial playback refusal rejects an offline publisher' trial_rejects_offline
+expect 'trial playback refusal accepts a signed inactive-object response for an existing stream' trial_accepts_signed_denial
+
+revocation_clock_precedes_auxiliary_calls() {
+  python3 - "$here/scenarios/46-operator-grant-trial.sh" <<'CLOCK'
+import sys
+source=open(sys.argv[1]).read()
+mutation=source.index('cli_json admin users deactivate')
+capture=source.find('revocation_started_ms=$(monotonic_ms)',mutation)
+login=source.index('code=$(user_login)',mutation)
+assert mutation < capture < login, 'revocation clock must be captured before auxiliary login/token checks'
+CLOCK
+}
+expect 'session deadline begins immediately after the revocation response' revocation_clock_precedes_auxiliary_calls
+late_success() { command sleep 1.2; return 0; }
+late_success_is_refused() { ! (within_bound_since "$(monotonic_ms)" 1 'late success' late_success) >"$work/late-success.log"; }
+expect 'bounded wait refuses a late successful response' late_success_is_refused
+expired_start_is_refused() (
+  started=$(monotonic_ms) || return 1
+  command sleep 1.1
+  ! within_bound_since "$started" 1 'already late at helper entry' true >"$work/late-start.log"
+)
+expect 'deadline includes work before the polling helper starts' expired_start_is_refused
+expect 'bounded wait accepts an immediate success' within_bound_since "$(monotonic_ms)" 1 'immediate success' true
+
+revocation_publishers_outlive_observation() {
+  python3 - "$here/scenarios/46-operator-grant-trial.sh" <<'PUBLISH'
+import re,sys
+source=open(sys.argv[1]).read()
+constants={key:int(value) for key,value in re.findall(r'^(\w+)=(\d+)$',source,re.M)}
+required=sum(constants[key] for key in ['MEDIA_BOUND_S','INGEST_STOP_BOUND_S','READMISSION_BOUND_S'])
+calls=re.findall(r'publish_until_admitted[^\n]+?320x240 10 ([^ ]+) ',source[source.index('api_admitted()'):])
+assert len(calls)==2, 'must exercise both live revocations'
+for value in calls:
+    duration=constants[value.strip('"${}') ] if '$' in value else int(value)
+    assert duration>required, f'publisher ends naturally inside revocation observation: {duration}s <= {required}s'
+PUBLISH
+}
+expect 'revocation publishers cannot finish naturally during the assertion window' revocation_publishers_outlive_observation
+
+
+expired_publisher_does_not_prove_termination() {
+  publisher_stopped_before_deadline 0 true
+  [ "$?" = 2 ]
+}
+expect 'a naturally expired publisher cannot prove termination' expired_publisher_does_not_prove_termination
 
 if [ "$failures" -gt 0 ]; then
   echo "lib.sh checks: $failures failed"

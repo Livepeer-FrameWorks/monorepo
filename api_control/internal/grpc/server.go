@@ -143,8 +143,11 @@ type ServerMetrics struct {
 	// they replace had used less than a quarter of its validity. Renewal is due
 	// at a third, so a healthy compiler never counts one, whatever the catalog
 	// size or validity class.
-	MediaAuthorityEarlyRenewals *prometheus.CounterVec
-	FieldDecryptFailures        *prometheus.CounterVec
+	MediaAuthorityEarlyRenewals          *prometheus.CounterVec
+	FieldDecryptFailures                 *prometheus.CounterVec
+	TenantAccountClosureReadFailures     *prometheus.CounterVec
+	TenantAccountClosureFailures         *prometheus.GaugeVec
+	TenantAccountClosureRepeatedFailures *prometheus.GaugeVec
 }
 
 type streamAdmissionBilling interface {
@@ -1210,6 +1213,9 @@ func (s *CommodoreServer) loadAdmissionRouteInputs(ctx context.Context, tenantID
 	group.Go(func() error {
 		resp, err := s.quartermasterClient.GetClusterRouting(groupCtx, &quartermasterpb.GetClusterRoutingRequest{TenantId: tenantID})
 		if err != nil {
+			if status.Code(err) == codes.NotFound {
+				return err
+			}
 			return status.Errorf(codes.Unavailable, "%s failed: %v", routingStage, err)
 		}
 		routing = resp
@@ -2153,6 +2159,9 @@ func (s *CommodoreServer) validateStreamKey(ctx context.Context, req *commodorep
 		} else {
 			billingModel = billingStatus.BillingModel
 			isSuspended = billingStatus.IsSuspended
+			if billingStatus.GetGrantExpired() {
+				return &commodorepb.ValidateStreamKeyResponse{Valid: false, Error: "Operator grant has expired", RejectionReason: commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_GRANT_EXPIRED}, nil
+			}
 			isBalanceNegative = billingStatus.IsBalanceNegative
 			dvrPolicy = billingStatus.DvrPolicy
 			allowances = billingStatus.Allowances
@@ -2331,11 +2340,11 @@ func (s *CommodoreServer) validateStreamKey(ctx context.Context, req *commodorep
 // and cluster_peers; and ingest-endpoint resolution (HTTP front door and gRPC),
 // which uses the stream_key identifier.
 //
-// Admission semantics: `admitted` rolls user-active, cluster entitlement,
-// suspension, and negative-balance into a single boolean. Free-tier-load and
-// per-tenant-cap are NOT enforced here (they live in Foghorn's PUSH_REWRITE
-// path); the facts needed to layer those checks caller-side are returned in
-// the response. Those two missing gates are INGEST-time admission concerns and
+// Admission semantics: closed tenants cannot resolve media; stream-key resolves
+// also require an active user. Tenant-owned media resolves use cluster
+// entitlement, suspension and balance. Foghorn enforces free-tier load and
+// per-tenant caps in PUSH_REWRITE using the facts returned in the response. Those admission gates
+// are INGEST-time admission concerns and
 // do not apply to playback resolution, so the playback caller is unaffected;
 // the playback-relevant gates (suspension, negative-balance) are already inside
 // `admitted`. Widening *managed-stream* ownership to tenants still requires
@@ -2408,7 +2417,7 @@ func (s *CommodoreServer) ResolveStreamContext(ctx context.Context, req *commodo
 		RequiresAuth:       resolved.RequiresAuth,
 	}
 
-	if !resolved.IsActive.Bool {
+	if identifierIsPublishIntent && !resolved.IsActive.Bool {
 		resp.Admitted = false
 		resp.AdmissionReason = "User account is inactive"
 		resp.RejectionReason = commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_USER_INACTIVE
@@ -2599,6 +2608,10 @@ func (s *CommodoreServer) ResolveStreamContext(ctx context.Context, req *commodo
 	// per-tenant-cap remain caller-side because they require Foghorn's local
 	// capacity state.
 	switch {
+	case billingStatus.GetGrantExpired():
+		resp.Admitted = false
+		resp.AdmissionReason = "Operator grant has expired"
+		resp.RejectionReason = commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_GRANT_EXPIRED
 	case resp.IsSuspended:
 		resp.Admitted = false
 		resp.AdmissionReason = "Tenant is suspended"
@@ -4750,7 +4763,7 @@ func (s *CommodoreServer) Login(ctx context.Context, req *commodorepb.LoginReque
 	// Check account status only after proving the password, so login does not
 	// leak account state for incorrect credentials.
 	if !user.IsActive {
-		if recordErr := s.recordLoginFailed(ctx, user.ID, user.TenantID, "password", "account_inactive"); recordErr != nil {
+		if recordErr := s.recordLoginFailed(ctx, user.ID, user.TenantID, "password", sharedauthority.ReasonAccountInactive); recordErr != nil {
 			return nil, recordErr
 		}
 		return nil, status.Error(codes.Unauthenticated, "account deactivated")
@@ -6444,7 +6457,7 @@ func (s *CommodoreServer) WalletLogin(ctx context.Context, req *commodorepb.Wall
 		return nil, status.Errorf(codes.Internal, "failed to generate token: %v", err)
 	}
 	if !profile.IsActive {
-		if recordErr := s.recordLoginFailed(ctx, userID, tenantID, "wallet", "account_inactive"); recordErr != nil {
+		if recordErr := s.recordLoginFailed(ctx, userID, tenantID, "wallet", sharedauthority.ReasonAccountInactive); recordErr != nil {
 			return nil, recordErr
 		}
 		return nil, status.Error(codes.Unauthenticated, "account deactivated")
@@ -10376,8 +10389,10 @@ func NewGRPCServer(ctx context.Context, cfg CommodoreServerConfig) (*grpc.Server
 	// revision) — so no Clip/VOD/DVR creation strands one plane.
 	go commodoreServer.runCreationIntentSweep(context.Background())
 
-	// Compile owner-service refresh obligations and independently deliver each
-	// signed authority version to every target Foghorn control cell.
+	// Retry tenant closures whose Quartermaster teardown has not completed.
+	go commodoreServer.runTenantAccountClosures(ctx)
+
+	// Compile and deliver signed authorities to each target Foghorn control cell.
 	go commodoreServer.runMediaAuthorityWorkers(context.Background())
 	go commodoreServer.runMediaAuthorityReconciler(context.Background())
 	go commodoreServer.runMediaAuthorityRetention(context.Background())
@@ -11062,7 +11077,7 @@ func (s *CommodoreServer) TerminateTenantStreams(ctx context.Context, req *fogho
 
 	targets := buildClusterFanoutTargets(route)
 	if len(targets) == 0 {
-		return nil, status.Errorf(codes.Unavailable, "no foghorn targets for tenant %s", req.TenantId)
+		return nil, status.Error(codes.Unavailable, "no foghorn targets available for tenant")
 	}
 
 	var totalStreams, totalSessions int32
@@ -11078,6 +11093,11 @@ func (s *CommodoreServer) TerminateTenantStreams(ctx context.Context, req *fogho
 			continue
 		}
 		foghornResp, _, callErr := client.TerminateTenantStreams(ctx, req.TenantId, req.Reason)
+		if foghornResp != nil {
+			totalStreams += foghornResp.StreamsTerminated
+			totalSessions += foghornResp.SessionsTerminated
+			allStreamNames = append(allStreamNames, foghornResp.StreamNames...)
+		}
 		if callErr != nil {
 			s.logger.WithError(callErr).WithFields(logging.Fields{
 				"tenant_id":  req.TenantId,
@@ -11087,20 +11107,12 @@ func (s *CommodoreServer) TerminateTenantStreams(ctx context.Context, req *fogho
 			failures++
 			continue
 		}
-		totalStreams += foghornResp.StreamsTerminated
-		totalSessions += foghornResp.SessionsTerminated
-		allStreamNames = append(allStreamNames, foghornResp.StreamNames...)
 	}
 
-	if totalStreams == 0 && totalSessions == 0 && lastErr != nil {
-		return nil, status.Errorf(codes.Unavailable, "failed to terminate streams on any cluster: %v", lastErr)
-	}
+	progress := &foghorncontrolpb.TerminateTenantStreamsResponse{StreamsTerminated: totalStreams, SessionsTerminated: totalSessions, StreamNames: allStreamNames}
 	if failures > 0 {
-		s.logger.WithError(lastErr).WithFields(logging.Fields{
-			"tenant_id":       req.TenantId,
-			"clusters_failed": failures,
-			"clusters_total":  len(targets),
-		}).Warn("Tenant termination partially failed: some clusters unreachable")
+		s.logger.WithError(lastErr).WithFields(logging.Fields{"tenant_id": req.TenantId, "clusters_failed": failures, "clusters_total": len(targets)}).Warn("Tenant termination remains pending on unreachable clusters")
+		return nil, grpcutil.PendingStreamStop(progress)
 	}
 
 	s.logger.WithFields(logging.Fields{
@@ -11139,12 +11151,41 @@ func (s *CommodoreServer) InvalidateTenantCache(ctx context.Context, req *foghor
 
 	targets := buildClusterFanoutTargets(route)
 	if len(targets) == 0 {
-		return nil, status.Errorf(codes.Unavailable, "no foghorn targets for tenant %s", req.TenantId)
+		if route != nil && (route.clusterID != "" || route.officialClusterID != "" || len(route.clusterPeers) > 0 || len(route.admissionPeers) > 0 || len(route.foghornAddrsByCluster) > 0) {
+			return nil, status.Error(codes.Unavailable, "tenant has clusters but Foghorn discovery returned no reachable targets")
+		}
+		return &foghorncontrolpb.InvalidateTenantCacheResponse{}, nil
 	}
 
 	var totalInvalidated int32
 	var lastErr error
 	failures := 0
+	expected := map[string]bool{}
+	add := func(id string) {
+		if id != "" {
+			expected[id] = true
+		}
+	}
+	if route != nil {
+		add(route.clusterID)
+		add(route.officialClusterID)
+		for _, peer := range route.clusterPeers {
+			add(peer.GetClusterId())
+		}
+		for _, peer := range route.admissionPeers {
+			add(peer.GetClusterId())
+		}
+		for id := range route.foghornAddrsByCluster {
+			add(id)
+		}
+	}
+	for _, target := range targets {
+		delete(expected, target.clusterID)
+	}
+	for id := range expected {
+		failures++
+		lastErr = status.Errorf(codes.Unavailable, "configured cell %s has no Foghorn address", id)
+	}
 	for _, target := range targets {
 		client, dialErr := s.foghornPool.GetOrCreate(foghornPoolKey(target.clusterID, target.addr), target.addr)
 		if dialErr != nil {
@@ -11166,15 +11207,9 @@ func (s *CommodoreServer) InvalidateTenantCache(ctx context.Context, req *foghor
 		totalInvalidated += foghornResp.EntriesInvalidated
 	}
 
-	if totalInvalidated == 0 && lastErr != nil {
-		return nil, status.Errorf(codes.Unavailable, "failed to invalidate cache on any cluster: %v", lastErr)
-	}
 	if failures > 0 {
-		s.logger.WithError(lastErr).WithFields(logging.Fields{
-			"tenant_id":       req.TenantId,
-			"clusters_failed": failures,
-			"clusters_total":  len(targets),
-		}).Warn("Tenant cache invalidation partially failed: some clusters unreachable")
+		s.logger.WithError(lastErr).WithFields(logging.Fields{"tenant_id": req.TenantId, "clusters_failed": failures, "clusters_total": len(targets) + len(expected)}).Warn("Tenant cache invalidation is incomplete")
+		return nil, status.Errorf(codes.Unavailable, "cache invalidation did not reach every configured cell: %v", lastErr)
 	}
 
 	s.logger.WithFields(logging.Fields{
@@ -11324,6 +11359,12 @@ func (s *CommodoreServer) CreateUserInTenant(ctx context.Context, req *commodore
 		Role:         role, Permissions: permissions, CreatedAt: sql.NullTime{Time: now, Valid: true},
 	})
 	if err != nil {
+		if state := fwdb.SQLState(err); state == "23514" {
+			closed, closureErr := queries.IsTenantAccountClosed(ctx, tenantID)
+			if closureErr == nil && closed {
+				return nil, status.Error(codes.FailedPrecondition, "tenant account is permanently closed")
+			}
+		}
 		return nil, status.Errorf(codes.Internal, "failed to create user: %v", err)
 	}
 

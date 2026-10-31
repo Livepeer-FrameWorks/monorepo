@@ -32,7 +32,7 @@ const prepaidStatementUsageToleranceMicro = 10_000
 // PrepaidStatementDetails is what a prepaid statement states besides its line
 // items. It is stored as usage_details.statement. Amounts are EUR cents.
 type PrepaidStatementDetails struct {
-	// ClosesPrepaidPhase is set on the statement a switch to postpaid wrote.
+	// ClosesPrepaidPhase marks a statement closing a pricing/model phase.
 	ClosesPrepaidPhase bool `json:"closes_prepaid_phase"`
 	// RatedUsageCents is the period's usage at rated prices, without fees.
 	RatedUsageCents int64 `json:"rated_usage_cents"`
@@ -456,7 +456,7 @@ func logPrepaidStatement(logger logging.Logger, run *prepaidStatementRun, result
 // transaction. It reports whether it wrote the statement.
 func (jm *JobManager) finalizePrepaidStatementPeriod(ctx context.Context, subscription purserdb.ListSubscriptionsDueForInvoiceRow, periodStart, periodEnd time.Time, draftInvoiceID string) bool {
 	tenantID := subscription.TenantID
-	tier, err := billingpkg.LoadEffectiveTier(ctx, jm.db, tenantID)
+	tier, err := billingpkg.LoadSubscriptionEffectiveTierAt(ctx, jm.db, tenantID, periodEnd)
 	if err != nil {
 		jm.logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to load tier for prepaid statement")
 		return false
@@ -489,7 +489,13 @@ func (jm *JobManager) finalizePrepaidStatementPeriod(ctx context.Context, subscr
 		if txErr := purserdb.New(tx).LockSubscriptionForPeriodClose(ctx, tenantID); txErr != nil {
 			return fmt.Errorf("lock subscription: %w", txErr)
 		}
-		var txErr error
+		current, txErr := purserdb.New(tx).GetSubscriptionForPhaseClose(ctx, tenantID)
+		if txErr != nil {
+			return fmt.Errorf("reload subscription: %w", txErr)
+		}
+		if !sameInvoiceSubscription(purserdb.ListSubscriptionsDueForInvoiceRow(current), subscription) {
+			return ErrPrepaidPhaseChanged
+		}
 		result, txErr = writePrepaidStatementTx(ctx, tx, run, draftInvoiceID, periodStart, time.Now().UTC())
 		if txErr != nil {
 			return txErr
@@ -527,12 +533,9 @@ func (jm *JobManager) finalizePrepaidStatementPeriod(ctx context.Context, subscr
 // meanwhile; the switch is retried.
 var ErrPrepaidPhaseChanged = errors.New("the prepaid subscription or its usage changed while its closing statement was prepared")
 
-// PrepaidPhaseClose closes a prepaid tenant's prepaid phase when it switches
-// to postpaid. Its usage was paid from the balance as it was reported, so it
-// belongs on a prepaid statement and never on the postpaid invoice: the
-// statement covers the period's start up to the switch, and the postpaid
-// period starts at the switch and ends where the prepaid period would have.
-// Rating happens before the switch transaction, writing inside it.
+// PrepaidPhaseClose closes a prepaid pricing/model phase with a statement.
+// Usage already paid from the balance is not charged again. Rating runs before
+// the transaction; writing and starting the next phase happen inside it.
 type PrepaidPhaseClose struct {
 	logger        logging.Logger
 	tenantID      string
@@ -545,7 +548,7 @@ type PrepaidPhaseClose struct {
 	// was rated from; CountPhaseUsageReceivedBefore at commit must still
 	// return it.
 	received int64
-	// run is nil when the switch falls on the period start, which leaves no
+	// run is nil when the boundary falls on the period start, which leaves no
 	// prepaid phase to state.
 	run    *prepaidStatementRun
 	result prepaidStatementResult
@@ -558,7 +561,7 @@ type PrepaidPhaseClose struct {
 // stored period, else the calendar month of at.
 func currentBillingPeriod(start, end, mollieNext sql.NullTime, at time.Time) (time.Time, time.Time) {
 	if mollieNext.Valid {
-		periodStart, periodEnd := mollieAnchoredPeriod(mollieNext.Time, start)
+		periodStart, periodEnd := mollieAnchoredPeriod(mollieNext.Time, start, end)
 		return periodStart.UTC(), periodEnd.UTC()
 	}
 	return prepaidPhasePeriod(start, end, at)
@@ -586,6 +589,15 @@ func countPhaseReceived(ctx context.Context, queries *purserdb.Queries, tenantID
 // the usage that reached Purser after the switch by its records' receipt
 // time, which the database clock wrote.
 func PreparePrepaidPhaseClose(ctx context.Context, db *sql.DB, logger logging.Logger, svc *Service, tenantID string) (*PrepaidPhaseClose, error) {
+	return preparePrepaidPhaseClose(ctx, db, logger, svc, tenantID, time.Time{}, false)
+}
+
+// PreparePrepaidGrantBoundary settles prior prepaid usage before a grant changes its prices.
+func PreparePrepaidGrantBoundary(ctx context.Context, db *sql.DB, logger logging.Logger, svc *Service, tenantID string, at time.Time) (*PrepaidPhaseClose, error) {
+	return preparePrepaidPhaseClose(ctx, db, logger, svc, tenantID, at, true)
+}
+
+func preparePrepaidPhaseClose(ctx context.Context, db *sql.DB, logger logging.Logger, svc *Service, tenantID string, at time.Time, grantBoundary bool) (*PrepaidPhaseClose, error) {
 	subscription, err := purserdb.New(db).GetSubscriptionPrepaidPhase(ctx, tenantID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -597,6 +609,9 @@ func PreparePrepaidPhaseClose(ctx context.Context, db *sql.DB, logger logging.Lo
 		return nil, nil
 	}
 	switchAt := subscription.DatabaseNow.UTC().Truncate(time.Microsecond)
+	if !at.IsZero() {
+		switchAt = at.UTC().Truncate(time.Microsecond)
+	}
 	phaseStart, phaseEnd := currentBillingPeriod(subscription.BillingPeriodStart, subscription.BillingPeriodEnd, subscription.MollieNextPaymentDate, switchAt)
 	closing := &PrepaidPhaseClose{
 		logger: logger, tenantID: tenantID,
@@ -607,9 +622,14 @@ func PreparePrepaidPhaseClose(ctx context.Context, db *sql.DB, logger logging.Lo
 		return closing, nil
 	}
 	if !switchAt.Before(phaseEnd) {
-		closing.nextPeriodEnd = switchAt.AddDate(0, 1, 0)
+		closing.nextPeriodEnd = billing.NextMonthlyAnniversary(switchAt)
 	}
-	tier, err := billingpkg.LoadSubscriptionEffectiveTier(ctx, db, tenantID)
+	var tier *billingpkg.EffectiveTier
+	if grantBoundary {
+		tier, err = billingpkg.LoadSubscriptionEffectiveTierAt(ctx, db, tenantID, switchAt)
+	} else {
+		tier, err = billingpkg.LoadSubscriptionEffectiveTier(ctx, db, tenantID)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("load prepaid tier: %w", err)
 	}
@@ -650,15 +670,10 @@ func prepaidPhasePeriod(start, end sql.NullTime, at time.Time) (time.Time, time.
 	return monthStart, monthStart.AddDate(0, 1, 0)
 }
 
-// CommitTx writes the closing statement and starts the postpaid period at the
-// switch, inside the switch's transaction and before it changes the billing
-// model. The caller holds the subscription row lock. It reports whether it
-// closed a phase; without one the caller keeps its own period handling. A
-// subscription that changed since the statement was rated, or usage of the
-// phase that reached Purser meanwhile, returns ErrPrepaidPhaseChanged. The
-// statement settles what the phase's usage still owes the balance. The open
-// draft overlapping the phase becomes the statement. It may run again when
-// the transaction retries.
+// CommitTx writes the closing statement and starts the next billing phase.
+// The caller holds the subscription row lock. Changed subscription/pricing or
+// received usage returns ErrPrepaidPhaseChanged. The statement settles any
+// remaining usage balance, and an overlapping draft becomes that statement.
 func (c *PrepaidPhaseClose) CommitTx(ctx context.Context, tx *sql.Tx) (bool, error) {
 	if c == nil {
 		return false, nil
@@ -697,10 +712,10 @@ func (c *PrepaidPhaseClose) CommitTx(ctx context.Context, tx *sql.Tx) (bool, err
 		PeriodStart: c.switchAt, PeriodEnd: c.nextPeriodEnd, TenantID: c.tenantID,
 	})
 	if err != nil {
-		return false, fmt.Errorf("start the postpaid period: %w", err)
+		return false, fmt.Errorf("start the next billing phase: %w", err)
 	}
 	if rows != 1 {
-		return false, fmt.Errorf("start the postpaid period: no subscription for tenant %s", c.tenantID)
+		return false, fmt.Errorf("start the next billing phase: no subscription for tenant %s", c.tenantID)
 	}
 	c.closed = true
 	return true, nil
@@ -713,11 +728,11 @@ func (c *PrepaidPhaseClose) Log() {
 	}
 	logPrepaidStatement(c.logger, c.run, c.result)
 	c.logger.WithFields(logging.Fields{
-		"tenant_id":           c.tenantID,
-		"statement_id":        c.result.statementID,
-		"postpaid_from":       c.switchAt.Format(time.RFC3339Nano),
-		"postpaid_period_end": c.nextPeriodEnd.Format(time.RFC3339),
-	}).Info("Closed prepaid phase at switch to postpaid")
+		"tenant_id":        c.tenantID,
+		"statement_id":     c.result.statementID,
+		"phase_from":       c.switchAt.Format(time.RFC3339Nano),
+		"phase_period_end": c.nextPeriodEnd.Format(time.RFC3339),
+	}).Info("Closed prepaid billing phase")
 }
 
 // StatementID is the closing statement written by CommitTx, empty when none.
@@ -731,3 +746,6 @@ func (c *PrepaidPhaseClose) StatementID() string {
 func sameNullTime(a, b sql.NullTime) bool {
 	return a.Valid == b.Valid && (!a.Valid || a.Time.Equal(b.Time))
 }
+
+// BoundaryAt returns the instant separating the old and next pricing phases.
+func (c *PrepaidPhaseClose) BoundaryAt() time.Time { return c.switchAt }

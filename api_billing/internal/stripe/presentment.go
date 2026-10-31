@@ -18,13 +18,18 @@ import (
 // SetupCheckoutParams describes a Checkout Session that saves a card for
 // off-session charges without creating a subscription.
 type SetupCheckoutParams struct {
-	CustomerID     string
-	TenantID       string
-	TierID         string
-	Currency       string
-	SuccessURL     string
-	CancelURL      string
-	IdempotencyKey string
+	CustomerID        string
+	TenantID          string
+	TierID            string
+	Currency          string
+	SuccessURL        string
+	CancelURL         string
+	IdempotencyKey    string
+	ReservationID     string
+	ExpiresAt         time.Time
+	ExistingSessionID string
+	ReplayBefore      time.Time
+	ResumeOnly        bool
 }
 
 // PurposeSubscriptionSetup marks a setup-mode Checkout Session that activates a
@@ -35,6 +40,22 @@ const PurposeSubscriptionSetup = "subscription_setup"
 // tenant's presentment currency. Card is the only method: the saved method is
 // charged off-session in USD or GBP.
 func (c *Client) CreateSetupCheckoutSession(ctx context.Context, params SetupCheckoutParams) (*stripe.CheckoutSession, error) {
+	if params.ResumeOnly || params.ExistingSessionID != "" {
+		sess, err := c.ReservedCheckout(ctx, params.CustomerID, params.ReservationID, params.ExistingSessionID)
+		if err != nil {
+			return nil, err
+		}
+		if sess == nil {
+			if time.Now().Before(params.ReplayBefore) {
+				params.ResumeOnly = false
+				params.ExistingSessionID = ""
+				return c.CreateSetupCheckoutSession(ctx, params)
+			}
+			return nil, fmt.Errorf("checkout response is unbound; inspect admin billing recovery list before retrying")
+		}
+		return sess, nil
+	}
+
 	if params.IdempotencyKey == "" {
 		return nil, fmt.Errorf("CreateSetupCheckoutSession requires a deterministic IdempotencyKey")
 	}
@@ -42,10 +63,11 @@ func (c *Client) CreateSetupCheckoutSession(ctx context.Context, params SetupChe
 		return nil, fmt.Errorf("CreateSetupCheckoutSession requires a customer and currency")
 	}
 	metadata := map[string]string{
-		"tenant_id":    params.TenantID,
-		"tier_id":      params.TierID,
-		"reference_id": params.TierID,
-		"purpose":      PurposeSubscriptionSetup,
+		"checkout_reservation_id": params.ReservationID,
+		"tenant_id":               params.TenantID,
+		"tier_id":                 params.TierID,
+		"reference_id":            params.TierID,
+		"purpose":                 PurposeSubscriptionSetup,
 	}
 	sessionParams := &stripe.CheckoutSessionParams{
 		Customer:           stripe.String(params.CustomerID),
@@ -56,6 +78,9 @@ func (c *Client) CreateSetupCheckoutSession(ctx context.Context, params SetupChe
 		Metadata:           metadata,
 		PaymentMethodTypes: []*string{stripe.String("card")},
 		SetupIntentData:    &stripe.CheckoutSessionSetupIntentDataParams{Metadata: metadata},
+	}
+	if !params.ExpiresAt.IsZero() {
+		sessionParams.ExpiresAt = stripe.Int64(params.ExpiresAt.Unix())
 	}
 	sessionParams.Context = ctx
 	sessionParams.SetIdempotencyKey(params.IdempotencyKey)

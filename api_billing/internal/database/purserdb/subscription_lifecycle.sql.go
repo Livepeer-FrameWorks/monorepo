@@ -467,20 +467,17 @@ func (q *Queries) RecordAccountClosureCollectionWriteoffs(ctx context.Context, t
 
 const updateTenantSubscriptionFields = `-- name: UpdateTenantSubscriptionFields :execrows
 UPDATE purser.tenant_subscriptions
-SET tier_id = CASE WHEN $1::boolean THEN $2::text::uuid ELSE tier_id END,
-    billing_email = CASE WHEN $3::boolean THEN $4::text ELSE billing_email END,
-    payment_method = CASE WHEN $5::boolean THEN $6::text ELSE payment_method END,
-    status = CASE WHEN $7::boolean THEN $8::text ELSE status END,
-    billing_period_start = CASE WHEN $9::boolean THEN $10 ELSE billing_period_start END,
-    billing_period_end = CASE WHEN $11::boolean THEN $12 ELSE billing_period_end END,
-    custom_features = CASE WHEN $13::boolean THEN $14::jsonb ELSE custom_features END,
+SET billing_email = CASE WHEN $1::boolean THEN $2::text ELSE billing_email END,
+    payment_method = CASE WHEN $3::boolean THEN $4::text ELSE payment_method END,
+    status = CASE WHEN $5::boolean THEN $6::text ELSE status END,
+    billing_period_start = CASE WHEN $7::boolean THEN $8 ELSE billing_period_start END,
+    billing_period_end = CASE WHEN $9::boolean THEN $10 ELSE billing_period_end END,
+    custom_features = CASE WHEN $11::boolean THEN $12::jsonb ELSE custom_features END,
     updated_at = NOW()
-WHERE tenant_id = $15::text::uuid AND status != 'cancelled'
+WHERE tenant_id = $13::text::uuid AND status != 'cancelled'
 `
 
 type UpdateTenantSubscriptionFieldsParams struct {
-	SetTierID             bool            `db:"set_tier_id" json:"set_tier_id"`
-	TierID                string          `db:"tier_id" json:"tier_id"`
 	SetBillingEmail       bool            `db:"set_billing_email" json:"set_billing_email"`
 	BillingEmail          string          `db:"billing_email" json:"billing_email"`
 	SetPaymentMethod      bool            `db:"set_payment_method" json:"set_payment_method"`
@@ -498,8 +495,6 @@ type UpdateTenantSubscriptionFieldsParams struct {
 
 func (q *Queries) UpdateTenantSubscriptionFields(ctx context.Context, arg UpdateTenantSubscriptionFieldsParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, updateTenantSubscriptionFields,
-		arg.SetTierID,
-		arg.TierID,
 		arg.SetBillingEmail,
 		arg.BillingEmail,
 		arg.SetPaymentMethod,

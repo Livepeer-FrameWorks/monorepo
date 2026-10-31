@@ -1,0 +1,36 @@
+package handlers
+
+import (
+	"strings"
+	"testing"
+	"time"
+
+	"frameworks/api_billing/internal/appconfig/appconfigtest"
+	"frameworks/api_billing/internal/subscriptions"
+)
+
+func TestFreeFallbackNoticesRender(t *testing.T) {
+	appconfigtest.Set(t, "WEBAPP_PUBLIC_URL", "https://app.example.test")
+	moveAt := time.Date(2026, 11, 13, 9, 0, 0, 0, time.UTC)
+	es := &EmailService{}
+	for _, c := range []struct {
+		notice FreeFallbackNotice
+		want   string
+	}{
+		{FreeFallbackNotice{Reason: subscriptions.FallbackPaymentFailed, MoveAt: moveAt}, "November 13, 2026"},
+		{FreeFallbackNotice{Reason: subscriptions.FallbackPaymentFailed, MoveAt: moveAt, Moved: true}, "final invoice covers your usage up to the move"},
+		{FreeFallbackNotice{Reason: subscriptions.FallbackCancelled, MoveAt: moveAt, Moved: true}, "Your cancellation is complete"},
+	} {
+		templateName, subject := freeFallbackTemplate(c.notice)
+		if subject == "" {
+			t.Fatalf("%s has no subject", templateName)
+		}
+		body, err := es.renderBillingTemplate(templateName, EmailData{TenantName: "Acme", DueDate: c.notice.MoveAt, LoginURL: "https://app.example.test/account/billing"})
+		if err != nil {
+			t.Fatalf("%s: %v", templateName, err)
+		}
+		if !strings.Contains(body, c.want) {
+			t.Fatalf("%s does not say %q", templateName, c.want)
+		}
+	}
+}

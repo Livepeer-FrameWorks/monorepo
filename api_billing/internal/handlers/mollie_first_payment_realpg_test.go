@@ -26,6 +26,17 @@ func TestMollieFirstPaymentUsesThePresentmentCurrencyItWasCreatedUnder_RealPG(t 
 	ctx := context.Background()
 	fixture, mollieClient := installMollieFixture(t)
 	service := &Service{db: db, logger: logging.NewLogger(), mollieClient: mollieClient}
+	service.chargeAdvanceBaseFee = func(ctx context.Context, tenantID string) error {
+		var count int
+		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM purser.mollie_mandates WHERE tenant_id=$1 AND status='valid'`, tenantID).Scan(&count); err != nil {
+			return err
+		}
+		if count != 1 {
+			t.Errorf("advance charge ran without its committed mandate: %d", count)
+		}
+		return nil
+	}
+
 	tierID := insertTierChangeTier(t, db, "20.00")
 
 	cases := []struct {
@@ -60,7 +71,7 @@ func TestMollieFirstPaymentUsesThePresentmentCurrencyItWasCreatedUnder_RealPG(t 
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := queries.SetProviderIntentPaymentOpen(ctx, purserdb.SetProviderIntentPaymentOpenParams{
+			if err := queries.SetProviderIntentPaymentOpen(ctx, purserdb.SetProviderIntentPaymentOpenParams{TenantID: tenantID,
 				PaymentID: sql.NullString{String: paymentID, Valid: true}, IntentID: intentID,
 			}); err != nil {
 				t.Fatal(err)
@@ -115,5 +126,44 @@ func TestMollieFirstPaymentUsesThePresentmentCurrencyItWasCreatedUnder_RealPG(t 
 					activated, paymentMethod.String, tc.wantActivated, tc.createdUnder)
 			}
 		})
+	}
+}
+
+func TestMollieFirstPaymentRecoveryWinsDuringMandateFetch_RealPG(t *testing.T) {
+	db := startPurserUsageRealPG(t)
+	ctx := t.Context()
+	fixture, client := installMollieFixture(t)
+	tenant := uuid.NewString()
+	tier := insertTierChangeTier(t, db, "20.00")
+	q := purserdb.New(db)
+	if _, err := db.Exec(`INSERT INTO purser.tenant_subscriptions(tenant_id,tier_id,status,billing_model)VALUES($1,$2,'active','prepaid')`, tenant, tier); err != nil {
+		t.Fatal(err)
+	}
+	id, err := q.UpsertMollieFirstPaymentIntent(ctx, purserdb.UpsertMollieFirstPaymentIntentParams{TenantID: tenant, TierID: tier, Currency: "EUR", IdempotencyKey: tenant, AmountCents: 2000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = q.SetProviderIntentPaymentOpen(ctx, purserdb.SetProviderIntentPaymentOpenParams{TenantID: tenant, IntentID: id, PaymentID: sql.NullString{String: "tr_race", Valid: true}}); err != nil {
+		t.Fatal(err)
+	}
+	fixture.route(http.MethodGet, "/v2/payments/tr_race", func(recordedProviderRequest) (int, any) {
+		return 200, map[string]any{"id": "tr_race", "status": "paid", "paidAt": time.Now().UTC().Format(time.RFC3339), "sequenceType": "first", "customerId": "customer", "mandateId": "mandate", "amount": map[string]string{"currency": "EUR", "value": "20.00"}, "metadata": map[string]string{"tenant_id": tenant, "payment_type": "first_payment", "checkout_reservation_id": id}}
+	})
+	fixture.route(http.MethodGet, "/v2/customers/customer/mandates/mandate", func(recordedProviderRequest) (int, any) {
+		if err := q.FinishProviderCheckoutIntent(ctx, purserdb.FinishProviderCheckoutIntentParams{TenantID: tenant, IntentID: id, Status: "expired"}); err != nil {
+			return 500, map[string]string{"detail": err.Error()}
+		}
+		return 200, map[string]any{"id": "mandate", "status": "valid", "method": "creditcard", "createdAt": time.Now().UTC().Format(time.RFC3339)}
+	})
+	svc := &Service{db: db, logger: logging.NewLogger(), mollieClient: client}
+	if _, err = svc.handleMolliePaymentWebhook(ctx, "tr_race", []byte("id=tr_race")); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err = db.QueryRow(`SELECT COUNT(*) FROM purser.mollie_mandates WHERE tenant_id=$1`, tenant).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("recovery lost the race: expired fee retained %d mandate(s)", count)
 	}
 }

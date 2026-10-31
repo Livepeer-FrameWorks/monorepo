@@ -12,6 +12,8 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	"github.com/google/uuid"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 const (
@@ -145,6 +147,14 @@ func (s *PurserServer) deliverMediaAuthorityRefreshRow(ctx context.Context, clie
 		if _, _, reconcileErr := s.reconcileCanonicalTierClusterAccess(ctx, row.TenantID); reconcileErr != nil {
 			s.incMediaAuthorityRefreshFailure("entitlement_reconcile")
 			return false, s.failMediaAuthorityRefresh(ctx, queries, id, row, fmt.Errorf("reconcile tenant entitlements: %w", reconcileErr))
+		}
+		if err := s.invalidateTenantCache(ctx, row.TenantID, row.Reason); err != nil {
+			if status.Code(err) != codes.NotFound {
+				s.incMediaAuthorityRefreshFailure("cache_invalidation")
+				if s.logger != nil {
+					s.logger.WithError(err).WithField("tenant_id", row.TenantID).Warn("Tenant cache invalidation failed; continuing media authority refresh")
+				}
+			}
 		}
 	}
 	callCtx, cancel := context.WithTimeout(ctx, mediaAuthorityRefreshRPCTimeout)

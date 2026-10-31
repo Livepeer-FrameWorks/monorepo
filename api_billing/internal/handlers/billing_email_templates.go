@@ -51,9 +51,42 @@ var billingEmailMetaByName = map[string]billingEmailMeta{
 		Eyebrow:   "Account notice",
 		Title:     "Account suspended",
 	},
+	"payment_grace_started": {
+		Preheader: "Your plan keeps running while you update your payment details.",
+		Eyebrow:   "Billing notice",
+		Title:     "We could not collect your payment",
+	},
+	"moved_to_free": {
+		Preheader: "Your streams keep running on the Free plan.",
+		Eyebrow:   "Billing notice",
+		Title:     "Your account moved to Free",
+	},
+	"cancellation_moved_to_free": {
+		Preheader: "Your cancellation is complete.",
+		Eyebrow:   "Billing notice",
+		Title:     "Your subscription has ended",
+	},
 }
 
 var billingEmailTemplates = map[string]string{
+	"payment_grace_started": `
+<p style="margin:0 0 16px; color:#24283b; font-size:15px; line-height:23px;">{{if .TenantName}}Hello {{.TenantName}},{{else}}Hello,{{end}}</p>
+<p style="margin:0 0 18px; color:#24283b; font-size:15px; line-height:23px;">Your payment provider stopped collecting for your FrameWorks subscription. Your plan and your streams keep running until {{.DueDate.UTC.Format "January 2, 2006"}}.</p>
+<p style="margin:0; color:#24283b; font-size:15px; line-height:23px;">Set up payment again before that date to stay on your plan. Otherwise your account moves to the Free plan and you receive a final invoice for your usage up to the move.</p>
+{{template "action" (action .LoginURL "Update payment")}}`,
+
+	"moved_to_free": `
+<p style="margin:0 0 16px; color:#24283b; font-size:15px; line-height:23px;">{{if .TenantName}}Hello {{.TenantName}},{{else}}Hello,{{end}}</p>
+<p style="margin:0 0 18px; color:#24283b; font-size:15px; line-height:23px;">We could not restore payment for your subscription, so your account has moved to the Free plan. Your streams keep running within the Free plan's limits.</p>
+<p style="margin:0; color:#24283b; font-size:15px; line-height:23px;">A final invoice covers your usage up to the move. Any unpaid invoices need settling before you can choose a paid plan again.</p>
+{{template "action" (action .LoginURL "Go to billing")}}`,
+
+	"cancellation_moved_to_free": `
+<p style="margin:0 0 16px; color:#24283b; font-size:15px; line-height:23px;">{{if .TenantName}}Hello {{.TenantName}},{{else}}Hello,{{end}}</p>
+<p style="margin:0 0 18px; color:#24283b; font-size:15px; line-height:23px;">Your cancellation is complete and your account is now on the Free plan. Your streams keep running within the Free plan's limits.</p>
+<p style="margin:0; color:#24283b; font-size:15px; line-height:23px;">A final invoice covers any usage in your last period. You can return to a paid plan at any time.</p>
+{{template "action" (action .LoginURL "Go to billing")}}`,
+
 	"invoice_created": `
 <p style="margin:0 0 16px; color:#24283b; font-size:15px; line-height:23px;">{{if .TenantName}}Hello {{.TenantName}},{{else}}Hello,{{end}}</p>
 <p style="margin:0 0 18px; color:#24283b; font-size:15px; line-height:23px;">A new invoice has been generated for your FrameWorks account.</p>

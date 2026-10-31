@@ -35,6 +35,8 @@ const (
 	// A rotated refresh token was replayed after its grace period, so two
 	// parties hold the same session line.
 	SessionRevocationReason_SESSION_REVOCATION_REASON_REFRESH_TOKEN_REUSE SessionRevocationReason = 3
+	// A platform operator deactivated the user or closed the tenant account.
+	SessionRevocationReason_SESSION_REVOCATION_REASON_OPERATOR_DEACTIVATION SessionRevocationReason = 4
 )
 
 // Enum value maps for SessionRevocationReason.
@@ -44,12 +46,14 @@ var (
 		1: "SESSION_REVOCATION_REASON_LOGOUT",
 		2: "SESSION_REVOCATION_REASON_PASSWORD_RESET",
 		3: "SESSION_REVOCATION_REASON_REFRESH_TOKEN_REUSE",
+		4: "SESSION_REVOCATION_REASON_OPERATOR_DEACTIVATION",
 	}
 	SessionRevocationReason_value = map[string]int32{
-		"SESSION_REVOCATION_REASON_UNSPECIFIED":         0,
-		"SESSION_REVOCATION_REASON_LOGOUT":              1,
-		"SESSION_REVOCATION_REASON_PASSWORD_RESET":      2,
-		"SESSION_REVOCATION_REASON_REFRESH_TOKEN_REUSE": 3,
+		"SESSION_REVOCATION_REASON_UNSPECIFIED":           0,
+		"SESSION_REVOCATION_REASON_LOGOUT":                1,
+		"SESSION_REVOCATION_REASON_PASSWORD_RESET":        2,
+		"SESSION_REVOCATION_REASON_REFRESH_TOKEN_REUSE":   3,
+		"SESSION_REVOCATION_REASON_OPERATOR_DEACTIVATION": 4,
 	}
 )
 
@@ -876,6 +880,96 @@ func (x *ClusterSubscriptionRejected) GetReason() string {
 	return ""
 }
 
+// UserActiveChanged records an account access change; playback permission is unchanged.
+type UserActiveChanged struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	UserId        string                 `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	Active        bool                   `protobuf:"varint,2,opt,name=active,proto3" json:"active,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UserActiveChanged) Reset() {
+	*x = UserActiveChanged{}
+	mi := &file_events_internal_v1_tenants_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UserActiveChanged) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UserActiveChanged) ProtoMessage() {}
+
+func (x *UserActiveChanged) ProtoReflect() protoreflect.Message {
+	mi := &file_events_internal_v1_tenants_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UserActiveChanged.ProtoReflect.Descriptor instead.
+func (*UserActiveChanged) Descriptor() ([]byte, []int) {
+	return file_events_internal_v1_tenants_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *UserActiveChanged) GetUserId() string {
+	if x != nil {
+		return x.UserId
+	}
+	return ""
+}
+
+func (x *UserActiveChanged) GetActive() bool {
+	if x != nil {
+		return x.Active
+	}
+	return false
+}
+
+// TenantAccountClosed marks local account access inactive; operator reasons remain private.
+type TenantAccountClosed struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TenantAccountClosed) Reset() {
+	*x = TenantAccountClosed{}
+	mi := &file_events_internal_v1_tenants_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TenantAccountClosed) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TenantAccountClosed) ProtoMessage() {}
+
+func (x *TenantAccountClosed) ProtoReflect() protoreflect.Message {
+	mi := &file_events_internal_v1_tenants_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TenantAccountClosed.ProtoReflect.Descriptor instead.
+func (*TenantAccountClosed) Descriptor() ([]byte, []int) {
+	return file_events_internal_v1_tenants_proto_rawDescGZIP(), []int{14}
+}
+
 var File_events_internal_v1_tenants_proto protoreflect.FileDescriptor
 
 const file_events_internal_v1_tenants_proto_rawDesc = "" +
@@ -949,12 +1043,19 @@ const file_events_internal_v1_tenants_proto_rawDesc = "" +
 	"cluster_id\x18\x02 \x01(\tR\tclusterId\x12W\n" +
 	"\rreject_reason\x18\x03 \x01(\x0e22.frameworks.events.internal.v1.ClusterRejectReasonR\frejectReason\x12\x16\n" +
 	"\x06reason\x18\x04 \x01(\tR\x06reason:>\xc2\xf3\x18:\n" +
-	"\x1dcluster.subscription_rejected\x10\x02\x18\x01\"\x15cluster_subscriptions*\xcb\x01\n" +
+	"\x1dcluster.subscription_rejected\x10\x02\x18\x01\"\x15cluster_subscriptions\"j\n" +
+	"\x11UserActiveChanged\x12\x17\n" +
+	"\auser_id\x18\x01 \x01(\tR\x06userId\x12\x16\n" +
+	"\x06active\x18\x02 \x01(\bR\x06active:$\xc2\xf3\x18 \n" +
+	"\x13user.active_changed\x10\x02\x18\x01\"\x05users\"D\n" +
+	"\x13TenantAccountClosed:-\xc2\xf3\x18)\n" +
+	"\x1auser.tenant_account_closed\x10\x02\x18\x01\"\atenants*\x80\x02\n" +
 	"\x17SessionRevocationReason\x12)\n" +
 	"%SESSION_REVOCATION_REASON_UNSPECIFIED\x10\x00\x12$\n" +
 	" SESSION_REVOCATION_REASON_LOGOUT\x10\x01\x12,\n" +
 	"(SESSION_REVOCATION_REASON_PASSWORD_RESET\x10\x02\x121\n" +
-	"-SESSION_REVOCATION_REASON_REFRESH_TOKEN_REUSE\x10\x03*\x94\x02\n" +
+	"-SESSION_REVOCATION_REASON_REFRESH_TOKEN_REUSE\x10\x03\x123\n" +
+	"/SESSION_REVOCATION_REASON_OPERATOR_DEACTIVATION\x10\x04*\x94\x02\n" +
 	"\x13ClusterRejectReason\x12%\n" +
 	"!CLUSTER_REJECT_REASON_UNSPECIFIED\x10\x00\x12\"\n" +
 	"\x1eCLUSTER_REJECT_REASON_CAPACITY\x10\x01\x12 \n" +
@@ -977,7 +1078,7 @@ func file_events_internal_v1_tenants_proto_rawDescGZIP() []byte {
 }
 
 var file_events_internal_v1_tenants_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_events_internal_v1_tenants_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
+var file_events_internal_v1_tenants_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
 var file_events_internal_v1_tenants_proto_goTypes = []any{
 	(SessionRevocationReason)(0),         // 0: frameworks.events.internal.v1.SessionRevocationReason
 	(ClusterRejectReason)(0),             // 1: frameworks.events.internal.v1.ClusterRejectReason
@@ -994,16 +1095,18 @@ var file_events_internal_v1_tenants_proto_goTypes = []any{
 	(*ClusterSubscriptionRequested)(nil), // 12: frameworks.events.internal.v1.ClusterSubscriptionRequested
 	(*ClusterSubscriptionApproved)(nil),  // 13: frameworks.events.internal.v1.ClusterSubscriptionApproved
 	(*ClusterSubscriptionRejected)(nil),  // 14: frameworks.events.internal.v1.ClusterSubscriptionRejected
-	(*common.SignupAttribution)(nil),     // 15: common.SignupAttribution
-	(*timestamppb.Timestamp)(nil),        // 16: google.protobuf.Timestamp
-	(*structpb.Struct)(nil),              // 17: google.protobuf.Struct
+	(*UserActiveChanged)(nil),            // 15: frameworks.events.internal.v1.UserActiveChanged
+	(*TenantAccountClosed)(nil),          // 16: frameworks.events.internal.v1.TenantAccountClosed
+	(*common.SignupAttribution)(nil),     // 17: common.SignupAttribution
+	(*timestamppb.Timestamp)(nil),        // 18: google.protobuf.Timestamp
+	(*structpb.Struct)(nil),              // 19: google.protobuf.Struct
 }
 var file_events_internal_v1_tenants_proto_depIdxs = []int32{
-	15, // 0: frameworks.events.internal.v1.TenantCreated.attribution:type_name -> common.SignupAttribution
-	16, // 1: frameworks.events.internal.v1.UserSessionsRevoked.revoked_at:type_name -> google.protobuf.Timestamp
+	17, // 0: frameworks.events.internal.v1.TenantCreated.attribution:type_name -> common.SignupAttribution
+	18, // 1: frameworks.events.internal.v1.UserSessionsRevoked.revoked_at:type_name -> google.protobuf.Timestamp
 	0,  // 2: frameworks.events.internal.v1.UserSessionsRevoked.reason:type_name -> frameworks.events.internal.v1.SessionRevocationReason
-	17, // 3: frameworks.events.internal.v1.ClusterUpdated.before_state:type_name -> google.protobuf.Struct
-	17, // 4: frameworks.events.internal.v1.ClusterUpdated.after_state:type_name -> google.protobuf.Struct
+	19, // 3: frameworks.events.internal.v1.ClusterUpdated.before_state:type_name -> google.protobuf.Struct
+	19, // 4: frameworks.events.internal.v1.ClusterUpdated.after_state:type_name -> google.protobuf.Struct
 	1,  // 5: frameworks.events.internal.v1.ClusterSubscriptionRejected.reject_reason:type_name -> frameworks.events.internal.v1.ClusterRejectReason
 	6,  // [6:6] is the sub-list for method output_type
 	6,  // [6:6] is the sub-list for method input_type
@@ -1023,7 +1126,7 @@ func file_events_internal_v1_tenants_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_events_internal_v1_tenants_proto_rawDesc), len(file_events_internal_v1_tenants_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   13,
+			NumMessages:   15,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

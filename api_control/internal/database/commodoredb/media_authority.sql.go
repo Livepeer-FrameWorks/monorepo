@@ -1077,23 +1077,6 @@ func (q *Queries) GetCurrentMediaAuthorityPayload(ctx context.Context, arg GetCu
 	return i, err
 }
 
-const getCurrentMediaAuthorityPlaybackSourceRevision = `-- name: GetCurrentMediaAuthorityPlaybackSourceRevision :one
-SELECT COALESCE((SELECT item->>'revision'
-    FROM jsonb_array_elements(versions.source_revisions) AS item
-    WHERE item->>'service' = 'commodore-playback-access' LIMIT 1), '')::text AS revision
-FROM commodore.media_authority_current AS current
-JOIN commodore.media_authority_versions AS versions USING (authority_kind, authority_id, authority_version)
-WHERE current.authority_kind = 'media_object'
-  AND current.authority_id = $1
-`
-
-func (q *Queries) GetCurrentMediaAuthorityPlaybackSourceRevision(ctx context.Context, authorityID string) (string, error) {
-	row := q.db.QueryRowContext(ctx, getCurrentMediaAuthorityPlaybackSourceRevision, authorityID)
-	var revision string
-	err := row.Scan(&revision)
-	return revision, err
-}
-
 const getCurrentMediaAuthorityPublication = `-- name: GetCurrentMediaAuthorityPublication :one
 SELECT versions.authority_version, versions.content_digest, versions.dependents_digest,
        versions.issued_at, versions.refresh_after, versions.valid_until
@@ -1134,6 +1117,35 @@ func (q *Queries) GetCurrentMediaAuthorityPublication(ctx context.Context, arg G
 	return i, err
 }
 
+const getCurrentMediaAuthorityRevocationSnapshot = `-- name: GetCurrentMediaAuthorityRevocationSnapshot :one
+SELECT versions.payload, versions.valid_until, versions.source_revisions
+FROM commodore.media_authority_current AS current
+JOIN commodore.media_authority_versions AS versions
+  ON versions.authority_kind = current.authority_kind
+ AND versions.authority_id = current.authority_id
+ AND versions.authority_version = current.authority_version
+WHERE current.authority_kind = $1
+  AND current.authority_id = $2
+`
+
+type GetCurrentMediaAuthorityRevocationSnapshotParams struct {
+	AuthorityKind string `db:"authority_kind" json:"authority_kind"`
+	AuthorityID   string `db:"authority_id" json:"authority_id"`
+}
+
+type GetCurrentMediaAuthorityRevocationSnapshotRow struct {
+	Payload         []byte          `db:"payload" json:"payload"`
+	ValidUntil      time.Time       `db:"valid_until" json:"valid_until"`
+	SourceRevisions json.RawMessage `db:"source_revisions" json:"source_revisions"`
+}
+
+func (q *Queries) GetCurrentMediaAuthorityRevocationSnapshot(ctx context.Context, arg GetCurrentMediaAuthorityRevocationSnapshotParams) (GetCurrentMediaAuthorityRevocationSnapshotRow, error) {
+	row := q.db.QueryRowContext(ctx, getCurrentMediaAuthorityRevocationSnapshot, arg.AuthorityKind, arg.AuthorityID)
+	var i GetCurrentMediaAuthorityRevocationSnapshotRow
+	err := row.Scan(&i.Payload, &i.ValidUntil, &i.SourceRevisions)
+	return i, err
+}
+
 const getLiveStreamMediaAuthoritySource = `-- name: GetLiveStreamMediaAuthoritySource :one
 SELECT id::text AS stream_id, tenant_id::text AS tenant_id, user_id::text AS user_id,
        internal_name, playback_id::text AS playback_id, stream_key::text AS stream_key,
@@ -1145,7 +1157,8 @@ SELECT id::text AS stream_id, tenant_id::text AS tenant_id, user_id::text AS use
        deleted_at,
        -- Ages are taken on the database clock, in the column's own time zone.
        COALESCE(EXTRACT(EPOCH FROM (NOW()::timestamp - created_at)), 1e12)::bigint AS age_seconds,
-       COALESCE(EXTRACT(EPOCH FROM (NOW()::timestamp - active_ingest_cluster_updated_at)), 1e12)::bigint AS ingest_lease_age_seconds
+       COALESCE(EXTRACT(EPOCH FROM (NOW()::timestamp - active_ingest_cluster_updated_at)), 1e12)::bigint AS ingest_lease_age_seconds,
+       EXISTS(SELECT 1 FROM commodore.users owner WHERE owner.id=streams.user_id AND owner.tenant_id=streams.tenant_id AND owner.is_active)::boolean AS may_publish
 FROM commodore.streams
 WHERE id = $1::uuid
 `
@@ -1167,6 +1180,7 @@ type GetLiveStreamMediaAuthoritySourceRow struct {
 	DeletedAt                sql.NullTime `db:"deleted_at" json:"deleted_at"`
 	AgeSeconds               int64        `db:"age_seconds" json:"age_seconds"`
 	IngestLeaseAgeSeconds    int64        `db:"ingest_lease_age_seconds" json:"ingest_lease_age_seconds"`
+	MayPublish               bool         `db:"may_publish" json:"may_publish"`
 }
 
 func (q *Queries) GetLiveStreamMediaAuthoritySource(ctx context.Context, streamID string) (GetLiveStreamMediaAuthoritySourceRow, error) {
@@ -1189,6 +1203,7 @@ func (q *Queries) GetLiveStreamMediaAuthoritySource(ctx context.Context, streamI
 		&i.DeletedAt,
 		&i.AgeSeconds,
 		&i.IngestLeaseAgeSeconds,
+		&i.MayPublish,
 	)
 	return i, err
 }
@@ -2212,6 +2227,12 @@ WHERE status IN ('pending', 'processing')
   AND lane IN ('event', 'bulk', 'object_deadline', 'tenant_deadline')
   AND next_attempt_at <= NOW()
 GROUP BY lane
+UNION ALL
+SELECT lane,COUNT(*)::bigint AS due_count,
+       COALESCE(MAX(EXTRACT(EPOCH FROM (NOW()-pending_since))),0)::double precision AS oldest_due_seconds
+FROM commodore.media_authority_refresh_obligations
+WHERE lane='ingest_revocation' AND status IN ('pending','processing')
+GROUP BY lane
 ORDER BY lane
 `
 
@@ -2223,6 +2244,7 @@ type ListMediaAuthorityObligationStatsRow struct {
 
 // Reads only what is due, through the due index. The table holds a renewal row
 // for every published authority, nearly all of them scheduled for later.
+// Session-stop delivery also counts work waiting in backoff, by its first enqueue.
 func (q *Queries) ListMediaAuthorityObligationStats(ctx context.Context) ([]ListMediaAuthorityObligationStatsRow, error) {
 	rows, err := q.db.QueryContext(ctx, listMediaAuthorityObligationStats)
 	if err != nil {
@@ -2521,6 +2543,39 @@ func (q *Queries) ListTenantMediaObjectRefreshTargets(ctx context.Context, tenan
 			return nil, err
 		}
 		items = append(items, target_key)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listUserLiveStreamAuthorityTargets = `-- name: ListUserLiveStreamAuthorityTargets :many
+SELECT id::text FROM commodore.streams
+WHERE tenant_id=$1::uuid AND user_id=$2::uuid AND deleted_at IS NULL
+`
+
+type ListUserLiveStreamAuthorityTargetsParams struct {
+	TenantID string `db:"tenant_id" json:"tenant_id"`
+	UserID   string `db:"user_id" json:"user_id"`
+}
+
+func (q *Queries) ListUserLiveStreamAuthorityTargets(ctx context.Context, arg ListUserLiveStreamAuthorityTargetsParams) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listUserLiveStreamAuthorityTargets, arg.TenantID, arg.UserID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err

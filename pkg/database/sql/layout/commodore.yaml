@@ -23,8 +23,12 @@ colocated_tables:
   - commodore.media_authority_cell_ack_resets
   - commodore.media_authority_compiler_state
   - commodore.media_authority_use_epoch
+  # One lifecycle guard and closure retry state per tenant.
+  - commodore.tenant_account_states
   - public._schema_baseline
 distributed_tables:
+  # Append-only history grows with lifecycle actions and supports tenant-time keyset reads.
+  - commodore.operator_account_audit
   # Every API-token request touches last_used_at, so writes follow request traffic.
   - commodore.api_tokens
   - commodore.delegated_jwt_replays

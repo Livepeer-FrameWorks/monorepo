@@ -1,0 +1,2 @@
+ALTER TABLE commodore.media_authority_refresh_obligations
+ VALIDATE CONSTRAINT chk_media_authority_obligation_lane;

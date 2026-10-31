@@ -38,6 +38,8 @@ import (
 )
 
 const (
+	// Denials can renew without extending the expired grant or causing minute-by-minute publication.
+	expiredOperatorGrantDenyValidity = 15 * time.Minute
 	// Reconciliation is the safety net behind event-driven refresh and scheduled
 	// renewal: it recompiles tenants (publishing only on drift), re-arms parked
 	// targets, and repairs missing renewal obligations.
@@ -75,7 +77,7 @@ const (
 	// for unchanged source state. Reconciliation then re-issues every authority
 	// in use once; nothing else would, because an unchanged compile publishes
 	// nothing.
-	mediaAuthorityCompilerRevision = 1
+	mediaAuthorityCompilerRevision = 2
 	// Queue gauges and the sweeps that settle deliveries nothing will ever make.
 	// Neither is needed to deliver, so they run off the one-second delivery tick.
 	// Each replica observes once a minute; the alerts on these gauges wait
@@ -225,6 +227,14 @@ func (s *CommodoreServer) compileTenantAuthority(ctx context.Context, tenantID s
 	if tenantID == "" {
 		return errors.New("tenant ID is required")
 	}
+	closed, lifecycleErr := commodoredb.New(s.db).IsTenantAccountClosed(ctx, tenantID)
+	if lifecycleErr != nil {
+		return fmt.Errorf("load tenant account lifecycle: %w", lifecycleErr)
+	}
+	if closed {
+		return s.compileInactiveTenantAuthority(ctx, tenantID)
+	}
+
 	ctx, skip, useErr := s.decideTenantInUse(ctx, commodoredb.New(s.db), tenantID)
 	if useErr != nil || skip {
 		return useErr
@@ -326,7 +336,20 @@ func tenantAuthorityNotFound(resp *quartermasterpb.GetTenantResponse) bool {
 	return resp != nil && resp.GetTenant() == nil && strings.EqualFold(strings.TrimSpace(resp.GetError()), "tenant not found")
 }
 
+// compileInactiveTenantAuthority publishes local account closure before Quartermaster catches up.
+func (s *CommodoreServer) compileInactiveTenantAuthority(ctx context.Context, tenantID string) error {
+	payload := deletedTenantAuthorityPayload(tenantID)
+	payload.Lifecycle = mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_INACTIVE
+	payload.DecisionReason = "tenant_inactive"
+	return s.compileTenantAccessState(ctx, tenantID, payload, "commodore", "account_closed")
+}
+
 func (s *CommodoreServer) compileDeletedTenantAuthority(ctx context.Context, tenantID string) error {
+	return s.compileTenantAccessState(ctx, tenantID, deletedTenantAuthorityPayload(tenantID), "quartermaster", "deleted")
+}
+
+// compileTenantAccessState distributes a terminal access decision to every prior tenant holder.
+func (s *CommodoreServer) compileTenantAccessState(ctx context.Context, tenantID string, payload *mediaauthoritypb.TenantAuthority, source, revision string) error {
 	current, err := commodoredb.New(s.db).GetCurrentMediaAuthorityPayload(ctx, commodoredb.GetCurrentMediaAuthorityPayloadParams{
 		AuthorityKind: "tenant", AuthorityID: tenantID,
 	})
@@ -335,20 +358,19 @@ func (s *CommodoreServer) compileDeletedTenantAuthority(ctx context.Context, ten
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("load deleted tenant authority history: %w", err)
+		return fmt.Errorf("load tenant authority history: %w", err)
 	}
 	previous := &mediaauthoritypb.TenantAuthority{}
 	if unmarshalErr := proto.Unmarshal(current.Payload, previous); unmarshalErr != nil {
-		return fmt.Errorf("decode deleted tenant authority history: %w", unmarshalErr)
+		return fmt.Errorf("decode tenant authority history: %w", unmarshalErr)
 	}
 	if previous.GetTenantId() != tenantID {
-		return errors.New("deleted tenant authority identity mismatch")
+		return errors.New("tenant authority identity mismatch")
 	}
-	payload := deletedTenantAuthorityPayload(tenantID)
 	if placementErr := s.inheritTenantPlacement(ctx, payload, nil, previous); placementErr != nil {
 		return placementErr
 	}
-	revisions, err := tenantPlacementSourceRevisions(payload, []*mediaauthoritypb.AuthoritySourceRevision{{Service: "quartermaster", Revision: "deleted"}})
+	revisions, err := tenantPlacementSourceRevisions(payload, []*mediaauthoritypb.AuthoritySourceRevision{{Service: source, Revision: revision}})
 	if err != nil {
 		return err
 	}
@@ -386,7 +408,10 @@ func (s *CommodoreServer) compileLiveStreamAuthority(ctx context.Context, stream
 	var policy *mediaauthoritypb.PlaybackPolicy
 	ctx = withPlaybackAccessSource(ctx, source.RequiresAuth, source.PlaybackPolicy, source.PlaybackWebhookSecretEnc)
 	defer func() {
-		desiredLive := &mediaauthoritypb.LiveStreamAuthority{IngestMode: source.IngestMode, PublishingCredentialSha256: sharedauthority.PublishingCredentialDigest(source.StreamKey)}
+		desiredLive := &mediaauthoritypb.LiveStreamAuthority{IngestMode: source.IngestMode}
+		if source.MayPublish {
+			desiredLive.PublishingCredentialSha256 = sharedauthority.PublishingCredentialDigest(source.StreamKey)
+		}
 		retErr = s.revokeChangedAccessOnCompileFailure(ctx, authorityID, mediaauthoritypb.MediaObjectKind_MEDIA_OBJECT_KIND_LIVE_STREAM, policy, desiredLive, retErr)
 	}()
 
@@ -476,8 +501,9 @@ func (s *CommodoreServer) compileLiveStreamAuthority(ctx context.Context, stream
 	// the control plane is unreachable, so it is signed only with a cluster to
 	// bind it to. Without it the cell finds no local credential and validates the
 	// stream key against Commodore, exactly as it does for an unknown stream.
+	// It is also withheld while the owning user is inactive.
 	var publishingCredential []byte
-	if originClusterID != "" {
+	if originClusterID != "" && source.MayPublish {
 		publishingCredential = sharedauthority.PublishingCredentialDigest(source.StreamKey)
 	}
 	payload := &mediaauthoritypb.MediaObjectAuthority{
@@ -1115,6 +1141,11 @@ func buildTenantAuthority(tenant *quartermasterpb.Tenant, entitlement *quarterma
 		Lifecycle:     mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE,
 	}
 	validUntil := issuedAt.Add(mediaAuthorityValidity)
+	if deadline := admission.GetValidUntil(); deadline != nil {
+		if deadline.AsTime().After(issuedAt) && deadline.AsTime().Before(validUntil) {
+			validUntil = deadline.AsTime()
+		}
+	}
 	if !tenant.GetIsActive() {
 		payload.Lifecycle = mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_INACTIVE
 		payload.BillingDecision = mediaauthoritypb.TenantBillingDecision_TENANT_BILLING_DECISION_INACTIVE
@@ -1134,6 +1165,10 @@ func buildTenantAuthority(tenant *quartermasterpb.Tenant, entitlement *quarterma
 	payload.TierLevel = admission.GetTierLevel()
 	payload.BillingDecision = mediaauthoritypb.TenantBillingDecision_TENANT_BILLING_DECISION_ALLOW
 	switch {
+	case admission.GetValidUntil() != nil && !admission.GetValidUntil().AsTime().After(issuedAt):
+		payload.BillingDecision = mediaauthoritypb.TenantBillingDecision_TENANT_BILLING_DECISION_PAYMENT_REQUIRED
+		payload.DecisionReason = sharedauthority.ReasonOperatorGrantExpired
+		validUntil = issuedAt.Add(expiredOperatorGrantDenyValidity)
 	case billing.GetIsSuspended():
 		payload.BillingDecision = mediaauthoritypb.TenantBillingDecision_TENANT_BILLING_DECISION_SUSPENDED
 		payload.DecisionReason = "tenant_suspended"
@@ -1143,7 +1178,7 @@ func buildTenantAuthority(tenant *quartermasterpb.Tenant, entitlement *quarterma
 	// the durable prepaid balance and explicit suspension state only.
 	case model == mediaauthoritypb.TenantBillingModel_TENANT_BILLING_MODEL_PREPAID && billing.GetBalanceCents() <= 0:
 		payload.BillingDecision = mediaauthoritypb.TenantBillingDecision_TENANT_BILLING_DECISION_PAYMENT_REQUIRED
-		payload.DecisionReason = "prepaid_balance_unavailable"
+		payload.DecisionReason = sharedauthority.ReasonPrepaidBalanceUnavailable
 	}
 	positive := payload.GetBillingDecision() == mediaauthoritypb.TenantBillingDecision_TENANT_BILLING_DECISION_ALLOW
 	payload.AllowPlatformSharedPlayback = positive
@@ -1548,7 +1583,7 @@ func (s *CommodoreServer) publishMediaObjectAuthority(ctx context.Context, autho
 			validUntil = commercial.validUntil
 		}
 		if commercial.revision != "" {
-			revisions = append(append([]*mediaauthoritypb.AuthoritySourceRevision(nil), revisions...), &mediaauthoritypb.AuthoritySourceRevision{Service: "purser", Revision: commercial.revision})
+			revisions = replaceAuthoritySourceRevision(revisions, "purser", commercial.revision)
 		}
 	}
 	issuedAt, validUntil = mediaAuthorityInstant(issuedAt), mediaAuthorityInstant(validUntil)
@@ -1780,6 +1815,7 @@ func (s *CommodoreServer) runMediaAuthorityWorkers(ctx context.Context) {
 	processes := []func(context.Context){
 		s.adoptLegacyMediaAuthorityRefreshInbox,
 		s.processMediaAuthorityEventObligations,
+		s.processAccountIngestRevocations,
 		s.processMediaAuthorityBulkObligations,
 		s.processMediaAuthorityObjectRenewals,
 		s.processMediaAuthorityTenantRenewals,

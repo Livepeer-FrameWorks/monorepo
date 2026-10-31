@@ -11,6 +11,9 @@ import (
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/orchestrator"
 	"frameworks/cli/pkg/remoteaccess"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // clusterRuntimeData is the runtime data every task of an existing cluster
@@ -57,6 +60,9 @@ func clusterRuntimeData(ctx context.Context, manifest *inventory.Manifest, share
 	return runtimeData, nil
 }
 
+// clusterRuntimeDataFn is the control-plane rendering boundary for recovery tests.
+var clusterRuntimeDataFn = clusterRuntimeData
+
 // provisionNeedsExistingClusterOwners reports whether a provision renders a
 // Livepeer gateway without running the Quartermaster bootstrap that resolves
 // cluster owners, as `--only-services livepeer-gateway-*` does. Such a run
@@ -100,16 +106,22 @@ func (rc *resolvedCluster) RuntimeData(ctx context.Context, sshKey string) (map[
 			return
 		}
 		manifestDir := filepath.Dir(rc.ManifestPath)
-		data, err := clusterRuntimeData(ctx, rc.Manifest, sharedEnv, manifestDir, sshKey)
+		data, err := clusterRuntimeDataFn(ctx, rc.Manifest, sharedEnv, manifestDir, sshKey)
 		if err != nil {
-			remembered := doctorContextSystemTenantID(rc)
-			if remembered == "" || anyClusterRunsLivepeerGateway(rc.Manifest) {
+			remembered := contextSystemTenantID(rc)
+			if remembered == "" || !quartermasterRecoveryUnavailable(err) {
 				rc.runtimeDataErr = err
+				return
+			}
+			// Gateway ownership needs live alias resolution as well as a system identity.
+			if anyClusterRunsLivepeerGateway(rc.Manifest) {
+				rc.runtimeDataErr = fmt.Errorf("authoritative owner aliases are required for Livepeer gateway recovery rendering: %w", err)
 				return
 			}
 			if data, rc.runtimeDataErr = provisionRuntimeData(rc.Manifest, manifestDir, sharedEnv); rc.runtimeDataErr != nil {
 				return
 			}
+			rc.warnSavedSystemTenantRecovery()
 			data["system_tenant_id"] = remembered
 			if qmAddr, addrErr := resolveServiceGRPCAddr(rc.Manifest, "quartermaster", defaultGRPCPort("quartermaster")); addrErr == nil {
 				data["quartermaster_grpc_addr"] = qmAddr
@@ -118,8 +130,15 @@ func (rc *resolvedCluster) RuntimeData(ctx context.Context, sshKey string) (map[
 		if id, ok := data["system_tenant_id"].(string); !ok || id == "" {
 			resolved, tenantErr := rc.ResolveSystemTenantID(ctx)
 			if tenantErr != nil {
-				rc.runtimeDataErr = fmt.Errorf("resolve system tenant for service configuration: %w", tenantErr)
-				return
+				remembered := contextSystemTenantID(rc)
+				// A failed identity lookup can reuse a complete live owner-alias snapshot.
+				owners, aliasesKnown := data["owner_tenant_ids_by_alias"].(map[string]string)
+				if remembered == "" || !quartermasterRecoveryUnavailable(tenantErr) || (anyClusterRunsLivepeerGateway(rc.Manifest) && (!aliasesKnown || len(owners) == 0)) {
+					rc.runtimeDataErr = fmt.Errorf("resolve system tenant for service configuration: %w", tenantErr)
+					return
+				}
+				rc.warnSavedSystemTenantRecovery()
+				resolved = remembered
 			}
 			data["system_tenant_id"] = resolved
 		}
@@ -129,4 +148,14 @@ func (rc *resolvedCluster) RuntimeData(ctx context.Context, sshKey string) (map[
 		return nil, rc.runtimeDataErr
 	}
 	return maps.Clone(rc.runtimeData), nil
+}
+
+// warnSavedSystemTenantRecovery identifies rendering that uses the saved identity.
+func (rc *resolvedCluster) warnSavedSystemTenantRecovery() {
+	fmt.Fprintln(rc.warningOutput(), "Warning: Quartermaster is unavailable; using the saved system tenant ID for recovery rendering")
+}
+
+// quartermasterRecoveryUnavailable excludes authoritative alias and permission failures.
+func quartermasterRecoveryUnavailable(err error) bool {
+	return status.Code(err) == codes.Unavailable || status.Code(err) == codes.DeadlineExceeded || remoteaccess.IsUnavailable(err)
 }

@@ -158,6 +158,7 @@ message GetTenantAdmissionStatusRequest {
 
 message GetTenantAdmissionStatusResponse {
   string billing_model = 1;
+  // Explicit suspension, permanent closure or a grant awaiting expiry reconciliation.
   bool is_suspended = 2;
   bool is_balance_negative = 3;
   int64 balance_cents = 4;
@@ -167,6 +168,8 @@ message GetTenantAdmissionStatusResponse {
   string collection_provider = 8;
   string tier_name = 9;
   int32 tier_level = 10;
+  // Signed admission must be renewed at this deadline.
+  google.protobuf.Timestamp valid_until = 11;
 }
 
 // Full billing status check for entitlement- and pricing-aware calls.
@@ -204,7 +207,7 @@ message ListTenantBillingSnapshotsResponse {
 // This is NOT the full BillingStatusResponse - that's for user-facing dashboards.
 message GetTenantBillingStatusResponse {
   string billing_model = 1;       // 'postpaid' or 'prepaid'
-  bool is_suspended = 2;          // subscription status = 'suspended' (balance < -$10)
+  bool is_suspended = 2;          // Explicit suspension, permanent closure or an expired grant.
   bool is_balance_negative = 3;   // prepaid balance <= 0 (soft gate, return 402)
   int64 balance_cents = 4;        // current balance (for display/logging)
   // Tier cap on customer-set retention. 0 means "no cap" (paid-tier baseline);
@@ -248,6 +251,8 @@ message GetTenantBillingStatusResponse {
   bool collection_ready = 13;
   string collection_provider = 14; // stripe, mollie, or empty
   string tier_name = 15;           // free, pro, business, or custom catalog name
+  // True while a grant past its deadline awaits reconciliation.
+  bool grant_expired = 16;
 }
 
 // Marginal storage pricing snapshot exposed via GetTenantBillingStatus.
@@ -1171,9 +1176,9 @@ service PrepaidService {
   // Re-evaluates cluster access. Existing prepaid balance is carried forward.
   rpc PromoteToPaid(PromoteToPaidRequest) returns (PromoteToPaidResponse);
 
-  // Change the postpaid billing tier. Upgrades apply immediately and reconcile
-  // cluster access; downgrades stage pending_tier_id/pending_effective_at and
-  // are applied by the billing-close job after the current invoice clears.
+  // Change the postpaid billing tier. Upgrades close old usage, start a fresh
+  // month and credit the unused paid fee; unresolved provider or metering work
+  // returns a pending upgrade. Downgrades apply at the current period's end.
   // Prepaid → postpaid transition stays on PromoteToPaid.
   rpc ChangeBillingTier(ChangeBillingTierRequest) returns (ChangeBillingTierResponse);
 
@@ -1184,12 +1189,21 @@ service PrepaidService {
   // model. Records a billing.subscription_updated event carrying the reason.
   rpc AdminAssignTier(AdminAssignTierRequest) returns (AdminAssignTierResponse);
 
+  // Lists outstanding provider work without exposing raw webhook payloads. Platform operators only.
+  rpc AdminListCheckoutRecovery(AdminListCheckoutRecoveryRequest) returns (AdminListCheckoutRecoveryResponse);
+  // Previews one tenant checkout; confirmed requests durably reconcile it. Platform operators only.
+  rpc AdminRecoverCheckout(AdminRecoverCheckoutRequest) returns (AdminRecoverCheckoutResponse);
+  // Inspect a paid upgrade or cancel its unapplied request without starting a purchase.
+  rpc AdminRecoverTierUpgrade(AdminRecoverTierUpgradeRequest) returns (AdminRecoverTierUpgradeResponse);
+
   // Operator billing arrangement for one tenant: a base fee in place of the
   // tier's, usage rated at zero, invoices the operator collects by hand, and
   // an optional expiry. It replaces the self-serve requirement that a paid
   // postpaid tier has Stripe or Mollie collection. Platform operators only.
   rpc AdminSetBillingGrant(AdminSetBillingGrantRequest) returns (AdminBillingGrantResponse);
   rpc AdminGetBillingGrant(AdminGetBillingGrantRequest) returns (AdminBillingGrantResponse);
+  // Lists current and archived operator arrangements. Requires a platform-operator JWT.
+  rpc AdminListBillingGrants(AdminListBillingGrantsRequest) returns (AdminListBillingGrantsResponse);
   rpc AdminRevokeBillingGrant(AdminRevokeBillingGrantRequest) returns (AdminBillingGrantResponse);
 
   // Records a payment the operator received outside any provider (a bank
@@ -1499,14 +1513,14 @@ message ChangeBillingTierRequest {
   string tier_id = 2;
 }
 
-// Response describes whether the change applied immediately (upgrade) or was
-// scheduled for the current period end (downgrade).
+// Response distinguishes an applied upgrade from pending reconciliation or a
+// downgrade scheduled for the current period's end.
 message ChangeBillingTierResponse {
   bool success = 1;
   string message = 2;
-  // Set when the change applied immediately (upgrade path).
+  // Set when the upgrade's pricing and billing boundary committed.
   string applied_tier_id = 3;
-  // Set when the change was scheduled (downgrade path).
+  // Set for a scheduled downgrade or an upgrade awaiting reconciliation.
   string pending_tier_id = 4;
   google.protobuf.Timestamp effective_at = 5;
   // Populated on immediate apply.
@@ -1553,8 +1567,16 @@ message OperatorBillingGrant {
   string reason = 6;
   string granted_by = 7;
   google.protobuf.Timestamp granted_at = 8;
-  // False once expires_at has passed.
+  // False once expires_at has passed or the grant has ended.
   bool active = 9;
+  // Tier restored when the grant ends if its assigned tier is still current.
+  string fallback_tier_name = 10;
+  // Archive boundary; unset while this is the current grant.
+  google.protobuf.Timestamp ended_at = 11;
+  // Last failed expiry attempt; empty when no failure is recorded.
+  string expiry_error = 12;
+  // Consecutive failed expiry attempts for the current grant.
+  int32 expiry_failures = 13;
 }
 
 message AdminSetBillingGrantRequest {
@@ -1569,6 +1591,33 @@ message AdminSetBillingGrantRequest {
   google.protobuf.Timestamp expires_at = 6;
   // Why the operator granted it; recorded on the grant and the audit event.
   string reason = 7;
+  // Explicit fallback tier; unset preserves the original fallback.
+  optional string fallback_tier_name = 8;
+}
+
+// AdminListBillingGrantsRequest selects active grants and optional retained history.
+message AdminListBillingGrantsRequest {
+  // Zero includes every expiry; positive values select the next N seconds, up to ten years.
+  int64 expiring_within_seconds = 1;
+  // Include ended grants from history.
+  bool include_expired = 2;
+  // Page size, 1..500; zero selects the default of 100.
+  int32 limit = 3;
+  // Non-negative number of rows to skip.
+  int32 offset = 4;
+}
+
+// AdminBillingGrantEntry pairs a tenant arrangement with the tier it prices.
+message AdminBillingGrantEntry {
+  string tenant_id = 1; // Tenant UUID.
+  string tier_name = 2; // Current tier for a live grant, or the historical tier for an ended grant.
+  OperatorBillingGrant grant = 3;
+}
+
+// AdminListBillingGrantsResponse is a page of tenant billing arrangements.
+message AdminListBillingGrantsResponse {
+  repeated AdminBillingGrantEntry grants = 1;
+  bool has_more = 2; // More entries exist beyond this page.
 }
 
 message AdminGetBillingGrantRequest {
@@ -1578,6 +1627,7 @@ message AdminGetBillingGrantRequest {
 message AdminRevokeBillingGrantRequest {
   string tenant_id = 1;
   string reason = 2;
+  string tier_name = 3; // Optional active recovery tier instead of the remembered fallback.
 }
 
 // The tier and billing model a tenant's subscription is on.
@@ -2063,4 +2113,100 @@ message CompleteX402MutationResultRequest {
 
 message CompleteX402MutationResultResponse {
   bool completed = 1;
+}
+
+// AdminListCheckoutRecoveryRequest bounds the outstanding provider-work inventory.
+message AdminListCheckoutRecoveryRequest {
+  string tenant_id = 1; // Optional tenant UUID; omitted lists service-wide work.
+  int32 limit = 2; // 1..100, defaults to 50.
+  int32 offset = 3; // Non-negative page offset.
+  bool history = 4; // Lists immutable operator requests; requires tenant_id.
+}
+
+// CheckoutRecoveryItem describes an outstanding callback or checkout compensation.
+message CheckoutRecoveryItem {
+  string id = 1; // Provider inbox UUID.
+  string tenant_id = 2; // Known tenant UUID; may be empty for an unbound callback.
+  string reservation_id = 3; // Checkout reservation UUID, when applicable.
+  string provider = 4; // stripe, mollie, or an internal billing-recovery kind.
+  string event_key = 5; // Provider event or internal recovery identity.
+  string status = 6; // Current durable inbox state.
+  int32 attempts = 7; // Failed attempts; ordinary settlement waits do not increment it.
+  string last_error = 8; // Latest reconciliation failure, including normal settlement waits.
+  google.protobuf.Timestamp next_attempt_at = 9; // Earliest retry time.
+  google.protobuf.Timestamp expires_at = 10; // Checkout's provider deadline, when applicable.
+  int64 amount_cents = 11; // Reserved amount in currency minor units.
+  string currency = 12; // ISO currency of the reservation.
+  string reservation_status = 13; // Durable checkout state, distinct from inbox state.
+  bool amount_known = 14; // False means no provider amount has been observed.
+}
+
+// AdminListCheckoutRecoveryResponse contains one page of outstanding work.
+message AdminListCheckoutRecoveryResponse {
+  repeated CheckoutRecoveryItem items = 1;
+  bool has_more = 2;
+  repeated CheckoutRecoveryAudit entries = 3; // Operator requests when history=true.
+}
+
+// AdminRecoverCheckoutRequest selects the exact tenant-owned checkout to recover.
+message AdminRecoverCheckoutRequest {
+  string tenant_id = 1; // Owning tenant UUID.
+  string reservation_id = 2; // Reservation UUID from recovery list.
+  string reason = 3; // Required operator reason, retained with the recovery request.
+  bool confirmed = 4; // False returns a read-only preview; true permits cancellation/refund.
+}
+
+// AdminRecoverCheckoutResponse reports a preview or the reservation's durable recovery state.
+message AdminRecoverCheckoutResponse {
+  string provider = 1; // stripe or mollie.
+  string status = 2; // Current local reservation state.
+  int64 amount_cents = 3; // Checkout total when known, otherwise the reserved amount.
+  string currency = 4; // ISO currency of amount_cents.
+  // Current reservation state, not actions attributable to this invocation.
+  // Each confirmed invocation creates its own audit record.
+  string outcome = 5; // preview, pending, activated, expired, cancelled, or refund reconciliation state.
+  string detail = 6; // Human-readable provider/wait/error detail.
+  string audit_id = 7; // Durable operator request UUID; absent on a preview.
+  bool amount_known = 8; // False means amount_cents is only a local placeholder.
+}
+
+// CheckoutRecoveryAudit retains each operator request independently of inbox retries.
+message CheckoutRecoveryAudit {
+  string id = 1; // Audit UUID.
+  string reservation_id = 2; // Tenant-owned checkout UUID.
+  string actor_id = 3; // Authenticated operator user ID.
+  string reason = 4; // Original operator reason.
+  string outcome = 5; // Latest outcome of this request.
+  string detail = 6; // Provider result or pending reason.
+  google.protobuf.Timestamp created_at = 7; // Time of the operator request.
+}
+
+// AdminRecoverTierUpgradeRequest selects one tenant-owned accepted purchase.
+message AdminRecoverTierUpgradeRequest {
+  // Owning tenant UUID, checked against the accepted purchase.
+  string tenant_id = 1;
+  // Durable purchase UUID returned by the recovery list.
+  string upgrade_id = 2;
+  // False previews; true records an operator-attributed recovery request.
+  bool confirmed = 3;
+  // Required on confirmation and retained with the first recovery request.
+  string reason = 4;
+}
+
+// AdminRecoverTierUpgradeResponse reports the durable purchase and recovery state.
+message AdminRecoverTierUpgradeResponse {
+  // Accepted purchase UUID.
+  string upgrade_id = 1;
+  // Durable purchase state; a queued recovery can remain pending.
+  string state = 2;
+  // Collection provider whose existing objects recovery inspects.
+  string provider = 3;
+  // Target billing tier UUID of the accepted purchase.
+  string tier_id = 4;
+  // First operator who requested recovery, empty before confirmation.
+  string requested_by = 5;
+  // Immutable reason retained with that operator request.
+  string reason = 6;
+  // Human-readable preview or current reconciliation outcome.
+  string detail = 7;
 }

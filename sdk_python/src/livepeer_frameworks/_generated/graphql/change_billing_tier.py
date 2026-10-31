@@ -29,9 +29,9 @@ class ChangeBillingTier(BaseModel):
         OpenUnion(),
     ] = Field(
         alias="changeBillingTier",
-        description="Change the postpaid billing tier. Upgrades apply immediately and reconcile\ncluster access; downgrades are scheduled for the current billing period end\nso the tenant keeps paid entitlements until the period closes.",
+        description="Change the postpaid billing tier. Upgrades start a fresh month and credit\nthe unused paid fee; provider or metering reconciliation can leave them pending.\nDowngrades take effect at the current billing period end.",
     )
-    "Change the postpaid billing tier. Upgrades apply immediately and reconcile\ncluster access; downgrades are scheduled for the current billing period end\nso the tenant keeps paid entitlements until the period closes."
+    "Change the postpaid billing tier. Upgrades start a fresh month and credit\nthe unused paid fee; provider or metering reconciliation can leave them pending.\nDowngrades take effect at the current billing period end."
 
 
 class ChangeBillingTierChangeBillingTierChangeBillingTierPayload(

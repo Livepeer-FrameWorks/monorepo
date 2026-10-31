@@ -5,12 +5,14 @@ package grpc
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"frameworks/api_billing/internal/database/purserdb"
+	"frameworks/api_billing/internal/subscriptions"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/events"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -137,6 +139,14 @@ func TestMollieBillingEventsCommitWithTheirState_RealPG(t *testing.T) { //nolint
 		}
 		return id
 	}
+	newSubscriptionIntent := func(t *testing.T, tenantID, providerID string) string {
+		t.Helper()
+		var id string
+		if err := db.QueryRow(`INSERT INTO purser.payment_provider_intents(tenant_id,provider,purpose,local_reference_type,local_reference_id,status,currency,idempotency_key) VALUES($1,'mollie','mollie_subscription_create','billing_tiers',$2,'pending','EUR',$3) RETURNING id::text`, tenantID, tierID, providerID).Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
 	activation := func(tenantID, mollieSubscriptionID string) purserdb.ActivateMollieTenantSubscriptionParams {
 		periodEnd := time.Now().UTC().AddDate(0, 1, 0).Truncate(24 * time.Hour)
 		return purserdb.ActivateMollieTenantSubscriptionParams{
@@ -156,11 +166,52 @@ func TestMollieBillingEventsCommitWithTheirState_RealPG(t *testing.T) { //nolint
 		return id.String
 	}
 
+	t.Run("a grant arriving during provider signup blocks activation", func(t *testing.T) {
+		tenantID := uuid.NewString()
+		subscriptionID := newSubscription(t, tenantID)
+		if _, writeErr := db.ExecContext(ctx, `INSERT INTO purser.subscription_operator_grants(subscription_id,waive_usage,reason) VALUES($1::uuid,true,'trial')`, subscriptionID); writeErr != nil {
+			t.Fatal(writeErr)
+		}
+		affected, activateErr := server.activateMollieSubscription(callerCtx, activation(tenantID, "sub_grant_race"), newSubscriptionIntent(t, tenantID, "sub_grant_race"))
+		if !errors.Is(activateErr, subscriptions.ErrOutstandingGrant) || affected != 0 {
+			t.Fatalf("grant activation = %d, %v", affected, activateErr)
+		}
+		if got := mollieSubscription(t, tenantID); got != "" {
+			t.Fatalf("outstanding grant activated subscription %q", got)
+		}
+		if rows := purserDomainRows(t, db, tenantID); len(rows) != 0 {
+			t.Fatalf("blocked activation emitted events: %+v", rows)
+		}
+	})
+
+	t.Run("reactivation refuses a retained cancelled grant", func(t *testing.T) {
+		tenantID := uuid.NewString()
+		subscriptionID := newSubscription(t, tenantID)
+		if _, cancelErr := db.ExecContext(ctx, `UPDATE purser.tenant_subscriptions SET status='cancelled' WHERE tenant_id=$1`, tenantID); cancelErr != nil {
+			t.Fatal(cancelErr)
+		}
+		// A retained arrangement must be ended through its billing boundary before a new subscription.
+		if _, seedErr := db.ExecContext(ctx, `INSERT INTO purser.subscription_operator_grants(subscription_id,waive_usage,reason) VALUES($1::uuid,true,'cancelled trial')`, subscriptionID); seedErr != nil {
+			t.Fatal(seedErr)
+		}
+		affected, activationErr := server.activateMollieSubscription(callerCtx, activation(tenantID, "sub_reactivated"), newSubscriptionIntent(t, tenantID, "sub_reactivated"))
+		if !errors.Is(activationErr, subscriptions.ErrOutstandingGrant) || affected != 0 {
+			t.Fatalf("cancelled reactivation=%d,%v", affected, activationErr)
+		}
+		var grants, history int
+		if readErr := db.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM purser.subscription_operator_grants WHERE subscription_id=$1),(SELECT count(*) FROM purser.subscription_operator_grant_history WHERE subscription_id=$1)`, subscriptionID).Scan(&grants, &history); readErr != nil {
+			t.Fatal(readErr)
+		}
+		if grants != 1 || history != 0 {
+			t.Fatalf("reactivation revived cancelled arrangement: grants=%d history=%d", grants, history)
+		}
+	})
+
 	t.Run("subscription: a failed event insert leaves the subscription unactivated", func(t *testing.T) {
 		tenantID := uuid.NewString()
 		newSubscription(t, tenantID)
 		allow := rejectPurserDomainEvents(t, db)
-		_, err := server.activateMollieSubscription(callerCtx, activation(tenantID, "sub_rollback"))
+		_, err := server.activateMollieSubscription(callerCtx, activation(tenantID, "sub_rollback"), newSubscriptionIntent(t, tenantID, "sub_rollback"))
 		allow()
 		if err == nil || !strings.Contains(err.Error(), "domain outbox unavailable") {
 			t.Fatalf("activateMollieSubscription err = %v, want the outbox failure", err)
@@ -176,7 +227,22 @@ func TestMollieBillingEventsCommitWithTheirState_RealPG(t *testing.T) { //nolint
 	t.Run("subscription: activation and billing.subscription_created commit together, once", func(t *testing.T) {
 		tenantID := uuid.NewString()
 		subscriptionID := newSubscription(t, tenantID)
-		rows, err := server.activateMollieSubscription(callerCtx, activation(tenantID, "sub_first"))
+		intent, err := subscriptions.ReserveCheckout(ctx, db, tenantID, func(tx *sql.Tx) (string, error) {
+			return purserdb.New(tx).UpsertMollieSubscriptionIntent(ctx, purserdb.UpsertMollieSubscriptionIntentParams{TenantID: tenantID, TierID: tierID, CustomerID: sql.NullString{String: "customer", Valid: true}, Currency: "EUR", AmountCents: 4000, IdempotencyKey: "settled-mollie-checkout"})
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = purserdb.New(db).SetProviderIntentSubscriptionOpen(ctx, purserdb.SetProviderIntentSubscriptionOpenParams{TenantID: tenantID, SubscriptionID: sql.NullString{String: "sub_first", Valid: true}, IntentID: intent}); err != nil {
+			t.Fatal(err)
+		}
+		if pending, err := pendingProviderCheckoutForTest(ctx, db, tenantID); err != nil || !pending {
+			t.Fatalf("open checkout not reserved: %v,%v", pending, err)
+		}
+		rows, err := server.activateMollieSubscription(callerCtx, activation(tenantID, "sub_first"), intent)
+		if pending, err := pendingProviderCheckoutForTest(ctx, db, tenantID); err != nil || pending {
+			t.Fatalf("successful Mollie checkout still blocks grants: %v,%v", pending, err)
+		}
 		if err != nil || rows != 1 {
 			t.Fatalf("activateMollieSubscription = %d, %v", rows, err)
 		}
@@ -198,7 +264,7 @@ func TestMollieBillingEventsCommitWithTheirState_RealPG(t *testing.T) { //nolint
 			t.Fatalf("payload = %v", &created)
 		}
 
-		if rows, err := server.activateMollieSubscription(callerCtx, activation(tenantID, "sub_first")); err != nil || rows != 1 {
+		if rows, err := server.activateMollieSubscription(callerCtx, activation(tenantID, "sub_first"), intent); err != nil || rows != 1 {
 			t.Fatalf("replayed activation = %d, %v", rows, err)
 		}
 		if domain := purserDomainRows(t, db, tenantID); len(domain) != 1 {
@@ -208,7 +274,7 @@ func TestMollieBillingEventsCommitWithTheirState_RealPG(t *testing.T) { //nolint
 
 	t.Run("subscription: a tenant without a subscription row records nothing", func(t *testing.T) {
 		tenantID := uuid.NewString()
-		if rows, err := server.activateMollieSubscription(callerCtx, activation(tenantID, "sub_orphan")); err != nil || rows != 0 {
+		if rows, err := server.activateMollieSubscription(callerCtx, activation(tenantID, "sub_orphan"), newSubscriptionIntent(t, tenantID, "sub_orphan")); err != nil || rows != 0 {
 			t.Fatalf("activateMollieSubscription = %d, %v, want 0 rows", rows, err)
 		}
 		if domain := purserDomainRows(t, db, tenantID); len(domain) != 0 {

@@ -71,7 +71,7 @@ while IFS= read -r path; do
 done < <(stack_compose exec -T -e STACK_SCENARIOS="${STACK_SCENARIOS:-default}" stack-runner \
   bash /repo/scripts/stack/scenarios/list.sh)
 [ "${#scenarios[@]}" -gt 0 ] || { echo "no scenarios selected (STACK_SCENARIOS=${STACK_SCENARIOS:-default})"; exit 1; }
-if printf '%s\n' "${scenarios[@]}" | grep -Eq '/(27|28)-'; then
+if printf '%s\n' "${scenarios[@]}" | grep -Eq '/(27|28|46)-'; then
   echo 'building the operator CLI for the selected stack scenarios'
   make build-bin-cli || exit 1
 fi

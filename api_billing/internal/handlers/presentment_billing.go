@@ -14,6 +14,7 @@ import (
 	"frameworks/api_billing/internal/fx"
 	"frameworks/api_billing/internal/pricing"
 	"frameworks/api_billing/internal/rating"
+	"frameworks/api_billing/internal/subscriptions"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -69,31 +70,43 @@ func finalizeInvoicePresentmentTx(ctx context.Context, tx *sql.Tx, invoiceID, te
 // tenant already runs on keeps the current period. The activation commits
 // before the charge; a charge that cannot start now is retried by the invoice
 // job.
-func (s *Service) activateAdvanceBilledTenant(ctx context.Context, tenantID, tierID, provider, stripeCustomerID string, now time.Time) error {
+func (s *Service) activateAdvanceBilledTenant(ctx context.Context, tenantID, tierID, provider, stripeCustomerID string, now time.Time, receiptID string) error {
+	return s.activateAdvanceBilledTenantWithMandate(ctx, tenantID, tierID, provider, stripeCustomerID, now, receiptID, nil)
+}
+
+func (s *Service) activateAdvanceBilledTenantWithMandate(ctx context.Context, tenantID, tierID, provider, stripeCustomerID string, now time.Time, receiptID string, mandate *purserdb.UpsertMollieMandateParams) error {
+	if _, policyErr := subscriptions.TransitionProvider(ctx, s.db, subscriptions.ProviderChange{TenantID: tenantID, Operation: subscriptions.ProviderCheckout}); policyErr != nil {
+		return policyErr
+	}
 	periodStart := now.UTC().Truncate(time.Microsecond)
 	profile, err := purserdb.New(s.db).GetTenantCollectionProfile(ctx, tenantID)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("load collection profile before activation: %w", err)
 	}
+	var closing *PostpaidPhaseClose
 	if err == nil && advanceBilledPeriodChanges(profile, tierID, provider, periodStart) {
-		if s.closeAdvanceBilledPeriod == nil {
-			return errors.New("advance billing is not wired to close the current period")
+		var prepareErr error
+		closing, prepareErr = PrepareProviderBillingBoundary(ctx, s.db, s.logger, s, tenantID, periodStart)
+		if prepareErr != nil {
+			return fmt.Errorf("prepare the current period before provider activation: %w", prepareErr)
 		}
-		closedAt, closeErr := s.closeAdvanceBilledPeriod(ctx, tenantID, periodStart)
-		if closeErr != nil {
-			return fmt.Errorf("close the current period before the tier change: %w", closeErr)
+		if closing != nil {
+			periodStart = closing.BoundaryAt()
 		}
-		periodStart = closedAt
 	}
-	rows, err := purserdb.New(s.db).ActivateAdvanceBilledSubscription(ctx, purserdb.ActivateAdvanceBilledSubscriptionParams{
+
+	result, err := subscriptions.TransitionProvider(ctx, s.db, subscriptions.ProviderChange{TenantID: tenantID, Operation: subscriptions.AdvanceActivation, ReceiptIntentID: receiptID, MollieMandate: mandate, Boundary: closing, Advance: purserdb.ActivateAdvanceBilledSubscriptionParams{
 		PaymentMethod: provider, StripeCustomerID: stripeCustomerID, TierID: tierID,
-		PeriodStart: periodStart, PeriodEnd: periodStart.AddDate(0, 1, 0), TenantID: tenantID,
-	})
+		PeriodStart: periodStart, PeriodEnd: billing.NextMonthlyAnniversary(periodStart), TenantID: tenantID,
+	}})
 	if err != nil {
 		return fmt.Errorf("activate tenant %s without a provider subscription: %w", tenantID, err)
 	}
-	if rows == 0 {
+	if result.Rows == 0 {
 		return fmt.Errorf("no subscription without a provider subscription for tenant %s", tenantID)
+	}
+	if closing != nil {
+		closing.AfterCommit(ctx)
 	}
 	if s.convergeTenantEntitlements != nil {
 		if convergeErr := s.convergeTenantEntitlements(ctx, tenantID); convergeErr != nil {
@@ -125,58 +138,42 @@ func advanceBilledPeriodChanges(profile purserdb.GetTenantCollectionProfileRow, 
 	return !sameTier || profile.PaymentMethod.String != provider
 }
 
-// CloseAdvanceBilledPeriod finalizes the usage invoice of the tenant's current
-// period for [period start, closeAt) and returns the time the period ended.
-// When that invoice was already finalized, its end is returned, so a retried
-// change starts the next period exactly where the closed one ended.
-func (jm *JobManager) CloseAdvanceBilledPeriod(ctx context.Context, tenantID string, closeAt time.Time) (time.Time, error) {
-	queries := purserdb.New(jm.db)
-	subscription, err := queries.GetSubscriptionForInvoice(ctx, tenantID)
-	if err != nil {
-		return time.Time{}, fmt.Errorf("load subscription to close: %w", err)
-	}
-	if !subscription.BillingPeriodStart.Valid {
-		return time.Time{}, fmt.Errorf("tenant %s has no billing period to close", tenantID)
-	}
-	periodStart := sql.NullTime{Time: subscription.BillingPeriodStart.Time, Valid: true}
-	closedAt, err := queries.GetFinalizedInvoicePeriodEnd(ctx, purserdb.GetFinalizedInvoicePeriodEndParams{TenantID: tenantID, PeriodStart: periodStart})
-	if err == nil {
-		return closedAt, nil
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		return time.Time{}, fmt.Errorf("check the closed period's invoice: %w", err)
-	}
-	jm.finalizeSubscriptionPeriods(ctx, []purserdb.ListSubscriptionsDueForInvoiceRow{
-		purserdb.ListSubscriptionsDueForInvoiceRow(subscription),
-	}, closeAt, closeAt)
-	closedAt, err = queries.GetFinalizedInvoicePeriodEnd(ctx, purserdb.GetFinalizedInvoicePeriodEndParams{TenantID: tenantID, PeriodStart: periodStart})
-	if errors.Is(err, sql.ErrNoRows) {
-		return time.Time{}, fmt.Errorf("usage invoice for tenant %s period starting %s was not finalized", tenantID, periodStart.Time.Format(time.RFC3339))
-	}
-	if err != nil {
-		return time.Time{}, fmt.Errorf("check the closed period's invoice: %w", err)
-	}
-	return closedAt, nil
-}
-
 // handleStripeSetupCheckoutCompleted saves the payment method a setup-mode
 // Checkout Session collected as the customer's default and activates the tier
 // the session was started for.
-func (s *Service) handleStripeSetupCheckoutCompleted(ctx context.Context, sessionID, tenantID, tierID, customerID, setupIntentID string) error {
+func (s *Service) handleStripeSetupCheckoutCompleted(ctx context.Context, sessionID, tenantID, tierID, customerID, setupIntentID string, receiptID string) error {
 	if tenantID == "" || customerID == "" || setupIntentID == "" {
 		return fmt.Errorf("setup checkout %s is missing tenant, customer, or setup intent", sessionID)
 	}
+	completed, completedErr := purserdb.New(s.db).CheckoutAlreadySettled(ctx, purserdb.CheckoutAlreadySettledParams{TenantID: tenantID, Provider: "stripe", SessionID: sessionID, PaymentID: ""})
+	if completedErr != nil {
+		return fmt.Errorf("check checkout outcome: %w", completedErr)
+	}
+	if completed {
+		return nil
+	}
+	bound, bindingErr := purserdb.New(s.db).CheckoutReceiptBound(ctx, purserdb.CheckoutReceiptBoundParams{TenantID: tenantID, Provider: "stripe", SessionID: sessionID})
+	if bindingErr != nil {
+		return fmt.Errorf("read checkout response binding: %w", bindingErr)
+	}
+	if !bound {
+		return errors.New("checkout response binding is pending; retry")
+	}
+
 	if s.stripeClient == nil {
 		return errors.New("stripe client not configured for setup checkout")
 	}
 	if _, err := s.stripeClient.SetDefaultPaymentMethodFromSetupIntent(ctx, customerID, setupIntentID); err != nil {
 		return err
 	}
-	if err := s.activateAdvanceBilledTenant(ctx, tenantID, tierID, "stripe", customerID, time.Now()); err != nil {
+	if err := s.activateAdvanceBilledTenant(ctx, tenantID, tierID, "stripe", customerID, providerReceiptTime(ctx), receiptID); err != nil {
+		if errors.Is(err, subscriptions.ErrCheckoutExpired) {
+			return nil
+		}
 		return err
 	}
 	if err := purserdb.New(s.db).MarkStripeIntentSucceededBySession(ctx, purserdb.MarkStripeIntentSucceededBySessionParams{
-		SubscriptionID: "", SessionID: sessionID,
+		SubscriptionID: "", SessionID: sessionID, TenantID: tenantID,
 	}); err != nil {
 		return fmt.Errorf("mark setup checkout intent succeeded: %w", err)
 	}
@@ -297,6 +294,14 @@ func (jm *JobManager) chargeAdvanceBaseFee(ctx context.Context, tenantID string,
 	dueAt := now.AddDate(0, 0, baseFeeDueDays)
 	err = withTx(ctx, jm.db, func(tx *sql.Tx) error {
 		txQueries := purserdb.New(tx)
+		if lockErr := txQueries.LockSubscriptionForPeriodClose(ctx, tenantID); lockErr != nil {
+			return lockErr
+		}
+		if _, closureErr := txQueries.GetTenantBillingClosure(ctx, tenantID); closureErr == nil {
+			return nil
+		} else if !errors.Is(closureErr, sql.ErrNoRows) {
+			return closureErr
+		}
 		previous, previousErr := planPreviousBaseFee(ctx, txQueries, tenantID, periodStart)
 		if previousErr != nil {
 			return previousErr
@@ -380,6 +385,9 @@ func (jm *JobManager) chargeAdvanceBaseFee(ctx context.Context, tenantID string,
 				return reduceErr
 			}
 		}
+		if consumeErr := consumePreviousBaseFee(ctx, txQueries, tenantID, previous, invoiceID, periodStart); consumeErr != nil {
+			return consumeErr
+		}
 		if netCents < 0 {
 			if creditErr := creditPrepaidBalanceForBaseFeeTx(ctx, tx, tenantID, invoiceID, -netCents, now); creditErr != nil {
 				return creditErr
@@ -412,6 +420,7 @@ const unusedBaseFeeCreditLineKey = "unused_base_fee_credit"
 type baseFeeCredit struct {
 	cents                  int64
 	invoiceID              string
+	providerPaymentID      string
 	periodStart, periodEnd time.Time
 }
 
@@ -676,10 +685,11 @@ func baseFeeInvoiceDetails(tier *billingpkg.EffectiveTier, baseEUR decimal.Decim
 	}
 	if credit.cents > 0 {
 		details["unused_base_fee_credit"] = map[string]any{
-			"invoice_id":   credit.invoiceID,
-			"period_start": credit.periodStart,
-			"period_end":   credit.periodEnd,
-			"amount":       decimal.New(credit.cents, -2).StringFixed(2),
+			"invoice_id":          credit.invoiceID,
+			"provider_payment_id": credit.providerPaymentID,
+			"period_start":        credit.periodStart,
+			"period_end":          credit.periodEnd,
+			"amount":              decimal.New(credit.cents, -2).StringFixed(2),
 		}
 	}
 	usageDetails, err := json.Marshal(details)
@@ -770,6 +780,26 @@ func creditPrepaidBalanceForBaseFeeTx(ctx context.Context, tx *sql.Tx, tenantID,
 		CreatedAt:       sql.NullTime{Time: now, Valid: true},
 	}); err != nil {
 		return fmt.Errorf("record unused base subscription credit: %w", err)
+	}
+	return nil
+}
+
+// consumePreviousBaseFee records the replacement that used an invoice's unused
+// share. Without this marker, a later prepaid round trip can credit it again.
+func consumePreviousBaseFee(ctx context.Context, queries *purserdb.Queries, tenantID string, previous previousBaseFee, replacementID string, at time.Time) error {
+	if !previous.found || previous.credit.invoiceID == "" {
+		return nil
+	}
+	details, err := json.Marshal(map[string]any{"returned_from": at, "replacement_invoice_id": replacementID, "credited": decimal.New(previous.credit.cents, -2).StringFixed(2)})
+	if err != nil {
+		return fmt.Errorf("marshal consumed base fee: %w", err)
+	}
+	rows, err := queries.MarkBaseFeeUnusedShareReturned(ctx, purserdb.MarkBaseFeeUnusedShareReturnedParams{TenantID: tenantID, InvoiceID: previous.credit.invoiceID, Details: details})
+	if err != nil {
+		return fmt.Errorf("record consumed base fee: %w", err)
+	}
+	if rows != 1 {
+		return fmt.Errorf("record consumed base fee: invoice %s not found", previous.credit.invoiceID)
 	}
 	return nil
 }

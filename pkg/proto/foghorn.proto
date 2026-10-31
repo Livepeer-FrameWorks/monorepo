@@ -263,6 +263,8 @@ service NodeControlService {
 service TenantControlService {
   // TerminateTenantStreams stops all active streams for a tenant (called when suspended)
   rpc TerminateTenantStreams(foghorn_control.TerminateTenantStreamsRequest) returns (foghorn_control.TerminateTenantStreamsResponse);
+  // TerminateStreamSessions stops only the specified tenant-owned streams.
+  rpc TerminateStreamSessions(foghorn_control.TerminateStreamSessionsRequest) returns (foghorn_control.TerminateTenantStreamsResponse);
   // InvalidateTenantCache clears cached suspension status for a tenant (called on reactivation)
   rpc InvalidateTenantCache(foghorn_control.InvalidateTenantCacheRequest) returns (foghorn_control.InvalidateTenantCacheResponse);
   // InvalidatePlaybackAuth tells Foghorn to send invalidate_sessions to every

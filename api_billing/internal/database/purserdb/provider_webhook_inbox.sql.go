@@ -9,12 +9,13 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"time"
 
 	"github.com/google/uuid"
 )
 
 const claimProviderWebhooks = `-- name: ClaimProviderWebhooks :many
-SELECT id, provider, headers, raw_payload, attempts
+SELECT id, provider, headers, raw_payload, GREATEST(attempts,wait_attempts)::integer AS attempts, created_at, event_key
 FROM purser.provider_webhook_inbox
 WHERE next_attempt_at <= NOW()
   AND (status IN ('pending', 'failed')
@@ -36,6 +37,8 @@ type ClaimProviderWebhooksRow struct {
 	Headers    json.RawMessage `db:"headers" json:"headers"`
 	RawPayload []byte          `db:"raw_payload" json:"raw_payload"`
 	Attempts   int32           `db:"attempts" json:"attempts"`
+	CreatedAt  time.Time       `db:"created_at" json:"created_at"`
+	EventKey   string          `db:"event_key" json:"event_key"`
 }
 
 func (q *Queries) ClaimProviderWebhooks(ctx context.Context, arg ClaimProviderWebhooksParams) ([]ClaimProviderWebhooksRow, error) {
@@ -53,6 +56,8 @@ func (q *Queries) ClaimProviderWebhooks(ctx context.Context, arg ClaimProviderWe
 			&i.Headers,
 			&i.RawPayload,
 			&i.Attempts,
+			&i.CreatedAt,
+			&i.EventKey,
 		); err != nil {
 			return nil, err
 		}
@@ -108,29 +113,246 @@ func (q *Queries) EnqueueProviderWebhook(ctx context.Context, arg EnqueueProvide
 	return err
 }
 
+const enqueueSuspendedTenantStop = `-- name: EnqueueSuspendedTenantStop :exec
+INSERT INTO purser.provider_webhook_inbox AS inbox (
+    provider, event_key, headers, raw_payload
+)
+VALUES ('tenant_suspension', 'tenant-suspension:' || $1::text,
+        jsonb_build_object('tenant_id', $1::text),
+        convert_to(jsonb_build_object('tenant_id', $1::text)::text, 'UTF8'))
+ON CONFLICT (provider, event_key) DO UPDATE SET
+    status = 'pending', next_attempt_at = NOW(), processed_at = NULL,
+    attempts = CASE WHEN inbox.status = 'processed' THEN 0 ELSE inbox.attempts END,
+    wait_attempts = CASE WHEN inbox.status = 'processed' THEN 0 ELSE inbox.wait_attempts END,
+    unresolved_since = CASE WHEN inbox.status = 'processed' THEN NULL ELSE inbox.unresolved_since END,
+    claimed_at = NULL, lease_token = NULL, updated_at = NOW()
+`
+
+func (q *Queries) EnqueueSuspendedTenantStop(ctx context.Context, tenantID string) error {
+	_, err := q.db.ExecContext(ctx, enqueueSuspendedTenantStop, tenantID)
+	return err
+}
+
 const failProviderWebhook = `-- name: FailProviderWebhook :execresult
 UPDATE purser.provider_webhook_inbox
-SET status = 'failed', attempts = attempts + 1,
-    next_attempt_at = NOW() + ($1::bigint * interval '1 millisecond'),
-    claimed_at = NULL, lease_token = NULL, last_error = $2, updated_at = NOW()
-WHERE id = $3
-  AND ($4::text = '' OR lease_token::text = $4::text)
+SET status = CASE WHEN $1::boolean THEN 'pending' ELSE 'failed' END,
+    attempts = attempts + CASE WHEN $1::boolean THEN 0 ELSE 1 END,
+    wait_attempts = wait_attempts + CASE WHEN $1::boolean THEN 1 ELSE 0 END,
+    unresolved_since = COALESCE(unresolved_since, NOW()),
+    next_attempt_at = NOW() + ($2::bigint * INTERVAL '1 millisecond'),
+    claimed_at = NULL, lease_token = NULL,
+    last_error = $3::text, updated_at = NOW()
+WHERE id = $4
+  AND ($5::text = '' OR lease_token::text = $5::text)
 `
 
 type FailProviderWebhookParams struct {
-	BackoffMilliseconds int64          `db:"backoff_milliseconds" json:"backoff_milliseconds"`
-	LastError           sql.NullString `db:"last_error" json:"last_error"`
-	ID                  uuid.UUID      `db:"id" json:"id"`
-	LeaseToken          string         `db:"lease_token" json:"lease_token"`
+	Waiting             bool      `db:"waiting" json:"waiting"`
+	BackoffMilliseconds int64     `db:"backoff_milliseconds" json:"backoff_milliseconds"`
+	LastError           string    `db:"last_error" json:"last_error"`
+	ID                  uuid.UUID `db:"id" json:"id"`
+	LeaseToken          string    `db:"lease_token" json:"lease_token"`
 }
 
 func (q *Queries) FailProviderWebhook(ctx context.Context, arg FailProviderWebhookParams) (sql.Result, error) {
 	return q.db.ExecContext(ctx, failProviderWebhook,
+		arg.Waiting,
 		arg.BackoffMilliseconds,
 		arg.LastError,
 		arg.ID,
 		arg.LeaseToken,
 	)
+}
+
+const finishCheckoutRecoveryAudit = `-- name: FinishCheckoutRecoveryAudit :exec
+UPDATE purser.checkout_recovery_audit
+SET outcome = $1::text, detail = $2::text,
+    completed_at = CASE WHEN $1::text IN ('requested', 'pending') THEN NULL ELSE NOW() END
+WHERE tenant_id = $3::text::uuid AND id = $4::text::uuid
+  AND outcome IN ('requested', 'pending')
+`
+
+type FinishCheckoutRecoveryAuditParams struct {
+	Outcome  string `db:"outcome" json:"outcome"`
+	Detail   string `db:"detail" json:"detail"`
+	TenantID string `db:"tenant_id" json:"tenant_id"`
+	ID       string `db:"id" json:"id"`
+}
+
+func (q *Queries) FinishCheckoutRecoveryAudit(ctx context.Context, arg FinishCheckoutRecoveryAuditParams) error {
+	_, err := q.db.ExecContext(ctx, finishCheckoutRecoveryAudit,
+		arg.Outcome,
+		arg.Detail,
+		arg.TenantID,
+		arg.ID,
+	)
+	return err
+}
+
+const insertCheckoutRecoveryAudit = `-- name: InsertCheckoutRecoveryAudit :one
+INSERT INTO purser.checkout_recovery_audit (tenant_id, intent_id, actor_id, reason)
+VALUES ($1::text::uuid, $2::text::uuid,
+        $3::text, $4::text)
+RETURNING id::text
+`
+
+type InsertCheckoutRecoveryAuditParams struct {
+	TenantID string `db:"tenant_id" json:"tenant_id"`
+	IntentID string `db:"intent_id" json:"intent_id"`
+	ActorID  string `db:"actor_id" json:"actor_id"`
+	Reason   string `db:"reason" json:"reason"`
+}
+
+func (q *Queries) InsertCheckoutRecoveryAudit(ctx context.Context, arg InsertCheckoutRecoveryAuditParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, insertCheckoutRecoveryAudit,
+		arg.TenantID,
+		arg.IntentID,
+		arg.ActorID,
+		arg.Reason,
+	)
+	var id string
+	err := row.Scan(&id)
+	return id, err
+}
+
+const listCheckoutRecovery = `-- name: ListCheckoutRecovery :many
+SELECT i.id::text, COALESCE(p.provider, i.headers->>'provider', i.provider)::text AS provider,
+       i.event_key, i.status, i.attempts, i.last_error, i.next_attempt_at,
+       COALESCE(p.tenant_id::text, i.headers->>'tenant_id', '')::text AS tenant_id,
+       COALESCE(p.id::text, upgrade.id::text, i.headers->>'reference_id', '')::text AS reservation_id,
+       COALESCE(p.expires_at, p.created_at + INTERVAL '24 hours') AS expires_at,
+       COALESCE(p.amount_cents, upgrade.base_cents, NULLIF(i.headers->>'amount_cents', '')::bigint, 0)::bigint AS amount_cents,
+       COALESCE(p.currency, i.headers->>'currency', '')::text AS currency,
+       COALESCE(p.status, upgrade.state, i.headers->>'reference_kind', '')::text AS reservation_status
+FROM purser.provider_webhook_inbox i
+LEFT JOIN purser.payment_provider_intents p
+  ON i.provider = 'checkout_recovery'
+ AND p.id::text = convert_from(i.raw_payload, 'UTF8')::jsonb->>'checkout_reservation_id'
+ AND p.tenant_id::text = convert_from(i.raw_payload, 'UTF8')::jsonb->>'tenant_id'
+LEFT JOIN purser.subscription_tier_upgrades upgrade
+  ON i.provider = 'tier_upgrade'
+ AND upgrade.id::text = convert_from(i.raw_payload, 'UTF8')::jsonb->>'id'
+ AND upgrade.tenant_id::text = i.headers->>'tenant_id'
+WHERE i.status <> 'processed'
+  AND ($1::text = ''
+       OR COALESCE(p.tenant_id::text, i.headers->>'tenant_id', '') = $1::text)
+ORDER BY i.created_at, i.id
+LIMIT $3::bigint OFFSET $2::bigint
+`
+
+type ListCheckoutRecoveryParams struct {
+	TenantID  string `db:"tenant_id" json:"tenant_id"`
+	RowOffset int64  `db:"row_offset" json:"row_offset"`
+	RowLimit  int64  `db:"row_limit" json:"row_limit"`
+}
+
+type ListCheckoutRecoveryRow struct {
+	IID               string         `db:"i_id" json:"i_id"`
+	Provider          string         `db:"provider" json:"provider"`
+	EventKey          string         `db:"event_key" json:"event_key"`
+	Status            string         `db:"status" json:"status"`
+	Attempts          int32          `db:"attempts" json:"attempts"`
+	LastError         sql.NullString `db:"last_error" json:"last_error"`
+	NextAttemptAt     time.Time      `db:"next_attempt_at" json:"next_attempt_at"`
+	TenantID          string         `db:"tenant_id" json:"tenant_id"`
+	ReservationID     string         `db:"reservation_id" json:"reservation_id"`
+	ExpiresAt         sql.NullTime   `db:"expires_at" json:"expires_at"`
+	AmountCents       int64          `db:"amount_cents" json:"amount_cents"`
+	Currency          string         `db:"currency" json:"currency"`
+	ReservationStatus string         `db:"reservation_status" json:"reservation_status"`
+}
+
+// Platform-operator inventory includes unbound callbacks; a supplied tenant narrows to its reservations.
+func (q *Queries) ListCheckoutRecovery(ctx context.Context, arg ListCheckoutRecoveryParams) ([]ListCheckoutRecoveryRow, error) {
+	rows, err := q.db.QueryContext(ctx, listCheckoutRecovery, arg.TenantID, arg.RowOffset, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListCheckoutRecoveryRow{}
+	for rows.Next() {
+		var i ListCheckoutRecoveryRow
+		if err := rows.Scan(
+			&i.IID,
+			&i.Provider,
+			&i.EventKey,
+			&i.Status,
+			&i.Attempts,
+			&i.LastError,
+			&i.NextAttemptAt,
+			&i.TenantID,
+			&i.ReservationID,
+			&i.ExpiresAt,
+			&i.AmountCents,
+			&i.Currency,
+			&i.ReservationStatus,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCheckoutRecoveryAudit = `-- name: ListCheckoutRecoveryAudit :many
+SELECT id::text, intent_id::text, actor_id, reason, outcome, detail, created_at
+FROM purser.checkout_recovery_audit
+WHERE tenant_id = $1::text::uuid
+ORDER BY created_at DESC, id
+LIMIT $3::bigint OFFSET $2::bigint
+`
+
+type ListCheckoutRecoveryAuditParams struct {
+	TenantID  string `db:"tenant_id" json:"tenant_id"`
+	RowOffset int64  `db:"row_offset" json:"row_offset"`
+	RowLimit  int64  `db:"row_limit" json:"row_limit"`
+}
+
+type ListCheckoutRecoveryAuditRow struct {
+	ID        string    `db:"id" json:"id"`
+	IntentID  string    `db:"intent_id" json:"intent_id"`
+	ActorID   string    `db:"actor_id" json:"actor_id"`
+	Reason    string    `db:"reason" json:"reason"`
+	Outcome   string    `db:"outcome" json:"outcome"`
+	Detail    string    `db:"detail" json:"detail"`
+	CreatedAt time.Time `db:"created_at" json:"created_at"`
+}
+
+func (q *Queries) ListCheckoutRecoveryAudit(ctx context.Context, arg ListCheckoutRecoveryAuditParams) ([]ListCheckoutRecoveryAuditRow, error) {
+	rows, err := q.db.QueryContext(ctx, listCheckoutRecoveryAudit, arg.TenantID, arg.RowOffset, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListCheckoutRecoveryAuditRow{}
+	for rows.Next() {
+		var i ListCheckoutRecoveryAuditRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.IntentID,
+			&i.ActorID,
+			&i.Reason,
+			&i.Outcome,
+			&i.Detail,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const markProviderWebhookProcessing = `-- name: MarkProviderWebhookProcessing :exec
@@ -147,5 +369,120 @@ type MarkProviderWebhookProcessingParams struct {
 
 func (q *Queries) MarkProviderWebhookProcessing(ctx context.Context, arg MarkProviderWebhookProcessingParams) error {
 	_, err := q.db.ExecContext(ctx, markProviderWebhookProcessing, arg.LeaseToken, arg.ID)
+	return err
+}
+
+const pendingCheckoutRecoveryAudits = `-- name: PendingCheckoutRecoveryAudits :many
+SELECT id::text, actor_id, reason
+FROM purser.checkout_recovery_audit
+WHERE tenant_id = $1::text::uuid AND intent_id = $2::text::uuid
+  AND outcome IN ('requested', 'pending')
+FOR UPDATE
+`
+
+type PendingCheckoutRecoveryAuditsParams struct {
+	TenantID string `db:"tenant_id" json:"tenant_id"`
+	IntentID string `db:"intent_id" json:"intent_id"`
+}
+
+type PendingCheckoutRecoveryAuditsRow struct {
+	ID      string `db:"id" json:"id"`
+	ActorID string `db:"actor_id" json:"actor_id"`
+	Reason  string `db:"reason" json:"reason"`
+}
+
+func (q *Queries) PendingCheckoutRecoveryAudits(ctx context.Context, arg PendingCheckoutRecoveryAuditsParams) ([]PendingCheckoutRecoveryAuditsRow, error) {
+	rows, err := q.db.QueryContext(ctx, pendingCheckoutRecoveryAudits, arg.TenantID, arg.IntentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []PendingCheckoutRecoveryAuditsRow{}
+	for rows.Next() {
+		var i PendingCheckoutRecoveryAuditsRow
+		if err := rows.Scan(&i.ID, &i.ActorID, &i.Reason); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const providerWebhookInboxRepeatedFailures = `-- name: ProviderWebhookInboxRepeatedFailures :one
+SELECT COUNT(*)::bigint AS items
+FROM purser.provider_webhook_inbox
+WHERE status IN ('pending', 'failed', 'processing')
+  AND (attempts > 1 OR unresolved_since < NOW() - INTERVAL '14 days')
+`
+
+// Service-wide recovery inventory; tenant filtering would hide stuck work.
+func (q *Queries) ProviderWebhookInboxRepeatedFailures(ctx context.Context) (int64, error) {
+	row := q.db.QueryRowContext(ctx, providerWebhookInboxRepeatedFailures)
+	var items int64
+	err := row.Scan(&items)
+	return items, err
+}
+
+const providerWebhookReceivedAt = `-- name: ProviderWebhookReceivedAt :one
+SELECT created_at FROM purser.provider_webhook_inbox
+WHERE provider = $1::text
+  AND event_key = $2::text
+  AND ((provider = 'stripe' AND convert_from(raw_payload, 'UTF8')::jsonb#>>'{data,object,metadata,tenant_id}' = $3::text)
+    OR (provider = 'mollie' AND convert_from(raw_payload, 'UTF8')::jsonb->>'tenant_id' = $3::text))
+`
+
+type ProviderWebhookReceivedAtParams struct {
+	Provider string `db:"provider" json:"provider"`
+	EventKey string `db:"event_key" json:"event_key"`
+	TenantID string `db:"tenant_id" json:"tenant_id"`
+}
+
+func (q *Queries) ProviderWebhookReceivedAt(ctx context.Context, arg ProviderWebhookReceivedAtParams) (time.Time, error) {
+	row := q.db.QueryRowContext(ctx, providerWebhookReceivedAt, arg.Provider, arg.EventKey, arg.TenantID)
+	var created_at time.Time
+	err := row.Scan(&created_at)
+	return created_at, err
+}
+
+const requestCheckoutRecovery = `-- name: RequestCheckoutRecovery :exec
+INSERT INTO purser.provider_webhook_inbox (
+    provider, event_key, headers, raw_payload, next_attempt_at
+)
+SELECT 'checkout_recovery', 'checkout-expiry:' || id::text,
+       jsonb_build_object('recovery_reason', $1::text),
+       convert_to(jsonb_build_object(
+           'checkout_reservation_id', id::text, 'tenant_id', tenant_id::text, 'force', true
+       )::text, 'UTF8'), NOW()
+FROM purser.payment_provider_intents
+WHERE tenant_id = $2::text::uuid AND id = $3::text::uuid
+ON CONFLICT (provider, event_key) DO UPDATE SET
+    attempts = CASE WHEN purser.provider_webhook_inbox.status = 'processed'
+        THEN 0 ELSE purser.provider_webhook_inbox.attempts END,
+    wait_attempts = CASE WHEN purser.provider_webhook_inbox.status = 'processed'
+        THEN 0 ELSE purser.provider_webhook_inbox.wait_attempts END,
+    unresolved_since = CASE WHEN purser.provider_webhook_inbox.status = 'processed'
+        THEN NULL ELSE purser.provider_webhook_inbox.unresolved_since END,
+    last_error = CASE WHEN purser.provider_webhook_inbox.status = 'processed'
+        THEN NULL ELSE purser.provider_webhook_inbox.last_error END,
+    processed_at = NULL,
+    headers = EXCLUDED.headers, raw_payload = EXCLUDED.raw_payload,
+    next_attempt_at = LEAST(purser.provider_webhook_inbox.next_attempt_at, NOW()),
+    status = 'pending', claimed_at = NULL, lease_token = NULL, updated_at = NOW()
+`
+
+type RequestCheckoutRecoveryParams struct {
+	Reason   string `db:"reason" json:"reason"`
+	TenantID string `db:"tenant_id" json:"tenant_id"`
+	IntentID string `db:"intent_id" json:"intent_id"`
+}
+
+func (q *Queries) RequestCheckoutRecovery(ctx context.Context, arg RequestCheckoutRecoveryParams) error {
+	_, err := q.db.ExecContext(ctx, requestCheckoutRecovery, arg.Reason, arg.TenantID, arg.IntentID)
 	return err
 }

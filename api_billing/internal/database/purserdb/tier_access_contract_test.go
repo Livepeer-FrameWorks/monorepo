@@ -26,7 +26,7 @@ func TestEffectiveDNSEntitlementSQLPrecedenceAndFailClosedDefault(t *testing.T) 
 			t.Fatal("DNS sweep must preserve override > tier > false precedence")
 		}
 	}
-	if !strings.Contains(listSubscriptionTierNames, "CASE WHEN ts.status = 'active'") ||
+	if !strings.Contains(listSubscriptionTierNames, "CASE WHEN ts.status IN ('active', 'past_due', 'pending_cancellation')") ||
 		!strings.Contains(listSubscriptionTierNames, "ELSE false") {
 		t.Fatal("cancelled subscriptions must materialize both DNS grants as false")
 	}

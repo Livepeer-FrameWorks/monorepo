@@ -20,26 +20,28 @@ import (
 // was dropped because the invoice UPSERT branches on a status column rather
 // than going through distinct create/finalize/void/reissue entry points.
 type PurserMetrics struct {
-	BillingCalculations       *prometheus.CounterVec
-	UsageRecords              *prometheus.CounterVec
-	UsageQuarantine           *prometheus.CounterVec // labels: usage_type, reason
-	WebhookSignatureFailures  *prometheus.CounterVec
-	CryptoScannerBlocks       *prometheus.GaugeVec
-	CryptoScannerCaughtUp     *prometheus.GaugeVec // labels: network; unix time the cursor last reached the finalized head
-	CryptoScannerErrors       *prometheus.CounterVec
-	CryptoDepositReorgs       *prometheus.CounterVec
-	CryptoUnsweptBaseUnits    *prometheus.GaugeVec
-	CryptoOldestUnswept       *prometheus.GaugeVec
-	CryptoFailedSweepItems    *prometheus.GaugeVec
-	CryptoRelayerBalanceETH   *prometheus.GaugeVec
-	X402QuoteConversion       *prometheus.GaugeVec
-	X402SettlementLatency     *prometheus.GaugeVec
-	CryptoPendingDeposits     *prometheus.GaugeVec
-	CryptoAccountingAnomalies *prometheus.GaugeVec
-	CryptoAnomalyOldest       *prometheus.GaugeVec
-	CryptoInvoiceReview       *prometheus.GaugeVec
-	CryptoLedgerReversals     *prometheus.GaugeVec
-	FXRateReferenceAge        *prometheus.GaugeVec // labels: currency
+	ProviderWebhookInboxFailures     *prometheus.GaugeVec
+	ProviderWebhookInboxReadFailures *prometheus.CounterVec
+	BillingCalculations              *prometheus.CounterVec
+	UsageRecords                     *prometheus.CounterVec
+	UsageQuarantine                  *prometheus.CounterVec // labels: usage_type, reason
+	WebhookSignatureFailures         *prometheus.CounterVec
+	CryptoScannerBlocks              *prometheus.GaugeVec
+	CryptoScannerCaughtUp            *prometheus.GaugeVec // labels: network; unix time the cursor last reached the finalized head
+	CryptoScannerErrors              *prometheus.CounterVec
+	CryptoDepositReorgs              *prometheus.CounterVec
+	CryptoUnsweptBaseUnits           *prometheus.GaugeVec
+	CryptoOldestUnswept              *prometheus.GaugeVec
+	CryptoFailedSweepItems           *prometheus.GaugeVec
+	CryptoRelayerBalanceETH          *prometheus.GaugeVec
+	X402QuoteConversion              *prometheus.GaugeVec
+	X402SettlementLatency            *prometheus.GaugeVec
+	CryptoPendingDeposits            *prometheus.GaugeVec
+	CryptoAccountingAnomalies        *prometheus.GaugeVec
+	CryptoAnomalyOldest              *prometheus.GaugeVec
+	CryptoInvoiceReview              *prometheus.GaugeVec
+	CryptoLedgerReversals            *prometheus.GaugeVec
+	FXRateReferenceAge               *prometheus.GaugeVec // labels: currency
 }
 
 // Service owns the dependencies for the Stripe/Mollie webhook and checkout
@@ -58,9 +60,9 @@ type Service struct {
 	// chargeAdvanceBaseFee is the JobManager's advance base-fee charge, set by
 	// NewJobManager, used when a payment-method setup activates a tier.
 	chargeAdvanceBaseFee func(context.Context, string) error
-	// closeAdvanceBilledPeriod is the JobManager's early period close, set by
-	// NewJobManager, used when a tenant billed in advance changes tier.
-	closeAdvanceBilledPeriod func(context.Context, string, time.Time) (time.Time, error)
+	// chargeTierUpgradeInvoice starts collection after the upgrade and its credit commit.
+	chargeTierUpgradeInvoice   func(context.Context, string, string, time.Time) error
+	stopSuspendedTenantStreams func(context.Context, string) error
 }
 
 // SetTenantEntitlementConverger wires the post-commit repair used by webhook

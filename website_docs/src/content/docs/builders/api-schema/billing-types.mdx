@@ -157,12 +157,12 @@ Result from creating a card top-up checkout session.
 
 **object**
 
-Result of a postpaid tier change. Either appliedTier is set (immediate upgrade) or pendingTier + effectiveAt are set (scheduled downgrade at period end).
+Result of a postpaid tier change. appliedTier identifies a committed upgrade. pendingTier identifies an upgrade awaiting reconciliation or a scheduled downgrade.
 
 - **success**: `Boolean!` — Whether the request was accepted.
 - **message**: `String!` — Human-readable status message.
-- **appliedTier**: `BillingTier` ([BillingTier](/builders/api-schema/billing-types/#billingtier)) — Set on immediate upgrade — the new active tier.
-- **pendingTier**: `BillingTier` ([BillingTier](/builders/api-schema/billing-types/#billingtier)) — Set on scheduled downgrade — the staged target tier.
+- **appliedTier**: `BillingTier` ([BillingTier](/builders/api-schema/billing-types/#billingtier)) — The active tier after the upgrade&#39;s billing boundary commits.
+- **pendingTier**: `BillingTier` ([BillingTier](/builders/api-schema/billing-types/#billingtier)) — The target of a pending upgrade or scheduled downgrade.
 - **effectiveAt**: `Time` ([Time](/builders/api-schema/shared/#time)) — When a scheduled downgrade will take effect.
 
 ## ChangeBillingTierResult

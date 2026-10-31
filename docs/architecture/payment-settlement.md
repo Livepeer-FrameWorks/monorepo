@@ -168,6 +168,66 @@ routed through `updateInvoicePaymentStatus`, observation marked
 `resolution='attached'`. A currency mismatch refuses to settle and leaves the
 observation unresolved for operator review rather than silently dropping it.
 
+## End of a provider subscription
+
+A subscription that ends never becomes `cancelled` while it has paid service to
+wind down, because billing and admission queries read `cancelled` as no
+subscription at all.
+
+| Trigger                                                                                                  | Status                 | Moves to Free            |
+| -------------------------------------------------------------------------------------------------------- | ---------------------- | ------------------------ |
+| Stripe `unpaid`, or `canceled` for any reason but a customer request                                     | `past_due`             | 14 days later            |
+| Mollie mandate revoked at charge time, or a failed installment finds the subscription canceled/suspended | `past_due`             | 14 days later            |
+| Stripe `canceled` from `pending_cancellation` or with reason `cancellation_requested`                    | `pending_cancellation` | At the event             |
+| Mollie cancellation through `CancelMollieSubscription`                                                   | `pending_cancellation` | At billing period end    |
+| Stripe `incomplete_expired`, or the subscription never activated                                         | `cancelled`            | Never; nothing activated |
+
+Mollie sends no webhook for a subscription's own status, so a failed installment
+reads it. Exhausted retries on a valid mandate keep ordinary dunning.
+
+`free_fallback_at` holds the date; repeated events never extend it, and any
+a completed provider activation clears it. Neither status is in the invoice job's list, so
+`runFreeFallbackSweep` issues the final invoice through
+`PrepareProviderBillingBoundary` in the transaction that moves the tenant,
+which waits for complete metering at the stored fallback cutoff. Retries keep
+that cutoff, so a delayed worker does not extend the invoice. A boundary already
+opened by an operator takes precedence over an earlier fallback date.
+
+Moves and notices have separate durable claims with five-minute retry backoff.
+Failed final invoices cannot starve later tenants, and notification failure does
+not block a billing move. SMTP runs after its claim commits, outside the billing
+transaction; acknowledgement is fenced against a newer move or fallback. The
+`PurserFreeFallbackStuck` alert reports repeated failures or sustained inventory
+read errors, using the maximum across replicas. An operator grant or a pending
+tier upgrade holds the move. On Free, `requireSettledOnFree` refuses paid
+tiers while finalized invoices are unpaid.
+
+Before moving a subscription to Free, Purser commits a pricing fence under the
+subscription row lock, then ends native provider collection outside that
+transaction. A provider outage keeps its native identity and retries. Grants,
+checkouts and upgrades cannot replace pricing while that stop is unsettled;
+account closure can still take ownership and permanently close billing.
+
+Confirmed bank payments that are still settling keep the fence. Normal waits
+are not failures; waits exceeding fourteen days alert. A recovered collector
+keeps the subscription. A payment that settles during cancellation retains its
+full paid term, including its DNS entitlements, without renewing or refunding
+that term. Initial Mollie funding is matched through its first-payment and
+native-creation receipts, excluding funding consumed by an earlier native
+creation. A rejected reservation with no native subscription does not consume
+it. Stripe retains cash-funded terms only with retained payment evidence;
+fully credit-funded terms use the paid invoice and its service period.
+
+A durable protection-through timestamp keeps local monthly start, end and
+collection anchors together through payment recovery. Dated dunning events
+establish protection before moving any local dates. Native renewal callbacks
+remain observational until actual invoice finalization closes each missed
+month with its own allowance. Before moving to Free, catch-up finalizes one
+complete stored month per transaction, then the final partial period. It
+propagates metering or invoice errors and never charges the next term. A new
+native purchase establishes a fresh period. Retry inventories prioritize untouched and least recently
+attempted work, so slow provider failures cannot monopolize the first batch.
+
 ## x402 settlement reconciler
 
 x402 USDC top-ups settle on-chain, so the row in `purser.x402_nonces` walks an

@@ -120,8 +120,8 @@ tenant-level state and is declared under `purser.customer_billing`. The
 `commodore bootstrap` subcommand reconciles all three Commodore-owned slices:
 `accounts[*].users`, `commodore.pull_streams`, and `commodore.mist_native_streams`. The CLI renderer
 validates intra-file references, then the service-specific bootstrap commands
-reconcile their owned sections; there is not currently a top-level
-`frameworks bootstrap validate` command.
+reconcile their owned sections. Use `<service> bootstrap --check --file`
+to validate rendered input with its owning service.
 
 ---
 
@@ -381,17 +381,54 @@ Operators declare explicit rows here when a tenant needs billing tier membership
 and media-cluster entitlement, including `quartermaster.system_tenant`. Account
 entries create users; tenant-to-tier links belong in Purser desired state.
 
+An optional `operator_grant` declares a billing arrangement:
+
+```yaml
+operator_grant:
+  base_fee: "0"
+  waive_usage: true
+  reason: "Operator API and stream test account"
+  # until: "2026-12-31" # optional absolute expiry, through this UTC day
+```
+
+`base_fee` is a non-negative EUR amount with at most eight integer digits and two decimals. `collection`
+is `provider` by default, or `invoice` for manual collection. A zero base fee
+with waived usage needs no payment provider. Provider subscriptions must be
+cancelled before overriding their base fee. The declared tier is permanent, so
+bootstrap grants have no fallback tier. When a grant ends, collection readiness again gates rated API work;
+existing postpaid media admission is unchanged. Use the operator CLI for a trial that restores the
+previous tier.
+
+Reapplying identical grants does not rewrite their start time or emit another
+audit event. Omitting `operator_grant` preserves grants created through the CLI.
+An expired declaration is inert, including when a later CLI grant exists.
+A live declaration owns the grant and logs replacements of CLI arrangements.
+Existing billing phases close before grant pricing changes. Renewing only the
+deadline keeps the current phase open. A pending expiry is ended through the runtime
+billing boundary before applying a live declaration. A tenant whose expiry cannot
+complete is reported and deferred while other tenants reconcile. Dry-run leaves
+pending expiries untouched and reports those tenants as deferred. Other preparation
+or collection prerequisites can refuse a change without committing.
+
 Stable: `tenant.ref`. Update-on-drift for `tier` and declared
 `entitlement_overrides`. `model` is applied when the subscription is created;
 a different `model` for an existing tenant is refused, because a switch
 between prepaid and postpaid closes the running period with a statement or
-invoice that only `frameworks admin billing set-tier` rates and writes. Make
-the switch there, then update the desired state.
+invoice. This also applies when expiry restored a fallback on a different
+billing model. Use `frameworks admin billing set-tier` to make the switch, then
+update the desired state.
 
 When this reconciles, Purser resolves the tenant alias to a UUID, writes the
 tenant's billing/subscription state, and emits post-commit access grants for the
 tier's eligible platform-official clusters. Those grants call Quartermaster's
 service-token `BootstrapClusterAccess` primitive.
+
+When a tenant is deferred, healthy tenants commit and `purser bootstrap` exits
+non-zero. Release apply therefore stops before the Commodore accounts step.
+Correct the reported tier, grant or dependency failure and re-run release apply.
+If expiry restored a different billing model, first run `frameworks admin billing
+set-tier` with the declared tier and a reason, then re-run. This uses the normal
+billing transition, including status, balances, credits and closing documents.
 
 ---
 
@@ -432,16 +469,23 @@ accounts:
       - email: admin@northwind.example
         role: owner
         password_ref: { sops: ..., key: NORTHWIND_OWNER_PASSWORD }
-    billing:
+purser:
+  customer_billing:
+    - tenant: { ref: quartermaster.tenants[northwind] }
       model: prepaid
-      tier: developer
+      tier: payg
       cluster_access: derived
 ```
 
-Customer-kind seeding ships when needed. The ordering is: tenant shell (QM step 2) →
+Customer accounts are reconciled during provision, finalize, and release apply. The ordering is: tenant shell (QM step 2) →
 clusters (QM step 2) → cluster_pricing (Purser step 3) → customer_billing (Purser step 3,
 calls QM `BootstrapClusterAccess` for eligible platform clusters) → user (Commodore
 step 4).
+
+`cluster release apply` runs `commodore bootstrap --accounts-only` after the
+Purser bootstrap. It never resets existing passwords or reconciles stream
+fixtures. The rendered accounts and secret references are validated before the
+release mutates the cluster.
 
 ### User reconciliation (idempotent)
 
@@ -460,6 +504,10 @@ Commodore reconciler semantics for any user under `accounts[*].users`:
   `--reset-credentials`.
 
 ---
+
+Creating a declared user in a permanently closed tenant defers that user and
+reports the account. Healthy accounts commit, and bootstrap exits non-zero so
+the closed user declaration can be removed before release apply is retried.
 
 ## Section: `commodore`
 

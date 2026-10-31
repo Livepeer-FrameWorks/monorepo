@@ -345,7 +345,7 @@ func localBillingStatus(tenant localauthority.TenantSnapshot) *BillingStatus {
 			status.State = BillingStatusStaleValid
 		}
 	case mediaauthoritypb.TenantBillingDecision_TENANT_BILLING_DECISION_PAYMENT_REQUIRED:
-		status.IsBalanceNegative = true
+		status.IsBalanceNegative = payload.GetDecisionReason() == sharedauthority.ReasonPrepaidBalanceUnavailable
 		status.State = BillingStatusDenied
 		status.DeniedReason = payload.GetDecisionReason()
 	case mediaauthoritypb.TenantBillingDecision_TENANT_BILLING_DECISION_SUSPENDED:

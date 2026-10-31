@@ -669,16 +669,16 @@ type CardTopupResult struct {
 	Conversion *purserpb.FxConversion `json:"conversion,omitempty"`
 }
 
-// Result of a postpaid tier change. Either appliedTier is set (immediate upgrade)
-// or pendingTier + effectiveAt are set (scheduled downgrade at period end).
+// Result of a postpaid tier change. appliedTier identifies a committed upgrade.
+// pendingTier identifies an upgrade awaiting reconciliation or a scheduled downgrade.
 type ChangeBillingTierPayload struct {
 	// Whether the request was accepted.
 	Success bool `json:"success"`
 	// Human-readable status message.
 	Message string `json:"message"`
-	// Set on immediate upgrade — the new active tier.
+	// The active tier after the upgrade's billing boundary commits.
 	AppliedTier *purserpb.BillingTier `json:"appliedTier,omitempty"`
-	// Set on scheduled downgrade — the staged target tier.
+	// The target of a pending upgrade or scheduled downgrade.
 	PendingTier *purserpb.BillingTier `json:"pendingTier,omitempty"`
 	// When a scheduled downgrade will take effect.
 	EffectiveAt *time.Time `json:"effectiveAt,omitempty"`

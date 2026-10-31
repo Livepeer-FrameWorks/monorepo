@@ -422,6 +422,7 @@ export default defineConfig({
               label: "Operations",
               items: [
                 { slug: "operators/operations" },
+                { slug: "operators/trial-accounts" },
                 { slug: "operators/alerting" },
                 { slug: "operators/media-storage" },
                 { slug: "operators/dvr" },

@@ -193,7 +193,7 @@ func TestGRPCQueryPack_RealPG(t *testing.T) { //nolint:funlen // One engine star
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := queries.SetProviderIntentCustomer(ctx, purserdb.SetProviderIntentCustomerParams{
+		if err := queries.SetProviderIntentCustomer(ctx, purserdb.SetProviderIntentCustomerParams{TenantID: tenantID,
 			CustomerID: sql.NullString{String: "cus_contract", Valid: true}, IntentID: intentID,
 		}); err != nil {
 			t.Fatal(err)

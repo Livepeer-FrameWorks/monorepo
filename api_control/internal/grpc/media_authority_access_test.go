@@ -101,7 +101,7 @@ func TestCompileFailureFallbackPreservesAwaitTenant(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	mock.ExpectQuery("GetCurrentMediaAuthorityPayload").WillReturnError(context.DeadlineExceeded)
+	mock.ExpectQuery("GetCurrentMediaAuthorityRevocationSnapshot").WillReturnError(context.DeadlineExceeded)
 	failures := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "test_revocation_failures"}, []string{"stage"})
 	registry := prometheus.NewRegistry()
 	registry.MustRegister(failures)
@@ -230,8 +230,8 @@ func TestCompileAuthorityChecksAccessBeforeTenantLookupSucceeds(t *testing.T) {
 					}}
 					mock.ExpectQuery("GetLiveStreamMediaAuthoritySource").WithArgs(objectID).WillReturnRows(sqlmock.NewRows([]string{
 						"stream_id", "tenant_id", "user_id", "internal_name", "playback_id", "stream_key", "ingest_mode", "requires_auth", "is_recording_enabled",
-						"playback_policy", "playback_webhook_secret_enc", "active_ingest_cluster_id", "last_ingest_cluster_id", "deleted_at", "age_seconds", "ingest_lease_age_seconds",
-					}).AddRow(objectID, tenantID, "user", "internal", "playback", "stream-key", "push", true, false, tt.policy, "", "", "", nil, 0, 0))
+						"playback_policy", "playback_webhook_secret_enc", "active_ingest_cluster_id", "last_ingest_cluster_id", "deleted_at", "age_seconds", "ingest_lease_age_seconds", "may_publish",
+					}).AddRow(objectID, tenantID, "user", "internal", "playback", "stream-key", "push", true, false, tt.policy, "", "", "", nil, 0, 0, true))
 				}
 				encoded, err := proto.Marshal(object)
 				if err != nil {
@@ -240,8 +240,8 @@ func TestCompileAuthorityChecksAccessBeforeTenantLookupSucceeds(t *testing.T) {
 				tenantErr := errors.New("tenant lookup unavailable")
 				denyErr := errors.New("deny publication history unavailable")
 				mock.ExpectQuery("GetCurrentMediaAuthorityPayload").WithArgs("tenant", tenantID).WillReturnError(tenantErr)
-				mock.ExpectQuery("GetCurrentMediaAuthorityPayload").WithArgs("media_object", authorityID).
-					WillReturnRows(sqlmock.NewRows([]string{"payload", "valid_until"}).AddRow(encoded, time.Now().Add(time.Hour)))
+				mock.ExpectQuery("GetCurrentMediaAuthorityRevocationSnapshot").WithArgs("media_object", authorityID).
+					WillReturnRows(sqlmock.NewRows([]string{"payload", "valid_until", "source_revisions"}).AddRow(encoded, time.Now().Add(time.Hour), []byte(`[]`)))
 				if tt.revoked {
 					// Stop at the safety-write entry point; real-engine tests prove the
 					// resulting deny is persisted and delivered without a tenant lookup.
@@ -285,7 +285,7 @@ func TestCompileFailureMissingPlacementPreservesAwaitTenant(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mock.ExpectQuery("GetCurrentMediaAuthorityPayload").WillReturnRows(sqlmock.NewRows([]string{"payload", "valid_until"}).AddRow(encoded, time.Now().Add(time.Hour)))
+	mock.ExpectQuery("GetCurrentMediaAuthorityRevocationSnapshot").WillReturnRows(sqlmock.NewRows([]string{"payload", "valid_until", "source_revisions"}).AddRow(encoded, time.Now().Add(time.Hour), []byte(`[]`)))
 	mock.ExpectBegin()
 	mock.ExpectQuery("MediaPlacementStreamExists").WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 	mock.ExpectRollback()
@@ -299,7 +299,7 @@ func TestCompileFailureMissingPlacementPreservesAwaitTenant(t *testing.T) {
 	}
 }
 
-func TestCompileFailureKnownIngestRevocationNeedsNoPlaybackRevisionLookup(t *testing.T) {
+func TestCompileFailureKnownIngestRevocationChecksPlaybackRevision(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatal(err)
@@ -316,7 +316,7 @@ func TestCompileFailureKnownIngestRevocationNeedsNoPlaybackRevisionLookup(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	mock.ExpectQuery("GetCurrentMediaAuthorityPayload").WillReturnRows(sqlmock.NewRows([]string{"payload", "valid_until"}).AddRow(encoded, time.Now().Add(time.Hour)))
+	mock.ExpectQuery("GetCurrentMediaAuthorityRevocationSnapshot").WillReturnRows(sqlmock.NewRows([]string{"payload", "valid_until", "source_revisions"}).AddRow(encoded, time.Now().Add(time.Hour), []byte(`[]`)))
 	denyErr := errors.New("deny publication history unavailable")
 	mock.ExpectQuery("GetCurrentMediaAuthorityPayload").WillReturnError(denyErr)
 	ctx := withPlaybackAccessSource(t.Context(), true, `{"type":"webhook","webhook":{"url":"https://example.test/auth"}}`, "sealed")
@@ -331,7 +331,7 @@ func TestCompileFailureKnownIngestRevocationNeedsNoPlaybackRevisionLookup(t *tes
 	}
 }
 
-func TestCompileFailurePlaybackReadFailureStillChecksPlacement(t *testing.T) {
+func TestCompileFailureMissingPlaybackRevisionDenies(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatal(err)
@@ -349,16 +349,14 @@ func TestCompileFailurePlaybackReadFailureStillChecksPlacement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mock.ExpectQuery("GetCurrentMediaAuthorityPayload").WillReturnRows(sqlmock.NewRows([]string{"payload", "valid_until"}).AddRow(encoded, time.Now().Add(time.Hour)))
-	mock.ExpectQuery("GetCurrentMediaAuthorityPlaybackSourceRevision").WillReturnError(errors.New("playback revision unavailable"))
-	mock.ExpectBegin()
-	mock.ExpectQuery("MediaPlacementStreamExists").WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
-	mock.ExpectRollback()
+	mock.ExpectQuery("GetCurrentMediaAuthorityRevocationSnapshot").WillReturnRows(sqlmock.NewRows([]string{"payload", "valid_until", "source_revisions"}).AddRow(encoded, time.Now().Add(time.Hour), []byte(`[]`)))
+	denyErr := errors.New("deny publication history unavailable")
+	mock.ExpectQuery("GetCurrentMediaAuthorityPayload").WillReturnError(denyErr)
 	ctx := withPlaybackAccessSource(t.Context(), true, `{"type":"webhook"}`, "sealed")
 	s := &CommodoreServer{db: db}
 	err = s.revokeChangedAccessOnCompileFailure(ctx, "live_stream:test", mediapb.MediaObjectKind_MEDIA_OBJECT_KIND_LIVE_STREAM, previous.PlaybackPolicy, nil, errTenantAuthorityMissing)
-	if class, _ := classifyAuthorityCompileError(err); class != authorityCompileAwaitTenant || !errors.Is(err, errTenantAuthorityMissing) {
-		t.Fatalf("fallback lost the original parent failure: %v", err)
+	if class, code := classifyAuthorityCompileError(err); class != authorityCompileTransient || code != "deny_publish_failed" || !errors.Is(err, denyErr) {
+		t.Fatalf("missing provenance retained access: %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)

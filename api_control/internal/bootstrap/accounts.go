@@ -9,8 +9,11 @@ import (
 
 	"frameworks/api_control/internal/database/commodoredb"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
+	fwdb "github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
+	"github.com/yugabyte/pgx/v5/pgconn"
 )
 
 // ReconcileAccounts reconciles every Account's users into commodore.users.
@@ -81,6 +84,8 @@ func ReconcileAccounts(
 				res.Updated = append(res.Updated, key)
 			case "noop":
 				res.Noop = append(res.Noop, key)
+			case "deferred":
+				res.Deferred = append(res.Deferred, key)
 			}
 		}
 	}
@@ -93,9 +98,18 @@ func validateAccount(a Account) error {
 		return errors.New("tenant.ref required")
 	}
 	switch a.Kind {
-	case AccountSystemOperator, AccountCustomer:
+	case AccountSystemOperator:
+		if !isSystemTenantRef(a.Tenant.Ref) {
+			return errors.New("system_operator must reference quartermaster.system_tenant")
+		}
+	case AccountCustomer:
 	default:
 		return fmt.Errorf("account kind must be %q or %q (got %q)", AccountSystemOperator, AccountCustomer, a.Kind)
+	}
+	for _, user := range a.Users {
+		if user.PlatformOperator && !isSystemTenantRef(a.Tenant.Ref) {
+			return errors.New("platform operators must belong to the system tenant")
+		}
 	}
 	return nil
 }
@@ -125,12 +139,34 @@ func reconcileUser(ctx context.Context, exec DBTX, tenantID string, u AccountUse
 			return "", "", fmt.Errorf("hash password: %w", hashErr)
 		}
 		userID := uuid.New().String()
+		_, inTransaction := exec.(*sql.Tx)
+		if inTransaction {
+			if saveErr := queries.BeginBootstrapAccountUser(ctx); saveErr != nil {
+				return "", "", saveErr
+			}
+		}
 		if insertErr := queries.CreateBootstrapUser(ctx, commodoredb.CreateBootstrapUserParams{
 			ID: userID, TenantID: tenantID, Email: u.Email, PasswordHash: hash,
 			FirstName: u.FirstName, LastName: u.LastName, Role: u.Role,
 			Permissions: defaultPermissions(u.Role), PlatformOperator: u.PlatformOperator,
 		}); insertErr != nil {
+			if closedTenantAccountError(insertErr) {
+				if inTransaction {
+					if rollbackErr := queries.RollbackBootstrapAccountUser(ctx); rollbackErr != nil {
+						return "", "", rollbackErr
+					}
+					if releaseErr := queries.ReleaseBootstrapAccountUser(ctx); releaseErr != nil {
+						return "", "", releaseErr
+					}
+				}
+				return "deferred", fmt.Sprintf("account tenant %s user %s is permanently closed; remove this user declaration", tenantID, u.Email), nil
+			}
 			return "", "", fmt.Errorf("insert user: %w", insertErr)
+		}
+		if inTransaction {
+			if releaseErr := queries.ReleaseBootstrapAccountUser(ctx); releaseErr != nil {
+				return "", "", releaseErr
+			}
 		}
 		return "created", "", nil
 	case err != nil:
@@ -226,4 +262,18 @@ func AliasFromRef(ref string) (string, error) {
 		return strings.TrimSuffix(strings.TrimPrefix(ref, prefix), "]"), nil
 	}
 	return "", fmt.Errorf("malformed tenant ref %q", ref)
+}
+
+// closedTenantAccountError distinguishes the account guard from unrelated checks.
+func closedTenantAccountError(err error) bool {
+	if fwdb.SQLState(err) != "23514" {
+		return false
+	}
+	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok {
+		return pgErr.ConstraintName == "tenant_account_closed"
+	}
+	if pqErr, ok := errors.AsType[*pq.Error](err); ok {
+		return pqErr.Constraint == "tenant_account_closed"
+	}
+	return false
 }

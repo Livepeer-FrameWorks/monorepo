@@ -41,11 +41,12 @@ func TestBillingGrantRequestValidation(t *testing.T) {
 		{"reason required", billingGrantRequest{BaseFee: "0"}, "--reason"},
 		{"changes nothing", billingGrantRequest{Reason: "x"}, "changes nothing"},
 		{"bad collection", billingGrantRequest{Reason: "x", Collection: "wire"}, "--collection"},
-		{"bad base fee", billingGrantRequest{Reason: "x", BaseFee: "1.234"}, "--base-fee"},
-		{"negative base fee", billingGrantRequest{Reason: "x", BaseFee: "-1"}, "--base-fee"},
+		{"bad base fee", billingGrantRequest{Reason: "x", BaseFee: "1.234"}, "--base-fee \"1.234\": expected a non-negative EUR amount with at most eight integer digits and two decimals"},
+		{"overflow base fee", billingGrantRequest{Reason: "x", BaseFee: "100000000"}, "--base-fee \"100000000\": expected a non-negative EUR amount with at most eight integer digits and two decimals"},
+		{"negative base fee", billingGrantRequest{Reason: "x", BaseFee: "-1"}, "--base-fee \"-1\": expected a non-negative EUR amount with at most eight integer digits and two decimals"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := tc.req.toProto(billingOperatorTenant, now); err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+			if _, err := tc.req.toProto(billingOperatorTenant, now); err == nil || !strings.Contains(err.Error(), tc.wantErr) || (strings.Contains(tc.wantErr, "eight integer digits") && err.Error() != tc.wantErr) {
 				t.Fatalf("err = %v, want %q", err, tc.wantErr)
 			}
 		})
@@ -137,5 +138,20 @@ func TestRunBillingGrantShowReportsTheTenantsTier(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "supporter (postpaid)") {
 		t.Fatalf("text output does not name the tenant's tier:\n%s", out.String())
+	}
+}
+
+func TestBillingGrantRevokeForwardsRecoveryTier(t *testing.T) {
+	client := &fakeAdminBillingClient{grantResp: &purserpb.AdminBillingGrantResponse{}}
+	var out bytes.Buffer
+	if err := runBillingGrantRevoke(context.Background(), &out, client, nil, "token", billingTenantTarget{TenantID: "11111111-1111-1111-1111-111111111111"}, "retired fallback", "production", true); err != nil {
+		t.Fatal(err)
+	}
+	if len(client.revokeTiers) != 1 || client.revokeTiers[0] != "production" {
+		t.Fatalf("recovery tiers=%v", client.revokeTiers)
+	}
+	command := newAdminBillingGrantRevokeCmd()
+	if err := command.ParseFlags([]string{"--tier", "production"}); err != nil {
+		t.Fatal(err)
 	}
 }

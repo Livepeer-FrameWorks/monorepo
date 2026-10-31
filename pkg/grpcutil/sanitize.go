@@ -103,6 +103,11 @@ func SanitizeError(err error) error {
 			return withDetails.Err()
 		}
 	}
+	if st.Code() == codes.Unavailable {
+		if progress := StreamStopProgress(st.Err()); progress != nil {
+			return PendingStreamStop(progress)
+		}
+	}
 	// Rebuilt from the reason alone so no downstream message crosses the
 	// boundary, while clients keep the typed state and advised retry delay.
 	if reason, retryAfter, ok := PlaybackStreamState(st.Err()); ok && reason == StreamStartingReason && st.Code() == codes.Unavailable {

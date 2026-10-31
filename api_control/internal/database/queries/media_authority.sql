@@ -1303,6 +1303,7 @@ RETURNING inbox.source_service, inbox.source_event_id, inbox.tenant_id::text AS 
 -- name: ListMediaAuthorityObligationStats :many
 -- Reads only what is due, through the due index. The table holds a renewal row
 -- for every published authority, nearly all of them scheduled for later.
+-- Session-stop delivery also counts work waiting in backoff, by its first enqueue.
 SELECT lane,
        COUNT(*)::bigint AS due_count,
        COALESCE(MAX(EXTRACT(EPOCH FROM (NOW() - GREATEST(pending_since, next_attempt_at)))), 0)::double precision AS oldest_due_seconds
@@ -1310,6 +1311,12 @@ FROM commodore.media_authority_refresh_obligations
 WHERE status IN ('pending', 'processing')
   AND lane IN ('event', 'bulk', 'object_deadline', 'tenant_deadline')
   AND next_attempt_at <= NOW()
+GROUP BY lane
+UNION ALL
+SELECT lane,COUNT(*)::bigint AS due_count,
+       COALESCE(MAX(EXTRACT(EPOCH FROM (NOW()-pending_since))),0)::double precision AS oldest_due_seconds
+FROM commodore.media_authority_refresh_obligations
+WHERE lane='ingest_revocation' AND status IN ('pending','processing')
 GROUP BY lane
 ORDER BY lane;
 
@@ -1382,13 +1389,14 @@ JOIN commodore.media_authority_versions AS versions
 WHERE current.authority_kind = sqlc.arg(authority_kind)
   AND current.authority_id = sqlc.arg(authority_id);
 
--- name: GetCurrentMediaAuthorityPlaybackSourceRevision :one
-SELECT COALESCE((SELECT item->>'revision'
-    FROM jsonb_array_elements(versions.source_revisions) AS item
-    WHERE item->>'service' = 'commodore-playback-access' LIMIT 1), '')::text AS revision
+-- name: GetCurrentMediaAuthorityRevocationSnapshot :one
+SELECT versions.payload, versions.valid_until, versions.source_revisions
 FROM commodore.media_authority_current AS current
-JOIN commodore.media_authority_versions AS versions USING (authority_kind, authority_id, authority_version)
-WHERE current.authority_kind = 'media_object'
+JOIN commodore.media_authority_versions AS versions
+  ON versions.authority_kind = current.authority_kind
+ AND versions.authority_id = current.authority_id
+ AND versions.authority_version = current.authority_version
+WHERE current.authority_kind = sqlc.arg(authority_kind)
   AND current.authority_id = sqlc.arg(authority_id);
 
 -- name: MarkMediaAuthorityVersionTombstone :execrows
@@ -1438,7 +1446,8 @@ SELECT id::text AS stream_id, tenant_id::text AS tenant_id, user_id::text AS use
        deleted_at,
        -- Ages are taken on the database clock, in the column's own time zone.
        COALESCE(EXTRACT(EPOCH FROM (NOW()::timestamp - created_at)), 1e12)::bigint AS age_seconds,
-       COALESCE(EXTRACT(EPOCH FROM (NOW()::timestamp - active_ingest_cluster_updated_at)), 1e12)::bigint AS ingest_lease_age_seconds
+       COALESCE(EXTRACT(EPOCH FROM (NOW()::timestamp - active_ingest_cluster_updated_at)), 1e12)::bigint AS ingest_lease_age_seconds,
+       EXISTS(SELECT 1 FROM commodore.users owner WHERE owner.id=streams.user_id AND owner.tenant_id=streams.tenant_id AND owner.is_active)::boolean AS may_publish
 FROM commodore.streams
 WHERE id = sqlc.arg(stream_id)::uuid;
 
@@ -1667,3 +1676,7 @@ WHERE changes.rollout_status IN ('pending', 'blocked')
   AND (changes.tenant_id, changes.created_at) > (sqlc.arg(after_tenant_id)::uuid, sqlc.arg(after_created_at)::timestamptz)
 ORDER BY changes.tenant_id, changes.created_at
 LIMIT sqlc.arg(max_rows)::integer;
+
+-- name: ListUserLiveStreamAuthorityTargets :many
+SELECT id::text FROM commodore.streams
+WHERE tenant_id=sqlc.arg(tenant_id)::uuid AND user_id=sqlc.arg(user_id)::uuid AND deleted_at IS NULL;

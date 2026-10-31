@@ -3,6 +3,7 @@ package grpc
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"testing"
 	"time"
 
@@ -33,11 +34,11 @@ func TestGetTenantAdmissionStatusMapsBoundedDecision(t *testing.T) {
 	cols := []string{
 		"billing_model", "subscription_status", "balance_cents", "reserved_balance_cents",
 		"payment_method", "stripe_subscription_id", "mollie_subscription_id", "tier_name", "tier_level",
-		"stripe_customer_id", "has_valid_mollie_mandate", "grant_collection", "grant_waive_usage", "effective_base_price",
+		"stripe_customer_id", "has_valid_mollie_mandate", "grant_collection", "grant_waive_usage", "effective_base_price", "grant_expires_at",
 	}
 	mock.ExpectQuery(`FROM purser\.tenant_subscriptions ts`).
 		WithArgs("EUR", "tenant-1").
-		WillReturnRows(sqlmock.NewRows(cols).AddRow("prepaid", "active", int64(100), int64(125), nil, nil, nil, "prepaid", int32(2), nil, false, nil, false, "0.00"))
+		WillReturnRows(sqlmock.NewRows(cols).AddRow("prepaid", "active", int64(100), int64(125), nil, nil, nil, "prepaid", int32(2), nil, false, nil, false, "0.00", nil))
 
 	resp, err := s.GetTenantAdmissionStatus(context.Background(), &purserpb.GetTenantAdmissionStatusRequest{TenantId: "tenant-1"})
 	if err != nil {
@@ -95,14 +96,14 @@ func TestGetTenantBillingStatusPrepaidNegativeBalance(t *testing.T) {
 		"billing_model", "status", "balance_cents", "reserved_balance_cents", "retention", "dvr_entitlements",
 		"tier_id", "billing_period_start", "billing_period_end", "storage_limit", "resource_limits",
 		"payment_method", "stripe_subscription_id", "mollie_subscription_id", "tier_name",
-		"stripe_customer_id", "has_valid_mollie_mandate", "grant_collection", "grant_waive_usage", "effective_base_price",
+		"stripe_customer_id", "has_valid_mollie_mandate", "grant_collection", "grant_waive_usage", "effective_base_price", "grant_expires_at",
 	}
 
 	t.Run("prepaid non-positive trips negative", func(t *testing.T) {
 		s, mock := newReadServer(t, true)
 		mock.ExpectQuery(`LEFT JOIN purser\.prepaid_balances pb`).
 			WillReturnRows(sqlmock.NewRows(cols).
-				AddRow("prepaid", "active", int64(-50), int64(0), "", "", "", nil, nil, "", "", nil, nil, nil, "prepaid", nil, false, nil, false, "0.00"))
+				AddRow("prepaid", "active", int64(-50), int64(0), "", "", "", nil, nil, "", "", nil, nil, nil, "prepaid", nil, false, nil, false, "0.00", nil))
 
 		resp, err := s.GetTenantBillingStatus(context.Background(), &purserpb.GetTenantBillingStatusRequest{TenantId: "tenant-1"})
 		if err != nil {
@@ -117,7 +118,7 @@ func TestGetTenantBillingStatusPrepaidNegativeBalance(t *testing.T) {
 		s, mock := newReadServer(t, true)
 		mock.ExpectQuery(`LEFT JOIN purser\.prepaid_balances pb`).
 			WillReturnRows(sqlmock.NewRows(cols).
-				AddRow("prepaid", "active", int64(100), int64(125), "", "", "", nil, nil, "", "", nil, nil, nil, "prepaid", nil, false, nil, false, "0.00"))
+				AddRow("prepaid", "active", int64(100), int64(125), "", "", "", nil, nil, "", "", nil, nil, nil, "prepaid", nil, false, nil, false, "0.00", nil))
 
 		resp, err := s.GetTenantBillingStatus(context.Background(), &purserpb.GetTenantBillingStatusRequest{TenantId: "tenant-1"})
 		if err != nil {
@@ -132,7 +133,7 @@ func TestGetTenantBillingStatusPrepaidNegativeBalance(t *testing.T) {
 		s, mock := newReadServer(t, true)
 		mock.ExpectQuery(`LEFT JOIN purser\.prepaid_balances pb`).
 			WillReturnRows(sqlmock.NewRows(cols).
-				AddRow("postpaid", "suspended", int64(-50), int64(0), "", "", "", nil, nil, "", "", "stripe", "sub_1", nil, "pro", nil, false, nil, false, "0.00"))
+				AddRow("postpaid", "suspended", int64(-50), int64(0), "", "", "", nil, nil, "", "", "stripe", "sub_1", nil, "pro", nil, false, nil, false, "0.00", nil))
 
 		resp, err := s.GetTenantBillingStatus(context.Background(), &purserpb.GetTenantBillingStatusRequest{TenantId: "tenant-1"})
 		if err != nil {
@@ -396,5 +397,40 @@ func TestCheckClusterAccessEmptyInputGuard(t *testing.T) {
 	_, err := s.CheckClusterAccess(context.Background(), &purserpb.CheckClusterAccessRequest{TenantId: "tenant-1"})
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("err = %v, want InvalidArgument", err)
+	}
+}
+
+func TestGetTenantAdmissionStatusRetainsExpiredGrantDeadline(t *testing.T) {
+	s, mock := newReadServer(t, true)
+	deadline := time.Now().Add(-time.Minute).UTC().Truncate(time.Microsecond)
+	cols := []string{"billing_model", "subscription_status", "balance_cents", "reserved_balance_cents", "payment_method", "stripe_subscription_id", "mollie_subscription_id", "tier_name", "tier_level", "stripe_customer_id", "has_valid_mollie_mandate", "grant_collection", "grant_waive_usage", "effective_base_price", "grant_expires_at"}
+	mock.ExpectQuery("GetTenantAdmissionStatus").WithArgs("EUR", "tenant-1").WillReturnRows(sqlmock.NewRows(cols).AddRow("postpaid", "active", 0, 0, nil, nil, nil, "trial", 4, nil, false, "invoice", true, "0.00", deadline))
+	response, err := s.GetTenantAdmissionStatus(context.Background(), &purserpb.GetTenantAdmissionStatusRequest{TenantId: "tenant-1"})
+	if err != nil || !response.GetIsSuspended() || response.GetValidUntil() == nil || !response.GetValidUntil().AsTime().Equal(deadline) {
+		t.Fatalf("past grant deadline disappeared: response=%v err=%v", response, err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestOnlineBillingAdmissionHonorsGrantDeadline(t *testing.T) {
+	for _, expired := range []bool{false, true} {
+		t.Run(fmt.Sprint(expired), func(t *testing.T) {
+			s, mock := newReadServer(t, true)
+			deadline := time.Now().Add(time.Hour)
+			if expired {
+				deadline = time.Now().Add(-time.Minute)
+			}
+			cols := []string{"billing_model", "status", "balance_cents", "reserved_balance_cents", "retention", "dvr_entitlements", "tier_id", "billing_period_start", "billing_period_end", "storage_limit", "resource_limits", "payment_method", "stripe_subscription_id", "mollie_subscription_id", "tier_name", "stripe_customer_id", "has_valid_mollie_mandate", "grant_collection", "grant_waive_usage", "effective_base_price", "grant_expires_at"}
+			mock.ExpectQuery("GetTenantBillingStatus").WillReturnRows(sqlmock.NewRows(cols).AddRow("postpaid", "active", 0, 0, "", "", "", nil, nil, "", "", nil, nil, nil, "enterprise", nil, false, "invoice", true, "0.00", deadline))
+			response, err := s.GetTenantBillingStatus(t.Context(), &purserpb.GetTenantBillingStatusRequest{TenantId: "tenant"})
+			if err != nil || response.GetIsSuspended() != expired {
+				t.Fatalf("expired=%v fallback admission=%v err=%v", expired, response, err)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }

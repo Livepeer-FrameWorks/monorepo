@@ -368,3 +368,26 @@ func nextTenantEventType(t *testing.T, conn *websocket.Conn, within time.Duratio
 		}
 	}
 }
+
+func (r *recordingSockets) CloseUserAPITokens(tenantID, userID string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.tokens = append(r.tokens, tenantID+"/user:"+userID)
+	return 0
+}
+
+func TestUserDeactivationClosesAPITokenSockets(t *testing.T) {
+	sm := &SubscriptionManager{}
+	sockets := &recordingSockets{seen: make(chan struct{}, 2)}
+	sm.SetCredentialSockets(sockets)
+	event := sessionsRevokedEvent(t, "tenant-1", "user-1", time.Now())
+	payload, err := anypb.New(&internalv1.UserSessionsRevoked{UserId: "user-1", RevokedAt: timestamppb.Now(), Reason: internalv1.SessionRevocationReason_SESSION_REVOCATION_REASON_OPERATOR_DEACTIVATION})
+	if err != nil {
+		t.Fatal(err)
+	}
+	event.GetData().GetTenantEvent().Data = payload
+	sm.applyCredentialRevocation(signalmanclient.StreamKey{Channel: signalmanpb.Channel_CHANNEL_SESSIONS}, event)
+	if len(sockets.tokens) != 1 || sockets.tokens[0] != "tenant-1/user:user-1" {
+		t.Fatalf("deactivation API closures=%v", sockets.tokens)
+	}
+}

@@ -148,7 +148,7 @@ func (q *Queries) GetStoragePricing(ctx context.Context, arg GetStoragePricingPa
 const getTenantAdmissionStatus = `-- name: GetTenantAdmissionStatus :one
 SELECT
     ts.billing_model,
-    ts.status AS subscription_status,
+    CASE WHEN EXISTS (SELECT 1 FROM purser.tenant_billing_closures closure WHERE closure.tenant_id = ts.tenant_id) THEN 'suspended' ELSE ts.status END::text AS subscription_status,
     pb.balance_cents,
     reservations.reserved_balance_cents,
     ts.payment_method,
@@ -163,7 +163,9 @@ SELECT
     )::boolean AS has_valid_mollie_mandate,
     og.collection AS grant_collection,
     COALESCE(og.waive_usage, false)::boolean AS grant_waive_usage,
-    COALESCE(og.base_price, bt.base_price)::text AS effective_base_price
+    COALESCE(og.base_price, bt.base_price)::text AS effective_base_price,
+    (SELECT grant_deadline.expires_at FROM purser.subscription_operator_grants grant_deadline
+     WHERE grant_deadline.subscription_id = ts.id) AS grant_expires_at
 FROM purser.tenant_subscriptions ts
 JOIN purser.billing_tiers bt ON bt.id = ts.tier_id
 LEFT JOIN purser.subscription_operator_grants og
@@ -203,6 +205,7 @@ type GetTenantAdmissionStatusRow struct {
 	GrantCollection       sql.NullString `db:"grant_collection" json:"grant_collection"`
 	GrantWaiveUsage       bool           `db:"grant_waive_usage" json:"grant_waive_usage"`
 	EffectiveBasePrice    string         `db:"effective_base_price" json:"effective_base_price"`
+	GrantExpiresAt        sql.NullTime   `db:"grant_expires_at" json:"grant_expires_at"`
 }
 
 func (q *Queries) GetTenantAdmissionStatus(ctx context.Context, arg GetTenantAdmissionStatusParams) (GetTenantAdmissionStatusRow, error) {
@@ -223,6 +226,7 @@ func (q *Queries) GetTenantAdmissionStatus(ctx context.Context, arg GetTenantAdm
 		&i.GrantCollection,
 		&i.GrantWaiveUsage,
 		&i.EffectiveBasePrice,
+		&i.GrantExpiresAt,
 	)
 	return i, err
 }
@@ -230,7 +234,7 @@ func (q *Queries) GetTenantAdmissionStatus(ctx context.Context, arg GetTenantAdm
 const getTenantBillingStatus = `-- name: GetTenantBillingStatus :one
 SELECT
     ts.billing_model,
-    ts.status AS subscription_status,
+    CASE WHEN EXISTS (SELECT 1 FROM purser.tenant_billing_closures closure WHERE closure.tenant_id = ts.tenant_id) THEN 'suspended' ELSE ts.status END::text AS subscription_status,
     pb.balance_cents,
     reservations.reserved_balance_cents,
     COALESCE(te.value::text, '')::text AS retention_value,
@@ -251,7 +255,9 @@ SELECT
     )::boolean AS has_valid_mollie_mandate,
     og.collection AS grant_collection,
     COALESCE(og.waive_usage, false)::boolean AS grant_waive_usage,
-    COALESCE(og.base_price, bt.base_price)::text AS effective_base_price
+    COALESCE(og.base_price, bt.base_price)::text AS effective_base_price,
+    (SELECT grant_deadline.expires_at FROM purser.subscription_operator_grants grant_deadline
+     WHERE grant_deadline.subscription_id = ts.id) AS grant_expires_at
 FROM purser.tenant_subscriptions ts
 JOIN purser.billing_tiers bt ON bt.id = ts.tier_id
 LEFT JOIN purser.subscription_operator_grants og
@@ -353,6 +359,7 @@ type GetTenantBillingStatusRow struct {
 	GrantCollection       sql.NullString `db:"grant_collection" json:"grant_collection"`
 	GrantWaiveUsage       bool           `db:"grant_waive_usage" json:"grant_waive_usage"`
 	EffectiveBasePrice    string         `db:"effective_base_price" json:"effective_base_price"`
+	GrantExpiresAt        sql.NullTime   `db:"grant_expires_at" json:"grant_expires_at"`
 }
 
 func (q *Queries) GetTenantBillingStatus(ctx context.Context, arg GetTenantBillingStatusParams) (GetTenantBillingStatusRow, error) {
@@ -384,6 +391,7 @@ func (q *Queries) GetTenantBillingStatus(ctx context.Context, arg GetTenantBilli
 		&i.GrantCollection,
 		&i.GrantWaiveUsage,
 		&i.EffectiveBasePrice,
+		&i.GrantExpiresAt,
 	)
 	return i, err
 }

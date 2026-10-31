@@ -11,6 +11,31 @@ import (
 	"time"
 )
 
+const countFailedOperatorGrantExpiries = `-- name: CountFailedOperatorGrantExpiries :one
+SELECT COUNT(*) FROM purser.subscription_operator_grants g
+WHERE g.expiry_error IS NOT NULL
+`
+
+// Platform-wide operator recovery metric.
+func (q *Queries) CountFailedOperatorGrantExpiries(ctx context.Context) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countFailedOperatorGrantExpiries)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countRepeatedOperatorGrantExpiryFailures = `-- name: CountRepeatedOperatorGrantExpiryFailures :one
+SELECT COUNT(*) FROM purser.subscription_operator_grants WHERE expiry_error IS NOT NULL AND expiry_failures>1
+`
+
+// Platform-wide recovery metric; one failed attempt alone is not a stuck grant.
+func (q *Queries) CountRepeatedOperatorGrantExpiryFailures(ctx context.Context) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countRepeatedOperatorGrantExpiryFailures)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createConfirmedOperatorInvoicePayment = `-- name: CreateConfirmedOperatorInvoicePayment :exec
 INSERT INTO purser.billing_payments (
     id, invoice_id, method, amount, currency, tx_id, status, confirmed_at, created_at, updated_at,
@@ -90,24 +115,6 @@ func (q *Queries) DeleteSubscriptionOperatorGrant(ctx context.Context, subscript
 	return result.RowsAffected()
 }
 
-const getActiveOperatorBaseFeeOverride = `-- name: GetActiveOperatorBaseFeeOverride :one
-SELECT (g.base_price IS NOT NULL)::boolean AS overrides_base_fee
-FROM purser.tenant_subscriptions ts
-JOIN purser.subscription_operator_grants g ON g.subscription_id = ts.id
-WHERE ts.tenant_id = $1::text::uuid AND ts.status != 'cancelled'
-  AND (g.expires_at IS NULL OR g.expires_at > NOW())
-ORDER BY ts.created_at DESC
-LIMIT 1
-`
-
-// Whether an operator grant in force sets this tenant's base fee.
-func (q *Queries) GetActiveOperatorBaseFeeOverride(ctx context.Context, tenantID string) (bool, error) {
-	row := q.db.QueryRowContext(ctx, getActiveOperatorBaseFeeOverride, tenantID)
-	var overrides_base_fee bool
-	err := row.Scan(&overrides_base_fee)
-	return overrides_base_fee, err
-}
-
 const getProviderSubscriptionState = `-- name: GetProviderSubscriptionState :one
 SELECT ts.id::text AS subscription_id,
        (NULLIF(ts.stripe_subscription_id, '') IS NOT NULL)::boolean AS has_stripe_subscription,
@@ -137,24 +144,32 @@ const getSubscriptionOperatorGrant = `-- name: GetSubscriptionOperatorGrant :one
 SELECT g.subscription_id::text AS subscription_id,
        g.base_price,
        g.waive_usage, g.collection, g.expires_at, g.reason, g.granted_by, g.granted_at,
-       (g.expires_at IS NULL OR g.expires_at > NOW())::boolean AS active
+       COALESCE(g.fallback_tier_id::text, '')::text AS fallback_tier_id, COALESCE(g.assigned_tier_id, ts.tier_id)::text AS assigned_tier_id,
+       COALESCE(fallback.tier_name, '')::text AS fallback_tier_name,
+       (g.expires_at IS NULL OR g.expires_at > NOW())::boolean AS active, g.expiry_error, g.expiry_failures
 FROM purser.tenant_subscriptions ts
 JOIN purser.subscription_operator_grants g ON g.subscription_id = ts.id
-WHERE ts.tenant_id = $1::text::uuid AND ts.status != 'cancelled'
+LEFT JOIN purser.billing_tiers fallback ON fallback.id = g.fallback_tier_id
+WHERE ts.tenant_id = $1::text::uuid
 ORDER BY ts.created_at DESC
 LIMIT 1
 `
 
 type GetSubscriptionOperatorGrantRow struct {
-	SubscriptionID string         `db:"subscription_id" json:"subscription_id"`
-	BasePrice      sql.NullString `db:"base_price" json:"base_price"`
-	WaiveUsage     bool           `db:"waive_usage" json:"waive_usage"`
-	Collection     string         `db:"collection" json:"collection"`
-	ExpiresAt      sql.NullTime   `db:"expires_at" json:"expires_at"`
-	Reason         string         `db:"reason" json:"reason"`
-	GrantedBy      sql.NullString `db:"granted_by" json:"granted_by"`
-	GrantedAt      time.Time      `db:"granted_at" json:"granted_at"`
-	Active         bool           `db:"active" json:"active"`
+	SubscriptionID   string         `db:"subscription_id" json:"subscription_id"`
+	BasePrice        sql.NullString `db:"base_price" json:"base_price"`
+	WaiveUsage       bool           `db:"waive_usage" json:"waive_usage"`
+	Collection       string         `db:"collection" json:"collection"`
+	ExpiresAt        sql.NullTime   `db:"expires_at" json:"expires_at"`
+	Reason           string         `db:"reason" json:"reason"`
+	GrantedBy        sql.NullString `db:"granted_by" json:"granted_by"`
+	GrantedAt        time.Time      `db:"granted_at" json:"granted_at"`
+	FallbackTierID   string         `db:"fallback_tier_id" json:"fallback_tier_id"`
+	AssignedTierID   string         `db:"assigned_tier_id" json:"assigned_tier_id"`
+	FallbackTierName string         `db:"fallback_tier_name" json:"fallback_tier_name"`
+	Active           bool           `db:"active" json:"active"`
+	ExpiryError      sql.NullString `db:"expiry_error" json:"expiry_error"`
+	ExpiryFailures   int32          `db:"expiry_failures" json:"expiry_failures"`
 }
 
 // The operator grant recorded for a tenant's subscription, whether or not it
@@ -171,17 +186,22 @@ func (q *Queries) GetSubscriptionOperatorGrant(ctx context.Context, tenantID str
 		&i.Reason,
 		&i.GrantedBy,
 		&i.GrantedAt,
+		&i.FallbackTierID,
+		&i.AssignedTierID,
+		&i.FallbackTierName,
 		&i.Active,
+		&i.ExpiryError,
+		&i.ExpiryFailures,
 	)
 	return i, err
 }
 
 const getSubscriptionTierForGrant = `-- name: GetSubscriptionTierForGrant :one
 SELECT ts.id::text AS subscription_id, ts.tier_id::text AS tier_id, bt.tier_name,
-       COALESCE(bt.tier_level, 0)::integer AS tier_level, ts.billing_model
+       COALESCE(bt.tier_level, 0)::integer AS tier_level, ts.billing_model, ts.status
 FROM purser.tenant_subscriptions ts
 JOIN purser.billing_tiers bt ON bt.id = ts.tier_id
-WHERE ts.tenant_id = $1::text::uuid AND ts.status != 'cancelled'
+WHERE ts.tenant_id = $1::text::uuid
 ORDER BY ts.created_at DESC
 LIMIT 1
 `
@@ -192,6 +212,7 @@ type GetSubscriptionTierForGrantRow struct {
 	TierName       string `db:"tier_name" json:"tier_name"`
 	TierLevel      int32  `db:"tier_level" json:"tier_level"`
 	BillingModel   string `db:"billing_model" json:"billing_model"`
+	Status         string `db:"status" json:"status"`
 }
 
 // The tier and billing model of the tenant's subscription, which an operator
@@ -205,13 +226,185 @@ func (q *Queries) GetSubscriptionTierForGrant(ctx context.Context, tenantID stri
 		&i.TierName,
 		&i.TierLevel,
 		&i.BillingModel,
+		&i.Status,
 	)
 	return i, err
 }
 
+const listExpiredOperatorGrants = `-- name: ListExpiredOperatorGrants :many
+SELECT ts.tenant_id::text AS tenant_id, g.granted_at FROM purser.subscription_operator_grants g
+JOIN purser.tenant_subscriptions ts ON ts.id = g.subscription_id
+WHERE g.expires_at <= NOW()
+  AND (g.expiry_attempted_at IS NULL OR g.expiry_attempted_at + INTERVAL '5 minutes' <= NOW())
+ORDER BY g.expiry_attempted_at ASC NULLS FIRST, g.expires_at ASC LIMIT 100
+`
+
+type ListExpiredOperatorGrantsRow struct {
+	TenantID  string    `db:"tenant_id" json:"tenant_id"`
+	GrantedAt time.Time `db:"granted_at" json:"granted_at"`
+}
+
+// Platform-wide expiry queue; mutation rechecks the grant under its subscription lock.
+func (q *Queries) ListExpiredOperatorGrants(ctx context.Context) ([]ListExpiredOperatorGrantsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listExpiredOperatorGrants)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListExpiredOperatorGrantsRow{}
+	for rows.Next() {
+		var i ListExpiredOperatorGrantsRow
+		if err := rows.Scan(&i.TenantID, &i.GrantedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listOperatorBillingGrants = `-- name: ListOperatorBillingGrants :many
+WITH grants AS (
+ (SELECT NULL::uuid AS tenant_id, g.subscription_id, NULL::uuid AS tier_id,
+        g.fallback_tier_id, g.base_price, g.waive_usage, g.collection, g.expires_at,
+        g.reason, g.granted_by, g.granted_at, g.expiry_error, g.expiry_failures, NULL::timestamptz AS ended_at
+  FROM purser.subscription_operator_grants g
+  WHERE ($1::boolean OR g.expires_at IS NULL OR g.expires_at > NOW())
+    AND ($2::bigint = 0 OR (g.expires_at > NOW() AND g.expires_at <= NOW() + $2::bigint * INTERVAL '1 second'))
+  ORDER BY g.granted_at DESC, g.subscription_id
+  LIMIT $3::bigint + $4::bigint)
+ UNION ALL
+ (SELECT tenant_id, subscription_id, tier_id, fallback_tier_id, base_price, waive_usage, collection,
+        expires_at, reason, granted_by, granted_at, NULL::text AS expiry_error, 0::integer AS expiry_failures, ended_at
+  FROM purser.subscription_operator_grant_history
+  WHERE $1::boolean
+    AND ($2::bigint = 0 OR (expires_at > NOW() AND expires_at <= NOW() + $2::bigint * INTERVAL '1 second'))
+  ORDER BY granted_at DESC, subscription_id, ended_at ASC
+  LIMIT $3::bigint + $4::bigint)
+), page AS (
+ SELECT tenant_id, subscription_id, tier_id, fallback_tier_id, base_price, waive_usage, collection, expires_at, reason, granted_by, granted_at, expiry_error, expiry_failures, ended_at FROM grants
+ ORDER BY granted_at DESC, subscription_id, ended_at NULLS FIRST
+ LIMIT $3 OFFSET $4
+)
+SELECT COALESCE(g.tenant_id, ts.tenant_id)::text AS tenant_id, g.subscription_id::text AS subscription_id, t.tier_name,
+       COALESCE(f.tier_name, '')::text AS fallback_tier_name,
+       g.base_price, g.waive_usage, g.collection, g.expires_at, g.reason, g.granted_by, g.granted_at, g.expiry_error, g.expiry_failures, g.ended_at,
+       (g.ended_at IS NULL AND (g.expires_at IS NULL OR g.expires_at > NOW()))::boolean AS active
+FROM page g JOIN purser.tenant_subscriptions ts ON ts.id = g.subscription_id
+JOIN purser.billing_tiers t ON t.id = COALESCE(g.tier_id, ts.tier_id)
+LEFT JOIN purser.billing_tiers f ON f.id = g.fallback_tier_id
+ORDER BY g.granted_at DESC, g.subscription_id, g.ended_at NULLS FIRST
+`
+
+type ListOperatorBillingGrantsParams struct {
+	IncludeExpired  bool  `db:"include_expired" json:"include_expired"`
+	ExpiringSeconds int64 `db:"expiring_seconds" json:"expiring_seconds"`
+	RowLimit        int64 `db:"row_limit" json:"row_limit"`
+	RowOffset       int64 `db:"row_offset" json:"row_offset"`
+}
+
+type ListOperatorBillingGrantsRow struct {
+	TenantID         string         `db:"tenant_id" json:"tenant_id"`
+	SubscriptionID   string         `db:"subscription_id" json:"subscription_id"`
+	TierName         string         `db:"tier_name" json:"tier_name"`
+	FallbackTierName string         `db:"fallback_tier_name" json:"fallback_tier_name"`
+	BasePrice        sql.NullString `db:"base_price" json:"base_price"`
+	WaiveUsage       bool           `db:"waive_usage" json:"waive_usage"`
+	Collection       string         `db:"collection" json:"collection"`
+	ExpiresAt        sql.NullTime   `db:"expires_at" json:"expires_at"`
+	Reason           string         `db:"reason" json:"reason"`
+	GrantedBy        sql.NullString `db:"granted_by" json:"granted_by"`
+	GrantedAt        time.Time      `db:"granted_at" json:"granted_at"`
+	ExpiryError      sql.NullString `db:"expiry_error" json:"expiry_error"`
+	ExpiryFailures   int32          `db:"expiry_failures" json:"expiry_failures"`
+	EndedAt          sql.NullTime   `db:"ended_at" json:"ended_at"`
+	Active           bool           `db:"active" json:"active"`
+}
+
+// Bound each source before joining subscription/tier metadata. This operator
+// query deliberately spans tenants, including archived grants when requested.
+func (q *Queries) ListOperatorBillingGrants(ctx context.Context, arg ListOperatorBillingGrantsParams) ([]ListOperatorBillingGrantsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listOperatorBillingGrants,
+		arg.IncludeExpired,
+		arg.ExpiringSeconds,
+		arg.RowLimit,
+		arg.RowOffset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListOperatorBillingGrantsRow{}
+	for rows.Next() {
+		var i ListOperatorBillingGrantsRow
+		if err := rows.Scan(
+			&i.TenantID,
+			&i.SubscriptionID,
+			&i.TierName,
+			&i.FallbackTierName,
+			&i.BasePrice,
+			&i.WaiveUsage,
+			&i.Collection,
+			&i.ExpiresAt,
+			&i.Reason,
+			&i.GrantedBy,
+			&i.GrantedAt,
+			&i.ExpiryError,
+			&i.ExpiryFailures,
+			&i.EndedAt,
+			&i.Active,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const recordOperatorGrantExpiryFailure = `-- name: RecordOperatorGrantExpiryFailure :exec
+UPDATE purser.subscription_operator_grants g
+SET expiry_attempted_at=NOW(), expiry_error=$1::text, expiry_failures=expiry_failures+1
+FROM purser.tenant_subscriptions ts
+WHERE ts.id=g.subscription_id AND ts.tenant_id=$2::text::uuid
+  AND g.expires_at <= NOW() AND g.granted_at=$3::timestamptz
+  AND (g.expiry_attempted_at IS NULL OR g.expiry_attempted_at <= NOW()-INTERVAL '5 minutes')
+`
+
+type RecordOperatorGrantExpiryFailureParams struct {
+	Failure   string    `db:"failure" json:"failure"`
+	TenantID  string    `db:"tenant_id" json:"tenant_id"`
+	GrantedAt time.Time `db:"granted_at" json:"granted_at"`
+}
+
+func (q *Queries) RecordOperatorGrantExpiryFailure(ctx context.Context, arg RecordOperatorGrantExpiryFailureParams) error {
+	_, err := q.db.ExecContext(ctx, recordOperatorGrantExpiryFailure, arg.Failure, arg.TenantID, arg.GrantedAt)
+	return err
+}
+
+const setOperatorGrantBoundary = `-- name: SetOperatorGrantBoundary :exec
+SELECT set_config('frameworks.operator_grant_boundary', $1::text, true)
+`
+
+// The history trigger uses the same instant as the closing document.
+func (q *Queries) SetOperatorGrantBoundary(ctx context.Context, boundary string) error {
+	_, err := q.db.ExecContext(ctx, setOperatorGrantBoundary, boundary)
+	return err
+}
+
 const upsertSubscriptionOperatorGrant = `-- name: UpsertSubscriptionOperatorGrant :exec
 INSERT INTO purser.subscription_operator_grants (
-    subscription_id, base_price, waive_usage, collection, expires_at, reason, granted_by, granted_at
+    subscription_id, base_price, waive_usage, collection, expires_at, reason, granted_by, granted_at, fallback_tier_id, assigned_tier_id
 ) VALUES (
     $1::text::uuid,
     $2::text::numeric,
@@ -220,7 +413,7 @@ INSERT INTO purser.subscription_operator_grants (
     $5,
     $6,
     NULLIF($7::text, ''),
-    NOW()
+    COALESCE($8::timestamptz, NOW()), $9::text::uuid, $10::text::uuid
 )
 ON CONFLICT (subscription_id) DO UPDATE SET
     base_price = EXCLUDED.base_price,
@@ -229,7 +422,9 @@ ON CONFLICT (subscription_id) DO UPDATE SET
     expires_at = EXCLUDED.expires_at,
     reason = EXCLUDED.reason,
     granted_by = EXCLUDED.granted_by,
-    granted_at = EXCLUDED.granted_at
+    granted_at = EXCLUDED.granted_at,
+    fallback_tier_id = EXCLUDED.fallback_tier_id, assigned_tier_id = EXCLUDED.assigned_tier_id,
+    expiry_attempted_at=NULL, expiry_error=NULL, expiry_failures=0
 `
 
 type UpsertSubscriptionOperatorGrantParams struct {
@@ -240,6 +435,9 @@ type UpsertSubscriptionOperatorGrantParams struct {
 	ExpiresAt      sql.NullTime   `db:"expires_at" json:"expires_at"`
 	Reason         string         `db:"reason" json:"reason"`
 	GrantedBy      string         `db:"granted_by" json:"granted_by"`
+	EffectiveAt    sql.NullTime   `db:"effective_at" json:"effective_at"`
+	FallbackTierID sql.NullString `db:"fallback_tier_id" json:"fallback_tier_id"`
+	AssignedTierID sql.NullString `db:"assigned_tier_id" json:"assigned_tier_id"`
 }
 
 func (q *Queries) UpsertSubscriptionOperatorGrant(ctx context.Context, arg UpsertSubscriptionOperatorGrantParams) error {
@@ -251,6 +449,9 @@ func (q *Queries) UpsertSubscriptionOperatorGrant(ctx context.Context, arg Upser
 		arg.ExpiresAt,
 		arg.Reason,
 		arg.GrantedBy,
+		arg.EffectiveAt,
+		arg.FallbackTierID,
+		arg.AssignedTierID,
 	)
 	return err
 }

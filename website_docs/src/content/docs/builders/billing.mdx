@@ -31,8 +31,8 @@ cluster.
 <Aside type="tip">
   **API requests currently cost €0, but they are still metered and itemized.** The same applies to
   the current API/LLM/search/embedding meters unless a tier or cluster contract explicitly prices
-  them. API traffic remains subject to request throttling. Advanced processing (AI, V2V,
-  compositing) is in pilot — see below.
+  them. API traffic remains subject to request throttling. Advanced processing (AI, V2V, server-side
+  composition) is in the pipeline — see below.
 </Aside>
 
 ## Free Tier
@@ -79,7 +79,7 @@ Add funds to a prepaid balance and pay as usage accrues. Usage is deducted at th
 
 Standard live transcoding is included in delivered-minute pricing. Browser-side StreamCrafter
 composition does not create a server-processing charge. Advanced processing (AI workloads such as
-live transcription, V2V transformations, and automated highlights) is in pilot — see
+live transcription, V2V transformations, and automated highlights) is in the pipeline — see
 [Advanced processing](#advanced-processing) below.
 
 ## Metered Tiers
@@ -101,6 +101,12 @@ Paid self-serve tiers do not impose a plan-level retention cap. Content still fo
 artifact policy; the service defaults are indefinite VOD retention and 30 days for DVR chapters and
 clips.
 
+Upgrading starts a fresh monthly billing period. Usage before the switch closes at the old rates,
+and the unused paid share of the old base fee is credited against the new month. This is a billing
+credit rather than a cash refund. An upgrade may briefly remain pending while payment or usage
+records are reconciled; retrying it does not start another purchase. Downgrades take effect at the
+end of the current paid period.
+
 **Overages (metered tiers):**
 
 | Tier       | Delivered Minutes | Cold storage     |
@@ -113,11 +119,11 @@ clips.
 ## Advanced processing
 
 Advanced processing (AI workloads such as live transcription, video analysis, automated highlights,
-V2V transformations, and multi-stream compositing) is in **pilot**. These jobs use the same
+V2V transformations, and server-side composition) is in the pipeline. These jobs will use the same
 meter-based billing path as delivered minutes and storage, with product-shaped meters added per job
 or marketplace offer.
 
-To request pilot access, [contact us](https://frameworks.network/contact). Standard live
+To talk about early access, [contact us](https://frameworks.network/contact). Standard live
 transcoding remains included in delivered-minute pricing.
 
 ## Billing Models
@@ -128,15 +134,26 @@ Load credits first, use resources as you go. Balance decreases as usage accrues.
 
 **Thresholds:**
 
-| Balance     | Effect                                       |
-| ----------- | -------------------------------------------- |
-| Below €5    | Low balance warning                          |
-| €0 or below | New ingests blocked; playback may return 402 |
-| Below -€10  | Account suspended; streams terminated        |
+| Balance     | Effect                                                                    |
+| ----------- | ------------------------------------------------------------------------- |
+| Below €5    | Low balance warning                                                       |
+| €0 or below | New streams and new viewers blocked; running streams and viewers continue |
+| Below -€10  | Account suspended; streams terminated                                     |
+
+At €0 or below, a viewer or encoder that disconnects counts as new and cannot reconnect until you top up.
 
 ### Postpaid
 
 Monthly subscription with included delivered-minute allocations. Cold storage is metered to the second and rated per GiB-month (a fixed 730-hour month), so 10 GiB kept for three days bills 10 × 72/730 GiB-months. Invoice lines show the quantity in GiB-months. Overages are drafted during the billing period and invoiced at period end. Before activation, complete the billing email and address, choose an eligible tier, and finish either Stripe Checkout or Mollie's first-payment mandate flow. The provider webhook is authoritative; returning to the browser alone does not activate postpaid billing.
+
+**When a subscription ends:**
+
+| What happened                                       | What follows                                                                                                                                                                                                             |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Payment failed and your provider stopped collecting | You stay on your plan for 14 days and we email you. Set up payment again in that time to keep the plan. Otherwise your account moves to Free with a final invoice for your usage up to the move, and we email you again. |
+| You cancelled                                       | You keep your plan until the paid period ends, then your account moves to Free and we confirm by email.                                                                                                                  |
+
+Streams keep running on Free within its limits. Unpaid invoices stay outstanding with reminders, and you need to settle them before choosing a paid tier again.
 
 ## Currency
 

@@ -1549,9 +1549,10 @@ var NodeControlService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	TenantControlService_TerminateTenantStreams_FullMethodName = "/foghorn.TenantControlService/TerminateTenantStreams"
-	TenantControlService_InvalidateTenantCache_FullMethodName  = "/foghorn.TenantControlService/InvalidateTenantCache"
-	TenantControlService_InvalidatePlaybackAuth_FullMethodName = "/foghorn.TenantControlService/InvalidatePlaybackAuth"
+	TenantControlService_TerminateTenantStreams_FullMethodName  = "/foghorn.TenantControlService/TerminateTenantStreams"
+	TenantControlService_TerminateStreamSessions_FullMethodName = "/foghorn.TenantControlService/TerminateStreamSessions"
+	TenantControlService_InvalidateTenantCache_FullMethodName   = "/foghorn.TenantControlService/InvalidateTenantCache"
+	TenantControlService_InvalidatePlaybackAuth_FullMethodName  = "/foghorn.TenantControlService/InvalidatePlaybackAuth"
 )
 
 // TenantControlServiceClient is the client API for TenantControlService service.
@@ -1562,6 +1563,8 @@ const (
 type TenantControlServiceClient interface {
 	// TerminateTenantStreams stops all active streams for a tenant (called when suspended)
 	TerminateTenantStreams(ctx context.Context, in *foghorn_control.TerminateTenantStreamsRequest, opts ...grpc.CallOption) (*foghorn_control.TerminateTenantStreamsResponse, error)
+	// TerminateStreamSessions stops only the specified tenant-owned streams.
+	TerminateStreamSessions(ctx context.Context, in *foghorn_control.TerminateStreamSessionsRequest, opts ...grpc.CallOption) (*foghorn_control.TerminateTenantStreamsResponse, error)
 	// InvalidateTenantCache clears cached suspension status for a tenant (called on reactivation)
 	InvalidateTenantCache(ctx context.Context, in *foghorn_control.InvalidateTenantCacheRequest, opts ...grpc.CallOption) (*foghorn_control.InvalidateTenantCacheResponse, error)
 	// InvalidatePlaybackAuth tells Foghorn to send invalidate_sessions to every
@@ -1583,6 +1586,16 @@ func (c *tenantControlServiceClient) TerminateTenantStreams(ctx context.Context,
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(foghorn_control.TerminateTenantStreamsResponse)
 	err := c.cc.Invoke(ctx, TenantControlService_TerminateTenantStreams_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *tenantControlServiceClient) TerminateStreamSessions(ctx context.Context, in *foghorn_control.TerminateStreamSessionsRequest, opts ...grpc.CallOption) (*foghorn_control.TerminateTenantStreamsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(foghorn_control.TerminateTenantStreamsResponse)
+	err := c.cc.Invoke(ctx, TenantControlService_TerminateStreamSessions_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1617,6 +1630,8 @@ func (c *tenantControlServiceClient) InvalidatePlaybackAuth(ctx context.Context,
 type TenantControlServiceServer interface {
 	// TerminateTenantStreams stops all active streams for a tenant (called when suspended)
 	TerminateTenantStreams(context.Context, *foghorn_control.TerminateTenantStreamsRequest) (*foghorn_control.TerminateTenantStreamsResponse, error)
+	// TerminateStreamSessions stops only the specified tenant-owned streams.
+	TerminateStreamSessions(context.Context, *foghorn_control.TerminateStreamSessionsRequest) (*foghorn_control.TerminateTenantStreamsResponse, error)
 	// InvalidateTenantCache clears cached suspension status for a tenant (called on reactivation)
 	InvalidateTenantCache(context.Context, *foghorn_control.InvalidateTenantCacheRequest) (*foghorn_control.InvalidateTenantCacheResponse, error)
 	// InvalidatePlaybackAuth tells Foghorn to send invalidate_sessions to every
@@ -1636,6 +1651,9 @@ type UnimplementedTenantControlServiceServer struct{}
 
 func (UnimplementedTenantControlServiceServer) TerminateTenantStreams(context.Context, *foghorn_control.TerminateTenantStreamsRequest) (*foghorn_control.TerminateTenantStreamsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method TerminateTenantStreams not implemented")
+}
+func (UnimplementedTenantControlServiceServer) TerminateStreamSessions(context.Context, *foghorn_control.TerminateStreamSessionsRequest) (*foghorn_control.TerminateTenantStreamsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method TerminateStreamSessions not implemented")
 }
 func (UnimplementedTenantControlServiceServer) InvalidateTenantCache(context.Context, *foghorn_control.InvalidateTenantCacheRequest) (*foghorn_control.InvalidateTenantCacheResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method InvalidateTenantCache not implemented")
@@ -1678,6 +1696,24 @@ func _TenantControlService_TerminateTenantStreams_Handler(srv interface{}, ctx c
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(TenantControlServiceServer).TerminateTenantStreams(ctx, req.(*foghorn_control.TerminateTenantStreamsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TenantControlService_TerminateStreamSessions_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(foghorn_control.TerminateStreamSessionsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TenantControlServiceServer).TerminateStreamSessions(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TenantControlService_TerminateStreamSessions_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TenantControlServiceServer).TerminateStreamSessions(ctx, req.(*foghorn_control.TerminateStreamSessionsRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1728,6 +1764,10 @@ var TenantControlService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "TerminateTenantStreams",
 			Handler:    _TenantControlService_TerminateTenantStreams_Handler,
+		},
+		{
+			MethodName: "TerminateStreamSessions",
+			Handler:    _TenantControlService_TerminateStreamSessions_Handler,
 		},
 		{
 			MethodName: "InvalidateTenantCache",

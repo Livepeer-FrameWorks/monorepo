@@ -223,3 +223,20 @@ func TestMistNativeStreamToRendered_RejectsLegacyAllowedClusterIDs(t *testing.T)
 		t.Fatalf("expected legacy-key rejection naming source_location, got %v", err)
 	}
 }
+
+func TestMistNativeSystemTenantFormsRenderAndResolve(t *testing.T) {
+	for _, ref := range []string{"quartermaster.system_tenant", "quartermaster.tenants[frameworks]"} {
+		rendered, renderErr := mistNativeStreamToRendered(MistNativeStream{PlaybackID: "system", OwnerTenant: TenantRef{Ref: ref}, Title: "System", Source: "ts-exec:fixture", SourceKind: "exec", SourceLocation: clusterLocation("edge")}, []Cluster{{ID: "edge", Type: "edge"}}, nil)
+		if renderErr != nil {
+			t.Errorf("%s render: %v", ref, renderErr)
+			continue
+		}
+		r := validRendered()
+		if !tenantRefResolves(rendered.OwnerTenant.Ref, r) {
+			t.Errorf("%s failed resolution", ref)
+		}
+	}
+	if isSystemTenantRef(TenantRef{Ref: "quartermaster.tenants.frameworks"}) {
+		t.Fatal("dotted alias accepted")
+	}
+}

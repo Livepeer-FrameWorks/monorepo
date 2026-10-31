@@ -367,6 +367,8 @@ Read by `api_billing/cmd/purser`.
 | `GRPC_TLS_CA_PATH` | string |  |  | v0.3.0 | CA bundle that internal gRPC clients use to verify servers. |
 | `GRPC_ALLOW_INSECURE` | boolean | `false` |  | v0.3.0 | Allows plaintext internal gRPC when no TLS material is configured. Development only. |
 | `SERVICE_TOKEN` | string |  | secret | v0.3.0 | Shared service token for Quartermaster calls. Required when the desired state declares customer_billing. |
+| `COMMODORE_GRPC_ADDR` | string | `commodore:19001` |  | v0.3.14 | Commodore address for best-effort bootstrap billing cache invalidation. |
+| `COMMODORE_GRPC_TLS_SERVER_NAME` | string |  |  | v0.3.14 | TLS server name override for Commodore. |
 
 ### bootstrap-validate subcommand
 

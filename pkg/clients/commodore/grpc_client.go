@@ -1393,10 +1393,14 @@ func (c *GRPCClient) DeleteVodAsset(ctx context.Context, tenantID, artifactHash 
 // TerminateTenantStreams stops all active streams for a suspended tenant.
 // Called by Purser when prepaid balance drops below threshold.
 func (c *GRPCClient) TerminateTenantStreams(ctx context.Context, tenantID, reason string) (*foghorncontrolpb.TerminateTenantStreamsResponse, error) {
-	return c.internal.TerminateTenantStreams(withServiceAuth(ctx), &foghorncontrolpb.TerminateTenantStreamsRequest{
+	response, err := c.internal.TerminateTenantStreams(withServiceAuth(ctx), &foghorncontrolpb.TerminateTenantStreamsRequest{
 		TenantId: tenantID,
 		Reason:   reason,
 	})
+	if err != nil && response == nil {
+		response = grpcutil.StreamStopProgress(err)
+	}
+	return response, err
 }
 
 // InvalidateTenantCache clears cached suspension status for a tenant.
@@ -1594,4 +1598,20 @@ func (c *GRPCClient) RecordSigningKeyUse(ctx context.Context, tenantID, kid stri
 		Kid:      kid,
 	})
 	return err
+}
+
+// AdminSetUserActive changes user access. Requires a platform-operator JWT.
+func (c *GRPCClient) AdminSetUserActive(ctx context.Context, req *commodorepb.AdminSetUserActiveRequest) (*commodorepb.AdminSetUserActiveResponse, error) {
+	return c.user.AdminSetUserActive(ctx, req)
+}
+
+// AdminDeactivateTenant closes account access. Requires a platform-operator JWT.
+func (c *GRPCClient) AdminDeactivateTenant(ctx context.Context, req *commodorepb.AdminDeactivateTenantRequest) error {
+	_, err := c.user.AdminDeactivateTenant(ctx, req)
+	return err
+}
+
+// AdminListAccountHistory reads the private audit. Requires a platform-operator JWT.
+func (c *GRPCClient) AdminListAccountHistory(ctx context.Context, req *commodorepb.AdminListAccountHistoryRequest) (*commodorepb.AdminListAccountHistoryResponse, error) {
+	return c.user.AdminListAccountHistory(ctx, req)
 }

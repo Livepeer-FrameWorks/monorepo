@@ -191,7 +191,8 @@ plan` and `release apply --dry-run` list every step and, per host, the role task
    and its Livepeer health and keystore validation must pass before the next host starts. A dry
    run reports these steps without running them.
 4. **Postdeploy migrations.** These refuse to run until the release's required data migrations
-   are complete. The Purser tier catalog reconcile follows.
+   are complete. The Purser billing reconcile follows, then Commodore reconciles accounts
+   only on releases that declare that capability; stream declarations are left alone.
 
 After postdeploy, `release apply` checks that every replica of the auth services and the web app
 runs the release's version, since a readiness check cannot detect an older web app bundle. It

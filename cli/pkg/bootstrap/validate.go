@@ -43,9 +43,8 @@ func (es ValidationErrors) AsError() error {
 }
 
 // Validate exercises a Rendered document against schema and reference-integrity
-// invariants. It does not connect to any DB — service bootstrap subcommands run this
-// during `--check` mode. Validate is allowed to fail-fast on apiVersion mismatch (no
-// other check matters) but otherwise collects all problems before returning.
+// invariants without database access. Service bootstrap commands validate their
+// owned sections independently. It collects schema and reference errors before returning.
 func (r *Rendered) Validate() error {
 	if r == nil {
 		return errors.New("nil Rendered")
@@ -278,6 +277,11 @@ func (r *Rendered) validatePurser(errs *ValidationErrors) {
 		} else if b.Model != "prepaid" && b.Model != "postpaid" {
 			*errs = append(*errs, &ValidationError{Path: path + ".model", Msg: fmt.Sprintf("must be prepaid or postpaid (got %q)", b.Model)})
 		}
+		if b.OperatorGrant != nil {
+			if err := b.OperatorGrant.Validate(); err != nil {
+				*errs = append(*errs, &ValidationError{Path: path + ".operator_grant", Msg: err.Error()})
+			}
+		}
 		if b.Tier == "" {
 			*errs = append(*errs, &ValidationError{Path: path + ".tier", Msg: "required"})
 		}
@@ -289,6 +293,9 @@ func (r *Rendered) validateAccounts(errs *ValidationErrors) {
 		path := fmt.Sprintf("accounts[%d]", i)
 		switch a.Kind {
 		case AccountSystemOperator:
+			if !isSystemTenantRef(a.Tenant) {
+				*errs = append(*errs, &ValidationError{Path: path + ".tenant.ref", Msg: "system_operator must reference quartermaster.system_tenant"})
+			}
 			if !a.Billing.IsNone() {
 				*errs = append(*errs, &ValidationError{Path: path + ".billing.model", Msg: "account billing is not authoritative; declare tenant billing in purser.customer_billing"})
 			}
@@ -405,6 +412,9 @@ func tenantRefResolves(ref string, r *Rendered) bool {
 		return r.Quartermaster.SystemTenant != nil && r.Quartermaster.SystemTenant.Alias != ""
 	}
 	alias := groups[1]
+	if r.Quartermaster.SystemTenant != nil && alias == SystemTenantAlias {
+		return true
+	}
 	for _, t := range r.Quartermaster.Tenants {
 		if t.Alias == alias {
 			return true

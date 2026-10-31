@@ -653,11 +653,18 @@ func executingMigrationSQL(content string) string {
 		}
 		// IF NOT EXISTS may name a live table. Only an unconditional creation
 		// proves the destination is new, and only for subsequent statements.
-		if len(statement) > 2 && isSQLWord(statement[0], "create") && isSQLWord(statement[1], "table") && !isSQLWord(statement[2], "if") {
-			if name, _, ok := qualifiedName(statement, 2); ok {
-				created[name] = true
+		if len(statement) > 2 && isSQLWord(statement[0], "create") {
+			tableAt := 1
+			if isSQLWord(statement[tableAt], "unlogged") {
+				tableAt++
+			}
+			if tableAt+1 < len(statement) && isSQLWord(statement[tableAt], "table") && !isSQLWord(statement[tableAt+1], "if") {
+				if name, _, ok := qualifiedName(statement, tableAt+1); ok {
+					created[name] = true
+				}
 			}
 		}
+
 		insertAt := -1
 		for i, tok := range statement {
 			if isSQLWord(tok, "insert") {

@@ -131,19 +131,22 @@ func (x *GetTenantAdmissionStatusRequest) GetTenantId() string {
 }
 
 type GetTenantAdmissionStatusResponse struct {
-	state                 protoimpl.MessageState `protogen:"open.v1"`
-	BillingModel          string                 `protobuf:"bytes,1,opt,name=billing_model,json=billingModel,proto3" json:"billing_model,omitempty"`
-	IsSuspended           bool                   `protobuf:"varint,2,opt,name=is_suspended,json=isSuspended,proto3" json:"is_suspended,omitempty"`
-	IsBalanceNegative     bool                   `protobuf:"varint,3,opt,name=is_balance_negative,json=isBalanceNegative,proto3" json:"is_balance_negative,omitempty"`
-	BalanceCents          int64                  `protobuf:"varint,4,opt,name=balance_cents,json=balanceCents,proto3" json:"balance_cents,omitempty"`
-	ReservedBalanceCents  int64                  `protobuf:"varint,5,opt,name=reserved_balance_cents,json=reservedBalanceCents,proto3" json:"reserved_balance_cents,omitempty"`
-	AvailableBalanceCents int64                  `protobuf:"varint,6,opt,name=available_balance_cents,json=availableBalanceCents,proto3" json:"available_balance_cents,omitempty"`
-	CollectionReady       bool                   `protobuf:"varint,7,opt,name=collection_ready,json=collectionReady,proto3" json:"collection_ready,omitempty"`
-	CollectionProvider    string                 `protobuf:"bytes,8,opt,name=collection_provider,json=collectionProvider,proto3" json:"collection_provider,omitempty"`
-	TierName              string                 `protobuf:"bytes,9,opt,name=tier_name,json=tierName,proto3" json:"tier_name,omitempty"`
-	TierLevel             int32                  `protobuf:"varint,10,opt,name=tier_level,json=tierLevel,proto3" json:"tier_level,omitempty"`
-	unknownFields         protoimpl.UnknownFields
-	sizeCache             protoimpl.SizeCache
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	BillingModel string                 `protobuf:"bytes,1,opt,name=billing_model,json=billingModel,proto3" json:"billing_model,omitempty"`
+	// Explicit suspension, permanent closure or a grant awaiting expiry reconciliation.
+	IsSuspended           bool   `protobuf:"varint,2,opt,name=is_suspended,json=isSuspended,proto3" json:"is_suspended,omitempty"`
+	IsBalanceNegative     bool   `protobuf:"varint,3,opt,name=is_balance_negative,json=isBalanceNegative,proto3" json:"is_balance_negative,omitempty"`
+	BalanceCents          int64  `protobuf:"varint,4,opt,name=balance_cents,json=balanceCents,proto3" json:"balance_cents,omitempty"`
+	ReservedBalanceCents  int64  `protobuf:"varint,5,opt,name=reserved_balance_cents,json=reservedBalanceCents,proto3" json:"reserved_balance_cents,omitempty"`
+	AvailableBalanceCents int64  `protobuf:"varint,6,opt,name=available_balance_cents,json=availableBalanceCents,proto3" json:"available_balance_cents,omitempty"`
+	CollectionReady       bool   `protobuf:"varint,7,opt,name=collection_ready,json=collectionReady,proto3" json:"collection_ready,omitempty"`
+	CollectionProvider    string `protobuf:"bytes,8,opt,name=collection_provider,json=collectionProvider,proto3" json:"collection_provider,omitempty"`
+	TierName              string `protobuf:"bytes,9,opt,name=tier_name,json=tierName,proto3" json:"tier_name,omitempty"`
+	TierLevel             int32  `protobuf:"varint,10,opt,name=tier_level,json=tierLevel,proto3" json:"tier_level,omitempty"`
+	// Signed admission must be renewed at this deadline.
+	ValidUntil    *timestamppb.Timestamp `protobuf:"bytes,11,opt,name=valid_until,json=validUntil,proto3" json:"valid_until,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *GetTenantAdmissionStatusResponse) Reset() {
@@ -244,6 +247,13 @@ func (x *GetTenantAdmissionStatusResponse) GetTierLevel() int32 {
 		return x.TierLevel
 	}
 	return 0
+}
+
+func (x *GetTenantAdmissionStatusResponse) GetValidUntil() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ValidUntil
+	}
+	return nil
 }
 
 // Full billing status check for entitlement- and pricing-aware calls.
@@ -526,7 +536,7 @@ func (x *ListTenantBillingSnapshotsResponse) GetSnapshots() []*TenantBillingSnap
 type GetTenantBillingStatusResponse struct {
 	state             protoimpl.MessageState `protogen:"open.v1"`
 	BillingModel      string                 `protobuf:"bytes,1,opt,name=billing_model,json=billingModel,proto3" json:"billing_model,omitempty"`                   // 'postpaid' or 'prepaid'
-	IsSuspended       bool                   `protobuf:"varint,2,opt,name=is_suspended,json=isSuspended,proto3" json:"is_suspended,omitempty"`                     // subscription status = 'suspended' (balance < -$10)
+	IsSuspended       bool                   `protobuf:"varint,2,opt,name=is_suspended,json=isSuspended,proto3" json:"is_suspended,omitempty"`                     // Explicit suspension, permanent closure or an expired grant.
 	IsBalanceNegative bool                   `protobuf:"varint,3,opt,name=is_balance_negative,json=isBalanceNegative,proto3" json:"is_balance_negative,omitempty"` // prepaid balance <= 0 (soft gate, return 402)
 	BalanceCents      int64                  `protobuf:"varint,4,opt,name=balance_cents,json=balanceCents,proto3" json:"balance_cents,omitempty"`                  // current balance (for display/logging)
 	// Tier cap on customer-set retention. 0 means "no cap" (paid-tier baseline);
@@ -570,8 +580,10 @@ type GetTenantBillingStatusResponse struct {
 	CollectionReady    bool   `protobuf:"varint,13,opt,name=collection_ready,json=collectionReady,proto3" json:"collection_ready,omitempty"`
 	CollectionProvider string `protobuf:"bytes,14,opt,name=collection_provider,json=collectionProvider,proto3" json:"collection_provider,omitempty"` // stripe, mollie, or empty
 	TierName           string `protobuf:"bytes,15,opt,name=tier_name,json=tierName,proto3" json:"tier_name,omitempty"`                               // free, pro, business, or custom catalog name
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// True while a grant past its deadline awaits reconciliation.
+	GrantExpired  bool `protobuf:"varint,16,opt,name=grant_expired,json=grantExpired,proto3" json:"grant_expired,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *GetTenantBillingStatusResponse) Reset() {
@@ -707,6 +719,13 @@ func (x *GetTenantBillingStatusResponse) GetTierName() string {
 		return x.TierName
 	}
 	return ""
+}
+
+func (x *GetTenantBillingStatusResponse) GetGrantExpired() bool {
+	if x != nil {
+		return x.GrantExpired
+	}
+	return false
 }
 
 // Marginal storage pricing snapshot exposed via GetTenantBillingStatus.
@@ -9335,15 +9354,15 @@ func (x *ChangeBillingTierRequest) GetTierId() string {
 	return ""
 }
 
-// Response describes whether the change applied immediately (upgrade) or was
-// scheduled for the current period end (downgrade).
+// Response distinguishes an applied upgrade from pending reconciliation or a
+// downgrade scheduled for the current period's end.
 type ChangeBillingTierResponse struct {
 	state   protoimpl.MessageState `protogen:"open.v1"`
 	Success bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
 	Message string                 `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
-	// Set when the change applied immediately (upgrade path).
+	// Set when the upgrade's pricing and billing boundary committed.
 	AppliedTierId string `protobuf:"bytes,3,opt,name=applied_tier_id,json=appliedTierId,proto3" json:"applied_tier_id,omitempty"`
-	// Set when the change was scheduled (downgrade path).
+	// Set for a scheduled downgrade or an upgrade awaiting reconciliation.
 	PendingTierId string                 `protobuf:"bytes,4,opt,name=pending_tier_id,json=pendingTierId,proto3" json:"pending_tier_id,omitempty"`
 	EffectiveAt   *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=effective_at,json=effectiveAt,proto3" json:"effective_at,omitempty"`
 	// Populated on immediate apply.
@@ -9636,10 +9655,18 @@ type OperatorBillingGrant struct {
 	Reason    string                 `protobuf:"bytes,6,opt,name=reason,proto3" json:"reason,omitempty"`
 	GrantedBy string                 `protobuf:"bytes,7,opt,name=granted_by,json=grantedBy,proto3" json:"granted_by,omitempty"`
 	GrantedAt *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=granted_at,json=grantedAt,proto3" json:"granted_at,omitempty"`
-	// False once expires_at has passed.
-	Active        bool `protobuf:"varint,9,opt,name=active,proto3" json:"active,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// False once expires_at has passed or the grant has ended.
+	Active bool `protobuf:"varint,9,opt,name=active,proto3" json:"active,omitempty"`
+	// Tier restored when the grant ends if its assigned tier is still current.
+	FallbackTierName string `protobuf:"bytes,10,opt,name=fallback_tier_name,json=fallbackTierName,proto3" json:"fallback_tier_name,omitempty"`
+	// Archive boundary; unset while this is the current grant.
+	EndedAt *timestamppb.Timestamp `protobuf:"bytes,11,opt,name=ended_at,json=endedAt,proto3" json:"ended_at,omitempty"`
+	// Last failed expiry attempt; empty when no failure is recorded.
+	ExpiryError string `protobuf:"bytes,12,opt,name=expiry_error,json=expiryError,proto3" json:"expiry_error,omitempty"`
+	// Consecutive failed expiry attempts for the current grant.
+	ExpiryFailures int32 `protobuf:"varint,13,opt,name=expiry_failures,json=expiryFailures,proto3" json:"expiry_failures,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *OperatorBillingGrant) Reset() {
@@ -9735,6 +9762,34 @@ func (x *OperatorBillingGrant) GetActive() bool {
 	return false
 }
 
+func (x *OperatorBillingGrant) GetFallbackTierName() string {
+	if x != nil {
+		return x.FallbackTierName
+	}
+	return ""
+}
+
+func (x *OperatorBillingGrant) GetEndedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.EndedAt
+	}
+	return nil
+}
+
+func (x *OperatorBillingGrant) GetExpiryError() string {
+	if x != nil {
+		return x.ExpiryError
+	}
+	return ""
+}
+
+func (x *OperatorBillingGrant) GetExpiryFailures() int32 {
+	if x != nil {
+		return x.ExpiryFailures
+	}
+	return 0
+}
+
 type AdminSetBillingGrantRequest struct {
 	state    protoimpl.MessageState `protogen:"open.v1"`
 	TenantId string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
@@ -9747,9 +9802,11 @@ type AdminSetBillingGrantRequest struct {
 	Collection string                 `protobuf:"bytes,5,opt,name=collection,proto3" json:"collection,omitempty"`
 	ExpiresAt  *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
 	// Why the operator granted it; recorded on the grant and the audit event.
-	Reason        string `protobuf:"bytes,7,opt,name=reason,proto3" json:"reason,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Reason string `protobuf:"bytes,7,opt,name=reason,proto3" json:"reason,omitempty"`
+	// Explicit fallback tier; unset preserves the original fallback.
+	FallbackTierName *string `protobuf:"bytes,8,opt,name=fallback_tier_name,json=fallbackTierName,proto3,oneof" json:"fallback_tier_name,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *AdminSetBillingGrantRequest) Reset() {
@@ -9831,6 +9888,200 @@ func (x *AdminSetBillingGrantRequest) GetReason() string {
 	return ""
 }
 
+func (x *AdminSetBillingGrantRequest) GetFallbackTierName() string {
+	if x != nil && x.FallbackTierName != nil {
+		return *x.FallbackTierName
+	}
+	return ""
+}
+
+// AdminListBillingGrantsRequest selects active grants and optional retained history.
+type AdminListBillingGrantsRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Zero includes every expiry; positive values select the next N seconds, up to ten years.
+	ExpiringWithinSeconds int64 `protobuf:"varint,1,opt,name=expiring_within_seconds,json=expiringWithinSeconds,proto3" json:"expiring_within_seconds,omitempty"`
+	// Include ended grants from history.
+	IncludeExpired bool `protobuf:"varint,2,opt,name=include_expired,json=includeExpired,proto3" json:"include_expired,omitempty"`
+	// Page size, 1..500; zero selects the default of 100.
+	Limit int32 `protobuf:"varint,3,opt,name=limit,proto3" json:"limit,omitempty"`
+	// Non-negative number of rows to skip.
+	Offset        int32 `protobuf:"varint,4,opt,name=offset,proto3" json:"offset,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AdminListBillingGrantsRequest) Reset() {
+	*x = AdminListBillingGrantsRequest{}
+	mi := &file_purser_proto_msgTypes[116]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AdminListBillingGrantsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AdminListBillingGrantsRequest) ProtoMessage() {}
+
+func (x *AdminListBillingGrantsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_purser_proto_msgTypes[116]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AdminListBillingGrantsRequest.ProtoReflect.Descriptor instead.
+func (*AdminListBillingGrantsRequest) Descriptor() ([]byte, []int) {
+	return file_purser_proto_rawDescGZIP(), []int{116}
+}
+
+func (x *AdminListBillingGrantsRequest) GetExpiringWithinSeconds() int64 {
+	if x != nil {
+		return x.ExpiringWithinSeconds
+	}
+	return 0
+}
+
+func (x *AdminListBillingGrantsRequest) GetIncludeExpired() bool {
+	if x != nil {
+		return x.IncludeExpired
+	}
+	return false
+}
+
+func (x *AdminListBillingGrantsRequest) GetLimit() int32 {
+	if x != nil {
+		return x.Limit
+	}
+	return 0
+}
+
+func (x *AdminListBillingGrantsRequest) GetOffset() int32 {
+	if x != nil {
+		return x.Offset
+	}
+	return 0
+}
+
+// AdminBillingGrantEntry pairs a tenant arrangement with the tier it prices.
+type AdminBillingGrantEntry struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"` // Tenant UUID.
+	TierName      string                 `protobuf:"bytes,2,opt,name=tier_name,json=tierName,proto3" json:"tier_name,omitempty"` // Current tier for a live grant, or the historical tier for an ended grant.
+	Grant         *OperatorBillingGrant  `protobuf:"bytes,3,opt,name=grant,proto3" json:"grant,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AdminBillingGrantEntry) Reset() {
+	*x = AdminBillingGrantEntry{}
+	mi := &file_purser_proto_msgTypes[117]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AdminBillingGrantEntry) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AdminBillingGrantEntry) ProtoMessage() {}
+
+func (x *AdminBillingGrantEntry) ProtoReflect() protoreflect.Message {
+	mi := &file_purser_proto_msgTypes[117]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AdminBillingGrantEntry.ProtoReflect.Descriptor instead.
+func (*AdminBillingGrantEntry) Descriptor() ([]byte, []int) {
+	return file_purser_proto_rawDescGZIP(), []int{117}
+}
+
+func (x *AdminBillingGrantEntry) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *AdminBillingGrantEntry) GetTierName() string {
+	if x != nil {
+		return x.TierName
+	}
+	return ""
+}
+
+func (x *AdminBillingGrantEntry) GetGrant() *OperatorBillingGrant {
+	if x != nil {
+		return x.Grant
+	}
+	return nil
+}
+
+// AdminListBillingGrantsResponse is a page of tenant billing arrangements.
+type AdminListBillingGrantsResponse struct {
+	state         protoimpl.MessageState    `protogen:"open.v1"`
+	Grants        []*AdminBillingGrantEntry `protobuf:"bytes,1,rep,name=grants,proto3" json:"grants,omitempty"`
+	HasMore       bool                      `protobuf:"varint,2,opt,name=has_more,json=hasMore,proto3" json:"has_more,omitempty"` // More entries exist beyond this page.
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AdminListBillingGrantsResponse) Reset() {
+	*x = AdminListBillingGrantsResponse{}
+	mi := &file_purser_proto_msgTypes[118]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AdminListBillingGrantsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AdminListBillingGrantsResponse) ProtoMessage() {}
+
+func (x *AdminListBillingGrantsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_purser_proto_msgTypes[118]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AdminListBillingGrantsResponse.ProtoReflect.Descriptor instead.
+func (*AdminListBillingGrantsResponse) Descriptor() ([]byte, []int) {
+	return file_purser_proto_rawDescGZIP(), []int{118}
+}
+
+func (x *AdminListBillingGrantsResponse) GetGrants() []*AdminBillingGrantEntry {
+	if x != nil {
+		return x.Grants
+	}
+	return nil
+}
+
+func (x *AdminListBillingGrantsResponse) GetHasMore() bool {
+	if x != nil {
+		return x.HasMore
+	}
+	return false
+}
+
 type AdminGetBillingGrantRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
@@ -9840,7 +10091,7 @@ type AdminGetBillingGrantRequest struct {
 
 func (x *AdminGetBillingGrantRequest) Reset() {
 	*x = AdminGetBillingGrantRequest{}
-	mi := &file_purser_proto_msgTypes[116]
+	mi := &file_purser_proto_msgTypes[119]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9852,7 +10103,7 @@ func (x *AdminGetBillingGrantRequest) String() string {
 func (*AdminGetBillingGrantRequest) ProtoMessage() {}
 
 func (x *AdminGetBillingGrantRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[116]
+	mi := &file_purser_proto_msgTypes[119]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9865,7 +10116,7 @@ func (x *AdminGetBillingGrantRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AdminGetBillingGrantRequest.ProtoReflect.Descriptor instead.
 func (*AdminGetBillingGrantRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{116}
+	return file_purser_proto_rawDescGZIP(), []int{119}
 }
 
 func (x *AdminGetBillingGrantRequest) GetTenantId() string {
@@ -9879,13 +10130,14 @@ type AdminRevokeBillingGrantRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
 	Reason        string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`
+	TierName      string                 `protobuf:"bytes,3,opt,name=tier_name,json=tierName,proto3" json:"tier_name,omitempty"` // Optional active recovery tier instead of the remembered fallback.
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *AdminRevokeBillingGrantRequest) Reset() {
 	*x = AdminRevokeBillingGrantRequest{}
-	mi := &file_purser_proto_msgTypes[117]
+	mi := &file_purser_proto_msgTypes[120]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9897,7 +10149,7 @@ func (x *AdminRevokeBillingGrantRequest) String() string {
 func (*AdminRevokeBillingGrantRequest) ProtoMessage() {}
 
 func (x *AdminRevokeBillingGrantRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[117]
+	mi := &file_purser_proto_msgTypes[120]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9910,7 +10162,7 @@ func (x *AdminRevokeBillingGrantRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AdminRevokeBillingGrantRequest.ProtoReflect.Descriptor instead.
 func (*AdminRevokeBillingGrantRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{117}
+	return file_purser_proto_rawDescGZIP(), []int{120}
 }
 
 func (x *AdminRevokeBillingGrantRequest) GetTenantId() string {
@@ -9923,6 +10175,13 @@ func (x *AdminRevokeBillingGrantRequest) GetTenantId() string {
 func (x *AdminRevokeBillingGrantRequest) GetReason() string {
 	if x != nil {
 		return x.Reason
+	}
+	return ""
+}
+
+func (x *AdminRevokeBillingGrantRequest) GetTierName() string {
+	if x != nil {
+		return x.TierName
 	}
 	return ""
 }
@@ -9941,7 +10200,7 @@ type BillingGrantTier struct {
 
 func (x *BillingGrantTier) Reset() {
 	*x = BillingGrantTier{}
-	mi := &file_purser_proto_msgTypes[118]
+	mi := &file_purser_proto_msgTypes[121]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9953,7 +10212,7 @@ func (x *BillingGrantTier) String() string {
 func (*BillingGrantTier) ProtoMessage() {}
 
 func (x *BillingGrantTier) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[118]
+	mi := &file_purser_proto_msgTypes[121]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9966,7 +10225,7 @@ func (x *BillingGrantTier) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BillingGrantTier.ProtoReflect.Descriptor instead.
 func (*BillingGrantTier) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{118}
+	return file_purser_proto_rawDescGZIP(), []int{121}
 }
 
 func (x *BillingGrantTier) GetSubscriptionId() string {
@@ -10023,7 +10282,7 @@ type AdminBillingGrantResponse struct {
 
 func (x *AdminBillingGrantResponse) Reset() {
 	*x = AdminBillingGrantResponse{}
-	mi := &file_purser_proto_msgTypes[119]
+	mi := &file_purser_proto_msgTypes[122]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10035,7 +10294,7 @@ func (x *AdminBillingGrantResponse) String() string {
 func (*AdminBillingGrantResponse) ProtoMessage() {}
 
 func (x *AdminBillingGrantResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[119]
+	mi := &file_purser_proto_msgTypes[122]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10048,7 +10307,7 @@ func (x *AdminBillingGrantResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AdminBillingGrantResponse.ProtoReflect.Descriptor instead.
 func (*AdminBillingGrantResponse) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{119}
+	return file_purser_proto_rawDescGZIP(), []int{122}
 }
 
 func (x *AdminBillingGrantResponse) GetGrant() *OperatorBillingGrant {
@@ -10099,7 +10358,7 @@ type AdminRecordInvoicePaymentRequest struct {
 
 func (x *AdminRecordInvoicePaymentRequest) Reset() {
 	*x = AdminRecordInvoicePaymentRequest{}
-	mi := &file_purser_proto_msgTypes[120]
+	mi := &file_purser_proto_msgTypes[123]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10111,7 +10370,7 @@ func (x *AdminRecordInvoicePaymentRequest) String() string {
 func (*AdminRecordInvoicePaymentRequest) ProtoMessage() {}
 
 func (x *AdminRecordInvoicePaymentRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[120]
+	mi := &file_purser_proto_msgTypes[123]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10124,7 +10383,7 @@ func (x *AdminRecordInvoicePaymentRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AdminRecordInvoicePaymentRequest.ProtoReflect.Descriptor instead.
 func (*AdminRecordInvoicePaymentRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{120}
+	return file_purser_proto_rawDescGZIP(), []int{123}
 }
 
 func (x *AdminRecordInvoicePaymentRequest) GetTenantId() string {
@@ -10168,7 +10427,7 @@ type AdminRecordInvoicePaymentResponse struct {
 
 func (x *AdminRecordInvoicePaymentResponse) Reset() {
 	*x = AdminRecordInvoicePaymentResponse{}
-	mi := &file_purser_proto_msgTypes[121]
+	mi := &file_purser_proto_msgTypes[124]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10180,7 +10439,7 @@ func (x *AdminRecordInvoicePaymentResponse) String() string {
 func (*AdminRecordInvoicePaymentResponse) ProtoMessage() {}
 
 func (x *AdminRecordInvoicePaymentResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[121]
+	mi := &file_purser_proto_msgTypes[124]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10193,7 +10452,7 @@ func (x *AdminRecordInvoicePaymentResponse) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use AdminRecordInvoicePaymentResponse.ProtoReflect.Descriptor instead.
 func (*AdminRecordInvoicePaymentResponse) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{121}
+	return file_purser_proto_rawDescGZIP(), []int{124}
 }
 
 func (x *AdminRecordInvoicePaymentResponse) GetPaymentId() string {
@@ -10236,7 +10495,7 @@ type AdminListPrepaidDoubleChargesRequest struct {
 
 func (x *AdminListPrepaidDoubleChargesRequest) Reset() {
 	*x = AdminListPrepaidDoubleChargesRequest{}
-	mi := &file_purser_proto_msgTypes[122]
+	mi := &file_purser_proto_msgTypes[125]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10248,7 +10507,7 @@ func (x *AdminListPrepaidDoubleChargesRequest) String() string {
 func (*AdminListPrepaidDoubleChargesRequest) ProtoMessage() {}
 
 func (x *AdminListPrepaidDoubleChargesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[122]
+	mi := &file_purser_proto_msgTypes[125]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10261,7 +10520,7 @@ func (x *AdminListPrepaidDoubleChargesRequest) ProtoReflect() protoreflect.Messa
 
 // Deprecated: Use AdminListPrepaidDoubleChargesRequest.ProtoReflect.Descriptor instead.
 func (*AdminListPrepaidDoubleChargesRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{122}
+	return file_purser_proto_rawDescGZIP(), []int{125}
 }
 
 func (x *AdminListPrepaidDoubleChargesRequest) GetTenantId() string {
@@ -10309,7 +10568,7 @@ type PrepaidDoubleCharge struct {
 
 func (x *PrepaidDoubleCharge) Reset() {
 	*x = PrepaidDoubleCharge{}
-	mi := &file_purser_proto_msgTypes[123]
+	mi := &file_purser_proto_msgTypes[126]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10321,7 +10580,7 @@ func (x *PrepaidDoubleCharge) String() string {
 func (*PrepaidDoubleCharge) ProtoMessage() {}
 
 func (x *PrepaidDoubleCharge) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[123]
+	mi := &file_purser_proto_msgTypes[126]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10334,7 +10593,7 @@ func (x *PrepaidDoubleCharge) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PrepaidDoubleCharge.ProtoReflect.Descriptor instead.
 func (*PrepaidDoubleCharge) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{123}
+	return file_purser_proto_rawDescGZIP(), []int{126}
 }
 
 func (x *PrepaidDoubleCharge) GetTenantId() string {
@@ -10440,7 +10699,7 @@ type AdminListPrepaidDoubleChargesResponse struct {
 
 func (x *AdminListPrepaidDoubleChargesResponse) Reset() {
 	*x = AdminListPrepaidDoubleChargesResponse{}
-	mi := &file_purser_proto_msgTypes[124]
+	mi := &file_purser_proto_msgTypes[127]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10452,7 +10711,7 @@ func (x *AdminListPrepaidDoubleChargesResponse) String() string {
 func (*AdminListPrepaidDoubleChargesResponse) ProtoMessage() {}
 
 func (x *AdminListPrepaidDoubleChargesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[124]
+	mi := &file_purser_proto_msgTypes[127]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10465,7 +10724,7 @@ func (x *AdminListPrepaidDoubleChargesResponse) ProtoReflect() protoreflect.Mess
 
 // Deprecated: Use AdminListPrepaidDoubleChargesResponse.ProtoReflect.Descriptor instead.
 func (*AdminListPrepaidDoubleChargesResponse) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{124}
+	return file_purser_proto_rawDescGZIP(), []int{127}
 }
 
 func (x *AdminListPrepaidDoubleChargesResponse) GetCharges() []*PrepaidDoubleCharge {
@@ -10502,7 +10761,7 @@ type CreateStripeCheckoutRequest struct {
 
 func (x *CreateStripeCheckoutRequest) Reset() {
 	*x = CreateStripeCheckoutRequest{}
-	mi := &file_purser_proto_msgTypes[125]
+	mi := &file_purser_proto_msgTypes[128]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10514,7 +10773,7 @@ func (x *CreateStripeCheckoutRequest) String() string {
 func (*CreateStripeCheckoutRequest) ProtoMessage() {}
 
 func (x *CreateStripeCheckoutRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[125]
+	mi := &file_purser_proto_msgTypes[128]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10527,7 +10786,7 @@ func (x *CreateStripeCheckoutRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateStripeCheckoutRequest.ProtoReflect.Descriptor instead.
 func (*CreateStripeCheckoutRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{125}
+	return file_purser_proto_rawDescGZIP(), []int{128}
 }
 
 func (x *CreateStripeCheckoutRequest) GetTenantId() string {
@@ -10575,7 +10834,7 @@ type CreateStripeCheckoutResponse struct {
 
 func (x *CreateStripeCheckoutResponse) Reset() {
 	*x = CreateStripeCheckoutResponse{}
-	mi := &file_purser_proto_msgTypes[126]
+	mi := &file_purser_proto_msgTypes[129]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10587,7 +10846,7 @@ func (x *CreateStripeCheckoutResponse) String() string {
 func (*CreateStripeCheckoutResponse) ProtoMessage() {}
 
 func (x *CreateStripeCheckoutResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[126]
+	mi := &file_purser_proto_msgTypes[129]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10600,7 +10859,7 @@ func (x *CreateStripeCheckoutResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateStripeCheckoutResponse.ProtoReflect.Descriptor instead.
 func (*CreateStripeCheckoutResponse) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{126}
+	return file_purser_proto_rawDescGZIP(), []int{129}
 }
 
 func (x *CreateStripeCheckoutResponse) GetCheckoutUrl() string {
@@ -10627,7 +10886,7 @@ type CreateBillingPortalRequest struct {
 
 func (x *CreateBillingPortalRequest) Reset() {
 	*x = CreateBillingPortalRequest{}
-	mi := &file_purser_proto_msgTypes[127]
+	mi := &file_purser_proto_msgTypes[130]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10639,7 +10898,7 @@ func (x *CreateBillingPortalRequest) String() string {
 func (*CreateBillingPortalRequest) ProtoMessage() {}
 
 func (x *CreateBillingPortalRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[127]
+	mi := &file_purser_proto_msgTypes[130]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10652,7 +10911,7 @@ func (x *CreateBillingPortalRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateBillingPortalRequest.ProtoReflect.Descriptor instead.
 func (*CreateBillingPortalRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{127}
+	return file_purser_proto_rawDescGZIP(), []int{130}
 }
 
 func (x *CreateBillingPortalRequest) GetTenantId() string {
@@ -10678,7 +10937,7 @@ type CreateBillingPortalResponse struct {
 
 func (x *CreateBillingPortalResponse) Reset() {
 	*x = CreateBillingPortalResponse{}
-	mi := &file_purser_proto_msgTypes[128]
+	mi := &file_purser_proto_msgTypes[131]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10690,7 +10949,7 @@ func (x *CreateBillingPortalResponse) String() string {
 func (*CreateBillingPortalResponse) ProtoMessage() {}
 
 func (x *CreateBillingPortalResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[128]
+	mi := &file_purser_proto_msgTypes[131]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10703,7 +10962,7 @@ func (x *CreateBillingPortalResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateBillingPortalResponse.ProtoReflect.Descriptor instead.
 func (*CreateBillingPortalResponse) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{128}
+	return file_purser_proto_rawDescGZIP(), []int{131}
 }
 
 func (x *CreateBillingPortalResponse) GetPortalUrl() string {
@@ -10722,7 +10981,7 @@ type SyncStripeSubscriptionRequest struct {
 
 func (x *SyncStripeSubscriptionRequest) Reset() {
 	*x = SyncStripeSubscriptionRequest{}
-	mi := &file_purser_proto_msgTypes[129]
+	mi := &file_purser_proto_msgTypes[132]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10734,7 +10993,7 @@ func (x *SyncStripeSubscriptionRequest) String() string {
 func (*SyncStripeSubscriptionRequest) ProtoMessage() {}
 
 func (x *SyncStripeSubscriptionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[129]
+	mi := &file_purser_proto_msgTypes[132]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10747,7 +11006,7 @@ func (x *SyncStripeSubscriptionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SyncStripeSubscriptionRequest.ProtoReflect.Descriptor instead.
 func (*SyncStripeSubscriptionRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{129}
+	return file_purser_proto_rawDescGZIP(), []int{132}
 }
 
 func (x *SyncStripeSubscriptionRequest) GetTenantId() string {
@@ -10770,7 +11029,7 @@ type CreateMollieFirstPaymentRequest struct {
 
 func (x *CreateMollieFirstPaymentRequest) Reset() {
 	*x = CreateMollieFirstPaymentRequest{}
-	mi := &file_purser_proto_msgTypes[130]
+	mi := &file_purser_proto_msgTypes[133]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10782,7 +11041,7 @@ func (x *CreateMollieFirstPaymentRequest) String() string {
 func (*CreateMollieFirstPaymentRequest) ProtoMessage() {}
 
 func (x *CreateMollieFirstPaymentRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[130]
+	mi := &file_purser_proto_msgTypes[133]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10795,7 +11054,7 @@ func (x *CreateMollieFirstPaymentRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateMollieFirstPaymentRequest.ProtoReflect.Descriptor instead.
 func (*CreateMollieFirstPaymentRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{130}
+	return file_purser_proto_rawDescGZIP(), []int{133}
 }
 
 func (x *CreateMollieFirstPaymentRequest) GetTenantId() string {
@@ -10844,7 +11103,7 @@ type CreateMollieFirstPaymentResponse struct {
 
 func (x *CreateMollieFirstPaymentResponse) Reset() {
 	*x = CreateMollieFirstPaymentResponse{}
-	mi := &file_purser_proto_msgTypes[131]
+	mi := &file_purser_proto_msgTypes[134]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10856,7 +11115,7 @@ func (x *CreateMollieFirstPaymentResponse) String() string {
 func (*CreateMollieFirstPaymentResponse) ProtoMessage() {}
 
 func (x *CreateMollieFirstPaymentResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[131]
+	mi := &file_purser_proto_msgTypes[134]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10869,7 +11128,7 @@ func (x *CreateMollieFirstPaymentResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateMollieFirstPaymentResponse.ProtoReflect.Descriptor instead.
 func (*CreateMollieFirstPaymentResponse) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{131}
+	return file_purser_proto_rawDescGZIP(), []int{134}
 }
 
 func (x *CreateMollieFirstPaymentResponse) GetPaymentUrl() string {
@@ -10905,7 +11164,7 @@ type CreateMollieSubscriptionRequest struct {
 
 func (x *CreateMollieSubscriptionRequest) Reset() {
 	*x = CreateMollieSubscriptionRequest{}
-	mi := &file_purser_proto_msgTypes[132]
+	mi := &file_purser_proto_msgTypes[135]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10917,7 +11176,7 @@ func (x *CreateMollieSubscriptionRequest) String() string {
 func (*CreateMollieSubscriptionRequest) ProtoMessage() {}
 
 func (x *CreateMollieSubscriptionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[132]
+	mi := &file_purser_proto_msgTypes[135]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10930,7 +11189,7 @@ func (x *CreateMollieSubscriptionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateMollieSubscriptionRequest.ProtoReflect.Descriptor instead.
 func (*CreateMollieSubscriptionRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{132}
+	return file_purser_proto_rawDescGZIP(), []int{135}
 }
 
 func (x *CreateMollieSubscriptionRequest) GetTenantId() string {
@@ -10972,7 +11231,7 @@ type CreateMollieSubscriptionResponse struct {
 
 func (x *CreateMollieSubscriptionResponse) Reset() {
 	*x = CreateMollieSubscriptionResponse{}
-	mi := &file_purser_proto_msgTypes[133]
+	mi := &file_purser_proto_msgTypes[136]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10984,7 +11243,7 @@ func (x *CreateMollieSubscriptionResponse) String() string {
 func (*CreateMollieSubscriptionResponse) ProtoMessage() {}
 
 func (x *CreateMollieSubscriptionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[133]
+	mi := &file_purser_proto_msgTypes[136]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10997,7 +11256,7 @@ func (x *CreateMollieSubscriptionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateMollieSubscriptionResponse.ProtoReflect.Descriptor instead.
 func (*CreateMollieSubscriptionResponse) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{133}
+	return file_purser_proto_rawDescGZIP(), []int{136}
 }
 
 func (x *CreateMollieSubscriptionResponse) GetSubscriptionId() string {
@@ -11030,7 +11289,7 @@ type ListMollieMandatesRequest struct {
 
 func (x *ListMollieMandatesRequest) Reset() {
 	*x = ListMollieMandatesRequest{}
-	mi := &file_purser_proto_msgTypes[134]
+	mi := &file_purser_proto_msgTypes[137]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11042,7 +11301,7 @@ func (x *ListMollieMandatesRequest) String() string {
 func (*ListMollieMandatesRequest) ProtoMessage() {}
 
 func (x *ListMollieMandatesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[134]
+	mi := &file_purser_proto_msgTypes[137]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11055,7 +11314,7 @@ func (x *ListMollieMandatesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListMollieMandatesRequest.ProtoReflect.Descriptor instead.
 func (*ListMollieMandatesRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{134}
+	return file_purser_proto_rawDescGZIP(), []int{137}
 }
 
 func (x *ListMollieMandatesRequest) GetTenantId() string {
@@ -11080,7 +11339,7 @@ type MollieMandate struct {
 
 func (x *MollieMandate) Reset() {
 	*x = MollieMandate{}
-	mi := &file_purser_proto_msgTypes[135]
+	mi := &file_purser_proto_msgTypes[138]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11092,7 +11351,7 @@ func (x *MollieMandate) String() string {
 func (*MollieMandate) ProtoMessage() {}
 
 func (x *MollieMandate) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[135]
+	mi := &file_purser_proto_msgTypes[138]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11105,7 +11364,7 @@ func (x *MollieMandate) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MollieMandate.ProtoReflect.Descriptor instead.
 func (*MollieMandate) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{135}
+	return file_purser_proto_rawDescGZIP(), []int{138}
 }
 
 func (x *MollieMandate) GetId() string {
@@ -11166,7 +11425,7 @@ type ListMollieMandatesResponse struct {
 
 func (x *ListMollieMandatesResponse) Reset() {
 	*x = ListMollieMandatesResponse{}
-	mi := &file_purser_proto_msgTypes[136]
+	mi := &file_purser_proto_msgTypes[139]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11178,7 +11437,7 @@ func (x *ListMollieMandatesResponse) String() string {
 func (*ListMollieMandatesResponse) ProtoMessage() {}
 
 func (x *ListMollieMandatesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[136]
+	mi := &file_purser_proto_msgTypes[139]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11191,7 +11450,7 @@ func (x *ListMollieMandatesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListMollieMandatesResponse.ProtoReflect.Descriptor instead.
 func (*ListMollieMandatesResponse) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{136}
+	return file_purser_proto_rawDescGZIP(), []int{139}
 }
 
 func (x *ListMollieMandatesResponse) GetMandates() []*MollieMandate {
@@ -11211,7 +11470,7 @@ type CancelMollieSubscriptionRequest struct {
 
 func (x *CancelMollieSubscriptionRequest) Reset() {
 	*x = CancelMollieSubscriptionRequest{}
-	mi := &file_purser_proto_msgTypes[137]
+	mi := &file_purser_proto_msgTypes[140]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11223,7 +11482,7 @@ func (x *CancelMollieSubscriptionRequest) String() string {
 func (*CancelMollieSubscriptionRequest) ProtoMessage() {}
 
 func (x *CancelMollieSubscriptionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[137]
+	mi := &file_purser_proto_msgTypes[140]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11236,7 +11495,7 @@ func (x *CancelMollieSubscriptionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelMollieSubscriptionRequest.ProtoReflect.Descriptor instead.
 func (*CancelMollieSubscriptionRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{137}
+	return file_purser_proto_rawDescGZIP(), []int{140}
 }
 
 func (x *CancelMollieSubscriptionRequest) GetTenantId() string {
@@ -11263,7 +11522,7 @@ type RotateCryptoDepositKeyRequest struct {
 
 func (x *RotateCryptoDepositKeyRequest) Reset() {
 	*x = RotateCryptoDepositKeyRequest{}
-	mi := &file_purser_proto_msgTypes[138]
+	mi := &file_purser_proto_msgTypes[141]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11275,7 +11534,7 @@ func (x *RotateCryptoDepositKeyRequest) String() string {
 func (*RotateCryptoDepositKeyRequest) ProtoMessage() {}
 
 func (x *RotateCryptoDepositKeyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[138]
+	mi := &file_purser_proto_msgTypes[141]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11288,7 +11547,7 @@ func (x *RotateCryptoDepositKeyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RotateCryptoDepositKeyRequest.ProtoReflect.Descriptor instead.
 func (*RotateCryptoDepositKeyRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{138}
+	return file_purser_proto_rawDescGZIP(), []int{141}
 }
 
 func (x *RotateCryptoDepositKeyRequest) GetXpub() string {
@@ -11317,7 +11576,7 @@ type RotateCryptoDepositKeyResponse struct {
 
 func (x *RotateCryptoDepositKeyResponse) Reset() {
 	*x = RotateCryptoDepositKeyResponse{}
-	mi := &file_purser_proto_msgTypes[139]
+	mi := &file_purser_proto_msgTypes[142]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11329,7 +11588,7 @@ func (x *RotateCryptoDepositKeyResponse) String() string {
 func (*RotateCryptoDepositKeyResponse) ProtoMessage() {}
 
 func (x *RotateCryptoDepositKeyResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[139]
+	mi := &file_purser_proto_msgTypes[142]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11342,7 +11601,7 @@ func (x *RotateCryptoDepositKeyResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RotateCryptoDepositKeyResponse.ProtoReflect.Descriptor instead.
 func (*RotateCryptoDepositKeyResponse) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{139}
+	return file_purser_proto_rawDescGZIP(), []int{142}
 }
 
 func (x *RotateCryptoDepositKeyResponse) GetPreviousXpubFingerprint() string {
@@ -11384,7 +11643,7 @@ type CryptoReadinessCheck struct {
 
 func (x *CryptoReadinessCheck) Reset() {
 	*x = CryptoReadinessCheck{}
-	mi := &file_purser_proto_msgTypes[140]
+	mi := &file_purser_proto_msgTypes[143]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11396,7 +11655,7 @@ func (x *CryptoReadinessCheck) String() string {
 func (*CryptoReadinessCheck) ProtoMessage() {}
 
 func (x *CryptoReadinessCheck) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[140]
+	mi := &file_purser_proto_msgTypes[143]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11409,7 +11668,7 @@ func (x *CryptoReadinessCheck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CryptoReadinessCheck.ProtoReflect.Descriptor instead.
 func (*CryptoReadinessCheck) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{140}
+	return file_purser_proto_rawDescGZIP(), []int{143}
 }
 
 func (x *CryptoReadinessCheck) GetComponent() string {
@@ -11444,7 +11703,7 @@ type CryptoReadinessResponse struct {
 
 func (x *CryptoReadinessResponse) Reset() {
 	*x = CryptoReadinessResponse{}
-	mi := &file_purser_proto_msgTypes[141]
+	mi := &file_purser_proto_msgTypes[144]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11456,7 +11715,7 @@ func (x *CryptoReadinessResponse) String() string {
 func (*CryptoReadinessResponse) ProtoMessage() {}
 
 func (x *CryptoReadinessResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[141]
+	mi := &file_purser_proto_msgTypes[144]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11469,7 +11728,7 @@ func (x *CryptoReadinessResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CryptoReadinessResponse.ProtoReflect.Descriptor instead.
 func (*CryptoReadinessResponse) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{141}
+	return file_purser_proto_rawDescGZIP(), []int{144}
 }
 
 func (x *CryptoReadinessResponse) GetReady() bool {
@@ -11503,7 +11762,7 @@ type PlanCryptoSweepRequest struct {
 
 func (x *PlanCryptoSweepRequest) Reset() {
 	*x = PlanCryptoSweepRequest{}
-	mi := &file_purser_proto_msgTypes[142]
+	mi := &file_purser_proto_msgTypes[145]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11515,7 +11774,7 @@ func (x *PlanCryptoSweepRequest) String() string {
 func (*PlanCryptoSweepRequest) ProtoMessage() {}
 
 func (x *PlanCryptoSweepRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[142]
+	mi := &file_purser_proto_msgTypes[145]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11528,7 +11787,7 @@ func (x *PlanCryptoSweepRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PlanCryptoSweepRequest.ProtoReflect.Descriptor instead.
 func (*PlanCryptoSweepRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{142}
+	return file_purser_proto_rawDescGZIP(), []int{145}
 }
 
 func (x *PlanCryptoSweepRequest) GetNetwork() string {
@@ -11557,7 +11816,7 @@ type PlanCryptoSweepResponse struct {
 
 func (x *PlanCryptoSweepResponse) Reset() {
 	*x = PlanCryptoSweepResponse{}
-	mi := &file_purser_proto_msgTypes[143]
+	mi := &file_purser_proto_msgTypes[146]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11569,7 +11828,7 @@ func (x *PlanCryptoSweepResponse) String() string {
 func (*PlanCryptoSweepResponse) ProtoMessage() {}
 
 func (x *PlanCryptoSweepResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[143]
+	mi := &file_purser_proto_msgTypes[146]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11582,7 +11841,7 @@ func (x *PlanCryptoSweepResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PlanCryptoSweepResponse.ProtoReflect.Descriptor instead.
 func (*PlanCryptoSweepResponse) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{143}
+	return file_purser_proto_rawDescGZIP(), []int{146}
 }
 
 func (x *PlanCryptoSweepResponse) GetManifestJson() []byte {
@@ -11624,7 +11883,7 @@ type BroadcastCryptoSweepRequest struct {
 
 func (x *BroadcastCryptoSweepRequest) Reset() {
 	*x = BroadcastCryptoSweepRequest{}
-	mi := &file_purser_proto_msgTypes[144]
+	mi := &file_purser_proto_msgTypes[147]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11636,7 +11895,7 @@ func (x *BroadcastCryptoSweepRequest) String() string {
 func (*BroadcastCryptoSweepRequest) ProtoMessage() {}
 
 func (x *BroadcastCryptoSweepRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[144]
+	mi := &file_purser_proto_msgTypes[147]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11649,7 +11908,7 @@ func (x *BroadcastCryptoSweepRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BroadcastCryptoSweepRequest.ProtoReflect.Descriptor instead.
 func (*BroadcastCryptoSweepRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{144}
+	return file_purser_proto_rawDescGZIP(), []int{147}
 }
 
 func (x *BroadcastCryptoSweepRequest) GetSignedBundleJson() []byte {
@@ -11685,7 +11944,7 @@ type SweepBroadcastItem struct {
 
 func (x *SweepBroadcastItem) Reset() {
 	*x = SweepBroadcastItem{}
-	mi := &file_purser_proto_msgTypes[145]
+	mi := &file_purser_proto_msgTypes[148]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11697,7 +11956,7 @@ func (x *SweepBroadcastItem) String() string {
 func (*SweepBroadcastItem) ProtoMessage() {}
 
 func (x *SweepBroadcastItem) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[145]
+	mi := &file_purser_proto_msgTypes[148]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11710,7 +11969,7 @@ func (x *SweepBroadcastItem) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SweepBroadcastItem.ProtoReflect.Descriptor instead.
 func (*SweepBroadcastItem) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{145}
+	return file_purser_proto_rawDescGZIP(), []int{148}
 }
 
 func (x *SweepBroadcastItem) GetItemId() string {
@@ -11752,7 +12011,7 @@ type BroadcastCryptoSweepResponse struct {
 
 func (x *BroadcastCryptoSweepResponse) Reset() {
 	*x = BroadcastCryptoSweepResponse{}
-	mi := &file_purser_proto_msgTypes[146]
+	mi := &file_purser_proto_msgTypes[149]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11764,7 +12023,7 @@ func (x *BroadcastCryptoSweepResponse) String() string {
 func (*BroadcastCryptoSweepResponse) ProtoMessage() {}
 
 func (x *BroadcastCryptoSweepResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[146]
+	mi := &file_purser_proto_msgTypes[149]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11777,7 +12036,7 @@ func (x *BroadcastCryptoSweepResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BroadcastCryptoSweepResponse.ProtoReflect.Descriptor instead.
 func (*BroadcastCryptoSweepResponse) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{146}
+	return file_purser_proto_rawDescGZIP(), []int{149}
 }
 
 func (x *BroadcastCryptoSweepResponse) GetBatchId() string {
@@ -11811,7 +12070,7 @@ type ReconcileCryptoSweepRequest struct {
 
 func (x *ReconcileCryptoSweepRequest) Reset() {
 	*x = ReconcileCryptoSweepRequest{}
-	mi := &file_purser_proto_msgTypes[147]
+	mi := &file_purser_proto_msgTypes[150]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11823,7 +12082,7 @@ func (x *ReconcileCryptoSweepRequest) String() string {
 func (*ReconcileCryptoSweepRequest) ProtoMessage() {}
 
 func (x *ReconcileCryptoSweepRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[147]
+	mi := &file_purser_proto_msgTypes[150]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11836,7 +12095,7 @@ func (x *ReconcileCryptoSweepRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReconcileCryptoSweepRequest.ProtoReflect.Descriptor instead.
 func (*ReconcileCryptoSweepRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{147}
+	return file_purser_proto_rawDescGZIP(), []int{150}
 }
 
 func (x *ReconcileCryptoSweepRequest) GetBatchId() string {
@@ -11867,7 +12126,7 @@ type ReconcileCryptoSweepResponse struct {
 
 func (x *ReconcileCryptoSweepResponse) Reset() {
 	*x = ReconcileCryptoSweepResponse{}
-	mi := &file_purser_proto_msgTypes[148]
+	mi := &file_purser_proto_msgTypes[151]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11879,7 +12138,7 @@ func (x *ReconcileCryptoSweepResponse) String() string {
 func (*ReconcileCryptoSweepResponse) ProtoMessage() {}
 
 func (x *ReconcileCryptoSweepResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[148]
+	mi := &file_purser_proto_msgTypes[151]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11892,7 +12151,7 @@ func (x *ReconcileCryptoSweepResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReconcileCryptoSweepResponse.ProtoReflect.Descriptor instead.
 func (*ReconcileCryptoSweepResponse) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{148}
+	return file_purser_proto_rawDescGZIP(), []int{151}
 }
 
 func (x *ReconcileCryptoSweepResponse) GetBatchId() string {
@@ -11949,7 +12208,7 @@ type ReleaseCryptoSweepRequest struct {
 
 func (x *ReleaseCryptoSweepRequest) Reset() {
 	*x = ReleaseCryptoSweepRequest{}
-	mi := &file_purser_proto_msgTypes[149]
+	mi := &file_purser_proto_msgTypes[152]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -11961,7 +12220,7 @@ func (x *ReleaseCryptoSweepRequest) String() string {
 func (*ReleaseCryptoSweepRequest) ProtoMessage() {}
 
 func (x *ReleaseCryptoSweepRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[149]
+	mi := &file_purser_proto_msgTypes[152]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11974,7 +12233,7 @@ func (x *ReleaseCryptoSweepRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReleaseCryptoSweepRequest.ProtoReflect.Descriptor instead.
 func (*ReleaseCryptoSweepRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{149}
+	return file_purser_proto_rawDescGZIP(), []int{152}
 }
 
 func (x *ReleaseCryptoSweepRequest) GetBatchId() string {
@@ -12020,7 +12279,7 @@ type ReleaseCryptoSweepResponse struct {
 
 func (x *ReleaseCryptoSweepResponse) Reset() {
 	*x = ReleaseCryptoSweepResponse{}
-	mi := &file_purser_proto_msgTypes[150]
+	mi := &file_purser_proto_msgTypes[153]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -12032,7 +12291,7 @@ func (x *ReleaseCryptoSweepResponse) String() string {
 func (*ReleaseCryptoSweepResponse) ProtoMessage() {}
 
 func (x *ReleaseCryptoSweepResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[150]
+	mi := &file_purser_proto_msgTypes[153]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12045,7 +12304,7 @@ func (x *ReleaseCryptoSweepResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReleaseCryptoSweepResponse.ProtoReflect.Descriptor instead.
 func (*ReleaseCryptoSweepResponse) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{150}
+	return file_purser_proto_rawDescGZIP(), []int{153}
 }
 
 func (x *ReleaseCryptoSweepResponse) GetBatchId() string {
@@ -12113,7 +12372,7 @@ type ResolveX402MutationResultRequest struct {
 
 func (x *ResolveX402MutationResultRequest) Reset() {
 	*x = ResolveX402MutationResultRequest{}
-	mi := &file_purser_proto_msgTypes[151]
+	mi := &file_purser_proto_msgTypes[154]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -12125,7 +12384,7 @@ func (x *ResolveX402MutationResultRequest) String() string {
 func (*ResolveX402MutationResultRequest) ProtoMessage() {}
 
 func (x *ResolveX402MutationResultRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[151]
+	mi := &file_purser_proto_msgTypes[154]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12138,7 +12397,7 @@ func (x *ResolveX402MutationResultRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolveX402MutationResultRequest.ProtoReflect.Descriptor instead.
 func (*ResolveX402MutationResultRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{151}
+	return file_purser_proto_rawDescGZIP(), []int{154}
 }
 
 func (x *ResolveX402MutationResultRequest) GetTenantId() string {
@@ -12213,7 +12472,7 @@ type ResolveX402MutationResultResponse struct {
 
 func (x *ResolveX402MutationResultResponse) Reset() {
 	*x = ResolveX402MutationResultResponse{}
-	mi := &file_purser_proto_msgTypes[152]
+	mi := &file_purser_proto_msgTypes[155]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -12225,7 +12484,7 @@ func (x *ResolveX402MutationResultResponse) String() string {
 func (*ResolveX402MutationResultResponse) ProtoMessage() {}
 
 func (x *ResolveX402MutationResultResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[152]
+	mi := &file_purser_proto_msgTypes[155]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12238,7 +12497,7 @@ func (x *ResolveX402MutationResultResponse) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use ResolveX402MutationResultResponse.ProtoReflect.Descriptor instead.
 func (*ResolveX402MutationResultResponse) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{152}
+	return file_purser_proto_rawDescGZIP(), []int{155}
 }
 
 func (x *ResolveX402MutationResultResponse) GetTenantId() string {
@@ -12308,7 +12567,7 @@ type GetPaymentRequirementsRequest struct {
 
 func (x *GetPaymentRequirementsRequest) Reset() {
 	*x = GetPaymentRequirementsRequest{}
-	mi := &file_purser_proto_msgTypes[153]
+	mi := &file_purser_proto_msgTypes[156]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -12320,7 +12579,7 @@ func (x *GetPaymentRequirementsRequest) String() string {
 func (*GetPaymentRequirementsRequest) ProtoMessage() {}
 
 func (x *GetPaymentRequirementsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[153]
+	mi := &file_purser_proto_msgTypes[156]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12333,7 +12592,7 @@ func (x *GetPaymentRequirementsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPaymentRequirementsRequest.ProtoReflect.Descriptor instead.
 func (*GetPaymentRequirementsRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{153}
+	return file_purser_proto_rawDescGZIP(), []int{156}
 }
 
 func (x *GetPaymentRequirementsRequest) GetTenantId() string {
@@ -12377,7 +12636,7 @@ type PaymentRequirements struct {
 
 func (x *PaymentRequirements) Reset() {
 	*x = PaymentRequirements{}
-	mi := &file_purser_proto_msgTypes[154]
+	mi := &file_purser_proto_msgTypes[157]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -12389,7 +12648,7 @@ func (x *PaymentRequirements) String() string {
 func (*PaymentRequirements) ProtoMessage() {}
 
 func (x *PaymentRequirements) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[154]
+	mi := &file_purser_proto_msgTypes[157]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12402,7 +12661,7 @@ func (x *PaymentRequirements) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PaymentRequirements.ProtoReflect.Descriptor instead.
 func (*PaymentRequirements) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{154}
+	return file_purser_proto_rawDescGZIP(), []int{157}
 }
 
 func (x *PaymentRequirements) GetX402Version() int32 {
@@ -12494,7 +12753,7 @@ type PaymentRequirement struct {
 
 func (x *PaymentRequirement) Reset() {
 	*x = PaymentRequirement{}
-	mi := &file_purser_proto_msgTypes[155]
+	mi := &file_purser_proto_msgTypes[158]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -12506,7 +12765,7 @@ func (x *PaymentRequirement) String() string {
 func (*PaymentRequirement) ProtoMessage() {}
 
 func (x *PaymentRequirement) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[155]
+	mi := &file_purser_proto_msgTypes[158]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12519,7 +12778,7 @@ func (x *PaymentRequirement) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PaymentRequirement.ProtoReflect.Descriptor instead.
 func (*PaymentRequirement) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{155}
+	return file_purser_proto_rawDescGZIP(), []int{158}
 }
 
 func (x *PaymentRequirement) GetScheme() string {
@@ -12610,7 +12869,7 @@ type VerifyX402PaymentRequest struct {
 
 func (x *VerifyX402PaymentRequest) Reset() {
 	*x = VerifyX402PaymentRequest{}
-	mi := &file_purser_proto_msgTypes[156]
+	mi := &file_purser_proto_msgTypes[159]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -12622,7 +12881,7 @@ func (x *VerifyX402PaymentRequest) String() string {
 func (*VerifyX402PaymentRequest) ProtoMessage() {}
 
 func (x *VerifyX402PaymentRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[156]
+	mi := &file_purser_proto_msgTypes[159]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12635,7 +12894,7 @@ func (x *VerifyX402PaymentRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VerifyX402PaymentRequest.ProtoReflect.Descriptor instead.
 func (*VerifyX402PaymentRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{156}
+	return file_purser_proto_rawDescGZIP(), []int{159}
 }
 
 func (x *VerifyX402PaymentRequest) GetTenantId() string {
@@ -12673,7 +12932,7 @@ type VerifyX402PaymentResponse struct {
 
 func (x *VerifyX402PaymentResponse) Reset() {
 	*x = VerifyX402PaymentResponse{}
-	mi := &file_purser_proto_msgTypes[157]
+	mi := &file_purser_proto_msgTypes[160]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -12685,7 +12944,7 @@ func (x *VerifyX402PaymentResponse) String() string {
 func (*VerifyX402PaymentResponse) ProtoMessage() {}
 
 func (x *VerifyX402PaymentResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[157]
+	mi := &file_purser_proto_msgTypes[160]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12698,7 +12957,7 @@ func (x *VerifyX402PaymentResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VerifyX402PaymentResponse.ProtoReflect.Descriptor instead.
 func (*VerifyX402PaymentResponse) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{157}
+	return file_purser_proto_rawDescGZIP(), []int{160}
 }
 
 func (x *VerifyX402PaymentResponse) GetValid() bool {
@@ -12754,7 +13013,7 @@ type SettleX402PaymentRequest struct {
 
 func (x *SettleX402PaymentRequest) Reset() {
 	*x = SettleX402PaymentRequest{}
-	mi := &file_purser_proto_msgTypes[158]
+	mi := &file_purser_proto_msgTypes[161]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -12766,7 +13025,7 @@ func (x *SettleX402PaymentRequest) String() string {
 func (*SettleX402PaymentRequest) ProtoMessage() {}
 
 func (x *SettleX402PaymentRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[158]
+	mi := &file_purser_proto_msgTypes[161]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12779,7 +13038,7 @@ func (x *SettleX402PaymentRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SettleX402PaymentRequest.ProtoReflect.Descriptor instead.
 func (*SettleX402PaymentRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{158}
+	return file_purser_proto_rawDescGZIP(), []int{161}
 }
 
 func (x *SettleX402PaymentRequest) GetTenantId() string {
@@ -12823,7 +13082,7 @@ type SettleX402PaymentResponse struct {
 
 func (x *SettleX402PaymentResponse) Reset() {
 	*x = SettleX402PaymentResponse{}
-	mi := &file_purser_proto_msgTypes[159]
+	mi := &file_purser_proto_msgTypes[162]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -12835,7 +13094,7 @@ func (x *SettleX402PaymentResponse) String() string {
 func (*SettleX402PaymentResponse) ProtoMessage() {}
 
 func (x *SettleX402PaymentResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[159]
+	mi := &file_purser_proto_msgTypes[162]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12848,7 +13107,7 @@ func (x *SettleX402PaymentResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SettleX402PaymentResponse.ProtoReflect.Descriptor instead.
 func (*SettleX402PaymentResponse) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{159}
+	return file_purser_proto_rawDescGZIP(), []int{162}
 }
 
 func (x *SettleX402PaymentResponse) GetSuccess() bool {
@@ -12944,7 +13203,7 @@ type GetTenantX402AddressRequest struct {
 
 func (x *GetTenantX402AddressRequest) Reset() {
 	*x = GetTenantX402AddressRequest{}
-	mi := &file_purser_proto_msgTypes[160]
+	mi := &file_purser_proto_msgTypes[163]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -12956,7 +13215,7 @@ func (x *GetTenantX402AddressRequest) String() string {
 func (*GetTenantX402AddressRequest) ProtoMessage() {}
 
 func (x *GetTenantX402AddressRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[160]
+	mi := &file_purser_proto_msgTypes[163]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12969,7 +13228,7 @@ func (x *GetTenantX402AddressRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetTenantX402AddressRequest.ProtoReflect.Descriptor instead.
 func (*GetTenantX402AddressRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{160}
+	return file_purser_proto_rawDescGZIP(), []int{163}
 }
 
 func (x *GetTenantX402AddressRequest) GetTenantId() string {
@@ -12990,7 +13249,7 @@ type GetTenantX402AddressResponse struct {
 
 func (x *GetTenantX402AddressResponse) Reset() {
 	*x = GetTenantX402AddressResponse{}
-	mi := &file_purser_proto_msgTypes[161]
+	mi := &file_purser_proto_msgTypes[164]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -13002,7 +13261,7 @@ func (x *GetTenantX402AddressResponse) String() string {
 func (*GetTenantX402AddressResponse) ProtoMessage() {}
 
 func (x *GetTenantX402AddressResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[161]
+	mi := &file_purser_proto_msgTypes[164]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13015,7 +13274,7 @@ func (x *GetTenantX402AddressResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetTenantX402AddressResponse.ProtoReflect.Descriptor instead.
 func (*GetTenantX402AddressResponse) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{161}
+	return file_purser_proto_rawDescGZIP(), []int{164}
 }
 
 func (x *GetTenantX402AddressResponse) GetAddress() string {
@@ -13053,7 +13312,7 @@ type ClaimX402MutationResultRequest struct {
 
 func (x *ClaimX402MutationResultRequest) Reset() {
 	*x = ClaimX402MutationResultRequest{}
-	mi := &file_purser_proto_msgTypes[162]
+	mi := &file_purser_proto_msgTypes[165]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -13065,7 +13324,7 @@ func (x *ClaimX402MutationResultRequest) String() string {
 func (*ClaimX402MutationResultRequest) ProtoMessage() {}
 
 func (x *ClaimX402MutationResultRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[162]
+	mi := &file_purser_proto_msgTypes[165]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13078,7 +13337,7 @@ func (x *ClaimX402MutationResultRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClaimX402MutationResultRequest.ProtoReflect.Descriptor instead.
 func (*ClaimX402MutationResultRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{162}
+	return file_purser_proto_rawDescGZIP(), []int{165}
 }
 
 func (x *ClaimX402MutationResultRequest) GetTenantId() string {
@@ -13136,7 +13395,7 @@ type ClaimX402MutationResultResponse struct {
 
 func (x *ClaimX402MutationResultResponse) Reset() {
 	*x = ClaimX402MutationResultResponse{}
-	mi := &file_purser_proto_msgTypes[163]
+	mi := &file_purser_proto_msgTypes[166]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -13148,7 +13407,7 @@ func (x *ClaimX402MutationResultResponse) String() string {
 func (*ClaimX402MutationResultResponse) ProtoMessage() {}
 
 func (x *ClaimX402MutationResultResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[163]
+	mi := &file_purser_proto_msgTypes[166]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13161,7 +13420,7 @@ func (x *ClaimX402MutationResultResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClaimX402MutationResultResponse.ProtoReflect.Descriptor instead.
 func (*ClaimX402MutationResultResponse) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{163}
+	return file_purser_proto_rawDescGZIP(), []int{166}
 }
 
 func (x *ClaimX402MutationResultResponse) GetState() string {
@@ -13214,7 +13473,7 @@ type CompleteX402MutationResultRequest struct {
 
 func (x *CompleteX402MutationResultRequest) Reset() {
 	*x = CompleteX402MutationResultRequest{}
-	mi := &file_purser_proto_msgTypes[164]
+	mi := &file_purser_proto_msgTypes[167]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -13226,7 +13485,7 @@ func (x *CompleteX402MutationResultRequest) String() string {
 func (*CompleteX402MutationResultRequest) ProtoMessage() {}
 
 func (x *CompleteX402MutationResultRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[164]
+	mi := &file_purser_proto_msgTypes[167]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13239,7 +13498,7 @@ func (x *CompleteX402MutationResultRequest) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use CompleteX402MutationResultRequest.ProtoReflect.Descriptor instead.
 func (*CompleteX402MutationResultRequest) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{164}
+	return file_purser_proto_rawDescGZIP(), []int{167}
 }
 
 func (x *CompleteX402MutationResultRequest) GetTenantId() string {
@@ -13300,7 +13559,7 @@ type CompleteX402MutationResultResponse struct {
 
 func (x *CompleteX402MutationResultResponse) Reset() {
 	*x = CompleteX402MutationResultResponse{}
-	mi := &file_purser_proto_msgTypes[165]
+	mi := &file_purser_proto_msgTypes[168]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -13312,7 +13571,7 @@ func (x *CompleteX402MutationResultResponse) String() string {
 func (*CompleteX402MutationResultResponse) ProtoMessage() {}
 
 func (x *CompleteX402MutationResultResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_purser_proto_msgTypes[165]
+	mi := &file_purser_proto_msgTypes[168]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13325,7 +13584,7 @@ func (x *CompleteX402MutationResultResponse) ProtoReflect() protoreflect.Message
 
 // Deprecated: Use CompleteX402MutationResultResponse.ProtoReflect.Descriptor instead.
 func (*CompleteX402MutationResultResponse) Descriptor() ([]byte, []int) {
-	return file_purser_proto_rawDescGZIP(), []int{165}
+	return file_purser_proto_rawDescGZIP(), []int{168}
 }
 
 func (x *CompleteX402MutationResultResponse) GetCompleted() bool {
@@ -13335,6 +13594,723 @@ func (x *CompleteX402MutationResultResponse) GetCompleted() bool {
 	return false
 }
 
+// AdminListCheckoutRecoveryRequest bounds the outstanding provider-work inventory.
+type AdminListCheckoutRecoveryRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"` // Optional tenant UUID; omitted lists service-wide work.
+	Limit         int32                  `protobuf:"varint,2,opt,name=limit,proto3" json:"limit,omitempty"`                      // 1..100, defaults to 50.
+	Offset        int32                  `protobuf:"varint,3,opt,name=offset,proto3" json:"offset,omitempty"`                    // Non-negative page offset.
+	History       bool                   `protobuf:"varint,4,opt,name=history,proto3" json:"history,omitempty"`                  // Lists immutable operator requests; requires tenant_id.
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AdminListCheckoutRecoveryRequest) Reset() {
+	*x = AdminListCheckoutRecoveryRequest{}
+	mi := &file_purser_proto_msgTypes[169]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AdminListCheckoutRecoveryRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AdminListCheckoutRecoveryRequest) ProtoMessage() {}
+
+func (x *AdminListCheckoutRecoveryRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_purser_proto_msgTypes[169]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AdminListCheckoutRecoveryRequest.ProtoReflect.Descriptor instead.
+func (*AdminListCheckoutRecoveryRequest) Descriptor() ([]byte, []int) {
+	return file_purser_proto_rawDescGZIP(), []int{169}
+}
+
+func (x *AdminListCheckoutRecoveryRequest) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *AdminListCheckoutRecoveryRequest) GetLimit() int32 {
+	if x != nil {
+		return x.Limit
+	}
+	return 0
+}
+
+func (x *AdminListCheckoutRecoveryRequest) GetOffset() int32 {
+	if x != nil {
+		return x.Offset
+	}
+	return 0
+}
+
+func (x *AdminListCheckoutRecoveryRequest) GetHistory() bool {
+	if x != nil {
+		return x.History
+	}
+	return false
+}
+
+// CheckoutRecoveryItem describes an outstanding callback or checkout compensation.
+type CheckoutRecoveryItem struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	Id                string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`                                                         // Provider inbox UUID.
+	TenantId          string                 `protobuf:"bytes,2,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`                             // Known tenant UUID; may be empty for an unbound callback.
+	ReservationId     string                 `protobuf:"bytes,3,opt,name=reservation_id,json=reservationId,proto3" json:"reservation_id,omitempty"`              // Checkout reservation UUID, when applicable.
+	Provider          string                 `protobuf:"bytes,4,opt,name=provider,proto3" json:"provider,omitempty"`                                             // stripe, mollie, or an internal billing-recovery kind.
+	EventKey          string                 `protobuf:"bytes,5,opt,name=event_key,json=eventKey,proto3" json:"event_key,omitempty"`                             // Provider event or internal recovery identity.
+	Status            string                 `protobuf:"bytes,6,opt,name=status,proto3" json:"status,omitempty"`                                                 // Current durable inbox state.
+	Attempts          int32                  `protobuf:"varint,7,opt,name=attempts,proto3" json:"attempts,omitempty"`                                            // Failed attempts; ordinary settlement waits do not increment it.
+	LastError         string                 `protobuf:"bytes,8,opt,name=last_error,json=lastError,proto3" json:"last_error,omitempty"`                          // Latest reconciliation failure, including normal settlement waits.
+	NextAttemptAt     *timestamppb.Timestamp `protobuf:"bytes,9,opt,name=next_attempt_at,json=nextAttemptAt,proto3" json:"next_attempt_at,omitempty"`            // Earliest retry time.
+	ExpiresAt         *timestamppb.Timestamp `protobuf:"bytes,10,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`                         // Checkout's provider deadline, when applicable.
+	AmountCents       int64                  `protobuf:"varint,11,opt,name=amount_cents,json=amountCents,proto3" json:"amount_cents,omitempty"`                  // Reserved amount in currency minor units.
+	Currency          string                 `protobuf:"bytes,12,opt,name=currency,proto3" json:"currency,omitempty"`                                            // ISO currency of the reservation.
+	ReservationStatus string                 `protobuf:"bytes,13,opt,name=reservation_status,json=reservationStatus,proto3" json:"reservation_status,omitempty"` // Durable checkout state, distinct from inbox state.
+	AmountKnown       bool                   `protobuf:"varint,14,opt,name=amount_known,json=amountKnown,proto3" json:"amount_known,omitempty"`                  // False means no provider amount has been observed.
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *CheckoutRecoveryItem) Reset() {
+	*x = CheckoutRecoveryItem{}
+	mi := &file_purser_proto_msgTypes[170]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CheckoutRecoveryItem) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CheckoutRecoveryItem) ProtoMessage() {}
+
+func (x *CheckoutRecoveryItem) ProtoReflect() protoreflect.Message {
+	mi := &file_purser_proto_msgTypes[170]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CheckoutRecoveryItem.ProtoReflect.Descriptor instead.
+func (*CheckoutRecoveryItem) Descriptor() ([]byte, []int) {
+	return file_purser_proto_rawDescGZIP(), []int{170}
+}
+
+func (x *CheckoutRecoveryItem) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *CheckoutRecoveryItem) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *CheckoutRecoveryItem) GetReservationId() string {
+	if x != nil {
+		return x.ReservationId
+	}
+	return ""
+}
+
+func (x *CheckoutRecoveryItem) GetProvider() string {
+	if x != nil {
+		return x.Provider
+	}
+	return ""
+}
+
+func (x *CheckoutRecoveryItem) GetEventKey() string {
+	if x != nil {
+		return x.EventKey
+	}
+	return ""
+}
+
+func (x *CheckoutRecoveryItem) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
+func (x *CheckoutRecoveryItem) GetAttempts() int32 {
+	if x != nil {
+		return x.Attempts
+	}
+	return 0
+}
+
+func (x *CheckoutRecoveryItem) GetLastError() string {
+	if x != nil {
+		return x.LastError
+	}
+	return ""
+}
+
+func (x *CheckoutRecoveryItem) GetNextAttemptAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.NextAttemptAt
+	}
+	return nil
+}
+
+func (x *CheckoutRecoveryItem) GetExpiresAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ExpiresAt
+	}
+	return nil
+}
+
+func (x *CheckoutRecoveryItem) GetAmountCents() int64 {
+	if x != nil {
+		return x.AmountCents
+	}
+	return 0
+}
+
+func (x *CheckoutRecoveryItem) GetCurrency() string {
+	if x != nil {
+		return x.Currency
+	}
+	return ""
+}
+
+func (x *CheckoutRecoveryItem) GetReservationStatus() string {
+	if x != nil {
+		return x.ReservationStatus
+	}
+	return ""
+}
+
+func (x *CheckoutRecoveryItem) GetAmountKnown() bool {
+	if x != nil {
+		return x.AmountKnown
+	}
+	return false
+}
+
+// AdminListCheckoutRecoveryResponse contains one page of outstanding work.
+type AdminListCheckoutRecoveryResponse struct {
+	state         protoimpl.MessageState   `protogen:"open.v1"`
+	Items         []*CheckoutRecoveryItem  `protobuf:"bytes,1,rep,name=items,proto3" json:"items,omitempty"`
+	HasMore       bool                     `protobuf:"varint,2,opt,name=has_more,json=hasMore,proto3" json:"has_more,omitempty"`
+	Entries       []*CheckoutRecoveryAudit `protobuf:"bytes,3,rep,name=entries,proto3" json:"entries,omitempty"` // Operator requests when history=true.
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AdminListCheckoutRecoveryResponse) Reset() {
+	*x = AdminListCheckoutRecoveryResponse{}
+	mi := &file_purser_proto_msgTypes[171]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AdminListCheckoutRecoveryResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AdminListCheckoutRecoveryResponse) ProtoMessage() {}
+
+func (x *AdminListCheckoutRecoveryResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_purser_proto_msgTypes[171]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AdminListCheckoutRecoveryResponse.ProtoReflect.Descriptor instead.
+func (*AdminListCheckoutRecoveryResponse) Descriptor() ([]byte, []int) {
+	return file_purser_proto_rawDescGZIP(), []int{171}
+}
+
+func (x *AdminListCheckoutRecoveryResponse) GetItems() []*CheckoutRecoveryItem {
+	if x != nil {
+		return x.Items
+	}
+	return nil
+}
+
+func (x *AdminListCheckoutRecoveryResponse) GetHasMore() bool {
+	if x != nil {
+		return x.HasMore
+	}
+	return false
+}
+
+func (x *AdminListCheckoutRecoveryResponse) GetEntries() []*CheckoutRecoveryAudit {
+	if x != nil {
+		return x.Entries
+	}
+	return nil
+}
+
+// AdminRecoverCheckoutRequest selects the exact tenant-owned checkout to recover.
+type AdminRecoverCheckoutRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`                // Owning tenant UUID.
+	ReservationId string                 `protobuf:"bytes,2,opt,name=reservation_id,json=reservationId,proto3" json:"reservation_id,omitempty"` // Reservation UUID from recovery list.
+	Reason        string                 `protobuf:"bytes,3,opt,name=reason,proto3" json:"reason,omitempty"`                                    // Required operator reason, retained with the recovery request.
+	Confirmed     bool                   `protobuf:"varint,4,opt,name=confirmed,proto3" json:"confirmed,omitempty"`                             // False returns a read-only preview; true permits cancellation/refund.
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AdminRecoverCheckoutRequest) Reset() {
+	*x = AdminRecoverCheckoutRequest{}
+	mi := &file_purser_proto_msgTypes[172]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AdminRecoverCheckoutRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AdminRecoverCheckoutRequest) ProtoMessage() {}
+
+func (x *AdminRecoverCheckoutRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_purser_proto_msgTypes[172]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AdminRecoverCheckoutRequest.ProtoReflect.Descriptor instead.
+func (*AdminRecoverCheckoutRequest) Descriptor() ([]byte, []int) {
+	return file_purser_proto_rawDescGZIP(), []int{172}
+}
+
+func (x *AdminRecoverCheckoutRequest) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *AdminRecoverCheckoutRequest) GetReservationId() string {
+	if x != nil {
+		return x.ReservationId
+	}
+	return ""
+}
+
+func (x *AdminRecoverCheckoutRequest) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+func (x *AdminRecoverCheckoutRequest) GetConfirmed() bool {
+	if x != nil {
+		return x.Confirmed
+	}
+	return false
+}
+
+// AdminRecoverCheckoutResponse reports a preview or the reservation's durable recovery state.
+type AdminRecoverCheckoutResponse struct {
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	Provider    string                 `protobuf:"bytes,1,opt,name=provider,proto3" json:"provider,omitempty"`                           // stripe or mollie.
+	Status      string                 `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"`                               // Current local reservation state.
+	AmountCents int64                  `protobuf:"varint,3,opt,name=amount_cents,json=amountCents,proto3" json:"amount_cents,omitempty"` // Checkout total when known, otherwise the reserved amount.
+	Currency    string                 `protobuf:"bytes,4,opt,name=currency,proto3" json:"currency,omitempty"`                           // ISO currency of amount_cents.
+	// Current reservation state, not actions attributable to this invocation.
+	// Each confirmed invocation creates its own audit record.
+	Outcome       string `protobuf:"bytes,5,opt,name=outcome,proto3" json:"outcome,omitempty"`                             // preview, pending, activated, expired, cancelled, or refund reconciliation state.
+	Detail        string `protobuf:"bytes,6,opt,name=detail,proto3" json:"detail,omitempty"`                               // Human-readable provider/wait/error detail.
+	AuditId       string `protobuf:"bytes,7,opt,name=audit_id,json=auditId,proto3" json:"audit_id,omitempty"`              // Durable operator request UUID; absent on a preview.
+	AmountKnown   bool   `protobuf:"varint,8,opt,name=amount_known,json=amountKnown,proto3" json:"amount_known,omitempty"` // False means amount_cents is only a local placeholder.
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AdminRecoverCheckoutResponse) Reset() {
+	*x = AdminRecoverCheckoutResponse{}
+	mi := &file_purser_proto_msgTypes[173]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AdminRecoverCheckoutResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AdminRecoverCheckoutResponse) ProtoMessage() {}
+
+func (x *AdminRecoverCheckoutResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_purser_proto_msgTypes[173]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AdminRecoverCheckoutResponse.ProtoReflect.Descriptor instead.
+func (*AdminRecoverCheckoutResponse) Descriptor() ([]byte, []int) {
+	return file_purser_proto_rawDescGZIP(), []int{173}
+}
+
+func (x *AdminRecoverCheckoutResponse) GetProvider() string {
+	if x != nil {
+		return x.Provider
+	}
+	return ""
+}
+
+func (x *AdminRecoverCheckoutResponse) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
+func (x *AdminRecoverCheckoutResponse) GetAmountCents() int64 {
+	if x != nil {
+		return x.AmountCents
+	}
+	return 0
+}
+
+func (x *AdminRecoverCheckoutResponse) GetCurrency() string {
+	if x != nil {
+		return x.Currency
+	}
+	return ""
+}
+
+func (x *AdminRecoverCheckoutResponse) GetOutcome() string {
+	if x != nil {
+		return x.Outcome
+	}
+	return ""
+}
+
+func (x *AdminRecoverCheckoutResponse) GetDetail() string {
+	if x != nil {
+		return x.Detail
+	}
+	return ""
+}
+
+func (x *AdminRecoverCheckoutResponse) GetAuditId() string {
+	if x != nil {
+		return x.AuditId
+	}
+	return ""
+}
+
+func (x *AdminRecoverCheckoutResponse) GetAmountKnown() bool {
+	if x != nil {
+		return x.AmountKnown
+	}
+	return false
+}
+
+// CheckoutRecoveryAudit retains each operator request independently of inbox retries.
+type CheckoutRecoveryAudit struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`                                            // Audit UUID.
+	ReservationId string                 `protobuf:"bytes,2,opt,name=reservation_id,json=reservationId,proto3" json:"reservation_id,omitempty"` // Tenant-owned checkout UUID.
+	ActorId       string                 `protobuf:"bytes,3,opt,name=actor_id,json=actorId,proto3" json:"actor_id,omitempty"`                   // Authenticated operator user ID.
+	Reason        string                 `protobuf:"bytes,4,opt,name=reason,proto3" json:"reason,omitempty"`                                    // Original operator reason.
+	Outcome       string                 `protobuf:"bytes,5,opt,name=outcome,proto3" json:"outcome,omitempty"`                                  // Latest outcome of this request.
+	Detail        string                 `protobuf:"bytes,6,opt,name=detail,proto3" json:"detail,omitempty"`                                    // Provider result or pending reason.
+	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`             // Time of the operator request.
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CheckoutRecoveryAudit) Reset() {
+	*x = CheckoutRecoveryAudit{}
+	mi := &file_purser_proto_msgTypes[174]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CheckoutRecoveryAudit) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CheckoutRecoveryAudit) ProtoMessage() {}
+
+func (x *CheckoutRecoveryAudit) ProtoReflect() protoreflect.Message {
+	mi := &file_purser_proto_msgTypes[174]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CheckoutRecoveryAudit.ProtoReflect.Descriptor instead.
+func (*CheckoutRecoveryAudit) Descriptor() ([]byte, []int) {
+	return file_purser_proto_rawDescGZIP(), []int{174}
+}
+
+func (x *CheckoutRecoveryAudit) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *CheckoutRecoveryAudit) GetReservationId() string {
+	if x != nil {
+		return x.ReservationId
+	}
+	return ""
+}
+
+func (x *CheckoutRecoveryAudit) GetActorId() string {
+	if x != nil {
+		return x.ActorId
+	}
+	return ""
+}
+
+func (x *CheckoutRecoveryAudit) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+func (x *CheckoutRecoveryAudit) GetOutcome() string {
+	if x != nil {
+		return x.Outcome
+	}
+	return ""
+}
+
+func (x *CheckoutRecoveryAudit) GetDetail() string {
+	if x != nil {
+		return x.Detail
+	}
+	return ""
+}
+
+func (x *CheckoutRecoveryAudit) GetCreatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return nil
+}
+
+// AdminRecoverTierUpgradeRequest selects one tenant-owned accepted purchase.
+type AdminRecoverTierUpgradeRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Owning tenant UUID, checked against the accepted purchase.
+	TenantId string `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	// Durable purchase UUID returned by the recovery list.
+	UpgradeId string `protobuf:"bytes,2,opt,name=upgrade_id,json=upgradeId,proto3" json:"upgrade_id,omitempty"`
+	// False previews; true records an operator-attributed recovery request.
+	Confirmed bool `protobuf:"varint,3,opt,name=confirmed,proto3" json:"confirmed,omitempty"`
+	// Required on confirmation and retained with the first recovery request.
+	Reason        string `protobuf:"bytes,4,opt,name=reason,proto3" json:"reason,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AdminRecoverTierUpgradeRequest) Reset() {
+	*x = AdminRecoverTierUpgradeRequest{}
+	mi := &file_purser_proto_msgTypes[175]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AdminRecoverTierUpgradeRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AdminRecoverTierUpgradeRequest) ProtoMessage() {}
+
+func (x *AdminRecoverTierUpgradeRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_purser_proto_msgTypes[175]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AdminRecoverTierUpgradeRequest.ProtoReflect.Descriptor instead.
+func (*AdminRecoverTierUpgradeRequest) Descriptor() ([]byte, []int) {
+	return file_purser_proto_rawDescGZIP(), []int{175}
+}
+
+func (x *AdminRecoverTierUpgradeRequest) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *AdminRecoverTierUpgradeRequest) GetUpgradeId() string {
+	if x != nil {
+		return x.UpgradeId
+	}
+	return ""
+}
+
+func (x *AdminRecoverTierUpgradeRequest) GetConfirmed() bool {
+	if x != nil {
+		return x.Confirmed
+	}
+	return false
+}
+
+func (x *AdminRecoverTierUpgradeRequest) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+// AdminRecoverTierUpgradeResponse reports the durable purchase and recovery state.
+type AdminRecoverTierUpgradeResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Accepted purchase UUID.
+	UpgradeId string `protobuf:"bytes,1,opt,name=upgrade_id,json=upgradeId,proto3" json:"upgrade_id,omitempty"`
+	// Durable purchase state; a queued recovery can remain pending.
+	State string `protobuf:"bytes,2,opt,name=state,proto3" json:"state,omitempty"`
+	// Collection provider whose existing objects recovery inspects.
+	Provider string `protobuf:"bytes,3,opt,name=provider,proto3" json:"provider,omitempty"`
+	// Target billing tier UUID of the accepted purchase.
+	TierId string `protobuf:"bytes,4,opt,name=tier_id,json=tierId,proto3" json:"tier_id,omitempty"`
+	// First operator who requested recovery, empty before confirmation.
+	RequestedBy string `protobuf:"bytes,5,opt,name=requested_by,json=requestedBy,proto3" json:"requested_by,omitempty"`
+	// Immutable reason retained with that operator request.
+	Reason string `protobuf:"bytes,6,opt,name=reason,proto3" json:"reason,omitempty"`
+	// Human-readable preview or current reconciliation outcome.
+	Detail        string `protobuf:"bytes,7,opt,name=detail,proto3" json:"detail,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AdminRecoverTierUpgradeResponse) Reset() {
+	*x = AdminRecoverTierUpgradeResponse{}
+	mi := &file_purser_proto_msgTypes[176]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AdminRecoverTierUpgradeResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AdminRecoverTierUpgradeResponse) ProtoMessage() {}
+
+func (x *AdminRecoverTierUpgradeResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_purser_proto_msgTypes[176]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AdminRecoverTierUpgradeResponse.ProtoReflect.Descriptor instead.
+func (*AdminRecoverTierUpgradeResponse) Descriptor() ([]byte, []int) {
+	return file_purser_proto_rawDescGZIP(), []int{176}
+}
+
+func (x *AdminRecoverTierUpgradeResponse) GetUpgradeId() string {
+	if x != nil {
+		return x.UpgradeId
+	}
+	return ""
+}
+
+func (x *AdminRecoverTierUpgradeResponse) GetState() string {
+	if x != nil {
+		return x.State
+	}
+	return ""
+}
+
+func (x *AdminRecoverTierUpgradeResponse) GetProvider() string {
+	if x != nil {
+		return x.Provider
+	}
+	return ""
+}
+
+func (x *AdminRecoverTierUpgradeResponse) GetTierId() string {
+	if x != nil {
+		return x.TierId
+	}
+	return ""
+}
+
+func (x *AdminRecoverTierUpgradeResponse) GetRequestedBy() string {
+	if x != nil {
+		return x.RequestedBy
+	}
+	return ""
+}
+
+func (x *AdminRecoverTierUpgradeResponse) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+func (x *AdminRecoverTierUpgradeResponse) GetDetail() string {
+	if x != nil {
+		return x.Detail
+	}
+	return ""
+}
+
 var File_purser_proto protoreflect.FileDescriptor
 
 const file_purser_proto_rawDesc = "" +
@@ -13342,7 +14318,7 @@ const file_purser_proto_rawDesc = "" +
 	"\fpurser.proto\x12\x06purser\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1bgoogle/protobuf/empty.proto\x1a\x1cgoogle/protobuf/struct.proto\x1a\fcommon.proto\x1a\fshared.proto\x1a\x13tenant_limits.proto\x1a\x17metering_contract.proto\x1a\x15media_placement.proto\x1a\n" +
 	"x402.proto\">\n" +
 	"\x1fGetTenantAdmissionStatusRequest\x12\x1b\n" +
-	"\ttenant_id\x18\x01 \x01(\tR\btenantId\"\xc5\x03\n" +
+	"\ttenant_id\x18\x01 \x01(\tR\btenantId\"\x82\x04\n" +
 	" GetTenantAdmissionStatusResponse\x12#\n" +
 	"\rbilling_model\x18\x01 \x01(\tR\fbillingModel\x12!\n" +
 	"\fis_suspended\x18\x02 \x01(\bR\visSuspended\x12.\n" +
@@ -13355,7 +14331,9 @@ const file_purser_proto_rawDesc = "" +
 	"\ttier_name\x18\t \x01(\tR\btierName\x12\x1d\n" +
 	"\n" +
 	"tier_level\x18\n" +
-	" \x01(\x05R\ttierLevel\"<\n" +
+	" \x01(\x05R\ttierLevel\x12;\n" +
+	"\vvalid_until\x18\v \x01(\v2\x1a.google.protobuf.TimestampR\n" +
+	"validUntil\"<\n" +
 	"\x1dGetTenantBillingStatusRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\"X\n" +
 	"!ListTenantBillingSnapshotsRequest\x12\x1d\n" +
@@ -13377,7 +14355,7 @@ const file_purser_proto_rawDesc = "" +
 	"\bcurrency\x18\v \x01(\tR\bcurrency\x12?\n" +
 	"\rsubscribed_at\x18\f \x01(\v2\x1a.google.protobuf.TimestampR\fsubscribedAt\"a\n" +
 	"\"ListTenantBillingSnapshotsResponse\x12;\n" +
-	"\tsnapshots\x18\x01 \x03(\v2\x1d.purser.TenantBillingSnapshotR\tsnapshots\"\x96\x06\n" +
+	"\tsnapshots\x18\x01 \x03(\v2\x1d.purser.TenantBillingSnapshotR\tsnapshots\"\xbb\x06\n" +
 	"\x1eGetTenantBillingStatusResponse\x12#\n" +
 	"\rbilling_model\x18\x01 \x01(\tR\fbillingModel\x12!\n" +
 	"\fis_suspended\x18\x02 \x01(\bR\visSuspended\x12.\n" +
@@ -13397,7 +14375,8 @@ const file_purser_proto_rawDesc = "" +
 	"\x17available_balance_cents\x18\f \x01(\x03R\x15availableBalanceCents\x12)\n" +
 	"\x10collection_ready\x18\r \x01(\bR\x0fcollectionReady\x12/\n" +
 	"\x13collection_provider\x18\x0e \x01(\tR\x12collectionProvider\x12\x1b\n" +
-	"\ttier_name\x18\x0f \x01(\tR\btierName\"\xe1\x01\n" +
+	"\ttier_name\x18\x0f \x01(\tR\btierName\x12#\n" +
+	"\rgrant_expired\x18\x10 \x01(\bR\fgrantExpired\"\xe1\x01\n" +
 	"\x0eStoragePricing\x12\x1a\n" +
 	"\bcurrency\x18\x03 \x01(\tR\bcurrency\x12\x14\n" +
 	"\x05model\x18\x04 \x01(\tR\x05model\x12.\n" +
@@ -14420,7 +15399,7 @@ const file_purser_proto_rawDesc = "" +
 	"\achanged\x18\b \x01(\bR\achanged\x120\n" +
 	"\x14eligible_cluster_ids\x18\t \x03(\tR\x12eligibleClusterIds\x12,\n" +
 	"\x12primary_cluster_id\x18\n" +
-	" \x01(\tR\x10primaryClusterId\"\xf8\x02\n" +
+	" \x01(\tR\x10primaryClusterId\"\xa9\x04\n" +
 	"\x14OperatorBillingGrant\x12'\n" +
 	"\x0fsubscription_id\x18\x01 \x01(\tR\x0esubscriptionId\x12\"\n" +
 	"\n" +
@@ -14437,8 +15416,13 @@ const file_purser_proto_rawDesc = "" +
 	"granted_by\x18\a \x01(\tR\tgrantedBy\x129\n" +
 	"\n" +
 	"granted_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\tgrantedAt\x12\x16\n" +
-	"\x06active\x18\t \x01(\bR\x06activeB\r\n" +
-	"\v_base_price\"\x9e\x02\n" +
+	"\x06active\x18\t \x01(\bR\x06active\x12,\n" +
+	"\x12fallback_tier_name\x18\n" +
+	" \x01(\tR\x10fallbackTierName\x125\n" +
+	"\bended_at\x18\v \x01(\v2\x1a.google.protobuf.TimestampR\aendedAt\x12!\n" +
+	"\fexpiry_error\x18\f \x01(\tR\vexpiryError\x12'\n" +
+	"\x0fexpiry_failures\x18\r \x01(\x05R\x0eexpiryFailuresB\r\n" +
+	"\v_base_price\"\xe8\x02\n" +
 	"\x1bAdminSetBillingGrantRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x1b\n" +
 	"\ttier_name\x18\x02 \x01(\tR\btierName\x12\"\n" +
@@ -14451,13 +15435,28 @@ const file_purser_proto_rawDesc = "" +
 	"collection\x129\n" +
 	"\n" +
 	"expires_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\x12\x16\n" +
-	"\x06reason\x18\a \x01(\tR\x06reasonB\r\n" +
-	"\v_base_price\":\n" +
+	"\x06reason\x18\a \x01(\tR\x06reason\x121\n" +
+	"\x12fallback_tier_name\x18\b \x01(\tH\x01R\x10fallbackTierName\x88\x01\x01B\r\n" +
+	"\v_base_priceB\x15\n" +
+	"\x13_fallback_tier_name\"\xae\x01\n" +
+	"\x1dAdminListBillingGrantsRequest\x126\n" +
+	"\x17expiring_within_seconds\x18\x01 \x01(\x03R\x15expiringWithinSeconds\x12'\n" +
+	"\x0finclude_expired\x18\x02 \x01(\bR\x0eincludeExpired\x12\x14\n" +
+	"\x05limit\x18\x03 \x01(\x05R\x05limit\x12\x16\n" +
+	"\x06offset\x18\x04 \x01(\x05R\x06offset\"\x86\x01\n" +
+	"\x16AdminBillingGrantEntry\x12\x1b\n" +
+	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x1b\n" +
+	"\ttier_name\x18\x02 \x01(\tR\btierName\x122\n" +
+	"\x05grant\x18\x03 \x01(\v2\x1c.purser.OperatorBillingGrantR\x05grant\"s\n" +
+	"\x1eAdminListBillingGrantsResponse\x126\n" +
+	"\x06grants\x18\x01 \x03(\v2\x1e.purser.AdminBillingGrantEntryR\x06grants\x12\x19\n" +
+	"\bhas_more\x18\x02 \x01(\bR\ahasMore\":\n" +
 	"\x1bAdminGetBillingGrantRequest\x12\x1b\n" +
-	"\ttenant_id\x18\x01 \x01(\tR\btenantId\"U\n" +
+	"\ttenant_id\x18\x01 \x01(\tR\btenantId\"r\n" +
 	"\x1eAdminRevokeBillingGrantRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x16\n" +
-	"\x06reason\x18\x02 \x01(\tR\x06reason\"\xb5\x01\n" +
+	"\x06reason\x18\x02 \x01(\tR\x06reason\x12\x1b\n" +
+	"\ttier_name\x18\x03 \x01(\tR\btierName\"\xb5\x01\n" +
 	"\x10BillingGrantTier\x12'\n" +
 	"\x0fsubscription_id\x18\x01 \x01(\tR\x0esubscriptionId\x12\x17\n" +
 	"\atier_id\x18\x02 \x01(\tR\x06tierId\x12\x1b\n" +
@@ -14743,7 +15742,72 @@ const file_purser_proto_rawDesc = "" +
 	"\vstatus_code\x18\a \x01(\x05R\n" +
 	"statusCode\"B\n" +
 	"\"CompleteX402MutationResultResponse\x12\x1c\n" +
-	"\tcompleted\x18\x01 \x01(\bR\tcompleted*n\n" +
+	"\tcompleted\x18\x01 \x01(\bR\tcompleted\"\x87\x01\n" +
+	" AdminListCheckoutRecoveryRequest\x12\x1b\n" +
+	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x14\n" +
+	"\x05limit\x18\x02 \x01(\x05R\x05limit\x12\x16\n" +
+	"\x06offset\x18\x03 \x01(\x05R\x06offset\x12\x18\n" +
+	"\ahistory\x18\x04 \x01(\bR\ahistory\"\x86\x04\n" +
+	"\x14CheckoutRecoveryItem\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1b\n" +
+	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12%\n" +
+	"\x0ereservation_id\x18\x03 \x01(\tR\rreservationId\x12\x1a\n" +
+	"\bprovider\x18\x04 \x01(\tR\bprovider\x12\x1b\n" +
+	"\tevent_key\x18\x05 \x01(\tR\beventKey\x12\x16\n" +
+	"\x06status\x18\x06 \x01(\tR\x06status\x12\x1a\n" +
+	"\battempts\x18\a \x01(\x05R\battempts\x12\x1d\n" +
+	"\n" +
+	"last_error\x18\b \x01(\tR\tlastError\x12B\n" +
+	"\x0fnext_attempt_at\x18\t \x01(\v2\x1a.google.protobuf.TimestampR\rnextAttemptAt\x129\n" +
+	"\n" +
+	"expires_at\x18\n" +
+	" \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\x12!\n" +
+	"\famount_cents\x18\v \x01(\x03R\vamountCents\x12\x1a\n" +
+	"\bcurrency\x18\f \x01(\tR\bcurrency\x12-\n" +
+	"\x12reservation_status\x18\r \x01(\tR\x11reservationStatus\x12!\n" +
+	"\famount_known\x18\x0e \x01(\bR\vamountKnown\"\xab\x01\n" +
+	"!AdminListCheckoutRecoveryResponse\x122\n" +
+	"\x05items\x18\x01 \x03(\v2\x1c.purser.CheckoutRecoveryItemR\x05items\x12\x19\n" +
+	"\bhas_more\x18\x02 \x01(\bR\ahasMore\x127\n" +
+	"\aentries\x18\x03 \x03(\v2\x1d.purser.CheckoutRecoveryAuditR\aentries\"\x97\x01\n" +
+	"\x1bAdminRecoverCheckoutRequest\x12\x1b\n" +
+	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12%\n" +
+	"\x0ereservation_id\x18\x02 \x01(\tR\rreservationId\x12\x16\n" +
+	"\x06reason\x18\x03 \x01(\tR\x06reason\x12\x1c\n" +
+	"\tconfirmed\x18\x04 \x01(\bR\tconfirmed\"\x81\x02\n" +
+	"\x1cAdminRecoverCheckoutResponse\x12\x1a\n" +
+	"\bprovider\x18\x01 \x01(\tR\bprovider\x12\x16\n" +
+	"\x06status\x18\x02 \x01(\tR\x06status\x12!\n" +
+	"\famount_cents\x18\x03 \x01(\x03R\vamountCents\x12\x1a\n" +
+	"\bcurrency\x18\x04 \x01(\tR\bcurrency\x12\x18\n" +
+	"\aoutcome\x18\x05 \x01(\tR\aoutcome\x12\x16\n" +
+	"\x06detail\x18\x06 \x01(\tR\x06detail\x12\x19\n" +
+	"\baudit_id\x18\a \x01(\tR\aauditId\x12!\n" +
+	"\famount_known\x18\b \x01(\bR\vamountKnown\"\xee\x01\n" +
+	"\x15CheckoutRecoveryAudit\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12%\n" +
+	"\x0ereservation_id\x18\x02 \x01(\tR\rreservationId\x12\x19\n" +
+	"\bactor_id\x18\x03 \x01(\tR\aactorId\x12\x16\n" +
+	"\x06reason\x18\x04 \x01(\tR\x06reason\x12\x18\n" +
+	"\aoutcome\x18\x05 \x01(\tR\aoutcome\x12\x16\n" +
+	"\x06detail\x18\x06 \x01(\tR\x06detail\x129\n" +
+	"\n" +
+	"created_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"\x92\x01\n" +
+	"\x1eAdminRecoverTierUpgradeRequest\x12\x1b\n" +
+	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x1d\n" +
+	"\n" +
+	"upgrade_id\x18\x02 \x01(\tR\tupgradeId\x12\x1c\n" +
+	"\tconfirmed\x18\x03 \x01(\bR\tconfirmed\x12\x16\n" +
+	"\x06reason\x18\x04 \x01(\tR\x06reason\"\xde\x01\n" +
+	"\x1fAdminRecoverTierUpgradeResponse\x12\x1d\n" +
+	"\n" +
+	"upgrade_id\x18\x01 \x01(\tR\tupgradeId\x12\x14\n" +
+	"\x05state\x18\x02 \x01(\tR\x05state\x12\x1a\n" +
+	"\bprovider\x18\x03 \x01(\tR\bprovider\x12\x17\n" +
+	"\atier_id\x18\x04 \x01(\tR\x06tierId\x12!\n" +
+	"\frequested_by\x18\x05 \x01(\tR\vrequestedBy\x12\x16\n" +
+	"\x06reason\x18\x06 \x01(\tR\x06reason\x12\x16\n" +
+	"\x06detail\x18\a \x01(\tR\x06detail*n\n" +
 	"\vCryptoAsset\x12\x1c\n" +
 	"\x18CRYPTO_ASSET_UNSPECIFIED\x10\x00\x12\x14\n" +
 	"\x10CRYPTO_ASSET_ETH\x10\x01\x12\x15\n" +
@@ -14796,7 +15860,7 @@ const file_purser_proto_rawDesc = "" +
 	"\x12CheckClusterAccess\x12!.purser.CheckClusterAccessRequest\x1a\".purser.CheckClusterAccessResponse\x12j\n" +
 	"\x19CreateClusterSubscription\x12(.purser.CreateClusterSubscriptionRequest\x1a#.purser.ClusterSubscriptionResponse\x12]\n" +
 	"\x19CancelClusterSubscription\x12(.purser.CancelClusterSubscriptionRequest\x1a\x16.google.protobuf.Empty\x12\x7f\n" +
-	"\x1eListMarketplaceClusterPricings\x12-.purser.ListMarketplaceClusterPricingsRequest\x1a..purser.ListMarketplaceClusterPricingsResponse2\xfb\x0f\n" +
+	"\x1eListMarketplaceClusterPricings\x12-.purser.ListMarketplaceClusterPricingsRequest\x1a..purser.ListMarketplaceClusterPricingsResponse2\xa5\x13\n" +
 	"\x0ePrepaidService\x12M\n" +
 	"\x11GetPrepaidBalance\x12 .purser.GetPrepaidBalanceRequest\x1a\x16.purser.PrepaidBalance\x12G\n" +
 	"\fTopupBalance\x12\x1b.purser.TopupBalanceRequest\x1a\x1a.purser.BalanceTransaction\x12I\n" +
@@ -14814,9 +15878,13 @@ const file_purser_proto_rawDesc = "" +
 	"\x0eGetCryptoTopup\x12\x1d.purser.GetCryptoTopupRequest\x1a\x13.purser.CryptoTopup\x12L\n" +
 	"\rPromoteToPaid\x12\x1c.purser.PromoteToPaidRequest\x1a\x1d.purser.PromoteToPaidResponse\x12X\n" +
 	"\x11ChangeBillingTier\x12 .purser.ChangeBillingTierRequest\x1a!.purser.ChangeBillingTierResponse\x12R\n" +
-	"\x0fAdminAssignTier\x12\x1e.purser.AdminAssignTierRequest\x1a\x1f.purser.AdminAssignTierResponse\x12^\n" +
+	"\x0fAdminAssignTier\x12\x1e.purser.AdminAssignTierRequest\x1a\x1f.purser.AdminAssignTierResponse\x12p\n" +
+	"\x19AdminListCheckoutRecovery\x12(.purser.AdminListCheckoutRecoveryRequest\x1a).purser.AdminListCheckoutRecoveryResponse\x12a\n" +
+	"\x14AdminRecoverCheckout\x12#.purser.AdminRecoverCheckoutRequest\x1a$.purser.AdminRecoverCheckoutResponse\x12j\n" +
+	"\x17AdminRecoverTierUpgrade\x12&.purser.AdminRecoverTierUpgradeRequest\x1a'.purser.AdminRecoverTierUpgradeResponse\x12^\n" +
 	"\x14AdminSetBillingGrant\x12#.purser.AdminSetBillingGrantRequest\x1a!.purser.AdminBillingGrantResponse\x12^\n" +
-	"\x14AdminGetBillingGrant\x12#.purser.AdminGetBillingGrantRequest\x1a!.purser.AdminBillingGrantResponse\x12d\n" +
+	"\x14AdminGetBillingGrant\x12#.purser.AdminGetBillingGrantRequest\x1a!.purser.AdminBillingGrantResponse\x12g\n" +
+	"\x16AdminListBillingGrants\x12%.purser.AdminListBillingGrantsRequest\x1a&.purser.AdminListBillingGrantsResponse\x12d\n" +
 	"\x17AdminRevokeBillingGrant\x12&.purser.AdminRevokeBillingGrantRequest\x1a!.purser.AdminBillingGrantResponse\x12p\n" +
 	"\x19AdminRecordInvoicePayment\x12(.purser.AdminRecordInvoicePaymentRequest\x1a).purser.AdminRecordInvoicePaymentResponse\x12|\n" +
 	"\x1dAdminListPrepaidDoubleCharges\x12,.purser.AdminListPrepaidDoubleChargesRequest\x1a-.purser.AdminListPrepaidDoubleChargesResponse2S\n" +
@@ -14860,537 +15928,565 @@ func file_purser_proto_rawDescGZIP() []byte {
 }
 
 var file_purser_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_purser_proto_msgTypes = make([]protoimpl.MessageInfo, 172)
+var file_purser_proto_msgTypes = make([]protoimpl.MessageInfo, 183)
 var file_purser_proto_goTypes = []any{
-	(CryptoAsset)(0),                               // 0: purser.CryptoAsset
-	(*GetTenantAdmissionStatusRequest)(nil),        // 1: purser.GetTenantAdmissionStatusRequest
-	(*GetTenantAdmissionStatusResponse)(nil),       // 2: purser.GetTenantAdmissionStatusResponse
-	(*GetTenantBillingStatusRequest)(nil),          // 3: purser.GetTenantBillingStatusRequest
-	(*ListTenantBillingSnapshotsRequest)(nil),      // 4: purser.ListTenantBillingSnapshotsRequest
-	(*TenantBillingSnapshot)(nil),                  // 5: purser.TenantBillingSnapshot
-	(*ListTenantBillingSnapshotsResponse)(nil),     // 6: purser.ListTenantBillingSnapshotsResponse
-	(*GetTenantBillingStatusResponse)(nil),         // 7: purser.GetTenantBillingStatusResponse
-	(*StoragePricing)(nil),                         // 8: purser.StoragePricing
-	(*GetBillingTiersRequest)(nil),                 // 9: purser.GetBillingTiersRequest
-	(*GetBillingTiersResponse)(nil),                // 10: purser.GetBillingTiersResponse
-	(*GetBillingTierRequest)(nil),                  // 11: purser.GetBillingTierRequest
-	(*BillingTier)(nil),                            // 12: purser.BillingTier
-	(*PricingRule)(nil),                            // 13: purser.PricingRule
-	(*MeterDefinition)(nil),                        // 14: purser.MeterDefinition
-	(*ListMeterDefinitionsResponse)(nil),           // 15: purser.ListMeterDefinitionsResponse
-	(*BillingFeatures)(nil),                        // 16: purser.BillingFeatures
-	(*CreateBillingTierRequest)(nil),               // 17: purser.CreateBillingTierRequest
-	(*UpdateBillingTierRequest)(nil),               // 18: purser.UpdateBillingTierRequest
-	(*GetSubscriptionRequest)(nil),                 // 19: purser.GetSubscriptionRequest
-	(*GetSubscriptionResponse)(nil),                // 20: purser.GetSubscriptionResponse
-	(*GetBillingDetailsRequest)(nil),               // 21: purser.GetBillingDetailsRequest
-	(*UpdateBillingDetailsRequest)(nil),            // 22: purser.UpdateBillingDetailsRequest
-	(*BillingDetails)(nil),                         // 23: purser.BillingDetails
-	(*FxConversion)(nil),                           // 24: purser.FxConversion
-	(*TenantSubscription)(nil),                     // 25: purser.TenantSubscription
-	(*BillingAddress)(nil),                         // 26: purser.BillingAddress
-	(*CreateSubscriptionRequest)(nil),              // 27: purser.CreateSubscriptionRequest
-	(*UpdateSubscriptionRequest)(nil),              // 28: purser.UpdateSubscriptionRequest
-	(*CancelSubscriptionRequest)(nil),              // 29: purser.CancelSubscriptionRequest
-	(*GetOperatorRevenueRequest)(nil),              // 30: purser.GetOperatorRevenueRequest
-	(*OperatorRevenueByCluster)(nil),               // 31: purser.OperatorRevenueByCluster
-	(*GetOperatorRevenueResponse)(nil),             // 32: purser.GetOperatorRevenueResponse
-	(*ListOperatorClustersRequest)(nil),            // 33: purser.ListOperatorClustersRequest
-	(*ListOperatorClustersResponse)(nil),           // 34: purser.ListOperatorClustersResponse
-	(*GetOperatorPayoutsRequest)(nil),              // 35: purser.GetOperatorPayoutsRequest
-	(*OperatorPayout)(nil),                         // 36: purser.OperatorPayout
-	(*GetOperatorPayoutsResponse)(nil),             // 37: purser.GetOperatorPayoutsResponse
-	(*GetInvoiceRequest)(nil),                      // 38: purser.GetInvoiceRequest
-	(*GetInvoiceResponse)(nil),                     // 39: purser.GetInvoiceResponse
-	(*LineItem)(nil),                               // 40: purser.LineItem
-	(*Invoice)(nil),                                // 41: purser.Invoice
-	(*ListInvoicesRequest)(nil),                    // 42: purser.ListInvoicesRequest
-	(*ListInvoicesResponse)(nil),                   // 43: purser.ListInvoicesResponse
-	(*BillingDocument)(nil),                        // 44: purser.BillingDocument
-	(*ListBillingDocumentsRequest)(nil),            // 45: purser.ListBillingDocumentsRequest
-	(*ListBillingDocumentsResponse)(nil),           // 46: purser.ListBillingDocumentsResponse
-	(*GetBillingDocumentRequest)(nil),              // 47: purser.GetBillingDocumentRequest
-	(*GetBillingDocumentResponse)(nil),             // 48: purser.GetBillingDocumentResponse
-	(*PaymentRequest)(nil),                         // 49: purser.PaymentRequest
-	(*PaymentResponse)(nil),                        // 50: purser.PaymentResponse
-	(*GetPaymentMethodsRequest)(nil),               // 51: purser.GetPaymentMethodsRequest
-	(*PaymentMethodResponse)(nil),                  // 52: purser.PaymentMethodResponse
-	(*GetBillingStatusRequest)(nil),                // 53: purser.GetBillingStatusRequest
-	(*BillingStatusResponse)(nil),                  // 54: purser.BillingStatusResponse
-	(*Payment)(nil),                                // 55: purser.Payment
-	(*GetPaymentRequest)(nil),                      // 56: purser.GetPaymentRequest
-	(*ListPaymentsRequest)(nil),                    // 57: purser.ListPaymentsRequest
-	(*ListPaymentsResponse)(nil),                   // 58: purser.ListPaymentsResponse
-	(*CountryMetrics)(nil),                         // 59: purser.CountryMetrics
-	(*GetUsageRecordsRequest)(nil),                 // 60: purser.GetUsageRecordsRequest
-	(*UsageRecord)(nil),                            // 61: purser.UsageRecord
-	(*UsageRecordsResponse)(nil),                   // 62: purser.UsageRecordsResponse
-	(*GetUsageAggregatesRequest)(nil),              // 63: purser.GetUsageAggregatesRequest
-	(*UsageAggregate)(nil),                         // 64: purser.UsageAggregate
-	(*GetUsageAggregatesResponse)(nil),             // 65: purser.GetUsageAggregatesResponse
-	(*UsageFilters)(nil),                           // 66: purser.UsageFilters
-	(*CheckUserLimitRequest)(nil),                  // 67: purser.CheckUserLimitRequest
-	(*CheckUserLimitResponse)(nil),                 // 68: purser.CheckUserLimitResponse
-	(*TenantUsageRequest)(nil),                     // 69: purser.TenantUsageRequest
-	(*TenantUsageResponse)(nil),                    // 70: purser.TenantUsageResponse
-	(*ClusterPricing)(nil),                         // 71: purser.ClusterPricing
-	(*GetClusterPricingRequest)(nil),               // 72: purser.GetClusterPricingRequest
-	(*GetClustersPricingBatchRequest)(nil),         // 73: purser.GetClustersPricingBatchRequest
-	(*GetClustersPricingBatchResponse)(nil),        // 74: purser.GetClustersPricingBatchResponse
-	(*SetClusterPricingRequest)(nil),               // 75: purser.SetClusterPricingRequest
-	(*ListClusterPricingsRequest)(nil),             // 76: purser.ListClusterPricingsRequest
-	(*ListClusterPricingsResponse)(nil),            // 77: purser.ListClusterPricingsResponse
-	(*CheckClusterAccessRequest)(nil),              // 78: purser.CheckClusterAccessRequest
-	(*CheckClusterAccessResponse)(nil),             // 79: purser.CheckClusterAccessResponse
-	(*CreateClusterSubscriptionRequest)(nil),       // 80: purser.CreateClusterSubscriptionRequest
-	(*ClusterSubscriptionResponse)(nil),            // 81: purser.ClusterSubscriptionResponse
-	(*CancelClusterSubscriptionRequest)(nil),       // 82: purser.CancelClusterSubscriptionRequest
-	(*ListMarketplaceClusterPricingsRequest)(nil),  // 83: purser.ListMarketplaceClusterPricingsRequest
-	(*ListMarketplaceClusterPricingsResponse)(nil), // 84: purser.ListMarketplaceClusterPricingsResponse
-	(*MarketplaceClusterPricing)(nil),              // 85: purser.MarketplaceClusterPricing
-	(*PrepaidBalance)(nil),                         // 86: purser.PrepaidBalance
-	(*BalanceTransaction)(nil),                     // 87: purser.BalanceTransaction
-	(*GetPrepaidBalanceRequest)(nil),               // 88: purser.GetPrepaidBalanceRequest
-	(*TopupBalanceRequest)(nil),                    // 89: purser.TopupBalanceRequest
-	(*DeductBalanceRequest)(nil),                   // 90: purser.DeductBalanceRequest
-	(*AdjustBalanceRequest)(nil),                   // 91: purser.AdjustBalanceRequest
-	(*ListBalanceTransactionsRequest)(nil),         // 92: purser.ListBalanceTransactionsRequest
-	(*ListBalanceTransactionsResponse)(nil),        // 93: purser.ListBalanceTransactionsResponse
-	(*InitializePrepaidBalanceRequest)(nil),        // 94: purser.InitializePrepaidBalanceRequest
-	(*InitializePrepaidAccountRequest)(nil),        // 95: purser.InitializePrepaidAccountRequest
-	(*InitializePrepaidAccountResponse)(nil),       // 96: purser.InitializePrepaidAccountResponse
-	(*InitializePostpaidAccountRequest)(nil),       // 97: purser.InitializePostpaidAccountRequest
-	(*InitializePostpaidAccountResponse)(nil),      // 98: purser.InitializePostpaidAccountResponse
-	(*CreateCardTopupRequest)(nil),                 // 99: purser.CreateCardTopupRequest
-	(*CreateCardTopupResponse)(nil),                // 100: purser.CreateCardTopupResponse
-	(*PendingTopup)(nil),                           // 101: purser.PendingTopup
-	(*GetPendingTopupRequest)(nil),                 // 102: purser.GetPendingTopupRequest
-	(*ListPendingTopupsRequest)(nil),               // 103: purser.ListPendingTopupsRequest
-	(*ListPendingTopupsResponse)(nil),              // 104: purser.ListPendingTopupsResponse
-	(*CreateCryptoTopupRequest)(nil),               // 105: purser.CreateCryptoTopupRequest
-	(*CreateCryptoTopupResponse)(nil),              // 106: purser.CreateCryptoTopupResponse
-	(*GetCryptoTopupRequest)(nil),                  // 107: purser.GetCryptoTopupRequest
-	(*CryptoTopup)(nil),                            // 108: purser.CryptoTopup
-	(*PromoteToPaidRequest)(nil),                   // 109: purser.PromoteToPaidRequest
-	(*PromoteToPaidResponse)(nil),                  // 110: purser.PromoteToPaidResponse
-	(*ChangeBillingTierRequest)(nil),               // 111: purser.ChangeBillingTierRequest
-	(*ChangeBillingTierResponse)(nil),              // 112: purser.ChangeBillingTierResponse
-	(*AdminAssignTierRequest)(nil),                 // 113: purser.AdminAssignTierRequest
-	(*AdminAssignTierResponse)(nil),                // 114: purser.AdminAssignTierResponse
-	(*OperatorBillingGrant)(nil),                   // 115: purser.OperatorBillingGrant
-	(*AdminSetBillingGrantRequest)(nil),            // 116: purser.AdminSetBillingGrantRequest
-	(*AdminGetBillingGrantRequest)(nil),            // 117: purser.AdminGetBillingGrantRequest
-	(*AdminRevokeBillingGrantRequest)(nil),         // 118: purser.AdminRevokeBillingGrantRequest
-	(*BillingGrantTier)(nil),                       // 119: purser.BillingGrantTier
-	(*AdminBillingGrantResponse)(nil),              // 120: purser.AdminBillingGrantResponse
-	(*AdminRecordInvoicePaymentRequest)(nil),       // 121: purser.AdminRecordInvoicePaymentRequest
-	(*AdminRecordInvoicePaymentResponse)(nil),      // 122: purser.AdminRecordInvoicePaymentResponse
-	(*AdminListPrepaidDoubleChargesRequest)(nil),   // 123: purser.AdminListPrepaidDoubleChargesRequest
-	(*PrepaidDoubleCharge)(nil),                    // 124: purser.PrepaidDoubleCharge
-	(*AdminListPrepaidDoubleChargesResponse)(nil),  // 125: purser.AdminListPrepaidDoubleChargesResponse
-	(*CreateStripeCheckoutRequest)(nil),            // 126: purser.CreateStripeCheckoutRequest
-	(*CreateStripeCheckoutResponse)(nil),           // 127: purser.CreateStripeCheckoutResponse
-	(*CreateBillingPortalRequest)(nil),             // 128: purser.CreateBillingPortalRequest
-	(*CreateBillingPortalResponse)(nil),            // 129: purser.CreateBillingPortalResponse
-	(*SyncStripeSubscriptionRequest)(nil),          // 130: purser.SyncStripeSubscriptionRequest
-	(*CreateMollieFirstPaymentRequest)(nil),        // 131: purser.CreateMollieFirstPaymentRequest
-	(*CreateMollieFirstPaymentResponse)(nil),       // 132: purser.CreateMollieFirstPaymentResponse
-	(*CreateMollieSubscriptionRequest)(nil),        // 133: purser.CreateMollieSubscriptionRequest
-	(*CreateMollieSubscriptionResponse)(nil),       // 134: purser.CreateMollieSubscriptionResponse
-	(*ListMollieMandatesRequest)(nil),              // 135: purser.ListMollieMandatesRequest
-	(*MollieMandate)(nil),                          // 136: purser.MollieMandate
-	(*ListMollieMandatesResponse)(nil),             // 137: purser.ListMollieMandatesResponse
-	(*CancelMollieSubscriptionRequest)(nil),        // 138: purser.CancelMollieSubscriptionRequest
-	(*RotateCryptoDepositKeyRequest)(nil),          // 139: purser.RotateCryptoDepositKeyRequest
-	(*RotateCryptoDepositKeyResponse)(nil),         // 140: purser.RotateCryptoDepositKeyResponse
-	(*CryptoReadinessCheck)(nil),                   // 141: purser.CryptoReadinessCheck
-	(*CryptoReadinessResponse)(nil),                // 142: purser.CryptoReadinessResponse
-	(*PlanCryptoSweepRequest)(nil),                 // 143: purser.PlanCryptoSweepRequest
-	(*PlanCryptoSweepResponse)(nil),                // 144: purser.PlanCryptoSweepResponse
-	(*BroadcastCryptoSweepRequest)(nil),            // 145: purser.BroadcastCryptoSweepRequest
-	(*SweepBroadcastItem)(nil),                     // 146: purser.SweepBroadcastItem
-	(*BroadcastCryptoSweepResponse)(nil),           // 147: purser.BroadcastCryptoSweepResponse
-	(*ReconcileCryptoSweepRequest)(nil),            // 148: purser.ReconcileCryptoSweepRequest
-	(*ReconcileCryptoSweepResponse)(nil),           // 149: purser.ReconcileCryptoSweepResponse
-	(*ReleaseCryptoSweepRequest)(nil),              // 150: purser.ReleaseCryptoSweepRequest
-	(*ReleaseCryptoSweepResponse)(nil),             // 151: purser.ReleaseCryptoSweepResponse
-	(*ResolveX402MutationResultRequest)(nil),       // 152: purser.ResolveX402MutationResultRequest
-	(*ResolveX402MutationResultResponse)(nil),      // 153: purser.ResolveX402MutationResultResponse
-	(*GetPaymentRequirementsRequest)(nil),          // 154: purser.GetPaymentRequirementsRequest
-	(*PaymentRequirements)(nil),                    // 155: purser.PaymentRequirements
-	(*PaymentRequirement)(nil),                     // 156: purser.PaymentRequirement
-	(*VerifyX402PaymentRequest)(nil),               // 157: purser.VerifyX402PaymentRequest
-	(*VerifyX402PaymentResponse)(nil),              // 158: purser.VerifyX402PaymentResponse
-	(*SettleX402PaymentRequest)(nil),               // 159: purser.SettleX402PaymentRequest
-	(*SettleX402PaymentResponse)(nil),              // 160: purser.SettleX402PaymentResponse
-	(*GetTenantX402AddressRequest)(nil),            // 161: purser.GetTenantX402AddressRequest
-	(*GetTenantX402AddressResponse)(nil),           // 162: purser.GetTenantX402AddressResponse
-	(*ClaimX402MutationResultRequest)(nil),         // 163: purser.ClaimX402MutationResultRequest
-	(*ClaimX402MutationResultResponse)(nil),        // 164: purser.ClaimX402MutationResultResponse
-	(*CompleteX402MutationResultRequest)(nil),      // 165: purser.CompleteX402MutationResultRequest
-	(*CompleteX402MutationResultResponse)(nil),     // 166: purser.CompleteX402MutationResultResponse
-	nil,                                      // 167: purser.BillingTier.EntitlementsEntry
-	nil,                                      // 168: purser.TenantSubscription.EntitlementOverridesEntry
-	nil,                                      // 169: purser.UpdateSubscriptionRequest.EntitlementOverridesEntry
-	nil,                                      // 170: purser.TenantUsageResponse.UsageEntry
-	nil,                                      // 171: purser.TenantUsageResponse.CostsEntry
-	nil,                                      // 172: purser.GetClustersPricingBatchResponse.PricingsEntry
-	(*timestamppb.Timestamp)(nil),            // 173: google.protobuf.Timestamp
-	(*shared.DVRPolicy)(nil),                 // 174: shared.DVRPolicy
-	(*metering_contract.MeterAllowance)(nil), // 175: metering.MeterAllowance
-	(*tenant_limits.TenantResourceLimits)(nil),      // 176: tenant_limits.TenantResourceLimits
-	(*common.CursorPaginationRequest)(nil),          // 177: common.CursorPaginationRequest
-	(*common.CursorPaginationResponse)(nil),         // 178: common.CursorPaginationResponse
-	(*structpb.Struct)(nil),                         // 179: google.protobuf.Struct
-	(*common.TimeRange)(nil),                        // 180: common.TimeRange
-	(*x402.X402PaymentPayload)(nil),                 // 181: x402.X402PaymentPayload
-	(*emptypb.Empty)(nil),                           // 182: google.protobuf.Empty
-	(*media_placement.CommercialQuoteRequest)(nil),  // 183: media_placement.CommercialQuoteRequest
-	(*shared.WebhookRequest)(nil),                   // 184: shared.WebhookRequest
-	(*media_placement.CommercialQuoteResponse)(nil), // 185: media_placement.CommercialQuoteResponse
-	(*shared.WebhookResponse)(nil),                  // 186: shared.WebhookResponse
+	(CryptoAsset)(0),                                // 0: purser.CryptoAsset
+	(*GetTenantAdmissionStatusRequest)(nil),         // 1: purser.GetTenantAdmissionStatusRequest
+	(*GetTenantAdmissionStatusResponse)(nil),        // 2: purser.GetTenantAdmissionStatusResponse
+	(*GetTenantBillingStatusRequest)(nil),           // 3: purser.GetTenantBillingStatusRequest
+	(*ListTenantBillingSnapshotsRequest)(nil),       // 4: purser.ListTenantBillingSnapshotsRequest
+	(*TenantBillingSnapshot)(nil),                   // 5: purser.TenantBillingSnapshot
+	(*ListTenantBillingSnapshotsResponse)(nil),      // 6: purser.ListTenantBillingSnapshotsResponse
+	(*GetTenantBillingStatusResponse)(nil),          // 7: purser.GetTenantBillingStatusResponse
+	(*StoragePricing)(nil),                          // 8: purser.StoragePricing
+	(*GetBillingTiersRequest)(nil),                  // 9: purser.GetBillingTiersRequest
+	(*GetBillingTiersResponse)(nil),                 // 10: purser.GetBillingTiersResponse
+	(*GetBillingTierRequest)(nil),                   // 11: purser.GetBillingTierRequest
+	(*BillingTier)(nil),                             // 12: purser.BillingTier
+	(*PricingRule)(nil),                             // 13: purser.PricingRule
+	(*MeterDefinition)(nil),                         // 14: purser.MeterDefinition
+	(*ListMeterDefinitionsResponse)(nil),            // 15: purser.ListMeterDefinitionsResponse
+	(*BillingFeatures)(nil),                         // 16: purser.BillingFeatures
+	(*CreateBillingTierRequest)(nil),                // 17: purser.CreateBillingTierRequest
+	(*UpdateBillingTierRequest)(nil),                // 18: purser.UpdateBillingTierRequest
+	(*GetSubscriptionRequest)(nil),                  // 19: purser.GetSubscriptionRequest
+	(*GetSubscriptionResponse)(nil),                 // 20: purser.GetSubscriptionResponse
+	(*GetBillingDetailsRequest)(nil),                // 21: purser.GetBillingDetailsRequest
+	(*UpdateBillingDetailsRequest)(nil),             // 22: purser.UpdateBillingDetailsRequest
+	(*BillingDetails)(nil),                          // 23: purser.BillingDetails
+	(*FxConversion)(nil),                            // 24: purser.FxConversion
+	(*TenantSubscription)(nil),                      // 25: purser.TenantSubscription
+	(*BillingAddress)(nil),                          // 26: purser.BillingAddress
+	(*CreateSubscriptionRequest)(nil),               // 27: purser.CreateSubscriptionRequest
+	(*UpdateSubscriptionRequest)(nil),               // 28: purser.UpdateSubscriptionRequest
+	(*CancelSubscriptionRequest)(nil),               // 29: purser.CancelSubscriptionRequest
+	(*GetOperatorRevenueRequest)(nil),               // 30: purser.GetOperatorRevenueRequest
+	(*OperatorRevenueByCluster)(nil),                // 31: purser.OperatorRevenueByCluster
+	(*GetOperatorRevenueResponse)(nil),              // 32: purser.GetOperatorRevenueResponse
+	(*ListOperatorClustersRequest)(nil),             // 33: purser.ListOperatorClustersRequest
+	(*ListOperatorClustersResponse)(nil),            // 34: purser.ListOperatorClustersResponse
+	(*GetOperatorPayoutsRequest)(nil),               // 35: purser.GetOperatorPayoutsRequest
+	(*OperatorPayout)(nil),                          // 36: purser.OperatorPayout
+	(*GetOperatorPayoutsResponse)(nil),              // 37: purser.GetOperatorPayoutsResponse
+	(*GetInvoiceRequest)(nil),                       // 38: purser.GetInvoiceRequest
+	(*GetInvoiceResponse)(nil),                      // 39: purser.GetInvoiceResponse
+	(*LineItem)(nil),                                // 40: purser.LineItem
+	(*Invoice)(nil),                                 // 41: purser.Invoice
+	(*ListInvoicesRequest)(nil),                     // 42: purser.ListInvoicesRequest
+	(*ListInvoicesResponse)(nil),                    // 43: purser.ListInvoicesResponse
+	(*BillingDocument)(nil),                         // 44: purser.BillingDocument
+	(*ListBillingDocumentsRequest)(nil),             // 45: purser.ListBillingDocumentsRequest
+	(*ListBillingDocumentsResponse)(nil),            // 46: purser.ListBillingDocumentsResponse
+	(*GetBillingDocumentRequest)(nil),               // 47: purser.GetBillingDocumentRequest
+	(*GetBillingDocumentResponse)(nil),              // 48: purser.GetBillingDocumentResponse
+	(*PaymentRequest)(nil),                          // 49: purser.PaymentRequest
+	(*PaymentResponse)(nil),                         // 50: purser.PaymentResponse
+	(*GetPaymentMethodsRequest)(nil),                // 51: purser.GetPaymentMethodsRequest
+	(*PaymentMethodResponse)(nil),                   // 52: purser.PaymentMethodResponse
+	(*GetBillingStatusRequest)(nil),                 // 53: purser.GetBillingStatusRequest
+	(*BillingStatusResponse)(nil),                   // 54: purser.BillingStatusResponse
+	(*Payment)(nil),                                 // 55: purser.Payment
+	(*GetPaymentRequest)(nil),                       // 56: purser.GetPaymentRequest
+	(*ListPaymentsRequest)(nil),                     // 57: purser.ListPaymentsRequest
+	(*ListPaymentsResponse)(nil),                    // 58: purser.ListPaymentsResponse
+	(*CountryMetrics)(nil),                          // 59: purser.CountryMetrics
+	(*GetUsageRecordsRequest)(nil),                  // 60: purser.GetUsageRecordsRequest
+	(*UsageRecord)(nil),                             // 61: purser.UsageRecord
+	(*UsageRecordsResponse)(nil),                    // 62: purser.UsageRecordsResponse
+	(*GetUsageAggregatesRequest)(nil),               // 63: purser.GetUsageAggregatesRequest
+	(*UsageAggregate)(nil),                          // 64: purser.UsageAggregate
+	(*GetUsageAggregatesResponse)(nil),              // 65: purser.GetUsageAggregatesResponse
+	(*UsageFilters)(nil),                            // 66: purser.UsageFilters
+	(*CheckUserLimitRequest)(nil),                   // 67: purser.CheckUserLimitRequest
+	(*CheckUserLimitResponse)(nil),                  // 68: purser.CheckUserLimitResponse
+	(*TenantUsageRequest)(nil),                      // 69: purser.TenantUsageRequest
+	(*TenantUsageResponse)(nil),                     // 70: purser.TenantUsageResponse
+	(*ClusterPricing)(nil),                          // 71: purser.ClusterPricing
+	(*GetClusterPricingRequest)(nil),                // 72: purser.GetClusterPricingRequest
+	(*GetClustersPricingBatchRequest)(nil),          // 73: purser.GetClustersPricingBatchRequest
+	(*GetClustersPricingBatchResponse)(nil),         // 74: purser.GetClustersPricingBatchResponse
+	(*SetClusterPricingRequest)(nil),                // 75: purser.SetClusterPricingRequest
+	(*ListClusterPricingsRequest)(nil),              // 76: purser.ListClusterPricingsRequest
+	(*ListClusterPricingsResponse)(nil),             // 77: purser.ListClusterPricingsResponse
+	(*CheckClusterAccessRequest)(nil),               // 78: purser.CheckClusterAccessRequest
+	(*CheckClusterAccessResponse)(nil),              // 79: purser.CheckClusterAccessResponse
+	(*CreateClusterSubscriptionRequest)(nil),        // 80: purser.CreateClusterSubscriptionRequest
+	(*ClusterSubscriptionResponse)(nil),             // 81: purser.ClusterSubscriptionResponse
+	(*CancelClusterSubscriptionRequest)(nil),        // 82: purser.CancelClusterSubscriptionRequest
+	(*ListMarketplaceClusterPricingsRequest)(nil),   // 83: purser.ListMarketplaceClusterPricingsRequest
+	(*ListMarketplaceClusterPricingsResponse)(nil),  // 84: purser.ListMarketplaceClusterPricingsResponse
+	(*MarketplaceClusterPricing)(nil),               // 85: purser.MarketplaceClusterPricing
+	(*PrepaidBalance)(nil),                          // 86: purser.PrepaidBalance
+	(*BalanceTransaction)(nil),                      // 87: purser.BalanceTransaction
+	(*GetPrepaidBalanceRequest)(nil),                // 88: purser.GetPrepaidBalanceRequest
+	(*TopupBalanceRequest)(nil),                     // 89: purser.TopupBalanceRequest
+	(*DeductBalanceRequest)(nil),                    // 90: purser.DeductBalanceRequest
+	(*AdjustBalanceRequest)(nil),                    // 91: purser.AdjustBalanceRequest
+	(*ListBalanceTransactionsRequest)(nil),          // 92: purser.ListBalanceTransactionsRequest
+	(*ListBalanceTransactionsResponse)(nil),         // 93: purser.ListBalanceTransactionsResponse
+	(*InitializePrepaidBalanceRequest)(nil),         // 94: purser.InitializePrepaidBalanceRequest
+	(*InitializePrepaidAccountRequest)(nil),         // 95: purser.InitializePrepaidAccountRequest
+	(*InitializePrepaidAccountResponse)(nil),        // 96: purser.InitializePrepaidAccountResponse
+	(*InitializePostpaidAccountRequest)(nil),        // 97: purser.InitializePostpaidAccountRequest
+	(*InitializePostpaidAccountResponse)(nil),       // 98: purser.InitializePostpaidAccountResponse
+	(*CreateCardTopupRequest)(nil),                  // 99: purser.CreateCardTopupRequest
+	(*CreateCardTopupResponse)(nil),                 // 100: purser.CreateCardTopupResponse
+	(*PendingTopup)(nil),                            // 101: purser.PendingTopup
+	(*GetPendingTopupRequest)(nil),                  // 102: purser.GetPendingTopupRequest
+	(*ListPendingTopupsRequest)(nil),                // 103: purser.ListPendingTopupsRequest
+	(*ListPendingTopupsResponse)(nil),               // 104: purser.ListPendingTopupsResponse
+	(*CreateCryptoTopupRequest)(nil),                // 105: purser.CreateCryptoTopupRequest
+	(*CreateCryptoTopupResponse)(nil),               // 106: purser.CreateCryptoTopupResponse
+	(*GetCryptoTopupRequest)(nil),                   // 107: purser.GetCryptoTopupRequest
+	(*CryptoTopup)(nil),                             // 108: purser.CryptoTopup
+	(*PromoteToPaidRequest)(nil),                    // 109: purser.PromoteToPaidRequest
+	(*PromoteToPaidResponse)(nil),                   // 110: purser.PromoteToPaidResponse
+	(*ChangeBillingTierRequest)(nil),                // 111: purser.ChangeBillingTierRequest
+	(*ChangeBillingTierResponse)(nil),               // 112: purser.ChangeBillingTierResponse
+	(*AdminAssignTierRequest)(nil),                  // 113: purser.AdminAssignTierRequest
+	(*AdminAssignTierResponse)(nil),                 // 114: purser.AdminAssignTierResponse
+	(*OperatorBillingGrant)(nil),                    // 115: purser.OperatorBillingGrant
+	(*AdminSetBillingGrantRequest)(nil),             // 116: purser.AdminSetBillingGrantRequest
+	(*AdminListBillingGrantsRequest)(nil),           // 117: purser.AdminListBillingGrantsRequest
+	(*AdminBillingGrantEntry)(nil),                  // 118: purser.AdminBillingGrantEntry
+	(*AdminListBillingGrantsResponse)(nil),          // 119: purser.AdminListBillingGrantsResponse
+	(*AdminGetBillingGrantRequest)(nil),             // 120: purser.AdminGetBillingGrantRequest
+	(*AdminRevokeBillingGrantRequest)(nil),          // 121: purser.AdminRevokeBillingGrantRequest
+	(*BillingGrantTier)(nil),                        // 122: purser.BillingGrantTier
+	(*AdminBillingGrantResponse)(nil),               // 123: purser.AdminBillingGrantResponse
+	(*AdminRecordInvoicePaymentRequest)(nil),        // 124: purser.AdminRecordInvoicePaymentRequest
+	(*AdminRecordInvoicePaymentResponse)(nil),       // 125: purser.AdminRecordInvoicePaymentResponse
+	(*AdminListPrepaidDoubleChargesRequest)(nil),    // 126: purser.AdminListPrepaidDoubleChargesRequest
+	(*PrepaidDoubleCharge)(nil),                     // 127: purser.PrepaidDoubleCharge
+	(*AdminListPrepaidDoubleChargesResponse)(nil),   // 128: purser.AdminListPrepaidDoubleChargesResponse
+	(*CreateStripeCheckoutRequest)(nil),             // 129: purser.CreateStripeCheckoutRequest
+	(*CreateStripeCheckoutResponse)(nil),            // 130: purser.CreateStripeCheckoutResponse
+	(*CreateBillingPortalRequest)(nil),              // 131: purser.CreateBillingPortalRequest
+	(*CreateBillingPortalResponse)(nil),             // 132: purser.CreateBillingPortalResponse
+	(*SyncStripeSubscriptionRequest)(nil),           // 133: purser.SyncStripeSubscriptionRequest
+	(*CreateMollieFirstPaymentRequest)(nil),         // 134: purser.CreateMollieFirstPaymentRequest
+	(*CreateMollieFirstPaymentResponse)(nil),        // 135: purser.CreateMollieFirstPaymentResponse
+	(*CreateMollieSubscriptionRequest)(nil),         // 136: purser.CreateMollieSubscriptionRequest
+	(*CreateMollieSubscriptionResponse)(nil),        // 137: purser.CreateMollieSubscriptionResponse
+	(*ListMollieMandatesRequest)(nil),               // 138: purser.ListMollieMandatesRequest
+	(*MollieMandate)(nil),                           // 139: purser.MollieMandate
+	(*ListMollieMandatesResponse)(nil),              // 140: purser.ListMollieMandatesResponse
+	(*CancelMollieSubscriptionRequest)(nil),         // 141: purser.CancelMollieSubscriptionRequest
+	(*RotateCryptoDepositKeyRequest)(nil),           // 142: purser.RotateCryptoDepositKeyRequest
+	(*RotateCryptoDepositKeyResponse)(nil),          // 143: purser.RotateCryptoDepositKeyResponse
+	(*CryptoReadinessCheck)(nil),                    // 144: purser.CryptoReadinessCheck
+	(*CryptoReadinessResponse)(nil),                 // 145: purser.CryptoReadinessResponse
+	(*PlanCryptoSweepRequest)(nil),                  // 146: purser.PlanCryptoSweepRequest
+	(*PlanCryptoSweepResponse)(nil),                 // 147: purser.PlanCryptoSweepResponse
+	(*BroadcastCryptoSweepRequest)(nil),             // 148: purser.BroadcastCryptoSweepRequest
+	(*SweepBroadcastItem)(nil),                      // 149: purser.SweepBroadcastItem
+	(*BroadcastCryptoSweepResponse)(nil),            // 150: purser.BroadcastCryptoSweepResponse
+	(*ReconcileCryptoSweepRequest)(nil),             // 151: purser.ReconcileCryptoSweepRequest
+	(*ReconcileCryptoSweepResponse)(nil),            // 152: purser.ReconcileCryptoSweepResponse
+	(*ReleaseCryptoSweepRequest)(nil),               // 153: purser.ReleaseCryptoSweepRequest
+	(*ReleaseCryptoSweepResponse)(nil),              // 154: purser.ReleaseCryptoSweepResponse
+	(*ResolveX402MutationResultRequest)(nil),        // 155: purser.ResolveX402MutationResultRequest
+	(*ResolveX402MutationResultResponse)(nil),       // 156: purser.ResolveX402MutationResultResponse
+	(*GetPaymentRequirementsRequest)(nil),           // 157: purser.GetPaymentRequirementsRequest
+	(*PaymentRequirements)(nil),                     // 158: purser.PaymentRequirements
+	(*PaymentRequirement)(nil),                      // 159: purser.PaymentRequirement
+	(*VerifyX402PaymentRequest)(nil),                // 160: purser.VerifyX402PaymentRequest
+	(*VerifyX402PaymentResponse)(nil),               // 161: purser.VerifyX402PaymentResponse
+	(*SettleX402PaymentRequest)(nil),                // 162: purser.SettleX402PaymentRequest
+	(*SettleX402PaymentResponse)(nil),               // 163: purser.SettleX402PaymentResponse
+	(*GetTenantX402AddressRequest)(nil),             // 164: purser.GetTenantX402AddressRequest
+	(*GetTenantX402AddressResponse)(nil),            // 165: purser.GetTenantX402AddressResponse
+	(*ClaimX402MutationResultRequest)(nil),          // 166: purser.ClaimX402MutationResultRequest
+	(*ClaimX402MutationResultResponse)(nil),         // 167: purser.ClaimX402MutationResultResponse
+	(*CompleteX402MutationResultRequest)(nil),       // 168: purser.CompleteX402MutationResultRequest
+	(*CompleteX402MutationResultResponse)(nil),      // 169: purser.CompleteX402MutationResultResponse
+	(*AdminListCheckoutRecoveryRequest)(nil),        // 170: purser.AdminListCheckoutRecoveryRequest
+	(*CheckoutRecoveryItem)(nil),                    // 171: purser.CheckoutRecoveryItem
+	(*AdminListCheckoutRecoveryResponse)(nil),       // 172: purser.AdminListCheckoutRecoveryResponse
+	(*AdminRecoverCheckoutRequest)(nil),             // 173: purser.AdminRecoverCheckoutRequest
+	(*AdminRecoverCheckoutResponse)(nil),            // 174: purser.AdminRecoverCheckoutResponse
+	(*CheckoutRecoveryAudit)(nil),                   // 175: purser.CheckoutRecoveryAudit
+	(*AdminRecoverTierUpgradeRequest)(nil),          // 176: purser.AdminRecoverTierUpgradeRequest
+	(*AdminRecoverTierUpgradeResponse)(nil),         // 177: purser.AdminRecoverTierUpgradeResponse
+	nil,                                             // 178: purser.BillingTier.EntitlementsEntry
+	nil,                                             // 179: purser.TenantSubscription.EntitlementOverridesEntry
+	nil,                                             // 180: purser.UpdateSubscriptionRequest.EntitlementOverridesEntry
+	nil,                                             // 181: purser.TenantUsageResponse.UsageEntry
+	nil,                                             // 182: purser.TenantUsageResponse.CostsEntry
+	nil,                                             // 183: purser.GetClustersPricingBatchResponse.PricingsEntry
+	(*timestamppb.Timestamp)(nil),                   // 184: google.protobuf.Timestamp
+	(*shared.DVRPolicy)(nil),                        // 185: shared.DVRPolicy
+	(*metering_contract.MeterAllowance)(nil),        // 186: metering.MeterAllowance
+	(*tenant_limits.TenantResourceLimits)(nil),      // 187: tenant_limits.TenantResourceLimits
+	(*common.CursorPaginationRequest)(nil),          // 188: common.CursorPaginationRequest
+	(*common.CursorPaginationResponse)(nil),         // 189: common.CursorPaginationResponse
+	(*structpb.Struct)(nil),                         // 190: google.protobuf.Struct
+	(*common.TimeRange)(nil),                        // 191: common.TimeRange
+	(*x402.X402PaymentPayload)(nil),                 // 192: x402.X402PaymentPayload
+	(*emptypb.Empty)(nil),                           // 193: google.protobuf.Empty
+	(*media_placement.CommercialQuoteRequest)(nil),  // 194: media_placement.CommercialQuoteRequest
+	(*shared.WebhookRequest)(nil),                   // 195: shared.WebhookRequest
+	(*media_placement.CommercialQuoteResponse)(nil), // 196: media_placement.CommercialQuoteResponse
+	(*shared.WebhookResponse)(nil),                  // 197: shared.WebhookResponse
 }
 var file_purser_proto_depIdxs = []int32{
-	173, // 0: purser.TenantBillingSnapshot.trial_ends_at:type_name -> google.protobuf.Timestamp
-	173, // 1: purser.TenantBillingSnapshot.next_billing_date:type_name -> google.protobuf.Timestamp
-	173, // 2: purser.TenantBillingSnapshot.subscribed_at:type_name -> google.protobuf.Timestamp
-	5,   // 3: purser.ListTenantBillingSnapshotsResponse.snapshots:type_name -> purser.TenantBillingSnapshot
-	174, // 4: purser.GetTenantBillingStatusResponse.dvr_policy:type_name -> shared.DVRPolicy
-	175, // 5: purser.GetTenantBillingStatusResponse.allowances:type_name -> metering.MeterAllowance
-	176, // 6: purser.GetTenantBillingStatusResponse.tenant_resource_limits:type_name -> tenant_limits.TenantResourceLimits
-	8,   // 7: purser.GetTenantBillingStatusResponse.storage_pricing:type_name -> purser.StoragePricing
-	177, // 8: purser.GetBillingTiersRequest.pagination:type_name -> common.CursorPaginationRequest
-	12,  // 9: purser.GetBillingTiersResponse.tiers:type_name -> purser.BillingTier
-	178, // 10: purser.GetBillingTiersResponse.pagination:type_name -> common.CursorPaginationResponse
-	16,  // 11: purser.BillingTier.features:type_name -> purser.BillingFeatures
-	173, // 12: purser.BillingTier.created_at:type_name -> google.protobuf.Timestamp
-	173, // 13: purser.BillingTier.updated_at:type_name -> google.protobuf.Timestamp
-	13,  // 14: purser.BillingTier.pricing_rules:type_name -> purser.PricingRule
-	167, // 15: purser.BillingTier.entitlements:type_name -> purser.BillingTier.EntitlementsEntry
-	14,  // 16: purser.ListMeterDefinitionsResponse.meters:type_name -> purser.MeterDefinition
-	16,  // 17: purser.CreateBillingTierRequest.features:type_name -> purser.BillingFeatures
-	16,  // 18: purser.UpdateBillingTierRequest.features:type_name -> purser.BillingFeatures
-	25,  // 19: purser.GetSubscriptionResponse.subscription:type_name -> purser.TenantSubscription
-	26,  // 20: purser.UpdateBillingDetailsRequest.address:type_name -> purser.BillingAddress
-	26,  // 21: purser.BillingDetails.address:type_name -> purser.BillingAddress
-	173, // 22: purser.BillingDetails.updated_at:type_name -> google.protobuf.Timestamp
-	173, // 23: purser.TenantSubscription.started_at:type_name -> google.protobuf.Timestamp
-	173, // 24: purser.TenantSubscription.trial_ends_at:type_name -> google.protobuf.Timestamp
-	173, // 25: purser.TenantSubscription.next_billing_date:type_name -> google.protobuf.Timestamp
-	173, // 26: purser.TenantSubscription.cancelled_at:type_name -> google.protobuf.Timestamp
-	16,  // 27: purser.TenantSubscription.custom_features:type_name -> purser.BillingFeatures
-	13,  // 28: purser.TenantSubscription.pricing_overrides:type_name -> purser.PricingRule
-	168, // 29: purser.TenantSubscription.entitlement_overrides:type_name -> purser.TenantSubscription.EntitlementOverridesEntry
-	26,  // 30: purser.TenantSubscription.billing_address:type_name -> purser.BillingAddress
-	173, // 31: purser.TenantSubscription.created_at:type_name -> google.protobuf.Timestamp
-	173, // 32: purser.TenantSubscription.updated_at:type_name -> google.protobuf.Timestamp
-	173, // 33: purser.TenantSubscription.billing_period_start:type_name -> google.protobuf.Timestamp
-	173, // 34: purser.TenantSubscription.billing_period_end:type_name -> google.protobuf.Timestamp
-	173, // 35: purser.TenantSubscription.stripe_current_period_end:type_name -> google.protobuf.Timestamp
-	173, // 36: purser.TenantSubscription.pending_effective_at:type_name -> google.protobuf.Timestamp
-	173, // 37: purser.CreateSubscriptionRequest.trial_ends_at:type_name -> google.protobuf.Timestamp
-	16,  // 38: purser.CreateSubscriptionRequest.custom_features:type_name -> purser.BillingFeatures
-	173, // 39: purser.CreateSubscriptionRequest.billing_period_start:type_name -> google.protobuf.Timestamp
-	173, // 40: purser.CreateSubscriptionRequest.billing_period_end:type_name -> google.protobuf.Timestamp
-	16,  // 41: purser.UpdateSubscriptionRequest.custom_features:type_name -> purser.BillingFeatures
-	173, // 42: purser.UpdateSubscriptionRequest.billing_period_start:type_name -> google.protobuf.Timestamp
-	173, // 43: purser.UpdateSubscriptionRequest.billing_period_end:type_name -> google.protobuf.Timestamp
-	13,  // 44: purser.UpdateSubscriptionRequest.pricing_overrides:type_name -> purser.PricingRule
-	169, // 45: purser.UpdateSubscriptionRequest.entitlement_overrides:type_name -> purser.UpdateSubscriptionRequest.EntitlementOverridesEntry
-	173, // 46: purser.GetOperatorRevenueRequest.range_start:type_name -> google.protobuf.Timestamp
-	173, // 47: purser.GetOperatorRevenueRequest.range_end:type_name -> google.protobuf.Timestamp
-	31,  // 48: purser.GetOperatorRevenueResponse.clusters:type_name -> purser.OperatorRevenueByCluster
-	31,  // 49: purser.ListOperatorClustersResponse.clusters:type_name -> purser.OperatorRevenueByCluster
-	173, // 50: purser.GetOperatorPayoutsRequest.range_start:type_name -> google.protobuf.Timestamp
-	173, // 51: purser.GetOperatorPayoutsRequest.range_end:type_name -> google.protobuf.Timestamp
-	173, // 52: purser.OperatorPayout.created_at:type_name -> google.protobuf.Timestamp
-	173, // 53: purser.OperatorPayout.paid_at:type_name -> google.protobuf.Timestamp
-	36,  // 54: purser.GetOperatorPayoutsResponse.payouts:type_name -> purser.OperatorPayout
-	41,  // 55: purser.GetInvoiceResponse.invoice:type_name -> purser.Invoice
-	12,  // 56: purser.GetInvoiceResponse.tier:type_name -> purser.BillingTier
-	179, // 57: purser.LineItem.dimensions:type_name -> google.protobuf.Struct
-	173, // 58: purser.Invoice.due_date:type_name -> google.protobuf.Timestamp
-	173, // 59: purser.Invoice.paid_at:type_name -> google.protobuf.Timestamp
-	179, // 60: purser.Invoice.usage_details:type_name -> google.protobuf.Struct
-	173, // 61: purser.Invoice.created_at:type_name -> google.protobuf.Timestamp
-	173, // 62: purser.Invoice.updated_at:type_name -> google.protobuf.Timestamp
-	173, // 63: purser.Invoice.period_start:type_name -> google.protobuf.Timestamp
-	173, // 64: purser.Invoice.period_end:type_name -> google.protobuf.Timestamp
-	40,  // 65: purser.Invoice.line_items:type_name -> purser.LineItem
-	173, // 66: purser.Invoice.finalized_at:type_name -> google.protobuf.Timestamp
-	177, // 67: purser.ListInvoicesRequest.pagination:type_name -> common.CursorPaginationRequest
-	41,  // 68: purser.ListInvoicesResponse.invoices:type_name -> purser.Invoice
-	178, // 69: purser.ListInvoicesResponse.pagination:type_name -> common.CursorPaginationResponse
-	173, // 70: purser.BillingDocument.issued_at:type_name -> google.protobuf.Timestamp
-	173, // 71: purser.BillingDocument.retention_until:type_name -> google.protobuf.Timestamp
-	44,  // 72: purser.ListBillingDocumentsResponse.documents:type_name -> purser.BillingDocument
-	44,  // 73: purser.GetBillingDocumentResponse.document:type_name -> purser.BillingDocument
-	173, // 74: purser.PaymentResponse.expires_at:type_name -> google.protobuf.Timestamp
-	173, // 75: purser.PaymentResponse.created_at:type_name -> google.protobuf.Timestamp
-	173, // 76: purser.PaymentResponse.quoted_at:type_name -> google.protobuf.Timestamp
-	24,  // 77: purser.PaymentResponse.fx:type_name -> purser.FxConversion
-	25,  // 78: purser.BillingStatusResponse.subscription:type_name -> purser.TenantSubscription
-	12,  // 79: purser.BillingStatusResponse.tier:type_name -> purser.BillingTier
-	173, // 80: purser.BillingStatusResponse.next_billing_date:type_name -> google.protobuf.Timestamp
-	41,  // 81: purser.BillingStatusResponse.pending_invoices:type_name -> purser.Invoice
-	55,  // 82: purser.BillingStatusResponse.recent_payments:type_name -> purser.Payment
-	115, // 83: purser.BillingStatusResponse.operator_grant:type_name -> purser.OperatorBillingGrant
-	173, // 84: purser.Payment.confirmed_at:type_name -> google.protobuf.Timestamp
-	173, // 85: purser.Payment.created_at:type_name -> google.protobuf.Timestamp
-	173, // 86: purser.Payment.updated_at:type_name -> google.protobuf.Timestamp
-	24,  // 87: purser.Payment.fx:type_name -> purser.FxConversion
-	177, // 88: purser.ListPaymentsRequest.pagination:type_name -> common.CursorPaginationRequest
-	55,  // 89: purser.ListPaymentsResponse.payments:type_name -> purser.Payment
-	178, // 90: purser.ListPaymentsResponse.pagination:type_name -> common.CursorPaginationResponse
-	180, // 91: purser.GetUsageRecordsRequest.time_range:type_name -> common.TimeRange
-	177, // 92: purser.GetUsageRecordsRequest.pagination:type_name -> common.CursorPaginationRequest
-	179, // 93: purser.UsageRecord.usage_details:type_name -> google.protobuf.Struct
-	173, // 94: purser.UsageRecord.created_at:type_name -> google.protobuf.Timestamp
-	173, // 95: purser.UsageRecord.period_start:type_name -> google.protobuf.Timestamp
-	173, // 96: purser.UsageRecord.period_end:type_name -> google.protobuf.Timestamp
-	179, // 97: purser.UsageRecord.dimensions:type_name -> google.protobuf.Struct
-	61,  // 98: purser.UsageRecordsResponse.usage_records:type_name -> purser.UsageRecord
-	66,  // 99: purser.UsageRecordsResponse.filters:type_name -> purser.UsageFilters
-	178, // 100: purser.UsageRecordsResponse.pagination:type_name -> common.CursorPaginationResponse
-	180, // 101: purser.GetUsageAggregatesRequest.time_range:type_name -> common.TimeRange
-	173, // 102: purser.UsageAggregate.period_start:type_name -> google.protobuf.Timestamp
-	173, // 103: purser.UsageAggregate.period_end:type_name -> google.protobuf.Timestamp
-	64,  // 104: purser.GetUsageAggregatesResponse.aggregates:type_name -> purser.UsageAggregate
-	180, // 105: purser.UsageFilters.time_range:type_name -> common.TimeRange
-	170, // 106: purser.TenantUsageResponse.usage:type_name -> purser.TenantUsageResponse.UsageEntry
-	171, // 107: purser.TenantUsageResponse.costs:type_name -> purser.TenantUsageResponse.CostsEntry
-	40,  // 108: purser.TenantUsageResponse.line_items:type_name -> purser.LineItem
-	179, // 109: purser.ClusterPricing.metered_rates:type_name -> google.protobuf.Struct
-	179, // 110: purser.ClusterPricing.default_quotas:type_name -> google.protobuf.Struct
-	173, // 111: purser.ClusterPricing.created_at:type_name -> google.protobuf.Timestamp
-	173, // 112: purser.ClusterPricing.updated_at:type_name -> google.protobuf.Timestamp
-	172, // 113: purser.GetClustersPricingBatchResponse.pricings:type_name -> purser.GetClustersPricingBatchResponse.PricingsEntry
-	179, // 114: purser.SetClusterPricingRequest.metered_rates:type_name -> google.protobuf.Struct
-	179, // 115: purser.SetClusterPricingRequest.default_quotas:type_name -> google.protobuf.Struct
-	177, // 116: purser.ListClusterPricingsRequest.pagination:type_name -> common.CursorPaginationRequest
-	71,  // 117: purser.ListClusterPricingsResponse.pricings:type_name -> purser.ClusterPricing
-	178, // 118: purser.ListClusterPricingsResponse.pagination:type_name -> common.CursorPaginationResponse
-	177, // 119: purser.ListMarketplaceClusterPricingsRequest.pagination:type_name -> common.CursorPaginationRequest
-	85,  // 120: purser.ListMarketplaceClusterPricingsResponse.pricings:type_name -> purser.MarketplaceClusterPricing
-	178, // 121: purser.ListMarketplaceClusterPricingsResponse.pagination:type_name -> common.CursorPaginationResponse
-	173, // 122: purser.MarketplaceClusterPricing.created_at:type_name -> google.protobuf.Timestamp
-	173, // 123: purser.PrepaidBalance.created_at:type_name -> google.protobuf.Timestamp
-	173, // 124: purser.PrepaidBalance.updated_at:type_name -> google.protobuf.Timestamp
-	173, // 125: purser.BalanceTransaction.created_at:type_name -> google.protobuf.Timestamp
-	180, // 126: purser.ListBalanceTransactionsRequest.time_range:type_name -> common.TimeRange
-	177, // 127: purser.ListBalanceTransactionsRequest.pagination:type_name -> common.CursorPaginationRequest
-	87,  // 128: purser.ListBalanceTransactionsResponse.transactions:type_name -> purser.BalanceTransaction
-	178, // 129: purser.ListBalanceTransactionsResponse.pagination:type_name -> common.CursorPaginationResponse
-	26,  // 130: purser.CreateCardTopupRequest.billing_address:type_name -> purser.BillingAddress
-	173, // 131: purser.CreateCardTopupResponse.expires_at:type_name -> google.protobuf.Timestamp
-	24,  // 132: purser.CreateCardTopupResponse.fx:type_name -> purser.FxConversion
-	173, // 133: purser.PendingTopup.expires_at:type_name -> google.protobuf.Timestamp
-	173, // 134: purser.PendingTopup.completed_at:type_name -> google.protobuf.Timestamp
-	173, // 135: purser.PendingTopup.created_at:type_name -> google.protobuf.Timestamp
-	173, // 136: purser.PendingTopup.updated_at:type_name -> google.protobuf.Timestamp
-	24,  // 137: purser.PendingTopup.fx:type_name -> purser.FxConversion
-	177, // 138: purser.ListPendingTopupsRequest.pagination:type_name -> common.CursorPaginationRequest
-	101, // 139: purser.ListPendingTopupsResponse.topups:type_name -> purser.PendingTopup
-	178, // 140: purser.ListPendingTopupsResponse.pagination:type_name -> common.CursorPaginationResponse
-	0,   // 141: purser.CreateCryptoTopupRequest.asset:type_name -> purser.CryptoAsset
-	0,   // 142: purser.CreateCryptoTopupResponse.asset:type_name -> purser.CryptoAsset
-	173, // 143: purser.CreateCryptoTopupResponse.expires_at:type_name -> google.protobuf.Timestamp
-	173, // 144: purser.CreateCryptoTopupResponse.quoted_at:type_name -> google.protobuf.Timestamp
-	24,  // 145: purser.CreateCryptoTopupResponse.fx:type_name -> purser.FxConversion
-	0,   // 146: purser.CryptoTopup.asset:type_name -> purser.CryptoAsset
-	173, // 147: purser.CryptoTopup.expires_at:type_name -> google.protobuf.Timestamp
-	173, // 148: purser.CryptoTopup.detected_at:type_name -> google.protobuf.Timestamp
-	173, // 149: purser.CryptoTopup.completed_at:type_name -> google.protobuf.Timestamp
-	173, // 150: purser.CryptoTopup.created_at:type_name -> google.protobuf.Timestamp
-	24,  // 151: purser.CryptoTopup.fx:type_name -> purser.FxConversion
-	173, // 152: purser.ChangeBillingTierResponse.effective_at:type_name -> google.protobuf.Timestamp
-	173, // 153: purser.OperatorBillingGrant.expires_at:type_name -> google.protobuf.Timestamp
-	173, // 154: purser.OperatorBillingGrant.granted_at:type_name -> google.protobuf.Timestamp
-	173, // 155: purser.AdminSetBillingGrantRequest.expires_at:type_name -> google.protobuf.Timestamp
-	115, // 156: purser.AdminBillingGrantResponse.grant:type_name -> purser.OperatorBillingGrant
-	119, // 157: purser.AdminBillingGrantResponse.tier:type_name -> purser.BillingGrantTier
-	114, // 158: purser.AdminBillingGrantResponse.assignment:type_name -> purser.AdminAssignTierResponse
-	173, // 159: purser.PrepaidDoubleCharge.period_start:type_name -> google.protobuf.Timestamp
-	173, // 160: purser.PrepaidDoubleCharge.period_end:type_name -> google.protobuf.Timestamp
-	124, // 161: purser.AdminListPrepaidDoubleChargesResponse.charges:type_name -> purser.PrepaidDoubleCharge
-	179, // 162: purser.MollieMandate.details:type_name -> google.protobuf.Struct
-	173, // 163: purser.MollieMandate.created_at:type_name -> google.protobuf.Timestamp
-	136, // 164: purser.ListMollieMandatesResponse.mandates:type_name -> purser.MollieMandate
-	141, // 165: purser.CryptoReadinessResponse.checks:type_name -> purser.CryptoReadinessCheck
-	146, // 166: purser.BroadcastCryptoSweepResponse.items:type_name -> purser.SweepBroadcastItem
-	156, // 167: purser.PaymentRequirements.accepts:type_name -> purser.PaymentRequirement
-	181, // 168: purser.VerifyX402PaymentRequest.payment:type_name -> x402.X402PaymentPayload
-	181, // 169: purser.SettleX402PaymentRequest.payment:type_name -> x402.X402PaymentPayload
-	71,  // 170: purser.GetClustersPricingBatchResponse.PricingsEntry.value:type_name -> purser.ClusterPricing
-	9,   // 171: purser.BillingService.GetBillingTiers:input_type -> purser.GetBillingTiersRequest
-	11,  // 172: purser.BillingService.GetBillingTier:input_type -> purser.GetBillingTierRequest
-	182, // 173: purser.BillingService.ListMeterDefinitions:input_type -> google.protobuf.Empty
-	17,  // 174: purser.BillingService.CreateBillingTier:input_type -> purser.CreateBillingTierRequest
-	18,  // 175: purser.BillingService.UpdateBillingTier:input_type -> purser.UpdateBillingTierRequest
-	1,   // 176: purser.BillingService.GetTenantAdmissionStatus:input_type -> purser.GetTenantAdmissionStatusRequest
-	3,   // 177: purser.BillingService.GetTenantBillingStatus:input_type -> purser.GetTenantBillingStatusRequest
-	4,   // 178: purser.BillingService.ListTenantBillingSnapshots:input_type -> purser.ListTenantBillingSnapshotsRequest
-	19,  // 179: purser.SubscriptionService.GetSubscription:input_type -> purser.GetSubscriptionRequest
-	27,  // 180: purser.SubscriptionService.CreateSubscription:input_type -> purser.CreateSubscriptionRequest
-	28,  // 181: purser.SubscriptionService.UpdateSubscription:input_type -> purser.UpdateSubscriptionRequest
-	29,  // 182: purser.SubscriptionService.CancelSubscription:input_type -> purser.CancelSubscriptionRequest
-	21,  // 183: purser.SubscriptionService.GetBillingDetails:input_type -> purser.GetBillingDetailsRequest
-	22,  // 184: purser.SubscriptionService.UpdateBillingDetails:input_type -> purser.UpdateBillingDetailsRequest
-	38,  // 185: purser.InvoiceService.GetInvoice:input_type -> purser.GetInvoiceRequest
-	42,  // 186: purser.InvoiceService.ListInvoices:input_type -> purser.ListInvoicesRequest
-	45,  // 187: purser.InvoiceService.ListBillingDocuments:input_type -> purser.ListBillingDocumentsRequest
-	47,  // 188: purser.InvoiceService.GetBillingDocument:input_type -> purser.GetBillingDocumentRequest
-	30,  // 189: purser.OperatorRevenueService.GetOperatorRevenue:input_type -> purser.GetOperatorRevenueRequest
-	33,  // 190: purser.OperatorRevenueService.ListOperatorClusters:input_type -> purser.ListOperatorClustersRequest
-	35,  // 191: purser.OperatorRevenueService.GetOperatorPayouts:input_type -> purser.GetOperatorPayoutsRequest
-	49,  // 192: purser.PaymentService.CreatePayment:input_type -> purser.PaymentRequest
-	56,  // 193: purser.PaymentService.GetPayment:input_type -> purser.GetPaymentRequest
-	57,  // 194: purser.PaymentService.ListPayments:input_type -> purser.ListPaymentsRequest
-	51,  // 195: purser.PaymentService.GetPaymentMethods:input_type -> purser.GetPaymentMethodsRequest
-	53,  // 196: purser.PaymentService.GetBillingStatus:input_type -> purser.GetBillingStatusRequest
-	60,  // 197: purser.UsageService.GetUsageRecords:input_type -> purser.GetUsageRecordsRequest
-	69,  // 198: purser.UsageService.GetTenantUsage:input_type -> purser.TenantUsageRequest
-	63,  // 199: purser.UsageService.GetUsageAggregates:input_type -> purser.GetUsageAggregatesRequest
-	67,  // 200: purser.UsageService.CheckUserLimit:input_type -> purser.CheckUserLimitRequest
-	183, // 201: purser.ClusterPricingService.GetMediaPlacementQuote:input_type -> media_placement.CommercialQuoteRequest
-	72,  // 202: purser.ClusterPricingService.GetClusterPricing:input_type -> purser.GetClusterPricingRequest
-	73,  // 203: purser.ClusterPricingService.GetClustersPricingBatch:input_type -> purser.GetClustersPricingBatchRequest
-	75,  // 204: purser.ClusterPricingService.SetClusterPricing:input_type -> purser.SetClusterPricingRequest
-	76,  // 205: purser.ClusterPricingService.ListClusterPricings:input_type -> purser.ListClusterPricingsRequest
-	78,  // 206: purser.ClusterPricingService.CheckClusterAccess:input_type -> purser.CheckClusterAccessRequest
-	80,  // 207: purser.ClusterPricingService.CreateClusterSubscription:input_type -> purser.CreateClusterSubscriptionRequest
-	82,  // 208: purser.ClusterPricingService.CancelClusterSubscription:input_type -> purser.CancelClusterSubscriptionRequest
-	83,  // 209: purser.ClusterPricingService.ListMarketplaceClusterPricings:input_type -> purser.ListMarketplaceClusterPricingsRequest
-	88,  // 210: purser.PrepaidService.GetPrepaidBalance:input_type -> purser.GetPrepaidBalanceRequest
-	89,  // 211: purser.PrepaidService.TopupBalance:input_type -> purser.TopupBalanceRequest
-	90,  // 212: purser.PrepaidService.DeductBalance:input_type -> purser.DeductBalanceRequest
-	91,  // 213: purser.PrepaidService.AdjustBalance:input_type -> purser.AdjustBalanceRequest
-	92,  // 214: purser.PrepaidService.ListBalanceTransactions:input_type -> purser.ListBalanceTransactionsRequest
-	94,  // 215: purser.PrepaidService.InitializePrepaidBalance:input_type -> purser.InitializePrepaidBalanceRequest
-	95,  // 216: purser.PrepaidService.InitializePrepaidAccount:input_type -> purser.InitializePrepaidAccountRequest
-	97,  // 217: purser.PrepaidService.InitializePostpaidAccount:input_type -> purser.InitializePostpaidAccountRequest
-	97,  // 218: purser.PrepaidService.EnsureFreeAccount:input_type -> purser.InitializePostpaidAccountRequest
-	99,  // 219: purser.PrepaidService.CreateCardTopup:input_type -> purser.CreateCardTopupRequest
-	102, // 220: purser.PrepaidService.GetPendingTopup:input_type -> purser.GetPendingTopupRequest
-	103, // 221: purser.PrepaidService.ListPendingTopups:input_type -> purser.ListPendingTopupsRequest
-	105, // 222: purser.PrepaidService.CreateCryptoTopup:input_type -> purser.CreateCryptoTopupRequest
-	107, // 223: purser.PrepaidService.GetCryptoTopup:input_type -> purser.GetCryptoTopupRequest
-	109, // 224: purser.PrepaidService.PromoteToPaid:input_type -> purser.PromoteToPaidRequest
-	111, // 225: purser.PrepaidService.ChangeBillingTier:input_type -> purser.ChangeBillingTierRequest
-	113, // 226: purser.PrepaidService.AdminAssignTier:input_type -> purser.AdminAssignTierRequest
-	116, // 227: purser.PrepaidService.AdminSetBillingGrant:input_type -> purser.AdminSetBillingGrantRequest
-	117, // 228: purser.PrepaidService.AdminGetBillingGrant:input_type -> purser.AdminGetBillingGrantRequest
-	118, // 229: purser.PrepaidService.AdminRevokeBillingGrant:input_type -> purser.AdminRevokeBillingGrantRequest
-	121, // 230: purser.PrepaidService.AdminRecordInvoicePayment:input_type -> purser.AdminRecordInvoicePaymentRequest
-	123, // 231: purser.PrepaidService.AdminListPrepaidDoubleCharges:input_type -> purser.AdminListPrepaidDoubleChargesRequest
-	184, // 232: purser.WebhookService.ProcessWebhook:input_type -> shared.WebhookRequest
-	126, // 233: purser.StripeService.CreateCheckoutSession:input_type -> purser.CreateStripeCheckoutRequest
-	128, // 234: purser.StripeService.CreateBillingPortalSession:input_type -> purser.CreateBillingPortalRequest
-	130, // 235: purser.StripeService.SyncSubscription:input_type -> purser.SyncStripeSubscriptionRequest
-	131, // 236: purser.MollieService.CreateFirstPayment:input_type -> purser.CreateMollieFirstPaymentRequest
-	133, // 237: purser.MollieService.CreateMollieSubscription:input_type -> purser.CreateMollieSubscriptionRequest
-	135, // 238: purser.MollieService.ListMandates:input_type -> purser.ListMollieMandatesRequest
-	138, // 239: purser.MollieService.CancelMollieSubscription:input_type -> purser.CancelMollieSubscriptionRequest
-	154, // 240: purser.X402Service.GetPaymentRequirements:input_type -> purser.GetPaymentRequirementsRequest
-	157, // 241: purser.X402Service.VerifyX402Payment:input_type -> purser.VerifyX402PaymentRequest
-	159, // 242: purser.X402Service.SettleX402Payment:input_type -> purser.SettleX402PaymentRequest
-	161, // 243: purser.X402Service.GetTenantX402Address:input_type -> purser.GetTenantX402AddressRequest
-	163, // 244: purser.X402Service.ClaimX402MutationResult:input_type -> purser.ClaimX402MutationResultRequest
-	165, // 245: purser.X402Service.CompleteX402MutationResult:input_type -> purser.CompleteX402MutationResultRequest
-	182, // 246: purser.CryptoSweepService.GetCryptoReadiness:input_type -> google.protobuf.Empty
-	139, // 247: purser.CryptoSweepService.RotateCryptoDepositKey:input_type -> purser.RotateCryptoDepositKeyRequest
-	143, // 248: purser.CryptoSweepService.PlanCryptoSweep:input_type -> purser.PlanCryptoSweepRequest
-	145, // 249: purser.CryptoSweepService.BroadcastCryptoSweep:input_type -> purser.BroadcastCryptoSweepRequest
-	148, // 250: purser.CryptoSweepService.ReconcileCryptoSweep:input_type -> purser.ReconcileCryptoSweepRequest
-	150, // 251: purser.CryptoSweepService.ReleaseCryptoSweep:input_type -> purser.ReleaseCryptoSweepRequest
-	152, // 252: purser.CryptoSweepService.ResolveX402MutationResult:input_type -> purser.ResolveX402MutationResultRequest
-	10,  // 253: purser.BillingService.GetBillingTiers:output_type -> purser.GetBillingTiersResponse
-	12,  // 254: purser.BillingService.GetBillingTier:output_type -> purser.BillingTier
-	15,  // 255: purser.BillingService.ListMeterDefinitions:output_type -> purser.ListMeterDefinitionsResponse
-	12,  // 256: purser.BillingService.CreateBillingTier:output_type -> purser.BillingTier
-	12,  // 257: purser.BillingService.UpdateBillingTier:output_type -> purser.BillingTier
-	2,   // 258: purser.BillingService.GetTenantAdmissionStatus:output_type -> purser.GetTenantAdmissionStatusResponse
-	7,   // 259: purser.BillingService.GetTenantBillingStatus:output_type -> purser.GetTenantBillingStatusResponse
-	6,   // 260: purser.BillingService.ListTenantBillingSnapshots:output_type -> purser.ListTenantBillingSnapshotsResponse
-	20,  // 261: purser.SubscriptionService.GetSubscription:output_type -> purser.GetSubscriptionResponse
-	25,  // 262: purser.SubscriptionService.CreateSubscription:output_type -> purser.TenantSubscription
-	25,  // 263: purser.SubscriptionService.UpdateSubscription:output_type -> purser.TenantSubscription
-	182, // 264: purser.SubscriptionService.CancelSubscription:output_type -> google.protobuf.Empty
-	23,  // 265: purser.SubscriptionService.GetBillingDetails:output_type -> purser.BillingDetails
-	23,  // 266: purser.SubscriptionService.UpdateBillingDetails:output_type -> purser.BillingDetails
-	39,  // 267: purser.InvoiceService.GetInvoice:output_type -> purser.GetInvoiceResponse
-	43,  // 268: purser.InvoiceService.ListInvoices:output_type -> purser.ListInvoicesResponse
-	46,  // 269: purser.InvoiceService.ListBillingDocuments:output_type -> purser.ListBillingDocumentsResponse
-	48,  // 270: purser.InvoiceService.GetBillingDocument:output_type -> purser.GetBillingDocumentResponse
-	32,  // 271: purser.OperatorRevenueService.GetOperatorRevenue:output_type -> purser.GetOperatorRevenueResponse
-	34,  // 272: purser.OperatorRevenueService.ListOperatorClusters:output_type -> purser.ListOperatorClustersResponse
-	37,  // 273: purser.OperatorRevenueService.GetOperatorPayouts:output_type -> purser.GetOperatorPayoutsResponse
-	50,  // 274: purser.PaymentService.CreatePayment:output_type -> purser.PaymentResponse
-	55,  // 275: purser.PaymentService.GetPayment:output_type -> purser.Payment
-	58,  // 276: purser.PaymentService.ListPayments:output_type -> purser.ListPaymentsResponse
-	52,  // 277: purser.PaymentService.GetPaymentMethods:output_type -> purser.PaymentMethodResponse
-	54,  // 278: purser.PaymentService.GetBillingStatus:output_type -> purser.BillingStatusResponse
-	62,  // 279: purser.UsageService.GetUsageRecords:output_type -> purser.UsageRecordsResponse
-	70,  // 280: purser.UsageService.GetTenantUsage:output_type -> purser.TenantUsageResponse
-	65,  // 281: purser.UsageService.GetUsageAggregates:output_type -> purser.GetUsageAggregatesResponse
-	68,  // 282: purser.UsageService.CheckUserLimit:output_type -> purser.CheckUserLimitResponse
-	185, // 283: purser.ClusterPricingService.GetMediaPlacementQuote:output_type -> media_placement.CommercialQuoteResponse
-	71,  // 284: purser.ClusterPricingService.GetClusterPricing:output_type -> purser.ClusterPricing
-	74,  // 285: purser.ClusterPricingService.GetClustersPricingBatch:output_type -> purser.GetClustersPricingBatchResponse
-	71,  // 286: purser.ClusterPricingService.SetClusterPricing:output_type -> purser.ClusterPricing
-	77,  // 287: purser.ClusterPricingService.ListClusterPricings:output_type -> purser.ListClusterPricingsResponse
-	79,  // 288: purser.ClusterPricingService.CheckClusterAccess:output_type -> purser.CheckClusterAccessResponse
-	81,  // 289: purser.ClusterPricingService.CreateClusterSubscription:output_type -> purser.ClusterSubscriptionResponse
-	182, // 290: purser.ClusterPricingService.CancelClusterSubscription:output_type -> google.protobuf.Empty
-	84,  // 291: purser.ClusterPricingService.ListMarketplaceClusterPricings:output_type -> purser.ListMarketplaceClusterPricingsResponse
-	86,  // 292: purser.PrepaidService.GetPrepaidBalance:output_type -> purser.PrepaidBalance
-	87,  // 293: purser.PrepaidService.TopupBalance:output_type -> purser.BalanceTransaction
-	87,  // 294: purser.PrepaidService.DeductBalance:output_type -> purser.BalanceTransaction
-	87,  // 295: purser.PrepaidService.AdjustBalance:output_type -> purser.BalanceTransaction
-	93,  // 296: purser.PrepaidService.ListBalanceTransactions:output_type -> purser.ListBalanceTransactionsResponse
-	86,  // 297: purser.PrepaidService.InitializePrepaidBalance:output_type -> purser.PrepaidBalance
-	96,  // 298: purser.PrepaidService.InitializePrepaidAccount:output_type -> purser.InitializePrepaidAccountResponse
-	98,  // 299: purser.PrepaidService.InitializePostpaidAccount:output_type -> purser.InitializePostpaidAccountResponse
-	98,  // 300: purser.PrepaidService.EnsureFreeAccount:output_type -> purser.InitializePostpaidAccountResponse
-	100, // 301: purser.PrepaidService.CreateCardTopup:output_type -> purser.CreateCardTopupResponse
-	101, // 302: purser.PrepaidService.GetPendingTopup:output_type -> purser.PendingTopup
-	104, // 303: purser.PrepaidService.ListPendingTopups:output_type -> purser.ListPendingTopupsResponse
-	106, // 304: purser.PrepaidService.CreateCryptoTopup:output_type -> purser.CreateCryptoTopupResponse
-	108, // 305: purser.PrepaidService.GetCryptoTopup:output_type -> purser.CryptoTopup
-	110, // 306: purser.PrepaidService.PromoteToPaid:output_type -> purser.PromoteToPaidResponse
-	112, // 307: purser.PrepaidService.ChangeBillingTier:output_type -> purser.ChangeBillingTierResponse
-	114, // 308: purser.PrepaidService.AdminAssignTier:output_type -> purser.AdminAssignTierResponse
-	120, // 309: purser.PrepaidService.AdminSetBillingGrant:output_type -> purser.AdminBillingGrantResponse
-	120, // 310: purser.PrepaidService.AdminGetBillingGrant:output_type -> purser.AdminBillingGrantResponse
-	120, // 311: purser.PrepaidService.AdminRevokeBillingGrant:output_type -> purser.AdminBillingGrantResponse
-	122, // 312: purser.PrepaidService.AdminRecordInvoicePayment:output_type -> purser.AdminRecordInvoicePaymentResponse
-	125, // 313: purser.PrepaidService.AdminListPrepaidDoubleCharges:output_type -> purser.AdminListPrepaidDoubleChargesResponse
-	186, // 314: purser.WebhookService.ProcessWebhook:output_type -> shared.WebhookResponse
-	127, // 315: purser.StripeService.CreateCheckoutSession:output_type -> purser.CreateStripeCheckoutResponse
-	129, // 316: purser.StripeService.CreateBillingPortalSession:output_type -> purser.CreateBillingPortalResponse
-	25,  // 317: purser.StripeService.SyncSubscription:output_type -> purser.TenantSubscription
-	132, // 318: purser.MollieService.CreateFirstPayment:output_type -> purser.CreateMollieFirstPaymentResponse
-	134, // 319: purser.MollieService.CreateMollieSubscription:output_type -> purser.CreateMollieSubscriptionResponse
-	137, // 320: purser.MollieService.ListMandates:output_type -> purser.ListMollieMandatesResponse
-	182, // 321: purser.MollieService.CancelMollieSubscription:output_type -> google.protobuf.Empty
-	155, // 322: purser.X402Service.GetPaymentRequirements:output_type -> purser.PaymentRequirements
-	158, // 323: purser.X402Service.VerifyX402Payment:output_type -> purser.VerifyX402PaymentResponse
-	160, // 324: purser.X402Service.SettleX402Payment:output_type -> purser.SettleX402PaymentResponse
-	162, // 325: purser.X402Service.GetTenantX402Address:output_type -> purser.GetTenantX402AddressResponse
-	164, // 326: purser.X402Service.ClaimX402MutationResult:output_type -> purser.ClaimX402MutationResultResponse
-	166, // 327: purser.X402Service.CompleteX402MutationResult:output_type -> purser.CompleteX402MutationResultResponse
-	142, // 328: purser.CryptoSweepService.GetCryptoReadiness:output_type -> purser.CryptoReadinessResponse
-	140, // 329: purser.CryptoSweepService.RotateCryptoDepositKey:output_type -> purser.RotateCryptoDepositKeyResponse
-	144, // 330: purser.CryptoSweepService.PlanCryptoSweep:output_type -> purser.PlanCryptoSweepResponse
-	147, // 331: purser.CryptoSweepService.BroadcastCryptoSweep:output_type -> purser.BroadcastCryptoSweepResponse
-	149, // 332: purser.CryptoSweepService.ReconcileCryptoSweep:output_type -> purser.ReconcileCryptoSweepResponse
-	151, // 333: purser.CryptoSweepService.ReleaseCryptoSweep:output_type -> purser.ReleaseCryptoSweepResponse
-	153, // 334: purser.CryptoSweepService.ResolveX402MutationResult:output_type -> purser.ResolveX402MutationResultResponse
-	253, // [253:335] is the sub-list for method output_type
-	171, // [171:253] is the sub-list for method input_type
-	171, // [171:171] is the sub-list for extension type_name
-	171, // [171:171] is the sub-list for extension extendee
-	0,   // [0:171] is the sub-list for field type_name
+	184, // 0: purser.GetTenantAdmissionStatusResponse.valid_until:type_name -> google.protobuf.Timestamp
+	184, // 1: purser.TenantBillingSnapshot.trial_ends_at:type_name -> google.protobuf.Timestamp
+	184, // 2: purser.TenantBillingSnapshot.next_billing_date:type_name -> google.protobuf.Timestamp
+	184, // 3: purser.TenantBillingSnapshot.subscribed_at:type_name -> google.protobuf.Timestamp
+	5,   // 4: purser.ListTenantBillingSnapshotsResponse.snapshots:type_name -> purser.TenantBillingSnapshot
+	185, // 5: purser.GetTenantBillingStatusResponse.dvr_policy:type_name -> shared.DVRPolicy
+	186, // 6: purser.GetTenantBillingStatusResponse.allowances:type_name -> metering.MeterAllowance
+	187, // 7: purser.GetTenantBillingStatusResponse.tenant_resource_limits:type_name -> tenant_limits.TenantResourceLimits
+	8,   // 8: purser.GetTenantBillingStatusResponse.storage_pricing:type_name -> purser.StoragePricing
+	188, // 9: purser.GetBillingTiersRequest.pagination:type_name -> common.CursorPaginationRequest
+	12,  // 10: purser.GetBillingTiersResponse.tiers:type_name -> purser.BillingTier
+	189, // 11: purser.GetBillingTiersResponse.pagination:type_name -> common.CursorPaginationResponse
+	16,  // 12: purser.BillingTier.features:type_name -> purser.BillingFeatures
+	184, // 13: purser.BillingTier.created_at:type_name -> google.protobuf.Timestamp
+	184, // 14: purser.BillingTier.updated_at:type_name -> google.protobuf.Timestamp
+	13,  // 15: purser.BillingTier.pricing_rules:type_name -> purser.PricingRule
+	178, // 16: purser.BillingTier.entitlements:type_name -> purser.BillingTier.EntitlementsEntry
+	14,  // 17: purser.ListMeterDefinitionsResponse.meters:type_name -> purser.MeterDefinition
+	16,  // 18: purser.CreateBillingTierRequest.features:type_name -> purser.BillingFeatures
+	16,  // 19: purser.UpdateBillingTierRequest.features:type_name -> purser.BillingFeatures
+	25,  // 20: purser.GetSubscriptionResponse.subscription:type_name -> purser.TenantSubscription
+	26,  // 21: purser.UpdateBillingDetailsRequest.address:type_name -> purser.BillingAddress
+	26,  // 22: purser.BillingDetails.address:type_name -> purser.BillingAddress
+	184, // 23: purser.BillingDetails.updated_at:type_name -> google.protobuf.Timestamp
+	184, // 24: purser.TenantSubscription.started_at:type_name -> google.protobuf.Timestamp
+	184, // 25: purser.TenantSubscription.trial_ends_at:type_name -> google.protobuf.Timestamp
+	184, // 26: purser.TenantSubscription.next_billing_date:type_name -> google.protobuf.Timestamp
+	184, // 27: purser.TenantSubscription.cancelled_at:type_name -> google.protobuf.Timestamp
+	16,  // 28: purser.TenantSubscription.custom_features:type_name -> purser.BillingFeatures
+	13,  // 29: purser.TenantSubscription.pricing_overrides:type_name -> purser.PricingRule
+	179, // 30: purser.TenantSubscription.entitlement_overrides:type_name -> purser.TenantSubscription.EntitlementOverridesEntry
+	26,  // 31: purser.TenantSubscription.billing_address:type_name -> purser.BillingAddress
+	184, // 32: purser.TenantSubscription.created_at:type_name -> google.protobuf.Timestamp
+	184, // 33: purser.TenantSubscription.updated_at:type_name -> google.protobuf.Timestamp
+	184, // 34: purser.TenantSubscription.billing_period_start:type_name -> google.protobuf.Timestamp
+	184, // 35: purser.TenantSubscription.billing_period_end:type_name -> google.protobuf.Timestamp
+	184, // 36: purser.TenantSubscription.stripe_current_period_end:type_name -> google.protobuf.Timestamp
+	184, // 37: purser.TenantSubscription.pending_effective_at:type_name -> google.protobuf.Timestamp
+	184, // 38: purser.CreateSubscriptionRequest.trial_ends_at:type_name -> google.protobuf.Timestamp
+	16,  // 39: purser.CreateSubscriptionRequest.custom_features:type_name -> purser.BillingFeatures
+	184, // 40: purser.CreateSubscriptionRequest.billing_period_start:type_name -> google.protobuf.Timestamp
+	184, // 41: purser.CreateSubscriptionRequest.billing_period_end:type_name -> google.protobuf.Timestamp
+	16,  // 42: purser.UpdateSubscriptionRequest.custom_features:type_name -> purser.BillingFeatures
+	184, // 43: purser.UpdateSubscriptionRequest.billing_period_start:type_name -> google.protobuf.Timestamp
+	184, // 44: purser.UpdateSubscriptionRequest.billing_period_end:type_name -> google.protobuf.Timestamp
+	13,  // 45: purser.UpdateSubscriptionRequest.pricing_overrides:type_name -> purser.PricingRule
+	180, // 46: purser.UpdateSubscriptionRequest.entitlement_overrides:type_name -> purser.UpdateSubscriptionRequest.EntitlementOverridesEntry
+	184, // 47: purser.GetOperatorRevenueRequest.range_start:type_name -> google.protobuf.Timestamp
+	184, // 48: purser.GetOperatorRevenueRequest.range_end:type_name -> google.protobuf.Timestamp
+	31,  // 49: purser.GetOperatorRevenueResponse.clusters:type_name -> purser.OperatorRevenueByCluster
+	31,  // 50: purser.ListOperatorClustersResponse.clusters:type_name -> purser.OperatorRevenueByCluster
+	184, // 51: purser.GetOperatorPayoutsRequest.range_start:type_name -> google.protobuf.Timestamp
+	184, // 52: purser.GetOperatorPayoutsRequest.range_end:type_name -> google.protobuf.Timestamp
+	184, // 53: purser.OperatorPayout.created_at:type_name -> google.protobuf.Timestamp
+	184, // 54: purser.OperatorPayout.paid_at:type_name -> google.protobuf.Timestamp
+	36,  // 55: purser.GetOperatorPayoutsResponse.payouts:type_name -> purser.OperatorPayout
+	41,  // 56: purser.GetInvoiceResponse.invoice:type_name -> purser.Invoice
+	12,  // 57: purser.GetInvoiceResponse.tier:type_name -> purser.BillingTier
+	190, // 58: purser.LineItem.dimensions:type_name -> google.protobuf.Struct
+	184, // 59: purser.Invoice.due_date:type_name -> google.protobuf.Timestamp
+	184, // 60: purser.Invoice.paid_at:type_name -> google.protobuf.Timestamp
+	190, // 61: purser.Invoice.usage_details:type_name -> google.protobuf.Struct
+	184, // 62: purser.Invoice.created_at:type_name -> google.protobuf.Timestamp
+	184, // 63: purser.Invoice.updated_at:type_name -> google.protobuf.Timestamp
+	184, // 64: purser.Invoice.period_start:type_name -> google.protobuf.Timestamp
+	184, // 65: purser.Invoice.period_end:type_name -> google.protobuf.Timestamp
+	40,  // 66: purser.Invoice.line_items:type_name -> purser.LineItem
+	184, // 67: purser.Invoice.finalized_at:type_name -> google.protobuf.Timestamp
+	188, // 68: purser.ListInvoicesRequest.pagination:type_name -> common.CursorPaginationRequest
+	41,  // 69: purser.ListInvoicesResponse.invoices:type_name -> purser.Invoice
+	189, // 70: purser.ListInvoicesResponse.pagination:type_name -> common.CursorPaginationResponse
+	184, // 71: purser.BillingDocument.issued_at:type_name -> google.protobuf.Timestamp
+	184, // 72: purser.BillingDocument.retention_until:type_name -> google.protobuf.Timestamp
+	44,  // 73: purser.ListBillingDocumentsResponse.documents:type_name -> purser.BillingDocument
+	44,  // 74: purser.GetBillingDocumentResponse.document:type_name -> purser.BillingDocument
+	184, // 75: purser.PaymentResponse.expires_at:type_name -> google.protobuf.Timestamp
+	184, // 76: purser.PaymentResponse.created_at:type_name -> google.protobuf.Timestamp
+	184, // 77: purser.PaymentResponse.quoted_at:type_name -> google.protobuf.Timestamp
+	24,  // 78: purser.PaymentResponse.fx:type_name -> purser.FxConversion
+	25,  // 79: purser.BillingStatusResponse.subscription:type_name -> purser.TenantSubscription
+	12,  // 80: purser.BillingStatusResponse.tier:type_name -> purser.BillingTier
+	184, // 81: purser.BillingStatusResponse.next_billing_date:type_name -> google.protobuf.Timestamp
+	41,  // 82: purser.BillingStatusResponse.pending_invoices:type_name -> purser.Invoice
+	55,  // 83: purser.BillingStatusResponse.recent_payments:type_name -> purser.Payment
+	115, // 84: purser.BillingStatusResponse.operator_grant:type_name -> purser.OperatorBillingGrant
+	184, // 85: purser.Payment.confirmed_at:type_name -> google.protobuf.Timestamp
+	184, // 86: purser.Payment.created_at:type_name -> google.protobuf.Timestamp
+	184, // 87: purser.Payment.updated_at:type_name -> google.protobuf.Timestamp
+	24,  // 88: purser.Payment.fx:type_name -> purser.FxConversion
+	188, // 89: purser.ListPaymentsRequest.pagination:type_name -> common.CursorPaginationRequest
+	55,  // 90: purser.ListPaymentsResponse.payments:type_name -> purser.Payment
+	189, // 91: purser.ListPaymentsResponse.pagination:type_name -> common.CursorPaginationResponse
+	191, // 92: purser.GetUsageRecordsRequest.time_range:type_name -> common.TimeRange
+	188, // 93: purser.GetUsageRecordsRequest.pagination:type_name -> common.CursorPaginationRequest
+	190, // 94: purser.UsageRecord.usage_details:type_name -> google.protobuf.Struct
+	184, // 95: purser.UsageRecord.created_at:type_name -> google.protobuf.Timestamp
+	184, // 96: purser.UsageRecord.period_start:type_name -> google.protobuf.Timestamp
+	184, // 97: purser.UsageRecord.period_end:type_name -> google.protobuf.Timestamp
+	190, // 98: purser.UsageRecord.dimensions:type_name -> google.protobuf.Struct
+	61,  // 99: purser.UsageRecordsResponse.usage_records:type_name -> purser.UsageRecord
+	66,  // 100: purser.UsageRecordsResponse.filters:type_name -> purser.UsageFilters
+	189, // 101: purser.UsageRecordsResponse.pagination:type_name -> common.CursorPaginationResponse
+	191, // 102: purser.GetUsageAggregatesRequest.time_range:type_name -> common.TimeRange
+	184, // 103: purser.UsageAggregate.period_start:type_name -> google.protobuf.Timestamp
+	184, // 104: purser.UsageAggregate.period_end:type_name -> google.protobuf.Timestamp
+	64,  // 105: purser.GetUsageAggregatesResponse.aggregates:type_name -> purser.UsageAggregate
+	191, // 106: purser.UsageFilters.time_range:type_name -> common.TimeRange
+	181, // 107: purser.TenantUsageResponse.usage:type_name -> purser.TenantUsageResponse.UsageEntry
+	182, // 108: purser.TenantUsageResponse.costs:type_name -> purser.TenantUsageResponse.CostsEntry
+	40,  // 109: purser.TenantUsageResponse.line_items:type_name -> purser.LineItem
+	190, // 110: purser.ClusterPricing.metered_rates:type_name -> google.protobuf.Struct
+	190, // 111: purser.ClusterPricing.default_quotas:type_name -> google.protobuf.Struct
+	184, // 112: purser.ClusterPricing.created_at:type_name -> google.protobuf.Timestamp
+	184, // 113: purser.ClusterPricing.updated_at:type_name -> google.protobuf.Timestamp
+	183, // 114: purser.GetClustersPricingBatchResponse.pricings:type_name -> purser.GetClustersPricingBatchResponse.PricingsEntry
+	190, // 115: purser.SetClusterPricingRequest.metered_rates:type_name -> google.protobuf.Struct
+	190, // 116: purser.SetClusterPricingRequest.default_quotas:type_name -> google.protobuf.Struct
+	188, // 117: purser.ListClusterPricingsRequest.pagination:type_name -> common.CursorPaginationRequest
+	71,  // 118: purser.ListClusterPricingsResponse.pricings:type_name -> purser.ClusterPricing
+	189, // 119: purser.ListClusterPricingsResponse.pagination:type_name -> common.CursorPaginationResponse
+	188, // 120: purser.ListMarketplaceClusterPricingsRequest.pagination:type_name -> common.CursorPaginationRequest
+	85,  // 121: purser.ListMarketplaceClusterPricingsResponse.pricings:type_name -> purser.MarketplaceClusterPricing
+	189, // 122: purser.ListMarketplaceClusterPricingsResponse.pagination:type_name -> common.CursorPaginationResponse
+	184, // 123: purser.MarketplaceClusterPricing.created_at:type_name -> google.protobuf.Timestamp
+	184, // 124: purser.PrepaidBalance.created_at:type_name -> google.protobuf.Timestamp
+	184, // 125: purser.PrepaidBalance.updated_at:type_name -> google.protobuf.Timestamp
+	184, // 126: purser.BalanceTransaction.created_at:type_name -> google.protobuf.Timestamp
+	191, // 127: purser.ListBalanceTransactionsRequest.time_range:type_name -> common.TimeRange
+	188, // 128: purser.ListBalanceTransactionsRequest.pagination:type_name -> common.CursorPaginationRequest
+	87,  // 129: purser.ListBalanceTransactionsResponse.transactions:type_name -> purser.BalanceTransaction
+	189, // 130: purser.ListBalanceTransactionsResponse.pagination:type_name -> common.CursorPaginationResponse
+	26,  // 131: purser.CreateCardTopupRequest.billing_address:type_name -> purser.BillingAddress
+	184, // 132: purser.CreateCardTopupResponse.expires_at:type_name -> google.protobuf.Timestamp
+	24,  // 133: purser.CreateCardTopupResponse.fx:type_name -> purser.FxConversion
+	184, // 134: purser.PendingTopup.expires_at:type_name -> google.protobuf.Timestamp
+	184, // 135: purser.PendingTopup.completed_at:type_name -> google.protobuf.Timestamp
+	184, // 136: purser.PendingTopup.created_at:type_name -> google.protobuf.Timestamp
+	184, // 137: purser.PendingTopup.updated_at:type_name -> google.protobuf.Timestamp
+	24,  // 138: purser.PendingTopup.fx:type_name -> purser.FxConversion
+	188, // 139: purser.ListPendingTopupsRequest.pagination:type_name -> common.CursorPaginationRequest
+	101, // 140: purser.ListPendingTopupsResponse.topups:type_name -> purser.PendingTopup
+	189, // 141: purser.ListPendingTopupsResponse.pagination:type_name -> common.CursorPaginationResponse
+	0,   // 142: purser.CreateCryptoTopupRequest.asset:type_name -> purser.CryptoAsset
+	0,   // 143: purser.CreateCryptoTopupResponse.asset:type_name -> purser.CryptoAsset
+	184, // 144: purser.CreateCryptoTopupResponse.expires_at:type_name -> google.protobuf.Timestamp
+	184, // 145: purser.CreateCryptoTopupResponse.quoted_at:type_name -> google.protobuf.Timestamp
+	24,  // 146: purser.CreateCryptoTopupResponse.fx:type_name -> purser.FxConversion
+	0,   // 147: purser.CryptoTopup.asset:type_name -> purser.CryptoAsset
+	184, // 148: purser.CryptoTopup.expires_at:type_name -> google.protobuf.Timestamp
+	184, // 149: purser.CryptoTopup.detected_at:type_name -> google.protobuf.Timestamp
+	184, // 150: purser.CryptoTopup.completed_at:type_name -> google.protobuf.Timestamp
+	184, // 151: purser.CryptoTopup.created_at:type_name -> google.protobuf.Timestamp
+	24,  // 152: purser.CryptoTopup.fx:type_name -> purser.FxConversion
+	184, // 153: purser.ChangeBillingTierResponse.effective_at:type_name -> google.protobuf.Timestamp
+	184, // 154: purser.OperatorBillingGrant.expires_at:type_name -> google.protobuf.Timestamp
+	184, // 155: purser.OperatorBillingGrant.granted_at:type_name -> google.protobuf.Timestamp
+	184, // 156: purser.OperatorBillingGrant.ended_at:type_name -> google.protobuf.Timestamp
+	184, // 157: purser.AdminSetBillingGrantRequest.expires_at:type_name -> google.protobuf.Timestamp
+	115, // 158: purser.AdminBillingGrantEntry.grant:type_name -> purser.OperatorBillingGrant
+	118, // 159: purser.AdminListBillingGrantsResponse.grants:type_name -> purser.AdminBillingGrantEntry
+	115, // 160: purser.AdminBillingGrantResponse.grant:type_name -> purser.OperatorBillingGrant
+	122, // 161: purser.AdminBillingGrantResponse.tier:type_name -> purser.BillingGrantTier
+	114, // 162: purser.AdminBillingGrantResponse.assignment:type_name -> purser.AdminAssignTierResponse
+	184, // 163: purser.PrepaidDoubleCharge.period_start:type_name -> google.protobuf.Timestamp
+	184, // 164: purser.PrepaidDoubleCharge.period_end:type_name -> google.protobuf.Timestamp
+	127, // 165: purser.AdminListPrepaidDoubleChargesResponse.charges:type_name -> purser.PrepaidDoubleCharge
+	190, // 166: purser.MollieMandate.details:type_name -> google.protobuf.Struct
+	184, // 167: purser.MollieMandate.created_at:type_name -> google.protobuf.Timestamp
+	139, // 168: purser.ListMollieMandatesResponse.mandates:type_name -> purser.MollieMandate
+	144, // 169: purser.CryptoReadinessResponse.checks:type_name -> purser.CryptoReadinessCheck
+	149, // 170: purser.BroadcastCryptoSweepResponse.items:type_name -> purser.SweepBroadcastItem
+	159, // 171: purser.PaymentRequirements.accepts:type_name -> purser.PaymentRequirement
+	192, // 172: purser.VerifyX402PaymentRequest.payment:type_name -> x402.X402PaymentPayload
+	192, // 173: purser.SettleX402PaymentRequest.payment:type_name -> x402.X402PaymentPayload
+	184, // 174: purser.CheckoutRecoveryItem.next_attempt_at:type_name -> google.protobuf.Timestamp
+	184, // 175: purser.CheckoutRecoveryItem.expires_at:type_name -> google.protobuf.Timestamp
+	171, // 176: purser.AdminListCheckoutRecoveryResponse.items:type_name -> purser.CheckoutRecoveryItem
+	175, // 177: purser.AdminListCheckoutRecoveryResponse.entries:type_name -> purser.CheckoutRecoveryAudit
+	184, // 178: purser.CheckoutRecoveryAudit.created_at:type_name -> google.protobuf.Timestamp
+	71,  // 179: purser.GetClustersPricingBatchResponse.PricingsEntry.value:type_name -> purser.ClusterPricing
+	9,   // 180: purser.BillingService.GetBillingTiers:input_type -> purser.GetBillingTiersRequest
+	11,  // 181: purser.BillingService.GetBillingTier:input_type -> purser.GetBillingTierRequest
+	193, // 182: purser.BillingService.ListMeterDefinitions:input_type -> google.protobuf.Empty
+	17,  // 183: purser.BillingService.CreateBillingTier:input_type -> purser.CreateBillingTierRequest
+	18,  // 184: purser.BillingService.UpdateBillingTier:input_type -> purser.UpdateBillingTierRequest
+	1,   // 185: purser.BillingService.GetTenantAdmissionStatus:input_type -> purser.GetTenantAdmissionStatusRequest
+	3,   // 186: purser.BillingService.GetTenantBillingStatus:input_type -> purser.GetTenantBillingStatusRequest
+	4,   // 187: purser.BillingService.ListTenantBillingSnapshots:input_type -> purser.ListTenantBillingSnapshotsRequest
+	19,  // 188: purser.SubscriptionService.GetSubscription:input_type -> purser.GetSubscriptionRequest
+	27,  // 189: purser.SubscriptionService.CreateSubscription:input_type -> purser.CreateSubscriptionRequest
+	28,  // 190: purser.SubscriptionService.UpdateSubscription:input_type -> purser.UpdateSubscriptionRequest
+	29,  // 191: purser.SubscriptionService.CancelSubscription:input_type -> purser.CancelSubscriptionRequest
+	21,  // 192: purser.SubscriptionService.GetBillingDetails:input_type -> purser.GetBillingDetailsRequest
+	22,  // 193: purser.SubscriptionService.UpdateBillingDetails:input_type -> purser.UpdateBillingDetailsRequest
+	38,  // 194: purser.InvoiceService.GetInvoice:input_type -> purser.GetInvoiceRequest
+	42,  // 195: purser.InvoiceService.ListInvoices:input_type -> purser.ListInvoicesRequest
+	45,  // 196: purser.InvoiceService.ListBillingDocuments:input_type -> purser.ListBillingDocumentsRequest
+	47,  // 197: purser.InvoiceService.GetBillingDocument:input_type -> purser.GetBillingDocumentRequest
+	30,  // 198: purser.OperatorRevenueService.GetOperatorRevenue:input_type -> purser.GetOperatorRevenueRequest
+	33,  // 199: purser.OperatorRevenueService.ListOperatorClusters:input_type -> purser.ListOperatorClustersRequest
+	35,  // 200: purser.OperatorRevenueService.GetOperatorPayouts:input_type -> purser.GetOperatorPayoutsRequest
+	49,  // 201: purser.PaymentService.CreatePayment:input_type -> purser.PaymentRequest
+	56,  // 202: purser.PaymentService.GetPayment:input_type -> purser.GetPaymentRequest
+	57,  // 203: purser.PaymentService.ListPayments:input_type -> purser.ListPaymentsRequest
+	51,  // 204: purser.PaymentService.GetPaymentMethods:input_type -> purser.GetPaymentMethodsRequest
+	53,  // 205: purser.PaymentService.GetBillingStatus:input_type -> purser.GetBillingStatusRequest
+	60,  // 206: purser.UsageService.GetUsageRecords:input_type -> purser.GetUsageRecordsRequest
+	69,  // 207: purser.UsageService.GetTenantUsage:input_type -> purser.TenantUsageRequest
+	63,  // 208: purser.UsageService.GetUsageAggregates:input_type -> purser.GetUsageAggregatesRequest
+	67,  // 209: purser.UsageService.CheckUserLimit:input_type -> purser.CheckUserLimitRequest
+	194, // 210: purser.ClusterPricingService.GetMediaPlacementQuote:input_type -> media_placement.CommercialQuoteRequest
+	72,  // 211: purser.ClusterPricingService.GetClusterPricing:input_type -> purser.GetClusterPricingRequest
+	73,  // 212: purser.ClusterPricingService.GetClustersPricingBatch:input_type -> purser.GetClustersPricingBatchRequest
+	75,  // 213: purser.ClusterPricingService.SetClusterPricing:input_type -> purser.SetClusterPricingRequest
+	76,  // 214: purser.ClusterPricingService.ListClusterPricings:input_type -> purser.ListClusterPricingsRequest
+	78,  // 215: purser.ClusterPricingService.CheckClusterAccess:input_type -> purser.CheckClusterAccessRequest
+	80,  // 216: purser.ClusterPricingService.CreateClusterSubscription:input_type -> purser.CreateClusterSubscriptionRequest
+	82,  // 217: purser.ClusterPricingService.CancelClusterSubscription:input_type -> purser.CancelClusterSubscriptionRequest
+	83,  // 218: purser.ClusterPricingService.ListMarketplaceClusterPricings:input_type -> purser.ListMarketplaceClusterPricingsRequest
+	88,  // 219: purser.PrepaidService.GetPrepaidBalance:input_type -> purser.GetPrepaidBalanceRequest
+	89,  // 220: purser.PrepaidService.TopupBalance:input_type -> purser.TopupBalanceRequest
+	90,  // 221: purser.PrepaidService.DeductBalance:input_type -> purser.DeductBalanceRequest
+	91,  // 222: purser.PrepaidService.AdjustBalance:input_type -> purser.AdjustBalanceRequest
+	92,  // 223: purser.PrepaidService.ListBalanceTransactions:input_type -> purser.ListBalanceTransactionsRequest
+	94,  // 224: purser.PrepaidService.InitializePrepaidBalance:input_type -> purser.InitializePrepaidBalanceRequest
+	95,  // 225: purser.PrepaidService.InitializePrepaidAccount:input_type -> purser.InitializePrepaidAccountRequest
+	97,  // 226: purser.PrepaidService.InitializePostpaidAccount:input_type -> purser.InitializePostpaidAccountRequest
+	97,  // 227: purser.PrepaidService.EnsureFreeAccount:input_type -> purser.InitializePostpaidAccountRequest
+	99,  // 228: purser.PrepaidService.CreateCardTopup:input_type -> purser.CreateCardTopupRequest
+	102, // 229: purser.PrepaidService.GetPendingTopup:input_type -> purser.GetPendingTopupRequest
+	103, // 230: purser.PrepaidService.ListPendingTopups:input_type -> purser.ListPendingTopupsRequest
+	105, // 231: purser.PrepaidService.CreateCryptoTopup:input_type -> purser.CreateCryptoTopupRequest
+	107, // 232: purser.PrepaidService.GetCryptoTopup:input_type -> purser.GetCryptoTopupRequest
+	109, // 233: purser.PrepaidService.PromoteToPaid:input_type -> purser.PromoteToPaidRequest
+	111, // 234: purser.PrepaidService.ChangeBillingTier:input_type -> purser.ChangeBillingTierRequest
+	113, // 235: purser.PrepaidService.AdminAssignTier:input_type -> purser.AdminAssignTierRequest
+	170, // 236: purser.PrepaidService.AdminListCheckoutRecovery:input_type -> purser.AdminListCheckoutRecoveryRequest
+	173, // 237: purser.PrepaidService.AdminRecoverCheckout:input_type -> purser.AdminRecoverCheckoutRequest
+	176, // 238: purser.PrepaidService.AdminRecoverTierUpgrade:input_type -> purser.AdminRecoverTierUpgradeRequest
+	116, // 239: purser.PrepaidService.AdminSetBillingGrant:input_type -> purser.AdminSetBillingGrantRequest
+	120, // 240: purser.PrepaidService.AdminGetBillingGrant:input_type -> purser.AdminGetBillingGrantRequest
+	117, // 241: purser.PrepaidService.AdminListBillingGrants:input_type -> purser.AdminListBillingGrantsRequest
+	121, // 242: purser.PrepaidService.AdminRevokeBillingGrant:input_type -> purser.AdminRevokeBillingGrantRequest
+	124, // 243: purser.PrepaidService.AdminRecordInvoicePayment:input_type -> purser.AdminRecordInvoicePaymentRequest
+	126, // 244: purser.PrepaidService.AdminListPrepaidDoubleCharges:input_type -> purser.AdminListPrepaidDoubleChargesRequest
+	195, // 245: purser.WebhookService.ProcessWebhook:input_type -> shared.WebhookRequest
+	129, // 246: purser.StripeService.CreateCheckoutSession:input_type -> purser.CreateStripeCheckoutRequest
+	131, // 247: purser.StripeService.CreateBillingPortalSession:input_type -> purser.CreateBillingPortalRequest
+	133, // 248: purser.StripeService.SyncSubscription:input_type -> purser.SyncStripeSubscriptionRequest
+	134, // 249: purser.MollieService.CreateFirstPayment:input_type -> purser.CreateMollieFirstPaymentRequest
+	136, // 250: purser.MollieService.CreateMollieSubscription:input_type -> purser.CreateMollieSubscriptionRequest
+	138, // 251: purser.MollieService.ListMandates:input_type -> purser.ListMollieMandatesRequest
+	141, // 252: purser.MollieService.CancelMollieSubscription:input_type -> purser.CancelMollieSubscriptionRequest
+	157, // 253: purser.X402Service.GetPaymentRequirements:input_type -> purser.GetPaymentRequirementsRequest
+	160, // 254: purser.X402Service.VerifyX402Payment:input_type -> purser.VerifyX402PaymentRequest
+	162, // 255: purser.X402Service.SettleX402Payment:input_type -> purser.SettleX402PaymentRequest
+	164, // 256: purser.X402Service.GetTenantX402Address:input_type -> purser.GetTenantX402AddressRequest
+	166, // 257: purser.X402Service.ClaimX402MutationResult:input_type -> purser.ClaimX402MutationResultRequest
+	168, // 258: purser.X402Service.CompleteX402MutationResult:input_type -> purser.CompleteX402MutationResultRequest
+	193, // 259: purser.CryptoSweepService.GetCryptoReadiness:input_type -> google.protobuf.Empty
+	142, // 260: purser.CryptoSweepService.RotateCryptoDepositKey:input_type -> purser.RotateCryptoDepositKeyRequest
+	146, // 261: purser.CryptoSweepService.PlanCryptoSweep:input_type -> purser.PlanCryptoSweepRequest
+	148, // 262: purser.CryptoSweepService.BroadcastCryptoSweep:input_type -> purser.BroadcastCryptoSweepRequest
+	151, // 263: purser.CryptoSweepService.ReconcileCryptoSweep:input_type -> purser.ReconcileCryptoSweepRequest
+	153, // 264: purser.CryptoSweepService.ReleaseCryptoSweep:input_type -> purser.ReleaseCryptoSweepRequest
+	155, // 265: purser.CryptoSweepService.ResolveX402MutationResult:input_type -> purser.ResolveX402MutationResultRequest
+	10,  // 266: purser.BillingService.GetBillingTiers:output_type -> purser.GetBillingTiersResponse
+	12,  // 267: purser.BillingService.GetBillingTier:output_type -> purser.BillingTier
+	15,  // 268: purser.BillingService.ListMeterDefinitions:output_type -> purser.ListMeterDefinitionsResponse
+	12,  // 269: purser.BillingService.CreateBillingTier:output_type -> purser.BillingTier
+	12,  // 270: purser.BillingService.UpdateBillingTier:output_type -> purser.BillingTier
+	2,   // 271: purser.BillingService.GetTenantAdmissionStatus:output_type -> purser.GetTenantAdmissionStatusResponse
+	7,   // 272: purser.BillingService.GetTenantBillingStatus:output_type -> purser.GetTenantBillingStatusResponse
+	6,   // 273: purser.BillingService.ListTenantBillingSnapshots:output_type -> purser.ListTenantBillingSnapshotsResponse
+	20,  // 274: purser.SubscriptionService.GetSubscription:output_type -> purser.GetSubscriptionResponse
+	25,  // 275: purser.SubscriptionService.CreateSubscription:output_type -> purser.TenantSubscription
+	25,  // 276: purser.SubscriptionService.UpdateSubscription:output_type -> purser.TenantSubscription
+	193, // 277: purser.SubscriptionService.CancelSubscription:output_type -> google.protobuf.Empty
+	23,  // 278: purser.SubscriptionService.GetBillingDetails:output_type -> purser.BillingDetails
+	23,  // 279: purser.SubscriptionService.UpdateBillingDetails:output_type -> purser.BillingDetails
+	39,  // 280: purser.InvoiceService.GetInvoice:output_type -> purser.GetInvoiceResponse
+	43,  // 281: purser.InvoiceService.ListInvoices:output_type -> purser.ListInvoicesResponse
+	46,  // 282: purser.InvoiceService.ListBillingDocuments:output_type -> purser.ListBillingDocumentsResponse
+	48,  // 283: purser.InvoiceService.GetBillingDocument:output_type -> purser.GetBillingDocumentResponse
+	32,  // 284: purser.OperatorRevenueService.GetOperatorRevenue:output_type -> purser.GetOperatorRevenueResponse
+	34,  // 285: purser.OperatorRevenueService.ListOperatorClusters:output_type -> purser.ListOperatorClustersResponse
+	37,  // 286: purser.OperatorRevenueService.GetOperatorPayouts:output_type -> purser.GetOperatorPayoutsResponse
+	50,  // 287: purser.PaymentService.CreatePayment:output_type -> purser.PaymentResponse
+	55,  // 288: purser.PaymentService.GetPayment:output_type -> purser.Payment
+	58,  // 289: purser.PaymentService.ListPayments:output_type -> purser.ListPaymentsResponse
+	52,  // 290: purser.PaymentService.GetPaymentMethods:output_type -> purser.PaymentMethodResponse
+	54,  // 291: purser.PaymentService.GetBillingStatus:output_type -> purser.BillingStatusResponse
+	62,  // 292: purser.UsageService.GetUsageRecords:output_type -> purser.UsageRecordsResponse
+	70,  // 293: purser.UsageService.GetTenantUsage:output_type -> purser.TenantUsageResponse
+	65,  // 294: purser.UsageService.GetUsageAggregates:output_type -> purser.GetUsageAggregatesResponse
+	68,  // 295: purser.UsageService.CheckUserLimit:output_type -> purser.CheckUserLimitResponse
+	196, // 296: purser.ClusterPricingService.GetMediaPlacementQuote:output_type -> media_placement.CommercialQuoteResponse
+	71,  // 297: purser.ClusterPricingService.GetClusterPricing:output_type -> purser.ClusterPricing
+	74,  // 298: purser.ClusterPricingService.GetClustersPricingBatch:output_type -> purser.GetClustersPricingBatchResponse
+	71,  // 299: purser.ClusterPricingService.SetClusterPricing:output_type -> purser.ClusterPricing
+	77,  // 300: purser.ClusterPricingService.ListClusterPricings:output_type -> purser.ListClusterPricingsResponse
+	79,  // 301: purser.ClusterPricingService.CheckClusterAccess:output_type -> purser.CheckClusterAccessResponse
+	81,  // 302: purser.ClusterPricingService.CreateClusterSubscription:output_type -> purser.ClusterSubscriptionResponse
+	193, // 303: purser.ClusterPricingService.CancelClusterSubscription:output_type -> google.protobuf.Empty
+	84,  // 304: purser.ClusterPricingService.ListMarketplaceClusterPricings:output_type -> purser.ListMarketplaceClusterPricingsResponse
+	86,  // 305: purser.PrepaidService.GetPrepaidBalance:output_type -> purser.PrepaidBalance
+	87,  // 306: purser.PrepaidService.TopupBalance:output_type -> purser.BalanceTransaction
+	87,  // 307: purser.PrepaidService.DeductBalance:output_type -> purser.BalanceTransaction
+	87,  // 308: purser.PrepaidService.AdjustBalance:output_type -> purser.BalanceTransaction
+	93,  // 309: purser.PrepaidService.ListBalanceTransactions:output_type -> purser.ListBalanceTransactionsResponse
+	86,  // 310: purser.PrepaidService.InitializePrepaidBalance:output_type -> purser.PrepaidBalance
+	96,  // 311: purser.PrepaidService.InitializePrepaidAccount:output_type -> purser.InitializePrepaidAccountResponse
+	98,  // 312: purser.PrepaidService.InitializePostpaidAccount:output_type -> purser.InitializePostpaidAccountResponse
+	98,  // 313: purser.PrepaidService.EnsureFreeAccount:output_type -> purser.InitializePostpaidAccountResponse
+	100, // 314: purser.PrepaidService.CreateCardTopup:output_type -> purser.CreateCardTopupResponse
+	101, // 315: purser.PrepaidService.GetPendingTopup:output_type -> purser.PendingTopup
+	104, // 316: purser.PrepaidService.ListPendingTopups:output_type -> purser.ListPendingTopupsResponse
+	106, // 317: purser.PrepaidService.CreateCryptoTopup:output_type -> purser.CreateCryptoTopupResponse
+	108, // 318: purser.PrepaidService.GetCryptoTopup:output_type -> purser.CryptoTopup
+	110, // 319: purser.PrepaidService.PromoteToPaid:output_type -> purser.PromoteToPaidResponse
+	112, // 320: purser.PrepaidService.ChangeBillingTier:output_type -> purser.ChangeBillingTierResponse
+	114, // 321: purser.PrepaidService.AdminAssignTier:output_type -> purser.AdminAssignTierResponse
+	172, // 322: purser.PrepaidService.AdminListCheckoutRecovery:output_type -> purser.AdminListCheckoutRecoveryResponse
+	174, // 323: purser.PrepaidService.AdminRecoverCheckout:output_type -> purser.AdminRecoverCheckoutResponse
+	177, // 324: purser.PrepaidService.AdminRecoverTierUpgrade:output_type -> purser.AdminRecoverTierUpgradeResponse
+	123, // 325: purser.PrepaidService.AdminSetBillingGrant:output_type -> purser.AdminBillingGrantResponse
+	123, // 326: purser.PrepaidService.AdminGetBillingGrant:output_type -> purser.AdminBillingGrantResponse
+	119, // 327: purser.PrepaidService.AdminListBillingGrants:output_type -> purser.AdminListBillingGrantsResponse
+	123, // 328: purser.PrepaidService.AdminRevokeBillingGrant:output_type -> purser.AdminBillingGrantResponse
+	125, // 329: purser.PrepaidService.AdminRecordInvoicePayment:output_type -> purser.AdminRecordInvoicePaymentResponse
+	128, // 330: purser.PrepaidService.AdminListPrepaidDoubleCharges:output_type -> purser.AdminListPrepaidDoubleChargesResponse
+	197, // 331: purser.WebhookService.ProcessWebhook:output_type -> shared.WebhookResponse
+	130, // 332: purser.StripeService.CreateCheckoutSession:output_type -> purser.CreateStripeCheckoutResponse
+	132, // 333: purser.StripeService.CreateBillingPortalSession:output_type -> purser.CreateBillingPortalResponse
+	25,  // 334: purser.StripeService.SyncSubscription:output_type -> purser.TenantSubscription
+	135, // 335: purser.MollieService.CreateFirstPayment:output_type -> purser.CreateMollieFirstPaymentResponse
+	137, // 336: purser.MollieService.CreateMollieSubscription:output_type -> purser.CreateMollieSubscriptionResponse
+	140, // 337: purser.MollieService.ListMandates:output_type -> purser.ListMollieMandatesResponse
+	193, // 338: purser.MollieService.CancelMollieSubscription:output_type -> google.protobuf.Empty
+	158, // 339: purser.X402Service.GetPaymentRequirements:output_type -> purser.PaymentRequirements
+	161, // 340: purser.X402Service.VerifyX402Payment:output_type -> purser.VerifyX402PaymentResponse
+	163, // 341: purser.X402Service.SettleX402Payment:output_type -> purser.SettleX402PaymentResponse
+	165, // 342: purser.X402Service.GetTenantX402Address:output_type -> purser.GetTenantX402AddressResponse
+	167, // 343: purser.X402Service.ClaimX402MutationResult:output_type -> purser.ClaimX402MutationResultResponse
+	169, // 344: purser.X402Service.CompleteX402MutationResult:output_type -> purser.CompleteX402MutationResultResponse
+	145, // 345: purser.CryptoSweepService.GetCryptoReadiness:output_type -> purser.CryptoReadinessResponse
+	143, // 346: purser.CryptoSweepService.RotateCryptoDepositKey:output_type -> purser.RotateCryptoDepositKeyResponse
+	147, // 347: purser.CryptoSweepService.PlanCryptoSweep:output_type -> purser.PlanCryptoSweepResponse
+	150, // 348: purser.CryptoSweepService.BroadcastCryptoSweep:output_type -> purser.BroadcastCryptoSweepResponse
+	152, // 349: purser.CryptoSweepService.ReconcileCryptoSweep:output_type -> purser.ReconcileCryptoSweepResponse
+	154, // 350: purser.CryptoSweepService.ReleaseCryptoSweep:output_type -> purser.ReleaseCryptoSweepResponse
+	156, // 351: purser.CryptoSweepService.ResolveX402MutationResult:output_type -> purser.ResolveX402MutationResultResponse
+	266, // [266:352] is the sub-list for method output_type
+	180, // [180:266] is the sub-list for method input_type
+	180, // [180:180] is the sub-list for extension type_name
+	180, // [180:180] is the sub-list for extension extendee
+	0,   // [0:180] is the sub-list for field type_name
 }
 
 func init() { file_purser_proto_init() }
@@ -15439,7 +16535,7 @@ func file_purser_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_purser_proto_rawDesc), len(file_purser_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   172,
+			NumMessages:   183,
 			NumExtensions: 0,
 			NumServices:   13,
 		},

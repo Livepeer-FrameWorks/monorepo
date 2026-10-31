@@ -1885,11 +1885,11 @@ unitsPerEur: string, /** Rate source: identity (EUR), ecb (ECB reference rate), 
 source: string, /** ECB reference date of the rate (YYYY-MM-DD). */
 referenceDate: string } | null };
 
-/** Result of a postpaid tier change. Either appliedTier is set (immediate upgrade) or pendingTier + effectiveAt are set (scheduled downgrade at period end). */
+/** Result of a postpaid tier change. appliedTier identifies a committed upgrade. pendingTier identifies an upgrade awaiting reconciliation or a scheduled downgrade. */
 export type ChangeBillingTierPayloadDefaultFieldsFragment = { /** Whether the request was accepted. */
 success: boolean, /** Human-readable status message. */
 message: string, /** When a scheduled downgrade will take effect. */
-effectiveAt: string | null, /** Set on immediate upgrade — the new active tier. */
+effectiveAt: string | null, /** The active tier after the upgrade's billing boundary commits. */
 appliedTier: { /** Unique tier identifier. */
 id: string, /** Internal tier name (payg, free, supporter, developer, production, enterprise). */
 tierName: string, /** Numeric ordering of tiers; 0 = payg (prepaid), 1 = free, 5 = enterprise. Used to compare upgrade vs downgrade direction. */
@@ -1908,7 +1908,7 @@ supportLevel: string, /** Whether SLA guarantees apply. */
 sla: boolean, /** Whether the tenant may override the tier's processing profiles. */
 processingCustomizable: boolean }, /** Priced behaviors per meter (rating engine input). */
 pricingRules: Array<{ meter: string, model: string, currency: string, includedQuantity: string, unitPrice: string, configJson: string }>, /** Non-billing grants (e.g. recording_retention_days). Values are JSON-encoded strings. */
-entitlements: Array<{ key: string, value: string }> } | null, /** Set on scheduled downgrade — the staged target tier. */
+entitlements: Array<{ key: string, value: string }> } | null, /** The target of a pending upgrade or scheduled downgrade. */
 pendingTier: { /** Unique tier identifier. */
 id: string, /** Internal tier name (payg, free, supporter, developer, production, enterprise). */
 tierName: string, /** Numeric ordering of tiers; 0 = payg (prepaid), 1 = free, 5 = enterprise. Used to compare upgrade vs downgrade direction. */
@@ -4621,14 +4621,14 @@ export type ChangeBillingTierMutationVariables = Exact<{
 }>;
 
 
-/** Change the postpaid billing tier. Upgrades apply immediately and reconcile cluster access; downgrades are scheduled for the current billing period end so the tenant keeps paid entitlements until the period closes. */
-export type ChangeBillingTierMutation = { /** Change the postpaid billing tier. Upgrades apply immediately and reconcile cluster access; downgrades are scheduled for the current billing period end so the tenant keeps paid entitlements until the period closes. */
+/** Change the postpaid billing tier. Upgrades start a fresh month and credit the unused paid fee; provider or metering reconciliation can leave them pending. Downgrades take effect at the current billing period end. */
+export type ChangeBillingTierMutation = { /** Change the postpaid billing tier. Upgrades start a fresh month and credit the unused paid fee; provider or metering reconciliation can leave them pending. Downgrades take effect at the current billing period end. */
 changeBillingTier:
     | { __typename: 'AuthError', message: string, code: string | null }
     | { __typename: 'ChangeBillingTierPayload', /** Whether the request was accepted. */
 success: boolean, /** Human-readable status message. */
 message: string, /** When a scheduled downgrade will take effect. */
-effectiveAt: string | null, /** Set on immediate upgrade — the new active tier. */
+effectiveAt: string | null, /** The active tier after the upgrade's billing boundary commits. */
 appliedTier: { /** Unique tier identifier. */
 id: string, /** Internal tier name (payg, free, supporter, developer, production, enterprise). */
 tierName: string, /** Numeric ordering of tiers; 0 = payg (prepaid), 1 = free, 5 = enterprise. Used to compare upgrade vs downgrade direction. */
@@ -4647,7 +4647,7 @@ supportLevel: string, /** Whether SLA guarantees apply. */
 sla: boolean, /** Whether the tenant may override the tier's processing profiles. */
 processingCustomizable: boolean }, /** Priced behaviors per meter (rating engine input). */
 pricingRules: Array<{ meter: string, model: string, currency: string, includedQuantity: string, unitPrice: string, configJson: string }>, /** Non-billing grants (e.g. recording_retention_days). Values are JSON-encoded strings. */
-entitlements: Array<{ key: string, value: string }> } | null, /** Set on scheduled downgrade — the staged target tier. */
+entitlements: Array<{ key: string, value: string }> } | null, /** The target of a pending upgrade or scheduled downgrade. */
 pendingTier: { /** Unique tier identifier. */
 id: string, /** Internal tier name (payg, free, supporter, developer, production, enterprise). */
 tierName: string, /** Numeric ordering of tiers; 0 = payg (prepaid), 1 = free, 5 = enterprise. Used to compare upgrade vs downgrade direction. */
@@ -11048,7 +11048,7 @@ export const CardTopupResultDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDo
   }
 }
     `, {"fragmentName":"CardTopupResultDefaultFields"}) as unknown as TypedDocumentString<CardTopupResultDefaultFieldsFragment, unknown>;
-/** Result of a postpaid tier change. Either appliedTier is set (immediate upgrade) or pendingTier + effectiveAt are set (scheduled downgrade at period end). */
+/** Result of a postpaid tier change. appliedTier identifies a committed upgrade. pendingTier identifies an upgrade awaiting reconciliation or a scheduled downgrade. */
 export const ChangeBillingTierPayloadDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
     fragment ChangeBillingTierPayloadDefaultFields on ChangeBillingTierPayload {
   success
@@ -17324,7 +17324,7 @@ fragment ValidationErrorDefaultFields on ValidationError {
   field
   constraint
 }`) as unknown as TypedDocumentString<BootstrapEdgeMutation, BootstrapEdgeMutationVariables>;
-/** Change the postpaid billing tier. Upgrades apply immediately and reconcile cluster access; downgrades are scheduled for the current billing period end so the tenant keeps paid entitlements until the period closes. */
+/** Change the postpaid billing tier. Upgrades start a fresh month and credit the unused paid fee; provider or metering reconciliation can leave them pending. Downgrades take effect at the current billing period end. */
 export const ChangeBillingTierDocument = /*#__PURE__*/ new TypedDocumentString(`
     mutation ChangeBillingTier($tierId: ID!) {
   changeBillingTier(tierId: $tierId) {

@@ -36,12 +36,12 @@ func TestBootstrapAccountsRepository_RealPG(t *testing.T) {
 	}
 	var userID, passwordHash string
 	var permissions []string
-	if err := db.QueryRowContext(ctx, `
+	if readErr := db.QueryRowContext(ctx, `
 		SELECT id::text, password_hash, permissions
 		FROM commodore.users
 		WHERE tenant_id = $1::uuid AND email = 'ops@example.test'
-	`, tenantID).Scan(&userID, &passwordHash, pq.Array(&permissions)); err != nil {
-		t.Fatal(err)
+	`, tenantID).Scan(&userID, &passwordHash, pq.Array(&permissions)); readErr != nil {
+		t.Fatal(readErr)
 	}
 	if !auth.CheckPassword("original-password", passwordHash) {
 		t.Fatal("created password hash does not verify")
@@ -65,8 +65,8 @@ func TestBootstrapAccountsRepository_RealPG(t *testing.T) {
 		t.Fatalf("profile update = %#v, err = %v", result, err)
 	}
 	var updatedHash, firstName string
-	if err := db.QueryRowContext(ctx, `SELECT password_hash, first_name FROM commodore.users WHERE id = $1::uuid`, userID).Scan(&updatedHash, &firstName); err != nil {
-		t.Fatal(err)
+	if readErr := db.QueryRowContext(ctx, `SELECT password_hash, first_name FROM commodore.users WHERE id = $1::uuid`, userID).Scan(&updatedHash, &firstName); readErr != nil {
+		t.Fatal(readErr)
 	}
 	if updatedHash != passwordHash || firstName != "Operator" {
 		t.Fatalf("profile update changed credentials or missed profile: hash_changed=%t first_name=%q", updatedHash != passwordHash, firstName)
@@ -81,19 +81,44 @@ func TestBootstrapAccountsRepository_RealPG(t *testing.T) {
 	if err != nil || len(warnings) != 0 || len(result.Updated) != 1 {
 		t.Fatalf("authorized credential reset = %#v, warnings = %#v, err = %v", result, warnings, err)
 	}
-	if err := db.QueryRowContext(ctx, `SELECT password_hash FROM commodore.users WHERE id = $1::uuid`, userID).Scan(&updatedHash); err != nil {
-		t.Fatal(err)
+	if readErr := db.QueryRowContext(ctx, `SELECT password_hash FROM commodore.users WHERE id = $1::uuid`, userID).Scan(&updatedHash); readErr != nil {
+		t.Fatal(readErr)
 	}
 	if updatedHash == passwordHash || !auth.CheckPassword("must-not-replace", updatedHash) {
 		t.Fatal("authorized credential reset did not replace the password hash")
 	}
 
 	var count int
-	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM commodore.users WHERE tenant_id = $1::uuid`, tenantID).Scan(&count); err != nil {
-		t.Fatal(err)
+	if readErr := db.QueryRowContext(ctx, `SELECT count(*) FROM commodore.users WHERE tenant_id = $1::uuid`, tenantID).Scan(&count); readErr != nil {
+		t.Fatal(readErr)
 	}
 	if count != 1 {
 		t.Fatalf("bootstrap replay created %d users, want 1", count)
+	}
+	// A closed account must not roll back another account in the shared apply.
+	closedID := "10000000-0000-4000-8000-000000000002"
+	if _, writeErr := db.ExecContext(ctx, `INSERT INTO commodore.tenant_account_states(tenant_id,closed_at,closed_by) VALUES($1::text::uuid,NOW(),$1::text)`, closedID); writeErr != nil {
+		t.Fatal(writeErr)
+	}
+	closed := Account{Kind: AccountCustomer, Tenant: TenantRef{Ref: "quartermaster.tenants[closed]"}, Users: []AccountUser{{Email: "closed@example.test", Role: "owner", Password: "unused-password"}}}
+	healthy := Account{Kind: AccountCustomer, Tenant: TenantRef{Ref: "quartermaster.tenants[healthy]"}, Users: []AccountUser{{Email: "healthy@example.test", Role: "owner", Password: "valid-password"}}}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	resolver := accountRecoveryResolver(func(_ context.Context, alias string) (string, error) {
+		if alias == "closed" {
+			return closedID, nil
+		}
+		return tenantID, nil
+	})
+	recovered, warnings, err := ReconcileAccounts(ctx, tx, []Account{closed, healthy}, resolver, false)
+	if err != nil || len(recovered.Deferred) != 1 || len(recovered.Created) != 1 || len(warnings) != 1 {
+		t.Fatalf("closed-account reconciliation=%+v warnings=%v err=%v", recovered, warnings, err)
+	}
+	if commitErr := tx.Commit(); commitErr != nil {
+		t.Fatal(commitErr)
 	}
 }
 
@@ -102,12 +127,12 @@ func TestBootstrapPullStreamsRepository_RealPG(t *testing.T) {
 	ctx := context.Background()
 	tenantID := "10000000-0000-4000-8000-000000000001"
 	ownerID := "20000000-0000-4000-8000-000000000002"
-	if _, err := db.ExecContext(ctx, `
+	if _, writeErr := db.ExecContext(ctx, `
 		INSERT INTO commodore.users
 			(id, tenant_id, email, role, permissions, platform_operator, is_active, verified)
 		VALUES ($1::uuid, $2::uuid, 'owner@example.test', 'owner', ARRAY['read','write','admin'], false, true, true)
-	`, ownerID, tenantID); err != nil {
-		t.Fatal(err)
+	`, ownerID, tenantID); writeErr != nil {
+		t.Fatal(writeErr)
 	}
 	stream := PullStream{
 		PlaybackID:  "contract-pull",
@@ -136,13 +161,13 @@ func TestBootstrapPullStreamsRepository_RealPG(t *testing.T) {
 	var streamID, ingestMode, encryptedURI string
 	var enabled bool
 	var allowed []string
-	if err := db.QueryRowContext(ctx, `
+	if readErr := db.QueryRowContext(ctx, `
 		SELECT s.id::text, s.ingest_mode, p.source_uri_enc, p.enabled, p.allowed_cluster_ids
 		FROM commodore.streams s
 		JOIN commodore.stream_pull_sources p ON p.stream_id = s.id
 		WHERE s.tenant_id = $1::uuid AND s.playback_id = $2::citext
-	`, tenantID, stream.PlaybackID).Scan(&streamID, &ingestMode, &encryptedURI, &enabled, pq.Array(&allowed)); err != nil {
-		t.Fatal(err)
+	`, tenantID, stream.PlaybackID).Scan(&streamID, &ingestMode, &encryptedURI, &enabled, pq.Array(&allowed)); readErr != nil {
+		t.Fatal(readErr)
 	}
 	if ingestMode != "pull" || encryptedURI != "enc:"+stream.SourceURI || !enabled || fmt.Sprint(allowed) != "[edge-a edge-b]" {
 		t.Fatalf("stored pull stream = mode %q uri %q enabled %t allowed %#v", ingestMode, encryptedURI, enabled, allowed)
@@ -151,8 +176,8 @@ func TestBootstrapPullStreamsRepository_RealPG(t *testing.T) {
 		t.Fatalf("stored source location = %+v", location)
 	}
 	var actor string
-	if err := db.QueryRowContext(ctx, `SELECT actor_id FROM commodore.media_placement_changes WHERE tenant_id = $1::uuid AND scope_kind = 'stream' AND scope_id = $2::uuid`, tenantID, streamID).Scan(&actor); err != nil || actor != placementpolicy.SystemActorBootstrap {
-		t.Fatalf("source location receipt actor = %q, err = %v", actor, err)
+	if readErr := db.QueryRowContext(ctx, `SELECT actor_id FROM commodore.media_placement_changes WHERE tenant_id = $1::uuid AND scope_kind = 'stream' AND scope_id = $2::uuid`, tenantID, streamID).Scan(&actor); readErr != nil || actor != placementpolicy.SystemActorBootstrap {
+		t.Fatalf("source location receipt actor = %q, err = %v", actor, readErr)
 	}
 
 	result, err = ReconcilePullStreams(ctx, db, []PullStream{stream}, staticResolver(tenantID), clusters, fakeCipher{})
@@ -176,28 +201,28 @@ func TestBootstrapPullStreamsRepository_RealPG(t *testing.T) {
 	if location := readLocation(streamID); fmt.Sprint(location.Clusters) != "[{edge-b [edge-b-1]}]" || fmt.Sprint(location.AvoidNodeIDs) != "[edge-b-9]" {
 		t.Fatalf("updated source location = %+v", location)
 	}
-	if err := db.QueryRowContext(ctx, `
+	if readErr := db.QueryRowContext(ctx, `
 		SELECT s.title, p.source_uri_enc, p.enabled, p.allowed_cluster_ids
 		FROM commodore.streams s
 		JOIN commodore.stream_pull_sources p ON p.stream_id = s.id
 		WHERE s.id = $1::uuid
-	`, streamID).Scan(&stream.Title, &encryptedURI, &enabled, pq.Array(&allowed)); err != nil {
-		t.Fatal(err)
+	`, streamID).Scan(&stream.Title, &encryptedURI, &enabled, pq.Array(&allowed)); readErr != nil {
+		t.Fatal(readErr)
 	}
 	if stream.Title != "Updated pull" || encryptedURI != "enc:rtsp://example.test/updated" || enabled || fmt.Sprint(allowed) != "[edge-b]" {
 		t.Fatalf("updated pull stream = title %q uri %q enabled %t allowed %#v", stream.Title, encryptedURI, enabled, allowed)
 	}
 
-	if _, err := db.ExecContext(ctx, `DELETE FROM commodore.stream_pull_sources WHERE stream_id = $1::uuid`, streamID); err != nil {
-		t.Fatal(err)
+	if _, writeErr := db.ExecContext(ctx, `DELETE FROM commodore.stream_pull_sources WHERE stream_id = $1::uuid`, streamID); writeErr != nil {
+		t.Fatal(writeErr)
 	}
 	result, err = ReconcilePullStreams(ctx, db, []PullStream{stream}, staticResolver(tenantID), clusters, fakeCipher{})
 	if err != nil || len(result.Updated) != 1 {
 		t.Fatalf("repair missing pull source = %#v, err = %v", result, err)
 	}
 	var count int
-	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM commodore.stream_pull_sources WHERE stream_id = $1::uuid`, streamID).Scan(&count); err != nil {
-		t.Fatal(err)
+	if readErr := db.QueryRowContext(ctx, `SELECT count(*) FROM commodore.stream_pull_sources WHERE stream_id = $1::uuid`, streamID).Scan(&count); readErr != nil {
+		t.Fatal(readErr)
 	}
 	if count != 1 {
 		t.Fatalf("repaired pull source count = %d, want 1", count)
@@ -213,12 +238,12 @@ func TestBootstrapPullStreamsRepository_RealPG(t *testing.T) {
 	if locations, err = ReconcileStreamSourceLocations(ctx, db, CommodoreSection{PullStreams: []PullStream{unrestricted}}, staticResolver(tenantID)); err != nil || len(locations.Noop) != 1 {
 		t.Fatalf("unrestricted source location = %#v, err = %v", locations, err)
 	}
-	if err := db.QueryRowContext(ctx, `
+	if readErr := db.QueryRowContext(ctx, `
 		SELECT p.allowed_cluster_ids FROM commodore.streams s
 		JOIN commodore.stream_pull_sources p ON p.stream_id = s.id
 		WHERE s.tenant_id = $1::uuid AND s.playback_id = $2::citext
-	`, tenantID, unrestricted.PlaybackID).Scan(pq.Array(&allowed)); err != nil || len(allowed) != 0 {
-		t.Fatalf("unrestricted pin column = %#v, err = %v", allowed, err)
+	`, tenantID, unrestricted.PlaybackID).Scan(pq.Array(&allowed)); readErr != nil || len(allowed) != 0 {
+		t.Fatalf("unrestricted pin column = %#v, err = %v", allowed, readErr)
 	}
 }
 
@@ -227,12 +252,12 @@ func TestBootstrapMistNativeRepository_RealPG(t *testing.T) {
 	ctx := context.Background()
 	tenantID := "10000000-0000-4000-8000-000000000001"
 	ownerID := "20000000-0000-4000-8000-000000000002"
-	if _, err := db.ExecContext(ctx, `
+	if _, writeErr := db.ExecContext(ctx, `
 		INSERT INTO commodore.users
 			(id, tenant_id, email, role, permissions, platform_operator, is_active, verified)
 		VALUES ($1::uuid, $2::uuid, 'owner@example.test', 'owner', ARRAY['read','write','admin'], false, true, true)
-	`, ownerID, tenantID); err != nil {
-		t.Fatal(err)
+	`, ownerID, tenantID); writeErr != nil {
+		t.Fatal(writeErr)
 	}
 	primary := MistNativeStream{
 		PlaybackID: "mist-contract", OwnerTenant: TenantRef{Ref: "quartermaster.system_tenant"},
@@ -262,7 +287,7 @@ func TestBootstrapMistNativeRepository_RealPG(t *testing.T) {
 	var streamID, sourceSpec, sourceKind, localAssets, processPolicy string
 	var placement int
 	var allowed []string
-	if err := db.QueryRowContext(ctx, `
+	if readErr := db.QueryRowContext(ctx, `
 		SELECT s.id::text, mn.source_spec, mn.source_kind, mn.placement_count,
 		       mn.allowed_cluster_ids, mn.local_asset_paths::text, spc.processes_live::text
 		FROM commodore.streams s
@@ -271,8 +296,8 @@ func TestBootstrapMistNativeRepository_RealPG(t *testing.T) {
 		WHERE s.tenant_id = $1::uuid AND s.playback_id = $2::citext
 	`, tenantID, primary.PlaybackID).Scan(
 		&streamID, &sourceSpec, &sourceKind, &placement, pq.Array(&allowed), &localAssets, &processPolicy,
-	); err != nil {
-		t.Fatal(err)
+	); readErr != nil {
+		t.Fatal(readErr)
 	}
 	if sourceSpec != primary.Source || sourceKind != "exec" || placement != 1 || fmt.Sprint(allowed) != "[edge-a]" || localAssets != "[]" || processPolicy == "" {
 		t.Fatalf("stored mist source = source %q kind %q placement %d allowed %#v assets %q policy %q", sourceSpec, sourceKind, placement, allowed, localAssets, processPolicy)
@@ -296,21 +321,21 @@ func TestBootstrapMistNativeRepository_RealPG(t *testing.T) {
 	var title string
 	var alwaysOn, recording bool
 	var monitoring sql.NullBool
-	if err := db.QueryRowContext(ctx, `
+	if readErr := db.QueryRowContext(ctx, `
 		SELECT s.title, s.always_on, s.is_recording_enabled, s.monitoring_enabled,
 		       mn.source_spec, mn.placement_count
 		FROM commodore.streams s
 		JOIN commodore.stream_mist_sources mn ON mn.stream_id = s.id
 		WHERE s.id = $1::uuid
-	`, streamID).Scan(&title, &alwaysOn, &recording, &monitoring, &sourceSpec, &placement); err != nil {
-		t.Fatal(err)
+	`, streamID).Scan(&title, &alwaysOn, &recording, &monitoring, &sourceSpec, &placement); readErr != nil {
+		t.Fatal(readErr)
 	}
 	if title != primary.Title || alwaysOn || !recording || !monitoring.Valid || !monitoring.Bool || sourceSpec != primary.Source || placement != 2 {
 		t.Fatalf("updated mist stream = title %q always_on %t recording %t monitoring %#v source %q placement %d", title, alwaysOn, recording, monitoring, sourceSpec, placement)
 	}
 	var count int
-	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM commodore.stream_processing_config WHERE stream_id = $1::uuid`, streamID).Scan(&count); err != nil {
-		t.Fatal(err)
+	if readErr := db.QueryRowContext(ctx, `SELECT count(*) FROM commodore.stream_processing_config WHERE stream_id = $1::uuid`, streamID).Scan(&count); readErr != nil {
+		t.Fatal(readErr)
 	}
 	if count != 0 {
 		t.Fatalf("cleared process override count = %d, want 0", count)
@@ -324,7 +349,7 @@ func TestBootstrapMistNativeRepository_RealPG(t *testing.T) {
 
 func startCommodoreBootstrapRealPG(t *testing.T) *sql.DB {
 	t.Helper()
-	if _, err := exec.LookPath("docker"); err != nil {
+	if _, lookPathErr := exec.LookPath("docker"); lookPathErr != nil {
 		t.Skip("docker not available")
 	}
 	name := fmt.Sprintf("fw-commodore-bootstrap-realpg-%d", time.Now().UnixNano())
@@ -333,8 +358,8 @@ func startCommodoreBootstrapRealPG(t *testing.T) *sql.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if output, err := dockerpg.Run("run", "-d", "--name", name, "-P", "-e", "POSTGRES_PASSWORD=harness", image); err != nil {
-		t.Fatalf("docker run: %v\n%s", err, output)
+	if output, runErr := dockerpg.Run("run", "-d", "--name", name, "-P", "-e", "POSTGRES_PASSWORD=harness", image); runErr != nil {
+		t.Fatalf("docker run: %v\n%s", runErr, output)
 	}
 	port, err := dockerpg.DiscoverPublishedHostPort(name, "5432/tcp")
 	if err != nil {
@@ -345,15 +370,22 @@ func startCommodoreBootstrapRealPG(t *testing.T) *sql.DB {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	if err := dockerpg.WaitReady(db, name); err != nil {
-		t.Fatal(err)
+	if waitReadyErr := dockerpg.WaitReady(db, name); waitReadyErr != nil {
+		t.Fatal(waitReadyErr)
 	}
 	schema, err := dbsql.Content.ReadFile("schema/commodore.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(string(schema)); err != nil {
-		t.Fatal(err)
+	if _, writeErr := db.ExecContext(context.Background(), string(schema)); writeErr != nil {
+		t.Fatal(writeErr)
 	}
 	return db
+}
+
+// accountRecoveryResolver adapts an account lookup for the closed-account fixture.
+type accountRecoveryResolver func(context.Context, string) (string, error)
+
+func (f accountRecoveryResolver) Resolve(ctx context.Context, alias string) (string, error) {
+	return f(ctx, alias)
 }

@@ -3,7 +3,9 @@ package remoteaccess
 import (
 	"context"
 	"errors"
+	"net"
 	"strings"
+	"syscall"
 	"testing"
 
 	"frameworks/cli/pkg/inventory"
@@ -366,4 +368,32 @@ func itoa(n int) string {
 		n /= 10
 	}
 	return string(buf[i:])
+}
+
+func TestTransportAvailabilityKeepsAuthorityFailuresTerminal(t *testing.T) {
+	unreachable := &net.OpError{Op: "dial", Net: "tcp", Err: syscall.EHOSTUNREACH}
+	for _, test := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"direct dial", unreachable, true},
+		{"permission error", syscall.EACCES, false},
+		{"temporary DNS", &net.DNSError{Err: "temporary", IsTemporary: true}, true},
+		{"SSH reset", &ssh.TunnelFailure{Diagnostic: "Connection reset by peer", Err: unreachable}, true},
+		{"SSH temporary DNS", &ssh.TunnelFailure{Diagnostic: "Temporary failure in name resolution", Err: unreachable}, true},
+		{"macOS timeout", &ssh.TunnelFailure{Diagnostic: "ssh: connect to host fleet port 22: Operation timed out", Err: unreachable}, true},
+		{"macOS host down", &ssh.TunnelFailure{Diagnostic: "ssh: connect to host fleet port 22: Host is down", Err: unreachable}, true},
+		{"SSH DNS missing", &ssh.TunnelFailure{Diagnostic: "ssh: Could not resolve hostname missing: nodename nor servname provided", Err: unreachable}, false},
+		{"DNS missing", &net.DNSError{Err: "no such host", Name: "missing", IsNotFound: true}, false},
+		{"SSH host down", &ssh.TunnelFailure{Diagnostic: "ssh: connect to host fleet port 22: No route to host", Err: unreachable}, true},
+		{"SSH credentials", &ssh.TunnelFailure{Diagnostic: "Permission denied (publickey)", Err: unreachable}, false},
+		{"SSH host key", &ssh.TunnelFailure{Diagnostic: "Host key verification failed", Err: unreachable}, false},
+		{"all replicas down", errors.Join(unreachable, context.DeadlineExceeded), true},
+		{"manifest failure", errors.Join(unreachable, errors.New("host is not in manifest")), false},
+	} {
+		if got := IsUnavailable(test.err); got != test.want {
+			t.Errorf("%s availability=%v want%v", test.name, got, test.want)
+		}
+	}
 }

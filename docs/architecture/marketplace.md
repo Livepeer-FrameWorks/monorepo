@@ -76,6 +76,25 @@ Tenant starts access through Purser
 it safely requires a two-proof payment-and-approval state machine. It must not
 silently accept either proof as a substitute for the other.
 
+### Paid cancellation and account closure
+
+Cancelling renewal of a paid monthly subscription retains access through its
+paid-through date and does not refund the remaining time. A self-service paid
+tier upgrade closes the old billing period and starts a fresh month. Usage before
+and after that boundary retains its own pricing, and the unused paid share of the
+old base fee is credited against the replacement period rather than refunded in
+cash.
+
+Permanent account closure ends access immediately and stops future charges. It
+retains fees for activated cluster service. A paid tenant or cluster checkout
+that never activated is refunded only for its initial purchase; recurring
+service invoices are not checkout compensation. Open checkouts expire and late
+provider subscription identities are durably cancelled without reopening access
+or final billing. Compensation voids any operator credit recorded for that initial cluster
+invoice while the return to the consumer is pending. Bank settlement is tracked
+separately, preserving operator attribution for delivered service.
+Cancellation of renewal does not refund an activated month.
+
 ### Tenant-cluster binding
 
 Streams inherit the tenant's preferred cluster (set via `SetPreferredCluster` mutation).

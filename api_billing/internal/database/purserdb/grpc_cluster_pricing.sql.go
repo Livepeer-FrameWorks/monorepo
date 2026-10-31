@@ -298,38 +298,6 @@ func (q *Queries) ListMarketplaceClusterPricingPage(ctx context.Context, arg Lis
 	return items, nil
 }
 
-const setClusterCheckoutIntentCustomer = `-- name: SetClusterCheckoutIntentCustomer :exec
-UPDATE purser.payment_provider_intents
-SET provider_customer_id = $1, updated_at = NOW()
-WHERE id = $2::text::uuid
-`
-
-type SetClusterCheckoutIntentCustomerParams struct {
-	CustomerID sql.NullString `db:"customer_id" json:"customer_id"`
-	IntentID   string         `db:"intent_id" json:"intent_id"`
-}
-
-func (q *Queries) SetClusterCheckoutIntentCustomer(ctx context.Context, arg SetClusterCheckoutIntentCustomerParams) error {
-	_, err := q.db.ExecContext(ctx, setClusterCheckoutIntentCustomer, arg.CustomerID, arg.IntentID)
-	return err
-}
-
-const setClusterCheckoutIntentSessionOpen = `-- name: SetClusterCheckoutIntentSessionOpen :exec
-UPDATE purser.payment_provider_intents
-SET provider_session_id = $1, status = 'provider_open', updated_at = NOW()
-WHERE id = $2::text::uuid
-`
-
-type SetClusterCheckoutIntentSessionOpenParams struct {
-	SessionID sql.NullString `db:"session_id" json:"session_id"`
-	IntentID  string         `db:"intent_id" json:"intent_id"`
-}
-
-func (q *Queries) SetClusterCheckoutIntentSessionOpen(ctx context.Context, arg SetClusterCheckoutIntentSessionOpenParams) error {
-	_, err := q.db.ExecContext(ctx, setClusterCheckoutIntentSessionOpen, arg.SessionID, arg.IntentID)
-	return err
-}
-
 const updateCancelledClusterSubscription = `-- name: UpdateCancelledClusterSubscription :exec
 UPDATE purser.cluster_subscriptions
 SET status = $1::varchar(50),

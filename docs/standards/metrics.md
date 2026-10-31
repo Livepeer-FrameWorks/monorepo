@@ -530,20 +530,28 @@ method-level lifecycle/read denials use the existing
 
 The remaining edge-hardening signals are likewise bounded:
 
-| Metric                                                  | Labels               | Meaning                                                                                           |
-| ------------------------------------------------------- | -------------------- | ------------------------------------------------------------------------------------------------- |
-| `quartermaster_node_identity_rejections_total`          | `reason`             | Strict fingerprint proof rejection (`keyless`, `invalid_stored_key`, or `key_mismatch`)           |
-| `quartermaster_billing_entitlement_stale_total`         | none                 | Purser observation rejected by Quartermaster's timestamp fence                                    |
-| `quartermaster_dns_backstop_repairs_total`              | `resource`, `action` | Desired/applied alias or custom-domain drift repaired                                             |
-| `quartermaster_navigator_outbox_failures_total`         | `resource`           | Alias/custom-domain delivery failed and remains retryable                                         |
-| `quartermaster_navigator_outbox_pending`                | `resource`           | Incomplete alias/custom-domain hand-offs awaiting convergence                                     |
-| `purser_tier_access_reconciliation_failures_total`      | `operation`          | Tier access or DNS entitlement reconcile failed (`reconcile`, `revoke`, `sweep`, or `sweep_item`) |
-| `purser_media_authority_refresh_pending`                | none                 | Current incomplete media-authority refresh obligations                                            |
-| `purser_media_authority_refresh_oldest_pending_seconds` | none                 | Seconds since the oldest incomplete obligation was first enqueued, unaffected by delivery retries |
-| `purser_media_authority_refresh_failures_total`         | `stage`              | Refresh delivery, reconciliation, completion-fence, or queue-observation failure                  |
-| `purser_media_authority_refresh_completions_total`      | `outcome`            | Completed refresh attempts (`delivered` or safely `superseded`)                                   |
-| `purser_media_authority_refresh_worker_ready`           | none                 | `1` only while the durable worker has both database and Commodore dependencies                    |
-| `purser_fx_rate_reference_age_seconds`                  | `currency`           | Seconds since the start of the newest stored ECB reference date; conversions refuse beyond 5 days |
+| Metric                                                     | Labels                     | Meaning                                                                                                                                                                                              |
+| ---------------------------------------------------------- | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `quartermaster_node_identity_rejections_total`             | `reason`                   | Strict fingerprint proof rejection (`keyless`, `invalid_stored_key`, or `key_mismatch`)                                                                                                              |
+| `quartermaster_billing_entitlement_stale_total`            | none                       | Purser observation rejected by Quartermaster's timestamp fence                                                                                                                                       |
+| `quartermaster_dns_backstop_repairs_total`                 | `resource`, `action`       | Desired/applied alias or custom-domain drift repaired                                                                                                                                                |
+| `quartermaster_navigator_outbox_failures_total`            | `resource`                 | Alias/custom-domain delivery failed and remains retryable                                                                                                                                            |
+| `quartermaster_navigator_outbox_pending`                   | `resource`                 | Incomplete alias/custom-domain hand-offs awaiting convergence                                                                                                                                        |
+| `purser_tier_access_reconciliation_failures_total`         | `operation`                | Tier access or DNS entitlement reconcile failed (`reconcile`, `revoke`, `sweep`, or `sweep_item`)                                                                                                    |
+| `purser_operator_grant_expiry_failed_items`                | none                       | Gauge of subscriptions with failed grant expiry, including cancelled subscriptions; replicated global count, aggregate with max rather than sum; retains the last successful count when a read fails |
+| `commodore_tenant_account_closure_failed_items`            | none                       | Gauge of tenant closures awaiting Quartermaster after a failed attempt; replicated global count, aggregate with max; retains the last successful count when a read fails                             |
+| `purser_operator_grant_expiry_repeatedly_failed_items`     | none                       | Gauge of outstanding grant expiries with at least two failed attempts; used by the recovery alert, aggregate replicas with max                                                                       |
+| `commodore_tenant_account_closure_repeatedly_failed_items` | none                       | Gauge of outstanding Quartermaster synchronizations with at least two failed attempts; used by the recovery alert, aggregate replicas with max                                                       |
+| `purser_operator_grant_expiry_read_failures_total`         | none                       | Counter of failed expiry-queue or failed-item count reads; the recovery alert also fires for repeated read failures over two minutes sustained for five minutes, aggregated with max across replicas |
+| `purser_free_fallback_repeatedly_failed_items`             | `stage` (`move`, `notice`) | Outstanding Free fallback work with at least two failed attempts; aggregate replicas with max; the last good count survives inventory read failures                                                  |
+| `purser_free_fallback_read_failures_total`                 | none                       | Failed reads of the Free fallback queue or failure counts; initialized at startup; repeated failures also drive its recovery alert                                                                   |
+| `commodore_tenant_account_closure_read_failures_total`     | none                       | Counter of failed closure-queue count reads; the recovery alert also fires for repeated read failures over two minutes sustained for five minutes, aggregated with max across replicas               |
+| `purser_media_authority_refresh_pending`                   | none                       | Current incomplete media-authority refresh obligations                                                                                                                                               |
+| `purser_media_authority_refresh_oldest_pending_seconds`    | none                       | Seconds since the oldest incomplete obligation was first enqueued, unaffected by delivery retries                                                                                                    |
+| `purser_media_authority_refresh_failures_total`            | `stage`                    | Refresh delivery, reconciliation, completion-fence, or queue-observation failure                                                                                                                     |
+| `purser_media_authority_refresh_completions_total`         | `outcome`                  | Completed refresh attempts (`delivered` or safely `superseded`)                                                                                                                                      |
+| `purser_media_authority_refresh_worker_ready`              | none                       | `1` only while the durable worker has both database and Commodore dependencies                                                                                                                       |
+| `purser_fx_rate_reference_age_seconds`                     | `currency`                 | Seconds since the start of the newest stored ECB reference date; conversions refuse beyond 5 days                                                                                                    |
 
 Quartermaster's media-authority refresh outbox exposes the same queue signals as
 Purser's: `quartermaster_media_authority_refresh_pending`,
@@ -555,15 +563,15 @@ a stuck queue look young), and
 and `observe`.
 
 Commodore's media-authority refresh queue holds one obligation per target and
-lane (`event`, `bulk`, `object_deadline`, `tenant_deadline`), so every series
+lane (`event`, `bulk`, `ingest_revocation`, `object_deadline`, `tenant_deadline`), so every series
 below is bounded by lane, target kind, settlement outcome, or publish cause. The
 gauges are refreshed every thirty seconds from partial indexes; none of them
 reads a table in proportion to the catalog:
 
 | Metric                                                      | Labels                    | Meaning                                                                                                                                                                                                                                                                                                                                                                                                           |
 | ----------------------------------------------------------- | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `commodore_media_authority_refresh_pending`                 | `lane`                    | Obligations that are due and not yet settled                                                                                                                                                                                                                                                                                                                                                                      |
-| `commodore_media_authority_refresh_oldest_pending_seconds`  | `lane`                    | Seconds the oldest due obligation has waited; a scheduled renewal counts from its due time, not from when it was scheduled                                                                                                                                                                                                                                                                                        |
+| `commodore_media_authority_refresh_pending`                 | `lane`                    | Obligations that are due and not yet settled; ingest_revocation includes delivery waiting in backoff                                                                                                                                                                                                                                                                                                              |
+| `commodore_media_authority_refresh_oldest_pending_seconds`  | `lane`                    | Seconds the oldest due obligation has waited (ingest_revocation measures from first enqueue, including backoff); a scheduled renewal counts from its due time, not from when it was scheduled                                                                                                                                                                                                                     |
 | `commodore_media_authority_refresh_parked`                  | `target_kind`             | Targets that cannot compile until source state changes (`tenant`, `live_stream`, `artifact`, `tenant_media_objects`)                                                                                                                                                                                                                                                                                              |
 | `commodore_media_authority_refresh_settlements_total`       | `lane`, `outcome`         | How a claimed obligation settled: `completed` (published), `noop` (unchanged), `superseded`, `transient`, `parked`, or `dormant` (a renewal of an authority nobody uses)                                                                                                                                                                                                                                          |
 | `commodore_media_authority_expired_warm`                    | `authority_kind`          | Authorities still being renewed whose current version has run out; zero unless renewal is failing to reach an authority in use                                                                                                                                                                                                                                                                                    |
@@ -592,6 +600,20 @@ Chain order: `GRPCMetricsInterceptor → GRPCLoggingInterceptor → GRPCAuthInte
 ### Naming and double-prefix trap
 
 `pkg/monitoring/metrics.go` `NewCounter` / `NewGauge` / `NewHistogram` already prepend `serviceName + "_"`. Never pass a name that itself begins with the service name — the result is a double-prefixed metric (`<svc>_<svc>_*`).
+
+### Purser provider recovery
+
+Purser provider recovery exports `purser_provider_webhook_inbox_repeatedly_failed_items`
+(gauge, recovery items with repeated failures or settlement waits over fourteen days) and
+`purser_provider_webhook_inbox_read_failures_total` (counter, inventory read failures).
+The gauge retains its last good value on a failed read. Both have no labels.
+`PurserProviderWebhookInboxStuck` takes the maximum across replicas and covers
+provider activation or paid tier upgrades held by incomplete metering, expired checkout
+cancellation, tenant billing closure, refunds, and repeated inventory read failures. A single failure
+is quiet; pending reservations and bank-transfer settlement waits under fourteen days
+are not failures. Failure and wait counts accumulate separately; switching between
+waiting and failure never resets the unresolved age or repeated-failure count.
+Use `frameworks admin billing recovery list` for retry status and errors.
 
 ### Shared-package metrics
 

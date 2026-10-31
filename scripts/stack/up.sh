@@ -160,6 +160,10 @@ log "3/7 demo, two-cell and stack fixtures"
 make --no-print-directory seed-demo-postgres >/dev/null
 psql_db quartermaster -q < pkg/database/sql/seeds/demo/postgres/two-cell/quartermaster.sql >/dev/null
 psql_db quartermaster -q < scripts/stack/seed.sql >/dev/null
+# Reuse one declared system-tenant operator across scenarios.
+stack_compose exec -T quartermaster /app/quartermaster bootstrap --file /dev/stdin < scripts/stack/bootstrap.yaml || fail "stack operator tenant bootstrap failed"
+stack_compose exec -T commodore /app/commodore bootstrap --accounts-only --file /dev/stdin < scripts/stack/bootstrap.yaml || fail "stack operator account bootstrap failed"
+
 live_processes="$(awk '/processes_live: &standard_live/ { getline; sub(/^[[:space:]]+/, ""); print; exit }' api_billing/internal/bootstrap/catalog/billing_tiers.yaml)"
 [ -n "$live_processes" ] || fail "could not read standard_live from the billing tier catalog"
 psql_db purser -q -v live="$live_processes" -v window="${STACK_DVR_WINDOW_SECONDS:-120}" < scripts/stack/seed-purser.sql >/dev/null

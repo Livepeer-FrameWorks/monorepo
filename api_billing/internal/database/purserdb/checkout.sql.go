@@ -16,6 +16,8 @@ UPDATE purser.tenant_subscriptions
 SET stripe_customer_id = COALESCE(NULLIF($1::text, ''), stripe_customer_id),
     stripe_subscription_id = COALESCE(NULLIF($2::text, ''), stripe_subscription_id),
     stripe_subscription_status = 'active', status = 'active', billing_model = 'postpaid',
+    free_fallback_provider_stopping = FALSE, free_fallback_wait_since = NULL, free_fallback_provider_ended_at = NULL,
+    free_fallback_at = NULL, free_fallback_reason = NULL, free_fallback_notified_at = NULL, free_fallback_moved_at = NULL,
     tier_id = COALESCE(
         NULLIF($3::text, '')::uuid,
         CASE WHEN pending_reason = 'stripe_checkout' THEN pending_tier_id END,
@@ -38,10 +40,11 @@ SET stripe_customer_id = COALESCE(NULLIF($1::text, ''), stripe_customer_id),
         WHEN pending_reason = 'stripe_checkout'
          AND (NULLIF($3::text, '') IS NULL OR pending_tier_id = NULLIF($3::text, '')::uuid)
         THEN NULL ELSE pending_intent_id END,
-    stripe_current_period_end = CASE WHEN $4::timestamptz IS NULL THEN stripe_current_period_end WHEN billing_period_start IS NULL OR $5::timestamp >= billing_period_start THEN $4::timestamptz ELSE stripe_current_period_end END,
-    billing_period_start = GREATEST($5::timestamp, billing_period_start),
-    billing_period_end = CASE WHEN billing_period_start IS NULL OR $5::timestamp >= billing_period_start THEN COALESCE($4::timestamp, billing_period_end) ELSE billing_period_end END,
-    next_billing_date = CASE WHEN billing_period_start IS NULL OR $5::timestamp >= billing_period_start THEN COALESCE($4::timestamp, next_billing_date) ELSE next_billing_date END,
+    stripe_current_period_end = CASE WHEN $4::timestamptz IS NULL THEN stripe_current_period_end WHEN $4::timestamptz IS NOT NULL AND (billing_period_start IS NULL OR $5::timestamp >= billing_period_start) THEN $4::timestamptz WHEN billing_period_start IS NULL OR $4::timestamp > billing_period_start THEN GREATEST($4::timestamptz, stripe_current_period_end) ELSE stripe_current_period_end END,
+    billing_period_start = CASE WHEN (stripe_subscription_id = NULLIF($2::text, '') AND (free_fallback_at IS NOT NULL OR billing_period_start <= free_fallback_unbilled_through AT TIME ZONE 'UTC')) THEN billing_period_start ELSE GREATEST($5::timestamp, billing_period_start) END,
+    billing_period_end = CASE WHEN (stripe_subscription_id = NULLIF($2::text, '') AND (free_fallback_at IS NOT NULL OR billing_period_start <= free_fallback_unbilled_through AT TIME ZONE 'UTC')) THEN billing_period_end ELSE CASE WHEN $4::timestamptz IS NOT NULL AND (billing_period_start IS NULL OR $5::timestamp >= billing_period_start) THEN $4::timestamp WHEN billing_period_start IS NULL OR $4::timestamp > billing_period_start THEN GREATEST($4::timestamp, billing_period_end) ELSE billing_period_end END END,
+    next_billing_date = CASE WHEN (stripe_subscription_id = NULLIF($2::text, '') AND (free_fallback_at IS NOT NULL OR billing_period_start <= free_fallback_unbilled_through AT TIME ZONE 'UTC')) THEN next_billing_date ELSE CASE WHEN $4::timestamptz IS NOT NULL AND (billing_period_start IS NULL OR $5::timestamp >= billing_period_start) THEN $4::timestamp WHEN billing_period_start IS NULL OR $4::timestamp > billing_period_start THEN GREATEST($4::timestamp, next_billing_date) ELSE next_billing_date END END,
+    free_fallback_unbilled_through = CASE WHEN stripe_subscription_id = NULLIF($2::text, '') THEN CASE WHEN (free_fallback_at IS NOT NULL OR billing_period_start <= free_fallback_unbilled_through AT TIME ZONE 'UTC') THEN GREATEST(free_fallback_unbilled_through, $5::timestamptz - INTERVAL '1 microsecond') ELSE free_fallback_unbilled_through END ELSE NULL END,
     updated_at = NOW()
 WHERE tenant_id = $6::text::uuid
 `
@@ -164,10 +167,20 @@ UPDATE purser.tenant_subscriptions
 SET pending_tier_id = NULL, pending_effective_at = NULL,
     pending_reason = NULL, pending_intent_id = NULL, updated_at = NOW()
 WHERE tenant_id = $1::text::uuid AND pending_reason = 'stripe_checkout'
+ AND pending_intent_id IN(SELECT id FROM purser.payment_provider_intents
+ WHERE tenant_id=$1::text::uuid AND provider='stripe'
+ AND (provider_session_id=NULLIF($2::text,'')
+ OR provider_subscription_id=NULLIF($3::text,'')))
 `
 
-func (q *Queries) ClearTenantStripeCheckoutPending(ctx context.Context, tenantID string) error {
-	_, err := q.db.ExecContext(ctx, clearTenantStripeCheckoutPending, tenantID)
+type ClearTenantStripeCheckoutPendingParams struct {
+	TenantID       string `db:"tenant_id" json:"tenant_id"`
+	SessionID      string `db:"session_id" json:"session_id"`
+	SubscriptionID string `db:"subscription_id" json:"subscription_id"`
+}
+
+func (q *Queries) ClearTenantStripeCheckoutPending(ctx context.Context, arg ClearTenantStripeCheckoutPendingParams) error {
+	_, err := q.db.ExecContext(ctx, clearTenantStripeCheckoutPending, arg.TenantID, arg.SessionID, arg.SubscriptionID)
 	return err
 }
 
@@ -218,24 +231,34 @@ func (q *Queries) CompletePendingTopupProviderIntent(ctx context.Context, arg Co
 const expireStripeIntentBySession = `-- name: ExpireStripeIntentBySession :exec
 UPDATE purser.payment_provider_intents
 SET status = 'expired', updated_at = NOW()
-WHERE provider = 'stripe' AND provider_session_id = $1::text
+WHERE tenant_id=$1::text::uuid AND provider = 'stripe' AND provider_session_id = $2::text
   AND status NOT IN ('succeeded', 'cancelled', 'expired', 'terminal_failed')
 `
 
-func (q *Queries) ExpireStripeIntentBySession(ctx context.Context, sessionID string) error {
-	_, err := q.db.ExecContext(ctx, expireStripeIntentBySession, sessionID)
+type ExpireStripeIntentBySessionParams struct {
+	TenantID  string `db:"tenant_id" json:"tenant_id"`
+	SessionID string `db:"session_id" json:"session_id"`
+}
+
+func (q *Queries) ExpireStripeIntentBySession(ctx context.Context, arg ExpireStripeIntentBySessionParams) error {
+	_, err := q.db.ExecContext(ctx, expireStripeIntentBySession, arg.TenantID, arg.SessionID)
 	return err
 }
 
 const expireStripeIntentBySubscription = `-- name: ExpireStripeIntentBySubscription :exec
 UPDATE purser.payment_provider_intents
 SET status = 'expired', updated_at = NOW()
-WHERE provider = 'stripe' AND provider_subscription_id = $1::text
+WHERE tenant_id=$1::text::uuid AND provider = 'stripe' AND provider_subscription_id = $2::text
   AND status NOT IN ('succeeded', 'cancelled', 'expired', 'terminal_failed')
 `
 
-func (q *Queries) ExpireStripeIntentBySubscription(ctx context.Context, subscriptionID string) error {
-	_, err := q.db.ExecContext(ctx, expireStripeIntentBySubscription, subscriptionID)
+type ExpireStripeIntentBySubscriptionParams struct {
+	TenantID       string `db:"tenant_id" json:"tenant_id"`
+	SubscriptionID string `db:"subscription_id" json:"subscription_id"`
+}
+
+func (q *Queries) ExpireStripeIntentBySubscription(ctx context.Context, arg ExpireStripeIntentBySubscriptionParams) error {
+	_, err := q.db.ExecContext(ctx, expireStripeIntentBySubscription, arg.TenantID, arg.SubscriptionID)
 	return err
 }
 
@@ -319,16 +342,17 @@ func (q *Queries) HoldPendingTopupForOperatorReview(ctx context.Context, arg Hol
 const linkStripeIntentSubscription = `-- name: LinkStripeIntentSubscription :exec
 UPDATE purser.payment_provider_intents
 SET provider_subscription_id = COALESCE(provider_subscription_id, $1::text), updated_at = NOW()
-WHERE provider = 'stripe' AND provider_session_id = $2::text
+WHERE tenant_id=$2::text::uuid AND provider = 'stripe' AND provider_session_id = $3::text
 `
 
 type LinkStripeIntentSubscriptionParams struct {
 	SubscriptionID string `db:"subscription_id" json:"subscription_id"`
+	TenantID       string `db:"tenant_id" json:"tenant_id"`
 	SessionID      string `db:"session_id" json:"session_id"`
 }
 
 func (q *Queries) LinkStripeIntentSubscription(ctx context.Context, arg LinkStripeIntentSubscriptionParams) error {
-	_, err := q.db.ExecContext(ctx, linkStripeIntentSubscription, arg.SubscriptionID, arg.SessionID)
+	_, err := q.db.ExecContext(ctx, linkStripeIntentSubscription, arg.SubscriptionID, arg.TenantID, arg.SessionID)
 	return err
 }
 
@@ -405,18 +429,19 @@ const markStripeClusterIntentSucceeded = `-- name: MarkStripeClusterIntentSuccee
 UPDATE purser.payment_provider_intents
 SET provider_subscription_id = COALESCE(provider_subscription_id, NULLIF($1::text, '')),
     status = 'succeeded', succeeded_at = COALESCE(succeeded_at, NOW()), updated_at = NOW()
-WHERE provider = 'stripe'
-  AND (provider_session_id = NULLIF($2::text, '')
+WHERE tenant_id = $2::text::uuid AND provider = 'stripe'
+  AND (provider_session_id = NULLIF($3::text, '')
        OR provider_subscription_id = NULLIF($1::text, ''))
 `
 
 type MarkStripeClusterIntentSucceededParams struct {
 	SubscriptionID string `db:"subscription_id" json:"subscription_id"`
+	TenantID       string `db:"tenant_id" json:"tenant_id"`
 	SessionID      string `db:"session_id" json:"session_id"`
 }
 
 func (q *Queries) MarkStripeClusterIntentSucceeded(ctx context.Context, arg MarkStripeClusterIntentSucceededParams) error {
-	_, err := q.db.ExecContext(ctx, markStripeClusterIntentSucceeded, arg.SubscriptionID, arg.SessionID)
+	_, err := q.db.ExecContext(ctx, markStripeClusterIntentSucceeded, arg.SubscriptionID, arg.TenantID, arg.SessionID)
 	return err
 }
 
@@ -424,16 +449,17 @@ const markStripeIntentSucceededBySession = `-- name: MarkStripeIntentSucceededBy
 UPDATE purser.payment_provider_intents
 SET provider_subscription_id = COALESCE(provider_subscription_id, NULLIF($1::text, '')),
     status = 'succeeded', succeeded_at = COALESCE(succeeded_at, NOW()), updated_at = NOW()
-WHERE provider = 'stripe' AND provider_session_id = $2::text
+WHERE tenant_id=$2::text::uuid AND provider = 'stripe' AND provider_session_id = $3::text
 `
 
 type MarkStripeIntentSucceededBySessionParams struct {
 	SubscriptionID string `db:"subscription_id" json:"subscription_id"`
+	TenantID       string `db:"tenant_id" json:"tenant_id"`
 	SessionID      string `db:"session_id" json:"session_id"`
 }
 
 func (q *Queries) MarkStripeIntentSucceededBySession(ctx context.Context, arg MarkStripeIntentSucceededBySessionParams) error {
-	_, err := q.db.ExecContext(ctx, markStripeIntentSucceededBySession, arg.SubscriptionID, arg.SessionID)
+	_, err := q.db.ExecContext(ctx, markStripeIntentSucceededBySession, arg.SubscriptionID, arg.TenantID, arg.SessionID)
 	return err
 }
 
@@ -459,21 +485,19 @@ func (q *Queries) ResolveClusterSubscriptionByStripeID(ctx context.Context, subs
 
 const stageTenantSubscriptionPendingStripe = `-- name: StageTenantSubscriptionPendingStripe :exec
 UPDATE purser.tenant_subscriptions
-SET stripe_customer_id = COALESCE(NULLIF($1::text, ''), stripe_customer_id),
-    stripe_subscription_id = COALESCE(NULLIF($2::text, ''), stripe_subscription_id),
-    stripe_subscription_status = CASE WHEN status = 'active' THEN stripe_subscription_status ELSE 'incomplete' END,
-    updated_at = NOW()
-WHERE tenant_id = $3::text::uuid
+SET stripe_customer_id=COALESCE(NULLIF($1::text,''),stripe_customer_id),updated_at=NOW()
+WHERE tenant_id=$2::text::uuid
 `
 
 type StageTenantSubscriptionPendingStripeParams struct {
-	CustomerID     string `db:"customer_id" json:"customer_id"`
-	SubscriptionID string `db:"subscription_id" json:"subscription_id"`
-	TenantID       string `db:"tenant_id" json:"tenant_id"`
+	CustomerID string `db:"customer_id" json:"customer_id"`
+	TenantID   string `db:"tenant_id" json:"tenant_id"`
 }
 
+// An unpaid attempt must not replace an established subscription's identity or status.
+// Its prospective subscription lives on the provider intent until activation.
 func (q *Queries) StageTenantSubscriptionPendingStripe(ctx context.Context, arg StageTenantSubscriptionPendingStripeParams) error {
-	_, err := q.db.ExecContext(ctx, stageTenantSubscriptionPendingStripe, arg.CustomerID, arg.SubscriptionID, arg.TenantID)
+	_, err := q.db.ExecContext(ctx, stageTenantSubscriptionPendingStripe, arg.CustomerID, arg.TenantID)
 	return err
 }
 
@@ -486,7 +510,8 @@ INSERT INTO purser.cluster_subscriptions (
     NULLIF($3::text, ''), NULLIF($4::text, ''),
     'active', NULLIF($5::text, ''),
     (SELECT id FROM purser.payment_provider_intents
-     WHERE provider = 'stripe' AND provider_session_id = $5::text LIMIT 1),
+     WHERE tenant_id = $1::text::uuid
+       AND provider = 'stripe' AND provider_session_id = $5::text LIMIT 1),
     NOW(), NOW()
 )
 ON CONFLICT (tenant_id, cluster_id) DO UPDATE SET
@@ -527,7 +552,8 @@ INSERT INTO purser.cluster_subscriptions (
     NULLIF($3::text, ''), NULLIF($4::text, ''),
     'incomplete', NULLIF($5::text, ''),
     (SELECT id FROM purser.payment_provider_intents
-     WHERE provider = 'stripe' AND provider_session_id = $5::text LIMIT 1),
+     WHERE tenant_id = $1::text::uuid
+       AND provider = 'stripe' AND provider_session_id = $5::text LIMIT 1),
     NOW(), NOW()
 )
 ON CONFLICT (tenant_id, cluster_id) DO UPDATE SET

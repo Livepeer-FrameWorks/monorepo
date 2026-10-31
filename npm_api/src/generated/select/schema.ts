@@ -704,17 +704,17 @@ export interface CardTopupResult {
 
 
 /**
- * Result of a postpaid tier change. Either appliedTier is set (immediate upgrade)
- * or pendingTier + effectiveAt are set (scheduled downgrade at period end).
+ * Result of a postpaid tier change. appliedTier identifies a committed upgrade.
+ * pendingTier identifies an upgrade awaiting reconciliation or a scheduled downgrade.
  */
 export interface ChangeBillingTierPayload {
     /** Whether the request was accepted. */
     success: Scalars['Boolean']
     /** Human-readable status message. */
     message: Scalars['String']
-    /** Set on immediate upgrade — the new active tier. */
+    /** The active tier after the upgrade's billing boundary commits. */
     appliedTier: (BillingTier | null)
-    /** Set on scheduled downgrade — the staged target tier. */
+    /** The target of a pending upgrade or scheduled downgrade. */
     pendingTier: (BillingTier | null)
     /** When a scheduled downgrade will take effect. */
     effectiveAt: (Scalars['Time'] | null)
@@ -3090,9 +3090,9 @@ export interface Mutation {
      */
     promoteToPaid: PromoteToPaidResult
     /**
-     * Change the postpaid billing tier. Upgrades apply immediately and reconcile
-     * cluster access; downgrades are scheduled for the current billing period end
-     * so the tenant keeps paid entitlements until the period closes.
+     * Change the postpaid billing tier. Upgrades start a fresh month and credit
+     * the unused paid fee; provider or metering reconciliation can leave them pending.
+     * Downgrades take effect at the current billing period end.
      */
     changeBillingTier: ChangeBillingTierResult
     /** Delete a Skipper conversation. */
@@ -7547,17 +7547,17 @@ export interface CardTopupResultGenqlSelection{
 
 
 /**
- * Result of a postpaid tier change. Either appliedTier is set (immediate upgrade)
- * or pendingTier + effectiveAt are set (scheduled downgrade at period end).
+ * Result of a postpaid tier change. appliedTier identifies a committed upgrade.
+ * pendingTier identifies an upgrade awaiting reconciliation or a scheduled downgrade.
  */
 export interface ChangeBillingTierPayloadGenqlSelection{
     /** Whether the request was accepted. */
     success?: boolean | number
     /** Human-readable status message. */
     message?: boolean | number
-    /** Set on immediate upgrade — the new active tier. */
+    /** The active tier after the upgrade's billing boundary commits. */
     appliedTier?: BillingTierGenqlSelection
-    /** Set on scheduled downgrade — the staged target tier. */
+    /** The target of a pending upgrade or scheduled downgrade. */
     pendingTier?: BillingTierGenqlSelection
     /** When a scheduled downgrade will take effect. */
     effectiveAt?: boolean | number
@@ -10583,9 +10583,9 @@ export interface MutationGenqlSelection{
     /** The billing tier to subscribe to. */
     tierId: Scalars['ID']} })
     /**
-     * Change the postpaid billing tier. Upgrades apply immediately and reconcile
-     * cluster access; downgrades are scheduled for the current billing period end
-     * so the tenant keeps paid entitlements until the period closes.
+     * Change the postpaid billing tier. Upgrades start a fresh month and credit
+     * the unused paid fee; provider or metering reconciliation can leave them pending.
+     * Downgrades take effect at the current billing period end.
      */
     changeBillingTier?: (ChangeBillingTierResultGenqlSelection & { __args: {
     /** The target billing tier. Must be an active postpaid tier (tier_level >= 1). */

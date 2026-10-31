@@ -51,6 +51,8 @@ enum SessionRevocationReason {
   // A rotated refresh token was replayed after its grace period, so two
   // parties hold the same session line.
   SESSION_REVOCATION_REASON_REFRESH_TOKEN_REUSE = 3;
+  // A platform operator deactivated the user or closed the tenant account.
+  SESSION_REVOCATION_REASON_OPERATOR_DEACTIVATION = 4;
 }
 
 // UserSessionsRevoked ends every interactive session of a user: each access
@@ -127,4 +129,16 @@ message ClusterSubscriptionRejected {
   string cluster_id = 2;
   ClusterRejectReason reject_reason = 3;
   string reason = 4;
+}
+
+// UserActiveChanged records an account access change; playback permission is unchanged.
+message UserActiveChanged {
+  option (frameworks.events.event) = {type: "user.active_changed", visibility: VISIBILITY_INTERNAL, scope: SCOPE_TENANT, aggregate: "users"};
+  string user_id = 1;
+  bool active = 2;
+}
+
+// TenantAccountClosed marks local account access inactive; operator reasons remain private.
+message TenantAccountClosed {
+  option (frameworks.events.event) = {type: "user.tenant_account_closed", visibility: VISIBILITY_INTERNAL, scope: SCOPE_TENANT, aggregate: "tenants"};
 }

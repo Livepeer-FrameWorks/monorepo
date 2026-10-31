@@ -9,6 +9,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -185,6 +186,7 @@ LEFT JOIN purser.subscription_operator_grants og
     ON og.subscription_id = ts.id AND (og.expires_at IS NULL OR og.expires_at > NOW())
 WHERE ts.tenant_id = $1::text::uuid
   AND ts.status = 'active'
+  AND NOT EXISTS (SELECT 1 FROM purser.tenant_billing_closures closure WHERE closure.tenant_id = ts.tenant_id)
 ORDER BY ts.created_at DESC
 LIMIT 1
 `
@@ -248,6 +250,63 @@ type LoadSubscriptionEffectiveTierRow struct {
 func (q *Queries) LoadSubscriptionEffectiveTier(ctx context.Context, tenantID string) (LoadSubscriptionEffectiveTierRow, error) {
 	row := q.db.QueryRowContext(ctx, loadSubscriptionEffectiveTier, tenantID)
 	var i LoadSubscriptionEffectiveTierRow
+	err := row.Scan(
+		&i.TierID,
+		&i.TierName,
+		&i.BasePrice,
+		&i.Currency,
+		&i.MeteringEnabled,
+		&i.SubscriptionID,
+		&i.WaiveUsage,
+		&i.GrantedBasePrice,
+	)
+	return i, err
+}
+
+const loadSubscriptionEffectiveTierAt = `-- name: LoadSubscriptionEffectiveTierAt :one
+SELECT bt.id AS tier_id, bt.tier_name, bt.base_price::text AS base_price,
+       bt.currency, COALESCE(bt.metering_enabled, false) AS metering_enabled,
+       ts.id AS subscription_id, COALESCE(og.waive_usage, false)::boolean AS waive_usage,
+       og.base_price AS granted_base_price
+FROM purser.tenant_subscriptions ts
+LEFT JOIN LATERAL (
+    SELECT NULL::uuid AS tier_id, g.base_price, g.waive_usage, g.granted_at
+    FROM purser.subscription_operator_grants g
+    WHERE g.subscription_id = ts.id AND g.granted_at < $1::timestamptz
+      AND (g.expires_at IS NULL OR g.expires_at >= $1::timestamptz)
+    UNION ALL
+    SELECT h.tier_id, h.base_price, h.waive_usage, h.granted_at
+    FROM purser.subscription_operator_grant_history h
+    WHERE h.tenant_id = ts.tenant_id AND h.subscription_id = ts.id
+      AND h.granted_at < $1::timestamptz AND h.ended_at >= $1::timestamptz
+    ORDER BY granted_at DESC LIMIT 1
+) og ON TRUE
+JOIN purser.billing_tiers bt ON bt.id = COALESCE(og.tier_id, ts.tier_id)
+WHERE ts.tenant_id = $2::text::uuid
+ORDER BY ts.created_at DESC LIMIT 1
+`
+
+type LoadSubscriptionEffectiveTierAtParams struct {
+	CloseAt  time.Time `db:"close_at" json:"close_at"`
+	TenantID string    `db:"tenant_id" json:"tenant_id"`
+}
+
+type LoadSubscriptionEffectiveTierAtRow struct {
+	TierID           uuid.UUID      `db:"tier_id" json:"tier_id"`
+	TierName         string         `db:"tier_name" json:"tier_name"`
+	BasePrice        string         `db:"base_price" json:"base_price"`
+	Currency         string         `db:"currency" json:"currency"`
+	MeteringEnabled  bool           `db:"metering_enabled" json:"metering_enabled"`
+	SubscriptionID   uuid.UUID      `db:"subscription_id" json:"subscription_id"`
+	WaiveUsage       bool           `db:"waive_usage" json:"waive_usage"`
+	GrantedBasePrice sql.NullString `db:"granted_base_price" json:"granted_base_price"`
+}
+
+// An invoice covers time before close_at, so a grant beginning exactly there
+// belongs to the next phase; one ending there still prices this phase.
+func (q *Queries) LoadSubscriptionEffectiveTierAt(ctx context.Context, arg LoadSubscriptionEffectiveTierAtParams) (LoadSubscriptionEffectiveTierAtRow, error) {
+	row := q.db.QueryRowContext(ctx, loadSubscriptionEffectiveTierAt, arg.CloseAt, arg.TenantID)
+	var i LoadSubscriptionEffectiveTierAtRow
 	err := row.Scan(
 		&i.TierID,
 		&i.TierName,

@@ -35,6 +35,7 @@ type fakeAdminBillingClient struct {
 	grantReqs   []*purserpb.AdminSetBillingGrantRequest
 	grantResp   *purserpb.AdminBillingGrantResponse
 	revokeCalls []string
+	revokeTiers []string
 	paymentReqs []*purserpb.AdminRecordInvoicePaymentRequest
 	paymentResp *purserpb.AdminRecordInvoicePaymentResponse
 }
@@ -48,8 +49,9 @@ func (f *fakeAdminBillingClient) AdminGetBillingGrant(context.Context, string) (
 	return f.grantResp, nil
 }
 
-func (f *fakeAdminBillingClient) AdminRevokeBillingGrant(_ context.Context, tenantID, reason string) (*purserpb.AdminBillingGrantResponse, error) {
+func (f *fakeAdminBillingClient) AdminRevokeBillingGrant(_ context.Context, tenantID, reason string, recoveryTier string) (*purserpb.AdminBillingGrantResponse, error) {
 	f.revokeCalls = append(f.revokeCalls, tenantID+"|"+reason)
+	f.revokeTiers = append(f.revokeTiers, recoveryTier)
 	return f.grantResp, nil
 }
 

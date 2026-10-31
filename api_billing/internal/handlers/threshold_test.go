@@ -84,6 +84,7 @@ func TestEnforcePrepaidThresholds_SuspendsBelowThreshold(t *testing.T) {
 	mock.ExpectExec("UPDATE purser.tenant_subscriptions").
 		WithArgs(tenantID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("EnqueueSuspendedTenantStop").WithArgs(tenantID).WillReturnResult(sqlmock.NewResult(0, 1))
 	expectDomainEvent(mock, "account.suspended", tenantID)
 	mock.ExpectCommit()
 
@@ -117,6 +118,7 @@ func TestEnforcePrepaidThresholds_SuspensionRollsBackWhenEventInsertFails(t *tes
 	mock.ExpectExec("UPDATE purser.tenant_subscriptions").
 		WithArgs(tenantID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("EnqueueSuspendedTenantStop").WithArgs(tenantID).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`INSERT INTO purser\.domain_event_outbox`).
 		WillReturnError(errors.New("outbox unavailable"))
 	mock.ExpectRollback()

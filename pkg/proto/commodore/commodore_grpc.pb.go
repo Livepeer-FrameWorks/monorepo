@@ -2814,6 +2814,9 @@ const (
 	UserService_LookupDeviceAuthorization_FullMethodName  = "/commodore.UserService/LookupDeviceAuthorization"
 	UserService_ApproveDeviceAuthorization_FullMethodName = "/commodore.UserService/ApproveDeviceAuthorization"
 	UserService_AdminLookupUserByEmail_FullMethodName     = "/commodore.UserService/AdminLookupUserByEmail"
+	UserService_AdminSetUserActive_FullMethodName         = "/commodore.UserService/AdminSetUserActive"
+	UserService_AdminListAccountHistory_FullMethodName    = "/commodore.UserService/AdminListAccountHistory"
+	UserService_AdminDeactivateTenant_FullMethodName      = "/commodore.UserService/AdminDeactivateTenant"
 )
 
 // UserServiceClient is the client API for UserService service.
@@ -2861,6 +2864,12 @@ type UserServiceClient interface {
 	// address for operator tooling. Requires a platform-operator JWT; service
 	// and tenant credentials are refused.
 	AdminLookupUserByEmail(ctx context.Context, in *AdminLookupUserByEmailRequest, opts ...grpc.CallOption) (*AdminLookupUserByEmailResponse, error)
+	// Sets a user's account access without changing playback. Requires a platform-operator JWT.
+	AdminSetUserActive(ctx context.Context, in *AdminSetUserActiveRequest, opts ...grpc.CallOption) (*AdminSetUserActiveResponse, error)
+	// Lists private account lifecycle audit. Requires a platform-operator JWT.
+	AdminListAccountHistory(ctx context.Context, in *AdminListAccountHistoryRequest, opts ...grpc.CallOption) (*AdminListAccountHistoryResponse, error)
+	// Closes local account access and synchronizes tenant inactivity. Requires a platform-operator JWT.
+	AdminDeactivateTenant(ctx context.Context, in *AdminDeactivateTenantRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 }
 
 type userServiceClient struct {
@@ -3121,6 +3130,36 @@ func (c *userServiceClient) AdminLookupUserByEmail(ctx context.Context, in *Admi
 	return out, nil
 }
 
+func (c *userServiceClient) AdminSetUserActive(ctx context.Context, in *AdminSetUserActiveRequest, opts ...grpc.CallOption) (*AdminSetUserActiveResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AdminSetUserActiveResponse)
+	err := c.cc.Invoke(ctx, UserService_AdminSetUserActive_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *userServiceClient) AdminListAccountHistory(ctx context.Context, in *AdminListAccountHistoryRequest, opts ...grpc.CallOption) (*AdminListAccountHistoryResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AdminListAccountHistoryResponse)
+	err := c.cc.Invoke(ctx, UserService_AdminListAccountHistory_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *userServiceClient) AdminDeactivateTenant(ctx context.Context, in *AdminDeactivateTenantRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, UserService_AdminDeactivateTenant_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // UserServiceServer is the server API for UserService service.
 // All implementations must embed UnimplementedUserServiceServer
 // for forward compatibility.
@@ -3166,6 +3205,12 @@ type UserServiceServer interface {
 	// address for operator tooling. Requires a platform-operator JWT; service
 	// and tenant credentials are refused.
 	AdminLookupUserByEmail(context.Context, *AdminLookupUserByEmailRequest) (*AdminLookupUserByEmailResponse, error)
+	// Sets a user's account access without changing playback. Requires a platform-operator JWT.
+	AdminSetUserActive(context.Context, *AdminSetUserActiveRequest) (*AdminSetUserActiveResponse, error)
+	// Lists private account lifecycle audit. Requires a platform-operator JWT.
+	AdminListAccountHistory(context.Context, *AdminListAccountHistoryRequest) (*AdminListAccountHistoryResponse, error)
+	// Closes local account access and synchronizes tenant inactivity. Requires a platform-operator JWT.
+	AdminDeactivateTenant(context.Context, *AdminDeactivateTenantRequest) (*emptypb.Empty, error)
 	mustEmbedUnimplementedUserServiceServer()
 }
 
@@ -3250,6 +3295,15 @@ func (UnimplementedUserServiceServer) ApproveDeviceAuthorization(context.Context
 }
 func (UnimplementedUserServiceServer) AdminLookupUserByEmail(context.Context, *AdminLookupUserByEmailRequest) (*AdminLookupUserByEmailResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method AdminLookupUserByEmail not implemented")
+}
+func (UnimplementedUserServiceServer) AdminSetUserActive(context.Context, *AdminSetUserActiveRequest) (*AdminSetUserActiveResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AdminSetUserActive not implemented")
+}
+func (UnimplementedUserServiceServer) AdminListAccountHistory(context.Context, *AdminListAccountHistoryRequest) (*AdminListAccountHistoryResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AdminListAccountHistory not implemented")
+}
+func (UnimplementedUserServiceServer) AdminDeactivateTenant(context.Context, *AdminDeactivateTenantRequest) (*emptypb.Empty, error) {
+	return nil, status.Error(codes.Unimplemented, "method AdminDeactivateTenant not implemented")
 }
 func (UnimplementedUserServiceServer) mustEmbedUnimplementedUserServiceServer() {}
 func (UnimplementedUserServiceServer) testEmbeddedByValue()                     {}
@@ -3722,6 +3776,60 @@ func _UserService_AdminLookupUserByEmail_Handler(srv interface{}, ctx context.Co
 	return interceptor(ctx, in, info, handler)
 }
 
+func _UserService_AdminSetUserActive_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AdminSetUserActiveRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(UserServiceServer).AdminSetUserActive(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: UserService_AdminSetUserActive_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(UserServiceServer).AdminSetUserActive(ctx, req.(*AdminSetUserActiveRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _UserService_AdminListAccountHistory_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AdminListAccountHistoryRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(UserServiceServer).AdminListAccountHistory(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: UserService_AdminListAccountHistory_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(UserServiceServer).AdminListAccountHistory(ctx, req.(*AdminListAccountHistoryRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _UserService_AdminDeactivateTenant_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AdminDeactivateTenantRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(UserServiceServer).AdminDeactivateTenant(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: UserService_AdminDeactivateTenant_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(UserServiceServer).AdminDeactivateTenant(ctx, req.(*AdminDeactivateTenantRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // UserService_ServiceDesc is the grpc.ServiceDesc for UserService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -3828,6 +3936,18 @@ var UserService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "AdminLookupUserByEmail",
 			Handler:    _UserService_AdminLookupUserByEmail_Handler,
+		},
+		{
+			MethodName: "AdminSetUserActive",
+			Handler:    _UserService_AdminSetUserActive_Handler,
+		},
+		{
+			MethodName: "AdminListAccountHistory",
+			Handler:    _UserService_AdminListAccountHistory_Handler,
+		},
+		{
+			MethodName: "AdminDeactivateTenant",
+			Handler:    _UserService_AdminDeactivateTenant_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

@@ -3,6 +3,8 @@ package grpc
 import (
 	"context"
 	"errors"
+	"frameworks/api_billing/internal/handlers"
+	foghorncontrolpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -211,6 +213,38 @@ func TestPurserMediaAuthorityRefreshDrainsPastFullDeliveredBatch(t *testing.T) {
 	}
 	if got := client.calls.Load(); got != int64(mediaAuthorityRefreshBatchSize) {
 		t.Fatalf("delivered %d, want %d", got, mediaAuthorityRefreshBatchSize)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+type retryingGrantCache struct {
+	handlers.CommodoreClient
+	err   error
+	calls int
+}
+
+func (c *retryingGrantCache) InvalidateTenantCache(context.Context, string, string) (*foghorncontrolpb.InvalidateTenantCacheResponse, error) {
+	c.calls++
+	return &foghorncontrolpb.InvalidateTenantCacheResponse{}, c.err
+}
+
+func TestSubscriptionRefreshDeliversDespiteCacheFailure(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	id := uuid.New()
+	row := purserdb.ClaimMediaAuthorityRefreshBatchRow{ID: id.String(), TenantID: "tenant", SourceEventID: "grant-commit", Reason: "subscription_authority_changed", Attempts: 1, Revision: 4}
+	cache := &retryingGrantCache{err: errors.New("Commodore unavailable")}
+	refresh := &recordingRefreshClient{}
+	server := &PurserServer{db: db, commodoreClient: cache}
+	mock.ExpectExec(`UPDATE purser\.media_authority_refresh_outbox`).WithArgs(id, int64(4)).WillReturnResult(sqlmock.NewResult(0, 1))
+	delivered, err := server.deliverMediaAuthorityRefreshRow(context.Background(), refresh, row)
+	if err != nil || !delivered || refresh.calls != 1 || cache.calls != 1 {
+		t.Fatalf("delivery=%v err=%v refresh=%d cache=%d", delivered, err, refresh.calls, cache.calls)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)

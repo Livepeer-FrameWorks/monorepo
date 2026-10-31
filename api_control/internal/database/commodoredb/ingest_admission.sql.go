@@ -147,6 +147,7 @@ WHERE CASE $2::text
     WHEN 'stream_key' THEN s.stream_key = $3::text
     ELSE false
 END
+AND NOT EXISTS (SELECT 1 FROM commodore.tenant_account_states account WHERE account.tenant_id=s.tenant_id AND account.closed_at IS NOT NULL)
 AND ($2::text <> 'stream_key' OR s.deleted_at IS NULL)
 `
 

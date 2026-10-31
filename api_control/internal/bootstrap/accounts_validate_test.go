@@ -10,7 +10,17 @@ func TestValidateAccount(t *testing.T) {
 	}{
 		{
 			name:    "valid_system_operator",
-			account: Account{Kind: AccountSystemOperator, Tenant: TenantRef{Ref: "tenant-a"}},
+			account: Account{Kind: AccountSystemOperator, Tenant: TenantRef{Ref: "quartermaster.system_tenant"}},
+		},
+		{
+			name:    "operator_outside_system_tenant",
+			account: Account{Kind: AccountSystemOperator, Tenant: TenantRef{Ref: "quartermaster.tenants.customer"}},
+			wantErr: true,
+		},
+		{
+			name:    "customer_with_platform_operator",
+			account: Account{Kind: AccountCustomer, Tenant: TenantRef{Ref: "quartermaster.tenants.customer"}, Users: []AccountUser{{PlatformOperator: true}}},
+			wantErr: true,
 		},
 		{
 			name:    "valid_customer",

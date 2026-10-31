@@ -40,8 +40,8 @@ type websocketIdentity struct {
 	tenantID   string
 	// tokenID is the API token's ID; empty for sessions.
 	tokenID string
-	// userID and issuedAt identify a session token; a revocation of the
-	// user's sessions covers the tokens issued in or before its second.
+	// userID identifies the owner of either credential type. For sessions,
+	// issuedAt bounds which tokens a session revocation covers.
 	userID    string
 	issuedAt  time.Time
 	expiresAt time.Time
@@ -67,9 +67,8 @@ func websocketIdentityFrom(ctx context.Context) (websocketIdentity, bool) {
 }
 
 func bearerIdentity(token string, result *AuthResult) websocketIdentity {
-	id := websocketIdentity{credential: token, tenantID: result.TenantID, tokenID: result.TokenID}
+	id := websocketIdentity{credential: token, tenantID: result.TenantID, tokenID: result.TokenID, userID: result.UserID}
 	if result.AuthType == "jwt" {
-		id.userID = result.UserID
 		if result.IssuedAt != nil {
 			id.issuedAt = *result.IssuedAt
 		}
@@ -486,4 +485,28 @@ func (w websocketIdentityWatch) watch(ctx context.Context, id websocketIdentity,
 			}
 		}
 	}
+}
+
+// CloseUserAPITokens closes existing API sockets on account deactivation without revoking the tokens themselves.
+func (s *WebsocketSessions) CloseUserAPITokens(tenantID, userID string) int {
+	if s == nil {
+		return 0
+	}
+	s.mu.Lock()
+	var sessions []*websocketSession
+	for key, connections := range s.byToken {
+		if key.tenantID != tenantID {
+			continue
+		}
+		for connection := range connections {
+			if connection.id.userID == userID {
+				sessions = append(sessions, connection)
+			}
+		}
+	}
+	s.mu.Unlock()
+	for _, connection := range sessions {
+		connection.close(ErrWebsocketCredentialRevoked)
+	}
+	return len(sessions)
 }

@@ -38,3 +38,13 @@ message SubscriptionUpdated {
   // Operator-supplied reason; set when an operator assigned the tier.
   string reason = 5;
 }
+
+// CheckoutRecoveryAction is an operator recovery request or its terminal result.
+message CheckoutRecoveryAction {
+  option (frameworks.events.event) = {type: "billing.checkout_recovery_action", visibility: VISIBILITY_INTERNAL, scope: SCOPE_TENANT, aggregate: "payment_provider_intents"};
+  string audit_id = 1; // Durable action ID linking request and result.
+  string reservation_id = 2; // Checkout being recovered.
+  string outcome = 3; // requested or the terminal reservation outcome.
+  string reason = 4; // Operator-supplied reason.
+  string detail = 5; // Provider result or reconciliation diagnostic.
+}

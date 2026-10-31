@@ -301,6 +301,7 @@ func TestApplyProviderReversal_MissingLocalRefIsBlockedRetryable(t *testing.T) {
 	mock.ExpectQuery(`SELECT id::text AS topup_id, tenant_id::text AS tenant_id`).
 		WithArgs("pi_unknown").
 		WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery("HasRefundSettlementOwner").WithArgs("stripe", "pi_unknown").WillReturnRows(sqlmock.NewRows([]string{"owned"}).AddRow(false))
 	mock.ExpectRollback()
 
 	_, err := s.applyProviderReversal(context.Background(), providerReversalInput{

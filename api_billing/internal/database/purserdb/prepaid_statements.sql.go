@@ -571,7 +571,7 @@ const getSubscriptionForPhaseClose = `-- name: GetSubscriptionForPhaseClose :one
 SELECT ts.tenant_id::text AS tenant_id,
        ts.billing_email,
        ts.tier_id,
-       ts.status,
+       CASE WHEN EXISTS (SELECT 1 FROM purser.tenant_billing_closures closure WHERE closure.tenant_id=ts.tenant_id) THEN 'suspended' ELSE ts.status END::text AS status,
        ts.billing_period_start,
        ts.billing_period_end,
        ts.mollie_next_payment_date,

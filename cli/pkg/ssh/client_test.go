@@ -333,3 +333,51 @@ func containsPair(args []string, flag, value string) bool {
 	}
 	return false
 }
+
+func TestCommandTransportsKeepCallerLocale(t *testing.T) {
+	t.Setenv("LC_ALL", "nl_NL.UTF-8")
+	prior := execCommandContext
+	defer func() { execCommandContext = prior }()
+	client := &Client{config: &ConnectionConfig{}, resolution: Resolution{Target: "fixture"}}
+	var observed []*exec.Cmd
+	execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		cmd := testExecCommandContext(ctx, name, args...)
+		observed = append(observed, cmd)
+		return cmd
+	}
+	if _, err := client.Run(context.Background(), "true"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.RunStream(context.Background(), "true", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Ping(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Upload(context.Background(), UploadOptions{LocalPath: "source", RemotePath: "/tmp/target"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(observed) < 5 {
+		t.Fatalf("missing transport coverage: %d commands", len(observed))
+	}
+	for _, cmd := range observed {
+		for _, entry := range cmd.Environ() {
+			if strings.HasPrefix(entry, "LC_ALL=") && entry != "LC_ALL=nl_NL.UTF-8" {
+				t.Fatalf("command changed caller locale: %s", entry)
+			}
+		}
+		if containsPair(cmd.Args, "-o", "LogLevel=ERROR") {
+			t.Fatalf("command hid SSH warnings: %v", cmd.Args)
+		}
+	}
+}
+
+func TestCommandTransportsKeepCallerLogPolicy(t *testing.T) {
+	cfg := &ConnectionConfig{}
+	res := Resolution{Target: "operator@cell"}
+	for _, args := range [][]string{BuildSSHArgs(cfg, res), BuildSCPArgs(cfg, res, "source", "target")} {
+		if containsPair(args, "-o", "LogLevel=ERROR") {
+			t.Fatalf("command transport suppresses caller's SSH warnings: %v", args)
+		}
+	}
+}

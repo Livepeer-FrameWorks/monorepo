@@ -2084,9 +2084,9 @@ type Mutation {
   ): PromoteToPaidResult!
 
   """
-  Change the postpaid billing tier. Upgrades apply immediately and reconcile
-  cluster access; downgrades are scheduled for the current billing period end
-  so the tenant keeps paid entitlements until the period closes.
+  Change the postpaid billing tier. Upgrades start a fresh month and credit
+  the unused paid fee; provider or metering reconciliation can leave them pending.
+  Downgrades take effect at the current billing period end.
   """
   changeBillingTier(
     """
@@ -3431,17 +3431,17 @@ type PromoteToPaidPayload {
 }
 
 """
-Result of a postpaid tier change. Either appliedTier is set (immediate upgrade)
-or pendingTier + effectiveAt are set (scheduled downgrade at period end).
+Result of a postpaid tier change. appliedTier identifies a committed upgrade.
+pendingTier identifies an upgrade awaiting reconciliation or a scheduled downgrade.
 """
 type ChangeBillingTierPayload {
   "Whether the request was accepted."
   success: Boolean!
   "Human-readable status message."
   message: String!
-  "Set on immediate upgrade — the new active tier."
+  "The active tier after the upgrade's billing boundary commits."
   appliedTier: BillingTier
-  "Set on scheduled downgrade — the staged target tier."
+  "The target of a pending upgrade or scheduled downgrade."
   pendingTier: BillingTier
   "When a scheduled downgrade will take effect."
   effectiveAt: Time

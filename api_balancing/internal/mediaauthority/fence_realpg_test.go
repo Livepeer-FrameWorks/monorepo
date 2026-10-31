@@ -5,7 +5,9 @@ package mediaauthority
 import (
 	"context"
 	"crypto/ed25519"
+	"database/sql"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -389,4 +391,66 @@ func TestMediaAuthorityRestoreFence_RealPG(t *testing.T) {
 			t.Fatal("proof begun before the second restore cleared its fence")
 		}
 	})
+}
+
+func TestLiveAuthorityPublishingRevocationRemovesCredential_RealPG(t *testing.T) {
+	db := startMediaAuthorityRealPG(t)
+	tenant, trust, _ := storeFixture(t, "cell-a")
+	store, err := NewStore(db, "cell-a", trust)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.now = func() time.Time { return storeFixtureNow.Add(time.Minute) }
+	ctx := context.Background()
+	if _, err := store.Apply(ctx, tenant); err != nil {
+		t.Fatal(err)
+	}
+	payload := &mediaauthoritypb.MediaObjectAuthority{SchemaVersion: sharedauthority.SchemaVersion, ObjectKind: mediaauthoritypb.MediaObjectKind_MEDIA_OBJECT_KIND_LIVE_STREAM, TenantId: "10000000-0000-0000-0000-000000000001", UserId: "30000000-0000-0000-0000-000000000001", InternalName: "owned-live", PlaybackId: "owned-playback", Lifecycle: mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE, OriginClusterId: "cell-a", PlaybackPolicy: &mediaauthoritypb.PlaybackPolicy{Kind: mediaauthoritypb.PlaybackPolicyKind_PLAYBACK_POLICY_KIND_PUBLIC}, Object: &mediaauthoritypb.MediaObjectAuthority_LiveStream{LiveStream: &mediaauthoritypb.LiveStreamAuthority{StreamId: "20000000-0000-0000-0000-000000000001", IngestMode: "push", OutageIngestClusterId: "cell-a", PublishingCredentialSha256: sharedauthority.PublishingCredentialDigest("owner-key"), ProcessesJson: "[]", DvrProcessesJson: "[]"}}}
+	seed := make([]byte, ed25519.SeedSize)
+	for i := range seed {
+		seed[i] = byte(i)
+	}
+	for version := uint64(1); version <= 2; version++ {
+		if version == 2 {
+			payload.GetLiveStream().PublishingCredentialSha256 = nil
+		}
+		envelope, err := sharedauthority.NewEnvelope(mediaauthoritypb.AuthorityKind_AUTHORITY_KIND_MEDIA_OBJECT, sharedauthority.LiveStreamAuthorityID(payload.GetLiveStream().GetStreamId()), version, storeFixtureNow, storeFixtureNow.Add(10*time.Minute), storeFixtureNow.Add(time.Hour), "signer-1", "cell-a", payload, []*mediaauthoritypb.AuthoritySourceRevision{{Service: "commodore", Revision: fmt.Sprint(version)}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		signed, err := sharedauthority.Sign(envelope, ed25519.NewKeyFromSeed(seed))
+		if err != nil {
+			t.Fatal(err)
+		}
+		encoded, err := proto.Marshal(signed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, applyErr := store.Apply(ctx, encoded); applyErr != nil {
+			t.Fatal(applyErr)
+		}
+		if version == 1 {
+			id := sharedauthority.LiveStreamAuthorityID(payload.GetLiveStream().GetStreamId())
+			if ready, readyErr := store.MarkPlaybackPairLocalReadReady(ctx, payload.GetTenantId(), 7, id, 1); readyErr != nil || !ready {
+				t.Fatalf("initial playback readiness=%v err=%v", ready, readyErr)
+			}
+			if ready, readyErr := store.MarkIngestPairLocalReady(ctx, payload.GetTenantId(), 7, id, 1); readyErr != nil || !ready {
+				t.Fatalf("initial ingest readiness=%v err=%v", ready, readyErr)
+			}
+		}
+		publishing, err := store.MediaObjectByPublishingCredential(ctx, "owner-key")
+		if version == 1 && (err != nil || !publishing.IngestReady) {
+			t.Fatalf("active credential lookup: %v", err)
+		}
+		if version == 2 && !errors.Is(err, sql.ErrNoRows) {
+			t.Fatalf("revoked credential lookup=%v, want no rows", err)
+		}
+		playback, err := store.MediaObjectByPlaybackID(ctx, "owned-playback")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !playback.Ready || playback.Authority.GetLifecycle() != mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE || playback.Authority.GetPlaybackPolicy().GetKind() != mediaauthoritypb.PlaybackPolicyKind_PLAYBACK_POLICY_KIND_PUBLIC {
+			t.Fatal("publishing revocation changed playback lifecycle")
+		}
+	}
 }

@@ -1,5 +1,7 @@
 package bootstrap
 
+import "github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
+
 // DesiredState is the slice of the rendered bootstrap-desired-state file Purser
 // consumes. The CLI's renderer (cli/pkg/bootstrap) writes the full document; each
 // service parses only its top-level section.
@@ -77,11 +79,12 @@ type ClusterPricing struct {
 // the QM tenant by alias; ReconcileCustomerBilling resolves alias → UUID via
 // Quartermaster's ResolveTenantAliases gRPC.
 type CustomerBilling struct {
-	Tenant               TenantRef      `yaml:"tenant"`
-	Model                string         `yaml:"model"`
-	Tier                 string         `yaml:"tier"`
-	ClusterAccess        string         `yaml:"cluster_access,omitempty"`
-	EntitlementOverrides map[string]any `yaml:"entitlement_overrides,omitempty"`
+	Tenant               TenantRef                  `yaml:"tenant"`
+	Model                string                     `yaml:"model"`
+	Tier                 string                     `yaml:"tier"`
+	ClusterAccess        string                     `yaml:"cluster_access,omitempty"`
+	EntitlementOverrides map[string]any             `yaml:"entitlement_overrides,omitempty"`
+	OperatorGrant        *billing.OperatorGrantSpec `yaml:"operator_grant,omitempty"`
 }
 
 // TenantRef mirrors cli/pkg/bootstrap.TenantRef's wire format.

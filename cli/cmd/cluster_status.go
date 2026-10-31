@@ -399,7 +399,7 @@ func printReplicaDiscrepancies(cmd *cobra.Command, results []serviceStatus) {
 // Checked=true so the policy gate cannot read silent failure as success.
 func printStatusControlPlaneSection(cmd *cobra.Command, rc *resolvedCluster) {
 	out := cmd.OutOrStdout()
-	systemTenantID := doctorContextSystemTenantID(rc)
+	systemTenantID := contextSystemTenantID(rc)
 	if systemTenantID == "" {
 		return
 	}

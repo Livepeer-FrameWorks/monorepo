@@ -168,7 +168,7 @@ func TestDoctorTCPProbeCommandUsesHostLoopback(t *testing.T) {
 
 // The doctor trusts a saved system tenant only when the saved context also
 // supplied the manifest; a manifest passed with --gitops-dir resolves its own.
-func TestDoctorContextSystemTenantIDOnlyFromContextManifest(t *testing.T) {
+func TestContextSystemTenantIDOnlyFromContextManifest(t *testing.T) {
 	manifest := restartFoghornCellManifest("eu", "us")
 	cases := []struct {
 		source inventory.ManifestSource
@@ -181,13 +181,13 @@ func TestDoctorContextSystemTenantIDOnlyFromContextManifest(t *testing.T) {
 	}
 	for _, tc := range cases {
 		rc := &resolvedCluster{Manifest: manifest, Source: tc.source, ContextSystemTenantID: " ctx-tenant "}
-		if got := doctorContextSystemTenantID(rc); got != tc.want {
+		if got := contextSystemTenantID(rc); got != tc.want {
 			t.Fatalf("source %s: system tenant = %q, want %q", tc.source, got, tc.want)
 		}
 	}
 	// --cluster on the context's own gitops source selects another cluster.
 	rc := &resolvedCluster{Manifest: manifest, Source: inventory.SourceContext, ContextSystemTenantID: "ctx-tenant", ClusterOverridesContext: true}
-	if got := doctorContextSystemTenantID(rc); got != "" {
+	if got := contextSystemTenantID(rc); got != "" {
 		t.Fatalf("--cluster override: system tenant = %q, want none", got)
 	}
 }
@@ -206,11 +206,10 @@ func TestDoctorResolveSystemTenantIDFromBootstrapAlias(t *testing.T) {
 	}
 
 	id, warning = doctorResolveSystemTenantID("saved", func() (string, error) {
-		t.Fatal("saved system tenant must not dial Quartermaster")
-		return "", nil
+		return "authoritative", nil
 	})
-	if warning != nil || id != "saved" {
-		t.Fatalf("saved = %q, %+v", id, warning)
+	if warning == nil || id != "authoritative" || !strings.Contains(warning.Detail, "saved") || !strings.Contains(warning.Detail, "authoritative") {
+		t.Fatalf("stale saved identity = %q, %+v; want authoritative identity and mismatch warning", id, warning)
 	}
 
 	for name, resolve := range map[string]func() (string, error){

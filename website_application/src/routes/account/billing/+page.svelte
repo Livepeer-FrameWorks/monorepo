@@ -424,6 +424,7 @@
     displayName?: string | null;
     tierLevel?: number | null;
     basePrice?: number | null;
+    currency?: string | null;
   }) {
     if (!tier.id) {
       toast.error("Billing tier unavailable");
@@ -441,12 +442,12 @@
       );
       return;
     }
-    if (isDowngrade) {
-      const ok = window.confirm(
-        `Downgrade to ${tier.displayName ?? "this tier"} at the end of the current billing period?`
-      );
-      if (!ok) return;
-    }
+    const confirmed = window.confirm(
+      isDowngrade
+        ? `Downgrade to ${tier.displayName ?? "this tier"} at the end of the current billing period?`
+        : `Upgrade to ${tier.displayName ?? "this tier"} and start a fresh month at ${formatCurrency(tier.basePrice, tier.currency ?? "EUR")}? Any confirmed unused paid fee reduces the new charge; unpaid time is prorated. Usage from the old period is billed separately. Stripe may charge immediately. No cash refund is issued.`
+    );
+    if (!confirmed) return;
 
     changeTierLoadingId = tier.id;
     try {
@@ -455,7 +456,13 @@
       if (data?.__typename === "ChangeBillingTierPayload") {
         if (data.pendingTier) {
           const effective = data.effectiveAt ? formatDate(data.effectiveAt) : "period end";
-          toast.success(`Downgrade scheduled for ${effective}`);
+          if (isDowngrade) {
+            toast.success(`Downgrade scheduled for ${effective}`);
+          } else {
+            toast.info(
+              data.message || "Upgrade accepted; payment and billing are being reconciled"
+            );
+          }
         } else {
           toast.success(
             data.message || `Upgraded to ${data.appliedTier?.displayName ?? "new tier"}`
@@ -686,6 +693,7 @@
   const isPrepaid = $derived(billingStatus?.subscription?.billingModel === "prepaid");
   const pendingTier = $derived(billingStatus?.subscription?.pendingTier ?? null);
   const pendingEffectiveAt = $derived(billingStatus?.subscription?.pendingEffectiveAt ?? null);
+  const pendingReason = $derived(billingStatus?.subscription?.pendingReason ?? null);
 </script>
 
 <svelte:head>
@@ -921,9 +929,16 @@
                           <div
                             class="mt-3 border border-warning/50 bg-warning/10 px-3 py-2 text-xs text-warning"
                           >
-                            Downgrading to {pendingTier.displayName} on {pendingEffectiveAt
-                              ? formatDate(pendingEffectiveAt)
-                              : "period end"}
+                            {#if pendingReason === "tier_upgrade"}
+                              Your upgrade to {pendingTier.displayName} is being completed. Retrying the
+                              upgrade will not start another purchase.
+                            {:else if pendingReason === "stripe_checkout"}
+                              Checkout for {pendingTier.displayName} is awaiting completion.
+                            {:else}
+                              Downgrading to {pendingTier.displayName} on {pendingEffectiveAt
+                                ? formatDate(pendingEffectiveAt)
+                                : "period end"}
+                            {/if}
                           </div>
                         {/if}
                       {:else if !isPrepaid && (tier.tierLevel ?? 0) >= 1}

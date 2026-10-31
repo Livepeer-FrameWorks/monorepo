@@ -415,7 +415,10 @@ SELECT mc.mollie_customer_id,
 FROM purser.mollie_customers mc
 JOIN purser.tenant_subscriptions ts ON ts.tenant_id = mc.tenant_id
 WHERE mc.tenant_id = $1::text::uuid
-  AND ts.status = 'active'
+  AND (ts.status = 'active' OR EXISTS (
+      SELECT 1 FROM purser.tenant_billing_closures closure
+      WHERE closure.tenant_id = ts.tenant_id
+  ))
   AND (ts.mollie_subscription_id IS NOT NULL OR ts.payment_method = 'mollie')
 `
 
@@ -436,7 +439,10 @@ const getActiveStripeCollectionDetails = `-- name: GetActiveStripeCollectionDeta
 SELECT stripe_customer_id, stripe_subscription_id
 FROM purser.tenant_subscriptions
 WHERE tenant_id = $1::text::uuid
-  AND status = 'active'
+  AND (status = 'active' OR EXISTS (
+      SELECT 1 FROM purser.tenant_billing_closures closure
+      WHERE closure.tenant_id = tenant_subscriptions.tenant_id
+  ))
   AND (stripe_subscription_id IS NOT NULL
        OR (payment_method = 'stripe' AND stripe_customer_id IS NOT NULL))
 `
@@ -1103,15 +1109,19 @@ SELECT ts.tenant_id::text AS tenant_id,
 FROM purser.tenant_subscriptions ts
 JOIN purser.billing_tiers bt ON ts.tier_id = bt.id
 WHERE ts.status = 'active'
+  AND ts.pending_reason IS DISTINCT FROM 'tier_upgrade'
+  AND NOT EXISTS (SELECT 1 FROM purser.tenant_billing_closures closure WHERE closure.tenant_id = ts.tenant_id)
+  AND NOT EXISTS (SELECT 1 FROM purser.subscription_operator_grants expired_grant
+      WHERE expired_grant.subscription_id = ts.id AND expired_grant.expires_at <= $1::timestamptz)
   AND bt.is_active = TRUE
   AND (
       (ts.mollie_next_payment_date IS NOT NULL
-          AND ts.mollie_next_payment_date <= $1::date)
+          AND ts.mollie_next_payment_date <= ($1::timestamp)::date)
       OR (ts.billing_period_end IS NOT NULL
-          AND ts.billing_period_end <= $1)
+          AND ts.billing_period_end <= ($1::timestamp))
       OR (ts.billing_period_end IS NULL
           AND (ts.next_billing_date IS NULL
-              OR ts.next_billing_date <= $1))
+              OR ts.next_billing_date <= ($1::timestamp)))
   )
 `
 
@@ -1401,18 +1411,38 @@ func (q *Queries) SetProviderBillingPaymentAttemptFailure(ctx context.Context, a
 
 const setProviderPaymentIntentFailure = `-- name: SetProviderPaymentIntentFailure :exec
 UPDATE purser.payment_provider_intents
-SET status = $1, last_error = $2, updated_at = NOW()
-WHERE id = $3::text::uuid
+SET status = CASE
+        WHEN $1::text = 'terminal_failed'
+          AND purpose IN ('tenant_subscription_checkout', 'mollie_first_payment', 'mollie_subscription_create')
+          AND (provider_session_id IS NOT NULL OR provider_payment_id IS NOT NULL
+               OR provider_subscription_id IS NOT NULL
+               OR (NOT $2::boolean
+                   AND (submission_state <> 'prepared' OR provider_request IS NOT NULL)))
+            THEN 'provider_call_failed'
+        ELSE $1::text
+    END,
+    last_error = $3, updated_at = NOW()
+WHERE id = $4::text::uuid
+  AND tenant_id = $5::text::uuid
+  AND status NOT IN ('succeeded', 'expired', 'cancelled', 'terminal_failed')
 `
 
 type SetProviderPaymentIntentFailureParams struct {
-	Status    string         `db:"status" json:"status"`
-	LastError sql.NullString `db:"last_error" json:"last_error"`
-	IntentID  string         `db:"intent_id" json:"intent_id"`
+	Status            string         `db:"status" json:"status"`
+	DefiniteRejection bool           `db:"definite_rejection" json:"definite_rejection"`
+	LastError         sql.NullString `db:"last_error" json:"last_error"`
+	IntentID          string         `db:"intent_id" json:"intent_id"`
+	TenantID          string         `db:"tenant_id" json:"tenant_id"`
 }
 
 func (q *Queries) SetProviderPaymentIntentFailure(ctx context.Context, arg SetProviderPaymentIntentFailureParams) error {
-	_, err := q.db.ExecContext(ctx, setProviderPaymentIntentFailure, arg.Status, arg.LastError, arg.IntentID)
+	_, err := q.db.ExecContext(ctx, setProviderPaymentIntentFailure,
+		arg.Status,
+		arg.DefiniteRejection,
+		arg.LastError,
+		arg.IntentID,
+		arg.TenantID,
+	)
 	return err
 }
 

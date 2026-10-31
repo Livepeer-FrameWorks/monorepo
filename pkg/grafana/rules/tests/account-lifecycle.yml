@@ -1,0 +1,189 @@
+# Both recovery queues fire after five minutes and resolve when drained.
+rule_files:
+  - ../frameworks.yml
+
+evaluation_interval: 1m
+
+tests:
+  - interval: 1m
+    input_series:
+      - series: commodore_tenant_account_closure_repeatedly_failed_items{instance="a"}
+        values: "0 1x7 0x4"
+      - series: purser_operator_grant_expiry_repeatedly_failed_items{instance="a"}
+        values: "0 1x7 0x4"
+      - series: commodore_tenant_account_closure_repeatedly_failed_items{instance="b"}
+        values: "0 1x7 0x4"
+      - series: purser_operator_grant_expiry_repeatedly_failed_items{instance="b"}
+        values: "0 1x7 0x4"
+    alert_rule_test:
+      - eval_time: 4m
+        groupname: frameworks.rules
+        alertname: CommodoreTenantAccountClosureStuck
+        exp_alerts: []
+      - eval_time: 7m
+        groupname: frameworks.rules
+        alertname: CommodoreTenantAccountClosureStuck
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: Tenant closure is awaiting synchronization
+              description: Commodore is retrying a failed tenant closure or cannot read its recovery queue. Check Commodore logs.
+      - eval_time: 10m
+        groupname: frameworks.rules
+        alertname: CommodoreTenantAccountClosureStuck
+        exp_alerts: []
+      - eval_time: 4m
+        groupname: frameworks.rules
+        alertname: PurserOperatorGrantExpiryStuck
+        exp_alerts: []
+      - eval_time: 7m
+        groupname: frameworks.rules
+        alertname: PurserOperatorGrantExpiryStuck
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: Operator grant expiry needs recovery
+              description: A grant failed billing-boundary reconciliation or Purser cannot read its expiry queue. Run frameworks admin billing grant list --include-expired and grant show --tenant-id <uuid> to inspect expiry failures and the last error. Other expiries continue.
+      - eval_time: 10m
+        groupname: frameworks.rules
+        alertname: PurserOperatorGrantExpiryStuck
+        exp_alerts: []
+  - interval: 1m
+    input_series:
+      - series: commodore_tenant_account_closure_repeatedly_failed_items{instance="a"}
+        values: "0 NaNx20 0x12"
+      - series: commodore_tenant_account_closure_read_failures_total{instance="a"}
+        values: "0+1x20 20x30"
+      - series: commodore_tenant_account_closure_read_failures_total{instance="b"}
+        values: "0+1x20 20x30"
+    alert_rule_test:
+      - eval_time: 4m
+        groupname: frameworks.rules
+        alertname: CommodoreTenantAccountClosureStuck
+        exp_alerts: []
+      - eval_time: 7m
+        groupname: frameworks.rules
+        alertname: CommodoreTenantAccountClosureStuck
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: Tenant closure is awaiting synchronization
+              description: Commodore is retrying a failed tenant closure or cannot read its recovery queue. Check Commodore logs.
+      - eval_time: 19m
+        groupname: frameworks.rules
+        alertname: CommodoreTenantAccountClosureStuck
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: Tenant closure is awaiting synchronization
+              description: Commodore is retrying a failed tenant closure or cannot read its recovery queue. Check Commodore logs.
+      - eval_time: 50m
+        groupname: frameworks.rules
+        alertname: CommodoreTenantAccountClosureStuck
+        exp_alerts: []
+  - interval: 1m
+    input_series:
+      - series: purser_operator_grant_expiry_repeatedly_failed_items{instance="a"}
+        values: "0 NaNx20 0x12"
+      - series: purser_operator_grant_expiry_read_failures_total{instance="a"}
+        values: "0+1x20 20x30"
+      - series: purser_operator_grant_expiry_read_failures_total{instance="b"}
+        values: "0+1x20 20x30"
+    alert_rule_test:
+      - eval_time: 4m
+        groupname: frameworks.rules
+        alertname: PurserOperatorGrantExpiryStuck
+        exp_alerts: []
+      - eval_time: 7m
+        groupname: frameworks.rules
+        alertname: PurserOperatorGrantExpiryStuck
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: Operator grant expiry needs recovery
+              description: A grant failed billing-boundary reconciliation or Purser cannot read its expiry queue. Run frameworks admin billing grant list --include-expired and grant show --tenant-id <uuid> to inspect expiry failures and the last error. Other expiries continue.
+      - eval_time: 19m
+        groupname: frameworks.rules
+        alertname: PurserOperatorGrantExpiryStuck
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: Operator grant expiry needs recovery
+              description: A grant failed billing-boundary reconciliation or Purser cannot read its expiry queue. Run frameworks admin billing grant list --include-expired and grant show --tenant-id <uuid> to inspect expiry failures and the last error. Other expiries continue.
+      - eval_time: 50m
+        groupname: frameworks.rules
+        alertname: PurserOperatorGrantExpiryStuck
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: commodore_tenant_account_closure_read_failures_total{instance="a"}
+        values: "0 2x20"
+      - series: purser_operator_grant_expiry_read_failures_total{instance="a"}
+        values: "0 2x20"
+    alert_rule_test:
+      - eval_time: 7m
+        groupname: frameworks.rules
+        alertname: CommodoreTenantAccountClosureStuck
+        exp_alerts: []
+      - eval_time: 7m
+        groupname: frameworks.rules
+        alertname: PurserOperatorGrantExpiryStuck
+        exp_alerts: []
+      - eval_time: 10m
+        groupname: frameworks.rules
+        alertname: CommodoreTenantAccountClosureStuck
+        exp_alerts: []
+      - eval_time: 10m
+        groupname: frameworks.rules
+        alertname: PurserOperatorGrantExpiryStuck
+        exp_alerts: []
+  - interval: 1m
+    input_series:
+      - series: commodore_media_authority_refresh_oldest_pending_seconds{instance="a",lane="ingest_revocation"}
+        values: "0 600x10 0x5"
+      - series: commodore_media_authority_refresh_oldest_pending_seconds{instance="b",lane="ingest_revocation"}
+        values: "0 600x10 0x5"
+    alert_rule_test:
+      - eval_time: 4m
+        groupname: frameworks.rules
+        alertname: CommodoreAccountIngestRevocationStuck
+        exp_alerts: []
+      - eval_time: 7m
+        groupname: frameworks.rules
+        alertname: CommodoreAccountIngestRevocationStuck
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: Account session-stop delivery is awaiting a cell
+              description: A locally revoked account still has session-stop delivery pending, including backoff. Tenant closure, when requested, proceeds independently of stop delivery. Restore the recorded cell to clear this obligation. Permanently removed cells have no retirement command; the alert continues until restored. If the cell is permanently removed, record that fact in the incident and silence this alert for that cell.
+      - eval_time: 15m
+        groupname: frameworks.rules
+        alertname: CommodoreAccountIngestRevocationStuck
+        exp_alerts: []
+  - interval: 1m
+    input_series:
+      - series: commodore_tenant_account_closure_failed_items{instance="a"}
+        values: "0 1x8 0x4"
+      - series: purser_operator_grant_expiry_failed_items{instance="a"}
+        values: "0 1x8 0x4"
+      - series: commodore_tenant_account_closure_repeatedly_failed_items{instance="a"}
+        values: "0x14"
+      - series: purser_operator_grant_expiry_repeatedly_failed_items{instance="a"}
+        values: "0x14"
+    alert_rule_test:
+      - eval_time: 7m
+        groupname: frameworks.rules
+        alertname: CommodoreTenantAccountClosureStuck
+        exp_alerts: []
+      - eval_time: 7m
+        groupname: frameworks.rules
+        alertname: PurserOperatorGrantExpiryStuck
+        exp_alerts: []

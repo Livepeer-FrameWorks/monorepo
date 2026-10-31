@@ -19,13 +19,20 @@ import (
 // Result describes what a reconciler did per row. Returned aggregated so callers
 // can log a summary and CI can assert idempotency (a second run returns all noop).
 type Result struct {
-	Created []string
-	Updated []string
-	Noop    []string
+	Created  []string
+	Updated  []string
+	Noop     []string
+	Deferred []DeferredCustomer
+}
+
+// DeferredCustomer identifies a billing declaration that needs a retry.
+type DeferredCustomer struct {
+	Alias  string
+	Reason string
 }
 
 // Total returns the number of rows the reconciler considered.
-func (r Result) Total() int { return len(r.Created) + len(r.Updated) + len(r.Noop) }
+func (r Result) Total() int { return len(r.Created) + len(r.Updated) + len(r.Noop) + len(r.Deferred) }
 
 // ReconcileBillingTierCatalog upserts every CatalogTier into purser.billing_tiers,
 // purser.tier_entitlements, and purser.tier_pricing_rules inside a single

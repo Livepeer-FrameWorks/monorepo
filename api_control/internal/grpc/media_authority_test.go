@@ -58,9 +58,11 @@ type unusedMediaAuthorityTenantSource struct{}
 func (unusedMediaAuthorityTenantSource) GetTenant(context.Context, string) (*quartermasterpb.GetTenantResponse, error) {
 	panic("unused")
 }
+
 func (unusedMediaAuthorityTenantSource) GetTenantEntitlement(context.Context, string) (*quartermasterpb.GetTenantEntitlementResponse, error) {
 	panic("unused")
 }
+
 func (unusedMediaAuthorityTenantSource) ListActiveTenants(context.Context) ([]string, error) {
 	panic("unused")
 }
@@ -70,6 +72,7 @@ type unusedMediaAuthorityBillingSource struct{}
 func (unusedMediaAuthorityBillingSource) GetTenantBillingStatus(context.Context, string) (*purserpb.GetTenantBillingStatusResponse, error) {
 	panic("unused")
 }
+
 func (unusedMediaAuthorityBillingSource) GetTenantAdmissionStatus(context.Context, string) (*purserpb.GetTenantAdmissionStatusResponse, error) {
 	panic("unused")
 }
@@ -1106,4 +1109,42 @@ func equalStrings(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+func TestTrialAuthorityCannotOutliveGrantExpiry(t *testing.T) {
+	issuedAt := time.Now().UTC()
+	expiry := issuedAt.Add(2 * time.Minute)
+	_, _, validUntil, _, err := buildTenantAuthority(
+		&quartermasterpb.Tenant{Id: "tenant-trial", IsActive: true},
+		&quartermasterpb.GetTenantEntitlementResponse{},
+		&purserpb.GetTenantBillingStatusResponse{BillingModel: "postpaid"},
+		&purserpb.GetTenantAdmissionStatusResponse{TierLevel: 4, ValidUntil: timestamppb.New(expiry)}, issuedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !validUntil.Equal(expiry) {
+		t.Fatalf("offline authority valid until %s, want trial deadline %s", validUntil, expiry)
+	}
+}
+
+func TestTenantWithoutGrantKeepsFullAuthorityValidity(t *testing.T) {
+	issued := time.Now().UTC()
+	_, _, until, _, err := buildTenantAuthority(&quartermasterpb.Tenant{Id: "no-grant", IsActive: true}, &quartermasterpb.GetTenantEntitlementResponse{}, &purserpb.GetTenantBillingStatusResponse{BillingModel: "postpaid"}, &purserpb.GetTenantAdmissionStatusResponse{TierLevel: 4}, issued)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !until.Equal(issued.Add(24 * time.Hour)) {
+		t.Fatalf("validity=%s, want 24h", until.Sub(issued))
+	}
+}
+
+func TestExpiredUnsweptGrantCannotSignAnAllow(t *testing.T) {
+	issued := time.Now().UTC()
+	payload, _, until, _, err := buildTenantAuthority(&quartermasterpb.Tenant{Id: "tenant", IsActive: true}, &quartermasterpb.GetTenantEntitlementResponse{}, &purserpb.GetTenantBillingStatusResponse{BillingModel: "postpaid"}, &purserpb.GetTenantAdmissionStatusResponse{TierLevel: 4, ValidUntil: timestamppb.New(issued.Add(-time.Second))}, issued)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if payload.GetBillingDecision() != mediaauthoritypb.TenantBillingDecision_TENANT_BILLING_DECISION_PAYMENT_REQUIRED || until.Before(issued.Add(10*time.Minute)) || until.After(issued.Add(15*time.Minute)) {
+		t.Fatalf("expired unswept grant decision=%v until=%s", payload.GetBillingDecision(), until)
+	}
 }

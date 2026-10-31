@@ -77,6 +77,7 @@ SET stripe_subscription_id = $1,
     updated_at = NOW()
 WHERE tenant_id = $5::text::uuid
   AND cluster_id = $6
+  AND NOT EXISTS (SELECT 1 FROM purser.tenant_billing_closures closure WHERE closure.tenant_id = cluster_subscriptions.tenant_id)
 `
 
 type AttachAndUpdateClusterStripeSubscriptionParams struct {
@@ -1141,11 +1142,16 @@ const markStripeSubscriptionIntentSucceeded = `-- name: MarkStripeSubscriptionIn
 UPDATE purser.payment_provider_intents
 SET provider_subscription_id = COALESCE(provider_subscription_id, NULLIF($1, '')),
     status = 'succeeded', succeeded_at = COALESCE(succeeded_at, NOW()), updated_at = NOW()
-WHERE provider = 'stripe' AND provider_subscription_id = $1
+WHERE tenant_id=$2::text::uuid AND provider = 'stripe' AND provider_subscription_id = $1
 `
 
-func (q *Queries) MarkStripeSubscriptionIntentSucceeded(ctx context.Context, subscriptionID interface{}) error {
-	_, err := q.db.ExecContext(ctx, markStripeSubscriptionIntentSucceeded, subscriptionID)
+type MarkStripeSubscriptionIntentSucceededParams struct {
+	SubscriptionID interface{} `db:"subscription_id" json:"subscription_id"`
+	TenantID       string      `db:"tenant_id" json:"tenant_id"`
+}
+
+func (q *Queries) MarkStripeSubscriptionIntentSucceeded(ctx context.Context, arg MarkStripeSubscriptionIntentSucceededParams) error {
+	_, err := q.db.ExecContext(ctx, markStripeSubscriptionIntentSucceeded, arg.SubscriptionID, arg.TenantID)
 	return err
 }
 
@@ -1425,6 +1431,7 @@ SET stripe_subscription_status = $1,
     stripe_current_period_end = $3,
     updated_at = NOW()
 WHERE stripe_subscription_id = $4
+  AND NOT EXISTS (SELECT 1 FROM purser.tenant_billing_closures closure WHERE closure.tenant_id = cluster_subscriptions.tenant_id)
 `
 
 type UpdateClusterStripeSubscriptionStatusParams struct {
@@ -1449,38 +1456,45 @@ func (q *Queries) UpdateClusterStripeSubscriptionStatus(ctx context.Context, arg
 
 const updateMollieNextPaymentDate = `-- name: UpdateMollieNextPaymentDate :exec
 UPDATE purser.tenant_subscriptions
-SET mollie_next_payment_date = $1::text::date, updated_at = NOW()
-WHERE mollie_subscription_id = $2
+SET mollie_next_payment_date = CASE WHEN (free_fallback_at IS NOT NULL OR billing_period_start <= free_fallback_unbilled_through AT TIME ZONE 'UTC') THEN mollie_next_payment_date ELSE $1::text::date END, updated_at = NOW()
+WHERE tenant_id = $2::text::uuid
+  AND mollie_subscription_id = $3
+  AND NOT EXISTS (SELECT 1 FROM purser.tenant_billing_closures closure WHERE closure.tenant_id = tenant_subscriptions.tenant_id)
 `
 
 type UpdateMollieNextPaymentDateParams struct {
 	NextPaymentDate      string         `db:"next_payment_date" json:"next_payment_date"`
+	TenantID             string         `db:"tenant_id" json:"tenant_id"`
 	MollieSubscriptionID sql.NullString `db:"mollie_subscription_id" json:"mollie_subscription_id"`
 }
 
 func (q *Queries) UpdateMollieNextPaymentDate(ctx context.Context, arg UpdateMollieNextPaymentDateParams) error {
-	_, err := q.db.ExecContext(ctx, updateMollieNextPaymentDate, arg.NextPaymentDate, arg.MollieSubscriptionID)
+	_, err := q.db.ExecContext(ctx, updateMollieNextPaymentDate, arg.NextPaymentDate, arg.TenantID, arg.MollieSubscriptionID)
 	return err
 }
 
 const updateTenantStripeSubscriptionStatus = `-- name: UpdateTenantStripeSubscriptionStatus :execrows
 UPDATE purser.tenant_subscriptions
-SET stripe_subscription_status = $1,
+SET stripe_subscription_status = $1::text,
     status = $2,
-    stripe_current_period_end = CASE WHEN $3::timestamptz IS NULL THEN stripe_current_period_end WHEN billing_period_start IS NULL OR $4::timestamp >= billing_period_start THEN $3::timestamptz ELSE stripe_current_period_end END,
-    billing_period_start = GREATEST($4::timestamp, billing_period_start),
-    billing_period_end = CASE WHEN billing_period_start IS NULL OR $4::timestamp >= billing_period_start THEN COALESCE($3::timestamp, billing_period_end) ELSE billing_period_end END,
-    next_billing_date = CASE WHEN billing_period_start IS NULL OR $4::timestamp >= billing_period_start THEN COALESCE($3::timestamp, next_billing_date) ELSE next_billing_date END,
+    stripe_current_period_end = CASE WHEN $3::timestamptz IS NULL THEN stripe_current_period_end WHEN $3::timestamptz IS NOT NULL AND (billing_period_start IS NULL OR $4::timestamp >= billing_period_start) THEN $3::timestamptz WHEN billing_period_start IS NULL OR $3::timestamp > billing_period_start THEN GREATEST($3::timestamptz, stripe_current_period_end) ELSE stripe_current_period_end END,
+    billing_period_start = CASE WHEN ((free_fallback_at IS NOT NULL OR billing_period_start <= free_fallback_unbilled_through AT TIME ZONE 'UTC') OR $1::text IN ('past_due', 'unpaid', 'canceled')) THEN billing_period_start ELSE GREATEST($4::timestamp, billing_period_start) END,
+    billing_period_end = CASE WHEN ((free_fallback_at IS NOT NULL OR billing_period_start <= free_fallback_unbilled_through AT TIME ZONE 'UTC') OR $1::text IN ('past_due', 'unpaid', 'canceled')) THEN billing_period_end ELSE CASE WHEN $3::timestamptz IS NOT NULL AND (billing_period_start IS NULL OR $4::timestamp >= billing_period_start) THEN $3::timestamp WHEN billing_period_start IS NULL OR $3::timestamp > billing_period_start THEN GREATEST($3::timestamp, billing_period_end) ELSE billing_period_end END END,
+    next_billing_date = CASE WHEN ((free_fallback_at IS NOT NULL OR billing_period_start <= free_fallback_unbilled_through AT TIME ZONE 'UTC') OR $1::text IN ('past_due', 'unpaid', 'canceled')) THEN next_billing_date ELSE CASE WHEN $3::timestamptz IS NOT NULL AND (billing_period_start IS NULL OR $4::timestamp >= billing_period_start) THEN $3::timestamp WHEN billing_period_start IS NULL OR $3::timestamp > billing_period_start THEN GREATEST($3::timestamp, next_billing_date) ELSE next_billing_date END END,
+    free_fallback_unbilled_through = CASE WHEN $1::text IN ('past_due', 'unpaid', 'canceled') THEN GREATEST(free_fallback_unbilled_through, NOW(), $4::timestamptz - INTERVAL '1 microsecond') WHEN (free_fallback_at IS NOT NULL OR billing_period_start <= free_fallback_unbilled_through AT TIME ZONE 'UTC') THEN GREATEST(free_fallback_unbilled_through, $4::timestamptz - INTERVAL '1 microsecond') ELSE free_fallback_unbilled_through END,
     updated_at = NOW()
 WHERE tenant_id = $5::text::uuid
+ AND stripe_subscription_id=$6::text
+  AND NOT EXISTS (SELECT 1 FROM purser.tenant_billing_closures closure WHERE closure.tenant_id = tenant_subscriptions.tenant_id)
 `
 
 type UpdateTenantStripeSubscriptionStatusParams struct {
-	StripeStatus sql.NullString `db:"stripe_status" json:"stripe_status"`
-	Status       string         `db:"status" json:"status"`
-	PeriodEnd    sql.NullTime   `db:"period_end" json:"period_end"`
-	PeriodStart  sql.NullTime   `db:"period_start" json:"period_start"`
-	TenantID     string         `db:"tenant_id" json:"tenant_id"`
+	StripeStatus   sql.NullString `db:"stripe_status" json:"stripe_status"`
+	Status         string         `db:"status" json:"status"`
+	PeriodEnd      sql.NullTime   `db:"period_end" json:"period_end"`
+	PeriodStart    sql.NullTime   `db:"period_start" json:"period_start"`
+	TenantID       string         `db:"tenant_id" json:"tenant_id"`
+	SubscriptionID string         `db:"subscription_id" json:"subscription_id"`
 }
 
 func (q *Queries) UpdateTenantStripeSubscriptionStatus(ctx context.Context, arg UpdateTenantStripeSubscriptionStatusParams) (int64, error) {
@@ -1490,6 +1504,7 @@ func (q *Queries) UpdateTenantStripeSubscriptionStatus(ctx context.Context, arg 
 		arg.PeriodEnd,
 		arg.PeriodStart,
 		arg.TenantID,
+		arg.SubscriptionID,
 	)
 	if err != nil {
 		return 0, err

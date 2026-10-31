@@ -73,7 +73,7 @@ func (c *tenantAdmissionLastGood) load(tenantID string) (*purserpb.GetTenantAdmi
 		return nil, 0, false
 	}
 	age := c.clock().Sub(entry.readAt)
-	if age > tenantAdmissionLastGoodTTL {
+	if age > tenantAdmissionLastGoodTTL || (entry.response.GetValidUntil() != nil && !entry.response.GetValidUntil().AsTime().After(c.clock())) {
 		delete(c.entries, tenantID)
 		return nil, 0, false
 	}

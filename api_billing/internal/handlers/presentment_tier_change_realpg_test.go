@@ -6,9 +6,12 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"testing"
 	"time"
+
+	"frameworks/api_billing/internal/database/purserdb"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/google/uuid"
@@ -168,6 +171,13 @@ func (f *tierChangeFixture) changeTier(t *testing.T, tierID string) {
 		"metadata": map[string]string{"purpose": string(PurposeSubscriptionSetup), "tenant_id": f.tenantID, "tier_id": tierID, "reference_id": tierID},
 	})
 	if err != nil {
+		t.Fatal(err)
+	}
+	// The checkout RPC has already bound this provider response before delivery.
+	if _, err := f.db.ExecContext(t.Context(), `INSERT INTO purser.payment_provider_intents
+		(tenant_id,provider,purpose,local_reference_type,local_reference_id,status,currency,idempotency_key,provider_session_id)
+		VALUES($1,'stripe','tenant_subscription_checkout','billing_tiers',$2,'provider_open','USD',$3,$4)
+		ON CONFLICT (provider,idempotency_key) DO NOTHING`, f.tenantID, tierID, "tier-change:"+tierID, "cs_change_"+tierID); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.service.DispatchStripeCheckoutCompleted(context.Background(), session); err != nil {
@@ -479,4 +489,35 @@ func TestExpiredCheckoutUnblocksPreviousBaseFee_RealPG(t *testing.T) {
 			t.Fatalf("confirmed payment was overwritten: %s, %v", status, err)
 		}
 	})
+}
+
+// A replacement invoice consumes the old fee's unused share. Returning the
+// replacement share to prepaid must not expose that older fee for another credit.
+func TestReplacementBaseFeeCannotBeCreditedTwice_RealPG(t *testing.T) {
+	f := newTierChangeFixture(t, "20.00", firstBaseFeePaid)
+	f.changeTier(t, insertTierChangeTier(t, f.db, "50.00"))
+	var invoiceID, txID string
+	var cents int64
+	if err := f.db.QueryRow(`SELECT i.id::text,p.tx_id,i.presentment_amount_cents FROM purser.billing_invoices i JOIN purser.billing_payments p ON p.invoice_id=i.id WHERE i.tenant_id=$1 AND i.base_fee_period_start>$2 AND p.status='pending'`, f.tenantID, f.start).Scan(&invoiceID, &txID, &cents); err != nil {
+		t.Fatal(err)
+	}
+	if updated, err := f.service.updateInvoicePaymentStatus("stripe", txID, invoiceID, "confirmed", nil, providerSettlementEvidence{TenantID: f.tenantID, AmountCents: cents, Currency: "usd"}); err != nil || !updated {
+		t.Fatalf("confirm replacement: %v %v", updated, err)
+	}
+	paygID := uuid.NewString()
+	if _, err := f.db.Exec(`INSERT INTO purser.billing_tiers(id,tier_name,display_name,base_price,currency,tier_level,is_default_prepaid,metering_enabled) VALUES($1,'payg','PAYG',0,'EUR',0,true,false)`, paygID); err != nil {
+		t.Fatal(err)
+	}
+	closing, err := PreparePostpaidPhaseClose(t.Context(), f.db, f.jobs.logger, f.service, f.tenantID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if closed, err := commitSwitchToPrepaid(t.Context(), f.db, closing, f.tenantID, paygID); err != nil || !closed {
+		t.Fatalf("switch to prepaid: %v %v", closed, err)
+	}
+	switchAt, _ := subscriptionPeriod(t, f.db, f.tenantID)
+	id, err := purserdb.New(f.db).FindOverlappedBaseFeeInvoice(t.Context(), purserdb.FindOverlappedBaseFeeInvoiceParams{TenantID: f.tenantID, PeriodStart: switchAt.Add(time.Hour)})
+	if !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("old invoice available for a duplicate unused-fee credit: invoice=%s err=%v", id, err)
+	}
 }

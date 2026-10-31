@@ -45,8 +45,7 @@ LIMIT 1;
 
 -- name: UpdateTenantSubscriptionFields :execrows
 UPDATE purser.tenant_subscriptions
-SET tier_id = CASE WHEN sqlc.arg(set_tier_id)::boolean THEN sqlc.arg(tier_id)::text::uuid ELSE tier_id END,
-    billing_email = CASE WHEN sqlc.arg(set_billing_email)::boolean THEN sqlc.arg(billing_email)::text ELSE billing_email END,
+SET billing_email = CASE WHEN sqlc.arg(set_billing_email)::boolean THEN sqlc.arg(billing_email)::text ELSE billing_email END,
     payment_method = CASE WHEN sqlc.arg(set_payment_method)::boolean THEN sqlc.arg(payment_method)::text ELSE payment_method END,
     status = CASE WHEN sqlc.arg(set_status)::boolean THEN sqlc.arg(status)::text ELSE status END,
     billing_period_start = CASE WHEN sqlc.arg(set_billing_period_start)::boolean THEN sqlc.arg(billing_period_start) ELSE billing_period_start END,

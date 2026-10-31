@@ -132,10 +132,12 @@ type TenantRef struct {
 
 // Result reports per-row reconciler outcomes so callers can assert idempotency.
 type Result struct {
-	Created []string
-	Updated []string
-	Noop    []string
-	Deleted []string
+	// Deferred names declarations that require operator recovery.
+	Deferred []string
+	Created  []string
+	Updated  []string
+	Noop     []string
+	Deleted  []string
 }
 
 func (r Result) Total() int {

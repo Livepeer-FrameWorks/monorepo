@@ -102,6 +102,41 @@ eventually() {
   done
 }
 
+# monotonic_ms prints a clock unaffected by wall-clock adjustments.
+monotonic_ms() { python3 -c 'import time; print(time.monotonic_ns() // 1000000)'; }
+
+# within_bound_since <start-ms> <secs> <description> <command...> includes all
+# elapsed work after the captured response, as well as the successful attempt.
+within_bound_since() {
+  local deadline=$(($1 + $2 * 1000)) what=$3 now rc
+  shift 3
+  while true; do
+    now=$(monotonic_ms) || return 1
+    [ "$now" -lt "$deadline" ] || { fail "timed out: $what"; return 1; }
+    "$@"
+    rc=$?
+    now=$(monotonic_ms) || return 1
+    [ "$now" -lt "$deadline" ] || { fail "timed out: $what"; return 1; }
+    [ "$rc" = 0 ] && { pass "$what"; return 0; }
+    [ "$rc" = 2 ] && { fail "refused: $what"; return 1; }
+    sleep 0.1
+  done
+}
+
+# publisher_stopped_before_deadline rejects a session which could have ended
+# because its finite publisher lifetime elapsed, even if the session is gone.
+publisher_stopped_before_deadline() {
+  local deadline=$1 now rc
+  shift
+  now=$(monotonic_ms) || return 1
+  [ "$now" -lt "$deadline" ] || return 2
+  "$@"
+  rc=$?
+  now=$(monotonic_ms) || return 1
+  [ "$now" -lt "$deadline" ] || return 2
+  return "$rc"
+}
+
 # ---- fault injection ----------------------------------------------------------
 
 # stack_ctl <stop|start|restart|kill|pause|unpause> <service>...: acts on this
@@ -413,7 +448,7 @@ publish() {
   need ffmpeg || return 1
   local flvflags=no_metadata
   [ "${6:-}" = metadata ] && flvflags=+add_keyframe_index
-  ffmpeg -hide_banner -loglevel error -re \
+  ffmpeg -hide_banner -loglevel "${7:-error}" -re \
     -f lavfi -i "testsrc2=size=$3:rate=$4" -f lavfi -i 'sine=frequency=440:sample_rate=48000' \
     -t "$5" -c:v libx264 -preset veryfast -g $(($4 * 2)) -pix_fmt yuv420p -c:a aac -b:a 96k \
     -flvflags "$flvflags" -f flv "$1/$2" >"$STACK_STATE_DIR/publish-$2.log" 2>&1 &
@@ -778,6 +813,23 @@ for r in rows:
 saw_event() {
   webhook_events "$1" | awk -v t="$2" '$1==t && $3=="valid"{ $1=$2=$3=""; print substr($0,4) }' |
     while read -r data; do echo "$data" | jq -e "${3:-true}" >/dev/null 2>&1 && { echo hit; break; }; done | grep -q hit
+}
+
+# publish_refused checks durable admission history, including sessions which
+# ended before the observation. Publisher exit alone never proves refusal.
+publish_refused() {
+  local db=$1 internal=$2 rtmp=$3 key=$4 before after probe
+  before=$(pg "$db" "SELECT COUNT(*) FROM foghorn.ingest_sessions WHERE tenant_id='$STACK_TENANT_ID' AND stream_internal_name IN ('$internal','live+$internal')") || return 1
+  probe=$(publish "$rtmp" "$key" 320x240 10 60 "" debug) || return 1
+  for _ in $(seq 35); do
+    sleep 1
+    after=$(pg "$db" "SELECT COUNT(*) FROM foghorn.ingest_sessions WHERE tenant_id='$STACK_TENANT_ID' AND stream_internal_name IN ('$internal','live+$internal')") || { kill "$probe" 2>/dev/null; return 1; }
+    if [ "$after" != "$before" ]; then kill "$probe" 2>/dev/null; return 1; fi
+  done
+  kill "$probe" 2>/dev/null || true
+  # createStream succeeded before ffmpeg sends publish: an unreachable edge
+  # cannot satisfy this positive control for the refused attempt.
+  grep -q 'Sending publish command' "$STACK_STATE_DIR/publish-$key.log"
 }
 
 if [ -n "${STACK_ADAPTER_FILE:-}" ]; then

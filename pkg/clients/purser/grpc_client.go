@@ -602,8 +602,8 @@ func (c *GRPCClient) PromoteToPaid(ctx context.Context, tenantID, tierID string)
 	})
 }
 
-// ChangeBillingTier changes a postpaid tenant's tier. Upgrades apply
-// immediately; downgrades are scheduled by Purser for period close.
+// ChangeBillingTier starts a paid upgrade with a fresh month and unused-fee
+// credit, or schedules a downgrade. Accepted upgrades can await reconciliation.
 func (c *GRPCClient) ChangeBillingTier(ctx context.Context, tenantID, tierID string) (*purserpb.ChangeBillingTierResponse, error) {
 	return c.prepaid.ChangeBillingTier(ctx, &purserpb.ChangeBillingTierRequest{
 		TenantId: tenantID,
@@ -628,8 +628,9 @@ func (c *GRPCClient) AdminGetBillingGrant(ctx context.Context, tenantID string) 
 }
 
 // AdminRevokeBillingGrant removes a tenant's operator billing arrangement.
-func (c *GRPCClient) AdminRevokeBillingGrant(ctx context.Context, tenantID, reason string) (*purserpb.AdminBillingGrantResponse, error) {
-	return c.prepaid.AdminRevokeBillingGrant(ctx, &purserpb.AdminRevokeBillingGrantRequest{TenantId: tenantID, Reason: reason})
+func (c *GRPCClient) AdminRevokeBillingGrant(ctx context.Context, tenantID, reason, recoveryTier string) (*purserpb.AdminBillingGrantResponse, error) {
+	req := &purserpb.AdminRevokeBillingGrantRequest{TenantId: tenantID, Reason: reason, TierName: recoveryTier}
+	return c.prepaid.AdminRevokeBillingGrant(ctx, req)
 }
 
 // AdminRecordInvoicePayment records a payment received outside any provider.
@@ -817,4 +818,24 @@ func (c *GRPCClient) ReleaseCryptoSweep(ctx context.Context, req *purserpb.Relea
 
 func (c *GRPCClient) ResolveX402MutationResult(ctx context.Context, req *purserpb.ResolveX402MutationResultRequest) (*purserpb.ResolveX402MutationResultResponse, error) {
 	return c.cryptoSweep.ResolveX402MutationResult(ctx, req)
+}
+
+// AdminListBillingGrants reads active arrangements and optional retained grant history.
+func (c *GRPCClient) AdminListBillingGrants(ctx context.Context, req *purserpb.AdminListBillingGrantsRequest) (*purserpb.AdminListBillingGrantsResponse, error) {
+	return c.prepaid.AdminListBillingGrants(ctx, req)
+}
+
+// AdminListCheckoutRecovery reads outstanding provider work for a platform operator.
+func (c *GRPCClient) AdminListCheckoutRecovery(ctx context.Context, r *purserpb.AdminListCheckoutRecoveryRequest) (*purserpb.AdminListCheckoutRecoveryResponse, error) {
+	return c.prepaid.AdminListCheckoutRecovery(ctx, r)
+}
+
+// AdminRecoverCheckout runs immediate, durable recovery of a tenant-owned attempt.
+func (c *GRPCClient) AdminRecoverCheckout(ctx context.Context, r *purserpb.AdminRecoverCheckoutRequest) (*purserpb.AdminRecoverCheckoutResponse, error) {
+	return c.prepaid.AdminRecoverCheckout(ctx, r)
+}
+
+// AdminRecoverTierUpgrade inspects or requests recovery of one accepted upgrade.
+func (c *GRPCClient) AdminRecoverTierUpgrade(ctx context.Context, r *purserpb.AdminRecoverTierUpgradeRequest) (*purserpb.AdminRecoverTierUpgradeResponse, error) {
+	return c.prepaid.AdminRecoverTierUpgrade(ctx, r)
 }

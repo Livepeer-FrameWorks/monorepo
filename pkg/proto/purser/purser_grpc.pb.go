@@ -2070,8 +2070,12 @@ const (
 	PrepaidService_PromoteToPaid_FullMethodName                 = "/purser.PrepaidService/PromoteToPaid"
 	PrepaidService_ChangeBillingTier_FullMethodName             = "/purser.PrepaidService/ChangeBillingTier"
 	PrepaidService_AdminAssignTier_FullMethodName               = "/purser.PrepaidService/AdminAssignTier"
+	PrepaidService_AdminListCheckoutRecovery_FullMethodName     = "/purser.PrepaidService/AdminListCheckoutRecovery"
+	PrepaidService_AdminRecoverCheckout_FullMethodName          = "/purser.PrepaidService/AdminRecoverCheckout"
+	PrepaidService_AdminRecoverTierUpgrade_FullMethodName       = "/purser.PrepaidService/AdminRecoverTierUpgrade"
 	PrepaidService_AdminSetBillingGrant_FullMethodName          = "/purser.PrepaidService/AdminSetBillingGrant"
 	PrepaidService_AdminGetBillingGrant_FullMethodName          = "/purser.PrepaidService/AdminGetBillingGrant"
+	PrepaidService_AdminListBillingGrants_FullMethodName        = "/purser.PrepaidService/AdminListBillingGrants"
 	PrepaidService_AdminRevokeBillingGrant_FullMethodName       = "/purser.PrepaidService/AdminRevokeBillingGrant"
 	PrepaidService_AdminRecordInvoicePayment_FullMethodName     = "/purser.PrepaidService/AdminRecordInvoicePayment"
 	PrepaidService_AdminListPrepaidDoubleCharges_FullMethodName = "/purser.PrepaidService/AdminListPrepaidDoubleCharges"
@@ -2122,9 +2126,9 @@ type PrepaidServiceClient interface {
 	// default prepaid tier); falls back to is_default_postpaid when empty.
 	// Re-evaluates cluster access. Existing prepaid balance is carried forward.
 	PromoteToPaid(ctx context.Context, in *PromoteToPaidRequest, opts ...grpc.CallOption) (*PromoteToPaidResponse, error)
-	// Change the postpaid billing tier. Upgrades apply immediately and reconcile
-	// cluster access; downgrades stage pending_tier_id/pending_effective_at and
-	// are applied by the billing-close job after the current invoice clears.
+	// Change the postpaid billing tier. Upgrades close old usage, start a fresh
+	// month and credit the unused paid fee; unresolved provider or metering work
+	// returns a pending upgrade. Downgrades apply at the current period's end.
 	// Prepaid → postpaid transition stays on PromoteToPaid.
 	ChangeBillingTier(ctx context.Context, in *ChangeBillingTierRequest, opts ...grpc.CallOption) (*ChangeBillingTierResponse, error)
 	// Operator assignment of a tenant's tier and billing model. Requires service
@@ -2133,12 +2137,20 @@ type PrepaidServiceClient interface {
 	// self-serve paths enforce; the tier must be active and support the billing
 	// model. Records a billing.subscription_updated event carrying the reason.
 	AdminAssignTier(ctx context.Context, in *AdminAssignTierRequest, opts ...grpc.CallOption) (*AdminAssignTierResponse, error)
+	// Lists outstanding provider work without exposing raw webhook payloads. Platform operators only.
+	AdminListCheckoutRecovery(ctx context.Context, in *AdminListCheckoutRecoveryRequest, opts ...grpc.CallOption) (*AdminListCheckoutRecoveryResponse, error)
+	// Previews one tenant checkout; confirmed requests durably reconcile it. Platform operators only.
+	AdminRecoverCheckout(ctx context.Context, in *AdminRecoverCheckoutRequest, opts ...grpc.CallOption) (*AdminRecoverCheckoutResponse, error)
+	// Inspect a paid upgrade or cancel its unapplied request without starting a purchase.
+	AdminRecoverTierUpgrade(ctx context.Context, in *AdminRecoverTierUpgradeRequest, opts ...grpc.CallOption) (*AdminRecoverTierUpgradeResponse, error)
 	// Operator billing arrangement for one tenant: a base fee in place of the
 	// tier's, usage rated at zero, invoices the operator collects by hand, and
 	// an optional expiry. It replaces the self-serve requirement that a paid
 	// postpaid tier has Stripe or Mollie collection. Platform operators only.
 	AdminSetBillingGrant(ctx context.Context, in *AdminSetBillingGrantRequest, opts ...grpc.CallOption) (*AdminBillingGrantResponse, error)
 	AdminGetBillingGrant(ctx context.Context, in *AdminGetBillingGrantRequest, opts ...grpc.CallOption) (*AdminBillingGrantResponse, error)
+	// Lists current and archived operator arrangements. Requires a platform-operator JWT.
+	AdminListBillingGrants(ctx context.Context, in *AdminListBillingGrantsRequest, opts ...grpc.CallOption) (*AdminListBillingGrantsResponse, error)
 	AdminRevokeBillingGrant(ctx context.Context, in *AdminRevokeBillingGrantRequest, opts ...grpc.CallOption) (*AdminBillingGrantResponse, error)
 	// Records a payment the operator received outside any provider (a bank
 	// transfer) for the full open balance of an invoice, which marks it paid.
@@ -2328,6 +2340,36 @@ func (c *prepaidServiceClient) AdminAssignTier(ctx context.Context, in *AdminAss
 	return out, nil
 }
 
+func (c *prepaidServiceClient) AdminListCheckoutRecovery(ctx context.Context, in *AdminListCheckoutRecoveryRequest, opts ...grpc.CallOption) (*AdminListCheckoutRecoveryResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AdminListCheckoutRecoveryResponse)
+	err := c.cc.Invoke(ctx, PrepaidService_AdminListCheckoutRecovery_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *prepaidServiceClient) AdminRecoverCheckout(ctx context.Context, in *AdminRecoverCheckoutRequest, opts ...grpc.CallOption) (*AdminRecoverCheckoutResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AdminRecoverCheckoutResponse)
+	err := c.cc.Invoke(ctx, PrepaidService_AdminRecoverCheckout_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *prepaidServiceClient) AdminRecoverTierUpgrade(ctx context.Context, in *AdminRecoverTierUpgradeRequest, opts ...grpc.CallOption) (*AdminRecoverTierUpgradeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AdminRecoverTierUpgradeResponse)
+	err := c.cc.Invoke(ctx, PrepaidService_AdminRecoverTierUpgrade_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *prepaidServiceClient) AdminSetBillingGrant(ctx context.Context, in *AdminSetBillingGrantRequest, opts ...grpc.CallOption) (*AdminBillingGrantResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(AdminBillingGrantResponse)
@@ -2342,6 +2384,16 @@ func (c *prepaidServiceClient) AdminGetBillingGrant(ctx context.Context, in *Adm
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(AdminBillingGrantResponse)
 	err := c.cc.Invoke(ctx, PrepaidService_AdminGetBillingGrant_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *prepaidServiceClient) AdminListBillingGrants(ctx context.Context, in *AdminListBillingGrantsRequest, opts ...grpc.CallOption) (*AdminListBillingGrantsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AdminListBillingGrantsResponse)
+	err := c.cc.Invoke(ctx, PrepaidService_AdminListBillingGrants_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -2423,9 +2475,9 @@ type PrepaidServiceServer interface {
 	// default prepaid tier); falls back to is_default_postpaid when empty.
 	// Re-evaluates cluster access. Existing prepaid balance is carried forward.
 	PromoteToPaid(context.Context, *PromoteToPaidRequest) (*PromoteToPaidResponse, error)
-	// Change the postpaid billing tier. Upgrades apply immediately and reconcile
-	// cluster access; downgrades stage pending_tier_id/pending_effective_at and
-	// are applied by the billing-close job after the current invoice clears.
+	// Change the postpaid billing tier. Upgrades close old usage, start a fresh
+	// month and credit the unused paid fee; unresolved provider or metering work
+	// returns a pending upgrade. Downgrades apply at the current period's end.
 	// Prepaid → postpaid transition stays on PromoteToPaid.
 	ChangeBillingTier(context.Context, *ChangeBillingTierRequest) (*ChangeBillingTierResponse, error)
 	// Operator assignment of a tenant's tier and billing model. Requires service
@@ -2434,12 +2486,20 @@ type PrepaidServiceServer interface {
 	// self-serve paths enforce; the tier must be active and support the billing
 	// model. Records a billing.subscription_updated event carrying the reason.
 	AdminAssignTier(context.Context, *AdminAssignTierRequest) (*AdminAssignTierResponse, error)
+	// Lists outstanding provider work without exposing raw webhook payloads. Platform operators only.
+	AdminListCheckoutRecovery(context.Context, *AdminListCheckoutRecoveryRequest) (*AdminListCheckoutRecoveryResponse, error)
+	// Previews one tenant checkout; confirmed requests durably reconcile it. Platform operators only.
+	AdminRecoverCheckout(context.Context, *AdminRecoverCheckoutRequest) (*AdminRecoverCheckoutResponse, error)
+	// Inspect a paid upgrade or cancel its unapplied request without starting a purchase.
+	AdminRecoverTierUpgrade(context.Context, *AdminRecoverTierUpgradeRequest) (*AdminRecoverTierUpgradeResponse, error)
 	// Operator billing arrangement for one tenant: a base fee in place of the
 	// tier's, usage rated at zero, invoices the operator collects by hand, and
 	// an optional expiry. It replaces the self-serve requirement that a paid
 	// postpaid tier has Stripe or Mollie collection. Platform operators only.
 	AdminSetBillingGrant(context.Context, *AdminSetBillingGrantRequest) (*AdminBillingGrantResponse, error)
 	AdminGetBillingGrant(context.Context, *AdminGetBillingGrantRequest) (*AdminBillingGrantResponse, error)
+	// Lists current and archived operator arrangements. Requires a platform-operator JWT.
+	AdminListBillingGrants(context.Context, *AdminListBillingGrantsRequest) (*AdminListBillingGrantsResponse, error)
 	AdminRevokeBillingGrant(context.Context, *AdminRevokeBillingGrantRequest) (*AdminBillingGrantResponse, error)
 	// Records a payment the operator received outside any provider (a bank
 	// transfer) for the full open balance of an invoice, which marks it paid.
@@ -2510,11 +2570,23 @@ func (UnimplementedPrepaidServiceServer) ChangeBillingTier(context.Context, *Cha
 func (UnimplementedPrepaidServiceServer) AdminAssignTier(context.Context, *AdminAssignTierRequest) (*AdminAssignTierResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method AdminAssignTier not implemented")
 }
+func (UnimplementedPrepaidServiceServer) AdminListCheckoutRecovery(context.Context, *AdminListCheckoutRecoveryRequest) (*AdminListCheckoutRecoveryResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AdminListCheckoutRecovery not implemented")
+}
+func (UnimplementedPrepaidServiceServer) AdminRecoverCheckout(context.Context, *AdminRecoverCheckoutRequest) (*AdminRecoverCheckoutResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AdminRecoverCheckout not implemented")
+}
+func (UnimplementedPrepaidServiceServer) AdminRecoverTierUpgrade(context.Context, *AdminRecoverTierUpgradeRequest) (*AdminRecoverTierUpgradeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AdminRecoverTierUpgrade not implemented")
+}
 func (UnimplementedPrepaidServiceServer) AdminSetBillingGrant(context.Context, *AdminSetBillingGrantRequest) (*AdminBillingGrantResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method AdminSetBillingGrant not implemented")
 }
 func (UnimplementedPrepaidServiceServer) AdminGetBillingGrant(context.Context, *AdminGetBillingGrantRequest) (*AdminBillingGrantResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method AdminGetBillingGrant not implemented")
+}
+func (UnimplementedPrepaidServiceServer) AdminListBillingGrants(context.Context, *AdminListBillingGrantsRequest) (*AdminListBillingGrantsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AdminListBillingGrants not implemented")
 }
 func (UnimplementedPrepaidServiceServer) AdminRevokeBillingGrant(context.Context, *AdminRevokeBillingGrantRequest) (*AdminBillingGrantResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method AdminRevokeBillingGrant not implemented")
@@ -2852,6 +2924,60 @@ func _PrepaidService_AdminAssignTier_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PrepaidService_AdminListCheckoutRecovery_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AdminListCheckoutRecoveryRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PrepaidServiceServer).AdminListCheckoutRecovery(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PrepaidService_AdminListCheckoutRecovery_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PrepaidServiceServer).AdminListCheckoutRecovery(ctx, req.(*AdminListCheckoutRecoveryRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PrepaidService_AdminRecoverCheckout_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AdminRecoverCheckoutRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PrepaidServiceServer).AdminRecoverCheckout(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PrepaidService_AdminRecoverCheckout_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PrepaidServiceServer).AdminRecoverCheckout(ctx, req.(*AdminRecoverCheckoutRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PrepaidService_AdminRecoverTierUpgrade_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AdminRecoverTierUpgradeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PrepaidServiceServer).AdminRecoverTierUpgrade(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PrepaidService_AdminRecoverTierUpgrade_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PrepaidServiceServer).AdminRecoverTierUpgrade(ctx, req.(*AdminRecoverTierUpgradeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _PrepaidService_AdminSetBillingGrant_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(AdminSetBillingGrantRequest)
 	if err := dec(in); err != nil {
@@ -2884,6 +3010,24 @@ func _PrepaidService_AdminGetBillingGrant_Handler(srv interface{}, ctx context.C
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(PrepaidServiceServer).AdminGetBillingGrant(ctx, req.(*AdminGetBillingGrantRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PrepaidService_AdminListBillingGrants_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AdminListBillingGrantsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PrepaidServiceServer).AdminListBillingGrants(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PrepaidService_AdminListBillingGrants_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PrepaidServiceServer).AdminListBillingGrants(ctx, req.(*AdminListBillingGrantsRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -3018,12 +3162,28 @@ var PrepaidService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _PrepaidService_AdminAssignTier_Handler,
 		},
 		{
+			MethodName: "AdminListCheckoutRecovery",
+			Handler:    _PrepaidService_AdminListCheckoutRecovery_Handler,
+		},
+		{
+			MethodName: "AdminRecoverCheckout",
+			Handler:    _PrepaidService_AdminRecoverCheckout_Handler,
+		},
+		{
+			MethodName: "AdminRecoverTierUpgrade",
+			Handler:    _PrepaidService_AdminRecoverTierUpgrade_Handler,
+		},
+		{
 			MethodName: "AdminSetBillingGrant",
 			Handler:    _PrepaidService_AdminSetBillingGrant_Handler,
 		},
 		{
 			MethodName: "AdminGetBillingGrant",
 			Handler:    _PrepaidService_AdminGetBillingGrant_Handler,
+		},
+		{
+			MethodName: "AdminListBillingGrants",
+			Handler:    _PrepaidService_AdminListBillingGrants_Handler,
 		},
 		{
 			MethodName: "AdminRevokeBillingGrant",

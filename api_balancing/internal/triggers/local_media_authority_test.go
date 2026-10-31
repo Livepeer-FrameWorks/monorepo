@@ -1087,3 +1087,11 @@ func TestDVRStreamSourceUsesMarkedLocalAuthorityWithoutControlPlane(t *testing.T
 		t.Fatal(err)
 	}
 }
+
+func TestExpiredGrantDenialDoesNotClaimNegativeBalance(t *testing.T) {
+	tenant := localauthority.TenantSnapshot{Ready: true, Authority: &mediaauthoritypb.TenantAuthority{TenantId: "tenant", Lifecycle: mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE, BillingDecision: mediaauthoritypb.TenantBillingDecision_TENANT_BILLING_DECISION_PAYMENT_REQUIRED, DecisionReason: "operator_grant_expired"}}
+	billing := localBillingStatus(tenant)
+	if billing.IsBalanceNegative || billing.DeniedReason != "operator_grant_expired" || billing.State != BillingStatusDenied {
+		t.Fatalf("expired grant has misleading billing status: %+v", billing)
+	}
+}

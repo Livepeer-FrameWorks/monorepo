@@ -62,4 +62,5 @@ WHERE CASE sqlc.arg(identifier_kind)::text
     WHEN 'stream_key' THEN s.stream_key = sqlc.arg(identifier_value)::text
     ELSE false
 END
+AND NOT EXISTS (SELECT 1 FROM commodore.tenant_account_states account WHERE account.tenant_id=s.tenant_id AND account.closed_at IS NOT NULL)
 AND (sqlc.arg(identifier_kind)::text <> 'stream_key' OR s.deleted_at IS NULL);

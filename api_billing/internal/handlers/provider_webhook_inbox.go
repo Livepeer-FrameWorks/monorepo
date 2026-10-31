@@ -8,20 +8,26 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/google/uuid"
-
 	"frameworks/api_billing/internal/database/purserdb"
+	billingmollie "frameworks/api_billing/internal/mollie"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/outbox"
+	"github.com/google/uuid"
 )
 
 type providerWebhookPayload struct {
-	Provider string
-	Headers  map[string]string
-	Body     []byte
+	Provider   string
+	EventKey   string
+	ReceivedAt time.Time
+	Headers    map[string]string
+	Body       []byte
 }
 
-type providerWebhookInboxStore struct{ db *sql.DB }
+type providerWebhookInboxStore struct {
+	db      *sql.DB
+	metrics *PurserMetrics
+}
 
 type providerWebhookDispatcher struct{ service *Service }
 
@@ -84,7 +90,7 @@ func (s *providerWebhookInboxStore) ClaimBatch(ctx context.Context, batchSize in
 			}
 			claims = append(claims, outbox.Claim[providerWebhookPayload]{
 				ID: webhookInboxClaimID(item.ID.String()), Attempts: int(item.Attempts), LeaseToken: leaseToken,
-				Payload: providerWebhookPayload{Provider: item.Provider, Headers: headers, Body: item.RawPayload},
+				Payload: providerWebhookPayload{Provider: item.Provider, EventKey: item.EventKey, ReceivedAt: item.CreatedAt, Headers: headers, Body: item.RawPayload},
 			})
 		}
 		return nil
@@ -133,9 +139,10 @@ func (s *providerWebhookInboxStore) fail(ctx context.Context, id string, cause e
 	}
 	result, err := purserdb.New(s.db).FailProviderWebhook(ctx, purserdb.FailProviderWebhookParams{
 		BackoffMilliseconds: backoff.Milliseconds(),
-		LastError:           sql.NullString{String: message, Valid: true},
+		LastError:           message,
 		ID:                  inboxID,
 		LeaseToken:          leaseToken,
+		Waiting:             errors.Is(cause, ErrAwaitingProviderSettlement) || errors.Is(cause, billingmollie.ErrPaymentSettling),
 	})
 	return requireWebhookInboxUpdate(result, err)
 }
@@ -158,6 +165,85 @@ func (d *providerWebhookDispatcher) Dispatch(ctx context.Context, payload provid
 	if d.service == nil {
 		return []string{"reconciliation"}, errors.New("provider webhook service is not configured")
 	}
+	if payload.Provider == "refund_settlement" {
+		var plan billing.RefundSettlement
+		if err := json.Unmarshal(payload.Body, &plan); err != nil {
+			return nil, err
+		}
+		expected := "refund-settlement:" + plan.Provider + ":" + plan.ReferenceKind + ":" + plan.ReferenceID + ":" + plan.PaymentID
+		if plan.PaymentID == "" || payload.EventKey != expected {
+			return nil, errors.New("invalid internal refund settlement record")
+		}
+		if err := d.service.settlePurchaseRefund(ctx, plan); err != nil {
+			return []string{"refund_settlement"}, err
+		}
+		return nil, nil
+	}
+	if payload.Provider == "tenant_suspension" {
+		var suspension struct {
+			TenantID string `json:"tenant_id"`
+		}
+		if err := json.Unmarshal(payload.Body, &suspension); err != nil {
+			return nil, err
+		}
+		if suspension.TenantID == "" || payload.EventKey != "tenant-suspension:"+suspension.TenantID {
+			return nil, errors.New("invalid internal suspension record")
+		}
+		if d.service.stopSuspendedTenantStreams == nil {
+			return []string{"tenant_suspension"}, errors.New("stream suspension retry is not configured")
+		}
+		if err := d.service.stopSuspendedTenantStreams(ctx, suspension.TenantID); err != nil {
+			return []string{"tenant_suspension"}, err
+		}
+		return nil, nil
+	}
+	if payload.Provider == "tier_upgrade" {
+		var upgrade struct {
+			ID       string `json:"id"`
+			TenantID string `json:"tenant_id"`
+		}
+		if err := json.Unmarshal(payload.Body, &upgrade); err != nil {
+			return nil, err
+		}
+		if upgrade.ID == "" || upgrade.TenantID == "" || payload.EventKey != "tier-upgrade:"+upgrade.ID {
+			return nil, errors.New("invalid internal tier upgrade record")
+		}
+		_, err := d.service.ProcessTierUpgrade(ctx, upgrade.TenantID, upgrade.ID)
+		if err == nil || errors.Is(err, billing.ErrTierUpgradeRejected) {
+			return nil, nil
+		}
+		return []string{"tier_upgrade"}, err
+	}
+	if payload.Provider == "tenant_closure" {
+		var closure struct {
+			TenantID string `json:"tenant_id"`
+		}
+		if err := json.Unmarshal(payload.Body, &closure); err != nil {
+			return nil, err
+		}
+		if closure.TenantID == "" || payload.EventKey != "tenant-closure:"+closure.TenantID {
+			return nil, errors.New("invalid tenant billing closure record")
+		}
+		if err := d.service.closeTenantBilling(ctx, closure.TenantID); err != nil {
+			return []string{"tenant_closure"}, err
+		}
+		return nil, nil
+	}
+	var expiry checkoutReservationExpiry
+	if payload.Provider == "checkout_recovery" {
+		if err := json.Unmarshal(payload.Body, &expiry); err != nil {
+			return nil, err
+		}
+		if expiry.IntentID == "" || payload.EventKey != "checkout-expiry:"+expiry.IntentID {
+			return nil, errors.New("invalid internal checkout recovery record")
+		}
+		if recoveryErr := d.service.expireCheckoutReservation(ctx, expiry); recoveryErr != nil {
+			return []string{"checkout_recovery"}, recoveryErr
+		}
+		return nil, d.service.finishCheckoutRecoveryAudits(ctx, expiry.TenantID, expiry.IntentID)
+	}
+
+	ctx = context.WithValue(ctx, providerReceiptTimeKey{}, payload.ReceivedAt)
 	var ok bool
 	var message string
 	switch payload.Provider {
@@ -186,14 +272,84 @@ func (d *providerWebhookDispatcher) Dispatch(ctx context.Context, payload provid
 }
 
 func (jm *JobManager) runProviderWebhookInbox(ctx context.Context) {
+	var metrics *PurserMetrics
+	if jm.billing != nil {
+		metrics = jm.billing.metrics
+	}
+
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	store := &providerWebhookInboxStore{db: jm.db, metrics: metrics}
+	observed := make(chan struct{})
+	go func() { defer close(observed); store.observePeriodically(runCtx) }()
 	worker := &outbox.Worker[providerWebhookPayload]{
-		Config: outbox.Config{
-			BaseBackoff: time.Minute, MaxBackoff: 6 * time.Hour, BatchSize: 50,
-			PollPeriod: 5 * time.Second, Lease: 2 * time.Minute,
-			SettleTimeout: 30 * time.Second, AlertAfterAttempts: 5,
-		},
-		Store: &providerWebhookInboxStore{db: jm.db}, Dispatcher: &providerWebhookDispatcher{service: jm.billing},
+		Config: providerWebhookWorkerConfig(),
+		Store:  store, Dispatcher: &providerWebhookDispatcher{service: jm.billing},
 		Logger: jm.logger, AlertLabel: "provider webhook inbox",
 	}
-	worker.Run(ctx)
+	worker.Run(runCtx)
+	cancel()
+	<-observed
+}
+
+type providerReceiptTimeKey struct{}
+
+// providerReceiptTime fixes the metering boundary at the first durable webhook receipt.
+// A held metering anomaly keeps this boundary pending under PurserProviderWebhookInboxStuck.
+func providerReceiptTime(ctx context.Context) time.Time {
+	if at, ok := ctx.Value(providerReceiptTimeKey{}).(time.Time); ok && !at.IsZero() {
+		return at
+	}
+	return time.Now()
+}
+
+// observeFailures retains the last good count if the inventory cannot be read.
+func (s *providerWebhookInboxStore) observeFailures(ctx context.Context) {
+	if s.metrics == nil || s.metrics.ProviderWebhookInboxFailures == nil {
+		return
+	}
+	observeCtx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	count, err := purserdb.New(s.db).ProviderWebhookInboxRepeatedFailures(observeCtx)
+	if err != nil {
+		if s.metrics.ProviderWebhookInboxReadFailures != nil {
+			s.metrics.ProviderWebhookInboxReadFailures.WithLabelValues().Inc()
+		}
+		return
+	}
+	s.metrics.ProviderWebhookInboxFailures.WithLabelValues().Set(float64(count))
+}
+
+// observePeriodically keeps inventory reads off the callback claim/activation path.
+func (s *providerWebhookInboxStore) observePeriodically(ctx context.Context) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for ctx.Err() == nil {
+		discoverCtx, discoverCancel := context.WithTimeout(ctx, time.Second)
+		discoverErr := purserdb.New(s.db).EnqueueUnresolvedCheckoutRecovery(discoverCtx)
+		discoverCancel()
+		if discoverErr != nil {
+			if s.metrics != nil && s.metrics.ProviderWebhookInboxReadFailures != nil {
+				s.metrics.ProviderWebhookInboxReadFailures.WithLabelValues().Inc()
+			}
+		}
+		s.observeFailures(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+// DefersFailedClaims confirms that next_attempt_at excludes failed claims from the current drain.
+func (*providerWebhookInboxStore) DefersFailedClaims() bool { return true }
+
+func providerWebhookWorkerConfig() outbox.Config {
+	return outbox.Config{
+		// Dispatch is sequential: claim one bounded call so settlement fits the lease.
+		BaseBackoff: time.Minute, MaxBackoff: 6 * time.Hour, BatchSize: 1,
+		PollPeriod: 5 * time.Second, Lease: 2 * time.Minute,
+		SettleTimeout: 30 * time.Second,
+	}
 }

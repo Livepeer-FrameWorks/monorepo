@@ -35,7 +35,7 @@ type Sections struct {
 //  4. customer_billing — resolves tenant alias → UUID via the supplied
 //     QMBootstrapClient (bootstrap calls Quartermaster's ResolveTenantAliases gRPC).
 //     Emits PostCommitOps for cross-service entitlement work.
-func Reconcile(ctx context.Context, exec DBTX, desired PurserSection, embedded []CatalogTier, resolver QMBootstrapClient) (*Sections, error) {
+func Reconcile(ctx context.Context, exec DBTX, desired PurserSection, embedded []CatalogTier, resolver QMBootstrapClient, prepared map[string]*PreparedCustomerGrant) (*Sections, error) {
 	if exec == nil {
 		return nil, errors.New("Reconcile: nil executor")
 	}
@@ -67,7 +67,7 @@ func Reconcile(ctx context.Context, exec DBTX, desired PurserSection, embedded [
 		if resolver == nil {
 			return out, errors.New("customer_billing: declared but no QMBootstrapClient supplied")
 		}
-		cbRes, post, err := ReconcileCustomerBilling(ctx, exec, desired.CustomerBilling, resolver)
+		cbRes, post, err := ReconcileCustomerBilling(ctx, exec, desired.CustomerBilling, resolver, prepared)
 		out.CustomerBilling = cbRes
 		out.PostCommit = post
 		if err != nil {

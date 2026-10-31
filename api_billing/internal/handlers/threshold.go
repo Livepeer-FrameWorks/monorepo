@@ -112,6 +112,9 @@ func (e *ThresholdEnforcer) suspendTenantForBalance(ctx context.Context, tenantI
 		if suspendErr != nil || rowsAffected == 0 {
 			return suspendErr
 		}
+		if err := purserdb.New(tx).EnqueueSuspendedTenantStop(ctx, tenantID); err != nil {
+			return err
+		}
 		return billingevents.NewAndEnqueue(ctx, tx, tenantID, tenantID, &publicv1.AccountSuspended{
 			Reason: publicv1.SuspensionReason_SUSPENSION_REASON_BALANCE_EXHAUSTED,
 		}, events.Actor{})
@@ -143,7 +146,7 @@ func (e *ThresholdEnforcer) suspendTenantForBalance(ctx context.Context, tenantI
 		defer cancel()
 		resp, err := e.commodoreClient.TerminateTenantStreams(terminateCtx, tenantID, "insufficient_balance")
 		if err != nil {
-			e.logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to terminate tenant streams on suspension")
+			e.logger.WithError(err).WithFields(logging.Fields{"tenant_id": tenantID, "streams_terminated": resp.GetStreamsTerminated(), "sessions_terminated": resp.GetSessionsTerminated(), "stream_names": resp.GetStreamNames()}).Error("Tenant suspension stream termination failed on some nodes")
 		} else {
 			e.logger.WithFields(logging.Fields{
 				"tenant_id":           tenantID,

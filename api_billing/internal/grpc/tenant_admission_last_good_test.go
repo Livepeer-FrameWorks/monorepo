@@ -24,8 +24,8 @@ func admissionRows() *sqlmock.Rows {
 	return sqlmock.NewRows([]string{
 		"billing_model", "subscription_status", "balance_cents", "reserved_balance_cents",
 		"payment_method", "stripe_subscription_id", "mollie_subscription_id", "tier_name", "tier_level",
-		"stripe_customer_id", "has_valid_mollie_mandate", "grant_collection", "grant_waive_usage", "effective_base_price",
-	}).AddRow("prepaid", "active", int64(5000), int64(100), nil, nil, nil, "pro", int32(3), nil, false, nil, false, "0.00")
+		"stripe_customer_id", "has_valid_mollie_mandate", "grant_collection", "grant_waive_usage", "effective_base_price", "grant_expires_at",
+	}).AddRow("prepaid", "active", int64(5000), int64(100), nil, nil, nil, "pro", int32(3), nil, false, nil, false, "0.00", nil)
 }
 
 func newAdmissionServer(t *testing.T) (*PurserServer, sqlmock.Sqlmock, *logrustest.Hook) {

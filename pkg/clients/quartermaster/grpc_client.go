@@ -1104,3 +1104,9 @@ func (c *GRPCClient) GetServiceHealth(ctx context.Context, serviceID string) (*q
 		ServiceId: serviceID,
 	})
 }
+
+// DeleteTenant deactivates the tenant and durably queues its domain teardown.
+func (c *GRPCClient) DeleteTenant(ctx context.Context, tenantID string) error {
+	_, err := c.tenant.DeleteTenant(ctx, &quartermasterpb.DeleteTenantRequest{TenantId: tenantID})
+	return err
+}

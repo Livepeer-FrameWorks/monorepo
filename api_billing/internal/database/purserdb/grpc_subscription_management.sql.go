@@ -11,34 +11,6 @@ import (
 	"encoding/json"
 )
 
-const applyTenantTierUpgrade = `-- name: ApplyTenantTierUpgrade :exec
-UPDATE purser.tenant_subscriptions
-SET tier_id = $1::text::uuid,
-    pending_tier_id = NULL, pending_effective_at = NULL, pending_reason = NULL,
-    billing_period_start = COALESCE(billing_period_start, $2),
-    billing_period_end = COALESCE(billing_period_end, $3),
-    next_billing_date = COALESCE(next_billing_date, $3),
-    updated_at = NOW()
-WHERE tenant_id = $4::text::uuid
-`
-
-type ApplyTenantTierUpgradeParams struct {
-	TierID      string       `db:"tier_id" json:"tier_id"`
-	PeriodStart sql.NullTime `db:"period_start" json:"period_start"`
-	PeriodEnd   sql.NullTime `db:"period_end" json:"period_end"`
-	TenantID    string       `db:"tenant_id" json:"tenant_id"`
-}
-
-func (q *Queries) ApplyTenantTierUpgrade(ctx context.Context, arg ApplyTenantTierUpgradeParams) error {
-	_, err := q.db.ExecContext(ctx, applyTenantTierUpgrade,
-		arg.TierID,
-		arg.PeriodStart,
-		arg.PeriodEnd,
-		arg.TenantID,
-	)
-	return err
-}
-
 const assignTenantSubscriptionTier = `-- name: AssignTenantSubscriptionTier :execrows
 UPDATE purser.tenant_subscriptions
 SET tier_id = $1::text::uuid,
@@ -125,6 +97,36 @@ func (q *Queries) GetCanonicalPromotedSubscription(ctx context.Context, arg GetC
 		&i.TierLevel,
 		&i.TierName,
 		&i.BalanceCents,
+	)
+	return i, err
+}
+
+const getFallbackTierForOperatorGrant = `-- name: GetFallbackTierForOperatorGrant :one
+SELECT id::text AS id, tier_name, COALESCE(tier_level, 0)::integer AS tier_level,
+       COALESCE(is_active, true)::boolean AS is_active,
+       COALESCE(is_default_prepaid, false)::boolean AS is_default_prepaid
+FROM purser.billing_tiers
+WHERE tier_name = $1
+FOR NO KEY UPDATE
+`
+
+type GetFallbackTierForOperatorGrantRow struct {
+	ID               string `db:"id" json:"id"`
+	TierName         string `db:"tier_name" json:"tier_name"`
+	TierLevel        int32  `db:"tier_level" json:"tier_level"`
+	IsActive         bool   `db:"is_active" json:"is_active"`
+	IsDefaultPrepaid bool   `db:"is_default_prepaid" json:"is_default_prepaid"`
+}
+
+func (q *Queries) GetFallbackTierForOperatorGrant(ctx context.Context, tierName string) (GetFallbackTierForOperatorGrantRow, error) {
+	row := q.db.QueryRowContext(ctx, getFallbackTierForOperatorGrant, tierName)
+	var i GetFallbackTierForOperatorGrantRow
+	err := row.Scan(
+		&i.ID,
+		&i.TierName,
+		&i.TierLevel,
+		&i.IsActive,
+		&i.IsDefaultPrepaid,
 	)
 	return i, err
 }
@@ -259,6 +261,7 @@ SELECT id::text AS id, tier_name, COALESCE(tier_level, 0)::integer AS tier_level
        COALESCE(is_default_prepaid, false)::boolean AS is_default_prepaid
 FROM purser.billing_tiers
 WHERE tier_name = $1
+FOR SHARE
 `
 
 type GetTierByNameForOperatorAssignmentRow struct {
@@ -303,6 +306,47 @@ func (q *Queries) GetTierForBillingChange(ctx context.Context, tierID string) (G
 		&i.TierName,
 		&i.IsDefaultPrepaid,
 		&i.IsActive,
+	)
+	return i, err
+}
+
+const lockTenantSubscriptionForGrantExpiry = `-- name: LockTenantSubscriptionForGrantExpiry :one
+SELECT subscription.id::text AS subscription_id, subscription.tier_id::text AS tier_id,
+       tier.tier_name, COALESCE(tier.tier_level, 0)::integer AS tier_level,
+       subscription.billing_model, subscription.status,
+       (subscription.pending_tier_id IS NOT NULL)::boolean AS has_pending_tier,
+       subscription.billing_period_start, subscription.billing_period_end
+FROM purser.tenant_subscriptions subscription
+JOIN purser.billing_tiers tier ON tier.id = subscription.tier_id
+WHERE subscription.tenant_id = $1::text::uuid
+FOR UPDATE OF subscription SKIP LOCKED
+`
+
+type LockTenantSubscriptionForGrantExpiryRow struct {
+	SubscriptionID     string       `db:"subscription_id" json:"subscription_id"`
+	TierID             string       `db:"tier_id" json:"tier_id"`
+	TierName           string       `db:"tier_name" json:"tier_name"`
+	TierLevel          int32        `db:"tier_level" json:"tier_level"`
+	BillingModel       string       `db:"billing_model" json:"billing_model"`
+	Status             string       `db:"status" json:"status"`
+	HasPendingTier     bool         `db:"has_pending_tier" json:"has_pending_tier"`
+	BillingPeriodStart sql.NullTime `db:"billing_period_start" json:"billing_period_start"`
+	BillingPeriodEnd   sql.NullTime `db:"billing_period_end" json:"billing_period_end"`
+}
+
+func (q *Queries) LockTenantSubscriptionForGrantExpiry(ctx context.Context, tenantID string) (LockTenantSubscriptionForGrantExpiryRow, error) {
+	row := q.db.QueryRowContext(ctx, lockTenantSubscriptionForGrantExpiry, tenantID)
+	var i LockTenantSubscriptionForGrantExpiryRow
+	err := row.Scan(
+		&i.SubscriptionID,
+		&i.TierID,
+		&i.TierName,
+		&i.TierLevel,
+		&i.BillingModel,
+		&i.Status,
+		&i.HasPendingTier,
+		&i.BillingPeriodStart,
+		&i.BillingPeriodEnd,
 	)
 	return i, err
 }

@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"strings"
 	"testing"
 	"time"
@@ -617,9 +618,15 @@ func TestEarlyClosedPeriodKeepsItsInvoiceCreditFromTheNextDraft_RealPG(t *testin
 		t.Fatal(err)
 	}
 	tenant.receive(t, egressReport(tenant.id, strings.Repeat("c", 64), periodStart.Add(24*time.Hour), 1000))
-	if _, err := tenant.jobs.CloseAdvanceBilledPeriod(ctx, tenant.id, closeAt); err != nil {
-		t.Fatalf("close the period early: %v", err)
+	closing, prepareErr := PrepareProviderBillingBoundary(ctx, db, tenant.jobs.logger, tenant.svc, tenant.id, closeAt)
+	if prepareErr != nil {
+		t.Fatal(prepareErr)
 	}
+	transitionErr := database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error { _, closeErr := closing.CommitTx(ctx, tx); return closeErr })
+	if transitionErr != nil {
+		t.Fatalf("close the period early: %v", transitionErr)
+	}
+	closing.AfterCommit(ctx)
 	closed := readInvoice(t, db, tenant.id, periodStart)
 	if closed.status != "pending" || closed.credit != "10.00" || tenant.balance(t) != 0 {
 		t.Fatalf("early-closed invoice = status %s credit %s, balance %d; want the whole 10.00 balance as its credit", closed.status, closed.credit, tenant.balance(t))

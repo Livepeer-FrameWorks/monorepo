@@ -73,6 +73,7 @@ type SubscriptionManager struct {
 type CredentialSockets interface {
 	CloseAPIToken(tenantID, tokenID string) int
 	CloseUserSessions(tenantID, userID string, revokedAt time.Time) int
+	CloseUserAPITokens(tenantID, userID string) int
 }
 
 type credentialSocketsHolder struct{ sockets CredentialSockets }
@@ -475,8 +476,11 @@ func (sm *SubscriptionManager) applyCredentialRevocation(key signalmanclient.Str
 		if tenantID == "" {
 			tenantID = event.GetTenantId()
 		}
-		if userID, revokedAt, ok := revokedUserSessions(tenantID, event); ok {
-			holder.sockets.CloseUserSessions(tenantID, userID, revokedAt)
+		if revocation, ok := revokedUserSessions(tenantID, event); ok {
+			holder.sockets.CloseUserSessions(tenantID, revocation.GetUserId(), revocation.GetRevokedAt().AsTime())
+			if revocation.GetReason() == internalv1.SessionRevocationReason_SESSION_REVOCATION_REASON_OPERATOR_DEACTIVATION {
+				holder.sockets.CloseUserAPITokens(tenantID, revocation.GetUserId())
+			}
 		}
 	}
 }
@@ -896,21 +900,20 @@ func (sm *SubscriptionManager) watchRevocationStream(ctx context.Context, key si
 	}
 }
 
-// revokedUserSessions returns the user and revocation time when event is
-// tenantID's user.sessions_revoked.
-func revokedUserSessions(tenantID string, event *signalmanpb.SignalmanEvent) (string, time.Time, bool) {
+// revokedUserSessions decodes only the matching tenant's session-revocation event.
+func revokedUserSessions(tenantID string, event *signalmanpb.SignalmanEvent) (*internalv1.UserSessionsRevoked, bool) {
 	if event.GetEventType() != signalmanpb.EventType_EVENT_TYPE_TENANT_EVENT || event.GetTenantId() != tenantID {
-		return "", time.Time{}, false
+		return nil, false
 	}
 	tenantEvent := event.GetData().GetTenantEvent()
 	if tenantEvent.GetType() != "user.sessions_revoked" {
-		return "", time.Time{}, false
+		return nil, false
 	}
 	var payload internalv1.UserSessionsRevoked
 	if err := tenantEvent.GetData().UnmarshalTo(&payload); err != nil || payload.GetUserId() == "" || !payload.GetRevokedAt().IsValid() {
-		return "", time.Time{}, false
+		return nil, false
 	}
-	return payload.GetUserId(), payload.GetRevokedAt().AsTime(), true
+	return &payload, true
 }
 
 // revokedAPITokenID returns the revoked token's ID when event is tenantID's

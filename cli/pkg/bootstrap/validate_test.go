@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"frameworks/cli/pkg/inventory"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 )
 
 func validRendered() *Rendered {
@@ -187,5 +188,41 @@ func TestValidateCollectsMultipleErrors(t *testing.T) {
 	}
 	if len(errs) < 3 {
 		t.Fatalf("expected at least 3 errors; got %d: %v", len(errs), errs)
+	}
+}
+
+func TestRenderedGrantValidationAndSystemOperatorOwnership(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*Rendered)
+		want   string
+	}{
+		{"invalid grant", func(r *Rendered) {
+			r.Purser.CustomerBilling = []CustomerBilling{{Tenant: TenantRefSystem(), Model: "postpaid", Tier: "enterprise", OperatorGrant: &billing.OperatorGrantSpec{Reason: "missing price"}}}
+		}, "changes nothing"},
+		{"operator tenant", func(r *Rendered) {
+			r.Accounts = []AccountRendered{{Kind: AccountSystemOperator, Tenant: TenantRefAlias("customer")}}
+		}, "system_operator must reference"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			r := validRendered()
+			test.mutate(r)
+			if err := r.Validate(); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("validation=%v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestSystemOperatorReferencesValidateAndResolve(t *testing.T) {
+	for _, ref := range []string{"quartermaster.system_tenant", "quartermaster.tenants[frameworks]"} {
+		r := validRendered()
+		r.Accounts = []AccountRendered{{Kind: AccountSystemOperator, Tenant: TenantRef{Ref: ref}, Users: []AccountUserRendered{{AccountUserCommon: AccountUserCommon{Email: "ops@example.test", Role: "owner", PlatformOperator: true}, Password: "fixture-password"}}}}
+		if err := r.Validate(); err != nil {
+			t.Errorf("operator reference %s rejected: %v", ref, err)
+		}
+		if !tenantRefResolves(ref, r) {
+			t.Errorf("operator reference %s cannot resolve", ref)
+		}
 	}
 }

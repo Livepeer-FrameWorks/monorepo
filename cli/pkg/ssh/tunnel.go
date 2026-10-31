@@ -6,12 +6,39 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
+
+// TunnelFailure retains SSH's diagnostic so an authentication/configuration
+// failure cannot be mistaken for the local readiness probe's connection refusal.
+type TunnelFailure struct {
+	Diagnostic string
+	Err        error
+}
+
+func (e *TunnelFailure) Error() string { return e.Err.Error() }
+func (e *TunnelFailure) Unwrap() error { return e.Err }
+
+// Unavailable reports an SSH transport outage, not rejected credentials or configuration.
+func (e *TunnelFailure) Unavailable() bool {
+	diagnostic := strings.ToLower(e.Diagnostic)
+	if diagnostic != "" {
+		for _, phrase := range []string{"connection timed out", "connection refused", "no route to host", "network is unreachable", "operation timed out", "host is down", "connection reset by peer", "temporary failure in name resolution"} {
+			if strings.Contains(diagnostic, phrase) {
+				return true
+			}
+		}
+		return false
+	}
+	var network net.Error
+	return (errors.As(e.Err, &network) && network.Timeout()) || errors.Is(e.Err, context.DeadlineExceeded) || errors.Is(e.Err, syscall.ECONNREFUSED) || errors.Is(e.Err, syscall.EHOSTUNREACH) || errors.Is(e.Err, syscall.ECONNRESET)
+}
 
 // Tunnel is an active `ssh -N -L` local-port-forward. The forwarder is a child
 // `ssh` process owned by this struct; Close() terminates it.
@@ -152,6 +179,7 @@ func LocalForward(ctx context.Context, opts LocalForwardOptions) (*Tunnel, error
 	args := BuildSSHArgs(opts.Config, resolution)
 	args = append(args,
 		"-N",
+		"-o", "LogLevel=ERROR",
 		"-o", "ExitOnForwardFailure=yes",
 		"-L", fmt.Sprintf("%s:%d:%s:%d", "127.0.0.1", localPort, remoteHost, opts.RemotePort),
 		resolution.Target,
@@ -161,6 +189,7 @@ func LocalForward(ctx context.Context, opts LocalForwardOptions) (*Tunnel, error
 	// context from the parent so cancel-from-above still tears it down.
 	tunnelCtx, cancel := context.WithCancel(ctx)
 	cmd := execCommandContext(tunnelCtx, "ssh", args...)
+	cmd.Env = append(os.Environ(), "LC_ALL=C")
 	stderr := &bytes.Buffer{}
 	cmd.Stderr = stderr
 
@@ -186,12 +215,13 @@ func LocalForward(ctx context.Context, opts LocalForwardOptions) (*Tunnel, error
 	if err := tunnelReady(tunnelCtx, localAddr, deadline); err != nil {
 		_ = t.Close()
 		stderrText := strings.TrimSpace(stderr.String())
+		failure := &TunnelFailure{Diagnostic: stderrText, Err: err}
 		if stderrText != "" {
 			return nil, fmt.Errorf("LocalForward %s → %s:%d: %s: %w",
-				localAddr, remoteHost, opts.RemotePort, stderrText, err)
+				localAddr, remoteHost, opts.RemotePort, stderrText, failure)
 		}
 		return nil, fmt.Errorf("LocalForward %s → %s:%d: %w",
-			localAddr, remoteHost, opts.RemotePort, err)
+			localAddr, remoteHost, opts.RemotePort, failure)
 	}
 
 	return t, nil

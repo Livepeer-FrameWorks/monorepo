@@ -350,20 +350,21 @@ func (jm *JobManager) afterPostpaidInvoiceCommit(ctx context.Context, run *postp
 }
 
 // ErrPostpaidPhaseChanged means the postpaid subscription, its arrangement or
-// its received usage changed while its closing invoice was rated; the switch
+// its received usage changed while its closing invoice was rated; the caller
 // is retried.
 var ErrPostpaidPhaseChanged = errors.New("the postpaid subscription or its usage changed while its closing invoice was prepared")
 
-// PostpaidPhaseClose closes a postpaid tenant's postpaid phase when it
-// switches to prepaid. The postpaid plan's entitlement ends at the switch, so
-// what it used is owed then: the phase's usage invoice is rated and finalized
-// for [period start, switch) at the postpaid tier's prices, with the base fee
-// for the phase's share of the period and monthly cluster fees for their
-// active time, and collected
-// like any postpaid invoice. The prepaid period starts at the switch and ends
-// where the postpaid period would have. Rating happens before the switch
-// transaction, writing inside it.
+// PostpaidPhaseClose finalizes a postpaid pricing/model phase at its boundary.
+// The invoice covers the phase's usage, prorated base fee and monthly cluster
+// fees. Rating runs before the transaction; CommitTx writes the document and
+// starts the next phase in the same transaction as the arrangement change.
 type PostpaidPhaseClose struct {
+	// grantBoundary also fences the grant snapshot used to rate this phase.
+	grantBoundary bool
+	// monthlyCatchup advances Mollie's invoice anchor without charging a new term.
+	monthlyCatchup bool
+	// toPrepaid settles deferred collection and unused advance fees into prepaid credit.
+	toPrepaid    bool
 	jobs         *JobManager
 	tenantID     string
 	subscription purserdb.GetSubscriptionForPhaseCloseRow
@@ -374,19 +375,19 @@ type PostpaidPhaseClose struct {
 	// CountPhaseUsageReceivedBefore at commit must still return it.
 	received      int64
 	nextPeriodEnd time.Time
-	// run is nil when the switch falls on the period start, which leaves no
+	// run is nil when the boundary falls on the period start, which leaves no
 	// postpaid phase to invoice.
 	run    *postpaidInvoiceRun
 	result postpaidInvoiceResult
 	// carriedCents is what the collection minimum had deferred, charged to the
-	// prepaid balance at the switch; balanceAfter is the balance after it.
+	// prepaid balance when moving to prepaid; balanceAfter is the resulting balance.
 	carriedCents int64
 	balanceAfter int64
 	// releasedCredit is the credit an open draft of the phase that started
 	// elsewhere than the phase held under its own key, returned before the
 	// closing invoice takes the credit it uses.
 	releasedCredit invoiceCreditChange
-	// baseFeeReturn is what the switch returned of an advance base-fee
+	// baseFeeReturn is what a move to prepaid returned of an advance base-fee
 	// invoice's unused share.
 	baseFeeReturn unusedBaseFeeReturn
 	closed        bool
@@ -444,6 +445,59 @@ func settleCollectionCarryTx(ctx context.Context, tx *sql.Tx, tenantID, invoiceI
 // in force when they reached Purser, by the receipt time the database clock
 // wrote. Records that reach Purser after the switch go to the prepaid phase.
 func PreparePostpaidPhaseClose(ctx context.Context, db *sql.DB, logger logging.Logger, svc *Service, tenantID string) (*PostpaidPhaseClose, error) {
+	return preparePostpaidPhaseClose(ctx, db, logger, svc, tenantID, time.Time{}, true, false)
+}
+
+// PrepareProviderBillingBoundary rates usage received by preparation time for a
+// provider tier/model change. It commits only after the provider lock confirms
+// there is no outstanding grant; delayed usage for the closing phase is included.
+func PrepareProviderBillingBoundary(ctx context.Context, db *sql.DB, logger logging.Logger, svc *Service, tenantID string, at time.Time) (*PostpaidPhaseClose, error) {
+	closing, err := preparePostpaidPhaseClose(ctx, db, logger, svc, tenantID, at, false, false)
+	if err != nil {
+		return nil, err
+	}
+	if closing != nil && closing.run != nil && closing.tier.MeteringEnabled {
+		if err = closing.jobs.assertMeteringComplete(ctx, tenantID, closing.phase.start, closing.phase.end); err != nil {
+			return nil, fmt.Errorf("wait for complete metering before provider activation: %w", err)
+		}
+	}
+	return closing, nil
+}
+
+// PrepareFreeFallbackBoundary closes at most one stored monthly period. The
+// final partial period ends at cutoff; complete months keep separate allowances.
+func PrepareFreeFallbackBoundary(ctx context.Context, db *sql.DB, logger logging.Logger, svc *Service, tenantID string, cutoff time.Time) (*PostpaidPhaseClose, bool, error) {
+	subscription, err := purserdb.New(db).GetSubscriptionForPhaseClose(ctx, tenantID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, true, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	start, end := currentBillingPeriod(subscription.BillingPeriodStart, subscription.BillingPeriodEnd, subscription.MollieNextPaymentDate, cutoff)
+	boundary := cutoff
+	final := true
+	if end.After(start) && end.Before(cutoff) {
+		boundary, final = end, false
+	}
+	closing, err := PrepareProviderBillingBoundary(ctx, db, logger, svc, tenantID, boundary)
+	if err != nil || closing == nil {
+		return closing, final, err
+	}
+	if !final {
+		closing.monthlyCatchup = true
+		closing.nextPeriodEnd = nextBillingPeriodEnd(closing.phase.chainFrom, boundary)
+	}
+	return closing, final, nil
+}
+
+// PreparePostpaidGrantBoundary rates the closing phase at a grant change.
+// toPrepaid also settles deferred collection and unused advance fees into prepaid credit.
+func PreparePostpaidGrantBoundary(ctx context.Context, db *sql.DB, logger logging.Logger, svc *Service, tenantID string, at time.Time, toPrepaid bool) (*PostpaidPhaseClose, error) {
+	return preparePostpaidPhaseClose(ctx, db, logger, svc, tenantID, at, toPrepaid, true)
+}
+
+func preparePostpaidPhaseClose(ctx context.Context, db *sql.DB, logger logging.Logger, svc *Service, tenantID string, at time.Time, toPrepaid, grantBoundary bool) (*PostpaidPhaseClose, error) {
 	queries := purserdb.New(db)
 	clock, err := queries.GetSubscriptionPrepaidPhase(ctx, tenantID)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -463,12 +517,16 @@ func PreparePostpaidPhaseClose(ctx context.Context, db *sql.DB, logger logging.L
 		return nil, nil
 	}
 	switchAt := clock.DatabaseNow.UTC().Truncate(time.Microsecond)
+	if !at.IsZero() {
+		switchAt = at.UTC().Truncate(time.Microsecond)
+	}
 	phaseStart, phaseEnd := currentBillingPeriod(subscription.BillingPeriodStart, subscription.BillingPeriodEnd, subscription.MollieNextPaymentDate, switchAt)
 	if svc == nil {
 		svc = &Service{db: db, logger: logger}
 	}
 	closing := &PostpaidPhaseClose{
-		jobs:     &JobManager{db: db, logger: logger, billing: svc},
+		jobs:          &JobManager{db: db, logger: logger, billing: svc},
+		grantBoundary: grantBoundary, toPrepaid: toPrepaid,
 		tenantID: tenantID, subscription: subscription,
 		switchAt: switchAt, nextPeriodEnd: phaseEnd,
 	}
@@ -476,7 +534,7 @@ func PreparePostpaidPhaseClose(ctx context.Context, db *sql.DB, logger logging.L
 		return closing, nil
 	}
 	if !switchAt.Before(phaseEnd) {
-		closing.nextPeriodEnd = switchAt.AddDate(0, 1, 0)
+		closing.nextPeriodEnd = billing.NextMonthlyAnniversary(switchAt)
 	}
 	chainFrom, err := splitPeriodStart(ctx, db, tenantID, phaseStart)
 	if err != nil {
@@ -486,14 +544,25 @@ func PreparePostpaidPhaseClose(ctx context.Context, db *sql.DB, logger logging.L
 		start: phaseStart, end: switchAt, chainFrom: chainFrom, periodEnd: phaseEnd,
 		receivedBefore: sql.NullTime{Time: switchAt, Valid: true},
 	}
+	if !grantBoundary {
+		// Provider changes rate all usage already received, including late reports
+		// for the closing phase. A grant's historic deadline keeps its own cutoff.
+		closing.phase.receivedBefore = sql.NullTime{Time: clock.DatabaseNow, Valid: true}
+	}
 	if closing.received, err = countPhaseReceived(ctx, queries, tenantID, closing.phase); err != nil {
 		return nil, err
 	}
-	closing.tier, err = billingpkg.LoadSubscriptionEffectiveTier(ctx, db, tenantID)
+	if grantBoundary {
+		closing.tier, err = billingpkg.LoadSubscriptionEffectiveTierAt(ctx, db, tenantID, switchAt)
+	} else {
+		closing.tier, err = billingpkg.LoadSubscriptionEffectiveTier(ctx, db, tenantID)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("load postpaid tier: %w", err)
 	}
-	closing.run, err = closing.jobs.ratePostpaidInvoice(ctx, purserdb.ListSubscriptionsDueForInvoiceRow(subscription), closing.tier, closing.phase, "", true)
+	// Grant/model switches retain the calendar period. Provider activation starts
+	// a new period, so its closing invoice must not extend the old phase chain.
+	closing.run, err = closing.jobs.ratePostpaidInvoice(ctx, purserdb.ListSubscriptionsDueForInvoiceRow(subscription), closing.tier, closing.phase, "", grantBoundary || toPrepaid)
 	if err != nil {
 		return nil, err
 	}
@@ -526,14 +595,11 @@ func (c *PostpaidPhaseClose) unchangedSince(current purserdb.GetSubscriptionForP
 	return err == nil && base.Equal(c.tier.BasePrice) && tier.WaiveUsage == c.tier.UsageWaived && tier.TierID.String() == c.tier.TierID
 }
 
-// CommitTx writes the closing invoice and starts the prepaid period at the
-// switch, inside the switch's transaction and before it changes the billing
-// model. The caller holds the subscription row lock. It reports whether it
-// closed a phase; without one the caller keeps its own period handling. A
-// subscription, arrangement or received usage that changed since the invoice
-// was rated returns ErrPostpaidPhaseChanged. An advance base-fee invoice of
-// the period has its unused share from the switch returned
-// (returnUnusedBaseFeeTx). It may run again when the transaction retries.
+// CommitTx writes the closing invoice and starts the next billing phase inside
+// the arrangement's transaction. The caller holds the subscription row lock.
+// Changed subscription/pricing/received usage returns ErrPostpaidPhaseChanged.
+// A move to prepaid returns unused advance fees; a postpaid grant boundary
+// keeps them available for planPreviousBaseFee's postpaid netting.
 func (c *PostpaidPhaseClose) CommitTx(ctx context.Context, tx *sql.Tx) (bool, error) {
 	if c == nil {
 		return false, nil
@@ -551,7 +617,14 @@ func (c *PostpaidPhaseClose) CommitTx(ctx context.Context, tx *sql.Tx) (bool, er
 		}
 		return false, nil
 	}
-	tier, err := queries.LoadSubscriptionEffectiveTier(ctx, c.tenantID)
+	var tier purserdb.LoadSubscriptionEffectiveTierRow
+	if c.grantBoundary {
+		var row purserdb.LoadSubscriptionEffectiveTierAtRow
+		row, err = queries.LoadSubscriptionEffectiveTierAt(ctx, purserdb.LoadSubscriptionEffectiveTierAtParams{TenantID: c.tenantID, CloseAt: c.switchAt})
+		tier = purserdb.LoadSubscriptionEffectiveTierRow(row)
+	} else {
+		tier, err = queries.LoadSubscriptionEffectiveTier(ctx, c.tenantID)
+	}
 	if err != nil {
 		return false, fmt.Errorf("load postpaid tier: %w", err)
 	}
@@ -585,20 +658,33 @@ func (c *PostpaidPhaseClose) CommitTx(ctx context.Context, tx *sql.Tx) (bool, er
 	if err != nil {
 		return false, err
 	}
-	if c.carriedCents, c.balanceAfter, err = settleCollectionCarryTx(ctx, tx, c.tenantID, c.result.invoiceID); err != nil {
-		return false, err
+	if c.toPrepaid {
+		if c.carriedCents, c.balanceAfter, err = settleCollectionCarryTx(ctx, tx, c.tenantID, c.result.invoiceID); err != nil {
+			return false, err
+		}
 	}
-	if c.baseFeeReturn, err = returnUnusedBaseFeeTx(ctx, tx, c.tenantID, c.switchAt, time.Now().UTC()); err != nil {
-		return false, err
+	if c.toPrepaid {
+		if c.baseFeeReturn, err = returnUnusedBaseFeeTx(ctx, tx, c.tenantID, c.switchAt, time.Now().UTC()); err != nil {
+			return false, err
+		}
 	}
-	rows, err := queries.StartBillingPhase(ctx, purserdb.StartBillingPhaseParams{
-		PeriodStart: c.switchAt, PeriodEnd: c.nextPeriodEnd, TenantID: c.tenantID,
-	})
+	var rows int64
+	if c.monthlyCatchup {
+		rows, err = queries.AdvanceSubscriptionBillingPeriod(ctx, purserdb.AdvanceSubscriptionBillingPeriodParams{
+			BillingPeriodStart: sql.NullTime{Time: c.switchAt, Valid: true},
+			BillingPeriodEnd:   sql.NullTime{Time: c.nextPeriodEnd, Valid: true},
+			NextBillingDate:    sql.NullTime{Time: c.nextPeriodEnd, Valid: true}, TenantID: c.tenantID,
+		})
+	} else {
+		rows, err = queries.StartBillingPhase(ctx, purserdb.StartBillingPhaseParams{
+			PeriodStart: c.switchAt, PeriodEnd: c.nextPeriodEnd, TenantID: c.tenantID,
+		})
+	}
 	if err != nil {
-		return false, fmt.Errorf("start the prepaid period: %w", err)
+		return false, fmt.Errorf("start the next billing phase: %w", err)
 	}
 	if rows != 1 {
-		return false, fmt.Errorf("start the prepaid period: no subscription for tenant %s", c.tenantID)
+		return false, fmt.Errorf("start the next billing phase: no subscription for tenant %s", c.tenantID)
 	}
 	c.closed = true
 	return true, nil
@@ -629,11 +715,11 @@ func (c *PostpaidPhaseClose) AfterCommit(ctx context.Context) {
 		}).Info("Returned the unused share of the advance base fee at the switch to prepaid")
 	}
 	c.jobs.logger.WithFields(logging.Fields{
-		"tenant_id":          c.tenantID,
-		"invoice_id":         c.result.invoiceID,
-		"prepaid_from":       c.switchAt.Format(time.RFC3339Nano),
-		"prepaid_period_end": c.nextPeriodEnd.Format(time.RFC3339),
-	}).Info("Closed postpaid phase at switch to prepaid")
+		"tenant_id":        c.tenantID,
+		"invoice_id":       c.result.invoiceID,
+		"phase_from":       c.switchAt.Format(time.RFC3339Nano),
+		"phase_period_end": c.nextPeriodEnd.Format(time.RFC3339),
+	}).Info("Closed postpaid billing phase")
 }
 
 // InvoiceID is the closing invoice written by CommitTx, empty when none.
@@ -642,4 +728,17 @@ func (c *PostpaidPhaseClose) InvoiceID() string {
 		return ""
 	}
 	return c.result.invoiceID
+}
+
+// BoundaryAt returns the instant separating the old and next pricing phases.
+func (c *PostpaidPhaseClose) BoundaryAt() time.Time { return c.switchAt }
+
+// sameInvoiceSubscription compares billing snapshots using instants for nullable times.
+func sameInvoiceSubscription(a, b purserdb.ListSubscriptionsDueForInvoiceRow) bool {
+	if !sameNullTime(a.BillingPeriodStart, b.BillingPeriodStart) || !sameNullTime(a.BillingPeriodEnd, b.BillingPeriodEnd) || !sameNullTime(a.MollieNextPaymentDate, b.MollieNextPaymentDate) {
+		return false
+	}
+	a.BillingPeriodStart, a.BillingPeriodEnd, a.MollieNextPaymentDate = sql.NullTime{}, sql.NullTime{}, sql.NullTime{}
+	b.BillingPeriodStart, b.BillingPeriodEnd, b.MollieNextPaymentDate = sql.NullTime{}, sql.NullTime{}, sql.NullTime{}
+	return a == b
 }

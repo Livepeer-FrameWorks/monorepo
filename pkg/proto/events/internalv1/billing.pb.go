@@ -240,6 +240,83 @@ func (x *SubscriptionUpdated) GetReason() string {
 	return ""
 }
 
+// CheckoutRecoveryAction is an operator recovery request or its terminal result.
+type CheckoutRecoveryAction struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	AuditId       string                 `protobuf:"bytes,1,opt,name=audit_id,json=auditId,proto3" json:"audit_id,omitempty"`                   // Durable action ID linking request and result.
+	ReservationId string                 `protobuf:"bytes,2,opt,name=reservation_id,json=reservationId,proto3" json:"reservation_id,omitempty"` // Checkout being recovered.
+	Outcome       string                 `protobuf:"bytes,3,opt,name=outcome,proto3" json:"outcome,omitempty"`                                  // requested or the terminal reservation outcome.
+	Reason        string                 `protobuf:"bytes,4,opt,name=reason,proto3" json:"reason,omitempty"`                                    // Operator-supplied reason.
+	Detail        string                 `protobuf:"bytes,5,opt,name=detail,proto3" json:"detail,omitempty"`                                    // Provider result or reconciliation diagnostic.
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CheckoutRecoveryAction) Reset() {
+	*x = CheckoutRecoveryAction{}
+	mi := &file_events_internal_v1_billing_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CheckoutRecoveryAction) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CheckoutRecoveryAction) ProtoMessage() {}
+
+func (x *CheckoutRecoveryAction) ProtoReflect() protoreflect.Message {
+	mi := &file_events_internal_v1_billing_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CheckoutRecoveryAction.ProtoReflect.Descriptor instead.
+func (*CheckoutRecoveryAction) Descriptor() ([]byte, []int) {
+	return file_events_internal_v1_billing_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *CheckoutRecoveryAction) GetAuditId() string {
+	if x != nil {
+		return x.AuditId
+	}
+	return ""
+}
+
+func (x *CheckoutRecoveryAction) GetReservationId() string {
+	if x != nil {
+		return x.ReservationId
+	}
+	return ""
+}
+
+func (x *CheckoutRecoveryAction) GetOutcome() string {
+	if x != nil {
+		return x.Outcome
+	}
+	return ""
+}
+
+func (x *CheckoutRecoveryAction) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+func (x *CheckoutRecoveryAction) GetDetail() string {
+	if x != nil {
+		return x.Detail
+	}
+	return ""
+}
+
 var File_events_internal_v1_billing_proto protoreflect.FileDescriptor
 
 const file_events_internal_v1_billing_proto_rawDesc = "" +
@@ -265,7 +342,14 @@ const file_events_internal_v1_billing_proto_rawDesc = "" +
 	"\x06status\x18\x03 \x01(\tR\x06status\x12%\n" +
 	"\x0echanged_fields\x18\x04 \x03(\tR\rchangedFields\x12\x16\n" +
 	"\x06reason\x18\x05 \x01(\tR\x06reason:5\xc2\xf3\x181\n" +
-	"\x1cbilling.subscription_updated\x10\x02\x18\x01\"\rsubscriptionsBPZNgithub.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/internalv1;internalv1b\x06proto3"
+	"\x1cbilling.subscription_updated\x10\x02\x18\x01\"\rsubscriptions\"\xea\x01\n" +
+	"\x16CheckoutRecoveryAction\x12\x19\n" +
+	"\baudit_id\x18\x01 \x01(\tR\aauditId\x12%\n" +
+	"\x0ereservation_id\x18\x02 \x01(\tR\rreservationId\x12\x18\n" +
+	"\aoutcome\x18\x03 \x01(\tR\aoutcome\x12\x16\n" +
+	"\x06reason\x18\x04 \x01(\tR\x06reason\x12\x16\n" +
+	"\x06detail\x18\x05 \x01(\tR\x06detail:D\xc2\xf3\x18@\n" +
+	" billing.checkout_recovery_action\x10\x02\x18\x01\"\x18payment_provider_intentsBPZNgithub.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/internalv1;internalv1b\x06proto3"
 
 var (
 	file_events_internal_v1_billing_proto_rawDescOnce sync.Once
@@ -279,15 +363,16 @@ func file_events_internal_v1_billing_proto_rawDescGZIP() []byte {
 	return file_events_internal_v1_billing_proto_rawDescData
 }
 
-var file_events_internal_v1_billing_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
+var file_events_internal_v1_billing_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
 var file_events_internal_v1_billing_proto_goTypes = []any{
-	(*PaymentCreated)(nil),      // 0: frameworks.events.internal.v1.PaymentCreated
-	(*SubscriptionCreated)(nil), // 1: frameworks.events.internal.v1.SubscriptionCreated
-	(*SubscriptionUpdated)(nil), // 2: frameworks.events.internal.v1.SubscriptionUpdated
-	(*v1.Money)(nil),            // 3: frameworks.events.public.v1.Money
+	(*PaymentCreated)(nil),         // 0: frameworks.events.internal.v1.PaymentCreated
+	(*SubscriptionCreated)(nil),    // 1: frameworks.events.internal.v1.SubscriptionCreated
+	(*SubscriptionUpdated)(nil),    // 2: frameworks.events.internal.v1.SubscriptionUpdated
+	(*CheckoutRecoveryAction)(nil), // 3: frameworks.events.internal.v1.CheckoutRecoveryAction
+	(*v1.Money)(nil),               // 4: frameworks.events.public.v1.Money
 }
 var file_events_internal_v1_billing_proto_depIdxs = []int32{
-	3, // 0: frameworks.events.internal.v1.PaymentCreated.amount:type_name -> frameworks.events.public.v1.Money
+	4, // 0: frameworks.events.internal.v1.PaymentCreated.amount:type_name -> frameworks.events.public.v1.Money
 	1, // [1:1] is the sub-list for method output_type
 	1, // [1:1] is the sub-list for method input_type
 	1, // [1:1] is the sub-list for extension type_name
@@ -306,7 +391,7 @@ func file_events_internal_v1_billing_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_events_internal_v1_billing_proto_rawDesc), len(file_events_internal_v1_billing_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   3,
+			NumMessages:   4,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

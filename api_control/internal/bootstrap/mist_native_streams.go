@@ -223,14 +223,11 @@ func validateMistNativeShape(m MistNativeStream) (placementpolicy.SourceLocation
 	return location, nil
 }
 
-// isSystemTenantRef matches the same alias paths the CLI render layer
-// accepts as the operator/system tenant. Kept in sync with
-// cli/pkg/bootstrap.isSystemTenantRef — the alias literal is the
-// cross-service contract, not the Go function.
+// isSystemTenantRef accepts the canonical alias paths shared with CLI validation and rendering.
 func isSystemTenantRef(ref string) bool {
 	r := strings.TrimSpace(ref)
 	return r == "quartermaster.system_tenant" ||
-		r == "quartermaster.tenants."+SystemTenantAlias
+		r == "quartermaster.tenants["+SystemTenantAlias+"]"
 }
 
 // monitoringNullBool maps the rendered per-stream Monitoring value to the

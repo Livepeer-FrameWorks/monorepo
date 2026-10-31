@@ -67,6 +67,7 @@ func newSourceURIEncrypter(cfg *appconfig.CommodoreBootstrap) (fieldcrypt.FieldC
 // Subcommand surface (per docs/architecture/bootstrap-desired-state.md):
 //
 //	commodore bootstrap --file ...                          # apply
+//	commodore bootstrap --file ... --accounts-only          # leave stream fixtures unchanged
 //	commodore bootstrap --file ... --check                  # parse + schema validate
 //	commodore bootstrap --file ... --dry-run                # full reconcile in a tx that rolls back
 //	commodore bootstrap --file ... --reset-credentials      # rehash passwords for users
@@ -79,11 +80,20 @@ func newSourceURIEncrypter(cfg *appconfig.CommodoreBootstrap) (fieldcrypt.FieldC
 // --dry-run runs the same code path as apply against an outer transaction the
 // dispatcher rolls back. Reconcilers themselves never call BeginTx/Commit.
 func runBootstrapCommand(args []string) int {
+	return runBootstrapCommandWithRuntime(args, func(logger logging.Logger) (*appconfig.CommodoreBootstrap, error) {
+		return config.Load[appconfig.CommodoreBootstrap](config.Options{Service: "commodore", Logger: logger})
+	}, database.MustConnect)
+}
+
+// runBootstrapCommandWithRuntime parses and executes the service command with
+// explicit configuration and database dependencies, including the offline check.
+func runBootstrapCommandWithRuntime(args []string, loadConfig func(logging.Logger) (*appconfig.CommodoreBootstrap, error), connectDatabase func(database.Config, logging.Logger) *sql.DB) int {
 	fs := flag.NewFlagSet("commodore bootstrap", flag.ContinueOnError)
 	file := fs.String("file", "", "path to the rendered bootstrap desired-state YAML")
 	check := fs.Bool("check", false, "parse + schema-validate only; no DB connection")
 	dryRun := fs.Bool("dry-run", false, "run the full reconcile inside a transaction that rolls back; reports planned changes")
 	resetCreds := fs.Bool("reset-credentials", false, "rehash passwords for users that set reset_credentials=true (otherwise: warn-and-skip the password rewrite, profile changes still applied)")
+	accountsOnly := fs.Bool("accounts-only", false, "reconcile accounts without applying stream declarations")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -118,7 +128,7 @@ func runBootstrapCommand(args []string) int {
 	}
 
 	config.LoadEnv(logger)
-	cfg, err := config.Load[appconfig.CommodoreBootstrap](config.Options{Service: "commodore", Logger: logger})
+	cfg, err := loadConfig(logger)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "commodore bootstrap: %v\n", err)
 		return 1
@@ -126,7 +136,7 @@ func runBootstrapCommand(args []string) int {
 	dbConfig := database.DefaultConfig()
 	dbConfig.ServiceName = "commodore"
 	dbConfig.URL = cfg.DatabaseURL
-	db := database.MustConnect(dbConfig, logger)
+	db := connectDatabase(dbConfig, logger)
 	defer func() { _ = db.Close() }()
 
 	resolver, err := newGRPCResolver(logger, cfg)
@@ -137,17 +147,20 @@ func runBootstrapCommand(args []string) int {
 	defer resolver.Close()
 
 	ctx := context.Background()
-	if nodeErr := requireSourceLocationNodePlacement(ctx, desired.Commodore, db, resolver, cfg, logger); nodeErr != nil {
-		fmt.Fprintf(os.Stderr, "commodore bootstrap: %v\n", nodeErr)
-		return 1
+	if !*accountsOnly {
+		if nodeErr := requireSourceLocationNodePlacement(ctx, desired.Commodore, db, resolver, cfg, logger); nodeErr != nil {
+			fmt.Fprintf(os.Stderr, "commodore bootstrap: %v\n", nodeErr)
+			return 1
+		}
 	}
 
 	// The reconcile body replays on retryable transaction failures, so its
 	// report lines are buffered per attempt and printed once the outcome is known.
 	var (
-		out     []bootstrapReportLine
-		bodyRan bool
-		bodyErr error
+		out              []bootstrapReportLine
+		bodyRan          bool
+		bodyErr          error
+		accountsDeferred bool
 	)
 	report := func(stderr bool, format string, args ...any) {
 		out = append(out, bootstrapReportLine{stderr: stderr, text: fmt.Sprintf(format, args...)})
@@ -160,67 +173,71 @@ func runBootstrapCommand(args []string) int {
 			return err
 		}
 
-		res, warnings, err := bootstrap.ReconcileAccounts(ctx, tx, desired.Accounts, resolver, *resetCreds)
-		for _, w := range warnings {
-			report(true, "commodore bootstrap: warning: %s\n", w)
-		}
-		if err != nil {
-			return fail(err, "commodore bootstrap: %v\n", err)
-		}
-		report(false, "commodore bootstrap accounts: created=%d updated=%d noop=%d\n",
-			len(res.Created), len(res.Updated), len(res.Noop))
-
-		if streams := desired.Commodore.PullStreams; len(streams) > 0 {
-			encrypter, encrypterErr := newSourceURIEncrypter(cfg)
-			if encrypterErr != nil {
-				return fail(encrypterErr, "commodore bootstrap: source URI encrypter: %v\n", encrypterErr)
+		return reconcileBootstrapSections(*accountsOnly, func() error {
+			res, warnings, err := bootstrap.ReconcileAccounts(ctx, tx, desired.Accounts, resolver, *resetCreds)
+			for _, w := range warnings {
+				report(true, "commodore bootstrap: warning: %s\n", w)
 			}
-			clusterResolver := &grpcClusterResolver{client: resolver.client}
-			psRes, reconcileErr := bootstrap.ReconcilePullStreams(ctx, tx, streams, resolver, clusterResolver, encrypter)
-			if reconcileErr != nil {
-				return fail(reconcileErr, "commodore bootstrap: %v\n", reconcileErr)
+			if err != nil {
+				return fail(err, "commodore bootstrap: %v\n", err)
 			}
-			report(false, "commodore bootstrap pull_streams: created=%d updated=%d noop=%d\n",
-				len(psRes.Created), len(psRes.Updated), len(psRes.Noop))
-		}
+			report(false, "commodore bootstrap accounts: created=%d updated=%d noop=%d\n",
+				len(res.Created), len(res.Updated), len(res.Noop))
+			accountsDeferred = len(res.Deferred) > 0
+			return nil
+		}, func() error {
+			if streams := desired.Commodore.PullStreams; len(streams) > 0 {
+				encrypter, encrypterErr := newSourceURIEncrypter(cfg)
+				if encrypterErr != nil {
+					return fail(encrypterErr, "commodore bootstrap: source URI encrypter: %v\n", encrypterErr)
+				}
+				clusterResolver := &grpcClusterResolver{client: resolver.client}
+				psRes, reconcileErr := bootstrap.ReconcilePullStreams(ctx, tx, streams, resolver, clusterResolver, encrypter)
+				if reconcileErr != nil {
+					return fail(reconcileErr, "commodore bootstrap: %v\n", reconcileErr)
+				}
+				report(false, "commodore bootstrap pull_streams: created=%d updated=%d noop=%d\n",
+					len(psRes.Created), len(psRes.Updated), len(psRes.Noop))
+			}
 
-		// Mist-native streams: always reconcile, even when the desired list is
-		// empty. ReconcileMistNativeStreams handles upserts; an empty list means
-		// "every previously-bootstrapped mist_native stream under the operator
-		// tenant must be deleted". Without this call the declarative remove path
-		// would be broken — pulling a stream out of bootstrap.yaml has to stop
-		// the stream, not leave it running.
-		mnStreams := desired.Commodore.MistNativeStreams
-		var mnRes bootstrap.Result
-		var mnErr error
-		if len(mnStreams) > 0 {
-			mnRes, mnErr = bootstrap.ReconcileMistNativeStreams(ctx, tx, mnStreams, resolver)
-		} else {
-			// No desired rows declared. Scope the prune to the operator/system
-			// tenant — any other tenant's mist_native streams stay untouched
-			// (the operator-tenant scope matches the render-time exec gate).
-			mnRes, mnErr = bootstrap.PruneAllMistNativeStreams(ctx, tx, resolver, []string{bootstrap.SystemTenantAlias})
-		}
-		if mnErr != nil {
-			return fail(mnErr, "commodore bootstrap: %v\n", mnErr)
-		}
-		report(false, "commodore bootstrap mist_native_streams: created=%d updated=%d noop=%d deleted=%d\n",
-			len(mnRes.Created), len(mnRes.Updated), len(mnRes.Noop), len(mnRes.Deleted))
+			// Mist-native streams: always reconcile, even when the desired list is
+			// empty. ReconcileMistNativeStreams handles upserts; an empty list means
+			// "every previously-bootstrapped mist_native stream under the operator
+			// tenant must be deleted". Without this call the declarative remove path
+			// would be broken — pulling a stream out of bootstrap.yaml has to stop
+			// the stream, not leave it running.
+			mnStreams := desired.Commodore.MistNativeStreams
+			var mnRes bootstrap.Result
+			var mnErr error
+			if len(mnStreams) > 0 {
+				mnRes, mnErr = bootstrap.ReconcileMistNativeStreams(ctx, tx, mnStreams, resolver)
+			} else {
+				// No desired rows declared. Scope the prune to the operator/system
+				// tenant — any other tenant's mist_native streams stay untouched
+				// (the operator-tenant scope matches the render-time exec gate).
+				mnRes, mnErr = bootstrap.PruneAllMistNativeStreams(ctx, tx, resolver, []string{bootstrap.SystemTenantAlias})
+			}
+			if mnErr != nil {
+				return fail(mnErr, "commodore bootstrap: %v\n", mnErr)
+			}
+			report(false, "commodore bootstrap mist_native_streams: created=%d updated=%d noop=%d deleted=%d\n",
+				len(mnRes.Created), len(mnRes.Updated), len(mnRes.Noop), len(mnRes.Deleted))
 
-		// Source locations become the declared streams' own ingest placement rules
-		// once every declared stream row exists in this transaction.
-		locationRes, err := bootstrap.ReconcileStreamSourceLocations(ctx, tx, desired.Commodore, resolver)
-		if err != nil {
-			return fail(err, "commodore bootstrap: %v\n", err)
-		}
-		report(false, "commodore bootstrap stream source_locations: updated=%d noop=%d\n",
-			len(locationRes.Updated), len(locationRes.Noop))
-		return nil
+			// Source locations become the declared streams' own ingest placement rules
+			// once every declared stream row exists in this transaction.
+			locationRes, err := bootstrap.ReconcileStreamSourceLocations(ctx, tx, desired.Commodore, resolver)
+			if err != nil {
+				return fail(err, "commodore bootstrap: %v\n", err)
+			}
+			report(false, "commodore bootstrap stream source_locations: updated=%d noop=%d\n",
+				len(locationRes.Updated), len(locationRes.Noop))
+			return nil
+		})
 	}
 
 	// A replay discards the aborted attempt's report, so a later begin failure is not mistaken for a failed commit
 	// of that attempt's work.
-	resetAttempt := func(error, int) { out, bodyRan, bodyErr = out[:0], false, nil }
+	resetAttempt := func(error, int) { out, bodyRan, bodyErr, accountsDeferred = out[:0], false, nil, false }
 	var txErr error
 	if *dryRun {
 		txErr = database.WithRetryablePostgresRollbackTxWithHook(ctx, db, nil, resetAttempt, reconcile)
@@ -255,6 +272,9 @@ func runBootstrapCommand(args []string) int {
 	}
 	if *dryRun {
 		fmt.Fprintln(os.Stdout, "commodore bootstrap [dry-run] rolled back; no changes persisted")
+	}
+	if accountsDeferred {
+		return 1
 	}
 	return 0
 }
@@ -442,4 +462,15 @@ func loadDesiredState(path string) (*bootstrap.DesiredState, error) {
 	}
 
 	return out, nil
+}
+
+// reconcileBootstrapSections applies accounts before optionally reconciling media.
+func reconcileBootstrapSections(accountsOnly bool, accounts, streams func() error) error {
+	if err := accounts(); err != nil {
+		return err
+	}
+	if accountsOnly {
+		return nil
+	}
+	return streams()
 }

@@ -690,6 +690,8 @@ func TestExpandMigrationSeparatesStoredRoutineDefinitionFromExecution(t *testing
 		{"registered trigger function", registered, false},
 		{"identity table alongside registered trigger", registered + `CREATE TABLE purser.ids(id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY);`, false},
 		{"table-returning routine alongside registered trigger", registered + `CREATE FUNCTION purser.ids() RETURNS TABLE(id BIGINT) LANGUAGE SQL AS $$SELECT 1::bigint$$;`, false},
+		{"unlogged fresh table initialization", `CREATE UNLOGGED TABLE purser.fresh(id BIGINT PRIMARY KEY); INSERT INTO purser.fresh VALUES(1) ON CONFLICT(id) DO UPDATE SET id=EXCLUDED.id;`, false},
+		{"unlogged if-not-exists table is not fresh", `CREATE UNLOGGED TABLE IF NOT EXISTS purser.fresh(id BIGINT PRIMARY KEY); INSERT INTO purser.fresh VALUES(1) ON CONFLICT(id) DO UPDATE SET id=EXCLUDED.id;`, true},
 		{"literal seed cannot rewrite live rows", `INSERT INTO purser.meter_definitions(meter,allowed_dimensions) VALUES('x','{kind}') ON CONFLICT(meter) DO UPDATE SET allowed_dimensions=EXCLUDED.allowed_dimensions;`, true},
 		{"new destination does not hide source merge", `CREATE TABLE purser.new_tiers(id BIGINT); WITH changed AS (MERGE INTO purser.billing_tiers t USING purser.copy c ON t.id=c.id WHEN MATCHED THEN DELETE RETURNING t.id) INSERT INTO purser.new_tiers SELECT id FROM changed ON CONFLICT(id) DO UPDATE SET id=EXCLUDED.id;`, true},
 		{"unbounded upsert", `INSERT INTO purser.billing_tiers SELECT * FROM purser.copy ON CONFLICT(tier_name) DO UPDATE SET base_price=EXCLUDED.base_price;`, true},

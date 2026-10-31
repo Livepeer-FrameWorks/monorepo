@@ -16,6 +16,8 @@ import (
 
 	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // quartermasterRoutingFake serves the two lookups a full route build makes and
@@ -25,6 +27,7 @@ type quartermasterRoutingFake struct {
 	quartermasterpb.UnimplementedBootstrapServiceServer
 
 	routingCalls atomic.Int64
+	routingErr   error
 	// gate holds every routing call open until released, so the build is
 	// guaranteed to still be in flight when the other callers arrive.
 	gate chan struct{}
@@ -35,6 +38,9 @@ func (f *quartermasterRoutingFake) GetClusterRouting(ctx context.Context, _ *qua
 		return nil, err
 	}
 	f.routingCalls.Add(1)
+	if f.routingErr != nil {
+		return nil, f.routingErr
+	}
 	if f.gate != nil {
 		select {
 		case <-f.gate:
@@ -272,4 +278,12 @@ func waitFor(t *testing.T, cond func() bool) {
 		time.Sleep(2 * time.Millisecond)
 	}
 	t.Fatal("condition not met within deadline")
+}
+
+func TestMissingTenantRoutePreservesNotFound(t *testing.T) {
+	server := &CommodoreServer{quartermasterClient: startQuartermasterRoutingFake(t, &quartermasterRoutingFake{routingErr: status.Error(codes.NotFound, "tenant inactive")}), purserClient: startPurserEntitlementFake(t, &purserEntitlementFake{}), logger: logrus.New()}
+	_, _, err := server.loadAdmissionRouteInputs(context.Background(), "closed-tenant", "cache invalidation")
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("inactive tenant routing status=%v, want NotFound", err)
+	}
 }

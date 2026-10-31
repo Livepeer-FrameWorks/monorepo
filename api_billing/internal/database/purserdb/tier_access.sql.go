@@ -57,10 +57,10 @@ func (q *Queries) ListEligibleOfficialClusters(ctx context.Context, arg ListElig
 
 const listSubscriptionTierNames = `-- name: ListSubscriptionTierNames :many
 SELECT DISTINCT ON (ts.tenant_id) ts.tenant_id, bt.tier_name,
-       CASE WHEN ts.status = 'active' THEN COALESCE(
+       CASE WHEN ts.status IN ('active', 'past_due', 'pending_cancellation') THEN COALESCE(
            subdomain_override.value, subdomain_default.value, 'false'::jsonb
        )::text::boolean ELSE false END AS custom_subdomain_enabled,
-       CASE WHEN ts.status = 'active' THEN COALESCE(
+       CASE WHEN ts.status IN ('active', 'past_due', 'pending_cancellation') THEN COALESCE(
            domain_override.value, domain_default.value, 'false'::jsonb
        )::text::boolean ELSE false END AS custom_domain_enabled
 FROM purser.tenant_subscriptions ts
@@ -113,14 +113,14 @@ func (q *Queries) ListSubscriptionTierNames(ctx context.Context) ([]ListSubscrip
 
 const loadEffectiveDNSEntitlements = `-- name: LoadEffectiveDNSEntitlements :one
 SELECT bt.tier_name,
-	       CASE WHEN ts.status = 'active' THEN COALESCE(
+	       CASE WHEN ts.status IN ('active', 'past_due', 'pending_cancellation') THEN COALESCE(
 	           (SELECT seo.value FROM purser.subscription_entitlement_overrides seo
 	            WHERE seo.subscription_id = ts.id AND seo.key = 'custom_subdomain_enabled'),
 	           (SELECT te.value FROM purser.tier_entitlements te
 	            WHERE te.tier_id = bt.id AND te.key = 'custom_subdomain_enabled'),
 	           'false'::jsonb
 	       )::text::boolean ELSE false END AS custom_subdomain_enabled,
-	       CASE WHEN ts.status = 'active' THEN COALESCE(
+	       CASE WHEN ts.status IN ('active', 'past_due', 'pending_cancellation') THEN COALESCE(
 	           (SELECT seo.value FROM purser.subscription_entitlement_overrides seo
 	            WHERE seo.subscription_id = ts.id AND seo.key = 'custom_domain_enabled'),
 	           (SELECT te.value FROM purser.tier_entitlements te

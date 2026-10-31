@@ -10,13 +10,13 @@ import (
 	"frameworks/api_billing/internal/billingevents"
 	"frameworks/api_billing/internal/database/purserdb"
 	"frameworks/api_billing/internal/handlers"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/internalv1"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 	"github.com/google/uuid"
-	"github.com/shopspring/decimal"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -53,13 +53,16 @@ func parseOperatorGrantChange(req *purserpb.AdminSetBillingGrantRequest, now tim
 		return change, status.Errorf(codes.InvalidArgument, `collection must be "provider" or "invoice", got %q`, req.GetCollection())
 	}
 	if req.BasePrice != nil {
-		base, err := decimal.NewFromString(strings.TrimSpace(req.GetBasePrice()))
-		if err != nil || base.IsNegative() || base.Exponent() < -2 {
-			return change, status.Errorf(codes.InvalidArgument, "base_price must be a non-negative EUR amount with at most two decimals, got %q", req.GetBasePrice())
+		amount, err := billing.ParseOperatorGrantAmount(req.GetBasePrice())
+		if err != nil {
+			return change, status.Errorf(codes.InvalidArgument, "base_price: %v", err)
 		}
-		change.basePrice = sql.NullString{String: base.StringFixed(2), Valid: true}
+		change.basePrice = sql.NullString{String: amount, Valid: true}
 	}
 	if req.GetExpiresAt() != nil {
+		if err := req.GetExpiresAt().CheckValid(); err != nil {
+			return change, status.Errorf(codes.InvalidArgument, "invalid expires_at: %v", err)
+		}
 		expires := req.GetExpiresAt().AsTime()
 		if !expires.After(now) {
 			return change, status.Errorf(codes.InvalidArgument, "expires_at %s is not in the future", expires.Format(time.RFC3339))
@@ -72,10 +75,7 @@ func parseOperatorGrantChange(req *purserpb.AdminSetBillingGrantRequest, now tim
 	return change, nil
 }
 
-// AdminSetBillingGrant records an operator's billing arrangement for a
-// tenant, optionally assigning a tier first. A grant that sets the base fee is
-// refused while a Stripe or Mollie subscription exists: that subscription
-// bills the tier's price on the provider's side, outside Purser's invoice.
+// AdminSetBillingGrant records a validated arrangement and assigns its tier atomically.
 func (s *PurserServer) AdminSetBillingGrant(ctx context.Context, req *purserpb.AdminSetBillingGrantRequest) (*purserpb.AdminBillingGrantResponse, error) {
 	tenantID := strings.TrimSpace(req.GetTenantId())
 	if _, err := uuid.Parse(tenantID); err != nil {
@@ -91,59 +91,55 @@ func (s *PurserServer) AdminSetBillingGrant(ctx context.Context, req *purserpb.A
 		}
 	}
 
-	resp := &purserpb.AdminBillingGrantResponse{}
-	if tierName := strings.TrimSpace(req.GetTierName()); tierName != "" {
-		assigned, assignErr := s.AdminAssignTier(ctx, &purserpb.AdminAssignTierRequest{
-			TenantId: tenantID, TierName: tierName, Reason: change.reason,
-		})
-		if assignErr != nil {
-			return nil, assignErr
+	var assigned *purserpb.AdminAssignTierResponse
+	var mutation *operatorGrantMutation
+	for attempt := 1; ; attempt++ {
+		previous, err := loadGrantForMutation(ctx, s.db, tenantID)
+		if err != nil {
+			return nil, err
 		}
-		resp.Assignment = assigned
+		if previous != nil && previous.ExpiresAt.Valid && !previous.ExpiresAt.Time.After(time.Now()) {
+			return nil, status.Error(codes.FailedPrecondition, "end the expired grant with grant revoke --tier or set-tier before setting a new grant")
+		}
+		tierName := strings.TrimSpace(req.GetTierName())
+		if tierName == "" {
+			current, loadErr := purserdb.New(s.db).GetSubscriptionTierForGrant(ctx, tenantID)
+			if errors.Is(loadErr, sql.ErrNoRows) {
+				return nil, status.Error(codes.FailedPrecondition, "assign a tier first (--tier)")
+			}
+			if loadErr != nil {
+				return nil, status.Errorf(codes.Internal, "load subscription: %v", loadErr)
+			}
+			tierName = current.TierName
+		}
+		mutation = &operatorGrantMutation{change: &change, previous: previous, fallbackTierName: req.FallbackTierName}
+		assigned, err = s.adminAssignTierOnce(ctx, tenantID, tierName, "", change.reason, mutation)
+		if errors.Is(err, errPhaseChangedWhileRated) {
+			if attempt < phaseCloseAttempts {
+				continue
+			}
+			return nil, status.Error(codes.Aborted, "billing phase changed while setting the grant; retry")
+		}
+		if err != nil {
+			return nil, err
+		}
+		break
 	}
-
-	userID := middleware.GetUserID(ctx)
-	stage, err := runRetryableTx(ctx, s.db, func(tx *sql.Tx) error {
-		queries := purserdb.New(tx)
-		sub, subErr := queries.GetProviderSubscriptionState(ctx, tenantID)
-		if errors.Is(subErr, sql.ErrNoRows) {
-			return status.Error(codes.FailedPrecondition, "tenant has no billing subscription; assign a tier first (--tier)")
+	if mutation.mutated {
+		fields := logging.Fields{"tenant_id": tenantID, "operator": middleware.GetUserID(ctx), "base_price": change.basePrice.String, "waive_usage": change.waiveUsage, "collection": change.collection, "reason": change.reason}
+		if change.expiresAt.Valid {
+			fields["expires_at"] = change.expiresAt.Time.UTC().Format(time.RFC3339)
 		}
-		if subErr != nil {
-			return txStatusErrorf(subErr, codes.Internal, "load subscription: %v", subErr)
-		}
-		if change.basePrice.Valid && (sub.HasStripeSubscription || sub.HasMollieSubscription) {
-			return providerSubscriptionBillsBaseFee()
-		}
-		if upsertErr := queries.UpsertSubscriptionOperatorGrant(ctx, purserdb.UpsertSubscriptionOperatorGrantParams{
-			SubscriptionID: sub.SubscriptionID, BasePrice: change.basePrice, WaiveUsage: change.waiveUsage,
-			Collection: change.collection, ExpiresAt: change.expiresAt, Reason: change.reason, GrantedBy: userID,
-		}); upsertErr != nil {
-			return txStatusErrorf(upsertErr, codes.Internal, "store grant: %v", upsertErr)
-		}
-		return s.enqueueGrantChangedTx(ctx, tx, tenantID, sub.SubscriptionID, userID, change.reason)
-	})
-	if err != nil {
-		return nil, grantTxError(stage, "grant", err)
+		s.logger.WithFields(fields).Info("Operator set billing grant")
 	}
-	s.afterGrantChange(ctx, tenantID)
-
+	resp := &purserpb.AdminBillingGrantResponse{Assignment: assigned}
 	if err := s.fillGrantResponse(ctx, tenantID, resp); err != nil {
 		return nil, err
 	}
-	s.logger.WithFields(logging.Fields{
-		"tenant_id":    tenantID,
-		"operator":     userID,
-		"base_price":   change.basePrice.String,
-		"waive_usage":  change.waiveUsage,
-		"collection":   change.collection,
-		"expires_at":   change.expiresAt.Time,
-		"grant_reason": change.reason,
-	}).Info("Operator set billing grant")
 	return resp, nil
 }
 
-// AdminGetBillingGrant returns the tenant's grant, including one that expired.
+// AdminGetBillingGrant returns the tenant's current grant, including an expired grant.
 func (s *PurserServer) AdminGetBillingGrant(ctx context.Context, req *purserpb.AdminGetBillingGrantRequest) (*purserpb.AdminBillingGrantResponse, error) {
 	tenantID := strings.TrimSpace(req.GetTenantId())
 	if _, err := uuid.Parse(tenantID); err != nil {
@@ -156,8 +152,7 @@ func (s *PurserServer) AdminGetBillingGrant(ctx context.Context, req *purserpb.A
 	return resp, nil
 }
 
-// AdminRevokeBillingGrant removes the tenant's grant; the tenant is billed
-// and admitted by the tier and its own payment setup again.
+// AdminRevokeBillingGrant closes the grant phase and restores an eligible fallback tier.
 func (s *PurserServer) AdminRevokeBillingGrant(ctx context.Context, req *purserpb.AdminRevokeBillingGrantRequest) (*purserpb.AdminBillingGrantResponse, error) {
 	tenantID := strings.TrimSpace(req.GetTenantId())
 	reason := strings.TrimSpace(req.GetReason())
@@ -167,37 +162,14 @@ func (s *PurserServer) AdminRevokeBillingGrant(ctx context.Context, req *purserp
 	if reason == "" {
 		return nil, status.Error(codes.InvalidArgument, "reason is required; it is recorded on the audit event")
 	}
-	userID := middleware.GetUserID(ctx)
-	stage, err := runRetryableTx(ctx, s.db, func(tx *sql.Tx) error {
-		queries := purserdb.New(tx)
-		sub, subErr := queries.GetProviderSubscriptionState(ctx, tenantID)
-		if errors.Is(subErr, sql.ErrNoRows) {
-			return status.Error(codes.NotFound, "tenant has no billing subscription")
-		}
-		if subErr != nil {
-			return txStatusErrorf(subErr, codes.Internal, "load subscription: %v", subErr)
-		}
-		removed, delErr := queries.DeleteSubscriptionOperatorGrant(ctx, sub.SubscriptionID)
-		if delErr != nil {
-			return txStatusErrorf(delErr, codes.Internal, "remove grant: %v", delErr)
-		}
-		if removed == 0 {
-			return status.Error(codes.NotFound, "tenant has no billing grant")
-		}
-		return s.enqueueGrantChangedTx(ctx, tx, tenantID, sub.SubscriptionID, userID, reason)
-	})
-	if err != nil {
-		return nil, grantTxError(stage, "grant revocation", err)
-	}
-	s.afterGrantChange(ctx, tenantID)
 
+	if err := s.endOperatorGrantToTier(ctx, tenantID, reason, false, strings.TrimSpace(req.GetTierName())); err != nil {
+		return nil, err
+	}
 	resp := &purserpb.AdminBillingGrantResponse{}
 	if err := s.fillGrantResponse(ctx, tenantID, resp); err != nil {
 		return nil, err
 	}
-	s.logger.WithFields(logging.Fields{
-		"tenant_id": tenantID, "operator": userID, "revoke_reason": reason,
-	}).Info("Operator revoked billing grant")
 	return resp, nil
 }
 
@@ -278,19 +250,6 @@ func (s *PurserServer) AdminRecordInvoicePayment(ctx context.Context, req *purse
 	return resp, nil
 }
 
-// operatorGrantSetsBaseFee reports whether an operator grant in force sets
-// the tenant's base fee.
-func (s *PurserServer) operatorGrantSetsBaseFee(ctx context.Context, tenantID string) (bool, error) {
-	overrides, err := purserdb.New(s.db).GetActiveOperatorBaseFeeOverride(ctx, tenantID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
-	if err != nil {
-		return false, status.Errorf(codes.Internal, "load operator grant: %v", err)
-	}
-	return overrides, nil
-}
-
 func (s *PurserServer) refuseBaseFeeGrantWithProviderSubscription(ctx context.Context, tenantID string) error {
 	sub, err := purserdb.New(s.db).GetProviderSubscriptionState(ctx, tenantID)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -330,15 +289,6 @@ func (s *PurserServer) enqueueGrantChangedTx(ctx context.Context, tx *sql.Tx, te
 	return nil
 }
 
-// afterGrantChange drops cached tenant billing state so admission reads the
-// new arrangement. A failure is logged, not returned: the grant is stored and
-// caches expire on their own.
-func (s *PurserServer) afterGrantChange(ctx context.Context, tenantID string) {
-	if err := s.invalidateTenantCache(ctx, tenantID, "billing_grant_changed"); err != nil {
-		s.logger.WithError(err).WithField("tenant_id", tenantID).Warn("Could not invalidate tenant cache after billing grant change")
-	}
-}
-
 func (s *PurserServer) fillGrantResponse(ctx context.Context, tenantID string, resp *purserpb.AdminBillingGrantResponse) error {
 	grant, err := s.loadOperatorGrant(ctx, tenantID)
 	if err != nil {
@@ -374,7 +324,7 @@ func (s *PurserServer) loadOperatorGrant(ctx context.Context, tenantID string) (
 		return nil, status.Errorf(codes.Internal, "load operator grant: %v", err)
 	}
 	grant := &purserpb.OperatorBillingGrant{
-		SubscriptionId: row.SubscriptionID, WaiveUsage: row.WaiveUsage, Collection: row.Collection,
+		SubscriptionId: row.SubscriptionID, FallbackTierName: row.FallbackTierName, WaiveUsage: row.WaiveUsage, ExpiryError: row.ExpiryError.String, ExpiryFailures: row.ExpiryFailures, Collection: row.Collection,
 		Reason: row.Reason, GrantedBy: row.GrantedBy.String, GrantedAt: timestamppb.New(row.GrantedAt),
 		Active: row.Active,
 	}

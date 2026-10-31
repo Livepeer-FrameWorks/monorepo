@@ -244,7 +244,12 @@ monthly=$(pg purser "SELECT id::text FROM purser.billing_invoices WHERE tenant_i
   AND document_kind='prepaid_statement' AND period_start='$phase_start' AND status='paid'")
 check 'month-end wrote a paid prepaid statement for the last phase' [ -n "$monthly" ]
 [ -n "$monthly" ] || finish
-calendar=$(pg purser "SELECT (s.period_start=i.period_end AND s.period_end=t.billing_period_start
+calendar=$(pg purser "SELECT (EXISTS (
+    SELECT 1 FROM purser.billing_invoices grant_end
+    WHERE grant_end.tenant_id='$tenant' AND grant_end.document_kind='prepaid_statement'
+      AND grant_end.period_start=i.period_end AND grant_end.period_end=s.period_start
+      AND grant_end.usage_details->'statement'->>'closes_prepaid_phase'='true')
+  AND s.period_end=t.billing_period_start
   AND t.billing_period_end=t.billing_period_start + INTERVAL '1 month')::int
   FROM purser.billing_invoices s, purser.billing_invoices i, purser.tenant_subscriptions t
   WHERE s.id='$monthly' AND s.tenant_id='$tenant' AND i.id='$invoice' AND i.tenant_id='$tenant' AND t.tenant_id='$tenant'")
@@ -265,7 +270,7 @@ conservation=$(pg purser "SELECT (
       AND period_start < (SELECT period_end FROM purser.billing_invoices WHERE tenant_id='$tenant' AND id='$monthly')
     ) ledger)
   )::int")
-check 'all three billing phases account for actual API usage exactly once' [ "$conservation" = 1 ]
+check 'all billing phases account for actual API usage exactly once' [ "$conservation" = 1 ]
 balance_after_month=$(pg purser "SELECT balance_cents FROM purser.prepaid_balances WHERE tenant_id='$tenant' AND currency='EUR'")
 check 'month-end did not charge settled prepaid usage again' [ "$balance_after_month" = "$balance_before_month" ]
 monthly_zero=$(pg purser "SELECT (amount=0 AND prepaid_credit_applied=0)::int

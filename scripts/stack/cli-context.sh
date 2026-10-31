@@ -33,7 +33,9 @@ contexts:
     access_mode: local
     endpoints:
       bridge_url: http://bridge:18000
+      quartermaster_grpc_addr: quartermaster:19002
       purser_grpc_addr: purser:19003
+      commodore_grpc_addr: commodore:19001
       allow_insecure: true
     gitops:
       source: manifest

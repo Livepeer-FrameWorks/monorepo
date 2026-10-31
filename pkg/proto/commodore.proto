@@ -490,6 +490,8 @@ enum StreamKeyRejectionReason {
   STREAM_KEY_REJECTION_PROTOCOL_NOT_SUPPORTED = 8;
   STREAM_KEY_REJECTION_CLUSTER_UNHEALTHY = 9;
   STREAM_KEY_REJECTION_DUPLICATE_INGEST = 10;
+  // The operator grant deadline passed; this is independent of prepaid balance.
+  STREAM_KEY_REJECTION_GRANT_EXPIRED = 11;
 }
 
 // Matches pkg/api/commodore/types.go:ValidateStreamKeyResponse exactly
@@ -1564,6 +1566,12 @@ service UserService {
   // address for operator tooling. Requires a platform-operator JWT; service
   // and tenant credentials are refused.
   rpc AdminLookupUserByEmail(AdminLookupUserByEmailRequest) returns (AdminLookupUserByEmailResponse);
+  // Sets a user's account access without changing playback. Requires a platform-operator JWT.
+  rpc AdminSetUserActive(AdminSetUserActiveRequest) returns (AdminSetUserActiveResponse);
+  // Lists private account lifecycle audit. Requires a platform-operator JWT.
+  rpc AdminListAccountHistory(AdminListAccountHistoryRequest) returns (AdminListAccountHistoryResponse);
+  // Closes local account access and synchronizes tenant inactivity. Requires a platform-operator JWT.
+  rpc AdminDeactivateTenant(AdminDeactivateTenantRequest) returns (google.protobuf.Empty);
 }
 
 message AdminLookupUserByEmailRequest {
@@ -2687,4 +2695,55 @@ message ApproveDeviceAuthorizationRequest {
 message ApproveDeviceAuthorizationResponse {
   bool success = 1;
   string client_id = 2;
+}
+
+// Operator access change scoped to one tenant and one user.
+message AdminSetUserActiveRequest {
+  string tenant_id = 1; // Tenant UUID.
+  string user_id = 2; // User UUID; mutually exclusive with email.
+  string email = 3; // User email within the tenant; mutually exclusive with user_id.
+  bool active = 4; // Whether the user may authenticate and publish.
+  string reason = 5; // Required private operator audit reason.
+}
+
+// AdminSetUserActiveResponse reports the user identity and resulting access state.
+message AdminSetUserActiveResponse {
+  string user_id = 1;
+  string tenant_id = 2;
+  string email = 3;
+  string role = 4;
+  bool is_active = 5;
+  bool verified = 6;
+}
+
+// AdminDeactivateTenantRequest confirms permanent closure of an existing tenant.
+message AdminDeactivateTenantRequest {
+  string tenant_id = 1; // Tenant UUID; the system tenant cannot be closed.
+  string reason = 2; // Required private operator audit reason.
+  string tenant_name = 3; // Exact Quartermaster name confirming permanent closure.
+}
+
+// Operator-only, tenant-scoped account lifecycle audit page.
+message AdminListAccountHistoryRequest {
+  string tenant_id = 1; // Tenant UUID.
+  int32 limit = 2; // Page size, 1..500; zero selects the default of 100.
+  string before = 3; // Opaque cursor from the preceding page; empty selects the newest entries.
+}
+
+// OperatorAccountAuditEntry is one private account lifecycle action.
+message OperatorAccountAuditEntry {
+  string id = 1; // Audit entry UUID.
+  string actor_user_id = 2; // Platform operator user UUID.
+  string target_id = 3; // Affected user or tenant UUID.
+  string action = 4; // user_active:true, user_active:false, or tenant_closed.
+  string reason = 5; // Private operator reason, never exposed to tenant credentials.
+  // Time the operator action was recorded.
+  google.protobuf.Timestamp created_at = 6;
+}
+
+// AdminListAccountHistoryResponse is a page of private account lifecycle actions.
+message AdminListAccountHistoryResponse {
+  repeated OperatorAccountAuditEntry entries = 1;
+  bool has_more = 2; // Older entries exist beyond this page.
+  string next_cursor = 3; // Pass as before to read the next page.
 }

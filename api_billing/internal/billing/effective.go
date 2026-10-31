@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"maps"
 	"strings"
+	"time"
 
 	"github.com/shopspring/decimal"
 
@@ -86,6 +87,15 @@ func LoadSubscriptionEffectiveTier(ctx context.Context, db *sql.DB, tenantID str
 		return nil, errors.New("LoadSubscriptionEffectiveTier: empty tenant_id")
 	}
 	row, err := purserdb.New(db).LoadSubscriptionEffectiveTier(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	return effectiveTierFromRow(ctx, db, purserdb.LoadActiveEffectiveTierRow(row))
+}
+
+// LoadSubscriptionEffectiveTierAt resolves the pricing in force just before a phase closes.
+func LoadSubscriptionEffectiveTierAt(ctx context.Context, db purserdb.DBTX, tenantID string, closeAt time.Time) (*EffectiveTier, error) {
+	row, err := purserdb.New(db).LoadSubscriptionEffectiveTierAt(ctx, purserdb.LoadSubscriptionEffectiveTierAtParams{TenantID: tenantID, CloseAt: closeAt})
 	if err != nil {
 		return nil, err
 	}

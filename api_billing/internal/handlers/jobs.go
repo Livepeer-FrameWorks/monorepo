@@ -29,6 +29,7 @@ import (
 	"frameworks/api_billing/internal/pricing"
 	"frameworks/api_billing/internal/rating"
 	billingstripe "frameworks/api_billing/internal/stripe"
+	"frameworks/api_billing/internal/subscriptions"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	decklog "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
 	periscope "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/periscope"
@@ -40,6 +41,7 @@ import (
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	foghorncontrolpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/restream"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/topology"
 )
 
 type canonicalUsageDelta struct {
@@ -272,12 +274,14 @@ func (jm *JobManager) validateUsageSummaryMeters(ctx context.Context, summary mo
 
 // mollieAnchoredPeriod is the billing period that ends on Mollie's next
 // payment date. A period that started later, at a switch from prepaid that
-// closed the prepaid phase, keeps that start: the phase before it is on its
-// prepaid statement.
-func mollieAnchoredPeriod(mollieNext time.Time, billingPeriodStart sql.NullTime) (time.Time, time.Time) {
+// closed the prepaid phase, keeps that start. Matching recorded ends also keep
+// a precise upgrade start before the date-only anchor, rather than dropping
+// the hours a renewal rounded up.
+func mollieAnchoredPeriod(mollieNext time.Time, billingPeriodStart, billingPeriodEnd sql.NullTime) (time.Time, time.Time) {
 	periodEnd := time.Date(mollieNext.Year(), mollieNext.Month(), mollieNext.Day(), 0, 0, 0, 0, time.UTC)
-	periodStart := periodEnd.AddDate(0, -1, 0)
-	if billingPeriodStart.Valid && billingPeriodStart.Time.After(periodStart) && billingPeriodStart.Time.Before(periodEnd) {
+	periodStart := billing.PreviousMonthlyAnniversary(periodEnd)
+	if billingPeriodStart.Valid && billingPeriodStart.Time.Before(periodEnd) &&
+		(billingPeriodStart.Time.After(periodStart) || billingPeriodEnd.Valid && billingPeriodEnd.Time.Equal(periodEnd)) {
 		periodStart = billingPeriodStart.Time
 	}
 	return periodStart, periodEnd
@@ -293,17 +297,20 @@ func mollieAnchoredPeriod(mollieNext time.Time, billingPeriodStart sql.NullTime)
 func nextBillingPeriodEnd(splitStart, periodEnd time.Time) time.Time {
 	start, end := splitStart.UTC(), periodEnd.UTC()
 	for months := 1; months <= 12; months++ {
-		if start.AddDate(0, months, 0).Equal(end) {
-			return end.AddDate(0, months, 0)
+		if billing.AddCalendarMonths(start, months).Equal(end) {
+			return billing.AddCalendarMonths(start, 2*months)
+		}
+		if billing.AddCalendarMonths(end, -months).Equal(start) {
+			return billing.AddCalendarMonths(end, months)
 		}
 	}
-	return end.AddDate(0, 1, 0)
+	return billing.NextMonthlyAnniversary(end)
 }
 
 func loadSubscriptionPeriod(ctx context.Context, db *sql.DB, tenantID string, now time.Time) (time.Time, time.Time, error) {
 	period, err := purserdb.New(db).GetActiveSubscriptionPeriod(ctx, tenantID)
 	if err == nil && period.MollieNextPaymentDate.Valid {
-		periodStart, periodEnd := mollieAnchoredPeriod(period.MollieNextPaymentDate.Time, period.BillingPeriodStart)
+		periodStart, periodEnd := mollieAnchoredPeriod(period.MollieNextPaymentDate.Time, period.BillingPeriodStart, period.BillingPeriodEnd)
 		return periodStart, periodEnd, nil
 	}
 	if err == nil && period.BillingPeriodStart.Valid && period.BillingPeriodEnd.Valid && period.BillingPeriodEnd.Time.After(period.BillingPeriodStart.Time) {
@@ -486,7 +493,8 @@ func NewJobManager(database *sql.DB, log logging.Logger, commodoreClient Commodo
 // billing steps, which activation paths run after a tenant changes tier.
 func wireAdvanceBilling(billing *Service, jm *JobManager) {
 	billing.chargeAdvanceBaseFee = jm.ChargeAdvanceBaseFee
-	billing.closeAdvanceBilledPeriod = jm.CloseAdvanceBilledPeriod
+	billing.chargeTierUpgradeInvoice = jm.chargeTierUpgradeInvoice
+	billing.stopSuspendedTenantStreams = jm.stopSuspendedTenantStreams
 }
 
 // Start begins all background jobs
@@ -495,7 +503,8 @@ func (jm *JobManager) Start(ctx context.Context) {
 
 	// Start usage report consumer
 	if jm.kafkaConsumer != nil {
-		jm.kafkaConsumer.AddHandler(jm.billingTopic, jm.handleUsageReport)
+		jm.kafkaConsumer.AddHandler(jm.billingTopic, jm.handleBillingMessage)
+		jm.kafkaConsumer.AddHandler(topology.TopicDomainEvents, jm.handleBillingMessage)
 		go func() {
 			if err := jm.kafkaConsumer.Start(ctx); err != nil && ctx.Err() == nil {
 				jm.logger.WithError(err).Error("Kafka consumer exited with error")
@@ -673,8 +682,11 @@ func (jm *JobManager) Stop() {
 	close(jm.stopCh)
 }
 
-// handleUsageReport consumes billing usage reports from Kafka
-func (jm *JobManager) handleUsageReport(ctx context.Context, msg kafka.Message) error {
+// handleBillingMessage consumes billing usage reports from Kafka
+func (jm *JobManager) handleBillingMessage(ctx context.Context, msg kafka.Message) error {
+	if msg.Topic == topology.TopicDomainEvents {
+		return jm.queueTenantBillingClosure(ctx, msg)
+	}
 	summary, ingestSource, err := decodeUsageSummary(msg.Value)
 	if err != nil {
 		jm.logger.WithError(err).WithFields(logging.Fields{
@@ -1695,7 +1707,15 @@ func (jm *JobManager) getBalanceTransactionByReference(ctx context.Context, tena
 func (jm *JobManager) suspendTenantForBalance(ctx context.Context, tenantID string, balanceCents int64) error {
 	// Update subscription status to 'suspended'
 	// This blocks NEW ingests/streams via Foghorn (which checks suspension status)
-	rowsAffected, err := purserdb.New(jm.db).SuspendActiveTenantSubscription(ctx, tenantID)
+	var rowsAffected int64
+	err := database.WithRetryablePostgresTx(ctx, jm.db, nil, func(tx *sql.Tx) error {
+		var err error
+		rowsAffected, err = purserdb.New(tx).SuspendActiveTenantSubscription(ctx, tenantID)
+		if err != nil || rowsAffected == 0 {
+			return err
+		}
+		return purserdb.New(tx).EnqueueSuspendedTenantStop(ctx, tenantID)
+	})
 	if err != nil {
 		return err
 	}
@@ -1717,7 +1737,7 @@ func (jm *JobManager) suspendTenantForBalance(ctx context.Context, tenantID stri
 			defer cancel()
 			resp, err := jm.commodoreClient.TerminateTenantStreams(terminateCtx, tenantID, "insufficient_balance")
 			if err != nil {
-				jm.logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to terminate tenant streams on suspension")
+				jm.logger.WithError(err).WithFields(logging.Fields{"tenant_id": tenantID, "streams_terminated": resp.GetStreamsTerminated(), "sessions_terminated": resp.GetSessionsTerminated(), "stream_names": resp.GetStreamNames()}).Error("Tenant suspension stream termination failed on some nodes")
 			} else {
 				jm.logger.WithFields(logging.Fields{
 					"tenant_id":           tenantID,
@@ -1777,7 +1797,7 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 	defer jm.chargeDueAdvanceBaseFees(ctx, now)
 
 	// Identify tenants due for billing. Pricing rules / entitlements are loaded
-	// per-tenant via LoadEffectiveTier so this query stays narrow.
+	// per-phase via LoadSubscriptionEffectiveTierAt so this query stays narrow.
 	dueSubscriptions, err := purserdb.New(jm.db).ListSubscriptionsDueForInvoice(ctx, now)
 
 	if err != nil {
@@ -1808,13 +1828,6 @@ func (jm *JobManager) finalizeSubscriptionPeriods(ctx context.Context, dueSubscr
 		billingPeriodEnd := subscription.BillingPeriodEnd
 		mollieNextPaymentDate := subscription.MollieNextPaymentDate
 
-		tier, tierErr := billingpkg.LoadEffectiveTier(ctx, jm.db, tenantID)
-		if tierErr != nil {
-			jm.logger.WithError(tierErr).WithField("tenant_id", tenantID).Error("Failed to load effective tier for invoice")
-			continue
-		}
-		meteringEnabled := tier.MeteringEnabled
-
 		var periodStart, periodEnd time.Time
 		if closingEarly {
 			if !billingPeriodStart.Valid || !closeAt.After(billingPeriodStart.Time) {
@@ -1824,7 +1837,7 @@ func (jm *JobManager) finalizeSubscriptionPeriods(ctx context.Context, dueSubscr
 			periodStart = billingPeriodStart.Time
 			periodEnd = closeAt
 		} else if mollieNextPaymentDate.Valid {
-			periodStart, periodEnd = mollieAnchoredPeriod(mollieNextPaymentDate.Time, billingPeriodStart)
+			periodStart, periodEnd = mollieAnchoredPeriod(mollieNextPaymentDate.Time, billingPeriodStart, billingPeriodEnd)
 		} else if billingPeriodStart.Valid && billingPeriodEnd.Valid && billingPeriodEnd.Time.After(billingPeriodStart.Time) {
 			periodStart = billingPeriodStart.Time
 			periodEnd = billingPeriodEnd.Time
@@ -1836,6 +1849,13 @@ func (jm *JobManager) finalizeSubscriptionPeriods(ctx context.Context, dueSubscr
 		if periodEnd.After(now) {
 			continue // Billing period not closed yet
 		}
+		tier, tierErr := billingpkg.LoadSubscriptionEffectiveTierAt(ctx, jm.db, tenantID, periodEnd)
+		if tierErr != nil {
+			jm.logger.WithError(tierErr).WithField("tenant_id", tenantID).Error("Failed to load effective tier for invoice")
+			continue
+		}
+		meteringEnabled := tier.MeteringEnabled
+
 		if meteringCompletenessRequired(meteringEnabled, tier.UsageWaived) {
 			if completenessErr := jm.assertMeteringComplete(ctx, tenantID, periodStart, periodEnd); completenessErr != nil {
 				jm.logger.WithError(completenessErr).WithField("tenant_id", tenantID).Error("Metering incomplete; invoice finalization blocked")
@@ -1921,7 +1941,14 @@ func (jm *JobManager) finalizeSubscriptionPeriods(ctx context.Context, dueSubscr
 			if txErr := purserdb.New(tx).LockSubscriptionForPeriodClose(ctx, tenantID); txErr != nil {
 				return fmt.Errorf("lock subscription: %w", txErr)
 			}
-			var txErr error
+			current, txErr := purserdb.New(tx).GetSubscriptionForPhaseClose(ctx, tenantID)
+			if txErr != nil {
+				return fmt.Errorf("reload subscription: %w", txErr)
+			}
+			// Both repository queries return the same phase snapshot; compare times as instants.
+			if !sameInvoiceSubscription(purserdb.ListSubscriptionsDueForInvoiceRow(current), subscription) {
+				return ErrPostpaidPhaseChanged
+			}
 			result, txErr = writePostpaidInvoiceTx(ctx, tx, run)
 			if txErr != nil {
 				return txErr
@@ -2221,7 +2248,7 @@ func (jm *JobManager) chargeStripeOverage(ctx context.Context, tenantID, invoice
 			intentStatus = "terminal_failed"
 			nextRetry = sql.NullTime{}
 		}
-		if updateErr := queries.SetProviderPaymentIntentFailure(ctx, purserdb.SetProviderPaymentIntentFailureParams{
+		if updateErr := queries.SetProviderPaymentIntentFailure(ctx, purserdb.SetProviderPaymentIntentFailureParams{TenantID: tenantID,
 			Status:    intentStatus,
 			LastError: sql.NullString{String: chargeErr.Error(), Valid: true},
 			IntentID:  providerIntentID,
@@ -2280,7 +2307,7 @@ func (jm *JobManager) chargeStripeOverage(ctx context.Context, tenantID, invoice
 		// SCA required: customer must reauthorize. Park the intent in
 		// sca_required; the attempt row mirrors that state so the retry
 		// job does not re-fire automatically.
-		if updateErr := queries.SetProviderPaymentIntentFailure(ctx, purserdb.SetProviderPaymentIntentFailureParams{
+		if updateErr := queries.SetProviderPaymentIntentFailure(ctx, purserdb.SetProviderPaymentIntentFailureParams{TenantID: tenantID,
 			Status:    "sca_required",
 			LastError: sql.NullString{String: result.FailureMessage, Valid: true},
 			IntentID:  providerIntentID,
@@ -2321,7 +2348,7 @@ func (jm *JobManager) chargeStripeOverage(ctx context.Context, tenantID, invoice
 	case result.Status == "failed":
 		// Hard failure (card_declined, expired_card, etc.) requires a new
 		// customer action or operator decision rather than blind retry.
-		if updateErr := queries.SetProviderPaymentIntentFailure(ctx, purserdb.SetProviderPaymentIntentFailureParams{
+		if updateErr := queries.SetProviderPaymentIntentFailure(ctx, purserdb.SetProviderPaymentIntentFailureParams{TenantID: tenantID,
 			Status:    "terminal_failed",
 			LastError: sql.NullString{String: result.FailureCode + ": " + result.FailureMessage, Valid: true},
 			IntentID:  providerIntentID,
@@ -2597,12 +2624,15 @@ func (jm *JobManager) chargeMollieOverage(ctx context.Context, tenantID, invoice
 			if mandateErr := queries.RevokeValidMollieMandates(ctx, tenantID); mandateErr != nil {
 				jm.logger.WithError(mandateErr).WithField("tenant_id", tenantID).Warn("mark mollie mandate revoked")
 			}
+			if _, graceErr := subscriptions.StartPaymentFailureGrace(ctx, jm.db, tenantID, time.Now()); graceErr != nil {
+				return fmt.Errorf("start payment failure grace: %w", graceErr)
+			}
 		}
 		intentStatus := "provider_call_failed"
 		if mandateRevoked || providerCallCount >= maxProviderPaymentAttempts {
 			intentStatus = "terminal_failed"
 		}
-		if intentErr := queries.SetProviderPaymentIntentFailure(ctx, purserdb.SetProviderPaymentIntentFailureParams{
+		if intentErr := queries.SetProviderPaymentIntentFailure(ctx, purserdb.SetProviderPaymentIntentFailureParams{TenantID: tenantID,
 			Status:    intentStatus,
 			LastError: sql.NullString{String: err.Error(), Valid: true},
 			IntentID:  providerIntentID,
@@ -2688,10 +2718,22 @@ func (jm *JobManager) applyPendingDowngrade(ctx context.Context, tenantID string
 	// set as the "reconcile-not-yet-applied" marker. Conditional on the
 	// staged target so a racing ChangeBillingTier that re-pointed the
 	// pending is not clobbered.
-	rows, err := queries.ApplyPendingDowngradeTier(ctx, purserdb.ApplyPendingDowngradeTierParams{
-		PendingTierID: stagedTarget,
-		TenantID:      tenantID,
+	var rows int64
+	err = database.WithRetryablePostgresTx(ctx, jm.db, nil, func(tx *sql.Tx) error {
+		if _, guardErr := subscriptions.LockChange(ctx, tx, tenantID, subscriptions.ChangePricing); guardErr != nil {
+			return guardErr
+		}
+		var applyErr error
+		rows, applyErr = purserdb.New(tx).ApplyPendingDowngradeTier(ctx, purserdb.ApplyPendingDowngradeTierParams{
+			PendingTierID: stagedTarget,
+			TenantID:      tenantID,
+		})
+		return applyErr
 	})
+	if subscriptions.IsPricingRefusal(err) {
+		jm.logger.WithError(err).WithField("tenant_id", tenantID).Debug("Pending downgrade held by its subscription pricing state")
+		return
+	}
 	if err != nil {
 		jm.logger.WithError(err).WithField("tenant_id", tenantID).Warn("flip tier_id for pending downgrade")
 		return
@@ -2710,9 +2752,7 @@ func (jm *JobManager) applyPendingDowngrade(ctx context.Context, tenantID string
 	if jm.commodoreClient != nil {
 		invalidateCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		if _, invErr := jm.commodoreClient.InvalidateTenantCache(invalidateCtx, tenantID, "tier_changed"); invErr != nil {
-			jm.logger.WithError(invErr).WithField("tenant_id", tenantID).Warn("invalidate tenant cache after pending downgrade; will retry next tick")
-			cancel()
-			return
+			jm.logger.WithError(invErr).WithField("tenant_id", tenantID).Warn("pending downgrade committed; cache invalidation failed, durable media refresh will retry delivery")
 		}
 		cancel()
 	}

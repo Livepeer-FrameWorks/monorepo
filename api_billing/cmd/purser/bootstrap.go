@@ -14,6 +14,9 @@ import (
 	"frameworks/api_billing/internal/appconfig"
 	"frameworks/api_billing/internal/bootstrap"
 	"frameworks/api_billing/internal/database/purserdb"
+	pursergrpc "frameworks/api_billing/internal/grpc"
+	"frameworks/api_billing/internal/handlers"
+	commodoreclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
@@ -131,6 +134,37 @@ func runBootstrapApply(args []string) int {
 	if qm != nil {
 		qmIface = qm
 	}
+	var grantService *handlers.Service
+	if qm != nil {
+		grantService = handlers.NewService(db, logger, nil, qm.client, nil, nil, nil)
+	}
+	var commodore *commodoreclient.GRPCClient
+	if !*dryRun && len(desired.Purser.CustomerBilling) > 0 {
+		commodore, err = commodoreclient.NewGRPCClient(commodoreclient.GRPCConfig{GRPCAddr: cfg.CommodoreGRPCAddr, Timeout: 10 * time.Second, Logger: logger, ServiceToken: cfg.ServiceToken, AllowInsecure: cfg.AllowInsecure, CACertFile: cfg.CAPath, ServerName: cfg.CommodoreGRPCTLSServerName})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "purser bootstrap: Commodore client: %v\n", err)
+			return 1
+		}
+		defer func() { _ = commodore.Close() }()
+	}
+	var endExpired func(context.Context, string) error
+	if !*dryRun {
+		var qmClient *qmclient.GRPCClient
+		if qm != nil {
+			qmClient = qm.client
+		}
+		var grantCommodore handlers.CommodoreClient
+		if commodore != nil {
+			grantCommodore = commodore
+		}
+		endExpired = pursergrpc.NewBootstrapGrantExpiry(db, logger, grantService, qmClient, grantCommodore)
+	}
+	preparedGrants, err := bootstrap.PrepareCustomerGrants(ctx, db, desired.Purser.CustomerBilling, qmIface, logger, grantService, endExpired)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "purser bootstrap: prepare grants: %v\n", err)
+		return 1
+	}
+
 	// Reconcile only writes through tx and reads Quartermaster, so a replayed
 	// attempt is safe; its output is printed once, after the final attempt.
 	var (
@@ -141,7 +175,7 @@ func runBootstrapApply(args []string) int {
 	txErr := database.WithRetryablePostgresTxWithHook(ctx, db, nil, func(error, int) {
 		out, reconcileErr, reconciled = nil, nil, false
 	}, func(tx *sql.Tx) error {
-		out, reconcileErr = bootstrap.Reconcile(ctx, tx, desired.Purser, embedded, qmIface)
+		out, reconcileErr = bootstrap.Reconcile(ctx, tx, desired.Purser, embedded, qmIface, preparedGrants)
 		if reconcileErr != nil {
 			return reconcileErr
 		}
@@ -167,6 +201,9 @@ func runBootstrapApply(args []string) int {
 		for _, op := range out.PostCommit {
 			fmt.Fprintf(os.Stdout, "purser bootstrap [dry-run] would: %s tenant=%s cluster=%s\n", op.Kind, op.Alias, op.ClusterID)
 		}
+		if len(out.CustomerBilling.Deferred) > 0 {
+			return 1
+		}
 		return 0
 	case txErr != nil && !reconciled:
 		fmt.Fprintf(os.Stderr, "purser bootstrap: begin tx: %v\n", txErr)
@@ -175,6 +212,7 @@ func runBootstrapApply(args []string) int {
 		fmt.Fprintf(os.Stderr, "purser bootstrap: commit: %v\n", txErr)
 		return 1
 	}
+	bootstrap.AfterCustomerGrantsCommit(ctx, preparedGrants)
 	if len(out.PostCommit) > 0 {
 		// Cross-service entitlement runs after the local Purser tx is durable.
 		// Per-op failures are reported and the command exits non-zero so the
@@ -185,7 +223,11 @@ func runBootstrapApply(args []string) int {
 		}
 		failures := 0
 		for _, op := range out.PostCommit {
-			if applyErr := applyPostCommitOp(ctx, db, qm.client, op); applyErr != nil {
+			if applyErr := applyPostCommitOp(ctx, db, qm.client, commodore, op); applyErr != nil {
+				if op.Kind == bootstrap.PostCommitInvalidateTenantCache {
+					logger.WithError(applyErr).WithField("tenant_id", op.TenantID).Warn("Bootstrap cache invalidation failed; durable media refresh remains queued")
+					continue
+				}
 				failures++
 				fmt.Fprintf(os.Stderr, "purser bootstrap post-commit %s tenant=%s cluster=%s: %v\n",
 					op.Kind, op.Alias, op.ClusterID, applyErr)
@@ -196,11 +238,20 @@ func runBootstrapApply(args []string) int {
 			return 1
 		}
 	}
+	if len(out.CustomerBilling.Deferred) > 0 {
+		return 1
+	}
 	return 0
 }
 
-func applyPostCommitOp(ctx context.Context, db *sql.DB, client *qmclient.GRPCClient, op bootstrap.PostCommitOp) error {
+func applyPostCommitOp(ctx context.Context, db *sql.DB, client *qmclient.GRPCClient, commodore *commodoreclient.GRPCClient, op bootstrap.PostCommitOp) error {
 	switch op.Kind {
+	case bootstrap.PostCommitInvalidateTenantCache:
+		if commodore == nil {
+			return errors.New("commodore is required for billing cache invalidation")
+		}
+		_, err := commodore.InvalidateTenantCache(ctx, op.TenantID, "bootstrap_billing_grant_changed")
+		return err
 	case bootstrap.PostCommitGrantClusterAccess:
 		// Bootstrap CLI runs admin/system-tenant grants; per-tenant runtime
 		// caps come from Purser tier entitlements during admission, not from
@@ -234,6 +285,9 @@ func applyPostCommitOp(ctx context.Context, db *sql.DB, client *qmclient.GRPCCli
 func printPurserSection(name string, r bootstrap.Result) {
 	fmt.Fprintf(os.Stdout, "purser bootstrap %s: created=%d updated=%d noop=%d\n",
 		name, len(r.Created), len(r.Updated), len(r.Noop))
+	for _, deferred := range r.Deferred {
+		fmt.Fprintf(os.Stderr, "purser bootstrap %s: DEFERRED alias=%s reason=%s\n", name, deferred.Alias, deferred.Reason)
+	}
 }
 
 // runBootstrapValidate runs the cross-service invariant check: every QM

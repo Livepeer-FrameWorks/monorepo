@@ -227,24 +227,29 @@ func main() {
 			"Renewals published while the replaced version had used less than a quarter of its validity",
 			[]string{"authority_kind"},
 		),
+		TenantAccountClosureReadFailures:     metricsCollector.NewCounter("tenant_account_closure_read_failures_total", "Failed reads of the outstanding tenant closure count", nil),
+		TenantAccountClosureFailures:         metricsCollector.NewGauge("tenant_account_closure_failed_items", "Tenant closures awaiting Quartermaster synchronization", []string{}),
+		TenantAccountClosureRepeatedFailures: metricsCollector.NewGauge("tenant_account_closure_repeatedly_failed_items", "Tenant synchronizations with more than one failed attempt", nil),
 		FieldDecryptFailures: metricsCollector.NewCounter(
 			"field_decrypt_failures_total",
 			"Application-field decryption failures by bounded purpose and ciphertext format",
 			[]string{"purpose", "format"},
 		),
 	}
-	for _, lane := range []string{"event", "bulk", "object_deadline", "tenant_deadline"} {
+	for _, lane := range []string{"event", "bulk", "ingest_revocation", "object_deadline", "tenant_deadline"} {
 		for _, outcome := range []string{"completed", "noop", "superseded", "transient", "parked", "dormant"} {
 			serverMetrics.MediaAuthorityRefreshSettlements.WithLabelValues(lane, outcome).Add(0)
 		}
 	}
+	serverMetrics.TenantAccountClosureReadFailures.WithLabelValues().Add(0)
+
 	for _, kind := range []string{"tenant", "media_object"} {
 		for _, cause := range []string{"content", "targets", "validity", "renewal"} {
 			serverMetrics.MediaAuthorityVersionsPublished.WithLabelValues(kind, cause).Add(0)
 		}
 		serverMetrics.MediaAuthorityEarlyRenewals.WithLabelValues(kind).Add(0)
 	}
-	for _, stage := range []string{"previous_read", "previous_decode", "playback_source_read", "placement_read", "deny_publish"} {
+	for _, stage := range []string{"previous_read", "previous_decode", "playback_source_decode", "placement_read", "publishing_revoke", "deny_publish"} {
 		serverMetrics.MediaAuthorityRevocationCheckFailures.WithLabelValues(stage).Add(0)
 	}
 

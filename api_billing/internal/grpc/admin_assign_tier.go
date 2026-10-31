@@ -10,6 +10,7 @@ import (
 	"frameworks/api_billing/internal/billingevents"
 	"frameworks/api_billing/internal/database/purserdb"
 	"frameworks/api_billing/internal/handlers"
+	"frameworks/api_billing/internal/subscriptions"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
@@ -71,13 +72,41 @@ func (s *PurserServer) AdminAssignTier(ctx context.Context, req *purserpb.AdminA
 	// subscription or usage that changed in between rates it again.
 	// After the last attempt the caller gets codes.Aborted.
 	for attempt := 1; ; attempt++ {
-		resp, err := s.adminAssignTierOnce(ctx, tenantID, tierName, requestedModel, reason)
-		if errors.Is(err, errPhaseChangedWhileRated) && attempt < phaseCloseAttempts {
-			continue
+		previous, err := loadGrantForMutation(ctx, s.db, tenantID)
+		if err != nil {
+			return nil, err
+		}
+		if previous != nil && previous.Active {
+			current, readErr := purserdb.New(s.db).GetSubscriptionTierForGrant(ctx, tenantID)
+			if readErr != nil {
+				return nil, status.Errorf(codes.Internal, "load current subscription tier: %v", readErr)
+			}
+			if current.TierName == tierName && (requestedModel == "" || requestedModel == current.BillingModel) {
+				return s.adminAssignTierOnce(ctx, tenantID, tierName, requestedModel, reason, nil)
+			}
+		}
+		var grant *operatorGrantMutation
+		if previous != nil {
+			grant = &operatorGrantMutation{previous: previous, reason: reason, clearFallback: true}
+			if previous.ExpiresAt.Valid && !previous.ExpiresAt.Time.After(time.Now()) {
+				grant.at = previous.ExpiresAt.Time
+			} else {
+				grant.change = &operatorGrantChange{basePrice: previous.BasePrice, waiveUsage: previous.WaiveUsage, collection: previous.Collection, expiresAt: previous.ExpiresAt, reason: previous.Reason}
+			}
+		}
+		resp, err := s.adminAssignTierOnce(ctx, tenantID, tierName, requestedModel, reason, grant)
+		if errors.Is(err, errPhaseChangedWhileRated) {
+			if attempt < phaseCloseAttempts {
+				continue
+			}
+			return nil, status.Error(codes.Aborted, "billing phase changed while assigning the tier; retry")
 		}
 		return resp, err
 	}
 }
+
+// errSubscriptionCancelled lets grant ending recheck cancellation under its cleanup lock.
+var errSubscriptionCancelled = status.Error(codes.FailedPrecondition, "subscription is cancelled; end any outstanding grant with grant revoke, then start provider checkout")
 
 // phaseCloseAttempts bounds how often a tier assignment rates a closing
 // document again because the subscription or its usage changed meanwhile.
@@ -86,23 +115,70 @@ const phaseCloseAttempts = 3
 // errPhaseChangedWhileRated means the document that closes the current
 // billing phase was rated for a subscription or usage that changed before
 // the switch committed.
-var errPhaseChangedWhileRated = errors.New("the billing phase changed while its closing document was prepared")
+var errPhaseChangedWhileRated = status.Error(codes.Aborted, "the billing phase changed while its closing document was prepared")
 
-func (s *PurserServer) adminAssignTierOnce(ctx context.Context, tenantID, tierName, requestedModel, reason string) (*purserpb.AdminAssignTierResponse, error) {
+func (s *PurserServer) adminAssignTierOnce(ctx context.Context, tenantID, tierName, requestedModel, reason string, grant *operatorGrantMutation) (*purserpb.AdminAssignTierResponse, error) {
 	userID := middleware.GetUserID(ctx)
 
 	// A move between prepaid and postpaid closes the current phase: from
 	// prepaid with its statement, from postpaid with its invoice. The closing
 	// document is rated here, outside the transaction.
-	phase, prepareErr := s.preparePrepaidPhaseCloseForTier(ctx, tenantID, tierName, requestedModel)
-	if prepareErr != nil {
-		return nil, prepareErr
-	}
-	postpaidPhase, prepareErr := s.preparePostpaidPhaseCloseForTier(ctx, tenantID, tierName, requestedModel)
-	if prepareErr != nil {
-		return nil, prepareErr
+	var phase *handlers.PrepaidPhaseClose
+	var prepareErr error
+	if grant == nil {
+		phase, prepareErr = s.preparePrepaidPhaseCloseForTier(ctx, tenantID, tierName, requestedModel)
+		if prepareErr != nil {
+			return nil, prepareErr
+		}
 	}
 
+	var postpaidPhase *handlers.PostpaidPhaseClose
+	if grant == nil {
+		postpaidPhase, prepareErr = s.preparePostpaidPhaseCloseForTier(ctx, tenantID, tierName, requestedModel)
+		if prepareErr != nil {
+			return nil, prepareErr
+		}
+	}
+
+	if grant != nil {
+		target, err := purserdb.New(s.db).GetTierByNameForOperatorAssignment(ctx, tierName)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, status.Errorf(codes.NotFound, "billing tier %q does not exist", tierName)
+		}
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "load billing tier: %v", err)
+		}
+		model, err := operatorTierBillingModel(target.TierName, target.TierLevel, target.IsDefaultPrepaid, requestedModel)
+		if grant.keepTier {
+			model, err = requestedModel, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		current, loadErr := purserdb.New(s.db).GetSubscriptionTierForGrant(ctx, tenantID)
+		if loadErr != nil && !errors.Is(loadErr, sql.ErrNoRows) {
+			return nil, status.Errorf(codes.Internal, "load subscription: %v", loadErr)
+		}
+		grant.expectedTierID, grant.expectedModel = current.TierID, current.BillingModel
+		grant.pricingBoundary = loadErr == nil && (current.TierID != target.ID || current.BillingModel != model || grant.changesPrices())
+		if grant.pricingBoundary {
+			phase, prepareErr = handlers.PreparePrepaidGrantBoundary(ctx, s.db, s.logger, s.billing, tenantID, grant.at)
+			if prepareErr != nil {
+				return nil, status.Errorf(codes.Internal, "prepare grant billing boundary: %v", prepareErr)
+			}
+			if phase != nil {
+				grant.at = phase.BoundaryAt()
+			}
+			postpaidPhase, prepareErr = handlers.PreparePostpaidGrantBoundary(ctx, s.db, s.logger, s.billing, tenantID, grant.at, model == "prepaid")
+			if prepareErr != nil {
+				return nil, status.Errorf(codes.Internal, "prepare grant billing boundary: %v", prepareErr)
+			}
+		}
+	}
+
+	if grant != nil && postpaidPhase != nil {
+		grant.at = postpaidPhase.BoundaryAt()
+	}
 	var resp *purserpb.AdminAssignTierResponse
 	var creditReturns []handlers.InvoiceCreditReturn
 	phaseClosed, postpaidPhaseClosed := false, false
@@ -117,10 +193,13 @@ func (s *PurserServer) adminAssignTierOnce(ctx context.Context, tenantID, tierNa
 		if err != nil {
 			return txStatusErrorf(err, codes.Internal, "load billing tier: %v", err)
 		}
-		if !tier.IsActive {
+		if !tier.IsActive && (grant == nil || !grant.keepTier) {
 			return status.Errorf(codes.FailedPrecondition, "billing tier %q is inactive", tierName)
 		}
 		model, err := operatorTierBillingModel(tier.TierName, tier.TierLevel, tier.IsDefaultPrepaid, requestedModel)
+		if grant != nil && grant.keepTier {
+			model, err = requestedModel, nil
+		}
 		if err != nil {
 			return err
 		}
@@ -131,7 +210,18 @@ func (s *PurserServer) adminAssignTierOnce(ctx context.Context, tenantID, tierNa
 
 		now := time.Now()
 		created := false
-		current, err := queries.LockTenantSubscriptionForOperatorAssignment(ctx, tenantID)
+		var current purserdb.LockTenantSubscriptionForOperatorAssignmentRow
+		// Expiry skips a row another replica owns; operator commands wait for its lock.
+		if grant != nil && grant.expiredOnly {
+			var locked purserdb.LockTenantSubscriptionForGrantExpiryRow
+			locked, err = queries.LockTenantSubscriptionForGrantExpiry(ctx, tenantID)
+			current = purserdb.LockTenantSubscriptionForOperatorAssignmentRow(locked)
+			if errors.Is(err, sql.ErrNoRows) {
+				return errOperatorGrantBusy
+			}
+		} else {
+			current, err = queries.LockTenantSubscriptionForOperatorAssignment(ctx, tenantID)
+		}
 		if errors.Is(err, sql.ErrNoRows) {
 			if _, err = queries.EnsureDefaultTenantSubscription(ctx, purserdb.EnsureDefaultTenantSubscriptionParams{
 				ID: uuid.New(), TenantID: tenantID, TierID: tierUUID, BillingModel: model,
@@ -145,8 +235,18 @@ func (s *PurserServer) adminAssignTierOnce(ctx context.Context, tenantID, tierNa
 		if err != nil {
 			return txStatusErrorf(err, codes.Internal, "load subscription: %v", err)
 		}
+		if grant != nil && grant.keepTier && (current.TierID != tier.ID || current.BillingModel != model) {
+			return errPhaseChangedWhileRated
+		}
+		accountClosed, closedErr := queries.IsTenantBillingClosed(ctx, tenantID)
+		if closedErr != nil {
+			return txStatusErrorf(closedErr, codes.Internal, "read account closure: %v", closedErr)
+		}
+		if accountClosed && (grant == nil || grant.change != nil) {
+			return status.Error(codes.FailedPrecondition, subscriptions.ErrTenantBillingClosed.Error())
+		}
 		if current.Status == "cancelled" {
-			return status.Error(codes.FailedPrecondition, "subscription is cancelled because the account was closed; a closed account cannot be assigned a tier")
+			return errSubscriptionCancelled
 		}
 
 		resp = &purserpb.AdminAssignTierResponse{
@@ -170,25 +270,50 @@ func (s *PurserServer) adminAssignTierOnce(ctx context.Context, tenantID, tierNa
 				newStatus = "active"
 				changedFields = append(changedFields, "status")
 			}
-			if current.HasPendingTier {
+			if current.HasPendingTier && (grant == nil || !grant.keepTier) {
 				changedFields = append(changedFields, "pending_tier_id")
+			}
+		}
+		if grant == nil && !created && (current.TierID != tier.ID || current.BillingModel != model) {
+			if _, guardErr := subscriptions.LockChange(ctx, tx, tenantID, subscriptions.ChangePricing); guardErr != nil {
+				if subscriptions.IsPricingRefusal(guardErr) {
+					return errPhaseChangedWhileRated
+				}
+				return txStatusErrorf(guardErr, codes.Internal, "check operator assignment grant: %v", guardErr)
+			}
+		}
+		if grant != nil {
+			if !created && (current.TierID != grant.expectedTierID || current.BillingModel != grant.expectedModel) {
+				return errPhaseChangedWhileRated
+			}
+			if grantErr := grant.checkUnchanged(ctx, queries, tenantID); grantErr != nil {
+				return grantErr
+			}
+			if !created && current.BillingModel == "postpaid" && grant.pricingBoundary {
+				if postpaidPhaseClosed, err = commitPostpaidPhaseClose(ctx, tx, postpaidPhase); err != nil {
+					return err
+				}
+			}
+		}
+		if !created && current.BillingModel == "prepaid" && (grant == nil && model == "postpaid" || grant != nil && grant.pricingBoundary) {
+			if phaseClosed, err = commitPrepaidPhaseClose(ctx, tx, phase); err != nil {
+				return err
+			}
+		}
+		if grant == nil && !created && current.BillingModel == "postpaid" && model == "prepaid" {
+			if postpaidPhaseClosed, err = commitPostpaidPhaseClose(ctx, tx, postpaidPhase); err != nil {
+				return err
+			}
+		}
+		if grant != nil {
+			if grantErr := s.writeOperatorGrantMutationTx(ctx, tx, current, tenantID, tier.ID, grant); grantErr != nil {
+				return grantErr
 			}
 		}
 		if len(changedFields) == 0 {
 			return nil
 		}
 		resp.Changed = true
-
-		if !created && current.BillingModel == "prepaid" && model == "postpaid" {
-			if phaseClosed, err = commitPrepaidPhaseClose(ctx, tx, phase); err != nil {
-				return err
-			}
-		}
-		if !created && current.BillingModel == "postpaid" && model == "prepaid" {
-			if postpaidPhaseClosed, err = commitPostpaidPhaseClose(ctx, tx, postpaidPhase); err != nil {
-				return err
-			}
-		}
 
 		if !created {
 			if _, err = queries.AssignTenantSubscriptionTier(ctx, purserdb.AssignTenantSubscriptionTierParams{
@@ -245,6 +370,9 @@ func (s *PurserServer) adminAssignTierOnce(ctx context.Context, tenantID, tierNa
 	default:
 		return nil, err
 	}
+	if grant != nil && !grant.mutated && !resp.GetChanged() {
+		return resp, nil
+	}
 	if phaseClosed {
 		phase.Log()
 	}
@@ -265,11 +393,12 @@ func (s *PurserServer) adminAssignTierOnce(ctx context.Context, tenantID, tierNa
 	eligibleClusters, primaryCluster, clusterErr := s.reconcileCanonicalTierClusterAccess(ctx, tenantID)
 	if clusterErr != nil {
 		s.logger.WithError(clusterErr).WithField("tenant_id", tenantID).Error("reconcile cluster access after operator tier assignment")
-		return nil, status.Errorf(codes.Internal, "tier assigned but failed to reconcile cluster access: %v", clusterErr)
+		if grant == nil {
+			return nil, status.Errorf(codes.Internal, "tier assigned but failed to reconcile cluster access: %v", clusterErr)
+		}
 	}
 	if invErr := s.invalidateTenantCache(ctx, tenantID, "tier_changed"); invErr != nil {
 		s.logger.WithError(invErr).WithField("tenant_id", tenantID).Error("invalidate tenant cache after operator tier assignment")
-		return nil, status.Errorf(codes.Internal, "tier assigned but failed to invalidate tenant cache: %v", invErr)
 	}
 	resp.EligibleClusterIds = eligibleClusters
 	resp.PrimaryClusterId = primaryCluster

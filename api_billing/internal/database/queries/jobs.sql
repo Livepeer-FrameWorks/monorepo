@@ -288,15 +288,19 @@ SELECT ts.tenant_id::text AS tenant_id,
 FROM purser.tenant_subscriptions ts
 JOIN purser.billing_tiers bt ON ts.tier_id = bt.id
 WHERE ts.status = 'active'
+  AND ts.pending_reason IS DISTINCT FROM 'tier_upgrade'
+  AND NOT EXISTS (SELECT 1 FROM purser.tenant_billing_closures closure WHERE closure.tenant_id = ts.tenant_id)
+  AND NOT EXISTS (SELECT 1 FROM purser.subscription_operator_grants expired_grant
+      WHERE expired_grant.subscription_id = ts.id AND expired_grant.expires_at <= sqlc.arg(now)::timestamptz)
   AND bt.is_active = TRUE
   AND (
       (ts.mollie_next_payment_date IS NOT NULL
-          AND ts.mollie_next_payment_date <= sqlc.arg(now)::date)
+          AND ts.mollie_next_payment_date <= (sqlc.arg(now)::timestamp)::date)
       OR (ts.billing_period_end IS NOT NULL
-          AND ts.billing_period_end <= sqlc.arg(now))
+          AND ts.billing_period_end <= (sqlc.arg(now)::timestamp))
       OR (ts.billing_period_end IS NULL
           AND (ts.next_billing_date IS NULL
-              OR ts.next_billing_date <= sqlc.arg(now)))
+              OR ts.next_billing_date <= (sqlc.arg(now)::timestamp)))
   );
 
 -- name: CountFinalizedInvoicesForPeriod :one
@@ -456,7 +460,10 @@ ORDER BY subscription.pending_effective_at ASC, subscription.tenant_id ASC;
 SELECT stripe_customer_id, stripe_subscription_id
 FROM purser.tenant_subscriptions
 WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
-  AND status = 'active'
+  AND (status = 'active' OR EXISTS (
+      SELECT 1 FROM purser.tenant_billing_closures closure
+      WHERE closure.tenant_id = tenant_subscriptions.tenant_id
+  ))
   AND (stripe_subscription_id IS NOT NULL
        OR (payment_method = 'stripe' AND stripe_customer_id IS NOT NULL));
 
@@ -523,8 +530,20 @@ WHERE payment_id = sqlc.arg(payment_id)::text::uuid
 
 -- name: SetProviderPaymentIntentFailure :exec
 UPDATE purser.payment_provider_intents
-SET status = sqlc.arg(status), last_error = sqlc.arg(last_error), updated_at = NOW()
-WHERE id = sqlc.arg(intent_id)::text::uuid;
+SET status = CASE
+        WHEN sqlc.arg(status)::text = 'terminal_failed'
+          AND purpose IN ('tenant_subscription_checkout', 'mollie_first_payment', 'mollie_subscription_create')
+          AND (provider_session_id IS NOT NULL OR provider_payment_id IS NOT NULL
+               OR provider_subscription_id IS NOT NULL
+               OR (NOT sqlc.arg(definite_rejection)::boolean
+                   AND (submission_state <> 'prepared' OR provider_request IS NOT NULL)))
+            THEN 'provider_call_failed'
+        ELSE sqlc.arg(status)::text
+    END,
+    last_error = sqlc.arg(last_error), updated_at = NOW()
+WHERE id = sqlc.arg(intent_id)::text::uuid
+  AND tenant_id = sqlc.arg(tenant_id)::text::uuid
+  AND status NOT IN ('succeeded', 'expired', 'cancelled', 'terminal_failed');
 
 -- name: SetProviderBillingPaymentAttemptFailure :exec
 UPDATE purser.billing_payment_attempts
@@ -587,7 +606,10 @@ SELECT mc.mollie_customer_id,
 FROM purser.mollie_customers mc
 JOIN purser.tenant_subscriptions ts ON ts.tenant_id = mc.tenant_id
 WHERE mc.tenant_id = sqlc.arg(tenant_id)::text::uuid
-  AND ts.status = 'active'
+  AND (ts.status = 'active' OR EXISTS (
+      SELECT 1 FROM purser.tenant_billing_closures closure
+      WHERE closure.tenant_id = ts.tenant_id
+  ))
   AND (ts.mollie_subscription_id IS NOT NULL OR ts.payment_method = 'mollie');
 
 -- name: RevokeValidMollieMandates :exec

@@ -4930,22 +4930,37 @@ func (s *FoghornGRPCServer) buildClipDeletedLifecycleData(
 	return clipData
 }
 
-// TerminateTenantStreams stops all active streams for a suspended tenant
-// Called by Purser when a tenant's prepaid balance drops below -$10
+// TerminateTenantStreams stops active sessions for every stream in the tenant.
 func (s *FoghornGRPCServer) TerminateTenantStreams(ctx context.Context, req *foghorncontrolpb.TerminateTenantStreamsRequest) (*foghorncontrolpb.TerminateTenantStreamsResponse, error) {
-	if req.TenantId == "" {
+	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
 	}
+	return s.terminateStreamSessions(ctx, req.GetTenantId(), req.GetReason(), nil)
+}
 
+// TerminateStreamSessions refuses an empty scope rather than escalating it to the tenant.
+func (s *FoghornGRPCServer) TerminateStreamSessions(ctx context.Context, req *foghorncontrolpb.TerminateStreamSessionsRequest) (*foghorncontrolpb.TerminateTenantStreamsResponse, error) {
+	if req.GetTenantId() == "" || len(req.GetStreamNames()) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id and non-empty stream_names are required")
+	}
+	for _, name := range req.GetStreamNames() {
+		if strings.TrimSpace(name) == "" {
+			return nil, status.Error(codes.InvalidArgument, "stream_names must not contain empty names")
+		}
+	}
+	return s.terminateStreamSessions(ctx, req.GetTenantId(), req.GetReason(), req.GetStreamNames())
+}
+
+func (s *FoghornGRPCServer) terminateStreamSessions(ctx context.Context, tenantID, reason string, names []string) (*foghorncontrolpb.TerminateTenantStreamsResponse, error) {
 	s.logger.WithFields(logging.Fields{
-		"tenant_id": req.TenantId,
-		"reason":    req.Reason,
-	}).Info("Terminating tenant streams due to suspension")
+		"tenant_id": tenantID,
+		"reason":    reason,
+	}).Info("Terminating tenant streams")
 
 	// Get all active streams for this tenant from the stream state manager
-	streams := s.lb.GetStreamsByTenant(req.TenantId)
+	streams := s.lb.GetStreamsByTenant(tenantID)
 	if len(streams) == 0 {
-		s.logger.WithField("tenant_id", req.TenantId).Debug("No active streams to terminate")
+		s.logger.WithField("tenant_id", tenantID).Debug("No active streams to terminate")
 		return &foghorncontrolpb.TerminateTenantStreamsResponse{
 			StreamsTerminated:  0,
 			SessionsTerminated: 0,
@@ -4955,9 +4970,15 @@ func (s *FoghornGRPCServer) TerminateTenantStreams(ctx context.Context, req *fog
 
 	// Group streams by node for efficient batch stop_sessions calls
 	streamsByNode := make(map[string][]string)
-	var allStreamNames []string
+	acknowledged := make(map[string]bool)
+	scope := make(map[string]bool, len(names))
+	for _, name := range names {
+		scope[name] = true
+	}
 	for _, stream := range streams {
-		allStreamNames = append(allStreamNames, stream.InternalName)
+		if len(scope) != 0 && !scope[stream.InternalName] {
+			continue
+		}
 		// Get the node from stream instances
 		instances := s.lb.GetStreamInstances(stream.InternalName)
 		for nodeID := range instances {
@@ -4967,30 +4988,42 @@ func (s *FoghornGRPCServer) TerminateTenantStreams(ctx context.Context, req *fog
 
 	// Send stop_sessions to each node
 	sessionsTerminated := int32(0)
+	var failed bool
 	for nodeID, nodeStreams := range streamsByNode {
 		stopReq := &ipcpb.StopSessionsRequest{
 			StreamNames: nodeStreams,
-			TenantId:    req.TenantId,
-			Reason:      req.Reason,
+			TenantId:    tenantID,
+			Reason:      reason,
 		}
 		if err := control.SendStopSessions(nodeID, stopReq); err != nil {
 			s.logger.WithFields(logging.Fields{
 				"node_id":   nodeID,
-				"tenant_id": req.TenantId,
+				"tenant_id": tenantID,
 				"error":     err,
 			}).Warn("Failed to send stop_sessions to node")
-			// Continue trying other nodes
+			failed = true
 		} else {
 			sessionsTerminated += int32(len(nodeStreams))
+			for _, name := range nodeStreams {
+				acknowledged[name] = true
+			}
 		}
 	}
 
+	allStreamNames := make([]string, 0, len(acknowledged))
+	for name := range acknowledged {
+		allStreamNames = append(allStreamNames, name)
+	}
+	sort.Strings(allStreamNames)
 	s.logger.WithFields(logging.Fields{
-		"tenant_id":           req.TenantId,
+		"tenant_id":           tenantID,
 		"streams_terminated":  len(allStreamNames),
 		"sessions_terminated": sessionsTerminated,
 		"stream_names":        allStreamNames,
 	}).Info("Tenant stream termination completed")
+	if failed {
+		return nil, grpcutil.PendingStreamStop(&foghorncontrolpb.TerminateTenantStreamsResponse{StreamsTerminated: int32(len(allStreamNames)), SessionsTerminated: sessionsTerminated, StreamNames: allStreamNames})
+	}
 
 	return &foghorncontrolpb.TerminateTenantStreamsResponse{
 		StreamsTerminated:  int32(len(allStreamNames)),

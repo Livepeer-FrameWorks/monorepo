@@ -126,26 +126,28 @@ func main() {
 	// through distinct create/finalize/void/reissue entry points, so adding
 	// it would only ever fire with one synthetic label combination. Drop.
 	handlerMetrics := &handlers.PurserMetrics{
-		BillingCalculations:       metricsCollector.NewCounter("billing_calculations_total", "Billing calculations performed", []string{"tenant_id", "status"}),
-		UsageRecords:              metricsCollector.NewCounter("usage_records_processed_total", "Usage records processed", []string{"usage_type"}),
-		UsageQuarantine:           metricsCollector.NewCounter("usage_records_quarantine_total", "Usage records rejected and routed to purser.usage_records_quarantine", []string{"usage_type", "reason"}),
-		WebhookSignatureFailures:  metricsCollector.NewCounter("webhook_signature_failures_total", "Webhook signature validation failures", []string{"provider"}),
-		CryptoScannerBlocks:       metricsCollector.NewGauge("crypto_scanner_block", "Observed crypto scanner block by head kind", []string{"network", "head"}),
-		CryptoScannerCaughtUp:     metricsCollector.NewGauge("crypto_scanner_caught_up_timestamp_seconds", "Unix time this process last saw the network's scan cursor reach the finalized head", []string{"network"}),
-		CryptoScannerErrors:       metricsCollector.NewCounter("crypto_scanner_errors_total", "Crypto scanner errors by scan stage and cause", []string{"network", "stage", "reason"}),
-		CryptoDepositReorgs:       metricsCollector.NewCounter("crypto_deposit_reorg_reversals_total", "Allocated crypto deposit reversals after canonicality failure", []string{"network", "purpose"}),
-		CryptoUnsweptBaseUnits:    metricsCollector.NewGauge("crypto_unswept_base_units", "Confirmed custody amount not yet assigned to a confirmed sweep", []string{"network", "asset"}),
-		CryptoOldestUnswept:       metricsCollector.NewGauge("crypto_oldest_unswept_age_seconds", "Age of the oldest confirmed unswept custody source", []string{"network", "asset"}),
-		CryptoFailedSweepItems:    metricsCollector.NewGauge("crypto_failed_sweep_items", "Sweep items currently failed", []string{"network", "asset"}),
-		CryptoRelayerBalanceETH:   metricsCollector.NewGauge("crypto_sweep_relayer_balance_eth", "Dedicated USDC sweep relayer native gas balance", []string{"network"}),
-		X402QuoteConversion:       metricsCollector.NewGauge("x402_quote_conversion_ratio", "Confirmed x402 quotes divided by created quotes in the last 24 hours", []string{"network"}),
-		X402SettlementLatency:     metricsCollector.NewGauge("x402_settlement_latency_p95_seconds", "P95 confirmed x402 settlement latency over the last 24 hours", []string{"network"}),
-		CryptoPendingDeposits:     metricsCollector.NewGauge("crypto_deposit_events", "Crypto deposit events by reconciliation state", []string{"network", "status"}),
-		CryptoAccountingAnomalies: metricsCollector.NewGauge("crypto_accounting_anomalies", "Open crypto accounting anomalies", []string{"kind"}),
-		CryptoAnomalyOldest:       metricsCollector.NewGauge("crypto_accounting_anomaly_oldest_age_seconds", "Age of the oldest open crypto accounting anomaly", []string{"kind"}),
-		CryptoInvoiceReview:       metricsCollector.NewGauge("crypto_invoice_review_items", "Crypto invoice deposit events requiring operator review", []string{"network"}),
-		CryptoLedgerReversals:     metricsCollector.NewGauge("crypto_ledger_reversals_total", "Durable crypto-related ledger reversals", []string{"reference_type"}),
-		FXRateReferenceAge:        metricsCollector.NewGauge("fx_rate_reference_age_seconds", "Seconds since the start of the newest stored ECB reference date", []string{"currency"}),
+		BillingCalculations:              metricsCollector.NewCounter("billing_calculations_total", "Billing calculations performed", []string{"tenant_id", "status"}),
+		UsageRecords:                     metricsCollector.NewCounter("usage_records_processed_total", "Usage records processed", []string{"usage_type"}),
+		UsageQuarantine:                  metricsCollector.NewCounter("usage_records_quarantine_total", "Usage records rejected and routed to purser.usage_records_quarantine", []string{"usage_type", "reason"}),
+		WebhookSignatureFailures:         metricsCollector.NewCounter("webhook_signature_failures_total", "Webhook signature validation failures", []string{"provider"}),
+		CryptoScannerBlocks:              metricsCollector.NewGauge("crypto_scanner_block", "Observed crypto scanner block by head kind", []string{"network", "head"}),
+		CryptoScannerCaughtUp:            metricsCollector.NewGauge("crypto_scanner_caught_up_timestamp_seconds", "Unix time this process last saw the network's scan cursor reach the finalized head", []string{"network"}),
+		CryptoScannerErrors:              metricsCollector.NewCounter("crypto_scanner_errors_total", "Crypto scanner errors by scan stage and cause", []string{"network", "stage", "reason"}),
+		CryptoDepositReorgs:              metricsCollector.NewCounter("crypto_deposit_reorg_reversals_total", "Allocated crypto deposit reversals after canonicality failure", []string{"network", "purpose"}),
+		CryptoUnsweptBaseUnits:           metricsCollector.NewGauge("crypto_unswept_base_units", "Confirmed custody amount not yet assigned to a confirmed sweep", []string{"network", "asset"}),
+		CryptoOldestUnswept:              metricsCollector.NewGauge("crypto_oldest_unswept_age_seconds", "Age of the oldest confirmed unswept custody source", []string{"network", "asset"}),
+		CryptoFailedSweepItems:           metricsCollector.NewGauge("crypto_failed_sweep_items", "Sweep items currently failed", []string{"network", "asset"}),
+		CryptoRelayerBalanceETH:          metricsCollector.NewGauge("crypto_sweep_relayer_balance_eth", "Dedicated USDC sweep relayer native gas balance", []string{"network"}),
+		X402QuoteConversion:              metricsCollector.NewGauge("x402_quote_conversion_ratio", "Confirmed x402 quotes divided by created quotes in the last 24 hours", []string{"network"}),
+		X402SettlementLatency:            metricsCollector.NewGauge("x402_settlement_latency_p95_seconds", "P95 confirmed x402 settlement latency over the last 24 hours", []string{"network"}),
+		CryptoPendingDeposits:            metricsCollector.NewGauge("crypto_deposit_events", "Crypto deposit events by reconciliation state", []string{"network", "status"}),
+		ProviderWebhookInboxFailures:     metricsCollector.NewGauge("provider_webhook_inbox_repeatedly_failed_items", "Billing recovery items with repeated failures or unresolved waits older than fourteen days", nil),
+		ProviderWebhookInboxReadFailures: metricsCollector.NewCounter("provider_webhook_inbox_read_failures_total", "Failed reads of the provider webhook recovery inventory", nil),
+		CryptoAccountingAnomalies:        metricsCollector.NewGauge("crypto_accounting_anomalies", "Open crypto accounting anomalies", []string{"kind"}),
+		CryptoAnomalyOldest:              metricsCollector.NewGauge("crypto_accounting_anomaly_oldest_age_seconds", "Age of the oldest open crypto accounting anomaly", []string{"kind"}),
+		CryptoInvoiceReview:              metricsCollector.NewGauge("crypto_invoice_review_items", "Crypto invoice deposit events requiring operator review", []string{"network"}),
+		CryptoLedgerReversals:            metricsCollector.NewGauge("crypto_ledger_reversals_total", "Durable crypto-related ledger reversals", []string{"reference_type"}),
+		FXRateReferenceAge:               metricsCollector.NewGauge("fx_rate_reference_age_seconds", "Seconds since the start of the newest stored ECB reference date", []string{"currency"}),
 	}
 
 	// Register DB connection-pool stats (open/in-use/idle gauges +
@@ -158,15 +160,26 @@ func main() {
 	// (billing/usage/subscription/invoice) where the operation label maps 1:1
 	// to a gRPC method would only rename the same axis.
 	serverMetrics := &pursergrpc.ServerMetrics{
-		GRPCRequests:                     metricsCollector.NewCounter("grpc_requests_total", "Total gRPC requests", []string{"method", "status"}),
-		GRPCDuration:                     metricsCollector.NewHistogram("grpc_request_duration_seconds", "gRPC request duration", []string{"method"}, nil),
-		TierAccessReconciliationFailures: metricsCollector.NewCounter("tier_access_reconciliation_failures_total", "Tier access and DNS entitlement reconciliation failures", []string{"operation"}),
-		MediaAuthorityRefreshFailures:    metricsCollector.NewCounter("media_authority_refresh_failures_total", "Media-authority refresh failures", []string{"stage"}),
-		MediaAuthorityRefreshCompletions: metricsCollector.NewCounter("media_authority_refresh_completions_total", "Media-authority refresh completion outcomes", []string{"outcome"}),
-		MediaAuthorityRefreshPending:     metricsCollector.NewGauge("media_authority_refresh_pending", "Pending media-authority refresh obligations", nil),
-		MediaAuthorityRefreshOldest:      metricsCollector.NewGauge("media_authority_refresh_oldest_pending_seconds", "Age of the oldest pending media-authority refresh obligation", nil),
-		MediaAuthorityRefreshWorkerReady: metricsCollector.NewGauge("media_authority_refresh_worker_ready", "Whether the media-authority refresh worker has its required dependencies", nil),
+		FreeFallbackFailures:                metricsCollector.NewGauge("free_fallback_repeatedly_failed_items", "Free fallback moves or notifications with repeated failures", []string{"stage"}),
+		FreeFallbackReadFailures:            metricsCollector.NewCounter("free_fallback_read_failures_total", "Failed reads of the Free fallback recovery inventory", nil),
+		OperatorGrantExpiryFailures:         metricsCollector.NewGauge("operator_grant_expiry_failed_items", "Operator grants whose expiry needs recovery", nil),
+		OperatorGrantExpiryRepeatedFailures: metricsCollector.NewGauge("operator_grant_expiry_repeatedly_failed_items", "Operator grant expiries with more than one failed attempt", nil),
+		OperatorGrantExpiryReadFailures:     metricsCollector.NewCounter("operator_grant_expiry_read_failures_total", "Failed reads of the operator grant expiry queue or failed-item count", nil),
+		GRPCRequests:                        metricsCollector.NewCounter("grpc_requests_total", "Total gRPC requests", []string{"method", "status"}),
+		GRPCDuration:                        metricsCollector.NewHistogram("grpc_request_duration_seconds", "gRPC request duration", []string{"method"}, nil),
+		TierAccessReconciliationFailures:    metricsCollector.NewCounter("tier_access_reconciliation_failures_total", "Tier access and DNS entitlement reconciliation failures", []string{"operation"}),
+		MediaAuthorityRefreshFailures:       metricsCollector.NewCounter("media_authority_refresh_failures_total", "Media-authority refresh failures", []string{"stage"}),
+		MediaAuthorityRefreshCompletions:    metricsCollector.NewCounter("media_authority_refresh_completions_total", "Media-authority refresh completion outcomes", []string{"outcome"}),
+		MediaAuthorityRefreshPending:        metricsCollector.NewGauge("media_authority_refresh_pending", "Pending media-authority refresh obligations", nil),
+		MediaAuthorityRefreshOldest:         metricsCollector.NewGauge("media_authority_refresh_oldest_pending_seconds", "Age of the oldest pending media-authority refresh obligation", nil),
+		MediaAuthorityRefreshWorkerReady:    metricsCollector.NewGauge("media_authority_refresh_worker_ready", "Whether the media-authority refresh worker has its required dependencies", nil),
 	}
+
+	serverMetrics.OperatorGrantExpiryReadFailures.WithLabelValues().Add(0)
+	serverMetrics.FreeFallbackReadFailures.WithLabelValues().Add(0)
+	serverMetrics.FreeFallbackFailures.WithLabelValues("move").Set(0)
+	serverMetrics.FreeFallbackFailures.WithLabelValues("notice").Set(0)
+	handlerMetrics.ProviderWebhookInboxReadFailures.WithLabelValues().Add(0)
 
 	// Create Quartermaster gRPC client for tenant lookups (used by webhooks)
 	qmGRPCClient, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{

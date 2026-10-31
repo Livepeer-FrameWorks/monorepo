@@ -45,16 +45,6 @@ ON CONFLICT (provider, idempotency_key) DO UPDATE SET
     updated_at = NOW()
 RETURNING id::text AS id;
 
--- name: SetClusterCheckoutIntentCustomer :exec
-UPDATE purser.payment_provider_intents
-SET provider_customer_id = sqlc.arg(customer_id), updated_at = NOW()
-WHERE id = sqlc.arg(intent_id)::text::uuid;
-
--- name: SetClusterCheckoutIntentSessionOpen :exec
-UPDATE purser.payment_provider_intents
-SET provider_session_id = sqlc.arg(session_id), status = 'provider_open', updated_at = NOW()
-WHERE id = sqlc.arg(intent_id)::text::uuid;
-
 -- name: UpsertPendingClusterCheckoutSubscription :one
 INSERT INTO purser.cluster_subscriptions (
     tenant_id, cluster_id, status, stripe_customer_id, checkout_session_id,

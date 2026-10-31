@@ -55,6 +55,10 @@ type TokenFencedStore interface {
 	RecordFailureToken(ctx context.Context, id string, currentAttempts int, failedTargets []string, cause error, backoff time.Duration, leaseToken string) error
 }
 
+// BackoffStore removes failed claims from the due set before returning success.
+// Such stores can keep draining unrelated work after a recorded failure.
+type BackoffStore interface{ DefersFailedClaims() bool }
+
 // CompletedPruner is an OPTIONAL interface a Store may also implement to delete its delivered rows once they are past
 // the store's retention. The worker calls it from its run loop at most once per pruneEvery; an implementation deletes
 // in bounded batches and reports how many rows it removed.
@@ -123,11 +127,9 @@ func (w *Worker[P]) Run(ctx context.Context) {
 	}
 }
 
-// Drain processes batches until a claim comes back short of Config.BatchSize, so throughput follows the enqueue
-// rate instead of being capped at one batch per PollPeriod. It continues only while every claimed row completed:
-// some stores make a failed row due again at once (no backoff column), so a batch with any failure ends the pass
-// and the failed rows are retried on the next tick. Completed rows leave the due set, so the loop ends once fewer
-// than a batch of rows are due.
+// Drain processes due work until a short batch or a settlement failure. Stores
+// with durable backoff continue after a recorded dispatch failure. Other stores
+// stop the pass so an immediately due failed row cannot create a busy loop.
 func (w *Worker[P]) Drain(ctx context.Context) {
 	for {
 		claimed, completed := w.processBatch(ctx)
@@ -142,7 +144,7 @@ func (w *Worker[P]) ProcessBatch(ctx context.Context) {
 	w.processBatch(ctx)
 }
 
-// processBatch claims and settles one batch and reports how many rows it claimed and how many completed.
+// processBatch reports claims and settled progress; a backoff store counts deferred failures as progress.
 func (w *Worker[P]) processBatch(ctx context.Context) (claimed, completed int) {
 	claims, err := w.Store.ClaimBatch(ctx, w.Config.BatchSize, w.Config.Lease)
 	if err != nil {
@@ -168,7 +170,11 @@ func (w *Worker[P]) processBatch(ctx context.Context) (claimed, completed int) {
 			completed++
 			continue
 		}
-		w.recordFailure(ctx, c.ID, c.Attempts, failed, dispatchErr, c.LeaseToken)
+		if w.recordFailure(ctx, c.ID, c.Attempts, failed, dispatchErr, c.LeaseToken) {
+			if store, ok := w.Store.(BackoffStore); ok && store.DefersFailedClaims() {
+				completed++
+			}
+		}
 	}
 	return len(claims), completed
 }
@@ -198,7 +204,7 @@ func (w *Worker[P]) TryDispatch(ctx context.Context, id string, currentAttempts 
 	w.recordFailure(ctx, id, currentAttempts, failed, err, "")
 }
 
-func (w *Worker[P]) recordFailure(ctx context.Context, id string, currentAttempts int, failedTargets []string, cause error, leaseToken string) {
+func (w *Worker[P]) recordFailure(ctx context.Context, id string, currentAttempts int, failedTargets []string, cause error, leaseToken string) bool {
 	backoff := ComputeBackoff(w.Config, currentAttempts)
 	sctx, scancel := w.settleCtx(ctx)
 	defer scancel()
@@ -212,7 +218,7 @@ func (w *Worker[P]) recordFailure(ctx context.Context, id string, currentAttempt
 		if w.Logger != nil {
 			w.Logger.WithError(err).WithField("outbox_id", id).Warn("record outbox failure failed")
 		}
-		return
+		return false
 	}
 	nextAttempts := currentAttempts + 1
 	if w.Config.AlertAfterAttempts > 0 && nextAttempts >= w.Config.AlertAfterAttempts && w.Logger != nil {
@@ -232,6 +238,7 @@ func (w *Worker[P]) recordFailure(ctx context.Context, id string, currentAttempt
 			"cause":          causeStr,
 		}).Errorf("%s has been failing for many attempts; backend likely partitioned. Worker will keep retrying — investigate.", label)
 	}
+	return true
 }
 
 // ComputeBackoff doubles the base backoff per attempt, capping at MaxBackoff.

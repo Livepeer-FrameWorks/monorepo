@@ -1,6 +1,8 @@
 package releases
 
 import (
+	"slices"
+	"strings"
 	"testing"
 )
 
@@ -262,6 +264,35 @@ func TestRequiredTransitionIDsPublished(t *testing.T) {
 		}
 		if len(ids) != 0 {
 			t.Fatalf("%s: v0.3 starts without historical one-off transitions, got %v", target, ids)
+		}
+	}
+}
+
+func TestAccountsBootstrapCapabilityFollowsReleaseCatalog(t *testing.T) {
+	var introduced string
+	for _, r := range embedded.releases {
+		if slices.Contains(r.Capabilities, CapabilityAccountsBootstrap) {
+			introduced = r.Version
+		}
+	}
+	if introduced == "" {
+		t.Fatal("accounts bootstrap capability is absent from catalog")
+	}
+	for _, target := range []string{introduced, introduced + "-rc1", "v99.0.0"} {
+		if !Supports(target, CapabilityAccountsBootstrap) {
+			t.Fatalf("accounts bootstrap absent for %s", target)
+		}
+	}
+	if Supports("v0.3.13", CapabilityAccountsBootstrap) {
+		t.Fatal("older binary does not support --accounts-only")
+	}
+}
+
+func TestCatalogRejectsUnknownAndDuplicateCapabilities(t *testing.T) {
+	for _, capabilities := range []string{"[future_feature]", "[accounts_bootstrap, accounts_bootstrap]"} {
+		catalog := parseCatalog([]byte("service_databases:\n  purser: purser\nreleases:\n  - version: v0.3.14\n    capabilities: " + capabilities + "\n"))
+		if catalog.err == nil || !strings.Contains(catalog.err.Error(), "capability") {
+			t.Fatalf("capabilities %s accepted: %v", capabilities, catalog.err)
 		}
 	}
 }

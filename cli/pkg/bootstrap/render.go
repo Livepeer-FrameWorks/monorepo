@@ -1431,13 +1431,10 @@ func validateMistNativeSourceKind(kind, source string) error {
 }
 
 func isSystemTenantRef(ref TenantRef) bool {
-	// TenantRef.Ref is a path like "quartermaster.system_tenant" or
-	// "quartermaster.tenants.<alias>". The system tenant lives at a stable
-	// path; resolution against actual rows happens at reconcile time. Here
-	// we accept either form.
+	// Both canonical system-tenant paths resolve to the same Quartermaster alias.
 	r := strings.TrimSpace(ref.Ref)
 	return r == "quartermaster.system_tenant" ||
-		r == "quartermaster.tenants."+SystemTenantAlias
+		r == "quartermaster.tenants["+SystemTenantAlias+"]"
 }
 
 func mediaClusterIDSet(clusters []Cluster) map[string]bool {

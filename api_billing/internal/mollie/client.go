@@ -3,6 +3,8 @@ package mollie
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -118,21 +120,41 @@ func (c *Client) GetCustomer(ctx context.Context, customerID string) (*mollie.Cu
 
 // FirstPaymentParams for creating the initial payment that establishes a mandate
 type FirstPaymentParams struct {
-	CustomerID     string               // Mollie customer ID
-	TenantID       string               // For metadata/logging
-	TierID         string               // For price lookup
-	Amount         *mollie.Amount       // Payment amount
-	Description    string               // Payment description
-	Method         mollie.PaymentMethod // ideal, creditcard, bancontact
-	RedirectURL    string               // Where to redirect after payment
-	WebhookURL     string               // Webhook for payment status updates
-	IdempotencyKey string
+	CustomerID        string               // Mollie customer ID
+	TenantID          string               // For metadata/logging
+	TierID            string               // For price lookup
+	Amount            *mollie.Amount       // Payment amount
+	Description       string               // Payment description
+	Method            mollie.PaymentMethod // ideal, creditcard, bancontact
+	RedirectURL       string               // Where to redirect after payment
+	WebhookURL        string               // Webhook for payment status updates
+	IdempotencyKey    string
+	ReservationID     string
+	ExistingPaymentID string
+	ReplayBefore      time.Time
+	ResumeOnly        bool
 }
 
 // CreateFirstPayment creates the initial payment to establish a mandate.
 // For iDEAL: User pays via bank → Creates SEPA Direct Debit mandate
 // For card: User enters card → Creates card mandate
 func (c *Client) CreateFirstPayment(ctx context.Context, params FirstPaymentParams) (*mollie.Payment, error) {
+	if params.ResumeOnly || params.ExistingPaymentID != "" {
+		p, err := c.ReservedPayment(ctx, params.CustomerID, params.ReservationID, params.ExistingPaymentID)
+		if err != nil {
+			return nil, err
+		}
+		if p == nil {
+			if time.Now().Before(params.ReplayBefore) {
+				params.ResumeOnly = false
+				params.ExistingPaymentID = ""
+				return c.CreateFirstPayment(ctx, params)
+			}
+			return nil, fmt.Errorf("checkout response is unbound; inspect admin billing recovery list")
+		}
+		return p, nil
+	}
+
 	if params.IdempotencyKey == "" {
 		return nil, fmt.Errorf("CreateFirstPayment requires a deterministic IdempotencyKey")
 	}
@@ -143,11 +165,12 @@ func (c *Client) CreateFirstPayment(ctx context.Context, params FirstPaymentPara
 		"webhookUrl":  params.WebhookURL,
 		"method":      []mollie.PaymentMethod{params.Method},
 		"metadata": map[string]any{
-			"purpose":      "mandate_setup",
-			"tenant_id":    params.TenantID,
-			"tier_id":      params.TierID,
-			"reference_id": params.TierID,
-			"payment_type": "first_payment",
+			"checkout_reservation_id": params.ReservationID,
+			"purpose":                 "mandate_setup",
+			"tenant_id":               params.TenantID,
+			"tier_id":                 params.TierID,
+			"reference_id":            params.TierID,
+			"payment_type":            "first_payment",
 		},
 		"sequenceType": mollie.FirstSequence,
 	})
@@ -206,20 +229,39 @@ func (c *Client) GetMandate(ctx context.Context, customerID, mandateID string) (
 
 // SubscriptionParams for creating a subscription
 type SubscriptionParams struct {
-	CustomerID     string
-	TenantID       string
-	TierID         string
-	MandateID      string // explicit mandate to charge; empty lets Mollie pick any valid one
-	Amount         *mollie.Amount
-	Interval       string // 1 month, 1 year
-	Description    string
-	StartDate      string // YYYY-MM-DD format, or empty for immediate
-	WebhookURL     string
-	IdempotencyKey string
+	CustomerID             string
+	TenantID               string
+	TierID                 string
+	MandateID              string // explicit mandate to charge; empty lets Mollie pick any valid one
+	Amount                 *mollie.Amount
+	Interval               string // 1 month, 1 year
+	Description            string
+	StartDate              string // YYYY-MM-DD format, or empty for immediate
+	WebhookURL             string
+	IdempotencyKey         string
+	ReservationID          string
+	ExistingSubscriptionID string
+	ReplayBefore           time.Time
+	ResumeOnly             bool
 }
 
 // CreateSubscription creates a recurring subscription using an existing mandate
 func (c *Client) CreateSubscription(ctx context.Context, params SubscriptionParams) (*mollie.Subscription, error) {
+	if params.ResumeOnly || params.ExistingSubscriptionID != "" {
+		sub, err := c.ReservedSubscription(ctx, params.CustomerID, params.ReservationID, params.ExistingSubscriptionID)
+		if err != nil {
+			return nil, err
+		}
+		if sub != nil {
+			return sub, nil
+		}
+		if time.Now().Before(params.ReplayBefore) {
+			params.ResumeOnly = false
+			return c.CreateSubscription(ctx, params)
+		}
+		return nil, fmt.Errorf("subscription response is unbound; inspect admin billing recovery list")
+	}
+
 	if params.IdempotencyKey == "" {
 		return nil, fmt.Errorf("CreateSubscription requires a deterministic IdempotencyKey")
 	}
@@ -230,10 +272,11 @@ func (c *Client) CreateSubscription(ctx context.Context, params SubscriptionPara
 		"mandateId":   params.MandateID,
 		"webhookUrl":  params.WebhookURL,
 		"metadata": map[string]any{
-			"purpose":      "subscription",
-			"tenant_id":    params.TenantID,
-			"tier_id":      params.TierID,
-			"reference_id": params.TierID,
+			"checkout_reservation_id": params.ReservationID,
+			"purpose":                 "subscription",
+			"tenant_id":               params.TenantID,
+			"tier_id":                 params.TierID,
+			"reference_id":            params.TierID,
 		},
 	}
 
@@ -295,7 +338,7 @@ func (c *Client) postJSON(ctx context.Context, rawURL string, body []byte, idemp
 		return nil, fmt.Errorf("read Mollie response: %w", readErr)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("mollie status %d: %s", resp.StatusCode, string(respBody))
+		return nil, &APIError{StatusCode: resp.StatusCode, Message: string(respBody)}
 	}
 	return respBody, nil
 }
@@ -502,4 +545,11 @@ func Amount(value string, currency string) *mollie.Amount {
 		Value:    value,
 		Currency: currency,
 	}
+}
+
+// CredentialFingerprint scopes durable request replay without storing the API key.
+func (c *Client) CredentialFingerprint() string {
+	mac := hmac.New(sha256.New, []byte(c.apiKey))
+	mac.Write([]byte("frameworks/checkout-credential/v1"))
+	return fmt.Sprintf("%x", mac.Sum(nil))
 }

@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"net/http"
 	"strings"
@@ -290,11 +291,16 @@ func TestHandleSubscriptionCheckoutCompletedPersistsTierAndPaymentMethod(t *test
 
 	s := &Service{db: mockDB, logger: logrus.New()}
 
+	mock.ExpectQuery("CheckoutAlreadySettled").WillReturnRows(sqlmock.NewRows([]string{"succeeded"}).AddRow(false))
+	mock.ExpectQuery("CheckoutReceiptBound").WillReturnRows(sqlmock.NewRows([]string{"bound"}).AddRow(true))
+	mock.ExpectBegin()
+	expectProviderSubscriptionLock(mock, checkoutTenantID)
 	mock.ExpectExec(subscriptionCheckoutUpdatePattern()).
 		WithArgs("cus_123", "sub_456", "tier-pro", nil, nil, checkoutTenantID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
 	mock.ExpectExec(`UPDATE purser\.payment_provider_intents\s+SET provider_subscription_id`).
-		WithArgs("sub_456", "cs_test_session").
+		WithArgs("sub_456", checkoutTenantID, "cs_test_session").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	if err := s.handleSubscriptionCheckoutCompleted(
@@ -305,6 +311,7 @@ func TestHandleSubscriptionCheckoutCompletedPersistsTierAndPaymentMethod(t *test
 		"cus_123",
 		"sub_456",
 		true,
+		"",
 	); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -323,9 +330,11 @@ func TestHandleSubscriptionCheckoutCompletedErrorsOnMissingRow(t *testing.T) {
 
 	s := &Service{db: mockDB, logger: logrus.New()}
 
-	mock.ExpectExec(subscriptionCheckoutUpdatePattern()).
-		WithArgs("cus_123", "sub_456", "tier-pro", nil, nil, "tenant-missing").
-		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery("CheckoutAlreadySettled").WillReturnRows(sqlmock.NewRows([]string{"succeeded"}).AddRow(false))
+	mock.ExpectQuery("CheckoutReceiptBound").WillReturnRows(sqlmock.NewRows([]string{"bound"}).AddRow(true))
+	mock.ExpectBegin()
+	mock.ExpectQuery("LockTenantSubscriptionForProviderChange").WithArgs("tenant-missing").WillReturnError(sql.ErrNoRows)
+	mock.ExpectCommit()
 
 	err = s.handleSubscriptionCheckoutCompleted(
 		context.Background(),
@@ -335,6 +344,7 @@ func TestHandleSubscriptionCheckoutCompletedErrorsOnMissingRow(t *testing.T) {
 		"cus_123",
 		"sub_456",
 		true,
+		"",
 	)
 	if err == nil || !strings.Contains(err.Error(), "no tenant_subscriptions row") {
 		t.Fatalf("expected missing-row error, got %v", err)
@@ -356,6 +366,7 @@ func TestHandleSubscriptionCheckoutCompletedSkipsWhenTenantMissing(t *testing.T)
 		"cus_123",
 		"sub_456",
 		true,
+		"",
 	); err != nil {
 		t.Fatalf("expected nil error when tenant_id empty, got %v", err)
 	}
@@ -373,14 +384,14 @@ func TestHandleSubscriptionCheckoutCompletedStagesWhenUnpaid(t *testing.T) {
 
 	s := &Service{db: mockDB, logger: logrus.New()}
 
-	mock.ExpectExec(`(?s)UPDATE purser\.tenant_subscriptions.*stripe_subscription_status = CASE.*WHERE tenant_id = \$3`).
-		WithArgs("cus_123", "sub_456", checkoutTenantID).
-		WillReturnResult(sqlmock.NewResult(0, 1))
-	// Staging also links the subscription id onto the session-keyed intent so
-	// later activation-by-subscription-id can close it.
-	mock.ExpectExec(`UPDATE purser\.payment_provider_intents\s+SET provider_subscription_id = COALESCE.*provider_session_id = \$2`).
-		WithArgs("sub_456", "cs_test_session").
-		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery("CheckoutAlreadySettled").WillReturnRows(sqlmock.NewRows([]string{"succeeded"}).AddRow(false))
+	mock.ExpectQuery("CheckoutReceiptBound").WillReturnRows(sqlmock.NewRows([]string{"bound"}).AddRow(true))
+
+	mock.ExpectBegin()
+	expectProviderSubscriptionLock(mock, checkoutTenantID)
+	mock.ExpectExec("StageTenantSubscriptionPendingStripe").WithArgs("cus_123", checkoutTenantID).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("LinkStripeIntentSubscription").WithArgs("sub_456", checkoutTenantID, "cs_test_session").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
 
 	if err := s.handleSubscriptionCheckoutCompleted(
 		context.Background(),
@@ -390,6 +401,7 @@ func TestHandleSubscriptionCheckoutCompletedStagesWhenUnpaid(t *testing.T) {
 		"cus_123",
 		"sub_456",
 		false,
+		"",
 	); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -511,4 +523,10 @@ func withDefaultTransport(t *testing.T, transport http.RoundTripper) {
 	old := http.DefaultTransport
 	http.DefaultTransport = transport
 	t.Cleanup(func() { http.DefaultTransport = old })
+}
+
+func expectProviderSubscriptionLock(mock sqlmock.Sqlmock, tenant string) {
+	mock.ExpectQuery("LockTenantSubscriptionForProviderChange").WithArgs(tenant).WillReturnRows(sqlmock.NewRows([]string{"subscription_id", "tier_id", "status", "billing_model", "stripe_subscription_id", "mollie_subscription_id", "pending_reason", "free_fallback_provider_stopping", "free_fallback_provider_ended_at"}).AddRow("sub-local-1", "tier", "active", "postpaid", nil, nil, nil, false, nil))
+	mock.ExpectQuery("IsTenantBillingClosed").WillReturnRows(sqlmock.NewRows([]string{"closed"}).AddRow(false))
+	mock.ExpectQuery("GetSubscriptionOperatorGrant").WithArgs(tenant).WillReturnError(sql.ErrNoRows)
 }

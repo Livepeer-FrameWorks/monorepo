@@ -37,6 +37,42 @@ encrypted independently for active recipient cells with X25519 + HKDF +
 AES-GCM. Historical delivery cells receive signed replacements or revocations
 but do not receive newly issued secret boxes.
 
+An inactive stream owner has no publishing credential in the signed live
+object. Deactivation queues each owned stream for refresh and stops its active
+ingest through durable session-stop delivery; it preserves playback and the
+tenant's content. Failed stop delivery backs off without exhausting its retries.
+A failed stop has its own obligation lane so it does not change the compiler
+error classification.
+Tenant closure commits local revocation and its session-stop obligation, then
+synchronizes the inactive tenant with Quartermaster independently. Unreachable
+cells keep retrying in the stop lane; `CommodoreAccountIngestRevocationStuck`
+alerts on the age of pending delivery, including backoff. If a dependency prevents
+compiling the replacement, Commodore corrects the previous object by removing
+its credential. If that correction also fails, it publishes a deny rather than
+retaining publishing
+access. A changed or missing playback-source revision, including a rotated
+webhook secret, requires a full deny rather than re-signing the previous secret.
+Payload and source revisions are read from one stored version. Placement-schema
+corrections include the tenant's recipient cells. A cell disconnected from
+Commodore retains the old credential until delivery resumes or the object
+expires; it cannot receive the stop command while disconnected.
+
+A tenant authority's `valid_until` is capped at its operator grant deadline, so
+an isolated cell cannot extend the trial. If the deadline passed before the
+expiry worker ended the grant, the compiler signs a fifteen-minute
+`PAYMENT_REQUIRED` denial with reason `operator_grant_expired`. This denial may
+renew without granting access; it does not indicate a negative prepaid balance.
+Expiry is fail-closed even if the tenant has another collection method: the
+fallback tier and billing boundary must settle before access resumes.
+A `PAYMENT_REQUIRED` denial with reason `prepaid_balance_unavailable` refuses
+new streams and viewers and leaves running ones alone: playback grants stay on
+edges with `new_sessions_blocked` set, and the managed-stream set reports
+incomplete so nothing is retracted. Running sessions end only at suspension.
+Local tenant account closure compiles an inactive authority with
+`tenant_inactive` and source revision
+`commodore/account_closed` in the original schema (placement schemas hash this
+source revision), without waiting for Quartermaster to mark the tenant inactive.
+
 Signing and encryption keys are separate:
 
 - Commodore receives the Ed25519 signing private key and the public X25519
@@ -79,7 +115,8 @@ holds one row per target and lane. A target is a tenant authority
 `media_object:artifact:<id>`), or the set of a tenant's objects
 (`tenant_media_objects:<id>`); its key is also the compile-fence scope. Lanes are
 `event` for source changes, `bulk` for work enumerated from a set (a tenant's
-objects, the tenants to reconcile), and `tenant_deadline` / `object_deadline` for
+objects, the tenants to reconcile), `ingest_revocation` for failed session-stop
+delivery, and `tenant_deadline` / `object_deadline` for
 scheduled renewal, each with its own worker, lease, and timeout. A tenant change
 that touches thousands of objects therefore never stands in front of a change to
 one of them. Each lane is drained by one claimant feeding a fixed number of
@@ -97,33 +134,31 @@ it. Purser commits a change before the event that enqueues its refresh, which is
 what makes the rule hold; answers age out after two minutes.
 
 Every writer goes through `commodore.enqueue_media_authority_obligation`: source
-triggers, owner-service events, placement and playback-policy changes, fanout,
-and renewal scheduling. A second event for a target folds into its existing row
-and bumps `revision`. Completion is fenced on the claimed revision, so an event
-that folds in while the row is compiling leaves it pending instead of being
-completed away. A target is never compiled by two lanes at once. Every claim
-writes the target's row in `media_authority_target_claims`, and a claim finding
-that row held by another lane under a live lease skips the target; settlement
-deletes it. A check of the other lane's lease alone would not do: it reads a
-snapshot, and two lanes can both pass it before either commits. Writing one
-row serializes them — on PostgreSQL the second waits and then sees the first's
-claim; under Yugabyte's snapshot isolation the second fails and the next pass
-sees it. Folds keep a live obligation lease because a fold flips the row to
-pending while its compile is still running. Event and bulk leases are ten
-seconds, renewed every third of that on the obligation and the claim row while
-the compile runs, so a replica that stops mid-compile (a restart, or a claim
-that committed after its caller gave up) holds the target for at most one
-lease, and a change that folded into its row runs within seconds. Without this, an event compile and a
-renewal of the same authority both run, and the compile fence discards one after
-its source reads and signing. Each claim carries a fresh token on the
-obligation and the claim row, and every settlement and release requires it: a
-worker whose lease lapsed, and whose target was claimed again at the same
-revision, settles and releases nothing. A compile that loses the fence to
-another compile of the same authority (a fetch, say) is not complete: that
-compile has only started and may still fail, so the row goes back to pending
-and runs once more, a no-op if the other compile published. A waiting event keeps its due time when its target changes again, so a
-target that keeps changing is not sent to the back of a backlog; a renewal's due
-time is replaced by each publication.
+triggers, owner-service events, placement and playback-policy changes, fanout, and
+renewal scheduling. A second event for a target folds into its existing row and bumps
+`revision`. Completion is fenced on the claimed revision, so an event that folds in
+while the row is compiling leaves it pending instead of being completed away. A target
+is never compiled by two lanes at once. Every claim writes the target's row in
+`media_authority_target_claims`, and a claim finding that row held by another lane under
+a live lease skips the target; settlement deletes it. A check of the other lane's lease
+alone would not do: it reads a snapshot, and two lanes can both pass it before either
+commits. Writing one row serializes them — on PostgreSQL the second waits and then sees
+the first's claim; under Yugabyte's snapshot isolation the second fails and the next
+pass sees it. Folds keep a live obligation lease because a fold flips the row to pending
+while its compile is still running. Event and bulk leases are ten seconds, renewed every
+third of that on the obligation and the claim row while the compile runs, so a replica
+that stops mid-compile (a restart, or a claim that committed after its caller gave up)
+holds the target for at most one lease, and a change that folded into its row runs
+within seconds. Without this, an event compile and a renewal of the same authority both
+run, and the compile fence discards one after its source reads and signing. Each claim
+carries a fresh token on the obligation and the claim row, and every settlement and
+release requires it: a worker whose lease lapsed, and whose target was claimed again at
+the same revision, settles and releases nothing. A compile that loses the fence to
+another compile of the same authority (a fetch, say) is not complete: that compile has
+only started and may still fail, so the row goes back to pending and runs once more, a
+no-op if the other compile published. A waiting event keeps its due time when its target
+changes again, so a target that keeps changing is not sent to the back of a backlog; a
+renewal's due time is replaced by each publication.
 
 A compile failure is classified. A failure that retrying cannot fix — a source
 row that cannot produce a valid envelope, an undecodable policy, a missing seal
@@ -213,27 +248,26 @@ stable identity, because quote observation and expiry are part of what they say,
 and always publish.
 
 A tenant publication fans out to the tenant's media objects only when
-`dependents_digest` — the tenant fields objects derive from, which excludes
-allowances, limits, and decision text — changes (and, while some cell still takes
-only short-lived object authorities, when tenant validity shrinks below what
-objects were capped to). The fanout obligation is written in the tenant's
-publishing transaction. Processing it reads, once, the tenant's objects cells may
-still hold — the current version is not a tombstone and some version of the
-object is still valid — and refreshes them in the `bulk` lane, 500 per
-statement; a fanout that fails part way runs again from the start, and an
-object enqueued twice folds into its one pending refresh. The newest
-version can be expired while an older one still verifies, so the check covers
-every version. An object with no valid version left has nothing to correct.
-Metering therefore publishes tenant versions without re-signing a single object.
-Every tenant compile that finds a valid tenant authority re-arms the objects
-parked waiting for it, even when the compile publishes nothing. One input reaches objects without passing through
-the tenant authority: process configuration comes from the tenant's tier. The
-two Purser reasons that can change it, `subscription_authority_changed` and
-`billing_tier_authority_changed`, refresh the tenant's objects directly.
-Signing-key and tenant processing changes refresh all of the tenant's objects as
-well. A playback-policy change does not: it refreshes the changed object and,
-for a stream, the recordings, chapters and clips of that stream that cells may
-still hold, since those are the only authorities that carry the stream's policy.
+`dependents_digest` — the tenant fields objects derive from, which excludes allowances,
+limits, and decision text — changes (and, while some cell still takes only short-lived
+object authorities, when tenant validity shrinks below what objects were capped to). The
+fanout obligation is written in the tenant's publishing transaction. Processing it
+reads, once, the tenant's objects cells may still hold — the current version is not a
+tombstone and some version of the object is still valid — and refreshes them in the
+`bulk` lane, 500 per statement; a fanout that fails part way runs again from the start,
+and an object enqueued twice folds into its one pending refresh. The newest version can
+be expired while an older one still verifies, so the check covers every version. An
+object with no valid version left has nothing to correct. Metering therefore publishes
+tenant versions without re-signing a single object. Every tenant compile that finds a
+valid tenant authority re-arms the objects parked waiting for it, even when the compile
+publishes nothing. One input reaches objects without passing through the tenant
+authority: process configuration comes from the tenant's tier. The two Purser reasons
+that can change it, `subscription_authority_changed` and
+`billing_tier_authority_changed`, refresh the tenant's objects directly. Signing-key and
+tenant processing changes refresh all of the tenant's objects as well. A playback-policy
+change does not: it refreshes the changed object and, for a stream, the recordings,
+chapters and clips of that stream that cells may still hold, since those are the only
+authorities that carry the stream's policy.
 
 An object compile captures the current tenant version and, under that tenant's
 current-pointer lock, publishes only if the tenant's `dependents_digest` is still
@@ -660,19 +694,18 @@ tombstone is never forgotten. A forgotten object is, to that cell, one it never
 held: readiness markers and the placement revision fence start over, and the
 stale-pointer purge sweeps its pointers and thumbnails.
 
-Tenant envelopes hard-expire no later than 24 hours. Media-object envelopes
-hard-expire no later than thirty days and are not capped by their tenant's
-validity: every decision a cell makes also requires the tenant authority, so what
-a cell serves while it cannot reach the control plane is still bounded by the
-tenant's 24 hours, and suspension, grant changes and billing travel in the tenant
-authority. A version carries a nominal validity with optional shorter per-cell
-correction caps. A replica that predates the longer bound rejects the envelope outright, so it is issued only
-when every cell the version goes to attests `long_validity_ready`; until then
-objects keep the earlier bounds (24 hours live, seven days artifact, capped by
-the tenant). Every object is compiled against the tenant authority
-it captured and is refused if that tenant changed before publication; it is
-bounded by the tenant's validity only when its placement policy carries
-commercial quotes, and then by the quotes as well.
+Tenant envelopes hard-expire no later than 24 hours. Media-object envelopes hard-expire
+no later than thirty days and are not capped by their tenant's validity: every decision
+a cell makes also requires the tenant authority, so what a cell serves while it cannot
+reach the control plane is still bounded by the tenant's 24 hours, and suspension, grant
+changes and billing travel in the tenant authority. A version carries a nominal validity
+with optional shorter per-cell correction caps. A replica that predates the longer bound
+rejects the envelope outright, so it is issued only when every cell the version goes to
+attests `long_validity_ready`; until then objects keep the earlier bounds (24 hours
+live, seven days artifact, capped by the tenant). Every object is compiled against the
+tenant authority it captured and is refused if that tenant changed before publication;
+it is bounded by the tenant's validity only when its placement policy carries commercial
+quotes, and then by the quotes as well.
 
 Every published version of an authority in use schedules its own renewal a third
 of the way through its validity, and `refresh_after` sits at half. Every
@@ -1005,3 +1038,28 @@ tenant/object recompilation. During a cell seal-key compromise, rotate that cell
 recipient, recompile all secret-bearing authority targeted there, and revoke or
 drain the affected cell as required. Do not extend validity or enable central
 fallback to mask a key incident.
+
+System-tenant managed sources (`mist_native` and pull) belong to the tenant.
+Deactivating their original owner revokes publisher keys and active push sessions;
+managed-source reconciliation and playback continue while the tenant is active.
+
+Cluster retirement remains an open operator requirement: Quartermaster
+has no persisted retirement state or command. An unreachable historical ingest
+cell therefore retains its durable session-stop obligation and raises
+`CommodoreAccountIngestRevocationStuck`; it is never silently treated as retired.
+Tenant closure still completes independently. The alert continues until the cell
+is restored: confirming that it is offline does not settle the obligation. There
+is no retirement command. Silence this alert while awaiting a supported cluster
+retirement mechanism.
+
+Account reactivation supersedes queued owner stops. Commodore rechecks the owner
+before each cell call. A stop already in flight can end a publisher that reconnects
+during reactivation once; the publisher can reconnect after that call finishes.
+An unreachable cell leaves the stop pending and raises
+`CommodoreAccountIngestRevocationStuck`, for user deactivation as well as closure.
+
+Permanent tenant closure also emits `user.tenant_account_closed` for Purser.
+Purser records the event's cutoff, stops future invoice selection, and durably
+cancels established Stripe/Mollie subscriptions before finalizing the open
+billing phase. Provider cancellation and metering failures remain in its
+provider inbox; they do not reopen the tenant's media authority.

@@ -225,7 +225,9 @@ type PurserBootstrap struct {
 	QuartermasterClient
 	config.GRPCClientTLS
 
-	ServiceToken string `env:"SERVICE_TOKEN" secret:"true" desc:"Shared service token for Quartermaster calls. Required when the desired state declares customer_billing." introduced:"v0.3.0"`
+	ServiceToken               string `env:"SERVICE_TOKEN" secret:"true" desc:"Shared service token for Quartermaster calls. Required when the desired state declares customer_billing." introduced:"v0.3.0"`
+	CommodoreGRPCAddr          string `env:"COMMODORE_GRPC_ADDR" default:"commodore:@port(commodore.grpc)" desc:"Commodore address for best-effort bootstrap billing cache invalidation." introduced:"v0.3.14"`
+	CommodoreGRPCTLSServerName string `env:"COMMODORE_GRPC_TLS_SERVER_NAME" desc:"TLS server name override for Commodore." introduced:"v0.3.14"`
 }
 
 // PurserDataMigrations is the configuration of `purser data-migrations`.

@@ -89,16 +89,6 @@ SET billing_period_start = COALESCE(billing_period_start, sqlc.arg(period_start)
     END
 WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid;
 
--- name: ApplyTenantTierUpgrade :exec
-UPDATE purser.tenant_subscriptions
-SET tier_id = sqlc.arg(tier_id)::text::uuid,
-    pending_tier_id = NULL, pending_effective_at = NULL, pending_reason = NULL,
-    billing_period_start = COALESCE(billing_period_start, sqlc.arg(period_start)),
-    billing_period_end = COALESCE(billing_period_end, sqlc.arg(period_end)),
-    next_billing_date = COALESCE(next_billing_date, sqlc.arg(period_end)),
-    updated_at = NOW()
-WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid;
-
 -- name: ScheduleTenantTierDowngrade :exec
 UPDATE purser.tenant_subscriptions
 SET pending_tier_id = sqlc.arg(tier_id)::text::uuid,
@@ -125,7 +115,16 @@ SELECT id::text AS id, tier_name, COALESCE(tier_level, 0)::integer AS tier_level
        COALESCE(is_active, true)::boolean AS is_active,
        COALESCE(is_default_prepaid, false)::boolean AS is_default_prepaid
 FROM purser.billing_tiers
-WHERE tier_name = sqlc.arg(tier_name);
+WHERE tier_name = sqlc.arg(tier_name)
+FOR SHARE;
+
+-- name: GetFallbackTierForOperatorGrant :one
+SELECT id::text AS id, tier_name, COALESCE(tier_level, 0)::integer AS tier_level,
+       COALESCE(is_active, true)::boolean AS is_active,
+       COALESCE(is_default_prepaid, false)::boolean AS is_default_prepaid
+FROM purser.billing_tiers
+WHERE tier_name = sqlc.arg(tier_name)
+FOR NO KEY UPDATE;
 
 -- name: AssignTenantSubscriptionTier :execrows
 UPDATE purser.tenant_subscriptions
@@ -138,3 +137,14 @@ SET tier_id = sqlc.arg(tier_id)::text::uuid,
     pending_tier_id = NULL, pending_effective_at = NULL, pending_reason = NULL,
     updated_at = NOW()
 WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid;
+
+-- name: LockTenantSubscriptionForGrantExpiry :one
+SELECT subscription.id::text AS subscription_id, subscription.tier_id::text AS tier_id,
+       tier.tier_name, COALESCE(tier.tier_level, 0)::integer AS tier_level,
+       subscription.billing_model, subscription.status,
+       (subscription.pending_tier_id IS NOT NULL)::boolean AS has_pending_tier,
+       subscription.billing_period_start, subscription.billing_period_end
+FROM purser.tenant_subscriptions subscription
+JOIN purser.billing_tiers tier ON tier.id = subscription.tier_id
+WHERE subscription.tenant_id = sqlc.arg(tenant_id)::text::uuid
+FOR UPDATE OF subscription SKIP LOCKED;

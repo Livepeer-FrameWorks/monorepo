@@ -13,6 +13,8 @@ import (
 // a target holds at most one obligation per lane.
 const (
 	MediaAuthorityLaneEvent = "event"
+	// MediaAuthorityLaneIngestRevocation retries session stops independently of signing.
+	MediaAuthorityLaneIngestRevocation = "ingest_revocation"
 	// MediaAuthorityLaneBulk carries work enumerated from a set (a tenant's
 	// objects, the tenants to reconcile) so it never queues in front of a change.
 	MediaAuthorityLaneBulk           = "bulk"

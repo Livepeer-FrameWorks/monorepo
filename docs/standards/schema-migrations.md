@@ -177,18 +177,18 @@ listed with the file's checksum in `yugabyteRerunGuards`
 with the same effect; the validator rejects a guard whose file changed, whose statement no
 longer matches, or whose statement is already safe.
 
-The expand SQL validator guards against common authoring mistakes, not hostile
-SQL. It inspects direct updates, deletes, upserts, merges and truncation, including
-routine bodies that a migration calls, CTAS queries and literal EXECUTE bodies.
-Stored definitions alone do not execute their bodies. Initialization of a table unconditionally created earlier in the same migration
-is additive; `CREATE TABLE IF NOT EXISTS` does not prove a table is new. Upserts
-that update existing tables, including literal price seeds, require service-owned
-data migration. `DO NOTHING` seeds remain additive. Encoded strings, constructed
-dynamic SQL and volatile functions in `DEFAULT` expressions require code review.
-Three immutable v0.3.0 files already shipped with upserts: Foghorn ordering-counter
-initialization and Purser usage/dimension catalog seeds. Their original paths and
-exact contents are pinned in `migrate_shipped_upserts.go`; edits or copies into a
-new release receive no exception. This preserves shipped checksums without
+The expand SQL validator guards against common authoring mistakes, not hostile SQL. It
+inspects direct updates, deletes, upserts, merges and truncation, including routine
+bodies that a migration calls, CTAS queries and literal EXECUTE bodies. Stored
+definitions alone do not execute their bodies. Initialization of a table unconditionally
+created earlier in the same migration is additive; `CREATE TABLE IF NOT EXISTS` does not
+prove a table is new. Upserts that update existing tables, including literal price
+seeds, require service-owned data migration. `DO NOTHING` seeds remain additive. Encoded
+strings, constructed dynamic SQL and volatile functions in `DEFAULT` expressions require
+code review. Three immutable v0.3.0 files already shipped with upserts: Foghorn
+ordering-counter initialization and Purser usage/dimension catalog seeds. Their original
+paths and exact contents are pinned in `migrate_shipped_upserts.go`; edits or copies
+into a new release receive no exception. This preserves shipped checksums without
 allowing the same rewrites in new migrations.
 
 ## Dry-run safety

@@ -158,6 +158,9 @@ func (p *Processor) readReadyLocalIngest(ctx context.Context, credential string)
 			reason = commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_TENANT_SUSPENDED
 		} else if tenantPayload.GetBillingDecision() == mediaauthoritypb.TenantBillingDecision_TENANT_BILLING_DECISION_PAYMENT_REQUIRED {
 			reason = commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_BALANCE_NEGATIVE
+			if tenantPayload.GetDecisionReason() == sharedauthority.ReasonOperatorGrantExpired {
+				reason = commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_GRANT_EXPIRED
+			}
 		}
 		return &commodorepb.ValidateStreamKeyResponse{
 			Valid: false, Error: tenantPayload.GetDecisionReason(), RejectionReason: reason,

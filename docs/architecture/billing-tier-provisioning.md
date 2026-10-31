@@ -208,8 +208,60 @@ since no later postpaid invoice would collect them. A subscription, tier,
 provider setup, operator grant (including one that expired) or count of
 received usage that changed since the rating returns `ErrPostpaidPhaseChanged`;
 `AdminAssignTier` rates again, up to three times, then returns `Aborted`.
-Unresolved cluster pricing refuses the switch. Operator grants never change
-the billing model, so a grant expiring is not a switch.
+Unresolved cluster pricing refuses the boundary. A grant ending can also restore
+a fallback tier and change the billing model, such as an enterprise trial returning to PAYG.
+
+Advance-billed provider activation closes the old billing period and starts a
+new month. Its closing invoice is not marked `closes_postpaid_phase`; otherwise
+the new base fee would be prorated against the old period again. The unused
+share of the prior advance invoice still nets against the new base-fee invoice.
+Grant and model switches retain the original period and its phase chain.
+
+Self-service paid upgrades follow the same fresh-month rule. `ChangeBillingTier`
+records one durable upgrade under the subscription lock. Checkout, grants and
+other pricing changes wait until its provider outcome and usage boundary are
+known. Stripe replaces its existing subscription item, resets renewal and
+immediately charges the new month with its retained paid-fee proration credit. Mollie changes the
+existing recurring amount and next payment date; Purser invoices the new month
+less the unused paid share of the previous fee. Mollie's date-only renewal date
+is the new period's end. Calendar arithmetic caps a missing month-end day at
+February 28/29 (or the target month's last day); matching recorded provider
+ends retain the precise local upgrade start. Advance collection uses that same invoice ledger and
+the current ECB rate, locked onto the replacement invoice when it is issued.
+
+The closing usage invoice, new local period and any Purser-issued replacement
+base fee and credit commit together. The unused fee comes from the paid invoice
+or provider contract, rather than the tier's current list price or a grant-split
+usage phase. It is a billing credit, not a cash refund. An in-flight payment of the
+previous fee refuses the upgrade before provider pricing changes. Stripe also
+requires its previous subscription invoice to be paid before issuing a proration
+credit. An ambiguous provider update or incomplete metering keeps the upgrade
+pending. Retrying the same tier
+uses the original upgrade identity and boundary; an already-applied tier is a
+no-op. Provider metadata locates a price change whose response was lost, and
+callbacks preceding a committed Stripe upgrade cannot restore its old tier or
+status. The provider inbox owns retry leases, backoff and alerts; committed
+pricing is not rolled back by cache delivery failures. Permanent account closure
+cancels unapplied upgrades. A confirmed provider purchase before the closure
+cutoff applies pricing up to that cutoff; an already-issued replacement invoice
+is still collected. A Stripe purchase starting at or after the cutoff is
+compensated using only its replacement invoice. Closure never refunds unused
+time on an activated month and prevents callbacks from reopening billing.
+
+Upgrades refuse scheduled downgrades and cancelled or pending-cancellation
+subscriptions; the customer must explicitly cancel the pending change or resume
+first. Mollie upgrades wait for local rollover when the previous period has
+ended, even if Mollie already collected the next renewal. Refunded or disputed
+provider fees cannot fund a new credit. Metering is checked at the accepted
+boundary before provider mutation; retries retain that boundary.
+
+An operator can inspect `admin billing recovery list --tenant-id <uuid>` and run
+`admin billing recovery upgrade --tenant-id <uuid> --upgrade-id <uuid> --reason
+"Reconcile purchase"`. Recovery previews and confirms first. It only locates
+existing provider work, cancels an unapplied request or finishes an applied
+purchase; it never initiates another purchase. The purchase retains the first
+recovery operator and reason. Provider outages retain the pricing fence until
+that existing purchase can be resolved.
 
 **Period after a split.** Whichever document closes the last part of a split
 period, the next period is as long as the whole period the switches split,
@@ -245,23 +297,29 @@ change:
 3. Otherwise a grant under which the tenant owes nothing: base fee 0 and usage
    waived. Provider `operator`.
 
-An operator grant is one row per subscription, set with
-`frameworks admin billing grant set` (`AdminSetBillingGrant`):
+An operator grant is the current arrangement for one subscription, set with
+`frameworks admin billing grant set` (`AdminSetBillingGrant`).
 
-- `base_price` replaces the tier's base fee in `LoadEffectiveTier`, so every
-  invoice and base-fee path sees it. A grant that sets it is refused while a
-  Stripe or Mollie subscription exists, because that subscription bills the
-  tier's price on the provider's side; while it applies, Stripe Checkout runs in
-  setup mode (card only) and Mollie subscriptions are refused.
-- `waive_usage` rates usage at zero for that tenant, the per-tenant form of
-  `WAIVE_USAGE_CHARGES`. Quantities and would-have-cost amounts stay on the
-  invoice.
-- `expires_at` is evaluated at read time: an expired grant stops applying
-  everywhere at once, with no job, and stays on record.
+- `base_price` overrides the subscription tier's base fee. Without an override,
+  the current subscription tier supplies the price, including after an operator tier change.
+  `LoadSubscriptionEffectiveTierAt` selects the grant and tier for the invoiced phase.
+  Provider subscriptions must be cancelled before overriding their base fee.
+- `waive_usage` rates metered usage at zero while preserving quantities and would-have-cost amounts.
+- Assigning a trial tier remembers the original tier as fallback. `--fallback-tier`
+  chooses another active fallback. Renewal preserves it; an explicit `set-tier`
+  change clears it. Ending the grant restores it only if the assigned tier is still current.
+- Pricing changes close the preceding billing phase transactionally. Changing only
+  a deadline or reason leaves the period open; an identical set is a no-op.
+- A minute sweep ends expired grants at their deadline, archives their arrangement,
+  and restores the fallback. A failed boundary is retried with five-minute backoff,
+  alerted, and holds invoicing for that tenant while other tenants continue.
+- `grant list --include-expired` reads current and archived grants; `grant revoke`
+  ends the current arrangement immediately through the same billing-boundary path.
 
-Grant changes record `billing.subscription_updated` with `changed_fields =
-["operator_grant"]` and the operator's reason. Metering and rating are unchanged
-by a grant.
+The subscription lock fences grant changes, historical pricing and billing documents.
+`billing.subscription_updated` records changed arrangements. Durable refresh work
+reconciles tenant entitlements and invalidates caches after commit. Signed media
+permission ends at a future grant deadline, including during control-plane outages.
 
 ## Default Tier Configuration
 
@@ -284,7 +342,9 @@ WHERE cluster_id = ANY(<quartermaster_official_cluster_ids>)
   AND (allow_free_tier = true OR <tier_level> > 0)
 ```
 
-Purser grants each eligible cluster through Quartermaster's service-token `BootstrapClusterAccess` RPC. The cluster with the highest `required_tier_level` is set as primary (most capable cluster the tier grants access to).
+Purser grants each eligible cluster through Quartermaster's service-token
+`BootstrapClusterAccess` RPC. The cluster with the highest `required_tier_level` is set
+as primary (most capable cluster the tier grants access to).
 
 ## Key Files
 
@@ -300,7 +360,80 @@ Purser grants each eligible cluster through Quartermaster's service-token `Boots
 - Tier-specific paid collection must be completed before selecting a non-Free
   postpaid tier, unless an operator grant stands in for it. Free activation
   remains provider-free.
-- `AdminAssignTier` (`set-tier`) changes the tier only. A paid postpaid tier
-  assigned that way without collection or a grant is refused rated work.
+- `AdminAssignTier` (`set-tier`) changes tier and billing model while preserving
+  an active grant. A tier change clears its fallback. A paid postpaid tier
+  without collection or a grant is refused rated work.
 - `PromoteToPaid` honors an explicit active, postpaid-eligible `tier_id`; an
   empty value selects the default postpaid tier.
+
+Provider tier and billing-model transitions use one subscription-row-locked
+policy. Stripe checkout/activation, Mollie subscription activation and advance
+billing after Stripe setup or Mollie mandate completion refuse an outstanding
+operator grant. A renewal of the same established Stripe subscription updates
+only status and period dates while keeping its grant. Cancellation retains the
+arrangement for recoverable provider states. Revoke or expiry on a cancelled
+subscription archives it at the cleanup time without a tier change or closing
+document; new checkout can proceed after that cleanup. Bootstrap defers a
+cancelled subscription with an actionable recovery error while reconciling the
+other tenants, and reports a non-zero result.
+
+All ordinary pricing changes use the subscription row lock before reading its
+operator grant. Self-service changes, promotions and scheduled downgrades refuse
+an outstanding grant. Bootstrap keeps the granted tier and model when the
+billing declaration has no live grant change; its cluster entitlement operations
+use that retained tier. An operator's explicit grant/tier lifecycle closes the
+required billing boundary before replacing the arrangement.
+
+Checkout reserves its durable provider intent under the same lock before any
+external call. Grant creation refuses while Stripe checkout or Mollie first
+payment/subscription setup is outstanding, including an ambiguous provider call.
+Reconcile that checkout before granting a trial; the refusal identifies its
+checkout deadline. Completed purchases remain reserved through payment
+settlement, including after that deadline. Use
+`frameworks admin billing recovery list` for pending work. Run
+`frameworks admin billing recovery checkout --tenant-id <uuid>
+--reservation-id <uuid> --reason "Abandoned checkout"` for a provider/state/amount
+preview and confirmation; `--yes` confirms non-interactively. The outcome and
+actor are retained per request, exposed by `recovery list --tenant-id <uuid>
+--history`, and emitted as `billing.checkout_recovery_action` request/result
+events. Unbound attempts may be closed early; completed unsettled purchases
+remain fenced. Normal settlement waits back off to six hours and alert after
+fourteen days. Successful Mollie
+activation settles its reservation atomically; completed checkout replays cannot
+activate an old tier under a later grant.
+
+A checkout retries its existing open intent and stored provider idempotency key.
+A later checkout after settlement creates a new intent and key; prior receipts
+remain available to identify stale callbacks. A callback waits until its exact
+session/payment reference is bound to the local intent. Storing a delayed
+provider response preserves a terminal outcome. Confirmed session expiry and
+compensating subscription cancellation close the reservation, allowing a fresh
+attempt without reusing the cancelled provider resource.
+
+Checkout completion is persisted independently from settlement under the
+subscription row lock. Direct events and recovery use that same completion
+fact. A receipt stays outstanding until activation or confirmed expiry,
+cancellation or failed settlement; an elapsed deadline alone cannot release it.
+Compensation is marked under the lock before provider I/O, preventing concurrent
+activation, and the receipt closes only after reconciliation finishes. Recovery
+never cancels the provider subscription already installed locally.
+
+Compensation is scoped to the checkout's first payment or initial invoice;
+recurring service invoices are excluded. Refund acceptance enqueues separate
+bank-settlement inspection with immutable native payment and currency evidence.
+Only confirmed refunds or unreversed chargebacks count as returned funds. A
+failed or missing return remains actionable inbox work; polling never creates
+a second refund. An unactivated cluster purchase voids its initial operator
+credit under the same subscription lock, whether the accrual or refund liability
+arrives first. It does not reverse producer credit for recurring service.
+
+The reservation records `prepared` before commercial provider I/O. Persisting
+the exact request and its credential digest changes its submission state to
+`submitted` under the subscription lock. A prepared attempt can therefore close
+without a provider call, including after a local preflight failure. Requests
+without an original journal are located rather than reconstructed and replayed.
+Idempotent replays use the stored body/key only within a 23-hour Stripe or
+45-minute Mollie window; Mollie's keys are retained for one hour and scoped to
+the API credential. Credential rotation cannot turn a retry into a second create.
+Late provider responses invalidate an older recovery lease and wake the durable
+work again, so its acknowledgement cannot erase the new binding.

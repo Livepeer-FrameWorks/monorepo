@@ -837,9 +837,9 @@ class AsyncGraphQLClient(AsyncBaseClient):
     async def change_billing_tier(
         self, tier_id: str, **kwargs: Any
     ) -> ChangeBillingTier:
-        """Change the postpaid billing tier. Upgrades apply immediately and reconcile
-        cluster access; downgrades are scheduled for the current billing period end
-        so the tenant keeps paid entitlements until the period closes."""
+        """Change the postpaid billing tier. Upgrades start a fresh month and credit
+        the unused paid fee; provider or metering reconciliation can leave them pending.
+        Downgrades take effect at the current billing period end."""
         query = gql("""
             mutation ChangeBillingTier($tierId: ID!) {
               changeBillingTier(tierId: $tierId) {

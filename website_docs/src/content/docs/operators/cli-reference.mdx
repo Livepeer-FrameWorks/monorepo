@@ -1932,6 +1932,36 @@ Periscope cross-tenant rollup. The Periscope RPC only answers service
 credentials, so the command needs an active context with a resolvable
 service token.
 
+#### frameworks admin tenants deactivate
+
+Permanently close a tenant, disable all users, and tear down its domains and media
+permission. Local closure prevents concurrent user creation and activation;
+Quartermaster teardown retries after a temporary outage. The system tenant cannot
+be closed. The tenant must exist in Quartermaster. Type its name to confirm, or pass
+`--yes --tenant-name` with its exact current name. Use user deactivation for a reversible suspension.
+
+```bash
+frameworks admin tenants deactivate <UUID> --yes --tenant-name "Exact Tenant Name" --reason "Account closed"
+```
+
+#### frameworks admin tenants get
+
+Read a tenant directly by UUID, without paging through the tenant list.
+
+```bash
+frameworks admin tenants get <UUID> --output json
+```
+
+#### frameworks admin tenants history
+
+Read private operator account changes and their reasons. Requires a platform-operator JWT.
+Use `--limit` (1..500, default 100) and the returned `--before` cursor to page
+through the newest entries first. Reasons are escaped in text output.
+
+```bash
+frameworks admin tenants history <UUID> --output json
+```
+
 ---
 
 ### frameworks admin clusters
@@ -2128,7 +2158,7 @@ Billing tier and subscription management.
 - `set-cluster-pricing` - Set or update pricing config for a cluster
 - `credit` - Add (or with `--debit`, remove) EUR prepaid balance for a tenant
 - `set-tier` - Put a tenant on a billing tier as an operator decision
-- `grant set` / `grant show` / `grant revoke` - Operator billing arrangements: base fee, usage
+- `grant set` / `grant show` / `grant revoke` / `grant list` - Operator billing arrangements: base fee, usage
   waiver, manual invoicing, expiry
 - `record-payment` - Record a bank transfer that paid an invoice
 - `prepaid-double-charges` - List invoices that charged prepaid tenants twice for the same usage
@@ -2209,7 +2239,8 @@ to its total, when it is finalized. A scheduled downgrade is cleared.
 After the change Purser reconciles cluster access for the new tier and refreshes cached tenant
 limits, the same as a self-serve tier change, and records `billing.subscription_updated` with
 `--reason` and the calling identity. Assigning the tier and model the tenant already has changes
-nothing and records no event; cluster access is reconciled again.
+nothing and records no event; cluster access is reconciled again. An active grant continues on
+the assigned tier, and a tier change clears its fallback.
 
 A postpaid paid tier invoices its base price and usage when the period closes, and rated work is
 admitted only once those charges can be collected: the tenant's own Stripe or Mollie setup, or an
@@ -2257,26 +2288,70 @@ An arrangement has four parts:
   emailed as usual, stay pending until you record the payment with `record-payment`, and get the
   usual overdue reminders.
 - **Expiry** (`--until`): a date (the arrangement runs through that day, UTC) or an RFC 3339 time.
-  After it the tier and the tenant's own payment setup apply again. Without it the arrangement runs
-  until revoked.
+  Expiry closes the granted phase and restores its fallback when the assigned tier is still current.
+  Without it the arrangement runs until revoked.
 
-A tenant that owes nothing (base fee 0 and usage waived) needs no collection setup. An invoice uses
-the arrangement in force when its period is invoiced.
+A tenant that owes nothing (base fee 0 and usage waived) needs no collection setup. Pricing changes
+close the preceding phase, so each invoice uses the arrangement that applied during its interval.
+Renewing a deadline preserves the period, and an identical grant set is a no-op.
+
+#### frameworks admin billing grant list
+
+List operator grants and retained grant history. By default this shows current
+grants; `--include-expired` adds retained history,
+`--expiring 7d` selects grants ending in the next seven days, and `--limit` /
+`--offset` select a page.
+
+```bash
+frameworks admin billing grant list --expiring 7d
+frameworks admin billing grant list --include-expired --output json
+```
+
+#### frameworks admin billing recovery list
+
+`recovery list` reads outstanding provider callbacks and checkout recovery work,
+including the last error, next retry and checkout deadline. Use `--limit` (1–100)
+and `--offset` to page; `--tenant-id` narrows to a tenant's checkout reservations.
+Omit the tenant filter to include provider callbacks not yet bound to a tenant.
+Use `--tenant-id <UUID> --history` to read each operator request, identity, reason
+and outcome. Empty lists print an explicit message.
+
+#### frameworks admin billing recovery checkout
+
+`frameworks admin billing recovery checkout --tenant-id <UUID> --reservation-id <UUID> --reason "Abandoned checkout"`
+previews the provider, state and amount, then requires interactive `yes` or
+`--yes`. Recovery reports its actual outcome and audit ID; pending work remains
+queued. On-time completed purchases activate after settlement, even after the
+checkout deadline. An abandoned attempt may be expired early; compensation can
+cancel a subscription and request refunds. Refund acceptance does not mean bank
+settlement has finished. Both commands require a platform-operator JWT.
+
+#### frameworks admin billing recovery upgrade
+
+`frameworks admin billing recovery upgrade --tenant-id <UUID> --upgrade-id <UUID> --reason "Reconcile purchase"`
+previews an accepted tier upgrade and requires interactive `yes` or `--yes`.
+Get its purchase UUID from `recovery list`. Recovery locates existing provider
+work; it cancels an unapplied request or completes an applied purchase without
+starting another purchase. It records the first operator and reason and reports
+the durable state, including work that still needs provider or metering repair.
+The command requires a platform-operator JWT.
 
 #### frameworks admin billing grant set
 
-Record an arrangement, replacing any previous one. `--tier` assigns the tier first, as `set-tier`
-does. Records `billing.subscription_updated` with `--reason`, and prints the arrangement and whether
+Record an arrangement, optionally assigning `--tier` in the same transaction. An initial tier
+change remembers its previous tier as fallback. Renewal preserves it; an explicit `set-tier` change
+clears it. `--fallback-tier` chooses another active fallback. Records `billing.subscription_updated` with `--reason`, and prints the arrangement and whether
 the tenant's charges can now be collected.
 
 **Flags:**
 
 - `--tenant-id` / `--email` - The tenant, as for `set-tier`
 - `--tier` - Also assign this tier; empty keeps the tenant's tier
+- `--fallback-tier` - Active tier to restore when the grant ends
 - `--base-fee` - EUR base fee in place of the tier's, for example `0`
 - `--waive-usage` - Rate usage at zero
 - `--collection` - `provider` (default) or `invoice`
-- `--until` - End of the arrangement
+- `--until` - Absolute deadline: a date includes that UTC day; RFC3339 names an instant
 - `--reason` - Why; recorded on the arrangement and the audit event (required)
 
 ```bash
@@ -2303,12 +2378,16 @@ frameworks admin billing grant show --email owner@example.com
 
 #### frameworks admin billing grant revoke
 
-Remove the arrangement; the tier and the tenant's own payment setup apply from then on. `--reason`
-is required and recorded on the audit event.
+Close the granted billing phase and restore its fallback when the assigned tier
+is still current. `--reason` is required and recorded on the audit event.
+`--tier <active-tier>` explicitly chooses a recovery tier.
 
 ```bash
 frameworks admin billing grant revoke --tenant-id <UUID> --reason "supporter period over"
 ```
+
+If the recorded fallback tier is retired, pass `--tier <active-tier>` to choose
+an active recovery tier while closing the grant at its expiry boundary.
 
 ---
 
@@ -2371,6 +2450,8 @@ Manage users in existing tenants.
 **Subcommands:**
 
 - `create` - Create a user in an existing tenant (requires service token auth)
+- `activate` - Restore a user's access (requires a platform-operator JWT)
+- `deactivate` - Revoke a user's access (requires a platform-operator JWT)
 
 ```bash
 # Right after cluster provision — tenant-id comes from context, password from stdin
@@ -2395,6 +2476,25 @@ frameworks admin users create \
 - `--role` - `owner` or `member` (default: `owner`)
 
 Without `--password` or `--password-stdin`, the CLI prompts at a TTY with hidden echo.
+
+#### frameworks admin users deactivate
+
+Reversibly disable a user, their interactive sessions, API access and stream-key publishing. Tenant-owned media remains available.
+Requires a platform-operator session and a private audit reason.
+Use `--email`, or `--user-id` with `--tenant-id`. With `--email`, `--tenant-id` is optional.
+
+```bash
+frameworks admin users deactivate --email trial@example.com --reason "Trial paused"
+```
+
+#### frameworks admin users activate
+
+Restore a disabled user. Old interactive sessions and refresh tokens stay revoked;
+log in again. Existing API tokens and stream keys work once billing permits them.
+
+```bash
+frameworks admin users activate --email trial@example.com --reason "Trial resumed"
+```
 
 ---
 

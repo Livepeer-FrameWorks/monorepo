@@ -46,6 +46,8 @@ func TestReconcileCustomerBilling_PlatformOfficialIntersection(t *testing.T) {
 
 	tenantUUID := "11111111-1111-1111-1111-111111111111"
 	tierUUID := "22222222-2222-2222-2222-222222222222"
+	mock.ExpectBegin()
+	mock.ExpectQuery("LockTenantSubscriptionForProviderChange").WithArgs(tenantUUID).WillReturnError(sql.ErrNoRows)
 
 	// Tier resolution.
 	mock.ExpectQuery(`SELECT id, COALESCE\(tier_level, 0\)::integer AS tier_level, currency[\s\S]+FROM purser\.billing_tiers[\s\S]+WHERE tier_name = \$1`).
@@ -84,7 +86,8 @@ func TestReconcileCustomerBilling_PlatformOfficialIntersection(t *testing.T) {
 		Tier:   "starter",
 	}}
 
-	res, post, err := ReconcileCustomerBilling(context.Background(), db, entries, qm)
+	mock.ExpectCommit()
+	res, post, err := ReconcileCustomerBilling(context.Background(), db, entries, qm, nil)
 	if err != nil {
 		t.Fatalf("ReconcileCustomerBilling: %v", err)
 	}
@@ -142,6 +145,8 @@ func TestReconcileCustomerBilling_ClusterAccessNone(t *testing.T) {
 
 	tenantUUID := "11111111-1111-1111-1111-111111111111"
 	tierUUID := "22222222-2222-2222-2222-222222222222"
+	mock.ExpectBegin()
+	mock.ExpectQuery("LockTenantSubscriptionForProviderChange").WithArgs(tenantUUID).WillReturnError(sql.ErrNoRows)
 
 	mock.ExpectQuery(`SELECT id, COALESCE\(tier_level, 0\)::integer AS tier_level, currency[\s\S]+FROM purser\.billing_tiers[\s\S]+WHERE tier_name = \$1`).
 		WithArgs("enterprise").
@@ -163,7 +168,8 @@ func TestReconcileCustomerBilling_ClusterAccessNone(t *testing.T) {
 		ClusterAccess: "none",
 	}}
 
-	_, post, err := ReconcileCustomerBilling(context.Background(), db, entries, qm)
+	mock.ExpectCommit()
+	_, post, err := ReconcileCustomerBilling(context.Background(), db, entries, qm, nil)
 	if err != nil {
 		t.Fatalf("ReconcileCustomerBilling: %v", err)
 	}
@@ -186,6 +192,10 @@ func TestReconcileCustomerBilling_EntitlementOverrides(t *testing.T) {
 
 	tenantUUID := "11111111-1111-1111-1111-111111111111"
 	tierUUID := "22222222-2222-2222-2222-222222222222"
+	mock.ExpectBegin()
+	mock.ExpectQuery("LockTenantSubscriptionForProviderChange").WithArgs(tenantUUID).WillReturnRows(sqlmock.NewRows([]string{"subscription_id", "tier_id", "status", "billing_model", "stripe_subscription_id", "mollie_subscription_id", "pending_reason", "free_fallback_provider_stopping", "free_fallback_provider_ended_at"}).AddRow("sub", tierUUID, "active", "postpaid", nil, nil, nil, false, nil))
+	mock.ExpectQuery("IsTenantBillingClosed").WillReturnRows(sqlmock.NewRows([]string{"closed"}).AddRow(false))
+	mock.ExpectQuery("GetSubscriptionOperatorGrant").WithArgs(tenantUUID).WillReturnError(sql.ErrNoRows)
 	subscriptionUUID := "33333333-3333-3333-3333-333333333333"
 
 	mock.ExpectQuery(`SELECT id, COALESCE\(tier_level, 0\)::integer AS tier_level, currency[\s\S]+FROM purser\.billing_tiers[\s\S]+WHERE tier_name = \$1`).
@@ -219,7 +229,8 @@ func TestReconcileCustomerBilling_EntitlementOverrides(t *testing.T) {
 		},
 	}}
 
-	res, post, err := ReconcileCustomerBilling(context.Background(), db, entries, qm)
+	mock.ExpectCommit()
+	res, post, err := ReconcileCustomerBilling(context.Background(), db, entries, qm, nil)
 	if err != nil {
 		t.Fatalf("ReconcileCustomerBilling: %v", err)
 	}
@@ -246,19 +257,21 @@ func TestReconcileCustomerBilling_RefusesBillingModelSwitch(t *testing.T) {
 
 	tenantUUID := "11111111-1111-1111-1111-111111111111"
 	tierUUID := "22222222-2222-2222-2222-222222222222"
+	mock.ExpectBegin()
+	mock.ExpectQuery("LockTenantSubscriptionForProviderChange").WithArgs(tenantUUID).WillReturnRows(sqlmock.NewRows([]string{"subscription_id", "tier_id", "status", "billing_model", "stripe_subscription_id", "mollie_subscription_id", "pending_reason", "free_fallback_provider_stopping", "free_fallback_provider_ended_at"}).AddRow("sub", tierUUID, "active", "postpaid", nil, nil, nil, false, nil))
+	mock.ExpectQuery("IsTenantBillingClosed").WillReturnRows(sqlmock.NewRows([]string{"closed"}).AddRow(false))
+	mock.ExpectQuery("GetSubscriptionOperatorGrant").WithArgs(tenantUUID).WillReturnError(sql.ErrNoRows)
 	mock.ExpectQuery(`SELECT id, COALESCE\(tier_level, 0\)::integer AS tier_level, currency[\s\S]+FROM purser\.billing_tiers[\s\S]+WHERE tier_name = \$1`).
 		WithArgs("payg").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "tier_level", "currency"}).AddRow(tierUUID, int32(0), "EUR"))
-	mock.ExpectQuery(regexp.QuoteMeta("FROM purser.tenant_subscriptions")).
-		WithArgs(tenantUUID).
-		WillReturnRows(sqlmock.NewRows([]string{"tier_id", "billing_model"}).AddRow(tierUUID, "postpaid"))
 
 	qm := &fakeQM{tenantUUIDs: map[string]string{"acme": tenantUUID}}
-	_, _, err = ReconcileCustomerBilling(context.Background(), db, []CustomerBilling{{
+	mock.ExpectCommit()
+	result, _, err := ReconcileCustomerBilling(context.Background(), db, []CustomerBilling{{
 		Tenant: TenantRef{Ref: "quartermaster.tenants[acme]"}, Model: "prepaid", Tier: "payg", ClusterAccess: "none",
-	}}, qm)
-	if err == nil || !regexp.MustCompile(`runs postpaid billing; desired state declares prepaid`).MatchString(err.Error()) {
-		t.Fatalf("ReconcileCustomerBilling error = %v, want the billing model switch refused", err)
+	}}, qm, nil)
+	if err != nil || len(result.Deferred) != 1 || !regexp.MustCompile(`runs postpaid billing; desired state declares prepaid`).MatchString(result.Deferred[0].Reason) {
+		t.Fatalf("ReconcileCustomerBilling result=%+v error=%v, want just this tenant deferred", result, err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("unmet expectations: %v", err)

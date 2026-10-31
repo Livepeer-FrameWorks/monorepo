@@ -406,9 +406,9 @@ cluster for tables that hold a few hundred rows.
 | quartermaster | colocated   | 23               | 7                  |
 | navigator     | colocated   | 11               | 2                  |
 | periscope     | colocated   | 5                | 1                  |
-| commodore     | colocated   | 15               | 29                 |
+| commodore     | colocated   | 19               | 34                 |
 | foghorn       | colocated   | 17               | 32, plus 1 retired |
-| purser        | colocated   | 26               | 52                 |
+| purser        | colocated   | 27               | 53                 |
 | skipper       | distributed | 0                | 10                 |
 | lookout       | distributed | 0                | 7                  |
 | bosun         | distributed | 0                | 9                  |

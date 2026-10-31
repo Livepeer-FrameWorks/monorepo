@@ -1,6 +1,6 @@
 -- name: GetTenantCollectionProfile :one
 SELECT presentment_currency::text AS presentment_currency,
-       status, billing_model, payment_method, stripe_customer_id,
+       CASE WHEN EXISTS (SELECT 1 FROM purser.tenant_billing_closures closure WHERE closure.tenant_id=tenant_subscriptions.tenant_id) THEN 'suspended' ELSE status END::text AS status, billing_model, payment_method, stripe_customer_id,
        stripe_subscription_id, mollie_subscription_id,
        billing_period_start, billing_period_end, tier_id::text AS tier_id
 FROM purser.tenant_subscriptions
@@ -73,6 +73,9 @@ SELECT ts.tenant_id::text AS tenant_id,
        ts.billing_period_end::timestamptz AS billing_period_end
 FROM purser.tenant_subscriptions ts
 WHERE ts.status = 'active'
+  AND NOT EXISTS (SELECT 1 FROM purser.tenant_billing_closures closure WHERE closure.tenant_id = ts.tenant_id)
+  AND NOT EXISTS (SELECT 1 FROM purser.subscription_operator_grants expired_grant
+      WHERE expired_grant.subscription_id = ts.id AND expired_grant.expires_at <= NOW())
   AND ts.billing_model = 'postpaid'
   AND ts.stripe_subscription_id IS NULL
   AND ts.mollie_subscription_id IS NULL
@@ -116,8 +119,8 @@ RETURNING id::text AS id;
 
 -- name: FindOverlappedBaseFeeInvoice :one
 -- The base-fee invoice of the period a tier change cut short: it started
--- before period_start and would have run past it. An invoice whose unused
--- share a switch to prepaid already returned is not found again.
+-- before period_start and would have run past it. An unused share already
+-- returned to prepaid or credited to a replacement invoice is not found again.
 SELECT id::text AS id
 FROM purser.billing_invoices
 WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
@@ -128,8 +131,8 @@ ORDER BY base_fee_period_start DESC
 LIMIT 1;
 
 -- name: MarkBaseFeeUnusedShareReturned :execrows
--- Records on a base-fee invoice that a switch to prepaid returned the unused
--- share of its period; details states from when and how much.
+-- Records disposition of the unused share, either returned to prepaid or
+-- applied to a replacement invoice; details identifies its destination.
 UPDATE purser.billing_invoices
 SET usage_details = usage_details || jsonb_build_object('unused_share_returned', sqlc.arg(details)::jsonb),
     updated_at = NOW()
@@ -188,15 +191,6 @@ JOIN purser.billing_tiers bt ON ts.tier_id = bt.id
 WHERE ts.tenant_id = sqlc.arg(tenant_id)::text::uuid
   AND ts.status = 'active';
 
--- name: GetFinalizedInvoicePeriodEnd :one
-SELECT period_end::timestamptz AS period_end
-FROM purser.billing_invoices
-WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
-  AND period_start = sqlc.arg(period_start)
-  AND base_fee_period_start IS NULL
-  AND status NOT IN ('draft', 'manual_review')
-LIMIT 1;
-
 -- name: ActivateAdvanceBilledSubscription :execrows
 -- Applies the tier a payment-method setup was started for and starts the first
 -- period at activation. The base fee for that period is then charged in
@@ -205,6 +199,8 @@ LIMIT 1;
 UPDATE purser.tenant_subscriptions
 SET status = 'active',
     billing_model = 'postpaid',
+    free_fallback_provider_stopping = FALSE, free_fallback_wait_since = NULL, free_fallback_provider_ended_at = NULL,
+    free_fallback_at = NULL, free_fallback_reason = NULL, free_fallback_notified_at = NULL, free_fallback_moved_at = NULL,
     payment_method = sqlc.arg(payment_method)::text,
     stripe_customer_id = COALESCE(NULLIF(sqlc.arg(stripe_customer_id)::text, ''), stripe_customer_id),
     tier_id = COALESCE(

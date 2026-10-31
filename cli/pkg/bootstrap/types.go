@@ -8,6 +8,8 @@
 // boundaries, and merge precedence.
 package bootstrap
 
+import "github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
+
 // The rendered file carries no schema-version field. The Purser/Commodore/QM
 // binary that consumes a rendered file ships with the YAML decoder using
 // KnownFields(true), so any field it doesn't recognize fails parse. The binary
@@ -260,11 +262,12 @@ type OverlayPricingRule struct {
 // Tenant references the QM tenant by alias; Purser bootstrap resolves the alias to a
 // UUID via QM's persisted alias mapping at apply time. Stable key: Tenant ref.
 type CustomerBilling struct {
-	Tenant               TenantRef      `yaml:"tenant"`
-	Model                string         `yaml:"model"` // "prepaid" | "postpaid"
-	Tier                 string         `yaml:"tier"`
-	ClusterAccess        string         `yaml:"cluster_access,omitempty"` // "derived"
-	EntitlementOverrides map[string]any `yaml:"entitlement_overrides,omitempty"`
+	Tenant               TenantRef                  `yaml:"tenant"`
+	Model                string                     `yaml:"model"` // "prepaid" | "postpaid"
+	Tier                 string                     `yaml:"tier"`
+	ClusterAccess        string                     `yaml:"cluster_access,omitempty"` // "derived"
+	EntitlementOverrides map[string]any             `yaml:"entitlement_overrides,omitempty"`
+	OperatorGrant        *billing.OperatorGrantSpec `yaml:"operator_grant,omitempty"`
 }
 
 // PurserSection is the shape of the purser: top-level key. Identical across layers —

@@ -52,7 +52,7 @@ groups:
       # tenant with thousands of objects legitimately takes longer than this, and
       # it never stands in front of a change.
       - alert: MediaAuthorityRefreshStuck
-        expr: commodore_media_authority_refresh_oldest_pending_seconds{lane!="bulk"} > 300
+        expr: commodore_media_authority_refresh_oldest_pending_seconds{lane!~"bulk|ingest_revocation"} > 300
         for: 5m
         labels:
           severity: critical
@@ -149,6 +149,51 @@ groups:
         annotations:
           summary: "Media authorities are renewed before they are due"
           description: "{{ $labels.authority_kind }} authorities are being renewed early, {{ $value }} per second: versions replaced before a quarter of their validity had passed. Check renewal scheduling before delivery and audit tables grow."
+
+      - alert: CommodoreAccountIngestRevocationStuck
+        expr: max(commodore_media_authority_refresh_oldest_pending_seconds{lane="ingest_revocation"}) > 300
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Account session-stop delivery is awaiting a cell"
+          description: "A locally revoked account still has session-stop delivery pending, including backoff. Tenant closure, when requested, proceeds independently of stop delivery. Restore the recorded cell to clear this obligation. Permanently removed cells have no retirement command; the alert continues until restored. If the cell is permanently removed, record that fact in the incident and silence this alert for that cell."
+
+      - alert: CommodoreTenantAccountClosureStuck
+        expr: max(commodore_tenant_account_closure_repeatedly_failed_items) > 0 or max(increase(commodore_tenant_account_closure_read_failures_total[2m])) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Tenant closure is awaiting synchronization"
+          description: "Commodore is retrying a failed tenant closure or cannot read its recovery queue. Check Commodore logs."
+
+      - alert: PurserProviderWebhookInboxStuck
+        expr: max(purser_provider_webhook_inbox_repeatedly_failed_items) > 0 or max(increase(purser_provider_webhook_inbox_read_failures_total[2m])) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Provider activation, tier upgrade or checkout recovery needs attention"
+          description: "Purser is retrying provider activation, a paid tier upgrade, suspended-stream stop, tenant billing closure or expired-checkout compensation, or cannot read that recovery queue. Run frameworks admin billing recovery list to inspect retry status and errors. Normal provider settlement waits are not failures; waits over fourteen days need investigation. Missing metering holds activation or an upgrade at its recorded billing boundary."
+
+      - alert: PurserFreeFallbackStuck
+        expr: max(purser_free_fallback_repeatedly_failed_items) > 0 or max(increase(purser_free_fallback_read_failures_total[2m])) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Move to Free or its notification needs recovery"
+          description: "Purser is retrying provider cancellation, a final invoice, Free move or notification, a bank settlement has waited over fourteen days, or Purser cannot read that queue. Inspect Purser logs for the tenant and failure. Required metering must settle at the stored cutoff; mail failures do not block billing moves. Other tenants continue."
+
+      - alert: PurserOperatorGrantExpiryStuck
+        expr: max(purser_operator_grant_expiry_repeatedly_failed_items) > 0 or max(increase(purser_operator_grant_expiry_read_failures_total[2m])) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Operator grant expiry needs recovery"
+          description: "A grant failed billing-boundary reconciliation or Purser cannot read its expiry queue. Run frameworks admin billing grant list --include-expired and grant show --tenant-id <uuid> to inspect expiry failures and the last error. Other expiries continue."
 
       - alert: PurserMediaAuthorityRefreshWorkerDisabled
         expr: purser_media_authority_refresh_worker_ready == 0

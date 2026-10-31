@@ -68,9 +68,11 @@ The mutating release sequence is host convergence, service database creation and
 expand migrations, platform-artifact upgrades
 with declared transitions at their ordering points, the Quartermaster bootstrap
 reconcile, stale placement cleanup, the service-cluster assignment reconcile,
-then postdeploy migrations and the Purser tier catalog reconcile. The
-Quartermaster and Purser bootstrap desired state is rendered before the first
-mutation (`prepareReleaseQuartermasterBootstrap`, `prepareReleaseTierCatalog`),
+then postdeploy migrations, the Purser billing reconcile, and the Commodore
+accounts-only reconcile when the release declares that capability. The
+Quartermaster, Purser and Commodore account desired state is rendered before
+the first mutation (`prepareReleaseQuartermasterBootstrap`, `prepareReleaseTierCatalog`,
+`prepareReleaseAccounts`),
 so values the CLI derives, such as a service instance's health endpoint, reach
 Quartermaster on every release rather than only on `cluster provision`.
 

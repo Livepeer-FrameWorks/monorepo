@@ -2,13 +2,15 @@
 UPDATE purser.payment_provider_intents
 SET provider_subscription_id = COALESCE(provider_subscription_id, NULLIF(sqlc.arg(subscription_id)::text, '')),
     status = 'succeeded', succeeded_at = COALESCE(succeeded_at, NOW()), updated_at = NOW()
-WHERE provider = 'stripe' AND provider_session_id = sqlc.arg(session_id)::text;
+WHERE tenant_id=sqlc.arg(tenant_id)::text::uuid AND provider = 'stripe' AND provider_session_id = sqlc.arg(session_id)::text;
 
 -- name: ActivateTenantSubscriptionFromStripe :execrows
 UPDATE purser.tenant_subscriptions
 SET stripe_customer_id = COALESCE(NULLIF(sqlc.arg(customer_id)::text, ''), stripe_customer_id),
     stripe_subscription_id = COALESCE(NULLIF(sqlc.arg(subscription_id)::text, ''), stripe_subscription_id),
     stripe_subscription_status = 'active', status = 'active', billing_model = 'postpaid',
+    free_fallback_provider_stopping = FALSE, free_fallback_wait_since = NULL, free_fallback_provider_ended_at = NULL,
+    free_fallback_at = NULL, free_fallback_reason = NULL, free_fallback_notified_at = NULL, free_fallback_moved_at = NULL,
     tier_id = COALESCE(
         NULLIF(sqlc.arg(tier_id)::text, '')::uuid,
         CASE WHEN pending_reason = 'stripe_checkout' THEN pending_tier_id END,
@@ -31,20 +33,20 @@ SET stripe_customer_id = COALESCE(NULLIF(sqlc.arg(customer_id)::text, ''), strip
         WHEN pending_reason = 'stripe_checkout'
          AND (NULLIF(sqlc.arg(tier_id)::text, '') IS NULL OR pending_tier_id = NULLIF(sqlc.arg(tier_id)::text, '')::uuid)
         THEN NULL ELSE pending_intent_id END,
-    stripe_current_period_end = CASE WHEN sqlc.narg(period_end)::timestamptz IS NULL THEN stripe_current_period_end WHEN billing_period_start IS NULL OR sqlc.narg(period_start)::timestamp >= billing_period_start THEN sqlc.narg(period_end)::timestamptz ELSE stripe_current_period_end END,
-    billing_period_start = GREATEST(sqlc.narg(period_start)::timestamp, billing_period_start),
-    billing_period_end = CASE WHEN billing_period_start IS NULL OR sqlc.narg(period_start)::timestamp >= billing_period_start THEN COALESCE(sqlc.narg(period_end)::timestamp, billing_period_end) ELSE billing_period_end END,
-    next_billing_date = CASE WHEN billing_period_start IS NULL OR sqlc.narg(period_start)::timestamp >= billing_period_start THEN COALESCE(sqlc.narg(period_end)::timestamp, next_billing_date) ELSE next_billing_date END,
+    stripe_current_period_end = CASE WHEN sqlc.narg(period_end)::timestamptz IS NULL THEN stripe_current_period_end WHEN sqlc.narg(period_end)::timestamptz IS NOT NULL AND (billing_period_start IS NULL OR sqlc.narg(period_start)::timestamp >= billing_period_start) THEN sqlc.narg(period_end)::timestamptz WHEN billing_period_start IS NULL OR sqlc.narg(period_end)::timestamp > billing_period_start THEN GREATEST(sqlc.narg(period_end)::timestamptz, stripe_current_period_end) ELSE stripe_current_period_end END,
+    billing_period_start = CASE WHEN (stripe_subscription_id = NULLIF(sqlc.arg(subscription_id)::text, '') AND (free_fallback_at IS NOT NULL OR billing_period_start <= free_fallback_unbilled_through AT TIME ZONE 'UTC')) THEN billing_period_start ELSE GREATEST(sqlc.narg(period_start)::timestamp, billing_period_start) END,
+    billing_period_end = CASE WHEN (stripe_subscription_id = NULLIF(sqlc.arg(subscription_id)::text, '') AND (free_fallback_at IS NOT NULL OR billing_period_start <= free_fallback_unbilled_through AT TIME ZONE 'UTC')) THEN billing_period_end ELSE CASE WHEN sqlc.narg(period_end)::timestamptz IS NOT NULL AND (billing_period_start IS NULL OR sqlc.narg(period_start)::timestamp >= billing_period_start) THEN sqlc.narg(period_end)::timestamp WHEN billing_period_start IS NULL OR sqlc.narg(period_end)::timestamp > billing_period_start THEN GREATEST(sqlc.narg(period_end)::timestamp, billing_period_end) ELSE billing_period_end END END,
+    next_billing_date = CASE WHEN (stripe_subscription_id = NULLIF(sqlc.arg(subscription_id)::text, '') AND (free_fallback_at IS NOT NULL OR billing_period_start <= free_fallback_unbilled_through AT TIME ZONE 'UTC')) THEN next_billing_date ELSE CASE WHEN sqlc.narg(period_end)::timestamptz IS NOT NULL AND (billing_period_start IS NULL OR sqlc.narg(period_start)::timestamp >= billing_period_start) THEN sqlc.narg(period_end)::timestamp WHEN billing_period_start IS NULL OR sqlc.narg(period_end)::timestamp > billing_period_start THEN GREATEST(sqlc.narg(period_end)::timestamp, next_billing_date) ELSE next_billing_date END END,
+    free_fallback_unbilled_through = CASE WHEN stripe_subscription_id = NULLIF(sqlc.arg(subscription_id)::text, '') THEN CASE WHEN (free_fallback_at IS NOT NULL OR billing_period_start <= free_fallback_unbilled_through AT TIME ZONE 'UTC') THEN GREATEST(free_fallback_unbilled_through, sqlc.narg(period_start)::timestamptz - INTERVAL '1 microsecond') ELSE free_fallback_unbilled_through END ELSE NULL END,
     updated_at = NOW()
 WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid;
 
 -- name: StageTenantSubscriptionPendingStripe :exec
+-- An unpaid attempt must not replace an established subscription's identity or status.
+-- Its prospective subscription lives on the provider intent until activation.
 UPDATE purser.tenant_subscriptions
-SET stripe_customer_id = COALESCE(NULLIF(sqlc.arg(customer_id)::text, ''), stripe_customer_id),
-    stripe_subscription_id = COALESCE(NULLIF(sqlc.arg(subscription_id)::text, ''), stripe_subscription_id),
-    stripe_subscription_status = CASE WHEN status = 'active' THEN stripe_subscription_status ELSE 'incomplete' END,
-    updated_at = NOW()
-WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid;
+SET stripe_customer_id=COALESCE(NULLIF(sqlc.arg(customer_id)::text,''),stripe_customer_id),updated_at=NOW()
+WHERE tenant_id=sqlc.arg(tenant_id)::text::uuid;
 
 -- name: ResolveClusterSubscriptionByStripeID :one
 SELECT tenant_id::text AS tenant_id, cluster_id,
@@ -66,7 +68,8 @@ INSERT INTO purser.cluster_subscriptions (
     NULLIF(sqlc.arg(customer_id)::text, ''), NULLIF(sqlc.arg(subscription_id)::text, ''),
     'active', NULLIF(sqlc.arg(session_id)::text, ''),
     (SELECT id FROM purser.payment_provider_intents
-     WHERE provider = 'stripe' AND provider_session_id = sqlc.arg(session_id)::text LIMIT 1),
+     WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
+       AND provider = 'stripe' AND provider_session_id = sqlc.arg(session_id)::text LIMIT 1),
     NOW(), NOW()
 )
 ON CONFLICT (tenant_id, cluster_id) DO UPDATE SET
@@ -82,7 +85,7 @@ ON CONFLICT (tenant_id, cluster_id) DO UPDATE SET
 UPDATE purser.payment_provider_intents
 SET provider_subscription_id = COALESCE(provider_subscription_id, NULLIF(sqlc.arg(subscription_id)::text, '')),
     status = 'succeeded', succeeded_at = COALESCE(succeeded_at, NOW()), updated_at = NOW()
-WHERE provider = 'stripe'
+WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid AND provider = 'stripe'
   AND (provider_session_id = NULLIF(sqlc.arg(session_id)::text, '')
        OR provider_subscription_id = NULLIF(sqlc.arg(subscription_id)::text, ''));
 
@@ -95,7 +98,8 @@ INSERT INTO purser.cluster_subscriptions (
     NULLIF(sqlc.arg(customer_id)::text, ''), NULLIF(sqlc.arg(subscription_id)::text, ''),
     'incomplete', NULLIF(sqlc.arg(session_id)::text, ''),
     (SELECT id FROM purser.payment_provider_intents
-     WHERE provider = 'stripe' AND provider_session_id = sqlc.arg(session_id)::text LIMIT 1),
+     WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
+       AND provider = 'stripe' AND provider_session_id = sqlc.arg(session_id)::text LIMIT 1),
     NOW(), NOW()
 )
 ON CONFLICT (tenant_id, cluster_id) DO UPDATE SET
@@ -111,14 +115,18 @@ ON CONFLICT (tenant_id, cluster_id) DO UPDATE SET
 -- name: ExpireStripeIntentBySubscription :exec
 UPDATE purser.payment_provider_intents
 SET status = 'expired', updated_at = NOW()
-WHERE provider = 'stripe' AND provider_subscription_id = sqlc.arg(subscription_id)::text
+WHERE tenant_id=sqlc.arg(tenant_id)::text::uuid AND provider = 'stripe' AND provider_subscription_id = sqlc.arg(subscription_id)::text
   AND status NOT IN ('succeeded', 'cancelled', 'expired', 'terminal_failed');
 
 -- name: ClearTenantStripeCheckoutPending :exec
 UPDATE purser.tenant_subscriptions
 SET pending_tier_id = NULL, pending_effective_at = NULL,
     pending_reason = NULL, pending_intent_id = NULL, updated_at = NOW()
-WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid AND pending_reason = 'stripe_checkout';
+WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid AND pending_reason = 'stripe_checkout'
+ AND pending_intent_id IN(SELECT id FROM purser.payment_provider_intents
+ WHERE tenant_id=sqlc.arg(tenant_id)::text::uuid AND provider='stripe'
+ AND (provider_session_id=NULLIF(sqlc.arg(session_id)::text,'')
+ OR provider_subscription_id=NULLIF(sqlc.arg(subscription_id)::text,'')));
 
 -- name: MarkPendingTopupTerminal :exec
 UPDATE purser.pending_topups
@@ -128,12 +136,12 @@ WHERE id = sqlc.arg(topup_id)::text::uuid AND status = 'pending';
 -- name: LinkStripeIntentSubscription :exec
 UPDATE purser.payment_provider_intents
 SET provider_subscription_id = COALESCE(provider_subscription_id, sqlc.arg(subscription_id)::text), updated_at = NOW()
-WHERE provider = 'stripe' AND provider_session_id = sqlc.arg(session_id)::text;
+WHERE tenant_id=sqlc.arg(tenant_id)::text::uuid AND provider = 'stripe' AND provider_session_id = sqlc.arg(session_id)::text;
 
 -- name: ExpireStripeIntentBySession :exec
 UPDATE purser.payment_provider_intents
 SET status = 'expired', updated_at = NOW()
-WHERE provider = 'stripe' AND provider_session_id = sqlc.arg(session_id)::text
+WHERE tenant_id=sqlc.arg(tenant_id)::text::uuid AND provider = 'stripe' AND provider_session_id = sqlc.arg(session_id)::text
   AND status NOT IN ('succeeded', 'cancelled', 'expired', 'terminal_failed');
 
 -- name: ClearStagedStripeClusterSubscription :exec

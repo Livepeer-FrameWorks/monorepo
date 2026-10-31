@@ -15,6 +15,7 @@ colocated_tables:
   - purser.meter_definitions
   - purser.tier_pricing_rules
   - purser.tenant_subscriptions
+  - purser.tenant_billing_closures
   - purser.subscription_pricing_overrides
   - purser.subscription_entitlement_overrides
   - purser.subscription_operator_grants
@@ -33,6 +34,11 @@ colocated_tables:
   - purser.tenant_balance_rollups
   - public._schema_baseline
 distributed_tables:
+  # Retained purchase receipts grow with paid tier upgrades.
+  - purser.subscription_tier_upgrades
+  - purser.checkout_recovery_audit
+  # Append-only pricing history grows with operator changes.
+  - purser.subscription_operator_grant_history
   # One row per anomalous deposit reference, so it grows with events.
   - purser.crypto_accounting_anomalies
   - purser.delegated_jwt_replays

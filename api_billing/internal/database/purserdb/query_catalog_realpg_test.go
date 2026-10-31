@@ -33,6 +33,8 @@ type generatedQuery struct {
 func TestGeneratedQueryCatalogPrepares_RealPG(t *testing.T) {
 	db := startQueryCatalogRealPG(t)
 	preparePurserQueryCatalog(t, db)
+	assertCheckoutRecoveryQueryPlan(t, db)
+	assertCheckoutIntentScopeAndFailureFence(t, db)
 	assertTenantAdmissionQueryExecution(t, db)
 	assertTenantAdmissionQueryPlan(t, db)
 	assertMediaAuthorityRefreshTriggers(t, db)
@@ -269,6 +271,8 @@ func assertMediaAuthorityRefreshTriggers(t *testing.T, db *sql.DB) {
 func TestGeneratedQueryCatalogPrepares_RealYugabyte(t *testing.T) {
 	db := startQueryCatalogRealYugabyte(t)
 	preparePurserQueryCatalog(t, db)
+	assertCheckoutRecoveryQueryPlan(t, db)
+	assertCheckoutIntentScopeAndFailureFence(t, db)
 	assertTenantAdmissionQueryExecution(t, db)
 	assertMediaAuthorityRefreshTriggers(t, db)
 	assertDNSSweepMatchesTenantEntitlements(t, db)

@@ -75,9 +75,21 @@ func bindPlaybackAccessSource(ctx context.Context, digest []byte, revisions []*m
 		hash.Write([]byte(source.revision))
 		digest = hash.Sum(nil)
 	}
-	revisions = append(append([]*mediapb.AuthoritySourceRevision(nil), revisions...), &mediapb.AuthoritySourceRevision{Service: "commodore-playback-access", Revision: source.revision})
-	slices.SortFunc(revisions, func(left, right *mediapb.AuthoritySourceRevision) int {
+	revisions = replaceAuthoritySourceRevision(revisions, "commodore-playback-access", source.revision)
+	return digest, revisions
+}
+
+// replaceAuthoritySourceRevision retains other sources when correcting a signed object.
+func replaceAuthoritySourceRevision(revisions []*mediapb.AuthoritySourceRevision, service, revision string) []*mediapb.AuthoritySourceRevision {
+	result := make([]*mediapb.AuthoritySourceRevision, 0, len(revisions)+1)
+	for _, source := range revisions {
+		if source.GetService() != service {
+			result = append(result, source)
+		}
+	}
+	result = append(result, &mediapb.AuthoritySourceRevision{Service: service, Revision: revision})
+	slices.SortFunc(result, func(left, right *mediapb.AuthoritySourceRevision) int {
 		return strings.Compare(left.GetService(), right.GetService())
 	})
-	return digest, revisions
+	return result
 }

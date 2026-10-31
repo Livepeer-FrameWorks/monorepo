@@ -18,8 +18,10 @@ import (
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -572,18 +574,33 @@ func (c *GRPCClient) InvalidatePlaybackAuthWithBundle(ctx context.Context, tenan
 	return resp, trailers, err
 }
 
-// TerminateTenantStreams stops all active streams for a suspended tenant.
+// TerminateTenantStreams stops all active streams owned by a tenant.
 // Returns any trailers emitted by the downstream service.
 func (c *GRPCClient) TerminateTenantStreams(ctx context.Context, tenantID, reason string) (*foghorncontrolpb.TerminateTenantStreamsResponse, metadata.MD, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
-
 	var trailers metadata.MD
-	resp, err := c.tenant.TerminateTenantStreams(ctx, &foghorncontrolpb.TerminateTenantStreamsRequest{
-		TenantId: tenantID,
-		Reason:   reason,
-	}, grpc.Trailer(&trailers))
-	return resp, trailers, err
+	response, err := c.tenant.TerminateTenantStreams(ctx, &foghorncontrolpb.TerminateTenantStreamsRequest{TenantId: tenantID, Reason: reason}, grpc.Trailer(&trailers))
+	if err != nil && response == nil {
+		response = grpcutil.StreamStopProgress(err)
+	}
+	return response, trailers, err
+}
+
+// TerminateNamedTenantStreams has no tenant-wide fallback: an older cell's
+// Unimplemented response must leave the owner revocation pending.
+func (c *GRPCClient) TerminateNamedTenantStreams(ctx context.Context, tenantID, reason string, streamNames []string) (*foghorncontrolpb.TerminateTenantStreamsResponse, metadata.MD, error) {
+	if len(streamNames) == 0 {
+		return nil, nil, status.Error(codes.InvalidArgument, "stream_names must not be empty")
+	}
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	var trailers metadata.MD
+	response, err := c.tenant.TerminateStreamSessions(ctx, &foghorncontrolpb.TerminateStreamSessionsRequest{TenantId: tenantID, Reason: reason, StreamNames: streamNames}, grpc.Trailer(&trailers))
+	if err != nil && response == nil {
+		response = grpcutil.StreamStopProgress(err)
+	}
+	return response, trailers, err
 }
 
 // InvalidateTenantCache clears cached suspension status for a tenant (called on reactivation).

@@ -1,0 +1,85 @@
+rule_files:
+  - ../frameworks.yml
+
+evaluation_interval: 1m
+
+tests:
+  - interval: 1m
+    input_series:
+      - series: purser_free_fallback_repeatedly_failed_items{instance="a",stage="move"}
+        values: "0 1x7 0x4"
+      - series: purser_free_fallback_repeatedly_failed_items{instance="b",stage="move"}
+        values: "0 1x7 0x4"
+    alert_rule_test:
+      - eval_time: 4m
+        groupname: frameworks.rules
+        alertname: PurserFreeFallbackStuck
+        exp_alerts: []
+      - eval_time: 7m
+        groupname: frameworks.rules
+        alertname: PurserFreeFallbackStuck
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: Move to Free or its notification needs recovery
+              description: Purser is retrying provider cancellation, a final invoice, Free move or notification, a bank settlement has waited over fourteen days, or Purser cannot read that queue. Inspect Purser logs for the tenant and failure. Required metering must settle at the stored cutoff; mail failures do not block billing moves. Other tenants continue.
+      - eval_time: 10m
+        groupname: frameworks.rules
+        alertname: PurserFreeFallbackStuck
+        exp_alerts: []
+  - interval: 1m
+    input_series:
+      - series: purser_free_fallback_repeatedly_failed_items{instance="a",stage="notice"}
+        values: "0 1x7 0x4"
+    alert_rule_test:
+      - eval_time: 7m
+        groupname: frameworks.rules
+        alertname: PurserFreeFallbackStuck
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: Move to Free or its notification needs recovery
+              description: Purser is retrying provider cancellation, a final invoice, Free move or notification, a bank settlement has waited over fourteen days, or Purser cannot read that queue. Inspect Purser logs for the tenant and failure. Required metering must settle at the stored cutoff; mail failures do not block billing moves. Other tenants continue.
+      - eval_time: 10m
+        groupname: frameworks.rules
+        alertname: PurserFreeFallbackStuck
+        exp_alerts: []
+  - interval: 1m
+    input_series:
+      - series: purser_free_fallback_repeatedly_failed_items{instance="a",stage="move"}
+        values: "0 NaNx20 0x35"
+      - series: purser_free_fallback_read_failures_total{instance="a"}
+        values: "0+1x20 20x35"
+      - series: purser_free_fallback_read_failures_total{instance="b"}
+        values: "0+1x20 20x35"
+    alert_rule_test:
+      - eval_time: 4m
+        groupname: frameworks.rules
+        alertname: PurserFreeFallbackStuck
+        exp_alerts: []
+      - eval_time: 7m
+        groupname: frameworks.rules
+        alertname: PurserFreeFallbackStuck
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: Move to Free or its notification needs recovery
+              description: Purser is retrying provider cancellation, a final invoice, Free move or notification, a bank settlement has waited over fourteen days, or Purser cannot read that queue. Inspect Purser logs for the tenant and failure. Required metering must settle at the stored cutoff; mail failures do not block billing moves. Other tenants continue.
+      - eval_time: 50m
+        groupname: frameworks.rules
+        alertname: PurserFreeFallbackStuck
+        exp_alerts: []
+  - interval: 1m
+    input_series:
+      - series: purser_free_fallback_repeatedly_failed_items{instance="a",stage="move"}
+        values: "0x35"
+      - series: purser_free_fallback_read_failures_total{instance="a"}
+        values: "0 1x35"
+    alert_rule_test:
+      - eval_time: 20m
+        groupname: frameworks.rules
+        alertname: PurserFreeFallbackStuck
+        exp_alerts: []

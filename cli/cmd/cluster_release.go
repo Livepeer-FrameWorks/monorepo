@@ -14,6 +14,7 @@ import (
 
 	"frameworks/cli/internal/releases"
 	"frameworks/cli/internal/ux"
+	"frameworks/cli/pkg/bootstrap"
 	"frameworks/cli/pkg/detect"
 	"frameworks/cli/pkg/gitops"
 	"frameworks/cli/pkg/inventory"
@@ -23,6 +24,7 @@ import (
 	"frameworks/cli/pkg/ssh"
 	"frameworks/cli/pkg/watchdog"
 	fwv "github.com/Livepeer-FrameWorks/monorepo/pkg/version"
+	"gopkg.in/yaml.v3"
 
 	"github.com/spf13/cobra"
 )
@@ -103,7 +105,7 @@ func runReleasePlan(cmd *cobra.Command, rc *resolvedCluster, opts releasePlanOpt
 		return fmt.Errorf("resolve target platform version: %w", err)
 	}
 	channel, _ := gitops.ResolveVersion(selector)
-	gm, err := gitops.FetchFromRepositories(gitops.FetchOptions{}, rc.ReleaseRepos, channel, platformVersion)
+	gm, err := fetchReleaseManifestFn(gitops.FetchOptions{}, rc.ReleaseRepos, channel, platformVersion)
 	if err != nil {
 		return fmt.Errorf("fetch release metadata for compatibility check: %w", err)
 	}
@@ -149,7 +151,10 @@ func runReleasePlan(cmd *cobra.Command, rc *resolvedCluster, opts releasePlanOpt
 	}
 	fmt.Fprintln(out, "  7. schema postdeploy migrations")
 	if _, ok := manifest.Services["purser"]; ok {
-		fmt.Fprintln(out, "     · then the Purser tier catalog reconcile (purser bootstrap + validate)")
+		fmt.Fprintln(out, "     · then the Purser billing reconcile (purser bootstrap + validate)")
+	}
+	if svc, ok := manifest.Services["commodore"]; ok && svc.Enabled && releases.Supports(platformVersion, releases.CapabilityAccountsBootstrap) {
+		fmt.Fprintln(out, "     · then the Commodore accounts reconcile (commodore bootstrap --accounts-only)")
 	}
 	fmt.Fprintf(out, "  8. schema contract migrations: deferred until the rollback window closes; take a fresh backup first (`cluster migrate --phase contract --to-version %s --backup <completed-backup-path> --yes`)\n", platformVersion)
 	writeReleasePlanGroup(out, "managed dependencies (independent manifest pins)", classes.Dependencies)
@@ -179,8 +184,7 @@ func writeReleasePlanGroup(out io.Writer, label string, values []string) {
 	fmt.Fprintf(out, "  %s: %s\n", label, strings.Join(values, " -> "))
 }
 
-// fetchReleaseManifestFn reads the published release manifest `release apply` checks compatibility against. Tests
-// substitute a fixture so the apply sequence runs without the release repositories.
+// fetchReleaseManifestFn reads published metadata for release plan and apply compatibility checks.
 var fetchReleaseManifestFn = gitops.FetchFromRepositories
 
 // releaseRunMigrateFn, releaseRunUpgradesFn and releaseReconcilePlacementsFn run the migration phases, the service
@@ -192,6 +196,10 @@ var (
 	// releasePrepareTierCatalogFn renders the Purser bootstrap desired state
 	// before the first mutation and returns the step that applies it.
 	releasePrepareTierCatalogFn = prepareReleaseTierCatalog
+	// releasePrepareAccountsFn prepares the accounts-only step before mutations.
+	releasePrepareAccountsFn = prepareReleaseAccounts
+	// releaseRunAccountsBootstrapFn invokes the service with --accounts-only.
+	releaseRunAccountsBootstrapFn = runServiceBootstrap
 	// releaseNewHostConvergenceFn builds the pre-upgrade host convergence.
 	releaseNewHostConvergenceFn = newReleaseHostConvergence
 	// releasePrepareQuartermasterBootstrapFn renders the Quartermaster
@@ -213,17 +221,13 @@ func prepareReleaseQuartermasterBootstrap(cmd *cobra.Command, rc *resolvedCluste
 	if _, ok := manifest.Services["quartermaster"]; !ok {
 		return nil, nil
 	}
-	sharedEnv, err := rc.PreparedSharedEnv()
-	if err != nil {
-		return nil, fmt.Errorf("load manifest env_files: %w", err)
-	}
-	bootstrapYAML, err := renderBootstrapYAML(cmd, manifest, filepath.Dir(rc.ManifestPath), sharedEnv)
+	bootstrapYAML, err := rc.releaseBootstrapYAML(cmd)
 	if err != nil {
 		return nil, err
 	}
 	return func(ctx context.Context, dryRun bool) error {
 		if dryRun {
-			fmt.Fprintln(cmd.OutOrStdout(), "  dry-run: quartermaster bootstrap would run; the desired state rendered")
+			fmt.Fprintln(cmd.OutOrStdout(), "  dry-run: quartermaster bootstrap would run with the rendered desired state")
 			return nil
 		}
 		if err := runServiceBootstrap(ctx, cmd, manifest, sshPool, "quartermaster", bootstrapYAML, nil); err != nil {
@@ -271,17 +275,13 @@ func prepareReleaseTierCatalog(cmd *cobra.Command, rc *resolvedCluster, sshPool 
 	if _, ok := manifest.Services["purser"]; !ok {
 		return nil, nil
 	}
-	sharedEnv, err := rc.PreparedSharedEnv()
-	if err != nil {
-		return nil, fmt.Errorf("load manifest env_files: %w", err)
-	}
-	bootstrapYAML, err := renderBootstrapYAML(cmd, manifest, filepath.Dir(rc.ManifestPath), sharedEnv)
+	bootstrapYAML, err := rc.releaseBootstrapYAML(cmd)
 	if err != nil {
 		return nil, err
 	}
 	return func(ctx context.Context, dryRun bool) error {
 		if dryRun {
-			fmt.Fprintln(cmd.OutOrStdout(), "  dry-run: purser bootstrap and its validate would run; the desired state rendered")
+			fmt.Fprintln(cmd.OutOrStdout(), "  dry-run: purser bootstrap and its validate would run with the rendered desired state")
 			return nil
 		}
 		if err := runServiceBootstrap(ctx, cmd, manifest, sshPool, "purser", bootstrapYAML, nil); err != nil {
@@ -291,6 +291,36 @@ func prepareReleaseTierCatalog(cmd *cobra.Command, rc *resolvedCluster, sshPool 
 			return fmt.Errorf("purser bootstrap validate: %w", err)
 		}
 		return nil
+	}, nil
+}
+
+// prepareReleaseAccounts prepares a catalog-gated accounts-only reconcile and its dry-run report.
+func prepareReleaseAccounts(cmd *cobra.Command, rc *resolvedCluster, sshPool *ssh.Pool, platformVersion string) (func(context.Context, bool) error, error) {
+	if !releases.Supports(platformVersion, releases.CapabilityAccountsBootstrap) {
+		return nil, nil
+	}
+	if svc, ok := rc.Manifest.Services["commodore"]; !ok || !svc.Enabled {
+		return nil, nil
+	}
+	rendered, err := rc.releaseBootstrapYAML(cmd)
+	if err != nil {
+		return nil, err
+	}
+	var desired bootstrap.Rendered
+	if err = yaml.Unmarshal(rendered, &desired); err != nil {
+		return nil, err
+	}
+	return func(ctx context.Context, dryRun bool) error {
+		if dryRun {
+			fmt.Fprintln(cmd.OutOrStdout(), "  dry-run: commodore bootstrap --accounts-only would run with the rendered desired state")
+			for _, account := range desired.Accounts {
+				for _, user := range account.Users {
+					fmt.Fprintf(cmd.OutOrStdout(), "    account %s: %s\n", account.Tenant.Ref, user.Email)
+				}
+			}
+			return nil
+		}
+		return releaseRunAccountsBootstrapFn(ctx, cmd, rc.Manifest, sshPool, "commodore", rendered, []string{"--accounts-only"})
 	}, nil
 }
 
@@ -410,9 +440,13 @@ func runReleaseApply(cmd *cobra.Command, rc *resolvedCluster, opts releaseApplyO
 		}
 	}
 
+	reconcileAccounts, err := releasePrepareAccountsFn(cmd, rc, sshPool, platformVersion)
+	if err != nil {
+		return fmt.Errorf("commodore accounts: %w", err)
+	}
 	reconcileTierCatalog, err := releasePrepareTierCatalogFn(cmd, rc, sshPool)
 	if err != nil {
-		return fmt.Errorf("purser tier catalog: %w", err)
+		return fmt.Errorf("purser billing declarations: %w", err)
 	}
 	reconcileQuartermaster, err := releasePrepareQuartermasterBootstrapFn(cmd, rc, sshPool)
 	if err != nil {
@@ -444,7 +478,10 @@ func runReleaseApply(cmd *cobra.Command, rc *resolvedCluster, opts releaseApplyO
 	}
 	fmt.Fprintln(out, "  5. postdeploy migrations")
 	if reconcileTierCatalog != nil {
-		fmt.Fprintln(out, "     · then the Purser tier catalog reconcile (purser bootstrap + validate)")
+		fmt.Fprintln(out, "     · then the Purser billing reconcile (purser bootstrap + validate)")
+	}
+	if reconcileAccounts != nil {
+		fmt.Fprintln(out, "     · then the Commodore accounts reconcile (commodore bootstrap --accounts-only)")
 	}
 	fmt.Fprintf(out, "  6. contract migrations: deferred until the rollback window closes; take a fresh backup first (`cluster migrate --phase contract --to-version %s --backup <completed-backup-path> --yes`)\n", platformVersion)
 
@@ -548,9 +585,15 @@ func runReleaseApply(cmd *cobra.Command, rc *resolvedCluster, opts releaseApplyO
 	// The upgraded Purser embeds this release's tier catalog; provision and
 	// finalize are not the only paths that must converge it.
 	if reconcileTierCatalog != nil {
-		ux.Subheading(out, "Reconciling the Purser tier catalog")
+		ux.Subheading(out, "Reconciling Purser billing declarations")
 		if err := reconcileTierCatalog(cmd.Context(), opts.dryRun); err != nil {
-			return fmt.Errorf("purser tier catalog: %w", err)
+			return fmt.Errorf("purser billing declarations: %w", err)
+		}
+	}
+	if reconcileAccounts != nil {
+		ux.Subheading(out, "Reconciling Commodore accounts")
+		if err := reconcileAccounts(cmd.Context(), opts.dryRun); err != nil {
+			return fmt.Errorf("commodore accounts: %w", err)
 		}
 	}
 	if !opts.dryRun {
@@ -1069,4 +1112,17 @@ func stringInSlice(s string, list []string) bool {
 		}
 	}
 	return false
+}
+
+// releaseBootstrapYAML renders one invocation's service-owned bootstrap declarations.
+func (rc *resolvedCluster) releaseBootstrapYAML(cmd *cobra.Command) ([]byte, error) {
+	rc.bootstrapYAMLOnce.Do(func() {
+		sharedEnv, err := rc.PreparedSharedEnv()
+		if err != nil {
+			rc.bootstrapYAMLErr = fmt.Errorf("load manifest env_files: %w", err)
+			return
+		}
+		rc.bootstrapYAML, rc.bootstrapYAMLErr = renderBootstrapYAML(cmd, rc.Manifest, filepath.Dir(rc.ManifestPath), sharedEnv)
+	})
+	return rc.bootstrapYAML, rc.bootstrapYAMLErr
 }

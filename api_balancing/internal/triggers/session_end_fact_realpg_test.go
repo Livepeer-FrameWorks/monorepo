@@ -23,6 +23,7 @@ import (
 // event belongs to a later Mist lifetime and is not the one that ended.
 func TestVanishOnlyEndForwardsSessionEndFact_RealPG(t *testing.T) {
 	conn := startFoghornTriggersRealPG(t)
+	t.Run("inactive owner signed object refuses outage publishing and preserves playback", func(t *testing.T) { testInactiveOwnerSignedPermissionRefusesOutageIngestAndPreservesPlayback(t, conn) })
 	control.SetDB(conn)
 	t.Cleanup(func() { control.SetDB(nil) })
 	ctx := context.Background()

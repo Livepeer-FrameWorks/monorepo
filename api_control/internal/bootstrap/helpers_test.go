@@ -170,7 +170,7 @@ func TestNormalizeAllowedClusterIDs(t *testing.T) {
 func TestIsSystemTenantRef(t *testing.T) {
 	yes := []string{
 		"quartermaster.system_tenant",
-		"quartermaster.tenants.frameworks",
+		"quartermaster.tenants[frameworks]",
 		"  quartermaster.system_tenant  ", // trimmed
 	}
 	for _, ref := range yes {
@@ -178,7 +178,7 @@ func TestIsSystemTenantRef(t *testing.T) {
 			t.Errorf("isSystemTenantRef(%q) = false, want true", ref)
 		}
 	}
-	no := []string{"", "quartermaster.tenants[acme]", "quartermaster.tenants.acme", "system_tenant"}
+	no := []string{"quartermaster.tenants.frameworks", "", "quartermaster.tenants[acme]", "quartermaster.tenants.acme", "system_tenant"}
 	for _, ref := range no {
 		if isSystemTenantRef(ref) {
 			t.Errorf("isSystemTenantRef(%q) = true, want false", ref)
@@ -233,5 +233,19 @@ func TestEncodeLocalAssetPaths(t *testing.T) {
 	}
 	if !strings.Contains(got, "/srv/a.ts") || !strings.HasPrefix(got, "[") {
 		t.Errorf("encoded = %q, want a JSON array containing the path", got)
+	}
+}
+
+func TestSystemTenantReferencesResolve(t *testing.T) {
+	for _, ref := range []string{"quartermaster.system_tenant", "quartermaster.tenants[frameworks]"} {
+		account := validAccount()
+		account.Tenant.Ref = ref
+		if err := validateAccount(account); err != nil {
+			t.Errorf("system account ref %s rejected: %v", ref, err)
+		}
+		alias, err := AliasFromRef(ref)
+		if err != nil || alias != SystemTenantAlias {
+			t.Errorf("system account ref %s resolves to %s: %v", ref, alias, err)
+		}
 	}
 }

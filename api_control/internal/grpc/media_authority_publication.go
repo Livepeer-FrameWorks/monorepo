@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -91,9 +92,10 @@ func (s *CommodoreServer) revokeChangedAccessOnCompileFailure(ctx context.Contex
 	// A failed dependency may have consumed the compile deadline. Give the
 	// safety write a bounded budget of its own, retaining generation and parent
 	// fences so an overtaken compile still cannot publish a stale revocation.
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	// Discard long-validity offers so a safety correction cannot extend access.
+	ctx, cancel := context.WithTimeout(withMediaAuthorityLongValidity(context.WithoutCancel(ctx), time.Time{}), 5*time.Second)
 	defer cancel()
-	current, err := commodoredb.New(s.db).GetCurrentMediaAuthorityPayload(ctx, commodoredb.GetCurrentMediaAuthorityPayloadParams{AuthorityKind: "media_object", AuthorityID: authorityID})
+	current, err := commodoredb.New(s.db).GetCurrentMediaAuthorityRevocationSnapshot(ctx, commodoredb.GetCurrentMediaAuthorityRevocationSnapshotParams{AuthorityKind: "media_object", AuthorityID: authorityID})
 	if errors.Is(err, sql.ErrNoRows) {
 		return compileErr
 	}
@@ -109,29 +111,42 @@ func (s *CommodoreServer) revokeChangedAccessOnCompileFailure(ctx context.Contex
 	if previous.GetLifecycle() != mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE {
 		return compileErr
 	}
+	if source, ok := ctx.Value(playbackAccessSourceKey{}).(playbackAccessSource); ok && desired == nil {
+		desired = source.localPolicy(previous.GetPlaybackPolicy())
+	}
 	accessChanged := playbackAccessRevoked(previous.GetPlaybackPolicy(), desired)
+	onlyPublishingRevocation := false
 	if previousLive := previous.GetLiveStream(); desiredLive != nil && previousLive != nil {
+		onlyPublishingRevocation = desired != nil && proto.Equal(previous.GetPlaybackPolicy(), desired) &&
+			previousLive.GetIngestMode() == desiredLive.GetIngestMode() && len(previousLive.GetPublishingCredentialSha256()) > 0 && len(desiredLive.GetPublishingCredentialSha256()) == 0
 		accessChanged = accessChanged || previousLive.GetIngestMode() != desiredLive.GetIngestMode() ||
 			(len(previousLive.GetPublishingCredentialSha256()) > 0 && !bytes.Equal(previousLive.GetPublishingCredentialSha256(), desiredLive.GetPublishingCredentialSha256()))
 	}
-	if source, ok := ctx.Value(playbackAccessSourceKey{}).(playbackAccessSource); ok && !accessChanged {
-		if desired == nil {
-			desired = source.localPolicy(previous.GetPlaybackPolicy())
-			accessChanged = playbackAccessRevoked(previous.GetPlaybackPolicy(), desired)
-		}
+
+	var revisions []*mediaauthoritypb.AuthoritySourceRevision
+	revisionErr := json.Unmarshal(current.SourceRevisions, &revisions)
+	if revisionErr != nil {
+		s.observeMediaAuthorityRevocationCheckFailure(authorityID, "playback_source_decode", revisionErr)
+	}
+	if source, ok := ctx.Value(playbackAccessSourceKey{}).(playbackAccessSource); ok {
 		oldKind := previous.GetPlaybackPolicy().GetKind()
 		if desired == nil && source.requiresAuth && oldKind == mediaauthoritypb.PlaybackPolicyKind_PLAYBACK_POLICY_KIND_PUBLIC {
 			accessChanged = true
-		} else if !accessChanged && (desired == nil || (oldKind == mediaauthoritypb.PlaybackPolicyKind_PLAYBACK_POLICY_KIND_WEBHOOK && desired.GetKind() == oldKind)) {
-			revision, readErr := commodoredb.New(s.db).GetCurrentMediaAuthorityPlaybackSourceRevision(ctx, authorityID)
-			if readErr != nil {
-				s.observeMediaAuthorityRevocationCheckFailure(authorityID, "playback_source_read", readErr)
-			} else {
-				accessChanged = revision != "" && revision != source.revision
+		} else if desired == nil || onlyPublishingRevocation || (oldKind == mediaauthoritypb.PlaybackPolicyKind_PLAYBACK_POLICY_KIND_WEBHOOK && desired.GetKind() == oldKind) {
+			revision := ""
+			for _, stored := range revisions {
+				if stored.GetService() == "commodore-playback-access" {
+					revision = stored.GetRevision()
+					break
+				}
+			}
+			if revisionErr != nil || revision != source.revision {
+				accessChanged, onlyPublishingRevocation = true, false
 			}
 		}
 	}
-	if !accessChanged && previous.GetLifecycle() == mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE && sharedauthority.IsPlacementSchema(previous.GetSchemaVersion()) {
+
+	if (!accessChanged || onlyPublishingRevocation) && previous.GetLifecycle() == mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE && sharedauthority.IsPlacementSchema(previous.GetSchemaVersion()) {
 		scope := placementpolicy.Scope{TenantID: previous.GetTenantId(), Kind: "stream"}
 		if live := previous.GetLiveStream(); live != nil {
 			scope.ID = live.GetStreamId()
@@ -148,13 +163,43 @@ func (s *CommodoreServer) revokeChangedAccessOnCompileFailure(ctx context.Contex
 			}
 			if err != nil {
 				s.observeMediaAuthorityRevocationCheckFailure(authorityID, "placement_read", err)
-				return compileErr
+				if !accessChanged {
+					return compileErr
+				}
+				onlyPublishingRevocation = false
+			} else {
+				placementChanged := placementAccessChanged(previous.GetMediaPlacement(), snapshot.Own)
+				accessChanged = accessChanged || placementChanged
+				onlyPublishingRevocation = onlyPublishingRevocation && !placementChanged
 			}
-			accessChanged = placementAccessChanged(previous.GetMediaPlacement(), snapshot.Own)
 		}
 	}
 	if !accessChanged {
 		return compileErr
+	}
+	// A known publishing-only revocation can correct the previous object without
+	// dropping playback while a dependency is unavailable. If that correction
+	// cannot be published, deny access rather than retain the revoked credential.
+	if onlyPublishingRevocation {
+		previous.GetLiveStream().PublishingCredentialSha256 = nil
+		issuedAt := time.Now().UTC()
+		var targets []string
+		if sharedauthority.IsPlacementSchema(previous.GetSchemaVersion()) {
+			_, targets, _, _, err = s.tenantAuthorityContext(ctx, previous.GetTenantId(), false)
+		}
+		if err == nil {
+			err = revisionErr
+		}
+		if err == nil {
+			err = s.persistMediaObjectAuthority(ctx, authorityID, previous, targets, revisions, issuedAt, current.ValidUntil)
+		}
+		if err == nil || errors.Is(err, errMediaAuthorityCompileSuperseded) {
+			if err != nil {
+				return err
+			}
+			return compileErr
+		}
+		s.observeMediaAuthorityRevocationCheckFailure(authorityID, "publishing_revoke", err)
 	}
 	if err = s.compileDeniedMediaObjectAuthority(ctx, authorityID, kind, mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_INACTIVE, "media-access-change-pending"); err != nil {
 		if errors.Is(err, errMediaAuthorityCompileSuperseded) {

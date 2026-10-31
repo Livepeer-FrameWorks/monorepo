@@ -71,9 +71,11 @@ func (f fakeTransition) BeforeServices() []string { return f.before }
 func (f fakeTransition) Scopes(*reconcileEnv) ([]ReconcileScope, error) {
 	return nil, nil
 }
+
 func (f fakeTransition) Check(context.Context, *reconcileEnv, ReconcileScope) ReconcileCheck {
 	return ReconcileCheck{}
 }
+
 func (f fakeTransition) Apply(context.Context, *reconcileEnv, ReconcileScope) error  { return nil }
 func (f fakeTransition) Verify(context.Context, *reconcileEnv, ReconcileScope) error { return nil }
 func (f fakeTransition) ProvisionDisposition() ProvisionDisposition                  { return f.disposition }
@@ -94,13 +96,20 @@ func seqLabels(steps []releaseStep) []string {
 func idDeploy(s string) string { return s }
 
 func TestResolvedClusterSystemTenantUsesLifecycleState(t *testing.T) {
+	original := releaseResolveSystemTenantIDFn
+	t.Cleanup(func() { releaseResolveSystemTenantIDFn = original })
+	calls := 0
+	releaseResolveSystemTenantIDFn = func(context.Context, *resolvedCluster) (string, error) {
+		calls++
+		return "tenant-from-quartermaster", nil
+	}
 	rc := &resolvedCluster{Source: inventory.SourceContext, ContextSystemTenantID: " tenant-from-context "}
 	got, err := rc.ResolveSystemTenantID(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != "tenant-from-context" {
-		t.Fatalf("system tenant = %q, want context identity", got)
+	if got != "tenant-from-quartermaster" || calls != 1 {
+		t.Fatalf("system tenant = %q, want Quartermaster identity", got)
 	}
 
 	// Resolution is stable for the whole release, even if mutable caller state
@@ -110,7 +119,7 @@ func TestResolvedClusterSystemTenantUsesLifecycleState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if again != got {
+	if again != got || calls != 1 {
 		t.Fatalf("cached system tenant = %q, want %q", again, got)
 	}
 }

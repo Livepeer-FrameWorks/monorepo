@@ -45,6 +45,7 @@ const (
 	authorityCompilePark
 	authorityCompileSuperseded
 	authorityCompileAwaitTenant
+	authorityCompileRevocationPending
 )
 
 // authorityCompileError classifies why a compile did not publish. Unclassified
@@ -53,6 +54,9 @@ type authorityCompileError struct {
 	class authorityCompileClass
 	code  string
 	err   error
+	// compileErr is settled independently once the failed stop has its own durable obligation.
+	compileErr error
+	stopQueued bool
 }
 
 func (e *authorityCompileError) Error() string { return e.err.Error() }
@@ -124,6 +128,10 @@ func markMediaAuthorityPublished(ctx context.Context) {
 	}
 }
 
+func (s *CommodoreServer) processAccountIngestRevocations(ctx context.Context) {
+	s.processMediaAuthorityObligationLane(ctx, commodoredb.MediaAuthorityLaneIngestRevocation, mediaAuthorityObligationLease, mediaAuthorityRefreshTimeout)
+}
+
 func (s *CommodoreServer) processMediaAuthorityEventObligations(ctx context.Context) {
 	s.processMediaAuthorityObligationLane(ctx, commodoredb.MediaAuthorityLaneEvent, mediaAuthorityObligationLease, mediaAuthorityRefreshTimeout)
 }
@@ -155,7 +163,7 @@ func (s *CommodoreServer) processMediaAuthorityTenantRenewals(ctx context.Contex
 // together share one read of what they all derive from, and no read can outlive
 // the change that enqueued the next rows.
 func (s *CommodoreServer) processMediaAuthorityObligationLane(ctx context.Context, lane string, lease, timeout time.Duration) {
-	if !s.mediaAuthorityEnabled() {
+	if !s.mediaAuthorityEnabled() && lane != commodoredb.MediaAuthorityLaneIngestRevocation {
 		return
 	}
 	completed := make(chan struct{}, mediaAuthorityRefreshWorkers)
@@ -271,6 +279,21 @@ func (s *CommodoreServer) renewMediaAuthorityObligationLease(ctx context.Context
 
 func (s *CommodoreServer) compileMediaAuthorityObligation(ctx context.Context, row commodoredb.ClaimMediaAuthorityObligationsRow) error {
 	target := commodoredb.MediaAuthorityTarget{Key: row.TargetKey, Kind: row.TargetKind}
+	if row.Lane == commodoredb.MediaAuthorityLaneIngestRevocation {
+		if row.TargetKind == commodoredb.MediaAuthorityTargetTenant {
+			if stopErr := s.stopAccountIngest(ctx, row.TenantID, "", nil); stopErr != nil {
+				return &authorityCompileError{class: authorityCompileRevocationPending, code: "ingest_revocation_pending", err: stopErr}
+			}
+			return nil
+		}
+		if row.TargetKind != commodoredb.MediaAuthorityTargetLiveStream {
+			return parkAuthorityCompile("unsupported_stop_target", fmt.Errorf("unsupported ingest stop target %q", row.TargetKind))
+		}
+		if err := s.stopRevokedStreamIngest(ctx, row.TenantID, target.ObjectID()); err != nil {
+			return &authorityCompileError{class: authorityCompileRevocationPending, code: "ingest_revocation_pending", err: err}
+		}
+		return nil
+	}
 	switch row.TargetKind {
 	case commodoredb.MediaAuthorityTargetTenantMediaObjects:
 		// Fanout publishes nothing and must not fence out a concurrent tenant
@@ -281,9 +304,20 @@ func (s *CommodoreServer) compileMediaAuthorityObligation(ctx context.Context, r
 			return s.compileTenantAuthority(compileCtx, row.TenantID)
 		})
 	case commodoredb.MediaAuthorityTargetLiveStream:
-		return s.withMediaAuthorityCompileFence(ctx, row.TargetKey, func(compileCtx context.Context) error {
+		stopErr := s.stopRevokedStreamIngest(ctx, row.TenantID, target.ObjectID())
+		// Stop delivery and signed access converge independently: an offline
+		// cell must not delay credential revocation on the reachable cells.
+		compileErr := s.withMediaAuthorityCompileFence(ctx, row.TargetKey, func(compileCtx context.Context) error {
 			return s.compileLiveStreamAuthority(compileCtx, target.ObjectID())
 		})
+		if stopErr != nil {
+			queueErr := commodoredb.New(s.db).EnqueueMediaAuthorityObligation(ctx, commodoredb.EnqueueMediaAuthorityObligationParams{
+				Lane: commodoredb.MediaAuthorityLaneIngestRevocation, TargetKey: row.TargetKey, TargetKind: row.TargetKind,
+				TenantID: row.TenantID, Reason: sharedauthority.ReasonAccountInactive, SourceService: "commodore", SourceEventID: "ingest-stop:" + row.TargetKey,
+			})
+			return &authorityCompileError{class: authorityCompileRevocationPending, code: "ingest_revocation_pending", err: errors.Join(stopErr, compileErr, queueErr), compileErr: compileErr, stopQueued: queueErr == nil}
+		}
+		return compileErr
 	case commodoredb.MediaAuthorityTargetArtifact:
 		return s.withMediaAuthorityCompileFence(ctx, row.TargetKey, func(compileCtx context.Context) error {
 			return s.compileArtifactAuthority(compileCtx, target.ObjectID())
@@ -311,6 +345,10 @@ func (s *CommodoreServer) settleMediaAuthorityObligation(row commodoredb.ClaimMe
 	ctx, cancel := context.WithTimeout(context.Background(), mediaAuthoritySettleTimeout)
 	defer cancel()
 	queries := commodoredb.New(s.db)
+	var stopped *authorityCompileError
+	if errors.As(compileErr, &stopped) && stopped.stopQueued {
+		compileErr = stopped.compileErr
+	}
 	fields := logging.Fields{"lane": row.Lane, "target": row.TargetKey, "tenant_id": row.TenantID, "attempts": row.Attempts}
 
 	var (
@@ -380,7 +418,8 @@ func (s *CommodoreServer) settleMediaAuthorityObligation(row commodoredb.ClaimMe
 		observed = "parked"
 		settled, err = s.parkMediaAuthorityObligation(ctx, queries, row, code, compileErr)
 		s.logger.WithError(compileErr).WithFields(fields).WithField("park_reason", code).Warn("Parked media authority refresh: the target cannot compile until its source state changes")
-	case row.Attempts >= mediaAuthorityMaxTransientAttempts:
+	// Security delivery keeps retrying until the cell returns or the account is reactivated.
+	case row.Attempts >= mediaAuthorityMaxTransientAttempts && class != authorityCompileRevocationPending:
 		observed = "parked"
 		settled, err = s.parkMediaAuthorityObligation(ctx, queries, row, "exhausted", compileErr)
 		s.logger.WithError(compileErr).WithFields(fields).WithField("park_reason", "exhausted").Warn("Parked media authority refresh after repeated transient failures")
@@ -533,7 +572,7 @@ func (s *CommodoreServer) observeMediaAuthorityObligationStats(ctx context.Conte
 	for _, row := range lanes {
 		due[row.Lane] = row
 	}
-	for _, lane := range []string{commodoredb.MediaAuthorityLaneEvent, commodoredb.MediaAuthorityLaneBulk, commodoredb.MediaAuthorityLaneObjectDeadline, commodoredb.MediaAuthorityLaneTenantDeadline} {
+	for _, lane := range []string{commodoredb.MediaAuthorityLaneEvent, commodoredb.MediaAuthorityLaneBulk, commodoredb.MediaAuthorityLaneIngestRevocation, commodoredb.MediaAuthorityLaneObjectDeadline, commodoredb.MediaAuthorityLaneTenantDeadline} {
 		s.metrics.MediaAuthorityRefreshPending.WithLabelValues(lane).Set(float64(due[lane].DueCount))
 		s.metrics.MediaAuthorityRefreshOldestPendingSeconds.WithLabelValues(lane).Set(due[lane].OldestDueSeconds)
 	}

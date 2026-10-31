@@ -2,6 +2,7 @@ package grpc
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"testing"
@@ -262,9 +263,31 @@ func TestSettleMediaAuthorityObligation(t *testing.T) {
 				mock.ExpectExec(settlePark).WithArgs("malformed_authority", sqlmock.AnyArg(), key, lane, revision, token).WillReturnResult(sqlmock.NewResult(0, 1))
 			},
 		},
+
+		"a queued stop does not retry a successful compile": {
+			attempts:   1,
+			compileErr: &authorityCompileError{class: authorityCompileRevocationPending, code: "ingest_revocation_pending", err: errors.New("stop pending"), stopQueued: true},
+			expect: func(mock sqlmock.Sqlmock) {
+				mock.ExpectExec(settleComplete).WithArgs(key, lane, revision, token).WillReturnResult(sqlmock.NewResult(0, 1))
+			},
+		},
+		"a queued stop does not change a permanent compiler error": {
+			attempts:   1,
+			compileErr: &authorityCompileError{class: authorityCompileRevocationPending, code: "ingest_revocation_pending", err: errors.New("stop pending"), stopQueued: true, compileErr: parkAuthorityCompile("invalid_source", errors.New("source invalid"))},
+			expect: func(mock sqlmock.Sqlmock) {
+				mock.ExpectExec(settlePark).WithArgs("invalid_source", sqlmock.AnyArg(), key, lane, revision, token).WillReturnResult(sqlmock.NewResult(0, 1))
+			},
+		},
 		"a transient failure backs off": {
 			attempts:   3,
 			compileErr: errors.New("load tenant billing authority: unavailable"),
+			expect: func(mock sqlmock.Sqlmock) {
+				mock.ExpectExec(settleFail).WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), key, lane, revision, token).WillReturnResult(sqlmock.NewResult(0, 1))
+			},
+		},
+		"an undelivered account stop never exhausts its retries": {
+			attempts:   mediaAuthorityMaxTransientAttempts + 1,
+			compileErr: &authorityCompileError{class: authorityCompileRevocationPending, code: "ingest_revocation_pending", err: errors.New("cell disconnected")},
 			expect: func(mock sqlmock.Sqlmock) {
 				mock.ExpectExec(settleFail).WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), key, lane, revision, token).WillReturnResult(sqlmock.NewResult(0, 1))
 			},
@@ -312,5 +335,48 @@ func TestSettleMediaAuthorityObligation(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+// A failed active-session stop must not delay credential revocation on reachable cells.
+func TestIngestStopFailureStillAttemptsSignedRevocation(t *testing.T) {
+	db, mock, dbErr := sqlmock.New()
+	if dbErr != nil {
+		t.Fatal(dbErr)
+	}
+	defer db.Close()
+	server := &CommodoreServer{db: db}
+	server.foghornDiscovery.Store("offline-cell", &foghornDiscoveryEntry{at: time.Now()})
+	mock.ExpectQuery("GetRevokedStreamIngest").WillReturnRows(sqlmock.NewRows([]string{"internal_name"}).AddRow("revoked"))
+	mock.ExpectQuery("ListAccountIngestCells").WillReturnRows(sqlmock.NewRows([]string{"cell_id"}).AddRow("offline-cell"))
+	compileStarted := errors.New("compile source temporarily unavailable")
+	mock.ExpectQuery("INSERT INTO commodore.media_authority_compile_fences").WillReturnError(compileStarted)
+	mock.ExpectExec("EnqueueMediaAuthorityObligation").WillReturnResult(sqlmock.NewResult(0, 1))
+	callErr := server.compileMediaAuthorityObligation(t.Context(), commodoredb.ClaimMediaAuthorityObligationsRow{TenantID: "tenant", TargetKind: commodoredb.MediaAuthorityTargetLiveStream, TargetKey: commodoredb.LiveStreamMediaAuthorityTarget("stream").Key})
+	if !errors.Is(callErr, compileStarted) {
+		t.Fatalf("failed stop prevented signed access revocation: %v", callErr)
+	}
+	if class, _ := classifyAuthorityCompileError(callErr); class != authorityCompileRevocationPending {
+		t.Fatalf("stop no longer retries: %v", callErr)
+	}
+	if unmet := mock.ExpectationsWereMet(); unmet != nil {
+		t.Fatal(unmet)
+	}
+}
+
+func TestIngestRevocationLaneDoesNotCompile(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	mock.ExpectQuery("GetRevokedStreamIngest").WillReturnError(sql.ErrNoRows)
+	server := &CommodoreServer{db: db}
+	callErr := server.compileMediaAuthorityObligation(t.Context(), commodoredb.ClaimMediaAuthorityObligationsRow{Lane: commodoredb.MediaAuthorityLaneIngestRevocation, TargetKind: commodoredb.MediaAuthorityTargetLiveStream, TargetKey: commodoredb.LiveStreamMediaAuthorityTarget("stream").Key, TenantID: "tenant"})
+	if callErr != nil {
+		t.Fatalf("reactivated owner stop should settle without a compiler: %v", callErr)
+	}
+	if unmet := mock.ExpectationsWereMet(); unmet != nil {
+		t.Fatal(unmet)
 	}
 }

@@ -381,3 +381,53 @@ func TestListDVRChapters_NoPolicyReturnsEmpty(t *testing.T) {
 		t.Fatalf("unmet SQL expectations: %v", err)
 	}
 }
+
+func TestTerminateStreamSessions_ScopedOwnerKeepsBystander(t *testing.T) {
+	sm := state.ResetDefaultManagerForTests()
+	t.Cleanup(sm.Shutdown)
+	seedLiveStreamRpcMore(t, sm, "owner-stream", "node-owner", "tenant")
+	seedLiveStreamRpcMore(t, sm, "other-owner-stream", "node-owner", "tenant")
+	connected := setupLocalRegistry(t, "node-owner")
+	server := NewFoghornGRPCServer(nil, logging.NewLogger(), balancer.NewLoadBalancer(logging.NewLogger()), nil, nil, nil, nil, nil)
+	response, err := server.TerminateStreamSessions(context.Background(), &foghorncontrolpb.TerminateStreamSessionsRequest{TenantId: "tenant", Reason: "account_inactive", StreamNames: []string{"owner-stream", "foreign-stream"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.GetStreamsTerminated() != 1 || len(connected.sent) != 1 || len(connected.sent[0].GetStopSessionsRequest().GetStreamNames()) != 1 || connected.sent[0].GetStopSessionsRequest().GetStreamNames()[0] != "owner-stream" {
+		t.Fatalf("owner termination touched another owner's stream: response=%v sent=%v", response, connected.sent)
+	}
+}
+
+func TestTerminateTenantStreams_FailedNodeRemainsRetryable(t *testing.T) {
+	setupLocalRegistry(t, "other-connected-node")
+	sm := state.ResetDefaultManagerForTests()
+	t.Cleanup(sm.Shutdown)
+	seedLiveStreamRpcMore(t, sm, "owner-stream", "disconnected-node", "tenant")
+	server := NewFoghornGRPCServer(nil, logging.NewLogger(), balancer.NewLoadBalancer(logging.NewLogger()), nil, nil, nil, nil, nil)
+	_, err := server.TerminateTenantStreams(context.Background(), &foghorncontrolpb.TerminateTenantStreamsRequest{TenantId: "tenant", Reason: "account_inactive"})
+	if status.Code(err) != codes.Unavailable {
+		t.Fatalf("failed stop acknowledged: %v", err)
+	}
+}
+
+func TestTerminateTenantStreams_PartialFailureRetainsCounts(t *testing.T) {
+	sm := state.ResetDefaultManagerForTests()
+	t.Cleanup(sm.Shutdown)
+	seedLiveStreamRpcMore(t, sm, "reachable", "online", "tenant")
+	seedLiveStreamRpcMore(t, sm, "unreachable", "offline", "tenant")
+	setupLocalRegistry(t, "online")
+	server := NewFoghornGRPCServer(nil, logging.NewLogger(), balancer.NewLoadBalancer(logging.NewLogger()), nil, nil, nil, nil, nil)
+	_, err := server.TerminateTenantStreams(context.Background(), &foghorncontrolpb.TerminateTenantStreamsRequest{TenantId: "tenant"})
+	if status.Code(err) != codes.Unavailable {
+		t.Fatalf("partial stop=%v", err)
+	}
+	var progress *foghorncontrolpb.TerminateTenantStreamsResponse
+	for _, detail := range status.Convert(err).Details() {
+		if value, ok := detail.(*foghorncontrolpb.TerminateTenantStreamsResponse); ok {
+			progress = value
+		}
+	}
+	if progress.GetStreamsTerminated() != 1 || progress.GetSessionsTerminated() != 1 || len(progress.GetStreamNames()) != 1 || progress.GetStreamNames()[0] != "reachable" {
+		t.Fatalf("partial stop lost successful counts: %v", progress)
+	}
+}

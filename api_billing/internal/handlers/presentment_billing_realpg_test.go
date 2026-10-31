@@ -57,10 +57,11 @@ func invoiceCreatedEvents(t *testing.T, db *sql.DB, tenantID string) map[string]
 }
 
 type recordedProviderRequest struct {
-	method string
-	path   string
-	query  url.Values
-	form   url.Values
+	method         string
+	path           string
+	query          url.Values
+	form           url.Values
+	idempotencyKey string
 }
 
 type providerFixture struct {
@@ -71,7 +72,7 @@ type providerFixture struct {
 
 func (f *providerFixture) handle(w http.ResponseWriter, r *http.Request) {
 	_ = r.ParseForm()
-	request := recordedProviderRequest{method: r.Method, path: r.URL.Path, query: r.URL.Query(), form: r.PostForm}
+	request := recordedProviderRequest{method: r.Method, path: r.URL.Path, query: r.URL.Query(), form: r.PostForm, idempotencyKey: r.Header.Get("Idempotency-Key")}
 	f.mu.Lock()
 	f.requests = append(f.requests, request)
 	route := f.routes[r.Method+" "+r.URL.Path]

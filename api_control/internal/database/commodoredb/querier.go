@@ -85,19 +85,29 @@ type Querier interface {
 	// claim's snapshot was taken, so every row the claim returns was committed
 	// before it.
 	ClaimMediaAuthorityObligations(ctx context.Context, arg ClaimMediaAuthorityObligationsParams) ([]ClaimMediaAuthorityObligationsRow, error)
+	// Platform-wide recovery queue. Claim one call with a five-minute lease, so a slow
+	// batch cannot outlive leases for tenants it has not attempted.
+	ClaimPendingTenantAccountClosures(ctx context.Context) ([]ClaimPendingTenantAccountClosuresRow, error)
 	ClaimServiceEventOutboxBatch(ctx context.Context, arg ClaimServiceEventOutboxBatchParams) ([]ClaimServiceEventOutboxBatchRow, error)
 	ClaimStreamCleanupBatch(ctx context.Context, batchSize int32) ([]ClaimStreamCleanupBatchRow, error)
 	ClearArtifactCatalogTombstone(ctx context.Context, arg ClearArtifactCatalogTombstoneParams) error
 	ClearArtifactCreationCommandAck(ctx context.Context, arg ClearArtifactCreationCommandAckParams) error
 	ClearManagedStreamActiveCluster(ctx context.Context, arg ClearManagedStreamActiveClusterParams) (int64, error)
+	CloseTenantAccount(ctx context.Context, arg CloseTenantAccountParams) error
 	CompleteAccountEmail(ctx context.Context, arg CompleteAccountEmailParams) error
 	CompleteInvalidation(ctx context.Context, id string) error
 	CompleteMediaAuthorityObligation(ctx context.Context, arg CompleteMediaAuthorityObligationParams) (int64, error)
 	CompleteServiceEventOutbox(ctx context.Context, arg CompleteServiceEventOutboxParams) error
+	CompleteTenantAccountClosure(ctx context.Context, tenantID string) error
 	ConsumeAuthorizationCode(ctx context.Context, id string) error
 	ConsumeWalletChallenge(ctx context.Context, arg ConsumeWalletChallengeParams) (string, error)
 	CountAPITokensForUser(ctx context.Context, arg CountAPITokensForUserParams) (int32, error)
+	// Platform operators belong to the system tenant, so its lock serializes this global guard.
+	CountActivePlatformOperators(ctx context.Context, tenantID string) (int64, error)
 	CountActiveSigningKeys(ctx context.Context, tenantID string) (int64, error)
+	CountFailedTenantAccountClosures(ctx context.Context) (int64, error)
+	// Platform-wide recovery metric; a single failed call may recover after backoff.
+	CountRepeatedTenantAccountClosureFailures(ctx context.Context) (int64, error)
 	CountStreamKeys(ctx context.Context, arg CountStreamKeysParams) (int32, error)
 	CountStreamsForUser(ctx context.Context, arg CountStreamsForUserParams) (int32, error)
 	CountStreamsForUserSearch(ctx context.Context, arg CountStreamsForUserSearchParams) (int32, error)
@@ -162,6 +172,7 @@ type Querier interface {
 	// found the object in use again.
 	EnsureMediaAuthorityRenewal(ctx context.Context, arg EnsureMediaAuthorityRenewalParams) error
 	EnsureMediaPlacementPolicy(ctx context.Context, arg EnsureMediaPlacementPolicyParams) error
+	EnsureTenantAccountState(ctx context.Context, tenantID string) error
 	ExpireDeviceAuthorization(ctx context.Context, id string) error
 	FailAccountEmail(ctx context.Context, arg FailAccountEmailParams) error
 	FailInvalidation(ctx context.Context, arg FailInvalidationParams) error
@@ -174,6 +185,7 @@ type Querier interface {
 	FindUserIDByEmail(ctx context.Context, email sql.NullString) (string, error)
 	GetAPITokenUserContext(ctx context.Context, arg GetAPITokenUserContextParams) (GetAPITokenUserContextRow, error)
 	GetAccountEmailRecipient(ctx context.Context, arg GetAccountEmailRecipientParams) (GetAccountEmailRecipientRow, error)
+	GetAccountUserForUpdate(ctx context.Context, arg GetAccountUserForUpdateParams) (GetAccountUserForUpdateRow, error)
 	GetActiveIngestClaim(ctx context.Context, streamKey string) (GetActiveIngestClaimRow, error)
 	GetArtifactCatalogTombstoneForUpdate(ctx context.Context, arg GetArtifactCatalogTombstoneForUpdateParams) (GetArtifactCatalogTombstoneForUpdateRow, error)
 	GetArtifactCatalogTombstoneOrigin(ctx context.Context, arg GetArtifactCatalogTombstoneOriginParams) (string, error)
@@ -193,8 +205,8 @@ type Querier interface {
 	GetClipSourceStream(ctx context.Context, arg GetClipSourceStreamParams) (GetClipSourceStreamRow, error)
 	GetClipWebhookSecret(ctx context.Context, arg GetClipWebhookSecretParams) (sql.NullString, error)
 	GetCurrentMediaAuthorityPayload(ctx context.Context, arg GetCurrentMediaAuthorityPayloadParams) (GetCurrentMediaAuthorityPayloadRow, error)
-	GetCurrentMediaAuthorityPlaybackSourceRevision(ctx context.Context, authorityID string) (string, error)
 	GetCurrentMediaAuthorityPublication(ctx context.Context, arg GetCurrentMediaAuthorityPublicationParams) (GetCurrentMediaAuthorityPublicationRow, error)
+	GetCurrentMediaAuthorityRevocationSnapshot(ctx context.Context, arg GetCurrentMediaAuthorityRevocationSnapshotParams) (GetCurrentMediaAuthorityRevocationSnapshotRow, error)
 	GetDVRCatalogState(ctx context.Context, arg GetDVRCatalogStateParams) (GetDVRCatalogStateRow, error)
 	GetDVRDeletionRoute(ctx context.Context, arg GetDVRDeletionRouteParams) (GetDVRDeletionRouteRow, error)
 	GetDVRRetentionStreamID(ctx context.Context, arg GetDVRRetentionStreamIDParams) (string, error)
@@ -231,6 +243,8 @@ type Querier interface {
 	GetPushTargetStreamOwner(ctx context.Context, arg GetPushTargetStreamOwnerParams) (string, error)
 	GetRefreshTokenSuccessorState(ctx context.Context, id string) (bool, error)
 	GetRefreshUser(ctx context.Context, arg GetRefreshUserParams) (GetRefreshUserRow, error)
+	// An activation supersedes a pending user stop; a permanently closed tenant does not.
+	GetRevokedStreamIngest(ctx context.Context, arg GetRevokedStreamIngestParams) (string, error)
 	GetSigningKey(ctx context.Context, arg GetSigningKeyParams) (GetSigningKeyRow, error)
 	GetSigningKeyCursor(ctx context.Context, arg GetSigningKeyCursorParams) (sql.NullTime, error)
 	GetStreamAdmissionByKey(ctx context.Context, streamKey string) (GetStreamAdmissionByKeyRow, error)
@@ -298,6 +312,7 @@ type Querier interface {
 	InsertWalletIdentity(ctx context.Context, arg InsertWalletIdentityParams) error
 	InsertWalletUser(ctx context.Context, arg InsertWalletUserParams) error
 	IsDVRChapterPlaybackTarget(ctx context.Context, arg IsDVRChapterPlaybackTargetParams) (bool, error)
+	IsTenantAccountClosed(ctx context.Context, tenantID string) (bool, error)
 	LeaseAccountEmail(ctx context.Context, arg LeaseAccountEmailParams) (sql.NullString, error)
 	LeaseInvalidation(ctx context.Context, arg LeaseInvalidationParams) error
 	LeaseStreamCleanup(ctx context.Context, arg LeaseStreamCleanupParams) (sql.NullString, error)
@@ -306,6 +321,8 @@ type Querier interface {
 	ListAPITokensBackwardBefore(ctx context.Context, arg ListAPITokensBackwardBeforeParams) ([]ListAPITokensBackwardBeforeRow, error)
 	ListAPITokensForward(ctx context.Context, arg ListAPITokensForwardParams) ([]ListAPITokensForwardRow, error)
 	ListAPITokensForwardAfter(ctx context.Context, arg ListAPITokensForwardAfterParams) ([]ListAPITokensForwardAfterRow, error)
+	// Include recorded and historical recipients, even after tenant entitlements are removed.
+	ListAccountIngestCells(ctx context.Context, arg ListAccountIngestCellsParams) ([]string, error)
 	// Publishing a successor does not change what a cell acknowledged holding.
 	ListAcknowledgedMediaAuthoritiesForCell(ctx context.Context, arg ListAcknowledgedMediaAuthoritiesForCellParams) ([]ListAcknowledgedMediaAuthoritiesForCellRow, error)
 	ListActiveMediaAuthorityCells(ctx context.Context, arg ListActiveMediaAuthorityCellsParams) ([]string, error)
@@ -376,12 +393,15 @@ type Querier interface {
 	ListMediaAuthorityHoldingCells(ctx context.Context, arg ListMediaAuthorityHoldingCellsParams) ([]string, error)
 	// Reads only what is due, through the due index. The table holds a renewal row
 	// for every published authority, nearly all of them scheduled for later.
+	// Session-stop delivery also counts work waiting in backoff, by its first enqueue.
 	ListMediaAuthorityObligationStats(ctx context.Context) ([]ListMediaAuthorityObligationStatsRow, error)
 	ListMediaAuthorityPriorCells(ctx context.Context, arg ListMediaAuthorityPriorCellsParams) ([]string, error)
 	// What each cell's replicas do with media authority, independent of placement.
 	// A cell with no row has attested nothing.
 	ListMediaCellAuthorityFeatures(ctx context.Context, cellIds []string) ([]ListMediaCellAuthorityFeaturesRow, error)
 	ListMediaCellPlacementCapabilities(ctx context.Context, cellIds []string) ([]ListMediaCellPlacementCapabilitiesRow, error)
+	// Private operator read, fenced by tenant and ordered through the tenant-time index.
+	ListOperatorAccountAudit(ctx context.Context, arg ListOperatorAccountAuditParams) ([]ListOperatorAccountAuditRow, error)
 	ListParkedMediaAuthorityObligationCounts(ctx context.Context) ([]ListParkedMediaAuthorityObligationCountsRow, error)
 	ListPullSourceEventsByInternalName(ctx context.Context, arg ListPullSourceEventsByInternalNameParams) ([]ListPullSourceEventsByInternalNameRow, error)
 	ListPullSourceEventsByStream(ctx context.Context, arg ListPullSourceEventsByStreamParams) ([]ListPullSourceEventsByStreamRow, error)
@@ -406,6 +426,7 @@ type Querier interface {
 	ListStreamsBackwardBefore(ctx context.Context, arg ListStreamsBackwardBeforeParams) ([]ListStreamsBackwardBeforeRow, error)
 	ListStreamsForward(ctx context.Context, arg ListStreamsForwardParams) ([]ListStreamsForwardRow, error)
 	ListStreamsForwardAfter(ctx context.Context, arg ListStreamsForwardAfterParams) ([]ListStreamsForwardAfterRow, error)
+	ListTenantAccountUsers(ctx context.Context, tenantID string) ([]string, error)
 	ListTenantArtifactMediaAuthoritySources(ctx context.Context, tenantID string) ([]ListTenantArtifactMediaAuthoritySourcesRow, error)
 	ListTenantLiveStreamMediaAuthoritySources(ctx context.Context, tenantID string) ([]ListTenantLiveStreamMediaAuthoritySourcesRow, error)
 	// The tenant's objects that some cell may still hold a valid copy of: any
@@ -418,6 +439,7 @@ type Querier interface {
 	// enqueues that follow are bounded statements without rereading the tenant's
 	// rows for each of them.
 	ListTenantMediaObjectRefreshTargets(ctx context.Context, tenantID string) ([]string, error)
+	ListUserLiveStreamAuthorityTargets(ctx context.Context, arg ListUserLiveStreamAuthorityTargetsParams) ([]string, error)
 	ListUserWallets(ctx context.Context, userID string) ([]ListUserWalletsRow, error)
 	// Tenants whose authority is still being renewed. Reconciliation covers these;
 	// a tenant nobody uses is compiled when it is next used.
@@ -450,6 +472,7 @@ type Querier interface {
 	LockSigningKeyTenant(ctx context.Context, tenantID string) error
 	LockStreamMistSourcePins(ctx context.Context, arg LockStreamMistSourcePinsParams) ([]string, error)
 	LockStreamPullSourcePins(ctx context.Context, arg LockStreamPullSourcePinsParams) ([]string, error)
+	LockTenantAccountState(ctx context.Context, tenantID string) (sql.NullTime, error)
 	LockUserAuthenticationMethods(ctx context.Context, arg LockUserAuthenticationMethodsParams) (sql.NullBool, error)
 	LookupClipPolicyByInternalName(ctx context.Context, internalName string) (LookupClipPolicyByInternalNameRow, error)
 	LookupClipPolicyByPlaybackID(ctx context.Context, playbackID string) (LookupClipPolicyByPlaybackIDRow, error)
@@ -502,7 +525,10 @@ type Querier interface {
 	// Use is kept to the day: a row is written at most once a day per authority
 	// however often it is decided on. One row means the day advanced.
 	RecordMediaAuthorityUse(ctx context.Context, arg RecordMediaAuthorityUseParams) (int64, error)
+	// Private operator audit; never projected into tenant-visible domain events.
+	RecordOperatorAccountAudit(ctx context.Context, arg RecordOperatorAccountAuditParams) error
 	RecordSigningKeyUse(ctx context.Context, arg RecordSigningKeyUseParams) error
+	RecordTenantAccountClosureFailure(ctx context.Context, arg RecordTenantAccountClosureFailureParams) error
 	RefreshPrimaryStreamKey(ctx context.Context, arg RefreshPrimaryStreamKeyParams) (int64, error)
 	RegisterStreamThumbnailServingCell(ctx context.Context, arg RegisterStreamThumbnailServingCellParams) (int64, error)
 	// A lane's compile of a target has settled, whatever its outcome; another lane
@@ -569,6 +595,7 @@ type Querier interface {
 	RevokeSigningKey(ctx context.Context, arg RevokeSigningKeyParams) (RevokeSigningKeyRow, error)
 	RevokeUserSessions(ctx context.Context, arg RevokeUserSessionsParams) (sql.NullTime, error)
 	RotateRefreshToken(ctx context.Context, arg RotateRefreshTokenParams) error
+	SetAccountUserActive(ctx context.Context, arg SetAccountUserActiveParams) (SetAccountUserActiveRow, error)
 	SetClipPlaybackPolicy(ctx context.Context, arg SetClipPlaybackPolicyParams) (SetClipPlaybackPolicyRow, error)
 	SetCreatedStreamDescription(ctx context.Context, arg SetCreatedStreamDescriptionParams) error
 	SetCreatedStreamLiveVideoABR(ctx context.Context, arg SetCreatedStreamLiveVideoABRParams) error

@@ -18,6 +18,7 @@ require (
 	github.com/sirupsen/logrus v1.9.4
 	github.com/stripe/stripe-go/v85 v85.2.0
 	github.com/x402-foundation/x402/go/v2 v2.23.0
+	github.com/yugabyte/pgx/v5 v5.7.6-yb-1
 	golang.org/x/crypto v0.50.0
 	golang.org/x/image v0.40.0
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260414002931-afd174a4e478
@@ -90,7 +91,6 @@ require (
 	github.com/twmb/franz-go/pkg/kadm v1.18.0 // indirect
 	github.com/twmb/franz-go/pkg/kmsg v1.13.1 // indirect
 	github.com/ugorji/go/codec v1.3.1 // indirect
-	github.com/yugabyte/pgx/v5 v5.7.6-yb-1 // indirect
 	go.mongodb.org/mongo-driver/v2 v2.5.1 // indirect
 	go.opentelemetry.io/otel v1.43.0 // indirect
 	go.opentelemetry.io/otel/sdk v1.43.0 // indirect

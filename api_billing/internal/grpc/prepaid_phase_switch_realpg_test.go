@@ -5,6 +5,7 @@ package grpc
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"fmt"
 	"strings"
 	"testing"
@@ -13,6 +14,7 @@ import (
 	"frameworks/api_billing/internal/appconfig/appconfigtest"
 	"frameworks/api_billing/internal/handlers"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 	"github.com/google/uuid"
@@ -92,10 +94,15 @@ func TestPrepaidToPostpaidSwitchInvoicesOnlyUsageFromTheSwitch_RealPG(t *testing
 	recordEgress(t, strings.Repeat("2", 64), window.Add(-5*time.Minute), 50)
 	recordEgress(t, strings.Repeat("3", 64), window.Add(10*time.Minute), 100)
 
-	jobs := handlers.NewJobManager(db, logger, nil, nil, nil, nil, handlers.NewService(db, logger, nil, nil, nil, nil, nil), nil)
-	if _, err := jobs.CloseAdvanceBilledPeriod(ctx, tenantID, periodEnd); err != nil {
-		t.Fatalf("finalize the postpaid period: %v", err)
+	service := handlers.NewService(db, logger, nil, nil, nil, nil, nil)
+	closing, prepareErr := handlers.PrepareProviderBillingBoundary(ctx, db, logger, service, tenantID, periodEnd)
+	if prepareErr != nil {
+		t.Fatal(prepareErr)
 	}
+	if closeErr := database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error { _, commitErr := closing.CommitTx(ctx, tx); return commitErr }); closeErr != nil {
+		t.Fatalf("finalize the postpaid period: %v", closeErr)
+	}
+	closing.AfterCommit(ctx)
 
 	var invoiceStart time.Time
 	var metered, base, details string

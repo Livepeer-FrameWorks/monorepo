@@ -136,45 +136,39 @@ type releaseSideStateConverger interface {
 // the catalog entry; v0.3 starts with no retained one-off handlers.
 var releaseTransitionRegistry = map[string]ReleaseTransition{}
 
-// ResolveSystemTenantID returns the stable UUID Quartermaster owns for the
-// canonical system-tenant alias. A context-sourced invocation may reuse the
-// identity that a prior reconciliation persisted; an explicit manifest always
-// resolves its own authority through Quartermaster so an unrelated active
-// context or static env value cannot leak across clusters. The result is cached
-// for this invocation so a multi-service release never re-dials Quartermaster
-// per replica.
+// ResolveSystemTenantID resolves Quartermaster's canonical alias once per invocation.
 func (rc *resolvedCluster) ResolveSystemTenantID(ctx context.Context) (string, error) {
 	rc.systemTenantOnce.Do(func() {
-		// An explicit manifest source may target a different cluster than the
-		// active context. Only trust the remembered identity when that context
-		// also supplied the manifest; explicit inputs resolve their own authority.
-		if id := doctorContextSystemTenantID(rc); id != "" {
-			rc.systemTenantID = id
-			return
+		rc.systemTenantID, rc.systemTenantErr = releaseResolveSystemTenantIDFn(ctx, rc)
+		if saved := contextSystemTenantID(rc); rc.systemTenantErr == nil && saved != "" && saved != rc.systemTenantID {
+			fmt.Fprintf(rc.warningOutput(), "Warning: saved system tenant %s differs from Quartermaster's %s; using Quartermaster's identity\n", saved, rc.systemTenantID)
 		}
-		client, _, cleanup, err := buildReconcileQM(ctx, rc)
-		if err != nil {
-			rc.systemTenantErr = err
-			return
-		}
-		defer cleanup()
-		resp, err := client.ResolveTenantAliases(ctx, []string{bootstrap.SystemTenantAlias})
-		if err != nil {
-			rc.systemTenantErr = fmt.Errorf("ResolveTenantAliases: %w", err)
-			return
-		}
-		if len(resp.GetUnknown()) > 0 {
-			rc.systemTenantErr = fmt.Errorf("system tenant alias %q is not established in Quartermaster", bootstrap.SystemTenantAlias)
-			return
-		}
-		id := strings.TrimSpace(resp.GetMapping()[bootstrap.SystemTenantAlias])
-		if id == "" {
-			rc.systemTenantErr = fmt.Errorf("system tenant alias %q resolved to an empty UUID", bootstrap.SystemTenantAlias)
-			return
-		}
-		rc.systemTenantID = id
 	})
 	return rc.systemTenantID, rc.systemTenantErr
+}
+
+// releaseResolveSystemTenantIDFn supplies the authoritative alias lookup for an invocation.
+var releaseResolveSystemTenantIDFn = resolveReleaseSystemTenantID
+
+// resolveReleaseSystemTenantID reads the canonical system alias through the selected control plane.
+func resolveReleaseSystemTenantID(ctx context.Context, rc *resolvedCluster) (string, error) {
+	client, _, cleanup, err := buildReconcileQM(ctx, rc)
+	if err != nil {
+		return "", err
+	}
+	defer cleanup()
+	resp, err := client.ResolveTenantAliases(ctx, []string{bootstrap.SystemTenantAlias})
+	if err != nil {
+		return "", fmt.Errorf("ResolveTenantAliases: %w", err)
+	}
+	if len(resp.GetUnknown()) > 0 {
+		return "", fmt.Errorf("system tenant alias %q is not established in Quartermaster", bootstrap.SystemTenantAlias)
+	}
+	id := strings.TrimSpace(resp.GetMapping()[bootstrap.SystemTenantAlias])
+	if id == "" {
+		return "", fmt.Errorf("system tenant alias %q resolved to an empty UUID", bootstrap.SystemTenantAlias)
+	}
+	return id, nil
 }
 
 // buildReconcileQM constructs an authenticated Quartermaster client for the release executor and returns the operator

@@ -922,7 +922,7 @@ func newAdminBootstrapTokensRevokeCmd() *cobra.Command {
 func newAdminTenantsCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "tenants", Short: "Manage tenants"}
 	cmd.AddCommand(newAdminTenantsListCmd())
-	cmd.AddCommand(newAdminTenantsActivityCmd())
+	cmd.AddCommand(newAdminTenantsActivityCmd(), newAdminTenantsDeactivateCmd(), newAdminTenantsGetCmd(), newAdminTenantsHistoryCmd())
 	return cmd
 }
 
@@ -2372,7 +2372,7 @@ func newAdminBillingCmd() *cobra.Command {
 	cmd.AddCommand(newAdminBillingSetClusterPricingCmd())
 	cmd.AddCommand(newAdminBillingCreditCmd())
 	cmd.AddCommand(newAdminBillingSetTierCmd())
-	cmd.AddCommand(newAdminBillingGrantCmd())
+	cmd.AddCommand(newAdminBillingGrantCmd(), newAdminBillingRecoveryCmd())
 	cmd.AddCommand(newAdminBillingRecordPaymentCmd())
 	cmd.AddCommand(newAdminBillingPrepaidDoubleChargesCmd())
 	return cmd
@@ -2388,7 +2388,7 @@ type adminBillingClient interface {
 	AdminAssignTier(ctx context.Context, req *purserpb.AdminAssignTierRequest) (*purserpb.AdminAssignTierResponse, error)
 	AdminSetBillingGrant(ctx context.Context, req *purserpb.AdminSetBillingGrantRequest) (*purserpb.AdminBillingGrantResponse, error)
 	AdminGetBillingGrant(ctx context.Context, tenantID string) (*purserpb.AdminBillingGrantResponse, error)
-	AdminRevokeBillingGrant(ctx context.Context, tenantID, reason string) (*purserpb.AdminBillingGrantResponse, error)
+	AdminRevokeBillingGrant(ctx context.Context, tenantID, reason, recoveryTier string) (*purserpb.AdminBillingGrantResponse, error)
 	AdminRecordInvoicePayment(ctx context.Context, req *purserpb.AdminRecordInvoicePaymentRequest) (*purserpb.AdminRecordInvoicePaymentResponse, error)
 }
 
@@ -2586,7 +2586,7 @@ func newAdminBillingSetClusterPricingCmd() *cobra.Command {
 
 func newAdminUsersCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "users", Short: "Manage users"}
-	cmd.AddCommand(newAdminUsersCreateCmd())
+	cmd.AddCommand(newAdminUsersCreateCmd(), newAdminUsersActiveCmd(false), newAdminUsersActiveCmd(true))
 	return cmd
 }
 

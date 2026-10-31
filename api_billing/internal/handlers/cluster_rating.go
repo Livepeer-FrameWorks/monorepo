@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 
@@ -622,7 +623,7 @@ func monthlyFeeOverlap(periodStart, periodEnd, activeFrom time.Time, activeUntil
 	if activeUntil.Valid && activeUntil.Time.Before(until) {
 		until = activeUntil.Time
 	}
-	monthSeconds = int64(periodStart.AddDate(0, 1, 0).Sub(periodStart) / time.Second)
+	monthSeconds = int64(billing.NextMonthlyAnniversary(periodStart).Sub(periodStart) / time.Second)
 	if !until.After(from) {
 		return from, until, 0, monthSeconds
 	}

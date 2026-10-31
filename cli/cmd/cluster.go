@@ -102,14 +102,15 @@ invocation. Explicit flags always win over saved context defaults.`,
 }
 
 type resolvedCluster struct {
-	envSource    *resolvedCluster
-	Manifest     *inventory.Manifest
-	ManifestPath string
-	AgeKey       string
-	Source       inventory.ManifestSource
-	Cluster      string
-	ReleaseRepos []string
-	Cleanup      func()
+	warningWriter io.Writer
+	envSource     *resolvedCluster
+	Manifest      *inventory.Manifest
+	ManifestPath  string
+	AgeKey        string
+	Source        inventory.ManifestSource
+	Cluster       string
+	ReleaseRepos  []string
+	Cleanup       func()
 
 	// Persona and ContextName describe the active CLI context (if any) at the
 	// time the manifest was resolved. Lifecycle commands gate on these so a
@@ -118,8 +119,8 @@ type resolvedCluster struct {
 	Persona     fwcfg.Persona
 	ContextName string
 	// ContextSystemTenantID is the last Quartermaster-resolved identity saved
-	// by provisioning or control-plane reconciliation. Live lifecycle commands
-	// use it as a cache hint and resolve through Quartermaster when absent.
+	// by provisioning or control-plane reconciliation. Deep doctor resolves it live;
+	// runtime rendering can use the saved value for Quartermaster recovery.
 	ContextSystemTenantID string
 
 	// ClusterOverridesContext is true when --cluster selected a cluster other
@@ -147,6 +148,10 @@ type resolvedCluster struct {
 	// every one of them the ledger lacks before any upgrade, so later dry-run pre-deploy gates count a missing expand
 	// migration in this set as applied. Only a dry-run sets it, so a real apply checks the ledger strictly.
 	dryRunExpandMigrations map[string]struct{}
+
+	bootstrapYAMLOnce sync.Once
+	bootstrapYAML     []byte
+	bootstrapYAMLErr  error
 
 	sharedEnvOnce         sync.Once
 	sharedEnv             map[string]string
@@ -432,6 +437,7 @@ func resolveClusterManifest(cmd *cobra.Command) (*resolvedCluster, error) {
 	}
 
 	return &resolvedCluster{
+		warningWriter:           cmd.ErrOrStderr(),
 		Manifest:                manifest,
 		ManifestPath:            rm.Path,
 		AgeKey:                  rm.AgeKey,
@@ -1826,8 +1832,9 @@ func doctorServiceProbe(name string, svc inventory.ServiceConfig) doctorProbe {
 // doctorControlPlane runs ControlPlaneReadiness, prints its section, and
 // returns the report plus next-steps derived from any warnings.
 func doctorControlPlane(cmd *cobra.Command, rc *resolvedCluster, serviceToken string, sharedEnv map[string]string, deep bool) (readiness.Report, []ux.NextStep) {
+	var identityWarning *readiness.Warning
 	manifest := rc.Manifest
-	systemTenantID := doctorContextSystemTenantID(rc)
+	systemTenantID := contextSystemTenantID(rc)
 	if !deep && systemTenantID == "" {
 		return readiness.Report{}, nil
 	}
@@ -1868,26 +1875,30 @@ func doctorControlPlane(cmd *cobra.Command, rc *resolvedCluster, serviceToken st
 		resolved, warning := doctorResolveSystemTenantID(systemTenantID, func() (string, error) {
 			return resolveSystemTenantIDViaQM(cmd.Context(), manifest, runtimeData, sess)
 		})
-		if warning != nil {
+		if warning != nil && resolved == "" {
 			report := readiness.Report{Checked: true, Warnings: []readiness.Warning{*warning}}
 			return renderDoctorControlPlane(cmd, "(unresolved)", qmAddr, report)
 		}
 		systemTenantID = resolved
+		identityWarning = warning
 	}
 	runtimeData["system_tenant_id"] = systemTenantID
 
 	// Deep checks use the same SSH-forwarded service endpoints as provisioning.
 	// Default checks remain unauthenticated and therefore unchecked.
 	report := buildControlPlaneReport(cmd.Context(), manifest, runtimeData, sess)
+	if identityWarning != nil {
+		report.Warnings = append(report.Warnings, *identityWarning)
+	}
 	return renderDoctorControlPlane(cmd, systemTenantID, qmAddr, report)
 }
 
-// doctorContextSystemTenantID is the system tenant UUID the active context
+// contextSystemTenantID is the system tenant UUID the active context
 // saved, used only when that context also supplied the manifest for its own
 // cluster. A manifest passed explicitly (--manifest, --gitops-dir) or another
 // --cluster may name a different platform, so its system tenant is resolved
 // from that platform's Quartermaster.
-func doctorContextSystemTenantID(rc *resolvedCluster) string {
+func contextSystemTenantID(rc *resolvedCluster) string {
 	if rc == nil {
 		return ""
 	}
@@ -1897,16 +1908,10 @@ func doctorContextSystemTenantID(rc *resolvedCluster) string {
 	return strings.TrimSpace(rc.ContextSystemTenantID)
 }
 
-// doctorResolveSystemTenantID returns the saved system tenant when there is
-// one, and otherwise resolves the bootstrap-declared system tenant alias
-// (bootstrap.SystemTenantAlias, the account gitops bootstrap.yaml refers to
-// as quartermaster.system_tenant) to its UUID through Quartermaster. A failed
-// resolution is a control-plane warning, so the check reports it instead of
-// passing unverified.
+// doctorResolveSystemTenantID verifies the saved identity against Quartermaster.
+// A stale identity is a warning; control-plane checks still use the live UUID.
 func doctorResolveSystemTenantID(saved string, viaQuartermaster func() (string, error)) (string, *readiness.Warning) {
-	if saved = strings.TrimSpace(saved); saved != "" {
-		return saved, nil
-	}
+	saved = strings.TrimSpace(saved)
 	id, err := viaQuartermaster()
 	if err == nil && strings.TrimSpace(id) == "" {
 		err = errors.New("empty UUID in the ResolveTenantAliases response")
@@ -1921,7 +1926,14 @@ func doctorResolveSystemTenantID(saved string, viaQuartermaster func() (string, 
 			},
 		}
 	}
-	return strings.TrimSpace(id), nil
+	id = strings.TrimSpace(id)
+	if saved != "" && saved != id {
+		return id, &readiness.Warning{
+			Subject: "control-plane.system-tenant",
+			Detail:  fmt.Sprintf("Saved system tenant %s differs from Quartermaster's %s; using Quartermaster's identity", saved, id),
+		}
+	}
+	return id, nil
 }
 
 func renderDoctorControlPlane(cmd *cobra.Command, systemTenantID, qmAddr string, report readiness.Report) (readiness.Report, []ux.NextStep) {
@@ -2056,4 +2068,12 @@ func printHealthResult(cmd *cobra.Command, serviceName string, result *health.Ch
 			fmt.Fprintf(cmd.OutOrStdout(), "    %s: %s\n", k, v)
 		}
 	}
+}
+
+// warningOutput preserves the command's configured diagnostic stream.
+func (rc *resolvedCluster) warningOutput() io.Writer {
+	if rc.warningWriter != nil {
+		return rc.warningWriter
+	}
+	return os.Stderr
 }

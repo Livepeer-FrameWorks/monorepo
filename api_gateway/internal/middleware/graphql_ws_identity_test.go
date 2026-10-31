@@ -472,3 +472,25 @@ func TestGraphQLWebsocketClosesAtSessionExpiry(t *testing.T) {
 		t.Fatalf("socket closed %s before its session expired", early)
 	}
 }
+
+func TestAPIWebsocketTracksItsOwnerForDeactivation(t *testing.T) {
+	identity := bearerIdentity("fw_token", &AuthResult{AuthType: "api_token", UserID: "user-1", TenantID: "tenant-1", TokenID: "token-1"})
+	if identity.userID != "user-1" {
+		t.Fatalf("API socket owner=%q, want user-1 for account deactivation", identity.userID)
+	}
+}
+
+func TestAccountDeactivationClosesOnlyItsOwnersAPISockets(t *testing.T) {
+	clients, _ := switchableClients(t)
+	sessions := NewWebsocketSessions(nil)
+	connection, _ := openSubscription(t, clients, "Bearer fw_api_token_value", sessions, 0)
+	if count := sessions.CloseUserAPITokens("tenant-1", "another-user"); count != 0 {
+		t.Fatalf("another user closed %d sockets", count)
+	}
+	if count := sessions.CloseUserAPITokens("tenant-1", "user-1"); count != 1 {
+		t.Fatalf("deactivation closed %d sockets, want 1", count)
+	}
+	if code := awaitClose(t, connection, 2*time.Second); code != WebsocketCloseForbidden {
+		t.Fatalf("deactivated API socket close code=%d", code)
+	}
+}

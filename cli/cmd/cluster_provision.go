@@ -688,7 +688,7 @@ func collectRuntimeForReadinessOnly(rc *resolvedCluster) map[string]any {
 	if qmAddr, err := resolveServiceGRPCAddr(rc.Manifest, "quartermaster", defaultGRPCPort("quartermaster")); err == nil {
 		data["quartermaster_grpc_addr"] = qmAddr
 	}
-	if id := doctorContextSystemTenantID(rc); id != "" {
+	if id := contextSystemTenantID(rc); id != "" {
 		data["system_tenant_id"] = id
 	}
 	// service_token comes from manifest shared env; we can't read that here

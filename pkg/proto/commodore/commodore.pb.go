@@ -47,6 +47,8 @@ const (
 	StreamKeyRejectionReason_STREAM_KEY_REJECTION_PROTOCOL_NOT_SUPPORTED StreamKeyRejectionReason = 8
 	StreamKeyRejectionReason_STREAM_KEY_REJECTION_CLUSTER_UNHEALTHY      StreamKeyRejectionReason = 9
 	StreamKeyRejectionReason_STREAM_KEY_REJECTION_DUPLICATE_INGEST       StreamKeyRejectionReason = 10
+	// The operator grant deadline passed; this is independent of prepaid balance.
+	StreamKeyRejectionReason_STREAM_KEY_REJECTION_GRANT_EXPIRED StreamKeyRejectionReason = 11
 )
 
 // Enum value maps for StreamKeyRejectionReason.
@@ -63,6 +65,7 @@ var (
 		8:  "STREAM_KEY_REJECTION_PROTOCOL_NOT_SUPPORTED",
 		9:  "STREAM_KEY_REJECTION_CLUSTER_UNHEALTHY",
 		10: "STREAM_KEY_REJECTION_DUPLICATE_INGEST",
+		11: "STREAM_KEY_REJECTION_GRANT_EXPIRED",
 	}
 	StreamKeyRejectionReason_value = map[string]int32{
 		"STREAM_KEY_REJECTION_UNSPECIFIED":            0,
@@ -76,6 +79,7 @@ var (
 		"STREAM_KEY_REJECTION_PROTOCOL_NOT_SUPPORTED": 8,
 		"STREAM_KEY_REJECTION_CLUSTER_UNHEALTHY":      9,
 		"STREAM_KEY_REJECTION_DUPLICATE_INGEST":       10,
+		"STREAM_KEY_REJECTION_GRANT_EXPIRED":          11,
 	}
 )
 
@@ -15290,6 +15294,437 @@ func (x *ApproveDeviceAuthorizationResponse) GetClientId() string {
 	return ""
 }
 
+// Operator access change scoped to one tenant and one user.
+type AdminSetUserActiveRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"` // Tenant UUID.
+	UserId        string                 `protobuf:"bytes,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`       // User UUID; mutually exclusive with email.
+	Email         string                 `protobuf:"bytes,3,opt,name=email,proto3" json:"email,omitempty"`                       // User email within the tenant; mutually exclusive with user_id.
+	Active        bool                   `protobuf:"varint,4,opt,name=active,proto3" json:"active,omitempty"`                    // Whether the user may authenticate and publish.
+	Reason        string                 `protobuf:"bytes,5,opt,name=reason,proto3" json:"reason,omitempty"`                     // Required private operator audit reason.
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AdminSetUserActiveRequest) Reset() {
+	*x = AdminSetUserActiveRequest{}
+	mi := &file_commodore_proto_msgTypes[205]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AdminSetUserActiveRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AdminSetUserActiveRequest) ProtoMessage() {}
+
+func (x *AdminSetUserActiveRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_commodore_proto_msgTypes[205]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AdminSetUserActiveRequest.ProtoReflect.Descriptor instead.
+func (*AdminSetUserActiveRequest) Descriptor() ([]byte, []int) {
+	return file_commodore_proto_rawDescGZIP(), []int{205}
+}
+
+func (x *AdminSetUserActiveRequest) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *AdminSetUserActiveRequest) GetUserId() string {
+	if x != nil {
+		return x.UserId
+	}
+	return ""
+}
+
+func (x *AdminSetUserActiveRequest) GetEmail() string {
+	if x != nil {
+		return x.Email
+	}
+	return ""
+}
+
+func (x *AdminSetUserActiveRequest) GetActive() bool {
+	if x != nil {
+		return x.Active
+	}
+	return false
+}
+
+func (x *AdminSetUserActiveRequest) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+// AdminSetUserActiveResponse reports the user identity and resulting access state.
+type AdminSetUserActiveResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	UserId        string                 `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	TenantId      string                 `protobuf:"bytes,2,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	Email         string                 `protobuf:"bytes,3,opt,name=email,proto3" json:"email,omitempty"`
+	Role          string                 `protobuf:"bytes,4,opt,name=role,proto3" json:"role,omitempty"`
+	IsActive      bool                   `protobuf:"varint,5,opt,name=is_active,json=isActive,proto3" json:"is_active,omitempty"`
+	Verified      bool                   `protobuf:"varint,6,opt,name=verified,proto3" json:"verified,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AdminSetUserActiveResponse) Reset() {
+	*x = AdminSetUserActiveResponse{}
+	mi := &file_commodore_proto_msgTypes[206]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AdminSetUserActiveResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AdminSetUserActiveResponse) ProtoMessage() {}
+
+func (x *AdminSetUserActiveResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_commodore_proto_msgTypes[206]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AdminSetUserActiveResponse.ProtoReflect.Descriptor instead.
+func (*AdminSetUserActiveResponse) Descriptor() ([]byte, []int) {
+	return file_commodore_proto_rawDescGZIP(), []int{206}
+}
+
+func (x *AdminSetUserActiveResponse) GetUserId() string {
+	if x != nil {
+		return x.UserId
+	}
+	return ""
+}
+
+func (x *AdminSetUserActiveResponse) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *AdminSetUserActiveResponse) GetEmail() string {
+	if x != nil {
+		return x.Email
+	}
+	return ""
+}
+
+func (x *AdminSetUserActiveResponse) GetRole() string {
+	if x != nil {
+		return x.Role
+	}
+	return ""
+}
+
+func (x *AdminSetUserActiveResponse) GetIsActive() bool {
+	if x != nil {
+		return x.IsActive
+	}
+	return false
+}
+
+func (x *AdminSetUserActiveResponse) GetVerified() bool {
+	if x != nil {
+		return x.Verified
+	}
+	return false
+}
+
+// AdminDeactivateTenantRequest confirms permanent closure of an existing tenant.
+type AdminDeactivateTenantRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`       // Tenant UUID; the system tenant cannot be closed.
+	Reason        string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`                           // Required private operator audit reason.
+	TenantName    string                 `protobuf:"bytes,3,opt,name=tenant_name,json=tenantName,proto3" json:"tenant_name,omitempty"` // Exact Quartermaster name confirming permanent closure.
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AdminDeactivateTenantRequest) Reset() {
+	*x = AdminDeactivateTenantRequest{}
+	mi := &file_commodore_proto_msgTypes[207]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AdminDeactivateTenantRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AdminDeactivateTenantRequest) ProtoMessage() {}
+
+func (x *AdminDeactivateTenantRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_commodore_proto_msgTypes[207]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AdminDeactivateTenantRequest.ProtoReflect.Descriptor instead.
+func (*AdminDeactivateTenantRequest) Descriptor() ([]byte, []int) {
+	return file_commodore_proto_rawDescGZIP(), []int{207}
+}
+
+func (x *AdminDeactivateTenantRequest) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *AdminDeactivateTenantRequest) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+func (x *AdminDeactivateTenantRequest) GetTenantName() string {
+	if x != nil {
+		return x.TenantName
+	}
+	return ""
+}
+
+// Operator-only, tenant-scoped account lifecycle audit page.
+type AdminListAccountHistoryRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"` // Tenant UUID.
+	Limit         int32                  `protobuf:"varint,2,opt,name=limit,proto3" json:"limit,omitempty"`                      // Page size, 1..500; zero selects the default of 100.
+	Before        string                 `protobuf:"bytes,3,opt,name=before,proto3" json:"before,omitempty"`                     // Opaque cursor from the preceding page; empty selects the newest entries.
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AdminListAccountHistoryRequest) Reset() {
+	*x = AdminListAccountHistoryRequest{}
+	mi := &file_commodore_proto_msgTypes[208]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AdminListAccountHistoryRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AdminListAccountHistoryRequest) ProtoMessage() {}
+
+func (x *AdminListAccountHistoryRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_commodore_proto_msgTypes[208]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AdminListAccountHistoryRequest.ProtoReflect.Descriptor instead.
+func (*AdminListAccountHistoryRequest) Descriptor() ([]byte, []int) {
+	return file_commodore_proto_rawDescGZIP(), []int{208}
+}
+
+func (x *AdminListAccountHistoryRequest) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *AdminListAccountHistoryRequest) GetLimit() int32 {
+	if x != nil {
+		return x.Limit
+	}
+	return 0
+}
+
+func (x *AdminListAccountHistoryRequest) GetBefore() string {
+	if x != nil {
+		return x.Before
+	}
+	return ""
+}
+
+// OperatorAccountAuditEntry is one private account lifecycle action.
+type OperatorAccountAuditEntry struct {
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	Id          string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`                                        // Audit entry UUID.
+	ActorUserId string                 `protobuf:"bytes,2,opt,name=actor_user_id,json=actorUserId,proto3" json:"actor_user_id,omitempty"` // Platform operator user UUID.
+	TargetId    string                 `protobuf:"bytes,3,opt,name=target_id,json=targetId,proto3" json:"target_id,omitempty"`            // Affected user or tenant UUID.
+	Action      string                 `protobuf:"bytes,4,opt,name=action,proto3" json:"action,omitempty"`                                // user_active:true, user_active:false, or tenant_closed.
+	Reason      string                 `protobuf:"bytes,5,opt,name=reason,proto3" json:"reason,omitempty"`                                // Private operator reason, never exposed to tenant credentials.
+	// Time the operator action was recorded.
+	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *OperatorAccountAuditEntry) Reset() {
+	*x = OperatorAccountAuditEntry{}
+	mi := &file_commodore_proto_msgTypes[209]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *OperatorAccountAuditEntry) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*OperatorAccountAuditEntry) ProtoMessage() {}
+
+func (x *OperatorAccountAuditEntry) ProtoReflect() protoreflect.Message {
+	mi := &file_commodore_proto_msgTypes[209]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use OperatorAccountAuditEntry.ProtoReflect.Descriptor instead.
+func (*OperatorAccountAuditEntry) Descriptor() ([]byte, []int) {
+	return file_commodore_proto_rawDescGZIP(), []int{209}
+}
+
+func (x *OperatorAccountAuditEntry) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *OperatorAccountAuditEntry) GetActorUserId() string {
+	if x != nil {
+		return x.ActorUserId
+	}
+	return ""
+}
+
+func (x *OperatorAccountAuditEntry) GetTargetId() string {
+	if x != nil {
+		return x.TargetId
+	}
+	return ""
+}
+
+func (x *OperatorAccountAuditEntry) GetAction() string {
+	if x != nil {
+		return x.Action
+	}
+	return ""
+}
+
+func (x *OperatorAccountAuditEntry) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+func (x *OperatorAccountAuditEntry) GetCreatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return nil
+}
+
+// AdminListAccountHistoryResponse is a page of private account lifecycle actions.
+type AdminListAccountHistoryResponse struct {
+	state         protoimpl.MessageState       `protogen:"open.v1"`
+	Entries       []*OperatorAccountAuditEntry `protobuf:"bytes,1,rep,name=entries,proto3" json:"entries,omitempty"`
+	HasMore       bool                         `protobuf:"varint,2,opt,name=has_more,json=hasMore,proto3" json:"has_more,omitempty"`         // Older entries exist beyond this page.
+	NextCursor    string                       `protobuf:"bytes,3,opt,name=next_cursor,json=nextCursor,proto3" json:"next_cursor,omitempty"` // Pass as before to read the next page.
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AdminListAccountHistoryResponse) Reset() {
+	*x = AdminListAccountHistoryResponse{}
+	mi := &file_commodore_proto_msgTypes[210]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AdminListAccountHistoryResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AdminListAccountHistoryResponse) ProtoMessage() {}
+
+func (x *AdminListAccountHistoryResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_commodore_proto_msgTypes[210]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AdminListAccountHistoryResponse.ProtoReflect.Descriptor instead.
+func (*AdminListAccountHistoryResponse) Descriptor() ([]byte, []int) {
+	return file_commodore_proto_rawDescGZIP(), []int{210}
+}
+
+func (x *AdminListAccountHistoryResponse) GetEntries() []*OperatorAccountAuditEntry {
+	if x != nil {
+		return x.Entries
+	}
+	return nil
+}
+
+func (x *AdminListAccountHistoryResponse) GetHasMore() bool {
+	if x != nil {
+		return x.HasMore
+	}
+	return false
+}
+
+func (x *AdminListAccountHistoryResponse) GetNextCursor() string {
+	if x != nil {
+		return x.NextCursor
+	}
+	return ""
+}
+
 var File_commodore_proto protoreflect.FileDescriptor
 
 const file_commodore_proto_rawDesc = "" +
@@ -16730,7 +17165,42 @@ const file_commodore_proto_rawDesc = "" +
 	"\tuser_code\x18\x03 \x01(\tR\buserCode\"[\n" +
 	"\"ApproveDeviceAuthorizationResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x1b\n" +
-	"\tclient_id\x18\x02 \x01(\tR\bclientId*\xf4\x03\n" +
+	"\tclient_id\x18\x02 \x01(\tR\bclientId\"\x97\x01\n" +
+	"\x19AdminSetUserActiveRequest\x12\x1b\n" +
+	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x17\n" +
+	"\auser_id\x18\x02 \x01(\tR\x06userId\x12\x14\n" +
+	"\x05email\x18\x03 \x01(\tR\x05email\x12\x16\n" +
+	"\x06active\x18\x04 \x01(\bR\x06active\x12\x16\n" +
+	"\x06reason\x18\x05 \x01(\tR\x06reason\"\xb5\x01\n" +
+	"\x1aAdminSetUserActiveResponse\x12\x17\n" +
+	"\auser_id\x18\x01 \x01(\tR\x06userId\x12\x1b\n" +
+	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12\x14\n" +
+	"\x05email\x18\x03 \x01(\tR\x05email\x12\x12\n" +
+	"\x04role\x18\x04 \x01(\tR\x04role\x12\x1b\n" +
+	"\tis_active\x18\x05 \x01(\bR\bisActive\x12\x1a\n" +
+	"\bverified\x18\x06 \x01(\bR\bverified\"t\n" +
+	"\x1cAdminDeactivateTenantRequest\x12\x1b\n" +
+	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x16\n" +
+	"\x06reason\x18\x02 \x01(\tR\x06reason\x12\x1f\n" +
+	"\vtenant_name\x18\x03 \x01(\tR\n" +
+	"tenantName\"k\n" +
+	"\x1eAdminListAccountHistoryRequest\x12\x1b\n" +
+	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x14\n" +
+	"\x05limit\x18\x02 \x01(\x05R\x05limit\x12\x16\n" +
+	"\x06before\x18\x03 \x01(\tR\x06before\"\xd7\x01\n" +
+	"\x19OperatorAccountAuditEntry\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\"\n" +
+	"\ractor_user_id\x18\x02 \x01(\tR\vactorUserId\x12\x1b\n" +
+	"\ttarget_id\x18\x03 \x01(\tR\btargetId\x12\x16\n" +
+	"\x06action\x18\x04 \x01(\tR\x06action\x12\x16\n" +
+	"\x06reason\x18\x05 \x01(\tR\x06reason\x129\n" +
+	"\n" +
+	"created_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"\x9d\x01\n" +
+	"\x1fAdminListAccountHistoryResponse\x12>\n" +
+	"\aentries\x18\x01 \x03(\v2$.commodore.OperatorAccountAuditEntryR\aentries\x12\x19\n" +
+	"\bhas_more\x18\x02 \x01(\bR\ahasMore\x12\x1f\n" +
+	"\vnext_cursor\x18\x03 \x01(\tR\n" +
+	"nextCursor*\x9c\x04\n" +
 	"\x18StreamKeyRejectionReason\x12$\n" +
 	" STREAM_KEY_REJECTION_UNSPECIFIED\x10\x00\x12$\n" +
 	" STREAM_KEY_REJECTION_INVALID_KEY\x10\x01\x12&\n" +
@@ -16743,7 +17213,8 @@ const file_commodore_proto_rawDesc = "" +
 	"+STREAM_KEY_REJECTION_PROTOCOL_NOT_SUPPORTED\x10\b\x12*\n" +
 	"&STREAM_KEY_REJECTION_CLUSTER_UNHEALTHY\x10\t\x12)\n" +
 	"%STREAM_KEY_REJECTION_DUPLICATE_INGEST\x10\n" +
-	"*f\n" +
+	"\x12&\n" +
+	"\"STREAM_KEY_REJECTION_GRANT_EXPIRED\x10\v*f\n" +
 	"\x10MonitoringToggle\x12\x1d\n" +
 	"\x19MONITORING_TOGGLE_INHERIT\x10\x00\x12\x18\n" +
 	"\x14MONITORING_TOGGLE_ON\x10\x01\x12\x19\n" +
@@ -16837,7 +17308,7 @@ const file_commodore_proto_rawDesc = "" +
 	"\x1bRequestMediaAuthorityReplay\x12-.commodore.RequestMediaAuthorityReplayRequest\x1a..commodore.RequestMediaAuthorityReplayResponse\x12d\n" +
 	"\x13FetchMediaAuthority\x12%.commodore.FetchMediaAuthorityRequest\x1a&.commodore.FetchMediaAuthorityResponse\x12\\\n" +
 	"\x17ReportMediaAuthorityUse\x12).commodore.ReportMediaAuthorityUseRequest\x1a\x16.google.protobuf.Empty\x12r\n" +
-	"\"ReportMediaCellPlacementCapability\x124.commodore.ReportMediaCellPlacementCapabilityRequest\x1a\x16.google.protobuf.Empty2\x83\x11\n" +
+	"\"ReportMediaCellPlacementCapability\x124.commodore.ReportMediaCellPlacementCapabilityRequest\x1a\x16.google.protobuf.Empty2\xb2\x13\n" +
 	"\vUserService\x129\n" +
 	"\x05Login\x12\x17.commodore.LoginRequest\x1a\x17.commodore.AuthResponse\x12C\n" +
 	"\bRegister\x12\x1a.commodore.RegisterRequest\x1a\x1b.commodore.RegisterResponse\x12=\n" +
@@ -16864,7 +17335,10 @@ const file_commodore_proto_rawDesc = "" +
 	"\x17PollDeviceAuthorization\x12).commodore.PollDeviceAuthorizationRequest\x1a\x17.commodore.AuthResponse\x12v\n" +
 	"\x19LookupDeviceAuthorization\x12+.commodore.LookupDeviceAuthorizationRequest\x1a,.commodore.LookupDeviceAuthorizationResponse\x12y\n" +
 	"\x1aApproveDeviceAuthorization\x12,.commodore.ApproveDeviceAuthorizationRequest\x1a-.commodore.ApproveDeviceAuthorizationResponse\x12m\n" +
-	"\x16AdminLookupUserByEmail\x12(.commodore.AdminLookupUserByEmailRequest\x1a).commodore.AdminLookupUserByEmailResponse2\xb6\x04\n" +
+	"\x16AdminLookupUserByEmail\x12(.commodore.AdminLookupUserByEmailRequest\x1a).commodore.AdminLookupUserByEmailResponse\x12a\n" +
+	"\x12AdminSetUserActive\x12$.commodore.AdminSetUserActiveRequest\x1a%.commodore.AdminSetUserActiveResponse\x12p\n" +
+	"\x17AdminListAccountHistory\x12).commodore.AdminListAccountHistoryRequest\x1a*.commodore.AdminListAccountHistoryResponse\x12X\n" +
+	"\x15AdminDeactivateTenant\x12'.commodore.AdminDeactivateTenantRequest\x1a\x16.google.protobuf.Empty2\xb6\x04\n" +
 	"\rStreamService\x12O\n" +
 	"\fCreateStream\x12\x1e.commodore.CreateStreamRequest\x1a\x1f.commodore.CreateStreamResponse\x12;\n" +
 	"\tGetStream\x12\x1b.commodore.GetStreamRequest\x1a\x11.commodore.Stream\x12X\n" +
@@ -16933,306 +17407,312 @@ func file_commodore_proto_rawDescGZIP() []byte {
 }
 
 var file_commodore_proto_enumTypes = make([]protoimpl.EnumInfo, 6)
-var file_commodore_proto_msgTypes = make([]protoimpl.MessageInfo, 207)
+var file_commodore_proto_msgTypes = make([]protoimpl.MessageInfo, 213)
 var file_commodore_proto_goTypes = []any{
-	(StreamKeyRejectionReason)(0),                      // 0: commodore.StreamKeyRejectionReason
-	(MonitoringToggle)(0),                              // 1: commodore.MonitoringToggle
-	(ArtifactAssetType)(0),                             // 2: commodore.ArtifactAssetType
-	(SourceLocationMode)(0),                            // 3: commodore.SourceLocationMode
-	(PushTargetStatusReason)(0),                        // 4: commodore.PushTargetStatusReason
-	(MediaRetentionTarget)(0),                          // 5: commodore.MediaRetentionTarget
-	(*ReportMediaCellPlacementCapabilityRequest)(nil),  // 6: commodore.ReportMediaCellPlacementCapabilityRequest
-	(*RequestMediaAuthorityRefreshRequest)(nil),        // 7: commodore.RequestMediaAuthorityRefreshRequest
-	(*RequestMediaAuthorityRefreshResponse)(nil),       // 8: commodore.RequestMediaAuthorityRefreshResponse
-	(*RequestMediaAuthorityReplayRequest)(nil),         // 9: commodore.RequestMediaAuthorityReplayRequest
-	(*HeldMediaAuthority)(nil),                         // 10: commodore.HeldMediaAuthority
-	(*RequestMediaAuthorityReplayResponse)(nil),        // 11: commodore.RequestMediaAuthorityReplayResponse
-	(*FetchMediaAuthorityRequest)(nil),                 // 12: commodore.FetchMediaAuthorityRequest
-	(*FetchMediaAuthorityResponse)(nil),                // 13: commodore.FetchMediaAuthorityResponse
-	(*MediaAuthorityUse)(nil),                          // 14: commodore.MediaAuthorityUse
-	(*ReportMediaAuthorityUseRequest)(nil),             // 15: commodore.ReportMediaAuthorityUseRequest
-	(*ValidateStreamKeyRequest)(nil),                   // 16: commodore.ValidateStreamKeyRequest
-	(*ValidateStreamKeyResponse)(nil),                  // 17: commodore.ValidateStreamKeyResponse
-	(*ResolveStreamContextRequest)(nil),                // 18: commodore.ResolveStreamContextRequest
-	(*ResolveStreamContextResponse)(nil),               // 19: commodore.ResolveStreamContextResponse
-	(*ListManagedStreamsRequest)(nil),                  // 20: commodore.ListManagedStreamsRequest
-	(*ManagedStreamRow)(nil),                           // 21: commodore.ManagedStreamRow
-	(*ListManagedStreamsResponse)(nil),                 // 22: commodore.ListManagedStreamsResponse
-	(*ListStreamMonitoringRequest)(nil),                // 23: commodore.ListStreamMonitoringRequest
-	(*StreamMonitoringRow)(nil),                        // 24: commodore.StreamMonitoringRow
-	(*ListStreamMonitoringResponse)(nil),               // 25: commodore.ListStreamMonitoringResponse
-	(*RecordStreamActiveClusterRequest)(nil),           // 26: commodore.RecordStreamActiveClusterRequest
-	(*RecordStreamActiveClusterResponse)(nil),          // 27: commodore.RecordStreamActiveClusterResponse
-	(*RegisterStreamThumbnailServingCellRequest)(nil),  // 28: commodore.RegisterStreamThumbnailServingCellRequest
-	(*RegisterStreamThumbnailServingCellResponse)(nil), // 29: commodore.RegisterStreamThumbnailServingCellResponse
-	(*ClearStreamActiveClusterRequest)(nil),            // 30: commodore.ClearStreamActiveClusterRequest
-	(*ClearStreamActiveClusterResponse)(nil),           // 31: commodore.ClearStreamActiveClusterResponse
-	(*ActiveIngestStream)(nil),                         // 32: commodore.ActiveIngestStream
-	(*SyncActiveIngestPlacementRequest)(nil),           // 33: commodore.SyncActiveIngestPlacementRequest
-	(*SyncActiveIngestPlacementResponse)(nil),          // 34: commodore.SyncActiveIngestPlacementResponse
-	(*ResolvePlaybackIDRequest)(nil),                   // 35: commodore.ResolvePlaybackIDRequest
-	(*ResolvePlaybackIDResponse)(nil),                  // 36: commodore.ResolvePlaybackIDResponse
-	(*ResolvePullSourceByInternalNameRequest)(nil),     // 37: commodore.ResolvePullSourceByInternalNameRequest
-	(*ResolvePullSourceByInternalNameResponse)(nil),    // 38: commodore.ResolvePullSourceByInternalNameResponse
-	(*ResolvePlaybackPolicyRequest)(nil),               // 39: commodore.ResolvePlaybackPolicyRequest
-	(*RecordSigningKeyUseRequest)(nil),                 // 40: commodore.RecordSigningKeyUseRequest
-	(*PlaybackSigningKey)(nil),                         // 41: commodore.PlaybackSigningKey
-	(*PlaybackJwtPolicy)(nil),                          // 42: commodore.PlaybackJwtPolicy
-	(*PlaybackWebhookPolicy)(nil),                      // 43: commodore.PlaybackWebhookPolicy
-	(*ResolvePlaybackPolicyResponse)(nil),              // 44: commodore.ResolvePlaybackPolicyResponse
-	(*ResolveInternalNameRequest)(nil),                 // 45: commodore.ResolveInternalNameRequest
-	(*ResolveInternalNameResponse)(nil),                // 46: commodore.ResolveInternalNameResponse
-	(*ValidateAPITokenRequest)(nil),                    // 47: commodore.ValidateAPITokenRequest
-	(*ValidateAPITokenResponse)(nil),                   // 48: commodore.ValidateAPITokenResponse
-	(*ValidateSessionRequest)(nil),                     // 49: commodore.ValidateSessionRequest
-	(*ValidateSessionResponse)(nil),                    // 50: commodore.ValidateSessionResponse
-	(*ListRecentSessionRevocationsRequest)(nil),        // 51: commodore.ListRecentSessionRevocationsRequest
-	(*SessionRevocation)(nil),                          // 52: commodore.SessionRevocation
-	(*ListRecentSessionRevocationsResponse)(nil),       // 53: commodore.ListRecentSessionRevocationsResponse
-	(*MintMistAdminSessionRequest)(nil),                // 54: commodore.MintMistAdminSessionRequest
-	(*MintMistAdminSessionResponse)(nil),               // 55: commodore.MintMistAdminSessionResponse
-	(*ValidateMistAdminSessionRequest)(nil),            // 56: commodore.ValidateMistAdminSessionRequest
-	(*ValidateMistAdminSessionResponse)(nil),           // 57: commodore.ValidateMistAdminSessionResponse
-	(*RegisterDVRRequest)(nil),                         // 58: commodore.RegisterDVRRequest
-	(*RegisterDVRResponse)(nil),                        // 59: commodore.RegisterDVRResponse
-	(*UpdateDVRRetentionRequest)(nil),                  // 60: commodore.UpdateDVRRetentionRequest
-	(*UpdateDVRRetentionResponse)(nil),                 // 61: commodore.UpdateDVRRetentionResponse
-	(*MediaTrack)(nil),                                 // 62: commodore.MediaTrack
-	(*UpdateArtifactCatalogSnapshotRequest)(nil),       // 63: commodore.UpdateArtifactCatalogSnapshotRequest
-	(*UpdateArtifactCatalogSnapshotResponse)(nil),      // 64: commodore.UpdateArtifactCatalogSnapshotResponse
-	(*ResolveClipHashRequest)(nil),                     // 65: commodore.ResolveClipHashRequest
-	(*ResolveClipHashResponse)(nil),                    // 66: commodore.ResolveClipHashResponse
-	(*ResolveDVRHashRequest)(nil),                      // 67: commodore.ResolveDVRHashRequest
-	(*ResolveDVRHashResponse)(nil),                     // 68: commodore.ResolveDVRHashResponse
-	(*ResolveIdentifierRequest)(nil),                   // 69: commodore.ResolveIdentifierRequest
-	(*ResolveIdentifierResponse)(nil),                  // 70: commodore.ResolveIdentifierResponse
-	(*ResolveVodHashRequest)(nil),                      // 71: commodore.ResolveVodHashRequest
-	(*ResolveVodHashResponse)(nil),                     // 72: commodore.ResolveVodHashResponse
-	(*ResolveVodIDRequest)(nil),                        // 73: commodore.ResolveVodIDRequest
-	(*ResolveVodIDResponse)(nil),                       // 74: commodore.ResolveVodIDResponse
-	(*MintChapterPlaybackIDRequest)(nil),               // 75: commodore.MintChapterPlaybackIDRequest
-	(*MintChapterPlaybackIDResponse)(nil),              // 76: commodore.MintChapterPlaybackIDResponse
-	(*ResolveChapterPlaybackIDRequest)(nil),            // 77: commodore.ResolveChapterPlaybackIDRequest
-	(*ResolveChapterPlaybackIDResponse)(nil),           // 78: commodore.ResolveChapterPlaybackIDResponse
-	(*GetTenantProcessesJSONRequest)(nil),              // 79: commodore.GetTenantProcessesJSONRequest
-	(*GetTenantProcessesJSONResponse)(nil),             // 80: commodore.GetTenantProcessesJSONResponse
-	(*ListStorageArtifactsRequest)(nil),                // 81: commodore.ListStorageArtifactsRequest
-	(*StorageArtifactInfo)(nil),                        // 82: commodore.StorageArtifactInfo
-	(*ListStorageArtifactsResponse)(nil),               // 83: commodore.ListStorageArtifactsResponse
-	(*ResolveArtifactPlaybackIDRequest)(nil),           // 84: commodore.ResolveArtifactPlaybackIDRequest
-	(*ResolveArtifactPlaybackIDResponse)(nil),          // 85: commodore.ResolveArtifactPlaybackIDResponse
-	(*ResolveArtifactInternalNameRequest)(nil),         // 86: commodore.ResolveArtifactInternalNameRequest
-	(*ResolveArtifactInternalNameResponse)(nil),        // 87: commodore.ResolveArtifactInternalNameResponse
-	(*GetOrCreateWalletUserRequest)(nil),               // 88: commodore.GetOrCreateWalletUserRequest
-	(*GetOrCreateWalletUserResponse)(nil),              // 89: commodore.GetOrCreateWalletUserResponse
-	(*GetTenantUserCountRequest)(nil),                  // 90: commodore.GetTenantUserCountRequest
-	(*GetTenantUserCountResponse)(nil),                 // 91: commodore.GetTenantUserCountResponse
-	(*GetTenantPrimaryUserRequest)(nil),                // 92: commodore.GetTenantPrimaryUserRequest
-	(*GetTenantPrimaryUserResponse)(nil),               // 93: commodore.GetTenantPrimaryUserResponse
-	(*CreateUserInTenantRequest)(nil),                  // 94: commodore.CreateUserInTenantRequest
-	(*CreateUserInTenantResponse)(nil),                 // 95: commodore.CreateUserInTenantResponse
-	(*AdminLookupUserByEmailRequest)(nil),              // 96: commodore.AdminLookupUserByEmailRequest
-	(*AdminLookupUserByEmailResponse)(nil),             // 97: commodore.AdminLookupUserByEmailResponse
-	(*LoginRequest)(nil),                               // 98: commodore.LoginRequest
-	(*BehaviorData)(nil),                               // 99: commodore.BehaviorData
-	(*RegisterRequest)(nil),                            // 100: commodore.RegisterRequest
-	(*AuthResponse)(nil),                               // 101: commodore.AuthResponse
-	(*RegisterResponse)(nil),                           // 102: commodore.RegisterResponse
-	(*GetMeRequest)(nil),                               // 103: commodore.GetMeRequest
-	(*LogoutRequest)(nil),                              // 104: commodore.LogoutRequest
-	(*LogoutResponse)(nil),                             // 105: commodore.LogoutResponse
-	(*RefreshTokenRequest)(nil),                        // 106: commodore.RefreshTokenRequest
-	(*VerifyEmailRequest)(nil),                         // 107: commodore.VerifyEmailRequest
-	(*VerifyEmailResponse)(nil),                        // 108: commodore.VerifyEmailResponse
-	(*ResendVerificationRequest)(nil),                  // 109: commodore.ResendVerificationRequest
-	(*ResendVerificationResponse)(nil),                 // 110: commodore.ResendVerificationResponse
-	(*ForgotPasswordRequest)(nil),                      // 111: commodore.ForgotPasswordRequest
-	(*ForgotPasswordResponse)(nil),                     // 112: commodore.ForgotPasswordResponse
-	(*ResetPasswordRequest)(nil),                       // 113: commodore.ResetPasswordRequest
-	(*ResetPasswordResponse)(nil),                      // 114: commodore.ResetPasswordResponse
-	(*UpdateMeRequest)(nil),                            // 115: commodore.UpdateMeRequest
-	(*UpdateNewsletterRequest)(nil),                    // 116: commodore.UpdateNewsletterRequest
-	(*UpdateNewsletterResponse)(nil),                   // 117: commodore.UpdateNewsletterResponse
-	(*GetNewsletterStatusRequest)(nil),                 // 118: commodore.GetNewsletterStatusRequest
-	(*GetNewsletterStatusResponse)(nil),                // 119: commodore.GetNewsletterStatusResponse
-	(*IssueWalletChallengeRequest)(nil),                // 120: commodore.IssueWalletChallengeRequest
-	(*IssueWalletChallengeResponse)(nil),               // 121: commodore.IssueWalletChallengeResponse
-	(*WalletLoginRequest)(nil),                         // 122: commodore.WalletLoginRequest
-	(*LinkWalletRequest)(nil),                          // 123: commodore.LinkWalletRequest
-	(*UnlinkWalletRequest)(nil),                        // 124: commodore.UnlinkWalletRequest
-	(*UnlinkWalletResponse)(nil),                       // 125: commodore.UnlinkWalletResponse
-	(*ListWalletsRequest)(nil),                         // 126: commodore.ListWalletsRequest
-	(*ListWalletsResponse)(nil),                        // 127: commodore.ListWalletsResponse
-	(*WalletIdentity)(nil),                             // 128: commodore.WalletIdentity
-	(*LinkEmailRequest)(nil),                           // 129: commodore.LinkEmailRequest
-	(*LinkEmailResponse)(nil),                          // 130: commodore.LinkEmailResponse
-	(*User)(nil),                                       // 131: commodore.User
-	(*CreateStreamRequest)(nil),                        // 132: commodore.CreateStreamRequest
-	(*SourceLocationCluster)(nil),                      // 133: commodore.SourceLocationCluster
-	(*StreamSourceLocation)(nil),                       // 134: commodore.StreamSourceLocation
-	(*CreateStreamResponse)(nil),                       // 135: commodore.CreateStreamResponse
-	(*GetStreamRequest)(nil),                           // 136: commodore.GetStreamRequest
-	(*GetStreamsBatchRequest)(nil),                     // 137: commodore.GetStreamsBatchRequest
-	(*GetStreamsBatchResponse)(nil),                    // 138: commodore.GetStreamsBatchResponse
-	(*Stream)(nil),                                     // 139: commodore.Stream
-	(*PullSourceAllowedClustersInput)(nil),             // 140: commodore.PullSourceAllowedClustersInput
-	(*PullSourceInput)(nil),                            // 141: commodore.PullSourceInput
-	(*PullSourceView)(nil),                             // 142: commodore.PullSourceView
-	(*ManagedSourceView)(nil),                          // 143: commodore.ManagedSourceView
-	(*ListStreamsRequest)(nil),                         // 144: commodore.ListStreamsRequest
-	(*ListStreamsResponse)(nil),                        // 145: commodore.ListStreamsResponse
-	(*UpdateStreamRequest)(nil),                        // 146: commodore.UpdateStreamRequest
-	(*DeleteStreamRequest)(nil),                        // 147: commodore.DeleteStreamRequest
-	(*DeleteStreamResponse)(nil),                       // 148: commodore.DeleteStreamResponse
-	(*CreateStreamKeyRequest)(nil),                     // 149: commodore.CreateStreamKeyRequest
-	(*StreamKey)(nil),                                  // 150: commodore.StreamKey
-	(*StreamKeyResponse)(nil),                          // 151: commodore.StreamKeyResponse
-	(*ListStreamKeysRequest)(nil),                      // 152: commodore.ListStreamKeysRequest
-	(*ListStreamKeysResponse)(nil),                     // 153: commodore.ListStreamKeysResponse
-	(*DeactivateStreamKeyRequest)(nil),                 // 154: commodore.DeactivateStreamKeyRequest
-	(*PushTarget)(nil),                                 // 155: commodore.PushTarget
-	(*CreatePushTargetRequest)(nil),                    // 156: commodore.CreatePushTargetRequest
-	(*ListPushTargetsRequest)(nil),                     // 157: commodore.ListPushTargetsRequest
-	(*ListPushTargetsResponse)(nil),                    // 158: commodore.ListPushTargetsResponse
-	(*UpdatePushTargetRequest)(nil),                    // 159: commodore.UpdatePushTargetRequest
-	(*DeletePushTargetRequest)(nil),                    // 160: commodore.DeletePushTargetRequest
-	(*DeletePushTargetResponse)(nil),                   // 161: commodore.DeletePushTargetResponse
-	(*GetStreamPushTargetsRequest)(nil),                // 162: commodore.GetStreamPushTargetsRequest
-	(*GetStreamPushTargetsResponse)(nil),               // 163: commodore.GetStreamPushTargetsResponse
-	(*PushTargetInternal)(nil),                         // 164: commodore.PushTargetInternal
-	(*UpdatePushTargetStatusRequest)(nil),              // 165: commodore.UpdatePushTargetStatusRequest
-	(*AdminListAPITokensRequest)(nil),                  // 166: commodore.AdminListAPITokensRequest
-	(*AdminAPITokenInfo)(nil),                          // 167: commodore.AdminAPITokenInfo
-	(*AdminListAPITokensResponse)(nil),                 // 168: commodore.AdminListAPITokensResponse
-	(*CreateAPITokenRequest)(nil),                      // 169: commodore.CreateAPITokenRequest
-	(*CreateAPITokenResponse)(nil),                     // 170: commodore.CreateAPITokenResponse
-	(*ListAPITokensRequest)(nil),                       // 171: commodore.ListAPITokensRequest
-	(*APITokenInfo)(nil),                               // 172: commodore.APITokenInfo
-	(*ListAPITokensResponse)(nil),                      // 173: commodore.ListAPITokensResponse
-	(*RevokeAPITokenRequest)(nil),                      // 174: commodore.RevokeAPITokenRequest
-	(*RevokeAPITokenResponse)(nil),                     // 175: commodore.RevokeAPITokenResponse
-	(*RefreshStreamKeyRequest)(nil),                    // 176: commodore.RefreshStreamKeyRequest
-	(*RefreshStreamKeyResponse)(nil),                   // 177: commodore.RefreshStreamKeyResponse
-	(*SigningKey)(nil),                                 // 178: commodore.SigningKey
-	(*CreateSigningKeyRequest)(nil),                    // 179: commodore.CreateSigningKeyRequest
-	(*CreateSigningKeyResponse)(nil),                   // 180: commodore.CreateSigningKeyResponse
-	(*GetSigningKeyRequest)(nil),                       // 181: commodore.GetSigningKeyRequest
-	(*ListSigningKeysRequest)(nil),                     // 182: commodore.ListSigningKeysRequest
-	(*ListSigningKeysResponse)(nil),                    // 183: commodore.ListSigningKeysResponse
-	(*RevokeSigningKeyRequest)(nil),                    // 184: commodore.RevokeSigningKeyRequest
-	(*SetPlaybackPolicyRequest)(nil),                   // 185: commodore.SetPlaybackPolicyRequest
-	(*SetPlaybackPolicyResponse)(nil),                  // 186: commodore.SetPlaybackPolicyResponse
-	(*RecordPullSourceEventRequest)(nil),               // 187: commodore.RecordPullSourceEventRequest
-	(*ListPullSourceEventsRequest)(nil),                // 188: commodore.ListPullSourceEventsRequest
-	(*PullSourceEvent)(nil),                            // 189: commodore.PullSourceEvent
-	(*ListPullSourceEventsResponse)(nil),               // 190: commodore.ListPullSourceEventsResponse
-	(*MediaRetentionBounds)(nil),                       // 191: commodore.MediaRetentionBounds
-	(*GetMediaRetentionPolicyRequest)(nil),             // 192: commodore.GetMediaRetentionPolicyRequest
-	(*GetMediaRetentionPolicyResponse)(nil),            // 193: commodore.GetMediaRetentionPolicyResponse
-	(*SetMediaRetentionPolicyRequest)(nil),             // 194: commodore.SetMediaRetentionPolicyRequest
-	(*SetMediaRetentionPolicyResponse)(nil),            // 195: commodore.SetMediaRetentionPolicyResponse
-	(*UpdateAssetRetentionRequest)(nil),                // 196: commodore.UpdateAssetRetentionRequest
-	(*ResetAssetRetentionRequest)(nil),                 // 197: commodore.ResetAssetRetentionRequest
-	(*UpdateAssetRetentionResponse)(nil),               // 198: commodore.UpdateAssetRetentionResponse
-	(*SetStreamRetentionOverridesRequest)(nil),         // 199: commodore.SetStreamRetentionOverridesRequest
-	(*SetStreamRetentionOverridesResponse)(nil),        // 200: commodore.SetStreamRetentionOverridesResponse
-	(*CompleteAuthorizationRequest)(nil),               // 201: commodore.CompleteAuthorizationRequest
-	(*CompleteAuthorizationResponse)(nil),              // 202: commodore.CompleteAuthorizationResponse
-	(*ExchangeAuthorizationCodeRequest)(nil),           // 203: commodore.ExchangeAuthorizationCodeRequest
-	(*StartDeviceAuthorizationRequest)(nil),            // 204: commodore.StartDeviceAuthorizationRequest
-	(*StartDeviceAuthorizationResponse)(nil),           // 205: commodore.StartDeviceAuthorizationResponse
-	(*PollDeviceAuthorizationRequest)(nil),             // 206: commodore.PollDeviceAuthorizationRequest
-	(*LookupDeviceAuthorizationRequest)(nil),           // 207: commodore.LookupDeviceAuthorizationRequest
-	(*LookupDeviceAuthorizationResponse)(nil),          // 208: commodore.LookupDeviceAuthorizationResponse
-	(*ApproveDeviceAuthorizationRequest)(nil),          // 209: commodore.ApproveDeviceAuthorizationRequest
-	(*ApproveDeviceAuthorizationResponse)(nil),         // 210: commodore.ApproveDeviceAuthorizationResponse
-	nil,                                      // 211: commodore.PlaybackJwtPolicy.RequiredClaimsJsonEntry
-	nil,                                      // 212: commodore.ListStorageArtifactsResponse.KindCountsEntry
-	(*timestamppb.Timestamp)(nil),            // 213: google.protobuf.Timestamp
-	(*cluster_peer.TenantClusterPeer)(nil),   // 214: cluster_peer.TenantClusterPeer
-	(*shared.DVRPolicy)(nil),                 // 215: shared.DVRPolicy
-	(*metering_contract.MeterAllowance)(nil), // 216: metering.MeterAllowance
-	(*tenant_limits.TenantResourceLimits)(nil),             // 217: tenant_limits.TenantResourceLimits
-	(*shared.ThumbnailAssets)(nil),                         // 218: shared.ThumbnailAssets
-	(*common.SignupAttribution)(nil),                       // 219: common.SignupAttribution
-	(*media_placement.Warning)(nil),                        // 220: media_placement.Warning
-	(*common.CursorPaginationRequest)(nil),                 // 221: common.CursorPaginationRequest
-	(*common.CursorPaginationResponse)(nil),                // 222: common.CursorPaginationResponse
-	(*shared.StartDVRRequest)(nil),                         // 223: shared.StartDVRRequest
-	(*foghorn_control.RetrieveDVRChapterRequest)(nil),      // 224: foghorn_control.RetrieveDVRChapterRequest
-	(*foghorn_control.ListDVRChaptersRequest)(nil),         // 225: foghorn_control.ListDVRChaptersRequest
-	(*foghorn_control.TerminateTenantStreamsRequest)(nil),  // 226: foghorn_control.TerminateTenantStreamsRequest
-	(*foghorn_control.InvalidateTenantCacheRequest)(nil),   // 227: foghorn_control.InvalidateTenantCacheRequest
-	(*media_placement.GetPolicyRequest)(nil),               // 228: media_placement.GetPolicyRequest
-	(*media_placement.GetOptionsRequest)(nil),              // 229: media_placement.GetOptionsRequest
-	(*media_placement.PreviewRequest)(nil),                 // 230: media_placement.PreviewRequest
-	(*media_placement.ReviewChangeRequest)(nil),            // 231: media_placement.ReviewChangeRequest
-	(*media_placement.ApplyChangeRequest)(nil),             // 232: media_placement.ApplyChangeRequest
-	(*media_placement.GetChangeRequest)(nil),               // 233: media_placement.GetChangeRequest
-	(*foghorn_control.TestPlaybackAccessRequest)(nil),      // 234: foghorn_control.TestPlaybackAccessRequest
-	(*shared.CreateClipRequest)(nil),                       // 235: shared.CreateClipRequest
-	(*shared.GetClipRequest)(nil),                          // 236: shared.GetClipRequest
-	(*shared.DeleteClipRequest)(nil),                       // 237: shared.DeleteClipRequest
-	(*shared.StopDVRRequest)(nil),                          // 238: shared.StopDVRRequest
-	(*shared.DeleteDVRRequest)(nil),                        // 239: shared.DeleteDVRRequest
-	(*shared.ViewerEndpointRequest)(nil),                   // 240: shared.ViewerEndpointRequest
-	(*shared.IngestEndpointRequest)(nil),                   // 241: shared.IngestEndpointRequest
-	(*shared.CreateVodUploadRequest)(nil),                  // 242: shared.CreateVodUploadRequest
-	(*shared.ImportVodAssetRequest)(nil),                   // 243: shared.ImportVodAssetRequest
-	(*shared.CompleteVodUploadRequest)(nil),                // 244: shared.CompleteVodUploadRequest
-	(*shared.AbortVodUploadRequest)(nil),                   // 245: shared.AbortVodUploadRequest
-	(*shared.GetVodUploadStatusRequest)(nil),               // 246: shared.GetVodUploadStatusRequest
-	(*shared.DeleteVodAssetRequest)(nil),                   // 247: shared.DeleteVodAssetRequest
-	(*foghorn_control.SetNodeModeRequest)(nil),             // 248: foghorn_control.SetNodeModeRequest
-	(*foghorn_control.GetNodeHealthRequest)(nil),           // 249: foghorn_control.GetNodeHealthRequest
-	(*emptypb.Empty)(nil),                                  // 250: google.protobuf.Empty
-	(*shared.StartDVRResponse)(nil),                        // 251: shared.StartDVRResponse
-	(*foghorn_control.RetrieveDVRChapterResponse)(nil),     // 252: foghorn_control.RetrieveDVRChapterResponse
-	(*foghorn_control.ListDVRChaptersResponse)(nil),        // 253: foghorn_control.ListDVRChaptersResponse
-	(*foghorn_control.TerminateTenantStreamsResponse)(nil), // 254: foghorn_control.TerminateTenantStreamsResponse
-	(*foghorn_control.InvalidateTenantCacheResponse)(nil),  // 255: foghorn_control.InvalidateTenantCacheResponse
-	(*media_placement.PolicyState)(nil),                    // 256: media_placement.PolicyState
-	(*media_placement.Options)(nil),                        // 257: media_placement.Options
-	(*media_placement.Preview)(nil),                        // 258: media_placement.Preview
-	(*media_placement.Review)(nil),                         // 259: media_placement.Review
-	(*media_placement.Change)(nil),                         // 260: media_placement.Change
-	(*foghorn_control.TestPlaybackAccessResponse)(nil),     // 261: foghorn_control.TestPlaybackAccessResponse
-	(*shared.CreateClipResponse)(nil),                      // 262: shared.CreateClipResponse
-	(*shared.ClipInfo)(nil),                                // 263: shared.ClipInfo
-	(*shared.DeleteClipResponse)(nil),                      // 264: shared.DeleteClipResponse
-	(*shared.StopDVRResponse)(nil),                         // 265: shared.StopDVRResponse
-	(*shared.DeleteDVRResponse)(nil),                       // 266: shared.DeleteDVRResponse
-	(*shared.ViewerEndpointResponse)(nil),                  // 267: shared.ViewerEndpointResponse
-	(*shared.IngestEndpointResponse)(nil),                  // 268: shared.IngestEndpointResponse
-	(*shared.CreateVodUploadResponse)(nil),                 // 269: shared.CreateVodUploadResponse
-	(*shared.ImportVodAssetResponse)(nil),                  // 270: shared.ImportVodAssetResponse
-	(*shared.CompleteVodUploadResponse)(nil),               // 271: shared.CompleteVodUploadResponse
-	(*shared.AbortVodUploadResponse)(nil),                  // 272: shared.AbortVodUploadResponse
-	(*shared.GetVodUploadStatusResponse)(nil),              // 273: shared.GetVodUploadStatusResponse
-	(*shared.DeleteVodAssetResponse)(nil),                  // 274: shared.DeleteVodAssetResponse
-	(*foghorn_control.SetNodeModeResponse)(nil),            // 275: foghorn_control.SetNodeModeResponse
-	(*foghorn_control.GetNodeHealthResponse)(nil),          // 276: foghorn_control.GetNodeHealthResponse
+	(StreamKeyRejectionReason)(0),                          // 0: commodore.StreamKeyRejectionReason
+	(MonitoringToggle)(0),                                  // 1: commodore.MonitoringToggle
+	(ArtifactAssetType)(0),                                 // 2: commodore.ArtifactAssetType
+	(SourceLocationMode)(0),                                // 3: commodore.SourceLocationMode
+	(PushTargetStatusReason)(0),                            // 4: commodore.PushTargetStatusReason
+	(MediaRetentionTarget)(0),                              // 5: commodore.MediaRetentionTarget
+	(*ReportMediaCellPlacementCapabilityRequest)(nil),      // 6: commodore.ReportMediaCellPlacementCapabilityRequest
+	(*RequestMediaAuthorityRefreshRequest)(nil),            // 7: commodore.RequestMediaAuthorityRefreshRequest
+	(*RequestMediaAuthorityRefreshResponse)(nil),           // 8: commodore.RequestMediaAuthorityRefreshResponse
+	(*RequestMediaAuthorityReplayRequest)(nil),             // 9: commodore.RequestMediaAuthorityReplayRequest
+	(*HeldMediaAuthority)(nil),                             // 10: commodore.HeldMediaAuthority
+	(*RequestMediaAuthorityReplayResponse)(nil),            // 11: commodore.RequestMediaAuthorityReplayResponse
+	(*FetchMediaAuthorityRequest)(nil),                     // 12: commodore.FetchMediaAuthorityRequest
+	(*FetchMediaAuthorityResponse)(nil),                    // 13: commodore.FetchMediaAuthorityResponse
+	(*MediaAuthorityUse)(nil),                              // 14: commodore.MediaAuthorityUse
+	(*ReportMediaAuthorityUseRequest)(nil),                 // 15: commodore.ReportMediaAuthorityUseRequest
+	(*ValidateStreamKeyRequest)(nil),                       // 16: commodore.ValidateStreamKeyRequest
+	(*ValidateStreamKeyResponse)(nil),                      // 17: commodore.ValidateStreamKeyResponse
+	(*ResolveStreamContextRequest)(nil),                    // 18: commodore.ResolveStreamContextRequest
+	(*ResolveStreamContextResponse)(nil),                   // 19: commodore.ResolveStreamContextResponse
+	(*ListManagedStreamsRequest)(nil),                      // 20: commodore.ListManagedStreamsRequest
+	(*ManagedStreamRow)(nil),                               // 21: commodore.ManagedStreamRow
+	(*ListManagedStreamsResponse)(nil),                     // 22: commodore.ListManagedStreamsResponse
+	(*ListStreamMonitoringRequest)(nil),                    // 23: commodore.ListStreamMonitoringRequest
+	(*StreamMonitoringRow)(nil),                            // 24: commodore.StreamMonitoringRow
+	(*ListStreamMonitoringResponse)(nil),                   // 25: commodore.ListStreamMonitoringResponse
+	(*RecordStreamActiveClusterRequest)(nil),               // 26: commodore.RecordStreamActiveClusterRequest
+	(*RecordStreamActiveClusterResponse)(nil),              // 27: commodore.RecordStreamActiveClusterResponse
+	(*RegisterStreamThumbnailServingCellRequest)(nil),      // 28: commodore.RegisterStreamThumbnailServingCellRequest
+	(*RegisterStreamThumbnailServingCellResponse)(nil),     // 29: commodore.RegisterStreamThumbnailServingCellResponse
+	(*ClearStreamActiveClusterRequest)(nil),                // 30: commodore.ClearStreamActiveClusterRequest
+	(*ClearStreamActiveClusterResponse)(nil),               // 31: commodore.ClearStreamActiveClusterResponse
+	(*ActiveIngestStream)(nil),                             // 32: commodore.ActiveIngestStream
+	(*SyncActiveIngestPlacementRequest)(nil),               // 33: commodore.SyncActiveIngestPlacementRequest
+	(*SyncActiveIngestPlacementResponse)(nil),              // 34: commodore.SyncActiveIngestPlacementResponse
+	(*ResolvePlaybackIDRequest)(nil),                       // 35: commodore.ResolvePlaybackIDRequest
+	(*ResolvePlaybackIDResponse)(nil),                      // 36: commodore.ResolvePlaybackIDResponse
+	(*ResolvePullSourceByInternalNameRequest)(nil),         // 37: commodore.ResolvePullSourceByInternalNameRequest
+	(*ResolvePullSourceByInternalNameResponse)(nil),        // 38: commodore.ResolvePullSourceByInternalNameResponse
+	(*ResolvePlaybackPolicyRequest)(nil),                   // 39: commodore.ResolvePlaybackPolicyRequest
+	(*RecordSigningKeyUseRequest)(nil),                     // 40: commodore.RecordSigningKeyUseRequest
+	(*PlaybackSigningKey)(nil),                             // 41: commodore.PlaybackSigningKey
+	(*PlaybackJwtPolicy)(nil),                              // 42: commodore.PlaybackJwtPolicy
+	(*PlaybackWebhookPolicy)(nil),                          // 43: commodore.PlaybackWebhookPolicy
+	(*ResolvePlaybackPolicyResponse)(nil),                  // 44: commodore.ResolvePlaybackPolicyResponse
+	(*ResolveInternalNameRequest)(nil),                     // 45: commodore.ResolveInternalNameRequest
+	(*ResolveInternalNameResponse)(nil),                    // 46: commodore.ResolveInternalNameResponse
+	(*ValidateAPITokenRequest)(nil),                        // 47: commodore.ValidateAPITokenRequest
+	(*ValidateAPITokenResponse)(nil),                       // 48: commodore.ValidateAPITokenResponse
+	(*ValidateSessionRequest)(nil),                         // 49: commodore.ValidateSessionRequest
+	(*ValidateSessionResponse)(nil),                        // 50: commodore.ValidateSessionResponse
+	(*ListRecentSessionRevocationsRequest)(nil),            // 51: commodore.ListRecentSessionRevocationsRequest
+	(*SessionRevocation)(nil),                              // 52: commodore.SessionRevocation
+	(*ListRecentSessionRevocationsResponse)(nil),           // 53: commodore.ListRecentSessionRevocationsResponse
+	(*MintMistAdminSessionRequest)(nil),                    // 54: commodore.MintMistAdminSessionRequest
+	(*MintMistAdminSessionResponse)(nil),                   // 55: commodore.MintMistAdminSessionResponse
+	(*ValidateMistAdminSessionRequest)(nil),                // 56: commodore.ValidateMistAdminSessionRequest
+	(*ValidateMistAdminSessionResponse)(nil),               // 57: commodore.ValidateMistAdminSessionResponse
+	(*RegisterDVRRequest)(nil),                             // 58: commodore.RegisterDVRRequest
+	(*RegisterDVRResponse)(nil),                            // 59: commodore.RegisterDVRResponse
+	(*UpdateDVRRetentionRequest)(nil),                      // 60: commodore.UpdateDVRRetentionRequest
+	(*UpdateDVRRetentionResponse)(nil),                     // 61: commodore.UpdateDVRRetentionResponse
+	(*MediaTrack)(nil),                                     // 62: commodore.MediaTrack
+	(*UpdateArtifactCatalogSnapshotRequest)(nil),           // 63: commodore.UpdateArtifactCatalogSnapshotRequest
+	(*UpdateArtifactCatalogSnapshotResponse)(nil),          // 64: commodore.UpdateArtifactCatalogSnapshotResponse
+	(*ResolveClipHashRequest)(nil),                         // 65: commodore.ResolveClipHashRequest
+	(*ResolveClipHashResponse)(nil),                        // 66: commodore.ResolveClipHashResponse
+	(*ResolveDVRHashRequest)(nil),                          // 67: commodore.ResolveDVRHashRequest
+	(*ResolveDVRHashResponse)(nil),                         // 68: commodore.ResolveDVRHashResponse
+	(*ResolveIdentifierRequest)(nil),                       // 69: commodore.ResolveIdentifierRequest
+	(*ResolveIdentifierResponse)(nil),                      // 70: commodore.ResolveIdentifierResponse
+	(*ResolveVodHashRequest)(nil),                          // 71: commodore.ResolveVodHashRequest
+	(*ResolveVodHashResponse)(nil),                         // 72: commodore.ResolveVodHashResponse
+	(*ResolveVodIDRequest)(nil),                            // 73: commodore.ResolveVodIDRequest
+	(*ResolveVodIDResponse)(nil),                           // 74: commodore.ResolveVodIDResponse
+	(*MintChapterPlaybackIDRequest)(nil),                   // 75: commodore.MintChapterPlaybackIDRequest
+	(*MintChapterPlaybackIDResponse)(nil),                  // 76: commodore.MintChapterPlaybackIDResponse
+	(*ResolveChapterPlaybackIDRequest)(nil),                // 77: commodore.ResolveChapterPlaybackIDRequest
+	(*ResolveChapterPlaybackIDResponse)(nil),               // 78: commodore.ResolveChapterPlaybackIDResponse
+	(*GetTenantProcessesJSONRequest)(nil),                  // 79: commodore.GetTenantProcessesJSONRequest
+	(*GetTenantProcessesJSONResponse)(nil),                 // 80: commodore.GetTenantProcessesJSONResponse
+	(*ListStorageArtifactsRequest)(nil),                    // 81: commodore.ListStorageArtifactsRequest
+	(*StorageArtifactInfo)(nil),                            // 82: commodore.StorageArtifactInfo
+	(*ListStorageArtifactsResponse)(nil),                   // 83: commodore.ListStorageArtifactsResponse
+	(*ResolveArtifactPlaybackIDRequest)(nil),               // 84: commodore.ResolveArtifactPlaybackIDRequest
+	(*ResolveArtifactPlaybackIDResponse)(nil),              // 85: commodore.ResolveArtifactPlaybackIDResponse
+	(*ResolveArtifactInternalNameRequest)(nil),             // 86: commodore.ResolveArtifactInternalNameRequest
+	(*ResolveArtifactInternalNameResponse)(nil),            // 87: commodore.ResolveArtifactInternalNameResponse
+	(*GetOrCreateWalletUserRequest)(nil),                   // 88: commodore.GetOrCreateWalletUserRequest
+	(*GetOrCreateWalletUserResponse)(nil),                  // 89: commodore.GetOrCreateWalletUserResponse
+	(*GetTenantUserCountRequest)(nil),                      // 90: commodore.GetTenantUserCountRequest
+	(*GetTenantUserCountResponse)(nil),                     // 91: commodore.GetTenantUserCountResponse
+	(*GetTenantPrimaryUserRequest)(nil),                    // 92: commodore.GetTenantPrimaryUserRequest
+	(*GetTenantPrimaryUserResponse)(nil),                   // 93: commodore.GetTenantPrimaryUserResponse
+	(*CreateUserInTenantRequest)(nil),                      // 94: commodore.CreateUserInTenantRequest
+	(*CreateUserInTenantResponse)(nil),                     // 95: commodore.CreateUserInTenantResponse
+	(*AdminLookupUserByEmailRequest)(nil),                  // 96: commodore.AdminLookupUserByEmailRequest
+	(*AdminLookupUserByEmailResponse)(nil),                 // 97: commodore.AdminLookupUserByEmailResponse
+	(*LoginRequest)(nil),                                   // 98: commodore.LoginRequest
+	(*BehaviorData)(nil),                                   // 99: commodore.BehaviorData
+	(*RegisterRequest)(nil),                                // 100: commodore.RegisterRequest
+	(*AuthResponse)(nil),                                   // 101: commodore.AuthResponse
+	(*RegisterResponse)(nil),                               // 102: commodore.RegisterResponse
+	(*GetMeRequest)(nil),                                   // 103: commodore.GetMeRequest
+	(*LogoutRequest)(nil),                                  // 104: commodore.LogoutRequest
+	(*LogoutResponse)(nil),                                 // 105: commodore.LogoutResponse
+	(*RefreshTokenRequest)(nil),                            // 106: commodore.RefreshTokenRequest
+	(*VerifyEmailRequest)(nil),                             // 107: commodore.VerifyEmailRequest
+	(*VerifyEmailResponse)(nil),                            // 108: commodore.VerifyEmailResponse
+	(*ResendVerificationRequest)(nil),                      // 109: commodore.ResendVerificationRequest
+	(*ResendVerificationResponse)(nil),                     // 110: commodore.ResendVerificationResponse
+	(*ForgotPasswordRequest)(nil),                          // 111: commodore.ForgotPasswordRequest
+	(*ForgotPasswordResponse)(nil),                         // 112: commodore.ForgotPasswordResponse
+	(*ResetPasswordRequest)(nil),                           // 113: commodore.ResetPasswordRequest
+	(*ResetPasswordResponse)(nil),                          // 114: commodore.ResetPasswordResponse
+	(*UpdateMeRequest)(nil),                                // 115: commodore.UpdateMeRequest
+	(*UpdateNewsletterRequest)(nil),                        // 116: commodore.UpdateNewsletterRequest
+	(*UpdateNewsletterResponse)(nil),                       // 117: commodore.UpdateNewsletterResponse
+	(*GetNewsletterStatusRequest)(nil),                     // 118: commodore.GetNewsletterStatusRequest
+	(*GetNewsletterStatusResponse)(nil),                    // 119: commodore.GetNewsletterStatusResponse
+	(*IssueWalletChallengeRequest)(nil),                    // 120: commodore.IssueWalletChallengeRequest
+	(*IssueWalletChallengeResponse)(nil),                   // 121: commodore.IssueWalletChallengeResponse
+	(*WalletLoginRequest)(nil),                             // 122: commodore.WalletLoginRequest
+	(*LinkWalletRequest)(nil),                              // 123: commodore.LinkWalletRequest
+	(*UnlinkWalletRequest)(nil),                            // 124: commodore.UnlinkWalletRequest
+	(*UnlinkWalletResponse)(nil),                           // 125: commodore.UnlinkWalletResponse
+	(*ListWalletsRequest)(nil),                             // 126: commodore.ListWalletsRequest
+	(*ListWalletsResponse)(nil),                            // 127: commodore.ListWalletsResponse
+	(*WalletIdentity)(nil),                                 // 128: commodore.WalletIdentity
+	(*LinkEmailRequest)(nil),                               // 129: commodore.LinkEmailRequest
+	(*LinkEmailResponse)(nil),                              // 130: commodore.LinkEmailResponse
+	(*User)(nil),                                           // 131: commodore.User
+	(*CreateStreamRequest)(nil),                            // 132: commodore.CreateStreamRequest
+	(*SourceLocationCluster)(nil),                          // 133: commodore.SourceLocationCluster
+	(*StreamSourceLocation)(nil),                           // 134: commodore.StreamSourceLocation
+	(*CreateStreamResponse)(nil),                           // 135: commodore.CreateStreamResponse
+	(*GetStreamRequest)(nil),                               // 136: commodore.GetStreamRequest
+	(*GetStreamsBatchRequest)(nil),                         // 137: commodore.GetStreamsBatchRequest
+	(*GetStreamsBatchResponse)(nil),                        // 138: commodore.GetStreamsBatchResponse
+	(*Stream)(nil),                                         // 139: commodore.Stream
+	(*PullSourceAllowedClustersInput)(nil),                 // 140: commodore.PullSourceAllowedClustersInput
+	(*PullSourceInput)(nil),                                // 141: commodore.PullSourceInput
+	(*PullSourceView)(nil),                                 // 142: commodore.PullSourceView
+	(*ManagedSourceView)(nil),                              // 143: commodore.ManagedSourceView
+	(*ListStreamsRequest)(nil),                             // 144: commodore.ListStreamsRequest
+	(*ListStreamsResponse)(nil),                            // 145: commodore.ListStreamsResponse
+	(*UpdateStreamRequest)(nil),                            // 146: commodore.UpdateStreamRequest
+	(*DeleteStreamRequest)(nil),                            // 147: commodore.DeleteStreamRequest
+	(*DeleteStreamResponse)(nil),                           // 148: commodore.DeleteStreamResponse
+	(*CreateStreamKeyRequest)(nil),                         // 149: commodore.CreateStreamKeyRequest
+	(*StreamKey)(nil),                                      // 150: commodore.StreamKey
+	(*StreamKeyResponse)(nil),                              // 151: commodore.StreamKeyResponse
+	(*ListStreamKeysRequest)(nil),                          // 152: commodore.ListStreamKeysRequest
+	(*ListStreamKeysResponse)(nil),                         // 153: commodore.ListStreamKeysResponse
+	(*DeactivateStreamKeyRequest)(nil),                     // 154: commodore.DeactivateStreamKeyRequest
+	(*PushTarget)(nil),                                     // 155: commodore.PushTarget
+	(*CreatePushTargetRequest)(nil),                        // 156: commodore.CreatePushTargetRequest
+	(*ListPushTargetsRequest)(nil),                         // 157: commodore.ListPushTargetsRequest
+	(*ListPushTargetsResponse)(nil),                        // 158: commodore.ListPushTargetsResponse
+	(*UpdatePushTargetRequest)(nil),                        // 159: commodore.UpdatePushTargetRequest
+	(*DeletePushTargetRequest)(nil),                        // 160: commodore.DeletePushTargetRequest
+	(*DeletePushTargetResponse)(nil),                       // 161: commodore.DeletePushTargetResponse
+	(*GetStreamPushTargetsRequest)(nil),                    // 162: commodore.GetStreamPushTargetsRequest
+	(*GetStreamPushTargetsResponse)(nil),                   // 163: commodore.GetStreamPushTargetsResponse
+	(*PushTargetInternal)(nil),                             // 164: commodore.PushTargetInternal
+	(*UpdatePushTargetStatusRequest)(nil),                  // 165: commodore.UpdatePushTargetStatusRequest
+	(*AdminListAPITokensRequest)(nil),                      // 166: commodore.AdminListAPITokensRequest
+	(*AdminAPITokenInfo)(nil),                              // 167: commodore.AdminAPITokenInfo
+	(*AdminListAPITokensResponse)(nil),                     // 168: commodore.AdminListAPITokensResponse
+	(*CreateAPITokenRequest)(nil),                          // 169: commodore.CreateAPITokenRequest
+	(*CreateAPITokenResponse)(nil),                         // 170: commodore.CreateAPITokenResponse
+	(*ListAPITokensRequest)(nil),                           // 171: commodore.ListAPITokensRequest
+	(*APITokenInfo)(nil),                                   // 172: commodore.APITokenInfo
+	(*ListAPITokensResponse)(nil),                          // 173: commodore.ListAPITokensResponse
+	(*RevokeAPITokenRequest)(nil),                          // 174: commodore.RevokeAPITokenRequest
+	(*RevokeAPITokenResponse)(nil),                         // 175: commodore.RevokeAPITokenResponse
+	(*RefreshStreamKeyRequest)(nil),                        // 176: commodore.RefreshStreamKeyRequest
+	(*RefreshStreamKeyResponse)(nil),                       // 177: commodore.RefreshStreamKeyResponse
+	(*SigningKey)(nil),                                     // 178: commodore.SigningKey
+	(*CreateSigningKeyRequest)(nil),                        // 179: commodore.CreateSigningKeyRequest
+	(*CreateSigningKeyResponse)(nil),                       // 180: commodore.CreateSigningKeyResponse
+	(*GetSigningKeyRequest)(nil),                           // 181: commodore.GetSigningKeyRequest
+	(*ListSigningKeysRequest)(nil),                         // 182: commodore.ListSigningKeysRequest
+	(*ListSigningKeysResponse)(nil),                        // 183: commodore.ListSigningKeysResponse
+	(*RevokeSigningKeyRequest)(nil),                        // 184: commodore.RevokeSigningKeyRequest
+	(*SetPlaybackPolicyRequest)(nil),                       // 185: commodore.SetPlaybackPolicyRequest
+	(*SetPlaybackPolicyResponse)(nil),                      // 186: commodore.SetPlaybackPolicyResponse
+	(*RecordPullSourceEventRequest)(nil),                   // 187: commodore.RecordPullSourceEventRequest
+	(*ListPullSourceEventsRequest)(nil),                    // 188: commodore.ListPullSourceEventsRequest
+	(*PullSourceEvent)(nil),                                // 189: commodore.PullSourceEvent
+	(*ListPullSourceEventsResponse)(nil),                   // 190: commodore.ListPullSourceEventsResponse
+	(*MediaRetentionBounds)(nil),                           // 191: commodore.MediaRetentionBounds
+	(*GetMediaRetentionPolicyRequest)(nil),                 // 192: commodore.GetMediaRetentionPolicyRequest
+	(*GetMediaRetentionPolicyResponse)(nil),                // 193: commodore.GetMediaRetentionPolicyResponse
+	(*SetMediaRetentionPolicyRequest)(nil),                 // 194: commodore.SetMediaRetentionPolicyRequest
+	(*SetMediaRetentionPolicyResponse)(nil),                // 195: commodore.SetMediaRetentionPolicyResponse
+	(*UpdateAssetRetentionRequest)(nil),                    // 196: commodore.UpdateAssetRetentionRequest
+	(*ResetAssetRetentionRequest)(nil),                     // 197: commodore.ResetAssetRetentionRequest
+	(*UpdateAssetRetentionResponse)(nil),                   // 198: commodore.UpdateAssetRetentionResponse
+	(*SetStreamRetentionOverridesRequest)(nil),             // 199: commodore.SetStreamRetentionOverridesRequest
+	(*SetStreamRetentionOverridesResponse)(nil),            // 200: commodore.SetStreamRetentionOverridesResponse
+	(*CompleteAuthorizationRequest)(nil),                   // 201: commodore.CompleteAuthorizationRequest
+	(*CompleteAuthorizationResponse)(nil),                  // 202: commodore.CompleteAuthorizationResponse
+	(*ExchangeAuthorizationCodeRequest)(nil),               // 203: commodore.ExchangeAuthorizationCodeRequest
+	(*StartDeviceAuthorizationRequest)(nil),                // 204: commodore.StartDeviceAuthorizationRequest
+	(*StartDeviceAuthorizationResponse)(nil),               // 205: commodore.StartDeviceAuthorizationResponse
+	(*PollDeviceAuthorizationRequest)(nil),                 // 206: commodore.PollDeviceAuthorizationRequest
+	(*LookupDeviceAuthorizationRequest)(nil),               // 207: commodore.LookupDeviceAuthorizationRequest
+	(*LookupDeviceAuthorizationResponse)(nil),              // 208: commodore.LookupDeviceAuthorizationResponse
+	(*ApproveDeviceAuthorizationRequest)(nil),              // 209: commodore.ApproveDeviceAuthorizationRequest
+	(*ApproveDeviceAuthorizationResponse)(nil),             // 210: commodore.ApproveDeviceAuthorizationResponse
+	(*AdminSetUserActiveRequest)(nil),                      // 211: commodore.AdminSetUserActiveRequest
+	(*AdminSetUserActiveResponse)(nil),                     // 212: commodore.AdminSetUserActiveResponse
+	(*AdminDeactivateTenantRequest)(nil),                   // 213: commodore.AdminDeactivateTenantRequest
+	(*AdminListAccountHistoryRequest)(nil),                 // 214: commodore.AdminListAccountHistoryRequest
+	(*OperatorAccountAuditEntry)(nil),                      // 215: commodore.OperatorAccountAuditEntry
+	(*AdminListAccountHistoryResponse)(nil),                // 216: commodore.AdminListAccountHistoryResponse
+	nil,                                                    // 217: commodore.PlaybackJwtPolicy.RequiredClaimsJsonEntry
+	nil,                                                    // 218: commodore.ListStorageArtifactsResponse.KindCountsEntry
+	(*timestamppb.Timestamp)(nil),                          // 219: google.protobuf.Timestamp
+	(*cluster_peer.TenantClusterPeer)(nil),                 // 220: cluster_peer.TenantClusterPeer
+	(*shared.DVRPolicy)(nil),                               // 221: shared.DVRPolicy
+	(*metering_contract.MeterAllowance)(nil),               // 222: metering.MeterAllowance
+	(*tenant_limits.TenantResourceLimits)(nil),             // 223: tenant_limits.TenantResourceLimits
+	(*shared.ThumbnailAssets)(nil),                         // 224: shared.ThumbnailAssets
+	(*common.SignupAttribution)(nil),                       // 225: common.SignupAttribution
+	(*media_placement.Warning)(nil),                        // 226: media_placement.Warning
+	(*common.CursorPaginationRequest)(nil),                 // 227: common.CursorPaginationRequest
+	(*common.CursorPaginationResponse)(nil),                // 228: common.CursorPaginationResponse
+	(*shared.StartDVRRequest)(nil),                         // 229: shared.StartDVRRequest
+	(*foghorn_control.RetrieveDVRChapterRequest)(nil),      // 230: foghorn_control.RetrieveDVRChapterRequest
+	(*foghorn_control.ListDVRChaptersRequest)(nil),         // 231: foghorn_control.ListDVRChaptersRequest
+	(*foghorn_control.TerminateTenantStreamsRequest)(nil),  // 232: foghorn_control.TerminateTenantStreamsRequest
+	(*foghorn_control.InvalidateTenantCacheRequest)(nil),   // 233: foghorn_control.InvalidateTenantCacheRequest
+	(*media_placement.GetPolicyRequest)(nil),               // 234: media_placement.GetPolicyRequest
+	(*media_placement.GetOptionsRequest)(nil),              // 235: media_placement.GetOptionsRequest
+	(*media_placement.PreviewRequest)(nil),                 // 236: media_placement.PreviewRequest
+	(*media_placement.ReviewChangeRequest)(nil),            // 237: media_placement.ReviewChangeRequest
+	(*media_placement.ApplyChangeRequest)(nil),             // 238: media_placement.ApplyChangeRequest
+	(*media_placement.GetChangeRequest)(nil),               // 239: media_placement.GetChangeRequest
+	(*foghorn_control.TestPlaybackAccessRequest)(nil),      // 240: foghorn_control.TestPlaybackAccessRequest
+	(*shared.CreateClipRequest)(nil),                       // 241: shared.CreateClipRequest
+	(*shared.GetClipRequest)(nil),                          // 242: shared.GetClipRequest
+	(*shared.DeleteClipRequest)(nil),                       // 243: shared.DeleteClipRequest
+	(*shared.StopDVRRequest)(nil),                          // 244: shared.StopDVRRequest
+	(*shared.DeleteDVRRequest)(nil),                        // 245: shared.DeleteDVRRequest
+	(*shared.ViewerEndpointRequest)(nil),                   // 246: shared.ViewerEndpointRequest
+	(*shared.IngestEndpointRequest)(nil),                   // 247: shared.IngestEndpointRequest
+	(*shared.CreateVodUploadRequest)(nil),                  // 248: shared.CreateVodUploadRequest
+	(*shared.ImportVodAssetRequest)(nil),                   // 249: shared.ImportVodAssetRequest
+	(*shared.CompleteVodUploadRequest)(nil),                // 250: shared.CompleteVodUploadRequest
+	(*shared.AbortVodUploadRequest)(nil),                   // 251: shared.AbortVodUploadRequest
+	(*shared.GetVodUploadStatusRequest)(nil),               // 252: shared.GetVodUploadStatusRequest
+	(*shared.DeleteVodAssetRequest)(nil),                   // 253: shared.DeleteVodAssetRequest
+	(*foghorn_control.SetNodeModeRequest)(nil),             // 254: foghorn_control.SetNodeModeRequest
+	(*foghorn_control.GetNodeHealthRequest)(nil),           // 255: foghorn_control.GetNodeHealthRequest
+	(*emptypb.Empty)(nil),                                  // 256: google.protobuf.Empty
+	(*shared.StartDVRResponse)(nil),                        // 257: shared.StartDVRResponse
+	(*foghorn_control.RetrieveDVRChapterResponse)(nil),     // 258: foghorn_control.RetrieveDVRChapterResponse
+	(*foghorn_control.ListDVRChaptersResponse)(nil),        // 259: foghorn_control.ListDVRChaptersResponse
+	(*foghorn_control.TerminateTenantStreamsResponse)(nil), // 260: foghorn_control.TerminateTenantStreamsResponse
+	(*foghorn_control.InvalidateTenantCacheResponse)(nil),  // 261: foghorn_control.InvalidateTenantCacheResponse
+	(*media_placement.PolicyState)(nil),                    // 262: media_placement.PolicyState
+	(*media_placement.Options)(nil),                        // 263: media_placement.Options
+	(*media_placement.Preview)(nil),                        // 264: media_placement.Preview
+	(*media_placement.Review)(nil),                         // 265: media_placement.Review
+	(*media_placement.Change)(nil),                         // 266: media_placement.Change
+	(*foghorn_control.TestPlaybackAccessResponse)(nil),     // 267: foghorn_control.TestPlaybackAccessResponse
+	(*shared.CreateClipResponse)(nil),                      // 268: shared.CreateClipResponse
+	(*shared.ClipInfo)(nil),                                // 269: shared.ClipInfo
+	(*shared.DeleteClipResponse)(nil),                      // 270: shared.DeleteClipResponse
+	(*shared.StopDVRResponse)(nil),                         // 271: shared.StopDVRResponse
+	(*shared.DeleteDVRResponse)(nil),                       // 272: shared.DeleteDVRResponse
+	(*shared.ViewerEndpointResponse)(nil),                  // 273: shared.ViewerEndpointResponse
+	(*shared.IngestEndpointResponse)(nil),                  // 274: shared.IngestEndpointResponse
+	(*shared.CreateVodUploadResponse)(nil),                 // 275: shared.CreateVodUploadResponse
+	(*shared.ImportVodAssetResponse)(nil),                  // 276: shared.ImportVodAssetResponse
+	(*shared.CompleteVodUploadResponse)(nil),               // 277: shared.CompleteVodUploadResponse
+	(*shared.AbortVodUploadResponse)(nil),                  // 278: shared.AbortVodUploadResponse
+	(*shared.GetVodUploadStatusResponse)(nil),              // 279: shared.GetVodUploadStatusResponse
+	(*shared.DeleteVodAssetResponse)(nil),                  // 280: shared.DeleteVodAssetResponse
+	(*foghorn_control.SetNodeModeResponse)(nil),            // 281: foghorn_control.SetNodeModeResponse
+	(*foghorn_control.GetNodeHealthResponse)(nil),          // 282: foghorn_control.GetNodeHealthResponse
 }
 var file_commodore_proto_depIdxs = []int32{
-	213, // 0: commodore.RequestMediaAuthorityReplayRequest.as_of:type_name -> google.protobuf.Timestamp
+	219, // 0: commodore.RequestMediaAuthorityReplayRequest.as_of:type_name -> google.protobuf.Timestamp
 	10,  // 1: commodore.RequestMediaAuthorityReplayRequest.held:type_name -> commodore.HeldMediaAuthority
-	213, // 2: commodore.RequestMediaAuthorityReplayRequest.acknowledged_before:type_name -> google.protobuf.Timestamp
+	219, // 2: commodore.RequestMediaAuthorityReplayRequest.acknowledged_before:type_name -> google.protobuf.Timestamp
 	10,  // 3: commodore.RequestMediaAuthorityReplayResponse.confirmed:type_name -> commodore.HeldMediaAuthority
-	213, // 4: commodore.RequestMediaAuthorityReplayResponse.observed_at:type_name -> google.protobuf.Timestamp
+	219, // 4: commodore.RequestMediaAuthorityReplayResponse.observed_at:type_name -> google.protobuf.Timestamp
 	14,  // 5: commodore.ReportMediaAuthorityUseRequest.uses:type_name -> commodore.MediaAuthorityUse
 	0,   // 6: commodore.ValidateStreamKeyResponse.rejection_reason:type_name -> commodore.StreamKeyRejectionReason
-	214, // 7: commodore.ValidateStreamKeyResponse.cluster_peers:type_name -> cluster_peer.TenantClusterPeer
+	220, // 7: commodore.ValidateStreamKeyResponse.cluster_peers:type_name -> cluster_peer.TenantClusterPeer
 	164, // 8: commodore.ValidateStreamKeyResponse.push_targets:type_name -> commodore.PushTargetInternal
-	215, // 9: commodore.ValidateStreamKeyResponse.dvr_policy:type_name -> shared.DVRPolicy
-	216, // 10: commodore.ValidateStreamKeyResponse.allowances:type_name -> metering.MeterAllowance
-	217, // 11: commodore.ValidateStreamKeyResponse.tenant_resource_limits:type_name -> tenant_limits.TenantResourceLimits
-	214, // 12: commodore.ValidateStreamKeyResponse.authority_cluster_peers:type_name -> cluster_peer.TenantClusterPeer
+	221, // 9: commodore.ValidateStreamKeyResponse.dvr_policy:type_name -> shared.DVRPolicy
+	222, // 10: commodore.ValidateStreamKeyResponse.allowances:type_name -> metering.MeterAllowance
+	223, // 11: commodore.ValidateStreamKeyResponse.tenant_resource_limits:type_name -> tenant_limits.TenantResourceLimits
+	220, // 12: commodore.ValidateStreamKeyResponse.authority_cluster_peers:type_name -> cluster_peer.TenantClusterPeer
 	0,   // 13: commodore.ResolveStreamContextResponse.rejection_reason:type_name -> commodore.StreamKeyRejectionReason
-	214, // 14: commodore.ResolveStreamContextResponse.cluster_peers:type_name -> cluster_peer.TenantClusterPeer
-	215, // 15: commodore.ResolveStreamContextResponse.dvr_policy:type_name -> shared.DVRPolicy
-	216, // 16: commodore.ResolveStreamContextResponse.allowances:type_name -> metering.MeterAllowance
-	217, // 17: commodore.ResolveStreamContextResponse.tenant_resource_limits:type_name -> tenant_limits.TenantResourceLimits
-	214, // 18: commodore.ResolveStreamContextResponse.authority_cluster_peers:type_name -> cluster_peer.TenantClusterPeer
+	220, // 14: commodore.ResolveStreamContextResponse.cluster_peers:type_name -> cluster_peer.TenantClusterPeer
+	221, // 15: commodore.ResolveStreamContextResponse.dvr_policy:type_name -> shared.DVRPolicy
+	222, // 16: commodore.ResolveStreamContextResponse.allowances:type_name -> metering.MeterAllowance
+	223, // 17: commodore.ResolveStreamContextResponse.tenant_resource_limits:type_name -> tenant_limits.TenantResourceLimits
+	220, // 18: commodore.ResolveStreamContextResponse.authority_cluster_peers:type_name -> cluster_peer.TenantClusterPeer
 	21,  // 19: commodore.ListManagedStreamsResponse.streams:type_name -> commodore.ManagedStreamRow
 	1,   // 20: commodore.StreamMonitoringRow.monitoring_toggle:type_name -> commodore.MonitoringToggle
 	24,  // 21: commodore.ListStreamMonitoringResponse.streams:type_name -> commodore.StreamMonitoringRow
@@ -17240,48 +17720,48 @@ var file_commodore_proto_depIdxs = []int32{
 	32,  // 23: commodore.SyncActiveIngestPlacementRequest.release:type_name -> commodore.ActiveIngestStream
 	32,  // 24: commodore.SyncActiveIngestPlacementResponse.renew_refused:type_name -> commodore.ActiveIngestStream
 	32,  // 25: commodore.SyncActiveIngestPlacementResponse.release_refused:type_name -> commodore.ActiveIngestStream
-	214, // 26: commodore.ResolvePlaybackIDResponse.cluster_peers:type_name -> cluster_peer.TenantClusterPeer
-	214, // 27: commodore.ResolvePlaybackIDResponse.authority_cluster_peers:type_name -> cluster_peer.TenantClusterPeer
-	211, // 28: commodore.PlaybackJwtPolicy.required_claims_json:type_name -> commodore.PlaybackJwtPolicy.RequiredClaimsJsonEntry
+	220, // 26: commodore.ResolvePlaybackIDResponse.cluster_peers:type_name -> cluster_peer.TenantClusterPeer
+	220, // 27: commodore.ResolvePlaybackIDResponse.authority_cluster_peers:type_name -> cluster_peer.TenantClusterPeer
+	217, // 28: commodore.PlaybackJwtPolicy.required_claims_json:type_name -> commodore.PlaybackJwtPolicy.RequiredClaimsJsonEntry
 	41,  // 29: commodore.PlaybackJwtPolicy.active_keys:type_name -> commodore.PlaybackSigningKey
 	42,  // 30: commodore.ResolvePlaybackPolicyResponse.jwt_policy:type_name -> commodore.PlaybackJwtPolicy
 	43,  // 31: commodore.ResolvePlaybackPolicyResponse.webhook_policy:type_name -> commodore.PlaybackWebhookPolicy
-	214, // 32: commodore.ResolveInternalNameResponse.cluster_peers:type_name -> cluster_peer.TenantClusterPeer
-	213, // 33: commodore.ListRecentSessionRevocationsRequest.since:type_name -> google.protobuf.Timestamp
-	213, // 34: commodore.SessionRevocation.revoked_at:type_name -> google.protobuf.Timestamp
+	220, // 32: commodore.ResolveInternalNameResponse.cluster_peers:type_name -> cluster_peer.TenantClusterPeer
+	219, // 33: commodore.ListRecentSessionRevocationsRequest.since:type_name -> google.protobuf.Timestamp
+	219, // 34: commodore.SessionRevocation.revoked_at:type_name -> google.protobuf.Timestamp
 	52,  // 35: commodore.ListRecentSessionRevocationsResponse.revocations:type_name -> commodore.SessionRevocation
-	213, // 36: commodore.RegisterDVRRequest.retention_until:type_name -> google.protobuf.Timestamp
-	213, // 37: commodore.UpdateDVRRetentionRequest.retention_until:type_name -> google.protobuf.Timestamp
+	219, // 36: commodore.RegisterDVRRequest.retention_until:type_name -> google.protobuf.Timestamp
+	219, // 37: commodore.UpdateDVRRetentionRequest.retention_until:type_name -> google.protobuf.Timestamp
 	2,   // 38: commodore.UpdateArtifactCatalogSnapshotRequest.asset_type:type_name -> commodore.ArtifactAssetType
 	62,  // 39: commodore.UpdateArtifactCatalogSnapshotRequest.tracks:type_name -> commodore.MediaTrack
-	214, // 40: commodore.ResolveIdentifierResponse.cluster_peers:type_name -> cluster_peer.TenantClusterPeer
-	214, // 41: commodore.ResolveVodHashResponse.cluster_peers:type_name -> cluster_peer.TenantClusterPeer
-	213, // 42: commodore.StorageArtifactInfo.created_at:type_name -> google.protobuf.Timestamp
-	213, // 43: commodore.StorageArtifactInfo.updated_at:type_name -> google.protobuf.Timestamp
-	213, // 44: commodore.StorageArtifactInfo.expires_at:type_name -> google.protobuf.Timestamp
-	218, // 45: commodore.StorageArtifactInfo.thumbnail_assets:type_name -> shared.ThumbnailAssets
+	220, // 40: commodore.ResolveIdentifierResponse.cluster_peers:type_name -> cluster_peer.TenantClusterPeer
+	220, // 41: commodore.ResolveVodHashResponse.cluster_peers:type_name -> cluster_peer.TenantClusterPeer
+	219, // 42: commodore.StorageArtifactInfo.created_at:type_name -> google.protobuf.Timestamp
+	219, // 43: commodore.StorageArtifactInfo.updated_at:type_name -> google.protobuf.Timestamp
+	219, // 44: commodore.StorageArtifactInfo.expires_at:type_name -> google.protobuf.Timestamp
+	224, // 45: commodore.StorageArtifactInfo.thumbnail_assets:type_name -> shared.ThumbnailAssets
 	62,  // 46: commodore.StorageArtifactInfo.tracks:type_name -> commodore.MediaTrack
 	82,  // 47: commodore.ListStorageArtifactsResponse.artifacts:type_name -> commodore.StorageArtifactInfo
-	212, // 48: commodore.ListStorageArtifactsResponse.kind_counts:type_name -> commodore.ListStorageArtifactsResponse.KindCountsEntry
-	214, // 49: commodore.ResolveArtifactPlaybackIDResponse.cluster_peers:type_name -> cluster_peer.TenantClusterPeer
-	214, // 50: commodore.ResolveArtifactPlaybackIDResponse.authority_cluster_peers:type_name -> cluster_peer.TenantClusterPeer
-	214, // 51: commodore.ResolveArtifactInternalNameResponse.cluster_peers:type_name -> cluster_peer.TenantClusterPeer
-	214, // 52: commodore.ResolveArtifactInternalNameResponse.authority_cluster_peers:type_name -> cluster_peer.TenantClusterPeer
-	219, // 53: commodore.GetOrCreateWalletUserRequest.attribution:type_name -> common.SignupAttribution
+	218, // 48: commodore.ListStorageArtifactsResponse.kind_counts:type_name -> commodore.ListStorageArtifactsResponse.KindCountsEntry
+	220, // 49: commodore.ResolveArtifactPlaybackIDResponse.cluster_peers:type_name -> cluster_peer.TenantClusterPeer
+	220, // 50: commodore.ResolveArtifactPlaybackIDResponse.authority_cluster_peers:type_name -> cluster_peer.TenantClusterPeer
+	220, // 51: commodore.ResolveArtifactInternalNameResponse.cluster_peers:type_name -> cluster_peer.TenantClusterPeer
+	220, // 52: commodore.ResolveArtifactInternalNameResponse.authority_cluster_peers:type_name -> cluster_peer.TenantClusterPeer
+	225, // 53: commodore.GetOrCreateWalletUserRequest.attribution:type_name -> common.SignupAttribution
 	131, // 54: commodore.CreateUserInTenantResponse.user:type_name -> commodore.User
 	99,  // 55: commodore.LoginRequest.behavior:type_name -> commodore.BehaviorData
 	99,  // 56: commodore.RegisterRequest.behavior:type_name -> commodore.BehaviorData
-	219, // 57: commodore.RegisterRequest.attribution:type_name -> common.SignupAttribution
+	225, // 57: commodore.RegisterRequest.attribution:type_name -> common.SignupAttribution
 	131, // 58: commodore.AuthResponse.user:type_name -> commodore.User
-	213, // 59: commodore.AuthResponse.expires_at:type_name -> google.protobuf.Timestamp
-	213, // 60: commodore.IssueWalletChallengeResponse.expires_at:type_name -> google.protobuf.Timestamp
-	219, // 61: commodore.WalletLoginRequest.attribution:type_name -> common.SignupAttribution
+	219, // 59: commodore.AuthResponse.expires_at:type_name -> google.protobuf.Timestamp
+	219, // 60: commodore.IssueWalletChallengeResponse.expires_at:type_name -> google.protobuf.Timestamp
+	225, // 61: commodore.WalletLoginRequest.attribution:type_name -> common.SignupAttribution
 	128, // 62: commodore.ListWalletsResponse.wallets:type_name -> commodore.WalletIdentity
-	213, // 63: commodore.WalletIdentity.created_at:type_name -> google.protobuf.Timestamp
-	213, // 64: commodore.WalletIdentity.last_auth_at:type_name -> google.protobuf.Timestamp
-	213, // 65: commodore.User.last_login_at:type_name -> google.protobuf.Timestamp
-	213, // 66: commodore.User.created_at:type_name -> google.protobuf.Timestamp
-	213, // 67: commodore.User.updated_at:type_name -> google.protobuf.Timestamp
+	219, // 63: commodore.WalletIdentity.created_at:type_name -> google.protobuf.Timestamp
+	219, // 64: commodore.WalletIdentity.last_auth_at:type_name -> google.protobuf.Timestamp
+	219, // 65: commodore.User.last_login_at:type_name -> google.protobuf.Timestamp
+	219, // 66: commodore.User.created_at:type_name -> google.protobuf.Timestamp
+	219, // 67: commodore.User.updated_at:type_name -> google.protobuf.Timestamp
 	128, // 68: commodore.User.wallets:type_name -> commodore.WalletIdentity
 	141, // 69: commodore.CreateStreamRequest.pull_source:type_name -> commodore.PullSourceInput
 	134, // 70: commodore.CreateStreamRequest.source_location:type_name -> commodore.StreamSourceLocation
@@ -17289,329 +17769,337 @@ var file_commodore_proto_depIdxs = []int32{
 	133, // 72: commodore.StreamSourceLocation.clusters:type_name -> commodore.SourceLocationCluster
 	142, // 73: commodore.CreateStreamResponse.pull_source:type_name -> commodore.PullSourceView
 	134, // 74: commodore.CreateStreamResponse.source_location:type_name -> commodore.StreamSourceLocation
-	220, // 75: commodore.CreateStreamResponse.source_location_warnings:type_name -> media_placement.Warning
+	226, // 75: commodore.CreateStreamResponse.source_location_warnings:type_name -> media_placement.Warning
 	139, // 76: commodore.GetStreamsBatchResponse.streams:type_name -> commodore.Stream
-	213, // 77: commodore.Stream.started_at:type_name -> google.protobuf.Timestamp
-	213, // 78: commodore.Stream.ended_at:type_name -> google.protobuf.Timestamp
-	213, // 79: commodore.Stream.created_at:type_name -> google.protobuf.Timestamp
-	213, // 80: commodore.Stream.updated_at:type_name -> google.protobuf.Timestamp
+	219, // 77: commodore.Stream.started_at:type_name -> google.protobuf.Timestamp
+	219, // 78: commodore.Stream.ended_at:type_name -> google.protobuf.Timestamp
+	219, // 79: commodore.Stream.created_at:type_name -> google.protobuf.Timestamp
+	219, // 80: commodore.Stream.updated_at:type_name -> google.protobuf.Timestamp
 	142, // 81: commodore.Stream.pull_source:type_name -> commodore.PullSourceView
-	218, // 82: commodore.Stream.thumbnail_assets:type_name -> shared.ThumbnailAssets
+	224, // 82: commodore.Stream.thumbnail_assets:type_name -> shared.ThumbnailAssets
 	1,   // 83: commodore.Stream.monitoring:type_name -> commodore.MonitoringToggle
 	143, // 84: commodore.Stream.managed_source:type_name -> commodore.ManagedSourceView
 	134, // 85: commodore.Stream.source_location:type_name -> commodore.StreamSourceLocation
-	220, // 86: commodore.Stream.source_location_warnings:type_name -> media_placement.Warning
+	226, // 86: commodore.Stream.source_location_warnings:type_name -> media_placement.Warning
 	140, // 87: commodore.PullSourceInput.allowed_clusters:type_name -> commodore.PullSourceAllowedClustersInput
-	221, // 88: commodore.ListStreamsRequest.pagination:type_name -> common.CursorPaginationRequest
+	227, // 88: commodore.ListStreamsRequest.pagination:type_name -> common.CursorPaginationRequest
 	139, // 89: commodore.ListStreamsResponse.streams:type_name -> commodore.Stream
-	222, // 90: commodore.ListStreamsResponse.pagination:type_name -> common.CursorPaginationResponse
+	228, // 90: commodore.ListStreamsResponse.pagination:type_name -> common.CursorPaginationResponse
 	141, // 91: commodore.UpdateStreamRequest.pull_source:type_name -> commodore.PullSourceInput
 	1,   // 92: commodore.UpdateStreamRequest.monitoring:type_name -> commodore.MonitoringToggle
 	134, // 93: commodore.UpdateStreamRequest.source_location:type_name -> commodore.StreamSourceLocation
-	213, // 94: commodore.DeleteStreamResponse.deleted_at:type_name -> google.protobuf.Timestamp
-	213, // 95: commodore.StreamKey.last_used_at:type_name -> google.protobuf.Timestamp
-	213, // 96: commodore.StreamKey.created_at:type_name -> google.protobuf.Timestamp
-	213, // 97: commodore.StreamKey.updated_at:type_name -> google.protobuf.Timestamp
+	219, // 94: commodore.DeleteStreamResponse.deleted_at:type_name -> google.protobuf.Timestamp
+	219, // 95: commodore.StreamKey.last_used_at:type_name -> google.protobuf.Timestamp
+	219, // 96: commodore.StreamKey.created_at:type_name -> google.protobuf.Timestamp
+	219, // 97: commodore.StreamKey.updated_at:type_name -> google.protobuf.Timestamp
 	150, // 98: commodore.StreamKeyResponse.stream_key:type_name -> commodore.StreamKey
-	221, // 99: commodore.ListStreamKeysRequest.pagination:type_name -> common.CursorPaginationRequest
+	227, // 99: commodore.ListStreamKeysRequest.pagination:type_name -> common.CursorPaginationRequest
 	150, // 100: commodore.ListStreamKeysResponse.stream_keys:type_name -> commodore.StreamKey
-	222, // 101: commodore.ListStreamKeysResponse.pagination:type_name -> common.CursorPaginationResponse
-	213, // 102: commodore.PushTarget.last_pushed_at:type_name -> google.protobuf.Timestamp
-	213, // 103: commodore.PushTarget.created_at:type_name -> google.protobuf.Timestamp
-	213, // 104: commodore.PushTarget.updated_at:type_name -> google.protobuf.Timestamp
+	228, // 101: commodore.ListStreamKeysResponse.pagination:type_name -> common.CursorPaginationResponse
+	219, // 102: commodore.PushTarget.last_pushed_at:type_name -> google.protobuf.Timestamp
+	219, // 103: commodore.PushTarget.created_at:type_name -> google.protobuf.Timestamp
+	219, // 104: commodore.PushTarget.updated_at:type_name -> google.protobuf.Timestamp
 	155, // 105: commodore.ListPushTargetsResponse.push_targets:type_name -> commodore.PushTarget
-	213, // 106: commodore.DeletePushTargetResponse.deleted_at:type_name -> google.protobuf.Timestamp
+	219, // 106: commodore.DeletePushTargetResponse.deleted_at:type_name -> google.protobuf.Timestamp
 	164, // 107: commodore.GetStreamPushTargetsResponse.push_targets:type_name -> commodore.PushTargetInternal
 	4,   // 108: commodore.UpdatePushTargetStatusRequest.reason:type_name -> commodore.PushTargetStatusReason
-	221, // 109: commodore.AdminListAPITokensRequest.pagination:type_name -> common.CursorPaginationRequest
-	213, // 110: commodore.AdminAPITokenInfo.last_used_at:type_name -> google.protobuf.Timestamp
-	213, // 111: commodore.AdminAPITokenInfo.expires_at:type_name -> google.protobuf.Timestamp
-	213, // 112: commodore.AdminAPITokenInfo.created_at:type_name -> google.protobuf.Timestamp
+	227, // 109: commodore.AdminListAPITokensRequest.pagination:type_name -> common.CursorPaginationRequest
+	219, // 110: commodore.AdminAPITokenInfo.last_used_at:type_name -> google.protobuf.Timestamp
+	219, // 111: commodore.AdminAPITokenInfo.expires_at:type_name -> google.protobuf.Timestamp
+	219, // 112: commodore.AdminAPITokenInfo.created_at:type_name -> google.protobuf.Timestamp
 	167, // 113: commodore.AdminListAPITokensResponse.tokens:type_name -> commodore.AdminAPITokenInfo
-	222, // 114: commodore.AdminListAPITokensResponse.pagination:type_name -> common.CursorPaginationResponse
-	213, // 115: commodore.CreateAPITokenRequest.expires_at:type_name -> google.protobuf.Timestamp
-	213, // 116: commodore.CreateAPITokenResponse.expires_at:type_name -> google.protobuf.Timestamp
-	213, // 117: commodore.CreateAPITokenResponse.created_at:type_name -> google.protobuf.Timestamp
-	221, // 118: commodore.ListAPITokensRequest.pagination:type_name -> common.CursorPaginationRequest
-	213, // 119: commodore.APITokenInfo.last_used_at:type_name -> google.protobuf.Timestamp
-	213, // 120: commodore.APITokenInfo.expires_at:type_name -> google.protobuf.Timestamp
-	213, // 121: commodore.APITokenInfo.created_at:type_name -> google.protobuf.Timestamp
+	228, // 114: commodore.AdminListAPITokensResponse.pagination:type_name -> common.CursorPaginationResponse
+	219, // 115: commodore.CreateAPITokenRequest.expires_at:type_name -> google.protobuf.Timestamp
+	219, // 116: commodore.CreateAPITokenResponse.expires_at:type_name -> google.protobuf.Timestamp
+	219, // 117: commodore.CreateAPITokenResponse.created_at:type_name -> google.protobuf.Timestamp
+	227, // 118: commodore.ListAPITokensRequest.pagination:type_name -> common.CursorPaginationRequest
+	219, // 119: commodore.APITokenInfo.last_used_at:type_name -> google.protobuf.Timestamp
+	219, // 120: commodore.APITokenInfo.expires_at:type_name -> google.protobuf.Timestamp
+	219, // 121: commodore.APITokenInfo.created_at:type_name -> google.protobuf.Timestamp
 	172, // 122: commodore.ListAPITokensResponse.tokens:type_name -> commodore.APITokenInfo
-	222, // 123: commodore.ListAPITokensResponse.pagination:type_name -> common.CursorPaginationResponse
-	213, // 124: commodore.RevokeAPITokenResponse.revoked_at:type_name -> google.protobuf.Timestamp
+	228, // 123: commodore.ListAPITokensResponse.pagination:type_name -> common.CursorPaginationResponse
+	219, // 124: commodore.RevokeAPITokenResponse.revoked_at:type_name -> google.protobuf.Timestamp
 	178, // 125: commodore.CreateSigningKeyResponse.signing_key:type_name -> commodore.SigningKey
 	178, // 126: commodore.ListSigningKeysResponse.signing_keys:type_name -> commodore.SigningKey
 	42,  // 127: commodore.SetPlaybackPolicyRequest.jwt:type_name -> commodore.PlaybackJwtPolicy
 	43,  // 128: commodore.SetPlaybackPolicyRequest.webhook:type_name -> commodore.PlaybackWebhookPolicy
-	213, // 129: commodore.PullSourceEvent.created_at:type_name -> google.protobuf.Timestamp
+	219, // 129: commodore.PullSourceEvent.created_at:type_name -> google.protobuf.Timestamp
 	189, // 130: commodore.ListPullSourceEventsResponse.events:type_name -> commodore.PullSourceEvent
 	191, // 131: commodore.GetMediaRetentionPolicyResponse.bounds:type_name -> commodore.MediaRetentionBounds
-	213, // 132: commodore.GetMediaRetentionPolicyResponse.updated_at:type_name -> google.protobuf.Timestamp
+	219, // 132: commodore.GetMediaRetentionPolicyResponse.updated_at:type_name -> google.protobuf.Timestamp
 	5,   // 133: commodore.SetMediaRetentionPolicyRequest.target_type:type_name -> commodore.MediaRetentionTarget
 	193, // 134: commodore.SetMediaRetentionPolicyResponse.policy:type_name -> commodore.GetMediaRetentionPolicyResponse
 	5,   // 135: commodore.UpdateAssetRetentionRequest.target_type:type_name -> commodore.MediaRetentionTarget
-	213, // 136: commodore.UpdateAssetRetentionRequest.retention_until:type_name -> google.protobuf.Timestamp
+	219, // 136: commodore.UpdateAssetRetentionRequest.retention_until:type_name -> google.protobuf.Timestamp
 	5,   // 137: commodore.ResetAssetRetentionRequest.target_type:type_name -> commodore.MediaRetentionTarget
-	213, // 138: commodore.UpdateAssetRetentionResponse.retention_until:type_name -> google.protobuf.Timestamp
-	213, // 139: commodore.CompleteAuthorizationResponse.expires_at:type_name -> google.protobuf.Timestamp
-	213, // 140: commodore.LookupDeviceAuthorizationResponse.expires_at:type_name -> google.protobuf.Timestamp
-	16,  // 141: commodore.InternalService.ValidateStreamKey:input_type -> commodore.ValidateStreamKeyRequest
-	16,  // 142: commodore.InternalService.CheckStreamKey:input_type -> commodore.ValidateStreamKeyRequest
-	18,  // 143: commodore.InternalService.ResolveStreamContext:input_type -> commodore.ResolveStreamContextRequest
-	20,  // 144: commodore.InternalService.ListManagedStreams:input_type -> commodore.ListManagedStreamsRequest
-	23,  // 145: commodore.InternalService.ListStreamMonitoring:input_type -> commodore.ListStreamMonitoringRequest
-	26,  // 146: commodore.InternalService.RecordStreamActiveCluster:input_type -> commodore.RecordStreamActiveClusterRequest
-	28,  // 147: commodore.InternalService.RegisterStreamThumbnailServingCell:input_type -> commodore.RegisterStreamThumbnailServingCellRequest
-	30,  // 148: commodore.InternalService.ClearStreamActiveCluster:input_type -> commodore.ClearStreamActiveClusterRequest
-	33,  // 149: commodore.InternalService.SyncActiveIngestPlacement:input_type -> commodore.SyncActiveIngestPlacementRequest
-	35,  // 150: commodore.InternalService.ResolvePlaybackID:input_type -> commodore.ResolvePlaybackIDRequest
-	37,  // 151: commodore.InternalService.ResolvePullSourceByInternalName:input_type -> commodore.ResolvePullSourceByInternalNameRequest
-	39,  // 152: commodore.InternalService.ResolvePlaybackPolicy:input_type -> commodore.ResolvePlaybackPolicyRequest
-	40,  // 153: commodore.InternalService.RecordSigningKeyUse:input_type -> commodore.RecordSigningKeyUseRequest
-	45,  // 154: commodore.InternalService.ResolveInternalName:input_type -> commodore.ResolveInternalNameRequest
-	47,  // 155: commodore.InternalService.ValidateAPIToken:input_type -> commodore.ValidateAPITokenRequest
-	49,  // 156: commodore.InternalService.ValidateSession:input_type -> commodore.ValidateSessionRequest
-	51,  // 157: commodore.InternalService.ListRecentSessionRevocations:input_type -> commodore.ListRecentSessionRevocationsRequest
-	54,  // 158: commodore.InternalService.MintMistAdminSession:input_type -> commodore.MintMistAdminSessionRequest
-	56,  // 159: commodore.InternalService.ValidateMistAdminSession:input_type -> commodore.ValidateMistAdminSessionRequest
-	223, // 160: commodore.InternalService.StartDVR:input_type -> shared.StartDVRRequest
-	224, // 161: commodore.InternalService.RetrieveDVRChapter:input_type -> foghorn_control.RetrieveDVRChapterRequest
-	225, // 162: commodore.InternalService.ListDVRChapters:input_type -> foghorn_control.ListDVRChaptersRequest
-	58,  // 163: commodore.InternalService.RegisterDVR:input_type -> commodore.RegisterDVRRequest
-	60,  // 164: commodore.InternalService.UpdateDVRRetention:input_type -> commodore.UpdateDVRRetentionRequest
-	63,  // 165: commodore.InternalService.UpdateArtifactCatalogSnapshot:input_type -> commodore.UpdateArtifactCatalogSnapshotRequest
-	65,  // 166: commodore.InternalService.ResolveClipHash:input_type -> commodore.ResolveClipHashRequest
-	67,  // 167: commodore.InternalService.ResolveDVRHash:input_type -> commodore.ResolveDVRHashRequest
-	84,  // 168: commodore.InternalService.ResolveArtifactPlaybackID:input_type -> commodore.ResolveArtifactPlaybackIDRequest
-	86,  // 169: commodore.InternalService.ResolveArtifactInternalName:input_type -> commodore.ResolveArtifactInternalNameRequest
-	69,  // 170: commodore.InternalService.ResolveIdentifier:input_type -> commodore.ResolveIdentifierRequest
-	71,  // 171: commodore.InternalService.ResolveVodHash:input_type -> commodore.ResolveVodHashRequest
-	73,  // 172: commodore.InternalService.ResolveVodID:input_type -> commodore.ResolveVodIDRequest
-	75,  // 173: commodore.InternalService.MintChapterPlaybackID:input_type -> commodore.MintChapterPlaybackIDRequest
-	77,  // 174: commodore.InternalService.ResolveChapterPlaybackID:input_type -> commodore.ResolveChapterPlaybackIDRequest
-	79,  // 175: commodore.InternalService.GetTenantProcessesJSON:input_type -> commodore.GetTenantProcessesJSONRequest
-	81,  // 176: commodore.InternalService.ListStorageArtifacts:input_type -> commodore.ListStorageArtifactsRequest
-	88,  // 177: commodore.InternalService.GetOrCreateWalletUser:input_type -> commodore.GetOrCreateWalletUserRequest
-	226, // 178: commodore.InternalService.TerminateTenantStreams:input_type -> foghorn_control.TerminateTenantStreamsRequest
-	227, // 179: commodore.InternalService.InvalidateTenantCache:input_type -> foghorn_control.InvalidateTenantCacheRequest
-	90,  // 180: commodore.InternalService.GetTenantUserCount:input_type -> commodore.GetTenantUserCountRequest
-	92,  // 181: commodore.InternalService.GetTenantPrimaryUser:input_type -> commodore.GetTenantPrimaryUserRequest
-	94,  // 182: commodore.InternalService.CreateUserInTenant:input_type -> commodore.CreateUserInTenantRequest
-	192, // 183: commodore.InternalService.GetMediaRetentionPolicy:input_type -> commodore.GetMediaRetentionPolicyRequest
-	194, // 184: commodore.InternalService.SetMediaRetentionPolicy:input_type -> commodore.SetMediaRetentionPolicyRequest
-	196, // 185: commodore.InternalService.UpdateAssetRetention:input_type -> commodore.UpdateAssetRetentionRequest
-	197, // 186: commodore.InternalService.ResetAssetRetention:input_type -> commodore.ResetAssetRetentionRequest
-	199, // 187: commodore.InternalService.SetStreamRetentionOverrides:input_type -> commodore.SetStreamRetentionOverridesRequest
-	228, // 188: commodore.InternalService.GetMediaPlacementPolicy:input_type -> media_placement.GetPolicyRequest
-	229, // 189: commodore.InternalService.GetMediaPlacementOptions:input_type -> media_placement.GetOptionsRequest
-	230, // 190: commodore.InternalService.PreviewMediaPlacement:input_type -> media_placement.PreviewRequest
-	231, // 191: commodore.InternalService.ReviewMediaPlacementChange:input_type -> media_placement.ReviewChangeRequest
-	232, // 192: commodore.InternalService.ApplyMediaPlacementChange:input_type -> media_placement.ApplyChangeRequest
-	233, // 193: commodore.InternalService.GetMediaPlacementChange:input_type -> media_placement.GetChangeRequest
-	234, // 194: commodore.InternalService.TestPlaybackAccess:input_type -> foghorn_control.TestPlaybackAccessRequest
-	187, // 195: commodore.InternalService.RecordPullSourceEvent:input_type -> commodore.RecordPullSourceEventRequest
-	188, // 196: commodore.InternalService.ListPullSourceEvents:input_type -> commodore.ListPullSourceEventsRequest
-	7,   // 197: commodore.InternalService.RequestMediaAuthorityRefresh:input_type -> commodore.RequestMediaAuthorityRefreshRequest
-	9,   // 198: commodore.InternalService.RequestMediaAuthorityReplay:input_type -> commodore.RequestMediaAuthorityReplayRequest
-	12,  // 199: commodore.InternalService.FetchMediaAuthority:input_type -> commodore.FetchMediaAuthorityRequest
-	15,  // 200: commodore.InternalService.ReportMediaAuthorityUse:input_type -> commodore.ReportMediaAuthorityUseRequest
-	6,   // 201: commodore.InternalService.ReportMediaCellPlacementCapability:input_type -> commodore.ReportMediaCellPlacementCapabilityRequest
-	98,  // 202: commodore.UserService.Login:input_type -> commodore.LoginRequest
-	100, // 203: commodore.UserService.Register:input_type -> commodore.RegisterRequest
-	104, // 204: commodore.UserService.Logout:input_type -> commodore.LogoutRequest
-	106, // 205: commodore.UserService.RefreshToken:input_type -> commodore.RefreshTokenRequest
-	107, // 206: commodore.UserService.VerifyEmail:input_type -> commodore.VerifyEmailRequest
-	109, // 207: commodore.UserService.ResendVerification:input_type -> commodore.ResendVerificationRequest
-	111, // 208: commodore.UserService.ForgotPassword:input_type -> commodore.ForgotPasswordRequest
-	113, // 209: commodore.UserService.ResetPassword:input_type -> commodore.ResetPasswordRequest
-	103, // 210: commodore.UserService.GetMe:input_type -> commodore.GetMeRequest
-	115, // 211: commodore.UserService.UpdateMe:input_type -> commodore.UpdateMeRequest
-	116, // 212: commodore.UserService.UpdateNewsletter:input_type -> commodore.UpdateNewsletterRequest
-	118, // 213: commodore.UserService.GetNewsletterStatus:input_type -> commodore.GetNewsletterStatusRequest
-	120, // 214: commodore.UserService.IssueWalletChallenge:input_type -> commodore.IssueWalletChallengeRequest
-	122, // 215: commodore.UserService.WalletLogin:input_type -> commodore.WalletLoginRequest
-	123, // 216: commodore.UserService.LinkWallet:input_type -> commodore.LinkWalletRequest
-	124, // 217: commodore.UserService.UnlinkWallet:input_type -> commodore.UnlinkWalletRequest
-	126, // 218: commodore.UserService.ListWallets:input_type -> commodore.ListWalletsRequest
-	129, // 219: commodore.UserService.LinkEmail:input_type -> commodore.LinkEmailRequest
-	201, // 220: commodore.UserService.CompleteAuthorization:input_type -> commodore.CompleteAuthorizationRequest
-	203, // 221: commodore.UserService.ExchangeAuthorizationCode:input_type -> commodore.ExchangeAuthorizationCodeRequest
-	204, // 222: commodore.UserService.StartDeviceAuthorization:input_type -> commodore.StartDeviceAuthorizationRequest
-	206, // 223: commodore.UserService.PollDeviceAuthorization:input_type -> commodore.PollDeviceAuthorizationRequest
-	207, // 224: commodore.UserService.LookupDeviceAuthorization:input_type -> commodore.LookupDeviceAuthorizationRequest
-	209, // 225: commodore.UserService.ApproveDeviceAuthorization:input_type -> commodore.ApproveDeviceAuthorizationRequest
-	96,  // 226: commodore.UserService.AdminLookupUserByEmail:input_type -> commodore.AdminLookupUserByEmailRequest
-	132, // 227: commodore.StreamService.CreateStream:input_type -> commodore.CreateStreamRequest
-	136, // 228: commodore.StreamService.GetStream:input_type -> commodore.GetStreamRequest
-	137, // 229: commodore.StreamService.GetStreamsBatch:input_type -> commodore.GetStreamsBatchRequest
-	144, // 230: commodore.StreamService.ListStreams:input_type -> commodore.ListStreamsRequest
-	146, // 231: commodore.StreamService.UpdateStream:input_type -> commodore.UpdateStreamRequest
-	147, // 232: commodore.StreamService.DeleteStream:input_type -> commodore.DeleteStreamRequest
-	176, // 233: commodore.StreamService.RefreshStreamKey:input_type -> commodore.RefreshStreamKeyRequest
-	149, // 234: commodore.StreamKeyService.CreateStreamKey:input_type -> commodore.CreateStreamKeyRequest
-	152, // 235: commodore.StreamKeyService.ListStreamKeys:input_type -> commodore.ListStreamKeysRequest
-	154, // 236: commodore.StreamKeyService.DeactivateStreamKey:input_type -> commodore.DeactivateStreamKeyRequest
-	156, // 237: commodore.PushTargetService.CreatePushTarget:input_type -> commodore.CreatePushTargetRequest
-	157, // 238: commodore.PushTargetService.ListPushTargets:input_type -> commodore.ListPushTargetsRequest
-	159, // 239: commodore.PushTargetService.UpdatePushTarget:input_type -> commodore.UpdatePushTargetRequest
-	160, // 240: commodore.PushTargetService.DeletePushTarget:input_type -> commodore.DeletePushTargetRequest
-	162, // 241: commodore.PushTargetService.GetStreamPushTargets:input_type -> commodore.GetStreamPushTargetsRequest
-	165, // 242: commodore.PushTargetService.UpdatePushTargetStatus:input_type -> commodore.UpdatePushTargetStatusRequest
-	169, // 243: commodore.DeveloperService.CreateAPIToken:input_type -> commodore.CreateAPITokenRequest
-	171, // 244: commodore.DeveloperService.ListAPITokens:input_type -> commodore.ListAPITokensRequest
-	174, // 245: commodore.DeveloperService.RevokeAPIToken:input_type -> commodore.RevokeAPITokenRequest
-	166, // 246: commodore.DeveloperService.AdminListAPITokens:input_type -> commodore.AdminListAPITokensRequest
-	235, // 247: commodore.ClipService.CreateClip:input_type -> shared.CreateClipRequest
-	236, // 248: commodore.ClipService.GetClip:input_type -> shared.GetClipRequest
-	237, // 249: commodore.ClipService.DeleteClip:input_type -> shared.DeleteClipRequest
-	238, // 250: commodore.DVRService.StopDVR:input_type -> shared.StopDVRRequest
-	239, // 251: commodore.DVRService.DeleteDVR:input_type -> shared.DeleteDVRRequest
-	240, // 252: commodore.ViewerService.ResolveViewerEndpoint:input_type -> shared.ViewerEndpointRequest
-	241, // 253: commodore.ViewerService.ResolveIngestEndpoint:input_type -> shared.IngestEndpointRequest
-	242, // 254: commodore.VodService.CreateVodUpload:input_type -> shared.CreateVodUploadRequest
-	243, // 255: commodore.VodService.ImportVodAsset:input_type -> shared.ImportVodAssetRequest
-	244, // 256: commodore.VodService.CompleteVodUpload:input_type -> shared.CompleteVodUploadRequest
-	245, // 257: commodore.VodService.AbortVodUpload:input_type -> shared.AbortVodUploadRequest
-	246, // 258: commodore.VodService.GetVodUploadStatus:input_type -> shared.GetVodUploadStatusRequest
-	247, // 259: commodore.VodService.DeleteVodAsset:input_type -> shared.DeleteVodAssetRequest
-	248, // 260: commodore.NodeManagementService.SetNodeOperationalMode:input_type -> foghorn_control.SetNodeModeRequest
-	249, // 261: commodore.NodeManagementService.GetNodeHealth:input_type -> foghorn_control.GetNodeHealthRequest
-	179, // 262: commodore.PlaybackAccessControlService.CreateSigningKey:input_type -> commodore.CreateSigningKeyRequest
-	181, // 263: commodore.PlaybackAccessControlService.GetSigningKey:input_type -> commodore.GetSigningKeyRequest
-	182, // 264: commodore.PlaybackAccessControlService.ListSigningKeys:input_type -> commodore.ListSigningKeysRequest
-	184, // 265: commodore.PlaybackAccessControlService.RevokeSigningKey:input_type -> commodore.RevokeSigningKeyRequest
-	185, // 266: commodore.PlaybackAccessControlService.SetPlaybackPolicy:input_type -> commodore.SetPlaybackPolicyRequest
-	17,  // 267: commodore.InternalService.ValidateStreamKey:output_type -> commodore.ValidateStreamKeyResponse
-	17,  // 268: commodore.InternalService.CheckStreamKey:output_type -> commodore.ValidateStreamKeyResponse
-	19,  // 269: commodore.InternalService.ResolveStreamContext:output_type -> commodore.ResolveStreamContextResponse
-	22,  // 270: commodore.InternalService.ListManagedStreams:output_type -> commodore.ListManagedStreamsResponse
-	25,  // 271: commodore.InternalService.ListStreamMonitoring:output_type -> commodore.ListStreamMonitoringResponse
-	27,  // 272: commodore.InternalService.RecordStreamActiveCluster:output_type -> commodore.RecordStreamActiveClusterResponse
-	29,  // 273: commodore.InternalService.RegisterStreamThumbnailServingCell:output_type -> commodore.RegisterStreamThumbnailServingCellResponse
-	31,  // 274: commodore.InternalService.ClearStreamActiveCluster:output_type -> commodore.ClearStreamActiveClusterResponse
-	34,  // 275: commodore.InternalService.SyncActiveIngestPlacement:output_type -> commodore.SyncActiveIngestPlacementResponse
-	36,  // 276: commodore.InternalService.ResolvePlaybackID:output_type -> commodore.ResolvePlaybackIDResponse
-	38,  // 277: commodore.InternalService.ResolvePullSourceByInternalName:output_type -> commodore.ResolvePullSourceByInternalNameResponse
-	44,  // 278: commodore.InternalService.ResolvePlaybackPolicy:output_type -> commodore.ResolvePlaybackPolicyResponse
-	250, // 279: commodore.InternalService.RecordSigningKeyUse:output_type -> google.protobuf.Empty
-	46,  // 280: commodore.InternalService.ResolveInternalName:output_type -> commodore.ResolveInternalNameResponse
-	48,  // 281: commodore.InternalService.ValidateAPIToken:output_type -> commodore.ValidateAPITokenResponse
-	50,  // 282: commodore.InternalService.ValidateSession:output_type -> commodore.ValidateSessionResponse
-	53,  // 283: commodore.InternalService.ListRecentSessionRevocations:output_type -> commodore.ListRecentSessionRevocationsResponse
-	55,  // 284: commodore.InternalService.MintMistAdminSession:output_type -> commodore.MintMistAdminSessionResponse
-	57,  // 285: commodore.InternalService.ValidateMistAdminSession:output_type -> commodore.ValidateMistAdminSessionResponse
-	251, // 286: commodore.InternalService.StartDVR:output_type -> shared.StartDVRResponse
-	252, // 287: commodore.InternalService.RetrieveDVRChapter:output_type -> foghorn_control.RetrieveDVRChapterResponse
-	253, // 288: commodore.InternalService.ListDVRChapters:output_type -> foghorn_control.ListDVRChaptersResponse
-	59,  // 289: commodore.InternalService.RegisterDVR:output_type -> commodore.RegisterDVRResponse
-	61,  // 290: commodore.InternalService.UpdateDVRRetention:output_type -> commodore.UpdateDVRRetentionResponse
-	64,  // 291: commodore.InternalService.UpdateArtifactCatalogSnapshot:output_type -> commodore.UpdateArtifactCatalogSnapshotResponse
-	66,  // 292: commodore.InternalService.ResolveClipHash:output_type -> commodore.ResolveClipHashResponse
-	68,  // 293: commodore.InternalService.ResolveDVRHash:output_type -> commodore.ResolveDVRHashResponse
-	85,  // 294: commodore.InternalService.ResolveArtifactPlaybackID:output_type -> commodore.ResolveArtifactPlaybackIDResponse
-	87,  // 295: commodore.InternalService.ResolveArtifactInternalName:output_type -> commodore.ResolveArtifactInternalNameResponse
-	70,  // 296: commodore.InternalService.ResolveIdentifier:output_type -> commodore.ResolveIdentifierResponse
-	72,  // 297: commodore.InternalService.ResolveVodHash:output_type -> commodore.ResolveVodHashResponse
-	74,  // 298: commodore.InternalService.ResolveVodID:output_type -> commodore.ResolveVodIDResponse
-	76,  // 299: commodore.InternalService.MintChapterPlaybackID:output_type -> commodore.MintChapterPlaybackIDResponse
-	78,  // 300: commodore.InternalService.ResolveChapterPlaybackID:output_type -> commodore.ResolveChapterPlaybackIDResponse
-	80,  // 301: commodore.InternalService.GetTenantProcessesJSON:output_type -> commodore.GetTenantProcessesJSONResponse
-	83,  // 302: commodore.InternalService.ListStorageArtifacts:output_type -> commodore.ListStorageArtifactsResponse
-	89,  // 303: commodore.InternalService.GetOrCreateWalletUser:output_type -> commodore.GetOrCreateWalletUserResponse
-	254, // 304: commodore.InternalService.TerminateTenantStreams:output_type -> foghorn_control.TerminateTenantStreamsResponse
-	255, // 305: commodore.InternalService.InvalidateTenantCache:output_type -> foghorn_control.InvalidateTenantCacheResponse
-	91,  // 306: commodore.InternalService.GetTenantUserCount:output_type -> commodore.GetTenantUserCountResponse
-	93,  // 307: commodore.InternalService.GetTenantPrimaryUser:output_type -> commodore.GetTenantPrimaryUserResponse
-	95,  // 308: commodore.InternalService.CreateUserInTenant:output_type -> commodore.CreateUserInTenantResponse
-	193, // 309: commodore.InternalService.GetMediaRetentionPolicy:output_type -> commodore.GetMediaRetentionPolicyResponse
-	195, // 310: commodore.InternalService.SetMediaRetentionPolicy:output_type -> commodore.SetMediaRetentionPolicyResponse
-	198, // 311: commodore.InternalService.UpdateAssetRetention:output_type -> commodore.UpdateAssetRetentionResponse
-	198, // 312: commodore.InternalService.ResetAssetRetention:output_type -> commodore.UpdateAssetRetentionResponse
-	200, // 313: commodore.InternalService.SetStreamRetentionOverrides:output_type -> commodore.SetStreamRetentionOverridesResponse
-	256, // 314: commodore.InternalService.GetMediaPlacementPolicy:output_type -> media_placement.PolicyState
-	257, // 315: commodore.InternalService.GetMediaPlacementOptions:output_type -> media_placement.Options
-	258, // 316: commodore.InternalService.PreviewMediaPlacement:output_type -> media_placement.Preview
-	259, // 317: commodore.InternalService.ReviewMediaPlacementChange:output_type -> media_placement.Review
-	260, // 318: commodore.InternalService.ApplyMediaPlacementChange:output_type -> media_placement.Change
-	260, // 319: commodore.InternalService.GetMediaPlacementChange:output_type -> media_placement.Change
-	261, // 320: commodore.InternalService.TestPlaybackAccess:output_type -> foghorn_control.TestPlaybackAccessResponse
-	250, // 321: commodore.InternalService.RecordPullSourceEvent:output_type -> google.protobuf.Empty
-	190, // 322: commodore.InternalService.ListPullSourceEvents:output_type -> commodore.ListPullSourceEventsResponse
-	8,   // 323: commodore.InternalService.RequestMediaAuthorityRefresh:output_type -> commodore.RequestMediaAuthorityRefreshResponse
-	11,  // 324: commodore.InternalService.RequestMediaAuthorityReplay:output_type -> commodore.RequestMediaAuthorityReplayResponse
-	13,  // 325: commodore.InternalService.FetchMediaAuthority:output_type -> commodore.FetchMediaAuthorityResponse
-	250, // 326: commodore.InternalService.ReportMediaAuthorityUse:output_type -> google.protobuf.Empty
-	250, // 327: commodore.InternalService.ReportMediaCellPlacementCapability:output_type -> google.protobuf.Empty
-	101, // 328: commodore.UserService.Login:output_type -> commodore.AuthResponse
-	102, // 329: commodore.UserService.Register:output_type -> commodore.RegisterResponse
-	105, // 330: commodore.UserService.Logout:output_type -> commodore.LogoutResponse
-	101, // 331: commodore.UserService.RefreshToken:output_type -> commodore.AuthResponse
-	108, // 332: commodore.UserService.VerifyEmail:output_type -> commodore.VerifyEmailResponse
-	110, // 333: commodore.UserService.ResendVerification:output_type -> commodore.ResendVerificationResponse
-	112, // 334: commodore.UserService.ForgotPassword:output_type -> commodore.ForgotPasswordResponse
-	114, // 335: commodore.UserService.ResetPassword:output_type -> commodore.ResetPasswordResponse
-	131, // 336: commodore.UserService.GetMe:output_type -> commodore.User
-	131, // 337: commodore.UserService.UpdateMe:output_type -> commodore.User
-	117, // 338: commodore.UserService.UpdateNewsletter:output_type -> commodore.UpdateNewsletterResponse
-	119, // 339: commodore.UserService.GetNewsletterStatus:output_type -> commodore.GetNewsletterStatusResponse
-	121, // 340: commodore.UserService.IssueWalletChallenge:output_type -> commodore.IssueWalletChallengeResponse
-	101, // 341: commodore.UserService.WalletLogin:output_type -> commodore.AuthResponse
-	128, // 342: commodore.UserService.LinkWallet:output_type -> commodore.WalletIdentity
-	125, // 343: commodore.UserService.UnlinkWallet:output_type -> commodore.UnlinkWalletResponse
-	127, // 344: commodore.UserService.ListWallets:output_type -> commodore.ListWalletsResponse
-	130, // 345: commodore.UserService.LinkEmail:output_type -> commodore.LinkEmailResponse
-	202, // 346: commodore.UserService.CompleteAuthorization:output_type -> commodore.CompleteAuthorizationResponse
-	101, // 347: commodore.UserService.ExchangeAuthorizationCode:output_type -> commodore.AuthResponse
-	205, // 348: commodore.UserService.StartDeviceAuthorization:output_type -> commodore.StartDeviceAuthorizationResponse
-	101, // 349: commodore.UserService.PollDeviceAuthorization:output_type -> commodore.AuthResponse
-	208, // 350: commodore.UserService.LookupDeviceAuthorization:output_type -> commodore.LookupDeviceAuthorizationResponse
-	210, // 351: commodore.UserService.ApproveDeviceAuthorization:output_type -> commodore.ApproveDeviceAuthorizationResponse
-	97,  // 352: commodore.UserService.AdminLookupUserByEmail:output_type -> commodore.AdminLookupUserByEmailResponse
-	135, // 353: commodore.StreamService.CreateStream:output_type -> commodore.CreateStreamResponse
-	139, // 354: commodore.StreamService.GetStream:output_type -> commodore.Stream
-	138, // 355: commodore.StreamService.GetStreamsBatch:output_type -> commodore.GetStreamsBatchResponse
-	145, // 356: commodore.StreamService.ListStreams:output_type -> commodore.ListStreamsResponse
-	139, // 357: commodore.StreamService.UpdateStream:output_type -> commodore.Stream
-	148, // 358: commodore.StreamService.DeleteStream:output_type -> commodore.DeleteStreamResponse
-	177, // 359: commodore.StreamService.RefreshStreamKey:output_type -> commodore.RefreshStreamKeyResponse
-	151, // 360: commodore.StreamKeyService.CreateStreamKey:output_type -> commodore.StreamKeyResponse
-	153, // 361: commodore.StreamKeyService.ListStreamKeys:output_type -> commodore.ListStreamKeysResponse
-	250, // 362: commodore.StreamKeyService.DeactivateStreamKey:output_type -> google.protobuf.Empty
-	155, // 363: commodore.PushTargetService.CreatePushTarget:output_type -> commodore.PushTarget
-	158, // 364: commodore.PushTargetService.ListPushTargets:output_type -> commodore.ListPushTargetsResponse
-	155, // 365: commodore.PushTargetService.UpdatePushTarget:output_type -> commodore.PushTarget
-	161, // 366: commodore.PushTargetService.DeletePushTarget:output_type -> commodore.DeletePushTargetResponse
-	163, // 367: commodore.PushTargetService.GetStreamPushTargets:output_type -> commodore.GetStreamPushTargetsResponse
-	155, // 368: commodore.PushTargetService.UpdatePushTargetStatus:output_type -> commodore.PushTarget
-	170, // 369: commodore.DeveloperService.CreateAPIToken:output_type -> commodore.CreateAPITokenResponse
-	173, // 370: commodore.DeveloperService.ListAPITokens:output_type -> commodore.ListAPITokensResponse
-	175, // 371: commodore.DeveloperService.RevokeAPIToken:output_type -> commodore.RevokeAPITokenResponse
-	168, // 372: commodore.DeveloperService.AdminListAPITokens:output_type -> commodore.AdminListAPITokensResponse
-	262, // 373: commodore.ClipService.CreateClip:output_type -> shared.CreateClipResponse
-	263, // 374: commodore.ClipService.GetClip:output_type -> shared.ClipInfo
-	264, // 375: commodore.ClipService.DeleteClip:output_type -> shared.DeleteClipResponse
-	265, // 376: commodore.DVRService.StopDVR:output_type -> shared.StopDVRResponse
-	266, // 377: commodore.DVRService.DeleteDVR:output_type -> shared.DeleteDVRResponse
-	267, // 378: commodore.ViewerService.ResolveViewerEndpoint:output_type -> shared.ViewerEndpointResponse
-	268, // 379: commodore.ViewerService.ResolveIngestEndpoint:output_type -> shared.IngestEndpointResponse
-	269, // 380: commodore.VodService.CreateVodUpload:output_type -> shared.CreateVodUploadResponse
-	270, // 381: commodore.VodService.ImportVodAsset:output_type -> shared.ImportVodAssetResponse
-	271, // 382: commodore.VodService.CompleteVodUpload:output_type -> shared.CompleteVodUploadResponse
-	272, // 383: commodore.VodService.AbortVodUpload:output_type -> shared.AbortVodUploadResponse
-	273, // 384: commodore.VodService.GetVodUploadStatus:output_type -> shared.GetVodUploadStatusResponse
-	274, // 385: commodore.VodService.DeleteVodAsset:output_type -> shared.DeleteVodAssetResponse
-	275, // 386: commodore.NodeManagementService.SetNodeOperationalMode:output_type -> foghorn_control.SetNodeModeResponse
-	276, // 387: commodore.NodeManagementService.GetNodeHealth:output_type -> foghorn_control.GetNodeHealthResponse
-	180, // 388: commodore.PlaybackAccessControlService.CreateSigningKey:output_type -> commodore.CreateSigningKeyResponse
-	178, // 389: commodore.PlaybackAccessControlService.GetSigningKey:output_type -> commodore.SigningKey
-	183, // 390: commodore.PlaybackAccessControlService.ListSigningKeys:output_type -> commodore.ListSigningKeysResponse
-	178, // 391: commodore.PlaybackAccessControlService.RevokeSigningKey:output_type -> commodore.SigningKey
-	186, // 392: commodore.PlaybackAccessControlService.SetPlaybackPolicy:output_type -> commodore.SetPlaybackPolicyResponse
-	267, // [267:393] is the sub-list for method output_type
-	141, // [141:267] is the sub-list for method input_type
-	141, // [141:141] is the sub-list for extension type_name
-	141, // [141:141] is the sub-list for extension extendee
-	0,   // [0:141] is the sub-list for field type_name
+	219, // 138: commodore.UpdateAssetRetentionResponse.retention_until:type_name -> google.protobuf.Timestamp
+	219, // 139: commodore.CompleteAuthorizationResponse.expires_at:type_name -> google.protobuf.Timestamp
+	219, // 140: commodore.LookupDeviceAuthorizationResponse.expires_at:type_name -> google.protobuf.Timestamp
+	219, // 141: commodore.OperatorAccountAuditEntry.created_at:type_name -> google.protobuf.Timestamp
+	215, // 142: commodore.AdminListAccountHistoryResponse.entries:type_name -> commodore.OperatorAccountAuditEntry
+	16,  // 143: commodore.InternalService.ValidateStreamKey:input_type -> commodore.ValidateStreamKeyRequest
+	16,  // 144: commodore.InternalService.CheckStreamKey:input_type -> commodore.ValidateStreamKeyRequest
+	18,  // 145: commodore.InternalService.ResolveStreamContext:input_type -> commodore.ResolveStreamContextRequest
+	20,  // 146: commodore.InternalService.ListManagedStreams:input_type -> commodore.ListManagedStreamsRequest
+	23,  // 147: commodore.InternalService.ListStreamMonitoring:input_type -> commodore.ListStreamMonitoringRequest
+	26,  // 148: commodore.InternalService.RecordStreamActiveCluster:input_type -> commodore.RecordStreamActiveClusterRequest
+	28,  // 149: commodore.InternalService.RegisterStreamThumbnailServingCell:input_type -> commodore.RegisterStreamThumbnailServingCellRequest
+	30,  // 150: commodore.InternalService.ClearStreamActiveCluster:input_type -> commodore.ClearStreamActiveClusterRequest
+	33,  // 151: commodore.InternalService.SyncActiveIngestPlacement:input_type -> commodore.SyncActiveIngestPlacementRequest
+	35,  // 152: commodore.InternalService.ResolvePlaybackID:input_type -> commodore.ResolvePlaybackIDRequest
+	37,  // 153: commodore.InternalService.ResolvePullSourceByInternalName:input_type -> commodore.ResolvePullSourceByInternalNameRequest
+	39,  // 154: commodore.InternalService.ResolvePlaybackPolicy:input_type -> commodore.ResolvePlaybackPolicyRequest
+	40,  // 155: commodore.InternalService.RecordSigningKeyUse:input_type -> commodore.RecordSigningKeyUseRequest
+	45,  // 156: commodore.InternalService.ResolveInternalName:input_type -> commodore.ResolveInternalNameRequest
+	47,  // 157: commodore.InternalService.ValidateAPIToken:input_type -> commodore.ValidateAPITokenRequest
+	49,  // 158: commodore.InternalService.ValidateSession:input_type -> commodore.ValidateSessionRequest
+	51,  // 159: commodore.InternalService.ListRecentSessionRevocations:input_type -> commodore.ListRecentSessionRevocationsRequest
+	54,  // 160: commodore.InternalService.MintMistAdminSession:input_type -> commodore.MintMistAdminSessionRequest
+	56,  // 161: commodore.InternalService.ValidateMistAdminSession:input_type -> commodore.ValidateMistAdminSessionRequest
+	229, // 162: commodore.InternalService.StartDVR:input_type -> shared.StartDVRRequest
+	230, // 163: commodore.InternalService.RetrieveDVRChapter:input_type -> foghorn_control.RetrieveDVRChapterRequest
+	231, // 164: commodore.InternalService.ListDVRChapters:input_type -> foghorn_control.ListDVRChaptersRequest
+	58,  // 165: commodore.InternalService.RegisterDVR:input_type -> commodore.RegisterDVRRequest
+	60,  // 166: commodore.InternalService.UpdateDVRRetention:input_type -> commodore.UpdateDVRRetentionRequest
+	63,  // 167: commodore.InternalService.UpdateArtifactCatalogSnapshot:input_type -> commodore.UpdateArtifactCatalogSnapshotRequest
+	65,  // 168: commodore.InternalService.ResolveClipHash:input_type -> commodore.ResolveClipHashRequest
+	67,  // 169: commodore.InternalService.ResolveDVRHash:input_type -> commodore.ResolveDVRHashRequest
+	84,  // 170: commodore.InternalService.ResolveArtifactPlaybackID:input_type -> commodore.ResolveArtifactPlaybackIDRequest
+	86,  // 171: commodore.InternalService.ResolveArtifactInternalName:input_type -> commodore.ResolveArtifactInternalNameRequest
+	69,  // 172: commodore.InternalService.ResolveIdentifier:input_type -> commodore.ResolveIdentifierRequest
+	71,  // 173: commodore.InternalService.ResolveVodHash:input_type -> commodore.ResolveVodHashRequest
+	73,  // 174: commodore.InternalService.ResolveVodID:input_type -> commodore.ResolveVodIDRequest
+	75,  // 175: commodore.InternalService.MintChapterPlaybackID:input_type -> commodore.MintChapterPlaybackIDRequest
+	77,  // 176: commodore.InternalService.ResolveChapterPlaybackID:input_type -> commodore.ResolveChapterPlaybackIDRequest
+	79,  // 177: commodore.InternalService.GetTenantProcessesJSON:input_type -> commodore.GetTenantProcessesJSONRequest
+	81,  // 178: commodore.InternalService.ListStorageArtifacts:input_type -> commodore.ListStorageArtifactsRequest
+	88,  // 179: commodore.InternalService.GetOrCreateWalletUser:input_type -> commodore.GetOrCreateWalletUserRequest
+	232, // 180: commodore.InternalService.TerminateTenantStreams:input_type -> foghorn_control.TerminateTenantStreamsRequest
+	233, // 181: commodore.InternalService.InvalidateTenantCache:input_type -> foghorn_control.InvalidateTenantCacheRequest
+	90,  // 182: commodore.InternalService.GetTenantUserCount:input_type -> commodore.GetTenantUserCountRequest
+	92,  // 183: commodore.InternalService.GetTenantPrimaryUser:input_type -> commodore.GetTenantPrimaryUserRequest
+	94,  // 184: commodore.InternalService.CreateUserInTenant:input_type -> commodore.CreateUserInTenantRequest
+	192, // 185: commodore.InternalService.GetMediaRetentionPolicy:input_type -> commodore.GetMediaRetentionPolicyRequest
+	194, // 186: commodore.InternalService.SetMediaRetentionPolicy:input_type -> commodore.SetMediaRetentionPolicyRequest
+	196, // 187: commodore.InternalService.UpdateAssetRetention:input_type -> commodore.UpdateAssetRetentionRequest
+	197, // 188: commodore.InternalService.ResetAssetRetention:input_type -> commodore.ResetAssetRetentionRequest
+	199, // 189: commodore.InternalService.SetStreamRetentionOverrides:input_type -> commodore.SetStreamRetentionOverridesRequest
+	234, // 190: commodore.InternalService.GetMediaPlacementPolicy:input_type -> media_placement.GetPolicyRequest
+	235, // 191: commodore.InternalService.GetMediaPlacementOptions:input_type -> media_placement.GetOptionsRequest
+	236, // 192: commodore.InternalService.PreviewMediaPlacement:input_type -> media_placement.PreviewRequest
+	237, // 193: commodore.InternalService.ReviewMediaPlacementChange:input_type -> media_placement.ReviewChangeRequest
+	238, // 194: commodore.InternalService.ApplyMediaPlacementChange:input_type -> media_placement.ApplyChangeRequest
+	239, // 195: commodore.InternalService.GetMediaPlacementChange:input_type -> media_placement.GetChangeRequest
+	240, // 196: commodore.InternalService.TestPlaybackAccess:input_type -> foghorn_control.TestPlaybackAccessRequest
+	187, // 197: commodore.InternalService.RecordPullSourceEvent:input_type -> commodore.RecordPullSourceEventRequest
+	188, // 198: commodore.InternalService.ListPullSourceEvents:input_type -> commodore.ListPullSourceEventsRequest
+	7,   // 199: commodore.InternalService.RequestMediaAuthorityRefresh:input_type -> commodore.RequestMediaAuthorityRefreshRequest
+	9,   // 200: commodore.InternalService.RequestMediaAuthorityReplay:input_type -> commodore.RequestMediaAuthorityReplayRequest
+	12,  // 201: commodore.InternalService.FetchMediaAuthority:input_type -> commodore.FetchMediaAuthorityRequest
+	15,  // 202: commodore.InternalService.ReportMediaAuthorityUse:input_type -> commodore.ReportMediaAuthorityUseRequest
+	6,   // 203: commodore.InternalService.ReportMediaCellPlacementCapability:input_type -> commodore.ReportMediaCellPlacementCapabilityRequest
+	98,  // 204: commodore.UserService.Login:input_type -> commodore.LoginRequest
+	100, // 205: commodore.UserService.Register:input_type -> commodore.RegisterRequest
+	104, // 206: commodore.UserService.Logout:input_type -> commodore.LogoutRequest
+	106, // 207: commodore.UserService.RefreshToken:input_type -> commodore.RefreshTokenRequest
+	107, // 208: commodore.UserService.VerifyEmail:input_type -> commodore.VerifyEmailRequest
+	109, // 209: commodore.UserService.ResendVerification:input_type -> commodore.ResendVerificationRequest
+	111, // 210: commodore.UserService.ForgotPassword:input_type -> commodore.ForgotPasswordRequest
+	113, // 211: commodore.UserService.ResetPassword:input_type -> commodore.ResetPasswordRequest
+	103, // 212: commodore.UserService.GetMe:input_type -> commodore.GetMeRequest
+	115, // 213: commodore.UserService.UpdateMe:input_type -> commodore.UpdateMeRequest
+	116, // 214: commodore.UserService.UpdateNewsletter:input_type -> commodore.UpdateNewsletterRequest
+	118, // 215: commodore.UserService.GetNewsletterStatus:input_type -> commodore.GetNewsletterStatusRequest
+	120, // 216: commodore.UserService.IssueWalletChallenge:input_type -> commodore.IssueWalletChallengeRequest
+	122, // 217: commodore.UserService.WalletLogin:input_type -> commodore.WalletLoginRequest
+	123, // 218: commodore.UserService.LinkWallet:input_type -> commodore.LinkWalletRequest
+	124, // 219: commodore.UserService.UnlinkWallet:input_type -> commodore.UnlinkWalletRequest
+	126, // 220: commodore.UserService.ListWallets:input_type -> commodore.ListWalletsRequest
+	129, // 221: commodore.UserService.LinkEmail:input_type -> commodore.LinkEmailRequest
+	201, // 222: commodore.UserService.CompleteAuthorization:input_type -> commodore.CompleteAuthorizationRequest
+	203, // 223: commodore.UserService.ExchangeAuthorizationCode:input_type -> commodore.ExchangeAuthorizationCodeRequest
+	204, // 224: commodore.UserService.StartDeviceAuthorization:input_type -> commodore.StartDeviceAuthorizationRequest
+	206, // 225: commodore.UserService.PollDeviceAuthorization:input_type -> commodore.PollDeviceAuthorizationRequest
+	207, // 226: commodore.UserService.LookupDeviceAuthorization:input_type -> commodore.LookupDeviceAuthorizationRequest
+	209, // 227: commodore.UserService.ApproveDeviceAuthorization:input_type -> commodore.ApproveDeviceAuthorizationRequest
+	96,  // 228: commodore.UserService.AdminLookupUserByEmail:input_type -> commodore.AdminLookupUserByEmailRequest
+	211, // 229: commodore.UserService.AdminSetUserActive:input_type -> commodore.AdminSetUserActiveRequest
+	214, // 230: commodore.UserService.AdminListAccountHistory:input_type -> commodore.AdminListAccountHistoryRequest
+	213, // 231: commodore.UserService.AdminDeactivateTenant:input_type -> commodore.AdminDeactivateTenantRequest
+	132, // 232: commodore.StreamService.CreateStream:input_type -> commodore.CreateStreamRequest
+	136, // 233: commodore.StreamService.GetStream:input_type -> commodore.GetStreamRequest
+	137, // 234: commodore.StreamService.GetStreamsBatch:input_type -> commodore.GetStreamsBatchRequest
+	144, // 235: commodore.StreamService.ListStreams:input_type -> commodore.ListStreamsRequest
+	146, // 236: commodore.StreamService.UpdateStream:input_type -> commodore.UpdateStreamRequest
+	147, // 237: commodore.StreamService.DeleteStream:input_type -> commodore.DeleteStreamRequest
+	176, // 238: commodore.StreamService.RefreshStreamKey:input_type -> commodore.RefreshStreamKeyRequest
+	149, // 239: commodore.StreamKeyService.CreateStreamKey:input_type -> commodore.CreateStreamKeyRequest
+	152, // 240: commodore.StreamKeyService.ListStreamKeys:input_type -> commodore.ListStreamKeysRequest
+	154, // 241: commodore.StreamKeyService.DeactivateStreamKey:input_type -> commodore.DeactivateStreamKeyRequest
+	156, // 242: commodore.PushTargetService.CreatePushTarget:input_type -> commodore.CreatePushTargetRequest
+	157, // 243: commodore.PushTargetService.ListPushTargets:input_type -> commodore.ListPushTargetsRequest
+	159, // 244: commodore.PushTargetService.UpdatePushTarget:input_type -> commodore.UpdatePushTargetRequest
+	160, // 245: commodore.PushTargetService.DeletePushTarget:input_type -> commodore.DeletePushTargetRequest
+	162, // 246: commodore.PushTargetService.GetStreamPushTargets:input_type -> commodore.GetStreamPushTargetsRequest
+	165, // 247: commodore.PushTargetService.UpdatePushTargetStatus:input_type -> commodore.UpdatePushTargetStatusRequest
+	169, // 248: commodore.DeveloperService.CreateAPIToken:input_type -> commodore.CreateAPITokenRequest
+	171, // 249: commodore.DeveloperService.ListAPITokens:input_type -> commodore.ListAPITokensRequest
+	174, // 250: commodore.DeveloperService.RevokeAPIToken:input_type -> commodore.RevokeAPITokenRequest
+	166, // 251: commodore.DeveloperService.AdminListAPITokens:input_type -> commodore.AdminListAPITokensRequest
+	241, // 252: commodore.ClipService.CreateClip:input_type -> shared.CreateClipRequest
+	242, // 253: commodore.ClipService.GetClip:input_type -> shared.GetClipRequest
+	243, // 254: commodore.ClipService.DeleteClip:input_type -> shared.DeleteClipRequest
+	244, // 255: commodore.DVRService.StopDVR:input_type -> shared.StopDVRRequest
+	245, // 256: commodore.DVRService.DeleteDVR:input_type -> shared.DeleteDVRRequest
+	246, // 257: commodore.ViewerService.ResolveViewerEndpoint:input_type -> shared.ViewerEndpointRequest
+	247, // 258: commodore.ViewerService.ResolveIngestEndpoint:input_type -> shared.IngestEndpointRequest
+	248, // 259: commodore.VodService.CreateVodUpload:input_type -> shared.CreateVodUploadRequest
+	249, // 260: commodore.VodService.ImportVodAsset:input_type -> shared.ImportVodAssetRequest
+	250, // 261: commodore.VodService.CompleteVodUpload:input_type -> shared.CompleteVodUploadRequest
+	251, // 262: commodore.VodService.AbortVodUpload:input_type -> shared.AbortVodUploadRequest
+	252, // 263: commodore.VodService.GetVodUploadStatus:input_type -> shared.GetVodUploadStatusRequest
+	253, // 264: commodore.VodService.DeleteVodAsset:input_type -> shared.DeleteVodAssetRequest
+	254, // 265: commodore.NodeManagementService.SetNodeOperationalMode:input_type -> foghorn_control.SetNodeModeRequest
+	255, // 266: commodore.NodeManagementService.GetNodeHealth:input_type -> foghorn_control.GetNodeHealthRequest
+	179, // 267: commodore.PlaybackAccessControlService.CreateSigningKey:input_type -> commodore.CreateSigningKeyRequest
+	181, // 268: commodore.PlaybackAccessControlService.GetSigningKey:input_type -> commodore.GetSigningKeyRequest
+	182, // 269: commodore.PlaybackAccessControlService.ListSigningKeys:input_type -> commodore.ListSigningKeysRequest
+	184, // 270: commodore.PlaybackAccessControlService.RevokeSigningKey:input_type -> commodore.RevokeSigningKeyRequest
+	185, // 271: commodore.PlaybackAccessControlService.SetPlaybackPolicy:input_type -> commodore.SetPlaybackPolicyRequest
+	17,  // 272: commodore.InternalService.ValidateStreamKey:output_type -> commodore.ValidateStreamKeyResponse
+	17,  // 273: commodore.InternalService.CheckStreamKey:output_type -> commodore.ValidateStreamKeyResponse
+	19,  // 274: commodore.InternalService.ResolveStreamContext:output_type -> commodore.ResolveStreamContextResponse
+	22,  // 275: commodore.InternalService.ListManagedStreams:output_type -> commodore.ListManagedStreamsResponse
+	25,  // 276: commodore.InternalService.ListStreamMonitoring:output_type -> commodore.ListStreamMonitoringResponse
+	27,  // 277: commodore.InternalService.RecordStreamActiveCluster:output_type -> commodore.RecordStreamActiveClusterResponse
+	29,  // 278: commodore.InternalService.RegisterStreamThumbnailServingCell:output_type -> commodore.RegisterStreamThumbnailServingCellResponse
+	31,  // 279: commodore.InternalService.ClearStreamActiveCluster:output_type -> commodore.ClearStreamActiveClusterResponse
+	34,  // 280: commodore.InternalService.SyncActiveIngestPlacement:output_type -> commodore.SyncActiveIngestPlacementResponse
+	36,  // 281: commodore.InternalService.ResolvePlaybackID:output_type -> commodore.ResolvePlaybackIDResponse
+	38,  // 282: commodore.InternalService.ResolvePullSourceByInternalName:output_type -> commodore.ResolvePullSourceByInternalNameResponse
+	44,  // 283: commodore.InternalService.ResolvePlaybackPolicy:output_type -> commodore.ResolvePlaybackPolicyResponse
+	256, // 284: commodore.InternalService.RecordSigningKeyUse:output_type -> google.protobuf.Empty
+	46,  // 285: commodore.InternalService.ResolveInternalName:output_type -> commodore.ResolveInternalNameResponse
+	48,  // 286: commodore.InternalService.ValidateAPIToken:output_type -> commodore.ValidateAPITokenResponse
+	50,  // 287: commodore.InternalService.ValidateSession:output_type -> commodore.ValidateSessionResponse
+	53,  // 288: commodore.InternalService.ListRecentSessionRevocations:output_type -> commodore.ListRecentSessionRevocationsResponse
+	55,  // 289: commodore.InternalService.MintMistAdminSession:output_type -> commodore.MintMistAdminSessionResponse
+	57,  // 290: commodore.InternalService.ValidateMistAdminSession:output_type -> commodore.ValidateMistAdminSessionResponse
+	257, // 291: commodore.InternalService.StartDVR:output_type -> shared.StartDVRResponse
+	258, // 292: commodore.InternalService.RetrieveDVRChapter:output_type -> foghorn_control.RetrieveDVRChapterResponse
+	259, // 293: commodore.InternalService.ListDVRChapters:output_type -> foghorn_control.ListDVRChaptersResponse
+	59,  // 294: commodore.InternalService.RegisterDVR:output_type -> commodore.RegisterDVRResponse
+	61,  // 295: commodore.InternalService.UpdateDVRRetention:output_type -> commodore.UpdateDVRRetentionResponse
+	64,  // 296: commodore.InternalService.UpdateArtifactCatalogSnapshot:output_type -> commodore.UpdateArtifactCatalogSnapshotResponse
+	66,  // 297: commodore.InternalService.ResolveClipHash:output_type -> commodore.ResolveClipHashResponse
+	68,  // 298: commodore.InternalService.ResolveDVRHash:output_type -> commodore.ResolveDVRHashResponse
+	85,  // 299: commodore.InternalService.ResolveArtifactPlaybackID:output_type -> commodore.ResolveArtifactPlaybackIDResponse
+	87,  // 300: commodore.InternalService.ResolveArtifactInternalName:output_type -> commodore.ResolveArtifactInternalNameResponse
+	70,  // 301: commodore.InternalService.ResolveIdentifier:output_type -> commodore.ResolveIdentifierResponse
+	72,  // 302: commodore.InternalService.ResolveVodHash:output_type -> commodore.ResolveVodHashResponse
+	74,  // 303: commodore.InternalService.ResolveVodID:output_type -> commodore.ResolveVodIDResponse
+	76,  // 304: commodore.InternalService.MintChapterPlaybackID:output_type -> commodore.MintChapterPlaybackIDResponse
+	78,  // 305: commodore.InternalService.ResolveChapterPlaybackID:output_type -> commodore.ResolveChapterPlaybackIDResponse
+	80,  // 306: commodore.InternalService.GetTenantProcessesJSON:output_type -> commodore.GetTenantProcessesJSONResponse
+	83,  // 307: commodore.InternalService.ListStorageArtifacts:output_type -> commodore.ListStorageArtifactsResponse
+	89,  // 308: commodore.InternalService.GetOrCreateWalletUser:output_type -> commodore.GetOrCreateWalletUserResponse
+	260, // 309: commodore.InternalService.TerminateTenantStreams:output_type -> foghorn_control.TerminateTenantStreamsResponse
+	261, // 310: commodore.InternalService.InvalidateTenantCache:output_type -> foghorn_control.InvalidateTenantCacheResponse
+	91,  // 311: commodore.InternalService.GetTenantUserCount:output_type -> commodore.GetTenantUserCountResponse
+	93,  // 312: commodore.InternalService.GetTenantPrimaryUser:output_type -> commodore.GetTenantPrimaryUserResponse
+	95,  // 313: commodore.InternalService.CreateUserInTenant:output_type -> commodore.CreateUserInTenantResponse
+	193, // 314: commodore.InternalService.GetMediaRetentionPolicy:output_type -> commodore.GetMediaRetentionPolicyResponse
+	195, // 315: commodore.InternalService.SetMediaRetentionPolicy:output_type -> commodore.SetMediaRetentionPolicyResponse
+	198, // 316: commodore.InternalService.UpdateAssetRetention:output_type -> commodore.UpdateAssetRetentionResponse
+	198, // 317: commodore.InternalService.ResetAssetRetention:output_type -> commodore.UpdateAssetRetentionResponse
+	200, // 318: commodore.InternalService.SetStreamRetentionOverrides:output_type -> commodore.SetStreamRetentionOverridesResponse
+	262, // 319: commodore.InternalService.GetMediaPlacementPolicy:output_type -> media_placement.PolicyState
+	263, // 320: commodore.InternalService.GetMediaPlacementOptions:output_type -> media_placement.Options
+	264, // 321: commodore.InternalService.PreviewMediaPlacement:output_type -> media_placement.Preview
+	265, // 322: commodore.InternalService.ReviewMediaPlacementChange:output_type -> media_placement.Review
+	266, // 323: commodore.InternalService.ApplyMediaPlacementChange:output_type -> media_placement.Change
+	266, // 324: commodore.InternalService.GetMediaPlacementChange:output_type -> media_placement.Change
+	267, // 325: commodore.InternalService.TestPlaybackAccess:output_type -> foghorn_control.TestPlaybackAccessResponse
+	256, // 326: commodore.InternalService.RecordPullSourceEvent:output_type -> google.protobuf.Empty
+	190, // 327: commodore.InternalService.ListPullSourceEvents:output_type -> commodore.ListPullSourceEventsResponse
+	8,   // 328: commodore.InternalService.RequestMediaAuthorityRefresh:output_type -> commodore.RequestMediaAuthorityRefreshResponse
+	11,  // 329: commodore.InternalService.RequestMediaAuthorityReplay:output_type -> commodore.RequestMediaAuthorityReplayResponse
+	13,  // 330: commodore.InternalService.FetchMediaAuthority:output_type -> commodore.FetchMediaAuthorityResponse
+	256, // 331: commodore.InternalService.ReportMediaAuthorityUse:output_type -> google.protobuf.Empty
+	256, // 332: commodore.InternalService.ReportMediaCellPlacementCapability:output_type -> google.protobuf.Empty
+	101, // 333: commodore.UserService.Login:output_type -> commodore.AuthResponse
+	102, // 334: commodore.UserService.Register:output_type -> commodore.RegisterResponse
+	105, // 335: commodore.UserService.Logout:output_type -> commodore.LogoutResponse
+	101, // 336: commodore.UserService.RefreshToken:output_type -> commodore.AuthResponse
+	108, // 337: commodore.UserService.VerifyEmail:output_type -> commodore.VerifyEmailResponse
+	110, // 338: commodore.UserService.ResendVerification:output_type -> commodore.ResendVerificationResponse
+	112, // 339: commodore.UserService.ForgotPassword:output_type -> commodore.ForgotPasswordResponse
+	114, // 340: commodore.UserService.ResetPassword:output_type -> commodore.ResetPasswordResponse
+	131, // 341: commodore.UserService.GetMe:output_type -> commodore.User
+	131, // 342: commodore.UserService.UpdateMe:output_type -> commodore.User
+	117, // 343: commodore.UserService.UpdateNewsletter:output_type -> commodore.UpdateNewsletterResponse
+	119, // 344: commodore.UserService.GetNewsletterStatus:output_type -> commodore.GetNewsletterStatusResponse
+	121, // 345: commodore.UserService.IssueWalletChallenge:output_type -> commodore.IssueWalletChallengeResponse
+	101, // 346: commodore.UserService.WalletLogin:output_type -> commodore.AuthResponse
+	128, // 347: commodore.UserService.LinkWallet:output_type -> commodore.WalletIdentity
+	125, // 348: commodore.UserService.UnlinkWallet:output_type -> commodore.UnlinkWalletResponse
+	127, // 349: commodore.UserService.ListWallets:output_type -> commodore.ListWalletsResponse
+	130, // 350: commodore.UserService.LinkEmail:output_type -> commodore.LinkEmailResponse
+	202, // 351: commodore.UserService.CompleteAuthorization:output_type -> commodore.CompleteAuthorizationResponse
+	101, // 352: commodore.UserService.ExchangeAuthorizationCode:output_type -> commodore.AuthResponse
+	205, // 353: commodore.UserService.StartDeviceAuthorization:output_type -> commodore.StartDeviceAuthorizationResponse
+	101, // 354: commodore.UserService.PollDeviceAuthorization:output_type -> commodore.AuthResponse
+	208, // 355: commodore.UserService.LookupDeviceAuthorization:output_type -> commodore.LookupDeviceAuthorizationResponse
+	210, // 356: commodore.UserService.ApproveDeviceAuthorization:output_type -> commodore.ApproveDeviceAuthorizationResponse
+	97,  // 357: commodore.UserService.AdminLookupUserByEmail:output_type -> commodore.AdminLookupUserByEmailResponse
+	212, // 358: commodore.UserService.AdminSetUserActive:output_type -> commodore.AdminSetUserActiveResponse
+	216, // 359: commodore.UserService.AdminListAccountHistory:output_type -> commodore.AdminListAccountHistoryResponse
+	256, // 360: commodore.UserService.AdminDeactivateTenant:output_type -> google.protobuf.Empty
+	135, // 361: commodore.StreamService.CreateStream:output_type -> commodore.CreateStreamResponse
+	139, // 362: commodore.StreamService.GetStream:output_type -> commodore.Stream
+	138, // 363: commodore.StreamService.GetStreamsBatch:output_type -> commodore.GetStreamsBatchResponse
+	145, // 364: commodore.StreamService.ListStreams:output_type -> commodore.ListStreamsResponse
+	139, // 365: commodore.StreamService.UpdateStream:output_type -> commodore.Stream
+	148, // 366: commodore.StreamService.DeleteStream:output_type -> commodore.DeleteStreamResponse
+	177, // 367: commodore.StreamService.RefreshStreamKey:output_type -> commodore.RefreshStreamKeyResponse
+	151, // 368: commodore.StreamKeyService.CreateStreamKey:output_type -> commodore.StreamKeyResponse
+	153, // 369: commodore.StreamKeyService.ListStreamKeys:output_type -> commodore.ListStreamKeysResponse
+	256, // 370: commodore.StreamKeyService.DeactivateStreamKey:output_type -> google.protobuf.Empty
+	155, // 371: commodore.PushTargetService.CreatePushTarget:output_type -> commodore.PushTarget
+	158, // 372: commodore.PushTargetService.ListPushTargets:output_type -> commodore.ListPushTargetsResponse
+	155, // 373: commodore.PushTargetService.UpdatePushTarget:output_type -> commodore.PushTarget
+	161, // 374: commodore.PushTargetService.DeletePushTarget:output_type -> commodore.DeletePushTargetResponse
+	163, // 375: commodore.PushTargetService.GetStreamPushTargets:output_type -> commodore.GetStreamPushTargetsResponse
+	155, // 376: commodore.PushTargetService.UpdatePushTargetStatus:output_type -> commodore.PushTarget
+	170, // 377: commodore.DeveloperService.CreateAPIToken:output_type -> commodore.CreateAPITokenResponse
+	173, // 378: commodore.DeveloperService.ListAPITokens:output_type -> commodore.ListAPITokensResponse
+	175, // 379: commodore.DeveloperService.RevokeAPIToken:output_type -> commodore.RevokeAPITokenResponse
+	168, // 380: commodore.DeveloperService.AdminListAPITokens:output_type -> commodore.AdminListAPITokensResponse
+	268, // 381: commodore.ClipService.CreateClip:output_type -> shared.CreateClipResponse
+	269, // 382: commodore.ClipService.GetClip:output_type -> shared.ClipInfo
+	270, // 383: commodore.ClipService.DeleteClip:output_type -> shared.DeleteClipResponse
+	271, // 384: commodore.DVRService.StopDVR:output_type -> shared.StopDVRResponse
+	272, // 385: commodore.DVRService.DeleteDVR:output_type -> shared.DeleteDVRResponse
+	273, // 386: commodore.ViewerService.ResolveViewerEndpoint:output_type -> shared.ViewerEndpointResponse
+	274, // 387: commodore.ViewerService.ResolveIngestEndpoint:output_type -> shared.IngestEndpointResponse
+	275, // 388: commodore.VodService.CreateVodUpload:output_type -> shared.CreateVodUploadResponse
+	276, // 389: commodore.VodService.ImportVodAsset:output_type -> shared.ImportVodAssetResponse
+	277, // 390: commodore.VodService.CompleteVodUpload:output_type -> shared.CompleteVodUploadResponse
+	278, // 391: commodore.VodService.AbortVodUpload:output_type -> shared.AbortVodUploadResponse
+	279, // 392: commodore.VodService.GetVodUploadStatus:output_type -> shared.GetVodUploadStatusResponse
+	280, // 393: commodore.VodService.DeleteVodAsset:output_type -> shared.DeleteVodAssetResponse
+	281, // 394: commodore.NodeManagementService.SetNodeOperationalMode:output_type -> foghorn_control.SetNodeModeResponse
+	282, // 395: commodore.NodeManagementService.GetNodeHealth:output_type -> foghorn_control.GetNodeHealthResponse
+	180, // 396: commodore.PlaybackAccessControlService.CreateSigningKey:output_type -> commodore.CreateSigningKeyResponse
+	178, // 397: commodore.PlaybackAccessControlService.GetSigningKey:output_type -> commodore.SigningKey
+	183, // 398: commodore.PlaybackAccessControlService.ListSigningKeys:output_type -> commodore.ListSigningKeysResponse
+	178, // 399: commodore.PlaybackAccessControlService.RevokeSigningKey:output_type -> commodore.SigningKey
+	186, // 400: commodore.PlaybackAccessControlService.SetPlaybackPolicy:output_type -> commodore.SetPlaybackPolicyResponse
+	272, // [272:401] is the sub-list for method output_type
+	143, // [143:272] is the sub-list for method input_type
+	143, // [143:143] is the sub-list for extension type_name
+	143, // [143:143] is the sub-list for extension extendee
+	0,   // [0:143] is the sub-list for field type_name
 }
 
 func init() { file_commodore_proto_init() }
@@ -17670,7 +18158,7 @@ func file_commodore_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_commodore_proto_rawDesc), len(file_commodore_proto_rawDesc)),
 			NumEnums:      6,
-			NumMessages:   207,
+			NumMessages:   213,
 			NumExtensions: 0,
 			NumServices:   12,
 		},

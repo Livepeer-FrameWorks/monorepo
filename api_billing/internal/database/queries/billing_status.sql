@@ -1,7 +1,7 @@
 -- name: GetTenantAdmissionStatus :one
 SELECT
     ts.billing_model,
-    ts.status AS subscription_status,
+    CASE WHEN EXISTS (SELECT 1 FROM purser.tenant_billing_closures closure WHERE closure.tenant_id = ts.tenant_id) THEN 'suspended' ELSE ts.status END::text AS subscription_status,
     pb.balance_cents,
     reservations.reserved_balance_cents,
     ts.payment_method,
@@ -16,7 +16,9 @@ SELECT
     )::boolean AS has_valid_mollie_mandate,
     og.collection AS grant_collection,
     COALESCE(og.waive_usage, false)::boolean AS grant_waive_usage,
-    COALESCE(og.base_price, bt.base_price)::text AS effective_base_price
+    COALESCE(og.base_price, bt.base_price)::text AS effective_base_price,
+    (SELECT grant_deadline.expires_at FROM purser.subscription_operator_grants grant_deadline
+     WHERE grant_deadline.subscription_id = ts.id) AS grant_expires_at
 FROM purser.tenant_subscriptions ts
 JOIN purser.billing_tiers bt ON bt.id = ts.tier_id
 LEFT JOIN purser.subscription_operator_grants og
@@ -38,7 +40,7 @@ LIMIT 1;
 -- name: GetTenantBillingStatus :one
 SELECT
     ts.billing_model,
-    ts.status AS subscription_status,
+    CASE WHEN EXISTS (SELECT 1 FROM purser.tenant_billing_closures closure WHERE closure.tenant_id = ts.tenant_id) THEN 'suspended' ELSE ts.status END::text AS subscription_status,
     pb.balance_cents,
     reservations.reserved_balance_cents,
     COALESCE(te.value::text, '')::text AS retention_value,
@@ -59,7 +61,9 @@ SELECT
     )::boolean AS has_valid_mollie_mandate,
     og.collection AS grant_collection,
     COALESCE(og.waive_usage, false)::boolean AS grant_waive_usage,
-    COALESCE(og.base_price, bt.base_price)::text AS effective_base_price
+    COALESCE(og.base_price, bt.base_price)::text AS effective_base_price,
+    (SELECT grant_deadline.expires_at FROM purser.subscription_operator_grants grant_deadline
+     WHERE grant_deadline.subscription_id = ts.id) AS grant_expires_at
 FROM purser.tenant_subscriptions ts
 JOIN purser.billing_tiers bt ON bt.id = ts.tier_id
 LEFT JOIN purser.subscription_operator_grants og

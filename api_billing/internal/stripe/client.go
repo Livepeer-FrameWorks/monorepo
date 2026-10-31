@@ -2,6 +2,7 @@ package stripe
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -129,27 +130,49 @@ func PaymentMethodTypesForCurrency(currency string) []*string {
 
 // CheckoutSessionParams for creating a checkout session
 type CheckoutSessionParams struct {
-	CustomerID     string // Stripe customer ID
-	TenantID       string // For metadata
-	TierID         string // For metadata
-	Purpose        string // subscription, cluster_subscription, etc.
-	ReferenceID    string // tier_id, cluster_id, etc.
-	ClusterID      string // For cluster subscriptions
-	PriceID        string // Stripe Price ID (monthly or yearly)
-	Currency       string // Price currency; gates the EU payment-method allowlist
-	SuccessURL     string
-	CancelURL      string
-	TrialDays      int64 // Optional trial period
-	IdempotencyKey string
+	CustomerID        string // Stripe customer ID
+	TenantID          string // For metadata
+	TierID            string // For metadata
+	Purpose           string // subscription, cluster_subscription, etc.
+	ReferenceID       string // tier_id, cluster_id, etc.
+	ClusterID         string // For cluster subscriptions
+	PriceID           string // Stripe Price ID (monthly or yearly)
+	Currency          string // Price currency; gates the EU payment-method allowlist
+	SuccessURL        string
+	CancelURL         string
+	TrialDays         int64 // Optional trial period
+	IdempotencyKey    string
+	ReservationID     string
+	ExpiresAt         time.Time
+	ExistingSessionID string
+	ReplayBefore      time.Time
+	ResumeOnly        bool
 }
 
 // CreateCheckoutSession creates a Stripe Checkout Session for subscription
 func (c *Client) CreateCheckoutSession(ctx context.Context, params CheckoutSessionParams) (*stripe.CheckoutSession, error) {
+	if params.ResumeOnly || params.ExistingSessionID != "" {
+		sess, err := c.ReservedCheckout(ctx, params.CustomerID, params.ReservationID, params.ExistingSessionID)
+		if err != nil {
+			return nil, err
+		}
+		if sess == nil {
+			if time.Now().Before(params.ReplayBefore) {
+				params.ResumeOnly = false
+				params.ExistingSessionID = ""
+				return c.CreateCheckoutSession(ctx, params)
+			}
+			return nil, fmt.Errorf("checkout response is unbound; inspect admin billing recovery list before retrying")
+		}
+		return sess, nil
+	}
+
 	if params.IdempotencyKey == "" {
 		return nil, fmt.Errorf("CreateCheckoutSession requires a deterministic IdempotencyKey")
 	}
 	metadata := map[string]string{
-		"tenant_id": params.TenantID,
+		"checkout_reservation_id": params.ReservationID,
+		"tenant_id":               params.TenantID,
 	}
 	if params.Purpose != "" {
 		metadata["purpose"] = params.Purpose
@@ -179,6 +202,10 @@ func (c *Client) CreateCheckoutSession(ctx context.Context, params CheckoutSessi
 		PaymentMethodTypes: PaymentMethodTypesForCurrency(params.Currency),
 	}
 
+	if !params.ExpiresAt.IsZero() {
+		sessionParams.ExpiresAt = stripe.Int64(params.ExpiresAt.Unix())
+	}
+	sessionParams.Context = ctx
 	// Ensure subscription metadata is set on the created Stripe subscription.
 	subscriptionData := &stripe.CheckoutSessionSubscriptionDataParams{
 		Metadata: metadata,
@@ -373,7 +400,9 @@ func (c *Client) ExpireCheckoutSession(ctx context.Context, sessionID string) er
 	if sessionID == "" {
 		return nil
 	}
-	if _, err := checkoutsession.Expire(sessionID, nil); err != nil {
+	params := &stripe.CheckoutSessionExpireParams{}
+	params.Context = ctx
+	if _, err := checkoutsession.Expire(sessionID, params); err != nil {
 		return fmt.Errorf("failed to expire checkout session: %w", err)
 	}
 	c.logger.WithField("session_id", sessionID).Info("Expired Stripe checkout session")
@@ -397,7 +426,9 @@ func (c *Client) CreateBillingPortalSession(ctx context.Context, customerID, ret
 
 // GetSubscription retrieves a subscription by ID
 func (c *Client) GetSubscription(ctx context.Context, subscriptionID string) (*stripe.Subscription, error) {
-	sub, err := subscription.Get(subscriptionID, nil)
+	params := &stripe.SubscriptionParams{}
+	params.Context = ctx
+	sub, err := subscription.Get(subscriptionID, params)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get subscription: %w", err)
 	}
@@ -421,7 +452,9 @@ func (c *Client) CancelSubscription(ctx context.Context, subscriptionID string) 
 
 // CancelSubscriptionImmediately cancels a subscription immediately
 func (c *Client) CancelSubscriptionImmediately(ctx context.Context, subscriptionID string) (*stripe.Subscription, error) {
-	sub, err := subscription.Cancel(subscriptionID, nil)
+	params := &stripe.SubscriptionCancelParams{Prorate: stripe.Bool(false), InvoiceNow: stripe.Bool(false)}
+	params.Context = ctx
+	sub, err := subscription.Cancel(subscriptionID, params)
 	if err != nil {
 		return nil, fmt.Errorf("failed to cancel subscription immediately: %w", err)
 	}
@@ -667,4 +700,11 @@ func (c *Client) DeactivatePrice(ctx context.Context, priceID string) error {
 	}
 	c.logger.WithField("price_id", priceID).Info("Deactivated stale Stripe price")
 	return nil
+}
+
+// CredentialFingerprint scopes durable request replay without storing the API key.
+func (c *Client) CredentialFingerprint() string {
+	mac := hmac.New(sha256.New, []byte(c.secretKey))
+	mac.Write([]byte("frameworks/checkout-credential/v1"))
+	return fmt.Sprintf("%x", mac.Sum(nil))
 }

@@ -5730,12 +5730,12 @@ Result from creating a card top-up checkout session.
 
 **object**
 
-Result of a postpaid tier change. Either appliedTier is set (immediate upgrade) or pendingTier + effectiveAt are set (scheduled downgrade at period end).
+Result of a postpaid tier change. appliedTier identifies a committed upgrade. pendingTier identifies an upgrade awaiting reconciliation or a scheduled downgrade.
 
 - **success**: `Boolean!` — Whether the request was accepted.
 - **message**: `String!` — Human-readable status message.
-- **appliedTier**: `BillingTier` ([BillingTier](/builders/api-schema/billing-types/#billingtier)) — Set on immediate upgrade — the new active tier.
-- **pendingTier**: `BillingTier` ([BillingTier](/builders/api-schema/billing-types/#billingtier)) — Set on scheduled downgrade — the staged target tier.
+- **appliedTier**: `BillingTier` ([BillingTier](/builders/api-schema/billing-types/#billingtier)) — The active tier after the upgrade&#39;s billing boundary commits.
+- **pendingTier**: `BillingTier` ([BillingTier](/builders/api-schema/billing-types/#billingtier)) — The target of a pending upgrade or scheduled downgrade.
 - **effectiveAt**: `Time` ([Time](/builders/api-schema/shared/#time)) — When a scheduled downgrade will take effect.
 
 ## ChangeBillingTierResult
@@ -6639,7 +6639,7 @@ usageRecordsConnection(
 
 ### Mutation.changeBillingTier
 
-Change the postpaid billing tier. Upgrades apply immediately and reconcile cluster access; downgrades are scheduled for the current billing period end so the tenant keeps paid entitlements until the period closes.
+Change the postpaid billing tier. Upgrades start a fresh month and credit the unused paid fee; provider or metering reconciliation can leave them pending. Downgrades take effect at the current billing period end.
 
 ```graphql
 changeBillingTier(
@@ -14489,6 +14489,12 @@ Paid self-serve tiers do not impose a plan-level retention cap. Content still fo
 artifact policy; the service defaults are indefinite VOD retention and 30 days for DVR chapters and
 clips.
 
+Upgrading starts a fresh monthly billing period. Usage before the switch closes at the old rates,
+and the unused paid share of the old base fee is credited against the new month. This is a billing
+credit rather than a cash refund. An upgrade may briefly remain pending while payment or usage
+records are reconciled; retrying it does not start another purchase. Downgrades take effect at the
+end of the current paid period.
+
 **Overages (metered tiers):**
 
 | Tier       | Delivered Minutes | Cold storage     |
@@ -16032,13 +16038,14 @@ Default hotkeys:
 # StreamCrafter — Compositor
 https://logbook.frameworks.network/builders/ingest-compositor
 
-The compositor enables multi-source layout control — arrange camera and screen share into layouts with scenes, layers, and animated transitions.
+The compositor enables multi-source layout control — arrange camera and screen share into layouts with scenes and layers.
 
 <Aside type="tip" title="On by Default in the Drop-in Components">
   The React, Svelte, and Web Component drop-in components enable the compositor by default. It works
-  with a single source (fullscreen solo layout) and scales to multi-source layouts automatically.
-  The vanilla `createStreamCrafter()` facade and the headless controllers leave it off until you
-  call `enableCompositor()`.
+  with a single source (fullscreen solo layout). The layout does not change when you add sources: a
+  new source starts full-frame on top until you pick a layout in the compositor controls or call
+  `applyLayout()`. The vanilla `createStreamCrafter()` facade and the headless controllers leave it
+  off until you call `enableCompositor()`.
 </Aside>
 
 ## Enabling and Disabling the Compositor
@@ -16165,7 +16172,7 @@ Each layout supports three scaling modes that control how sources fill their all
 
 ## Scenes
 
-Scenes are named collections of layers with their own layout configurations. Switch between scenes for different broadcast segments.
+Scenes are named collections of layers. Switch between scenes for different broadcast segments. A scene has no layout of its own: the compositor keeps one current layout, and `applyLayout()` arranges the active scene's layers with it.
 
 ```ts
 // React useCompositor hook or Svelte createCompositorStore
@@ -16173,11 +16180,7 @@ const interview = compositor.createScene("interview");
 const soloCam = compositor.createScene("solo-cam");
 
 if (interview) {
-  await compositor.transitionTo(interview.id, {
-    type: "fade",
-    durationMs: 500,
-    easing: "ease-in-out",
-  });
+  compositor.setActiveScene(interview.id);
 }
 ```
 
@@ -16190,30 +16193,22 @@ const sceneManager = studio.sceneManager;
 const interview = sceneManager?.createScene("interview");
 sceneManager?.createScene("solo-cam");
 
-// Switch to a scene with a transition
+// Switch to a scene
 if (interview) {
-  await sceneManager?.transitionTo(interview.id, {
-    type: "fade",
-    durationMs: 500,
-    easing: "ease-in-out",
-  });
+  sceneManager?.setActiveScene(interview.id);
 }
 ```
 
-### Transition Types
+### Scene Transitions
 
-| Type          | Description                     |
-| ------------- | ------------------------------- |
-| `cut`         | Instant switch (0ms)            |
-| `fade`        | Cross-fade between scenes       |
-| `slide-left`  | New scene slides in from right  |
-| `slide-right` | New scene slides in from left   |
-| `slide-up`    | New scene slides in from bottom |
-| `slide-down`  | New scene slides in from top    |
+Every scene switch is a hard cut today. `transitionTo()` accepts the `cut`, `fade`, `slide-left`,
+`slide-right`, `slide-up`, and `slide-down` types with a duration and easing, but the output still
+cuts to the new scene whichever values you pass.
 
 ## Layers
 
-Each source in a scene becomes a layer with independent controls:
+A new source becomes a layer in the active scene only. To show it in another scene, call
+`addLayer(sceneId, sourceId)` for that scene. Each layer has independent controls:
 
 | Property            | Type      | Description                   |
 | ------------------- | --------- | ----------------------------- |
@@ -16226,6 +16221,7 @@ Each source in a scene becomes a layer with independent controls:
 ### Layer Operations
 
 ```ts
+// React useCompositor hook. With the Svelte store, read $compositor.activeSceneId instead.
 const sceneId = compositor.activeSceneId;
 if (!sceneId) return;
 
@@ -17120,7 +17116,7 @@ Browser-based broadcasting — camera, screen share, or both with audio mixing. 
 <Aside type="tip" title="When to use StreamCrafter vs OBS">
 
 Use StreamCrafter for browser-based streaming, screen shares, webcam broadcasts, and interactive apps.
-Use OBS or a hardware encoder for scene switching, complex overlays, and fine control over encoding quality.
+Use OBS or a hardware encoder for animated scene transitions, complex overlays, and fine control over encoding quality. StreamCrafter's drop-in UI has no scene switcher; scenes are available through the compositor API.
 
 </Aside>
 
@@ -17327,11 +17323,11 @@ See [Advanced Features](/builders/ingest-advanced/) for audio mixing details.
 
 ## Compositor
 
-The compositor is **enabled by default** — multi-source layout control with scenes, layers, and transitions:
+The compositor is **enabled by default** — multi-source layout control with scenes and layers:
 
 - 17 layout presets (solo, PiP, split, grid, featured, and more)
-- Drag-and-drop layer ordering
-- Scene switching with animated transitions
+- Layer ordering through `reorderLayers()` or the optional `LayerList` component, which the drop-in UI does not render
+- Scenes through the compositor API, with hard cuts between them
 - GPU-accelerated rendering (WebGPU, WebGL, Canvas2D fallback)
 
 See [Compositor](/builders/ingest-compositor/) for full details.
@@ -17351,12 +17347,15 @@ See [Compositor](/builders/ingest-compositor/) for full details.
 
 ## Browser Support
 
-| Browser      | Tested       |
-| ------------ | ------------ |
-| Chrome 90+   | Full support |
-| Firefox 90+  | Full support |
-| Safari 14.1+ | Full support |
-| Edge 90+     | Full support |
+StreamCrafter publishes no minimum browser versions. What runs depends on the browser APIs below:
+
+| Capability               | Browser APIs                                                                   |
+| ------------------------ | ------------------------------------------------------------------------------ |
+| Publishing               | `RTCPeerConnection`                                                            |
+| Camera and microphone    | `getUserMedia`, which requires a secure context                                |
+| Screen share             | `getDisplayMedia`                                                              |
+| Compositor               | Web Workers and `OffscreenCanvas`; `enableCompositor()` rejects if setup fails |
+| Background-safe encoding | WebCodecs and `RTCRtpScriptTransform`                                          |
 
 <Aside type="note" title="Background Tab Behavior">
   Background-safe encoding requires WebCodecs **and** RTCRtpScriptTransform support
@@ -17975,9 +17974,11 @@ Each enabled live destination uses one slot from your existing viewer-capacity l
 Playback policy, DVR, and analytics stay on the single ingest; only distribution fans out.
 
 <Aside type="tip">
-  Multistreaming uses native MistServer push, so FrameWorks does not add a re-encoding step. Each
-  target receives the source bitstream from the origin node. Destination platforms can still add
-  their own buffering and latency.
+  Multistreaming uses native MistServer push from the origin node. Each destination receives your
+  source video whenever its codec and settings fit, with no re-encoding. If a destination's hard
+  limit rules out the source, Mist sends one compatible rendition instead. Renditions above your
+  source's resolution, and audio conversions to a codec your source already uses, are skipped, so no
+  processing runs for them. Destination platforms can still add their own buffering and latency.
 </Aside>
 
 ```mermaid
@@ -30025,6 +30026,36 @@ Periscope cross-tenant rollup. The Periscope RPC only answers service
 credentials, so the command needs an active context with a resolvable
 service token.
 
+#### frameworks admin tenants deactivate
+
+Permanently close a tenant, disable all users, and tear down its domains and media
+permission. Local closure prevents concurrent user creation and activation;
+Quartermaster teardown retries after a temporary outage. The system tenant cannot
+be closed. The tenant must exist in Quartermaster. Type its name to confirm, or pass
+`--yes --tenant-name` with its exact current name. Use user deactivation for a reversible suspension.
+
+```bash
+frameworks admin tenants deactivate <UUID> --yes --tenant-name "Exact Tenant Name" --reason "Account closed"
+```
+
+#### frameworks admin tenants get
+
+Read a tenant directly by UUID, without paging through the tenant list.
+
+```bash
+frameworks admin tenants get <UUID> --output json
+```
+
+#### frameworks admin tenants history
+
+Read private operator account changes and their reasons. Requires a platform-operator JWT.
+Use `--limit` (1..500, default 100) and the returned `--before` cursor to page
+through the newest entries first. Reasons are escaped in text output.
+
+```bash
+frameworks admin tenants history <UUID> --output json
+```
+
 ---
 
 ### frameworks admin clusters
@@ -30221,7 +30252,7 @@ Billing tier and subscription management.
 - `set-cluster-pricing` - Set or update pricing config for a cluster
 - `credit` - Add (or with `--debit`, remove) EUR prepaid balance for a tenant
 - `set-tier` - Put a tenant on a billing tier as an operator decision
-- `grant set` / `grant show` / `grant revoke` - Operator billing arrangements: base fee, usage
+- `grant set` / `grant show` / `grant revoke` / `grant list` - Operator billing arrangements: base fee, usage
   waiver, manual invoicing, expiry
 - `record-payment` - Record a bank transfer that paid an invoice
 - `prepaid-double-charges` - List invoices that charged prepaid tenants twice for the same usage
@@ -30302,7 +30333,8 @@ to its total, when it is finalized. A scheduled downgrade is cleared.
 After the change Purser reconciles cluster access for the new tier and refreshes cached tenant
 limits, the same as a self-serve tier change, and records `billing.subscription_updated` with
 `--reason` and the calling identity. Assigning the tier and model the tenant already has changes
-nothing and records no event; cluster access is reconciled again.
+nothing and records no event; cluster access is reconciled again. An active grant continues on
+the assigned tier, and a tier change clears its fallback.
 
 A postpaid paid tier invoices its base price and usage when the period closes, and rated work is
 admitted only once those charges can be collected: the tenant's own Stripe or Mollie setup, or an
@@ -30350,26 +30382,70 @@ An arrangement has four parts:
   emailed as usual, stay pending until you record the payment with `record-payment`, and get the
   usual overdue reminders.
 - **Expiry** (`--until`): a date (the arrangement runs through that day, UTC) or an RFC 3339 time.
-  After it the tier and the tenant's own payment setup apply again. Without it the arrangement runs
-  until revoked.
+  Expiry closes the granted phase and restores its fallback when the assigned tier is still current.
+  Without it the arrangement runs until revoked.
 
-A tenant that owes nothing (base fee 0 and usage waived) needs no collection setup. An invoice uses
-the arrangement in force when its period is invoiced.
+A tenant that owes nothing (base fee 0 and usage waived) needs no collection setup. Pricing changes
+close the preceding phase, so each invoice uses the arrangement that applied during its interval.
+Renewing a deadline preserves the period, and an identical grant set is a no-op.
+
+#### frameworks admin billing grant list
+
+List operator grants and retained grant history. By default this shows current
+grants; `--include-expired` adds retained history,
+`--expiring 7d` selects grants ending in the next seven days, and `--limit` /
+`--offset` select a page.
+
+```bash
+frameworks admin billing grant list --expiring 7d
+frameworks admin billing grant list --include-expired --output json
+```
+
+#### frameworks admin billing recovery list
+
+`recovery list` reads outstanding provider callbacks and checkout recovery work,
+including the last error, next retry and checkout deadline. Use `--limit` (1–100)
+and `--offset` to page; `--tenant-id` narrows to a tenant's checkout reservations.
+Omit the tenant filter to include provider callbacks not yet bound to a tenant.
+Use `--tenant-id <UUID> --history` to read each operator request, identity, reason
+and outcome. Empty lists print an explicit message.
+
+#### frameworks admin billing recovery checkout
+
+`frameworks admin billing recovery checkout --tenant-id <UUID> --reservation-id <UUID> --reason "Abandoned checkout"`
+previews the provider, state and amount, then requires interactive `yes` or
+`--yes`. Recovery reports its actual outcome and audit ID; pending work remains
+queued. On-time completed purchases activate after settlement, even after the
+checkout deadline. An abandoned attempt may be expired early; compensation can
+cancel a subscription and request refunds. Refund acceptance does not mean bank
+settlement has finished. Both commands require a platform-operator JWT.
+
+#### frameworks admin billing recovery upgrade
+
+`frameworks admin billing recovery upgrade --tenant-id <UUID> --upgrade-id <UUID> --reason "Reconcile purchase"`
+previews an accepted tier upgrade and requires interactive `yes` or `--yes`.
+Get its purchase UUID from `recovery list`. Recovery locates existing provider
+work; it cancels an unapplied request or completes an applied purchase without
+starting another purchase. It records the first operator and reason and reports
+the durable state, including work that still needs provider or metering repair.
+The command requires a platform-operator JWT.
 
 #### frameworks admin billing grant set
 
-Record an arrangement, replacing any previous one. `--tier` assigns the tier first, as `set-tier`
-does. Records `billing.subscription_updated` with `--reason`, and prints the arrangement and whether
+Record an arrangement, optionally assigning `--tier` in the same transaction. An initial tier
+change remembers its previous tier as fallback. Renewal preserves it; an explicit `set-tier` change
+clears it. `--fallback-tier` chooses another active fallback. Records `billing.subscription_updated` with `--reason`, and prints the arrangement and whether
 the tenant's charges can now be collected.
 
 **Flags:**
 
 - `--tenant-id` / `--email` - The tenant, as for `set-tier`
 - `--tier` - Also assign this tier; empty keeps the tenant's tier
+- `--fallback-tier` - Active tier to restore when the grant ends
 - `--base-fee` - EUR base fee in place of the tier's, for example `0`
 - `--waive-usage` - Rate usage at zero
 - `--collection` - `provider` (default) or `invoice`
-- `--until` - End of the arrangement
+- `--until` - Absolute deadline: a date includes that UTC day; RFC3339 names an instant
 - `--reason` - Why; recorded on the arrangement and the audit event (required)
 
 ```bash
@@ -30396,12 +30472,16 @@ frameworks admin billing grant show --email owner@example.com
 
 #### frameworks admin billing grant revoke
 
-Remove the arrangement; the tier and the tenant's own payment setup apply from then on. `--reason`
-is required and recorded on the audit event.
+Close the granted billing phase and restore its fallback when the assigned tier
+is still current. `--reason` is required and recorded on the audit event.
+`--tier <active-tier>` explicitly chooses a recovery tier.
 
 ```bash
 frameworks admin billing grant revoke --tenant-id <UUID> --reason "supporter period over"
 ```
+
+If the recorded fallback tier is retired, pass `--tier <active-tier>` to choose
+an active recovery tier while closing the grant at its expiry boundary.
 
 ---
 
@@ -30464,6 +30544,8 @@ Manage users in existing tenants.
 **Subcommands:**
 
 - `create` - Create a user in an existing tenant (requires service token auth)
+- `activate` - Restore a user's access (requires a platform-operator JWT)
+- `deactivate` - Revoke a user's access (requires a platform-operator JWT)
 
 ```bash
 # Right after cluster provision — tenant-id comes from context, password from stdin
@@ -30488,6 +30570,25 @@ frameworks admin users create \
 - `--role` - `owner` or `member` (default: `owner`)
 
 Without `--password` or `--password-stdin`, the CLI prompts at a TTY with hidden echo.
+
+#### frameworks admin users deactivate
+
+Reversibly disable a user, their interactive sessions, API access and stream-key publishing. Tenant-owned media remains available.
+Requires a platform-operator session and a private audit reason.
+Use `--email`, or `--user-id` with `--tenant-id`. With `--email`, `--tenant-id` is optional.
+
+```bash
+frameworks admin users deactivate --email trial@example.com --reason "Trial paused"
+```
+
+#### frameworks admin users activate
+
+Restore a disabled user. Old interactive sessions and refresh tokens stay revoked;
+log in again. Existing API tokens and stream keys work once billing permits them.
+
+```bash
+frameworks admin users activate --email trial@example.com --reason "Trial resumed"
+```
 
 ---
 
@@ -33232,6 +33333,8 @@ Read by `api_billing/cmd/purser`.
 | `GRPC_TLS_CA_PATH` | string |  |  | v0.3.0 | CA bundle that internal gRPC clients use to verify servers. |
 | `GRPC_ALLOW_INSECURE` | boolean | `false` |  | v0.3.0 | Allows plaintext internal gRPC when no TLS material is configured. Development only. |
 | `SERVICE_TOKEN` | string |  | secret | v0.3.0 | Shared service token for Quartermaster calls. Required when the desired state declares customer_billing. |
+| `COMMODORE_GRPC_ADDR` | string | `commodore:19001` |  | v0.3.14 | Commodore address for best-effort bootstrap billing cache invalidation. |
+| `COMMODORE_GRPC_TLS_SERVER_NAME` | string |  |  | v0.3.14 | TLS server name override for Commodore. |
 
 ### bootstrap-validate subcommand
 
@@ -38520,7 +38623,8 @@ plan` and `release apply --dry-run` list every step and, per host, the role task
    and its Livepeer health and keystore validation must pass before the next host starts. A dry
    run reports these steps without running them.
 4. **Postdeploy migrations.** These refuse to run until the release's required data migrations
-   are complete. The Purser tier catalog reconcile follows.
+   are complete. The Purser billing reconcile follows, then Commodore reconciles accounts
+   only on releases that declare that capability; stream declarations are left alone.
 
 After postdeploy, `release apply` checks that every replica of the auth services and the web app
 runs the release's version, since a readiness check cannot detect an older web app bundle. It
@@ -39843,6 +39947,224 @@ The first observation for each signal type saves a baseline instead of posting �
 
 
 ---
+# Test and trial accounts
+https://logbook.frameworks.network/operators/trial-accounts
+
+Create a tenant through signup or bootstrap, then grant a trial as a platform
+operator:
+
+```bash
+frameworks admin billing grant set --email trial@example.com --tier enterprise \
+  --base-fee 0 --waive-usage --until 2026-12-31 --reason "Enterprise evaluation"
+frameworks admin billing grant list --expiring 7d
+frameworks admin billing grant show --email trial@example.com
+frameworks admin billing grant revoke --email trial@example.com --reason "Evaluation complete"
+```
+
+A date includes that UTC day; an RFC3339 timestamp names an exact deadline.
+`--fallback-tier` overrides the original tier restored when the grant ends.
+Renewing a grant preserves its original fallback, including when `--tier` is
+omitted or unchanged. An explicit `admin billing set-tier` clears that
+fallback and preserves the billing arrangement on the assigned tier until it
+ends.
+
+A minute sweep closes an expired grant and restores its fallback. A trial
+returning to zero-balance PAYG cannot ingest or play media until funded. A
+grant without fallback leaves the current tier in place; collection readiness
+continues to gate rated API work. Existing postpaid media admission is
+unchanged. The free tier requires no payment provider. Trial expiry blocks new
+ingest but does not proactively end an existing positive-balance publisher;
+prepaid suspension stops it once its balance becomes negative.
+
+Renewing a deadline or re-sending the same prices keeps the current billing
+period open. Tenants cannot change tier themselves while a grant is
+outstanding, and scheduled downgrades wait until it ends. An operator can use
+`set-tier` to change the granted tier through a billing boundary. Complete or
+reconcile any pending provider checkout before setting a grant. The refusal
+identifies the checkout deadline; it is not a deadline for the grant. A
+completed checkout keeps its reservation while payment settles, even after the
+checkout deadline. Inspect outstanding work and recover an abandoned checkout:
+
+```bash
+frameworks admin billing recovery list --tenant-id <uuid>
+frameworks admin billing recovery checkout --tenant-id <uuid> --reservation-id <uuid> --reason "Abandoned evaluation checkout"
+frameworks admin billing recovery list --tenant-id <uuid> --history
+```
+
+Recovery displays the provider, state and checkout amount before asking for
+confirmation. Use `--yes` to confirm without prompting. It reports whether the
+checkout expired, the subscription activated, cancellation/refund
+reconciliation finished, or work remains pending. An accepted refund request
+can still await bank settlement. Refund work remains visible in `recovery list`
+until Stripe or Mollie confirms the returned amount; a failed bank return raises
+`PurserProviderWebhookInboxStuck`. Inspect the exact provider payment and repair
+the missing return in that provider's console. Settlement polling only reads
+provider receipts and never sends another refund. For cluster purchases, only
+the initial unactivated purchase is returned; its corresponding operator credit
+is voided without reversing credit for delivered recurring service. Every request retains its operator identity,
+reason and outcome in history and emits audit events; a later request does not
+overwrite it.
+
+An on-time completed purchase is reconciled into its subscription when
+settlement succeeds. Failed settlement releases its reservation. An abandoned
+or unbound attempt can be recovered before its deadline, while a completed
+purchase still settling remains reserved. Failed recovery stays durable.
+Normal settlement waits back off from one minute to six hours and keep their
+reason visible; waits exceeding fourteen days raise
+`PurserProviderWebhookInboxStuck`.
+
+Grants change prices prospectively. Closing documents preserve charges before
+the grant and waive only the granted phase. Ended and replaced grants remain
+available with `grant list --include-expired` for audit and historical
+pricing. An existing Stripe or Mollie subscription must be cancelled before a
+base-fee override.
+
+Gateway billing caches may take about two minutes to refresh. Signed media
+permission is bounded by the trial deadline, including while a media cell is
+disconnected. Early revocation reaches connected cells through authority
+refresh; a disconnected cell retains already-issued permission until its
+signed expiry.
+
+For reversible user suspension:
+
+```bash
+frameworks admin users deactivate --email trial@example.com --reason "Evaluation paused"
+frameworks admin users activate --email trial@example.com --reason "Evaluation resumed"
+```
+
+Deactivation ends existing interactive sessions, API-token WebSockets, and
+stream-key publishing. Tenant-owned streams and VODs keep their playback
+availability. Activation requires a fresh interactive login; previously
+revoked sessions do not return. Connected cells receive stream-key revocation
+and an active-ingest stop through the durable refresh queue. Once received,
+they enforce it even while Commodore is unavailable. Unreachable cells retry
+and raise `CommodoreAccountIngestRevocationStuck`. A reactivation supersedes
+queued stops; a stop already in flight can end a newly connected publisher
+once. Reconnect after reactivation if that happens. Billing restrictions still
+apply to API work, ingest and playback.
+
+`frameworks admin tenants deactivate <UUID> --yes --tenant-name "Exact Tenant
+Name" --reason "Account closed"` requires a matching Quartermaster tenant name.
+Omit both confirmation flags to type the name interactively; `--tenant-name`
+requires `--yes`. Closure permanently closes all users and queues a durable
+stop for their active ingest. Quartermaster teardown proceeds independently;
+unreachable cells retry and raise the `CommodoreAccountIngestRevocationStuck` alert. The alert
+continues until the cell is restored. Confirming that a cell is permanently
+offline does not clear it: no cluster-retirement command exists. Silence the
+alert for that cell after recording its permanent removal in the incident. Closure publishes
+tenant-inactive authority without authorizing data deletion. It cannot be reversed. The local closure
+blocks new active users even if Quartermaster is temporarily unavailable.
+
+Purser consumes the permanent closure event and durably records its billing
+cutoff. It cancels established Stripe and Mollie subscriptions without refunding
+completed service, then finalizes the open billing phase at that cutoff. No
+later recurring invoice is started. Provider outages and incomplete metering
+keep the finalization pending; inspect `frameworks admin billing recovery list
+--tenant-id <uuid>`. An outstanding grant first closes at the cutoff through
+the normal expiry worker. Late paid or settling cluster callbacks queue provider
+cancellation, including after final billing; they cannot restore access or
+finalize another billing document.
+
+Open cluster checkouts are expired so they cannot accept another purchase.
+Activated paid cluster subscriptions are cancelled without refunding or crediting their unused
+paid time. A paid tenant or cluster checkout that never activated is refunded
+only for its checkout payment or first invoice; recurring service payments are
+never part of checkout compensation.
+Normal subscription cancellation stops renewal at the paid-through date; permanent
+account closure ends access immediately. Failed or duplicate checkout recovery is
+a separate compensation action, not a refund policy for ordinary cancellation.
+
+`PurserOperatorGrantExpiryStuck` exposes its last error and failed-attempt count through `grant show` and `grant list
+--include-expired`. Commodore synchronization failures raise
+`CommodoreTenantAccountClosureStuck` independently of billing finalization.
+
+For an operator-owned account, declare a Quartermaster tenant, a Purser
+`customer_billing` row with `model: postpaid`, `tier: enterprise`, and
+`operator_grant: {base_fee: "0", waive_usage: true, reason: "Operator test
+account"}`, then declare its users in `accounts`. Put passwords in the normal
+SOPS secret references. Release apply reconciles accounts after Purser without
+resetting existing passwords. No grant expiry means the arrangement lasts
+until revoked. A live declaration owns the grant and logs any CLI arrangement
+it replaces. An expired declaration is inert and leaves later CLI grants
+alone. Remove a live declaration before a permanent CLI revocation.
+
+Failed expiry reconciliation is recorded with five-minute backoff and alerted;
+later expiries continue. Correct the underlying billing or pricing error;
+retries run automatically.
+
+Bridge closes API-token WebSockets on the live revocation event. A replica
+that missed the event rechecks `ValidateAPIToken` every minute, bounding the
+remaining socket access.
+
+Release apply attempts pending grant expiry before reconciling a live billing
+declaration. Dry-run leaves pending expiries untouched and reports those
+tenants as deferred.
+
+Read private deactivation and closure reasons with `frameworks admin tenants
+history <UUID>`. Only platform operators can read this audit.
+
+If bootstrap defers a tenant, healthy tenants commit and the command exits
+non-zero, stopping release apply before the accounts step. Fix the reported
+failure and re-run release apply. When expiry restored a different billing
+model, run `frameworks admin billing set-tier` with the declared tier,
+`--billing-model` and a reason before retrying, so the normal transition
+handles balances and credits. An obsolete fallback can be recovered with
+`grant revoke --tier <active-tier>` or an explicit `set-tier`; both close the
+expired grant at its deadline.
+
+An expired grant awaiting reconciliation must be ended with `grant revoke
+--tier` or `set-tier` before setting another grant. A rejected replacement
+leaves the original grant and billing phase unchanged. Cancelling a
+subscription keeps its grant so recoverable provider states such as Stripe
+unpaid do not lose waived usage. Revoke or expiry on a cancelled subscription
+archives the grant at the cleanup time without changing tier or issuing a
+closing document. Revoke it before starting a new provider checkout. Renewal
+of the same established Stripe subscription may restore status and dates while
+retaining the grant; a new checkout or activation must end it first.
+
+Checkout reservations have a deadline and belong to one provider attempt.
+Failures before checkout creation and definite provider rejections release the
+reservation immediately. Ambiguous results remain reserved until the durable
+provider inbox reconciles them after the checkout deadline;
+`PurserProviderWebhookInboxStuck` covers provider outages or compensation
+failures. Historical receipts already installed as the tenant's subscription
+do not block grants. Other unresolved receipts are queued for recovery before
+they release their reservation. A provider activation awaiting complete usage
+metering keeps the first webhook receipt as its billing boundary. An open
+metering anomaly holds that activation; `PurserProviderWebhookInboxStuck`
+covers retries while the anomaly is resolved.
+
+A timed-out create retries with its original parameters and idempotency key.
+Replay is limited to 23 hours for Stripe and 45 minutes for Mollie, and to the
+credential used for that request. Outside that window, recovery locates existing
+provider objects rather than creating another purchase. A prepared attempt that
+never reached provider submission can be closed even while the provider is down.
+If the provider has not supplied an amount, the preview says it is unknown.
+
+## Upgrade and recovery compatibility
+
+A v0.3.13 Foghorn does not implement `TerminateStreamSessions`. Per-user stops
+remain queued until that cell is upgraded; they never fall back to stopping the
+whole tenant. New publishes are refused independently of this session-stop retry.
+
+Platform-cluster `provision`, `upgrade`, `apply` and `diff` resolve the system
+tenant through Quartermaster. A saved ID is used only for supported transport
+recovery; Livepeer gateway clusters require a successful Quartermaster lookup.
+
+`frameworks admin billing recovery upgrade --tenant-id <uuid> --upgrade-id <uuid>
+--reason "Reconcile purchase"` previews a pending tier upgrade before asking for
+confirmation. It cancels a request only after confirming it was not applied;
+otherwise it completes the accepted purchase. It does not start another provider
+purchase. Recovery retains the operator identity and reason, and reports the
+actual durable state. Use `recovery list` for the purchase UUID and retry errors.
+
+A suspended tenant's session-stop request is queued with its suspension. Partial
+cell failures and Commodore outages retry durably. Resumption is checked under
+the subscription lock before retrying, so a completed resumption clears the
+queued stop without ending a new stream.
+
+
+---
 # YugabyteDB Physical Layout
 https://logbook.frameworks.network/operators/yugabyte-layout
 
@@ -40163,6 +40485,7 @@ Planned items in this area are detailed on the [Roadmap](/roadmap#streaming).
 | ↳ Stream keys *(foundation)* | Available | API, Agents (MCP), Dashboard, Docs | Per-stream ingest credentials with rotation. |
 | ↳ Pull streams | Expanding | API, Agents (MCP), Dashboard, Docs | Stream inputs pulled from upstream sources (RTSP, SRT, RIST, HLS, etc.) instead of pushed, with resolution-stage lifecycle audit. |
 | ↳ Multistream push targets | Available | API, Agents (MCP), Dashboard, Docs | Forward live streams to RTMP/SRT destinations with per-target video choice and an optional per-stream live video ABR switch. |
+| ↳ SCTE-35 cue markers | Expanding | Docs | SCTE-35 splice cues in the media engine, with MistServer reading them from MPEG-TS input and inserting them into MPEG-TS outputs. Platform controls are expanding. |
 | **StreamCrafter (browser studio)** | Available | API, Dashboard, Docs | Browser-based broadcasting studio — WHIP/WebRTC ingest, compositing, and multi-source mixing. Ships as npm packages @livepeer-frameworks/streamcrafter-&#123;core,react,svelte,wc&#125; and powers the dashboard's Go Live page. |
 | **Device discovery and contribution inputs** | Planned | — | Edge-local discovery for cameras, PTZ devices, NDI sources, USB capture, HDMI inputs, and local contribution paths. |
 
@@ -40311,6 +40634,7 @@ This broader inventory includes the [product capability matrix](/platform/featur
 | ↳ Stream keys *(foundation)* | Available | API, Agents (MCP), Dashboard, Docs | Per-stream ingest credentials with rotation. |
 | ↳ Pull streams | Expanding | API, Agents (MCP), Dashboard, Docs | Stream inputs pulled from upstream sources (RTSP, SRT, RIST, HLS, etc.) instead of pushed, with resolution-stage lifecycle audit. |
 | ↳ Multistream push targets | Available | API, Agents (MCP), Dashboard, Docs | Forward live streams to RTMP/SRT destinations with per-target video choice and an optional per-stream live video ABR switch. |
+| ↳ SCTE-35 cue markers | Expanding | Docs | SCTE-35 splice cues in the media engine, with MistServer reading them from MPEG-TS input and inserting them into MPEG-TS outputs. Platform controls are expanding. |
 | **StreamCrafter (browser studio)** | Available | API, Dashboard, Docs | Browser-based broadcasting studio — WHIP/WebRTC ingest, compositing, and multi-source mixing. Ships as npm packages @livepeer-frameworks/streamcrafter-&#123;core,react,svelte,wc&#125; and powers the dashboard's Go Live page. |
 | **Device discovery and contribution inputs** | Planned | — | Edge-local discovery for cameras, PTZ devices, NDI sources, USB capture, HDMI inputs, and local contribution paths. |
 

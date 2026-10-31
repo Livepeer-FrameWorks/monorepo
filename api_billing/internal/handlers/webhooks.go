@@ -24,8 +24,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 
-	billingmollie "frameworks/api_billing/internal/mollie"
 	"frameworks/api_billing/internal/operator"
+	"frameworks/api_billing/internal/subscriptions"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -52,9 +52,10 @@ var errWebhookMissingLocalReference = errors.New("webhook references local row t
 // Stripe webhook payload structure
 // Flexible struct to handle multiple event types (payment_intent, subscription, invoice, checkout)
 type StripeWebhookPayload struct {
-	ID   string `json:"id"`
-	Type string `json:"type"`
-	Data struct {
+	Created int64  `json:"created"`
+	ID      string `json:"id"`
+	Type    string `json:"type"`
+	Data    struct {
 		Object json.RawMessage `json:"object"` // Parsed per event type
 	} `json:"data"`
 }
@@ -121,7 +122,11 @@ type StripeSubscriptionObject struct {
 	CustomerID        string `json:"customer"`
 	Status            string `json:"status"` // active, past_due, canceled, trialing, etc.
 	CancelAtPeriodEnd bool   `json:"cancel_at_period_end"`
-	Items             struct {
+	// CancellationDetails.Reason separates cancellation_requested from payment_failed.
+	CancellationDetails struct {
+		Reason string `json:"reason"`
+	} `json:"cancellation_details"`
+	Items struct {
 		Data []struct {
 			ID                 string `json:"id"`
 			CurrentPeriodStart int64  `json:"current_period_start"`
@@ -129,11 +134,12 @@ type StripeSubscriptionObject struct {
 		} `json:"data"`
 	} `json:"items"`
 	Metadata struct {
-		Purpose     string `json:"purpose"`
-		ReferenceID string `json:"reference_id"`
-		TenantID    string `json:"tenant_id"`
-		TierID      string `json:"tier_id"`
-		ClusterID   string `json:"cluster_id"`
+		Purpose       string `json:"purpose"`
+		ReferenceID   string `json:"reference_id"`
+		TenantID      string `json:"tenant_id"`
+		TierID        string `json:"tier_id"`
+		ClusterID     string `json:"cluster_id"`
+		ReservationID string `json:"checkout_reservation_id"`
 	} `json:"metadata"`
 }
 
@@ -446,6 +452,9 @@ func (s *Service) ProcessStripeWebhookGRPC(body []byte, headers map[string]strin
 }
 
 func (s *Service) processStripeWebhookPayload(ctx context.Context, payload StripeWebhookPayload, signature string, body []byte) (bool, string, int) {
+	if payload.Created > 0 {
+		ctx = subscriptions.WithProviderCompletion(ctx, time.Unix(payload.Created, 0))
+	}
 	claim, claimErr := s.claimWebhookEvent(ctx, "stripe", payload.ID, payload.Type, signature, body)
 	if claimErr != nil {
 		s.logger.WithError(claimErr).Error("Failed to claim Stripe webhook event")
@@ -734,6 +743,9 @@ func (s *Service) handleStripeSubscriptionEvent(payload StripeWebhookPayload) er
 	}
 
 	ctx := context.Background()
+	if payload.Created > 0 {
+		ctx = subscriptions.WithProviderCompletion(ctx, time.Unix(payload.Created, 0))
+	}
 	ourStatus := MapStripeSubscriptionStatus(obj.Status, obj.CancelAtPeriodEnd)
 
 	// Get period end from subscription items
@@ -751,6 +763,11 @@ func (s *Service) handleStripeSubscriptionEvent(payload StripeWebhookPayload) er
 	}
 
 	if obj.Metadata.ClusterID != "" || obj.Metadata.Purpose == "cluster_subscription" {
+		if obj.Metadata.ReservationID != "" {
+			if _, err := s.bindCheckoutReceipt(ctx, obj.Metadata.TenantID, obj.Metadata.ReservationID, "stripe", "", "", obj.ID); err != nil {
+				return err
+			}
+		}
 		if ourStatus == "active" {
 			// Activation authority for an async cluster subscription: grant
 			// access once Stripe collects the first payment.
@@ -764,6 +781,7 @@ func (s *Service) handleStripeSubscriptionEvent(payload StripeWebhookPayload) er
 
 	// Find tenant by Stripe subscription ID
 	tenantID, err := purserdb.New(s.db).GetTenantByStripeSubscription(ctx, sql.NullString{String: obj.ID, Valid: true})
+	knownSubscription := err == nil
 	if err != nil {
 		// Try to find by customer ID if subscription ID not found
 		tenantID, err = purserdb.New(s.db).GetTenantByStripeCustomer(ctx, sql.NullString{String: obj.CustomerID, Valid: true})
@@ -779,19 +797,47 @@ func (s *Service) handleStripeSubscriptionEvent(payload StripeWebhookPayload) er
 		}
 	}
 
-	eventType := eventSubscriptionUpdated
-	if ourStatus == "cancelled" {
-		eventType = eventSubscriptionCanceled
+	if !knownSubscription && obj.Metadata.ReservationID == "" {
+		id, err := purserdb.New(s.db).FindProviderCheckoutReservation(ctx, purserdb.FindProviderCheckoutReservationParams{TenantID: tenantID, Provider: "stripe", SubscriptionID: obj.ID})
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		obj.Metadata.ReservationID = id
 	}
+	if obj.Metadata.ReservationID != "" && (obj.Status == "incomplete_expired" || obj.Status == "canceled") {
+		if err := database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
+			if _, err := subscriptions.LockChange(ctx, tx, tenantID, subscriptions.PreservePricing); err != nil {
+				return err
+			}
+			return s.clearStagedStripeCheckout(ctx, tx, tenantID, obj.ID, "")
+		}); err != nil {
+			return err
+		}
+	}
+	expired, bindErr := s.bindCheckoutReceipt(ctx, tenantID, obj.Metadata.ReservationID, "stripe", "", "", obj.ID)
+	if bindErr != nil {
+		return bindErr
+	}
+	if expired {
+		return nil
+	}
+	matched := true
 	txErr := database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
+		matched = true
+		appliedStatus := ourStatus
 		queries := purserdb.New(tx)
 		if ourStatus == "active" {
 			// Activation authority for an async tenant subscription: apply the
 			// purchased tier and clear staged checkout state once funds settle.
-			if _, actErr := s.activateTenantSubscriptionFromStripe(ctx, tx, tenantID, obj.CustomerID, obj.ID, obj.Metadata.TierID, periodStart, periodEnd); actErr != nil {
+			rows, actErr := s.activateTenantSubscriptionFromStripe(ctx, tx, tenantID, obj.CustomerID, obj.ID, obj.Metadata.TierID, periodStart, periodEnd, obj.Metadata.ReservationID)
+			if actErr != nil {
 				return actErr
 			}
-			if intentErr := queries.MarkStripeSubscriptionIntentSucceeded(ctx, obj.ID); intentErr != nil {
+			if rows == 0 {
+				matched = false
+				return nil
+			}
+			if intentErr := queries.MarkStripeSubscriptionIntentSucceeded(ctx, purserdb.MarkStripeSubscriptionIntentSucceededParams{TenantID: tenantID, SubscriptionID: obj.ID}); intentErr != nil {
 				return fmt.Errorf("failed to mark subscription intent succeeded: %w", intentErr)
 			}
 		} else {
@@ -801,18 +847,24 @@ func (s *Service) handleStripeSubscriptionEvent(payload StripeWebhookPayload) er
 				}
 				return sql.NullTime{Time: value.UTC(), Valid: true}
 			}
-			if _, updateErr := queries.UpdateTenantStripeSubscriptionStatus(ctx, purserdb.UpdateTenantStripeSubscriptionStatusParams{
-				StripeStatus: sql.NullString{String: obj.Status, Valid: obj.Status != ""}, Status: ourStatus,
+			statusResult, updateErr := subscriptions.TransitionProvider(ctx, tx, subscriptions.ProviderChange{TenantID: tenantID, Operation: subscriptions.StripeStatus, StripeCancellationReason: obj.CancellationDetails.Reason, StripeStatus: purserdb.UpdateTenantStripeSubscriptionStatusParams{
+				SubscriptionID: obj.ID, StripeStatus: sql.NullString{String: obj.Status, Valid: obj.Status != ""}, Status: ourStatus,
 				PeriodEnd: toNullTime(periodEnd), PeriodStart: toNullTime(periodStart), TenantID: tenantID,
-			}); updateErr != nil {
+			}})
+			if updateErr != nil {
 				return fmt.Errorf("failed to update subscription status: %w", updateErr)
 			}
+			if statusResult.Rows == 0 {
+				matched = false
+				return nil
+			}
+			appliedStatus = statusResult.Status
 			// A subscription that reached a terminal failure (incomplete_expired /
 			// unpaid / canceled all map to "cancelled") without ever activating
 			// leaves staged stripe_checkout state behind; clear it so a failed async
 			// first payment does not strand a pending tier.
 			if ourStatus == "cancelled" {
-				if clearErr := s.clearStagedStripeCheckout(ctx, tx, tenantID, obj.ID); clearErr != nil {
+				if clearErr := s.clearStagedStripeCheckout(ctx, tx, tenantID, obj.ID, ""); clearErr != nil {
 					return clearErr
 				}
 			}
@@ -828,22 +880,32 @@ func (s *Service) handleStripeSubscriptionEvent(payload StripeWebhookPayload) er
 			subscriptionID = obj.ID
 		}
 		updated, buildErr := billingevents.New(tenantID, subscriptionID, &internalv1.SubscriptionUpdated{
-			SubscriptionId: subscriptionID, TierId: obj.Metadata.TierID, Status: ourStatus,
+			SubscriptionId: subscriptionID, TierId: obj.Metadata.TierID, Status: appliedStatus,
 			ChangedFields: []string{"status"},
 		}, events.Actor{})
 		if buildErr != nil {
 			return buildErr
 		}
+		eventType := eventSubscriptionUpdated
+		if appliedStatus == "cancelled" {
+			eventType = eventSubscriptionCanceled
+		}
 		return emitBillingEventsTx(ctx, tx, eventType, tenantID, "subscription", subscriptionID, &ipcpb.BillingEvent{
 			SubscriptionId: subscriptionID,
 			Provider:       "stripe",
-			Status:         ourStatus,
+			Status:         appliedStatus,
 		}, updated)
 	})
+	if errors.Is(txErr, subscriptions.ErrCheckoutExpired) {
+		return nil
+	}
 	if txErr != nil {
 		return txErr
 	}
 
+	if !matched {
+		return nil
+	}
 	s.logger.WithFields(logging.Fields{
 		"tenant_id":       tenantID,
 		"subscription_id": obj.ID,
@@ -971,13 +1033,17 @@ func (s *Service) recordMonthlyClusterCredit(ctx context.Context, obj *StripeInv
 		// payload omits them, receipt time keeps the row queryable by a
 		// deterministic period.
 		periodEnd = time.Now().UTC()
-		periodStart = periodEnd.AddDate(0, -1, 0)
+		periodStart = billing.PreviousMonthlyAnniversary(periodEnd)
 	}
 
 	return database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
-		return operator.PersistStripeSubscriptionCredit(ctx, tx,
-			obj.ID, ownerUUID, clusterID, strings.ToUpper(obj.Currency), obj.AmountPaid,
-			periodStart, periodEnd, "cluster_monthly")
+		if _, err := subscriptions.LockChange(ctx, tx, consumingTenantID, subscriptions.PreservePricing); err != nil {
+			return err
+		}
+		if err := operator.PersistStripeSubscriptionCredit(ctx, tx, obj.ID, ownerUUID, clusterID, strings.ToUpper(obj.Currency), obj.AmountPaid, periodStart, periodEnd, "cluster_monthly"); err != nil {
+			return err
+		}
+		return purserdb.New(tx).ApplyCompensatedStripeInvoiceCredit(ctx, purserdb.ApplyCompensatedStripeInvoiceCreditParams{TenantID: consumingTenantID, InvoiceID: obj.ID, Currency: strings.ToUpper(obj.Currency)})
 	})
 }
 
@@ -1086,11 +1152,9 @@ type stripeCheckoutSessionEvent struct {
 	} `json:"metadata"`
 }
 
-// handleStripeCheckoutAsyncPaymentFailed records the failure of a delayed
-// Checkout payment (SEPA/iDEAL/Bancontact) that was ultimately declined. No
-// value was granted — the completed handler gated on payment_status — so this
-// only moves the staged one-time payment to a terminal state. Subscription
-// checkouts are reconciled via the customer.subscription.* terminal path.
+// handleStripeCheckoutAsyncPaymentFailed records a failed payment attempt.
+// Subscription purchases remain fenced until durable compensation confirms that
+// their provider subscription and payable invoice have been closed.
 func (s *Service) handleStripeCheckoutAsyncPaymentFailed(payload StripeWebhookPayload) error {
 	var sess stripeCheckoutSessionEvent
 	if err := json.Unmarshal(payload.Data.Object, &sess); err != nil {
@@ -1116,6 +1180,24 @@ func (s *Service) handleStripeCheckoutAsyncPaymentFailed(payload StripeWebhookPa
 		return nil
 	case PurposePrepaid:
 		return s.markPendingTopupTerminal(ctx, sess.Metadata.ReferenceID, "failed")
+	case PurposeSubscription, PurposeSubscriptionSetup:
+		return database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
+			if _, err := subscriptions.LockChange(ctx, tx, sess.Metadata.TenantID, subscriptions.PreservePricing); err != nil {
+				return err
+			}
+			q := purserdb.New(tx)
+			intentID, err := q.FindProviderCheckoutReservation(ctx, purserdb.FindProviderCheckoutReservationParams{TenantID: sess.Metadata.TenantID, Provider: "stripe", SessionID: sess.ID})
+			if errors.Is(err, sql.ErrNoRows) {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			if err := q.StartCheckoutCompensation(ctx, purserdb.StartCheckoutCompensationParams{TenantID: sess.Metadata.TenantID, IntentID: intentID}); err != nil {
+				return err
+			}
+			return q.RequestCheckoutRecovery(ctx, purserdb.RequestCheckoutRecoveryParams{TenantID: sess.Metadata.TenantID, IntentID: intentID, Reason: "Stripe checkout payment attempt failed"})
+		})
 	default:
 		s.logger.WithFields(logging.Fields{
 			"session_id": sess.ID,
@@ -1136,7 +1218,7 @@ func (s *Service) handleStripeCheckoutExpired(payload StripeWebhookPayload) erro
 		return fmt.Errorf("failed to parse checkout session: %w", err)
 	}
 	ctx := context.Background()
-	if err := s.expireStripeCheckoutIntent(ctx, sess.ID); err != nil {
+	if err := s.expireStripeCheckoutIntent(ctx, sess.Metadata.TenantID, sess.ID); err != nil {
 		return err
 	}
 	switch CheckoutPurpose(sess.Metadata.Purpose) {
@@ -1145,7 +1227,7 @@ func (s *Service) handleStripeCheckoutExpired(payload StripeWebhookPayload) erro
 	case PurposePrepaid:
 		return s.markPendingTopupTerminal(ctx, sess.Metadata.ReferenceID, "expired")
 	case PurposeSubscription, PurposeSubscriptionSetup:
-		return s.clearStagedStripeCheckout(ctx, s.db, sess.Metadata.TenantID, sess.Subscription)
+		return s.clearStagedStripeCheckout(ctx, s.db, sess.Metadata.TenantID, sess.Subscription, sess.ID)
 	case PurposeClusterSubscription:
 		return s.clearStagedClusterSubscription(ctx, sess.ID, sess.Subscription)
 	default:
@@ -1389,6 +1471,9 @@ func (s *Service) handleMolliePaymentWebhook(parentCtx context.Context, paymentI
 		return "", errMollieUnknownPayment
 	}
 
+	if payment.PaidAt != nil {
+		ctx = subscriptions.WithProviderCompletion(ctx, *payment.PaidAt)
+	}
 	status := strings.ToLower(payment.Status)
 	if status == "" {
 		return "", fmt.Errorf("missing Mollie payment status")
@@ -1403,6 +1488,11 @@ func (s *Service) handleMolliePaymentWebhook(parentCtx context.Context, paymentI
 		return eventID, nil
 	}
 
+	if _, scopeErr := uuid.Parse(mollieMetadataString(payment.Metadata, "checkout_reservation_id")); scopeErr == nil {
+		if err = purserdb.New(s.db).WakeRefundSettlementOwner(ctx, purserdb.WakeRefundSettlementOwnerParams{Provider: "mollie", PaymentID: payment.ID}); err != nil {
+			return eventID, err
+		}
+	}
 	// Mollie reports refund/chargeback movement on the original payment
 	// rather than firing a separate event. Apply the reversal ledger
 	// movement before mapping the status, then still reconcile the payment
@@ -1438,6 +1528,30 @@ func (s *Service) handleMolliePaymentWebhook(parentCtx context.Context, paymentI
 			}
 			return "", fmt.Errorf("missing tenant_id for Mollie first payment")
 		}
+
+		if newStatus == "confirmed" && payment.PaidAt == nil && mollieMetadataString(payment.Metadata, "checkout_reservation_id") != "" {
+			return "", errors.New("paid Mollie checkout is missing its provider completion time")
+		}
+
+		if completionErr := s.recordMollieCheckoutCompletion(ctx, tenantID, mollieMetadataString(payment.Metadata, "checkout_reservation_id"), payment); completionErr != nil {
+			return "", completionErr
+		}
+		expired, bindErr := s.bindCheckoutReceipt(ctx, tenantID, mollieMetadataString(payment.Metadata, "checkout_reservation_id"), "mollie", "", payment.ID, "")
+		if bindErr != nil {
+			return "", bindErr
+		}
+		if expired {
+			return eventID, nil
+		}
+		if newStatus == "confirmed" || newStatus == "failed" {
+			bound, bindingErr := purserdb.New(s.db).CheckoutReceiptBound(ctx, purserdb.CheckoutReceiptBoundParams{TenantID: tenantID, Provider: "mollie", PaymentID: payment.ID})
+			if bindingErr != nil {
+				return "", fmt.Errorf("read first-payment response binding: %w", bindingErr)
+			}
+			if !bound {
+				return "", errors.New("first-payment response binding is pending; retry")
+			}
+		}
 		if newStatus == "failed" {
 			if resolveErr := purserdb.New(s.db).ResolveMollieFirstPaymentIntent(ctx, purserdb.ResolveMollieFirstPaymentIntentParams{
 				Status: mollieFirstPaymentIntentStatus(status), TenantID: tenantID, ProviderPaymentID: optionalSQLString(payment.ID),
@@ -1448,14 +1562,16 @@ func (s *Service) handleMolliePaymentWebhook(parentCtx context.Context, paymentI
 		if newStatus != "confirmed" {
 			return eventID, nil
 		}
-		if payment.CustomerID == "" || payment.MandateID == "" {
-			return "", fmt.Errorf("missing Mollie customer or mandate ID")
+		completed, completedErr := purserdb.New(s.db).CheckoutAlreadySettled(ctx, purserdb.CheckoutAlreadySettledParams{TenantID: tenantID, Provider: "mollie", PaymentID: payment.ID})
+		if completedErr != nil {
+			return "", fmt.Errorf("check first-payment outcome: %w", completedErr)
+		}
+		if completed {
+			return eventID, nil
 		}
 
-		if execErr := purserdb.New(s.db).UpsertMollieCustomer(ctx, purserdb.UpsertMollieCustomerParams{
-			TenantID: tenantID, MollieCustomerID: payment.CustomerID,
-		}); execErr != nil {
-			return "", fmt.Errorf("failed to upsert Mollie customer mapping: %w", execErr)
+		if payment.CustomerID == "" || payment.MandateID == "" {
+			return "", fmt.Errorf("missing Mollie customer or mandate ID")
 		}
 
 		mandate, mandateErr := s.mollieClient.GetMandate(ctx, payment.CustomerID, payment.MandateID)
@@ -1463,9 +1579,6 @@ func (s *Service) handleMolliePaymentWebhook(parentCtx context.Context, paymentI
 			return "", fmt.Errorf("failed to fetch Mollie mandate: %w", mandateErr)
 		}
 		info := s.mollieClient.ExtractMandateInfo(mandate, payment.CustomerID)
-		if upsertErr := s.upsertMollieMandate(tenantID, info); upsertErr != nil {
-			return "", upsertErr
-		}
 		// A first payment created outside EUR is a zero-amount mandate payment:
 		// the mandate activates the tier and Purser charges the base fee on it.
 		// One created in EUR paid the base fee ahead of a Mollie subscription.
@@ -1474,16 +1587,35 @@ func (s *Service) handleMolliePaymentWebhook(parentCtx context.Context, paymentI
 		if currencyErr != nil {
 			return "", currencyErr
 		}
+
 		if createdIn != billing.LedgerCurrency && info.Status == "valid" {
-			tierID := mollieMetadataString(payment.Metadata, "tier_id")
-			if activateErr := s.activateAdvanceBilledTenant(ctx, tenantID, tierID, "mollie", "", time.Now()); activateErr != nil {
+			receiptID := mollieMetadataString(payment.Metadata, "checkout_reservation_id")
+			if receiptID == "" {
+				var readErr error
+				receiptID, readErr = purserdb.New(s.db).FindProviderCheckoutReservation(ctx, purserdb.FindProviderCheckoutReservationParams{TenantID: tenantID, Provider: "mollie", PaymentID: payment.ID})
+				if readErr != nil {
+					return "", readErr
+				}
+			}
+			details, marshalErr := json.Marshal(info.Details)
+			if marshalErr != nil {
+				return "", marshalErr
+			}
+			mandateParams := &purserdb.UpsertMollieMandateParams{TenantID: tenantID, MollieCustomerID: info.MollieCustomerID, MollieMandateID: info.MollieMandateID, Status: info.Status, Method: info.Method, Details: details, CreatedAt: sql.NullTime{Time: info.CreatedAt, Valid: !info.CreatedAt.IsZero()}}
+			if activateErr := s.activateAdvanceBilledTenantWithMandate(ctx, tenantID, mollieMetadataString(payment.Metadata, "tier_id"), "mollie", "", providerReceiptTime(ctx), receiptID, mandateParams); activateErr != nil {
+				if errors.Is(activateErr, subscriptions.ErrCheckoutExpired) {
+					return eventID, nil
+				}
 				return "", activateErr
 			}
+			return eventID, nil
 		}
-		if resolveErr := purserdb.New(s.db).ResolveMollieFirstPaymentIntent(ctx, purserdb.ResolveMollieFirstPaymentIntentParams{
-			Status: "succeeded", TenantID: tenantID, ProviderPaymentID: optionalSQLString(payment.ID),
-		}); resolveErr != nil {
-			return "", fmt.Errorf("record Mollie first payment outcome: %w", resolveErr)
+
+		if completionErr := s.completeMollieFirstPayment(ctx, tenantID, payment.ID, mollieMetadataString(payment.Metadata, "checkout_reservation_id"), info); completionErr != nil {
+			if errors.Is(completionErr, subscriptions.ErrCheckoutExpired) {
+				return eventID, nil
+			}
+			return "", completionErr
 		}
 		return eventID, nil
 	}
@@ -1530,6 +1662,11 @@ func (s *Service) handleMolliePaymentWebhook(parentCtx context.Context, paymentI
 				s.logger.WithError(scanErr).WithField("mollie_subscription_id", payment.SubscriptionID).Warn("Failed to resolve tenant_id from subscription")
 			}
 		}
+		if newStatus == "failed" && tenantID != "" {
+			if graceErr := s.startGraceIfMollieSubscriptionEnded(ctx, tenantID, payment); graceErr != nil {
+				return eventID, graceErr
+			}
+		}
 		resolvedInvoiceID, resolveErr := s.resolveMollieSubscriptionInvoice(ctx, payment.SubscriptionID, payment)
 		if resolveErr != nil {
 			return eventID, resolveErr
@@ -1560,7 +1697,7 @@ func (s *Service) handleMolliePaymentWebhook(parentCtx context.Context, paymentI
 		}
 		if sub, subErr := s.mollieClient.GetSubscription(ctx, payment.CustomerID, payment.SubscriptionID); subErr == nil && sub.NextPaymentDate != nil {
 			if persistErr := purserdb.New(s.db).UpdateMollieNextPaymentDate(ctx, purserdb.UpdateMollieNextPaymentDateParams{
-				NextPaymentDate:      sub.NextPaymentDate.String(),
+				TenantID: tenantID, NextPaymentDate: sub.NextPaymentDate.String(),
 				MollieSubscriptionID: sql.NullString{String: payment.SubscriptionID, Valid: true},
 			}); persistErr != nil {
 				s.logger.WithError(persistErr).WithField("mollie_subscription_id", payment.SubscriptionID).Warn("Failed to persist next_payment_date")
@@ -1599,6 +1736,21 @@ func (s *Service) handleMolliePaymentWebhook(parentCtx context.Context, paymentI
 	}
 
 	return eventID, nil
+}
+
+// startGraceIfMollieSubscriptionEnded starts the grace period when a failed
+// installment finds Mollie stopped collecting. Mollie sends no webhook for a
+// subscription's own status, so a failed payment is when this is learned.
+func (s *Service) startGraceIfMollieSubscriptionEnded(ctx context.Context, tenantID string, payment *mollie.Payment) error {
+	sub, err := s.mollieClient.GetSubscription(ctx, payment.CustomerID, payment.SubscriptionID)
+	if err != nil {
+		return fmt.Errorf("read Mollie subscription after failed payment: %w", err)
+	}
+	if sub.Status != mollie.SubscriptionStatusCanceled && sub.Status != mollie.SubscriptionStatusSuspended {
+		return nil
+	}
+	_, err = subscriptions.StartMolliePaymentFailureGrace(ctx, s.db, tenantID, payment.SubscriptionID, time.Now())
+	return err
 }
 
 // mollieFirstPaymentCurrency is the currency a Mollie first payment was
@@ -1777,7 +1929,7 @@ func (s *Service) handleStripeChargeRefunded(payload StripeWebhookPayload) error
 			s.logger.WithFields(logging.Fields{
 				"refund_id":   r.ID,
 				"payment_int": charge.PaymentIntent,
-			}).Debug("Stripe refund already applied; webhook replay")
+			}).Debug("Refund notification requires no invoice or top-up reversal")
 		}
 	}
 	return nil
@@ -1840,6 +1992,9 @@ func (s *Service) handleStripeChargeDispute(payload StripeWebhookPayload) error 
 		_ = applied
 		return nil
 	case "charge.dispute.funds_reinstated":
+		if err := purserdb.New(s.db).WakeRefundSettlementOwner(ctx, purserdb.WakeRefundSettlementOwnerParams{Provider: "stripe", PaymentID: providerPaymentID}); err != nil {
+			return err
+		}
 		// Reversed dispute: flag for operator review rather than silently
 		// reversing automatically; the negative balance / clawback may have
 		// already paid out.
@@ -1901,6 +2056,13 @@ func (s *Service) applyProviderReversal(parentCtx context.Context, in providerRe
 			topup, topupErr = queries.GetPendingTopupForReversal(ctx, sql.NullString{String: in.providerPaymentID, Valid: true})
 			err = topupErr
 			if errors.Is(err, sql.ErrNoRows) {
+				owned, lookupErr := queries.HasRefundSettlementOwner(ctx, purserdb.HasRefundSettlementOwnerParams{Provider: in.provider, PaymentID: in.providerPaymentID})
+				if lookupErr != nil {
+					return lookupErr
+				}
+				if owned && (in.reversalType == "refund" || in.reversalType == "chargeback" || in.reversalType == "dispute") {
+					return queries.WakeRefundSettlementOwner(ctx, purserdb.WakeRefundSettlementOwnerParams{Provider: in.provider, PaymentID: in.providerPaymentID})
+				}
 				return fmt.Errorf("reversal %s references unknown provider payment %s: %w",
 					in.providerReversalID, in.providerPaymentID, errWebhookMissingLocalReference)
 			}
@@ -2787,27 +2949,6 @@ func invoicePaymentMethodForProvider(provider string) string {
 	default:
 		return provider
 	}
-}
-
-func (s *Service) upsertMollieMandate(tenantID string, info billingmollie.MandateInfo) error {
-	if tenantID == "" {
-		return fmt.Errorf("missing tenant_id for Mollie mandate")
-	}
-	details, err := json.Marshal(info.Details)
-	if err != nil {
-		return fmt.Errorf("failed to serialize Mollie mandate details: %w", err)
-	}
-
-	err = purserdb.New(s.db).UpsertMollieMandate(context.Background(), purserdb.UpsertMollieMandateParams{
-		TenantID: tenantID, MollieCustomerID: info.MollieCustomerID, MollieMandateID: info.MollieMandateID,
-		Status: info.Status, Method: info.Method, Details: details,
-		CreatedAt: sql.NullTime{Time: info.CreatedAt, Valid: !info.CreatedAt.IsZero()},
-	})
-	if err != nil {
-		return fmt.Errorf("failed to store Mollie mandate: %w", err)
-	}
-
-	return nil
 }
 
 // getTenantInfo calls Quartermaster to get tenant information using gRPC

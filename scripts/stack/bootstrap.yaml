@@ -1,0 +1,13 @@
+# Disposable stack fixture, validated and reconciled by each up.sh run. Credentials are local-test data.
+quartermaster:
+  system_tenant:
+    alias: frameworks
+    name: FrameWorks
+accounts:
+  - kind: system_operator
+    tenant: { ref: "quartermaster.system_tenant" }
+    users:
+      - email: operator@stack.test
+        password: stack-operator-password
+        role: owner
+        platform_operator: true

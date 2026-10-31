@@ -173,10 +173,18 @@ message InvalidateTenantCacheResponse {
   int32 entries_invalidated = 1;
 }
 
-// TerminateTenantStreamsRequest is sent by Purser when a tenant is suspended
+// TerminateTenantStreamsRequest stops live sessions after billing or account revocation.
 message TerminateTenantStreamsRequest {
   string tenant_id = 1;
-  string reason = 2; // e.g., "insufficient_balance", "suspended"
+  string reason = 2; // e.g., "insufficient_balance", "account_inactive"
+}
+
+// TerminateStreamSessionsRequest stops only named streams owned by tenant_id.
+// A distinct RPC makes older cells refuse rather than interpret it as a tenant-wide stop.
+message TerminateStreamSessionsRequest {
+  string tenant_id = 1;
+  string reason = 2; // e.g., "account_inactive"
+  repeated string stream_names = 3; // Required non-empty scope of internal names.
 }
 
 // TerminateTenantStreamsResponse indicates the result of termination

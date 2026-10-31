@@ -2140,8 +2140,8 @@ class CardTopupResultDefaultConversion(BaseModel):
 
 
 class ChangeBillingTierPayloadDefault(BaseModel):
-    """Result of a postpaid tier change. Either appliedTier is set (immediate upgrade)
-    or pendingTier + effectiveAt are set (scheduled downgrade at period end)."""
+    """Result of a postpaid tier change. appliedTier identifies a committed upgrade.
+    pendingTier identifies an upgrade awaiting reconciliation or a scheduled downgrade."""
 
     success: bool = Field(description="Whether the request was accepted.")
     "Whether the request was accepted."
@@ -2149,14 +2149,14 @@ class ChangeBillingTierPayloadDefault(BaseModel):
     "Human-readable status message."
     applied_tier: Optional["ChangeBillingTierPayloadDefaultAppliedTier"] = Field(
         alias="appliedTier",
-        description="Set on immediate upgrade — the new active tier.",
+        description="The active tier after the upgrade's billing boundary commits.",
     )
-    "Set on immediate upgrade — the new active tier."
+    "The active tier after the upgrade's billing boundary commits."
     pending_tier: Optional["ChangeBillingTierPayloadDefaultPendingTier"] = Field(
         alias="pendingTier",
-        description="Set on scheduled downgrade — the staged target tier.",
+        description="The target of a pending upgrade or scheduled downgrade.",
     )
-    "Set on scheduled downgrade — the staged target tier."
+    "The target of a pending upgrade or scheduled downgrade."
     effective_at: Optional[datetime] = Field(
         alias="effectiveAt", description="When a scheduled downgrade will take effect."
     )

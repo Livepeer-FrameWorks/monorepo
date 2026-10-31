@@ -68,10 +68,12 @@ func TestComputeBackoffNonPositiveBaseReturnsMax(t *testing.T) {
 type captureHook struct{ entries []*logrus.Entry }
 
 func (h *captureHook) Levels() []logrus.Level { return logrus.AllLevels }
+
 func (h *captureHook) Fire(e *logrus.Entry) error {
 	h.entries = append(h.entries, e)
 	return nil
 }
+
 func (h *captureHook) count(level logrus.Level, substr string) int {
 	n := 0
 	for _, e := range h.entries {
@@ -81,6 +83,7 @@ func (h *captureHook) count(level logrus.Level, substr string) int {
 	}
 	return n
 }
+
 func (h *captureHook) firstError(substr string) *logrus.Entry {
 	for _, e := range h.entries {
 		if e.Level == logrus.ErrorLevel && strings.Contains(e.Message, substr) {
@@ -591,5 +594,19 @@ func TestDrainStopsAfterFullBatchWithFailure(t *testing.T) {
 	if store.claimCalls != 1 || len(store.failed) != 1 || len(store.completed) != 1 {
 		t.Fatalf("claims=%d completed=%v failed=%v, want one claim, one completion, one failure",
 			store.claimCalls, store.completed, store.failed)
+	}
+}
+
+type deferredQueueStore struct{ queueStore }
+
+func (*deferredQueueStore) DefersFailedClaims() bool { return true }
+
+func TestDrainContinuesPastDurablyDeferredFailure(t *testing.T) {
+	store := &deferredQueueStore{queueStore: queueStore{pending: []string{"failed", "healthy"}}}
+	disp := &cancelAfterDispatcher{after: 100, failOn: "failed", cancel: func() {}}
+	w := &Worker[string]{Config: Config{BatchSize: 1, BaseBackoff: time.Minute}, Store: store, Dispatcher: disp}
+	w.Drain(context.Background())
+	if len(store.completed) != 1 || store.completed[0] != "healthy" || len(store.failed) != 1 {
+		t.Fatalf("deferred failure stalled healthy work: completed=%v failed=%v", store.completed, store.failed)
 	}
 }

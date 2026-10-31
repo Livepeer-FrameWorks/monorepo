@@ -2,6 +2,9 @@ package handlers
 
 import (
 	"context"
+	"database/sql"
+	"errors"
+	foghorncontrolpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
 	"testing"
 	"time"
 
@@ -113,9 +116,14 @@ func TestApplyPendingDowngrade_Happy_FlipsThenReconcilesThenClears(t *testing.T)
 		WithArgs(tenantID).
 		WillReturnRows(rows)
 	// Step 1: flip tier_id.
+	mock.ExpectBegin()
+	mock.ExpectQuery("LockTenantSubscriptionForProviderChange").WithArgs(tenantID).WillReturnRows(sqlmock.NewRows([]string{"subscription_id", "tier_id", "status", "billing_model", "stripe_subscription_id", "mollie_subscription_id", "pending_reason", "free_fallback_provider_stopping", "free_fallback_provider_ended_at"}).AddRow("sub", "tier-A", "active", "postpaid", nil, nil, nil, false, nil))
+	mock.ExpectQuery("IsTenantBillingClosed").WillReturnRows(sqlmock.NewRows([]string{"closed"}).AddRow(false))
+	mock.ExpectQuery("GetSubscriptionOperatorGrant").WithArgs(tenantID).WillReturnError(sql.ErrNoRows)
 	mock.ExpectExec(`UPDATE purser\.tenant_subscriptions\s+SET tier_id = \$1`).
 		WithArgs(pending, tenantID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
 	// Step 3: clear pending_* (Step 2 is the reconciler stub call).
 	mock.ExpectExec(`UPDATE purser\.tenant_subscriptions\s+SET pending_tier_id = NULL`).
 		WithArgs(tenantID, pending).
@@ -157,9 +165,14 @@ func TestApplyPendingDowngrade_ReconcileFailLeavesPending(t *testing.T) {
 		WithArgs(tenantID).
 		WillReturnRows(rows)
 	// Step 1 flip still happens — favors-user ordering.
+	mock.ExpectBegin()
+	mock.ExpectQuery("LockTenantSubscriptionForProviderChange").WithArgs(tenantID).WillReturnRows(sqlmock.NewRows([]string{"subscription_id", "tier_id", "status", "billing_model", "stripe_subscription_id", "mollie_subscription_id", "pending_reason", "free_fallback_provider_stopping", "free_fallback_provider_ended_at"}).AddRow("sub", "tier-A", "active", "postpaid", nil, nil, nil, false, nil))
+	mock.ExpectQuery("IsTenantBillingClosed").WillReturnRows(sqlmock.NewRows([]string{"closed"}).AddRow(false))
+	mock.ExpectQuery("GetSubscriptionOperatorGrant").WithArgs(tenantID).WillReturnError(sql.ErrNoRows)
 	mock.ExpectExec(`UPDATE purser\.tenant_subscriptions\s+SET tier_id = \$1`).
 		WithArgs(pending, tenantID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
 	// Step 3 must NOT run when reconcile fails — pending_* stays set so the
 	// next cron tick retries.
 
@@ -178,3 +191,58 @@ var errStubReconcile = stubErr("stub reconcile failure")
 type stubErr string
 
 func (e stubErr) Error() string { return string(e) }
+
+type unreachableDowngradeCommodore struct{ mockCommodoreClient }
+
+func (*unreachableDowngradeCommodore) InvalidateTenantCache(context.Context, string, string) (*foghorncontrolpb.InvalidateTenantCacheResponse, error) {
+	return nil, errors.New("cell unavailable")
+}
+
+func TestApplyPendingDowngrade_CacheFailureStillClears(t *testing.T) {
+	mockDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer mockDB.Close()
+
+	reconciler := &stubTierReconciler{}
+	jm := &JobManager{db: mockDB, logger: logging.NewLogger(), tierReconciler: reconciler, billing: &Service{}, commodoreClient: &unreachableDowngradeCommodore{}}
+
+	tenantID := "tenant-1"
+	pending := "tier-B"
+	past := time.Now().Add(-time.Hour)
+
+	rows := sqlmock.NewRows([]string{"tier_id", "pending_tier_id", "pending_effective_at", "tier_level", "tier_name"}).
+		AddRow("tier-A", pending, past, int32(1), "free")
+	mock.ExpectQuery(`SELECT subscription\.tier_id::text AS tier_id,\s+COALESCE\(subscription\.pending_tier_id::text`).
+		WithArgs(tenantID).
+		WillReturnRows(rows)
+	// Step 1: flip tier_id.
+	mock.ExpectBegin()
+	mock.ExpectQuery("LockTenantSubscriptionForProviderChange").WithArgs(tenantID).WillReturnRows(sqlmock.NewRows([]string{"subscription_id", "tier_id", "status", "billing_model", "stripe_subscription_id", "mollie_subscription_id", "pending_reason", "free_fallback_provider_stopping", "free_fallback_provider_ended_at"}).AddRow("sub", "tier-A", "active", "postpaid", nil, nil, nil, false, nil))
+	mock.ExpectQuery("IsTenantBillingClosed").WillReturnRows(sqlmock.NewRows([]string{"closed"}).AddRow(false))
+	mock.ExpectQuery("GetSubscriptionOperatorGrant").WithArgs(tenantID).WillReturnError(sql.ErrNoRows)
+	mock.ExpectExec(`UPDATE purser\.tenant_subscriptions\s+SET tier_id = \$1`).
+		WithArgs(pending, tenantID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+	// Step 3: clear pending_* (Step 2 is the reconciler stub call).
+	mock.ExpectExec(`UPDATE purser\.tenant_subscriptions\s+SET pending_tier_id = NULL`).
+		WithArgs(tenantID, pending).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	jm.applyPendingDowngrade(context.Background(), tenantID)
+
+	if reconciler.calls != 1 {
+		t.Errorf("reconciler called %d times; want 1", reconciler.calls)
+	}
+	if reconciler.tenantID != tenantID || reconciler.level != 1 {
+		t.Errorf("reconciler called with tenant=%q level=%d; want tenant=%q level=1", reconciler.tenantID, reconciler.level, tenantID)
+	}
+	if reconciler.tierName != "free" {
+		t.Errorf("reconciler called with tierName=%q; want \"free\" (staged tier's name)", reconciler.tierName)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet sqlmock expectations: %v", err)
+	}
+}

@@ -307,7 +307,7 @@ func TestPromoteToPaidNotFoundAndAlreadyPostpaid(t *testing.T) {
 		s, mock := newReadServer(t, true)
 		mock.ExpectQuery(`SELECT billing_model, status, billing_email`).WithArgs("tenant-x").WillReturnError(sqlmockNoRows())
 		mock.ExpectBegin()
-		mock.ExpectQuery(`SELECT id::text AS id, billing_model, tier_id::text AS tier_id`).
+		mock.ExpectQuery(`LockTenantSubscriptionForProviderChange`).
 			WithArgs("tenant-x").
 			WillReturnError(sqlmockNoRows())
 		mock.ExpectRollback()
@@ -346,6 +346,8 @@ func expectPrepaidPhaseRead(mock sqlmock.Sqlmock, tenantID, model string) {
 }
 
 func expectLockedPromotionSubscription(mock sqlmock.Sqlmock, tenantID, model, tierID string, paymentMethod, stripeSubscription, email, name, address any) {
+	expectProviderSubscriptionLock(mock, tenantID)
+	mock.ExpectQuery("GetSubscriptionOperatorGrant").WithArgs(tenantID).WillReturnError(sqlmockNoRows())
 	if address == nil {
 		address = []byte(`{}`)
 	}

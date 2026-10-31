@@ -439,12 +439,15 @@ func TestLoadPeerAddressesFromRedis_LeaderConnectsImportedHint(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed peer hint: %v", err)
 	}
+	receiving := make(chan struct{})
+	var ready sync.Once
 	client := &fakeFederationClient{
-		openFunc: func(context.Context) (foghornfederationpb.FoghornFederation_PeerChannelClient, error) {
-			return &capturePeerChannelStream{}, nil
+		openFunc: func(ctx context.Context) (foghornfederationpb.FoghornFederation_PeerChannelClient, error) {
+			return &readyPeerChannelStream{blockingPeerChannelStream: blockingPeerChannelStream{ctx: ctx}, ready: func() { ready.Do(func() { close(receiving) }) }}, nil
 		},
 	}
 	pm := newTestPeerManager(t, "local-cluster", cache, true)
+	t.Cleanup(pm.Close)
 	pm.reconnectBackoff = time.Millisecond
 	pm.pool = &fakeFederationPool{getOrCreate: func(_, _ string) (federationPeerClient, error) {
 		return client, nil
@@ -453,7 +456,13 @@ func TestLoadPeerAddressesFromRedis_LeaderConnectsImportedHint(t *testing.T) {
 	if err := pm.loadPeerAddressesFromRedis(); err != nil {
 		t.Fatalf("loadPeerAddressesFromRedis: %v", err)
 	}
-	waitFor(t, 100*time.Millisecond, func() bool { return client.openCount() > 0 }, "leader did not connect imported peer hint")
+	// Opening the stream precedes reading the shared stream registry. Wait for
+	// initial advertisement to finish before the next test replaces that registry.
+	select {
+	case <-receiving:
+	case <-time.After(time.Second):
+		t.Fatal("leader did not finish connecting the imported peer hint")
+	}
 }
 
 func TestLoadPeerAddressesFromRedis_UpdatesExistingAddress(t *testing.T) {
@@ -748,6 +757,7 @@ func (s *capturePeerChannelStream) Send(msg *foghornfederationpb.PeerMessage) er
 func (s *capturePeerChannelStream) Recv() (*foghornfederationpb.PeerMessage, error) {
 	return nil, io.EOF
 }
+
 func (s *capturePeerChannelStream) CloseSend() error             { return nil }
 func (s *capturePeerChannelStream) Context() context.Context     { return context.Background() }
 func (s *capturePeerChannelStream) Header() (metadata.MD, error) { return metadata.MD{}, nil }
@@ -758,6 +768,16 @@ func (s *capturePeerChannelStream) RecvMsg(any) error            { return io.EOF
 type blockingPeerChannelStream struct {
 	capturePeerChannelStream
 	ctx context.Context
+}
+
+type readyPeerChannelStream struct {
+	blockingPeerChannelStream
+	ready func()
+}
+
+func (s *readyPeerChannelStream) Recv() (*foghornfederationpb.PeerMessage, error) {
+	s.ready()
+	return s.blockingPeerChannelStream.Recv()
 }
 
 func (s *blockingPeerChannelStream) Recv() (*foghornfederationpb.PeerMessage, error) {

@@ -3,6 +3,7 @@ package grpc
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -82,7 +83,8 @@ func TestRuntimeKeyringReadsHistoricalShortJWTFromLegacyOnlyChannel(t *testing.T
 }
 
 type countingStreamAdmissionBilling struct {
-	calls int
+	calls   int
+	expired bool
 }
 
 func TestNewCommodoreServerKeepsOptionalClientInterfacesNil(t *testing.T) {
@@ -100,7 +102,7 @@ func TestNewCommodoreServerKeepsOptionalClientInterfacesNil(t *testing.T) {
 
 func (c *countingStreamAdmissionBilling) GetTenantBillingStatus(context.Context, string) (*purserpb.GetTenantBillingStatusResponse, error) {
 	c.calls++
-	return &purserpb.GetTenantBillingStatusResponse{BillingModel: "postpaid"}, nil
+	return &purserpb.GetTenantBillingStatusResponse{BillingModel: "postpaid", GrantExpired: c.expired}, nil
 }
 
 func TestValidateStreamKey(t *testing.T) {
@@ -415,11 +417,11 @@ func TestResolveStreamContext(t *testing.T) {
 		},
 		{
 			name: "inactive_user",
-			req:  &commodorepb.ResolveStreamContextRequest{Identifier: &commodorepb.ResolveStreamContextRequest_PlaybackId{PlaybackId: "pk_inactive"}},
+			req:  &commodorepb.ResolveStreamContextRequest{Identifier: &commodorepb.ResolveStreamContextRequest_StreamKey{StreamKey: "pk_inactive"}},
 			setupMock: func(mock sqlmock.Sqlmock) {
 				rows := sqlmock.NewRows(cols).
 					AddRow("stream-id", "user-id", "tenant-id", "internal", false, true, "pk_inactive", "mist_native", false, nil, false, nil, nil, "")
-				mock.ExpectQuery(`ResolveStreamContextByIdentifier`).WithArgs(int64(activeIngestLease.Seconds()), "playback_id", "pk_inactive").WillReturnRows(rows)
+				mock.ExpectQuery(`ResolveStreamContextByIdentifier`).WithArgs(int64(activeIngestLease.Seconds()), "stream_key", "pk_inactive").WillReturnRows(rows)
 			},
 			assert: func(t *testing.T, resp *commodorepb.ResolveStreamContextResponse) {
 				if resp.Admitted {
@@ -1091,5 +1093,41 @@ func TestValidateStreamKey_PushTargetLoadFailureIsTransientAndWritesNoPlacement(
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestValidateStreamKeyGrantExpiryUsesPaymentRequiredReason(t *testing.T) {
+	for _, expired := range []bool{false, true} {
+		t.Run(fmt.Sprint(expired), func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			mock.ExpectQuery("FROM commodore.streams").WithArgs("key").WillReturnRows(sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "internal_name", "is_active", "is_recording_enabled", "playback_id", "ingest_mode", "dvr_chapter_mode", "dvr_chapter_interval_seconds", "last_ingest_cluster_id"}).AddRow("stream-id", "user-id", "tenant-id", "internal", true, true, "pk_test123", "push", nil, nil, ""))
+			if !expired {
+				expectNoEnabledPushTargets(mock, "stream-id", "tenant-id")
+				mock.ExpectQuery("UPDATE commodore.streams").WithArgs("cluster-us", "claim", int64(activeIngestLease.Seconds()), "key").WillReturnRows(claimReserved())
+			}
+			billing := &countingStreamAdmissionBilling{expired: expired}
+			server := &CommodoreServer{db: db, logger: logrus.New(), streamAdmissionBilling: billing, routeCache: map[string]*clusterRoute{"tenant-id": admittingRoute("cluster-us")}, routeCacheTTL: 5 * time.Minute}
+			response, err := server.ValidateStreamKey(serviceCtx(), &commodorepb.ValidateStreamKeyRequest{StreamKey: "key", ClusterId: "cluster-us", ClaimToken: "claim"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if expired {
+				if response.GetValid() || response.GetRejectionReason() != commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_GRANT_EXPIRED {
+					t.Fatalf("expired grant used a different publisher refusal: %+v", response)
+				}
+			} else if !response.GetValid() {
+				t.Fatalf("active subscription refused: %+v", response)
+			}
+			if billing.calls != 1 {
+				t.Fatalf("billing calls=%d", billing.calls)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }

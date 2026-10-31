@@ -1362,11 +1362,11 @@ func (x *InvalidateTenantCacheResponse) GetEntriesInvalidated() int32 {
 	return 0
 }
 
-// TerminateTenantStreamsRequest is sent by Purser when a tenant is suspended
+// TerminateTenantStreamsRequest stops live sessions after billing or account revocation.
 type TerminateTenantStreamsRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
-	Reason        string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"` // e.g., "insufficient_balance", "suspended"
+	Reason        string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"` // e.g., "insufficient_balance", "account_inactive"
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1415,6 +1415,68 @@ func (x *TerminateTenantStreamsRequest) GetReason() string {
 	return ""
 }
 
+// TerminateStreamSessionsRequest stops only named streams owned by tenant_id.
+// A distinct RPC makes older cells refuse rather than interpret it as a tenant-wide stop.
+type TerminateStreamSessionsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	Reason        string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`                              // e.g., "account_inactive"
+	StreamNames   []string               `protobuf:"bytes,3,rep,name=stream_names,json=streamNames,proto3" json:"stream_names,omitempty"` // Required non-empty scope of internal names.
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TerminateStreamSessionsRequest) Reset() {
+	*x = TerminateStreamSessionsRequest{}
+	mi := &file_foghorn_control_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TerminateStreamSessionsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TerminateStreamSessionsRequest) ProtoMessage() {}
+
+func (x *TerminateStreamSessionsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_foghorn_control_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TerminateStreamSessionsRequest.ProtoReflect.Descriptor instead.
+func (*TerminateStreamSessionsRequest) Descriptor() ([]byte, []int) {
+	return file_foghorn_control_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *TerminateStreamSessionsRequest) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *TerminateStreamSessionsRequest) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+func (x *TerminateStreamSessionsRequest) GetStreamNames() []string {
+	if x != nil {
+		return x.StreamNames
+	}
+	return nil
+}
+
 // TerminateTenantStreamsResponse indicates the result of termination
 type TerminateTenantStreamsResponse struct {
 	state              protoimpl.MessageState `protogen:"open.v1"`
@@ -1427,7 +1489,7 @@ type TerminateTenantStreamsResponse struct {
 
 func (x *TerminateTenantStreamsResponse) Reset() {
 	*x = TerminateTenantStreamsResponse{}
-	mi := &file_foghorn_control_proto_msgTypes[16]
+	mi := &file_foghorn_control_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1439,7 +1501,7 @@ func (x *TerminateTenantStreamsResponse) String() string {
 func (*TerminateTenantStreamsResponse) ProtoMessage() {}
 
 func (x *TerminateTenantStreamsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_foghorn_control_proto_msgTypes[16]
+	mi := &file_foghorn_control_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1452,7 +1514,7 @@ func (x *TerminateTenantStreamsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TerminateTenantStreamsResponse.ProtoReflect.Descriptor instead.
 func (*TerminateTenantStreamsResponse) Descriptor() ([]byte, []int) {
-	return file_foghorn_control_proto_rawDescGZIP(), []int{16}
+	return file_foghorn_control_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *TerminateTenantStreamsResponse) GetStreamsTerminated() int32 {
@@ -1508,7 +1570,7 @@ type TestPlaybackAccessRequest struct {
 
 func (x *TestPlaybackAccessRequest) Reset() {
 	*x = TestPlaybackAccessRequest{}
-	mi := &file_foghorn_control_proto_msgTypes[17]
+	mi := &file_foghorn_control_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1520,7 +1582,7 @@ func (x *TestPlaybackAccessRequest) String() string {
 func (*TestPlaybackAccessRequest) ProtoMessage() {}
 
 func (x *TestPlaybackAccessRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_foghorn_control_proto_msgTypes[17]
+	mi := &file_foghorn_control_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1533,7 +1595,7 @@ func (x *TestPlaybackAccessRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TestPlaybackAccessRequest.ProtoReflect.Descriptor instead.
 func (*TestPlaybackAccessRequest) Descriptor() ([]byte, []int) {
-	return file_foghorn_control_proto_rawDescGZIP(), []int{17}
+	return file_foghorn_control_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *TestPlaybackAccessRequest) GetTenantId() string {
@@ -1633,7 +1695,7 @@ type TestPlaybackAccessResponse struct {
 
 func (x *TestPlaybackAccessResponse) Reset() {
 	*x = TestPlaybackAccessResponse{}
-	mi := &file_foghorn_control_proto_msgTypes[18]
+	mi := &file_foghorn_control_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1645,7 +1707,7 @@ func (x *TestPlaybackAccessResponse) String() string {
 func (*TestPlaybackAccessResponse) ProtoMessage() {}
 
 func (x *TestPlaybackAccessResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_foghorn_control_proto_msgTypes[18]
+	mi := &file_foghorn_control_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1658,7 +1720,7 @@ func (x *TestPlaybackAccessResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TestPlaybackAccessResponse.ProtoReflect.Descriptor instead.
 func (*TestPlaybackAccessResponse) Descriptor() ([]byte, []int) {
-	return file_foghorn_control_proto_rawDescGZIP(), []int{18}
+	return file_foghorn_control_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *TestPlaybackAccessResponse) GetAllowed() bool {
@@ -1860,7 +1922,11 @@ const file_foghorn_control_proto_rawDesc = "" +
 	"\x13entries_invalidated\x18\x01 \x01(\x05R\x12entriesInvalidated\"T\n" +
 	"\x1dTerminateTenantStreamsRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x16\n" +
-	"\x06reason\x18\x02 \x01(\tR\x06reason\"\xa3\x01\n" +
+	"\x06reason\x18\x02 \x01(\tR\x06reason\"x\n" +
+	"\x1eTerminateStreamSessionsRequest\x12\x1b\n" +
+	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x16\n" +
+	"\x06reason\x18\x02 \x01(\tR\x06reason\x12!\n" +
+	"\fstream_names\x18\x03 \x03(\tR\vstreamNames\"\xa3\x01\n" +
 	"\x1eTerminateTenantStreamsResponse\x12-\n" +
 	"\x12streams_terminated\x18\x01 \x01(\x05R\x11streamsTerminated\x12/\n" +
 	"\x13sessions_terminated\x18\x02 \x01(\x05R\x12sessionsTerminated\x12!\n" +
@@ -1913,7 +1979,7 @@ func file_foghorn_control_proto_rawDescGZIP() []byte {
 }
 
 var file_foghorn_control_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_foghorn_control_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
+var file_foghorn_control_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
 var file_foghorn_control_proto_goTypes = []any{
 	(SetNodeModeStatus)(0),                 // 0: foghorn_control.SetNodeModeStatus
 	(*RetrieveDVRChapterRequest)(nil),      // 1: foghorn_control.RetrieveDVRChapterRequest
@@ -1932,9 +1998,10 @@ var file_foghorn_control_proto_goTypes = []any{
 	(*InvalidateTenantCacheRequest)(nil),   // 14: foghorn_control.InvalidateTenantCacheRequest
 	(*InvalidateTenantCacheResponse)(nil),  // 15: foghorn_control.InvalidateTenantCacheResponse
 	(*TerminateTenantStreamsRequest)(nil),  // 16: foghorn_control.TerminateTenantStreamsRequest
-	(*TerminateTenantStreamsResponse)(nil), // 17: foghorn_control.TerminateTenantStreamsResponse
-	(*TestPlaybackAccessRequest)(nil),      // 18: foghorn_control.TestPlaybackAccessRequest
-	(*TestPlaybackAccessResponse)(nil),     // 19: foghorn_control.TestPlaybackAccessResponse
+	(*TerminateStreamSessionsRequest)(nil), // 17: foghorn_control.TerminateStreamSessionsRequest
+	(*TerminateTenantStreamsResponse)(nil), // 18: foghorn_control.TerminateTenantStreamsResponse
+	(*TestPlaybackAccessRequest)(nil),      // 19: foghorn_control.TestPlaybackAccessRequest
+	(*TestPlaybackAccessResponse)(nil),     // 20: foghorn_control.TestPlaybackAccessResponse
 }
 var file_foghorn_control_proto_depIdxs = []int32{
 	4,  // 0: foghorn_control.ListDVRChaptersResponse.chapters:type_name -> foghorn_control.ChapterRef
@@ -1961,7 +2028,7 @@ func file_foghorn_control_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_foghorn_control_proto_rawDesc), len(file_foghorn_control_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   19,
+			NumMessages:   20,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

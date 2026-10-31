@@ -2,11 +2,14 @@ package grpc
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/lib/pq"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
@@ -24,6 +27,8 @@ const (
 // expectLoadSubscription stubs the SELECT for the current subscription row.
 func expectLoadSubscription(mock sqlmock.Sqlmock, tenantID, tierID string, tierLevel int32, billingModel string, periodStart, periodEnd time.Time) {
 	mock.ExpectBegin()
+	expectProviderSubscriptionLock(mock, tenantID)
+	mock.ExpectQuery("GetSubscriptionOperatorGrant").WithArgs(tenantID).WillReturnError(sql.ErrNoRows)
 	cols := []string{"tier_id", "tier_level", "billing_model", "billing_period_start", "billing_period_end", "stripe_current_period_end"}
 	rows := sqlmock.NewRows(cols).AddRow(tierID, tierLevel, billingModel, periodStart, periodEnd, nil)
 	mock.ExpectQuery(`(?s)SELECT subscription\.tier_id::text AS tier_id, tier\.tier_level,\s+subscription\.billing_model.*FOR UPDATE OF subscription`).
@@ -44,7 +49,12 @@ func expectLoadTargetTier(mock sqlmock.Sqlmock, tierID string, tierLevel int32, 
 		WillReturnRows(rows)
 }
 
+func expectSettledOnFree(mock sqlmock.Sqlmock) {
+	mock.ExpectQuery("TenantOwesInvoicesOnFree").WillReturnRows(sqlmock.NewRows([]string{"owes"}).AddRow(false))
+}
+
 func expectCollectionReady(mock sqlmock.Sqlmock) {
+	expectSettledOnFree(mock)
 	mock.ExpectQuery(`SELECT payment_method, stripe_subscription_id, mollie_subscription_id,`).
 		WithArgs(sqlmock.AnyArg(), tenantID).
 		WillReturnRows(sqlmock.NewRows([]string{"payment_method", "stripe_subscription_id", "mollie_subscription_id", "billing_email", "billing_name", "billing_address", "stripe_customer_id", "has_valid_mollie_mandate", "grant_collection", "grant_waive_usage", "effective_base_price"}).
@@ -122,42 +132,24 @@ func TestChangeBillingTier_RejectsInactiveTarget(t *testing.T) {
 	}
 }
 
-func TestChangeBillingTier_UpgradePathFlipsImmediately(t *testing.T) {
+func TestChangeBillingTier_UpgradeRequiresBillingTransitionService(t *testing.T) {
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	if err != nil {
-		t.Fatalf("sqlmock: %v", err)
+		t.Fatal(err)
 	}
 	defer db.Close()
-	// No tierReconciler / commodoreClient configured — both are nil-safe in
-	// the upgrade path.
 	server := &PurserServer{db: db, logger: logging.NewLogger()}
-
-	// Current: free (level 1); Target: production (level 4) → upgrade.
-	periodStart := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
-	periodEnd := periodStart.AddDate(0, 1, 0)
-	expectLoadSubscription(mock, tenantID, freeTierID, 1, "postpaid", periodStart, periodEnd)
+	start := time.Now().Add(-time.Hour)
+	expectLoadSubscription(mock, tenantID, freeTierID, 1, "postpaid", start, start.AddDate(0, 1, 0))
 	expectLoadTargetTier(mock, prodTierID, 4, false, true)
 	expectCollectionReady(mock)
-	mock.ExpectExec(`UPDATE purser\.tenant_subscriptions\s+SET tier_id = \$1`).
-		WithArgs(prodTierID, periodStart, periodEnd, tenantID).
-		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectCommit()
-
-	resp, err := server.ChangeBillingTier(context.Background(), &purserpb.ChangeBillingTierRequest{
-		TenantId: tenantID,
-		TierId:   prodTierID,
-	})
-	if err != nil {
-		t.Fatalf("ChangeBillingTier: %v", err)
+	mock.ExpectRollback()
+	_, err = server.ChangeBillingTier(context.Background(), &purserpb.ChangeBillingTierRequest{TenantId: tenantID, TierId: prodTierID})
+	if status.Code(err) != codes.Unavailable {
+		t.Fatalf("upgrade without its billing boundary returned %v", err)
 	}
-	if resp.GetAppliedTierId() != prodTierID {
-		t.Errorf("AppliedTierId = %q, want %q", resp.GetAppliedTierId(), prodTierID)
-	}
-	if resp.GetPendingTierId() != "" {
-		t.Errorf("PendingTierId = %q, want empty", resp.GetPendingTierId())
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Errorf("unmet sqlmock expectations: %v", err)
+	if err = mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -213,6 +205,8 @@ func TestChangeBillingTier_DowngradeWithoutSubscriptionPeriodUsesOpenDraftPeriod
 	rows := sqlmock.NewRows([]string{"tier_id", "tier_level", "billing_model", "billing_period_start", "billing_period_end", "stripe_current_period_end"}).
 		AddRow(prodTierID, int32(4), "postpaid", nil, nil, nil)
 	mock.ExpectBegin()
+	expectProviderSubscriptionLock(mock, tenantID)
+	mock.ExpectQuery("GetSubscriptionOperatorGrant").WithArgs(tenantID).WillReturnError(sql.ErrNoRows)
 	mock.ExpectQuery(`(?s)SELECT subscription\.tier_id::text AS tier_id, tier\.tier_level,\s+subscription\.billing_model.*FOR UPDATE OF subscription`).
 		WithArgs(tenantID).
 		WillReturnRows(rows)
@@ -283,6 +277,7 @@ func TestChangeBillingTier_FreeCannotActivatePaidTierWithoutCollection(t *testin
 	now := time.Now()
 	expectLoadSubscription(mock, tenantID, freeTierID, 1, "postpaid", now, now.Add(time.Hour))
 	expectLoadTargetTier(mock, prodTierID, 4, false, true)
+	expectSettledOnFree(mock)
 	mock.ExpectQuery(`SELECT payment_method, stripe_subscription_id, mollie_subscription_id,`).
 		WithArgs(sqlmock.AnyArg(), tenantID).
 		WillReturnRows(sqlmock.NewRows([]string{"payment_method", "stripe_subscription_id", "mollie_subscription_id", "billing_email", "billing_name", "billing_address", "stripe_customer_id", "has_valid_mollie_mandate", "grant_collection", "grant_waive_usage", "effective_base_price"}).
@@ -300,10 +295,8 @@ func TestChangeBillingTier_FreeCannotActivatePaidTierWithoutCollection(t *testin
 	}
 }
 
-// TestChangeBillingTier_ReplayReportsOnlyTheCommittedOutcome proves a tier change whose commit fails with 40001 is
-// replayed against the current subscription. Attempt 1 stages a downgrade and aborts; by attempt 2 a concurrent change
-// moved the tenant below the target, so the replay upgrades immediately and nothing of the staged downgrade leaks into
-// the response.
+// A serialization retry can observe a different canonical tier. An unchanged
+// replay must not report the downgrade staged by the rolled-back attempt.
 func TestChangeBillingTier_ReplayReportsOnlyTheCommittedOutcome(t *testing.T) {
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	if err != nil {
@@ -322,11 +315,11 @@ func TestChangeBillingTier_ReplayReportsOnlyTheCommittedOutcome(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit().WillReturnError(&pq.Error{Code: "40001", Message: "could not serialize access"})
 
-	expectLoadSubscription(mock, tenantID, freeTierID, 1, "postpaid", periodStart, periodEnd)
+	expectLoadSubscription(mock, tenantID, paygTierID, 2, "postpaid", periodStart, periodEnd)
 	expectLoadTargetTier(mock, paygTierID, 2, false, true)
 	expectCollectionReady(mock)
-	mock.ExpectExec(`UPDATE purser\.tenant_subscriptions\s+SET tier_id = \$1`).
-		WithArgs(paygTierID, periodStart, periodEnd, tenantID).
+	mock.ExpectExec(`UPDATE purser\.tenant_subscriptions\s+SET billing_period_start = COALESCE`).
+		WithArgs(periodStart, periodEnd, tenantID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
@@ -338,7 +331,7 @@ func TestChangeBillingTier_ReplayReportsOnlyTheCommittedOutcome(t *testing.T) {
 		t.Fatalf("ChangeBillingTier: %v", err)
 	}
 	if resp.GetAppliedTierId() != paygTierID || resp.GetPendingTierId() != "" {
-		t.Fatalf("applied=%q pending=%q, want the committed upgrade only", resp.GetAppliedTierId(), resp.GetPendingTierId())
+		t.Fatalf("applied=%q pending=%q, want the committed unchanged result only", resp.GetAppliedTierId(), resp.GetPendingTierId())
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("unmet sqlmock expectations: %v", err)

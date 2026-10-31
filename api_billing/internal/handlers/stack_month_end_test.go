@@ -76,7 +76,8 @@ func TestStackMonthEnd(t *testing.T) {
 	jobs := &JobManager{db: db, logger: logger, billing: NewService(db, logger, nil, qm, nil, nil, nil)}
 
 	// The guard identifies the completed prepaid -> postpaid -> prepaid
-	// round trip. Other tenants and their metering sources are untouched.
+	// round trip, including the prepaid boundary when the retained grant is
+	// revoked after set-tier. Other tenants and metering sources are untouched.
 	var start, end time.Time
 	err = database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
 		if scanErr := tx.QueryRowContext(ctx, `
@@ -88,8 +89,13 @@ func TestStackMonthEnd(t *testing.T) {
 		    AND i.id = $2 AND i.document_kind = 'prepaid_statement'
 		    AND i.usage_details->'statement'->>'closes_prepaid_phase' = 'true')
 		  AND EXISTS (SELECT 1 FROM purser.billing_invoices i WHERE i.tenant_id = s.tenant_id
-		    AND i.document_kind = 'invoice' AND i.period_end = s.billing_period_start
-		    AND i.usage_details->>'closes_postpaid_phase' = 'true')
+		    AND i.document_kind = 'invoice'
+		    AND i.usage_details->>'closes_postpaid_phase' = 'true'
+		    AND EXISTS (
+		      SELECT 1 FROM purser.billing_invoices grant_end
+		      WHERE grant_end.tenant_id=s.tenant_id AND grant_end.document_kind='prepaid_statement'
+		        AND grant_end.period_start=i.period_end AND grant_end.period_end=s.billing_period_start
+		        AND grant_end.usage_details->'statement'->>'closes_prepaid_phase'='true'))
 		FOR UPDATE OF s`, tenant, statement).Scan(&start, &end); scanErr != nil {
 			return fmt.Errorf("fixture is not the completed billing round trip: %w", scanErr)
 		}

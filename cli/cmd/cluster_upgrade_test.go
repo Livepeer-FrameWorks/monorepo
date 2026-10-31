@@ -1,15 +1,21 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/pem"
 	"errors"
+	"net"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"frameworks/cli/pkg/detect"
 	"frameworks/cli/pkg/gitops"
@@ -18,6 +24,9 @@ import (
 )
 
 func TestClusterRuntimeDataIncludesInternalPKI(t *testing.T) {
+	original := releaseResolveSystemTenantIDFn
+	t.Cleanup(func() { releaseResolveSystemTenantIDFn = original })
+	releaseResolveSystemTenantIDFn = func(context.Context, *resolvedCluster) (string, error) { return "system-tenant", nil }
 	rootCert, _, intermediateCert, intermediateKey := genTestInternalCA(t)
 	intermediateKeyDER, err := x509.MarshalECPrivateKey(intermediateKey)
 	if err != nil {
@@ -414,5 +423,90 @@ func TestReplicaNeedsUpgradeConsultsThePrecheckOnlyOnTheTarget(t *testing.T) {
 	want := errors.New("precheck failed")
 	if _, err := replicaNeedsUpgrade(true, func() (bool, error) { return false, want }); !errors.Is(err, want) {
 		t.Fatalf("precheck error not returned: %v", err)
+	}
+}
+
+func TestClusterRuntimeDataDoesNotMaskConfigurationFailure(t *testing.T) {
+	rc := resolvedClusterWithEnv(&inventory.Manifest{Profile: "dev", Services: map[string]inventory.ServiceConfig{"quartermaster": {Enabled: true}}}, map[string]string{})
+	rc.Source = inventory.SourceContext
+	rc.ContextSystemTenantID = "11111111-1111-4111-8111-111111111111"
+	data, err := rc.RuntimeData(context.Background(), "")
+	if err == nil || !strings.Contains(err.Error(), "SERVICE_TOKEN is required") || data != nil {
+		t.Fatalf("configuration failure masked by saved identity: data=%v err=%v", data, err)
+	}
+}
+
+func TestClusterRuntimeDataRetainsContextRecoveryWithoutQuartermaster(t *testing.T) {
+	original := releaseResolveSystemTenantIDFn
+	t.Cleanup(func() { releaseResolveSystemTenantIDFn = original })
+	releaseResolveSystemTenantIDFn = func(context.Context, *resolvedCluster) (string, error) {
+		return "", status.Error(codes.Unavailable, "Quartermaster down")
+	}
+	rc := resolvedClusterWithEnv(&inventory.Manifest{Services: map[string]inventory.ServiceConfig{}}, nil)
+	rc.Source = inventory.SourceContext
+	rc.ContextSystemTenantID = "11111111-1111-4111-8111-111111111111"
+	data, err := rc.RuntimeData(context.Background(), "")
+	if err != nil || data["system_tenant_id"] != rc.ContextSystemTenantID {
+		t.Fatalf("context recovery runtime=%v err=%v", data, err)
+	}
+}
+
+func TestRecoveryWarnsAndRefusesLivepeerGateway(t *testing.T) {
+	original := clusterRuntimeDataFn
+	t.Cleanup(func() { clusterRuntimeDataFn = original })
+	for _, failure := range []error{status.Error(codes.Unavailable, "Quartermaster unreachable"), &net.OpError{Op: "dial", Net: "tcp", Err: syscall.EHOSTUNREACH}} {
+		for _, gateway := range []bool{false, true} {
+			calls := 0
+			clusterRuntimeDataFn = func(_ context.Context, _ *inventory.Manifest, env map[string]string, _ string, _ string) (map[string]any, error) {
+				calls++
+				if env["SERVICE_TOKEN"] != "fixture" {
+					t.Fatal("missing preflight fixture token")
+				}
+				return nil, failure
+			}
+			manifest := &inventory.Manifest{Profile: "dev", Services: map[string]inventory.ServiceConfig{"quartermaster": {Enabled: true, Host: "core"}}, Hosts: map[string]inventory.Host{"core": {Name: "core"}}}
+			if gateway {
+				manifest.Hosts["media"] = inventory.Host{Name: "media", Cluster: "media"}
+				manifest.Clusters = map[string]inventory.ClusterConfig{"media": {Name: "Media"}}
+				manifest.Services["livepeer-gateway"] = inventory.ServiceConfig{Enabled: true, Host: "media", Cluster: "media"}
+			}
+			rc := resolvedClusterWithEnv(manifest, map[string]string{"SERVICE_TOKEN": "fixture"})
+			rc.Source = inventory.SourceContext
+			rc.ContextSystemTenantID = "11111111-1111-4111-8111-111111111111"
+			var warning bytes.Buffer
+			rc.warningWriter = &warning
+			data, runErr := rc.RuntimeData(t.Context(), "")
+			if calls != 1 {
+				t.Fatalf("runtime lookup not attempted: calls=%d", calls)
+			}
+			if gateway {
+				if runErr == nil || !strings.Contains(runErr.Error(), "authoritative owner aliases are required for Livepeer gateway recovery rendering") || warning.Len() != 0 {
+					t.Fatalf("gateway recovery error=%v warning=%s", runErr, warning.String())
+				}
+			} else if runErr != nil || data["system_tenant_id"] != rc.ContextSystemTenantID || !strings.Contains(warning.String(), "using the saved system tenant ID") {
+				t.Fatalf("recovery failure=%v data=%v warning=%s", runErr, data, warning.String())
+			}
+		}
+	}
+}
+
+func TestSavedSystemTenantDoesNotOverrideAuthoritativeFailure(t *testing.T) {
+	original := releaseResolveSystemTenantIDFn
+	t.Cleanup(func() { releaseResolveSystemTenantIDFn = original })
+	for _, code := range []codes.Code{codes.NotFound, codes.PermissionDenied, codes.FailedPrecondition} {
+		releaseResolveSystemTenantIDFn = func(context.Context, *resolvedCluster) (string, error) {
+			return "", status.Error(code, "alias unavailable authoritatively")
+		}
+		rc := resolvedClusterWithEnv(&inventory.Manifest{Services: map[string]inventory.ServiceConfig{}}, nil)
+		rc.Source = inventory.SourceContext
+		rc.ContextSystemTenantID = "11111111-1111-4111-8111-111111111111"
+		var diagnostics bytes.Buffer
+		rc.warningWriter = &diagnostics
+		if _, err := rc.RuntimeData(t.Context(), ""); status.Code(err) != code {
+			t.Fatalf("code %v reused saved identity: %v", code, err)
+		}
+		if diagnostics.Len() != 0 {
+			t.Fatalf("authoritative failure warned about recovery: %s", diagnostics.String())
+		}
 	}
 }

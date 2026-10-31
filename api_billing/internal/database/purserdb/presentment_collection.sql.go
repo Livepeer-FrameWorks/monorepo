@@ -18,6 +18,8 @@ const activateAdvanceBilledSubscription = `-- name: ActivateAdvanceBilledSubscri
 UPDATE purser.tenant_subscriptions
 SET status = 'active',
     billing_model = 'postpaid',
+    free_fallback_provider_stopping = FALSE, free_fallback_wait_since = NULL, free_fallback_provider_ended_at = NULL,
+    free_fallback_at = NULL, free_fallback_reason = NULL, free_fallback_notified_at = NULL, free_fallback_moved_at = NULL,
     payment_method = $1::text,
     stripe_customer_id = COALESCE(NULLIF($2::text, ''), stripe_customer_id),
     tier_id = COALESCE(
@@ -177,35 +179,13 @@ type FindOverlappedBaseFeeInvoiceParams struct {
 }
 
 // The base-fee invoice of the period a tier change cut short: it started
-// before period_start and would have run past it. An invoice whose unused
-// share a switch to prepaid already returned is not found again.
+// before period_start and would have run past it. An unused share already
+// returned to prepaid or credited to a replacement invoice is not found again.
 func (q *Queries) FindOverlappedBaseFeeInvoice(ctx context.Context, arg FindOverlappedBaseFeeInvoiceParams) (string, error) {
 	row := q.db.QueryRowContext(ctx, findOverlappedBaseFeeInvoice, arg.TenantID, arg.PeriodStart)
 	var id string
 	err := row.Scan(&id)
 	return id, err
-}
-
-const getFinalizedInvoicePeriodEnd = `-- name: GetFinalizedInvoicePeriodEnd :one
-SELECT period_end::timestamptz AS period_end
-FROM purser.billing_invoices
-WHERE tenant_id = $1::text::uuid
-  AND period_start = $2
-  AND base_fee_period_start IS NULL
-  AND status NOT IN ('draft', 'manual_review')
-LIMIT 1
-`
-
-type GetFinalizedInvoicePeriodEndParams struct {
-	TenantID    string       `db:"tenant_id" json:"tenant_id"`
-	PeriodStart sql.NullTime `db:"period_start" json:"period_start"`
-}
-
-func (q *Queries) GetFinalizedInvoicePeriodEnd(ctx context.Context, arg GetFinalizedInvoicePeriodEndParams) (time.Time, error) {
-	row := q.db.QueryRowContext(ctx, getFinalizedInvoicePeriodEnd, arg.TenantID, arg.PeriodStart)
-	var period_end time.Time
-	err := row.Scan(&period_end)
-	return period_end, err
 }
 
 const getInvoicePaymentFXBasis = `-- name: GetInvoicePaymentFXBasis :one
@@ -412,7 +392,7 @@ func (q *Queries) GetSubscriptionForInvoice(ctx context.Context, tenantID string
 
 const getTenantCollectionProfile = `-- name: GetTenantCollectionProfile :one
 SELECT presentment_currency::text AS presentment_currency,
-       status, billing_model, payment_method, stripe_customer_id,
+       CASE WHEN EXISTS (SELECT 1 FROM purser.tenant_billing_closures closure WHERE closure.tenant_id=tenant_subscriptions.tenant_id) THEN 'suspended' ELSE status END::text AS status, billing_model, payment_method, stripe_customer_id,
        stripe_subscription_id, mollie_subscription_id,
        billing_period_start, billing_period_end, tier_id::text AS tier_id
 FROM purser.tenant_subscriptions
@@ -555,6 +535,9 @@ SELECT ts.tenant_id::text AS tenant_id,
        ts.billing_period_end::timestamptz AS billing_period_end
 FROM purser.tenant_subscriptions ts
 WHERE ts.status = 'active'
+  AND NOT EXISTS (SELECT 1 FROM purser.tenant_billing_closures closure WHERE closure.tenant_id = ts.tenant_id)
+  AND NOT EXISTS (SELECT 1 FROM purser.subscription_operator_grants expired_grant
+      WHERE expired_grant.subscription_id = ts.id AND expired_grant.expires_at <= NOW())
   AND ts.billing_model = 'postpaid'
   AND ts.stripe_subscription_id IS NULL
   AND ts.mollie_subscription_id IS NULL
@@ -775,8 +758,8 @@ type MarkBaseFeeUnusedShareReturnedParams struct {
 	TenantID  string          `db:"tenant_id" json:"tenant_id"`
 }
 
-// Records on a base-fee invoice that a switch to prepaid returned the unused
-// share of its period; details states from when and how much.
+// Records disposition of the unused share, either returned to prepaid or
+// applied to a replacement invoice; details identifies its destination.
 func (q *Queries) MarkBaseFeeUnusedShareReturned(ctx context.Context, arg MarkBaseFeeUnusedShareReturnedParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, markBaseFeeUnusedShareReturned, arg.Details, arg.InvoiceID, arg.TenantID)
 	if err != nil {

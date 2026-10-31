@@ -7,6 +7,7 @@ import (
 	"time"
 
 	foghornclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/foghorn"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
 	foghorncontrolpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
@@ -21,6 +22,7 @@ type testTenantControlServer struct {
 	foghornpb.UnimplementedTenantControlServiceServer
 	terminateResp  *foghorncontrolpb.TerminateTenantStreamsResponse
 	invalidateResp *foghorncontrolpb.InvalidateTenantCacheResponse
+	invalidateErr  error
 }
 
 func (s *testTenantControlServer) TerminateTenantStreams(context.Context, *foghorncontrolpb.TerminateTenantStreamsRequest) (*foghorncontrolpb.TerminateTenantStreamsResponse, error) {
@@ -28,7 +30,7 @@ func (s *testTenantControlServer) TerminateTenantStreams(context.Context, *fogho
 }
 
 func (s *testTenantControlServer) InvalidateTenantCache(context.Context, *foghorncontrolpb.InvalidateTenantCacheRequest) (*foghorncontrolpb.InvalidateTenantCacheResponse, error) {
-	return s.invalidateResp, nil
+	return s.invalidateResp, s.invalidateErr
 }
 
 func startTenantControlTestServer(t *testing.T, svc foghornpb.TenantControlServiceServer) string {
@@ -81,7 +83,7 @@ func TestTerminateTenantStreams_FailsWhenAllDialAttemptsFail(t *testing.T) {
 	}
 }
 
-func TestTerminateTenantStreams_SucceedsWithPartialResults(t *testing.T) {
+func TestTerminateTenantStreams_PartialResultsRemainPending(t *testing.T) {
 	goodAddr := startTenantControlTestServer(t, &testTenantControlServer{
 		terminateResp: &foghorncontrolpb.TerminateTenantStreamsResponse{StreamsTerminated: 2, SessionsTerminated: 3, StreamNames: []string{"a", "b"}},
 	})
@@ -97,9 +99,13 @@ func TestTerminateTenantStreams_SucceedsWithPartialResults(t *testing.T) {
 	ctx, cancel := context.WithTimeout(serviceCtx(), 150*time.Millisecond)
 	defer cancel()
 
-	resp, err := server.TerminateTenantStreams(ctx, &foghorncontrolpb.TerminateTenantStreamsRequest{TenantId: "tenant-1", Reason: "suspended"})
-	if err != nil {
-		t.Fatalf("expected success with partial results, got error: %v", err)
+	_, err := server.TerminateTenantStreams(ctx, &foghorncontrolpb.TerminateTenantStreamsRequest{TenantId: "tenant-1", Reason: "suspended"})
+	if status.Code(err) != codes.Unavailable {
+		t.Fatalf("partial delivery must stay pending: %v", err)
+	}
+	resp := grpcutil.StreamStopProgress(err)
+	if resp == nil {
+		t.Fatalf("missing partial counts: %v", err)
 	}
 	if resp.StreamsTerminated != 2 {
 		t.Fatalf("expected 2 streams terminated from successful cluster, got %d", resp.StreamsTerminated)
@@ -149,5 +155,51 @@ func TestTerminateTenantStreams_DeduplicatesByAddrWhenClusterIDMissing(t *testin
 	}
 	if resp.StreamsTerminated != 7 || resp.SessionsTerminated != 9 {
 		t.Fatalf("expected single-target result (7/9), got %d/%d", resp.StreamsTerminated, resp.SessionsTerminated)
+	}
+}
+
+func TestInvalidateTenantCache_NoTargetsIsSuccessful(t *testing.T) {
+	server := newTenantFanoutTestServer(t, &clusterRoute{resolvedAt: time.Now()})
+	response, err := server.InvalidateTenantCache(serviceCtx(), &foghorncontrolpb.InvalidateTenantCacheRequest{TenantId: "tenant-1", Reason: "tenant closed"})
+	if err != nil || response.GetEntriesInvalidated() != 0 {
+		t.Fatalf("closed tenant cache invalidation=%v err=%v", response, err)
+	}
+}
+
+func TestInvalidateTenantCacheDiscoveryGapIsNotEmptyTenant(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		route *clusterRoute
+		want  codes.Code
+	}{
+		{"no clusters", &clusterRoute{}, codes.OK},
+		{"primary without discovery", &clusterRoute{clusterID: "cell"}, codes.Unavailable},
+		{"official without discovery", &clusterRoute{officialClusterID: "cell"}, codes.Unavailable},
+		{"unhealthy entitlement", &clusterRoute{admissionPeers: []*clusterpeerpb.TenantClusterPeer{{ClusterId: "cell"}}}, codes.Unavailable},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			test.route.resolvedAt = time.Now()
+			server := newTenantFanoutTestServer(t, test.route)
+			_, callErr := server.InvalidateTenantCache(serviceCtx(), &foghorncontrolpb.InvalidateTenantCacheRequest{TenantId: "tenant-1"})
+			if status.Code(callErr) != test.want {
+				t.Fatalf("invalidation result=%v want=%s", callErr, test.want)
+			}
+		})
+	}
+}
+
+func TestInvalidateTenantCacheRefusesPartialDelivery(t *testing.T) {
+	for _, missing := range []bool{true, false} {
+		t.Run(map[bool]string{true: "undiscoverable cell", false: "failed RPC"}[missing], func(t *testing.T) {
+			good := startTenantControlTestServer(t, &testTenantControlServer{invalidateResp: &foghorncontrolpb.InvalidateTenantCacheResponse{EntriesInvalidated: 5}})
+			bad := ""
+			if !missing {
+				bad = startTenantControlTestServer(t, &testTenantControlServer{invalidateErr: status.Error(codes.Unavailable, "cell disconnected")})
+			}
+			server := newTenantFanoutTestServer(t, &clusterRoute{clusterID: "good", foghornAddr: good, clusterPeers: []*clusterpeerpb.TenantClusterPeer{{ClusterId: "bad", FoghornGrpcAddr: bad}}, resolvedAt: time.Now()})
+			if _, err := server.InvalidateTenantCache(serviceCtx(), &foghorncontrolpb.InvalidateTenantCacheRequest{TenantId: "tenant-1"}); status.Code(err) != codes.Unavailable {
+				t.Fatalf("partial delivery reported success: %v", err)
+			}
+		})
 	}
 }

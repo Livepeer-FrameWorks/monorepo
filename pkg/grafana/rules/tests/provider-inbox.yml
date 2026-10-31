@@ -1,0 +1,59 @@
+rule_files:
+  - ../frameworks.yml
+evaluation_interval: 1m
+tests:
+  - interval: 1m
+    input_series:
+      - series: purser_provider_webhook_inbox_repeatedly_failed_items{instance="a"}
+        values: "0 1x7 0x5"
+      - series: purser_provider_webhook_inbox_repeatedly_failed_items{instance="b"}
+        values: "0 1x7 0x5"
+    alert_rule_test:
+      - eval_time: 4m
+        groupname: frameworks.rules
+        alertname: PurserProviderWebhookInboxStuck
+        exp_alerts: []
+      - eval_time: 7m
+        groupname: frameworks.rules
+        alertname: PurserProviderWebhookInboxStuck
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: Provider activation, tier upgrade or checkout recovery needs attention
+              description: Purser is retrying provider activation, a paid tier upgrade, suspended-stream stop, tenant billing closure or expired-checkout compensation, or cannot read that recovery queue. Run frameworks admin billing recovery list to inspect retry status and errors. Normal provider settlement waits are not failures; waits over fourteen days need investigation. Missing metering holds activation or an upgrade at its recorded billing boundary.
+      - eval_time: 10m
+        groupname: frameworks.rules
+        alertname: PurserProviderWebhookInboxStuck
+        exp_alerts: []
+  - interval: 1m
+    input_series:
+      - series: purser_provider_webhook_inbox_read_failures_total{instance="a"}
+        values: "0+1x8 8x7"
+      - series: purser_provider_webhook_inbox_read_failures_total{instance="b"}
+        values: "0+1x8 8x7"
+    alert_rule_test:
+      - eval_time: 7m
+        groupname: frameworks.rules
+        alertname: PurserProviderWebhookInboxStuck
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: Provider activation, tier upgrade or checkout recovery needs attention
+              description: Purser is retrying provider activation, a paid tier upgrade, suspended-stream stop, tenant billing closure or expired-checkout compensation, or cannot read that recovery queue. Run frameworks admin billing recovery list to inspect retry status and errors. Normal provider settlement waits are not failures; waits over fourteen days need investigation. Missing metering holds activation or an upgrade at its recorded billing boundary.
+      - eval_time: 12m
+        groupname: frameworks.rules
+        alertname: PurserProviderWebhookInboxStuck
+        exp_alerts: []
+  - interval: 1m
+    input_series:
+      - series: purser_provider_webhook_inbox_repeatedly_failed_items{instance="a"}
+        values: "0x15"
+      - series: purser_provider_webhook_inbox_read_failures_total{instance="a"}
+        values: "0x2 1x12"
+    alert_rule_test:
+      - eval_time: 12m
+        groupname: frameworks.rules
+        alertname: PurserProviderWebhookInboxStuck
+        exp_alerts: []

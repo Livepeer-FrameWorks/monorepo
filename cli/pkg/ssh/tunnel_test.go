@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -46,7 +47,13 @@ func TestLocalForwardArgs(t *testing.T) {
 
 	// The helper subprocess prints the argv it was invoked with. We reach into
 	// cmd.Args (ssh, args...) — assert the exact -L spec, -N, and ExitOnForwardFailure.
+	if !slices.Contains(tun.cmd.Env, "LC_ALL=C") {
+		t.Fatal("SSH diagnostics have no stable locale: missing LC_ALL=C")
+	}
 	args := tun.cmd.Args
+	if !containsPair(args, "-o", "LogLevel=ERROR") {
+		t.Fatal("SSH configuration can suppress authentication diagnostics")
+	}
 	if !containsFlag(args, "-N") {
 		t.Errorf("missing -N in argv: %v", args)
 	}
