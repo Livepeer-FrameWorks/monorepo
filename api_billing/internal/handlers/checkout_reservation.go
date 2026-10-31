@@ -149,7 +149,7 @@ func (s *Service) expireClaimedCheckoutReservation(ctx context.Context, expiry c
 		if s.mollieClient == nil {
 			return errors.New("mollie activation history requires its configured provider client")
 		}
-		historicalActivated, historyOrphans, waiting = s.mollieClient.InspectFirstPaymentFunding(ctx, r.ProviderCustomerID.String, r.ProviderPaymentID.String, snapshot.Current.MollieSubscriptionID.String, func(subscriptionID string) (bool, error) {
+		activationProof := func(subscriptionID string) (bool, error) {
 			proof, proofErr := q.GetHistoricalMollieFundingActivation(ctx, purserdb.GetHistoricalMollieFundingActivationParams{TenantID: r.TenantID, IntentID: r.ID, SubscriptionID: subscriptionID})
 			if errors.Is(proofErr, sql.ErrNoRows) {
 				return false, nil
@@ -159,7 +159,11 @@ func (s *Service) expireClaimedCheckoutReservation(ctx context.Context, expiry c
 			}
 			historySubscription, historyProof = subscriptionID, proof
 			return true, nil
-		})
+		}
+		historicalActivated, historyOrphans, waiting = s.mollieClient.InspectFirstPaymentFunding(
+			ctx, r.ProviderCustomerID.String, r.ProviderPaymentID.String,
+			snapshot.Current.MollieSubscriptionID.String, activationProof,
+		)
 		if waiting != nil && !errors.Is(waiting, billingmollie.ErrHistoricalFundingAmbiguous) {
 			return waiting
 		}
@@ -194,7 +198,9 @@ func (s *Service) expireClaimedCheckoutReservation(ctx context.Context, expiry c
 				return ErrAwaitingProviderSettlement
 			}
 			if proof.NativeID != "" {
-				if backfillErr := tq.BackfillHistoricalMollieCheckoutFunding(ctx, purserdb.BackfillHistoricalMollieCheckoutFundingParams{TenantID: r.TenantID, IntentID: r.ID, NativeID: proof.NativeID, ActivatedAt: proof.ActivatedAt}); backfillErr != nil {
+				if backfillErr := tq.BackfillHistoricalMollieCheckoutFunding(ctx, purserdb.BackfillHistoricalMollieCheckoutFundingParams{
+					TenantID: r.TenantID, IntentID: r.ID, NativeID: proof.NativeID, ActivatedAt: proof.ActivatedAt,
+				}); backfillErr != nil {
 					return backfillErr
 				}
 			}

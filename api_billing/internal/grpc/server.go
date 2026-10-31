@@ -7053,8 +7053,20 @@ func (s *PurserServer) CreateFirstPayment(ctx context.Context, req *purserpb.Cre
 	}, nil
 }
 
-// CreateSubscription creates a Mollie subscription after mandate is valid
+// CreateMollieSubscription activates a Mollie subscription or compensates refused funding.
 func (s *PurserServer) CreateMollieSubscription(ctx context.Context, req *purserpb.CreateMollieSubscriptionRequest) (*purserpb.CreateMollieSubscriptionResponse, error) {
+	response, err := s.createMollieSubscription(ctx, req)
+	if status.Code(err) != codes.FailedPrecondition && status.Code(err) != codes.NotFound {
+		return response, err
+	}
+	if queueErr := s.compensateRefusedMollieFunding(ctx, req.GetTenantId(), req.GetTierId(), status.Convert(err).Message()); queueErr != nil {
+		s.logger.WithError(queueErr).WithField("tenant_id", req.GetTenantId()).Error("Failed to queue refused Mollie first-payment compensation")
+		return nil, status.Error(codes.Internal, "failed to queue refused first-payment compensation; retry activation")
+	}
+	return response, err
+}
+
+func (s *PurserServer) createMollieSubscription(ctx context.Context, req *purserpb.CreateMollieSubscriptionRequest) (*purserpb.CreateMollieSubscriptionResponse, error) {
 	if s.mollieClient == nil {
 		return nil, status.Error(codes.Unavailable, "Mollie not configured")
 	}
@@ -7135,7 +7147,7 @@ func (s *PurserServer) CreateMollieSubscription(ctx context.Context, req *purser
 		mandate, mandateErr := s.mollieClient.GetMandate(ctx, mollieCustomerID, mandateID)
 		if mandateErr != nil {
 			s.logger.WithError(mandateErr).WithField("customer_id", mollieCustomerID).Warn("Failed to verify Mollie mandate")
-			return nil, status.Error(codes.FailedPrecondition, "mandate is unavailable for this Mollie customer")
+			return nil, status.Error(codes.Unavailable, "failed to verify Mollie mandate; retry activation")
 		}
 		if mandate == nil || mandate.ID != mandateID || mandate.Status != "valid" {
 			return nil, status.Error(codes.FailedPrecondition, "mandate is not valid for recurring collection")
@@ -7275,6 +7287,10 @@ func (s *PurserServer) CreateMollieSubscription(ctx context.Context, req *purser
 		PeriodStart:     sql.NullTime{Time: periodStart, Valid: true},
 		PeriodEnd:       sql.NullTime{Time: periodEnd, Valid: true}, TierID: tierID, TenantID: tenantID,
 	}, subscriptionIntentID)
+	if errors.Is(err, subscriptions.ErrCheckoutCompensationQueued) {
+		s.logger.WithError(err).WithField("subscription_id", sub.ID).Warn("Mollie activation refused; durable checkout recovery owns cancellation and the initial-payment refund")
+		return nil, status.Error(codes.FailedPrecondition, err.Error())
+	}
 	if err != nil {
 		s.logger.WithError(err).WithField("subscription_id", sub.ID).Error("Failed to persist Mollie subscription state; compensating cancel")
 		if cancelErr := s.mollieClient.CancelSubscription(ctx, mollieCustomerID, sub.ID); cancelErr != nil {

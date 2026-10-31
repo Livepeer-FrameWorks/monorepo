@@ -10592,6 +10592,7 @@ export interface MutationGenqlSelection{
     /**
      * Active, non-Enterprise postpaid tier with tier_level >= 1. Already-postpaid
      * tenants on this tier are unchanged, including a tier retired after purchase.
+     * An outstanding operator grant or tier upgrade must finish first.
      */
     tierId: Scalars['ID']} })
     /**

@@ -70,7 +70,7 @@ func testEndedProviderAssignmentBilling(t *testing.T, db *sql.DB, server *Purser
 						return
 					}
 					if action == "assign without deadline" {
-						exec(t, `UPDATE purser.tenant_subscriptions SET free_fallback_at=NULL,free_fallback_reason=NULL WHERE tenant_id=$1`, tenant)
+						exec(t, `UPDATE purser.tenant_subscriptions SET free_fallback_at=NULL,free_fallback_reason=NULL,billing_period_start=NULL,billing_period_end=NULL,mollie_next_payment_date=NULL,stripe_current_period_end=NULL WHERE tenant_id=$1`, tenant)
 						_, err := server.AdminAssignTier(operatorAssignCtx(operatorID), &purserpb.AdminAssignTierRequest{TenantId: tenant, TierName: "ended-paid", Reason: "restore billable service"})
 						if status.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), "recorded fallback deadline") {
 							t.Fatalf("missing retained cutoff allowed partial billing progress: %v", err)
@@ -84,7 +84,7 @@ func testEndedProviderAssignmentBilling(t *testing.T, db *sql.DB, server *Purser
 					if action == "assign after metering repair" {
 						exec(t, `UPDATE purser.metering_windows SET complete=false WHERE source_id='ended-provider' AND period_start=$1`, end.Add(10*time.Hour))
 						_, err := server.AdminAssignTier(operatorAssignCtx(operatorID), &purserpb.AdminAssignTierRequest{TenantId: tenant, TierName: "ended-paid", Reason: "restore billable service"})
-						if err == nil || !strings.Contains(err.Error(), "metering") {
+						if status.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), "metering") {
 							t.Fatalf("incomplete second month did not hold assignment: %v", err)
 						}
 						var closed int

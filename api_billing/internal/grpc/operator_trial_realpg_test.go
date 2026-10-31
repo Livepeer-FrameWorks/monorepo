@@ -25,6 +25,7 @@ import (
 )
 
 func TestOperatorTrialLifecycle_RealPG(t *testing.T) {
+	t.Run("actionable billing boundary", testGrantBoundaryDataCondition)
 	db := startOperatorGrantDatabase(t)
 	ctx := context.Background()
 	tenantID, paygID, enterpriseID := uuid.NewString(), uuid.NewString(), uuid.NewString()

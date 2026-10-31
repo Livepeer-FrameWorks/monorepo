@@ -424,7 +424,7 @@ WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid AND id = sqlc.arg(intent_id)::
 -- Activation and receipt settlement commit in the same subscription transaction.
 UPDATE purser.payment_provider_intents
 SET status = 'succeeded', succeeded_at = COALESCE(succeeded_at, NOW()),
-    activated_at = COALESCE(activated_at, NOW()), updated_at = NOW()
+    activated_at = COALESCE(activated_at, NOW()), recovery_started_at = NULL, updated_at = NOW()
 WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid AND id = sqlc.arg(intent_id)::text::uuid;
 
 -- name: SetProviderCheckoutDeadline :exec
@@ -564,3 +564,34 @@ UPDATE purser.payment_provider_intents
 SET activated_at = COALESCE(activated_at, NOW()), updated_at = NOW()
 WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid AND id = sqlc.arg(intent_id)::text::uuid
   AND provider = 'mollie' AND purpose = 'mollie_first_payment';
+
+-- name: ListRefusedMollieFundingIntents :many
+-- The subscription lock excludes activation while unused, locally owned funding
+-- and its unactivated native checkout are handed to durable compensation.
+WITH unused AS (
+    SELECT funding.id
+    FROM purser.payment_provider_intents funding
+    JOIN purser.mollie_customers customer ON customer.tenant_id = funding.tenant_id
+      AND customer.mollie_customer_id = funding.provider_customer_id
+    WHERE funding.tenant_id = sqlc.arg(tenant_id)::text::uuid
+      AND funding.provider = 'mollie' AND funding.purpose = 'mollie_first_payment'
+      AND funding.local_reference_type = 'billing_tiers'
+      AND funding.local_reference_id = sqlc.arg(tier_id)::text::uuid
+      AND funding.status = 'succeeded' AND funding.activated_at IS NULL
+      AND funding.provider_mandate_id IS NOT NULL
+      AND funding.provider_payment_id IS NOT NULL
+      AND funding.recovery_started_at IS NULL
+      AND NOT EXISTS (
+          SELECT 1 FROM purser.payment_provider_intents native
+          JOIN purser.tenant_subscriptions subscription ON subscription.tenant_id = native.tenant_id
+          WHERE native.tenant_id = funding.tenant_id AND native.funding_intent_id = funding.id
+            AND (native.activated_at IS NOT NULL
+              OR native.provider_subscription_id = subscription.mollie_subscription_id))
+)
+SELECT id::text FROM unused
+UNION
+SELECT native.id::text FROM purser.payment_provider_intents native
+JOIN unused ON native.funding_intent_id = unused.id
+WHERE native.tenant_id = sqlc.arg(tenant_id)::text::uuid
+  AND native.provider = 'mollie' AND native.purpose = 'mollie_subscription_create'
+  AND native.activated_at IS NULL AND native.status <> 'succeeded';

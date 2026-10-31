@@ -88,7 +88,11 @@ SELECT (
 -- The caller rechecks the canonical delivery proof under the subscription lock.
 WITH linked AS (
     UPDATE purser.payment_provider_intents native
-    SET funding_intent_id = sqlc.arg(intent_id)::text::uuid, updated_at = NOW()
+    SET funding_intent_id = sqlc.arg(intent_id)::text::uuid,
+        status = 'succeeded',
+        succeeded_at = COALESCE(native.succeeded_at, sqlc.arg(activated_at)::timestamp),
+        activated_at = COALESCE(native.activated_at, sqlc.arg(activated_at)::timestamp),
+        recovery_started_at = NULL, updated_at = NOW()
     WHERE native.tenant_id = sqlc.arg(tenant_id)::text::uuid
       AND native.id = sqlc.arg(native_id)::text::uuid
       AND (native.funding_intent_id IS NULL OR native.funding_intent_id = sqlc.arg(intent_id)::text::uuid)
@@ -108,7 +112,8 @@ WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid AND id = sqlc.arg(intent_id)::
 
 -- name: RetainDeliveredHistoricalMollieCheckout :execrows
 UPDATE purser.payment_provider_intents
-SET status = 'succeeded', activated_at = NOW(), recovery_outcome = 'delivered', updated_at = NOW()
+SET status = 'succeeded', activated_at = NOW(), recovery_outcome = 'delivered',
+    recovery_started_at = NULL, updated_at = NOW()
 WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid AND id = sqlc.arg(intent_id)::text::uuid
   AND recovery_outcome = 'ambiguous_delivery'
   AND provider = 'mollie' AND purpose = 'mollie_first_payment'

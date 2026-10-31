@@ -82,7 +82,7 @@ func (c *Client) InspectRefundSettlement(ctx context.Context, plan billing.Refun
 			return receipts, fmt.Errorf("failed refund for charge %s has no original purchase invoice", plan.ChargeID)
 		}
 		var retried billing.CheckoutRecoveryResult
-		if err := c.refundInvoicePayments(ctx, plan.InvoiceID, key, &retried, plan.ReferenceKind, plan.ReferenceID); err != nil {
+		if err := c.refundInvoicePaymentsForCharge(ctx, plan.InvoiceID, key, &retried, plan.ReferenceKind, plan.ReferenceID, plan.ChargeID); err != nil {
 			return receipts, err
 		}
 		return receipts, billing.ErrRefundSettling

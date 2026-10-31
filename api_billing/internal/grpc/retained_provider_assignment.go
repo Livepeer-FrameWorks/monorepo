@@ -70,11 +70,15 @@ func (s *PurserServer) prepareRetainedProviderChange(ctx context.Context, tenant
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "read retained provider billing phase: %v", err)
 	}
-	if proof.PaidUntil.After(proof.DatabaseNow) {
-		return nil, nil // The locked assignment returns the paid-term refusal.
-	}
 	if !proof.FreeFallbackAt.Valid {
 		return nil, status.Error(codes.FailedPrecondition, "retained provider cancellation has no recorded fallback deadline; reconcile its cancellation before assigning a tier")
+	}
+	paidUntil := proof.FreeFallbackAt.Time
+	if proof.StripeCurrentPeriodEnd.Valid && proof.StripeCurrentPeriodEnd.Time.After(paidUntil) {
+		paidUntil = proof.StripeCurrentPeriodEnd.Time
+	}
+	if paidUntil.After(proof.DatabaseNow) {
+		return nil, nil
 	}
 	if grant == nil {
 		_, grantErr := q.GetSubscriptionOperatorGrant(ctx, tenantID)
@@ -114,7 +118,7 @@ func (s *PurserServer) prepareRetainedProviderChange(ctx context.Context, tenant
 	for {
 		closing, final, prepareErr := handlers.PrepareRetainedProviderBoundary(ctx, s.db, s.logger, s.billing, tenantID, cutoff, model == "prepaid", grant != nil)
 		if prepareErr != nil {
-			return nil, status.Errorf(codes.Internal, "prepare ended provider billing period: %v", prepareErr)
+			return nil, billingBoundaryStatus("prepare ended provider billing period", prepareErr)
 		}
 		if final {
 			prepared.phase = closing

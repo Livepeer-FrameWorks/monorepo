@@ -13,6 +13,7 @@ import (
 
 	"frameworks/api_billing/internal/database/purserdb"
 	billingmollie "frameworks/api_billing/internal/mollie"
+	"frameworks/api_billing/internal/subscriptions"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
@@ -35,6 +36,7 @@ func assertClosureRefundsOnlyUnactivatedFirstPayment(t *testing.T) {
 			tenant := newPhaseTenant(t, db, "prepaid", now.Add(-time.Hour), now.AddDate(0, 1, 0), 0)
 			fixture, client := installMollieFixture(t)
 			tenant.svc.mollieClient = client
+			fixture.beforeRequest = func() { assertSubscriptionUnlockedDuringProviderCall(t, db, tenant.id) }
 			id := uuid.NewString()
 			if _, err := db.ExecContext(t.Context(), `INSERT INTO purser.payment_provider_intents(id,tenant_id,provider,purpose,status,currency,amount_cents,idempotency_key,provider_customer_id,provider_payment_id,expires_at) VALUES($1::uuid,$2,'mollie','mollie_first_payment','provider_open','EUR',2000,$1::text,'customer','initial',NOW()+INTERVAL '1 hour')`, id, tenant.id); err != nil {
 				t.Fatal(err)
@@ -135,9 +137,21 @@ func assertClosureRefundsOnlyUnactivatedFirstPayment(t *testing.T) {
 					t.Fatal("closure refunded a first payment that funded delivered service")
 				}
 				if strings.HasPrefix(kind, "delivered legacy") {
-					var activated sql.NullTime
-					if err := db.QueryRowContext(t.Context(), `SELECT activated_at FROM purser.payment_provider_intents WHERE tenant_id=$1 AND id=$2`, tenant.id, id).Scan(&activated); err != nil || !activated.Valid {
-						t.Fatalf("delivered funding did not resolve through activation proof: %+v %v", activated, err)
+					var activated, recoveryStarted sql.NullTime
+					if err := db.QueryRowContext(t.Context(), `SELECT activated_at,recovery_started_at FROM purser.payment_provider_intents WHERE tenant_id=$1 AND id=$2`, tenant.id, id).Scan(&activated, &recoveryStarted); err != nil || !activated.Valid || recoveryStarted.Valid {
+						t.Fatalf("delivered funding did not clear its recovery latch: activated=%v recovery_started=%v err=%v", activated, recoveryStarted, err)
+					}
+				}
+				if strings.HasPrefix(kind, "delivered legacy") {
+					var nativeID string
+					readErr := db.QueryRow(`SELECT id::text FROM purser.payment_provider_intents WHERE tenant_id=$1 AND provider='mollie' AND provider_subscription_id='historical'`, tenant.id).Scan(&nativeID)
+					if readErr != nil && !errors.Is(readErr, sql.ErrNoRows) {
+						t.Fatal(readErr)
+					}
+					if readErr == nil {
+						if err := withTx(t.Context(), db, func(tx *sql.Tx) error { return subscriptions.CheckReceipt(t.Context(), tx, tenant.id, nativeID) }); err != nil {
+							t.Fatalf("proven native receipt still rejects its funding: %v", err)
+						}
 					}
 				}
 				if strings.HasPrefix(kind, "delivered legacy") {
@@ -193,6 +207,7 @@ func assertHistoricalDeliveryDecisionGuards(t *testing.T) {
 			tenant := newPhaseTenant(t, db, "prepaid", now.Add(-time.Hour), now.AddDate(0, 1, 0), 0)
 			fixture, client := installMollieFixture(t)
 			tenant.svc.mollieClient = client
+			fixture.beforeRequest = func() { assertSubscriptionUnlockedDuringProviderCall(t, db, tenant.id) }
 			id := uuid.NewString()
 			if _, err := db.ExecContext(t.Context(), `INSERT INTO purser.payment_provider_intents(id,tenant_id,provider,purpose,status,currency,amount_cents,idempotency_key,provider_customer_id,provider_payment_id,succeeded_at) VALUES($1::uuid,$2::uuid,'mollie','mollie_first_payment','succeeded','EUR',2000,$1::text,'customer','initial',NOW())`, id, tenant.id); err != nil {
 				t.Fatal(err)
@@ -275,6 +290,7 @@ func assertHistoricalMollieMultipleDeliveredPayments(t *testing.T) {
 	tenant := newPhaseTenant(t, db, "prepaid", now.Add(-time.Hour), now.AddDate(0, 1, 0), 0)
 	fixture, client := installMollieFixture(t)
 	tenant.svc.mollieClient = client
+	fixture.beforeRequest = func() { assertSubscriptionUnlockedDuringProviderCall(t, db, tenant.id) }
 	ids := []string{uuid.NewString(), uuid.NewString()}
 	subscriptions := []any{}
 	for i, id := range ids {

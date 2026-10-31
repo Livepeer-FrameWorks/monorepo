@@ -131,8 +131,8 @@ ORDER BY base_fee_period_start DESC
 LIMIT 1;
 
 -- name: MarkBaseFeeUnusedShareReturned :execrows
--- Records disposition of the unused share, either returned to prepaid or
--- applied to a replacement invoice; details identifies its destination.
+-- Records the unused-fee disposition and prevents double application.
+-- The ledger key covers both replacement-fee offsets and forfeited amounts.
 UPDATE purser.billing_invoices
 SET usage_details = usage_details || jsonb_build_object('unused_share_returned', sqlc.arg(details)::jsonb),
     updated_at = NOW()

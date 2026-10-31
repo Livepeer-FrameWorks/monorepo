@@ -21,6 +21,7 @@ type checkoutRecoveryBackend struct {
 	processing      bool
 	sessionPayment  bool
 	includeRenewals bool
+	secondCharge    bool
 	openInvoice     bool
 	staleInvoice    bool
 	paymentInvoices []string
@@ -60,6 +61,9 @@ func (b *checkoutRecoveryBackend) Call(method, path, key string, p api.ParamsCon
 			*v = *b.chargeOverride
 		}
 
+		if b.secondCharge && path == "/v1/charges/ch_other" {
+			v.ID = "ch_other"
+		}
 	case *api.Invoice:
 		*v = api.Invoice{ID: "in_reserved", Status: api.InvoiceStatusVoid}
 	case *api.PaymentIntent:
@@ -102,6 +106,10 @@ func (b *checkoutRecoveryBackend) CallRaw(method, path, key string, body []byte,
 	switch v := result.(type) {
 	case *api.RefundList:
 		v.Data = b.existingRefunds
+		query, _ := url.ParseQuery(string(body))
+		if b.secondCharge && query.Get("charge") == "ch_other" {
+			v.Data = nil
+		}
 	case *api.DisputeList:
 		v.Data = b.disputes
 	case *api.CheckoutSessionList:
@@ -131,6 +139,9 @@ func (b *checkoutRecoveryBackend) CallRaw(method, path, key string, body []byte,
 			return nil
 		}
 		v.Data = []*api.InvoicePayment{{ID: "ip_reserved", AmountPaid: b.allocation, Payment: &api.InvoicePaymentPayment{PaymentIntent: &api.PaymentIntent{ID: "pi_reserved"}}}}
+		if b.secondCharge {
+			v.Data = append(v.Data, &api.InvoicePayment{ID: "ip_other", AmountPaid: 2000, Payment: &api.InvoicePaymentPayment{Charge: &api.Charge{ID: "ch_other"}}})
+		}
 	}
 	return nil
 }
@@ -492,5 +503,18 @@ func TestRefundSettlementRetriesAsynchronousFailure(t *testing.T) {
 	receipts, err := c.InspectRefundSettlement(t.Context(), plan)
 	if err != nil || len(receipts) != 1 || receipts[0].AmountCents != 2000 || len(b.refundParams) != 1 {
 		t.Fatalf("replacement refund did not settle once: receipts=%+v calls=%d err=%v", receipts, len(b.refundParams), err)
+	}
+}
+
+func TestRefundSettlementRetryStaysOnItsRecordedCharge(t *testing.T) {
+	b := &checkoutRecoveryBackend{secondCharge: true, existingRefunds: []*api.Refund{{ID: "failed", Amount: 2000, Currency: api.CurrencyEUR, Status: api.RefundStatusFailed}}}
+	installBackend(t, b)
+	c := NewClient(Config{SecretKey: "sk_test", Logger: logging.NewLogger()})
+	plan := billing.RefundSettlement{Provider: "stripe", ReferenceKind: "checkout", ReferenceID: "reservation", InvoiceID: "in_reserved", PaymentID: "pi_reserved", ChargeID: "ch_reserved", AmountCents: 2000, Currency: "EUR"}
+	if _, err := c.InspectRefundSettlement(t.Context(), plan); !errors.Is(err, billing.ErrRefundSettling) {
+		t.Fatal(err)
+	}
+	if len(b.refundParams) != 1 || api.StringValue(b.refundParams[0].PaymentIntent) != "pi_reserved" {
+		t.Fatalf("one settlement retried another charge without recording its plan: %+v", b.refundParams)
 	}
 }

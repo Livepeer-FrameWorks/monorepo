@@ -639,6 +639,9 @@ type Querier interface {
 	ListPurserInvoicedClusterSubscriptionsForPeriod(ctx context.Context, arg ListPurserInvoicedClusterSubscriptionsForPeriodParams) ([]ListPurserInvoicedClusterSubscriptionsForPeriodRow, error)
 	ListRecentPayments(ctx context.Context, arg ListRecentPaymentsParams) ([]ListRecentPaymentsRow, error)
 	ListRecoverableFailedX402Settlements(ctx context.Context, recoveryWindowHours interface{}) ([]ListRecoverableFailedX402SettlementsRow, error)
+	// The subscription lock excludes activation while unused, locally owned funding
+	// and its unactivated native checkout are handed to durable compensation.
+	ListRefusedMollieFundingIntents(ctx context.Context, arg ListRefusedMollieFundingIntentsParams) ([]string, error)
 	ListStorageProviderCreditAllocations(ctx context.Context, invoiceID string) ([]ListStorageProviderCreditAllocationsRow, error)
 	ListSubmittingX402Intents(ctx context.Context) ([]ListSubmittingX402IntentsRow, error)
 	ListSubscriptionEntitlementOverrides(ctx context.Context, subscriptionID string) ([]ListSubscriptionEntitlementOverridesRow, error)
@@ -705,8 +708,8 @@ type Querier interface {
 	LockX402SettlementRollup(ctx context.Context, nonceID string) (LockX402SettlementRollupRow, error)
 	MarkActiveX402SettlementFailed(ctx context.Context, arg MarkActiveX402SettlementFailedParams) error
 	MarkAllocatedDepositReorged(ctx context.Context, eventID string) (int64, error)
-	// Records disposition of the unused share, either returned to prepaid or
-	// applied to a replacement invoice; details identifies its destination.
+	// Records the unused-fee disposition and prevents double application.
+	// The ledger key covers both replacement-fee offsets and forfeited amounts.
 	MarkBaseFeeUnusedShareReturned(ctx context.Context, arg MarkBaseFeeUnusedShareReturnedParams) (int64, error)
 	MarkBillingEventOutboxClaimed(ctx context.Context, arg MarkBillingEventOutboxClaimedParams) error
 	// Completion is durable independently of payment settlement.

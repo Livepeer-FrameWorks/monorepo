@@ -194,7 +194,7 @@ func (q *Queries) CompleteMollieSubscriptionCheckout(ctx context.Context, arg Co
 const completeProviderCheckoutReservation = `-- name: CompleteProviderCheckoutReservation :exec
 UPDATE purser.payment_provider_intents
 SET status = 'succeeded', succeeded_at = COALESCE(succeeded_at, NOW()),
-    activated_at = COALESCE(activated_at, NOW()), updated_at = NOW()
+    activated_at = COALESCE(activated_at, NOW()), recovery_started_at = NULL, updated_at = NOW()
 WHERE tenant_id = $1::text::uuid AND id = $2::text::uuid
 `
 
@@ -706,6 +706,66 @@ type LinkProviderIntentCustomerParams struct {
 func (q *Queries) LinkProviderIntentCustomer(ctx context.Context, arg LinkProviderIntentCustomerParams) error {
 	_, err := q.db.ExecContext(ctx, linkProviderIntentCustomer, arg.CustomerID, arg.IntentID, arg.TenantID)
 	return err
+}
+
+const listRefusedMollieFundingIntents = `-- name: ListRefusedMollieFundingIntents :many
+WITH unused AS (
+    SELECT funding.id
+    FROM purser.payment_provider_intents funding
+    JOIN purser.mollie_customers customer ON customer.tenant_id = funding.tenant_id
+      AND customer.mollie_customer_id = funding.provider_customer_id
+    WHERE funding.tenant_id = $1::text::uuid
+      AND funding.provider = 'mollie' AND funding.purpose = 'mollie_first_payment'
+      AND funding.local_reference_type = 'billing_tiers'
+      AND funding.local_reference_id = $2::text::uuid
+      AND funding.status = 'succeeded' AND funding.activated_at IS NULL
+      AND funding.provider_mandate_id IS NOT NULL
+      AND funding.provider_payment_id IS NOT NULL
+      AND funding.recovery_started_at IS NULL
+      AND NOT EXISTS (
+          SELECT 1 FROM purser.payment_provider_intents native
+          JOIN purser.tenant_subscriptions subscription ON subscription.tenant_id = native.tenant_id
+          WHERE native.tenant_id = funding.tenant_id AND native.funding_intent_id = funding.id
+            AND (native.activated_at IS NOT NULL
+              OR native.provider_subscription_id = subscription.mollie_subscription_id))
+)
+SELECT id::text FROM unused
+UNION
+SELECT native.id::text FROM purser.payment_provider_intents native
+JOIN unused ON native.funding_intent_id = unused.id
+WHERE native.tenant_id = $1::text::uuid
+  AND native.provider = 'mollie' AND native.purpose = 'mollie_subscription_create'
+  AND native.activated_at IS NULL AND native.status <> 'succeeded'
+`
+
+type ListRefusedMollieFundingIntentsParams struct {
+	TenantID string `db:"tenant_id" json:"tenant_id"`
+	TierID   string `db:"tier_id" json:"tier_id"`
+}
+
+// The subscription lock excludes activation while unused, locally owned funding
+// and its unactivated native checkout are handed to durable compensation.
+func (q *Queries) ListRefusedMollieFundingIntents(ctx context.Context, arg ListRefusedMollieFundingIntentsParams) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listRefusedMollieFundingIntents, arg.TenantID, arg.TierID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const lockProviderIntentPaymentID = `-- name: LockProviderIntentPaymentID :one

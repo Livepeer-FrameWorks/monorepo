@@ -116,9 +116,25 @@ func testAbandonedFallbackNoticeRetry(t *testing.T) {
 				t.Fatalf("wrong notice phase changed notification: %v", err)
 			}
 			request.Moved = moved
+			if _, err := db.Exec(`INSERT INTO purser.subscription_operator_grants(subscription_id,reason,collection) SELECT id,'temporary grant','invoice' FROM purser.tenant_subscriptions WHERE tenant_id=$1`, tenant); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := client.AdminResendFreeFallbackNotice(ctx, &purserpb.AdminResendFreeFallbackNoticeRequest{TenantId: tenant}); status.Code(err) != codes.FailedPrecondition {
+				t.Fatalf("grant-held notice preview accepted: %v", err)
+			}
+			if _, err := client.AdminResendFreeFallbackNotice(ctx, request); status.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), "grant") {
+				t.Fatalf("granted tenant accepted undeliverable notice: %v", err)
+			}
+			if _, err := db.Exec(`DELETE FROM purser.subscription_operator_grants WHERE subscription_id=(SELECT id FROM purser.tenant_subscriptions WHERE tenant_id=$1)`, tenant); err != nil {
+				t.Fatal(err)
+			}
 			for i := 0; i < 2; i++ {
 				confirmed, err := client.AdminResendFreeFallbackNotice(ctx, request)
-				if err != nil || confirmed.GetStatus() != "queued" || calls != 0 {
+				wantStatus := "queued"
+				if i > 0 {
+					wantStatus = "already_queued"
+				}
+				if err != nil || confirmed.GetStatus() != wantStatus || calls != 0 {
 					t.Fatalf("notice retry did not queue durably: %v %v", confirmed, err)
 				}
 			}

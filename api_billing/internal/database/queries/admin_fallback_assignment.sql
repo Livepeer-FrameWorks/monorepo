@@ -4,9 +4,6 @@
 SELECT stripe_subscription_id, mollie_subscription_id,
        free_fallback_provider_ended_at, free_fallback_at,
        stripe_current_period_end,
-       GREATEST(free_fallback_at, stripe_current_period_end,
-                CASE WHEN free_fallback_at IS NULL THEN
-                    GREATEST(billing_period_end AT TIME ZONE 'UTC', mollie_next_payment_date::timestamp AT TIME ZONE 'UTC') END)::timestamptz AS paid_until,
        NOW()::timestamptz AS database_now
 FROM purser.tenant_subscriptions
 WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid

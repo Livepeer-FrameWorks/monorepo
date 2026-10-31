@@ -183,6 +183,12 @@ func (c *Client) RefundUnappliedTierUpgrade(ctx context.Context, upgradeID, invo
 }
 
 func (c *Client) refundInvoicePayments(ctx context.Context, invoiceID, key string, result *billing.CheckoutRecoveryResult, kind, referenceID string) error {
+	return c.refundInvoicePaymentsForCharge(ctx, invoiceID, key, result, kind, referenceID, "")
+}
+
+// refundInvoicePaymentsForCharge scopes a settlement retry to its recorded charge.
+// The initial compensation passes no charge filter and records every plan.
+func (c *Client) refundInvoicePaymentsForCharge(ctx context.Context, invoiceID, key string, result *billing.CheckoutRecoveryResult, kind, referenceID, chargeID string) error {
 	pp := &stripe.InvoicePaymentListParams{Invoice: stripe.String(invoiceID), Status: stripe.String("paid")}
 	pp.Context = ctx
 	payments := invoicepayment.List(pp)
@@ -222,6 +228,9 @@ func (c *Client) refundInvoicePayments(ctx context.Context, invoiceID, key strin
 		}
 		if collected == nil || collected.ID == "" || collected.Amount <= 0 || len(collected.Currency) != 3 {
 			return fmt.Errorf("paid invoice %s has no captured charge", invoiceID)
+		}
+		if chargeID != "" && collected.ID != chargeID {
+			continue
 		}
 		target := collected.Amount
 		if paid.AmountPaid > 0 {

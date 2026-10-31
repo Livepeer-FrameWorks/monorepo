@@ -131,7 +131,7 @@ func transitionProviderWithRecoveryTx(ctx context.Context, tx *sql.Tx, change Pr
 			return result, queueErr
 		}
 	}
-	result.Refusal = errors.Join(ErrCheckoutExpired, err)
+	result.Refusal = errors.Join(ErrCheckoutCompensationQueued, ErrCheckoutExpired, err)
 	return result, nil
 }
 
@@ -249,10 +249,16 @@ func transitionProviderTx(ctx context.Context, tx *sql.Tx, change ProviderChange
 		return result, err
 	}
 	if locked.HasGrant {
-		if change.Operation != StripeRenewal || current.StripeSubscriptionID.String == "" || current.StripeSubscriptionID.String != change.Stripe.SubscriptionID || current.BillingModel != "postpaid" || current.PendingReason.String == "stripe_checkout" {
+		if change.Operation != StripeRenewal || current.StripeSubscriptionID.String == "" ||
+			current.StripeSubscriptionID.String != change.Stripe.SubscriptionID ||
+			current.BillingModel != "postpaid" || current.PendingReason.String == "stripe_checkout" {
 			return result, ErrOutstandingGrant
 		}
-		result.Rows, err = q.UpdateTenantStripeSubscriptionStatus(ctx, purserdb.UpdateTenantStripeSubscriptionStatusParams{TenantID: change.TenantID, Status: "active", SubscriptionID: change.Stripe.SubscriptionID, StripeStatus: sql.NullString{String: "active", Valid: true}, PeriodStart: change.Stripe.PeriodStart, PeriodEnd: change.Stripe.PeriodEnd})
+		result.Rows, err = q.UpdateTenantStripeSubscriptionStatus(ctx, purserdb.UpdateTenantStripeSubscriptionStatusParams{
+			TenantID: change.TenantID, Status: "active", SubscriptionID: change.Stripe.SubscriptionID,
+			StripeStatus: sql.NullString{String: "active", Valid: true},
+			PeriodStart:  change.Stripe.PeriodStart, PeriodEnd: change.Stripe.PeriodEnd,
+		})
 		return result, err
 	}
 	targetID, provider, incomingID := "", "", ""
@@ -333,6 +339,10 @@ func transitionProviderTx(ctx context.Context, tx *sql.Tx, change ProviderChange
 	}
 	return result, err
 }
+
+// ErrCheckoutCompensationQueued means the transaction queued recovery for an unactivated purchase.
+// A caller must commit that transaction before acknowledging the provider event.
+var ErrCheckoutCompensationQueued = errors.New("checkout refusal queued for compensation")
 
 // ErrCheckoutExpired leaves compensation to the durable checkout recovery inbox.
 var ErrCheckoutExpired = errors.New("payment-provider checkout reservation expired")

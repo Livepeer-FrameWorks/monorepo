@@ -254,8 +254,9 @@ keeps the subscription. A payment that settles during cancellation retains its
 full paid term, including its DNS entitlements, without renewing or refunding
 that term. Initial Mollie funding is matched through its first-payment and
 native-creation receipts, excluding funding consumed by an earlier native
-creation. A rejected reservation with no native subscription does not consume
-it. Stripe retains cash-funded terms only with retained payment evidence;
+creation. A definitive activation refusal queues compensation for unused paid
+funding even when no native subscription was created; a transient read failure
+leaves it reusable. Stripe retains cash-funded terms only with retained payment evidence;
 fully credit-funded terms use the paid invoice and its service period.
 
 A durable protection-through timestamp keeps local monthly start, end and

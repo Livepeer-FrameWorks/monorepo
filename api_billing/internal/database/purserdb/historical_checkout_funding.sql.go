@@ -13,7 +13,11 @@ import (
 const backfillHistoricalMollieCheckoutFunding = `-- name: BackfillHistoricalMollieCheckoutFunding :exec
 WITH linked AS (
     UPDATE purser.payment_provider_intents native
-    SET funding_intent_id = $3::text::uuid, updated_at = NOW()
+    SET funding_intent_id = $3::text::uuid,
+        status = 'succeeded',
+        succeeded_at = COALESCE(native.succeeded_at, $1::timestamp),
+        activated_at = COALESCE(native.activated_at, $1::timestamp),
+        recovery_started_at = NULL, updated_at = NOW()
     WHERE native.tenant_id = $2::text::uuid
       AND native.id = $4::text::uuid
       AND (native.funding_intent_id IS NULL OR native.funding_intent_id = $3::text::uuid)
@@ -181,7 +185,8 @@ func (q *Queries) MarkHistoricalMollieDeliveryAmbiguous(ctx context.Context, arg
 
 const retainDeliveredHistoricalMollieCheckout = `-- name: RetainDeliveredHistoricalMollieCheckout :execrows
 UPDATE purser.payment_provider_intents
-SET status = 'succeeded', activated_at = NOW(), recovery_outcome = 'delivered', updated_at = NOW()
+SET status = 'succeeded', activated_at = NOW(), recovery_outcome = 'delivered',
+    recovery_started_at = NULL, updated_at = NOW()
 WHERE tenant_id = $1::text::uuid AND id = $2::text::uuid
   AND recovery_outcome = 'ambiguous_delivery'
   AND provider = 'mollie' AND purpose = 'mollie_first_payment'

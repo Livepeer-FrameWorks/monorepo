@@ -2129,7 +2129,7 @@ type PrepaidServiceClient interface {
 	// Re-evaluates cluster access. Existing prepaid balance is carried forward.
 	PromoteToPaid(ctx context.Context, in *PromoteToPaidRequest, opts ...grpc.CallOption) (*PromoteToPaidResponse, error)
 	// Change the postpaid billing tier. Upgrades close old usage, start a fresh
-	// month and credit the unused paid fee; unresolved provider or metering work
+	// month and offset its base fee with the unused paid fee; unresolved provider or metering work
 	// returns a pending upgrade. Downgrades apply at the current period's end.
 	// Prepaid → postpaid transition stays on PromoteToPaid.
 	ChangeBillingTier(ctx context.Context, in *ChangeBillingTierRequest, opts ...grpc.CallOption) (*ChangeBillingTierResponse, error)
@@ -2503,7 +2503,7 @@ type PrepaidServiceServer interface {
 	// Re-evaluates cluster access. Existing prepaid balance is carried forward.
 	PromoteToPaid(context.Context, *PromoteToPaidRequest) (*PromoteToPaidResponse, error)
 	// Change the postpaid billing tier. Upgrades close old usage, start a fresh
-	// month and credit the unused paid fee; unresolved provider or metering work
+	// month and offset its base fee with the unused paid fee; unresolved provider or metering work
 	// returns a pending upgrade. Downgrades apply at the current period's end.
 	// Prepaid → postpaid transition stays on PromoteToPaid.
 	ChangeBillingTier(context.Context, *ChangeBillingTierRequest) (*ChangeBillingTierResponse, error)

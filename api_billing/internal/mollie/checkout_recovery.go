@@ -312,13 +312,16 @@ func (c *Client) ReservedSubscription(ctx context.Context, customerID, intentID,
 	}
 }
 
-// InspectFirstPaymentFunding resolves activation history for a funding
-// receipt that predates local funding links. Provider creation alone does not
-// prove local activation; ambiguous history retains the payment for reconciliation.
 // ErrHistoricalFundingAmbiguous requires an operator to decide delivery from external evidence.
 var ErrHistoricalFundingAmbiguous = errors.New("historical Mollie delivery cannot be proven")
 
-func (c *Client) InspectFirstPaymentFunding(ctx context.Context, customerID, paymentID, retainedSubscriptionID string, locallyActivated func(string) (bool, error)) (bool, []string, error) {
+// InspectFirstPaymentFunding resolves activation history for a funding
+// receipt that predates local funding links. Provider creation alone does not
+// prove local activation; ambiguous history retains the payment for reconciliation.
+func (c *Client) InspectFirstPaymentFunding(
+	ctx context.Context, customerID, paymentID, retainedSubscriptionID string,
+	locallyActivated func(string) (bool, error),
+) (bool, []string, error) {
 	payment, err := c.GetPayment(ctx, paymentID)
 	if err != nil {
 		return false, nil, err
@@ -392,7 +395,12 @@ func (c *Client) InspectFirstPaymentFunding(ctx context.Context, customerID, pay
 		}
 		if page.Links.Next == nil || page.Links.Next.Href == "" {
 			if !funded && ambiguousID != "" && retained {
-				return false, orphans, fmt.Errorf("%w: subscription %s, initial payment %s; use frameworks admin billing recovery checkout --tenant-id TENANT --reservation-id RESERVATION --reason REASON --retain-delivered only after confirming delivered service", ErrHistoricalFundingAmbiguous, ambiguousID, paymentID)
+				return false, orphans, fmt.Errorf(
+					"%w: subscription %s, initial payment %s; use frameworks admin billing recovery checkout "+
+						"--tenant-id TENANT --reservation-id RESERVATION --reason REASON "+
+						"--retain-delivered only after confirming delivered service",
+					ErrHistoricalFundingAmbiguous, ambiguousID, paymentID,
+				)
 			}
 			return funded, orphans, nil
 		}

@@ -318,6 +318,11 @@ func TestCreateMollieSubscriptionRefusesOutstandingGrantBeforeProvider(t *testin
 			mock.ExpectQuery(`-- name: GetSubscriptionOperatorGrant`).WithArgs("tenant-a").WillReturnRows(sqlmock.NewRows([]string{"subscription_id", "base_price", "waive_usage", "collection", "expires_at", "reason", "granted_by", "granted_at", "fallback_tier_id", "assigned_tier_id", "fallback_tier_name", "active", "expiry_error", "expiry_failures"}).AddRow("sub", nil, true, "provider", time.Now().Add(-time.Minute), "trial", nil, time.Now().Add(-time.Hour), "fallback", "tier", "payg", active, nil, int32(0)))
 			mock.ExpectQuery("HasPendingTierUpgrade").WillReturnRows(sqlmock.NewRows([]string{"pending"}).AddRow(false))
 			mock.ExpectRollback()
+			mock.ExpectBegin()
+			expectProviderSubscriptionLock(mock, "tenant-a")
+			mock.ExpectQuery("GetSubscriptionOperatorGrant").WithArgs("tenant-a").WillReturnError(sql.ErrNoRows)
+			mock.ExpectQuery("ListRefusedMollieFundingIntents").WillReturnRows(sqlmock.NewRows([]string{"id"}))
+			mock.ExpectCommit()
 			_, callErr := server.CreateMollieSubscription(t.Context(), &purserpb.CreateMollieSubscriptionRequest{TenantId: "tenant-a", TierId: "11111111-1111-1111-1111-111111111111", MandateId: "mdt_123"})
 			if status.Code(callErr) != codes.FailedPrecondition || status.Convert(callErr).Message() != "end the outstanding operator billing grant before changing tier or billing model" {
 				t.Fatalf("grant signup = %v", callErr)

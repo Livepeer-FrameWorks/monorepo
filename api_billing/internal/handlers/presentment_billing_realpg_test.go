@@ -65,9 +65,10 @@ type recordedProviderRequest struct {
 }
 
 type providerFixture struct {
-	mu       sync.Mutex
-	requests []recordedProviderRequest
-	routes   map[string]func(recordedProviderRequest) (int, any)
+	beforeRequest func()
+	mu            sync.Mutex
+	requests      []recordedProviderRequest
+	routes        map[string]func(recordedProviderRequest) (int, any)
 }
 
 func (f *providerFixture) handle(w http.ResponseWriter, r *http.Request) {
@@ -76,7 +77,11 @@ func (f *providerFixture) handle(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	f.requests = append(f.requests, request)
 	route := f.routes[r.Method+" "+r.URL.Path]
+	beforeRequest := f.beforeRequest
 	f.mu.Unlock()
+	if beforeRequest != nil {
+		beforeRequest()
+	}
 	if route == nil {
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = w.Write([]byte(`{"error":{"type":"invalid_request_error","message":"no fixture route"}}`))

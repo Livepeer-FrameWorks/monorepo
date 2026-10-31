@@ -6,10 +6,10 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-
-	"frameworks/api_billing/internal/subscriptions"
 	"testing"
 	"time"
+
+	"frameworks/api_billing/internal/subscriptions"
 
 	"github.com/google/uuid"
 )
@@ -113,6 +113,7 @@ VALUES($1::uuid,$2,$3,$4,'billing_tiers',$5,'provider_open','EUR',2000,$1::text,
 				})
 			}
 
+			fixture.beforeRequest = func() { assertSubscriptionUnlockedDuringProviderCall(t, db, tenant.id) }
 			expiry := checkoutReservationExpiry{TenantID: tenant.id, IntentID: id, Force: true}
 			if mode == "async Stripe refusal" {
 				var event StripeWebhookPayload

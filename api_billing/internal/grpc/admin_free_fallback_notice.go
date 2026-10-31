@@ -38,7 +38,15 @@ func (s *PurserServer) AdminResendFreeFallbackNotice(ctx context.Context, r *pur
 	if err != nil {
 		return nil, status.Errorf(codes.Unavailable, "read fallback notice: %v", err)
 	}
-	out := &purserpb.AdminResendFreeFallbackNoticeResponse{Status: "notice_abandoned", Recipient: row.Recipient, ScheduledAt: timestamppb.New(row.ScheduledAt), Moved: row.Moved, Detail: row.LastError}
+	if _, grantErr := purserdb.New(s.db).GetSubscriptionOperatorGrant(ctx, r.GetTenantId()); grantErr == nil {
+		return nil, status.Error(codes.FailedPrecondition, "end the outstanding billing grant before retrying its fallback notice")
+	} else if !errors.Is(grantErr, sql.ErrNoRows) {
+		return nil, status.Errorf(codes.Unavailable, "read fallback notice grant: %v", grantErr)
+	}
+	out := &purserpb.AdminResendFreeFallbackNoticeResponse{
+		Status: "notice_abandoned", Recipient: row.Recipient,
+		ScheduledAt: timestamppb.New(row.ScheduledAt), Moved: row.Moved, Detail: row.LastError,
+	}
 	if !r.GetConfirmed() {
 		if !row.FreeFallbackNoticeAbandonedAt.Valid {
 			return nil, status.Error(codes.FailedPrecondition, "fallback notice is already queued; inspect recovery list")
@@ -49,6 +57,9 @@ func (s *PurserServer) AdminResendFreeFallbackNotice(ctx context.Context, r *pur
 		locked, lockErr := subscriptions.LockChange(ctx, tx, r.GetTenantId(), subscriptions.PreservePricing)
 		if lockErr != nil {
 			return lockErr
+		}
+		if locked.HasGrant {
+			return status.Error(codes.FailedPrecondition, "end the outstanding billing grant before retrying its fallback notice")
 		}
 		q := purserdb.New(tx)
 		current, readErr := q.GetFreeFallbackNoticeRecovery(ctx, r.GetTenantId())
@@ -62,11 +73,20 @@ func (s *PurserServer) AdminResendFreeFallbackNotice(ctx context.Context, r *pur
 			return status.Error(codes.FailedPrecondition, "set billing_email before retrying the notice")
 		}
 		out.Recipient = current.Recipient
-		rows, updateErr := q.RequeueAbandonedFreeFallbackNotice(ctx, purserdb.RequeueAbandonedFreeFallbackNoticeParams{TenantID: r.GetTenantId(), ScheduledAt: current.ScheduledAt, Moved: current.Moved})
-		if updateErr != nil || rows == 0 {
+		rows, updateErr := q.RequeueAbandonedFreeFallbackNotice(ctx, purserdb.RequeueAbandonedFreeFallbackNoticeParams{
+			TenantID: r.GetTenantId(), ScheduledAt: current.ScheduledAt, Moved: current.Moved,
+		})
+		if updateErr != nil {
 			return updateErr
 		}
-		return billingevents.NewAndEnqueue(ctx, tx, r.GetTenantId(), locked.Current.SubscriptionID, &internalv1.SubscriptionUpdated{SubscriptionId: locked.Current.SubscriptionID, ChangedFields: []string{"free_fallback_notice_retry"}, Reason: strings.TrimSpace(r.GetReason())}, s.domainActor(ctx))
+		if rows == 0 {
+			out.Status = "already_queued"
+			return nil
+		}
+		return billingevents.NewAndEnqueue(ctx, tx, r.GetTenantId(), locked.Current.SubscriptionID, &internalv1.SubscriptionUpdated{
+			SubscriptionId: locked.Current.SubscriptionID,
+			ChangedFields:  []string{"free_fallback_notice_retry"}, Reason: strings.TrimSpace(r.GetReason()),
+		}, s.domainActor(ctx))
 	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "tenant has no pending fallback notice")
@@ -76,6 +96,10 @@ func (s *PurserServer) AdminResendFreeFallbackNotice(ctx context.Context, r *pur
 			return nil, err
 		}
 		return nil, status.Errorf(codes.Unavailable, "queue fallback notice: %v", err)
+	}
+	if out.Status == "already_queued" {
+		out.Detail = "A previous request already queued this notice; no additional operator action was recorded."
+		return out, nil
 	}
 	out.Status, out.Detail = "queued", "The notification is durably queued for the fallback email worker; billing and payment objects are unchanged."
 	return out, nil

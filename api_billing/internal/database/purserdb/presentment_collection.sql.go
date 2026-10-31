@@ -757,8 +757,8 @@ type MarkBaseFeeUnusedShareReturnedParams struct {
 	TenantID  string          `db:"tenant_id" json:"tenant_id"`
 }
 
-// Records disposition of the unused share, either returned to prepaid or
-// applied to a replacement invoice; details identifies its destination.
+// Records the unused-fee disposition and prevents double application.
+// The ledger key covers both replacement-fee offsets and forfeited amounts.
 func (q *Queries) MarkBaseFeeUnusedShareReturned(ctx context.Context, arg MarkBaseFeeUnusedShareReturnedParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, markBaseFeeUnusedShareReturned, arg.Details, arg.InvoiceID, arg.TenantID)
 	if err != nil {

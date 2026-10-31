@@ -111,10 +111,16 @@ func (q *Queries) InsertBootstrapEntitlementOverride(ctx context.Context, arg In
 
 const insertBootstrapTenantSubscription = `-- name: InsertBootstrapTenantSubscription :exec
 INSERT INTO purser.tenant_subscriptions (
-    id, tenant_id, tier_id, billing_model, presentment_currency, status, started_at, created_at, updated_at
+    id, tenant_id, tier_id, billing_model, presentment_currency, status,
+    billing_period_start, billing_period_end, next_billing_date,
+    started_at, created_at, updated_at
 ) VALUES (
     $1, $2::text::uuid, $3,
-    $4, $5::text, 'active', NOW(), NOW(), NOW()
+    $4, $5::text, 'active',
+    NOW() AT TIME ZONE 'UTC',
+    (NOW() AT TIME ZONE 'UTC') + INTERVAL '1 month',
+    (NOW() AT TIME ZONE 'UTC') + INTERVAL '1 month',
+    NOW(), NOW(), NOW()
 )
 `
 

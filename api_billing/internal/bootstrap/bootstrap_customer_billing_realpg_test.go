@@ -76,6 +76,7 @@ func TestBootstrapCustomerBillingRepository_RealPG(t *testing.T) { //nolint:funl
 		t.Fatalf("first result = %+v", result)
 	}
 	assertBootstrapPostCommitOps(t, post)
+	assertBootstrapCreationPeriods(t, db, tenantID)
 
 	var subscriptionID, storedTierID, model string
 	if readErr := db.QueryRowContext(ctx, `
@@ -626,5 +627,20 @@ func assertBootstrapPreservesUncollectedUpgrade(t *testing.T, db *sql.DB) {
 	var actual string
 	if err = db.QueryRowContext(ctx, `SELECT tier_id::text FROM purser.tenant_subscriptions WHERE tenant_id=$1`, tenant).Scan(&actual); err != nil || actual != current {
 		t.Fatalf("bootstrap overwrote purchased tier: %s %v", actual, err)
+	}
+}
+
+func assertBootstrapCreationPeriods(t *testing.T, db *sql.DB, tenantID string) {
+	t.Helper()
+	var created time.Time
+	var start, end, next sql.NullTime
+	if err := db.QueryRow(`SELECT created_at,billing_period_start,billing_period_end,next_billing_date FROM purser.tenant_subscriptions WHERE tenant_id=$1`, tenantID).Scan(&created, &start, &end, &next); err != nil {
+		t.Fatal(err)
+	}
+	if !start.Valid || !end.Valid || !next.Valid {
+		t.Fatalf("bootstrap subscription has NULL billing coordinates: %v %v %v", start, end, next)
+	}
+	if !start.Time.Equal(created) || !end.Time.Equal(billing.NextMonthlyAnniversary(created)) || !next.Time.Equal(end.Time) {
+		t.Fatalf("bootstrap billed before creation or lost anniversary: created=%s start=%s end=%s next=%s", created, start.Time, end.Time, next.Time)
 	}
 }

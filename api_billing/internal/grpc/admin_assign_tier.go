@@ -169,14 +169,14 @@ func (s *PurserServer) adminAssignTierOnce(ctx context.Context, tenantID, tierNa
 		if grant.pricingBoundary {
 			phase, prepareErr = handlers.PreparePrepaidGrantBoundary(ctx, s.db, s.logger, s.billing, tenantID, grant.at)
 			if prepareErr != nil {
-				return nil, status.Errorf(codes.Internal, "prepare grant billing boundary: %v", prepareErr)
+				return nil, billingBoundaryStatus("prepare grant billing boundary", prepareErr)
 			}
 			if phase != nil {
 				grant.at = phase.BoundaryAt()
 			}
 			postpaidPhase, prepareErr = handlers.PreparePostpaidGrantBoundary(ctx, s.db, s.logger, s.billing, tenantID, grant.at, model == "prepaid")
 			if prepareErr != nil {
-				return nil, status.Errorf(codes.Internal, "prepare grant billing boundary: %v", prepareErr)
+				return nil, billingBoundaryStatus("prepare grant billing boundary", prepareErr)
 			}
 		}
 	}
@@ -528,7 +528,7 @@ func (s *PurserServer) preparePrepaidPhaseCloseForTier(ctx context.Context, tena
 func (s *PurserServer) preparePrepaidPhaseClose(ctx context.Context, tenantID string) (*handlers.PrepaidPhaseClose, error) {
 	phase, err := handlers.PreparePrepaidPhaseClose(ctx, s.db, s.logger, s.billing, tenantID)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "prepare the statement that closes the prepaid period: %v", err)
+		return nil, billingBoundaryStatus("prepare the statement that closes the prepaid period", err)
 	}
 	return phase, nil
 }
@@ -566,7 +566,7 @@ func (s *PurserServer) preparePostpaidPhaseCloseForTier(ctx context.Context, ten
 	if model, modelErr := operatorTierBillingModel(tier.TierName, tier.TierLevel, tier.IsDefaultPrepaid, requestedModel); modelErr == nil && model == "prepaid" {
 		phase, prepareErr := handlers.PreparePostpaidPhaseClose(ctx, s.db, s.logger, s.billing, tenantID)
 		if prepareErr != nil {
-			return nil, status.Errorf(codes.Internal, "prepare the invoice that closes the postpaid period: %v", prepareErr)
+			return nil, billingBoundaryStatus("prepare the invoice that closes the postpaid period", prepareErr)
 		}
 		return phase, nil
 	}
@@ -592,4 +592,13 @@ func commitPostpaidPhaseClose(ctx context.Context, tx *sql.Tx, phase *handlers.P
 		return false, txStatusErrorf(err, codes.Internal, "close the postpaid period: %v", err)
 	}
 	return closed, nil
+}
+
+// billingBoundaryStatus preserves the repair reason without exposing database failures.
+func billingBoundaryStatus(operation string, err error) error {
+	code := codes.Internal
+	if handlers.IsBillingBoundaryCondition(err) {
+		code = codes.FailedPrecondition
+	}
+	return status.Errorf(code, "%s: %v", operation, err)
 }

@@ -48,8 +48,8 @@ func TestMollieBillingEventsCommitWithTheirState_RealPG(t *testing.T) { //nolint
 	server := &PurserServer{db: db, logger: logging.NewLogger(), tokenHasher: hasher}
 	tierID := uuid.NewString()
 	if _, err := db.Exec(`
-		INSERT INTO purser.billing_tiers (id, tier_name, display_name, base_price, currency, metering_enabled)
-		VALUES ($1, $2, 'Mollie events', 20.00, 'EUR', false)`, tierID, "mollie-events-"+tierID); err != nil {
+		INSERT INTO purser.billing_tiers (id, tier_name, display_name, base_price, currency, metering_enabled, tier_level)
+		VALUES ($1, $2, 'Mollie events', 20.00, 'EUR', false, 1)`, tierID, "mollie-events-"+tierID); err != nil {
 		t.Fatal(err)
 	}
 	userID := uuid.NewString()
@@ -228,7 +228,7 @@ func TestMollieBillingEventsCommitWithTheirState_RealPG(t *testing.T) { //nolint
 		tenantID := uuid.NewString()
 		subscriptionID := newSubscription(t, tenantID)
 		intent, err := subscriptions.ReserveCheckout(ctx, db, tenantID, func(tx *sql.Tx) (string, error) {
-			return purserdb.New(tx).UpsertMollieSubscriptionIntent(ctx, purserdb.UpsertMollieSubscriptionIntentParams{TenantID: tenantID, TierID: tierID, CustomerID: sql.NullString{String: "customer", Valid: true}, Currency: "EUR", AmountCents: 4000, IdempotencyKey: "settled-mollie-checkout"})
+			return purserdb.New(tx).UpsertMollieSubscriptionIntent(ctx, purserdb.UpsertMollieSubscriptionIntentParams{TenantID: tenantID, TierID: tierID, CustomerID: sql.NullString{String: "customer", Valid: true}, Currency: "EUR", AmountCents: 2000, IdempotencyKey: "settled-mollie-checkout"})
 		})
 		if err != nil {
 			t.Fatal(err)

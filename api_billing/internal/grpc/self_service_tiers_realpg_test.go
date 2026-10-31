@@ -25,6 +25,7 @@ import (
 // Existing checkouts must recheck catalog eligibility when their provider completes.
 func assertSelfServiceCheckoutEligibility(t *testing.T, db *sql.DB) {
 	t.Helper()
+	t.Run("Mollie first-payment refusal", func(t *testing.T) { assertMollieFirstPaymentRefusalQueuesRecovery(t, db) })
 	t.Run("Mollie refused activation queues linked funding", func(t *testing.T) { assertRefusedMollieActivationQueuesFunding(t, db) })
 	for _, mode := range []string{"enterprise", "inactive", "zero level", "paid advance", "past due advance", "native Stripe", "native Mollie"} {
 		t.Run("checkout eligibility/"+mode, func(t *testing.T) {
@@ -179,4 +180,94 @@ func assertRefusedMollieActivationQueuesFunding(t *testing.T, db *sql.DB) {
 			t.Fatalf("refused native/funding did not queue immediate compensation: id=%s latch=%t force=%t err=%v", id, latched, forced, err)
 		}
 	}
+}
+
+func assertMollieFirstPaymentRefusalQueuesRecovery(t *testing.T, db *sql.DB) {
+	t.Helper()
+	for _, mode := range []string{"ineligible tier", "missing billing details", "linked native", "activated funding", "activated native", "established native", "other customer", "other tenant", "other tier", "unpaid funding", "mandate outage"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx := t.Context()
+			tenant, current, target, funding, native := uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
+			exec := func(query string, args ...any) {
+				t.Helper()
+				if _, err := db.ExecContext(ctx, query, args...); err != nil {
+					t.Fatal(err)
+				}
+			}
+			exec(`INSERT INTO purser.billing_tiers(id,tier_name,display_name,tier_level,base_price,is_enterprise)
+VALUES($1::uuid,$1::text,'Free',0,0,false),($2::uuid,$2::text,'Target',2,20,$3)`, current, target, mode != "missing billing details" && mode != "mandate outage")
+			exec(`INSERT INTO purser.tenant_subscriptions(tenant_id,tier_id,status,billing_model,payment_method,presentment_currency,billing_name,billing_email,billing_address)
+VALUES($1,$2,'active','prepaid','mollie','EUR','Customer','billing@example.test','{"street":"Main 1","city":"Amsterdam","postal_code":"1000AA","country":"NL"}')`, tenant, current)
+			exec(`INSERT INTO purser.mollie_customers(tenant_id,mollie_customer_id) VALUES($1::text::uuid,'customer-'||$1::text)`, tenant)
+			exec(`INSERT INTO purser.payment_provider_intents(id,tenant_id,provider,purpose,local_reference_type,local_reference_id,status,currency,amount_cents,idempotency_key,provider_customer_id,provider_payment_id,provider_mandate_id,succeeded_at,expires_at)
+VALUES($1::uuid,$2::text::uuid,'mollie','mollie_first_payment','billing_tiers',$3,'succeeded','EUR',2000,$1::text,'customer-'||$2::text,'paid-first-'||$1::text,'mandate',NOW(),NOW()+INTERVAL '1 hour')`, funding, tenant, target)
+			switch mode {
+			case "missing billing details":
+				exec(`UPDATE purser.tenant_subscriptions SET billing_email=NULL WHERE tenant_id=$1`, tenant)
+			case "activated funding":
+				exec(`UPDATE purser.payment_provider_intents SET activated_at=NOW() WHERE tenant_id=$1 AND id=$2`, tenant, funding)
+			case "other customer":
+				exec(`UPDATE purser.payment_provider_intents SET provider_customer_id='other' WHERE tenant_id=$1 AND id=$2`, tenant, funding)
+			case "other tenant":
+				exec(`UPDATE purser.payment_provider_intents SET tenant_id=$3 WHERE tenant_id=$1 AND id=$2`, tenant, funding, uuid.NewString())
+			case "other tier":
+				exec(`UPDATE purser.payment_provider_intents SET local_reference_id=$3 WHERE tenant_id=$1 AND id=$2`, tenant, funding, uuid.NewString())
+			case "unpaid funding":
+				exec(`UPDATE purser.payment_provider_intents SET status='provider_open',succeeded_at=NULL WHERE tenant_id=$1 AND id=$2`, tenant, funding)
+			}
+			linked := mode == "linked native" || mode == "activated native" || mode == "established native"
+			if linked {
+				exec(`INSERT INTO purser.payment_provider_intents(id,tenant_id,provider,purpose,local_reference_type,local_reference_id,status,currency,amount_cents,idempotency_key,provider_customer_id,provider_subscription_id,funding_intent_id,expires_at)
+VALUES($1::uuid,$2::text::uuid,'mollie','mollie_subscription_create','billing_tiers',$3,'provider_open','EUR',2000,$1::text,'customer-'||$2::text,'native-'||$1::text,$4,NOW()+INTERVAL '1 hour')`, native, tenant, target, funding)
+				if mode == "established native" {
+					exec(`UPDATE purser.tenant_subscriptions SET mollie_subscription_id='native-'||$2::text WHERE tenant_id=$1::text::uuid`, tenant, native)
+				}
+				if mode == "activated native" {
+					exec(`UPDATE purser.payment_provider_intents SET status='succeeded',activated_at=NOW() WHERE tenant_id=$1 AND id=$2`, tenant, native)
+				}
+			}
+			client := &refusedFundingMollieClient{outage: mode == "mandate outage"}
+			server := &PurserServer{db: db, logger: logging.NewLogger(), mollieClient: client}
+			for range 2 {
+				_, err := server.CreateMollieSubscription(ctx, &purserpb.CreateMollieSubscriptionRequest{TenantId: tenant, TierId: target, MandateId: "mandate"})
+				wantCode := codes.FailedPrecondition
+				if mode == "mandate outage" {
+					wantCode = codes.Unavailable
+				}
+				if status.Code(err) != wantCode {
+					t.Fatalf("refused activation code=%s want=%s: %v", status.Code(err), wantCode, err)
+				}
+			}
+			var queued int
+			err := db.QueryRowContext(ctx, `SELECT count(*) FROM purser.payment_provider_intents p JOIN purser.provider_webhook_inbox i ON i.provider='checkout_recovery' AND i.event_key='checkout-expiry:'||p.id::text
+WHERE p.tenant_id=$1 AND p.recovery_started_at IS NOT NULL AND convert_from(i.raw_payload,'UTF8')::jsonb->>'force'='true' AND i.next_attempt_at<=NOW()`, tenant).Scan(&queued)
+			want := 0
+			if mode == "ineligible tier" || mode == "missing billing details" {
+				want = 1
+			}
+			if mode == "linked native" {
+				want = 2
+			}
+			if err != nil || queued != want || client.creates != 0 {
+				t.Fatalf("refused funding queue=%d want=%d provider creates=%d err=%v", queued, want, client.creates, err)
+			}
+		})
+	}
+}
+
+type refusedFundingMollieClient struct {
+	fakeMollieBillingClient
+	outage  bool
+	creates int
+}
+
+func (c *refusedFundingMollieClient) GetMandate(_ context.Context, _ string, id string) (*mollielib.Mandate, error) {
+	if c.outage {
+		return nil, errors.New("temporary mandate read failure")
+	}
+	return &mollielib.Mandate{ID: id, Status: "valid"}, nil
+}
+func (c *refusedFundingMollieClient) CreateSubscription(context.Context, billingmollie.SubscriptionParams) (*mollielib.Subscription, error) {
+	c.creates++
+	return nil, errors.New("refused first payment reached subscription create")
 }

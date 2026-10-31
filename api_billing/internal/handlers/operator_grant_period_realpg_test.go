@@ -60,6 +60,9 @@ func monthlyRejectsChangedPhase(t *testing.T, model string) {
 
 func TestStripeWebhookPreservesClosedGrantPhase_RealPG(t *testing.T) {
 	db := startPurserUsageRealPG(t)
+	testMollieInvoiceUTCDayBoundary(t)
+	testClosingPricingCondition(t)
+	testEstablishedStripeRefusalMustRetry(t)
 	testRecoverableStripeStateKeepsWaivedUsage(t)
 	testProviderActivationRefusesGrant(t)
 	testCompletedCheckoutCannotReactivatePricing(t)
@@ -410,12 +413,21 @@ func testProviderBoundaryRefusalLeavesNoInvoice(t *testing.T) {
 
 	acceptedDB := startPurserUsageRealPG(t)
 	accepted := newPhaseTenant(t, acceptedDB, "postpaid", start, start.AddDate(0, 1, 0), 0)
+	// New payment-method setup can purchase a paid tier from Free. A live
+	// paid-to-paid change uses the separate upgrade purchase path.
+	freeTier := uuid.NewString()
+	if _, err := acceptedDB.Exec(`INSERT INTO purser.billing_tiers(id,tier_name,display_name,tier_level,base_price,metering_enabled) VALUES($1,'free','Free',0,0,true)`, freeTier); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := acceptedDB.Exec(`UPDATE purser.tenant_subscriptions SET tier_id=$2 WHERE tenant_id=$1`, accepted.id, freeTier); err != nil {
+		t.Fatal(err)
+	}
 	seedCompleteMetering(t, acceptedDB, start.Truncate(5*time.Minute), now.Add(5*time.Minute))
 	prepared, prepareErr := PrepareProviderBillingBoundary(t.Context(), acceptedDB, accepted.jobs.logger, accepted.svc, accepted.id, now)
 	if prepareErr != nil {
 		t.Fatal(prepareErr)
 	}
-	result, activateErr := subscriptions.TransitionProvider(t.Context(), acceptedDB, subscriptions.ProviderChange{TenantID: accepted.id, Operation: subscriptions.AdvanceActivation, Boundary: prepared, Advance: purserdb.ActivateAdvanceBilledSubscriptionParams{TenantID: accepted.id, TierID: accepted.paygID, PaymentMethod: "stripe", PeriodStart: now, PeriodEnd: now.AddDate(0, 1, 0)}})
+	result, activateErr := subscriptions.TransitionProvider(t.Context(), acceptedDB, subscriptions.ProviderChange{TenantID: accepted.id, Operation: subscriptions.AdvanceActivation, Boundary: prepared, Advance: purserdb.ActivateAdvanceBilledSubscriptionParams{TenantID: accepted.id, TierID: accepted.supporterID, PaymentMethod: "stripe", PeriodStart: now, PeriodEnd: now.AddDate(0, 1, 0)}})
 	if activateErr != nil || result.Rows != 1 {
 		t.Fatalf("activation without a grant failed: rows=%d err=%v", result.Rows, activateErr)
 	}
@@ -423,7 +435,7 @@ func testProviderBoundaryRefusalLeavesNoInvoice(t *testing.T) {
 	if readErr := acceptedDB.QueryRow(`SELECT tier_id::text,billing_period_start,(SELECT count(*) FROM purser.billing_invoices WHERE tenant_id=s.tenant_id) FROM purser.tenant_subscriptions s WHERE tenant_id=$1`, accepted.id).Scan(&currentTier, &currentStart, &invoices); readErr != nil {
 		t.Fatal(readErr)
 	}
-	if invoices != 1 || !currentStart.Equal(now) || currentTier != accepted.paygID {
+	if invoices != 1 || !currentStart.Equal(now) || currentTier != accepted.supporterID {
 		t.Fatalf("activation did not commit its invoice, period and tier together: invoices=%d start=%s tier=%s", invoices, currentStart, currentTier)
 	}
 }
@@ -466,26 +478,29 @@ func testProviderBoundaryRequiresCompleteMetering(t *testing.T) {
 	now := time.Now().UTC().Truncate(5 * time.Minute)
 	start := now.Add(-10 * time.Minute)
 	tenant := newPhaseTenant(t, db, "postpaid", start, now.AddDate(0, 1, 0), 0)
-	charges := 0
-	tenant.svc.chargeAdvanceBaseFee = func(context.Context, string) error { charges++; return nil }
-	err := tenant.svc.activateAdvanceBilledTenant(t.Context(), tenant.id, tenant.paygID, "stripe", "customer", now, "")
-	if err == nil || !strings.Contains(err.Error(), "metering") {
-		t.Fatalf("incomplete advance period was finalized: %v", err)
+	_, err := PrepareProviderBillingBoundary(t.Context(), db, tenant.jobs.logger, tenant.svc, tenant.id, now)
+	if !IsBillingBoundaryCondition(err) || !strings.Contains(err.Error(), "metering") {
+		t.Fatalf("incomplete provider boundary was not actionable: %v", err)
 	}
 	var tier string
 	var documents int
 	if err = db.QueryRow(`SELECT tier_id::text,(SELECT count(*) FROM purser.billing_invoices WHERE tenant_id=s.tenant_id) FROM purser.tenant_subscriptions s WHERE tenant_id=$1`, tenant.id).Scan(&tier, &documents); err != nil {
 		t.Fatal(err)
 	}
-	if tier != tenant.supporterID || documents != 0 || charges != 0 {
-		t.Fatalf("incomplete close mutated billing: tier=%s documents=%d charges=%d", tier, documents, charges)
+	if tier != tenant.supporterID || documents != 0 {
+		t.Fatalf("incomplete close mutated billing: tier=%s documents=%d", tier, documents)
 	}
 	seedCompleteMetering(t, db, start, now)
-	if err = tenant.svc.activateAdvanceBilledTenant(t.Context(), tenant.id, tenant.paygID, "stripe", "customer", now, ""); err != nil {
+	closing, err := PrepareProviderBillingBoundary(t.Context(), db, tenant.jobs.logger, tenant.svc, tenant.id, now)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if charges != 1 {
-		t.Fatalf("complete activation charges=%d", charges)
+	result, err := subscriptions.TransitionProvider(t.Context(), db, subscriptions.ProviderChange{TenantID: tenant.id, Operation: subscriptions.AdvanceActivation, Boundary: closing, Advance: purserdb.ActivateAdvanceBilledSubscriptionParams{TenantID: tenant.id, TierID: tenant.supporterID, PaymentMethod: "stripe", PeriodStart: now, PeriodEnd: now.AddDate(0, 1, 0)}})
+	if err != nil || result.Rows != 1 {
+		t.Fatalf("complete boundary did not activate: %+v %v", result, err)
+	}
+	if err = db.QueryRow(`SELECT count(*) FROM purser.billing_invoices WHERE tenant_id=$1`, tenant.id).Scan(&documents); err != nil || documents != 1 {
+		t.Fatalf("complete provider boundary invoices=%d %v", documents, err)
 	}
 }
 
@@ -639,6 +654,9 @@ func TestProviderReservationLifecycle_RealYugabyte(t *testing.T) {
 		{"TenantClosureStopsBilling", TestTenantClosureStopsBilling_RealPG},
 		{"PendingCheckoutPreservesEstablishedStripeSubscription", testPendingCheckoutPreservesEstablishedStripeSubscription},
 		{"RecoverableStripeStateKeepsWaivedUsage", testRecoverableStripeStateKeepsWaivedUsage},
+		{"EstablishedStripeRefusalMustRetry", testEstablishedStripeRefusalMustRetry},
+		{"ClosingPricingCondition", testClosingPricingCondition},
+		{"MollieInvoiceUTCDayBoundary", testMollieInvoiceUTCDayBoundary},
 		{"ProviderCheckoutReservationDeadline", testProviderCheckoutReservationDeadline},
 		{"StripeDelayedSettlementKeepsReservationUntilTerminal", TestStripeDelayedSettlementKeepsReservationUntilTerminal_RealPG},
 		{"HistoricalCompletedStripeCheckoutAndUnboundRecovery", TestHistoricalCompletedStripeCheckoutAndUnboundRecovery_RealPG},
@@ -1242,6 +1260,108 @@ func TestHistoricalCompletedStripeCheckoutAndUnboundRecovery_RealPG(t *testing.T
 			}
 			if pending, err := pendingProviderCheckoutForTest(ctx, db, tenant.id); err != nil || pending {
 				t.Fatalf("confirmed recovery still blocks tenant: %v %v", pending, err)
+			}
+		})
+	}
+}
+
+func testEstablishedStripeRefusalMustRetry(t *testing.T) {
+	t.Helper()
+	db := startProviderReservationDatabase(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	tenant := newPhaseTenant(t, db, "postpaid", now.Add(-time.Hour), now.AddDate(0, 1, 0), 0)
+	sub, customer, intent := "sub_"+tenant.id, "cus_"+tenant.id, uuid.NewString()
+	if _, err := db.Exec(`UPDATE purser.tenant_subscriptions SET status='past_due',stripe_subscription_id=$2,stripe_customer_id=$3,payment_method='stripe' WHERE tenant_id=$1`, tenant.id, sub, customer); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE purser.billing_tiers SET is_active=false WHERE id=$1`, tenant.paygID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO purser.payment_provider_intents(id,tenant_id,provider,purpose,status,currency,idempotency_key,provider_subscription_id,activated_at,expires_at) VALUES($1::text::uuid,$2::text::uuid,'stripe','tenant_subscription_checkout','succeeded','EUR',$1::text,$3,NOW()-INTERVAL '1 hour',NOW()-INTERVAL '1 hour')`, intent, tenant.id, sub); err != nil {
+		t.Fatal(err)
+	}
+	payload := StripeWebhookPayload{Type: "customer.subscription.updated"}
+	payload.Data.Object = json.RawMessage(fmt.Sprintf(`{"id":%q,"customer":%q,"status":"active","metadata":{"checkout_reservation_id":%q,"tenant_id":%q,"tier_id":%q},"items":{"data":[{"current_period_start":%d,"current_period_end":%d}]}}`, sub, customer, intent, tenant.id, tenant.paygID, now.Unix(), now.AddDate(0, 1, 0).Unix()))
+	if err := tenant.svc.handleStripeSubscriptionEvent(payload); err == nil {
+		t.Fatal("established subscription's refused renewal was acknowledged instead of retried")
+	}
+	var status string
+	var compensations int
+	if err := db.QueryRow(`SELECT s.status,(SELECT COUNT(*) FROM purser.payment_provider_intents WHERE tenant_id=$1 AND recovery_started_at IS NOT NULL) FROM purser.tenant_subscriptions s WHERE tenant_id=$1`, tenant.id).Scan(&status, &compensations); err != nil {
+		t.Fatal(err)
+	}
+	if status != "past_due" || compensations != 0 {
+		t.Fatalf("retry changed established subscription: status=%s compensations=%d", status, compensations)
+	}
+	// Repair the metadata and replay the same provider event, not a new checkout.
+	payload.Data.Object = json.RawMessage(strings.ReplaceAll(string(payload.Data.Object), tenant.paygID, tenant.supporterID))
+	if err := tenant.svc.handleStripeSubscriptionEvent(payload); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT status FROM purser.tenant_subscriptions WHERE tenant_id=$1`, tenant.id).Scan(&status); err != nil || status != "active" {
+		t.Fatalf("valid renewal did not apply: %s %v", status, err)
+	}
+}
+
+func testClosingPricingCondition(t *testing.T) {
+	t.Helper()
+	db := startPurserUsageRealPG(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	start := now.Add(-10 * 24 * time.Hour)
+	tenant := newPhaseTenant(t, db, "postpaid", start, now.AddDate(0, 1, 0), 0)
+	cluster, owner := "late-pricing-"+uuid.NewString(), uuid.NewString()
+	tenant.svc.qmClient = statementQuartermaster{marketplaceClusterResolver{clusterID: cluster, ownerTenantID: owner}}
+	if _, err := db.Exec(`INSERT INTO purser.cluster_subscriptions(tenant_id,cluster_id,status,activated_at,created_at) VALUES($1,$2,'active',$3,$3)`, tenant.id, cluster, start); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO purser.cluster_pricing_history(cluster_id,pricing_model,base_price,currency,effective_from) VALUES($1,'monthly',30,'EUR',$2)`, cluster, start.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	_, err := PreparePostpaidGrantBoundary(t.Context(), db, tenant.jobs.logger, tenant.svc, tenant.id, now, false)
+	if !IsBillingBoundaryCondition(err) || !strings.Contains(err.Error(), "pricing") {
+		t.Fatalf("dated period before cluster pricing was not actionable: %v", err)
+	}
+	var documents int
+	if err = db.QueryRow(`SELECT count(*) FROM purser.billing_invoices WHERE tenant_id=$1`, tenant.id).Scan(&documents); err != nil || documents != 0 {
+		t.Fatalf("unresolved boundary wrote documents=%d %v", documents, err)
+	}
+}
+
+func testMollieInvoiceUTCDayBoundary(t *testing.T) {
+	t.Helper()
+	db := startPurserUsageRealPG(t)
+	start := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	end := start.AddDate(0, 1, 0)
+	tenant := newPhaseTenant(t, db, "postpaid", start, end, 0)
+	native := "mollie-" + tenant.id
+	if _, err := db.Exec(`UPDATE purser.tenant_subscriptions SET mollie_subscription_id=$2 WHERE tenant_id=$1`, tenant.id, native); err != nil {
+		t.Fatal(err)
+	}
+	invoice := uuid.NewString()
+	if _, err := db.Exec(`INSERT INTO purser.billing_invoices(id,tenant_id,status,amount,due_date,period_start,period_end) VALUES($1,$2,'pending',20,NOW(),$3,$4)`, invoice, tenant.id, start, end); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		at    string
+		found bool
+	}{
+		{"2026-06-30T23:59:59Z", false}, {"2026-07-01T00:00:00Z", true},
+		{"2026-07-31T23:59:59Z", true}, {"2026-08-01T00:00:00Z", true},
+		{"2026-08-01T23:59:59Z", true}, {"2026-08-02T00:00:00Z", false},
+		{"2026-06-30T23:30:00-02:00", true}, {"2026-08-02T00:30:00+02:00", true},
+	} {
+		t.Run(test.at, func(t *testing.T) {
+			at, err := time.Parse(time.RFC3339, test.at)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := purserdb.New(db).ResolveMollieSubscriptionInvoice(t.Context(), purserdb.ResolveMollieSubscriptionInvoiceParams{PaymentCreatedAt: at, MollieSubscriptionID: sql.NullString{String: native, Valid: true}})
+			if test.found {
+				if err != nil || got != invoice {
+					t.Fatalf("UTC date match=%s %v want=%s", got, err, invoice)
+				}
+			} else if !errors.Is(err, sql.ErrNoRows) {
+				t.Fatalf("outside-day payment matched=%s %v", got, err)
 			}
 		})
 	}

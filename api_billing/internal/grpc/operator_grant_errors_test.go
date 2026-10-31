@@ -4,11 +4,14 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"frameworks/api_billing/internal/database/purserdb"
+	"frameworks/api_billing/internal/handlers"
+	"frameworks/api_billing/internal/pricing"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	fwdb "github.com/Livepeer-FrameWorks/monorepo/pkg/database"
@@ -281,5 +284,27 @@ func TestGrantExpiryQueueReadFailureCounted(t *testing.T) {
 	}
 	if unmet := mock.ExpectationsWereMet(); unmet != nil {
 		t.Fatal(unmet)
+	}
+}
+
+func TestBillingBoundaryConditionStatus(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		err  error
+		code codes.Code
+	}{
+		{"pricing condition", &handlers.BillingBoundaryCondition{Reason: "cluster pricing does not cover the closing period"}, codes.FailedPrecondition},
+		{"wrapped metering condition", fmt.Errorf("prepare monthly invoice: %w", &handlers.BillingBoundaryCondition{Reason: "required metering windows are missing"}), codes.FailedPrecondition},
+		{"missing marketplace pricing", pricing.ErrThirdPartyPricingMissing, codes.FailedPrecondition},
+		{"missing custom pricing", pricing.ErrCustomPricingMissingForCluster, codes.FailedPrecondition},
+		{"ambiguous ownership", pricing.ErrAmbiguousClusterOwnership, codes.FailedPrecondition},
+		{"database failure", errors.New("connection refused"), codes.Internal},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := billingBoundaryStatus("prepare grant billing boundary", test.err)
+			if status.Code(err) != test.code || !strings.Contains(err.Error(), test.err.Error()) {
+				t.Fatalf("boundary error=%v want %v with reason", err, test.code)
+			}
+		})
 	}
 }

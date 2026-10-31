@@ -389,6 +389,11 @@ billing declaration has no live grant change; its cluster entitlement operations
 use that retained tier. An operator's explicit grant/tier lifecycle closes the
 required billing boundary before replacing the arrangement.
 
+A definitive Mollie activation refusal queues immediate compensation for paid,
+unused first-payment funding. The subscription lock excludes concurrent activation;
+activated funding and established native subscriptions are never refunded by that
+refusal. Transient provider reads leave funding available for retry.
+
 Checkout reserves its durable provider intent under the same lock before any
 external call. Grant creation refuses while Stripe checkout or Mollie first
 payment/subscription setup is outstanding, including an ambiguous provider call.

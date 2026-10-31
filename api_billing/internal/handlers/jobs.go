@@ -2026,7 +2026,7 @@ func (jm *JobManager) assertMeteringComplete(ctx context.Context, tenantID strin
 		return fmt.Errorf("count active metering sources: %w", err)
 	}
 	if activeSources == 0 {
-		return errors.New("no active metering sources registered")
+		return billingBoundaryConditionf("no active metering sources registered; restore metering registration before retrying")
 	}
 	missingWindows, err := queries.CountMissingMeteringWindows(ctx, purserdb.CountMissingMeteringWindowsParams{
 		PeriodStart: periodStart,
@@ -2036,7 +2036,7 @@ func (jm *JobManager) assertMeteringComplete(ctx context.Context, tenantID strin
 		return fmt.Errorf("check metering windows: %w", err)
 	}
 	if missingWindows > 0 {
-		return fmt.Errorf("%d required metering windows are missing", missingWindows)
+		return billingBoundaryConditionf("%d required metering windows are missing; wait for complete metering before retrying", missingWindows)
 	}
 	openAnomalies, err := queries.CountOpenMeteringAnomalies(ctx, purserdb.CountOpenMeteringAnomaliesParams{
 		TenantID:  tenantID,
@@ -2046,7 +2046,7 @@ func (jm *JobManager) assertMeteringComplete(ctx context.Context, tenantID strin
 		return fmt.Errorf("check metering anomalies: %w", err)
 	}
 	if openAnomalies > 0 {
-		return fmt.Errorf("%d unresolved metering anomalies", openAnomalies)
+		return billingBoundaryConditionf("%d unresolved metering anomalies; reconcile metering anomalies before retrying", openAnomalies)
 	}
 	return nil
 }

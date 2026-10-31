@@ -60,16 +60,19 @@ func finalizeInvoicePresentmentTx(ctx context.Context, tx *sql.Tx, invoiceID, te
 }
 
 // activateAdvanceBilledTenant starts advance invoicing after payment-method setup.
-// Setup cannot change a paid tier or provider during its current period; that
-// purchase must use the durable tier-upgrade boundary. Replaying the current
-// tier and provider preserves its period. Activation commits before collection,
+// Setup cannot change a paid tier during its current period; that purchase
+// uses the durable tier-upgrade boundary. Setting up another collection provider
+// on the same advance-billed tier preserves its paid period. Activation commits before collection,
 // and the invoice job retries a charge that cannot start immediately.
 func (s *Service) activateAdvanceBilledTenant(ctx context.Context, tenantID, tierID, provider, stripeCustomerID string, now time.Time, receiptID string) error {
 	return s.activateAdvanceBilledTenantWithMandate(ctx, tenantID, tierID, provider, stripeCustomerID, now, receiptID, nil)
 }
 
 func (s *Service) activateAdvanceBilledTenantWithMandate(ctx context.Context, tenantID, tierID, provider, stripeCustomerID string, now time.Time, receiptID string, mandate *purserdb.UpsertMollieMandateParams) error {
-	if _, policyErr := subscriptions.TransitionProvider(ctx, s.db, subscriptions.ProviderChange{TenantID: tenantID, Operation: subscriptions.ProviderCheckout, ReceiptIntentID: receiptID, Advance: purserdb.ActivateAdvanceBilledSubscriptionParams{TierID: tierID, PaymentMethod: provider}}); policyErr != nil {
+	if _, policyErr := subscriptions.TransitionProvider(ctx, s.db, subscriptions.ProviderChange{
+		TenantID: tenantID, Operation: subscriptions.ProviderCheckout, ReceiptIntentID: receiptID,
+		Advance: purserdb.ActivateAdvanceBilledSubscriptionParams{TierID: tierID, PaymentMethod: provider},
+	}); policyErr != nil {
 		return policyErr
 	}
 	periodStart := now.UTC().Truncate(time.Microsecond)
@@ -89,10 +92,12 @@ func (s *Service) activateAdvanceBilledTenantWithMandate(ctx context.Context, te
 		}
 	}
 
-	result, err := subscriptions.TransitionProvider(ctx, s.db, subscriptions.ProviderChange{TenantID: tenantID, Operation: subscriptions.AdvanceActivation, ReceiptIntentID: receiptID, MollieMandate: mandate, Boundary: closing, Advance: purserdb.ActivateAdvanceBilledSubscriptionParams{
-		PaymentMethod: provider, StripeCustomerID: stripeCustomerID, TierID: tierID,
-		PeriodStart: periodStart, PeriodEnd: billing.NextMonthlyAnniversary(periodStart), TenantID: tenantID,
-	}})
+	result, err := subscriptions.TransitionProvider(ctx, s.db, subscriptions.ProviderChange{
+		TenantID: tenantID, Operation: subscriptions.AdvanceActivation, ReceiptIntentID: receiptID,
+		MollieMandate: mandate, Boundary: closing, Advance: purserdb.ActivateAdvanceBilledSubscriptionParams{
+			PaymentMethod: provider, StripeCustomerID: stripeCustomerID, TierID: tierID,
+			PeriodStart: periodStart, PeriodEnd: billing.NextMonthlyAnniversary(periodStart), TenantID: tenantID,
+		}})
 	if err != nil {
 		return fmt.Errorf("activate tenant %s without a provider subscription: %w", tenantID, err)
 	}
@@ -437,52 +442,52 @@ var errPreviousBaseFeePaymentPending = errors.New("a payment of the previous bas
 // what that invoice still owes is unknown; the switch waits for it.
 var ErrBaseFeePaymentPending = errPreviousBaseFeePaymentPending
 
-// unusedBaseFeeReturn is what a switch to prepaid returned of the advance
+// unusedBaseFeeDisposition is what a switch to prepaid returned of the advance
 // base-fee invoice whose period it cut short.
-type unusedBaseFeeReturn struct {
+type unusedBaseFeeDisposition struct {
 	invoiceID      string
 	reducedCents   int64
 	forfeitedCents int64
 }
 
-// returnUnusedBaseFeeTx settles the old invoice when an operator moves to
+// settleUnusedBaseFeeTx settles the old invoice when an operator moves to
 // prepaid. Unpaid fees are reduced to their used share; retained paid fees are
 // forfeited, recorded on the invoice, and never become spendable balance.
-func returnUnusedBaseFeeTx(ctx context.Context, tx *sql.Tx, tenantID string, switchAt, now time.Time) (unusedBaseFeeReturn, error) {
+func settleUnusedBaseFeeTx(ctx context.Context, tx *sql.Tx, tenantID string, switchAt, now time.Time) (unusedBaseFeeDisposition, error) {
 	queries := purserdb.New(tx)
 	plan, err := planPreviousBaseFee(ctx, queries, tenantID, switchAt)
 	if err != nil {
-		return unusedBaseFeeReturn{}, err
+		return unusedBaseFeeDisposition{}, err
 	}
 	if !plan.found || plan.credit.invoiceID == "" {
-		return unusedBaseFeeReturn{}, nil
+		return unusedBaseFeeDisposition{}, nil
 	}
-	returned := unusedBaseFeeReturn{invoiceID: plan.credit.invoiceID, forfeitedCents: plan.credit.cents}
+	disposition := unusedBaseFeeDisposition{invoiceID: plan.credit.invoiceID, forfeitedCents: plan.credit.cents}
 	if plan.reduction != nil {
 		if err = reducePreviousBaseFeeInvoiceTx(ctx, tx, tenantID, *plan.reduction, now); err != nil {
-			return unusedBaseFeeReturn{}, err
+			return unusedBaseFeeDisposition{}, err
 		}
-		returned.reducedCents = plan.reduction.reducedCents
+		disposition.reducedCents = plan.reduction.reducedCents
 	}
 	details, err := json.Marshal(map[string]any{
-		"returned_from": switchAt,
-		"reduced":       decimal.New(returned.reducedCents, -2).StringFixed(2),
-		"credited":      decimal.Zero.StringFixed(2),
-		"forfeited":     decimal.New(returned.forfeitedCents, -2).StringFixed(2),
+		"unused_from": switchAt,
+		"reduced":     decimal.New(disposition.reducedCents, -2).StringFixed(2),
+		"credited":    decimal.Zero.StringFixed(2),
+		"forfeited":   decimal.New(disposition.forfeitedCents, -2).StringFixed(2),
 	})
 	if err != nil {
-		return unusedBaseFeeReturn{}, fmt.Errorf("marshal base-fee return: %w", err)
+		return unusedBaseFeeDisposition{}, fmt.Errorf("marshal base-fee disposition: %w", err)
 	}
 	rows, err := queries.MarkBaseFeeUnusedShareReturned(ctx, purserdb.MarkBaseFeeUnusedShareReturnedParams{
-		Details: details, InvoiceID: returned.invoiceID, TenantID: tenantID,
+		Details: details, InvoiceID: disposition.invoiceID, TenantID: tenantID,
 	})
 	if err != nil {
-		return unusedBaseFeeReturn{}, fmt.Errorf("record the base-fee return on invoice %s: %w", returned.invoiceID, err)
+		return unusedBaseFeeDisposition{}, fmt.Errorf("record the base-fee disposition on invoice %s: %w", disposition.invoiceID, err)
 	}
 	if rows != 1 {
-		return unusedBaseFeeReturn{}, fmt.Errorf("record the base-fee return: base-fee invoice %s not found", returned.invoiceID)
+		return unusedBaseFeeDisposition{}, fmt.Errorf("record the base-fee disposition: base-fee invoice %s not found", disposition.invoiceID)
 	}
-	return returned, nil
+	return disposition, nil
 }
 
 // previousBaseFee is what a new period's base-fee invoice does with the

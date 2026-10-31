@@ -141,6 +141,10 @@ func TestOperatorTierChangeCacheFailure_RealPG(t *testing.T) {
 				if _, err := db.Exec(`UPDATE purser.tenant_subscriptions SET stripe_subscription_id='sub',stripe_customer_id='customer' WHERE tenant_id=$1`, tenant); err != nil {
 					t.Fatal(err)
 				}
+				// The provider fixture proves a retained EUR20 payment at old-price.
+				if _, err := db.Exec(`UPDATE purser.billing_tiers SET base_price=20,stripe_price_id_monthly='old-price' WHERE id=$1`, oldTier); err != nil {
+					t.Fatal(err)
+				}
 				if _, err := db.Exec(`UPDATE purser.billing_tiers SET base_price=50,stripe_price_id_monthly='new-price' WHERE id=$1`, nextTier); err != nil {
 					t.Fatal(err)
 				}

@@ -116,7 +116,9 @@ LEFT JOIN purser.subscription_tier_upgrades upgrade
                 ELSE 'scheduled' END::text AS status,
            (subscription.free_fallback_failures + subscription.free_fallback_notice_failures)::integer AS attempts,
            NULLIF(concat_ws('; ', subscription.free_fallback_reason,
-               subscription.free_fallback_error, subscription.free_fallback_notice_error), '') AS last_error,
+               subscription.free_fallback_error, subscription.free_fallback_notice_error,
+               CASE WHEN subscription.free_fallback_notice_abandoned_at IS NOT NULL
+                    THEN 'Repair billing_email, then run frameworks admin billing recovery notice --tenant-id ' || subscription.tenant_id::text || ' --reason <reason>' END), '') AS last_error,
            subscription.free_fallback_at::timestamptz AS next_attempt_at,
            subscription.tenant_id::text AS tenant_id, ''::text AS reservation_id,
            NULL::timestamptz AS expires_at, 0::bigint AS amount_cents, ''::text AS currency,

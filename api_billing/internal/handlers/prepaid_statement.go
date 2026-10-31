@@ -125,7 +125,7 @@ func (jm *JobManager) ratePrepaidStatement(ctx context.Context, tier *billingpkg
 		return nil, fmt.Errorf("rate statement usage: %w", err)
 	}
 	if len(result.ManualReviewReasons) > 0 {
-		return nil, fmt.Errorf("statement cluster pricing is unresolved: %s", strings.Join(result.ManualReviewReasons, "; "))
+		return nil, billingBoundaryConditionf("statement cluster pricing is unresolved: %s; reconcile pricing for the closing period before retrying", strings.Join(result.ManualReviewReasons, "; "))
 	}
 	applyBaseFeeShare(result, phase)
 	run := &prepaidStatementRun{

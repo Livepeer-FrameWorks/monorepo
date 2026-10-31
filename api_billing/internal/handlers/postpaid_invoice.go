@@ -97,7 +97,7 @@ func (jm *JobManager) ratePostpaidInvoice(ctx context.Context, subscription purs
 		subscription.StripeSubscriptionID.Valid, subscription.MollieSubscriptionID.Valid,
 		subscription.StripeCustomerID.Valid && subscription.StripeCustomerID.String != "", subscription.HasMollieCustomer)
 	if err != nil {
-		return nil, fmt.Errorf("invoice finalization blocked by ambiguous collection provider: %w", err)
+		return nil, billingBoundaryConditionf("invoice finalization blocked by ambiguous collection provider: %v; select the correct collection provider before retrying", err)
 	}
 	ratingResult, err := jm.rateInvoiceForTenant(ctx, tenantID, phase, tier, true, baseProviderManaged, perClusterUsage, perClusterDimensioned)
 	if err != nil {
@@ -387,10 +387,10 @@ type PostpaidPhaseClose struct {
 	// elsewhere than the phase held under its own key, returned before the
 	// closing invoice takes the credit it uses.
 	releasedCredit invoiceCreditChange
-	// baseFeeReturn is what a move to prepaid returned of an advance base-fee
-	// invoice's unused share.
-	baseFeeReturn unusedBaseFeeReturn
-	closed        bool
+	// baseFeeDisposition records the reduction or forfeiture of the advance
+	// invoice's unused share at a move to prepaid.
+	baseFeeDisposition unusedBaseFeeDisposition
+	closed             bool
 }
 
 // settleCollectionCarryTx charges what the collection minimum deferred from
@@ -522,7 +522,7 @@ func prepareMonthlyPostpaidBoundary(ctx context.Context, db *sql.DB, logger logg
 }
 
 // PreparePostpaidGrantBoundary rates the closing phase at a grant change.
-// toPrepaid also settles deferred collection and unused advance fees into prepaid credit.
+// toPrepaid also settles deferred collection and records the unused advance-fee disposition.
 func PreparePostpaidGrantBoundary(ctx context.Context, db *sql.DB, logger logging.Logger, svc *Service, tenantID string, at time.Time, toPrepaid bool) (*PostpaidPhaseClose, error) {
 	return preparePostpaidPhaseClose(ctx, db, logger, svc, tenantID, at, toPrepaid, true)
 }
@@ -574,9 +574,9 @@ func preparePostpaidPhaseClose(ctx context.Context, db *sql.DB, logger logging.L
 		start: phaseStart, end: switchAt, chainFrom: chainFrom, periodEnd: phaseEnd,
 		receivedBefore: sql.NullTime{Time: switchAt, Valid: true},
 	}
-	if !grantBoundary {
-		// Provider changes rate all usage already received, including late reports
-		// for the closing phase. A grant's historic deadline keeps its own cutoff.
+	if !grantBoundary || switchAt.Equal(phaseEnd) {
+		// Complete months include all reports received before preparation.
+		// Only a historic midmonth grant split needs the grant deadline cutoff.
 		closing.phase.receivedBefore = sql.NullTime{Time: clock.DatabaseNow, Valid: true}
 	}
 	if closing.received, err = countPhaseReceived(ctx, queries, tenantID, closing.phase); err != nil {
@@ -597,7 +597,7 @@ func preparePostpaidPhaseClose(ctx context.Context, db *sql.DB, logger logging.L
 		return nil, err
 	}
 	if len(closing.run.rating.ManualReviewReasons) > 0 {
-		return nil, fmt.Errorf("the closing invoice's cluster pricing is unresolved: %s", strings.Join(closing.run.rating.ManualReviewReasons, "; "))
+		return nil, billingBoundaryConditionf("the closing invoice's cluster pricing is unresolved: %s; reconcile pricing for the closing period before retrying", strings.Join(closing.run.rating.ManualReviewReasons, "; "))
 	}
 	return closing, nil
 }
@@ -635,7 +635,7 @@ func (c *PostpaidPhaseClose) CommitTx(ctx context.Context, tx *sql.Tx) (bool, er
 		return false, nil
 	}
 	c.closed, c.result, c.releasedCredit = false, postpaidInvoiceResult{}, invoiceCreditChange{}
-	c.carriedCents, c.balanceAfter, c.baseFeeReturn = 0, 0, unusedBaseFeeReturn{}
+	c.carriedCents, c.balanceAfter, c.baseFeeDisposition = 0, 0, unusedBaseFeeDisposition{}
 	queries := purserdb.New(tx)
 	current, err := queries.GetSubscriptionForPhaseClose(ctx, c.tenantID)
 	if err != nil {
@@ -694,7 +694,7 @@ func (c *PostpaidPhaseClose) CommitTx(ctx context.Context, tx *sql.Tx) (bool, er
 		}
 	}
 	if c.toPrepaid {
-		if c.baseFeeReturn, err = returnUnusedBaseFeeTx(ctx, tx, c.tenantID, c.switchAt, time.Now().UTC()); err != nil {
+		if c.baseFeeDisposition, err = settleUnusedBaseFeeTx(ctx, tx, c.tenantID, c.switchAt, time.Now().UTC()); err != nil {
 			return false, err
 		}
 	}
@@ -736,13 +736,13 @@ func (c *PostpaidPhaseClose) AfterCommit(ctx context.Context) {
 			"balance_after": c.balanceAfter,
 		}).Info("Charged postpaid charges below the collection minimum to the prepaid balance at the switch to prepaid")
 	}
-	if c.baseFeeReturn.invoiceID != "" {
+	if c.baseFeeDisposition.invoiceID != "" {
 		c.jobs.logger.WithFields(logging.Fields{
 			"tenant_id":        c.tenantID,
-			"base_fee_invoice": c.baseFeeReturn.invoiceID,
-			"reduced_cents":    c.baseFeeReturn.reducedCents,
+			"base_fee_invoice": c.baseFeeDisposition.invoiceID,
+			"reduced_cents":    c.baseFeeDisposition.reducedCents,
 			"credited_cents":   int64(0),
-			"forfeited_cents":  c.baseFeeReturn.forfeitedCents,
+			"forfeited_cents":  c.baseFeeDisposition.forfeitedCents,
 		}).Info("Settled the unused advance base fee at the switch to prepaid")
 	}
 	c.jobs.logger.WithFields(logging.Fields{

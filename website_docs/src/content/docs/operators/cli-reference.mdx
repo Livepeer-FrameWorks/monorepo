@@ -2229,9 +2229,10 @@ Moving from postpaid to prepaid ends the postpaid plan at the change: its invoic
 up to the change is finalized then, with the usage reported until the change at the postpaid
 tier's prices and the base fee and monthly cluster fees for that part of the period, and collected
 like any invoice (off-session charge through the tenant's provider, or `record-payment` for a bank
-transfer). A base fee charged in advance for the period has its unused part, from the change on,
-returned to the prepaid balance. The prepaid period starts at the change and the prepaid balance
-pays usage reported after it, including late reports for earlier usage. Each plan pays the base fee
+transfer). For an operator move to prepaid, the unused share of an already-paid advance fee
+is forfeited and recorded on the invoice; it creates no spendable balance or cash refund.
+The unpaid share of an open advance-fee invoice is reduced to the amount earned. The prepaid
+period starts at the change and the prepaid balance pays usage reported after it, including late reports for earlier usage. Each plan pays the base fee
 only for its own part of the period, also across several changes. Drafts hold no credit, so the
 balance stays visible while the postpaid period runs; an invoice takes only the credit it uses, up
 to its total, when it is finalized. A scheduled downgrade is cleared.
