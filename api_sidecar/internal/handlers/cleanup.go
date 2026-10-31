@@ -420,36 +420,23 @@ func (cm *CleanupMonitor) extractArtifactHashFromPath(path string, _assetType st
 	return ""
 }
 
-// calculateCleanupPriority calculates cleanup priority for a clip
-// Lower priority = higher likelihood of deletion
+// calculateCleanupPriority ranks candidates for ascending eviction order.
 func (cm *CleanupMonitor) calculateCleanupPriority(clip ClipCleanupInfo) float64 {
-	now := time.Now()
+	return storageEvictionPriority(time.Now(), clip.CreatedAt, clip.LastAccessed, clip.SizeBytes, clip.AccessCount)
+}
 
-	// Age factor: older clips have lower priority (more likely to be deleted)
-	ageHours := now.Sub(clip.CreatedAt).Hours()
-	ageFactor := ageHours / 24.0 // Convert to days
-
-	// Size factor: larger clips have slightly lower priority
-	sizeMB := float64(clip.SizeBytes) / (1024 * 1024)
-	sizeFactor := sizeMB / 100.0 // Normalize to ~100MB
-
-	// Access factor: less accessed clips have lower priority
-	accessFactor := float64(clip.AccessCount + 1) // +1 to avoid division by zero
-
-	// Recent access factor: recently accessed clips have higher priority
-	lastAccessHours := now.Sub(clip.LastAccessed).Hours()
-	recentAccessFactor := 1.0
-	if lastAccessHours < 24 {
-		recentAccessFactor = 10.0 // Much higher priority if accessed in last 24h
-	} else if lastAccessHours < 168 { // 7 days
-		recentAccessFactor = 2.0
+// storageEvictionPriority protects frequent and recent accesses. Age and size
+// lower the score, so cold content is reclaimed first by both storage paths.
+func storageEvictionPriority(now, createdAt, lastAccessed time.Time, sizeBytes uint64, accessCount int) float64 {
+	ageDays := max(now.Sub(createdAt).Hours()/24, 0)
+	sizeGB := float64(sizeBytes) / (1024 * 1024 * 1000)
+	recentFactor := 1.0
+	if now.Sub(lastAccessed) < 24*time.Hour {
+		recentFactor = 10
+	} else if now.Sub(lastAccessed) < 7*24*time.Hour {
+		recentFactor = 2
 	}
-
-	// Combined priority: lower = more likely to be deleted
-	// Formula: (age + size) / (access_count * recent_access_bonus)
-	priority := (ageFactor + sizeFactor*0.1) / (accessFactor * recentAccessFactor)
-
-	return priority
+	return (max(float64(accessCount), 0) + 1) * recentFactor / (1 + ageDays + sizeGB)
 }
 
 // cleanupClip removes an artifact from storage (clip, dvr, or vod)

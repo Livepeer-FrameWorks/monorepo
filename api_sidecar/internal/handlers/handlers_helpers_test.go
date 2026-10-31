@@ -207,8 +207,8 @@ func TestCalculateFreezePriorityRecentAccess(t *testing.T) {
 	recentPriority := sm.calculateFreezePriority(recent)
 	stalePriority := sm.calculateFreezePriority(stale)
 
-	if recentPriority >= stalePriority {
-		t.Fatalf("expected recent access to reduce freeze priority: recent=%f stale=%f", recentPriority, stalePriority)
+	if recentPriority <= stalePriority {
+		t.Fatalf("expected recent access to protect content from freezing: recent=%f stale=%f", recentPriority, stalePriority)
 	}
 }
 

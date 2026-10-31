@@ -92,11 +92,10 @@ func TestCalculateCleanupPriority_OldUnaccessed(t *testing.T) {
 		t.Fatalf("expected positive priority, got %f", priority)
 	}
 
-	// ageFactor = 48/24 = 2.0, sizeFactor = 10/100 = 0.1
-	// accessFactor = 1, recentAccessFactor = 1.0 (last access > 7d ago)
-	// expected ≈ (2.0 + 0.1*0.1) / (1 * 1.0) = 2.01
-	if math.Abs(priority-2.01) > 0.05 {
-		t.Fatalf("expected priority ≈ 2.01 for old unaccessed clip, got %f", priority)
+	// Two days old, 10 MB, with no recent access or access count.
+	want := 1 / 3.01
+	if math.Abs(priority-want) > 0.005 {
+		t.Fatalf("expected priority ≈ %f for old unaccessed clip, got %f", want, priority)
 	}
 }
 
@@ -121,8 +120,8 @@ func TestCalculateCleanupPriority_RecentlyAccessed(t *testing.T) {
 	recentPriority := cm.calculateCleanupPriority(recent)
 
 	ratio := recentPriority / basePriority
-	if math.Abs(ratio-0.1) > 0.01 {
-		t.Fatalf("expected recently accessed priority to be 10x higher (ratio ≈ 0.1), got ratio %f (base=%f, recent=%f)",
+	if math.Abs(ratio-10) > 0.01 {
+		t.Fatalf("expected recently accessed priority to be 10x higher (ratio ≈ 10), got ratio %f (base=%f, recent=%f)",
 			ratio, basePriority, recentPriority)
 	}
 }
@@ -147,8 +146,8 @@ func TestCalculateCleanupPriority_HighAccessCount(t *testing.T) {
 	}
 	highPriority := cm.calculateCleanupPriority(high)
 
-	if highPriority >= lowPriority {
-		t.Fatalf("expected high access count to yield higher priority (kept longer), got high=%f >= low=%f",
+	if highPriority <= lowPriority {
+		t.Fatalf("expected high access count to yield higher priority (kept longer), got high=%f <= low=%f",
 			highPriority, lowPriority)
 	}
 }
@@ -173,12 +172,12 @@ func TestCalculateCleanupPriority_LargeFile(t *testing.T) {
 	}
 	largePriority := cm.calculateCleanupPriority(large)
 
-	if largePriority <= smallPriority {
-		t.Fatalf("expected large file to have slightly higher priority number (size increases numerator), got large=%f <= small=%f",
+	if largePriority >= smallPriority {
+		t.Fatalf("expected large file to have lower eviction score, got large=%f >= small=%f",
 			largePriority, smallPriority)
 	}
 
-	diff := largePriority - smallPriority
+	diff := smallPriority - largePriority
 	if diff > 1.0 {
 		t.Fatalf("expected size difference to be minor (< 1.0), got %f", diff)
 	}

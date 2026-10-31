@@ -1371,26 +1371,7 @@ func (sm *StorageManager) extractHashFromPath(path string) string {
 }
 
 func (sm *StorageManager) calculateFreezePriority(asset FreezeCandidate) float64 {
-	now := time.Now()
-
-	ageHours := now.Sub(asset.CreatedAt).Hours()
-	ageFactor := ageHours / 24.0
-
-	sizeMB := float64(asset.SizeBytes) / (1024 * 1024)
-	sizeFactor := sizeMB / 100.0
-
-	accessFactor := float64(asset.AccessCount + 1)
-
-	lastAccessHours := now.Sub(asset.LastAccessed).Hours()
-	recentAccessFactor := 1.0
-	if lastAccessHours < 24 {
-		recentAccessFactor = 10.0
-	} else if lastAccessHours < 168 {
-		recentAccessFactor = 2.0
-	}
-
-	priority := (ageFactor + sizeFactor*0.1) / (accessFactor * recentAccessFactor)
-	return priority
+	return storageEvictionPriority(time.Now(), asset.CreatedAt, asset.LastAccessed, asset.SizeBytes, asset.AccessCount)
 }
 
 // fallbackCleanup performs deletion-based cleanup when S3 is not configured
