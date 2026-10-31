@@ -166,7 +166,7 @@ func (s *Service) handleStripeSetupCheckoutCompleted(ctx context.Context, sessio
 		return err
 	}
 	if err := s.activateAdvanceBilledTenant(ctx, tenantID, tierID, "stripe", customerID, providerReceiptTime(ctx), receiptID); err != nil {
-		if errors.Is(err, subscriptions.ErrCheckoutExpired) {
+		if errors.Is(err, subscriptions.ErrCheckoutCompensationQueued) {
 			return nil
 		}
 		return err
@@ -438,11 +438,11 @@ const unusedBaseFeeReductionLineKey = "unused_base_fee_reduction"
 var errPreviousBaseFeePaymentPending = errors.New("a payment of the previous base-fee invoice is still pending")
 
 // ErrBaseFeePaymentPending means a payment of the advance base-fee invoice
-// whose unused share a switch to prepaid returns has not resolved yet, so
+// whose unused share a switch to prepaid settles has not resolved yet, so
 // what that invoice still owes is unknown; the switch waits for it.
 var ErrBaseFeePaymentPending = errPreviousBaseFeePaymentPending
 
-// unusedBaseFeeDisposition is what a switch to prepaid returned of the advance
+// unusedBaseFeeDisposition records reduction and forfeit of the advance
 // base-fee invoice whose period it cut short.
 type unusedBaseFeeDisposition struct {
 	invoiceID      string
@@ -740,7 +740,7 @@ func consumePreviousBaseFee(ctx context.Context, queries *purserdb.Queries, tena
 		return nil
 	}
 	details, err := json.Marshal(map[string]any{
-		"returned_from": at, "replacement_invoice_id": replacementID,
+		"unused_from": at, "replacement_invoice_id": replacementID,
 		"credited":  decimal.New(applied.cents, -2).StringFixed(2),
 		"forfeited": decimal.New(applied.forfeitedCents, -2).StringFixed(2),
 	})

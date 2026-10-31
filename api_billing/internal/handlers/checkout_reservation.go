@@ -121,7 +121,7 @@ func (s *Service) expireClaimedCheckoutReservation(ctx context.Context, expiry c
 			if !expiry.Force && time.Now().Before(r.ExpiresAt.Time) {
 				return errors.New("checkout reservation deadline has not elapsed")
 			}
-			preCall = r.SubmissionState == "prepared" && len(r.ProviderRequest) == 0 && !hasCheckoutProviderReference(r)
+			preCall = r.SubmissionState == "prepared" && len(r.ProviderRequest) == 0 && !hasCheckoutPurchaseReference(r)
 			inspect = !preCall && !r.RecoveryStartedAt.Valid && r.Status != "expired" && r.Status != "cancelled" && r.Status != "terminal_failed"
 		}
 		return nil
@@ -211,6 +211,16 @@ func (s *Service) expireClaimedCheckoutReservation(ctx context.Context, expiry c
 			return tq.MarkHistoricalMollieDeliveryAmbiguous(ctx, purserdb.MarkHistoricalMollieDeliveryAmbiguousParams{TenantID: r.TenantID, IntentID: r.ID})
 		}
 		if inspect && reconcile != nil {
+			if snapshot.Current.Status == "cancelled" {
+				if clearErr := tq.ClearEndedCheckoutSubscriptions(ctx, purserdb.ClearEndedCheckoutSubscriptionsParams{
+					TenantID:         r.TenantID,
+					StripeID:         snapshot.Current.StripeSubscriptionID.String,
+					MollieID:         snapshot.Current.MollieSubscriptionID.String,
+					IncomingStripeID: incomingSubscriptionID,
+				}); clearErr != nil {
+					return clearErr
+				}
+			}
 			tierID, tierErr := tq.GetSelfServiceCheckoutTier(ctx, purserdb.GetSelfServiceCheckoutTierParams{TenantID: r.TenantID, IntentID: r.ID})
 			if tierErr != nil && !errors.Is(tierErr, sql.ErrNoRows) {
 				return tierErr
@@ -386,17 +396,6 @@ func (s *Service) inspectCheckoutForRecovery(ctx context.Context, exec purserdb.
 	if !hasCheckoutProviderReference(r) {
 		return nil, nil
 	}
-	tierID := ""
-	if r.Purpose == "tenant_subscription_checkout" || r.Purpose == "mollie_first_payment" || r.Purpose == "mollie_subscription_create" {
-		var readErr error
-		tierID, readErr = purserdb.New(exec).GetSelfServiceCheckoutTier(ctx, purserdb.GetSelfServiceCheckoutTierParams{TenantID: r.TenantID, IntentID: r.ID})
-		if readErr != nil {
-			return nil, readErr
-		}
-		if tierID == "" {
-			return nil, nil
-		}
-	}
 
 	switch r.Provider {
 	case "stripe":
@@ -438,14 +437,6 @@ func (s *Service) inspectCheckoutForRecovery(ctx context.Context, exec purserdb.
 		}
 		if conflict {
 			return nil, nil
-		}
-		if tierID != "" {
-			if eligibilityErr := subscriptions.CheckSelfServiceActivation(ctx, exec, r.TenantID, tierID, "stripe", incomingID); eligibilityErr != nil {
-				if errors.Is(eligibilityErr, sql.ErrNoRows) || subscriptions.IsPricingRefusal(eligibilityErr) {
-					return nil, nil
-				}
-				return nil, eligibilityErr
-			}
 		}
 		if sess.Subscription != nil && sess.Subscription.ID != "" {
 			sub, subscriptionErr := s.stripeClient.GetSubscription(ctx, sess.Subscription.ID)
@@ -516,14 +507,6 @@ func (s *Service) inspectCheckoutForRecovery(ctx context.Context, exec purserdb.
 		}
 		if conflict {
 			return nil, nil
-		}
-		if tierID != "" {
-			if eligibilityErr := subscriptions.CheckSelfServiceActivation(ctx, exec, r.TenantID, tierID, "mollie", ""); eligibilityErr != nil {
-				if errors.Is(eligibilityErr, sql.ErrNoRows) || subscriptions.IsPricingRefusal(eligibilityErr) {
-					return nil, nil
-				}
-				return nil, eligibilityErr
-			}
 		}
 		if at, completed := mollieCheckoutCompletion(r, payment); completed {
 			*completedAt = at
@@ -762,6 +745,12 @@ func (s *Service) reconcileRecoveredStripeCheckout(ctx context.Context, r purser
 		return ErrAwaitingProviderSettlement
 	}
 	return nil
+}
+
+// Customer creation cannot collect money. Only purchase references imply that
+// a prepared request may have reached the provider's checkout endpoint.
+func hasCheckoutPurchaseReference(r purserdb.GetProviderCheckoutReservationRow) bool {
+	return r.ProviderSessionID.String != "" || r.ProviderPaymentID.String != "" || r.ProviderSubscriptionID.String != ""
 }
 
 func hasCheckoutProviderReference(r purserdb.GetProviderCheckoutReservationRow) bool {

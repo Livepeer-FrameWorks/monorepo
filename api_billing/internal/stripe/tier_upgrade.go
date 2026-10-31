@@ -42,10 +42,10 @@ func (c *Client) UpgradeMonthlySubscription(ctx context.Context, request billing
 	if request.LocateOnly {
 		return billing.TierUpgradeReceipt{}, fmt.Errorf("%w: no provider update exists for this purchase", billing.ErrTierUpgradeRejected)
 	}
-	if item.Quantity != 1 || item.Price == nil || item.Price.UnitAmount != request.OldBaseCents ||
+	if item.Quantity != 1 || item.Price == nil || item.Price.UnitAmount < 0 || item.Price.UnitAmount > request.BaseCents ||
 		item.Price.Currency != stripe.CurrencyEUR || item.Price.Recurring == nil ||
 		item.Price.Recurring.Interval != stripe.PriceRecurringIntervalMonth || item.Price.Recurring.IntervalCount != 1 {
-		return billing.TierUpgradeReceipt{}, fmt.Errorf("%w: the previous Stripe price differs from the accepted monthly EUR fee", billing.ErrTierUpgradeRejected)
+		return billing.TierUpgradeReceipt{}, fmt.Errorf("%w: the native Stripe fee must be one monthly EUR unit no higher than the replacement fee", billing.ErrTierUpgradeRejected)
 	}
 	if sub.Status != stripe.SubscriptionStatusActive && sub.Status != stripe.SubscriptionStatusTrialing {
 		return billing.TierUpgradeReceipt{}, fmt.Errorf("%w: Stripe subscription is %s", billing.ErrTierUpgradeRejected, sub.Status)
@@ -56,8 +56,11 @@ func (c *Client) UpgradeMonthlySubscription(ctx context.Context, request billing
 	if sub.LatestInvoice != nil && sub.LatestInvoice.Status != stripe.InvoiceStatusPaid {
 		return billing.TierUpgradeReceipt{}, errors.Join(billing.ErrTierUpgradeRejected, billing.ErrTierUpgradeUnsettled)
 	}
-	if request.OldBaseCents > 0 && (sub.LatestInvoice == nil || sub.LatestInvoice.AmountPaid <= 0) {
+	if item.Price.UnitAmount > 0 && (sub.LatestInvoice == nil || sub.LatestInvoice.AmountPaid <= 0) {
 		return billing.TierUpgradeReceipt{}, fmt.Errorf("%w: the previous paid fee cannot be established from Stripe's latest invoice; reconcile its payment before upgrading", billing.ErrTierUpgradeRejected)
+	}
+	if err = validateStripePaidMonthlyBase(ctx, sub, item); err != nil {
+		return billing.TierUpgradeReceipt{}, err
 	}
 	if sub.LatestInvoice != nil && sub.LatestInvoice.AmountPaid > 0 {
 		if err = retainedUpgradeFee(ctx, sub.LatestInvoice.ID); err != nil {
@@ -93,6 +96,59 @@ func (c *Client) UpgradeMonthlySubscription(ctx context.Context, request billing
 		return billing.TierUpgradeReceipt{}, err
 	}
 	return stripeUpgradeReceipt(updated)
+}
+
+// Native proration uses the subscriber's actual price, which may predate the
+// current catalog. Bind it to the paid invoice's full monthly base line rather
+// than allowing an unpaid price edit or an unrelated usage payment as evidence.
+func validateStripePaidMonthlyBase(ctx context.Context, sub *stripe.Subscription, item *stripe.SubscriptionItem) error {
+	reject := func() error {
+		return fmt.Errorf("%w: the native monthly fee has no matching undiscounted paid base line; reconcile its invoice before upgrading", billing.ErrTierUpgradeRejected)
+	}
+	if len(sub.Discounts) > 0 || len(item.Discounts) > 0 {
+		return reject()
+	}
+	if item.Price.UnitAmount == 0 {
+		return nil
+	}
+	if sub.LatestInvoice == nil || sub.LatestInvoice.ID == "" {
+		return reject()
+	}
+	lines := sub.LatestInvoice.Lines
+	if lines == nil || lines.HasMore {
+		params := &stripe.InvoiceListLinesParams{Invoice: stripe.String(sub.LatestInvoice.ID)}
+		params.Context = ctx
+		iter := invoice.ListLines(params)
+		lines = &stripe.InvoiceLineItemList{}
+		for iter.Next() {
+			lines.Data = append(lines.Data, iter.InvoiceLineItem())
+		}
+		if err := iter.Err(); err != nil {
+			return err
+		}
+	}
+	matches := 0
+	for _, line := range lines.Data {
+		if line.Pricing == nil || line.Pricing.PriceDetails == nil || line.Pricing.PriceDetails.Price == nil || line.Pricing.PriceDetails.Price.ID != item.Price.ID ||
+			line.Parent == nil || line.Parent.SubscriptionItemDetails == nil {
+			continue
+		}
+		parent := line.Parent.SubscriptionItemDetails
+		if parent.Proration || parent.Subscription != sub.ID || parent.SubscriptionItem != item.ID ||
+			line.Period == nil || line.Period.Start != item.CurrentPeriodStart || line.Period.End != item.CurrentPeriodEnd ||
+			line.Period.End <= line.Period.Start {
+			continue
+		}
+		if line.Quantity != 1 || line.Currency != stripe.CurrencyEUR || line.Amount != item.Price.UnitAmount ||
+			len(line.DiscountAmounts) > 0 || len(line.PretaxCreditAmounts) > 0 {
+			return reject()
+		}
+		matches++
+	}
+	if matches != 1 {
+		return reject()
+	}
+	return nil
 }
 
 // Renewal changes latest_invoice and the subscription item's current period.

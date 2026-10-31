@@ -194,12 +194,11 @@ invoice (flagged `closes_postpaid_phase`), also a draft that started elsewhere
 than the phase (its credit returns first, under its own key), so no draft
 stays open; the prepaid period starts at the switch and ends where the
 postpaid period would have. An advance base-fee invoice of the period has the
-unused share from the switch returned once (`returnUnusedBaseFeeTx`, the
-tier-change rule): a paid one credits it to the prepaid balance
-(`reference_type = 'base_fee_unused_share'`), an unpaid one is reduced to its
-used share; the invoice records `unused_share_returned`, so no later base-fee
-invoice of the period credits it again. A payment of it still pending refuses
-the switch with `FailedPrecondition`.
+unused share settled once by `settleUnusedBaseFeeTx`: an unpaid invoice is
+reduced to its used share; unused paid fees are forfeited with an invoice audit
+record and never become spendable prepaid credit. The shipped
+`unused_share_returned` ledger key prevents applying the same share again.
+A payment still pending refuses the switch with `FailedPrecondition`.
 The invoice is collected like any postpaid invoice: email, `invoice_created`,
 and after commit the off-session charge through the subscription's provider,
 or payment by transfer (`AdminRecordInvoicePayment`). Charges the collection
@@ -240,7 +239,10 @@ or provider contract, rather than the tier's current list price or a grant-split
 usage phase. It is a billing credit, not a cash refund. An in-flight payment of the
 previous fee refuses the upgrade before provider pricing changes. Stripe also
 requires its previous subscription invoice to be paid before issuing a proration
-credit. An ambiguous provider update or incomplete metering keeps the upgrade
+credit. A grandfathered Stripe price uses the monthly EUR base line actually
+paid for that native subscription and item, rather than today's catalog price.
+Missing or ambiguous payment evidence refuses the upgrade.
+An ambiguous provider update or incomplete metering keeps the upgrade
 pending. Retrying the same tier
 uses the original upgrade identity and boundary; an already-applied tier is a
 no-op. Provider metadata locates a price change whose response was lost, and
@@ -392,7 +394,10 @@ required billing boundary before replacing the arrangement.
 A definitive Mollie activation refusal queues immediate compensation for paid,
 unused first-payment funding. The subscription lock excludes concurrent activation;
 activated funding and established native subscriptions are never refunded by that
-refusal. Transient provider reads leave funding available for retry.
+refusal. Repairable conditions, including incomplete billing details, unpaid invoices,
+pending checkout or fallback, invalid mandates and changed request credentials,
+keep funding available for retry. Compensation is limited to eligibility,
+closure, an outstanding grant or a removed tier.
 
 Checkout reserves its durable provider intent under the same lock before any
 external call. Grant creation refuses while Stripe checkout or Mollie first

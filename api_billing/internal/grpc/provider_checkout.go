@@ -19,7 +19,7 @@ import (
 func (s *PurserServer) requireProviderCheckout(ctx context.Context, tenantID string) error {
 	result, err := subscriptions.TransitionProvider(ctx, s.db, subscriptions.ProviderChange{TenantID: tenantID, Operation: subscriptions.ProviderCheckout})
 	if subscriptions.IsPricingRefusal(err) {
-		return status.Error(codes.FailedPrecondition, err.Error())
+		return checkoutPolicyStatus(codes.FailedPrecondition, err.Error(), err)
 	}
 	if err != nil {
 		return status.Errorf(codes.Internal, "check provider checkout: %v", err)
@@ -104,5 +104,5 @@ func checkoutRequestError(err error) error {
 	if errors.Is(err, subscriptions.ErrCheckoutExpired) || subscriptions.IsPricingRefusal(err) || errors.Is(err, subscriptions.ErrCheckoutRequestChanged) {
 		code = codes.FailedPrecondition
 	}
-	return status.Errorf(code, "retain checkout request: %v", err)
+	return checkoutPolicyStatus(code, fmt.Sprintf("retain checkout request: %v", err), err)
 }

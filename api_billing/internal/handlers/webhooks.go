@@ -1604,7 +1604,7 @@ func (s *Service) handleMolliePaymentWebhook(parentCtx context.Context, paymentI
 			}
 			mandateParams := &purserdb.UpsertMollieMandateParams{TenantID: tenantID, MollieCustomerID: info.MollieCustomerID, MollieMandateID: info.MollieMandateID, Status: info.Status, Method: info.Method, Details: details, CreatedAt: sql.NullTime{Time: info.CreatedAt, Valid: !info.CreatedAt.IsZero()}}
 			if activateErr := s.activateAdvanceBilledTenantWithMandate(ctx, tenantID, mollieMetadataString(payment.Metadata, "tier_id"), "mollie", "", providerReceiptTime(ctx), receiptID, mandateParams); activateErr != nil {
-				if errors.Is(activateErr, subscriptions.ErrCheckoutExpired) {
+				if errors.Is(activateErr, subscriptions.ErrCheckoutCompensationQueued) {
 					return eventID, nil
 				}
 				return "", activateErr
@@ -1613,7 +1613,7 @@ func (s *Service) handleMolliePaymentWebhook(parentCtx context.Context, paymentI
 		}
 
 		if completionErr := s.completeMollieFirstPayment(ctx, tenantID, payment.ID, mollieMetadataString(payment.Metadata, "checkout_reservation_id"), info); completionErr != nil {
-			if errors.Is(completionErr, subscriptions.ErrCheckoutExpired) {
+			if errors.Is(completionErr, subscriptions.ErrCheckoutCompensationQueued) {
 				return eventID, nil
 			}
 			return "", completionErr

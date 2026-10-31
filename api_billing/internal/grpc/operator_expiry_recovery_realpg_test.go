@@ -54,6 +54,9 @@ func TestOperatorGrantExpiryFailuresDoNotStarveLaterTenants_RealPG(t *testing.T)
 	if count, err := purserdb.New(db).CountRepeatedOperatorGrantExpiryFailures(ctx); err != nil || count != 0 {
 		t.Fatalf("one failed attempt counted as repeated: %d,%v", count, err)
 	}
+	if due, err := purserdb.New(db).ListExpiredOperatorGrants(ctx); err != nil || len(due) != 0 {
+		t.Fatalf("failed grants bypassed the five-minute retry window: due=%d err=%v", len(due), err)
+	}
 	var duplicateTenant string
 	var duplicateGrant time.Time
 	if err := db.QueryRow(`SELECT s.tenant_id::text,g.granted_at FROM purser.subscription_operator_grants g JOIN purser.tenant_subscriptions s ON s.id=g.subscription_id WHERE g.expiry_error IS NOT NULL LIMIT 1`).Scan(&duplicateTenant, &duplicateGrant); err != nil {

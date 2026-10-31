@@ -363,7 +363,7 @@ type PostpaidPhaseClose struct {
 	grantBoundary bool
 	// monthlyCatchup advances Mollie's invoice anchor without charging a new term.
 	monthlyCatchup bool
-	// toPrepaid settles deferred collection and unused advance fees into prepaid credit.
+	// toPrepaid collects deferred charges and forfeits unused paid advance fees.
 	toPrepaid    bool
 	jobs         *JobManager
 	tenantID     string

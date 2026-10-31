@@ -269,17 +269,15 @@ func (s *PurserServer) adminAssignTierOnce(ctx context.Context, tenantID, tierNa
 			return txStatusErrorf(upgradeErr, codes.Internal, "check tier upgrade fence: %v", upgradeErr)
 		}
 
-		// Preserve native fee evidence until its paid term ends before detaching
-		// an ended collector.
-		// A live native subscription still owns its cancellation obligation.
+		// Preserve an ended collector's fee evidence until its paid term ends.
+		// A live subscription still owns its cancellation obligation.
 		pricing, lockErr := queries.LockTenantSubscriptionForProviderChange(ctx, tenantID)
 		if lockErr != nil {
 			return txStatusErrorf(lockErr, codes.Internal, "read fallback stop fence: %v", lockErr)
 		}
 		retainedNative := pricing.StripeSubscriptionID.String != "" || pricing.MollieSubscriptionID.String != ""
 		preserveCancellation := grant != nil && !grant.clearFallback && retainedNative
-		if pricing.FreeFallbackProviderEndedAt.Valid &&
-			retainedNative {
+		if pricing.FreeFallbackProviderEndedAt.Valid && retainedNative {
 			var paidUntil time.Time
 			paidErr := sql.ErrNoRows
 			if retainedProvider != nil {

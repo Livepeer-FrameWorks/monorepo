@@ -62,7 +62,13 @@ func (f *upgradeProviderFixture) serve(t *testing.T, w http.ResponseWriter, r *h
 	case "GET /v1/invoices":
 		respond(map[string]any{"object": "list", "data": []any{map[string]any{"id": "upgrade-invoice", "billing_reason": "subscription_update", "parent": map[string]any{"type": "subscription_details", "subscription_details": map[string]any{"metadata": f.stripeMetadata, "subscription": "sub"}}, "lines": map[string]any{"object": "list", "has_more": false, "data": []any{map[string]any{"id": "base", "amount": 5000, "pricing": map[string]any{"price_details": map[string]any{"price": "new-price"}}, "period": map[string]any{"start": f.start.Unix(), "end": f.end.Unix()}}}}}}})
 	case "GET /v1/invoice_payments":
+		if r.URL.Query().Get("invoice") == "upgrade-invoice" {
+			respond(map[string]any{"object": "list", "data": []any{map[string]any{"id": "upgrade-payment", "amount_paid": 5000, "payment": map[string]any{"type": "charge", "charge": "upgrade-charge"}}}})
+			return
+		}
 		respond(map[string]any{"object": "list", "data": []any{map[string]any{"id": "old-payment", "amount_paid": 2000, "payment": map[string]any{"type": "charge", "charge": "old-charge"}}}})
+	case "GET /v1/charges/upgrade-charge":
+		respond(map[string]any{"id": "upgrade-charge", "amount": 5000, "currency": "eur", "amount_refunded": 0, "refunded": false, "disputed": false})
 	case "GET /v1/charges/old-charge":
 		respond(map[string]any{"id": "old-charge", "amount": 2000, "amount_refunded": 0, "refunded": false, "disputed": false})
 	case "GET /v1/prices/new-price":
@@ -101,12 +107,19 @@ func (f *upgradeProviderFixture) serve(t *testing.T, w http.ResponseWriter, r *h
 				return
 			}
 		}
+		fee, invoiceID := 2000, "old-invoice"
 		if f.stripeMetadata["billing_tier_upgrade_id"] != "" {
-			price = "new-price"
+			price, fee, invoiceID = "new-price", 5000, "upgrade-invoice"
+		}
+		baseLine := map[string]any{
+			"id": "paid-base", "amount": fee, "currency": "eur", "quantity": 1,
+			"parent":  map[string]any{"type": "subscription_item_details", "subscription_item_details": map[string]any{"subscription": "sub", "subscription_item": "item", "proration": false}},
+			"pricing": map[string]any{"price_details": map[string]any{"price": price}},
+			"period":  map[string]any{"start": f.start.Unix(), "end": f.end.Unix()},
 		}
 		respond(map[string]any{"id": "sub", "object": "subscription", "customer": "customer", "status": "active", "metadata": f.stripeMetadata,
-			"latest_invoice": map[string]any{"id": "old-invoice", "object": "invoice", "status": invoiceStatus, "amount_paid": 2000},
-			"items":          map[string]any{"object": "list", "data": []any{map[string]any{"id": "item", "object": "subscription_item", "quantity": 1, "price": map[string]any{"id": price, "object": "price", "unit_amount": 2000, "currency": "eur", "recurring": map[string]any{"interval": "month", "interval_count": 1}}, "current_period_start": f.start.Unix(), "current_period_end": f.end.Unix()}}}})
+			"latest_invoice": map[string]any{"id": invoiceID, "object": "invoice", "status": invoiceStatus, "amount_paid": fee, "lines": map[string]any{"data": []any{baseLine}}},
+			"items":          map[string]any{"object": "list", "data": []any{map[string]any{"id": "item", "object": "subscription_item", "quantity": 1, "price": map[string]any{"id": price, "object": "price", "unit_amount": fee, "currency": "eur", "recurring": map[string]any{"interval": "month", "interval_count": 1}}, "current_period_start": f.start.Unix(), "current_period_end": f.end.Unix()}}}})
 	case "POST /v1/payment_intents":
 		if err := r.ParseForm(); err != nil {
 			t.Error(err)
@@ -193,7 +206,7 @@ func (tr upgradeMollieTransport) RoundTrip(request *http.Request) (*http.Respons
 }
 
 func TestTierUpgradeProviders_RealPG(t *testing.T) {
-	for _, mode := range []string{"advance Stripe", "advance missing invoice", "fixed Stripe", "fixed Mollie", "Mollie cancellation after provider receipt", "lost Stripe response", "metering delay", "cancelled subscription during metering wait", "cancelled subscription after advance receipt", "account closure after advance receipt", "refusal write failure", "stale Stripe price", "unpaid Stripe fee", "rejected price transaction retry", "Stripe rounded grant boundary", "Stripe same second callback", "unpaid Mollie renewal", "paid Mollie renewal before rollover", "declined upgrade with scheduled downgrade", "operator cancels metering wait", "operator completes lost Stripe response"} {
+	for _, mode := range []string{"advance Stripe", "advance missing invoice", "fixed Stripe", "grandfathered Stripe price", "fixed Mollie", "Mollie cancellation after provider receipt", "lost Stripe response", "metering delay", "cancelled subscription during metering wait", "cancelled subscription after advance receipt", "account closure after advance receipt", "refusal write failure", "stale Stripe price", "unpaid Stripe fee", "rejected price transaction retry", "Stripe rounded grant boundary", "Stripe same second callback", "unpaid Mollie renewal", "paid Mollie renewal before rollover", "declined upgrade with scheduled downgrade", "operator cancels metering wait", "operator completes lost Stripe response"} {
 		t.Run(mode, func(t *testing.T) {
 			db := startOperatorGrantDatabase(t)
 			if strings.Contains(t.Name(), "_RealYugabyte") {
@@ -281,6 +294,9 @@ VALUES ($1,'paid',20,20,NOW(),$2,$3,2500,'USD',1.25,CURRENT_DATE,NOW())`, tenant
 			}
 			if mode == "metering delay" || mode == "cancelled subscription during metering wait" || mode == "operator cancels metering wait" {
 				exec(`UPDATE purser.billing_tiers SET metering_enabled=true WHERE id IN ($1,$2)`, oldTier, newTier)
+			}
+			if mode == "grandfathered Stripe price" {
+				exec(`UPDATE purser.billing_tiers SET base_price=30 WHERE id=$1`, oldTier)
 			}
 			if mode == "stale Stripe price" || mode == "refusal write failure" || mode == "declined upgrade with scheduled downgrade" {
 				exec(`UPDATE purser.billing_tiers SET base_price=60 WHERE id=$1`, newTier)

@@ -9,6 +9,35 @@ import (
 	"context"
 )
 
+const clearEndedCheckoutSubscriptions = `-- name: ClearEndedCheckoutSubscriptions :exec
+UPDATE purser.tenant_subscriptions
+SET stripe_subscription_id = CASE WHEN COALESCE(stripe_subscription_id, '') = $1::text
+                                      AND COALESCE(stripe_subscription_id, '') <> $2::text
+                                 THEN NULL ELSE stripe_subscription_id END,
+    mollie_subscription_id = CASE WHEN COALESCE(mollie_subscription_id, '') = $3::text
+                                 THEN NULL ELSE mollie_subscription_id END
+WHERE tenant_id = $4::text::uuid AND status = 'cancelled'
+`
+
+type ClearEndedCheckoutSubscriptionsParams struct {
+	StripeID         string `db:"stripe_id" json:"stripe_id"`
+	IncomingStripeID string `db:"incoming_stripe_id" json:"incoming_stripe_id"`
+	MollieID         string `db:"mollie_id" json:"mollie_id"`
+	TenantID         string `db:"tenant_id" json:"tenant_id"`
+}
+
+// Recovery has verified that cancelled prior collectors are no longer live.
+// The caller holds the subscription lock and rechecks its inspection snapshot.
+func (q *Queries) ClearEndedCheckoutSubscriptions(ctx context.Context, arg ClearEndedCheckoutSubscriptionsParams) error {
+	_, err := q.db.ExecContext(ctx, clearEndedCheckoutSubscriptions,
+		arg.StripeID,
+		arg.IncomingStripeID,
+		arg.MollieID,
+		arg.TenantID,
+	)
+	return err
+}
+
 const getSelfServiceCheckoutTier = `-- name: GetSelfServiceCheckoutTier :one
 SELECT COALESCE(local_reference_id::text, '')::text AS tier_id
 FROM purser.payment_provider_intents

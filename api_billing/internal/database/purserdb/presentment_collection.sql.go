@@ -179,7 +179,7 @@ type FindOverlappedBaseFeeInvoiceParams struct {
 
 // The base-fee invoice of the period a tier change cut short: it started
 // before period_start and would have run past it. An unused share already
-// returned to prepaid or credited to a replacement invoice is not found again.
+// forfeited or credited to a replacement invoice is not found again.
 func (q *Queries) FindOverlappedBaseFeeInvoice(ctx context.Context, arg FindOverlappedBaseFeeInvoiceParams) (string, error) {
 	row := q.db.QueryRowContext(ctx, findOverlappedBaseFeeInvoice, arg.TenantID, arg.PeriodStart)
 	var id string

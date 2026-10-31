@@ -226,11 +226,11 @@ func (c *Client) refundInvoicePaymentsForCharge(ctx context.Context, invoiceID, 
 		} else {
 			return fmt.Errorf("unsupported payment for checkout invoice %s", invoiceID)
 		}
+		if chargeID != "" && (collected == nil || collected.ID != chargeID) {
+			continue
+		}
 		if collected == nil || collected.ID == "" || collected.Amount <= 0 || len(collected.Currency) != 3 {
 			return fmt.Errorf("paid invoice %s has no captured charge", invoiceID)
-		}
-		if chargeID != "" && collected.ID != chargeID {
-			continue
 		}
 		target := collected.Amount
 		if paid.AmountPaid > 0 {

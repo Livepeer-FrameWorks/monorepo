@@ -17,7 +17,7 @@ func (s *PurserServer) requireSelfServiceCheckout(ctx context.Context, tenantID,
 		return status.Error(codes.NotFound, "target tier not found")
 	}
 	if subscriptions.IsPricingRefusal(err) {
-		return status.Error(codes.FailedPrecondition, err.Error())
+		return checkoutPolicyStatus(codes.FailedPrecondition, err.Error(), err)
 	}
 	if err != nil {
 		return status.Errorf(codes.Internal, "check self-service tier eligibility: %v", err)

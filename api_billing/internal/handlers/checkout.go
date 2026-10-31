@@ -533,7 +533,7 @@ func (s *Service) handleSubscriptionCheckoutCompleted(ctx context.Context, sessi
 
 	if !settled {
 		err := s.stageTenantSubscriptionPending(ctx, sessionID, tenantID, tierID, customerID, subscriptionID, receiptID)
-		if errors.Is(err, subscriptions.ErrCheckoutExpired) {
+		if errors.Is(err, subscriptions.ErrCheckoutCompensationQueued) {
 			return nil
 		}
 		return err
@@ -541,7 +541,7 @@ func (s *Service) handleSubscriptionCheckoutCompleted(ctx context.Context, sessi
 
 	result, err := subscriptions.TransitionProvider(ctx, s.db, subscriptions.ProviderChange{TenantID: tenantID, Operation: subscriptions.StripeCheckout, ReceiptIntentID: receiptID, Stripe: purserdb.ActivateTenantSubscriptionFromStripeParams{CustomerID: customerID, SubscriptionID: subscriptionID, TierID: tierID}})
 	rows := result.Rows
-	if errors.Is(err, subscriptions.ErrCheckoutExpired) {
+	if errors.Is(err, subscriptions.ErrCheckoutCompensationQueued) {
 		return nil
 	}
 	if err != nil {

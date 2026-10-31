@@ -71,6 +71,7 @@ func TestStripeWebhookPreservesClosedGrantPhase_RealPG(t *testing.T) {
 	testEveryProviderPathWithGrant(t)
 	testScheduledChangeWithGrant(t)
 	testProviderBoundaryRequiresCompleteMetering(t)
+	testRawExpiredCheckoutCallbackMustRetry(t)
 	testProviderActivationWaitsForGrant(t)
 	testProviderBoundaryRefusalLeavesNoInvoice(t)
 	ctx := context.Background()
@@ -478,29 +479,33 @@ func testProviderBoundaryRequiresCompleteMetering(t *testing.T) {
 	now := time.Now().UTC().Truncate(5 * time.Minute)
 	start := now.Add(-10 * time.Minute)
 	tenant := newPhaseTenant(t, db, "postpaid", start, now.AddDate(0, 1, 0), 0)
-	_, err := PrepareProviderBillingBoundary(t.Context(), db, tenant.jobs.logger, tenant.svc, tenant.id, now)
+	free := uuid.NewString()
+	if _, err := db.ExecContext(t.Context(), `INSERT INTO purser.billing_tiers(id,tier_name,display_name,tier_level,base_price,metering_enabled) VALUES($1,'free-activation','Free',0,0,true)`, free); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(t.Context(), `UPDATE purser.tenant_subscriptions SET tier_id=$2 WHERE tenant_id=$1`, tenant.id, free); err != nil {
+		t.Fatal(err)
+	}
+	charges := 0
+	tenant.svc.chargeAdvanceBaseFee = func(context.Context, string) error { charges++; return nil }
+	err := tenant.svc.activateAdvanceBilledTenant(t.Context(), tenant.id, tenant.supporterID, "stripe", "customer", now, "")
 	if !IsBillingBoundaryCondition(err) || !strings.Contains(err.Error(), "metering") {
-		t.Fatalf("incomplete provider boundary was not actionable: %v", err)
+		t.Fatalf("incomplete activation boundary was not actionable: %v", err)
 	}
 	var tier string
 	var documents int
 	if err = db.QueryRow(`SELECT tier_id::text,(SELECT count(*) FROM purser.billing_invoices WHERE tenant_id=s.tenant_id) FROM purser.tenant_subscriptions s WHERE tenant_id=$1`, tenant.id).Scan(&tier, &documents); err != nil {
 		t.Fatal(err)
 	}
-	if tier != tenant.supporterID || documents != 0 {
-		t.Fatalf("incomplete close mutated billing: tier=%s documents=%d", tier, documents)
+	if tier != free || documents != 0 || charges != 0 {
+		t.Fatalf("incomplete activation mutated or charged billing: tier=%s invoices=%d charges=%d", tier, documents, charges)
 	}
 	seedCompleteMetering(t, db, start, now)
-	closing, err := PrepareProviderBillingBoundary(t.Context(), db, tenant.jobs.logger, tenant.svc, tenant.id, now)
-	if err != nil {
+	if err = tenant.svc.activateAdvanceBilledTenant(t.Context(), tenant.id, tenant.supporterID, "stripe", "customer", now, ""); err != nil {
 		t.Fatal(err)
 	}
-	result, err := subscriptions.TransitionProvider(t.Context(), db, subscriptions.ProviderChange{TenantID: tenant.id, Operation: subscriptions.AdvanceActivation, Boundary: closing, Advance: purserdb.ActivateAdvanceBilledSubscriptionParams{TenantID: tenant.id, TierID: tenant.supporterID, PaymentMethod: "stripe", PeriodStart: now, PeriodEnd: now.AddDate(0, 1, 0)}})
-	if err != nil || result.Rows != 1 {
-		t.Fatalf("complete boundary did not activate: %+v %v", result, err)
-	}
-	if err = db.QueryRow(`SELECT count(*) FROM purser.billing_invoices WHERE tenant_id=$1`, tenant.id).Scan(&documents); err != nil || documents != 1 {
-		t.Fatalf("complete provider boundary invoices=%d %v", documents, err)
+	if err = db.QueryRow(`SELECT tier_id::text,(SELECT count(*) FROM purser.billing_invoices WHERE tenant_id=s.tenant_id) FROM purser.tenant_subscriptions s WHERE tenant_id=$1`, tenant.id).Scan(&tier, &documents); err != nil || tier != tenant.supporterID || documents != 1 || charges != 1 {
+		t.Fatalf("repaired activation tier=%s invoices=%d charges=%d err=%v", tier, documents, charges, err)
 	}
 }
 
@@ -1362,6 +1367,32 @@ func testMollieInvoiceUTCDayBoundary(t *testing.T) {
 				}
 			} else if !errors.Is(err, sql.ErrNoRows) {
 				t.Fatalf("outside-day payment matched=%s %v", got, err)
+			}
+		})
+	}
+}
+
+func testRawExpiredCheckoutCallbackMustRetry(t *testing.T) {
+	t.Helper()
+	for _, settled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("raw expired native callback settled=%t", settled), func(t *testing.T) {
+			db := startPurserUsageRealPG(t)
+			now := time.Now().UTC()
+			tenant := newPhaseTenant(t, db, "prepaid", now.Add(-time.Hour), now.AddDate(0, 1, 0), 0)
+			receipt := uuid.NewString()
+			if _, err := db.ExecContext(t.Context(), `INSERT INTO purser.payment_provider_intents(id,tenant_id,provider,purpose,local_reference_type,local_reference_id,status,currency,idempotency_key,provider_session_id,provider_subscription_id,created_at,expires_at)
+VALUES($1::uuid,$2,'stripe','tenant_subscription_checkout','billing_tiers',$3,'provider_open','EUR',$1::text,'session','incoming',NOW()-INTERVAL '2 hours',NOW()-INTERVAL '1 hour')`, receipt, tenant.id, tenant.supporterID); err != nil {
+				t.Fatal(err)
+			}
+			ctx := subscriptions.WithProviderCompletion(t.Context(), now)
+			err := tenant.svc.handleSubscriptionCheckoutCompleted(ctx, "session", tenant.id, tenant.supporterID, "customer", "incoming", settled, receipt)
+			if !errors.Is(err, subscriptions.ErrCheckoutExpired) || errors.Is(err, subscriptions.ErrCheckoutCompensationQueued) {
+				t.Fatalf("raw expiry was acknowledged without committed recovery: %v", err)
+			}
+			var model string
+			var recovery int
+			if err := db.QueryRowContext(t.Context(), `SELECT billing_model,(SELECT count(*) FROM purser.provider_webhook_inbox i WHERE i.provider='checkout_recovery' AND i.event_key='checkout-expiry:'||$2::text) FROM purser.tenant_subscriptions WHERE tenant_id=$1`, tenant.id, receipt).Scan(&model, &recovery); err != nil || model != "prepaid" || recovery != 0 {
+				t.Fatalf("raw refusal mutated billing/recovery: model=%s work=%d err=%v", model, recovery, err)
 			}
 		})
 	}

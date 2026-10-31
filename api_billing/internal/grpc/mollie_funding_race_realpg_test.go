@@ -36,7 +36,7 @@ func (c *fundingRaceMollieClient) CreateSubscription(_ context.Context, _ billin
 
 func assertMollieFundingRecoveryOrdersWithActivation(t *testing.T) {
 	t.Helper()
-	for _, when := range []string{"recovery owns funding first", "native create owns funding first"} {
+	for _, when := range []string{"recovery owns funding first", "native create owns funding first", "recovery owns native first"} {
 		t.Run(when, func(t *testing.T) {
 			db := startOperatorGrantDatabase(t)
 			tenant, paid, _ := seedFallbackLifecycle(t, db)
@@ -64,6 +64,19 @@ func assertMollieFundingRecoveryOrdersWithActivation(t *testing.T) {
 			client := &fundingRaceMollieClient{fakeMollieBillingClient: fakeMollieBillingClient{subscription: &mollielib.Subscription{ID: "native", Status: "active"}}}
 			if when == "recovery owns funding first" {
 				recoverFunding()
+			} else if when == "recovery owns native first" {
+				client.onCreate = func() {
+					var nativeID string
+					if err := db.QueryRow(`SELECT id FROM purser.payment_provider_intents WHERE tenant_id=$1 AND purpose='mollie_subscription_create'`, tenant).Scan(&nativeID); err != nil {
+						t.Fatal(err)
+					}
+					if err := q.StartCheckoutCompensation(t.Context(), purserdb.StartCheckoutCompensationParams{TenantID: tenant, IntentID: nativeID}); err != nil {
+						t.Fatal(err)
+					}
+					if err := q.RequestCheckoutRecovery(t.Context(), purserdb.RequestCheckoutRecoveryParams{TenantID: tenant, IntentID: nativeID, Reason: "concurrent native recovery"}); err != nil {
+						t.Fatal(err)
+					}
+				}
 			} else {
 				client.onCreate = recoverFunding
 			}
@@ -72,6 +85,14 @@ func assertMollieFundingRecoveryOrdersWithActivation(t *testing.T) {
 			if when == "recovery owns funding first" {
 				if status.Code(err) != codes.FailedPrecondition || client.calls != 0 {
 					t.Fatalf("compensating funding created a new subscription: calls=%d err=%v", client.calls, err)
+				}
+			} else if when == "recovery owns native first" {
+				if status.Code(err) != codes.FailedPrecondition || client.calls != 1 || len(client.cancelledSubscriptions) != 0 {
+					t.Fatalf("durable native recovery gained an inline cancellation owner: creates=%d cancels=%v err=%v", client.calls, client.cancelledSubscriptions, err)
+				}
+				var pending int
+				if err := db.QueryRow(`SELECT count(*) FROM purser.provider_webhook_inbox WHERE provider='checkout_recovery' AND headers->>'tenant_id'=$1 AND status='pending'`, tenant).Scan(&pending); err != nil || pending == 0 {
+					t.Fatalf("native cancellation lost durable owner: pending=%d err=%v", pending, err)
 				}
 			} else {
 				if err != nil || client.calls != 1 {

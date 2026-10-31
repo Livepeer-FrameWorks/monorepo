@@ -95,7 +95,7 @@ func TransitionProvider(ctx context.Context, exec purserdb.DBTX, change Provider
 
 func transitionProviderWithRecoveryTx(ctx context.Context, tx *sql.Tx, change ProviderChange) (ProviderResult, error) {
 	result, err := transitionProviderTx(ctx, tx, change)
-	if err == nil || change.ReceiptIntentID == "" || !IsPricingRefusal(err) {
+	if err == nil || change.ReceiptIntentID == "" || (!IsPricingRefusal(err) && !errors.Is(err, ErrCheckoutExpired)) {
 		return result, err
 	}
 	locked, lockErr := LockChange(ctx, tx, change.TenantID, PreservePricing)
@@ -117,7 +117,10 @@ func transitionProviderWithRecoveryTx(ctx context.Context, tx *sql.Tx, change Pr
 	if reservation.Provider == "mollie" {
 		subscriptionID = change.Mollie.SubscriptionID.String
 	}
-	if bindErr := q.BindProviderCheckoutReceipt(ctx, purserdb.BindProviderCheckoutReceiptParams{TenantID: change.TenantID, IntentID: reservation.ID, Provider: reservation.Provider, SubscriptionID: subscriptionID}); bindErr != nil {
+	if bindErr := q.BindProviderCheckoutReceipt(ctx, purserdb.BindProviderCheckoutReceiptParams{
+		TenantID: change.TenantID, IntentID: reservation.ID,
+		Provider: reservation.Provider, SubscriptionID: subscriptionID,
+	}); bindErr != nil {
 		return result, bindErr
 	}
 	for _, id := range []string{reservation.ID, reservation.FundingIntentID} {

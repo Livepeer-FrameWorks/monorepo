@@ -18,6 +18,7 @@ type tierUpgradeBackend struct {
 	originalStart, originalEnd int64
 	feeRefunded                int64
 	feeDisputed                bool
+	basisLines                 []*api.InvoiceLineItem
 }
 
 func (b *tierUpgradeBackend) Call(method, path, key string, params api.ParamsContainer, out api.LastResponseSetter) error {
@@ -41,6 +42,23 @@ func (b *tierUpgradeBackend) Call(method, path, key string, params api.ParamsCon
 		b.current.LatestInvoice = &api.Invoice{ID: "upgrade-invoice", Status: api.InvoiceStatusPaid}
 		if b.loseResponse {
 			return errors.New("provider committed but response was lost")
+		}
+	}
+	if method == "GET" && b.current.LatestInvoice != nil && b.current.Items != nil && len(b.current.Items.Data) == 1 {
+		item := b.current.Items.Data[0]
+		if item.CurrentPeriodStart == 0 {
+			item.CurrentPeriodStart = time.Now().AddDate(0, 0, -15).Unix()
+			item.CurrentPeriodEnd = time.Now().AddDate(0, 0, 15).Unix()
+		}
+		if b.basisLines != nil {
+			b.current.LatestInvoice.Lines = &api.InvoiceLineItemList{Data: b.basisLines}
+		} else if b.current.LatestInvoice.Lines == nil && item.Price != nil {
+			b.current.LatestInvoice.Lines = &api.InvoiceLineItemList{Data: []*api.InvoiceLineItem{{
+				ID: "base-line", Amount: item.Price.UnitAmount, Currency: api.CurrencyEUR, Quantity: 1,
+				Pricing: &api.InvoiceLineItemPricing{PriceDetails: &api.InvoiceLineItemPricingPriceDetails{Price: &api.Price{ID: item.Price.ID}}},
+				Parent:  &api.InvoiceLineItemParent{SubscriptionItemDetails: &api.InvoiceLineItemParentSubscriptionItemDetails{Subscription: b.current.ID, SubscriptionItem: item.ID}},
+				Period:  &api.Period{Start: item.CurrentPeriodStart, End: item.CurrentPeriodEnd},
+			}}}
 		}
 	}
 	*out.(*api.Subscription) = *b.current
@@ -186,5 +204,54 @@ func TestTierUpgradeStripeRefusesMultipleOldUnits(t *testing.T) {
 	_, err := newStripeClient().UpgradeMonthlySubscription(t.Context(), billing.TierUpgradeRequest{ID: "upgrade", TenantID: "tenant", CustomerID: "customer", SubscriptionID: "sub", PriceID: "new-price", OldBaseCents: 2000, BaseCents: 5000})
 	if !errors.Is(err, billing.ErrTierUpgradeRejected) || b.updates != 0 {
 		t.Fatalf("multiple old units credited during a one-unit upgrade: updates=%d err=%v", b.updates, err)
+	}
+}
+
+func TestTierUpgradeStripeKeepsGrandfatheredPaidPrice(t *testing.T) {
+	b := &tierUpgradeBackend{current: &api.Subscription{
+		ID: "sub", Customer: &api.Customer{ID: "customer"}, Status: api.SubscriptionStatusActive,
+		Metadata:      map[string]string{"tenant_id": "tenant"},
+		LatestInvoice: &api.Invoice{ID: "paid-old", Status: api.InvoiceStatusPaid, AmountPaid: 2000},
+		Items:         &api.SubscriptionItemList{Data: []*api.SubscriptionItem{{ID: "item", Quantity: 1, Price: &api.Price{ID: "old", UnitAmount: 2000, Currency: api.CurrencyEUR, Recurring: &api.PriceRecurring{Interval: api.PriceRecurringIntervalMonth, IntervalCount: 1}}}}},
+	}}
+	installBackend(t, b)
+	_, err := newStripeClient().UpgradeMonthlySubscription(t.Context(), billing.TierUpgradeRequest{ID: "upgrade", TenantID: "tenant", CustomerID: "customer", SubscriptionID: "sub", PriceID: "new-price", OldBaseCents: 3000, BaseCents: 5000})
+	if err != nil || b.updates != 1 {
+		t.Fatalf("a EUR20 paid subscriber cannot upgrade after catalog changes to EUR30: updates=%d err=%v", b.updates, err)
+	}
+}
+
+func TestTierUpgradeStripeRequiresItsPaidBaseLine(t *testing.T) {
+	for _, mode := range []string{"wrong price", "wrong fee", "wrong period", "wrong item", "two base lines", "no base line"} {
+		t.Run(mode, func(t *testing.T) {
+			start, end := time.Now().AddDate(0, 0, -15).Unix(), time.Now().AddDate(0, 0, 15).Unix()
+			line := &api.InvoiceLineItem{ID: "base", Amount: 2000, Currency: api.CurrencyEUR, Quantity: 1,
+				Pricing: &api.InvoiceLineItemPricing{PriceDetails: &api.InvoiceLineItemPricingPriceDetails{Price: &api.Price{ID: "old"}}},
+				Parent:  &api.InvoiceLineItemParent{SubscriptionItemDetails: &api.InvoiceLineItemParentSubscriptionItemDetails{Subscription: "sub", SubscriptionItem: "item"}},
+				Period:  &api.Period{Start: start, End: end}}
+			lines := []*api.InvoiceLineItem{line}
+			switch mode {
+			case "wrong price":
+				line.Pricing.PriceDetails.Price.ID = "unrelated"
+			case "wrong fee":
+				line.Amount = 1500
+			case "wrong period":
+				line.Period.End++
+			case "wrong item":
+				line.Parent.SubscriptionItemDetails.SubscriptionItem = "other-item"
+			case "two base lines":
+				lines = append(lines, line)
+			case "no base line":
+				lines = []*api.InvoiceLineItem{}
+			}
+			b := &tierUpgradeBackend{basisLines: lines, current: &api.Subscription{ID: "sub", Customer: &api.Customer{ID: "customer"}, Status: api.SubscriptionStatusActive, Metadata: map[string]string{"tenant_id": "tenant"},
+				LatestInvoice: &api.Invoice{ID: "paid-old", Status: api.InvoiceStatusPaid, AmountPaid: 2000},
+				Items:         &api.SubscriptionItemList{Data: []*api.SubscriptionItem{{ID: "item", Quantity: 1, CurrentPeriodStart: start, CurrentPeriodEnd: end, Price: &api.Price{ID: "old", UnitAmount: 2000, Currency: api.CurrencyEUR, Recurring: &api.PriceRecurring{Interval: api.PriceRecurringIntervalMonth, IntervalCount: 1}}}}}}}
+			installBackend(t, b)
+			_, err := newStripeClient().UpgradeMonthlySubscription(t.Context(), billing.TierUpgradeRequest{ID: "upgrade", TenantID: "tenant", CustomerID: "customer", SubscriptionID: "sub", PriceID: "new-price", OldBaseCents: 2000, BaseCents: 5000})
+			if !errors.Is(err, billing.ErrTierUpgradeRejected) || b.updates != 0 {
+				t.Fatalf("unproven paid price reached update: updates=%d err=%v", b.updates, err)
+			}
+		})
 	}
 }

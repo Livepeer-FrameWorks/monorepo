@@ -97,6 +97,9 @@ type Querier interface {
 	ClearAccountClosureCollectionBalances(ctx context.Context, tenantID string) (int64, error)
 	ClearAppliedPendingDowngrade(ctx context.Context, arg ClearAppliedPendingDowngradeParams) error
 	ClearCancelledTierUpgrade(ctx context.Context, tenantID string) error
+	// Recovery has verified that cancelled prior collectors are no longer live.
+	// The caller holds the subscription lock and rechecks its inspection snapshot.
+	ClearEndedCheckoutSubscriptions(ctx context.Context, arg ClearEndedCheckoutSubscriptionsParams) error
 	ClearOpenInvoicePrepaidCredit(ctx context.Context, arg ClearOpenInvoicePrepaidCreditParams) error
 	ClearStagedStripeClusterSubscription(ctx context.Context, arg ClearStagedStripeClusterSubscriptionParams) error
 	ClearSubscriptionFreeFallback(ctx context.Context, tenantID string) (int64, error)
@@ -230,7 +233,7 @@ type Querier interface {
 	FailProviderWebhook(ctx context.Context, arg FailProviderWebhookParams) (sql.Result, error)
 	// The base-fee invoice of the period a tier change cut short: it started
 	// before period_start and would have run past it. An unused share already
-	// returned to prepaid or credited to a replacement invoice is not found again.
+	// forfeited or credited to a replacement invoice is not found again.
 	FindOverlappedBaseFeeInvoice(ctx context.Context, arg FindOverlappedBaseFeeInvoiceParams) (string, error)
 	FindProviderCheckoutReservation(ctx context.Context, arg FindProviderCheckoutReservationParams) (string, error)
 	// Binding can arrive during provider I/O; only release the exact references reconciled.

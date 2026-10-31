@@ -120,7 +120,7 @@ RETURNING id::text AS id;
 -- name: FindOverlappedBaseFeeInvoice :one
 -- The base-fee invoice of the period a tier change cut short: it started
 -- before period_start and would have run past it. An unused share already
--- returned to prepaid or credited to a replacement invoice is not found again.
+-- forfeited or credited to a replacement invoice is not found again.
 SELECT id::text AS id
 FROM purser.billing_invoices
 WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid

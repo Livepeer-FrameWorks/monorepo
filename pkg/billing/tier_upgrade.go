@@ -13,7 +13,8 @@ type TierUpgradeRequest struct {
 	// LocateOnly reconciles an existing provider update without creating one.
 	LocateOnly bool
 	BaseCents  int64
-	// OldBaseCents distinguishes a genuinely free month from a missing paid basis.
+	// OldBaseCents snapshots the catalog fee for the local billing boundary.
+	// Stripe validates its native paid invoice basis independently.
 	OldBaseCents int64
 }
 

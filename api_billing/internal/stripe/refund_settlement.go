@@ -85,7 +85,7 @@ func (c *Client) InspectRefundSettlement(ctx context.Context, plan billing.Refun
 		if err := c.refundInvoicePaymentsForCharge(ctx, plan.InvoiceID, key, &retried, plan.ReferenceKind, plan.ReferenceID, plan.ChargeID); err != nil {
 			return receipts, err
 		}
-		return receipts, billing.ErrRefundSettling
+		return receipts, fmt.Errorf("refund for charge %s failed at the bank; compensation retried and its return still needs confirmation", plan.ChargeID)
 	}
 
 	return receipts, fmt.Errorf("purchase %s has no bank return in progress; inspect the provider and issue its missing refund", plan.ReferenceID)

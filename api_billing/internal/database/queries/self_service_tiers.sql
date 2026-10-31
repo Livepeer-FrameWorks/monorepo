@@ -31,3 +31,14 @@ SELECT CASE
        (free_fallback_provider_ended_at IS NOT NULL AND status = 'pending_cancellation')::boolean AS paid_cancellation_term
 FROM purser.tenant_subscriptions
 WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid;
+
+-- name: ClearEndedCheckoutSubscriptions :exec
+-- Recovery has verified that cancelled prior collectors are no longer live.
+-- The caller holds the subscription lock and rechecks its inspection snapshot.
+UPDATE purser.tenant_subscriptions
+SET stripe_subscription_id = CASE WHEN COALESCE(stripe_subscription_id, '') = sqlc.arg(stripe_id)::text
+                                      AND COALESCE(stripe_subscription_id, '') <> sqlc.arg(incoming_stripe_id)::text
+                                 THEN NULL ELSE stripe_subscription_id END,
+    mollie_subscription_id = CASE WHEN COALESCE(mollie_subscription_id, '') = sqlc.arg(mollie_id)::text
+                                 THEN NULL ELSE mollie_subscription_id END
+WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid AND status = 'cancelled';

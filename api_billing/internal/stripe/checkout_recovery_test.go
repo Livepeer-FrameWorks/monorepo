@@ -16,23 +16,24 @@ import (
 
 type checkoutRecoveryBackend struct {
 	stripeMoneyBackend
-	paths           []string
-	paid, refunded  bool
-	processing      bool
-	sessionPayment  bool
-	includeRenewals bool
-	secondCharge    bool
-	openInvoice     bool
-	staleInvoice    bool
-	paymentInvoices []string
-	cancelParams    *api.SubscriptionCancelParams
-	sessionInvoice  string
-	chargeOverride  *api.Charge
-	allocation      int64
-	refundParams    []*api.RefundParams
-	existingRefunds []*api.Refund
-	refundStatus    api.RefundStatus
-	disputes        []*api.Dispute
+	paths             []string
+	paid, refunded    bool
+	processing        bool
+	sessionPayment    bool
+	includeRenewals   bool
+	secondCharge      bool
+	uncapturedPayment bool
+	openInvoice       bool
+	staleInvoice      bool
+	paymentInvoices   []string
+	cancelParams      *api.SubscriptionCancelParams
+	sessionInvoice    string
+	chargeOverride    *api.Charge
+	allocation        int64
+	refundParams      []*api.RefundParams
+	existingRefunds   []*api.Refund
+	refundStatus      api.RefundStatus
+	disputes          []*api.Dispute
 }
 
 func (b *checkoutRecoveryBackend) Call(method, path, key string, p api.ParamsContainer, result api.LastResponseSetter) error {
@@ -71,6 +72,9 @@ func (b *checkoutRecoveryBackend) Call(method, path, key string, p api.ParamsCon
 		if b.chargeOverride != nil {
 			v.LatestCharge = b.chargeOverride
 		}
+		if b.uncapturedPayment && path == "/v1/payment_intents/pi_uncaptured" {
+			v.ID, v.LatestCharge = "pi_uncaptured", nil
+		}
 		if b.processing {
 			v.Status = api.PaymentIntentStatusProcessing
 		}
@@ -78,7 +82,7 @@ func (b *checkoutRecoveryBackend) Call(method, path, key string, p api.ParamsCon
 			v.Status = api.PaymentIntentStatusRequiresPaymentMethod
 			v.LatestCharge = nil
 		}
-		if b.refunded {
+		if b.refunded && v.LatestCharge != nil {
 			v.LatestCharge.AmountRefunded = 2000
 		}
 	case *api.Refund:
@@ -139,6 +143,9 @@ func (b *checkoutRecoveryBackend) CallRaw(method, path, key string, body []byte,
 			return nil
 		}
 		v.Data = []*api.InvoicePayment{{ID: "ip_reserved", AmountPaid: b.allocation, Payment: &api.InvoicePaymentPayment{PaymentIntent: &api.PaymentIntent{ID: "pi_reserved"}}}}
+		if b.uncapturedPayment {
+			v.Data = append(v.Data, &api.InvoicePayment{ID: "ip_uncaptured", Payment: &api.InvoicePaymentPayment{PaymentIntent: &api.PaymentIntent{ID: "pi_uncaptured"}}})
+		}
 		if b.secondCharge {
 			v.Data = append(v.Data, &api.InvoicePayment{ID: "ip_other", AmountPaid: 2000, Payment: &api.InvoicePaymentPayment{Charge: &api.Charge{ID: "ch_other"}}})
 		}
@@ -496,7 +503,7 @@ func TestRefundSettlementRetriesAsynchronousFailure(t *testing.T) {
 		t.Fatalf("pending refund retried: calls=%d err=%v", len(b.refundParams), err)
 	}
 	b.existingRefunds[0].Status = api.RefundStatusFailed
-	if _, err := c.InspectRefundSettlement(t.Context(), plan); !errors.Is(err, billing.ErrRefundSettling) || len(b.refundParams) != 1 {
+	if _, err := c.InspectRefundSettlement(t.Context(), plan); err == nil || errors.Is(err, billing.ErrRefundSettling) || len(b.refundParams) != 1 {
 		t.Fatalf("asynchronous failure did not re-enter compensation: calls=%d err=%v", len(b.refundParams), err)
 	}
 	b.existingRefunds[len(b.existingRefunds)-1].Status = api.RefundStatusSucceeded
@@ -511,10 +518,23 @@ func TestRefundSettlementRetryStaysOnItsRecordedCharge(t *testing.T) {
 	installBackend(t, b)
 	c := NewClient(Config{SecretKey: "sk_test", Logger: logging.NewLogger()})
 	plan := billing.RefundSettlement{Provider: "stripe", ReferenceKind: "checkout", ReferenceID: "reservation", InvoiceID: "in_reserved", PaymentID: "pi_reserved", ChargeID: "ch_reserved", AmountCents: 2000, Currency: "EUR"}
-	if _, err := c.InspectRefundSettlement(t.Context(), plan); !errors.Is(err, billing.ErrRefundSettling) {
-		t.Fatal(err)
+	if _, err := c.InspectRefundSettlement(t.Context(), plan); err == nil || errors.Is(err, billing.ErrRefundSettling) {
+		t.Fatalf("failed bank return must remain a failure after retry: %v", err)
 	}
 	if len(b.refundParams) != 1 || api.StringValue(b.refundParams[0].PaymentIntent) != "pi_reserved" {
 		t.Fatalf("one settlement retried another charge without recording its plan: %+v", b.refundParams)
+	}
+}
+
+func TestRefundRetryIgnoresUnrelatedUncapturedPayment(t *testing.T) {
+	b := &checkoutRecoveryBackend{uncapturedPayment: true}
+	installBackend(t, b)
+	c := NewClient(Config{SecretKey: "sk_test", Logger: logging.NewLogger()})
+	var result billing.CheckoutRecoveryResult
+	if err := c.refundInvoicePaymentsForCharge(t.Context(), "in_reserved", "key", &result, "checkout", "reservation", "ch_reserved"); err != nil {
+		t.Fatal(err)
+	}
+	if len(b.refundParams) != 1 || len(result.RefundSettlements) != 1 {
+		t.Fatalf("scoped refund changed allocations: calls=%d plans=%d", len(b.refundParams), len(result.RefundSettlements))
 	}
 }

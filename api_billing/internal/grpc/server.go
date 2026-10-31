@@ -7056,7 +7056,7 @@ func (s *PurserServer) CreateFirstPayment(ctx context.Context, req *purserpb.Cre
 // CreateMollieSubscription activates a Mollie subscription or compensates refused funding.
 func (s *PurserServer) CreateMollieSubscription(ctx context.Context, req *purserpb.CreateMollieSubscriptionRequest) (*purserpb.CreateMollieSubscriptionResponse, error) {
 	response, err := s.createMollieSubscription(ctx, req)
-	if status.Code(err) != codes.FailedPrecondition && status.Code(err) != codes.NotFound {
+	if !definitiveMollieActivationRefusal(err) {
 		return response, err
 	}
 	if queueErr := s.compensateRefusedMollieFunding(ctx, req.GetTenantId(), req.GetTierId(), status.Convert(err).Message()); queueErr != nil {
@@ -7157,7 +7157,7 @@ func (s *PurserServer) createMollieSubscription(ctx context.Context, req *purser
 	// Get tier price
 	tier, err := queries.GetMollieTierPrice(ctx, tierID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, status.Errorf(codes.NotFound, "tier not found: %s", tierID)
+		return nil, checkoutPolicyStatus(codes.NotFound, fmt.Sprintf("tier not found: %s", tierID), subscriptions.ErrSelfServiceTier)
 	}
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to get billing tier")
@@ -7207,7 +7207,7 @@ func (s *PurserServer) createMollieSubscription(ctx context.Context, req *purser
 	})
 	if intentErr != nil {
 		if subscriptions.IsPricingRefusal(intentErr) || errors.Is(intentErr, subscriptions.ErrPendingCheckout) || errors.Is(intentErr, subscriptions.ErrCheckoutExpired) {
-			return nil, status.Error(codes.FailedPrecondition, intentErr.Error())
+			return nil, checkoutPolicyStatus(codes.FailedPrecondition, intentErr.Error(), intentErr)
 		}
 		s.logger.WithError(intentErr).Error("Failed to record Mollie subscription intent")
 		return nil, status.Error(codes.Internal, "failed to record subscription intent")

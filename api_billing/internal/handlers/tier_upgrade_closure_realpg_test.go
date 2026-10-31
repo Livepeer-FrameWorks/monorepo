@@ -56,11 +56,20 @@ billing_name='Customer',billing_address='{"street":"Street 1","city":"Leiden","p
 					price = "new-price"
 				}
 				invoiceID := "old-invoice"
+				fee := 2000
 				if metadata["billing_tier_upgrade_id"] != "" {
 					invoiceID = "upgrade-invoice"
+					fee = 5000
 				}
-				return map[string]any{"id": "subscription", "object": "subscription", "customer": "customer", "status": state, "metadata": metadata, "latest_invoice": map[string]any{"id": invoiceID, "status": "paid", "amount_paid": 2000},
-					"items": map[string]any{"data": []any{map[string]any{"id": "item", "quantity": 1, "price": map[string]any{"id": price, "unit_amount": 2000, "currency": "eur", "recurring": map[string]any{"interval": "month", "interval_count": 1}}, "current_period_start": providerStart.Unix(), "current_period_end": providerEnd.Unix()}}}}
+				return map[string]any{"id": "subscription", "object": "subscription", "customer": "customer", "status": state, "metadata": metadata, "latest_invoice": map[string]any{"id": invoiceID, "status": "paid", "amount_paid": fee,
+					"lines": map[string]any{"data": []any{map[string]any{
+						"id": "paid-base", "amount": fee, "currency": "eur", "quantity": 1,
+						"parent":  map[string]any{"type": "subscription_item_details", "subscription_item_details": map[string]any{"subscription": "subscription", "subscription_item": "item", "proration": false}},
+						"pricing": map[string]any{"price_details": map[string]any{"price": price}},
+						"period":  map[string]any{"start": providerStart.Unix(), "end": providerEnd.Unix()},
+					}}},
+				},
+					"items": map[string]any{"data": []any{map[string]any{"id": "item", "quantity": 1, "price": map[string]any{"id": price, "unit_amount": fee, "currency": "eur", "recurring": map[string]any{"interval": "month", "interval_count": 1}}, "current_period_start": providerStart.Unix(), "current_period_end": providerEnd.Unix()}}}}
 			}
 			fixture.route("GET", "/v1/customers/customer", func(recordedProviderRequest) (int, any) {
 				return 200, map[string]any{"id": "customer", "invoice_settings": map[string]any{"default_payment_method": "pm"}}
