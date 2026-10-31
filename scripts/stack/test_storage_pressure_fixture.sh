@@ -9,14 +9,29 @@ OLD=$(($(date +%s) - 7200))
 STACK_TENANT_ID=fixture-tenant
 FOGHORN_A_DB=fixture-foghorn
 mkdir -p "$STORE/vod" "$STORE/clips" "$STORE/dvr/recording" "$STORE/upload"
-for file in vod/delivered.mkv vod/delivered.mkv.dtsh vod/unrelated.mkv dvr/recording/manifest.m3u8 upload/delivered.mp4; do
+for file in vod/delivered.mkv vod/delivered.mkv.dtsh vod/unrelated.mkv vod/processing.mkv vod/deleted.mkv vod/pending.mkv dvr/recording/manifest.m3u8 upload/delivered.mp4; do
   printf 'fixture' >"$STORE/$file"
 done
 pg() {
   [ "$1" = "$FOGHORN_A_DB" ]
-  [[ "$2" == *"tenant_id='fixture-tenant'"* && "$2" == *"status='completed'"* && "$2" == *"sync_status='synced'"* ]]
-  printf 'delivered\nrecording\n'
+  python3 - "$2" <<'PYSQL'
+import sqlite3,sys
+with sqlite3.connect(':memory:') as db:
+    db.execute("ATTACH DATABASE ':memory:' AS foghorn")
+    db.execute('CREATE TABLE foghorn.artifacts(artifact_hash TEXT, tenant_id TEXT, status TEXT, sync_status TEXT, artifact_type TEXT)')
+    db.executemany('INSERT INTO foghorn.artifacts VALUES(?,?,?,?,?)',[
+        ('delivered','fixture-tenant','ready','synced','vod'),
+        ('recording','fixture-tenant','completed','synced','dvr'),
+        ('unrelated','other-tenant','ready','synced','vod'),
+        ('processing','fixture-tenant','processing','synced','vod'),
+        ('deleted','fixture-tenant','deleted','synced','vod'),
+        ('pending','fixture-tenant','ready','pending','vod'),
+    ])
+    for row in db.execute(sys.argv[1]):
+        print(row[0])
+PYSQL
 }
+
 # The container uses GNU touch; provide its narrow fixture operation on macOS too.
 mkdir -p "$work/bin"
 cat >"$work/bin/touch" <<'PYTOUCH'
@@ -36,7 +51,7 @@ import os,sys
 root,old=sys.argv[1],int(sys.argv[2])
 for path in ['vod/delivered.mkv','vod/delivered.mkv.dtsh','dvr/recording/manifest.m3u8']:
     assert abs(os.stat(root+'/'+path).st_mtime-old)<2, path
-for path in ['vod/unrelated.mkv','upload/delivered.mp4']:
+for path in ['vod/unrelated.mkv','vod/processing.mkv','vod/deleted.mkv','vod/pending.mkv','upload/delivered.mp4']:
     assert os.stat(root+'/'+path).st_mtime>old+3600, path
 PY
 STACK_TARGET=staging
