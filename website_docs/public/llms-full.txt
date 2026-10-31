@@ -30434,6 +30434,12 @@ checkout deadline. An abandoned attempt may be expired early; compensation can
 cancel a subscription and request refunds. Refund acceptance does not mean bank
 settlement has finished. Both commands require a platform-operator JWT.
 
+`--retain-delivered` selects an audited attestation for an ambiguous historical
+Mollie first payment. It retains the payment without refund or new access,
+requires the same preview and confirmation, and records the operator and reason.
+Current checkouts and payments already owed a refund are refused. Older Purser
+servers return `Unimplemented`; the CLI does not fall back to refund recovery.
+
 #### frameworks admin billing recovery upgrade
 
 `frameworks admin billing recovery upgrade --tenant-id <UUID> --upgrade-id <UUID> --reason "Reconcile purchase"`
@@ -40021,6 +40027,21 @@ is voided without reversing credit for delivered recurring service. Every reques
 reason and outcome in history and emits audit events; a later request does not
 overwrite it.
 
+Historical Mollie first payments are linked to local activation records during
+recovery after verifying the provider mandate. If multiple receipts cannot be
+linked safely, inspect the exact receipt and service history. A platform
+operator can attest delivered service without refunding it:
+
+```bash
+frameworks admin billing recovery checkout --tenant-id <uuid> --reservation-id <uuid> --retain-delivered --reason "Verified delivered service from historical records"
+```
+
+This action previews first and requires confirmation. It records the operator,
+reason and `delivered` outcome, retains the payment, and creates no subscription
+or access. It refuses current checkout flows and any payment already owed a
+refund or returned by the provider. It shares the compensation lock with the
+worker, so a concurrent refund cannot race the decision.
+
 An on-time completed purchase is reconciled into its subscription when
 settlement succeeds. Failed settlement releases its reservation. An abandoned
 or unbound attempt can be recovered before its deadline, while a completed
@@ -40178,14 +40199,32 @@ recovery; Livepeer gateway clusters require a successful Quartermaster lookup.
 `frameworks admin billing recovery upgrade --tenant-id <uuid> --upgrade-id <uuid>
 --reason "Reconcile purchase"` previews a pending tier upgrade before asking for
 confirmation. It cancels a request only after confirming it was not applied;
-otherwise it completes the accepted purchase. It does not start another provider
-purchase. Recovery retains the operator identity and reason, and reports the
+otherwise it reconciles the accepted purchase. A Stripe purchase already applied
+by the provider still waits for complete usage metering before its local billing
+boundary can finish. Recovery does not bypass that requirement or start another
+provider purchase. Recovery retains the operator identity and reason, and reports the
 actual durable state. Use `recovery list` for the purchase UUID and retry errors.
 
 A suspended tenant's session-stop request is queued with its suspension. Partial
 cell failures and Commodore outages retry durably. Resumption is checked under
 the subscription lock before retrying, so a completed resumption clears the
 queued stop without ending a new stream.
+
+A scheduled automatic fallback can be inspected with
+`frameworks admin billing recovery list --tenant-id <UUID>`. An explicit
+`set-tier` abort restores invoicing and detaches only proven-ended native
+subscriptions after their paid term ends. Tier assignment and grant changes
+refuse while an ended subscription still has paid service time remaining.
+Automatic expiry can end a same-tier waiver at its deadline while preserving
+the paid-term evidence and cancellation schedule.
+A live native subscription or a stop already in flight must
+finish reconciliation first; the command returns a precondition error.
+
+Fallback email delivery stops after five failures. The `notice_abandoned`
+recovery row retains the reason and delivery error, and leaves the automatic
+stuck alert. Correct `billing_email` for the next fallback or completed-move
+notice, or use `set-tier` to cancel the fallback as an explicit billing decision.
+Email failure never blocks the billing move.
 
 
 ---

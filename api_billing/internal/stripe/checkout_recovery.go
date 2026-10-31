@@ -2,7 +2,9 @@ package stripe
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
@@ -34,6 +36,9 @@ func (c *Client) RecoverReservedCheckout(ctx context.Context, customerID, intent
 		}
 		err = c.cancelReservedSession(ctx, sess, intentID, &result)
 		return result, err
+	}
+	if customerID == "" || intentID == "" {
+		return result, fmt.Errorf("unbound Stripe checkout recovery requires customer and reservation identities")
 	}
 	p := &stripe.CheckoutSessionListParams{Customer: stripe.String(customerID)}
 	p.Context = ctx
@@ -80,7 +85,7 @@ func (c *Client) cancelReservedSession(ctx context.Context, sess *stripe.Checkou
 	invoices := invoice.List(p)
 	for invoices.Next() {
 		inv := invoices.Invoice()
-		if (sess.Invoice != nil && sess.Invoice.ID != "" && inv.ID != sess.Invoice.ID) || (sess.Invoice == nil || sess.Invoice.ID == "") && inv.BillingReason != stripe.InvoiceBillingReasonSubscriptionCreate {
+		if (sess.Invoice != nil && sess.Invoice.ID != "" && inv.ID != sess.Invoice.ID) || ((sess.Invoice == nil || sess.Invoice.ID == "") && inv.BillingReason != stripe.InvoiceBillingReasonSubscriptionCreate) {
 			continue
 		}
 		// A partially paid invoice can still own another processing debit.
@@ -139,6 +144,9 @@ func (c *Client) ReservedCheckout(ctx context.Context, customerID, intentID, ses
 		p := &stripe.CheckoutSessionParams{}
 		p.Context = ctx
 		return checkoutsession.Get(sessionID, p)
+	}
+	if customerID == "" || intentID == "" {
+		return nil, fmt.Errorf("unbound Stripe checkout inspection requires customer and reservation identities")
 	}
 	p := &stripe.CheckoutSessionListParams{Customer: stripe.String(customerID)}
 	p.Context = ctx
@@ -226,11 +234,17 @@ func (c *Client) refundInvoicePayments(ctx context.Context, invoiceID, key strin
 			paymentID = collected.ID
 		}
 		result.RefundSettlements = append(result.RefundSettlements, billing.RefundSettlement{Provider: "stripe", ReferenceKind: kind, ReferenceID: referenceID, InvoiceID: invoiceID, PaymentID: paymentID, ChargeID: collected.ID, AmountCents: target, Currency: string(collected.Currency)})
-		returned := collected.AmountRefunded
+		history, err := checkoutRefundHistory(ctx, collected.ID, collected.Currency)
+		if err != nil {
+			return err
+		}
+		// A charge snapshot may lag a refund accepted by Stripe. Read existing
+		// bank returns before calculating the remaining purchase liability.
+		returned := max(collected.AmountRefunded, history.returned)
 		if collected.Disputed {
-			lost, open, err := lostDisputeReceipts(ctx, collected.ID)
-			if err != nil {
-				return err
+			lost, open, disputeErr := lostDisputeReceipts(ctx, collected.ID)
+			if disputeErr != nil {
+				return disputeErr
 			}
 			if open {
 				return fmt.Errorf("checkout charge %s has an unresolved dispute; resolve it before refunding", collected.ID)
@@ -243,18 +257,33 @@ func (c *Client) refundInvoicePayments(ctx context.Context, invoiceID, key strin
 			}
 			if returned >= target {
 				result.ReturnedByChargeback = true
+				if history.pending {
+					result.RefundRequested = true
+				} else if max(collected.AmountRefunded, history.returned) > 0 {
+					result.RefundAlreadyComplete = true
+				}
 				continue
 			}
 		}
 		if collected.Refunded || returned >= target {
-			result.RefundAlreadyComplete = true
+			if history.pending {
+				result.RefundRequested = true
+			} else {
+				result.RefundAlreadyComplete = true
+			}
 			continue
 		}
 		rp.Amount = stripe.Int64(min(target-returned, collected.Amount-returned))
 		rp.Context = ctx
-		rp.SetIdempotencyKey(key + ":" + paid.ID)
-		if _, err := refund.New(rp); err != nil {
+		// A changed bank return changes the amount. A confirmed failed refund
+		// requires a fresh attempt, while a lost response must replay its key.
+		rp.SetIdempotencyKey(fmt.Sprintf("%s:%s:%d:%s", key, paid.ID, *rp.Amount, history.failureIdentity))
+		created, err := refund.New(rp)
+		if err != nil {
 			return err
+		}
+		if created.Status == stripe.RefundStatusFailed || created.Status == stripe.RefundStatusCanceled {
+			return fmt.Errorf("checkout refund %s was %s; recovery will retry after confirming its final state", created.ID, created.Status)
 		}
 		result.RefundRequested = true
 	}
@@ -262,4 +291,41 @@ func (c *Client) refundInvoicePayments(ctx context.Context, invoiceID, key strin
 		return err
 	}
 	return nil
+}
+
+type checkoutRefundState struct {
+	returned        int64
+	pending         bool
+	failureIdentity string
+}
+
+func checkoutRefundHistory(ctx context.Context, chargeID string, currency stripe.Currency) (checkoutRefundState, error) {
+	p := &stripe.RefundListParams{Charge: stripe.String(chargeID)}
+	p.Context = ctx
+	iter := refund.List(p)
+	var state checkoutRefundState
+	var failedIDs []string
+	seen := map[string]bool{}
+	for iter.Next() {
+		r := iter.Refund()
+		if seen[r.ID] {
+			continue
+		}
+		seen[r.ID] = true
+		switch r.Status {
+		case stripe.RefundStatusFailed, stripe.RefundStatusCanceled:
+			failedIDs = append(failedIDs, r.ID)
+		default:
+			if r.Amount < 0 || !strings.EqualFold(string(r.Currency), string(currency)) {
+				return state, fmt.Errorf("refund %s has invalid amount or purchase currency", r.ID)
+			}
+			state.returned += r.Amount
+			state.pending = state.pending || r.Status != stripe.RefundStatusSucceeded
+		}
+	}
+	if len(failedIDs) > 0 {
+		sort.Strings(failedIDs)
+		state.failureIdentity = fmt.Sprintf("%x", sha256.Sum256([]byte(strings.Join(failedIDs, "\x00"))))
+	}
+	return state, iter.Err()
 }

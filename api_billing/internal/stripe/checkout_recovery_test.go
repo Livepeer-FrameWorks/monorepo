@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	api "github.com/stripe/stripe-go/v85"
 )
@@ -23,6 +24,13 @@ type checkoutRecoveryBackend struct {
 	staleInvoice    bool
 	paymentInvoices []string
 	cancelParams    *api.SubscriptionCancelParams
+	sessionInvoice  string
+	chargeOverride  *api.Charge
+	allocation      int64
+	refundParams    []*api.RefundParams
+	existingRefunds []*api.Refund
+	refundStatus    api.RefundStatus
+	disputes        []*api.Dispute
 }
 
 func (b *checkoutRecoveryBackend) Call(method, path, key string, p api.ParamsContainer, result api.LastResponseSetter) error {
@@ -33,6 +41,9 @@ func (b *checkoutRecoveryBackend) Call(method, path, key string, p api.ParamsCon
 	switch v := result.(type) {
 	case *api.CheckoutSession:
 		*v = api.CheckoutSession{ID: "cs_reserved", Status: api.CheckoutSessionStatusOpen}
+		if b.sessionInvoice != "" {
+			v.Invoice = &api.Invoice{ID: b.sessionInvoice}
+		}
 		if b.paid {
 			v.Status = api.CheckoutSessionStatusComplete
 			v.Subscription = &api.Subscription{ID: "sub_reserved"}
@@ -46,6 +57,9 @@ func (b *checkoutRecoveryBackend) Call(method, path, key string, p api.ParamsCon
 		*v = api.Invoice{ID: "in_reserved", Status: api.InvoiceStatusVoid}
 	case *api.PaymentIntent:
 		*v = api.PaymentIntent{ID: "pi_reserved", LatestCharge: &api.Charge{ID: "ch_reserved", Currency: api.CurrencyEUR, Amount: 2000}}
+		if b.chargeOverride != nil {
+			v.LatestCharge = b.chargeOverride
+		}
 		if b.processing {
 			v.Status = api.PaymentIntentStatusProcessing
 		}
@@ -57,7 +71,16 @@ func (b *checkoutRecoveryBackend) Call(method, path, key string, p api.ParamsCon
 			v.LatestCharge.AmountRefunded = 2000
 		}
 	case *api.Refund:
-		b.refunded = true
+		params := p.(*api.RefundParams)
+		b.refundParams = append(b.refundParams, params)
+		v.ID = fmt.Sprintf("refund-%d", len(b.refundParams))
+		v.Status = b.refundStatus
+		if v.Status == "" {
+			v.Status = api.RefundStatusPending
+		}
+		if v.Status != api.RefundStatusFailed && v.Status != api.RefundStatusCanceled {
+			b.refunded = true
+		}
 	}
 	return nil
 }
@@ -65,6 +88,10 @@ func (b *checkoutRecoveryBackend) Call(method, path, key string, p api.ParamsCon
 func (b *checkoutRecoveryBackend) CallRaw(method, path, key string, body []byte, p *api.Params, result api.LastResponseSetter) error {
 	b.paths = append(b.paths, method+" "+path)
 	switch v := result.(type) {
+	case *api.RefundList:
+		v.Data = b.existingRefunds
+	case *api.DisputeList:
+		v.Data = b.disputes
 	case *api.CheckoutSessionList:
 		own := &api.CheckoutSession{ID: "cs_reserved", Status: api.CheckoutSessionStatusOpen, Metadata: map[string]string{"checkout_reservation_id": "reservation"}}
 		if b.paid {
@@ -91,7 +118,7 @@ func (b *checkoutRecoveryBackend) CallRaw(method, path, key string, body []byte,
 			v.Data = nil
 			return nil
 		}
-		v.Data = []*api.InvoicePayment{{ID: "ip_reserved", Payment: &api.InvoicePaymentPayment{PaymentIntent: &api.PaymentIntent{ID: "pi_reserved"}}}}
+		v.Data = []*api.InvoicePayment{{ID: "ip_reserved", AmountPaid: b.allocation, Payment: &api.InvoicePaymentPayment{PaymentIntent: &api.PaymentIntent{ID: "pi_reserved"}}}}
 	}
 	return nil
 }
@@ -286,5 +313,149 @@ func TestCheckoutCompensationClosesUnpaidInvoiceBeforeReleasingReservation(t *te
 	}
 	if !voided {
 		t.Fatalf("released checkout while its unpaid initial invoice still accepted payment: %v", b.paths)
+	}
+}
+
+func TestCheckoutRefundRetryUsesAmountBoundIdentity(t *testing.T) {
+	b := &checkoutRecoveryBackend{}
+	installBackend(t, b)
+	c := NewClient(Config{SecretKey: "sk_test", Logger: logging.NewLogger()})
+	var result billing.CheckoutRecoveryResult
+	if err := c.refundInvoicePayments(t.Context(), "in_reserved", "reservation", &result, "checkout", "intent"); err != nil {
+		t.Fatal(err)
+	}
+	b.refunded = false
+	b.chargeOverride = &api.Charge{ID: "ch_reserved", Currency: api.CurrencyEUR, Amount: 2000, AmountRefunded: 500}
+	if err := c.refundInvoicePayments(t.Context(), "in_reserved", "reservation", &result, "checkout", "intent"); err != nil {
+		t.Fatal(err)
+	}
+	if len(b.refundParams) != 2 || *b.refundParams[0].Amount != 2000 || *b.refundParams[1].Amount != 1500 || *b.refundParams[0].IdempotencyKey == *b.refundParams[1].IdempotencyKey {
+		t.Fatalf("different amounts reused one provider identity: %+v", b.refundParams)
+	}
+}
+
+func TestCheckoutFailedRefundIsRetriedAfterConfirmedFailure(t *testing.T) {
+	b := &checkoutRecoveryBackend{refundStatus: api.RefundStatusFailed}
+	installBackend(t, b)
+	c := NewClient(Config{SecretKey: "sk_test", Logger: logging.NewLogger()})
+	var result billing.CheckoutRecoveryResult
+	if err := c.refundInvoicePayments(t.Context(), "in_reserved", "reservation", &result, "checkout", "intent"); err == nil || result.RefundRequested {
+		t.Fatalf("failed refund reported accepted: %+v %v", result, err)
+	}
+	firstKey := *b.refundParams[0].IdempotencyKey
+	b.existingRefunds = []*api.Refund{{ID: "refund-1", Status: api.RefundStatusFailed}}
+	b.refundStatus = api.RefundStatusPending
+	if err := c.refundInvoicePayments(t.Context(), "in_reserved", "reservation", &result, "checkout", "intent"); err != nil || !result.RefundRequested {
+		t.Fatalf("confirmed failed refund cannot recover: %+v %v", result, err)
+	}
+	if *b.refundParams[1].IdempotencyKey == firstKey {
+		t.Fatal("retry replays permanently failed refund")
+	}
+}
+
+func TestCheckoutRefundRespectsAllocationAndBankReturns(t *testing.T) {
+	for _, tc := range []struct {
+		name                       string
+		returned, allocation, lost int64
+		open                       bool
+		want                       int64
+		refuse                     bool
+	}{
+		{name: "partial refund", returned: 500, want: 1500},
+		{name: "refund and lost dispute", returned: 500, lost: 500, want: 1000},
+		{name: "fully lost dispute", lost: 2000, want: 0},
+		{name: "open dispute", open: true, refuse: true},
+		{name: "shared charge", allocation: 1000, refuse: true},
+		{name: "already refunded", returned: 2000, want: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ch := &api.Charge{ID: "ch_reserved", Currency: api.CurrencyEUR, Amount: 2000, AmountRefunded: tc.returned, Disputed: tc.lost > 0 || tc.open}
+			b := &checkoutRecoveryBackend{chargeOverride: ch, allocation: tc.allocation}
+			if ch.Disputed {
+				state := api.DisputeStatusLost
+				if tc.open {
+					state = api.DisputeStatusNeedsResponse
+				}
+				b.disputes = []*api.Dispute{{ID: "dispute", Status: state, Amount: tc.lost, Currency: api.CurrencyEUR}}
+			}
+			installBackend(t, b)
+			c := NewClient(Config{SecretKey: "sk_test", Logger: logging.NewLogger()})
+			var result billing.CheckoutRecoveryResult
+			err := c.refundInvoicePayments(t.Context(), "in_reserved", "reservation", &result, "checkout", "intent")
+			if (err != nil) != tc.refuse {
+				t.Fatalf("unexpected allocation result: %+v %v", result, err)
+			}
+			if tc.refuse || tc.want == 0 {
+				if len(b.refundParams) != 0 {
+					t.Fatalf("unsafe or duplicate refund: %+v", b.refundParams)
+				}
+			} else if len(b.refundParams) != 1 || *b.refundParams[0].Amount != tc.want {
+				t.Fatalf("refund did not respect bank returns: %+v", b.refundParams)
+			}
+		})
+	}
+}
+
+func TestRecoveryUsesExplicitSessionInvoice(t *testing.T) {
+	b := &checkoutRecoveryBackend{paid: true, includeRenewals: true, sessionInvoice: "in_renewal"}
+	installBackend(t, b)
+	c := NewClient(Config{SecretKey: "sk_test", Logger: logging.NewLogger()})
+	if _, err := c.RecoverReservedCheckout(t.Context(), "cus_reserved", "intent", "cs_reserved"); err != nil {
+		t.Fatal(err)
+	}
+	if len(b.paymentInvoices) == 0 {
+		t.Fatal("explicit checkout invoice was not read")
+	}
+	for _, id := range b.paymentInvoices {
+		if id != "in_renewal" {
+			t.Fatalf("refunded another invoice: %s", id)
+		}
+	}
+}
+
+func TestCheckoutRecoveryWithoutCustomerDoesNotScanAllSessions(t *testing.T) {
+	b := &checkoutRecoveryBackend{}
+	installBackend(t, b)
+	c := NewClient(Config{SecretKey: "sk_test", Logger: logging.NewLogger()})
+	if _, err := c.RecoverReservedCheckout(t.Context(), "", "intent", ""); err == nil {
+		t.Fatal("unbound recovery scanned sessions without a customer")
+	}
+	if _, err := c.ReservedCheckout(t.Context(), "", "intent", ""); err == nil {
+		t.Fatal("preview scanned sessions without a customer")
+	}
+	if len(b.paths) != 0 {
+		t.Fatalf("customer-wide request escaped validation: %v", b.paths)
+	}
+}
+
+func TestCheckoutRefundFailureIdentityIncludesEveryConfirmedFailure(t *testing.T) {
+	b := &checkoutRecoveryBackend{existingRefunds: []*api.Refund{{ID: "z-first", Created: 10, Status: api.RefundStatusFailed}}}
+	installBackend(t, b)
+	first, err := checkoutRefundHistory(t.Context(), "charge", api.CurrencyEUR)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.existingRefunds = append(b.existingRefunds, &api.Refund{ID: "a-second", Created: 10, Status: api.RefundStatusFailed})
+	second, err := checkoutRefundHistory(t.Context(), "charge", api.CurrencyEUR)
+	if err != nil || first.failureIdentity == second.failureIdentity {
+		t.Fatalf("equal-time failed retry kept the prior identity: first=%+v second=%+v err=%v", first, second, err)
+	}
+	b.existingRefunds[0], b.existingRefunds[1] = b.existingRefunds[1], b.existingRefunds[0]
+	reordered, err := checkoutRefundHistory(t.Context(), "charge", api.CurrencyEUR)
+	if err != nil || second.failureIdentity != reordered.failureIdentity {
+		t.Fatalf("pagination order changed failed identity: %+v %+v %v", second, reordered, err)
+	}
+}
+
+func TestCheckoutRefundLostResponseDoesNotRepeatPendingReturn(t *testing.T) {
+	b := &checkoutRecoveryBackend{existingRefunds: []*api.Refund{{ID: "in-flight", Status: api.RefundStatusPending, Amount: 2000, Currency: api.CurrencyEUR}}}
+	installBackend(t, b)
+	c := NewClient(Config{SecretKey: "sk_test", Logger: logging.NewLogger()})
+	var result billing.CheckoutRecoveryResult
+	if err := c.refundInvoicePayments(t.Context(), "in_reserved", "reservation", &result, "checkout", "intent"); err != nil {
+		t.Fatal(err)
+	}
+	if len(b.refundParams) != 0 {
+		t.Fatal("a stale charge snapshot caused a second refund despite an existing bank return")
 	}
 }

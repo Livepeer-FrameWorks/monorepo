@@ -110,7 +110,8 @@ LEFT JOIN purser.subscription_tier_upgrades upgrade
 ), fallback_rows AS (
     SELECT subscription.id::text AS id, 'free_fallback'::text AS provider,
            ('free-fallback:' || subscription.tenant_id::text)::text AS event_key,
-           CASE WHEN subscription.free_fallback_moved_at IS NOT NULL THEN 'notice'
+           CASE WHEN subscription.free_fallback_notice_abandoned_at IS NOT NULL THEN 'notice_abandoned'
+                WHEN subscription.free_fallback_moved_at IS NOT NULL THEN 'notice'
                 WHEN subscription.free_fallback_provider_stopping THEN 'provider_stopping'
                 ELSE 'scheduled' END::text AS status,
            (subscription.free_fallback_failures + subscription.free_fallback_notice_failures)::integer AS attempts,

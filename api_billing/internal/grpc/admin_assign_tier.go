@@ -256,6 +256,44 @@ func (s *PurserServer) adminAssignTierOnce(ctx context.Context, tenantID, tierNa
 			return txStatusErrorf(upgradeErr, codes.Internal, "check tier upgrade fence: %v", upgradeErr)
 		}
 
+		// Preserve native fee evidence until its paid term ends before detaching
+		// an ended collector.
+		// A live native subscription still owns its cancellation obligation.
+		pricing, lockErr := queries.LockTenantSubscriptionForProviderChange(ctx, tenantID)
+		if lockErr != nil {
+			return txStatusErrorf(lockErr, codes.Internal, "read fallback stop fence: %v", lockErr)
+		}
+		preservePaidTerm := false
+		if pricing.FreeFallbackProviderEndedAt.Valid &&
+			(pricing.StripeSubscriptionID.String != "" || pricing.MollieSubscriptionID.String != "") {
+			paidUntil, paidErr := queries.GetOpenRetainedProviderPaidTerm(ctx, tenantID)
+			if paidErr == nil {
+				preservePaidTerm = grant != nil && grant.expiredOnly && grant.change == nil && grant.keepTier &&
+					current.TierID == tier.ID && current.BillingModel == model
+				if !preservePaidTerm {
+					return status.Errorf(codes.FailedPrecondition,
+						"the ended native subscription's paid term runs until %s; wait for it to end before assigning a tier or changing a billing grant",
+						paidUntil.UTC().Format(time.RFC3339))
+				}
+			} else if !errors.Is(paidErr, sql.ErrNoRows) {
+				return txStatusErrorf(paidErr, codes.Internal, "read retained provider paid term: %v", paidErr)
+			}
+		}
+		// Expiry removes only the same-tier waiver; its native fee evidence and
+		// cancellation schedule must survive until the already-paid term ends.
+		clearFallback := !preservePaidTerm && (grant == nil || grant.clearFallback ||
+			(model == "postpaid" && tier.TierLevel > 0 && pricing.FreeFallbackProviderEndedAt.Valid))
+		if clearFallback {
+			if pricing.FreeFallbackProviderStopping {
+				return status.Error(codes.FailedPrecondition, subscriptions.ErrPendingFreeFallback.Error())
+			}
+			if !pricing.FreeFallbackProviderEndedAt.Valid &&
+				(current.Status == "past_due" || current.Status == "pending_cancellation") &&
+				(pricing.StripeSubscriptionID.String != "" || pricing.MollieSubscriptionID.String != "") {
+				return status.Error(codes.FailedPrecondition, "the native payment-provider subscription is still live; inspect admin billing recovery list and let its cancellation finish before assigning the tier")
+			}
+		}
+
 		resp = &purserpb.AdminAssignTierResponse{
 			SubscriptionId: current.SubscriptionID, TierId: tier.ID, TierName: tier.TierName,
 			TierLevel: tier.TierLevel, BillingModel: model,
@@ -283,6 +321,9 @@ func (s *PurserServer) adminAssignTierOnce(ctx context.Context, tenantID, tierNa
 		}
 		if grant == nil && !created && (current.TierID != tier.ID || current.BillingModel != model) {
 			if _, guardErr := subscriptions.LockChange(ctx, tx, tenantID, subscriptions.ChangePricing); guardErr != nil {
+				if errors.Is(guardErr, subscriptions.ErrPendingFreeFallback) {
+					return status.Error(codes.FailedPrecondition, guardErr.Error())
+				}
 				if subscriptions.IsPricingRefusal(guardErr) {
 					return errPhaseChangedWhileRated
 				}
@@ -317,20 +358,17 @@ func (s *PurserServer) adminAssignTierOnce(ctx context.Context, tenantID, tierNa
 				return grantErr
 			}
 		}
-		if grant == nil || grant.clearFallback {
-			pricing, lockErr := queries.LockTenantSubscriptionForProviderChange(ctx, tenantID)
-			if lockErr != nil {
-				return txStatusErrorf(lockErr, codes.Internal, "read fallback stop fence: %v", lockErr)
-			}
-			if pricing.FreeFallbackProviderStopping {
-				return status.Error(codes.FailedPrecondition, subscriptions.ErrPendingFreeFallback.Error())
-			}
+		if clearFallback {
 			cleared, clearErr := queries.ClearSubscriptionFreeFallback(ctx, tenantID)
 			if clearErr != nil {
 				return txStatusErrorf(clearErr, codes.Internal, "cancel scheduled fallback: %v", clearErr)
 			}
 			if cleared > 0 {
 				changedFields = append(changedFields, "free_fallback")
+				if current.Status == "past_due" || current.Status == "pending_cancellation" {
+					newStatus = "active"
+					changedFields = append(changedFields, "status")
+				}
 			}
 		}
 		if len(changedFields) == 0 {

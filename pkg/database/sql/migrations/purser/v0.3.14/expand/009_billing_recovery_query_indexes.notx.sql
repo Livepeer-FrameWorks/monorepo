@@ -28,7 +28,8 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_subscription_fallback_notice_retry
         tenant_id ASC
     )
     WHERE free_fallback_at IS NOT NULL
-      AND (free_fallback_moved_at IS NOT NULL OR free_fallback_notified_at IS NULL);
+      AND (free_fallback_moved_at IS NOT NULL OR free_fallback_notified_at IS NULL)
+      AND free_fallback_notice_abandoned_at IS NULL;
 
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_subscription_fallback_failed
     ON purser.tenant_subscriptions (
@@ -57,7 +58,8 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_subscription_fallback_notice_failed
     )
     INCLUDE (id)
     WHERE free_fallback_at IS NOT NULL
-      AND free_fallback_notice_error IS NOT NULL;
+      AND free_fallback_notice_error IS NOT NULL
+      AND free_fallback_notice_abandoned_at IS NULL;
 
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_provider_inbox_failed_attempts
     ON purser.provider_webhook_inbox (

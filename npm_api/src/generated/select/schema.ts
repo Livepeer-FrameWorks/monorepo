@@ -3092,6 +3092,7 @@ export interface Mutation {
     /**
      * Change the postpaid billing tier. Upgrades start a fresh month and credit
      * the unused paid fee; provider or metering reconciliation can leave them pending.
+     * Enterprise and upgrades to a lower base price require an operator arrangement.
      * Downgrades take effect at the current billing period end.
      */
     changeBillingTier: ChangeBillingTierResult
@@ -10289,7 +10290,7 @@ export interface MutationGenqlSelection{
      * After successful payment, user is redirected to successUrl.
      */
     createStripeCheckout?: (StripeCheckoutResultGenqlSelection & { __args: {
-    /** The billing tier to subscribe to. */
+    /** The active, non-Enterprise postpaid tier to subscribe to (tier_level >= 1). */
     tierId: Scalars['ID'],
     /** Billing period: 'monthly' or 'yearly'. */
     billingPeriod: Scalars['String'],
@@ -10585,10 +10586,11 @@ export interface MutationGenqlSelection{
     /**
      * Change the postpaid billing tier. Upgrades start a fresh month and credit
      * the unused paid fee; provider or metering reconciliation can leave them pending.
+     * Enterprise and upgrades to a lower base price require an operator arrangement.
      * Downgrades take effect at the current billing period end.
      */
     changeBillingTier?: (ChangeBillingTierResultGenqlSelection & { __args: {
-    /** The target billing tier. Must be an active postpaid tier (tier_level >= 1). */
+    /** The target billing tier. Must be active, non-Enterprise and postpaid (tier_level >= 1). */
     tierId: Scalars['ID']} })
     /** Delete a Skipper conversation. */
     deleteSkipperConversation?: { __args: {id: Scalars['ID']} }

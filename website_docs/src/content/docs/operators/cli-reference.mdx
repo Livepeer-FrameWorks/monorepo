@@ -2329,6 +2329,12 @@ checkout deadline. An abandoned attempt may be expired early; compensation can
 cancel a subscription and request refunds. Refund acceptance does not mean bank
 settlement has finished. Both commands require a platform-operator JWT.
 
+`--retain-delivered` selects an audited attestation for an ambiguous historical
+Mollie first payment. It retains the payment without refund or new access,
+requires the same preview and confirmation, and records the operator and reason.
+Current checkouts and payments already owed a refund are refused. Older Purser
+servers return `Unimplemented`; the CLI does not fall back to refund recovery.
+
 #### frameworks admin billing recovery upgrade
 
 `frameworks admin billing recovery upgrade --tenant-id <UUID> --upgrade-id <UUID> --reason "Reconcile purchase"`

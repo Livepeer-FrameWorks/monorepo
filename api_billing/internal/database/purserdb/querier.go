@@ -62,6 +62,9 @@ type Querier interface {
 	AttachProviderPaymentIDToIntent(ctx context.Context, arg AttachProviderPaymentIDToIntentParams) error
 	AttachProviderPaymentToPendingTopup(ctx context.Context, arg AttachProviderPaymentToPendingTopupParams) (int64, error)
 	AttachStripeIntentToInvoicePayment(ctx context.Context, arg AttachStripeIntentToInvoicePaymentParams) (int64, error)
+	// A locally activated native checkout can prove its preceding first payment
+	// within one customer's checkout sequence, after provider mandate verification.
+	BackfillHistoricalMollieCheckoutFunding(ctx context.Context, arg BackfillHistoricalMollieCheckoutFundingParams) error
 	// This runs for every usage summary. The IS NULL filter keeps a subscription
 	// whose period is already set from being rewritten with its own values: an
 	// UPDATE that names a column fires that column's UPDATE OF triggers even when
@@ -331,6 +334,9 @@ type Querier interface {
 	GetMollieTierPrice(ctx context.Context, tierID string) (GetMollieTierPriceRow, error)
 	GetNextDurableX402RelayerNonce(ctx context.Context, arg GetNextDurableX402RelayerNonceParams) (int64, error)
 	GetOpenInvoiceBillingPeriod(ctx context.Context, arg GetOpenInvoiceBillingPeriodParams) (GetOpenInvoiceBillingPeriodRow, error)
+	// Retained native identities exclude an already-paid fee from Purser invoices.
+	// The fallback date can be later than local monthly coordinates during catch-up.
+	GetOpenRetainedProviderPaidTerm(ctx context.Context, tenantID string) (time.Time, error)
 	// The open usage invoice (draft or held for manual review) that a switch
 	// closing the phase [phase_start, phase_end) turns into the phase's closing
 	// document: the one starting at the phase, else the latest one whose period
@@ -394,6 +400,8 @@ type Querier interface {
 	// Whether a Stripe or Mollie subscription bills the tier's base fee on the
 	// provider's side for this subscription.
 	GetProviderSubscriptionState(ctx context.Context, tenantID string) (GetProviderSubscriptionStateRow, error)
+	GetSelfServiceCheckoutTier(ctx context.Context, arg GetSelfServiceCheckoutTierParams) (string, error)
+	GetSelfServiceNativeSubscriptions(ctx context.Context, tenantID string) (GetSelfServiceNativeSubscriptionsRow, error)
 	GetSimplifiedInvoiceDocument(ctx context.Context, arg GetSimplifiedInvoiceDocumentParams) (GetSimplifiedInvoiceDocumentRow, error)
 	// Where the period began that switches between prepaid and postpaid split up
 	// to period_start: the start of the earliest of the contiguous documents that
@@ -460,6 +468,8 @@ type Querier interface {
 	// A provider-created subscription is not evidence of delivered local service.
 	// Without exact funding links, only a sole initial receipt can be associated.
 	HasHistoricalMollieActivation(ctx context.Context, arg HasHistoricalMollieActivationParams) (bool, error)
+	HasHistoricalMollieFundingActivation(ctx context.Context, arg HasHistoricalMollieFundingActivationParams) (bool, error)
+	HasMollieCheckoutRefundObligation(ctx context.Context, arg HasMollieCheckoutRefundObligationParams) (bool, error)
 	HasPendingMollieFundingCheckout(ctx context.Context, arg HasPendingMollieFundingCheckoutParams) (bool, error)
 	HasPendingTierUpgrade(ctx context.Context, tenantID string) (bool, error)
 	// Authenticated provider callbacks have no tenant context until their payment
@@ -815,6 +825,7 @@ type Querier interface {
 	// Closes the operator review holds of an uncredited top-up whose paid amount
 	// the provider has fully returned; evidence_ref names the closing reversal.
 	ResolvePendingTopupReviewHolds(ctx context.Context, arg ResolvePendingTopupReviewHoldsParams) (int64, error)
+	RetainDeliveredHistoricalMollieCheckout(ctx context.Context, arg RetainDeliveredHistoricalMollieCheckoutParams) error
 	// A payment completed while the native cancellation ran still buys its full term.
 	RetainPaidFreeFallbackPeriod(ctx context.Context, arg RetainPaidFreeFallbackPeriodParams) (int64, error)
 	ReviewX402MutationResult(ctx context.Context, arg ReviewX402MutationResultParams) (int64, error)
@@ -830,6 +841,8 @@ type Querier interface {
 	// An unjournalled request with unknown submission provenance may only be located.
 	SaveCheckoutProviderRequest(ctx context.Context, arg SaveCheckoutProviderRequestParams) (SaveCheckoutProviderRequestRow, error)
 	ScheduleTenantTierDowngrade(ctx context.Context, arg ScheduleTenantTierDowngradeParams) error
+	// Paid advance changes need the durable upgrade boundary instead of another setup.
+	SelfServiceAdvanceTierChange(ctx context.Context, arg SelfServiceAdvanceTierChangeParams) (bool, error)
 	SetBalanceTransactionResult(ctx context.Context, arg SetBalanceTransactionResultParams) (int64, error)
 	SetCryptoWalletCreditedAmount(ctx context.Context, arg SetCryptoWalletCreditedAmountParams) (int64, error)
 	// Finalizing records the customer and supplier the invoice is issued to and by.

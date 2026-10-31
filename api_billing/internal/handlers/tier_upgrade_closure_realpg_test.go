@@ -60,7 +60,7 @@ billing_name='Customer',billing_address='{"street":"Street 1","city":"Leiden","p
 					invoiceID = "upgrade-invoice"
 				}
 				return map[string]any{"id": "subscription", "object": "subscription", "customer": "customer", "status": state, "metadata": metadata, "latest_invoice": map[string]any{"id": invoiceID, "status": "paid", "amount_paid": 2000},
-					"items": map[string]any{"data": []any{map[string]any{"id": "item", "price": map[string]any{"id": price}, "current_period_start": providerStart.Unix(), "current_period_end": providerEnd.Unix()}}}}
+					"items": map[string]any{"data": []any{map[string]any{"id": "item", "price": map[string]any{"id": price, "unit_amount": 2000, "currency": "eur", "recurring": map[string]any{"interval": "month", "interval_count": 1}}, "current_period_start": providerStart.Unix(), "current_period_end": providerEnd.Unix()}}}}
 			}
 			fixture.route("GET", "/v1/customers/customer", func(recordedProviderRequest) (int, any) {
 				return 200, map[string]any{"id": "customer", "invoice_settings": map[string]any{"default_payment_method": "pm"}}
@@ -89,6 +89,12 @@ billing_name='Customer',billing_address='{"street":"Street 1","city":"Leiden","p
 			})
 			fixture.route("GET", "/v1/charges/upgrade-charge", func(recordedProviderRequest) (int, any) {
 				return 200, map[string]any{"id": "upgrade-charge", "amount": 5000, "currency": "eur"}
+			})
+			fixture.route("GET", "/v1/refunds", func(r recordedProviderRequest) (int, any) {
+				if r.query.Get("charge") == "" {
+					t.Error("refund history was not scoped to the purchase charge")
+				}
+				return 200, map[string]any{"object": "list", "data": []any{}, "has_more": false}
 			})
 			fixture.route("POST", "/v1/refunds", func(r recordedProviderRequest) (int, any) {
 				if r.form.Get("charge") != "upgrade-charge" || r.form.Get("amount") != "5000" {
@@ -146,7 +152,7 @@ VALUES($1,'paid',20,20,NOW(),$2,$3,2500,'USD',1.25,CURRENT_DATE,NOW())`, tenant.
 				exec(`UPDATE purser.subscription_tier_upgrades SET state='provider_applied',provider_receipt=$3 WHERE tenant_id=$1 AND id=$2`, tenant.id, id, encoded)
 			}
 			if name == "provider_applied" || name == "stripe_future_paid" || name == "stripe_lost_response" {
-				receipt, err := client.UpgradeMonthlySubscription(t.Context(), billing.TierUpgradeRequest{ID: id, TenantID: tenant.id, TierID: target, CustomerID: "customer", SubscriptionID: "subscription", PriceID: "new-price", BaseCents: 5000})
+				receipt, err := client.UpgradeMonthlySubscription(t.Context(), billing.TierUpgradeRequest{ID: id, TenantID: tenant.id, TierID: target, CustomerID: "customer", SubscriptionID: "subscription", PriceID: "new-price", BaseCents: 5000, OldBaseCents: 2000})
 				if err != nil {
 					t.Fatal(err)
 				}

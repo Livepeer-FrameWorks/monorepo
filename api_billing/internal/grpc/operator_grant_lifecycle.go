@@ -236,11 +236,7 @@ func (s *PurserServer) endOperatorGrantToTier(ctx context.Context, tenantID, rea
 				if locked.Status != "cancelled" {
 					return errPhaseChangedWhileRated
 				}
-				endedAt := time.Now().UTC()
-				if grant.ExpiresAt.Valid && !grant.ExpiresAt.Time.After(endedAt) {
-					endedAt = grant.ExpiresAt.Time
-				}
-				mutation := &operatorGrantMutation{previous: grant, reason: reason, at: endedAt}
+				mutation := &operatorGrantMutation{previous: grant, reason: reason, at: time.Now().UTC()}
 				if checkErr := mutation.checkUnchanged(ctx, q, tenantID); checkErr != nil {
 					return checkErr
 				}

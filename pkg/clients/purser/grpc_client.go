@@ -835,6 +835,11 @@ func (c *GRPCClient) AdminRecoverCheckout(ctx context.Context, r *purserpb.Admin
 	return c.prepaid.AdminRecoverCheckout(ctx, r)
 }
 
+// AdminRetainDeliveredCheckout attests historical delivery without refunding.
+func (c *GRPCClient) AdminRetainDeliveredCheckout(ctx context.Context, r *purserpb.AdminRecoverCheckoutRequest) (*purserpb.AdminRecoverCheckoutResponse, error) {
+	return c.prepaid.AdminRetainDeliveredCheckout(ctx, r)
+}
+
 // AdminRecoverTierUpgrade inspects or requests recovery of one accepted upgrade.
 func (c *GRPCClient) AdminRecoverTierUpgrade(ctx context.Context, r *purserpb.AdminRecoverTierUpgradeRequest) (*purserpb.AdminRecoverTierUpgradeResponse, error) {
 	return c.prepaid.AdminRecoverTierUpgrade(ctx, r)

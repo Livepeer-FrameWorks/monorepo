@@ -24,6 +24,9 @@ func TestCheckoutRecoveryRequiresPlatformOperator(t *testing.T) {
 		if _, err := s.AdminListCheckoutRecovery(ctx, &purserpb.AdminListCheckoutRecoveryRequest{}); status.Code(err) != codes.PermissionDenied {
 			t.Fatalf("inventory allowed %s: %v", auth, err)
 		}
+		if _, err := s.AdminRetainDeliveredCheckout(ctx, &purserpb.AdminRecoverCheckoutRequest{}); status.Code(err) != codes.PermissionDenied {
+			t.Fatalf("delivery decision allowed %s: %v", auth, err)
+		}
 		if _, err := s.AdminRecoverCheckout(ctx, &purserpb.AdminRecoverCheckoutRequest{}); status.Code(err) != codes.PermissionDenied {
 			t.Fatalf("recovery allowed %s: %v", auth, err)
 		}

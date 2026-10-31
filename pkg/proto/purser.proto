@@ -1193,6 +1193,9 @@ service PrepaidService {
   rpc AdminListCheckoutRecovery(AdminListCheckoutRecoveryRequest) returns (AdminListCheckoutRecoveryResponse);
   // Previews one tenant checkout; confirmed requests durably reconcile it. Platform operators only.
   rpc AdminRecoverCheckout(AdminRecoverCheckoutRequest) returns (AdminRecoverCheckoutResponse);
+  // Attests delivered historical Mollie service without refund. A separate RPC
+  // makes older servers refuse this action instead of cancelling the checkout.
+  rpc AdminRetainDeliveredCheckout(AdminRecoverCheckoutRequest) returns (AdminRecoverCheckoutResponse);
   // Inspect a paid upgrade or cancel its unapplied request without starting a purchase.
   rpc AdminRecoverTierUpgrade(AdminRecoverTierUpgradeRequest) returns (AdminRecoverTierUpgradeResponse);
 
@@ -2153,7 +2156,7 @@ message AdminRecoverCheckoutRequest {
   string tenant_id = 1; // Owning tenant UUID.
   string reservation_id = 2; // Reservation UUID from recovery list.
   string reason = 3; // Required operator reason, retained with the recovery request.
-  bool confirmed = 4; // False returns a read-only preview; true permits cancellation/refund.
+  bool confirmed = 4; // False returns a read-only preview; true permits the selected RPC action.
 }
 
 // AdminRecoverCheckoutResponse reports a preview or the reservation's durable recovery state.

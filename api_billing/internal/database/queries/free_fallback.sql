@@ -9,6 +9,7 @@ SET free_fallback_unbilled_through = CASE WHEN free_fallback_at IS NULL THEN GRE
     free_fallback_notice_attempted_at = CASE WHEN free_fallback_at IS NULL THEN NULL ELSE free_fallback_notice_attempted_at END,
     free_fallback_notice_failures = CASE WHEN free_fallback_at IS NULL THEN 0 ELSE free_fallback_notice_failures END,
     free_fallback_notice_error = CASE WHEN free_fallback_at IS NULL THEN NULL ELSE free_fallback_notice_error END,
+    free_fallback_notice_abandoned_at = CASE WHEN free_fallback_at IS NULL THEN NULL ELSE free_fallback_notice_abandoned_at END,
     free_fallback_reason = CASE
         WHEN free_fallback_at IS NULL OR sqlc.arg(fallback_at)::timestamptz < free_fallback_at THEN sqlc.arg(reason)::text
         ELSE free_fallback_reason END,
@@ -30,14 +31,32 @@ WHERE subscription.tenant_id = sqlc.arg(tenant_id)::text::uuid
   AND subscription.billing_model = 'postpaid'
   AND subscription.status IN ('active', 'past_due');
 
+-- name: GetOpenRetainedProviderPaidTerm :one
+-- Retained native identities exclude an already-paid fee from Purser invoices.
+-- The fallback date can be later than local monthly coordinates during catch-up.
+SELECT GREATEST(free_fallback_at, billing_period_end AT TIME ZONE 'UTC',
+                stripe_current_period_end, mollie_next_payment_date::timestamp AT TIME ZONE 'UTC')::timestamptz AS paid_until
+FROM purser.tenant_subscriptions
+WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
+  AND free_fallback_provider_ended_at IS NOT NULL
+  AND (NULLIF(stripe_subscription_id, '') IS NOT NULL OR NULLIF(mollie_subscription_id, '') IS NOT NULL)
+  AND GREATEST(free_fallback_at, billing_period_end AT TIME ZONE 'UTC',
+               stripe_current_period_end, mollie_next_payment_date::timestamp AT TIME ZONE 'UTC') > NOW();
+
 -- name: ClearSubscriptionFreeFallback :execrows
 UPDATE purser.tenant_subscriptions
-SET free_fallback_at = NULL, free_fallback_reason = NULL, free_fallback_notified_at = NULL,
+SET status = CASE WHEN status IN ('past_due', 'pending_cancellation') THEN 'active' ELSE status END,
+    stripe_subscription_id = CASE WHEN free_fallback_provider_ended_at IS NULL THEN stripe_subscription_id END,
+    stripe_subscription_status = CASE WHEN free_fallback_provider_ended_at IS NULL THEN stripe_subscription_status END,
+    stripe_current_period_end = CASE WHEN free_fallback_provider_ended_at IS NULL THEN stripe_current_period_end END,
+    mollie_subscription_id = CASE WHEN free_fallback_provider_ended_at IS NULL THEN mollie_subscription_id END,
+    mollie_next_payment_date = CASE WHEN free_fallback_provider_ended_at IS NULL THEN mollie_next_payment_date END,
+    free_fallback_at = NULL, free_fallback_reason = NULL, free_fallback_notified_at = NULL,
     free_fallback_moved_at = NULL, free_fallback_provider_stopping = FALSE,
     free_fallback_provider_ended_at = NULL, free_fallback_wait_since = NULL,
     free_fallback_attempted_at = NULL, free_fallback_failures = 0, free_fallback_error = NULL,
     free_fallback_notice_attempted_at = NULL, free_fallback_notice_failures = 0,
-    free_fallback_notice_error = NULL, updated_at = NOW()
+    free_fallback_notice_error = NULL, free_fallback_notice_abandoned_at = NULL, updated_at = NOW()
 WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
   AND (free_fallback_at IS NOT NULL OR free_fallback_provider_ended_at IS NOT NULL);
 
@@ -79,7 +98,8 @@ SET tier_id = sqlc.arg(tier_id)::text::uuid, status = 'active', billing_model = 
     pending_reason = CASE WHEN pending_reason = 'stripe_checkout' THEN pending_reason END,
     free_fallback_provider_ended_at = COALESCE(free_fallback_provider_ended_at, NOW()),
     free_fallback_moved_at = NOW(), free_fallback_provider_stopping = FALSE, free_fallback_wait_since = NULL, free_fallback_error = NULL, free_fallback_failures = 0,
-    free_fallback_notice_attempted_at = NULL, free_fallback_notice_error = NULL, free_fallback_notice_failures = 0, updated_at = NOW()
+    free_fallback_notice_attempted_at = NULL, free_fallback_notice_error = NULL, free_fallback_notice_failures = 0,
+    free_fallback_notice_abandoned_at = NULL, updated_at = NOW()
 WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
   AND free_fallback_at <= NOW()
   AND free_fallback_moved_at IS NULL;
@@ -89,6 +109,7 @@ SELECT subscription.tenant_id::text AS tenant_id
 FROM purser.tenant_subscriptions subscription
 WHERE free_fallback_at IS NOT NULL
   AND (free_fallback_moved_at IS NOT NULL OR free_fallback_notified_at IS NULL)
+  AND free_fallback_notice_abandoned_at IS NULL
   AND NOT EXISTS (SELECT 1 FROM purser.subscription_operator_grants grant_row
       WHERE grant_row.subscription_id = subscription.id)
   AND (free_fallback_notice_attempted_at IS NULL OR free_fallback_notice_attempted_at <= NOW() - (LEAST(720, 5 * power(2, LEAST(free_fallback_notice_failures, 8))) * INTERVAL '1 minute'))
@@ -103,6 +124,7 @@ SET free_fallback_notice_attempted_at = NOW(),
 WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
   AND free_fallback_at IS NOT NULL
   AND (free_fallback_moved_at IS NOT NULL OR free_fallback_notified_at IS NULL)
+  AND free_fallback_notice_abandoned_at IS NULL
   AND NOT EXISTS (SELECT 1 FROM purser.subscription_operator_grants grant_row
       WHERE grant_row.subscription_id = subscription.id)
   AND (free_fallback_notice_attempted_at IS NULL OR free_fallback_notice_attempted_at <= NOW() - (LEAST(720, 5 * power(2, LEAST(free_fallback_notice_failures, 8))) * INTERVAL '1 minute'))
@@ -126,7 +148,9 @@ WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
 
 -- name: RecordFreeFallbackNoticeFailure :exec
 UPDATE purser.tenant_subscriptions
-SET free_fallback_notice_error = sqlc.arg(failure)::text
+SET free_fallback_notice_error = sqlc.arg(failure)::text,
+    free_fallback_notice_abandoned_at = CASE WHEN free_fallback_notice_failures >= 5
+        THEN NOW() ELSE free_fallback_notice_abandoned_at END
 WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
   AND free_fallback_notice_attempted_at = sqlc.arg(attempted_at)::timestamptz
   AND free_fallback_at = sqlc.arg(scheduled_at)::timestamptz;
@@ -232,7 +256,7 @@ WITH moves AS MATERIALIZED (
 ), notices AS MATERIALIZED (
     SELECT id, tenant_id FROM purser.tenant_subscriptions
     WHERE free_fallback_at IS NOT NULL AND free_fallback_notice_error IS NOT NULL
-      AND free_fallback_notice_failures > 1
+      AND free_fallback_notice_failures > 1 AND free_fallback_notice_abandoned_at IS NULL
 ), closed AS MATERIALIZED (
     SELECT closure.tenant_id FROM purser.tenant_billing_closures closure
     WHERE closure.tenant_id = ANY (ARRAY(

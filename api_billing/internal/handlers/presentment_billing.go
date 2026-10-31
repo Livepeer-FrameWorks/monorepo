@@ -60,16 +60,11 @@ func finalizeInvoicePresentmentTx(ctx context.Context, tx *sql.Tx, invoiceID, te
 	return record, nil
 }
 
-// activateAdvanceBilledTenant applies the tier a payment-method setup was
-// started for, starts its period, reconciles entitlements, and charges that
-// period's base fee in advance. When the tenant is already billed in advance
-// on another tier or provider, its current period is closed at the change
-// first: that period's usage invoice is finalized for [start, change) and the
-// new period starts at the change, so the new base-fee invoice credits the
-// unused share of the previous one. A replay for the tier and provider the
-// tenant already runs on keeps the current period. The activation commits
-// before the charge; a charge that cannot start now is retried by the invoice
-// job.
+// activateAdvanceBilledTenant starts advance invoicing after payment-method setup.
+// Setup cannot change a paid tier or provider during its current period; that
+// purchase must use the durable tier-upgrade boundary. Replaying the current
+// tier and provider preserves its period. Activation commits before collection,
+// and the invoice job retries a charge that cannot start immediately.
 func (s *Service) activateAdvanceBilledTenant(ctx context.Context, tenantID, tierID, provider, stripeCustomerID string, now time.Time, receiptID string) error {
 	return s.activateAdvanceBilledTenantWithMandate(ctx, tenantID, tierID, provider, stripeCustomerID, now, receiptID, nil)
 }
@@ -85,6 +80,12 @@ func (s *Service) activateAdvanceBilledTenantWithMandate(ctx context.Context, te
 	}
 	var closing *PostpaidPhaseClose
 	if err == nil && advanceBilledPeriodChanges(profile, tierID, provider, periodStart) {
+		if eligibilityErr := subscriptions.CheckSelfServiceCheckout(ctx, s.db, tenantID, tierID, provider); eligibilityErr != nil {
+			if errors.Is(eligibilityErr, subscriptions.ErrSelfServiceTier) || errors.Is(eligibilityErr, subscriptions.ErrSelfServiceTierChange) {
+				return errors.Join(subscriptions.ErrCheckoutExpired, eligibilityErr)
+			}
+			return eligibilityErr
+		}
 		var prepareErr error
 		closing, prepareErr = PrepareProviderBillingBoundary(ctx, s.db, s.logger, s, tenantID, periodStart)
 		if prepareErr != nil {
@@ -231,10 +232,10 @@ func (jm *JobManager) ChargeAdvanceBaseFee(ctx context.Context, tenantID string)
 // fee: an active postpaid tenant without a provider subscription, presented
 // outside EUR, with a card provider on file. When a tier change cut the
 // previous base-fee period short, planPreviousBaseFee settles that invoice's
-// unused share in the same transaction: a paid invoice's is credited here, an
-// unpaid invoice is reduced to its used share. The net EUR amount is presented
-// at the ECB rate of now, and a credit larger than the base fee goes to the EUR
-// prepaid balance with nothing charged. A missing or stale rate, or a payment
+// unused share in the same transaction: a paid invoice credits the replacement,
+// and an unpaid invoice is reduced to its used share. Credit is capped at the
+// replacement fee; any excess is recorded as forfeited and never becomes funds.
+// The net EUR amount is presented at the current ECB rate. A missing or stale rate, or a payment
 // of the previous invoice still pending, creates nothing and returns an error.
 // A period that already has a base-fee invoice is left alone, and the retry job
 // collects an invoice whose charge did not start.
@@ -306,7 +307,7 @@ func (jm *JobManager) chargeAdvanceBaseFee(ctx context.Context, tenantID string,
 		if previousErr != nil {
 			return previousErr
 		}
-		credit = previous.credit
+		credit = cappedReplacementCredit(previous.credit, baseEUR.Shift(2).IntPart())
 		if !baseEUR.IsPositive() && !previous.found {
 			return nil
 		}
@@ -385,13 +386,8 @@ func (jm *JobManager) chargeAdvanceBaseFee(ctx context.Context, tenantID string,
 				return reduceErr
 			}
 		}
-		if consumeErr := consumePreviousBaseFee(ctx, txQueries, tenantID, previous, invoiceID, periodStart); consumeErr != nil {
+		if consumeErr := consumePreviousBaseFee(ctx, txQueries, tenantID, previous, credit, invoiceID, periodStart); consumeErr != nil {
 			return consumeErr
-		}
-		if netCents < 0 {
-			if creditErr := creditPrepaidBalanceForBaseFeeTx(ctx, tx, tenantID, invoiceID, -netCents, now); creditErr != nil {
-				return creditErr
-			}
 		}
 		if emailErr := enqueueInvoiceEmailTx(ctx, tx, invoiceID, tenantID, billingEmail.String, status); emailErr != nil {
 			return emailErr
@@ -419,9 +415,19 @@ const unusedBaseFeeCreditLineKey = "unused_base_fee_credit"
 
 type baseFeeCredit struct {
 	cents                  int64
+	forfeitedCents         int64
 	invoiceID              string
 	providerPaymentID      string
 	periodStart, periodEnd time.Time
+}
+
+// cappedReplacementCredit consumes the available share once, including excess
+// that cannot fund this purchase and must not survive as spendable credit.
+func cappedReplacementCredit(credit baseFeeCredit, baseCents int64) baseFeeCredit {
+	applied := min(max(credit.cents, 0), max(baseCents, 0))
+	credit.forfeitedCents = max(credit.cents-applied, 0)
+	credit.cents = applied
+	return credit
 }
 
 // unusedBaseFeeReductionLineKey is the line that takes the unused share of its
@@ -683,13 +689,14 @@ func baseFeeInvoiceDetails(tier *billingpkg.EffectiveTier, baseEUR decimal.Decim
 			"base_price": baseEUR.String(),
 		},
 	}
-	if credit.cents > 0 {
+	if credit.cents > 0 || credit.forfeitedCents > 0 {
 		details["unused_base_fee_credit"] = map[string]any{
 			"invoice_id":          credit.invoiceID,
 			"provider_payment_id": credit.providerPaymentID,
 			"period_start":        credit.periodStart,
 			"period_end":          credit.periodEnd,
 			"amount":              decimal.New(credit.cents, -2).StringFixed(2),
+			"forfeited_amount":    decimal.New(credit.forfeitedCents, -2).StringFixed(2),
 		}
 	}
 	usageDetails, err := json.Marshal(details)
@@ -756,41 +763,17 @@ func InvoicePaymentFX(ctx context.Context, db purserdb.DBTX, tenantID, invoiceID
 	return issued.Part(amountMinor, basis.PaidOriginalCents, basis.PaidEurCents)
 }
 
-// creditPrepaidBalanceForBaseFeeTx credits the EUR prepaid balance with the
-// part of an unused base-fee credit the new base fee does not absorb. The
-// balance transaction references the base-fee invoice, so it is written once.
-func creditPrepaidBalanceForBaseFeeTx(ctx context.Context, tx *sql.Tx, tenantID, invoiceID string, cents int64, now time.Time) error {
-	queries := purserdb.New(tx)
-	if err := queries.EnsurePrepaidBalanceRow(ctx, purserdb.EnsurePrepaidBalanceRowParams{TenantID: tenantID, Currency: billing.LedgerCurrency}); err != nil {
-		return fmt.Errorf("initialize prepaid balance: %w", err)
-	}
-	balance, err := queries.AddPrepaidBalance(ctx, purserdb.AddPrepaidBalanceParams{
-		AmountCents: cents, TenantID: tenantID, Currency: billing.LedgerCurrency,
-	})
-	if err != nil {
-		return fmt.Errorf("credit prepaid balance: %w", err)
-	}
-	if err := queries.InsertBalanceTransaction(ctx, purserdb.InsertBalanceTransactionParams{
-		ID: uuid.New(), TenantID: tenantID, AmountCents: cents, BalanceAfterCents: balance,
-		TransactionType: "adjustment",
-		Description:     sql.NullString{String: "Unused base subscription credit beyond the new base fee", Valid: true},
-		ReferenceID:     sql.NullString{String: invoiceID, Valid: true},
-		ReferenceType:   sql.NullString{String: "base_fee_invoice", Valid: true},
-		ActorKind:       sql.NullString{String: "system", Valid: true},
-		CreatedAt:       sql.NullTime{Time: now, Valid: true},
-	}); err != nil {
-		return fmt.Errorf("record unused base subscription credit: %w", err)
-	}
-	return nil
-}
-
 // consumePreviousBaseFee records the replacement that used an invoice's unused
 // share. Without this marker, a later prepaid round trip can credit it again.
-func consumePreviousBaseFee(ctx context.Context, queries *purserdb.Queries, tenantID string, previous previousBaseFee, replacementID string, at time.Time) error {
+func consumePreviousBaseFee(ctx context.Context, queries *purserdb.Queries, tenantID string, previous previousBaseFee, applied baseFeeCredit, replacementID string, at time.Time) error {
 	if !previous.found || previous.credit.invoiceID == "" {
 		return nil
 	}
-	details, err := json.Marshal(map[string]any{"returned_from": at, "replacement_invoice_id": replacementID, "credited": decimal.New(previous.credit.cents, -2).StringFixed(2)})
+	details, err := json.Marshal(map[string]any{
+		"returned_from": at, "replacement_invoice_id": replacementID,
+		"credited":  decimal.New(applied.cents, -2).StringFixed(2),
+		"forfeited": decimal.New(applied.forfeitedCents, -2).StringFixed(2),
+	})
 	if err != nil {
 		return fmt.Errorf("marshal consumed base fee: %w", err)
 	}

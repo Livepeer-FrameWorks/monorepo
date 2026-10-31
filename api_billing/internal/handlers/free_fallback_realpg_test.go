@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -104,6 +105,31 @@ func TestStripeSubscriptionEndPlansTheMoveToFree_RealPG(t *testing.T) {
 }
 
 func TestPaymentFailureGraceIsNotExtendedAndRecoveryCancelsIt_RealPG(t *testing.T) {
+	for _, before := range []string{"closed", "provider ended"} {
+		t.Run("mandate revocation persists after "+before, func(t *testing.T) {
+			db := startProviderReservationDatabase(t)
+			now := time.Now().UTC()
+			tenant := newPhaseTenant(t, db, "postpaid", now.Add(-time.Hour), now.AddDate(0, 1, 0), 0)
+			if _, err := db.Exec(`INSERT INTO purser.mollie_mandates(tenant_id,mollie_customer_id,mollie_mandate_id,status,method) VALUES($1,'customer','mandate','valid','directdebit')`, tenant.id); err != nil {
+				t.Fatal(err)
+			}
+			if before == "closed" {
+				if _, err := db.Exec(`INSERT INTO purser.tenant_billing_closures(tenant_id,closed_at,source_event_id) VALUES($1,NOW(),'closed-fixture')`, tenant.id); err != nil {
+					t.Fatal(err)
+				}
+			} else if _, err := db.Exec(`UPDATE purser.tenant_subscriptions SET free_fallback_provider_ended_at=NOW() WHERE tenant_id=$1`, tenant.id); err != nil {
+				t.Fatal(err)
+			}
+			started, err := subscriptions.RecordMollieMandateRevoked(t.Context(), db, tenant.id, now)
+			if err != nil || started {
+				t.Fatalf("ended account started grace: %v %v", started, err)
+			}
+			var mandate string
+			if err := db.QueryRow(`SELECT status FROM purser.mollie_mandates WHERE tenant_id=$1 AND mollie_mandate_id='mandate'`, tenant.id).Scan(&mandate); err != nil || mandate != "revoked" {
+				t.Fatalf("lost collector revocation: %s %v", mandate, err)
+			}
+		})
+	}
 	t.Run("mandate loss and grace commit together", func(t *testing.T) {
 		db := startProviderReservationDatabase(t)
 		now := time.Now().UTC()
@@ -341,7 +367,7 @@ func TestFreeFallbackRecoveryKeepsUnbilledUsageThroughRenewalReplay_RealPG(t *te
 }
 
 func TestFreeFallbackLifecycle_RealYugabyte(t *testing.T) {
-	for _, contract := range []struct {
+	contracts := []struct {
 		name string
 		run  func(*testing.T)
 	}{
@@ -352,7 +378,30 @@ func TestFreeFallbackLifecycle_RealYugabyte(t *testing.T) {
 		{"TestGraceNeverStartsOnFreeOrPrepaidTenants", TestGraceNeverStartsOnFreeOrPrepaidTenants_RealPG},
 		{"TestMollieCancellationMovesToFreeAtPeriodEnd", TestMollieCancellationMovesToFreeAtPeriodEnd_RealPG},
 		{"TestReplacedMollieFailureCannotStartFreeFallback", TestReplacedMollieFailureCannotStartFreeFallback_RealPG},
-	} {
+	}
+	if !t.Run("selection parity", func(t *testing.T) {
+		selection := os.Getenv("FRAMEWORKS_FREE_FALLBACK_TESTS")
+		if selection == "" {
+			t.Skip("selection parity requires the Makefile's canonical test list")
+		}
+		selected := make(map[string]bool)
+		for _, name := range strings.Split(selection, "|") {
+			selected[name] = true
+		}
+		for _, contract := range contracts {
+			name := contract.name + "_RealPG"
+			if !selected[name] {
+				t.Fatalf("Yugabyte fallback case %s is missing from the Makefile selection", name)
+			}
+			delete(selected, name)
+		}
+		if len(selected) != 0 {
+			t.Fatalf("Makefile fallback cases are absent from the Yugabyte matrix: %v", selected)
+		}
+	}) {
+		return
+	}
+	for _, contract := range contracts {
 		t.Run(contract.name, contract.run)
 	}
 }

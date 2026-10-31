@@ -43,7 +43,10 @@ func (s *Service) StageTierUpgradeTx(ctx context.Context, tx *sql.Tx, tenantID, 
 	if err != nil {
 		return "", err
 	}
-	if target.IsEnterprise || row.BaseCents < row.OldBaseCents {
+	if eligibilityErr := subscriptions.ValidateSelfServiceTier(target); eligibilityErr != nil {
+		return "", errors.Join(billing.ErrTierUpgradeRejected, eligibilityErr)
+	}
+	if row.BaseCents < row.OldBaseCents {
 		return "", fmt.Errorf("%w: self-service upgrades require a published tier priced at least as high as the current tier", billing.ErrTierUpgradeRejected)
 	}
 	if !row.RequestedAt.Before(row.OldPeriodEnd) {

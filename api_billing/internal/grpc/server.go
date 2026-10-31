@@ -5982,8 +5982,12 @@ func (s *PurserServer) promoteToPaidOnce(ctx context.Context, req *purserpb.Prom
 		if err != nil {
 			return txStatusErrorf(err, codes.Internal, "failed to resolve tier: %v", err)
 		}
-		if !tier.IsActive.Bool || tier.IsDefaultPrepaid.Bool || tier.TierLevel.Int32 < 1 {
-			return status.Error(codes.FailedPrecondition, "tier is not active and postpaid-eligible")
+		eligibleTier, eligibilityErr := queries.GetTierForBillingChange(ctx, tier.ID)
+		if eligibilityErr != nil {
+			return txStatusErrorf(eligibilityErr, codes.Internal, "load self-service promotion tier: %v", eligibilityErr)
+		}
+		if eligibilityErr = subscriptions.ValidateSelfServiceTier(eligibleTier); eligibilityErr != nil {
+			return status.Error(codes.FailedPrecondition, eligibilityErr.Error())
 		}
 		if !strings.EqualFold(tier.TierName, "free") {
 			address := scanBillingAddress(subscription.BillingAddress)
@@ -6137,11 +6141,8 @@ func (s *PurserServer) ChangeBillingTier(ctx context.Context, req *purserpb.Chan
 		if err != nil {
 			return txStatusErrorf(err, codes.Internal, "load target tier: %v", err)
 		}
-		if !target.IsActive.Bool {
-			return status.Error(codes.FailedPrecondition, "target tier is inactive")
-		}
-		if target.IsDefaultPrepaid.Bool || target.TierLevel.Int32 < 1 {
-			return status.Error(codes.FailedPrecondition, "target tier is not postpaid-eligible")
+		if eligibilityErr := subscriptions.ValidateSelfServiceTier(target); eligibilityErr != nil {
+			return status.Error(codes.FailedPrecondition, eligibilityErr.Error())
 		}
 		if !strings.EqualFold(target.TierName, "free") {
 			if settleErr := s.requireSettledOnFree(ctx, queries, tenantID); settleErr != nil {
@@ -6484,6 +6485,10 @@ func (s *PurserServer) CreateCheckoutSession(ctx context.Context, req *purserpb.
 
 	if policyErr := s.requireProviderCheckout(ctx, tenantID); policyErr != nil {
 		return nil, policyErr
+	}
+
+	if eligibilityErr := s.requireSelfServiceCheckout(ctx, tenantID, tierID, "stripe"); eligibilityErr != nil {
+		return nil, eligibilityErr
 	}
 
 	// Get billing tier to find Stripe price ID
@@ -6855,6 +6860,10 @@ func (s *PurserServer) CreateFirstPayment(ctx context.Context, req *purserpb.Cre
 		return nil, policyErr
 	}
 
+	if eligibilityErr := s.requireSelfServiceCheckout(ctx, tenantID, tierID, "mollie"); eligibilityErr != nil {
+		return nil, eligibilityErr
+	}
+
 	// Get tier price
 	queries := purserdb.New(s.db)
 	tier, err := queries.GetMollieTierPrice(ctx, tierID)
@@ -7073,6 +7082,10 @@ func (s *PurserServer) CreateMollieSubscription(ctx context.Context, req *purser
 	// grants must end through their billing boundary before a provider can do it.
 	if policyErr := s.requireProviderCheckout(ctx, tenantID); policyErr != nil {
 		return nil, policyErr
+	}
+
+	if eligibilityErr := s.requireSelfServiceCheckout(ctx, tenantID, tierID, "mollie"); eligibilityErr != nil {
+		return nil, eligibilityErr
 	}
 
 	// Precondition: a tenant_subscriptions row must exist before we ask

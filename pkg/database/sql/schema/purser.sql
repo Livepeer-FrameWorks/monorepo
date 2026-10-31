@@ -658,6 +658,7 @@ CREATE TABLE IF NOT EXISTS purser.tenant_subscriptions (
     free_fallback_notice_attempted_at TIMESTAMPTZ,
     free_fallback_notice_failures INTEGER NOT NULL DEFAULT 0,
     free_fallback_notice_error TEXT,
+    free_fallback_notice_abandoned_at TIMESTAMPTZ,
 
     -- ===== PAYMENT & BILLING =====
     payment_method VARCHAR(50),
@@ -2128,6 +2129,12 @@ CREATE TABLE IF NOT EXISTS purser.payment_provider_intents (
     funding_intent_id UUID,
     provider_mandate_id TEXT,
     expires_at TIMESTAMPTZ,
+    checkout_completed_at TIMESTAMPTZ,
+    recovery_started_at TIMESTAMPTZ,
+    recovery_outcome TEXT,
+    provider_request BYTEA,
+    submission_state VARCHAR(12) NOT NULL DEFAULT 'unknown',
+    reconciled_references JSONB,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT chk_payment_intent_provider CHECK (provider IN ('stripe', 'mollie')),
@@ -2348,6 +2355,8 @@ CREATE TABLE IF NOT EXISTS purser.provider_webhook_inbox (
     raw_payload BYTEA NOT NULL,
     status VARCHAR(20) NOT NULL DEFAULT 'pending',
     attempts INT NOT NULL DEFAULT 0,
+    wait_attempts INTEGER NOT NULL DEFAULT 0,
+    unresolved_since TIMESTAMPTZ,
     next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     claimed_at TIMESTAMPTZ,
     lease_token UUID,
@@ -3591,11 +3600,6 @@ CREATE OR REPLACE TRIGGER trg_guard_operator_grant_fallback_retirement
 BEFORE UPDATE OF is_active ON purser.billing_tiers
 FOR EACH ROW EXECUTE FUNCTION purser.guard_operator_grant_fallback_retirement();
 
-ALTER TABLE purser.payment_provider_intents
-    ADD COLUMN IF NOT EXISTS checkout_completed_at TIMESTAMPTZ,
-    ADD COLUMN IF NOT EXISTS recovery_started_at TIMESTAMPTZ,
-    ADD COLUMN IF NOT EXISTS recovery_outcome TEXT;
-
 CREATE TABLE IF NOT EXISTS purser.checkout_recovery_audit (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id UUID NOT NULL,
@@ -3609,16 +3613,6 @@ CREATE TABLE IF NOT EXISTS purser.checkout_recovery_audit (
 );
 CREATE INDEX IF NOT EXISTS idx_checkout_recovery_audit_tenant
     ON purser.checkout_recovery_audit(tenant_id, created_at DESC);
-
-ALTER TABLE purser.provider_webhook_inbox
-    ADD COLUMN IF NOT EXISTS wait_attempts INTEGER NOT NULL DEFAULT 0,
-    ADD COLUMN IF NOT EXISTS unresolved_since TIMESTAMPTZ;
-
-ALTER TABLE purser.payment_provider_intents
-    ADD COLUMN IF NOT EXISTS provider_request BYTEA;
-
-ALTER TABLE purser.payment_provider_intents ADD COLUMN IF NOT EXISTS submission_state VARCHAR(12) NOT NULL DEFAULT 'unknown';
-ALTER TABLE purser.payment_provider_intents ADD COLUMN IF NOT EXISTS reconciled_references JSONB;
 
 CREATE INDEX IF NOT EXISTS idx_provider_checkout_unresolved
 ON purser.payment_provider_intents(created_at ASC, id ASC)
@@ -3701,7 +3695,8 @@ CREATE INDEX IF NOT EXISTS idx_subscription_fallback_notice_retry
         tenant_id ASC
     )
     WHERE free_fallback_at IS NOT NULL
-      AND (free_fallback_moved_at IS NOT NULL OR free_fallback_notified_at IS NULL);
+      AND (free_fallback_moved_at IS NOT NULL OR free_fallback_notified_at IS NULL)
+      AND free_fallback_notice_abandoned_at IS NULL;
 
 CREATE INDEX IF NOT EXISTS idx_subscription_fallback_failed
     ON purser.tenant_subscriptions (
@@ -3730,7 +3725,8 @@ CREATE INDEX IF NOT EXISTS idx_subscription_fallback_notice_failed
     )
     INCLUDE (id)
     WHERE free_fallback_at IS NOT NULL
-      AND free_fallback_notice_error IS NOT NULL;
+      AND free_fallback_notice_error IS NOT NULL
+      AND free_fallback_notice_abandoned_at IS NULL;
 
 CREATE INDEX IF NOT EXISTS idx_provider_inbox_failed_attempts
     ON purser.provider_webhook_inbox (

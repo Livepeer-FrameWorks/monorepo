@@ -158,5 +158,8 @@ var ErrPendingFreeFallback = errors.New("the move to Free is reconciling its pro
 
 // IsPricingRefusal identifies an account or grant that requires a caller-visible precondition.
 func IsPricingRefusal(err error) bool {
-	return errors.Is(err, ErrPaidCancellationTerm) || errors.Is(err, ErrPendingFreeFallback) || errors.Is(err, ErrOutstandingGrant) || errors.Is(err, ErrTenantBillingClosed) || errors.Is(err, ErrPendingTierUpgrade)
+	return errors.Is(err, ErrSelfServiceSubscription) || errors.Is(err, ErrSelfServiceTier) || errors.Is(err, ErrSelfServiceTierChange) ||
+		errors.Is(err, ErrPaidCancellationTerm) || errors.Is(err, ErrPendingFreeFallback) ||
+		errors.Is(err, ErrOutstandingGrant) || errors.Is(err, ErrTenantBillingClosed) ||
+		errors.Is(err, ErrPendingTierUpgrade)
 }

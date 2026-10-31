@@ -29,9 +29,9 @@ class ChangeBillingTier(BaseModel):
         OpenUnion(),
     ] = Field(
         alias="changeBillingTier",
-        description="Change the postpaid billing tier. Upgrades start a fresh month and credit\nthe unused paid fee; provider or metering reconciliation can leave them pending.\nDowngrades take effect at the current billing period end.",
+        description="Change the postpaid billing tier. Upgrades start a fresh month and credit\nthe unused paid fee; provider or metering reconciliation can leave them pending.\nEnterprise and upgrades to a lower base price require an operator arrangement.\nDowngrades take effect at the current billing period end.",
     )
-    "Change the postpaid billing tier. Upgrades start a fresh month and credit\nthe unused paid fee; provider or metering reconciliation can leave them pending.\nDowngrades take effect at the current billing period end."
+    "Change the postpaid billing tier. Upgrades start a fresh month and credit\nthe unused paid fee; provider or metering reconciliation can leave them pending.\nEnterprise and upgrades to a lower base price require an operator arrangement.\nDowngrades take effect at the current billing period end."
 
 
 class ChangeBillingTierChangeBillingTierChangeBillingTierPayload(

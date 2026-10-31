@@ -29,6 +29,7 @@ func TestCustomerGrantDatabaseConflictRetriesWholeTransaction(t *testing.T) {
 		} else {
 			mock.ExpectQuery("GetSubscriptionOperatorGrant").WillReturnError(sql.ErrNoRows)
 			mock.ExpectQuery("GetBootstrapBillingTier").WillReturnRows(sqlmock.NewRows([]string{"id", "tier_level", "currency"}).AddRow(tier, 4, "EUR"))
+			mock.ExpectQuery("HasPendingTierUpgrade").WithArgs(tenant).WillReturnRows(sqlmock.NewRows([]string{"pending"}).AddRow(false))
 			mock.ExpectQuery("GetSubscriptionOperatorGrant").WillReturnError(sql.ErrNoRows)
 			mock.ExpectQuery("GetBootstrapTenantSubscription").WillReturnRows(sqlmock.NewRows([]string{"tier_id", "billing_model"}).AddRow(tier, "postpaid"))
 			mock.ExpectCommit()

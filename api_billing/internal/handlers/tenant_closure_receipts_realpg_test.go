@@ -87,6 +87,12 @@ func TestTenantClosureRecoversUnfulfilledClusterReceipts_RealPG(t *testing.T) {
 				}
 				return 200, map[string]any{"id": "charge", "currency": "eur", "amount": 2900, "amount_refunded": amount, "refunded": refunded.Load()}
 			})
+			fixture.route("GET", "/v1/refunds", func(r recordedProviderRequest) (int, any) {
+				if r.query.Get("charge") == "" {
+					t.Error("refund history was not scoped to the purchase charge")
+				}
+				return 200, map[string]any{"object": "list", "data": []any{}, "has_more": false}
+			})
 			fixture.route("POST", "/v1/refunds", func(recordedProviderRequest) (int, any) {
 				refunded.Store(true)
 				return 200, map[string]any{"id": "refund", "status": "pending"}

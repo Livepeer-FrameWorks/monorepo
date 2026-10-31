@@ -184,7 +184,7 @@ groups:
           severity: warning
         annotations:
           summary: "Move to Free or its notification needs recovery"
-          description: "Purser is retrying provider cancellation, a final invoice, Free move or notification, a bank settlement has waited over fourteen days, or Purser cannot read that queue. Inspect Purser logs for the tenant and failure. Required metering must settle at the stored cutoff; mail failures do not block billing moves. Other tenants continue."
+          description: "Purser is retrying provider cancellation, a final invoice, Free move or notification, a bank settlement has waited over fourteen days, or Purser cannot read that queue. Run frameworks admin billing recovery list --tenant-id <uuid> to inspect the failure. Restore required metering or provider access; for mail failures fix billing_email or use set-tier to cancel the fallback. Mail delivery stops after five failures and remains visible as notice_abandoned in recovery list; it does not block billing moves. Other tenants continue."
 
       - alert: PurserOperatorGrantExpiryStuck
         expr: max(purser_operator_grant_expiry_repeatedly_failed_items) > 0 or max(increase(purser_operator_grant_expiry_read_failures_total[2m])) > 1

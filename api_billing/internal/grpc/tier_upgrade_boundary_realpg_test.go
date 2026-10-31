@@ -22,6 +22,8 @@ import (
 func TestTierUpgradeStartsFreshMonth_RealPG(t *testing.T) {
 	db := startOperatorGrantDatabase(t)
 	assertSelfServiceUpgradePriceBounds(t, db)
+	assertSelfServiceCheckoutEligibility(t, db)
+	assertLateTierUpgradeRetryRefusesPurchase(t, db)
 	ctx := t.Context()
 	tenant, oldTier, newTier := uuid.NewString(), uuid.NewString(), uuid.NewString()
 	start := time.Now().UTC().Add(-15 * 24 * time.Hour).Truncate(time.Second)

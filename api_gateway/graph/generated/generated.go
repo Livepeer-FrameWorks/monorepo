@@ -26124,7 +26124,7 @@ type Mutation {
   """
   createStripeCheckout(
     """
-    The billing tier to subscribe to.
+    The active, non-Enterprise postpaid tier to subscribe to (tier_level >= 1).
     """
     tierId: ID!
     """
@@ -26648,11 +26648,12 @@ type Mutation {
   """
   Change the postpaid billing tier. Upgrades start a fresh month and credit
   the unused paid fee; provider or metering reconciliation can leave them pending.
+  Enterprise and upgrades to a lower base price require an operator arrangement.
   Downgrades take effect at the current billing period end.
   """
   changeBillingTier(
     """
-    The target billing tier. Must be an active postpaid tier (tier_level >= 1).
+    The target billing tier. Must be active, non-Enterprise and postpaid (tier_level >= 1).
     """
     tierId: ID!
   ): ChangeBillingTierResult!

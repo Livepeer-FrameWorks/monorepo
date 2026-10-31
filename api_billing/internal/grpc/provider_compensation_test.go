@@ -56,6 +56,7 @@ func TestCreateCheckoutSessionExpiresStripeSessionWhenLocalStageFails(t *testing
 		WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "tax_id", "billing_address", "updated_at", "presentment_currency"}).
 			AddRow("billing@example.com", "Example Customer", "Example", nil, []byte(`{"street":"Main 1","city":"Amsterdam","postal_code":"1000AA","country":"NL"}`), time.Now(), "EUR"))
 	expectProviderCheckoutWithoutGrant(mock, "tenant-a")
+	expectSelfServiceCheckout(mock, "tenant-a", tierID, "stripe")
 	mock.ExpectQuery(`SELECT tier_name, COALESCE\(currency, 'EUR'\)::text AS currency`).
 		WithArgs(false, tierID).
 		WillReturnRows(sqlmock.NewRows([]string{"tier_name", "currency", "stripe_price_id_monthly"}).AddRow("Pro", "USD", "price_123"))
@@ -136,6 +137,7 @@ func TestCreateMollieSubscriptionCancelsProviderSubscriptionWhenLocalPersistFail
 			AddRow("billing@example.com", "Example Customer", "Example", nil, []byte(`{"street":"Main 1","city":"Amsterdam","postal_code":"1000AA","country":"NL"}`), time.Now(), "EUR"))
 	expectCollectionProfile(mock, "tenant-a", "EUR")
 	expectProviderCheckoutWithoutGrant(mock, "tenant-a")
+	expectSelfServiceCheckout(mock, "tenant-a", tierID, "mollie")
 	mock.ExpectQuery(`SELECT EXISTS\(`).
 		WithArgs("tenant-a").
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
@@ -168,6 +170,7 @@ func TestCreateMollieSubscriptionCancelsProviderSubscriptionWhenLocalPersistFail
 	mock.ExpectQuery("GetSubscriptionOperatorGrant").WithArgs("tenant-a").WillReturnError(sql.ErrNoRows)
 	mock.ExpectQuery("GetProviderCheckoutReservation").WillReturnRows(checkoutReservationTestRows("intent-mollie-sub", "tenant-a", "mollie", "mollie_subscription_create", "cst_123", nil, nil, nil, "pending", time.Now().Add(24*time.Hour), 0))
 	mock.ExpectQuery("HasPendingTierUpgrade").WillReturnRows(sqlmock.NewRows([]string{"pending"}).AddRow(false))
+	expectSelfServiceCheckout(mock, "tenant-a", tierID, "mollie")
 	mock.ExpectExec(`UPDATE purser\.tenant_subscriptions\s+SET mollie_subscription_id = \$1`).
 		WillReturnError(errors.New("db down"))
 	mock.ExpectRollback()

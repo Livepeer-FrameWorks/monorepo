@@ -17,6 +17,7 @@ import (
 type checkoutRecoveryClient interface {
 	AdminListCheckoutRecovery(context.Context, *purserpb.AdminListCheckoutRecoveryRequest) (*purserpb.AdminListCheckoutRecoveryResponse, error)
 	AdminRecoverCheckout(context.Context, *purserpb.AdminRecoverCheckoutRequest) (*purserpb.AdminRecoverCheckoutResponse, error)
+	AdminRetainDeliveredCheckout(context.Context, *purserpb.AdminRecoverCheckoutRequest) (*purserpb.AdminRecoverCheckoutResponse, error)
 }
 
 func runCheckoutRecoveryList(ctx context.Context, w io.Writer, p checkoutRecoveryClient, jwt string, r *purserpb.AdminListCheckoutRecoveryRequest, jsonOutput bool) error {
@@ -79,7 +80,7 @@ func runCheckoutRecoveryList(ctx context.Context, w io.Writer, p checkoutRecover
 	return nil
 }
 
-func runCheckoutRecoveryNow(ctx context.Context, w io.Writer, p checkoutRecoveryClient, jwt string, r *purserpb.AdminRecoverCheckoutRequest, jsonOutput bool) error {
+func runCheckoutRecoveryNow(ctx context.Context, w io.Writer, p checkoutRecoveryClient, jwt string, r *purserpb.AdminRecoverCheckoutRequest, jsonOutput, retainDelivered bool) error {
 	if err := validateUUID(r.GetTenantId()); err != nil {
 		return err
 	}
@@ -94,7 +95,13 @@ func runCheckoutRecoveryNow(ctx context.Context, w io.Writer, p checkoutRecovery
 	}
 	cctx, cancel := adminRPCContextTimeout(ctx, jwt, 40*time.Second)
 	defer cancel()
-	res, err := p.AdminRecoverCheckout(cctx, r)
+	var res *purserpb.AdminRecoverCheckoutResponse
+	var err error
+	if retainDelivered {
+		res, err = p.AdminRetainDeliveredCheckout(cctx, r)
+	} else {
+		res, err = p.AdminRecoverCheckout(cctx, r)
+	}
 	if err != nil {
 		return err
 	}
@@ -105,12 +112,17 @@ func runCheckoutRecoveryNow(ctx context.Context, w io.Writer, p checkoutRecovery
 	return err
 }
 
-func confirmCheckoutRecovery(cmd *cobra.Command, res *purserpb.AdminRecoverCheckoutResponse, yes bool) error {
+func confirmCheckoutRecovery(cmd *cobra.Command, res *purserpb.AdminRecoverCheckoutResponse, yes, retainDelivered bool) error {
 	amount := "unknown (no provider amount observed)"
 	if res.GetAmountKnown() {
 		amount = recoveryAmount(res.GetAmountCents(), res.GetCurrency())
 	}
-	fmt.Fprintf(cmd.ErrOrStderr(), "Checkout provider: %s; state: %s; amount: %s. %s\nRecovery may cancel the subscription and request refunds.\n", res.GetProvider(), res.GetStatus(), amount, res.GetDetail())
+	fmt.Fprintf(cmd.ErrOrStderr(), "Checkout provider: %s; state: %s; amount: %s. %s\n", res.GetProvider(), res.GetStatus(), amount, res.GetDetail())
+	if retainDelivered {
+		fmt.Fprintln(cmd.ErrOrStderr(), "Confirm that this payment funded delivered service. It will be retained without refund; your identity and reason will be recorded.")
+	} else {
+		fmt.Fprintln(cmd.ErrOrStderr(), "Recovery may cancel the subscription and request refunds.")
+	}
 	if yes {
 		return nil
 	}
@@ -139,7 +151,7 @@ func newAdminBillingRecoveryCmd() *cobra.Command {
 	list.Flags().BoolVar(&listReq.History, "history", false, "list operator requests and outcomes (requires --tenant-id)")
 	list.Flags().Int32Var(&listReq.Offset, "offset", 0, "rows to skip")
 	req := &purserpb.AdminRecoverCheckoutRequest{}
-	var yes bool
+	var yes, retainDelivered bool
 	recoverCmd := &cobra.Command{Use: "checkout", Short: "Recover one checkout immediately; may cancel and refund", RunE: func(cmd *cobra.Command, _ []string) error {
 		req.Confirmed = false
 		p, cfg, cleanup, err := purserGRPCClientFromContext(cmd.Context())
@@ -159,17 +171,23 @@ func newAdminBillingRecoveryCmd() *cobra.Command {
 		}
 		cctx, cancel := adminRPCContext(cmd.Context(), cfg.Auth.JWT)
 		defer cancel()
-		preview, err := p.AdminRecoverCheckout(cctx, req)
+		var preview *purserpb.AdminRecoverCheckoutResponse
+		if retainDelivered {
+			preview, err = p.AdminRetainDeliveredCheckout(cctx, req)
+		} else {
+			preview, err = p.AdminRecoverCheckout(cctx, req)
+		}
 		if err != nil {
 			return err
 		}
-		if err = confirmCheckoutRecovery(cmd, preview, yes); err != nil {
+		if err = confirmCheckoutRecovery(cmd, preview, yes, retainDelivered); err != nil {
 			return err
 		}
 		req.Confirmed = true
-		return runCheckoutRecoveryNow(cmd.Context(), cmd.OutOrStdout(), p, cfg.Auth.JWT, req, output == "json")
+		return runCheckoutRecoveryNow(cmd.Context(), cmd.OutOrStdout(), p, cfg.Auth.JWT, req, output == "json", retainDelivered)
 	}}
 	recoverCmd.Flags().BoolVarP(&yes, "yes", "y", false, "confirm the displayed cancellation/refund risk without prompting")
+	recoverCmd.Flags().BoolVar(&retainDelivered, "retain-delivered", false, "attest an ambiguous historical Mollie payment funded delivered service; retain it without refund")
 	recoverCmd.Flags().StringVar(&req.TenantId, "tenant-id", "", "owning tenant UUID (required)")
 	recoverCmd.Flags().StringVar(&req.ReservationId, "reservation-id", "", "checkout reservation UUID (required)")
 	recoverCmd.Flags().StringVar(&req.Reason, "reason", "", "operator reason, retained with the recovery request (required)")

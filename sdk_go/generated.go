@@ -10032,6 +10032,7 @@ func (v *ChangeBillingTierPayloadDefaultFieldsPendingTierBillingTierPricingRules
 type ChangeBillingTierResponse struct {
 	// Change the postpaid billing tier. Upgrades start a fresh month and credit
 	// the unused paid fee; provider or metering reconciliation can leave them pending.
+	// Enterprise and upgrades to a lower base price require an operator arrangement.
 	// Downgrades take effect at the current billing period end.
 	ChangeBillingTier ChangeBillingTierChangeBillingTierChangeBillingTierResult `json:"-"`
 }
@@ -125970,6 +125971,7 @@ fragment AuthErrorDefaultFields on AuthError {
 //
 // Change the postpaid billing tier. Upgrades start a fresh month and credit
 // the unused paid fee; provider or metering reconciliation can leave them pending.
+// Enterprise and upgrades to a lower base price require an operator arrangement.
 // Downgrades take effect at the current billing period end.
 func ChangeBillingTier(
 	ctx_ context.Context,

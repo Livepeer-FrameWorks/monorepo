@@ -532,7 +532,7 @@ func (s *Service) handleSubscriptionCheckoutCompleted(ctx context.Context, sessi
 	}
 
 	if !settled {
-		err := s.stageTenantSubscriptionPending(ctx, sessionID, tenantID, customerID, subscriptionID, receiptID)
+		err := s.stageTenantSubscriptionPending(ctx, sessionID, tenantID, tierID, customerID, subscriptionID, receiptID)
 		if errors.Is(err, subscriptions.ErrCheckoutExpired) {
 			return nil
 		}
@@ -592,8 +592,8 @@ func (s *Service) activateTenantSubscriptionFromStripe(ctx context.Context, exec
 // stageTenantSubscriptionPending binds the prospective provider subscription under
 // the same lock as activation and grant changes. Its receipt carries the new
 // subscription; an established subscription retains its identity and status.
-func (s *Service) stageTenantSubscriptionPending(ctx context.Context, sessionID, tenantID, customerID, subscriptionID, receiptID string) error {
-	_, err := subscriptions.TransitionProvider(ctx, s.db, subscriptions.ProviderChange{TenantID: tenantID, Operation: subscriptions.StripePending, ReceiptIntentID: receiptID, CheckoutSessionID: sessionID, Stripe: purserdb.ActivateTenantSubscriptionFromStripeParams{CustomerID: customerID, SubscriptionID: subscriptionID}})
+func (s *Service) stageTenantSubscriptionPending(ctx context.Context, sessionID, tenantID, tierID, customerID, subscriptionID, receiptID string) error {
+	_, err := subscriptions.TransitionProvider(ctx, s.db, subscriptions.ProviderChange{TenantID: tenantID, Operation: subscriptions.StripePending, ReceiptIntentID: receiptID, CheckoutSessionID: sessionID, Stripe: purserdb.ActivateTenantSubscriptionFromStripeParams{CustomerID: customerID, SubscriptionID: subscriptionID, TierID: tierID}})
 	return err
 }
 

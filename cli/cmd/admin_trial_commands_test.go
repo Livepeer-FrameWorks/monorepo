@@ -27,12 +27,14 @@ type trialCommandServer struct {
 	commodorepb.UnimplementedUserServiceServer
 	quartermasterpb.UnimplementedTenantServiceServer
 	purserpb.UnimplementedPrepaidServiceServer
-	history         *commodorepb.AdminListAccountHistoryRequest
-	tenant          string
-	failure         bool
-	jwt             string
-	recoveryCalls   int
-	recoveryOutcome string
+	history           *commodorepb.AdminListAccountHistoryRequest
+	tenant            string
+	failure           bool
+	jwt               string
+	recoveryCalls     int
+	recoveryOutcome   string
+	retainDelivered   bool
+	retainUnsupported bool
 }
 
 func (s *trialCommandServer) GetTenant(ctx context.Context, req *quartermasterpb.GetTenantRequest) (*quartermasterpb.GetTenantResponse, error) {
@@ -68,6 +70,7 @@ func (s *trialCommandServer) AdminListCheckoutRecovery(ctx context.Context, r *p
 
 func (s *trialCommandServer) AdminRecoverCheckout(ctx context.Context, r *purserpb.AdminRecoverCheckoutRequest) (*purserpb.AdminRecoverCheckoutResponse, error) {
 	s.readJWT(ctx)
+	s.retainDelivered = false
 	if r.GetReason() != "abandoned" {
 		return nil, status.Error(codes.InvalidArgument, "reason lost")
 	}
@@ -79,7 +82,24 @@ func (s *trialCommandServer) AdminRecoverCheckout(ctx context.Context, r *purser
 	if outcome == "" {
 		outcome = "expired"
 	}
+
 	return &purserpb.AdminRecoverCheckoutResponse{Provider: "stripe", Status: "expired", Outcome: outcome, AuditId: "audit", Detail: "provider result"}, nil
+}
+
+func (s *trialCommandServer) AdminRetainDeliveredCheckout(ctx context.Context, r *purserpb.AdminRecoverCheckoutRequest) (*purserpb.AdminRecoverCheckoutResponse, error) {
+	s.readJWT(ctx)
+	s.retainDelivered = true
+	if s.retainUnsupported {
+		return nil, status.Error(codes.Unimplemented, "delivery attestation unavailable")
+	}
+	if r.GetReason() != "abandoned" {
+		return nil, status.Error(codes.InvalidArgument, "reason lost")
+	}
+	if !r.GetConfirmed() {
+		return &purserpb.AdminRecoverCheckoutResponse{Provider: "mollie", Status: "succeeded", Outcome: "preview"}, nil
+	}
+	s.recoveryCalls++
+	return &purserpb.AdminRecoverCheckoutResponse{Provider: "mollie", Status: "succeeded", Outcome: "delivered", AuditId: "audit"}, nil
 }
 
 func (s *trialCommandServer) AdminRecoverTierUpgrade(ctx context.Context, r *purserpb.AdminRecoverTierUpgradeRequest) (*purserpb.AdminRecoverTierUpgradeResponse, error) {
@@ -155,6 +175,9 @@ func TestTrialAccountCommandsUseRealRPCs(t *testing.T) {
 		{"recover checkout interactive yes", []string{"admin", "billing", "recovery", "checkout", "--tenant-id", id, "--reservation-id", id, "--reason", "abandoned"}, "Checkout recovery: expired", false},
 		{"recover checkout", []string{"admin", "billing", "recovery", "checkout", "--yes", "--tenant-id", id, "--reservation-id", id, "--reason", "abandoned"}, "Checkout recovery: expired", false},
 		{"recover checkout pending", []string{"admin", "billing", "recovery", "checkout", "--yes", "--tenant-id", id, "--reservation-id", id, "--reason", "abandoned"}, "Checkout recovery: pending", false},
+		{"retain delivered unconfirmed", []string{"admin", "billing", "recovery", "checkout", "--retain-delivered", "--tenant-id", id, "--reservation-id", id, "--reason", "abandoned"}, "confirmation", true},
+		{"retain delivered older server", []string{"admin", "billing", "recovery", "checkout", "--retain-delivered", "--yes", "--tenant-id", id, "--reservation-id", id, "--reason", "abandoned"}, "delivery attestation unavailable", true},
+		{"retain delivered confirmed", []string{"admin", "billing", "recovery", "checkout", "--retain-delivered", "--yes", "--tenant-id", id, "--reservation-id", id, "--reason", "abandoned"}, "Checkout recovery: delivered", false},
 
 		{"recover upgrade unconfirmed", []string{"admin", "billing", "recovery", "upgrade", "--tenant-id", id, "--upgrade-id", id, "--reason", "reconcile"}, "confirmation", true},
 		{"recover upgrade", []string{"admin", "billing", "recovery", "upgrade", "--tenant-id", id, "--upgrade-id", id, "--reason", "reconcile", "--yes"}, "Tier upgrade recovery: cancelled", false},
@@ -167,6 +190,7 @@ func TestTrialAccountCommandsUseRealRPCs(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			service.failure = tc.fail
+			service.retainUnsupported = tc.name == "retain delivered older server"
 			service.recoveryOutcome = ""
 			if tc.name == "recover checkout pending" {
 				service.recoveryOutcome = "pending"
@@ -182,7 +206,7 @@ func TestTrialAccountCommandsUseRealRPCs(t *testing.T) {
 			}
 			command.SetArgs(tc.args)
 			err := command.Execute()
-			if (tc.name == "recover checkout refuses unconfirmed" || tc.name == "recover upgrade unconfirmed") && service.recoveryCalls != callsBefore {
+			if (tc.name == "recover checkout refuses unconfirmed" || tc.name == "recover upgrade unconfirmed" || tc.name == "retain delivered unconfirmed" || tc.name == "retain delivered older server") && service.recoveryCalls != callsBefore {
 				t.Fatal("unconfirmed request moved money")
 			}
 			if tc.fail {
@@ -196,6 +220,9 @@ func TestTrialAccountCommandsUseRealRPCs(t *testing.T) {
 			}
 			if !strings.Contains(out.String(), tc.want) {
 				t.Fatalf("output=%s, want %s", out.String(), tc.want)
+			}
+			if tc.name == "retain delivered confirmed" && (!service.retainDelivered || !strings.Contains(out.String(), "retained without refund")) {
+				t.Fatalf("delivery decision lost its flag or confirmation warning: %s", out.String())
 			}
 			if service.jwt != "Bearer operator-jwt" {
 				t.Fatalf("operator identity lost: %q", service.jwt)
@@ -230,7 +257,7 @@ func TestRecoveryCommandsValidateBeforeRPCAndShowEmptyInventory(t *testing.T) {
 	for _, r := range []*purserpb.AdminRecoverCheckoutRequest{{TenantId: "bad", ReservationId: id, Reason: "reason", Confirmed: true}, {TenantId: id, ReservationId: "bad", Reason: "reason", Confirmed: true}, {TenantId: id, ReservationId: id, Confirmed: true}, {TenantId: id, ReservationId: id, Reason: "reason"}} {
 		fake := &recoveryValidationClient{}
 		var out bytes.Buffer
-		if err := runCheckoutRecoveryNow(t.Context(), &out, fake, "jwt", r, false); err == nil || fake.calls != 0 {
+		if err := runCheckoutRecoveryNow(t.Context(), &out, fake, "jwt", r, false, false); err == nil || fake.calls != 0 {
 			t.Fatalf("invalid recovery called RPC: request=%v calls=%d err=%v", r, fake.calls, err)
 		}
 	}
@@ -271,4 +298,9 @@ func TestCheckoutRecoveryTextShowsMoneyAndHistoryColumns(t *testing.T) {
 			t.Fatalf("missing %q in %s", want, out.String())
 		}
 	}
+}
+
+func (c *recoveryValidationClient) AdminRetainDeliveredCheckout(context.Context, *purserpb.AdminRecoverCheckoutRequest) (*purserpb.AdminRecoverCheckoutResponse, error) {
+	c.calls++
+	return &purserpb.AdminRecoverCheckoutResponse{Outcome: "delivered"}, nil
 }

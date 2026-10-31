@@ -21,6 +21,11 @@ import (
 
 var errFreeFallbackHeld = errors.New("free fallback held until the subscription's pricing state clears")
 
+func isFreeFallbackHeld(err error) bool {
+	return errors.Is(err, errFreeFallbackHeld) || errors.Is(err, subscriptions.ErrPendingCheckout) ||
+		errors.Is(err, subscriptions.ErrPendingTierUpgrade)
+}
+
 // runFreeFallbackSweep reconciles due billing moves until shutdown.
 func (s *PurserServer) runFreeFallbackSweep(ctx context.Context) {
 	ticker := time.NewTicker(time.Minute)
@@ -59,7 +64,7 @@ func (s *PurserServer) sweepFreeFallbackMovesOnce(ctx context.Context) {
 	}
 	for _, tenantID := range due {
 		if moveErr := s.moveTenantToFree(ctx, tenantID); moveErr != nil {
-			if errors.Is(moveErr, errFreeFallbackHeld) || errors.Is(moveErr, subscriptions.ErrPendingCheckout) || errors.Is(moveErr, subscriptions.ErrPendingTierUpgrade) {
+			if isFreeFallbackHeld(moveErr) {
 				s.logger.WithError(moveErr).WithField("tenant_id", tenantID).Debug("Move to Free held by pending pricing")
 			} else {
 				s.logger.WithError(moveErr).WithField("tenant_id", tenantID).Warn("Move to Free not completed; retrying on the next sweep")
@@ -77,7 +82,7 @@ func (s *PurserServer) sweepFreeFallbackNoticesOnce(ctx context.Context) {
 	}
 	for _, tenantID := range notices {
 		if noticeErr := s.deliverFreeFallbackNotice(ctx, tenantID); noticeErr != nil {
-			s.logger.WithError(noticeErr).WithField("tenant_id", tenantID).Warn("Free fallback notice not delivered; retrying on the next sweep")
+			s.logger.WithError(noticeErr).WithField("tenant_id", tenantID).Warn("Free fallback notice delivery failed; inspect the billing recovery inventory")
 		}
 	}
 }
@@ -101,7 +106,7 @@ func (s *PurserServer) moveTenantToFree(ctx context.Context, tenantID string) (r
 		}
 		recordCtx, recordCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer recordCancel()
-		if errors.Is(resultErr, errFreeFallbackHeld) || errors.Is(resultErr, subscriptions.ErrPendingTierUpgrade) || errors.Is(resultErr, subscriptions.ErrPendingCheckout) {
+		if isFreeFallbackHeld(resultErr) {
 			if err := queries.AcknowledgeFreeFallbackHold(recordCtx, purserdb.AcknowledgeFreeFallbackHoldParams{TenantID: tenantID, AttemptedAt: claimedAt}); err != nil {
 				s.logger.WithError(err).WithField("tenant_id", tenantID).Error("Could not acknowledge Free fallback hold")
 			}
@@ -111,7 +116,7 @@ func (s *PurserServer) moveTenantToFree(ctx context.Context, tenantID string) (r
 			s.logger.WithError(err).WithField("tenant_id", tenantID).Error("Could not record Free fallback failure")
 		}
 	}()
-	scheduled, err := purserdb.New(s.db).GetSubscriptionFreeFallback(ctx, tenantID)
+	scheduled, err := queries.GetSubscriptionFreeFallback(ctx, tenantID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}

@@ -41,7 +41,7 @@ func createUpgradeInvoiceTx(ctx context.Context, tx *sql.Tx, row purserdb.GetTie
 	}
 	// Unused service credit only offsets this replacement purchase. It never
 	// becomes prepaid funds, including when a provider receipt exceeds the fee.
-	credit.cents = min(credit.cents, max(row.BaseCents, 0))
+	credit = cappedReplacementCredit(credit, row.BaseCents)
 	baseEUR := decimal.New(row.BaseCents, -2)
 	collectCents := max(row.BaseCents-credit.cents, 0)
 	now := time.Now().UTC()
@@ -90,7 +90,7 @@ func createUpgradeInvoiceTx(ctx context.Context, tx *sql.Tx, row purserdb.GetTie
 			return err
 		}
 	}
-	if err = consumePreviousBaseFee(ctx, q, row.TenantID, previous, invoiceID, receipt.PeriodStart); err != nil {
+	if err = consumePreviousBaseFee(ctx, q, row.TenantID, previous, credit, invoiceID, receipt.PeriodStart); err != nil {
 		return err
 	}
 

@@ -70,6 +70,15 @@ func (s *PurserServer) AdminListCheckoutRecovery(ctx context.Context, r *purserp
 
 // AdminRecoverCheckout previews a reservation or persists a confirmed recovery request.
 func (s *PurserServer) AdminRecoverCheckout(ctx context.Context, r *purserpb.AdminRecoverCheckoutRequest) (*purserpb.AdminRecoverCheckoutResponse, error) {
+	return s.adminRecoverCheckout(ctx, r, false)
+}
+
+// AdminRetainDeliveredCheckout records delivery without authorizing compensation.
+func (s *PurserServer) AdminRetainDeliveredCheckout(ctx context.Context, r *purserpb.AdminRecoverCheckoutRequest) (*purserpb.AdminRecoverCheckoutResponse, error) {
+	return s.adminRecoverCheckout(ctx, r, true)
+}
+
+func (s *PurserServer) adminRecoverCheckout(ctx context.Context, r *purserpb.AdminRecoverCheckoutRequest, retainDelivered bool) (*purserpb.AdminRecoverCheckoutResponse, error) {
 	if err := middleware.RequirePlatformOperatorJWT(ctx); err != nil {
 		return nil, err
 	}
@@ -87,7 +96,11 @@ func (s *PurserServer) AdminRecoverCheckout(ctx context.Context, r *purserpb.Adm
 	}
 	var out *purserpb.AdminRecoverCheckoutResponse
 	var err error
-	if !r.GetConfirmed() {
+	if retainDelivered && !r.GetConfirmed() {
+		out, err = s.billing.PreviewRetainDeliveredCheckout(ctx, r.GetTenantId(), r.GetReservationId())
+	} else if retainDelivered {
+		out, err = s.billing.RetainDeliveredCheckout(ctx, r.GetTenantId(), r.GetReservationId(), r.GetReason())
+	} else if !r.GetConfirmed() {
 		out, err = s.billing.PreviewCheckoutRecovery(ctx, r.GetTenantId(), r.GetReservationId())
 	} else {
 		out, err = s.billing.RecoverCheckoutResult(ctx, r.GetTenantId(), r.GetReservationId(), r.GetReason())
@@ -95,6 +108,9 @@ func (s *PurserServer) AdminRecoverCheckout(ctx context.Context, r *purserpb.Adm
 	if err != nil {
 		if errors.Is(err, handlers.ErrCheckoutReservationNotFound) {
 			return nil, status.Error(codes.NotFound, "tenant checkout reservation not found")
+		}
+		if errors.Is(err, handlers.ErrCheckoutDeliveryDecisionNotAllowed) {
+			return nil, status.Error(codes.FailedPrecondition, err.Error())
 		}
 		return nil, status.Errorf(codes.Unavailable, "checkout recovery request could not be reconciled; inspect recovery list: %v", err)
 	}

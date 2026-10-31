@@ -81,15 +81,15 @@ func startPaymentFailureGrace(ctx context.Context, db *sql.DB, tenantID, mollieS
 		if lockErr != nil {
 			return fmt.Errorf("lock subscription for payment failure: %w", lockErr)
 		}
-		if locked.AccountClosed || locked.Current.FreeFallbackProviderEndedAt.Valid ||
-			(mollieSubscriptionID != "" && locked.Current.MollieSubscriptionID.String != mollieSubscriptionID) {
-			return nil
-		}
 		q := purserdb.New(tx)
 		if revokeMandates {
 			if err := q.RevokeValidMollieMandates(ctx, tenantID); err != nil {
 				return err
 			}
+		}
+		if locked.AccountClosed || locked.Current.FreeFallbackProviderEndedAt.Valid ||
+			(mollieSubscriptionID != "" && locked.Current.MollieSubscriptionID.String != mollieSubscriptionID) {
+			return nil
 		}
 		rows, updateErr := q.MarkSubscriptionPaymentFailed(ctx, tenantID)
 		if updateErr != nil || rows == 0 {

@@ -166,6 +166,7 @@ func TestBootstrapDeclaredGrantIsIdempotent_RealPG(t *testing.T) {
 		db = startBootstrapPricingRealPG(t)
 	}
 	ctx := context.Background()
+	assertBootstrapPreservesUncollectedUpgrade(t, db)
 	testBootstrapPreservesCLIGrant(t, db)
 	tenantID, tierID := uuid.NewString(), uuid.NewString()
 	if _, writeErr := db.ExecContext(ctx, `INSERT INTO purser.billing_tiers(id,tier_name,display_name,tier_level,base_price,currency,metering_enabled) VALUES($1,'grant-contract','Grant contract',4,100,'EUR',false)`, tierID); writeErr != nil {
@@ -555,13 +556,13 @@ func testBootstrapPreservesCLIGrant(t *testing.T, db *sql.DB) {
 	t.Helper()
 	for _, expiredDeclaration := range []bool{false, true} {
 		tenant, grantedTier, declaredTier := uuid.NewString(), uuid.NewString(), uuid.NewString()
-		if _, err := db.Exec(`INSERT INTO purser.billing_tiers(id,tier_name,display_name,tier_level,base_price,metering_enabled) VALUES($1::text::uuid,$1::text,'Granted',4,100,false),($2::text::uuid,$2::text,'Declared',1,40,false)`, grantedTier, declaredTier); err != nil {
+		if _, err := db.ExecContext(t.Context(), `INSERT INTO purser.billing_tiers(id,tier_name,display_name,tier_level,base_price,metering_enabled) VALUES($1::text::uuid,$1::text,'Granted',4,100,false),($2::text::uuid,$2::text,'Declared',1,40,false)`, grantedTier, declaredTier); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := db.Exec(`INSERT INTO purser.tenant_subscriptions(tenant_id,tier_id,status,billing_model) VALUES($1,$2,'active','postpaid')`, tenant, grantedTier); err != nil {
+		if _, err := db.ExecContext(t.Context(), `INSERT INTO purser.tenant_subscriptions(tenant_id,tier_id,status,billing_model) VALUES($1,$2,'active','postpaid')`, tenant, grantedTier); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := db.Exec(`INSERT INTO purser.subscription_operator_grants(subscription_id,base_price,waive_usage,reason,assigned_tier_id) SELECT id,0,true,'CLI trial',tier_id FROM purser.tenant_subscriptions WHERE tenant_id=$1`, tenant); err != nil {
+		if _, err := db.ExecContext(t.Context(), `INSERT INTO purser.subscription_operator_grants(subscription_id,base_price,waive_usage,reason,assigned_tier_id) SELECT id,0,true,'CLI trial',tier_id FROM purser.tenant_subscriptions WHERE tenant_id=$1`, tenant); err != nil {
 			t.Fatal(err)
 		}
 		entry := CustomerBilling{Tenant: TenantRef{Ref: "quartermaster.tenants[protected]"}, Model: "postpaid", Tier: declaredTier, ClusterAccess: "none"}
@@ -586,7 +587,7 @@ func testBootstrapPreservesCLIGrant(t *testing.T, db *sql.DB) {
 			t.Fatal(err)
 		}
 		var got string
-		if err = db.QueryRow(`SELECT tier_id::text FROM purser.tenant_subscriptions WHERE tenant_id=$1`, tenant).Scan(&got); err != nil {
+		if err = db.QueryRowContext(t.Context(), `SELECT tier_id::text FROM purser.tenant_subscriptions WHERE tenant_id=$1`, tenant).Scan(&got); err != nil {
 			t.Fatal(err)
 		}
 		if got != grantedTier {
@@ -597,5 +598,33 @@ func testBootstrapPreservesCLIGrant(t *testing.T, db *sql.DB) {
 				t.Fatalf("bootstrap propagated declared tier under CLI grant: %+v", op)
 			}
 		}
+	}
+}
+
+func assertBootstrapPreservesUncollectedUpgrade(t *testing.T, db *sql.DB) {
+	t.Helper()
+	ctx := t.Context()
+	tenant, current, target, upgrade := uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
+	_, err := db.ExecContext(ctx, `INSERT INTO purser.billing_tiers(id,tier_name,display_name,tier_level,currency)
+ VALUES($1::uuid,$1::text,'Current',2,'EUR'),($2::uuid,$2::text,'Target',3,'EUR')`, current, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.ExecContext(ctx, `INSERT INTO purser.tenant_subscriptions(tenant_id,tier_id,status,billing_model,pending_reason) VALUES($1,$2,'active','postpaid',NULL)`, tenant, current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.ExecContext(ctx, `INSERT INTO purser.subscription_tier_upgrades(id,tenant_id,old_tier_id,tier_id,actor_id,old_period_start,old_period_end,requested_at,provider,collection_provider,customer_id,provider_subscription_id,stripe_price_id,old_base_cents,base_cents,state)
+ VALUES($1,$2,$3,$3,'operator',NOW()-INTERVAL '1 day',NOW()+INTERVAL '29 days',NOW(),'invoice','','','','',0,0,'pricing_applied')`, upgrade, tenant, current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, _, err := ReconcileCustomerBilling(ctx, db, []CustomerBilling{{Tenant: TenantRef{Ref: "quartermaster.tenants[upgrade]"}, Model: "postpaid", Tier: target, ClusterAccess: "none"}}, &fakeQM{tenantUUIDs: map[string]string{"upgrade": tenant}}, nil)
+	if err != nil || len(result.Deferred) != 1 {
+		t.Fatalf("bootstrap ignored uncollected upgrade: result=%+v err=%v", result, err)
+	}
+	var actual string
+	if err = db.QueryRowContext(ctx, `SELECT tier_id::text FROM purser.tenant_subscriptions WHERE tenant_id=$1`, tenant).Scan(&actual); err != nil || actual != current {
+		t.Fatalf("bootstrap overwrote purchased tier: %s %v", actual, err)
 	}
 }

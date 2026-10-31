@@ -195,6 +195,11 @@ opened by an operator takes precedence over an earlier fallback date.
 
 Moves and notices use separate workers and durable claims. Moves retry after
 five minutes; failed notices back off exponentially to a twelve-hour maximum.
+After five failures, delivery stops in the terminal `notice_abandoned` state.
+The abandoned notice leaves the automatic stuck gauge but remains in recovery
+inventory with its delivery error; a new fallback or completed move starts a
+new notice lifecycle. Correct `billing_email` before the next lifecycle, or use
+`set-tier` to cancel the fallback when that is the intended billing decision.
 Failed final invoices cannot starve later tenants, and notification failure does
 not block a billing move. SMTP runs after its claim commits, outside the billing
 transaction; acknowledgement is fenced against a newer move or fallback. The
@@ -203,7 +208,15 @@ read errors, using the maximum across replicas. An operator grant or a pending
 tier upgrade holds the move. A platform operator can inspect its schedule and
 errors with `admin billing recovery list --tenant-id <UUID>`. An audited
 `admin billing set-tier` cancels a scheduled fallback before provider stopping
-begins; an in-flight stop must first finish reconciliation. On Free, `requireSettledOnFree` refuses paid
+begins when no live native collector remains. The abort restores `active`
+invoicing and atomically detaches proven-ended native subscription identities.
+An ended native subscription retains its fee-exclusion identity until its paid
+term ends. Tier assignment, grant set and explicit grant revoke refuse during
+that term, including while overdue monthly phases are still catching up.
+Automatic same-tier grant expiry still ends its waiver at the grant deadline,
+preserving the native identity, ended-provider evidence and fallback schedule.
+A live native collector or an in-flight stop must finish reconciliation before
+assignment; Purser refuses the abort instead of discarding that obligation. On Free, `requireSettledOnFree` refuses paid
 tiers while finalized invoices are unpaid.
 
 Before moving a subscription to Free, Purser commits a pricing fence under the

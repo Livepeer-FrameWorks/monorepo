@@ -85,6 +85,31 @@ func TransitionProvider(ctx context.Context, exec purserdb.DBTX, change Provider
 		result, transitionErr = transitionProviderTx(ctx, tx, change)
 		return transitionErr
 	})
+	if errors.Is(err, ErrCheckoutExpired) && IsPricingRefusal(err) && change.ReceiptIntentID != "" {
+		queueErr := database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
+			locked, lockErr := LockChange(ctx, tx, change.TenantID, PreservePricing)
+			if lockErr != nil {
+				return lockErr
+			}
+			q := purserdb.New(tx)
+			reservation, readErr := q.GetProviderCheckoutReservation(ctx, purserdb.GetProviderCheckoutReservationParams{TenantID: change.TenantID, IntentID: change.ReceiptIntentID})
+			if readErr != nil {
+				return readErr
+			}
+			// A stale callback must never turn an established subscription into a refund.
+			if reservation.ActivatedAt.Valid || reservation.ProviderSubscriptionID.String != "" &&
+				(reservation.Provider == "stripe" && reservation.ProviderSubscriptionID.String == locked.Current.StripeSubscriptionID.String || reservation.Provider == "mollie" && reservation.ProviderSubscriptionID.String == locked.Current.MollieSubscriptionID.String) {
+				return nil
+			}
+			if latchErr := q.StartCheckoutCompensation(ctx, purserdb.StartCheckoutCompensationParams{TenantID: change.TenantID, IntentID: change.ReceiptIntentID}); latchErr != nil {
+				return latchErr
+			}
+			return q.RequestCheckoutRecovery(ctx, purserdb.RequestCheckoutRecoveryParams{TenantID: change.TenantID, IntentID: change.ReceiptIntentID, Reason: err.Error()})
+		})
+		if queueErr != nil {
+			return result, queueErr
+		}
+	}
 	return result, err
 }
 
@@ -207,6 +232,30 @@ func transitionProviderTx(ctx context.Context, tx *sql.Tx, change ProviderChange
 		}
 		result.Rows, err = q.UpdateTenantStripeSubscriptionStatus(ctx, purserdb.UpdateTenantStripeSubscriptionStatusParams{TenantID: change.TenantID, Status: "active", SubscriptionID: change.Stripe.SubscriptionID, StripeStatus: sql.NullString{String: "active", Valid: true}, PeriodStart: change.Stripe.PeriodStart, PeriodEnd: change.Stripe.PeriodEnd})
 		return result, err
+	}
+	targetID, provider, incomingID := "", "", ""
+	switch change.Operation {
+	case StripeCheckout, StripePending:
+		targetID, provider, incomingID = change.Stripe.TierID, "stripe", change.Stripe.SubscriptionID
+	case StripeRenewal:
+		if current.StripeSubscriptionID.String != change.Stripe.SubscriptionID || change.Stripe.TierID != "" && change.Stripe.TierID != current.TierID {
+			targetID, provider, incomingID = change.Stripe.TierID, "stripe", change.Stripe.SubscriptionID
+		}
+	case MollieActivation:
+		targetID, provider, incomingID = change.Mollie.TierID, "mollie", change.Mollie.SubscriptionID.String
+	case AdvanceActivation:
+		targetID, provider = change.Advance.TierID, change.Advance.PaymentMethod
+	}
+	if provider != "" {
+		if targetID == "" {
+			targetID = current.TierID
+		}
+		if eligibilityErr := CheckSelfServiceActivation(ctx, tx, change.TenantID, targetID, provider, incomingID); eligibilityErr != nil {
+			if IsPricingRefusal(eligibilityErr) {
+				return result, errors.Join(ErrCheckoutExpired, eligibilityErr)
+			}
+			return result, eligibilityErr
+		}
 	}
 	if change.Operation == AdvanceActivation && (current.StripeSubscriptionID.Valid || current.MollieSubscriptionID.Valid) {
 		return result, errors.New("advance activation requires a subscription without a provider subscription")

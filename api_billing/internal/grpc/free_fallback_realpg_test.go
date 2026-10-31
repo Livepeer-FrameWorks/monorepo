@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -336,7 +337,7 @@ func TestFreeFallbackKeepsMissedMonthsSeparate_RealPG(t *testing.T) {
 }
 
 func TestFreeFallbackLifecycle_RealYugabyte(t *testing.T) {
-	for _, contract := range []struct {
+	contracts := []struct {
 		name string
 		run  func(*testing.T)
 	}{
@@ -351,7 +352,30 @@ func TestFreeFallbackLifecycle_RealYugabyte(t *testing.T) {
 		{"TestOperatorGrantHoldsTheMoveToFree", TestOperatorGrantHoldsTheMoveToFree_RealPG},
 		{"TestFreeFallbackFailuresDoNotStarveLaterTenants", TestFreeFallbackFailuresDoNotStarveLaterTenants_RealPG},
 		{"TestFreeFallbackStopsUnpaidProviderSubscription", TestFreeFallbackStopsUnpaidProviderSubscription_RealPG},
-	} {
+	}
+	if !t.Run("selection parity", func(t *testing.T) {
+		selection := os.Getenv("FRAMEWORKS_FREE_FALLBACK_TESTS")
+		if selection == "" {
+			t.Skip("selection parity requires the Makefile's canonical test list")
+		}
+		selected := make(map[string]bool)
+		for _, name := range strings.Split(selection, "|") {
+			selected[name] = true
+		}
+		for _, contract := range contracts {
+			name := contract.name + "_RealPG"
+			if !selected[name] {
+				t.Fatalf("Yugabyte fallback case %s is missing from the Makefile selection", name)
+			}
+			delete(selected, name)
+		}
+		if len(selected) != 0 {
+			t.Fatalf("Makefile fallback cases are absent from the Yugabyte matrix: %v", selected)
+		}
+	}) {
+		return
+	}
+	for _, contract := range contracts {
 		t.Run(contract.name, contract.run)
 	}
 }

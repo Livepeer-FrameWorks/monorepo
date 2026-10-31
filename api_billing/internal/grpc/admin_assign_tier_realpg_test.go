@@ -5,9 +5,12 @@ package grpc
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"strings"
 	"testing"
 	"time"
+
+	"frameworks/api_billing/internal/database/purserdb"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -104,36 +107,150 @@ func TestAdminAssignTier_RealPG(t *testing.T) { //nolint:funlen // One database 
 		}
 		return tierID, model, subStatus, pending
 	}
-	t.Run("operator assignment cancels a scheduled fallback", func(t *testing.T) {
-		tenant := seed(t, "free", "postpaid", "active")
-		if _, err := db.ExecContext(ctx, `UPDATE purser.tenant_subscriptions SET free_fallback_at=NOW()+INTERVAL '7 days',free_fallback_reason='payment_failed',free_fallback_provider_ended_at=NOW() WHERE tenant_id=$1`, tenant); err != nil {
+	for _, before := range []string{"past_due", "pending_cancellation"} {
+		t.Run("operator assignment restores invoicing from "+before, func(t *testing.T) {
+			tenant := seed(t, "production", "postpaid", before)
+			if _, err := db.ExecContext(ctx, `UPDATE purser.tenant_subscriptions SET billing_period_start=NOW()-INTERVAL '1 month',billing_period_end=NOW()-INTERVAL '1 hour',free_fallback_at=NOW()+INTERVAL '7 days',free_fallback_reason='payment_failed' WHERE tenant_id=$1`, tenant); err != nil {
+				t.Fatal(err)
+			}
+			if before == "pending_cancellation" {
+				if _, err := db.ExecContext(ctx, `UPDATE purser.tenant_subscriptions SET free_fallback_at=NOW()-INTERVAL '1 hour',free_fallback_reason='cancelled',stripe_subscription_id='ended-subscription',stripe_subscription_status='canceled',stripe_current_period_end=NOW()-INTERVAL '1 hour',mollie_subscription_id='ended-mollie',mollie_next_payment_date=CURRENT_DATE,free_fallback_provider_ended_at=NOW() WHERE tenant_id=$1`, tenant); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := server.AdminAssignTier(operatorAssignCtx(operatorID), &purserpb.AdminAssignTierRequest{TenantId: tenant, TierName: "production", Reason: "operator corrected the billing arrangement"}); err != nil {
+				t.Fatal(err)
+			}
+			var scheduled, ended sql.NullTime
+			var state string
+			var stripe, mollie sql.NullString
+			if err := db.QueryRowContext(ctx, `SELECT status,free_fallback_at,free_fallback_provider_ended_at,stripe_subscription_id,mollie_subscription_id FROM purser.tenant_subscriptions WHERE tenant_id=$1`, tenant).Scan(&state, &scheduled, &ended, &stripe, &mollie); err != nil {
+				t.Fatal(err)
+			}
+			if state != "active" || scheduled.Valid || ended.Valid || stripe.Valid || mollie.Valid {
+				t.Fatalf("abort left unbillable subscription: status=%s scheduled=%v ended=%v stripe=%v mollie=%v", state, scheduled, ended, stripe, mollie)
+			}
+			due, err := purserdb.New(db).ListSubscriptionsDueForInvoice(ctx, time.Now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			found := false
+			for _, row := range due {
+				if row.TenantID == tenant {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatal("aborted fallback is absent from the production invoice job")
+			}
+		})
+	}
+	for _, provider := range []string{"stripe", "mollie"} {
+		for _, action := range []string{"set-tier", "grant set", "grant revoke"} {
+			t.Run("open ended-provider paid term refuses "+provider+" "+action, func(t *testing.T) {
+				tenant := seed(t, "production", "postpaid", "pending_cancellation")
+				if _, err := db.ExecContext(ctx, `UPDATE purser.tenant_subscriptions SET presentment_currency='EUR' WHERE tenant_id=$1`, tenant); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := db.ExecContext(ctx, `UPDATE purser.tenant_subscriptions SET billing_period_start=NOW()-INTERVAL '10 days',billing_period_end=CASE WHEN $2='mollie' THEN NOW()-INTERVAL '1 hour' ELSE NOW()+INTERVAL '20 days' END,free_fallback_at=NOW()+INTERVAL '20 days',free_fallback_reason='cancelled',free_fallback_provider_ended_at=NOW(),stripe_subscription_id=CASE WHEN $2='stripe' THEN 'ended-stripe' END,stripe_customer_id=CASE WHEN $2='stripe' THEN 'customer' END,stripe_subscription_status=CASE WHEN $2='stripe' THEN 'canceled' END,mollie_subscription_id=CASE WHEN $2='mollie' THEN 'ended-mollie' END WHERE tenant_id=$1`, tenant, provider); err != nil {
+					t.Fatal(err)
+				}
+				if action == "grant revoke" {
+					if _, err := db.ExecContext(ctx, `INSERT INTO purser.subscription_operator_grants(subscription_id,assigned_tier_id,collection,waive_usage,reason,granted_by) SELECT id,tier_id,'invoice',true,'existing arrangement',$2::uuid FROM purser.tenant_subscriptions WHERE tenant_id=$1`, tenant, operatorID); err != nil {
+						t.Fatal(err)
+					}
+				}
+				snapshot := func() string {
+					t.Helper()
+					var value string
+					if err := db.QueryRowContext(ctx, `SELECT jsonb_build_object('subscription',to_jsonb(subscription),'grant',(SELECT to_jsonb(grant_row) FROM purser.subscription_operator_grants grant_row WHERE grant_row.subscription_id=subscription.id),'history',(SELECT COUNT(*) FROM purser.subscription_operator_grant_history WHERE tenant_id=subscription.tenant_id),'invoices',(SELECT COUNT(*) FROM purser.billing_invoices WHERE tenant_id=subscription.tenant_id),'events',(SELECT COUNT(*) FROM purser.domain_event_outbox WHERE tenant_id=subscription.tenant_id))::text FROM purser.tenant_subscriptions subscription WHERE tenant_id=$1`, tenant).Scan(&value); err != nil {
+						t.Fatal(err)
+					}
+					return value
+				}
+				before := snapshot()
+				var err error
+				switch action {
+				case "set-tier":
+					_, err = server.AdminAssignTier(operatorAssignCtx(operatorID), &purserpb.AdminAssignTierRequest{TenantId: tenant, TierName: "production", Reason: "retain paid service"})
+				case "grant set":
+					_, err = server.AdminSetBillingGrant(operatorAssignCtx(operatorID), &purserpb.AdminSetBillingGrantRequest{TenantId: tenant, TierName: "production", WaiveUsage: true, Collection: "invoice", Reason: "retain paid service"})
+				case "grant revoke":
+					_, err = server.AdminRevokeBillingGrant(operatorAssignCtx(operatorID), &purserpb.AdminRevokeBillingGrantRequest{TenantId: tenant, TierName: "production", Reason: "retain paid service"})
+				}
+				if status.Code(err) != codes.FailedPrecondition {
+					t.Fatalf("open paid term lost fee evidence through %s: %v", action, err)
+				}
+				if !strings.Contains(err.Error(), "paid term") {
+					t.Fatalf("paid term refusal was not actionable: %v", err)
+				}
+				if after := snapshot(); after != before {
+					t.Fatalf("refused %s changed subscription/grant/invoice/event state: before=%s after=%s", action, before, after)
+				}
+			})
+		}
+	}
+	t.Run("automatic same-tier waiver expiry preserves the native paid term", func(t *testing.T) {
+		tenant := seed(t, "production", "postpaid", "pending_cancellation")
+		if _, err := db.ExecContext(ctx, `UPDATE purser.tenant_subscriptions SET presentment_currency='EUR' WHERE tenant_id=$1`, tenant); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := server.AdminAssignTier(operatorAssignCtx(operatorID), &purserpb.AdminAssignTierRequest{TenantId: tenant, TierName: "production", Reason: "operator corrected the billing arrangement"}); err != nil {
+		expires := time.Now().UTC().Truncate(time.Microsecond).Add(-time.Hour)
+		if _, err := db.ExecContext(ctx, `UPDATE purser.tenant_subscriptions SET billing_period_start=NOW()-INTERVAL '10 days',billing_period_end=NOW()+INTERVAL '20 days',free_fallback_at=NOW()+INTERVAL '20 days',free_fallback_reason='cancelled',free_fallback_provider_ended_at=NOW(),stripe_subscription_id='retained-paid',stripe_customer_id='customer',stripe_subscription_status='canceled' WHERE tenant_id=$1`, tenant); err != nil {
 			t.Fatal(err)
 		}
-		var scheduled, ended sql.NullTime
-		if err := db.QueryRowContext(ctx, `SELECT free_fallback_at,free_fallback_provider_ended_at FROM purser.tenant_subscriptions WHERE tenant_id=$1`, tenant).Scan(&scheduled, &ended); err != nil {
+		if _, err := db.ExecContext(ctx, `INSERT INTO purser.subscription_operator_grants(subscription_id,assigned_tier_id,collection,waive_usage,reason,granted_by,granted_at,expires_at) SELECT id,tier_id,'invoice',true,'expiring usage waiver',$2::uuid,NOW()-INTERVAL '2 days',$3 FROM purser.tenant_subscriptions WHERE tenant_id=$1`, tenant, operatorID, expires); err != nil {
 			t.Fatal(err)
 		}
-		if scheduled.Valid || ended.Valid {
-			t.Fatalf("operator correction left stale fallback state: scheduled=%v ended=%v", scheduled, ended)
+		ownership := func() string {
+			t.Helper()
+			var value string
+			if err := db.QueryRowContext(ctx, `SELECT jsonb_build_object('tier',tier_id,'status',status,'stripe',stripe_subscription_id,'mollie',mollie_subscription_id,'ended',free_fallback_provider_ended_at,'fallback',free_fallback_at,'reason',free_fallback_reason)::text FROM purser.tenant_subscriptions WHERE tenant_id=$1`, tenant).Scan(&value); err != nil {
+				t.Fatal(err)
+			}
+			return value
+		}
+		before := ownership()
+		if err := server.endOperatorGrant(operatorAssignCtx(operatorID), tenant, "grant expired", true); err != nil {
+			t.Fatalf("paid term deferred an expired usage waiver: %v", err)
+		}
+		if _, err := purserdb.New(db).GetSubscriptionOperatorGrant(ctx, tenant); !errors.Is(err, sql.ErrNoRows) {
+			t.Fatalf("expired waiver still applies: %v", err)
+		}
+		var ended time.Time
+		if err := db.QueryRowContext(ctx, `SELECT ended_at FROM purser.subscription_operator_grant_history WHERE tenant_id=$1`, tenant).Scan(&ended); err != nil || !ended.Equal(expires) {
+			t.Fatalf("waiver did not end at its deadline: %v %v", ended, err)
+		}
+		if after := ownership(); after != before {
+			t.Fatalf("waiver expiry discarded paid native ownership: before=%s after=%s", before, after)
 		}
 	})
-	t.Run("same tier cannot clear an in-flight provider stop", func(t *testing.T) {
-		tenant := seed(t, "free", "postpaid", "active")
-		if _, err := db.ExecContext(ctx, `UPDATE purser.tenant_subscriptions SET free_fallback_at=NOW(),free_fallback_reason='payment_failed',free_fallback_provider_stopping=TRUE WHERE tenant_id=$1`, tenant); err != nil {
+	t.Run("a live native subscription cannot lose its fallback obligation", func(t *testing.T) {
+		tenant := seed(t, "production", "postpaid", "past_due")
+		if _, err := db.ExecContext(ctx, `UPDATE purser.tenant_subscriptions SET stripe_subscription_id='unpaid-but-live',free_fallback_at=NOW()+INTERVAL '7 days',free_fallback_reason='payment_failed' WHERE tenant_id=$1`, tenant); err != nil {
 			t.Fatal(err)
 		}
-		_, err := server.AdminAssignTier(operatorAssignCtx(operatorID), &purserpb.AdminAssignTierRequest{TenantId: tenant, TierName: "free", Reason: "operator retries the current tier"})
+		_, err := server.AdminAssignTier(operatorAssignCtx(operatorID), &purserpb.AdminAssignTierRequest{TenantId: tenant, TierName: "production", Reason: "operator tries to abort collection"})
 		if status.Code(err) != codes.FailedPrecondition {
-			t.Fatalf("in-flight provider stop was cleared: %v", err)
+			t.Fatalf("live collector lost its fallback: %v", err)
 		}
-		var stopping bool
-		if err := db.QueryRowContext(ctx, `SELECT free_fallback_provider_stopping FROM purser.tenant_subscriptions WHERE tenant_id=$1`, tenant).Scan(&stopping); err != nil || !stopping {
-			t.Fatalf("lost provider stop fence: stopping=%v err=%v", stopping, err)
+		var scheduled sql.NullTime
+		if err := db.QueryRowContext(ctx, `SELECT free_fallback_at FROM purser.tenant_subscriptions WHERE tenant_id=$1`, tenant).Scan(&scheduled); err != nil || !scheduled.Valid {
+			t.Fatalf("live collector lost durable shutdown: %v %v", scheduled, err)
 		}
 	})
+	for _, target := range []string{"free", "production"} {
+		t.Run("provider stop refuses assignment to "+target, func(t *testing.T) {
+			tenant := seed(t, "free", "postpaid", "active")
+			if _, err := db.ExecContext(ctx, `UPDATE purser.tenant_subscriptions SET free_fallback_at=NOW(),free_fallback_reason='payment_failed',free_fallback_provider_stopping=TRUE WHERE tenant_id=$1`, tenant); err != nil {
+				t.Fatal(err)
+			}
+			_, err := server.AdminAssignTier(operatorAssignCtx(operatorID), &purserpb.AdminAssignTierRequest{TenantId: tenant, TierName: target, Reason: "operator retries assignment"})
+			if status.Code(err) != codes.FailedPrecondition {
+				t.Fatalf("in-flight provider stop did not return a precondition: %v", err)
+			}
+		})
+	}
 	for _, phase := range []string{"requested", "pricing_applied"} {
 		t.Run("operator assignment preserves upgrade "+phase, func(t *testing.T) {
 			tenant := seed(t, "production", "postpaid", "active")

@@ -389,7 +389,7 @@ func (c *Client) FirstPaymentFundedSubscription(ctx context.Context, customerID,
 			}
 		}
 		if page.Links.Next == nil || page.Links.Next.Href == "" {
-			if ambiguousID != "" && retained {
+			if !funded && ambiguousID != "" && retained {
 				return false, fmt.Errorf("cannot prove activation of historical Mollie subscription %s for initial payment %s; provider renewal is cancelled, but its initial collection requires reconciliation", ambiguousID, paymentID)
 			}
 			return funded, nil

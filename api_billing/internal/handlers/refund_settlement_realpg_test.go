@@ -73,6 +73,9 @@ func TestCheckoutRefundSettlementAndOperatorCredit_RealPG(t *testing.T) {
 				return 200, map[string]any{"id": "refund", "status": "pending", "amount": 2000, "currency": "eur"}
 			})
 			fixture.route("GET", "/v1/refunds", func(recordedProviderRequest) (int, any) {
+				if !refundRequested {
+					return 200, map[string]any{"object": "list", "data": []any{}}
+				}
 				return 200, map[string]any{"object": "list", "data": []any{map[string]any{"id": "refund", "status": bankState, "amount": 2000, "currency": "eur", "charge": "charge"}}}
 			})
 			if err := tenant.svc.expireCheckoutReservation(ctx, checkoutReservationExpiry{TenantID: tenant.id, IntentID: id, Force: true}); err != nil {

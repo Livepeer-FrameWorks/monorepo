@@ -154,6 +154,11 @@ func ReconcileCustomerBilling(ctx context.Context, exec DBTX, entries []Customer
 				businessErr = subscriptions.ErrPendingFreeFallback
 			} else if locked.Current.PendingReason.String == "tier_upgrade" {
 				businessErr = subscriptions.ErrPendingTierUpgrade
+			} else if pendingErr := subscriptions.CheckPendingTierUpgrade(ctx, tx, tenantID); pendingErr != nil {
+				if !errors.Is(pendingErr, subscriptions.ErrPendingTierUpgrade) {
+					return Result{}, nil, pendingErr
+				}
+				businessErr = pendingErr
 			} else if locked.Current.Status == "cancelled" {
 				businessErr = fmt.Errorf("tenant %s subscription is cancelled: revoke its outstanding grant before starting provider checkout", tenantID)
 			} else if locked.Current.BillingModel != e.Model {

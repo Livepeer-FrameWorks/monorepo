@@ -12,6 +12,9 @@ import (
 	"time"
 
 	"frameworks/api_billing/internal/database/purserdb"
+	"frameworks/api_billing/internal/subscriptions"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/google/uuid"
@@ -46,7 +49,7 @@ const (
 // that base-fee invoice was paid before the change.
 func newTierChangeFixture(t *testing.T, fromBase string, first firstBaseFee) *tierChangeFixture {
 	t.Helper()
-	db := startPurserUsageRealPG(t)
+	db := startProviderReservationDatabase(t)
 	ctx := context.Background()
 	stripe, stripeClient := installStripeFixture(t)
 	stripe.route(http.MethodGet, "/v1/setup_intents/seti_change", func(recordedProviderRequest) (int, any) {
@@ -154,35 +157,41 @@ func insertTierChangeTier(t *testing.T, db *sql.DB, base string) string {
 	t.Helper()
 	tierID := uuid.NewString()
 	if _, err := db.ExecContext(context.Background(), `
-		INSERT INTO purser.billing_tiers (id, tier_name, display_name, base_price, currency, metering_enabled)
-		VALUES ($1, $2, 'Tier change', $3::numeric, 'EUR', false)
+		INSERT INTO purser.billing_tiers (id, tier_name, display_name, base_price, currency, metering_enabled, tier_level)
+		VALUES ($1, $2, 'Tier change', $3::numeric, 'EUR', false, 2)
 	`, tierID, "tier-change-"+tierID, base); err != nil {
 		t.Fatal(err)
 	}
 	return tierID
 }
 
-// changeTier completes a Stripe setup checkout for tierID, the path a
-// USD or GBP tenant takes to change tier.
+// changeTier purchases the replacement through the durable paid-upgrade boundary.
 func (f *tierChangeFixture) changeTier(t *testing.T, tierID string) {
 	t.Helper()
-	session, err := json.Marshal(map[string]any{
-		"id": "cs_change_" + tierID, "customer": "cus_change", "setup_intent": "seti_change", "mode": "setup",
-		"metadata": map[string]string{"purpose": string(PurposeSubscriptionSetup), "tenant_id": f.tenantID, "tier_id": tierID, "reference_id": tierID},
+	if err := f.tryChangeTier(t, tierID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (f *tierChangeFixture) tryChangeTier(t *testing.T, tierID string) error {
+	t.Helper()
+	var id string
+	err := database.WithRetryablePostgresTx(t.Context(), f.db, nil, func(tx *sql.Tx) error {
+		locked, err := subscriptions.LockChange(t.Context(), tx, f.tenantID, subscriptions.ChangePricing)
+		if err != nil {
+			return err
+		}
+		if locked.Current.TierID == tierID {
+			return nil
+		}
+		id, err = f.service.StageTierUpgradeTx(t.Context(), tx, f.tenantID, tierID, f.start, f.end)
+		return err
 	})
-	if err != nil {
-		t.Fatal(err)
+	if err != nil || id == "" {
+		return err
 	}
-	// The checkout RPC has already bound this provider response before delivery.
-	if _, err := f.db.ExecContext(t.Context(), `INSERT INTO purser.payment_provider_intents
-		(tenant_id,provider,purpose,local_reference_type,local_reference_id,status,currency,idempotency_key,provider_session_id)
-		VALUES($1,'stripe','tenant_subscription_checkout','billing_tiers',$2,'provider_open','USD',$3,$4)
-		ON CONFLICT (provider,idempotency_key) DO NOTHING`, f.tenantID, tierID, "tier-change:"+tierID, "cs_change_"+tierID); err != nil {
-		t.Fatal(err)
-	}
-	if err := f.service.DispatchStripeCheckoutCompleted(context.Background(), session); err != nil {
-		t.Fatalf("setup checkout completion: %v", err)
-	}
+	_, err = f.service.ProcessTierUpgrade(t.Context(), f.tenantID, id)
+	return err
 }
 
 type tierChangeState struct {
@@ -299,36 +308,100 @@ func TestAdvanceBilledTierUpgradeClosesThePeriodAndProratesTheBaseFee_RealPG(t *
 	}
 }
 
-func TestAdvanceBilledTierDowngradeCreditsTheExcessToThePrepaidBalance_RealPG(t *testing.T) {
-	f := newTierChangeFixture(t, "50.00", firstBaseFeePaid)
-	downgradeTier := insertTierChangeTier(t, f.db, "20.00")
+func TestAdvanceSetupRefusesMidPeriodTierChange_RealPG(t *testing.T) {
+	assertIneligibleCheckoutCompensates(t)
+	for _, mode := range []string{"cheaper", "enterprise", "inactive", "prepaid", "upgrade"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newTierChangeFixture(t, "50.00", firstBaseFeePaid)
+			target := insertTierChangeTier(t, f.db, "20.00")
+			if _, err := f.db.ExecContext(t.Context(), `UPDATE purser.billing_tiers SET tier_level=3,is_active=true WHERE id=$1`, target); err != nil {
+				t.Fatal(err)
+			}
+			switch mode {
+			case "enterprise":
+				_, err := f.db.ExecContext(t.Context(), `UPDATE purser.billing_tiers SET is_enterprise=true,base_price=0 WHERE id=$1`, target)
+				if err != nil {
+					t.Fatal(err)
+				}
+			case "inactive":
+				_, err := f.db.ExecContext(t.Context(), `UPDATE purser.billing_tiers SET is_active=false WHERE id=$1`, target)
+				if err != nil {
+					t.Fatal(err)
+				}
+			case "prepaid":
+				_, err := f.db.ExecContext(t.Context(), `UPDATE purser.billing_tiers SET tier_level=0,is_default_prepaid=true WHERE id=$1`, target)
+				if err != nil {
+					t.Fatal(err)
+				}
+			case "upgrade":
+				_, err := f.db.ExecContext(t.Context(), `UPDATE purser.billing_tiers SET base_price=100 WHERE id=$1`, target)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			err := f.service.activateAdvanceBilledTenant(t.Context(), f.tenantID, target, "stripe", "cus_change", time.Now(), "")
+			if err == nil {
+				t.Fatal("setup bypassed the paid tier-upgrade boundary")
+			}
+			var tier string
+			var start, end time.Time
+			if readErr := f.db.QueryRowContext(t.Context(), `SELECT tier_id::text,billing_period_start,billing_period_end FROM purser.tenant_subscriptions WHERE tenant_id=$1`, f.tenantID).Scan(&tier, &start, &end); readErr != nil {
+				t.Fatal(readErr)
+			}
+			if tier == target || !start.Equal(f.start) || !end.Equal(f.end) {
+				t.Fatalf("refused setup changed pricing: tier=%s period=[%s,%s)", tier, start, end)
+			}
+			var funds, transactions int64
+			if readErr := f.db.QueryRowContext(t.Context(), `SELECT COALESCE((SELECT balance_cents FROM purser.prepaid_balances WHERE tenant_id=$1 AND currency='EUR'),0),(SELECT COUNT(*) FROM purser.balance_transactions WHERE tenant_id=$1)`, f.tenantID).Scan(&funds, &transactions); readErr != nil {
+				t.Fatal(readErr)
+			}
+			if funds != 0 || transactions != 0 {
+				t.Fatalf("refused setup created spendable credit: balance=%d entries=%d", funds, transactions)
+			}
+			if calls := len(f.stripe.matching("POST", "/v1/payment_intents")); calls != 1 {
+				t.Fatalf("refused setup collected another fee: calls=%d", calls)
+			}
+		})
+	}
+}
 
-	f.changeTier(t, downgradeTier)
-	after := f.state(t)
+func TestAdvanceBaseFeeCreditIsCappedAndAudited_RealPG(t *testing.T) {
+	for _, mode := range []string{"advance invoice", "upgrade invoice"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newTierChangeFixture(t, "50.00", firstBaseFeePaid)
+			target := insertTierChangeTier(t, f.db, "20.00")
+			cutoff := f.start.Add(15 * 24 * time.Hour)
+			if _, err := f.db.ExecContext(t.Context(), `UPDATE purser.tenant_subscriptions SET tier_id=$2,billing_period_start=$3,billing_period_end=$3::timestamp+INTERVAL '1 month',next_billing_date=$3::timestamp+INTERVAL '1 month' WHERE tenant_id=$1`, f.tenantID, target, cutoff); err != nil {
+				t.Fatal(err)
+			}
+			if mode == "advance invoice" {
+				if err := f.jobs.chargeAdvanceBaseFee(t.Context(), f.tenantID, cutoff); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				err := database.WithRetryablePostgresTx(t.Context(), f.db, nil, func(tx *sql.Tx) error {
+					return createUpgradeInvoiceTx(t.Context(), tx, purserdb.GetTierUpgradeRow{ID: uuid.NewString(), TenantID: f.tenantID, TierID: target, ActorID: "operator", Provider: "advance", OldBaseCents: 5000, BaseCents: 2000}, billing.TierUpgradeReceipt{Applied: true, PeriodStart: cutoff, PeriodEnd: billing.NextMonthlyAnniversary(cutoff)})
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			var applied, forfeited, credited, oldForfeited string
+			if err := f.db.QueryRowContext(t.Context(), `SELECT replacement.usage_details#>>'{unused_base_fee_credit,amount}',replacement.usage_details#>>'{unused_base_fee_credit,forfeited_amount}',previous.usage_details#>>'{unused_share_returned,credited}',previous.usage_details#>>'{unused_share_returned,forfeited}' FROM purser.billing_invoices replacement JOIN purser.billing_invoices previous ON previous.tenant_id=replacement.tenant_id WHERE replacement.tenant_id=$1 AND replacement.base_fee_period_start=$2 AND previous.base_fee_period_start=$3`, f.tenantID, cutoff, f.start).Scan(&applied, &forfeited, &credited, &oldForfeited); err != nil {
+				t.Fatalf("replacement credit lacks capped/forfeited audit: %v", err)
+			}
+			if applied != "20.00" || credited != "20.00" || forfeited != "5.00" || oldForfeited != "5.00" {
+				t.Fatalf("replacement and consumed credit disagree: applied=%s credited=%s forfeited=%s old_forfeited=%s", applied, credited, forfeited, oldForfeited)
+			}
+			var funds, entries int64
+			if err := f.db.QueryRowContext(t.Context(), `SELECT COALESCE((SELECT balance_cents FROM purser.prepaid_balances WHERE tenant_id=$1 AND currency='EUR'),0),(SELECT COUNT(*) FROM purser.balance_transactions WHERE tenant_id=$1)`, f.tenantID).Scan(&funds, &entries); err != nil {
+				t.Fatal(err)
+			}
+			if funds != 0 || entries != 0 {
+				t.Fatalf("replacement credit became spendable funds: balance=%d entries=%d", funds, entries)
+			}
 
-	if after.usageStatus == "draft" || after.usageEnd.Sub(after.changeAt).Abs() > time.Millisecond {
-		t.Errorf("old period usage invoice = %s ending %s, want finalized ending at the change %s", after.usageStatus, after.usageEnd, after.changeAt)
-	}
-	credit := proratedCreditCents(5000, f.start, f.end, after.changeAt)
-	excess := credit - 2000
-	if excess <= 0 {
-		t.Fatalf("fixture credit %d does not exceed the new base fee", credit)
-	}
-	if after.newAmount != "0.00" || after.newStatus != "paid" || after.newPresentmentCents != 0 || after.charges != 1 {
-		t.Errorf("new base-fee invoice amount %s status %s presentment %d, charges %d; want a paid zero invoice and no new charge",
-			after.newAmount, after.newStatus, after.newPresentmentCents, after.charges)
-	}
-	if after.balanceCents != excess || after.balanceTransactions != 1 {
-		t.Errorf("prepaid balance %d with %d invoice transactions, want %d from one transaction", after.balanceCents, after.balanceTransactions, excess)
-	}
-	if t.Failed() {
-		return
-	}
-
-	f.changeTier(t, downgradeTier)
-	replay := f.state(t)
-	if replay.balanceCents != excess || replay.balanceTransactions != 1 || replay.charges != 1 || replay.baseFeeInvoices != 2 || replay.changeAt != after.changeAt {
-		t.Fatalf("replayed downgrade changed state: before %+v after %+v", after, replay)
+		})
 	}
 }
 
@@ -348,6 +421,12 @@ func TestAdvanceBilledTierChangeReducesAnUnpaidPreviousBaseFeeInvoice_RealPG(t *
 			f := newTierChangeFixture(t, tc.fromBase, firstBaseFeeDeclined)
 			newTier := insertTierChangeTier(t, f.db, tc.toBase)
 
+			if tc.toCents < tc.fromCents {
+				if err := f.tryChangeTier(t, newTier); !errors.Is(err, billing.ErrTierUpgradeRejected) {
+					t.Fatalf("lower-priced purchase was accepted: %v", err)
+				}
+				return
+			}
 			f.changeTier(t, newTier)
 			after := f.state(t)
 			first := f.firstBaseFee(t)
@@ -394,15 +473,15 @@ func TestAdvanceBilledTierChangeWaitsForAPendingPreviousBaseFeeCharge_RealPG(t *
 	f := newTierChangeFixture(t, "20.00", firstBaseFeeInFlight)
 	upgradeTier := insertTierChangeTier(t, f.db, "50.00")
 
-	f.changeTier(t, upgradeTier)
-	waiting := f.state(t)
-	if waiting.changeAt.Equal(f.start) || waiting.baseFeeInvoices != 1 || waiting.charges != 1 {
-		t.Fatalf("while the previous charge is pending: period start %s, %d base-fee invoices, %d charges; want the new period with no base-fee invoice yet",
-			waiting.changeAt, waiting.baseFeeInvoices, waiting.charges)
+	if err := f.tryChangeTier(t, upgradeTier); !errors.Is(err, ErrBaseFeePaymentPending) {
+		t.Fatalf("unresolved old payment did not refuse purchase: %v", err)
 	}
-
+	var waiting time.Time
+	if err := f.db.QueryRowContext(t.Context(), `SELECT billing_period_start FROM purser.tenant_subscriptions WHERE tenant_id=$1`, f.tenantID).Scan(&waiting); err != nil || !waiting.Equal(f.start) {
+		t.Fatalf("pending old charge moved period: %s %v", waiting, err)
+	}
 	f.confirmFirstBaseFeePayment(t)
-	f.jobs.chargeDueAdvanceBaseFees(context.Background(), time.Now())
+	f.changeTier(t, upgradeTier)
 	after := f.state(t)
 	credit := proratedCreditCents(2000, f.start, f.end, after.changeAt)
 	if after.baseFeeInvoices != 2 || after.newAmount != decimal.New(5000-credit, -2).StringFixed(2) || after.charges != 2 {
@@ -418,9 +497,9 @@ func TestExpiredCheckoutUnblocksPreviousBaseFee_RealPG(t *testing.T) {
 	if _, err := f.db.ExecContext(ctx, `UPDATE purser.billing_payments SET tx_id = 'cs_expired' WHERE invoice_id = $1 AND status = 'pending'`, first.id); err != nil {
 		t.Fatal(err)
 	}
-	f.changeTier(t, insertTierChangeTier(t, f.db, "50.00"))
-	if f.state(t).baseFeeInvoices != 1 {
-		t.Fatal("unresolved payment must block repricing")
+	target := insertTierChangeTier(t, f.db, "50.00")
+	if err := f.tryChangeTier(t, target); !errors.Is(err, ErrBaseFeePaymentPending) {
+		t.Fatalf("unresolved payment must block repricing: %v", err)
 	}
 	var event StripeWebhookPayload
 	event.Data.Object, _ = json.Marshal(map[string]any{
@@ -433,6 +512,7 @@ func TestExpiredCheckoutUnblocksPreviousBaseFee_RealPG(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	f.changeTier(t, target)
 	f.jobs.chargeDueAdvanceBaseFees(ctx, time.Now())
 	if got := f.state(t); got.baseFeeInvoices != 2 || got.charges != 2 {
 		t.Fatalf("expiry did not unblock advance billing: %+v", got)
@@ -498,22 +578,22 @@ func TestReplacementBaseFeeCannotBeCreditedTwice_RealPG(t *testing.T) {
 	f.changeTier(t, insertTierChangeTier(t, f.db, "50.00"))
 	var invoiceID, txID string
 	var cents int64
-	if err := f.db.QueryRow(`SELECT i.id::text,p.tx_id,i.presentment_amount_cents FROM purser.billing_invoices i JOIN purser.billing_payments p ON p.invoice_id=i.id WHERE i.tenant_id=$1 AND i.base_fee_period_start>$2 AND p.status='pending'`, f.tenantID, f.start).Scan(&invoiceID, &txID, &cents); err != nil {
+	if err := f.db.QueryRowContext(t.Context(), `SELECT i.id::text,p.tx_id,i.presentment_amount_cents FROM purser.billing_invoices i JOIN purser.billing_payments p ON p.invoice_id=i.id WHERE i.tenant_id=$1 AND i.base_fee_period_start>$2 AND p.status='pending'`, f.tenantID, f.start).Scan(&invoiceID, &txID, &cents); err != nil {
 		t.Fatal(err)
 	}
 	if updated, err := f.service.updateInvoicePaymentStatus("stripe", txID, invoiceID, "confirmed", nil, providerSettlementEvidence{TenantID: f.tenantID, AmountCents: cents, Currency: "usd"}); err != nil || !updated {
 		t.Fatalf("confirm replacement: %v %v", updated, err)
 	}
 	paygID := uuid.NewString()
-	if _, err := f.db.Exec(`INSERT INTO purser.billing_tiers(id,tier_name,display_name,base_price,currency,tier_level,is_default_prepaid,metering_enabled) VALUES($1,'payg','PAYG',0,'EUR',0,true,false)`, paygID); err != nil {
+	if _, err := f.db.ExecContext(t.Context(), `INSERT INTO purser.billing_tiers(id,tier_name,display_name,base_price,currency,tier_level,is_default_prepaid,metering_enabled) VALUES($1,'payg','PAYG',0,'EUR',0,true,false)`, paygID); err != nil {
 		t.Fatal(err)
 	}
 	closing, err := PreparePostpaidPhaseClose(t.Context(), f.db, f.jobs.logger, f.service, f.tenantID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if closed, err := commitSwitchToPrepaid(t.Context(), f.db, closing, f.tenantID, paygID); err != nil || !closed {
-		t.Fatalf("switch to prepaid: %v %v", closed, err)
+	if closed, switchErr := commitSwitchToPrepaid(t.Context(), f.db, closing, f.tenantID, paygID); switchErr != nil || !closed {
+		t.Fatalf("switch to prepaid: %v %v", closed, switchErr)
 	}
 	switchAt, _ := subscriptionPeriod(t, f.db, f.tenantID)
 	id, err := purserdb.New(f.db).FindOverlappedBaseFeeInvoice(t.Context(), purserdb.FindOverlappedBaseFeeInvoiceParams{TenantID: f.tenantID, PeriodStart: switchAt.Add(time.Hour)})

@@ -154,6 +154,7 @@ func TestPromoteToPaidDefaultTierCarriesCredit(t *testing.T) {
 	mock.ExpectQuery(`SELECT id::text AS id, tier_level, tier_name, is_default_prepaid, is_active`).
 		WithArgs(false, "").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "tier_level", "tier_name", "is_default_prepaid", "is_active"}).AddRow("tier-paid", int32(2), "supporter", false, true))
+	expectSelfServiceTier(mock, "tier-paid", 2, false, true, false)
 	expectPrepaidPhaseRead(mock, "tenant-1", "prepaid")
 	mock.ExpectQuery(`UPDATE purser\.tenant_subscriptions\s+SET billing_model = 'postpaid'`).
 		WithArgs("tier-paid", "tenant-1").
@@ -226,6 +227,7 @@ func TestPromoteToPaidRequiresCompleteBillingDetails(t *testing.T) {
 	mock.ExpectQuery(`SELECT id::text AS id, tier_level, tier_name, is_default_prepaid, is_active`).
 		WithArgs(false, "").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "tier_level", "tier_name", "is_default_prepaid", "is_active"}).AddRow("tier-paid", int32(2), "supporter", false, true))
+	expectSelfServiceTier(mock, "tier-paid", 2, false, true, false)
 	mock.ExpectRollback()
 
 	_, err := s.PromoteToPaid(context.Background(), &purserpb.PromoteToPaidRequest{TenantId: "tenant-1"})
@@ -261,6 +263,7 @@ func TestPromoteToPaidExplicitTierRejectsNonEligible(t *testing.T) {
 				WithArgs(true, "tier-req").
 				WillReturnRows(sqlmock.NewRows([]string{"id", "tier_level", "tier_name", "is_default_prepaid", "is_active"}).
 					AddRow("tier-req", tc.tierLevel, "some-tier", tc.isPrepaid, tc.isActive))
+			expectSelfServiceTier(mock, "tier-req", tc.tierLevel, tc.isPrepaid, tc.isActive, false)
 			mock.ExpectRollback()
 
 			tierID := "tier-req"
@@ -281,6 +284,7 @@ func TestPromoteToPaidAllowsVerifiedFreePathWithoutBillingProfileOrProvider(t *t
 		WithArgs(true, "tier-free").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "tier_level", "tier_name", "is_default_prepaid", "is_active"}).
 			AddRow("tier-free", int32(1), "free", false, true))
+	expectSelfServiceTier(mock, "tier-free", 1, false, true, false)
 	expectPrepaidPhaseRead(mock, "tenant-1", "prepaid")
 	mock.ExpectQuery(`UPDATE purser\.tenant_subscriptions\s+SET billing_model = 'postpaid'`).
 		WithArgs("tier-free", "tenant-1").
@@ -323,6 +327,7 @@ func TestPromoteToPaidNotFoundAndAlreadyPostpaid(t *testing.T) {
 		mock.ExpectQuery(`SELECT id::text AS id, tier_level, tier_name, is_default_prepaid, is_active`).
 			WithArgs(true, "tier-free").
 			WillReturnRows(sqlmock.NewRows([]string{"id", "tier_level", "tier_name", "is_default_prepaid", "is_active"}).AddRow("tier-free", int32(1), "free", false, true))
+		expectSelfServiceTier(mock, "tier-free", 1, false, true, false)
 		mock.ExpectCommit()
 		expectCanonicalPromotion(mock, "tenant-1", "sub-1", "tier-free", int32(1), "free", 1500)
 		response, err := s.PromoteToPaid(context.Background(), &purserpb.PromoteToPaidRequest{TenantId: "tenant-1"})
@@ -679,4 +684,14 @@ func TestUpdateSubscriptionBindsTenantAndProtectsCustomTerms(t *testing.T) {
 	}); status.Code(err) == codes.PermissionDenied {
 		t.Fatalf("platform operator was denied: %v", err)
 	}
+}
+
+func expectSelfServiceTier(mock sqlmock.Sqlmock, tierID string, level int32, prepaid, active, enterprise bool) {
+	mock.ExpectQuery("GetTierForBillingChange").WithArgs(tierID).WillReturnRows(sqlmock.NewRows([]string{"tier_level", "tier_name", "is_default_prepaid", "is_active", "is_enterprise"}).AddRow(level, "catalog-tier", prepaid, active, enterprise))
+}
+
+func expectSelfServiceCheckout(mock sqlmock.Sqlmock, tenantID, tierID, provider string) {
+	expectSelfServiceTier(mock, tierID, 2, false, true, false)
+	mock.ExpectQuery("SelfServiceAdvanceTierChange").WithArgs(tenantID, tierID, provider).WillReturnRows(sqlmock.NewRows([]string{"changing"}).AddRow(false))
+	mock.ExpectQuery("GetSelfServiceNativeSubscriptions").WithArgs(tenantID).WillReturnRows(sqlmock.NewRows([]string{"stripe_id", "mollie_id", "paid_cancellation_term"}).AddRow("", "", false))
 }

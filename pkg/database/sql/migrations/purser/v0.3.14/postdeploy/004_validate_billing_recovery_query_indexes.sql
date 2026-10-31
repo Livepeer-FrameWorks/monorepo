@@ -33,8 +33,16 @@ BEGIN
           AND state.indrelid = 'purser.tenant_subscriptions'::regclass
           AND state.indisvalid AND state.indisready
           AND pg_get_indexdef(state.indexrelid) !~ ' HASH([, )])'
+          AND pg_get_indexdef(state.indexrelid, 1, true) IN (
+              'free_fallback_notice_attempted_at', 'free_fallback_notice_attempted_at NULLS FIRST',
+              'free_fallback_notice_attempted_at ASC NULLS FIRST')
+          AND pg_get_indexdef(state.indexrelid) ~ '[(]free_fallback_notice_attempted_at( ASC)? NULLS FIRST,'
+          AND pg_get_indexdef(state.indexrelid, 2, true) IN ('free_fallback_at', 'free_fallback_at ASC')
+          AND pg_get_indexdef(state.indexrelid, 3, true) IN ('tenant_id', 'tenant_id ASC')
+          AND regexp_replace(pg_get_expr(state.indpred, state.indrelid), '[[:space:]]', '', 'g') =
+              '((free_fallback_atISNOTNULL)AND((free_fallback_moved_atISNOTNULL)OR(free_fallback_notified_atISNULL))AND(free_fallback_notice_abandoned_atISNULL))'
     ) THEN
-        RAISE EXCEPTION 'idx_subscription_fallback_notice_retry is absent, invalid, or hash-sharded';
+        RAISE EXCEPTION 'idx_subscription_fallback_notice_retry is absent, invalid, hash-sharded, or has a different retry key/predicate';
     END IF;
     IF NOT EXISTS (
         SELECT 1 FROM pg_index state
@@ -61,6 +69,10 @@ BEGIN
           AND state.indisvalid AND state.indisready
           AND pg_get_indexdef(state.indexrelid) !~ ' HASH([, )])'
           AND pg_get_indexdef(state.indexrelid) LIKE '% INCLUDE (id)%'
+          AND pg_get_indexdef(state.indexrelid, 1, true) IN ('free_fallback_notice_failures', 'free_fallback_notice_failures ASC')
+          AND pg_get_indexdef(state.indexrelid, 2, true) IN ('tenant_id', 'tenant_id ASC')
+          AND regexp_replace(pg_get_expr(state.indpred, state.indrelid), '[[:space:]()]', '', 'g') =
+              'free_fallback_atISNOTNULLANDfree_fallback_notice_errorISNOTNULLANDfree_fallback_notice_abandoned_atISNULL'
     ) THEN
         RAISE EXCEPTION 'idx_subscription_fallback_notice_failed is absent, invalid, hash-sharded, or missing its covering id';
     END IF;

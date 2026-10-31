@@ -2072,6 +2072,7 @@ const (
 	PrepaidService_AdminAssignTier_FullMethodName               = "/purser.PrepaidService/AdminAssignTier"
 	PrepaidService_AdminListCheckoutRecovery_FullMethodName     = "/purser.PrepaidService/AdminListCheckoutRecovery"
 	PrepaidService_AdminRecoverCheckout_FullMethodName          = "/purser.PrepaidService/AdminRecoverCheckout"
+	PrepaidService_AdminRetainDeliveredCheckout_FullMethodName  = "/purser.PrepaidService/AdminRetainDeliveredCheckout"
 	PrepaidService_AdminRecoverTierUpgrade_FullMethodName       = "/purser.PrepaidService/AdminRecoverTierUpgrade"
 	PrepaidService_AdminSetBillingGrant_FullMethodName          = "/purser.PrepaidService/AdminSetBillingGrant"
 	PrepaidService_AdminGetBillingGrant_FullMethodName          = "/purser.PrepaidService/AdminGetBillingGrant"
@@ -2141,6 +2142,9 @@ type PrepaidServiceClient interface {
 	AdminListCheckoutRecovery(ctx context.Context, in *AdminListCheckoutRecoveryRequest, opts ...grpc.CallOption) (*AdminListCheckoutRecoveryResponse, error)
 	// Previews one tenant checkout; confirmed requests durably reconcile it. Platform operators only.
 	AdminRecoverCheckout(ctx context.Context, in *AdminRecoverCheckoutRequest, opts ...grpc.CallOption) (*AdminRecoverCheckoutResponse, error)
+	// Attests delivered historical Mollie service without refund. A separate RPC
+	// makes older servers refuse this action instead of cancelling the checkout.
+	AdminRetainDeliveredCheckout(ctx context.Context, in *AdminRecoverCheckoutRequest, opts ...grpc.CallOption) (*AdminRecoverCheckoutResponse, error)
 	// Inspect a paid upgrade or cancel its unapplied request without starting a purchase.
 	AdminRecoverTierUpgrade(ctx context.Context, in *AdminRecoverTierUpgradeRequest, opts ...grpc.CallOption) (*AdminRecoverTierUpgradeResponse, error)
 	// Operator billing arrangement for one tenant: a base fee in place of the
@@ -2360,6 +2364,16 @@ func (c *prepaidServiceClient) AdminRecoverCheckout(ctx context.Context, in *Adm
 	return out, nil
 }
 
+func (c *prepaidServiceClient) AdminRetainDeliveredCheckout(ctx context.Context, in *AdminRecoverCheckoutRequest, opts ...grpc.CallOption) (*AdminRecoverCheckoutResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AdminRecoverCheckoutResponse)
+	err := c.cc.Invoke(ctx, PrepaidService_AdminRetainDeliveredCheckout_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *prepaidServiceClient) AdminRecoverTierUpgrade(ctx context.Context, in *AdminRecoverTierUpgradeRequest, opts ...grpc.CallOption) (*AdminRecoverTierUpgradeResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(AdminRecoverTierUpgradeResponse)
@@ -2490,6 +2504,9 @@ type PrepaidServiceServer interface {
 	AdminListCheckoutRecovery(context.Context, *AdminListCheckoutRecoveryRequest) (*AdminListCheckoutRecoveryResponse, error)
 	// Previews one tenant checkout; confirmed requests durably reconcile it. Platform operators only.
 	AdminRecoverCheckout(context.Context, *AdminRecoverCheckoutRequest) (*AdminRecoverCheckoutResponse, error)
+	// Attests delivered historical Mollie service without refund. A separate RPC
+	// makes older servers refuse this action instead of cancelling the checkout.
+	AdminRetainDeliveredCheckout(context.Context, *AdminRecoverCheckoutRequest) (*AdminRecoverCheckoutResponse, error)
 	// Inspect a paid upgrade or cancel its unapplied request without starting a purchase.
 	AdminRecoverTierUpgrade(context.Context, *AdminRecoverTierUpgradeRequest) (*AdminRecoverTierUpgradeResponse, error)
 	// Operator billing arrangement for one tenant: a base fee in place of the
@@ -2575,6 +2592,9 @@ func (UnimplementedPrepaidServiceServer) AdminListCheckoutRecovery(context.Conte
 }
 func (UnimplementedPrepaidServiceServer) AdminRecoverCheckout(context.Context, *AdminRecoverCheckoutRequest) (*AdminRecoverCheckoutResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method AdminRecoverCheckout not implemented")
+}
+func (UnimplementedPrepaidServiceServer) AdminRetainDeliveredCheckout(context.Context, *AdminRecoverCheckoutRequest) (*AdminRecoverCheckoutResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AdminRetainDeliveredCheckout not implemented")
 }
 func (UnimplementedPrepaidServiceServer) AdminRecoverTierUpgrade(context.Context, *AdminRecoverTierUpgradeRequest) (*AdminRecoverTierUpgradeResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method AdminRecoverTierUpgrade not implemented")
@@ -2960,6 +2980,24 @@ func _PrepaidService_AdminRecoverCheckout_Handler(srv interface{}, ctx context.C
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PrepaidService_AdminRetainDeliveredCheckout_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AdminRecoverCheckoutRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PrepaidServiceServer).AdminRetainDeliveredCheckout(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PrepaidService_AdminRetainDeliveredCheckout_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PrepaidServiceServer).AdminRetainDeliveredCheckout(ctx, req.(*AdminRecoverCheckoutRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _PrepaidService_AdminRecoverTierUpgrade_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(AdminRecoverTierUpgradeRequest)
 	if err := dec(in); err != nil {
@@ -3168,6 +3206,10 @@ var PrepaidService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "AdminRecoverCheckout",
 			Handler:    _PrepaidService_AdminRecoverCheckout_Handler,
+		},
+		{
+			MethodName: "AdminRetainDeliveredCheckout",
+			Handler:    _PrepaidService_AdminRetainDeliveredCheckout_Handler,
 		},
 		{
 			MethodName: "AdminRecoverTierUpgrade",

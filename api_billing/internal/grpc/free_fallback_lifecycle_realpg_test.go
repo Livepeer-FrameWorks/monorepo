@@ -6,14 +6,17 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"frameworks/api_billing/internal/database/purserdb"
+	"frameworks/api_billing/internal/handlers"
 	"frameworks/api_billing/internal/subscriptions"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
+	dbsql "github.com/Livepeer-FrameWorks/monorepo/pkg/database/sql"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	publicv1 "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/public/v1"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
@@ -54,6 +57,102 @@ func fallbackLifecycleServer(db *sql.DB, p *fallbackLifecycleProvider) *PurserSe
 }
 
 func TestFreeFallbackProviderFailureKeepsDurableFence_RealPG(t *testing.T) {
+	t.Run("postdeploy validates the notice retry index contract", func(t *testing.T) {
+		for _, defect := range []string{"key", "predicate"} {
+			t.Run(defect, func(t *testing.T) {
+				db := startOperatorGrantDatabase(t)
+				validation, err := dbsql.Content.ReadFile("migrations/purser/v0.3.14/postdeploy/004_validate_billing_recovery_query_indexes.sql")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err = db.ExecContext(t.Context(), string(validation)); err != nil {
+					var definition, predicate string
+					if readErr := db.QueryRowContext(t.Context(), `SELECT pg_get_indexdef(indexrelid),pg_get_expr(indpred,indrelid) FROM pg_index WHERE indexrelid='purser.idx_subscription_fallback_notice_retry'::regclass`).Scan(&definition, &predicate); readErr != nil {
+						t.Fatal(readErr)
+					}
+					t.Fatalf("valid notice index rejected: %v; definition=%s predicate=%s", err, definition, predicate)
+				}
+				definition := `CREATE INDEX idx_subscription_fallback_notice_retry ON purser.tenant_subscriptions (tenant_id,free_fallback_at) WHERE free_fallback_at IS NOT NULL AND (free_fallback_moved_at IS NOT NULL OR free_fallback_notified_at IS NULL) AND free_fallback_notice_abandoned_at IS NULL`
+				if defect == "predicate" {
+					definition = `CREATE INDEX idx_subscription_fallback_notice_retry ON purser.tenant_subscriptions (free_fallback_notice_attempted_at ASC NULLS FIRST,free_fallback_at,tenant_id) WHERE free_fallback_at IS NOT NULL`
+				}
+				if _, err = db.ExecContext(t.Context(), `DROP INDEX purser.idx_subscription_fallback_notice_retry; `+definition); err != nil {
+					t.Fatal(err)
+				}
+				if _, err = db.ExecContext(t.Context(), string(validation)); err == nil || !strings.Contains(err.Error(), "idx_subscription_fallback_notice_retry") {
+					t.Fatalf("postdeploy accepted wrong notice retry %s: %v", defect, err)
+				}
+			})
+		}
+	})
+	t.Run("paid grant and explicit revoke clear ended fallback ownership", func(t *testing.T) {
+		db := startOperatorGrantDatabase(t)
+		tenant, paid, free := seedFallbackLifecycle(t, db)
+		if _, err := db.Exec(`UPDATE purser.tenant_subscriptions SET tier_id=$2,status='active',payment_method=NULL,stripe_subscription_id=NULL,stripe_customer_id=NULL,free_fallback_moved_at=NOW(),free_fallback_provider_ended_at=NOW() WHERE tenant_id=$1`, tenant, free); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(`UPDATE purser.billing_tiers SET tier_level=3 WHERE id=$1`, paid); err != nil {
+			t.Fatal(err)
+		}
+		server := fallbackLifecycleServer(db, &fallbackLifecycleProvider{})
+		ctx := operatorAssignCtx(uuid.NewString())
+		if _, err := server.AdminSetBillingGrant(ctx, &purserpb.AdminSetBillingGrantRequest{TenantId: tenant, TierName: paid, WaiveUsage: true, Collection: "invoice", Reason: "paid support arrangement"}); err != nil {
+			t.Fatal(err)
+		}
+		var ended sql.NullTime
+		if err := db.QueryRow(`SELECT free_fallback_provider_ended_at FROM purser.tenant_subscriptions WHERE tenant_id=$1`, tenant).Scan(&ended); err != nil || ended.Valid {
+			t.Fatalf("paid grant retained dead collector ownership: %v %v", ended, err)
+		}
+		if _, err := db.Exec(`UPDATE purser.tenant_subscriptions SET free_fallback_provider_ended_at=NOW() WHERE tenant_id=$1`, tenant); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := server.AdminRevokeBillingGrant(ctx, &purserpb.AdminRevokeBillingGrantRequest{TenantId: tenant, TierName: paid, Reason: "restore paid collection"}); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.QueryRow(`SELECT free_fallback_provider_ended_at FROM purser.tenant_subscriptions WHERE tenant_id=$1`, tenant).Scan(&ended); err != nil || ended.Valid {
+			t.Fatalf("paid revoke retained dead collector ownership: %v %v", ended, err)
+		}
+		started, err := subscriptions.StartPaymentFailureGrace(ctx, db, tenant, time.Now())
+		if err != nil || !started {
+			t.Fatalf("next collector failure lost its grace obligation: %v %v", started, err)
+		}
+	})
+	t.Run("undeliverable notices stop retrying and remain inspectable", func(t *testing.T) {
+		db := startOperatorGrantDatabase(t)
+		tenant, _, _ := seedFallbackLifecycle(t, db)
+		if _, err := db.Exec(`UPDATE purser.tenant_subscriptions SET free_fallback_notified_at=NULL,billing_email='broken@example.test' WHERE tenant_id=$1`, tenant); err != nil {
+			t.Fatal(err)
+		}
+		calls := 0
+		server := fallbackLifecycleServer(db, &fallbackLifecycleProvider{})
+		server.freeFallbackNoticeSender = func(handlers.FreeFallbackNotice) error { calls++; return errors.New("recipient rejected") }
+		for attempt := 1; attempt <= 5; attempt++ {
+			if err := server.deliverFreeFallbackNotice(t.Context(), tenant); err == nil {
+				t.Fatal("mail rejection was swallowed")
+			}
+			counts, err := purserdb.New(db).CountRepeatedFreeFallbackFailures(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if attempt == 2 && counts.Notices != 1 {
+				t.Fatalf("repeated mail failure was not alerted: %+v", counts)
+			}
+			if _, err := db.Exec(`UPDATE purser.tenant_subscriptions SET free_fallback_notice_attempted_at=NOW()-INTERVAL '2 days' WHERE tenant_id=$1`, tenant); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := server.deliverFreeFallbackNotice(t.Context(), tenant); err != nil || calls != 5 {
+			t.Fatalf("terminal mail retried forever: calls=%d err=%v", calls, err)
+		}
+		counts, err := purserdb.New(db).CountRepeatedFreeFallbackFailures(t.Context())
+		if err != nil || counts.Notices != 0 {
+			t.Fatalf("terminal mail retained stuck alert: %+v %v", counts, err)
+		}
+		items, err := server.AdminListCheckoutRecovery(operatorAssignCtx(uuid.NewString()), &purserpb.AdminListCheckoutRecoveryRequest{TenantId: tenant})
+		if err != nil || len(items.GetItems()) != 1 || items.Items[0].Status != "notice_abandoned" || !strings.Contains(items.Items[0].LastError, "recipient rejected") {
+			t.Fatalf("terminal notice lost operator inventory: %+v %v", items, err)
+		}
+	})
 	t.Run("fallback target must exist before stopping collection", func(t *testing.T) {
 		db := startOperatorGrantDatabase(t)
 		tenant, _, free := seedFallbackLifecycle(t, db)

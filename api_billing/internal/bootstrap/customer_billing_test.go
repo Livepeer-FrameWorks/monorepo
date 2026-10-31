@@ -201,6 +201,7 @@ func TestReconcileCustomerBilling_EntitlementOverrides(t *testing.T) {
 	mock.ExpectQuery(`SELECT id, COALESCE\(tier_level, 0\)::integer AS tier_level, currency[\s\S]+FROM purser\.billing_tiers[\s\S]+WHERE tier_name = \$1`).
 		WithArgs("free").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "tier_level", "currency"}).AddRow(tierUUID, int32(1), "EUR"))
+	mock.ExpectQuery("HasPendingTierUpgrade").WithArgs(tenantUUID).WillReturnRows(sqlmock.NewRows([]string{"pending"}).AddRow(false))
 	mock.ExpectQuery(regexp.QuoteMeta("FROM purser.tenant_subscriptions")).
 		WithArgs(tenantUUID).
 		WillReturnRows(sqlmock.NewRows([]string{"tier_id", "billing_model"}).AddRow(tierUUID, "postpaid"))
@@ -264,6 +265,7 @@ func TestReconcileCustomerBilling_RefusesBillingModelSwitch(t *testing.T) {
 	mock.ExpectQuery(`SELECT id, COALESCE\(tier_level, 0\)::integer AS tier_level, currency[\s\S]+FROM purser\.billing_tiers[\s\S]+WHERE tier_name = \$1`).
 		WithArgs("payg").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "tier_level", "currency"}).AddRow(tierUUID, int32(0), "EUR"))
+	mock.ExpectQuery("HasPendingTierUpgrade").WithArgs(tenantUUID).WillReturnRows(sqlmock.NewRows([]string{"pending"}).AddRow(false))
 
 	qm := &fakeQM{tenantUUIDs: map[string]string{"acme": tenantUUID}}
 	mock.ExpectCommit()
