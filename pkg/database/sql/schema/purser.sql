@@ -3728,6 +3728,7 @@ CREATE INDEX IF NOT EXISTS idx_subscription_fallback_notice_failed
         free_fallback_notice_failures ASC,
         tenant_id ASC
     )
+    INCLUDE (id)
     WHERE free_fallback_at IS NOT NULL
       AND free_fallback_notice_error IS NOT NULL;
 

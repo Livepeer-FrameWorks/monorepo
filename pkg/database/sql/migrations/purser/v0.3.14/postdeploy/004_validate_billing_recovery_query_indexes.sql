@@ -60,8 +60,9 @@ BEGIN
           AND state.indrelid = 'purser.tenant_subscriptions'::regclass
           AND state.indisvalid AND state.indisready
           AND pg_get_indexdef(state.indexrelid) !~ ' HASH([, )])'
+          AND pg_get_indexdef(state.indexrelid) LIKE '% INCLUDE (id)%'
     ) THEN
-        RAISE EXCEPTION 'idx_subscription_fallback_notice_failed is absent, invalid, or hash-sharded';
+        RAISE EXCEPTION 'idx_subscription_fallback_notice_failed is absent, invalid, hash-sharded, or missing its covering id';
     END IF;
     IF NOT EXISTS (
         SELECT 1 FROM pg_index state
