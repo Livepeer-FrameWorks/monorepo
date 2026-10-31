@@ -66,11 +66,10 @@ import (
 	tenantlimitspb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/tenant_limits"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pullsource"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/restream"
+	fwserver "github.com/Livepeer-FrameWorks/monorepo/pkg/server"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/streamident"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/turnstile"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/vodupload"
-
-	fwserver "github.com/Livepeer-FrameWorks/monorepo/pkg/server"
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
 	"golang.org/x/sync/errgroup"
@@ -533,14 +532,44 @@ func buildClusterFanoutTargets(route *clusterRoute) []clusterFanoutTarget {
 			addTarget(route.officialClusterID, addr)
 		}
 	}
-	for _, peer := range route.clusterPeers {
-		addTarget(peer.ClusterId, peer.FoghornGrpcAddr)
-		for _, addr := range route.foghornAddrsByCluster[peer.ClusterId] {
-			addTarget(peer.ClusterId, addr)
+	for _, peers := range [][]*clusterpeerpb.TenantClusterPeer{route.clusterPeers, route.admissionPeers} {
+		for _, peer := range peers {
+			addTarget(peer.ClusterId, peer.FoghornGrpcAddr)
+			for _, addr := range route.foghornAddrsByCluster[peer.ClusterId] {
+				addTarget(peer.ClusterId, addr)
+			}
 		}
 	}
 
 	return targets
+}
+
+// missingTenantFanoutCells retains entitlement cells even when health filtering
+// or service discovery omitted their addresses. Only an empty entitlement set
+// proves that there is nothing to deliver.
+func missingTenantFanoutCells(route *clusterRoute, targets []clusterFanoutTarget) map[string]bool {
+	expected := map[string]bool{}
+	add := func(id string) {
+		if id != "" {
+			expected[id] = true
+		}
+	}
+	if route != nil {
+		add(route.clusterID)
+		add(route.officialClusterID)
+		for _, peers := range [][]*clusterpeerpb.TenantClusterPeer{route.clusterPeers, route.admissionPeers} {
+			for _, peer := range peers {
+				add(peer.GetClusterId())
+			}
+		}
+		for id := range route.foghornAddrsByCluster {
+			add(id)
+		}
+	}
+	for _, target := range targets {
+		delete(expected, target.clusterID)
+	}
+	return expected
 }
 
 func foghornPoolKey(clusterID, addr string) string {
@@ -11076,14 +11105,16 @@ func (s *CommodoreServer) TerminateTenantStreams(ctx context.Context, req *fogho
 	}
 
 	targets := buildClusterFanoutTargets(route)
-	if len(targets) == 0 {
-		return nil, status.Error(codes.Unavailable, "no foghorn targets available for tenant")
-	}
 
 	var totalStreams, totalSessions int32
 	var allStreamNames []string
 	var lastErr error
 	failures := 0
+	missing := missingTenantFanoutCells(route, targets)
+	for id := range missing {
+		failures++
+		lastErr = status.Errorf(codes.Unavailable, "configured cell %s has no Foghorn address", id)
+	}
 	for _, target := range targets {
 		client, dialErr := s.foghornPool.GetOrCreate(foghornPoolKey(target.clusterID, target.addr), target.addr)
 		if dialErr != nil {
@@ -11111,7 +11142,7 @@ func (s *CommodoreServer) TerminateTenantStreams(ctx context.Context, req *fogho
 
 	progress := &foghorncontrolpb.TerminateTenantStreamsResponse{StreamsTerminated: totalStreams, SessionsTerminated: totalSessions, StreamNames: allStreamNames}
 	if failures > 0 {
-		s.logger.WithError(lastErr).WithFields(logging.Fields{"tenant_id": req.TenantId, "clusters_failed": failures, "clusters_total": len(targets)}).Warn("Tenant termination remains pending on unreachable clusters")
+		s.logger.WithError(lastErr).WithFields(logging.Fields{"tenant_id": req.TenantId, "clusters_failed": failures, "clusters_total": len(targets) + len(missing)}).Warn("Tenant termination remains pending on unreachable clusters")
 		return nil, grpcutil.PendingStreamStop(progress)
 	}
 
@@ -11160,28 +11191,7 @@ func (s *CommodoreServer) InvalidateTenantCache(ctx context.Context, req *foghor
 	var totalInvalidated int32
 	var lastErr error
 	failures := 0
-	expected := map[string]bool{}
-	add := func(id string) {
-		if id != "" {
-			expected[id] = true
-		}
-	}
-	if route != nil {
-		add(route.clusterID)
-		add(route.officialClusterID)
-		for _, peer := range route.clusterPeers {
-			add(peer.GetClusterId())
-		}
-		for _, peer := range route.admissionPeers {
-			add(peer.GetClusterId())
-		}
-		for id := range route.foghornAddrsByCluster {
-			add(id)
-		}
-	}
-	for _, target := range targets {
-		delete(expected, target.clusterID)
-	}
+	expected := missingTenantFanoutCells(route, targets)
 	for id := range expected {
 		failures++
 		lastErr = status.Errorf(codes.Unavailable, "configured cell %s has no Foghorn address", id)

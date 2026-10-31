@@ -11,7 +11,6 @@ import (
 	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
 	foghorncontrolpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
-
 	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -164,6 +163,34 @@ func TestInvalidateTenantCache_NoTargetsIsSuccessful(t *testing.T) {
 	if err != nil || response.GetEntriesInvalidated() != 0 {
 		t.Fatalf("closed tenant cache invalidation=%v err=%v", response, err)
 	}
+}
+
+func TestTerminateTenantStreamsAccountsForEveryEntitledCell(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		peers []*clusterpeerpb.TenantClusterPeer
+		want  codes.Code
+	}{
+		{"no clusters", nil, codes.OK},
+		{"unhealthy entitled cell without discovery", []*clusterpeerpb.TenantClusterPeer{{ClusterId: "unhealthy"}}, codes.Unavailable},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := newTenantFanoutTestServer(t, &clusterRoute{admissionPeers: test.peers, resolvedAt: time.Now()})
+			_, err := server.TerminateTenantStreams(serviceCtx(), &foghorncontrolpb.TerminateTenantStreamsRequest{TenantId: "tenant-1"})
+			if status.Code(err) != test.want {
+				t.Fatalf("stop result=%v want=%s", err, test.want)
+			}
+		})
+	}
+	t.Run("healthy cell stopped but unhealthy cell undiscovered", func(t *testing.T) {
+		good := startTenantControlTestServer(t, &testTenantControlServer{terminateResp: &foghorncontrolpb.TerminateTenantStreamsResponse{StreamsTerminated: 2}})
+		server := newTenantFanoutTestServer(t, &clusterRoute{clusterID: "healthy", foghornAddr: good,
+			admissionPeers: []*clusterpeerpb.TenantClusterPeer{{ClusterId: "healthy"}, {ClusterId: "unhealthy"}}, resolvedAt: time.Now()})
+		_, err := server.TerminateTenantStreams(serviceCtx(), &foghorncontrolpb.TerminateTenantStreamsRequest{TenantId: "tenant-1"})
+		if status.Code(err) != codes.Unavailable || grpcutil.StreamStopProgress(err).GetStreamsTerminated() != 2 {
+			t.Fatalf("incomplete stop lost pending status or successful counts: %v", err)
+		}
+	})
 }
 
 func TestInvalidateTenantCacheDiscoveryGapIsNotEmptyTenant(t *testing.T) {
