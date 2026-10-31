@@ -2262,6 +2262,10 @@ CREATE INDEX IF NOT EXISTS idx_tenant_account_states_closures_pending
 ON commodore.tenant_account_states(closure_attempted_at ASC NULLS FIRST, closed_at ASC, tenant_id)
 WHERE closed_at IS NOT NULL AND quartermaster_closed_at IS NULL;
 
+CREATE INDEX IF NOT EXISTS idx_tenant_account_states_closure_failures
+ON commodore.tenant_account_states(closure_failures ASC, tenant_id ASC)
+WHERE quartermaster_closed_at IS NULL AND closure_error IS NOT NULL;
+
 -- Schema baseline identity marker. Records that this database was created from the
 -- consolidated baseline at this floor, so the migration min-version guard treats
 -- below-floor migrations as folded into the baseline (not missing). An existing

@@ -105,10 +105,18 @@ WITH streams AS (
 ), cells AS (
     SELECT active_ingest_cluster_id::text AS cell_id FROM streams
     UNION SELECT last_ingest_cluster_id::text FROM streams
-    UNION SELECT target.cell_id::text FROM commodore.media_authority_targets target
-
-WHERE (target.authority_kind = 'media_object' AND target.authority_id IN (SELECT 'live_stream:'||id::text FROM streams))
-    OR (sqlc.arg(stream_id)::text = '' AND target.authority_id = sqlc.arg(tenant_id)::text AND target.authority_kind = 'tenant')
+    UNION
+    SELECT target.cell_id::text
+    FROM streams
+    JOIN commodore.media_authority_targets target
+      ON target.authority_kind = 'media_object'
+     AND target.authority_id = 'live_stream:' || streams.id::text
+    UNION
+    SELECT target.cell_id::text
+    FROM commodore.media_authority_targets target
+    WHERE sqlc.arg(stream_id)::text = ''
+      AND target.authority_kind = 'tenant'
+      AND target.authority_id = sqlc.arg(tenant_id)::text
 )
 SELECT DISTINCT cell_id FROM cells WHERE cell_id IS NOT NULL AND btrim(cell_id)<>'' ORDER BY cell_id;
 
