@@ -426,10 +426,10 @@ func validatePostgresMigrationSet(migrations []Migration) error {
 					})
 				}
 			}
+			if hasInlineAddedColumnConstraint(content) && !immutableShippedInlineConstraint(migration) {
+				issues = append(issues, MigrationValidationIssue{Path: migration.Path, Message: "constraints on added columns must be separate named ADD CONSTRAINT statements using NOT VALID and postdeploy validation"})
+			}
 			for _, stmt := range splitSQLStatements(structuralContent) {
-				if hasInlineAddedColumnConstraint(stmt) && !immutableShippedInlineConstraint(migration) {
-					issues = append(issues, MigrationValidationIssue{Path: migration.Path, Message: "constraints on added columns must be separate named ADD CONSTRAINT statements using NOT VALID and postdeploy validation"})
-				}
 				if alterColumnType.MatchString(stmt) && !compatiblePushTargetURIWidening.MatchString(stmt) {
 					issues = append(issues, MigrationValidationIssue{
 						Path:    migration.Path,
@@ -820,7 +820,7 @@ func stripSQLSingleQuotedLiterals(content string) string {
 	var out strings.Builder
 	out.Grow(len(content))
 	var dollarTag string
-	inSingle := false
+	inSingle, escapedString := false, false
 	for i := 0; i < len(content); {
 		if dollarTag != "" && strings.HasPrefix(content[i:], dollarTag) {
 			out.WriteString(dollarTag)
@@ -844,11 +844,13 @@ func stripSQLSingleQuotedLiterals(content string) string {
 		}
 		if !inSingle {
 			inSingle = true
+			escapedString = i > 0 && (content[i-1] == 'e' || content[i-1] == 'E') &&
+				(i == 1 || !isSQLIdentifierPart(content[i-2]))
 			out.WriteByte(' ')
 			i++
 			continue
 		}
-		if content[i] == '\\' && i+1 < len(content) {
+		if escapedString && content[i] == '\\' && i+1 < len(content) {
 			out.WriteString("  ")
 			i += 2
 			continue
@@ -869,14 +871,16 @@ func stripSQLSingleQuotedLiterals(content string) string {
 
 // Named table constraints exempt only their own ADD clause. Commas within a
 // type, expression or quoted identifier cannot hide a later constrained column.
-func hasInlineAddedColumnConstraint(statement string) bool {
-	if !alterTableStatement.MatchString(statement) {
-		return false
-	}
-	for _, clause := range splitSQLAlterClauses(statement) {
-		if inlineAddedColumnConstraint.MatchString(clause) &&
-			!addConstraintName.MatchString(clause) && !addAnonymousConstraint.MatchString(clause) {
-			return true
+func hasInlineAddedColumnConstraint(content string) bool {
+	for _, statement := range splitSQLStatements(expandMigrationSafetySQL(content)) {
+		if !alterTableStatement.MatchString(statement) {
+			continue
+		}
+		for _, clause := range splitSQLAlterClauses(statement) {
+			if inlineAddedColumnConstraint.MatchString(clause) &&
+				!addConstraintName.MatchString(clause) && !addAnonymousConstraint.MatchString(clause) {
+				return true
+			}
 		}
 	}
 	return false

@@ -223,7 +223,8 @@ table scan without strengthening the post-release schema.
 An added column must not carry an inline `CHECK` or `REFERENCES` constraint.
 Use a separate named constraint with `NOT VALID`, then validate in postdeploy.
 This applies to each `ADD` clause even when another clause adds a valid table
-constraint. Three already-shipped files are exempted by their exact path
+constraint, including statements inside executed `DO` blocks. Data literals,
+including dollar-quoted text, cannot hide a later constrained column. Three already-shipped files are exempted by their exact path
 and SHA-256 in `migrate_shipped_constraints.go`; moved or edited copies are
 validated normally. New migrations cannot add an exemption.
 

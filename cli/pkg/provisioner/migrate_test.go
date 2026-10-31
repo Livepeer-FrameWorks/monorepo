@@ -417,6 +417,42 @@ func TestValidateMigrationSet_InlineAddedColumnConstraint(t *testing.T) {
 	}
 }
 
+func TestValidateMigrationSet_ExecutableInlineConstraints(t *testing.T) {
+	for name, content := range map[string]string{
+		"separate statements in DO": `DO $$ BEGIN
+ALTER TABLE purser.a ADD CONSTRAINT safe CHECK (true) NOT VALID;
+ALTER TABLE purser.a ADD COLUMN owner UUID REFERENCES purser.owners(id);
+END $$;`,
+		"mixed clauses in DO":                      `DO $body$ BEGIN ALTER TABLE purser.a ADD CONSTRAINT safe CHECK (true) NOT VALID, ADD COLUMN owner UUID REFERENCES purser.owners(id); END $body$;`,
+		"dollar data cannot swallow comma":         `ALTER TABLE purser.a ADD CONSTRAINT safe CHECK (reason <> $q$($q$) NOT VALID, ADD COLUMN owner UUID REFERENCES purser.owners(id);`,
+		"standard backslash does not escape quote": `ALTER TABLE purser.a ADD CONSTRAINT safe CHECK (reason <> '\') NOT VALID, ADD COLUMN owner UUID REFERENCES purser.owners(id);`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := validatePostgresMigrationSet([]Migration{{Database: "purser", Version: "v0.3.14", Phase: "expand", Sequence: 1, Path: "migrations/purser/v0.3.14/expand/001.sql", Transactional: true, content: content}})
+			if err == nil || !strings.Contains(err.Error(), "constraints on added columns must be separate named ADD CONSTRAINT") {
+				t.Fatalf("executed inline constraint escaped validation: %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateMigrationSet_ExecutableConstraintControls(t *testing.T) {
+	for _, content := range []string{
+		`DO $$ BEGIN ALTER TABLE purser.a ADD CONSTRAINT safe CHECK (reason <> $q$($q$) NOT VALID; ALTER TABLE purser.a ADD COLUMN owner UUID; END $$;`,
+		`DO $$ BEGIN RAISE NOTICE 'ALTER TABLE purser.a ADD COLUMN owner UUID REFERENCES purser.owners(id)'; ALTER TABLE purser.a ADD CONSTRAINT safe CHECK (true) NOT VALID; END $$;`,
+		`ALTER TABLE purser.a ADD CONSTRAINT safe CHECK (reason <> '\') NOT VALID, ADD COLUMN owner UUID;`,
+		`ALTER TABLE purser.a ADD CONSTRAINT safe CHECK (reason <> E'\'') NOT VALID, ADD COLUMN owner UUID;`,
+	} {
+		migrations := []Migration{
+			{Database: "purser", Version: "v0.3.14", Phase: "expand", Sequence: 1, Path: "migrations/purser/v0.3.14/expand/001.sql", Transactional: true, content: content},
+			{Database: "purser", Version: "v0.3.14", Phase: "postdeploy", Sequence: 1, Path: "migrations/purser/v0.3.14/postdeploy/001.sql", Transactional: true, content: `ALTER TABLE purser.a VALIDATE CONSTRAINT safe;`},
+		}
+		if err := validatePostgresMigrationSet(migrations); err != nil {
+			t.Fatalf("valid staged constraint rejected: %s: %v", content, err)
+		}
+	}
+}
+
 func TestValidateMigrationSet_ConstraintMarkersInCommentsAndStringsDoNotCount(t *testing.T) {
 	tests := []struct {
 		name       string
