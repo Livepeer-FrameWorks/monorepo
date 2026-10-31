@@ -3050,7 +3050,7 @@ func (p *Processor) handleStreamSource(trigger *ipcpb.MistTrigger) (string, bool
 				if !localSet.Marked {
 					return "", false
 				}
-				if localErr != nil || !localSet.Complete {
+				if localErr != nil {
 					p.logger.WithError(localErr).WithField("stream_name", streamName).Warn("STREAM_SOURCE: local managed-stream authority is incomplete")
 					return control.OfflineUnavailable, false
 				}
@@ -3063,6 +3063,12 @@ func (p *Processor) handleStreamSource(trigger *ipcpb.MistTrigger) (string, bool
 						return control.OfflineUnavailable, true
 					}
 					return "balance:" + base, true
+				}
+				// Completeness protects destructive reconciliation of omitted
+				// streams. Each emitted row is independently authorized, so a
+				// different tenant's missing authority cannot block this source.
+				if !localSet.Complete {
+					return control.OfflineUnavailable, false
 				}
 				return control.OfflineNotConfigured, false
 			}

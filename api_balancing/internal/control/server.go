@@ -58,10 +58,9 @@ import (
 	foghornrelaypb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_relay"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
+	fwserver "github.com/Livepeer-FrameWorks/monorepo/pkg/server"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/streamident"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
-
-	fwserver "github.com/Livepeer-FrameWorks/monorepo/pkg/server"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
@@ -1406,15 +1405,13 @@ func ServedClustersSnapshot() []string {
 // requests; an authenticated node's identity alone never grants an assignment.
 func StartServedClustersRefresh(ctx context.Context, interval time.Duration, log logging.Logger) {
 	requests := make(chan struct{}, 1)
+	hints := servedClusterRefreshHints{last: make(map[string]time.Time)}
 	manager := state.DefaultManager()
 	manager.SetNodeClusterObserver(func(clusterID string) {
 		if clusterID == "" || isServedCluster(clusterID) || isReleasedControlCluster(clusterID) {
 			return
 		}
-		select {
-		case requests <- struct{}{}:
-		default:
-		}
+		hints.request(clusterID, time.Now(), requests)
 	})
 	defer manager.SetNodeClusterObserver(nil)
 	// Cover node changes between the startup snapshot and observer registration.
@@ -1432,6 +1429,33 @@ func StartServedClustersRefresh(ctx context.Context, interval time.Duration, log
 			LoadPlatformSharedClusters()
 			log.WithField("clusters", ServedClustersSnapshot()).Debug("Refreshed served + platform-shared clusters from Quartermaster")
 		}
+	}
+}
+
+const servedClusterHintMinInterval = 30 * time.Second
+
+type servedClusterRefreshHints struct {
+	mu   sync.Mutex
+	last map[string]time.Time
+}
+
+// A failed discovery answer has the same cooldown as a successful one. Peer
+// heartbeats are hints and cannot turn an unknown cluster into a poll loop.
+func (h *servedClusterRefreshHints) request(clusterID string, now time.Time, requests chan<- struct{}) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if last, ok := h.last[clusterID]; ok && now.Sub(last) < servedClusterHintMinInterval {
+		return
+	}
+	select {
+	case requests <- struct{}{}:
+		for id, last := range h.last {
+			if now.Sub(last) >= servedClusterHintMinInterval {
+				delete(h.last, id)
+			}
+		}
+		h.last[clusterID] = now
+	default:
 	}
 }
 

@@ -110,6 +110,13 @@ func TestServedClustersRefreshFromPeerNodeIdentity(t *testing.T) {
 	waitFor("foreign identity did not request an authoritative assignment check", func() bool {
 		return registry.calls.Load() > beforeForeign
 	})
+	for range 20 {
+		holder.TouchNode("foreign-node", true)
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := registry.calls.Load() - beforeForeign; got != 1 {
+		t.Fatalf("unknown cluster heartbeats bypassed refresh throttling: calls=%d want=1", got)
+	}
 	cancel()
 	<-done
 	if isServedCluster("foreign-b") {
@@ -125,5 +132,35 @@ func TestServedClustersRefreshFromPeerNodeIdentity(t *testing.T) {
 	}
 	if got := registry.calls.Load(); got != beforeViewer {
 		t.Fatalf("viewer classification called Quartermaster: %d new calls", got-beforeViewer)
+	}
+}
+
+func TestServedClusterRefreshHintCooldown(t *testing.T) {
+	hints := servedClusterRefreshHints{last: make(map[string]time.Time)}
+	requests := make(chan struct{}, 1)
+	now := time.Now()
+	hints.request("unknown", now, requests)
+	<-requests
+	hints.request("unknown", now.Add(time.Second), requests)
+	if len(requests) != 0 {
+		t.Fatal("repeat hint bypassed cooldown")
+	}
+	hints.request("other", now.Add(time.Second), requests)
+	if len(requests) != 1 {
+		t.Fatal("unrelated cluster lost first discovery hint")
+	}
+	hints.request("queue-full", now.Add(time.Second), requests)
+	<-requests
+	hints.request("queue-full", now.Add(2*time.Second), requests)
+	if len(requests) != 1 {
+		t.Fatal("a dropped hint consumed its cooldown")
+	}
+	<-requests
+	hints.request("unknown", now.Add(2*servedClusterHintMinInterval), requests)
+	if len(requests) != 1 {
+		t.Fatal("failed discovery cannot retry after cooldown")
+	}
+	if len(hints.last) != 1 {
+		t.Fatalf("expired hint entries retained: %+v", hints.last)
 	}
 }
