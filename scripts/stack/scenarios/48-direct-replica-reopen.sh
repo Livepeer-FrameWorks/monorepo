@@ -148,12 +148,12 @@ for direction in a-to-b b-to-a; do
   OLD=$(replication)
   [ -n "$OLD" ] || { fail "$direction: no physical pull was recorded"; continue; }
 
-  # Wait for destination presence before ending it, so lifecycle absence clears
-  # the observed replica rather than waiting for an unstarted pull's grace.
+  # Wait for destination presence before ending it. A short-lived replica can
+  # still be inside the admission start grace when its final snapshot lands.
   observed() { log_has "$SEEN" 'Replication destination observed live' "${SERVICES[@]}"; }
   eventually 40 "$direction: destination observed carrying the pull" observed || continue
   stack_exec "$DEST" /command/s6-svc -r /run/service/mistserver || { fail "$direction: restart destination Mist"; continue; }
-  eventually 90 "$direction: old destination pull cleared" cleared || continue
+  eventually 360 "$direction: old destination pull cleared" cleared || continue
   # One new playback: retrying /play here would hide the recovery defect.
   assert_ts "$direction: same alias reopens directly with TS bytes" "$DIRECT" || continue
   NEW=$(replication)
