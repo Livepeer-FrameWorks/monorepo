@@ -397,6 +397,21 @@ func TestValidateMigrationSet_NotValidConstraintWithPostdeployValidation(t *test
 	}
 }
 
+func TestValidateMigrationSet_InlineAddedColumnConstraint(t *testing.T) {
+	for _, definition := range []string{
+		`ADD COLUMN reason TEXT CHECK (reason <> '')`,
+		`ADD COLUMN reason TEXT CONSTRAINT reason_valid CHECK (reason <> '')`,
+		`ADD COLUMN owner UUID REFERENCES purser.owners(id)`,
+	} {
+		t.Run(definition, func(t *testing.T) {
+			err := validatePostgresMigrationSet([]Migration{{Database: "purser", Version: "v0.3.14", Phase: "expand", Sequence: 1, Path: "migrations/purser/v0.3.14/expand/001.sql", Transactional: true, content: "ALTER TABLE purser.a " + definition + ";"}})
+			if err == nil {
+				t.Fatal("inline validated constraint escaped expand safety validation")
+			}
+		})
+	}
+}
+
 func TestValidateMigrationSet_ConstraintMarkersInCommentsAndStringsDoNotCount(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -756,5 +771,35 @@ func TestShippedUpsertExceptionsAreExactAndCannotMove(t *testing.T) {
 	}
 	if seen != len(shippedExpandUpserts) {
 		t.Fatalf("found %d pinned files, want %d", seen, len(shippedExpandUpserts))
+	}
+}
+
+func TestShippedInlineConstraintExceptionsAreExactAndCannotMove(t *testing.T) {
+	migrations, err := discoverAllPostgresMigrationsForValidation()
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := 0
+	for _, m := range migrations {
+		if _, ok := shippedInlineConstraints[m.Path]; !ok {
+			continue
+		}
+		seen++
+		if !immutableShippedInlineConstraint(m) {
+			t.Fatalf("shipped checksum changed: %s", m.Path)
+		}
+		altered := m
+		altered.content += " INSERT INTO purser.billing_tiers(tier_name) VALUES('free') ON CONFLICT(tier_name) DO UPDATE SET base_price=0;"
+		if immutableShippedInlineConstraint(altered) {
+			t.Fatal("modified shipped file retained exemption")
+		}
+		moved := m
+		moved.Path = "migrations/purser/v0.3.14/expand/999_copy.sql"
+		if immutableShippedInlineConstraint(moved) {
+			t.Fatal("copy to a new release retained exemption")
+		}
+	}
+	if seen != len(shippedInlineConstraints) {
+		t.Fatalf("found %d pinned files, want %d", seen, len(shippedInlineConstraints))
 	}
 }

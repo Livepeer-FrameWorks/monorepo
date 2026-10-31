@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"frameworks/cli/internal/releases"
+
 	dbsql "github.com/Livepeer-FrameWorks/monorepo/pkg/database/sql"
 )
 
@@ -122,6 +123,7 @@ var (
 	castNameReference                  = regexp.MustCompile(`(?is)'([^']+)'\s*::\s*name\b`)
 	addConstraintName                  = regexp.MustCompile(`(?is)\bADD\s+CONSTRAINT\s+"?([A-Za-z_][A-Za-z0-9_]*)"?`)
 	addAnonymousConstraint             = regexp.MustCompile(`(?is)\bADD\s+(?:CHECK\s*\(|FOREIGN\s+KEY\s*\()`)
+	inlineAddedColumnConstraint        = regexp.MustCompile(`(?is)\bALTER\s+TABLE\b[^;]*\bADD\s+(?:COLUMN\s+)?(?:IF\s+NOT\s+EXISTS\s+)?"?[A-Za-z_][A-Za-z0-9_]*"?\s+[^;]*\b(?:CHECK\s*\(|REFERENCES\s+)`)
 	validateConstraintName             = regexp.MustCompile(`(?is)\bVALIDATE\s+CONSTRAINT\s+"?([A-Za-z_][A-Za-z0-9_]*)"?`)
 	dropConstraintName                 = regexp.MustCompile(`(?is)\bDROP\s+CONSTRAINT(?:\s+IF\s+EXISTS)?\s+"?([A-Za-z_][A-Za-z0-9_]*)"?`)
 	updateTableName                    = regexp.MustCompile(`(?is)\bUPDATE\s+([A-Za-z_][A-Za-z0-9_.]*)(?:\s+(?:AS\s+)?[A-Za-z_][A-Za-z0-9_]*)?\s+SET\b`)
@@ -424,6 +426,9 @@ func validatePostgresMigrationSet(migrations []Migration) error {
 				}
 			}
 			for _, stmt := range splitSQLStatements(structuralContent) {
+				if inlineAddedColumnConstraint.MatchString(stmt) && !immutableShippedInlineConstraint(migration) && !addConstraintName.MatchString(stmt) && !addAnonymousConstraint.MatchString(stmt) {
+					issues = append(issues, MigrationValidationIssue{Path: migration.Path, Message: "constraints on added columns must be separate named ADD CONSTRAINT statements using NOT VALID and postdeploy validation"})
+				}
 				if alterColumnType.MatchString(stmt) && !compatiblePushTargetURIWidening.MatchString(stmt) {
 					issues = append(issues, MigrationValidationIssue{
 						Path:    migration.Path,
