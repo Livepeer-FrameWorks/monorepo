@@ -201,7 +201,7 @@ func (q *Queries) CompleteProviderCheckoutReservation(ctx context.Context, arg C
 
 const enqueueCheckoutReservationExpiry = `-- name: EnqueueCheckoutReservationExpiry :exec
 INSERT INTO purser.provider_webhook_inbox(provider, event_key, headers, raw_payload, next_attempt_at)
-SELECT 'checkout_recovery', 'checkout-expiry:'||id::text, '{}',
+SELECT 'checkout_recovery', 'checkout-expiry:'||id::text, jsonb_build_object('tenant_id', tenant_id::text),
     convert_to(jsonb_build_object('checkout_reservation_id', id::text, 'tenant_id', tenant_id::text)::text, 'UTF8'), COALESCE(expires_at, created_at+INTERVAL '24 hours')
 FROM purser.payment_provider_intents
 WHERE tenant_id = $1::text::uuid AND id = $2::text::uuid
@@ -221,7 +221,7 @@ func (q *Queries) EnqueueCheckoutReservationExpiry(ctx context.Context, arg Enqu
 
 const enqueueUnresolvedCheckoutRecovery = `-- name: EnqueueUnresolvedCheckoutRecovery :exec
 INSERT INTO purser.provider_webhook_inbox(provider, event_key, headers, raw_payload, next_attempt_at)
-SELECT 'checkout_recovery', 'checkout-expiry:'||id::text, '{}',
+SELECT 'checkout_recovery', 'checkout-expiry:'||id::text, jsonb_build_object('tenant_id', tenant_id::text),
     convert_to(jsonb_build_object('checkout_reservation_id', id::text, 'tenant_id', tenant_id::text)::text, 'UTF8'), COALESCE(expires_at, created_at+INTERVAL '24 hours')
 FROM purser.payment_provider_intents
 WHERE purpose IN ('tenant_subscription_checkout', 'mollie_first_payment', 'mollie_subscription_create')

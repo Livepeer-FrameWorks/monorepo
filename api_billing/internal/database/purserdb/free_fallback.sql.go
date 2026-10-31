@@ -137,15 +137,32 @@ func (q *Queries) CompleteFreeFallbackPeriod(ctx context.Context, arg CompleteFr
 }
 
 const countRepeatedFreeFallbackFailures = `-- name: CountRepeatedFreeFallbackFailures :one
-SELECT COUNT(*) FILTER (WHERE subscription.free_fallback_moved_at IS NULL
-                         AND ((subscription.free_fallback_error IS NOT NULL AND subscription.free_fallback_failures > 1)
-                              OR subscription.free_fallback_wait_since <= NOW() - INTERVAL '14 days')
-                         AND NOT EXISTS (SELECT 1 FROM purser.subscription_operator_grants grant_row WHERE grant_row.subscription_id = subscription.id))::bigint AS moves,
-       COUNT(*) FILTER (WHERE subscription.free_fallback_notice_error IS NOT NULL
-                         AND subscription.free_fallback_notice_failures > 1)::bigint AS notices
-FROM purser.tenant_subscriptions subscription
-WHERE subscription.free_fallback_at IS NOT NULL
-  AND NOT EXISTS (SELECT 1 FROM purser.tenant_billing_closures closure WHERE closure.tenant_id = subscription.tenant_id)
+WITH moves AS MATERIALIZED (
+    SELECT id, tenant_id FROM purser.tenant_subscriptions
+    WHERE free_fallback_at IS NOT NULL AND free_fallback_moved_at IS NULL
+      AND free_fallback_error IS NOT NULL AND free_fallback_failures > 1
+    UNION
+    SELECT id, tenant_id FROM purser.tenant_subscriptions
+    WHERE free_fallback_at IS NOT NULL AND free_fallback_moved_at IS NULL
+      AND free_fallback_wait_since <= NOW() - INTERVAL '14 days'
+), notices AS MATERIALIZED (
+    SELECT tenant_id FROM purser.tenant_subscriptions
+    WHERE free_fallback_at IS NOT NULL AND free_fallback_notice_error IS NOT NULL
+      AND free_fallback_notice_failures > 1
+), closed AS MATERIALIZED (
+    SELECT closure.tenant_id FROM purser.tenant_billing_closures closure
+    WHERE closure.tenant_id = ANY (ARRAY(
+        SELECT moves.tenant_id FROM moves UNION SELECT notices.tenant_id FROM notices
+    ))
+), granted AS MATERIALIZED (
+    SELECT grant_row.subscription_id FROM purser.subscription_operator_grants grant_row
+    WHERE grant_row.subscription_id = ANY (ARRAY(SELECT moves.id FROM moves))
+)
+SELECT (SELECT COUNT(*) FROM moves
+        WHERE moves.tenant_id NOT IN (SELECT closed.tenant_id FROM closed)
+          AND moves.id NOT IN (SELECT granted.subscription_id FROM granted))::bigint AS moves,
+       (SELECT COUNT(*) FROM notices
+        WHERE notices.tenant_id NOT IN (SELECT closed.tenant_id FROM closed))::bigint AS notices
 `
 
 type CountRepeatedFreeFallbackFailuresRow struct {
@@ -153,7 +170,8 @@ type CountRepeatedFreeFallbackFailuresRow struct {
 	Notices int64 `db:"notices" json:"notices"`
 }
 
-// Platform-wide recovery inventory; subscription ownership remains tenant-scoped.
+// Exact service-wide counts over indexed failure cohorts. Exclusion keys are
+// fetched once per cohort instead of once for every aggregate input row.
 func (q *Queries) CountRepeatedFreeFallbackFailures(ctx context.Context) (CountRepeatedFreeFallbackFailuresRow, error) {
 	row := q.db.QueryRowContext(ctx, countRepeatedFreeFallbackFailures)
 	var i CountRepeatedFreeFallbackFailuresRow
@@ -252,17 +270,32 @@ func (q *Queries) GetSubscriptionFreeFallback(ctx context.Context, tenantID stri
 }
 
 const listDueFreeFallbacks = `-- name: ListDueFreeFallbacks :many
-SELECT subscription.tenant_id::text AS tenant_id
-FROM purser.tenant_subscriptions subscription
-WHERE subscription.free_fallback_at <= $1::timestamptz
-  AND subscription.free_fallback_moved_at IS NULL
-  AND (subscription.free_fallback_attempted_at IS NULL OR subscription.free_fallback_attempted_at <= NOW() - INTERVAL '5 minutes')
-  AND NOT EXISTS (SELECT 1 FROM purser.tenant_billing_closures closure WHERE closure.tenant_id = subscription.tenant_id)
-  AND NOT EXISTS (SELECT 1 FROM purser.subscription_operator_grants grant_row WHERE grant_row.subscription_id = subscription.id)
-ORDER BY subscription.free_fallback_attempted_at ASC NULLS FIRST, subscription.free_fallback_at ASC, subscription.tenant_id ASC
+WITH candidates AS MATERIALIZED (
+    SELECT subscription.id, subscription.tenant_id, subscription.free_fallback_attempted_at,
+           subscription.free_fallback_at
+    FROM purser.tenant_subscriptions subscription
+    WHERE subscription.free_fallback_at <= $1::timestamptz
+      AND subscription.free_fallback_moved_at IS NULL
+      AND (subscription.free_fallback_attempted_at IS NULL
+           OR subscription.free_fallback_attempted_at <= NOW() - INTERVAL '5 minutes')
+), closed AS MATERIALIZED (
+    SELECT closure.tenant_id FROM purser.tenant_billing_closures closure
+    WHERE closure.tenant_id = ANY (ARRAY(SELECT candidates.tenant_id FROM candidates))
+), granted AS MATERIALIZED (
+    SELECT grant_row.subscription_id FROM purser.subscription_operator_grants grant_row
+    WHERE grant_row.subscription_id = ANY (ARRAY(SELECT candidates.id FROM candidates))
+)
+SELECT candidates.tenant_id::text AS tenant_id
+FROM candidates
+WHERE candidates.tenant_id NOT IN (SELECT closed.tenant_id FROM closed)
+  AND candidates.id NOT IN (SELECT granted.subscription_id FROM granted)
+ORDER BY candidates.free_fallback_attempted_at ASC NULLS FIRST,
+         candidates.free_fallback_at ASC, candidates.tenant_id ASC
 LIMIT 100
 `
 
+// Snapshot the due cohort once, then fetch exclusion keys in batches. Claims
+// still recheck every exclusion under the subscription lock.
 func (q *Queries) ListDueFreeFallbacks(ctx context.Context, now time.Time) ([]string, error) {
 	rows, err := q.db.QueryContext(ctx, listDueFreeFallbacks, now)
 	if err != nil {
@@ -287,12 +320,12 @@ func (q *Queries) ListDueFreeFallbacks(ctx context.Context, now time.Time) ([]st
 }
 
 const listFreeFallbackNotices = `-- name: ListFreeFallbackNotices :many
-SELECT tenant_id::text AS tenant_id
-FROM purser.tenant_subscriptions
+SELECT subscription.tenant_id::text AS tenant_id
+FROM purser.tenant_subscriptions subscription
 WHERE free_fallback_at IS NOT NULL
   AND (free_fallback_moved_at IS NOT NULL OR free_fallback_notified_at IS NULL)
   AND (free_fallback_notice_attempted_at IS NULL OR free_fallback_notice_attempted_at <= NOW() - INTERVAL '5 minutes')
-ORDER BY free_fallback_notice_attempted_at ASC NULLS FIRST, free_fallback_at ASC, tenant_id ASC
+ORDER BY free_fallback_notice_attempted_at ASC NULLS FIRST, free_fallback_at ASC, subscription.tenant_id ASC
 LIMIT 100
 `
 

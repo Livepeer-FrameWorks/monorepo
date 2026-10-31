@@ -32,20 +32,29 @@ WITH confirmed AS (
       AND headers->>'currency' = $3::text
 ), receipts AS (
     SELECT GREATEST(confirmed.refunded, promised.refunded) AS refunded FROM confirmed CROSS JOIN promised
-), accruals AS (
+), originals AS MATERIALIZED (
+    SELECT original.id, original.source_type, original.invoice_line_item_id, original.provider_usage_record_id, original.usage_adjustment_id, original.stripe_invoice_id, original.entry_type, original.reverses_ledger_id, original.cluster_owner_tenant_id, original.cluster_id, original.invoice_id, original.period_start, original.period_end, original.currency, original.gross_cents, original.platform_fee_cents, original.payable_cents, original.status, original.payout_batch_id, original.notes, original.created_at, original.updated_at FROM purser.operator_credit_ledger original
+    WHERE original.source_type = 'stripe_subscription' AND original.entry_type = 'accrual'
+      AND original.stripe_invoice_id = $2::text
+      AND original.currency = $3::text AND original.gross_cents > 0
+), prior AS MATERIALIZED (
+    SELECT reversed.reverses_ledger_id,
+           -SUM(reversed.gross_cents)::bigint AS gross,
+           -SUM(reversed.platform_fee_cents)::bigint AS fee
+    FROM purser.operator_credit_ledger reversed
+    WHERE reversed.entry_type = 'clawback'
+      AND reversed.reverses_ledger_id = ANY (ARRAY(SELECT originals.id FROM originals))
+    GROUP BY reversed.reverses_ledger_id
+), accruals AS MATERIALIZED (
     SELECT original.id, original.source_type, original.invoice_line_item_id, original.provider_usage_record_id, original.usage_adjustment_id, original.stripe_invoice_id, original.entry_type, original.reverses_ledger_id, original.cluster_owner_tenant_id, original.cluster_id, original.invoice_id, original.period_start, original.period_end, original.currency, original.gross_cents, original.platform_fee_cents, original.payable_cents, original.status, original.payout_batch_id, original.notes, original.created_at, original.updated_at,
            LEAST(receipts.refunded, original.gross_cents)::bigint AS target_gross,
            ROUND(LEAST(receipts.refunded, original.gross_cents)
                  * original.platform_fee_cents::numeric / original.gross_cents)::bigint AS target_fee,
-           COALESCE((SELECT -SUM(gross_cents) FROM purser.operator_credit_ledger reversed
-                     WHERE reversed.reverses_ledger_id = original.id AND reversed.entry_type = 'clawback'), 0)::bigint AS prior_gross,
-           COALESCE((SELECT -SUM(platform_fee_cents) FROM purser.operator_credit_ledger reversed
-                     WHERE reversed.reverses_ledger_id = original.id AND reversed.entry_type = 'clawback'), 0)::bigint AS prior_fee
-    FROM purser.operator_credit_ledger original CROSS JOIN receipts
-    WHERE original.source_type = 'stripe_subscription' AND original.entry_type = 'accrual'
-      AND original.stripe_invoice_id = $2::text
-      AND original.currency = $3::text AND original.gross_cents > 0
-      AND receipts.refunded > 0
+           COALESCE(prior.gross, 0)::bigint AS prior_gross,
+           COALESCE(prior.fee, 0)::bigint AS prior_fee
+    FROM originals original CROSS JOIN receipts
+    LEFT JOIN prior ON prior.reverses_ledger_id = original.id
+    WHERE receipts.refunded > 0
 ), deltas AS (
     SELECT id, source_type, invoice_line_item_id, provider_usage_record_id, usage_adjustment_id, stripe_invoice_id, entry_type, reverses_ledger_id, cluster_owner_tenant_id, cluster_id, invoice_id, period_start, period_end, currency, gross_cents, platform_fee_cents, payable_cents, status, payout_batch_id, notes, created_at, updated_at, target_gross, target_fee, prior_gross, prior_fee, GREATEST(target_gross - prior_gross, 0) AS gross_delta,
               GREATEST(target_fee - prior_fee, 0) AS fee_delta

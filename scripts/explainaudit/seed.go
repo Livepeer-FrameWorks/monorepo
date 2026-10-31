@@ -487,6 +487,9 @@ func (s *seeder) seedAll(ctx context.Context) error {
 		}
 		t.deletedRows = int(n)
 	}
+	if err := s.bindPurserInboxReceipts(ctx, conn); err != nil {
+		return err
+	}
 	if _, err := conn.ExecContext(ctx, "SET session_replication_role = DEFAULT"); err != nil {
 		return err
 	}
@@ -734,6 +737,11 @@ func (s *seeder) textValue(rng *rand.Rand, c *column, i int, pooled bool) string
 
 // generate returns one value of column c for row i, or nil for NULL.
 func (s *seeder) generate(rng *rand.Rand, t *table, c *column, i int) *string {
+	if t.qname == "purser.provider_webhook_inbox" {
+		if value, ok := providerInboxSeedValue(c.name, i); ok {
+			return strp(value)
+		}
+	}
 	name := c.name
 	nullable := !c.notNull
 	if len(c.checkValues) > 0 {

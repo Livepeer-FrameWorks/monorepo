@@ -43,41 +43,64 @@ WHERE id = sqlc.arg(id)
 -- name: ProviderWebhookInboxRepeatedFailures :one
 -- Service-wide recovery inventory; tenant filtering would hide stuck work.
 SELECT COUNT(*)::bigint AS items
-FROM purser.provider_webhook_inbox
-WHERE status IN ('pending', 'failed', 'processing')
-  AND (attempts > 1 OR unresolved_since < NOW() - INTERVAL '14 days');
+FROM (
+    SELECT id FROM purser.provider_webhook_inbox
+    WHERE status IN ('pending', 'failed', 'processing') AND attempts > 1
+    UNION
+    SELECT id FROM purser.provider_webhook_inbox
+    WHERE status IN ('pending', 'failed', 'processing')
+      AND unresolved_since < NOW() - INTERVAL '14 days'
+) unresolved;
 
 -- name: ListCheckoutRecovery :many
 -- Platform-operator inventory includes unbound callbacks; a supplied tenant narrows to its reservations.
+-- Each disjoint branch reads an ordered index head before enrichment.
+WITH selected AS (
+    (SELECT inbox.* FROM purser.provider_webhook_inbox inbox
+     WHERE inbox.status <> 'processed' AND sqlc.arg(tenant_id)::text = ''
+     ORDER BY inbox.created_at, inbox.id
+     LIMIT (sqlc.arg(row_limit)::bigint + sqlc.arg(row_offset)::bigint))
+    UNION ALL
+    (SELECT inbox.* FROM purser.provider_webhook_inbox inbox
+     WHERE inbox.status <> 'processed' AND sqlc.arg(tenant_id)::text <> ''
+       AND inbox.headers->>'tenant_id' = sqlc.arg(tenant_id)::text
+     ORDER BY inbox.created_at, inbox.id
+     LIMIT (sqlc.arg(row_limit)::bigint + sqlc.arg(row_offset)::bigint))
+), page AS MATERIALIZED (
+    SELECT selected.*,
+           CASE WHEN selected.provider IN ('checkout_recovery', 'tier_upgrade')
+                THEN convert_from(selected.raw_payload, 'UTF8')::jsonb END AS internal_payload
+    FROM selected
+    ORDER BY selected.created_at, selected.id
+    LIMIT sqlc.arg(row_limit)::bigint OFFSET sqlc.arg(row_offset)::bigint
+)
 SELECT i.id::text, COALESCE(p.provider, i.headers->>'provider', i.provider)::text AS provider,
        i.event_key, i.status, i.attempts, i.last_error, i.next_attempt_at,
-       COALESCE(p.tenant_id::text, i.headers->>'tenant_id', '')::text AS tenant_id,
+       COALESCE(p.tenant_id::text, i.headers->>'tenant_id', i.internal_payload->>'tenant_id', '')::text AS tenant_id,
        COALESCE(p.id::text, upgrade.id::text, i.headers->>'reference_id', '')::text AS reservation_id,
        COALESCE(p.expires_at, p.created_at + INTERVAL '24 hours') AS expires_at,
        COALESCE(p.amount_cents, upgrade.base_cents, NULLIF(i.headers->>'amount_cents', '')::bigint, 0)::bigint AS amount_cents,
        COALESCE(p.currency, i.headers->>'currency', '')::text AS currency,
        COALESCE(p.status, upgrade.state, i.headers->>'reference_kind', '')::text AS reservation_status
-FROM purser.provider_webhook_inbox i
+FROM page i
 LEFT JOIN purser.payment_provider_intents p
-  ON i.provider = 'checkout_recovery'
- AND p.id::text = convert_from(i.raw_payload, 'UTF8')::jsonb->>'checkout_reservation_id'
- AND p.tenant_id::text = convert_from(i.raw_payload, 'UTF8')::jsonb->>'tenant_id'
+  ON p.id = CASE WHEN i.provider = 'checkout_recovery'
+                 THEN (i.internal_payload->>'checkout_reservation_id')::uuid END
+ AND p.tenant_id = CASE WHEN i.provider = 'checkout_recovery'
+                        THEN (i.internal_payload->>'tenant_id')::uuid END
 LEFT JOIN purser.subscription_tier_upgrades upgrade
-  ON i.provider = 'tier_upgrade'
- AND upgrade.id::text = convert_from(i.raw_payload, 'UTF8')::jsonb->>'id'
- AND upgrade.tenant_id::text = i.headers->>'tenant_id'
-WHERE i.status <> 'processed'
-  AND (sqlc.arg(tenant_id)::text = ''
-       OR COALESCE(p.tenant_id::text, i.headers->>'tenant_id', '') = sqlc.arg(tenant_id)::text)
-ORDER BY i.created_at, i.id
-LIMIT sqlc.arg(row_limit)::bigint OFFSET sqlc.arg(row_offset)::bigint;
+  ON upgrade.id = CASE WHEN i.provider = 'tier_upgrade'
+                       THEN (i.internal_payload->>'id')::uuid END
+ AND upgrade.tenant_id = CASE WHEN i.provider = 'tier_upgrade'
+                              THEN (i.headers->>'tenant_id')::uuid END
+ORDER BY i.created_at, i.id;
 
 -- name: RequestCheckoutRecovery :exec
 INSERT INTO purser.provider_webhook_inbox (
     provider, event_key, headers, raw_payload, next_attempt_at
 )
 SELECT 'checkout_recovery', 'checkout-expiry:' || id::text,
-       jsonb_build_object('recovery_reason', sqlc.arg(reason)::text),
+       jsonb_build_object('recovery_reason', sqlc.arg(reason)::text, 'tenant_id', tenant_id::text),
        convert_to(jsonb_build_object(
            'checkout_reservation_id', id::text, 'tenant_id', tenant_id::text, 'force', true
        )::text, 'UTF8'), NOW()

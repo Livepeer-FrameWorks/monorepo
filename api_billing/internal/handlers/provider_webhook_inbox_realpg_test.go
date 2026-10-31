@@ -98,9 +98,38 @@ func TestProviderWebhookInboxRepository_RealPG(t *testing.T) {
 	if err := purserdb.New(db).EnqueueCheckoutReservationExpiry(ctx, purserdb.EnqueueCheckoutReservationExpiryParams{TenantID: tenantID, IntentID: intentID}); err != nil {
 		t.Fatal(err)
 	}
+	var recoveryTenant string
+	if err := db.QueryRowContext(ctx, `SELECT headers->>'tenant_id' FROM purser.provider_webhook_inbox WHERE provider='checkout_recovery' AND event_key=$1`, "checkout-expiry:"+intentID).Scan(&recoveryTenant); err != nil || recoveryTenant != tenantID {
+		t.Fatalf("checkout expiry tenant header = %q, want %q: %v", recoveryTenant, tenantID, err)
+	}
+	// Native callbacks are opaque bytes, including Mollie form bodies. Inventory
+	// must not decode them as internal checkout JSON before filtering by tenant.
+	for i, raw := range [][]byte{[]byte("id=tr_opaque"), {0xfc, 0xff}} {
+		if ok, _, _ := service.enqueueProviderWebhook(ctx, "mollie", "opaque-"+string(rune('a'+i)), nil, raw); !ok {
+			t.Fatal("enqueue opaque provider callback")
+		}
+	}
 	items, listErr := purserdb.New(db).ListCheckoutRecovery(ctx, purserdb.ListCheckoutRecoveryParams{TenantID: tenantID, RowLimit: 10})
 	if listErr != nil || len(items) != 1 || items[0].Provider != "stripe" {
 		t.Fatalf("operator inventory must name the payment provider, not the internal work kind: %+v %v", items, listErr)
+	}
+	all, listErr := purserdb.New(db).ListCheckoutRecovery(ctx, purserdb.ListCheckoutRecoveryParams{RowLimit: 10})
+	if listErr != nil || len(all) != 4 {
+		t.Fatalf("opaque callbacks broke global recovery inventory: rows=%d err=%v", len(all), listErr)
+	}
+	unresolvedTenantID, unresolvedIntentID := uuid.NewString(), uuid.NewString()
+	if _, err := db.ExecContext(ctx, `INSERT INTO purser.payment_provider_intents(id,tenant_id,provider,purpose,status,currency,idempotency_key) VALUES($1::text::uuid,$2,'stripe','tenant_subscription_checkout','pending','EUR',$1::text)`, unresolvedIntentID, unresolvedTenantID); err != nil {
+		t.Fatal(err)
+	}
+	if err := purserdb.New(db).EnqueueUnresolvedCheckoutRecovery(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRowContext(ctx, `SELECT headers->>'tenant_id' FROM purser.provider_webhook_inbox WHERE provider='checkout_recovery' AND event_key=$1`, "checkout-expiry:"+unresolvedIntentID).Scan(&recoveryTenant); err != nil || recoveryTenant != unresolvedTenantID {
+		t.Fatalf("unresolved checkout tenant header = %q, want %q: %v", recoveryTenant, unresolvedTenantID, err)
+	}
+	items, listErr = purserdb.New(db).ListCheckoutRecovery(ctx, purserdb.ListCheckoutRecoveryParams{TenantID: unresolvedTenantID, RowLimit: 10})
+	if listErr != nil || len(items) != 1 || items[0].ReservationID != unresolvedIntentID {
+		t.Fatalf("unresolved checkout absent from tenant inventory: %+v %v", items, listErr)
 	}
 }
 

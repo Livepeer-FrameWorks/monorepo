@@ -159,7 +159,8 @@ type Querier interface {
 	// under the subscription row lock, with the count it rated to see whether
 	// usage arrived while its closing document was rated.
 	CountPhaseUsageReceivedBefore(ctx context.Context, arg CountPhaseUsageReceivedBeforeParams) (int64, error)
-	// Platform-wide recovery inventory; subscription ownership remains tenant-scoped.
+	// Exact service-wide counts over indexed failure cohorts. Exclusion keys are
+	// fetched once per cohort instead of once for every aggregate input row.
 	CountRepeatedFreeFallbackFailures(ctx context.Context) (CountRepeatedFreeFallbackFailuresRow, error)
 	// Platform-wide recovery metric; one failed attempt alone is not a stuck grant.
 	CountRepeatedOperatorGrantExpiryFailures(ctx context.Context) (int64, error)
@@ -549,6 +550,7 @@ type Querier interface {
 	ListBootstrapTierEntitlements(ctx context.Context, tierID uuid.UUID) ([]ListBootstrapTierEntitlementsRow, error)
 	ListBootstrapTierPricingRules(ctx context.Context, tierID uuid.UUID) ([]ListBootstrapTierPricingRulesRow, error)
 	// Platform-operator inventory includes unbound callbacks; a supplied tenant narrows to its reservations.
+	// Each disjoint branch reads an ordered index head before enrichment.
 	ListCheckoutRecovery(ctx context.Context, arg ListCheckoutRecoveryParams) ([]ListCheckoutRecoveryRow, error)
 	ListCheckoutRecoveryAudit(ctx context.Context, arg ListCheckoutRecoveryAuditParams) ([]ListCheckoutRecoveryAuditRow, error)
 	// Closure forbids new invoices, but issued debt still needs a collection attempt.
@@ -565,6 +567,8 @@ type Querier interface {
 	ListCryptoSweepReconcileItems(ctx context.Context, batchID string) ([]ListCryptoSweepReconcileItemsRow, error)
 	ListCryptoSweepReleaseItems(ctx context.Context, batchID string) ([]ListCryptoSweepReleaseItemsRow, error)
 	ListCryptoUnsweptMetrics(ctx context.Context) ([]ListCryptoUnsweptMetricsRow, error)
+	// Snapshot the due cohort once, then fetch exclusion keys in batches. Claims
+	// still recheck every exclusion under the subscription lock.
 	ListDueFreeFallbacks(ctx context.Context, now time.Time) ([]string, error)
 	ListDuePendingDowngradeTenantIDs(ctx context.Context, now sql.NullTime) ([]string, error)
 	ListEligibleOfficialClusters(ctx context.Context, arg ListEligibleOfficialClustersParams) ([]ListEligibleOfficialClustersRow, error)
@@ -617,6 +621,8 @@ type Querier interface {
 	ListSubscriptionEntitlementOverrides(ctx context.Context, subscriptionID string) ([]ListSubscriptionEntitlementOverridesRow, error)
 	ListSubscriptionPricingOverrides(ctx context.Context, subscriptionID string) ([]ListSubscriptionPricingOverridesRow, error)
 	ListSubscriptionTierNames(ctx context.Context) ([]ListSubscriptionTierNamesRow, error)
+	// Eligible subscriptions and their exclusion keys share one statement snapshot.
+	// Batch key lookups avoid a distributed read per tenant or per catalog join.
 	ListSubscriptionsDueForInvoice(ctx context.Context, now time.Time) ([]ListSubscriptionsDueForInvoiceRow, error)
 	ListTenantBillingSnapshots(ctx context.Context, arg ListTenantBillingSnapshotsParams) ([]ListTenantBillingSnapshotsRow, error)
 	ListTenantDimensionedUsage(ctx context.Context, arg ListTenantDimensionedUsageParams) ([]ListTenantDimensionedUsageRow, error)

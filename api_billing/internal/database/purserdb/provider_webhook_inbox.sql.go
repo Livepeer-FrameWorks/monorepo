@@ -216,34 +216,51 @@ func (q *Queries) InsertCheckoutRecoveryAudit(ctx context.Context, arg InsertChe
 }
 
 const listCheckoutRecovery = `-- name: ListCheckoutRecovery :many
+WITH selected AS (
+    (SELECT inbox.id, inbox.provider, inbox.event_key, inbox.headers, inbox.raw_payload, inbox.status, inbox.attempts, inbox.next_attempt_at, inbox.claimed_at, inbox.lease_token, inbox.last_error, inbox.processed_at, inbox.created_at, inbox.updated_at, inbox.wait_attempts, inbox.unresolved_since FROM purser.provider_webhook_inbox inbox
+     WHERE inbox.status <> 'processed' AND $1::text = ''
+     ORDER BY inbox.created_at, inbox.id
+     LIMIT ($2::bigint + $3::bigint))
+    UNION ALL
+    (SELECT inbox.id, inbox.provider, inbox.event_key, inbox.headers, inbox.raw_payload, inbox.status, inbox.attempts, inbox.next_attempt_at, inbox.claimed_at, inbox.lease_token, inbox.last_error, inbox.processed_at, inbox.created_at, inbox.updated_at, inbox.wait_attempts, inbox.unresolved_since FROM purser.provider_webhook_inbox inbox
+     WHERE inbox.status <> 'processed' AND $1::text <> ''
+       AND inbox.headers->>'tenant_id' = $1::text
+     ORDER BY inbox.created_at, inbox.id
+     LIMIT ($2::bigint + $3::bigint))
+), page AS MATERIALIZED (
+    SELECT selected.id, selected.provider, selected.event_key, selected.headers, selected.raw_payload, selected.status, selected.attempts, selected.next_attempt_at, selected.claimed_at, selected.lease_token, selected.last_error, selected.processed_at, selected.created_at, selected.updated_at, selected.wait_attempts, selected.unresolved_since,
+           CASE WHEN selected.provider IN ('checkout_recovery', 'tier_upgrade')
+                THEN convert_from(selected.raw_payload, 'UTF8')::jsonb END AS internal_payload
+    FROM selected
+    ORDER BY selected.created_at, selected.id
+    LIMIT $2::bigint OFFSET $3::bigint
+)
 SELECT i.id::text, COALESCE(p.provider, i.headers->>'provider', i.provider)::text AS provider,
        i.event_key, i.status, i.attempts, i.last_error, i.next_attempt_at,
-       COALESCE(p.tenant_id::text, i.headers->>'tenant_id', '')::text AS tenant_id,
+       COALESCE(p.tenant_id::text, i.headers->>'tenant_id', i.internal_payload->>'tenant_id', '')::text AS tenant_id,
        COALESCE(p.id::text, upgrade.id::text, i.headers->>'reference_id', '')::text AS reservation_id,
        COALESCE(p.expires_at, p.created_at + INTERVAL '24 hours') AS expires_at,
        COALESCE(p.amount_cents, upgrade.base_cents, NULLIF(i.headers->>'amount_cents', '')::bigint, 0)::bigint AS amount_cents,
        COALESCE(p.currency, i.headers->>'currency', '')::text AS currency,
        COALESCE(p.status, upgrade.state, i.headers->>'reference_kind', '')::text AS reservation_status
-FROM purser.provider_webhook_inbox i
+FROM page i
 LEFT JOIN purser.payment_provider_intents p
-  ON i.provider = 'checkout_recovery'
- AND p.id::text = convert_from(i.raw_payload, 'UTF8')::jsonb->>'checkout_reservation_id'
- AND p.tenant_id::text = convert_from(i.raw_payload, 'UTF8')::jsonb->>'tenant_id'
+  ON p.id = CASE WHEN i.provider = 'checkout_recovery'
+                 THEN (i.internal_payload->>'checkout_reservation_id')::uuid END
+ AND p.tenant_id = CASE WHEN i.provider = 'checkout_recovery'
+                        THEN (i.internal_payload->>'tenant_id')::uuid END
 LEFT JOIN purser.subscription_tier_upgrades upgrade
-  ON i.provider = 'tier_upgrade'
- AND upgrade.id::text = convert_from(i.raw_payload, 'UTF8')::jsonb->>'id'
- AND upgrade.tenant_id::text = i.headers->>'tenant_id'
-WHERE i.status <> 'processed'
-  AND ($1::text = ''
-       OR COALESCE(p.tenant_id::text, i.headers->>'tenant_id', '') = $1::text)
+  ON upgrade.id = CASE WHEN i.provider = 'tier_upgrade'
+                       THEN (i.internal_payload->>'id')::uuid END
+ AND upgrade.tenant_id = CASE WHEN i.provider = 'tier_upgrade'
+                              THEN (i.headers->>'tenant_id')::uuid END
 ORDER BY i.created_at, i.id
-LIMIT $3::bigint OFFSET $2::bigint
 `
 
 type ListCheckoutRecoveryParams struct {
 	TenantID  string `db:"tenant_id" json:"tenant_id"`
-	RowOffset int64  `db:"row_offset" json:"row_offset"`
 	RowLimit  int64  `db:"row_limit" json:"row_limit"`
+	RowOffset int64  `db:"row_offset" json:"row_offset"`
 }
 
 type ListCheckoutRecoveryRow struct {
@@ -263,8 +280,9 @@ type ListCheckoutRecoveryRow struct {
 }
 
 // Platform-operator inventory includes unbound callbacks; a supplied tenant narrows to its reservations.
+// Each disjoint branch reads an ordered index head before enrichment.
 func (q *Queries) ListCheckoutRecovery(ctx context.Context, arg ListCheckoutRecoveryParams) ([]ListCheckoutRecoveryRow, error) {
-	rows, err := q.db.QueryContext(ctx, listCheckoutRecovery, arg.TenantID, arg.RowOffset, arg.RowLimit)
+	rows, err := q.db.QueryContext(ctx, listCheckoutRecovery, arg.TenantID, arg.RowLimit, arg.RowOffset)
 	if err != nil {
 		return nil, err
 	}
@@ -416,9 +434,14 @@ func (q *Queries) PendingCheckoutRecoveryAudits(ctx context.Context, arg Pending
 
 const providerWebhookInboxRepeatedFailures = `-- name: ProviderWebhookInboxRepeatedFailures :one
 SELECT COUNT(*)::bigint AS items
-FROM purser.provider_webhook_inbox
-WHERE status IN ('pending', 'failed', 'processing')
-  AND (attempts > 1 OR unresolved_since < NOW() - INTERVAL '14 days')
+FROM (
+    SELECT id FROM purser.provider_webhook_inbox
+    WHERE status IN ('pending', 'failed', 'processing') AND attempts > 1
+    UNION
+    SELECT id FROM purser.provider_webhook_inbox
+    WHERE status IN ('pending', 'failed', 'processing')
+      AND unresolved_since < NOW() - INTERVAL '14 days'
+) unresolved
 `
 
 // Service-wide recovery inventory; tenant filtering would hide stuck work.
@@ -455,7 +478,7 @@ INSERT INTO purser.provider_webhook_inbox (
     provider, event_key, headers, raw_payload, next_attempt_at
 )
 SELECT 'checkout_recovery', 'checkout-expiry:' || id::text,
-       jsonb_build_object('recovery_reason', $1::text),
+       jsonb_build_object('recovery_reason', $1::text, 'tenant_id', tenant_id::text),
        convert_to(jsonb_build_object(
            'checkout_reservation_id', id::text, 'tenant_id', tenant_id::text, 'force', true
        )::text, 'UTF8'), NOW()

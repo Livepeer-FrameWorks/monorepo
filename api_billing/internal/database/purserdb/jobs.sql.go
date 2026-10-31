@@ -1087,6 +1087,32 @@ func (q *Queries) ListProviderPaymentAttemptsForRetry(ctx context.Context, maxAt
 }
 
 const listSubscriptionsDueForInvoice = `-- name: ListSubscriptionsDueForInvoice :many
+WITH due AS MATERIALIZED (
+    SELECT ts.id, ts.tenant_id, ts.billing_email, ts.tier_id, ts.status,
+           ts.billing_period_start, ts.billing_period_end, ts.mollie_next_payment_date,
+           ts.stripe_subscription_id, ts.mollie_subscription_id, ts.payment_method,
+           ts.stripe_customer_id, ts.presentment_currency, ts.billing_model
+    FROM purser.tenant_subscriptions ts
+    WHERE ts.status = 'active' AND ts.pending_reason IS DISTINCT FROM 'tier_upgrade'
+      AND ((ts.mollie_next_payment_date IS NOT NULL
+                AND ts.mollie_next_payment_date <= ($1::timestamp)::date)
+        OR (ts.billing_period_end IS NOT NULL
+                AND ts.billing_period_end <= $1::timestamp)
+        OR (ts.billing_period_end IS NULL
+                AND (ts.next_billing_date IS NULL OR ts.next_billing_date <= $1::timestamp)))
+), tiers AS MATERIALIZED (
+    SELECT id, tier_name, display_name, billing_period FROM purser.billing_tiers WHERE is_active = TRUE
+), closed AS MATERIALIZED (
+    SELECT closure.tenant_id FROM purser.tenant_billing_closures closure
+    WHERE closure.tenant_id = ANY (ARRAY(SELECT due.tenant_id FROM due))
+), expired AS MATERIALIZED (
+    SELECT grant_row.subscription_id FROM purser.subscription_operator_grants grant_row
+    WHERE grant_row.subscription_id = ANY (ARRAY(SELECT due.id FROM due))
+      AND grant_row.expires_at <= $1::timestamptz
+), mollie AS MATERIALIZED (
+    SELECT customer.tenant_id FROM purser.mollie_customers customer
+    WHERE customer.tenant_id = ANY (ARRAY(SELECT due.tenant_id FROM due))
+)
 SELECT ts.tenant_id::text AS tenant_id,
        ts.billing_email,
        ts.tier_id,
@@ -1099,30 +1125,14 @@ SELECT ts.tenant_id::text AS tenant_id,
        ts.payment_method,
        ts.stripe_customer_id,
        ts.presentment_currency::text AS presentment_currency,
-       EXISTS (
-           SELECT 1 FROM purser.mollie_customers mc WHERE mc.tenant_id = ts.tenant_id
-       )::boolean AS has_mollie_customer,
+       (ts.tenant_id IN (SELECT tenant_id FROM mollie))::boolean AS has_mollie_customer,
        bt.tier_name,
        bt.display_name,
        bt.billing_period,
        ts.billing_model
-FROM purser.tenant_subscriptions ts
-JOIN purser.billing_tiers bt ON ts.tier_id = bt.id
-WHERE ts.status = 'active'
-  AND ts.pending_reason IS DISTINCT FROM 'tier_upgrade'
-  AND NOT EXISTS (SELECT 1 FROM purser.tenant_billing_closures closure WHERE closure.tenant_id = ts.tenant_id)
-  AND NOT EXISTS (SELECT 1 FROM purser.subscription_operator_grants expired_grant
-      WHERE expired_grant.subscription_id = ts.id AND expired_grant.expires_at <= $1::timestamptz)
-  AND bt.is_active = TRUE
-  AND (
-      (ts.mollie_next_payment_date IS NOT NULL
-          AND ts.mollie_next_payment_date <= ($1::timestamp)::date)
-      OR (ts.billing_period_end IS NOT NULL
-          AND ts.billing_period_end <= ($1::timestamp))
-      OR (ts.billing_period_end IS NULL
-          AND (ts.next_billing_date IS NULL
-              OR ts.next_billing_date <= ($1::timestamp)))
-  )
+FROM due ts JOIN tiers bt ON ts.tier_id = bt.id
+WHERE ts.tenant_id NOT IN (SELECT closed.tenant_id FROM closed)
+  AND ts.id NOT IN (SELECT expired.subscription_id FROM expired)
 `
 
 type ListSubscriptionsDueForInvoiceRow struct {
@@ -1145,6 +1155,8 @@ type ListSubscriptionsDueForInvoiceRow struct {
 	BillingModel          string         `db:"billing_model" json:"billing_model"`
 }
 
+// Eligible subscriptions and their exclusion keys share one statement snapshot.
+// Batch key lookups avoid a distributed read per tenant or per catalog join.
 func (q *Queries) ListSubscriptionsDueForInvoice(ctx context.Context, now time.Time) ([]ListSubscriptionsDueForInvoiceRow, error) {
 	rows, err := q.db.QueryContext(ctx, listSubscriptionsDueForInvoice, now)
 	if err != nil {

@@ -59,20 +59,29 @@ WITH confirmed AS (
       AND headers->>'currency' = sqlc.arg(currency)::text
 ), receipts AS (
     SELECT GREATEST(confirmed.refunded, promised.refunded) AS refunded FROM confirmed CROSS JOIN promised
-), accruals AS (
+), originals AS MATERIALIZED (
+    SELECT original.* FROM purser.operator_credit_ledger original
+    WHERE original.source_type = 'stripe_subscription' AND original.entry_type = 'accrual'
+      AND original.stripe_invoice_id = sqlc.arg(invoice_id)::text
+      AND original.currency = sqlc.arg(currency)::text AND original.gross_cents > 0
+), prior AS MATERIALIZED (
+    SELECT reversed.reverses_ledger_id,
+           -SUM(reversed.gross_cents)::bigint AS gross,
+           -SUM(reversed.platform_fee_cents)::bigint AS fee
+    FROM purser.operator_credit_ledger reversed
+    WHERE reversed.entry_type = 'clawback'
+      AND reversed.reverses_ledger_id = ANY (ARRAY(SELECT originals.id FROM originals))
+    GROUP BY reversed.reverses_ledger_id
+), accruals AS MATERIALIZED (
     SELECT original.*,
            LEAST(receipts.refunded, original.gross_cents)::bigint AS target_gross,
            ROUND(LEAST(receipts.refunded, original.gross_cents)
                  * original.platform_fee_cents::numeric / original.gross_cents)::bigint AS target_fee,
-           COALESCE((SELECT -SUM(gross_cents) FROM purser.operator_credit_ledger reversed
-                     WHERE reversed.reverses_ledger_id = original.id AND reversed.entry_type = 'clawback'), 0)::bigint AS prior_gross,
-           COALESCE((SELECT -SUM(platform_fee_cents) FROM purser.operator_credit_ledger reversed
-                     WHERE reversed.reverses_ledger_id = original.id AND reversed.entry_type = 'clawback'), 0)::bigint AS prior_fee
-    FROM purser.operator_credit_ledger original CROSS JOIN receipts
-    WHERE original.source_type = 'stripe_subscription' AND original.entry_type = 'accrual'
-      AND original.stripe_invoice_id = sqlc.arg(invoice_id)::text
-      AND original.currency = sqlc.arg(currency)::text AND original.gross_cents > 0
-      AND receipts.refunded > 0
+           COALESCE(prior.gross, 0)::bigint AS prior_gross,
+           COALESCE(prior.fee, 0)::bigint AS prior_fee
+    FROM originals original CROSS JOIN receipts
+    LEFT JOIN prior ON prior.reverses_ledger_id = original.id
+    WHERE receipts.refunded > 0
 ), deltas AS (
     SELECT *, GREATEST(target_gross - prior_gross, 0) AS gross_delta,
               GREATEST(target_fee - prior_fee, 0) AS fee_delta

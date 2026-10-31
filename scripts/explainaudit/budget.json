@@ -1509,6 +1509,18 @@
     "read_requests": 1,
     "rows_scanned": 3000
   },
+  "purser:CountFailedOperatorGrantExpiries@declared": {
+    "reason": "Exact failure inventory uses idx_operator_grants_failed with storage-side aggregation, zero heap fetches and one RPC. The fixture contains 1288 failed grants; amplification is relative to its single COUNT result.",
+    "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION"],
+    "read_requests": 1,
+    "rows_scanned": 1288
+  },
+  "purser:CountFailedOperatorGrantExpiries@distributed": {
+    "reason": "Exact failure inventory uses idx_operator_grants_failed with storage-side aggregation, zero heap fetches and one RPC. The fixture contains 1288 failed grants; amplification is relative to its single COUNT result.",
+    "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION"],
+    "read_requests": 1,
+    "rows_scanned": 1288
+  },
   "purser:CountMissingMeteringWindows@declared": {
     "flags": ["NESTED_LOOP_UNBATCHED", "READ_AMPLIFICATION", "SEQ_SCAN_LARGE", "SLOW"],
     "read_requests": 11,
@@ -1538,6 +1550,18 @@
     "flags": ["READ_AMPLIFICATION"],
     "read_requests": 1,
     "rows_scanned": 6121
+  },
+  "purser:CountRepeatedFreeFallbackFailures@declared": {
+    "reason": "Exact failed/aged move and notice inventories use covering failure indexes, deduplicate overlapping moves and batch closure/grant exclusions. Both layouts read 1549 cohort/key rows across five RPCs, with no subscription-table scan or correlated probes. Counts remain uncapped.",
+    "flags": ["READ_AMPLIFICATION"],
+    "read_requests": 5,
+    "rows_scanned": 1549
+  },
+  "purser:CountRepeatedFreeFallbackFailures@distributed": {
+    "reason": "Exact failed/aged move and notice inventories use covering failure indexes, deduplicate overlapping moves and batch closure/grant exclusions. Both layouts read 1549 cohort/key rows across five RPCs, with no subscription-table scan or correlated probes. Counts remain uncapped.",
+    "flags": ["READ_AMPLIFICATION"],
+    "read_requests": 5,
+    "rows_scanned": 1549
   },
   "purser:DeleteBootstrapTierEntitlement@distributed": {
     "flags": ["READ_AMPLIFICATION"],
