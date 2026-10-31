@@ -122,12 +122,21 @@ func TestCheckoutRequestJournalAndLateResponseHandoff_RealPG(t *testing.T) {
 	if err := purserdb.New(db).SetProviderIntentSessionOpen(ctx, purserdb.SetProviderIntentSessionOpenParams{TenantID: tenant.id, IntentID: id, SessionID: sql.NullString{String: session, Valid: true}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.MarkCompletedToken(ctx, claims[0].ID, claims[0].LeaseToken); err == nil {
-		t.Fatal("old claim swallowed late provider response")
+	if concurrent, err := store.ClaimBatch(ctx, 1, time.Minute); err != nil || len(concurrent) != 0 {
+		t.Fatalf("late response stole the active recovery lease: %v %v", concurrent, err)
+	}
+	if err := store.MarkCompletedToken(ctx, claims[0].ID, claims[0].LeaseToken); err != nil {
+		t.Fatalf("late response invalidated its owner's acknowledgment: %v", err)
 	}
 	next, err := store.ClaimBatch(ctx, 1, time.Minute)
 	if err != nil || len(next) != 1 || next[0].LeaseToken == claims[0].LeaseToken {
 		t.Fatalf("late response did not get fresh claim: %v %v", next, err)
+	}
+	if err := store.MarkCompletedToken(ctx, next[0].ID, next[0].LeaseToken); err != nil {
+		t.Fatal(err)
+	}
+	if remaining, err := store.ClaimBatch(ctx, 1, time.Minute); err != nil || len(remaining) != 0 {
+		t.Fatalf("acknowledged late response kept recovery queued: %v %v", remaining, err)
 	}
 }
 
