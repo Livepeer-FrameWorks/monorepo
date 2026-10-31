@@ -166,7 +166,7 @@ recovery_id=$(pg purser "WITH receipt AS (
  VALUES('$tenant','stripe','tenant_subscription_checkout','provider_call_failed','prepared','EUR',gen_random_uuid()::text,NOW()+INTERVAL '23 hours') RETURNING id,tenant_id,expires_at
 ), queued AS (
  INSERT INTO purser.provider_webhook_inbox(provider,event_key,headers,raw_payload,next_attempt_at)
- SELECT 'checkout_recovery','checkout-expiry:'||id::text,'{}',
+ SELECT 'checkout_recovery','checkout-expiry:'||id::text,jsonb_build_object('tenant_id',tenant_id::text),
  convert_to(jsonb_build_object('checkout_reservation_id',id::text,'tenant_id',tenant_id::text)::text,'UTF8'),expires_at FROM receipt
  RETURNING event_key)
  SELECT id::text FROM receipt WHERE EXISTS(SELECT 1 FROM queued)") || {
