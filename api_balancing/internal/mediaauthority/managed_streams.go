@@ -44,11 +44,19 @@ func (s *Store) ManagedStreams(ctx context.Context, clusterID string) (ManagedSt
 		return result, nil
 	}
 	result.Complete = true
+	rowUnavailable := func(authorityID string, cause error) {
+		result.Complete = false
+		if s.logger != nil {
+			s.logger.WithError(cause).WithField("authority_id", authorityID).Warn("Managed source authority unavailable; preserving other tenants and disabling retraction")
+		}
+		s.refreshAsync(AuthorityLookup{AuthorityID: authorityID})
+	}
 	for _, row := range rows {
 		result.Marked = result.Marked || row.LocalSourceReady
 		object, err := decodeMediaObjectSnapshot(row.Payload, row.PayloadSha256, row.AuthorityID, row.AuthorityVersion, false, row.RefreshAfter, row.ValidUntil, s.now().UTC())
 		if err != nil {
-			return result, err
+			rowUnavailable(row.AuthorityID, err)
+			continue
 		}
 		object.ParentVersion = row.TenantAuthorityVersion
 		// A tombstone remains a deny after its envelope expires. It needs no
@@ -73,7 +81,8 @@ func (s *Store) ManagedStreams(ctx context.Context, clusterID string) (ManagedSt
 		}
 		authority := object.Authority
 		if authority == nil || authority.GetLiveStream() == nil {
-			return result, fmt.Errorf("managed-stream authority %q has no live-stream payload", row.AuthorityID)
+			rowUnavailable(row.AuthorityID, fmt.Errorf("managed-stream authority %q has no live-stream payload", row.AuthorityID))
+			continue
 		}
 		tenant, err := s.TenantSourceForObject(ctx, object)
 		if errors.Is(err, sql.ErrNoRows) {
@@ -82,7 +91,8 @@ func (s *Store) ManagedStreams(ctx context.Context, clusterID string) (ManagedSt
 			continue
 		}
 		if err != nil {
-			return result, fmt.Errorf("load managed-stream tenant %q: %w", authority.GetTenantId(), err)
+			rowUnavailable(row.AuthorityID, fmt.Errorf("load managed-stream tenant %q: %w", authority.GetTenantId(), err))
+			continue
 		}
 		if !tenant.SourceReady {
 			result.Complete = false
@@ -111,7 +121,8 @@ func (s *Store) ManagedStreams(ctx context.Context, clusterID string) (ManagedSt
 		}
 		secret, err := s.OpenLiveStreamSecret(object)
 		if err != nil {
-			return result, fmt.Errorf("open managed-stream authority %q: %w", row.AuthorityID, err)
+			rowUnavailable(row.AuthorityID, fmt.Errorf("open managed-stream authority %q: %w", row.AuthorityID, err))
+			continue
 		}
 		if strings.TrimSpace(secret.GetNativeSourceSpec()) == "" || !slices.Contains(secret.GetNativeAllowedClusterIds(), clusterID) {
 			continue

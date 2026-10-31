@@ -23,6 +23,7 @@ import (
 // signed version could still verify, an old envelope cannot come back once the
 // version fence is gone, and a tombstone is never forgotten.
 func TestMediaAuthorityCollectionAndFetch_RealPG(t *testing.T) {
+	t.Run("partial managed rows preserve other tenants", testManagedStreamRowFailureIsolation)
 	conn := startMediaAuthorityRealPG(t)
 	_, trust, _ := storeFixture(t, "cell-a")
 	store, err := NewStore(conn, "cell-a", trust)
