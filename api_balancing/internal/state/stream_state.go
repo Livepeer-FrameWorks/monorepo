@@ -524,6 +524,7 @@ type StreamStateManager struct {
 	mu           sync.RWMutex
 	// playbackAuthorityHandler receives peers' authority announcements.
 	playbackAuthorityHandler func(PlaybackAuthorityChange)
+	nodeClusterObserver      func(string)
 
 	// Whole-node artifact report ordering (see SetNodeArtifacts). A report is ordered by (fence,
 	// seq): the connection fence is issued monotonically by Foghorn when the node's control

@@ -86,6 +86,9 @@ func (sm *StreamStateManager) handleStateChangelogEntry(id string, change StateC
 		return
 	}
 	sm.applyRedisChange(change)
+	if change.Entity == StateEntityNode && change.Operation == StateOpUpsert {
+		sm.notifyNodeCluster(change.NodeID)
+	}
 	if change.Entity == StateEntityStream || change.Entity == StateEntityStreamInstance {
 		sm.notifyStreamChanged(change.StreamName)
 	}

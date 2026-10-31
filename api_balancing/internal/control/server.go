@@ -1401,14 +1401,32 @@ func ServedClustersSnapshot() []string {
 	return ids
 }
 
-// StartServedClustersRefresh periodically reloads cluster assignments from Quartermaster.
+// StartServedClustersRefresh reloads authoritative assignments periodically and
+// when a peer discovers a new node cluster. Refreshes stay outside media
+// requests; an authenticated node's identity alone never grants an assignment.
 func StartServedClustersRefresh(ctx context.Context, interval time.Duration, log logging.Logger) {
+	requests := make(chan struct{}, 1)
+	manager := state.DefaultManager()
+	manager.SetNodeClusterObserver(func(clusterID string) {
+		if clusterID == "" || isServedCluster(clusterID) || isReleasedControlCluster(clusterID) {
+			return
+		}
+		select {
+		case requests <- struct{}{}:
+		default:
+		}
+	})
+	defer manager.SetNodeClusterObserver(nil)
+	// Cover node changes between the startup snapshot and observer registration.
+	LoadServedClusters()
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-requests:
+			LoadServedClusters()
 		case <-ticker.C:
 			LoadServedClusters()
 			LoadPlatformSharedClusters()
