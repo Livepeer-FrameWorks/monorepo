@@ -72,7 +72,7 @@ update_cleanup() {
     # The edge then reports its image-seeded version labels again: the edge
     # seed replaces an installed component on a later image only while its
     # label is the image-seeded one.
-    pg quartermaster "DELETE FROM quartermaster.cluster_release_targets WHERE cluster_id='$UPDATE_CLUSTER';
+    pg_fixture quartermaster "DELETE FROM quartermaster.cluster_release_targets WHERE cluster_id='$UPDATE_CLUSTER';
       DELETE FROM quartermaster.edge_releases WHERE channel='stable' AND version='$UPDATE_STAGED'" >/dev/null
     # shellcheck disable=SC2016 # expanded by the edge's shell
     stack_exec "$EDGE_SERVICE" sh -c 'f=/etc/frameworks/component-versions.env
@@ -108,7 +108,7 @@ stage_stack_release() {
   stack_exec "$EDGE_SERVICE" cp -p /etc/frameworks/component-versions.env /etc/frameworks/component-versions.env.stack-update || return 1
   WANT_HELMSMAN="$v-helmsman" WANT_MIST="$v-mist"
   UPDATE_STAGED=$v
-  pg quartermaster "INSERT INTO quartermaster.edge_releases (channel, version, components) VALUES ('stable', '$v',
+  pg_fixture quartermaster "INSERT INTO quartermaster.edge_releases (channel, version, components) VALUES ('stable', '$v',
       '{\"helmsman\":{\"version\":\"$WANT_HELMSMAN\",\"artifacts\":{\"linux/$arch\":{\"artifact_url\":\"$base/helmsman.tar.gz\",\"checksum\":\"$hs\"}}},
         \"mist\":{\"version\":\"$WANT_MIST\",\"artifacts\":{\"linux/$arch\":{\"artifact_url\":\"$base/mist.tar.gz\",\"checksum\":\"$ms\"}}}}'::jsonb);
     INSERT INTO quartermaster.cluster_release_targets (cluster_id, channel, target_version, rollout_plan, paused)

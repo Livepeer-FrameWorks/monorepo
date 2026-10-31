@@ -106,13 +106,17 @@ ORPHAN="$STORE/vod/$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n').mkv.dtsh"
 as_helmsman "mkdir -p $STORE/vod && head -c 4096 /dev/urandom >$ORPHAN && touch -d @$OLD $ORPHAN" ||
   { fail "arrange: plant an orphan sidecar"; finish; }
 age_synced_pressure_fixture_cache || { fail "arrange: age durable completed fixture media"; finish; }
+# Make this recording older than the shared cache fixtures so its durability
+# verdict is exercised before other cache candidates can satisfy the target.
+DVR_OLD=$((OLD - 31536000))
+as_helmsman "find '$DVR_DIR' -type f -exec touch -d @$DVR_OLD {} +" || { fail "arrange: prioritize the recording's eviction"; finish; }
 
 # cap_at <percent>: a logical capacity that puts the edge's storage at that
 # usage, applied by a Helmsman restart.
 store_bytes() { edge_sh "find $STORE -type f -exec stat -c %s {} + 2>/dev/null | awk '{s+=\$1} END {print s+0}'"; }
 cap_at() {
   local used
-  edge_sh "[ ! -e $DVR_DIR/$DVR_HASH.m3u8 ] || touch -d @$OLD $DVR_DIR/$DVR_HASH.m3u8"
+  edge_sh "[ ! -e $DVR_DIR/$DVR_HASH.m3u8 ] || touch -d @$DVR_OLD $DVR_DIR/$DVR_HASH.m3u8"
   used=$(store_bytes)
   [ "${used:-0}" -gt 0 ] 2>/dev/null || return 1
   CAP=$((used * 100 / $1))
@@ -170,6 +174,7 @@ dvr_gone() { [ -z "$(dvr_dir)" ]; }
 # A pass that evicted nothing else reaches its target only by evicting the recording.
 evicted_or_preempted() { dvr_gone || { [ "${others:-0}" -gt 0 ] && reached_target; }; }
 check "the durable recording's local copy is evicted, or lower-priority artifacts brought the pass below target first (others evicted: ${others:-0})" evicted_or_preempted
+check "Foghorn verified this recording's durable copy before eviction" pressure_dvr_durability_verified "$T1" "$DVR_HASH"
 missing=$(log_json "$T1" 'select(.reason == "s3_object_missing") | .asset_hash' foghorn foghorn-2 | sort -u | tr '\n' ' ')
 check "Foghorn refused no eviction as s3_object_missing (refused: ${missing:-none})" [ -z "$missing" ]
 bogus=$(log_json "$T1" 'select((.msg // "") | test("not cataloged")) | .sample_hashes[]? | select(test("^[0-9a-f]+$") | not)' "$EDGE_SERVICE" | sort -u | tr '\n' ' ')

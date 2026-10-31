@@ -45,3 +45,11 @@ unset STACK_TARGET
 pg() { printf "bad';touch malicious\n"; }
 if age_synced_pressure_fixture_cache 2>/dev/null; then echo 'unsafe hash accepted' >&2; exit 1; fi
 printf 'storage pressure fixture isolation: ok\n'
+
+log_json() { printf '%s\n' "${EVENTS:-}" | jq -r "$2"; }
+EVENTS='{"asset_hash":"other-recording","msg":"Asset durable copy verified, safe to delete local copy"}'
+
+if pressure_dvr_durability_verified since recording; then echo 'missing DVR verdict accepted' >&2; exit 1; fi
+EVENTS='{"asset_hash":"recording","msg":"Asset durable copy verified, safe to delete local copy"}'
+pressure_dvr_durability_verified since recording
+if pressure_dvr_durability_verified since "bad';hash"; then echo 'unsafe DVR hash accepted' >&2; exit 1; fi
