@@ -123,7 +123,8 @@ var (
 	castNameReference                  = regexp.MustCompile(`(?is)'([^']+)'\s*::\s*name\b`)
 	addConstraintName                  = regexp.MustCompile(`(?is)\bADD\s+CONSTRAINT\s+"?([A-Za-z_][A-Za-z0-9_]*)"?`)
 	addAnonymousConstraint             = regexp.MustCompile(`(?is)\bADD\s+(?:CHECK\s*\(|FOREIGN\s+KEY\s*\()`)
-	inlineAddedColumnConstraint        = regexp.MustCompile(`(?is)\bALTER\s+TABLE\b[^;]*\bADD\s+(?:COLUMN\s+)?(?:IF\s+NOT\s+EXISTS\s+)?"?[A-Za-z_][A-Za-z0-9_]*"?\s+[^;]*\b(?:CHECK\s*\(|REFERENCES\s+)`)
+	alterTableStatement                = regexp.MustCompile(`(?is)\bALTER\s+TABLE\b`)
+	inlineAddedColumnConstraint        = regexp.MustCompile(`(?is)\bADD\s+(?:COLUMN\s+)?(?:IF\s+NOT\s+EXISTS\s+)?(?:"(?:[^"]|"")*"|[A-Za-z_][A-Za-z0-9_]*)\s+[^;]*\b(?:CHECK\s*\(|REFERENCES\s+)`)
 	validateConstraintName             = regexp.MustCompile(`(?is)\bVALIDATE\s+CONSTRAINT\s+"?([A-Za-z_][A-Za-z0-9_]*)"?`)
 	dropConstraintName                 = regexp.MustCompile(`(?is)\bDROP\s+CONSTRAINT(?:\s+IF\s+EXISTS)?\s+"?([A-Za-z_][A-Za-z0-9_]*)"?`)
 	updateTableName                    = regexp.MustCompile(`(?is)\bUPDATE\s+([A-Za-z_][A-Za-z0-9_.]*)(?:\s+(?:AS\s+)?[A-Za-z_][A-Za-z0-9_]*)?\s+SET\b`)
@@ -426,7 +427,7 @@ func validatePostgresMigrationSet(migrations []Migration) error {
 				}
 			}
 			for _, stmt := range splitSQLStatements(structuralContent) {
-				if inlineAddedColumnConstraint.MatchString(stmt) && !immutableShippedInlineConstraint(migration) && !addConstraintName.MatchString(stmt) && !addAnonymousConstraint.MatchString(stmt) {
+				if hasInlineAddedColumnConstraint(stmt) && !immutableShippedInlineConstraint(migration) {
 					issues = append(issues, MigrationValidationIssue{Path: migration.Path, Message: "constraints on added columns must be separate named ADD CONSTRAINT statements using NOT VALID and postdeploy validation"})
 				}
 				if alterColumnType.MatchString(stmt) && !compatiblePushTargetURIWidening.MatchString(stmt) {
@@ -864,6 +865,56 @@ func stripSQLSingleQuotedLiterals(content string) string {
 		i++
 	}
 	return out.String()
+}
+
+// Named table constraints exempt only their own ADD clause. Commas within a
+// type, expression or quoted identifier cannot hide a later constrained column.
+func hasInlineAddedColumnConstraint(statement string) bool {
+	if !alterTableStatement.MatchString(statement) {
+		return false
+	}
+	for _, clause := range splitSQLAlterClauses(statement) {
+		if inlineAddedColumnConstraint.MatchString(clause) &&
+			!addConstraintName.MatchString(clause) && !addAnonymousConstraint.MatchString(clause) {
+			return true
+		}
+	}
+	return false
+}
+
+func splitSQLAlterClauses(statement string) []string {
+	var clauses []string
+	start, depth := 0, 0
+	var quote byte
+	for i := 0; i < len(statement); i++ {
+		c := statement[i]
+		if quote != 0 {
+			if c == quote {
+				if i+1 < len(statement) && statement[i+1] == quote {
+					i++
+				} else {
+					quote = 0
+				}
+			}
+			continue
+		}
+		switch c {
+		case '\'', '"':
+			quote = c
+		case '(':
+			depth++
+		case ')':
+			if depth > 0 {
+				depth--
+			}
+		case ',':
+			if depth == 0 {
+				clauses = append(clauses, statement[start:i])
+				start = i + 1
+			}
+		}
+	}
+	return append(clauses, statement[start:])
 }
 
 type addedConstraint struct {

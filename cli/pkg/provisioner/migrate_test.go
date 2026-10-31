@@ -402,11 +402,16 @@ func TestValidateMigrationSet_InlineAddedColumnConstraint(t *testing.T) {
 		`ADD COLUMN reason TEXT CHECK (reason <> '')`,
 		`ADD COLUMN reason TEXT CONSTRAINT reason_valid CHECK (reason <> '')`,
 		`ADD COLUMN owner UUID REFERENCES purser.owners(id)`,
+		`ADD CONSTRAINT safe CHECK (true) NOT VALID, ADD COLUMN owner UUID REFERENCES purser.owners(id)`,
+		`ADD COLUMN owner UUID REFERENCES purser.owners(id), ADD CONSTRAINT safe CHECK (true) NOT VALID`,
+		`ADD CHECK (true) NOT VALID, ADD COLUMN owner UUID REFERENCES purser.owners(id)`,
+		`ADD COLUMN amount NUMERIC(10, 2), ADD CONSTRAINT safe CHECK (amount >= 0) NOT VALID, ADD COLUMN owner UUID REFERENCES purser.owners(id)`,
+		`ADD CONSTRAINT safe CHECK (true) NOT VALID, ADD COLUMN "owner,name" UUID REFERENCES purser.owners(id)`,
 	} {
 		t.Run(definition, func(t *testing.T) {
 			err := validatePostgresMigrationSet([]Migration{{Database: "purser", Version: "v0.3.14", Phase: "expand", Sequence: 1, Path: "migrations/purser/v0.3.14/expand/001.sql", Transactional: true, content: "ALTER TABLE purser.a " + definition + ";"}})
-			if err == nil {
-				t.Fatal("inline validated constraint escaped expand safety validation")
+			if err == nil || !strings.Contains(err.Error(), "constraints on added columns must be separate named ADD CONSTRAINT") {
+				t.Fatalf("inline validated constraint escaped expand safety validation: %v", err)
 			}
 		})
 	}

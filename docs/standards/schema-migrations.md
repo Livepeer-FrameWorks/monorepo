@@ -220,6 +220,13 @@ exception is a compatibility constraint explicitly dropped by a contract migrati
 in that same release: validating a constraint solely to drop it would add a full
 table scan without strengthening the post-release schema.
 
+An added column must not carry an inline `CHECK` or `REFERENCES` constraint.
+Use a separate named constraint with `NOT VALID`, then validate in postdeploy.
+This applies to each `ADD` clause even when another clause adds a valid table
+constraint. Three already-shipped files are exempted by their exact path
+and SHA-256 in `migrate_shipped_constraints.go`; moved or edited copies are
+validated normally. New migrations cannot add an exemption.
+
 `make verify-schema-migrations` supplies the complete local schema proof that version checks cannot.
 For PostgreSQL it compares both current-baseline replay and the latest tagged
 baseline plus pending migrations against the current fresh-install baseline. For
