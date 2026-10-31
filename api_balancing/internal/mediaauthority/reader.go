@@ -315,6 +315,12 @@ func (s *Store) MediaObjectSourceByInternalName(ctx context.Context, internalNam
 	return snapshot, err
 }
 
+// tenantSourceReadError separates an unavailable store from an invalid stored projection.
+type tenantSourceReadError struct{ cause error }
+
+func (e *tenantSourceReadError) Error() string { return "read local tenant source: " + e.cause.Error() }
+func (e *tenantSourceReadError) Unwrap() error { return e.cause }
+
 func (s *Store) TenantSource(ctx context.Context, tenantID string) (TenantSnapshot, error) {
 	tenantID = strings.TrimSpace(tenantID)
 	if tenantID == "" {
@@ -322,7 +328,10 @@ func (s *Store) TenantSource(ctx context.Context, tenantID string) (TenantSnapsh
 	}
 	row, err := foghorndb.New(s.db).GetLocalTenantSourceAuthority(ctx, tenantID)
 	if err != nil {
-		return TenantSnapshot{}, err
+		if errors.Is(err, sql.ErrNoRows) {
+			return TenantSnapshot{}, err
+		}
+		return TenantSnapshot{}, &tenantSourceReadError{cause: err}
 	}
 	snapshot := TenantSnapshot{Version: row.AuthorityVersion, SourceReady: row.LocalSourceReady, Freshness: authorityFreshness(s.now().UTC(), row.RefreshAfter, row.ValidUntil), RefreshAfter: row.RefreshAfter, ValidUntil: row.ValidUntil}
 	snapshot.Freshness = s.fencedFreshness(snapshot.Freshness, "tenant", tenantID, false)

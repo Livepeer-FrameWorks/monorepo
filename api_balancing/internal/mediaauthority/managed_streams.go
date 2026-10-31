@@ -48,12 +48,15 @@ func (s *Store) SetManagedStreamSetMetric(metric *prometheus.CounterVec) {
 func (s *Store) ManagedStreams(ctx context.Context, clusterID string) (result ManagedStreamSet, resultErr error) {
 	result = ManagedStreamSet{Contexts: make(map[string]*commodorepb.ResolveStreamContextResponse)}
 	defer func() {
+		if resultErr != nil {
+			result.Complete = false
+		}
 		if s.managedStreamSets == nil {
 			return
 		}
 		outcome := "complete"
 		switch {
-		case ctx.Err() != nil:
+		case errors.Is(resultErr, context.Canceled), errors.Is(resultErr, context.DeadlineExceeded):
 			outcome = "cancelled"
 		case resultErr != nil:
 			outcome = "error"
@@ -125,6 +128,10 @@ func (s *Store) ManagedStreams(ctx context.Context, clusterID string) (result Ma
 			continue
 		}
 		if err != nil {
+			var readErr *tenantSourceReadError
+			if errors.As(err, &readErr) {
+				return result, err
+			}
 			rowUnavailable(row.AuthorityID, fmt.Errorf("load managed-stream tenant %q: %w", authority.GetTenantId(), err))
 			continue
 		}
