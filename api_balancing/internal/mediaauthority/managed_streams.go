@@ -128,7 +128,7 @@ func (s *Store) ManagedStreams(ctx context.Context, clusterID string) (result Ma
 			continue
 		}
 		if err != nil {
-			var readErr *tenantSourceReadError
+			var readErr *authorityStoreReadError
 			if errors.As(err, &readErr) {
 				return result, err
 			}

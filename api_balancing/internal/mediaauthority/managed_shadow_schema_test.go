@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -156,35 +157,60 @@ func TestManagedSourceCancellationStopsTenantReads(t *testing.T) {
 }
 
 func TestManagedSourceDatabaseFailureStopsTenantReads(t *testing.T) {
-	store, mock, closeDB := newFixtureStore(t, "cell-a")
-	defer closeDB()
-	metric := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "test_managed_sets_total", Help: "test"}, []string{"outcome"})
-	store.SetManagedStreamSetMetric(metric)
-	object := &mediapb.MediaObjectAuthority{TenantId: "tenant", InternalName: "internal",
-		Object: &mediapb.MediaObjectAuthority_LiveStream{LiveStream: &mediapb.LiveStreamAuthority{StreamId: "stream", IngestMode: "mist_native"}}}
-	payload, err := proto.Marshal(object)
-	if err != nil {
-		t.Fatal(err)
+	for _, parentChanged := range []bool{false, true} {
+		t.Run(fmt.Sprintf("parent_changed=%v", parentChanged), func(t *testing.T) {
+			store, mock, closeDB := newFixtureStore(t, "cell-a")
+			store.SetAuthorityFetcher(func(context.Context, AuthorityLookup) ([][]byte, error) { return nil, errors.New("unexpected refresh") })
+			defer closeDB()
+			metric := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "test_managed_sets_total", Help: "test"}, []string{"outcome"})
+			store.SetManagedStreamSetMetric(metric)
+			object := &mediapb.MediaObjectAuthority{TenantId: "tenant", InternalName: "internal",
+				Object: &mediapb.MediaObjectAuthority_LiveStream{LiveStream: &mediapb.LiveStreamAuthority{StreamId: "stream", IngestMode: "mist_native"}}}
+			payload, err := proto.Marshal(object)
+			if err != nil {
+				t.Fatal(err)
+			}
+			digest := sha256.Sum256(payload)
+			until := store.now().Add(time.Hour)
+			mock.ExpectQuery("ListLocalManagedStreamAuthorities").WillReturnRows(sqlmock.NewRows([]string{
+				"authority_id", "authority_version", "payload", "payload_sha256", "refresh_after", "valid_until",
+				"local_source_ready", "withheld_by_tenant_revival", "tenant_authority_version",
+			}).AddRow("stream", 2, payload, digest[:], until, until, true, false, 0).AddRow("stream", 2, payload, digest[:], until, until, true, false, 0))
+			dbFault := errors.New("database disconnected")
+			if parentChanged {
+				tenant := &mediapb.TenantAuthority{TenantId: "tenant"}
+				tenantPayload, marshalErr := proto.Marshal(tenant)
+				if marshalErr != nil {
+					t.Fatal(marshalErr)
+				}
+				tenantHash := sha256.Sum256(tenantPayload)
+				mock.ExpectQuery("GetLocalTenantSourceAuthority").WithArgs("tenant").WillReturnRows(sqlmock.NewRows([]string{
+					"payload", "payload_sha256", "refresh_after", "valid_until", "authority_version", "local_source_ready",
+				}).AddRow(tenantPayload, tenantHash[:], until, until, 1, true))
+				mock.ExpectQuery("GetLocalMediaObjectAuthorityByInternalName").WithArgs("internal").WillReturnError(dbFault)
+			} else {
+				mock.ExpectQuery("GetLocalTenantSourceAuthority").WithArgs("tenant").WillReturnError(dbFault)
+			}
+			set, err := store.ManagedStreams(context.Background(), "cluster")
+			if set.Complete {
+				t.Fatal("database outage returned a complete desired set")
+			}
+			if !errors.Is(err, dbFault) {
+				t.Fatalf("database outage was treated as per-row corruption: %v", err)
+			}
+			if got := testutil.ToFloat64(metric.WithLabelValues("error")); got != 1 {
+				t.Fatalf("failed sets=%v want1", got)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+			store.fetcher.mu.Lock()
+			refreshes := len(store.fetcher.remembered)
+			store.fetcher.mu.Unlock()
+			if refreshes != 0 {
+				t.Fatalf("database outage scheduled %d per-row refreshes", refreshes)
+			}
+		})
 	}
-	digest := sha256.Sum256(payload)
-	until := store.now().Add(time.Hour)
-	mock.ExpectQuery("ListLocalManagedStreamAuthorities").WillReturnRows(sqlmock.NewRows([]string{
-		"authority_id", "authority_version", "payload", "payload_sha256", "refresh_after", "valid_until",
-		"local_source_ready", "withheld_by_tenant_revival", "tenant_authority_version",
-	}).AddRow("stream", 2, payload, digest[:], until, until, true, false, 0).AddRow("stream", 2, payload, digest[:], until, until, true, false, 0))
-	dbFault := errors.New("database disconnected")
-	mock.ExpectQuery("GetLocalTenantSourceAuthority").WithArgs("tenant").WillReturnError(dbFault)
-	set, err := store.ManagedStreams(context.Background(), "cluster")
-	if set.Complete {
-		t.Fatal("database outage returned a complete desired set")
-	}
-	if !errors.Is(err, dbFault) {
-		t.Fatalf("database outage was treated as per-row corruption: %v", err)
-	}
-	if got := testutil.ToFloat64(metric.WithLabelValues("error")); got != 1 {
-		t.Fatalf("failed sets=%v want1", got)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatal(err)
-	}
+
 }

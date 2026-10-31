@@ -125,7 +125,7 @@ type MediaObjectSnapshot struct {
 func (s *Store) TenantForObject(ctx context.Context, object MediaObjectSnapshot) (TenantSnapshot, error) {
 	tenant, err := s.Tenant(ctx, object.Authority.GetTenantId())
 	if err == nil && tenant.Version != object.ParentVersion {
-		tenant = s.recheckObjectParent(ctx, object, tenant)
+		tenant, err = s.recheckObjectParent(ctx, object, tenant)
 	}
 	return tenant, err
 }
@@ -133,20 +133,24 @@ func (s *Store) TenantForObject(ctx context.Context, object MediaObjectSnapshot)
 func (s *Store) TenantSourceForObject(ctx context.Context, object MediaObjectSnapshot) (TenantSnapshot, error) {
 	tenant, err := s.TenantSource(ctx, object.Authority.GetTenantId())
 	if err == nil && tenant.Version != object.ParentVersion {
-		tenant = s.recheckObjectParent(ctx, object, tenant)
+		tenant, err = s.recheckObjectParent(ctx, object, tenant)
 	}
 	return tenant, err
 }
 
 // A routine parent renewal may land between the two reads. Recheck the same
 // object version locally; a changed object or revival barrier still fails closed.
-func (s *Store) recheckObjectParent(ctx context.Context, object MediaObjectSnapshot, tenant TenantSnapshot) TenantSnapshot {
+func (s *Store) recheckObjectParent(ctx context.Context, object MediaObjectSnapshot, tenant TenantSnapshot) (TenantSnapshot, error) {
 	current, err := s.MediaObjectByInternalName(ctx, object.Authority.GetInternalName())
 	if err != nil || current.AuthorityID != object.AuthorityID || current.Version != object.Version ||
 		current.ParentVersion != tenant.Version || current.Freshness == FreshnessHardExpired {
 		tenant.Freshness = FreshnessHardExpired
 	}
-	return tenant
+	var readErr *authorityStoreReadError
+	if errors.As(err, &readErr) {
+		return tenant, err
+	}
+	return tenant, nil
 }
 
 func (s *Store) MediaObjectByPublishingCredential(ctx context.Context, credential string) (MediaObjectSnapshot, error) {
@@ -261,7 +265,7 @@ func (s *Store) readPairSnapshot(ctx context.Context, row foghorndb.GetLocalRead
 		LocalIngestReady: row.TenantIngestReady, LocalSourceReady: row.TenantSourceReady,
 	})
 	if pair.TenantErr == nil && pair.Tenant.Version != object.ParentVersion {
-		pair.Tenant = s.recheckObjectParent(ctx, object, pair.Tenant)
+		pair.Tenant, pair.TenantErr = s.recheckObjectParent(ctx, object, pair.Tenant)
 	}
 	return pair, nil
 }
@@ -289,7 +293,10 @@ func (s *Store) MediaObjectByInternalName(ctx context.Context, internalName stri
 	}
 	row, err := foghorndb.New(s.db).GetLocalMediaObjectAuthorityByInternalName(ctx, internalName)
 	if err != nil {
-		return MediaObjectSnapshot{}, err
+		if errors.Is(err, sql.ErrNoRows) {
+			return MediaObjectSnapshot{}, err
+		}
+		return MediaObjectSnapshot{}, &authorityStoreReadError{cause: err}
 	}
 	snapshot, err := decodeMediaObjectSnapshot(row.Payload, row.PayloadSha256, row.AuthorityID, row.AuthorityVersion, row.LocalReadReady, row.RefreshAfter, row.ValidUntil, s.now().UTC())
 	snapshot.ParentVersion = row.TenantAuthorityVersion
@@ -315,11 +322,13 @@ func (s *Store) MediaObjectSourceByInternalName(ctx context.Context, internalNam
 	return snapshot, err
 }
 
-// tenantSourceReadError separates an unavailable store from an invalid stored projection.
-type tenantSourceReadError struct{ cause error }
+// authorityStoreReadError separates an unavailable store from an invalid stored projection.
+type authorityStoreReadError struct{ cause error }
 
-func (e *tenantSourceReadError) Error() string { return "read local tenant source: " + e.cause.Error() }
-func (e *tenantSourceReadError) Unwrap() error { return e.cause }
+func (e *authorityStoreReadError) Error() string {
+	return "read local authority store: " + e.cause.Error()
+}
+func (e *authorityStoreReadError) Unwrap() error { return e.cause }
 
 func (s *Store) TenantSource(ctx context.Context, tenantID string) (TenantSnapshot, error) {
 	tenantID = strings.TrimSpace(tenantID)
@@ -331,7 +340,7 @@ func (s *Store) TenantSource(ctx context.Context, tenantID string) (TenantSnapsh
 		if errors.Is(err, sql.ErrNoRows) {
 			return TenantSnapshot{}, err
 		}
-		return TenantSnapshot{}, &tenantSourceReadError{cause: err}
+		return TenantSnapshot{}, &authorityStoreReadError{cause: err}
 	}
 	snapshot := TenantSnapshot{Version: row.AuthorityVersion, SourceReady: row.LocalSourceReady, Freshness: authorityFreshness(s.now().UTC(), row.RefreshAfter, row.ValidUntil), RefreshAfter: row.RefreshAfter, ValidUntil: row.ValidUntil}
 	snapshot.Freshness = s.fencedFreshness(snapshot.Freshness, "tenant", tenantID, false)
