@@ -193,7 +193,8 @@ func (q *Queries) CompleteMollieSubscriptionCheckout(ctx context.Context, arg Co
 
 const completeProviderCheckoutReservation = `-- name: CompleteProviderCheckoutReservation :exec
 UPDATE purser.payment_provider_intents
-SET status = 'succeeded', succeeded_at = COALESCE(succeeded_at, NOW()), updated_at = NOW()
+SET status = 'succeeded', succeeded_at = COALESCE(succeeded_at, NOW()),
+    activated_at = COALESCE(activated_at, NOW()), updated_at = NOW()
 WHERE tenant_id = $1::text::uuid AND id = $2::text::uuid
 `
 

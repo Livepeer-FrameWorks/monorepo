@@ -21,7 +21,7 @@ import (
 
 func assertClosureRefundsOnlyUnactivatedFirstPayment(t *testing.T) {
 	t.Helper()
-	for _, kind := range []string{"unactivated current", "unactivated legacy", "delivered legacy", "delivered legacy with reopened receipt", "cancelled create without activation", "cancelled create already refunded"} {
+	for _, kind := range []string{"unactivated current", "unactivated zero mandate", "unactivated legacy", "delivered legacy", "delivered legacy with reopened receipt", "cancelled create without activation", "cancelled create already refunded"} {
 		t.Run(kind, func(t *testing.T) {
 			db := startProviderReservationDatabase(t)
 			now := time.Now().UTC().Truncate(time.Second)
@@ -32,7 +32,12 @@ func assertClosureRefundsOnlyUnactivatedFirstPayment(t *testing.T) {
 			if _, err := db.ExecContext(t.Context(), `INSERT INTO purser.payment_provider_intents(id,tenant_id,provider,purpose,status,currency,amount_cents,idempotency_key,provider_customer_id,provider_payment_id,expires_at) VALUES($1::uuid,$2,'mollie','mollie_first_payment','provider_open','EUR',2000,$1::text,'customer','initial',NOW()+INTERVAL '1 hour')`, id, tenant.id); err != nil {
 				t.Fatal(err)
 			}
-			if kind == "unactivated current" {
+			if kind == "unactivated zero mandate" {
+				if _, err := db.ExecContext(t.Context(), `UPDATE purser.payment_provider_intents SET amount_cents=0 WHERE tenant_id=$1 AND id=$2`, tenant.id, id); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if kind == "unactivated current" || kind == "unactivated zero mandate" {
 				if err := tenant.svc.completeMollieFirstPayment(t.Context(), tenant.id, "initial", id, billingmollie.MandateInfo{MollieCustomerID: "customer", MollieMandateID: "mandate", Status: "valid", CreatedAt: now}); err != nil {
 					t.Fatal(err)
 				}
@@ -56,7 +61,11 @@ func assertClosureRefundsOnlyUnactivatedFirstPayment(t *testing.T) {
 				if refunded {
 					returned = "20.00"
 				}
-				return 200, map[string]any{"id": "initial", "customerId": "customer", "mandateId": "mandate", "status": "paid", "sequenceType": "first", "createdAt": now.Add(-time.Minute).Format(time.RFC3339), "paidAt": now.Format(time.RFC3339), "amount": map[string]string{"value": "20.00", "currency": "EUR"}, "amountRefunded": map[string]string{"value": returned, "currency": "EUR"}}
+				collected := "20.00"
+				if kind == "unactivated zero mandate" {
+					collected = "0.00"
+				}
+				return 200, map[string]any{"id": "initial", "customerId": "customer", "mandateId": "mandate", "status": "paid", "sequenceType": "first", "createdAt": now.Add(-time.Minute).Format(time.RFC3339), "paidAt": now.Format(time.RFC3339), "amount": map[string]string{"value": collected, "currency": "EUR"}, "amountRefunded": map[string]string{"value": returned, "currency": "EUR"}}
 			})
 			fixture.route("GET", "/v2/customers/customer/subscriptions", func(recordedProviderRequest) (int, any) {
 				subscriptions := []any{}
@@ -99,7 +108,7 @@ func assertClosureRefundsOnlyUnactivatedFirstPayment(t *testing.T) {
 			for range 3 {
 				worker.ProcessBatch(t.Context())
 			}
-			if kind == "cancelled create already refunded" {
+			if kind == "cancelled create already refunded" || kind == "unactivated zero mandate" {
 				row, readErr := purserdb.New(db).GetProviderCheckoutReservation(t.Context(), purserdb.GetProviderCheckoutReservationParams{TenantID: tenant.id, IntentID: id})
 				if readErr != nil || !row.CompensationCurrent || len(fixture.matching("POST", "/v2/payments/initial/refunds")) != 0 {
 					t.Fatalf("confirmed bank return did not resolve ambiguous funding safely: row=%+v err=%v", row, readErr)

@@ -423,7 +423,8 @@ WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid AND id = sqlc.arg(intent_id)::
 -- name: CompleteProviderCheckoutReservation :exec
 -- Activation and receipt settlement commit in the same subscription transaction.
 UPDATE purser.payment_provider_intents
-SET status = 'succeeded', succeeded_at = COALESCE(succeeded_at, NOW()), updated_at = NOW()
+SET status = 'succeeded', succeeded_at = COALESCE(succeeded_at, NOW()),
+    activated_at = COALESCE(activated_at, NOW()), updated_at = NOW()
 WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid AND id = sqlc.arg(intent_id)::text::uuid;
 
 -- name: SetProviderCheckoutDeadline :exec

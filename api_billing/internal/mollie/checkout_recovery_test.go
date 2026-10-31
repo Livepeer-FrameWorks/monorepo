@@ -39,6 +39,19 @@ func TestMollieExpiredReservationRefundsPaidFirstPayment(t *testing.T) {
 	testMollieExpiredReservationRefundsPaidPayment(t, false)
 }
 
+func TestMollieZeroAmountMandateNeedsNoRefundSettlement(t *testing.T) {
+	c := newMollieContractClient(t, func(req *http.Request) (*http.Response, error) {
+		if req.Method != http.MethodGet || req.URL.Path != "/v2/payments/mandate" {
+			t.Fatalf("zero mandate attempted a provider mutation: %s %s", req.Method, req.URL.Path)
+		}
+		return mollieJSONResponse(200, `{"id":"mandate","status":"paid","sequenceType":"first","amount":{"value":"0.00","currency":"USD"}}`), nil
+	})
+	result, err := c.RecoverReservedCheckout(t.Context(), "customer", "reservation", "mandate", "")
+	if err != nil || len(result.RefundSettlements) != 0 {
+		t.Fatalf("zero mandate created an invalid refund obligation: %+v %v", result, err)
+	}
+}
+
 func TestMollieExpiredReservationPreservesPaidSubscriptionPayments(t *testing.T) {
 	testMollieExpiredReservationRefundsPaidPayment(t, true)
 }

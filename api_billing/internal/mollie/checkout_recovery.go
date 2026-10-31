@@ -127,6 +127,11 @@ func (c *Client) cancelReservedPayment(ctx context.Context, intentID, id string,
 			return amountErr
 		}
 		originalCents := remaining.Shift(2).IntPart()
+		if originalCents == 0 {
+			// A zero-amount card mandate establishes collection permission;
+			// it has no bank return or monetary settlement to reconcile.
+			return nil
+		}
 		var chargedBack int64
 		if payment.AmountChargedBack != nil {
 			amount, parseErr := decimal.NewFromString(payment.AmountChargedBack.Value)
