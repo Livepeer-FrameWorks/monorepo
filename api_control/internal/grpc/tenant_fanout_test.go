@@ -24,6 +24,8 @@ type testTenantControlServer struct {
 	invalidateResp *foghorncontrolpb.InvalidateTenantCacheResponse
 	invalidateErr  error
 	terminateWait  bool
+	invalidateWait bool
+	invalidated    chan struct{}
 	terminated     chan struct{}
 }
 
@@ -107,7 +109,14 @@ func TestTerminateTenantStreams_IncludesRecordedDeentitledCells(t *testing.T) {
 	}
 }
 
-func (s *testTenantControlServer) InvalidateTenantCache(context.Context, *foghorncontrolpb.InvalidateTenantCacheRequest) (*foghorncontrolpb.InvalidateTenantCacheResponse, error) {
+func (s *testTenantControlServer) InvalidateTenantCache(ctx context.Context, _ *foghorncontrolpb.InvalidateTenantCacheRequest) (*foghorncontrolpb.InvalidateTenantCacheResponse, error) {
+	if s.invalidateWait {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	if s.invalidated != nil {
+		close(s.invalidated)
+	}
 	return s.invalidateResp, s.invalidateErr
 }
 
@@ -314,5 +323,78 @@ func TestInvalidateTenantCacheRefusesPartialDelivery(t *testing.T) {
 				t.Fatalf("partial delivery reported success: %v", err)
 			}
 		})
+	}
+}
+
+func TestTenantStopUsesBothRecipientSourcesIndependently(t *testing.T) {
+	for _, source := range []string{"no entitlements", "route unavailable", "recorded inventory unavailable", "route hangs", "recorded inventory hangs"} {
+		t.Run(source, func(t *testing.T) {
+			stopped := make(chan struct{})
+			addr := startTenantControlTestServer(t, &testTenantControlServer{terminated: stopped, terminateResp: &foghorncontrolpb.TerminateTenantStreamsResponse{StreamsTerminated: 2}})
+			server := newTenantFanoutTestServer(t, &clusterRoute{clusterID: "recorded", foghornAddr: addr, resolvedAt: time.Now()})
+			db, mock, err := sqlmock.New()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			server.db = db
+			if source == "recorded inventory unavailable" || source == "recorded inventory hangs" {
+				expect := mock.ExpectQuery("ListAccountIngestCells")
+				if source == "recorded inventory hangs" {
+					expect.WillDelayFor(2 * time.Second)
+				}
+				expect.WillReturnError(status.Error(codes.Unavailable, "inventory unavailable"))
+			} else {
+				delete(server.routeCache, "tenant-1")
+				code := codes.NotFound
+				if source == "route unavailable" {
+					code = codes.Unavailable
+				}
+				fake := &quartermasterRoutingFake{routingErr: status.Error(code, "no active entitled cluster")}
+				if source == "route hangs" {
+					fake.routingErr = nil
+					fake.gate = make(chan struct{})
+				}
+				server.quartermasterClient = startQuartermasterRoutingFake(t, fake)
+				mock.ExpectQuery("ListAccountIngestCells").WithArgs("tenant-1", "").WillReturnRows(sqlmock.NewRows([]string{"cell_id"}).AddRow("recorded"))
+				server.foghornDiscovery.Store("recorded", &foghornDiscoveryEntry{at: time.Now(), addrs: []string{addr}})
+			}
+			ctx, cancel := context.WithTimeout(serviceCtx(), time.Second)
+			defer cancel()
+			response, callErr := server.TerminateTenantStreams(ctx, &foghorncontrolpb.TerminateTenantStreamsRequest{TenantId: "tenant-1"})
+			select {
+			case <-stopped:
+			default:
+				t.Fatal("recipient-source failure prevented delivery to a known cell")
+			}
+			if source == "no entitlements" {
+				if callErr != nil || response.GetStreamsTerminated() != 2 {
+					t.Fatalf("authoritative empty entitlement did not deliver recorded cells: %v %v", response, callErr)
+				}
+			} else if status.Code(callErr) != codes.Unavailable || grpcutil.StreamStopProgress(callErr).GetStreamsTerminated() != 2 {
+				t.Fatalf("incomplete recipient inventory lost retry or progress: %v", callErr)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestCacheInvalidationHangingCellDoesNotStarveHealthyCell(t *testing.T) {
+	hanging := startTenantControlTestServer(t, &testTenantControlServer{invalidateWait: true})
+	invalidated := make(chan struct{})
+	healthy := startTenantControlTestServer(t, &testTenantControlServer{invalidated: invalidated, invalidateResp: &foghorncontrolpb.InvalidateTenantCacheResponse{EntriesInvalidated: 3}})
+	server := newTenantFanoutTestServer(t, &clusterRoute{clusterID: "hanging", foghornAddr: hanging, clusterPeers: []*clusterpeerpb.TenantClusterPeer{{ClusterId: "healthy", FoghornGrpcAddr: healthy}}, resolvedAt: time.Now()})
+	ctx, cancel := context.WithTimeout(serviceCtx(), 250*time.Millisecond)
+	defer cancel()
+	_, err := server.InvalidateTenantCache(ctx, &foghorncontrolpb.InvalidateTenantCacheRequest{TenantId: "tenant-1"})
+	select {
+	case <-invalidated:
+	default:
+		t.Fatal("hanging cell prevented healthy-cell cache invalidation")
+	}
+	if status.Code(err) != codes.Unavailable {
+		t.Fatalf("partial invalidation was acknowledged: %v", err)
 	}
 }

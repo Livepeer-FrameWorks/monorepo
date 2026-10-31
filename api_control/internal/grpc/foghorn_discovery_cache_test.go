@@ -116,3 +116,25 @@ func TestApplyMediaAuthorityFailureBurstKeepsDiscovery(t *testing.T) {
 		t.Fatalf("Quartermaster discovery calls = %d across a burst of 8 failed deliveries, want 1", n)
 	}
 }
+
+func TestDiscoverFoghornAddrsBrieflyHonorsCallerCancellation(t *testing.T) {
+	server, fake := newDiscoveryCountingServer(t, 600*time.Millisecond)
+	sharedDone := make(chan []string, 1)
+	go func() { sharedDone <- server.discoverFoghornAddrsBriefly(context.Background(), "cell-b") }()
+	waitFor(t, func() bool { return fake.discovers.Load() == 1 })
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	started := time.Now()
+	if got := server.discoverFoghornAddrsBriefly(ctx, "cell-b"); len(got) != 0 {
+		t.Fatalf("cancelled caller got %v", got)
+	}
+	if elapsed := time.Since(started); elapsed > 200*time.Millisecond {
+		t.Fatalf("cancelled caller waited for shared discovery: %v", elapsed)
+	}
+	if got := <-sharedDone; len(got) != 1 {
+		t.Fatalf("live caller lost shared discovery: %v", got)
+	}
+	if fake.discovers.Load() != 1 {
+		t.Fatal("cancelled caller started another discovery")
+	}
+}

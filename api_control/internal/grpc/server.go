@@ -433,7 +433,7 @@ func (s *CommodoreServer) discoverFoghornAddrsBriefly(ctx context.Context, clust
 			return entry.addrs
 		}
 	}
-	result, err, _ := s.foghornDiscoveryFlight.Do(clusterID, func() (any, error) {
+	resultCh := s.foghornDiscoveryFlight.DoChan(clusterID, func() (any, error) {
 		// The others share this call, so it does not end with the caller that
 		// started it.
 		callCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), foghornDiscoveryTimeout)
@@ -444,11 +444,19 @@ func (s *CommodoreServer) discoverFoghornAddrsBriefly(ctx context.Context, clust
 		}
 		return addrs, nil
 	})
-	addrs, ok := result.([]string)
-	if err != nil || !ok {
+	select {
+	case <-ctx.Done():
 		return nil
+	case result := <-resultCh:
+		if ctx.Err() != nil {
+			return nil
+		}
+		addrs, ok := result.Val.([]string)
+		if result.Err != nil || !ok {
+			return nil
+		}
+		return addrs
 	}
-	return addrs
 }
 
 // forgetFoghornDiscovery drops a cell's answer after a failed delivery so the
@@ -11082,34 +11090,40 @@ func (s *CommodoreServer) DeleteVodAsset(ctx context.Context, req *sharedpb.Dele
 	return resp, nil
 }
 
-// TerminateTenantStreams stops all active streams for a suspended tenant.
-// Called by Purser when prepaid balance drops below -$10.
-// Forwards to Foghorn which sends stop_sessions to affected nodes.
-func (s *CommodoreServer) TerminateTenantStreams(ctx context.Context, req *foghorncontrolpb.TerminateTenantStreamsRequest) (*foghorncontrolpb.TerminateTenantStreamsResponse, error) {
-	if err := requireServiceAuthentication(ctx, "TerminateTenantStreams"); err != nil {
-		return nil, err
+// tenantControlFanoutTargets combines entitlement routing with durable ingest
+// recipients. Either source can fail without suppressing delivery to the other.
+func (s *CommodoreServer) tenantControlFanoutTargets(ctx context.Context, tenantID string) ([]clusterFanoutTarget, error) {
+	// Discovery cannot consume the delivery window of recipients the other
+	// source already knows. Keep two thirds of a caller's budget for fanout.
+	lookupBudget := routeBuildTimeout / 3
+	if deadline, ok := ctx.Deadline(); ok {
+		lookupBudget = min(lookupBudget, time.Until(deadline)/3)
 	}
-	if req.TenantId == "" {
-		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
+	lookupCtx, cancelLookup := context.WithTimeout(ctx, lookupBudget)
+	defer cancelLookup()
+	var route *clusterRoute
+	var cells []string
+	var routeErr, cellsErr error
+	var sources sync.WaitGroup
+	sources.Add(2)
+	go func() { defer sources.Done(); route, routeErr = s.resolveClusterRouteForTenant(lookupCtx, tenantID) }()
+	go func() {
+		defer sources.Done()
+		cells, cellsErr = commodoredb.New(s.db).ListAccountIngestCells(lookupCtx, commodoredb.ListAccountIngestCellsParams{TenantID: tenantID, StreamID: ""})
+	}()
+	sources.Wait()
+	// NotFound is an authoritative empty entitlement set, not an empty ingest set.
+	if status.Code(routeErr) == codes.NotFound {
+		routeErr = nil
 	}
-
-	s.logger.WithFields(logging.Fields{
-		"tenant_id": req.TenantId,
-		"reason":    req.Reason,
-	}).Info("Received tenant stream termination request from Purser")
-
-	// Fan out to ALL clusters the tenant has access to
-	route, err := s.resolveClusterRouteForTenant(ctx, req.TenantId)
-	if err != nil {
-		return nil, err
+	coverageErr := errors.Join(routeErr, cellsErr)
+	if coverageErr != nil {
+		s.routeCacheMu.Lock()
+		delete(s.routeCache, tenantID)
+		s.routeCacheMu.Unlock()
 	}
-
 	targets := buildClusterFanoutTargets(route)
-	cells, err := commodoredb.New(s.db).ListAccountIngestCells(ctx, commodoredb.ListAccountIngestCellsParams{TenantID: req.TenantId, StreamID: ""})
-	if err != nil {
-		return nil, status.Errorf(codes.Unavailable, "read recorded ingest cells: %v", err)
-	}
-	seen := make(map[string]bool, len(targets))
+	seen := map[string]bool{}
 	for _, target := range targets {
 		seen[target.clusterID] = true
 	}
@@ -11123,36 +11137,68 @@ func (s *CommodoreServer) TerminateTenantStreams(ctx context.Context, req *fogho
 			seen[cell] = true
 		}
 	}
+	return targets, coverageErr
+}
 
-	var totalStreams, totalSessions int32
-	var allStreamNames []string
-	var lastErr error
-	failures := 0
-	type stopResult struct {
-		response *foghorncontrolpb.TerminateTenantStreamsResponse
-		err      error
-	}
-	results := make([]stopResult, len(targets))
+type tenantControlDelivery[T any] struct {
+	response T
+	err      error
+}
+
+func dispatchTenantControl[T any](ctx context.Context, s *CommodoreServer, targets []clusterFanoutTarget, deliver func(context.Context, *foghornclient.GRPCClient) (T, error)) []tenantControlDelivery[T] {
+	results := make([]tenantControlDelivery[T], len(targets))
 	var calls sync.WaitGroup
 	for i, target := range targets {
 		calls.Add(1)
 		go func() {
 			defer calls.Done()
 			var client *foghornclient.GRPCClient
-			var dialErr error
 			if target.addr == "" {
-				client, dialErr = s.resolveFoghornForClusterDirect(ctx, target.clusterID)
+				client, results[i].err = s.resolveFoghornForClusterDirect(ctx, target.clusterID)
 			} else {
-				client, dialErr = s.foghornPool.GetOrCreate(foghornPoolKey(target.clusterID, target.addr), target.addr)
+				client, results[i].err = s.foghornPool.GetOrCreate(foghornPoolKey(target.clusterID, target.addr), target.addr)
 			}
-			if dialErr != nil {
-				results[i].err = dialErr
-				return
+			if results[i].err == nil {
+				results[i].response, results[i].err = deliver(ctx, client)
 			}
-			results[i].response, _, results[i].err = client.TerminateTenantStreams(ctx, req.TenantId, req.Reason)
+			if results[i].err != nil {
+				s.forgetFoghornDiscovery(target.clusterID)
+			}
 		}()
 	}
 	calls.Wait()
+	return results
+}
+
+// TerminateTenantStreams delivers a suspended tenant's durable stop to entitled
+// and recorded ingest cells. Partial progress is retained and incomplete coverage retries.
+func (s *CommodoreServer) TerminateTenantStreams(ctx context.Context, req *foghorncontrolpb.TerminateTenantStreamsRequest) (*foghorncontrolpb.TerminateTenantStreamsResponse, error) {
+	if err := requireServiceAuthentication(ctx, "TerminateTenantStreams"); err != nil {
+		return nil, err
+	}
+	if req.TenantId == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
+	}
+
+	s.logger.WithFields(logging.Fields{
+		"tenant_id": req.TenantId,
+		"reason":    req.Reason,
+	}).Info("Received tenant stream termination request from Purser")
+
+	targets, inventoryErr := s.tenantControlFanoutTargets(ctx, req.TenantId)
+
+	var totalStreams, totalSessions int32
+	var allStreamNames []string
+	var lastErr error
+	failures := 0
+	if inventoryErr != nil {
+		failures++
+		lastErr = inventoryErr
+	}
+	results := dispatchTenantControl(ctx, s, targets, func(callCtx context.Context, client *foghornclient.GRPCClient) (*foghorncontrolpb.TerminateTenantStreamsResponse, error) {
+		response, _, callErr := client.TerminateTenantStreams(callCtx, req.TenantId, req.Reason)
+		return response, callErr
+	})
 	for i, result := range results {
 		if result.response != nil {
 			totalStreams += result.response.StreamsTerminated
@@ -11166,7 +11212,6 @@ func (s *CommodoreServer) TerminateTenantStreams(ctx context.Context, req *fogho
 			s.routeCacheMu.Lock()
 			delete(s.routeCache, req.TenantId)
 			s.routeCacheMu.Unlock()
-			s.forgetFoghornDiscovery(targets[i].clusterID)
 			lastErr = result.err
 			failures++
 		}
@@ -11174,7 +11219,7 @@ func (s *CommodoreServer) TerminateTenantStreams(ctx context.Context, req *fogho
 
 	progress := &foghorncontrolpb.TerminateTenantStreamsResponse{StreamsTerminated: totalStreams, SessionsTerminated: totalSessions, StreamNames: allStreamNames}
 	if failures > 0 {
-		s.logger.WithError(lastErr).WithFields(logging.Fields{"tenant_id": req.TenantId, "clusters_failed": failures, "clusters_total": len(targets)}).Warn("Tenant termination remains pending on unreachable clusters")
+		s.logger.WithError(lastErr).WithFields(logging.Fields{"tenant_id": req.TenantId, "pending_failures": failures, "known_cells": len(targets)}).Warn("Tenant termination has incomplete recipient discovery or delivery")
 		return nil, grpcutil.PendingStreamStop(progress)
 	}
 
@@ -11206,52 +11251,35 @@ func (s *CommodoreServer) InvalidateTenantCache(ctx context.Context, req *foghor
 		"reason":    req.Reason,
 	}).Info("Received tenant cache invalidation request from Purser")
 
-	// Fan out to ALL clusters the tenant has access to
-	route, err := s.resolveClusterRouteForTenant(ctx, req.TenantId)
-	if err != nil {
-		return nil, err
-	}
-
-	targets := buildClusterFanoutTargets(route)
-	if len(targets) == 0 {
-		if route != nil && (route.clusterID != "" || route.officialClusterID != "" || len(route.clusterPeers) > 0 || len(route.admissionPeers) > 0 || len(route.foghornAddrsByCluster) > 0) {
-			return nil, status.Error(codes.Unavailable, "tenant has clusters but Foghorn discovery returned no reachable targets")
-		}
-		return &foghorncontrolpb.InvalidateTenantCacheResponse{}, nil
-	}
-
+	targets, inventoryErr := s.tenantControlFanoutTargets(ctx, req.TenantId)
 	var totalInvalidated int32
 	var lastErr error
 	failures := 0
-	expected := missingTenantFanoutCells(route, targets)
-	for id := range expected {
+	if inventoryErr != nil {
 		failures++
-		lastErr = status.Errorf(codes.Unavailable, "configured cell %s has no Foghorn address", id)
+		lastErr = inventoryErr
 	}
-	for _, target := range targets {
-		client, dialErr := s.foghornPool.GetOrCreate(foghornPoolKey(target.clusterID, target.addr), target.addr)
-		if dialErr != nil {
-			s.logger.WithError(dialErr).WithField("cluster_id", target.clusterID).Warn("Failed to connect to cluster for cache invalidation")
-			lastErr = dialErr
-			failures++
-			continue
+	results := dispatchTenantControl(ctx, s, targets, func(callCtx context.Context, client *foghornclient.GRPCClient) (*foghorncontrolpb.InvalidateTenantCacheResponse, error) {
+		response, _, callErr := client.InvalidateTenantCache(callCtx, req.TenantId, req.Reason)
+		return response, callErr
+	})
+	for i, result := range results {
+		if result.response != nil {
+			totalInvalidated += result.response.EntriesInvalidated
 		}
-		foghornResp, _, callErr := client.InvalidateTenantCache(ctx, req.TenantId, req.Reason)
-		if callErr != nil {
-			s.logger.WithError(callErr).WithFields(logging.Fields{
-				"tenant_id":  req.TenantId,
-				"cluster_id": target.clusterID,
-			}).Warn("Failed to invalidate tenant cache on cluster")
-			lastErr = callErr
+		if result.err != nil {
+			s.logger.WithError(result.err).WithFields(logging.Fields{"tenant_id": req.TenantId, "cluster_id": targets[i].clusterID}).Warn("Failed to invalidate tenant cache on cluster")
+			s.routeCacheMu.Lock()
+			delete(s.routeCache, req.TenantId)
+			s.routeCacheMu.Unlock()
+			lastErr = result.err
 			failures++
-			continue
 		}
-		totalInvalidated += foghornResp.EntriesInvalidated
 	}
 
 	if failures > 0 {
-		s.logger.WithError(lastErr).WithFields(logging.Fields{"tenant_id": req.TenantId, "clusters_failed": failures, "clusters_total": len(targets) + len(expected)}).Warn("Tenant cache invalidation is incomplete")
-		return nil, status.Errorf(codes.Unavailable, "cache invalidation did not reach every configured cell: %v", lastErr)
+		s.logger.WithError(lastErr).WithFields(logging.Fields{"tenant_id": req.TenantId, "pending_failures": failures, "known_cells": len(targets)}).Warn("Tenant cache invalidation is incomplete")
+		return nil, status.Errorf(codes.Unavailable, "cache invalidation recipient discovery or delivery is incomplete: %v", lastErr)
 	}
 
 	s.logger.WithFields(logging.Fields{

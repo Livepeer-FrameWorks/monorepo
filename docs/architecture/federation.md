@@ -493,8 +493,13 @@ deadline still caps the whole operation.
 #### Tenant Operations Fan-Out
 
 `TerminateTenantStreams` and the legacy `InvalidateTenantCache` compatibility
-signal fan out to all clusters the tenant has access to, not just the primary
-cluster. Signed tenant/object replacements use a separate durable per-cell
+signal fan out concurrently to entitled cells and recorded ingest cells, not
+just the primary cluster. Entitlement routing and ingest inventory are independent:
+a failure in one still delivers to recipients known through the other, with
+incomplete coverage remaining pending. A missing entitlement route does not hide
+recorded ingest. Recorded cells remain targets after entitlement ends; a
+permanently removed cell remains pending because cluster retirement is not
+implemented. Signed tenant/object replacements use a separate durable per-cell
 delivery ledger that also targets historical recipient cells. An invalidation
 cannot delete or replace signed authority; partial compatibility fan-out failure
 therefore does not turn still-valid authority into unknown state.

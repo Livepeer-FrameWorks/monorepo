@@ -140,8 +140,12 @@ tenant's primary cluster. This uses a **push+forward** model:
    unavailable peer does not consume the next peer's timeout window.
 
 **Tenant suspension** (`TerminateTenantStreams`, `InvalidateTenantCache`) fans out
-to **all clusters** the tenant has access to, ensuring streams are terminated and
-caches invalidated everywhere.
+concurrently to entitled cells and cells recorded on the tenant's streams. Each
+recipient source is independent: a missing entitlement cannot hide a recorded
+publisher, and an inventory failure still permits delivery to known route cells.
+Incomplete discovery or delivery remains pending. Recorded cells stay targets
+after entitlement ends; without cluster retirement, a permanently removed cell
+keeps its stop and the aggregated alert pending.
 
 ---
 
