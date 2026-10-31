@@ -75,6 +75,31 @@ func TestReservePendingViewerByAttemptID(t *testing.T) {
 	}
 }
 
+func TestReleasePendingViewerKeepsOtherAttemptsAndActiveViewers(t *testing.T) {
+	sm := setupStateManager(t)
+	configureTestNode(sm, "node")
+	sm.ReservePendingViewer("redirect", "node", "stream")
+	sm.ReservePendingViewer("direct", "node", "stream")
+	sm.ReleasePendingViewer("direct", "other-node", "stream")
+	sm.ReleasePendingViewer("direct", "node", "other-stream")
+	if sm.GetNodeState("node").PendingRedirects != 2 {
+		t.Fatal("release removed a different connection's reservation")
+	}
+	sm.ReleasePendingViewer("direct", "node", "stream")
+	sm.ReleasePendingViewer("direct", "node", "stream")
+	if node := sm.GetNodeState("node"); node.PendingRedirects != 1 || node.AddBandwidth == 0 {
+		t.Fatal("release removed another attempt or released twice")
+	}
+	sm.StartVirtualViewerByID("redirect", "node", "stream", "203.0.113.1")
+	sm.ReleasePendingViewer("redirect", "node", "stream")
+	viewers := sm.GetVirtualViewersForNode("node")
+	for _, viewer := range viewers {
+		if viewer.ID == "redirect" && viewer.State != VirtualViewerActive {
+			t.Fatal("release removed an active viewer")
+		}
+	}
+}
+
 func TestCreateVirtualViewer_SaturatesAddBandwidth(t *testing.T) {
 	sm := setupStateManager(t)
 	nodeID := "node-1"

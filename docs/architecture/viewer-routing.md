@@ -116,6 +116,15 @@ playlist, each variant playlist, and every segment and part, on fresh and
 keep-alive connections alike. Foghorn decides the first request of a session and
 the session's `USER_NEW`; the edge answers the session's later requests itself.
 
+For a new viewer, `PLAY_REWRITE` admits and prepares the exact connected edge
+before returning the runtime name. Direct edge URLs can therefore start a
+cross-cell pull, including after an earlier replica ended and its pull was
+cleared. Preparation uses current authority and source ownership to create a
+new physical attempt; `STREAM_SOURCE` continues to refuse cleared attempts and
+retired credentials. This connection creates no redirect, so its preparation's
+temporary bandwidth reservation is released and normal connected-viewer
+accounting applies. `USER_NEW` rechecks admission without preparing media again.
+
 - **Grant.** When Foghorn admits a viewer on ready signed authority, it sends the
   serving edge a `PlaybackGrant` for the stream over the control stream, before
   the `PLAY_REWRITE` answer. The grant maps the requested names (playback ID,

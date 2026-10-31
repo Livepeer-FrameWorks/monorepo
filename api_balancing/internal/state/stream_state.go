@@ -4538,6 +4538,23 @@ func (sm *StreamStateManager) ReservePendingViewer(viewerID, nodeID, streamName 
 	return true
 }
 
+// ReleasePendingViewer drops only this preparation's unconsumed reservation.
+// An already connected viewer and other attempts retain their accounting.
+func (sm *StreamStateManager) ReleasePendingViewer(viewerID, nodeID, streamName string) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	viewer := sm.virtualViewers[viewerID]
+	if viewer == nil || viewer.State != VirtualViewerPending || viewer.NodeID != nodeID || viewer.StreamName != streamName {
+		return
+	}
+	viewer.State = VirtualViewerAbandoned
+	viewer.DisconnectTime = time.Now()
+	sm.reconcilePendingViewersLocked(nodeID)
+	if node := sm.nodes[nodeID]; node != nil {
+		sm.recomputeNodeScoresLocked(node)
+	}
+}
+
 func (sm *StreamStateManager) createVirtualViewerLocked(nodeID, streamName, clientIP string) string {
 	return sm.createVirtualViewerWithIDLocked(uuid.New().String(), nodeID, streamName, clientIP)
 }

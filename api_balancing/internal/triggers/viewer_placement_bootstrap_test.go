@@ -17,13 +17,16 @@ func (placementOnlyReader) Placement(context.Context, string, string, string) (l
 }
 
 func TestConfigureLiveViewerPlacementAdmissionUsesPublicRuntime(t *testing.T) {
-	for _, missing := range []string{"none", "runtime", "gate", "source", "gate-cell", "source-cell", "authority", "internal-name-lookup", "router", "already-installed"} {
+	for _, missing := range []string{"none", "runtime", "gate", "source", "gate-cell", "source-cell", "authority", "internal-name-lookup", "router", "preparer", "already-installed"} {
 		t.Run(missing, func(t *testing.T) {
 			processor := newTestProcessor(t)
 			observe := func(context.Context, balancer.PlacementCell, balancer.PlacementRouteRequest) (balancer.PlacementCellObservation, error) {
 				return balancer.PlacementCellObservation{}, errors.New("unused")
 			}
-			gate := &federation.PlacementPolicyGate{CellID: "cell", Authority: viewerPlacementPairReader{}, Router: balancer.PlacementRouter{Observe: observe}}
+			gate := &federation.PlacementPolicyGate{CellID: "cell", Authority: viewerPlacementPairReader{}, Router: balancer.PlacementRouter{Observe: observe,
+				Prepare: func(context.Context, balancer.PlacementCell, balancer.PlacementPreparationRequest) (balancer.PlacementPreparationResult, error) {
+					return balancer.PlacementPreparationResult{}, errors.New("unused")
+				}}}
 			runtime := &federation.LivePublicPlacementRuntime{Gate: gate, Source: &federation.MediaPlacementPaths{Push: &federation.LivePushPlacementPaths{CellID: "cell"}}}
 			switch missing {
 			case "runtime":
@@ -42,6 +45,8 @@ func TestConfigureLiveViewerPlacementAdmissionUsesPublicRuntime(t *testing.T) {
 				gate.Authority = placementOnlyReader{}
 			case "router":
 				gate.Router.Observe = nil
+			case "preparer":
+				gate.Router.Prepare = nil
 			case "already-installed":
 				processor.SetViewerPlacementAdmission(func(context.Context, ViewerPlacementConnection) (federation.PlacementAdmissionDecision, error) {
 					return federation.PlacementAdmissionDecision{}, errors.New("existing")

@@ -677,6 +677,30 @@ func placementDestinationKey(cluster, node string) string {
 	return fmt.Sprintf("%d:%s%s", len(cluster), cluster, node)
 }
 
+// PrepareExact prepares a destination already admitted by policy. It cannot
+// choose a different node; a refusal or mismatched acknowledgement fails closed.
+func (router PlacementRouter) PrepareExact(ctx context.Context, cell PlacementCell, req PlacementPreparationRequest) (PlacementPreparationResult, error) {
+	if router.Prepare == nil {
+		return PlacementPreparationResult{}, ErrPlacementUnavailable
+	}
+	ctx, cancel := context.WithDeadline(ctx, req.ExpiresAt)
+	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return PlacementPreparationResult{}, err
+	}
+	result, err := router.Prepare(ctx, cell, req)
+	if err != nil {
+		return PlacementPreparationResult{}, err
+	}
+	if err = ctx.Err(); err != nil {
+		return PlacementPreparationResult{}, err
+	}
+	if !preparationMatches(req, result, router.now()) || result.Outcome != PlacementAccepted || result.Endpoint == "" {
+		return PlacementPreparationResult{}, ErrPlacementPreparation
+	}
+	return result, nil
+}
+
 func preparationMatches(req PlacementPreparationRequest, result PlacementPreparationResult, now time.Time) bool {
 	return result.TenantID == req.Route.TenantID && result.ObjectID == req.Route.ObjectID && result.SourceGeneration == req.Route.SourceGeneration &&
 		result.ClusterID == req.Choice.ClusterID && result.NodeID == req.Choice.NodeID && result.Protocol == req.Route.Protocol &&

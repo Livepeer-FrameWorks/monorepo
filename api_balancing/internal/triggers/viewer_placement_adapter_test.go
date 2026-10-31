@@ -37,6 +37,7 @@ func TestViewerPlacementAdapterTrustedInputsAndLifetime(t *testing.T) {
 		"expired generation", "unbounded generation", "canceled", "canceled authority", "canceled source",
 		"tenant changed after source", "object changed after source",
 		"source changed after decision", "source disappeared after decision", "source expiry shortened", "source canceled after decision",
+		"pre-source", "pre-source denied", "prepare error", "prepare wrong node", "prepare expired", "prepare refused", "prepare shorter", "prepare missing", "prepare canceled", "source changed during preparation",
 	} {
 		t.Run(scenario, func(t *testing.T) {
 			now := time.Now()
@@ -46,6 +47,7 @@ func TestViewerPlacementAdapterTrustedInputsAndLifetime(t *testing.T) {
 			defer cancel()
 			var observed atomic.Int32
 			var reads, sources int
+			prepared := 0
 			sourceUntil := now.Add(10 * time.Second)
 			adapter := &ViewerPlacementAdapter{GeoIP: &geoip.Reader{}, GeoCache: cache.New(cache.Options{TTL: time.Minute, MaxEntries: 16}, cache.MetricsHooks{})}
 			adapter.GeoCache.Set(connection.ClientAddress, &geoip.GeoData{Latitude: 40.7, Longitude: -74}, time.Minute)
@@ -69,7 +71,7 @@ func TestViewerPlacementAdapterTrustedInputsAndLifetime(t *testing.T) {
 				sources++
 				if sources == 2 {
 					switch scenario {
-					case "source changed after decision":
+					case "source changed after decision", "source changed during preparation":
 						return "replacement-generation", sourceUntil, nil
 					case "source disappeared after decision":
 						return "", time.Time{}, errors.New("source withdrawn")
@@ -129,10 +131,39 @@ func TestViewerPlacementAdapterTrustedInputsAndLifetime(t *testing.T) {
 						ObservedAt: now, ExpiresAt: until, Capacity: placement.CapacityAvailable, BWAvailable: 100, BWLimit: 1000,
 						RAMUsed: 1, RAMMax: 100, Presence: placement.Present, SourceFeasible: true, Location: &placement.Coordinates{Latitude: 40.7, Longitude: -74},
 					}}}, nil
+				}, Prepare: func(_ context.Context, cell balancer.PlacementCell, request balancer.PlacementPreparationRequest) (balancer.PlacementPreparationResult, error) {
+					prepared++
+					if cell.ID != "us-cell" || request.Route.Location == nil || *request.Route.Location != (placement.Coordinates{Latitude: 40.7, Longitude: -74}) {
+						t.Fatal("preparation lost admitted geography or destination cell")
+					}
+					result := viewerReopenPreparation(request)
+					switch scenario {
+					case "prepare error":
+						return result, errors.New("source notification failed")
+					case "prepare wrong node":
+						result.NodeID = "other"
+					case "prepare expired":
+						result.ExpiresAt = now.Add(-time.Second)
+					case "prepare refused":
+						result.Outcome = balancer.PlacementSourceUnavailable
+					case "prepare shorter":
+						result.ExpiresAt = now.Add(5 * time.Second)
+					case "prepare canceled":
+						cancel()
+					}
+					return result, nil
 				}}}
-			want := scenario == "valid" || scenario == "mapped IPv4" || scenario == "unknown geo unbounded" || scenario == "source expiry shortened"
+			want := scenario == "valid" || scenario == "mapped IPv4" || scenario == "unknown geo unbounded" || scenario == "source expiry shortened" || scenario == "pre-source" || scenario == "prepare shorter"
 			preReadFailure := false
 			switch scenario {
+			case "pre-source", "pre-source denied", "prepare error", "prepare wrong node", "prepare expired", "prepare refused", "prepare shorter", "prepare missing", "prepare canceled", "source changed during preparation":
+				connection.PreSource, connection.Connector = true, "HLS"
+				if scenario == "prepare missing" {
+					adapter.Gate.Router.Prepare = nil
+				}
+				if scenario == "pre-source denied" {
+					adapter.GeoCache.Set(connection.ClientAddress, &geoip.GeoData{Latitude: 52, Longitude: 4}, time.Minute)
+				}
 			case "mapped IPv4":
 				connection.ClientAddress = "::ffff:203.0.113.1"
 			case "unknown geo unbounded", "unknown geo bounded":
@@ -164,13 +195,21 @@ func TestViewerPlacementAdapterTrustedInputsAndLifetime(t *testing.T) {
 				preReadFailure = true
 			}
 			decision, err := adapter.AdmitViewer(ctx, connection)
+			wantPrepared := connection.PreSource && scenario != "pre-source denied" && scenario != "prepare missing"
+			if (prepared == 1) != wantPrepared {
+				t.Fatalf("preparation calls=%d, want preparation=%t", prepared, wantPrepared)
+			}
 			if (err == nil) != want {
 				t.Fatalf("unexpected admission: %+v %v", decision, err)
 			}
 			if !want && decision != (federation.PlacementAdmissionDecision{}) {
 				t.Fatalf("failed admission returned usable decision: %+v", decision)
 			}
-			if want && (decision.Protocol != "hls" || decision.SourceGeneration != "owner-generation" || !decision.ExpiresAt.Equal(sourceUntil) || observed.Load() != 1) {
+			decisionUntil := sourceUntil
+			if scenario == "prepare shorter" {
+				decisionUntil = now.Add(5 * time.Second)
+			}
+			if want && (decision.Protocol != "hls" || decision.SourceGeneration != "owner-generation" || !decision.ExpiresAt.Equal(decisionUntil) || observed.Load() != 1) {
 				t.Fatalf("decision lost source/protocol/expiry: %+v observations=%d", decision, observed.Load())
 			}
 			if want && (decision.TenantAuthorityVersion != pair.Tenant.Version || decision.ObjectAuthorityVersion != pair.Object.Version) {

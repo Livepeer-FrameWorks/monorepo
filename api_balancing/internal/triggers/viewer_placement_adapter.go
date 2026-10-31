@@ -9,6 +9,7 @@ import (
 	"frameworks/api_balancing/internal/balancer"
 	"frameworks/api_balancing/internal/federation"
 	localauthority "frameworks/api_balancing/internal/mediaauthority"
+	"frameworks/api_balancing/internal/state"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/cache"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/placement"
@@ -84,6 +85,43 @@ func (adapter *ViewerPlacementAdapter) AdmitViewer(ctx context.Context, connecti
 	decision, err := adapter.Gate.Admit(ctx, input)
 	if err != nil {
 		return federation.PlacementAdmissionDecision{}, err
+	}
+	if connection.PreSource {
+		// A direct viewer may arrive after its previous replica was cleared.
+		// Prepare a current exact-node attempt before Mist asks STREAM_SOURCE;
+		// the retired pull remains fenced until preparation replaces it.
+		attempt, attemptErr := placement.NewPreparationAttemptID(time.Now())
+		if attemptErr != nil {
+			return federation.PlacementAdmissionDecision{}, attemptErr
+		}
+		// This connection is accounted by PLAY_REWRITE itself, without a new
+		// redirect. Release its preparation reservation even on a failed reply.
+		defer state.DefaultManager().ReleasePendingViewer(attempt, connection.NodeID, connection.InternalName)
+		until := decision.ExpiresAt
+		if sourceUntil.Before(until) {
+			until = sourceUntil
+		}
+		var cell balancer.PlacementCell
+		for _, candidate := range authority.Cells {
+			if candidate.ID == adapter.Gate.CellID {
+				cell = candidate
+				break
+			}
+		}
+		prepared, prepareErr := adapter.Gate.Router.PrepareExact(ctx, cell, balancer.PlacementPreparationRequest{
+			Route: balancer.PlacementRouteRequest{TenantID: decision.TenantID, ObjectID: decision.ObjectID, InternalName: decision.InternalName,
+				Verb: placement.Serve, Protocol: decision.Protocol, SourceGeneration: decision.SourceGeneration, Policy: authority.Policy,
+				PolicyDigest: decision.PolicyDigest, PolicyRevision: decision.PolicyRevision, ParentRevision: decision.ParentRevision,
+				TenantAuthorityVersion: decision.TenantAuthorityVersion, ObjectAuthorityVersion: decision.ObjectAuthorityVersion,
+				Cells: authority.Cells, Location: input.Location},
+			Choice: placement.Choice{ClusterID: connection.ClusterID, NodeID: connection.NodeID}, AttemptID: attempt, ExpiresAt: until,
+		})
+		if prepareErr != nil {
+			return federation.PlacementAdmissionDecision{}, prepareErr
+		}
+		if prepared.ExpiresAt.Before(decision.ExpiresAt) {
+			decision.ExpiresAt = prepared.ExpiresAt
+		}
 	}
 	// Global observation can span a publisher replacement or withdrawal. Recheck
 	// the owner-derived generation without repeating the placement census.

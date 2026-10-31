@@ -17,7 +17,7 @@ func (p *Processor) ConfigureLiveViewerPlacementAdmission(runtime *federation.Li
 		return errors.New("viewer placement admission dependencies are unavailable or already configured")
 	}
 	sourceCell, sourceErr := runtime.Source.CellID()
-	if runtime.Gate.CellID == "" || runtime.Gate.Authority == nil || runtime.Gate.Router.Observe == nil || sourceErr != nil || sourceCell != runtime.Gate.CellID {
+	if runtime.Gate.CellID == "" || runtime.Gate.Authority == nil || runtime.Gate.Router.Observe == nil || runtime.Gate.Router.Prepare == nil || sourceErr != nil || sourceCell != runtime.Gate.CellID {
 		return errors.New("viewer placement admission requires a cell-bound policy gate and source paths")
 	}
 	authority, ok := runtime.Gate.Authority.(ViewerPlacementAuthorityReader)

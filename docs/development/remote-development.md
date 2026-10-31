@@ -95,6 +95,13 @@ scripts/remote-dev.sh run stack-1 bash -lc 'STACK_SLOT=1 STACK_REUSE=1 STACK_KEE
 existing slot's Mist build is used. A failed stack run keeps its compose logs
 under the slot's `.stack/` directory for diagnosis.
 
+Default scenario 48 provisions two system-owned managed executable inputs with
+expiring cluster-access grants. In both directions it opens the public playback
+alias directly on the remote edge, restarts that edge's MistServer, waits for
+the old replica pull to clear, and reopens the same alias without `/play`.
+Both plays must return TS bytes and reopening must use a new physical attempt.
+The fixtures are removed afterward. It runs only on the isolated stack.
+
 Scenario 27 uses real API traffic, Periscope reports, operator billing commands,
 and billing PDF downloads. Its stack-only Go driver expires the disposable
 tenant's returned prepaid phase at the last closed metering window, calls
