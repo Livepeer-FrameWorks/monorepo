@@ -74,10 +74,8 @@ type AbortVodUploadAbortVodUploadAbortVodUploadResult interface {
 
 func (v *AbortVodUploadAbortVodUploadAuthError) implementsGraphQLInterfaceAbortVodUploadAbortVodUploadAbortVodUploadResult() {
 }
-
 func (v *AbortVodUploadAbortVodUploadDeleteSuccess) implementsGraphQLInterfaceAbortVodUploadAbortVodUploadAbortVodUploadResult() {
 }
-
 func (v *AbortVodUploadAbortVodUploadNotFoundError) implementsGraphQLInterfaceAbortVodUploadAbortVodUploadAbortVodUploadResult() {
 }
 
@@ -723,13 +721,10 @@ type AcceptClusterInviteAcceptClusterInviteClusterSubscriptionResult interface {
 
 func (v *AcceptClusterInviteAcceptClusterInviteAuthError) implementsGraphQLInterfaceAcceptClusterInviteAcceptClusterInviteClusterSubscriptionResult() {
 }
-
 func (v *AcceptClusterInviteAcceptClusterInviteClusterSubscription) implementsGraphQLInterfaceAcceptClusterInviteAcceptClusterInviteClusterSubscriptionResult() {
 }
-
 func (v *AcceptClusterInviteAcceptClusterInviteNotFoundError) implementsGraphQLInterfaceAcceptClusterInviteAcceptClusterInviteClusterSubscriptionResult() {
 }
-
 func (v *AcceptClusterInviteAcceptClusterInviteValidationError) implementsGraphQLInterfaceAcceptClusterInviteAcceptClusterInviteClusterSubscriptionResult() {
 }
 
@@ -1381,13 +1376,10 @@ type AcknowledgeIncidentAcknowledgeIncidentIncidentMutationResult interface {
 
 func (v *AcknowledgeIncidentAcknowledgeIncidentAuthError) implementsGraphQLInterfaceAcknowledgeIncidentAcknowledgeIncidentIncidentMutationResult() {
 }
-
 func (v *AcknowledgeIncidentAcknowledgeIncident) implementsGraphQLInterfaceAcknowledgeIncidentAcknowledgeIncidentIncidentMutationResult() {
 }
-
 func (v *AcknowledgeIncidentAcknowledgeIncidentNotFoundError) implementsGraphQLInterfaceAcknowledgeIncidentAcknowledgeIncidentIncidentMutationResult() {
 }
-
 func (v *AcknowledgeIncidentAcknowledgeIncidentValidationError) implementsGraphQLInterfaceAcknowledgeIncidentAcknowledgeIncidentIncidentMutationResult() {
 }
 
@@ -2040,13 +2032,10 @@ type AddIncidentNoteAddIncidentNoteIncidentMutationResult interface {
 
 func (v *AddIncidentNoteAddIncidentNoteAuthError) implementsGraphQLInterfaceAddIncidentNoteAddIncidentNoteIncidentMutationResult() {
 }
-
 func (v *AddIncidentNoteAddIncidentNoteIncident) implementsGraphQLInterfaceAddIncidentNoteAddIncidentNoteIncidentMutationResult() {
 }
-
 func (v *AddIncidentNoteAddIncidentNoteNotFoundError) implementsGraphQLInterfaceAddIncidentNoteAddIncidentNoteIncidentMutationResult() {
 }
-
 func (v *AddIncidentNoteAddIncidentNoteValidationError) implementsGraphQLInterfaceAddIncidentNoteAddIncidentNoteIncidentMutationResult() {
 }
 
@@ -2580,13 +2569,10 @@ type ApplyClusterMediaConsentChangeApplyClusterMediaConsentChangeMediaCapacityCo
 
 func (v *ApplyClusterMediaConsentChangeApplyClusterMediaConsentChangeAuthError) implementsGraphQLInterfaceApplyClusterMediaConsentChangeApplyClusterMediaConsentChangeMediaCapacityConsentChangeResult() {
 }
-
 func (v *ApplyClusterMediaConsentChangeApplyClusterMediaConsentChangeMediaCapacityConsentChange) implementsGraphQLInterfaceApplyClusterMediaConsentChangeApplyClusterMediaConsentChangeMediaCapacityConsentChangeResult() {
 }
-
 func (v *ApplyClusterMediaConsentChangeApplyClusterMediaConsentChangeMediaPlacementError) implementsGraphQLInterfaceApplyClusterMediaConsentChangeApplyClusterMediaConsentChangeMediaCapacityConsentChangeResult() {
 }
-
 func (v *ApplyClusterMediaConsentChangeApplyClusterMediaConsentChangeNotFoundError) implementsGraphQLInterfaceApplyClusterMediaConsentChangeApplyClusterMediaConsentChangeMediaCapacityConsentChangeResult() {
 }
 
@@ -3182,13 +3168,10 @@ type ApplyMediaPlacementChangeApplyMediaPlacementChangeMediaPlacementChangeResul
 
 func (v *ApplyMediaPlacementChangeApplyMediaPlacementChangeAuthError) implementsGraphQLInterfaceApplyMediaPlacementChangeApplyMediaPlacementChangeMediaPlacementChangeResult() {
 }
-
 func (v *ApplyMediaPlacementChangeApplyMediaPlacementChange) implementsGraphQLInterfaceApplyMediaPlacementChangeApplyMediaPlacementChangeMediaPlacementChangeResult() {
 }
-
 func (v *ApplyMediaPlacementChangeApplyMediaPlacementChangeMediaPlacementError) implementsGraphQLInterfaceApplyMediaPlacementChangeApplyMediaPlacementChangeMediaPlacementChangeResult() {
 }
-
 func (v *ApplyMediaPlacementChangeApplyMediaPlacementChangeNotFoundError) implementsGraphQLInterfaceApplyMediaPlacementChangeApplyMediaPlacementChangeMediaPlacementChangeResult() {
 }
 
@@ -3851,13 +3834,10 @@ type ApproveClusterSubscriptionApproveClusterSubscriptionClusterSubscriptionResu
 
 func (v *ApproveClusterSubscriptionApproveClusterSubscriptionAuthError) implementsGraphQLInterfaceApproveClusterSubscriptionApproveClusterSubscriptionClusterSubscriptionResult() {
 }
-
 func (v *ApproveClusterSubscriptionApproveClusterSubscription) implementsGraphQLInterfaceApproveClusterSubscriptionApproveClusterSubscriptionClusterSubscriptionResult() {
 }
-
 func (v *ApproveClusterSubscriptionApproveClusterSubscriptionNotFoundError) implementsGraphQLInterfaceApproveClusterSubscriptionApproveClusterSubscriptionClusterSubscriptionResult() {
 }
-
 func (v *ApproveClusterSubscriptionApproveClusterSubscriptionValidationError) implementsGraphQLInterfaceApproveClusterSubscriptionApproveClusterSubscriptionClusterSubscriptionResult() {
 }
 
@@ -6354,13 +6334,10 @@ type AssignIncidentAssignIncidentIncidentMutationResult interface {
 
 func (v *AssignIncidentAssignIncidentAuthError) implementsGraphQLInterfaceAssignIncidentAssignIncidentIncidentMutationResult() {
 }
-
 func (v *AssignIncidentAssignIncident) implementsGraphQLInterfaceAssignIncidentAssignIncidentIncidentMutationResult() {
 }
-
 func (v *AssignIncidentAssignIncidentNotFoundError) implementsGraphQLInterfaceAssignIncidentAssignIncidentIncidentMutationResult() {
 }
-
 func (v *AssignIncidentAssignIncidentValidationError) implementsGraphQLInterfaceAssignIncidentAssignIncidentIncidentMutationResult() {
 }
 
@@ -8551,10 +8528,8 @@ type BootstrapEdgeBootstrapEdgeBootstrapEdgeResult interface {
 
 func (v *BootstrapEdgeBootstrapEdgeAuthError) implementsGraphQLInterfaceBootstrapEdgeBootstrapEdgeBootstrapEdgeResult() {
 }
-
 func (v *BootstrapEdgeBootstrapEdgeBootstrapEdgeResponse) implementsGraphQLInterfaceBootstrapEdgeBootstrapEdgeBootstrapEdgeResult() {
 }
-
 func (v *BootstrapEdgeBootstrapEdgeValidationError) implementsGraphQLInterfaceBootstrapEdgeBootstrapEdgeBootstrapEdgeResult() {
 }
 
@@ -9428,10 +9403,8 @@ type ChangeBillingTierChangeBillingTierChangeBillingTierResult interface {
 
 func (v *ChangeBillingTierChangeBillingTierAuthError) implementsGraphQLInterfaceChangeBillingTierChangeBillingTierChangeBillingTierResult() {
 }
-
 func (v *ChangeBillingTierChangeBillingTierChangeBillingTierPayload) implementsGraphQLInterfaceChangeBillingTierChangeBillingTierChangeBillingTierResult() {
 }
-
 func (v *ChangeBillingTierChangeBillingTierValidationError) implementsGraphQLInterfaceChangeBillingTierChangeBillingTierChangeBillingTierResult() {
 }
 
@@ -12671,13 +12644,10 @@ type CompleteVodUploadCompleteVodUploadCompleteVodUploadResult interface {
 
 func (v *CompleteVodUploadCompleteVodUploadAuthError) implementsGraphQLInterfaceCompleteVodUploadCompleteVodUploadCompleteVodUploadResult() {
 }
-
 func (v *CompleteVodUploadCompleteVodUploadNotFoundError) implementsGraphQLInterfaceCompleteVodUploadCompleteVodUploadCompleteVodUploadResult() {
 }
-
 func (v *CompleteVodUploadCompleteVodUploadValidationError) implementsGraphQLInterfaceCompleteVodUploadCompleteVodUploadCompleteVodUploadResult() {
 }
-
 func (v *CompleteVodUploadCompleteVodUploadVodAsset) implementsGraphQLInterfaceCompleteVodUploadCompleteVodUploadCompleteVodUploadResult() {
 }
 
@@ -15219,11 +15189,9 @@ type CreateClipCreateClipCreateClipResult interface {
 
 func (v *CreateClipCreateClipAuthError) implementsGraphQLInterfaceCreateClipCreateClipCreateClipResult() {
 }
-
 func (v *CreateClipCreateClip) implementsGraphQLInterfaceCreateClipCreateClipCreateClipResult() {}
 func (v *CreateClipCreateClipNotFoundError) implementsGraphQLInterfaceCreateClipCreateClipCreateClipResult() {
 }
-
 func (v *CreateClipCreateClipValidationError) implementsGraphQLInterfaceCreateClipCreateClipCreateClipResult() {
 }
 
@@ -15869,13 +15837,10 @@ type CreateClusterInviteCreateClusterInviteCreateClusterInviteResult interface {
 
 func (v *CreateClusterInviteCreateClusterInviteAuthError) implementsGraphQLInterfaceCreateClusterInviteCreateClusterInviteCreateClusterInviteResult() {
 }
-
 func (v *CreateClusterInviteCreateClusterInvite) implementsGraphQLInterfaceCreateClusterInviteCreateClusterInviteCreateClusterInviteResult() {
 }
-
 func (v *CreateClusterInviteCreateClusterInviteNotFoundError) implementsGraphQLInterfaceCreateClusterInviteCreateClusterInviteCreateClusterInviteResult() {
 }
-
 func (v *CreateClusterInviteCreateClusterInviteValidationError) implementsGraphQLInterfaceCreateClusterInviteCreateClusterInviteCreateClusterInviteResult() {
 }
 
@@ -16447,10 +16412,8 @@ type CreateConversationCreateConversationCreateConversationResult interface {
 
 func (v *CreateConversationCreateConversationAuthError) implementsGraphQLInterfaceCreateConversationCreateConversationCreateConversationResult() {
 }
-
 func (v *CreateConversationCreateConversation) implementsGraphQLInterfaceCreateConversationCreateConversationCreateConversationResult() {
 }
-
 func (v *CreateConversationCreateConversationValidationError) implementsGraphQLInterfaceCreateConversationCreateConversationCreateConversationResult() {
 }
 
@@ -17104,13 +17067,10 @@ type CreateDeveloperTokenCreateDeveloperTokenCreateDeveloperTokenResult interfac
 
 func (v *CreateDeveloperTokenCreateDeveloperTokenAuthError) implementsGraphQLInterfaceCreateDeveloperTokenCreateDeveloperTokenCreateDeveloperTokenResult() {
 }
-
 func (v *CreateDeveloperTokenCreateDeveloperToken) implementsGraphQLInterfaceCreateDeveloperTokenCreateDeveloperTokenCreateDeveloperTokenResult() {
 }
-
 func (v *CreateDeveloperTokenCreateDeveloperTokenRateLimitError) implementsGraphQLInterfaceCreateDeveloperTokenCreateDeveloperTokenCreateDeveloperTokenResult() {
 }
-
 func (v *CreateDeveloperTokenCreateDeveloperTokenValidationError) implementsGraphQLInterfaceCreateDeveloperTokenCreateDeveloperTokenCreateDeveloperTokenResult() {
 }
 
@@ -17632,10 +17592,8 @@ type CreateEdgeClusterCreateEdgeClusterCreateEdgeClusterResult interface {
 
 func (v *CreateEdgeClusterCreateEdgeClusterAuthError) implementsGraphQLInterfaceCreateEdgeClusterCreateEdgeClusterCreateEdgeClusterResult() {
 }
-
 func (v *CreateEdgeClusterCreateEdgeClusterCreateEdgeClusterResponse) implementsGraphQLInterfaceCreateEdgeClusterCreateEdgeClusterCreateEdgeClusterResult() {
 }
-
 func (v *CreateEdgeClusterCreateEdgeClusterValidationError) implementsGraphQLInterfaceCreateEdgeClusterCreateEdgeClusterCreateEdgeClusterResult() {
 }
 
@@ -18327,10 +18285,8 @@ type CreateEnrollmentTokenCreateEnrollmentTokenCreateEnrollmentTokenResult inter
 
 func (v *CreateEnrollmentTokenCreateEnrollmentTokenAuthError) implementsGraphQLInterfaceCreateEnrollmentTokenCreateEnrollmentTokenCreateEnrollmentTokenResult() {
 }
-
 func (v *CreateEnrollmentTokenCreateEnrollmentTokenCreateEnrollmentTokenResponse) implementsGraphQLInterfaceCreateEnrollmentTokenCreateEnrollmentTokenCreateEnrollmentTokenResult() {
 }
-
 func (v *CreateEnrollmentTokenCreateEnrollmentTokenValidationError) implementsGraphQLInterfaceCreateEnrollmentTokenCreateEnrollmentTokenCreateEnrollmentTokenResult() {
 }
 
@@ -18845,13 +18801,10 @@ type CreateMollieFirstPaymentCreateMollieFirstPaymentMollieFirstPaymentResult in
 
 func (v *CreateMollieFirstPaymentCreateMollieFirstPaymentAuthError) implementsGraphQLInterfaceCreateMollieFirstPaymentCreateMollieFirstPaymentMollieFirstPaymentResult() {
 }
-
 func (v *CreateMollieFirstPaymentCreateMollieFirstPayment) implementsGraphQLInterfaceCreateMollieFirstPaymentCreateMollieFirstPaymentMollieFirstPaymentResult() {
 }
-
 func (v *CreateMollieFirstPaymentCreateMollieFirstPaymentNotFoundError) implementsGraphQLInterfaceCreateMollieFirstPaymentCreateMollieFirstPaymentMollieFirstPaymentResult() {
 }
-
 func (v *CreateMollieFirstPaymentCreateMollieFirstPaymentValidationError) implementsGraphQLInterfaceCreateMollieFirstPaymentCreateMollieFirstPaymentMollieFirstPaymentResult() {
 }
 
@@ -19369,13 +19322,10 @@ type CreateMollieSubscriptionCreateMollieSubscriptionMollieSubscriptionResult in
 
 func (v *CreateMollieSubscriptionCreateMollieSubscriptionAuthError) implementsGraphQLInterfaceCreateMollieSubscriptionCreateMollieSubscriptionMollieSubscriptionResult() {
 }
-
 func (v *CreateMollieSubscriptionCreateMollieSubscription) implementsGraphQLInterfaceCreateMollieSubscriptionCreateMollieSubscriptionMollieSubscriptionResult() {
 }
-
 func (v *CreateMollieSubscriptionCreateMollieSubscriptionNotFoundError) implementsGraphQLInterfaceCreateMollieSubscriptionCreateMollieSubscriptionMollieSubscriptionResult() {
 }
-
 func (v *CreateMollieSubscriptionCreateMollieSubscriptionValidationError) implementsGraphQLInterfaceCreateMollieSubscriptionCreateMollieSubscriptionMollieSubscriptionResult() {
 }
 
@@ -19987,10 +19937,8 @@ type CreatePaymentCreatePaymentCreatePaymentResult interface {
 
 func (v *CreatePaymentCreatePaymentAuthError) implementsGraphQLInterfaceCreatePaymentCreatePaymentCreatePaymentResult() {
 }
-
 func (v *CreatePaymentCreatePayment) implementsGraphQLInterfaceCreatePaymentCreatePaymentCreatePaymentResult() {
 }
-
 func (v *CreatePaymentCreatePaymentValidationError) implementsGraphQLInterfaceCreatePaymentCreatePaymentCreatePaymentResult() {
 }
 
@@ -20487,13 +20435,10 @@ type CreateSigningKeyCreateSigningKeyCreateSigningKeyResult interface {
 
 func (v *CreateSigningKeyCreateSigningKeyAuthError) implementsGraphQLInterfaceCreateSigningKeyCreateSigningKeyCreateSigningKeyResult() {
 }
-
 func (v *CreateSigningKeyCreateSigningKeyCreateSigningKeySuccess) implementsGraphQLInterfaceCreateSigningKeyCreateSigningKeyCreateSigningKeyResult() {
 }
-
 func (v *CreateSigningKeyCreateSigningKeyRateLimitError) implementsGraphQLInterfaceCreateSigningKeyCreateSigningKeyCreateSigningKeyResult() {
 }
-
 func (v *CreateSigningKeyCreateSigningKeyValidationError) implementsGraphQLInterfaceCreateSigningKeyCreateSigningKeyCreateSigningKeyResult() {
 }
 
@@ -21243,10 +21188,8 @@ type CreateStreamCreateStreamCreateStreamResult interface {
 
 func (v *CreateStreamCreateStreamAuthError) implementsGraphQLInterfaceCreateStreamCreateStreamCreateStreamResult() {
 }
-
 func (v *CreateStreamCreateStream) implementsGraphQLInterfaceCreateStreamCreateStreamCreateStreamResult() {
 }
-
 func (v *CreateStreamCreateStreamValidationError) implementsGraphQLInterfaceCreateStreamCreateStreamCreateStreamResult() {
 }
 
@@ -21635,13 +21578,10 @@ type CreateStreamKeyCreateStreamKeyCreateStreamKeyResult interface {
 
 func (v *CreateStreamKeyCreateStreamKeyAuthError) implementsGraphQLInterfaceCreateStreamKeyCreateStreamKeyCreateStreamKeyResult() {
 }
-
 func (v *CreateStreamKeyCreateStreamKeyNotFoundError) implementsGraphQLInterfaceCreateStreamKeyCreateStreamKeyCreateStreamKeyResult() {
 }
-
 func (v *CreateStreamKeyCreateStreamKey) implementsGraphQLInterfaceCreateStreamKeyCreateStreamKeyCreateStreamKeyResult() {
 }
-
 func (v *CreateStreamKeyCreateStreamKeyValidationError) implementsGraphQLInterfaceCreateStreamKeyCreateStreamKeyCreateStreamKeyResult() {
 }
 
@@ -22242,13 +22182,10 @@ type CreateStripeBillingPortalCreateStripeBillingPortalStripeBillingPortalResult
 
 func (v *CreateStripeBillingPortalCreateStripeBillingPortalAuthError) implementsGraphQLInterfaceCreateStripeBillingPortalCreateStripeBillingPortalStripeBillingPortalResult() {
 }
-
 func (v *CreateStripeBillingPortalCreateStripeBillingPortalNotFoundError) implementsGraphQLInterfaceCreateStripeBillingPortalCreateStripeBillingPortalStripeBillingPortalResult() {
 }
-
 func (v *CreateStripeBillingPortalCreateStripeBillingPortalStripeBillingPortalSession) implementsGraphQLInterfaceCreateStripeBillingPortalCreateStripeBillingPortalStripeBillingPortalResult() {
 }
-
 func (v *CreateStripeBillingPortalCreateStripeBillingPortalValidationError) implementsGraphQLInterfaceCreateStripeBillingPortalCreateStripeBillingPortalStripeBillingPortalResult() {
 }
 
@@ -22748,13 +22685,10 @@ type CreateStripeCheckoutCreateStripeCheckoutStripeCheckoutResult interface {
 
 func (v *CreateStripeCheckoutCreateStripeCheckoutAuthError) implementsGraphQLInterfaceCreateStripeCheckoutCreateStripeCheckoutStripeCheckoutResult() {
 }
-
 func (v *CreateStripeCheckoutCreateStripeCheckoutNotFoundError) implementsGraphQLInterfaceCreateStripeCheckoutCreateStripeCheckoutStripeCheckoutResult() {
 }
-
 func (v *CreateStripeCheckoutCreateStripeCheckoutStripeCheckoutSession) implementsGraphQLInterfaceCreateStripeCheckoutCreateStripeCheckoutStripeCheckoutResult() {
 }
-
 func (v *CreateStripeCheckoutCreateStripeCheckoutValidationError) implementsGraphQLInterfaceCreateStripeCheckoutCreateStripeCheckoutStripeCheckoutResult() {
 }
 
@@ -23173,10 +23107,8 @@ type CreateVodUploadCreateVodUploadCreateVodUploadResult interface {
 
 func (v *CreateVodUploadCreateVodUploadAuthError) implementsGraphQLInterfaceCreateVodUploadCreateVodUploadCreateVodUploadResult() {
 }
-
 func (v *CreateVodUploadCreateVodUploadValidationError) implementsGraphQLInterfaceCreateVodUploadCreateVodUploadCreateVodUploadResult() {
 }
-
 func (v *CreateVodUploadCreateVodUploadVodUploadSession) implementsGraphQLInterfaceCreateVodUploadCreateVodUploadCreateVodUploadResult() {
 }
 
@@ -23605,10 +23537,8 @@ type CreateWebhookEndpointCreateWebhookEndpointCreateWebhookEndpointResult inter
 
 func (v *CreateWebhookEndpointCreateWebhookEndpointAuthError) implementsGraphQLInterfaceCreateWebhookEndpointCreateWebhookEndpointCreateWebhookEndpointResult() {
 }
-
 func (v *CreateWebhookEndpointCreateWebhookEndpointValidationError) implementsGraphQLInterfaceCreateWebhookEndpointCreateWebhookEndpointCreateWebhookEndpointResult() {
 }
-
 func (v *CreateWebhookEndpointCreateWebhookEndpointWebhookEndpointSecret) implementsGraphQLInterfaceCreateWebhookEndpointCreateWebhookEndpointCreateWebhookEndpointResult() {
 }
 
@@ -24699,10 +24629,8 @@ type DeleteClipDeleteClipDeleteClipResult interface {
 
 func (v *DeleteClipDeleteClipAuthError) implementsGraphQLInterfaceDeleteClipDeleteClipDeleteClipResult() {
 }
-
 func (v *DeleteClipDeleteClipDeleteSuccess) implementsGraphQLInterfaceDeleteClipDeleteClipDeleteClipResult() {
 }
-
 func (v *DeleteClipDeleteClipNotFoundError) implementsGraphQLInterfaceDeleteClipDeleteClipDeleteClipResult() {
 }
 
@@ -25096,7 +25024,6 @@ type DeleteDVRDeleteDVRDeleteDVRResult interface {
 func (v *DeleteDVRDeleteDVRAuthError) implementsGraphQLInterfaceDeleteDVRDeleteDVRDeleteDVRResult() {}
 func (v *DeleteDVRDeleteDVRDeleteSuccess) implementsGraphQLInterfaceDeleteDVRDeleteDVRDeleteDVRResult() {
 }
-
 func (v *DeleteDVRDeleteDVRNotFoundError) implementsGraphQLInterfaceDeleteDVRDeleteDVRDeleteDVRResult() {
 }
 
@@ -25587,10 +25514,8 @@ type DeleteStreamDeleteStreamDeleteStreamResult interface {
 
 func (v *DeleteStreamDeleteStreamAuthError) implementsGraphQLInterfaceDeleteStreamDeleteStreamDeleteStreamResult() {
 }
-
 func (v *DeleteStreamDeleteStreamDeleteSuccess) implementsGraphQLInterfaceDeleteStreamDeleteStreamDeleteStreamResult() {
 }
-
 func (v *DeleteStreamDeleteStreamNotFoundError) implementsGraphQLInterfaceDeleteStreamDeleteStreamDeleteStreamResult() {
 }
 
@@ -25917,10 +25842,8 @@ type DeleteStreamKeyDeleteStreamKeyDeleteStreamKeyResult interface {
 
 func (v *DeleteStreamKeyDeleteStreamKeyAuthError) implementsGraphQLInterfaceDeleteStreamKeyDeleteStreamKeyDeleteStreamKeyResult() {
 }
-
 func (v *DeleteStreamKeyDeleteStreamKeyDeleteSuccess) implementsGraphQLInterfaceDeleteStreamKeyDeleteStreamKeyDeleteStreamKeyResult() {
 }
-
 func (v *DeleteStreamKeyDeleteStreamKeyNotFoundError) implementsGraphQLInterfaceDeleteStreamKeyDeleteStreamKeyDeleteStreamKeyResult() {
 }
 
@@ -26512,10 +26435,8 @@ type DeleteVodAssetDeleteVodAssetDeleteVodAssetResult interface {
 
 func (v *DeleteVodAssetDeleteVodAssetAuthError) implementsGraphQLInterfaceDeleteVodAssetDeleteVodAssetDeleteVodAssetResult() {
 }
-
 func (v *DeleteVodAssetDeleteVodAssetDeleteSuccess) implementsGraphQLInterfaceDeleteVodAssetDeleteVodAssetDeleteVodAssetResult() {
 }
-
 func (v *DeleteVodAssetDeleteVodAssetNotFoundError) implementsGraphQLInterfaceDeleteVodAssetDeleteVodAssetDeleteVodAssetResult() {
 }
 
@@ -26924,10 +26845,8 @@ type DeleteWebhookEndpointDeleteWebhookEndpointDeleteWebhookEndpointResult inter
 
 func (v *DeleteWebhookEndpointDeleteWebhookEndpointAuthError) implementsGraphQLInterfaceDeleteWebhookEndpointDeleteWebhookEndpointDeleteWebhookEndpointResult() {
 }
-
 func (v *DeleteWebhookEndpointDeleteWebhookEndpointDeleteSuccess) implementsGraphQLInterfaceDeleteWebhookEndpointDeleteWebhookEndpointDeleteWebhookEndpointResult() {
 }
-
 func (v *DeleteWebhookEndpointDeleteWebhookEndpointNotFoundError) implementsGraphQLInterfaceDeleteWebhookEndpointDeleteWebhookEndpointDeleteWebhookEndpointResult() {
 }
 
@@ -27576,10 +27495,8 @@ type DisableWebhookEndpointDisableWebhookEndpointWebhookEndpointResult interface
 
 func (v *DisableWebhookEndpointDisableWebhookEndpointAuthError) implementsGraphQLInterfaceDisableWebhookEndpointDisableWebhookEndpointWebhookEndpointResult() {
 }
-
 func (v *DisableWebhookEndpointDisableWebhookEndpointNotFoundError) implementsGraphQLInterfaceDisableWebhookEndpointDisableWebhookEndpointWebhookEndpointResult() {
 }
-
 func (v *DisableWebhookEndpointDisableWebhookEndpoint) implementsGraphQLInterfaceDisableWebhookEndpointDisableWebhookEndpointWebhookEndpointResult() {
 }
 
@@ -28135,10 +28052,8 @@ type EnableWebhookEndpointEnableWebhookEndpointWebhookEndpointResult interface {
 
 func (v *EnableWebhookEndpointEnableWebhookEndpointAuthError) implementsGraphQLInterfaceEnableWebhookEndpointEnableWebhookEndpointWebhookEndpointResult() {
 }
-
 func (v *EnableWebhookEndpointEnableWebhookEndpointNotFoundError) implementsGraphQLInterfaceEnableWebhookEndpointEnableWebhookEndpointWebhookEndpointResult() {
 }
-
 func (v *EnableWebhookEndpointEnableWebhookEndpoint) implementsGraphQLInterfaceEnableWebhookEndpointEnableWebhookEndpointWebhookEndpointResult() {
 }
 
@@ -33202,13 +33117,10 @@ type GetClusterMediaConsentChangeClusterMediaConsentChangeMediaCapacityConsentCh
 
 func (v *GetClusterMediaConsentChangeClusterMediaConsentChangeAuthError) implementsGraphQLInterfaceGetClusterMediaConsentChangeClusterMediaConsentChangeMediaCapacityConsentChangeResult() {
 }
-
 func (v *GetClusterMediaConsentChangeClusterMediaConsentChangeMediaCapacityConsentChange) implementsGraphQLInterfaceGetClusterMediaConsentChangeClusterMediaConsentChangeMediaCapacityConsentChangeResult() {
 }
-
 func (v *GetClusterMediaConsentChangeClusterMediaConsentChangeMediaPlacementError) implementsGraphQLInterfaceGetClusterMediaConsentChangeClusterMediaConsentChangeMediaCapacityConsentChangeResult() {
 }
-
 func (v *GetClusterMediaConsentChangeClusterMediaConsentChangeNotFoundError) implementsGraphQLInterfaceGetClusterMediaConsentChangeClusterMediaConsentChangeMediaCapacityConsentChangeResult() {
 }
 
@@ -33767,13 +33679,10 @@ type GetClusterMediaConsentClusterMediaConsentMediaCapacityConsentResult interfa
 
 func (v *GetClusterMediaConsentClusterMediaConsentAuthError) implementsGraphQLInterfaceGetClusterMediaConsentClusterMediaConsentMediaCapacityConsentResult() {
 }
-
 func (v *GetClusterMediaConsentClusterMediaConsentMediaCapacityConsent) implementsGraphQLInterfaceGetClusterMediaConsentClusterMediaConsentMediaCapacityConsentResult() {
 }
-
 func (v *GetClusterMediaConsentClusterMediaConsentMediaPlacementError) implementsGraphQLInterfaceGetClusterMediaConsentClusterMediaConsentMediaCapacityConsentResult() {
 }
-
 func (v *GetClusterMediaConsentClusterMediaConsentNotFoundError) implementsGraphQLInterfaceGetClusterMediaConsentClusterMediaConsentMediaCapacityConsentResult() {
 }
 
@@ -38206,91 +38115,62 @@ type GetInfrastructureNodeMetrics1hConnectionNode interface {
 
 func (v *GetInfrastructureNodeMetrics1hConnectionNodeAPIUsageRecord) implementsGraphQLInterfaceGetInfrastructureNodeMetrics1hConnectionNode() {
 }
-
 func (v *GetInfrastructureNodeMetrics1hConnectionNodeArtifactEvent) implementsGraphQLInterfaceGetInfrastructureNodeMetrics1hConnectionNode() {
 }
-
 func (v *GetInfrastructureNodeMetrics1hConnectionNodeBufferEvent) implementsGraphQLInterfaceGetInfrastructureNodeMetrics1hConnectionNode() {
 }
-
 func (v *GetInfrastructureNodeMetrics1hConnectionNodeClientMetrics5m) implementsGraphQLInterfaceGetInfrastructureNodeMetrics1hConnectionNode() {
 }
-
 func (v *GetInfrastructureNodeMetrics1hConnectionNodeClip) implementsGraphQLInterfaceGetInfrastructureNodeMetrics1hConnectionNode() {
 }
-
 func (v *GetInfrastructureNodeMetrics1hConnectionNodeCluster) implementsGraphQLInterfaceGetInfrastructureNodeMetrics1hConnectionNode() {
 }
-
 func (v *GetInfrastructureNodeMetrics1hConnectionNodeConnectionEvent) implementsGraphQLInterfaceGetInfrastructureNodeMetrics1hConnectionNode() {
 }
-
 func (v *GetInfrastructureNodeMetrics1hConnectionNodeConversation) implementsGraphQLInterfaceGetInfrastructureNodeMetrics1hConnectionNode() {
 }
-
 func (v *GetInfrastructureNodeMetrics1hConnectionNodeInfrastructureNode) implementsGraphQLInterfaceGetInfrastructureNodeMetrics1hConnectionNode() {
 }
-
 func (v *GetInfrastructureNodeMetrics1hConnectionNodeMessage) implementsGraphQLInterfaceGetInfrastructureNodeMetrics1hConnectionNode() {
 }
-
 func (v *GetInfrastructureNodeMetrics1hConnectionNodeNodeMetric) implementsGraphQLInterfaceGetInfrastructureNodeMetrics1hConnectionNode() {
 }
-
 func (v *GetInfrastructureNodeMetrics1hConnectionNodeNodeMetricHourly) implementsGraphQLInterfaceGetInfrastructureNodeMetrics1hConnectionNode() {
 }
-
 func (v *GetInfrastructureNodeMetrics1hConnectionNodeNodePerformance5m) implementsGraphQLInterfaceGetInfrastructureNodeMetrics1hConnectionNode() {
 }
-
 func (v *GetInfrastructureNodeMetrics1hConnectionNodeProcessingUsageRecord) implementsGraphQLInterfaceGetInfrastructureNodeMetrics1hConnectionNode() {
 }
-
 func (v *GetInfrastructureNodeMetrics1hConnectionNodeQualityTierDaily) implementsGraphQLInterfaceGetInfrastructureNodeMetrics1hConnectionNode() {
 }
-
 func (v *GetInfrastructureNodeMetrics1hConnectionNodeSigningKey) implementsGraphQLInterfaceGetInfrastructureNodeMetrics1hConnectionNode() {
 }
-
 func (v *GetInfrastructureNodeMetrics1hConnectionNodeStorageEvent) implementsGraphQLInterfaceGetInfrastructureNodeMetrics1hConnectionNode() {
 }
-
 func (v *GetInfrastructureNodeMetrics1hConnectionNodeStorageUsageRecord) implementsGraphQLInterfaceGetInfrastructureNodeMetrics1hConnectionNode() {
 }
-
 func (v *GetInfrastructureNodeMetrics1hConnectionNodeStream) implementsGraphQLInterfaceGetInfrastructureNodeMetrics1hConnectionNode() {
 }
-
 func (v *GetInfrastructureNodeMetrics1hConnectionNodeStreamAnalyticsDaily) implementsGraphQLInterfaceGetInfrastructureNodeMetrics1hConnectionNode() {
 }
-
 func (v *GetInfrastructureNodeMetrics1hConnectionNodeStreamConnectionHourly) implementsGraphQLInterfaceGetInfrastructureNodeMetrics1hConnectionNode() {
 }
-
 func (v *GetInfrastructureNodeMetrics1hConnectionNodeStreamEvent) implementsGraphQLInterfaceGetInfrastructureNodeMetrics1hConnectionNode() {
 }
-
 func (v *GetInfrastructureNodeMetrics1hConnectionNodeStreamHealth5m) implementsGraphQLInterfaceGetInfrastructureNodeMetrics1hConnectionNode() {
 }
-
 func (v *GetInfrastructureNodeMetrics1hConnectionNodeStreamHealthMetric) implementsGraphQLInterfaceGetInfrastructureNodeMetrics1hConnectionNode() {
 }
-
 func (v *GetInfrastructureNodeMetrics1hConnectionNodeTenantDailyStat) implementsGraphQLInterfaceGetInfrastructureNodeMetrics1hConnectionNode() {
 }
-
 func (v *GetInfrastructureNodeMetrics1hConnectionNodeTrackListEvent) implementsGraphQLInterfaceGetInfrastructureNodeMetrics1hConnectionNode() {
 }
-
 func (v *GetInfrastructureNodeMetrics1hConnectionNodeViewerGeoHourly) implementsGraphQLInterfaceGetInfrastructureNodeMetrics1hConnectionNode() {
 }
-
 func (v *GetInfrastructureNodeMetrics1hConnectionNodeViewerHoursHourly) implementsGraphQLInterfaceGetInfrastructureNodeMetrics1hConnectionNode() {
 }
-
 func (v *GetInfrastructureNodeMetrics1hConnectionNodeViewerSession) implementsGraphQLInterfaceGetInfrastructureNodeMetrics1hConnectionNode() {
 }
-
 func (v *GetInfrastructureNodeMetrics1hConnectionNodeVodAsset) implementsGraphQLInterfaceGetInfrastructureNodeMetrics1hConnectionNode() {
 }
 
@@ -39400,91 +39280,62 @@ type GetInfrastructureNodeMetricsConnectionNode interface {
 
 func (v *GetInfrastructureNodeMetricsConnectionNodeAPIUsageRecord) implementsGraphQLInterfaceGetInfrastructureNodeMetricsConnectionNode() {
 }
-
 func (v *GetInfrastructureNodeMetricsConnectionNodeArtifactEvent) implementsGraphQLInterfaceGetInfrastructureNodeMetricsConnectionNode() {
 }
-
 func (v *GetInfrastructureNodeMetricsConnectionNodeBufferEvent) implementsGraphQLInterfaceGetInfrastructureNodeMetricsConnectionNode() {
 }
-
 func (v *GetInfrastructureNodeMetricsConnectionNodeClientMetrics5m) implementsGraphQLInterfaceGetInfrastructureNodeMetricsConnectionNode() {
 }
-
 func (v *GetInfrastructureNodeMetricsConnectionNodeClip) implementsGraphQLInterfaceGetInfrastructureNodeMetricsConnectionNode() {
 }
-
 func (v *GetInfrastructureNodeMetricsConnectionNodeCluster) implementsGraphQLInterfaceGetInfrastructureNodeMetricsConnectionNode() {
 }
-
 func (v *GetInfrastructureNodeMetricsConnectionNodeConnectionEvent) implementsGraphQLInterfaceGetInfrastructureNodeMetricsConnectionNode() {
 }
-
 func (v *GetInfrastructureNodeMetricsConnectionNodeConversation) implementsGraphQLInterfaceGetInfrastructureNodeMetricsConnectionNode() {
 }
-
 func (v *GetInfrastructureNodeMetricsConnectionNodeInfrastructureNode) implementsGraphQLInterfaceGetInfrastructureNodeMetricsConnectionNode() {
 }
-
 func (v *GetInfrastructureNodeMetricsConnectionNodeMessage) implementsGraphQLInterfaceGetInfrastructureNodeMetricsConnectionNode() {
 }
-
 func (v *GetInfrastructureNodeMetricsConnectionNodeNodeMetric) implementsGraphQLInterfaceGetInfrastructureNodeMetricsConnectionNode() {
 }
-
 func (v *GetInfrastructureNodeMetricsConnectionNodeNodeMetricHourly) implementsGraphQLInterfaceGetInfrastructureNodeMetricsConnectionNode() {
 }
-
 func (v *GetInfrastructureNodeMetricsConnectionNodeNodePerformance5m) implementsGraphQLInterfaceGetInfrastructureNodeMetricsConnectionNode() {
 }
-
 func (v *GetInfrastructureNodeMetricsConnectionNodeProcessingUsageRecord) implementsGraphQLInterfaceGetInfrastructureNodeMetricsConnectionNode() {
 }
-
 func (v *GetInfrastructureNodeMetricsConnectionNodeQualityTierDaily) implementsGraphQLInterfaceGetInfrastructureNodeMetricsConnectionNode() {
 }
-
 func (v *GetInfrastructureNodeMetricsConnectionNodeSigningKey) implementsGraphQLInterfaceGetInfrastructureNodeMetricsConnectionNode() {
 }
-
 func (v *GetInfrastructureNodeMetricsConnectionNodeStorageEvent) implementsGraphQLInterfaceGetInfrastructureNodeMetricsConnectionNode() {
 }
-
 func (v *GetInfrastructureNodeMetricsConnectionNodeStorageUsageRecord) implementsGraphQLInterfaceGetInfrastructureNodeMetricsConnectionNode() {
 }
-
 func (v *GetInfrastructureNodeMetricsConnectionNodeStream) implementsGraphQLInterfaceGetInfrastructureNodeMetricsConnectionNode() {
 }
-
 func (v *GetInfrastructureNodeMetricsConnectionNodeStreamAnalyticsDaily) implementsGraphQLInterfaceGetInfrastructureNodeMetricsConnectionNode() {
 }
-
 func (v *GetInfrastructureNodeMetricsConnectionNodeStreamConnectionHourly) implementsGraphQLInterfaceGetInfrastructureNodeMetricsConnectionNode() {
 }
-
 func (v *GetInfrastructureNodeMetricsConnectionNodeStreamEvent) implementsGraphQLInterfaceGetInfrastructureNodeMetricsConnectionNode() {
 }
-
 func (v *GetInfrastructureNodeMetricsConnectionNodeStreamHealth5m) implementsGraphQLInterfaceGetInfrastructureNodeMetricsConnectionNode() {
 }
-
 func (v *GetInfrastructureNodeMetricsConnectionNodeStreamHealthMetric) implementsGraphQLInterfaceGetInfrastructureNodeMetricsConnectionNode() {
 }
-
 func (v *GetInfrastructureNodeMetricsConnectionNodeTenantDailyStat) implementsGraphQLInterfaceGetInfrastructureNodeMetricsConnectionNode() {
 }
-
 func (v *GetInfrastructureNodeMetricsConnectionNodeTrackListEvent) implementsGraphQLInterfaceGetInfrastructureNodeMetricsConnectionNode() {
 }
-
 func (v *GetInfrastructureNodeMetricsConnectionNodeViewerGeoHourly) implementsGraphQLInterfaceGetInfrastructureNodeMetricsConnectionNode() {
 }
-
 func (v *GetInfrastructureNodeMetricsConnectionNodeViewerHoursHourly) implementsGraphQLInterfaceGetInfrastructureNodeMetricsConnectionNode() {
 }
-
 func (v *GetInfrastructureNodeMetricsConnectionNodeViewerSession) implementsGraphQLInterfaceGetInfrastructureNodeMetricsConnectionNode() {
 }
-
 func (v *GetInfrastructureNodeMetricsConnectionNodeVodAsset) implementsGraphQLInterfaceGetInfrastructureNodeMetricsConnectionNode() {
 }
 
@@ -41810,13 +41661,10 @@ type GetMediaPlacementChangeMediaPlacementChangeMediaPlacementChangeResult inter
 
 func (v *GetMediaPlacementChangeMediaPlacementChangeAuthError) implementsGraphQLInterfaceGetMediaPlacementChangeMediaPlacementChangeMediaPlacementChangeResult() {
 }
-
 func (v *GetMediaPlacementChangeMediaPlacementChange) implementsGraphQLInterfaceGetMediaPlacementChangeMediaPlacementChangeMediaPlacementChangeResult() {
 }
-
 func (v *GetMediaPlacementChangeMediaPlacementChangeMediaPlacementError) implementsGraphQLInterfaceGetMediaPlacementChangeMediaPlacementChangeMediaPlacementChangeResult() {
 }
-
 func (v *GetMediaPlacementChangeMediaPlacementChangeNotFoundError) implementsGraphQLInterfaceGetMediaPlacementChangeMediaPlacementChangeMediaPlacementChangeResult() {
 }
 
@@ -42440,13 +42288,10 @@ type GetMediaPlacementOptionsMediaPlacementOptionsMediaPlacementOptionsResult in
 
 func (v *GetMediaPlacementOptionsMediaPlacementOptionsAuthError) implementsGraphQLInterfaceGetMediaPlacementOptionsMediaPlacementOptionsMediaPlacementOptionsResult() {
 }
-
 func (v *GetMediaPlacementOptionsMediaPlacementOptionsMediaPlacementError) implementsGraphQLInterfaceGetMediaPlacementOptionsMediaPlacementOptionsMediaPlacementOptionsResult() {
 }
-
 func (v *GetMediaPlacementOptionsMediaPlacementOptionsMediaPlacementOptionsConnection) implementsGraphQLInterfaceGetMediaPlacementOptionsMediaPlacementOptionsMediaPlacementOptionsResult() {
 }
-
 func (v *GetMediaPlacementOptionsMediaPlacementOptionsNotFoundError) implementsGraphQLInterfaceGetMediaPlacementOptionsMediaPlacementOptionsMediaPlacementOptionsResult() {
 }
 
@@ -42896,13 +42741,10 @@ type GetMediaPlacementPolicyMediaPlacementPolicyMediaPlacementPolicyResult inter
 
 func (v *GetMediaPlacementPolicyMediaPlacementPolicyAuthError) implementsGraphQLInterfaceGetMediaPlacementPolicyMediaPlacementPolicyMediaPlacementPolicyResult() {
 }
-
 func (v *GetMediaPlacementPolicyMediaPlacementPolicyMediaPlacementError) implementsGraphQLInterfaceGetMediaPlacementPolicyMediaPlacementPolicyMediaPlacementPolicyResult() {
 }
-
 func (v *GetMediaPlacementPolicyMediaPlacementPolicyMediaPlacementPolicyState) implementsGraphQLInterfaceGetMediaPlacementPolicyMediaPlacementPolicyMediaPlacementPolicyResult() {
 }
-
 func (v *GetMediaPlacementPolicyMediaPlacementPolicyNotFoundError) implementsGraphQLInterfaceGetMediaPlacementPolicyMediaPlacementPolicyMediaPlacementPolicyResult() {
 }
 
@@ -54646,13 +54488,10 @@ type GetPreviewMediaPlacementPreviewMediaPlacementMediaPlacementPreviewResult in
 
 func (v *GetPreviewMediaPlacementPreviewMediaPlacementAuthError) implementsGraphQLInterfaceGetPreviewMediaPlacementPreviewMediaPlacementMediaPlacementPreviewResult() {
 }
-
 func (v *GetPreviewMediaPlacementPreviewMediaPlacementMediaPlacementError) implementsGraphQLInterfaceGetPreviewMediaPlacementPreviewMediaPlacementMediaPlacementPreviewResult() {
 }
-
 func (v *GetPreviewMediaPlacementPreviewMediaPlacementMediaPlacementPreview) implementsGraphQLInterfaceGetPreviewMediaPlacementPreviewMediaPlacementMediaPlacementPreviewResult() {
 }
-
 func (v *GetPreviewMediaPlacementPreviewMediaPlacementNotFoundError) implementsGraphQLInterfaceGetPreviewMediaPlacementPreviewMediaPlacementMediaPlacementPreviewResult() {
 }
 
@@ -56786,13 +56625,10 @@ type GetReviewClusterMediaConsentChangeReviewClusterMediaConsentChangeMediaPlace
 
 func (v *GetReviewClusterMediaConsentChangeReviewClusterMediaConsentChangeAuthError) implementsGraphQLInterfaceGetReviewClusterMediaConsentChangeReviewClusterMediaConsentChangeMediaPlacementReviewResult() {
 }
-
 func (v *GetReviewClusterMediaConsentChangeReviewClusterMediaConsentChangeMediaPlacementError) implementsGraphQLInterfaceGetReviewClusterMediaConsentChangeReviewClusterMediaConsentChangeMediaPlacementReviewResult() {
 }
-
 func (v *GetReviewClusterMediaConsentChangeReviewClusterMediaConsentChangeMediaPlacementReview) implementsGraphQLInterfaceGetReviewClusterMediaConsentChangeReviewClusterMediaConsentChangeMediaPlacementReviewResult() {
 }
-
 func (v *GetReviewClusterMediaConsentChangeReviewClusterMediaConsentChangeNotFoundError) implementsGraphQLInterfaceGetReviewClusterMediaConsentChangeReviewClusterMediaConsentChangeMediaPlacementReviewResult() {
 }
 
@@ -57345,13 +57181,10 @@ type GetReviewMediaPlacementChangeReviewMediaPlacementChangeMediaPlacementReview
 
 func (v *GetReviewMediaPlacementChangeReviewMediaPlacementChangeAuthError) implementsGraphQLInterfaceGetReviewMediaPlacementChangeReviewMediaPlacementChangeMediaPlacementReviewResult() {
 }
-
 func (v *GetReviewMediaPlacementChangeReviewMediaPlacementChangeMediaPlacementError) implementsGraphQLInterfaceGetReviewMediaPlacementChangeReviewMediaPlacementChangeMediaPlacementReviewResult() {
 }
-
 func (v *GetReviewMediaPlacementChangeReviewMediaPlacementChangeMediaPlacementReview) implementsGraphQLInterfaceGetReviewMediaPlacementChangeReviewMediaPlacementChangeMediaPlacementReviewResult() {
 }
-
 func (v *GetReviewMediaPlacementChangeReviewMediaPlacementChangeNotFoundError) implementsGraphQLInterfaceGetReviewMediaPlacementChangeReviewMediaPlacementChangeMediaPlacementReviewResult() {
 }
 
@@ -66849,13 +66682,10 @@ type GetVodUploadStatusVodUploadStatusVodUploadStatusResult interface {
 
 func (v *GetVodUploadStatusVodUploadStatusAuthError) implementsGraphQLInterfaceGetVodUploadStatusVodUploadStatusVodUploadStatusResult() {
 }
-
 func (v *GetVodUploadStatusVodUploadStatusNotFoundError) implementsGraphQLInterfaceGetVodUploadStatusVodUploadStatusVodUploadStatusResult() {
 }
-
 func (v *GetVodUploadStatusVodUploadStatusValidationError) implementsGraphQLInterfaceGetVodUploadStatusVodUploadStatusVodUploadStatusResult() {
 }
-
 func (v *GetVodUploadStatusVodUploadStatus) implementsGraphQLInterfaceGetVodUploadStatusVodUploadStatusVodUploadStatusResult() {
 }
 
@@ -68202,10 +68032,8 @@ type ImportVodAssetImportVodAssetImportVodAssetResult interface {
 
 func (v *ImportVodAssetImportVodAssetAuthError) implementsGraphQLInterfaceImportVodAssetImportVodAssetImportVodAssetResult() {
 }
-
 func (v *ImportVodAssetImportVodAssetValidationError) implementsGraphQLInterfaceImportVodAssetImportVodAssetImportVodAssetResult() {
 }
-
 func (v *ImportVodAssetImportVodAsset) implementsGraphQLInterfaceImportVodAssetImportVodAssetImportVodAssetResult() {
 }
 
@@ -70040,7 +69868,6 @@ type LinkEmailLinkEmailLinkEmailResult interface {
 func (v *LinkEmailLinkEmailAuthError) implementsGraphQLInterfaceLinkEmailLinkEmailLinkEmailResult() {}
 func (v *LinkEmailLinkEmailLinkEmailPayload) implementsGraphQLInterfaceLinkEmailLinkEmailLinkEmailResult() {
 }
-
 func (v *LinkEmailLinkEmailValidationError) implementsGraphQLInterfaceLinkEmailLinkEmailLinkEmailResult() {
 }
 
@@ -70386,10 +70213,8 @@ type LinkWalletLinkWalletLinkWalletResult interface {
 
 func (v *LinkWalletLinkWalletAuthError) implementsGraphQLInterfaceLinkWalletLinkWalletLinkWalletResult() {
 }
-
 func (v *LinkWalletLinkWalletValidationError) implementsGraphQLInterfaceLinkWalletLinkWalletLinkWalletResult() {
 }
-
 func (v *LinkWalletLinkWalletWalletIdentity) implementsGraphQLInterfaceLinkWalletLinkWalletLinkWalletResult() {
 }
 
@@ -78202,13 +78027,10 @@ type OpenMistAdminSessionOpenMistAdminSessionOpenMistAdminSessionResult interfac
 
 func (v *OpenMistAdminSessionOpenMistAdminSessionAuthError) implementsGraphQLInterfaceOpenMistAdminSessionOpenMistAdminSessionOpenMistAdminSessionResult() {
 }
-
 func (v *OpenMistAdminSessionOpenMistAdminSession) implementsGraphQLInterfaceOpenMistAdminSessionOpenMistAdminSessionOpenMistAdminSessionResult() {
 }
-
 func (v *OpenMistAdminSessionOpenMistAdminSessionNotFoundError) implementsGraphQLInterfaceOpenMistAdminSessionOpenMistAdminSessionOpenMistAdminSessionResult() {
 }
-
 func (v *OpenMistAdminSessionOpenMistAdminSessionValidationError) implementsGraphQLInterfaceOpenMistAdminSessionOpenMistAdminSessionOpenMistAdminSessionResult() {
 }
 
@@ -81591,10 +81413,8 @@ type PromoteToPaidPromoteToPaidPromoteToPaidResult interface {
 
 func (v *PromoteToPaidPromoteToPaidAuthError) implementsGraphQLInterfacePromoteToPaidPromoteToPaidPromoteToPaidResult() {
 }
-
 func (v *PromoteToPaidPromoteToPaidPromoteToPaidPayload) implementsGraphQLInterfacePromoteToPaidPromoteToPaidPromoteToPaidResult() {
 }
-
 func (v *PromoteToPaidPromoteToPaidValidationError) implementsGraphQLInterfacePromoteToPaidPromoteToPaidPromoteToPaidResult() {
 }
 
@@ -83493,13 +83313,10 @@ type RefreshStreamKeyRefreshStreamKeyUpdateStreamResult interface {
 
 func (v *RefreshStreamKeyRefreshStreamKeyAuthError) implementsGraphQLInterfaceRefreshStreamKeyRefreshStreamKeyUpdateStreamResult() {
 }
-
 func (v *RefreshStreamKeyRefreshStreamKeyNotFoundError) implementsGraphQLInterfaceRefreshStreamKeyRefreshStreamKeyUpdateStreamResult() {
 }
-
 func (v *RefreshStreamKeyRefreshStreamKeyStream) implementsGraphQLInterfaceRefreshStreamKeyRefreshStreamKeyUpdateStreamResult() {
 }
-
 func (v *RefreshStreamKeyRefreshStreamKeyValidationError) implementsGraphQLInterfaceRefreshStreamKeyRefreshStreamKeyUpdateStreamResult() {
 }
 
@@ -84018,13 +83835,10 @@ type RejectClusterSubscriptionRejectClusterSubscriptionClusterSubscriptionResult
 
 func (v *RejectClusterSubscriptionRejectClusterSubscriptionAuthError) implementsGraphQLInterfaceRejectClusterSubscriptionRejectClusterSubscriptionClusterSubscriptionResult() {
 }
-
 func (v *RejectClusterSubscriptionRejectClusterSubscription) implementsGraphQLInterfaceRejectClusterSubscriptionRejectClusterSubscriptionClusterSubscriptionResult() {
 }
-
 func (v *RejectClusterSubscriptionRejectClusterSubscriptionNotFoundError) implementsGraphQLInterfaceRejectClusterSubscriptionRejectClusterSubscriptionClusterSubscriptionResult() {
 }
-
 func (v *RejectClusterSubscriptionRejectClusterSubscriptionValidationError) implementsGraphQLInterfaceRejectClusterSubscriptionRejectClusterSubscriptionClusterSubscriptionResult() {
 }
 
@@ -84546,13 +84360,10 @@ type ReplayWebhookDeliveriesReplayWebhookDeliveriesReplayWebhookDeliveriesResult
 
 func (v *ReplayWebhookDeliveriesReplayWebhookDeliveriesAuthError) implementsGraphQLInterfaceReplayWebhookDeliveriesReplayWebhookDeliveriesReplayWebhookDeliveriesResult() {
 }
-
 func (v *ReplayWebhookDeliveriesReplayWebhookDeliveriesNotFoundError) implementsGraphQLInterfaceReplayWebhookDeliveriesReplayWebhookDeliveriesReplayWebhookDeliveriesResult() {
 }
-
 func (v *ReplayWebhookDeliveriesReplayWebhookDeliveriesValidationError) implementsGraphQLInterfaceReplayWebhookDeliveriesReplayWebhookDeliveriesReplayWebhookDeliveriesResult() {
 }
-
 func (v *ReplayWebhookDeliveriesReplayWebhookDeliveriesWebhookReplayResult) implementsGraphQLInterfaceReplayWebhookDeliveriesReplayWebhookDeliveriesReplayWebhookDeliveriesResult() {
 }
 
@@ -85247,13 +85058,10 @@ type ReplayWebhookDeliveryReplayWebhookDeliveryReplayWebhookDeliveryResult inter
 
 func (v *ReplayWebhookDeliveryReplayWebhookDeliveryAuthError) implementsGraphQLInterfaceReplayWebhookDeliveryReplayWebhookDeliveryReplayWebhookDeliveryResult() {
 }
-
 func (v *ReplayWebhookDeliveryReplayWebhookDeliveryNotFoundError) implementsGraphQLInterfaceReplayWebhookDeliveryReplayWebhookDeliveryReplayWebhookDeliveryResult() {
 }
-
 func (v *ReplayWebhookDeliveryReplayWebhookDeliveryValidationError) implementsGraphQLInterfaceReplayWebhookDeliveryReplayWebhookDeliveryReplayWebhookDeliveryResult() {
 }
-
 func (v *ReplayWebhookDeliveryReplayWebhookDelivery) implementsGraphQLInterfaceReplayWebhookDeliveryReplayWebhookDeliveryReplayWebhookDeliveryResult() {
 }
 
@@ -85777,13 +85585,10 @@ type RequestClusterSubscriptionRequestClusterSubscriptionClusterSubscriptionResu
 
 func (v *RequestClusterSubscriptionRequestClusterSubscriptionAuthError) implementsGraphQLInterfaceRequestClusterSubscriptionRequestClusterSubscriptionClusterSubscriptionResult() {
 }
-
 func (v *RequestClusterSubscriptionRequestClusterSubscription) implementsGraphQLInterfaceRequestClusterSubscriptionRequestClusterSubscriptionClusterSubscriptionResult() {
 }
-
 func (v *RequestClusterSubscriptionRequestClusterSubscriptionNotFoundError) implementsGraphQLInterfaceRequestClusterSubscriptionRequestClusterSubscriptionClusterSubscriptionResult() {
 }
-
 func (v *RequestClusterSubscriptionRequestClusterSubscriptionValidationError) implementsGraphQLInterfaceRequestClusterSubscriptionRequestClusterSubscriptionClusterSubscriptionResult() {
 }
 
@@ -86399,13 +86204,10 @@ type ResetMediaRetentionOverrideResetMediaRetentionOverrideUpdateMediaRetentionR
 
 func (v *ResetMediaRetentionOverrideResetMediaRetentionOverrideAuthError) implementsGraphQLInterfaceResetMediaRetentionOverrideResetMediaRetentionOverrideUpdateMediaRetentionResult() {
 }
-
 func (v *ResetMediaRetentionOverrideResetMediaRetentionOverrideEffectiveRetention) implementsGraphQLInterfaceResetMediaRetentionOverrideResetMediaRetentionOverrideUpdateMediaRetentionResult() {
 }
-
 func (v *ResetMediaRetentionOverrideResetMediaRetentionOverrideNotFoundError) implementsGraphQLInterfaceResetMediaRetentionOverrideResetMediaRetentionOverrideUpdateMediaRetentionResult() {
 }
-
 func (v *ResetMediaRetentionOverrideResetMediaRetentionOverrideValidationError) implementsGraphQLInterfaceResetMediaRetentionOverrideResetMediaRetentionOverrideUpdateMediaRetentionResult() {
 }
 
@@ -86965,13 +86767,10 @@ type ResolveIncidentResolveIncidentIncidentMutationResult interface {
 
 func (v *ResolveIncidentResolveIncidentAuthError) implementsGraphQLInterfaceResolveIncidentResolveIncidentIncidentMutationResult() {
 }
-
 func (v *ResolveIncidentResolveIncident) implementsGraphQLInterfaceResolveIncidentResolveIncidentIncidentMutationResult() {
 }
-
 func (v *ResolveIncidentResolveIncidentNotFoundError) implementsGraphQLInterfaceResolveIncidentResolveIncidentIncidentMutationResult() {
 }
-
 func (v *ResolveIncidentResolveIncidentValidationError) implementsGraphQLInterfaceResolveIncidentResolveIncidentIncidentMutationResult() {
 }
 
@@ -88412,10 +88211,8 @@ type RevokeClusterInviteRevokeClusterInviteRevokeClusterInviteResult interface {
 
 func (v *RevokeClusterInviteRevokeClusterInviteAuthError) implementsGraphQLInterfaceRevokeClusterInviteRevokeClusterInviteRevokeClusterInviteResult() {
 }
-
 func (v *RevokeClusterInviteRevokeClusterInviteDeleteSuccess) implementsGraphQLInterfaceRevokeClusterInviteRevokeClusterInviteRevokeClusterInviteResult() {
 }
-
 func (v *RevokeClusterInviteRevokeClusterInviteNotFoundError) implementsGraphQLInterfaceRevokeClusterInviteRevokeClusterInviteRevokeClusterInviteResult() {
 }
 
@@ -88824,10 +88621,8 @@ type RevokeDeveloperTokenRevokeDeveloperTokenRevokeDeveloperTokenResult interfac
 
 func (v *RevokeDeveloperTokenRevokeDeveloperTokenAuthError) implementsGraphQLInterfaceRevokeDeveloperTokenRevokeDeveloperTokenRevokeDeveloperTokenResult() {
 }
-
 func (v *RevokeDeveloperTokenRevokeDeveloperTokenDeleteSuccess) implementsGraphQLInterfaceRevokeDeveloperTokenRevokeDeveloperTokenRevokeDeveloperTokenResult() {
 }
-
 func (v *RevokeDeveloperTokenRevokeDeveloperTokenNotFoundError) implementsGraphQLInterfaceRevokeDeveloperTokenRevokeDeveloperTokenRevokeDeveloperTokenResult() {
 }
 
@@ -89279,10 +89074,8 @@ type RevokeSigningKeyRevokeSigningKeyRevokeSigningKeyResult interface {
 
 func (v *RevokeSigningKeyRevokeSigningKeyAuthError) implementsGraphQLInterfaceRevokeSigningKeyRevokeSigningKeyRevokeSigningKeyResult() {
 }
-
 func (v *RevokeSigningKeyRevokeSigningKeyNotFoundError) implementsGraphQLInterfaceRevokeSigningKeyRevokeSigningKeyRevokeSigningKeyResult() {
 }
-
 func (v *RevokeSigningKeyRevokeSigningKey) implementsGraphQLInterfaceRevokeSigningKeyRevokeSigningKeyRevokeSigningKeyResult() {
 }
 
@@ -89691,10 +89484,8 @@ type RotateWebhookEndpointSecretRotateWebhookEndpointSecretRotateWebhookEndpoint
 
 func (v *RotateWebhookEndpointSecretRotateWebhookEndpointSecretAuthError) implementsGraphQLInterfaceRotateWebhookEndpointSecretRotateWebhookEndpointSecretRotateWebhookEndpointSecretResult() {
 }
-
 func (v *RotateWebhookEndpointSecretRotateWebhookEndpointSecretNotFoundError) implementsGraphQLInterfaceRotateWebhookEndpointSecretRotateWebhookEndpointSecretRotateWebhookEndpointSecretResult() {
 }
-
 func (v *RotateWebhookEndpointSecretRotateWebhookEndpointSecret) implementsGraphQLInterfaceRotateWebhookEndpointSecretRotateWebhookEndpointSecretRotateWebhookEndpointSecretResult() {
 }
 
@@ -90821,13 +90612,10 @@ type SendMessageSendMessageSendMessageResult interface {
 
 func (v *SendMessageSendMessageAuthError) implementsGraphQLInterfaceSendMessageSendMessageSendMessageResult() {
 }
-
 func (v *SendMessageSendMessage) implementsGraphQLInterfaceSendMessageSendMessageSendMessageResult() {
 }
-
 func (v *SendMessageSendMessageNotFoundError) implementsGraphQLInterfaceSendMessageSendMessageSendMessageResult() {
 }
-
 func (v *SendMessageSendMessageValidationError) implementsGraphQLInterfaceSendMessageSendMessageSendMessageResult() {
 }
 
@@ -91552,10 +91340,8 @@ type SetMediaRetentionPolicySetMediaRetentionPolicySetMediaRetentionPolicyResult
 
 func (v *SetMediaRetentionPolicySetMediaRetentionPolicyAuthError) implementsGraphQLInterfaceSetMediaRetentionPolicySetMediaRetentionPolicySetMediaRetentionPolicyResult() {
 }
-
 func (v *SetMediaRetentionPolicySetMediaRetentionPolicy) implementsGraphQLInterfaceSetMediaRetentionPolicySetMediaRetentionPolicySetMediaRetentionPolicyResult() {
 }
-
 func (v *SetMediaRetentionPolicySetMediaRetentionPolicyValidationError) implementsGraphQLInterfaceSetMediaRetentionPolicySetMediaRetentionPolicySetMediaRetentionPolicyResult() {
 }
 
@@ -92237,13 +92023,10 @@ type SetNodeModeSetNodeModeSetNodeModeResult interface {
 
 func (v *SetNodeModeSetNodeModeAuthError) implementsGraphQLInterfaceSetNodeModeSetNodeModeSetNodeModeResult() {
 }
-
 func (v *SetNodeModeSetNodeModeInfrastructureNode) implementsGraphQLInterfaceSetNodeModeSetNodeModeSetNodeModeResult() {
 }
-
 func (v *SetNodeModeSetNodeModeNotFoundError) implementsGraphQLInterfaceSetNodeModeSetNodeModeSetNodeModeResult() {
 }
-
 func (v *SetNodeModeSetNodeModeValidationError) implementsGraphQLInterfaceSetNodeModeSetNodeModeSetNodeModeResult() {
 }
 
@@ -92808,19 +92591,14 @@ type SetPlaybackPolicySetPlaybackPolicySetPlaybackPolicyResult interface {
 
 func (v *SetPlaybackPolicySetPlaybackPolicyAuthError) implementsGraphQLInterfaceSetPlaybackPolicySetPlaybackPolicySetPlaybackPolicyResult() {
 }
-
 func (v *SetPlaybackPolicySetPlaybackPolicyClip) implementsGraphQLInterfaceSetPlaybackPolicySetPlaybackPolicySetPlaybackPolicyResult() {
 }
-
 func (v *SetPlaybackPolicySetPlaybackPolicyNotFoundError) implementsGraphQLInterfaceSetPlaybackPolicySetPlaybackPolicySetPlaybackPolicyResult() {
 }
-
 func (v *SetPlaybackPolicySetPlaybackPolicyStream) implementsGraphQLInterfaceSetPlaybackPolicySetPlaybackPolicySetPlaybackPolicyResult() {
 }
-
 func (v *SetPlaybackPolicySetPlaybackPolicyValidationError) implementsGraphQLInterfaceSetPlaybackPolicySetPlaybackPolicySetPlaybackPolicyResult() {
 }
-
 func (v *SetPlaybackPolicySetPlaybackPolicyVodAsset) implementsGraphQLInterfaceSetPlaybackPolicySetPlaybackPolicySetPlaybackPolicyResult() {
 }
 
@@ -93747,13 +93525,10 @@ type SetPreferredClusterSetPreferredClusterSetPreferredClusterResult interface {
 
 func (v *SetPreferredClusterSetPreferredClusterAuthError) implementsGraphQLInterfaceSetPreferredClusterSetPreferredClusterSetPreferredClusterResult() {
 }
-
 func (v *SetPreferredClusterSetPreferredCluster) implementsGraphQLInterfaceSetPreferredClusterSetPreferredClusterSetPreferredClusterResult() {
 }
-
 func (v *SetPreferredClusterSetPreferredClusterNotFoundError) implementsGraphQLInterfaceSetPreferredClusterSetPreferredClusterSetPreferredClusterResult() {
 }
-
 func (v *SetPreferredClusterSetPreferredClusterValidationError) implementsGraphQLInterfaceSetPreferredClusterSetPreferredClusterSetPreferredClusterResult() {
 }
 
@@ -94309,13 +94084,10 @@ type SetStreamRetentionOverridesSetStreamRetentionOverridesSetStreamRetentionOve
 
 func (v *SetStreamRetentionOverridesSetStreamRetentionOverridesAuthError) implementsGraphQLInterfaceSetStreamRetentionOverridesSetStreamRetentionOverridesSetStreamRetentionOverridesResult() {
 }
-
 func (v *SetStreamRetentionOverridesSetStreamRetentionOverridesNotFoundError) implementsGraphQLInterfaceSetStreamRetentionOverridesSetStreamRetentionOverridesSetStreamRetentionOverridesResult() {
 }
-
 func (v *SetStreamRetentionOverridesSetStreamRetentionOverrides) implementsGraphQLInterfaceSetStreamRetentionOverridesSetStreamRetentionOverridesSetStreamRetentionOverridesResult() {
 }
-
 func (v *SetStreamRetentionOverridesSetStreamRetentionOverridesValidationError) implementsGraphQLInterfaceSetStreamRetentionOverridesSetStreamRetentionOverridesSetStreamRetentionOverridesResult() {
 }
 
@@ -94748,16 +94520,12 @@ type SkipperChatSkipperChatSkipperChatEvent interface {
 
 func (v *SkipperChatSkipperChatSkipperDone) implementsGraphQLInterfaceSkipperChatSkipperChatSkipperChatEvent() {
 }
-
 func (v *SkipperChatSkipperChatSkipperMeta) implementsGraphQLInterfaceSkipperChatSkipperChatSkipperChatEvent() {
 }
-
 func (v *SkipperChatSkipperChatSkipperToken) implementsGraphQLInterfaceSkipperChatSkipperChatSkipperChatEvent() {
 }
-
 func (v *SkipperChatSkipperChatSkipperToolEndEvent) implementsGraphQLInterfaceSkipperChatSkipperChatSkipperChatEvent() {
 }
-
 func (v *SkipperChatSkipperChatSkipperToolStartEvent) implementsGraphQLInterfaceSkipperChatSkipperChatSkipperChatEvent() {
 }
 
@@ -104519,13 +104287,10 @@ type SubmitX402PaymentSubmitX402PaymentSubmitX402PaymentResult interface {
 
 func (v *SubmitX402PaymentSubmitX402PaymentAuthError) implementsGraphQLInterfaceSubmitX402PaymentSubmitX402PaymentSubmitX402PaymentResult() {
 }
-
 func (v *SubmitX402PaymentSubmitX402PaymentNotFoundError) implementsGraphQLInterfaceSubmitX402PaymentSubmitX402PaymentSubmitX402PaymentResult() {
 }
-
 func (v *SubmitX402PaymentSubmitX402PaymentValidationError) implementsGraphQLInterfaceSubmitX402PaymentSubmitX402PaymentSubmitX402PaymentResult() {
 }
-
 func (v *SubmitX402PaymentSubmitX402PaymentX402PaymentResult) implementsGraphQLInterfaceSubmitX402PaymentSubmitX402PaymentSubmitX402PaymentResult() {
 }
 
@@ -107305,94 +107070,64 @@ type TenantEventsTenantEventsPublicEventData interface {
 
 func (v *TenantEventsTenantEventsPublicEventDataAccountSuspended) implementsGraphQLInterfaceTenantEventsTenantEventsPublicEventData() {
 }
-
 func (v *TenantEventsTenantEventsPublicEventDataApiTokenCreated) implementsGraphQLInterfaceTenantEventsTenantEventsPublicEventData() {
 }
-
 func (v *TenantEventsTenantEventsPublicEventDataApiTokenRevoked) implementsGraphQLInterfaceTenantEventsTenantEventsPublicEventData() {
 }
-
 func (v *TenantEventsTenantEventsPublicEventDataBillingDetailsUpdated) implementsGraphQLInterfaceTenantEventsTenantEventsPublicEventData() {
 }
-
 func (v *TenantEventsTenantEventsPublicEventDataClipFailed) implementsGraphQLInterfaceTenantEventsTenantEventsPublicEventData() {
 }
-
 func (v *TenantEventsTenantEventsPublicEventDataClipReady) implementsGraphQLInterfaceTenantEventsTenantEventsPublicEventData() {
 }
-
 func (v *TenantEventsTenantEventsPublicEventDataClipRequested) implementsGraphQLInterfaceTenantEventsTenantEventsPublicEventData() {
 }
-
 func (v *TenantEventsTenantEventsPublicEventDataCustomDomainFailed) implementsGraphQLInterfaceTenantEventsTenantEventsPublicEventData() {
 }
-
 func (v *TenantEventsTenantEventsPublicEventDataCustomDomainVerified) implementsGraphQLInterfaceTenantEventsTenantEventsPublicEventData() {
 }
-
 func (v *TenantEventsTenantEventsPublicEventDataInvoiceCreated) implementsGraphQLInterfaceTenantEventsTenantEventsPublicEventData() {
 }
-
 func (v *TenantEventsTenantEventsPublicEventDataInvoicePaid) implementsGraphQLInterfaceTenantEventsTenantEventsPublicEventData() {
 }
-
 func (v *TenantEventsTenantEventsPublicEventDataMultistreamStatusChanged) implementsGraphQLInterfaceTenantEventsTenantEventsPublicEventData() {
 }
-
 func (v *TenantEventsTenantEventsPublicEventDataPaymentFailed) implementsGraphQLInterfaceTenantEventsTenantEventsPublicEventData() {
 }
-
 func (v *TenantEventsTenantEventsPublicEventDataRecordingChapterFailed) implementsGraphQLInterfaceTenantEventsTenantEventsPublicEventData() {
 }
-
 func (v *TenantEventsTenantEventsPublicEventDataRecordingFailed) implementsGraphQLInterfaceTenantEventsTenantEventsPublicEventData() {
 }
-
 func (v *TenantEventsTenantEventsPublicEventDataRecordingReady) implementsGraphQLInterfaceTenantEventsTenantEventsPublicEventData() {
 }
-
 func (v *TenantEventsTenantEventsPublicEventDataRecordingStarted) implementsGraphQLInterfaceTenantEventsTenantEventsPublicEventData() {
 }
-
 func (v *TenantEventsTenantEventsPublicEventDataRecordingStopped) implementsGraphQLInterfaceTenantEventsTenantEventsPublicEventData() {
 }
-
 func (v *TenantEventsTenantEventsPublicEventDataStreamConnected) implementsGraphQLInterfaceTenantEventsTenantEventsPublicEventData() {
 }
-
 func (v *TenantEventsTenantEventsPublicEventDataStreamCreated) implementsGraphQLInterfaceTenantEventsTenantEventsPublicEventData() {
 }
-
 func (v *TenantEventsTenantEventsPublicEventDataStreamDeleted) implementsGraphQLInterfaceTenantEventsTenantEventsPublicEventData() {
 }
-
 func (v *TenantEventsTenantEventsPublicEventDataStreamIdle) implementsGraphQLInterfaceTenantEventsTenantEventsPublicEventData() {
 }
-
 func (v *TenantEventsTenantEventsPublicEventDataStreamKeyRotated) implementsGraphQLInterfaceTenantEventsTenantEventsPublicEventData() {
 }
-
 func (v *TenantEventsTenantEventsPublicEventDataStreamLive) implementsGraphQLInterfaceTenantEventsTenantEventsPublicEventData() {
 }
-
 func (v *TenantEventsTenantEventsPublicEventDataStreamUpdated) implementsGraphQLInterfaceTenantEventsTenantEventsPublicEventData() {
 }
-
 func (v *TenantEventsTenantEventsPublicEventDataTopupCredited) implementsGraphQLInterfaceTenantEventsTenantEventsPublicEventData() {
 }
-
 func (v *TenantEventsTenantEventsPublicEventDataUploadAborted) implementsGraphQLInterfaceTenantEventsTenantEventsPublicEventData() {
 }
-
 func (v *TenantEventsTenantEventsPublicEventDataUploadCompleted) implementsGraphQLInterfaceTenantEventsTenantEventsPublicEventData() {
 }
-
 func (v *TenantEventsTenantEventsPublicEventDataUploadCreated) implementsGraphQLInterfaceTenantEventsTenantEventsPublicEventData() {
 }
-
 func (v *TenantEventsTenantEventsPublicEventDataUploadFailed) implementsGraphQLInterfaceTenantEventsTenantEventsPublicEventData() {
 }
-
 func (v *TenantEventsTenantEventsPublicEventDataUploadReady) implementsGraphQLInterfaceTenantEventsTenantEventsPublicEventData() {
 }
 
@@ -109982,13 +109717,10 @@ type TestPlaybackAccessTestPlaybackAccessTestPlaybackAccessResult interface {
 
 func (v *TestPlaybackAccessTestPlaybackAccessAuthError) implementsGraphQLInterfaceTestPlaybackAccessTestPlaybackAccessTestPlaybackAccessResult() {
 }
-
 func (v *TestPlaybackAccessTestPlaybackAccessNotFoundError) implementsGraphQLInterfaceTestPlaybackAccessTestPlaybackAccessTestPlaybackAccessResult() {
 }
-
 func (v *TestPlaybackAccessTestPlaybackAccessPlaybackAccessDecision) implementsGraphQLInterfaceTestPlaybackAccessTestPlaybackAccessTestPlaybackAccessResult() {
 }
-
 func (v *TestPlaybackAccessTestPlaybackAccessValidationError) implementsGraphQLInterfaceTestPlaybackAccessTestPlaybackAccessTestPlaybackAccessResult() {
 }
 
@@ -110497,13 +110229,10 @@ type TestWebhookEndpointTestWebhookEndpointTestWebhookEndpointResult interface {
 
 func (v *TestWebhookEndpointTestWebhookEndpointAuthError) implementsGraphQLInterfaceTestWebhookEndpointTestWebhookEndpointTestWebhookEndpointResult() {
 }
-
 func (v *TestWebhookEndpointTestWebhookEndpointNotFoundError) implementsGraphQLInterfaceTestWebhookEndpointTestWebhookEndpointTestWebhookEndpointResult() {
 }
-
 func (v *TestWebhookEndpointTestWebhookEndpointRateLimitError) implementsGraphQLInterfaceTestWebhookEndpointTestWebhookEndpointTestWebhookEndpointResult() {
 }
-
 func (v *TestWebhookEndpointTestWebhookEndpointWebhookTestResult) implementsGraphQLInterfaceTestWebhookEndpointTestWebhookEndpointTestWebhookEndpointResult() {
 }
 
@@ -113011,10 +112740,8 @@ type UnlinkWalletUnlinkWalletUnlinkWalletResult interface {
 
 func (v *UnlinkWalletUnlinkWalletAuthError) implementsGraphQLInterfaceUnlinkWalletUnlinkWalletUnlinkWalletResult() {
 }
-
 func (v *UnlinkWalletUnlinkWalletDeleteSuccess) implementsGraphQLInterfaceUnlinkWalletUnlinkWalletUnlinkWalletResult() {
 }
-
 func (v *UnlinkWalletUnlinkWalletNotFoundError) implementsGraphQLInterfaceUnlinkWalletUnlinkWalletUnlinkWalletResult() {
 }
 
@@ -113809,13 +113536,10 @@ type UpdateClusterMarketplaceUpdateClusterMarketplaceUpdateClusterResult interfa
 
 func (v *UpdateClusterMarketplaceUpdateClusterMarketplaceAuthError) implementsGraphQLInterfaceUpdateClusterMarketplaceUpdateClusterMarketplaceUpdateClusterResult() {
 }
-
 func (v *UpdateClusterMarketplaceUpdateClusterMarketplaceCluster) implementsGraphQLInterfaceUpdateClusterMarketplaceUpdateClusterMarketplaceUpdateClusterResult() {
 }
-
 func (v *UpdateClusterMarketplaceUpdateClusterMarketplaceNotFoundError) implementsGraphQLInterfaceUpdateClusterMarketplaceUpdateClusterMarketplaceUpdateClusterResult() {
 }
-
 func (v *UpdateClusterMarketplaceUpdateClusterMarketplaceValidationError) implementsGraphQLInterfaceUpdateClusterMarketplaceUpdateClusterMarketplaceUpdateClusterResult() {
 }
 
@@ -114355,13 +114079,10 @@ type UpdateMediaRetentionUpdateMediaRetentionUpdateMediaRetentionResult interfac
 
 func (v *UpdateMediaRetentionUpdateMediaRetentionAuthError) implementsGraphQLInterfaceUpdateMediaRetentionUpdateMediaRetentionUpdateMediaRetentionResult() {
 }
-
 func (v *UpdateMediaRetentionUpdateMediaRetentionEffectiveRetention) implementsGraphQLInterfaceUpdateMediaRetentionUpdateMediaRetentionUpdateMediaRetentionResult() {
 }
-
 func (v *UpdateMediaRetentionUpdateMediaRetentionNotFoundError) implementsGraphQLInterfaceUpdateMediaRetentionUpdateMediaRetentionUpdateMediaRetentionResult() {
 }
-
 func (v *UpdateMediaRetentionUpdateMediaRetentionValidationError) implementsGraphQLInterfaceUpdateMediaRetentionUpdateMediaRetentionUpdateMediaRetentionResult() {
 }
 
@@ -115238,13 +114959,10 @@ type UpdateStreamUpdateStreamUpdateStreamResult interface {
 
 func (v *UpdateStreamUpdateStreamAuthError) implementsGraphQLInterfaceUpdateStreamUpdateStreamUpdateStreamResult() {
 }
-
 func (v *UpdateStreamUpdateStreamNotFoundError) implementsGraphQLInterfaceUpdateStreamUpdateStreamUpdateStreamResult() {
 }
-
 func (v *UpdateStreamUpdateStream) implementsGraphQLInterfaceUpdateStreamUpdateStreamUpdateStreamResult() {
 }
-
 func (v *UpdateStreamUpdateStreamValidationError) implementsGraphQLInterfaceUpdateStreamUpdateStreamUpdateStreamResult() {
 }
 
@@ -115718,10 +115436,8 @@ type UpdateTenantUpdateTenantUpdateTenantResult interface {
 
 func (v *UpdateTenantUpdateTenantAuthError) implementsGraphQLInterfaceUpdateTenantUpdateTenantUpdateTenantResult() {
 }
-
 func (v *UpdateTenantUpdateTenant) implementsGraphQLInterfaceUpdateTenantUpdateTenantUpdateTenantResult() {
 }
-
 func (v *UpdateTenantUpdateTenantValidationError) implementsGraphQLInterfaceUpdateTenantUpdateTenantUpdateTenantResult() {
 }
 
@@ -116335,13 +116051,10 @@ type UpdateWebhookEndpointUpdateWebhookEndpointUpdateWebhookEndpointResult inter
 
 func (v *UpdateWebhookEndpointUpdateWebhookEndpointAuthError) implementsGraphQLInterfaceUpdateWebhookEndpointUpdateWebhookEndpointUpdateWebhookEndpointResult() {
 }
-
 func (v *UpdateWebhookEndpointUpdateWebhookEndpointNotFoundError) implementsGraphQLInterfaceUpdateWebhookEndpointUpdateWebhookEndpointUpdateWebhookEndpointResult() {
 }
-
 func (v *UpdateWebhookEndpointUpdateWebhookEndpointValidationError) implementsGraphQLInterfaceUpdateWebhookEndpointUpdateWebhookEndpointUpdateWebhookEndpointResult() {
 }
-
 func (v *UpdateWebhookEndpointUpdateWebhookEndpoint) implementsGraphQLInterfaceUpdateWebhookEndpointUpdateWebhookEndpointUpdateWebhookEndpointResult() {
 }
 
@@ -122105,7 +121818,6 @@ type WalletLoginWalletLoginWalletLoginResult interface {
 
 func (v *WalletLoginWalletLoginValidationError) implementsGraphQLInterfaceWalletLoginWalletLoginWalletLoginResult() {
 }
-
 func (v *WalletLoginWalletLoginWalletLoginPayload) implementsGraphQLInterfaceWalletLoginWalletLoginWalletLoginResult() {
 }
 
@@ -146046,252 +145758,169 @@ func WalletLogin(
 
 	return data_, err_
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceAbortVodUploadAbortVodUploadAbortVodUploadResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceAcceptClusterInviteAcceptClusterInviteClusterSubscriptionResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceAcknowledgeIncidentAcknowledgeIncidentIncidentMutationResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceAddIncidentNoteAddIncidentNoteIncidentMutationResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceApplyClusterMediaConsentChangeApplyClusterMediaConsentChangeMediaCapacityConsentChangeResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceApplyMediaPlacementChangeApplyMediaPlacementChangeMediaPlacementChangeResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceApproveClusterSubscriptionApproveClusterSubscriptionClusterSubscriptionResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceAssignIncidentAssignIncidentIncidentMutationResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceBootstrapEdgeBootstrapEdgeBootstrapEdgeResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceChangeBillingTierChangeBillingTierChangeBillingTierResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceCompleteVodUploadCompleteVodUploadCompleteVodUploadResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceCreateClipCreateClipCreateClipResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceCreateClusterInviteCreateClusterInviteCreateClusterInviteResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceCreateConversationCreateConversationCreateConversationResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceCreateDeveloperTokenCreateDeveloperTokenCreateDeveloperTokenResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceCreateEdgeClusterCreateEdgeClusterCreateEdgeClusterResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceCreateEnrollmentTokenCreateEnrollmentTokenCreateEnrollmentTokenResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceCreateMollieFirstPaymentCreateMollieFirstPaymentMollieFirstPaymentResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceCreateMollieSubscriptionCreateMollieSubscriptionMollieSubscriptionResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceCreatePaymentCreatePaymentCreatePaymentResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceCreateSigningKeyCreateSigningKeyCreateSigningKeyResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceCreateStreamCreateStreamCreateStreamResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceCreateStreamKeyCreateStreamKeyCreateStreamKeyResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceCreateStripeBillingPortalCreateStripeBillingPortalStripeBillingPortalResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceCreateStripeCheckoutCreateStripeCheckoutStripeCheckoutResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceCreateVodUploadCreateVodUploadCreateVodUploadResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceCreateWebhookEndpointCreateWebhookEndpointCreateWebhookEndpointResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceDeleteClipDeleteClipDeleteClipResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceDeleteDVRDeleteDVRDeleteDVRResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceDeleteStreamDeleteStreamDeleteStreamResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceDeleteStreamKeyDeleteStreamKeyDeleteStreamKeyResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceDeleteVodAssetDeleteVodAssetDeleteVodAssetResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceDeleteWebhookEndpointDeleteWebhookEndpointDeleteWebhookEndpointResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceDisableWebhookEndpointDisableWebhookEndpointWebhookEndpointResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceEnableWebhookEndpointEnableWebhookEndpointWebhookEndpointResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceGetClusterMediaConsentChangeClusterMediaConsentChangeMediaCapacityConsentChangeResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceGetClusterMediaConsentClusterMediaConsentMediaCapacityConsentResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceGetInfrastructureNodeMetrics1hConnectionNode() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceGetInfrastructureNodeMetricsConnectionNode() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceGetMediaPlacementChangeMediaPlacementChangeMediaPlacementChangeResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceGetMediaPlacementOptionsMediaPlacementOptionsMediaPlacementOptionsResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceGetMediaPlacementPolicyMediaPlacementPolicyMediaPlacementPolicyResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceGetNodeNode() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceGetPreviewMediaPlacementPreviewMediaPlacementMediaPlacementPreviewResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceGetReviewClusterMediaConsentChangeReviewClusterMediaConsentChangeMediaPlacementReviewResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceGetReviewMediaPlacementChangeReviewMediaPlacementChangeMediaPlacementReviewResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceGetVodUploadStatusVodUploadStatusVodUploadStatusResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceImportVodAssetImportVodAssetImportVodAssetResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceLinkEmailLinkEmailLinkEmailResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceLinkWalletLinkWalletLinkWalletResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceOpenMistAdminSessionOpenMistAdminSessionOpenMistAdminSessionResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfacePromoteToPaidPromoteToPaidPromoteToPaidResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceRefreshStreamKeyRefreshStreamKeyUpdateStreamResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceRejectClusterSubscriptionRejectClusterSubscriptionClusterSubscriptionResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceReplayWebhookDeliveriesReplayWebhookDeliveriesReplayWebhookDeliveriesResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceReplayWebhookDeliveryReplayWebhookDeliveryReplayWebhookDeliveryResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceRequestClusterSubscriptionRequestClusterSubscriptionClusterSubscriptionResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceResetMediaRetentionOverrideResetMediaRetentionOverrideUpdateMediaRetentionResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceResolveIncidentResolveIncidentIncidentMutationResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceRevokeClusterInviteRevokeClusterInviteRevokeClusterInviteResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceRevokeDeveloperTokenRevokeDeveloperTokenRevokeDeveloperTokenResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceRevokeSigningKeyRevokeSigningKeyRevokeSigningKeyResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceRotateWebhookEndpointSecretRotateWebhookEndpointSecretRotateWebhookEndpointSecretResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceSendMessageSendMessageSendMessageResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceSetMediaRetentionPolicySetMediaRetentionPolicySetMediaRetentionPolicyResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceSetNodeModeSetNodeModeSetNodeModeResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceSetPlaybackPolicySetPlaybackPolicySetPlaybackPolicyResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceSetPreferredClusterSetPreferredClusterSetPreferredClusterResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceSetStreamRetentionOverridesSetStreamRetentionOverridesSetStreamRetentionOverridesResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceSkipperChatSkipperChatSkipperChatEvent() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceStartDVRStartDVRStartDVRResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceStopDVRStopDVRStopDVRResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceSubmitX402PaymentSubmitX402PaymentSubmitX402PaymentResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceTenantEventsTenantEventsPublicEventData() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceTestPlaybackAccessTestPlaybackAccessTestPlaybackAccessResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceTestWebhookEndpointTestWebhookEndpointTestWebhookEndpointResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceUnlinkWalletUnlinkWalletUnlinkWalletResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceUpdateClusterMarketplaceUpdateClusterMarketplaceUpdateClusterResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceUpdateMediaRetentionUpdateMediaRetentionUpdateMediaRetentionResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceUpdateStreamUpdateStreamUpdateStreamResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceUpdateTenantUpdateTenantUpdateTenantResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceUpdateWebhookEndpointUpdateWebhookEndpointUpdateWebhookEndpointResult() {
 }
-
 func (v *UnknownMember) implementsGraphQLInterfaceWalletLoginWalletLoginWalletLoginResult() {
 }
