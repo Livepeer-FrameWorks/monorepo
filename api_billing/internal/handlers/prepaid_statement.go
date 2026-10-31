@@ -120,7 +120,7 @@ func (jm *JobManager) ratePrepaidStatement(ctx context.Context, tier *billingpkg
 	if err != nil {
 		return nil, fmt.Errorf("collect statement usage: %w", err)
 	}
-	result, err := jm.rateInvoiceForTenant(ctx, tenantID, periodStart, periodEnd, tier, true, baseProviderManaged, perClusterUsage, perClusterDimensioned)
+	result, err := jm.rateInvoiceForTenant(ctx, tenantID, phase, tier, true, baseProviderManaged, perClusterUsage, perClusterDimensioned)
 	if err != nil {
 		return nil, fmt.Errorf("rate statement usage: %w", err)
 	}

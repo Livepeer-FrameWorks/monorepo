@@ -3380,7 +3380,7 @@ func (jm *JobManager) updateInvoiceDraft(ctx context.Context, tenantID string) e
 	// Rate the period via the engine; one source of truth for invoice math.
 	// Money stays as decimal.Decimal end-to-end and binds to NUMERIC columns
 	// as decimal strings; float64 never touches the cents.
-	ratingResult, err := jm.rateInvoiceForTenant(ctx, tenantID, periodStart, periodEnd, tier, true, baseProviderManaged, perClusterUsage, perClusterDimensioned)
+	ratingResult, err := jm.rateInvoiceForTenant(ctx, tenantID, phase, tier, true, baseProviderManaged, perClusterUsage, perClusterDimensioned)
 	if err != nil {
 		return fmt.Errorf("rate usage: %w", err)
 	}

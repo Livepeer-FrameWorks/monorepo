@@ -46,7 +46,7 @@ func TestRateInvoiceForTenantZeroesBaseForProviderManagedSub(t *testing.T) {
 	got, err := jm.rateInvoiceForTenant(
 		context.Background(),
 		"tenant-stripe",
-		periodStart, periodEnd,
+		usagePhase{start: periodStart, end: periodEnd},
 		newTestTier("EUR"),
 		true,                            // includeBasePrice
 		true,                            // baseProviderManaged — Stripe/Mollie owns the base
@@ -83,7 +83,7 @@ func TestRateInvoiceForTenantKeepsBaseForSelfManagedSub(t *testing.T) {
 	got, err := jm.rateInvoiceForTenant(
 		context.Background(),
 		"tenant-self",
-		periodStart, periodEnd,
+		usagePhase{start: periodStart, end: periodEnd},
 		newTestTier("EUR"),
 		true,                            // includeBasePrice
 		false,                           // baseProviderManaged — Purser owns the base
@@ -122,7 +122,7 @@ func TestFreeStatementPreservesUsageAtZeroDue(t *testing.T) {
 	jm := &JobManager{db: mockDB, logger: logging.NewLogger(), billing: &Service{}}
 	periodStart := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
 	result, err := jm.rateInvoiceForTenant(
-		context.Background(), "tenant-free", periodStart, periodStart.AddDate(0, 1, 0), tier,
+		context.Background(), "tenant-free", usagePhase{start: periodStart, end: periodStart.AddDate(0, 1, 0)}, tier,
 		true, false,
 		map[string]map[string]float64{"": {string(rating.MeterDeliveredMinutes): 120}},
 		map[string][]rating.DimensionedQuantity{},
@@ -163,7 +163,7 @@ func TestOperatorGrantRatesBaseFeeAndUsageToZero(t *testing.T) {
 	jm := &JobManager{db: mockDB, logger: logging.NewLogger(), billing: &Service{}}
 	periodStart := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 	result, err := jm.rateInvoiceForTenant(
-		context.Background(), "tenant-supporter", periodStart, periodStart.AddDate(0, 1, 0), tier,
+		context.Background(), "tenant-supporter", usagePhase{start: periodStart, end: periodStart.AddDate(0, 1, 0)}, tier,
 		true, false,
 		map[string]map[string]float64{"": {string(rating.MeterDeliveredMinutes): 120}},
 		map[string][]rating.DimensionedQuantity{},

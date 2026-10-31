@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 
@@ -260,13 +259,14 @@ func flattenUsageAcrossClusters(perCluster map[string]map[string]float64) map[st
 func (jm *JobManager) rateInvoiceForTenant(
 	ctx context.Context,
 	tenantID string,
-	periodStart, periodEnd time.Time,
+	phase usagePhase,
 	tier *billingpkg.EffectiveTier,
 	includeBasePrice bool,
 	baseProviderManaged bool,
 	perClusterUsage map[string]map[string]float64,
 	perClusterDimensioned map[string][]rating.DimensionedQuantity,
 ) (*clusterRatingResult, error) {
+	periodStart, periodEnd := phase.start, phase.end
 	if tier == nil {
 		return nil, errors.New("rateInvoiceForTenant: nil tier")
 	}
@@ -452,7 +452,7 @@ func (jm *JobManager) rateInvoiceForTenant(
 		out.GrossUsageAmount = out.GrossUsageAmount.Add(res.GrossUsageAmount)
 	}
 
-	monthlyLines, monthlyErr := jm.purserInvoicedClusterMonthlyLines(ctx, tenantID, periodStart, periodEnd, tier, resolver, periodSuffix)
+	monthlyLines, monthlyErr := jm.purserInvoicedClusterMonthlyLines(ctx, tenantID, phase, tier, resolver, periodSuffix)
 	if monthlyErr != nil {
 		return nil, monthlyErr
 	}
@@ -475,23 +475,21 @@ func (jm *JobManager) rateInvoiceForTenant(
 // billed on Purser invoices instead of a Stripe subscription: one line per
 // subscription active during the period at the cluster's monthly price in
 // effect at the period start, attributed to the cluster for operator credit.
-// The price is prorated like the advance base fee: times the seconds the
-// subscription was active inside the period over the seconds of the month
-// starting at the period start, at most once, rounded half away from zero to
-// the cent. A period closed early by a tier change and the period starting at
-// the change therefore each carry only their share, and a subscription added,
-// cancelled, or reactivated inside a period pays for its active time.
+// Cluster activity is priced against the phase's complete billing cycle.
+// Cumulative active-time positions keep split invoices equal to one unsplit
+// fee, including cancellation and reactivation within the cycle.
 func (jm *JobManager) purserInvoicedClusterMonthlyLines(
 	ctx context.Context,
 	tenantID string,
-	periodStart, periodEnd time.Time,
+	phase usagePhase,
 	tier *billingpkg.EffectiveTier,
 	resolver pricing.QuartermasterClient,
 	periodSuffix string,
 ) ([]pricedLine, error) {
+	periodStart, periodEnd := phase.start, phase.end
 	queries := purserdb.New(jm.db)
 	subscriptions, err := queries.ListPurserInvoicedClusterSubscriptionsForPeriod(ctx, purserdb.ListPurserInvoicedClusterSubscriptionsForPeriodParams{
-		TenantID: tenantID, PeriodStart: periodStart, PeriodEnd: periodEnd,
+		TenantID: tenantID, PeriodStart: phase.splitStart(), PeriodEnd: phase.splitEnd(),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("list Purser-invoiced cluster subscriptions: %w", err)
@@ -503,8 +501,8 @@ func (jm *JobManager) purserInvoicedClusterMonthlyLines(
 		return nil, errors.New("rateInvoiceForTenant: pricing resolver not configured but monthly cluster subscriptions require it")
 	}
 	type activeSpan struct {
-		from, until           time.Time
-		seconds, monthSeconds int64
+		from, until                   time.Time
+		before, through, monthSeconds int64
 	}
 	spans := make(map[string]activeSpan)
 	for _, subscription := range subscriptions {
@@ -513,21 +511,26 @@ func (jm *JobManager) purserInvoicedClusterMonthlyLines(
 		if subscription.Status == "cancelled" {
 			cancelledAt = subscription.CancelledAt
 		}
-		activeFrom, activeUntil, activeSeconds, monthSeconds := monthlyFeeOverlap(periodStart, periodEnd, subscription.ActiveFrom, cancelledAt)
-		if activeSeconds <= 0 {
-			continue
+		activeFrom, activeUntil, activeSeconds, monthSeconds := monthlyFeeOverlap(phase, subscription.ActiveFrom, cancelledAt)
+		if monthSeconds <= 0 {
+			return nil, errors.New("monthly cluster billing requires a positive cycle")
 		}
+		prefix := usagePhase{start: phase.splitStart(), end: phase.start, periodEnd: phase.splitEnd()}
+		_, _, before, _ := monthlyFeeOverlap(prefix, subscription.ActiveFrom, cancelledAt)
+		prefix.end = phase.end
+		_, _, through, _ := monthlyFeeOverlap(prefix, subscription.ActiveFrom, cancelledAt)
 		span, exists := spans[clusterID]
 		if !exists {
-			span = activeSpan{from: activeFrom, until: activeUntil, monthSeconds: monthSeconds}
+			span = activeSpan{monthSeconds: monthSeconds}
 		}
-		if activeFrom.Before(span.from) {
+		if activeSeconds > 0 && (span.from.IsZero() || activeFrom.Before(span.from)) {
 			span.from = activeFrom
 		}
-		if activeUntil.After(span.until) {
+		if activeSeconds > 0 && activeUntil.After(span.until) {
 			span.until = activeUntil
 		}
-		span.seconds += activeSeconds
+		span.before += before
+		span.through += through
 		spans[clusterID] = span
 	}
 	clusterIDs := make([]string, 0, len(spans))
@@ -539,7 +542,11 @@ func (jm *JobManager) purserInvoicedClusterMonthlyLines(
 	for _, clusterID := range clusterIDs {
 		span := spans[clusterID]
 		activeFrom, activeUntil := span.from, span.until
-		activeSeconds, monthSeconds := min(span.seconds, span.monthSeconds), span.monthSeconds
+		before, through := min(span.before, span.monthSeconds), min(span.through, span.monthSeconds)
+		activeSeconds, monthSeconds := through-before, span.monthSeconds
+		if activeSeconds <= 0 {
+			continue
+		}
 		history, historyErr := queries.LoadClusterPricingHistory(ctx, purserdb.LoadClusterPricingHistoryParams{
 			ClusterID: clusterID, EffectiveFrom: periodStart,
 		})
@@ -558,10 +565,14 @@ func (jm *JobManager) purserInvoicedClusterMonthlyLines(
 		if parseErr != nil {
 			return nil, fmt.Errorf("parse monthly price for cluster %s: %w", clusterID, parseErr)
 		}
-		price := monthlyPrice
+		// Round cumulative active-time positions, so adjacent phases and
+		// cancellations retain exactly the same cents as one unsplit invoice.
+		position := func(seconds int64) decimal.Decimal {
+			return monthlyPrice.Shift(2).Mul(decimal.NewFromInt(seconds)).Div(decimal.NewFromInt(monthSeconds)).Round(0)
+		}
+		price := position(through).Sub(position(before)).Shift(-2)
 		description := "Cluster monthly fee"
 		if activeSeconds < monthSeconds {
-			price = monthlyPrice.Shift(2).Mul(decimal.NewFromInt(activeSeconds)).Div(decimal.NewFromInt(monthSeconds)).Round(0).Shift(-2)
 			description = fmt.Sprintf("Cluster monthly fee %s to %s", activeFrom.UTC().Format(time.DateOnly), activeUntil.UTC().Format(time.DateOnly))
 		}
 		resolved, resolveErr := pricing.ResolveClusterPricing(ctx, pricing.ResolveInputs{
@@ -611,23 +622,21 @@ func (jm *JobManager) purserInvoicedClusterMonthlyLines(
 	return lines, nil
 }
 
-// monthlyFeeOverlap is the part of [periodStart, periodEnd) a subscription
-// active from activeFrom until activeUntil (open when not valid) covers, its
-// length in whole seconds, and the seconds of the month starting at
-// periodStart. The covered seconds never exceed the month.
-func monthlyFeeOverlap(periodStart, periodEnd, activeFrom time.Time, activeUntil sql.NullTime) (from, until time.Time, activeSeconds, monthSeconds int64) {
-	from, until = periodStart, periodEnd
+// monthlyFeeOverlap intersects cluster activity with a phase and returns its
+// whole seconds and the retained cycle duration. An invalid activeUntil is open.
+func monthlyFeeOverlap(phase usagePhase, activeFrom time.Time, activeUntil sql.NullTime) (from, until time.Time, activeSeconds, monthSeconds int64) {
+	from, until = phase.start, phase.end
 	if activeFrom.After(from) {
 		from = activeFrom
 	}
 	if activeUntil.Valid && activeUntil.Time.Before(until) {
 		until = activeUntil.Time
 	}
-	monthSeconds = int64(billing.NextMonthlyAnniversary(periodStart).Sub(periodStart) / time.Second)
+	monthSeconds = int64(phase.splitEnd().Sub(phase.splitStart()) / time.Second)
 	if !until.After(from) {
 		return from, until, 0, monthSeconds
 	}
-	return from, until, min(int64(until.Sub(from)/time.Second), monthSeconds), monthSeconds
+	return from, until, min(int64(until.Sub(from)/time.Second), max(monthSeconds, 0)), monthSeconds
 }
 
 // usageMapFromAggregates derives the rating engine's per-meter usage map from

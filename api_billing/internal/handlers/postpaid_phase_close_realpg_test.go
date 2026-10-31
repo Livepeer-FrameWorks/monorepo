@@ -203,7 +203,12 @@ func TestPostpaidToPrepaidSwitchBillsEachPhaseOnce_RealPG(t *testing.T) { //noli
 	// switches split.
 	baseCents := usagePhase{start: postpaidFrom, end: switchAt, chainFrom: periodStart, periodEnd: periodEnd}.
 		baseFeeShare(decimal.New(7900, -2)).Shift(2).IntPart()
-	clusterCents := proratedMonthlyCents(3000, postpaidFrom, switchAt, periodStart.AddDate(0, 0, -10), time.Time{})
+	// Both model switches retain the same original cycle. Literal monthly
+	// cents are apportioned cumulatively so the last phase gets the remainder.
+	clusterPosition := func(at time.Time) int64 {
+		return decimal.NewFromInt(3000).Mul(decimal.NewFromInt(int64(at.Sub(periodStart) / time.Second))).Div(decimal.NewFromInt(int64(periodEnd.Sub(periodStart) / time.Second))).Round(0).IntPart()
+	}
+	clusterCents := clusterPosition(switchAt) - clusterPosition(postpaidFrom)
 	usageCents := int64(240) // (100 + 20) GiB at 0.02
 	grossCents := baseCents + usageCents + clusterCents
 	if invoice.id != draft.id || invoice.kind != "invoice" || !strings.HasPrefix(invoice.number, "INV-") || invoice.status != "pending" ||
@@ -266,7 +271,7 @@ func TestPostpaidToPrepaidSwitchBillsEachPhaseOnce_RealPG(t *testing.T) { //noli
 		t.Fatalf("month end closed %d of %d due periods, want the prepaid statement", generated, len(due))
 	}
 	statement := readInvoice(t, db, tenantID, switchAt)
-	statementFees := proratedMonthlyCents(3000, switchAt, periodEnd, periodStart.AddDate(0, 0, -10), time.Time{})
+	statementFees := int64(3000) - clusterPosition(switchAt)
 	if statement.kind != "prepaid_statement" || !statement.periodEnd.Equal(periodEnd) || statement.metered != cents(80+statementFees) {
 		t.Fatalf("month-end document = kind %s period %s..%s metered %s, want the prepaid statement of %s..%s with 80 GiB at 0.01 and cluster fee %s",
 			statement.kind, statement.periodStart, statement.periodEnd, statement.metered, switchAt, periodEnd, cents(statementFees))

@@ -12,6 +12,7 @@ import (
 	billingpkg "frameworks/api_billing/internal/billing"
 	"frameworks/api_billing/internal/database/purserdb"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/google/uuid"
@@ -47,7 +48,7 @@ func proratedMonthlyCents(monthlyCents int64, periodStart, periodEnd, activeFrom
 		return 0
 	}
 	overlap := decimal.NewFromInt(int64(until.Sub(from) / time.Second))
-	month := decimal.NewFromInt(int64(periodStart.AddDate(0, 1, 0).Sub(periodStart) / time.Second))
+	month := decimal.NewFromInt(int64(billing.NextMonthlyAnniversary(periodStart).Sub(periodStart) / time.Second))
 	return decimal.NewFromInt(monthlyCents).Mul(overlap).Div(month).Round(0).IntPart()
 }
 
@@ -94,7 +95,7 @@ func TestPurserInvoicedClusterMonthlyFeeProratesByActiveTime_RealPG(t *testing.T
 	}
 	monthlyLine := func(t *testing.T, tenantID string, periodStart, periodEnd time.Time) (int64, int64) {
 		t.Helper()
-		lines, err := jobs.purserInvoicedClusterMonthlyLines(ctx, tenantID, periodStart, periodEnd, tier, resolver, periodStart.Format("200601"))
+		lines, err := jobs.purserInvoicedClusterMonthlyLines(ctx, tenantID, usagePhase{start: periodStart, end: periodEnd, periodEnd: billing.NextMonthlyAnniversary(periodStart)}, tier, resolver, periodStart.Format("200601"))
 		if err != nil {
 			t.Fatalf("purserInvoicedClusterMonthlyLines: %v", err)
 		}

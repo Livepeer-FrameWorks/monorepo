@@ -99,7 +99,7 @@ func (jm *JobManager) ratePostpaidInvoice(ctx context.Context, subscription purs
 	if err != nil {
 		return nil, fmt.Errorf("invoice finalization blocked by ambiguous collection provider: %w", err)
 	}
-	ratingResult, err := jm.rateInvoiceForTenant(ctx, tenantID, periodStart, periodEnd, tier, true, baseProviderManaged, perClusterUsage, perClusterDimensioned)
+	ratingResult, err := jm.rateInvoiceForTenant(ctx, tenantID, phase, tier, true, baseProviderManaged, perClusterUsage, perClusterDimensioned)
 	if err != nil {
 		return nil, fmt.Errorf("rate usage: %w", err)
 	}

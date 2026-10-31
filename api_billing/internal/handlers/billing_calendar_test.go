@@ -43,7 +43,7 @@ func TestBillingCalendarPreservesExactMollieUpgradeStart(t *testing.T) {
 func TestBillingCalendarCapsClusterMonthlyFee(t *testing.T) {
 	start := time.Date(2027, time.January, 31, 0, 0, 0, 0, time.UTC)
 	end := time.Date(2027, time.February, 28, 0, 0, 0, 0, time.UTC)
-	_, _, active, month := monthlyFeeOverlap(start, end, start, sql.NullTime{})
+	_, _, active, month := monthlyFeeOverlap(usagePhase{start: start, end: end}, start, sql.NullTime{})
 	if active != 28*86400 || month != 28*86400 {
 		t.Fatalf("full February fee was prorated against the wrong month: active=%d month=%d", active, month)
 	}

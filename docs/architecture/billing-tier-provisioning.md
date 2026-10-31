@@ -210,6 +210,11 @@ received usage that changed since the rating returns `ErrPostpaidPhaseChanged`;
 `AdminAssignTier` rates again, up to three times, then returns `Aborted`.
 Unresolved cluster pricing refuses the boundary. A grant ending can also restore
 a fallback tier and change the billing model, such as an enterprise trial returning to PAYG.
+Model switches keep the original cycle for monthly cluster fees too. Cumulative
+active-time positions are rounded at each phase boundary, so the split charges
+add up to the same cents as one unsplit invoice, including cancellation and
+reactivation inside the cycle. A paid upgrade establishes its fresh monthly
+cycle before subsequent fees are rated.
 
 Advance-billed provider activation closes the old billing period and starts a
 new month. Its closing invoice is not marked `closes_postpaid_phase`; otherwise
