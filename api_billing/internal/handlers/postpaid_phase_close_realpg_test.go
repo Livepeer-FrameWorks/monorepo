@@ -131,7 +131,10 @@ func TestPostpaidToPrepaidSwitchBillsEachPhaseOnce_RealPG(t *testing.T) { //noli
 	ctx := context.Background()
 	now := time.Now().UTC().Truncate(time.Second)
 	periodStart := now.Truncate(time.Hour).Add(-10 * 24 * time.Hour)
-	periodEnd := periodStart.AddDate(0, 1, 0)
+	var periodEnd, expectedNextEnd time.Time
+	if err := db.QueryRowContext(ctx, `SELECT $1::timestamptz + INTERVAL '1 month', $1::timestamptz + INTERVAL '2 months'`, periodStart).Scan(&periodEnd, &expectedNextEnd); err != nil {
+		t.Fatal(err)
+	}
 	postpaidFrom := periodStart.Add(4 * 24 * time.Hour)
 	seedCompleteMetering(t, db, periodStart.AddDate(0, -1, 0), periodEnd.AddDate(0, 1, 0))
 	paygID, supporterID := splitTiers(t, db)
@@ -283,8 +286,8 @@ func TestPostpaidToPrepaidSwitchBillsEachPhaseOnce_RealPG(t *testing.T) { //noli
 		t.Fatalf("balance after month end = %d, want %d: only the prepaid phase's cluster fee is charged", got, -80-statementFees)
 	}
 	nextStart, nextEnd := subscriptionPeriod(t, db, tenantID)
-	if !nextStart.Equal(periodEnd) || !nextEnd.Equal(periodEnd.AddDate(0, 1, 0)) {
-		t.Fatalf("period after month end = %s..%s, want the whole next period %s..%s", nextStart, nextEnd, periodEnd, periodEnd.AddDate(0, 1, 0))
+	if !nextStart.Equal(periodEnd) || !nextEnd.Equal(expectedNextEnd) {
+		t.Fatalf("period after month end = %s..%s, want the whole next period %s..%s", nextStart, nextEnd, periodEnd, expectedNextEnd)
 	}
 
 	// Every record of the period is on exactly one document or settlement.

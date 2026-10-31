@@ -48,12 +48,12 @@ VALUES ($1,'paid',20,20,NOW(),$2,$3,2500,'USD',1.25,CURRENT_DATE,NOW())`, tenant
 	if err != nil {
 		t.Fatal(err)
 	}
-	var actualStart, actualEnd time.Time
-	if err = db.QueryRowContext(ctx, `SELECT billing_period_start,billing_period_end FROM purser.tenant_subscriptions WHERE tenant_id=$1`, tenant).Scan(&actualStart, &actualEnd); err != nil {
+	var actualStart, actualEnd, expectedEnd time.Time
+	if err = db.QueryRowContext(ctx, `SELECT billing_period_start,billing_period_end,billing_period_start + INTERVAL '1 month' FROM purser.tenant_subscriptions WHERE tenant_id=$1`, tenant).Scan(&actualStart, &actualEnd, &expectedEnd); err != nil {
 		t.Fatal(err)
 	}
-	if !actualStart.After(start) || !actualEnd.Equal(actualStart.AddDate(0, 1, 0)) {
-		t.Fatalf("paid upgrade kept the old billing period: %s..%s, old %s..%s, response=%+v", actualStart, actualEnd, start, end, response)
+	if !actualStart.After(start) || !actualEnd.Equal(expectedEnd) {
+		t.Fatalf("paid upgrade period=%s..%s, expected capped end %s and start after %s; old end %s, response=%+v", actualStart, actualEnd, expectedEnd, start, end, response)
 	}
 	var amount, credit string
 	if err = db.QueryRowContext(ctx, `SELECT i.amount::text,(-line.amount)::text FROM purser.billing_invoices i
