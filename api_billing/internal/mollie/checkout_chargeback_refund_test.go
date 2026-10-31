@@ -18,9 +18,6 @@ func TestMollieCheckoutRefundNeverRepeatsAChargeback(t *testing.T) {
 				got = body["amount"].(map[string]any)["value"].(string)
 				return mollieJSONResponse(201, `{"id":"refund","status":"queued"}`), nil
 			})
-			previous := http.DefaultTransport
-			http.DefaultTransport = http.DefaultClient.Transport
-			t.Cleanup(func() { http.DefaultTransport = previous })
 			if err := c.CancelReservedCheckout(t.Context(), "customer", "reservation", "payment", ""); err != nil {
 				t.Fatal(err)
 			}

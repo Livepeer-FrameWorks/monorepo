@@ -1,0 +1,4 @@
+ALTER TABLE purser.subscription_operator_grants
+    VALIDATE CONSTRAINT subscription_operator_grants_fallback_tier_id_fkey;
+ALTER TABLE purser.subscription_operator_grants
+    VALIDATE CONSTRAINT subscription_operator_grants_assigned_tier_id_fkey;

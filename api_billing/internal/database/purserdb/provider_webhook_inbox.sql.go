@@ -74,7 +74,9 @@ func (q *Queries) ClaimProviderWebhooks(ctx context.Context, arg ClaimProviderWe
 
 const completeProviderWebhook = `-- name: CompleteProviderWebhook :execresult
 UPDATE purser.provider_webhook_inbox
-SET status = 'processed', processed_at = NOW(), claimed_at = NULL,
+SET status = CASE WHEN wake_requested THEN 'pending' ELSE 'processed' END,
+    processed_at = CASE WHEN NOT wake_requested THEN NOW() END,
+    next_attempt_at = CASE WHEN wake_requested THEN NOW() ELSE next_attempt_at END, claimed_at = NULL,
     lease_token = NULL, last_error = NULL, updated_at = NOW()
 WHERE id = $1
   AND ($2::text = '' OR lease_token::text = $2::text)
@@ -121,11 +123,12 @@ VALUES ('tenant_suspension', 'tenant-suspension:' || $1::text,
         jsonb_build_object('tenant_id', $1::text),
         convert_to(jsonb_build_object('tenant_id', $1::text)::text, 'UTF8'))
 ON CONFLICT (provider, event_key) DO UPDATE SET
-    status = 'pending', next_attempt_at = NOW(), processed_at = NULL,
+    status = CASE WHEN inbox.status = 'processing' THEN 'processing' ELSE 'pending' END,
+    wake_requested = TRUE, next_attempt_at = NOW(), processed_at = NULL,
     attempts = CASE WHEN inbox.status = 'processed' THEN 0 ELSE inbox.attempts END,
     wait_attempts = CASE WHEN inbox.status = 'processed' THEN 0 ELSE inbox.wait_attempts END,
     unresolved_since = CASE WHEN inbox.status = 'processed' THEN NULL ELSE inbox.unresolved_since END,
-    claimed_at = NULL, lease_token = NULL, updated_at = NOW()
+    updated_at = NOW()
 `
 
 func (q *Queries) EnqueueSuspendedTenantStop(ctx context.Context, tenantID string) error {
@@ -135,11 +138,11 @@ func (q *Queries) EnqueueSuspendedTenantStop(ctx context.Context, tenantID strin
 
 const failProviderWebhook = `-- name: FailProviderWebhook :execresult
 UPDATE purser.provider_webhook_inbox
-SET status = CASE WHEN $1::boolean THEN 'pending' ELSE 'failed' END,
+SET status = CASE WHEN wake_requested OR $1::boolean THEN 'pending' ELSE 'failed' END,
     attempts = attempts + CASE WHEN $1::boolean THEN 0 ELSE 1 END,
     wait_attempts = wait_attempts + CASE WHEN $1::boolean THEN 1 ELSE 0 END,
     unresolved_since = COALESCE(unresolved_since, NOW()),
-    next_attempt_at = NOW() + ($2::bigint * INTERVAL '1 millisecond'),
+    next_attempt_at = CASE WHEN wake_requested THEN NOW() ELSE NOW() + ($2::bigint * INTERVAL '1 millisecond') END,
     claimed_at = NULL, lease_token = NULL,
     last_error = $3::text, updated_at = NOW()
 WHERE id = $4
@@ -217,32 +220,33 @@ func (q *Queries) InsertCheckoutRecoveryAudit(ctx context.Context, arg InsertChe
 
 const listCheckoutRecovery = `-- name: ListCheckoutRecovery :many
 WITH selected AS (
-    (SELECT inbox.id, inbox.provider, inbox.event_key, inbox.headers, inbox.raw_payload, inbox.status, inbox.attempts, inbox.next_attempt_at, inbox.claimed_at, inbox.lease_token, inbox.last_error, inbox.processed_at, inbox.created_at, inbox.updated_at, inbox.wait_attempts, inbox.unresolved_since FROM purser.provider_webhook_inbox inbox
-     WHERE inbox.status <> 'processed' AND $1::text = ''
+    (SELECT inbox.id, inbox.provider, inbox.event_key, inbox.headers, inbox.raw_payload, inbox.status, inbox.attempts, inbox.next_attempt_at, inbox.claimed_at, inbox.lease_token, inbox.wake_requested, inbox.last_error, inbox.processed_at, inbox.created_at, inbox.updated_at, inbox.wait_attempts, inbox.unresolved_since FROM purser.provider_webhook_inbox inbox
+     WHERE inbox.status <> 'processed' AND $3::text = ''
      ORDER BY inbox.created_at, inbox.id
-     LIMIT ($2::bigint + $3::bigint))
+     LIMIT ($2::bigint + $1::bigint))
     UNION ALL
-    (SELECT inbox.id, inbox.provider, inbox.event_key, inbox.headers, inbox.raw_payload, inbox.status, inbox.attempts, inbox.next_attempt_at, inbox.claimed_at, inbox.lease_token, inbox.last_error, inbox.processed_at, inbox.created_at, inbox.updated_at, inbox.wait_attempts, inbox.unresolved_since FROM purser.provider_webhook_inbox inbox
-     WHERE inbox.status <> 'processed' AND $1::text <> ''
-       AND inbox.headers->>'tenant_id' = $1::text
+    (SELECT inbox.id, inbox.provider, inbox.event_key, inbox.headers, inbox.raw_payload, inbox.status, inbox.attempts, inbox.next_attempt_at, inbox.claimed_at, inbox.lease_token, inbox.wake_requested, inbox.last_error, inbox.processed_at, inbox.created_at, inbox.updated_at, inbox.wait_attempts, inbox.unresolved_since FROM purser.provider_webhook_inbox inbox
+     WHERE inbox.status <> 'processed' AND $3::text <> ''
+       AND inbox.headers->>'tenant_id' = $3::text
      ORDER BY inbox.created_at, inbox.id
-     LIMIT ($2::bigint + $3::bigint))
+     LIMIT ($2::bigint + $1::bigint))
 ), page AS MATERIALIZED (
-    SELECT selected.id, selected.provider, selected.event_key, selected.headers, selected.raw_payload, selected.status, selected.attempts, selected.next_attempt_at, selected.claimed_at, selected.lease_token, selected.last_error, selected.processed_at, selected.created_at, selected.updated_at, selected.wait_attempts, selected.unresolved_since,
+    SELECT selected.id, selected.provider, selected.event_key, selected.headers, selected.raw_payload, selected.status, selected.attempts, selected.next_attempt_at, selected.claimed_at, selected.lease_token, selected.wake_requested, selected.last_error, selected.processed_at, selected.created_at, selected.updated_at, selected.wait_attempts, selected.unresolved_since,
            CASE WHEN selected.provider IN ('checkout_recovery', 'tier_upgrade')
                 THEN convert_from(selected.raw_payload, 'UTF8')::jsonb END AS internal_payload
     FROM selected
     ORDER BY selected.created_at, selected.id
-    LIMIT $2::bigint OFFSET $3::bigint
-)
-SELECT i.id::text, COALESCE(p.provider, i.headers->>'provider', i.provider)::text AS provider,
+    LIMIT ($2::bigint + $1::bigint)
+), inbox_rows AS (
+SELECT i.id::text AS id, COALESCE(p.provider, i.headers->>'provider', i.provider)::text AS provider,
        i.event_key, i.status, i.attempts, i.last_error, i.next_attempt_at,
        COALESCE(p.tenant_id::text, i.headers->>'tenant_id', i.internal_payload->>'tenant_id', '')::text AS tenant_id,
        COALESCE(p.id::text, upgrade.id::text, i.headers->>'reference_id', '')::text AS reservation_id,
        COALESCE(p.expires_at, p.created_at + INTERVAL '24 hours') AS expires_at,
        COALESCE(p.amount_cents, upgrade.base_cents, NULLIF(i.headers->>'amount_cents', '')::bigint, 0)::bigint AS amount_cents,
        COALESCE(p.currency, i.headers->>'currency', '')::text AS currency,
-       COALESCE(p.status, upgrade.state, i.headers->>'reference_kind', '')::text AS reservation_status
+       COALESCE(p.status, upgrade.state, i.headers->>'reference_kind', '')::text AS reservation_status,
+       i.created_at AS sort_at
 FROM page i
 LEFT JOIN purser.payment_provider_intents p
   ON p.id = CASE WHEN i.provider = 'checkout_recovery'
@@ -254,17 +258,53 @@ LEFT JOIN purser.subscription_tier_upgrades upgrade
                        THEN (i.internal_payload->>'id')::uuid END
  AND upgrade.tenant_id = CASE WHEN i.provider = 'tier_upgrade'
                               THEN (i.headers->>'tenant_id')::uuid END
-ORDER BY i.created_at, i.id
+), fallback_selected AS (
+    (SELECT subscription.id, subscription.tenant_id, subscription.tier_id, subscription.status, subscription.billing_email, subscription.billing_model, subscription.started_at, subscription.trial_ends_at, subscription.next_billing_date, subscription.billing_period_start, subscription.billing_period_end, subscription.cancelled_at, subscription.custom_features, subscription.pending_tier_id, subscription.pending_effective_at, subscription.pending_reason, subscription.free_fallback_at, subscription.free_fallback_reason, subscription.free_fallback_notified_at, subscription.free_fallback_moved_at, subscription.free_fallback_provider_stopping, subscription.free_fallback_wait_since, subscription.free_fallback_unbilled_through, subscription.free_fallback_provider_ended_at, subscription.free_fallback_attempted_at, subscription.free_fallback_failures, subscription.free_fallback_error, subscription.free_fallback_notice_attempted_at, subscription.free_fallback_notice_failures, subscription.free_fallback_notice_error, subscription.payment_method, subscription.payment_reference, subscription.billing_name, subscription.billing_company, subscription.billing_address, subscription.tax_id, subscription.tax_rate, subscription.stripe_customer_id, subscription.stripe_subscription_id, subscription.stripe_subscription_status, subscription.stripe_current_period_end, subscription.dunning_attempts, subscription.mollie_subscription_id, subscription.mollie_next_payment_date, subscription.x402_address_index, subscription.x402_address_xpub, subscription.created_at, subscription.updated_at, subscription.pending_intent_id, subscription.presentment_currency FROM purser.tenant_subscriptions subscription
+     WHERE subscription.free_fallback_at IS NOT NULL AND $3::text = ''
+     ORDER BY subscription.free_fallback_at, subscription.id
+     LIMIT ($2::bigint + $1::bigint))
+    UNION ALL
+    (SELECT subscription.id, subscription.tenant_id, subscription.tier_id, subscription.status, subscription.billing_email, subscription.billing_model, subscription.started_at, subscription.trial_ends_at, subscription.next_billing_date, subscription.billing_period_start, subscription.billing_period_end, subscription.cancelled_at, subscription.custom_features, subscription.pending_tier_id, subscription.pending_effective_at, subscription.pending_reason, subscription.free_fallback_at, subscription.free_fallback_reason, subscription.free_fallback_notified_at, subscription.free_fallback_moved_at, subscription.free_fallback_provider_stopping, subscription.free_fallback_wait_since, subscription.free_fallback_unbilled_through, subscription.free_fallback_provider_ended_at, subscription.free_fallback_attempted_at, subscription.free_fallback_failures, subscription.free_fallback_error, subscription.free_fallback_notice_attempted_at, subscription.free_fallback_notice_failures, subscription.free_fallback_notice_error, subscription.payment_method, subscription.payment_reference, subscription.billing_name, subscription.billing_company, subscription.billing_address, subscription.tax_id, subscription.tax_rate, subscription.stripe_customer_id, subscription.stripe_subscription_id, subscription.stripe_subscription_status, subscription.stripe_current_period_end, subscription.dunning_attempts, subscription.mollie_subscription_id, subscription.mollie_next_payment_date, subscription.x402_address_index, subscription.x402_address_xpub, subscription.created_at, subscription.updated_at, subscription.pending_intent_id, subscription.presentment_currency FROM purser.tenant_subscriptions subscription
+     WHERE subscription.free_fallback_at IS NOT NULL AND $3::text <> ''
+       AND subscription.tenant_id = NULLIF($3::text, '')::uuid
+     ORDER BY subscription.free_fallback_at, subscription.id
+     LIMIT ($2::bigint + $1::bigint))
+), fallback_rows AS (
+    SELECT subscription.id::text AS id, 'free_fallback'::text AS provider,
+           ('free-fallback:' || subscription.tenant_id::text)::text AS event_key,
+           CASE WHEN subscription.free_fallback_moved_at IS NOT NULL THEN 'notice'
+                WHEN subscription.free_fallback_provider_stopping THEN 'provider_stopping'
+                ELSE 'scheduled' END::text AS status,
+           (subscription.free_fallback_failures + subscription.free_fallback_notice_failures)::integer AS attempts,
+           NULLIF(concat_ws('; ', subscription.free_fallback_reason,
+               subscription.free_fallback_error, subscription.free_fallback_notice_error), '') AS last_error,
+           subscription.free_fallback_at::timestamptz AS next_attempt_at,
+           subscription.tenant_id::text AS tenant_id, ''::text AS reservation_id,
+           NULL::timestamptz AS expires_at, 0::bigint AS amount_cents, ''::text AS currency,
+           'subscription'::text AS reservation_status, subscription.free_fallback_at AS sort_at
+    FROM fallback_selected subscription
+    ORDER BY subscription.free_fallback_at, subscription.id
+    LIMIT ($2::bigint + $1::bigint)
+), inventory AS (
+    SELECT id, provider, event_key, status, attempts, last_error, next_attempt_at, tenant_id, reservation_id, expires_at, amount_cents, currency, reservation_status, sort_at FROM inbox_rows
+    UNION ALL
+    SELECT id, provider, event_key, status, attempts, last_error, next_attempt_at, tenant_id, reservation_id, expires_at, amount_cents, currency, reservation_status, sort_at FROM fallback_rows
+)
+SELECT id::text AS id, provider, event_key, status, attempts, last_error, next_attempt_at,
+       tenant_id, reservation_id, expires_at, amount_cents, currency, reservation_status
+FROM inventory
+ORDER BY sort_at, id
+LIMIT $2::bigint OFFSET $1::bigint
 `
 
 type ListCheckoutRecoveryParams struct {
-	TenantID  string `db:"tenant_id" json:"tenant_id"`
-	RowLimit  int64  `db:"row_limit" json:"row_limit"`
 	RowOffset int64  `db:"row_offset" json:"row_offset"`
+	RowLimit  int64  `db:"row_limit" json:"row_limit"`
+	TenantID  string `db:"tenant_id" json:"tenant_id"`
 }
 
 type ListCheckoutRecoveryRow struct {
-	IID               string         `db:"i_id" json:"i_id"`
+	ID                string         `db:"id" json:"id"`
 	Provider          string         `db:"provider" json:"provider"`
 	EventKey          string         `db:"event_key" json:"event_key"`
 	Status            string         `db:"status" json:"status"`
@@ -282,7 +322,7 @@ type ListCheckoutRecoveryRow struct {
 // Platform-operator inventory includes unbound callbacks; a supplied tenant narrows to its reservations.
 // Each disjoint branch reads an ordered index head before enrichment.
 func (q *Queries) ListCheckoutRecovery(ctx context.Context, arg ListCheckoutRecoveryParams) ([]ListCheckoutRecoveryRow, error) {
-	rows, err := q.db.QueryContext(ctx, listCheckoutRecovery, arg.TenantID, arg.RowLimit, arg.RowOffset)
+	rows, err := q.db.QueryContext(ctx, listCheckoutRecovery, arg.RowOffset, arg.RowLimit, arg.TenantID)
 	if err != nil {
 		return nil, err
 	}
@@ -291,7 +331,7 @@ func (q *Queries) ListCheckoutRecovery(ctx context.Context, arg ListCheckoutReco
 	for rows.Next() {
 		var i ListCheckoutRecoveryRow
 		if err := rows.Scan(
-			&i.IID,
+			&i.ID,
 			&i.Provider,
 			&i.EventKey,
 			&i.Status,
@@ -375,7 +415,7 @@ func (q *Queries) ListCheckoutRecoveryAudit(ctx context.Context, arg ListCheckou
 
 const markProviderWebhookProcessing = `-- name: MarkProviderWebhookProcessing :exec
 UPDATE purser.provider_webhook_inbox
-SET status = 'processing', claimed_at = NOW(),
+SET status = 'processing', claimed_at = NOW(), wake_requested = FALSE,
     lease_token = $1::text::uuid, updated_at = NOW()
 WHERE id = $2
 `
@@ -496,7 +536,8 @@ ON CONFLICT (provider, event_key) DO UPDATE SET
     processed_at = NULL,
     headers = EXCLUDED.headers, raw_payload = EXCLUDED.raw_payload,
     next_attempt_at = LEAST(purser.provider_webhook_inbox.next_attempt_at, NOW()),
-    status = 'pending', claimed_at = NULL, lease_token = NULL, updated_at = NOW()
+    status = CASE WHEN purser.provider_webhook_inbox.status = 'processing' THEN 'processing' ELSE 'pending' END,
+    wake_requested = TRUE, updated_at = NOW()
 `
 
 type RequestCheckoutRecoveryParams struct {

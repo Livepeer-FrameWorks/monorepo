@@ -8,6 +8,9 @@ import (
 	"testing"
 	"time"
 
+	billingmollie "frameworks/api_billing/internal/mollie"
+	billingstripe "frameworks/api_billing/internal/stripe"
+
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
@@ -17,9 +20,6 @@ import (
 	stripelib "github.com/stripe/stripe-go/v85"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-
-	billingmollie "frameworks/api_billing/internal/mollie"
-	billingstripe "frameworks/api_billing/internal/stripe"
 )
 
 // expectCollectionProfile answers the tenant presentment-currency lookup.
@@ -67,6 +67,7 @@ func TestCreateCheckoutSessionExpiresStripeSessionWhenLocalStageFails(t *testing
 	mock.ExpectBegin()
 	expectProviderSubscriptionLock(mock, "tenant-a")
 	mock.ExpectQuery("GetSubscriptionOperatorGrant").WithArgs("tenant-a").WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery("HasPendingTierUpgrade").WillReturnRows(sqlmock.NewRows([]string{"pending"}).AddRow(false))
 	mock.ExpectQuery(`INSERT INTO purser\.payment_provider_intents`).
 		WithArgs("tenant-a", tierID, "USD", "stripe-tenant-checkout:tenant-a:"+tierID).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("intent-tenant"))
@@ -102,7 +103,7 @@ func TestCreateCheckoutSessionExpiresStripeSessionWhenLocalStageFails(t *testing
 		t.Fatal("expected staging failure")
 	}
 	if len(stripeClient.expiredSessions) != 1 || stripeClient.expiredSessions[0] != "cs_test_123" {
-		t.Fatalf("expired sessions = %#v, want [cs_test_123]", stripeClient.expiredSessions)
+		t.Fatalf("expired sessions = %#v, want [cs_test_123]; err=%v", stripeClient.expiredSessions, err)
 	}
 	if stripeClient.checkoutKey != "reserved-key" {
 		t.Fatalf("provider did not receive reserved idempotency key: %s", stripeClient.checkoutKey)
@@ -148,9 +149,12 @@ func TestCreateMollieSubscriptionCancelsProviderSubscriptionWhenLocalPersistFail
 	mock.ExpectBegin()
 	expectProviderSubscriptionLock(mock, "tenant-a")
 	mock.ExpectQuery("GetSubscriptionOperatorGrant").WithArgs("tenant-a").WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery("HasPendingTierUpgrade").WillReturnRows(sqlmock.NewRows([]string{"pending"}).AddRow(false))
 	mock.ExpectQuery(`INSERT INTO purser\.payment_provider_intents`).
 		WithArgs("tenant-a", tierID, "cst_123", "EUR", int64(2000), "mollie-subscription:tenant-a:"+tierID+":mdt_123").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("intent-mollie-sub"))
+	mock.ExpectExec("LinkMollieCheckoutFunding").WithArgs("mdt_123", "tenant-a", "intent-mollie-sub").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery("GetProviderCheckoutReservation").WillReturnRows(checkoutReservationTestRows("intent-mollie-sub", "tenant-a", "mollie", "mollie_subscription_create", "cst_123", nil, nil, nil, "pending", time.Now().Add(time.Hour), 0))
 	mock.ExpectQuery("GetPendingProviderCheckout").WillReturnRows(sqlmock.NewRows([]string{"pending", "deadline", "kind"}).AddRow(false, time.Unix(0, 0), "checkout"))
 	mock.ExpectExec("EnqueueCheckoutReservationExpiry").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
@@ -163,6 +167,7 @@ func TestCreateMollieSubscriptionCancelsProviderSubscriptionWhenLocalPersistFail
 	expectProviderSubscriptionLock(mock, "tenant-a")
 	mock.ExpectQuery("GetSubscriptionOperatorGrant").WithArgs("tenant-a").WillReturnError(sql.ErrNoRows)
 	mock.ExpectQuery("GetProviderCheckoutReservation").WillReturnRows(checkoutReservationTestRows("intent-mollie-sub", "tenant-a", "mollie", "mollie_subscription_create", "cst_123", nil, nil, nil, "pending", time.Now().Add(24*time.Hour), 0))
+	mock.ExpectQuery("HasPendingTierUpgrade").WillReturnRows(sqlmock.NewRows([]string{"pending"}).AddRow(false))
 	mock.ExpectExec(`UPDATE purser\.tenant_subscriptions\s+SET mollie_subscription_id = \$1`).
 		WillReturnError(errors.New("db down"))
 	mock.ExpectRollback()
@@ -178,7 +183,7 @@ func TestCreateMollieSubscriptionCancelsProviderSubscriptionWhenLocalPersistFail
 		t.Fatal("expected local persist failure")
 	}
 	if len(mollieClient.cancelledSubscriptions) != 1 || mollieClient.cancelledSubscriptions[0] != "cst_123/sub_123" {
-		t.Fatalf("cancelled subscriptions = %#v, want [cst_123/sub_123]", mollieClient.cancelledSubscriptions)
+		t.Fatalf("cancelled subscriptions = %#v, want [cst_123/sub_123]; err=%v", mollieClient.cancelledSubscriptions, err)
 	}
 	if mollieClient.checkoutKey != "reserved-key" {
 		t.Fatalf("provider did not receive reserved idempotency key: %s", mollieClient.checkoutKey)
@@ -308,6 +313,7 @@ func TestCreateMollieSubscriptionRefusesOutstandingGrantBeforeProvider(t *testin
 			mock.ExpectBegin()
 			expectProviderSubscriptionLock(mock, "tenant-a")
 			mock.ExpectQuery(`-- name: GetSubscriptionOperatorGrant`).WithArgs("tenant-a").WillReturnRows(sqlmock.NewRows([]string{"subscription_id", "base_price", "waive_usage", "collection", "expires_at", "reason", "granted_by", "granted_at", "fallback_tier_id", "assigned_tier_id", "fallback_tier_name", "active", "expiry_error", "expiry_failures"}).AddRow("sub", nil, true, "provider", time.Now().Add(-time.Minute), "trial", nil, time.Now().Add(-time.Hour), "fallback", "tier", "payg", active, nil, int32(0)))
+			mock.ExpectQuery("HasPendingTierUpgrade").WillReturnRows(sqlmock.NewRows([]string{"pending"}).AddRow(false))
 			mock.ExpectRollback()
 			_, callErr := server.CreateMollieSubscription(t.Context(), &purserpb.CreateMollieSubscriptionRequest{TenantId: "tenant-a", TierId: "11111111-1111-1111-1111-111111111111", MandateId: "mdt_123"})
 			if status.Code(callErr) != codes.FailedPrecondition || status.Convert(callErr).Message() != "end the outstanding operator billing grant before changing tier or billing model" {
@@ -333,6 +339,7 @@ func TestStripeCheckoutRefusesOutstandingGrantBeforeProvider(t *testing.T) {
 			mock.ExpectBegin()
 			expectProviderSubscriptionLock(mock, "tenant-a")
 			mock.ExpectQuery(`-- name: GetSubscriptionOperatorGrant`).WithArgs("tenant-a").WillReturnRows(sqlmock.NewRows([]string{"subscription_id", "base_price", "waive_usage", "collection", "expires_at", "reason", "granted_by", "granted_at", "fallback_tier_id", "assigned_tier_id", "fallback_tier_name", "active", "expiry_error", "expiry_failures"}).AddRow("sub", nil, true, "provider", time.Now().Add(-time.Minute), "trial", nil, time.Now().Add(-time.Hour), "fallback", "tier", "payg", active, nil, int32(0)))
+			mock.ExpectQuery("HasPendingTierUpgrade").WillReturnRows(sqlmock.NewRows([]string{"pending"}).AddRow(false))
 			mock.ExpectRollback()
 			_, callErr := server.CreateCheckoutSession(t.Context(), &purserpb.CreateStripeCheckoutRequest{TenantId: "tenant-a", TierId: "11111111-1111-1111-1111-111111111111", SuccessUrl: "https://example.test/ok", CancelUrl: "https://example.test/cancel"})
 			if status.Code(callErr) != codes.FailedPrecondition || status.Convert(callErr).Message() != "end the outstanding operator billing grant before changing tier or billing model" {
@@ -354,6 +361,7 @@ func expectProviderCheckoutWithoutGrant(mock sqlmock.Sqlmock, tenant string) {
 	mock.ExpectBegin()
 	expectProviderSubscriptionLock(mock, tenant)
 	mock.ExpectQuery("GetSubscriptionOperatorGrant").WithArgs(tenant).WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery("HasPendingTierUpgrade").WillReturnRows(sqlmock.NewRows([]string{"pending"}).AddRow(false))
 	mock.ExpectCommit()
 	expectSettledOnFree(mock)
 }
@@ -369,6 +377,7 @@ func TestCreateFirstPaymentRefusesOutstandingGrantBeforeProvider(t *testing.T) {
 	mock.ExpectBegin()
 	expectProviderSubscriptionLock(mock, "tenant-a")
 	mock.ExpectQuery("GetSubscriptionOperatorGrant").WithArgs("tenant-a").WillReturnRows(sqlmock.NewRows([]string{"subscription_id", "base_price", "waive_usage", "collection", "expires_at", "reason", "granted_by", "granted_at", "fallback_tier_id", "assigned_tier_id", "fallback_tier_name", "active", "expiry_error", "expiry_failures"}).AddRow("sub", nil, true, "provider", nil, "trial", nil, time.Now(), "", "tier", "", true, nil, int32(0)))
+	mock.ExpectQuery("HasPendingTierUpgrade").WillReturnRows(sqlmock.NewRows([]string{"pending"}).AddRow(false))
 	mock.ExpectRollback()
 	_, callErr := server.CreateFirstPayment(t.Context(), &purserpb.CreateMollieFirstPaymentRequest{TenantId: "tenant-a", TierId: "tier", Method: "creditcard", RedirectUrl: "https://example.test/return"})
 	if status.Code(callErr) != codes.FailedPrecondition {
@@ -386,6 +395,7 @@ func expectProviderRequestJournal(mock sqlmock.Sqlmock, tenant, kind, credential
 	mock.ExpectBegin()
 	expectProviderSubscriptionLock(mock, tenant)
 	mock.ExpectQuery("GetSubscriptionOperatorGrant").WithArgs(tenant).WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery("HasPendingTierUpgrade").WillReturnRows(sqlmock.NewRows([]string{"pending"}).AddRow(false))
 	raw, _ := json.Marshal(map[string]any{"kind": kind, "credential": credential, "replay_before": time.Now().Add(time.Minute), "params": map[string]any{"IdempotencyKey": "reserved-key"}})
 	mock.ExpectQuery("SaveCheckoutProviderRequest").WillReturnRows(sqlmock.NewRows([]string{"provider_request", "submission_state"}).AddRow(raw, "submitted"))
 	mock.ExpectCommit()

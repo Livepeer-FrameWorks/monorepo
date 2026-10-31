@@ -2,11 +2,22 @@ ALTER TABLE purser.billing_tiers
     ADD COLUMN IF NOT EXISTS operator_grant_fallback_revision BIGINT NOT NULL DEFAULT 0;
 
 ALTER TABLE purser.subscription_operator_grants
-    ADD COLUMN IF NOT EXISTS fallback_tier_id UUID REFERENCES purser.billing_tiers(id),
-    ADD COLUMN IF NOT EXISTS assigned_tier_id UUID REFERENCES purser.billing_tiers(id),
+    ADD COLUMN IF NOT EXISTS fallback_tier_id UUID,
+    ADD COLUMN IF NOT EXISTS assigned_tier_id UUID,
     ADD COLUMN IF NOT EXISTS expiry_attempted_at TIMESTAMPTZ,
     ADD COLUMN IF NOT EXISTS expiry_error TEXT,
     ADD COLUMN IF NOT EXISTS expiry_failures INTEGER NOT NULL DEFAULT 0;
+
+ALTER TABLE purser.subscription_operator_grants
+    DROP CONSTRAINT IF EXISTS subscription_operator_grants_fallback_tier_id_fkey;
+ALTER TABLE purser.subscription_operator_grants
+    ADD CONSTRAINT subscription_operator_grants_fallback_tier_id_fkey
+    FOREIGN KEY (fallback_tier_id) REFERENCES purser.billing_tiers(id) NOT VALID;
+ALTER TABLE purser.subscription_operator_grants
+    DROP CONSTRAINT IF EXISTS subscription_operator_grants_assigned_tier_id_fkey;
+ALTER TABLE purser.subscription_operator_grants
+    ADD CONSTRAINT subscription_operator_grants_assigned_tier_id_fkey
+    FOREIGN KEY (assigned_tier_id) REFERENCES purser.billing_tiers(id) NOT VALID;
 
 -- Immutable pricing phases preserve the arrangement used to rate past usage.
 CREATE TABLE IF NOT EXISTS purser.subscription_operator_grant_history (
@@ -38,9 +49,9 @@ BEGIN
     SELECT ts.tenant_id, OLD.subscription_id, ts.tier_id,
            OLD.fallback_tier_id, OLD.base_price, OLD.waive_usage, OLD.collection,
            OLD.expires_at, OLD.reason, OLD.granted_by, OLD.granted_at,
-           CASE WHEN ts.status='cancelled' THEN NOW() ELSE LEAST(COALESCE(OLD.expires_at, 'infinity'::timestamptz),
+           LEAST(COALESCE(OLD.expires_at, 'infinity'::timestamptz),
                CASE WHEN TG_OP = 'UPDATE' THEN NEW.granted_at
-               ELSE COALESCE(NULLIF(current_setting('frameworks.operator_grant_boundary', true), '')::timestamptz, NOW()) END) END
+               ELSE COALESCE(NULLIF(current_setting('frameworks.operator_grant_boundary', true), '')::timestamptz, NOW()) END)
     FROM purser.tenant_subscriptions ts WHERE ts.id = OLD.subscription_id;
     RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
 END;

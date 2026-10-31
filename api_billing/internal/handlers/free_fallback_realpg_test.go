@@ -7,13 +7,13 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"frameworks/api_billing/internal/appconfig/appconfigtest"
 	"frameworks/api_billing/internal/database/purserdb"
 	"frameworks/api_billing/internal/subscriptions"
-	"strings"
 
 	"github.com/VictorAvelar/mollie-api-go/v4/mollie"
 )
@@ -104,6 +104,34 @@ func TestStripeSubscriptionEndPlansTheMoveToFree_RealPG(t *testing.T) {
 }
 
 func TestPaymentFailureGraceIsNotExtendedAndRecoveryCancelsIt_RealPG(t *testing.T) {
+	t.Run("mandate loss and grace commit together", func(t *testing.T) {
+		db := startProviderReservationDatabase(t)
+		now := time.Now().UTC()
+		tenant := newPhaseTenant(t, db, "postpaid", now.Add(-time.Hour), now.AddDate(0, 1, 0), 0)
+		if _, err := db.Exec(`INSERT INTO purser.mollie_mandates(tenant_id,mollie_customer_id,mollie_mandate_id,status,method) VALUES($1,'customer','mandate','valid','directdebit')`, tenant.id); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(`CREATE FUNCTION purser.reject_grace_write() RETURNS TRIGGER LANGUAGE plpgsql AS $$ BEGIN IF NEW.free_fallback_at IS NOT NULL THEN RAISE EXCEPTION 'injected grace write failure'; END IF; RETURN NEW; END $$; CREATE TRIGGER reject_grace_write BEFORE UPDATE ON purser.tenant_subscriptions FOR EACH ROW EXECUTE FUNCTION purser.reject_grace_write()`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := subscriptions.RecordMollieMandateRevoked(t.Context(), db, tenant.id, now); err == nil {
+			t.Fatal("injected grace failure was swallowed")
+		}
+		var mandate string
+		if err := db.QueryRow(`SELECT status FROM purser.mollie_mandates WHERE tenant_id=$1 AND mollie_mandate_id='mandate'`, tenant.id).Scan(&mandate); err != nil || mandate != "valid" {
+			t.Fatalf("lost retry trigger: status=%s err=%v", mandate, err)
+		}
+		if _, err := db.Exec(`DROP TRIGGER reject_grace_write ON purser.tenant_subscriptions`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := subscriptions.RecordMollieMandateRevoked(t.Context(), db, tenant.id, now); err != nil {
+			t.Fatal(err)
+		}
+		if got := readFallback(t, db, tenant.id); !got.at.Valid {
+			t.Fatal("retry did not establish grace")
+		}
+	})
+
 	db := startProviderReservationDatabase(t)
 	now := time.Now().UTC().Truncate(time.Second)
 	tenant := newPhaseTenant(t, db, "postpaid", now.Add(-24*time.Hour), now.AddDate(0, 1, 0), 0)
@@ -309,5 +337,22 @@ func TestFreeFallbackRecoveryKeepsUnbilledUsageThroughRenewalReplay_RealPG(t *te
 			}
 			assertPeriod(fresh)
 		})
+	}
+}
+
+func TestFreeFallbackLifecycle_RealYugabyte(t *testing.T) {
+	for _, contract := range []struct {
+		name string
+		run  func(*testing.T)
+	}{
+		{"TestFreeFallbackRecoveryKeepsUnbilledUsageThroughRenewalReplay", TestFreeFallbackRecoveryKeepsUnbilledUsageThroughRenewalReplay_RealPG},
+		{"TestStripeSubscriptionEndPlansTheMoveToFree", TestStripeSubscriptionEndPlansTheMoveToFree_RealPG},
+		{"TestPaymentFailureGraceIsNotExtendedAndRecoveryCancelsIt", TestPaymentFailureGraceIsNotExtendedAndRecoveryCancelsIt_RealPG},
+		{"TestFailedMollieInstallmentStartsGraceOnlyWhenMollieStopped", TestFailedMollieInstallmentStartsGraceOnlyWhenMollieStopped_RealPG},
+		{"TestGraceNeverStartsOnFreeOrPrepaidTenants", TestGraceNeverStartsOnFreeOrPrepaidTenants_RealPG},
+		{"TestMollieCancellationMovesToFreeAtPeriodEnd", TestMollieCancellationMovesToFreeAtPeriodEnd_RealPG},
+		{"TestReplacedMollieFailureCannotStartFreeFallback", TestReplacedMollieFailureCannotStartFreeFallback_RealPG},
+	} {
+		t.Run(contract.name, contract.run)
 	}
 }

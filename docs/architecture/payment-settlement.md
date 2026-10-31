@@ -185,21 +185,25 @@ subscription at all.
 Mollie sends no webhook for a subscription's own status, so a failed installment
 reads it. Exhausted retries on a valid mandate keep ordinary dunning.
 
-`free_fallback_at` holds the date; repeated events never extend it, and any
-a completed provider activation clears it. Neither status is in the invoice job's list, so
+`free_fallback_at` holds the date; repeated events never extend it, and a
+completed provider activation clears it. Neither status is in the invoice job's list, so
 `runFreeFallbackSweep` issues the final invoice through
 `PrepareProviderBillingBoundary` in the transaction that moves the tenant,
 which waits for complete metering at the stored fallback cutoff. Retries keep
 that cutoff, so a delayed worker does not extend the invoice. A boundary already
 opened by an operator takes precedence over an earlier fallback date.
 
-Moves and notices have separate durable claims with five-minute retry backoff.
+Moves and notices use separate workers and durable claims. Moves retry after
+five minutes; failed notices back off exponentially to a twelve-hour maximum.
 Failed final invoices cannot starve later tenants, and notification failure does
 not block a billing move. SMTP runs after its claim commits, outside the billing
 transaction; acknowledgement is fenced against a newer move or fallback. The
 `PurserFreeFallbackStuck` alert reports repeated failures or sustained inventory
 read errors, using the maximum across replicas. An operator grant or a pending
-tier upgrade holds the move. On Free, `requireSettledOnFree` refuses paid
+tier upgrade holds the move. A platform operator can inspect its schedule and
+errors with `admin billing recovery list --tenant-id <UUID>`. An audited
+`admin billing set-tier` cancels a scheduled fallback before provider stopping
+begins; an in-flight stop must first finish reconciliation. On Free, `requireSettledOnFree` refuses paid
 tiers while finalized invoices are unpaid.
 
 Before moving a subscription to Free, Purser commits a pricing fence under the

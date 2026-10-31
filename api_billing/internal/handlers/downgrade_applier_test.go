@@ -4,13 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	foghorncontrolpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
 	"testing"
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
-
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	foghorncontrolpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
 )
 
 type stubTierReconciler struct {
@@ -120,6 +119,7 @@ func TestApplyPendingDowngrade_Happy_FlipsThenReconcilesThenClears(t *testing.T)
 	mock.ExpectQuery("LockTenantSubscriptionForProviderChange").WithArgs(tenantID).WillReturnRows(sqlmock.NewRows([]string{"subscription_id", "tier_id", "status", "billing_model", "stripe_subscription_id", "mollie_subscription_id", "pending_reason", "free_fallback_provider_stopping", "free_fallback_provider_ended_at"}).AddRow("sub", "tier-A", "active", "postpaid", nil, nil, nil, false, nil))
 	mock.ExpectQuery("IsTenantBillingClosed").WillReturnRows(sqlmock.NewRows([]string{"closed"}).AddRow(false))
 	mock.ExpectQuery("GetSubscriptionOperatorGrant").WithArgs(tenantID).WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery("HasPendingTierUpgrade").WillReturnRows(sqlmock.NewRows([]string{"pending"}).AddRow(false))
 	mock.ExpectExec(`UPDATE purser\.tenant_subscriptions\s+SET tier_id = \$1`).
 		WithArgs(pending, tenantID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
@@ -169,6 +169,7 @@ func TestApplyPendingDowngrade_ReconcileFailLeavesPending(t *testing.T) {
 	mock.ExpectQuery("LockTenantSubscriptionForProviderChange").WithArgs(tenantID).WillReturnRows(sqlmock.NewRows([]string{"subscription_id", "tier_id", "status", "billing_model", "stripe_subscription_id", "mollie_subscription_id", "pending_reason", "free_fallback_provider_stopping", "free_fallback_provider_ended_at"}).AddRow("sub", "tier-A", "active", "postpaid", nil, nil, nil, false, nil))
 	mock.ExpectQuery("IsTenantBillingClosed").WillReturnRows(sqlmock.NewRows([]string{"closed"}).AddRow(false))
 	mock.ExpectQuery("GetSubscriptionOperatorGrant").WithArgs(tenantID).WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery("HasPendingTierUpgrade").WillReturnRows(sqlmock.NewRows([]string{"pending"}).AddRow(false))
 	mock.ExpectExec(`UPDATE purser\.tenant_subscriptions\s+SET tier_id = \$1`).
 		WithArgs(pending, tenantID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
@@ -222,6 +223,7 @@ func TestApplyPendingDowngrade_CacheFailureStillClears(t *testing.T) {
 	mock.ExpectQuery("LockTenantSubscriptionForProviderChange").WithArgs(tenantID).WillReturnRows(sqlmock.NewRows([]string{"subscription_id", "tier_id", "status", "billing_model", "stripe_subscription_id", "mollie_subscription_id", "pending_reason", "free_fallback_provider_stopping", "free_fallback_provider_ended_at"}).AddRow("sub", "tier-A", "active", "postpaid", nil, nil, nil, false, nil))
 	mock.ExpectQuery("IsTenantBillingClosed").WillReturnRows(sqlmock.NewRows([]string{"closed"}).AddRow(false))
 	mock.ExpectQuery("GetSubscriptionOperatorGrant").WithArgs(tenantID).WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery("HasPendingTierUpgrade").WillReturnRows(sqlmock.NewRows([]string{"pending"}).AddRow(false))
 	mock.ExpectExec(`UPDATE purser\.tenant_subscriptions\s+SET tier_id = \$1`).
 		WithArgs(pending, tenantID).
 		WillReturnResult(sqlmock.NewResult(0, 1))

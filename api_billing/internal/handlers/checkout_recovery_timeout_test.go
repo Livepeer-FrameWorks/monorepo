@@ -9,6 +9,7 @@ import (
 	"time"
 
 	billingstripe "frameworks/api_billing/internal/stripe"
+
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	stripeapi "github.com/stripe/stripe-go/v85"
@@ -66,12 +67,14 @@ func testCheckoutRecoveryBoundsProviderCalls(t *testing.T, paid bool) {
 	stripeapi.SetBackend(stripeapi.APIBackend, stripeapi.GetBackendWithConfig(stripeapi.APIBackend, &stripeapi.BackendConfig{HTTPClient: &http.Client{Transport: transport}, MaxNetworkRetries: stripeapi.Int64(0)}))
 	t.Cleanup(func() { stripeapi.SetBackend(stripeapi.APIBackend, previous) })
 	svc := &Service{db: db, logger: logging.NewLogger(), stripeClient: billingstripe.NewClient(billingstripe.Config{SecretKey: "sk_test", Logger: logging.NewLogger()})}
+	expectCheckoutRecoverySessionLock(m)
 	m.ExpectBegin()
 	expectProviderSubscriptionLock(m, "tenant")
 	m.ExpectQuery("GetProviderCheckoutReservation").WillReturnRows(checkoutReservationTestRows("intent", "tenant", "stripe", "tenant_subscription_checkout", "customer", "session", nil, nil, "pending", time.Now().Add(-time.Minute), 0))
 	m.ExpectExec("StartCheckoutCompensation").WillReturnResult(sqlmock.NewResult(0, 1))
 	m.ExpectCommit()
 	m.ExpectQuery("FinishCheckoutCompensation").WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(1)))
+	expectCheckoutRecoverySessionUnlock(m)
 	if err = svc.expireCheckoutReservation(context.Background(), checkoutReservationExpiry{TenantID: "tenant", IntentID: "intent"}); err != nil {
 		t.Fatal(err)
 	}
@@ -98,12 +101,14 @@ func TestRecoveryClosesBoundSessionWithoutCustomerMapping(t *testing.T) {
 	stripeapi.SetBackend(stripeapi.APIBackend, stripeapi.GetBackendWithConfig(stripeapi.APIBackend, &stripeapi.BackendConfig{HTTPClient: &http.Client{Transport: transport}, MaxNetworkRetries: stripeapi.Int64(0)}))
 	t.Cleanup(func() { stripeapi.SetBackend(stripeapi.APIBackend, previous) })
 	svc := &Service{db: db, logger: logging.NewLogger(), stripeClient: billingstripe.NewClient(billingstripe.Config{SecretKey: "sk_test", Logger: logging.NewLogger()})}
+	expectCheckoutRecoverySessionLock(m)
 	m.ExpectBegin()
 	expectProviderSubscriptionLock(m, "tenant")
 	m.ExpectQuery("GetProviderCheckoutReservation").WillReturnRows(checkoutReservationTestRows("intent", "tenant", "stripe", "tenant_subscription_checkout", nil, "session", nil, nil, "pending", time.Now().Add(-time.Hour), 0))
 	m.ExpectExec("StartCheckoutCompensation").WillReturnResult(sqlmock.NewResult(0, 1))
 	m.ExpectCommit()
 	m.ExpectQuery("FinishCheckoutCompensation").WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(1)))
+	expectCheckoutRecoverySessionUnlock(m)
 	if err = svc.expireCheckoutReservation(t.Context(), checkoutReservationExpiry{TenantID: "tenant", IntentID: "intent"}); err != nil {
 		t.Fatal(err)
 	}

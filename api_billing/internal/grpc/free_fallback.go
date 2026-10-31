@@ -19,17 +19,14 @@ import (
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
-// freeFallbackTier is the plan a tenant moves to when its paid subscription ends.
-const freeFallbackTier = "free"
-
 var errFreeFallbackHeld = errors.New("free fallback held until the subscription's pricing state clears")
 
-// runFreeFallbackSweep moves due tenants and delivers notices until shutdown.
+// runFreeFallbackSweep reconciles due billing moves until shutdown.
 func (s *PurserServer) runFreeFallbackSweep(ctx context.Context) {
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
 	for {
-		s.sweepFreeFallbacksOnce(ctx)
+		s.sweepFreeFallbackMovesOnce(ctx)
 		select {
 		case <-ctx.Done():
 			return
@@ -38,7 +35,21 @@ func (s *PurserServer) runFreeFallbackSweep(ctx context.Context) {
 	}
 }
 
-func (s *PurserServer) sweepFreeFallbacksOnce(ctx context.Context) {
+// Notices have their own worker so slow provider reconciliation cannot starve email.
+func (s *PurserServer) runFreeFallbackNotices(ctx context.Context) {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for {
+		s.sweepFreeFallbackNoticesOnce(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func (s *PurserServer) sweepFreeFallbackMovesOnce(ctx context.Context) {
 	defer s.observeFreeFallbacks(ctx)
 	queries := purserdb.New(s.db)
 	due, err := queries.ListDueFreeFallbacks(ctx, time.Now())
@@ -48,9 +59,17 @@ func (s *PurserServer) sweepFreeFallbacksOnce(ctx context.Context) {
 	}
 	for _, tenantID := range due {
 		if moveErr := s.moveTenantToFree(ctx, tenantID); moveErr != nil {
-			s.logger.WithError(moveErr).WithField("tenant_id", tenantID).Warn("Move to Free not completed; retrying on the next sweep")
+			if errors.Is(moveErr, errFreeFallbackHeld) || errors.Is(moveErr, subscriptions.ErrPendingCheckout) || errors.Is(moveErr, subscriptions.ErrPendingTierUpgrade) {
+				s.logger.WithError(moveErr).WithField("tenant_id", tenantID).Debug("Move to Free held by pending pricing")
+			} else {
+				s.logger.WithError(moveErr).WithField("tenant_id", tenantID).Warn("Move to Free not completed; retrying on the next sweep")
+			}
 		}
 	}
+}
+
+func (s *PurserServer) sweepFreeFallbackNoticesOnce(ctx context.Context) {
+	queries := purserdb.New(s.db)
 	notices, err := queries.ListFreeFallbackNotices(ctx)
 	if err != nil {
 		s.freeFallbackReadFailed()
@@ -63,9 +82,8 @@ func (s *PurserServer) sweepFreeFallbacksOnce(ctx context.Context) {
 	}
 }
 
-// moveTenantToFree issues the final invoice and moves the tenant to Free in one
-// transaction. The invoice is rated before the transaction; usage or pricing
-// that moves in between refuses the commit and the next sweep rates it again.
+// moveTenantToFree stops provider renewal before committing the final invoice
+// and default postpaid tier. Concurrent usage or pricing changes retry rating.
 func (s *PurserServer) moveTenantToFree(ctx context.Context, tenantID string) (resultErr error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -83,6 +101,12 @@ func (s *PurserServer) moveTenantToFree(ctx context.Context, tenantID string) (r
 		}
 		recordCtx, recordCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer recordCancel()
+		if errors.Is(resultErr, errFreeFallbackHeld) || errors.Is(resultErr, subscriptions.ErrPendingTierUpgrade) || errors.Is(resultErr, subscriptions.ErrPendingCheckout) {
+			if err := queries.AcknowledgeFreeFallbackHold(recordCtx, purserdb.AcknowledgeFreeFallbackHoldParams{TenantID: tenantID, AttemptedAt: claimedAt}); err != nil {
+				s.logger.WithError(err).WithField("tenant_id", tenantID).Error("Could not acknowledge Free fallback hold")
+			}
+			return
+		}
 		if err := queries.RecordFreeFallbackMoveFailure(recordCtx, purserdb.RecordFreeFallbackMoveFailureParams{TenantID: tenantID, AttemptedAt: claimedAt, Failure: resultErr.Error()}); err != nil {
 			s.logger.WithError(err).WithField("tenant_id", tenantID).Error("Could not record Free fallback failure")
 		}
@@ -93,6 +117,10 @@ func (s *PurserServer) moveTenantToFree(ctx context.Context, tenantID string) (r
 	}
 	if err != nil {
 		return fmt.Errorf("read the final invoice cutoff: %w", err)
+	}
+	target, err := queries.GetFreeFallbackTier(ctx)
+	if err != nil {
+		return fmt.Errorf("resolve active default postpaid fallback before stopping collection: %w", err)
 	}
 	staged, err := s.stageFreeFallbackProviderStop(ctx, tenantID, claimedAt, scheduled)
 	if err != nil || !staged {
@@ -143,11 +171,14 @@ func (s *PurserServer) moveTenantToFree(ctx context.Context, tenantID string) (r
 			}
 			return nil
 		}
-		tier, tierErr := queries.GetTierByNameForOperatorAssignment(ctx, freeFallbackTier)
+		tier, tierErr := queries.GetFreeFallbackTier(ctx)
 		if tierErr != nil {
 			return fmt.Errorf("load the Free tier: %w", tierErr)
 		}
-		moved, moveErr := queries.MoveSubscriptionToFreeFallback(ctx, purserdb.MoveSubscriptionToFreeFallbackParams{TierID: tier.ID, TenantID: tenantID})
+		if tier != target {
+			return handlers.ErrPostpaidPhaseChanged
+		}
+		moved, moveErr := queries.MoveSubscriptionToFreeFallback(ctx, purserdb.MoveSubscriptionToFreeFallbackParams{TierID: tier, TenantID: tenantID})
 		if moveErr != nil {
 			return moveErr
 		}
@@ -155,7 +186,7 @@ func (s *PurserServer) moveTenantToFree(ctx context.Context, tenantID string) (r
 			return errFreeFallbackHeld
 		}
 		updated, buildErr := billingevents.New(tenantID, locked.Current.SubscriptionID, &internalv1.SubscriptionUpdated{
-			SubscriptionId: locked.Current.SubscriptionID, TierId: tier.ID, Status: "active",
+			SubscriptionId: locked.Current.SubscriptionID, TierId: tier, Status: "active",
 			ChangedFields: []string{"tier_id", "status"}, Reason: "subscription ended",
 		}, s.domainActor(ctx))
 		if buildErr != nil {
@@ -251,7 +282,8 @@ func (s *PurserServer) stageFreeFallbackProviderStop(ctx context.Context, tenant
 		}
 		q := purserdb.New(tx)
 		if locked.Current.BillingModel != "postpaid" {
-			return q.ClearSubscriptionFreeFallback(ctx, tenantID)
+			_, clearErr := q.ClearSubscriptionFreeFallback(ctx, tenantID)
+			return clearErr
 		}
 		if locked.Current.TierID != scheduled.TierID || locked.Current.StripeSubscriptionID.String != scheduled.StripeSubscriptionID || locked.Current.MollieSubscriptionID.String != scheduled.MollieSubscriptionID {
 			return handlers.ErrPostpaidPhaseChanged

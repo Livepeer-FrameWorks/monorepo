@@ -11,6 +11,7 @@ import (
 
 	"frameworks/api_billing/internal/database/purserdb"
 	"frameworks/api_billing/internal/subscriptions"
+
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -37,7 +38,7 @@ func seedFallbackLifecycle(t *testing.T, db *sql.DB) (tenant, paid, free string)
 	if _, err := db.Exec(`INSERT INTO purser.billing_tiers(id,tier_name,display_name,base_price,currency,metering_enabled) VALUES($1::text::uuid,$1::text,'Paid',20,'EUR',false),($2::text::uuid,$2::text,'Free fixture',0,'EUR',false)`, paid, free); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`UPDATE purser.billing_tiers SET tier_name='free' WHERE id=$1`, free); err != nil {
+	if _, err := db.Exec(`UPDATE purser.billing_tiers SET tier_name='free',is_default_postpaid=true WHERE id=$1`, free); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`INSERT INTO purser.tenant_subscriptions(tenant_id,tier_id,status,billing_model,payment_method,presentment_currency,billing_period_start,billing_period_end,stripe_customer_id,stripe_subscription_id,free_fallback_at,free_fallback_reason,free_fallback_notified_at) VALUES($1,$2,'past_due','postpaid','stripe','EUR',NOW()-INTERVAL '20 days',NOW()-INTERVAL '1 hour','customer','subscription',NOW()-INTERVAL '1 hour','payment_failed',NOW())`, tenant, paid); err != nil {
@@ -53,7 +54,46 @@ func fallbackLifecycleServer(db *sql.DB, p *fallbackLifecycleProvider) *PurserSe
 }
 
 func TestFreeFallbackProviderFailureKeepsDurableFence_RealPG(t *testing.T) {
-	db := startPurserTransitionRealPG(t)
+	t.Run("fallback target must exist before stopping collection", func(t *testing.T) {
+		db := startOperatorGrantDatabase(t)
+		tenant, _, free := seedFallbackLifecycle(t, db)
+		if _, err := db.ExecContext(t.Context(), `UPDATE purser.billing_tiers SET is_active=false WHERE id=$1`, free); err != nil {
+			t.Fatal(err)
+		}
+		calls := 0
+		provider := &fallbackLifecycleProvider{call: func(context.Context, billing.SubscriptionEndRequest) (billing.SubscriptionEndResult, error) {
+			calls++
+			return billing.SubscriptionEndResult{}, nil
+		}}
+		server := fallbackLifecycleServer(db, provider)
+		if err := server.moveTenantToFree(t.Context(), tenant); err == nil || calls != 0 {
+			t.Fatalf("invalid fallback cancelled a provider first: calls=%d err=%v", calls, err)
+		}
+	})
+	t.Run("pricing holds clear stale move alerts", func(t *testing.T) {
+		db := startOperatorGrantDatabase(t)
+		tenant, _, _ := seedFallbackLifecycle(t, db)
+		if _, err := db.Exec(`UPDATE purser.tenant_subscriptions SET pending_reason='tier_upgrade',free_fallback_failures=2,free_fallback_error='temporary outage' WHERE tenant_id=$1`, tenant); err != nil {
+			t.Fatal(err)
+		}
+		server := fallbackLifecycleServer(db, &fallbackLifecycleProvider{call: func(context.Context, billing.SubscriptionEndRequest) (billing.SubscriptionEndResult, error) {
+			t.Fatal("held upgrade stopped its provider")
+			return billing.SubscriptionEndResult{}, nil
+		}})
+		if err := server.moveTenantToFree(t.Context(), tenant); !errors.Is(err, errFreeFallbackHeld) {
+			t.Fatal(err)
+		}
+		counts, err := purserdb.New(db).CountRepeatedFreeFallbackFailures(t.Context())
+		if err != nil || counts.Moves != 0 {
+			t.Fatalf("held upgrade retained old move alert: %+v %v", counts, err)
+		}
+		items, err := server.AdminListCheckoutRecovery(operatorAssignCtx(uuid.NewString()), &purserpb.AdminListCheckoutRecoveryRequest{TenantId: tenant})
+		if err != nil || len(items.GetItems()) != 1 || items.Items[0].Provider != "free_fallback" {
+			t.Fatalf("fallback not inspectable: %+v %v", items, err)
+		}
+	})
+
+	db := startOperatorGrantDatabase(t)
 	tenant, paid, free := seedFallbackLifecycle(t, db)
 	calls := 0
 	provider := &fallbackLifecycleProvider{call: func(ctx context.Context, r billing.SubscriptionEndRequest) (billing.SubscriptionEndResult, error) {
@@ -119,7 +159,7 @@ func TestFreeFallbackProviderFailureKeepsDurableFence_RealPG(t *testing.T) {
 func TestFreeFallbackRetainsPendingAndPaidTerm_RealPG(t *testing.T) {
 	for _, kind := range []string{"pending", "paid", "recovered", "closure"} {
 		t.Run(kind, func(t *testing.T) {
-			db := startPurserTransitionRealPG(t)
+			db := startOperatorGrantDatabase(t)
 			tenant, paid, _ := seedFallbackLifecycle(t, db)
 			end := time.Now().UTC().Truncate(time.Second).AddDate(0, 1, 0)
 			var start time.Time
@@ -201,7 +241,7 @@ func TestFreeFallbackRetainsPendingAndPaidTerm_RealPG(t *testing.T) {
 }
 
 func TestFreeFallbackOldRetriesCannotStarveUntouchedWork_RealPG(t *testing.T) {
-	db := startPurserTransitionRealPG(t)
+	db := startOperatorGrantDatabase(t)
 	tenant, paid, _ := seedFallbackLifecycle(t, db)
 	// Every older retry is eligible again after a slow batch. Untouched work
 	// must precede them even when its fallback date is newer.
@@ -239,7 +279,7 @@ func (p *fallbackMollieCancel) CancelSubscription(context.Context, string, strin
 }
 
 func TestMollieCancellationKeepsReplacementSubscription_RealPG(t *testing.T) {
-	db := startPurserTransitionRealPG(t)
+	db := startOperatorGrantDatabase(t)
 	tenant, _, _ := seedFallbackLifecycle(t, db)
 	if _, err := db.Exec(`INSERT INTO purser.mollie_customers(tenant_id,mollie_customer_id) VALUES($1,'customer')`, tenant); err != nil {
 		t.Fatal(err)
@@ -272,9 +312,10 @@ func TestMollieCancellationKeepsReplacementSubscription_RealPG(t *testing.T) {
 }
 
 func TestMollieFallbackFindsFundingThroughActualSubscriptionCreation_RealPG(t *testing.T) {
+	assertMollieFundingRecoveryOrdersWithActivation(t)
 	for _, history := range []string{"fresh", "already delivered", "rejected before provider", "compensated before activation"} {
 		t.Run(history, func(t *testing.T) {
-			db := startPurserTransitionRealPG(t)
+			db := startOperatorGrantDatabase(t)
 			tenant, paid, _ := seedFallbackLifecycle(t, db)
 			ctx := t.Context()
 			q := purserdb.New(db)
@@ -347,13 +388,16 @@ func TestMollieFallbackFindsFundingThroughActualSubscriptionCreation_RealPG(t *t
 func TestProviderFailureUnderGrantKeepsFallbackObligation_RealPG(t *testing.T) {
 	for _, provider := range []string{"stripe", "mollie"} {
 		t.Run(provider, func(t *testing.T) {
-			db := startPurserTransitionRealPG(t)
+			db := startOperatorGrantDatabase(t)
 			tenant, paid, free := seedFallbackLifecycle(t, db)
 			ctx := t.Context()
 			if _, err := db.Exec(`UPDATE purser.tenant_subscriptions SET status='active',free_fallback_at=NULL,mollie_subscription_id=CASE WHEN $2='mollie' THEN 'mollie-native' END WHERE tenant_id=$1`, tenant, provider); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := db.Exec(`INSERT INTO purser.subscription_operator_grants(subscription_id,waive_usage,collection,reason,assigned_tier_id,fallback_tier_id,granted_at,expires_at) SELECT id,true,'provider','trial',tier_id,$2,NOW()-INTERVAL '2 hours',NOW()-INTERVAL '1 hour' FROM purser.tenant_subscriptions WHERE tenant_id=$1`, tenant, paid); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := db.Exec(`UPDATE purser.tenant_subscriptions SET free_fallback_notice_failures=2,free_fallback_notice_error='SMTP unavailable' WHERE tenant_id=$1`, tenant); err != nil {
 				t.Fatal(err)
 			}
 			at := time.Now().Add(-15 * 24 * time.Hour)
@@ -375,6 +419,10 @@ func TestProviderFailureUnderGrantKeepsFallbackObligation_RealPG(t *testing.T) {
 			server := fallbackLifecycleServer(db, ender)
 			if provider == "mollie" {
 				server.mollieClient = &fallbackMollieEnder{end: ender}
+			}
+			counts, countErr := purserdb.New(db).CountRepeatedFreeFallbackFailures(ctx)
+			if countErr != nil || counts.Notices != 0 {
+				t.Fatalf("grant-held notices retained an alert: %+v %v", counts, countErr)
 			}
 			server.sweepFreeFallbacksOnce(ctx)
 			var got string

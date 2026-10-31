@@ -33,9 +33,6 @@ func TestTierUpgradeMollieCreditsThePaidContractNotTheCurrentListPrice(t *testin
 				}
 				return mollieJSONResponse(200, fmt.Sprintf(`{"_embedded":{"payments":[{"id":"old-fee","status":"paid","subscriptionId":%q,"createdAt":%q,"metadata":%s,"amount":{"value":"20.00","currency":"EUR"}}]},"_links":{}}`, sub, paymentStart.Format(time.RFC3339), metadata)), nil
 			})
-			previous := http.DefaultTransport
-			http.DefaultTransport = http.DefaultClient.Transport
-			t.Cleanup(func() { http.DefaultTransport = previous })
 			receipt, err := c.UpgradeMonthlySubscription(t.Context(), billing.TierUpgradeRequest{ID: "upgrade", TenantID: "tenant", OldTierID: "old", TierID: "new", CustomerID: "customer", SubscriptionID: "sub", RequestedAt: now,
 				OldPeriodStart: now.Add(-5 * 24 * time.Hour), OldPeriodEnd: end, BaseCents: 5000})
 			if err != nil || receipt.UnusedPaidCents != 1000 || !receipt.PaidPeriodStart.Equal(originalStart) {

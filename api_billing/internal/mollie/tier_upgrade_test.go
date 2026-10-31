@@ -41,9 +41,6 @@ func TestTierUpgradeMollieCreditsOnlyPaidFeeAndLocatesLostPatch(t *testing.T) {
 		}
 		return nil, fmt.Errorf("unexpected provider operation: %s %s", req.Method, req.URL.Path)
 	})
-	previous := http.DefaultTransport
-	http.DefaultTransport = http.DefaultClient.Transport
-	t.Cleanup(func() { http.DefaultTransport = previous })
 	request := billing.TierUpgradeRequest{ID: "upgrade", TenantID: "tenant", OldTierID: "old", TierID: "new", CustomerID: "customer", SubscriptionID: "sub", RequestedAt: now, OldPeriodStart: start, OldPeriodEnd: end, BaseCents: 5000}
 	if _, err := c.UpgradeMonthlySubscription(t.Context(), request); err == nil {
 		t.Fatal("lost PATCH response did not fail")
@@ -70,9 +67,6 @@ func TestTierUpgradeMollieWaitsForSettlement(t *testing.T) {
 				}
 				return mollieJSONResponse(200, fmt.Sprintf(`{"_embedded":{"payments":[{"id":"waiting","subscriptionId":"sub","status":"pending","createdAt":%q}]},"_links":{}}`, boundary.Add(offset).Format(time.RFC3339Nano))), nil
 			})
-			previous := http.DefaultTransport
-			http.DefaultTransport = http.DefaultClient.Transport
-			t.Cleanup(func() { http.DefaultTransport = previous })
 			_, err := c.UpgradeMonthlySubscription(t.Context(), billing.TierUpgradeRequest{ID: "upgrade", TenantID: "tenant", CustomerID: "customer", SubscriptionID: "sub", RequestedAt: now, OldPeriodStart: boundary.AddDate(0, -1, 0), OldPeriodEnd: boundary, BaseCents: 5000})
 			if !errors.Is(err, billing.ErrTierUpgradeUnsettled) || mutations != 0 {
 				t.Fatalf("unsettled fee changed pricing: mutations=%d err=%v", mutations, err)
@@ -97,9 +91,6 @@ func TestTierUpgradeMollieRefusesPaidRenewalBeforeLocalRollover(t *testing.T) {
 		}
 		return mollieJSONResponse(200, fmt.Sprintf(`{"_embedded":{"payments":[{"id":"renewal","subscriptionId":"sub","status":"paid","createdAt":%q,"amount":{"value":"20.00","currency":"EUR"}}]},"_links":{}}`, end.Format(time.RFC3339))), nil
 	})
-	previous := http.DefaultTransport
-	http.DefaultTransport = http.DefaultClient.Transport
-	t.Cleanup(func() { http.DefaultTransport = previous })
 	_, err := c.UpgradeMonthlySubscription(t.Context(), billing.TierUpgradeRequest{ID: "upgrade", TenantID: "tenant", CustomerID: "customer", SubscriptionID: "sub", RequestedAt: now, OldPeriodStart: end.AddDate(0, -1, 0), OldPeriodEnd: end, BaseCents: 5000})
 	if !errors.Is(err, billing.ErrTierUpgradeRejected) || mutations != 0 {
 		t.Fatalf("paid renewal lost at stale local boundary: mutations=%d err=%v", mutations, err)
@@ -121,9 +112,6 @@ func TestTierUpgradeMollieDoesNotCreditChargedBackFee(t *testing.T) {
 		}
 		return mollieJSONResponse(200, fmt.Sprintf(`{"_embedded":{"payments":[{"id":"old","status":"paid","subscriptionId":"sub","createdAt":%q,"amount":{"value":"20.00","currency":"EUR"},"amountRefunded":{"value":"4.00","currency":"EUR"},"amountChargedBack":{"value":"6.00","currency":"EUR"}}]},"_links":{}}`, start.Format(time.RFC3339))), nil
 	})
-	previous := http.DefaultTransport
-	http.DefaultTransport = http.DefaultClient.Transport
-	t.Cleanup(func() { http.DefaultTransport = previous })
 	receipt, err := c.UpgradeMonthlySubscription(t.Context(), billing.TierUpgradeRequest{ID: "upgrade", TenantID: "tenant", CustomerID: "customer", SubscriptionID: "sub", RequestedAt: now, OldPeriodStart: start, OldPeriodEnd: end, BaseCents: 5000})
 	if err != nil || receipt.UnusedPaidCents != 500 {
 		t.Fatalf("credited money not retained: receipt=%+v err=%v", receipt, err)
@@ -146,9 +134,6 @@ func TestTierUpgradeMollieRefusesRenewalBeforeLocalMidnight(t *testing.T) {
 		}
 		return mollieJSONResponse(200, `{"_embedded":{"payments":[{"id":"renewal","status":"paid","subscriptionId":"sub","createdAt":"2026-10-31T23:00:00Z","amount":{"value":"20.00","currency":"EUR"}}]},"_links":{}}`), nil
 	})
-	previous := http.DefaultTransport
-	http.DefaultTransport = http.DefaultClient.Transport
-	t.Cleanup(func() { http.DefaultTransport = previous })
 	_, err := c.UpgradeMonthlySubscription(t.Context(), billing.TierUpgradeRequest{ID: "upgrade", TenantID: "tenant", CustomerID: "customer", SubscriptionID: "sub", RequestedAt: now, OldPeriodStart: end.AddDate(0, -1, 0), OldPeriodEnd: end, BaseCents: 5000})
 	if !errors.Is(err, billing.ErrTierUpgradeRejected) || mutations != 0 {
 		t.Fatalf("provider already renewed but stale local period lost its fee: mutations=%d err=%v", mutations, err)
@@ -174,9 +159,6 @@ func TestMollieUpgradeCreditsFebruaryFeeAfterGrantSplitsMarchCycle(t *testing.T)
 			return nil, fmt.Errorf("unexpected provider operation: %s %s", req.Method, req.URL.Path)
 		}
 	})
-	previous := http.DefaultTransport
-	http.DefaultTransport = http.DefaultClient.Transport
-	t.Cleanup(func() { http.DefaultTransport = previous })
 	receipt, err := c.UpgradeMonthlySubscription(t.Context(), billing.TierUpgradeRequest{
 		ID: "upgrade", TenantID: "tenant", OldTierID: "old", TierID: "new",
 		CustomerID: "customer", SubscriptionID: "sub", BaseCents: 5000,

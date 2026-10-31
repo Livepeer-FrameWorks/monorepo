@@ -47,7 +47,7 @@ WHERE subscription.tenant_id = sqlc.arg(tenant_id)::text::uuid
 FOR UPDATE OF subscription;
 
 -- name: GetTierForBillingChange :one
-SELECT tier_level, tier_name, is_default_prepaid, is_active
+SELECT tier_level, tier_name, is_default_prepaid, is_active, COALESCE(is_enterprise, false)::boolean AS is_enterprise
 FROM purser.billing_tiers
 WHERE id = sqlc.arg(tier_id)::text::uuid;
 

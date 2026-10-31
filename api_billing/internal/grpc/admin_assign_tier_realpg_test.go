@@ -46,7 +46,7 @@ func operatorAssignCtx(userID string) context.Context {
 }
 
 func TestAdminAssignTier_RealPG(t *testing.T) { //nolint:funlen // One database carries the whole assignment matrix.
-	db := startPurserTransitionRealPG(t)
+	db := startOperatorGrantDatabase(t)
 	ctx := context.Background()
 	tiers := map[string]string{}
 	for _, tier := range []struct {
@@ -103,6 +103,56 @@ func TestAdminAssignTier_RealPG(t *testing.T) { //nolint:funlen // One database 
 			t.Fatal(err)
 		}
 		return tierID, model, subStatus, pending
+	}
+	t.Run("operator assignment cancels a scheduled fallback", func(t *testing.T) {
+		tenant := seed(t, "free", "postpaid", "active")
+		if _, err := db.ExecContext(ctx, `UPDATE purser.tenant_subscriptions SET free_fallback_at=NOW()+INTERVAL '7 days',free_fallback_reason='payment_failed',free_fallback_provider_ended_at=NOW() WHERE tenant_id=$1`, tenant); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := server.AdminAssignTier(operatorAssignCtx(operatorID), &purserpb.AdminAssignTierRequest{TenantId: tenant, TierName: "production", Reason: "operator corrected the billing arrangement"}); err != nil {
+			t.Fatal(err)
+		}
+		var scheduled, ended sql.NullTime
+		if err := db.QueryRowContext(ctx, `SELECT free_fallback_at,free_fallback_provider_ended_at FROM purser.tenant_subscriptions WHERE tenant_id=$1`, tenant).Scan(&scheduled, &ended); err != nil {
+			t.Fatal(err)
+		}
+		if scheduled.Valid || ended.Valid {
+			t.Fatalf("operator correction left stale fallback state: scheduled=%v ended=%v", scheduled, ended)
+		}
+	})
+	t.Run("same tier cannot clear an in-flight provider stop", func(t *testing.T) {
+		tenant := seed(t, "free", "postpaid", "active")
+		if _, err := db.ExecContext(ctx, `UPDATE purser.tenant_subscriptions SET free_fallback_at=NOW(),free_fallback_reason='payment_failed',free_fallback_provider_stopping=TRUE WHERE tenant_id=$1`, tenant); err != nil {
+			t.Fatal(err)
+		}
+		_, err := server.AdminAssignTier(operatorAssignCtx(operatorID), &purserpb.AdminAssignTierRequest{TenantId: tenant, TierName: "free", Reason: "operator retries the current tier"})
+		if status.Code(err) != codes.FailedPrecondition {
+			t.Fatalf("in-flight provider stop was cleared: %v", err)
+		}
+		var stopping bool
+		if err := db.QueryRowContext(ctx, `SELECT free_fallback_provider_stopping FROM purser.tenant_subscriptions WHERE tenant_id=$1`, tenant).Scan(&stopping); err != nil || !stopping {
+			t.Fatalf("lost provider stop fence: stopping=%v err=%v", stopping, err)
+		}
+	})
+	for _, phase := range []string{"requested", "pricing_applied"} {
+		t.Run("operator assignment preserves upgrade "+phase, func(t *testing.T) {
+			tenant := seed(t, "production", "postpaid", "active")
+			if _, err := db.ExecContext(ctx, `INSERT INTO purser.subscription_tier_upgrades(id,tenant_id,old_tier_id,tier_id,actor_id,old_period_start,old_period_end,requested_at,provider,collection_provider,customer_id,provider_subscription_id,stripe_price_id,old_base_cents,base_cents,state)
+VALUES($1,$2,$3,$4,'customer',NOW()-INTERVAL '1 day',NOW()+INTERVAL '29 days',NOW(),'invoice','invoice','','','',0,2000,$5)`, uuid.NewString(), tenant, tiers["free"], tiers["production"], phase); err != nil {
+				t.Fatal(err)
+			}
+			if phase == "requested" {
+				if _, err := db.ExecContext(ctx, `UPDATE purser.tenant_subscriptions SET pending_reason='tier_upgrade',pending_tier_id=tier_id WHERE tenant_id=$1`, tenant); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, target := range []string{"production", "free"} {
+				_, err := server.AdminAssignTier(operatorAssignCtx(operatorID), &purserpb.AdminAssignTierRequest{TenantId: tenant, TierName: target, Reason: "operator correction during collection"})
+				if status.Code(err) != codes.FailedPrecondition {
+					t.Fatalf("%s upgrade was repriced by %s: %v", phase, target, err)
+				}
+			}
+		})
 	}
 	updatedEvent := func(t *testing.T, tenantID string) (*internalv1.SubscriptionUpdated, string) {
 		t.Helper()

@@ -111,6 +111,8 @@ func TestProviderInboxClaimsOneBoundedDispatchPerLease(t *testing.T) {
 	}
 	defer db.Close()
 	m.MatchExpectationsInOrder(false)
+	expectCheckoutRecoverySessionLock(m)
+	expectCheckoutRecoverySessionUnlock(m)
 	metrics := &PurserMetrics{ProviderWebhookInboxFailures: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "test_worker_inbox_items"}, nil), ProviderWebhookInboxReadFailures: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "test_worker_inbox_read_failures_total"}, nil)}
 	m.ExpectQuery("ProviderWebhookInboxRepeatedFailures").WillReturnRows(sqlmock.NewRows([]string{"items"}).AddRow(2))
 	m.ExpectExec("EnqueueUnresolvedCheckoutRecovery").WillReturnResult(sqlmock.NewResult(0, 1))
@@ -170,6 +172,7 @@ func TestCheckoutRecoveryRetryDiscardsRolledBackDecision(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
+	expectCheckoutRecoverySessionLock(m)
 	m.ExpectBegin()
 	expectProviderSubscriptionLock(m, "tenant")
 	m.ExpectQuery("GetProviderCheckoutReservation").WillReturnRows(checkoutReservationTestRows("intent", "tenant", "stripe", "tenant_subscription_checkout", nil, nil, nil, nil, "succeeded", time.Now().Add(-time.Hour), 0))
@@ -180,6 +183,7 @@ func TestCheckoutRecoveryRetryDiscardsRolledBackDecision(t *testing.T) {
 	m.ExpectExec("StartCheckoutCompensation").WillReturnResult(sqlmock.NewResult(0, 1))
 	m.ExpectCommit()
 	m.ExpectQuery("FinishCheckoutCompensation").WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(1)))
+	expectCheckoutRecoverySessionUnlock(m)
 	if err = (&Service{db: db}).expireCheckoutReservation(t.Context(), checkoutReservationExpiry{TenantID: "tenant", IntentID: "intent"}); err != nil {
 		t.Fatal(err)
 	}

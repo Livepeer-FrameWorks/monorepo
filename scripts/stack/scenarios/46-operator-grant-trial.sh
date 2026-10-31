@@ -312,6 +312,11 @@ pid=$(publish_until_admitted "$EDGE_A_RTMP" "$key" 320x240 10 "$REVOCATION_PUBLI
 pass 'activation restores ingest under the admitted grant'
 check 'restored session accepted immediately before closure' credential_admitted "$jwt"
 check 'restored API token accepted immediately before closure' credential_admitted "$api"
+closure_refresh=$(awk '$6=="refresh_token"{print $7}' "$cookies" | tail -1)
+[ -n "$closure_refresh" ] || {
+  fail 'fresh login did not issue a refresh token'
+  finish_trial
+}
 cli_json admin tenants deactivate "$tenant" --yes --tenant-name "$trial_name" --reason 'stack active tenant closure' >/dev/null || {
   fail 'active tenant closure failed'
   finish_trial
@@ -323,6 +328,8 @@ eventually "$INGEST_STOP_BOUND_S" 'closed tenant active push ends' publisher_sto
 code=$(user_login)
 check 'closed tenant user cannot log in' bash -c '[[ "$1" = 401 || "$1" = 403 ]]' _ "$code"
 check 'closed tenant API token is refused' credential_refused "$api"
+refresh_code=$(curl -s -m 20 -X POST -o /dev/null -w '%{http_code}' -H "Cookie: refresh_token=$closure_refresh" "$BRIDGE_URL/auth/refresh")
+check 'closed tenant refresh token is refused' bash -c '[[ "$1" = 401 || "$1" = 403 ]]' _ "$refresh_code"
 check 'closed tenant key refuses a new publisher' publish_refused "$FOGHORN_A_DB" "$internal" "$EDGE_A_RTMP" "$key"
 billing_cutoff_recorded() {
   [ "$(pg purser "SELECT COUNT(*) FROM purser.tenant_billing_closures WHERE tenant_id='$tenant'")" = 1 ]

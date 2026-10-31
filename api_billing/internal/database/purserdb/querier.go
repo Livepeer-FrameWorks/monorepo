@@ -13,6 +13,8 @@ import (
 )
 
 type Querier interface {
+	// A newer claim or lifecycle cannot be cleared by an older worker.
+	AcknowledgeFreeFallbackHold(ctx context.Context, arg AcknowledgeFreeFallbackHoldParams) error
 	AcquireCryptoTaxDocumentLock(ctx context.Context, lockKey string) error
 	AcquireX402RelayerNonceLock(ctx context.Context, lockKey string) error
 	// Applies the tier a payment-method setup was started for and starts the first
@@ -95,7 +97,7 @@ type Querier interface {
 	ClearCancelledTierUpgrade(ctx context.Context, tenantID string) error
 	ClearOpenInvoicePrepaidCredit(ctx context.Context, arg ClearOpenInvoicePrepaidCreditParams) error
 	ClearStagedStripeClusterSubscription(ctx context.Context, arg ClearStagedStripeClusterSubscriptionParams) error
-	ClearSubscriptionFreeFallback(ctx context.Context, tenantID string) error
+	ClearSubscriptionFreeFallback(ctx context.Context, tenantID string) (int64, error)
 	ClearTenantStripeCheckoutPending(ctx context.Context, arg ClearTenantStripeCheckoutPendingParams) error
 	// CollectPhaseUsage per meter dimension.
 	CollectPhaseDimensionedUsage(ctx context.Context, arg CollectPhaseDimensionedUsageParams) ([]CollectPhaseDimensionedUsageRow, error)
@@ -288,6 +290,7 @@ type Querier interface {
 	GetFXRateOnOrBefore(ctx context.Context, arg GetFXRateOnOrBeforeParams) (GetFXRateOnOrBeforeRow, error)
 	GetFallbackTierForOperatorGrant(ctx context.Context, tierName string) (GetFallbackTierForOperatorGrantRow, error)
 	GetFirstX402SettlementAttemptHash(ctx context.Context, settlementID string) (string, error)
+	GetFreeFallbackTier(ctx context.Context) (string, error)
 	GetHDWalletXpub(ctx context.Context) (string, error)
 	GetInitializedPostpaidAccount(ctx context.Context, tenantID string) (GetInitializedPostpaidAccountRow, error)
 	GetInitializedPrepaidAccount(ctx context.Context, arg GetInitializedPrepaidAccountParams) (GetInitializedPrepaidAccountRow, error)
@@ -454,6 +457,11 @@ type Querier interface {
 	GetX402SettlementByIdentity(ctx context.Context, arg GetX402SettlementByIdentityParams) (GetX402SettlementByIdentityRow, error)
 	GetX402TaxSnapshot(ctx context.Context, arg GetX402TaxSnapshotParams) (GetX402TaxSnapshotRow, error)
 	HaltClosedTenantBilling(ctx context.Context, tenantID string) error
+	// A provider-created subscription is not evidence of delivered local service.
+	// Without exact funding links, only a sole initial receipt can be associated.
+	HasHistoricalMollieActivation(ctx context.Context, arg HasHistoricalMollieActivationParams) (bool, error)
+	HasPendingMollieFundingCheckout(ctx context.Context, arg HasPendingMollieFundingCheckoutParams) (bool, error)
+	HasPendingTierUpgrade(ctx context.Context, tenantID string) (bool, error)
 	// Authenticated provider callbacks have no tenant context until their payment
 	// reference is resolved. This platform-wide lookup only selects an existing owner.
 	HasRefundSettlementOwner(ctx context.Context, arg HasRefundSettlementOwnerParams) (bool, error)
@@ -532,6 +540,7 @@ type Querier interface {
 	IsX402MutationCompleted(ctx context.Context, arg IsX402MutationCompletedParams) (bool, error)
 	LeaseInvoiceEmail(ctx context.Context, arg LeaseInvoiceEmailParams) (int64, error)
 	LinkBillingPaymentIntent(ctx context.Context, arg LinkBillingPaymentIntentParams) error
+	LinkMollieCheckoutFunding(ctx context.Context, arg LinkMollieCheckoutFundingParams) error
 	LinkPaymentReversalToOperatorCredit(ctx context.Context, arg LinkPaymentReversalToOperatorCreditParams) error
 	LinkProviderIntentCustomer(ctx context.Context, arg LinkProviderIntentCustomerParams) error
 	LinkStripeIntentSubscription(ctx context.Context, arg LinkStripeIntentSubscriptionParams) error
@@ -701,6 +710,7 @@ type Querier interface {
 	// Coverage is measured in the currency the invoice was presented in: the
 	// original amounts of confirmed payments in that currency, net of reversals.
 	MarkFullySettledBillingInvoicePaid(ctx context.Context, arg MarkFullySettledBillingInvoicePaidParams) (int64, error)
+	MarkMollieFirstPaymentActivated(ctx context.Context, arg MarkMollieFirstPaymentActivatedParams) error
 	MarkOperatorAccrualClawedBack(ctx context.Context, accrualLedgerID string) error
 	MarkPaymentReversalForReview(ctx context.Context, reversalID string) error
 	MarkPendingBillingPaymentFailed(ctx context.Context, paymentID string) error

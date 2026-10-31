@@ -31,7 +31,7 @@ import (
 // paid tier needs it settled first.
 func TestPaymentFailureMovesToFreeWithFinalInvoice_RealPG(t *testing.T) {
 	appconfigtest.Set(t, "WAIVE_USAGE_CHARGES", "false")
-	db := startPurserTransitionRealPG(t)
+	db := startOperatorGrantDatabase(t)
 	ctx := context.Background()
 	tenantID, freeID, supporterID := uuid.NewString(), uuid.NewString(), uuid.NewString()
 	periodStart := time.Now().UTC().Truncate(time.Hour).Add(-20 * 24 * time.Hour)
@@ -63,6 +63,9 @@ func TestPaymentFailureMovesToFreeWithFinalInvoice_RealPG(t *testing.T) {
 		tenantID, subscriptions.FallbackPaymentFailed, time.Now().Add(time.Hour))
 
 	var notices []handlers.FreeFallbackNotice
+	if _, err := db.ExecContext(ctx, `UPDATE purser.billing_tiers SET is_default_postpaid=true WHERE tier_name='free'`); err != nil {
+		t.Fatal(err)
+	}
 	server := &PurserServer{db: db, logger: logging.NewLogger(), stripeClient: &fallbackUnpaidStripe{}, tierReconciler: &assignTierReconciler{}, commodoreClient: &recordingCommodoreCache{},
 		freeFallbackNoticeSender: func(notice handlers.FreeFallbackNotice) error {
 			notices = append(notices, notice)
@@ -142,7 +145,7 @@ func TestPaymentFailureMovesToFreeWithFinalInvoice_RealPG(t *testing.T) {
 
 // An operator arrangement made during the grace period stays until it ends.
 func TestOperatorGrantHoldsTheMoveToFree_RealPG(t *testing.T) {
-	db := startPurserTransitionRealPG(t)
+	db := startOperatorGrantDatabase(t)
 	ctx := context.Background()
 	tenantID, freeID, supporterID := uuid.NewString(), uuid.NewString(), uuid.NewString()
 	if _, err := db.ExecContext(ctx, `INSERT INTO purser.billing_tiers (id, tier_name, display_name, base_price, currency, tier_level, metering_enabled)
@@ -157,6 +160,9 @@ func TestOperatorGrantHoldsTheMoveToFree_RealPG(t *testing.T) {
 		SELECT id, tier_id, 'invoice', 'support arrangement', '7a000000-0000-4000-8000-000000000003' FROM purser.tenant_subscriptions WHERE tenant_id=$1`, tenantID); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := db.ExecContext(ctx, `UPDATE purser.billing_tiers SET is_default_postpaid=true WHERE tier_name='free'`); err != nil {
+		t.Fatal(err)
+	}
 	server := &PurserServer{db: db, logger: logging.NewLogger(), tierReconciler: &assignTierReconciler{}, commodoreClient: &recordingCommodoreCache{}}
 	server.sweepFreeFallbacksOnce(ctx)
 	var tierID string
@@ -167,7 +173,7 @@ func TestOperatorGrantHoldsTheMoveToFree_RealPG(t *testing.T) {
 
 // A failed final invoice must not monopolize the worker's first batch.
 func TestFreeFallbackFailuresDoNotStarveLaterTenants_RealPG(t *testing.T) {
-	db := startPurserTransitionRealPG(t)
+	db := startOperatorGrantDatabase(t)
 	ctx := t.Context()
 	free, metered, unmetered := uuid.NewString(), uuid.NewString(), uuid.NewString()
 	if _, err := db.ExecContext(ctx, `INSERT INTO purser.billing_tiers
@@ -188,6 +194,9 @@ func TestFreeFallbackFailuresDoNotStarveLaterTenants_RealPG(t *testing.T) {
 		VALUES ($1,$2,'past_due','postpaid','EUR',NOW()-INTERVAL '20 days',NOW()+INTERVAL '10 days',NOW()-INTERVAL '1 day','payment_failed')`, tenant, unmetered); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := db.ExecContext(ctx, `UPDATE purser.billing_tiers SET is_default_postpaid=true WHERE tier_name='free'`); err != nil {
+		t.Fatal(err)
+	}
 	server := &PurserServer{db: db, logger: logging.NewLogger(), tierReconciler: &assignTierReconciler{}, commodoreClient: &recordingCommodoreCache{}}
 	server.sweepFreeFallbacksOnce(ctx)
 	server.sweepFreeFallbacksOnce(ctx)
@@ -203,7 +212,7 @@ func TestFreeFallbackFailuresDoNotStarveLaterTenants_RealPG(t *testing.T) {
 // A recoverable unpaid Stripe subscription must stop billing before its local
 // identity is discarded; otherwise neither a retry nor later closure owns it.
 func TestFreeFallbackStopsUnpaidProviderSubscription_RealPG(t *testing.T) {
-	db := startPurserTransitionRealPG(t)
+	db := startOperatorGrantDatabase(t)
 	ctx := t.Context()
 	free, paid, tenant := uuid.NewString(), uuid.NewString(), uuid.NewString()
 	if _, err := db.ExecContext(ctx, `INSERT INTO purser.billing_tiers
@@ -219,6 +228,9 @@ func TestFreeFallbackStopsUnpaidProviderSubscription_RealPG(t *testing.T) {
 		t.Fatal(err)
 	}
 	provider := &fallbackUnpaidStripe{live: true}
+	if _, err := db.ExecContext(ctx, `UPDATE purser.billing_tiers SET is_default_postpaid=true WHERE tier_name='free'`); err != nil {
+		t.Fatal(err)
+	}
 	server := &PurserServer{db: db, logger: logging.NewLogger(), stripeClient: provider, tierReconciler: &assignTierReconciler{}, commodoreClient: &recordingCommodoreCache{}}
 	server.sweepFreeFallbacksOnce(ctx)
 	var tier string
@@ -253,7 +265,7 @@ func (f *fallbackUnpaidStripe) EndSubscriptionForFallback(ctx context.Context, r
 
 func TestFreeFallbackKeepsMissedMonthsSeparate_RealPG(t *testing.T) {
 	appconfigtest.Set(t, "WAIVE_USAGE_CHARGES", "false")
-	db := startPurserTransitionRealPG(t)
+	db := startOperatorGrantDatabase(t)
 	ctx := t.Context()
 	now := time.Now().UTC()
 	month := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
@@ -278,6 +290,9 @@ func TestFreeFallbackKeepsMissedMonthsSeparate_RealPG(t *testing.T) {
 	for i, quantity := range []float64{100, 150, 100} {
 		at := start.AddDate(0, i, 0).Add(time.Hour)
 		exec(`INSERT INTO purser.usage_records(tenant_id,cluster_id,usage_type,unit,dimensions,dimension_key,source_id,report_id,usage_value,usage_details,period_start,period_end,granularity,value_kind,created_at) VALUES($1,'','egress_gb','gibibyte','{}',$2,'fallback-monthly',$3,$4,'{}',$5,$5::timestamptz+INTERVAL '5 minutes','minute_5','delta',$5)`, tenant, fmt.Sprintf("%x", sha256.Sum256([]byte("{}"))), strings.Repeat(fmt.Sprintf("%x", i+1), 64), quantity, at)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE purser.billing_tiers SET is_default_postpaid=true WHERE tier_name='free'`); err != nil {
+		t.Fatal(err)
 	}
 	server := &PurserServer{db: db, logger: logging.NewLogger(), stripeClient: &fallbackUnpaidStripe{}, tierReconciler: &assignTierReconciler{}, commodoreClient: &recordingCommodoreCache{}, freeFallbackNoticeSender: func(handlers.FreeFallbackNotice) error { return nil }}
 	for range 4 {
@@ -318,4 +333,32 @@ func TestFreeFallbackKeepsMissedMonthsSeparate_RealPG(t *testing.T) {
 	if err = rows.Err(); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestFreeFallbackLifecycle_RealYugabyte(t *testing.T) {
+	for _, contract := range []struct {
+		name string
+		run  func(*testing.T)
+	}{
+		{"TestFreeFallbackKeepsMissedMonthsSeparate", TestFreeFallbackKeepsMissedMonthsSeparate_RealPG},
+		{"TestMollieCancellationKeepsReplacementSubscription", TestMollieCancellationKeepsReplacementSubscription_RealPG},
+		{"TestMollieFallbackFindsFundingThroughActualSubscriptionCreation", TestMollieFallbackFindsFundingThroughActualSubscriptionCreation_RealPG},
+		{"TestProviderFailureUnderGrantKeepsFallbackObligation", TestProviderFailureUnderGrantKeepsFallbackObligation_RealPG},
+		{"TestFreeFallbackProviderFailureKeepsDurableFence", TestFreeFallbackProviderFailureKeepsDurableFence_RealPG},
+		{"TestFreeFallbackRetainsPendingAndPaidTerm", TestFreeFallbackRetainsPendingAndPaidTerm_RealPG},
+		{"TestFreeFallbackOldRetriesCannotStarveUntouchedWork", TestFreeFallbackOldRetriesCannotStarveUntouchedWork_RealPG},
+		{"TestPaymentFailureMovesToFreeWithFinalInvoice", TestPaymentFailureMovesToFreeWithFinalInvoice_RealPG},
+		{"TestOperatorGrantHoldsTheMoveToFree", TestOperatorGrantHoldsTheMoveToFree_RealPG},
+		{"TestFreeFallbackFailuresDoNotStarveLaterTenants", TestFreeFallbackFailuresDoNotStarveLaterTenants_RealPG},
+		{"TestFreeFallbackStopsUnpaidProviderSubscription", TestFreeFallbackStopsUnpaidProviderSubscription_RealPG},
+	} {
+		t.Run(contract.name, contract.run)
+	}
+}
+
+func TestAdminAssignTier_RealYugabyte(t *testing.T) { TestAdminAssignTier_RealPG(t) }
+
+func (s *PurserServer) sweepFreeFallbacksOnce(ctx context.Context) {
+	s.sweepFreeFallbackMovesOnce(ctx)
+	s.sweepFreeFallbackNoticesOnce(ctx)
 }

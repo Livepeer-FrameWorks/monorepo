@@ -2124,6 +2124,9 @@ CREATE TABLE IF NOT EXISTS purser.payment_provider_intents (
     last_error TEXT,
     attempt_count INT NOT NULL DEFAULT 0,
     succeeded_at TIMESTAMPTZ,
+    activated_at TIMESTAMPTZ,
+    funding_intent_id UUID,
+    provider_mandate_id TEXT,
     expires_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -2348,6 +2351,7 @@ CREATE TABLE IF NOT EXISTS purser.provider_webhook_inbox (
     next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     claimed_at TIMESTAMPTZ,
     lease_token UUID,
+    wake_requested BOOLEAN NOT NULL DEFAULT FALSE,
     last_error TEXT,
     processed_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -3514,9 +3518,9 @@ BEGIN
     SELECT ts.tenant_id, OLD.subscription_id, ts.tier_id,
            OLD.fallback_tier_id, OLD.base_price, OLD.waive_usage, OLD.collection,
            OLD.expires_at, OLD.reason, OLD.granted_by, OLD.granted_at,
-           CASE WHEN ts.status='cancelled' THEN NOW() ELSE LEAST(COALESCE(OLD.expires_at, 'infinity'::timestamptz),
+           LEAST(COALESCE(OLD.expires_at, 'infinity'::timestamptz),
                CASE WHEN TG_OP = 'UPDATE' THEN NEW.granted_at
-               ELSE COALESCE(NULLIF(current_setting('frameworks.operator_grant_boundary', true), '')::timestamptz, NOW()) END) END
+               ELSE COALESCE(NULLIF(current_setting('frameworks.operator_grant_boundary', true), '')::timestamptz, NOW()) END)
     FROM purser.tenant_subscriptions ts WHERE ts.id = OLD.subscription_id;
     RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
 END;
@@ -3658,9 +3662,9 @@ CREATE TABLE IF NOT EXISTS purser.subscription_tier_upgrades (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS uq_subscription_tier_upgrade_pending
     ON purser.subscription_tier_upgrades (tenant_id)
-    WHERE state IN ('requested','provider_applied');
+    WHERE state IN ('requested','provider_applied','pricing_applied');
 CREATE INDEX IF NOT EXISTS idx_subscription_tier_upgrades_tenant
-    ON purser.subscription_tier_upgrades (tenant_id,provider_subscription_id,requested_at DESC);
+    ON purser.subscription_tier_upgrades (tenant_id ASC, provider_subscription_id ASC, requested_at DESC);
 
 CREATE INDEX IF NOT EXISTS idx_provider_refund_settlement_payment
     ON purser.provider_webhook_inbox ((headers->>'provider') ASC, (headers->>'provider_payment_id') ASC)

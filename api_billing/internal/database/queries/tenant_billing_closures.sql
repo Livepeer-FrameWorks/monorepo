@@ -61,7 +61,9 @@ UPDATE purser.payment_provider_intents intent
 SET recovery_started_at = COALESCE(recovery_started_at, NOW()), updated_at = NOW()
 WHERE intent.tenant_id = sqlc.arg(tenant_id)::text::uuid
   AND intent.purpose IN ('tenant_subscription_checkout', 'mollie_first_payment', 'mollie_subscription_create', 'cluster_subscription_checkout')
-  AND intent.status IN ('pending', 'provider_open', 'provider_call_failed')
+  AND (intent.status IN ('pending', 'provider_open', 'provider_call_failed')
+       OR (intent.purpose = 'mollie_first_payment' AND intent.status = 'succeeded'
+           AND intent.activated_at IS NULL))
   AND NOT EXISTS (
       SELECT 1 FROM purser.tenant_subscriptions ts
       WHERE ts.tenant_id = intent.tenant_id
@@ -101,7 +103,8 @@ SELECT 'tenant_closure', 'tenant-closure:' || tenant_id::text,
 FROM purser.tenant_billing_closures
 WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid AND providers_cancelled_at IS NULL
 ON CONFLICT (provider, event_key) DO UPDATE SET
-    status = 'pending',
+    status = CASE WHEN purser.provider_webhook_inbox.status = 'processing' THEN 'processing' ELSE 'pending' END,
+    wake_requested = TRUE,
     next_attempt_at = LEAST(purser.provider_webhook_inbox.next_attempt_at, NOW()),
     attempts = CASE WHEN purser.provider_webhook_inbox.status = 'processed'
         THEN 0 ELSE purser.provider_webhook_inbox.attempts END,
@@ -111,7 +114,7 @@ ON CONFLICT (provider, event_key) DO UPDATE SET
         THEN NULL ELSE purser.provider_webhook_inbox.unresolved_since END,
     last_error = CASE WHEN purser.provider_webhook_inbox.status = 'processed'
         THEN NULL ELSE purser.provider_webhook_inbox.last_error END,
-    processed_at = NULL, claimed_at = NULL, lease_token = NULL, updated_at = NOW();
+    processed_at = NULL, updated_at = NOW();
 
 -- name: MarkClosedTenantProvidersCancelled :execrows
 UPDATE purser.tenant_billing_closures

@@ -2,7 +2,7 @@
 SELECT id::text, tier_id::text, state
 FROM purser.subscription_tier_upgrades
 WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
-    AND state IN ('requested', 'provider_applied');
+    AND state IN ('requested', 'provider_applied', 'pricing_applied');
 
 -- name: GetTierUpgrade :one
 SELECT id::text, tenant_id::text, old_tier_id::text, tier_id::text, actor_id,
@@ -106,3 +106,10 @@ SET recovery_requested_at = COALESCE(recovery_requested_at, NOW()),
     updated_at = NOW()
 WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid AND id = sqlc.arg(id)::text::uuid
     AND state NOT IN ('completed', 'cancelled') AND recovery_requested_at IS NULL;
+
+-- name: HasPendingTierUpgrade :one
+SELECT EXISTS (
+    SELECT 1 FROM purser.subscription_tier_upgrades
+    WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
+      AND state IN ('requested', 'provider_applied', 'pricing_applied')
+)::boolean AS pending;

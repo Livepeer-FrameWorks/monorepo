@@ -71,3 +71,7 @@ type SettledRefund struct {
 // ErrRefundSettling means the provider accepted a refund whose bank settlement
 // has not covered the compensated purchase yet.
 var ErrRefundSettling = errors.New("provider refund is settling")
+
+// ErrCheckoutSettlementPending preserves recovery until an initial debit has a
+// terminal outcome, even after its subscription has been cancelled.
+var ErrCheckoutSettlementPending = errors.New("awaiting provider settlement")

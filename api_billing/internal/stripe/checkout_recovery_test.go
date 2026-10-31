@@ -3,6 +3,7 @@ package stripe
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -15,7 +16,12 @@ type checkoutRecoveryBackend struct {
 	stripeMoneyBackend
 	paths           []string
 	paid, refunded  bool
+	processing      bool
+	sessionPayment  bool
 	includeRenewals bool
+	openInvoice     bool
+	staleInvoice    bool
+	paymentInvoices []string
 	cancelParams    *api.SubscriptionCancelParams
 }
 
@@ -30,11 +36,23 @@ func (b *checkoutRecoveryBackend) Call(method, path, key string, p api.ParamsCon
 		if b.paid {
 			v.Status = api.CheckoutSessionStatusComplete
 			v.Subscription = &api.Subscription{ID: "sub_reserved"}
+			if b.sessionPayment {
+				v.PaymentIntent = &api.PaymentIntent{ID: "pi_reserved"}
+			}
 		}
 	case *api.Subscription:
 		*v = api.Subscription{ID: "sub_reserved", Status: api.SubscriptionStatusActive}
+	case *api.Invoice:
+		*v = api.Invoice{ID: "in_reserved", Status: api.InvoiceStatusVoid}
 	case *api.PaymentIntent:
 		*v = api.PaymentIntent{ID: "pi_reserved", LatestCharge: &api.Charge{ID: "ch_reserved", Currency: api.CurrencyEUR, Amount: 2000}}
+		if b.processing {
+			v.Status = api.PaymentIntentStatusProcessing
+		}
+		if b.openInvoice {
+			v.Status = api.PaymentIntentStatusRequiresPaymentMethod
+			v.LatestCharge = nil
+		}
 		if b.refunded {
 			v.LatestCharge.AmountRefunded = 2000
 		}
@@ -56,13 +74,67 @@ func (b *checkoutRecoveryBackend) CallRaw(method, path, key string, body []byte,
 		v.Data = []*api.CheckoutSession{{ID: "cs_other", Status: api.CheckoutSessionStatusOpen, Metadata: map[string]string{"checkout_reservation_id": "other"}}, own}
 	case *api.InvoiceList:
 		v.Data = []*api.Invoice{{ID: "in_reserved", AmountPaid: 2000, BillingReason: api.InvoiceBillingReasonSubscriptionCreate}}
+		if b.processing || b.openInvoice || b.staleInvoice {
+			v.Data[0].AmountPaid = 0
+			v.Data[0].Status = api.InvoiceStatusOpen
+		}
 		if b.includeRenewals {
 			v.Data = append(v.Data, &api.Invoice{ID: "in_renewal", AmountPaid: 2000, BillingReason: api.InvoiceBillingReasonSubscriptionCycle})
 		}
 	case *api.InvoicePaymentList:
+		query, err := url.ParseQuery(string(body))
+		if err != nil {
+			return err
+		}
+		b.paymentInvoices = append(b.paymentInvoices, query.Get("invoice"))
+		if b.openInvoice && query.Get("status") == "paid" {
+			v.Data = nil
+			return nil
+		}
 		v.Data = []*api.InvoicePayment{{ID: "ip_reserved", Payment: &api.InvoicePaymentPayment{PaymentIntent: &api.PaymentIntent{ID: "pi_reserved"}}}}
 	}
 	return nil
+}
+
+func TestCheckoutCompensationWaitsForInitialDebitSettlement(t *testing.T) {
+	for _, sessionPayment := range []bool{false, true} {
+		t.Run(fmt.Sprint("session payment reference=", sessionPayment), func(t *testing.T) {
+			b := &checkoutRecoveryBackend{paid: true, processing: true, sessionPayment: sessionPayment, includeRenewals: true}
+			installBackend(t, b)
+			c := NewClient(Config{SecretKey: "sk_test", Logger: logging.NewLogger()})
+			if _, err := c.RecoverReservedCheckout(t.Context(), "cus_reserved", "reservation", "cs_reserved"); err == nil {
+				t.Fatal("processing first debit was marked fully compensated before it could be refunded")
+			}
+			if b.refunded {
+				t.Fatal("processing debit was refunded before collection")
+			}
+			b.processing = false
+			if _, err := c.RecoverReservedCheckout(t.Context(), "cus_reserved", "reservation", "cs_reserved"); err != nil {
+				t.Fatal(err)
+			}
+			refunds := 0
+			for _, path := range b.paths {
+				if path == "POST /v1/refunds" {
+					refunds++
+				}
+			}
+			if refunds != 1 {
+				t.Fatalf("settled initial debit must be refunded once: calls=%v", b.paths)
+			}
+		})
+	}
+}
+
+func TestCheckoutCompensationReadsPaymentsAfterInvoiceSnapshot(t *testing.T) {
+	b := &checkoutRecoveryBackend{paid: true, staleInvoice: true}
+	installBackend(t, b)
+	c := NewClient(Config{SecretKey: "sk_test", Logger: logging.NewLogger()})
+	if _, err := c.RecoverReservedCheckout(t.Context(), "cus_reserved", "reservation", "cs_reserved"); err != nil {
+		t.Fatal(err)
+	}
+	if !b.refunded {
+		t.Fatal("a debit that settled after invoice listing was permanently skipped")
+	}
 }
 
 func TestExpiredStripeReservationRecoversLostSessionBinding(t *testing.T) {
@@ -189,13 +261,30 @@ func TestRecoveryRefundsCheckoutInvoiceOnly(t *testing.T) {
 			t.Fatalf("recovery read delivered service: %s", path)
 		}
 	}
-	reads := 0
-	for _, path := range b.paths {
-		if path == "GET /v1/invoice_payments" {
-			reads++
+	if len(b.paymentInvoices) == 0 {
+		t.Fatal("checkout payment allocations were not inspected")
+	}
+	for _, id := range b.paymentInvoices {
+		if id != "in_reserved" {
+			t.Fatalf("recovery reached delivered invoice %s", id)
 		}
 	}
-	if reads != 1 {
-		t.Fatalf("recovery reached %d invoice payments; only checkout invoice may be refunded", reads)
+}
+
+func TestCheckoutCompensationClosesUnpaidInvoiceBeforeReleasingReservation(t *testing.T) {
+	b := &checkoutRecoveryBackend{paid: true, openInvoice: true}
+	installBackend(t, b)
+	client := NewClient(Config{SecretKey: "sk_test", Logger: logging.NewLogger()})
+	if _, err := client.RecoverReservedCheckout(t.Context(), "cus_reserved", "reservation", "cs_reserved"); err != nil {
+		t.Fatal(err)
+	}
+	voided := false
+	for _, path := range b.paths {
+		if path == "POST /v1/invoices/in_reserved/void" {
+			voided = true
+		}
+	}
+	if !voided {
+		t.Fatalf("released checkout while its unpaid initial invoice still accepted payment: %v", b.paths)
 	}
 }

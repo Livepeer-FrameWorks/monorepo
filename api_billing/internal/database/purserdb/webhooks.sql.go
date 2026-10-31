@@ -1252,17 +1252,19 @@ func (q *Queries) ResetTenantDunningAttempts(ctx context.Context, tenantID strin
 const resolveMollieFirstPaymentIntent = `-- name: ResolveMollieFirstPaymentIntent :exec
 UPDATE purser.payment_provider_intents
 SET status = $1::text,
+    provider_mandate_id = COALESCE($2::text, provider_mandate_id),
     succeeded_at = CASE WHEN $1::text = 'succeeded' THEN COALESCE(succeeded_at, NOW()) ELSE succeeded_at END,
     updated_at = NOW()
-WHERE tenant_id = $2::text::uuid
+WHERE tenant_id = $3::text::uuid
   AND provider = 'mollie'
   AND purpose = 'mollie_first_payment'
-  AND provider_payment_id = $3
+  AND provider_payment_id = $4
   AND status IN ('pending', 'provider_open')
 `
 
 type ResolveMollieFirstPaymentIntentParams struct {
 	Status            string         `db:"status" json:"status"`
+	MandateID         sql.NullString `db:"mandate_id" json:"mandate_id"`
 	TenantID          string         `db:"tenant_id" json:"tenant_id"`
 	ProviderPaymentID sql.NullString `db:"provider_payment_id" json:"provider_payment_id"`
 }
@@ -1270,7 +1272,12 @@ type ResolveMollieFirstPaymentIntentParams struct {
 // Records the outcome of a Mollie first payment on its intent, which ends the
 // presentment-currency lock the open intent holds.
 func (q *Queries) ResolveMollieFirstPaymentIntent(ctx context.Context, arg ResolveMollieFirstPaymentIntentParams) error {
-	_, err := q.db.ExecContext(ctx, resolveMollieFirstPaymentIntent, arg.Status, arg.TenantID, arg.ProviderPaymentID)
+	_, err := q.db.ExecContext(ctx, resolveMollieFirstPaymentIntent,
+		arg.Status,
+		arg.MandateID,
+		arg.TenantID,
+		arg.ProviderPaymentID,
+	)
 	return err
 }
 

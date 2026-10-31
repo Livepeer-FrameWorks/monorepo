@@ -256,7 +256,6 @@ PUBLISH
 }
 expect 'revocation publishers cannot finish naturally during the assertion window' revocation_publishers_outlive_observation
 
-
 expired_publisher_does_not_prove_termination() {
   publisher_stopped_before_deadline 0 true
   [ "$?" = 2 ]

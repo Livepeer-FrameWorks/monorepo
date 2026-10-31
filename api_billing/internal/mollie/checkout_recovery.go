@@ -112,6 +112,9 @@ func (c *Client) cancelReservedPayment(ctx context.Context, intentID, id string,
 	if err != nil {
 		return err
 	}
+	if payment.SubscriptionID != "" || payment.SequenceType == mollie.RecurringSequence {
+		return nil
+	}
 	switch payment.Status {
 	case "canceled", "expired", "failed":
 		return nil
@@ -301,5 +304,99 @@ func (c *Client) ReservedSubscription(ctx context.Context, customerID, intentID,
 			return nil, errors.New("subscription pagination did not advance")
 		}
 		from = nextFrom
+	}
+}
+
+// FirstPaymentFundedSubscription resolves activation history for a funding
+// receipt that predates local funding links. Provider creation alone does not
+// prove local activation; ambiguous history retains the payment for reconciliation.
+func (c *Client) FirstPaymentFundedSubscription(ctx context.Context, customerID, paymentID, retainedSubscriptionID string, locallyActivated func(string) (bool, error)) (bool, error) {
+	payment, err := c.GetPayment(ctx, paymentID)
+	if err != nil {
+		return false, err
+	}
+	if customerID == "" {
+		customerID = payment.CustomerID
+	}
+	if customerID == "" || payment.CustomerID != "" && payment.CustomerID != customerID {
+		return false, errors.New("first payment has no matching provider customer")
+	}
+	retained, amountErr := retainedFallbackPayment(payment)
+	if amountErr != nil {
+		return false, amountErr
+	}
+	funded := false
+	ambiguousID := ""
+	from := ""
+	for {
+		u, err := c.mollieURL("v2/customers/" + url.PathEscape(customerID) + "/subscriptions")
+		if err != nil {
+			return false, err
+		}
+		query := u.Query()
+		query.Set("limit", "250")
+		if from != "" {
+			query.Set("from", from)
+		}
+		u.RawQuery = query.Encode()
+		raw, err := c.getJSON(ctx, u.String())
+		if err != nil {
+			return false, err
+		}
+		var page struct {
+			Embedded struct {
+				Subscriptions []*mollie.Subscription `json:"subscriptions"`
+			} `json:"_embedded"`
+			Links struct {
+				Next *struct {
+					Href string `json:"href"`
+				} `json:"next"`
+			} `json:"_links"`
+		}
+		if err = json.Unmarshal(raw, &page); err != nil {
+			return false, err
+		}
+		for _, subscription := range page.Embedded.Subscriptions {
+			if payment.CreatedAt == nil || subscription.CreatedAT == nil {
+				return false, errors.New("provider funding history has no creation timestamps")
+			}
+			if subscription.CreatedAT.Before(*payment.CreatedAt) {
+				continue
+			}
+			if payment.MandateID == "" || subscription.MandateID == "" {
+				return false, errors.New("provider funding history cannot identify the initial payment mandate")
+			}
+			if subscription.MandateID == payment.MandateID {
+				activated, proofErr := locallyActivated(subscription.ID)
+				if proofErr != nil {
+					return false, proofErr
+				}
+				if activated {
+					funded = true
+				} else {
+					ambiguousID = subscription.ID
+				}
+				if subscription.ID != retainedSubscriptionID {
+					if cancelErr := c.CancelEstablishedSubscription(ctx, customerID, subscription.ID); cancelErr != nil {
+						return false, cancelErr
+					}
+				}
+			}
+		}
+		if page.Links.Next == nil || page.Links.Next.Href == "" {
+			if ambiguousID != "" && retained {
+				return false, fmt.Errorf("cannot prove activation of historical Mollie subscription %s for initial payment %s; provider renewal is cancelled, but its initial collection requires reconciliation", ambiguousID, paymentID)
+			}
+			return funded, nil
+		}
+		next, err := url.Parse(page.Links.Next.Href)
+		if err != nil {
+			return false, err
+		}
+		cursor := next.Query().Get("from")
+		if cursor == "" || cursor == from {
+			return false, errors.New("provider subscription history has no advancing cursor")
+		}
+		from = cursor
 	}
 }

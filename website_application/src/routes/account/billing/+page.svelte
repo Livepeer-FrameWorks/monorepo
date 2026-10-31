@@ -445,7 +445,7 @@
     const confirmed = window.confirm(
       isDowngrade
         ? `Downgrade to ${tier.displayName ?? "this tier"} at the end of the current billing period?`
-        : `Upgrade to ${tier.displayName ?? "this tier"} and start a fresh month at ${formatCurrency(tier.basePrice, tier.currency ?? "EUR")}? Any confirmed unused paid fee reduces the new charge; unpaid time is prorated. Usage from the old period is billed separately. Stripe may charge immediately. No cash refund is issued.`
+        : `Upgrade to ${tier.displayName ?? "this tier"} and start a fresh month? The monthly catalog fee is ${formatCurrency(tier.basePrice, tier.currency ?? "EUR")}. Collection can occur immediately through your payment provider. A retained unused paid fee offsets only the replacement fee; it never becomes spendable balance or a cash refund. Usage from the old period is billed separately. The invoice shows the net amount and, for advance billing, conversion to your billing currency at the invoice exchange rate.`
     );
     if (!confirmed) return;
 

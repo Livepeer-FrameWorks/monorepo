@@ -15,11 +15,14 @@ import (
 	"time"
 
 	"frameworks/api_billing/internal/appconfig"
+	billingpkg "frameworks/api_billing/internal/billing"
+	"frameworks/api_billing/internal/billingevents"
 	"frameworks/api_billing/internal/database/purserdb"
 	"frameworks/api_billing/internal/fx"
 	"frameworks/api_billing/internal/handlers"
 	"frameworks/api_billing/internal/mollie"
 	"frameworks/api_billing/internal/pricing"
+	"frameworks/api_billing/internal/rating"
 	"frameworks/api_billing/internal/stripe"
 	"frameworks/api_billing/internal/subscriptions"
 	"frameworks/api_billing/internal/tieraccess"
@@ -31,25 +34,26 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/countries"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	fwdb "github.com/Livepeer-FrameWorks/monorepo/pkg/database"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/events"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/models"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/pagination"
 	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	internalv1 "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/internalv1"
+	publicv1 "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/public/v1"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	meteringpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/metering_contract"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 	tenantlimitspb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/tenant_limits"
-
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/pagination"
+	fwserver "github.com/Livepeer-FrameWorks/monorepo/pkg/server"
 	sharedx402 "github.com/Livepeer-FrameWorks/monorepo/pkg/x402"
 	mollielib "github.com/VictorAvelar/mollie-api-go/v4/mollie"
-
-	fwserver "github.com/Livepeer-FrameWorks/monorepo/pkg/server"
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/shopspring/decimal"
@@ -63,13 +67,6 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
-
-	billingpkg "frameworks/api_billing/internal/billing"
-	"frameworks/api_billing/internal/billingevents"
-	"frameworks/api_billing/internal/rating"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/events"
-	internalv1 "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/internalv1"
-	publicv1 "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/public/v1"
 )
 
 // loadTierPricingRules reads pricing rules for a tier and converts them into
@@ -4635,6 +4632,7 @@ func NewGRPCServer(ctx context.Context, cfg GRPCServerConfig) (*grpc.Server, err
 	go purserServer.runMediaAuthorityRefreshOutboxWorker(context.Background())
 	go purserServer.runOperatorGrantExpirySweep(ctx)
 	go purserServer.runFreeFallbackSweep(ctx)
+	go purserServer.runFreeFallbackNotices(ctx)
 
 	// Register all services
 	purserpb.RegisterBillingServiceServer(server, purserServer)
@@ -7165,15 +7163,25 @@ func (s *PurserServer) CreateMollieSubscription(ctx context.Context, req *purser
 	// when activation fails after the external subscription was created.
 	subscriptionIntentKey := fmt.Sprintf("mollie-subscription:%s:%s:%s", tenantID, tierID, mandateID)
 	subscriptionIntentID, intentErr := subscriptions.ReserveCheckout(ctx, s.db, tenantID, func(tx *sql.Tx) (string, error) {
-		return purserdb.New(tx).UpsertMollieSubscriptionIntent(ctx, purserdb.UpsertMollieSubscriptionIntentParams{
+		id, reserveErr := purserdb.New(tx).UpsertMollieSubscriptionIntent(ctx, purserdb.UpsertMollieSubscriptionIntentParams{
 			TenantID: tenantID, TierID: tierID,
 			CustomerID: sql.NullString{String: mollieCustomerID, Valid: true},
 			Currency:   tier.Currency, AmountCents: basePrice.Round(2).Shift(2).IntPart(),
 			IdempotencyKey: subscriptionIntentKey,
 		})
+		if reserveErr != nil {
+			return "", reserveErr
+		}
+		if fundingErr := purserdb.New(tx).LinkMollieCheckoutFunding(ctx, purserdb.LinkMollieCheckoutFundingParams{TenantID: tenantID, IntentID: id, MandateID: mandateID}); fundingErr != nil {
+			return "", fundingErr
+		}
+		if receiptErr := subscriptions.CheckReceipt(ctx, tx, tenantID, id); receiptErr != nil {
+			return "", receiptErr
+		}
+		return id, nil
 	})
 	if intentErr != nil {
-		if subscriptions.IsPricingRefusal(intentErr) || errors.Is(intentErr, subscriptions.ErrPendingCheckout) {
+		if subscriptions.IsPricingRefusal(intentErr) || errors.Is(intentErr, subscriptions.ErrPendingCheckout) || errors.Is(intentErr, subscriptions.ErrCheckoutExpired) {
 			return nil, status.Error(codes.FailedPrecondition, intentErr.Error())
 		}
 		s.logger.WithError(intentErr).Error("Failed to record Mollie subscription intent")

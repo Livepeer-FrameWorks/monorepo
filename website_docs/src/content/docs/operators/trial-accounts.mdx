@@ -62,6 +62,10 @@ An on-time completed purchase is reconciled into its subscription when
 settlement succeeds. Failed settlement releases its reservation. An abandoned
 or unbound attempt can be recovered before its deadline, while a completed
 purchase still settling remains reserved. Failed recovery stays durable.
+Historical Mollie receipts without a unique funding link require local activation
+evidence before their initial collection can be treated as delivered service.
+Ambiguous history stays pending with the exact subscription and payment in its
+diagnostic; verify these in the provider console before reconciling them.
 Normal settlement waits back off from one minute to six hours and keep their
 reason visible; waits exceeding fourteen days raise
 `PurserProviderWebhookInboxStuck`.
@@ -103,9 +107,13 @@ requires `--yes`. Closure permanently closes all users and queues a durable
 stop for their active ingest. Quartermaster teardown proceeds independently;
 unreachable cells retry and raise the `CommodoreAccountIngestRevocationStuck` alert. The alert
 continues until the cell is restored. Confirming that a cell is permanently
-offline does not clear it: no cluster-retirement command exists. Silence the
-alert for that cell after recording its permanent removal in the incident. Closure publishes
-tenant-inactive authority without authorizing data deletion. It cannot be reversed. The local closure
+offline does not clear it: no cluster-retirement command exists. This alert is aggregated and has no cell label: silencing it suppresses all
+account-ingest revocation stalls. Record permanent removals in the incident;
+restoring the cell is currently the only way to complete its stop obligation.
+Foghorn v0.3.13 returns Unimplemented for per-user stops during a rolling
+upgrade; those stops retry until its Foghorn is upgraded. Closure publishes
+tenant-inactive authority without authorizing data deletion. It cannot be reversed. Remove closed users from bootstrap declarations before the next release apply;
+otherwise validation refuses their reactivation. The local closure
 blocks new active users even if Quartermaster is temporarily unavailable.
 
 Purser consumes the permanent closure event and durably records its billing

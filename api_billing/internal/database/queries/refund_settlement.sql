@@ -103,9 +103,12 @@ FROM deltas WHERE gross_delta > 0;
 -- A provider can reverse a chargeback after an earlier bank check completed.
 -- Authenticated provider-payment routing selects the existing scoped work.
 UPDATE purser.provider_webhook_inbox
-SET status = 'pending', next_attempt_at = NOW(), processed_at = NULL,
-    attempts = 0, wait_attempts = 0, unresolved_since = NULL,
-    last_error = NULL, claimed_at = NULL, lease_token = NULL, updated_at = NOW()
-WHERE provider = 'refund_settlement' AND status = 'processed'
+SET status = CASE WHEN status = 'processing' THEN 'processing' ELSE 'pending' END,
+    wake_requested = TRUE, next_attempt_at = NOW(), processed_at = NULL,
+    attempts = CASE WHEN status = 'processed' THEN 0 ELSE attempts END,
+    wait_attempts = CASE WHEN status = 'processed' THEN 0 ELSE wait_attempts END,
+    unresolved_since = CASE WHEN status = 'processed' THEN NULL ELSE unresolved_since END,
+    last_error = CASE WHEN status = 'processed' THEN NULL ELSE last_error END, updated_at = NOW()
+WHERE provider = 'refund_settlement' AND status IN ('processed', 'processing')
   AND headers->>'provider' = sqlc.arg(provider)::text
   AND headers->>'provider_payment_id' = sqlc.arg(payment_id)::text;

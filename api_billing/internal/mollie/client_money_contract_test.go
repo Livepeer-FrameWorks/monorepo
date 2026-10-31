@@ -21,7 +21,7 @@ func (fn mollieRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, erro
 
 func newMollieContractClient(t *testing.T, handler mollieRoundTripFunc) *Client {
 	t.Helper()
-	client, err := NewClient(Config{APIKey: "test_secret", Logger: logging.NewLogger()})
+	client, err := NewClient(Config{APIKey: "test_secret", Logger: logging.NewLogger(), HTTPClient: &http.Client{Transport: handler}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -29,9 +29,6 @@ func newMollieContractClient(t *testing.T, handler mollieRoundTripFunc) *Client 
 	if err != nil {
 		t.Fatal(err)
 	}
-	previous := http.DefaultClient
-	http.DefaultClient = &http.Client{Transport: handler}
-	t.Cleanup(func() { http.DefaultClient = previous })
 	return client
 }
 

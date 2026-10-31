@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"frameworks/api_billing/internal/database/purserdb"
+
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 )
 
@@ -59,7 +60,25 @@ func LockChange(ctx context.Context, tx *sql.Tx, tenantID string, policy ChangeP
 	if current.PendingReason.String == "tier_upgrade" && policy == ChangePricing {
 		return state, ErrPendingTierUpgrade
 	}
+	if policy == ChangePricing {
+		if err := CheckPendingTierUpgrade(ctx, tx, tenantID); err != nil {
+			return state, err
+		}
+	}
 	return state, nil
+}
+
+// CheckPendingTierUpgrade protects collection after pricing has been applied and
+// the subscription's scheduled-change marker has cleared. Call under its row lock.
+func CheckPendingTierUpgrade(ctx context.Context, tx *sql.Tx, tenantID string) error {
+	pending, err := purserdb.New(tx).HasPendingTierUpgrade(ctx, tenantID)
+	if err != nil {
+		return fmt.Errorf("read pending tier upgrade: %w", err)
+	}
+	if pending {
+		return ErrPendingTierUpgrade
+	}
+	return nil
 }
 
 // WithOpenAccount serializes non-tier purchases with permanent account closure.

@@ -6,7 +6,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -20,6 +19,8 @@ import (
 	billingmollie "frameworks/api_billing/internal/mollie"
 	billingstripe "frameworks/api_billing/internal/stripe"
 	"frameworks/api_billing/internal/subscriptions"
+
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 	"github.com/google/uuid"
@@ -238,12 +239,8 @@ func TestTierUpgradeProviders_RealPG(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				oldTransport, oldClient := http.DefaultTransport, http.DefaultClient
-				transport := upgradeMollieTransport{base: oldTransport, endpoint: endpoint}
-				http.DefaultTransport = transport
-				http.DefaultClient = &http.Client{Transport: transport}
-				t.Cleanup(func() { http.DefaultTransport = oldTransport; http.DefaultClient = oldClient })
-				mollieClient, err = billingmollie.NewClient(billingmollie.Config{APIKey: "test_fixture", Logger: logger})
+				transport := upgradeMollieTransport{base: http.DefaultTransport, endpoint: endpoint}
+				mollieClient, err = billingmollie.NewClient(billingmollie.Config{APIKey: "test_fixture", Logger: logger, HTTPClient: &http.Client{Transport: transport}})
 				if err != nil {
 					t.Fatal(err)
 				}

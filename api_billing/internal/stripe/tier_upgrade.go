@@ -51,6 +51,9 @@ func (c *Client) UpgradeMonthlySubscription(ctx context.Context, request billing
 	if sub.LatestInvoice != nil && sub.LatestInvoice.Status != stripe.InvoiceStatusPaid {
 		return billing.TierUpgradeReceipt{}, errors.Join(billing.ErrTierUpgradeRejected, billing.ErrTierUpgradeUnsettled)
 	}
+	if request.OldBaseCents > 0 && (sub.LatestInvoice == nil || sub.LatestInvoice.AmountPaid <= 0) {
+		return billing.TierUpgradeReceipt{}, fmt.Errorf("%w: the previous paid fee cannot be established from Stripe's latest invoice; reconcile its payment before upgrading", billing.ErrTierUpgradeRejected)
+	}
 	if sub.LatestInvoice != nil && sub.LatestInvoice.AmountPaid > 0 {
 		if err = retainedUpgradeFee(ctx, sub.LatestInvoice.ID); err != nil {
 			return billing.TierUpgradeReceipt{}, err

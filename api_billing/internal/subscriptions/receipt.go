@@ -30,7 +30,16 @@ func readReceipt(ctx context.Context, tx *sql.Tx, tenantID, intentID string) (*p
 	if err != nil {
 		return nil, err
 	}
-	if r.Status == "succeeded" {
+	if r.FundingIntentID != "" {
+		funding, err := purserdb.New(tx).GetProviderCheckoutReservation(ctx, purserdb.GetProviderCheckoutReservationParams{TenantID: tenantID, IntentID: r.FundingIntentID})
+		if err != nil {
+			return nil, err
+		}
+		if funding.Status != "succeeded" || funding.RecoveryStartedAt.Valid || funding.ActivatedAt.Valid && !r.ActivatedAt.Valid {
+			return nil, ErrCheckoutExpired
+		}
+	}
+	if r.Status == "succeeded" && !r.RecoveryStartedAt.Valid {
 		return &r, nil
 	}
 	if r.RecoveryStartedAt.Valid || r.Status == "expired" || r.Status == "cancelled" || r.Status == "terminal_failed" {

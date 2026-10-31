@@ -95,4 +95,3 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_subscription_stripe_customer_latest
     )
     INCLUDE (tenant_id)
     WHERE stripe_customer_id IS NOT NULL;
-

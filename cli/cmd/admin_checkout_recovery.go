@@ -66,6 +66,12 @@ func runCheckoutRecoveryList(ctx context.Context, w io.Writer, p checkoutRecover
 			}
 			fmt.Fprintf(w, "%s  %s  %s  %s/%s  %s  %s  %q\n", item.GetProvider(), item.GetTenantId(), item.GetReservationId(), item.GetReservationStatus(), item.GetStatus(), amount, next, item.GetLastError())
 		}
+		for _, item := range res.GetItems() {
+			if item.GetProvider() == "free_fallback" {
+				fmt.Fprintln(w, "A scheduled Free fallback can be cancelled with admin billing set-tier --tenant-id <tenant> --tier <tier> --reason <reason>. A provider_stopping fallback must finish reconciliation first.")
+				break
+			}
+		}
 	}
 	if res.GetHasMore() {
 		fmt.Fprintf(w, "More results: repeat with --offset %d\n", r.GetOffset()+r.GetLimit())

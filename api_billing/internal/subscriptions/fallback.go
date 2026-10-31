@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"frameworks/api_billing/internal/database/purserdb"
+
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 )
 
@@ -51,7 +52,7 @@ func planStripeFallback(ctx context.Context, currentStatus, stripeStatus, cancel
 // no subscription end of its own. A grant holds the move while the provider
 // obligation remains recorded. It reports whether the tenant is in grace.
 func StartPaymentFailureGrace(ctx context.Context, db *sql.DB, tenantID string, now time.Time) (bool, error) {
-	return startPaymentFailureGrace(ctx, db, tenantID, "", now)
+	return startPaymentFailureGrace(ctx, db, tenantID, "", now, false)
 }
 
 // StartMolliePaymentFailureGrace ignores delayed failures from a replaced subscription.
@@ -59,10 +60,17 @@ func StartMolliePaymentFailureGrace(ctx context.Context, db *sql.DB, tenantID, s
 	if subscriptionID == "" {
 		return false, errors.New("mollie subscription identity is required for payment failure")
 	}
-	return startPaymentFailureGrace(ctx, db, tenantID, subscriptionID, now)
+	return startPaymentFailureGrace(ctx, db, tenantID, subscriptionID, now, false)
 }
 
-func startPaymentFailureGrace(ctx context.Context, db *sql.DB, tenantID, mollieSubscriptionID string, now time.Time) (bool, error) {
+// RecordMollieMandateRevoked commits collector loss with its fallback obligation.
+// A failed grace write leaves the mandate valid so ordinary collection retries
+// cannot discard the only durable trigger.
+func RecordMollieMandateRevoked(ctx context.Context, db *sql.DB, tenantID string, now time.Time) (bool, error) {
+	return startPaymentFailureGrace(ctx, db, tenantID, "", now, true)
+}
+
+func startPaymentFailureGrace(ctx context.Context, db *sql.DB, tenantID, mollieSubscriptionID string, now time.Time, revokeMandates bool) (bool, error) {
 	started := false
 	err := database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
 		started = false
@@ -78,6 +86,11 @@ func startPaymentFailureGrace(ctx context.Context, db *sql.DB, tenantID, mollieS
 			return nil
 		}
 		q := purserdb.New(tx)
+		if revokeMandates {
+			if err := q.RevokeValidMollieMandates(ctx, tenantID); err != nil {
+				return err
+			}
+		}
 		rows, updateErr := q.MarkSubscriptionPaymentFailed(ctx, tenantID)
 		if updateErr != nil || rows == 0 {
 			return updateErr

@@ -10,6 +10,7 @@ import (
 
 	"frameworks/api_billing/internal/database/purserdb"
 	"frameworks/api_billing/internal/subscriptions"
+
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
@@ -37,6 +38,16 @@ func (s *Service) StageTierUpgradeTx(ctx context.Context, tx *sql.Tx, tenantID, 
 	row, err := q.GetTierUpgrade(ctx, purserdb.GetTierUpgradeParams{TenantID: tenantID, ID: id})
 	if err != nil {
 		return "", err
+	}
+	target, err := q.GetTierForBillingChange(ctx, tierID)
+	if err != nil {
+		return "", err
+	}
+	if target.IsEnterprise || row.BaseCents < row.OldBaseCents {
+		return "", fmt.Errorf("%w: self-service upgrades require a published tier priced at least as high as the current tier", billing.ErrTierUpgradeRejected)
+	}
+	if !row.RequestedAt.Before(row.OldPeriodEnd) {
+		return "", fmt.Errorf("%w: the current billing period must roll over before upgrading", billing.ErrTierUpgradeRejected)
 	}
 	if row.Provider == "advance" && row.OldBaseCents > 0 {
 		previous, readErr := planPreviousBaseFee(ctx, q, tenantID, row.RequestedAt)
@@ -109,7 +120,7 @@ func (s *Service) ProcessTierUpgrade(ctx context.Context, tenantID, id string) (
 		}
 		request := billing.TierUpgradeRequest{ID: id, TenantID: tenantID, OldTierID: row.OldTierID, TierID: row.TierID, CustomerID: row.CustomerID,
 			SubscriptionID: row.ProviderSubscriptionID, PriceID: row.StripePriceID, RequestedAt: row.RequestedAt,
-			OldPeriodStart: row.OldPeriodStart, OldPeriodEnd: row.OldPeriodEnd, BaseCents: row.BaseCents,
+			OldPeriodStart: row.OldPeriodStart, OldPeriodEnd: row.OldPeriodEnd, BaseCents: row.BaseCents, OldBaseCents: row.OldBaseCents,
 		}
 		// Resolve a possibly committed purchase before applying eligibility
 		// checks that may have changed while its response was lost.
@@ -164,6 +175,11 @@ func (s *Service) ProcessTierUpgrade(ctx context.Context, tenantID, id string) (
 				}
 				err = fmt.Errorf("%w: %w", billing.ErrTierUpgradeRejected, err)
 			}
+		}
+		// Leave the bounded provider request inside the old monthly period.
+		// A located, already-committed purchase reconciles before this check.
+		if err == nil && !time.Now().Add(30*time.Second).Before(row.OldPeriodEnd) {
+			err = fmt.Errorf("%w: the previous billing period is ending; wait for renewal before purchasing an upgrade", billing.ErrTierUpgradeRejected)
 		}
 		if err == nil {
 			receipt, err = s.providerTierUpgrade(ctx, row, request)

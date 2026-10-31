@@ -93,6 +93,17 @@ func TestTierUpgradeStripeDoesNotCreditUnpaidMonth(t *testing.T) {
 	}
 }
 
+func TestTierUpgradeStripeRequiresRetainedBasisBehindZeroInvoice(t *testing.T) {
+	b := &tierUpgradeBackend{feeRefunded: 2000, current: &api.Subscription{ID: "sub", Customer: &api.Customer{ID: "customer"}, Status: api.SubscriptionStatusActive,
+		Metadata: map[string]string{"tenant_id": "tenant"}, LatestInvoice: &api.Invoice{ID: "zero-adjustment", Status: api.InvoiceStatusPaid},
+		Items: &api.SubscriptionItemList{Data: []*api.SubscriptionItem{{ID: "item", Price: &api.Price{ID: "old", UnitAmount: 2000}}}}}}
+	installBackend(t, b)
+	_, err := newStripeClient().UpgradeMonthlySubscription(t.Context(), billing.TierUpgradeRequest{ID: "upgrade", TenantID: "tenant", CustomerID: "customer", SubscriptionID: "sub", PriceID: "new-price", BaseCents: 5000, OldBaseCents: 2000})
+	if !errors.Is(err, billing.ErrTierUpgradeRejected) || b.updates != 0 {
+		t.Fatalf("zero latest invoice bypassed retained paid basis: updates=%d err=%v", b.updates, err)
+	}
+}
+
 func TestTierUpgradeStripeRefusesWrongPrice(t *testing.T) {
 	b := &tierUpgradeBackend{current: &api.Subscription{ID: "sub", Customer: &api.Customer{ID: "customer"}, Status: api.SubscriptionStatusActive,
 		Metadata: map[string]string{"tenant_id": "tenant"}, LatestInvoice: &api.Invoice{Status: api.InvoiceStatusPaid},

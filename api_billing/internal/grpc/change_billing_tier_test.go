@@ -7,12 +7,11 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 	"github.com/lib/pq"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 )
 
 const (
@@ -29,6 +28,7 @@ func expectLoadSubscription(mock sqlmock.Sqlmock, tenantID, tierID string, tierL
 	mock.ExpectBegin()
 	expectProviderSubscriptionLock(mock, tenantID)
 	mock.ExpectQuery("GetSubscriptionOperatorGrant").WithArgs(tenantID).WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery("HasPendingTierUpgrade").WillReturnRows(sqlmock.NewRows([]string{"pending"}).AddRow(false))
 	cols := []string{"tier_id", "tier_level", "billing_model", "billing_period_start", "billing_period_end", "stripe_current_period_end"}
 	rows := sqlmock.NewRows(cols).AddRow(tierID, tierLevel, billingModel, periodStart, periodEnd, nil)
 	mock.ExpectQuery(`(?s)SELECT subscription\.tier_id::text AS tier_id, tier\.tier_level,\s+subscription\.billing_model.*FOR UPDATE OF subscription`).
@@ -38,13 +38,13 @@ func expectLoadSubscription(mock sqlmock.Sqlmock, tenantID, tierID string, tierL
 
 // expectLoadTargetTier stubs the SELECT against billing_tiers for the target.
 func expectLoadTargetTier(mock sqlmock.Sqlmock, tierID string, tierLevel int32, isDefaultPrepaid, isActive bool) {
-	cols := []string{"tier_level", "tier_name", "is_default_prepaid", "is_active"}
+	cols := []string{"tier_level", "tier_name", "is_default_prepaid", "is_active", "is_enterprise"}
 	tierName := "target-tier"
 	if tierID == freeTierID {
 		tierName = "free"
 	}
-	rows := sqlmock.NewRows(cols).AddRow(tierLevel, tierName, isDefaultPrepaid, isActive)
-	mock.ExpectQuery(`SELECT tier_level, tier_name, is_default_prepaid, is_active\s+FROM purser\.billing_tiers`).
+	rows := sqlmock.NewRows(cols).AddRow(tierLevel, tierName, isDefaultPrepaid, isActive, false)
+	mock.ExpectQuery(`GetTierForBillingChange`).
 		WithArgs(tierID).
 		WillReturnRows(rows)
 }
@@ -207,6 +207,7 @@ func TestChangeBillingTier_DowngradeWithoutSubscriptionPeriodUsesOpenDraftPeriod
 	mock.ExpectBegin()
 	expectProviderSubscriptionLock(mock, tenantID)
 	mock.ExpectQuery("GetSubscriptionOperatorGrant").WithArgs(tenantID).WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery("HasPendingTierUpgrade").WillReturnRows(sqlmock.NewRows([]string{"pending"}).AddRow(false))
 	mock.ExpectQuery(`(?s)SELECT subscription\.tier_id::text AS tier_id, tier\.tier_level,\s+subscription\.billing_model.*FOR UPDATE OF subscription`).
 		WithArgs(tenantID).
 		WillReturnRows(rows)

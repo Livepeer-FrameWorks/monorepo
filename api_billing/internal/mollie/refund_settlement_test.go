@@ -37,9 +37,6 @@ func TestRefundSettlementWaitsForBankAndIncludesChargeback(t *testing.T) {
 				}
 				return nil, fmt.Errorf("unexpected provider read: %s", req.URL.Path)
 			})
-			previous := http.DefaultTransport
-			http.DefaultTransport = http.DefaultClient.Transport
-			t.Cleanup(func() { http.DefaultTransport = previous })
 			receipts, err := c.InspectRefundSettlement(t.Context(), billing.RefundSettlement{Provider: "mollie", PaymentID: "payment", ReferenceID: "purchase", AmountCents: 2000, Currency: "EUR"})
 			switch state {
 			case "queued":

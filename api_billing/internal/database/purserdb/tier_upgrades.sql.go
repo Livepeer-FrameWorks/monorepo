@@ -82,7 +82,7 @@ const getPendingTierUpgrade = `-- name: GetPendingTierUpgrade :one
 SELECT id::text, tier_id::text, state
 FROM purser.subscription_tier_upgrades
 WHERE tenant_id = $1::text::uuid
-    AND state IN ('requested', 'provider_applied')
+    AND state IN ('requested', 'provider_applied', 'pricing_applied')
 `
 
 type GetPendingTierUpgradeRow struct {
@@ -225,6 +225,21 @@ func (q *Queries) GetTierUpgradeInvoice(ctx context.Context, arg GetTierUpgradeI
 		&i.CollectionStarted,
 	)
 	return i, err
+}
+
+const hasPendingTierUpgrade = `-- name: HasPendingTierUpgrade :one
+SELECT EXISTS (
+    SELECT 1 FROM purser.subscription_tier_upgrades
+    WHERE tenant_id = $1::text::uuid
+      AND state IN ('requested', 'provider_applied', 'pricing_applied')
+)::boolean AS pending
+`
+
+func (q *Queries) HasPendingTierUpgrade(ctx context.Context, tenantID string) (bool, error) {
+	row := q.db.QueryRowContext(ctx, hasPendingTierUpgrade, tenantID)
+	var pending bool
+	err := row.Scan(&pending)
+	return pending, err
 }
 
 const insertTierUpgrade = `-- name: InsertTierUpgrade :one

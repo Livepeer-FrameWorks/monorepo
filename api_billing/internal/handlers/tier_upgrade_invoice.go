@@ -12,6 +12,7 @@ import (
 	"frameworks/api_billing/internal/fx"
 	"frameworks/api_billing/internal/pricing"
 	"frameworks/api_billing/internal/rating"
+
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	"github.com/shopspring/decimal"
 )
@@ -38,6 +39,9 @@ func createUpgradeInvoiceTx(ctx context.Context, tx *sql.Tx, row purserdb.GetTie
 	if err != nil {
 		return err
 	}
+	// Unused service credit only offsets this replacement purchase. It never
+	// becomes prepaid funds, including when a provider receipt exceeds the fee.
+	credit.cents = min(credit.cents, max(row.BaseCents, 0))
 	baseEUR := decimal.New(row.BaseCents, -2)
 	collectCents := max(row.BaseCents-credit.cents, 0)
 	now := time.Now().UTC()
@@ -89,11 +93,7 @@ func createUpgradeInvoiceTx(ctx context.Context, tx *sql.Tx, row purserdb.GetTie
 	if err = consumePreviousBaseFee(ctx, q, row.TenantID, previous, invoiceID, receipt.PeriodStart); err != nil {
 		return err
 	}
-	if credit.cents > row.BaseCents {
-		if err = creditPrepaidBalanceForBaseFeeTx(ctx, tx, row.TenantID, invoiceID, credit.cents-row.BaseCents, now); err != nil {
-			return err
-		}
-	}
+
 	email, err := q.GetTenantBillingEmail(ctx, row.TenantID)
 	if err != nil {
 		return err

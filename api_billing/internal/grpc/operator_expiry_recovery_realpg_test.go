@@ -108,7 +108,10 @@ func testCancelledGrantCanEnd(t *testing.T, db *sql.DB) {
 			t.Fatal(seedErr)
 		}
 		server := &PurserServer{db: db, logger: logging.NewLogger(), commodoreClient: &recordingCommodoreCache{}}
-		before := time.Now().Add(-time.Second)
+		var deadline time.Time
+		if err := db.QueryRow(`SELECT grant_row.expires_at FROM purser.subscription_operator_grants grant_row JOIN purser.tenant_subscriptions subscription ON subscription.id=grant_row.subscription_id WHERE subscription.tenant_id=$1`, tenant).Scan(&deadline); err != nil {
+			t.Fatal(err)
+		}
 		if endErr := server.endOperatorGrant(t.Context(), tenant, "end cancelled grant", expired); endErr != nil {
 			t.Fatalf("cancelled grant cannot end: %v", endErr)
 		}
@@ -118,7 +121,7 @@ func testCancelledGrantCanEnd(t *testing.T, db *sql.DB) {
 		if readErr := db.QueryRow(`SELECT (SELECT count(*) FROM purser.subscription_operator_grants WHERE subscription_id=s.id),(SELECT count(*) FROM purser.billing_invoices WHERE tenant_id=s.tenant_id),s.tier_id::text,s.status,h.ended_at FROM purser.tenant_subscriptions s JOIN purser.subscription_operator_grant_history h ON h.subscription_id=s.id WHERE s.tenant_id=$1`, tenant).Scan(&grants, &documents, &gotTier, &status, &ended); readErr != nil {
 			t.Fatal(readErr)
 		}
-		if grants != 0 || documents != 0 || gotTier != tier || status != "cancelled" || ended.Before(before) {
+		if grants != 0 || documents != 0 || gotTier != tier || status != "cancelled" || !ended.Equal(deadline) {
 			t.Fatalf("cancelled cleanup grants=%d invoices=%d tier=%s status=%s ended=%s", grants, documents, gotTier, status, ended)
 		}
 		checkout, checkoutErr := subscriptions.TransitionProvider(t.Context(), db, subscriptions.ProviderChange{TenantID: tenant, Operation: subscriptions.ProviderCheckout})

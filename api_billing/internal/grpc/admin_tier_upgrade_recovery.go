@@ -10,6 +10,7 @@ import (
 	"frameworks/api_billing/internal/billingevents"
 	"frameworks/api_billing/internal/database/purserdb"
 	"frameworks/api_billing/internal/subscriptions"
+
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
@@ -77,7 +78,7 @@ func (s *PurserServer) AdminRecoverTierUpgrade(ctx context.Context, r *purserpb.
 	if err != nil {
 		return nil, status.Errorf(codes.Unavailable, "read upgrade recovery: %v", err)
 	}
-	detail := "Recovery inspects the existing purchase. It cancels an unapplied request and finishes pricing and collection for an applied purchase; it never starts another purchase."
+	detail := "Recovery inspects the existing purchase. It cancels an unapplied request or resumes reconciliation of an applied purchase; it never starts another purchase. Stripe uses its actual replacement anchor, which may require metering repair before local pricing and collection can finish."
 	if r.GetConfirmed() && row.State == "completed" {
 		detail = "The provider purchase and local pricing are reconciled; invoice collection is recorded where required."
 	} else if r.GetConfirmed() && row.State == "cancelled" {

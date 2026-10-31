@@ -130,15 +130,11 @@ func (rt fixtureRoundTripper) RoundTrip(r *http.Request) (*http.Response, error)
 	return recorder.Result(), nil
 }
 
-// installMollieFixture serves Mollie API calls made through the default HTTP
-// client from an in-process fixture.
+// installMollieFixture gives this client a private in-process provider transport.
 func installMollieFixture(t *testing.T) (*providerFixture, *billingmollie.Client) {
 	t.Helper()
 	fixture := &providerFixture{routes: map[string]func(recordedProviderRequest) (int, any){}}
-	previous := http.DefaultClient.Transport
-	http.DefaultClient.Transport = fixtureRoundTripper{handler: http.HandlerFunc(fixture.handle)}
-	t.Cleanup(func() { http.DefaultClient.Transport = previous })
-	client, err := billingmollie.NewClient(billingmollie.Config{APIKey: "test_presentment", Logger: logging.NewLogger()})
+	client, err := billingmollie.NewClient(billingmollie.Config{APIKey: "test_presentment", Logger: logging.NewLogger(), HTTPClient: &http.Client{Transport: fixtureRoundTripper{handler: http.HandlerFunc(fixture.handle)}}})
 	if err != nil {
 		t.Fatal(err)
 	}

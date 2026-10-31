@@ -9,6 +9,7 @@ import (
 
 	"frameworks/api_billing/internal/billingevents"
 	"frameworks/api_billing/internal/database/purserdb"
+
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/events"
@@ -146,7 +147,7 @@ func (e *ThresholdEnforcer) suspendTenantForBalance(ctx context.Context, tenantI
 		defer cancel()
 		resp, err := e.commodoreClient.TerminateTenantStreams(terminateCtx, tenantID, "insufficient_balance")
 		if err != nil {
-			e.logger.WithError(err).WithFields(logging.Fields{"tenant_id": tenantID, "streams_terminated": resp.GetStreamsTerminated(), "sessions_terminated": resp.GetSessionsTerminated(), "stream_names": resp.GetStreamNames()}).Error("Tenant suspension stream termination failed on some nodes")
+			e.logger.WithError(err).WithFields(logging.Fields{"tenant_id": tenantID, "streams_terminated": resp.GetStreamsTerminated(), "sessions_terminated": resp.GetSessionsTerminated(), "stream_names": resp.GetStreamNames()}).Warn("Tenant suspension stream termination incomplete; durable retry remains queued")
 		} else {
 			e.logger.WithFields(logging.Fields{
 				"tenant_id":           tenantID,

@@ -116,7 +116,7 @@ func (c *Client) UpgradeMonthlySubscription(ctx context.Context, request billing
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Idempotency-Key", "tier-upgrade:"+request.ID)
-	response, err := http.DefaultClient.Do(req)
+	response, err := c.httpClient.Do(req)
 	if err != nil {
 		return billing.TierUpgradeReceipt{}, err
 	}

@@ -163,7 +163,7 @@ tests:
               severity: warning
             exp_annotations:
               summary: Account session-stop delivery is awaiting a cell
-              description: A locally revoked account still has session-stop delivery pending, including backoff. Tenant closure, when requested, proceeds independently of stop delivery. Restore the recorded cell to clear this obligation. Permanently removed cells have no retirement command; the alert continues until restored. If the cell is permanently removed, record that fact in the incident and silence this alert for that cell.
+              description: A locally revoked account still has session-stop delivery pending, including backoff. Tenant closure, when requested, proceeds independently of stop delivery. Restore the recorded cell to clear this obligation. Permanently removed cells have no retirement command; the alert continues until restored. Foghorn v0.3.13 returns Unimplemented for per-user stops during rollout; upgrade the recorded cell. This alert aggregates all cells, so silencing it suppresses other pending stops too. Record permanently removed cells in the incident; there is no per-cell silence.
       - eval_time: 15m
         groupname: frameworks.rules
         alertname: CommodoreAccountIngestRevocationStuck

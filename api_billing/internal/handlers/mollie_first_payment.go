@@ -9,6 +9,7 @@ import (
 	"frameworks/api_billing/internal/database/purserdb"
 	billingmollie "frameworks/api_billing/internal/mollie"
 	"frameworks/api_billing/internal/subscriptions"
+
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 )
 
@@ -42,6 +43,6 @@ func (s *Service) completeMollieFirstPayment(ctx context.Context, tenantID, paym
 		if err := q.UpsertMollieMandate(ctx, purserdb.UpsertMollieMandateParams{TenantID: tenantID, MollieCustomerID: info.MollieCustomerID, MollieMandateID: info.MollieMandateID, Status: info.Status, Method: info.Method, Details: details, CreatedAt: sql.NullTime{Time: info.CreatedAt, Valid: !info.CreatedAt.IsZero()}}); err != nil {
 			return err
 		}
-		return q.ResolveMollieFirstPaymentIntent(ctx, purserdb.ResolveMollieFirstPaymentIntentParams{TenantID: tenantID, ProviderPaymentID: optionalSQLString(paymentID), Status: "succeeded"})
+		return q.ResolveMollieFirstPaymentIntent(ctx, purserdb.ResolveMollieFirstPaymentIntentParams{TenantID: tenantID, ProviderPaymentID: optionalSQLString(paymentID), MandateID: optionalSQLString(info.MollieMandateID), Status: "succeeded"})
 	})
 }

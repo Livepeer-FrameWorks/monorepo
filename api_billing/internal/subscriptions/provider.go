@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"frameworks/api_billing/internal/database/purserdb"
+
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 )
 
@@ -110,6 +111,9 @@ func transitionProviderTx(ctx context.Context, tx *sql.Tx, change ProviderChange
 	}
 	if current.PendingReason.String == "tier_upgrade" {
 		return ProviderResult{}, ErrPendingTierUpgrade
+	}
+	if upgradeErr := CheckPendingTierUpgrade(ctx, tx, change.TenantID); upgradeErr != nil {
+		return ProviderResult{}, upgradeErr
 	}
 	if locked.AccountClosed {
 		if change.Operation == StripeStatus || change.Operation == StripeRenewal {

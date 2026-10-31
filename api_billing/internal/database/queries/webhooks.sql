@@ -644,6 +644,7 @@ WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
 -- presentment-currency lock the open intent holds.
 UPDATE purser.payment_provider_intents
 SET status = sqlc.arg(status)::text,
+    provider_mandate_id = COALESCE(sqlc.narg(mandate_id)::text, provider_mandate_id),
     succeeded_at = CASE WHEN sqlc.arg(status)::text = 'succeeded' THEN COALESCE(succeeded_at, NOW()) ELSE succeeded_at END,
     updated_at = NOW()
 WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid

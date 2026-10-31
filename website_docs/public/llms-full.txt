@@ -14419,8 +14419,8 @@ cluster.
 <Aside type="tip">
   **API requests currently cost €0, but they are still metered and itemized.** The same applies to
   the current API/LLM/search/embedding meters unless a tier or cluster contract explicitly prices
-  them. API traffic remains subject to request throttling. Advanced processing (AI, V2V,
-  compositing) is in pilot — see below.
+  them. API traffic remains subject to request throttling. Advanced processing (AI, V2V, server-side
+  composition) is in the pipeline — see below.
 </Aside>
 
 ## Free Tier
@@ -14467,7 +14467,7 @@ Add funds to a prepaid balance and pay as usage accrues. Usage is deducted at th
 
 Standard live transcoding is included in delivered-minute pricing. Browser-side StreamCrafter
 composition does not create a server-processing charge. Advanced processing (AI workloads such as
-live transcription, V2V transformations, and automated highlights) is in pilot — see
+live transcription, V2V transformations, and automated highlights) is in the pipeline — see
 [Advanced processing](#advanced-processing) below.
 
 ## Metered Tiers
@@ -14507,11 +14507,11 @@ end of the current paid period.
 ## Advanced processing
 
 Advanced processing (AI workloads such as live transcription, video analysis, automated highlights,
-V2V transformations, and multi-stream compositing) is in **pilot**. These jobs use the same
+V2V transformations, and server-side composition) is in the pipeline. These jobs will use the same
 meter-based billing path as delivered minutes and storage, with product-shaped meters added per job
 or marketplace offer.
 
-To request pilot access, [contact us](https://frameworks.network/contact). Standard live
+To talk about early access, [contact us](https://frameworks.network/contact). Standard live
 transcoding remains included in delivered-minute pricing.
 
 ## Billing Models
@@ -14522,15 +14522,26 @@ Load credits first, use resources as you go. Balance decreases as usage accrues.
 
 **Thresholds:**
 
-| Balance     | Effect                                       |
-| ----------- | -------------------------------------------- |
-| Below €5    | Low balance warning                          |
-| €0 or below | New ingests blocked; playback may return 402 |
-| Below -€10  | Account suspended; streams terminated        |
+| Balance     | Effect                                                                    |
+| ----------- | ------------------------------------------------------------------------- |
+| Below €5    | Low balance warning                                                       |
+| €0 or below | New streams and new viewers blocked; running streams and viewers continue |
+| Below -€10  | Account suspended; streams terminated                                     |
+
+At €0 or below, a viewer or encoder that disconnects counts as new and cannot reconnect until you top up.
 
 ### Postpaid
 
 Monthly subscription with included delivered-minute allocations. Cold storage is metered to the second and rated per GiB-month (a fixed 730-hour month), so 10 GiB kept for three days bills 10 × 72/730 GiB-months. Invoice lines show the quantity in GiB-months. Overages are drafted during the billing period and invoiced at period end. Before activation, complete the billing email and address, choose an eligible tier, and finish either Stripe Checkout or Mollie's first-payment mandate flow. The provider webhook is authoritative; returning to the browser alone does not activate postpaid billing.
+
+**When a subscription ends:**
+
+| What happened                                       | What follows                                                                                                                                                                                                             |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Payment failed and your provider stopped collecting | You stay on your plan for 14 days and we email you. Set up payment again in that time to keep the plan. Otherwise your account moves to Free with a final invoice for your usage up to the move, and we email you again. |
+| You cancelled                                       | You keep your plan until the paid period ends, then your account moves to Free and we confirm by email.                                                                                                                  |
+
+Streams keep running on Free within its limits. Unpaid invoices stay outstanding with reminders, and you need to settle them before choosing a paid tier again.
 
 ## Currency
 
@@ -25547,7 +25558,7 @@ Bunny is the better choice for:
 ## What's not yet at parity, and what's coming
 
 - **DRM** (FairPlay / Widevine / PlayReady) — in development.
-- **Automatic chapter generation, transcription, caption auto-generation** — Live Transcription, Compositing, and Video Analysis are on the [roadmap](/roadmap).
+- **Automatic chapter generation, transcription, caption auto-generation** — Live Transcription, StreamCrafter cloud production, and Video Analysis are on the [roadmap](/roadmap).
 - **Per-video heatmaps and retention curves** — per-asset watch-density and retention curves now ship for the FrameWorks player; broader cross-player view-level QoE is still on the [roadmap](/roadmap#view-level-qoe-analytics).
 - **Per-region replication knob** — FrameWorks uses cluster placement instead of a 1-of-N replication slider; if you used Bunny's 1–9 region replication, plan which cluster (or set of hybrid edges) to anchor your assets to.
 - **Managed iframe-embed-as-a-product** — `<fw-player>` is the closest replacement.
@@ -30404,7 +30415,10 @@ frameworks admin billing grant list --include-expired --output json
 #### frameworks admin billing recovery list
 
 `recovery list` reads outstanding provider callbacks and checkout recovery work,
-including the last error, next retry and checkout deadline. Use `--limit` (1–100)
+including the last error, next retry and checkout deadline. Scheduled Free
+fallbacks also appear with their move date, state and last error. Before provider
+cancellation starts, an audited `admin billing set-tier` cancels that schedule;
+`provider_stopping` must finish provider reconciliation first. Use `--limit` (1–100)
 and `--offset` to page; `--tenant-id` narrows to a tenant's checkout reservations.
 Omit the tenant filter to include provider callbacks not yet bound to a tenant.
 Use `--tenant-id <UUID> --history` to read each operator request, identity, reason
@@ -30425,8 +30439,10 @@ settlement has finished. Both commands require a platform-operator JWT.
 `frameworks admin billing recovery upgrade --tenant-id <UUID> --upgrade-id <UUID> --reason "Reconcile purchase"`
 previews an accepted tier upgrade and requires interactive `yes` or `--yes`.
 Get its purchase UUID from `recovery list`. Recovery locates existing provider
-work; it cancels an unapplied request or completes an applied purchase without
-starting another purchase. It records the first operator and reason and reports
+work; it cancels an unapplied request or resumes an applied purchase without
+starting another purchase. Stripe anchors the new month when it accepts the
+provider update; local reconciliation waits for usage metering through that
+actual anchor. Repair missing metering before retrying a stalled purchase. It records the first operator and reason and reports
 the durable state, including work that still needs provider or metering repair.
 The command requires a platform-operator JWT.
 
@@ -40009,6 +40025,10 @@ An on-time completed purchase is reconciled into its subscription when
 settlement succeeds. Failed settlement releases its reservation. An abandoned
 or unbound attempt can be recovered before its deadline, while a completed
 purchase still settling remains reserved. Failed recovery stays durable.
+Historical Mollie receipts without a unique funding link require local activation
+evidence before their initial collection can be treated as delivered service.
+Ambiguous history stays pending with the exact subscription and payment in its
+diagnostic; verify these in the provider console before reconciling them.
 Normal settlement waits back off from one minute to six hours and keep their
 reason visible; waits exceeding fourteen days raise
 `PurserProviderWebhookInboxStuck`.
@@ -40050,9 +40070,13 @@ requires `--yes`. Closure permanently closes all users and queues a durable
 stop for their active ingest. Quartermaster teardown proceeds independently;
 unreachable cells retry and raise the `CommodoreAccountIngestRevocationStuck` alert. The alert
 continues until the cell is restored. Confirming that a cell is permanently
-offline does not clear it: no cluster-retirement command exists. Silence the
-alert for that cell after recording its permanent removal in the incident. Closure publishes
-tenant-inactive authority without authorizing data deletion. It cannot be reversed. The local closure
+offline does not clear it: no cluster-retirement command exists. This alert is aggregated and has no cell label: silencing it suppresses all
+account-ingest revocation stalls. Record permanent removals in the incident;
+restoring the cell is currently the only way to complete its stop obligation.
+Foghorn v0.3.13 returns Unimplemented for per-user stops during a rolling
+upgrade; those stops retry until its Foghorn is upgraded. Closure publishes
+tenant-inactive authority without authorizing data deletion. It cannot be reversed. Remove closed users from bootstrap declarations before the next release apply;
+otherwise validation refuses their reactivation. The local closure
 blocks new active users even if Quartermaster is temporarily unavailable.
 
 Purser consumes the permanent closure event and durably records its billing

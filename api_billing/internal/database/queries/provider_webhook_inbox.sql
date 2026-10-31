@@ -17,24 +17,26 @@ FOR UPDATE SKIP LOCKED;
 
 -- name: MarkProviderWebhookProcessing :exec
 UPDATE purser.provider_webhook_inbox
-SET status = 'processing', claimed_at = NOW(),
+SET status = 'processing', claimed_at = NOW(), wake_requested = FALSE,
     lease_token = sqlc.arg(lease_token)::text::uuid, updated_at = NOW()
 WHERE id = sqlc.arg(id);
 
 -- name: CompleteProviderWebhook :execresult
 UPDATE purser.provider_webhook_inbox
-SET status = 'processed', processed_at = NOW(), claimed_at = NULL,
+SET status = CASE WHEN wake_requested THEN 'pending' ELSE 'processed' END,
+    processed_at = CASE WHEN NOT wake_requested THEN NOW() END,
+    next_attempt_at = CASE WHEN wake_requested THEN NOW() ELSE next_attempt_at END, claimed_at = NULL,
     lease_token = NULL, last_error = NULL, updated_at = NOW()
 WHERE id = sqlc.arg(id)
   AND (sqlc.arg(lease_token)::text = '' OR lease_token::text = sqlc.arg(lease_token)::text);
 
 -- name: FailProviderWebhook :execresult
 UPDATE purser.provider_webhook_inbox
-SET status = CASE WHEN sqlc.arg(waiting)::boolean THEN 'pending' ELSE 'failed' END,
+SET status = CASE WHEN wake_requested OR sqlc.arg(waiting)::boolean THEN 'pending' ELSE 'failed' END,
     attempts = attempts + CASE WHEN sqlc.arg(waiting)::boolean THEN 0 ELSE 1 END,
     wait_attempts = wait_attempts + CASE WHEN sqlc.arg(waiting)::boolean THEN 1 ELSE 0 END,
     unresolved_since = COALESCE(unresolved_since, NOW()),
-    next_attempt_at = NOW() + (sqlc.arg(backoff_milliseconds)::bigint * INTERVAL '1 millisecond'),
+    next_attempt_at = CASE WHEN wake_requested THEN NOW() ELSE NOW() + (sqlc.arg(backoff_milliseconds)::bigint * INTERVAL '1 millisecond') END,
     claimed_at = NULL, lease_token = NULL,
     last_error = sqlc.arg(last_error)::text, updated_at = NOW()
 WHERE id = sqlc.arg(id)
@@ -72,16 +74,17 @@ WITH selected AS (
                 THEN convert_from(selected.raw_payload, 'UTF8')::jsonb END AS internal_payload
     FROM selected
     ORDER BY selected.created_at, selected.id
-    LIMIT sqlc.arg(row_limit)::bigint OFFSET sqlc.arg(row_offset)::bigint
-)
-SELECT i.id::text, COALESCE(p.provider, i.headers->>'provider', i.provider)::text AS provider,
+    LIMIT (sqlc.arg(row_limit)::bigint + sqlc.arg(row_offset)::bigint)
+), inbox_rows AS (
+SELECT i.id::text AS id, COALESCE(p.provider, i.headers->>'provider', i.provider)::text AS provider,
        i.event_key, i.status, i.attempts, i.last_error, i.next_attempt_at,
        COALESCE(p.tenant_id::text, i.headers->>'tenant_id', i.internal_payload->>'tenant_id', '')::text AS tenant_id,
        COALESCE(p.id::text, upgrade.id::text, i.headers->>'reference_id', '')::text AS reservation_id,
        COALESCE(p.expires_at, p.created_at + INTERVAL '24 hours') AS expires_at,
        COALESCE(p.amount_cents, upgrade.base_cents, NULLIF(i.headers->>'amount_cents', '')::bigint, 0)::bigint AS amount_cents,
        COALESCE(p.currency, i.headers->>'currency', '')::text AS currency,
-       COALESCE(p.status, upgrade.state, i.headers->>'reference_kind', '')::text AS reservation_status
+       COALESCE(p.status, upgrade.state, i.headers->>'reference_kind', '')::text AS reservation_status,
+       i.created_at AS sort_at
 FROM page i
 LEFT JOIN purser.payment_provider_intents p
   ON p.id = CASE WHEN i.provider = 'checkout_recovery'
@@ -93,7 +96,43 @@ LEFT JOIN purser.subscription_tier_upgrades upgrade
                        THEN (i.internal_payload->>'id')::uuid END
  AND upgrade.tenant_id = CASE WHEN i.provider = 'tier_upgrade'
                               THEN (i.headers->>'tenant_id')::uuid END
-ORDER BY i.created_at, i.id;
+), fallback_selected AS (
+    (SELECT subscription.* FROM purser.tenant_subscriptions subscription
+     WHERE subscription.free_fallback_at IS NOT NULL AND sqlc.arg(tenant_id)::text = ''
+     ORDER BY subscription.free_fallback_at, subscription.id
+     LIMIT (sqlc.arg(row_limit)::bigint + sqlc.arg(row_offset)::bigint))
+    UNION ALL
+    (SELECT subscription.* FROM purser.tenant_subscriptions subscription
+     WHERE subscription.free_fallback_at IS NOT NULL AND sqlc.arg(tenant_id)::text <> ''
+       AND subscription.tenant_id = NULLIF(sqlc.arg(tenant_id)::text, '')::uuid
+     ORDER BY subscription.free_fallback_at, subscription.id
+     LIMIT (sqlc.arg(row_limit)::bigint + sqlc.arg(row_offset)::bigint))
+), fallback_rows AS (
+    SELECT subscription.id::text AS id, 'free_fallback'::text AS provider,
+           ('free-fallback:' || subscription.tenant_id::text)::text AS event_key,
+           CASE WHEN subscription.free_fallback_moved_at IS NOT NULL THEN 'notice'
+                WHEN subscription.free_fallback_provider_stopping THEN 'provider_stopping'
+                ELSE 'scheduled' END::text AS status,
+           (subscription.free_fallback_failures + subscription.free_fallback_notice_failures)::integer AS attempts,
+           NULLIF(concat_ws('; ', subscription.free_fallback_reason,
+               subscription.free_fallback_error, subscription.free_fallback_notice_error), '') AS last_error,
+           subscription.free_fallback_at::timestamptz AS next_attempt_at,
+           subscription.tenant_id::text AS tenant_id, ''::text AS reservation_id,
+           NULL::timestamptz AS expires_at, 0::bigint AS amount_cents, ''::text AS currency,
+           'subscription'::text AS reservation_status, subscription.free_fallback_at AS sort_at
+    FROM fallback_selected subscription
+    ORDER BY subscription.free_fallback_at, subscription.id
+    LIMIT (sqlc.arg(row_limit)::bigint + sqlc.arg(row_offset)::bigint)
+), inventory AS (
+    SELECT * FROM inbox_rows
+    UNION ALL
+    SELECT * FROM fallback_rows
+)
+SELECT id::text AS id, provider, event_key, status, attempts, last_error, next_attempt_at,
+       tenant_id, reservation_id, expires_at, amount_cents, currency, reservation_status
+FROM inventory
+ORDER BY sort_at, id
+LIMIT sqlc.arg(row_limit)::bigint OFFSET sqlc.arg(row_offset)::bigint;
 
 -- name: RequestCheckoutRecovery :exec
 INSERT INTO purser.provider_webhook_inbox (
@@ -118,7 +157,8 @@ ON CONFLICT (provider, event_key) DO UPDATE SET
     processed_at = NULL,
     headers = EXCLUDED.headers, raw_payload = EXCLUDED.raw_payload,
     next_attempt_at = LEAST(purser.provider_webhook_inbox.next_attempt_at, NOW()),
-    status = 'pending', claimed_at = NULL, lease_token = NULL, updated_at = NOW();
+    status = CASE WHEN purser.provider_webhook_inbox.status = 'processing' THEN 'processing' ELSE 'pending' END,
+    wake_requested = TRUE, updated_at = NOW();
 
 -- name: ProviderWebhookReceivedAt :one
 SELECT created_at FROM purser.provider_webhook_inbox
@@ -162,8 +202,9 @@ VALUES ('tenant_suspension', 'tenant-suspension:' || sqlc.arg(tenant_id)::text,
         jsonb_build_object('tenant_id', sqlc.arg(tenant_id)::text),
         convert_to(jsonb_build_object('tenant_id', sqlc.arg(tenant_id)::text)::text, 'UTF8'))
 ON CONFLICT (provider, event_key) DO UPDATE SET
-    status = 'pending', next_attempt_at = NOW(), processed_at = NULL,
+    status = CASE WHEN inbox.status = 'processing' THEN 'processing' ELSE 'pending' END,
+    wake_requested = TRUE, next_attempt_at = NOW(), processed_at = NULL,
     attempts = CASE WHEN inbox.status = 'processed' THEN 0 ELSE inbox.attempts END,
     wait_attempts = CASE WHEN inbox.status = 'processed' THEN 0 ELSE inbox.wait_attempts END,
     unresolved_since = CASE WHEN inbox.status = 'processed' THEN NULL ELSE inbox.unresolved_since END,
-    claimed_at = NULL, lease_token = NULL, updated_at = NOW();
+    updated_at = NOW();

@@ -66,19 +66,71 @@ func (c *Client) cancelReservedSession(ctx context.Context, sess *stripe.Checkou
 		}
 	}
 	result.Cancelled = true
+	if sess.PaymentIntent != nil && sess.PaymentIntent.ID != "" {
+		payment, err := c.GetPaymentIntent(ctx, sess.PaymentIntent.ID)
+		if err != nil {
+			return err
+		}
+		if payment.Status == stripe.PaymentIntentStatusProcessing {
+			return billing.ErrCheckoutSettlementPending
+		}
+	}
 	p := &stripe.InvoiceListParams{Subscription: stripe.String(sub.ID)}
 	p.Context = ctx
 	invoices := invoice.List(p)
 	for invoices.Next() {
 		inv := invoices.Invoice()
-		if inv.AmountPaid == 0 || (sess.Invoice != nil && sess.Invoice.ID != "" && inv.ID != sess.Invoice.ID) || (sess.Invoice == nil || sess.Invoice.ID == "") && inv.BillingReason != stripe.InvoiceBillingReasonSubscriptionCreate {
+		if (sess.Invoice != nil && sess.Invoice.ID != "" && inv.ID != sess.Invoice.ID) || (sess.Invoice == nil || sess.Invoice.ID == "") && inv.BillingReason != stripe.InvoiceBillingReasonSubscriptionCreate {
 			continue
+		}
+		// A partially paid invoice can still own another processing debit.
+		// Subscription sessions need not expose those invoice payment intents.
+		if err := c.waitForCheckoutInvoiceDebit(ctx, inv.ID); err != nil {
+			return err
+		}
+		// Cancelling renewal does not by itself close an existing invoice's
+		// payment window. Close only this unactivated purchase's invoice before
+		// releasing its reservation; a processing debit keeps recovery pending.
+		switch inv.Status {
+		case stripe.InvoiceStatusDraft:
+			params := &stripe.InvoiceParams{}
+			params.Context = ctx
+			if _, err := invoice.Del(inv.ID, params); err != nil {
+				return err
+			}
+		case stripe.InvoiceStatusOpen, stripe.InvoiceStatusUncollectible:
+			params := &stripe.InvoiceVoidInvoiceParams{}
+			params.Context = ctx
+			params.SetIdempotencyKey("checkout-expiry-void:" + intentID + ":" + inv.ID)
+			if _, err := invoice.VoidInvoice(inv.ID, params); err != nil {
+				return err
+			}
 		}
 		if err := c.refundInvoicePayments(ctx, inv.ID, "checkout-expiry-refund:"+intentID, result, "checkout", intentID); err != nil {
 			return err
 		}
 	}
 	return invoices.Err()
+}
+
+func (c *Client) waitForCheckoutInvoiceDebit(ctx context.Context, invoiceID string) error {
+	p := &stripe.InvoicePaymentListParams{Invoice: stripe.String(invoiceID)}
+	p.Context = ctx
+	payments := invoicepayment.List(p)
+	for payments.Next() {
+		payment := payments.InvoicePayment().Payment
+		if payment == nil || payment.PaymentIntent == nil || payment.PaymentIntent.ID == "" {
+			continue
+		}
+		intent, err := c.GetPaymentIntent(ctx, payment.PaymentIntent.ID)
+		if err != nil {
+			return err
+		}
+		if intent.Status == stripe.PaymentIntentStatusProcessing {
+			return billing.ErrCheckoutSettlementPending
+		}
+	}
+	return payments.Err()
 }
 
 // ReservedCheckout retrieves the exact attempt before recovery chooses activation or compensation.

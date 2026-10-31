@@ -4,12 +4,14 @@ package handlers
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"testing"
 	"time"
 
 	"frameworks/api_billing/internal/database/purserdb"
 	billingmollie "frameworks/api_billing/internal/mollie"
+
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/outbox"
 	"github.com/google/uuid"
 )
@@ -17,6 +19,7 @@ import (
 func TestProviderWebhookInboxRepository_RealPG(t *testing.T) {
 	db := startPurserUsageRealPG(t)
 	ctx := context.Background()
+	assertCheckoutWakePreservesActiveClaim(t, db)
 	store := &providerWebhookInboxStore{db: db}
 	service := &Service{db: db}
 
@@ -172,5 +175,63 @@ func TestProviderSettlementWaitBackoffAndAgeAlert_RealPG(t *testing.T) {
 	}
 	if count, err := q.ProviderWebhookInboxRepeatedFailures(ctx); err != nil || count != 1 {
 		t.Fatalf("stale settlement failed to alert: %d %v", count, err)
+	}
+}
+
+func assertCheckoutWakePreservesActiveClaim(t *testing.T, db *sql.DB) {
+	t.Helper()
+	tenant, id := uuid.NewString(), uuid.NewString()
+	tier := uuid.NewString()
+	if _, err := db.ExecContext(t.Context(), `INSERT INTO purser.billing_tiers(id,tier_name,display_name) VALUES($1::uuid,$1::text,'Bind fixture')`, tier); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(t.Context(), `INSERT INTO purser.tenant_subscriptions(tenant_id,tier_id,status,billing_model) VALUES($1,$2,'active','postpaid')`, tenant, tier); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(t.Context(), `INSERT INTO purser.payment_provider_intents(id,tenant_id,provider,purpose,status,currency,idempotency_key,recovery_started_at) VALUES($1::uuid,$2,'stripe','tenant_subscription_checkout','cancelled','EUR',$1::text,NOW())`, id, tenant); err != nil {
+		t.Fatal(err)
+	}
+	q := purserdb.New(db)
+	if err := q.RequestCheckoutRecovery(t.Context(), purserdb.RequestCheckoutRecoveryParams{TenantID: tenant, IntentID: id, Reason: "operator recovery"}); err != nil {
+		t.Fatal(err)
+	}
+	store := &providerWebhookInboxStore{db: db}
+	claims, err := store.ClaimBatch(t.Context(), 1, time.Minute)
+	if err != nil || len(claims) != 1 {
+		t.Fatalf("initial claim: %+v %v", claims, err)
+	}
+	if err = q.SetProviderIntentSessionOpen(t.Context(), purserdb.SetProviderIntentSessionOpenParams{TenantID: tenant, IntentID: id, SessionID: sql.NullString{String: "late-session", Valid: true}}); err != nil {
+		t.Fatal(err)
+	}
+	var state, token string
+	if err = db.QueryRowContext(t.Context(), `SELECT status,COALESCE(lease_token::text,'') FROM purser.provider_webhook_inbox WHERE provider='checkout_recovery' AND event_key=$1 AND headers->>'tenant_id'=$2`, "checkout-expiry:"+id, tenant).Scan(&state, &token); err != nil {
+		t.Fatal(err)
+	}
+	if state != "processing" || token != claims[0].LeaseToken {
+		t.Fatalf("late receipt stole active recovery claim: state=%s token=%s expected=%s", state, token, claims[0].LeaseToken)
+	}
+	if err = store.MarkCompletedToken(t.Context(), claims[0].ID, claims[0].LeaseToken); err != nil {
+		t.Fatal(err)
+	}
+	followup, err := store.ClaimBatch(t.Context(), 1, time.Minute)
+	if err != nil || len(followup) != 1 {
+		t.Fatalf("old acknowledgement lost late receipt wake: %+v %v", followup, err)
+	}
+	if rows, err := q.FinishCheckoutCompensation(t.Context(), purserdb.FinishCheckoutCompensationParams{TenantID: tenant, IntentID: id, Outcome: "cancelled", ExpectedReferences: []byte(`{"session_id":"late-session","payment_id":null,"subscription_id":null}`)}); err != nil || rows != 1 {
+		t.Fatalf("finish first reference snapshot: rows=%d err=%v", rows, err)
+	}
+	svc := &Service{db: db}
+	if expired, err := svc.bindCheckoutReceipt(t.Context(), tenant, id, "stripe", "late-session", "", "late-subscription"); err != nil || !expired {
+		t.Fatalf("bind late webhook: expired=%v err=%v", expired, err)
+	}
+	if err = store.MarkCompletedToken(t.Context(), followup[0].ID, followup[0].LeaseToken); err != nil {
+		t.Fatal(err)
+	}
+	next, err := store.ClaimBatch(t.Context(), 1, time.Minute)
+	if err != nil || len(next) != 1 {
+		t.Fatalf("old acknowledgement lost bound webhook references: %+v %v", next, err)
+	}
+	if err = store.MarkCompletedToken(t.Context(), next[0].ID, next[0].LeaseToken); err != nil {
+		t.Fatal(err)
 	}
 }

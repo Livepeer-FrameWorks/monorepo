@@ -27,10 +27,6 @@ func TestMollieReservationRecoversLostBinding(t *testing.T) {
 			return nil, fmt.Errorf("unexpected request %s", req.URL.Path)
 		}
 	})
-	// The SDK client uses the default transport when its caller supplies no HTTP client.
-	previous := http.DefaultTransport
-	http.DefaultTransport = http.DefaultClient.Transport
-	t.Cleanup(func() { http.DefaultTransport = previous })
 	if err := c.CancelReservedCheckout(context.Background(), "customer", "reservation", "", ""); err != nil {
 		t.Fatal(err)
 	}
@@ -76,9 +72,6 @@ func testMollieExpiredReservationRefundsPaidPayment(t *testing.T, subscription b
 		}
 		return nil, fmt.Errorf("unexpected request %s %s", req.Method, req.URL.Path)
 	})
-	previous := http.DefaultTransport
-	http.DefaultTransport = http.DefaultClient.Transport
-	t.Cleanup(func() { http.DefaultTransport = previous })
 
 	paymentID, subscriptionID := "payment", ""
 	if subscription {
@@ -121,9 +114,6 @@ func TestMollieRecoveryCancelsSubscriptionBeforeWaitingForPendingPayment(t *test
 			return nil, fmt.Errorf("unexpected request %s %s", req.Method, req.URL.Path)
 		}
 	})
-	previous := http.DefaultTransport
-	http.DefaultTransport = http.DefaultClient.Transport
-	t.Cleanup(func() { http.DefaultTransport = previous })
 	if err := c.CancelReservedCheckout(context.Background(), "customer", "reservation", "", ""); err == nil {
 		t.Fatal("pending non-cancelable payment was silently settled")
 	}
@@ -141,9 +131,6 @@ func TestMollieRecoveryUsesRemainingRefundAmount(t *testing.T) {
 		calls++
 		return nil, fmt.Errorf("fully refunded payment must not be refunded again")
 	})
-	previous := http.DefaultTransport
-	http.DefaultTransport = http.DefaultClient.Transport
-	t.Cleanup(func() { http.DefaultTransport = previous })
 	if err := c.CancelReservedCheckout(t.Context(), "customer", "reservation", "payment", ""); err != nil {
 		t.Fatal(err)
 	}
@@ -171,9 +158,6 @@ func TestMollieRecoveryNeverRefundsMoreThanUnrefundedPayment(t *testing.T) {
 				got = body.Amount.Value
 				return mollieJSONResponse(201, `{"id":"refund"}`), nil
 			})
-			previous := http.DefaultTransport
-			http.DefaultTransport = http.DefaultClient.Transport
-			t.Cleanup(func() { http.DefaultTransport = previous })
 			if err := c.CancelReservedCheckout(t.Context(), "customer", "reservation", "payment", ""); err != nil {
 				t.Fatal(err)
 			}
@@ -199,9 +183,6 @@ func TestMollieUnboundRetryRespectsRetainedKeyWindow(t *testing.T) {
 					}
 					return mollieJSONResponse(201, `{"id":"same-object","status":"open"}`), nil
 				})
-				previous := http.DefaultTransport
-				http.DefaultTransport = http.DefaultClient.Transport
-				t.Cleanup(func() { http.DefaultTransport = previous })
 				bound := time.Now().Add(-time.Minute)
 				if retained {
 					bound = time.Now().Add(time.Minute)
@@ -239,13 +220,39 @@ func TestSubscriptionRecoveryPreservesRecurringServicePayments(t *testing.T) {
 		}
 		return nil, fmt.Errorf("unexpected %s", req.URL.Path)
 	})
-	previous := http.DefaultTransport
-	http.DefaultTransport = http.DefaultClient.Transport
-	t.Cleanup(func() { http.DefaultTransport = previous })
 	if _, err := c.RecoverReservedCheckout(t.Context(), "customer", "reservation", "", "old"); err != nil {
 		t.Fatal(err)
 	}
 	if refunds != 0 {
 		t.Fatalf("refunded %d payments for delivered recurring service", refunds)
+	}
+}
+
+func TestUnboundCheckoutNeverRefundsRecurringPayments(t *testing.T) {
+	for _, identity := range []string{`"subscriptionId":"delivered-subscription"`, `"sequenceType":"recurring"`} {
+		t.Run(identity, func(t *testing.T) {
+			refunds := 0
+			c := newMollieContractClient(t, func(r *http.Request) (*http.Response, error) {
+				switch r.URL.Path {
+				case "/v2/customers/customer/subscriptions":
+					return mollieJSONResponse(200, `{"_embedded":{"subscriptions":[]},"_links":{}}`), nil
+				case "/v2/customers/customer/payments":
+					return mollieJSONResponse(200, `{"_embedded":{"payments":[{"id":"recurring","metadata":{"checkout_reservation_id":"reservation"}}]},"_links":{}}`), nil
+				case "/v2/payments/recurring":
+					return mollieJSONResponse(200, `{"id":"recurring","status":"paid","amount":{"value":"20.00","currency":"EUR"},`+identity+`}`), nil
+				case "/v2/payments/recurring/refunds":
+					refunds++
+					return mollieJSONResponse(201, `{"id":"refund"}`), nil
+				default:
+					return nil, fmt.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+				}
+			})
+			if err := c.CancelReservedCheckout(t.Context(), "customer", "reservation", "", ""); err != nil {
+				t.Fatal(err)
+			}
+			if refunds != 0 {
+				t.Fatalf("refunded delivered recurring payment: refunds=%d", refunds)
+			}
+		})
 	}
 }

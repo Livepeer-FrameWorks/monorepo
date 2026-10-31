@@ -9,6 +9,7 @@ import (
 
 	"frameworks/api_billing/internal/database/purserdb"
 	"frameworks/api_billing/internal/subscriptions"
+
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/events"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/kafka"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/outbox"
@@ -17,6 +18,7 @@ import (
 )
 
 func TestTenantClosureStopsBilling_RealPG(t *testing.T) {
+	assertClosureRefundsOnlyUnactivatedFirstPayment(t)
 	for _, provider := range []string{"stripe", "mollie", "manual", "prepaid", "active_grant"} {
 		t.Run(provider, func(t *testing.T) {
 			db := startProviderReservationDatabase(t)

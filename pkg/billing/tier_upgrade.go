@@ -13,6 +13,8 @@ type TierUpgradeRequest struct {
 	// LocateOnly reconciles an existing provider update without creating one.
 	LocateOnly bool
 	BaseCents  int64
+	// OldBaseCents distinguishes a genuinely free month from a missing paid basis.
+	OldBaseCents int64
 }
 
 // TierUpgradeReceipt records the provider's authoritative replacement period.

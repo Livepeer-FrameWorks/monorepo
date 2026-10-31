@@ -13,22 +13,24 @@ import (
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-
 	"github.com/VictorAvelar/mollie-api-go/v4/mollie"
 )
 
 // Client wraps Mollie API operations for subscription management.
 // Uses the first-payment flow: iDEAL/card → SEPA DD mandate → recurring subscriptions.
 type Client struct {
-	client *mollie.Client
-	logger logging.Logger
-	apiKey string
+	client     *mollie.Client
+	httpClient *http.Client
+	logger     logging.Logger
+	apiKey     string
 }
 
 // Config for creating a new Mollie client
 type Config struct {
 	APIKey string // MOLLIE_API_KEY (live_xxx or test_xxx)
 	Logger logging.Logger
+	// HTTPClient provides the bounded transport shared by SDK and direct requests.
+	HTTPClient *http.Client
 }
 
 // NewClient creates a new Mollie client
@@ -38,7 +40,15 @@ func NewClient(config Config) (*Client, error) {
 		mollieConfig = mollie.NewAPIConfig(true) // Use live mode for live keys
 	}
 
-	client, err := mollie.NewClient(nil, mollieConfig)
+	httpClient := config.HTTPClient
+	if httpClient == nil {
+		httpClient = &http.Client{Timeout: 20 * time.Second}
+	} else if httpClient.Timeout == 0 {
+		bounded := *httpClient
+		bounded.Timeout = 20 * time.Second
+		httpClient = &bounded
+	}
+	client, err := mollie.NewClient(httpClient, mollieConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Mollie client: %w", err)
 	}
@@ -49,9 +59,10 @@ func NewClient(config Config) (*Client, error) {
 	}
 
 	return &Client{
-		client: client,
-		logger: config.Logger,
-		apiKey: config.APIKey,
+		client:     client,
+		httpClient: httpClient,
+		logger:     config.Logger,
+		apiKey:     config.APIKey,
 	}, nil
 }
 
@@ -328,7 +339,7 @@ func (c *Client) postJSON(ctx context.Context, rawURL string, body []byte, idemp
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Idempotency-Key", idempotencyKey)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -397,7 +408,7 @@ func (c *Client) ChargeOnMandate(ctx context.Context, params OnDemandChargeParam
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Idempotency-Key", params.IdempotencyKey)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create on-demand payment: %w", err)
 	}

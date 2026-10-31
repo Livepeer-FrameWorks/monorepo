@@ -5,21 +5,23 @@ package grpc
 import (
 	"database/sql"
 	"errors"
-
-	"frameworks/api_billing/internal/database/purserdb"
-	"frameworks/api_billing/internal/subscriptions"
 	"testing"
 	"time"
 
+	"frameworks/api_billing/internal/database/purserdb"
 	"frameworks/api_billing/internal/handlers"
+	"frameworks/api_billing/internal/subscriptions"
+
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 	"github.com/google/uuid"
-	"github.com/shopspring/decimal"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func TestTierUpgradeStartsFreshMonth_RealPG(t *testing.T) {
 	db := startOperatorGrantDatabase(t)
+	assertSelfServiceUpgradePriceBounds(t, db)
 	ctx := t.Context()
 	tenant, oldTier, newTier := uuid.NewString(), uuid.NewString(), uuid.NewString()
 	start := time.Now().UTC().Add(-15 * 24 * time.Hour).Truncate(time.Second)
@@ -61,10 +63,11 @@ JOIN purser.invoice_line_items line ON line.invoice_id=i.id AND line.line_key='u
 WHERE i.tenant_id=$1 AND i.base_fee_period_start=$2`, tenant, actualStart).Scan(&amount, &credit); err != nil {
 		t.Fatal(err)
 	}
-	wantCredit := decimal.NewFromInt(2000).Mul(decimal.NewFromInt(end.Sub(actualStart).Microseconds())).Div(decimal.NewFromInt(end.Sub(start).Microseconds())).Round(0).Shift(-2)
-	if credit != wantCredit.StringFixed(2) || amount != decimal.NewFromInt(50).Sub(wantCredit).StringFixed(2) {
-		t.Fatalf("new base fee/credit=%s/%s, expected %s/%s", amount, credit, decimal.NewFromInt(50).Sub(wantCredit), wantCredit)
+	// A paid €20 month exactly half unused offsets €10 of the €50 fee.
+	if credit != "10.00" || amount != "40.00" {
+		t.Fatalf("new base fee/credit=%s/%s, expected 40.00/10.00", amount, credit)
 	}
+
 	var invoices int
 	if err = db.QueryRowContext(ctx, `SELECT count(*) FROM purser.billing_invoices WHERE tenant_id=$1 AND base_fee_period_start IS NULL AND period_start=$2 AND period_end=$3 AND status<>'draft'`, tenant, start, actualStart).Scan(&invoices); err != nil || invoices != 1 {
 		t.Fatalf("old usage period was not finalized once: invoices=%d err=%v", invoices, err)
@@ -75,6 +78,55 @@ WHERE i.tenant_id=$1 AND i.base_fee_period_start=$2`, tenant, actualStart).Scan(
 	var replayStart, replayEnd sql.NullTime
 	if err = db.QueryRowContext(ctx, `SELECT billing_period_start,billing_period_end FROM purser.tenant_subscriptions WHERE tenant_id=$1`, tenant).Scan(&replayStart, &replayEnd); err != nil || !replayStart.Time.Equal(actualStart) || !replayEnd.Time.Equal(actualEnd) {
 		t.Fatalf("retry reset the period again: %v..%v, err=%v", replayStart, replayEnd, err)
+	}
+}
+
+func assertSelfServiceUpgradePriceBounds(t *testing.T, db *sql.DB) {
+	t.Helper()
+	for _, tc := range []struct {
+		name       string
+		price      int
+		enterprise bool
+	}{
+		{"enterprise is operator assigned", 0, true},
+		{"higher level with a cheaper price", 5, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := t.Context()
+			tenant, oldTier, target := uuid.NewString(), uuid.NewString(), uuid.NewString()
+			_, err := db.ExecContext(ctx, `INSERT INTO purser.billing_tiers(id,tier_name,display_name,tier_level,base_price,is_enterprise,metering_enabled)
+VALUES($1::uuid,$1::text,'Old',2,999,false,false),($2::uuid,$2::text,'Target',5,$3,$4,false)`, oldTier, target, tc.price, tc.enterprise)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = db.ExecContext(ctx, `INSERT INTO purser.tenant_subscriptions(tenant_id,tier_id,status,billing_model,payment_method,stripe_customer_id,
+billing_name,billing_email,billing_address,presentment_currency,billing_period_start,billing_period_end)
+VALUES($1,$2,'active','postpaid','stripe','customer','Customer','billing@example.com',
+'{"street":"Street 1","city":"Leiden","postal_code":"2332ED","country":"NL"}','USD',NOW()-INTERVAL '1 day',NOW()+INTERVAL '29 days')`, tenant, oldTier)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = db.ExecContext(ctx, `INSERT INTO purser.billing_invoices(tenant_id,status,amount,base_amount,due_date,base_fee_period_start,base_fee_period_end,presentment_amount_cents,presentment_currency,presentment_units_per_eur,presentment_reference_date,finalized_at)
+SELECT tenant_id,'paid',999,999,NOW(),billing_period_start,billing_period_end,99900,'USD',1,CURRENT_DATE,NOW() FROM purser.tenant_subscriptions WHERE tenant_id=$1`, tenant)
+			if err != nil {
+				t.Fatal(err)
+			}
+			logger := logging.NewLogger()
+			service := handlers.NewService(db, logger, nil, nil, nil, nil, nil)
+			server := &PurserServer{db: db, logger: logger, billing: service}
+			_, err = server.ChangeBillingTier(ctx, &purserpb.ChangeBillingTierRequest{TenantId: tenant, TierId: target})
+			if status.Code(err) != codes.FailedPrecondition {
+				t.Fatalf("unsafe upgrade was accepted: %v", err)
+			}
+			var actual string
+			var purchases int
+			if err = db.QueryRowContext(ctx, `SELECT tier_id::text,(SELECT count(*) FROM purser.subscription_tier_upgrades u WHERE u.tenant_id=s.tenant_id) FROM purser.tenant_subscriptions s WHERE tenant_id=$1`, tenant).Scan(&actual, &purchases); err != nil {
+				t.Fatal(err)
+			}
+			if actual != oldTier || purchases != 0 {
+				t.Fatalf("rejected upgrade changed pricing or staged a purchase: tier=%s purchases=%d", actual, purchases)
+			}
+		})
 	}
 }
 

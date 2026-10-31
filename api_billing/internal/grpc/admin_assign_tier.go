@@ -11,6 +11,7 @@ import (
 	"frameworks/api_billing/internal/database/purserdb"
 	"frameworks/api_billing/internal/handlers"
 	"frameworks/api_billing/internal/subscriptions"
+
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
@@ -248,6 +249,12 @@ func (s *PurserServer) adminAssignTierOnce(ctx context.Context, tenantID, tierNa
 		if current.Status == "cancelled" {
 			return errSubscriptionCancelled
 		}
+		if upgradeErr := subscriptions.CheckPendingTierUpgrade(ctx, tx, tenantID); upgradeErr != nil {
+			if subscriptions.IsPricingRefusal(upgradeErr) {
+				return status.Error(codes.FailedPrecondition, upgradeErr.Error())
+			}
+			return txStatusErrorf(upgradeErr, codes.Internal, "check tier upgrade fence: %v", upgradeErr)
+		}
 
 		resp = &purserpb.AdminAssignTierResponse{
 			SubscriptionId: current.SubscriptionID, TierId: tier.ID, TierName: tier.TierName,
@@ -308,6 +315,22 @@ func (s *PurserServer) adminAssignTierOnce(ctx context.Context, tenantID, tierNa
 		if grant != nil {
 			if grantErr := s.writeOperatorGrantMutationTx(ctx, tx, current, tenantID, tier.ID, grant); grantErr != nil {
 				return grantErr
+			}
+		}
+		if grant == nil || grant.clearFallback {
+			pricing, lockErr := queries.LockTenantSubscriptionForProviderChange(ctx, tenantID)
+			if lockErr != nil {
+				return txStatusErrorf(lockErr, codes.Internal, "read fallback stop fence: %v", lockErr)
+			}
+			if pricing.FreeFallbackProviderStopping {
+				return status.Error(codes.FailedPrecondition, subscriptions.ErrPendingFreeFallback.Error())
+			}
+			cleared, clearErr := queries.ClearSubscriptionFreeFallback(ctx, tenantID)
+			if clearErr != nil {
+				return txStatusErrorf(clearErr, codes.Internal, "cancel scheduled fallback: %v", clearErr)
+			}
+			if cleared > 0 {
+				changedFields = append(changedFields, "free_fallback")
 			}
 		}
 		if len(changedFields) == 0 {

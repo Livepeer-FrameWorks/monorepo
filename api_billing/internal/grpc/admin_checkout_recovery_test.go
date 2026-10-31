@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"frameworks/api_billing/internal/handlers"
+
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -49,6 +50,9 @@ func TestCheckoutRecoveryReportsPendingForMissingCustomer(t *testing.T) {
 	const tenant = "00000000-0000-4000-8000-000000000001"
 	const intent = "00000000-0000-4000-8000-000000000002"
 	for attempt := 0; attempt < 2; attempt++ {
+		if attempt == 1 {
+			m.ExpectQuery("SELECT pg_try_advisory_lock").WillReturnRows(sqlmock.NewRows([]string{"locked"}).AddRow(true))
+		}
 		m.ExpectBegin()
 		m.ExpectQuery("LockTenantSubscriptionForProviderChange").WillReturnRows(sqlmock.NewRows([]string{"subscription_id", "tier_id", "status", "billing_model", "stripe_subscription_id", "mollie_subscription_id", "pending_reason", "free_fallback_provider_stopping", "free_fallback_provider_ended_at"}).AddRow("sub", "tier", "active", "postpaid", nil, nil, nil, false, nil))
 		m.ExpectQuery("IsTenantBillingClosed").WillReturnRows(sqlmock.NewRows([]string{"closed"}).AddRow(false))
@@ -62,6 +66,7 @@ func TestCheckoutRecoveryReportsPendingForMissingCustomer(t *testing.T) {
 		} else {
 			m.ExpectQuery("GetMollieCustomerID").WillReturnError(sql.ErrNoRows)
 			m.ExpectRollback()
+			m.ExpectQuery("SELECT pg_advisory_unlock").WillReturnRows(sqlmock.NewRows([]string{"unlocked"}).AddRow(true))
 		}
 	}
 	m.ExpectQuery("GetProviderCheckoutReservation").WillReturnRows(checkoutReservationJournalRows(intent, tenant, "mollie", "mollie_subscription_create", nil, nil, nil, "provider-sub", "pending", time.Now().Add(-time.Hour), 0))

@@ -49,8 +49,7 @@ cells keep retrying in the stop lane; `CommodoreAccountIngestRevocationStuck`
 alerts on the age of pending delivery, including backoff. If a dependency prevents
 compiling the replacement, Commodore corrects the previous object by removing
 its credential. If that correction also fails, it publishes a deny rather than
-retaining publishing
-access. A changed or missing playback-source revision, including a rotated
+retaining publishing access. A changed or missing playback-source revision, including a rotated
 webhook secret, requires a full deny rather than re-signing the previous secret.
 Payload and source revisions are read from one stored version. Placement-schema
 corrections include the tenant's recipient cells. A cell disconnected from

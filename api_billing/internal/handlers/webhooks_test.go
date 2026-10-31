@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"frameworks/api_billing/internal/appconfig/appconfigtest"
+
 	"github.com/DATA-DOG/go-sqlmock"
 	mollie "github.com/VictorAvelar/mollie-api-go/v4/mollie"
 	"github.com/sirupsen/logrus"
@@ -169,6 +170,7 @@ func expectStripeSubscriptionActivation(mock sqlmock.Sqlmock, tenantID, subscrip
 	mock.ExpectQuery("LockTenantSubscriptionForProviderChange").WithArgs(tenantID).WillReturnRows(sqlmock.NewRows([]string{"subscription_id", "tier_id", "status", "billing_model", "stripe_subscription_id", "mollie_subscription_id", "pending_reason", "free_fallback_provider_stopping", "free_fallback_provider_ended_at"}).AddRow("sub-local-1", "tier", "active", "postpaid", subscriptionID, nil, nil, false, nil))
 	mock.ExpectQuery("IsTenantBillingClosed").WithArgs(tenantID).WillReturnRows(sqlmock.NewRows([]string{"closed"}).AddRow(false))
 	mock.ExpectQuery("GetSubscriptionOperatorGrant").WithArgs(tenantID).WillReturnRows(sqlmock.NewRows([]string{"subscription_id"}))
+	mock.ExpectQuery("HasPendingTierUpgrade").WillReturnRows(sqlmock.NewRows([]string{"pending"}).AddRow(false))
 	mock.ExpectQuery("GetStripeUpgradeBoundary").WithArgs(tenantID, subscriptionID).WillReturnRows(sqlmock.NewRows([]string{"boundary", "tier_id"}))
 	// active routes through the activation helper: applies the tier, sets
 	// payment_method=stripe, clears staged state, and backfills the period.

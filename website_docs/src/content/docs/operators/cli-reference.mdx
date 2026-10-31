@@ -2310,7 +2310,10 @@ frameworks admin billing grant list --include-expired --output json
 #### frameworks admin billing recovery list
 
 `recovery list` reads outstanding provider callbacks and checkout recovery work,
-including the last error, next retry and checkout deadline. Use `--limit` (1–100)
+including the last error, next retry and checkout deadline. Scheduled Free
+fallbacks also appear with their move date, state and last error. Before provider
+cancellation starts, an audited `admin billing set-tier` cancels that schedule;
+`provider_stopping` must finish provider reconciliation first. Use `--limit` (1–100)
 and `--offset` to page; `--tenant-id` narrows to a tenant's checkout reservations.
 Omit the tenant filter to include provider callbacks not yet bound to a tenant.
 Use `--tenant-id <UUID> --history` to read each operator request, identity, reason
@@ -2331,8 +2334,10 @@ settlement has finished. Both commands require a platform-operator JWT.
 `frameworks admin billing recovery upgrade --tenant-id <UUID> --upgrade-id <UUID> --reason "Reconcile purchase"`
 previews an accepted tier upgrade and requires interactive `yes` or `--yes`.
 Get its purchase UUID from `recovery list`. Recovery locates existing provider
-work; it cancels an unapplied request or completes an applied purchase without
-starting another purchase. It records the first operator and reason and reports
+work; it cancels an unapplied request or resumes an applied purchase without
+starting another purchase. Stripe anchors the new month when it accepts the
+provider update; local reconciliation waits for usage metering through that
+actual anchor. Repair missing metering before retrying a stalled purchase. It records the first operator and reason and reports
 the durable state, including work that still needs provider or metering repair.
 The command requires a platform-operator JWT.
 

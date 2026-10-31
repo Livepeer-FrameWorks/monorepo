@@ -11,9 +11,28 @@ import (
 	"time"
 )
 
+const acknowledgeFreeFallbackHold = `-- name: AcknowledgeFreeFallbackHold :exec
+UPDATE purser.tenant_subscriptions
+SET free_fallback_error = NULL, free_fallback_failures = 0
+WHERE tenant_id = $1::text::uuid
+  AND free_fallback_attempted_at = $2::timestamptz
+  AND free_fallback_moved_at IS NULL
+`
+
+type AcknowledgeFreeFallbackHoldParams struct {
+	TenantID    string    `db:"tenant_id" json:"tenant_id"`
+	AttemptedAt time.Time `db:"attempted_at" json:"attempted_at"`
+}
+
+// A newer claim or lifecycle cannot be cleared by an older worker.
+func (q *Queries) AcknowledgeFreeFallbackHold(ctx context.Context, arg AcknowledgeFreeFallbackHoldParams) error {
+	_, err := q.db.ExecContext(ctx, acknowledgeFreeFallbackHold, arg.TenantID, arg.AttemptedAt)
+	return err
+}
+
 const claimFreeFallbackMove = `-- name: ClaimFreeFallbackMove :one
 UPDATE purser.tenant_subscriptions subscription
-SET free_fallback_attempted_at = NOW(), free_fallback_failures = free_fallback_failures + 1
+SET free_fallback_attempted_at = NOW()
 WHERE tenant_id = $1::text::uuid
   AND free_fallback_at <= NOW() AND free_fallback_moved_at IS NULL
   AND (free_fallback_attempted_at IS NULL OR free_fallback_attempted_at <= NOW() - INTERVAL '5 minutes')
@@ -31,13 +50,15 @@ func (q *Queries) ClaimFreeFallbackMove(ctx context.Context, tenantID string) (t
 }
 
 const claimFreeFallbackNotice = `-- name: ClaimFreeFallbackNotice :one
-UPDATE purser.tenant_subscriptions
+UPDATE purser.tenant_subscriptions subscription
 SET free_fallback_notice_attempted_at = NOW(),
     free_fallback_notice_failures = free_fallback_notice_failures + 1
 WHERE tenant_id = $1::text::uuid
   AND free_fallback_at IS NOT NULL
   AND (free_fallback_moved_at IS NOT NULL OR free_fallback_notified_at IS NULL)
-  AND (free_fallback_notice_attempted_at IS NULL OR free_fallback_notice_attempted_at <= NOW() - INTERVAL '5 minutes')
+  AND NOT EXISTS (SELECT 1 FROM purser.subscription_operator_grants grant_row
+      WHERE grant_row.subscription_id = subscription.id)
+  AND (free_fallback_notice_attempted_at IS NULL OR free_fallback_notice_attempted_at <= NOW() - (LEAST(720, 5 * power(2, LEAST(free_fallback_notice_failures, 8))) * INTERVAL '1 minute'))
 RETURNING COALESCE(billing_email, '')::text AS billing_email, COALESCE(billing_name, '')::text AS billing_name,
           free_fallback_at::timestamptz AS free_fallback_at, COALESCE(free_fallback_reason, '')::text AS free_fallback_reason,
           (free_fallback_moved_at IS NOT NULL)::boolean AS moved,
@@ -68,17 +89,24 @@ func (q *Queries) ClaimFreeFallbackNotice(ctx context.Context, tenantID string) 
 	return i, err
 }
 
-const clearSubscriptionFreeFallback = `-- name: ClearSubscriptionFreeFallback :exec
+const clearSubscriptionFreeFallback = `-- name: ClearSubscriptionFreeFallback :execrows
 UPDATE purser.tenant_subscriptions
 SET free_fallback_at = NULL, free_fallback_reason = NULL, free_fallback_notified_at = NULL,
-    free_fallback_moved_at = NULL, free_fallback_provider_stopping = FALSE, free_fallback_wait_since = NULL, updated_at = NOW()
+    free_fallback_moved_at = NULL, free_fallback_provider_stopping = FALSE,
+    free_fallback_provider_ended_at = NULL, free_fallback_wait_since = NULL,
+    free_fallback_attempted_at = NULL, free_fallback_failures = 0, free_fallback_error = NULL,
+    free_fallback_notice_attempted_at = NULL, free_fallback_notice_failures = 0,
+    free_fallback_notice_error = NULL, updated_at = NOW()
 WHERE tenant_id = $1::text::uuid
-  AND free_fallback_at IS NOT NULL
+  AND (free_fallback_at IS NOT NULL OR free_fallback_provider_ended_at IS NOT NULL)
 `
 
-func (q *Queries) ClearSubscriptionFreeFallback(ctx context.Context, tenantID string) error {
-	_, err := q.db.ExecContext(ctx, clearSubscriptionFreeFallback, tenantID)
-	return err
+func (q *Queries) ClearSubscriptionFreeFallback(ctx context.Context, tenantID string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, clearSubscriptionFreeFallback, tenantID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const completeFreeFallbackNotice = `-- name: CompleteFreeFallbackNotice :exec
@@ -146,7 +174,7 @@ WITH moves AS MATERIALIZED (
     WHERE free_fallback_at IS NOT NULL AND free_fallback_moved_at IS NULL
       AND free_fallback_wait_since <= NOW() - INTERVAL '14 days'
 ), notices AS MATERIALIZED (
-    SELECT tenant_id FROM purser.tenant_subscriptions
+    SELECT id, tenant_id FROM purser.tenant_subscriptions
     WHERE free_fallback_at IS NOT NULL AND free_fallback_notice_error IS NOT NULL
       AND free_fallback_notice_failures > 1
 ), closed AS MATERIALIZED (
@@ -156,13 +184,14 @@ WITH moves AS MATERIALIZED (
     ))
 ), granted AS MATERIALIZED (
     SELECT grant_row.subscription_id FROM purser.subscription_operator_grants grant_row
-    WHERE grant_row.subscription_id = ANY (ARRAY(SELECT moves.id FROM moves))
+    WHERE grant_row.subscription_id = ANY (ARRAY(SELECT moves.id FROM moves UNION SELECT notices.id FROM notices))
 )
 SELECT (SELECT COUNT(*) FROM moves
         WHERE moves.tenant_id NOT IN (SELECT closed.tenant_id FROM closed)
           AND moves.id NOT IN (SELECT granted.subscription_id FROM granted))::bigint AS moves,
        (SELECT COUNT(*) FROM notices
-        WHERE notices.tenant_id NOT IN (SELECT closed.tenant_id FROM closed))::bigint AS notices
+        WHERE notices.tenant_id NOT IN (SELECT closed.tenant_id FROM closed)
+          AND notices.id NOT IN (SELECT granted.subscription_id FROM granted))::bigint AS notices
 `
 
 type CountRepeatedFreeFallbackFailuresRow struct {
@@ -177,6 +206,23 @@ func (q *Queries) CountRepeatedFreeFallbackFailures(ctx context.Context) (CountR
 	var i CountRepeatedFreeFallbackFailuresRow
 	err := row.Scan(&i.Moves, &i.Notices)
 	return i, err
+}
+
+const getFreeFallbackTier = `-- name: GetFreeFallbackTier :one
+SELECT id::text AS id
+FROM purser.billing_tiers
+WHERE COALESCE(is_default_postpaid, false) AND COALESCE(is_active, true)
+  AND base_price = 0
+ORDER BY id
+LIMIT 1
+FOR SHARE
+`
+
+func (q *Queries) GetFreeFallbackTier(ctx context.Context) (string, error) {
+	row := q.db.QueryRowContext(ctx, getFreeFallbackTier)
+	var id string
+	err := row.Scan(&id)
+	return id, err
 }
 
 const getSubscriptionFreeFallback = `-- name: GetSubscriptionFreeFallback :one
@@ -324,7 +370,9 @@ SELECT subscription.tenant_id::text AS tenant_id
 FROM purser.tenant_subscriptions subscription
 WHERE free_fallback_at IS NOT NULL
   AND (free_fallback_moved_at IS NOT NULL OR free_fallback_notified_at IS NULL)
-  AND (free_fallback_notice_attempted_at IS NULL OR free_fallback_notice_attempted_at <= NOW() - INTERVAL '5 minutes')
+  AND NOT EXISTS (SELECT 1 FROM purser.subscription_operator_grants grant_row
+      WHERE grant_row.subscription_id = subscription.id)
+  AND (free_fallback_notice_attempted_at IS NULL OR free_fallback_notice_attempted_at <= NOW() - (LEAST(720, 5 * power(2, LEAST(free_fallback_notice_failures, 8))) * INTERVAL '1 minute'))
 ORDER BY free_fallback_notice_attempted_at ASC NULLS FIRST, free_fallback_at ASC, subscription.tenant_id ASC
 LIMIT 100
 `
@@ -358,7 +406,7 @@ SET status = 'past_due', updated_at = NOW()
 FROM purser.billing_tiers tier
 WHERE subscription.tenant_id = $1::text::uuid
   AND tier.id = subscription.tier_id
-  AND tier.tier_name <> 'free'
+  AND NOT COALESCE(tier.is_default_postpaid, false)
   AND subscription.billing_model = 'postpaid'
   AND subscription.status IN ('active', 'past_due')
 `
@@ -406,7 +454,7 @@ func (q *Queries) MoveSubscriptionToFreeFallback(ctx context.Context, arg MoveSu
 
 const recordFreeFallbackMoveFailure = `-- name: RecordFreeFallbackMoveFailure :exec
 UPDATE purser.tenant_subscriptions
-SET free_fallback_error = $1::text
+SET free_fallback_error = $1::text, free_fallback_failures = free_fallback_failures + 1
 WHERE tenant_id = $2::text::uuid
   AND free_fallback_attempted_at = $3::timestamptz
   AND free_fallback_moved_at IS NULL
@@ -568,7 +616,7 @@ SELECT EXISTS (
     JOIN purser.billing_tiers tier ON tier.id = subscription.tier_id
     JOIN purser.billing_invoices invoice ON invoice.tenant_id = subscription.tenant_id
     WHERE subscription.tenant_id = $1::text::uuid
-      AND tier.tier_name = 'free'
+      AND COALESCE(tier.is_default_postpaid, false) AND tier.base_price = 0
       AND invoice.document_kind = 'invoice'
       AND invoice.status IN ('pending', 'overdue', 'failed')
       AND invoice.amount > COALESCE((

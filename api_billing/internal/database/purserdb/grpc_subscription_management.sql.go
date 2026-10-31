@@ -286,7 +286,7 @@ func (q *Queries) GetTierByNameForOperatorAssignment(ctx context.Context, tierNa
 }
 
 const getTierForBillingChange = `-- name: GetTierForBillingChange :one
-SELECT tier_level, tier_name, is_default_prepaid, is_active
+SELECT tier_level, tier_name, is_default_prepaid, is_active, COALESCE(is_enterprise, false)::boolean AS is_enterprise
 FROM purser.billing_tiers
 WHERE id = $1::text::uuid
 `
@@ -296,6 +296,7 @@ type GetTierForBillingChangeRow struct {
 	TierName         string        `db:"tier_name" json:"tier_name"`
 	IsDefaultPrepaid sql.NullBool  `db:"is_default_prepaid" json:"is_default_prepaid"`
 	IsActive         sql.NullBool  `db:"is_active" json:"is_active"`
+	IsEnterprise     bool          `db:"is_enterprise" json:"is_enterprise"`
 }
 
 func (q *Queries) GetTierForBillingChange(ctx context.Context, tierID string) (GetTierForBillingChangeRow, error) {
@@ -306,6 +307,7 @@ func (q *Queries) GetTierForBillingChange(ctx context.Context, tierID string) (G
 		&i.TierName,
 		&i.IsDefaultPrepaid,
 		&i.IsActive,
+		&i.IsEnterprise,
 	)
 	return i, err
 }

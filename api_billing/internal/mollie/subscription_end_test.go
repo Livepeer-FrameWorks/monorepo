@@ -60,9 +60,6 @@ func TestMollieFallbackRetainsSettledTermAndPendingDebits(t *testing.T) {
 				}
 				return nil, fmt.Errorf("unexpected provider operation: %s %s", req.Method, req.URL.Path)
 			})
-			previous := http.DefaultTransport
-			http.DefaultTransport = http.DefaultClient.Transport
-			t.Cleanup(func() { http.DefaultTransport = previous })
 			got, err := c.EndSubscriptionForFallback(t.Context(), billing.SubscriptionEndRequest{CustomerID: "customer", SubscriptionID: "sub", PeriodEnd: anchor})
 			wantCancels := 1
 			if tc.status == "canceled" {
@@ -114,9 +111,6 @@ func TestMollieFallbackRecoversOnlyValidRenewalAuthority(t *testing.T) {
 				}
 				return nil, fmt.Errorf("unexpected %s %s", req.Method, req.URL.Path)
 			})
-			previous := http.DefaultTransport
-			http.DefaultTransport = http.DefaultClient.Transport
-			t.Cleanup(func() { http.DefaultTransport = previous })
 			got, err := c.EndSubscriptionForFallback(t.Context(), billing.SubscriptionEndRequest{AllowRecovery: true, CustomerID: "customer", SubscriptionID: "sub", PeriodEnd: now})
 			if err != nil || got.Recovered != valid || canceled == valid || !got.PaidUntil.After(now) {
 				t.Fatalf("outcome=%+v canceled=%v err=%v", got, canceled, err)
@@ -139,9 +133,6 @@ func TestMollieFallbackKeepsOnlyItsExactInitialPaidMonth(t *testing.T) {
 				}
 				return nil, fmt.Errorf("unexpected %s %s", req.Method, req.URL.Path)
 			})
-			previous := http.DefaultTransport
-			http.DefaultTransport = http.DefaultClient.Transport
-			t.Cleanup(func() { http.DefaultTransport = previous })
 			id := "unrelated"
 			if matched {
 				id = "initial"

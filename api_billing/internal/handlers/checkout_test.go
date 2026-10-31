@@ -295,6 +295,7 @@ func TestHandleSubscriptionCheckoutCompletedPersistsTierAndPaymentMethod(t *test
 	mock.ExpectQuery("CheckoutReceiptBound").WillReturnRows(sqlmock.NewRows([]string{"bound"}).AddRow(true))
 	mock.ExpectBegin()
 	expectProviderSubscriptionLock(mock, checkoutTenantID)
+	mock.ExpectQuery("HasPendingTierUpgrade").WillReturnRows(sqlmock.NewRows([]string{"pending"}).AddRow(false))
 	mock.ExpectExec(subscriptionCheckoutUpdatePattern()).
 		WithArgs("cus_123", "sub_456", "tier-pro", nil, nil, checkoutTenantID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
@@ -389,6 +390,7 @@ func TestHandleSubscriptionCheckoutCompletedStagesWhenUnpaid(t *testing.T) {
 
 	mock.ExpectBegin()
 	expectProviderSubscriptionLock(mock, checkoutTenantID)
+	mock.ExpectQuery("HasPendingTierUpgrade").WillReturnRows(sqlmock.NewRows([]string{"pending"}).AddRow(false))
 	mock.ExpectExec("StageTenantSubscriptionPendingStripe").WithArgs("cus_123", checkoutTenantID).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("LinkStripeIntentSubscription").WithArgs("sub_456", checkoutTenantID, "cs_test_session").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()

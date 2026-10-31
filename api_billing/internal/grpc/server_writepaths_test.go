@@ -9,12 +9,11 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
-
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	foghorncontrolpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -348,6 +347,7 @@ func expectPrepaidPhaseRead(mock sqlmock.Sqlmock, tenantID, model string) {
 func expectLockedPromotionSubscription(mock sqlmock.Sqlmock, tenantID, model, tierID string, paymentMethod, stripeSubscription, email, name, address any) {
 	expectProviderSubscriptionLock(mock, tenantID)
 	mock.ExpectQuery("GetSubscriptionOperatorGrant").WithArgs(tenantID).WillReturnError(sqlmockNoRows())
+	mock.ExpectQuery("HasPendingTierUpgrade").WillReturnRows(sqlmock.NewRows([]string{"pending"}).AddRow(false))
 	if address == nil {
 		address = []byte(`{}`)
 	}

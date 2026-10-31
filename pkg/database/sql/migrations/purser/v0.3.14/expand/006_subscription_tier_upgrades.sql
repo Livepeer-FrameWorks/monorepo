@@ -26,6 +26,6 @@ CREATE TABLE IF NOT EXISTS purser.subscription_tier_upgrades (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS uq_subscription_tier_upgrade_pending
     ON purser.subscription_tier_upgrades (tenant_id)
-    WHERE state IN ('requested','provider_applied');
+    WHERE state IN ('requested','provider_applied','pricing_applied');
 CREATE INDEX IF NOT EXISTS idx_subscription_tier_upgrades_tenant
-    ON purser.subscription_tier_upgrades (tenant_id,provider_subscription_id,requested_at DESC);
+    ON purser.subscription_tier_upgrades (tenant_id ASC, provider_subscription_id ASC, requested_at DESC);

@@ -166,10 +166,19 @@ func (q *Queries) CheckoutReceiptBound(ctx context.Context, arg CheckoutReceiptB
 }
 
 const completeMollieSubscriptionCheckout = `-- name: CompleteMollieSubscriptionCheckout :exec
+WITH activated AS (
+    UPDATE purser.payment_provider_intents
+    SET status = 'succeeded', succeeded_at = COALESCE(succeeded_at, NOW()),
+        activated_at = COALESCE(activated_at, NOW()), updated_at = NOW()
+    WHERE tenant_id = $1::text::uuid AND provider = 'mollie'
+      AND purpose = 'mollie_subscription_create'
+      AND provider_subscription_id = $2::text
+    RETURNING funding_intent_id
+)
 UPDATE purser.payment_provider_intents
-SET status = 'succeeded', succeeded_at = COALESCE(succeeded_at, NOW()), updated_at = NOW()
-WHERE tenant_id = $1::text::uuid AND provider = 'mollie'
-    AND purpose = 'mollie_subscription_create' AND provider_subscription_id = $2::text
+SET activated_at = COALESCE(activated_at, NOW()), updated_at = NOW()
+WHERE tenant_id = $1::text::uuid
+  AND id IN (SELECT funding_intent_id FROM activated)
 `
 
 type CompleteMollieSubscriptionCheckoutParams struct {
@@ -280,7 +289,8 @@ SET status = CASE WHEN status IN ('expired', 'cancelled', 'terminal_failed') THE
     recovery_outcome = $2::text,
     reconciled_references = $3::jsonb, updated_at = NOW()
     WHERE tenant_id = $1::text::uuid AND id = $4::text::uuid
-    AND status <> 'succeeded' AND EXISTS (SELECT 1 FROM locked)
+    AND (status <> 'succeeded' OR (purpose = 'mollie_first_payment' AND activated_at IS NULL))
+    AND EXISTS (SELECT 1 FROM locked)
     AND jsonb_build_object('session_id', provider_session_id, 'payment_id', provider_payment_id,
     'subscription_id', provider_subscription_id) = $3::jsonb
     RETURNING id
@@ -408,7 +418,7 @@ FROM (
     UNION ALL
     SELECT requested_at, 'tier_upgrade'::text
     FROM purser.subscription_tier_upgrades
-    WHERE tenant_id = $1::text::uuid AND state IN ('requested', 'provider_applied')
+    WHERE tenant_id = $1::text::uuid AND state IN ('requested', 'provider_applied', 'pricing_applied')
     UNION ALL
     SELECT free_fallback_at, 'free_fallback'::text
     FROM purser.tenant_subscriptions
@@ -439,7 +449,7 @@ SELECT id::text, tenant_id::text, provider, purpose, provider_customer_id, provi
     provider_payment_id, provider_subscription_id, status, COALESCE(expires_at,
     created_at+INTERVAL '24 hours') AS expires_at, attempt_count, checkout_completed_at,
     recovery_started_at, created_at, amount_cents, currency, expires_at AS provider_deadline, recovery_outcome,
-    provider_request, submission_state,
+    provider_request, submission_state, succeeded_at, activated_at, COALESCE(funding_intent_id::text, '')::text AS funding_intent_id, provider_mandate_id,
     COALESCE(reconciled_references = jsonb_build_object('session_id', provider_session_id, 'payment_id', provider_payment_id, 'subscription_id', provider_subscription_id), false)::boolean AS compensation_current
 FROM purser.payment_provider_intents
 WHERE tenant_id = $1::text::uuid AND id = $2::text::uuid
@@ -471,6 +481,10 @@ type GetProviderCheckoutReservationRow struct {
 	RecoveryOutcome        sql.NullString `db:"recovery_outcome" json:"recovery_outcome"`
 	ProviderRequest        []byte         `db:"provider_request" json:"provider_request"`
 	SubmissionState        string         `db:"submission_state" json:"submission_state"`
+	SucceededAt            sql.NullTime   `db:"succeeded_at" json:"succeeded_at"`
+	ActivatedAt            sql.NullTime   `db:"activated_at" json:"activated_at"`
+	FundingIntentID        string         `db:"funding_intent_id" json:"funding_intent_id"`
+	ProviderMandateID      sql.NullString `db:"provider_mandate_id" json:"provider_mandate_id"`
 	CompensationCurrent    bool           `db:"compensation_current" json:"compensation_current"`
 }
 
@@ -498,6 +512,10 @@ func (q *Queries) GetProviderCheckoutReservation(ctx context.Context, arg GetPro
 		&i.RecoveryOutcome,
 		&i.ProviderRequest,
 		&i.SubmissionState,
+		&i.SucceededAt,
+		&i.ActivatedAt,
+		&i.FundingIntentID,
+		&i.ProviderMandateID,
 		&i.CompensationCurrent,
 	)
 	return i, err
@@ -620,6 +638,99 @@ func (q *Queries) GetTenantStripeSubscriptionID(ctx context.Context, tenantID st
 	return stripe_subscription_id, err
 }
 
+const hasHistoricalMollieActivation = `-- name: HasHistoricalMollieActivation :one
+SELECT (
+    (SELECT COUNT(*) FROM purser.payment_provider_intents funding
+     WHERE funding.tenant_id = $1::text::uuid AND funding.provider = 'mollie'
+       AND funding.purpose = 'mollie_first_payment'
+       AND (funding.status = 'succeeded' OR funding.succeeded_at IS NOT NULL)
+       AND funding.provider_customer_id = $2::text) = 1
+    AND (
+        EXISTS (SELECT 1 FROM purser.tenant_subscriptions subscription
+                WHERE subscription.tenant_id = $1::text::uuid
+                  AND subscription.mollie_subscription_id = $3::text)
+        OR EXISTS (SELECT 1 FROM purser.payment_provider_intents native
+                   WHERE native.tenant_id = $1::text::uuid AND native.provider = 'mollie'
+                     AND native.purpose = 'mollie_subscription_create'
+                     AND native.provider_subscription_id = $3::text
+                     AND (native.activated_at IS NOT NULL OR native.succeeded_at IS NOT NULL))
+        OR EXISTS (SELECT 1 FROM purser.mollie_payment_observations observation
+                   JOIN purser.billing_invoices invoice ON invoice.id = observation.invoice_id
+                     AND invoice.tenant_id = observation.tenant_id
+                   WHERE observation.tenant_id = $1::text::uuid
+                     AND observation.mollie_subscription_id = $3::text
+                     AND observation.resolution = 'attached' AND observation.resolved_at IS NOT NULL
+                     AND invoice.status NOT IN ('draft', 'manual_review'))
+    )
+)::boolean AS activated
+`
+
+type HasHistoricalMollieActivationParams struct {
+	TenantID       string `db:"tenant_id" json:"tenant_id"`
+	CustomerID     string `db:"customer_id" json:"customer_id"`
+	SubscriptionID string `db:"subscription_id" json:"subscription_id"`
+}
+
+// A provider-created subscription is not evidence of delivered local service.
+// Without exact funding links, only a sole initial receipt can be associated.
+func (q *Queries) HasHistoricalMollieActivation(ctx context.Context, arg HasHistoricalMollieActivationParams) (bool, error) {
+	row := q.db.QueryRowContext(ctx, hasHistoricalMollieActivation, arg.TenantID, arg.CustomerID, arg.SubscriptionID)
+	var activated bool
+	err := row.Scan(&activated)
+	return activated, err
+}
+
+const hasPendingMollieFundingCheckout = `-- name: HasPendingMollieFundingCheckout :one
+SELECT EXISTS (
+    SELECT 1 FROM purser.payment_provider_intents native
+    WHERE native.tenant_id = $1::text::uuid
+      AND native.funding_intent_id = $2::text::uuid
+      AND native.activated_at IS NULL
+      AND (native.status IN ('pending', 'provider_open', 'provider_call_failed')
+        OR (native.recovery_started_at IS NOT NULL AND NOT COALESCE(
+            native.reconciled_references = jsonb_build_object('session_id',native.provider_session_id,
+                'payment_id',native.provider_payment_id,'subscription_id',native.provider_subscription_id),false)))
+)::boolean AS pending
+`
+
+type HasPendingMollieFundingCheckoutParams struct {
+	TenantID  string `db:"tenant_id" json:"tenant_id"`
+	FundingID string `db:"funding_id" json:"funding_id"`
+}
+
+func (q *Queries) HasPendingMollieFundingCheckout(ctx context.Context, arg HasPendingMollieFundingCheckoutParams) (bool, error) {
+	row := q.db.QueryRowContext(ctx, hasPendingMollieFundingCheckout, arg.TenantID, arg.FundingID)
+	var pending bool
+	err := row.Scan(&pending)
+	return pending, err
+}
+
+const linkMollieCheckoutFunding = `-- name: LinkMollieCheckoutFunding :exec
+UPDATE purser.payment_provider_intents native
+SET funding_intent_id = (
+    SELECT funding.id FROM purser.payment_provider_intents funding
+    WHERE funding.tenant_id = native.tenant_id AND funding.provider = 'mollie'
+      AND funding.purpose = 'mollie_first_payment'
+      AND funding.provider_mandate_id = $1::text
+      AND funding.provider_customer_id = native.provider_customer_id
+    ORDER BY funding.created_at DESC, funding.id DESC LIMIT 1
+), updated_at = NOW()
+WHERE native.tenant_id = $2::text::uuid
+  AND native.id = $3::text::uuid
+  AND native.funding_intent_id IS NULL
+`
+
+type LinkMollieCheckoutFundingParams struct {
+	MandateID string `db:"mandate_id" json:"mandate_id"`
+	TenantID  string `db:"tenant_id" json:"tenant_id"`
+	IntentID  string `db:"intent_id" json:"intent_id"`
+}
+
+func (q *Queries) LinkMollieCheckoutFunding(ctx context.Context, arg LinkMollieCheckoutFundingParams) error {
+	_, err := q.db.ExecContext(ctx, linkMollieCheckoutFunding, arg.MandateID, arg.TenantID, arg.IntentID)
+	return err
+}
+
 const linkProviderIntentCustomer = `-- name: LinkProviderIntentCustomer :exec
 UPDATE purser.payment_provider_intents
 SET provider_customer_id = $1, updated_at = NOW()
@@ -716,14 +827,32 @@ func (q *Queries) MarkCheckoutCompleted(ctx context.Context, arg MarkCheckoutCom
 	return err
 }
 
+const markMollieFirstPaymentActivated = `-- name: MarkMollieFirstPaymentActivated :exec
+UPDATE purser.payment_provider_intents
+SET activated_at = COALESCE(activated_at, NOW()), updated_at = NOW()
+WHERE tenant_id = $1::text::uuid AND id = $2::text::uuid
+  AND provider = 'mollie' AND purpose = 'mollie_first_payment'
+`
+
+type MarkMollieFirstPaymentActivatedParams struct {
+	TenantID string `db:"tenant_id" json:"tenant_id"`
+	IntentID string `db:"intent_id" json:"intent_id"`
+}
+
+func (q *Queries) MarkMollieFirstPaymentActivated(ctx context.Context, arg MarkMollieFirstPaymentActivatedParams) error {
+	_, err := q.db.ExecContext(ctx, markMollieFirstPaymentActivated, arg.TenantID, arg.IntentID)
+	return err
+}
+
 const requeueExpiredCheckoutReservation = `-- name: RequeueExpiredCheckoutReservation :exec
 UPDATE purser.provider_webhook_inbox SET  attempts = CASE WHEN status = 'processed' THEN 0 ELSE attempts END,
     wait_attempts = CASE WHEN status = 'processed' THEN 0 ELSE wait_attempts END,
     unresolved_since = CASE WHEN status = 'processed' THEN NULL ELSE unresolved_since END,
     last_error = CASE WHEN status = 'processed' THEN NULL ELSE last_error END,
     processed_at = NULL,
-status = 'pending', next_attempt_at = NOW(), updated_at = NOW()
-WHERE provider = 'checkout_recovery' AND event_key = 'checkout-expiry:'||$1::text AND status = 'processed'
+status = CASE WHEN status = 'processing' THEN 'processing' ELSE 'pending' END,
+    wake_requested = TRUE, next_attempt_at = NOW(), updated_at = NOW()
+WHERE provider = 'checkout_recovery' AND event_key = 'checkout-expiry:'||$1::text AND status IN ('pending', 'failed', 'processing', 'processed')
     AND EXISTS(SELECT 1 FROM purser.payment_provider_intents
     WHERE tenant_id = $2::text::uuid AND id = $1::text::uuid)
 `
@@ -826,7 +955,8 @@ SET attempts = CASE WHEN status = 'processed' THEN 0 ELSE attempts END,
     unresolved_since = CASE WHEN status = 'processed' THEN NULL ELSE unresolved_since END,
     last_error = CASE WHEN status = 'processed' THEN NULL ELSE last_error END,
     processed_at = NULL,
-    status = 'pending', claimed_at = NULL, lease_token = NULL,
+    status = CASE WHEN status = 'processing' THEN 'processing' ELSE 'pending' END,
+    wake_requested = TRUE,
     next_attempt_at = LEAST(next_attempt_at, NOW()), updated_at = NOW()
 WHERE provider = 'checkout_recovery'
   AND event_key IN (
@@ -864,7 +994,8 @@ SET attempts = CASE WHEN status = 'processed' THEN 0 ELSE attempts END,
     unresolved_since = CASE WHEN status = 'processed' THEN NULL ELSE unresolved_since END,
     last_error = CASE WHEN status = 'processed' THEN NULL ELSE last_error END,
     processed_at = NULL,
-    status = 'pending', claimed_at = NULL, lease_token = NULL,
+    status = CASE WHEN status = 'processing' THEN 'processing' ELSE 'pending' END,
+    wake_requested = TRUE,
     next_attempt_at = LEAST(next_attempt_at, NOW()), updated_at = NOW()
 WHERE provider = 'checkout_recovery'
   AND event_key IN (
@@ -902,7 +1033,8 @@ SET attempts = CASE WHEN status = 'processed' THEN 0 ELSE attempts END,
     unresolved_since = CASE WHEN status = 'processed' THEN NULL ELSE unresolved_since END,
     last_error = CASE WHEN status = 'processed' THEN NULL ELSE last_error END,
     processed_at = NULL,
-    status = 'pending', claimed_at = NULL, lease_token = NULL,
+    status = CASE WHEN status = 'processing' THEN 'processing' ELSE 'pending' END,
+    wake_requested = TRUE,
     next_attempt_at = LEAST(next_attempt_at, NOW()), updated_at = NOW()
 WHERE provider = 'checkout_recovery'
   AND event_key IN (
@@ -950,7 +1082,8 @@ func (q *Queries) StageStripeCheckoutTier(ctx context.Context, arg StageStripeCh
 const startCheckoutCompensation = `-- name: StartCheckoutCompensation :exec
 UPDATE purser.payment_provider_intents
 SET recovery_started_at = COALESCE(recovery_started_at, NOW()), updated_at = NOW()
-WHERE tenant_id = $1::text::uuid AND id = $2::text::uuid AND status<>'succeeded'
+WHERE tenant_id = $1::text::uuid AND id = $2::text::uuid
+    AND (status <> 'succeeded' OR (purpose = 'mollie_first_payment' AND activated_at IS NULL))
 `
 
 type StartCheckoutCompensationParams struct {

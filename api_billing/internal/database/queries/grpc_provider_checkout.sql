@@ -70,7 +70,8 @@ SET attempts = CASE WHEN status = 'processed' THEN 0 ELSE attempts END,
     unresolved_since = CASE WHEN status = 'processed' THEN NULL ELSE unresolved_since END,
     last_error = CASE WHEN status = 'processed' THEN NULL ELSE last_error END,
     processed_at = NULL,
-    status = 'pending', claimed_at = NULL, lease_token = NULL,
+    status = CASE WHEN status = 'processing' THEN 'processing' ELSE 'pending' END,
+    wake_requested = TRUE,
     next_attempt_at = LEAST(next_attempt_at, NOW()), updated_at = NOW()
 WHERE provider = 'checkout_recovery'
   AND event_key IN (
@@ -194,7 +195,8 @@ SET attempts = CASE WHEN status = 'processed' THEN 0 ELSE attempts END,
     unresolved_since = CASE WHEN status = 'processed' THEN NULL ELSE unresolved_since END,
     last_error = CASE WHEN status = 'processed' THEN NULL ELSE last_error END,
     processed_at = NULL,
-    status = 'pending', claimed_at = NULL, lease_token = NULL,
+    status = CASE WHEN status = 'processing' THEN 'processing' ELSE 'pending' END,
+    wake_requested = TRUE,
     next_attempt_at = LEAST(next_attempt_at, NOW()), updated_at = NOW()
 WHERE provider = 'checkout_recovery'
   AND event_key IN (
@@ -264,7 +266,8 @@ SET attempts = CASE WHEN status = 'processed' THEN 0 ELSE attempts END,
     unresolved_since = CASE WHEN status = 'processed' THEN NULL ELSE unresolved_since END,
     last_error = CASE WHEN status = 'processed' THEN NULL ELSE last_error END,
     processed_at = NULL,
-    status = 'pending', claimed_at = NULL, lease_token = NULL,
+    status = CASE WHEN status = 'processing' THEN 'processing' ELSE 'pending' END,
+    wake_requested = TRUE,
     next_attempt_at = LEAST(next_attempt_at, NOW()), updated_at = NOW()
 WHERE provider = 'checkout_recovery'
   AND event_key IN (
@@ -321,10 +324,33 @@ WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
 FOR UPDATE;
 
 -- name: CompleteMollieSubscriptionCheckout :exec
+WITH activated AS (
+    UPDATE purser.payment_provider_intents
+    SET status = 'succeeded', succeeded_at = COALESCE(succeeded_at, NOW()),
+        activated_at = COALESCE(activated_at, NOW()), updated_at = NOW()
+    WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid AND provider = 'mollie'
+      AND purpose = 'mollie_subscription_create'
+      AND provider_subscription_id = sqlc.arg(subscription_id)::text
+    RETURNING funding_intent_id
+)
 UPDATE purser.payment_provider_intents
-SET status = 'succeeded', succeeded_at = COALESCE(succeeded_at, NOW()), updated_at = NOW()
-WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid AND provider = 'mollie'
-    AND purpose = 'mollie_subscription_create' AND provider_subscription_id = sqlc.arg(subscription_id)::text;
+SET activated_at = COALESCE(activated_at, NOW()), updated_at = NOW()
+WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
+  AND id IN (SELECT funding_intent_id FROM activated);
+
+-- name: LinkMollieCheckoutFunding :exec
+UPDATE purser.payment_provider_intents native
+SET funding_intent_id = (
+    SELECT funding.id FROM purser.payment_provider_intents funding
+    WHERE funding.tenant_id = native.tenant_id AND funding.provider = 'mollie'
+      AND funding.purpose = 'mollie_first_payment'
+      AND funding.provider_mandate_id = sqlc.arg(mandate_id)::text
+      AND funding.provider_customer_id = native.provider_customer_id
+    ORDER BY funding.created_at DESC, funding.id DESC LIMIT 1
+), updated_at = NOW()
+WHERE native.tenant_id = sqlc.arg(tenant_id)::text::uuid
+  AND native.id = sqlc.arg(intent_id)::text::uuid
+  AND native.funding_intent_id IS NULL;
 
 -- name: CheckoutAlreadySettled :one
 SELECT EXISTS (
@@ -372,7 +398,7 @@ SELECT id::text, tenant_id::text, provider, purpose, provider_customer_id, provi
     provider_payment_id, provider_subscription_id, status, COALESCE(expires_at,
     created_at+INTERVAL '24 hours') AS expires_at, attempt_count, checkout_completed_at,
     recovery_started_at, created_at, amount_cents, currency, expires_at AS provider_deadline, recovery_outcome,
-    provider_request, submission_state,
+    provider_request, submission_state, succeeded_at, activated_at, COALESCE(funding_intent_id::text, '')::text AS funding_intent_id, provider_mandate_id,
     COALESCE(reconciled_references = jsonb_build_object('session_id', provider_session_id, 'payment_id', provider_payment_id, 'subscription_id', provider_subscription_id), false)::boolean AS compensation_current
 FROM purser.payment_provider_intents
 WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid AND id = sqlc.arg(intent_id)::text::uuid;
@@ -417,8 +443,9 @@ UPDATE purser.provider_webhook_inbox SET  attempts = CASE WHEN status = 'process
     unresolved_since = CASE WHEN status = 'processed' THEN NULL ELSE unresolved_since END,
     last_error = CASE WHEN status = 'processed' THEN NULL ELSE last_error END,
     processed_at = NULL,
-status = 'pending', next_attempt_at = NOW(), updated_at = NOW()
-WHERE provider = 'checkout_recovery' AND event_key = 'checkout-expiry:'||sqlc.arg(intent_id)::text AND status = 'processed'
+status = CASE WHEN status = 'processing' THEN 'processing' ELSE 'pending' END,
+    wake_requested = TRUE, next_attempt_at = NOW(), updated_at = NOW()
+WHERE provider = 'checkout_recovery' AND event_key = 'checkout-expiry:'||sqlc.arg(intent_id)::text AND status IN ('pending', 'failed', 'processing', 'processed')
     AND EXISTS(SELECT 1 FROM purser.payment_provider_intents
     WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid AND id = sqlc.arg(intent_id)::text::uuid);
 
@@ -442,7 +469,8 @@ WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid AND id = sqlc.arg(intent_id)::
 -- name: StartCheckoutCompensation :exec
 UPDATE purser.payment_provider_intents
 SET recovery_started_at = COALESCE(recovery_started_at, NOW()), updated_at = NOW()
-WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid AND id = sqlc.arg(intent_id)::text::uuid AND status<>'succeeded';
+WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid AND id = sqlc.arg(intent_id)::text::uuid
+    AND (status <> 'succeeded' OR (purpose = 'mollie_first_payment' AND activated_at IS NULL));
 
 -- name: GetPendingProviderCheckout :one
 SELECT COUNT(*)>0 AS pending,
@@ -462,7 +490,7 @@ FROM (
     UNION ALL
     SELECT requested_at, 'tier_upgrade'::text
     FROM purser.subscription_tier_upgrades
-    WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid AND state IN ('requested', 'provider_applied')
+    WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid AND state IN ('requested', 'provider_applied', 'pricing_applied')
     UNION ALL
     SELECT free_fallback_at, 'free_fallback'::text
     FROM purser.tenant_subscriptions
@@ -503,7 +531,8 @@ SET status = CASE WHEN status IN ('expired', 'cancelled', 'terminal_failed') THE
     recovery_outcome = sqlc.arg(outcome)::text,
     reconciled_references = sqlc.arg(expected_references)::jsonb, updated_at = NOW()
     WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid AND id = sqlc.arg(intent_id)::text::uuid
-    AND status <> 'succeeded' AND EXISTS (SELECT 1 FROM locked)
+    AND (status <> 'succeeded' OR (purpose = 'mollie_first_payment' AND activated_at IS NULL))
+    AND EXISTS (SELECT 1 FROM locked)
     AND jsonb_build_object('session_id', provider_session_id, 'payment_id', provider_payment_id,
     'subscription_id', provider_subscription_id) = sqlc.arg(expected_references)::jsonb
     RETURNING id
@@ -516,3 +545,49 @@ SET status = CASE WHEN status IN ('expired', 'cancelled', 'terminal_failed') THE
     RETURNING id
 )
 SELECT COUNT(*)::bigint FROM finished;
+
+-- name: HasPendingMollieFundingCheckout :one
+SELECT EXISTS (
+    SELECT 1 FROM purser.payment_provider_intents native
+    WHERE native.tenant_id = sqlc.arg(tenant_id)::text::uuid
+      AND native.funding_intent_id = sqlc.arg(funding_id)::text::uuid
+      AND native.activated_at IS NULL
+      AND (native.status IN ('pending', 'provider_open', 'provider_call_failed')
+        OR (native.recovery_started_at IS NOT NULL AND NOT COALESCE(
+            native.reconciled_references = jsonb_build_object('session_id',native.provider_session_id,
+                'payment_id',native.provider_payment_id,'subscription_id',native.provider_subscription_id),false)))
+)::boolean AS pending;
+
+-- name: MarkMollieFirstPaymentActivated :exec
+UPDATE purser.payment_provider_intents
+SET activated_at = COALESCE(activated_at, NOW()), updated_at = NOW()
+WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid AND id = sqlc.arg(intent_id)::text::uuid
+  AND provider = 'mollie' AND purpose = 'mollie_first_payment';
+
+-- name: HasHistoricalMollieActivation :one
+-- A provider-created subscription is not evidence of delivered local service.
+-- Without exact funding links, only a sole initial receipt can be associated.
+SELECT (
+    (SELECT COUNT(*) FROM purser.payment_provider_intents funding
+     WHERE funding.tenant_id = sqlc.arg(tenant_id)::text::uuid AND funding.provider = 'mollie'
+       AND funding.purpose = 'mollie_first_payment'
+       AND (funding.status = 'succeeded' OR funding.succeeded_at IS NOT NULL)
+       AND funding.provider_customer_id = sqlc.arg(customer_id)::text) = 1
+    AND (
+        EXISTS (SELECT 1 FROM purser.tenant_subscriptions subscription
+                WHERE subscription.tenant_id = sqlc.arg(tenant_id)::text::uuid
+                  AND subscription.mollie_subscription_id = sqlc.arg(subscription_id)::text)
+        OR EXISTS (SELECT 1 FROM purser.payment_provider_intents native
+                   WHERE native.tenant_id = sqlc.arg(tenant_id)::text::uuid AND native.provider = 'mollie'
+                     AND native.purpose = 'mollie_subscription_create'
+                     AND native.provider_subscription_id = sqlc.arg(subscription_id)::text
+                     AND (native.activated_at IS NOT NULL OR native.succeeded_at IS NOT NULL))
+        OR EXISTS (SELECT 1 FROM purser.mollie_payment_observations observation
+                   JOIN purser.billing_invoices invoice ON invoice.id = observation.invoice_id
+                     AND invoice.tenant_id = observation.tenant_id
+                   WHERE observation.tenant_id = sqlc.arg(tenant_id)::text::uuid
+                     AND observation.mollie_subscription_id = sqlc.arg(subscription_id)::text
+                     AND observation.resolution = 'attached' AND observation.resolved_at IS NOT NULL
+                     AND invoice.status NOT IN ('draft', 'manual_review'))
+    )
+)::boolean AS activated;

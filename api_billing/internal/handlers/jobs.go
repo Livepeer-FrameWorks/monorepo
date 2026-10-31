@@ -16,11 +16,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/shopspring/decimal"
-	"github.com/sirupsen/logrus"
-
 	"frameworks/api_billing/internal/appconfig"
 	billingpkg "frameworks/api_billing/internal/billing"
 	"frameworks/api_billing/internal/database/purserdb"
@@ -30,6 +25,7 @@ import (
 	"frameworks/api_billing/internal/rating"
 	billingstripe "frameworks/api_billing/internal/stripe"
 	"frameworks/api_billing/internal/subscriptions"
+
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	decklog "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
 	periscope "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/periscope"
@@ -42,6 +38,10 @@ import (
 	foghorncontrolpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/restream"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/topology"
+	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/shopspring/decimal"
+	"github.com/sirupsen/logrus"
 )
 
 type canonicalUsageDelta struct {
@@ -1737,7 +1737,7 @@ func (jm *JobManager) suspendTenantForBalance(ctx context.Context, tenantID stri
 			defer cancel()
 			resp, err := jm.commodoreClient.TerminateTenantStreams(terminateCtx, tenantID, "insufficient_balance")
 			if err != nil {
-				jm.logger.WithError(err).WithFields(logging.Fields{"tenant_id": tenantID, "streams_terminated": resp.GetStreamsTerminated(), "sessions_terminated": resp.GetSessionsTerminated(), "stream_names": resp.GetStreamNames()}).Error("Tenant suspension stream termination failed on some nodes")
+				jm.logger.WithError(err).WithFields(logging.Fields{"tenant_id": tenantID, "streams_terminated": resp.GetStreamsTerminated(), "sessions_terminated": resp.GetSessionsTerminated(), "stream_names": resp.GetStreamNames()}).Warn("Tenant suspension stream termination incomplete; durable retry remains queued")
 			} else {
 				jm.logger.WithFields(logging.Fields{
 					"tenant_id":           tenantID,
@@ -2595,6 +2595,11 @@ func (jm *JobManager) chargeMollieOverage(ctx context.Context, tenantID, invoice
 	})
 	if err != nil {
 		mandateRevoked := isMollieMandateRevokedError(err)
+		if mandateRevoked {
+			if _, graceErr := subscriptions.RecordMollieMandateRevoked(ctx, jm.db, tenantID, time.Now()); graceErr != nil {
+				return fmt.Errorf("record collector loss and payment grace: %w", graceErr)
+			}
+		}
 		attemptStatus := "provider_call_failed"
 		nextRetry := sql.NullTime{Time: time.Now().Add(1 * time.Hour), Valid: true}
 		if mandateRevoked {
@@ -2618,16 +2623,7 @@ func (jm *JobManager) chargeMollieOverage(ctx context.Context, tenantID, invoice
 				jm.logger.WithError(markErr).WithField("payment_id", paymentID).Warn("mark Mollie overage payment failed")
 			}
 		}
-		if mandateRevoked {
-			// Mark all valid mandates for this tenant as revoked so the
-			// next pass picks up the customer-action gate.
-			if mandateErr := queries.RevokeValidMollieMandates(ctx, tenantID); mandateErr != nil {
-				jm.logger.WithError(mandateErr).WithField("tenant_id", tenantID).Warn("mark mollie mandate revoked")
-			}
-			if _, graceErr := subscriptions.StartPaymentFailureGrace(ctx, jm.db, tenantID, time.Now()); graceErr != nil {
-				return fmt.Errorf("start payment failure grace: %w", graceErr)
-			}
-		}
+
 		intentStatus := "provider_call_failed"
 		if mandateRevoked || providerCallCount >= maxProviderPaymentAttempts {
 			intentStatus = "terminal_failed"

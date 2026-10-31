@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"frameworks/api_billing/internal/database/purserdb"
+
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/outbox"
 	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
@@ -16,6 +17,7 @@ import (
 )
 
 func TestHistoricalMollieSubscriptionCheckoutSettlesWithoutRefund_RealPG(t *testing.T) {
+	t.Run("delivered Stripe receipt", assertHistoricalStripeCheckoutRetained)
 	db := startProviderReservationDatabase(t)
 	now := time.Now().UTC()
 	tenant := newPhaseTenant(t, db, "postpaid", now.Add(-time.Hour), now.AddDate(0, 1, 0), 0)
@@ -30,6 +32,9 @@ func TestHistoricalMollieSubscriptionCheckoutSettlesWithoutRefund_RealPG(t *test
 		t.Fatal(err)
 	}
 	fixture.route("GET", "/v2/customers/customer/subscriptions/historical-subscription", func(recordedProviderRequest) (int, any) {
+		return 200, map[string]any{"id": "historical-subscription", "status": "active"}
+	})
+	fixture.route("DELETE", "/v2/customers/customer/subscriptions/historical-subscription", func(recordedProviderRequest) (int, any) {
 		return 200, map[string]any{"id": "historical-subscription", "status": "canceled"}
 	})
 	fixture.route("GET", "/v2/customers/customer/subscriptions/historical-subscription/payments", func(recordedProviderRequest) (int, any) {
@@ -46,13 +51,18 @@ func TestHistoricalMollieSubscriptionCheckoutSettlesWithoutRefund_RealPG(t *test
 	worker := &outbox.Worker[providerWebhookPayload]{Config: providerWebhookWorkerConfig(), Store: &providerWebhookInboxStore{db: db}, Dispatcher: &providerWebhookDispatcher{service: tenant.svc}, Logger: tenant.jobs.logger}
 	worker.ProcessBatch(t.Context())
 	row, err := purserdb.New(db).GetProviderCheckoutReservation(t.Context(), purserdb.GetProviderCheckoutReservationParams{TenantID: tenant.id, IntentID: id})
-	if err != nil || row.Status != "succeeded" {
+	if err != nil || !row.CompensationCurrent {
 		t.Fatalf("bound historical subscription left open: status=%s err=%v", row.Status, err)
+	}
+	if len(fixture.matching("DELETE", "/v2/customers/customer/subscriptions/historical-subscription")) != 1 {
+		t.Fatal("historical orphan subscription was not cancelled")
 	}
 	fixture.mu.Lock()
 	defer fixture.mu.Unlock()
-	if len(fixture.requests) != 0 {
-		t.Fatalf("historical recurring service reached provider compensation: %v", fixture.requests)
+	for _, request := range fixture.requests {
+		if request.path != "/v2/customers/customer/subscriptions/historical-subscription" {
+			t.Fatalf("historical service reached payment compensation: %+v", request)
+		}
 	}
 }
 
@@ -141,11 +151,15 @@ func TestDefiniteCheckoutRejectionReleasesOnlyUnboundIntent_RealPG(t *testing.T)
 
 type suspensionRetryClient struct {
 	mockCommodoreClient
-	down bool
+	down   bool
+	onStop func()
 }
 
 func (c *suspensionRetryClient) TerminateTenantStreams(context.Context, string, string) (*foghornpb.TerminateTenantStreamsResponse, error) {
 	c.terminations++
+	if c.onStop != nil {
+		c.onStop()
+	}
 	if c.down {
 		return nil, grpcutil.PendingStreamStop(&foghornpb.TerminateTenantStreamsResponse{StreamsTerminated: 1})
 	}
@@ -153,6 +167,25 @@ func (c *suspensionRetryClient) TerminateTenantStreams(context.Context, string, 
 }
 
 func TestSuspensionStopRetriesAndRespectsResumption_RealPG(t *testing.T) {
+	t.Run("fanout holds no subscription lock", func(t *testing.T) {
+		db := startProviderReservationDatabase(t)
+		now := time.Now().UTC()
+		tenant := newPhaseTenant(t, db, "prepaid", now, now.AddDate(0, 1, 0), 0)
+		if _, err := db.Exec(`UPDATE purser.tenant_subscriptions SET status='suspended' WHERE tenant_id=$1`, tenant.id); err != nil {
+			t.Fatal(err)
+		}
+		client := &suspensionRetryClient{onStop: func() {
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+			defer cancel()
+			if _, err := db.ExecContext(ctx, `UPDATE purser.tenant_subscriptions SET billing_name='Concurrent billing update' WHERE tenant_id=$1`, tenant.id); err != nil {
+				t.Fatalf("fanout kept the subscription locked: %v", err)
+			}
+		}}
+		tenant.jobs.commodoreClient = client
+		if err := tenant.jobs.stopSuspendedTenantStreams(t.Context(), tenant.id); err != nil || client.terminations != 1 {
+			t.Fatalf("stop calls=%d err=%v", client.terminations, err)
+		}
+	})
 	for _, resume := range []bool{false, true} {
 		t.Run(map[bool]string{false: "recover cell", true: "resume before retry"}[resume], func(t *testing.T) {
 			db := startProviderReservationDatabase(t)
@@ -197,5 +230,36 @@ func TestSuspensionStopRetriesAndRespectsResumption_RealPG(t *testing.T) {
 				t.Fatalf("termination calls=%d want %d", client.terminations, want)
 			}
 		})
+	}
+}
+
+func assertHistoricalStripeCheckoutRetained(t *testing.T) {
+	db := startProviderReservationDatabase(t)
+	now := time.Now().UTC()
+	tenant := newPhaseTenant(t, db, "postpaid", now.Add(-time.Hour), now.AddDate(0, 1, 0), 0)
+	fixture, client := installStripeFixture(t)
+	tenant.svc.stripeClient = client
+	id := uuid.NewString()
+	if _, err := db.Exec(`INSERT INTO purser.payment_provider_intents(id,tenant_id,provider,purpose,status,currency,idempotency_key,provider_customer_id,provider_subscription_id,succeeded_at,created_at) VALUES($1::uuid,$2,'stripe','tenant_subscription_checkout','provider_open','EUR',$1::text,'customer','historical',NOW()-INTERVAL '60 days',NOW()-INTERVAL '90 days')`, id, tenant.id); err != nil {
+		t.Fatal(err)
+	}
+	fixture.route("GET", "/v1/subscriptions/historical", func(recordedProviderRequest) (int, any) {
+		return 200, map[string]any{"id": "historical", "status": "active"}
+	})
+	fixture.route("DELETE", "/v1/subscriptions/historical", func(recordedProviderRequest) (int, any) {
+		return 200, map[string]any{"id": "historical", "status": "canceled"}
+	})
+	if err := tenant.svc.expireCheckoutReservation(t.Context(), checkoutReservationExpiry{TenantID: tenant.id, IntentID: id, Force: true}); err != nil {
+		t.Fatal(err)
+	}
+	if len(fixture.matching("DELETE", "/v1/subscriptions/historical")) != 1 {
+		t.Fatal("historical Stripe renewal was left charging")
+	}
+	fixture.mu.Lock()
+	defer fixture.mu.Unlock()
+	for _, request := range fixture.requests {
+		if request.path != "/v1/subscriptions/historical" {
+			t.Fatalf("delivered Stripe service reached compensation: %+v", request)
+		}
 	}
 }
