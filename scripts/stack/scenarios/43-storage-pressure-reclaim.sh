@@ -139,9 +139,9 @@ log "pressure: the cleanup pass"
 if [ -n "$(dvr_dir)" ]; then
   T2=$(utc_now)
   cap_at 92 || { fail "cap $EDGE_SERVICE at 92% usage"; finish; }
-  cleanup_pass() { pass_logged "$T2" "Cleanup completed" || pass_logged "$T2" "No cleanup candidates found despite high storage usage"; }
-  eventually 420 "the cleanup monitor ran a cleanup pass" cleanup_pass
 fi
+cleanup_pass() { pass_logged "${T2:-$T1}" "Cleanup completed" || pass_logged "${T2:-$T1}" "No cleanup candidates found despite high storage usage"; }
+eventually 420 "the cleanup monitor ran a cleanup pass" cleanup_pass
 
 log "invariants"
 blocks_left=$(upload_blocks)

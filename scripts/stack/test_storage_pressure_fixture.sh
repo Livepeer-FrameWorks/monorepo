@@ -44,7 +44,8 @@ for path in sys.argv[3:]:
 PYTOUCH
 chmod +x "$work/bin/touch"
 export PATH="$work/bin:$PATH"
-as_helmsman() { bash -c "$1"; }
+# docker compose exec -T forwards its stdin to the container, drained or not.
+as_helmsman() { cat >/dev/null; bash -c "$1"; }
 age_synced_pressure_fixture_cache
 python3 - "$STORE" "$OLD" <<'PY'
 import os,sys
