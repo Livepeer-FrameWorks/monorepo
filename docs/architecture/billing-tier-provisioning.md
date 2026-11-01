@@ -531,14 +531,19 @@ work again, so its acknowledgement cannot erase the new binding.
 
 After upgrading, run `frameworks admin billing recovery list` and page through
 any remaining results using the reported `--offset`. Use `--tenant-id TENANT`
-to inspect one customer. Paid first payments without mandate or activation
-ownership appear as `succeeded/delivery_review`, with their reservation ID,
-provider payment ID, amount and currency. They have no automatic next attempt.
+to inspect one customer. The inbox automatically reviews historical paid first
+payments without mandate or activation ownership. It reads Mollie's history and
+checks local activation evidence, then records proven delivery or marks the
+receipt ambiguous. This pass never cancels subscriptions or refunds payments.
+Provider or database failures retry with the inbox's backoff and alerting.
 
-`delivery_review` means delivery has not been established locally. It does not
-mean the customer received no service: historical delivered payments can also
-lack that binding. Compare the listed payment with Mollie's records and the
-tenant's activation/history before asking the customer to pay again.
+Proven delivered payments leave the inventory. Remaining payments appear as
+`succeeded/delivery_review`, with their reservation ID, provider payment ID,
+amount and currency. They have no automatic next attempt after review finishes.
+Pending delivery checks appear once as queued work. An unresolved binding does
+not prove the customer received no service: compare the listed payment with
+Mollie's records and the tenant's activation/history before asking them to pay
+again.
 
 Use `frameworks admin billing recovery checkout --tenant-id TENANT
 --reservation-id RESERVATION --reason "Unactivated payment across rollout"`.

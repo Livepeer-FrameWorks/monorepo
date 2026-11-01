@@ -203,7 +203,7 @@ type Querier interface {
 	EnqueueSuspendedTenantStop(ctx context.Context, tenantID string) error
 	EnqueueTenantBillingClosure(ctx context.Context, tenantID string) error
 	EnqueueTierUpgrade(ctx context.Context, arg EnqueueTierUpgradeParams) error
-	// Service-wide recovery catches receipts whose provider response preceded this process.
+	// Service-wide discovery owns crash recovery and read-only historical delivery review.
 	EnqueueUnresolvedCheckoutRecovery(ctx context.Context) error
 	EnsureBillingCollectionBalance(ctx context.Context, arg EnsureBillingCollectionBalanceParams) error
 	EnsureBootstrapPrepaidBalance(ctx context.Context, arg EnsureBootstrapPrepaidBalanceParams) error

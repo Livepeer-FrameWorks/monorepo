@@ -1527,19 +1527,19 @@ func (s *Service) handleMolliePaymentWebhook(parentCtx context.Context, paymentI
 			if newStatus != "confirmed" {
 				return eventID, nil
 			}
-			return "", fmt.Errorf("missing tenant_id for Mollie first payment")
+			return eventID, fmt.Errorf("missing tenant_id for Mollie first payment")
 		}
 
 		if newStatus == "confirmed" && payment.PaidAt == nil && mollieMetadataString(payment.Metadata, "checkout_reservation_id") != "" {
-			return "", errors.New("paid Mollie checkout is missing its provider completion time")
+			return eventID, errors.New("paid Mollie checkout is missing its provider completion time")
 		}
 
 		if completionErr := s.recordMollieCheckoutCompletion(ctx, tenantID, mollieMetadataString(payment.Metadata, "checkout_reservation_id"), payment); completionErr != nil {
-			return "", completionErr
+			return eventID, completionErr
 		}
 		expired, bindErr := s.bindCheckoutReceipt(ctx, tenantID, mollieMetadataString(payment.Metadata, "checkout_reservation_id"), "mollie", "", payment.ID, "")
 		if bindErr != nil {
-			return "", bindErr
+			return eventID, bindErr
 		}
 		if expired {
 			return eventID, nil
@@ -1547,17 +1547,17 @@ func (s *Service) handleMolliePaymentWebhook(parentCtx context.Context, paymentI
 		if newStatus == "confirmed" || newStatus == "failed" {
 			bound, bindingErr := purserdb.New(s.db).CheckoutReceiptBound(ctx, purserdb.CheckoutReceiptBoundParams{TenantID: tenantID, Provider: "mollie", PaymentID: payment.ID})
 			if bindingErr != nil {
-				return "", fmt.Errorf("read first-payment response binding: %w", bindingErr)
+				return eventID, fmt.Errorf("read first-payment response binding: %w", bindingErr)
 			}
 			if !bound {
-				return "", errors.New("first-payment response binding is pending; retry")
+				return eventID, errors.New("first-payment response binding is pending; retry")
 			}
 		}
 		if newStatus == "failed" {
 			if resolveErr := purserdb.New(s.db).ResolveMollieFirstPaymentIntent(ctx, purserdb.ResolveMollieFirstPaymentIntentParams{
 				Status: mollieFirstPaymentIntentStatus(status), TenantID: tenantID, ProviderPaymentID: optionalSQLString(payment.ID),
 			}); resolveErr != nil {
-				return "", fmt.Errorf("record Mollie first payment outcome: %w", resolveErr)
+				return eventID, fmt.Errorf("record Mollie first payment outcome: %w", resolveErr)
 			}
 		}
 		if newStatus != "confirmed" {
@@ -1565,19 +1565,19 @@ func (s *Service) handleMolliePaymentWebhook(parentCtx context.Context, paymentI
 		}
 		completed, completedErr := purserdb.New(s.db).CheckoutAlreadySettled(ctx, purserdb.CheckoutAlreadySettledParams{TenantID: tenantID, Provider: "mollie", PaymentID: payment.ID})
 		if completedErr != nil {
-			return "", fmt.Errorf("check first-payment outcome: %w", completedErr)
+			return eventID, fmt.Errorf("check first-payment outcome: %w", completedErr)
 		}
 		if completed {
 			return eventID, nil
 		}
 
 		if payment.CustomerID == "" || payment.MandateID == "" {
-			return "", fmt.Errorf("missing Mollie customer or mandate ID")
+			return eventID, fmt.Errorf("missing Mollie customer or mandate ID")
 		}
 
 		mandate, mandateErr := s.mollieClient.GetMandate(ctx, payment.CustomerID, payment.MandateID)
 		if mandateErr != nil {
-			return "", fmt.Errorf("failed to fetch Mollie mandate: %w", mandateErr)
+			return eventID, fmt.Errorf("failed to fetch Mollie mandate: %w", mandateErr)
 		}
 		info := s.mollieClient.ExtractMandateInfo(mandate, payment.CustomerID)
 		// A first payment created outside EUR is a zero-amount mandate payment:
@@ -1586,7 +1586,7 @@ func (s *Service) handleMolliePaymentWebhook(parentCtx context.Context, paymentI
 		// The currency it was created in decides, not the tenant's current one.
 		createdIn, currencyErr := s.mollieFirstPaymentCurrency(ctx, tenantID, payment)
 		if currencyErr != nil {
-			return "", currencyErr
+			return eventID, currencyErr
 		}
 
 		if createdIn != billing.LedgerCurrency && info.Status == "valid" {
@@ -1595,19 +1595,19 @@ func (s *Service) handleMolliePaymentWebhook(parentCtx context.Context, paymentI
 				var readErr error
 				receiptID, readErr = purserdb.New(s.db).FindProviderCheckoutReservation(ctx, purserdb.FindProviderCheckoutReservationParams{TenantID: tenantID, Provider: "mollie", PaymentID: payment.ID})
 				if readErr != nil {
-					return "", readErr
+					return eventID, readErr
 				}
 			}
 			details, marshalErr := json.Marshal(info.Details)
 			if marshalErr != nil {
-				return "", marshalErr
+				return eventID, marshalErr
 			}
 			mandateParams := &purserdb.UpsertMollieMandateParams{TenantID: tenantID, MollieCustomerID: info.MollieCustomerID, MollieMandateID: info.MollieMandateID, Status: info.Status, Method: info.Method, Details: details, CreatedAt: sql.NullTime{Time: info.CreatedAt, Valid: !info.CreatedAt.IsZero()}}
 			if activateErr := s.activateAdvanceBilledTenantWithMandate(ctx, tenantID, mollieMetadataString(payment.Metadata, "tier_id"), "mollie", "", providerReceiptTime(ctx), receiptID, mandateParams); activateErr != nil {
 				if errors.Is(activateErr, subscriptions.ErrCheckoutCompensationQueued) {
 					return eventID, nil
 				}
-				return "", activateErr
+				return eventID, activateErr
 			}
 			return eventID, nil
 		}
@@ -1616,7 +1616,7 @@ func (s *Service) handleMolliePaymentWebhook(parentCtx context.Context, paymentI
 			if errors.Is(completionErr, subscriptions.ErrCheckoutCompensationQueued) {
 				return eventID, nil
 			}
-			return "", completionErr
+			return eventID, completionErr
 		}
 		return eventID, nil
 	}

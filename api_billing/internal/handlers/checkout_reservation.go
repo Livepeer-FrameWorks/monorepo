@@ -118,7 +118,7 @@ func (s *Service) expireClaimedCheckoutReservation(ctx context.Context, expiry c
 			if !r.ExpiresAt.Valid {
 				return errors.New("checkout reservation has no deadline")
 			}
-			if !expiry.Force && time.Now().Before(r.ExpiresAt.Time) {
+			if !expiry.Force && r.Status != "expired" && r.Status != "cancelled" && r.Status != "terminal_failed" && time.Now().Before(r.ExpiresAt.Time) {
 				return errors.New("checkout reservation deadline has not elapsed")
 			}
 			preCall = r.SubmissionState == "prepared" && len(r.ProviderRequest) == 0 && !hasCheckoutPurchaseReference(r)
@@ -404,6 +404,11 @@ func (s *Service) bindCheckoutReceipt(ctx context.Context, tenantID, intentID, p
 	}
 	expired := r.RecoveryStartedAt.Valid || r.Status == "expired" || r.Status == "cancelled" || r.Status == "terminal_failed" || !r.CheckoutCompletedAt.Valid && r.ExpiresAt.Valid && (at.IsZero() || at.After(r.ExpiresAt.Time))
 	if expired {
+		// A callback may bind a receipt created before durable expiry discovery.
+		// Acknowledgement requires an inbox owner, not only an attempted wake-up.
+		if err := q.EnqueueCheckoutReservationExpiry(ctx, purserdb.EnqueueCheckoutReservationExpiryParams{TenantID: tenantID, IntentID: intentID}); err != nil {
+			return false, err
+		}
 		if err := q.RequeueExpiredCheckoutReservation(ctx, purserdb.RequeueExpiredCheckoutReservationParams{TenantID: tenantID, IntentID: intentID}); err != nil {
 			return false, err
 		}

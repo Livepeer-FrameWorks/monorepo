@@ -14,6 +14,7 @@ import (
 	"frameworks/api_billing/internal/database/purserdb"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/outbox"
 	"github.com/google/uuid"
 )
 
@@ -130,7 +131,7 @@ func TestMollieFirstPaymentUsesThePresentmentCurrencyItWasCreatedUnder_RealPG(t 
 }
 
 func TestMollieFirstPaymentRecoveryWinsDuringMandateFetch_RealPG(t *testing.T) {
-	db := startPurserUsageRealPG(t)
+	db := startProviderReservationDatabase(t)
 	ctx := t.Context()
 	fixture, client := installMollieFixture(t)
 	tenant := uuid.NewString()
@@ -146,8 +147,9 @@ func TestMollieFirstPaymentRecoveryWinsDuringMandateFetch_RealPG(t *testing.T) {
 	if err = q.SetProviderIntentPaymentOpen(ctx, purserdb.SetProviderIntentPaymentOpenParams{TenantID: tenant, IntentID: id, PaymentID: sql.NullString{String: "tr_race", Valid: true}}); err != nil {
 		t.Fatal(err)
 	}
+	paidAt := time.Now().UTC().Truncate(time.Second)
 	fixture.route(http.MethodGet, "/v2/payments/tr_race", func(recordedProviderRequest) (int, any) {
-		return 200, map[string]any{"id": "tr_race", "status": "paid", "paidAt": time.Now().UTC().Format(time.RFC3339), "sequenceType": "first", "customerId": "customer", "mandateId": "mandate", "amount": map[string]string{"currency": "EUR", "value": "20.00"}, "metadata": map[string]string{"tenant_id": tenant, "payment_type": "first_payment", "checkout_reservation_id": id}}
+		return 200, map[string]any{"id": "tr_race", "status": "paid", "paidAt": paidAt.Format(time.RFC3339), "sequenceType": "first", "customerId": "customer", "mandateId": "mandate", "amount": map[string]string{"currency": "EUR", "value": "20.00"}, "metadata": map[string]string{"tenant_id": tenant, "payment_type": "first_payment", "checkout_reservation_id": id}}
 	})
 	fixture.route(http.MethodGet, "/v2/customers/customer/mandates/mandate", func(recordedProviderRequest) (int, any) {
 		if err := q.FinishProviderCheckoutIntent(ctx, purserdb.FinishProviderCheckoutIntentParams{TenantID: tenant, IntentID: id, Status: "expired"}); err != nil {
@@ -156,14 +158,49 @@ func TestMollieFirstPaymentRecoveryWinsDuringMandateFetch_RealPG(t *testing.T) {
 		return 200, map[string]any{"id": "mandate", "status": "valid", "method": "creditcard", "createdAt": time.Now().UTC().Format(time.RFC3339)}
 	})
 	svc := &Service{db: db, logger: logging.NewLogger(), mollieClient: client}
-	if _, err = svc.handleMolliePaymentWebhook(ctx, "tr_race", []byte("id=tr_race")); err != nil {
-		t.Fatal(err)
+	checkMandates := func() {
+		t.Helper()
+		var count int
+		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM purser.mollie_mandates WHERE tenant_id=$1`, tenant).Scan(&count); err != nil || count != 0 {
+			t.Fatalf("expired first payment installed a mandate: count=%d err=%v", count, err)
+		}
 	}
-	var count int
-	if err = db.QueryRow(`SELECT COUNT(*) FROM purser.mollie_mandates WHERE tenant_id=$1`, tenant).Scan(&count); err != nil {
-		t.Fatal(err)
+	body := []byte("id=tr_race")
+	if ok, _, status := svc.processMollieWebhookPayload(ctx, "tr_race", body); ok || status != 500 {
+		t.Fatalf("expiry during mandate fetch must retry, got ok=%v status=%d", ok, status)
 	}
-	if count != 0 {
-		t.Fatalf("recovery lost the race: expired fee retained %d mandate(s)", count)
+	checkMandates()
+	var webhookStatus string
+	if err := db.QueryRowContext(ctx, `SELECT status FROM purser.webhook_events WHERE provider='mollie'`).Scan(&webhookStatus); err != nil || webhookStatus != "failed_retryable" {
+		t.Fatalf("failed callback lost retry ownership: status=%s err=%v", webhookStatus, err)
+	}
+	fixture.route(http.MethodPost, "/v2/payments/tr_race/refunds", func(recordedProviderRequest) (int, any) {
+		return 201, map[string]any{"id": "refund", "status": "pending"}
+	})
+	if ok, _, status := svc.processMollieWebhookPayload(ctx, "tr_race", body); !ok || status != 200 {
+		t.Fatalf("redelivery did not hand the expired payment to recovery: ok=%v status=%d", ok, status)
+	}
+	var recoveryStatus string
+	if err := db.QueryRowContext(ctx, `SELECT status FROM purser.provider_webhook_inbox WHERE provider='checkout_recovery' AND headers->>'tenant_id'=$1 AND event_key='checkout-expiry:'||$2`, tenant, id).Scan(&recoveryStatus); err != nil || recoveryStatus != "pending" {
+		t.Fatalf("acknowledged callback has no durable refund owner: status=%s err=%v", recoveryStatus, err)
+	}
+	if len(fixture.matching("POST", "/v2/payments/tr_race/refunds")) != 0 || len(fixture.matching("GET", "/v2/customers/customer/mandates/mandate")) != 1 {
+		t.Fatal("redelivery refunded inline or repeated mandate activation")
+	}
+	worker := outbox.Worker[providerWebhookPayload]{Config: providerWebhookWorkerConfig(), Store: &providerWebhookInboxStore{db: db}, Dispatcher: &providerWebhookDispatcher{service: svc}, Logger: logging.NewLogger()}
+	worker.ProcessBatch(ctx)
+	receipt, err := q.GetProviderCheckoutReservation(ctx, purserdb.GetProviderCheckoutReservationParams{TenantID: tenant, IntentID: id})
+	if err != nil || !receipt.CompensationCurrent || receipt.RecoveryOutcome.String != "refund_requested" || len(fixture.matching("POST", "/v2/payments/tr_race/refunds")) != 1 {
+		t.Fatalf("inbox did not own exactly one refund: receipt=%+v err=%v", receipt, err)
+	}
+	if ok, _, status := svc.processMollieWebhookPayload(ctx, "tr_race", body); !ok || status != 200 {
+		t.Fatalf("duplicate callback: ok=%v status=%d", ok, status)
+	}
+	checkMandates()
+	if len(fixture.matching("POST", "/v2/payments/tr_race/refunds")) != 1 {
+		t.Fatal("duplicate callback repeated refund")
+	}
+	if err := db.QueryRowContext(ctx, `SELECT status FROM purser.webhook_events WHERE provider='mollie'`).Scan(&webhookStatus); err != nil || webhookStatus != "processed" {
+		t.Fatalf("redelivery not processed: %s %v", webhookStatus, err)
 	}
 }

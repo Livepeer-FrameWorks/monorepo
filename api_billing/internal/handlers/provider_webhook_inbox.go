@@ -229,6 +229,19 @@ func (d *providerWebhookDispatcher) Dispatch(ctx context.Context, payload provid
 		}
 		return nil, nil
 	}
+	if payload.Provider == "checkout_delivery_review" {
+		var review checkoutReservationExpiry
+		if err := json.Unmarshal(payload.Body, &review); err != nil {
+			return nil, err
+		}
+		if review.TenantID == "" || review.IntentID == "" || payload.EventKey != "checkout-delivery-review:"+review.IntentID || review.Force {
+			return nil, errors.New("invalid internal historical delivery review record")
+		}
+		if err := d.service.reviewHistoricalMollieDelivery(ctx, review); err != nil {
+			return []string{"checkout_delivery_review"}, err
+		}
+		return nil, nil
+	}
 	var expiry checkoutReservationExpiry
 	if payload.Provider == "checkout_recovery" {
 		if err := json.Unmarshal(payload.Body, &expiry); err != nil {

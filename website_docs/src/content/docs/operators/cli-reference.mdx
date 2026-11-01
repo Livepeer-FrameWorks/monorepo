@@ -2320,13 +2320,15 @@ Omit the tenant filter to include provider callbacks not yet bound to a tenant.
 Use `--tenant-id <UUID> --history` to read each operator request, identity, reason
 and outcome. Empty lists print an explicit message.
 
-Paid historical Mollie first payments without a mandate or activation binding
-appear as `succeeded/delivery_review`, including reservation ID, provider payment
-ID and amount. They have no automatic next attempt. An absent historical binding
-is not proof that the customer received no service: verify delivery before
-confirming recovery. Inventory and preview do not enqueue compensation. Active
-recovery replaces the review entry rather than duplicating it; resolved payments
-leave the list.
+The inbox automatically reviews historical paid Mollie first payments using
+provider history and local activation evidence. It records delivery or ambiguity
+without cancelling or refunding anything. Proven delivered payments leave the
+list; pending checks appear once as queued work. Unresolved payments remain as
+`succeeded/delivery_review`, including reservation ID, provider payment ID and
+amount, with no automatic next attempt after review. An absent binding does not
+prove the customer received no service: verify delivery before confirming
+recovery. Inventory and preview do not enqueue compensation. Active recovery
+replaces the review entry rather than duplicating it.
 
 #### frameworks admin billing recovery checkout
 

@@ -14,6 +14,8 @@ import (
 )
 
 func TestMollieCompletionSurvivesLateSettlement_RealPG(t *testing.T) {
+	t.Run("automatic historical delivery review", assertAutomaticHistoricalDeliveryReview)
+	t.Run("expiry during mandate fetch", TestMollieFirstPaymentRecoveryWinsDuringMandateFetch_RealPG)
 	t.Run("automatic settlement", func(t *testing.T) { assertMollieCompletionSurvivesLateSettlement(t, false) })
 	t.Run("confirmed cancellation", func(t *testing.T) { assertMollieCompletionSurvivesLateSettlement(t, true) })
 }

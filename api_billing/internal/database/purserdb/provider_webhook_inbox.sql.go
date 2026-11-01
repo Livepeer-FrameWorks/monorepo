@@ -232,7 +232,7 @@ WITH selected AS (
      LIMIT ($2::bigint + $1::bigint))
 ), page AS MATERIALIZED (
     SELECT selected.id, selected.provider, selected.event_key, selected.headers, selected.raw_payload, selected.status, selected.attempts, selected.wait_attempts, selected.unresolved_since, selected.next_attempt_at, selected.claimed_at, selected.lease_token, selected.wake_requested, selected.last_error, selected.processed_at, selected.created_at, selected.updated_at,
-           CASE WHEN selected.provider IN ('checkout_recovery', 'tier_upgrade')
+           CASE WHEN selected.provider IN ('checkout_recovery', 'checkout_delivery_review', 'tier_upgrade')
                 THEN convert_from(selected.raw_payload, 'UTF8')::jsonb END AS internal_payload
     FROM selected
     ORDER BY selected.created_at, selected.id
@@ -249,9 +249,9 @@ SELECT i.id::text AS id, COALESCE(p.provider, i.headers->>'provider', i.provider
        i.created_at AS sort_at
 FROM page i
 LEFT JOIN purser.payment_provider_intents p
-  ON p.id = CASE WHEN i.provider = 'checkout_recovery'
+  ON p.id = CASE WHEN i.provider IN ('checkout_recovery', 'checkout_delivery_review')
                  THEN (i.internal_payload->>'checkout_reservation_id')::uuid END
- AND p.tenant_id = CASE WHEN i.provider = 'checkout_recovery'
+ AND p.tenant_id = CASE WHEN i.provider IN ('checkout_recovery', 'checkout_delivery_review')
                         THEN (i.internal_payload->>'tenant_id')::uuid END
 LEFT JOIN purser.subscription_tier_upgrades upgrade
   ON upgrade.id = CASE WHEN i.provider = 'tier_upgrade'
@@ -297,8 +297,8 @@ LEFT JOIN purser.subscription_tier_upgrades upgrade
        AND intent.activated_at IS NULL AND intent.recovery_started_at IS NULL
        AND NOT EXISTS (
            SELECT 1 FROM purser.provider_webhook_inbox pending
-           WHERE pending.provider = 'checkout_recovery'
-             AND pending.event_key = 'checkout-expiry:' || intent.id::text
+           WHERE ((pending.provider = 'checkout_recovery' AND pending.event_key = 'checkout-expiry:' || intent.id::text)
+               OR (pending.provider = 'checkout_delivery_review' AND pending.event_key = 'checkout-delivery-review:' || intent.id::text))
              AND pending.headers->>'tenant_id' = intent.tenant_id::text
              AND pending.status <> 'processed'
        )
@@ -314,8 +314,8 @@ LEFT JOIN purser.subscription_tier_upgrades upgrade
        AND intent.activated_at IS NULL AND intent.recovery_started_at IS NULL
        AND NOT EXISTS (
            SELECT 1 FROM purser.provider_webhook_inbox pending
-           WHERE pending.provider = 'checkout_recovery'
-             AND pending.event_key = 'checkout-expiry:' || intent.id::text
+           WHERE ((pending.provider = 'checkout_recovery' AND pending.event_key = 'checkout-expiry:' || intent.id::text)
+               OR (pending.provider = 'checkout_delivery_review' AND pending.event_key = 'checkout-delivery-review:' || intent.id::text))
              AND pending.headers->>'tenant_id' = intent.tenant_id::text
              AND pending.status <> 'processed'
        )
@@ -327,19 +327,20 @@ LEFT JOIN purser.subscription_tier_upgrades upgrade
            'delivery_review'::text AS status, 0::integer AS attempts,
            ('Payment ' || intent.provider_payment_id ||
             ': verify delivered service before confirming admin billing recovery checkout')::text AS last_error,
-           TIMESTAMPTZ 'epoch' AS next_attempt_at,
+           NULL::timestamptz AS next_attempt_at,
            intent.tenant_id::text AS tenant_id, intent.id::text AS reservation_id,
            NULL::timestamptz AS expires_at, intent.amount_cents, intent.currency::text AS currency,
            intent.status::text AS reservation_status, intent.created_at AS sort_at
     FROM historical_selected intent
 ), inventory AS (
+    SELECT id, provider, event_key, status, attempts, last_error, next_attempt_at, tenant_id, reservation_id, expires_at, amount_cents, currency, reservation_status, sort_at FROM historical_rows
+    UNION ALL
     SELECT id, provider, event_key, status, attempts, last_error, next_attempt_at, tenant_id, reservation_id, expires_at, amount_cents, currency, reservation_status, sort_at FROM inbox_rows
     UNION ALL
     SELECT id, provider, event_key, status, attempts, last_error, next_attempt_at, tenant_id, reservation_id, expires_at, amount_cents, currency, reservation_status, sort_at FROM fallback_rows
-    UNION ALL
-    SELECT id, provider, event_key, status, attempts, last_error, next_attempt_at, tenant_id, reservation_id, expires_at, amount_cents, currency, reservation_status, sort_at FROM historical_rows
 )
-SELECT id::text AS id, provider, event_key, status, attempts, last_error, next_attempt_at,
+SELECT id::text AS id, provider, event_key, status, attempts,
+       COALESCE(last_error, '')::text AS last_error, next_attempt_at,
        tenant_id, reservation_id, expires_at, amount_cents, currency, reservation_status
 FROM inventory
 ORDER BY sort_at, id
@@ -353,19 +354,19 @@ type ListCheckoutRecoveryParams struct {
 }
 
 type ListCheckoutRecoveryRow struct {
-	ID                string         `db:"id" json:"id"`
-	Provider          string         `db:"provider" json:"provider"`
-	EventKey          string         `db:"event_key" json:"event_key"`
-	Status            string         `db:"status" json:"status"`
-	Attempts          int32          `db:"attempts" json:"attempts"`
-	LastError         sql.NullString `db:"last_error" json:"last_error"`
-	NextAttemptAt     time.Time      `db:"next_attempt_at" json:"next_attempt_at"`
-	TenantID          string         `db:"tenant_id" json:"tenant_id"`
-	ReservationID     string         `db:"reservation_id" json:"reservation_id"`
-	ExpiresAt         sql.NullTime   `db:"expires_at" json:"expires_at"`
-	AmountCents       int64          `db:"amount_cents" json:"amount_cents"`
-	Currency          string         `db:"currency" json:"currency"`
-	ReservationStatus string         `db:"reservation_status" json:"reservation_status"`
+	ID                string       `db:"id" json:"id"`
+	Provider          string       `db:"provider" json:"provider"`
+	EventKey          string       `db:"event_key" json:"event_key"`
+	Status            string       `db:"status" json:"status"`
+	Attempts          int32        `db:"attempts" json:"attempts"`
+	LastError         string       `db:"last_error" json:"last_error"`
+	NextAttemptAt     sql.NullTime `db:"next_attempt_at" json:"next_attempt_at"`
+	TenantID          string       `db:"tenant_id" json:"tenant_id"`
+	ReservationID     string       `db:"reservation_id" json:"reservation_id"`
+	ExpiresAt         sql.NullTime `db:"expires_at" json:"expires_at"`
+	AmountCents       int64        `db:"amount_cents" json:"amount_cents"`
+	Currency          string       `db:"currency" json:"currency"`
+	ReservationStatus string       `db:"reservation_status" json:"reservation_status"`
 }
 
 // Platform-operator inventory includes unbound callbacks; a supplied tenant narrows to its reservations.

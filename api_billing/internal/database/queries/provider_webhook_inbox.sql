@@ -71,7 +71,7 @@ WITH selected AS (
      LIMIT (sqlc.arg(row_limit)::bigint + sqlc.arg(row_offset)::bigint))
 ), page AS MATERIALIZED (
     SELECT selected.*,
-           CASE WHEN selected.provider IN ('checkout_recovery', 'tier_upgrade')
+           CASE WHEN selected.provider IN ('checkout_recovery', 'checkout_delivery_review', 'tier_upgrade')
                 THEN convert_from(selected.raw_payload, 'UTF8')::jsonb END AS internal_payload
     FROM selected
     ORDER BY selected.created_at, selected.id
@@ -88,9 +88,9 @@ SELECT i.id::text AS id, COALESCE(p.provider, i.headers->>'provider', i.provider
        i.created_at AS sort_at
 FROM page i
 LEFT JOIN purser.payment_provider_intents p
-  ON p.id = CASE WHEN i.provider = 'checkout_recovery'
+  ON p.id = CASE WHEN i.provider IN ('checkout_recovery', 'checkout_delivery_review')
                  THEN (i.internal_payload->>'checkout_reservation_id')::uuid END
- AND p.tenant_id = CASE WHEN i.provider = 'checkout_recovery'
+ AND p.tenant_id = CASE WHEN i.provider IN ('checkout_recovery', 'checkout_delivery_review')
                         THEN (i.internal_payload->>'tenant_id')::uuid END
 LEFT JOIN purser.subscription_tier_upgrades upgrade
   ON upgrade.id = CASE WHEN i.provider = 'tier_upgrade'
@@ -136,8 +136,8 @@ LEFT JOIN purser.subscription_tier_upgrades upgrade
        AND intent.activated_at IS NULL AND intent.recovery_started_at IS NULL
        AND NOT EXISTS (
            SELECT 1 FROM purser.provider_webhook_inbox pending
-           WHERE pending.provider = 'checkout_recovery'
-             AND pending.event_key = 'checkout-expiry:' || intent.id::text
+           WHERE ((pending.provider = 'checkout_recovery' AND pending.event_key = 'checkout-expiry:' || intent.id::text)
+               OR (pending.provider = 'checkout_delivery_review' AND pending.event_key = 'checkout-delivery-review:' || intent.id::text))
              AND pending.headers->>'tenant_id' = intent.tenant_id::text
              AND pending.status <> 'processed'
        )
@@ -153,8 +153,8 @@ LEFT JOIN purser.subscription_tier_upgrades upgrade
        AND intent.activated_at IS NULL AND intent.recovery_started_at IS NULL
        AND NOT EXISTS (
            SELECT 1 FROM purser.provider_webhook_inbox pending
-           WHERE pending.provider = 'checkout_recovery'
-             AND pending.event_key = 'checkout-expiry:' || intent.id::text
+           WHERE ((pending.provider = 'checkout_recovery' AND pending.event_key = 'checkout-expiry:' || intent.id::text)
+               OR (pending.provider = 'checkout_delivery_review' AND pending.event_key = 'checkout-delivery-review:' || intent.id::text))
              AND pending.headers->>'tenant_id' = intent.tenant_id::text
              AND pending.status <> 'processed'
        )
@@ -166,19 +166,20 @@ LEFT JOIN purser.subscription_tier_upgrades upgrade
            'delivery_review'::text AS status, 0::integer AS attempts,
            ('Payment ' || intent.provider_payment_id ||
             ': verify delivered service before confirming admin billing recovery checkout')::text AS last_error,
-           TIMESTAMPTZ 'epoch' AS next_attempt_at,
+           NULL::timestamptz AS next_attempt_at,
            intent.tenant_id::text AS tenant_id, intent.id::text AS reservation_id,
            NULL::timestamptz AS expires_at, intent.amount_cents, intent.currency::text AS currency,
            intent.status::text AS reservation_status, intent.created_at AS sort_at
     FROM historical_selected intent
 ), inventory AS (
+    SELECT * FROM historical_rows
+    UNION ALL
     SELECT * FROM inbox_rows
     UNION ALL
     SELECT * FROM fallback_rows
-    UNION ALL
-    SELECT * FROM historical_rows
 )
-SELECT id::text AS id, provider, event_key, status, attempts, last_error, next_attempt_at,
+SELECT id::text AS id, provider, event_key, status, attempts,
+       COALESCE(last_error, '')::text AS last_error, next_attempt_at,
        tenant_id, reservation_id, expires_at, amount_cents, currency, reservation_status
 FROM inventory
 ORDER BY sort_at, id

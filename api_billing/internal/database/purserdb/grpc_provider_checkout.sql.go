@@ -230,18 +230,45 @@ func (q *Queries) EnqueueCheckoutReservationExpiry(ctx context.Context, arg Enqu
 }
 
 const enqueueUnresolvedCheckoutRecovery = `-- name: EnqueueUnresolvedCheckoutRecovery :exec
+WITH recoverable AS (
+    SELECT id, tenant_id, COALESCE(expires_at, created_at + INTERVAL '24 hours') AS due_at
+    FROM purser.payment_provider_intents intent
+    WHERE purpose IN ('tenant_subscription_checkout', 'mollie_first_payment', 'mollie_subscription_create')
+      AND status IN ('pending', 'provider_open', 'provider_call_failed')
+      AND NOT EXISTS (
+          SELECT 1 FROM purser.provider_webhook_inbox inbox
+          WHERE inbox.provider = 'checkout_recovery'
+            AND inbox.event_key = 'checkout-expiry:' || intent.id::text)
+    ORDER BY created_at, id LIMIT 1000
+), historical AS (
+    SELECT id, tenant_id
+    FROM purser.payment_provider_intents intent
+    WHERE provider = 'mollie' AND purpose = 'mollie_first_payment'
+      AND status = 'succeeded' AND amount_cents > 0
+      AND provider_payment_id IS NOT NULL AND provider_mandate_id IS NULL
+      AND activated_at IS NULL AND recovery_started_at IS NULL
+      AND recovery_outcome IS DISTINCT FROM 'ambiguous_delivery'
+      AND NOT EXISTS (
+          SELECT 1 FROM purser.provider_webhook_inbox inbox
+          WHERE inbox.provider = 'checkout_delivery_review'
+            AND inbox.event_key = 'checkout-delivery-review:' || intent.id::text)
+    ORDER BY created_at, id LIMIT 1000
+), work AS (
+    SELECT 'checkout_recovery' AS provider, 'checkout-expiry:' || id::text AS event_key,
+           id, tenant_id, due_at FROM recoverable
+    UNION ALL
+    SELECT 'checkout_delivery_review', 'checkout-delivery-review:' || id::text,
+           id, tenant_id, NOW() FROM historical
+)
 INSERT INTO purser.provider_webhook_inbox(provider, event_key, headers, raw_payload, next_attempt_at)
-SELECT 'checkout_recovery', 'checkout-expiry:'||id::text, jsonb_build_object('tenant_id', tenant_id::text),
-    convert_to(jsonb_build_object('checkout_reservation_id', id::text, 'tenant_id', tenant_id::text)::text, 'UTF8'), COALESCE(expires_at, created_at+INTERVAL '24 hours')
-FROM purser.payment_provider_intents
-WHERE purpose IN ('tenant_subscription_checkout', 'mollie_first_payment', 'mollie_subscription_create')
-    AND status IN ('pending', 'provider_open', 'provider_call_failed')
-    AND NOT EXISTS(SELECT 1 FROM purser.provider_webhook_inbox i WHERE i.provider = 'checkout_recovery' AND i.event_key = 'checkout-expiry:'||purser.payment_provider_intents.id::text)
-ORDER BY created_at LIMIT 1000
+SELECT provider, event_key, jsonb_build_object('tenant_id', tenant_id::text),
+       convert_to(jsonb_build_object('checkout_reservation_id', id::text,
+           'tenant_id', tenant_id::text)::text, 'UTF8'), due_at
+FROM work
 ON CONFLICT(provider, event_key) DO NOTHING
 `
 
-// Service-wide recovery catches receipts whose provider response preceded this process.
+// Service-wide discovery owns crash recovery and read-only historical delivery review.
 func (q *Queries) EnqueueUnresolvedCheckoutRecovery(ctx context.Context) error {
 	_, err := q.db.ExecContext(ctx, enqueueUnresolvedCheckoutRecovery)
 	return err
