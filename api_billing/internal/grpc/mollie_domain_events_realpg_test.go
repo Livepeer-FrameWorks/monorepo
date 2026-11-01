@@ -139,11 +139,36 @@ func TestMollieBillingEventsCommitWithTheirState_RealPG(t *testing.T) { //nolint
 		}
 		return id
 	}
+	paidFunding := func(t *testing.T, tenantID string) {
+		t.Helper()
+		// Funding is setup state; only the subscription event is produced under test.
+		id := uuid.NewString()
+		if _, seedErr := db.Exec(`
+			INSERT INTO purser.payment_provider_intents (
+				id, tenant_id, provider, purpose, local_reference_type, local_reference_id,
+				status, currency, amount_cents, idempotency_key, provider_customer_id,
+				provider_payment_id, provider_mandate_id, succeeded_at
+			) VALUES (
+				$1::uuid, $2::text::uuid, 'mollie', 'mollie_first_payment', 'billing_tiers', $3,
+				'succeeded', 'EUR', 2000, $1::text, 'customer-' || $2::text,
+				'paid-' || $1::text, 'mandate', NOW()
+			)`, id, tenantID, tierID); seedErr != nil {
+			t.Fatal(seedErr)
+		}
+	}
 	newSubscriptionIntent := func(t *testing.T, tenantID, providerID string) string {
 		t.Helper()
-		var id string
-		if err := db.QueryRow(`INSERT INTO purser.payment_provider_intents(tenant_id,provider,purpose,local_reference_type,local_reference_id,status,currency,idempotency_key) VALUES($1,'mollie','mollie_subscription_create','billing_tiers',$2,'pending','EUR',$3) RETURNING id::text`, tenantID, tierID, providerID).Scan(&id); err != nil {
-			t.Fatal(err)
+		paidFunding(t, tenantID)
+		q := purserdb.New(db)
+		id, intentErr := q.UpsertMollieSubscriptionIntent(ctx, purserdb.UpsertMollieSubscriptionIntentParams{
+			TenantID: tenantID, TierID: tierID, CustomerID: sql.NullString{String: "customer-" + tenantID, Valid: true},
+			Currency: "EUR", AmountCents: 2000, IdempotencyKey: providerID,
+		})
+		if intentErr != nil {
+			t.Fatal(intentErr)
+		}
+		if linkErr := q.LinkMollieCheckoutFunding(ctx, purserdb.LinkMollieCheckoutFundingParams{TenantID: tenantID, IntentID: id, MandateID: "mandate"}); linkErr != nil {
+			t.Fatal(linkErr)
 		}
 		return id
 	}
@@ -227,8 +252,14 @@ func TestMollieBillingEventsCommitWithTheirState_RealPG(t *testing.T) { //nolint
 	t.Run("subscription: activation and billing.subscription_created commit together, once", func(t *testing.T) {
 		tenantID := uuid.NewString()
 		subscriptionID := newSubscription(t, tenantID)
+		paidFunding(t, tenantID)
 		intent, err := subscriptions.ReserveCheckout(ctx, db, tenantID, func(tx *sql.Tx) (string, error) {
-			return purserdb.New(tx).UpsertMollieSubscriptionIntent(ctx, purserdb.UpsertMollieSubscriptionIntentParams{TenantID: tenantID, TierID: tierID, CustomerID: sql.NullString{String: "customer", Valid: true}, Currency: "EUR", AmountCents: 2000, IdempotencyKey: "settled-mollie-checkout"})
+			q := purserdb.New(tx)
+			id, reserveErr := q.UpsertMollieSubscriptionIntent(ctx, purserdb.UpsertMollieSubscriptionIntentParams{TenantID: tenantID, TierID: tierID, CustomerID: sql.NullString{String: "customer-" + tenantID, Valid: true}, Currency: "EUR", AmountCents: 2000, IdempotencyKey: "settled-mollie-checkout"})
+			if reserveErr != nil {
+				return "", reserveErr
+			}
+			return id, q.LinkMollieCheckoutFunding(ctx, purserdb.LinkMollieCheckoutFundingParams{TenantID: tenantID, IntentID: id, MandateID: "mandate"})
 		})
 		if err != nil {
 			t.Fatal(err)
