@@ -122,7 +122,10 @@ func (s *Service) expireClaimedCheckoutReservation(ctx context.Context, expiry c
 				return errors.New("checkout reservation deadline has not elapsed")
 			}
 			preCall = r.SubmissionState == "prepared" && len(r.ProviderRequest) == 0 && !hasCheckoutPurchaseReference(r)
-			inspect = !preCall && !r.RecoveryStartedAt.Valid && r.Status != "expired" && r.Status != "cancelled" && r.Status != "terminal_failed"
+			// A confirmed operator request or account closure cancels the
+			// unactivated purchase; only automatic recovery may reinstall it.
+			inspect = !expiry.Force && !preCall && !r.RecoveryStartedAt.Valid &&
+				r.Status != "expired" && r.Status != "cancelled" && r.Status != "terminal_failed"
 		}
 		return nil
 	})
@@ -663,6 +666,7 @@ func (s *Service) PreviewCheckoutRecovery(ctx context.Context, tenantID, intentI
 			out.Detail = "provider payment " + string(payment.Status)
 		}
 	}
+	out.Detail += "; confirmation cancels an unactivated purchase instead of retrying activation; established service is retained"
 	out.Outcome = "preview"
 	return out, nil
 }

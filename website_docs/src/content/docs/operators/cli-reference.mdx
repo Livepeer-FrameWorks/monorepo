@@ -2325,10 +2325,19 @@ and outcome. Empty lists print an explicit message.
 `frameworks admin billing recovery checkout --tenant-id <UUID> --reservation-id <UUID> --reason "Abandoned checkout"`
 previews the provider, state and amount, then requires interactive `yes` or
 `--yes`. Recovery reports its actual outcome and audit ID; pending work remains
-queued. On-time completed purchases activate after settlement, even after the
-checkout deadline. An abandoned attempt may be expired early; compensation can
-cancel a subscription and request refunds. Refund acceptance does not mean bank
-settlement has finished. Both commands require a platform-operator JWT.
+queued. Automatic recovery activates on-time completed purchases after settlement,
+even after the checkout deadline. Confirmed operator recovery instead cancels an
+unactivated purchase and compensates only its initial collection; it does not
+retry activation or alter an unrelated previous collector. An abandoned attempt
+may be expired early. Refund acceptance does not mean bank settlement has finished.
+Both commands require a platform-operator JWT.
+
+Repairable Mollie activation refusals retain the existing paid first payment.
+Retry activation after fixing the reported condition instead of paying again;
+another first payment is refused while paid funding remains unused. Retained
+funding has no age-based refund. If activation is abandoned, closure is the only
+automatic refund unless a definitive refusal is observed. Confirmed operator
+recovery can request earlier compensation.
 
 `--retain-delivered` selects an audited attestation for an ambiguous historical
 Mollie first payment. It retains the payment without refund or new access,

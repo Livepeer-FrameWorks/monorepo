@@ -392,20 +392,44 @@ use that retained tier. An operator's explicit grant/tier lifecycle closes the
 required billing boundary before replacing the arrangement.
 
 A definitive Mollie activation refusal queues immediate compensation for paid,
-unused first-payment funding. The subscription lock excludes concurrent activation;
-activated funding and established native subscriptions are never refunded by that
-refusal. Repairable conditions, including incomplete billing details, unpaid invoices,
+unused first-payment funding. The subscription lock excludes concurrent
+activation; activated funding and established native subscriptions are never
+refunded by that refusal. Compensation is limited to tier eligibility, account
+closure, an outstanding grant or a provider-confirmed terminally invalid mandate.
+Invalid-mandate recovery covers unused funding on that mandate across tiers;
+other mandates keep their funding.
+
+Repairable conditions, including incomplete billing details, unpaid invoices,
 pending checkout or fallback, pending mandates, changed request credentials and
-cancelled setup keep funding available for retry. Compensation is limited to eligibility,
-closure, an outstanding grant, a removed tier or a provider-confirmed terminally
-invalid mandate. Invalid-mandate recovery refunds only unused funding bound to
-that mandate; other mandates keep their funding. The locked activation path uses
-the same classification: repairable refusals cancel the unactivated native
-subscription without refunding its reusable first payment.
+cancelled setup retain funding for **retry activation**. They do not require a
+second first payment. Reserving another Mollie first payment checks unused paid
+funding under the subscription lock and refuses until it is activated or refunded.
+The locked activation path cancels only the unactivated native subscription;
+after cleanup, retrying activation links and consumes the original payment once.
+
+Retained funding has no automatic age-based refund. If the customer abandons
+activation, account closure is the only automatic refund unless a definitive
+refusal is subsequently observed. An operator can request earlier compensation
+through confirmed `admin billing recovery checkout`; native cleanup must finish
+before its funding can be refunded.
+
+Mollie's [mandate schema](https://docs.mollie.com/reference/create-mandate)
+exposes `valid`, `pending` and `invalid`. Its
+[revocation endpoint](https://docs.mollie.com/reference/revoke-mandate) cancels
+linked subscriptions. Its [lookup endpoint](https://docs.mollie.com/reference/get-mandate)
+also returns 404 for missing entities, without a documented distinction for
+revocation. A lookup failure or omitted mandate alone is not evidence of a
+terminally invalid mandate. Purser retains that funding, reports retry guidance
+and permits confirmed operator recovery if the mandate cannot be restored.
 
 Recovery probes a cancelled Mollie collector using the customer bound to its
-native checkout receipt. Missing or conflicting bindings fail closed for
-operator inspection.
+native checkout receipt. Missing bindings fail closed during automatic recovery.
+An operator can preview and confirm `admin billing recovery checkout` to cancel
+the new, unactivated purchase without inspecting or altering the previous
+collector. Confirmed recovery does not attempt activation. The native receipt's
+unique provider-subscription constraint prevents conflicting customer bindings;
+violations of that database invariant require integrity repair rather than a
+guessed customer ID.
 
 Checkout reserves its durable provider intent under the same lock before any
 external call. Grant creation refuses while Stripe checkout or Mollie first

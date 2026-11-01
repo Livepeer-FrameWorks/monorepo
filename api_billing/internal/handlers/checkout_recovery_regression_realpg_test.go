@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	billingstripe "frameworks/api_billing/internal/stripe"
 	"frameworks/api_billing/internal/subscriptions"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/events"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/kafka"
 	internalv1 "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/internalv1"
@@ -273,7 +275,8 @@ func TestCheckoutRecoveryAuditTerminalResultIsImmutable_RealPG(t *testing.T) {
 
 func TestHistoricalRecoveryDoesNotReplaceEstablishedSubscription_RealPG(t *testing.T) {
 	t.Run("Mollie customer binding", testRecoveryProbesBoundMollieCustomer)
-	for _, scenario := range []string{"cancelled Stripe", "replaced by Mollie", "cancelled prior reference"} {
+	t.Run("operator cancels unactivated purchase with unknown previous binding", testRecoveryUnknownPreviousMollieCustomer)
+	for _, scenario := range []string{"cancelled Stripe", "replaced by Mollie", "cancelled prior reference", "missing checkout tier"} {
 		t.Run(scenario, func(t *testing.T) {
 			db := startProviderReservationDatabase(t)
 			fixture, client := installStripeFixture(t)
@@ -298,12 +301,17 @@ func TestHistoricalRecoveryDoesNotReplaceEstablishedSubscription_RealPG(t *testi
 			if _, err := db.Exec(`INSERT INTO purser.payment_provider_intents(id,tenant_id,provider,purpose,status,currency,idempotency_key,local_reference_id,provider_customer_id,provider_session_id,created_at) VALUES($1::uuid,$2,'stripe','tenant_subscription_checkout','provider_open','EUR',$1::text,$3,'customer','session',$4)`, id, tenant.id, tenant.supporterID, created); err != nil {
 				t.Fatal(err)
 			}
+			if scenario == "missing checkout tier" {
+				if _, err := db.Exec(`UPDATE purser.payment_provider_intents SET local_reference_id=NULL WHERE tenant_id=$1 AND id=$2`, tenant.id, id); err != nil {
+					t.Fatal(err)
+				}
+			}
 			fixture.route("GET", "/v1/checkout/sessions/session", func(recordedProviderRequest) (int, any) {
 				return 200, map[string]any{"id": "session", "status": "complete", "payment_status": "paid", "mode": "subscription", "created": created.Unix(), "expires_at": created.Add(24 * time.Hour).Unix(), "customer": "customer", "subscription": "historical", "metadata": map[string]string{"tenant_id": tenant.id, "purpose": "subscription", "reference_id": tenant.supporterID, "checkout_reservation_id": id}}
 			})
 			fixture.route("GET", "/v1/subscriptions/historical", func(recordedProviderRequest) (int, any) {
 				state := "canceled"
-				if scenario == "replaced by Mollie" || scenario == "cancelled prior reference" {
+				if scenario == "replaced by Mollie" || scenario == "cancelled prior reference" || scenario == "missing checkout tier" {
 					state = "active"
 				}
 				return 200, map[string]any{"id": "historical", "status": state}
@@ -364,6 +372,61 @@ func testRecoveryProbesBoundMollieCustomer(t *testing.T) {
 			}
 			if len(fixture.matching("GET", "/v2/customers/old-customer/subscriptions/old-subscription")) != 1 || len(fixture.matching("GET", "/v2/customers/current-customer/subscriptions/old-subscription")) != 0 {
 				t.Fatal("liveness probe used mutable current customer instead of native receipt binding")
+			}
+		})
+	}
+}
+
+func testRecoveryUnknownPreviousMollieCustomer(t *testing.T) {
+	for _, binding := range []string{"missing receipt", "unbound receipt"} {
+		t.Run(binding, func(t *testing.T) {
+			db := startProviderReservationDatabase(t)
+			fixture, client := installStripeFixture(t)
+			now := time.Now().UTC().Truncate(time.Second)
+			tenant := newPhaseTenant(t, db, "prepaid", now, now.AddDate(0, 1, 0), 0)
+			tenant.svc.stripeClient = client
+			_, tenant.svc.mollieClient = installMollieFixture(t)
+			exec := func(query string, args ...any) {
+				t.Helper()
+				if _, err := db.ExecContext(t.Context(), query, args...); err != nil {
+					t.Fatal(err)
+				}
+			}
+			exec(`UPDATE purser.tenant_subscriptions SET status='cancelled',mollie_subscription_id='previous' WHERE tenant_id=$1`, tenant.id)
+			if binding == "unbound receipt" {
+				exec(`INSERT INTO purser.payment_provider_intents(tenant_id,provider,purpose,status,currency,idempotency_key,provider_subscription_id) VALUES($1,'mollie','mollie_subscription_create','succeeded','EUR','old-unbound','previous')`, tenant.id)
+			}
+			id := uuid.NewString()
+			created := now.Add(-25 * time.Hour)
+			exec(`INSERT INTO purser.payment_provider_intents(id,tenant_id,provider,purpose,status,currency,idempotency_key,local_reference_id,provider_customer_id,provider_session_id,created_at) VALUES($1::uuid,$2,'stripe','tenant_subscription_checkout','provider_open','EUR',$1::text,$3,'customer','session',$4)`, id, tenant.id, tenant.supporterID, created)
+			fixture.route("GET", "/v1/checkout/sessions/session", func(recordedProviderRequest) (int, any) {
+				return 200, map[string]any{"id": "session", "status": "complete", "payment_status": "paid", "mode": "subscription", "created": created.Unix(), "expires_at": created.Add(24 * time.Hour).Unix(), "customer": "customer", "subscription": "incoming", "metadata": map[string]string{"tenant_id": tenant.id, "purpose": "subscription", "reference_id": tenant.supporterID, "checkout_reservation_id": id}}
+			})
+			fixture.route("GET", "/v1/subscriptions/incoming", func(recordedProviderRequest) (int, any) {
+				return 200, map[string]any{"id": "incoming", "status": "active"}
+			})
+			fixture.route("DELETE", "/v1/subscriptions/incoming", func(recordedProviderRequest) (int, any) {
+				return 200, map[string]any{"id": "incoming", "status": "canceled"}
+			})
+			fixture.route("GET", "/v1/invoices", func(recordedProviderRequest) (int, any) {
+				return 200, map[string]any{"object": "list", "data": []any{}, "has_more": false}
+			})
+			if err := tenant.svc.expireCheckoutReservation(t.Context(), checkoutReservationExpiry{TenantID: tenant.id, IntentID: id}); err == nil || !strings.Contains(err.Error(), "original customer") {
+				t.Fatalf("automatic recovery guessed a previous collector: %v", err)
+			}
+			ctx := context.WithValue(t.Context(), ctxkeys.KeyUserID, uuid.NewString())
+			out, err := tenant.svc.RecoverCheckoutResult(ctx, tenant.id, id, "cancel new purchase; previous binding is not provable")
+			if err != nil || out.Outcome != "cancelled" || len(fixture.matching("DELETE", "/v1/subscriptions/incoming")) != 1 {
+				t.Fatalf("confirmed compensation cannot clear unknown binding: out=%+v err=%v", out, err)
+			}
+			var previous, state string
+			if err := db.QueryRow(`SELECT s.mollie_subscription_id,i.status FROM purser.tenant_subscriptions s JOIN purser.payment_provider_intents i ON i.tenant_id=s.tenant_id WHERE s.tenant_id=$1 AND i.id=$2`, tenant.id, id).Scan(&previous, &state); err != nil || previous != "previous" || state != "expired" {
+				t.Fatalf("compensation changed the previous collector or kept the fence: previous=%s state=%s err=%v", previous, state, err)
+			}
+			for _, request := range fixture.requests {
+				if strings.Contains(request.path, "previous") {
+					t.Fatalf("confirmed recovery touched unproven previous collector: %+v", request)
+				}
 			}
 		})
 	}

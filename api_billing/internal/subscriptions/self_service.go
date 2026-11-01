@@ -34,6 +34,9 @@ func CheckSelfServiceCheckout(ctx context.Context, exec purserdb.DBTX, tenantID,
 // subscription lock. Only a replay of the established provider identity may
 // reuse a live native subscription; a different purchase must be compensated.
 func CheckSelfServiceActivation(ctx context.Context, exec purserdb.DBTX, tenantID, tierID, provider, incomingID string) error {
+	if tierID == "" {
+		return ErrSelfServiceTier
+	}
 	q := purserdb.New(exec)
 	tier, err := q.GetTierForBillingChange(ctx, tierID)
 	if errors.Is(err, sql.ErrNoRows) {
