@@ -195,23 +195,23 @@ func TestMediaAuthorityCollectionAndFetch_RealPG(t *testing.T) {
 		}
 
 		// A complete set retracts what it omits, which stops a running source. A
-		// spent prepaid balance leaves the set incomplete so nothing is retracted;
-		// suspension is what ends the source.
+		// spent prepaid balance holds the row outside the desired rows so it is
+		// neither started nor retracted; suspension omits it, which ends the source.
 		for version, billing := range []struct {
 			decision mediaauthoritypb.TenantBillingDecision
 			reason   string
-			complete bool
+			held     int
 		}{
-			{mediaauthoritypb.TenantBillingDecision_TENANT_BILLING_DECISION_PAYMENT_REQUIRED, sharedauthority.ReasonPrepaidBalanceUnavailable, false},
-			{mediaauthoritypb.TenantBillingDecision_TENANT_BILLING_DECISION_SUSPENDED, "tenant_suspended", true},
+			{mediaauthoritypb.TenantBillingDecision_TENANT_BILLING_DECISION_PAYMENT_REQUIRED, sharedauthority.ReasonPrepaidBalanceUnavailable, 1},
+			{mediaauthoritypb.TenantBillingDecision_TENANT_BILLING_DECISION_SUSPENDED, "tenant_suspended", 0},
 		} {
 			tenant := signedTenantBilling(t, uint64(50+version), billing.decision, billing.reason)
 			if _, err := restarted.Apply(ctx, tenant); err != nil {
 				t.Fatal(err)
 			}
 			set, err := restarted.ManagedStreams(ctx, "cell-a")
-			if err != nil || set.Complete != billing.complete || len(set.Rows) != 0 {
-				t.Fatalf("%s: complete=%v with %d rows (err %v), want complete=%v", billing.reason, set.Complete, len(set.Rows), err, billing.complete)
+			if err != nil || !set.Complete || len(set.Rows) != 0 || len(set.Held) != billing.held {
+				t.Fatalf("%s: complete=%v with %d rows and %d held (err %v), want complete with %d held", billing.reason, set.Complete, len(set.Rows), len(set.Held), err, billing.held)
 			}
 		}
 	})

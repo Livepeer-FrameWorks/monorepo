@@ -65,8 +65,10 @@ Expiry is fail-closed even if the tenant has another collection method: the
 fallback tier and billing boundary must settle before access resumes.
 A `PAYMENT_REQUIRED` denial with reason `prepaid_balance_unavailable` refuses
 new streams and viewers and leaves running ones alone: playback grants stay on
-edges with `new_sessions_blocked` set, and the managed-stream set reports
-incomplete so nothing is retracted. Running sessions end only at suspension.
+edges with `new_sessions_blocked` set, and the managed-stream set holds the
+tenant's rows: a held stream stays where it runs, starts nowhere new and leaves
+the set complete for every other tenant. A held source that restarts boots from
+its configuration on the node that holds it. Running sessions end only at suspension.
 Local tenant account closure compiles an inactive authority with
 `tenant_inactive` and source revision
 `commodore/account_closed` in the original schema (placement schemas hash this

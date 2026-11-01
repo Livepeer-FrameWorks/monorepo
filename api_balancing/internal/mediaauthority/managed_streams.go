@@ -17,11 +17,26 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// ManagedStreamSet is one cluster's desired managed streams. Rows may start;
+// Held, keyed by stream ID, may keep running where they already run but may not
+// start, because their tenant's prepaid balance is spent. A held stream is
+// neither desired nor omitted, so it leaves Complete untouched.
 type ManagedStreamSet struct {
 	Rows     []*commodorepb.ManagedStreamRow
+	Held     map[string]*commodorepb.ManagedStreamRow
 	Contexts map[string]*commodorepb.ResolveStreamContextResponse
 	Marked   bool
 	Complete bool
+}
+
+// HoldsStream reports whether a stream name or playback ID belongs to a held row.
+func (s ManagedStreamSet) HoldsStream(streamName string) bool {
+	for _, row := range s.Held {
+		if row.GetInternalName() == streamName || strings.EqualFold(row.GetPlaybackId(), streamName) {
+			return true
+		}
+	}
+	return false
 }
 
 type ManagedStreamPromotion string
@@ -46,7 +61,10 @@ func (s *Store) SetManagedStreamSetMetric(metric *prometheus.CounterVec) {
 // locally known mist_native object and its tenant projection carry the exact
 // source-readiness marker. A partial set is never used for retract decisions.
 func (s *Store) ManagedStreams(ctx context.Context, clusterID string) (result ManagedStreamSet, resultErr error) {
-	result = ManagedStreamSet{Contexts: make(map[string]*commodorepb.ResolveStreamContextResponse)}
+	result = ManagedStreamSet{
+		Held:     make(map[string]*commodorepb.ManagedStreamRow),
+		Contexts: make(map[string]*commodorepb.ResolveStreamContextResponse),
+	}
 	defer func() {
 		if resultErr != nil {
 			result.Complete = false
@@ -144,21 +162,20 @@ func (s *Store) ManagedStreams(ctx context.Context, clusterID string) (result Ma
 			s.refreshAsync(AuthorityLookup{AuthorityID: row.AuthorityID})
 			continue
 		}
-		// A spent prepaid balance is signed without cluster grants, so this set
-		// cannot say where the source runs, and omitting it would retract a running
-		// source. Incomplete, the set retracts nothing and the control plane answers.
-		if authority.GetLifecycle() == mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE &&
-			sharedauthority.PrepaidBalanceSpent(tenant.Authority) {
-			result.Complete = false
-			continue
-		}
-		if authority.GetLifecycle() != mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE ||
-			tenant.Authority.GetLifecycle() != mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE ||
-			tenant.Authority.GetBillingDecision() != mediaauthoritypb.TenantBillingDecision_TENANT_BILLING_DECISION_ALLOW {
-			continue
-		}
-		if !tenantAllowsCluster(tenant.Authority, clusterID) {
-			continue
+		// A spent prepaid balance is signed without cluster grants, so where the
+		// source may run comes from its sealed secret alone, and the row is held
+		// rather than desired: omitting it would retract a running source.
+		spent := authority.GetLifecycle() == mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE &&
+			sharedauthority.PrepaidBalanceSpent(tenant.Authority)
+		if !spent {
+			if authority.GetLifecycle() != mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE ||
+				tenant.Authority.GetLifecycle() != mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE ||
+				tenant.Authority.GetBillingDecision() != mediaauthoritypb.TenantBillingDecision_TENANT_BILLING_DECISION_ALLOW {
+				continue
+			}
+			if !tenantAllowsCluster(tenant.Authority, clusterID) {
+				continue
+			}
 		}
 		secret, err := s.OpenLiveStreamSecret(object)
 		if err != nil {
@@ -175,7 +192,6 @@ func (s *Store) ManagedStreams(ctx context.Context, clusterID string) (result Ma
 			SourceKind: secret.GetNativeSourceKind(), AlwaysOn: secret.GetNativeAlwaysOn(), PlacementCount: secret.GetNativePlacementCount(),
 			AllowedClusterIds: append([]string(nil), secret.GetNativeAllowedClusterIds()...),
 		}
-		result.Rows = append(result.Rows, managed)
 		// An always-on stream is in use for as long as it is configured, whether
 		// or not anyone is watching: it has to keep being renewed, or the set it
 		// is elected from would lose it. An on-demand one is in use when its
@@ -183,6 +199,11 @@ func (s *Store) ManagedStreams(ctx context.Context, clusterID string) (result Ma
 		if managed.GetAlwaysOn() {
 			s.NoteMediaObjectUse(object)
 		}
+		if spent {
+			result.Held[live.GetStreamId()] = managed
+			continue
+		}
+		result.Rows = append(result.Rows, managed)
 		origin, official := authority.GetOriginClusterId(), tenant.Authority.GetOfficialClusterId()
 		result.Contexts[live.GetStreamId()] = &commodorepb.ResolveStreamContextResponse{
 			Admitted: true, StreamId: live.GetStreamId(), PlaybackId: authority.GetPlaybackId(), InternalName: authority.GetInternalName(),

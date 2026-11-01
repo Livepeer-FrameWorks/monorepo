@@ -33,6 +33,7 @@ import (
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	sharedauthority "github.com/Livepeer-FrameWorks/monorepo/pkg/mediaauthority"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/models"
 	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
@@ -3013,6 +3014,12 @@ func (p *Processor) handleStreamSource(trigger *ipcpb.MistTrigger) (string, bool
 	}
 
 	if !strings.Contains(streamName, "+") {
+		// An empty answer keeps the source configured on this node, which is the
+		// only way a held stream comes back: every resolver below, and /source
+		// behind balance:, refuses a spent tenant.
+		if p.managedSourceHeldOnNode(requestCtx, streamName, trigger.GetNodeId()) {
+			return "", false, nil
+		}
 		nodeClusterID := p.resolveNodeClusterIDWithContext(requestCtx, trigger.GetNodeId())
 		// Federation hook: if a cross-cluster origin-pull is arranged for
 		// this mist-native stream, return the peer DTSC URL directly
@@ -3063,6 +3070,11 @@ func (p *Processor) handleStreamSource(trigger *ipcpb.MistTrigger) (string, bool
 						return control.OfflineUnavailable, true
 					}
 					return "balance:" + base, true
+				}
+				// A held stream is configured but refused until its tenant pays,
+				// which is an outage of the source and not its absence.
+				if localSet.HoldsStream(streamName) {
+					return control.OfflineUnavailable, false
 				}
 				// Completeness protects destructive reconciliation of omitted
 				// streams. Each emitted row is independently authorized, so a
@@ -3782,6 +3794,24 @@ func (p *Processor) resolveProcessSource(artifactHash, nodeID string) (string, b
 		"format":        format,
 	}).Warn("process+ source: unsafe-wrapper input not staged locally by Helmsman")
 	return control.OfflineUnavailable, false, nil
+}
+
+// managedSourceHeldOnNode reports whether a restart of streamName on nodeID is
+// a running source continuing at a spent prepaid balance. Only a node whose
+// sidecar still reports the configuration qualifies, so a spent tenant starts
+// nothing new. Unknown billing, suspension and any other denial do not qualify.
+func (p *Processor) managedSourceHeldOnNode(ctx context.Context, streamName, nodeID string) bool {
+	registry := control.StreamRegistryInstance
+	if registry == nil {
+		return false
+	}
+	tenantID, applied := registry.ManagedVerifiedSource(nodeID, streamName)
+	if !applied {
+		return false
+	}
+	billing := p.GetBillingStatus(ctx, streamName, tenantID)
+	return billing.BillingModel == "prepaid" && billing.IsBalanceNegative && !billing.IsSuspended &&
+		(billing.DeniedReason == "" || billing.DeniedReason == sharedauthority.ReasonPrepaidBalanceUnavailable)
 }
 
 // handleStreamProcess returns cached MistServer process config for the

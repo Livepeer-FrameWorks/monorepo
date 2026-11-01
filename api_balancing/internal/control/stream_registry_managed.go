@@ -215,6 +215,19 @@ func (r *StreamRegistry) ManagedVerifiedPresent(nodeID, streamID string) bool {
 	return ok
 }
 
+// ManagedVerifiedSource returns the tenant of the live managed configuration the
+// node's sidecar last reported under internalName. A retired placement is not one.
+func (r *StreamRegistry) ManagedVerifiedSource(nodeID, internalName string) (tenantID string, ok bool) {
+	r.managed.mu.Lock()
+	defer r.managed.mu.Unlock()
+	for _, snapshot := range r.managed.verified[nodeID] {
+		if snapshot.internalName == internalName && !snapshot.retired {
+			return snapshot.tenantID, true
+		}
+	}
+	return "", false
+}
+
 // ManagedHydrateForNode seeds lastSent with the sidecar's reported
 // applied set on (re)connect, parked under a pending-cluster sentinel
 // until the next reconciler tick promotes it to the real cluster bucket.

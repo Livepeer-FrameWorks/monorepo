@@ -203,34 +203,49 @@ func StartManagedStreamReconciler(ctx context.Context, interval time.Duration, l
 	}
 }
 
+// managedStreamSetReader is the local desired-state source of one reconciler tick.
+type managedStreamSetReader interface {
+	ManagedStreams(ctx context.Context, clusterID string) (localauthority.ManagedStreamSet, error)
+}
+
 func runManagedStreamReconcileOnce(ctx context.Context, log logging.Logger) {
-	for _, clusterID := range ServedClustersSnapshot() {
-		if store := LocalMediaAuthorityStore(); store != nil {
-			localCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-			local, localErr := store.ManagedStreams(localCtx, clusterID)
-			cancel()
-			if localErr != nil {
-				log.WithError(localErr).WithField("cluster_id", clusterID).Warn("Local managed-stream authority is unusable; preserving applied state")
-				if local.Marked {
-					continue
-				}
-			} else if local.Marked && local.Complete {
-				reconcileClusterManagedStreamsWithContexts(ctx, log, clusterID, local.Rows, local.Contexts)
-				continue
-			}
-		}
-		if CommodoreClient == nil {
-			continue
-		}
-		cctx, cancel := context.WithTimeout(ctx, 3*time.Second)
-		resp, err := CommodoreClient.ListManagedStreams(cctx, clusterID)
-		cancel()
-		if err != nil {
-			log.WithError(err).WithField("cluster_id", clusterID).Warn("ListManagedStreams failed")
-			continue
-		}
-		reconcileClusterManagedStreams(ctx, log, clusterID, resp.GetStreams())
+	var local managedStreamSetReader
+	if store := LocalMediaAuthorityStore(); store != nil {
+		local = store
 	}
+	for _, clusterID := range ServedClustersSnapshot() {
+		reconcileServedCluster(ctx, log, clusterID, local)
+	}
+}
+
+// reconcileServedCluster prefers the local desired set and asks Commodore only
+// when that set is unmarked or incomplete.
+func reconcileServedCluster(ctx context.Context, log logging.Logger, clusterID string, reader managedStreamSetReader) {
+	if reader != nil {
+		localCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		local, localErr := reader.ManagedStreams(localCtx, clusterID)
+		cancel()
+		if localErr != nil {
+			log.WithError(localErr).WithField("cluster_id", clusterID).Warn("Local managed-stream authority is unusable; preserving applied state")
+			if local.Marked {
+				return
+			}
+		} else if local.Marked && local.Complete {
+			reconcileClusterManagedStreamsWithContexts(ctx, log, clusterID, local.Rows, local.Contexts, local.Held)
+			return
+		}
+	}
+	if CommodoreClient == nil {
+		return
+	}
+	cctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	resp, err := CommodoreClient.ListManagedStreams(cctx, clusterID)
+	cancel()
+	if err != nil {
+		log.WithError(err).WithField("cluster_id", clusterID).Warn("ListManagedStreams failed")
+		return
+	}
+	reconcileClusterManagedStreams(ctx, log, clusterID, resp.GetStreams())
 }
 
 // reconcileClusterManagedStreams is the per-cluster body of one reconciler
@@ -256,11 +271,16 @@ func runManagedStreamReconcileOnce(ctx context.Context, log logging.Logger) {
 //     A denied stream stays in elected (placement still picked it) but is
 //     absent from admitted, so the retract loop fires. Transient-error
 //     streams are tracked separately so they neither Apply nor Retract.
+//  6. A stream held by a spent prepaid balance neither Applies nor Retracts,
+//     on any node: it keeps running wherever lastSent records it and starts
+//     nowhere new. The hold is per stream, not per elected node, because a
+//     spent tenant's signed placement denies every node, so its row may not be
+//     elected at all. Suspension is a denial, which retracts.
 func reconcileClusterManagedStreams(ctx context.Context, log logging.Logger, clusterID string, rows []*commodorepb.ManagedStreamRow) {
-	reconcileClusterManagedStreamsWithContexts(ctx, log, clusterID, rows, nil)
+	reconcileClusterManagedStreamsWithContexts(ctx, log, clusterID, rows, nil, nil)
 }
 
-func reconcileClusterManagedStreamsWithContexts(ctx context.Context, log logging.Logger, clusterID string, rows []*commodorepb.ManagedStreamRow, localContexts map[string]*commodorepb.ResolveStreamContextResponse) {
+func reconcileClusterManagedStreamsWithContexts(ctx context.Context, log logging.Logger, clusterID string, rows []*commodorepb.ManagedStreamRow, localContexts map[string]*commodorepb.ResolveStreamContextResponse, localHeld map[string]*commodorepb.ManagedStreamRow) {
 	localNodes := connectedNodesInCluster(clusterID)
 	sort.Strings(localNodes)
 	// Migrate any Register-hydrated entries for these nodes into this
@@ -353,6 +373,13 @@ func reconcileClusterManagedStreamsWithContexts(ctx context.Context, log logging
 	// on that node. retract_loop diffs against this, NOT against elected, so
 	// denied-this-tick streams (in elected but not admitted) get retracted.
 	admittedNodes := make(map[string]map[string]struct{})
+	heldStreams := make(map[string]struct{}, len(localHeld))
+	for sid := range localHeld {
+		heldStreams[sid] = struct{}{}
+	}
+	// admissionDecided[stream_id] records that Commodore gave a definite answer
+	// this tick, so the retract pass does not ask again.
+	admissionDecided := make(map[string]struct{})
 	// Snapshot the current per-cluster lastSent under a brief lock so the
 	// per-stream loop below (which performs ResolveStreamContext, sidecar
 	// sends, materializer hooks, RecordStreamActiveCluster, retract sends)
@@ -385,13 +412,18 @@ func reconcileClusterManagedStreamsWithContexts(ctx context.Context, log logging
 				}
 				transientNodes[nodeID][sid] = struct{}{}
 				continue
+			case materializeHeld:
+				heldStreams[sid] = struct{}{}
+				continue
 			case materializeDenied:
 				// Intentionally not added to admittedNodes — falls through to
 				// the retract loop which will emit Retract iff lastSent has
 				// the (node, stream) recorded from a previous tick.
+				admissionDecided[sid] = struct{}{}
 				continue
 			case materializeOK:
 				// proceed to Apply gate below
+				admissionDecided[sid] = struct{}{}
 			}
 
 			if admittedNodes[nodeID] == nil {
@@ -454,6 +486,24 @@ func reconcileClusterManagedStreamsWithContexts(ctx context.Context, log logging
 	// network sends + verified-applied checks happen lock-free. Deletions
 	// to the live state go through brief targeted locks after each successful
 	// retract.
+	streamHeld := func(sid string) bool {
+		if _, ok := heldStreams[sid]; ok {
+			return true
+		}
+		// A local set has already said what it holds. A connected row that
+		// reached here without a definite answer was never resolved, most
+		// often because placement elected nothing for it.
+		row := rowByID[sid]
+		if _, decided := admissionDecided[sid]; decided || row == nil || localContexts != nil {
+			return false
+		}
+		admissionDecided[sid] = struct{}{}
+		if !unelectedManagedStreamKeepsRunning(ctx, log, clusterID, row) {
+			return false
+		}
+		heldStreams[sid] = struct{}{}
+		return true
+	}
 	for nodeID, prev := range nodeLastSnap {
 		nodeAdmitted := admittedNodes[nodeID]
 		nodeTransient := transientNodes[nodeID]
@@ -462,6 +512,15 @@ func reconcileClusterManagedStreamsWithContexts(ctx context.Context, log logging
 				continue
 			}
 			if !shouldRetractManagedStream(sid, nodeAdmitted, nodeTransient) {
+				continue
+			}
+			// A retired placement runs nothing, so only its cleanup remains.
+			if !prevSnap.retired && streamHeld(sid) {
+				// The stream is still running here, so its central placement
+				// stays current even though it is no longer admitted.
+				if prevSnap.tenantID != "" && managedStreamVerifiedAppliedPresent(nodeID, sid) {
+					recordActiveClusterForManagedStream(ctx, log, clusterID, sid, prevSnap.tenantID)
+				}
 				continue
 			}
 			if err := sendRetractManagedStream(log, nodeID, sid, prevSnap); err != nil {
@@ -526,16 +585,45 @@ func clearActiveClusterForManagedStream(ctx context.Context, log logging.Logger,
 	}
 }
 
-// materializeStatus distinguishes the three reconcile outcomes for a
-// (stream, cluster, node) materialize attempt: OK (Apply + record), denied
-// (Retract any prior Apply), or transient (preserve prior state, retry).
+// materializeStatus distinguishes the reconcile outcomes for a (stream, cluster,
+// node) materialize attempt: OK (Apply + record), denied (Retract any prior
+// Apply), transient (preserve prior state, retry), or held (a spent balance:
+// keep the stream where it runs, start it nowhere).
 type materializeStatus int
 
 const (
 	materializeOK materializeStatus = iota
 	materializeDenied
 	materializeTransient
+	materializeHeld
 )
+
+// balanceHoldsManagedStream reports the one Commodore denial that refuses a new
+// stream and leaves a running one alone. Suspension and grant expiry outrank it
+// in ResolveStreamContext, so they never arrive as this rejection.
+func balanceHoldsManagedStream(streamCtx *commodorepb.ResolveStreamContextResponse) bool {
+	return !streamCtx.GetAdmitted() && streamCtx.GetRejectionReason() == commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_BALANCE_NEGATIVE
+}
+
+// unelectedManagedStreamKeepsRunning resolves a listed stream that holds a
+// lastSent entry but no election this tick. Only a definite answer other than a
+// balance hold lets it retract; a failed lookup preserves the running source.
+func unelectedManagedStreamKeepsRunning(ctx context.Context, log logging.Logger, clusterID string, row *commodorepb.ManagedStreamRow) bool {
+	if CommodoreClient == nil {
+		return false
+	}
+	rctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	streamCtx, err := CommodoreClient.ResolveStreamContext(rctx, row.GetStreamId(), "", "", clusterID)
+	cancel()
+	if err != nil {
+		log.WithError(err).WithFields(logging.Fields{
+			"cluster_id": clusterID,
+			"stream_id":  row.GetStreamId(),
+		}).Warn("ResolveStreamContext failed; preserving running stream, will retry next tick")
+		return true
+	}
+	return balanceHoldsManagedStream(streamCtx)
+}
 
 // materializeManagedStream resolves admission for a (stream, cluster) pair
 // and replays the PUSH_REWRITE-equivalent side-effects (stream-context cache
@@ -582,6 +670,9 @@ func materializeManagedStreamWithLocal(ctx context.Context, log logging.Logger, 
 		}).Warn("ResolveStreamContext failed; preserving prior state, will retry next tick")
 		return nil, materializeTransient
 	}
+	if balanceHoldsManagedStream(streamCtx) {
+		return streamCtx, materializeHeld
+	}
 	if !streamCtx.GetAdmitted() {
 		log.WithFields(logging.Fields{
 			"cluster_id":       clusterID,
@@ -620,7 +711,7 @@ func materializeManagedStreamEffects(ctx context.Context, streamCtx *commodorepb
 // pair previously recorded in lastSent must be retracted this tick.
 // Admitted-this-tick → keep. Transient-error this tick → keep (preserve
 // prior state, retry next tick). Anything else (explicit denial OR no
-// longer elected by placement) → retract.
+// longer elected by placement) → retract, unless a balance hold keeps it.
 func shouldRetractManagedStream(streamID string, admitted, transient map[string]struct{}) bool {
 	if _, ok := admitted[streamID]; ok {
 		return false

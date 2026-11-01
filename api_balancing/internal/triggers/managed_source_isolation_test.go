@@ -19,7 +19,7 @@ import (
 )
 
 func TestManagedSourceOutageIsIsolatedFromOtherTenants(t *testing.T) {
-	for _, lookup := range []string{"stream-internal", "PlaybackKey", "spent-stream"} {
+	for _, lookup := range []string{"stream-internal", "PlaybackKey", "spent-stream", "SPENT-playback"} {
 		t.Run(lookup, func(t *testing.T) {
 			settings := &appconfig.Foghorn{BalancerCapabilitySecret: "test-secret"}
 			settings.PublicBaseURL = "https://foghorn.example"
@@ -64,6 +64,16 @@ func TestManagedSourceOutageIsIsolatedFromOtherTenants(t *testing.T) {
 			spent.GetLiveStream().StreamId = "30000000-0000-0000-0000-000000000002"
 			spent.InternalName = "spent-stream"
 			spent.PlaybackId = "spent-playback"
+			spentAuthorityID := sharedauthority.LiveStreamAuthorityID(spent.GetLiveStream().StreamId)
+			spentSecret, err := proto.Marshal(&mediapb.LiveStreamSecret{AuthorityId: spentAuthorityID, TenantId: spent.TenantId, NativeSourceSpec: "/media/spent.mp4", NativeSourceKind: "file", NativeAllowedClusterIds: []string{"cluster-a"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			spentBox, err := sharedauthority.SealSecret("cell-a", spentAuthorityID, sharedauthority.SealRecipient{KeyID: keyID, PublicKey: key.PublicKey()}, spentSecret)
+			if err != nil {
+				t.Fatal(err)
+			}
+			spent.GetLiveStream().SealedCellSecrets = []*mediapb.SealedCellSecret{spentBox}
 			spentBytes, err := proto.Marshal(spent)
 			if err != nil {
 				t.Fatal(err)
@@ -77,7 +87,7 @@ func TestManagedSourceOutageIsIsolatedFromOtherTenants(t *testing.T) {
 			until := time.Now().Add(time.Hour)
 			mock.ExpectQuery("ListLocalManagedStreamAuthorities").WillReturnRows(sqlmock.NewRows([]string{"authority_id", "authority_version", "payload", "payload_sha256", "refresh_after", "valid_until", "local_source_ready", "withheld_by_tenant_revival", "tenant_authority_version"}).
 				AddRow(authorityID, 2, objectBytes, localPayloadDigest(objectBytes), until, until, true, false, 2).
-				AddRow(sharedauthority.LiveStreamAuthorityID(spent.GetLiveStream().StreamId), 2, spentBytes, localPayloadDigest(spentBytes), until, until, true, false, 2))
+				AddRow(spentAuthorityID, 2, spentBytes, localPayloadDigest(spentBytes), until, until, true, false, 2))
 			for _, tenant := range []struct {
 				id      string
 				payload []byte
@@ -88,7 +98,7 @@ func TestManagedSourceOutageIsIsolatedFromOtherTenants(t *testing.T) {
 			if err != nil || abort {
 				t.Fatalf("source lookup failed: got=%s abort=%v err=%v", got, abort, err)
 			}
-			if lookup == "spent-stream" {
+			if strings.HasPrefix(strings.ToLower(lookup), "spent-") {
 				if got != control.OfflineUnavailable {
 					t.Fatalf("spent tenant unexpectedly resolved: %s", got)
 				}

@@ -2,6 +2,8 @@ package mediaauthority
 
 import (
 	"context"
+	"crypto/ecdh"
+	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
 	"errors"
@@ -17,6 +19,108 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"google.golang.org/protobuf/proto"
 )
+
+// A spent tenant's row is held on its own: the set stays complete for the cell,
+// the stream can keep running where it runs, and suspension is what drops it.
+func TestManagedStreamsHoldSpentTenantRowInACompleteSet(t *testing.T) {
+	store, mock, closeDB := newFixtureStore(t, "cell-a")
+	defer closeDB()
+	metric := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "test_held_managed_sets_total", Help: "test"}, []string{"outcome"})
+	store.SetManagedStreamSetMetric(metric)
+	key, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.SetSealPrivateKey(sharedauthority.SealRecipientKeyID("cell-a", key.PublicKey()), key); err != nil {
+		t.Fatal(err)
+	}
+	const healthyTenant = "10000000-0000-0000-0000-000000000001"
+	const spentTenant = "10000000-0000-0000-0000-000000000002"
+	const suspendedTenant = "10000000-0000-0000-0000-000000000003"
+	const healthyStream = "20000000-0000-0000-0000-000000000001"
+	const spentStream = "20000000-0000-0000-0000-000000000002"
+	const spentElsewhereStream = "20000000-0000-0000-0000-000000000003"
+	const suspendedStream = "20000000-0000-0000-0000-000000000004"
+	spentAuthorityID := sharedauthority.LiveStreamAuthorityID(spentStream)
+
+	until := store.now().Add(time.Hour)
+	rows := sqlmock.NewRows([]string{
+		"authority_id", "authority_version", "payload", "payload_sha256", "refresh_after", "valid_until",
+		"local_source_ready", "withheld_by_tenant_revival", "tenant_authority_version",
+	})
+	var tenantOrder []string
+	for _, stream := range []struct{ id, tenant, cluster string }{
+		{healthyStream, healthyTenant, "cell-a"},
+		{spentStream, spentTenant, "cell-a"},
+		{spentElsewhereStream, spentTenant, "cell-b"},
+		{suspendedStream, suspendedTenant, "cell-a"},
+	} {
+		authorityID := sharedauthority.LiveStreamAuthorityID(stream.id)
+		object := sealedObjectFixture(t, key, authorityID, &mediapb.LiveStreamSecret{
+			AuthorityId: authorityID, TenantId: stream.tenant, NativeSourceSpec: "/media/" + stream.id + ".mp4", NativeSourceKind: "file",
+			NativeAlwaysOn: true, NativePlacementCount: 1, NativeAllowedClusterIds: []string{stream.cluster},
+		}, nil)
+		object.TenantId = stream.tenant
+		object.InternalName = "native-" + stream.id
+		object.PlaybackId = "playback-" + stream.id
+		object.GetLiveStream().StreamId = stream.id
+		object.GetLiveStream().IngestMode = "mist_native"
+		payload, marshalErr := proto.Marshal(object)
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		digest := sha256.Sum256(payload)
+		rows.AddRow(authorityID, 2, payload, digest[:], until, until, true, false, 3)
+		tenantOrder = append(tenantOrder, stream.tenant)
+	}
+	mock.ExpectQuery("ListLocalManagedStreamAuthorities").WillReturnRows(rows)
+	tenants := map[string]*mediapb.TenantAuthority{
+		healthyTenant: {SchemaVersion: sharedauthority.SchemaVersion, TenantId: healthyTenant, Lifecycle: mediapb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE,
+			BillingDecision:        mediapb.TenantBillingDecision_TENANT_BILLING_DECISION_ALLOW,
+			EffectiveClusterGrants: []*mediapb.TenantClusterGrant{{ClusterId: "cell-a"}}},
+		spentTenant: {SchemaVersion: sharedauthority.SchemaVersion, TenantId: spentTenant, Lifecycle: mediapb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE,
+			BillingDecision: mediapb.TenantBillingDecision_TENANT_BILLING_DECISION_PAYMENT_REQUIRED, DecisionReason: sharedauthority.ReasonPrepaidBalanceUnavailable},
+		suspendedTenant: {SchemaVersion: sharedauthority.SchemaVersion, TenantId: suspendedTenant, Lifecycle: mediapb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE,
+			BillingDecision: mediapb.TenantBillingDecision_TENANT_BILLING_DECISION_SUSPENDED, DecisionReason: "tenant_suspended"},
+	}
+	for _, tenantID := range tenantOrder {
+		payload, marshalErr := proto.Marshal(tenants[tenantID])
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		digest := sha256.Sum256(payload)
+		mock.ExpectQuery("GetLocalTenantSourceAuthority").WithArgs(tenantID).WillReturnRows(sqlmock.NewRows([]string{
+			"payload", "payload_sha256", "refresh_after", "valid_until", "authority_version", "local_source_ready",
+		}).AddRow(payload, digest[:], until, until, 3, true))
+	}
+
+	set, err := store.ManagedStreams(context.Background(), "cell-a")
+	if err != nil || !set.Marked || !set.Complete {
+		t.Fatalf("one spent tenant made the cell's set incomplete: complete=%v marked=%v err=%v", set.Complete, set.Marked, err)
+	}
+	if len(set.Rows) != 1 || set.Rows[0].GetStreamId() != healthyStream || set.Contexts[healthyStream] == nil {
+		t.Fatalf("desired rows = %+v, want the healthy tenant's stream only", set.Rows)
+	}
+	if len(set.Held) != 1 || set.Held[spentStream] == nil || set.Contexts[spentStream] != nil {
+		t.Fatalf("held rows = %+v, want the spent stream configured for this cluster only", set.Held)
+	}
+	if !set.HoldsStream("native-"+spentStream) || !set.HoldsStream("PLAYBACK-"+spentStream) || set.HoldsStream("native-"+healthyStream) {
+		t.Fatal("held stream lookup does not match by internal name and playback ID alone")
+	}
+	if got := testutil.ToFloat64(metric.WithLabelValues("complete")); got != 1 {
+		t.Fatalf("complete sets = %v, want 1", got)
+	}
+	renewed := false
+	for use := range store.uses.pending {
+		renewed = renewed || use.ID == spentAuthorityID
+	}
+	if !renewed {
+		t.Fatal("held always-on stream stopped being renewed")
+	}
+	if err = mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestManagedSourceMissingTenantIsIncompleteAndFetched(t *testing.T) {
 	store, mock, closeDB := newFixtureStore(t, "cell-a")
