@@ -127,6 +127,24 @@ export function baseMeta(routeId) {
   return descriptors;
 }
 
+export function customerStoryMeta(story) {
+  const robots = { name: "robots", content: "noindex, nofollow" };
+  if (!story) {
+    return [{ title: BRAND_NAME }, robots];
+  }
+
+  const title = `${story.customer} on ${BRAND_NAME}`;
+  return [
+    { title },
+    { name: "description", content: story.summary },
+    { property: "og:site_name", content: BRAND_NAME },
+    { property: "og:title", content: title },
+    { property: "og:description", content: story.summary },
+    { property: "og:image", content: socialImageUrl() },
+    robots,
+  ];
+}
+
 export const discoveryLinks = {
   app: APP_SITE_URL,
   api: API_SITE_URL,

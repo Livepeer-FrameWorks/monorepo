@@ -1,3 +1,5 @@
+import { customerStories, customerStoryPath } from "./src/lib/customerStories.js";
+
 const marketingRoutes = [
   "/",
   "/analytics",
@@ -16,5 +18,5 @@ const marketingRoutes = [
 
 export default {
   ssr: false,
-  prerender: marketingRoutes,
+  prerender: [...marketingRoutes, ...customerStories.map(customerStoryPath)],
 };
