@@ -49,6 +49,10 @@ clusters without hand-built local glue.
 
 What ships today in this area: [Platform capabilities → Playback](/platform/feature-matrix#playback).
 
+### Built-In Password and Geo Rules <Badge text="Next" variant="tip" />
+
+Password protection and country rules as switches on a stream, on every plan. These can already be built with a [playback webhook](/builders/playback-access-control), which means running your own endpoint. The built-in rules need no endpoint.
+
 ### DRM <Badge text="Next" variant="tip" />
 
 FairPlay, Widevine, and PlayReady support is in development, built on playback access control and the player SDKs. Until DRM lands, premium playback workflows that require it should stay on their existing provider.
@@ -77,9 +81,9 @@ An ONNX runtime in the media engine is in active development, running ultralight
 
 Processing placement today routes by node class and current load; what a job will actually cost is only knowable after it runs. The planned cost model predicts a job's footprint — CPU, GPU/VRAM, bandwidth — from its parameters (codec, resolution, framerate, model size, faster/slower-than-realtime factor), corrects those predictions continuously from measured costs of completed jobs, and accounts for interference between co-placed jobs and live serving on the same node. The scheduler will measure and allocate GPU and VRAM. The model extends processing orchestration and the capacity score used by viewer routing, so transcode and AI jobs are placed before they overload a node.
 
-### Composition and SSAI <Badge text="Later" variant="note" />
+### Composition and SSAI <Badge text="Next" variant="tip" />
 
-Composition stays inside the media engine: a MistServer-native blitter for logos, watermarks, and lower-third overlays; MistServer's Composer reused for server-side ad insertion (SSAI) and raw-pixel composition; picture-in-picture and automated clipping layered on top.
+This is the server side of StreamCrafter's cloud production. Composition mixes several live sources on processing nodes into one program stream, which then gets the same multistreaming, recording, and delivery as any other stream. It stays inside the media engine: a MistServer-native blitter for logos, watermarks, and lower-third overlays, and MistServer's Composer for raw-pixel composition, picture-in-picture, and server-side ad insertion (SSAI). Live switching between sources, backup inputs that take over when a primary source drops, and mixing remote guests into the program all build on this layer, with automated clipping layered on top. To compose in the browser today, use [StreamCrafter](/builders/ingest-compositor).
 
 ## Analytics & Observability
 
@@ -159,7 +163,7 @@ In a federated network, one viewer session can cross clusters run by different o
 
 ### Stream-Level Balances <Badge text="Later" variant="note" />
 
-Optional per-stream balances that fund usage before the tenant balance — enabling pay-per-view, tips, and sponsor-funded streams — plus promo codes, referral rewards, and volume discounts.
+Optional per-stream balances that fund usage before the tenant balance — enabling paywalled and pay-per-view streams, tips, and sponsor-funded streams — plus promo codes, referral rewards, and volume discounts.
 
 ## Developer Platform & Agents
 
@@ -181,7 +185,7 @@ What ships today in this area: [Platform capabilities → Engagement & Interacti
 
 ### Conferencing and Chat <Badge text="Next" variant="tip" />
 
-The next major feature theme after the current telemetry pass. Conferencing brings multi-party WebRTC rooms and remote contribution — a commentator or guest joins a room and their audio (video later) is mixed into the managed stream. Viewer chat ships alongside it as the first surface of the rooms service.
+The next major feature theme after the current telemetry pass, following [Team Accounts](#team-accounts-and-permissions) and [Composition](#composition-and-ssai). Conferencing brings multi-party WebRTC rooms and remote contribution: a commentator or guest joins from StreamCrafter and is mixed into the managed stream, in the browser or on the server, chosen per show. Rooms run through MistServer or peer to peer, with a bot participant ingesting media and chat. Viewer chat ships alongside it as the first surface of the rooms service.
 
 ### Rooms and Interactivity (Parlor) <Badge text="Next" variant="tip" />
 

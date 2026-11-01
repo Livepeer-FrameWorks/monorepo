@@ -26,6 +26,7 @@ This broader inventory includes the [product capability matrix](/platform/featur
 | ↳ Viewer protocol selection | Available | API, Docs | resolveViewerEndpoint accepts a required playback protocol and never substitutes another format. Players check serverInfo for this slug before sending the argument. |
 | ↳ Playback access control | Available | API, Agents (MCP), Dashboard, Docs | Public / JWT / webhook playback authorization policy on streams, clips, and VOD assets, with allowed embedding origins, a per-policy webhook context object, a dry-run tester, and full agent management surface. |
 | ↳ Signing keys *(foundation)* | Available | API, Agents (MCP), Dashboard, Docs | ES256 keypairs for signing playback JWTs. Private material returned once on creation. |
+| ↳ Built-in password and geo rules | Planned | — | Password protection and country rules as per-stream switches on every plan, with no customer webhook endpoint. |
 | ↳ DRM | Planned | — | FairPlay, Widevine, and PlayReady protection for premium playback workflows. |
 
 ### Media Library
@@ -49,7 +50,7 @@ This broader inventory includes the [product capability matrix](/platform/featur
 | **Processing** *(foundation)* | Expanding | API, Dashboard, Docs | Server-side media processing — live ABR transcoding, on-edge AI, and composition — placed on the right nodes across a cluster. |
 | ↳ Gateway-backed transcoding | Expanding | API, Dashboard, Docs | Live ABR renditions through Livepeer Gateway or local processing, with processing usage telemetry. |
 | ↳ Live AI processing | Planned | — | ONNX models running directly on the in-memory stream buffer of media edge nodes — detection, transcription, moderation, audio tagging, and embeddings for semantic search. |
-| ↳ Composition and SSAI | Planned | — | MistServer-native blitter for logos, watermarks, and lower-third overlays; Composer for server-side ad insertion (SSAI), raw-pixel composition, picture-in-picture, and automated clipping. |
+| ↳ Composition and SSAI | Planned | — | Server side of StreamCrafter cloud production. Mixes live sources on processing nodes into one program stream, with a MistServer-native blitter for logos, watermarks, and lower-third overlays, and Composer for raw-pixel composition, picture-in-picture, live switching, backup inputs, server-side ad insertion (SSAI), and automated clipping. |
 | **Workload cost model (GPU-aware scheduling)** *(foundation)* | Planned | — | Predictive per-job resource cost — codec, resolution, framerate, model size, and realtime factor mapped to expected CPU, GPU/VRAM, and bandwidth — continuously corrected by measured costs of completed jobs, feeding processing placement and admission. |
 
 ### Analytics & Observability
@@ -109,7 +110,7 @@ This broader inventory includes the [product capability matrix](/platform/featur
 | ↳ Usage caps, alerts, retention cost preview | Expanding | — | Customer-set caps and alerts on storage / bandwidth / recording / transcode meters; cost-preview hypotheticals for retention policy changes. |
 | **Wallet & on-chain identity** | Expanding | API, Agents (MCP), Dashboard, Docs | Wallet sign-in, linked-wallet account identity, and x402 micropayments. |
 | **Operator settlement and attribution** | Planned | — | Attribute served traffic to the operators whose clusters actually carried it — manipulation-resistant across independent operators — and settle the full loop, from credit accrual through operator-visible reporting to payout execution. |
-| **Stream-level balances** | Planned | — | Optional per-stream balances that fund usage before the tenant balance — pay-per-view, tips, sponsor-funded streams — plus promo codes, referral rewards, and volume discounts. |
+| **Stream-level balances** | Planned | — | Optional per-stream balances that fund usage before the tenant balance — paywalled and pay-per-view streams, tips, sponsor-funded streams — plus promo codes, referral rewards, and volume discounts. |
 | **Operator credit ledger** *(foundation)* *(platform)* | Expanding | — | Internal accrual ledger crediting cluster operators for served usage — platform-fee basis points, clawback and reversal support — populated from per-cluster usage attribution. |
 
 ### Developer Platform & Agents

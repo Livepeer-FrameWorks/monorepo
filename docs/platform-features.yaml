@@ -138,6 +138,7 @@ features:
         name: Multistream push targets
         description: Forward live streams to RTMP/SRT destinations with per-target video choice and an optional per-stream live video ABR switch.
         status: shipped
+        gap_reason: Live bitrate and bytes per destination are not shown yet; the panel has status and reason codes.
         required_surfaces:
           graphql: { required: true }
           mcp: { required: true }
@@ -397,6 +398,18 @@ features:
             routes: ["/developer/signing-keys"]
           docs:
             pages: [builders/playback-access-control.mdx]
+
+      - slug: playback-password-geo
+        name: Built-in password and geo rules
+        description: Password protection and country rules as per-stream switches on every plan, with no customer webhook endpoint.
+        status: roadmap
+        gap_reason: Not shipped. Webhook playback access control can enforce both today, but the customer runs the endpoint. Requires policy types, secret handling, GeoIP evaluation at playback admission, player password prompt, and dashboard/MCP surfaces.
+        depends_on: [playback-access-control]
+        required_surfaces:
+          graphql: { required: true }
+          mcp: { required: true }
+          webapp: { required: true }
+          docs: { required: true }
 
       - slug: drm
         name: DRM
@@ -786,9 +799,9 @@ features:
 
       - slug: composition
         name: Composition and SSAI
-        description: MistServer-native blitter for logos, watermarks, and lower-third overlays; Composer for server-side ad insertion (SSAI), raw-pixel composition, picture-in-picture, and automated clipping.
+        description: Server side of StreamCrafter cloud production. Mixes live sources on processing nodes into one program stream, with a MistServer-native blitter for logos, watermarks, and lower-third overlays, and Composer for raw-pixel composition, picture-in-picture, live switching, backup inputs, server-side ad insertion (SSAI), and automated clipping.
         status: roadmap
-        gap_reason: Not shipped. Requires product/API design for overlay placement and lifecycle, SSAI ad-decision integration, billing meters, agent permissions, and dashboard/MCP surfaces for configuring composition.
+        gap_reason: Not shipped. Composer ships in MistServer; the gap is platform work. Requires product/API design for overlay placement and lifecycle, source switching and backup-input failover, SSAI ad-decision integration, billing meters, agent permissions, and dashboard/MCP surfaces for configuring composition.
         depends_on: [processing]
         required_surfaces:
           graphql: { required: true }
@@ -1817,7 +1830,7 @@ features:
   - slug: stream-balances
     name: Stream-level balances
     area: commerce
-    description: Optional per-stream balances that fund usage before the tenant balance — pay-per-view, tips, sponsor-funded streams — plus promo codes, referral rewards, and volume discounts.
+    description: Optional per-stream balances that fund usage before the tenant balance — paywalled and pay-per-view streams, tips, sponsor-funded streams — plus promo codes, referral rewards, and volume discounts.
     status: roadmap
     gap_reason: |
       Not built; design in docs/rfcs/stream-balances.md. Referral capture exists at signup, but crediting mechanics,
@@ -2075,8 +2088,9 @@ features:
     gap_reason: |
       WHIP ingest and WHEP playback ship as single-source paths. Rooms need a session/room model, participant auth,
       server-side audio (then video) mixing into a managed stream for live-commentator and remote-guest workflows, plus
-      API, dashboard, and MCP surfaces.
-    depends_on: [streams]
+      API, dashboard, and MCP surfaces. StreamCrafter is the guest client; rooms run through MistServer or peer to
+      peer with a bot participant ingesting media and chat, and each show mixes in the browser or on the server.
+    depends_on: [streams, composition, team-rbac]
     related: [rooms-interactivity]
     required_surfaces:
       graphql: { required: true }
