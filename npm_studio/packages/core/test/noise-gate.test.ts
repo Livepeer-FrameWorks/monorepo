@@ -1,46 +1,29 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 
-import { NoiseGate, type NoiseGateOptions } from "../src/audio/NoiseGate";
+import { NoiseGate } from "../src/audio/NoiseGate";
 
-// Stub requestAnimationFrame / cancelAnimationFrame
-let rafCallbacks: Map<number, FrameRequestCallback>;
-let nextRafId: number;
+const tap = vi.hoisted(() => ({
+  emit: (_rms: number) => {},
+  destroy: vi.fn(),
+  input: { connect: vi.fn(), disconnect: vi.fn() },
+}));
 
-function setupRafStub() {
-  rafCallbacks = new Map();
-  nextRafId = 1;
-  (globalThis as any).requestAnimationFrame = vi.fn((cb: FrameRequestCallback) => {
-    const id = nextRafId++;
-    rafCallbacks.set(id, cb);
-    return id;
-  });
-  (globalThis as any).cancelAnimationFrame = vi.fn((id: number) => {
-    rafCallbacks.delete(id);
-  });
-}
+vi.mock("../src/audio/LevelTap", () => ({
+  LevelTap: class {
+    input = tap.input;
+    destroy = tap.destroy;
+    constructor(_context: unknown, onLevel: (rms: number) => void) {
+      tap.emit = onLevel;
+    }
+  },
+}));
 
-function fireRaf() {
-  const cbs = [...rafCallbacks.values()];
-  rafCallbacks.clear();
-  for (const cb of cbs) cb(performance.now());
-}
+const LOUD = 0.1; // ~-20 dB, above the default -40 dB threshold
+const QUIET = 0.0001; // -80 dB, below it
 
-// Mock AudioContext with BiquadFilter and Analyser support
 function createMockGainNode() {
   return {
     gain: { value: 1, setTargetAtTime: vi.fn() },
-    connect: vi.fn(),
-    disconnect: vi.fn(),
-  };
-}
-
-function createMockAnalyser(rmsLevel = 0) {
-  return {
-    fftSize: 256,
-    smoothingTimeConstant: 0,
-    getFloatTimeDomainData: vi.fn((data: Float32Array) => {
-      data.fill(rmsLevel);
-    }),
     connect: vi.fn(),
     disconnect: vi.fn(),
   };
@@ -50,7 +33,6 @@ function createMockAudioContext() {
   return {
     currentTime: 0,
     createGain: vi.fn(() => createMockGainNode()),
-    createAnalyser: vi.fn(() => createMockAnalyser()),
   };
 }
 
@@ -59,7 +41,7 @@ describe("NoiseGate", () => {
 
   beforeEach(() => {
     vi.useFakeTimers();
-    setupRafStub();
+    tap.destroy.mockClear();
     ctx = createMockAudioContext();
   });
 
@@ -72,17 +54,18 @@ describe("NoiseGate", () => {
   // Node wiring
   // ===========================================================================
   describe("node wiring", () => {
-    it("creates gain + analyser + output gain nodes", () => {
+    it("creates input and output gain nodes", () => {
       const gate = new NoiseGate(ctx as any);
       expect(ctx.createGain).toHaveBeenCalledTimes(2); // input + output
-      expect(ctx.createAnalyser).toHaveBeenCalledTimes(1);
       gate.destroy();
     });
 
-    it("wires input → analyser and input → outputGain", () => {
+    it("wires input → level tap and input → outputGain", () => {
       const gate = new NoiseGate(ctx as any);
       const inputGain = ctx.createGain.mock.results[0].value;
-      expect(inputGain.connect).toHaveBeenCalledTimes(2);
+      const outputGain = ctx.createGain.mock.results[1].value;
+      expect(inputGain.connect).toHaveBeenCalledWith(tap.input);
+      expect(inputGain.connect).toHaveBeenCalledWith(outputGain);
       gate.destroy();
     });
 
@@ -107,53 +90,35 @@ describe("NoiseGate", () => {
     });
 
     it("opens when signal exceeds threshold", () => {
-      // Signal level of 0.1 → ~-20 dB, above default -40 dB threshold
-      const analyser = createMockAnalyser(0.1);
-      ctx.createAnalyser = vi.fn(() => analyser);
-
       const gate = new NoiseGate(ctx as any);
-      fireRaf(); // process one frame
+      tap.emit(LOUD);
       expect(gate.currentState).toBe("open");
       expect(gate.isOpen).toBe(true);
       gate.destroy();
     });
 
     it("stays closed when signal is below threshold", () => {
-      // Signal level of 0.0001 → ~-80 dB, below default -40 dB threshold
-      const analyser = createMockAnalyser(0.0001);
-      ctx.createAnalyser = vi.fn(() => analyser);
-
       const gate = new NoiseGate(ctx as any);
-      fireRaf();
+      tap.emit(QUIET);
       expect(gate.currentState).toBe("closed");
       gate.destroy();
     });
 
     it("transitions to hold when signal drops below threshold", () => {
-      const analyser = createMockAnalyser(0.1);
-      ctx.createAnalyser = vi.fn(() => analyser);
-
       const gate = new NoiseGate(ctx as any);
-      fireRaf(); // open
+      tap.emit(LOUD);
       expect(gate.currentState).toBe("open");
 
-      // Drop signal
-      analyser.getFloatTimeDomainData = vi.fn((data: Float32Array) => data.fill(0.00001));
-      fireRaf();
+      tap.emit(QUIET);
       expect(gate.currentState).toBe("hold");
       gate.destroy();
     });
 
     it("transitions from hold → closed after hold time expires", () => {
-      const analyser = createMockAnalyser(0.1);
-      ctx.createAnalyser = vi.fn(() => analyser);
-
       const gate = new NoiseGate(ctx as any, { hold: 50 });
-      fireRaf(); // open
+      tap.emit(LOUD);
 
-      // Drop signal → hold
-      analyser.getFloatTimeDomainData = vi.fn((data: Float32Array) => data.fill(0.00001));
-      fireRaf();
+      tap.emit(QUIET);
       expect(gate.currentState).toBe("hold");
 
       // Advance past hold time
@@ -163,34 +128,23 @@ describe("NoiseGate", () => {
     });
 
     it("returns to open from hold if signal returns", () => {
-      const analyser = createMockAnalyser(0.1);
-      ctx.createAnalyser = vi.fn(() => analyser);
-
       const gate = new NoiseGate(ctx as any, { hold: 100 });
-      fireRaf(); // open
+      tap.emit(LOUD);
 
-      // Drop → hold
-      analyser.getFloatTimeDomainData = vi.fn((data: Float32Array) => data.fill(0.00001));
-      fireRaf();
+      tap.emit(QUIET);
       expect(gate.currentState).toBe("hold");
 
-      // Signal comes back → open
-      analyser.getFloatTimeDomainData = vi.fn((data: Float32Array) => data.fill(0.1));
-      fireRaf();
+      tap.emit(LOUD);
       expect(gate.currentState).toBe("open");
       gate.destroy();
     });
 
     it("isOpen is true for both open and hold states", () => {
-      const analyser = createMockAnalyser(0.1);
-      ctx.createAnalyser = vi.fn(() => analyser);
-
       const gate = new NoiseGate(ctx as any);
-      fireRaf();
+      tap.emit(LOUD);
       expect(gate.isOpen).toBe(true);
 
-      analyser.getFloatTimeDomainData = vi.fn((data: Float32Array) => data.fill(0.00001));
-      fireRaf();
+      tap.emit(QUIET);
       expect(gate.currentState).toBe("hold");
       expect(gate.isOpen).toBe(true);
       gate.destroy();
@@ -266,45 +220,27 @@ describe("NoiseGate", () => {
   // Destroy
   // ===========================================================================
   describe("destroy", () => {
-    it("cancels requestAnimationFrame", () => {
+    it("destroys the level tap", () => {
       const gate = new NoiseGate(ctx as any);
       gate.destroy();
-      expect(cancelAnimationFrame).toHaveBeenCalled();
+      expect(tap.destroy).toHaveBeenCalled();
     });
 
     it("disconnects all nodes", () => {
       const gate = new NoiseGate(ctx as any);
       const inputGain = ctx.createGain.mock.results[0].value;
       const outputGain = ctx.createGain.mock.results[1].value;
-      const analyser = ctx.createAnalyser.mock.results[0].value;
 
       gate.destroy();
       expect(inputGain.disconnect).toHaveBeenCalled();
       expect(outputGain.disconnect).toHaveBeenCalled();
-      expect(analyser.disconnect).toHaveBeenCalled();
-    });
-
-    it("stops processing loop after destroy", () => {
-      const gate = new NoiseGate(ctx as any);
-      gate.destroy();
-
-      // Fire RAF — should not schedule new frames
-      const callsBefore = (requestAnimationFrame as any).mock.calls.length;
-      fireRaf();
-      const callsAfter = (requestAnimationFrame as any).mock.calls.length;
-      expect(callsAfter).toBe(callsBefore);
     });
 
     it("clears hold timer", () => {
-      const analyser = createMockAnalyser(0.1);
-      ctx.createAnalyser = vi.fn(() => analyser);
-
       const gate = new NoiseGate(ctx as any, { hold: 1000 });
-      fireRaf(); // open
+      tap.emit(LOUD);
 
-      // Drop to hold
-      analyser.getFloatTimeDomainData = vi.fn((data: Float32Array) => data.fill(0.00001));
-      fireRaf();
+      tap.emit(QUIET);
       expect(gate.currentState).toBe("hold");
 
       gate.destroy();
