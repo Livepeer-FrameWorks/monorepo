@@ -26,6 +26,7 @@
     getAudioConstraints,
     getEncoderSettings,
     createStudioTranslator,
+    maskWhipUrl,
   } from "@livepeer-frameworks/streamcrafter-core";
   import VolumeSlider from "./VolumeSlider.svelte";
 
@@ -486,7 +487,7 @@
         <!-- WHIP URL -->
         <div class="fw-dev-mode-section">
           <div class="fw-dev-mode-section-header">{t("whipEndpoint")}</div>
-          <div class="fw-dev-mode-url">{whipUrl || t("notConfigured")}</div>
+          <div class="fw-dev-mode-url">{maskWhipUrl(whipUrl) || t("notConfigured")}</div>
           {#if whipUrl}
             <button type="button" class="fw-dev-mode-copy-btn" onclick={copyWhipUrl}
               >{t("copyUrl")}</button

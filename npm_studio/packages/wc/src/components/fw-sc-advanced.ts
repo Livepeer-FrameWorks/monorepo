@@ -18,6 +18,7 @@ import {
   type RendererStats,
   type StudioTranslateFn,
   createStudioTranslator,
+  maskWhipUrl,
 } from "@livepeer-frameworks/streamcrafter-core";
 
 type TabId = "audio" | "stats" | "info" | "compositor";
@@ -653,7 +654,7 @@ export class FwScAdvanced extends LitElement {
       <div class="section">
         <div class="section-header" style="margin-bottom:4px">${this.t("whipEndpoint")}</div>
         <div style="font-size:12px;color:hsl(var(--fw-sc-accent));word-break:break-all">
-          ${this.whipUrl || this.t("notConfigured")}
+          ${maskWhipUrl(this.whipUrl) || this.t("notConfigured")}
         </div>
         ${this.whipUrl
           ? html`

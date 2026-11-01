@@ -233,7 +233,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
 
       this.reconnectionManager.on("exhausted", () => {
         this.emit("reconnectionFailed", { error: "All reconnection attempts exhausted" });
-        this.setState("error", { error: "Connection lost - reconnection failed" });
+        this.endSession("Connection lost - reconnection failed");
       })
     );
   }
@@ -254,6 +254,15 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
 
   private isSessionActive(): boolean {
     return ["connecting", "streaming", "reconnecting"].includes(this.state);
+  }
+
+  /**
+   * End a failed session. Capture outlives the connection, so with media still
+   * available the broadcaster can go live again without re-adding sources.
+   */
+  private endSession(error: string): void {
+    const canRetry = this.sources.size > 0 && this.outputStream !== null;
+    this.setState(canRetry ? "capturing" : "error", { error });
   }
 
   /**
@@ -885,9 +894,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
           if (this.state === "streaming" && this.config.reconnection?.enabled !== false) {
             this.handleConnectionLost();
           } else {
-            this.setState("error", {
-              error: event.state === "failed" ? "Connection failed" : "Connection lost",
-            });
+            this.endSession(event.state === "failed" ? "Connection failed" : "Connection lost");
             this.stopStatsPolling();
           }
         }
@@ -978,7 +985,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
     this.log("Starting streaming");
     // New session should start from primary WHIP endpoint.
     this.currentEndpointIndex = 0;
-    this.setState("connecting");
+    this.setState("connecting", { error: undefined });
 
     try {
       // Create WHIP client
@@ -1063,9 +1070,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
         this.encoderManager.destroy();
         this.encoderManager = null;
       }
-      this.setState("error", {
-        error: error instanceof Error ? error.message : String(error),
-      });
+      this.endSession(error instanceof Error ? error.message : String(error));
       throw error;
     }
   }
@@ -1120,9 +1125,9 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
       await this.whipClient.connect(this.outputStream);
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError") return;
-      this.setState("error", {
-        error: `Reconnection failed: ${error instanceof Error ? error.message : String(error)}`,
-      });
+      this.endSession(
+        `Reconnection failed: ${error instanceof Error ? error.message : String(error)}`
+      );
     }
   }
 

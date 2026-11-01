@@ -87,7 +87,8 @@ describe("connection-time ingest placement", () => {
     });
     await expect(controller.startStreaming()).rejects.toThrow("No permitted destination");
     expect(whip.constructed).not.toHaveBeenCalled();
-    expect(controller.getState()).toBe("error");
+    expect(controller.getState()).toBe("capturing");
+    expect(controller.getStateContext().error).toBe("No permitted destination");
     expect(track.stop).not.toHaveBeenCalled();
   });
 
@@ -132,7 +133,8 @@ describe("connection-time ingest placement", () => {
     await vi.advanceTimersByTimeAsync(5000);
     await rejected;
     expect(whip.constructed).not.toHaveBeenCalled();
-    expect(controller.getState()).toBe("error");
+    expect(controller.getState()).toBe("capturing");
+    expect(controller.getStateContext().error).toContain("resolution timed out");
   });
 
   it("validates the resolved protocol without exposing the rejected URL", async () => {

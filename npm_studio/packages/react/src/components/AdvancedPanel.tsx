@@ -22,6 +22,7 @@ import {
   createEncoderConfig,
   getAudioConstraints,
   getEncoderSettings,
+  maskWhipUrl,
 } from "@livepeer-frameworks/streamcrafter-core";
 import { VolumeSlider } from "./VolumeSlider";
 import { useStudioTranslate } from "../context/StudioI18nContext";
@@ -862,7 +863,7 @@ const AdvancedPanel: React.FC<AdvancedPanelProps> = ({
                 wordBreak: "break-all",
               }}
             >
-              {whipUrl || t("notConfigured")}
+              {maskWhipUrl(whipUrl) || t("notConfigured")}
             </div>
             {whipUrl && (
               <button

@@ -11,6 +11,7 @@ export { TypedEventEmitter } from "./core/EventEmitter";
 export { DeviceManager } from "./core/DeviceManager";
 export { ScreenCapture } from "./core/ScreenCapture";
 export { WhipClient } from "./core/WhipClient";
+export { maskWhipUrl } from "./core/whipUrlDisplay";
 // Ingest controller exports
 export { IngestControllerV2 as IngestController } from "./core/IngestControllerV2";
 export { IngestControllerV2 } from "./core/IngestControllerV2"; // Named export for direct imports
