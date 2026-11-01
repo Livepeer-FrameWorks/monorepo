@@ -507,14 +507,12 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
 
     const transitionConfig = transition || this.defaultTransition;
 
-    // First, send the target scene to the worker
-    this.sendToWorker({ type: "updateScene", scene });
-
-    // Then start the transition
+    // The target travels with the transition: an updateScene first would
+    // replace the worker's current scene and leave nothing to transition from.
     this.sendToWorker({
       type: "startTransition",
       transition: transitionConfig,
-      toSceneId: sceneId,
+      toScene: scene,
     });
 
     const previousSceneId = this.activeSceneId;

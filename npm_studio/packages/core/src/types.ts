@@ -602,7 +602,7 @@ export type CompositorMainToWorker =
   | { type: "updateScene"; scene: Scene }
   | { type: "sourceFrame"; sourceId: string; frame: VideoFrame }
   | { type: "sourceImage"; sourceId: string; bitmap: ImageBitmap }
-  | { type: "startTransition"; transition: TransitionConfig; toSceneId: string }
+  | { type: "startTransition"; transition: TransitionConfig; toScene: Scene }
   | { type: "updateLayout"; layout: LayoutConfig }
   | { type: "animateLayout"; targetScene: Scene; transition: LayoutTransitionConfig }
   | { type: "resize"; width: number; height: number; frameRate?: number }

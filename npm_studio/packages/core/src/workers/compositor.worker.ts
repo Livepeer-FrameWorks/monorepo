@@ -113,7 +113,7 @@ self.onmessage = async (e: MessageEvent<CompositorMainToWorker>) => {
         break;
 
       case "startTransition":
-        handleStartTransition(message.transition, message.toSceneId);
+        handleStartTransition(message.transition, message.toScene);
         break;
 
       case "updateLayout":
@@ -229,26 +229,27 @@ function handleUpdateScene(scene: Scene): void {
   }
 }
 
-function handleStartTransition(transition: TransitionConfig, toSceneId: string): void {
+function handleStartTransition(transition: TransitionConfig, toScene: Scene): void {
   if (!currentScene || !renderer) return;
+
+  if (transition.type === "cut") {
+    nextScene = toScene;
+    completeTransition();
+    return;
+  }
 
   // Capture current scene as "from" snapshot
   captureSceneSnapshot("from");
 
-  // The "to" scene should have been set via updateScene
-  if (nextScene && nextScene.id === toSceneId) {
-    // Render the next scene and capture it
-    const tempScene = currentScene;
-    currentScene = nextScene;
-    renderCurrentScene();
-    captureSceneSnapshot("to");
-    currentScene = tempScene;
+  // Render the target scene and capture it
+  const fromScene = currentScene;
+  nextScene = toScene;
+  currentScene = toScene;
+  renderCurrentScene();
+  captureSceneSnapshot("to");
+  currentScene = fromScene;
 
-    // Start the transition
-    transitionEngine.start(currentScene.id, toSceneId, transition);
-  } else {
-    console.warn("[CompositorWorker] Next scene not found for transition:", toSceneId);
-  }
+  transitionEngine.start(fromScene.id, toScene.id, transition);
 }
 
 function captureSceneSnapshot(target: "from" | "to"): void {
