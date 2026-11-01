@@ -82,4 +82,67 @@ describe("compositor worker scene transitions", () => {
     expect(renderer.renderTransition).not.toHaveBeenCalled();
     await send({ type: "destroy" });
   });
+
+  it("renders each scene right before its snapshot and leaves the outgoing scene up", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const send = await worker();
+    renderer.renderScene.mockClear();
+
+    await send({
+      type: "startTransition",
+      transition: { type: "fade", durationMs: 60000, easing: "linear" },
+      toScene: scene("to"),
+    });
+
+    const rendered = renderer.renderScene.mock.calls.slice(0, 3).map(([s]) => (s as Scene).id);
+    expect(rendered).toEqual(["from", "to", "from"]);
+    const [fromRender, toRender, lastRender] = renderer.renderScene.mock.invocationCallOrder;
+    const [fromSnapshot, toSnapshot] = vi.mocked(createImageBitmap).mock.invocationCallOrder;
+    expect(fromRender).toBeLessThan(fromSnapshot);
+    expect(fromSnapshot).toBeLessThan(toRender);
+    expect(toRender).toBeLessThan(toSnapshot);
+    expect(toSnapshot).toBeLessThan(lastRender);
+    await send({ type: "destroy" });
+  });
+
+  it("sends no direct frame of the target scene while taking snapshots", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.stubGlobal(
+      "VideoFrame",
+      vi.fn(function () {})
+    );
+    const send = await worker();
+    await send({ type: "setDirectFrameOutput", enabled: true });
+    posted.length = 0;
+
+    await send({
+      type: "startTransition",
+      transition: { type: "fade", durationMs: 60000, easing: "linear" },
+      toScene: scene("to"),
+    });
+
+    expect(posted.filter((message) => message.type === "compositorFrame")).toEqual([]);
+    await send({ type: "destroy" });
+  });
+
+  it("keeps rendering when a cut interrupts a running fade", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const send = await worker();
+
+    await send({
+      type: "startTransition",
+      transition: { type: "fade", durationMs: 60000, easing: "linear" },
+      toScene: scene("to"),
+    });
+    await vi.waitFor(() => expect(renderer.renderTransition).toHaveBeenCalled());
+    await send({
+      type: "startTransition",
+      transition: { type: "cut", durationMs: 0, easing: "linear" },
+      toScene: scene("other"),
+    });
+    renderer.renderScene.mockClear();
+
+    await vi.waitFor(() => expect(renderer.renderScene).toHaveBeenCalled());
+    await send({ type: "destroy" });
+  });
 });

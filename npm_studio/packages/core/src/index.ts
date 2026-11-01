@@ -151,6 +151,7 @@ export {
   getStudioLocalePack,
   getAvailableStudioLocales,
   createStudioTranslator,
+  nextStudioSceneName,
   studioTranslate,
 } from "./I18n";
 export type {

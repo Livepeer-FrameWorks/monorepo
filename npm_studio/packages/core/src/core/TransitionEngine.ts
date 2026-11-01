@@ -275,7 +275,7 @@ export function getAvailableEasingTypes(): EasingType[] {
 export function validateTransitionConfig(config: Partial<TransitionConfig>): TransitionConfig {
   return {
     type: config.type || "fade",
-    durationMs: Math.max(0, config.durationMs ?? 500),
+    durationMs: Number.isFinite(config.durationMs) ? Math.max(0, config.durationMs as number) : 500,
     easing: config.easing || "ease-in-out",
   };
 }

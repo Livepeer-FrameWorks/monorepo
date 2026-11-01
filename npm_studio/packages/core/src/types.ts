@@ -395,9 +395,12 @@ export interface Scene {
   backgroundColor: string; // hex color for empty areas
 }
 
+export type LayerKind = "source" | "overlay";
+
 export interface Layer {
   id: string;
   sourceId: string; // references MediaSource.id
+  kind?: LayerKind; // "overlay" stays above the layout at its own position
   visible: boolean;
   locked: boolean;
   zIndex: number;

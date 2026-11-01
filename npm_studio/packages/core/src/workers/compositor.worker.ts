@@ -233,23 +233,25 @@ function handleStartTransition(transition: TransitionConfig, toScene: Scene): vo
   if (!currentScene || !renderer) return;
 
   if (transition.type === "cut") {
+    transitionEngine.reset();
     nextScene = toScene;
     completeTransition();
     return;
   }
 
-  // Capture current scene as "from" snapshot
+  // WebGL and WebGPU canvases lose their pixels once a frame is presented, so a
+  // snapshot is only good straight after rendering its scene in this same task.
+  renderer.renderScene(currentScene, frames);
   captureSceneSnapshot("from");
-
-  // Render the target scene and capture it
-  const fromScene = currentScene;
-  nextScene = toScene;
-  currentScene = toScene;
-  renderCurrentScene();
+  renderer.renderScene(toScene, frames);
   captureSceneSnapshot("to");
-  currentScene = fromScene;
 
-  transitionEngine.start(fromScene.id, toScene.id, transition);
+  // The canvas is presented when this task ends, and the first transition frame
+  // needs both snapshots, so the outgoing scene is what stays on it until then.
+  renderer.renderScene(currentScene, frames);
+
+  nextScene = toScene;
+  transitionEngine.start(currentScene.id, toScene.id, transition);
 }
 
 function captureSceneSnapshot(target: "from" | "to"): void {

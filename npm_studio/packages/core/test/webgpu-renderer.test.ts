@@ -680,80 +680,71 @@ describe("WebGPURenderer", () => {
       return new (globalThis as any).ImageBitmap(w, h) as ImageBitmap;
     }
 
-    it("creates temp texture and copies image", async () => {
+    /** The quads drawn, read back from the uniforms: clip-space offset and opacity. */
+    function drawnQuads(device: ReturnType<typeof createMockDevice>) {
+      return device.queue.writeBuffer.mock.calls
+        .map((call: any[]) => call[2])
+        .filter((data: unknown) => data instanceof ArrayBuffer && data.byteLength === 96)
+        .map((data: ArrayBuffer) => {
+          const floats = new Float32Array(data);
+          return { x: floats[12], y: floats[13], opacity: floats[16] };
+        });
+    }
+
+    it("cross-dissolves by drawing the target over the source", async () => {
       const { renderer, device } = await initRenderer();
-      const from = createImageBitmap();
-      const to = createImageBitmap();
-
-      renderer.renderTransition(from, to, 0.5, "fade");
-
-      expect(device.createTexture).toHaveBeenCalled();
-      expect(device.queue.copyExternalImageToTexture).toHaveBeenCalled();
-    });
-
-    it("copies target image on cut transition", async () => {
-      const { renderer, device } = await initRenderer();
-      const from = createImageBitmap();
-      const to = createImageBitmap();
-
-      renderer.renderTransition(from, to, 0.5, "cut");
-
-      const copyCall = device.queue.copyExternalImageToTexture.mock.calls.find(
-        (call: any[]) => call[0].source === to
-      );
-      expect(copyCall).toBeDefined();
-    });
-
-    it("copies target when progress >= 1", async () => {
-      const { renderer, device } = await initRenderer();
-      const from = createImageBitmap();
-      const to = createImageBitmap();
-
-      renderer.renderTransition(from, to, 1.0, "fade");
-
-      const copyCall = device.queue.copyExternalImageToTexture.mock.calls.find(
-        (call: any[]) => call[0].source === to
-      );
-      expect(copyCall).toBeDefined();
-    });
-
-    it("copies source when progress <= 0", async () => {
-      const { renderer, device } = await initRenderer();
-      const from = createImageBitmap();
-      const to = createImageBitmap();
-
-      renderer.renderTransition(from, to, 0.0, "fade");
-
-      const copyCall = device.queue.copyExternalImageToTexture.mock.calls.find(
-        (call: any[]) => call[0].source === from
-      );
-      expect(copyCall).toBeDefined();
-    });
-
-    it("copies source when progress < 0.5 for mid-transition", async () => {
-      const { renderer, device } = await initRenderer();
+      mockRenderPassEncoder.drawIndexed.mockClear();
       const from = createImageBitmap();
       const to = createImageBitmap();
 
       renderer.renderTransition(from, to, 0.3, "fade");
 
-      const copyCall = device.queue.copyExternalImageToTexture.mock.calls.find(
-        (call: any[]) => call[0].source === from
+      const sources = device.queue.copyExternalImageToTexture.mock.calls.map(
+        (call: any[]) => call[0].source
       );
-      expect(copyCall).toBeDefined();
+      expect(sources).toEqual([from, to]);
+      expect(mockRenderPassEncoder.drawIndexed).toHaveBeenCalledTimes(2);
+      const [first, second] = drawnQuads(device);
+      expect(first.opacity).toBeCloseTo(1);
+      expect(second.opacity).toBeCloseTo(0.3);
     });
 
-    it("copies target when progress > 0.5 for mid-transition", async () => {
+    it("gives its textures the usage image copies require", async () => {
+      const { renderer, device } = await initRenderer();
+
+      renderer.renderTransition(createImageBitmap(), createImageBitmap(), 0.5, "fade");
+
+      const usage = device.createTexture.mock.calls[0][0].usage;
+      expect(usage & (globalThis as any).GPUTextureUsage.RENDER_ATTACHMENT).toBeTruthy();
+    });
+
+    it.each([
+      ["slide-left", { x: -0.8, y: 0 }, { x: 1.2, y: 0 }],
+      ["slide-right", { x: 0.8, y: 0 }, { x: -1.2, y: 0 }],
+      ["slide-up", { x: 0, y: 0.8 }, { x: 0, y: -1.2 }],
+      ["slide-down", { x: 0, y: -0.8 }, { x: 0, y: 1.2 }],
+    ] as const)("moves both scenes for %s", async (type, fromAt, toAt) => {
+      const { renderer, device } = await initRenderer();
+
+      renderer.renderTransition(createImageBitmap(), createImageBitmap(), 0.4, type);
+
+      const [first, second] = drawnQuads(device);
+      expect(first.x).toBeCloseTo(fromAt.x);
+      expect(first.y).toBeCloseTo(fromAt.y);
+      expect(second.x).toBeCloseTo(toAt.x);
+      expect(second.y).toBeCloseTo(toAt.y);
+    });
+
+    it("keeps its textures across the frames of a transition", async () => {
       const { renderer, device } = await initRenderer();
       const from = createImageBitmap();
       const to = createImageBitmap();
 
-      renderer.renderTransition(from, to, 0.7, "fade");
+      renderer.renderTransition(from, to, 0.2, "fade");
+      const created = device.createTexture.mock.calls.length;
+      renderer.renderTransition(from, to, 0.4, "fade");
 
-      const copyCall = device.queue.copyExternalImageToTexture.mock.calls.find(
-        (call: any[]) => call[0].source === to
-      );
-      expect(copyCall).toBeDefined();
+      expect(device.createTexture.mock.calls.length).toBe(created);
     });
 
     it("returns early when device is null", () => {

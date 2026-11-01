@@ -18,6 +18,7 @@ import { TypedEventEmitter } from "./EventEmitter";
 import type {
   Scene,
   Layer,
+  LayerKind,
   LayerTransform,
   CompositorConfig,
   TransitionConfig,
@@ -32,7 +33,7 @@ import type {
 } from "../types";
 import { DEFAULT_LAYER_TRANSFORM, DEFAULT_COMPOSITOR_CONFIG } from "../types";
 import { applyLayout, createDefaultLayoutConfig } from "./layouts";
-import { createDefaultTransitionConfig } from "./TransitionEngine";
+import { createDefaultTransitionConfig, validateTransitionConfig } from "./TransitionEngine";
 
 // Capture the IIFE script src at module-load time (only available during synchronous execution).
 // In ESM/bundled contexts this is undefined — the import.meta.url paths handle those.
@@ -57,6 +58,7 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
   private defaultLayoutTransition: LayoutTransitionConfig = DEFAULT_LAYOUT_TRANSITION;
   private currentLayout: LayoutConfig;
   private isAnimating = false;
+  private pendingTransitions: (() => void)[] = [];
 
   // Worker communication
   private worker: Worker | null = null;
@@ -360,6 +362,7 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
 
       case "transitionComplete":
         this.emit("transitionCompleted", { sceneId: message.sceneId });
+        this.settlePendingTransitions();
         break;
 
       case "layoutAnimationComplete": {
@@ -497,7 +500,9 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
   }
 
   /**
-   * Transition to a new scene
+   * Transition to a new scene. The target is the active scene from the start;
+   * the promise resolves once the worker has finished the transition, which is
+   * also when a transition interrupted by a later one settles.
    */
   async transitionTo(sceneId: string, transition?: TransitionConfig): Promise<void> {
     const scene = this.scenes.get(sceneId);
@@ -505,7 +510,8 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
       throw new Error(`Scene not found: ${sceneId}`);
     }
 
-    const transitionConfig = transition || this.defaultTransition;
+    const transitionConfig = validateTransitionConfig(transition || this.defaultTransition);
+    const finished = new Promise<void>((resolve) => this.pendingTransitions.push(resolve));
 
     // The target travels with the transition: an updateScene first would
     // replace the worker's current scene and leave nothing to transition from.
@@ -516,14 +522,21 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
     });
 
     const previousSceneId = this.activeSceneId;
+    this.activeSceneId = sceneId;
+
     this.emit("transitionStarted", {
       fromSceneId: previousSceneId || "",
       toSceneId: sceneId,
       transition: transitionConfig,
     });
 
-    // Update active scene ID
-    this.activeSceneId = sceneId;
+    return finished;
+  }
+
+  private settlePendingTransitions(): void {
+    const pending = this.pendingTransitions;
+    this.pendingTransitions = [];
+    pending.forEach((resolve) => resolve());
   }
 
   // ============================================================================
@@ -533,7 +546,12 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
   /**
    * Add a layer to a scene
    */
-  addLayer(sceneId: string, sourceId: string, transform?: Partial<LayerTransform>): Layer {
+  addLayer(
+    sceneId: string,
+    sourceId: string,
+    transform?: Partial<LayerTransform>,
+    options?: { kind?: LayerKind }
+  ): Layer {
     const scene = this.scenes.get(sceneId);
     if (!scene) {
       throw new Error(`Scene not found: ${sceneId}`);
@@ -545,6 +563,7 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
     const layer: Layer = {
       id: layerId,
       sourceId,
+      kind: options?.kind ?? "source",
       visible: true,
       locked: false,
       zIndex: maxZIndex + 1,
@@ -577,6 +596,17 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
     this.updateSceneInWorker(scene);
 
     this.emit("layerRemoved", { sceneId, layerId });
+  }
+
+  /**
+   * Remove every layer showing a source, in all scenes.
+   */
+  removeSourceLayers(sourceId: string): void {
+    for (const scene of this.scenes.values()) {
+      for (const layer of scene.layers.filter((l) => l.sourceId === sourceId)) {
+        this.removeLayer(scene.id, layer.id);
+      }
+    }
   }
 
   /**
@@ -637,7 +667,11 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
       }
     });
 
-    this.updateSceneInWorker(scene);
+    // A layout assigns its slots by stacking order, so the active scene is
+    // laid out again; an overlay would otherwise end up under the main source.
+    if (this.activeSceneId === sceneId) {
+      this.applyLayout(this.currentLayout, true, { durationMs: 200, easing: "ease-out" });
+    }
   }
 
   /**
@@ -653,7 +687,7 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
 
     // Get layer IDs sorted by current zIndex
     const sortedLayers = [...scene.layers]
-      .filter((l) => l.visible)
+      .filter((l) => l.visible && l.kind !== "overlay")
       .sort((a, b) => a.zIndex - b.zIndex);
     if (sortedLayers.length < 2) {
       console.warn("[SceneManager] cycleSourceOrder: Need at least 2 visible layers");
@@ -670,13 +704,7 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
       if (last) layerIds.unshift(last);
     }
 
-    // Apply the new Z-order
     this.reorderLayers(scene.id, layerIds);
-
-    // Re-apply layout to update visual positions based on new Z-order
-    if (this.currentLayout) {
-      this.applyLayout(this.currentLayout, true, { durationMs: 200, easing: "ease-out" });
-    }
 
     this.emit("layerUpdated", { sceneId: scene.id, layer: scene.layers[0] });
   }
@@ -749,34 +777,41 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
   }
 
   private buildLayoutLayers(scene: Scene, layout: LayoutConfig): Layer[] {
-    const existingBySource = new Map(scene.layers.map((layer) => [layer.sourceId, layer]));
-    const visibleSourceIds = [...scene.layers]
+    const sourceStack = scene.layers
+      .filter((layer) => layer.kind !== "overlay")
+      .sort((a, b) => a.zIndex - b.zIndex);
+    const existingBySource = new Map(sourceStack.map((layer) => [layer.sourceId, layer]));
+    const visibleSourceIds = sourceStack
       .filter((layer) => layer.visible)
-      .sort((a, b) => a.zIndex - b.zIndex)
       .map((layer) => layer.sourceId);
-    const visibleLayoutLayers = applyLayout(layout, visibleSourceIds);
+    const layoutLayers = applyLayout(layout, visibleSourceIds);
 
-    const nextLayers = visibleLayoutLayers.map((layoutLayer) => {
-      const existing = existingBySource.get(layoutLayer.sourceId);
-      if (!existing) return layoutLayer;
-      return {
-        ...existing,
-        transform: layoutLayer.transform,
-        zIndex: layoutLayer.zIndex,
-        scalingMode: layoutLayer.scalingMode,
-      };
+    const placed = [...layoutLayers]
+      .sort((a, b) => a.zIndex - b.zIndex)
+      .map((layoutLayer) => {
+        const existing = existingBySource.get(layoutLayer.sourceId);
+        if (!existing) return layoutLayer;
+        return {
+          ...existing,
+          transform: layoutLayer.transform,
+          scalingMode: layoutLayer.scalingMode,
+        };
+      });
+
+    // Layers the layout has no slot for, hidden ones included, stay in the scene
+    // at their place in the stack; the placed layers fill the remaining places.
+    const placedSources = new Set(layoutLayers.map((layer) => layer.sourceId));
+    const stackedLayers = sourceStack.map((layer, zIndex) => {
+      const next = placedSources.has(layer.sourceId) ? placed.shift() : undefined;
+      return { ...(next ?? layer), zIndex };
     });
 
-    const visibleSources = new Set(visibleLayoutLayers.map((layer) => layer.sourceId));
-    const hiddenLayers = scene.layers
-      .filter((layer) => !layer.visible && !visibleSources.has(layer.sourceId))
+    const overlays = scene.layers
+      .filter((layer) => layer.kind === "overlay")
       .sort((a, b) => a.zIndex - b.zIndex)
-      .map((layer, index) => ({
-        ...layer,
-        zIndex: nextLayers.length + index,
-      }));
+      .map((layer, index) => ({ ...layer, zIndex: stackedLayers.length + index }));
 
-    return [...nextLayers, ...hiddenLayers];
+    return [...stackedLayers, ...overlays];
   }
 
   /**
@@ -1269,6 +1304,8 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
    * Destroy the SceneManager and release all resources
    */
   destroy(): void {
+    this.settlePendingTransitions();
+
     // Stop all frame processors and cancel readers
     for (const [sourceId] of this.frameProcessors) {
       this.unbindSource(sourceId);

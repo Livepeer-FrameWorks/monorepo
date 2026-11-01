@@ -1,6 +1,33 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 
 import { SceneManager } from "../src/core/SceneManager";
+import type { Scene, TransitionConfig } from "../src/types";
+
+interface PostedMessage {
+  type: string;
+  scene?: Scene;
+  targetScene?: Scene;
+  transition?: TransitionConfig;
+}
+
+function attachWorker(sm: SceneManager) {
+  const posted: PostedMessage[] = [];
+  const internals = sm as unknown as {
+    worker: unknown;
+    workerReady: boolean;
+    handleWorkerMessage(message: { type: string; sceneId: string }): void;
+  };
+  internals.worker = {
+    postMessage: (message: PostedMessage) => posted.push(message),
+    terminate: vi.fn(),
+  };
+  internals.workerReady = true;
+  return {
+    posted,
+    complete: (sceneId: string) =>
+      internals.handleWorkerMessage({ type: "transitionComplete", sceneId }),
+  };
+}
 
 describe("SceneManager", () => {
   beforeEach(() => {
@@ -329,6 +356,51 @@ describe("SceneManager", () => {
       expect(sm.getCurrentLayout()).toBeDefined();
     });
 
+    it("keeps overlays in place and on top across layout changes", () => {
+      const sm = new SceneManager();
+      const scene = sm.createScene("Main");
+      sm.setActiveScene(scene.id);
+      sm.addLayer(scene.id, "camera");
+      const logo = sm.addLayer(
+        scene.id,
+        "logo",
+        { x: 0.9, y: 0.05, width: 0.08, height: 0.08 },
+        { kind: "overlay" }
+      );
+      sm.addLayer(scene.id, "screen");
+
+      sm.applyLayout({ mode: "split-h" }, false);
+
+      const layers = sm.getScene(scene.id)!.layers;
+      const overlay = layers.find((layer) => layer.id === logo.id)!;
+      expect(layers).toHaveLength(3);
+      expect(overlay.transform).toMatchObject({ x: 0.9, y: 0.05, width: 0.08, height: 0.08 });
+      expect(overlay.zIndex).toBe(Math.max(...layers.map((layer) => layer.zIndex)));
+      expect(
+        layers.filter((layer) => layer.id !== logo.id).map((layer) => layer.transform.width)
+      ).toEqual([0.4975, 0.4975]);
+    });
+
+    it("leaves overlays out of source cycling", () => {
+      const sm = new SceneManager();
+      const scene = sm.createScene("Main");
+      sm.setActiveScene(scene.id);
+      const camera = sm.addLayer(scene.id, "camera");
+      const screen = sm.addLayer(scene.id, "screen");
+      const logo = sm.addLayer(scene.id, "logo", {}, { kind: "overlay" });
+      sm.applyLayout({ mode: "split-h" }, false);
+
+      const layerOf = (id: string) => sm.getScene(scene.id)!.layers.find((l) => l.id === id)!;
+      const cameraX = layerOf(camera.id).transform.x;
+      const logoTransform = { ...layerOf(logo.id).transform };
+
+      sm.cycleSourceOrder();
+
+      expect(layerOf(screen.id).transform.x).toBe(cameraX);
+      expect(layerOf(logo.id).transform).toEqual(logoTransform);
+      expect(layerOf(logo.id).zIndex).toBeGreaterThan(layerOf(camera.id).zIndex);
+    });
+
     it("keeps hidden layers addressable across layout changes", () => {
       const sm = new SceneManager();
       const scene = sm.createScene("Main");
@@ -363,6 +435,175 @@ describe("SceneManager", () => {
       expect(layers.every((layer) => layer.visible)).toBe(true);
       expect(layers.map((layer) => layer.sourceId).sort()).toEqual(["camera", "screen"]);
       expect(layers.map((layer) => layer.transform.width).sort()).toEqual([0.4975, 0.4975]);
+    });
+
+    it("keeps a layer that the solo layout has no slot for when it is shown again", () => {
+      const sm = new SceneManager();
+      const scene = sm.createScene("Main");
+      sm.setActiveScene(scene.id);
+      sm.addLayer(scene.id, "camera");
+      const screen = sm.addLayer(scene.id, "screen");
+
+      sm.setLayerVisibility(scene.id, screen.id, false);
+      sm.setLayerVisibility(scene.id, screen.id, true);
+
+      const layers = sm.getScene(scene.id)!.layers;
+      expect(layers.map((layer) => layer.sourceId).sort()).toEqual(["camera", "screen"]);
+      expect(layers.find((layer) => layer.sourceId === "screen")?.visible).toBe(true);
+    });
+
+    it("keeps the stacking order when a layer is hidden and shown again", () => {
+      const sm = new SceneManager();
+      const scene = sm.createScene("Main");
+      sm.setActiveScene(scene.id);
+      const camera = sm.addLayer(scene.id, "camera");
+      sm.addLayer(scene.id, "screen");
+      const order = () =>
+        [...sm.getScene(scene.id)!.layers]
+          .sort((a, b) => a.zIndex - b.zIndex)
+          .map((layer) => layer.sourceId);
+
+      sm.setLayerVisibility(scene.id, camera.id, false);
+      expect(order()).toEqual(["camera", "screen"]);
+
+      sm.setLayerVisibility(scene.id, camera.id, true);
+      expect(order()).toEqual(["camera", "screen"]);
+    });
+
+    it("keeps a PiP overlay above the main source after a reorder", () => {
+      const sm = new SceneManager();
+      const scene = sm.createScene("Main");
+      sm.setActiveScene(scene.id);
+      const camera = sm.addLayer(scene.id, "camera");
+      const screen = sm.addLayer(scene.id, "screen");
+      sm.applyLayout({ mode: "pip-br" }, false);
+
+      sm.reorderLayers(scene.id, [screen.id, camera.id]);
+
+      const layers = sm.getScene(scene.id)!.layers;
+      const main = layers.find((layer) => layer.sourceId === "screen")!;
+      const overlay = layers.find((layer) => layer.sourceId === "camera")!;
+      expect(main.transform.width).toBe(1);
+      expect(overlay.transform.width).toBeLessThan(1);
+      expect(overlay.zIndex).toBeGreaterThan(main.zIndex);
+    });
+
+    it("sends a reorder to the worker while no layout preset is applied", () => {
+      const sm = new SceneManager();
+      const { posted } = attachWorker(sm);
+      const scene = sm.createScene("Main");
+      sm.setActiveScene(scene.id);
+      const camera = sm.addLayer(scene.id, "camera");
+      const screen = sm.addLayer(scene.id, "screen");
+      posted.length = 0;
+
+      sm.reorderLayers(scene.id, [screen.id, camera.id]);
+
+      const sent = [...posted].reverse().find((m) => m.scene || m.targetScene);
+      const layers = (sent?.scene ?? sent?.targetScene)!.layers;
+      const top = [...layers].sort((a, b) => b.zIndex - a.zIndex)[0];
+      expect(top.sourceId).toBe("camera");
+    });
+  });
+
+  // ===========================================================================
+  // Sources across scenes
+  // ===========================================================================
+  describe("removeSourceLayers", () => {
+    it("removes the source from every scene, not only the active one", () => {
+      const sm = new SceneManager();
+      const first = sm.createScene("First");
+      const second = sm.createScene("Second");
+      sm.setActiveScene(second.id);
+      sm.addLayer(first.id, "camera");
+      sm.addLayer(second.id, "camera");
+      sm.addLayer(second.id, "screen");
+
+      sm.removeSourceLayers("camera");
+
+      expect(sm.getScene(first.id)!.layers).toEqual([]);
+      expect(sm.getScene(second.id)!.layers.map((layer) => layer.sourceId)).toEqual(["screen"]);
+    });
+  });
+
+  // ===========================================================================
+  // Transitions
+  // ===========================================================================
+  describe("transitionTo", () => {
+    function twoScenes(sm: SceneManager) {
+      const from = sm.createScene("From");
+      const to = sm.createScene("To");
+      sm.setActiveScene(from.id);
+      return { from, to };
+    }
+
+    it("resolves when the worker reports the transition finished", async () => {
+      const sm = new SceneManager();
+      const { complete } = attachWorker(sm);
+      const { to } = twoScenes(sm);
+      let resolved = false;
+
+      const pending = sm.transitionTo(to.id).then(() => {
+        resolved = true;
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(resolved).toBe(false);
+
+      complete(to.id);
+      await pending;
+      expect(resolved).toBe(true);
+    });
+
+    it("settles a superseded transition when the later one finishes", async () => {
+      const sm = new SceneManager();
+      const { complete } = attachWorker(sm);
+      const { from, to } = twoScenes(sm);
+
+      const first = sm.transitionTo(to.id);
+      const second = sm.transitionTo(from.id);
+      complete(from.id);
+
+      await expect(Promise.all([first, second])).resolves.toBeDefined();
+    });
+
+    it("settles a pending transition when the manager is destroyed", async () => {
+      const sm = new SceneManager();
+      attachWorker(sm);
+      const { to } = twoScenes(sm);
+
+      const pending = sm.transitionTo(to.id);
+      sm.destroy();
+
+      await expect(pending).resolves.toBeUndefined();
+    });
+
+    it("reports the target as active while the transition plays", () => {
+      const sm = new SceneManager();
+      attachWorker(sm);
+      const { to } = twoScenes(sm);
+      let activeOnStart: string | undefined;
+      sm.on("transitionStarted", () => {
+        activeOnStart = sm.getActiveScene()?.id;
+      });
+
+      void sm.transitionTo(to.id);
+
+      expect(activeOnStart).toBe(to.id);
+    });
+
+    it.each([
+      [-500, 0],
+      [Number.NaN, 500],
+    ])("sends a duration the worker can finish for %s", (durationMs, expected) => {
+      const sm = new SceneManager();
+      const { posted } = attachWorker(sm);
+      const { to } = twoScenes(sm);
+
+      void sm.transitionTo(to.id, { type: "fade", durationMs, easing: "linear" });
+
+      const sent = posted.find((message) => message.type === "startTransition");
+      expect(sent?.transition?.durationMs).toBe(expected);
     });
   });
 

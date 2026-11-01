@@ -174,6 +174,18 @@ function checkWebGPUSupport(): boolean {
 // WebGPU Renderer
 // ============================================================================
 
+interface TransitionQuad {
+  x: number;
+  y: number;
+  opacity: number;
+}
+
+interface TransitionSlot {
+  texture: GPUTexture;
+  uniformBuffer: GPUBuffer;
+  bindGroup: GPUBindGroup;
+}
+
 export class WebGPURenderer implements CompositorRenderer {
   readonly type: RendererType = "webgpu";
   readonly isSupported = checkWebGPUSupport();
@@ -196,6 +208,7 @@ export class WebGPURenderer implements CompositorRenderer {
   private bindGroups: Map<string, GPUBindGroup> = new Map();
   private bindGroupTextures: Map<string, GPUTexture> = new Map();
   private uniformBuffers: Map<string, GPUBuffer> = new Map();
+  private transitionSlots: [TransitionSlot | null, TransitionSlot | null] = [null, null];
 
   // Sampler
   private sampler: GPUSampler | null = null;
@@ -686,10 +699,8 @@ export class WebGPURenderer implements CompositorRenderer {
     progress: number,
     type: TransitionType
   ): void {
-    if (!this.device || !this.context) return;
+    if (!this.device || !this.context || !this.renderPipeline) return;
 
-    // For now, use a simple approach: render both images and blend
-    // A more sophisticated approach would use the transition shader
     const textureView = this.context.getCurrentTexture().createView();
     const commandEncoder = this.device.createCommandEncoder();
 
@@ -704,58 +715,101 @@ export class WebGPURenderer implements CompositorRenderer {
       ],
     });
 
-    // For simplicity, we'll implement transitions similarly to Canvas2D
-    // Full shader-based transitions would require the transition pipeline
+    renderPass.setPipeline(this.renderPipeline);
+    renderPass.setVertexBuffer(0, this.vertexBuffer!);
+    renderPass.setIndexBuffer(this.indexBuffer!, "uint16");
+
+    const { fromQuad, toQuad } = this.transitionQuads(Math.max(0, Math.min(1, progress)), type);
+    if (fromQuad) this.drawTransitionQuad(renderPass, 0, from, fromQuad);
+    this.drawTransitionQuad(renderPass, 1, to, toQuad);
+
     renderPass.end();
-
-    // Create temporary textures and render
-    this.renderTransitionSimple(from, to, progress, type, commandEncoder);
-
     this.device.queue.submit([commandEncoder.finish()]);
   }
 
-  private renderTransitionSimple(
-    from: ImageBitmap,
-    to: ImageBitmap,
-    progress: number,
-    type: TransitionType,
-    _commandEncoder: GPUCommandEncoder
-  ): void {
-    // Simple fallback: just copy the appropriate image
-    // Full implementation would use shader-based blending
-    const p = Math.max(0, Math.min(1, progress));
+  /** Where each scene is drawn at progress `p`: clip-space offsets, in canvas widths/heights. */
+  private transitionQuads(
+    p: number,
+    type: TransitionType
+  ): { fromQuad: TransitionQuad | null; toQuad: TransitionQuad } {
+    const quad = (x: number, y: number): TransitionQuad => ({ x, y, opacity: 1 });
 
-    if (!this.device || !this.context) return;
+    switch (type) {
+      case "fade":
+        return { fromQuad: quad(0, 0), toQuad: { x: 0, y: 0, opacity: p } };
+      case "slide-left":
+        return { fromQuad: quad(-p, 0), toQuad: quad(1 - p, 0) };
+      case "slide-right":
+        return { fromQuad: quad(p, 0), toQuad: quad(p - 1, 0) };
+      case "slide-up":
+        return { fromQuad: quad(0, p), toQuad: quad(0, p - 1) };
+      case "slide-down":
+        return { fromQuad: quad(0, -p), toQuad: quad(0, 1 - p) };
+      default:
+        return { fromQuad: null, toQuad: quad(0, 0) };
+    }
+  }
+
+  private drawTransitionQuad(
+    renderPass: GPURenderPassEncoder,
+    slotIndex: 0 | 1,
+    image: ImageBitmap,
+    quad: TransitionQuad
+  ): void {
+    const slot = this.getTransitionSlot(slotIndex, image);
+    if (!this.device || !slot) return;
+
+    this.device.queue.copyExternalImageToTexture(
+      { source: image },
+      { texture: slot.texture },
+      { width: image.width, height: image.height }
+    );
+
+    // Same layout as updateUniforms: mat4x4f, then opacity; crop stays zero.
+    const uniforms = new ArrayBuffer(96);
+    const floats = new Float32Array(uniforms);
+    floats.set([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, quad.x * 2, quad.y * 2, 0, 1], 0);
+    floats[16] = quad.opacity;
+    this.device.queue.writeBuffer(slot.uniformBuffer, 0, uniforms);
+
+    renderPass.setBindGroup(0, slot.bindGroup);
+    renderPass.drawIndexed(6);
+  }
+
+  private getTransitionSlot(index: 0 | 1, image: ImageBitmap): TransitionSlot | null {
+    if (!this.device || !this.sampler || !this.renderPipeline) return null;
+
+    const existing = this.transitionSlots[index];
+    if (existing?.texture.width === image.width && existing.texture.height === image.height) {
+      return existing;
+    }
+    existing?.texture.destroy();
+    existing?.uniformBuffer.destroy();
 
     const texture = this.device.createTexture({
-      size: { width: this.config.width, height: this.config.height },
+      size: { width: image.width, height: image.height },
       format: "rgba8unorm",
-      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+      usage:
+        GPUTextureUsage.TEXTURE_BINDING |
+        GPUTextureUsage.COPY_DST |
+        GPUTextureUsage.RENDER_ATTACHMENT,
+    });
+    const uniformBuffer = this.device.createBuffer({
+      size: 96,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
+    const bindGroup = this.device.createBindGroup({
+      layout: this.renderPipeline.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: { buffer: uniformBuffer } },
+        { binding: 1, resource: this.sampler },
+        { binding: 2, resource: texture.createView() },
+      ],
     });
 
-    // For cut/instant, just show target
-    if (type === "cut" || p >= 1) {
-      this.device.queue.copyExternalImageToTexture(
-        { source: to },
-        { texture },
-        { width: to.width, height: to.height }
-      );
-    } else if (p <= 0) {
-      this.device.queue.copyExternalImageToTexture(
-        { source: from },
-        { texture },
-        { width: from.width, height: from.height }
-      );
-    } else {
-      // For fade, we'd need proper blending - show target for simplicity
-      this.device.queue.copyExternalImageToTexture(
-        { source: p > 0.5 ? to : from },
-        { texture },
-        { width: to.width, height: to.height }
-      );
-    }
-
-    texture.destroy();
+    const slot = { texture, uniformBuffer, bindGroup };
+    this.transitionSlots[index] = slot;
+    return slot;
   }
 
   applyFilter(_layerId: string, _filter: FilterConfig): void {
@@ -803,6 +857,12 @@ export class WebGPURenderer implements CompositorRenderer {
       buffer.destroy();
     }
     this.uniformBuffers.clear();
+
+    for (const slot of this.transitionSlots) {
+      slot?.texture.destroy();
+      slot?.uniformBuffer.destroy();
+    }
+    this.transitionSlots = [null, null];
 
     this.vertexBuffer?.destroy();
     this.indexBuffer?.destroy();

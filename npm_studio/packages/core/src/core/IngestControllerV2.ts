@@ -380,14 +380,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
     // Unbind from compositor
     if (this.sceneManager) {
       this.sceneManager.unbindSource(id);
-      // Remove layer from active scene
-      const activeScene = this.sceneManager.getActiveScene();
-      if (activeScene) {
-        const layer = activeScene.layers.find((l) => l.sourceId === id);
-        if (layer) {
-          this.sceneManager.removeLayer(activeScene.id, layer.id);
-        }
-      }
+      this.sceneManager.removeSourceLayers(id);
     }
 
     this.sources.delete(id);
