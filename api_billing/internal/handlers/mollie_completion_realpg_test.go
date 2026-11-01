@@ -4,14 +4,21 @@ package handlers
 
 import (
 	"errors"
-	"frameworks/api_billing/internal/database/purserdb"
-	billingmollie "frameworks/api_billing/internal/mollie"
-	"github.com/google/uuid"
 	"testing"
 	"time"
+
+	"frameworks/api_billing/internal/database/purserdb"
+	billingmollie "frameworks/api_billing/internal/mollie"
+
+	"github.com/google/uuid"
 )
 
 func TestMollieCompletionSurvivesLateSettlement_RealPG(t *testing.T) {
+	t.Run("automatic settlement", func(t *testing.T) { assertMollieCompletionSurvivesLateSettlement(t, false) })
+	t.Run("confirmed cancellation", func(t *testing.T) { assertMollieCompletionSurvivesLateSettlement(t, true) })
+}
+
+func assertMollieCompletionSurvivesLateSettlement(t *testing.T, force bool) {
 	db := startProviderReservationDatabase(t)
 	fixture, client := installMollieFixture(t)
 	now := time.Now().UTC()
@@ -28,19 +35,32 @@ func TestMollieCompletionSurvivesLateSettlement_RealPG(t *testing.T) {
 	fixture.route("GET", "/v2/customers/customer/mandates/mandate", func(recordedProviderRequest) (int, any) {
 		return 200, map[string]any{"id": "mandate", "status": "valid", "method": "directdebit", "createdAt": now.Format(time.RFC3339)}
 	})
-	expiry := checkoutReservationExpiry{TenantID: tenant.id, IntentID: id, Force: true}
+	expiry := checkoutReservationExpiry{TenantID: tenant.id, IntentID: id, Force: force}
 	if err := tenant.svc.expireCheckoutReservation(t.Context(), expiry); !errors.Is(err, ErrAwaitingProviderSettlement) && !errors.Is(err, billingmollie.ErrPaymentSettling) {
 		t.Fatalf("accepted payment was not retained for settlement: %v", err)
 	}
 	q := purserdb.New(db)
 	r, err := q.GetProviderCheckoutReservation(t.Context(), purserdb.GetProviderCheckoutReservationParams{TenantID: tenant.id, IntentID: id})
-	if err != nil || !r.CheckoutCompletedAt.Valid || r.RecoveryStartedAt.Valid {
+	if err != nil || r.CheckoutCompletedAt.Valid == force || r.RecoveryStartedAt.Valid != force {
 		t.Fatalf("completion rolled back while waiting: %+v %v", r, err)
 	}
 	if pending, err := q.GetPendingProviderCheckout(t.Context(), purserdb.GetPendingProviderCheckoutParams{TenantID: tenant.id}); err != nil || !pending.Pending {
 		t.Fatalf("settling purchase lost fence: %v %v", pending, err)
 	}
 	state = "paid"
+	if force {
+		fixture.route("POST", "/v2/payments/payment/refunds", func(recordedProviderRequest) (int, any) {
+			return 201, map[string]any{"id": "refund", "status": "pending"}
+		})
+		if err := tenant.svc.expireCheckoutReservation(t.Context(), expiry); err != nil {
+			t.Fatal(err)
+		}
+		r, err = q.GetProviderCheckoutReservation(t.Context(), purserdb.GetProviderCheckoutReservationParams{TenantID: tenant.id, IntentID: id})
+		if err != nil || r.Status != "expired" || r.ActivatedAt.Valid || r.RecoveryOutcome.String != "refund_requested" || len(fixture.matching("POST", "/v2/payments/payment/refunds")) != 1 {
+			t.Fatalf("confirmed cancellation activated or retained the settled payment: receipt=%+v err=%v", r, err)
+		}
+		return
+	}
 	// Another worker has already claimed this provider status, but has not yet
 	// installed its receipt. A nil callback result must keep recovery pending.
 	payment, err := client.GetPayment(t.Context(), "payment")

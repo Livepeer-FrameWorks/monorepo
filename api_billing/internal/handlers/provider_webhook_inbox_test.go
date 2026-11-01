@@ -186,6 +186,7 @@ func TestCheckoutRecoveryRetryDiscardsRolledBackDecision(t *testing.T) {
 	expectProviderSubscriptionLock(m, "tenant")
 	m.ExpectQuery("GetProviderCheckoutReservation").WillReturnRows(checkoutReservationTestRows("intent", "tenant", "stripe", "tenant_subscription_checkout", nil, nil, nil, nil, "pending", deadline, 0))
 	m.ExpectExec("StartCheckoutCompensation").WillReturnResult(sqlmock.NewResult(0, 1))
+	m.ExpectQuery("GetProviderCheckoutReservation").WillReturnRows(checkoutReservationTestRows("intent", "tenant", "stripe", "tenant_subscription_checkout", nil, nil, nil, nil, "pending", deadline, 0))
 	m.ExpectCommit()
 	m.ExpectQuery("FinishCheckoutCompensation").WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(1)))
 	expectCheckoutRecoverySessionUnlock(m)

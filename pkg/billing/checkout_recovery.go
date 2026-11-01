@@ -1,6 +1,9 @@
 package billing
 
-import "errors"
+import (
+	"context"
+	"errors"
+)
 
 // CheckoutRecoveryResult reports provider actions accepted during one recovery.
 // RefundRequested means the provider accepted a refund; bank settlement may follow.
@@ -75,3 +78,16 @@ var ErrRefundSettling = errors.New("provider refund is settling")
 // ErrCheckoutSettlementPending preserves recovery until an initial debit has a
 // terminal outcome, even after its subscription has been cancelled.
 var ErrCheckoutSettlementPending = errors.New("awaiting provider settlement")
+
+// CheckoutRecoveryGuard revalidates the local compensation decision after
+// provider reads and immediately before each cancellation or refund request.
+// It must release database locks before returning to the provider client.
+type CheckoutRecoveryGuard func(context.Context) error
+
+// Check permits standalone provider reconciliation when no local guard is needed.
+func (g CheckoutRecoveryGuard) Check(ctx context.Context) error {
+	if g == nil {
+		return nil
+	}
+	return g(ctx)
+}

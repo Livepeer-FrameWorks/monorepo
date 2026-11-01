@@ -654,3 +654,21 @@ WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
   AND provider_customer_id IS NOT NULL
 GROUP BY tenant_id
 HAVING COUNT(DISTINCT provider_customer_id) = 1;
+
+-- name: ListUnresolvedMollieNativeCheckouts :many
+-- A provider-bound native receipt needs its terminal state checked before a
+-- returning customer can replace it. A live or unknown subscription stays fenced.
+SELECT intent.id::text
+FROM purser.payment_provider_intents intent
+WHERE intent.tenant_id = sqlc.arg(tenant_id)::text::uuid
+  AND intent.provider = 'mollie' AND intent.purpose = 'mollie_subscription_create'
+  AND intent.status IN ('pending', 'provider_open', 'provider_call_failed')
+  AND intent.activated_at IS NULL AND intent.recovery_started_at IS NULL
+  AND intent.provider_subscription_id IS NOT NULL AND intent.provider_customer_id IS NOT NULL
+  AND COALESCE(intent.expires_at, intent.created_at + INTERVAL '24 hours') <= NOW()
+  AND NOT EXISTS (
+      SELECT 1 FROM purser.tenant_subscriptions subscription
+      WHERE subscription.tenant_id = intent.tenant_id
+        AND subscription.mollie_subscription_id = intent.provider_subscription_id
+  )
+ORDER BY intent.created_at, intent.id;

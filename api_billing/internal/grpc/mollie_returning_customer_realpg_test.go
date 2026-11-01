@@ -3,11 +3,14 @@
 package grpc
 
 import (
+	"context"
 	"database/sql"
+	"errors"
 	"strings"
 	"testing"
 
 	"frameworks/api_billing/internal/database/purserdb"
+	billingmollie "frameworks/api_billing/internal/mollie"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
@@ -17,11 +20,39 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+type returningCustomerMollieClient struct {
+	retainedFundingMollieClient
+	resumed   int
+	getStatus string
+	getErr    error
+	onGet     func()
+}
+
+func (c *returningCustomerMollieClient) GetSubscription(_ context.Context, _ string, id string) (*mollielib.Subscription, error) {
+	c.resumed++
+	if c.onGet != nil {
+		c.onGet()
+	}
+	state := c.getStatus
+	if state == "" {
+		state = "canceled"
+	}
+	return &mollielib.Subscription{ID: id, Status: mollielib.SubscriptionStatus(state)}, c.getErr
+}
+
+func (c *returningCustomerMollieClient) CreateSubscription(ctx context.Context, params billingmollie.SubscriptionParams) (*mollielib.Subscription, error) {
+	if params.ExistingSubscriptionID == "previous" {
+		return nil, errors.New("attempted to reuse the ended native receipt")
+	}
+	return c.retainedFundingMollieClient.CreateSubscription(ctx, params)
+}
+
 func assertMollieReturningCustomerFunding(t *testing.T) {
 	for _, history := range []string{
 		"v0.3.13 delivered payment", "consumed payment", "reuse before consumed",
 		"reuse before refunded", "reuse before recovering", "reuse before other tier",
 		"reuse before other currency", "reuse before zero setup",
+		"live old subscription", "lookup failed", "changed receipt",
 	} {
 		t.Run(history, func(t *testing.T) {
 			db := startOperatorGrantDatabase(t)
@@ -32,24 +63,60 @@ func assertMollieReturningCustomerFunding(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			exec(`UPDATE purser.tenant_subscriptions SET tier_id=$2,billing_model='prepaid',stripe_subscription_id=NULL,stripe_customer_id=NULL,mollie_subscription_id='previous',free_fallback_at=NULL,free_fallback_provider_ended_at=NOW()-INTERVAL '1 day',status='active',billing_name='Customer',billing_email='billing@example.test',billing_address='{"street":"Main 1","city":"Amsterdam","postal_code":"1000AA","country":"NL"}' WHERE tenant_id=$1`, tenant, free)
+			exec(`
+                UPDATE purser.tenant_subscriptions SET tier_id=$2, billing_model= 'postpaid',
+                stripe_subscription_id=NULL, stripe_customer_id=NULL, mollie_subscription_id= 'previous',
+                free_fallback_at=NULL, free_fallback_provider_ended_at=NOW()-INTERVAL '1 day', status= 'active',
+                billing_name= 'Customer', billing_email= 'billing@example.test', billing_address=
+                '{"street":"Main 1","city":"Amsterdam","postal_code":"1000AA","country":"NL"}' WHERE
+                tenant_id=$1
+            `, tenant, free)
+			if rows, err := purserdb.New(db).ClearSubscriptionFreeFallback(t.Context(), tenant); err != nil || rows != 1 {
+				t.Fatalf("clear ended provider: rows=%d err=%v", rows, err)
+			}
+			var previous sql.NullString
+			if err := db.QueryRowContext(t.Context(), `SELECT mollie_subscription_id FROM purser.tenant_subscriptions WHERE tenant_id=$1`, tenant).Scan(&previous); err != nil || previous.Valid {
+				t.Fatalf("fallback retained previous subscription: previous=%v err=%v", previous, err)
+			}
 			exec(`INSERT INTO purser.mollie_customers(tenant_id,mollie_customer_id) VALUES($1,'customer')`, tenant)
 			funding := uuid.NewString()
 			// v0.3.13 records the paid first payment, but neither of the two
 			// activation-ownership columns introduced by v0.3.14 exists there.
-			exec(`INSERT INTO purser.payment_provider_intents(id,tenant_id,provider,purpose,local_reference_type,local_reference_id,status,currency,amount_cents,idempotency_key,provider_customer_id,provider_payment_id,succeeded_at,created_at) VALUES($1::uuid,$2,'mollie','mollie_first_payment','billing_tiers',$3,'succeeded','EUR',2000,$1::text,'customer','old-payment',NOW()-INTERVAL '2 months',NOW()-INTERVAL '2 months')`, funding, tenant, tier)
-			exec(`INSERT INTO purser.payment_provider_intents(tenant_id,provider,purpose,local_reference_type,local_reference_id,status,currency,amount_cents,idempotency_key,provider_customer_id,provider_subscription_id,created_at) VALUES($1,'mollie','mollie_subscription_create','billing_tiers',$2,'provider_open','EUR',2000,$3,'customer','previous',NOW()-INTERVAL '2 months')`, tenant, tier, "mollie-subscription:"+tenant+":"+tier+":mandate")
+			exec(`
+                INSERT INTO purser.payment_provider_intents(id, tenant_id, provider, purpose,
+                local_reference_type, local_reference_id, status, currency, amount_cents, idempotency_key,
+                provider_customer_id, provider_payment_id, succeeded_at, created_at) VALUES($1::uuid, $2,
+                'mollie', 'mollie_first_payment', 'billing_tiers', $3, 'succeeded', 'EUR', 2000, $1::text,
+                'customer', 'old-payment', NOW()-INTERVAL '2 months', NOW()-INTERVAL '2 months' )
+            `, funding, tenant, tier)
+			exec(`
+                INSERT INTO purser.payment_provider_intents(tenant_id, provider, purpose, local_reference_type,
+                local_reference_id, status, currency, amount_cents, idempotency_key, provider_customer_id,
+                provider_subscription_id, created_at) VALUES($1, 'mollie', 'mollie_subscription_create',
+                'billing_tiers', $2, 'provider_open', 'EUR', 2000, $3, 'customer', 'previous', NOW()-INTERVAL
+                '2 months' )
+            `, tenant, tier, "mollie-subscription:"+tenant+":"+tier+":mandate")
 			if history == "consumed payment" || strings.HasPrefix(history, "reuse before ") {
 				exec(`UPDATE purser.payment_provider_intents SET provider_mandate_id='mandate' WHERE tenant_id=$1 AND id=$2`, tenant, funding)
 			}
 			if history == "consumed payment" {
 				exec(`UPDATE purser.payment_provider_intents SET activated_at=NOW()-INTERVAL '2 months' WHERE tenant_id=$1 AND id=$2`, tenant, funding)
-				exec(`UPDATE purser.payment_provider_intents SET status='succeeded',activated_at=NOW()-INTERVAL '2 months',funding_intent_id=$2 WHERE tenant_id=$1 AND purpose='mollie_subscription_create'`, tenant, funding)
+				exec(`
+                UPDATE purser.payment_provider_intents SET status= 'succeeded', activated_at=NOW()-INTERVAL
+                '2 months', funding_intent_id=$2 WHERE tenant_id=$1 AND purpose= 'mollie_subscription_create'
+            `, tenant, funding)
 			}
 			reusable := ""
 			if strings.HasPrefix(history, "reuse before ") {
 				reusable = uuid.NewString()
-				exec(`INSERT INTO purser.payment_provider_intents(id,tenant_id,provider,purpose,local_reference_type,local_reference_id,status,currency,amount_cents,idempotency_key,provider_customer_id,provider_payment_id,provider_mandate_id,succeeded_at,created_at) VALUES($1::uuid,$2,'mollie','mollie_first_payment','billing_tiers',$3,'succeeded','EUR',2000,$1::text,'customer','reusable-payment','mandate',NOW()-INTERVAL '3 months',NOW()-INTERVAL '3 months')`, reusable, tenant, tier)
+				exec(`
+                INSERT INTO purser.payment_provider_intents(id, tenant_id, provider, purpose,
+                local_reference_type, local_reference_id, status, currency, amount_cents, idempotency_key,
+                provider_customer_id, provider_payment_id, provider_mandate_id, succeeded_at, created_at)
+                VALUES($1::uuid, $2, 'mollie', 'mollie_first_payment', 'billing_tiers', $3, 'succeeded', 'EUR',
+                2000, $1::text, 'customer', 'reusable-payment', 'mandate', NOW()-INTERVAL '3 months',
+                NOW()-INTERVAL '3 months' )
+            `, reusable, tenant, tier)
 				switch history {
 				case "reuse before consumed":
 					exec(`UPDATE purser.payment_provider_intents SET activated_at=NOW()-INTERVAL '2 months' WHERE tenant_id=$1 AND id=$2`, tenant, funding)
@@ -65,18 +132,53 @@ func assertMollieReturningCustomerFunding(t *testing.T) {
 					exec(`UPDATE purser.payment_provider_intents SET amount_cents=0 WHERE tenant_id=$1 AND id=$2`, tenant, funding)
 				}
 			}
-			client := &retainedFundingMollieClient{}
+			client := &returningCustomerMollieClient{}
 			client.subscription = &mollielib.Subscription{ID: "new-subscription", Status: "active"}
 			server := &PurserServer{db: db, logger: logging.NewLogger(), mollieClient: client}
 			activation := &purserpb.CreateMollieSubscriptionRequest{TenantId: tenant, TierId: tier, MandateId: "mandate"}
+			switch history {
+			case "live old subscription":
+				client.getStatus = "active"
+			case "lookup failed":
+				client.getErr = errors.New("provider temporarily unavailable")
+			case "changed receipt":
+				client.onGet = func() {
+					exec(`UPDATE purser.payment_provider_intents SET recovery_started_at=NOW()
+                      WHERE tenant_id=$1 AND provider_subscription_id='previous'`, tenant)
+				}
+			}
+			if history == "live old subscription" || history == "lookup failed" || history == "changed receipt" {
+				_, err := server.CreateFirstPayment(t.Context(), &purserpb.CreateMollieFirstPaymentRequest{TenantId: tenant, TierId: tier, Method: "creditcard", RedirectUrl: "https://example.test/return"})
+				want := codes.FailedPrecondition
+				if history == "lookup failed" {
+					want = codes.Unavailable
+				}
+				if status.Code(err) != want || client.payments != 0 || client.calls != 0 || client.resumed != 1 {
+					t.Fatalf("uncertain native lifted the fence: payments=%d creates=%d reads=%d err=%v", client.payments, client.calls, client.resumed, err)
+				}
+				var state string
+				if err := db.QueryRowContext(t.Context(), `SELECT status FROM purser.payment_provider_intents WHERE tenant_id=$1 AND provider_subscription_id='previous'`, tenant).Scan(&state); err != nil || state != "provider_open" {
+					t.Fatalf("uncertain native was retired: state=%s err=%v", state, err)
+				}
+				return
+			}
+
 			if reusable != "" {
 				out, err := server.CreateMollieSubscription(t.Context(), activation)
 				if err != nil || out.GetSubscriptionId() != "new-subscription" || client.calls != 1 || client.payments != 0 {
 					t.Fatalf("unusable latest receipt hides reusable funding: creates=%d payments=%d out=%v err=%v", client.calls, client.payments, out, err)
 				}
+				if client.resumed != 1 {
+					t.Fatalf("old native not checked: lookups=%d", client.resumed)
+				}
 				var consumed bool
 				var linked string
-				if err = db.QueryRow(`SELECT p.activated_at IS NOT NULL,n.funding_intent_id::text FROM purser.payment_provider_intents p JOIN purser.payment_provider_intents n ON n.tenant_id=p.tenant_id AND n.provider_subscription_id='new-subscription' WHERE p.tenant_id=$1 AND p.id=$2`, tenant, reusable).Scan(&consumed, &linked); err != nil || !consumed || linked != reusable {
+				if err = db.QueryRow(`
+                SELECT p.activated_at IS NOT NULL, n.funding_intent_id::text FROM
+                purser.payment_provider_intents p JOIN purser.payment_provider_intents n ON
+                n.tenant_id=p.tenant_id AND n.provider_subscription_id= 'new-subscription' WHERE p.tenant_id=$1
+                AND p.id=$2
+            `, tenant, reusable).Scan(&consumed, &linked); err != nil || !consumed || linked != reusable {
 					t.Fatalf("activation did not consume selected funding: consumed=%v linked=%s err=%v", consumed, linked, err)
 				}
 				return
@@ -98,9 +200,16 @@ func assertMollieReturningCustomerFunding(t *testing.T) {
 			if err != nil || out.GetSubscriptionId() != "new-subscription" || client.calls != 1 {
 				t.Fatalf("new payment cannot activate a returning subscription: creates=%d out=%v err=%v", client.calls, out, err)
 			}
+			if history != "consumed payment" && client.resumed != 1 {
+				t.Fatalf("old native not checked: lookups=%d", client.resumed)
+			}
 			var oldActivated, recovering sql.NullTime
 			var paidAndActivated int
-			if err = db.QueryRow(`SELECT activated_at,recovery_started_at,(SELECT count(*) FROM purser.payment_provider_intents p WHERE p.tenant_id=$1 AND p.provider_payment_id=$3 AND p.activated_at IS NOT NULL) FROM purser.payment_provider_intents WHERE tenant_id=$1 AND id=$2`, tenant, funding, payment.PaymentId).Scan(&oldActivated, &recovering, &paidAndActivated); err != nil {
+			if err = db.QueryRow(`
+                SELECT activated_at, recovery_started_at, (SELECT count(*) FROM purser.payment_provider_intents
+                p WHERE p.tenant_id=$1 AND p.provider_payment_id=$3 AND p.activated_at IS NOT NULL) FROM
+                purser.payment_provider_intents WHERE tenant_id=$1 AND id=$2
+            `, tenant, funding, payment.PaymentId).Scan(&oldActivated, &recovering, &paidAndActivated); err != nil {
 				t.Fatal(err)
 			}
 			if oldActivated.Valid != (history == "consumed payment") || recovering.Valid || paidAndActivated != 1 {

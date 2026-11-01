@@ -6903,7 +6903,7 @@ func (s *PurserServer) CreateFirstPayment(ctx context.Context, req *purserpb.Cre
 		firstPaymentAmount = decimal.Zero
 		firstPaymentIntentKey = fmt.Sprintf("mollie-mandate-setup:%s:%s:%s", tenantID, tierID, presentmentCurrency)
 	}
-	firstPaymentIntentID, intentErr := subscriptions.ReserveCheckout(ctx, s.db, tenantID, func(tx *sql.Tx) (string, error) {
+	firstPaymentIntentID, intentErr := s.reserveMollieCheckout(ctx, tenantID, func(tx *sql.Tx) (string, error) {
 		if fundingErr := subscriptions.CheckMollieFirstPayment(ctx, tx, tenantID); fundingErr != nil {
 			return "", fundingErr
 		}
@@ -6913,6 +6913,9 @@ func (s *PurserServer) CreateFirstPayment(ctx context.Context, req *purserpb.Cre
 		})
 	})
 	if intentErr != nil {
+		if status.Code(intentErr) == codes.Unavailable {
+			return nil, intentErr
+		}
 		if subscriptions.IsPricingRefusal(intentErr) || errors.Is(intentErr, subscriptions.ErrPendingCheckout) ||
 			errors.Is(intentErr, subscriptions.ErrUnusedMollieFunding) {
 			return nil, status.Error(codes.FailedPrecondition, intentErr.Error())
@@ -7213,7 +7216,7 @@ func (s *PurserServer) createMollieSubscription(ctx context.Context, req *purser
 	// attempt preserves the old receipt; compensation records cancellation
 	// when activation fails after the external subscription was created.
 	subscriptionIntentKey := fmt.Sprintf("mollie-subscription:%s:%s:%s", tenantID, tierID, mandateID)
-	subscriptionIntentID, intentErr := subscriptions.ReserveCheckout(ctx, s.db, tenantID, func(tx *sql.Tx) (string, error) {
+	subscriptionIntentID, intentErr := s.reserveMollieCheckout(ctx, tenantID, func(tx *sql.Tx) (string, error) {
 		id, reserveErr := purserdb.New(tx).UpsertMollieSubscriptionIntent(ctx, purserdb.UpsertMollieSubscriptionIntentParams{
 			TenantID: tenantID, TierID: tierID,
 			CustomerID: sql.NullString{String: mollieCustomerID, Valid: true},
@@ -7232,6 +7235,9 @@ func (s *PurserServer) createMollieSubscription(ctx context.Context, req *purser
 		return id, nil
 	})
 	if intentErr != nil {
+		if status.Code(intentErr) == codes.Unavailable {
+			return nil, intentErr
+		}
 		if subscriptions.IsPricingRefusal(intentErr) || errors.Is(intentErr, subscriptions.ErrPendingCheckout) || errors.Is(intentErr, subscriptions.ErrCheckoutExpired) {
 			return nil, mollieActivationStatus(intentErr)
 		}

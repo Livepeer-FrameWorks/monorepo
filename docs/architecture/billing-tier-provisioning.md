@@ -415,6 +415,11 @@ The first-payment fence owns receipts with a recorded mandate ID. A historical
 paid receipt without that binding is not treated as unused just because its
 activation date is NULL; its delivery history stays with historical recovery.
 A returning customer can purchase a new month without an operator backfill.
+An old native receipt still bound to a provider subscription is resolved before
+it is replaced. If Mollie confirms that subscription was cancelled or completed,
+the old native receipt is retired and the same request reserves a new checkout.
+An active subscription or failed provider read keeps the fence. The ended
+subscription never consumes the new payment.
 Activation links only succeeded, unactivated funding with no recovery in flight
 for the same tenant, customer, mandate, tier and currency. If no unused payment
 remains, the customer is asked to complete a new first payment. If paid funding
@@ -440,6 +445,11 @@ also returns 404 for missing entities, without a documented distinction for
 revocation. A lookup failure or omitted mandate alone is not evidence of a
 terminally invalid mandate. Purser retains that funding, reports retry guidance
 and permits confirmed operator recovery if the mandate cannot be restored.
+
+Checkout compensation rechecks the locked subscription and receipt snapshot
+after provider reads, before each cancellation or refund request. A concurrent
+change preserves the recovery fence for a fresh retry and does not enqueue a
+refund from the stale decision. Provider I/O runs outside database transactions.
 
 Recovery probes a cancelled Mollie collector using the customer bound to its
 native checkout receipt. Missing bindings fail closed during automatic recovery.
@@ -503,3 +513,34 @@ Idempotent replays use the stored body/key only within a 23-hour Stripe or
 the API credential. Credential rotation cannot turn a retry into a second create.
 Late provider responses invalidate an older recovery lease and wake the durable
 work again, so its acknowledgement cannot erase the new binding.
+
+### First payments across an upgrade
+
+After upgrading, compare Mollie's first payments paid just before rollout with
+local activation/history. A paid receipt created before mandate ownership was
+recorded neither fences a new payment nor links to new activation. Succeeded
+historical receipts are not picked up by the automatic checkout sweep or the
+ordinary recovery inventory. Check them before asking a customer to pay again.
+
+For each affected tenant (identified by the provider's tenant metadata), this
+read-only query finds the local reservation IDs. Bind `tenant_id`, `paid_since`
+and `rollout_at` to the tenant and the pre-rollout payment window under review:
+
+```sql
+SELECT id AS reservation_id, provider_payment_id, succeeded_at
+FROM purser.payment_provider_intents
+WHERE tenant_id = :'tenant_id'::uuid
+  AND provider = 'mollie' AND purpose = 'mollie_first_payment'
+  AND status = 'succeeded' AND provider_mandate_id IS NULL
+  AND activated_at IS NULL AND provider_payment_id IS NOT NULL
+  AND succeeded_at >= :'paid_since'::timestamptz
+  AND created_at < :'rollout_at'::timestamptz
+ORDER BY succeeded_at, id;
+```
+
+Preview `frameworks admin billing recovery checkout --tenant-id TENANT
+--reservation-id RESERVATION --reason "Unactivated payment across rollout"`.
+Confirm compensation only for a purchase that never activated. A receipt that
+funded delivered service must be retained; ambiguous delivery requires the
+confirmed `--retain-delivered` procedure, not a guessed refund. No manual data
+update or direct provider refund is part of this check.

@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,11 +17,15 @@ import (
 
 // TestIneligibleCheckoutCompensates exercises production recovery and its provider lock boundary.
 func TestIneligibleCheckoutCompensates_RealPG(t *testing.T) {
-	for _, mode := range []string{"stripe", "mollie", "native duplicate", "async Stripe refusal", "advance refusal", "concurrent subscription change"} {
+	for _, mode := range []string{"stripe", "mollie", "native duplicate", "async Stripe refusal", "advance refusal", "concurrent subscription change", "concurrent Stripe session change", "concurrent Stripe refund change", "concurrent Mollie payment change"} {
 		t.Run("ineligible recovery/"+mode, func(t *testing.T) {
 			provider := mode
-			if mode == "native duplicate" || mode == "async Stripe refusal" || mode == "advance refusal" || mode == "concurrent subscription change" {
+			concurrent := strings.HasPrefix(mode, "concurrent ")
+			if mode == "native duplicate" || mode == "async Stripe refusal" || mode == "advance refusal" || concurrent {
 				provider = "stripe"
+			}
+			if mode == "concurrent Mollie payment change" {
+				provider = "mollie"
 			}
 			db := startProviderReservationDatabase(t)
 			now := time.Now().UTC().Truncate(time.Second)
@@ -42,12 +47,18 @@ func TestIneligibleCheckoutCompensates_RealPG(t *testing.T) {
 					t.Fatal(err)
 				}
 				wantModel = "postpaid"
-			} else if mode != "concurrent subscription change" {
+			} else if !concurrent {
 				if _, err := db.ExecContext(t.Context(), `UPDATE purser.billing_tiers SET is_enterprise=true WHERE id=$1`, target); err != nil {
 					t.Fatal(err)
 				}
 			}
 
+			mutate := func() {
+				t.Helper()
+				if _, err := db.ExecContext(t.Context(), `UPDATE purser.tenant_subscriptions SET status='past_due' WHERE tenant_id=$1`, tenant.id); err != nil {
+					t.Fatal(err)
+				}
+			}
 			id := uuid.NewString()
 			fixture, client := installStripeFixture(t)
 			purpose, session, payment, subscription := "tenant_subscription_checkout", "ineligible", "", "unactivated"
@@ -62,14 +73,15 @@ VALUES($1::uuid,$2,$3,$4,'billing_tiers',$5,'provider_open','EUR',2000,$1::text,
 				tenant.svc.stripeClient = client
 				fixture.route("GET", "/v1/checkout/sessions/ineligible", func(recordedProviderRequest) (int, any) {
 					assertSubscriptionUnlockedDuringProviderCall(t, db, tenant.id)
-					if mode == "concurrent subscription change" {
-						if _, err := db.ExecContext(t.Context(), `UPDATE purser.tenant_subscriptions SET status='past_due' WHERE tenant_id=$1`, tenant.id); err != nil {
-							t.Fatal(err)
-						}
+					if mode == "concurrent Stripe session change" {
+						mutate()
 					}
 					return 200, map[string]any{"id": "ineligible", "status": "complete", "expires_at": now.Add(time.Hour).Unix(), "customer": "customer", "subscription": "unactivated", "payment_status": "paid", "metadata": map[string]string{"tenant_id": tenant.id, "purpose": "subscription", "reference_id": target, "checkout_reservation_id": id}}
 				})
 				fixture.route("GET", "/v1/subscriptions/unactivated", func(recordedProviderRequest) (int, any) {
+					if mode == "concurrent subscription change" {
+						mutate()
+					}
 					return 200, map[string]any{"id": "unactivated", "status": "active"}
 				})
 				fixture.route("DELETE", "/v1/subscriptions/unactivated", func(recordedProviderRequest) (int, any) {
@@ -85,6 +97,9 @@ VALUES($1::uuid,$2,$3,$4,'billing_tiers',$5,'provider_open','EUR',2000,$1::text,
 					return 200, map[string]any{"id": "initial-charge", "amount": 2000, "currency": "eur", "amount_refunded": 0}
 				})
 				fixture.route("GET", "/v1/refunds", func(r recordedProviderRequest) (int, any) {
+					if mode == "concurrent Stripe refund change" {
+						mutate()
+					}
 					if r.query.Get("charge") == "" {
 						t.Error("refund history was not scoped to the purchase charge")
 					}
@@ -100,6 +115,9 @@ VALUES($1::uuid,$2,$3,$4,'billing_tiers',$5,'provider_open','EUR',2000,$1::text,
 				fixture, tenant.svc.mollieClient = installMollieFixture(t)
 				fixture.route("GET", "/v2/payments/initial", func(recordedProviderRequest) (int, any) {
 					assertSubscriptionUnlockedDuringProviderCall(t, db, tenant.id)
+					if mode == "concurrent Mollie payment change" {
+						mutate()
+					}
 					return 200, map[string]any{"id": "initial", "status": "paid", "sequenceType": "first", "customerId": "customer", "mandateId": "mandate", "paidAt": now.Format(time.RFC3339), "createdAt": now.Add(-time.Minute).Format(time.RFC3339), "amount": map[string]string{"value": "20.00", "currency": "EUR"}, "metadata": map[string]string{"tenant_id": tenant.id, "tier_id": target, "payment_type": "first_payment", "checkout_reservation_id": id}}
 				})
 				fixture.route("GET", "/v2/customers/customer/mandates/mandate", func(recordedProviderRequest) (int, any) {
@@ -145,10 +163,24 @@ VALUES($1::uuid,$2,$3,$4,'billing_tiers',$5,'provider_open','EUR',2000,$1::text,
 					t.Fatalf("compensation retained original 23h deadline: expiry=%+v err=%v", expiry, err)
 				}
 			}
-			if mode == "concurrent subscription change" {
+			if concurrent {
 				err := tenant.svc.expireCheckoutReservation(t.Context(), expiry)
-				if !errors.Is(err, ErrAwaitingProviderSettlement) || len(fixture.matching("POST", "/v1/refunds")) != 0 || len(fixture.matching("DELETE", "/v1/subscriptions/unactivated")) != 0 {
+				wantDeletes := 0
+				if mode == "concurrent Stripe refund change" {
+					wantDeletes = 1
+				}
+				if !errors.Is(err, ErrAwaitingProviderSettlement) || len(fixture.matching("POST", "/v1/refunds")) != 0 || len(fixture.matching("POST", "/v2/payments/initial/refunds")) != 0 || len(fixture.matching("DELETE", "/v1/subscriptions/unactivated")) != wantDeletes {
 					t.Fatalf("recovery acted on stale subscription snapshot: err=%v", err)
+				}
+				var queued int
+				if err := db.QueryRowContext(t.Context(), `SELECT count(*) FROM purser.provider_webhook_inbox WHERE provider='refund_settlement' AND headers->>'tenant_id'=$1`, tenant.id).Scan(&queued); err != nil || queued != 0 {
+					t.Fatalf("stale snapshot queued a refund: queued=%d err=%v", queued, err)
+				}
+				if err := tenant.svc.expireCheckoutReservation(t.Context(), expiry); err != nil {
+					t.Fatalf("recovery did not retry the changed snapshot: %v", err)
+				}
+				if len(fixture.matching("POST", "/v1/refunds"))+len(fixture.matching("POST", "/v2/payments/initial/refunds")) != 1 {
+					t.Fatal("fresh snapshot did not compensate exactly once")
 				}
 				return
 			}

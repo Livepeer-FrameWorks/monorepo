@@ -666,6 +666,9 @@ type Querier interface {
 	ListTierEntitlements(ctx context.Context, tierID string) ([]ListTierEntitlementsRow, error)
 	ListTierPricingRules(ctx context.Context, tierID string) ([]ListTierPricingRulesRow, error)
 	ListUnfinishedTierUpgrades(ctx context.Context, tenantID string) ([]string, error)
+	// A provider-bound native receipt needs its terminal state checked before a
+	// returning customer can replace it. A live or unknown subscription stays fenced.
+	ListUnresolvedMollieNativeCheckouts(ctx context.Context, tenantID string) ([]string, error)
 	ListUsageAggregates(ctx context.Context, arg ListUsageAggregatesParams) ([]ListUsageAggregatesRow, error)
 	ListUsageRecords(ctx context.Context, arg ListUsageRecordsParams) ([]ListUsageRecordsRow, error)
 	ListX402QuoteMetrics(ctx context.Context) ([]ListX402QuoteMetricsRow, error)

@@ -26,6 +26,12 @@ func (c *Client) CancelReservedCheckout(ctx context.Context, customerID, intentI
 
 // RecoverReservedCheckout reports cancellation and refund outcomes for an exact reservation.
 func (c *Client) RecoverReservedCheckout(ctx context.Context, customerID, intentID, sessionID string) (billing.CheckoutRecoveryResult, error) {
+	return c.RecoverReservedCheckoutWithGuard(ctx, customerID, intentID, sessionID, nil)
+}
+
+// RecoverReservedCheckoutWithGuard rechecks local ownership after provider reads
+// before issuing each destructive request. No database lock spans provider I/O.
+func (c *Client) RecoverReservedCheckoutWithGuard(ctx context.Context, customerID, intentID, sessionID string, guard billing.CheckoutRecoveryGuard) (billing.CheckoutRecoveryResult, error) {
 	var result billing.CheckoutRecoveryResult
 	if sessionID != "" {
 		p := &stripe.CheckoutSessionParams{}
@@ -34,7 +40,7 @@ func (c *Client) RecoverReservedCheckout(ctx context.Context, customerID, intent
 		if err != nil {
 			return result, err
 		}
-		err = c.cancelReservedSession(ctx, sess, intentID, &result)
+		err = c.cancelReservedSession(ctx, sess, intentID, &result, guard)
 		return result, err
 	}
 	if customerID == "" || intentID == "" {
@@ -46,7 +52,7 @@ func (c *Client) RecoverReservedCheckout(ctx context.Context, customerID, intent
 	for iter.Next() {
 		sess := iter.CheckoutSession()
 		if sess.Metadata["checkout_reservation_id"] == intentID {
-			if err := c.cancelReservedSession(ctx, sess, intentID, &result); err != nil {
+			if err := c.cancelReservedSession(ctx, sess, intentID, &result, guard); err != nil {
 				return result, err
 			}
 		}
@@ -54,8 +60,11 @@ func (c *Client) RecoverReservedCheckout(ctx context.Context, customerID, intent
 	return result, iter.Err()
 }
 
-func (c *Client) cancelReservedSession(ctx context.Context, sess *stripe.CheckoutSession, intentID string, result *billing.CheckoutRecoveryResult) error {
+func (c *Client) cancelReservedSession(ctx context.Context, sess *stripe.CheckoutSession, intentID string, result *billing.CheckoutRecoveryResult, guard billing.CheckoutRecoveryGuard) error {
 	if sess.Status == stripe.CheckoutSessionStatusOpen {
+		if guardErr := guard.Check(ctx); guardErr != nil {
+			return guardErr
+		}
 		return c.ExpireCheckoutSession(ctx, sess.ID)
 	}
 	if sess.Subscription == nil || sess.Subscription.ID == "" {
@@ -66,6 +75,9 @@ func (c *Client) cancelReservedSession(ctx context.Context, sess *stripe.Checkou
 		return err
 	}
 	if sub.Status != stripe.SubscriptionStatusCanceled && sub.Status != stripe.SubscriptionStatusIncompleteExpired {
+		if guardErr := guard.Check(ctx); guardErr != nil {
+			return guardErr
+		}
 		if _, err = c.CancelSubscriptionImmediately(ctx, sub.ID); err != nil {
 			return err
 		}
@@ -98,12 +110,18 @@ func (c *Client) cancelReservedSession(ctx context.Context, sess *stripe.Checkou
 		// releasing its reservation; a processing debit keeps recovery pending.
 		switch inv.Status {
 		case stripe.InvoiceStatusDraft:
+			if guardErr := guard.Check(ctx); guardErr != nil {
+				return guardErr
+			}
 			params := &stripe.InvoiceParams{}
 			params.Context = ctx
 			if _, err := invoice.Del(inv.ID, params); err != nil {
 				return err
 			}
 		case stripe.InvoiceStatusOpen, stripe.InvoiceStatusUncollectible:
+			if guardErr := guard.Check(ctx); guardErr != nil {
+				return guardErr
+			}
 			params := &stripe.InvoiceVoidInvoiceParams{}
 			params.Context = ctx
 			params.SetIdempotencyKey("checkout-expiry-void:" + intentID + ":" + inv.ID)
@@ -111,7 +129,7 @@ func (c *Client) cancelReservedSession(ctx context.Context, sess *stripe.Checkou
 				return err
 			}
 		}
-		if err := c.refundInvoicePayments(ctx, inv.ID, "checkout-expiry-refund:"+intentID, result, "checkout", intentID); err != nil {
+		if err := c.refundInvoicePaymentsGuarded(ctx, inv.ID, "checkout-expiry-refund:"+intentID, result, "checkout", intentID, "", guard); err != nil {
 			return err
 		}
 	}
@@ -189,6 +207,10 @@ func (c *Client) refundInvoicePayments(ctx context.Context, invoiceID, key strin
 // refundInvoicePaymentsForCharge scopes a settlement retry to its recorded charge.
 // The initial compensation passes no charge filter and records every plan.
 func (c *Client) refundInvoicePaymentsForCharge(ctx context.Context, invoiceID, key string, result *billing.CheckoutRecoveryResult, kind, referenceID, chargeID string) error {
+	return c.refundInvoicePaymentsGuarded(ctx, invoiceID, key, result, kind, referenceID, chargeID, nil)
+}
+
+func (c *Client) refundInvoicePaymentsGuarded(ctx context.Context, invoiceID, key string, result *billing.CheckoutRecoveryResult, kind, referenceID, chargeID string, guard billing.CheckoutRecoveryGuard) error {
 	pp := &stripe.InvoicePaymentListParams{Invoice: stripe.String(invoiceID), Status: stripe.String("paid")}
 	pp.Context = ctx
 	payments := invoicepayment.List(pp)
@@ -242,7 +264,6 @@ func (c *Client) refundInvoicePaymentsForCharge(ctx context.Context, invoiceID, 
 		if paymentID == "" {
 			paymentID = collected.ID
 		}
-		result.RefundSettlements = append(result.RefundSettlements, billing.RefundSettlement{Provider: "stripe", ReferenceKind: kind, ReferenceID: referenceID, InvoiceID: invoiceID, PaymentID: paymentID, ChargeID: collected.ID, AmountCents: target, Currency: string(collected.Currency)})
 		history, err := checkoutRefundHistory(ctx, collected.ID, collected.Currency)
 		if err != nil {
 			return err
@@ -250,6 +271,7 @@ func (c *Client) refundInvoicePaymentsForCharge(ctx context.Context, invoiceID, 
 		// A charge snapshot may lag a refund accepted by Stripe. Read existing
 		// bank returns before calculating the remaining purchase liability.
 		returned := max(collected.AmountRefunded, history.returned)
+		coveredByChargeback := false
 		if collected.Disputed {
 			lost, open, disputeErr := lostDisputeReceipts(ctx, collected.ID)
 			if disputeErr != nil {
@@ -266,18 +288,18 @@ func (c *Client) refundInvoicePaymentsForCharge(ctx context.Context, invoiceID, 
 			}
 			if returned >= target {
 				result.ReturnedByChargeback = true
-				if history.pending {
-					result.RefundRequested = true
-				} else if max(collected.AmountRefunded, history.returned) > 0 {
-					result.RefundAlreadyComplete = true
-				}
-				continue
+				coveredByChargeback = true
 			}
 		}
+		if guardErr := guard.Check(ctx); guardErr != nil {
+			return guardErr
+		}
+		result.RefundSettlements = append(result.RefundSettlements, billing.RefundSettlement{Provider: "stripe", ReferenceKind: kind, ReferenceID: referenceID, InvoiceID: invoiceID, PaymentID: paymentID, ChargeID: collected.ID, AmountCents: target, Currency: string(collected.Currency)})
+
 		if collected.Refunded || returned >= target {
 			if history.pending {
 				result.RefundRequested = true
-			} else {
+			} else if !coveredByChargeback || max(collected.AmountRefunded, history.returned) > 0 {
 				result.RefundAlreadyComplete = true
 			}
 			continue

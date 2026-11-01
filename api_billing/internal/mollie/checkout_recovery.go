@@ -21,13 +21,19 @@ func (c *Client) CancelReservedCheckout(ctx context.Context, customerID, intentI
 
 // RecoverReservedCheckout reports actions accepted for an exact reservation.
 func (c *Client) RecoverReservedCheckout(ctx context.Context, customerID, intentID, paymentID, subscriptionID string) (billing.CheckoutRecoveryResult, error) {
+	return c.RecoverReservedCheckoutWithGuard(ctx, customerID, intentID, paymentID, subscriptionID, nil)
+}
+
+// RecoverReservedCheckoutWithGuard rechecks local ownership after provider reads
+// before issuing each destructive request. No database lock spans provider I/O.
+func (c *Client) RecoverReservedCheckoutWithGuard(ctx context.Context, customerID, intentID, paymentID, subscriptionID string, guard billing.CheckoutRecoveryGuard) (billing.CheckoutRecoveryResult, error) {
 	var result billing.CheckoutRecoveryResult
 	if subscriptionID != "" {
-		err := c.cancelReservedSubscription(ctx, customerID, subscriptionID, &result)
+		err := c.cancelReservedSubscription(ctx, customerID, subscriptionID, &result, guard)
 		return result, err
 	}
 	if paymentID != "" {
-		err := c.cancelReservedPayment(ctx, intentID, paymentID, &result)
+		err := c.cancelReservedPayment(ctx, intentID, paymentID, &result, guard)
 		return result, err
 	}
 	for _, resource := range []string{"subscriptions", "payments"} {
@@ -66,9 +72,9 @@ func (c *Client) RecoverReservedCheckout(ctx context.Context, customerID, intent
 					continue
 				}
 				if resource == "payments" {
-					err = c.cancelReservedPayment(ctx, intentID, object.ID, &result)
+					err = c.cancelReservedPayment(ctx, intentID, object.ID, &result, guard)
 				} else {
-					err = c.cancelReservedSubscription(ctx, customerID, object.ID, &result)
+					err = c.cancelReservedSubscription(ctx, customerID, object.ID, &result, guard)
 				}
 				if err != nil {
 					return result, err
@@ -91,12 +97,15 @@ func (c *Client) RecoverReservedCheckout(ctx context.Context, customerID, intent
 	return result, nil
 }
 
-func (c *Client) cancelReservedSubscription(ctx context.Context, customerID, id string, result *billing.CheckoutRecoveryResult) error {
+func (c *Client) cancelReservedSubscription(ctx context.Context, customerID, id string, result *billing.CheckoutRecoveryResult, guard billing.CheckoutRecoveryGuard) error {
 	sub, err := c.GetSubscription(ctx, customerID, id)
 	if err != nil {
 		return err
 	}
 	if sub.Status != "canceled" && sub.Status != "completed" {
+		if guardErr := guard.Check(ctx); guardErr != nil {
+			return guardErr
+		}
 		if err = c.CancelSubscription(ctx, customerID, id); err != nil {
 			return err
 		}
@@ -107,7 +116,7 @@ func (c *Client) cancelReservedSubscription(ctx context.Context, customerID, id 
 	return nil
 }
 
-func (c *Client) cancelReservedPayment(ctx context.Context, intentID, id string, result *billing.CheckoutRecoveryResult) error {
+func (c *Client) cancelReservedPayment(ctx context.Context, intentID, id string, result *billing.CheckoutRecoveryResult, guard billing.CheckoutRecoveryGuard) error {
 	payment, err := c.GetPayment(ctx, id)
 	if err != nil {
 		return err
@@ -119,6 +128,9 @@ func (c *Client) cancelReservedPayment(ctx context.Context, intentID, id string,
 	case "canceled", "expired", "failed":
 		return nil
 	case "paid":
+		if guardErr := guard.Check(ctx); guardErr != nil {
+			return guardErr
+		}
 		if payment.Amount == nil || len(payment.Amount.Currency) != 3 {
 			return fmt.Errorf("paid checkout %s has no amount", id)
 		}
@@ -181,6 +193,9 @@ func (c *Client) cancelReservedPayment(ctx context.Context, intentID, id string,
 		return err
 	default:
 		if payment.IsCancelable {
+			if guardErr := guard.Check(ctx); guardErr != nil {
+				return guardErr
+			}
 			_, _, err = c.client.Payments.Cancel(ctx, id)
 			if err == nil {
 				result.Cancelled = true

@@ -176,6 +176,7 @@ func (s *Service) expireClaimedCheckoutReservation(ctx context.Context, expiry c
 			return waiting
 		}
 	}
+	var compensation purserdb.GetProviderCheckoutReservationRow
 	inspectionReconcile, inspectionWaiting := reconcile, waiting
 	err = database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
 		complete = false
@@ -245,7 +246,11 @@ func (s *Service) expireClaimedCheckoutReservation(ctx context.Context, expiry c
 			}
 		}
 		if waiting == nil && reconcile == nil {
-			return tq.StartCheckoutCompensation(ctx, purserdb.StartCheckoutCompensationParams{TenantID: r.TenantID, IntentID: r.ID})
+			if latchErr := tq.StartCheckoutCompensation(ctx, purserdb.StartCheckoutCompensationParams{TenantID: r.TenantID, IntentID: r.ID}); latchErr != nil {
+				return latchErr
+			}
+			compensation, readErr = tq.GetProviderCheckoutReservation(ctx, purserdb.GetProviderCheckoutReservationParams{TenantID: r.TenantID, IntentID: r.ID})
+			return readErr
 		}
 		return nil
 	})
@@ -268,6 +273,22 @@ func (s *Service) expireClaimedCheckoutReservation(ctx context.Context, expiry c
 	if reconcile != nil {
 		return reconcile()
 	}
+	guard := billing.CheckoutRecoveryGuard(func(ctx context.Context) error {
+		return database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
+			locked, lockErr := subscriptions.LockChange(ctx, tx, r.TenantID, subscriptions.PreservePricing)
+			if lockErr != nil {
+				return lockErr
+			}
+			current, readErr := purserdb.New(tx).GetProviderCheckoutReservation(ctx, purserdb.GetProviderCheckoutReservationParams{TenantID: r.TenantID, IntentID: r.ID})
+			if readErr != nil {
+				return readErr
+			}
+			if !reflect.DeepEqual(locked, snapshot) || !reflect.DeepEqual(current, compensation) {
+				return ErrAwaitingProviderSettlement
+			}
+			return nil
+		})
+	})
 	var providerResult billing.CheckoutRecoveryResult
 	if !preCall && hasCheckoutProviderReference(r) {
 		switch {
@@ -278,12 +299,12 @@ func (s *Service) expireClaimedCheckoutReservation(ctx context.Context, expiry c
 			if s.stripeClient == nil {
 				return errors.New("stripe checkout recovery is not configured")
 			}
-			providerResult, err = s.stripeClient.RecoverReservedCheckout(ctx, r.ProviderCustomerID.String, r.ID, r.ProviderSessionID.String)
+			providerResult, err = s.stripeClient.RecoverReservedCheckoutWithGuard(ctx, r.ProviderCustomerID.String, r.ID, r.ProviderSessionID.String, guard)
 		case r.Provider == "mollie":
 			if s.mollieClient == nil {
 				return errors.New("mollie checkout recovery is not configured")
 			}
-			providerResult, err = s.mollieClient.RecoverReservedCheckout(ctx, r.ProviderCustomerID.String, r.ID, r.ProviderPaymentID.String, r.ProviderSubscriptionID.String)
+			providerResult, err = s.mollieClient.RecoverReservedCheckoutWithGuard(ctx, r.ProviderCustomerID.String, r.ID, r.ProviderPaymentID.String, r.ProviderSubscriptionID.String, guard)
 		default:
 			return fmt.Errorf("unsupported checkout provider %s", r.Provider)
 		}

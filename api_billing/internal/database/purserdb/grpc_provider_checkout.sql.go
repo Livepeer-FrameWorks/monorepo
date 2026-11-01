@@ -824,6 +824,48 @@ func (q *Queries) ListRefusedMollieFundingIntents(ctx context.Context, arg ListR
 	return items, nil
 }
 
+const listUnresolvedMollieNativeCheckouts = `-- name: ListUnresolvedMollieNativeCheckouts :many
+SELECT intent.id::text
+FROM purser.payment_provider_intents intent
+WHERE intent.tenant_id = $1::text::uuid
+  AND intent.provider = 'mollie' AND intent.purpose = 'mollie_subscription_create'
+  AND intent.status IN ('pending', 'provider_open', 'provider_call_failed')
+  AND intent.activated_at IS NULL AND intent.recovery_started_at IS NULL
+  AND intent.provider_subscription_id IS NOT NULL AND intent.provider_customer_id IS NOT NULL
+  AND COALESCE(intent.expires_at, intent.created_at + INTERVAL '24 hours') <= NOW()
+  AND NOT EXISTS (
+      SELECT 1 FROM purser.tenant_subscriptions subscription
+      WHERE subscription.tenant_id = intent.tenant_id
+        AND subscription.mollie_subscription_id = intent.provider_subscription_id
+  )
+ORDER BY intent.created_at, intent.id
+`
+
+// A provider-bound native receipt needs its terminal state checked before a
+// returning customer can replace it. A live or unknown subscription stays fenced.
+func (q *Queries) ListUnresolvedMollieNativeCheckouts(ctx context.Context, tenantID string) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listUnresolvedMollieNativeCheckouts, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var intent_id string
+		if err := rows.Scan(&intent_id); err != nil {
+			return nil, err
+		}
+		items = append(items, intent_id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const lockProviderIntentPaymentID = `-- name: LockProviderIntentPaymentID :one
 SELECT COALESCE(provider_payment_id, '')::text AS provider_payment_id
 FROM purser.payment_provider_intents
