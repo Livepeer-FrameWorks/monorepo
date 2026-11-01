@@ -15613,6 +15613,96 @@ example `suspensionReason: reason`.
 
 
 ---
+# Go Live from Your Browser
+https://logbook.frameworks.network/builders/go-live-browser
+
+StreamCrafter is the live studio in your dashboard. It captures your camera and screen in a browser tab, mixes them, and sends the result to FrameWorks. You don't need OBS or any other software.
+
+For a long or high-stakes broadcast, a dedicated encoder is still the steadier choice: see [Encoder Setup](/builders/encoder-setup).
+
+## Before you start
+
+- **A stream to broadcast to.** Open **Content → Streams** and create one if you don't have one yet. Pick a stream that receives pushed video; streams that pull from a camera or another server don't appear in Go Live.
+- **A Chromium-based browser, such as Chrome or Edge, is the safest choice.** In other browsers, your broadcast may pause when you switch away from the tab.
+- **Upload speed to match your quality setting.** The default needs about 4.5 Mbps, and more is better.
+
+## 1. Pick a stream
+
+Open **Go Live** in the dashboard sidebar and choose your stream under **Broadcast to**.
+
+## 2. Prepare the connection
+
+Click **Prepare connection**. FrameWorks finds a recommended node for your stream and shows its region, and the studio appears underneath.
+
+If no destination is confirmed, check your stream access and try again. FrameWorks looks up the best node again each time you connect, so the one shown here can change.
+
+## 3. Add your sources
+
+Use the buttons along the bottom of the studio:
+
+- **Add Camera** starts your camera and microphone. Allow access when the browser asks.
+- **Share Screen** lets you choose a screen, a window, or a browser tab.
+
+Each source appears in the mixer, where you can mute it, hide it from the picture, or remove it. You can add and remove sources during a broadcast.
+
+<Aside type="caution" title="Sharing your entire screen">
+  The studio's right-click menu can open an advanced panel that shows your private connection
+  address. Keep that panel closed, or share a single window or tab instead of your entire screen.
+</Aside>
+
+## 4. Choose a layout
+
+With two or more sources, the layout controls on the preview arrange them. You can show one source alone, place one inside another as picture-in-picture, or use a split, focus, or grid layout. The cycle control swaps which source goes in which position.
+
+Your browser does the mixing, so more sources put more load on your computer.
+
+## 5. Rehearse
+
+Nothing is public until you click **Go Live**, so use the preview to check everything first:
+
+- Check your framing and layout.
+- Watch the audio meter while you speak.
+- Open the settings button to choose a quality setting. You can't change it during a broadcast.
+
+| Setting      | Video           | Use it for                        |
+| ------------ | --------------- | --------------------------------- |
+| Professional | 1080p, 8 Mbps   | A fast, stable upload             |
+| Broadcast    | 1080p, 4.5 Mbps | Most streams. This is the default |
+| Conference   | 720p, 2.5 Mbps  | Limited upload, meetings          |
+
+## 6. Go live
+
+Click **Go Live**. The button stays disabled until you've added a source. A **LIVE** indicator appears at the top of the page when your broadcast starts.
+
+Keep the tab open for the whole broadcast. To check what viewers see, open the stream in **Content → Streams** in a second window and go to the **Playback** tab, which also has the playback link and embed code.
+
+## 7. Send it to other platforms
+
+To stream to YouTube, Twitch, or anywhere else at the same time, open your stream in **Content → Streams** and add destinations on its **Multistream** tab. Enabled destinations start and stop with your broadcast. See [Multistreaming](/builders/multistreaming).
+
+## If something goes wrong
+
+- **The connection drops.** The studio shows **Reconnecting...** and retries a few times on its own. If it shows an error instead, reload the page and repeat these steps. You'll need to add your sources again.
+- **The browser blocks your camera or microphone.** Allow access in the browser's site settings, then reload the page.
+- **The picture freezes when you change tabs.** Your browser is pausing the encoder in the background. Stay on the tab, or switch to a Chromium-based browser.
+- **Video is choppy.** Close other applications, remove sources you don't need, or switch to the Conference setting before your next broadcast.
+- **The stream won't start on a prepaid account.** At €0 new streams are blocked, and a broadcast that disconnects can't reconnect until you [top up](/builders/billing).
+
+More fixes are in [Troubleshooting](/builders/troubleshooting).
+
+## Finish the broadcast
+
+Click **Stop Streaming**. Your multistream destinations stop with it.
+
+## What's Next
+
+- [Multistreaming](/builders/multistreaming) — Reach other platforms from one broadcast.
+- [Recordings](/builders/recordings) — Keep a copy of your broadcast.
+- [Playback & Embedding](/builders/playback) — Put the stream on your site.
+- [StreamCrafter (Ingest)](/builders/ingest) — Add the studio to your own app.
+
+
+---
 # Incidents
 https://logbook.frameworks.network/builders/incidents
 
@@ -21273,6 +21363,7 @@ The **Playback Info** card shows your Playback ID. For protocol URLs and embed c
 
 ## What's Next
 
+- [Go Live from Your Browser](/builders/go-live-browser) — Stream from the dashboard without installing an encoder.
 - [Streams](/builders/streams) — Understand stream keys, playback IDs, and push versus pull ingest.
 - [Encoder Setup](/builders/encoder-setup) — Configure OBS for a reliable stream.
 - [Playback & Embedding](/builders/playback) — Put the stream on your site.
@@ -25615,7 +25706,16 @@ map the source-specific differences with you.
 4. **Rewire the API integration.** This is where most of the work is — see below.
 5. **Re-create playback access policies.** Public playback IDs migrate cleanly. For JWT-gated or webhook-gated playback, see [Playback Access Control](/builders/playback-access-control) — customer-managed ES256 signing keys, per-object policy, and webhook callbacks all ship today. Signing keys do not transfer between platforms; reissue on FrameWorks.
 6. **Re-attach multistream targets.** They're stream-scoped on most platforms, including FrameWorks.
-7. **Validate side by side.** Don't cut over until your dashboards agree.
+7. **Validate side by side.** Don't cut over until your dashboards agree. See [Run it in parallel](#run-it-in-parallel).
+
+## Run it in parallel
+
+Keep your current provider live while you test, so a problem on either side never takes the event down.
+
+1. **Send a second output.** Add FrameWorks as a second output on your encoder. Your uplink has to carry both outputs. If your encoder has only one output, or the source can't push to a second place, have FrameWorks fetch it as a [pull-input stream](/builders/pull-streams).
+2. **Compare on a real event.** Put a small share of viewers on the FrameWorks player and compare startup, rebuffering, and analytics with your current provider.
+3. **Keep destinations on one side.** Leave multistream targets on your current provider during the test, so YouTube or Twitch doesn't receive two feeds. When you move them, stream with a push output: pull-input streams don't start push targets.
+4. **Move viewers in stages.** Raise the share as the results hold up, and turn the old output off last.
 
 ## What changes regardless of source
 
@@ -25848,6 +25948,10 @@ Regardless of where you're coming from, the moves are the same:
 5. **Review playback access policies.** Public playback IDs are straightforward; JWT/webhook gating needs a separate plan.
 6. **Re-attach multistream targets.** Push targets are scoped per-stream on FrameWorks (and on most platforms).
 7. **Validate side-by-side.** Run your old and new streams in parallel before you cut over.
+
+### Run it in parallel
+
+Keep your current provider live while you test. Send a second encoder output to FrameWorks, compare playback and analytics on a real event, and move viewers when the results satisfy you. The [Any video API](/migrate/generic#run-it-in-parallel) guide covers how to set this up.
 
 ## Concepts worth knowing before you start
 
