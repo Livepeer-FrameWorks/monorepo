@@ -212,5 +212,22 @@ func TestManagedSourceDatabaseFailureStopsTenantReads(t *testing.T) {
 			}
 		})
 	}
+}
 
+func TestObjectSourceClassifiesStoreFailure(t *testing.T) {
+	for _, cause := range []error{sql.ErrNoRows, errors.New("database disconnected")} {
+		t.Run(cause.Error(), func(t *testing.T) {
+			store, mock, closeDB := newFixtureStore(t, "cell-a")
+			defer closeDB()
+			mock.ExpectQuery("GetLocalMediaObjectSourceAuthorityByInternalName").WithArgs("internal").WillReturnError(cause)
+			_, err := store.MediaObjectSourceByInternalName(t.Context(), "internal")
+			var storeErr *authorityStoreReadError
+			if !errors.Is(err, cause) || errors.As(err, &storeErr) == errors.Is(cause, sql.ErrNoRows) {
+				t.Fatalf("source read error classification: %v", err)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
 }

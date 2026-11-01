@@ -140,7 +140,9 @@ func (s *Store) TenantSourceForObject(ctx context.Context, object MediaObjectSna
 
 // A routine parent renewal may land between the two reads. Recheck the same
 // object version locally; a changed object or revival barrier still fails closed.
-func (s *Store) recheckObjectParent(ctx context.Context, object MediaObjectSnapshot, tenant TenantSnapshot) (TenantSnapshot, error) {
+func (s *Store) recheckObjectParent(
+	ctx context.Context, object MediaObjectSnapshot, tenant TenantSnapshot,
+) (TenantSnapshot, error) {
 	current, err := s.MediaObjectByInternalName(ctx, object.Authority.GetInternalName())
 	if err != nil || current.AuthorityID != object.AuthorityID || current.Version != object.Version ||
 		current.ParentVersion != tenant.Version || current.Freshness == FreshnessHardExpired {
@@ -312,7 +314,10 @@ func (s *Store) MediaObjectSourceByInternalName(ctx context.Context, internalNam
 	}
 	row, err := foghorndb.New(s.db).GetLocalMediaObjectSourceAuthorityByInternalName(ctx, internalName)
 	if err != nil {
-		return MediaObjectSnapshot{}, err
+		if errors.Is(err, sql.ErrNoRows) {
+			return MediaObjectSnapshot{}, err
+		}
+		return MediaObjectSnapshot{}, &authorityStoreReadError{cause: err}
 	}
 	snapshot, err := decodeMediaObjectSnapshot(row.Payload, row.PayloadSha256, row.AuthorityID, row.AuthorityVersion, false, row.RefreshAfter, row.ValidUntil, s.now().UTC())
 	snapshot.SourceReady = row.LocalSourceReady
