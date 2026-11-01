@@ -199,6 +199,7 @@ features:
         routes: ["/go-live", "/developer/sdks"]
       docs:
         pages:
+          - builders/go-live-browser.mdx
           - builders/ingest.mdx
           - builders/ingest-advanced.mdx
           - builders/ingest-compositor.mdx

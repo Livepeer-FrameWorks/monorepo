@@ -197,7 +197,7 @@ compositor.setLayerVisibility(sceneId, layerId, false);
 // Change opacity
 compositor.updateLayerTransform(sceneId, layerId, { opacity: 0.7 });
 
-// Reorder layers by layer ID
+// Reorder layers by layer ID, bottom to top
 compositor.reorderLayers(sceneId, ["layer-1", "layer-2", "layer-3"]);
 
 // Remove a layer

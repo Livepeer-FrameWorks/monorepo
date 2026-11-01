@@ -1805,7 +1805,7 @@ https://logbook.frameworks.network/blog/showcase-what-ships-today
 
 An event team has a product launch in six weeks. They need a presenter on camera with slides beside them, the stream on their own site and on YouTube, and a recording afterwards. Later in the year, they would like to switch between remote guests from a control room. They open a video platform's website to find out which of those things they can do today. Most feature pages make that hard to answer, because a shipped feature and a planned one read the same.
 
-Ours had that problem too. We have replaced the guesswork with a [showcase page](%MARKETING_URL%/showcase) that sorts FrameWorks into three groups: shipping today, in the pipeline, and further out on the roadmap.
+Ours had that problem too. We have replaced the guesswork with a [showcase page](%MARKETING_URL%/showcase) that sorts FrameWorks into three groups: shipping today, in the pipeline, and what follows on the roadmap.
 
 ## What you can use today
 
@@ -1823,9 +1823,9 @@ The browser studio is marked beta on the showcase page for a clear reason. You c
 
 ## What is in the pipeline, and what isn't ready
 
-The second group is work in active development that you can't use in production yet: StreamCrafter cloud production, teams and roles, SCTE-35 platform controls, live AI processing, DRM, and device discovery. Cloud production is the one the event team was asking about. It will mix and switch live sources on the server, so the show no longer depends on one presenter's computer.
+The second group is designed work that you can't use in production yet: StreamCrafter cloud production, teams and roles, SCTE-35 platform controls, live AI processing, DRM, and device discovery. Cloud production is the one the event team was asking about. It will mix and switch live sources on the server, so the show no longer depends on one presenter's computer.
 
-Guests are in the third group, further out, along with rooms and chat, server-side ad insertion, and live commerce. Guests need teams and server-side composition first, so we won't put them ahead of those. That means the event team's control room with remote guests isn't something we can offer today, and the page says that. We publish no dates for either group.
+Guests are in the third group, along with rooms and chat, server-side ad insertion, and live commerce. Guests come right after teams and server-side composition, because they depend on both. That means the event team's control room with remote guests isn't something we can offer today, and the page says that. We publish no dates for either group.
 
 If you need something from these groups sooner, tell us. It changes what we build next.
 

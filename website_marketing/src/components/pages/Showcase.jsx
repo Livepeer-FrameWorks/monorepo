@@ -95,11 +95,12 @@ const inThePipeline = [
   },
 ];
 
-const furtherOut = [
+const afterThat = [
   {
     title: "Guests and remote contribution",
     tone: "purple",
     description: "Invite guests into a show, mixed in the browser or on the server.",
+    statusNote: "Next on the roadmap, after teams and server-side composition. No date yet.",
   },
   {
     title: "Rooms and chat",
@@ -140,17 +141,17 @@ const Showcase = () => {
     },
     {
       eyebrow: "In the pipeline",
-      title: "In active development",
+      title: "Designed and coming next",
       cards: toCards(
         inThePipeline,
         "pipeline",
-        "In the pipeline: in active development, not generally available yet."
+        "In the pipeline: designed work, not generally available yet."
       ),
     },
     {
-      eyebrow: "Further out",
+      eyebrow: "After that",
       title: "On the roadmap",
-      cards: toCards(furtherOut, "pipeline", "On the roadmap: planned, with no date yet."),
+      cards: toCards(afterThat, "pipeline", "On the roadmap: planned, with no date yet."),
     },
   ];
 
@@ -160,7 +161,7 @@ const Showcase = () => {
         seed="/showcase"
         eyebrow="Showcase"
         title="What FrameWorks does today, and what comes next"
-        description="A plain view of what you can use now, what we are building, and what is further out."
+        description="A plain view of what you can use now, what is in the pipeline, and what follows it."
         align="center"
         surface="gradient"
         surfaceTone="accent"

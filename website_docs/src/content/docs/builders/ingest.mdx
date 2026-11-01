@@ -220,7 +220,7 @@ See [Advanced Features](/builders/ingest-advanced/) for audio mixing details.
 The compositor is **enabled by default** — multi-source layout control with scenes and layers:
 
 - 17 layout presets (solo, PiP, split, grid, featured, and more)
-- Layer ordering through `reorderLayers()` or the optional `LayerList` component, which the drop-in UI does not render
+- Layer ordering through `reorderLayers()` or the `LayerList` component, which the drop-in UI renders when you set `showProducerPanel` (`show-producer-panel` on the web component)
 - Scenes through the compositor API, with cuts, fades, and slides between them
 - GPU-accelerated rendering (WebGPU, WebGL, Canvas2D fallback)
 
@@ -228,16 +228,16 @@ See [Compositor](/builders/ingest-compositor/) for full details.
 
 ## States
 
-| State                    | Description                           |
-| ------------------------ | ------------------------------------- |
-| `idle`                   | Ready, no capture active              |
-| `requesting_permissions` | Waiting for camera/mic permission     |
-| `capturing`              | Media captured, not streaming         |
-| `connecting`             | Establishing WHIP connection          |
-| `streaming`              | Live and streaming                    |
-| `reconnecting`           | Connection lost, attempting reconnect |
-| `error`                  | Error occurred                        |
-| `destroyed`              | Cleanup complete                      |
+| State                    | Description                                                  |
+| ------------------------ | ------------------------------------------------------------ |
+| `idle`                   | Ready, no capture active                                     |
+| `requesting_permissions` | Waiting for camera/mic permission                            |
+| `capturing`              | Media captured, not streaming. A failed session returns here |
+| `connecting`             | Establishing WHIP connection                                 |
+| `streaming`              | Live and streaming                                           |
+| `reconnecting`           | Connection lost, attempting reconnect                        |
+| `error`                  | Error occurred                                               |
+| `destroyed`              | Cleanup complete                                             |
 
 ## Browser Support
 

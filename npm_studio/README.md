@@ -267,7 +267,7 @@ studio.masterVolume = 0.5;
 
 ### Compositor
 
-Scene-based multi-source composition with layouts and GPU renderers. **Enabled by default in the React, Svelte, and Web Component drop-ins**; `createStreamCrafter()` leaves it off until you call `enableCompositor()`. It works with a single source (solo layout). The layout does not change when you add sources: apply one with the compositor controls or `applyLayout()`. Scene switches are hard cuts.
+Scene-based multi-source composition with layouts and GPU renderers. **Enabled by default in the React, Svelte, and Web Component drop-ins**; `createStreamCrafter()` leaves it off until you call `enableCompositor()`. It works with a single source (solo layout). The layout does not change when you add sources: apply one with the compositor controls or `applyLayout()`. `transitionTo()` switches scenes with a cut, fade, or slide.
 
 ```ts
 const studio = createStreamCrafter({
