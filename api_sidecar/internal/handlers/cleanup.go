@@ -429,14 +429,14 @@ func (cm *CleanupMonitor) calculateCleanupPriority(clip ClipCleanupInfo) float64
 // lower the score, so cold content is reclaimed first by both storage paths.
 func storageEvictionPriority(now, createdAt, lastAccessed time.Time, sizeBytes uint64, accessCount int) float64 {
 	ageDays := max(now.Sub(createdAt).Hours()/24, 0)
-	sizeGB := float64(sizeBytes) / (1024 * 1024 * 1000)
+	sizeWeight := float64(sizeBytes) / (1024 * 1024 * 1000)
 	recentFactor := 1.0
 	if now.Sub(lastAccessed) < 24*time.Hour {
 		recentFactor = 10
 	} else if now.Sub(lastAccessed) < 7*24*time.Hour {
 		recentFactor = 2
 	}
-	return (max(float64(accessCount), 0) + 1) * recentFactor / (1 + ageDays + sizeGB)
+	return (max(float64(accessCount), 0) + 1) * recentFactor / (1 + ageDays + sizeWeight)
 }
 
 // cleanupClip removes an artifact from storage (clip, dvr, or vod)

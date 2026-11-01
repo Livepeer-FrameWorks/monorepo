@@ -395,8 +395,8 @@ A definitive Mollie activation refusal queues immediate compensation for paid,
 unused first-payment funding. The subscription lock excludes concurrent activation;
 activated funding and established native subscriptions are never refunded by that
 refusal. Repairable conditions, including incomplete billing details, unpaid invoices,
-pending checkout or fallback, invalid mandates and changed request credentials,
-keep funding available for retry. Compensation is limited to eligibility,
+pending checkout or fallback, invalid mandates, changed request credentials and
+cancelled setup keep funding available for retry. Compensation is limited to eligibility,
 closure, an outstanding grant or a removed tier.
 
 Checkout reserves its durable provider intent under the same lock before any
