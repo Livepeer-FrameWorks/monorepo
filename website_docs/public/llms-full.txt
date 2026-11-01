@@ -1800,6 +1800,43 @@ languages, the full list of error types, and the version table.
 
 
 ---
+# A Plain View of What FrameWorks Does Today
+https://logbook.frameworks.network/blog/showcase-what-ships-today
+
+An event team has a product launch in six weeks. They need a presenter on camera with slides beside them, the stream on their own site and on YouTube, and a recording afterwards. Later in the year, they would like to switch between remote guests from a control room. They open a video platform's website to find out which of those things they can do today. Most feature pages make that hard to answer, because a shipped feature and a planned one read the same.
+
+Ours had that problem too. We have replaced the guesswork with a [showcase page](%MARKETING_URL%/showcase) that sorts FrameWorks into three groups: shipping today, in the pipeline, and further out on the roadmap.
+
+## What you can use today
+
+The first group is what a customer can sign up for and use now: live delivery on our own media server, multistreaming, recording, clips, VOD, player SDKs, your own edge clusters, incidents and alerting, and access for AI agents through the MCP server.
+
+Take the event team. The presenter opens the Go Live page in the dashboard, adds a camera and shares the slide window, and chooses a picture-in-picture layout. The browser mixes those sources and publishes one stream to FrameWorks. From there it is an ordinary stream, so the embedded player, the YouTube destination, and the recording work the same way they do for a stream from OBS or a hardware encoder. Nobody on the team installs an encoder.
+
+For a first event, this is a good fit. For a broadcast where one laptop must not be a single point of failure, a dedicated encoder is still the steadier choice, and the guide says so.
+
+## StreamCrafter is usable now and will change a lot
+
+StreamCrafter is the name for all of this: mixing in the browser today, and production on the server as it arrives. MistServer's Composer is the engine behind the server side, and you won't need to know that name to use it.
+
+The browser studio is marked beta on the showcase page for a clear reason. You can go live with it today, and the SDK will change substantially as cloud production arrives. If you build it into your own application now, expect breaking changes. If you use it from the dashboard, those SDK changes are ours to absorb.
+
+## What is in the pipeline, and what isn't ready
+
+The second group is work in active development that you can't use in production yet: StreamCrafter cloud production, teams and roles, SCTE-35 platform controls, live AI processing, DRM, and device discovery. Cloud production is the one the event team was asking about. It will mix and switch live sources on the server, so the show no longer depends on one presenter's computer.
+
+Guests are in the third group, further out, along with rooms and chat, server-side ad insertion, and live commerce. Guests need teams and server-side composition first, so we won't put them ahead of those. That means the event team's control room with remote guests isn't something we can offer today, and the page says that. We publish no dates for either group.
+
+If you need something from these groups sooner, tell us. It changes what we build next.
+
+## Who you talk to
+
+Whichever group your project falls into, you work directly with the video engineers who have built MistServer for more than 15 years. That help covers your whole media pipeline, including the encoders and contribution before FrameWorks and the players and delivery after it. If a trial needs more usage than a plan allows, or a project needs different pricing, ask.
+
+The [showcase page](%MARKETING_URL%/showcase) has the full list, and the [Go Live guide](/builders/go-live-browser) walks through a first broadcast from the browser.
+
+
+---
 # Skipper: An AI Video Consultant With Real Diagnostics
 https://logbook.frameworks.network/blog/skipper-launch
 
