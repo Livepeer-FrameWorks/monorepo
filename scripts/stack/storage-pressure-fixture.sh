@@ -19,10 +19,10 @@ age_synced_pressure_fixture_cache() {
 # A different artifact reaching the target cannot prove the recording's S3-prefix
 # check. Require the control-plane verdict for this recording itself.
 pressure_dvr_durability_verified() {
-  local since=$1 hash=$2 verdict
+  local since=$1 hash=$2 verdict filter
   case "$hash" in ''|*[!a-zA-Z0-9_-]*) return 1 ;; esac
-  verdict=$(log_json "$since" \
-    "select(.asset_hash == \"$hash\" and ((.msg // \"\") | startswith(\"Asset durable copy verified, safe to delete local copy\"))) | .asset_hash" \
-    foghorn foghorn-2) || return 1
+  filter="select(.asset_hash == \"$hash\" and "
+  filter+='((.msg // "") | startswith("Asset durable copy verified, safe to delete local copy"))) | .asset_hash'
+  verdict=$(log_json "$since" "$filter" foghorn foghorn-2) || return 1
   [ -n "$verdict" ]
 }
