@@ -439,6 +439,33 @@ func storageEvictionPriority(now, createdAt, lastAccessed time.Time, sizeBytes u
 	return (max(float64(accessCount), 0) + 1) * recentFactor / (1 + ageDays + sizeWeight)
 }
 
+// deleteArtifactFile removes a clip or VOD file through the lease gate.
+func (cm *CleanupMonitor) deleteArtifactFile(artifact ClipCleanupInfo, assetType string) error {
+	err := leases.DeleteFileIfUnleased(artifact.FilePath)
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, leases.ErrLeaseHeld) {
+		cm.logger.WithField("file", artifact.FilePath).Info("Cleanup skipped: lease held")
+		return errCleanupSkip
+	}
+	// The storage manager reclaims the same files on the same tick; whichever
+	// loop deletes first reports the eviction.
+	if errors.Is(err, os.ErrNotExist) {
+		cm.logger.WithField("file", artifact.FilePath).Debug("Cleanup skipped: already evicted")
+		return errCleanupSkip
+	}
+	errStr := err.Error()
+	_ = control.SendStorageLifecycle(&ipcpb.StorageLifecycleData{ //nolint:errcheck // best-effort report
+		Action:    ipcpb.StorageLifecycleData_ACTION_EVICT_FAILED,
+		AssetType: assetType,
+		AssetHash: artifact.ClipHash,
+		SizeBytes: artifact.SizeBytes,
+		Error:     &errStr,
+	})
+	return fmt.Errorf("failed to remove artifact file: %w", err)
+}
+
 // cleanupClip removes an artifact from storage (clip, dvr, or vod)
 func (cm *CleanupMonitor) cleanupClip(artifact ClipCleanupInfo) error {
 	// Boot pause: destructive cleanup is disabled until lease state has been
@@ -542,20 +569,8 @@ func (cm *CleanupMonitor) cleanupClip(artifact ClipCleanupInfo) error {
 			return nil
 		}
 		// Clip and VOD are single files
-		if err := leases.DeleteFileIfUnleased(artifact.FilePath); err != nil {
-			if errors.Is(err, leases.ErrLeaseHeld) {
-				cm.logger.WithField("file", artifact.FilePath).Info("Cleanup skipped: lease held")
-				return errCleanupSkip
-			}
-			errStr := err.Error()
-			_ = control.SendStorageLifecycle(&ipcpb.StorageLifecycleData{ //nolint:errcheck // best-effort report
-				Action:    ipcpb.StorageLifecycleData_ACTION_EVICT_FAILED,
-				AssetType: assetType,
-				AssetHash: artifact.ClipHash,
-				SizeBytes: artifact.SizeBytes,
-				Error:     &errStr,
-			})
-			return fmt.Errorf("failed to remove artifact file: %w", err)
+		if err := cm.deleteArtifactFile(artifact, assetType); err != nil {
+			return err
 		}
 		// Sidecars are not lease-protected; remove only when primary
 		// succeeded. .blocks/ is the relay's per-asset block cache —

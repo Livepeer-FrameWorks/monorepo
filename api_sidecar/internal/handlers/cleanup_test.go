@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"math"
 	"os"
 	"path/filepath"
@@ -284,6 +285,21 @@ func TestCheckAndCleanup_FinalUsageMeasuresMediaRoot(t *testing.T) {
 	// The VOD copy cannot be evicted without Foghorn, so the root's usage is unchanged.
 	if math.Abs(final-initial) > 0.01 {
 		t.Fatalf("final_usage = %v, want the media root's usage %v (the pass evicted nothing)", final, initial)
+	}
+}
+
+// The storage manager evicts from the same directories on the same tick, so a
+// candidate can vanish between the walk and the delete.
+func TestDeleteArtifactFile_AlreadyEvictedIsSkipped(t *testing.T) {
+	cm := newTestCleanupMonitor()
+	artifact := ClipCleanupInfo{
+		ClipHash:  "202401011200abcdef1234",
+		FilePath:  filepath.Join(t.TempDir(), "202401011200abcdef1234.mkv"),
+		AssetType: "vod",
+	}
+
+	if err := cm.deleteArtifactFile(artifact, "vod"); !errors.Is(err, errCleanupSkip) {
+		t.Fatalf("deleteArtifactFile = %v, want errCleanupSkip for a file another pass evicted", err)
 	}
 }
 

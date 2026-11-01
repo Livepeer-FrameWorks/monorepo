@@ -773,6 +773,33 @@ func TestEvictClipVodCandidates_SyncedCandidateDeletedAndCounted(t *testing.T) {
 	}
 }
 
+// TestEvictClipVodCandidates_AlreadyEvictedIsNotAFailure covers the cleanup
+// monitor winning the delete on the shared tick: the bytes are gone, so nothing
+// counts as freed here and no eviction failure is reported.
+func TestEvictClipVodCandidates_AlreadyEvictedIsNotAFailure(t *testing.T) {
+	sm := newTestStorageManager(t)
+	sm.presignedClient = &fakePresignedClient{}
+	sm.requestCanDelete = func(_ context.Context, _ string) (bool, string, int64, error) {
+		return true, "remote_synced", 1234, nil
+	}
+	var actions []ipcpb.StorageLifecycleData_Action
+	sm.sendStorageLifecycle = func(data *ipcpb.StorageLifecycleData) error {
+		actions = append(actions, data.GetAction())
+		return nil
+	}
+
+	gone := filepath.Join(sm.basePath, "gone.mp4")
+	cand := FreezeCandidate{AssetType: AssetTypeClip, AssetHash: "hash-gone", FilePath: gone, SizeBytes: 17}
+	res := sm.evictClipVodCandidates([]FreezeCandidate{cand}, 17)
+
+	if res.freedBytes != 0 || res.deletedCount != 0 {
+		t.Fatalf("expected nothing counted for a file already gone, got %+v", res)
+	}
+	if len(actions) != 0 {
+		t.Fatalf("expected no lifecycle report for a file already gone, got %v", actions)
+	}
+}
+
 // TestEvictClipVodCandidates_NoEarlyStopOnPhantomFreeze is the core regression:
 // freezing uploads to S3 but RETAINS the local file, freeing zero disk. The old
 // loop counted the frozen size toward the target and stopped early, leaving disk

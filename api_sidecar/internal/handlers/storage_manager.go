@@ -681,6 +681,12 @@ func (sm *StorageManager) evictClipVodCandidates(candidates []FreezeCandidate, b
 			sm.logger.WithField("file", candidate.FilePath).Info("Normal-pressure eviction skipped: lease held")
 			continue
 		}
+		// The cleanup monitor reclaims the same files on the same tick; whichever
+		// loop deletes first reports the eviction.
+		if errors.Is(deleteErr, os.ErrNotExist) {
+			sm.logger.WithField("file", candidate.FilePath).Debug("Normal-pressure eviction skipped: already evicted")
+			continue
+		}
 		if deleteErr != nil {
 			sm.logger.WithError(deleteErr).WithField("asset_hash", candidate.AssetHash).Warn("Failed to delete local copy")
 			errStr := deleteErr.Error()
