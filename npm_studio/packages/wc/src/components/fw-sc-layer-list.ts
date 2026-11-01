@@ -22,6 +22,7 @@ export class FwScLayerList extends LitElement {
   @property({ attribute: false }) sources: MediaSource[] = [];
   @property({ type: String, attribute: "selected-layer-id" }) selectedLayerId: string | null = null;
   @property({ attribute: false }) onVisibilityToggle?: (layerId: string, visible: boolean) => void;
+  /** Receives layer IDs bottom to top, the order `reorderLayers` takes. */
   @property({ attribute: false }) onReorder?: (layerIds: string[]) => void;
   @property({ attribute: false }) onTransformEdit?: (
     layerId: string,
@@ -232,7 +233,7 @@ export class FwScLayerList extends LitElement {
     const newOrder = [...currentIds];
     newOrder.splice(fromIndex, 1);
     newOrder.splice(toIndex, 0, this._draggedId);
-    this.onReorder?.(newOrder);
+    this.onReorder?.(newOrder.reverse());
     this._draggedId = null;
   }
 
@@ -242,7 +243,7 @@ export class FwScLayerList extends LitElement {
     const idx = ids.indexOf(layerId);
     if (idx <= 0) return;
     [ids[idx - 1], ids[idx]] = [ids[idx], ids[idx - 1]];
-    this.onReorder?.(ids);
+    this.onReorder?.(ids.reverse());
   }
 
   private _moveDown(layerId: string) {
@@ -251,7 +252,7 @@ export class FwScLayerList extends LitElement {
     const idx = ids.indexOf(layerId);
     if (idx >= ids.length - 1) return;
     [ids[idx], ids[idx + 1]] = [ids[idx + 1], ids[idx]];
-    this.onReorder?.(ids);
+    this.onReorder?.(ids.reverse());
   }
 }
 

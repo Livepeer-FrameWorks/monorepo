@@ -104,7 +104,7 @@ describe("FwScLayerList parity", () => {
     expect(onSelect).toHaveBeenLastCalledWith(null);
   });
 
-  it("calls onReorder when move controls are used", async () => {
+  it("reports the new order bottom to top when the top layer moves down", async () => {
     const onVisibilityToggle = vi.fn();
     const onReorder = vi.fn();
 
@@ -117,6 +117,6 @@ describe("FwScLayerList parity", () => {
     const firstMoveDown = moveDownButtons?.[0] as HTMLButtonElement | undefined;
     firstMoveDown?.click();
 
-    expect(onReorder).toHaveBeenCalledWith(["layer-1", "layer-2"]);
+    expect(onReorder).toHaveBeenCalledWith(["layer-2", "layer-1"]);
   });
 });

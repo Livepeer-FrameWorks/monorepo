@@ -16,6 +16,7 @@
     layers: Layer[];
     sources: MediaSource[];
     onVisibilityToggle: (layerId: string, visible: boolean) => void;
+    /** Receives layer IDs bottom to top, the order `reorderLayers` takes. */
     onReorder: (layerIds: string[]) => void;
     onTransformEdit?: (layerId: string, transform: Partial<LayerTransform>) => void;
     onRemove?: (layerId: string) => void;
@@ -91,7 +92,7 @@
     const newOrder = [...currentIds];
     newOrder.splice(fromIndex, 1);
     newOrder.splice(toIndex, 0, draggedId);
-    onReorder(newOrder);
+    onReorder(newOrder.reverse());
     draggedId = null;
   }
 
@@ -107,7 +108,7 @@
 
     const newOrder = [...currentIds];
     [newOrder[index - 1], newOrder[index]] = [newOrder[index], newOrder[index - 1]];
-    onReorder(newOrder);
+    onReorder(newOrder.reverse());
   }
 
   function handleMoveDown(layerId: string) {
@@ -117,7 +118,7 @@
 
     const newOrder = [...currentIds];
     [newOrder[index], newOrder[index + 1]] = [newOrder[index + 1], newOrder[index]];
-    onReorder(newOrder);
+    onReorder(newOrder.reverse());
   }
 
   function handleOpacityChange(layerId: string, opacity: number) {

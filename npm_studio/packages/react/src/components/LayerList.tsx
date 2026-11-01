@@ -123,6 +123,7 @@ export interface LayerListProps {
   layers: Layer[];
   sources: MediaSource[];
   onVisibilityToggle: (layerId: string, visible: boolean) => void;
+  /** Receives layer IDs bottom to top, the order `reorderLayers` takes. */
   onReorder: (layerIds: string[]) => void;
   onTransformEdit?: (layerId: string, transform: Partial<LayerTransform>) => void;
   onRemove?: (layerId: string) => void;
@@ -217,7 +218,7 @@ export function LayerList({
       newOrder.splice(fromIndex, 1);
       newOrder.splice(toIndex, 0, draggedId);
 
-      onReorder(newOrder);
+      onReorder(newOrder.reverse());
       setDraggedId(null);
     },
     [draggedId, sortedLayers, onReorder]
@@ -237,7 +238,7 @@ export function LayerList({
 
       const newOrder = [...currentIds];
       [newOrder[index - 1], newOrder[index]] = [newOrder[index], newOrder[index - 1]];
-      onReorder(newOrder);
+      onReorder(newOrder.reverse());
     },
     [sortedLayers, onReorder]
   );
@@ -250,7 +251,7 @@ export function LayerList({
 
       const newOrder = [...currentIds];
       [newOrder[index], newOrder[index + 1]] = [newOrder[index + 1], newOrder[index]];
-      onReorder(newOrder);
+      onReorder(newOrder.reverse());
     },
     [sortedLayers, onReorder]
   );
