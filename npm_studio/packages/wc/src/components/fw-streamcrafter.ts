@@ -39,8 +39,11 @@ import {
   applyStudioThemeOverrides,
   clearStudioTheme,
   createStudioTranslator,
+  nextStudioSceneName,
+  type Scene,
   type StudioTranslateFn,
   type StudioLocale,
+  type TransitionConfig,
 } from "@livepeer-frameworks/streamcrafter-core";
 
 interface AudioProcessingSettings {
@@ -80,6 +83,7 @@ export class FwStreamCrafter extends LitElement {
     "broadcast";
   @property({ type: Boolean, attribute: "auto-start-camera" }) autoStartCamera = false;
   @property({ type: Boolean, attribute: "dev-mode" }) devMode = false;
+  @property({ type: Boolean, attribute: "show-producer-panel" }) showProducerPanel = false;
   @property({ type: Boolean, attribute: "show-settings" }) showSettings = false;
   @property({ type: Boolean }) debug = false;
   @property({ type: Boolean, attribute: "enable-compositor" }) enableCompositor = true;
@@ -711,6 +715,9 @@ export class FwStreamCrafter extends LitElement {
                 </div>
               `
             : nothing}
+          ${this.showProducerPanel && activeScene
+            ? this._renderProducerPanel(s.sources, activeScene)
+            : nothing}
           ${s.error || this._endpointError
             ? html`
                 <div class="fw-sc-error">
@@ -881,6 +888,52 @@ export class FwStreamCrafter extends LitElement {
             `
           : nothing}
       </div>
+    `;
+  }
+
+  private _renderProducerPanel(sources: MediaSource[], activeScene: Scene) {
+    const sceneManager = this.pc.getController()?.getSceneManager();
+    if (!sceneManager) return nothing;
+    const scenes = sceneManager.getAllScenes();
+
+    return html`
+      <section class="fw-sc-producer" aria-label=${this._t("composition")}>
+        <fw-sc-scene-switcher
+          .scenes=${scenes}
+          .activeSceneId=${activeScene.id}
+          .t=${this._t}
+          .onSceneSelect=${(sceneId: string) => {
+            sceneManager.setActiveScene(sceneId);
+            this.requestUpdate();
+          }}
+          .onSceneCreate=${() => {
+            sceneManager.createScene(nextStudioSceneName(scenes, this._t));
+            this.requestUpdate();
+          }}
+          .onSceneDelete=${(sceneId: string) => {
+            sceneManager.deleteScene(sceneId);
+            this.requestUpdate();
+          }}
+          .onTransitionTo=${async (sceneId: string, transition: TransitionConfig) => {
+            const finished = sceneManager.transitionTo(sceneId, transition);
+            this.requestUpdate();
+            await finished;
+          }}
+        ></fw-sc-scene-switcher>
+        <fw-sc-layer-list
+          .layers=${[...activeScene.layers]}
+          .sources=${sources}
+          .t=${this._t}
+          .onVisibilityToggle=${(layerId: string, visible: boolean) => {
+            sceneManager.setLayerVisibility(activeScene.id, layerId, visible);
+            this.requestUpdate();
+          }}
+          .onReorder=${(layerIds: string[]) => {
+            sceneManager.reorderLayers(activeScene.id, layerIds);
+            this.requestUpdate();
+          }}
+        ></fw-sc-layer-list>
+      </section>
     `;
   }
 

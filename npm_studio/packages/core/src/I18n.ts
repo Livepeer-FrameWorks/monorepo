@@ -174,8 +174,12 @@ export interface StudioTranslationStrings {
   // Scenes
   deleteScene: string;
   createNewScene: string;
+  sceneName: string;
+  layerCountOne: string;
+  layerCountMany: string;
 
   // Transitions
+  transitionType: string;
   cut: string;
   fade: string;
   slideLeft: string;
@@ -390,8 +394,12 @@ export const DEFAULT_STUDIO_TRANSLATIONS: StudioTranslationStrings = {
   // Scenes
   deleteScene: "Delete scene",
   createNewScene: "Create new scene",
+  sceneName: "Scene {number}",
+  layerCountOne: "1 layer",
+  layerCountMany: "{count} layers",
 
   // Transitions
+  transitionType: "Transition",
   cut: "Cut",
   fade: "Fade",
   slideLeft: "Slide Left",
@@ -494,6 +502,21 @@ const LOCALE_ES: StudioTranslationStrings = {
   audioBytes: "Bytes de audio",
   transitionDuration: "Duración de transición (ms)",
   setRendererHint: "Configure el renderizador antes de iniciar",
+  noLayers: "Sin capas. Agrega una fuente para empezar.",
+  hideLayer: "Ocultar capa",
+  showLayer: "Mostrar capa",
+  moveUp: "Subir",
+  moveDown: "Bajar",
+  deleteScene: "Eliminar escena",
+  createNewScene: "Crear escena",
+  sceneName: "Escena {number}",
+  layerCountOne: "1 capa",
+  layerCountMany: "{count} capas",
+  transitionType: "Transición",
+  slideLeft: "Deslizar a la izquierda",
+  slideRight: "Deslizar a la derecha",
+  slideUp: "Deslizar hacia arriba",
+  slideDown: "Deslizar hacia abajo",
 };
 
 const LOCALE_FR: StudioTranslationStrings = {
@@ -558,6 +581,21 @@ const LOCALE_FR: StudioTranslationStrings = {
   audioBytes: "Octets audio",
   transitionDuration: "Durée de transition (ms)",
   setRendererHint: "Configurer le moteur de rendu avant de démarrer",
+  noLayers: "Aucun calque. Ajoutez une source pour commencer.",
+  hideLayer: "Masquer le calque",
+  showLayer: "Afficher le calque",
+  moveUp: "Monter",
+  moveDown: "Descendre",
+  deleteScene: "Supprimer la scène",
+  createNewScene: "Créer une scène",
+  sceneName: "Scène {number}",
+  layerCountOne: "1 calque",
+  layerCountMany: "{count} calques",
+  transitionType: "Transition",
+  slideLeft: "Glisser vers la gauche",
+  slideRight: "Glisser vers la droite",
+  slideUp: "Glisser vers le haut",
+  slideDown: "Glisser vers le bas",
 };
 
 const LOCALE_DE: StudioTranslationStrings = {
@@ -622,6 +660,21 @@ const LOCALE_DE: StudioTranslationStrings = {
   audioBytes: "Audio-Bytes",
   transitionDuration: "\u00dcbergangsdauer (ms)",
   setRendererHint: "Renderer vor dem Start konfigurieren",
+  noLayers: "Keine Ebenen. Füge eine Quelle hinzu.",
+  hideLayer: "Ebene ausblenden",
+  showLayer: "Ebene einblenden",
+  moveUp: "Nach oben",
+  moveDown: "Nach unten",
+  deleteScene: "Szene löschen",
+  createNewScene: "Neue Szene erstellen",
+  sceneName: "Szene {number}",
+  layerCountOne: "1 Ebene",
+  layerCountMany: "{count} Ebenen",
+  transitionType: "Übergang",
+  slideLeft: "Nach links schieben",
+  slideRight: "Nach rechts schieben",
+  slideUp: "Nach oben schieben",
+  slideDown: "Nach unten schieben",
 };
 
 const LOCALE_NL: StudioTranslationStrings = {
@@ -686,6 +739,21 @@ const LOCALE_NL: StudioTranslationStrings = {
   audioBytes: "Audiobytes",
   transitionDuration: "Overgangsduur (ms)",
   setRendererHint: "Configureer renderer voordat u begint",
+  noLayers: "Geen lagen. Voeg een bron toe om te beginnen.",
+  hideLayer: "Laag verbergen",
+  showLayer: "Laag tonen",
+  moveUp: "Omhoog",
+  moveDown: "Omlaag",
+  deleteScene: "Scène verwijderen",
+  createNewScene: "Nieuwe scène maken",
+  sceneName: "Scène {number}",
+  layerCountOne: "1 laag",
+  layerCountMany: "{count} lagen",
+  transitionType: "Overgang",
+  slideLeft: "Naar links schuiven",
+  slideRight: "Naar rechts schuiven",
+  slideUp: "Omhoog schuiven",
+  slideDown: "Omlaag schuiven",
 };
 
 const STUDIO_LOCALE_PACKS: Record<StudioLocale, StudioTranslationStrings> = {
@@ -729,6 +797,17 @@ export function createStudioTranslator(
     }
     return str;
   };
+}
+
+/** Name for a new scene: the first numbered scene name not already in use. */
+export function nextStudioSceneName(
+  scenes: readonly { name: string }[],
+  t: StudioTranslateFn
+): string {
+  const names = new Set(scenes.map((scene) => scene.name));
+  let number = scenes.length + 1;
+  while (names.has(t("sceneName", { number }))) number++;
+  return t("sceneName", { number });
 }
 
 /** One-shot translate with explicit translations object. */

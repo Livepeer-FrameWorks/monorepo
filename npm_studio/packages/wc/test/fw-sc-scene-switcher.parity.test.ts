@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createStudioTranslator } from "@livepeer-frameworks/streamcrafter-core";
 import { FwScSceneSwitcher } from "../src/components/fw-sc-scene-switcher.js";
 
 function createScenes() {
@@ -31,6 +32,25 @@ afterEach(() => {
 });
 
 describe("FwScSceneSwitcher parity", () => {
+  it("counts layers through the translator", async () => {
+    const el = createElement();
+    el.t = createStudioTranslator({ locale: "de" });
+    await el.updateComplete;
+
+    const counts = [...el.shadowRoot!.querySelectorAll(".fw-sc-scene-layer-count")].map(
+      (node) => node.textContent
+    );
+    expect(counts).toEqual(["1 Ebene", "2 Ebenen"]);
+  });
+
+  it("keeps scene tiles on the theme surface", async () => {
+    const el = createElement();
+    await el.updateComplete;
+
+    const tile = el.shadowRoot!.querySelector(".fw-sc-scene-item") as HTMLElement;
+    expect(tile.style.backgroundColor).toBe("");
+  });
+
   it("hides create/delete controls when optional handlers are not provided", async () => {
     const el = createElement();
     await el.updateComplete;

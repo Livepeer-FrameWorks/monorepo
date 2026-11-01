@@ -1405,6 +1405,27 @@ export const sharedStyles = css`
   }
 
   /* =============================================
+   Producer Panel
+   ============================================= */
+  .fw-sc-producer {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    border-top: 1px solid hsl(var(--fw-sc-border) / 0.3);
+    border-bottom: 1px solid hsl(var(--fw-sc-border) / 0.3);
+  }
+
+  @container streamcrafter (min-width: 600px) {
+    .fw-sc-producer {
+      grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+    }
+
+    .fw-sc-producer .fw-sc-scene-switcher {
+      border-bottom: none;
+      border-right: 1px solid hsl(var(--fw-sc-border) / 0.2);
+    }
+  }
+
+  /* =============================================
    Scene Switcher
    ============================================= */
   .fw-sc-scene-switcher {

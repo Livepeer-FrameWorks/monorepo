@@ -20,6 +20,10 @@ export { StudioStatusBadge, type StudioStatusBadgeProps } from "./components/Stu
 // Compositor components
 export { SceneSwitcher, type SceneSwitcherProps } from "./components/SceneSwitcher";
 export { LayerList, type LayerListProps } from "./components/LayerList";
+export {
+  StudioProducerPanel,
+  type StudioProducerPanelProps,
+} from "./components/StudioProducerPanel";
 export { CompositorControls, type CompositorControlsProps } from "./components/CompositorControls";
 
 // Hooks

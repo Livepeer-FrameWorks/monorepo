@@ -17,6 +17,7 @@ export { default as StudioStatusBadge } from "./components/StudioStatusBadge.sve
 export { default as CompositorControls } from "./components/CompositorControls.svelte";
 export { default as SceneSwitcher } from "./components/SceneSwitcher.svelte";
 export { default as LayerList } from "./components/LayerList.svelte";
+export { default as StudioProducerPanel } from "./components/StudioProducerPanel.svelte";
 
 // Advanced Panel (dev mode sidebar)
 export {
@@ -69,6 +70,7 @@ export {
 // Compositor store
 export {
   createCompositorStore,
+  type CompositorContext,
   type CompositorState,
   type CompositorStore,
   type CreateCompositorStoreOptions,

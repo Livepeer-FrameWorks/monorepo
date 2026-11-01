@@ -89,6 +89,7 @@
       <div class="fw-sc-transition-controls">
         <select
           class="fw-sc-transition-select"
+          aria-label={t("transitionType")}
           value={selectedTransition}
           onchange={(e) =>
             (selectedTransition = (e.target as HTMLSelectElement).value as TransitionType)}
@@ -109,6 +110,7 @@
           max={3000}
           step={100}
           title={t("transitionDuration")}
+          aria-label={t("transitionDuration")}
         />
         <span class="fw-sc-transition-unit">ms</span>
       </div>
@@ -130,10 +132,13 @@
             handleSceneClick(scene.id);
           }
         }}
-        style="background-color: {scene.backgroundColor}"
       >
         <span class="fw-sc-scene-name">{scene.name}</span>
-        <span class="fw-sc-scene-layer-count">{scene.layers.length} layers</span>
+        <span class="fw-sc-scene-layer-count">
+          {scene.layers.length === 1
+            ? t("layerCountOne")
+            : t("layerCountMany", { count: scene.layers.length })}
+        </span>
         {#if onSceneDelete && scenes.length > 1 && scene.id !== activeSceneId}
           <button
             class="fw-sc-scene-delete"

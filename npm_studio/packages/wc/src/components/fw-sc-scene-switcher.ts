@@ -64,6 +64,11 @@ export class FwScSceneSwitcher extends LitElement {
     }
   }
 
+  private _layerCount(scene: Scene): string {
+    const count = scene.layers.length;
+    return count === 1 ? this.t("layerCountOne") : this.t("layerCountMany", { count });
+  }
+
   protected render() {
     return html`
       <div class="fw-sc-scene-switcher">
@@ -74,6 +79,7 @@ export class FwScSceneSwitcher extends LitElement {
                 <div class="fw-sc-transition-controls">
                   <select
                     class="fw-sc-transition-select"
+                    aria-label=${this.t("transitionType")}
                     .value=${this._selectedTransition}
                     @change=${(e: Event) => {
                       this._selectedTransition = (e.target as HTMLSelectElement)
@@ -98,6 +104,7 @@ export class FwScSceneSwitcher extends LitElement {
                     max="3000"
                     step="100"
                     title=${this.t("transitionDuration")}
+                    aria-label=${this.t("transitionDuration")}
                   />
                   <span class="fw-sc-transition-unit">ms</span>
                 </div>
@@ -115,10 +122,9 @@ export class FwScSceneSwitcher extends LitElement {
                   "fw-sc-scene-item--transitioning": this._isTransitioning,
                 })}
                 @click=${() => this._handleSceneClick(scene.id)}
-                style="background-color:${scene.backgroundColor}"
               >
                 <span class="fw-sc-scene-name">${scene.name}</span>
-                <span class="fw-sc-scene-layer-count">${scene.layers.length} layers</span>
+                <span class="fw-sc-scene-layer-count">${this._layerCount(scene)}</span>
                 ${this.onSceneDelete && this.scenes.length > 1 && scene.id !== this.activeSceneId
                   ? html`
                       <button

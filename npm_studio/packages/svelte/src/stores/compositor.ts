@@ -13,6 +13,7 @@ import type {
   RendererType,
   RendererStats,
   CompositorConfig,
+  MediaSource,
 } from "@livepeer-frameworks/streamcrafter-core";
 import type { IngestControllerV2 } from "@livepeer-frameworks/streamcrafter-core";
 
@@ -61,6 +62,17 @@ export interface CompositorStore extends Readable<CompositorState> {
 
   // Lifecycle
   destroy: () => void;
+}
+
+/**
+ * What the "fw-sc-controller" context gives composable children for compositing.
+ * `compositor` is null until the controller exists, so read it through the
+ * context each time rather than keeping a copy.
+ */
+export interface CompositorContext {
+  readonly compositor: CompositorStore | null;
+  readonly compositorState: CompositorState;
+  readonly sources: MediaSource[];
 }
 
 export interface CreateCompositorStoreOptions {

@@ -355,8 +355,7 @@
                   initialProfile="broadcast"
                   autoStartCamera={false}
                   showSettings={false}
-                  devMode={true}
-                  debug={false}
+                  showProducerPanel={true}
                   theme={themeStore.playerTheme as import("@livepeer-frameworks/streamcrafter-core").FwThemePreset}
                   enableCompositor={advancedSettings.enableCompositor}
                   compositorConfig={{ renderer: advancedSettings.compositorRenderer }}

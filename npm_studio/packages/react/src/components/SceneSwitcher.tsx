@@ -96,6 +96,7 @@ export function SceneSwitcher({
           <div className="fw-sc-transition-controls">
             <select
               className="fw-sc-transition-select"
+              aria-label={t("transitionType")}
               value={selectedTransition}
               onChange={(e) => setSelectedTransition(e.target.value as TransitionType)}
             >
@@ -115,6 +116,7 @@ export function SceneSwitcher({
               max={3000}
               step={100}
               title={t("transitionDuration")}
+              aria-label={t("transitionDuration")}
             />
             <span className="fw-sc-transition-unit">ms</span>
           </div>
@@ -127,10 +129,13 @@ export function SceneSwitcher({
             key={scene.id}
             className={`fw-sc-scene-item ${scene.id === activeSceneId ? "fw-sc-scene-item--active" : ""} ${isTransitioning ? "fw-sc-scene-item--transitioning" : ""}`}
             onClick={() => handleSceneClick(scene.id)}
-            style={{ backgroundColor: scene.backgroundColor }}
           >
             <span className="fw-sc-scene-name">{scene.name}</span>
-            <span className="fw-sc-scene-layer-count">{scene.layers.length} layers</span>
+            <span className="fw-sc-scene-layer-count">
+              {scene.layers.length === 1
+                ? t("layerCountOne")
+                : t("layerCountMany", { count: scene.layers.length })}
+            </span>
             {onSceneDelete && scenes.length > 1 && scene.id !== activeSceneId && (
               <button
                 className="fw-sc-scene-delete"

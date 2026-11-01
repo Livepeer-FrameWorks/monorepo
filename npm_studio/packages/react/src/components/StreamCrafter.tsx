@@ -17,6 +17,7 @@ import { useCompositor } from "../hooks/useCompositor";
 import { useIngestEndpoints } from "../hooks/useIngestEndpoints";
 import AdvancedPanel from "./AdvancedPanel";
 import { CompositorControls } from "./CompositorControls";
+import { StudioProducerPanel } from "./StudioProducerPanel";
 import { VolumeSlider } from "./VolumeSlider";
 import type { AudioProcessingSettings } from "./AdvancedPanel";
 import type {
@@ -66,6 +67,8 @@ export interface StreamCrafterProps {
   showSettings?: boolean;
   /** Enable dev mode UI */
   devMode?: boolean;
+  /** Show scene, transition and layer controls for producers */
+  showProducerPanel?: boolean;
   /** Enable debug logging */
   debug?: boolean;
   /** Enable compositor for multi-source composition */
@@ -454,6 +457,7 @@ const StreamCrafterInner: React.FC<StreamCrafterProps> = ({
   autoStartCamera = false,
   showSettings: initialShowSettings = false,
   devMode = false,
+  showProducerPanel = false,
   debug = false,
   enableCompositor = true,
   compositorConfig,
@@ -886,6 +890,10 @@ const StreamCrafterInner: React.FC<StreamCrafterProps> = ({
 
                 {/* VU Meter (horizontal bar under content area) */}
                 {isCapturing && <VUMeter level={levels.level} peakLevel={levels.peakLevel} />}
+
+                {showProducerPanel && enableCompositor && (
+                  <StudioProducerPanel compositor={compositor} sources={sources} />
+                )}
 
                 {/* Error Display */}
                 {(error || endpointError) && (

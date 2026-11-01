@@ -5,6 +5,7 @@ import {
   getStudioLocalePack,
   getAvailableStudioLocales,
   createStudioTranslator,
+  nextStudioSceneName,
   studioTranslate,
   type StudioLocale,
   type StudioTranslationStrings,
@@ -12,6 +13,18 @@ import {
 
 // All keys from StudioTranslationStrings
 const ALL_KEYS = Object.keys(DEFAULT_STUDIO_TRANSLATIONS) as (keyof StudioTranslationStrings)[];
+
+describe("nextStudioSceneName", () => {
+  const t = createStudioTranslator({ locale: "en" });
+
+  it("counts on from the scenes that exist", () => {
+    expect(nextStudioSceneName([{ name: "Default" }], t)).toBe("Scene 2");
+  });
+
+  it("skips a number already in use", () => {
+    expect(nextStudioSceneName([{ name: "Default" }, { name: "Scene 3" }], t)).toBe("Scene 4");
+  });
+});
 
 describe("Studio I18n", () => {
   // ===========================================================================

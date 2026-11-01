@@ -20,6 +20,7 @@
   import { createCompositorStore, type CompositorState } from "./stores/compositor";
   import { createIngestEndpointsStore, type IngestEndpointsState } from "./stores/ingestEndpoints";
   import CompositorControls from "./components/CompositorControls.svelte";
+  import StudioProducerPanel from "./components/StudioProducerPanel.svelte";
   import AdvancedPanel, { type AudioProcessingSettings } from "./components/AdvancedPanel.svelte";
   import VolumeSlider from "./components/VolumeSlider.svelte";
 
@@ -72,6 +73,8 @@
     showSettings?: boolean;
     /** Enable dev mode UI */
     devMode?: boolean;
+    /** Show scene, transition and layer controls for producers */
+    showProducerPanel?: boolean;
     /** Enable debug logging */
     debug?: boolean;
     /** Enable compositor for multi-source composition */
@@ -101,6 +104,7 @@
     autoStartCamera = false,
     showSettings: initialShowSettings = false,
     devMode = false,
+    showProducerPanel = false,
     debug = false,
     enableCompositor = true,
     compositorConfig = {},
@@ -258,6 +262,12 @@
     get isWebCodecsActive() {
       return crafterState.isWebCodecsActive;
     },
+    get compositor() {
+      return compositorStore;
+    },
+    get compositorState() {
+      return compositorState;
+    },
     // Actions
     startCamera: (opts?: any) => crafter.startCamera(opts),
     startScreenShare: (opts?: any) => crafter.startScreenShare(opts),
@@ -310,11 +320,16 @@
     if (resolvedWhipUrl) {
       // Use untrack to read compositorStore without creating a dependency
       // This prevents the effect from re-running when compositorStore changes
-      const existingCompositorStore = untrack(() => compositorStore);
+      let existingCompositorStore = untrack(() => compositorStore);
       const currentInitKey = `${resolvedWhipUrl}|${initialProfile}|${debug}`;
       const lastInitKey = untrack(() => controllerInitKey);
 
       if (lastInitKey !== currentInitKey) {
+        // The store is bound to the controller that is about to be replaced.
+        unsubscribeCompositor?.();
+        existingCompositorStore?.destroy();
+        existingCompositorStore = null;
+        compositorStore = null;
         crafter.initialize({
           whipUrl: resolvedWhipUrl,
           resolveWhipUrl: resolveWhipUrl ? (signal) => resolveWhipUrl!(signal) : undefined,
@@ -844,6 +859,10 @@
             style="left: {Math.min(audioLevels.peakLevel * 100, 100)}%"
           ></div>
         </div>
+      {/if}
+
+      {#if showProducerPanel && enableCompositor}
+        <StudioProducerPanel />
       {/if}
 
       <!-- Error Display -->

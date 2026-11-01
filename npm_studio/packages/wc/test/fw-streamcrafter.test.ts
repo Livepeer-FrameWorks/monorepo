@@ -27,6 +27,13 @@ describe("FwStreamCrafter", () => {
     expect(typeof proto.destroy).toBe("function");
   });
 
+  it("offers the producer panel behind an attribute, off by default", () => {
+    expect(new FwStreamCrafter().showProducerPanel).toBe(false);
+    expect(source).toContain('attribute: "show-producer-panel"');
+    expect(source).toContain("<fw-sc-scene-switcher");
+    expect(source).toContain("<fw-sc-layer-list");
+  });
+
   it("references shared context-menu i18n keys", () => {
     for (const key of STREAMCRAFTER_COMPONENT_PARITY_CONTEXT_MENU_I18N_KEYS) {
       expect(source).toContain(`"${key}"`);
