@@ -106,9 +106,6 @@ export interface StreamCrafterInstance {
   readonly compositorEnabled: boolean;
   readonly webCodecsActive: boolean;
   readonly encoderOverrides: EncoderOverrides;
-  readonly recording: boolean;
-  readonly recordingDuration: number;
-  readonly recordingFileSize: number;
   readonly codecFamily: string;
   readonly adaptiveBitrateActive: boolean;
   readonly currentBitrate: number | null;
@@ -140,11 +137,6 @@ export interface StreamCrafterInstance {
   switchAudioDevice(deviceId: string): Promise<void>;
 
   setEncoderOverrides(overrides: EncoderOverrides): void;
-
-  startRecording(): void;
-  stopRecording(): Blob | null;
-  pauseRecording(): void;
-  resumeRecording(): void;
 
   enableCompositor(config?: Partial<CompositorConfig>): Promise<void>;
   disableCompositor(): void;
@@ -183,17 +175,6 @@ export interface StreamCrafterInstance {
   on(
     event: "congestionChanged",
     handler: (e: { level: string; packetLoss: number; rtt: number }) => void
-  ): () => void;
-  on(event: "recordingStarted", handler: () => void): () => void;
-  on(
-    event: "recordingStopped",
-    handler: (e: { blob: Blob; duration: number; fileSize: number }) => void
-  ): () => void;
-  on(event: "recordingPaused", handler: () => void): () => void;
-  on(event: "recordingResumed", handler: () => void): () => void;
-  on(
-    event: "recordingProgress",
-    handler: (e: { duration: number; fileSize: number }) => void
   ): () => void;
   on(event: string, handler: (...args: any[]) => void): () => void;
 }
@@ -351,15 +332,6 @@ export function createStreamCrafter(config: CreateStreamCrafterConfig): StreamCr
     get encoderOverrides() {
       return ctrl.getEncoderOverrides();
     },
-    get recording() {
-      return ctrl.isRecordingActive();
-    },
-    get recordingDuration() {
-      return ctrl.getRecordingDuration();
-    },
-    get recordingFileSize() {
-      return ctrl.getRecordingFileSize();
-    },
     get codecFamily() {
       return ctrl.getVideoCodecFamily();
     },
@@ -425,11 +397,6 @@ export function createStreamCrafter(config: CreateStreamCrafterConfig): StreamCr
     switchAudioDevice: (id) => ctrl.switchAudioDevice(id),
 
     setEncoderOverrides: (overrides) => ctrl.setEncoderOverrides(overrides),
-
-    startRecording: () => ctrl.startRecording(),
-    stopRecording: () => ctrl.stopRecording(),
-    pauseRecording: () => ctrl.pauseRecording(),
-    resumeRecording: () => ctrl.resumeRecording(),
 
     enableCompositor: (config?) => ctrl.enableCompositor(config),
     disableCompositor: () => ctrl.disableCompositor(),

@@ -376,11 +376,6 @@ export interface IngestControllerEventsV2 extends IngestControllerEvents {
   webCodecsActive: { active: boolean };
   bitrateChanged: { bitrate: number; previousBitrate: number; congestion: string };
   congestionChanged: { level: string; packetLoss: number; rtt: number };
-  recordingStarted: undefined;
-  recordingStopped: { blob: Blob; duration: number; fileSize: number };
-  recordingPaused: undefined;
-  recordingResumed: undefined;
-  recordingProgress: { duration: number; fileSize: number };
 }
 
 export interface IngestStateContextV2 extends IngestStateContext {

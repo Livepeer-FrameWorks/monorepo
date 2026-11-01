@@ -16,9 +16,7 @@ import { ReconnectionManager } from "./ReconnectionManager";
 import { SceneManager } from "./SceneManager";
 import { EncoderManager, createMultiCodecEncoderConfig } from "./EncoderManager";
 import type { VideoCodecFamily } from "./CodecProfiles";
-import { RecordingManager } from "../recording/RecordingManager";
 import { BitrateAdaptation } from "./BitrateAdaptation";
-import type { WebMWriterOptions } from "../recording/WebMWriter";
 import { detectCapabilities, isRTCRtpScriptTransformSupported } from "./FeatureDetection";
 import { getVideoConstraints } from "./MediaConstraints";
 import type {
@@ -72,9 +70,6 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
   private encoderManager: EncoderManager | null = null;
   private encoderOverrides: EncoderOverrides = {};
   private videoCodecFamily: VideoCodecFamily = "h264";
-
-  // Recording
-  private recordingManager: RecordingManager | null = null;
 
   // Adaptive bitrate
   private bitrateAdaptation: BitrateAdaptation | null = null;
@@ -1685,129 +1680,6 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
     }
   }
 
-  // ============================================================================
-  // Recording
-  // ============================================================================
-
-  /**
-   * Start recording encoded chunks to a WebM container.
-   * Requires WebCodecs encoding to be active (encoder must be running).
-   * Recording works independently of streaming — can record while not streaming
-   * as long as the encoder is running.
-   */
-  startRecording(): void {
-    if (this.recordingManager?.isRecording) {
-      this.log("Recording already in progress");
-      return;
-    }
-
-    if (!this.encoderManager) {
-      this.log("Cannot record: no encoder active (WebCodecs required)");
-      this.emit("error", { error: "Recording requires WebCodecs encoding", recoverable: true });
-      return;
-    }
-
-    // H.264 is not valid in WebM — recording requires VP9 or AV1
-    if (this.videoCodecFamily === "h264") {
-      this.log("Cannot record: H.264 is not supported in WebM containers. Use VP9 or AV1.");
-      this.emit("error", {
-        error: "Recording requires VP9 or AV1 codec (H.264 not supported in WebM)",
-        recoverable: true,
-      });
-      return;
-    }
-
-    const videoCodec = this.videoCodecFamily === "av1" ? ("V_AV1" as const) : ("V_VP9" as const);
-    const encoderConfig = this.encoderManager.getConfig();
-
-    const muxerOptions: WebMWriterOptions = {
-      video: {
-        width: encoderConfig?.video.width ?? 1920,
-        height: encoderConfig?.video.height ?? 1080,
-      },
-      audio: {
-        sampleRate: encoderConfig?.audio.sampleRate ?? 48000,
-        channels: encoderConfig?.audio.numberOfChannels ?? 2,
-      },
-      videoCodec,
-    };
-
-    this.recordingManager = new RecordingManager({ muxerOptions });
-
-    this.recordingManager.on("progress", (event) => {
-      this.log("Recording progress", event);
-      this.emit("recordingProgress", { duration: event.duration, fileSize: event.fileSize });
-    });
-
-    this.recordingManager.on("stopped", (event) => {
-      this.log("Recording stopped", {
-        duration: event.duration,
-        fileSize: event.fileSize,
-      });
-    });
-
-    this.recordingManager.start(this.encoderManager);
-    this.log("Recording started", { videoCodec, muxerOptions });
-    this.emit("recordingStarted", undefined as any);
-  }
-
-  /**
-   * Stop recording and return the WebM blob.
-   * Returns null if no recording is in progress.
-   */
-  stopRecording(): Blob | null {
-    if (!this.recordingManager) return null;
-
-    const duration = this.recordingManager.duration;
-    const fileSize = this.recordingManager.fileSize;
-    const blob = this.recordingManager.stop();
-    this.recordingManager.destroy();
-    this.recordingManager = null;
-    if (blob) {
-      this.emit("recordingStopped", { blob, duration, fileSize });
-    }
-    return blob;
-  }
-
-  /**
-   * Pause recording (chunks are discarded while paused).
-   */
-  pauseRecording(): void {
-    if (!this.recordingManager) return;
-    this.recordingManager.pause();
-    this.emit("recordingPaused", undefined as any);
-  }
-
-  /**
-   * Resume recording after pause.
-   */
-  resumeRecording(): void {
-    if (!this.recordingManager) return;
-    this.recordingManager.resume();
-    this.emit("recordingResumed", undefined as any);
-  }
-
-  /**
-   * Check if recording is in progress.
-   */
-  isRecordingActive(): boolean {
-    return this.recordingManager?.isRecording === true;
-  }
-
-  /**
-   * Get current recording duration in milliseconds.
-   */
-  getRecordingDuration(): number {
-    return this.recordingManager?.duration ?? 0;
-  }
-
-  /**
-   * Get current recording file size in bytes.
-   */
-  getRecordingFileSize(): number {
-    return this.recordingManager?.fileSize ?? 0;
-  }
-
   /**
    * Add a MediaFileSource as a streaming source.
    * Wraps addCustomSource with type "media" and auto-handles the "ended" event.
@@ -1850,12 +1722,6 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
     this.eventForwardingUnsubs.forEach((fn) => fn());
     this.eventForwardingUnsubs = [];
     this.reconnectionManager.destroy();
-
-    // Stop recording
-    if (this.recordingManager) {
-      this.recordingManager.destroy();
-      this.recordingManager = null;
-    }
 
     // Destroy encoder
     if (this.encoderManager) {

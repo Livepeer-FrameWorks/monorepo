@@ -42,15 +42,6 @@ vi.mock("../src/core/IngestControllerV2", () => {
       this.destroy = vi.fn();
       this.getSceneManager = vi.fn().mockReturnValue(null);
 
-      // Recording
-      this.startRecording = vi.fn();
-      this.stopRecording = vi.fn().mockReturnValue(null);
-      this.pauseRecording = vi.fn();
-      this.resumeRecording = vi.fn();
-      this.isRecordingActive = vi.fn().mockReturnValue(false);
-      this.getRecordingDuration = vi.fn().mockReturnValue(0);
-      this.getRecordingFileSize = vi.fn().mockReturnValue(0);
-
       // Codec + bitrate
       this.getVideoCodecFamily = vi.fn().mockReturnValue("h264");
       this.isAdaptiveBitrateActive = vi.fn().mockReturnValue(false);
@@ -130,30 +121,6 @@ describe("createStreamCrafter", () => {
   });
 
   describe("new query getters", () => {
-    it("exposes recording state", () => {
-      const studio = createStreamCrafter({ whipUrl: "https://x.com/whip" });
-      expect(studio.recording).toBe(false);
-      const ctrl = getCtrl();
-      ctrl.isRecordingActive.mockReturnValue(true);
-      expect(studio.recording).toBe(true);
-      studio.destroy();
-    });
-
-    it("exposes recordingDuration", () => {
-      const studio = createStreamCrafter({ whipUrl: "https://x.com/whip" });
-      expect(studio.recordingDuration).toBe(0);
-      const ctrl = getCtrl();
-      ctrl.getRecordingDuration.mockReturnValue(5000);
-      expect(studio.recordingDuration).toBe(5000);
-      studio.destroy();
-    });
-
-    it("exposes recordingFileSize", () => {
-      const studio = createStreamCrafter({ whipUrl: "https://x.com/whip" });
-      expect(studio.recordingFileSize).toBe(0);
-      studio.destroy();
-    });
-
     it("exposes codecFamily", () => {
       const studio = createStreamCrafter({ whipUrl: "https://x.com/whip" });
       expect(studio.codecFamily).toBe("h264");
@@ -238,42 +205,6 @@ describe("createStreamCrafter", () => {
       await studio.stop();
       const ctrl = getCtrl();
       expect(ctrl.stopStreaming).toHaveBeenCalled();
-      studio.destroy();
-    });
-  });
-
-  describe("recording methods", () => {
-    it("startRecording delegates to controller", () => {
-      const studio = createStreamCrafter({ whipUrl: "https://x.com/whip" });
-      studio.startRecording();
-      const ctrl = getCtrl();
-      expect(ctrl.startRecording).toHaveBeenCalled();
-      studio.destroy();
-    });
-
-    it("stopRecording returns blob from controller", () => {
-      const studio = createStreamCrafter({ whipUrl: "https://x.com/whip" });
-      const ctrl = getCtrl();
-      const fakeBlob = new Blob(["data"], { type: "video/webm" });
-      ctrl.stopRecording.mockReturnValue(fakeBlob);
-      const result = studio.stopRecording();
-      expect(result).toBe(fakeBlob);
-      studio.destroy();
-    });
-
-    it("pauseRecording delegates to controller", () => {
-      const studio = createStreamCrafter({ whipUrl: "https://x.com/whip" });
-      studio.pauseRecording();
-      const ctrl = getCtrl();
-      expect(ctrl.pauseRecording).toHaveBeenCalled();
-      studio.destroy();
-    });
-
-    it("resumeRecording delegates to controller", () => {
-      const studio = createStreamCrafter({ whipUrl: "https://x.com/whip" });
-      studio.resumeRecording();
-      const ctrl = getCtrl();
-      expect(ctrl.resumeRecording).toHaveBeenCalled();
       studio.destroy();
     });
   });

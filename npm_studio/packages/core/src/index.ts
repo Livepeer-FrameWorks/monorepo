@@ -39,10 +39,6 @@ export {
   type CodecCapabilities,
 } from "./core/CodecProfiles";
 
-// Recording
-export { WebMWriter, type WebMWriterOptions, type WebMTrackConfig } from "./recording/WebMWriter";
-export { RecordingManager, type RecordingManagerOptions } from "./recording/RecordingManager";
-
 // Audio processing
 export { HighPassFilter, type HighPassFilterOptions } from "./audio/HighPassFilter";
 export { NoiseGate, type NoiseGateOptions } from "./audio/NoiseGate";

@@ -42,7 +42,6 @@ export interface StudioStateMap {
   error: { error: string; recoverable: boolean } | null;
   compositorEnabled: boolean;
   webCodecsActive: boolean;
-  recording: boolean;
   codecFamily: string;
   currentBitrate: number | null;
   congestionLevel: string | null;
@@ -112,10 +111,6 @@ const PROP_DESCRIPTORS: { [K in keyof StudioStateMap]: PropDescriptor<StudioStat
   webCodecsActive: {
     getter: (c) => c.isWebCodecsActive(),
     events: ["webCodecsActive"],
-  },
-  recording: {
-    getter: (c) => c.isRecordingActive(),
-    events: ["recordingStarted", "recordingStopped", "recordingPaused", "recordingResumed"],
   },
   codecFamily: {
     getter: (c) => c.getVideoCodecFamily(),

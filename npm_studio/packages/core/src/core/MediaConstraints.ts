@@ -19,7 +19,7 @@ export function getAudioConstraints(
 ): AudioConstraintProfile {
   const profiles: Record<QualityProfile, AudioConstraintProfile> = {
     professional: {
-      // Raw audio for professional streaming/recording
+      // Raw audio for professional streaming
       echoCancellation: false,
       noiseSuppression: false,
       autoGainControl: false,

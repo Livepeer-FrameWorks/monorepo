@@ -19,7 +19,6 @@ function createMockController() {
     getQualityProfile: vi.fn().mockReturnValue("broadcast"),
     isCompositorEnabled: vi.fn().mockReturnValue(false),
     isWebCodecsActive: vi.fn().mockReturnValue(false),
-    isRecordingActive: vi.fn().mockReturnValue(false),
     getVideoCodecFamily: vi.fn().mockReturnValue("h264"),
     getCurrentBitrate: vi.fn().mockReturnValue(null),
     getCongestionLevel: vi.fn().mockReturnValue(null),
@@ -187,24 +186,6 @@ describe("StudioReactiveState", () => {
   });
 
   describe("new reactive properties", () => {
-    it("recording reacts to recordingStarted/recordingStopped", () => {
-      const rs = createStudioReactiveState(ctrl);
-      const cb = vi.fn();
-      rs.on("recording", cb);
-      expect(cb).toHaveBeenCalledWith(false);
-      cb.mockClear();
-
-      ctrl.isRecordingActive.mockReturnValue(true);
-      ctrl._emit("recordingStarted");
-      expect(cb).toHaveBeenCalledWith(true);
-      cb.mockClear();
-
-      ctrl.isRecordingActive.mockReturnValue(false);
-      ctrl._emit("recordingStopped");
-      expect(cb).toHaveBeenCalledWith(false);
-      rs.destroy();
-    });
-
     it("codecFamily reacts to webCodecsActive event", () => {
       const rs = createStudioReactiveState(ctrl);
       const cb = vi.fn();
