@@ -1374,26 +1374,39 @@ func testMollieInvoiceUTCDayBoundary(t *testing.T) {
 
 func testRawExpiredCheckoutCallbackMustRetry(t *testing.T) {
 	t.Helper()
-	for _, settled := range []bool{false, true} {
-		t.Run(fmt.Sprintf("raw expired native callback settled=%t", settled), func(t *testing.T) {
-			db := startPurserUsageRealPG(t)
-			now := time.Now().UTC()
-			tenant := newPhaseTenant(t, db, "prepaid", now.Add(-time.Hour), now.AddDate(0, 1, 0), 0)
-			receipt := uuid.NewString()
-			if _, err := db.ExecContext(t.Context(), `INSERT INTO purser.payment_provider_intents(id,tenant_id,provider,purpose,local_reference_type,local_reference_id,status,currency,idempotency_key,provider_session_id,provider_subscription_id,created_at,expires_at)
+	for _, established := range []bool{false, true} {
+		for _, settled := range []bool{false, true} {
+			t.Run(fmt.Sprintf("raw expired native callback established=%t settled=%t", established, settled), func(t *testing.T) {
+				db := startPurserUsageRealPG(t)
+				now := time.Now().UTC()
+				tenant := newPhaseTenant(t, db, "prepaid", now.Add(-time.Hour), now.AddDate(0, 1, 0), 0)
+				receipt := uuid.NewString()
+				if _, err := db.ExecContext(t.Context(), `INSERT INTO purser.payment_provider_intents(id,tenant_id,provider,purpose,local_reference_type,local_reference_id,status,currency,idempotency_key,provider_session_id,provider_subscription_id,created_at,expires_at)
 VALUES($1::uuid,$2,'stripe','tenant_subscription_checkout','billing_tiers',$3,'provider_open','EUR',$1::text,'session','incoming',NOW()-INTERVAL '2 hours',NOW()-INTERVAL '1 hour')`, receipt, tenant.id, tenant.supporterID); err != nil {
-				t.Fatal(err)
-			}
-			ctx := subscriptions.WithProviderCompletion(t.Context(), now)
-			err := tenant.svc.handleSubscriptionCheckoutCompleted(ctx, "session", tenant.id, tenant.supporterID, "customer", "incoming", settled, receipt)
-			if !errors.Is(err, subscriptions.ErrCheckoutExpired) || errors.Is(err, subscriptions.ErrCheckoutCompensationQueued) {
-				t.Fatalf("raw expiry was acknowledged without committed recovery: %v", err)
-			}
-			var model string
-			var recovery int
-			if err := db.QueryRowContext(t.Context(), `SELECT billing_model,(SELECT count(*) FROM purser.provider_webhook_inbox i WHERE i.provider='checkout_recovery' AND i.event_key='checkout-expiry:'||$2::text) FROM purser.tenant_subscriptions WHERE tenant_id=$1`, tenant.id, receipt).Scan(&model, &recovery); err != nil || model != "prepaid" || recovery != 0 {
-				t.Fatalf("raw refusal mutated billing/recovery: model=%s work=%d err=%v", model, recovery, err)
-			}
-		})
+					t.Fatal(err)
+				}
+				if established {
+					if _, err := db.ExecContext(t.Context(), `UPDATE purser.tenant_subscriptions SET stripe_subscription_id='incoming' WHERE tenant_id=$1`, tenant.id); err != nil {
+						t.Fatal(err)
+					}
+				}
+				ctx := subscriptions.WithProviderCompletion(t.Context(), now)
+				err := tenant.svc.handleSubscriptionCheckoutCompleted(ctx, "session", tenant.id, tenant.supporterID, "customer", "incoming", settled, receipt)
+				wantRecovery := 1
+				if established {
+					wantRecovery = 0
+					if !errors.Is(err, subscriptions.ErrCheckoutExpired) || errors.Is(err, subscriptions.ErrCheckoutCompensationQueued) {
+						t.Fatalf("established raw expiry was acknowledged without committed recovery: %v", err)
+					}
+				} else if err != nil {
+					t.Fatalf("unactivated expiry with committed recovery was not acknowledged: %v", err)
+				}
+				var model string
+				var recovery int
+				if err := db.QueryRowContext(t.Context(), `SELECT billing_model,(SELECT count(*) FROM purser.provider_webhook_inbox i WHERE i.provider='checkout_recovery' AND i.event_key='checkout-expiry:'||$2::text) FROM purser.tenant_subscriptions WHERE tenant_id=$1`, tenant.id, receipt).Scan(&model, &recovery); err != nil || model != "prepaid" || recovery != wantRecovery {
+					t.Fatalf("expiry billing/recovery: model=%s work=%d want=%d err=%v", model, recovery, wantRecovery, err)
+				}
+			})
+		}
 	}
 }
