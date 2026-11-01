@@ -47,6 +47,49 @@ describe("pre-resolved endpoints that are not MistServer", () => {
     expect(state.streamStateClient).toBeNull();
   });
 
+  it("keeps polling a Mist edge that says the stream is offline", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockImplementation(
+          async () => new Response(JSON.stringify({ error: "Stream is offline" }))
+        )
+    );
+    const start = vi.spyOn(StreamStateClient.prototype, "start").mockImplementation(() => {});
+    const state = makeController({});
+
+    await state.hydrateFromSelectedMistEdge("pasted-url");
+    state.startStreamStatePolling();
+
+    expect(start).toHaveBeenCalledOnce();
+  });
+
+  it("does not poll a host whose reply is not Mist JSON", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async () => new Response("<html>not found</html>"))
+    );
+    const start = vi.spyOn(StreamStateClient.prototype, "start").mockImplementation(() => {});
+    const state = makeController({});
+
+    await state.hydrateFromSelectedMistEdge("pasted-url");
+    state.startStreamStatePolling();
+
+    expect(start).not.toHaveBeenCalled();
+  });
+
+  it("does not poll a host that cannot be reached", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
+    const start = vi.spyOn(StreamStateClient.prototype, "start").mockImplementation(() => {});
+    const state = makeController({});
+
+    await state.hydrateFromSelectedMistEdge("pasted-url");
+    state.startStreamStatePolling();
+
+    expect(start).not.toHaveBeenCalled();
+  });
+
   it("does not open a Mist metadata socket on a host that has no Mist JSON", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("", { status: 404 })));
     const connect = vi.spyOn(MetaTrackManager.prototype, "connect").mockImplementation(() => {});

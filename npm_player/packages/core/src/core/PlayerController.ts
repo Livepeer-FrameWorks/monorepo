@@ -3606,6 +3606,9 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     const streamName = this.getMistStreamName(contentId);
     const candidates = streamName === contentId ? [streamName] : [streamName, contentId];
 
+    // An error in a good reply, such as "Stream is offline", is Mist answering.
+    let mistAnswered = false;
+
     try {
       let lastError: unknown;
       for (const candidate of candidates) {
@@ -3618,6 +3621,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
           )
             return;
           if (data.error) {
+            mistAnswered = true;
             throw new Error(data.error);
           }
           const { sources, tracks } = this.applyMistStreamInfo(
@@ -3646,9 +3650,9 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       const message = error instanceof Error ? error.message : "Mist edge source discovery failed";
       this.log(`[resolveFromGateway] Mist edge source discovery unavailable: ${message}`);
       // A caller-supplied media URL can sit on any host. Without a baseUrl naming
-      // a Mist edge, a failed lookup means there is no stream state to poll.
+      // a Mist edge, a lookup nothing answered means there is no stream state to poll.
       this.selectedEdgeHasNoMist =
-        this.endpointMode === "provided" && !selectedEndpoints?.primary?.baseUrl;
+        !mistAnswered && this.endpointMode === "provided" && !selectedEndpoints?.primary?.baseUrl;
     }
   }
 
