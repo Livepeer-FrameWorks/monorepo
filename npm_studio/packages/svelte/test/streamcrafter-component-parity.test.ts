@@ -16,6 +16,11 @@ describe("StreamCrafter Svelte component parity", () => {
     }
   });
 
+  it("adds cameras through the picker, with no limit of one", () => {
+    expect(source).toContain("<CameraPicker");
+    expect(source).not.toContain("hasCamera");
+  });
+
   it("invokes shared callback props from component state flow", () => {
     expect(source).toContain(`${STREAMCRAFTER_COMPONENT_PARITY_CALLBACK_MARKERS.onStateChange}?.(`);
     expect(source).toContain(`${STREAMCRAFTER_COMPONENT_PARITY_CALLBACK_MARKERS.onError}?.(`);

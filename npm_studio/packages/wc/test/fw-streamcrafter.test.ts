@@ -34,6 +34,86 @@ describe("FwStreamCrafter", () => {
     expect(source).toContain("<fw-sc-layer-list");
   });
 
+  it("keeps Add Camera available with a camera live and offers the other cameras", async () => {
+    expect(source).not.toContain("!canAddSource || hasCamera");
+
+    const el = new FwStreamCrafter();
+    const startCamera = vi.fn(async () => ({}));
+    Object.assign(el.pc, {
+      startCamera,
+      getCameraChoices: async () => [
+        { deviceId: "front", label: "Front", inUse: true },
+        { deviceId: "rear", label: "Rear", inUse: false },
+      ],
+    });
+    el.pc.s.sources = [{ type: "camera" }] as never;
+    const picker = el as unknown as {
+      _handleAddCamera(): Promise<void>;
+      _startCamera(deviceId?: string): void;
+      _cameraChoices: unknown[] | null;
+    };
+
+    await picker._handleAddCamera();
+    expect(picker._cameraChoices).toHaveLength(2);
+    expect(startCamera).not.toHaveBeenCalled();
+
+    picker._startCamera("rear");
+    expect(startCamera).toHaveBeenCalledWith({ videoDeviceId: "rear" });
+    expect(picker._cameraChoices).toBeNull();
+  });
+
+  it("starts the only camera straight away", async () => {
+    const el = new FwStreamCrafter();
+    const startCamera = vi.fn(async () => ({}));
+    Object.assign(el.pc, {
+      startCamera,
+      getCameraChoices: async () => [{ deviceId: "front", label: "Front", inUse: false }],
+    });
+
+    await (el as unknown as { _handleAddCamera(): Promise<void> })._handleAddCamera();
+
+    expect(startCamera).toHaveBeenCalledWith({ videoDeviceId: "front" });
+  });
+
+  it("reports an image or media file it cannot use", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const el = new FwStreamCrafter();
+    Object.assign(el.pc, {
+      addMediaFile: async () => {
+        throw new Error("unsupported");
+      },
+      getController: () => ({
+        getSceneManager: () => ({
+          addImageOverlay: async () => {
+            throw new Error("bad image");
+          },
+        }),
+      }),
+    });
+    const internals = el as unknown as {
+      _handleOverlayImage(event: Event, scene: unknown): Promise<void>;
+      _handleMediaFile(event: Event): Promise<void>;
+      _overlayImageFailed: boolean;
+      _mediaFileFailed: boolean;
+    };
+    const pick = () =>
+      ({ target: { files: [new File(["x"], "file")], value: "file" } }) as unknown as Event;
+
+    await internals._handleOverlayImage(pick(), { id: "scene" });
+    await internals._handleMediaFile(pick());
+
+    expect(internals._overlayImageFailed).toBe(true);
+    expect(internals._mediaFileFailed).toBe(true);
+  });
+
+  it("offers overlays and media files in the producer panel", () => {
+    expect(source).toContain('accept="image/*"');
+    expect(source).toContain('accept="video/*,audio/*"');
+    expect(source).toContain('this._t("mediaTabNotice")');
+    expect(source).toContain("setOverlayPlacement");
+    expect(source).toContain("updateTextOverlay");
+  });
+
   it("references shared context-menu i18n keys", () => {
     for (const key of STREAMCRAFTER_COMPONENT_PARITY_CONTEXT_MENU_I18N_KEYS) {
       expect(source).toContain(`"${key}"`);

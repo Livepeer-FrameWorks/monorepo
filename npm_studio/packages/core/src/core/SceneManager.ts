@@ -20,6 +20,8 @@ import type {
   Layer,
   LayerKind,
   LayerTransform,
+  OverlayPlacement,
+  StudioOverlay,
   CompositorConfig,
   TransitionConfig,
   LayoutConfig,
@@ -49,6 +51,20 @@ const DEFAULT_LAYOUT_TRANSITION: LayoutTransitionConfig = {
   durationMs: 300,
   easing: "ease-out",
 };
+
+/** Lower left, clear of the frame edge. */
+const DEFAULT_TEXT_PLACEMENT: Partial<OverlayPlacement> = { x: 0.04, y: 0.92 };
+/** Top right, at a size that suits a logo. */
+const DEFAULT_IMAGE_PLACEMENT: OverlayPlacement = { x: 0.97, y: 0.05, size: 0.15 };
+
+interface OverlayRecord {
+  kind: StudioOverlay["kind"];
+  label: string;
+  /** Width over height of the overlay's bitmap, in pixels. */
+  aspect: number;
+  placement: OverlayPlacement;
+  text?: { source: TextOverlaySource; config: TextOverlayConfig };
+}
 
 export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
   private scenes: Map<string, Scene> = new Map();
@@ -94,8 +110,7 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
   private frameCallback: ((frame: VideoFrame) => void) | null = null;
 
   // Overlay tracking
-  private textOverlays: Map<string, { source: TextOverlaySource; layerIds: Map<string, string> }> =
-    new Map();
+  private overlays: Map<string, OverlayRecord> = new Map();
   private persistentOverlays: Map<
     string,
     { sourceId: string; transform?: Partial<LayerTransform> }
@@ -438,7 +453,7 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
         opacity: 1,
         ...overlay.transform,
       };
-      this.addLayer(id, sourceId, defaultTransform);
+      this.addLayer(id, sourceId, defaultTransform, { kind: "overlay" });
     }
 
     return scene;
@@ -550,7 +565,7 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
     sceneId: string,
     sourceId: string,
     transform?: Partial<LayerTransform>,
-    options?: { kind?: LayerKind }
+    options?: { kind?: LayerKind; label?: string }
   ): Layer {
     const scene = this.scenes.get(sceneId);
     if (!scene) {
@@ -558,17 +573,29 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
     }
 
     const layerId = `layer-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-    const maxZIndex = scene.layers.reduce((max, l) => Math.max(max, l.zIndex), -1);
+    const kind = options?.kind ?? "source";
+    const isOverlay = kind === "overlay";
+    const stack = isOverlay ? scene.layers : scene.layers.filter((l) => l.kind !== "overlay");
+    const zIndex = stack.reduce((max, l) => Math.max(max, l.zIndex), -1) + 1;
+
+    // A new source goes under the overlays, which move up to make room.
+    if (!isOverlay) {
+      for (const existing of scene.layers) {
+        if (existing.kind === "overlay" && existing.zIndex >= zIndex) existing.zIndex += 1;
+      }
+    }
 
     const layer: Layer = {
       id: layerId,
       sourceId,
-      kind: options?.kind ?? "source",
+      kind,
+      ...(options?.label !== undefined && { label: options.label }),
       visible: true,
       locked: false,
-      zIndex: maxZIndex + 1,
+      zIndex,
       transform: { ...DEFAULT_LAYER_TRANSFORM, ...transform },
-      scalingMode: this.currentLayout.scalingMode ?? "letterbox",
+      // A layout's crop or stretch is for its slots; an overlay keeps its picture whole.
+      scalingMode: isOverlay ? "letterbox" : (this.currentLayout.scalingMode ?? "letterbox"),
     };
 
     scene.layers.push(layer);
@@ -877,6 +904,12 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
         // Cast to VideoFrame since we know it's a video track processor
         const frame = value as VideoFrame;
 
+        // A read still pending at unbind can deliver one last frame.
+        if (this.frameReaders.get(sourceId) !== reader) {
+          frame.close();
+          return;
+        }
+
         // Send frame to worker (transfer ownership)
         this.sendToWorker({ type: "sourceFrame", sourceId, frame }, [frame]);
 
@@ -1004,14 +1037,131 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
   }
 
   /**
+   * Drop a source's last frame in the worker. Unbinding alone leaves it there,
+   * which is what keeps a paused or rebound source on screen.
+   */
+  releaseSource(sourceId: string): void {
+    this.sendToWorker({ type: "removeSource", sourceId });
+  }
+
+  /**
    * Bind an image source to the compositor
    */
   async bindImageSource(sourceId: string, imageUrl: string): Promise<void> {
-    const response = await fetch(imageUrl);
-    const blob = await response.blob();
-    const bitmap = await createImageBitmap(blob);
-
+    const bitmap = await this.decodeImage(imageUrl);
     this.sendToWorker({ type: "sourceImage", sourceId, bitmap }, [bitmap]);
+  }
+
+  /** Decode an image in this browser; a Blob is never sent anywhere. */
+  private async decodeImage(image: Blob | string): Promise<ImageBitmap> {
+    const blob = typeof image === "string" ? await (await fetch(image)).blob() : image;
+    const bitmap = await createImageBitmap(blob).catch(() => this.decodeThroughElement(blob));
+
+    const scale = Math.min(this.config.width / bitmap.width, this.config.height / bitmap.height);
+    if (scale >= 1) return bitmap;
+
+    const resized = await createImageBitmap(bitmap, {
+      resizeWidth: Math.round(bitmap.width * scale),
+      resizeHeight: Math.round(bitmap.height * scale),
+      resizeQuality: "high",
+    });
+    bitmap.close();
+    return resized;
+  }
+
+  /** SVG has no decoder behind createImageBitmap(blob), only behind an image element. */
+  private async decodeThroughElement(blob: Blob): Promise<ImageBitmap> {
+    const url = URL.createObjectURL(blob);
+    try {
+      const element = new Image();
+      element.src = url;
+      await element.decode();
+      return await createImageBitmap(element);
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  }
+
+  // ============================================================================
+  // Overlays
+  // ============================================================================
+
+  /** The image and text overlays in a scene, bottom to top. */
+  getOverlays(sceneId: string): StudioOverlay[] {
+    const layers = this.scenes.get(sceneId)?.layers ?? [];
+    return [...layers]
+      .sort((a, b) => a.zIndex - b.zIndex)
+      .flatMap((layer) => {
+        const overlay = this.overlays.get(layer.sourceId);
+        if (!overlay) return [];
+        return [
+          {
+            ...overlay.placement,
+            sourceId: layer.sourceId,
+            layerId: layer.id,
+            kind: overlay.kind,
+            label: overlay.label,
+            ...(overlay.text && { text: overlay.text.config }),
+          },
+        ];
+      });
+  }
+
+  /** Move an overlay, or resize an image overlay, in every scene it is in. */
+  setOverlayPlacement(sourceId: string, placement: Partial<OverlayPlacement>): void {
+    const overlay = this.overlays.get(sourceId);
+    if (!overlay) throw new Error(`Overlay not found: ${sourceId}`);
+
+    overlay.placement = { ...overlay.placement, ...placement };
+    this.applyOverlayRecord(sourceId, overlay);
+  }
+
+  /** Remove an overlay from every scene and let go of its bitmap. */
+  removeOverlay(sourceId: string): void {
+    if (!this.overlays.delete(sourceId)) return;
+    this.removeSourceLayers(sourceId);
+    this.releaseSource(sourceId);
+  }
+
+  private overlayTransform(overlay: OverlayRecord): Partial<LayerTransform> {
+    const { width: frameWidth, height: frameHeight } = this.config;
+    const frameAspect = frameWidth / frameHeight;
+
+    let width = overlay.placement.size;
+    let height = (width * frameAspect) / overlay.aspect;
+    if (height > 1) {
+      width /= height;
+      height = 1;
+    }
+    return {
+      x: overlay.placement.x * (1 - width),
+      y: overlay.placement.y * (1 - height),
+      width,
+      height,
+    };
+  }
+
+  private applyOverlayRecord(sourceId: string, overlay: OverlayRecord): void {
+    const transform = this.overlayTransform(overlay);
+    for (const scene of this.scenes.values()) {
+      for (const layer of scene.layers.filter((l) => l.sourceId === sourceId)) {
+        layer.label = overlay.label;
+        this.updateLayerTransform(scene.id, layer.id, transform);
+      }
+    }
+  }
+
+  private addOverlayLayer(
+    sceneId: string,
+    sourceId: string,
+    overlay: OverlayRecord
+  ): { layerId: string; sourceId: string } {
+    this.overlays.set(sourceId, overlay);
+    const layer = this.addLayer(sceneId, sourceId, this.overlayTransform(overlay), {
+      kind: "overlay",
+      label: overlay.label,
+    });
+    return { layerId: layer.id, sourceId };
   }
 
   // ============================================================================
@@ -1019,74 +1169,58 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
   // ============================================================================
 
   /**
-   * Add a text overlay to a scene.
-   * Creates a TextOverlaySource, renders the bitmap, sends it to the worker,
-   * and creates a layer at a high z-index.
+   * Add a text overlay to a scene. Its bitmap is drawn here, on the main thread
+   * where fonts are available, and its layer is as large as the text.
    */
   addTextOverlay(
     sceneId: string,
     config: TextOverlayConfig,
-    transform?: Partial<LayerTransform>
+    placement?: Partial<OverlayPlacement>
   ): { layerId: string; sourceId: string } {
     const scene = this.scenes.get(sceneId);
     if (!scene) throw new Error(`Scene not found: ${sceneId}`);
 
     const sourceId = `text-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-    const overlaySource = new TextOverlaySource(sourceId, this.config.width, this.config.height);
-    const bitmap = overlaySource.render(config);
+    const source = new TextOverlaySource(sourceId, this.config.width, this.config.height);
+    const textConfig: TextOverlayConfig = { style: "lower-third", ...config };
+    const bitmap = source.render(textConfig);
+    const size = bitmap.width / this.config.width;
+    const aspect = bitmap.width / bitmap.height;
 
     this.sendToWorker({ type: "sourceImage", sourceId, bitmap }, [bitmap]);
 
-    const defaultTransform: Partial<LayerTransform> = {
-      x: 0,
-      y: 0,
-      width: 1,
-      height: 1,
-      opacity: 1,
-      ...transform,
-    };
-    const layer = this.addLayer(sceneId, sourceId, defaultTransform);
-
-    this.textOverlays.set(sourceId, {
-      source: overlaySource,
-      layerIds: new Map([[sceneId, layer.id]]),
+    return this.addOverlayLayer(sceneId, sourceId, {
+      kind: "text",
+      label: config.text,
+      aspect,
+      placement: { x: 0, y: 0, ...DEFAULT_TEXT_PLACEMENT, ...placement, size },
+      text: { source, config: textConfig },
     });
-
-    return { layerId: layer.id, sourceId };
   }
 
   /**
    * Update the text content/style of an existing text overlay.
    */
-  updateTextOverlay(sourceId: string, config: TextOverlayConfig): void {
-    const overlay = this.textOverlays.get(sourceId);
-    if (!overlay) throw new Error(`Text overlay not found: ${sourceId}`);
+  updateTextOverlay(sourceId: string, config: Partial<TextOverlayConfig>): void {
+    const overlay = this.overlays.get(sourceId);
+    if (!overlay?.text) throw new Error(`Text overlay not found: ${sourceId}`);
 
-    const bitmap = overlay.source.render(config);
+    const textConfig: TextOverlayConfig = { ...overlay.text.config, ...config };
+    const bitmap = overlay.text.source.render(textConfig);
+    overlay.text.config = textConfig;
+    overlay.label = textConfig.text;
+    overlay.aspect = bitmap.width / bitmap.height;
+    overlay.placement = { ...overlay.placement, size: bitmap.width / this.config.width };
+
     this.sendToWorker({ type: "sourceImage", sourceId, bitmap }, [bitmap]);
+    this.applyOverlayRecord(sourceId, overlay);
   }
 
   /**
    * Remove a text overlay from all scenes it belongs to.
    */
   removeTextOverlay(sourceId: string): void {
-    const overlay = this.textOverlays.get(sourceId);
-    if (!overlay) return;
-
-    for (const [sceneId, layerId] of overlay.layerIds) {
-      const scene = this.scenes.get(sceneId);
-      if (scene) {
-        const idx = scene.layers.findIndex((l) => l.id === layerId);
-        if (idx !== -1) {
-          scene.layers.splice(idx, 1);
-          this.updateSceneInWorker(scene);
-          this.emit("layerRemoved", { sceneId, layerId });
-        }
-      }
-    }
-
-    this.textOverlays.delete(sourceId);
-    this.persistentOverlays.delete(sourceId);
+    this.removeOverlay(sourceId);
   }
 
   // ============================================================================
@@ -1094,30 +1228,28 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
   // ============================================================================
 
   /**
-   * Add an image overlay to a scene (wraps bindImageSource + addLayer).
+   * Add an image overlay to a scene. A File or Blob is decoded in the browser
+   * and stays there; a URL is fetched by the browser.
    */
   async addImageOverlay(
     sceneId: string,
-    imageUrl: string,
-    transform?: Partial<LayerTransform>
+    image: Blob | string,
+    placement?: Partial<OverlayPlacement>
   ): Promise<{ layerId: string; sourceId: string }> {
-    const scene = this.scenes.get(sceneId);
-    if (!scene) throw new Error(`Scene not found: ${sceneId}`);
+    if (!this.scenes.has(sceneId)) throw new Error(`Scene not found: ${sceneId}`);
 
     const sourceId = `img-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-    await this.bindImageSource(sourceId, imageUrl);
+    const bitmap = await this.decodeImage(image);
+    const aspect = bitmap.width / bitmap.height;
 
-    const defaultTransform: Partial<LayerTransform> = {
-      x: 0,
-      y: 0,
-      width: 1,
-      height: 1,
-      opacity: 1,
-      ...transform,
-    };
-    const layer = this.addLayer(sceneId, sourceId, defaultTransform);
+    this.sendToWorker({ type: "sourceImage", sourceId, bitmap }, [bitmap]);
 
-    return { layerId: layer.id, sourceId };
+    return this.addOverlayLayer(sceneId, sourceId, {
+      kind: "image",
+      label: typeof image === "string" ? image : image instanceof File ? image.name : "Image",
+      aspect,
+      placement: { ...DEFAULT_IMAGE_PLACEMENT, ...placement },
+    });
   }
 
   /**
@@ -1143,7 +1275,7 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
         opacity: 1,
         ...transform,
       };
-      this.addLayer(sceneId, sourceId, defaultTransform);
+      this.addLayer(sceneId, sourceId, defaultTransform, { kind: "overlay" });
     }
 
     return sourceId;
@@ -1164,6 +1296,7 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
         this.emit("layerRemoved", { sceneId, layerId });
       }
     }
+    this.releaseSource(sourceId);
   }
 
   // ============================================================================
@@ -1325,7 +1458,7 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
     this.activeSceneId = null;
 
     // Clear overlays
-    this.textOverlays.clear();
+    this.overlays.clear();
     this.persistentOverlays.clear();
 
     // Clear output

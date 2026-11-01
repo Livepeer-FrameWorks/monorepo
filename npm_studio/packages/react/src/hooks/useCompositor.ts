@@ -19,6 +19,9 @@ import type {
   RendererType,
   RendererStats,
   CompositorConfig,
+  OverlayPlacement,
+  StudioOverlay,
+  TextOverlayConfig,
 } from "@livepeer-frameworks/streamcrafter-core";
 import type { IngestControllerV2 } from "@livepeer-frameworks/streamcrafter-core";
 
@@ -65,6 +68,14 @@ export interface UseCompositorReturn {
   setLayerVisibility: (sceneId: string, layerId: string, visible: boolean) => void;
   reorderLayers: (sceneId: string, layerIds: string[]) => void;
 
+  // Overlays of the active scene, bottom to top; new ones join the active scene
+  overlays: StudioOverlay[];
+  addImageOverlay: (image: Blob) => Promise<void>;
+  addTextOverlay: (config: TextOverlayConfig) => void;
+  updateTextOverlay: (sourceId: string, config: Partial<TextOverlayConfig>) => void;
+  setOverlayPlacement: (sourceId: string, placement: Partial<OverlayPlacement>) => void;
+  removeOverlay: (sourceId: string) => void;
+
   // Layout presets
   applyLayout: (layout: LayoutConfig) => void;
   cycleSourceOrder: (direction?: "forward" | "backward") => void;
@@ -86,6 +97,7 @@ export function useCompositor({
   const [scenes, setScenes] = useState<Scene[]>([]);
   const [activeSceneId, setActiveSceneId] = useState<string | null>(null);
   const [currentLayout, setCurrentLayout] = useState<LayoutConfig | null>(null);
+  const [overlays, setOverlays] = useState<StudioOverlay[]>([]);
 
   const configRef = useRef(config);
   configRef.current = config;
@@ -102,6 +114,7 @@ export function useCompositor({
     setScenes(sceneManager.getAllScenes());
     const active = sceneManager.getActiveScene();
     setActiveSceneId(active?.id || null);
+    setOverlays(active ? sceneManager.getOverlays(active.id) : []);
     setRendererType(sceneManager.getRendererType());
     setStats(sceneManager.getStats());
     setCurrentLayout(sceneManager.getCurrentLayout());
@@ -181,6 +194,7 @@ export function useCompositor({
     setIsInitialized(false);
     setScenes([]);
     setActiveSceneId(null);
+    setOverlays([]);
     setRendererType(null);
     setStats(null);
   }, [controller]);
@@ -279,6 +293,59 @@ export function useCompositor({
     [controller, syncState]
   );
 
+  // Overlays
+  const addImageOverlay = useCallback(
+    async (image: Blob) => {
+      const sceneManager = controller?.getSceneManager();
+      const scene = sceneManager?.getActiveScene();
+      if (!sceneManager || !scene) return;
+      await sceneManager.addImageOverlay(scene.id, image);
+      syncState();
+    },
+    [controller, syncState]
+  );
+
+  const addTextOverlay = useCallback(
+    (config: TextOverlayConfig) => {
+      const sceneManager = controller?.getSceneManager();
+      const scene = sceneManager?.getActiveScene();
+      if (!sceneManager || !scene) return;
+      sceneManager.addTextOverlay(scene.id, config);
+      syncState();
+    },
+    [controller, syncState]
+  );
+
+  const updateTextOverlay = useCallback(
+    (sourceId: string, config: Partial<TextOverlayConfig>) => {
+      const sceneManager = controller?.getSceneManager();
+      if (!sceneManager) return;
+      sceneManager.updateTextOverlay(sourceId, config);
+      syncState();
+    },
+    [controller, syncState]
+  );
+
+  const setOverlayPlacement = useCallback(
+    (sourceId: string, placement: Partial<OverlayPlacement>) => {
+      const sceneManager = controller?.getSceneManager();
+      if (!sceneManager) return;
+      sceneManager.setOverlayPlacement(sourceId, placement);
+      syncState();
+    },
+    [controller, syncState]
+  );
+
+  const removeOverlay = useCallback(
+    (sourceId: string) => {
+      const sceneManager = controller?.getSceneManager();
+      if (!sceneManager) return;
+      sceneManager.removeOverlay(sourceId);
+      syncState();
+    },
+    [controller, syncState]
+  );
+
   // Layout presets
   const applyLayout = useCallback(
     (layout: LayoutConfig) => {
@@ -342,6 +409,14 @@ export function useCompositor({
     updateLayerTransform,
     setLayerVisibility,
     reorderLayers,
+
+    // Overlays
+    overlays,
+    addImageOverlay,
+    addTextOverlay,
+    updateTextOverlay,
+    setOverlayPlacement,
+    removeOverlay,
 
     // Layout presets
     applyLayout,

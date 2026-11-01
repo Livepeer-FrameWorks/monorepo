@@ -156,6 +156,9 @@ export class DeviceManager extends TypedEventEmitter<DeviceManagerEvents> {
         facingMode: options.facingMode,
       });
     }
+    if (options.audio === false) {
+      constraints = { ...constraints, audio: false };
+    }
 
     try {
       // Try with all constraints first
@@ -172,9 +175,13 @@ export class DeviceManager extends TypedEventEmitter<DeviceManagerEvents> {
       const err = error instanceof Error ? error : new Error(String(error));
 
       if (err.name === "OverconstrainedError") {
-        // Try with relaxed constraints
+        // Relax the size and frame rate; a camera the broadcaster picked stays picked.
         const relaxedConstraints: MediaStreamConstraints = {
-          video: constraints.video ? true : false,
+          video: options.videoDeviceId
+            ? { deviceId: { exact: options.videoDeviceId } }
+            : constraints.video
+              ? true
+              : false,
           audio: constraints.audio ? true : false,
         };
 
@@ -200,6 +207,15 @@ export class DeviceManager extends TypedEventEmitter<DeviceManagerEvents> {
   }
 
   /**
+   * Forget a stream whose capture has ended, so nothing reopens a device into it.
+   */
+  releaseStream(stream: MediaStream): void {
+    if (this.currentStream === stream) {
+      this.currentStream = null;
+    }
+  }
+
+  /**
    * Stop all tracks on current stream
    */
   stopAllTracks(): void {
@@ -212,21 +228,22 @@ export class DeviceManager extends TypedEventEmitter<DeviceManagerEvents> {
   }
 
   /**
-   * Replace video track in current stream
+   * Replace the video track of a stream, by default the last one captured
    */
   async replaceVideoTrack(
     deviceId: string,
-    profile: QualityProfile = "professional"
+    profile: QualityProfile = "professional",
+    stream: MediaStream | null = this.currentStream
   ): Promise<MediaStreamTrack | null> {
-    if (!this.currentStream) {
+    if (!stream) {
       throw new Error("No active stream to replace track in");
     }
 
     // Stop current video track
-    const currentVideoTrack = this.currentStream.getVideoTracks()[0];
+    const currentVideoTrack = stream.getVideoTracks()[0];
     if (currentVideoTrack) {
       currentVideoTrack.stop();
-      this.currentStream.removeTrack(currentVideoTrack);
+      stream.removeTrack(currentVideoTrack);
     }
 
     // Get new video track
@@ -238,7 +255,7 @@ export class DeviceManager extends TypedEventEmitter<DeviceManagerEvents> {
 
     const newTrack = newStream.getVideoTracks()[0];
     if (newTrack) {
-      this.currentStream.addTrack(newTrack);
+      stream.addTrack(newTrack);
     }
 
     return newTrack || null;

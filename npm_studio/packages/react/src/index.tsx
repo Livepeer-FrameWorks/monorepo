@@ -22,8 +22,10 @@ export { SceneSwitcher, type SceneSwitcherProps } from "./components/SceneSwitch
 export { LayerList, type LayerListProps } from "./components/LayerList";
 export {
   StudioProducerPanel,
+  type StudioMediaActions,
   type StudioProducerPanelProps,
 } from "./components/StudioProducerPanel";
+export { CameraPicker, type CameraPickerProps } from "./components/CameraPicker";
 export { CompositorControls, type CompositorControlsProps } from "./components/CompositorControls";
 
 // Hooks

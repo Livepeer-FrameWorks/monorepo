@@ -17,6 +17,7 @@ import { useCompositor } from "../hooks/useCompositor";
 import { useIngestEndpoints } from "../hooks/useIngestEndpoints";
 import AdvancedPanel from "./AdvancedPanel";
 import { CompositorControls } from "./CompositorControls";
+import { CameraPicker } from "./CameraPicker";
 import { StudioProducerPanel } from "./StudioProducerPanel";
 import { VolumeSlider } from "./VolumeSlider";
 import type { AudioProcessingSettings } from "./AdvancedPanel";
@@ -32,6 +33,7 @@ import type {
 } from "@livepeer-frameworks/streamcrafter-core";
 import {
   getAudioConstraints,
+  isSourceVisibleInScene,
   resolveStudioTheme,
   studioThemeOverridesToStyle,
   createStudioTranslator,
@@ -385,7 +387,7 @@ const SourceRow: React.FC<SourceRowProps> = ({
 }) => (
   <div className={cn("fw-sc-source", !isVisibleInCompositor && "fw-sc-source--hidden")}>
     {/* Visibility toggle for compositor mode */}
-    {isCompositorEnabled && onVisibilityToggle && (
+    {isCompositorEnabled && hasVideo && onVisibilityToggle && (
       <button
         type="button"
         className={cn("fw-sc-icon-btn", !isVisibleInCompositor && "fw-sc-icon-btn--muted")}
@@ -398,6 +400,7 @@ const SourceRow: React.FC<SourceRowProps> = ({
     <div className="fw-sc-source-icon">
       {source.type === "camera" && <CameraIcon size={16} />}
       {source.type === "screen" && <MonitorIcon size={16} />}
+      {source.type !== "camera" && source.type !== "screen" && <VideoIcon size={16} />}
     </div>
     <div className="fw-sc-source-info">
       <div className="fw-sc-source-label">
@@ -628,13 +631,16 @@ const StreamCrafterInner: React.FC<StreamCrafterProps> = ({
   }, [autoStartCamera, resolvedWhipUrl, state, startCamera]);
 
   // Handlers
-  const handleStartCamera = useCallback(async () => {
-    try {
-      await startCamera();
-    } catch (err) {
-      console.error("Failed to start camera:", err);
-    }
-  }, [startCamera]);
+  const handleStartCamera = useCallback(
+    async (videoDeviceId?: string) => {
+      try {
+        await startCamera(videoDeviceId ? { videoDeviceId } : undefined);
+      } catch (err) {
+        console.error("Failed to start camera:", err);
+      }
+    },
+    [startCamera]
+  );
 
   const handleStartScreenShare = useCallback(async () => {
     try {
@@ -728,7 +734,6 @@ const StreamCrafterInner: React.FC<StreamCrafterProps> = ({
   // Computed state
   const canAddSource = state !== "destroyed" && state !== "error";
   const canStream = isCapturing && !isStreaming && resolvedWhipUrl;
-  const hasCamera = sources.some((s) => s.type === "camera");
   const _hasScreen = sources.some((s) => s.type === "screen");
   const statusText = getStatusText(state, t, reconnectionState);
   const statusBadgeClass = getStatusBadgeClass(state, isReconnecting);
@@ -850,7 +855,10 @@ const StreamCrafterInner: React.FC<StreamCrafterProps> = ({
                               const layer = compositor.activeScene?.layers.find(
                                 (l) => l.sourceId === source.id
                               );
-                              const isVisibleInCompositor = layer?.visible ?? false;
+                              const isVisibleInCompositor = isSourceVisibleInScene(
+                                source,
+                                compositor.activeScene ?? { layers: [] }
+                              );
 
                               return (
                                 <SourceRow
@@ -892,7 +900,11 @@ const StreamCrafterInner: React.FC<StreamCrafterProps> = ({
                 {isCapturing && <VUMeter level={levels.level} peakLevel={levels.peakLevel} />}
 
                 {showProducerPanel && enableCompositor && (
-                  <StudioProducerPanel compositor={compositor} sources={sources} />
+                  <StudioProducerPanel
+                    compositor={compositor}
+                    sources={sources}
+                    media={hookReturn}
+                  />
                 )}
 
                 {/* Error Display */}
@@ -926,15 +938,12 @@ const StreamCrafterInner: React.FC<StreamCrafterProps> = ({
                 {/* Action Bar */}
                 <div className="fw-sc-actions">
                   {/* Secondary actions: Camera, Screen, Settings */}
-                  <button
-                    type="button"
-                    className="fw-sc-action-secondary"
-                    onClick={handleStartCamera}
-                    disabled={!canAddSource || hasCamera}
-                    title={hasCamera ? t("cameraActive") : t("addCamera")}
-                  >
-                    <CameraIcon size={18} />
-                  </button>
+                  <CameraPicker
+                    sources={sources}
+                    disabled={!canAddSource}
+                    getChoices={hookReturn.getCameraChoices}
+                    onPick={handleStartCamera}
+                  />
                   <button
                     type="button"
                     className="fw-sc-action-secondary"

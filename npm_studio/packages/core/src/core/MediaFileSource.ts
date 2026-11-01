@@ -15,6 +15,8 @@ export interface MediaFileSourceEvents {
   ended: undefined;
   seeked: { time: number };
   timeupdate: { currentTime: number; duration: number };
+  /** The file played again after running out, on new tracks. */
+  streamChanged: { stream: MediaStream };
   error: { message: string; error?: Error };
 }
 
@@ -85,8 +87,12 @@ export class MediaFileSource extends TypedEventEmitter<MediaFileSourceEvents> {
         this.video.removeEventListener("loadedmetadata", onLoaded);
         this.video.removeEventListener("error", onError);
 
-        // Create capture stream
-        this.stream = (this.video as any).captureStream();
+        try {
+          this.stream = this.capture();
+        } catch (error) {
+          reject(error);
+          return;
+        }
 
         this.emit("loaded", {
           duration: this.video.duration,
@@ -107,10 +113,26 @@ export class MediaFileSource extends TypedEventEmitter<MediaFileSourceEvents> {
     });
   }
 
+  private capture(): MediaStream {
+    const element = this.video as HTMLVideoElement & { captureStream?: () => MediaStream };
+    if (typeof element.captureStream !== "function") {
+      throw new Error("This browser cannot play a media file into the mix");
+    }
+    return element.captureStream();
+  }
+
   play(): void {
+    const stale = this.stream?.getTracks().every((track) => track.readyState === "ended");
     this.video.play().catch((e) => {
       this.emit("error", { message: e.message, error: e });
     });
+
+    // The element ends its captured tracks when it reaches the end of the file,
+    // and they stay ended when it plays again.
+    if (stale) {
+      this.stream = this.capture();
+      this.emit("streamChanged", { stream: this.stream });
+    }
   }
 
   pause(): void {

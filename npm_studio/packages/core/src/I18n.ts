@@ -211,6 +211,35 @@ export interface StudioTranslationStrings {
   audioBytes: string;
   transitionDuration: string;
   setRendererHint: string;
+
+  // Camera picker
+  chooseCamera: string;
+
+  // Overlays
+  overlays: string;
+  addLogo: string;
+  addText: string;
+  overlayDefaultText: string;
+  overlayText: string;
+  overlaySize: string;
+  overlayFontSize: string;
+  overlayColor: string;
+  overlayPositionX: string;
+  overlayPositionY: string;
+  removeOverlay: string;
+  noOverlays: string;
+  overlayImageError: string;
+  overlayLocalNotice: string;
+
+  // Media files
+  media: string;
+  addMediaFile: string;
+  playMedia: string;
+  pauseMedia: string;
+  loopMedia: string;
+  noMedia: string;
+  mediaFileError: string;
+  mediaTabNotice: string;
 }
 
 export type StudioLocale = "en" | "es" | "fr" | "de" | "nl";
@@ -431,6 +460,36 @@ export const DEFAULT_STUDIO_TRANSLATIONS: StudioTranslationStrings = {
   audioBytes: "Audio Bytes",
   transitionDuration: "Transition duration (ms)",
   setRendererHint: "Set renderer in config before starting",
+
+  // Camera picker
+  chooseCamera: "Choose a camera",
+
+  // Overlays
+  overlays: "Overlays",
+  addLogo: "Add logo",
+  addText: "Add text",
+  overlayDefaultText: "Your text",
+  overlayText: "Text",
+  overlaySize: "Size",
+  overlayFontSize: "Text size",
+  overlayColor: "Text color",
+  overlayPositionX: "Left to right",
+  overlayPositionY: "Top to bottom",
+  removeOverlay: "Remove overlay",
+  noOverlays: "No overlays in this scene.",
+  overlayImageError: "This image could not be read.",
+  overlayLocalNotice: "The image file stays in this browser. Only the finished mix is sent.",
+
+  // Media files
+  media: "Media",
+  addMediaFile: "Add media file",
+  playMedia: "Play",
+  pauseMedia: "Pause",
+  loopMedia: "Loop",
+  noMedia: "No media files in the mix.",
+  mediaFileError: "This file could not be played in this browser.",
+  mediaTabNotice:
+    "Files play from this tab and are not uploaded. Keep this tab open while a file is in the mix.",
 };
 
 // ============================================================================
@@ -517,6 +576,31 @@ const LOCALE_ES: StudioTranslationStrings = {
   slideRight: "Deslizar a la derecha",
   slideUp: "Deslizar hacia arriba",
   slideDown: "Deslizar hacia abajo",
+  chooseCamera: "Elegir una cámara",
+  overlays: "Superposiciones",
+  addLogo: "Agregar logotipo",
+  addText: "Agregar texto",
+  overlayDefaultText: "Tu texto",
+  overlayText: "Texto",
+  overlaySize: "Tamaño",
+  overlayFontSize: "Tamaño del texto",
+  overlayColor: "Color del texto",
+  overlayPositionX: "De izquierda a derecha",
+  overlayPositionY: "De arriba a abajo",
+  removeOverlay: "Quitar superposición",
+  noOverlays: "No hay superposiciones en esta escena.",
+  overlayImageError: "No se pudo leer esta imagen.",
+  overlayLocalNotice:
+    "El archivo de imagen se queda en este navegador. Solo se envía la mezcla final.",
+  media: "Multimedia",
+  addMediaFile: "Agregar archivo multimedia",
+  playMedia: "Reproducir",
+  pauseMedia: "Pausar",
+  loopMedia: "Repetir",
+  noMedia: "No hay archivos multimedia en la mezcla.",
+  mediaFileError: "Este archivo no se pudo reproducir en este navegador.",
+  mediaTabNotice:
+    "Los archivos se reproducen desde esta pestaña y no se suben. Mantén esta pestaña abierta mientras haya un archivo en la mezcla.",
 };
 
 const LOCALE_FR: StudioTranslationStrings = {
@@ -596,6 +680,30 @@ const LOCALE_FR: StudioTranslationStrings = {
   slideRight: "Glisser vers la droite",
   slideUp: "Glisser vers le haut",
   slideDown: "Glisser vers le bas",
+  chooseCamera: "Choisir une caméra",
+  overlays: "Incrustations",
+  addLogo: "Ajouter un logo",
+  addText: "Ajouter du texte",
+  overlayDefaultText: "Votre texte",
+  overlayText: "Texte",
+  overlaySize: "Taille",
+  overlayFontSize: "Taille du texte",
+  overlayColor: "Couleur du texte",
+  overlayPositionX: "De gauche à droite",
+  overlayPositionY: "De haut en bas",
+  removeOverlay: "Retirer l'incrustation",
+  noOverlays: "Aucune incrustation dans cette scène.",
+  overlayImageError: "Impossible de lire cette image.",
+  overlayLocalNotice: "Le fichier image reste dans ce navigateur. Seul le mixage final est envoyé.",
+  media: "Médias",
+  addMediaFile: "Ajouter un fichier média",
+  playMedia: "Lire",
+  pauseMedia: "Pause",
+  loopMedia: "Boucle",
+  noMedia: "Aucun fichier média dans le mixage.",
+  mediaFileError: "Ce fichier ne peut pas être lu dans ce navigateur.",
+  mediaTabNotice:
+    "Les fichiers sont lus depuis cet onglet et ne sont pas envoyés. Gardez cet onglet ouvert tant qu'un fichier est dans le mixage.",
 };
 
 const LOCALE_DE: StudioTranslationStrings = {
@@ -675,6 +783,31 @@ const LOCALE_DE: StudioTranslationStrings = {
   slideRight: "Nach rechts schieben",
   slideUp: "Nach oben schieben",
   slideDown: "Nach unten schieben",
+  chooseCamera: "Kamera auswählen",
+  overlays: "Einblendungen",
+  addLogo: "Logo hinzufügen",
+  addText: "Text hinzufügen",
+  overlayDefaultText: "Ihr Text",
+  overlayText: "Text",
+  overlaySize: "Größe",
+  overlayFontSize: "Textgröße",
+  overlayColor: "Textfarbe",
+  overlayPositionX: "Von links nach rechts",
+  overlayPositionY: "Von oben nach unten",
+  removeOverlay: "Einblendung entfernen",
+  noOverlays: "Keine Einblendungen in dieser Szene.",
+  overlayImageError: "Dieses Bild konnte nicht gelesen werden.",
+  overlayLocalNotice:
+    "Die Bilddatei bleibt in diesem Browser. Gesendet wird nur die fertige Mischung.",
+  media: "Medien",
+  addMediaFile: "Mediendatei hinzufügen",
+  playMedia: "Abspielen",
+  pauseMedia: "Pause",
+  loopMedia: "Wiederholen",
+  noMedia: "Keine Mediendateien in der Mischung.",
+  mediaFileError: "Diese Datei kann in diesem Browser nicht abgespielt werden.",
+  mediaTabNotice:
+    "Dateien werden aus diesem Tab abgespielt und nicht hochgeladen. Lassen Sie diesen Tab geöffnet, solange eine Datei in der Mischung ist.",
 };
 
 const LOCALE_NL: StudioTranslationStrings = {
@@ -754,6 +887,31 @@ const LOCALE_NL: StudioTranslationStrings = {
   slideRight: "Naar rechts schuiven",
   slideUp: "Omhoog schuiven",
   slideDown: "Omlaag schuiven",
+  chooseCamera: "Kies een camera",
+  overlays: "Overlays",
+  addLogo: "Logo toevoegen",
+  addText: "Tekst toevoegen",
+  overlayDefaultText: "Uw tekst",
+  overlayText: "Tekst",
+  overlaySize: "Grootte",
+  overlayFontSize: "Tekstgrootte",
+  overlayColor: "Tekstkleur",
+  overlayPositionX: "Van links naar rechts",
+  overlayPositionY: "Van boven naar beneden",
+  removeOverlay: "Overlay verwijderen",
+  noOverlays: "Geen overlays in deze scène.",
+  overlayImageError: "Deze afbeelding kon niet worden gelezen.",
+  overlayLocalNotice:
+    "Het afbeeldingsbestand blijft in deze browser. Alleen de eindmix wordt verzonden.",
+  media: "Media",
+  addMediaFile: "Mediabestand toevoegen",
+  playMedia: "Afspelen",
+  pauseMedia: "Pauzeren",
+  loopMedia: "Herhalen",
+  noMedia: "Geen mediabestanden in de mix.",
+  mediaFileError: "Dit bestand kan niet worden afgespeeld in deze browser.",
+  mediaTabNotice:
+    "Bestanden worden vanuit dit tabblad afgespeeld en niet geüpload. Houd dit tabblad open zolang er een bestand in de mix zit.",
 };
 
 const STUDIO_LOCALE_PACKS: Record<StudioLocale, StudioTranslationStrings> = {

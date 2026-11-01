@@ -986,6 +986,20 @@ describe("WebGPURenderer", () => {
       expect(lastCall[0].size).toEqual({ width: 1280, height: 720 });
     });
 
+    it("destroys the texture of a source that has left", async () => {
+      const { renderer, device } = await initRenderer();
+      const frame = { displayWidth: 1280, displayHeight: 720, close: vi.fn() };
+      device.createTexture.mockClear();
+      renderer.renderScene(makeScene(), new Map([["src-1", frame as any]]));
+      const texture = device.createTexture.mock.results[0].value;
+
+      renderer.renderScene(makeScene(), new Map());
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(texture.destroy).toHaveBeenCalled();
+    });
+
     it("recreates texture when size changes", async () => {
       const { renderer, device } = await initRenderer();
 

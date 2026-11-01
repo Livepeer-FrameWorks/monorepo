@@ -1,7 +1,7 @@
 <!--
-  Producer controls for the compositor: scenes with their transition, and the
-  layers of the active scene. Reads the compositor from the StreamCrafter context
-  and renders nothing until the compositor is running.
+  Producer controls for the compositor: scenes with their transition, the layers
+  of the active scene, overlays and media files. Reads the compositor from the
+  StreamCrafter context and renders nothing until the compositor is running.
 -->
 <script lang="ts">
   import { getContext } from "svelte";
@@ -14,6 +14,8 @@
   import type { CompositorContext } from "../stores/compositor";
   import SceneSwitcher from "./SceneSwitcher.svelte";
   import LayerList from "./LayerList.svelte";
+  import StudioOverlayControls from "./StudioOverlayControls.svelte";
+  import StudioMediaControls from "./StudioMediaControls.svelte";
 
   interface Props {
     class?: string;
@@ -58,5 +60,15 @@
       onVisibilityToggle={handleLayerVisibility}
       onReorder={handleLayerReorder}
     />
+    <StudioOverlayControls {compositor} overlays={composition.overlays} />
+    {#if context}
+      <StudioMediaControls
+        sources={context.sources}
+        addMediaFile={context.addMediaFile}
+        playMediaSource={context.playMediaSource}
+        pauseMediaSource={context.pauseMediaSource}
+        setMediaSourceLoop={context.setMediaSourceLoop}
+      />
+    {/if}
   </section>
 {/if}

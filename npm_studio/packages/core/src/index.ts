@@ -91,7 +91,11 @@ export { MediaFileSource, type MediaFileSourceEvents } from "./core/MediaFileSou
 
 // Compositor and scene management
 export { SceneManager } from "./core/SceneManager";
-export { TextOverlaySource, type TextOverlayConfig } from "./core/TextOverlaySource";
+export {
+  TextOverlaySource,
+  TEXT_OVERLAY_DEFAULTS,
+  type TextOverlayConfig,
+} from "./core/TextOverlaySource";
 export {
   TransitionEngine,
   createDefaultTransitionConfig,

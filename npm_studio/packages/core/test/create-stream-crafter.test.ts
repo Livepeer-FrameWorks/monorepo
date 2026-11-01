@@ -28,6 +28,11 @@ vi.mock("../src/core/IngestControllerV2", () => {
       this.startCamera = vi.fn().mockResolvedValue({ id: "cam-1" });
       this.startScreenShare = vi.fn().mockResolvedValue({ id: "screen-1" });
       this.addCustomSource = vi.fn().mockReturnValue({ id: "custom-1" });
+      this.addMediaFile = vi.fn().mockResolvedValue({ id: "media-1" });
+      this.playMediaSource = vi.fn();
+      this.pauseMediaSource = vi.fn();
+      this.setMediaSourceLoop = vi.fn();
+      this.getCameraChoices = vi.fn().mockResolvedValue([]);
       this.removeSource = vi.fn();
       this.stopCapture = vi.fn().mockResolvedValue(undefined);
       this.setSourceVolume = vi.fn();
@@ -189,6 +194,24 @@ describe("createStreamCrafter", () => {
       const ctrl = getCtrl();
       expect(ctrl.startCamera).toHaveBeenCalled();
       expect(result).toEqual({ id: "cam-1" });
+      studio.destroy();
+    });
+
+    it("media file and camera picker methods delegate to the controller", async () => {
+      const studio = createStreamCrafter({ whipUrl: "https://x.com/whip" });
+      const ctrl = getCtrl();
+      const file = new File(["x"], "clip.mp4");
+
+      expect(await studio.addMediaFile(file, { loop: true })).toEqual({ id: "media-1" });
+      studio.playMediaSource("media-1");
+      studio.pauseMediaSource("media-1");
+      studio.setMediaSourceLoop("media-1", true);
+      expect(await studio.getCameraChoices()).toEqual([]);
+
+      expect(ctrl.addMediaFile).toHaveBeenCalledWith(file, { loop: true });
+      expect(ctrl.playMediaSource).toHaveBeenCalledWith("media-1");
+      expect(ctrl.pauseMediaSource).toHaveBeenCalledWith("media-1");
+      expect(ctrl.setMediaSourceLoop).toHaveBeenCalledWith("media-1", true);
       studio.destroy();
     });
 

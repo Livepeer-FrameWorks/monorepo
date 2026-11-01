@@ -62,6 +62,8 @@
                 <CameraIcon size={16} />
               {:else if source.type === "screen"}
                 <MonitorIcon size={16} />
+              {:else}
+                <VideoIcon size={16} />
               {/if}
             </div>
             <div class="fw-sc-source-info">

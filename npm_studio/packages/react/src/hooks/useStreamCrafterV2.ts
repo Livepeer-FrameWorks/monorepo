@@ -14,6 +14,7 @@ import {
   type IngestState,
   type IngestStateContextV2,
   type IngestStats,
+  type CameraChoice,
   type CaptureOptions,
   type ScreenCaptureOptions,
   type DeviceInfo,
@@ -68,6 +69,10 @@ export interface UseStreamCrafterV2Return {
   startCamera: (options?: CaptureOptions) => Promise<MediaSource>;
   startScreenShare: (options?: ScreenCaptureOptions) => Promise<MediaSource | null>;
   addCustomSource: (stream: MediaStream, label: string) => MediaSource;
+  addMediaFile: (file: File, options?: { loop?: boolean }) => Promise<MediaSource>;
+  playMediaSource: (sourceId: string) => void;
+  pauseMediaSource: (sourceId: string) => void;
+  setMediaSourceLoop: (sourceId: string, loop: boolean) => void;
   removeSource: (sourceId: string) => void;
   stopCapture: () => Promise<void>;
 
@@ -87,7 +92,8 @@ export interface UseStreamCrafterV2Return {
 
   // Device actions
   getDevices: () => Promise<DeviceInfo[]>;
-  switchVideoDevice: (deviceId: string) => Promise<void>;
+  getCameraChoices: () => Promise<CameraChoice[]>;
+  switchVideoDevice: (deviceId: string, sourceId?: string) => Promise<void>;
   switchAudioDevice: (deviceId: string) => Promise<void>;
 
   // Stats
@@ -127,6 +133,7 @@ export function useStreamCrafterV2(options: UseStreamCrafterV2Options): UseStrea
   const [encoderStats, setEncoderStats] = useState<EncoderStats | null>(null);
 
   const controllerRef = useRef<IngestControllerV2 | null>(null);
+  const [, setControllerGeneration] = useState(0);
   // Track initial useWebCodecs value for controller creation (ref avoids dependency)
   const initialUseWebCodecsRef = useRef<boolean>(useWebCodecs);
 
@@ -138,6 +145,8 @@ export function useStreamCrafterV2(options: UseStreamCrafterV2Options): UseStrea
       useWebCodecs: initialUseWebCodecsRef.current,
     });
     controllerRef.current = controller;
+    // getController() reads a ref, so anything built on it needs this render.
+    setControllerGeneration((generation) => generation + 1);
 
     // Set up event listeners
     const unsubState = controller.on("stateChange", (event) => {
@@ -277,6 +286,26 @@ export function useStreamCrafterV2(options: UseStreamCrafterV2Options): UseStrea
     return controllerRef.current.addCustomSource(stream, label);
   }, []);
 
+  const addMediaFile = useCallback(async (file: File, mediaOptions?: { loop?: boolean }) => {
+    if (!controllerRef.current) {
+      throw new Error("Controller not initialized");
+    }
+    setError(null);
+    return controllerRef.current.addMediaFile(file, mediaOptions);
+  }, []);
+
+  const playMediaSource = useCallback((sourceId: string) => {
+    controllerRef.current?.playMediaSource(sourceId);
+  }, []);
+
+  const pauseMediaSource = useCallback((sourceId: string) => {
+    controllerRef.current?.pauseMediaSource(sourceId);
+  }, []);
+
+  const setMediaSourceLoop = useCallback((sourceId: string, loop: boolean) => {
+    controllerRef.current?.setMediaSourceLoop(sourceId, loop);
+  }, []);
+
   const removeSource = useCallback((sourceId: string) => {
     if (!controllerRef.current) return;
     controllerRef.current.removeSource(sourceId);
@@ -340,9 +369,13 @@ export function useStreamCrafterV2(options: UseStreamCrafterV2Options): UseStrea
     return controllerRef.current.getDevices();
   }, []);
 
-  const switchVideoDevice = useCallback(async (deviceId: string) => {
+  const getCameraChoices = useCallback(async () => {
+    return controllerRef.current?.getCameraChoices() ?? [];
+  }, []);
+
+  const switchVideoDevice = useCallback(async (deviceId: string, sourceId?: string) => {
     if (!controllerRef.current) return;
-    return controllerRef.current.switchVideoDevice(deviceId);
+    return controllerRef.current.switchVideoDevice(deviceId, sourceId);
   }, []);
 
   const switchAudioDevice = useCallback(async (deviceId: string) => {
@@ -402,6 +435,10 @@ export function useStreamCrafterV2(options: UseStreamCrafterV2Options): UseStrea
     startCamera,
     startScreenShare,
     addCustomSource,
+    addMediaFile,
+    playMediaSource,
+    pauseMediaSource,
+    setMediaSourceLoop,
     removeSource,
     stopCapture,
 
@@ -421,6 +458,7 @@ export function useStreamCrafterV2(options: UseStreamCrafterV2Options): UseStrea
 
     // Device actions
     getDevices,
+    getCameraChoices,
     switchVideoDevice,
     switchAudioDevice,
 

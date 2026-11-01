@@ -13,6 +13,7 @@ import {
   type IngestState,
   type IngestStateContextV2,
   type IngestStats,
+  type CameraChoice,
   type CaptureOptions,
   type ScreenCaptureOptions,
   type DeviceInfo,
@@ -66,6 +67,10 @@ export interface StreamCrafterContextV2Store {
   startCamera: (options?: CaptureOptions) => Promise<MediaSource>;
   startScreenShare: (options?: ScreenCaptureOptions) => Promise<MediaSource | null>;
   addCustomSource: (stream: MediaStream, label: string) => MediaSource;
+  addMediaFile: (file: File, options?: { loop?: boolean }) => Promise<MediaSource>;
+  playMediaSource: (sourceId: string) => void;
+  pauseMediaSource: (sourceId: string) => void;
+  setMediaSourceLoop: (sourceId: string, loop: boolean) => void;
   removeSource: (sourceId: string) => void;
   stopCapture: () => Promise<void>;
 
@@ -86,7 +91,8 @@ export interface StreamCrafterContextV2Store {
 
   // Devices
   getDevices: () => Promise<DeviceInfo[]>;
-  switchVideoDevice: (deviceId: string) => Promise<void>;
+  getCameraChoices: () => Promise<CameraChoice[]>;
+  switchVideoDevice: (deviceId: string, sourceId?: string) => Promise<void>;
   switchAudioDevice: (deviceId: string) => Promise<void>;
 
   // Stats
@@ -281,6 +287,26 @@ export function createStreamCrafterContextV2(): StreamCrafterContextV2Store {
       return controller.addCustomSource(stream, label);
     },
 
+    async addMediaFile(file: File, options?: { loop?: boolean }) {
+      if (!controller) {
+        throw new Error("Controller not initialized. Call initialize() first.");
+      }
+      applyUpdate({ error: null });
+      return controller.addMediaFile(file, options);
+    },
+
+    playMediaSource(sourceId: string) {
+      controller?.playMediaSource(sourceId);
+    },
+
+    pauseMediaSource(sourceId: string) {
+      controller?.pauseMediaSource(sourceId);
+    },
+
+    setMediaSourceLoop(sourceId: string, loop: boolean) {
+      controller?.setMediaSourceLoop(sourceId, loop);
+    },
+
     removeSource(sourceId: string) {
       if (!controller) return;
       controller.removeSource(sourceId);
@@ -344,9 +370,14 @@ export function createStreamCrafterContextV2(): StreamCrafterContextV2Store {
       return controller.getDevices();
     },
 
-    async switchVideoDevice(deviceId: string) {
+    async getCameraChoices() {
+      if (!controller) return [];
+      return controller.getCameraChoices();
+    },
+
+    async switchVideoDevice(deviceId: string, sourceId?: string) {
       if (!controller) return;
-      return controller.switchVideoDevice(deviceId);
+      return controller.switchVideoDevice(deviceId, sourceId);
     },
 
     async switchAudioDevice(deviceId: string) {

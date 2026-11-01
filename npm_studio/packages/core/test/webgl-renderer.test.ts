@@ -842,6 +842,35 @@ describe("WebGLRenderer", () => {
       expect(gl.createTexture).toHaveBeenCalled();
       expect(gl.texImage2D).toHaveBeenCalled();
     });
+
+    it("tells the shader a bitmap's colours arrive premultiplied, and a video frame's do not", () => {
+      const scene = makeScene();
+      const frames = new Map<string, VideoFrame | ImageBitmap>();
+      const premultiplied = () =>
+        gl.uniform1i.mock.calls.filter(
+          ([location]: [{ _name: string }]) => location._name === "u_premultiplied"
+        );
+
+      frames.set("source-1", createMockImageBitmap(320, 180));
+      renderer.renderScene(scene, frames);
+      expect(premultiplied().at(-1)?.[1]).toBe(1);
+
+      frames.set("source-1", createMockVideoFrame(320, 180));
+      renderer.renderScene(scene, frames);
+      expect(premultiplied().at(-1)?.[1]).toBe(0);
+    });
+
+    it("deletes the texture of a source that has left", () => {
+      const scene = makeScene();
+      const frames = new Map<string, VideoFrame | ImageBitmap>();
+      frames.set("source-1", createMockVideoFrame());
+      renderer.renderScene(scene, frames);
+
+      frames.delete("source-1");
+      renderer.renderScene(scene, frames);
+
+      expect(gl.deleteTexture).toHaveBeenCalled();
+    });
   });
 
   // =========================================================================

@@ -10,6 +10,7 @@ import {
   type IngestState,
   type IngestStateContextV2,
   type IngestStats,
+  type CameraChoice,
   type CaptureOptions,
   type ScreenCaptureOptions,
   type DeviceInfo,
@@ -301,6 +302,24 @@ export class IngestControllerHost implements ReactiveController {
     return this.controller.addCustomSource(stream, label);
   }
 
+  async addMediaFile(file: File, options?: { loop?: boolean }): Promise<MediaSource> {
+    if (!this.controller) throw new Error("Controller not initialized");
+    this.update({ error: null });
+    return this.controller.addMediaFile(file, options);
+  }
+
+  playMediaSource(sourceId: string) {
+    this.controller?.playMediaSource(sourceId);
+  }
+
+  pauseMediaSource(sourceId: string) {
+    this.controller?.pauseMediaSource(sourceId);
+  }
+
+  setMediaSourceLoop(sourceId: string, loop: boolean) {
+    this.controller?.setMediaSourceLoop(sourceId, loop);
+  }
+
   removeSource(sourceId: string) {
     this.controller?.removeSource(sourceId);
   }
@@ -361,8 +380,12 @@ export class IngestControllerHost implements ReactiveController {
     return this.controller?.getDevices() ?? [];
   }
 
-  async switchVideoDevice(deviceId: string) {
-    await this.controller?.switchVideoDevice(deviceId);
+  async getCameraChoices(): Promise<CameraChoice[]> {
+    return this.controller?.getCameraChoices() ?? [];
+  }
+
+  async switchVideoDevice(deviceId: string, sourceId?: string) {
+    await this.controller?.switchVideoDevice(deviceId, sourceId);
   }
 
   async switchAudioDevice(deviceId: string) {

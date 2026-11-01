@@ -13,6 +13,7 @@ import { ScreenCapture } from "./ScreenCapture";
 import { WhipClient } from "./WhipClient";
 import { AudioMixer } from "./AudioMixer";
 import { ReconnectionManager } from "./ReconnectionManager";
+import { MediaFileSource } from "./MediaFileSource";
 import { SceneManager } from "./SceneManager";
 import { EncoderManager, createMultiCodecEncoderConfig } from "./EncoderManager";
 import type { VideoCodecFamily } from "./CodecProfiles";
@@ -25,11 +26,13 @@ import type {
   IngestState,
   IngestStateContextV2,
   IngestStats,
+  CameraChoice,
   CaptureOptions,
   ScreenCaptureOptions,
   QualityProfile,
   DeviceInfo,
   MediaSource,
+  MediaPlayback,
   SourceType,
   CompositorConfig,
   EncoderOverrides,
@@ -55,6 +58,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
   private state: IngestState = "idle";
   private stateContext: IngestStateContextV2 = {};
   private sources: Map<string, MediaSource> = new Map();
+  private mediaFiles: Map<string, { file: MediaFileSource; unsubs: Array<() => void> }> = new Map();
   private outputStream: MediaStream | null = null;
   private currentProfile: QualityProfile;
   private useWebCodecs: boolean;
@@ -271,16 +275,29 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
 
   /**
    * Report a failed capture. A refused device leaves an active session running,
-   * so the caller gets the rejection and the session keeps its state.
+   * so the caller gets the rejection and the session keeps its state. Sources
+   * already capturing are just as unaffected, and stay ready to go live.
    */
   private failCapture(error: unknown): void {
     if (this.isSessionActive()) {
       this.log("Capture failed during active session", error);
       return;
     }
-    this.setState("error", {
-      error: error instanceof Error ? error.message : String(error),
-    });
+    const message = error instanceof Error ? error.message : String(error);
+    if (this.sources.size > 0) {
+      this.setState("capturing");
+      this.emit("error", { error: message, recoverable: true });
+      return;
+    }
+    this.setState("error", { error: message });
+  }
+
+  private hasSourceWithAudio(): boolean {
+    return Array.from(this.sources.values()).some((s) => s.stream.getAudioTracks().length > 0);
+  }
+
+  private hasSourceWithVideo(): boolean {
+    return Array.from(this.sources.values()).some((s) => s.stream.getVideoTracks().length > 0);
   }
 
   /**
@@ -331,8 +348,10 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
       }
     }
 
-    // Bind to compositor if enabled
-    if (this.sceneManager && this.sceneManager.isInitialized()) {
+    // Bind to compositor if enabled; audio has no place in a scene
+    if (!hasVideoTrack) {
+      this.log("Audio-only source stays out of the compositor", { sourceId: id });
+    } else if (this.sceneManager && this.sceneManager.isInitialized()) {
       this.log("Binding source to compositor", { sourceId: id });
       this.sceneManager.bindSource(id, stream);
       // Add layer to active scene
@@ -371,6 +390,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
 
     // Stop all tracks
     source.stream.getTracks().forEach((track) => track.stop());
+    this.deviceManager.releaseStream(source.stream);
 
     // Remove from audio mixer
     if (this.config.audioMixing) {
@@ -381,6 +401,14 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
     if (this.sceneManager) {
       this.sceneManager.unbindSource(id);
       this.sceneManager.removeSourceLayers(id);
+      this.sceneManager.releaseSource(id);
+    }
+
+    const mediaFile = this.mediaFiles.get(id);
+    if (mediaFile) {
+      mediaFile.unsubs.forEach((fn) => fn());
+      mediaFile.file.destroy();
+      this.mediaFiles.delete(id);
     }
 
     this.sources.delete(id);
@@ -560,8 +588,11 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
 
       const profile = options.profile || this.currentProfile;
 
+      // A further camera leaves the microphone already in the mix as the only one.
+      const audio = options.audio ?? !this.hasSourceWithAudio();
+
       // If encoder overrides are set, use them for capture constraints
-      const captureOptions: CaptureOptions = { ...options, profile };
+      const captureOptions: CaptureOptions = { ...options, profile, audio };
 
       if (this.encoderOverrides?.video) {
         const videoOverrides = this.encoderOverrides.video;
@@ -574,8 +605,9 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
             ...(videoOverrides.width && { width: { ideal: videoOverrides.width } }),
             ...(videoOverrides.height && { height: { ideal: videoOverrides.height } }),
             ...(videoOverrides.framerate && { frameRate: { ideal: videoOverrides.framerate } }),
+            ...(options.videoDeviceId && { deviceId: { exact: options.videoDeviceId } }),
           },
-          audio: true,
+          audio,
         };
         this.log(
           "Using encoder overrides for capture constraints:",
@@ -589,8 +621,8 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
       const source = this.addMediaSource("camera", stream, label);
 
       this.setCaptureState("capturing", {
-        hasVideo: stream.getVideoTracks().length > 0,
-        hasAudio: stream.getAudioTracks().length > 0,
+        hasVideo: this.hasSourceWithVideo(),
+        hasAudio: this.hasSourceWithAudio(),
       });
 
       return source;
@@ -598,6 +630,28 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
       this.failCapture(error);
       throw error;
     }
+  }
+
+  /**
+   * The video inputs a broadcaster can pick from. Empty until the browser shows
+   * device ids, which it does once camera permission is granted.
+   */
+  async getCameraChoices(): Promise<CameraChoice[]> {
+    const inUse = new Set(
+      Array.from(this.sources.values())
+        .filter((source) => source.type === "camera")
+        .flatMap((source) => source.stream.getVideoTracks())
+        .map((track) => track.getSettings().deviceId)
+    );
+    const inputs = await this.deviceManager.getVideoInputs();
+
+    return inputs
+      .filter((device) => device.deviceId)
+      .map((device) => ({
+        deviceId: device.deviceId,
+        label: device.label,
+        inUse: inUse.has(device.deviceId),
+      }));
   }
 
   /**
@@ -1224,10 +1278,25 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
   }
 
   /**
-   * Switch video device
+   * Switch a camera to another device: the camera source given, or the last one
+   * captured.
    */
-  async switchVideoDevice(deviceId: string): Promise<void> {
-    const newTrack = await this.deviceManager.replaceVideoTrack(deviceId, this.currentProfile);
+  async switchVideoDevice(deviceId: string, sourceId?: string): Promise<void> {
+    const source = sourceId ? this.sources.get(sourceId) : undefined;
+    const newTrack = await this.deviceManager.replaceVideoTrack(
+      deviceId,
+      this.currentProfile,
+      source?.stream ?? this.deviceManager.getStream()
+    );
+
+    // The compositor reads tracks and the connection sends its output, so the
+    // camera's new track only has to reach the compositor.
+    const composited = source ?? this.getCameraSource(this.deviceManager.getStream());
+    if (this.sceneManager && composited) {
+      this.sceneManager.unbindSource(composited.id);
+      this.sceneManager.bindSource(composited.id, composited.stream);
+      return;
+    }
 
     if (newTrack && this.whipClient) {
       const pc = this.whipClient.getPeerConnection();
@@ -1238,6 +1307,10 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
         }
       }
     }
+  }
+
+  private getCameraSource(stream: MediaStream | null): MediaSource | undefined {
+    return Array.from(this.sources.values()).find((source) => source.stream === stream);
   }
 
   /**
@@ -1411,6 +1484,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
 
     for (const [id, source] of this.sources) {
       if (!this.sceneManager) break; // Guard against concurrent disable
+      if (source.stream.getVideoTracks().length === 0) continue;
       // Bind source for frame extraction
       this.sceneManager.bindSource(id, source.stream);
       // Add layer to active scene
@@ -1674,25 +1748,114 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
   }
 
   /**
-   * Add a MediaFileSource as a streaming source.
-   * Wraps addCustomSource with type "media" and auto-handles the "ended" event.
+   * Add a local video or audio file as a source. It plays in this tab: video
+   * goes through the compositor, audio through the mixer, and the file itself
+   * is never uploaded.
    */
-  addMediaFileSource(
-    source: { getStream(): MediaStream | null; on(event: string, handler: Function): () => void },
-    label = "Media"
-  ): MediaSource | null {
-    const stream = source.getStream();
+  async addMediaFile(
+    file: File,
+    options: { loop?: boolean; autoplay?: boolean } = {}
+  ): Promise<MediaSource> {
+    const mediaFile = new MediaFileSource();
+    try {
+      await this.ensureAudioMixer();
+      await mediaFile.loadFile(file);
+    } catch (error) {
+      mediaFile.destroy();
+      throw error;
+    }
+
+    mediaFile.loop = options.loop ?? false;
+    const source = this.addMediaFileSource(mediaFile, file.name);
+    if (!source) {
+      mediaFile.destroy();
+      throw new Error(`Could not read ${file.name}`);
+    }
+    if (options.autoplay ?? true) {
+      mediaFile.play();
+    }
+    return source;
+  }
+
+  /**
+   * Add a loaded MediaFileSource as a streaming source. The source owns it from
+   * here on. A file that runs out stays in the mix on its last frame.
+   */
+  addMediaFileSource(file: MediaFileSource, label = "Media"): MediaSource | null {
+    const stream = file.getStream();
     if (!stream) return null;
 
-    const ms = this.addCustomSource(stream, label);
+    const source = this.addMediaSource("media", stream, label);
+    const refresh = () => this.updateMediaPlayback(source, file);
+    refresh();
 
-    // Auto-deactivate when playback ends
-    const unsub = source.on("ended", () => {
-      this.removeSource(ms.id);
-      unsub();
+    this.mediaFiles.set(source.id, {
+      file,
+      unsubs: [
+        file.on("playing", refresh),
+        file.on("paused", refresh),
+        file.on("ended", refresh),
+        file.on("streamChanged", (event) => this.replaceMediaStream(source, event.stream)),
+      ],
     });
 
-    return ms;
+    this.setCaptureState("capturing", {
+      hasVideo: this.hasSourceWithVideo(),
+      hasAudio: this.hasSourceWithAudio(),
+    });
+    return source;
+  }
+
+  private updateMediaPlayback(source: MediaSource, file: MediaFileSource): void {
+    const media: MediaPlayback = {
+      playing: file.isPlaying,
+      loop: file.loop,
+      duration: file.duration,
+      hasVideo: file.hasVideo,
+      hasAudio: file.hasAudio,
+    };
+    source.media = media;
+    this.emit("sourceUpdated", { source, changes: { media } });
+  }
+
+  /** Put a new capture of the same file where the old one was. */
+  private replaceMediaStream(source: MediaSource, stream: MediaStream): void {
+    source.stream = stream;
+
+    if (this.sceneManager && stream.getVideoTracks().length > 0) {
+      this.sceneManager.unbindSource(source.id);
+      this.sceneManager.bindSource(source.id, stream);
+    }
+
+    const audioTrack = stream.getAudioTracks()[0];
+    if (this.config.audioMixing && audioTrack) {
+      this.audioMixer.removeSource(source.id);
+      this.audioMixer.addSource(source.id, audioTrack, {
+        volume: source.volume,
+        muted: source.muted,
+      });
+    }
+
+    this.emit("sourceUpdated", { source, changes: { stream } });
+    this.updateOutputStreamFromSources();
+  }
+
+  /** Start or resume a media file source; one that ran out starts over. */
+  playMediaSource(sourceId: string): void {
+    this.mediaFiles.get(sourceId)?.file.play();
+  }
+
+  pauseMediaSource(sourceId: string): void {
+    this.mediaFiles.get(sourceId)?.file.pause();
+  }
+
+  setMediaSourceLoop(sourceId: string, loop: boolean): void {
+    const mediaFile = this.mediaFiles.get(sourceId);
+    const source = this.sources.get(sourceId);
+    if (!mediaFile || !source) return;
+
+    mediaFile.file.loop = loop;
+    this.updateMediaPlayback(source, mediaFile.file);
   }
 
   /**

@@ -17,6 +17,7 @@ vi.mock("@livepeer-frameworks/streamcrafter-core", async (importOriginal) => {
         getRendererType: () => "canvas2d",
         getStats: () => ({ fps: 30, frameTimeMs: 1 }),
         getCurrentLayout: () => ({ mode: "solo" }),
+        getOverlays: () => [],
         isInitialized: () => true,
       };
     });

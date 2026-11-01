@@ -43,6 +43,7 @@ import type {
   IngestState,
   IngestStateContextV2,
   IngestStats,
+  CameraChoice,
   CaptureOptions,
   ScreenCaptureOptions,
   CompositorConfig,
@@ -122,6 +123,11 @@ export interface StreamCrafterInstance {
   startCamera(options?: CaptureOptions): Promise<MediaSource>;
   startScreenShare(options?: ScreenCaptureOptions): Promise<MediaSource | null>;
   addCustomSource(stream: MediaStream, label: string): MediaSource;
+  addMediaFile(file: File, options?: { loop?: boolean; autoplay?: boolean }): Promise<MediaSource>;
+  playMediaSource(id: string): void;
+  pauseMediaSource(id: string): void;
+  setMediaSourceLoop(id: string, loop: boolean): void;
+  getCameraChoices(): Promise<CameraChoice[]>;
   removeSource(id: string): void;
   stopCapture(): Promise<void>;
 
@@ -133,7 +139,7 @@ export interface StreamCrafterInstance {
   goLive(): Promise<void>;
   stop(): Promise<void>;
 
-  switchVideoDevice(deviceId: string): Promise<void>;
+  switchVideoDevice(deviceId: string, sourceId?: string): Promise<void>;
   switchAudioDevice(deviceId: string): Promise<void>;
 
   setEncoderOverrides(overrides: EncoderOverrides): void;
@@ -382,6 +388,11 @@ export function createStreamCrafter(config: CreateStreamCrafterConfig): StreamCr
     startCamera: (opts?) => ctrl.startCamera(opts),
     startScreenShare: (opts?) => ctrl.startScreenShare(opts),
     addCustomSource: (stream, label) => ctrl.addCustomSource(stream, label),
+    addMediaFile: (file, options) => ctrl.addMediaFile(file, options),
+    playMediaSource: (id) => ctrl.playMediaSource(id),
+    pauseMediaSource: (id) => ctrl.pauseMediaSource(id),
+    setMediaSourceLoop: (id, loop) => ctrl.setMediaSourceLoop(id, loop),
+    getCameraChoices: () => ctrl.getCameraChoices(),
     removeSource: (id) => ctrl.removeSource(id),
     stopCapture: () => ctrl.stopCapture(),
 
@@ -393,7 +404,7 @@ export function createStreamCrafter(config: CreateStreamCrafterConfig): StreamCr
     goLive: () => ctrl.startStreaming(),
     stop: () => ctrl.stopStreaming(),
 
-    switchVideoDevice: (id) => ctrl.switchVideoDevice(id),
+    switchVideoDevice: (id, sourceId) => ctrl.switchVideoDevice(id, sourceId),
     switchAudioDevice: (id) => ctrl.switchAudioDevice(id),
 
     setEncoderOverrides: (overrides) => ctrl.setEncoderOverrides(overrides),

@@ -5,7 +5,9 @@ import { readable } from "svelte/store";
 import {
   createStudioTranslator,
   type Layer,
+  type MediaSource,
   type Scene,
+  type StudioOverlay,
   type TransitionConfig,
 } from "@livepeer-frameworks/streamcrafter-core";
 import StudioProducerPanel from "../src/components/StudioProducerPanel.svelte";
@@ -33,7 +35,62 @@ function fakeCompositor() {
     transitionTo: vi.fn(async (_id: string, _transition?: TransitionConfig) => {}),
     setLayerVisibility: vi.fn(),
     reorderLayers: vi.fn(),
+    addImageOverlay: vi.fn(async (_image: Blob) => {}),
+    addTextOverlay: vi.fn(),
+    updateTextOverlay: vi.fn(),
+    setOverlayPlacement: vi.fn(),
+    removeOverlay: vi.fn(),
   };
+}
+
+function fakeMedia() {
+  return {
+    addMediaFile: vi.fn(async (_file: File) => ({})),
+    playMediaSource: vi.fn(),
+    pauseMediaSource: vi.fn(),
+    setMediaSourceLoop: vi.fn(),
+  };
+}
+
+const textOverlay: StudioOverlay = {
+  sourceId: "text-1",
+  layerId: "layer-text",
+  kind: "text",
+  label: "Ada",
+  x: 0.04,
+  y: 0.92,
+  size: 0.2,
+  text: { text: "Ada", fontSize: 48, color: "#ffffff", style: "lower-third" },
+};
+
+const imageOverlay: StudioOverlay = {
+  sourceId: "img-1",
+  layerId: "layer-img",
+  kind: "image",
+  label: "logo.png",
+  x: 0.97,
+  y: 0.05,
+  size: 0.15,
+};
+
+const mediaSource = (overrides: Partial<MediaSource["media"]> = {}) =>
+  ({
+    id: "media-1",
+    type: "media",
+    label: "clip.mp4",
+    media: {
+      playing: true,
+      loop: false,
+      duration: 8,
+      hasVideo: true,
+      hasAudio: true,
+      ...overrides,
+    },
+  }) as MediaSource;
+
+function pick(input: HTMLInputElement, file: File) {
+  Object.defineProperty(input, "files", { value: [file], configurable: true });
+  return fireEvent.change(input);
 }
 
 function composition(overrides: Partial<CompositorState> = {}): CompositorState {
@@ -48,6 +105,7 @@ function composition(overrides: Partial<CompositorState> = {}): CompositorState 
     ],
     activeSceneId: "one",
     currentLayout: null,
+    overlays: [],
     ...overrides,
   };
 }
@@ -55,7 +113,9 @@ function composition(overrides: Partial<CompositorState> = {}): CompositorState 
 function renderPanel(
   state: CompositorState = composition(),
   compositor: ReturnType<typeof fakeCompositor> | null = fakeCompositor(),
-  context: [string, unknown][] = []
+  context: [string, unknown][] = [],
+  sources: MediaSource[] = [],
+  media: ReturnType<typeof fakeMedia> = fakeMedia()
 ) {
   const result = render(StudioProducerPanel, {
     context: new Map<string, unknown>([
@@ -64,19 +124,126 @@ function renderPanel(
         {
           compositor: compositor as unknown as CompositorStore,
           compositorState: state,
-          sources: [],
+          sources,
+          ...media,
         },
       ],
       ...context,
     ]),
   });
-  return { ...result, compositor: compositor! };
+  return { ...result, compositor: compositor!, media };
 }
 
 describe("StudioProducerPanel", () => {
   it("stays out of the way until the compositor runs", () => {
     const { container } = renderPanel(composition({ isInitialized: false }));
     expect(container.querySelector(".fw-sc-producer")).toBeNull();
+  });
+
+  it("turns a picked image into an overlay", async () => {
+    const { compositor, container } = renderPanel();
+    const file = new File(["x"], "logo.png", { type: "image/png" });
+
+    await pick(container.querySelector("input[accept='image/*']") as HTMLInputElement, file);
+
+    expect(compositor.addImageOverlay).toHaveBeenCalledWith(file);
+  });
+
+  it("says so when a picked image cannot be read", async () => {
+    const compositor = fakeCompositor();
+    compositor.addImageOverlay.mockRejectedValue(new Error("bad image"));
+    const { container } = renderPanel(composition(), compositor);
+
+    await pick(
+      container.querySelector("input[accept='image/*']") as HTMLInputElement,
+      new File(["x"], "broken.png")
+    );
+
+    expect(await screen.findByText("This image could not be read.")).toBeTruthy();
+  });
+
+  it("adds a text overlay with the studio's default text", async () => {
+    const { compositor } = renderPanel();
+
+    await fireEvent.click(screen.getByText("Add text"));
+
+    expect(compositor.addTextOverlay).toHaveBeenCalledWith({ text: "Your text" });
+  });
+
+  it("updates text, size and colour as they are edited", async () => {
+    const { compositor } = renderPanel(composition({ overlays: [textOverlay] }));
+
+    await fireEvent.input(screen.getByLabelText("Text"), { target: { value: "Grace" } });
+    await fireEvent.input(screen.getByLabelText("Text size"), { target: { value: "72" } });
+    await fireEvent.input(screen.getByLabelText("Text color"), { target: { value: "#ff0000" } });
+
+    expect(compositor.updateTextOverlay).toHaveBeenCalledWith("text-1", { text: "Grace" });
+    expect(compositor.updateTextOverlay).toHaveBeenCalledWith("text-1", { fontSize: 72 });
+    expect(compositor.updateTextOverlay).toHaveBeenCalledWith("text-1", { color: "#ff0000" });
+  });
+
+  it("moves and sizes a logo, and removes it", async () => {
+    const { compositor } = renderPanel(composition({ overlays: [imageOverlay] }));
+
+    await fireEvent.input(screen.getByLabelText("Left to right"), { target: { value: "25" } });
+    await fireEvent.input(screen.getByLabelText("Top to bottom"), { target: { value: "75" } });
+    await fireEvent.input(screen.getByLabelText("Size"), { target: { value: "30" } });
+    await fireEvent.click(screen.getByTitle("Remove overlay"));
+
+    expect(compositor.setOverlayPlacement).toHaveBeenCalledWith("img-1", { x: 0.25 });
+    expect(compositor.setOverlayPlacement).toHaveBeenCalledWith("img-1", { y: 0.75 });
+    expect(compositor.setOverlayPlacement).toHaveBeenCalledWith("img-1", { size: 0.3 });
+    expect(compositor.removeOverlay).toHaveBeenCalledWith("img-1");
+  });
+
+  it("adds a picked media file and says the file stays open in this tab", async () => {
+    const { media, container } = renderPanel();
+    const file = new File(["x"], "clip.mp4", { type: "video/mp4" });
+
+    await pick(
+      container.querySelector("input[accept='video/*,audio/*']") as HTMLInputElement,
+      file
+    );
+
+    expect(media.addMediaFile).toHaveBeenCalledWith(file);
+    expect(screen.getByText(/Keep this tab open/)).toBeTruthy();
+  });
+
+  it("says so when a media file cannot play", async () => {
+    const media = fakeMedia();
+    media.addMediaFile.mockRejectedValue(new Error("unsupported"));
+    const { container } = renderPanel(composition(), fakeCompositor(), [], [], media);
+
+    await pick(
+      container.querySelector("input[accept='video/*,audio/*']") as HTMLInputElement,
+      new File(["x"], "clip.xyz")
+    );
+
+    expect(await screen.findByText("This file could not be played in this browser.")).toBeTruthy();
+  });
+
+  it("pauses a playing file and plays a paused one", async () => {
+    const { media, unmount } = renderPanel(composition(), fakeCompositor(), [], [mediaSource()]);
+    await fireEvent.click(screen.getByText("Pause"));
+    expect(media.pauseMediaSource).toHaveBeenCalledWith("media-1");
+    unmount();
+
+    const paused = renderPanel(
+      composition(),
+      fakeCompositor(),
+      [],
+      [mediaSource({ playing: false })]
+    );
+    await fireEvent.click(screen.getByText("Play"));
+    expect(paused.media.playMediaSource).toHaveBeenCalledWith("media-1");
+  });
+
+  it("turns looping on for a file", async () => {
+    const { media } = renderPanel(composition(), fakeCompositor(), [], [mediaSource()]);
+
+    await fireEvent.click(screen.getByLabelText("Loop"));
+
+    expect(media.setMediaSourceLoop).toHaveBeenCalledWith("media-1", true);
   });
 
   it("adds a scene under the first unused number", async () => {

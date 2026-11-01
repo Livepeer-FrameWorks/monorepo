@@ -3,6 +3,8 @@
  * Type definitions for browser-based streaming with WebCodecs
  */
 
+import type { TextOverlayConfig } from "./core/TextOverlaySource";
+
 // ============================================================================
 // State Types
 // ============================================================================
@@ -38,6 +40,16 @@ export interface CaptureOptions {
   facingMode?: "user" | "environment";
   profile?: QualityProfile;
   customConstraints?: MediaStreamConstraints;
+  /** False captures video only. By default only the first camera opens a microphone. */
+  audio?: boolean;
+}
+
+/** A video input the broadcaster can pick. */
+export interface CameraChoice {
+  deviceId: string;
+  label: string;
+  /** Already a source in this studio. */
+  inUse: boolean;
 }
 
 export interface ScreenCaptureOptions {
@@ -287,6 +299,27 @@ export interface MediaSource {
   muted: boolean;
   volume: number; // 0.0 - 2.0 for audio mixing (200% boost)
   primaryVideo: boolean; // Is this the primary video source for streaming
+  media?: MediaPlayback; // Set on sources playing a media file
+}
+
+export interface MediaPlayback {
+  playing: boolean;
+  loop: boolean;
+  duration: number; // seconds
+  hasVideo: boolean;
+  hasAudio: boolean;
+}
+
+/**
+ * Whether a source shows in a scene. Audio has no layer, and is never hidden
+ * for lacking one.
+ */
+export function isSourceVisibleInScene(
+  source: Pick<MediaSource, "id" | "stream">,
+  scene: Pick<Scene, "layers"> | null | undefined
+): boolean {
+  if (!scene || source.stream.getVideoTracks().length === 0) return true;
+  return scene.layers.find((layer) => layer.sourceId === source.id)?.visible ?? false;
 }
 
 export interface SourceAddedEvent {
@@ -401,6 +434,7 @@ export interface Layer {
   id: string;
   sourceId: string; // references MediaSource.id
   kind?: LayerKind; // "overlay" stays above the layout at its own position
+  label?: string; // Name of an overlay, which has no MediaSource to take one from
   visible: boolean;
   locked: boolean;
   zIndex: number;
@@ -428,6 +462,28 @@ export interface CropConfig {
   right: number;
   bottom: number;
   left: number;
+}
+
+/**
+ * Where an overlay sits. `x` and `y` run from 0 to 1 across the room the overlay
+ * leaves in the frame: 0 is flush left or top, 1 is flush right or bottom, at any
+ * size. `size` is the width of an image overlay as a fraction of the frame; a
+ * text overlay takes its size from its font.
+ */
+export interface OverlayPlacement {
+  x: number;
+  y: number;
+  size: number;
+}
+
+/** An image or text overlay in a scene. */
+export interface StudioOverlay extends OverlayPlacement {
+  sourceId: string;
+  layerId: string;
+  kind: "image" | "text";
+  label: string;
+  /** The text and its styling; only on text overlays. */
+  text?: TextOverlayConfig;
 }
 
 // ============================================================================
@@ -600,6 +656,7 @@ export type CompositorMainToWorker =
   | { type: "updateScene"; scene: Scene }
   | { type: "sourceFrame"; sourceId: string; frame: VideoFrame }
   | { type: "sourceImage"; sourceId: string; bitmap: ImageBitmap }
+  | { type: "removeSource"; sourceId: string }
   | { type: "startTransition"; transition: TransitionConfig; toScene: Scene }
   | { type: "updateLayout"; layout: LayoutConfig }
   | { type: "animateLayout"; targetScene: Scene; transition: LayoutTransitionConfig }

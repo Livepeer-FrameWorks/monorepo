@@ -16,6 +16,11 @@ describe("StreamCrafter React component parity", () => {
     }
   });
 
+  it("adds cameras through the picker, with no limit of one", () => {
+    expect(source).toContain("<CameraPicker");
+    expect(source).not.toContain("hasCamera");
+  });
+
   it("offers the producer panel behind a prop", () => {
     expect(source).toContain("showProducerPanel = false");
     expect(source).toContain("<StudioProducerPanel");

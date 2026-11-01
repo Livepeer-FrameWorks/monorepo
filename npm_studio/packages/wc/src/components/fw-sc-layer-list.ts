@@ -50,9 +50,9 @@ export class FwScLayerList extends LitElement {
     return [...this.layers].sort((a, b) => b.zIndex - a.zIndex);
   }
 
-  private _getSourceLabel(sourceId: string): string {
-    const source = this.sources.find((s) => s.id === sourceId);
-    return source?.label || sourceId;
+  private _getLayerLabel(layer: Layer): string {
+    const source = this.sources.find((s) => s.id === layer.sourceId);
+    return layer.label || source?.label || layer.sourceId;
   }
 
   private _getSourceIcon(sourceId: string) {
@@ -117,7 +117,7 @@ export class FwScLayerList extends LitElement {
                       ${layer.visible ? eyeIcon(14) : eyeOffIcon(14)}
                     </button>
                     <span class="fw-sc-layer-icon">${this._getSourceIcon(layer.sourceId)}</span>
-                    <span class="fw-sc-layer-name">${this._getSourceLabel(layer.sourceId)}</span>
+                    <span class="fw-sc-layer-name">${this._getLayerLabel(layer)}</span>
 
                     ${this._editingLayerId === layer.id && this.onTransformEdit
                       ? html`

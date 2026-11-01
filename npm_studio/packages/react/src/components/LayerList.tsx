@@ -301,7 +301,9 @@ export function LayerList({
 
               {/* Source Info */}
               <span className="fw-sc-layer-icon">{getSourceIcon(layer.sourceId)}</span>
-              <span className="fw-sc-layer-name">{getSourceLabel(layer.sourceId)}</span>
+              <span className="fw-sc-layer-name">
+                {layer.label || getSourceLabel(layer.sourceId)}
+              </span>
 
               {/* Opacity (shown when editing) */}
               {editingLayerId === layer.id && onTransformEdit && (

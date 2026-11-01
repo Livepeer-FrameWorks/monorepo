@@ -5,7 +5,7 @@ description: "Multi-source compositing with scenes, layers, and layouts."
 
 import { Aside } from "@astrojs/starlight/components";
 
-The compositor enables multi-source layout control — arrange camera and screen share into layouts with scenes and layers.
+The compositor enables multi-source layout control — arrange cameras, screen share, and media files into layouts with scenes and layers, and put logos and text above them. It runs in the browser.
 
 <Aside type="tip" title="On by Default in the Drop-in Components">
   The React, Svelte, and Web Component drop-in components enable the compositor by default. It works
@@ -203,6 +203,74 @@ compositor.reorderLayers(sceneId, ["layer-1", "layer-2", "layer-3"]);
 // Remove a layer
 compositor.removeLayer(sceneId, layerId);
 ```
+
+## More Than One Camera
+
+`getCameraChoices()` lists the video inputs, and `startCamera({ videoDeviceId })` adds one as another
+source. The drop-in components use both behind **Add Camera**. The list is empty until the browser
+has shown device IDs, which it does once camera permission is granted.
+
+```ts
+const choices = await studio.getCameraChoices();
+const next = choices.find((choice) => !choice.inUse);
+if (next) await studio.startCamera({ videoDeviceId: next.deviceId });
+```
+
+The first camera opens the microphone. Later cameras are video only unless you pass `audio: true`,
+so one microphone does not reach the mix twice.
+
+## Overlays
+
+An overlay is a layer that stays above the sources at its own position. Layouts, source cycling, and
+sources added later leave it where it is. The compositor components and hooks add overlays to the
+active scene; `SceneManager` takes a scene ID.
+
+```ts
+// A picked file is decoded in the browser and never uploaded.
+const { sourceId: logo } = await sceneManager.addImageOverlay(sceneId, file);
+
+// Text is drawn at its size in output pixels, on a band sized to the text.
+const { sourceId: lowerThird } = sceneManager.addTextOverlay(sceneId, {
+  text: "Ada Lovelace",
+  fontSize: 48,
+  color: "#ffffff",
+});
+
+// Editing redraws the overlay at once and keeps its position.
+sceneManager.updateTextOverlay(lowerThird, { text: "Ada Lovelace, Analyst" });
+
+// x and y run from 0 to 1 across the room the overlay leaves in the frame,
+// so 1 is flush with the right or bottom edge at any size.
+// size is the width of an image as a fraction of the frame.
+sceneManager.setOverlayPlacement(logo, { x: 1, y: 0, size: 0.2 });
+
+sceneManager.removeOverlay(logo);
+```
+
+`getOverlays(sceneId)` returns the overlays of a scene with their placement and text. The hook and
+store expose it as `overlays` for the active scene. PNG transparency and SVG files are supported.
+
+## Media Files
+
+`addMediaFile(file, { loop })` plays a local video or audio file as a source. Its video goes through
+the compositor and its audio through the mixer, with the same volume and mute controls as any other
+source. An audio file has no layer.
+
+```ts
+const source = await studio.addMediaFile(file, { loop: true });
+
+studio.pauseMediaSource(source.id);
+studio.playMediaSource(source.id);
+studio.setMediaSourceLoop(source.id, false);
+```
+
+`source.media` holds the playback state. A file that runs out without looping stays in the mix on
+its last frame, and playing it again starts it over.
+
+<Aside type="note" title="The file plays from the tab">
+  The file is read by this browser tab and never uploaded, so the tab must stay open while the file
+  is in the mix. A browser that cannot capture from a media element refuses the file with an error.
+</Aside>
 
 ## Renderer
 

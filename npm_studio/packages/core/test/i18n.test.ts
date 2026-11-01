@@ -66,6 +66,36 @@ describe("Studio I18n", () => {
         expect(pack.addCamera).not.toBe(DEFAULT_STUDIO_TRANSLATIONS.addCamera);
       }
     });
+
+    it("non-en packs translate the overlay, media and camera picker strings", () => {
+      const keys: (keyof StudioTranslationStrings)[] = [
+        "chooseCamera",
+        "addLogo",
+        "addText",
+        "overlayDefaultText",
+        "overlaySize",
+        "overlayFontSize",
+        "overlayColor",
+        "overlayPositionX",
+        "overlayPositionY",
+        "removeOverlay",
+        "noOverlays",
+        "overlayImageError",
+        "overlayLocalNotice",
+        "addMediaFile",
+        "playMedia",
+        "loopMedia",
+        "noMedia",
+        "mediaFileError",
+        "mediaTabNotice",
+      ];
+      for (const locale of ["es", "fr", "de", "nl"] as StudioLocale[]) {
+        const pack = getStudioLocalePack(locale);
+        for (const key of keys) {
+          expect(pack[key], `${key} in ${locale}`).not.toBe(DEFAULT_STUDIO_TRANSLATIONS[key]);
+        }
+      }
+    });
   });
 
   // ===========================================================================

@@ -693,13 +693,15 @@ export class AudioMixer extends TypedEventEmitter<AudioMixerEvents> {
     if (this.levelMonitoringActive) return;
     this.levelMonitoringActive = true;
 
+    // The loop outlives a context that is suspended or not created yet: a meter
+    // starts with the studio, before the first source brings up the audio.
     const update = () => {
-      if (!this.levelMonitoringActive || this.audioContext?.state !== "running") {
-        return;
-      }
+      if (!this.levelMonitoringActive) return;
 
-      const { level, peakLevel } = this.getLevels();
-      this.emit("levelUpdate", { level, peakLevel });
+      if (this.audioContext?.state === "running") {
+        const { level, peakLevel } = this.getLevels();
+        this.emit("levelUpdate", { level, peakLevel });
+      }
 
       requestAnimationFrame(update);
     };

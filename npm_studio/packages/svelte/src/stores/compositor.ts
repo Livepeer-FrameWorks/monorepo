@@ -14,6 +14,9 @@ import type {
   RendererStats,
   CompositorConfig,
   MediaSource,
+  OverlayPlacement,
+  StudioOverlay,
+  TextOverlayConfig,
 } from "@livepeer-frameworks/streamcrafter-core";
 import type { IngestControllerV2 } from "@livepeer-frameworks/streamcrafter-core";
 
@@ -25,6 +28,8 @@ export interface CompositorState {
   scenes: Scene[];
   activeSceneId: string | null;
   currentLayout: LayoutConfig | null;
+  /** Overlays of the active scene, bottom to top. */
+  overlays: StudioOverlay[];
 }
 
 export interface CompositorStore extends Readable<CompositorState> {
@@ -56,6 +61,13 @@ export interface CompositorStore extends Readable<CompositorState> {
   setLayerVisibility: (sceneId: string, layerId: string, visible: boolean) => void;
   reorderLayers: (sceneId: string, layerIds: string[]) => void;
 
+  // Overlays, added to the active scene
+  addImageOverlay: (image: Blob) => Promise<void>;
+  addTextOverlay: (config: TextOverlayConfig) => void;
+  updateTextOverlay: (sourceId: string, config: Partial<TextOverlayConfig>) => void;
+  setOverlayPlacement: (sourceId: string, placement: Partial<OverlayPlacement>) => void;
+  removeOverlay: (sourceId: string) => void;
+
   // Layout presets
   applyLayout: (layout: LayoutConfig) => void;
   cycleSourceOrder: (direction?: "forward" | "backward") => void;
@@ -73,6 +85,10 @@ export interface CompositorContext {
   readonly compositor: CompositorStore | null;
   readonly compositorState: CompositorState;
   readonly sources: MediaSource[];
+  addMediaFile: (file: File) => Promise<unknown>;
+  playMediaSource: (sourceId: string) => void;
+  pauseMediaSource: (sourceId: string) => void;
+  setMediaSourceLoop: (sourceId: string, loop: boolean) => void;
 }
 
 export interface CreateCompositorStoreOptions {
@@ -92,6 +108,7 @@ export function createCompositorStore(options: CreateCompositorStoreOptions): Co
     scenes: [],
     activeSceneId: null,
     currentLayout: null,
+    overlays: [],
   });
 
   let unsubscribers: (() => void)[] = [];
@@ -107,10 +124,12 @@ export function createCompositorStore(options: CreateCompositorStoreOptions): Co
     const sceneManager = controller.getSceneManager();
     if (!sceneManager) return;
 
+    const activeSceneId = sceneManager.getActiveScene()?.id || null;
     store.update((state) => ({
       ...state,
       scenes: sceneManager.getAllScenes(),
-      activeSceneId: sceneManager.getActiveScene()?.id || null,
+      activeSceneId,
+      overlays: activeSceneId ? sceneManager.getOverlays(activeSceneId) : [],
       rendererType: sceneManager.getRendererType(),
       stats: sceneManager.getStats(),
       currentLayout: sceneManager.getCurrentLayout(),
@@ -200,6 +219,7 @@ export function createCompositorStore(options: CreateCompositorStoreOptions): Co
       scenes: [],
       activeSceneId: null,
       currentLayout: null,
+      overlays: [],
     });
   }
 
@@ -278,6 +298,44 @@ export function createCompositorStore(options: CreateCompositorStoreOptions): Co
     syncState();
   }
 
+  // Overlays
+  async function addImageOverlay(image: Blob): Promise<void> {
+    const sceneManager = controller?.getSceneManager();
+    const scene = sceneManager?.getActiveScene();
+    if (!sceneManager || !scene) return;
+    await sceneManager.addImageOverlay(scene.id, image);
+    syncState();
+  }
+
+  function addTextOverlay(config: TextOverlayConfig): void {
+    const sceneManager = controller?.getSceneManager();
+    const scene = sceneManager?.getActiveScene();
+    if (!sceneManager || !scene) return;
+    sceneManager.addTextOverlay(scene.id, config);
+    syncState();
+  }
+
+  function updateTextOverlay(sourceId: string, config: Partial<TextOverlayConfig>): void {
+    const sceneManager = controller?.getSceneManager();
+    if (!sceneManager) return;
+    sceneManager.updateTextOverlay(sourceId, config);
+    syncState();
+  }
+
+  function setOverlayPlacement(sourceId: string, placement: Partial<OverlayPlacement>): void {
+    const sceneManager = controller?.getSceneManager();
+    if (!sceneManager) return;
+    sceneManager.setOverlayPlacement(sourceId, placement);
+    syncState();
+  }
+
+  function removeOverlay(sourceId: string): void {
+    const sceneManager = controller?.getSceneManager();
+    if (!sceneManager) return;
+    sceneManager.removeOverlay(sourceId);
+    syncState();
+  }
+
   // Layout presets
   function applyLayout(layout: LayoutConfig): void {
     const sceneManager = controller?.getSceneManager();
@@ -319,6 +377,12 @@ export function createCompositorStore(options: CreateCompositorStoreOptions): Co
     updateLayerTransform,
     setLayerVisibility,
     reorderLayers,
+
+    addImageOverlay,
+    addTextOverlay,
+    updateTextOverlay,
+    setOverlayPlacement,
+    removeOverlay,
 
     applyLayout,
     cycleSourceOrder,

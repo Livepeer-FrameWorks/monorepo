@@ -13,6 +13,7 @@ import type {
   IngestState,
   IngestStateContextV2,
   IngestStats,
+  CameraChoice,
   CaptureOptions,
   ScreenCaptureOptions,
   DeviceInfo,
@@ -128,6 +129,35 @@ export class StreamCrafterV2 {
    */
   async startCamera(options?: CaptureOptions): Promise<MediaSource> {
     return this.controller.startCamera(options);
+  }
+
+  /**
+   * List the video inputs a broadcaster can pick from
+   */
+  async getCameraChoices(): Promise<CameraChoice[]> {
+    return this.controller.getCameraChoices();
+  }
+
+  /**
+   * Add a local video or audio file as a source. It plays from this tab.
+   */
+  async addMediaFile(
+    file: File,
+    options?: { loop?: boolean; autoplay?: boolean }
+  ): Promise<MediaSource> {
+    return this.controller.addMediaFile(file, options);
+  }
+
+  playMediaSource(sourceId: string): void {
+    this.controller.playMediaSource(sourceId);
+  }
+
+  pauseMediaSource(sourceId: string): void {
+    this.controller.pauseMediaSource(sourceId);
+  }
+
+  setMediaSourceLoop(sourceId: string, loop: boolean): void {
+    this.controller.setMediaSourceLoop(sourceId, loop);
   }
 
   /**
@@ -247,8 +277,8 @@ export class StreamCrafterV2 {
   /**
    * Switch video device while streaming
    */
-  async switchVideoDevice(deviceId: string): Promise<void> {
-    return this.controller.switchVideoDevice(deviceId);
+  async switchVideoDevice(deviceId: string, sourceId?: string): Promise<void> {
+    return this.controller.switchVideoDevice(deviceId, sourceId);
   }
 
   /**

@@ -6,8 +6,8 @@
     createStudioTranslator,
     type StudioTranslateFn,
   } from "@livepeer-frameworks/streamcrafter-core";
-  import CameraIcon from "../icons/CameraIcon.svelte";
   import MonitorIcon from "../icons/MonitorIcon.svelte";
+  import CameraPicker from "./CameraPicker.svelte";
   import StudioSettings from "./StudioSettings.svelte";
 
   interface Props {
@@ -25,12 +25,11 @@
   let t = $derived($translatorCtx);
 
   let canAddSource = $derived(pc?.state !== "destroyed" && pc?.state !== "error");
-  let hasCamera = $derived(pc?.sources?.some((s: any) => s.type === "camera") ?? false);
   let canStream = $derived(pc?.isCapturing && !pc?.isStreaming && whipUrl !== undefined);
 
-  async function handleStartCamera() {
+  async function handleStartCamera(videoDeviceId?: string) {
     try {
-      await pc?.startCamera();
+      await pc?.startCamera(videoDeviceId ? { videoDeviceId } : undefined);
     } catch (err) {
       console.error("Failed to start camera:", err);
     }
@@ -61,15 +60,12 @@
   {#if children}
     {@render children()}
   {:else}
-    <button
-      type="button"
-      class="fw-sc-action-secondary"
-      onclick={handleStartCamera}
-      disabled={!canAddSource || hasCamera}
-      title={hasCamera ? t("cameraActive") : t("addCamera")}
-    >
-      <CameraIcon size={18} />
-    </button>
+    <CameraPicker
+      sources={pc?.sources ?? []}
+      disabled={!canAddSource}
+      getChoices={() => pc?.getCameraChoices() ?? Promise.resolve([])}
+      onPick={handleStartCamera}
+    />
     <button
       type="button"
       class="fw-sc-action-secondary"

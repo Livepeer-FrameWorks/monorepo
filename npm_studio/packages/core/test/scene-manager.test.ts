@@ -381,6 +381,33 @@ describe("SceneManager", () => {
       ).toEqual([0.4975, 0.4975]);
     });
 
+    it("closes a frame that was on its way when the source was unbound", async () => {
+      const sm = new SceneManager();
+      const { posted } = attachWorker(sm);
+      const pending: ((result: { done: boolean; value?: unknown }) => void)[] = [];
+      const reader = {
+        read: () => new Promise((resolve) => pending.push(resolve)),
+        cancel: async () => {},
+      };
+      vi.stubGlobal(
+        "MediaStreamTrackProcessor",
+        class {
+          readable = { getReader: () => reader };
+        }
+      );
+
+      sm.bindSource("camera", { getVideoTracks: () => [{}] } as unknown as MediaStream);
+      sm.unbindSource("camera");
+      const frame = { close: vi.fn() };
+      pending[0]({ done: false, value: frame });
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(frame.close).toHaveBeenCalled();
+      expect(posted.filter((message) => message.type === "sourceFrame")).toEqual([]);
+      vi.unstubAllGlobals();
+    });
+
     it("leaves overlays out of source cycling", () => {
       const sm = new SceneManager();
       const scene = sm.createScene("Main");

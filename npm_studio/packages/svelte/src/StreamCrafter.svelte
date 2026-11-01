@@ -19,6 +19,7 @@
   import { createAudioLevelsStore, type AudioLevelsState } from "./stores/audioLevels.svelte";
   import { createCompositorStore, type CompositorState } from "./stores/compositor";
   import { createIngestEndpointsStore, type IngestEndpointsState } from "./stores/ingestEndpoints";
+  import CameraPicker from "./components/CameraPicker.svelte";
   import CompositorControls from "./components/CompositorControls.svelte";
   import StudioProducerPanel from "./components/StudioProducerPanel.svelte";
   import AdvancedPanel, { type AudioProcessingSettings } from "./components/AdvancedPanel.svelte";
@@ -50,6 +51,7 @@
   import {
     isWebCodecsEncodingPathSupported,
     detectCapabilities,
+    isSourceVisibleInScene,
     resolveStudioTheme,
     studioThemeOverridesToStyle,
   } from "@livepeer-frameworks/streamcrafter-core";
@@ -193,6 +195,7 @@
     scenes: [],
     activeSceneId: null,
     currentLayout: null,
+    overlays: [],
   });
   let ingestEndpointsState = $state<IngestEndpointsState>({
     endpoints: null,
@@ -271,6 +274,11 @@
     // Actions
     startCamera: (opts?: any) => crafter.startCamera(opts),
     startScreenShare: (opts?: any) => crafter.startScreenShare(opts),
+    getCameraChoices: () => crafter.getCameraChoices(),
+    addMediaFile: (file: File, opts?: { loop?: boolean }) => crafter.addMediaFile(file, opts),
+    playMediaSource: (id: string) => crafter.playMediaSource(id),
+    pauseMediaSource: (id: string) => crafter.pauseMediaSource(id),
+    setMediaSourceLoop: (id: string, loop: boolean) => crafter.setMediaSourceLoop(id, loop),
     removeSource: (id: string) => crafter.removeSource(id),
     setSourceVolume: (id: string, vol: number) => crafter.setSourceVolume(id, vol),
     setSourceMuted: (id: string, muted: boolean) => crafter.setSourceMuted(id, muted),
@@ -494,9 +502,9 @@
   });
 
   // Handlers
-  async function handleStartCamera() {
+  async function handleStartCamera(videoDeviceId?: string) {
     try {
-      await crafter.startCamera();
+      await crafter.startCamera(videoDeviceId ? { videoDeviceId } : undefined);
     } catch (err) {
       console.error("Failed to start camera:", err);
     }
@@ -586,12 +594,10 @@
     }
   }
 
-  function getSourceLayerVisibility(sourceId: string): boolean {
+  function getSourceLayerVisibility(source: MediaSource): boolean {
     if (!compositorState.isEnabled) return true;
     const activeScene = compositorState.scenes.find((s) => s.id === compositorState.activeSceneId);
-    if (!activeScene) return true;
-    const layer = activeScene.layers.find((l) => l.sourceId === sourceId);
-    return layer?.visible ?? false;
+    return isSourceVisibleInScene(source, activeScene);
   }
 
   function sourceHasVideo(source: MediaSource): boolean {
@@ -631,7 +637,6 @@
   let canStream = $derived(
     crafterState.isCapturing && !crafterState.isStreaming && resolvedWhipUrl
   );
-  let hasCamera = $derived(crafterState.sources.some((s) => s.type === "camera"));
   let _hasScreen = $derived(crafterState.sources.some((s) => s.type === "screen"));
 
   function getStatusText(state: IngestState, reconnState?: ReconnectionState | null): string {
@@ -771,9 +776,9 @@
             {#if showSources}
               <div class="fw-sc-sources">
                 {#each crafterState.sources as source (source.id)}
-                  {@const isVisible = getSourceLayerVisibility(source.id)}
+                  {@const isVisible = getSourceLayerVisibility(source)}
                   <div class="fw-sc-source {!isVisible ? 'fw-sc-source--hidden' : ''}">
-                    {#if enableCompositor}
+                    {#if enableCompositor && sourceHasVideo(source)}
                       <button
                         type="button"
                         class="fw-sc-icon-btn {!isVisible ? 'fw-sc-icon-btn--muted' : ''}"
@@ -788,6 +793,8 @@
                         <CameraIcon size={16} />
                       {:else if source.type === "screen"}
                         <MonitorIcon size={16} />
+                      {:else}
+                        <VideoIcon size={16} />
                       {/if}
                     </div>
                     <div class="fw-sc-source-info">
@@ -892,15 +899,12 @@
       <!-- Action Bar -->
       <div class="fw-sc-actions">
         <!-- Secondary actions: Camera, Screen, Settings -->
-        <button
-          type="button"
-          class="fw-sc-action-secondary"
-          onclick={handleStartCamera}
-          disabled={!canAddSource || hasCamera}
-          title={hasCamera ? t("cameraActive") : t("addCamera")}
-        >
-          <CameraIcon size={18} />
-        </button>
+        <CameraPicker
+          sources={crafterState.sources}
+          disabled={!canAddSource}
+          getChoices={crafter.getCameraChoices}
+          onPick={handleStartCamera}
+        />
         <button
           type="button"
           class="fw-sc-action-secondary"

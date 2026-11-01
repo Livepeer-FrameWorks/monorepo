@@ -187,6 +187,7 @@ export const StudioMixer: React.FC<StudioMixerProps> = ({
                 <div className="fw-sc-source-icon">
                   {source.type === "camera" && <CameraIcon size={16} />}
                   {source.type === "screen" && <MonitorIcon size={16} />}
+                  {source.type !== "camera" && source.type !== "screen" && <VideoIcon size={16} />}
                 </div>
                 <div className="fw-sc-source-info">
                   <div className="fw-sc-source-label">

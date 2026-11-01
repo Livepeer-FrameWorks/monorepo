@@ -18,6 +18,9 @@ export { default as CompositorControls } from "./components/CompositorControls.s
 export { default as SceneSwitcher } from "./components/SceneSwitcher.svelte";
 export { default as LayerList } from "./components/LayerList.svelte";
 export { default as StudioProducerPanel } from "./components/StudioProducerPanel.svelte";
+export { default as StudioOverlayControls } from "./components/StudioOverlayControls.svelte";
+export { default as StudioMediaControls } from "./components/StudioMediaControls.svelte";
+export { default as CameraPicker } from "./components/CameraPicker.svelte";
 
 // Advanced Panel (dev mode sidebar)
 export {

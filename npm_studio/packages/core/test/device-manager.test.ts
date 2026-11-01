@@ -348,9 +348,21 @@ describe("DeviceManager", () => {
 
       expect(result).toBe(fallbackStream);
       expect(mockGetUserMedia).toHaveBeenCalledTimes(2);
-      // Second call should use relaxed constraints (true/true instead of specific device)
+      // The second call drops the size and frame rate and keeps the picked camera.
       const secondCall = mockGetUserMedia.mock.calls[1][0];
-      expect(secondCall.video).toBe(true);
+      expect(secondCall.video).toEqual({ deviceId: { exact: "specific-cam" } });
+    });
+
+    it("relaxes to any camera when none was picked", async () => {
+      const overErr = new Error("Overconstrained");
+      overErr.name = "OverconstrainedError";
+      mockGetUserMedia
+        .mockRejectedValueOnce(overErr)
+        .mockResolvedValueOnce(makeStream([makeTrack("video")]));
+
+      await new DeviceManager().getUserMedia({});
+
+      expect(mockGetUserMedia.mock.calls[1][0].video).toBe(true);
     });
 
     it("emits error and re-throws on non-overconstrained failure", async () => {

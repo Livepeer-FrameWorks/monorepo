@@ -1,23 +1,8 @@
 import React, { useCallback } from "react";
 import { useStreamCrafterContext } from "../context/StreamCrafterContext";
 import { useStudioTranslate } from "../context/StudioI18nContext";
+import { CameraPicker } from "./CameraPicker";
 import { StudioSettings } from "./StudioSettings";
-
-const CameraIcon = ({ size = 18 }: { size?: number }) => (
-  <svg
-    width={size}
-    height={size}
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth="2"
-    strokeLinecap="round"
-    strokeLinejoin="round"
-  >
-    <path d="M23 7l-7 5 7 5V7z" />
-    <rect x="1" y="5" width="15" height="14" rx="2" ry="2" />
-  </svg>
-);
 
 const MonitorIcon = ({ size = 18 }: { size?: number }) => (
   <svg
@@ -53,16 +38,18 @@ export const StudioActionBar: React.FC<StudioActionBarProps> = ({
   const ctx = useStreamCrafterContext();
   const t = useStudioTranslate();
   const canAddSource = ctx.state !== "destroyed" && ctx.state !== "error";
-  const hasCamera = ctx.sources.some((s) => s.type === "camera");
   const canStream = ctx.isCapturing && !ctx.isStreaming && whipUrl !== undefined;
 
-  const handleStartCamera = useCallback(async () => {
-    try {
-      await ctx.startCamera();
-    } catch (err) {
-      console.error("Failed to start camera:", err);
-    }
-  }, [ctx]);
+  const handleStartCamera = useCallback(
+    async (videoDeviceId?: string) => {
+      try {
+        await ctx.startCamera(videoDeviceId ? { videoDeviceId } : undefined);
+      } catch (err) {
+        console.error("Failed to start camera:", err);
+      }
+    },
+    [ctx]
+  );
 
   const handleStartScreenShare = useCallback(async () => {
     try {
@@ -90,15 +77,12 @@ export const StudioActionBar: React.FC<StudioActionBarProps> = ({
 
   return (
     <div className="fw-sc-actions">
-      <button
-        type="button"
-        className="fw-sc-action-secondary"
-        onClick={handleStartCamera}
-        disabled={!canAddSource || hasCamera}
-        title={hasCamera ? t("cameraActive") : t("addCamera")}
-      >
-        <CameraIcon size={18} />
-      </button>
+      <CameraPicker
+        sources={ctx.sources}
+        disabled={!canAddSource}
+        getChoices={ctx.getCameraChoices}
+        onPick={handleStartCamera}
+      />
       <button
         type="button"
         className="fw-sc-action-secondary"

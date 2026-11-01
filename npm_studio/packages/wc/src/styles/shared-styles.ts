@@ -1426,6 +1426,204 @@ export const sharedStyles = css`
   }
 
   /* =============================================
+   Overlays and Media
+   ============================================= */
+  .fw-sc-producer-section {
+    grid-column: 1 / -1;
+    padding: 0.5rem 1rem 0.75rem;
+    border-top: 1px solid hsl(var(--fw-sc-border) / 0.2);
+  }
+
+  .fw-sc-producer-section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+  }
+
+  .fw-sc-producer-section-title {
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: hsl(var(--fw-sc-text-faint));
+  }
+
+  .fw-sc-producer-section-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  .fw-sc-producer-btn {
+    position: relative;
+    padding: 0.25rem 0.5rem;
+    border: 1px solid hsl(var(--fw-sc-border) / 0.3);
+    border-radius: 4px;
+    background: hsl(var(--fw-sc-surface-raised));
+    color: hsl(var(--fw-sc-text));
+    font-size: 0.75rem;
+    cursor: pointer;
+  }
+
+  .fw-sc-producer-btn:hover {
+    border-color: hsl(var(--fw-sc-accent));
+  }
+
+  .fw-sc-producer-btn:focus-within,
+  .fw-sc-producer-btn:focus-visible {
+    outline: 1px solid hsl(var(--fw-sc-accent));
+  }
+
+  .fw-sc-producer-file {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    opacity: 0;
+    cursor: pointer;
+  }
+
+  .fw-sc-producer-empty,
+  .fw-sc-producer-notice {
+    margin: 0;
+    font-size: 0.75rem;
+    color: hsl(var(--fw-sc-text-faint));
+  }
+
+  .fw-sc-producer-notice {
+    margin-top: 0.5rem;
+  }
+
+  .fw-sc-producer-error {
+    margin: 0 0 0.5rem;
+    font-size: 0.75rem;
+    color: hsl(var(--fw-sc-danger));
+  }
+
+  .fw-sc-overlay-list {
+    display: grid;
+    gap: 0.5rem;
+  }
+
+  .fw-sc-overlay-item {
+    display: grid;
+    gap: 0.375rem;
+    padding: 0.5rem;
+    border: 1px solid hsl(var(--fw-sc-border) / 0.2);
+    border-radius: 4px;
+  }
+
+  .fw-sc-overlay-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+  }
+
+  .fw-sc-overlay-name {
+    min-width: 0;
+    overflow: hidden;
+    font-size: 0.8125rem;
+    color: hsl(var(--fw-sc-text));
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .fw-sc-overlay-field {
+    display: grid;
+    grid-template-columns: 9rem minmax(0, 1fr);
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.75rem;
+    color: hsl(var(--fw-sc-text-muted));
+  }
+
+  .fw-sc-overlay-field textarea {
+    padding: 0.25rem 0.375rem;
+    border: 1px solid hsl(var(--fw-sc-border) / 0.3);
+    border-radius: 4px;
+    background: hsl(var(--fw-sc-surface-raised));
+    color: hsl(var(--fw-sc-text));
+    font: inherit;
+    resize: vertical;
+  }
+
+  .fw-sc-overlay-field input[type="range"] {
+    width: 100%;
+    accent-color: hsl(var(--fw-sc-accent));
+  }
+
+  .fw-sc-media-list {
+    display: grid;
+    gap: 0.25rem;
+  }
+
+  .fw-sc-media-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .fw-sc-media-loop {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    font-size: 0.75rem;
+    color: hsl(var(--fw-sc-text-muted));
+  }
+
+  .fw-sc-media-item .fw-sc-overlay-name {
+    flex: 1;
+  }
+
+  /* =============================================
+   Camera Picker
+   ============================================= */
+  .fw-sc-camera-picker {
+    position: relative;
+    display: flex;
+  }
+
+  .fw-sc-camera-menu {
+    position: absolute;
+    bottom: 100%;
+    left: 0;
+    z-index: 50;
+    min-width: 220px;
+    margin-bottom: 8px;
+    padding: 4px;
+    border: 1px solid hsl(var(--fw-sc-border) / 0.3);
+    background: hsl(var(--fw-sc-surface-deep));
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  }
+
+  .fw-sc-camera-menu-title {
+    padding: 0.25rem 0.75rem;
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: hsl(var(--fw-sc-text-faint));
+  }
+
+  .fw-sc-camera-menu button {
+    flex-direction: column;
+    align-items: flex-start;
+    padding: 0.5rem 0.75rem;
+  }
+
+  .fw-sc-camera-menu button:disabled {
+    color: hsl(var(--fw-sc-text-faint));
+    cursor: default;
+  }
+
+  .fw-sc-camera-menu-note {
+    font-size: 0.7rem;
+    color: hsl(var(--fw-sc-text-faint));
+  }
+
+  /* =============================================
    Scene Switcher
    ============================================= */
   .fw-sc-scene-switcher {

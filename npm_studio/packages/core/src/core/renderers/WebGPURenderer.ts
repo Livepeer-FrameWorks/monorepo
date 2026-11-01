@@ -444,6 +444,13 @@ export class WebGPURenderer implements CompositorRenderer {
   private updateTextures(frames: Map<string, VideoFrame | ImageBitmap>): void {
     if (!this.device) return;
 
+    for (const [sourceId, texture] of this.textures) {
+      if (!frames.has(sourceId)) {
+        this.textures.delete(sourceId);
+        this.destroyTextureWhenIdle(texture);
+      }
+    }
+
     for (const [sourceId, frame] of frames) {
       const width = "displayWidth" in frame ? frame.displayWidth : frame.width;
       const height = "displayHeight" in frame ? frame.displayHeight : frame.height;
@@ -453,24 +460,7 @@ export class WebGPURenderer implements CompositorRenderer {
       // Create or recreate texture if size changed
       if (!texture || texture.width !== width || texture.height !== height) {
         if (texture) {
-          const oldTexture = texture;
-          // Defer destruction until GPU work is done to avoid validation errors.
-          this.device.queue
-            .onSubmittedWorkDone()
-            .then(() => {
-              try {
-                oldTexture.destroy();
-              } catch {
-                // Ignore destroy errors
-              }
-            })
-            .catch(() => {
-              try {
-                oldTexture.destroy();
-              } catch {
-                // Ignore destroy errors
-              }
-            });
+          this.destroyTextureWhenIdle(texture);
         }
 
         texture = this.device.createTexture({
@@ -503,6 +493,20 @@ export class WebGPURenderer implements CompositorRenderer {
         );
       }
     }
+  }
+
+  /** Defer destruction until GPU work is done to avoid validation errors. */
+  private destroyTextureWhenIdle(texture: GPUTexture): void {
+    if (!this.device) return;
+
+    const destroy = () => {
+      try {
+        texture.destroy();
+      } catch {
+        // Ignore destroy errors
+      }
+    };
+    this.device.queue.onSubmittedWorkDone().then(destroy).catch(destroy);
   }
 
   private getOrCreateBindGroup(layer: Layer): GPUBindGroup | null {

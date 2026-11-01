@@ -137,6 +137,18 @@ describe("useStreamCrafterV2", () => {
     );
   });
 
+  it("renders again once the controller exists, so the compositor can come up without a source", () => {
+    const seen: unknown[] = [];
+
+    renderHook(() => {
+      const hook = useStreamCrafterV2(baseConfig);
+      seen.push(hook.getController());
+      return hook;
+    });
+
+    expect(seen.at(-1)).not.toBeNull();
+  });
+
   it("subscribes to controller events", () => {
     renderHook(() => useStreamCrafterV2(baseConfig));
 

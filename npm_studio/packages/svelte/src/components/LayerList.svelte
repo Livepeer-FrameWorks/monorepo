@@ -48,9 +48,9 @@
 
   let sortedLayers = $derived([...layers].sort((a, b) => b.zIndex - a.zIndex));
 
-  function getSourceLabel(sourceId: string): string {
-    const source = sources.find((candidate) => candidate.id === sourceId);
-    return source?.label || sourceId;
+  function getLayerLabel(layer: Layer): string {
+    const source = sources.find((candidate) => candidate.id === layer.sourceId);
+    return layer.label || source?.label || layer.sourceId;
   }
 
   function getSourceType(sourceId: string): MediaSource["type"] | undefined {
@@ -184,7 +184,7 @@
               <VideoIcon size={14} />
             {/if}
           </span>
-          <span class="fw-sc-layer-name">{getSourceLabel(layer.sourceId)}</span>
+          <span class="fw-sc-layer-name">{getLayerLabel(layer)}</span>
 
           {#if editingLayerId === layer.id && onTransformEdit}
             <div class="fw-sc-layer-opacity">

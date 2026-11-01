@@ -7,7 +7,7 @@ sidebar:
 
 import { Aside } from "@astrojs/starlight/components";
 
-StreamCrafter is the live studio in your dashboard. It captures your camera and screen in a browser tab, mixes them, and sends the result to FrameWorks. You don't need OBS or any other software.
+StreamCrafter is the live studio in your dashboard. It captures your cameras and screen in a browser tab, mixes them there, and sends the result to FrameWorks. You don't need OBS or any other software.
 
 For a long or high-stakes broadcast, a dedicated encoder is still the steadier choice: see [Encoder Setup](/builders/encoder-setup).
 
@@ -31,8 +31,10 @@ If no destination is confirmed, check your stream access and try again. FrameWor
 
 Use the buttons along the bottom of the studio:
 
-- **Add Camera** starts your camera and microphone. Allow access when the browser asks.
+- **Add Camera** starts your camera and microphone. Allow access when the browser asks. If your computer has more than one camera, the button lists them, and you can add another camera at any time. A camera already in use is marked as active. Only the first camera brings a microphone.
 - **Share Screen** lets you choose a screen, a window, or a browser tab.
+
+To play a video or audio file, use **Add media file** in the panel under the preview. The file plays through the mix like any other source, with **Play**, **Pause**, and **Loop** next to its name. It plays from your browser tab and is not uploaded, so keep the tab open while the file is in the mix.
 
 Each source appears in the mixer, where you can mute it, hide it from the picture, or remove it. You can add and remove sources during a broadcast.
 
@@ -45,7 +47,7 @@ Each source appears in the mixer, where you can mute it, hide it from the pictur
 
 With two or more sources, the layout controls on the preview arrange them. You can show one source alone, place one inside another as picture-in-picture, or use a split, focus, or grid layout. The cycle control swaps which source goes in which position.
 
-Your browser does the mixing, so more sources put more load on your computer.
+The mix runs in your browser, so every source you add puts more load on your computer. A new source starts full-frame on top until you pick a layout.
 
 ### Scenes and transitions
 
@@ -56,6 +58,13 @@ A scene is a saved arrangement of sources. The panel under the preview lists you
 - **Stack layers** with the arrows. The top of the list is drawn on top. The eye hides a layer in this scene and keeps its place in the stack.
 
 Rehearse your transitions in the preview before you go live.
+
+### Logos and text
+
+The **Overlays** section of the panel puts a logo or text above your sources in the scene you're on. Overlays stay on top and keep their position when you change the layout.
+
+- **Add logo** takes an image file, such as a PNG with a transparent background or an SVG. Set its size and position with the sliders. The image file stays in your browser; only the finished mix is sent.
+- **Add text** puts a lower third near the bottom left. Type your text, then set its size, color, and position. The picture updates as you edit.
 
 ## 5. Rehearse
 

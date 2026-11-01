@@ -404,6 +404,19 @@ describe("AudioMixer", () => {
       expect(mixer.isMonitoringLevels()).toBe(true);
       mixer.destroy();
     });
+
+    it("reports levels once the audio starts after monitoring did", async () => {
+      const mixer = new AudioMixer();
+      const levels = vi.fn();
+      mixer.on("levelUpdate", levels);
+      mixer.startLevelMonitoring();
+      await new Promise((resolve) => setTimeout(resolve, 5));
+
+      await mixer.initialize();
+      await vi.waitFor(() => expect(levels).toHaveBeenCalled());
+
+      mixer.destroy();
+    });
   });
 
   // ===========================================================================

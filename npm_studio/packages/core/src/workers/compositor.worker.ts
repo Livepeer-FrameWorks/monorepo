@@ -112,6 +112,10 @@ self.onmessage = async (e: MessageEvent<CompositorMainToWorker>) => {
         handleSourceImage(message.sourceId, message.bitmap);
         break;
 
+      case "removeSource":
+        handleRemoveSource(message.sourceId);
+        break;
+
       case "startTransition":
         handleStartTransition(message.transition, message.toScene);
         break;
@@ -223,6 +227,14 @@ function handleUpdateScene(scene: Scene): void {
   // If no transition is active, update the current scene directly
   if (!transitionEngine.isActive()) {
     currentScene = scene;
+
+    // A running layout animation ends on its target, so the update joins it there.
+    if (layoutAnimation) {
+      layoutAnimation.targetScene = scene;
+      for (const layer of scene.layers) {
+        layoutAnimation.toTransforms.set(layer.sourceId, { ...layer.transform });
+      }
+    }
   } else {
     // During transition, update the "next" scene
     nextScene = scene;
@@ -440,6 +452,14 @@ function handleSourceImage(sourceId: string, bitmap: ImageBitmap): void {
   }
 
   frames.set(sourceId, bitmap);
+}
+
+function handleRemoveSource(sourceId: string): void {
+  const frame = frames.get(sourceId);
+  if (frame && "close" in frame) {
+    frame.close();
+  }
+  frames.delete(sourceId);
 }
 
 // ============================================================================

@@ -195,7 +195,7 @@ describe("createStreamCrafterContextV2", () => {
     expect(mockGetDevices).toHaveBeenCalled();
 
     await store.switchVideoDevice("video-1");
-    expect(mockSwitchVideoDevice).toHaveBeenCalledWith("video-1");
+    expect(mockSwitchVideoDevice).toHaveBeenCalledWith("video-1", undefined);
 
     await store.switchAudioDevice("audio-1");
     expect(mockSwitchAudioDevice).toHaveBeenCalledWith("audio-1");

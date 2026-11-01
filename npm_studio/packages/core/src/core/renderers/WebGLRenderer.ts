@@ -107,6 +107,7 @@ precision highp float;
 uniform sampler2D u_texture;
 uniform float u_opacity;
 uniform float u_borderRadius;   // Border radius in pixels
+uniform int u_premultiplied;    // 1 when the texture holds premultiplied colours
 
 // Filter uniforms
 uniform int u_filterType;       // 0=none, 1=blur, 2=colorMatrix, 3=grayscale, 4=sepia, 5=chromaKey, 6=invert
@@ -140,6 +141,11 @@ vec3 rgb2ycbcr(vec3 rgb) {
 
 void main() {
   vec4 color = texture(u_texture, v_texCoord);
+
+  // The blend multiplies by alpha, so colours must reach it unmultiplied.
+  if (u_premultiplied == 1 && color.a > 0.0) {
+    color.rgb /= color.a;
+  }
 
   // Apply filter effects
   if (u_filterType == 2) {
@@ -259,6 +265,7 @@ export class WebGLRenderer implements CompositorRenderer {
     texture: WebGLUniformLocation;
     opacity: WebGLUniformLocation;
     borderRadius: WebGLUniformLocation;
+    premultiplied: WebGLUniformLocation;
     filterType: WebGLUniformLocation;
     filterStrength: WebGLUniformLocation;
     colorMatrix: WebGLUniformLocation;
@@ -276,7 +283,8 @@ export class WebGLRenderer implements CompositorRenderer {
 
   // Texture management
   private textures: Map<string, WebGLTexture> = new Map();
-  private textureCache: Map<string, { width: number; height: number }> = new Map();
+  private textureCache: Map<string, { width: number; height: number; premultiplied: boolean }> =
+    new Map();
 
   // Filter configurations
   private filterConfigs: Map<string, FilterConfig> = new Map();
@@ -334,6 +342,7 @@ export class WebGLRenderer implements CompositorRenderer {
       texture: gl.getUniformLocation(this.layerProgram, "u_texture")!,
       opacity: gl.getUniformLocation(this.layerProgram, "u_opacity")!,
       borderRadius: gl.getUniformLocation(this.layerProgram, "u_borderRadius")!,
+      premultiplied: gl.getUniformLocation(this.layerProgram, "u_premultiplied")!,
       filterType: gl.getUniformLocation(this.layerProgram, "u_filterType")!,
       filterStrength: gl.getUniformLocation(this.layerProgram, "u_filterStrength")!,
       colorMatrix: gl.getUniformLocation(this.layerProgram, "u_colorMatrix")!,
@@ -448,10 +457,21 @@ export class WebGLRenderer implements CompositorRenderer {
   private updateTextures(frames: Map<string, VideoFrame | ImageBitmap>): void {
     const gl = this.gl;
 
+    for (const [sourceId, texture] of this.textures) {
+      if (!frames.has(sourceId)) {
+        gl.deleteTexture(texture);
+        this.textures.delete(sourceId);
+        this.textureCache.delete(sourceId);
+      }
+    }
+
     for (const [sourceId, frame] of frames) {
       let texture = this.textures.get(sourceId);
       const width = "displayWidth" in frame ? frame.displayWidth : frame.width;
       const height = "displayHeight" in frame ? frame.displayHeight : frame.height;
+      // texImage2D uploads an ImageBitmap as it holds its pixels, premultiplied;
+      // the UNPACK flags do not apply to bitmaps.
+      const premultiplied = !("displayWidth" in frame);
       const cached = this.textureCache.get(sourceId);
 
       if (!texture) {
@@ -478,8 +498,8 @@ export class WebGLRenderer implements CompositorRenderer {
       } else {
         // Different size or new - use texImage2D
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, frame);
-        this.textureCache.set(sourceId, { width, height });
       }
+      this.textureCache.set(sourceId, { width, height, premultiplied });
     }
   }
 
@@ -576,6 +596,7 @@ export class WebGLRenderer implements CompositorRenderer {
     );
     gl.uniform1f(this.layerUniforms.opacity, Math.max(0, Math.min(1, opacity)));
     gl.uniform1f(this.layerUniforms.borderRadius, borderRadius);
+    gl.uniform1i(this.layerUniforms.premultiplied, textureInfo.premultiplied ? 1 : 0);
 
     // Set filter uniforms
     const filter = this.filterConfigs.get(layer.id);
