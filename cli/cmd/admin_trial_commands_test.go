@@ -65,7 +65,7 @@ func (s *trialCommandServer) AdminListCheckoutRecovery(ctx context.Context, r *p
 	if s.failure {
 		return nil, status.Error(codes.Unavailable, "recovery unavailable")
 	}
-	return &purserpb.AdminListCheckoutRecoveryResponse{Items: []*purserpb.CheckoutRecoveryItem{{Id: "work", ReservationId: "reservation", LastError: "provider offline", NextAttemptAt: timestamppb.Now()}}, HasMore: true}, nil
+	return &purserpb.AdminListCheckoutRecoveryResponse{Items: []*purserpb.CheckoutRecoveryItem{{Id: "work", ReservationId: "reservation", LastError: "provider offline", NextAttemptAt: timestamppb.Now()}, {Id: "historical-payment", TenantId: "00000000-0000-4000-8000-000000000001", ReservationId: "historical-payment-reservation", Provider: "mollie", Status: "delivery_review", ReservationStatus: "succeeded", AmountKnown: true, AmountCents: 2000, Currency: "EUR", LastError: "verify delivered service before confirming admin billing recovery checkout"}}, HasMore: true}, nil
 }
 
 func (s *trialCommandServer) AdminRecoverCheckout(ctx context.Context, r *purserpb.AdminRecoverCheckoutRequest) (*purserpb.AdminRecoverCheckoutResponse, error) {
@@ -185,6 +185,8 @@ func TestTrialAccountCommandsUseRealRPCs(t *testing.T) {
 		{"history json", []string{"--output", "json", "admin", "tenants", "history", id}, `"actor_user_id": "operator"`, false},
 		{"recovery text", []string{"admin", "billing", "recovery", "list", "--limit", "7"}, "provider offline", false},
 		{"recovery json", []string{"--output", "json", "admin", "billing", "recovery", "list"}, `"reservation_id": "reservation"`, false},
+		{"historical payment text", []string{"admin", "billing", "recovery", "list", "--tenant-id", id}, "historical-payment-reservation  succeeded/delivery_review  20.00 EUR  -", false},
+		{"historical payment json", []string{"--output", "json", "admin", "billing", "recovery", "list"}, `"status": "delivery_review"`, false},
 		{"recover missing reason", []string{"admin", "billing", "recovery", "checkout", "--tenant-id", id, "--reservation-id", id, "--yes"}, "--reason is required", true},
 		{"recover invalid UUID", []string{"admin", "billing", "recovery", "checkout", "--tenant-id", "bad", "--reservation-id", id, "--reason", "abandoned", "--yes"}, "invalid UUID", true},
 		{"recover checkout refuses unconfirmed", []string{"admin", "billing", "recovery", "checkout", "--tenant-id", id, "--reservation-id", id, "--reason", "abandoned"}, "confirmation", true},

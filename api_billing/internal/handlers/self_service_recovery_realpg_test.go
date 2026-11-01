@@ -17,11 +17,11 @@ import (
 
 // TestIneligibleCheckoutCompensates exercises production recovery and its provider lock boundary.
 func TestIneligibleCheckoutCompensates_RealPG(t *testing.T) {
-	for _, mode := range []string{"stripe", "mollie", "native duplicate", "async Stripe refusal", "advance refusal", "concurrent subscription change", "concurrent Stripe session change", "concurrent Stripe refund change", "concurrent Mollie payment change"} {
+	for _, mode := range []string{"stripe", "mollie", "native duplicate", "async Stripe refusal", "advance refusal", "concurrent subscription change", "concurrent Stripe session change", "concurrent Stripe refund change", "concurrent Mollie payment change", "bookkeeping during recovery"} {
 		t.Run("ineligible recovery/"+mode, func(t *testing.T) {
 			provider := mode
 			concurrent := strings.HasPrefix(mode, "concurrent ")
-			if mode == "native duplicate" || mode == "async Stripe refusal" || mode == "advance refusal" || concurrent {
+			if mode == "native duplicate" || mode == "async Stripe refusal" || mode == "advance refusal" || concurrent || mode == "bookkeeping during recovery" {
 				provider = "stripe"
 			}
 			if mode == "concurrent Mollie payment change" {
@@ -73,6 +73,13 @@ VALUES($1::uuid,$2,$3,$4,'billing_tiers',$5,'provider_open','EUR',2000,$1::text,
 				tenant.svc.stripeClient = client
 				fixture.route("GET", "/v1/checkout/sessions/ineligible", func(recordedProviderRequest) (int, any) {
 					assertSubscriptionUnlockedDuringProviderCall(t, db, tenant.id)
+					if mode == "bookkeeping during recovery" {
+						if _, err := db.ExecContext(t.Context(), `UPDATE purser.tenant_subscriptions
+                            SET updated_at=clock_timestamp(), billing_email='refreshed@example.test'
+                            WHERE tenant_id=$1`, tenant.id); err != nil {
+							t.Fatal(err)
+						}
+					}
 					if mode == "concurrent Stripe session change" {
 						mutate()
 					}

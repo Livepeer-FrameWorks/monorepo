@@ -57,6 +57,7 @@ FROM (
 -- name: ListCheckoutRecovery :many
 -- Platform-operator inventory includes unbound callbacks; a supplied tenant narrows to its reservations.
 -- Each disjoint branch reads an ordered index head before enrichment.
+-- Unbound paid first payments require delivery review, never automatic compensation.
 WITH selected AS (
     (SELECT inbox.* FROM purser.provider_webhook_inbox inbox
      WHERE inbox.status <> 'processed' AND sqlc.arg(tenant_id)::text = ''
@@ -126,10 +127,56 @@ LEFT JOIN purser.subscription_tier_upgrades upgrade
     FROM fallback_selected subscription
     ORDER BY subscription.free_fallback_at, subscription.id
     LIMIT (sqlc.arg(row_limit)::bigint + sqlc.arg(row_offset)::bigint)
+), historical_selected AS (
+    (SELECT intent.* FROM purser.payment_provider_intents intent
+     WHERE sqlc.arg(tenant_id)::text = ''
+       AND intent.provider = 'mollie' AND intent.purpose = 'mollie_first_payment'
+       AND intent.status = 'succeeded' AND intent.amount_cents > 0
+       AND intent.provider_payment_id IS NOT NULL AND intent.provider_mandate_id IS NULL
+       AND intent.activated_at IS NULL AND intent.recovery_started_at IS NULL
+       AND NOT EXISTS (
+           SELECT 1 FROM purser.provider_webhook_inbox pending
+           WHERE pending.provider = 'checkout_recovery'
+             AND pending.event_key = 'checkout-expiry:' || intent.id::text
+             AND pending.headers->>'tenant_id' = intent.tenant_id::text
+             AND pending.status <> 'processed'
+       )
+     ORDER BY intent.created_at, intent.id
+     LIMIT (sqlc.arg(row_limit)::bigint + sqlc.arg(row_offset)::bigint))
+    UNION ALL
+    (SELECT intent.* FROM purser.payment_provider_intents intent
+     WHERE sqlc.arg(tenant_id)::text <> ''
+       AND intent.tenant_id = NULLIF(sqlc.arg(tenant_id)::text, '')::uuid
+       AND intent.provider = 'mollie' AND intent.purpose = 'mollie_first_payment'
+       AND intent.status = 'succeeded' AND intent.amount_cents > 0
+       AND intent.provider_payment_id IS NOT NULL AND intent.provider_mandate_id IS NULL
+       AND intent.activated_at IS NULL AND intent.recovery_started_at IS NULL
+       AND NOT EXISTS (
+           SELECT 1 FROM purser.provider_webhook_inbox pending
+           WHERE pending.provider = 'checkout_recovery'
+             AND pending.event_key = 'checkout-expiry:' || intent.id::text
+             AND pending.headers->>'tenant_id' = intent.tenant_id::text
+             AND pending.status <> 'processed'
+       )
+     ORDER BY intent.created_at, intent.id
+     LIMIT (sqlc.arg(row_limit)::bigint + sqlc.arg(row_offset)::bigint))
+), historical_rows AS (
+    SELECT intent.id::text AS id, intent.provider::text AS provider,
+           ('historical-first-payment:' || intent.id::text)::text AS event_key,
+           'delivery_review'::text AS status, 0::integer AS attempts,
+           ('Payment ' || intent.provider_payment_id ||
+            ': verify delivered service before confirming admin billing recovery checkout')::text AS last_error,
+           TIMESTAMPTZ 'epoch' AS next_attempt_at,
+           intent.tenant_id::text AS tenant_id, intent.id::text AS reservation_id,
+           NULL::timestamptz AS expires_at, intent.amount_cents, intent.currency::text AS currency,
+           intent.status::text AS reservation_status, intent.created_at AS sort_at
+    FROM historical_selected intent
 ), inventory AS (
     SELECT * FROM inbox_rows
     UNION ALL
     SELECT * FROM fallback_rows
+    UNION ALL
+    SELECT * FROM historical_rows
 )
 SELECT id::text AS id, provider, event_key, status, attempts, last_error, next_attempt_at,
        tenant_id, reservation_id, expires_at, amount_cents, currency, reservation_status

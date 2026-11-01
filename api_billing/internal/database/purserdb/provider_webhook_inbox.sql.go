@@ -288,10 +288,56 @@ LEFT JOIN purser.subscription_tier_upgrades upgrade
     FROM fallback_selected subscription
     ORDER BY subscription.free_fallback_at, subscription.id
     LIMIT ($2::bigint + $1::bigint)
+), historical_selected AS (
+    (SELECT intent.id, intent.tenant_id, intent.provider, intent.purpose, intent.local_reference_type, intent.local_reference_id, intent.provider_customer_id, intent.provider_session_id, intent.provider_subscription_id, intent.provider_payment_id, intent.status, intent.currency, intent.amount_cents, intent.idempotency_key, intent.last_error, intent.attempt_count, intent.succeeded_at, intent.activated_at, intent.funding_intent_id, intent.provider_mandate_id, intent.expires_at, intent.checkout_completed_at, intent.recovery_started_at, intent.recovery_outcome, intent.provider_request, intent.submission_state, intent.reconciled_references, intent.created_at, intent.updated_at FROM purser.payment_provider_intents intent
+     WHERE $3::text = ''
+       AND intent.provider = 'mollie' AND intent.purpose = 'mollie_first_payment'
+       AND intent.status = 'succeeded' AND intent.amount_cents > 0
+       AND intent.provider_payment_id IS NOT NULL AND intent.provider_mandate_id IS NULL
+       AND intent.activated_at IS NULL AND intent.recovery_started_at IS NULL
+       AND NOT EXISTS (
+           SELECT 1 FROM purser.provider_webhook_inbox pending
+           WHERE pending.provider = 'checkout_recovery'
+             AND pending.event_key = 'checkout-expiry:' || intent.id::text
+             AND pending.headers->>'tenant_id' = intent.tenant_id::text
+             AND pending.status <> 'processed'
+       )
+     ORDER BY intent.created_at, intent.id
+     LIMIT ($2::bigint + $1::bigint))
+    UNION ALL
+    (SELECT intent.id, intent.tenant_id, intent.provider, intent.purpose, intent.local_reference_type, intent.local_reference_id, intent.provider_customer_id, intent.provider_session_id, intent.provider_subscription_id, intent.provider_payment_id, intent.status, intent.currency, intent.amount_cents, intent.idempotency_key, intent.last_error, intent.attempt_count, intent.succeeded_at, intent.activated_at, intent.funding_intent_id, intent.provider_mandate_id, intent.expires_at, intent.checkout_completed_at, intent.recovery_started_at, intent.recovery_outcome, intent.provider_request, intent.submission_state, intent.reconciled_references, intent.created_at, intent.updated_at FROM purser.payment_provider_intents intent
+     WHERE $3::text <> ''
+       AND intent.tenant_id = NULLIF($3::text, '')::uuid
+       AND intent.provider = 'mollie' AND intent.purpose = 'mollie_first_payment'
+       AND intent.status = 'succeeded' AND intent.amount_cents > 0
+       AND intent.provider_payment_id IS NOT NULL AND intent.provider_mandate_id IS NULL
+       AND intent.activated_at IS NULL AND intent.recovery_started_at IS NULL
+       AND NOT EXISTS (
+           SELECT 1 FROM purser.provider_webhook_inbox pending
+           WHERE pending.provider = 'checkout_recovery'
+             AND pending.event_key = 'checkout-expiry:' || intent.id::text
+             AND pending.headers->>'tenant_id' = intent.tenant_id::text
+             AND pending.status <> 'processed'
+       )
+     ORDER BY intent.created_at, intent.id
+     LIMIT ($2::bigint + $1::bigint))
+), historical_rows AS (
+    SELECT intent.id::text AS id, intent.provider::text AS provider,
+           ('historical-first-payment:' || intent.id::text)::text AS event_key,
+           'delivery_review'::text AS status, 0::integer AS attempts,
+           ('Payment ' || intent.provider_payment_id ||
+            ': verify delivered service before confirming admin billing recovery checkout')::text AS last_error,
+           TIMESTAMPTZ 'epoch' AS next_attempt_at,
+           intent.tenant_id::text AS tenant_id, intent.id::text AS reservation_id,
+           NULL::timestamptz AS expires_at, intent.amount_cents, intent.currency::text AS currency,
+           intent.status::text AS reservation_status, intent.created_at AS sort_at
+    FROM historical_selected intent
 ), inventory AS (
     SELECT id, provider, event_key, status, attempts, last_error, next_attempt_at, tenant_id, reservation_id, expires_at, amount_cents, currency, reservation_status, sort_at FROM inbox_rows
     UNION ALL
     SELECT id, provider, event_key, status, attempts, last_error, next_attempt_at, tenant_id, reservation_id, expires_at, amount_cents, currency, reservation_status, sort_at FROM fallback_rows
+    UNION ALL
+    SELECT id, provider, event_key, status, attempts, last_error, next_attempt_at, tenant_id, reservation_id, expires_at, amount_cents, currency, reservation_status, sort_at FROM historical_rows
 )
 SELECT id::text AS id, provider, event_key, status, attempts, last_error, next_attempt_at,
        tenant_id, reservation_id, expires_at, amount_cents, currency, reservation_status
@@ -324,6 +370,7 @@ type ListCheckoutRecoveryRow struct {
 
 // Platform-operator inventory includes unbound callbacks; a supplied tenant narrows to its reservations.
 // Each disjoint branch reads an ordered index head before enrichment.
+// Unbound paid first payments require delivery review, never automatic compensation.
 func (q *Queries) ListCheckoutRecovery(ctx context.Context, arg ListCheckoutRecoveryParams) ([]ListCheckoutRecoveryRow, error) {
 	rows, err := q.db.QueryContext(ctx, listCheckoutRecovery, arg.RowOffset, arg.RowLimit, arg.TenantID)
 	if err != nil {

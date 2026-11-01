@@ -30425,6 +30425,14 @@ Omit the tenant filter to include provider callbacks not yet bound to a tenant.
 Use `--tenant-id <UUID> --history` to read each operator request, identity, reason
 and outcome. Empty lists print an explicit message.
 
+Paid historical Mollie first payments without a mandate or activation binding
+appear as `succeeded/delivery_review`, including reservation ID, provider payment
+ID and amount. They have no automatic next attempt. An absent historical binding
+is not proof that the customer received no service: verify delivery before
+confirming recovery. Inventory and preview do not enqueue compensation. Active
+recovery replaces the review entry rather than duplicating it; resolved payments
+leave the list.
+
 #### frameworks admin billing recovery checkout
 
 `frameworks admin billing recovery checkout --tenant-id <UUID> --reservation-id <UUID> --reason "Abandoned checkout"`

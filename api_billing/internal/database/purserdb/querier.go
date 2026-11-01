@@ -584,6 +584,7 @@ type Querier interface {
 	ListBootstrapTierPricingRules(ctx context.Context, tierID uuid.UUID) ([]ListBootstrapTierPricingRulesRow, error)
 	// Platform-operator inventory includes unbound callbacks; a supplied tenant narrows to its reservations.
 	// Each disjoint branch reads an ordered index head before enrichment.
+	// Unbound paid first payments require delivery review, never automatic compensation.
 	ListCheckoutRecovery(ctx context.Context, arg ListCheckoutRecoveryParams) ([]ListCheckoutRecoveryRow, error)
 	ListCheckoutRecoveryAudit(ctx context.Context, arg ListCheckoutRecoveryAuditParams) ([]ListCheckoutRecoveryAuditRow, error)
 	// Closure forbids new invoices, but issued debt still needs a collection attempt.

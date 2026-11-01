@@ -3772,6 +3772,20 @@ CREATE INDEX IF NOT EXISTS idx_subscription_stripe_customer_latest
     INCLUDE (tenant_id)
     WHERE stripe_customer_id IS NOT NULL;
 
+CREATE INDEX IF NOT EXISTS idx_mollie_unbound_funding_listing
+ON purser.payment_provider_intents (created_at ASC, id ASC)
+WHERE provider = 'mollie' AND purpose = 'mollie_first_payment'
+  AND status = 'succeeded' AND amount_cents > 0
+  AND provider_payment_id IS NOT NULL AND provider_mandate_id IS NULL
+  AND activated_at IS NULL AND recovery_started_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_mollie_unbound_funding_tenant
+ON purser.payment_provider_intents (tenant_id ASC, created_at ASC, id ASC)
+WHERE provider = 'mollie' AND purpose = 'mollie_first_payment'
+  AND status = 'succeeded' AND amount_cents > 0
+  AND provider_payment_id IS NOT NULL AND provider_mandate_id IS NULL
+  AND activated_at IS NULL AND recovery_started_at IS NULL;
+
 -- Schema baseline identity marker. Records that this database was created from the
 -- consolidated baseline at this floor, so the migration min-version guard treats
 -- below-floor migrations as folded into the baseline (not missing). An existing

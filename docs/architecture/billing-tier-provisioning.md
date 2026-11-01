@@ -446,10 +446,23 @@ revocation. A lookup failure or omitted mandate alone is not evidence of a
 terminally invalid mandate. Purser retains that funding, reports retry guidance
 and permits confirmed operator recovery if the mandate cannot be restored.
 
+The foreground native-receipt cleanup records only a provider-confirmed terminal
+state; it never cancels at Mollie, inspects recurring payments or refunds funding.
+The inbox remains the owner of provider compensation. If recovery claims the
+receipt first, the foreground path skips it or fails its locked receipt recheck.
+If the foreground records the ended subscription first, the inbox's retry sees
+that terminal state and completes idempotently. Neither path treats recurring
+subscription payments as checkout funding.
+
 Checkout compensation rechecks the locked subscription and receipt snapshot
 after provider reads, before each cancellation or refund request. A concurrent
 change preserves the recovery fence for a fresh retry and does not enqueue a
-refund from the stale decision. Provider I/O runs outside database transactions.
+refund from the stale decision. The subscription snapshot contains only the
+pricing, status, provider identities, pending-change/fallback state and grant or
+closure presence read by that decision. Routine timestamp, contact, period,
+usage and notice bookkeeping is excluded. Usage and metering sweeps write their
+own records/balances; a real suspension or provider-state change correctly
+defers compensation. Provider I/O runs outside database transactions.
 
 Recovery probes a cancelled Mollie collector using the customer bound to its
 native checkout receipt. Missing bindings fail closed during automatic recovery.
@@ -516,31 +529,22 @@ work again, so its acknowledgement cannot erase the new binding.
 
 ### First payments across an upgrade
 
-After upgrading, compare Mollie's first payments paid just before rollout with
-local activation/history. A paid receipt created before mandate ownership was
-recorded neither fences a new payment nor links to new activation. Succeeded
-historical receipts are not picked up by the automatic checkout sweep or the
-ordinary recovery inventory. Check them before asking a customer to pay again.
+After upgrading, run `frameworks admin billing recovery list` and page through
+any remaining results using the reported `--offset`. Use `--tenant-id TENANT`
+to inspect one customer. Paid first payments without mandate or activation
+ownership appear as `succeeded/delivery_review`, with their reservation ID,
+provider payment ID, amount and currency. They have no automatic next attempt.
 
-For each affected tenant (identified by the provider's tenant metadata), this
-read-only query finds the local reservation IDs. Bind `tenant_id`, `paid_since`
-and `rollout_at` to the tenant and the pre-rollout payment window under review:
+`delivery_review` means delivery has not been established locally. It does not
+mean the customer received no service: historical delivered payments can also
+lack that binding. Compare the listed payment with Mollie's records and the
+tenant's activation/history before asking the customer to pay again.
 
-```sql
-SELECT id AS reservation_id, provider_payment_id, succeeded_at
-FROM purser.payment_provider_intents
-WHERE tenant_id = :'tenant_id'::uuid
-  AND provider = 'mollie' AND purpose = 'mollie_first_payment'
-  AND status = 'succeeded' AND provider_mandate_id IS NULL
-  AND activated_at IS NULL AND provider_payment_id IS NOT NULL
-  AND succeeded_at >= :'paid_since'::timestamptz
-  AND created_at < :'rollout_at'::timestamptz
-ORDER BY succeeded_at, id;
-```
-
-Preview `frameworks admin billing recovery checkout --tenant-id TENANT
+Use `frameworks admin billing recovery checkout --tenant-id TENANT
 --reservation-id RESERVATION --reason "Unactivated payment across rollout"`.
-Confirm compensation only for a purchase that never activated. A receipt that
-funded delivered service must be retained; ambiguous delivery requires the
-confirmed `--retain-delivered` procedure, not a guessed refund. No manual data
-update or direct provider refund is part of this check.
+The command previews the existing purchase and asks for confirmation. Confirm
+compensation only for a purchase that never activated. A receipt that funded
+delivered service must be retained; ambiguous delivery requires the confirmed
+`--retain-delivered` procedure, not a guessed refund. A payment with active
+recovery appears once under that work item; resolved receipts leave the list.
+Inventory and preview do not enqueue recovery or move money.

@@ -41,6 +41,7 @@ func assertMollieFundingRecoveryOrdersWithActivation(t *testing.T) {
 	t.Run("retained funding controls", assertMollieRetainedFundingControls)
 	t.Run("funding purchase identity", assertMollieFundingPurchaseIdentity)
 	t.Run("returning customers", assertMollieReturningCustomerFunding)
+	t.Run("historical payment inventory", assertMollieHistoricalPaymentInventory)
 	for _, when := range []string{"recovery owns funding first", "native create owns funding first", "recovery owns native first"} {
 		t.Run(when, func(t *testing.T) {
 			db := startOperatorGrantDatabase(t)

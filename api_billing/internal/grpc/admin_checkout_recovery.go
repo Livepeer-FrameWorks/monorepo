@@ -60,6 +60,9 @@ func (s *PurserServer) AdminListCheckoutRecovery(ctx context.Context, r *purserp
 	}
 	for _, row := range rows {
 		item := &purserpb.CheckoutRecoveryItem{Id: row.ID, TenantId: row.TenantID, ReservationId: row.ReservationID, Provider: row.Provider, EventKey: row.EventKey, Status: row.Status, Attempts: row.Attempts, LastError: row.LastError.String, NextAttemptAt: timestamppb.New(row.NextAttemptAt), AmountCents: row.AmountCents, Currency: row.Currency, ReservationStatus: row.ReservationStatus, AmountKnown: row.Provider == "mollie" && row.ReservationID != ""}
+		if row.Status == "delivery_review" {
+			item.NextAttemptAt = nil
+		}
 		if row.ExpiresAt.Valid {
 			item.ExpiresAt = timestamppb.New(row.ExpiresAt.Time)
 		}

@@ -137,7 +137,7 @@ func confirmCheckoutRecovery(cmd *cobra.Command, res *purserpb.AdminRecoverCheck
 func newAdminBillingRecoveryCmd() *cobra.Command {
 	parent := &cobra.Command{Use: "recovery", Short: "Inspect provider work and reconcile unresolved purchases"}
 	listReq := &purserpb.AdminListCheckoutRecoveryRequest{}
-	list := &cobra.Command{Use: "list", Short: "List outstanding provider work and errors", RunE: func(cmd *cobra.Command, _ []string) error {
+	list := &cobra.Command{Use: "list", Short: "List provider work, errors and historical payment delivery reviews", RunE: func(cmd *cobra.Command, _ []string) error {
 		p, cfg, cleanup, err := purserGRPCClientFromContext(cmd.Context())
 		if err != nil {
 			return err
