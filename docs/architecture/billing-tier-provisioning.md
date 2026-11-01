@@ -406,6 +406,10 @@ second first payment. Reserving another Mollie first payment checks unused paid
 funding under the subscription lock and refuses until it is activated or refunded.
 The locked activation path cancels only the unactivated native subscription;
 after cleanup, retrying activation links and consumes the original payment once.
+The receipt check verifies the paid purchase's tier, customer and currency both
+before creating a native subscription and at locked activation. Paid service
+cannot use a zero-amount mandate setup or funding for another tier. A later
+renewal-price change on the same tier does not rewrite the original first fee.
 
 Retained funding has no automatic age-based refund. If the customer abandons
 activation, account closure is the only automatic refund unless a definitive

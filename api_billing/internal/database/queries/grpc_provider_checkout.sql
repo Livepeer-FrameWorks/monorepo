@@ -363,6 +363,25 @@ WHERE native.tenant_id = sqlc.arg(tenant_id)::text::uuid
   AND native.id = sqlc.arg(intent_id)::text::uuid
   AND native.funding_intent_id IS NULL;
 
+-- name: MollieCheckoutFundingMatches :one
+-- The paid first month belongs to the purchased tier, customer and currency.
+-- Its fee may differ from a later catalog renewal price for that same tier.
+SELECT EXISTS (
+    SELECT 1 FROM purser.payment_provider_intents native
+    JOIN purser.payment_provider_intents funding
+      ON funding.tenant_id = native.tenant_id AND funding.id = native.funding_intent_id
+    WHERE native.tenant_id = sqlc.arg(tenant_id)::text::uuid
+      AND native.id = sqlc.arg(intent_id)::text::uuid
+      AND native.provider = 'mollie' AND native.purpose = 'mollie_subscription_create'
+      AND funding.provider = 'mollie' AND funding.purpose = 'mollie_first_payment'
+      AND funding.provider_customer_id = native.provider_customer_id
+      AND funding.local_reference_type = 'billing_tiers'
+      AND native.local_reference_type = 'billing_tiers'
+      AND funding.local_reference_id = native.local_reference_id
+      AND funding.currency = native.currency
+      AND (native.amount_cents = 0 OR funding.amount_cents > 0)
+)::boolean AS matches;
+
 -- name: CheckoutAlreadySettled :one
 SELECT EXISTS (
     SELECT 1 FROM purser.payment_provider_intents

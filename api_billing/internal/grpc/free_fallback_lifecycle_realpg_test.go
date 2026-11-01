@@ -450,7 +450,7 @@ func TestMollieFallbackFindsFundingThroughActualSubscriptionCreation_RealPG(t *t
 			if err = server.recordMollieFirstPaymentOpen(ctx, tenant, funding, "initial", &publicv1.Money{AmountMinor: 2000, Currency: "EUR"}); err != nil {
 				t.Fatal(err)
 			}
-			if err = q.ResolveMollieFirstPaymentIntent(ctx, purserdb.ResolveMollieFirstPaymentIntentParams{TenantID: tenant, ProviderPaymentID: sql.NullString{String: "initial", Valid: true}, Status: "succeeded"}); err != nil {
+			if err = q.ResolveMollieFirstPaymentIntent(ctx, purserdb.ResolveMollieFirstPaymentIntentParams{TenantID: tenant, ProviderPaymentID: sql.NullString{String: "initial", Valid: true}, MandateID: sql.NullString{String: "mandate", Valid: true}, Status: "succeeded"}); err != nil {
 				t.Fatal(err)
 			}
 			if history != "fresh" {

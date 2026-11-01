@@ -39,6 +39,7 @@ func assertMollieFundingRecoveryOrdersWithActivation(t *testing.T) {
 	t.Run("activation refusal", assertMollieActivationRefusalFunding)
 	t.Run("retained funding retry", assertMollieRetainedFundingRetry)
 	t.Run("retained funding controls", assertMollieRetainedFundingControls)
+	t.Run("funding purchase identity", assertMollieFundingPurchaseIdentity)
 	for _, when := range []string{"recovery owns funding first", "native create owns funding first", "recovery owns native first"} {
 		t.Run(when, func(t *testing.T) {
 			db := startOperatorGrantDatabase(t)
@@ -51,7 +52,7 @@ func assertMollieFundingRecoveryOrdersWithActivation(t *testing.T) {
 				t.Fatal(err)
 			}
 			funding := uuid.NewString()
-			if _, err := db.ExecContext(t.Context(), `INSERT INTO purser.payment_provider_intents(id,tenant_id,provider,purpose,status,currency,amount_cents,idempotency_key,provider_customer_id,provider_payment_id,provider_mandate_id,succeeded_at,expires_at) VALUES($1::uuid,$2,'mollie','mollie_first_payment','succeeded','EUR',2000,$1::text,'customer','initial','mandate',NOW(),NOW()+INTERVAL '1 hour')`, funding, tenant); err != nil {
+			if _, err := db.ExecContext(t.Context(), `INSERT INTO purser.payment_provider_intents(id,tenant_id,provider,purpose,local_reference_type,local_reference_id,status,currency,amount_cents,idempotency_key,provider_customer_id,provider_payment_id,provider_mandate_id,succeeded_at,expires_at) VALUES($1::uuid,$2,'mollie','mollie_first_payment','billing_tiers',$3,'succeeded','EUR',2000,$1::text,'customer','initial','mandate',NOW(),NOW()+INTERVAL '1 hour')`, funding, tenant, paid); err != nil {
 				t.Fatal(err)
 			}
 			service := handlers.NewService(db, logging.NewLogger(), nil, nil, nil, nil, nil)

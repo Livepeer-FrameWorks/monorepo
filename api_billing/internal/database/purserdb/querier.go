@@ -774,6 +774,9 @@ type Querier interface {
 	MarkX402SettlementConfirmed(ctx context.Context, arg MarkX402SettlementConfirmedParams) error
 	MarkX402SettlementFailed(ctx context.Context, arg MarkX402SettlementFailedParams) error
 	MarkX402SettlementSubmitted(ctx context.Context, arg MarkX402SettlementSubmittedParams) (int64, error)
+	// The paid first month belongs to the purchased tier, customer and currency.
+	// Its fee may differ from a later catalog renewal price for that same tier.
+	MollieCheckoutFundingMatches(ctx context.Context, arg MollieCheckoutFundingMatchesParams) (bool, error)
 	// A checkout staged during the grace period keeps its pending state, so its
 	// settlement can still activate the paid tier.
 	MoveSubscriptionToFreeFallback(ctx context.Context, arg MoveSubscriptionToFreeFallbackParams) (int64, error)

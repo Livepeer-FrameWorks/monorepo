@@ -183,3 +183,58 @@ func assertMollieRetainedFundingControls(t *testing.T) {
 		})
 	}
 }
+
+func assertMollieFundingPurchaseIdentity(t *testing.T) {
+	for _, purchase := range []string{"other tier", "other currency", "zero setup", "missing funding", "same tier repriced"} {
+		t.Run(purchase, func(t *testing.T) {
+			db := startOperatorGrantDatabase(t)
+			tenant, paid, free := seedFallbackLifecycle(t, db)
+			exec := func(query string, args ...any) {
+				t.Helper()
+				if _, err := db.ExecContext(t.Context(), query, args...); err != nil {
+					t.Fatal(err)
+				}
+			}
+			exec(`UPDATE purser.tenant_subscriptions SET tier_id=$2,billing_model='prepaid',stripe_subscription_id=NULL,stripe_customer_id=NULL,free_fallback_at=NULL,free_fallback_provider_ended_at=NULL,status='active',billing_name='Customer',billing_email='billing@example.test',billing_address='{"street":"Main 1","city":"Amsterdam","postal_code":"1000AA","country":"NL"}' WHERE tenant_id=$1`, tenant, free)
+			exec(`INSERT INTO purser.mollie_customers(tenant_id,mollie_customer_id) VALUES($1,'customer')`, tenant)
+			funding := uuid.NewString()
+			if purchase != "missing funding" {
+				exec(`INSERT INTO purser.payment_provider_intents(id,tenant_id,provider,purpose,local_reference_type,local_reference_id,status,currency,amount_cents,idempotency_key,provider_customer_id,provider_payment_id,provider_mandate_id,succeeded_at) VALUES($1::uuid,$2,'mollie','mollie_first_payment','billing_tiers',$3,'succeeded','EUR',2000,$1::text,'customer','paid-20','mandate',NOW())`, funding, tenant, paid)
+			}
+			target := paid
+			switch purchase {
+			case "other tier":
+				target = uuid.NewString()
+				exec(`INSERT INTO purser.billing_tiers(id,tier_name,display_name,tier_level,base_price,currency,metering_enabled) VALUES($1::uuid,$1::text,'Higher',2,50,'EUR',false)`, target)
+			case "other currency":
+				exec(`UPDATE purser.payment_provider_intents SET currency='USD' WHERE tenant_id=$1 AND id=$2`, tenant, funding)
+			case "zero setup":
+				exec(`UPDATE purser.payment_provider_intents SET amount_cents=0 WHERE tenant_id=$1 AND id=$2`, tenant, funding)
+			case "same tier repriced":
+				exec(`UPDATE purser.billing_tiers SET base_price=50 WHERE id=$1`, paid)
+			}
+			client := &fundingRaceMollieClient{fakeMollieBillingClient: fakeMollieBillingClient{subscription: &mollielib.Subscription{ID: "native", Status: "active"}}}
+			server := &PurserServer{db: db, logger: logging.NewLogger(), mollieClient: client}
+			_, err := server.CreateMollieSubscription(t.Context(), &purserpb.CreateMollieSubscriptionRequest{TenantId: tenant, TierId: target, MandateId: "mandate"})
+			if purchase == "same tier repriced" {
+				if err != nil || client.calls != 1 {
+					t.Fatalf("original purchase cannot activate after renewal repricing: creates=%d err=%v", client.calls, err)
+				}
+				return
+			}
+			if status.Code(err) != codes.FailedPrecondition || client.calls != 0 {
+				t.Fatalf("mismatched funding activated pricing: purchase=%s creates=%d err=%v", purchase, client.calls, err)
+			}
+			var pending, refunds int
+			if err = db.QueryRow(`SELECT count(*) FILTER (WHERE purpose='mollie_subscription_create'),count(*) FILTER (WHERE recovery_started_at IS NOT NULL) FROM purser.payment_provider_intents WHERE tenant_id=$1`, tenant).Scan(&pending, &refunds); err != nil || pending != 0 || refunds != 0 {
+				t.Fatalf("repairable selection stranded a checkout or refunded funding: pending=%d refunds=%d err=%v", pending, refunds, err)
+			}
+			if purchase == "other tier" {
+				_, err = server.CreateMollieSubscription(t.Context(), &purserpb.CreateMollieSubscriptionRequest{TenantId: tenant, TierId: paid, MandateId: "mandate"})
+				if err != nil || client.calls != 1 {
+					t.Fatalf("corrected tier cannot reuse its original payment: creates=%d err=%v", client.calls, err)
+				}
+			}
+		})
+	}
+}

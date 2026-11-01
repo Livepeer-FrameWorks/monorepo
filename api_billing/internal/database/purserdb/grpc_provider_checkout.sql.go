@@ -910,6 +910,38 @@ func (q *Queries) MarkMollieFirstPaymentActivated(ctx context.Context, arg MarkM
 	return err
 }
 
+const mollieCheckoutFundingMatches = `-- name: MollieCheckoutFundingMatches :one
+SELECT EXISTS (
+    SELECT 1 FROM purser.payment_provider_intents native
+    JOIN purser.payment_provider_intents funding
+      ON funding.tenant_id = native.tenant_id AND funding.id = native.funding_intent_id
+    WHERE native.tenant_id = $1::text::uuid
+      AND native.id = $2::text::uuid
+      AND native.provider = 'mollie' AND native.purpose = 'mollie_subscription_create'
+      AND funding.provider = 'mollie' AND funding.purpose = 'mollie_first_payment'
+      AND funding.provider_customer_id = native.provider_customer_id
+      AND funding.local_reference_type = 'billing_tiers'
+      AND native.local_reference_type = 'billing_tiers'
+      AND funding.local_reference_id = native.local_reference_id
+      AND funding.currency = native.currency
+      AND (native.amount_cents = 0 OR funding.amount_cents > 0)
+)::boolean AS matches
+`
+
+type MollieCheckoutFundingMatchesParams struct {
+	TenantID string `db:"tenant_id" json:"tenant_id"`
+	IntentID string `db:"intent_id" json:"intent_id"`
+}
+
+// The paid first month belongs to the purchased tier, customer and currency.
+// Its fee may differ from a later catalog renewal price for that same tier.
+func (q *Queries) MollieCheckoutFundingMatches(ctx context.Context, arg MollieCheckoutFundingMatchesParams) (bool, error) {
+	row := q.db.QueryRowContext(ctx, mollieCheckoutFundingMatches, arg.TenantID, arg.IntentID)
+	var matches bool
+	err := row.Scan(&matches)
+	return matches, err
+}
+
 const requeueExpiredCheckoutReservation = `-- name: RequeueExpiredCheckoutReservation :exec
 UPDATE purser.provider_webhook_inbox SET  attempts = CASE WHEN status = 'processed' THEN 0 ELSE attempts END,
     wait_attempts = CASE WHEN status = 'processed' THEN 0 ELSE wait_attempts END,

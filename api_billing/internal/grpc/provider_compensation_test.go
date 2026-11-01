@@ -156,7 +156,9 @@ func TestCreateMollieSubscriptionCancelsProviderSubscriptionWhenLocalPersistFail
 		WithArgs("tenant-a", tierID, "cst_123", "EUR", int64(2000), "mollie-subscription:tenant-a:"+tierID+":mdt_123").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("intent-mollie-sub"))
 	mock.ExpectExec("LinkMollieCheckoutFunding").WithArgs("mdt_123", "tenant-a", "intent-mollie-sub").WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectQuery("GetProviderCheckoutReservation").WillReturnRows(checkoutReservationTestRows("intent-mollie-sub", "tenant-a", "mollie", "mollie_subscription_create", "cst_123", nil, nil, nil, "pending", time.Now().Add(time.Hour), 0))
+	mock.ExpectQuery("GetProviderCheckoutReservation").WillReturnRows(checkoutReservationRowsWithFunding(false, "funding", "intent-mollie-sub", "tenant-a", "mollie", "mollie_subscription_create", "cst_123", nil, nil, nil, "pending", time.Now().Add(time.Hour), 0))
+	mock.ExpectQuery("GetProviderCheckoutReservation").WithArgs("tenant-a", "funding").WillReturnRows(checkoutReservationTestRows("funding", "tenant-a", "mollie", "mollie_first_payment", "cst_123", nil, "paid-first", nil, "succeeded", time.Now().Add(time.Hour), 0))
+	mock.ExpectQuery("MollieCheckoutFundingMatches").WithArgs("tenant-a", "intent-mollie-sub").WillReturnRows(sqlmock.NewRows([]string{"matches"}).AddRow(true))
 	mock.ExpectQuery("GetPendingProviderCheckout").WillReturnRows(sqlmock.NewRows([]string{"pending", "deadline", "kind"}).AddRow(false, time.Unix(0, 0), "checkout"))
 	mock.ExpectExec("EnqueueCheckoutReservationExpiry").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
@@ -168,7 +170,9 @@ func TestCreateMollieSubscriptionCancelsProviderSubscriptionWhenLocalPersistFail
 	mock.ExpectBegin()
 	expectProviderSubscriptionLock(mock, "tenant-a")
 	mock.ExpectQuery("GetSubscriptionOperatorGrant").WithArgs("tenant-a").WillReturnError(sql.ErrNoRows)
-	mock.ExpectQuery("GetProviderCheckoutReservation").WillReturnRows(checkoutReservationTestRows("intent-mollie-sub", "tenant-a", "mollie", "mollie_subscription_create", "cst_123", nil, nil, nil, "pending", time.Now().Add(24*time.Hour), 0))
+	mock.ExpectQuery("GetProviderCheckoutReservation").WillReturnRows(checkoutReservationRowsWithFunding(false, "funding", "intent-mollie-sub", "tenant-a", "mollie", "mollie_subscription_create", "cst_123", nil, nil, nil, "pending", time.Now().Add(24*time.Hour), 0))
+	mock.ExpectQuery("GetProviderCheckoutReservation").WithArgs("tenant-a", "funding").WillReturnRows(checkoutReservationTestRows("funding", "tenant-a", "mollie", "mollie_first_payment", "cst_123", nil, "paid-first", nil, "succeeded", time.Now().Add(time.Hour), 0))
+	mock.ExpectQuery("MollieCheckoutFundingMatches").WithArgs("tenant-a", "intent-mollie-sub").WillReturnRows(sqlmock.NewRows([]string{"matches"}).AddRow(true))
 	mock.ExpectQuery("HasPendingTierUpgrade").WillReturnRows(sqlmock.NewRows([]string{"pending"}).AddRow(false))
 	expectSelfServiceCheckout(mock, "tenant-a", tierID, "mollie")
 	mock.ExpectExec(`UPDATE purser\.tenant_subscriptions\s+SET mollie_subscription_id = \$1`).

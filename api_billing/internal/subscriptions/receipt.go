@@ -3,10 +3,14 @@ package subscriptions
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"time"
 
 	"frameworks/api_billing/internal/database/purserdb"
 )
+
+// ErrMollieFundingMismatch retains a payment while the caller selects its purchase.
+var ErrMollieFundingMismatch = errors.New("no reusable first payment for this tier and mandate; if you already paid, retry activation with its tier and mandate or recover that payment")
 
 type completionTimeKey struct{}
 
@@ -37,6 +41,17 @@ func readReceipt(ctx context.Context, tx *sql.Tx, tenantID, intentID string) (*p
 		}
 		if funding.Status != "succeeded" || funding.RecoveryStartedAt.Valid || funding.ActivatedAt.Valid && !r.ActivatedAt.Valid {
 			return nil, ErrCheckoutExpired
+		}
+	}
+	if r.Provider == "mollie" && r.Purpose == "mollie_subscription_create" && !r.ActivatedAt.Valid {
+		matches, err := purserdb.New(tx).MollieCheckoutFundingMatches(ctx, purserdb.MollieCheckoutFundingMatchesParams{
+			TenantID: tenantID, IntentID: intentID,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if !matches {
+			return nil, ErrMollieFundingMismatch
 		}
 	}
 	if r.Status == "succeeded" && !r.RecoveryStartedAt.Valid {
