@@ -10,7 +10,10 @@ import (
 )
 
 // ErrMollieFundingMismatch retains a payment while the caller selects its purchase.
-var ErrMollieFundingMismatch = errors.New("no reusable first payment for this tier and mandate; if you already paid, retry activation with its tier and mandate or recover that payment")
+var ErrMollieFundingMismatch = errors.New("unused payment does not match this setup; retry activation with the paid tier and mandate, or contact billing for help")
+
+// ErrMollieFundingRequired distinguishes a new purchase from retained paid funding.
+var ErrMollieFundingRequired = errors.New("no unused paid first payment is available; complete a new first payment before activation")
 
 type completionTimeKey struct{}
 
@@ -51,7 +54,7 @@ func readReceipt(ctx context.Context, tx *sql.Tx, tenantID, intentID string) (*p
 			return nil, err
 		}
 		if !matches {
-			return nil, ErrMollieFundingMismatch
+			return nil, mollieFundingSelectionError(ctx, tx, tenantID)
 		}
 	}
 	if r.Status == "succeeded" && !r.RecoveryStartedAt.Valid {
@@ -78,4 +81,17 @@ func readReceipt(ctx context.Context, tx *sql.Tx, tenantID, intentID string) (*p
 func ProviderCompletion(ctx context.Context) (time.Time, bool) {
 	at, ok := ctx.Value(completionTimeKey{}).(time.Time)
 	return at, ok
+}
+
+// A missing match can mean another owned purchase is retained, or that the
+// customer has no reusable funding. Only the latter should request a new payment.
+func mollieFundingSelectionError(ctx context.Context, tx *sql.Tx, tenantID string) error {
+	unused, err := purserdb.New(tx).HasUnusedPaidMollieFunding(ctx, tenantID)
+	if err != nil {
+		return err
+	}
+	if unused {
+		return ErrMollieFundingMismatch
+	}
+	return ErrMollieFundingRequired
 }

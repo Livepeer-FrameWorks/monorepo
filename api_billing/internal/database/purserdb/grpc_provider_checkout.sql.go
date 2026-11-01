@@ -695,12 +695,14 @@ SELECT EXISTS (
     WHERE funding.tenant_id = $1::text::uuid
       AND funding.provider = 'mollie' AND funding.purpose = 'mollie_first_payment'
       AND funding.status = 'succeeded' AND funding.amount_cents > 0
-      AND funding.provider_payment_id IS NOT NULL AND funding.activated_at IS NULL
+      AND funding.provider_payment_id IS NOT NULL AND funding.provider_mandate_id IS NOT NULL
+      AND funding.activated_at IS NULL
 )::boolean AS unused
 `
 
 // Called under the subscription lock before reserving another first payment.
-// Retained funding remains owned until activation or confirmed compensation.
+// A recorded mandate binds retained activation funding to this contract.
+// Unbound delivery receipts are reconciled through historical recovery.
 func (q *Queries) HasUnusedPaidMollieFunding(ctx context.Context, tenantID string) (bool, error) {
 	row := q.db.QueryRowContext(ctx, hasUnusedPaidMollieFunding, tenantID)
 	var unused bool
@@ -716,6 +718,13 @@ SET funding_intent_id = (
       AND funding.purpose = 'mollie_first_payment'
       AND funding.provider_mandate_id = $1::text
       AND funding.provider_customer_id = native.provider_customer_id
+      AND funding.status = 'succeeded' AND funding.activated_at IS NULL
+      AND funding.recovery_started_at IS NULL AND funding.provider_payment_id IS NOT NULL
+      AND funding.local_reference_type = 'billing_tiers'
+      AND native.local_reference_type = 'billing_tiers'
+      AND funding.local_reference_id = native.local_reference_id
+      AND funding.currency = native.currency
+      AND (native.amount_cents = 0 OR funding.amount_cents > 0)
     ORDER BY funding.created_at DESC, funding.id DESC LIMIT 1
 ), updated_at = NOW()
 WHERE native.tenant_id = $2::text::uuid
@@ -1320,6 +1329,11 @@ WITH requested AS (
     AND (i.idempotency_key = r.idempotency_key OR left(i.idempotency_key,
     33) = md5(r.idempotency_key) || ':')
     AND (i.status IN ('pending', 'provider_open', 'provider_call_failed') OR (i.status = 'succeeded' AND i.provider_subscription_id IS NULL))
+    AND NOT EXISTS (
+        SELECT 1 FROM purser.tenant_subscriptions subscription
+        WHERE subscription.tenant_id = i.tenant_id
+          AND subscription.mollie_subscription_id = i.provider_subscription_id
+    )
     ORDER BY i.created_at DESC LIMIT 1
 ), reused AS (
     UPDATE purser.payment_provider_intents
@@ -1352,6 +1366,7 @@ type UpsertMollieSubscriptionIntentParams struct {
 // Reuse only an outstanding attempt. Settled receipts and their provider keys
 // remain intact; a subsequent checkout gets its own durable idempotency key.
 // A retry retains its stored provider key and original request deadline.
+// A receipt bound to established service is not a new checkout to resume.
 func (q *Queries) UpsertMollieSubscriptionIntent(ctx context.Context, arg UpsertMollieSubscriptionIntentParams) (string, error) {
 	row := q.db.QueryRowContext(ctx, upsertMollieSubscriptionIntent,
 		arg.TenantID,

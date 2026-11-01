@@ -486,7 +486,8 @@ type Querier interface {
 	// reference is resolved. This platform-wide lookup only selects an existing owner.
 	HasRefundSettlementOwner(ctx context.Context, arg HasRefundSettlementOwnerParams) (bool, error)
 	// Called under the subscription lock before reserving another first payment.
-	// Retained funding remains owned until activation or confirmed compensation.
+	// A recorded mandate binds retained activation funding to this contract.
+	// Unbound delivery receipts are reconciled through historical recovery.
 	HasUnusedPaidMollieFunding(ctx context.Context, tenantID string) (bool, error)
 	// A settled top-up that cannot be credited stays pending with a needs_review
 	// reversal row, so an operator resolves the paid amount (refund or converted
@@ -971,6 +972,7 @@ type Querier interface {
 	// Reuse only an outstanding attempt. Settled receipts and their provider keys
 	// remain intact; a subsequent checkout gets its own durable idempotency key.
 	// A retry retains its stored provider key and original request deadline.
+	// A receipt bound to established service is not a new checkout to resume.
 	UpsertMollieSubscriptionIntent(ctx context.Context, arg UpsertMollieSubscriptionIntentParams) (string, error)
 	UpsertObservedCryptoDeposit(ctx context.Context, arg UpsertObservedCryptoDepositParams) error
 	UpsertOperatorCreditClawback(ctx context.Context, arg UpsertOperatorCreditClawbackParams) (string, error)

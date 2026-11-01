@@ -411,6 +411,21 @@ before creating a native subscription and at locked activation. Paid service
 cannot use a zero-amount mandate setup or funding for another tier. A later
 renewal-price change on the same tier does not rewrite the original first fee.
 
+The first-payment fence owns receipts with a recorded mandate ID. A historical
+paid receipt without that binding is not treated as unused just because its
+activation date is NULL; its delivery history stays with historical recovery.
+A returning customer can purchase a new month without an operator backfill.
+Activation links only succeeded, unactivated funding with no recovery in flight
+for the same tenant, customer, mandate, tier and currency. If no unused payment
+remains, the customer is asked to complete a new first payment. If paid funding
+is retained for a different setup, the customer gets retry or billing-help guidance.
+
+Replacing a tenant's Mollie customer does not transfer unused funding to the new
+customer. That funding keeps blocking another first payment until it is used
+under its original binding or an operator confirms recovery of the original
+payment. Reconcile any linked native checkout first, then the funding receipt;
+after compensation completes, the customer can start a new first payment.
+
 Retained funding has no automatic age-based refund. If the customer abandons
 activation, account closure is the only automatic refund unless a definitive
 refusal is subsequently observed. An operator can request earlier compensation

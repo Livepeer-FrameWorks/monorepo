@@ -48,8 +48,13 @@ func (s *PurserServer) compensateRefusedMollieFunding(
 // native cleanup without directing the customer through a second payment.
 func mollieActivationStatus(err error) error {
 	message := err.Error()
-	if !subscriptions.IsDefinitiveMollieActivationRefusal(err) {
-		message += "; retry activation using the existing first payment after setup recovery completes"
+	switch {
+	case errors.Is(err, subscriptions.ErrMollieFundingRequired):
+		message = subscriptions.ErrMollieFundingRequired.Error()
+	case errors.Is(err, subscriptions.ErrMollieFundingMismatch):
+		message = subscriptions.ErrMollieFundingMismatch.Error()
+	case errors.Is(err, subscriptions.ErrCheckoutExpired) && !subscriptions.IsDefinitiveMollieActivationRefusal(err):
+		message = "activation setup needs cleanup; retry activation afterwards using your retained first payment"
 	}
 	if errors.Is(err, subscriptions.ErrCheckoutCompensationQueued) {
 		// The committed transition already owns funding compensation.

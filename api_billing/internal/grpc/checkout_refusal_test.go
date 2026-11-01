@@ -28,6 +28,8 @@ func TestMollieDefinitiveRefusalKeepsItsDomainCause(t *testing.T) {
 		{"pending upgrade", subscriptions.ErrPendingTierUpgrade, false},
 		{"changed journal", subscriptions.ErrCheckoutRequestChanged, false},
 		{"expired receipt", subscriptions.ErrCheckoutExpired, false},
+		{"funding mismatch", subscriptions.ErrMollieFundingMismatch, false},
+		{"new payment required", subscriptions.ErrMollieFundingRequired, false},
 		{"unrelated missing row", sql.ErrNoRows, false},
 		{"repairable billing details", errors.New("billing details incomplete"), false},
 	} {

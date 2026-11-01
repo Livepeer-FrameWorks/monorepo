@@ -2339,6 +2339,13 @@ funding has no age-based refund. If activation is abandoned, closure is the only
 automatic refund unless a definitive refusal is observed. Confirmed operator
 recovery can request earlier compensation.
 
+An unused payment stays bound to its original Mollie customer. If that customer
+mapping changes, ask a platform operator to recover the original payment before
+starting another first payment. Reconcile a linked native checkout before its
+funding receipt. Consumed payments are never reused; when no unused payment is
+left, activation asks for a new first payment. Historical paid receipts without
+a mandate binding do not block returning customers from buying a new month.
+
 `--retain-delivered` selects an audited attestation for an ambiguous historical
 Mollie first payment. It retains the payment without refund or new access,
 requires the same preview and confirmation, and records the operator and reason.

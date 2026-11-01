@@ -177,5 +177,6 @@ func IsPricingRefusal(err error) bool {
 	return errors.Is(err, ErrSelfServiceSubscription) || errors.Is(err, ErrSelfServiceTier) || errors.Is(err, ErrSelfServiceTierChange) ||
 		errors.Is(err, ErrPaidCancellationTerm) || errors.Is(err, ErrPendingFreeFallback) ||
 		errors.Is(err, ErrOutstandingGrant) || errors.Is(err, ErrTenantBillingClosed) ||
-		errors.Is(err, ErrPendingTierUpgrade) || errors.Is(err, ErrMollieFundingMismatch)
+		errors.Is(err, ErrPendingTierUpgrade) || errors.Is(err, ErrMollieFundingMismatch) ||
+		errors.Is(err, ErrMollieFundingRequired)
 }
