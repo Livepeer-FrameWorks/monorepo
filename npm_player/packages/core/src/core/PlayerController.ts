@@ -711,6 +711,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   private _initializePlayerInFlight: Promise<unknown> | null = null;
 
   private endpoints: ContentEndpoints | null = null;
+  private selectedEdgeHasNoMist = false;
   private streamInfo: StreamInfo | null = null;
   private streamState: StreamState | null = null;
   /** Tracks parsed from MistServer JSON response (used for direct MistServer mode) */
@@ -3599,6 +3600,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     const selectedEndpoints = this.endpoints;
     const epoch = this.endpointResolutionEpoch;
     const mistBaseUrl = this.getSelectedMistBaseUrl();
+    this.selectedEdgeHasNoMist = false;
     if (!mistBaseUrl) return;
 
     const streamName = this.getMistStreamName(contentId);
@@ -3643,10 +3645,16 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     } catch (error) {
       const message = error instanceof Error ? error.message : "Mist edge source discovery failed";
       this.log(`[resolveFromGateway] Mist edge source discovery unavailable: ${message}`);
+      // A caller-supplied media URL can sit on any host. Without a baseUrl naming
+      // a Mist edge, a failed lookup means there is no stream state to poll.
+      this.selectedEdgeHasNoMist =
+        this.endpointMode === "provided" && !selectedEndpoints?.primary?.baseUrl;
     }
   }
 
   private startStreamStatePolling(): void {
+    if (this.selectedEdgeHasNoMist) return;
+
     const { contentId, mistUrl } = this.config;
     const contentType = this.getResolvedContentType();
 
@@ -5184,7 +5192,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     }
 
     const mistUrl = this.getSelectedMistBaseUrl();
-    if (!mistUrl) return;
+    if (!mistUrl || this.selectedEdgeHasNoMist) return;
 
     this.metaTrackManager = new MetaTrackManager({
       mistBaseUrl: mistUrl,
