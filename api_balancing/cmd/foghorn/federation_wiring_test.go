@@ -144,6 +144,12 @@ func wiredServerConfig(db *sql.DB) federation.FederationServerConfig {
 // artifact its origin deleted is retired, and metadata migration reaches the
 // source cell.
 func TestFederationServerWiredFromPeers(t *testing.T) {
+	// Installed before the peer manager starts, in main's order: the manager
+	// reads the global from its own goroutines.
+	prevRegistry := control.StreamRegistryInstance
+	control.SetStreamRegistry(control.NewStreamRegistry(nil, "cluster-a", time.Minute))
+	t.Cleanup(func() { control.SetStreamRegistry(prevRegistry) })
+
 	origin, originAddr := startOriginCell(t)
 	redis := miniredis.RunT(t)
 	logger := logging.NewLogger()
@@ -188,10 +194,6 @@ func TestFederationServerWiredFromPeers(t *testing.T) {
 	if buildErr != nil {
 		t.Fatalf("newFederationServer: %v", buildErr)
 	}
-
-	prevRegistry := control.StreamRegistryInstance
-	control.SetStreamRegistry(control.NewStreamRegistry(nil, "cluster-a", time.Minute))
-	t.Cleanup(func() { control.SetStreamRegistry(prevRegistry) })
 
 	serviceCtx := context.WithValue(context.Background(), ctxkeys.KeyAuthType, "service")
 	lifecycle := func(stream, tenant string) *foghornfederationpb.PeerMessage {

@@ -1092,6 +1092,32 @@ func main() {
 		return federation.S3Backing{}, false
 	}
 
+	// Unified stream registry: identity (push, pull, mist-native, federated
+	// peers) + artifact bookkeeping + replication state, with a periodic
+	// sweeper that ages stale Locations out. control.StreamRegistryInstance is
+	// an unsynchronized global, so it is installed here, before the peer manager
+	// and every other goroutine that reads it starts.
+	streamRegistry := control.NewStreamRegistry(commodoreClient, foghornCfg.ClusterID, 30*time.Second)
+	streamRegistry.SetLivePresence(control.NewLivePresence(state.DefaultManager()))
+	streamRegistry.SetMissLogger(func(_ context.Context, refKind, key string) {
+		logger.WithFields(logging.Fields{
+			"ref_kind": refKind,
+			"key":      key,
+		}).Debug("stream_registry.miss")
+	})
+	if redisClient != nil {
+		registryRedis := control.NewRedisRegistryStore(redisClient, foghornCfg.ClusterID)
+		if sources, artifacts, syncErr := streamRegistry.EnableRedisSync(context.Background(), registryRedis, instanceID, logger); syncErr != nil {
+			logger.WithError(syncErr).Warn("Failed to enable stream-registry Redis sync")
+		} else {
+			logger.WithFields(logging.Fields{
+				"sources":   sources,
+				"artifacts": artifacts,
+			}).Info("Stream-registry rehydrated from Redis")
+		}
+	}
+	control.SetStreamRegistry(streamRegistry)
+
 	// The inbound federation server is built from these peers once the gRPC
 	// server it delegates clip, DVR and artifact commands to exists.
 	var fedPeers *federationPeers
@@ -1114,9 +1140,9 @@ func main() {
 			Logger:              logger,
 			SelfGeo:             handlers.GetSelfGeo,
 			CanPurgeMemberships: control.PurgeableAdmissionEffectFences,
-			// Late-bound through the identity facade (wired further down,
-			// after the stream registry exists) so ad attribution shares
-			// the same front door and metrics as every other consumer.
+			// Late-bound through the identity facade (wired further down)
+			// so ad attribution shares the same front door and metrics as
+			// every other consumer.
 			ArtifactTenantResolver: func(ctx context.Context, hashes []string) (map[string]string, error) {
 				if r := identity.Default(); r != nil {
 					return r.ResolveArtifactTenants(ctx, hashes)
@@ -1274,29 +1300,7 @@ func main() {
 	control.SetGeoIPReader(geoipReader)
 	control.SetGeoIPCache(geoipCache)
 
-	// Unified stream registry: identity (push, pull, mist-native, federated
-	// peers) + artifact bookkeeping + replication state, with a periodic
-	// sweeper that ages stale Locations out.
-	streamRegistry := control.NewStreamRegistry(commodoreClient, foghornCfg.ClusterID, 30*time.Second)
-	streamRegistry.SetLivePresence(control.NewLivePresence(state.DefaultManager()))
-	streamRegistry.SetMissLogger(func(_ context.Context, refKind, key string) {
-		logger.WithFields(logging.Fields{
-			"ref_kind": refKind,
-			"key":      key,
-		}).Debug("stream_registry.miss")
-	})
-	if redisClient != nil {
-		registryRedis := control.NewRedisRegistryStore(redisClient, foghornCfg.ClusterID)
-		if sources, artifacts, syncErr := streamRegistry.EnableRedisSync(context.Background(), registryRedis, instanceID, logger); syncErr != nil {
-			logger.WithError(syncErr).Warn("Failed to enable stream-registry Redis sync")
-		} else {
-			logger.WithFields(logging.Fields{
-				"sources":   sources,
-				"artifacts": artifacts,
-			}).Info("Stream-registry rehydrated from Redis")
-		}
-	}
-	control.SetStreamRegistry(streamRegistry)
+	// Runs with the registry already installed; see its construction above.
 	streamRegistry.StartSweeper(context.Background(), 30*time.Second, 5*time.Minute)
 	if peerManager != nil {
 		// Peers can place viewers on a pushed stream only once they hold the
