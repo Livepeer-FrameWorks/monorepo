@@ -15683,8 +15683,8 @@ Use the buttons along the bottom of the studio:
 Each source appears in the mixer, where you can mute it, hide it from the picture, or remove it. You can add and remove sources during a broadcast.
 
 <Aside type="caution" title="Sharing your entire screen">
-  The studio's right-click menu can open an advanced panel that shows your private connection
-  address. Keep that panel closed, or share a single window or tab instead of your entire screen.
+  The studio's right-click menu can copy your private connection address. Avoid pasting it anywhere
+  a shared screen can show it.
 </Aside>
 
 ## 4. Choose a layout
@@ -15719,7 +15719,7 @@ To stream to YouTube, Twitch, or anywhere else at the same time, open your strea
 
 ## If something goes wrong
 
-- **The connection drops.** The studio shows **Reconnecting...** and retries a few times on its own. If it shows an error instead, reload the page and repeat these steps. You'll need to add your sources again.
+- **The connection drops.** The studio shows **Reconnecting...** and retries a few times on its own. If it shows an error instead, click **Go Live** again. Your sources stay in place.
 - **The browser blocks your camera or microphone.** Allow access in the browser's site settings, then reload the page.
 - **The picture freezes when you change tabs.** Your browser is pausing the encoder in the background. Stay on the tab, or switch to a Chromium-based browser.
 - **Video is choppy.** Close other applications, remove sources you don't need, or switch to the Conference setting before your next broadcast.
