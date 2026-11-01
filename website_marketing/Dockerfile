@@ -60,6 +60,7 @@ RUN if [ "$BUILD_ENV" = "development" ]; then \
 # copy the remaining sources now that deps are cached
 COPY npm_api/ npm_api/
 COPY npm_player/ npm_player/
+COPY npm_studio/ npm_studio/
 COPY website_marketing/ website_marketing/
 COPY docs/skills/ docs/skills/
 
