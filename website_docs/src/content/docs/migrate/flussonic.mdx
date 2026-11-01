@@ -1,0 +1,437 @@
+---
+title: "Migrate from Flussonic Media Server"
+description: "Move a self-run Flussonic Media Server deployment to or alongside FrameWorks: keep your hardware with FrameWorks edges, self-host the full stack, or use managed SaaS. Includes what is up next and what is not planned for IPTV and CCTV."
+sidebar:
+  order: 7
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+Flussonic Media Server (FMS) is a media server you install and run yourself. Its documentation
+covers ingest, transcoding, DVR, restreaming, and an IPTV/OTT service chain from headend to
+restreamer. FrameWorks is a live video platform whose media edges run MistServer, with GraphQL,
+routing, analytics, billing, and playback access control above them. It is built by the MistServer
+team.
+
+The two overlap on live ingest, HTTP delivery, DVR, and multi-server routing. They differ most on
+broadcast-network work. Event streaming is the closest fit: encoders repoint to RTMP, SRT, or WHIP,
+and DVR, clips, multistreaming, playback policies, analytics, and StreamCrafter work as described
+in the builder guides. If you run IPTV or CCTV, read
+[What's up next, and what's not planned](#whats-up-next-and-whats-not-planned) first, because some
+of those workloads should stay where they are.
+
+## Pick the right path
+
+| Your situation                                                                                                     | Best fit                                                          | Where to start                                                        |
+| ------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------- | --------------------------------------------------------------------- |
+| You need something that is up next, such as DRM, backup inputs, or built-in geo rules                              | Keep that workload on Flussonic until it ships, and move the rest | [Up next](#up-next)                                                   |
+| You depend on multicast or MPTS output, IPTV middleware, EPG extraction, session limits, or surveillance analytics | Keep that workload on Flussonic                                   | [Not planned](#not-planned)                                           |
+| You own servers and network position, and want routing, analytics, and a managed control plane on top              | Hybrid: FrameWorks edges on your hardware                         | [Stay on your own hardware](#path-1-stay-on-your-own-hardware-hybrid) |
+| You need the control plane, storage, and media inside your own network or jurisdiction                             | Full self-host                                                    | [Self-host the whole stack](#path-2-self-host-the-whole-stack)        |
+| You want to stop running media servers, and your sources are public or can push to the internet                    | Managed FrameWorks                                                | [Move to managed FrameWorks](#path-3-move-to-managed-frameworks)      |
+| You want more delivery reach, but the headend must stay as it is                                                   | Keep Flussonic as origin, add FrameWorks                          | [Run it in parallel](#9-run-it-in-parallel)                           |
+
+## TL;DR
+
+- **What stays:** RTMP, SRT, and WHIP ingest; RTSP, SRT, and HLS sources; multicast TS sources on
+  your own edges; HLS, DASH, LL-HLS, and WHEP delivery; DVR with catch-up-style replay; a webhook that allows or denies viewers.
+- **What changes:** `flussonic.conf` and `/streamer/api/v3/` become GraphQL. Stream names become
+  generated `streamKey` and `playbackId` values. `on_play` becomes a playback policy. `event_sink`
+  becomes signed webhooks. Disk-backed archives become S3-backed recordings split into chapters.
+  `source` and `peer` configuration becomes Foghorn routing.
+- **What you gain:** one control plane across your own and platform clusters, geo-balanced viewer
+  routing, first-party player QoE analytics, ES256 signed playback, sprite-sheet seek previews, and
+  API, dashboard, and MCP parity.
+- **What's up next:** DRM, StreamCrafter cloud production with backup inputs, built-in password and
+  geo rules, scheduled recordings, device discovery, pre-emptive stream replication, and team
+  accounts.
+- **What's not planned:** templates and dynamic stream names, always-on pull sources, multicast, UDP,
+  and MPTS output, IPTV middleware, EPG, session limits, and per-stream hardware encoder selection.
+
+## Translation tables
+
+### Streams and templates
+
+| Flussonic                                                    | FrameWorks                                                                                                                                                                                                                                    |
+| ------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `stream` block in `/etc/flussonic/flussonic.conf`            | `createStream(input)`, the dashboard, or the MCP `create_stream` tool                                                                                                                                                                         |
+| `static`: starts with the server, monitored and retried      | A push stream from an always-running encoder. Pull streams do not run this way; see the caution below                                                                                                                                         |
+| `ondemand`: runs only while viewers request it               | Pull stream. A viewer request opens the source, and it closes after a grace period when the last viewer leaves                                                                                                                                |
+| `input publish://`                                           | Push stream with a stream key                                                                                                                                                                                                                 |
+| `template` shared by many streams                            | Not planned. Settings are per stream, with tenant defaults for retention and ingest rules. Script `createStream`, or declare `pull_streams` in the [bootstrap overlay](/operators/cluster-manifest#stream-source-location) when you self-host |
+| `prefix` for dynamically named publishing                    | Not planned. Each stream exists before the encoder connects                                                                                                                                                                                   |
+| Several `input` lines with automatic failover and `priority` | One `sourceUri` per pull stream today. Up next: [backup inputs](/roadmap#composition-and-ssai) that take over when a primary source drops                                                                                                     |
+| `backup` file when the source is unavailable                 | FrameWorks does not synthesize fallback media today. Up next: [backup inputs](/roadmap#composition-and-ssai)                                                                                                                                  |
+| `timeshift://stream/seconds` as a delayed channel            | Not planned. Live viewers seek within the DVR window instead                                                                                                                                                                                  |
+| `thumbnails`                                                 | Generated automatically; see [Thumbnails and Previews](/builders/thumbnails-and-previews)                                                                                                                                                     |
+
+<Aside type="caution" title="Static channels and pull streams">
+  Pull streams are on-demand. With no viewer, FrameWorks does not open the source, so nothing is
+  recorded. A channel or camera that must record around the clock needs a process pushing to
+  FrameWorks continuously. A small relay on your network can do that:
+
+```bash
+ffmpeg -i "udp://239.0.0.1:1234" -c copy \
+  -f mpegts "srt://%INGEST_HOSTNAME%:%SRT_PORT%?streamid={stream-key}&latency=200&mode=caller"
+```
+
+On a full self-host, operator-declared managed streams run regardless of viewers, with file,
+playlist, or exec sources.
+
+</Aside>
+
+### Ingest
+
+| Flussonic                                       | FrameWorks                                                                                                        |
+| ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `input udp://239.0.0.1:1234` multicast          | Pull source `tsudp://239.0.0.1:1234`, on a self-hosted edge cluster with `allow_private_pull_sources: true`       |
+| `udp://eth2@239.0.0.1:1234` interface selection | Not documented. Test on multi-homed hosts before relying on it                                                    |
+| `rtsp://` camera source                         | Pull source `rtsp://`, with basic auth in the URI. `rtsps://` is not supported yet                                |
+| `hls://` source                                 | Pull source `https://.../*.m3u8`                                                                                  |
+| `tshttp://` source                              | `https://.../*.ts` covers single-file TS only. For live TS, use `tsudp://` or HLS                                 |
+| SRT publish with `streamid`                     | SRT push; `streamid` carries the stream key. See [Encoder Setup](/builders/encoder-setup)                         |
+| RTMP publish                                    | RTMP or E-RTMP push on port 1935. There is no RTMPS ingest; use SRT or WHIP when the link must be encrypted       |
+| WebRTC publish over WHIP                        | WHIP push, from an encoder or from StreamCrafter                                                                  |
+| RTSP or HTTP MPEG-TS publish                    | RTSP only on a hybrid edge with that port exposed. HTTP MPEG-TS publish is not documented. Move encoders to SRT   |
+| Satellite receivers and DVB-S cards             | DVB capture is not planned. Bring the feed in from your receiver as `tsudp://`, RTSP, or SRT                      |
+| NDI ingest                                      | Up next, as part of [Device Discovery and Contribution Inputs](/roadmap#device-discovery-and-contribution-inputs) |
+
+See [Pull-input Streams](/builders/pull-streams) for source location rules and private-network
+sources.
+
+### Playback and output
+
+| Flussonic                            | FrameWorks                                                                              |
+| ------------------------------------ | --------------------------------------------------------------------------------------- |
+| `/STREAMNAME/index.m3u8`             | `/play/{playbackId}/hls/index.m3u8`, or `/play/{playbackId}/cmaf/index.m3u8` for LL-HLS |
+| `/STREAMNAME/index.mpd`              | `/play/{playbackId}/cmaf/index.mpd`                                                     |
+| WHEP                                 | `/play/{playbackId}/whep`                                                               |
+| HTTP MPEG-TS at `/STREAMNAME/mpegts` | `/play/{playbackId}.ts`                                                                 |
+| RTMP, RTSP, and SRT playback         | Direct edge protocols when the edge exposes them; not the managed default               |
+| MSS at `.isml/manifest`              | Not planned                                                                             |
+| `embed.html`                         | `@livepeer-frameworks/player-*` for React, Svelte, Web Components, and vanilla JS       |
+
+Every viewer URL changes. Set-top apps, middleware channel lists, and player embeds all need
+new URLs, because a `playbackId` is generated and is not your Flussonic stream name.
+
+### Push to other destinations
+
+| Flussonic                             | FrameWorks                                                              |
+| ------------------------------------- | ----------------------------------------------------------------------- |
+| `push rtmp://...`                     | `createPushTarget(streamId, input)` with an `rtmp://` or `rtmps://` URI |
+| SRT push                              | `createPushTarget` with an `srt://` URI                                 |
+| `push udp://239.0.0.1:1234` multicast | Not planned                                                             |
+| HTTP MPEG-TS, HLS, or M4S push        | Not planned                                                             |
+| MPTS for a modulator                  | Not planned                                                             |
+
+Push targets accept `rtmp://`, `rtmps://`, and `srt://` URIs only. They start only for streams with
+a push ingest, so a pull stream cannot feed a push target. See
+[Multistreaming](/builders/multistreaming).
+
+### DVR
+
+| Flussonic                                           | FrameWorks                                                                                                       |
+| --------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `dvr /storage 1d`, set per stream or in a template  | `record: true` or `startDVR(streamId)`, with [retention](/builders/storage-and-retention) set by tenant or asset |
+| Disk limit such as `dvr /storage 90% 5d`            | No per-stream disk limit. Retention sets lifetime                                                                |
+| `schedule 3-6,5-8,23-5;` recording schedule         | Up next: scheduled recordings in [Scheduled Programming](/roadmap#scheduled-programming)                         |
+| Local disks or S3 cloud storage                     | S3 is the authoritative tier; edge disk is a cache. See [Media Storage](/operators/media-storage)                |
+| Catch-up URL `index-START-DURATION.m3u8`            | List chapters for a UTC range with `dvrChapters`, then play each chapter's `playbackId`                          |
+| Rewind with `timeshift_abs` or `timeshift_rel` URLs | Player seeking within the live rewind window through `dvrPlaybackId`                                             |
+| Export to MP4                                       | `createClip(input)`, or `/play/{id}.mp4?startunix=...&stopunix=...&dl=1`                                         |
+| Timelapse export, nPVR                              | Not planned                                                                                                      |
+| Timezone-delayed viewing                            | Not planned as a channel; request a past range from your application                                             |
+
+The DVR model differs in one way that matters for catch-up TV. FrameWorks has two surfaces: a
+bounded live rewind window, with a platform ceiling of 72 hours, and finalized chapters for
+everything older. Chapters are at least one hour long when clock-aligned, and they use UTC. A
+programme that crosses a chapter boundary spans two playback IDs, so your application has to map
+EPG times to chapters. See [DVR Chapters](/builders/dvr-chapters).
+
+### Authorization
+
+| Flussonic                                                                | FrameWorks                                                                                                                                                      |
+| ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `on_play` HTTP backend; 200 allows, 403 forbids                          | `setPlaybackPolicy` with `type: WEBHOOK`; any 2xx allows, anything else denies                                                                                  |
+| Backend answers with `X-UserId`, session lifetime, and limits            | Status code only. The body gives you `sessionId`, `viewerIp`, `viewerToken`, and optional `context`                                                             |
+| Keeps the previous status if the backend fails, and rechecks every 3 min | Decides once per viewer session (about 10 minutes by default). A timeout or 5xx denies                                                                          |
+| `on_play` backend as an external system or a custom script               | Webhook URLs must be public HTTPS endpoints; private and loopback addresses are refused                                                                         |
+| `securetoken` shared-secret hash                                         | `type: JWT` with customer-held ES256 keys, sent as `?jwt=`                                                                                                      |
+| `X-Max-Sessions` per-user limit                                          | Not planned                                                                                                                                                     |
+| `allowed_countries`                                                      | Implement in your webhook using `viewerIp` today. Up next: [Built-In Password and Geo Rules](/roadmap#built-in-password-and-geo-rules), with no endpoint to run |
+| `domains` domain lock                                                    | Allowed origins on a JWT or webhook policy                                                                                                                      |
+| `on_publish` backend and publish `password`                              | Stream keys with rotation. A publish-time webhook is not planned                                                                                                |
+| DRM: Widevine, PlayReady, and named vendors                              | Up next: [DRM](/roadmap#drm). Keep DRM-protected channels where they are until it ships                                                                         |
+
+Your `on_play` logic moves almost directly, with one design change: FrameWorks fails closed. Run
+the webhook endpoint with the same care as the player itself. See
+[Playback Access Control](/builders/playback-access-control).
+
+### Multi-server cluster
+
+Flussonic's cluster page advises building new clusters on its Catena product rather than on FMS
+. If you are planning a new cluster, weigh that route as well. Existing FMS clusters translate
+as follows.
+
+| Flussonic                                                        | FrameWorks                                                                                                                                                   |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `cluster_key` shared by servers                                  | Enrollment tokens; each node joins a cluster through `frameworks edge deploy`                                                                                |
+| `source` restreamer pulling from an origin                       | Foghorn relays over DTSC on viewer demand. Up next: pre-emptive replication in [Stream Replication Orchestration](/roadmap#stream-replication-orchestration) |
+| `balancer` redirect by bitrate, clients, usage, or streams       | Foghorn scores edges by geography, load, and health, and redirects viewers                                                                                   |
+| Per-peer `countries` GeoIP routing                               | [Viewer placement policy](/builders/media-placement), plus geo-routed DNS for tenant domains                                                                 |
+| `cluster_ingest`: restarts a stream on another peer if one fails | `sourceLocation` limits where a source may run. More than one edge per region per cluster is planned; until then, test node loss on your topology            |
+| `capture_at` soft preference for a server                        | `sourceLocation` with `nodeIds`, which is a hard restriction                                                                                                 |
+| `config_external` configuration backend                          | A polling equivalent is not planned. Use GraphQL, or the GitOps manifest on a full self-host                                                                 |
+
+### API and events
+
+| Flussonic                                                   | FrameWorks                                                                                 |
+| ----------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| REST + JSON under `/streamer/api/v3/`, described by OpenAPI | GraphQL at `/graphql`, with TypeScript, Go, and Python [SDKs](/builders/sdks)              |
+| HTTP Basic through `view_auth` and `edit_auth`              | Developer token (Bearer)                                                                   |
+| `PUT /streamer/api/v3/streams/{name}` upsert                | `createStream` and `updateStream`. IDs are generated, so keep a name-to-ID map             |
+| `DELETE /streamer/api/v3/streams/{name}`                    | `deleteStream(id)`                                                                         |
+| `event_sink` to an HTTP handler, log file, or script        | Up to 10 HTTPS [webhook](/builders/webhooks) endpoints, or the `tenantEvents` subscription |
+| `sign_key` and `X-Signature`                                | Standard Webhooks signatures                                                               |
+| `resend_limit` buffered retry                               | Retries for about three days, with a 30-day delivery log and replay                        |
+| `source_opened`, `source_closed`                            | Closest by name: `stream.connected`, `stream.idle`. Confirm against your own event log     |
+
+### Transcoding and processing
+
+| Flussonic                                               | FrameWorks                                                                                                                                                                              |
+| ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `transcoder` directive per stream or template           | `liveVideoAbr`: `INHERIT` uses the tier policy, `OFF` removes video renditions. No per-stream ladder in the docs                                                                        |
+| NVENC through `hw=nvenc`, with `deviceid` GPU selection | Per-stream encoder or GPU selection is not planned. Local transcode slots are set with `max_transcodes`                                                                                 |
+| `hw=qsv`; Flussonic Coder hardware                      | Not planned. Transcoding runs through Livepeer Gateway or local processing. Up next: GPU-aware placement in the [Workload Cost Model](/roadmap#workload-cost-model)                     |
+| `deinterlace`                                           | Not planned. Test interlaced broadcast feeds first                                                                                                                                      |
+| Burned-in logo                                          | Up next: overlays in [Composition and SSAI](/roadmap#composition-and-ssai)                                                                                                              |
+| `mosaic://` server-side mosaic                          | Server-side compositing is in the pipeline, listed as Up next under [Composition and SSAI](/roadmap#composition-and-ssai). StreamCrafter composes multiple sources in the browser today |
+
+## What's up next, and what's not planned
+
+Statuses come from the [roadmap](/roadmap), whose badges show relative order, not release dates.
+Until an item ships, keep that workload on Flussonic, or keep Flussonic as the origin and use
+FrameWorks for reach.
+
+### Up next
+
+| Roadmap item                                                                                  | What it unblocks                                                                                                                      |
+| --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| [DRM](/roadmap#drm)                                                                           | Protected channels that need FairPlay, Widevine, or PlayReady                                                                         |
+| [Team Accounts](/roadmap#team-accounts-and-permissions)                                       | Shared operations, with roles and audit visibility                                                                                    |
+| [Composition and SSAI](/roadmap#composition-and-ssai)                                         | StreamCrafter cloud production: live switching, overlays, in-stream ads, and backup inputs that take over when a primary source drops |
+| [Built-In Password and Geo Rules](/roadmap#built-in-password-and-geo-rules)                   | Password and country rules on every plan, with no webhook endpoint to run                                                             |
+| [Scheduled Programming](/roadmap#scheduled-programming)                                       | Calendar-driven recordings, and linear channels built from VOD                                                                        |
+| [Device Discovery and Contribution Inputs](/roadmap#device-discovery-and-contribution-inputs) | Cameras, PTZ devices, NDI, USB, and HDMI sources becoming managed streams                                                             |
+| [Stream Replication Orchestration](/roadmap#stream-replication-orchestration)                 | Streams placed in a region ahead of demand                                                                                            |
+| [Live AI Processing](/roadmap#live-ai-processing)                                             | Detection and transcription on media edges, with pilot access by contact                                                              |
+| [Workload Cost Model](/roadmap#workload-cost-model)                                           | Transcode placement based on predicted CPU and GPU cost                                                                               |
+| [Placement Policy and Storage Tiering](/roadmap#placement-policy-and-storage-tiering)         | Data residency rules for where content may live                                                                                       |
+| [NAT-Aware Routing and Traversal](/roadmap#nat-aware-routing-and-traversal)                   | Self-hosted nodes behind NAT taking full part in the network                                                                          |
+| [Edge ISO and Cloud Images](/roadmap#edge-iso-and-cloud-images)                               | Bare-metal edge installs and on-demand cloud scaling                                                                                  |
+| [Dedicated Provider Capacity](/roadmap#dedicated-provider-capacity)                           | Isolated provider-operated nodes for one tenant                                                                                       |
+| [Public Cluster Marketplace](/roadmap#public-cluster-marketplace)                             | Vetted third-party capacity under published terms                                                                                     |
+| [Federation State Synchronization](/roadmap#federation-state-synchronization)                 | Clusters of independent parties joining and leaving without a central coordinator                                                     |
+| [Platform Trust and Operations Hardening](/roadmap#platform-trust-and-operations-hardening)   | Live trust rotation, and OS updates that drain safely                                                                                 |
+| [Operator Settlement and Attribution](/roadmap#operator-settlement-and-attribution)           | Payouts to the operators whose clusters carried the traffic                                                                           |
+| [Conferencing and Chat](/roadmap#conferencing-and-chat)                                       | Remote guests mixed into a stream, and viewer chat                                                                                    |
+| [Rooms and Interactivity](/roadmap#rooms-and-interactivity-parlor)                            | Engagement features synced to the stream timeline                                                                                     |
+| [Live Commerce](/roadmap#live-commerce-shopping-and-auctions)                                 | Shopping and auctions on live streams                                                                                                 |
+
+Flussonic documents SCTE-35 handling and server-side ad insertion. On FrameWorks, SCTE-35
+cue handling is in the media engine with platform controls still expanding, and server-side ad
+insertion arrives with Composition and SSAI.
+
+### Later
+
+| Roadmap item                                                                                      | What it unblocks                                          |
+| ------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
+| [Stream-Level Balances](/roadmap#stream-level-balances)                                           | Paywalled and pay-per-view streams                        |
+| [Managed DNS, Proxying, and Storage Services](/roadmap#managed-dns-proxying-and-storage-services) | Customer-facing DNS, CDN, and standalone storage products |
+| [More SDK Languages](/roadmap#more-sdk-languages)                                                 | Generated clients for PHP, Ruby, Elixir, Java, and C#     |
+| [Mobile Apps and Help Center](/roadmap#mobile-apps-and-help-center)                               | Native mobile apps and an integrated help center          |
+
+### Not planned
+
+These items are not on the roadmap. Where a workaround exists, it is listed.
+
+**IPTV and broadcast**
+
+- **IPTV middleware.** FrameWorks has no subscriber management, channel packages, or set-top portal,
+  and no integration with middleware such as Stalker, which Flussonic documents. A custom
+  middleware can use the GraphQL API, webhook policies, and JWT playback.
+- **EPG.** Flussonic can extract EPG from MPEG-TS and export XMLTV or JSON. FrameWorks does not
+  read, store, or serve guide data. Your application maps guide times to chapters.
+- **Multicast, UDP, and MPTS output.** FrameWorks does not output to a multicast group or a
+  modulator. Keep your existing output path, or run a separate gateway that takes SRT or HLS from
+  FrameWorks and emits multicast.
+- **Session limits.** There is no per-user concurrent session limit.
+- **DVB capture, MSS playback, nPVR, timelapse export, and delayed-channel streams.**
+- **Deinterlacing controls and per-stream hardware encoder selection.**
+
+**CCTV and surveillance**
+
+- **A VMS.** Flussonic Watcher is a video surveillance system. FrameWorks has no camera
+  management product, operator console, access-control integration, or mobile surveillance app.
+- **ONVIF configuration and motion events.** Flussonic documents these. FrameWorks takes an RTSP
+  URL. Device Discovery, above, covers finding cameras.
+- **Face and plate recognition.** Watcher lists these.
+
+**Streams and clusters**
+
+- **Always-on pull streams.** Pull streams are on-demand, so with no viewer nothing is opened or
+  recorded. To record around the clock, run a [relay that pushes continuously](#streams-and-templates).
+- **Templates and dynamic stream names.** Script stream creation from your export.
+- **Publish-time webhooks and a `config_external` equivalent.**
+- **Federating a self-hosted platform with the FrameWorks network.**
+
+## Path 1: Stay on your own hardware (hybrid)
+
+You run edge nodes on your servers: MistServer, Helmsman, and Caddy. FrameWorks operates Foghorn,
+Livepeer, Chandler, object storage, DNS and TLS, analytics, billing, and the control plane. See
+[Selfhosters](/hybrid/overview) for the ownership table.
+
+1. **Use a separate box first.** Edges need their own ports, including 80, 443, 1935, and 8889/udp.
+   Do not replace a working Flussonic server on day one.
+2. **Check reachability.** An edge needs a public IP or a reachable public DNS name for viewers,
+   plus a path to the FrameWorks control plane.
+   [NAT-aware routing](/roadmap#nat-aware-routing-and-traversal) is up next. An isolated network
+   points to [Path 2](#path-2-self-host-the-whole-stack).
+3. **Deploy the edge.**
+
+   ```bash
+   frameworks login
+   frameworks edge deploy --ssh ubuntu@edge-1.example.com --email ops@example.com
+   ```
+
+4. **Allow private sources where needed.** Multicast and RFC1918 sources need a cluster that opted
+   in, and a stream `sourceLocation` restricted to it:
+
+   ```json
+   {
+     "input": {
+       "name": "Channel 1",
+       "ingestMode": "PULL",
+       "pullSource": { "sourceUri": "tsudp://239.0.0.1:1234", "enabled": true },
+       "sourceLocation": {
+         "mode": "RESTRICTED",
+         "clusters": [{ "clusterId": "headend-edge", "nodeIds": ["headend-edge-1"] }]
+       }
+     }
+   }
+   ```
+
+5. **Add reach if you want it.** A paid tenant can route across its own nodes and platform clusters
+   under one hostname.
+6. **Plan for storage.** FrameWorks operates durable object storage on this path, so archives leave
+   your site. For footage that must stay on your network, use
+   [Path 2](#path-2-self-host-the-whole-stack).
+
+## Path 2: Self-host the whole stack
+
+FrameWorks is public domain (Unlicense), and full self-hosting is supported. The `frameworks` CLI
+deploys and upgrades the control plane, Foghorn, edges, Livepeer, Chandler, databases, analytics,
+and interfaces from a GitOps repository. You own all of the data, including recordings.
+
+This is a larger operational step than running a media server. You operate a platform, with
+databases, Kafka, ClickHouse, object storage, DNS, and TLS, and you validate capacity, backups, and
+upgrade runbooks before carrying production traffic. A self-hosted platform is independent, and it
+cannot federate with the FrameWorks network. Start with the
+[deployment overview](/operators/deployment).
+
+## Path 3: Move to managed FrameWorks
+
+Use this when your sources can reach the internet and you want to stop running media servers.
+Platform clusters reject private literal source addresses, so multicast and LAN cameras need a
+hybrid edge or an encoder that pushes out.
+
+## Step-by-step
+
+The same steps apply on all three paths.
+
+### 1. Inventory what you run
+
+Export streams from `/streamer/api/v3/streams` and keep a copy of `flussonic.conf`. For each
+stream, record its type, inputs, template, `dvr`, `transcoder`, `push`, and `on_play` settings.
+
+### 2. Sort streams into four groups
+
+- **Direct:** published streams and on-demand sources with public or edge-reachable URLs.
+- **Needs a relay:** static channels and cameras that must record with no viewers.
+- **Waits for the roadmap:** anything that needs an [up next](#up-next) item, such as DRM.
+- **Stays on Flussonic:** anything that needs a [not planned](#not-planned) item, such as multicast
+  output or middleware integration.
+
+### 3. Create streams
+
+Expand templates by hand, since each stream carries its own settings. Script it from your export,
+and store the mapping from Flussonic name to `id`, `streamKey`, and `playbackId`.
+
+```graphql
+mutation CreateChannel {
+  createStream(input: { name: "channel-1", record: true }) {
+    ... on Stream {
+      id
+      streamKey
+      playbackId
+    }
+  }
+}
+```
+
+### 4. Connect sources
+
+Repoint encoders, or set up pull sources and relays. Encoders on RTMPS move to RTMP, or to SRT or
+WHIP for an encrypted link.
+
+### 5. Rewrite authorization
+
+Port `on_play` to a [webhook policy](/builders/playback-access-control#webhook-callback-policies).
+Verify `X-Frameworks-Signature`, read `viewerToken`, and return 200 or 403. Test with
+`testPlaybackAccess` before enforcing it.
+
+### 6. Recreate recording and catch-up
+
+Set retention, choose a chapter mode, and map your catch-up URLs to `dvrChapters` lookups. Existing
+Flussonic archives do not transfer automatically. Exported MP4 files can be imported as VOD
+with `importVodAsset`, and larger library imports are concierge work; contact us before you start.
+
+### 7. Replace event handlers
+
+Create a webhook endpoint for the events you handle, then update signature checks and event names.
+
+### 8. Update players and URLs
+
+Replace viewer URLs in players, middleware, and embeds. Signed URLs need `?jwt=`.
+
+### 9. Run it in parallel
+
+Follow [Run it in parallel](/migrate/generic#run-it-in-parallel). Flussonic gives you two ways to do
+this without touching the encoder:
+
+- Add an RTMP `push` to the stream, pointed at a FrameWorks stream key. This keeps multistream
+  targets available.
+- Have FrameWorks pull Flussonic's HLS output as a pull-input stream. Remember that a pull
+  stream only runs with viewers and cannot start push targets.
+
+## Beta and tricky bits
+
+- **Hybrid production cutovers need operator validation.** Test DNS, TLS, firewall policy, capacity,
+  node enrollment, and upgrade runbooks before moving production traffic.
+- **Billing rates are still maturing.** Rates may adjust as the platform matures.
+- **Marketplace primitives ship; the vetted public program is
+  [up next](/roadmap#public-cluster-marketplace).**
+- **Two viewers arriving at once on an idle pull stream** can briefly open two upstream connections
+  before fanout takes over. Check this against sources with connection limits.
+
+## Get help
+
+You work directly with the video engineers who have built MistServer for more than 15 years. Send
+us your inventory from step 1 and we will tell you which streams fit and which should stay put.
+
+| Channel              | Best for                                      | Where                                                        |
+| -------------------- | --------------------------------------------- | ------------------------------------------------------------ |
+| **In-app ticketing** | Migration scoping, account-specific questions | Dashboard `/support`                                         |
+| **Skipper**          | API discovery, diagnostics, after-hours help  | Dashboard `/skipper`, `⌘J` in docs, MCP at `/mcp`            |
+| **Forum**            | Long-form Q&A                                 | [forum.frameworks.network](https://forum.frameworks.network) |
+| **Discord**          | Real-time discussion                          | [Join](%DISCORD_URL%)                                        |

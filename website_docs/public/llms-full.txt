@@ -25724,6 +25724,740 @@ Bunny is the better choice for:
 
 
 ---
+# Migrate from Castr
+https://logbook.frameworks.network/migrate/castr
+
+[Castr](https://castr.com) and FrameWorks overlap on the core of a live event: send one encoder feed in, restream it to social platforms, embed a player on your own site, and keep a recording. Most of that move happens in the dashboard.
+
+The products differ in scope. Castr offers a paywall, TV playout, and a cloud switcher alongside its streaming service. FrameWorks centers on the live media pipeline, and several of those features are not available today. [What's up next, and what's not planned](#whats-up-next-and-whats-not-planned) gives the status of each one, so read it before you set a date.
+
+This guide is written for agencies, event teams, and sites that embed a player, so it follows the dashboard. A short [API section](#if-you-use-the-castr-api) covers integrations.
+
+## TL;DR
+
+- **What stays:** RTMP, SRT, and WHIP push ingest · a server URL plus stream key in your encoder · RTSP, HLS, and SRT pull sources · multistreaming to social platforms and custom RTMP or SRT destinations · going live from a browser · recording, replay, and clips · a player you embed on your site · limiting which websites can embed it.
+- **What changes:** RTMPS ingest → SRT or WHIP · choosing a hosting region → FrameWorks picks the ingest node · iframe embed → `<fw-player>` · password and geo protection → a JWT or webhook policy today · connecting a YouTube account → pasting a stream key · temporary recordings you save by hand → recordings kept under a retention policy · REST → GraphQL.
+- **What you gain:** LL-HLS, DASH, and WHEP delivery · E-RTMP ingest for HEVC and AV1 · RIST pull · 24/7 DVR with chapter replay · signed playback with ES256 JWTs · signed webhooks with retries and replay · view-level QoE for the FrameWorks player · TypeScript, Go, and Python SDKs · hybrid edges and full self-hosting.
+- **What's up next:** Team Accounts · StreamCrafter cloud production with live switching, overlays and watermarks, in-stream ads, and backup inputs · built-in password and geo rules on every plan · guests and viewer chat · 24/7 playlist channels · live transcription · DRM.
+- **Later, on the roadmap:** paywall and pay-per-view.
+- **Not planned:** OTT apps · a hosted iframe player · Dynamic Player · account-connected destinations · multistreaming from pull sources · RTMP pull · RTMPS ingest. See [the full list](#whats-up-next-and-whats-not-planned).
+
+<Aside type="note" title="Up next means not available today">
+  Up-next items are on the roadmap, without dates. Check [what's up
+  next](#whats-up-next-and-whats-not-planned) against the features your events use today.
+</Aside>
+
+## Translation tables
+
+The Castr dashboard groups a stream's settings into tabs: Destinations, Analytics, Live To VOD, Paywall, Alerts, Advertising, Settings, and Backup, with Source Setup, Playback, and Monitoring in a side panel. On FrameWorks, open a stream under **Content → Streams**. Its tabs are **Overview**, **Publishing** (**Source** for pull streams), **Artefacts**, **Multistream**, **Playback**, and **Playback Auth**.
+
+### Getting video in
+
+| Castr                                                         | FrameWorks                                                                                                                                                                                                                                                                                                                                               |
+| ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Livestream → Create New, name, Hosting Region                 | **Content → Streams → Create Stream**, then name. Regions aren't chosen by hand: the [ingest resolver](/builders/ingest-advanced) scores geography, node load, and stream configuration                                                                                                                                                                  |
+| Source Setup → Publish → RTMP, server URL and key             | **Publishing** tab: server URL and **Stream Key**. RTMP is plain RTMP. E-RTMP uses the same endpoint                                                                                                                                                                                                                                                     |
+| Source Setup → Publish → RTMPS                                | No RTMPS ingest. Use SRT or WHIP when the link must be encrypted                                                                                                                                                                                                                                                                                         |
+| Source Setup → Publish → SRT                                  | SRT, with a different URL format. See [step 3](#3-repoint-your-encoder)                                                                                                                                                                                                                                                                                  |
+| Source Setup → Publish → WHIP                                 | WHIP, shown on the stream's details page                                                                                                                                                                                                                                                                                                                 |
+| Source Setup → Webcam                                         | **Go Live** in the sidebar ([StreamCrafter](/builders/go-live-browser))                                                                                                                                                                                                                                                                                  |
+| Source Setup → Pull: HTTP, TS over HTTP, HLS, RTSP, RTMP, SRT | Choose **Pull** at creation: RTSP, SRT, RIST, HLS, DTSC, TS, MKV/WebM, TS over UDP. **RTMP pull is not supported.** For live TS over HTTP, use HLS or `tsudp://`. Castr's `hls://`, `hlss://`, `rtsp2://`, and `tshttp://` prefixes aren't FrameWorks schemes: write `https://.../*.m3u8` or `rtsp://`. See [Pull-input streams](/builders/pull-streams) |
+| Source Setup → Linked (another Castr stream as input)         | Not planned                                                                                                                                                                                                                                                                                                                                              |
+| `-1` constant ingest addresses per region                     | Use the ingest URL shown in the dashboard. Paid tenants also get `edge-ingest.{tenant}.cdn.frameworks.network`                                                                                                                                                                                                                                           |
+| Backup tab, failover ingest, VOD backup                       | Not available today. Backup inputs that take over when a primary source drops are [up next](/roadmap#composition-and-ssai)                                                                                                                                                                                                                               |
+
+### Destinations
+
+| Castr                                                               | FrameWorks                                                                                                                                       |
+| ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Destinations tab                                                    | **Multistream** tab                                                                                                                              |
+| YouTube connected through your Google account, or by server and key | Server and key only: pick the YouTube preset and paste the stream key                                                                            |
+| LinkedIn, TikTok LIVE, Rumble, Trovo guides and others              | Presets for Twitch, YouTube, Facebook, Kick, and X. For anything else, choose **Custom** and enter a full `rtmp://`, `rtmps://`, or `srt://` URI |
+| Multistream an RTSP camera                                          | Not planned. Pull streams don't start push targets, so have a local encoder push the camera feed instead                                         |
+
+Each enabled destination uses one slot from your existing viewer-capacity limit, and FrameWorks has no separate restream quota. The source video goes out unchanged when it fits the destination.
+
+### Playback and embedding
+
+| Castr                                                                                       | FrameWorks                                                                                                     |
+| ------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `https://player.castr.com/<id>` with URL parameters such as `autoplay`, `muted`, `controls` | `<fw-player content-type="live" content-id="..." autoplay muted>`. See [Web Components](/builders/playback-wc) |
+| Iframe URL, Direct Player link, HLS URL, and MP4 URL on a video                             | `<fw-player>` for embeds. The **Playback** tab lists protocol URLs. A hosted iframe player is not planned      |
+| Dynamic Player: change content without changing the embed code                              | Not planned. Each stream or asset has its own `playbackId`                                                     |
+| Playlist of live and on-demand items                                                        | Not planned                                                                                                    |
+| Low Latency, under 15 seconds                                                               | LL-HLS, chosen by the player                                                                                   |
+| Ultra Low Latency, under 2 seconds; Sub-Second streams                                      | WebRTC (WHEP), chosen by the player. No separate stream type                                                   |
+| `iframeMsg` messages to the parent page                                                     | `fw-state-change` events and `player.controller` on the element                                                |
+
+### Recording, clips, and video hosting
+
+| Castr                                                                  | FrameWorks                                                                                                                                                                                |
+| ---------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Live to VOD tab: turn on Cloud Recording before you go live            | Turn on recording on the stream page. A recorded stream can also be rewound while live                                                                                                    |
+| Temporary file kept three days, then saved as VOD or downloaded as MP4 | Saved automatically as chapters under **Artefacts**. Recordings and clips default to 30 days and VOD to keep forever. Set your own period in [retention](/builders/storage-and-retention) |
+| Live Clipping: select a range, download the clip                       | Create a stored clip in the **Clips** section of the stream page, or add a time range to a playback URL to download it. See [Clips](/builders/clips)                                      |
+| Content Library: upload from your computer or import from Dropbox      | **Library**: upload a file, or **Import from URL** for any public http(s) URL                                                                                                             |
+| Generate captions and interactive transcript for VOD                   | Not available today. Transcription is [up next](/roadmap#live-ai-processing), and caption upload is planned alongside it                                                                  |
+
+### Viewer access
+
+| Castr                                      | FrameWorks                                                                                                                                                                                                                                             |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Password protection                        | [Up next](/roadmap#built-in-password-and-geo-rules) as a built-in rule on every plan. Today, check the password in your own webhook endpoint or site login, then allow the viewer through a [webhook or JWT policy](/builders/playback-access-control) |
+| Domain whitelist in the Security tab       | **Allowed origins** on the **Playback Auth** tab, up to 50 entries. They apply to JWT and webhook policies, not to public content                                                                                                                      |
+| Whitelist specific pages only              | Origins have no path, so restrictions apply per site. Per-page rules are not planned                                                                                                                                                                   |
+| Geo-blocking                               | [Up next](/roadmap#built-in-password-and-geo-rules) as a built-in rule on every plan. Today, implement it in your webhook endpoint                                                                                                                     |
+| DRM add-on (Widevine, FairPlay, PlayReady) | [Up next](/roadmap#drm), not available today                                                                                                                                                                                                           |
+
+### Monetization, playout, and production
+
+None of these are available on FrameWorks today. Each row gives the roadmap status and what you can do now.
+
+| Castr                                                                                                       | FrameWorks status                                                                                                                                                             |
+| ----------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Event paywall with checkout through your own Stripe account                                                 | Later, through [Stream-Level Balances](/roadmap#stream-level-balances). Today, sell access yourself and enforce it with a JWT or webhook policy, which takes development work |
+| Pre-roll ads from an uploaded video or VAST tag                                                             | [Up next](/roadmap#composition-and-ssai), through server-side ad insertion                                                                                                    |
+| OTT service with subscriptions (SVOD)                                                                       | Not planned                                                                                                                                                                   |
+| TV playout: a timetable of files that runs as one channel, with EPG                                         | [Up next](/roadmap#scheduled-programming) as linear channels built from VOD assets. An EPG is not planned                                                                     |
+| Pre-recorded live streams with scheduling                                                                   | [Up next](/roadmap#scheduled-programming). Today, push a file with FFmpeg from a machine you control                                                                          |
+| Cloud Production: a browser switcher combining live streams, hosted videos, images, and web URLs into Flows | [Up next](/roadmap#composition-and-ssai) as StreamCrafter cloud production. Today, StreamCrafter mixes camera and screen sources in your own browser                          |
+| Live captions and translation                                                                               | Live transcription is [up next](/roadmap#live-ai-processing). Caption translation is not planned                                                                              |
+
+### Alerts and webhooks
+
+| Castr                                                          | FrameWorks                                                                                                                                                                  |
+| -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Alerts tab → Webhook, one URL per stream, stream start and end | **Developer → Webhooks**, up to 10 endpoints per account, for stream, clip, recording, upload, multistream, billing, and account events. See [Webhooks](/builders/webhooks) |
+| Stream start                                                   | `stream.live`                                                                                                                                                               |
+| Stream end                                                     | `stream.idle`                                                                                                                                                               |
+
+## Step-by-step
+
+### 1. List what you use on Castr
+
+Open a real event's stream on Castr and go through its tabs. Note anything set under Paywall, Advertising, Backup, or Security, plus any destinations, playout channels, Cloud Production Flows, or captions.
+
+Then sort each item into one of three groups: it moves, it changes shape, or it isn't available yet. The tables above cover each one, and you can move streams one at a time.
+
+### 2. Create your account and first stream
+
+Sign up at [%APP_URL%](%APP_URL%). The Free tier covers 3 concurrent live streams and 200 concurrent viewers, which is enough to rehearse.
+
+1. Open **Content → Streams** and click **Create Stream**.
+2. Give it a name.
+3. Turn on recording on the stream page if you want one.
+
+For an IP camera or other source you can't push from, choose **Pull** when you create the stream and enter the source URI. Pull streams are on demand: FrameWorks connects to the source when a viewer asks for playback.
+
+### 3. Repoint your encoder
+
+Your encoder settings keep the same shape. Only the addresses change. Use the values on the stream's **Publishing** tab.
+
+**RTMP.** A Castr address such as `rtmp://cg.castr.io/static` is replaced in full. As on Castr, the encoder needs only a server URL and stream key. In OBS, go to **Settings → Stream**, set **Service** to **Custom**, and paste the server URL and stream key.
+
+**SRT.** Castr's format, `srt://cg.castr.io:9998?pkt_size=1316&streamid=#!::r=012345678,m=publish`, does not carry over. Replace the whole string:
+
+```
+srt://%INGEST_HOSTNAME%:%SRT_PORT%?streamid={stream-key}&latency=200&mode=caller
+```
+
+**RTMPS.** FrameWorks has no RTMPS listener. If your link has to be encrypted, move that encoder to SRT or WHIP. If it doesn't, plain RTMP works.
+
+**WHIP.** Copy the URL from the stream's details page.
+
+**Webcam.** Open **Go Live** in the sidebar and follow [Go Live from Your Browser](/builders/go-live-browser). StreamCrafter also handles screen share and layouts such as picture-in-picture, split, and grid. For a long or high-stakes broadcast, a dedicated encoder is still the steadier choice.
+
+[Encoder Setup](/builders/encoder-setup) lists recommended bitrate, keyframe, and audio values.
+
+### 4. Recreate your destinations
+
+Open the stream's **Multistream** tab and click **Add Target**. Destinations don't carry over, so you'll need each one's stream key.
+
+- **Twitch, YouTube, Facebook, Kick, X:** pick the preset, paste the stream key, and give it a name.
+- **LinkedIn, TikTok, Rumble, and others:** choose **Custom** and enter the complete URI from that platform.
+
+Enabled targets start and stop with your broadcast, and each shows a live status. During testing, keep them on Castr. See step 8.
+
+### 5. Replace your embed
+
+Swap the Castr iframe for the Web Component. It needs one script tag and no build step:
+
+```diff
+- <iframe src="https://player.castr.com/<id>" allowfullscreen></iframe>
++ <script src="https://cdn.jsdelivr.net/npm/@livepeer-frameworks/player-wc/dist/fw-player.iife.js"></script>
++ <fw-player content-type="live" content-id="YOUR_PLAYBACK_ID" autoplay muted></fw-player>
+```
+
+The **Playback** tab's embed box shows the React version. Use it if your site is built with React. Svelte and vanilla packages also ship; see [Player (Playback)](/builders/playback).
+
+Castr URL parameters don't carry over. Autoplay and muting become attributes, and theming uses [CSS custom properties](/builders/playback-theming).
+
+### 6. Recreate viewer access
+
+If your streams are public, skip this step.
+
+Open the stream's **Playback Auth** tab and pick a policy.
+
+- **Limit which sites can embed.** Add your sites under allowed origins. Public content can't use this list, so set a webhook or JWT policy first. To limit by site and nothing else, point a webhook policy at an endpoint that returns 200.
+- **Password or geo rules.** Use a webhook policy today. Built-in rules that need no endpoint are [up next](/roadmap#built-in-password-and-geo-rules). FrameWorks calls your URL when a viewer connects, and your endpoint returns 2xx to allow or anything else to deny. Webhook checks aren't billed.
+- **Logged-in viewers.** Use a JWT policy. Your backend signs tokens with a signing key from **Developer → Credentials**.
+
+Allowed origins also block viewers that aren't browsers, unless the list contains `*`. They limit embedding, and you should pair them with real access control for anything sensitive. [Playback Access Control](/builders/playback-access-control) has code samples and a tester.
+
+### 7. Move your video library
+
+Save anything you want to keep from Castr's temporary recordings first, since those last three days.
+
+For each video, download it from the Content Library and upload it to **Library**. If your files also sit on your own storage, **Library → Import from URL** can fetch them, one video at a time, from a public URL on a server that supports range requests.
+
+FrameWorks content sits at account level, without Castr's library folders. Playback IDs are new, so embeds need updating. For a large library, [open an in-app ticket](%APP_URL%/support) and we'll scope it with you.
+
+### 8. Run it in parallel
+
+Keep Castr live while you test. Add FrameWorks as a second output on your encoder, keep destinations on Castr so YouTube doesn't receive two feeds, and move viewers in stages. The full procedure is in [Run it in parallel](/migrate/generic#run-it-in-parallel).
+
+Do this on a real event, not only a test pattern. Turn the Castr output off last.
+
+### 9. Cut over
+
+1. Create webhook endpoints under **Developer → Webhooks**. They receive events from the moment they're created, so do this before traffic moves.
+2. Enable your destinations on the FrameWorks stream and disable them on Castr.
+3. Point your encoders at FrameWorks only.
+4. Update the remaining embeds.
+
+## If you use the Castr API
+
+Castr's API is REST with HTTP Basic auth using a Token ID and Secret Key. FrameWorks is GraphQL with Bearer developer tokens, which you create under **Developer → Credentials**. The [generic guide](/migrate/generic#rest--graphql) covers the client side.
+
+| Castr                                                           | FrameWorks                                                                                                 |
+| --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `POST /v2/live-streams`                                         | `createStream(input)`                                                                                      |
+| `GET` / `PATCH` / `DELETE /v2/live-streams/{stream_id}`         | `stream(id)` / `updateStream(id, input)` / `deleteStream(id)`                                              |
+| `POST /v2/live-streams/{stream_id}/platforms`                   | `createPushTarget(streamId, input)`                                                                        |
+| `PATCH` / `DELETE .../platforms/{platform_id}`                  | `updatePushTarget(id, input)` / `deletePushTarget(id)`                                                     |
+| `POST /v2/videos/{folder_id}/uploads`                           | `createVodUpload(input)`, then `completeVodUpload`                                                         |
+| `POST /v2/webhook/endpoints`                                    | `createWebhookEndpoint`                                                                                    |
+| `GET /v2/live-streams/{stream_id}/epg`                          | Not planned                                                                                                |
+| `settings.cloud_recording`                                      | `record`                                                                                                   |
+| `settings.abr`                                                  | `liveVideoAbr` (`INHERIT` or `OFF`)                                                                        |
+| `settings.domain_whitelist`                                     | `allowedOrigins` on the playback policy                                                                    |
+| `settings.embed_password`, `country_block`, `country_whitelist` | Your webhook policy endpoint today. Built-in rules are [up next](/roadmap#built-in-password-and-geo-rules) |
+| `settings.low_latency_playback`                                 | Chosen by the player                                                                                       |
+| `settings.chat_enabled`                                         | Viewer chat is [up next](/roadmap#conferencing-and-chat)                                                   |
+
+Castr allows one API token at a time. FrameWorks has scoped [developer tokens](/builders/api-reference#token-scopes). SDKs ship for [TypeScript, Go, and Python](/builders/sdks).
+
+## What you gain on FrameWorks
+
+- **More delivery protocols.** LL-HLS, DASH, and WebRTC (WHEP) alongside HLS and MP4, with one signed URL model across them.
+- **More contribution options.** E-RTMP for HEVC and AV1 over RTMP, and RIST and TS-over-UDP pull sources.
+- **Recordings that keep themselves.** Recording stays on for a whole session, with live rewind and chapter replay. A 24/7 stream keeps one continuous archive with no forced restart. You set how long it's kept, per account, stream, or asset.
+- **Stored clips.** Clips from live streams, DVR, and chapters become playable assets, or you can cut a range on the fly as a download.
+- **A broader event catalog.** Signed webhooks using Standard Webhooks, retried for about three days, with a 30-day delivery log and replay.
+- **Viewer QoE.** Rebuffering, frame drops, startup time, and VOD retention for the FrameWorks player, in the dashboard.
+- **A browser studio in the dashboard.** Camera, screen share, and layouts with no install, plus [packages](/builders/ingest) to put the same studio in your own app.
+- **Run it your way.** Use managed FrameWorks, attach [your own edge nodes](/hybrid/overview), or self-host the whole stack.
+
+## Where Castr remains the better fit
+
+- **Selling tickets without a developer.** Castr's paywall takes card payments on a branded player and pays into your own Stripe account.
+- **OTT in one account.** An OTT service with subscriptions.
+- **Caption translation.** Captions translated into other languages.
+
+Castr also has features today that are up next on FrameWorks, such as Cloud Production, TV playout, and team members. See the next section.
+
+## What's up next, and what's not planned
+
+The statuses below come from the [roadmap](/roadmap), which shows relative order, not dates. None of these items are available on FrameWorks today.
+
+### Up next
+
+- **[Team Accounts](/roadmap#team-accounts-and-permissions).** Lets several people share one account with roles, which agencies and event crews need.
+- **[Composition and SSAI](/roadmap#composition-and-ssai).** Brings StreamCrafter cloud production, including live switching, overlays and watermarks, in-stream ads, and backup inputs that take over when a primary source drops. Today, StreamCrafter mixes local camera and screen sources in your browser.
+- **[Built-In Password and Geo Rules](/roadmap#built-in-password-and-geo-rules).** Turns password and country rules into switches on a stream, on every plan, so you no longer run a webhook endpoint for them.
+- **[Conferencing and Chat](/roadmap#conferencing-and-chat).** Adds remote guests and viewer chat, after Team Accounts and Composition.
+- **[Scheduled Programming](/roadmap#scheduled-programming).** Enables 24/7 playlist channels built from your VOD assets. A 24/7 live feed from your own encoder works today.
+- **[Live AI Processing](/roadmap#live-ai-processing).** Enables live transcription on the media edge. Caption upload is planned alongside it.
+- **[DRM](/roadmap#drm).** Allows FairPlay, Widevine, and PlayReady protection for premium content.
+
+### Later, on the roadmap
+
+- **Paywall and pay-per-view.** [Stream-Level Balances](/roadmap#stream-level-balances) enable paywalled and pay-per-view streams. Today, run your own checkout and enforce access with a JWT or webhook policy.
+
+### Not planned
+
+These are not on the roadmap.
+
+- **OTT apps and subscriptions.** There is no OTT service.
+- **Hosted iframe player.** `<fw-player>` is the way to embed.
+- **Dynamic Player and playlists.** Each stream or asset keeps its own `playbackId`.
+- **Account-connected destinations.** Destinations use stream keys or full URIs, not an account login.
+- **Multistreaming from pull sources.** Pull streams don't start push targets. An IP camera that must reach YouTube needs a local encoder that pushes.
+- **RTMP pull.** Bridge it through FFmpeg or `srt-live-transmit` to SRT, RIST, RTSP, or HLS.
+- **RTMPS ingest.** Use SRT or WHIP when the link must be encrypted.
+- **Linked streams and per-page embed rules.** Allowed origins work per site.
+- **EPG.** There is no program guide data.
+- **Caption translation and Dropbox import.** Upload files directly instead of importing from Dropbox.
+
+## Beta and tricky bits
+
+- **Billing works differently.** Paid tiers meter delivered minutes, with transcoding included. See [Billing](/builders/billing) and compare using your own past usage. Rates may adjust as we scale, but you keep the allowances you signed up for.
+- **Prepaid accounts stop at zero.** At €0 new streams are blocked. Top up before an event.
+- **Stream keys and playback IDs don't transfer.** Every encoder and embed needs updating.
+- **Allowed origins block non-browser players.** Test VLC, set-top, and app viewers before you enable them.
+- **Keep the browser tab open.** With StreamCrafter, closing the tab ends the broadcast, and quality can't change while live. Chromium-based browsers are the safest choice.
+- **Pull streams start on demand.** The first viewer wakes the source, and nothing is fetched while no one is watching.
+- **Self-hosted and hybrid cutovers need operator validation.** Test DNS, TLS, firewalls, capacity, and upgrade runbooks before moving production traffic.
+- **No history moves over.** Analytics and past webhook events stay on Castr.
+
+## Get help
+
+You work directly with the video engineers who have built MistServer for more than 15 years. That help covers the whole pipeline, including encoders and contribution before FrameWorks, and players and delivery after it.
+
+| Channel                     | Best for                                                                                    | Where                                                        |
+| --------------------------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| **Skipper** (AI consultant) | Quick troubleshooting, API discovery, diagnostics, after-hours, non-human callers           | Dashboard `/skipper` · `⌘J` in docs · MCP at `/mcp`          |
+| **In-app ticketing**        | Account-specific issues, billing, anything tied to your tenant data, library-migration help | Dashboard `/support`                                         |
+| **Forum**                   | Long-form Q&A, recipes, searchable community knowledge                                      | [forum.frameworks.network](https://forum.frameworks.network) |
+| **Discord**                 | Real-time chat, casual questions                                                            | [Join](%DISCORD_URL%)                                        |
+| **GitHub**                  | Bugs, feature requests, deeper technical threads                                            | [Livepeer-FrameWorks/monorepo](%GITHUB_URL%)                 |
+
+
+---
+# Migrate from Flussonic Media Server
+https://logbook.frameworks.network/migrate/flussonic
+
+Flussonic Media Server (FMS) is a media server you install and run yourself. Its documentation
+covers ingest, transcoding, DVR, restreaming, and an IPTV/OTT service chain from headend to
+restreamer. FrameWorks is a live video platform whose media edges run MistServer, with GraphQL,
+routing, analytics, billing, and playback access control above them. It is built by the MistServer
+team.
+
+The two overlap on live ingest, HTTP delivery, DVR, and multi-server routing. They differ most on
+broadcast-network work. Event streaming is the closest fit: encoders repoint to RTMP, SRT, or WHIP,
+and DVR, clips, multistreaming, playback policies, analytics, and StreamCrafter work as described
+in the builder guides. If you run IPTV or CCTV, read
+[What's up next, and what's not planned](#whats-up-next-and-whats-not-planned) first, because some
+of those workloads should stay where they are.
+
+## Pick the right path
+
+| Your situation                                                                                                     | Best fit                                                          | Where to start                                                        |
+| ------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------- | --------------------------------------------------------------------- |
+| You need something that is up next, such as DRM, backup inputs, or built-in geo rules                              | Keep that workload on Flussonic until it ships, and move the rest | [Up next](#up-next)                                                   |
+| You depend on multicast or MPTS output, IPTV middleware, EPG extraction, session limits, or surveillance analytics | Keep that workload on Flussonic                                   | [Not planned](#not-planned)                                           |
+| You own servers and network position, and want routing, analytics, and a managed control plane on top              | Hybrid: FrameWorks edges on your hardware                         | [Stay on your own hardware](#path-1-stay-on-your-own-hardware-hybrid) |
+| You need the control plane, storage, and media inside your own network or jurisdiction                             | Full self-host                                                    | [Self-host the whole stack](#path-2-self-host-the-whole-stack)        |
+| You want to stop running media servers, and your sources are public or can push to the internet                    | Managed FrameWorks                                                | [Move to managed FrameWorks](#path-3-move-to-managed-frameworks)      |
+| You want more delivery reach, but the headend must stay as it is                                                   | Keep Flussonic as origin, add FrameWorks                          | [Run it in parallel](#9-run-it-in-parallel)                           |
+
+## TL;DR
+
+- **What stays:** RTMP, SRT, and WHIP ingest; RTSP, SRT, and HLS sources; multicast TS sources on
+  your own edges; HLS, DASH, LL-HLS, and WHEP delivery; DVR with catch-up-style replay; a webhook that allows or denies viewers.
+- **What changes:** `flussonic.conf` and `/streamer/api/v3/` become GraphQL. Stream names become
+  generated `streamKey` and `playbackId` values. `on_play` becomes a playback policy. `event_sink`
+  becomes signed webhooks. Disk-backed archives become S3-backed recordings split into chapters.
+  `source` and `peer` configuration becomes Foghorn routing.
+- **What you gain:** one control plane across your own and platform clusters, geo-balanced viewer
+  routing, first-party player QoE analytics, ES256 signed playback, sprite-sheet seek previews, and
+  API, dashboard, and MCP parity.
+- **What's up next:** DRM, StreamCrafter cloud production with backup inputs, built-in password and
+  geo rules, scheduled recordings, device discovery, pre-emptive stream replication, and team
+  accounts.
+- **What's not planned:** templates and dynamic stream names, always-on pull sources, multicast, UDP,
+  and MPTS output, IPTV middleware, EPG, session limits, and per-stream hardware encoder selection.
+
+## Translation tables
+
+### Streams and templates
+
+| Flussonic                                                    | FrameWorks                                                                                                                                                                                                                                    |
+| ------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `stream` block in `/etc/flussonic/flussonic.conf`            | `createStream(input)`, the dashboard, or the MCP `create_stream` tool                                                                                                                                                                         |
+| `static`: starts with the server, monitored and retried      | A push stream from an always-running encoder. Pull streams do not run this way; see the caution below                                                                                                                                         |
+| `ondemand`: runs only while viewers request it               | Pull stream. A viewer request opens the source, and it closes after a grace period when the last viewer leaves                                                                                                                                |
+| `input publish://`                                           | Push stream with a stream key                                                                                                                                                                                                                 |
+| `template` shared by many streams                            | Not planned. Settings are per stream, with tenant defaults for retention and ingest rules. Script `createStream`, or declare `pull_streams` in the [bootstrap overlay](/operators/cluster-manifest#stream-source-location) when you self-host |
+| `prefix` for dynamically named publishing                    | Not planned. Each stream exists before the encoder connects                                                                                                                                                                                   |
+| Several `input` lines with automatic failover and `priority` | One `sourceUri` per pull stream today. Up next: [backup inputs](/roadmap#composition-and-ssai) that take over when a primary source drops                                                                                                     |
+| `backup` file when the source is unavailable                 | FrameWorks does not synthesize fallback media today. Up next: [backup inputs](/roadmap#composition-and-ssai)                                                                                                                                  |
+| `timeshift://stream/seconds` as a delayed channel            | Not planned. Live viewers seek within the DVR window instead                                                                                                                                                                                  |
+| `thumbnails`                                                 | Generated automatically; see [Thumbnails and Previews](/builders/thumbnails-and-previews)                                                                                                                                                     |
+
+<Aside type="caution" title="Static channels and pull streams">
+  Pull streams are on-demand. With no viewer, FrameWorks does not open the source, so nothing is
+  recorded. A channel or camera that must record around the clock needs a process pushing to
+  FrameWorks continuously. A small relay on your network can do that:
+
+```bash
+ffmpeg -i "udp://239.0.0.1:1234" -c copy \
+  -f mpegts "srt://%INGEST_HOSTNAME%:%SRT_PORT%?streamid={stream-key}&latency=200&mode=caller"
+```
+
+On a full self-host, operator-declared managed streams run regardless of viewers, with file,
+playlist, or exec sources.
+
+</Aside>
+
+### Ingest
+
+| Flussonic                                       | FrameWorks                                                                                                        |
+| ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `input udp://239.0.0.1:1234` multicast          | Pull source `tsudp://239.0.0.1:1234`, on a self-hosted edge cluster with `allow_private_pull_sources: true`       |
+| `udp://eth2@239.0.0.1:1234` interface selection | Not documented. Test on multi-homed hosts before relying on it                                                    |
+| `rtsp://` camera source                         | Pull source `rtsp://`, with basic auth in the URI. `rtsps://` is not supported yet                                |
+| `hls://` source                                 | Pull source `https://.../*.m3u8`                                                                                  |
+| `tshttp://` source                              | `https://.../*.ts` covers single-file TS only. For live TS, use `tsudp://` or HLS                                 |
+| SRT publish with `streamid`                     | SRT push; `streamid` carries the stream key. See [Encoder Setup](/builders/encoder-setup)                         |
+| RTMP publish                                    | RTMP or E-RTMP push on port 1935. There is no RTMPS ingest; use SRT or WHIP when the link must be encrypted       |
+| WebRTC publish over WHIP                        | WHIP push, from an encoder or from StreamCrafter                                                                  |
+| RTSP or HTTP MPEG-TS publish                    | RTSP only on a hybrid edge with that port exposed. HTTP MPEG-TS publish is not documented. Move encoders to SRT   |
+| Satellite receivers and DVB-S cards             | DVB capture is not planned. Bring the feed in from your receiver as `tsudp://`, RTSP, or SRT                      |
+| NDI ingest                                      | Up next, as part of [Device Discovery and Contribution Inputs](/roadmap#device-discovery-and-contribution-inputs) |
+
+See [Pull-input Streams](/builders/pull-streams) for source location rules and private-network
+sources.
+
+### Playback and output
+
+| Flussonic                            | FrameWorks                                                                              |
+| ------------------------------------ | --------------------------------------------------------------------------------------- |
+| `/STREAMNAME/index.m3u8`             | `/play/{playbackId}/hls/index.m3u8`, or `/play/{playbackId}/cmaf/index.m3u8` for LL-HLS |
+| `/STREAMNAME/index.mpd`              | `/play/{playbackId}/cmaf/index.mpd`                                                     |
+| WHEP                                 | `/play/{playbackId}/whep`                                                               |
+| HTTP MPEG-TS at `/STREAMNAME/mpegts` | `/play/{playbackId}.ts`                                                                 |
+| RTMP, RTSP, and SRT playback         | Direct edge protocols when the edge exposes them; not the managed default               |
+| MSS at `.isml/manifest`              | Not planned                                                                             |
+| `embed.html`                         | `@livepeer-frameworks/player-*` for React, Svelte, Web Components, and vanilla JS       |
+
+Every viewer URL changes. Set-top apps, middleware channel lists, and player embeds all need
+new URLs, because a `playbackId` is generated and is not your Flussonic stream name.
+
+### Push to other destinations
+
+| Flussonic                             | FrameWorks                                                              |
+| ------------------------------------- | ----------------------------------------------------------------------- |
+| `push rtmp://...`                     | `createPushTarget(streamId, input)` with an `rtmp://` or `rtmps://` URI |
+| SRT push                              | `createPushTarget` with an `srt://` URI                                 |
+| `push udp://239.0.0.1:1234` multicast | Not planned                                                             |
+| HTTP MPEG-TS, HLS, or M4S push        | Not planned                                                             |
+| MPTS for a modulator                  | Not planned                                                             |
+
+Push targets accept `rtmp://`, `rtmps://`, and `srt://` URIs only. They start only for streams with
+a push ingest, so a pull stream cannot feed a push target. See
+[Multistreaming](/builders/multistreaming).
+
+### DVR
+
+| Flussonic                                           | FrameWorks                                                                                                       |
+| --------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `dvr /storage 1d`, set per stream or in a template  | `record: true` or `startDVR(streamId)`, with [retention](/builders/storage-and-retention) set by tenant or asset |
+| Disk limit such as `dvr /storage 90% 5d`            | No per-stream disk limit. Retention sets lifetime                                                                |
+| `schedule 3-6,5-8,23-5;` recording schedule         | Up next: scheduled recordings in [Scheduled Programming](/roadmap#scheduled-programming)                         |
+| Local disks or S3 cloud storage                     | S3 is the authoritative tier; edge disk is a cache. See [Media Storage](/operators/media-storage)                |
+| Catch-up URL `index-START-DURATION.m3u8`            | List chapters for a UTC range with `dvrChapters`, then play each chapter's `playbackId`                          |
+| Rewind with `timeshift_abs` or `timeshift_rel` URLs | Player seeking within the live rewind window through `dvrPlaybackId`                                             |
+| Export to MP4                                       | `createClip(input)`, or `/play/{id}.mp4?startunix=...&stopunix=...&dl=1`                                         |
+| Timelapse export, nPVR                              | Not planned                                                                                                      |
+| Timezone-delayed viewing                            | Not planned as a channel; request a past range from your application                                             |
+
+The DVR model differs in one way that matters for catch-up TV. FrameWorks has two surfaces: a
+bounded live rewind window, with a platform ceiling of 72 hours, and finalized chapters for
+everything older. Chapters are at least one hour long when clock-aligned, and they use UTC. A
+programme that crosses a chapter boundary spans two playback IDs, so your application has to map
+EPG times to chapters. See [DVR Chapters](/builders/dvr-chapters).
+
+### Authorization
+
+| Flussonic                                                                | FrameWorks                                                                                                                                                      |
+| ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `on_play` HTTP backend; 200 allows, 403 forbids                          | `setPlaybackPolicy` with `type: WEBHOOK`; any 2xx allows, anything else denies                                                                                  |
+| Backend answers with `X-UserId`, session lifetime, and limits            | Status code only. The body gives you `sessionId`, `viewerIp`, `viewerToken`, and optional `context`                                                             |
+| Keeps the previous status if the backend fails, and rechecks every 3 min | Decides once per viewer session (about 10 minutes by default). A timeout or 5xx denies                                                                          |
+| `on_play` backend as an external system or a custom script               | Webhook URLs must be public HTTPS endpoints; private and loopback addresses are refused                                                                         |
+| `securetoken` shared-secret hash                                         | `type: JWT` with customer-held ES256 keys, sent as `?jwt=`                                                                                                      |
+| `X-Max-Sessions` per-user limit                                          | Not planned                                                                                                                                                     |
+| `allowed_countries`                                                      | Implement in your webhook using `viewerIp` today. Up next: [Built-In Password and Geo Rules](/roadmap#built-in-password-and-geo-rules), with no endpoint to run |
+| `domains` domain lock                                                    | Allowed origins on a JWT or webhook policy                                                                                                                      |
+| `on_publish` backend and publish `password`                              | Stream keys with rotation. A publish-time webhook is not planned                                                                                                |
+| DRM: Widevine, PlayReady, and named vendors                              | Up next: [DRM](/roadmap#drm). Keep DRM-protected channels where they are until it ships                                                                         |
+
+Your `on_play` logic moves almost directly, with one design change: FrameWorks fails closed. Run
+the webhook endpoint with the same care as the player itself. See
+[Playback Access Control](/builders/playback-access-control).
+
+### Multi-server cluster
+
+Flussonic's cluster page advises building new clusters on its Catena product rather than on FMS
+. If you are planning a new cluster, weigh that route as well. Existing FMS clusters translate
+as follows.
+
+| Flussonic                                                        | FrameWorks                                                                                                                                                   |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `cluster_key` shared by servers                                  | Enrollment tokens; each node joins a cluster through `frameworks edge deploy`                                                                                |
+| `source` restreamer pulling from an origin                       | Foghorn relays over DTSC on viewer demand. Up next: pre-emptive replication in [Stream Replication Orchestration](/roadmap#stream-replication-orchestration) |
+| `balancer` redirect by bitrate, clients, usage, or streams       | Foghorn scores edges by geography, load, and health, and redirects viewers                                                                                   |
+| Per-peer `countries` GeoIP routing                               | [Viewer placement policy](/builders/media-placement), plus geo-routed DNS for tenant domains                                                                 |
+| `cluster_ingest`: restarts a stream on another peer if one fails | `sourceLocation` limits where a source may run. More than one edge per region per cluster is planned; until then, test node loss on your topology            |
+| `capture_at` soft preference for a server                        | `sourceLocation` with `nodeIds`, which is a hard restriction                                                                                                 |
+| `config_external` configuration backend                          | A polling equivalent is not planned. Use GraphQL, or the GitOps manifest on a full self-host                                                                 |
+
+### API and events
+
+| Flussonic                                                   | FrameWorks                                                                                 |
+| ----------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| REST + JSON under `/streamer/api/v3/`, described by OpenAPI | GraphQL at `/graphql`, with TypeScript, Go, and Python [SDKs](/builders/sdks)              |
+| HTTP Basic through `view_auth` and `edit_auth`              | Developer token (Bearer)                                                                   |
+| `PUT /streamer/api/v3/streams/{name}` upsert                | `createStream` and `updateStream`. IDs are generated, so keep a name-to-ID map             |
+| `DELETE /streamer/api/v3/streams/{name}`                    | `deleteStream(id)`                                                                         |
+| `event_sink` to an HTTP handler, log file, or script        | Up to 10 HTTPS [webhook](/builders/webhooks) endpoints, or the `tenantEvents` subscription |
+| `sign_key` and `X-Signature`                                | Standard Webhooks signatures                                                               |
+| `resend_limit` buffered retry                               | Retries for about three days, with a 30-day delivery log and replay                        |
+| `source_opened`, `source_closed`                            | Closest by name: `stream.connected`, `stream.idle`. Confirm against your own event log     |
+
+### Transcoding and processing
+
+| Flussonic                                               | FrameWorks                                                                                                                                                                              |
+| ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `transcoder` directive per stream or template           | `liveVideoAbr`: `INHERIT` uses the tier policy, `OFF` removes video renditions. No per-stream ladder in the docs                                                                        |
+| NVENC through `hw=nvenc`, with `deviceid` GPU selection | Per-stream encoder or GPU selection is not planned. Local transcode slots are set with `max_transcodes`                                                                                 |
+| `hw=qsv`; Flussonic Coder hardware                      | Not planned. Transcoding runs through Livepeer Gateway or local processing. Up next: GPU-aware placement in the [Workload Cost Model](/roadmap#workload-cost-model)                     |
+| `deinterlace`                                           | Not planned. Test interlaced broadcast feeds first                                                                                                                                      |
+| Burned-in logo                                          | Up next: overlays in [Composition and SSAI](/roadmap#composition-and-ssai)                                                                                                              |
+| `mosaic://` server-side mosaic                          | Server-side compositing is in the pipeline, listed as Up next under [Composition and SSAI](/roadmap#composition-and-ssai). StreamCrafter composes multiple sources in the browser today |
+
+## What's up next, and what's not planned
+
+Statuses come from the [roadmap](/roadmap), whose badges show relative order, not release dates.
+Until an item ships, keep that workload on Flussonic, or keep Flussonic as the origin and use
+FrameWorks for reach.
+
+### Up next
+
+| Roadmap item                                                                                  | What it unblocks                                                                                                                      |
+| --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| [DRM](/roadmap#drm)                                                                           | Protected channels that need FairPlay, Widevine, or PlayReady                                                                         |
+| [Team Accounts](/roadmap#team-accounts-and-permissions)                                       | Shared operations, with roles and audit visibility                                                                                    |
+| [Composition and SSAI](/roadmap#composition-and-ssai)                                         | StreamCrafter cloud production: live switching, overlays, in-stream ads, and backup inputs that take over when a primary source drops |
+| [Built-In Password and Geo Rules](/roadmap#built-in-password-and-geo-rules)                   | Password and country rules on every plan, with no webhook endpoint to run                                                             |
+| [Scheduled Programming](/roadmap#scheduled-programming)                                       | Calendar-driven recordings, and linear channels built from VOD                                                                        |
+| [Device Discovery and Contribution Inputs](/roadmap#device-discovery-and-contribution-inputs) | Cameras, PTZ devices, NDI, USB, and HDMI sources becoming managed streams                                                             |
+| [Stream Replication Orchestration](/roadmap#stream-replication-orchestration)                 | Streams placed in a region ahead of demand                                                                                            |
+| [Live AI Processing](/roadmap#live-ai-processing)                                             | Detection and transcription on media edges, with pilot access by contact                                                              |
+| [Workload Cost Model](/roadmap#workload-cost-model)                                           | Transcode placement based on predicted CPU and GPU cost                                                                               |
+| [Placement Policy and Storage Tiering](/roadmap#placement-policy-and-storage-tiering)         | Data residency rules for where content may live                                                                                       |
+| [NAT-Aware Routing and Traversal](/roadmap#nat-aware-routing-and-traversal)                   | Self-hosted nodes behind NAT taking full part in the network                                                                          |
+| [Edge ISO and Cloud Images](/roadmap#edge-iso-and-cloud-images)                               | Bare-metal edge installs and on-demand cloud scaling                                                                                  |
+| [Dedicated Provider Capacity](/roadmap#dedicated-provider-capacity)                           | Isolated provider-operated nodes for one tenant                                                                                       |
+| [Public Cluster Marketplace](/roadmap#public-cluster-marketplace)                             | Vetted third-party capacity under published terms                                                                                     |
+| [Federation State Synchronization](/roadmap#federation-state-synchronization)                 | Clusters of independent parties joining and leaving without a central coordinator                                                     |
+| [Platform Trust and Operations Hardening](/roadmap#platform-trust-and-operations-hardening)   | Live trust rotation, and OS updates that drain safely                                                                                 |
+| [Operator Settlement and Attribution](/roadmap#operator-settlement-and-attribution)           | Payouts to the operators whose clusters carried the traffic                                                                           |
+| [Conferencing and Chat](/roadmap#conferencing-and-chat)                                       | Remote guests mixed into a stream, and viewer chat                                                                                    |
+| [Rooms and Interactivity](/roadmap#rooms-and-interactivity-parlor)                            | Engagement features synced to the stream timeline                                                                                     |
+| [Live Commerce](/roadmap#live-commerce-shopping-and-auctions)                                 | Shopping and auctions on live streams                                                                                                 |
+
+Flussonic documents SCTE-35 handling and server-side ad insertion. On FrameWorks, SCTE-35
+cue handling is in the media engine with platform controls still expanding, and server-side ad
+insertion arrives with Composition and SSAI.
+
+### Later
+
+| Roadmap item                                                                                      | What it unblocks                                          |
+| ------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
+| [Stream-Level Balances](/roadmap#stream-level-balances)                                           | Paywalled and pay-per-view streams                        |
+| [Managed DNS, Proxying, and Storage Services](/roadmap#managed-dns-proxying-and-storage-services) | Customer-facing DNS, CDN, and standalone storage products |
+| [More SDK Languages](/roadmap#more-sdk-languages)                                                 | Generated clients for PHP, Ruby, Elixir, Java, and C#     |
+| [Mobile Apps and Help Center](/roadmap#mobile-apps-and-help-center)                               | Native mobile apps and an integrated help center          |
+
+### Not planned
+
+These items are not on the roadmap. Where a workaround exists, it is listed.
+
+**IPTV and broadcast**
+
+- **IPTV middleware.** FrameWorks has no subscriber management, channel packages, or set-top portal,
+  and no integration with middleware such as Stalker, which Flussonic documents. A custom
+  middleware can use the GraphQL API, webhook policies, and JWT playback.
+- **EPG.** Flussonic can extract EPG from MPEG-TS and export XMLTV or JSON. FrameWorks does not
+  read, store, or serve guide data. Your application maps guide times to chapters.
+- **Multicast, UDP, and MPTS output.** FrameWorks does not output to a multicast group or a
+  modulator. Keep your existing output path, or run a separate gateway that takes SRT or HLS from
+  FrameWorks and emits multicast.
+- **Session limits.** There is no per-user concurrent session limit.
+- **DVB capture, MSS playback, nPVR, timelapse export, and delayed-channel streams.**
+- **Deinterlacing controls and per-stream hardware encoder selection.**
+
+**CCTV and surveillance**
+
+- **A VMS.** Flussonic Watcher is a video surveillance system. FrameWorks has no camera
+  management product, operator console, access-control integration, or mobile surveillance app.
+- **ONVIF configuration and motion events.** Flussonic documents these. FrameWorks takes an RTSP
+  URL. Device Discovery, above, covers finding cameras.
+- **Face and plate recognition.** Watcher lists these.
+
+**Streams and clusters**
+
+- **Always-on pull streams.** Pull streams are on-demand, so with no viewer nothing is opened or
+  recorded. To record around the clock, run a [relay that pushes continuously](#streams-and-templates).
+- **Templates and dynamic stream names.** Script stream creation from your export.
+- **Publish-time webhooks and a `config_external` equivalent.**
+- **Federating a self-hosted platform with the FrameWorks network.**
+
+## Path 1: Stay on your own hardware (hybrid)
+
+You run edge nodes on your servers: MistServer, Helmsman, and Caddy. FrameWorks operates Foghorn,
+Livepeer, Chandler, object storage, DNS and TLS, analytics, billing, and the control plane. See
+[Selfhosters](/hybrid/overview) for the ownership table.
+
+1. **Use a separate box first.** Edges need their own ports, including 80, 443, 1935, and 8889/udp.
+   Do not replace a working Flussonic server on day one.
+2. **Check reachability.** An edge needs a public IP or a reachable public DNS name for viewers,
+   plus a path to the FrameWorks control plane.
+   [NAT-aware routing](/roadmap#nat-aware-routing-and-traversal) is up next. An isolated network
+   points to [Path 2](#path-2-self-host-the-whole-stack).
+3. **Deploy the edge.**
+
+   ```bash
+   frameworks login
+   frameworks edge deploy --ssh ubuntu@edge-1.example.com --email ops@example.com
+   ```
+
+4. **Allow private sources where needed.** Multicast and RFC1918 sources need a cluster that opted
+   in, and a stream `sourceLocation` restricted to it:
+
+   ```json
+   {
+     "input": {
+       "name": "Channel 1",
+       "ingestMode": "PULL",
+       "pullSource": { "sourceUri": "tsudp://239.0.0.1:1234", "enabled": true },
+       "sourceLocation": {
+         "mode": "RESTRICTED",
+         "clusters": [{ "clusterId": "headend-edge", "nodeIds": ["headend-edge-1"] }]
+       }
+     }
+   }
+   ```
+
+5. **Add reach if you want it.** A paid tenant can route across its own nodes and platform clusters
+   under one hostname.
+6. **Plan for storage.** FrameWorks operates durable object storage on this path, so archives leave
+   your site. For footage that must stay on your network, use
+   [Path 2](#path-2-self-host-the-whole-stack).
+
+## Path 2: Self-host the whole stack
+
+FrameWorks is public domain (Unlicense), and full self-hosting is supported. The `frameworks` CLI
+deploys and upgrades the control plane, Foghorn, edges, Livepeer, Chandler, databases, analytics,
+and interfaces from a GitOps repository. You own all of the data, including recordings.
+
+This is a larger operational step than running a media server. You operate a platform, with
+databases, Kafka, ClickHouse, object storage, DNS, and TLS, and you validate capacity, backups, and
+upgrade runbooks before carrying production traffic. A self-hosted platform is independent, and it
+cannot federate with the FrameWorks network. Start with the
+[deployment overview](/operators/deployment).
+
+## Path 3: Move to managed FrameWorks
+
+Use this when your sources can reach the internet and you want to stop running media servers.
+Platform clusters reject private literal source addresses, so multicast and LAN cameras need a
+hybrid edge or an encoder that pushes out.
+
+## Step-by-step
+
+The same steps apply on all three paths.
+
+### 1. Inventory what you run
+
+Export streams from `/streamer/api/v3/streams` and keep a copy of `flussonic.conf`. For each
+stream, record its type, inputs, template, `dvr`, `transcoder`, `push`, and `on_play` settings.
+
+### 2. Sort streams into four groups
+
+- **Direct:** published streams and on-demand sources with public or edge-reachable URLs.
+- **Needs a relay:** static channels and cameras that must record with no viewers.
+- **Waits for the roadmap:** anything that needs an [up next](#up-next) item, such as DRM.
+- **Stays on Flussonic:** anything that needs a [not planned](#not-planned) item, such as multicast
+  output or middleware integration.
+
+### 3. Create streams
+
+Expand templates by hand, since each stream carries its own settings. Script it from your export,
+and store the mapping from Flussonic name to `id`, `streamKey`, and `playbackId`.
+
+```graphql
+mutation CreateChannel {
+  createStream(input: { name: "channel-1", record: true }) {
+    ... on Stream {
+      id
+      streamKey
+      playbackId
+    }
+  }
+}
+```
+
+### 4. Connect sources
+
+Repoint encoders, or set up pull sources and relays. Encoders on RTMPS move to RTMP, or to SRT or
+WHIP for an encrypted link.
+
+### 5. Rewrite authorization
+
+Port `on_play` to a [webhook policy](/builders/playback-access-control#webhook-callback-policies).
+Verify `X-Frameworks-Signature`, read `viewerToken`, and return 200 or 403. Test with
+`testPlaybackAccess` before enforcing it.
+
+### 6. Recreate recording and catch-up
+
+Set retention, choose a chapter mode, and map your catch-up URLs to `dvrChapters` lookups. Existing
+Flussonic archives do not transfer automatically. Exported MP4 files can be imported as VOD
+with `importVodAsset`, and larger library imports are concierge work; contact us before you start.
+
+### 7. Replace event handlers
+
+Create a webhook endpoint for the events you handle, then update signature checks and event names.
+
+### 8. Update players and URLs
+
+Replace viewer URLs in players, middleware, and embeds. Signed URLs need `?jwt=`.
+
+### 9. Run it in parallel
+
+Follow [Run it in parallel](/migrate/generic#run-it-in-parallel). Flussonic gives you two ways to do
+this without touching the encoder:
+
+- Add an RTMP `push` to the stream, pointed at a FrameWorks stream key. This keeps multistream
+  targets available.
+- Have FrameWorks pull Flussonic's HLS output as a pull-input stream. Remember that a pull
+  stream only runs with viewers and cannot start push targets.
+
+## Beta and tricky bits
+
+- **Hybrid production cutovers need operator validation.** Test DNS, TLS, firewall policy, capacity,
+  node enrollment, and upgrade runbooks before moving production traffic.
+- **Billing rates are still maturing.** Rates may adjust as the platform matures.
+- **Marketplace primitives ship; the vetted public program is
+  [up next](/roadmap#public-cluster-marketplace).**
+- **Two viewers arriving at once on an idle pull stream** can briefly open two upstream connections
+  before fanout takes over. Check this against sources with connection limits.
+
+## Get help
+
+You work directly with the video engineers who have built MistServer for more than 15 years. Send
+us your inventory from step 1 and we will tell you which streams fit and which should stay put.
+
+| Channel              | Best for                                      | Where                                                        |
+| -------------------- | --------------------------------------------- | ------------------------------------------------------------ |
+| **In-app ticketing** | Migration scoping, account-specific questions | Dashboard `/support`                                         |
+| **Skipper**          | API discovery, diagnostics, after-hours help  | Dashboard `/skipper`, `⌘J` in docs, MCP at `/mcp`            |
+| **Forum**            | Long-form Q&A                                 | [forum.frameworks.network](https://forum.frameworks.network) |
+| **Discord**          | Real-time discussion                          | [Join](%DISCORD_URL%)                                        |
+
+
+---
 # Migrate from any video API
 https://logbook.frameworks.network/migrate/generic
 
@@ -25939,6 +26673,16 @@ This section holds the FrameWorks **migration program**: dedicated guides for th
     title="Mux"
     href="/migrate/mux"
     description="Available now — REST → GraphQL, signed playback (RS256 → ES256), simulcast, and where Mux Data fits in the migration."
+  />
+  <LinkCard
+    title="Castr"
+    href="/migrate/castr"
+    description="Available now — move live streams, destinations, embeds, and recordings, with what's up next on the roadmap."
+  />
+  <LinkCard
+    title="Flussonic Media Server"
+    href="/migrate/flussonic"
+    description="Available now — keep your hardware with FrameWorks edges, self-host the full stack, or move to managed SaaS."
   />
   <LinkCard
     title="Any video API"
@@ -40761,6 +41505,7 @@ Planned items in this area are detailed on the [Roadmap](/roadmap#playback).
 | ↳ Viewer protocol selection | Available | API, Docs | resolveViewerEndpoint accepts a required playback protocol and never substitutes another format. Players check serverInfo for this slug before sending the argument. |
 | ↳ Playback access control | Available | API, Agents (MCP), Dashboard, Docs | Public / JWT / webhook playback authorization policy on streams, clips, and VOD assets, with allowed embedding origins, a per-policy webhook context object, a dry-run tester, and full agent management surface. |
 | ↳ Signing keys *(foundation)* | Available | API, Agents (MCP), Dashboard, Docs | ES256 keypairs for signing playback JWTs. Private material returned once on creation. |
+| ↳ Built-in password and geo rules | Planned | — | Password protection and country rules as per-stream switches on every plan, with no customer webhook endpoint. |
 | ↳ DRM | Planned | — | FairPlay, Widevine, and PlayReady protection for premium playback workflows. |
 
 ### Media Library
@@ -40788,7 +41533,7 @@ Planned items in this area are detailed on the [Roadmap](/roadmap#processing--ai
 | **Processing** *(foundation)* | Expanding | API, Dashboard, Docs | Server-side media processing — live ABR transcoding, on-edge AI, and composition — placed on the right nodes across a cluster. |
 | ↳ Gateway-backed transcoding | Expanding | API, Dashboard, Docs | Live ABR renditions through Livepeer Gateway or local processing, with processing usage telemetry. |
 | ↳ Live AI processing | Planned | — | ONNX models running directly on the in-memory stream buffer of media edge nodes — detection, transcription, moderation, audio tagging, and embeddings for semantic search. |
-| ↳ Composition and SSAI | Planned | — | MistServer-native blitter for logos, watermarks, and lower-third overlays; Composer for server-side ad insertion (SSAI), raw-pixel composition, picture-in-picture, and automated clipping. |
+| ↳ Composition and SSAI | Planned | — | Server side of StreamCrafter cloud production. Mixes live sources on processing nodes into one program stream, with a MistServer-native blitter for logos, watermarks, and lower-third overlays, and Composer for raw-pixel composition, picture-in-picture, live switching, backup inputs, server-side ad insertion (SSAI), and automated clipping. |
 | **Workload cost model (GPU-aware scheduling)** *(foundation)* | Planned | — | Predictive per-job resource cost — codec, resolution, framerate, model size, and realtime factor mapped to expected CPU, GPU/VRAM, and bandwidth — continuously corrected by measured costs of completed jobs, feeding processing placement and admission. |
 
 ### Analytics & Observability
@@ -40841,7 +41586,7 @@ Planned items in this area are detailed on the [Roadmap](/roadmap#commerce--bill
 | ↳ Usage caps, alerts, retention cost preview | Expanding | — | Customer-set caps and alerts on storage / bandwidth / recording / transcode meters; cost-preview hypotheticals for retention policy changes. |
 | **Wallet & on-chain identity** | Expanding | API, Agents (MCP), Dashboard, Docs | Wallet sign-in, linked-wallet account identity, and x402 micropayments. |
 | **Operator settlement and attribution** | Planned | — | Attribute served traffic to the operators whose clusters actually carried it — manipulation-resistant across independent operators — and settle the full loop, from credit accrual through operator-visible reporting to payout execution. |
-| **Stream-level balances** | Planned | — | Optional per-stream balances that fund usage before the tenant balance — pay-per-view, tips, sponsor-funded streams — plus promo codes, referral rewards, and volume discounts. |
+| **Stream-level balances** | Planned | — | Optional per-stream balances that fund usage before the tenant balance — paywalled and pay-per-view streams, tips, sponsor-funded streams — plus promo codes, referral rewards, and volume discounts. |
 
 ### Developer Platform & Agents
 
@@ -40908,6 +41653,7 @@ This broader inventory includes the [product capability matrix](/platform/featur
 | ↳ Viewer protocol selection | Available | API, Docs | resolveViewerEndpoint accepts a required playback protocol and never substitutes another format. Players check serverInfo for this slug before sending the argument. |
 | ↳ Playback access control | Available | API, Agents (MCP), Dashboard, Docs | Public / JWT / webhook playback authorization policy on streams, clips, and VOD assets, with allowed embedding origins, a per-policy webhook context object, a dry-run tester, and full agent management surface. |
 | ↳ Signing keys *(foundation)* | Available | API, Agents (MCP), Dashboard, Docs | ES256 keypairs for signing playback JWTs. Private material returned once on creation. |
+| ↳ Built-in password and geo rules | Planned | — | Password protection and country rules as per-stream switches on every plan, with no customer webhook endpoint. |
 | ↳ DRM | Planned | — | FairPlay, Widevine, and PlayReady protection for premium playback workflows. |
 
 ### Media Library
@@ -40931,7 +41677,7 @@ This broader inventory includes the [product capability matrix](/platform/featur
 | **Processing** *(foundation)* | Expanding | API, Dashboard, Docs | Server-side media processing — live ABR transcoding, on-edge AI, and composition — placed on the right nodes across a cluster. |
 | ↳ Gateway-backed transcoding | Expanding | API, Dashboard, Docs | Live ABR renditions through Livepeer Gateway or local processing, with processing usage telemetry. |
 | ↳ Live AI processing | Planned | — | ONNX models running directly on the in-memory stream buffer of media edge nodes — detection, transcription, moderation, audio tagging, and embeddings for semantic search. |
-| ↳ Composition and SSAI | Planned | — | MistServer-native blitter for logos, watermarks, and lower-third overlays; Composer for server-side ad insertion (SSAI), raw-pixel composition, picture-in-picture, and automated clipping. |
+| ↳ Composition and SSAI | Planned | — | Server side of StreamCrafter cloud production. Mixes live sources on processing nodes into one program stream, with a MistServer-native blitter for logos, watermarks, and lower-third overlays, and Composer for raw-pixel composition, picture-in-picture, live switching, backup inputs, server-side ad insertion (SSAI), and automated clipping. |
 | **Workload cost model (GPU-aware scheduling)** *(foundation)* | Planned | — | Predictive per-job resource cost — codec, resolution, framerate, model size, and realtime factor mapped to expected CPU, GPU/VRAM, and bandwidth — continuously corrected by measured costs of completed jobs, feeding processing placement and admission. |
 
 ### Analytics & Observability
@@ -40991,7 +41737,7 @@ This broader inventory includes the [product capability matrix](/platform/featur
 | ↳ Usage caps, alerts, retention cost preview | Expanding | — | Customer-set caps and alerts on storage / bandwidth / recording / transcode meters; cost-preview hypotheticals for retention policy changes. |
 | **Wallet & on-chain identity** | Expanding | API, Agents (MCP), Dashboard, Docs | Wallet sign-in, linked-wallet account identity, and x402 micropayments. |
 | **Operator settlement and attribution** | Planned | — | Attribute served traffic to the operators whose clusters actually carried it — manipulation-resistant across independent operators — and settle the full loop, from credit accrual through operator-visible reporting to payout execution. |
-| **Stream-level balances** | Planned | — | Optional per-stream balances that fund usage before the tenant balance — pay-per-view, tips, sponsor-funded streams — plus promo codes, referral rewards, and volume discounts. |
+| **Stream-level balances** | Planned | — | Optional per-stream balances that fund usage before the tenant balance — paywalled and pay-per-view streams, tips, sponsor-funded streams — plus promo codes, referral rewards, and volume discounts. |
 | **Operator credit ledger** *(foundation)* *(platform)* | Expanding | — | Internal accrual ledger crediting cluster operators for served usage — platform-fee basis points, clawback and reversal support — populated from per-cluster usage attribution. |
 
 ### Developer Platform & Agents
@@ -41075,6 +41821,10 @@ clusters without hand-built local glue.
 
 What ships today in this area: [Platform capabilities → Playback](/platform/feature-matrix#playback).
 
+### Built-In Password and Geo Rules <Badge text="Next" variant="tip" />
+
+Password protection and country rules as switches on a stream, on every plan. These can already be built with a [playback webhook](/builders/playback-access-control), which means running your own endpoint. The built-in rules need no endpoint.
+
 ### DRM <Badge text="Next" variant="tip" />
 
 FairPlay, Widevine, and PlayReady support is in development, built on playback access control and the player SDKs. Until DRM lands, premium playback workflows that require it should stay on their existing provider.
@@ -41103,9 +41853,9 @@ An ONNX runtime in the media engine is in active development, running ultralight
 
 Processing placement today routes by node class and current load; what a job will actually cost is only knowable after it runs. The planned cost model predicts a job's footprint — CPU, GPU/VRAM, bandwidth — from its parameters (codec, resolution, framerate, model size, faster/slower-than-realtime factor), corrects those predictions continuously from measured costs of completed jobs, and accounts for interference between co-placed jobs and live serving on the same node. The scheduler will measure and allocate GPU and VRAM. The model extends processing orchestration and the capacity score used by viewer routing, so transcode and AI jobs are placed before they overload a node.
 
-### Composition and SSAI <Badge text="Later" variant="note" />
+### Composition and SSAI <Badge text="Next" variant="tip" />
 
-Composition stays inside the media engine: a MistServer-native blitter for logos, watermarks, and lower-third overlays; MistServer's Composer reused for server-side ad insertion (SSAI) and raw-pixel composition; picture-in-picture and automated clipping layered on top.
+This is the server side of StreamCrafter's cloud production. Composition mixes several live sources on processing nodes into one program stream, which then gets the same multistreaming, recording, and delivery as any other stream. It stays inside the media engine: a MistServer-native blitter for logos, watermarks, and lower-third overlays, and MistServer's Composer for raw-pixel composition, picture-in-picture, and server-side ad insertion (SSAI). Live switching between sources, backup inputs that take over when a primary source drops, and mixing remote guests into the program all build on this layer, with automated clipping layered on top. To compose in the browser today, use [StreamCrafter](/builders/ingest-compositor).
 
 ## Analytics & Observability
 
@@ -41185,7 +41935,7 @@ In a federated network, one viewer session can cross clusters run by different o
 
 ### Stream-Level Balances <Badge text="Later" variant="note" />
 
-Optional per-stream balances that fund usage before the tenant balance — enabling pay-per-view, tips, and sponsor-funded streams — plus promo codes, referral rewards, and volume discounts.
+Optional per-stream balances that fund usage before the tenant balance — enabling paywalled and pay-per-view streams, tips, and sponsor-funded streams — plus promo codes, referral rewards, and volume discounts.
 
 ## Developer Platform & Agents
 
@@ -41207,7 +41957,7 @@ What ships today in this area: [Platform capabilities → Engagement & Interacti
 
 ### Conferencing and Chat <Badge text="Next" variant="tip" />
 
-The next major feature theme after the current telemetry pass. Conferencing brings multi-party WebRTC rooms and remote contribution — a commentator or guest joins a room and their audio (video later) is mixed into the managed stream. Viewer chat ships alongside it as the first surface of the rooms service.
+The next major feature theme after the current telemetry pass, following [Team Accounts](#team-accounts-and-permissions) and [Composition](#composition-and-ssai). Conferencing brings multi-party WebRTC rooms and remote contribution: a commentator or guest joins from StreamCrafter and is mixed into the managed stream, in the browser or on the server, chosen per show. Rooms run through MistServer or peer to peer, with a bot participant ingesting media and chat. Viewer chat ships alongside it as the first surface of the rooms service.
 
 ### Rooms and Interactivity (Parlor) <Badge text="Next" variant="tip" />
 
