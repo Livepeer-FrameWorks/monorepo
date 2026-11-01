@@ -92,6 +92,9 @@ for hash in "${hashes[@]}"; do
   check "ready clip $hash had no thumbnail upload denial" bash -c '[[ "$1" != *"$2"* ]]' _ "$denials" "$hash"
 done
 
+# This scenario reads the mutation's response, so it calls deleteStream itself.
+# The ledger entry keeps the EXIT cleanup from recording "not found" afterwards.
+sweep_ledger deleted "$SID" ''
 started=$(date +%s)
 response=$(gql 'mutation($id:ID!){deleteStream(id:$id){__typename ... on DeleteSuccess{success pending}}}' \
   "$(jq -cn --arg id "$SID" '{id:$id}')")
