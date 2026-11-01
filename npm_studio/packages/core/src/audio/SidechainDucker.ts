@@ -3,8 +3,10 @@
  *
  * When the key source (e.g. microphone) has signal above a threshold,
  * automatically reduce the volume of target sources (e.g. background music).
- * Uses an AnalyserNode + requestAnimationFrame loop to monitor RMS level.
+ * Uses LevelTap to monitor RMS level.
  */
+
+import { LevelTap } from "./LevelTap";
 
 export interface SidechainDuckerOptions {
   threshold?: number; // RMS threshold (0-1) to trigger ducking, default 0.02
@@ -15,13 +17,11 @@ export interface SidechainDuckerOptions {
 
 export class SidechainDucker {
   private context: AudioContext;
-  private analyser: AnalyserNode;
+  private levelTap: LevelTap;
   private _keyInput: GainNode;
   private _keyOutput: GainNode;
   private targets: Map<string, GainNode> = new Map();
-  private rafId: number | null = null;
   private isDucking = false;
-  private destroyed = false;
 
   private threshold: number;
   private ratio: number;
@@ -40,12 +40,9 @@ export class SidechainDucker {
     this._keyOutput = context.createGain();
     this._keyInput.connect(this._keyOutput);
 
-    // Analyser taps the key signal for level detection
-    this.analyser = context.createAnalyser();
-    this.analyser.fftSize = 256;
-    this._keyInput.connect(this.analyser);
-
-    this.startMonitoring();
+    // Level tap on the key signal
+    this.levelTap = new LevelTap(context, (rms) => this.processLevel(rms));
+    this._keyInput.connect(this.levelTap.input);
   }
 
   get keyInput(): AudioNode {
@@ -72,51 +69,27 @@ export class SidechainDucker {
     this.ratio = Math.max(0, Math.min(1, value));
   }
 
-  private startMonitoring(): void {
-    const data = new Float32Array(this.analyser.fftSize);
+  private processLevel(rms: number): void {
+    const now = this.context.currentTime;
+    const shouldDuck = rms > this.threshold;
 
-    const tick = () => {
-      if (this.destroyed) return;
-
-      this.analyser.getFloatTimeDomainData(data);
-
-      // Calculate RMS
-      let sum = 0;
-      for (let i = 0; i < data.length; i++) {
-        sum += data[i] * data[i];
+    if (shouldDuck && !this.isDucking) {
+      this.isDucking = true;
+      for (const gain of this.targets.values()) {
+        gain.gain.setTargetAtTime(this.ratio, now, this.attack);
       }
-      const rms = Math.sqrt(sum / data.length);
-
-      const now = this.context.currentTime;
-      const shouldDuck = rms > this.threshold;
-
-      if (shouldDuck && !this.isDucking) {
-        this.isDucking = true;
-        for (const gain of this.targets.values()) {
-          gain.gain.setTargetAtTime(this.ratio, now, this.attack);
-        }
-      } else if (!shouldDuck && this.isDucking) {
-        this.isDucking = false;
-        for (const gain of this.targets.values()) {
-          gain.gain.setTargetAtTime(1, now, this.release);
-        }
+    } else if (!shouldDuck && this.isDucking) {
+      this.isDucking = false;
+      for (const gain of this.targets.values()) {
+        gain.gain.setTargetAtTime(1, now, this.release);
       }
-
-      this.rafId = requestAnimationFrame(tick);
-    };
-
-    this.rafId = requestAnimationFrame(tick);
+    }
   }
 
   destroy(): void {
-    this.destroyed = true;
-    if (this.rafId !== null) {
-      cancelAnimationFrame(this.rafId);
-      this.rafId = null;
-    }
+    this.levelTap.destroy();
     this._keyInput.disconnect();
     this._keyOutput.disconnect();
-    this.analyser.disconnect();
     this.targets.clear();
   }
 }

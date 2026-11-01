@@ -1,11 +1,13 @@
 /**
  * Noise Gate
  * Attenuates audio below a threshold — silences background noise when not speaking.
- * Uses AnalyserNode for level detection and GainNode with envelope for gating.
+ * Uses LevelTap for level detection and GainNode with envelope for gating.
  *
  * States: OPEN (signal above threshold) → HOLD → CLOSE (attenuate)
  * The hold period prevents the gate from chattering on speech pauses.
  */
+
+import { LevelTap } from "./LevelTap";
 
 export interface NoiseGateOptions {
   threshold?: number; // dB below which gate closes (default: -40)
@@ -20,7 +22,7 @@ type GateState = "open" | "hold" | "closed";
 export class NoiseGate {
   private inputNode: GainNode;
   private outputGain: GainNode;
-  private analyser: AnalyserNode;
+  private levelTap: LevelTap;
   private context: AudioContext;
 
   private thresholdDb: number;
@@ -31,11 +33,6 @@ export class NoiseGate {
 
   private state: GateState = "closed";
   private holdTimer: ReturnType<typeof setTimeout> | null = null;
-  private rafId: number | null = null;
-  private active = true;
-
-  // Level detection buffer
-  private analyserData: Float32Array<ArrayBuffer>;
 
   constructor(context: AudioContext, opts?: NoiseGateOptions) {
     this.context = context;
@@ -49,22 +46,14 @@ export class NoiseGate {
     this.inputNode = context.createGain();
     this.inputNode.gain.value = 1;
 
-    // Analyser reads the input signal level
-    this.analyser = context.createAnalyser();
-    this.analyser.fftSize = 256;
-    this.analyser.smoothingTimeConstant = 0.5;
-    this.analyserData = new Float32Array(new ArrayBuffer(this.analyser.fftSize * 4));
-
     // Output gain controls attenuation
     this.outputGain = context.createGain();
     this.outputGain.gain.value = this.closedGain; // Start closed
 
-    // Wire: input → analyser (tap) + input → outputGain
-    this.inputNode.connect(this.analyser);
+    // Wire: input → level tap + input → outputGain
+    this.levelTap = new LevelTap(context, (rms) => this.processLevel(rms));
+    this.inputNode.connect(this.levelTap.input);
     this.inputNode.connect(this.outputGain);
-
-    // Start the gate processing loop
-    this.startProcessing();
   }
 
   get input(): AudioNode {
@@ -120,24 +109,7 @@ export class NoiseGate {
   // Processing
   // ==========================================================================
 
-  private startProcessing(): void {
-    const process = () => {
-      if (!this.active) return;
-      this.processFrame();
-      this.rafId = requestAnimationFrame(process);
-    };
-    this.rafId = requestAnimationFrame(process);
-  }
-
-  private processFrame(): void {
-    // Read RMS level from analyser
-    this.analyser.getFloatTimeDomainData(this.analyserData);
-
-    let sumSquares = 0;
-    for (let i = 0; i < this.analyserData.length; i++) {
-      sumSquares += this.analyserData[i] * this.analyserData[i];
-    }
-    const rms = Math.sqrt(sumSquares / this.analyserData.length);
+  private processLevel(rms: number): void {
     const levelDb = rms > 0.00001 ? 20 * Math.log10(rms) : -100;
 
     const now = this.context.currentTime;
@@ -198,14 +170,9 @@ export class NoiseGate {
   // ==========================================================================
 
   destroy(): void {
-    this.active = false;
     this.clearHoldTimer();
-    if (this.rafId !== null) {
-      cancelAnimationFrame(this.rafId);
-      this.rafId = null;
-    }
+    this.levelTap.destroy();
     this.inputNode.disconnect();
-    this.analyser.disconnect();
     this.outputGain.disconnect();
   }
 }

@@ -4,8 +4,10 @@
  * Sibilance control in the 4-8 kHz range.
  * Detection: BiquadFilterNode (bandpass) → AnalyserNode for sibilant energy.
  * Reduction: BiquadFilterNode (highshelf) with dynamically modulated gain.
- * Same requestAnimationFrame processing loop pattern as NoiseGate.
+ * Uses the same LevelTap level detection as NoiseGate.
  */
+
+import { LevelTap } from "./LevelTap";
 
 export interface DeEsserOptions {
   frequency?: number; // Center frequency in Hz, default 6000
@@ -21,13 +23,10 @@ export class DeEsser {
 
   // Detection chain
   private detector: BiquadFilterNode;
-  private analyser: AnalyserNode;
+  private levelTap: LevelTap;
 
   // Reduction
   private shelf: BiquadFilterNode;
-
-  private rafId: number | null = null;
-  private destroyed = false;
 
   private frequency: number;
   private threshold: number;
@@ -42,14 +41,13 @@ export class DeEsser {
     this._input = context.createGain();
     this._output = context.createGain();
 
-    // Detection: bandpass at sibilance frequency → analyser
+    // Detection: bandpass at sibilance frequency → level tap
     this.detector = context.createBiquadFilter();
     this.detector.type = "bandpass";
     this.detector.frequency.value = this.frequency;
     this.detector.Q.value = opts.q ?? 2;
 
-    this.analyser = context.createAnalyser();
-    this.analyser.fftSize = 256;
+    this.levelTap = new LevelTap(context, (rms) => this.processLevel(rms));
 
     // Reduction: highshelf at slightly below sibilance frequency
     this.shelf = context.createBiquadFilter();
@@ -61,11 +59,9 @@ export class DeEsser {
     this._input.connect(this.shelf);
     this.shelf.connect(this._output);
 
-    // Detection path (parallel): input → detector → analyser (no output)
+    // Detection path (parallel): input → detector → level tap (no output)
     this._input.connect(this.detector);
-    this.detector.connect(this.analyser);
-
-    this.startMonitoring();
+    this.detector.connect(this.levelTap.input);
   }
 
   get input(): AudioNode {
@@ -86,50 +82,27 @@ export class DeEsser {
     this.threshold = Math.max(-60, Math.min(0, dB));
   }
 
-  private startMonitoring(): void {
-    const data = new Float32Array(this.analyser.fftSize);
+  private processLevel(rms: number): void {
+    const dB = rms > 0.0001 ? 20 * Math.log10(rms) : -100;
 
-    const tick = () => {
-      if (this.destroyed) return;
-
-      this.analyser.getFloatTimeDomainData(data);
-
-      // Calculate RMS of detected band
-      let sum = 0;
-      for (let i = 0; i < data.length; i++) {
-        sum += data[i] * data[i];
-      }
-      const rms = Math.sqrt(sum / data.length);
-      const dB = rms > 0.0001 ? 20 * Math.log10(rms) : -100;
-
-      // Modulate shelf gain based on sibilant energy
-      const now = this.context.currentTime;
-      if (dB > this.threshold) {
-        // Sibilance detected — apply reduction proportional to excess
-        const excess = dB - this.threshold;
-        const targetGain = Math.max(this.reduction, -excess);
-        this.shelf.gain.setTargetAtTime(targetGain, now, 0.005);
-      } else {
-        // No sibilance — release
-        this.shelf.gain.setTargetAtTime(0, now, 0.05);
-      }
-
-      this.rafId = requestAnimationFrame(tick);
-    };
-
-    this.rafId = requestAnimationFrame(tick);
+    // Modulate shelf gain based on sibilant energy
+    const now = this.context.currentTime;
+    if (dB > this.threshold) {
+      // Sibilance detected — apply reduction proportional to excess
+      const excess = dB - this.threshold;
+      const targetGain = Math.max(this.reduction, -excess);
+      this.shelf.gain.setTargetAtTime(targetGain, now, 0.005);
+    } else {
+      // No sibilance — release
+      this.shelf.gain.setTargetAtTime(0, now, 0.05);
+    }
   }
 
   destroy(): void {
-    this.destroyed = true;
-    if (this.rafId !== null) {
-      cancelAnimationFrame(this.rafId);
-      this.rafId = null;
-    }
+    this.levelTap.destroy();
     this._input.disconnect();
     this._output.disconnect();
     this.detector.disconnect();
-    this.analyser.disconnect();
     this.shelf.disconnect();
   }
 }
