@@ -244,6 +244,10 @@ function handleUpdateScene(scene: Scene): void {
 function handleStartTransition(transition: TransitionConfig, toScene: Scene): void {
   if (!currentScene || !renderer) return;
 
+  // The animation renders over whatever is current, and it would put its own
+  // scene back the moment the transition lands.
+  finishLayoutAnimation();
+
   if (transition.type === "cut") {
     transitionEngine.reset();
     nextScene = toScene;
@@ -420,14 +424,19 @@ function updateLayoutAnimation(): Scene | null {
 
   // Check if animation is complete
   if (rawProgress >= 1) {
-    // Animation complete - set final scene
-    currentScene = layoutAnimation.targetScene;
-    layoutAnimation = null;
-    sendMessage({ type: "layoutAnimationComplete" });
+    finishLayoutAnimation();
     return null; // Return null to indicate we should use currentScene now
   }
 
   return interpolatedScene;
+}
+
+function finishLayoutAnimation(): void {
+  if (!layoutAnimation) return;
+
+  currentScene = layoutAnimation.targetScene;
+  layoutAnimation = null;
+  sendMessage({ type: "layoutAnimationComplete" });
 }
 
 // ============================================================================

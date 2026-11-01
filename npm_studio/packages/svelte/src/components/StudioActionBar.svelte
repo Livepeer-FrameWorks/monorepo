@@ -1,9 +1,11 @@
 <script lang="ts">
-  import { getContext } from "svelte";
+  import { getContext, onMount } from "svelte";
   import type { Snippet } from "svelte";
   import { readable, type Readable } from "svelte/store";
   import {
     createStudioTranslator,
+    detectStudioSupport,
+    FULL_STUDIO_SUPPORT,
     type StudioTranslateFn,
   } from "@livepeer-frameworks/streamcrafter-core";
   import MonitorIcon from "../icons/MonitorIcon.svelte";
@@ -24,8 +26,15 @@
     getContext<Readable<StudioTranslateFn> | undefined>("fw-sc-translator") ?? readable(fallbackT);
   let t = $derived($translatorCtx);
 
-  let canAddSource = $derived(pc?.state !== "destroyed" && pc?.state !== "error");
-  let canStream = $derived(pc?.isCapturing && !pc?.isStreaming && whipUrl !== undefined);
+  let support = $state(FULL_STUDIO_SUPPORT);
+  onMount(() => {
+    support = detectStudioSupport();
+  });
+
+  let canAddSource = $derived(pc?.state !== "destroyed");
+  let canStream = $derived(
+    pc?.isCapturing && !pc?.isStreaming && whipUrl !== undefined && support.publish
+  );
 
   async function handleStartCamera(videoDeviceId?: string) {
     try {
@@ -62,7 +71,7 @@
   {:else}
     <CameraPicker
       sources={pc?.sources ?? []}
-      disabled={!canAddSource}
+      disabled={!canAddSource || !support.camera}
       getChoices={() => pc?.getCameraChoices() ?? Promise.resolve([])}
       onPick={handleStartCamera}
     />
@@ -70,15 +79,15 @@
       type="button"
       class="fw-sc-action-secondary"
       onclick={handleStartScreenShare}
-      disabled={!canAddSource}
-      title={t("shareScreen")}
+      disabled={!canAddSource || !support.screen}
+      title={support.screen ? t("shareScreen") : t("screenShareUnsupported")}
     >
       <MonitorIcon size={18} />
     </button>
     {#if showSettingsButton}
       <StudioSettings />
     {/if}
-    {#if !pc?.isStreaming}
+    {#if !pc?.isStreaming && !pc?.isReconnecting}
       <button
         type="button"
         class="fw-sc-action-primary"

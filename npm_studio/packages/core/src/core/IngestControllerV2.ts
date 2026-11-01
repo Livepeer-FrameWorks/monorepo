@@ -53,7 +53,9 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
   private whipClient: WhipClient | null = null;
   private whipEndpoints: string[] = [];
   private currentEndpointIndex = 0;
-  private isStoppingIntentionally = false;
+  private connectingClient: WhipClient | null = null;
+  private sessionRun = 0;
+  private reportedCaptureFailure: string | null = null;
 
   private state: IngestState = "idle";
   private stateContext: IngestStateContextV2 = {};
@@ -194,9 +196,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
         this.emit("deviceChange", event);
       }),
 
-      this.deviceManager.on("error", (event) => {
-        this.emit("error", { error: event.message, recoverable: true });
-      }),
+      this.deviceManager.on("error", (event) => this.reportCaptureFailure(event.message)),
 
       this.screenCapture.on("ended", (event) => {
         this.log("Screen capture ended", event);
@@ -210,9 +210,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
         }
       }),
 
-      this.screenCapture.on("error", (event) => {
-        this.emit("error", { error: event.message, recoverable: true });
-      }),
+      this.screenCapture.on("error", (event) => this.reportCaptureFailure(event.message)),
 
       this.reconnectionManager.on("attemptStart", (event) => {
         this.emit("reconnectionAttempt", {
@@ -231,8 +229,13 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
       }),
 
       this.reconnectionManager.on("exhausted", () => {
+        const { lastError } = this.reconnectionManager.getState();
         this.emit("reconnectionFailed", { error: "All reconnection attempts exhausted" });
-        this.endSession("Connection lost - reconnection failed");
+        this.endSession(
+          lastError
+            ? `Connection lost - reconnection failed: ${lastError}`
+            : "Connection lost - reconnection failed"
+        );
       })
     );
   }
@@ -256,12 +259,49 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
   }
 
   /**
+   * Let go of everything a session holds. The controller drops its references
+   * at once, so a new session can start while the old one is still closing.
+   */
+  private async releaseSession(): Promise<void> {
+    this.sessionRun++;
+    this.destinationResolution?.abort();
+    this.stopStatsPolling();
+    this.disableDirectFrameOutput();
+    this.stopBitrateAdaptation();
+    this.reconnectionManager.stop();
+    this.cleanupWhipClientHandlers();
+
+    const encoder = this.encoderManager;
+    const whipClient = this.whipClient;
+    this.encoderManager = null;
+    this.whipClient = null;
+
+    try {
+      await encoder?.stop();
+    } catch (error) {
+      this.log("Encoder did not stop cleanly", error);
+    } finally {
+      encoder?.destroy();
+    }
+
+    try {
+      await whipClient?.disconnect();
+    } catch (error) {
+      this.log("WHIP connection did not close cleanly", error);
+    } finally {
+      whipClient?.destroy();
+    }
+  }
+
+  /**
    * End a failed session. Capture outlives the connection, so with media still
    * available the broadcaster can go live again without re-adding sources.
    */
   private endSession(error: string): void {
+    void this.releaseSession();
     const canRetry = this.sources.size > 0 && this.outputStream !== null;
     this.setState(canRetry ? "capturing" : "error", { error });
+    this.emit("error", { error, recoverable: canRetry });
   }
 
   /**
@@ -276,24 +316,48 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
   /**
    * Report a failed capture. A refused device leaves an active session running,
    * so the caller gets the rejection and the session keeps its state. Sources
-   * already capturing are just as unaffected, and stay ready to go live.
+   * already capturing are just as unaffected, and stay ready to go live. One
+   * device failing never rules out another, such as a screen on a machine with
+   * no webcam, so the studio stays ready for the next source either way.
    */
   private failCapture(error: unknown): void {
+    const reported = this.reportedCaptureFailure;
+    this.reportedCaptureFailure = null;
+
     if (this.isSessionActive()) {
       this.log("Capture failed during active session", error);
       return;
     }
-    const message = error instanceof Error ? error.message : String(error);
-    if (this.sources.size > 0) {
-      this.setState("capturing");
+
+    const message = reported ?? (error instanceof Error ? error.message : String(error));
+    this.setState(this.sources.size > 0 ? "capturing" : "idle", { error: message });
+    if (reported === null) {
       this.emit("error", { error: message, recoverable: true });
-      return;
     }
-    this.setState("error", { error: message });
+  }
+
+  /**
+   * Devices report their own failures, with the context of what was being opened
+   * and during a session too, so failCapture() must not report the same one again.
+   */
+  private reportCaptureFailure(message: string): void {
+    this.reportedCaptureFailure = message;
+    this.emit("error", { error: message, recoverable: true });
   }
 
   private hasSourceWithAudio(): boolean {
     return Array.from(this.sources.values()).some((s) => s.stream.getAudioTracks().length > 0);
+  }
+
+  /**
+   * Audio in a media file or a screen share is programme sound, not a voice. A
+   * bare microphone from a caller can only arrive as an audio-only custom source.
+   */
+  private hasMicrophone(): boolean {
+    return Array.from(this.sources.values()).some((s) => {
+      if (s.stream.getAudioTracks().length === 0) return false;
+      return s.type === "camera" || (s.type === "custom" && s.stream.getVideoTracks().length === 0);
+    });
   }
 
   private hasSourceWithVideo(): boolean {
@@ -380,9 +444,64 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
   }
 
   /**
-   * Remove a source by ID
+   * Remove a source by ID. The microphone is opened with a single camera, so
+   * when that camera goes the microphone moves to one that is left.
    */
   removeSource(id: string): void {
+    const source = this.sources.get(id);
+    if (!source) return;
+
+    const microphone = source.type === "camera" ? source.stream.getAudioTracks()[0] : undefined;
+    const microphoneDeviceId = microphone?.getSettings().deviceId;
+    const wasMuted = source.muted;
+
+    this.detachSource(id);
+
+    if (microphone) {
+      void this.moveMicrophone(microphoneDeviceId, wasMuted);
+    }
+  }
+
+  /** A muted microphone stays muted when it moves, whatever the new camera was set to. */
+  private async moveMicrophone(deviceId: string | undefined, muted: boolean): Promise<void> {
+    const camera = Array.from(this.sources.values()).find((s) => s.type === "camera");
+    if (!camera || this.hasMicrophone()) return;
+
+    try {
+      const track = await this.deviceManager.openMicrophone(deviceId, this.currentProfile);
+      if (!track) return;
+
+      if (this.sources.get(camera.id) !== camera || this.hasMicrophone()) {
+        track.stop();
+        return;
+      }
+
+      camera.muted = camera.muted || muted;
+      camera.stream.addTrack(track);
+      if (this.config.audioMixing) {
+        this.audioMixer.addSource(camera.id, track, {
+          volume: camera.volume,
+          muted: camera.muted,
+        });
+      } else {
+        track.enabled = !camera.muted;
+      }
+
+      this.emit("sourceUpdated", {
+        source: camera,
+        changes: { stream: camera.stream, muted: camera.muted },
+      });
+      this.updateOutputStreamFromSources();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.emit("error", {
+        error: `Could not reopen the microphone: ${message}`,
+        recoverable: true,
+      });
+    }
+  }
+
+  private detachSource(id: string): void {
     const source = this.sources.get(id);
     if (!source) return;
 
@@ -556,24 +675,24 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
       const pc = this.whipClient.getPeerConnection();
       if (!pc) return;
 
-      const senders = pc.getSenders();
-
       // Update video track (replaceTrack(null) properly stops sending)
       const newVideoTrack = this.outputStream.getVideoTracks()[0];
-      const videoSender = senders.find((s) => s.track?.kind === "video");
-      if (videoSender) {
-        await videoSender.replaceTrack(newVideoTrack ?? null);
-      }
+      await this.findSender(pc, "video")?.replaceTrack(newVideoTrack ?? null);
 
       // Update audio track (replaceTrack(null) properly stops sending)
       const newAudioTrack = this.outputStream.getAudioTracks()[0];
-      const audioSender = senders.find((s) => s.track?.kind === "audio");
-      if (audioSender) {
-        await audioSender.replaceTrack(newAudioTrack ?? null);
-      }
+      await this.findSender(pc, "audio")?.replaceTrack(newAudioTrack ?? null);
     } catch (error) {
       this.log("Error updating WHIP tracks", error);
     }
+  }
+
+  /**
+   * A sender loses its track on replaceTrack(null) and only its transceiver still
+   * says what it carries, through the receiver paired with it.
+   */
+  private findSender(pc: RTCPeerConnection, kind: "video" | "audio"): RTCRtpSender | undefined {
+    return pc.getTransceivers().find((t) => t.receiver.track.kind === kind)?.sender;
   }
 
   /**
@@ -581,7 +700,8 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
    */
   async startCamera(options: CaptureOptions = {}): Promise<MediaSource> {
     this.log("Starting camera capture", options);
-    this.setCaptureState("requesting_permissions");
+    this.reportedCaptureFailure = null;
+    this.setCaptureState("requesting_permissions", { error: undefined });
 
     try {
       await this.ensureAudioMixer();
@@ -589,7 +709,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
       const profile = options.profile || this.currentProfile;
 
       // A further camera leaves the microphone already in the mix as the only one.
-      const audio = options.audio ?? !this.hasSourceWithAudio();
+      const audio = options.audio ?? !this.hasMicrophone();
 
       // If encoder overrides are set, use them for capture constraints
       const captureOptions: CaptureOptions = { ...options, profile, audio };
@@ -670,7 +790,8 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
    */
   async startScreenShare(options: ScreenCaptureOptions = {}): Promise<MediaSource | null> {
     this.log("Starting screen share", options);
-    this.setCaptureState("requesting_permissions");
+    this.reportedCaptureFailure = null;
+    this.setCaptureState("requesting_permissions", { error: undefined });
 
     try {
       await this.ensureAudioMixer();
@@ -808,9 +929,14 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
   async stopCapture(): Promise<void> {
     this.log("Stopping all capture");
 
+    // Nothing is left to bring back once the sources are gone.
+    if (this.state === "connecting" || this.state === "reconnecting") {
+      void this.releaseSession();
+    }
+
     // Remove all sources
     for (const id of Array.from(this.sources.keys())) {
-      this.removeSource(id);
+      this.detachSource(id);
     }
 
     this.deviceManager.stopAllTracks();
@@ -861,12 +987,13 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
    * Called after initial connection and after reconnection.
    */
   private setupWhipClientHandlers(): void {
-    if (!this.whipClient) return;
+    const client = this.whipClient;
+    if (!client) return;
 
     this.cleanupWhipClientHandlers();
 
     this.whipClientUnsubs.push(
-      this.whipClient.on("stateChange", async (event) => {
+      client.on("stateChange", async (event) => {
         this.log("WHIP state changed", event);
         this.stateContext = {
           ...this.stateContext,
@@ -876,7 +1003,10 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
         if (event.state === "connected") {
           this.setState("streaming");
           this.startStatsPolling();
-          this.reconnectionManager.reset();
+          // A running attempt finishes on its own, and that reports the reconnection.
+          if (!this.reconnectionManager.isReconnecting()) {
+            this.reconnectionManager.reset();
+          }
 
           // Attach WebCodecs encoder transform if supported and codecs are aligned
           // This must happen AFTER connection is established (senders exist)
@@ -929,28 +1059,43 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
             }
           }
         } else if (event.state === "failed" || event.state === "disconnected") {
-          // Skip reconnection/error handling if user intentionally stopped streaming
-          if (this.isStoppingIntentionally) {
+          // connect() rejects with the reason, and whoever called it reports that.
+          if (this.connectingClient === client) {
             return;
           }
-          if (this.state === "streaming" && this.config.reconnection?.enabled !== false) {
+          // Every attempt ends in success or a retry until the manager gives up.
+          if (this.reconnectionManager.isReconnecting()) {
+            return;
+          }
+          const hadConnection = this.state === "streaming" || this.state === "reconnecting";
+          if (hadConnection && this.config.reconnection?.enabled !== false) {
             this.handleConnectionLost();
           } else {
             this.endSession(event.state === "failed" ? "Connection failed" : "Connection lost");
-            this.stopStatsPolling();
           }
         }
       })
     );
 
     this.whipClientUnsubs.push(
-      this.whipClient.on("error", (event) => {
-        if (this.isStoppingIntentionally) {
+      client.on("error", (event) => {
+        if (this.connectingClient === client) {
           return;
         }
         this.emit("error", { error: event.message, recoverable: false });
       })
     );
+  }
+
+  private async connectWhipClient(client: WhipClient, stream: MediaStream): Promise<void> {
+    this.connectingClient = client;
+    try {
+      await client.connect(stream);
+    } finally {
+      if (this.connectingClient === client) {
+        this.connectingClient = null;
+      }
+    }
   }
 
   private cleanupWhipClientHandlers(): void {
@@ -1025,19 +1170,22 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
     }
 
     this.log("Starting streaming");
+    this.reconnectionManager.stop();
     // New session should start from primary WHIP endpoint.
     this.currentEndpointIndex = 0;
     this.setState("connecting", { error: undefined });
 
+    let client: WhipClient | null = null;
     try {
       // Create WHIP client
-      this.whipClient = new WhipClient({
+      client = new WhipClient({
         whipUrl: this.config.resolveWhipUrl
           ? await this.resolveWhipDestination()
           : this.getCurrentWhipUrl(),
         iceServers: this.config.iceServers,
         debug: this.config.debug,
       });
+      this.whipClient = client;
 
       // Set up WHIP event handlers
       this.setupWhipClientHandlers();
@@ -1102,16 +1250,16 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
         );
       }
 
+      // A stop during the setup above leaves nothing to connect.
+      if (this.whipClient !== client) return;
+
       // Connect via standard MediaStream path
       // The encoder transform will be attached after connection is established
-      await this.whipClient.connect(this.outputStream);
+      await this.connectWhipClient(client, this.outputStream);
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError") throw error;
-      // Clean up encoder if connection fails
-      if (this.encoderManager) {
-        this.encoderManager.destroy();
-        this.encoderManager = null;
-      }
+      // A session stopped during the connect has already ended.
+      if (client && this.whipClient !== client) throw error;
       this.endSession(error instanceof Error ? error.message : String(error));
       throw error;
     }
@@ -1122,7 +1270,10 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
    */
   private async handleEncoderFailure(): Promise<void> {
     this.log("Handling encoder failure - reconnecting without WebCodecs");
+    // A stop during any wait below ends this reconnect with the session.
+    const run = this.sessionRun;
     this.setState("reconnecting");
+    this.cleanupWhipClientHandlers();
     this.stopStatsPolling();
     this.disableDirectFrameOutput();
     this.stopBitrateAdaptation();
@@ -1137,36 +1288,43 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
     this.useWebCodecs = false;
 
     // Clean up old WHIP client
-    if (this.whipClient) {
+    const previous = this.whipClient;
+    this.whipClient = null;
+    if (previous) {
       try {
-        await this.whipClient.disconnect();
+        await previous.disconnect();
       } finally {
-        this.whipClient.destroy();
-        this.whipClient = null;
+        previous.destroy();
       }
     }
+    if (run !== this.sessionRun) return;
 
     // Reconnect without WebCodecs
     if (!this.outputStream) {
-      this.setState("error", { error: "No output stream available for reconnection" });
+      this.endSession("No output stream available for reconnection");
       return;
     }
 
     try {
-      this.whipClient = new WhipClient({
-        whipUrl: this.config.resolveWhipUrl
-          ? await this.resolveWhipDestination()
-          : this.getNextWhipUrl(),
+      const whipUrl = this.config.resolveWhipUrl
+        ? await this.resolveWhipDestination()
+        : this.getNextWhipUrl();
+      if (run !== this.sessionRun) return;
+
+      const client = new WhipClient({
+        whipUrl,
         iceServers: this.config.iceServers,
         debug: this.config.debug,
       });
+      this.whipClient = client;
 
       // Set up event handlers (will use browser encoding since useWebCodecs is now false)
       this.setupWhipClientHandlers();
 
-      await this.whipClient.connect(this.outputStream);
+      await this.connectWhipClient(client, this.outputStream);
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError") return;
+      if (run !== this.sessionRun) return;
       this.endSession(
         `Reconnection failed: ${error instanceof Error ? error.message : String(error)}`
       );
@@ -1183,29 +1341,43 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
     this.stopBitrateAdaptation();
 
     this.reconnectionManager.start(async () => {
+      // The session can end during any wait below, and the attempt ends with it.
+      const assertStillReconnecting = () => {
+        if (!this.reconnectionManager.isReconnecting()) {
+          throw new Error("Reconnection cancelled");
+        }
+      };
+
       // Clean up old client handlers and connection
       this.cleanupWhipClientHandlers();
-      if (this.whipClient) {
+      const previous = this.whipClient;
+      this.whipClient = null;
+      if (previous) {
         try {
-          await this.whipClient.disconnect();
+          await previous.disconnect();
         } finally {
-          this.whipClient.destroy();
-          this.whipClient = null;
+          previous.destroy();
         }
       }
+      assertStillReconnecting();
 
       // Create new client and reconnect
-      if (!this.outputStream) {
+      const stream = this.outputStream;
+      if (!stream) {
         throw new Error("No output stream available");
       }
 
-      this.whipClient = new WhipClient({
-        whipUrl: this.config.resolveWhipUrl
-          ? await this.resolveWhipDestination()
-          : this.getNextWhipUrl(),
+      const whipUrl = this.config.resolveWhipUrl
+        ? await this.resolveWhipDestination()
+        : this.getNextWhipUrl();
+      assertStillReconnecting();
+
+      const client = new WhipClient({
+        whipUrl,
         iceServers: this.config.iceServers,
         debug: this.config.debug,
       });
+      this.whipClient = client;
 
       // Set up permanent event handlers (includes WebCodecs re-attachment)
       this.setupWhipClientHandlers();
@@ -1220,17 +1392,20 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
         const onStateChange = (event: { state: string }) => {
           if (event.state === "connected") {
             clearTimeout(timeout);
-            this.whipClient?.off("stateChange", onStateChange);
+            client.off("stateChange", onStateChange);
             resolve();
-          } else if (event.state === "failed") {
+          } else if (event.state === "failed" && this.connectingClient !== client) {
             clearTimeout(timeout);
-            this.whipClient?.off("stateChange", onStateChange);
+            client.off("stateChange", onStateChange);
             reject(new Error("Connection failed"));
           }
         };
 
-        this.whipClient!.on("stateChange", onStateChange);
-        this.whipClient!.connect(this.outputStream!).catch(reject);
+        client.on("stateChange", onStateChange);
+        this.connectWhipClient(client, stream).catch((error) => {
+          clearTimeout(timeout);
+          reject(error);
+        });
       });
     });
   }
@@ -1239,42 +1414,24 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
    * Stop streaming
    */
   async stopStreaming(): Promise<void> {
-    this.destinationResolution?.abort();
     this.log("Stopping streaming");
-    this.isStoppingIntentionally = true;
 
-    try {
-      this.stopStatsPolling();
-      this.disableDirectFrameOutput();
-      this.stopBitrateAdaptation();
-      this.reconnectionManager.stop();
+    // Closing the connection can wait on a server that is gone, and the
+    // broadcaster has stopped either way.
+    const released = this.releaseSession();
 
-      // Stop encoder
-      if (this.encoderManager) {
-        await this.encoderManager.stop();
-        this.encoderManager.destroy();
-        this.encoderManager = null;
-      }
-
-      if (this.whipClient) {
-        await this.whipClient.disconnect();
-        this.whipClient.destroy();
-        this.whipClient = null;
-      }
-
-      if (this.sources.size > 0) {
-        this.setState("capturing");
-      } else {
-        this.setState("idle");
-      }
-
-      this.stateContext = {
-        ...this.stateContext,
-        connectionState: "disconnected",
-      };
-    } finally {
-      this.isStoppingIntentionally = false;
+    if (this.sources.size > 0) {
+      this.setState("capturing");
+    } else {
+      this.setState("idle");
     }
+
+    this.stateContext = {
+      ...this.stateContext,
+      connectionState: "disconnected",
+    };
+
+    await released;
   }
 
   /**
@@ -1301,10 +1458,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
     if (newTrack && this.whipClient) {
       const pc = this.whipClient.getPeerConnection();
       if (pc) {
-        const sender = pc.getSenders().find((s) => s.track?.kind === "video");
-        if (sender) {
-          await sender.replaceTrack(newTrack);
-        }
+        await this.findSender(pc, "video")?.replaceTrack(newTrack);
       }
     }
   }
@@ -1322,10 +1476,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
     if (newTrack && this.whipClient) {
       const pc = this.whipClient.getPeerConnection();
       if (pc) {
-        const sender = pc.getSenders().find((s) => s.track?.kind === "audio");
-        if (sender) {
-          await sender.replaceTrack(newTrack);
-        }
+        await this.findSender(pc, "audio")?.replaceTrack(newTrack);
       }
     }
   }
@@ -1464,6 +1615,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
       this.log("SceneManager initialized successfully");
     } catch (e) {
       // If initialization fails, clean up and re-throw
+      this.sceneManager?.destroy();
       this.sceneManager = null;
       const message = e instanceof Error ? e.message : String(e);
       this.log("Compositor initialization failed:", message);
@@ -1898,7 +2050,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
 
     // Remove all sources
     for (const id of Array.from(this.sources.keys())) {
-      this.removeSource(id);
+      this.detachSource(id);
     }
 
     this.deviceManager.destroy();

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { afterAll, beforeAll, describe, it, expect, vi } from "vitest";
 import { tick } from "svelte";
 import { fireEvent, render, screen, waitFor } from "@testing-library/svelte";
 import { readable } from "svelte/store";
@@ -12,6 +12,14 @@ import {
 } from "@livepeer-frameworks/streamcrafter-core";
 import StudioProducerPanel from "../src/components/StudioProducerPanel.svelte";
 import type { CompositorState, CompositorStore } from "../src/stores/compositor";
+
+// jsdom media elements cannot capture; the panel offers media files to those that can.
+beforeAll(() => {
+  Object.assign(HTMLMediaElement.prototype, { captureStream: () => null });
+});
+afterAll(() => {
+  delete (HTMLMediaElement.prototype as Partial<HTMLMediaElement>).captureStream;
+});
 
 function layer(id: string, zIndex: number): Layer {
   return {
@@ -106,6 +114,7 @@ function composition(overrides: Partial<CompositorState> = {}): CompositorState 
     activeSceneId: "one",
     currentLayout: null,
     overlays: [],
+    error: null,
     ...overrides,
   };
 }

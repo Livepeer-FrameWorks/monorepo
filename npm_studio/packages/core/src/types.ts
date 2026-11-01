@@ -179,6 +179,17 @@ export interface IngestStats {
 // Browser Capability Types
 // ============================================================================
 
+export interface StudioSupport {
+  /** Open a camera or microphone */
+  camera: boolean;
+  /** Share a screen; missing on mobile browsers */
+  screen: boolean;
+  /** Publish over WHIP */
+  publish: boolean;
+  /** Play a local media file into the stream */
+  mediaFile: boolean;
+}
+
 export interface BrowserCapabilities {
   webcodecs: {
     videoEncoder: boolean;

@@ -17,13 +17,15 @@ class LevelTapProcessor extends AudioWorkletProcessor {
   sum = 0;
   count = 0;
   process(inputs) {
-    const samples = inputs[0]?.[0];
-    if (samples) {
-      for (let i = 0; i < samples.length; i++) {
-        this.sum += samples[i] * samples[i];
+    const channels = inputs[0];
+    if (channels?.length) {
+      for (const samples of channels) {
+        for (let i = 0; i < samples.length; i++) {
+          this.sum += samples[i] * samples[i];
+        }
       }
-      this.count += samples.length;
-      if (this.count >= ${WINDOW_SAMPLES}) {
+      this.count += channels[0].length * channels.length;
+      if (this.count >= ${WINDOW_SAMPLES} * channels.length) {
         this.port.postMessage(Math.sqrt(this.sum / this.count));
         this.sum = 0;
         this.count = 0;

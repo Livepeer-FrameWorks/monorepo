@@ -25,6 +25,7 @@ import {
   IngestClient,
   type CameraChoice,
   type CompositorConfig,
+  detectStudioSupport,
   getAudioConstraints,
   isSourceVisibleInScene,
   TEXT_OVERLAY_DEFAULTS,
@@ -115,6 +116,8 @@ export class FwStreamCrafter extends LitElement {
   @state() private _audioProcessing: AudioProcessingSettings;
   @state() private _encoderOverrides: EncoderOverrides = {};
   @state() private _cameraChoices: CameraChoice[] | null = null;
+  @state() private _cameraListFailed = false;
+  @state() private _compositorFailed = false;
   @state() private _overlayImageFailed = false;
   @state() private _mediaFileFailed = false;
 
@@ -126,6 +129,7 @@ export class FwStreamCrafter extends LitElement {
 
   pc: IngestControllerHost;
   private _t: StudioTranslateFn = createStudioTranslator({ locale: "en" });
+  private _support = detectStudioSupport();
   private _ingestClient: IngestClient | null = null;
   private _lastInitKey = "";
   private _dismissListenersAttached = false;
@@ -206,7 +210,8 @@ export class FwStreamCrafter extends LitElement {
     if (
       changed.has("_showSettings") ||
       changed.has("_contextMenu") ||
-      changed.has("_cameraChoices")
+      changed.has("_cameraChoices") ||
+      changed.has("_cameraListFailed")
     ) {
       this._syncDismissListeners();
     }
@@ -359,7 +364,7 @@ export class FwStreamCrafter extends LitElement {
 
     this._lastInitKey = initKey;
 
-    if (this.autoStartCamera && this.pc.s.state === "idle") {
+    if (this.autoStartCamera && this._support.camera && this.pc.s.state === "idle") {
       this.pc.startCamera().catch(console.error);
     }
   }
@@ -385,6 +390,7 @@ export class FwStreamCrafter extends LitElement {
         ? this.compositorConfig
         : undefined;
 
+    this._compositorFailed = false;
     this._compositorEnabling = controller
       .enableCompositor(config)
       .then(() => {
@@ -395,6 +401,7 @@ export class FwStreamCrafter extends LitElement {
       })
       .catch((error) => {
         console.error("Failed to enable compositor:", error);
+        this._compositorFailed = true;
       })
       .finally(() => {
         this._compositorEnabling = null;
@@ -436,8 +443,9 @@ export class FwStreamCrafter extends LitElement {
       }
     }
 
-    if (this._cameraChoices && !this._eventHitsElement(event, this._cameraPickerEl)) {
+    if (!this._eventHitsElement(event, this._cameraPickerEl)) {
       this._cameraChoices = null;
+      this._cameraListFailed = false;
     }
   };
 
@@ -445,11 +453,13 @@ export class FwStreamCrafter extends LitElement {
     if (event.key !== "Escape") return;
     if (this._showSettings) this._showSettings = false;
     if (this._contextMenu) this._contextMenu = null;
-    if (this._cameraChoices) this._cameraChoices = null;
+    this._cameraChoices = null;
+    this._cameraListFailed = false;
   };
 
   private _syncDismissListeners() {
-    const shouldAttach = this._showSettings || !!this._contextMenu || !!this._cameraChoices;
+    const shouldAttach =
+      this._showSettings || !!this._contextMenu || !!this._cameraChoices || this._cameraListFailed;
     if (shouldAttach && !this._dismissListenersAttached) {
       document.addEventListener("mousedown", this._handleDocumentMouseDown);
       document.addEventListener("keydown", this._handleDocumentKeyDown);
@@ -625,8 +635,14 @@ export class FwStreamCrafter extends LitElement {
 
     const statusText = this._getStatusText(s.state, s.reconnectionState);
     const statusBadgeClass = getStatusBadgeClass(s.state, s.isReconnecting);
-    const canAddSource = s.state !== "destroyed" && s.state !== "error";
-    const canStream = s.isCapturing && !s.isStreaming && !!this._resolvedWhipUrl;
+    const canAddSource = s.state !== "destroyed";
+    const support = this._support;
+    const canStream = s.isCapturing && !s.isStreaming && !!this._resolvedWhipUrl && support.publish;
+    const browserNotices = [
+      !support.camera && this._t("browserCannotCapture"),
+      !support.publish && this._t("browserCannotPublish"),
+      this.enableCompositor && this._compositorFailed && this._t("compositorUnavailable"),
+    ].filter((notice): notice is string => !!notice);
     const isResolvingEndpoint =
       !this.whipUrl && !!this.gatewayUrl && !!this.streamKey && this._endpointStatus === "loading";
     const activeScene = this._getActiveScene();
@@ -749,6 +765,16 @@ export class FwStreamCrafter extends LitElement {
           ${this.showProducerPanel && activeScene
             ? this._renderProducerPanel(s.sources, activeScene)
             : nothing}
+          ${browserNotices.map(
+            (notice) => html`
+              <div class="fw-sc-error" style="border-left-color: hsl(40 80% 65%)" role="alert">
+                <div class="fw-sc-error-title" style="color: hsl(40 80% 65%)">
+                  ${this._t("warning")}
+                </div>
+                <div class="fw-sc-error-message">${notice}</div>
+              </div>
+            `
+          )}
           ${s.error || this._endpointError
             ? html`
                 <div class="fw-sc-error">
@@ -779,13 +805,13 @@ export class FwStreamCrafter extends LitElement {
             : nothing}
 
           <div class="fw-sc-actions">
-            ${this._renderCameraPicker(canAddSource)}
+            ${this._renderCameraPicker(canAddSource && support.camera)}
             <button
               type="button"
               class="fw-sc-action-secondary"
               @click=${() => this.pc.startScreenShare({ audio: true }).catch(console.error)}
-              ?disabled=${!canAddSource}
-              title=${this._t("shareScreen")}
+              ?disabled=${!canAddSource || !support.screen}
+              title=${support.screen ? this._t("shareScreen") : this._t("screenShareUnsupported")}
             >
               ${monitorIcon(18)}
             </button>
@@ -807,7 +833,7 @@ export class FwStreamCrafter extends LitElement {
               </button>
               ${this._showSettings ? this._renderSettingsPopup() : nothing}
             </div>
-            ${!s.isStreaming
+            ${!s.isStreaming && !s.isReconnecting
               ? html`
                   <button
                     type="button"
@@ -962,11 +988,19 @@ export class FwStreamCrafter extends LitElement {
   }
 
   private async _handleAddCamera() {
+    this._cameraListFailed = false;
     if (this._cameraChoices) {
       this._cameraChoices = null;
       return;
     }
-    const choices = await this.pc.getCameraChoices();
+    let choices: CameraChoice[];
+    try {
+      choices = await this.pc.getCameraChoices();
+    } catch (error) {
+      console.error("Failed to list cameras:", error);
+      this._cameraListFailed = true;
+      return;
+    }
     const hasCamera = this.pc.s.sources.some((source: MediaSource) => source.type === "camera");
     if (!hasCamera && choices.length <= 1) {
       this._startCamera(choices[0]?.deviceId);
@@ -995,6 +1029,13 @@ export class FwStreamCrafter extends LitElement {
         >
           ${cameraIcon(18)}
         </button>
+        ${this._cameraListFailed
+          ? html`
+              <div class="fw-sc-camera-menu" role="alert">
+                <div class="fw-sc-camera-menu-note">${this._t("cameraListError")}</div>
+              </div>
+            `
+          : nothing}
         ${choices
           ? html`
               <div class="fw-sc-camera-menu" role="menu" aria-label=${this._t("chooseCamera")}>
@@ -1209,18 +1250,25 @@ export class FwStreamCrafter extends LitElement {
       <div class="fw-sc-producer-section">
         <div class="fw-sc-producer-section-header">
           <span class="fw-sc-producer-section-title">${this._t("media")}</span>
-          <div class="fw-sc-producer-section-actions">
-            <label class="fw-sc-producer-btn">
-              ${this._t("addMediaFile")}
-              <input
-                class="fw-sc-producer-file"
-                type="file"
-                accept="video/*,audio/*"
-                @change=${(event: Event) => this._handleMediaFile(event)}
-              />
-            </label>
-          </div>
+          ${this._support.mediaFile
+            ? html`
+                <div class="fw-sc-producer-section-actions">
+                  <label class="fw-sc-producer-btn">
+                    ${this._t("addMediaFile")}
+                    <input
+                      class="fw-sc-producer-file"
+                      type="file"
+                      accept="video/*,audio/*"
+                      @change=${(event: Event) => this._handleMediaFile(event)}
+                    />
+                  </label>
+                </div>
+              `
+            : nothing}
         </div>
+        ${!this._support.mediaFile
+          ? html`<p class="fw-sc-producer-notice">${this._t("mediaFileUnsupported")}</p>`
+          : nothing}
         ${this._mediaFileFailed
           ? html`<p class="fw-sc-producer-error" role="alert">${this._t("mediaFileError")}</p>`
           : nothing}
@@ -1305,9 +1353,11 @@ export class FwStreamCrafter extends LitElement {
     if (!sceneManager || !scene) return;
 
     const layer = scene.layers.find((candidate) => candidate.sourceId === sourceId);
-    if (!layer) return;
-
-    sceneManager.setLayerVisibility(scene.id, layer.id, !layer.visible);
+    if (layer) {
+      sceneManager.setLayerVisibility(scene.id, layer.id, !layer.visible);
+    } else {
+      sceneManager.addLayer(scene.id, sourceId);
+    }
     this.requestUpdate();
   }
 

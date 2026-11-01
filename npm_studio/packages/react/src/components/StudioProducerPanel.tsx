@@ -15,6 +15,7 @@ import {
 } from "@livepeer-frameworks/streamcrafter-core";
 import type { UseCompositorReturn } from "../hooks/useCompositor";
 import { useStudioTranslate } from "../context/StudioI18nContext";
+import { useStudioSupport } from "../hooks/useStudioSupport";
 import { SceneSwitcher } from "./SceneSwitcher";
 import { LayerList } from "./LayerList";
 
@@ -207,6 +208,7 @@ function OverlaySection({ compositor }: { compositor: UseCompositorReturn }) {
 
 function MediaSection({ sources, media }: { sources: MediaSource[]; media: StudioMediaActions }) {
   const t = useStudioTranslate();
+  const support = useStudioSupport();
   const [fileFailed, setFileFailed] = useState(false);
   const files = sources.filter((source) => source.media);
 
@@ -227,18 +229,22 @@ function MediaSection({ sources, media }: { sources: MediaSource[]; media: Studi
     <div className="fw-sc-producer-section">
       <div className="fw-sc-producer-section-header">
         <span className="fw-sc-producer-section-title">{t("media")}</span>
-        <div className="fw-sc-producer-section-actions">
-          <label className="fw-sc-producer-btn">
-            {t("addMediaFile")}
-            <input
-              className="fw-sc-producer-file"
-              type="file"
-              accept="video/*,audio/*"
-              onChange={handleFile}
-            />
-          </label>
-        </div>
+        {support.mediaFile && (
+          <div className="fw-sc-producer-section-actions">
+            <label className="fw-sc-producer-btn">
+              {t("addMediaFile")}
+              <input
+                className="fw-sc-producer-file"
+                type="file"
+                accept="video/*,audio/*"
+                onChange={handleFile}
+              />
+            </label>
+          </div>
+        )}
       </div>
+
+      {!support.mediaFile && <p className="fw-sc-producer-notice">{t("mediaFileUnsupported")}</p>}
 
       {fileFailed && (
         <p className="fw-sc-producer-error" role="alert">

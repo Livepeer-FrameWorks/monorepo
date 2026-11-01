@@ -197,6 +197,12 @@ export interface StudioTranslationStrings {
 
   // Errors
   configureWhipEndpoint: string;
+  browserCannotCapture: string;
+  browserCannotPublish: string;
+  screenShareUnsupported: string;
+  mediaFileUnsupported: string;
+  compositorUnavailable: string;
+  cameraListError: string;
 
   // Missing UI strings
   quality: string;
@@ -446,6 +452,15 @@ export const DEFAULT_STUDIO_TRANSLATIONS: StudioTranslationStrings = {
 
   // Errors
   configureWhipEndpoint: "Configure WHIP endpoint to stream",
+  browserCannotCapture:
+    "This browser can't capture a camera or screen here. Open this page over HTTPS in a current browser.",
+  browserCannotPublish:
+    "This browser can't publish a stream because WebRTC is not available. Use a current browser.",
+  screenShareUnsupported: "This browser can't share a screen",
+  mediaFileUnsupported: "This browser can't play a media file into the stream.",
+  compositorUnavailable:
+    "Scenes and layers are off because this browser could not start the compositor. You can still go live with one source.",
+  cameraListError: "Could not list the cameras",
 
   // Missing UI strings
   quality: "Quality",
@@ -601,6 +616,16 @@ const LOCALE_ES: StudioTranslationStrings = {
   mediaFileError: "Este archivo no se pudo reproducir en este navegador.",
   mediaTabNotice:
     "Los archivos se reproducen desde esta pestaña y no se suben. Mantén esta pestaña abierta mientras haya un archivo en la mezcla.",
+  browserCannotCapture:
+    "Este navegador no puede capturar una cámara ni una pantalla aquí. Abre esta página por HTTPS en un navegador actual.",
+  browserCannotPublish:
+    "Este navegador no puede publicar una transmisión porque WebRTC no está disponible. Usa un navegador actual.",
+  screenShareUnsupported: "Este navegador no puede compartir la pantalla",
+  mediaFileUnsupported:
+    "Este navegador no puede reproducir un archivo multimedia en la transmisión.",
+  compositorUnavailable:
+    "Las escenas y capas están desactivadas porque este navegador no pudo iniciar el compositor. Aún puedes transmitir con una fuente.",
+  cameraListError: "No se pudieron listar las cámaras",
 };
 
 const LOCALE_FR: StudioTranslationStrings = {
@@ -704,6 +729,15 @@ const LOCALE_FR: StudioTranslationStrings = {
   mediaFileError: "Ce fichier ne peut pas être lu dans ce navigateur.",
   mediaTabNotice:
     "Les fichiers sont lus depuis cet onglet et ne sont pas envoyés. Gardez cet onglet ouvert tant qu'un fichier est dans le mixage.",
+  browserCannotCapture:
+    "Ce navigateur ne peut pas capturer une caméra ou un écran ici. Ouvrez cette page en HTTPS dans un navigateur récent.",
+  browserCannotPublish:
+    "Ce navigateur ne peut pas publier de flux car WebRTC n'est pas disponible. Utilisez un navigateur récent.",
+  screenShareUnsupported: "Ce navigateur ne peut pas partager l'écran",
+  mediaFileUnsupported: "Ce navigateur ne peut pas lire un fichier média dans le flux.",
+  compositorUnavailable:
+    "Les scènes et les calques sont désactivés car ce navigateur n'a pas pu démarrer le compositeur. Vous pouvez tout de même diffuser avec une source.",
+  cameraListError: "Impossible de lister les caméras",
 };
 
 const LOCALE_DE: StudioTranslationStrings = {
@@ -808,6 +842,15 @@ const LOCALE_DE: StudioTranslationStrings = {
   mediaFileError: "Diese Datei kann in diesem Browser nicht abgespielt werden.",
   mediaTabNotice:
     "Dateien werden aus diesem Tab abgespielt und nicht hochgeladen. Lassen Sie diesen Tab geöffnet, solange eine Datei in der Mischung ist.",
+  browserCannotCapture:
+    "Dieser Browser kann hier weder Kamera noch Bildschirm aufnehmen. Öffnen Sie diese Seite über HTTPS in einem aktuellen Browser.",
+  browserCannotPublish:
+    "Dieser Browser kann keinen Stream senden, weil WebRTC nicht verfügbar ist. Verwenden Sie einen aktuellen Browser.",
+  screenShareUnsupported: "Dieser Browser kann den Bildschirm nicht teilen",
+  mediaFileUnsupported: "Dieser Browser kann keine Mediendatei in den Stream abspielen.",
+  compositorUnavailable:
+    "Szenen und Ebenen sind deaktiviert, weil dieser Browser den Compositor nicht starten konnte. Sie können trotzdem mit einer Quelle live gehen.",
+  cameraListError: "Die Kameras konnten nicht aufgelistet werden",
 };
 
 const LOCALE_NL: StudioTranslationStrings = {
@@ -912,6 +955,15 @@ const LOCALE_NL: StudioTranslationStrings = {
   mediaFileError: "Dit bestand kan niet worden afgespeeld in deze browser.",
   mediaTabNotice:
     "Bestanden worden vanuit dit tabblad afgespeeld en niet geüpload. Houd dit tabblad open zolang er een bestand in de mix zit.",
+  browserCannotCapture:
+    "Deze browser kan hier geen camera of scherm opnemen. Open deze pagina via HTTPS in een actuele browser.",
+  browserCannotPublish:
+    "Deze browser kan geen stream publiceren omdat WebRTC niet beschikbaar is. Gebruik een actuele browser.",
+  screenShareUnsupported: "Deze browser kan geen scherm delen",
+  mediaFileUnsupported: "Deze browser kan geen mediabestand in de stream afspelen.",
+  compositorUnavailable:
+    "Scènes en lagen staan uit omdat deze browser de compositor niet kon starten. Je kunt nog steeds live gaan met één bron.",
+  cameraListError: "De camera's konden niet worden weergegeven",
 };
 
 const STUDIO_LOCALE_PACKS: Record<StudioLocale, StudioTranslationStrings> = {

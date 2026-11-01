@@ -15,6 +15,7 @@ import { useStreamCrafterV2 } from "../hooks/useStreamCrafterV2";
 import { useAudioLevels } from "../hooks/useAudioLevels";
 import { useCompositor } from "../hooks/useCompositor";
 import { useIngestEndpoints } from "../hooks/useIngestEndpoints";
+import { useStudioSupport } from "../hooks/useStudioSupport";
 import AdvancedPanel from "./AdvancedPanel";
 import { CompositorControls } from "./CompositorControls";
 import { CameraPicker } from "./CameraPicker";
@@ -33,6 +34,7 @@ import type {
 } from "@livepeer-frameworks/streamcrafter-core";
 import {
   getAudioConstraints,
+  isMediaDevicesSupported,
   isSourceVisibleInScene,
   resolveStudioTheme,
   studioThemeOverridesToStyle,
@@ -478,6 +480,7 @@ const StreamCrafterInner: React.FC<StreamCrafterProps> = ({
     const resolved = resolveStudioTheme(theme);
     return resolved ? studioThemeOverridesToStyle(resolved) : undefined;
   }, [theme]);
+  const support = useStudioSupport();
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const settingsDropdownRef = useRef<HTMLDivElement>(null);
@@ -623,12 +626,21 @@ const StreamCrafterInner: React.FC<StreamCrafterProps> = ({
     }
   }, [mediaStream]);
 
-  // Auto-start camera if enabled
+  // Auto-start camera once per endpoint. A camera that fails leaves the state
+  // idle, and retrying from there would prompt the broadcaster forever.
+  const autoStartedFor = useRef<string | null>(null);
   useEffect(() => {
-    if (autoStartCamera && resolvedWhipUrl && state === "idle") {
-      startCamera().catch(console.error);
-    }
+    if (!autoStartCamera || !resolvedWhipUrl || state !== "idle") return;
+    if (autoStartedFor.current === resolvedWhipUrl || !isMediaDevicesSupported()) return;
+    autoStartedFor.current = resolvedWhipUrl;
+    startCamera().catch(console.error);
   }, [autoStartCamera, resolvedWhipUrl, state, startCamera]);
+  useEffect(
+    () => () => {
+      autoStartedFor.current = null;
+    },
+    []
+  );
 
   // Handlers
   const handleStartCamera = useCallback(
@@ -732,8 +744,13 @@ const StreamCrafterInner: React.FC<StreamCrafterProps> = ({
   }, [state, qualityProfile, qualityProfiles, sources.length, resolvedWhipUrl]);
 
   // Computed state
-  const canAddSource = state !== "destroyed" && state !== "error";
-  const canStream = isCapturing && !isStreaming && resolvedWhipUrl;
+  const canAddSource = state !== "destroyed";
+  const canStream = isCapturing && !isStreaming && resolvedWhipUrl && support.publish;
+  const browserNotices = [
+    !support.camera && t("browserCannotCapture"),
+    !support.publish && t("browserCannotPublish"),
+    enableCompositor && compositor.error && t("compositorUnavailable"),
+  ].filter((notice): notice is string => !!notice);
   const _hasScreen = sources.some((s) => s.type === "screen");
   const statusText = getStatusText(state, t, reconnectionState);
   const statusBadgeClass = getStatusBadgeClass(state, isReconnecting);
@@ -907,6 +924,21 @@ const StreamCrafterInner: React.FC<StreamCrafterProps> = ({
                   />
                 )}
 
+                {/* What this browser cannot do */}
+                {browserNotices.map((notice) => (
+                  <div
+                    key={notice}
+                    className="fw-sc-error"
+                    style={{ borderLeftColor: "hsl(40 80% 65%)" }}
+                    role="alert"
+                  >
+                    <div className="fw-sc-error-title" style={{ color: "hsl(40 80% 65%)" }}>
+                      {t("warning")}
+                    </div>
+                    <div className="fw-sc-error-message">{notice}</div>
+                  </div>
+                ))}
+
                 {/* Error Display */}
                 {(error || endpointError) && (
                   <div className="fw-sc-error">
@@ -940,7 +972,7 @@ const StreamCrafterInner: React.FC<StreamCrafterProps> = ({
                   {/* Secondary actions: Camera, Screen, Settings */}
                   <CameraPicker
                     sources={sources}
-                    disabled={!canAddSource}
+                    disabled={!canAddSource || !support.camera}
                     getChoices={hookReturn.getCameraChoices}
                     onPick={handleStartCamera}
                   />
@@ -948,8 +980,8 @@ const StreamCrafterInner: React.FC<StreamCrafterProps> = ({
                     type="button"
                     className="fw-sc-action-secondary"
                     onClick={handleStartScreenShare}
-                    disabled={!canAddSource}
-                    title={t("shareScreen")}
+                    disabled={!canAddSource || !support.screen}
+                    title={support.screen ? t("shareScreen") : t("screenShareUnsupported")}
                   >
                     <MonitorIcon size={18} />
                   </button>
@@ -1100,7 +1132,7 @@ const StreamCrafterInner: React.FC<StreamCrafterProps> = ({
                     )}
                   </div>
                   {/* Primary action: Go Live / Stop */}
-                  {!isStreaming ? (
+                  {!isStreaming && !isReconnecting ? (
                     <button
                       type="button"
                       className="fw-sc-action-primary"

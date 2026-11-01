@@ -170,6 +170,92 @@ describe("image overlays", () => {
     expect(layer.label).toBe("logo.png");
   });
 
+  describe("from an SVG", () => {
+    const svg = (attributes: string) =>
+      new File([`<svg xmlns="http://www.w3.org/2000/svg" ${attributes}></svg>`], "logo.svg", {
+        type: "image/svg+xml",
+      });
+
+    /** createImageBitmap as browsers have it: no decoder for a Blob of SVG, and no size for one. */
+    function stubSvgDecoding(natural: { width: number; height: number } = { width: 0, height: 0 }) {
+      vi.stubGlobal(
+        "Image",
+        class {
+          naturalWidth = natural.width;
+          naturalHeight = natural.height;
+          src = "";
+          async decode() {}
+        }
+      );
+      URL.createObjectURL = vi.fn(() => "blob:logo");
+      URL.revokeObjectURL = vi.fn();
+      const decode = vi.fn(
+        async (source: unknown, options?: { resizeWidth?: number; resizeHeight?: number }) => {
+          if (source instanceof Blob) throw new Error("The source image could not be decoded");
+          if (!options?.resizeWidth && !natural.width) {
+            throw new DOMException("no natural dimensions", "InvalidStateError");
+          }
+          return {
+            width: options?.resizeWidth ?? natural.width,
+            height: options?.resizeHeight ?? natural.height,
+            close: vi.fn(),
+          };
+        }
+      );
+      vi.stubGlobal("createImageBitmap", decode);
+      return decode;
+    }
+
+    it("takes its shape from the viewBox when it states no size", async () => {
+      const decode = stubSvgDecoding();
+      const { sm, scene } = manager();
+
+      await sm.addImageOverlay(scene.id, svg('viewBox="0 0 200 100"'));
+
+      const { width, height } = sm.getConfig();
+      expect(decode).toHaveBeenLastCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          resizeWidth: Math.round(Math.min(width, height * 2)),
+          resizeHeight: Math.round(Math.min(width, height * 2) / 2),
+        })
+      );
+    });
+
+    it("reads a viewBox written with commas", async () => {
+      const decode = stubSvgDecoding();
+      const { sm, scene } = manager();
+
+      await sm.addImageOverlay(scene.id, svg('viewBox="0,0,100,100"'));
+
+      const size = decode.mock.lastCall?.[1];
+      expect(size?.resizeWidth).toBe(size?.resizeHeight);
+    });
+
+    it("falls back to the frame's size when it has neither a size nor a viewBox", async () => {
+      const decode = stubSvgDecoding();
+      const { sm, scene } = manager();
+
+      await sm.addImageOverlay(scene.id, svg(""));
+
+      const { width, height } = sm.getConfig();
+      expect(decode).toHaveBeenLastCalledWith(
+        expect.anything(),
+        expect.objectContaining({ resizeWidth: width, resizeHeight: height })
+      );
+    });
+
+    it("keeps the shape of one with a size of its own", async () => {
+      const decode = stubSvgDecoding({ width: 400, height: 100 });
+      const { sm, scene } = manager();
+
+      await sm.addImageOverlay(scene.id, svg('width="400" height="100"'));
+
+      const size = decode.mock.lastCall?.[1];
+      expect(size!.resizeWidth! / size!.resizeHeight!).toBeCloseTo(4);
+    });
+  });
+
   it("keep the picture's shape at every size", async () => {
     stubBitmap(400, 100);
     const { sm, scene } = manager();

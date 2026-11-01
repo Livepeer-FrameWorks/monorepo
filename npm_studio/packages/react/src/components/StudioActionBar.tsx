@@ -1,6 +1,7 @@
 import React, { useCallback } from "react";
 import { useStreamCrafterContext } from "../context/StreamCrafterContext";
 import { useStudioTranslate } from "../context/StudioI18nContext";
+import { useStudioSupport } from "../hooks/useStudioSupport";
 import { CameraPicker } from "./CameraPicker";
 import { StudioSettings } from "./StudioSettings";
 
@@ -37,8 +38,9 @@ export const StudioActionBar: React.FC<StudioActionBarProps> = ({
 }) => {
   const ctx = useStreamCrafterContext();
   const t = useStudioTranslate();
-  const canAddSource = ctx.state !== "destroyed" && ctx.state !== "error";
-  const canStream = ctx.isCapturing && !ctx.isStreaming && whipUrl !== undefined;
+  const support = useStudioSupport();
+  const canAddSource = ctx.state !== "destroyed";
+  const canStream = ctx.isCapturing && !ctx.isStreaming && whipUrl !== undefined && support.publish;
 
   const handleStartCamera = useCallback(
     async (videoDeviceId?: string) => {
@@ -79,7 +81,7 @@ export const StudioActionBar: React.FC<StudioActionBarProps> = ({
     <div className="fw-sc-actions">
       <CameraPicker
         sources={ctx.sources}
-        disabled={!canAddSource}
+        disabled={!canAddSource || !support.camera}
         getChoices={ctx.getCameraChoices}
         onPick={handleStartCamera}
       />
@@ -87,13 +89,13 @@ export const StudioActionBar: React.FC<StudioActionBarProps> = ({
         type="button"
         className="fw-sc-action-secondary"
         onClick={handleStartScreenShare}
-        disabled={!canAddSource}
-        title={t("shareScreen")}
+        disabled={!canAddSource || !support.screen}
+        title={support.screen ? t("shareScreen") : t("screenShareUnsupported")}
       >
         <MonitorIcon size={18} />
       </button>
       {showSettingsButton && <StudioSettings />}
-      {!ctx.isStreaming ? (
+      {!ctx.isStreaming && !ctx.isReconnecting ? (
         <button
           type="button"
           className="fw-sc-action-primary"

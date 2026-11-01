@@ -46,6 +46,38 @@ describe("CameraPicker", () => {
     await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
   });
 
+  it("says so when the cameras cannot be listed", async () => {
+    const onPick = vi.fn();
+    render(CameraPicker, {
+      sources: [],
+      onPick,
+      getChoices: async () => {
+        throw new Error("enumerateDevices not supported");
+      },
+    });
+
+    await fireEvent.click(screen.getByTitle("Add Camera"));
+
+    expect((await screen.findByRole("alert")).textContent?.trim()).toBe(
+      "Could not list the cameras"
+    );
+    expect(onPick).not.toHaveBeenCalled();
+  });
+
+  it("clears that message on the next try", async () => {
+    const getChoices = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("enumerateDevices not supported"))
+      .mockResolvedValueOnce([rear]);
+    render(CameraPicker, { sources: [], onPick: vi.fn(), getChoices });
+
+    await fireEvent.click(screen.getByTitle("Add Camera"));
+    await screen.findByRole("alert");
+    await fireEvent.click(screen.getByTitle("Add Camera"));
+
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+  });
+
   it("shows a camera already in use without offering it again", async () => {
     renderPicker([camera], [front, rear]);
 

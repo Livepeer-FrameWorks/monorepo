@@ -20,6 +20,7 @@ export class ReconnectionManager extends TypedEventEmitter<ReconnectionEvents> {
   private reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
   private countdownInterval: ReturnType<typeof setInterval> | null = null;
   private reconnectCallback: (() => Promise<void>) | null = null;
+  private run = 0;
 
   constructor(config: Partial<ReconnectionConfig> = {}) {
     super();
@@ -138,12 +139,16 @@ export class ReconnectionManager extends TypedEventEmitter<ReconnectionEvents> {
 
     console.log(`[ReconnectionManager] Executing attempt ${this.state.attemptNumber}`);
 
+    // An attempt outlives stop(), and its outcome then belongs to nothing.
+    const run = this.run;
     try {
       await this.reconnectCallback();
+      if (run !== this.run) return;
 
       // Success!
       this.handleSuccess();
     } catch (error) {
+      if (run !== this.run) return;
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.handleFailure(errorMessage);
     }
@@ -202,6 +207,7 @@ export class ReconnectionManager extends TypedEventEmitter<ReconnectionEvents> {
   stop(): void {
     console.log("[ReconnectionManager] Stopping reconnection");
 
+    this.run++;
     this.cleanup();
 
     this.state = {
@@ -272,6 +278,7 @@ export class ReconnectionManager extends TypedEventEmitter<ReconnectionEvents> {
    * Destroy the manager
    */
   destroy(): void {
+    this.run++;
     this.cleanup();
     this.removeAllListeners();
   }

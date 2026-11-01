@@ -30,6 +30,8 @@ export interface CompositorState {
   currentLayout: LayoutConfig | null;
   /** Overlays of the active scene, bottom to top. */
   overlays: StudioOverlay[];
+  /** Why the compositor could not start, if it could not. */
+  error: string | null;
 }
 
 export interface CompositorStore extends Readable<CompositorState> {
@@ -109,6 +111,7 @@ export function createCompositorStore(options: CreateCompositorStoreOptions): Co
     activeSceneId: null,
     currentLayout: null,
     overlays: [],
+    error: null,
   });
 
   let unsubscribers: (() => void)[] = [];
@@ -170,7 +173,7 @@ export function createCompositorStore(options: CreateCompositorStoreOptions): Co
       .enableCompositor(config)
       .then(() => {
         console.log("[CompositorStore] Compositor enabled successfully");
-        store.update((state) => ({ ...state, isEnabled: true }));
+        store.update((state) => ({ ...state, isEnabled: true, error: null }));
         setupListeners();
       })
       .catch((error) => {
@@ -179,6 +182,7 @@ export function createCompositorStore(options: CreateCompositorStoreOptions): Co
           ...state,
           isEnabled: false,
           isInitialized: false,
+          error: error instanceof Error ? error.message : String(error),
         }));
       });
   }
@@ -193,7 +197,7 @@ export function createCompositorStore(options: CreateCompositorStoreOptions): Co
       console.log("[CompositorStore] Enabling compositor...");
       await controller.enableCompositor(enableConfig || config);
       console.log("[CompositorStore] Compositor enabled successfully");
-      store.update((state) => ({ ...state, isEnabled: true }));
+      store.update((state) => ({ ...state, isEnabled: true, error: null }));
       setupListeners();
     } catch (error) {
       console.error("[CompositorStore] Failed to enable compositor:", error);
@@ -201,6 +205,7 @@ export function createCompositorStore(options: CreateCompositorStoreOptions): Co
         ...state,
         isEnabled: false,
         isInitialized: false,
+        error: error instanceof Error ? error.message : String(error),
       }));
       throw error;
     }
@@ -220,6 +225,7 @@ export function createCompositorStore(options: CreateCompositorStoreOptions): Co
       activeSceneId: null,
       currentLayout: null,
       overlays: [],
+      error: null,
     });
   }
 

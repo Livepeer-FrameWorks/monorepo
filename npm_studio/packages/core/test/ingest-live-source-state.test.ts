@@ -126,15 +126,18 @@ describe("adding a source with no active session", () => {
     expect(controller.getState()).toBe("capturing");
   });
 
-  it("reports a refused capture as an error from idle", async () => {
+  it("reports a refused capture and stays ready for another source", async () => {
     const { controller, internals } = create("idle");
+    const errors = vi.fn();
+    controller.on("error", errors);
     internals.deviceManager.getUserMedia = vi.fn(async () => {
       throw new Error("Permission denied");
     });
 
     await expect(controller.startCamera()).rejects.toThrow("Permission denied");
 
-    expect(controller.getState()).toBe("error");
+    expect(controller.getState()).toBe("idle");
+    expect(errors).toHaveBeenCalledWith({ error: "Permission denied", recoverable: true });
   });
 });
 

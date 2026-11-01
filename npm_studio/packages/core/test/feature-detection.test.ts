@@ -13,6 +13,8 @@ import {
   isAudioCodecSupported,
   getSupportedVideoCodecs,
   getSupportedAudioCodecs,
+  isMediaFileCaptureSupported,
+  detectStudioSupport,
 } from "../src/core/FeatureDetection";
 
 // Stash originals for cleanup
@@ -229,6 +231,68 @@ describe("FeatureDetection", () => {
         configurable: true,
         writable: true,
       });
+    });
+  });
+
+  describe("isMediaFileCaptureSupported", () => {
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it("needs captureStream on media elements", () => {
+      vi.stubGlobal("HTMLMediaElement", class {});
+      expect(isMediaFileCaptureSupported()).toBe(false);
+
+      vi.stubGlobal(
+        "HTMLMediaElement",
+        class {
+          captureStream() {}
+        }
+      );
+      expect(isMediaFileCaptureSupported()).toBe(true);
+    });
+
+    it("is false with no media elements at all", () => {
+      expect(isMediaFileCaptureSupported()).toBe(false);
+    });
+  });
+
+  describe("detectStudioSupport", () => {
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it("reports what a desktop browser can do", () => {
+      vi.stubGlobal("navigator", {
+        mediaDevices: { getUserMedia: vi.fn(), getDisplayMedia: vi.fn() },
+      });
+      vi.stubGlobal("RTCPeerConnection", class {});
+      vi.stubGlobal(
+        "HTMLMediaElement",
+        class {
+          captureStream() {}
+        }
+      );
+
+      expect(detectStudioSupport()).toEqual({
+        camera: true,
+        screen: true,
+        publish: true,
+        mediaFile: true,
+      });
+    });
+
+    it("leaves only the screen out on a phone", () => {
+      vi.stubGlobal("navigator", { mediaDevices: { getUserMedia: vi.fn() } });
+      vi.stubGlobal("RTCPeerConnection", class {});
+
+      expect(detectStudioSupport()).toMatchObject({ camera: true, screen: false, publish: true });
+    });
+
+    it("finds nothing to capture with on an http origin", () => {
+      vi.stubGlobal("navigator", {});
+
+      expect(detectStudioSupport()).toMatchObject({ camera: false, screen: false });
     });
   });
 

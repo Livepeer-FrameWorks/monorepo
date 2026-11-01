@@ -51,6 +51,9 @@
   import {
     isWebCodecsEncodingPathSupported,
     detectCapabilities,
+    detectStudioSupport,
+    FULL_STUDIO_SUPPORT,
+    isMediaDevicesSupported,
     isSourceVisibleInScene,
     resolveStudioTheme,
     studioThemeOverridesToStyle,
@@ -196,6 +199,7 @@
     activeSceneId: null,
     currentLayout: null,
     overlays: [],
+    error: null,
   });
   let ingestEndpointsState = $state<IngestEndpointsState>({
     endpoints: null,
@@ -210,6 +214,7 @@
   });
   let encoderOverrides = $state<EncoderOverrides>({});
   const isWebCodecsAvailable = isWebCodecsEncodingPathSupported();
+  let support = $state(FULL_STUDIO_SUPPORT);
 
   // Sync initial prop values into state
   $effect(() => {
@@ -384,18 +389,23 @@
     onStateChange?.(crafterState.state, crafterState.stateContext);
   });
 
-  // Notify parent of errors
+  // Notify parent of errors. crafterState is replaced on every update, and the
+  // derived value only changes when the error does.
+  let currentError = $derived(crafterState.error);
   $effect(() => {
-    if (crafterState.error) {
-      onError?.(crafterState.error);
+    if (currentError) {
+      onError?.(currentError);
     }
   });
 
-  // Auto-start camera
+  // Auto-start camera once per endpoint. A camera that fails leaves the state
+  // idle, and retrying from there would prompt the broadcaster forever.
+  let autoStartedFor: string | null = null;
   $effect(() => {
-    if (autoStartCamera && resolvedWhipUrl && crafterState.state === "idle") {
-      handleStartCamera();
-    }
+    if (!autoStartCamera || !resolvedWhipUrl || crafterState.state !== "idle") return;
+    if (autoStartedFor === resolvedWhipUrl || !isMediaDevicesSupported()) return;
+    autoStartedFor = resolvedWhipUrl;
+    handleStartCamera();
   });
 
   // Click-outside handler for settings dropdown
@@ -456,6 +466,8 @@
   });
 
   onMount(() => {
+    support = detectStudioSupport();
+
     unsubscribe = crafter.subscribe((state) => {
       crafterState = state;
     });
@@ -633,9 +645,16 @@
   }
 
   // Computed
-  let canAddSource = $derived(crafterState.state !== "destroyed" && crafterState.state !== "error");
+  let canAddSource = $derived(crafterState.state !== "destroyed");
   let canStream = $derived(
-    crafterState.isCapturing && !crafterState.isStreaming && resolvedWhipUrl
+    crafterState.isCapturing && !crafterState.isStreaming && resolvedWhipUrl && support.publish
+  );
+  let browserNotices = $derived(
+    [
+      !support.camera && t("browserCannotCapture"),
+      !support.publish && t("browserCannotPublish"),
+      enableCompositor && compositorState.error && t("compositorUnavailable"),
+    ].filter((notice): notice is string => !!notice)
   );
   let _hasScreen = $derived(crafterState.sources.some((s) => s.type === "screen"));
 
@@ -872,6 +891,14 @@
         <StudioProducerPanel />
       {/if}
 
+      <!-- What this browser cannot do -->
+      {#each browserNotices as notice (notice)}
+        <div class="fw-sc-error" style="border-left-color: hsl(40 80% 65%)" role="alert">
+          <div class="fw-sc-error-title" style="color: hsl(40 80% 65%)">{t("warning")}</div>
+          <div class="fw-sc-error-message">{notice}</div>
+        </div>
+      {/each}
+
       <!-- Error Display -->
       {#if crafterState.error || ingestEndpointsState.error}
         <div class="fw-sc-error">
@@ -901,7 +928,7 @@
         <!-- Secondary actions: Camera, Screen, Settings -->
         <CameraPicker
           sources={crafterState.sources}
-          disabled={!canAddSource}
+          disabled={!canAddSource || !support.camera}
           getChoices={crafter.getCameraChoices}
           onPick={handleStartCamera}
         />
@@ -909,8 +936,8 @@
           type="button"
           class="fw-sc-action-secondary"
           onclick={handleStartScreenShare}
-          disabled={!canAddSource}
-          title={t("shareScreen")}
+          disabled={!canAddSource || !support.screen}
+          title={support.screen ? t("shareScreen") : t("screenShareUnsupported")}
         >
           <MonitorIcon size={18} />
         </button>
@@ -1020,7 +1047,7 @@
           {/if}
         </div>
         <!-- Primary action: Go Live / Stop -->
-        {#if !crafterState.isStreaming}
+        {#if !crafterState.isStreaming && !crafterState.isReconnecting}
           <button
             type="button"
             class="fw-sc-action-primary"

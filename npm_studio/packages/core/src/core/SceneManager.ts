@@ -1069,14 +1069,35 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
     return resized;
   }
 
-  /** SVG has no decoder behind createImageBitmap(blob), only behind an image element. */
+  /**
+   * SVG has no decoder behind createImageBitmap(blob), only behind an image
+   * element, and an SVG that states no size of its own needs one given here or
+   * createImageBitmap rejects it. A vector stays sharp at any size, so it is
+   * drawn as large as it fits the frame.
+   */
   private async decodeThroughElement(blob: Blob): Promise<ImageBitmap> {
     const url = URL.createObjectURL(blob);
     try {
       const element = new Image();
       element.src = url;
       await element.decode();
-      return await createImageBitmap(element);
+
+      const viewBox = /<svg\b[^>]*?\bviewBox\s*=\s*["']([^"']+)["']/i
+        .exec(await blob.text())?.[1]
+        .trim()
+        .split(/[\s,]+/)
+        .map(Number);
+      const [viewWidth, viewHeight] = viewBox?.slice(2) ?? [];
+      const hasViewBox = viewWidth > 0 && viewHeight > 0;
+      const width = hasViewBox ? viewWidth : element.naturalWidth || this.config.width;
+      const height = hasViewBox ? viewHeight : element.naturalHeight || this.config.height;
+
+      const scale = Math.min(this.config.width / width, this.config.height / height);
+      return await createImageBitmap(element, {
+        resizeWidth: Math.round(width * scale),
+        resizeHeight: Math.round(height * scale),
+        resizeQuality: "high",
+      });
     } finally {
       URL.revokeObjectURL(url);
     }

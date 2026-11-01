@@ -30,6 +30,7 @@ export { CompositorControls, type CompositorControlsProps } from "./components/C
 
 // Hooks
 export { useDevices, type UseDevicesReturn } from "./hooks/useDevices";
+export { useStudioSupport } from "./hooks/useStudioSupport";
 export { useScreenCapture, type UseScreenCaptureReturn } from "./hooks/useScreenCapture";
 export {
   useStreamStats,

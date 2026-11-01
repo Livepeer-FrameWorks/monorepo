@@ -91,4 +91,52 @@ describe("ReconnectionManager", () => {
 
     vi.useRealTimers();
   });
+
+  it("forgets an attempt still running when it was stopped", async () => {
+    vi.useFakeTimers();
+    const manager = new ReconnectionManager({ baseDelay: 10, maxAttempts: 3 });
+    const success = vi.fn();
+    manager.on("attemptSuccess", success);
+    let finishAttempt: () => void = () => {};
+    const attempt = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finishAttempt = resolve;
+        })
+    );
+
+    manager.start(attempt);
+    await vi.advanceTimersByTimeAsync(20);
+    manager.stop();
+    finishAttempt();
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(success).not.toHaveBeenCalled();
+    expect(attempt).toHaveBeenCalledOnce();
+
+    vi.useRealTimers();
+  });
+
+  it("does not let a stopped attempt's failure drive a later run", async () => {
+    vi.useFakeTimers();
+    const manager = new ReconnectionManager({ baseDelay: 10, maxAttempts: 3 });
+    let failAttempt: (error: Error) => void = () => {};
+    manager.start(
+      () =>
+        new Promise<void>((_, reject) => {
+          failAttempt = reject;
+        })
+    );
+    await vi.advanceTimersByTimeAsync(20);
+    manager.stop();
+    const nextRun = vi.fn(() => new Promise<void>(() => {}));
+    manager.start(nextRun);
+
+    failAttempt(new Error("late"));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(manager.getAttemptNumber()).toBe(1);
+
+    vi.useRealTimers();
+  });
 });

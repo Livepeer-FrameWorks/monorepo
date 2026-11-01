@@ -68,6 +68,34 @@ describe("compositor worker scene transitions", () => {
     await send({ type: "destroy" });
   });
 
+  it.each([
+    ["cut", 0],
+    ["fade", 10],
+  ] as const)("leaves a running layout animation behind for a %s", async (type, durationMs) => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const send = await worker();
+    await send({
+      type: "animateLayout",
+      targetScene: scene("from"),
+      transition: { durationMs: 60000, easing: "linear" },
+    } as CompositorMainToWorker);
+
+    await send({
+      type: "startTransition",
+      transition: { type, durationMs, easing: "linear" },
+      toScene: scene("to"),
+    });
+
+    expect(posted).toContainEqual({ type: "layoutAnimationComplete" });
+    await vi.waitFor(() =>
+      expect(posted).toContainEqual({ type: "transitionComplete", sceneId: "to" })
+    );
+    renderer.renderScene.mockClear();
+    await vi.waitFor(() => expect(renderer.renderScene).toHaveBeenCalled());
+    expect((renderer.renderScene.mock.lastCall?.[0] as Scene).id).toBe("to");
+    await send({ type: "destroy" });
+  });
+
   it("lands on the target at once for a cut", async () => {
     vi.spyOn(console, "log").mockImplementation(() => {});
     const send = await worker();

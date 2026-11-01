@@ -191,7 +191,61 @@ describe("more than one camera", () => {
     await expect(controller.startCamera({ videoDeviceId: "rear" })).rejects.toThrow();
 
     expect(controller.getState()).toBe("capturing");
-    expect(errors).toHaveBeenCalledWith({ error: "Device in use", recoverable: true });
+    expect(errors).toHaveBeenCalledOnce();
+    expect(errors).toHaveBeenCalledWith({
+      error: "getUserMedia failed: Device in use",
+      recoverable: true,
+    });
+    expect(controller.getStateContext().error).toBe("getUserMedia failed: Device in use");
+  });
+
+  it("reports a first camera that fails to open once", async () => {
+    getUserMedia.mockRejectedValueOnce(new DOMException("Not found", "NotFoundError"));
+    const controller = create();
+    const errors = vi.fn();
+    controller.on("error", errors);
+
+    await expect(controller.startCamera()).rejects.toThrow();
+
+    expect(errors).toHaveBeenCalledOnce();
+    expect(errors).toHaveBeenCalledWith({
+      error: "getUserMedia failed: Not found",
+      recoverable: true,
+    });
+  });
+
+  it("reports a failed screen share once", async () => {
+    const getDisplayMedia = vi.fn(async () => {
+      throw new DOMException("Capture failed", "NotReadableError");
+    });
+    vi.stubGlobal("navigator", {
+      mediaDevices: { getUserMedia, enumerateDevices, getDisplayMedia, addEventListener: vi.fn() },
+    });
+    const controller = create();
+    const errors = vi.fn();
+    controller.on("error", errors);
+
+    await expect(controller.startScreenShare()).rejects.toThrow();
+
+    expect(errors).toHaveBeenCalledOnce();
+    expect(errors).toHaveBeenCalledWith({
+      error: "Screen capture failed: Capture failed",
+      recoverable: true,
+    });
+  });
+
+  it("still reports a capture failure nothing else reported", async () => {
+    getUserMedia
+      .mockRejectedValueOnce(new DOMException("Too much", "OverconstrainedError"))
+      .mockRejectedValueOnce(new DOMException("Still no", "NotFoundError"));
+    const controller = create();
+    const errors = vi.fn();
+    controller.on("error", errors);
+
+    await expect(controller.startCamera()).rejects.toThrow();
+
+    expect(errors).toHaveBeenCalledOnce();
+    expect(errors).toHaveBeenCalledWith({ error: "Still no", recoverable: true });
   });
 
   it("offers each video input once and marks the ones in use", async () => {
@@ -244,6 +298,212 @@ describe("more than one camera", () => {
 
     await expect(controller.switchVideoDevice("rear")).rejects.toThrow();
     expect(getUserMedia).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("the microphone", () => {
+  function audioOnlyStream() {
+    return new FakeMediaStream([track("audio", "mic")]) as unknown as MediaStream;
+  }
+
+  const asksForMicrophone = (call: number) =>
+    getUserMedia.mock.calls[call][0].audio !== false &&
+    getUserMedia.mock.calls[call][0].audio !== undefined;
+
+  it("opens with the first camera when a media file already has audio", async () => {
+    getUserMedia.mockResolvedValueOnce(cameraStream("front"));
+    const controller = create();
+    controller.addMediaFileSource(
+      fakeMediaFile(audioOnlyStream()) as unknown as MediaFileSource,
+      "music.mp3"
+    );
+
+    await controller.startCamera();
+
+    expect(asksForMicrophone(0)).toBe(true);
+  });
+
+  it("opens with the first camera when a screen share already has audio", async () => {
+    getUserMedia.mockResolvedValueOnce(cameraStream("front"));
+    const controller = create();
+    const screen = (controller as unknown as { screenCapture: { start: unknown } }).screenCapture;
+    screen.start = vi.fn(
+      async () => new FakeMediaStream([track("video", "screen"), track("audio", "tab")])
+    );
+    await controller.startScreenShare({ audio: true });
+
+    await controller.startCamera();
+
+    expect(asksForMicrophone(0)).toBe(true);
+  });
+
+  it("stays a single microphone across cameras", async () => {
+    getUserMedia
+      .mockResolvedValueOnce(cameraStream("front"))
+      .mockResolvedValueOnce(cameraStream("rear", false));
+    const controller = create();
+
+    await controller.startCamera();
+    await controller.startCamera({ videoDeviceId: "rear" });
+
+    expect(asksForMicrophone(1)).toBe(false);
+  });
+
+  it("counts a bare microphone a caller added", async () => {
+    getUserMedia.mockResolvedValueOnce(cameraStream("front", false));
+    const controller = create();
+    controller.addCustomSource(audioOnlyStream(), "Desk mic");
+
+    await controller.startCamera();
+
+    expect(asksForMicrophone(0)).toBe(false);
+  });
+
+  it("moves to a remaining camera when the camera holding it is removed", async () => {
+    getUserMedia
+      .mockResolvedValueOnce(cameraStream("front"))
+      .mockResolvedValueOnce(cameraStream("rear", false))
+      .mockResolvedValueOnce(audioOnlyStream());
+    const controller = create();
+    const front = await controller.startCamera();
+    const rear = await controller.startCamera({ videoDeviceId: "rear" });
+
+    controller.removeSource(front.id);
+
+    await vi.waitFor(() => expect(rear.stream.getAudioTracks()).toHaveLength(1));
+    expect(getUserMedia.mock.calls[2][0].video).toBe(false);
+    expect(getUserMedia.mock.calls[2][0].audio.deviceId).toEqual({ exact: "mic" });
+    expect(controller.getMediaStream()?.getAudioTracks()).toHaveLength(1);
+  });
+
+  it("falls back to the default microphone when its device went with the camera", async () => {
+    getUserMedia
+      .mockResolvedValueOnce(cameraStream("front"))
+      .mockResolvedValueOnce(cameraStream("rear", false))
+      .mockRejectedValueOnce(new DOMException("Device gone", "OverconstrainedError"))
+      .mockResolvedValueOnce(audioOnlyStream());
+    const controller = create();
+    const front = await controller.startCamera();
+    const rear = await controller.startCamera({ videoDeviceId: "rear" });
+
+    controller.removeSource(front.id);
+
+    await vi.waitFor(() => expect(rear.stream.getAudioTracks()).toHaveLength(1));
+    expect(getUserMedia.mock.calls[3][0].audio.deviceId).toBeUndefined();
+  });
+
+  it("feeds the moved microphone to the mixer with the camera's level", async () => {
+    getUserMedia
+      .mockResolvedValueOnce(cameraStream("front"))
+      .mockResolvedValueOnce(cameraStream("rear", false))
+      .mockResolvedValueOnce(audioOnlyStream());
+    const controller = create(true);
+    const mixer = controller.getAudioMixer();
+    vi.spyOn(mixer, "initialize").mockResolvedValue(undefined);
+    const addSource = vi.spyOn(mixer, "addSource").mockImplementation(() => undefined as never);
+    vi.spyOn(mixer, "removeSource").mockImplementation(() => {});
+    const front = await controller.startCamera();
+    const rear = await controller.startCamera({ videoDeviceId: "rear" });
+    rear.volume = 0.5;
+
+    controller.removeSource(front.id);
+
+    await vi.waitFor(() => expect(addSource).toHaveBeenCalledTimes(2));
+    expect(addSource).toHaveBeenLastCalledWith(rear.id, expect.anything(), {
+      volume: 0.5,
+      muted: false,
+    });
+  });
+
+  it("stays muted when it moves", async () => {
+    getUserMedia
+      .mockResolvedValueOnce(cameraStream("front"))
+      .mockResolvedValueOnce(cameraStream("rear", false))
+      .mockResolvedValueOnce(audioOnlyStream());
+    const controller = create();
+    const front = await controller.startCamera();
+    const rear = await controller.startCamera({ videoDeviceId: "rear" });
+    controller.setSourceMuted(front.id, true);
+
+    controller.removeSource(front.id);
+
+    await vi.waitFor(() => expect(rear.stream.getAudioTracks()).toHaveLength(1));
+    expect(rear.muted).toBe(true);
+    expect(rear.stream.getAudioTracks()[0].enabled).toBe(false);
+  });
+
+  it("reports a microphone that cannot be reopened without losing the camera", async () => {
+    getUserMedia
+      .mockResolvedValueOnce(cameraStream("front"))
+      .mockResolvedValueOnce(cameraStream("rear", false))
+      .mockRejectedValue(new DOMException("Device in use", "NotReadableError"));
+    const controller = create();
+    const errors = vi.fn();
+    controller.on("error", errors);
+    const front = await controller.startCamera();
+    const rear = await controller.startCamera({ videoDeviceId: "rear" });
+
+    controller.removeSource(front.id);
+
+    await vi.waitFor(() =>
+      expect(errors).toHaveBeenCalledWith({
+        error: expect.stringContaining("Device in use"),
+        recoverable: true,
+      })
+    );
+    expect(controller.getSources().map((source) => source.id)).toEqual([rear.id]);
+  });
+
+  it("stops the reopened microphone if the camera left in the meantime", async () => {
+    const reopened = audioOnlyStream();
+    let finishOpening: (stream: MediaStream) => void = () => {};
+    getUserMedia
+      .mockResolvedValueOnce(cameraStream("front"))
+      .mockResolvedValueOnce(cameraStream("rear", false))
+      .mockImplementationOnce(
+        () =>
+          new Promise<MediaStream>((resolve) => {
+            finishOpening = resolve;
+          })
+      );
+    const controller = create();
+    const front = await controller.startCamera();
+    const rear = await controller.startCamera({ videoDeviceId: "rear" });
+
+    controller.removeSource(front.id);
+    await vi.waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(3));
+    controller.removeSource(rear.id);
+    finishOpening(reopened);
+
+    await vi.waitFor(() => expect(reopened.getAudioTracks()[0].stop).toHaveBeenCalled());
+  });
+
+  it("is not reopened when a camera without it is removed", async () => {
+    getUserMedia
+      .mockResolvedValueOnce(cameraStream("front"))
+      .mockResolvedValueOnce(cameraStream("rear", false));
+    const controller = create();
+    await controller.startCamera();
+    const rear = await controller.startCamera({ videoDeviceId: "rear" });
+
+    controller.removeSource(rear.id);
+    await new Promise((resolve) => setTimeout(resolve));
+
+    expect(getUserMedia).toHaveBeenCalledTimes(2);
+  });
+
+  it("is not reopened when all capture stops", async () => {
+    getUserMedia
+      .mockResolvedValueOnce(cameraStream("front"))
+      .mockResolvedValueOnce(cameraStream("rear", false));
+    const controller = create();
+    await controller.startCamera();
+    await controller.startCamera({ videoDeviceId: "rear" });
+
+    await controller.stopCapture();
+    await new Promise((resolve) => setTimeout(resolve));
+
+    expect(getUserMedia).toHaveBeenCalledTimes(2);
   });
 });
 

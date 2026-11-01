@@ -37,6 +37,8 @@ export interface UseCompositorReturn {
   isInitialized: boolean;
   rendererType: RendererType | null;
   stats: RendererStats | null;
+  /** Why the compositor could not start by itself, if it could not. */
+  error: string | null;
 
   // Scenes
   scenes: Scene[];
@@ -98,6 +100,7 @@ export function useCompositor({
   const [activeSceneId, setActiveSceneId] = useState<string | null>(null);
   const [currentLayout, setCurrentLayout] = useState<LayoutConfig | null>(null);
   const [overlays, setOverlays] = useState<StudioOverlay[]>([]);
+  const [error, setError] = useState<string | null>(null);
 
   const configRef = useRef(config);
   configRef.current = config;
@@ -125,11 +128,19 @@ export function useCompositor({
   useEffect(() => {
     let mounted = true;
     if (autoEnable && controller && !isEnabled) {
-      controller.enableCompositor(configRef.current).then(() => {
-        if (!mounted) return;
-        setIsEnabled(true);
-        syncState();
-      });
+      setError(null);
+      controller
+        .enableCompositor(configRef.current)
+        .then(() => {
+          if (!mounted) return;
+          setIsEnabled(true);
+          syncState();
+        })
+        .catch((err: unknown) => {
+          console.error("Failed to enable compositor:", err);
+          if (!mounted) return;
+          setError(err instanceof Error ? err.message : String(err));
+        });
     }
     return () => {
       mounted = false;
@@ -387,6 +398,7 @@ export function useCompositor({
     isInitialized,
     rendererType,
     stats,
+    error,
 
     // Scenes
     scenes,

@@ -3,7 +3,7 @@
  * Detects WebCodecs, WebRTC, and MediaDevices capabilities
  */
 
-import type { BrowserCapabilities } from "../types";
+import type { BrowserCapabilities, StudioSupport } from "../types";
 
 /**
  * Detect all browser capabilities for streaming
@@ -97,6 +97,39 @@ export function isScreenCaptureSupported(): boolean {
     typeof navigator.mediaDevices !== "undefined" &&
     typeof navigator.mediaDevices.getDisplayMedia === "function"
   );
+}
+
+/**
+ * Check if a media file can be played into the stream, which MediaFileSource
+ * does through the element's captureStream()
+ */
+export function isMediaFileCaptureSupported(): boolean {
+  return typeof HTMLMediaElement !== "undefined" && "captureStream" in HTMLMediaElement.prototype;
+}
+
+/**
+ * The state to render before a page has reached a browser. Nothing is known
+ * during server rendering, so controls start available and detectStudioSupport()
+ * corrects them once mounted.
+ */
+export const FULL_STUDIO_SUPPORT: StudioSupport = {
+  camera: true,
+  screen: true,
+  publish: true,
+  mediaFile: true,
+};
+
+/**
+ * What this browser lets a broadcaster do. Each capability stands alone, so one
+ * missing never takes the others down with it.
+ */
+export function detectStudioSupport(): StudioSupport {
+  return {
+    camera: isMediaDevicesSupported(),
+    screen: isScreenCaptureSupported(),
+    publish: isWebRTCSupported(),
+    mediaFile: isMediaFileCaptureSupported(),
+  };
 }
 
 /**

@@ -3,10 +3,12 @@
   removal live with every other source in the mixer.
 -->
 <script lang="ts">
-  import { getContext } from "svelte";
+  import { getContext, onMount } from "svelte";
   import { readable, type Readable } from "svelte/store";
   import {
     createStudioTranslator,
+    detectStudioSupport,
+    FULL_STUDIO_SUPPORT,
     type MediaSource,
     type StudioTranslateFn,
   } from "@livepeer-frameworks/streamcrafter-core";
@@ -26,6 +28,11 @@
   const translatorCtx =
     getContext<Readable<StudioTranslateFn> | undefined>("fw-sc-translator") ?? readable(fallbackT);
   let t = $derived($translatorCtx);
+
+  let support = $state(FULL_STUDIO_SUPPORT);
+  onMount(() => {
+    support = detectStudioSupport();
+  });
 
   let fileFailed = $state(false);
   let files = $derived(sources.filter((source) => source.media));
@@ -49,18 +56,24 @@
 <div class="fw-sc-producer-section">
   <div class="fw-sc-producer-section-header">
     <span class="fw-sc-producer-section-title">{t("media")}</span>
-    <div class="fw-sc-producer-section-actions">
-      <label class="fw-sc-producer-btn">
-        {t("addMediaFile")}
-        <input
-          class="fw-sc-producer-file"
-          type="file"
-          accept="video/*,audio/*"
-          onchange={handleFile}
-        />
-      </label>
-    </div>
+    {#if support.mediaFile}
+      <div class="fw-sc-producer-section-actions">
+        <label class="fw-sc-producer-btn">
+          {t("addMediaFile")}
+          <input
+            class="fw-sc-producer-file"
+            type="file"
+            accept="video/*,audio/*"
+            onchange={handleFile}
+          />
+        </label>
+      </div>
+    {/if}
   </div>
+
+  {#if !support.mediaFile}
+    <p class="fw-sc-producer-notice">{t("mediaFileUnsupported")}</p>
+  {/if}
 
   {#if fileFailed}
     <p class="fw-sc-producer-error" role="alert">{t("mediaFileError")}</p>

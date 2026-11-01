@@ -295,6 +295,31 @@ export class DeviceManager extends TypedEventEmitter<DeviceManagerEvents> {
   }
 
   /**
+   * Open a microphone on its own: the given device, or the default one when
+   * that device is no longer there.
+   */
+  async openMicrophone(
+    deviceId: string | undefined,
+    profile: QualityProfile = "professional"
+  ): Promise<MediaStreamTrack | null> {
+    const open = (audioDeviceId?: string) =>
+      navigator.mediaDevices.getUserMedia({
+        video: false,
+        audio: buildMediaConstraints(profile, { audioDeviceId }).audio,
+      });
+
+    const stream = await open(deviceId).catch((error: unknown) => {
+      const name = error instanceof Error ? error.name : "";
+      if (deviceId && (name === "OverconstrainedError" || name === "NotFoundError")) {
+        return open();
+      }
+      throw error;
+    });
+
+    return stream.getAudioTracks()[0] ?? null;
+  }
+
+  /**
    * Get all cached devices
    */
   getAllDevices(): DeviceInfo[] {

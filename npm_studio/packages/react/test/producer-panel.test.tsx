@@ -1,5 +1,5 @@
 import React from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, renderHook, screen } from "@testing-library/react";
 import type {
   CameraChoice,
@@ -13,6 +13,14 @@ import { StudioI18nProvider } from "../src/context/StudioI18nContext";
 import { useCompositor, type UseCompositorReturn } from "../src/hooks/useCompositor";
 
 afterEach(cleanup);
+
+// jsdom media elements cannot capture; the panel offers media files to those that can.
+beforeAll(() => {
+  Object.assign(HTMLMediaElement.prototype, { captureStream: () => null });
+});
+afterAll(() => {
+  delete (HTMLMediaElement.prototype as Partial<HTMLMediaElement>).captureStream;
+});
 
 function scene(id: string, name: string, layerIds: string[] = []): Scene {
   return {
@@ -127,6 +135,43 @@ describe("CameraPicker", () => {
 
     expect(onPick).toHaveBeenCalledWith("rear");
     expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("says so when the cameras cannot be listed", async () => {
+    const onPick = vi.fn();
+    render(
+      <CameraPicker
+        sources={[]}
+        onPick={onPick}
+        getChoices={async () => {
+          throw new Error("enumerateDevices not supported");
+        }}
+      />
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByTitle("Add Camera"));
+    });
+
+    expect(screen.getByRole("alert").textContent).toBe("Could not list the cameras");
+    expect(onPick).not.toHaveBeenCalled();
+  });
+
+  it("clears that message on the next try", async () => {
+    const getChoices = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("enumerateDevices not supported"))
+      .mockResolvedValueOnce([rear]);
+    render(<CameraPicker sources={[]} onPick={vi.fn()} getChoices={getChoices} />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByTitle("Add Camera"));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTitle("Add Camera"));
+    });
+
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("shows a camera already in use without offering it again", async () => {

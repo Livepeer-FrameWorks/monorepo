@@ -35,17 +35,22 @@ export interface CameraPickerProps {
 export function CameraPicker({ sources, disabled = false, getChoices, onPick }: CameraPickerProps) {
   const t = useStudioTranslate();
   const [choices, setChoices] = useState<CameraChoice[] | null>(null);
+  const [listFailed, setListFailed] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const isOpen = choices !== null;
 
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen && !listFailed) return;
 
+    const close = () => {
+      setChoices(null);
+      setListFailed(false);
+    };
     const handleOutsideClick = (e: MouseEvent) => {
-      if (!rootRef.current?.contains(e.target as Node)) setChoices(null);
+      if (!rootRef.current?.contains(e.target as Node)) close();
     };
     const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setChoices(null);
+      if (e.key === "Escape") close();
     };
     document.addEventListener("mousedown", handleOutsideClick);
     document.addEventListener("keydown", handleEscape);
@@ -53,14 +58,22 @@ export function CameraPicker({ sources, disabled = false, getChoices, onPick }: 
       document.removeEventListener("mousedown", handleOutsideClick);
       document.removeEventListener("keydown", handleEscape);
     };
-  }, [isOpen]);
+  }, [isOpen, listFailed]);
 
   const handleClick = useCallback(async () => {
+    setListFailed(false);
     if (isOpen) {
       setChoices(null);
       return;
     }
-    const available = await getChoices();
+    let available: CameraChoice[];
+    try {
+      available = await getChoices();
+    } catch (err) {
+      console.error("Failed to list cameras:", err);
+      setListFailed(true);
+      return;
+    }
     const hasCamera = sources.some((source) => source.type === "camera");
     if (!hasCamera && available.length <= 1) {
       onPick(available[0]?.deviceId);
@@ -82,6 +95,11 @@ export function CameraPicker({ sources, disabled = false, getChoices, onPick }: 
       >
         <CameraIcon size={18} />
       </button>
+      {listFailed && (
+        <div className="fw-sc-camera-menu" role="alert">
+          <div className="fw-sc-camera-menu-note">{t("cameraListError")}</div>
+        </div>
+      )}
       {choices && (
         <div className="fw-sc-camera-menu" role="menu" aria-label={t("chooseCamera")}>
           <div className="fw-sc-camera-menu-title">{t("chooseCamera")}</div>

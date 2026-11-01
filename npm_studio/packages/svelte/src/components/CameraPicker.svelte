@@ -28,10 +28,12 @@
   let t = $derived($translatorCtx);
 
   let choices = $state<CameraChoice[] | null>(null);
+  let listFailed = $state(false);
   let rootEl = $state<HTMLDivElement>();
 
   function close() {
     choices = null;
+    listFailed = false;
     document.removeEventListener("mousedown", handleOutsideClick);
     document.removeEventListener("keydown", handleEscape);
   }
@@ -45,17 +47,29 @@
   }
 
   async function handleClick() {
-    if (choices) {
-      close();
+    const wasOpen = choices !== null;
+    close();
+    if (wasOpen) return;
+
+    let available: CameraChoice[];
+    try {
+      available = await getChoices();
+    } catch (err) {
+      console.error("Failed to list cameras:", err);
+      listFailed = true;
+      listenForDismissal();
       return;
     }
-    const available = await getChoices();
     const hasCamera = sources.some((source) => source.type === "camera");
     if (!hasCamera && available.length <= 1) {
       onPick(available[0]?.deviceId);
       return;
     }
     choices = available;
+    listenForDismissal();
+  }
+
+  function listenForDismissal() {
     document.addEventListener("mousedown", handleOutsideClick);
     document.addEventListener("keydown", handleEscape);
   }
@@ -80,6 +94,11 @@
   >
     <CameraIcon size={18} />
   </button>
+  {#if listFailed}
+    <div class="fw-sc-camera-menu" role="alert">
+      <div class="fw-sc-camera-menu-note">{t("cameraListError")}</div>
+    </div>
+  {/if}
   {#if choices}
     <div class="fw-sc-camera-menu" role="menu" aria-label={t("chooseCamera")}>
       <div class="fw-sc-camera-menu-title">{t("chooseCamera")}</div>
