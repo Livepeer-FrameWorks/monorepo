@@ -630,24 +630,43 @@ func expectLocalTenant(mock sqlmock.Sqlmock, tenantBytes []byte, validUntil time
 }
 
 func TestPlaybackRejectsParentChangedBetweenObjectAndTenantReads(t *testing.T) {
-	p, mock, closeDB, tenantBytes, objectBytes := localAuthorityFixture(t)
-	defer closeDB()
-	validUntil := time.Now().Add(time.Hour)
-	expectLocalObject(mock, objectBytes, validUntil, true) // captures parent version 8
-	mock.ExpectQuery("GetLocalTenantAuthority").WillReturnRows(sqlmock.NewRows([]string{
-		"payload", "payload_sha256", "refresh_after", "valid_until", "authority_version",
-		"local_read_ready", "local_ingest_ready", "local_source_ready",
-	}).AddRow(tenantBytes, localPayloadDigest(tenantBytes), time.Now().Add(time.Minute), validUntil, 9, true, true, true))
-	object, err := p.mediaAuthorityStore.MediaObjectByPlaybackID(context.Background(), "playbackkey")
-	if err != nil {
-		t.Fatal(err)
-	}
-	tenant, err := p.mediaAuthorityStore.TenantForObject(context.Background(), object)
-	if err != nil || tenant.Freshness != localauthority.FreshnessHardExpired {
-		t.Fatalf("mixed parent generations admitted playback: tenant=%+v err=%v", tenant, err)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatal(err)
+	for _, tc := range []struct {
+		name          string
+		objectVersion int64
+		parentVersion int64
+		wantFreshness localauthority.Freshness
+	}{
+		{"stale parent", 4, 8, localauthority.FreshnessHardExpired},
+		{"routine parent renewal", 4, 9, localauthority.FreshnessValid},
+		{"object changed during reads", 5, 9, localauthority.FreshnessHardExpired},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p, mock, closeDB, tenantBytes, objectBytes := localAuthorityFixture(t)
+			defer closeDB()
+			validUntil := time.Now().Add(time.Hour)
+			expectLocalObject(mock, objectBytes, validUntil, true) // captures parent version 8
+			mock.ExpectQuery("GetLocalTenantAuthority").WillReturnRows(sqlmock.NewRows([]string{
+				"payload", "payload_sha256", "refresh_after", "valid_until", "authority_version",
+				"local_read_ready", "local_ingest_ready", "local_source_ready",
+			}).AddRow(tenantBytes, localPayloadDigest(tenantBytes), time.Now().Add(time.Minute), validUntil, 9, true, true, true))
+			mock.ExpectQuery("GetLocalMediaObjectAuthorityByInternalName").WithArgs("stream-internal").
+				WillReturnRows(sqlmock.NewRows([]string{
+					"payload", "payload_sha256", "refresh_after", "valid_until", "authority_id", "authority_version",
+					"local_read_ready", "withheld_by_tenant_revival", "tenant_authority_version",
+				}).AddRow(objectBytes, localPayloadDigest(objectBytes), time.Now().Add(time.Minute), validUntil,
+					sharedauthority.LiveStreamAuthorityID("30000000-0000-0000-0000-000000000001"), tc.objectVersion, true, false, tc.parentVersion))
+			object, err := p.mediaAuthorityStore.MediaObjectByPlaybackID(context.Background(), "playbackkey")
+			if err != nil {
+				t.Fatal(err)
+			}
+			tenant, err := p.mediaAuthorityStore.TenantForObject(context.Background(), object)
+			if err != nil || tenant.Freshness != tc.wantFreshness {
+				t.Fatalf("parent recheck freshness=%s want=%s err=%v", tenant.Freshness, tc.wantFreshness, err)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 
