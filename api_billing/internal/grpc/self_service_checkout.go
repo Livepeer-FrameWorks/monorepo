@@ -14,7 +14,7 @@ import (
 func (s *PurserServer) requireSelfServiceCheckout(ctx context.Context, tenantID, tierID, provider string) error {
 	err := subscriptions.CheckSelfServiceCheckout(ctx, s.db, tenantID, tierID, provider)
 	if errors.Is(err, sql.ErrNoRows) {
-		return status.Error(codes.NotFound, "target tier not found")
+		return status.Error(codes.FailedPrecondition, "tenant subscription is missing; bootstrap it before checkout")
 	}
 	if subscriptions.IsPricingRefusal(err) {
 		return checkoutPolicyStatus(codes.FailedPrecondition, err.Error(), err)

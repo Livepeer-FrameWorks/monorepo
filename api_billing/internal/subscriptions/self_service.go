@@ -64,3 +64,13 @@ func CheckSelfServiceActivation(ctx context.Context, exec purserdb.DBTX, tenantI
 	}
 	return nil
 }
+
+// ErrInvalidMollieMandate identifies a provider-confirmed terminal mandate.
+var ErrInvalidMollieMandate = errors.New("mandate is terminally invalid")
+
+// IsDefinitiveMollieActivationRefusal identifies policy refusals that make paid
+// first-payment funding unusable. Setup and in-flight pricing conditions retain it.
+func IsDefinitiveMollieActivationRefusal(err error) bool {
+	return errors.Is(err, ErrSelfServiceTier) || errors.Is(err, ErrTenantBillingClosed) ||
+		errors.Is(err, ErrOutstandingGrant) || errors.Is(err, ErrInvalidMollieMandate)
+}

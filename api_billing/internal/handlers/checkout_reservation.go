@@ -221,11 +221,11 @@ func (s *Service) expireClaimedCheckoutReservation(ctx context.Context, expiry c
 					return clearErr
 				}
 			}
-			tierID, tierErr := tq.GetSelfServiceCheckoutTier(ctx, purserdb.GetSelfServiceCheckoutTierParams{TenantID: r.TenantID, IntentID: r.ID})
-			if tierErr != nil && !errors.Is(tierErr, sql.ErrNoRows) {
-				return tierErr
-			}
-			if tierID != "" {
+			if isSubscriptionCheckout(r.Purpose) {
+				tierID, tierErr := tq.GetSelfServiceCheckoutTier(ctx, purserdb.GetSelfServiceCheckoutTierParams{TenantID: r.TenantID, IntentID: r.ID})
+				if tierErr != nil {
+					return tierErr
+				}
 				eligibilityErr := subscriptions.CheckSelfServiceActivation(ctx, tx, r.TenantID, tierID, r.Provider, incomingSubscriptionID)
 				if eligibilityErr != nil && !subscriptions.IsPricingRefusal(eligibilityErr) {
 					return eligibilityErr
@@ -887,9 +887,9 @@ func (s *Service) checkoutHasConflictingSubscription(ctx context.Context, exec p
 		if s.mollieClient == nil {
 			return false, errors.New("mollie client is required to inspect the previous subscription")
 		}
-		customerID, err := purserdb.New(exec).GetMollieCustomerID(ctx, tenantID)
+		customerID, err := purserdb.New(exec).GetBoundMollieSubscriptionCustomer(ctx, purserdb.GetBoundMollieSubscriptionCustomerParams{TenantID: tenantID, SubscriptionID: id})
 		if err != nil {
-			return false, err
+			return false, fmt.Errorf("cannot establish the original customer for Mollie subscription %s: %w", id, err)
 		}
 		live, readErr := s.mollieClient.HasLiveSubscription(ctx, customerID, id)
 		if readErr != nil || live {

@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -184,7 +185,7 @@ func assertRefusedMollieActivationQueuesFunding(t *testing.T, db *sql.DB) {
 
 func assertMollieFirstPaymentRefusalQueuesRecovery(t *testing.T, db *sql.DB) {
 	t.Helper()
-	for _, mode := range []string{"ineligible tier", "missing billing details", "linked native", "activated funding", "activated native", "established native", "other customer", "other tenant", "other tier", "unpaid funding", "mandate outage", "outstanding invoices", "pending fallback", "pending checkout", "invalid mandate", "rotated credentials", "cancelled setup", "tier gone", "grant", "closure"} {
+	for _, mode := range []string{"ineligible tier", "missing billing details", "linked native", "activated funding", "activated native", "established native", "other customer", "other tenant", "other tier", "unpaid funding", "mandate outage", "outstanding invoices", "pending fallback", "pending checkout", "invalid mandate", "pending mandate", "invalid mandate no explicit id", "invalid mandate other funding", "invalid mandate valid replacement", "rotated credentials", "cancelled setup", "tier gone", "grant", "closure"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx := t.Context()
 			tenant, current, target, funding, native := uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
@@ -194,11 +195,12 @@ func assertMollieFirstPaymentRefusalQueuesRecovery(t *testing.T, db *sql.DB) {
 					t.Fatal(err)
 				}
 			}
-			repairable := mode == "missing billing details" || mode == "mandate outage" || mode == "outstanding invoices" ||
-				mode == "pending fallback" || mode == "pending checkout" || mode == "invalid mandate" ||
+			eligibleTarget := mode == "missing billing details" || mode == "mandate outage" || mode == "outstanding invoices" ||
+				mode == "pending fallback" || mode == "pending checkout" || mode == "invalid mandate" || mode == "pending mandate" ||
+				mode == "invalid mandate no explicit id" || mode == "invalid mandate other funding" || mode == "invalid mandate valid replacement" ||
 				mode == "rotated credentials" || mode == "cancelled setup" || mode == "tier gone" || mode == "grant" || mode == "closure"
 			exec(`INSERT INTO purser.billing_tiers(id,tier_name,display_name,tier_level,base_price,is_enterprise)
-VALUES($1::uuid,$1::text,'Free',0,0,false),($2::uuid,$2::text,'Target',2,20,$3)`, current, target, !repairable)
+VALUES($1::uuid,$1::text,'Free',0,0,false),($2::uuid,$2::text,'Target',2,20,$3)`, current, target, !eligibleTarget)
 			exec(`INSERT INTO purser.tenant_subscriptions(tenant_id,tier_id,status,billing_model,payment_method,presentment_currency,billing_name,billing_email,billing_address)
 VALUES($1,$2,'active','prepaid','mollie','EUR','Customer','billing@example.test','{"street":"Main 1","city":"Amsterdam","postal_code":"1000AA","country":"NL"}')`, tenant, current)
 			exec(`INSERT INTO purser.mollie_customers(tenant_id,mollie_customer_id) VALUES($1::text::uuid,'customer-'||$1::text)`, tenant)
@@ -261,15 +263,27 @@ VALUES($1::uuid,$2::text::uuid,'mollie','mollie_subscription_create','billing_ti
 				exec(`INSERT INTO purser.payment_provider_intents(id,tenant_id,provider,purpose,local_reference_type,local_reference_id,status,currency,amount_cents,idempotency_key,provider_customer_id,expires_at,provider_request)
 VALUES($1::uuid,$2::uuid,'mollie','mollie_subscription_create','billing_tiers',$3,'provider_open','EUR',2000,$4,$5,NOW()+INTERVAL '1 hour','{"kind":"mollie_subscription","credential":"old-key","params":{}}')`, native, tenant, target, "mollie-subscription:"+tenant+":"+target+":mandate", "customer-"+tenant)
 			}
-			client := &refusedFundingMollieClient{outage: mode == "mandate outage", invalid: mode == "invalid mandate", cancelled: mode == "cancelled setup"}
+			otherFunding := uuid.NewString()
+			if mode == "invalid mandate other funding" || mode == "invalid mandate valid replacement" {
+				exec(`INSERT INTO purser.payment_provider_intents(id,tenant_id,provider,purpose,local_reference_type,local_reference_id,status,currency,amount_cents,idempotency_key,provider_customer_id,provider_payment_id,provider_mandate_id,succeeded_at,expires_at) VALUES($1::uuid,$2::uuid,'mollie','mollie_first_payment','billing_tiers',$3,'succeeded','EUR',2000,$1::text,'customer-'||$2::text,'other-payment-'||$1::text,'other-mandate',NOW(),NOW()+INTERVAL '1 hour')`, otherFunding, tenant, target)
+			}
+			client := &refusedFundingMollieClient{outage: mode == "mandate outage", invalid: strings.HasPrefix(mode, "invalid mandate"), pending: mode == "pending mandate", replacement: mode == "invalid mandate valid replacement", cancelled: mode == "cancelled setup"}
 			server := &PurserServer{db: db, logger: logging.NewLogger(), mollieClient: client}
-			for attempt := 0; attempt < 2; attempt++ {
-				_, err := server.CreateMollieSubscription(ctx, &purserpb.CreateMollieSubscriptionRequest{TenantId: tenant, TierId: target, MandateId: "mandate"})
+			attempts := 2
+			if mode == "invalid mandate valid replacement" {
+				attempts = 1
+			}
+			for attempt := 0; attempt < attempts; attempt++ {
+				mandateID := "mandate"
+				if mode == "invalid mandate no explicit id" || mode == "invalid mandate valid replacement" {
+					mandateID = ""
+				}
+				_, err := server.CreateMollieSubscription(ctx, &purserpb.CreateMollieSubscriptionRequest{TenantId: tenant, TierId: target, MandateId: mandateID})
 				wantCode := codes.FailedPrecondition
 				if mode == "mandate outage" {
 					wantCode = codes.Unavailable
 				}
-				if mode == "cancelled setup" && attempt == 1 {
+				if mode == "cancelled setup" && attempt == 1 || mode == "invalid mandate valid replacement" {
 					wantCode = codes.OK
 				}
 				if status.Code(err) != wantCode {
@@ -280,7 +294,7 @@ VALUES($1::uuid,$2::uuid,'mollie','mollie_subscription_create','billing_tiers',$
 			err := db.QueryRowContext(ctx, `SELECT count(*) FROM purser.payment_provider_intents p JOIN purser.provider_webhook_inbox i ON i.provider='checkout_recovery' AND i.event_key='checkout-expiry:'||p.id::text
 WHERE p.tenant_id=$1 AND p.recovery_started_at IS NOT NULL AND convert_from(i.raw_payload,'UTF8')::jsonb->>'force'='true' AND i.next_attempt_at<=NOW()`, tenant).Scan(&queued)
 			want := 0
-			if mode == "ineligible tier" || mode == "tier gone" || mode == "grant" || mode == "closure" {
+			if mode == "ineligible tier" || mode == "tier gone" || mode == "grant" || mode == "closure" || strings.HasPrefix(mode, "invalid mandate") {
 				want = 1
 			}
 			if mode == "linked native" {
@@ -289,9 +303,17 @@ WHERE p.tenant_id=$1 AND p.recovery_started_at IS NOT NULL AND convert_from(i.ra
 			wantCreates := 0
 			if mode == "cancelled setup" {
 				wantCreates = 2
+			} else if mode == "invalid mandate valid replacement" {
+				wantCreates = 1
 			}
 			if err != nil || queued != want || client.creates != wantCreates {
 				t.Fatalf("refused funding queue=%d want=%d provider creates=%d err=%v", queued, want, client.creates, err)
+			}
+			if mode == "invalid mandate other funding" || mode == "invalid mandate valid replacement" {
+				var latched, activated bool
+				if err := db.QueryRowContext(ctx, `SELECT recovery_started_at IS NOT NULL, activated_at IS NOT NULL FROM purser.payment_provider_intents WHERE tenant_id=$1 AND id=$2`, tenant, otherFunding).Scan(&latched, &activated); err != nil || latched || activated != (mode == "invalid mandate valid replacement") {
+					t.Fatalf("replacement funding disposition: latched=%v activated=%v err=%v", latched, activated, err)
+				}
 			}
 			if mode == "cancelled setup" {
 				var activated bool
@@ -305,10 +327,12 @@ WHERE p.tenant_id=$1 AND p.recovery_started_at IS NOT NULL AND convert_from(i.ra
 
 type refusedFundingMollieClient struct {
 	fakeMollieBillingClient
-	outage    bool
-	invalid   bool
-	cancelled bool
-	creates   int
+	outage      bool
+	invalid     bool
+	pending     bool
+	replacement bool
+	cancelled   bool
+	creates     int
 }
 
 func (c *refusedFundingMollieClient) GetMandate(_ context.Context, _ string, id string) (*mollielib.Mandate, error) {
@@ -318,11 +342,16 @@ func (c *refusedFundingMollieClient) GetMandate(_ context.Context, _ string, id 
 	state := mollielib.MandateStatus("valid")
 	if c.invalid {
 		state = "invalid"
+	} else if c.pending {
+		state = "pending"
 	}
 	return &mollielib.Mandate{ID: id, Status: state}, nil
 }
 func (c *refusedFundingMollieClient) CreateSubscription(context.Context, billingmollie.SubscriptionParams) (*mollielib.Subscription, error) {
 	c.creates++
+	if c.replacement {
+		return &mollielib.Subscription{ID: uuid.NewString(), Status: "active"}, nil
+	}
 	if c.cancelled {
 		if c.creates == 1 {
 			return &mollielib.Subscription{ID: uuid.NewString(), Status: "canceled"}, nil
@@ -330,4 +359,12 @@ func (c *refusedFundingMollieClient) CreateSubscription(context.Context, billing
 		return &mollielib.Subscription{ID: uuid.NewString(), Status: "active"}, nil
 	}
 	return nil, errors.New("refused first payment reached subscription create")
+}
+
+func (c *refusedFundingMollieClient) ListMandates(ctx context.Context, customerID string) ([]*mollielib.Mandate, error) {
+	mandate, err := c.GetMandate(ctx, customerID, "mandate")
+	if c.replacement {
+		return []*mollielib.Mandate{mandate, {ID: "other-mandate", Status: "valid"}}, err
+	}
+	return []*mollielib.Mandate{mandate}, err
 }

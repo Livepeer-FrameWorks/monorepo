@@ -579,6 +579,7 @@ WITH unused AS (
       AND funding.local_reference_id = sqlc.arg(tier_id)::text::uuid
       AND funding.status = 'succeeded' AND funding.activated_at IS NULL
       AND funding.provider_mandate_id IS NOT NULL
+      AND (sqlc.arg(mandate_id)::text = '' OR funding.provider_mandate_id = sqlc.arg(mandate_id)::text)
       AND funding.provider_payment_id IS NOT NULL
       AND funding.recovery_started_at IS NULL
       AND NOT EXISTS (
@@ -595,3 +596,15 @@ JOIN unused ON native.funding_intent_id = unused.id
 WHERE native.tenant_id = sqlc.arg(tenant_id)::text::uuid
   AND native.provider = 'mollie' AND native.purpose = 'mollie_subscription_create'
   AND native.activated_at IS NULL AND native.status <> 'succeeded';
+
+-- name: GetBoundMollieSubscriptionCustomer :one
+-- The native receipt binds its collector to the original provider customer.
+-- Missing or conflicting bindings cannot prove a cancelled collector ended.
+SELECT MIN(provider_customer_id)::text AS customer_id
+FROM purser.payment_provider_intents
+WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
+  AND provider = 'mollie' AND purpose = 'mollie_subscription_create'
+  AND provider_subscription_id = sqlc.arg(subscription_id)::text
+  AND provider_customer_id IS NOT NULL
+GROUP BY tenant_id
+HAVING COUNT(DISTINCT provider_customer_id) = 1;

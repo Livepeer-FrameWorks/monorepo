@@ -368,6 +368,31 @@ func (q *Queries) FinishProviderCheckoutIntent(ctx context.Context, arg FinishPr
 	return err
 }
 
+const getBoundMollieSubscriptionCustomer = `-- name: GetBoundMollieSubscriptionCustomer :one
+SELECT MIN(provider_customer_id)::text AS customer_id
+FROM purser.payment_provider_intents
+WHERE tenant_id = $1::text::uuid
+  AND provider = 'mollie' AND purpose = 'mollie_subscription_create'
+  AND provider_subscription_id = $2::text
+  AND provider_customer_id IS NOT NULL
+GROUP BY tenant_id
+HAVING COUNT(DISTINCT provider_customer_id) = 1
+`
+
+type GetBoundMollieSubscriptionCustomerParams struct {
+	TenantID       string `db:"tenant_id" json:"tenant_id"`
+	SubscriptionID string `db:"subscription_id" json:"subscription_id"`
+}
+
+// The native receipt binds its collector to the original provider customer.
+// Missing or conflicting bindings cannot prove a cancelled collector ended.
+func (q *Queries) GetBoundMollieSubscriptionCustomer(ctx context.Context, arg GetBoundMollieSubscriptionCustomerParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, getBoundMollieSubscriptionCustomer, arg.TenantID, arg.SubscriptionID)
+	var customer_id string
+	err := row.Scan(&customer_id)
+	return customer_id, err
+}
+
 const getMollieCustomerID = `-- name: GetMollieCustomerID :one
 SELECT mollie_customer_id
 FROM purser.mollie_customers
@@ -720,6 +745,7 @@ WITH unused AS (
       AND funding.local_reference_id = $2::text::uuid
       AND funding.status = 'succeeded' AND funding.activated_at IS NULL
       AND funding.provider_mandate_id IS NOT NULL
+      AND ($3::text = '' OR funding.provider_mandate_id = $3::text)
       AND funding.provider_payment_id IS NOT NULL
       AND funding.recovery_started_at IS NULL
       AND NOT EXISTS (
@@ -739,14 +765,15 @@ WHERE native.tenant_id = $1::text::uuid
 `
 
 type ListRefusedMollieFundingIntentsParams struct {
-	TenantID string `db:"tenant_id" json:"tenant_id"`
-	TierID   string `db:"tier_id" json:"tier_id"`
+	TenantID  string `db:"tenant_id" json:"tenant_id"`
+	TierID    string `db:"tier_id" json:"tier_id"`
+	MandateID string `db:"mandate_id" json:"mandate_id"`
 }
 
 // The subscription lock excludes activation while unused, locally owned funding
 // and its unactivated native checkout are handed to durable compensation.
 func (q *Queries) ListRefusedMollieFundingIntents(ctx context.Context, arg ListRefusedMollieFundingIntentsParams) ([]string, error) {
-	rows, err := q.db.QueryContext(ctx, listRefusedMollieFundingIntents, arg.TenantID, arg.TierID)
+	rows, err := q.db.QueryContext(ctx, listRefusedMollieFundingIntents, arg.TenantID, arg.TierID, arg.MandateID)
 	if err != nil {
 		return nil, err
 	}

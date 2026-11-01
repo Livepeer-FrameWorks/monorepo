@@ -395,9 +395,17 @@ A definitive Mollie activation refusal queues immediate compensation for paid,
 unused first-payment funding. The subscription lock excludes concurrent activation;
 activated funding and established native subscriptions are never refunded by that
 refusal. Repairable conditions, including incomplete billing details, unpaid invoices,
-pending checkout or fallback, invalid mandates, changed request credentials and
+pending checkout or fallback, pending mandates, changed request credentials and
 cancelled setup keep funding available for retry. Compensation is limited to eligibility,
-closure, an outstanding grant or a removed tier.
+closure, an outstanding grant, a removed tier or a provider-confirmed terminally
+invalid mandate. Invalid-mandate recovery refunds only unused funding bound to
+that mandate; other mandates keep their funding. The locked activation path uses
+the same classification: repairable refusals cancel the unactivated native
+subscription without refunding its reusable first payment.
+
+Recovery probes a cancelled Mollie collector using the customer bound to its
+native checkout receipt. Missing or conflicting bindings fail closed for
+operator inspection.
 
 Checkout reserves its durable provider intent under the same lock before any
 external call. Grant creation refuses while Stripe checkout or Mollie first

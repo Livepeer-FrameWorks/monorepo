@@ -267,6 +267,9 @@ type Querier interface {
 	GetBootstrapSubscriptionID(ctx context.Context, tenantID string) (uuid.UUID, error)
 	GetBootstrapTenantSubscription(ctx context.Context, tenantID string) (GetBootstrapTenantSubscriptionRow, error)
 	GetBootstrapTierID(ctx context.Context, tierName string) (uuid.UUID, error)
+	// The native receipt binds its collector to the original provider customer.
+	// Missing or conflicting bindings cannot prove a cancelled collector ended.
+	GetBoundMollieSubscriptionCustomer(ctx context.Context, arg GetBoundMollieSubscriptionCustomerParams) (string, error)
 	GetCachedVATValidation(ctx context.Context, arg GetCachedVATValidationParams) (bool, error)
 	GetCancelableSubscriptionID(ctx context.Context, tenantID string) (uuid.UUID, error)
 	GetCanonicalPromotedSubscription(ctx context.Context, arg GetCanonicalPromotedSubscriptionParams) (GetCanonicalPromotedSubscriptionRow, error)

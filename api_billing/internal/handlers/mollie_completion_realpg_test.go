@@ -18,7 +18,7 @@ func TestMollieCompletionSurvivesLateSettlement_RealPG(t *testing.T) {
 	tenant := newPhaseTenant(t, db, "prepaid", now.Add(-48*time.Hour), now.AddDate(0, 1, 0), 0)
 	tenant.svc.mollieClient = client
 	id := uuid.NewString()
-	if _, err := db.Exec(`INSERT INTO purser.payment_provider_intents(id,tenant_id,provider,purpose,status,currency,idempotency_key,provider_customer_id,provider_payment_id,expires_at,amount_cents) VALUES($1::uuid,$2,'mollie','mollie_first_payment','provider_open','EUR',$1::text,'customer','payment',NOW()-INTERVAL '1 hour',2000)`, id, tenant.id); err != nil {
+	if _, err := db.Exec(`INSERT INTO purser.payment_provider_intents(id,tenant_id,provider,purpose,local_reference_type,local_reference_id,status,currency,idempotency_key,provider_customer_id,provider_payment_id,expires_at,amount_cents) VALUES($1::uuid,$2,'mollie','mollie_first_payment','billing_tiers',$3,'provider_open','EUR',$1::text,'customer','payment',NOW()-INTERVAL '1 hour',2000)`, id, tenant.id, tenant.supporterID); err != nil {
 		t.Fatal(err)
 	}
 	state := "pending"

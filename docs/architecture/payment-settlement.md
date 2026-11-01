@@ -258,6 +258,10 @@ creation. A definitive activation refusal queues compensation for unused paid
 funding even when no native subscription was created; a transient read failure
 leaves it reusable. Stripe retains cash-funded terms only with retained payment evidence;
 fully credit-funded terms use the paid invoice and its service period.
+Pending mandates and in-flight pricing changes retain funding for retry. A
+provider-confirmed terminally invalid mandate queues compensation only for its
+own unused funding. Native subscriptions created before a repairable activation
+refusal are cancelled without refunding the reusable first payment.
 
 A durable protection-through timestamp keeps local monthly start, end and
 collection anchors together through payment recovery. Dated dunning events

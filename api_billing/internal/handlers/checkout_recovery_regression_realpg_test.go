@@ -272,6 +272,7 @@ func TestCheckoutRecoveryAuditTerminalResultIsImmutable_RealPG(t *testing.T) {
 }
 
 func TestHistoricalRecoveryDoesNotReplaceEstablishedSubscription_RealPG(t *testing.T) {
+	t.Run("Mollie customer binding", testRecoveryProbesBoundMollieCustomer)
 	for _, scenario := range []string{"cancelled Stripe", "replaced by Mollie", "cancelled prior reference"} {
 		t.Run(scenario, func(t *testing.T) {
 			db := startProviderReservationDatabase(t)
@@ -328,6 +329,41 @@ func TestHistoricalRecoveryDoesNotReplaceEstablishedSubscription_RealPG(t *testi
 			}
 			if stripe.String != "" || scenario == "replaced by Mollie" && mollie.String != "established" {
 				t.Fatalf("historical receipt replaced established pricing: stripe=%v mollie=%v", stripe, mollie)
+			}
+		})
+	}
+}
+
+func testRecoveryProbesBoundMollieCustomer(t *testing.T) {
+	for _, oldState := range []string{"active", "canceled"} {
+		t.Run(oldState, func(t *testing.T) {
+			db := startProviderReservationDatabase(t)
+			fixture, client := installMollieFixture(t)
+			now := time.Now().UTC()
+			tenant := newPhaseTenant(t, db, "prepaid", now, now.AddDate(0, 1, 0), 0)
+			tenant.svc.mollieClient = client
+			if _, err := db.Exec(`UPDATE purser.tenant_subscriptions SET status='cancelled',mollie_subscription_id='old-subscription' WHERE tenant_id=$1;`, tenant.id); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := db.Exec(`INSERT INTO purser.mollie_customers(tenant_id,mollie_customer_id) VALUES($1,'current-customer')`, tenant.id); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := db.Exec(`INSERT INTO purser.payment_provider_intents(tenant_id,provider,purpose,local_reference_type,local_reference_id,status,currency,idempotency_key,provider_customer_id,provider_subscription_id) VALUES($1,'mollie','mollie_subscription_create','billing_tiers',$2,'succeeded','EUR','old-native','old-customer','old-subscription')`, tenant.id, tenant.supporterID); err != nil {
+				t.Fatal(err)
+			}
+			fixture.route("GET", "/v2/customers/old-customer/subscriptions/old-subscription", func(recordedProviderRequest) (int, any) {
+				return 200, map[string]any{"id": "old-subscription", "status": oldState}
+			})
+			fixture.route("GET", "/v2/customers/current-customer/subscriptions/old-subscription", func(recordedProviderRequest) (int, any) {
+				return 404, map[string]any{"status": 404, "detail": "not owned by current customer"}
+			})
+			locked := subscriptions.LockedSubscription{Current: purserdb.LockTenantSubscriptionForProviderChangeRow{Status: "cancelled", MollieSubscriptionID: sql.NullString{String: "old-subscription", Valid: true}}}
+			conflict, err := tenant.svc.checkoutHasConflictingSubscription(t.Context(), db, tenant.id, locked, "stripe", "incoming")
+			if err != nil || conflict != (oldState == "active") {
+				t.Fatalf("bound Mollie collector liveness: conflict=%v state=%s err=%v", conflict, oldState, err)
+			}
+			if len(fixture.matching("GET", "/v2/customers/old-customer/subscriptions/old-subscription")) != 1 || len(fixture.matching("GET", "/v2/customers/current-customer/subscriptions/old-subscription")) != 0 {
+				t.Fatal("liveness probe used mutable current customer instead of native receipt binding")
 			}
 		})
 	}

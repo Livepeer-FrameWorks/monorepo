@@ -118,12 +118,18 @@ func transitionProviderWithRecoveryTx(ctx context.Context, tx *sql.Tx, change Pr
 		subscriptionID = change.Mollie.SubscriptionID.String
 	}
 	if bindErr := q.BindProviderCheckoutReceipt(ctx, purserdb.BindProviderCheckoutReceiptParams{
-		TenantID: change.TenantID, IntentID: reservation.ID,
-		Provider: reservation.Provider, SubscriptionID: subscriptionID,
+		TenantID:       change.TenantID,
+		IntentID:       reservation.ID,
+		Provider:       reservation.Provider,
+		SubscriptionID: subscriptionID,
 	}); bindErr != nil {
 		return result, bindErr
 	}
-	for _, id := range []string{reservation.ID, reservation.FundingIntentID} {
+	recoverIDs := []string{reservation.ID}
+	if IsDefinitiveMollieActivationRefusal(err) {
+		recoverIDs = append(recoverIDs, reservation.FundingIntentID)
+	}
+	for _, id := range recoverIDs {
 		if id == "" {
 			continue
 		}

@@ -7056,10 +7056,14 @@ func (s *PurserServer) CreateFirstPayment(ctx context.Context, req *purserpb.Cre
 // CreateMollieSubscription activates a Mollie subscription or compensates refused funding.
 func (s *PurserServer) CreateMollieSubscription(ctx context.Context, req *purserpb.CreateMollieSubscriptionRequest) (*purserpb.CreateMollieSubscriptionResponse, error) {
 	response, err := s.createMollieSubscription(ctx, req)
-	if !definitiveMollieActivationRefusal(err) {
+	if !subscriptions.IsDefinitiveMollieActivationRefusal(err) {
 		return response, err
 	}
-	if queueErr := s.compensateRefusedMollieFunding(ctx, req.GetTenantId(), req.GetTierId(), status.Convert(err).Message()); queueErr != nil {
+	mandateID := ""
+	if errors.Is(err, subscriptions.ErrInvalidMollieMandate) {
+		mandateID = req.GetMandateId()
+	}
+	if queueErr := s.compensateRefusedMollieFunding(ctx, req.GetTenantId(), req.GetTierId(), status.Convert(err).Message(), mandateID); queueErr != nil {
 		s.logger.WithError(queueErr).WithField("tenant_id", req.GetTenantId()).Error("Failed to queue refused Mollie first-payment compensation")
 		return nil, status.Error(codes.Internal, "failed to queue refused first-payment compensation; retry activation")
 	}
@@ -7134,10 +7138,18 @@ func (s *PurserServer) createMollieSubscription(ctx context.Context, req *purser
 			s.logger.WithError(listErr).Error("Failed to list Mollie mandates")
 			return nil, status.Error(codes.Internal, "failed to list mandates")
 		}
-		for _, m := range mandates {
-			if m.Status == "valid" {
-				mandateID = m.ID
-				break
+		for _, mandate := range mandates {
+			if mandate == nil {
+				continue
+			}
+			if mandate.Status == "invalid" {
+				if queueErr := s.compensateRefusedMollieFunding(
+					ctx, tenantID, tierID, subscriptions.ErrInvalidMollieMandate.Error(), mandate.ID,
+				); queueErr != nil {
+					return nil, status.Error(codes.Internal, "failed to queue invalid-mandate funding compensation; retry activation")
+				}
+			} else if mandate.Status == "valid" && mandateID == "" {
+				mandateID = mandate.ID
 			}
 		}
 		if mandateID == "" {
@@ -7148,6 +7160,9 @@ func (s *PurserServer) createMollieSubscription(ctx context.Context, req *purser
 		if mandateErr != nil {
 			s.logger.WithError(mandateErr).WithField("customer_id", mollieCustomerID).Warn("Failed to verify Mollie mandate")
 			return nil, status.Error(codes.Unavailable, "failed to verify Mollie mandate; retry activation")
+		}
+		if mandate != nil && mandate.ID == mandateID && mandate.Status == "invalid" {
+			return nil, checkoutPolicyStatus(codes.FailedPrecondition, subscriptions.ErrInvalidMollieMandate.Error(), subscriptions.ErrInvalidMollieMandate)
 		}
 		if mandate == nil || mandate.ID != mandateID || mandate.Status != "valid" {
 			return nil, status.Error(codes.FailedPrecondition, "mandate is not valid for recurring collection")
@@ -7288,7 +7303,7 @@ func (s *PurserServer) createMollieSubscription(ctx context.Context, req *purser
 		PeriodEnd:       sql.NullTime{Time: periodEnd, Valid: true}, TierID: tierID, TenantID: tenantID,
 	}, subscriptionIntentID)
 	if errors.Is(err, subscriptions.ErrCheckoutCompensationQueued) {
-		s.logger.WithError(err).WithField("subscription_id", sub.ID).Warn("Mollie activation refused; durable checkout recovery owns cancellation and the initial-payment refund")
+		s.logger.WithError(err).WithField("subscription_id", sub.ID).Warn("Mollie activation refused; durable checkout recovery owns unactivated subscription cleanup")
 		return nil, status.Error(codes.FailedPrecondition, err.Error())
 	}
 	if err != nil {

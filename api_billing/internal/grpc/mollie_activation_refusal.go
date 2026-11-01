@@ -13,7 +13,7 @@ import (
 
 // compensateRefusedMollieFunding queues unused first payments on definitive
 // activation refusals. Provider reads and transient failures leave funding reusable.
-func (s *PurserServer) compensateRefusedMollieFunding(ctx context.Context, tenantID, tierID, reason string) error {
+func (s *PurserServer) compensateRefusedMollieFunding(ctx context.Context, tenantID, tierID, reason, mandateID string) error {
 	return database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
 		if _, err := subscriptions.LockChange(ctx, tx, tenantID, subscriptions.PreservePricing); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
@@ -22,7 +22,7 @@ func (s *PurserServer) compensateRefusedMollieFunding(ctx context.Context, tenan
 			return err
 		}
 		q := purserdb.New(tx)
-		ids, err := q.ListRefusedMollieFundingIntents(ctx, purserdb.ListRefusedMollieFundingIntentsParams{TenantID: tenantID, TierID: tierID})
+		ids, err := q.ListRefusedMollieFundingIntents(ctx, purserdb.ListRefusedMollieFundingIntentsParams{TenantID: tenantID, TierID: tierID, MandateID: mandateID})
 		if err != nil {
 			return err
 		}
