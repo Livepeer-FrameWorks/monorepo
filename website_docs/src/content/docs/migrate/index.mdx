@@ -88,6 +88,10 @@ Regardless of where you're coming from, the moves are the same:
 6. **Re-attach multistream targets.** Push targets are scoped per-stream on FrameWorks (and on most platforms).
 7. **Validate side-by-side.** Run your old and new streams in parallel before you cut over.
 
+### Run it in parallel
+
+Keep your current provider live while you test. Send a second encoder output to FrameWorks, compare playback and analytics on a real event, and move viewers when the results satisfy you. The [Any video API](/migrate/generic#run-it-in-parallel) guide covers how to set this up.
+
 ## Concepts worth knowing before you start
 
 A few things differ from most peers, so we surface them once here instead of repeating them in every guide:
