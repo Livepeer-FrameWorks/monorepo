@@ -485,6 +485,9 @@ type Querier interface {
 	// Authenticated provider callbacks have no tenant context until their payment
 	// reference is resolved. This platform-wide lookup only selects an existing owner.
 	HasRefundSettlementOwner(ctx context.Context, arg HasRefundSettlementOwnerParams) (bool, error)
+	// Called under the subscription lock before reserving another first payment.
+	// Retained funding remains owned until activation or confirmed compensation.
+	HasUnusedPaidMollieFunding(ctx context.Context, tenantID string) (bool, error)
 	// A settled top-up that cannot be credited stays pending with a needs_review
 	// reversal row, so an operator resolves the paid amount (refund or converted
 	// credit) instead of the ledger absorbing it.

@@ -37,6 +37,8 @@ func (c *fundingRaceMollieClient) CreateSubscription(_ context.Context, _ billin
 func assertMollieFundingRecoveryOrdersWithActivation(t *testing.T) {
 	t.Helper()
 	t.Run("activation refusal", assertMollieActivationRefusalFunding)
+	t.Run("retained funding retry", assertMollieRetainedFundingRetry)
+	t.Run("retained funding controls", assertMollieRetainedFundingControls)
 	for _, when := range []string{"recovery owns funding first", "native create owns funding first", "recovery owns native first"} {
 		t.Run(when, func(t *testing.T) {
 			db := startOperatorGrantDatabase(t)

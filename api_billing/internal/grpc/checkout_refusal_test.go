@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"frameworks/api_billing/internal/subscriptions"
+
 	"github.com/DATA-DOG/go-sqlmock"
 
 	"google.golang.org/grpc/codes"
@@ -62,5 +63,14 @@ func TestSelfServiceCheckoutMissingSubscriptionIsRepairable(t *testing.T) {
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestQueuedMollieRefusalDoesNotGainASecondCompensationOwner(t *testing.T) {
+	for _, cause := range []error{subscriptions.ErrCheckoutExpired, subscriptions.ErrSelfServiceTier} {
+		err := mollieActivationStatus(errors.Join(subscriptions.ErrCheckoutCompensationQueued, cause))
+		if status.Code(err) != codes.FailedPrecondition || subscriptions.IsDefinitiveMollieActivationRefusal(err) {
+			t.Fatalf("committed refusal was offered to the RPC compensation owner again: %v", err)
+		}
 	}
 }

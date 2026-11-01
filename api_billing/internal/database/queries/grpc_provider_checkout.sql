@@ -128,6 +128,17 @@ SELECT tier_name, COALESCE(base_price::text, '0')::text AS base_price,
 FROM purser.billing_tiers
 WHERE id = sqlc.arg(tier_id)::text::uuid;
 
+-- name: HasUnusedPaidMollieFunding :one
+-- Called under the subscription lock before reserving another first payment.
+-- Retained funding remains owned until activation or confirmed compensation.
+SELECT EXISTS (
+    SELECT 1 FROM purser.payment_provider_intents funding
+    WHERE funding.tenant_id = sqlc.arg(tenant_id)::text::uuid
+      AND funding.provider = 'mollie' AND funding.purpose = 'mollie_first_payment'
+      AND funding.status = 'succeeded' AND funding.amount_cents > 0
+      AND funding.provider_payment_id IS NOT NULL AND funding.activated_at IS NULL
+)::boolean AS unused;
+
 -- name: UpsertMollieFirstPaymentIntent :one
 -- Reuse only an outstanding attempt. Settled receipts and their provider keys
 -- remain intact; a subsequent checkout gets its own durable idempotency key.
@@ -576,7 +587,8 @@ WITH unused AS (
     WHERE funding.tenant_id = sqlc.arg(tenant_id)::text::uuid
       AND funding.provider = 'mollie' AND funding.purpose = 'mollie_first_payment'
       AND funding.local_reference_type = 'billing_tiers'
-      AND funding.local_reference_id = sqlc.arg(tier_id)::text::uuid
+      AND (sqlc.arg(mandate_id)::text <> ''
+        OR funding.local_reference_id = sqlc.arg(tier_id)::text::uuid)
       AND funding.status = 'succeeded' AND funding.activated_at IS NULL
       AND funding.provider_mandate_id IS NOT NULL
       AND (sqlc.arg(mandate_id)::text = '' OR funding.provider_mandate_id = sqlc.arg(mandate_id)::text)

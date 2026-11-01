@@ -124,6 +124,22 @@ func CheckGrantCheckout(ctx context.Context, tx *sql.Tx, tenantID string) error 
 	return checkPendingCheckout(ctx, tx, tenantID, "")
 }
 
+// ErrUnusedMollieFunding prevents charging twice for an activation still funded.
+var ErrUnusedMollieFunding = errors.New("a paid first payment is awaiting activation or refund; retry activation instead of paying again")
+
+// CheckMollieFirstPayment requires retained paid funding to be used or refunded
+// before another first payment is reserved. Call under the subscription row lock.
+func CheckMollieFirstPayment(ctx context.Context, tx *sql.Tx, tenantID string) error {
+	unused, err := purserdb.New(tx).HasUnusedPaidMollieFunding(ctx, tenantID)
+	if err != nil {
+		return fmt.Errorf("read unused Mollie funding: %w", err)
+	}
+	if unused {
+		return ErrUnusedMollieFunding
+	}
+	return nil
+}
+
 // ErrPaidCancellationTerm protects the cancelled subscription's already-paid term.
 var ErrPaidCancellationTerm = errors.New("the cancelled subscription's paid term must end before starting a new checkout")
 
