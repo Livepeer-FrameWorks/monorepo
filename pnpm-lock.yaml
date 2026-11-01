@@ -973,6 +973,9 @@ importers:
       '@livepeer-frameworks/player-react':
         specifier: workspace:^
         version: link:../npm_player/packages/react
+      '@livepeer-frameworks/streamcrafter-react':
+        specifier: workspace:^
+        version: link:../npm_studio/packages/react
       '@marsidev/react-turnstile':
         specifier: ^1.5.0
         version: 1.5.0(react-dom@19.2.5(react@19.2.5))(react@19.2.5)

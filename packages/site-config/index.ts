@@ -62,6 +62,13 @@ export const MARKETING_ROUTES: MarketingRouteSeo[] = [
       "What you can use on FrameWorks today, what is in the pipeline, and what is further out on the roadmap.",
   },
   {
+    id: "stream-test",
+    path: "/stream-test",
+    title: "Stream Test - Try the FrameWorks Player and StreamCrafter",
+    description:
+      "Test HLS, DASH, WHEP, and MistServer playback in your browser, or publish to any WHIP endpoint with StreamCrafter.",
+  },
+  {
     id: "contact",
     path: "/contact",
     title: "Contact FrameWorks - Streaming Infrastructure Support",

@@ -14,6 +14,7 @@ const routes = [
   ["pricing/index.html", "FrameWorks Pricing - Hosted, Hybrid, and Self-Hosted Video Cloud"],
   ["about/index.html", "About FrameWorks - Built by the Team Behind MistServer"],
   ["showcase/index.html", "FrameWorks Showcase - What Ships Today and What Comes Next"],
+  ["stream-test/index.html", "Stream Test - Try the FrameWorks Player and StreamCrafter"],
   ["contact/index.html", "Contact FrameWorks - Streaming Infrastructure Support"],
   [
     "network/index.html",

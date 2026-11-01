@@ -6,6 +6,7 @@ const marketingRoutes = [
   "/pricing",
   "/about",
   "/showcase",
+  "/stream-test",
   "/contact",
   "/status",
   "/network",

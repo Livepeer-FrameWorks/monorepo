@@ -7,6 +7,7 @@ export default [
   route("about", "./routes/about.jsx"),
   route("showcase", "./routes/showcase.jsx"),
   route("customers/:slug", "./routes/customer-story.jsx"),
+  route("stream-test", "./routes/stream-test.jsx"),
   route("contact", "./routes/contact.jsx"),
   route("network", "./routes/network.jsx"),
   route("status", "./routes/status.jsx"),

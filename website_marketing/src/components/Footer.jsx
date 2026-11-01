@@ -36,6 +36,12 @@ const Footer = () => {
                 Showcase
               </Link>
               <Link
+                to="/stream-test"
+                className="text-sm text-muted-foreground transition-colors hover:text-foreground"
+              >
+                Stream test
+              </Link>
+              <Link
                 to="/contact"
                 className="text-sm text-muted-foreground transition-colors hover:text-foreground"
               >

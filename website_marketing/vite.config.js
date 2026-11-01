@@ -66,6 +66,8 @@ export default defineConfig(({ mode, command }) => {
     ],
     resolve: {
       conditions: ["source"],
+      // Workspace SDK sources would otherwise resolve their own copy of React.
+      dedupe: ["react", "react-dom"],
       alias: {
         "@": path.resolve(__dirname, "./src"),
       },
