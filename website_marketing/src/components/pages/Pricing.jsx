@@ -290,6 +290,11 @@ export const PRICING_FAQS = [
       "Running streams and their viewers keep going. At €0 new streams and new viewers are blocked, so a viewer or encoder that disconnects cannot reconnect until you top up. Below -€10 the account is suspended and streams stop.",
   },
   {
+    question: "What happens if a card payment fails?",
+    answer:
+      "Your plan and streams keep running for 14 days while you set up payment again. After that your account moves to the Free plan, with a final invoice for your usage up to the move.",
+  },
+  {
     question: "What is pay-as-you-go billing?",
     answer:
       "Add funds to your account via card or crypto. Delivered minutes and storage are deducted automatically; ingest, transcoding, and bandwidth are included. No invoices or monthly commitment. Top up again when your balance runs low.",
