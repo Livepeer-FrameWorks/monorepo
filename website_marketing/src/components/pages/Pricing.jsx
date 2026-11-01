@@ -61,6 +61,11 @@ const developerPricing = paidTierPricing(catalogTier.developer);
 const productionPricing = paidTierPricing(catalogTier.production);
 const freeCatalog = catalogTier.free;
 
+const streamingFeatures = [
+  "Adaptive bitrate included",
+  "Multistreaming with no destination cap: each enabled destination uses one viewer-capacity slot and counts toward delivered minutes",
+];
+
 const freeTier = {
   id: "free",
   name: "Free Tier",
@@ -70,6 +75,7 @@ const freeTier = {
     "Run the video and control-plane stack yourself. Free transcoding via the Livepeer network, free delivery from the shared bandwidth pool.",
   features: [
     `Self-hosted video stack, ${compactMinutes(freeCatalog)} delivered min/mo, ${freeCatalog.limits.storageGiB} GB storage, ${freeCatalog.limits.maxConcurrentStreams} streams / ${freeCatalog.limits.maxConcurrentViewers} viewers, ${freeCatalog.limits.retentionDays}-day retention`,
+    ...streamingFeatures,
   ],
   limitations: [
     `${freeCatalog.limits.maxConcurrentStreams} streams, ${freeCatalog.limits.maxConcurrentViewers} viewers, and ${freeCatalog.limits.storageGiB} GB storage are hard limits at any load`,
@@ -92,6 +98,7 @@ const paidTiers = [
     features: [
       supporterPricing.delivery,
       supporterPricing.storage,
+      ...streamingFeatures,
       "Hosted load balancer",
       "Custom subdomain (*.frameworks.network)",
       "Transparent usage reporting",
@@ -112,6 +119,7 @@ const paidTiers = [
     features: [
       developerPricing.delivery,
       developerPricing.storage,
+      ...streamingFeatures,
       "Team collaboration features",
       "Advanced analytics",
       "Priority support",
@@ -132,6 +140,7 @@ const paidTiers = [
     features: [
       productionPricing.delivery,
       productionPricing.storage,
+      ...streamingFeatures,
       "Business-hours support, on-call by Enterprise agreement",
       "Dedicated capacity options",
       "Live dashboard",
