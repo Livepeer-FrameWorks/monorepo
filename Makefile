@@ -1835,7 +1835,10 @@ verify-yugabyte-purser-contracts: verify-yugabyte-shared-fixture
 	@$(CONTRACT_GO_TEST) api_billing yugabyte/purser-tier-upgrade-providers -tags schema_verify -run '^TestTierUpgradeProviders_RealYugabyte$$' -count=1 -timeout 600s ./internal/grpc/
 	@$(CONTRACT_GO_TEST) api_billing yugabyte/purser-bootstrap-grants -tags schema_verify -run '^TestBootstrapDeclaredGrantIsIdempotent_RealYugabyte$$' -count=1 -timeout 600s ./internal/bootstrap/
 	@$(CONTRACT_GO_TEST) api_billing yugabyte/purser-query-catalog -tags schema_verify -run 'TestGeneratedQueryCatalogPrepares_RealYugabyte|TestBillingEventOutboxPrunesDelivered_RealYugabyte' -count=1 -timeout 1200s ./internal/database/purserdb/
-	@$(CONTRACT_GO_TEST) api_billing yugabyte/purser-livepeer-funding -tags schema_verify -run 'TestLivepeerFundingSignerLostLock_RealYugabyte|TestProviderReservationLifecycle_RealYugabyte' -count=1 -timeout 600s ./internal/handlers/
+	@$(CONTRACT_GO_TEST) api_billing yugabyte/purser-livepeer-funding -tags schema_verify -run '^TestLivepeerFundingSignerLostLock_RealYugabyte$$' -count=1 -timeout 600s ./internal/handlers/
+	@$(CONTRACT_GO_TEST) api_billing yugabyte/purser-reservation-billing -tags schema_verify -run '^TestProviderReservationBilling_RealYugabyte$$' -count=1 -timeout 600s ./internal/handlers/
+	@$(CONTRACT_GO_TEST) api_billing yugabyte/purser-reservation-recovery -tags schema_verify -run '^TestProviderReservationRecovery_RealYugabyte$$' -count=1 -timeout 600s ./internal/handlers/
+	@$(CONTRACT_GO_TEST) api_billing yugabyte/purser-reservation-deadlines -tags schema_verify -run '^TestProviderReservationDeadlines_RealYugabyte$$' -count=1 -timeout 600s ./internal/handlers/
 
 verify-yugabyte-navigator-contracts: verify-yugabyte-shared-fixture
 	@$(CONTRACT_GO_TEST) api_dns yugabyte/navigator-query-catalog -tags schema_verify -run '$(NAVIGATOR_QUERY_CATALOG_REALYB_TESTS)' -count=1 -timeout 1200s ./internal/database/navigatordb/

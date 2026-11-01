@@ -627,12 +627,13 @@ func startProviderReservationDatabase(t *testing.T) *sql.DB {
 	return startPurserUsageRealPG(t)
 }
 
-func TestProviderReservationLifecycle_RealYugabyte(t *testing.T) {
-	// Subtest cleanup returns each baseline to the shared pool before the next case.
-	for _, tc := range []struct {
-		name string
-		run  func(*testing.T)
-	}{
+type providerReservationCase struct {
+	name string
+	run  func(*testing.T)
+}
+
+func providerReservationCases() []providerReservationCase {
+	return []providerReservationCase{
 		{"AdvanceActivationStartsOneCappedCalendarMonth", TestAdvanceActivationStartsOneCappedCalendarMonth_RealPG},
 		{"AdvanceSetupRefusesMidPeriodTierChange", TestAdvanceSetupRefusesMidPeriodTierChange_RealPG},
 		{"IneligibleCheckoutCompensates", TestIneligibleCheckoutCompensates_RealPG},
@@ -677,9 +678,27 @@ func TestProviderReservationLifecycle_RealYugabyte(t *testing.T) {
 		{"CheckoutExpiryReleasesStagedReservation", testCheckoutExpiryReleasesStagedReservation},
 		{"CheckoutReservationsPreserveSettledReceipts", testCheckoutReservationsPreserveSettledReceipts},
 		{"CheckoutCompletionWaitsForBinding", testCheckoutCompletionWaitsForBinding},
-	} {
+	}
+}
+
+func runProviderReservationCases(t *testing.T, first, last int) {
+	t.Helper()
+	// Each subtest returns its database baseline to the shared pool.
+	for _, tc := range providerReservationCases()[first:last] {
 		t.Run(tc.name, tc.run)
 	}
+}
+
+func TestProviderReservationBilling_RealYugabyte(t *testing.T) {
+	runProviderReservationCases(t, 0, 15)
+}
+
+func TestProviderReservationRecovery_RealYugabyte(t *testing.T) {
+	runProviderReservationCases(t, 15, 30)
+}
+
+func TestProviderReservationDeadlines_RealYugabyte(t *testing.T) {
+	runProviderReservationCases(t, 30, len(providerReservationCases()))
 }
 
 func testCheckoutCompletionWaitsForBinding(t *testing.T) {
