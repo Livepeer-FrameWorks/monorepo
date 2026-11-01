@@ -322,6 +322,7 @@ export default defineConfig({
           label: "For Builders",
           items: [
             { slug: "builders/quick-start" },
+            { slug: "builders/go-live-browser" },
             { slug: "builders/streams" },
             { slug: "builders/encoder-setup" },
             { slug: "builders/integration-guide" },
