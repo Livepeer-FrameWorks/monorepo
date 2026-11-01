@@ -141,7 +141,7 @@ These gaps apply whatever the source platform:
 
 - AI Pipelines (text-to-image, image-to-video, ASR, live-video-to-video). Keep provider-specific
   AI calls on the source platform until FrameWorks exposes an equivalent surface.
-- RTMP and FLV-over-HTTP pull sources. Our MistServer fork has no RTMP/FLV pull module —
+- RTMP and FLV-over-HTTP pull sources. Our MistServer build has no RTMP/FLV pull module —
   RTSP, SRT, RIST, HLS, DTSC, and MPEG-TS over UDP (incl. multicast) are all supported, but
   a `pull: { source: "rtmp://…" }` or `https://.../*.flv` upstream won't work. If RTMP pull is on
   your critical path, [open a ticket](%APP_URL%/support) and we'll prioritize it.
@@ -150,7 +150,9 @@ These gaps apply whatever the source platform:
   use GraphQL codegen against the public schema and a Standard Webhooks library.
 - DRM (Widevine / FairPlay / PlayReady). In development.
 - Multi-participant SFU rooms. These are not exposed as a FrameWorks product surface today.
-- Per-target rendition selection on multistream.
+- Picking one specific rendition per multistream target. Each target's
+  [`videoChoice`](/builders/multistreaming#video-track-choice) selects the original video or a
+  processed rendition, and FrameWorks picks a compatible one.
 - VOD library import tooling. Concierge-only today — reach out.
 
 ## Beta flags worth knowing

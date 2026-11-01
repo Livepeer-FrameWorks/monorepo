@@ -1547,7 +1547,7 @@ Every new playback request on an edge node goes through a hook: before MistServe
 
 The weak spot was what happened when that question could not be answered. MistServer's hook interface had a single fallback value for "the handler failed", and for playback that fallback was a string that read as a stream name. It could not tell an explicit denial apart from a handler that never replied, and different call sites interpreted the same fallback differently. A control-plane problem could reach the viewer as an arbitrary answer rather than as a failure.
 
-Our MistServer fork now accepts an explicit action for each hook. For playback, a handler that cannot answer produces a denial, and an authoritative rejection produces the same denial. No sentinel value is involved. The edge agent also keeps the hook's definition repaired continuously, because a hook that has gone missing skips the decision entirely instead of failing it.
+Our MistServer build now accepts an explicit action for each hook. For playback, a handler that cannot answer produces a denial, and an authoritative rejection produces the same denial. No sentinel value is involved. The edge agent also keeps the hook's definition repaired continuously, because a hook that has gone missing skips the decision entirely instead of failing it.
 
 ## Each media cluster holds its own signed answers
 
@@ -25863,7 +25863,7 @@ These gaps apply whatever the source platform:
 
 - AI Pipelines (text-to-image, image-to-video, ASR, live-video-to-video). Keep provider-specific
   AI calls on the source platform until FrameWorks exposes an equivalent surface.
-- RTMP and FLV-over-HTTP pull sources. Our MistServer fork has no RTMP/FLV pull module —
+- RTMP and FLV-over-HTTP pull sources. Our MistServer build has no RTMP/FLV pull module —
   RTSP, SRT, RIST, HLS, DTSC, and MPEG-TS over UDP (incl. multicast) are all supported, but
   a `pull: { source: "rtmp://…" }` or `https://.../*.flv` upstream won't work. If RTMP pull is on
   your critical path, [open a ticket](%APP_URL%/support) and we'll prioritize it.
@@ -25872,7 +25872,9 @@ These gaps apply whatever the source platform:
   use GraphQL codegen against the public schema and a Standard Webhooks library.
 - DRM (Widevine / FairPlay / PlayReady). In development.
 - Multi-participant SFU rooms. These are not exposed as a FrameWorks product surface today.
-- Per-target rendition selection on multistream.
+- Picking one specific rendition per multistream target. Each target's
+  [`videoChoice`](/builders/multistreaming#video-track-choice) selects the original video or a
+  processed rendition, and FrameWorks picks a compatible one.
 - VOD library import tooling. Concierge-only today — reach out.
 
 ## Beta flags worth knowing
@@ -26072,13 +26074,13 @@ The shapes you know in Studio, mapped to FrameWorks:
 
 ### Multistream
 
-| Studio                                     | FrameWorks                                                         |
-| ------------------------------------------ | ------------------------------------------------------------------ |
-| `POST /multistream/target`                 | No global target library; use `createPushTarget(streamId, input)`  |
-| `PATCH /multistream/target/{id}`           | `updatePushTarget(id, input)` mutation                             |
-| `DELETE /multistream/target/{id}`          | `deletePushTarget(id)` mutation                                    |
-| Inline or attach target to a stream        | `createPushTarget(streamId, input)` creates a stream-scoped target |
-| Per-target rendition profile / `videoOnly` | Not exposed today                                                  |
+| Studio                                     | FrameWorks                                                               |
+| ------------------------------------------ | ------------------------------------------------------------------------ |
+| `POST /multistream/target`                 | No global target library; use `createPushTarget(streamId, input)`        |
+| `PATCH /multistream/target/{id}`           | `updatePushTarget(id, input)` mutation                                   |
+| `DELETE /multistream/target/{id}`          | `deletePushTarget(id)` mutation                                          |
+| Inline or attach target to a stream        | `createPushTarget(streamId, input)` creates a stream-scoped target       |
+| Per-target rendition profile / `videoOnly` | `videoChoice` selects original or processed video; no specific rendition |
 
 ### Access control
 
@@ -26377,8 +26379,8 @@ Current gaps to account for:
   mapping in your own records, keyed by stream ID or artifact ID.
 - **Per-stream transcode profiles** — FrameWorks uses a fixed rendition ladder per billing tier;
   Studio's `profiles[]` on a stream or asset has no equivalent yet.
-- **Per-target rendition selection on multistream** — Studio lets you pick which rendition goes to each push target. We push the default output today.
-- **RTMP and FLV-over-HTTP pull sources** — our MistServer fork has no RTMP/FLV pull module, so a `pull: { source: "rtmp://…" }` or a Studio-style `https://.../*.flv` upstream won't work. Everything else Mist documents (RTSP, SRT, RIST, HLS, DTSC, MPEG-TS over UDP including multicast) does. If RTMP pull is a critical requirement, [contact support](%APP_URL%/support) before planning your migration — there is no committed timeline yet.
+- **Picking one specific rendition per multistream target** — Studio lets you pick which rendition goes to each push target. On FrameWorks, each target's [`videoChoice`](/builders/multistreaming#video-track-choice) selects the original video or a processed rendition, and FrameWorks picks a compatible one.
+- **RTMP and FLV-over-HTTP pull sources** — our MistServer build has no RTMP/FLV pull module, so a `pull: { source: "rtmp://…" }` or a Studio-style `https://.../*.flv` upstream won't work. Everything else Mist documents (RTSP, SRT, RIST, HLS, DTSC, MPEG-TS over UDP including multicast) does. If RTMP pull is a critical requirement, [contact support](%APP_URL%/support) before planning your migration — there is no committed timeline yet.
 
 ## Beta and tricky bits
 
@@ -26830,7 +26832,7 @@ playback ID). See [Recordings, Clips & VOD](/builders/recordings#archive-chapter
 | `POST /video/v1/live-streams/{id}/simulcast-targets`                                | `createPushTarget(streamId, input)` mutation                                 |
 | `DELETE /video/v1/live-streams/{id}/simulcast-targets/{target_id}`                  | `deletePushTarget(id)` mutation                                              |
 | Up to 6 simultaneous targets per stream                                             | No documented hard cap; tested across Twitch / YouTube / Facebook / X / Kick |
-| Per-target rendition selection                                                      | Not exposed today (default output is pushed)                                 |
+| Per-target rendition selection                                                      | `videoChoice` selects original or processed video; no specific rendition     |
 | Simulcast events on webhooks (`.starting` / `.broadcasting` / `.errored` / `.idle`) | `multistream.status_changed` on webhooks or `tenantEvents`                   |
 
 ### Access control

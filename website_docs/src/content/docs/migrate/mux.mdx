@@ -82,7 +82,7 @@ playback ID). See [Recordings, Clips & VOD](/builders/recordings#archive-chapter
 | `POST /video/v1/live-streams/{id}/simulcast-targets`                                | `createPushTarget(streamId, input)` mutation                                 |
 | `DELETE /video/v1/live-streams/{id}/simulcast-targets/{target_id}`                  | `deletePushTarget(id)` mutation                                              |
 | Up to 6 simultaneous targets per stream                                             | No documented hard cap; tested across Twitch / YouTube / Facebook / X / Kick |
-| Per-target rendition selection                                                      | Not exposed today (default output is pushed)                                 |
+| Per-target rendition selection                                                      | `videoChoice` selects original or processed video; no specific rendition     |
 | Simulcast events on webhooks (`.starting` / `.broadcasting` / `.errored` / `.idle`) | `multistream.status_changed` on webhooks or `tenantEvents`                   |
 
 ### Access control

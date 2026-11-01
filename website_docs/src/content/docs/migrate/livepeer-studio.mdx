@@ -55,13 +55,13 @@ The shapes you know in Studio, mapped to FrameWorks:
 
 ### Multistream
 
-| Studio                                     | FrameWorks                                                         |
-| ------------------------------------------ | ------------------------------------------------------------------ |
-| `POST /multistream/target`                 | No global target library; use `createPushTarget(streamId, input)`  |
-| `PATCH /multistream/target/{id}`           | `updatePushTarget(id, input)` mutation                             |
-| `DELETE /multistream/target/{id}`          | `deletePushTarget(id)` mutation                                    |
-| Inline or attach target to a stream        | `createPushTarget(streamId, input)` creates a stream-scoped target |
-| Per-target rendition profile / `videoOnly` | Not exposed today                                                  |
+| Studio                                     | FrameWorks                                                               |
+| ------------------------------------------ | ------------------------------------------------------------------------ |
+| `POST /multistream/target`                 | No global target library; use `createPushTarget(streamId, input)`        |
+| `PATCH /multistream/target/{id}`           | `updatePushTarget(id, input)` mutation                                   |
+| `DELETE /multistream/target/{id}`          | `deletePushTarget(id)` mutation                                          |
+| Inline or attach target to a stream        | `createPushTarget(streamId, input)` creates a stream-scoped target       |
+| Per-target rendition profile / `videoOnly` | `videoChoice` selects original or processed video; no specific rendition |
 
 ### Access control
 
@@ -360,8 +360,8 @@ Current gaps to account for:
   mapping in your own records, keyed by stream ID or artifact ID.
 - **Per-stream transcode profiles** — FrameWorks uses a fixed rendition ladder per billing tier;
   Studio's `profiles[]` on a stream or asset has no equivalent yet.
-- **Per-target rendition selection on multistream** — Studio lets you pick which rendition goes to each push target. We push the default output today.
-- **RTMP and FLV-over-HTTP pull sources** — our MistServer fork has no RTMP/FLV pull module, so a `pull: { source: "rtmp://…" }` or a Studio-style `https://.../*.flv` upstream won't work. Everything else Mist documents (RTSP, SRT, RIST, HLS, DTSC, MPEG-TS over UDP including multicast) does. If RTMP pull is a critical requirement, [contact support](%APP_URL%/support) before planning your migration — there is no committed timeline yet.
+- **Picking one specific rendition per multistream target** — Studio lets you pick which rendition goes to each push target. On FrameWorks, each target's [`videoChoice`](/builders/multistreaming#video-track-choice) selects the original video or a processed rendition, and FrameWorks picks a compatible one.
+- **RTMP and FLV-over-HTTP pull sources** — our MistServer build has no RTMP/FLV pull module, so a `pull: { source: "rtmp://…" }` or a Studio-style `https://.../*.flv` upstream won't work. Everything else Mist documents (RTSP, SRT, RIST, HLS, DTSC, MPEG-TS over UDP including multicast) does. If RTMP pull is a critical requirement, [contact support](%APP_URL%/support) before planning your migration — there is no committed timeline yet.
 
 ## Beta and tricky bits
 

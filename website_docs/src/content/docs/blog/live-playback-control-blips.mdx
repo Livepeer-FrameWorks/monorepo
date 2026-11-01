@@ -21,7 +21,7 @@ Every new playback request on an edge node goes through a hook: before MistServe
 
 The weak spot was what happened when that question could not be answered. MistServer's hook interface had a single fallback value for "the handler failed", and for playback that fallback was a string that read as a stream name. It could not tell an explicit denial apart from a handler that never replied, and different call sites interpreted the same fallback differently. A control-plane problem could reach the viewer as an arbitrary answer rather than as a failure.
 
-Our MistServer fork now accepts an explicit action for each hook. For playback, a handler that cannot answer produces a denial, and an authoritative rejection produces the same denial. No sentinel value is involved. The edge agent also keeps the hook's definition repaired continuously, because a hook that has gone missing skips the decision entirely instead of failing it.
+Our MistServer build now accepts an explicit action for each hook. For playback, a handler that cannot answer produces a denial, and an authoritative rejection produces the same denial. No sentinel value is involved. The edge agent also keeps the hook's definition repaired continuously, because a hook that has gone missing skips the decision entirely instead of failing it.
 
 ## Each media cluster holds its own signed answers
 
