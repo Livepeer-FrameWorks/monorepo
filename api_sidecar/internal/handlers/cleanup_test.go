@@ -177,9 +177,9 @@ func TestCalculateCleanupPriority_LargeFile(t *testing.T) {
 			largePriority, smallPriority)
 	}
 
-	diff := smallPriority - largePriority
-	if diff > 1.0 {
-		t.Fatalf("expected size difference to be minor (< 1.0), got %f", diff)
+	wantRatio := 3.01 / 3.5
+	if ratio := largePriority / smallPriority; math.Abs(ratio-wantRatio) > 0.001 {
+		t.Fatalf("size weight ratio=%f want=%f", ratio, wantRatio)
 	}
 }
 
