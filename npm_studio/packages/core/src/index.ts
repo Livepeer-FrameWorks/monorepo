@@ -169,7 +169,14 @@ export type {
 } from "./I18n";
 
 // Configurable hotkeys
-export { DEFAULT_STUDIO_KEY_MAP, buildStudioKeyLookup, matchStudioKey } from "./StudioKeyMap";
+export {
+  DEFAULT_STUDIO_KEY_MAP,
+  buildStudioKeyLookup,
+  matchStudioKey,
+  isTypingTarget,
+  adjacentSceneId,
+  handleStudioSceneHotkey,
+} from "./StudioKeyMap";
 export type { StudioKeyMap } from "./StudioKeyMap";
 
 // Vanilla facade

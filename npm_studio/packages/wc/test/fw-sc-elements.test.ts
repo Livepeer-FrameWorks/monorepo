@@ -126,6 +126,73 @@ describe("sub-elements bound with for", () => {
   });
 });
 
+describe("scenes from the keyboard", () => {
+  const scenes = [
+    {
+      id: "one",
+      name: "Default",
+      layers: [{ id: "top", sourceId: "s", visible: true, zIndex: 0 }],
+    },
+    { id: "two", name: "Scene 2", layers: [] },
+  ];
+
+  it("go to the next scene on ] in the studio", async () => {
+    const setActiveScene = vi.fn();
+    const studio = document.createElement("fw-streamcrafter") as FwStreamCrafter;
+    Object.defineProperty(studio, "sceneManager", {
+      get: () => ({
+        getAllScenes: () => scenes,
+        getActiveScene: () => scenes[0],
+        setActiveScene,
+        on: () => () => {},
+      }),
+    });
+    document.body.append(studio);
+    await studio.updateComplete;
+
+    studio
+      .shadowRoot!.querySelector(".fw-sc-root")!
+      .dispatchEvent(new KeyboardEvent("keydown", { key: "]", bubbles: true, composed: true }));
+
+    expect(setActiveScene).toHaveBeenCalledWith("two");
+  });
+
+  it("switch from a focused scene tile and remove a layer from the panel", async () => {
+    const removeLayer = vi.fn();
+    const setActiveScene = vi.fn();
+    const studio = fakeStudio(
+      {},
+      {
+        getAllScenes: () => scenes,
+        getActiveScene: () => scenes[0],
+        setActiveScene,
+        transitionTo: vi.fn(async () => {}),
+        removeLayer,
+        getOverlays: () => [],
+      }
+    );
+    const panel = new FwScProducerPanel();
+    panel.studio = studio;
+    document.body.append(panel);
+    await panel.updateComplete;
+    const switcher = panel.shadowRoot!.querySelector("fw-sc-scene-switcher")!;
+    const layers = panel.shadowRoot!.querySelector("fw-sc-layer-list")!;
+    await switcher.updateComplete;
+    await layers.updateComplete;
+
+    const tiles = switcher.shadowRoot!.querySelectorAll<HTMLElement>(".fw-sc-scene-item");
+    expect(tiles[1].getAttribute("role")).toBe("button");
+    expect(tiles[1].tabIndex).toBe(0);
+    tiles[1].dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(
+      (studio.sceneManager as unknown as { transitionTo: ReturnType<typeof vi.fn> }).transitionTo
+    ).toHaveBeenCalledWith("two", expect.anything());
+
+    layers.shadowRoot!.querySelector<HTMLButtonElement>('[title="Remove layer"]')!.click();
+    expect(removeLayer).toHaveBeenCalledWith("one", "top");
+  });
+});
+
 describe("audio levels", () => {
   function mixer() {
     let handler: ((event: { level: number; peakLevel: number }) => void) | null = null;

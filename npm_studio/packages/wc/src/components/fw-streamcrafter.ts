@@ -33,6 +33,7 @@ import {
   detectStudioSupport,
   formatStreamInfo,
   getAudioConstraints,
+  handleStudioSceneHotkey,
   isSourceVisibleInScene,
   type EncoderOverrides,
   type IngestClientStatus,
@@ -697,7 +698,9 @@ export class FwStreamCrafter extends LitElement {
     return html`
       <div
         class=${rootClassName}
+        tabindex="-1"
         @contextmenu=${(event: MouseEvent) => this._handleContextMenu(event)}
+        @keydown=${(event: KeyboardEvent) => handleStudioSceneHotkey(event, this.sceneManager)}
       >
         <div class="main fw-sc-main">
           <div class="fw-sc-header">

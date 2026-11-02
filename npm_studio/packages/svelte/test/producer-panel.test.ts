@@ -44,6 +44,8 @@ function fakeCompositor() {
     transitionTo: vi.fn(async (_id: string, _transition?: TransitionConfig) => {}),
     setLayerVisibility: vi.fn(),
     reorderLayers: vi.fn(),
+    removeLayer: vi.fn(),
+    updateLayerTransform: vi.fn(),
     addImageOverlay: vi.fn(async (_image: Blob) => {}),
     addTextOverlay: vi.fn(),
     updateTextOverlay: vi.fn(),
@@ -328,6 +330,15 @@ describe("StudioProducerPanel", () => {
     await fireEvent.click(screen.getAllByTitle("Hide layer")[0]);
 
     expect(compositor.setLayerVisibility).toHaveBeenCalledWith("one", "top", false);
+  });
+
+  it("removes a layer from the active scene and offers its opacity", async () => {
+    const { compositor } = renderPanel();
+
+    await fireEvent.click(screen.getAllByTitle("Remove layer")[0]);
+
+    expect(compositor.removeLayer).toHaveBeenCalledWith("one", "top");
+    expect(screen.getAllByTitle("Edit opacity")).toHaveLength(2);
   });
 
   it("reorders layers bottom to top", async () => {

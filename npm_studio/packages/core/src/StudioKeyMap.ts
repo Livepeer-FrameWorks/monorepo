@@ -68,3 +68,53 @@ export function matchStudioKey(
 
   return lookup.get(compound) ?? lookup.get(e.key);
 }
+
+/** Whether a key press is typing into a field, which no shortcut may take. */
+export function isTypingTarget(e: KeyboardEvent): boolean {
+  const target = (e.composedPath?.()[0] ?? e.target) as HTMLElement | null;
+  if (!target) return false;
+  const tag = target.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || !!target.isContentEditable;
+}
+
+/** The scene after (1) or before (-1) the active one, or null at either end. */
+export function adjacentSceneId(
+  scenes: readonly { id: string }[],
+  activeSceneId: string | null | undefined,
+  direction: 1 | -1
+): string | null {
+  const index = scenes.findIndex((scene) => scene.id === activeSceneId);
+  if (index < 0) return null;
+  return scenes[index + direction]?.id ?? null;
+}
+
+interface SceneHotkeyTarget {
+  getAllScenes(): readonly { id: string }[];
+  getActiveScene(): { id: string } | null | undefined;
+  setActiveScene(sceneId: string): void;
+}
+
+const DEFAULT_LOOKUP = buildStudioKeyLookup(DEFAULT_STUDIO_KEY_MAP);
+
+/**
+ * Next scene (`]`) and previous scene (`[`) for the drop-in studios. Returns
+ * whether the key switched the scene.
+ */
+export function handleStudioSceneHotkey(
+  e: KeyboardEvent,
+  sceneManager: SceneHotkeyTarget | null | undefined,
+  lookup: Map<string, keyof StudioKeyMap> = DEFAULT_LOOKUP
+): boolean {
+  if (!sceneManager || isTypingTarget(e)) return false;
+  const action = matchStudioKey(e, lookup);
+  if (action !== "nextScene" && action !== "prevScene") return false;
+  const next = adjacentSceneId(
+    sceneManager.getAllScenes(),
+    sceneManager.getActiveScene()?.id,
+    action === "nextScene" ? 1 : -1
+  );
+  if (!next) return false;
+  e.preventDefault();
+  sceneManager.setActiveScene(next);
+  return true;
+}

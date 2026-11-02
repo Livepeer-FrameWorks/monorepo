@@ -73,6 +73,11 @@ export const sharedStyles = css`
     container-name: streamcrafter;
   }
 
+  /* The root takes focus only so that the scene hotkeys reach it. */
+  .fw-sc-root:focus {
+    outline: none;
+  }
+
   /* Dev mode - flex layout for side panel */
   .fw-sc-root--devmode {
     display: flex;
@@ -1768,6 +1773,11 @@ export const sharedStyles = css`
 
   .fw-sc-scene-item:hover {
     border-color: hsl(var(--fw-sc-border) / 0.5);
+  }
+
+  .fw-sc-scene-item:focus-visible {
+    outline: 2px solid hsl(var(--fw-sc-accent));
+    outline-offset: 2px;
   }
 
   .fw-sc-scene-item--active {

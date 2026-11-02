@@ -128,7 +128,17 @@ export function SceneSwitcher({
           <div
             key={scene.id}
             className={`fw-sc-scene-item ${scene.id === activeSceneId ? "fw-sc-scene-item--active" : ""} ${isTransitioning ? "fw-sc-scene-item--transitioning" : ""}`}
+            role="button"
+            tabIndex={0}
+            aria-pressed={scene.id === activeSceneId}
             onClick={() => handleSceneClick(scene.id)}
+            onKeyDown={(e) => {
+              if (e.target !== e.currentTarget) return;
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                handleSceneClick(scene.id);
+              }
+            }}
           >
             <span className="fw-sc-scene-name">{scene.name}</span>
             <span className="fw-sc-scene-layer-count">
@@ -138,6 +148,7 @@ export function SceneSwitcher({
             </span>
             {onSceneDelete && scenes.length > 1 && scene.id !== activeSceneId && (
               <button
+                type="button"
                 className="fw-sc-scene-delete"
                 onClick={(e) => handleDeleteClick(e, scene.id)}
                 title={t("deleteScene")}

@@ -9,6 +9,7 @@
   import {
     createStudioTranslator,
     nextStudioSceneName,
+    type LayerTransform,
     type StudioTranslateFn,
   } from "@livepeer-frameworks/streamcrafter-core";
   import type { CompositorContext } from "../stores/compositor";
@@ -41,6 +42,14 @@
   function handleLayerReorder(layerIds: string[]) {
     if (activeSceneId) compositor?.reorderLayers(activeSceneId, layerIds);
   }
+
+  function handleLayerTransform(layerId: string, transform: Partial<LayerTransform>) {
+    if (activeSceneId) compositor?.updateLayerTransform(activeSceneId, layerId, transform);
+  }
+
+  function handleLayerRemove(layerId: string) {
+    if (activeSceneId) compositor?.removeLayer(activeSceneId, layerId);
+  }
 </script>
 
 {#if compositor && composition?.isEnabled && composition.isInitialized}
@@ -59,6 +68,8 @@
       sources={context?.sources ?? []}
       onVisibilityToggle={handleLayerVisibility}
       onReorder={handleLayerReorder}
+      onTransformEdit={handleLayerTransform}
+      onRemove={handleLayerRemove}
     />
     <StudioOverlayControls {compositor} overlays={composition.overlays} />
     {#if context}

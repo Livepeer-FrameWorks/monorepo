@@ -39,6 +39,7 @@ import {
   isMediaDevicesSupported,
   isSourceVisibleInScene,
   formatStreamInfo,
+  handleStudioSceneHotkey,
   resolveStudioTheme,
   studioThemeOverridesToStyle,
   createStudioTranslator,
@@ -698,6 +699,14 @@ const StreamCrafterInner: React.FC<StreamCrafterProps> = ({
 
   const qualityProfiles = useMemo(() => getQualityProfiles(t), [t]);
 
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (!enableCompositor) return;
+      handleStudioSceneHotkey(e.nativeEvent, getController()?.getSceneManager());
+    },
+    [enableCompositor, getController]
+  );
+
   // Context menu actions
   const copyWhipUrl = useCallback(() => {
     if (resolvedWhipUrl) {
@@ -754,6 +763,8 @@ const StreamCrafterInner: React.FC<StreamCrafterProps> = ({
               className={cn("fw-sc-root", devMode && "fw-sc-root--devmode", className)}
               data-theme={typeof theme === "string" && theme !== "default" ? theme : undefined}
               style={themeStyle}
+              tabIndex={-1}
+              onKeyDown={handleKeyDown}
             >
               {/* Main content wrapper - takes remaining space when panel is open */}
               <div className={cn("fw-sc-main", devMode ? "flex-1 min-w-0" : "w-full")}>

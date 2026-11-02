@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/svelte";
+import { fireEvent, render, screen, waitFor } from "@testing-library/svelte";
 
 const controllers = vi.hoisted(() => [] as { enableCompositor: ReturnType<typeof vi.fn> }[]);
+const sceneSwitches = vi.hoisted(() => vi.fn());
 
 vi.mock("@livepeer-frameworks/streamcrafter-core", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
@@ -10,10 +11,12 @@ vi.mock("@livepeer-frameworks/streamcrafter-core", async (importOriginal) => {
     private sceneManager: unknown = null;
     enableCompositor = vi.fn(async () => {
       const scene = { id: "scene-1", name: "Default", layers: [], backgroundColor: "#000000" };
+      const second = { id: "scene-2", name: "Scene 2", layers: [], backgroundColor: "#000000" };
       this.sceneManager = {
         on: () => () => {},
-        getAllScenes: () => [scene],
+        getAllScenes: () => [scene, second],
         getActiveScene: () => scene,
+        setActiveScene: sceneSwitches,
         getRendererType: () => "canvas2d",
         getStats: () => ({ fps: 30, frameTimeMs: 1 }),
         getCurrentLayout: () => ({ mode: "solo" }),
@@ -64,7 +67,17 @@ import ProducerPanelHost from "./fixtures/ProducerPanelHost.svelte";
 describe("StreamCrafter producer panel", () => {
   beforeEach(() => {
     controllers.length = 0;
+    sceneSwitches.mockClear();
     vi.spyOn(console, "log").mockImplementation(() => {});
+  });
+
+  it("goes to the next scene on ]", async () => {
+    const { container } = render(StreamCrafter, { whipUrl: "https://ingest.example/whip" });
+    await screen.findByText("Scenes");
+
+    await fireEvent.keyDown(container.querySelector(".fw-sc-root") as HTMLElement, { key: "]" });
+
+    expect(sceneSwitches).toHaveBeenCalledWith("scene-2");
   });
 
   it("is on by default once the compositor runs", async () => {

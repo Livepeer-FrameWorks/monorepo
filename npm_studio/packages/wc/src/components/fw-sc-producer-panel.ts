@@ -8,6 +8,7 @@ import { html, css, nothing } from "lit";
 import { customElement } from "lit/decorators.js";
 import {
   nextStudioSceneName,
+  type LayerTransform,
   type TransitionConfig,
 } from "@livepeer-frameworks/streamcrafter-core";
 import { sharedStyles } from "../styles/shared-styles.js";
@@ -73,6 +74,14 @@ export class FwScProducerPanel extends StudioBoundElement {
           }}
           .onReorder=${(layerIds: string[]) => {
             sceneManager.reorderLayers(activeScene.id, layerIds);
+            changed();
+          }}
+          .onTransformEdit=${(layerId: string, transform: Partial<LayerTransform>) => {
+            sceneManager.updateLayerTransform(activeScene.id, layerId, transform);
+            changed();
+          }}
+          .onRemove=${(layerId: string) => {
+            sceneManager.removeLayer(activeScene.id, layerId);
             changed();
           }}
         ></fw-sc-layer-list>

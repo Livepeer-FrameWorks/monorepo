@@ -125,8 +125,10 @@
           : ''} {isTransitioning ? 'fw-sc-scene-item--transitioning' : ''}"
         role="button"
         tabindex="0"
+        aria-pressed={scene.id === activeSceneId}
         onclick={() => handleSceneClick(scene.id)}
         onkeydown={(e) => {
+          if (e.target !== e.currentTarget) return;
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
             handleSceneClick(scene.id);

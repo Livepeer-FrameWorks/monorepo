@@ -66,7 +66,13 @@ import {
 import type { StudioLocale, StudioTranslationStrings } from "../I18n";
 import { createStudioTranslator } from "../I18n";
 import type { StudioKeyMap } from "../StudioKeyMap";
-import { DEFAULT_STUDIO_KEY_MAP, buildStudioKeyLookup, matchStudioKey } from "../StudioKeyMap";
+import {
+  DEFAULT_STUDIO_KEY_MAP,
+  buildStudioKeyLookup,
+  handleStudioSceneHotkey,
+  isTypingTarget,
+  matchStudioKey,
+} from "../StudioKeyMap";
 
 // ============================================================================
 // Config
@@ -233,9 +239,8 @@ export function createStreamCrafter(config: CreateStreamCrafterConfig): StreamCr
   const keyLookup = buildStudioKeyLookup(keyMap);
 
   const handleKeyDown = (e: KeyboardEvent) => {
-    // Skip if user is typing in an input
-    const tag = (e.target as HTMLElement)?.tagName;
-    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+    if (isTypingTarget(e)) return;
+    if (handleStudioSceneHotkey(e, ctrl.getSceneManager?.(), keyLookup)) return;
 
     const action = matchStudioKey(e, keyLookup);
     if (!action) return;
@@ -260,26 +265,6 @@ export function createStreamCrafter(config: CreateStreamCrafterConfig): StreamCr
         // These are UI-level concerns, emit custom events for the wrapper to handle
         container?.dispatchEvent(new CustomEvent(`fw-sc-${action}`, { bubbles: true }));
         break;
-      case "nextScene": {
-        const sm = ctrl.getSceneManager?.();
-        if (sm) {
-          const scenes = sm.getAllScenes();
-          const active = sm.getActiveScene();
-          const idx = active ? scenes.findIndex((s: any) => s.id === active.id) : -1;
-          if (idx >= 0 && idx < scenes.length - 1) sm.setActiveScene(scenes[idx + 1].id);
-        }
-        break;
-      }
-      case "prevScene": {
-        const sm = ctrl.getSceneManager?.();
-        if (sm) {
-          const scenes = sm.getAllScenes();
-          const active = sm.getActiveScene();
-          const idx = active ? scenes.findIndex((s: any) => s.id === active.id) : -1;
-          if (idx > 0) sm.setActiveScene(scenes[idx - 1].id);
-        }
-        break;
-      }
     }
   };
 

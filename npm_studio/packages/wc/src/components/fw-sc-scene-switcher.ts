@@ -121,13 +121,24 @@ export class FwScSceneSwitcher extends LitElement {
                   "fw-sc-scene-item--active": scene.id === this.activeSceneId,
                   "fw-sc-scene-item--transitioning": this._isTransitioning,
                 })}
+                role="button"
+                tabindex="0"
+                aria-pressed=${scene.id === this.activeSceneId ? "true" : "false"}
                 @click=${() => this._handleSceneClick(scene.id)}
+                @keydown=${(e: KeyboardEvent) => {
+                  if (e.target !== e.currentTarget) return;
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    this._handleSceneClick(scene.id);
+                  }
+                }}
               >
                 <span class="fw-sc-scene-name">${scene.name}</span>
                 <span class="fw-sc-scene-layer-count">${this._layerCount(scene)}</span>
                 ${this.onSceneDelete && this.scenes.length > 1 && scene.id !== this.activeSceneId
                   ? html`
                       <button
+                        type="button"
                         class="fw-sc-scene-delete"
                         @click=${(e: Event) => {
                           e.stopPropagation();

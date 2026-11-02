@@ -62,6 +62,12 @@ export function StudioProducerPanel({
         onReorder={(layerIds) => {
           if (activeSceneId) compositor.reorderLayers(activeSceneId, layerIds);
         }}
+        onTransformEdit={(layerId, transform) => {
+          if (activeSceneId) compositor.updateLayerTransform(activeSceneId, layerId, transform);
+        }}
+        onRemove={(layerId) => {
+          if (activeSceneId) compositor.removeLayer(activeSceneId, layerId);
+        }}
       />
       <StudioOverlayControls compositor={compositor} />
       <StudioMediaControls sources={sources} media={media} />

@@ -351,6 +351,31 @@ describe("StudioProducerPanel", () => {
     expect(compositor.reorderLayers).toHaveBeenCalledWith("one", ["top", "bottom"]);
   });
 
+  it("removes a layer and edits its opacity in the active scene", () => {
+    const compositor = fakeCompositor({
+      removeLayer: vi.fn(),
+      updateLayerTransform: vi.fn(),
+    } as Partial<UseCompositorReturn>);
+    render(<StudioProducerPanel compositor={compositor} sources={[]} />);
+
+    fireEvent.click(screen.getAllByTitle("Remove layer")[0]);
+    expect(compositor.removeLayer).toHaveBeenCalledWith("one", "top");
+
+    expect(screen.getAllByTitle("Edit opacity")).toHaveLength(2);
+  });
+
+  it("switches scenes from the keyboard", () => {
+    const compositor = fakeCompositor();
+    render(<StudioProducerPanel compositor={compositor} sources={[]} />);
+    const tile = screen.getByText("Scene 2").closest(".fw-sc-scene-item") as HTMLElement;
+
+    expect(tile.getAttribute("role")).toBe("button");
+    expect(tile.tabIndex).toBe(0);
+    fireEvent.keyDown(tile, { key: "Enter" });
+
+    expect(compositor.transitionTo).toHaveBeenCalledWith("two", expect.anything());
+  });
+
   it("counts layers in the studio locale", () => {
     render(
       <StudioI18nProvider locale="de">

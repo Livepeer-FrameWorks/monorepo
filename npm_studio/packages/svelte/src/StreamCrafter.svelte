@@ -56,6 +56,7 @@
     detectStudioSupport,
     FULL_STUDIO_SUPPORT,
     formatStreamInfo,
+    handleStudioSceneHotkey,
     isMediaDevicesSupported,
     isSourceVisibleInScene,
     resolveStudioTheme,
@@ -666,11 +667,17 @@
     {@render children()}
   </div>
 {:else}
+  <!-- The studio root listens for the scene hotkeys pressed anywhere inside it. -->
+  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <div
     class="fw-sc-root {devMode ? 'fw-sc-root--devmode' : ''} {className}"
     data-theme={dataTheme}
     style={themeStyle || undefined}
     oncontextmenu={handleContextMenu}
+    onkeydown={(e) => {
+      if (enableCompositor) handleStudioSceneHotkey(e, crafter.getController()?.getSceneManager());
+    }}
+    tabindex="-1"
     role="application"
   >
     <!-- Main content wrapper -->
