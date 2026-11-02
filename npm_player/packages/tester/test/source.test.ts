@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  isPersistable,
   mistIngestUris,
   parsePlaybackUrl,
   parseWhipUrl,
@@ -227,6 +228,34 @@ describe("shared links", () => {
   it("never shares or loads a WHIP URL", () => {
     expect(shareQuery({ mode: "url", url: "https://edge.example.com/whip/secret-key" })).toBeNull();
     expect(readShareQuery("?url=https%3A%2F%2Fedge.example.com%2Fwhip%2Fsecret-key")).toBeNull();
+  });
+
+  it("never shares or keeps a FrameWorks ingest URL, which carries the stream key", () => {
+    const dashboardWhip = "https://edge-ingest.example.com/webrtc/sk_live_abc";
+    const frontDoor = "https://foghorn.example.com/ingest/sk_live_abc";
+    expect(shareQuery({ mode: "url", url: dashboardWhip })).toBeNull();
+    expect(shareQuery({ mode: "url", url: frontDoor })).toBeNull();
+    expect(
+      shareQuery({
+        mode: "mist",
+        baseUrl: "https://edge-ingest.example.com",
+        streamName: "sk_live_abc",
+      })
+    ).toBeNull();
+    expect(readShareQuery(`?url=${encodeURIComponent(dashboardWhip)}`)).toBeNull();
+    expect(readShareQuery(`?url=${encodeURIComponent(frontDoor)}`)).toBeNull();
+    expect(isPersistable({ mode: "url", url: dashboardWhip })).toBe(false);
+    expect(isPersistable({ mode: "url", url: frontDoor })).toBe(false);
+  });
+
+  it("still shares a WebRTC playback URL on a playback edge", () => {
+    const whep = "https://edge-egress.example.com/webrtc/demo";
+    expect(readShareQuery(`?${shareQuery({ mode: "url", url: whep })}`)).toEqual({
+      mode: "url",
+      url: whep,
+      protocol: undefined,
+    });
+    expect(isPersistable({ mode: "url", url: whep })).toBe(true);
   });
 
   it("ignores an unknown protocol parameter", () => {

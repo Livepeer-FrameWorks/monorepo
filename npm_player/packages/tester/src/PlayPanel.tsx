@@ -4,6 +4,7 @@ import { globalPlayerManager } from "@livepeer-frameworks/player-core";
 import type { FwThemePreset, PlayerController } from "@livepeer-frameworks/player-core";
 import {
   PLAY_PROTOCOLS,
+  isPersistable,
   readShareQuery,
   resolvePlaySource,
   shareQuery,
@@ -57,7 +58,8 @@ function readStored(key: string | undefined): PlaySource | undefined {
   if (!key || typeof window === "undefined") return undefined;
   try {
     const raw = window.localStorage.getItem(key);
-    return raw ? (JSON.parse(raw) as PlaySource) : undefined;
+    const stored = raw ? (JSON.parse(raw) as PlaySource) : undefined;
+    return stored && isPersistable(stored) ? stored : undefined;
   } catch {
     return undefined;
   }
@@ -117,7 +119,7 @@ export function PlayPanel({
         setError({ text: resolved.error, tls: resolved.tls });
         return;
       }
-      writeStored(storageKey, resolved.source);
+      if (isPersistable(resolved.source)) writeStored(storageKey, resolved.source);
       setPlaying((prev) => ({ ...resolved, key: (prev?.key ?? 0) + 1 }));
     },
     [gatewayUrl, pageProtocol, storageKey]

@@ -321,24 +321,50 @@ export function mistIngestUris(baseUrl: string, streamName: string) {
 const isProtocol = (value: string | null): value is PlayProtocol =>
   !!value && (PLAY_PROTOCOLS as readonly string[]).includes(value);
 
-/** A WHIP endpoint carries a stream key, so it never goes into a shared link. */
-const looksLikeWhip = (url: string) => /\/whip(\/|$|\?)/i.test(url);
+/**
+ * Whether a URL is an ingest endpoint, whose path carries a stream key: any /whip path,
+ * the Foghorn front door (/ingest/<key>), or /webrtc/<key> on an ingest host such as
+ * the dashboard's edge-ingest name. Mist serves WebRTC playback on /webrtc/ as well,
+ * so that path alone is not enough.
+ */
+function looksLikeIngest(url: string): boolean {
+  if (/\/whip(\/|$|\?)/i.test(url)) return true;
+  let parsed: URL;
+  try {
+    parsed = new URL(url.trim());
+  } catch {
+    return false;
+  }
+  if (/(^|\/)ingest\//i.test(parsed.pathname)) return true;
+  const firstLabel = parsed.hostname.split(".")[0] ?? "";
+  return /ingest/i.test(firstLabel) && /\/webrtc\//i.test(parsed.pathname);
+}
+
+const mistSourceUrl = (baseUrl: string, streamName: string) =>
+  `${normalizeBaseUrl(baseUrl)}/${encodeURIComponent(streamName)}`;
+
+/** Whether a play source may go into a shared link or the browser's storage. */
+export function isPersistable(source: PlaySource): boolean {
+  if (source.mode === "playback") return true;
+  if (source.mode === "mist") {
+    // A stream name on an ingest host is its stream key; test the WHIP URL it forms there.
+    return !looksLikeIngest(mistIngestUris(source.baseUrl, source.streamName).whip);
+  }
+  return !looksLikeIngest(source.url);
+}
 
 /**
  * Query string that reloads this play source: ?url= (with ?protocol=) or ?id=.
  * Returns null for sources that must not be shared.
  */
 export function shareQuery(source: PlaySource): string | null {
+  if (!isPersistable(source)) return null;
   const params = new URLSearchParams();
   if (source.mode === "playback") {
     params.set("id", source.playbackId);
   } else if (source.mode === "mist") {
-    params.set(
-      "url",
-      `${normalizeBaseUrl(source.baseUrl)}/${encodeURIComponent(source.streamName)}`
-    );
+    params.set("url", mistSourceUrl(source.baseUrl, source.streamName));
   } else {
-    if (looksLikeWhip(source.url)) return null;
     params.set("url", source.url.trim());
   }
   if (source.protocol && source.protocol !== "auto") params.set("protocol", source.protocol);
@@ -353,6 +379,6 @@ export function readShareQuery(search: string): PlaySource | null {
   const id = params.get("id")?.trim();
   if (id) return { mode: "playback", playbackId: id, protocol };
   const url = params.get("url")?.trim();
-  if (url && !looksLikeWhip(url)) return { mode: "url", url, protocol };
+  if (url && !looksLikeIngest(url)) return { mode: "url", url, protocol };
   return null;
 }
