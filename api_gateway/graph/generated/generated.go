@@ -447,11 +447,12 @@ type ComplexityRoot struct {
 	}
 
 	BillingArrangement struct {
-		BasePrice        func(childComplexity int) int
-		Collection       func(childComplexity int) int
-		ExpiresAt        func(childComplexity int) int
-		FallbackTierName func(childComplexity int) int
-		WaiveUsage       func(childComplexity int) int
+		BasePrice               func(childComplexity int) int
+		Collection              func(childComplexity int) int
+		ExpiresAt               func(childComplexity int) int
+		FallbackTierDisplayName func(childComplexity int) int
+		FallbackTierName        func(childComplexity int) int
+		WaiveUsage              func(childComplexity int) int
 	}
 
 	BillingDetails struct {
@@ -476,16 +477,18 @@ type ComplexityRoot struct {
 	}
 
 	BillingLifecycle struct {
-		BillingStatus      func(childComplexity int) int
-		CollectionProvider func(childComplexity int) int
-		CollectionReady    func(childComplexity int) int
-		EffectiveBasePrice func(childComplexity int) int
-		FreeFallback       func(childComplexity int) int
-		OperatorGrant      func(childComplexity int) int
-		PendingEffectiveAt func(childComplexity int) int
-		PendingReason      func(childComplexity int) int
-		PendingTier        func(childComplexity int) int
-		PendingTierState   func(childComplexity int) int
+		BillingStatus        func(childComplexity int) int
+		CollectionProvider   func(childComplexity int) int
+		CollectionReady      func(childComplexity int) int
+		DowngradeEffectiveAt func(childComplexity int) int
+		EffectiveBasePrice   func(childComplexity int) int
+		FreeFallback         func(childComplexity int) int
+		FreeMoveFinalAt      func(childComplexity int) int
+		OperatorGrant        func(childComplexity int) int
+		PendingEffectiveAt   func(childComplexity int) int
+		PendingReason        func(childComplexity int) int
+		PendingTier          func(childComplexity int) int
+		PendingTierState     func(childComplexity int) int
 	}
 
 	BillingStatus struct {
@@ -4456,6 +4459,8 @@ type ArtifactStateResolver interface {
 }
 type BillingArrangementResolver interface {
 	ExpiresAt(ctx context.Context, obj *purserpb.OperatorBillingGrant) (*time.Time, error)
+
+	FallbackTierDisplayName(ctx context.Context, obj *purserpb.OperatorBillingGrant) (*string, error)
 }
 type BillingDetailsResolver interface {
 	UpdatedAt(ctx context.Context, obj *purserpb.BillingDetails) (*time.Time, error)
@@ -4463,8 +4468,10 @@ type BillingDetailsResolver interface {
 type BillingLifecycleResolver interface {
 	PendingTier(ctx context.Context, obj *purserpb.BillingStatusResponse) (*purserpb.BillingTier, error)
 	PendingEffectiveAt(ctx context.Context, obj *purserpb.BillingStatusResponse) (*time.Time, error)
-	PendingReason(ctx context.Context, obj *purserpb.BillingStatusResponse) (*string, error)
+	PendingReason(ctx context.Context, obj *purserpb.BillingStatusResponse) (*model.PendingTierReason, error)
 	PendingTierState(ctx context.Context, obj *purserpb.BillingStatusResponse) (*model.PendingTierState, error)
+	DowngradeEffectiveAt(ctx context.Context, obj *purserpb.BillingStatusResponse) (*time.Time, error)
+	FreeMoveFinalAt(ctx context.Context, obj *purserpb.BillingStatusResponse) (*time.Time, error)
 }
 type BillingStatusResolver interface {
 	CurrentTier(ctx context.Context, obj *purserpb.BillingStatusResponse) (*purserpb.BillingTier, error)
@@ -6899,6 +6906,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.BillingArrangement.ExpiresAt(childComplexity), true
+	case "BillingArrangement.fallbackTierDisplayName":
+		if e.ComplexityRoot.BillingArrangement.FallbackTierDisplayName == nil {
+			break
+		}
+
+		return e.ComplexityRoot.BillingArrangement.FallbackTierDisplayName(childComplexity), true
 	case "BillingArrangement.fallbackTierName":
 		if e.ComplexityRoot.BillingArrangement.FallbackTierName == nil {
 			break
@@ -7005,6 +7018,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.BillingLifecycle.CollectionReady(childComplexity), true
+	case "BillingLifecycle.downgradeEffectiveAt":
+		if e.ComplexityRoot.BillingLifecycle.DowngradeEffectiveAt == nil {
+			break
+		}
+
+		return e.ComplexityRoot.BillingLifecycle.DowngradeEffectiveAt(childComplexity), true
 	case "BillingLifecycle.effectiveBasePrice":
 		if e.ComplexityRoot.BillingLifecycle.EffectiveBasePrice == nil {
 			break
@@ -7017,6 +7036,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.BillingLifecycle.FreeFallback(childComplexity), true
+	case "BillingLifecycle.freeMoveFinalAt":
+		if e.ComplexityRoot.BillingLifecycle.FreeMoveFinalAt == nil {
+			break
+		}
+
+		return e.ComplexityRoot.BillingLifecycle.FreeMoveFinalAt(childComplexity), true
 	case "BillingLifecycle.operatorGrant":
 		if e.ComplexityRoot.BillingLifecycle.OperatorGrant == nil {
 			break
@@ -30301,10 +30326,28 @@ type BillingLifecycle {
   pendingTier: BillingTier
   "When a scheduled downgrade takes effect."
   pendingEffectiveAt: Time
-  "Why pendingTier is set: downgrade, tier_upgrade or stripe_checkout."
-  pendingReason: String
-  "Progress of pendingTier while pendingReason is downgrade."
+  "Why pendingTier is set."
+  pendingReason: PendingTierReason
+  "Progress of pendingTier while pendingReason is DOWNGRADE."
   pendingTierState: PendingTierState
+  "When a downgrade chosen now takes effect: the end of the current billing period."
+  downgradeEffectiveAt: Time
+  """
+  For a Stripe- or Mollie-billed subscription: a move to Free chosen now can be
+  undone until this time, when the payment subscription is cancelled. Null when
+  no payment subscription has to be cancelled.
+  """
+  freeMoveFinalAt: Time
+}
+
+"Why a subscription has a pending plan."
+enum PendingTierReason {
+  "A downgrade scheduled with changeBillingTier for the end of the period."
+  DOWNGRADE
+  "A paid upgrade whose payment is being confirmed."
+  TIER_UPGRADE
+  "A Stripe checkout awaiting payment."
+  STRIPE_CHECKOUT
 }
 
 """
@@ -30322,6 +30365,8 @@ type BillingArrangement {
   expiresAt: Time
   "Plan the account returns to when the arrangement ends, when it is not the current plan."
   fallbackTierName: String
+  "Display name of fallbackTierName."
+  fallbackTierDisplayName: String
 }
 
 "Why an account moves to the Free plan."
@@ -45239,6 +45284,35 @@ func (ec *executionContext) fieldContext_BillingArrangement_fallbackTierName(_ c
 	return fc, nil
 }
 
+func (ec *executionContext) _BillingArrangement_fallbackTierDisplayName(ctx context.Context, field graphql.CollectedField, obj *purserpb.OperatorBillingGrant) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_BillingArrangement_fallbackTierDisplayName,
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.BillingArrangement().FallbackTierDisplayName(ctx, obj)
+		},
+		nil,
+		ec.marshalOString2ᚖstring,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_BillingArrangement_fallbackTierDisplayName(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "BillingArrangement",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _BillingDetails_email(ctx context.Context, field graphql.CollectedField, obj *purserpb.BillingDetails) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -45749,6 +45823,8 @@ func (ec *executionContext) fieldContext_BillingLifecycle_operatorGrant(_ contex
 				return ec.fieldContext_BillingArrangement_expiresAt(ctx, field)
 			case "fallbackTierName":
 				return ec.fieldContext_BillingArrangement_fallbackTierName(ctx, field)
+			case "fallbackTierDisplayName":
+				return ec.fieldContext_BillingArrangement_fallbackTierDisplayName(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type BillingArrangement", field.Name)
 		},
@@ -45895,7 +45971,7 @@ func (ec *executionContext) _BillingLifecycle_pendingReason(ctx context.Context,
 			return ec.Resolvers.BillingLifecycle().PendingReason(ctx, obj)
 		},
 		nil,
-		ec.marshalOString2ᚖstring,
+		ec.marshalOPendingTierReason2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐPendingTierReason,
 		true,
 		false,
 	)
@@ -45908,7 +45984,7 @@ func (ec *executionContext) fieldContext_BillingLifecycle_pendingReason(_ contex
 		IsMethod:   true,
 		IsResolver: true,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type String does not have child fields")
+			return nil, errors.New("field of type PendingTierReason does not have child fields")
 		},
 	}
 	return fc, nil
@@ -45938,6 +46014,64 @@ func (ec *executionContext) fieldContext_BillingLifecycle_pendingTierState(_ con
 		IsResolver: true,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type PendingTierState does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _BillingLifecycle_downgradeEffectiveAt(ctx context.Context, field graphql.CollectedField, obj *purserpb.BillingStatusResponse) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_BillingLifecycle_downgradeEffectiveAt,
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.BillingLifecycle().DowngradeEffectiveAt(ctx, obj)
+		},
+		nil,
+		ec.marshalOTime2ᚖtimeᚐTime,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_BillingLifecycle_downgradeEffectiveAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "BillingLifecycle",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Time does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _BillingLifecycle_freeMoveFinalAt(ctx context.Context, field graphql.CollectedField, obj *purserpb.BillingStatusResponse) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_BillingLifecycle_freeMoveFinalAt,
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.BillingLifecycle().FreeMoveFinalAt(ctx, obj)
+		},
+		nil,
+		ec.marshalOTime2ᚖtimeᚐTime,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_BillingLifecycle_freeMoveFinalAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "BillingLifecycle",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Time does not have child fields")
 		},
 	}
 	return fc, nil
@@ -96901,6 +97035,10 @@ func (ec *executionContext) fieldContext_Query_billingLifecycle(_ context.Contex
 				return ec.fieldContext_BillingLifecycle_pendingReason(ctx, field)
 			case "pendingTierState":
 				return ec.fieldContext_BillingLifecycle_pendingTierState(ctx, field)
+			case "downgradeEffectiveAt":
+				return ec.fieldContext_BillingLifecycle_downgradeEffectiveAt(ctx, field)
+			case "freeMoveFinalAt":
+				return ec.fieldContext_BillingLifecycle_freeMoveFinalAt(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type BillingLifecycle", field.Name)
 		},
@@ -122235,6 +122373,10 @@ func (ec *executionContext) fieldContext_TenantAdminBilling_lifecycle(_ context.
 				return ec.fieldContext_BillingLifecycle_pendingReason(ctx, field)
 			case "pendingTierState":
 				return ec.fieldContext_BillingLifecycle_pendingTierState(ctx, field)
+			case "downgradeEffectiveAt":
+				return ec.fieldContext_BillingLifecycle_downgradeEffectiveAt(ctx, field)
+			case "freeMoveFinalAt":
+				return ec.fieldContext_BillingLifecycle_freeMoveFinalAt(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type BillingLifecycle", field.Name)
 		},
@@ -150048,6 +150190,39 @@ func (ec *executionContext) _BillingArrangement(ctx context.Context, sel ast.Sel
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
 		case "fallbackTierName":
 			out.Values[i] = ec._BillingArrangement_fallbackTierName(ctx, field, obj)
+		case "fallbackTierDisplayName":
+			field := field
+
+			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._BillingArrangement_fallbackTierDisplayName(ctx, field, obj)
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -150384,6 +150559,72 @@ func (ec *executionContext) _BillingLifecycle(ctx context.Context, sel ast.Selec
 					}
 				}()
 				res = ec._BillingLifecycle_pendingTierState(ctx, field, obj)
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "downgradeEffectiveAt":
+			field := field
+
+			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._BillingLifecycle_downgradeEffectiveAt(ctx, field, obj)
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "freeMoveFinalAt":
+			field := field
+
+			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._BillingLifecycle_freeMoveFinalAt(ctx, field, obj)
 				return res
 			}
 
@@ -203543,6 +203784,22 @@ func (ec *executionContext) marshalOOrchestratorWithDetails2ᚖframeworksᚋapi_
 		return graphql.Null
 	}
 	return ec._OrchestratorWithDetails(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalOPendingTierReason2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐPendingTierReason(ctx context.Context, v any) (*model.PendingTierReason, error) {
+	if v == nil {
+		return nil, nil
+	}
+	var res = new(model.PendingTierReason)
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalOPendingTierReason2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐPendingTierReason(ctx context.Context, sel ast.SelectionSet, v *model.PendingTierReason) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return v
 }
 
 func (ec *executionContext) unmarshalOPendingTierState2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐPendingTierState(ctx context.Context, v any) (*model.PendingTierState, error) {

@@ -37,6 +37,7 @@ from .enums import (
     NodeStatus,
     PaymentMethod,
     PaymentStatus,
+    PendingTierReason,
     PendingTierState,
     PlaybackPolicyType,
     RetentionSource,
@@ -1321,16 +1322,25 @@ class BillingLifecycleDefault(BaseModel):
         description="When a scheduled downgrade takes effect.",
     )
     "When a scheduled downgrade takes effect."
-    pending_reason: Optional[str] = Field(
-        alias="pendingReason",
-        description="Why pendingTier is set: downgrade, tier_upgrade or stripe_checkout.",
+    pending_reason: Optional[PendingTierReason] = Field(
+        alias="pendingReason", description="Why pendingTier is set."
     )
-    "Why pendingTier is set: downgrade, tier_upgrade or stripe_checkout."
+    "Why pendingTier is set."
     pending_tier_state: Optional[PendingTierState] = Field(
         alias="pendingTierState",
-        description="Progress of pendingTier while pendingReason is downgrade.",
+        description="Progress of pendingTier while pendingReason is DOWNGRADE.",
     )
-    "Progress of pendingTier while pendingReason is downgrade."
+    "Progress of pendingTier while pendingReason is DOWNGRADE."
+    downgrade_effective_at: Optional[datetime] = Field(
+        alias="downgradeEffectiveAt",
+        description="When a downgrade chosen now takes effect: the end of the current billing period.",
+    )
+    "When a downgrade chosen now takes effect: the end of the current billing period."
+    free_move_final_at: Optional[datetime] = Field(
+        alias="freeMoveFinalAt",
+        description="For a Stripe- or Mollie-billed subscription: a move to Free chosen now can be\nundone until this time, when the payment subscription is cancelled. Null when\nno payment subscription has to be cancelled.",
+    )
+    "For a Stripe- or Mollie-billed subscription: a move to Free chosen now can be\nundone until this time, when the payment subscription is cancelled. Null when\nno payment subscription has to be cancelled."
 
 
 class BillingLifecycleDefaultOperatorGrant(BaseModel):
@@ -1360,6 +1370,10 @@ class BillingLifecycleDefaultOperatorGrant(BaseModel):
         description="Plan the account returns to when the arrangement ends, when it is not the current plan.",
     )
     "Plan the account returns to when the arrangement ends, when it is not the current plan."
+    fallback_tier_display_name: Optional[str] = Field(
+        alias="fallbackTierDisplayName", description="Display name of fallbackTierName."
+    )
+    "Display name of fallbackTierName."
 
 
 class BillingLifecycleDefaultFreeFallback(BaseModel):

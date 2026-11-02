@@ -4070,6 +4070,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 collection
                 expiresAt
                 fallbackTierName
+                fallbackTierDisplayName
               }
               freeFallback {
                 reason
@@ -4111,6 +4112,8 @@ class AsyncGraphQLClient(AsyncBaseClient):
               pendingEffectiveAt
               pendingReason
               pendingTierState
+              downgradeEffectiveAt
+              freeMoveFinalAt
             }
             """)
         variables: dict[str, object] = {}

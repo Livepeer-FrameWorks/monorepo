@@ -259,7 +259,7 @@ exports[`public API > operation manifest 1`] = `
       "since": "v0.3.11",
     },
     "GetBillingLifecycle": {
-      "hash": "sha256:51d83725356447f372b847ca5563e4ae34b496e0526b2a1dab397a5d4617a0eb",
+      "hash": "sha256:713da16f2459dd2e510d2f7227d0b4d3c0e6507c42492caf9320165f1a6e62b2",
       "kind": "query",
       "since": "v0.3.14",
     },
@@ -1677,6 +1677,7 @@ exports[`public API > select entry exports 1`] = `
   "enumNodeStatus",
   "enumPaymentMethod",
   "enumPaymentStatus",
+  "enumPendingTierReason",
   "enumPendingTierState",
   "enumPlaybackPolicyType",
   "enumRetentionSource",

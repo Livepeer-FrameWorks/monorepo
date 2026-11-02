@@ -604,6 +604,15 @@ func (r *billingArrangementResolver) ExpiresAt(ctx context.Context, obj *purserp
 	return &t, nil
 }
 
+// FallbackTierDisplayName is the resolver for the fallbackTierDisplayName field.
+func (r *billingArrangementResolver) FallbackTierDisplayName(ctx context.Context, obj *purserpb.OperatorBillingGrant) (*string, error) {
+	if obj.GetFallbackTierDisplayName() == "" {
+		return nil, nil
+	}
+	name := obj.GetFallbackTierDisplayName()
+	return &name, nil
+}
+
 // UpdatedAt is the resolver for the updatedAt field.
 func (r *billingDetailsResolver) UpdatedAt(ctx context.Context, obj *purserpb.BillingDetails) (*time.Time, error) {
 	if obj.UpdatedAt == nil {
@@ -632,17 +641,23 @@ func (r *billingLifecycleResolver) PendingEffectiveAt(ctx context.Context, obj *
 }
 
 // PendingReason is the resolver for the pendingReason field.
-func (r *billingLifecycleResolver) PendingReason(ctx context.Context, obj *purserpb.BillingStatusResponse) (*string, error) {
-	if obj.GetSubscription().GetPendingReason() == "" {
-		return nil, nil
-	}
-	reason := obj.GetSubscription().GetPendingReason()
-	return &reason, nil
+func (r *billingLifecycleResolver) PendingReason(ctx context.Context, obj *purserpb.BillingStatusResponse) (*model.PendingTierReason, error) {
+	return resolvers.PendingTierReason(obj), nil
 }
 
 // PendingTierState is the resolver for the pendingTierState field.
 func (r *billingLifecycleResolver) PendingTierState(ctx context.Context, obj *purserpb.BillingStatusResponse) (*model.PendingTierState, error) {
 	return resolvers.PendingTierState(obj), nil
+}
+
+// DowngradeEffectiveAt is the resolver for the downgradeEffectiveAt field.
+func (r *billingLifecycleResolver) DowngradeEffectiveAt(ctx context.Context, obj *purserpb.BillingStatusResponse) (*time.Time, error) {
+	return resolvers.ProtoTime(obj.GetDowngradeEffectiveAt()), nil
+}
+
+// FreeMoveFinalAt is the resolver for the freeMoveFinalAt field.
+func (r *billingLifecycleResolver) FreeMoveFinalAt(ctx context.Context, obj *purserpb.BillingStatusResponse) (*time.Time, error) {
+	return resolvers.ProtoTime(obj.GetFreeMoveFinalAt()), nil
 }
 
 // CurrentTier is the resolver for the currentTier field.

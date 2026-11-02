@@ -485,6 +485,8 @@ export interface BillingArrangement {
     expiresAt: (Scalars['Time'] | null)
     /** Plan the account returns to when the arrangement ends, when it is not the current plan. */
     fallbackTierName: (Scalars['String'] | null)
+    /** Display name of fallbackTierName. */
+    fallbackTierDisplayName: (Scalars['String'] | null)
     __typename: 'BillingArrangement'
 }
 
@@ -554,10 +556,18 @@ export interface BillingLifecycle {
     pendingTier: (BillingTier | null)
     /** When a scheduled downgrade takes effect. */
     pendingEffectiveAt: (Scalars['Time'] | null)
-    /** Why pendingTier is set: downgrade, tier_upgrade or stripe_checkout. */
-    pendingReason: (Scalars['String'] | null)
-    /** Progress of pendingTier while pendingReason is downgrade. */
+    /** Why pendingTier is set. */
+    pendingReason: (PendingTierReason | null)
+    /** Progress of pendingTier while pendingReason is DOWNGRADE. */
     pendingTierState: (PendingTierState | null)
+    /** When a downgrade chosen now takes effect: the end of the current billing period. */
+    downgradeEffectiveAt: (Scalars['Time'] | null)
+    /**
+     * For a Stripe- or Mollie-billed subscription: a move to Free chosen now can be
+     * undone until this time, when the payment subscription is cancelled. Null when
+     * no payment subscription has to be cancelled.
+     */
+    freeMoveFinalAt: (Scalars['Time'] | null)
     __typename: 'BillingLifecycle'
 }
 
@@ -3690,6 +3700,10 @@ export type PaymentMethod = 'CARD' | 'CRYPTO_ETH' | 'CRYPTO_USDC'
 
 /** Payment processing status. */
 export type PaymentStatus = 'PENDING' | 'CONFIRMED' | 'FAILED'
+
+
+/** Why a subscription has a pending plan. */
+export type PendingTierReason = 'DOWNGRADE' | 'TIER_UPGRADE' | 'STRIPE_CHECKOUT'
 
 
 /** Progress of a scheduled downgrade. */
@@ -7400,6 +7414,8 @@ export interface BillingArrangementGenqlSelection{
     expiresAt?: boolean | number
     /** Plan the account returns to when the arrangement ends, when it is not the current plan. */
     fallbackTierName?: boolean | number
+    /** Display name of fallbackTierName. */
+    fallbackTierDisplayName?: boolean | number
     __typename?: boolean | number
     __scalar?: boolean | number
 }
@@ -7473,10 +7489,18 @@ export interface BillingLifecycleGenqlSelection{
     pendingTier?: BillingTierGenqlSelection
     /** When a scheduled downgrade takes effect. */
     pendingEffectiveAt?: boolean | number
-    /** Why pendingTier is set: downgrade, tier_upgrade or stripe_checkout. */
+    /** Why pendingTier is set. */
     pendingReason?: boolean | number
-    /** Progress of pendingTier while pendingReason is downgrade. */
+    /** Progress of pendingTier while pendingReason is DOWNGRADE. */
     pendingTierState?: boolean | number
+    /** When a downgrade chosen now takes effect: the end of the current billing period. */
+    downgradeEffectiveAt?: boolean | number
+    /**
+     * For a Stripe- or Mollie-billed subscription: a move to Free chosen now can be
+     * undone until this time, when the payment subscription is cancelled. Null when
+     * no payment subscription has to be cancelled.
+     */
+    freeMoveFinalAt?: boolean | number
     __typename?: boolean | number
     __scalar?: boolean | number
 }
@@ -19479,6 +19503,12 @@ export const enumPaymentStatus = {
    PENDING: 'PENDING' as const,
    CONFIRMED: 'CONFIRMED' as const,
    FAILED: 'FAILED' as const
+}
+
+export const enumPendingTierReason = {
+   DOWNGRADE: 'DOWNGRADE' as const,
+   TIER_UPGRADE: 'TIER_UPGRADE' as const,
+   STRIPE_CHECKOUT: 'STRIPE_CHECKOUT' as const
 }
 
 export const enumPendingTierState = {

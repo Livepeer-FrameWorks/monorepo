@@ -393,6 +393,7 @@ fragment BillingLifecycleDefaultFields on BillingLifecycle {
     collection
     expiresAt
     fallbackTierName
+    fallbackTierDisplayName
   }
   freeFallback {
     reason
@@ -434,6 +435,8 @@ fragment BillingLifecycleDefaultFields on BillingLifecycle {
   pendingEffectiveAt
   pendingReason
   pendingTierState
+  downgradeEffectiveAt
+  freeMoveFinalAt
 }
 
 fragment BillingStatusDefaultFields on BillingStatus {

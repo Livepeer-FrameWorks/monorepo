@@ -6917,10 +6917,16 @@ type BillingLifecycleDefaultFields struct {
 	PendingTier *BillingLifecycleDefaultFieldsPendingTierBillingTier `json:"pendingTier"`
 	// When a scheduled downgrade takes effect.
 	PendingEffectiveAt *time.Time `json:"pendingEffectiveAt"`
-	// Why pendingTier is set: downgrade, tier_upgrade or stripe_checkout.
-	PendingReason *string `json:"pendingReason"`
-	// Progress of pendingTier while pendingReason is downgrade.
+	// Why pendingTier is set.
+	PendingReason *PendingTierReason `json:"pendingReason"`
+	// Progress of pendingTier while pendingReason is DOWNGRADE.
 	PendingTierState *PendingTierState `json:"pendingTierState"`
+	// When a downgrade chosen now takes effect: the end of the current billing period.
+	DowngradeEffectiveAt *time.Time `json:"downgradeEffectiveAt"`
+	// For a Stripe- or Mollie-billed subscription: a move to Free chosen now can be
+	// undone until this time, when the payment subscription is cancelled. Null when
+	// no payment subscription has to be cancelled.
+	FreeMoveFinalAt *time.Time `json:"freeMoveFinalAt"`
 }
 
 // GetBillingStatus returns BillingLifecycleDefaultFields.BillingStatus, and is useful for accessing the field via an interface.
@@ -6956,12 +6962,20 @@ func (v *BillingLifecycleDefaultFields) GetPendingEffectiveAt() *time.Time {
 }
 
 // GetPendingReason returns BillingLifecycleDefaultFields.PendingReason, and is useful for accessing the field via an interface.
-func (v *BillingLifecycleDefaultFields) GetPendingReason() *string { return v.PendingReason }
+func (v *BillingLifecycleDefaultFields) GetPendingReason() *PendingTierReason { return v.PendingReason }
 
 // GetPendingTierState returns BillingLifecycleDefaultFields.PendingTierState, and is useful for accessing the field via an interface.
 func (v *BillingLifecycleDefaultFields) GetPendingTierState() *PendingTierState {
 	return v.PendingTierState
 }
+
+// GetDowngradeEffectiveAt returns BillingLifecycleDefaultFields.DowngradeEffectiveAt, and is useful for accessing the field via an interface.
+func (v *BillingLifecycleDefaultFields) GetDowngradeEffectiveAt() *time.Time {
+	return v.DowngradeEffectiveAt
+}
+
+// GetFreeMoveFinalAt returns BillingLifecycleDefaultFields.FreeMoveFinalAt, and is useful for accessing the field via an interface.
+func (v *BillingLifecycleDefaultFields) GetFreeMoveFinalAt() *time.Time { return v.FreeMoveFinalAt }
 
 // BillingLifecycleDefaultFieldsFreeFallback includes the requested fields of the GraphQL type FreeFallback.
 // The GraphQL type's documentation follows.
@@ -7006,6 +7020,8 @@ type BillingLifecycleDefaultFieldsOperatorGrantBillingArrangement struct {
 	ExpiresAt *time.Time `json:"expiresAt"`
 	// Plan the account returns to when the arrangement ends, when it is not the current plan.
 	FallbackTierName *string `json:"fallbackTierName"`
+	// Display name of fallbackTierName.
+	FallbackTierDisplayName *string `json:"fallbackTierDisplayName"`
 }
 
 // GetBasePrice returns BillingLifecycleDefaultFieldsOperatorGrantBillingArrangement.BasePrice, and is useful for accessing the field via an interface.
@@ -7031,6 +7047,11 @@ func (v *BillingLifecycleDefaultFieldsOperatorGrantBillingArrangement) GetExpire
 // GetFallbackTierName returns BillingLifecycleDefaultFieldsOperatorGrantBillingArrangement.FallbackTierName, and is useful for accessing the field via an interface.
 func (v *BillingLifecycleDefaultFieldsOperatorGrantBillingArrangement) GetFallbackTierName() *string {
 	return v.FallbackTierName
+}
+
+// GetFallbackTierDisplayName returns BillingLifecycleDefaultFieldsOperatorGrantBillingArrangement.FallbackTierDisplayName, and is useful for accessing the field via an interface.
+func (v *BillingLifecycleDefaultFieldsOperatorGrantBillingArrangement) GetFallbackTierDisplayName() *string {
+	return v.FallbackTierDisplayName
 }
 
 // BillingLifecycleDefaultFieldsPendingTierBillingTier includes the requested fields of the GraphQL type BillingTier.
@@ -31419,13 +31440,23 @@ func (v *GetBillingLifecycleBillingLifecycle) GetPendingEffectiveAt() *time.Time
 }
 
 // GetPendingReason returns GetBillingLifecycleBillingLifecycle.PendingReason, and is useful for accessing the field via an interface.
-func (v *GetBillingLifecycleBillingLifecycle) GetPendingReason() *string {
+func (v *GetBillingLifecycleBillingLifecycle) GetPendingReason() *PendingTierReason {
 	return v.BillingLifecycleDefaultFields.PendingReason
 }
 
 // GetPendingTierState returns GetBillingLifecycleBillingLifecycle.PendingTierState, and is useful for accessing the field via an interface.
 func (v *GetBillingLifecycleBillingLifecycle) GetPendingTierState() *PendingTierState {
 	return v.BillingLifecycleDefaultFields.PendingTierState
+}
+
+// GetDowngradeEffectiveAt returns GetBillingLifecycleBillingLifecycle.DowngradeEffectiveAt, and is useful for accessing the field via an interface.
+func (v *GetBillingLifecycleBillingLifecycle) GetDowngradeEffectiveAt() *time.Time {
+	return v.BillingLifecycleDefaultFields.DowngradeEffectiveAt
+}
+
+// GetFreeMoveFinalAt returns GetBillingLifecycleBillingLifecycle.FreeMoveFinalAt, and is useful for accessing the field via an interface.
+func (v *GetBillingLifecycleBillingLifecycle) GetFreeMoveFinalAt() *time.Time {
+	return v.BillingLifecycleDefaultFields.FreeMoveFinalAt
 }
 
 func (v *GetBillingLifecycleBillingLifecycle) UnmarshalJSON(b []byte) error {
@@ -31470,9 +31501,13 @@ type __premarshalGetBillingLifecycleBillingLifecycle struct {
 
 	PendingEffectiveAt *time.Time `json:"pendingEffectiveAt"`
 
-	PendingReason *string `json:"pendingReason"`
+	PendingReason *PendingTierReason `json:"pendingReason"`
 
 	PendingTierState *PendingTierState `json:"pendingTierState"`
+
+	DowngradeEffectiveAt *time.Time `json:"downgradeEffectiveAt"`
+
+	FreeMoveFinalAt *time.Time `json:"freeMoveFinalAt"`
 }
 
 func (v *GetBillingLifecycleBillingLifecycle) MarshalJSON() ([]byte, error) {
@@ -31496,6 +31531,8 @@ func (v *GetBillingLifecycleBillingLifecycle) __premarshalJSON() (*__premarshalG
 	retval.PendingEffectiveAt = v.BillingLifecycleDefaultFields.PendingEffectiveAt
 	retval.PendingReason = v.BillingLifecycleDefaultFields.PendingReason
 	retval.PendingTierState = v.BillingLifecycleDefaultFields.PendingTierState
+	retval.DowngradeEffectiveAt = v.BillingLifecycleDefaultFields.DowngradeEffectiveAt
+	retval.FreeMoveFinalAt = v.BillingLifecycleDefaultFields.FreeMoveFinalAt
 	return &retval, nil
 }
 
@@ -79621,6 +79658,24 @@ var AllPaymentStatus = []PaymentStatus{
 	PaymentStatusPending,
 	PaymentStatusConfirmed,
 	PaymentStatusFailed,
+}
+
+// Why a subscription has a pending plan.
+type PendingTierReason string
+
+const (
+	// A downgrade scheduled with changeBillingTier for the end of the period.
+	PendingTierReasonDowngrade PendingTierReason = "DOWNGRADE"
+	// A paid upgrade whose payment is being confirmed.
+	PendingTierReasonTierUpgrade PendingTierReason = "TIER_UPGRADE"
+	// A Stripe checkout awaiting payment.
+	PendingTierReasonStripeCheckout PendingTierReason = "STRIPE_CHECKOUT"
+)
+
+var AllPendingTierReason = []PendingTierReason{
+	PendingTierReasonDowngrade,
+	PendingTierReasonTierUpgrade,
+	PendingTierReasonStripeCheckout,
 }
 
 // Progress of a scheduled downgrade.
@@ -129351,6 +129406,7 @@ fragment BillingLifecycleDefaultFields on BillingLifecycle {
 		collection
 		expiresAt
 		fallbackTierName
+		fallbackTierDisplayName
 	}
 	freeFallback {
 		reason
@@ -129392,6 +129448,8 @@ fragment BillingLifecycleDefaultFields on BillingLifecycle {
 	pendingEffectiveAt
 	pendingReason
 	pendingTierState
+	downgradeEffectiveAt
+	freeMoveFinalAt
 }
 `
 

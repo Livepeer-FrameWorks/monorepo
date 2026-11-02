@@ -25,10 +25,12 @@ enum GQL {
     currency
     billingPeriod
     supportLevel
+    slaLevel
     meteringEnabled
     isEnterprise
     features {
       supportLevel
+      sla
       processingCustomizable
     }
     pricingRules {
@@ -1183,6 +1185,7 @@ enum GQL {
         collection
         expiresAt
         fallbackTierName
+        fallbackTierDisplayName
       }
       freeFallback {
         reason
@@ -1197,6 +1200,8 @@ enum GQL {
       pendingEffectiveAt
       pendingReason
       pendingTierState
+      downgradeEffectiveAt
+      freeMoveFinalAt
     }
   }
   """
@@ -1328,6 +1333,7 @@ enum GQL {
       billingPeriod
       features {
         supportLevel
+        sla
         processingCustomizable
       }
       pricingRules {
@@ -1343,6 +1349,7 @@ enum GQL {
         value
       }
       supportLevel
+      slaLevel
       meteringEnabled
       isEnterprise
     }
@@ -2784,6 +2791,7 @@ enum GQL {
               collection
               expiresAt
               fallbackTierName
+              fallbackTierDisplayName
             }
             freeFallback {
               reason

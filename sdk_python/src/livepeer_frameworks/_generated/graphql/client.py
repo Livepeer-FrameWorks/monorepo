@@ -4035,6 +4035,7 @@ class GraphQLClient(BaseClient):
                 collection
                 expiresAt
                 fallbackTierName
+                fallbackTierDisplayName
               }
               freeFallback {
                 reason
@@ -4076,6 +4077,8 @@ class GraphQLClient(BaseClient):
               pendingEffectiveAt
               pendingReason
               pendingTierState
+              downgradeEffectiveAt
+              freeMoveFinalAt
             }
             """)
         variables: dict[str, object] = {}

@@ -601,6 +601,10 @@ type BillingArrangement {
   Plan the account returns to when the arrangement ends, when it is not the current plan.
   """
   fallbackTierName: String
+  """
+  Display name of fallbackTierName.
+  """
+  fallbackTierDisplayName: String
 }
 
 """
@@ -705,13 +709,23 @@ type BillingLifecycle {
   """
   pendingEffectiveAt: Time
   """
-  Why pendingTier is set: downgrade, tier_upgrade or stripe_checkout.
+  Why pendingTier is set.
   """
-  pendingReason: String
+  pendingReason: PendingTierReason
   """
-  Progress of pendingTier while pendingReason is downgrade.
+  Progress of pendingTier while pendingReason is DOWNGRADE.
   """
   pendingTierState: PendingTierState
+  """
+  When a downgrade chosen now takes effect: the end of the current billing period.
+  """
+  downgradeEffectiveAt: Time
+  """
+  For a Stripe- or Mollie-billed subscription: a move to Free chosen now can be
+  undone until this time, when the payment subscription is cancelled. Null when
+  no payment subscription has to be cancelled.
+  """
+  freeMoveFinalAt: Time
 }
 
 type BillingStatus {
@@ -5698,6 +5712,24 @@ enum PaymentStatus {
   Payment failed or declined.
   """
   FAILED
+}
+
+"""
+Why a subscription has a pending plan.
+"""
+enum PendingTierReason {
+  """
+  A downgrade scheduled with changeBillingTier for the end of the period.
+  """
+  DOWNGRADE
+  """
+  A paid upgrade whose payment is being confirmed.
+  """
+  TIER_UPGRADE
+  """
+  A Stripe checkout awaiting payment.
+  """
+  STRIPE_CHECKOUT
 }
 
 """

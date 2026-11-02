@@ -244,6 +244,7 @@ export const scalarFields = {
         "collection",
         "expiresAt",
         "fallbackTierName",
+        "fallbackTierDisplayName",
         "__typename"
     ],
     "BillingDetails": [
@@ -274,6 +275,8 @@ export const scalarFields = {
         "pendingEffectiveAt",
         "pendingReason",
         "pendingTierState",
+        "downgradeEffectiveAt",
+        "freeMoveFinalAt",
         "__typename"
     ],
     "BillingStatus": [

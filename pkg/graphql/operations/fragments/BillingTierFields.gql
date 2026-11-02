@@ -8,10 +8,12 @@ fragment BillingTierFields on BillingTier {
   currency
   billingPeriod
   supportLevel
+  slaLevel
   meteringEnabled
   isEnterprise
   features {
     supportLevel
+    sla
     processingCustomizable
   }
   pricingRules {

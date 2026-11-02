@@ -831,6 +831,16 @@ export type PaymentStatus =
   | 'PENDING'
   | '%future added value';
 
+/** Why a subscription has a pending plan. */
+export type PendingTierReason =
+  /** A downgrade scheduled with changeBillingTier for the end of the period. */
+  | 'DOWNGRADE'
+  /** A Stripe checkout awaiting payment. */
+  | 'STRIPE_CHECKOUT'
+  /** A paid upgrade whose payment is being confirmed. */
+  | 'TIER_UPGRADE'
+  | '%future added value';
+
 /** Progress of a scheduled downgrade. */
 export type PendingTierState =
   /** The effective time passed. The downgrade applies with the closing invoice. */
@@ -1803,15 +1813,18 @@ billingStatus: string, /** True only after a reusable postpaid provider subscrip
 collectionReady: boolean, /** Confirmed postpaid collection provider, when ready. */
 collectionProvider: string | null, /** Monthly base fee in EUR this account pays after any arrangement, as a decimal string. */
 effectiveBasePrice: string, /** When a scheduled downgrade takes effect. */
-pendingEffectiveAt: string | null, /** Why pendingTier is set: downgrade, tier_upgrade or stripe_checkout. */
-pendingReason: string | null, /** Progress of pendingTier while pendingReason is downgrade. */
-pendingTierState: PendingTierState | null, /** Billing arrangement FrameWorks set up for this account, such as a trial or a custom price, while it is in force. */
+pendingEffectiveAt: string | null, /** Why pendingTier is set. */
+pendingReason: PendingTierReason | null, /** Progress of pendingTier while pendingReason is DOWNGRADE. */
+pendingTierState: PendingTierState | null, /** When a downgrade chosen now takes effect: the end of the current billing period. */
+downgradeEffectiveAt: string | null, /** For a Stripe- or Mollie-billed subscription: a move to Free chosen now can be undone until this time, when the payment subscription is cancelled. Null when no payment subscription has to be cancelled. */
+freeMoveFinalAt: string | null, /** Billing arrangement FrameWorks set up for this account, such as a trial or a custom price, while it is in force. */
 operatorGrant: { /** Monthly base fee in EUR in place of the plan's, as a decimal string. Null keeps the plan's fee. */
 basePrice: string | null, /** Usage is metered and shown at zero cost. */
 waiveUsage: boolean, /** How invoices are collected: provider (Stripe or Mollie) or invoice (FrameWorks sends invoices to pay by bank transfer). */
 collection: string, /** When the arrangement ends. Null runs until FrameWorks ends it. */
 expiresAt: string | null, /** Plan the account returns to when the arrangement ends, when it is not the current plan. */
-fallbackTierName: string | null } | null, /** Scheduled move to the Free plan after a failed renewal payment or a cancellation. */
+fallbackTierName: string | null, /** Display name of fallbackTierName. */
+fallbackTierDisplayName: string | null } | null, /** Scheduled move to the Free plan after a failed renewal payment or a cancellation. */
 freeFallback: { reason: FreeFallbackReason, /** When the move happens, or happened once stage is MOVED. */
 at: string, stage: FreeFallbackStage, /** The Stripe or Mollie subscription is cancelled, so no renewal follows. */
 providerCancelled: boolean } | null, /** Plan the subscription changes to, when a change is scheduled or being confirmed. */
@@ -5809,15 +5822,18 @@ billingStatus: string, /** True only after a reusable postpaid provider subscrip
 collectionReady: boolean, /** Confirmed postpaid collection provider, when ready. */
 collectionProvider: string | null, /** Monthly base fee in EUR this account pays after any arrangement, as a decimal string. */
 effectiveBasePrice: string, /** When a scheduled downgrade takes effect. */
-pendingEffectiveAt: string | null, /** Why pendingTier is set: downgrade, tier_upgrade or stripe_checkout. */
-pendingReason: string | null, /** Progress of pendingTier while pendingReason is downgrade. */
-pendingTierState: PendingTierState | null, /** Billing arrangement FrameWorks set up for this account, such as a trial or a custom price, while it is in force. */
+pendingEffectiveAt: string | null, /** Why pendingTier is set. */
+pendingReason: PendingTierReason | null, /** Progress of pendingTier while pendingReason is DOWNGRADE. */
+pendingTierState: PendingTierState | null, /** When a downgrade chosen now takes effect: the end of the current billing period. */
+downgradeEffectiveAt: string | null, /** For a Stripe- or Mollie-billed subscription: a move to Free chosen now can be undone until this time, when the payment subscription is cancelled. Null when no payment subscription has to be cancelled. */
+freeMoveFinalAt: string | null, /** Billing arrangement FrameWorks set up for this account, such as a trial or a custom price, while it is in force. */
 operatorGrant: { /** Monthly base fee in EUR in place of the plan's, as a decimal string. Null keeps the plan's fee. */
 basePrice: string | null, /** Usage is metered and shown at zero cost. */
 waiveUsage: boolean, /** How invoices are collected: provider (Stripe or Mollie) or invoice (FrameWorks sends invoices to pay by bank transfer). */
 collection: string, /** When the arrangement ends. Null runs until FrameWorks ends it. */
 expiresAt: string | null, /** Plan the account returns to when the arrangement ends, when it is not the current plan. */
-fallbackTierName: string | null } | null, /** Scheduled move to the Free plan after a failed renewal payment or a cancellation. */
+fallbackTierName: string | null, /** Display name of fallbackTierName. */
+fallbackTierDisplayName: string | null } | null, /** Scheduled move to the Free plan after a failed renewal payment or a cancellation. */
 freeFallback: { reason: FreeFallbackReason, /** When the move happens, or happened once stage is MOVED. */
 at: string, stage: FreeFallbackStage, /** The Stripe or Mollie subscription is cancelled, so no renewal follows. */
 providerCancelled: boolean } | null, /** Plan the subscription changes to, when a change is scheduled or being confirmed. */
@@ -10848,6 +10864,7 @@ export const BillingLifecycleDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedD
     collection
     expiresAt
     fallbackTierName
+    fallbackTierDisplayName
   }
   freeFallback {
     reason
@@ -10889,6 +10906,8 @@ export const BillingLifecycleDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedD
   pendingEffectiveAt
   pendingReason
   pendingTierState
+  downgradeEffectiveAt
+  freeMoveFinalAt
 }
     `, {"fragmentName":"BillingLifecycleDefaultFields"}) as unknown as TypedDocumentString<BillingLifecycleDefaultFieldsFragment, unknown>;
 export const BillingStatusDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
@@ -19668,6 +19687,7 @@ export const GetBillingLifecycleDocument = /*#__PURE__*/ new TypedDocumentString
     collection
     expiresAt
     fallbackTierName
+    fallbackTierDisplayName
   }
   freeFallback {
     reason
@@ -19709,6 +19729,8 @@ export const GetBillingLifecycleDocument = /*#__PURE__*/ new TypedDocumentString
   pendingEffectiveAt
   pendingReason
   pendingTierState
+  downgradeEffectiveAt
+  freeMoveFinalAt
 }`) as unknown as TypedDocumentString<GetBillingLifecycleQuery, GetBillingLifecycleQueryVariables>;
 /** Get the current billing status including subscription tier and usage. */
 export const GetBillingStatusDocument = /*#__PURE__*/ new TypedDocumentString(`

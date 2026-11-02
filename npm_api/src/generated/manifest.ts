@@ -67,7 +67,7 @@ export const operations = {
   GetArtifactStatesConnection: { kind: "query", since: "v0.3.11", hash: "sha256:27a3031ce62afda7c75340978148c87246b1ed2d787664283b5b25605d8f28e5" },
   GetBalanceTransactionsConnection: { kind: "query", since: "v0.3.11", hash: "sha256:df19de070c9bc4b155de95cb603ac8d4127a2f7b78d32ea40a05961b2116d51d" },
   GetBillingDetails: { kind: "query", since: "v0.3.11", hash: "sha256:03fb875d81d95de9f6dcdbd38b0a286fa15d22c743baa6961f7d114a4180ebb2" },
-  GetBillingLifecycle: { kind: "query", since: "v0.3.14", hash: "sha256:51d83725356447f372b847ca5563e4ae34b496e0526b2a1dab397a5d4617a0eb" },
+  GetBillingLifecycle: { kind: "query", since: "v0.3.14", hash: "sha256:713da16f2459dd2e510d2f7227d0b4d3c0e6507c42492caf9320165f1a6e62b2" },
   GetBillingStatus: { kind: "query", since: "v0.3.11", hash: "sha256:27329e4d7b0bd37d5a0e3c433b99885206bed5d45d89ce413a9ec2f35e3dc0e5" },
   GetBillingTiers: { kind: "query", since: "v0.3.11", hash: "sha256:17ba741228ca449710608ec9bddc87cb14b6d1caaeefa748ebf93cd4f2a32c23" },
   GetBufferEventsConnection: { kind: "query", since: "v0.3.11", hash: "sha256:35e71f734de9291fd24145e2b08b8adc0e6f71842631961e64d82872c9bae0ba" },

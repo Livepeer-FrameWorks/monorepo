@@ -1814,6 +1814,7 @@
             "billingStatus": "text",
             "collectionProvider": "text",
             "collectionReady": true,
+            "downgradeEffectiveAt": "2026-09-19T14:03:27Z",
             "effectiveBasePrice": "text",
             "freeFallback": {
               "at": "2026-09-19T14:03:27Z",
@@ -1821,15 +1822,17 @@
               "reason": "PAYMENT_FAILED",
               "stage": "SCHEDULED"
             },
+            "freeMoveFinalAt": "2026-09-19T14:03:27Z",
             "operatorGrant": {
               "basePrice": "text",
               "collection": "text",
               "expiresAt": "2026-09-19T14:03:27Z",
+              "fallbackTierDisplayName": "text",
               "fallbackTierName": "text",
               "waiveUsage": true
             },
             "pendingEffectiveAt": "2026-09-19T14:03:27Z",
-            "pendingReason": "text",
+            "pendingReason": "DOWNGRADE",
             "pendingTier": {
               "basePrice": 1.5,
               "billingPeriod": "text",

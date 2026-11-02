@@ -354,6 +354,12 @@ class PaymentStatus(OpenEnum):
     FAILED = "FAILED"
 
 
+class PendingTierReason(OpenEnum):
+    DOWNGRADE = "DOWNGRADE"
+    TIER_UPGRADE = "TIER_UPGRADE"
+    STRIPE_CHECKOUT = "STRIPE_CHECKOUT"
+
+
 class PendingTierState(OpenEnum):
     SCHEDULED = "SCHEDULED"
     FINAL = "FINAL"

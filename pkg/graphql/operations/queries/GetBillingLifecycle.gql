@@ -13,6 +13,7 @@ query GetBillingLifecycle {
       collection
       expiresAt
       fallbackTierName
+      fallbackTierDisplayName
     }
     freeFallback {
       reason
@@ -27,5 +28,7 @@ query GetBillingLifecycle {
     pendingEffectiveAt
     pendingReason
     pendingTierState
+    downgradeEffectiveAt
+    freeMoveFinalAt
   }
 }

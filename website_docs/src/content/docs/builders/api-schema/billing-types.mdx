@@ -76,6 +76,7 @@ A billing arrangement FrameWorks set up for an account. Only the terms the accou
 - **collection**: `String!` — How invoices are collected: provider (Stripe or Mollie) or invoice (FrameWorks sends invoices to pay by bank transfer).
 - **expiresAt**: `Time` ([Time](/builders/api-schema/shared/#time)) — When the arrangement ends. Null runs until FrameWorks ends it.
 - **fallbackTierName**: `String` — Plan the account returns to when the arrangement ends, when it is not the current plan.
+- **fallbackTierDisplayName**: `String` — Display name of fallbackTierName.
 
 ## BillingDetails
 
@@ -116,8 +117,10 @@ A tenant&#39;s plan lifecycle, as its billing page shows it.
 - **freeFallback**: `FreeFallback` ([FreeFallback](/builders/api-schema/billing-types/#freefallback)) — Scheduled move to the Free plan after a failed renewal payment or a cancellation.
 - **pendingTier**: `BillingTier` ([BillingTier](/builders/api-schema/billing-types/#billingtier)) — Plan the subscription changes to, when a change is scheduled or being confirmed.
 - **pendingEffectiveAt**: `Time` ([Time](/builders/api-schema/shared/#time)) — When a scheduled downgrade takes effect.
-- **pendingReason**: `String` — Why pendingTier is set: downgrade, tier_upgrade or stripe_checkout.
-- **pendingTierState**: `PendingTierState` ([PendingTierState](/builders/api-schema/billing-types/#pendingtierstate)) — Progress of pendingTier while pendingReason is downgrade.
+- **pendingReason**: `PendingTierReason` ([PendingTierReason](/builders/api-schema/billing-types/#pendingtierreason)) — Why pendingTier is set.
+- **pendingTierState**: `PendingTierState` ([PendingTierState](/builders/api-schema/billing-types/#pendingtierstate)) — Progress of pendingTier while pendingReason is DOWNGRADE.
+- **downgradeEffectiveAt**: `Time` ([Time](/builders/api-schema/shared/#time)) — When a downgrade chosen now takes effect: the end of the current billing period.
+- **freeMoveFinalAt**: `Time` ([Time](/builders/api-schema/shared/#time)) — For a Stripe- or Mollie-billed subscription: a move to Free chosen now can be undone until this time, when the payment subscription is cancelled. Null when no payment subscription has to be cancelled.
 
 ## BillingStatus
 
@@ -626,6 +629,16 @@ Payment processing status.
 - `PENDING` — Payment initiated, awaiting confirmation.
 - `CONFIRMED` — Payment successfully processed.
 - `FAILED` — Payment failed or declined.
+
+## PendingTierReason
+
+**enum**
+
+Why a subscription has a pending plan.
+
+- `DOWNGRADE` — A downgrade scheduled with changeBillingTier for the end of the period.
+- `TIER_UPGRADE` — A paid upgrade whose payment is being confirmed.
+- `STRIPE_CHECKOUT` — A Stripe checkout awaiting payment.
 
 ## PendingTierState
 

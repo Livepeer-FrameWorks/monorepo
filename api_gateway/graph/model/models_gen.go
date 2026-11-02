@@ -5475,6 +5475,67 @@ func (e PaymentStatus) MarshalJSON() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// Why a subscription has a pending plan.
+type PendingTierReason string
+
+const (
+	// A downgrade scheduled with changeBillingTier for the end of the period.
+	PendingTierReasonDowngrade PendingTierReason = "DOWNGRADE"
+	// A paid upgrade whose payment is being confirmed.
+	PendingTierReasonTierUpgrade PendingTierReason = "TIER_UPGRADE"
+	// A Stripe checkout awaiting payment.
+	PendingTierReasonStripeCheckout PendingTierReason = "STRIPE_CHECKOUT"
+)
+
+var AllPendingTierReason = []PendingTierReason{
+	PendingTierReasonDowngrade,
+	PendingTierReasonTierUpgrade,
+	PendingTierReasonStripeCheckout,
+}
+
+func (e PendingTierReason) IsValid() bool {
+	switch e {
+	case PendingTierReasonDowngrade, PendingTierReasonTierUpgrade, PendingTierReasonStripeCheckout:
+		return true
+	}
+	return false
+}
+
+func (e PendingTierReason) String() string {
+	return string(e)
+}
+
+func (e *PendingTierReason) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = PendingTierReason(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid PendingTierReason", str)
+	}
+	return nil
+}
+
+func (e PendingTierReason) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *PendingTierReason) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e PendingTierReason) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
 // Progress of a scheduled downgrade.
 type PendingTierState string
 

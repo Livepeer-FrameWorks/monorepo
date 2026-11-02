@@ -3,6 +3,7 @@ package resolvers
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"frameworks/api_gateway/graph/model"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
@@ -10,6 +11,7 @@ import (
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // billingErrorDomain is the ErrorInfo domain Purser uses for refusals a
@@ -54,6 +56,31 @@ func PendingTierState(obj *purserpb.BillingStatusResponse) *model.PendingTierSta
 		return nil
 	}
 	return &state
+}
+
+// ProtoTime is ts as a nullable GraphQL Time.
+func ProtoTime(ts *timestamppb.Timestamp) *time.Time {
+	if ts == nil || !ts.IsValid() {
+		return nil
+	}
+	return protoTimePtr(ts)
+}
+
+// PendingTierReason maps the subscription's pending_reason; an unknown value
+// reads as no reason rather than failing the whole lifecycle.
+func PendingTierReason(obj *purserpb.BillingStatusResponse) *model.PendingTierReason {
+	var reason model.PendingTierReason
+	switch obj.GetSubscription().GetPendingReason() {
+	case "downgrade":
+		reason = model.PendingTierReasonDowngrade
+	case "tier_upgrade":
+		reason = model.PendingTierReasonTierUpgrade
+	case "stripe_checkout":
+		reason = model.PendingTierReasonStripeCheckout
+	default:
+		return nil
+	}
+	return &reason
 }
 
 // billingMutationError is the ValidationError for a failed billing mutation.

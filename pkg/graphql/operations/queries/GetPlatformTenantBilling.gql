@@ -27,6 +27,7 @@ query GetPlatformTenantBilling($id: ID!, $invoicesFirst: Int = 25, $timeRange: T
             collection
             expiresAt
             fallbackTierName
+            fallbackTierDisplayName
           }
           freeFallback {
             reason

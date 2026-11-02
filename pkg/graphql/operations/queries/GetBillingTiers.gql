@@ -11,6 +11,7 @@ query GetBillingTiers {
     billingPeriod
     features {
       supportLevel
+      sla
       processingCustomizable
     }
     pricingRules {
@@ -26,6 +27,7 @@ query GetBillingTiers {
       value
     }
     supportLevel
+    slaLevel
     meteringEnabled
     isEnterprise
   }
