@@ -28,6 +28,7 @@
   import RoutingMap from "$lib/components/charts/RoutingMap.svelte";
   import DashboardMetricCard from "$lib/components/shared/DashboardMetricCard.svelte";
   import EmptyState from "$lib/components/EmptyState.svelte";
+  import ClusterStatusPill from "$lib/components/infrastructure/ClusterStatusPill.svelte";
   import { clusterSubscriptionOutcome } from "$lib/utils/clusterSubscription";
 
   // Icons
@@ -601,11 +602,10 @@
                             </div>
                           </td>
                           <td class="py-3 px-4">
-                            <span
-                              class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-success/10 text-success"
-                            >
-                              {cluster.healthStatus ?? "Active"}
-                            </span>
+                            <ClusterStatusPill
+                              healthStatus={cluster.healthStatus}
+                              ownedClusterId={isOwner ? cluster.clusterId : null}
+                            />
                           </td>
                           <td class="py-3 px-4 text-muted-foreground">
                             {accessByCluster.get(cluster.clusterId)?.accessLevel ?? "subscriber"}

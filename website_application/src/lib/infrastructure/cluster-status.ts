@@ -17,6 +17,20 @@ export function clusterStatusLabel(
   return status || "unknown";
 }
 
+/** Pill colours for a cluster health status; anything not reported as healthy stays neutral. */
+export function clusterStatusClass(healthStatus: string | null | undefined): string {
+  switch (healthStatus?.trim().toLowerCase()) {
+    case "healthy":
+      return "border-success/40 bg-success/10 text-success";
+    case "degraded":
+      return "border-warning/40 bg-warning/10 text-warning";
+    case "unhealthy":
+      return "border-rose-500/40 bg-rose-500/10 text-rose-300";
+    default:
+      return "border-muted-foreground/40 bg-muted-foreground/10 text-muted-foreground";
+  }
+}
+
 export function isUnknownClusterStatus(healthStatus: string | null | undefined): boolean {
   const status = (healthStatus ?? "").trim().toLowerCase();
   return status === "" || status === "unknown";

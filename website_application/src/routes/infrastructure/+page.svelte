@@ -11,7 +11,11 @@
     GetNodesConnectionStore,
   } from "$houdini";
   import { SvelteMap } from "svelte/reactivity";
-  import { clusterStatusLabel, isUnknownClusterStatus } from "$lib/infrastructure/cluster-status";
+  import {
+    clusterStatusClass,
+    clusterStatusLabel,
+    isUnknownClusterStatus,
+  } from "$lib/infrastructure/cluster-status";
   import { toast } from "$lib/stores/toast.js";
   import LoadingCard from "$lib/components/LoadingCard.svelte";
   import SkeletonLoader from "$lib/components/SkeletonLoader.svelte";
@@ -207,19 +211,6 @@
   function handleTimeRangeChange(value: string) {
     timeRange = value;
     loadInfrastructureData();
-  }
-
-  function getStatusBadgeClass(status: string | null | undefined) {
-    switch (status?.toLowerCase()) {
-      case "healthy":
-        return "border-success/40 bg-success/10 text-success";
-      case "degraded":
-        return "border-warning/40 bg-warning/10 text-warning";
-      case "unhealthy":
-        return "border-rose-500/40 bg-rose-500/10 text-rose-300";
-      default:
-        return "border-muted-foreground/40 bg-muted-foreground/10 text-muted-foreground";
-    }
   }
 </script>
 
@@ -462,7 +453,7 @@
                           </div>
                           <Badge
                             variant="outline"
-                            class="text-xs uppercase {getStatusBadgeClass(cluster.healthStatus)}"
+                            class="text-xs uppercase {clusterStatusClass(cluster.healthStatus)}"
                           >
                             {clusterStatusLabel(
                               cluster.healthStatus,
