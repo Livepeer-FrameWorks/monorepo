@@ -19,7 +19,9 @@ describe("coming soon modal", () => {
     expect(body).toContain("on our servers");
     expect(body).toContain("backup input");
     expect(body).not.toMatch(/overlays and scenes/i);
+    expect(body).toContain("Up next");
+    expect(body).not.toContain("In Development");
     const link = (await screen.findByText("See what's next")).closest("a");
-    expect(link?.getAttribute("href")).toBe("https://frameworks.example/showcase#up-next");
+    expect(link?.getAttribute("href")).toBe("https://frameworks.example/showcase#composition");
   });
 });

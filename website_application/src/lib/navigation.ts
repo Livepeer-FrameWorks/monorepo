@@ -233,7 +233,6 @@ export const navigationConfig: Record<string, NavigationItem> = {
     },
   },
 
-  // StreamCrafter - browser studio today, server-side production in the pipeline
   streamcrafter: {
     name: "StreamCrafter",
     icon: "Clapperboard",

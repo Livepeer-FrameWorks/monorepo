@@ -18,7 +18,10 @@
   let { show = $bindable(false), item = null }: Props = $props();
 
   const dispatch = createEventDispatcher();
-  const upNextUrl = `${getMarketingSiteUrl().replace(/\/$/, "")}/showcase#up-next`;
+  const showcaseUrl = `${getMarketingSiteUrl().replace(/\/$/, "")}/showcase`;
+  // Cloud production is the showcase's "composition" card in the "Up next" tier.
+  let isCloudProduction = $derived(item?.name === "Cloud production");
+  let nextUrl = $derived(`${showcaseUrl}#${isCloudProduction ? "composition" : "up-next"}`);
 
   function close() {
     if (show) {
@@ -82,11 +85,10 @@
                   d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
                 />
               </svg>
-              In Development
+              {isCloudProduction ? "Up next" : "In Development"}
             </h3>
             <p class="text-xs text-muted-foreground leading-relaxed">
-              This feature is in the pipeline. The showcase lists what ships today and what comes
-              next.
+              The showcase lists what ships today and what comes next.
             </p>
           </div>
 
@@ -214,7 +216,7 @@
             Close
           </Button>
           <Button
-            href={upNextUrl}
+            href={nextUrl}
             target="_blank"
             rel="noreferrer"
             variant="ghost"

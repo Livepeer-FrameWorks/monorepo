@@ -518,14 +518,13 @@
                 >.
               </p>
               <p>
-                StreamCrafter is in beta and changes quickly. Cloud production and more studio
-                features are
+                StreamCrafter is in beta and changes quickly.
                 <a
-                  href={`${marketingSiteUrl}/showcase#up-next`}
+                  href={`${marketingSiteUrl}/showcase#composition`}
                   target="_blank"
                   rel="noopener noreferrer"
-                  class="text-primary hover:underline">in the pipeline</a
-                >.
+                  class="text-primary hover:underline">Cloud production</a
+                > is up next.
               </p>
             </div>
             <!-- eslint-enable svelte/no-navigation-without-resolve -->
