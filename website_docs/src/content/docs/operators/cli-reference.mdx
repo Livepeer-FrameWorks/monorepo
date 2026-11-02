@@ -226,6 +226,16 @@ read-only schema capability pack against the live PostgreSQL/YugabyteDB and
 ClickHouse engines. PostgreSQL/YugabyteDB probes assume the prepared runtime role,
 so the check proves required objects and least-privilege grants together.
 
+Deep mode also reads account and billing recovery from the Commodore and Purser
+databases and fails on the conditions their alerts fire on: a tenant closure
+whose Quartermaster synchronization failed more than once, a session stop pending
+for over 5 minutes, a confirmed downgrade held past its effective time, and a
+billing recovery item failing repeatedly or unresolved for over 14 days. Each
+finding names up to ten tenants and points at `frameworks admin tenants get`,
+`frameworks admin clusters retire` or `frameworks admin billing recovery list`.
+Closures still synchronizing and recovery items waiting normally are reported
+without failing the check.
+
 This is targeted binary-contract introspection, not a full physical-schema diff.
 Deep mode decrypts the shared env for authenticated service checks and ClickHouse
 credentials; Yugabyte administrative probes still use the role's localhost-only

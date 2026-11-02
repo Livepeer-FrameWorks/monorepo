@@ -762,6 +762,10 @@ Default mode (read-only, no SOPS decryption):
     in the system tenant, pricing config for clusters that declared it. Without
     a saved system tenant, the bootstrap system tenant alias is resolved
     through Quartermaster.
+  - Account and billing recovery, read from the Commodore and Purser
+    databases: tenant closures failing Quartermaster synchronization, session
+    stops pending over 5 minutes, held downgrades and billing recovery items
+    failing repeatedly, each with the tenants behind it.
   - YugabyteDB migration checks can use DATABASE_PASSWORD from decrypted
     env_files when postgres.password is not set directly in the manifest.
   - Requires a readable age key (SOPS_AGE_KEY_FILE, --age-key, or the active
@@ -1370,6 +1374,8 @@ func doctorDatabaseChecks(rc *resolvedCluster, pool *fwssh.Pool, sharedEnv map[s
 				Cmd: "frameworks cluster provision --only infrastructure",
 				Why: "Reconcile owner/runtime database roles and grants, then apply pending migrations.",
 			})
+		}}, doctorCheck{name: "Account and billing recovery", run: func(ctx context.Context) doctorOutcome {
+			return doctorAccountRecovery(ctx, rc, pool, sshKey)
 		}})
 	}
 	return checks
