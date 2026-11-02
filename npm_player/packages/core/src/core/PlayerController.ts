@@ -693,6 +693,29 @@ export function buildStreamInfoFromEndpoints(
  * controller.destroy();
  * ```
  */
+/**
+ * Outcome of the json_<name>.js lookup on a caller-supplied edge: "mist" knows the
+ * stream, "stream-absent" is Mist without that name, "no-mist" is any other host.
+ */
+type SelectedEdgeMist = "unknown" | "mist" | "stream-absent" | "unreachable" | "no-mist";
+
+/** Which lookup outcome wins when several candidate names disagree. */
+const MIST_LOOKUP_RANK: Record<Exclude<SelectedEdgeMist, "unknown">, number> = {
+  "no-mist": 0,
+  unreachable: 1,
+  "stream-absent": 2,
+  mist: 3,
+};
+
+/** A parsed json_<name>.js reply, as fetchMistStreamInfo returns it. */
+type MistJsonReply = MistStreamInfo & Record<string, any>;
+
+class MistHttpError extends Error {
+  constructor(readonly status: number) {
+    super(`MistServer HTTP ${status}`);
+  }
+}
+
 export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> {
   private config: PlayerControllerConfig;
   private state: PlayerState = "booting";
@@ -711,7 +734,12 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   private _initializePlayerInFlight: Promise<unknown> | null = null;
 
   private endpoints: ContentEndpoints | null = null;
-  private selectedEdgeHasNoMist = false;
+  /**
+   * What the selected edge's json_<name>.js lookup established for caller-supplied
+   * endpoints. Gateway and direct-Mist modes stay "unknown": their edges are Mist.
+   */
+  private selectedEdgeMist: SelectedEdgeMist = "unknown";
+  private selectedEdgeMistRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private streamInfo: StreamInfo | null = null;
   private streamState: StreamState | null = null;
   /** Tracks parsed from MistServer JSON response (used for direct MistServer mode) */
@@ -764,6 +792,8 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   // it re-resolves quietly on this timer until the stream becomes playable.
   private gatewayRecoveryTimer: ReturnType<typeof setTimeout> | null = null;
   private static readonly GATEWAY_RECOVERY_INTERVAL_MS = 5000;
+  private static readonly MIST_LOOKUP_RETRY_MIN_MS = 1000;
+  private static readonly MIST_LOOKUP_RETRY_MAX_MS = 30000;
   private static readonly GATEWAY_RECOVERY_WINDOW_MS = 5 * 60_000;
   private _playbackResumedSinceError: boolean = false;
 
@@ -3378,7 +3408,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     // Player-owned request: cache headers are readable here (unlike HLS.js/native fetches).
     this.bootTracer?.recordOwnedResponse(jsonUrl, response.headers);
     if (!response.ok) {
-      throw new Error(`MistServer HTTP ${response.status}`);
+      throw new MistHttpError(response.status);
     }
 
     let text = await response.text();
@@ -3600,64 +3630,131 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     const selectedEndpoints = this.endpoints;
     const epoch = this.endpointResolutionEpoch;
     const mistBaseUrl = this.getSelectedMistBaseUrl();
-    this.selectedEdgeHasNoMist = false;
+    this.clearSelectedEdgeMistRetry();
+    this.selectedEdgeMist = "unknown";
     if (!mistBaseUrl) return;
 
     const streamName = this.getMistStreamName(contentId);
     const candidates = streamName === contentId ? [streamName] : [streamName, contentId];
+    const isCurrent = () =>
+      !this.isDestroyed &&
+      this.endpointResolutionEpoch === epoch &&
+      this.endpoints === selectedEndpoints;
 
-    // An error in a good reply, such as "Stream is offline", is Mist answering.
-    let mistAnswered = false;
-
-    try {
-      let lastError: unknown;
-      for (const candidate of candidates) {
-        try {
-          const data = await this.fetchMistStreamInfo(mistBaseUrl, candidate, "resolveFromGateway");
-          if (
-            this.isDestroyed ||
-            this.endpointResolutionEpoch !== epoch ||
-            this.endpoints !== selectedEndpoints
-          )
-            return;
-          if (data.error) {
-            mistAnswered = true;
-            throw new Error(data.error);
-          }
-          const { sources, tracks } = this.applyMistStreamInfo(
-            data,
-            "resolveFromGateway",
-            mistBaseUrl
-          );
-          this.detectThumbnailVttUrl();
-          this.detectPreviewUrl();
-          this.log(
-            `[resolveFromGateway] Mist edge supplied ${sources.length} sources, ${tracks.length} tracks for ${candidate}`
-          );
-          return;
-        } catch (error) {
-          if (
-            this.isDestroyed ||
-            this.endpointResolutionEpoch !== epoch ||
-            this.endpoints !== selectedEndpoints
-          )
-            return;
-          lastError = error;
-        }
+    let outcome: Exclude<SelectedEdgeMist, "unknown"> = "no-mist";
+    for (const candidate of candidates) {
+      const lookup = await this.lookUpMistStream(mistBaseUrl, candidate, "resolveFromGateway");
+      if (!isCurrent()) return;
+      if (lookup.kind === "info") {
+        const { sources, tracks } = this.applyMistStreamInfo(
+          lookup.data,
+          "resolveFromGateway",
+          mistBaseUrl
+        );
+        this.detectThumbnailVttUrl();
+        this.detectPreviewUrl();
+        this.log(
+          `[resolveFromGateway] Mist edge supplied ${sources.length} sources, ${tracks.length} tracks for ${candidate}`
+        );
+        this.selectedEdgeMist = this.endpointMode === "provided" ? "mist" : "unknown";
+        return;
       }
-      throw lastError;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Mist edge source discovery failed";
-      this.log(`[resolveFromGateway] Mist edge source discovery unavailable: ${message}`);
-      // A caller-supplied media URL can sit on any host. Without a baseUrl naming
-      // a Mist edge, a lookup nothing answered means there is no stream state to poll.
-      this.selectedEdgeHasNoMist =
-        !mistAnswered && this.endpointMode === "provided" && !selectedEndpoints?.primary?.baseUrl;
+      if (MIST_LOOKUP_RANK[lookup.kind] > MIST_LOOKUP_RANK[outcome]) outcome = lookup.kind;
+      if (outcome === "mist") break;
+    }
+
+    this.log(`[resolveFromGateway] Mist edge source discovery: ${outcome}`);
+    if (this.endpointMode !== "provided") return;
+    // A baseUrl names a Mist edge, so a transport failure there is left to the
+    // stream-state client's own reconnects.
+    if (outcome === "unreachable" && selectedEndpoints?.primary?.baseUrl) return;
+    this.selectedEdgeMist = outcome;
+    if (outcome === "unreachable") {
+      this.scheduleSelectedEdgeMistRetry(mistBaseUrl, candidates, isCurrent);
     }
   }
 
+  /**
+   * Classify one json_<name>.js lookup. Only a 404 or a 200 that is not Mist JSON
+   * rules Mist out; transport errors and other HTTP failures are retried.
+   */
+  private async lookUpMistStream(
+    mistBaseUrl: string,
+    streamName: string,
+    logScope: string
+  ): Promise<
+    { kind: "info"; data: MistJsonReply } | { kind: Exclude<SelectedEdgeMist, "unknown"> }
+  > {
+    let data: MistJsonReply | null;
+    try {
+      data = await this.fetchMistStreamInfo(mistBaseUrl, streamName, logScope);
+    } catch (error) {
+      if (error instanceof MistHttpError) {
+        return { kind: error.status === 404 ? "no-mist" : "unreachable" };
+      }
+      return { kind: error instanceof SyntaxError ? "no-mist" : "unreachable" };
+    }
+    if (!data || typeof data !== "object") return { kind: "no-mist" };
+    const reply = data;
+    if (typeof reply.error === "string") {
+      // Mist answers an unknown or unconfigured name with this generic failure;
+      // a known stream reports its status ("Stream is offline", "...booting").
+      return { kind: /could not retrieve stream/i.test(reply.error) ? "stream-absent" : "mist" };
+    }
+    return Array.isArray(reply.source) ? { kind: "info", data: reply } : { kind: "no-mist" };
+  }
+
+  private scheduleSelectedEdgeMistRetry(
+    mistBaseUrl: string,
+    candidates: string[],
+    isCurrent: () => boolean,
+    attempt = 0
+  ): void {
+    const delay = Math.min(
+      PlayerController.MIST_LOOKUP_RETRY_MIN_MS * 2 ** attempt,
+      PlayerController.MIST_LOOKUP_RETRY_MAX_MS
+    );
+    this.selectedEdgeMistRetryTimer = setTimeout(async () => {
+      this.selectedEdgeMistRetryTimer = null;
+      if (!isCurrent()) return;
+      let outcome: Exclude<SelectedEdgeMist, "unknown"> = "no-mist";
+      for (const candidate of candidates) {
+        const lookup = await this.lookUpMistStream(mistBaseUrl, candidate, "mistLookupRetry");
+        if (!isCurrent()) return;
+        const kind = lookup.kind === "info" ? "mist" : lookup.kind;
+        if (MIST_LOOKUP_RANK[kind] > MIST_LOOKUP_RANK[outcome]) outcome = kind;
+        if (outcome === "mist") break;
+      }
+      this.selectedEdgeMist = outcome;
+      if (outcome === "unreachable") {
+        this.scheduleSelectedEdgeMistRetry(mistBaseUrl, candidates, isCurrent, attempt + 1);
+        return;
+      }
+      if (outcome !== "mist") return;
+      this.log("[mistLookupRetry] Mist edge answered, starting stream-state polling");
+      if (!this.streamStateClient) this.startStreamStatePolling();
+      if (this.videoElement && !this.metaTrackManager) this.initializeMetaTrackManager();
+    }, delay);
+  }
+
+  private clearSelectedEdgeMistRetry(): void {
+    if (this.selectedEdgeMistRetryTimer) {
+      clearTimeout(this.selectedEdgeMistRetryTimer);
+      this.selectedEdgeMistRetryTimer = null;
+    }
+  }
+
+  /** Whether the selected edge ruled out Mist state and metadata for this content. */
+  private selectedEdgeLacksMistStream(): boolean {
+    return (
+      this.selectedEdgeMist === "no-mist" ||
+      this.selectedEdgeMist === "stream-absent" ||
+      this.selectedEdgeMist === "unreachable"
+    );
+  }
+
   private startStreamStatePolling(): void {
-    if (this.selectedEdgeHasNoMist) return;
+    if (this.selectedEdgeLacksMistStream()) return;
 
     const { contentId, mistUrl } = this.config;
     const contentType = this.getResolvedContentType();
@@ -3666,7 +3763,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     // If contentType is unknown but mistUrl is provided, still poll so we can
     // detect when a stream comes online and initialize playback.
     if (contentType == null) {
-      if (!mistUrl) return;
+      if (!mistUrl && this.selectedEdgeMist !== "mist") return;
     } else if (contentType !== "live" && contentType !== "dvr") {
       return;
     }
@@ -5196,7 +5293,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     }
 
     const mistUrl = this.getSelectedMistBaseUrl();
-    if (!mistUrl || this.selectedEdgeHasNoMist) return;
+    if (!mistUrl || this.selectedEdgeLacksMistStream()) return;
 
     this.metaTrackManager = new MetaTrackManager({
       mistBaseUrl: mistUrl,
@@ -5280,6 +5377,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
 
   private cleanup(): void {
     this.clearGatewayRecovery();
+    this.clearSelectedEdgeMistRetry();
     this.clearDeferredAutoplayRetry();
     this.clearAutoplayActivationRecovery();
     this.cleanupMediaAttach();

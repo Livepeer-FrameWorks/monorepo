@@ -647,3 +647,22 @@ createPlayer({
   types like `ws/video/raw`, and only the protocols present in the `outputs` map are available to
   the scoring algorithm.
 </Aside>
+
+#### When the player polls the edge
+
+With `endpoints`, the player requests `json_<contentId>.js` from the primary edge once, before
+playback starts. The reply decides whether it polls stream state and opens the Mist metadata
+socket:
+
+| Reply from the edge                                       | What the player does                                                                                              |
+| --------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| Mist stream info                                          | Uses its sources and tracks, polls stream state, opens the metadata socket                                        |
+| A Mist status such as `Stream is offline`                 | Polls stream state and starts playback when the stream comes online                                               |
+| `Could not retrieve stream` (Mist does not know the name) | Plays the URL without polling and without a metadata socket                                                       |
+| HTTP 404, or a reply that is not Mist JSON                | Plays the URL as plain media without polling                                                                      |
+| A network error or another HTTP error                     | Plays the URL and repeats the lookup, waiting 1 s and doubling up to 30 s, until it gets one of the replies above |
+
+Set `baseUrl` whenever the edge runs MistServer. It tells the player where Mist answers, including
+a path prefix behind a proxy, and the player then keeps polling through network errors because the
+stream-state client reconnects on its own. Set `contentId` to the Mist stream name: a placeholder
+name gets the `Could not retrieve stream` reply, so the player shows no live status.

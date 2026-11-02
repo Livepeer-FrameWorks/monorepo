@@ -357,6 +357,15 @@ createPlayer({
 
 > When using `endpoints`, the player cannot discover MistServer-specific source types like `ws/video/raw`. Only the protocols present in `outputs` are available to the scorer.
 
+Before playback starts, the player requests `json_<contentId>.js` once from the primary edge (`baseUrl`, or the origin of the primary `url`):
+
+- Mist stream info, or a Mist status such as `Stream is offline`: the player polls stream state and opens the Mist metadata socket.
+- `Could not retrieve stream`, which Mist returns for a name it does not know: the player plays the URL without polling or metadata socket.
+- HTTP 404, or a reply that is not Mist JSON: the player plays the URL as plain media without polling.
+- A network error or another HTTP error: the player plays the URL and repeats the lookup, waiting 1 s and doubling up to 30 s, until one of the replies above arrives.
+
+Set `baseUrl` whenever the edge runs MistServer, and set `contentId` to the Mist stream name. With `baseUrl` set, the player keeps polling through network errors, because the stream-state client reconnects on its own.
+
 ---
 
 ## Features

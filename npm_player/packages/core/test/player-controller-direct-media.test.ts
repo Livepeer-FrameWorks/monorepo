@@ -79,7 +79,7 @@ describe("pre-resolved endpoints that are not MistServer", () => {
     expect(start).not.toHaveBeenCalled();
   });
 
-  it("does not poll a host that cannot be reached", async () => {
+  it("does not poll a host that cannot be reached while the lookup is retried", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
     const start = vi.spyOn(StreamStateClient.prototype, "start").mockImplementation(() => {});
     const state = makeController({});
@@ -88,6 +88,8 @@ describe("pre-resolved endpoints that are not MistServer", () => {
     state.startStreamStatePolling();
 
     expect(start).not.toHaveBeenCalled();
+    expect(state.selectedEdgeMistRetryTimer).not.toBeNull();
+    state.clearSelectedEdgeMistRetry();
   });
 
   it("does not open a Mist metadata socket on a host that has no Mist JSON", async () => {
