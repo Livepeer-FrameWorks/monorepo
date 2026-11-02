@@ -7,15 +7,16 @@ sidebar:
 
 import { Aside, Badge } from "@astrojs/starlight/components";
 
-The [Platform capabilities](/platform/feature-matrix) page is the source of truth for what you can use today. This roadmap groups the work ahead by the same product areas, so each section here lines up with a section of the capability matrix.
+The [Platform capabilities](/platform/feature-matrix) page is the source of truth for what you can use today. This roadmap groups the work ahead by the same product areas, so each section here lines up with a section of the capability matrix. For a shorter tour of the product, see the [showcase](%MARKETING_URL%/showcase).
 
 <Aside type="note" title="How to read this page">
 
 - <Badge text="Now" variant="success" /> — shipped foundations with active product hardening or
-  surface-area expansion.
+  surface-area expansion. The showcase lists these as **Shipping today**.
 - <Badge text="Next" variant="tip" /> — designed work that is not yet a complete public workflow.
+  The showcase lists these as **Up next**.
 - <Badge text="Later" variant="note" /> — backlog themes we expect to revisit after higher-priority
-  platform work.
+  platform work. The showcase lists these as **Further out**.
 
 </Aside>
 
@@ -32,6 +33,20 @@ What ships today in this area: [Platform capabilities → Streaming](/platform/f
 ### Pull-Input Streams <Badge text="Now" variant="success" />
 
 Pull streams are available through the dashboard, API, and agents. The remaining work is deeper operational visibility for upstream connection attempts, retries, private-source edge cases, and self-hosted deployment diagnostics across RTSP cameras, SRT/RIST feeds, HLS origins, MPEG-TS sources, and Mist/DTSC sources.
+
+### StreamCrafter Browser Studio <Badge text="Now" variant="success" />
+
+StreamCrafter is the live studio in the dashboard's Go Live page, and ships as npm packages for React, Svelte, and Web Components. It mixes several cameras, screen shares, and media files in the browser into scenes with stacked layers, logo and text overlays, picture-in-picture and split layouts, and cut, fade, or slide transitions, then publishes over WHIP. Start with the [Go Live guide](/builders/go-live-browser).
+
+StreamCrafter is in beta. The SDK will change substantially as cloud production arrives, so expect breaking changes between releases. The server-side half, mixing sources on processing nodes, is [Composition and SSAI](#composition-and-ssai).
+
+### Per-Destination Multistream Stats <Badge text="Next" variant="tip" />
+
+[Multistreaming](/builders/multistreaming) shows each destination's status and the reason for a failure. Next is live bitrate and bytes sent per destination, so you can see which platform is falling behind while the stream runs.
+
+### SCTE-35 Platform Controls <Badge text="Next" variant="tip" />
+
+The media engine already reads SCTE-35 cues from MPEG-TS input and writes them into its TS and TS-over-SRT outputs. The platform work is inserting and inspecting cues through the API, agents, and dashboard. Server-side ad insertion builds on these cues; see [Composition and SSAI](#composition-and-ssai).
 
 ### Device Discovery and Contribution Inputs <Badge text="Next" variant="tip" />
 
@@ -75,7 +90,7 @@ Livepeer Gateway integration is active. We are expanding native controls, plan-a
 
 ### Live AI Processing <Badge text="Next" variant="tip" />
 
-An ONNX runtime in the media engine is in active development, running ultralight CPU models directly on the in-memory stream buffer of a media edge node. Object detection and segmentation (YOLO) and audio transcription (Parakeet) are already tested; candidate workloads include content moderation, audio event tagging and speaker identification, and frame/text embeddings for semantic search. Heavy models defer to dedicated compute via the Livepeer network, with client-side processing stats in the media engine and processing-aware cluster scheduling as the remaining orchestration work. Pilot access is available via contact.
+An ONNX runtime in the media engine is in active development, running ultralight CPU models directly on the in-memory stream buffer of a media edge node. Object detection and segmentation (YOLO) and audio transcription (Parakeet) are already tested; candidate workloads include content moderation, audio event tagging and speaker identification, and frame/text embeddings for semantic search. Heavy models defer to dedicated compute via the Livepeer network, with client-side processing stats in the media engine and processing-aware cluster scheduling as the remaining orchestration work.
 
 ### Workload Cost Model <Badge text="Next" variant="tip" />
 
@@ -83,7 +98,7 @@ Processing placement today routes by node class and current load; what a job wil
 
 ### Composition and SSAI <Badge text="Next" variant="tip" />
 
-This is the server side of StreamCrafter's cloud production. Composition mixes several live sources on processing nodes into one program stream, which then gets the same multistreaming, recording, and delivery as any other stream. It stays inside the media engine: a MistServer-native blitter for logos, watermarks, and lower-third overlays, and MistServer's Composer for raw-pixel composition, picture-in-picture, and server-side ad insertion (SSAI). Live switching between sources, backup inputs that take over when a primary source drops, and mixing remote guests into the program all build on this layer, with automated clipping layered on top. To compose in the browser today, use [StreamCrafter](/builders/ingest-compositor).
+This is the server side of StreamCrafter's cloud production. Composition mixes several live sources on processing nodes into one program stream, which then gets the same multistreaming, recording, and delivery as any other stream. It stays inside the media engine: a MistServer-native blitter for logos, watermarks, and lower-third overlays, and MistServer's Composer for raw-pixel composition, picture-in-picture, and server-side ad insertion (SSAI). Live switching between sources, backup inputs that take over when a primary source drops, and mixing remote guests into the program all build on this layer, with automated clipping layered on top. To compose in the browser today, use the [StreamCrafter browser studio](#streamcrafter-browser-studio).
 
 ## Analytics & Observability
 
