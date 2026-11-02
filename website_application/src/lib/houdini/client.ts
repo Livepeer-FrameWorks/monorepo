@@ -42,7 +42,7 @@ async function postGraphQL(
   });
 }
 
-async function graphQLFetch({ fetch, name, text, variables, session }: RequestHandlerArgs) {
+export async function graphQLFetch({ fetch, name, text, variables, session }: RequestHandlerArgs) {
   const sess = session as Session | null;
   const headers: Record<string, string> = {
     Accept: "application/graphql+json, application/json",
