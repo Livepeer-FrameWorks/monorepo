@@ -669,6 +669,34 @@ export function buildStreamInfoFromEndpoints(
   return sources.length ? { source: sources, meta: { tracks }, type: contentType } : null;
 }
 
+/**
+ * Outcome of the json_<name>.js lookup on a caller-supplied edge:
+ * - "unknown": no lookup applies (gateway and direct-Mist modes, whose edges are Mist)
+ *   or the lookup has not finished yet.
+ * - "mist": the edge is Mist and knows the stream.
+ * - "stream-absent": the edge is Mist but does not know that name.
+ * - "unreachable": the lookup failed in transport or with a non-404 HTTP error; it is retried.
+ * - "no-mist": the host answered 404 or with something that is not Mist JSON.
+ */
+type SelectedEdgeMist = "unknown" | "mist" | "stream-absent" | "unreachable" | "no-mist";
+
+/** Which lookup outcome wins when several candidate names disagree. */
+const MIST_LOOKUP_RANK: Record<Exclude<SelectedEdgeMist, "unknown">, number> = {
+  "no-mist": 0,
+  unreachable: 1,
+  "stream-absent": 2,
+  mist: 3,
+};
+
+/** A parsed json_<name>.js reply, as fetchMistStreamInfo returns it. */
+type MistJsonReply = MistStreamInfo & Record<string, any>;
+
+class MistHttpError extends Error {
+  constructor(readonly status: number) {
+    super(`MistServer HTTP ${status}`);
+  }
+}
+
 // ============================================================================
 // PlayerController Class
 // ============================================================================
@@ -693,29 +721,6 @@ export function buildStreamInfoFromEndpoints(
  * controller.destroy();
  * ```
  */
-/**
- * Outcome of the json_<name>.js lookup on a caller-supplied edge: "mist" knows the
- * stream, "stream-absent" is Mist without that name, "no-mist" is any other host.
- */
-type SelectedEdgeMist = "unknown" | "mist" | "stream-absent" | "unreachable" | "no-mist";
-
-/** Which lookup outcome wins when several candidate names disagree. */
-const MIST_LOOKUP_RANK: Record<Exclude<SelectedEdgeMist, "unknown">, number> = {
-  "no-mist": 0,
-  unreachable: 1,
-  "stream-absent": 2,
-  mist: 3,
-};
-
-/** A parsed json_<name>.js reply, as fetchMistStreamInfo returns it. */
-type MistJsonReply = MistStreamInfo & Record<string, any>;
-
-class MistHttpError extends Error {
-  constructor(readonly status: number) {
-    super(`MistServer HTTP ${status}`);
-  }
-}
-
 export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> {
   private config: PlayerControllerConfig;
   private state: PlayerState = "booting";
@@ -3646,16 +3651,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       const lookup = await this.lookUpMistStream(mistBaseUrl, candidate, "resolveFromGateway");
       if (!isCurrent()) return;
       if (lookup.kind === "info") {
-        const { sources, tracks } = this.applyMistStreamInfo(
-          lookup.data,
-          "resolveFromGateway",
-          mistBaseUrl
-        );
-        this.detectThumbnailVttUrl();
-        this.detectPreviewUrl();
-        this.log(
-          `[resolveFromGateway] Mist edge supplied ${sources.length} sources, ${tracks.length} tracks for ${candidate}`
-        );
+        this.adoptSelectedEdgeMistInfo(lookup.data, "resolveFromGateway", mistBaseUrl, candidate);
         this.selectedEdgeMist = this.endpointMode === "provided" ? "mist" : "unknown";
         return;
       }
@@ -3672,6 +3668,21 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     if (outcome === "unreachable") {
       this.scheduleSelectedEdgeMistRetry(mistBaseUrl, candidates, isCurrent);
     }
+  }
+
+  /** Take the selected edge's Mist sources, tracks, sprite and preview for this content. */
+  private adoptSelectedEdgeMistInfo(
+    data: MistJsonReply,
+    logScope: string,
+    mistBaseUrl: string,
+    streamName: string
+  ): void {
+    const { sources, tracks } = this.applyMistStreamInfo(data, logScope, mistBaseUrl);
+    this.detectThumbnailVttUrl();
+    this.detectPreviewUrl();
+    this.log(
+      `[${logScope}] Mist edge supplied ${sources.length} sources, ${tracks.length} tracks for ${streamName}`
+    );
   }
 
   /**
@@ -3721,8 +3732,19 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       for (const candidate of candidates) {
         const lookup = await this.lookUpMistStream(mistBaseUrl, candidate, "mistLookupRetry");
         if (!isCurrent()) return;
-        const kind = lookup.kind === "info" ? "mist" : lookup.kind;
-        if (MIST_LOOKUP_RANK[kind] > MIST_LOOKUP_RANK[outcome]) outcome = kind;
+        if (lookup.kind === "info") {
+          try {
+            this.adoptSelectedEdgeMistInfo(lookup.data, "mistLookupRetry", mistBaseUrl, candidate);
+          } catch (error) {
+            // The caller's endpoints keep playing; stream-state polling still follows Mist.
+            this.log(
+              `[mistLookupRetry] Mist edge sources not applied: ${error instanceof Error ? error.message : String(error)}`
+            );
+          }
+          outcome = "mist";
+          break;
+        }
+        if (MIST_LOOKUP_RANK[lookup.kind] > MIST_LOOKUP_RANK[outcome]) outcome = lookup.kind;
         if (outcome === "mist") break;
       }
       this.selectedEdgeMist = outcome;

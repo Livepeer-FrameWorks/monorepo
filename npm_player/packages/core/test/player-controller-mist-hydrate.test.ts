@@ -123,6 +123,48 @@ describe("attach() with caller-supplied endpoints", () => {
     controller.destroy();
   });
 
+  it("applies the Mist sources and tracks when a retried edge answers with a live stream", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const webrtcUrl = "https://edge.example/webrtc/real-name";
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockImplementation(async () =>
+        mistJson({
+          type: "live",
+          source: [
+            { url: mediaUrl, type: "html5/application/vnd.apple.mpegurl", priority: 1 },
+            { url: webrtcUrl, type: "webrtc", priority: 2 },
+          ],
+          meta: {
+            tracks: {
+              video_H264_1280x720_25fps_1: {
+                type: "video",
+                codec: "H264",
+                idx: 1,
+                width: 1280,
+                height: 720,
+                init: "",
+              },
+            },
+          },
+        })
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const { controller, state } = makeAttachedController("real-name");
+
+    await controller.attach(document.createElement("div"));
+    expect(state.mistTracks).toBeNull();
+
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(state.streamInfo.source.map((s: { url: string }) => s.url)).toContain(webrtcUrl);
+    expect(state.mistTracks?.[0]).toMatchObject({ type: "video", codec: "H264" });
+    expect(start).toHaveBeenCalledOnce();
+    controller.destroy();
+  });
+
   it("retries a 5xx reply with backoff instead of ruling out Mist", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const fetchMock = vi
