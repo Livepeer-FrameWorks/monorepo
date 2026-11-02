@@ -87,7 +87,8 @@ func newClusterBackupCmd() *cobra.Command {
 dump per database, in pre-data, data and post-data sections), the databases of named postgres instances, and the
 ClickHouse billing facts. The CLI runs the dump tools on the database hosts over SSH and streams the output to the
 destination you name: a local directory or an s3:// URL. A manifest with file hashes, row counts and the migration
-ledger digest of every database is written last; a backup without it is incomplete.
+ledger digest of every database is written last; a backup without it is incomplete. With --all, backup create skips a
+manifest database that does not exist on the server yet: the next release apply creates it from its baseline.
 
 Object storage, Kafka, Valkey and SOPS-managed secrets are not part of a backup. Derived ClickHouse tables (rollups,
 views, raw telemetry) are rebuilt from the facts and Kafka.
