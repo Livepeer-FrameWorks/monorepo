@@ -21,6 +21,8 @@ import { CompositorControls } from "./CompositorControls";
 import { CameraPicker } from "./CameraPicker";
 import { MediaFileButton } from "./MediaFileButton";
 import { StudioSettings } from "./StudioSettings";
+import { StudioAudioControls } from "./StudioAudioControls";
+import { StudioConnectionHealth } from "./StudioConnectionHealth";
 import { StudioProducerPanel } from "./StudioProducerPanel";
 import { VolumeSlider } from "./VolumeSlider";
 import type { AudioProcessingSettings } from "./AdvancedPanel";
@@ -772,6 +774,7 @@ const StreamCrafterInner: React.FC<StreamCrafterProps> = ({
                 <div className="fw-sc-header">
                   <span className="fw-sc-header-title">{t("streamCrafter")}</span>
                   <div className="fw-sc-header-status">
+                    <StudioConnectionHealth stats={stats} isStreaming={isStreaming} />
                     <span className={statusBadgeClass}>{statusText}</span>
                   </div>
                 </div>
@@ -905,6 +908,13 @@ const StreamCrafterInner: React.FC<StreamCrafterProps> = ({
                     compositor={compositor}
                     sources={sources}
                     media={hookReturn}
+                  />
+                )}
+
+                {isCapturing && (
+                  <StudioAudioControls
+                    browserProcessing={audioProcessing}
+                    onBrowserProcessingChange={handleAudioProcessingChange}
                   />
                 )}
 

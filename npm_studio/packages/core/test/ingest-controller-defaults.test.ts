@@ -59,12 +59,13 @@ describe("IngestControllerV2 audio processing", () => {
 
     controller.setAudioProcessing({ noiseGate: { enabled: true, threshold: -50 } });
     controller.setAudioProcessing({ eq: { enabled: true, low: 3 } });
+    controller.setAudioProcessing({ eq: { enabled: true, high: -2 } });
     applied.mockClear();
     await internals.ensureAudioMixer();
 
     expect(applied).toHaveBeenCalledWith({
       noiseGate: { enabled: true, threshold: -50 },
-      eq: { enabled: true, low: 3 },
+      eq: { enabled: true, low: 3, high: -2 },
     });
     expect(controller.getAudioProcessing().noiseGate?.threshold).toBe(-50);
     controller.destroy();

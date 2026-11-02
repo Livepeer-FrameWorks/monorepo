@@ -944,7 +944,11 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
   setAudioProcessing(config: Omit<AudioProcessingConfig, "sidechain">): void {
     if (!this.config.audioMixing) return;
     const { sidechain: _sidechain, ...rest } = config as AudioProcessingConfig;
-    this.audioProcessing = { ...this.audioProcessing, ...rest };
+    const merged = { ...this.audioProcessing };
+    for (const key of Object.keys(rest) as (keyof typeof rest)[]) {
+      merged[key] = { ...merged[key], ...rest[key] } as never;
+    }
+    this.audioProcessing = merged;
     this.audioMixer.setAudioProcessing(rest);
   }
 

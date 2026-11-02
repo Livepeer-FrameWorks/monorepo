@@ -8,6 +8,8 @@ import { FwScMediaButton } from "../src/components/fw-sc-media-button.js";
 import { FwScOverlayControls } from "../src/components/fw-sc-overlay-controls.js";
 import { FwScProducerPanel } from "../src/components/fw-sc-producer-panel.js";
 import { FwScMeter } from "../src/components/fw-sc-meter.js";
+import { FwScAudioControls } from "../src/components/fw-sc-audio-controls.js";
+import { FwScConnectionHealth } from "../src/components/fw-sc-connection-health.js";
 import { IngestControllerHost } from "../src/controllers/ingest-controller-host.js";
 import { STUDIO_UPDATE_EVENT } from "../src/components/studio-bound-element.js";
 
@@ -237,5 +239,89 @@ describe("audio levels", () => {
 
     const fill = meter.shadowRoot?.querySelector<HTMLElement>(".fw-sc-vu-meter-fill");
     expect(fill?.getAttribute("style")).toContain("width:25%");
+  });
+});
+
+describe("<fw-sc-audio-controls>", () => {
+  function audioController() {
+    const processing: Record<string, object> = {};
+    return {
+      setAudioProcessing: vi.fn((config: Record<string, object>) => {
+        for (const [key, value] of Object.entries(config)) {
+          processing[key] = { ...processing[key], ...value };
+        }
+      }),
+      getAudioProcessing: () => ({ ...processing }),
+      setAudioDucking: vi.fn(),
+      isAudioDuckingEnabled: () => false,
+    };
+  }
+
+  async function mount() {
+    const controller = audioController();
+    const studio = fakeStudio({ getController: () => controller });
+    const controls = new FwScAudioControls();
+    controls.studio = studio;
+    controls.browserProcessing = {
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+    };
+    document.body.append(controls);
+    await controls.updateComplete;
+    const root = controls.shadowRoot!;
+    const toggle = (label: string) =>
+      [...root.querySelectorAll<HTMLLabelElement>(".fw-sc-audio-toggle")]
+        .find((el) => el.textContent?.includes(label))!
+        .querySelector("input")!;
+    return { controller, controls, toggle };
+  }
+
+  it("sets the gate, de-esser and ducking on the controller", async () => {
+    const { controller, toggle } = await mount();
+
+    toggle("Noise gate").click();
+    toggle("De-esser").click();
+    toggle("Lower other sources").click();
+
+    expect(controller.setAudioProcessing).toHaveBeenCalledWith({
+      noiseGate: { enabled: true, threshold: -40 },
+    });
+    expect(controller.setAudioProcessing).toHaveBeenCalledWith({ deEsser: { enabled: true } });
+    expect(controller.setAudioDucking).toHaveBeenCalledWith(true);
+  });
+
+  it("asks the studio to change browser processing", async () => {
+    const { controls, toggle } = await mount();
+    const changes = vi.fn();
+    controls.addEventListener("fw-audio-processing-change", (event) =>
+      changes((event as CustomEvent).detail.settings)
+    );
+
+    toggle("Echo Cancellation").click();
+
+    expect(changes).toHaveBeenCalledWith({ echoCancellation: false });
+  });
+});
+
+describe("<fw-sc-connection-health>", () => {
+  it("grades the connection while live", async () => {
+    const studio = fakeStudio({});
+    Object.assign(studio.pc.s, {
+      isStreaming: true,
+      stats: {
+        video: { packetsSent: 1000, packetsLost: 0, bitrate: 1_000_000 },
+        audio: { packetsSent: 0, packetsLost: 0, bitrate: 0 },
+        connection: { rtt: 400 },
+      },
+    });
+    const pill = new FwScConnectionHealth();
+    pill.studio = studio;
+    document.body.append(pill);
+    await pill.updateComplete;
+
+    expect(pill.shadowRoot!.querySelector('[role="status"]')?.textContent?.trim()).toBe(
+      "Connection poor"
+    );
   });
 });

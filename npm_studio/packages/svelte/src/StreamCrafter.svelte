@@ -22,6 +22,8 @@
   import CameraPicker from "./components/CameraPicker.svelte";
   import MediaFileButton from "./components/MediaFileButton.svelte";
   import StudioSettings from "./components/StudioSettings.svelte";
+  import StudioAudioControls from "./components/StudioAudioControls.svelte";
+  import StudioConnectionHealth from "./components/StudioConnectionHealth.svelte";
   import CompositorControls from "./components/CompositorControls.svelte";
   import StudioProducerPanel from "./components/StudioProducerPanel.svelte";
   import AdvancedPanel, { type AudioProcessingSettings } from "./components/AdvancedPanel.svelte";
@@ -686,6 +688,10 @@
       <div class="fw-sc-header">
         <span class="fw-sc-header-title">{t("streamCrafter")}</span>
         <div class="fw-sc-header-status">
+          <StudioConnectionHealth
+            stats={crafterState.stats}
+            isStreaming={crafterState.isStreaming}
+          />
           <span class={statusBadgeClass}>{statusText}</span>
         </div>
       </div>
@@ -854,6 +860,13 @@
 
       {#if showProducerPanel && enableCompositor}
         <StudioProducerPanel />
+      {/if}
+
+      {#if crafterState.isCapturing}
+        <StudioAudioControls
+          browserProcessing={audioProcessing}
+          onBrowserProcessingChange={handleAudioProcessingChange}
+        />
       {/if}
 
       <!-- What this browser cannot do -->

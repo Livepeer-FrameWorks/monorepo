@@ -113,6 +113,10 @@ export class FakeAudioMixer {
   }
   startLevelMonitoring() {}
   stopLevelMonitoring() {}
+  setAudioProcessing() {}
+  hasSource() {
+    return false;
+  }
   destroy() {}
 }
 

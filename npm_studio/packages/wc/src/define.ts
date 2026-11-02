@@ -14,6 +14,8 @@ import { FwScOverlayControls } from "./components/fw-sc-overlay-controls.js";
 import { FwScMediaControls } from "./components/fw-sc-media-controls.js";
 import { FwScMediaButton } from "./components/fw-sc-media-button.js";
 import { FwScMeter } from "./components/fw-sc-meter.js";
+import { FwScAudioControls } from "./components/fw-sc-audio-controls.js";
+import { FwScConnectionHealth } from "./components/fw-sc-connection-health.js";
 
 function safeDefine(name: string, ctor: CustomElementConstructor) {
   if (!customElements.get(name)) {
@@ -33,3 +35,5 @@ safeDefine("fw-sc-overlay-controls", FwScOverlayControls);
 safeDefine("fw-sc-media-controls", FwScMediaControls);
 safeDefine("fw-sc-media-button", FwScMediaButton);
 safeDefine("fw-sc-meter", FwScMeter);
+safeDefine("fw-sc-audio-controls", FwScAudioControls);
+safeDefine("fw-sc-connection-health", FwScConnectionHealth);

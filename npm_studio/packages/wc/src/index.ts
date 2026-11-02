@@ -14,6 +14,8 @@ export { FwScOverlayControls } from "./components/fw-sc-overlay-controls.js";
 export { FwScMediaControls } from "./components/fw-sc-media-controls.js";
 export { FwScMediaButton } from "./components/fw-sc-media-button.js";
 export { FwScMeter } from "./components/fw-sc-meter.js";
+export { FwScAudioControls } from "./components/fw-sc-audio-controls.js";
+export { FwScConnectionHealth } from "./components/fw-sc-connection-health.js";
 export { STUDIO_UPDATE_EVENT } from "./components/studio-bound-element.js";
 export { IngestControllerHost } from "./controllers/ingest-controller-host.js";
 export type {

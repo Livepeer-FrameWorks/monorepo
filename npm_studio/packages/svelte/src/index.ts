@@ -22,6 +22,8 @@ export { default as StudioOverlayControls } from "./components/StudioOverlayCont
 export { default as StudioMediaControls } from "./components/StudioMediaControls.svelte";
 export { default as CameraPicker } from "./components/CameraPicker.svelte";
 export { default as MediaFileButton } from "./components/MediaFileButton.svelte";
+export { default as StudioAudioControls } from "./components/StudioAudioControls.svelte";
+export { default as StudioConnectionHealth } from "./components/StudioConnectionHealth.svelte";
 
 // Advanced Panel (dev mode sidebar)
 export {

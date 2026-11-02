@@ -27,6 +27,8 @@ import "./fw-sc-camera-picker.js";
 import "./fw-sc-media-button.js";
 import "./fw-sc-meter.js";
 import "./fw-sc-producer-panel.js";
+import "./fw-sc-audio-controls.js";
+import "./fw-sc-connection-health.js";
 import {
   IngestClient,
   type CompositorConfig,
@@ -706,6 +708,7 @@ export class FwStreamCrafter extends LitElement {
           <div class="fw-sc-header">
             <span class="fw-sc-header-title">${this._t("streamCrafter")}</span>
             <div class="fw-sc-header-status">
+              <fw-sc-connection-health .studio=${this}></fw-sc-connection-health>
               <span class=${statusBadgeClass}>${statusText}</span>
             </div>
           </div>
@@ -793,6 +796,15 @@ export class FwStreamCrafter extends LitElement {
           ${s.isCapturing ? html`<fw-sc-meter .studio=${this}></fw-sc-meter>` : nothing}
           ${this.showProducerPanel && activeScene
             ? html`<fw-sc-producer-panel .studio=${this}></fw-sc-producer-panel>`
+            : nothing}
+          ${s.isCapturing
+            ? html`<fw-sc-audio-controls
+                .studio=${this}
+                .browserProcessing=${this._audioProcessing}
+                @fw-audio-processing-change=${(
+                  event: CustomEvent<{ settings: Partial<AudioProcessingSettings> }>
+                ) => this._handleAudioProcessingChange(event)}
+              ></fw-sc-audio-controls>`
             : nothing}
           ${browserNotices.map(
             (notice) => html`
