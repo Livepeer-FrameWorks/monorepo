@@ -3,7 +3,8 @@
 # staging: unsafe, creates a tenant, assigns its tier through the operator CLI and writes a collection fixture
 # A paid tenant schedules a downgrade to Free, sees it in billingLifecycle and
 # billingStatus, then cancels it by choosing its current tier. The operator
-# recovery surfaces report no held downgrade for it.
+# recovery surfaces report no held downgrade for it, then name a held one and
+# preview what holds it.
 . "$(dirname "$0")/../lib.sh"
 
 need jq curl python3 psql openssl || finish
@@ -122,4 +123,31 @@ if "$CLI" admin billing recovery downgrade --tenant-id "$tenant" --reason 'stack
 else
   check 'downgrade recovery reports nothing held' grep -q 'no downgrade past its effective time' "$STACK_STATE_DIR/downgrade-recovery.out"
 fi
+
+# A downgrade the provider confirmed, past the applier grace, whose closing
+# invoice sits in manual review: the case PurserTierDowngradeHeld alerts on.
+# The fixture is removed again so the alert does not stay raised on the stack.
+pg_fixture purser "UPDATE purser.tenant_subscriptions SET pending_tier_id='$free_id', pending_reason='downgrade',
+    pending_provider_tier_id='$free_id', pending_effective_at=date_trunc('second', NOW() - INTERVAL '27 hours')
+  WHERE tenant_id='$tenant';
+  INSERT INTO purser.billing_invoices (tenant_id, status, currency, amount, period_start, period_end, due_date)
+  SELECT tenant_id, 'manual_review', 'EUR', 0, pending_effective_at - INTERVAL '30 days', pending_effective_at, pending_effective_at
+  FROM purser.tenant_subscriptions WHERE tenant_id='$tenant'" >/dev/null
+inventory=$(cli_json admin billing recovery list --tenant-id "$tenant" --output json)
+echo "    held inventory: $(printf '%s' "$inventory" | jq -c '.held_downgrades // []')"
+check 'recovery list names the held downgrade and its manual_review invoice' json_has "$inventory" \
+  "[(.held_downgrades // [])[] | select(.tenant_id == \"$tenant\" and .target_tier_id == \"$free_id\" and .invoice_status == \"manual_review\")] | length == 1"
+if printf 'no\n' | "$CLI" admin billing recovery downgrade --tenant-id "$tenant" --reason 'stack downgrade test' \
+  >"$STACK_STATE_DIR/downgrade-preview.out" 2>&1; then
+  fail 'declined downgrade recovery was confirmed'
+else
+  check 'downgrade recovery preview reports the invoice hold' grep -q ': invoice_held\.' "$STACK_STATE_DIR/downgrade-preview.out"
+  check 'downgrade recovery preview names set-cluster-pricing' grep -q 'set-cluster-pricing' "$STACK_STATE_DIR/downgrade-preview.out"
+fi
+check 'declined preview kept the tier and the staged downgrade' \
+  [ "$(pg purser "SELECT t.tier_name||'/'||COALESCE(s.pending_tier_id::text,'') FROM purser.tenant_subscriptions s JOIN purser.billing_tiers t ON t.id=s.tier_id WHERE s.tenant_id='$tenant'")" = "developer/$free_id" ]
+pg_fixture purser "DELETE FROM purser.billing_invoices WHERE tenant_id='$tenant' AND status='manual_review';
+  UPDATE purser.tenant_subscriptions SET pending_tier_id=NULL, pending_reason=NULL, pending_provider_tier_id=NULL, pending_effective_at=NULL
+  WHERE tenant_id='$tenant'" >/dev/null
+check 'held downgrade fixture removed' [ "$(pg purser "SELECT COUNT(*) FROM purser.tenant_subscriptions WHERE tenant_id='$tenant' AND pending_tier_id IS NOT NULL")" = 0 ]
 finish
