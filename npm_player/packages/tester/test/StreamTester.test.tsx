@@ -27,7 +27,8 @@ function fakeController() {
       stallCount: 1,
       frameDropRate: 0.5,
     }),
-    getEndpoints: () => ({ primary: { protocol: "HLS", nodeId: "edge-1" } }),
+    // The endpoint prefers WHEP while the player plays the HLS source.
+    getEndpoints: () => ({ primary: { protocol: "WHEP", nodeId: "edge-1" } }),
     getState: () => "playing",
     getCurrentPlayerInfo: () => ({ name: "HLS.js Player", shortname: "hlsjs" }),
     getCurrentSourceInfo: () => ({ type: "html5/application/vnd.apple.mpegurl", url: "u" }),
@@ -110,6 +111,18 @@ describe("StreamTester", () => {
     expect(panel.textContent).toContain("2.50 Mbps");
     expect(panel.textContent).toContain("3.2 s");
     expect(panel.textContent).toContain("1080p");
+  });
+
+  it("shows the protocol of the source that is playing, not the endpoint's first pick", async () => {
+    setLocation("?url=https%3A%2F%2Fcdn.example.com%2Flive%2Findex.m3u8");
+    render(<StreamTester />);
+
+    const panel = await screen.findByRole("complementary", { name: "Playback diagnostics" });
+    await waitFor(() => expect(panel.textContent).toContain("HLS.js Player"));
+    const protocolRow = [...panel.querySelectorAll(".fwt-stat")].find(
+      (row) => row.querySelector("dt")?.textContent === "Protocol"
+    );
+    expect(protocolRow?.querySelector("dd")?.textContent).toBe("HLS");
   });
 
   it("plays a sample from the picker", async () => {

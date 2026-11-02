@@ -27,16 +27,33 @@ export interface LogEntry {
 
 const LOG_LIMIT = 80;
 
+/** Protocol name for a Mist source type (the MIME the playing source carries). */
+export function protocolOfSource(type: string): string {
+  if (/^wss?\/video\/raw$/.test(type)) return "Raw over WebSocket";
+  if (/^wss?\/video\/h264$/.test(type)) return "H.264 over WebSocket";
+  if (/^wss?\/video\/webm$/.test(type)) return "WebM over WebSocket";
+  if (/^wss?\//.test(type)) return "MP4 over WebSocket";
+  if (type.includes("whep")) return "WHEP";
+  if (type.includes("webrtc")) return "WebRTC (Mist)";
+  if (type.includes("mpegurl") || type.includes("m3u8")) return "HLS";
+  if (type.includes("dash") || type.includes("mpd")) return "DASH";
+  if (type.includes("mp4")) return "MP4";
+  if (type.includes("webm")) return "WebM";
+  return type;
+}
+
 function snapshot(controller: PlayerController): Snapshot {
   const video = controller.getVideoElement();
   const quality = controller.getPlaybackQuality();
   const primary = controller.getEndpoints()?.primary;
+  const source = controller.getCurrentSourceInfo();
   return {
     state: controller.getState(),
     player: controller.getCurrentPlayerInfo()?.name ?? null,
-    sourceType: controller.getCurrentSourceInfo()?.type ?? null,
-    sourceUrl: controller.getCurrentSourceInfo()?.url ?? null,
-    protocol: primary?.protocol ?? null,
+    sourceType: source?.type ?? null,
+    sourceUrl: source?.url ?? null,
+    // Before a source is selected, show the protocol the endpoint offers first.
+    protocol: source?.type ? protocolOfSource(source.type) : (primary?.protocol ?? null),
     nodeId: primary?.nodeId ?? null,
     live: controller.isEffectivelyLive(),
     resolution: video?.videoWidth ? `${video.videoWidth}×${video.videoHeight}` : null,
