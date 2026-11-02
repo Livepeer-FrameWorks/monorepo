@@ -279,9 +279,16 @@ func prepareReleaseTierCatalog(cmd *cobra.Command, rc *resolvedCluster, sshPool 
 	if err != nil {
 		return nil, err
 	}
+	var desired bootstrap.Rendered
+	if err = yaml.Unmarshal(bootstrapYAML, &desired); err != nil {
+		return nil, err
+	}
 	return func(ctx context.Context, dryRun bool) error {
 		if dryRun {
 			fmt.Fprintln(cmd.OutOrStdout(), "  dry-run: purser bootstrap and its validate would run with the rendered desired state")
+			for _, billing := range desired.Purser.CustomerBilling {
+				fmt.Fprintf(cmd.OutOrStdout(), "    billing %s: %s\n", billing.Tenant.Ref, describeReleaseCustomerBilling(billing))
+			}
 			return nil
 		}
 		if err := runServiceBootstrap(ctx, cmd, manifest, sshPool, "purser", bootstrapYAML, nil); err != nil {
@@ -315,13 +322,57 @@ func prepareReleaseAccounts(cmd *cobra.Command, rc *resolvedCluster, sshPool *ss
 			fmt.Fprintln(cmd.OutOrStdout(), "  dry-run: commodore bootstrap --accounts-only would run with the rendered desired state")
 			for _, account := range desired.Accounts {
 				for _, user := range account.Users {
-					fmt.Fprintf(cmd.OutOrStdout(), "    account %s: %s\n", account.Tenant.Ref, user.Email)
+					fmt.Fprintf(cmd.OutOrStdout(), "    account %s: %s\n", account.Tenant.Ref, describeReleaseAccountUser(user))
 				}
 			}
 			return nil
 		}
 		return releaseRunAccountsBootstrapFn(ctx, cmd, rc.Manifest, sshPool, "commodore", rendered, []string{"--accounts-only"})
 	}, nil
+}
+
+// describeReleaseCustomerBilling names a declared tenant's billing model, tier,
+// entitlement overrides and operator grant for the release dry-run.
+func describeReleaseCustomerBilling(b bootstrap.CustomerBilling) string {
+	parts := []string{b.Model + " " + b.Tier}
+	if len(b.EntitlementOverrides) > 0 {
+		keys := make([]string, 0, len(b.EntitlementOverrides))
+		for key := range b.EntitlementOverrides {
+			keys = append(keys, fmt.Sprintf("%s=%v", key, b.EntitlementOverrides[key]))
+		}
+		sort.Strings(keys)
+		parts = append(parts, "overrides "+strings.Join(keys, ","))
+	}
+	if g := b.OperatorGrant; g != nil {
+		grant := "operator grant"
+		if g.BaseFee != nil {
+			grant += " base fee " + *g.BaseFee
+		}
+		if g.WaiveUsage {
+			grant += ", usage waived"
+		}
+		if g.Collection != "" {
+			grant += ", collection " + g.Collection
+		}
+		if g.Until != "" {
+			grant += ", until " + g.Until
+		}
+		parts = append(parts, grant+" ("+g.Reason+")")
+	}
+	return strings.Join(parts, "; ")
+}
+
+// describeReleaseAccountUser names a declared user's email, role, platform
+// operator flag and wallet for the release dry-run. Passwords never print.
+func describeReleaseAccountUser(u bootstrap.AccountUserRendered) string {
+	line := u.Email + " " + u.Role
+	if u.PlatformOperator {
+		line += ", platform operator"
+	}
+	if u.Wallet != "" {
+		line += ", wallet " + u.Wallet
+	}
+	return line
 }
 
 type releaseApplyOptions struct {

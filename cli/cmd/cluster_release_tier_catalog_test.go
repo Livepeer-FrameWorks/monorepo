@@ -6,9 +6,11 @@ import (
 	"strings"
 	"testing"
 
+	"frameworks/cli/pkg/bootstrap"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/ssh"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	"github.com/spf13/cobra"
 )
 
@@ -135,7 +137,7 @@ func TestReleaseAccountsUsesOnlyAccountsAndShowsNames(t *testing.T) {
 	if err = step(context.Background(), true); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "operator@example.test") || strings.Contains(out.String(), "must-stay-private") || calls != 0 {
+	if !strings.Contains(out.String(), "operator@example.test owner") || strings.Contains(out.String(), "must-stay-private") || calls != 0 {
 		t.Fatalf("dry-run output=%s calls=%d", out.String(), calls)
 	}
 	if err = step(context.Background(), false); err != nil {
@@ -167,5 +169,25 @@ func TestReleasePlanNamesAccountsReconcileAtCapabilityBoundary(t *testing.T) {
 		if got := strings.Contains(out.String(), "Commodore accounts reconcile"); got != (version != "v0.3.13") {
 			t.Fatalf("accounts plan line for %s=%v: %s", version, got, out.String())
 		}
+	}
+}
+
+func TestReleaseDryRunDescribesDeclaredBillingAndUsers(t *testing.T) {
+	zero := "0"
+	declared := bootstrap.CustomerBilling{
+		Tenant: bootstrap.TenantRefAlias("frameworks-qa"), Model: "postpaid", Tier: "developer",
+		EntitlementOverrides: map[string]any{"max_concurrent_viewers": 0, "max_concurrent_streams": 2},
+		OperatorGrant:        &billing.OperatorGrantSpec{BaseFee: &zero, WaiveUsage: true, Until: "2026-12-01", Reason: "QA"},
+	}
+	want := "postpaid developer; overrides max_concurrent_streams=2,max_concurrent_viewers=0; operator grant base fee 0, usage waived, until 2026-12-01 (QA)"
+	if got := describeReleaseCustomerBilling(declared); got != want {
+		t.Fatalf("billing line = %q, want %q", got, want)
+	}
+	user := bootstrap.AccountUserRendered{
+		AccountUserCommon: bootstrap.AccountUserCommon{Email: "qa@example.test", Role: "owner", PlatformOperator: true, Wallet: "0x52908400098527886E0F7030069857D2E4169EE7"},
+		Password:          "must-stay-private",
+	}
+	if got := describeReleaseAccountUser(user); got != "qa@example.test owner, platform operator, wallet 0x52908400098527886E0F7030069857D2E4169EE7" {
+		t.Fatalf("user line = %q", got)
 	}
 }
