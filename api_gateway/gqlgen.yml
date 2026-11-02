@@ -642,6 +642,24 @@ models:
         resolver: true
       recentPayments:
         resolver: true
+      pendingTierState:
+        resolver: true
+  BillingArrangement:
+    model:
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser.OperatorBillingGrant
+    fields:
+      expiresAt:
+        resolver: true
+  FreeFallback:
+    model:
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser.FreeFallbackStatus
+    fields:
+      reason:
+        resolver: true
+      at:
+        resolver: true
+      stage:
+        resolver: true
   InvoicePayment:
     model:
       - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser.Payment

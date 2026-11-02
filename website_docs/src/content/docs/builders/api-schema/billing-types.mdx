@@ -65,6 +65,18 @@ Input for billing address.
 - **postalCode**: `String!` — Postal or ZIP code.
 - **country**: `String!` — ISO 3166-1 alpha-2 country code.
 
+## BillingArrangement
+
+**object**
+
+A billing arrangement FrameWorks set up for an account. Only the terms the account is billed under are shown.
+
+- **basePrice**: `String` — Monthly base fee in EUR in place of the plan&#39;s, as a decimal string. Null keeps the plan&#39;s fee.
+- **waiveUsage**: `Boolean!` — Usage is metered and shown at zero cost.
+- **collection**: `String!` — How invoices are collected: provider (Stripe or Mollie) or invoice (FrameWorks sends invoices to pay by bank transfer).
+- **expiresAt**: `Time` ([Time](/builders/api-schema/shared/#time)) — When the arrangement ends. Null runs until FrameWorks ends it.
+- **fallbackTierName**: `String` — Plan the account returns to when the arrangement ends, when it is not the current plan.
+
 ## BillingDetails
 
 **object**
@@ -108,6 +120,10 @@ Contractual and enforced properties of a billing tier. Usage limits are entitlem
 - **currency**: `String!`
 - **liveUsage**: `LiveUsageSummary!` ([LiveUsageSummary](/builders/api-schema/billing-types/#liveusagesummary))
 - **invoicePreview**: `Invoice` ([Invoice](/builders/api-schema/billing-types/#invoice))
+- **operatorGrant**: `BillingArrangement` ([BillingArrangement](/builders/api-schema/billing-types/#billingarrangement)) — Billing arrangement FrameWorks set up for this account, such as a trial or a custom price, while it is in force.
+- **effectiveBasePrice**: `String!` — Monthly base fee in EUR this account pays after any arrangement, as a decimal string.
+- **freeFallback**: `FreeFallback` ([FreeFallback](/builders/api-schema/billing-types/#freefallback)) — Scheduled move to the Free plan after a failed renewal payment or a cancellation.
+- **pendingTierState**: `PendingTierState` ([PendingTierState](/builders/api-schema/billing-types/#pendingtierstate)) — Progress of subscription.pendingTier while subscription.pendingReason is downgrade.
 
 ## BillingTier
 
@@ -307,6 +323,36 @@ A key-value entitlement entry. Values are JSON-encoded for type flexibility.
 
 - **key**: `String!`
 - **value**: `String!`
+
+## FreeFallback
+
+**object**
+
+A scheduled move to the Free plan.
+
+- **reason**: `FreeFallbackReason!` ([FreeFallbackReason](/builders/api-schema/billing-types/#freefallbackreason))
+- **at**: `Time!` ([Time](/builders/api-schema/shared/#time)) — When the move happens, or happened once stage is MOVED.
+- **stage**: `FreeFallbackStage!` ([FreeFallbackStage](/builders/api-schema/billing-types/#freefallbackstage))
+- **providerCancelled**: `Boolean!` — The Stripe or Mollie subscription is cancelled, so no renewal follows.
+
+## FreeFallbackReason
+
+**enum**
+
+Why an account moves to the Free plan.
+
+- `PAYMENT_FAILED` — A renewal payment failed. The plan stays active through the 14-day grace period.
+- `CANCELLED` — The subscription was cancelled. The plan runs to the end of its paid period.
+
+## FreeFallbackStage
+
+**enum**
+
+Where a scheduled move to the Free plan stands.
+
+- `SCHEDULED` — Before the move date. Paying the failed invoice or subscribing again keeps the plan.
+- `APPLYING` — The move date passed and the final invoice is being settled.
+- `MOVED` — The account is on Free.
 
 ## Invoice
 
@@ -568,6 +614,16 @@ Payment processing status.
 - `CONFIRMED` — Payment successfully processed.
 - `FAILED` — Payment failed or declined.
 
+## PendingTierState
+
+**enum**
+
+Progress of a scheduled downgrade.
+
+- `SCHEDULED` — Selecting the current plan with changeBillingTier cancels the downgrade.
+- `FINAL` — The payment provider subscription is cancelled. The move cannot be undone.
+- `APPLYING` — The effective time passed. The downgrade applies with the closing invoice.
+
 ## PrepaidBalance
 
 **object**
@@ -683,7 +739,7 @@ Stripe Checkout Session - redirect URL for hosted checkout.
 - **billingModel**: `String!`
 - **pendingTier**: `BillingTier` ([BillingTier](/builders/api-schema/billing-types/#billingtier))
 - **pendingEffectiveAt**: `Time` ([Time](/builders/api-schema/shared/#time))
-- **pendingReason**: `String`
+- **pendingReason**: `String` — Why pendingTier is set: downgrade (applies at pendingEffectiveAt; see BillingStatus.pendingTierState), tier_upgrade (a paid upgrade being confirmed) or stripe_checkout (a checkout awaiting payment).
 - **presentmentCurrency**: `Currency!` ([Currency](/builders/api-schema/billing-types/#currency)) — Currency the tenant is invoiced and charged in (EUR, USD, GBP), derived from the billing country. The prepaid ledger is always EUR.
 - **createdAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
 - **updatedAt**: `Time!` ([Time](/builders/api-schema/shared/#time))

@@ -2095,6 +2095,11 @@ type Mutation {
   reconciliation can leave them pending.
   Enterprise purchases and moves to a higher tier with a lower base price require an operator arrangement.
   Downgrades take effect at the current billing period end.
+  A refusal returns ValidationError whose code is one of PENDING_CHECKOUT,
+  PENDING_FREE_FALLBACK, PENDING_UPGRADE, OUTSTANDING_GRANT, ACCOUNT_CLOSED,
+  DOWNGRADE_HELD, PAID_TERM_ENDING, PROVIDER_SUBSCRIPTION_LIVE,
+  TIER_NOT_SELF_SERVICE, INVOICES_OUTSTANDING, COLLECTION_SETUP_REQUIRED or
+  BILLING_PROFILE_REQUIRED, with a message to show the customer.
   """
   changeBillingTier(
     """
@@ -5496,6 +5501,11 @@ type TenantSubscription {
   # applied by the billing close job after the current period's invoice clears.
   pendingTier: BillingTier
   pendingEffectiveAt: Time
+  """
+  Why pendingTier is set: downgrade (applies at pendingEffectiveAt; see
+  BillingStatus.pendingTierState), tier_upgrade (a paid upgrade being
+  confirmed) or stripe_checkout (a checkout awaiting payment).
+  """
   pendingReason: String
   "Currency the tenant is invoiced and charged in (EUR, USD, GBP), derived from the billing country. The prepaid ledger is always EUR."
   presentmentCurrency: Currency!
@@ -5524,6 +5534,69 @@ type BillingStatus {
   currency: String!
   liveUsage: LiveUsageSummary! # Near-real-time usage (Periscope)
   invoicePreview: Invoice # Authoritative draft invoice (Purser)
+  "Billing arrangement FrameWorks set up for this account, such as a trial or a custom price, while it is in force."
+  operatorGrant: BillingArrangement
+  "Monthly base fee in EUR this account pays after any arrangement, as a decimal string."
+  effectiveBasePrice: String!
+  "Scheduled move to the Free plan after a failed renewal payment or a cancellation."
+  freeFallback: FreeFallback
+  "Progress of subscription.pendingTier while subscription.pendingReason is downgrade."
+  pendingTierState: PendingTierState
+}
+
+"""
+A billing arrangement FrameWorks set up for an account. Only the terms the
+account is billed under are shown.
+"""
+type BillingArrangement {
+  "Monthly base fee in EUR in place of the plan's, as a decimal string. Null keeps the plan's fee."
+  basePrice: String
+  "Usage is metered and shown at zero cost."
+  waiveUsage: Boolean!
+  "How invoices are collected: provider (Stripe or Mollie) or invoice (FrameWorks sends invoices to pay by bank transfer)."
+  collection: String!
+  "When the arrangement ends. Null runs until FrameWorks ends it."
+  expiresAt: Time
+  "Plan the account returns to when the arrangement ends, when it is not the current plan."
+  fallbackTierName: String
+}
+
+"Why an account moves to the Free plan."
+enum FreeFallbackReason {
+  "A renewal payment failed. The plan stays active through the 14-day grace period."
+  PAYMENT_FAILED
+  "The subscription was cancelled. The plan runs to the end of its paid period."
+  CANCELLED
+}
+
+"Where a scheduled move to the Free plan stands."
+enum FreeFallbackStage {
+  "Before the move date. Paying the failed invoice or subscribing again keeps the plan."
+  SCHEDULED
+  "The move date passed and the final invoice is being settled."
+  APPLYING
+  "The account is on Free."
+  MOVED
+}
+
+"A scheduled move to the Free plan."
+type FreeFallback {
+  reason: FreeFallbackReason!
+  "When the move happens, or happened once stage is MOVED."
+  at: Time!
+  stage: FreeFallbackStage!
+  "The Stripe or Mollie subscription is cancelled, so no renewal follows."
+  providerCancelled: Boolean!
+}
+
+"Progress of a scheduled downgrade."
+enum PendingTierState {
+  "Selecting the current plan with changeBillingTier cancels the downgrade."
+  SCHEDULED
+  "The payment provider subscription is cancelled. The move cannot be undone."
+  FINAL
+  "The effective time passed. The downgrade applies with the closing invoice."
+  APPLYING
 }
 
 "A tenant-visible invoice payment record. Provider secrets and raw payloads are never exposed."
@@ -8714,6 +8787,8 @@ type TenantAdminDetail {
 type TenantAdminBilling {
   tenantId: ID!
   snapshot: TenantBillingSnapshot
+  "Plan lifecycle as the tenant sees it: arrangement, scheduled move to Free and pending plan change. Null when the tenant has no subscription."
+  lifecycle: BillingStatus
   invoices(page: ConnectionInput): InvoicesConnection!
   prepaidBalance: PrepaidBalance
   balanceTransactions(

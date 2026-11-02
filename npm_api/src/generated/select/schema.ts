@@ -471,6 +471,25 @@ export interface BillingAddress {
 
 
 /**
+ * A billing arrangement FrameWorks set up for an account. Only the terms the
+ * account is billed under are shown.
+ */
+export interface BillingArrangement {
+    /** Monthly base fee in EUR in place of the plan's, as a decimal string. Null keeps the plan's fee. */
+    basePrice: (Scalars['String'] | null)
+    /** Usage is metered and shown at zero cost. */
+    waiveUsage: Scalars['Boolean']
+    /** How invoices are collected: provider (Stripe or Mollie) or invoice (FrameWorks sends invoices to pay by bank transfer). */
+    collection: Scalars['String']
+    /** When the arrangement ends. Null runs until FrameWorks ends it. */
+    expiresAt: (Scalars['Time'] | null)
+    /** Plan the account returns to when the arrangement ends, when it is not the current plan. */
+    fallbackTierName: (Scalars['String'] | null)
+    __typename: 'BillingArrangement'
+}
+
+
+/**
  * Billing details for a tenant. These are optional for Free and small simplified
  * top-ups, and required when paid postpaid collection or a full invoice needs them.
  */
@@ -536,6 +555,14 @@ export interface BillingStatus {
     currency: Scalars['String']
     liveUsage: LiveUsageSummary
     invoicePreview: (Invoice | null)
+    /** Billing arrangement FrameWorks set up for this account, such as a trial or a custom price, while it is in force. */
+    operatorGrant: (BillingArrangement | null)
+    /** Monthly base fee in EUR this account pays after any arrangement, as a decimal string. */
+    effectiveBasePrice: Scalars['String']
+    /** Scheduled move to the Free plan after a failed renewal payment or a cancellation. */
+    freeFallback: (FreeFallback | null)
+    /** Progress of subscription.pendingTier while subscription.pendingReason is downgrade. */
+    pendingTierState: (PendingTierState | null)
     __typename: 'BillingStatus'
 }
 
@@ -1803,6 +1830,26 @@ export interface FederationSummary {
     overallFailureRate: Scalars['Float']
     __typename: 'FederationSummary'
 }
+
+
+/** A scheduled move to the Free plan. */
+export interface FreeFallback {
+    reason: FreeFallbackReason
+    /** When the move happens, or happened once stage is MOVED. */
+    at: Scalars['Time']
+    stage: FreeFallbackStage
+    /** The Stripe or Mollie subscription is cancelled, so no renewal follows. */
+    providerCancelled: Scalars['Boolean']
+    __typename: 'FreeFallback'
+}
+
+
+/** Why an account moves to the Free plan. */
+export type FreeFallbackReason = 'PAYMENT_FAILED' | 'CANCELLED'
+
+
+/** Where a scheduled move to the Free plan stands. */
+export type FreeFallbackStage = 'SCHEDULED' | 'APPLYING' | 'MOVED'
 
 export interface GeoBucket {
     h3Index: Scalars['String']
@@ -3099,6 +3146,11 @@ export interface Mutation {
      * reconciliation can leave them pending.
      * Enterprise purchases and moves to a higher tier with a lower base price require an operator arrangement.
      * Downgrades take effect at the current billing period end.
+     * A refusal returns ValidationError whose code is one of PENDING_CHECKOUT,
+     * PENDING_FREE_FALLBACK, PENDING_UPGRADE, OUTSTANDING_GRANT, ACCOUNT_CLOSED,
+     * DOWNGRADE_HELD, PAID_TERM_ENDING, PROVIDER_SUBSCRIPTION_LIVE,
+     * TIER_NOT_SELF_SERVICE, INVOICES_OUTSTANDING, COLLECTION_SETUP_REQUIRED or
+     * BILLING_PROFILE_REQUIRED, with a message to show the customer.
      */
     changeBillingTier: ChangeBillingTierResult
     /** Delete a Skipper conversation. */
@@ -3620,6 +3672,10 @@ export type PaymentMethod = 'CARD' | 'CRYPTO_ETH' | 'CRYPTO_USDC'
 
 /** Payment processing status. */
 export type PaymentStatus = 'PENDING' | 'CONFIRMED' | 'FAILED'
+
+
+/** Progress of a scheduled downgrade. */
+export type PendingTierState = 'SCHEDULED' | 'FINAL' | 'APPLYING'
 
 export interface PlatformOverview {
     totalStreams: Scalars['Int']
@@ -5937,6 +5993,11 @@ export interface TenantSubscription {
     billingModel: Scalars['String']
     pendingTier: (BillingTier | null)
     pendingEffectiveAt: (Scalars['Time'] | null)
+    /**
+     * Why pendingTier is set: downgrade (applies at pendingEffectiveAt; see
+     * BillingStatus.pendingTierState), tier_upgrade (a paid upgrade being
+     * confirmed) or stripe_checkout (a checkout awaiting payment).
+     */
     pendingReason: (Scalars['String'] | null)
     /** Currency the tenant is invoiced and charged in (EUR, USD, GBP), derived from the billing country. The prepaid ledger is always EUR. */
     presentmentCurrency: Scalars['Currency']
@@ -7302,6 +7363,26 @@ country: Scalars['String']}
 
 
 /**
+ * A billing arrangement FrameWorks set up for an account. Only the terms the
+ * account is billed under are shown.
+ */
+export interface BillingArrangementGenqlSelection{
+    /** Monthly base fee in EUR in place of the plan's, as a decimal string. Null keeps the plan's fee. */
+    basePrice?: boolean | number
+    /** Usage is metered and shown at zero cost. */
+    waiveUsage?: boolean | number
+    /** How invoices are collected: provider (Stripe or Mollie) or invoice (FrameWorks sends invoices to pay by bank transfer). */
+    collection?: boolean | number
+    /** When the arrangement ends. Null runs until FrameWorks ends it. */
+    expiresAt?: boolean | number
+    /** Plan the account returns to when the arrangement ends, when it is not the current plan. */
+    fallbackTierName?: boolean | number
+    __typename?: boolean | number
+    __scalar?: boolean | number
+}
+
+
+/**
  * Billing details for a tenant. These are optional for Free and small simplified
  * top-ups, and required when paid postpaid collection or a full invoice needs them.
  */
@@ -7370,6 +7451,14 @@ export interface BillingStatusGenqlSelection{
     currency?: boolean | number
     liveUsage?: LiveUsageSummaryGenqlSelection
     invoicePreview?: InvoiceGenqlSelection
+    /** Billing arrangement FrameWorks set up for this account, such as a trial or a custom price, while it is in force. */
+    operatorGrant?: BillingArrangementGenqlSelection
+    /** Monthly base fee in EUR this account pays after any arrangement, as a decimal string. */
+    effectiveBasePrice?: boolean | number
+    /** Scheduled move to the Free plan after a failed renewal payment or a cancellation. */
+    freeFallback?: FreeFallbackGenqlSelection
+    /** Progress of subscription.pendingTier while subscription.pendingReason is downgrade. */
+    pendingTierState?: boolean | number
     __typename?: boolean | number
     __scalar?: boolean | number
 }
@@ -9004,6 +9093,19 @@ export interface FederationSummaryGenqlSelection{
     __scalar?: boolean | number
 }
 
+
+/** A scheduled move to the Free plan. */
+export interface FreeFallbackGenqlSelection{
+    reason?: boolean | number
+    /** When the move happens, or happened once stage is MOVED. */
+    at?: boolean | number
+    stage?: boolean | number
+    /** The Stripe or Mollie subscription is cancelled, so no renewal follows. */
+    providerCancelled?: boolean | number
+    __typename?: boolean | number
+    __scalar?: boolean | number
+}
+
 export interface GeoBucketGenqlSelection{
     h3Index?: boolean | number
     resolution?: boolean | number
@@ -10602,6 +10704,11 @@ export interface MutationGenqlSelection{
      * reconciliation can leave them pending.
      * Enterprise purchases and moves to a higher tier with a lower base price require an operator arrangement.
      * Downgrades take effect at the current billing period end.
+     * A refusal returns ValidationError whose code is one of PENDING_CHECKOUT,
+     * PENDING_FREE_FALLBACK, PENDING_UPGRADE, OUTSTANDING_GRANT, ACCOUNT_CLOSED,
+     * DOWNGRADE_HELD, PAID_TERM_ENDING, PROVIDER_SUBSCRIPTION_LIVE,
+     * TIER_NOT_SELF_SERVICE, INVOICES_OUTSTANDING, COLLECTION_SETUP_REQUIRED or
+     * BILLING_PROFILE_REQUIRED, with a message to show the customer.
      */
     changeBillingTier?: (ChangeBillingTierResultGenqlSelection & { __args: {
     /** The target billing tier. Must be active, non-Enterprise and postpaid (tier_level >= 1). */
@@ -14036,6 +14143,11 @@ export interface TenantSubscriptionGenqlSelection{
     billingModel?: boolean | number
     pendingTier?: BillingTierGenqlSelection
     pendingEffectiveAt?: boolean | number
+    /**
+     * Why pendingTier is set: downgrade (applies at pendingEffectiveAt; see
+     * BillingStatus.pendingTierState), tier_upgrade (a paid upgrade being
+     * confirmed) or stripe_checkout (a checkout awaiting payment).
+     */
     pendingReason?: boolean | number
     /** Currency the tenant is invoiced and charged in (EUR, USD, GBP), derived from the billing country. The prepaid ledger is always EUR. */
     presentmentCurrency?: boolean | number
@@ -15428,6 +15540,14 @@ export interface X402PaymentResultGenqlSelection{
 
 
 
+    const BillingArrangement_possibleTypes: string[] = ['BillingArrangement']
+    export const isBillingArrangement = (obj?: { __typename?: any } | null): obj is BillingArrangement => {
+      if (!obj?.__typename) throw new Error('__typename is missing in "isBillingArrangement"')
+      return BillingArrangement_possibleTypes.includes(obj.__typename)
+    }
+
+
+
     const BillingDetails_possibleTypes: string[] = ['BillingDetails']
     export const isBillingDetails = (obj?: { __typename?: any } | null): obj is BillingDetails => {
       if (!obj?.__typename) throw new Error('__typename is missing in "isBillingDetails"')
@@ -16224,6 +16344,14 @@ export interface X402PaymentResultGenqlSelection{
     export const isFederationSummary = (obj?: { __typename?: any } | null): obj is FederationSummary => {
       if (!obj?.__typename) throw new Error('__typename is missing in "isFederationSummary"')
       return FederationSummary_possibleTypes.includes(obj.__typename)
+    }
+
+
+
+    const FreeFallback_possibleTypes: string[] = ['FreeFallback']
+    export const isFreeFallback = (obj?: { __typename?: any } | null): obj is FreeFallback => {
+      if (!obj?.__typename) throw new Error('__typename is missing in "isFreeFallback"')
+      return FreeFallback_possibleTypes.includes(obj.__typename)
     }
 
 
@@ -19082,6 +19210,17 @@ export const enumEventSuspensionReason = {
    SUSPENSION_REASON_POLICY: 'SUSPENSION_REASON_POLICY' as const
 }
 
+export const enumFreeFallbackReason = {
+   PAYMENT_FAILED: 'PAYMENT_FAILED' as const,
+   CANCELLED: 'CANCELLED' as const
+}
+
+export const enumFreeFallbackStage = {
+   SCHEDULED: 'SCHEDULED' as const,
+   APPLYING: 'APPLYING' as const,
+   MOVED: 'MOVED' as const
+}
+
 export const enumIncidentEventKind = {
    ALERT_FIRING: 'ALERT_FIRING' as const,
    ALERT_RESOLVED: 'ALERT_RESOLVED' as const,
@@ -19285,6 +19424,12 @@ export const enumPaymentStatus = {
    PENDING: 'PENDING' as const,
    CONFIRMED: 'CONFIRMED' as const,
    FAILED: 'FAILED' as const
+}
+
+export const enumPendingTierState = {
+   SCHEDULED: 'SCHEDULED' as const,
+   FINAL: 'FINAL' as const,
+   APPLYING: 'APPLYING' as const
 }
 
 export const enumPlaybackPolicyType = {

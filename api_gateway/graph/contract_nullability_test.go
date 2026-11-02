@@ -26,6 +26,8 @@ import (
 // An entry whose guard no longer exists fails the test too, so the list tracks
 // the resolvers exactly.
 var nonNullSourceGuards = map[string]string{
+	// Purser builds FreeFallbackStatus only from a set free_fallback_at.
+	"FreeFallback.at": "Purser sets free_fallback only when free_fallback_at is set",
 	// Periscope event and rollup rows: the timestamp is the row's own ClickHouse
 	// DateTime key (not Nullable) and Periscope always sets it.
 	"APIUsageRecord.timestamp":               periscopeRowTime,

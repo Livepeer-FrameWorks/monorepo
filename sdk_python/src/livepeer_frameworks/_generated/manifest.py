@@ -61,7 +61,7 @@ OPERATIONS: Final[dict[str, OperationInfo]] = {
     "GetArtifactStatesConnection": {"kind": "query", "since": "v0.3.11"},
     "GetBalanceTransactionsConnection": {"kind": "query", "since": "v0.3.11"},
     "GetBillingDetails": {"kind": "query", "since": "v0.3.11"},
-    "GetBillingStatus": {"kind": "query", "since": "v0.3.11"},
+    "GetBillingStatus": {"kind": "query", "since": "v0.3.14"},
     "GetBillingTiers": {"kind": "query", "since": "v0.3.11"},
     "GetBufferEventsConnection": {"kind": "query", "since": "v0.3.11"},
     "GetCapabilities": {"kind": "query", "since": "v0.3.11"},

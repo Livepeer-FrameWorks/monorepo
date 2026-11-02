@@ -3941,6 +3941,125 @@ func (e DVRChapterState) MarshalJSON() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// Why an account moves to the Free plan.
+type FreeFallbackReason string
+
+const (
+	// A renewal payment failed. The plan stays active through the 14-day grace period.
+	FreeFallbackReasonPaymentFailed FreeFallbackReason = "PAYMENT_FAILED"
+	// The subscription was cancelled. The plan runs to the end of its paid period.
+	FreeFallbackReasonCancelled FreeFallbackReason = "CANCELLED"
+)
+
+var AllFreeFallbackReason = []FreeFallbackReason{
+	FreeFallbackReasonPaymentFailed,
+	FreeFallbackReasonCancelled,
+}
+
+func (e FreeFallbackReason) IsValid() bool {
+	switch e {
+	case FreeFallbackReasonPaymentFailed, FreeFallbackReasonCancelled:
+		return true
+	}
+	return false
+}
+
+func (e FreeFallbackReason) String() string {
+	return string(e)
+}
+
+func (e *FreeFallbackReason) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = FreeFallbackReason(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid FreeFallbackReason", str)
+	}
+	return nil
+}
+
+func (e FreeFallbackReason) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *FreeFallbackReason) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e FreeFallbackReason) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+// Where a scheduled move to the Free plan stands.
+type FreeFallbackStage string
+
+const (
+	// Before the move date. Paying the failed invoice or subscribing again keeps the plan.
+	FreeFallbackStageScheduled FreeFallbackStage = "SCHEDULED"
+	// The move date passed and the final invoice is being settled.
+	FreeFallbackStageApplying FreeFallbackStage = "APPLYING"
+	// The account is on Free.
+	FreeFallbackStageMoved FreeFallbackStage = "MOVED"
+)
+
+var AllFreeFallbackStage = []FreeFallbackStage{
+	FreeFallbackStageScheduled,
+	FreeFallbackStageApplying,
+	FreeFallbackStageMoved,
+}
+
+func (e FreeFallbackStage) IsValid() bool {
+	switch e {
+	case FreeFallbackStageScheduled, FreeFallbackStageApplying, FreeFallbackStageMoved:
+		return true
+	}
+	return false
+}
+
+func (e FreeFallbackStage) String() string {
+	return string(e)
+}
+
+func (e *FreeFallbackStage) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = FreeFallbackStage(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid FreeFallbackStage", str)
+	}
+	return nil
+}
+
+func (e FreeFallbackStage) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *FreeFallbackStage) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e FreeFallbackStage) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
 type IncidentEventKind string
 
 const (
@@ -5351,6 +5470,67 @@ func (e *PaymentStatus) UnmarshalJSON(b []byte) error {
 }
 
 func (e PaymentStatus) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+// Progress of a scheduled downgrade.
+type PendingTierState string
+
+const (
+	// Selecting the current plan with changeBillingTier cancels the downgrade.
+	PendingTierStateScheduled PendingTierState = "SCHEDULED"
+	// The payment provider subscription is cancelled. The move cannot be undone.
+	PendingTierStateFinal PendingTierState = "FINAL"
+	// The effective time passed. The downgrade applies with the closing invoice.
+	PendingTierStateApplying PendingTierState = "APPLYING"
+)
+
+var AllPendingTierState = []PendingTierState{
+	PendingTierStateScheduled,
+	PendingTierStateFinal,
+	PendingTierStateApplying,
+}
+
+func (e PendingTierState) IsValid() bool {
+	switch e {
+	case PendingTierStateScheduled, PendingTierStateFinal, PendingTierStateApplying:
+		return true
+	}
+	return false
+}
+
+func (e PendingTierState) String() string {
+	return string(e)
+}
+
+func (e *PendingTierState) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = PendingTierState(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid PendingTierState", str)
+	}
+	return nil
+}
+
+func (e PendingTierState) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *PendingTierState) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e PendingTierState) MarshalJSON() ([]byte, error) {
 	var buf bytes.Buffer
 	e.MarshalGQL(&buf)
 	return buf.Bytes(), nil

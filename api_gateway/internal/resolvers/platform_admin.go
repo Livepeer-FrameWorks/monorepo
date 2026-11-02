@@ -336,6 +336,22 @@ func (r *Resolver) DoPlatformTenantInvoices(ctx context.Context, tenantID string
 	return r.DoGetInvoicesConnection(platformTenantCtx(ctx, tenantID), first, after, last, before)
 }
 
+// DoPlatformTenantBillingLifecycle is the tenant's own billing status, read
+// for the operator drill-down. Null when the tenant has no subscription.
+func (r *Resolver) DoPlatformTenantBillingLifecycle(ctx context.Context, tenantID string) (*purserpb.BillingStatusResponse, error) {
+	if err := r.platformGate(ctx, "platform.tenant.billing.lifecycle", tenantID); err != nil {
+		return nil, err
+	}
+	status, err := r.DoGetBillingStatus(platformTenantCtx(ctx, tenantID))
+	if err != nil {
+		return nil, err
+	}
+	if status.GetSubscription() == nil && !middleware.IsDemoMode(ctx) {
+		return nil, nil
+	}
+	return status, nil
+}
+
 func (r *Resolver) DoPlatformTenantPrepaidBalance(ctx context.Context, tenantID string) (*model.PrepaidBalance, error) {
 	if err := r.platformGate(ctx, "platform.tenant.billing.prepaidBalance", tenantID); err != nil {
 		return nil, err

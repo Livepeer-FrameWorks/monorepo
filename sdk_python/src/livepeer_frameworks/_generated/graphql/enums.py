@@ -138,6 +138,17 @@ class EventSuspensionReason(OpenEnum):
     SUSPENSION_REASON_POLICY = "SUSPENSION_REASON_POLICY"
 
 
+class FreeFallbackReason(OpenEnum):
+    PAYMENT_FAILED = "PAYMENT_FAILED"
+    CANCELLED = "CANCELLED"
+
+
+class FreeFallbackStage(OpenEnum):
+    SCHEDULED = "SCHEDULED"
+    APPLYING = "APPLYING"
+    MOVED = "MOVED"
+
+
 class IncidentEventKind(OpenEnum):
     ALERT_FIRING = "ALERT_FIRING"
     ALERT_RESOLVED = "ALERT_RESOLVED"
@@ -341,6 +352,12 @@ class PaymentStatus(OpenEnum):
     PENDING = "PENDING"
     CONFIRMED = "CONFIRMED"
     FAILED = "FAILED"
+
+
+class PendingTierState(OpenEnum):
+    SCHEDULED = "SCHEDULED"
+    FINAL = "FINAL"
+    APPLYING = "APPLYING"
 
 
 class PlaybackPolicyType(OpenEnum):

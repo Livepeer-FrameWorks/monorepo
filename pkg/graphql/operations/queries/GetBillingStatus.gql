@@ -29,6 +29,21 @@ query GetBillingStatus {
     nextBillingDate
     trialEndsAt
     outstandingAmount
+    effectiveBasePrice
+    operatorGrant {
+      basePrice
+      waiveUsage
+      collection
+      expiresAt
+      fallbackTierName
+    }
+    freeFallback {
+      reason
+      at
+      stage
+      providerCancelled
+    }
+    pendingTierState
     currentTier {
       ...BillingTierFields
     }
@@ -45,7 +60,6 @@ query GetBillingStatus {
       cancelledAt
       customFeatures {
         supportLevel
-        sla
         processingCustomizable
       }
       pricingOverrides {

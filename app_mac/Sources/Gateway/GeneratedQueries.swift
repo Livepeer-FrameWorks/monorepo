@@ -25,12 +25,10 @@ enum GQL {
     currency
     billingPeriod
     supportLevel
-    slaLevel
     meteringEnabled
     isEnterprise
     features {
       supportLevel
-      sla
       processingCustomizable
     }
     pricingRules {
@@ -1201,6 +1199,21 @@ enum GQL {
       nextBillingDate
       trialEndsAt
       outstandingAmount
+      effectiveBasePrice
+      operatorGrant {
+        basePrice
+        waiveUsage
+        collection
+        expiresAt
+        fallbackTierName
+      }
+      freeFallback {
+        reason
+        at
+        stage
+        providerCancelled
+      }
+      pendingTierState
       currentTier {
         ...BillingTierFields
       }
@@ -1217,7 +1230,6 @@ enum GQL {
         cancelledAt
         customFeatures {
           supportLevel
-          sla
           processingCustomizable
         }
         pricingOverrides {
@@ -1297,7 +1309,6 @@ enum GQL {
       billingPeriod
       features {
         supportLevel
-        sla
         processingCustomizable
       }
       pricingRules {
@@ -1313,7 +1324,6 @@ enum GQL {
         value
       }
       supportLevel
-      slaLevel
       meteringEnabled
       isEnterprise
     }
@@ -2737,13 +2747,39 @@ enum GQL {
             billingModel
             status
             tierName
-            trialEndsAt
             nextBillingDate
             outstandingAmount
             overdueInvoices
             prepaidBalanceCents
             currency
             subscribedAt
+          }
+          lifecycle {
+            billingStatus
+            collectionReady
+            collectionProvider
+            effectiveBasePrice
+            operatorGrant {
+              basePrice
+              waiveUsage
+              collection
+              expiresAt
+              fallbackTierName
+            }
+            freeFallback {
+              reason
+              at
+              stage
+              providerCancelled
+            }
+            pendingTierState
+            subscription {
+              pendingTier {
+                displayName
+              }
+              pendingEffectiveAt
+              pendingReason
+            }
           }
           invoices(page: { first: $invoicesFirst }) {
             edges {

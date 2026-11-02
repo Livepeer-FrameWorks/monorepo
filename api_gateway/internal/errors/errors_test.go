@@ -61,6 +61,20 @@ func TestErrorPresenterPreservesStructuredBillingBlocker(t *testing.T) {
 	}
 }
 
+func TestErrorPresenterPresentsTypedBillingRefusals(t *testing.T) {
+	message := "This account is closed. Billing changes are no longer possible."
+	st, err := status.New(codes.FailedPrecondition, message).WithDetails(&errdetails.ErrorInfo{
+		Reason: "ACCOUNT_CLOSED", Domain: "billing.frameworks.network", Metadata: map[string]string{"public_message": message},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	presented := ErrorPresenter(logging.NewLogger())(context.Background(), fmt.Errorf("create checkout: %w", st.Err()))
+	if presented.Message != message || presented.Extensions["code"] != "ACCOUNT_CLOSED" {
+		t.Fatalf("presented = %q %v, want the tenant message with code ACCOUNT_CLOSED", presented.Message, presented.Extensions)
+	}
+}
+
 func TestErrorPresenterMapsGRPCStatusToExtensionCode(t *testing.T) {
 	cases := []struct {
 		code    codes.Code

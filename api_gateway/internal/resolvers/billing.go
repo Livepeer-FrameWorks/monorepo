@@ -1344,7 +1344,7 @@ func (r *Resolver) DoCreateStripeCheckout(ctx context.Context, tierID, billingPe
 	resp, err := r.Clients.Purser.CreateStripeCheckoutSession(ctx, tenantID, tierID, billingPeriod, successURL, cancelURL)
 	if err != nil {
 		r.Logger.WithError(err).WithField("tenant_id", tenantID).Log(gatewayerrors.LogLevel(err), "Failed to create Stripe checkout")
-		return &model.ValidationError{Message: "Failed to create checkout session: " + err.Error()}, nil
+		return billingMutationError(err, "Failed to create checkout session", "", "tier_id"), nil
 	}
 
 	return &model.StripeCheckoutSession{
@@ -1375,7 +1375,7 @@ func (r *Resolver) DoCreateStripeBillingPortal(ctx context.Context, returnURL st
 	resp, err := r.Clients.Purser.CreateStripeBillingPortal(ctx, tenantID, returnURL)
 	if err != nil {
 		r.Logger.WithError(err).WithField("tenant_id", tenantID).Log(gatewayerrors.LogLevel(err), "Failed to create Stripe billing portal")
-		return &model.ValidationError{Message: "Failed to create billing portal: " + err.Error()}, nil
+		return billingMutationError(err, "Failed to create billing portal", "", ""), nil
 	}
 
 	return &model.StripeBillingPortalSession{
@@ -1412,7 +1412,7 @@ func (r *Resolver) DoCreateMollieFirstPayment(ctx context.Context, tierID, metho
 	resp, err := r.Clients.Purser.CreateMollieFirstPayment(ctx, tenantID, tierID, method, redirectURL)
 	if err != nil {
 		r.Logger.WithError(err).WithField("tenant_id", tenantID).Log(gatewayerrors.LogLevel(err), "Failed to create Mollie first payment")
-		return &model.ValidationError{Message: "Failed to create payment: " + err.Error()}, nil
+		return billingMutationError(err, "Failed to create payment", "", "tier_id"), nil
 	}
 
 	return &model.MollieFirstPayment{
@@ -1452,7 +1452,7 @@ func (r *Resolver) DoCreateMollieSubscription(ctx context.Context, tierID, manda
 	resp, err := r.Clients.Purser.CreateMollieSubscription(ctx, tenantID, tierID, mandateID, desc)
 	if err != nil {
 		r.Logger.WithError(err).WithField("tenant_id", tenantID).Log(gatewayerrors.LogLevel(err), "Failed to create Mollie subscription")
-		return &model.ValidationError{Message: "Failed to create subscription: " + err.Error()}, nil
+		return billingMutationError(err, "Failed to create subscription", "", "tier_id"), nil
 	}
 
 	var nextPaymentDate *string
@@ -1818,11 +1818,7 @@ func (r *Resolver) DoPromoteToPaid(ctx context.Context, tierID string) (model.Pr
 	resp, err := r.Clients.Purser.PromoteToPaid(ctx, tenantID, tierID)
 	if err != nil {
 		r.Logger.WithError(err).WithField("tenant_id", tenantID).Log(gatewayerrors.LogLevel(err), "Failed to promote to postpaid")
-		return &model.ValidationError{
-			Message: err.Error(),
-			Code:    ptrStr("PROMOTION_FAILED"),
-			Field:   ptrStr("tier_id"),
-		}, nil
+		return billingMutationError(err, "Could not switch to postpaid billing", "PROMOTION_FAILED", "tier_id"), nil
 	}
 
 	return &model.PromoteToPaidPayload{
@@ -1868,11 +1864,7 @@ func (r *Resolver) DoChangeBillingTier(ctx context.Context, tierID string) (mode
 	resp, err := r.Clients.Purser.ChangeBillingTier(ctx, tenantID, tierID)
 	if err != nil {
 		r.Logger.WithError(err).WithField("tenant_id", tenantID).WithField("tier_id", tierID).Log(gatewayerrors.LogLevel(err), "Failed to change billing tier")
-		return &model.ValidationError{
-			Message: err.Error(),
-			Code:    ptrStr("TIER_CHANGE_FAILED"),
-			Field:   ptrStr("tier_id"),
-		}, nil
+		return billingMutationError(err, "Could not change the plan", "TIER_CHANGE_FAILED", "tier_id"), nil
 	}
 
 	payload := &model.ChangeBillingTierPayload{

@@ -61,7 +61,7 @@ var operations = map[string]operationInfo{
 	"GetArtifactStatesConnection":              {Kind: "query", Since: "v0.3.11"},
 	"GetBalanceTransactionsConnection":         {Kind: "query", Since: "v0.3.11"},
 	"GetBillingDetails":                        {Kind: "query", Since: "v0.3.11"},
-	"GetBillingStatus":                         {Kind: "query", Since: "v0.3.11"},
+	"GetBillingStatus":                         {Kind: "query", Since: "v0.3.14"},
 	"GetBillingTiers":                          {Kind: "query", Since: "v0.3.11"},
 	"GetBufferEventsConnection":                {Kind: "query", Since: "v0.3.11"},
 	"GetCapabilities":                          {Kind: "query", Since: "v0.3.11"},

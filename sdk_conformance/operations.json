@@ -1850,6 +1850,13 @@
               "tierLevel": 1,
               "tierName": "text"
             },
+            "effectiveBasePrice": "text",
+            "freeFallback": {
+              "at": "2026-09-19T14:03:27Z",
+              "providerCancelled": true,
+              "reason": "PAYMENT_FAILED",
+              "stage": "SCHEDULED"
+            },
             "invoicePreview": {
               "amount": "12.50",
               "baseAmount": "12.50",
@@ -1949,10 +1956,18 @@
               "vodDeleted": 1
             },
             "nextBillingDate": "2026-09-19T14:03:27Z",
+            "operatorGrant": {
+              "basePrice": "text",
+              "collection": "text",
+              "expiresAt": "2026-09-19T14:03:27Z",
+              "fallbackTierName": "text",
+              "waiveUsage": true
+            },
             "outstandingAmount": 1.5,
             "paymentMethods": [
               "CARD"
             ],
+            "pendingTierState": "SCHEDULED",
             "recentPayments": [
               {
                 "amount": "12.50",

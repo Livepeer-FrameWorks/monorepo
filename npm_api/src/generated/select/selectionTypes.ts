@@ -238,6 +238,14 @@ export const scalarFields = {
         "country",
         "__typename"
     ],
+    "BillingArrangement": [
+        "basePrice",
+        "waiveUsage",
+        "collection",
+        "expiresAt",
+        "fallbackTierName",
+        "__typename"
+    ],
     "BillingDetails": [
         "email",
         "name",
@@ -268,6 +276,8 @@ export const scalarFields = {
         "trialEndsAt",
         "outstandingAmount",
         "currency",
+        "effectiveBasePrice",
+        "pendingTierState",
         "__typename"
     ],
     "BillingTier": [
@@ -1083,6 +1093,13 @@ export const scalarFields = {
         "totalEvents",
         "overallAvgLatencyMs",
         "overallFailureRate",
+        "__typename"
+    ],
+    "FreeFallback": [
+        "reason",
+        "at",
+        "stage",
+        "providerCancelled",
         "__typename"
     ],
     "GeoBucket": [

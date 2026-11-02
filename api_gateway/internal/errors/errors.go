@@ -181,6 +181,10 @@ func publicGRPCError(err error) (string, map[string]any, bool) {
 				"code":            info.GetReason(),
 				"required_fields": fields,
 			}, true
+		default:
+			if message := strings.TrimSpace(info.GetMetadata()["public_message"]); message != "" && info.GetReason() != "" {
+				return message, map[string]any{"code": info.GetReason()}, true
+			}
 		}
 	}
 	return "", nil, false

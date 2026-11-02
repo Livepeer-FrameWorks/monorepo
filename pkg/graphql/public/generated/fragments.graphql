@@ -581,6 +581,21 @@ fragment BillingStatusDefaultFields on BillingStatus {
       dimensions
     }
   }
+  operatorGrant {
+    basePrice
+    waiveUsage
+    collection
+    expiresAt
+    fallbackTierName
+  }
+  effectiveBasePrice
+  freeFallback {
+    reason
+    at
+    stage
+    providerCancelled
+  }
+  pendingTierState
 }
 
 fragment BillingTierDefaultFields on BillingTier {

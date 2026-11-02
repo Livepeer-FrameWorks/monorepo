@@ -9,13 +9,39 @@ query GetPlatformTenantBilling($id: ID!, $invoicesFirst: Int = 25, $timeRange: T
           billingModel
           status
           tierName
-          trialEndsAt
           nextBillingDate
           outstandingAmount
           overdueInvoices
           prepaidBalanceCents
           currency
           subscribedAt
+        }
+        lifecycle {
+          billingStatus
+          collectionReady
+          collectionProvider
+          effectiveBasePrice
+          operatorGrant {
+            basePrice
+            waiveUsage
+            collection
+            expiresAt
+            fallbackTierName
+          }
+          freeFallback {
+            reason
+            at
+            stage
+            providerCancelled
+          }
+          pendingTierState
+          subscription {
+            pendingTier {
+              displayName
+            }
+            pendingEffectiveAt
+            pendingReason
+          }
         }
         invoices(page: { first: $invoicesFirst }) {
           edges {

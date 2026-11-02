@@ -595,6 +595,15 @@ func (r *artifactStateResolver) ExpiresAt(ctx context.Context, obj *periscopepb.
 	return &t, nil
 }
 
+// ExpiresAt is the resolver for the expiresAt field.
+func (r *billingArrangementResolver) ExpiresAt(ctx context.Context, obj *purserpb.OperatorBillingGrant) (*time.Time, error) {
+	if obj.GetExpiresAt() == nil || !obj.GetExpiresAt().IsValid() {
+		return nil, nil
+	}
+	t := obj.GetExpiresAt().AsTime()
+	return &t, nil
+}
+
 // UpdatedAt is the resolver for the updatedAt field.
 func (r *billingDetailsResolver) UpdatedAt(ctx context.Context, obj *purserpb.BillingDetails) (*time.Time, error) {
 	if obj.UpdatedAt == nil {
@@ -665,6 +674,11 @@ func (r *billingStatusResolver) LiveUsage(ctx context.Context, obj *purserpb.Bil
 // InvoicePreview is the resolver for the invoicePreview field.
 func (r *billingStatusResolver) InvoicePreview(ctx context.Context, obj *purserpb.BillingStatusResponse) (*purserpb.Invoice, error) {
 	return r.DoGetInvoicePreview(ctx)
+}
+
+// PendingTierState is the resolver for the pendingTierState field.
+func (r *billingStatusResolver) PendingTierState(ctx context.Context, obj *purserpb.BillingStatusResponse) (*model.PendingTierState, error) {
+	return resolvers.PendingTierState(obj), nil
 }
 
 // Entitlements is the resolver for the entitlements field.
@@ -1493,6 +1507,25 @@ func (r *federationEventCountResolver) FailureCount(ctx context.Context, obj *pe
 // TotalEvents is the resolver for the totalEvents field.
 func (r *federationSummaryResolver) TotalEvents(ctx context.Context, obj *periscopepb.FederationSummary) (int, error) {
 	return int(obj.TotalEvents), nil
+}
+
+// Reason is the resolver for the reason field.
+func (r *freeFallbackResolver) Reason(ctx context.Context, obj *purserpb.FreeFallbackStatus) (model.FreeFallbackReason, error) {
+	return resolvers.FreeFallbackReason(obj)
+}
+
+// At is the resolver for the at field.
+func (r *freeFallbackResolver) At(ctx context.Context, obj *purserpb.FreeFallbackStatus) (*time.Time, error) {
+	if obj.GetAt() == nil || !obj.GetAt().IsValid() {
+		return nil, fmt.Errorf("free fallback has no date")
+	}
+	t := obj.GetAt().AsTime()
+	return &t, nil
+}
+
+// Stage is the resolver for the stage field.
+func (r *freeFallbackResolver) Stage(ctx context.Context, obj *purserpb.FreeFallbackStatus) (model.FreeFallbackStage, error) {
+	return resolvers.FreeFallbackStage(obj)
 }
 
 // H3Index is the resolver for the h3Index field.
@@ -5878,6 +5911,11 @@ func (r *tenantAdminBillingResolver) Snapshot(ctx context.Context, obj *markers.
 	return r.DoPlatformTenantBillingSnapshot(ctx, obj.TenantID)
 }
 
+// Lifecycle is the resolver for the lifecycle field.
+func (r *tenantAdminBillingResolver) Lifecycle(ctx context.Context, obj *markers.TenantAdminBilling) (*purserpb.BillingStatusResponse, error) {
+	return r.DoPlatformTenantBillingLifecycle(ctx, obj.TenantID)
+}
+
 // Invoices is the resolver for the invoices field.
 func (r *tenantAdminBillingResolver) Invoices(ctx context.Context, obj *markers.TenantAdminBilling, page *model.ConnectionInput) (*model.InvoicesConnection, error) {
 	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
@@ -6662,6 +6700,11 @@ func (r *Resolver) ArtifactEvent() generated.ArtifactEventResolver { return &art
 // ArtifactState returns generated.ArtifactStateResolver implementation.
 func (r *Resolver) ArtifactState() generated.ArtifactStateResolver { return &artifactStateResolver{r} }
 
+// BillingArrangement returns generated.BillingArrangementResolver implementation.
+func (r *Resolver) BillingArrangement() generated.BillingArrangementResolver {
+	return &billingArrangementResolver{r}
+}
+
 // BillingDetails returns generated.BillingDetailsResolver implementation.
 func (r *Resolver) BillingDetails() generated.BillingDetailsResolver {
 	return &billingDetailsResolver{r}
@@ -6743,6 +6786,9 @@ func (r *Resolver) FederationEventCount() generated.FederationEventCountResolver
 func (r *Resolver) FederationSummary() generated.FederationSummaryResolver {
 	return &federationSummaryResolver{r}
 }
+
+// FreeFallback returns generated.FreeFallbackResolver implementation.
+func (r *Resolver) FreeFallback() generated.FreeFallbackResolver { return &freeFallbackResolver{r} }
 
 // GeoBucket returns generated.GeoBucketResolver implementation.
 func (r *Resolver) GeoBucket() generated.GeoBucketResolver { return &geoBucketResolver{r} }
@@ -7124,6 +7170,7 @@ type analyticsUsageResolver struct{ *Resolver }
 type apiTokenCreatedResolver struct{ *Resolver }
 type artifactEventResolver struct{ *Resolver }
 type artifactStateResolver struct{ *Resolver }
+type billingArrangementResolver struct{ *Resolver }
 type billingDetailsResolver struct{ *Resolver }
 type billingStatusResolver struct{ *Resolver }
 type billingTierResolver struct{ *Resolver }
@@ -7144,6 +7191,7 @@ type developerTokenResolver struct{ *Resolver }
 type federationEventResolver struct{ *Resolver }
 type federationEventCountResolver struct{ *Resolver }
 type federationSummaryResolver struct{ *Resolver }
+type freeFallbackResolver struct{ *Resolver }
 type geoBucketResolver struct{ *Resolver }
 type geographicDistributionResolver struct{ *Resolver }
 type infrastructureNodeResolver struct{ *Resolver }

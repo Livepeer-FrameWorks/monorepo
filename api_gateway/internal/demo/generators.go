@@ -656,13 +656,14 @@ func GenerateBillingStatus() *purserpb.BillingStatusResponse {
 			CreatedAt:            timestamppb.New(now.Add(-90 * 24 * time.Hour)),
 			UpdatedAt:            timestamppb.New(now.Add(-7 * 24 * time.Hour)),
 		},
-		BillingStatus:     "active",
-		NextBillingDate:   timestamppb.New(nextBilling),
-		OutstandingAmount: 0.00,
-		Currency:          "EUR",
-		PendingInvoices:   []*purserpb.Invoice{}, // Empty slice
-		RecentPayments:    []*purserpb.Payment{}, // Empty slice
-		PaymentMethods:    []string{"card", "crypto_usdc", "crypto_eth"},
+		BillingStatus:      "active",
+		EffectiveBasePrice: "249.00",
+		NextBillingDate:    timestamppb.New(nextBilling),
+		OutstandingAmount:  0.00,
+		Currency:           "EUR",
+		PendingInvoices:    []*purserpb.Invoice{}, // Empty slice
+		RecentPayments:     []*purserpb.Payment{}, // Empty slice
+		PaymentMethods:     []string{"card", "crypto_usdc", "crypto_eth"},
 	}
 }
 

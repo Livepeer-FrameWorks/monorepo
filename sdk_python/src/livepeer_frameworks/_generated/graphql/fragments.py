@@ -14,6 +14,8 @@ from .enums import (
     DVRChapterMode,
     DVRChapterState,
     EventArtifactKind,
+    FreeFallbackReason,
+    FreeFallbackStage,
     IncidentEventKind,
     IncidentResolution,
     IncidentScope,
@@ -35,6 +37,7 @@ from .enums import (
     NodeStatus,
     PaymentMethod,
     PaymentStatus,
+    PendingTierState,
     PlaybackPolicyType,
     RetentionSource,
     SigningKeyAlgorithm,
@@ -1314,6 +1317,26 @@ class BillingStatusDefault(BaseModel):
     invoice_preview: Optional["BillingStatusDefaultInvoicePreview"] = Field(
         alias="invoicePreview"
     )
+    operator_grant: Optional["BillingStatusDefaultOperatorGrant"] = Field(
+        alias="operatorGrant",
+        description="Billing arrangement FrameWorks set up for this account, such as a trial or a custom price, while it is in force.",
+    )
+    "Billing arrangement FrameWorks set up for this account, such as a trial or a custom price, while it is in force."
+    effective_base_price: str = Field(
+        alias="effectiveBasePrice",
+        description="Monthly base fee in EUR this account pays after any arrangement, as a decimal string.",
+    )
+    "Monthly base fee in EUR this account pays after any arrangement, as a decimal string."
+    free_fallback: Optional["BillingStatusDefaultFreeFallback"] = Field(
+        alias="freeFallback",
+        description="Scheduled move to the Free plan after a failed renewal payment or a cancellation.",
+    )
+    "Scheduled move to the Free plan after a failed renewal payment or a cancellation."
+    pending_tier_state: Optional[PendingTierState] = Field(
+        alias="pendingTierState",
+        description="Progress of subscription.pendingTier while subscription.pendingReason is downgrade.",
+    )
+    "Progress of subscription.pendingTier while subscription.pendingReason is downgrade."
 
 
 class BillingStatusDefaultCurrentTier(BaseModel):
@@ -1457,7 +1480,11 @@ class BillingStatusDefaultSubscription(BaseModel):
         alias="pendingTier"
     )
     pending_effective_at: Optional[datetime] = Field(alias="pendingEffectiveAt")
-    pending_reason: Optional[str] = Field(alias="pendingReason")
+    pending_reason: Optional[str] = Field(
+        alias="pendingReason",
+        description="Why pendingTier is set: downgrade (applies at pendingEffectiveAt; see\nBillingStatus.pendingTierState), tier_upgrade (a paid upgrade being\nconfirmed) or stripe_checkout (a checkout awaiting payment).",
+    )
+    "Why pendingTier is set: downgrade (applies at pendingEffectiveAt; see\nBillingStatus.pendingTierState), tier_upgrade (a paid upgrade being\nconfirmed) or stripe_checkout (a checkout awaiting payment)."
     presentment_currency: Any = Field(
         alias="presentmentCurrency",
         description="Currency the tenant is invoiced and charged in (EUR, USD, GBP), derived from the billing country. The prepaid ledger is always EUR.",
@@ -1832,6 +1859,51 @@ class BillingStatusDefaultInvoicePreviewLineItems(BaseModel):
         description="Bounded pricing dimensions such as codec, rendition, backend, or model."
     )
     "Bounded pricing dimensions such as codec, rendition, backend, or model."
+
+
+class BillingStatusDefaultOperatorGrant(BaseModel):
+    """A billing arrangement FrameWorks set up for an account. Only the terms the
+    account is billed under are shown."""
+
+    base_price: Optional[str] = Field(
+        alias="basePrice",
+        description="Monthly base fee in EUR in place of the plan's, as a decimal string. Null keeps the plan's fee.",
+    )
+    "Monthly base fee in EUR in place of the plan's, as a decimal string. Null keeps the plan's fee."
+    waive_usage: bool = Field(
+        alias="waiveUsage", description="Usage is metered and shown at zero cost."
+    )
+    "Usage is metered and shown at zero cost."
+    collection: str = Field(
+        description="How invoices are collected: provider (Stripe or Mollie) or invoice (FrameWorks sends invoices to pay by bank transfer)."
+    )
+    "How invoices are collected: provider (Stripe or Mollie) or invoice (FrameWorks sends invoices to pay by bank transfer)."
+    expires_at: Optional[datetime] = Field(
+        alias="expiresAt",
+        description="When the arrangement ends. Null runs until FrameWorks ends it.",
+    )
+    "When the arrangement ends. Null runs until FrameWorks ends it."
+    fallback_tier_name: Optional[str] = Field(
+        alias="fallbackTierName",
+        description="Plan the account returns to when the arrangement ends, when it is not the current plan.",
+    )
+    "Plan the account returns to when the arrangement ends, when it is not the current plan."
+
+
+class BillingStatusDefaultFreeFallback(BaseModel):
+    """A scheduled move to the Free plan."""
+
+    reason: FreeFallbackReason
+    at: datetime = Field(
+        description="When the move happens, or happened once stage is MOVED."
+    )
+    "When the move happens, or happened once stage is MOVED."
+    stage: FreeFallbackStage
+    provider_cancelled: bool = Field(
+        alias="providerCancelled",
+        description="The Stripe or Mollie subscription is cancelled, so no renewal follows.",
+    )
+    "The Stripe or Mollie subscription is cancelled, so no renewal follows."
 
 
 class BillingTierDefault(BaseModel):

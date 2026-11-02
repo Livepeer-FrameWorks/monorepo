@@ -842,7 +842,12 @@ class AsyncGraphQLClient(AsyncBaseClient):
         price, without cash refund or spendable balance. Provider or metering
         reconciliation can leave them pending.
         Enterprise purchases and moves to a higher tier with a lower base price require an operator arrangement.
-        Downgrades take effect at the current billing period end."""
+        Downgrades take effect at the current billing period end.
+        A refusal returns ValidationError whose code is one of PENDING_CHECKOUT,
+        PENDING_FREE_FALLBACK, PENDING_UPGRADE, OUTSTANDING_GRANT, ACCOUNT_CLOSED,
+        DOWNGRADE_HELD, PAID_TERM_ENDING, PROVIDER_SUBSCRIPTION_LIVE,
+        TIER_NOT_SELF_SERVICE, INVOICES_OUTSTANDING, COLLECTION_SETUP_REQUIRED or
+        BILLING_PROFILE_REQUIRED, with a message to show the customer."""
         query = gql("""
             mutation ChangeBillingTier($tierId: ID!) {
               changeBillingTier(tierId: $tierId) {
@@ -4251,6 +4256,21 @@ class AsyncGraphQLClient(AsyncBaseClient):
                   dimensions
                 }
               }
+              operatorGrant {
+                basePrice
+                waiveUsage
+                collection
+                expiresAt
+                fallbackTierName
+              }
+              effectiveBasePrice
+              freeFallback {
+                reason
+                at
+                stage
+                providerCancelled
+              }
+              pendingTierState
             }
             """)
         variables: dict[str, object] = {}
