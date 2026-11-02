@@ -1,6 +1,8 @@
 # @livepeer-frameworks/streamcrafter-core
 
-Headless WHIP streaming engine for FrameWorks. Provides `IngestControllerV2`, `WhipClient`, WebCodecs encoder, audio mixing, compositor, and CSS.
+Headless WHIP streaming engine for FrameWorks. Provides `IngestControllerV2`, `WhipClient`, WebCodecs encoder, audio mixing and processing (noise gate, EQ, de-esser, ducking), compositor with scenes, transitions, overlays and media files, and CSS.
+
+> **Beta.** StreamCrafter is on 0.x and its API will change a lot while cloud production and guests are built. Expect breaking changes in minor releases: pin an exact version and read the changelog before you upgrade.
 
 > **Most users should install a wrapper instead of core directly:**
 >

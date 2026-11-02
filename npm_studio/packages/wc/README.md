@@ -2,6 +2,10 @@
 
 Web Components wrapper for StreamCrafter. Registers `<fw-streamcrafter>` and composable sub-elements via Lit — camera/screen capture, scene composition, and WHIP streaming.
 
+> **Beta.** StreamCrafter is on 0.x and its API will change a lot while cloud production and guests are built. Expect breaking changes in minor releases: pin an exact version and read the changelog before you upgrade.
+
+`<fw-streamcrafter>` includes the producer panel (scenes, transitions, layers, logo and text overlays, media files) whenever the compositor runs; turn it off with `show-producer-panel="false"`. It also has Add Media File in the action bar, an Audio section (noise gate, de-esser, EQ, ducking) and a connection health pill while live.
+
 **Docs:** https://logbook.frameworks.network
 
 ## Install
@@ -68,14 +72,15 @@ Notes:
 | `gateway-url`              | `string`  | `""`          | Gateway GraphQL endpoint                          |
 | `stream-key`               | `string`  | `""`          | Stream key (used with `gateway-url`)              |
 | `initial-profile`          | `string`  | `"broadcast"` | `"broadcast"` · `"professional"` · `"conference"` |
-| `enable-compositor`        | `boolean` | `true`        | Enable scene composition                          |
+| `enable-compositor`        | `boolean` | `true`        | Scene composition; `"false"` turns it off         |
+| `show-producer-panel`      | `boolean` | `true`        | Producer panel; `"false"` turns it off            |
 | `auto-start-camera`        | `boolean` | `false`       | Start camera on load                              |
 | `dev-mode`                 | `boolean` | `false`       | Show advanced debug panel                         |
 | `show-settings`            | `boolean` | `false`       | Open settings on load                             |
 | `debug`                    | `boolean` | `false`       | Debug logging                                     |
 | `theme`                    | `string`  | `""`          | Theme preset name                                 |
 | `locale`                   | `string`  | `"en"`        | UI language                                       |
-| `controls`                 | `string`  | `""`          | `"false"` to hide, `"stock"` for minimal          |
+| `controls`                 | `string`  | `""`          | `"false"` renders only the default slot           |
 | `compositor-worker-url`    | `string`  | `""`          | Custom compositor worker URL                      |
 | `encoder-worker-url`       | `string`  | `""`          | Custom encoder worker URL                         |
 | `rtc-transform-worker-url` | `string`  | `""`          | Custom RTC transform worker URL                   |
@@ -131,6 +136,29 @@ studio.destroy();
 Also supports `onStateChange` and `onError` property callbacks.
 
 ## Sub-elements
+
+These bind to the `<fw-streamcrafter>` they sit in, or to the one whose id is in `for`, and render again whenever the studio does:
+
+| Element                     | Description                                                  |
+| --------------------------- | ------------------------------------------------------------ |
+| `<fw-sc-producer-panel>`    | Scenes, layers, overlays and media while the compositor runs |
+| `<fw-sc-overlay-controls>`  | Logo and text overlays of the active scene                   |
+| `<fw-sc-media-controls>`    | Play, pause and loop for media files in the mix              |
+| `<fw-sc-camera-picker>`     | Add Camera, with a list when there is more than one camera   |
+| `<fw-sc-media-button>`      | Add Media File                                               |
+| `<fw-sc-audio-controls>`    | Noise gate, de-esser, EQ and ducking                         |
+| `<fw-sc-meter>`             | Level meter of the mixed audio                               |
+| `<fw-sc-connection-health>` | Good, unstable or poor while live                            |
+
+```html
+<fw-streamcrafter id="studio" whip-url="..." controls="false">
+  <fw-sc-producer-panel></fw-sc-producer-panel>
+  <fw-sc-camera-picker></fw-sc-camera-picker>
+</fw-streamcrafter>
+<fw-sc-meter for="studio"></fw-sc-meter>
+```
+
+These are presentational: set their data through JS properties and handle their events or callbacks.
 
 | Element                  | Description                                          |
 | ------------------------ | ---------------------------------------------------- |

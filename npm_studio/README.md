@@ -5,6 +5,10 @@
 
 Browser-based WHIP streaming SDK for **FrameWorks**. Camera, screen, or multi-source streaming to MistServer WHIP endpoints with WebCodecs encoding, compositor, auto-reconnection, and full customization.
 
+> **Beta.** StreamCrafter is on 0.x and its API will change a lot while cloud production and guests are built. Expect breaking changes in minor releases: pin an exact version and read the package changelog before you upgrade.
+
+The drop-in studios (React, Svelte, Web Components) include a producer panel for scenes, transitions, layers, logo and text overlays, and media files; it is on by default whenever the compositor runs. They also have Add Media File in the action bar, an Audio section with a noise gate, de-esser, EQ and ducking, and a connection health pill while live.
+
 ## Packages
 
 | Package                                     | Description                                                          |
@@ -225,7 +229,7 @@ const isLive = studio.reactiveState.get("streaming");
 | `translations` | `Partial<StudioTranslationStrings>`     | --                  | Custom translation overrides                 |
 | `keyMap`       | `Partial<StudioKeyMap>`                 | --                  | Custom keyboard shortcuts                    |
 | `reconnection` | `Partial<ReconnectionConfig>`           | `{ enabled: true }` | Reconnection settings                        |
-| `audioMixing`  | `boolean`                               | `false`             | Enable Web Audio mixer                       |
+| `audioMixing`  | `boolean`                               | `true`              | Mix audio through the Web Audio mixer        |
 | `compositor`   | `Partial<CompositorConfig>`             | --                  | Compositor configuration                     |
 | `debug`        | `boolean`                               | `false`             | Enable debug logging                         |
 
@@ -263,7 +267,19 @@ Web Audio API mixer for multiple sources with per-source and master volume.
 studio.setSourceVolume("camera-1", 0.8);
 studio.setSourceMuted("screen-1", true);
 studio.masterVolume = 0.5;
+
+// Noise gate, EQ and de-esser on the mix; kept until the mixer runs
+studio.setAudioProcessing({
+  noiseGate: { enabled: true, threshold: -45 },
+  eq: { enabled: true, low: 2, mid: 0, high: -3 },
+  deEsser: { enabled: true },
+});
+
+// Lower other sources while the first camera's microphone picks up sound
+studio.setAudioDucking(true);
 ```
+
+Audio mixing is on by default; pass `audioMixing: false` to skip the mixer.
 
 ### Compositor
 
@@ -394,7 +410,7 @@ studio.t("goLive"); // "Transmitir"
 
 ## Configurable Hotkeys
 
-Hotkeys are wired only in the vanilla `createStreamCrafter()` facade, on the container it mounts into. The React, Svelte, and Web Component drop-ins do not bind them.
+The vanilla `createStreamCrafter()` facade binds all of these on the container it mounts into, and takes `keyMap` overrides. The React, Svelte, and Web Component drop-ins bind `]` and `[` for the next and previous scene while the studio has focus. No hotkey fires while typing into a field.
 
 | Key           | Action                            |
 | ------------- | --------------------------------- |
@@ -431,7 +447,7 @@ createStreamCrafter({
 
 #### Composable (children + sub-components)
 
-When `children` is provided, the default UI is replaced. Sub-components auto-connect via context.
+When `children` is provided, the default UI is replaced. Sub-components connect via context, including the compositor.
 
 ```tsx
 import {
@@ -440,12 +456,16 @@ import {
   StudioMixer,
   StudioActionBar,
   StudioStatusBadge,
+  StudioProducerPanel,
+  StudioAudioControls,
 } from "@livepeer-frameworks/streamcrafter-react";
 
 <StreamCrafter whipUrl="...">
   <StudioStatusBadge />
   <StudioPreview />
   <StudioMixer />
+  <StudioProducerPanel />
+  <StudioAudioControls />
   <StudioActionBar whipUrl="..." />
 </StreamCrafter>;
 ```
@@ -562,9 +582,19 @@ Hides all built-in UI. Access the controller via the `.controller` property.
 </script>
 ```
 
-#### Standalone sub-components
+#### Studio sub-elements
 
-The `fw-sc-*` sub-components are presentational. They declare a `for` attribute, but it does not bind them to a `<fw-streamcrafter>`. Set their data through JS properties and handle their events or callbacks. See [Standalone Sub-Components](https://logbook.frameworks.network/builders/ingest-wc/#standalone-sub-components) for the wiring.
+`<fw-sc-producer-panel>`, `<fw-sc-overlay-controls>`, `<fw-sc-media-controls>`, `<fw-sc-camera-picker>`, `<fw-sc-media-button>`, `<fw-sc-audio-controls>`, `<fw-sc-meter>` and `<fw-sc-connection-health>` bind to the `<fw-streamcrafter>` they sit in, or to the one whose id is in `for`:
+
+```html
+<fw-streamcrafter id="studio" whip-url="..." controls="false">
+  <fw-sc-producer-panel></fw-sc-producer-panel>
+  <fw-sc-camera-picker></fw-sc-camera-picker>
+</fw-streamcrafter>
+<fw-sc-meter for="studio"></fw-sc-meter>
+```
+
+`<fw-sc-volume>`, `<fw-sc-compositor>`, `<fw-sc-scene-switcher>`, `<fw-sc-layer-list>` and `<fw-sc-advanced>` are presentational: set their data through JS properties and handle their events or callbacks. See [Slot-based Composition](https://logbook.frameworks.network/builders/ingest-wc/#slot-based-composition).
 
 ### Vanilla (`createStreamCrafter`)
 
@@ -643,6 +673,21 @@ import type {
 | Web Audio API                | Audio mixing                        |
 
 Tested: Chrome 90+, Firefox 90+, Safari 14.1+, Edge 90+.
+
+## Development
+
+The player and StreamCrafter share one playground, `@livepeer-frameworks/sdk-playground` in `npm_player/playground` (`npm_studio/playground` links to it). It runs the React bindings from source:
+
+```bash
+pnpm install
+pnpm --filter @livepeer-frameworks/sdk-playground dev
+```
+
+The Svelte and Web Component bindings have no playground yet; their tests run with:
+
+```bash
+pnpm --filter '@livepeer-frameworks/streamcrafter-*' test
+```
 
 ## License
 

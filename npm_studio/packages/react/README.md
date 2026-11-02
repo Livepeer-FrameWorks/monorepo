@@ -2,6 +2,10 @@
 
 React wrapper for StreamCrafter: drop-in UI component plus hooks for custom layouts.
 
+> **Beta.** StreamCrafter is on 0.x and its API will change a lot while cloud production and guests are built. Expect breaking changes in minor releases: pin an exact version and read the changelog before you upgrade.
+
+The drop-in `<StreamCrafter>` includes the producer panel (scenes, transitions, layers, logo and text overlays, media files) whenever the compositor runs; turn it off with `showProducerPanel={false}`. It also has Add Media File in the action bar, an Audio section (noise gate, de-esser, EQ, ducking) and a connection health pill while live. Composable children get the compositor from context, so `<StudioProducerPanel />`, `<StudioOverlayControls />`, `<StudioMediaControls />` and `<StudioAudioControls />` need no props.
+
 ## Documentation
 
 Docs: https://logbook.frameworks.network
