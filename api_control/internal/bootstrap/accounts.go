@@ -155,7 +155,9 @@ func validateUser(u AccountUser) error {
 
 // reconcileWallet links an Ethereum wallet to a bootstrap user. It returns
 // "linked", "noop" (already linked to this user) or "conflict" (linked to
-// another user, left untouched).
+// another user, left untouched). Like the rest of the accounts bootstrap it
+// emits no service event, so a link made here records no wallet_linked auth
+// event.
 func reconcileWallet(ctx context.Context, exec DBTX, tenantID, userID, wallet string) (string, error) {
 	address, err := auth.NormalizeEthAddress(wallet)
 	if err != nil {

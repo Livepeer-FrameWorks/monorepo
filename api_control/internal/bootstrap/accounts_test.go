@@ -213,8 +213,14 @@ func TestReconcileAccountsDefersWalletOfAnotherUser(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReconcileAccounts: %v", err)
 	}
-	if len(res.Deferred) != 1 || len(warnings) != 1 {
-		t.Fatalf("a wallet linked elsewhere = %+v warnings=%v, want it deferred with a warning", res, warnings)
+	// The user's own fields and its wallet are reported under separate keys:
+	// the unchanged user is a noop and only its wallet is deferred.
+	key := "quartermaster.system_tenant/ops@example.com"
+	if len(res.Deferred) != 1 || res.Deferred[0] != key+"/wallet" || len(warnings) != 1 {
+		t.Fatalf("a wallet linked elsewhere = %+v warnings=%v, want only %s/wallet deferred with a warning", res, warnings, key)
+	}
+	if len(res.Noop) != 1 || res.Noop[0] != key || len(res.Updated) != 0 || len(res.Created) != 0 {
+		t.Fatalf("a wallet linked elsewhere = %+v, want the unchanged user %s as a noop", res, key)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("unmet: %v (the other user's link must not be touched)", err)
