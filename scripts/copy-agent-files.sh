@@ -27,6 +27,69 @@ if [ ! -d "$SKILLS_DIR" ]; then
   exit 0
 fi
 
+SITE_CONFIG="$REPO_ROOT/packages/site-config/index.ts"
+
+# Reads `export const NAME = "value";` from the shared site config.
+site_const() {
+  sed -n "s/^export const $1 = \"\(.*\)\";$/\1/p" "$SITE_CONFIG"
+}
+
+# Prints a sed script that replaces the docs' %TOKEN% placeholders with the
+# values website_docs/astro.config.mjs substitutes into the rendered pages, so
+# llms-full.txt carries the same URLs as the HTML. Unset VITE_* values fall back
+# to the same defaults as that config; the app and marketing origins fall back
+# to the public sites.
+docs_url_tokens() {
+  gateway="${VITE_GATEWAY_URL:-http://localhost:18000}"
+  gateway_ws="${VITE_GRAPHQL_WS_URL:-$(printf '%s' "${gateway%/}" | sed 's/^http/ws/')/graphql/ws}"
+  ingest="${VITE_STREAMING_INGEST_URL:-http://localhost:8080}"
+  edge="${VITE_STREAMING_EDGE_URL:-http://localhost:8080}"
+  play="${VITE_STREAMING_PLAY_URL:-http://localhost:18008}"
+  app="${VITE_APP_URL:-$(site_const APP_SITE_URL)}"
+  marketing="${VITE_MARKETING_SITE_URL:-$(site_const MARKETING_SITE_URL)}"
+
+  ingest_scheme="${ingest%%://*}"
+  ingest_hostport="${ingest#*://}"
+  ingest_hostport="${ingest_hostport%%/*}"
+  ingest_host="${ingest_hostport%%:*}"
+  ingest_port_part=""
+  case "$ingest_hostport" in *:*) ingest_port_part=":${ingest_hostport#*:}" ;; esac
+
+  edge_scheme="${edge%%://*}"
+  edge_hostport="${edge#*://}"
+  edge_hostport="${edge_hostport%%/*}"
+  edge_host="${edge_hostport%%:*}"
+  edge_port_part=""
+  case "$edge_hostport" in *:*) edge_port_part=":${edge_hostport#*:}" ;; esac
+
+  rtmp_port="$(site_const STREAMING_RTMP_PORT)"
+  srt_port="$(site_const STREAMING_SRT_PORT)"
+  rtmp_path="$(site_const STREAMING_RTMP_PATH)"
+  hls_path="$(site_const STREAMING_HLS_PATH)"
+  webrtc_path="$(site_const STREAMING_WEBRTC_PATH)"
+
+  for pair in \
+    "APP_URL|$app" \
+    "MARKETING_URL|$marketing" \
+    "GATEWAY_URL|$gateway" \
+    "GATEWAY_WS_URL|$gateway_ws" \
+    "API_URL|$gateway" \
+    "RTMP_URL|rtmp://$ingest_host:$rtmp_port$rtmp_path" \
+    "SRT_HOST|$ingest_host:$srt_port" \
+    "WHIP_URL|$ingest_scheme://$ingest_host$ingest_port_part$webrtc_path" \
+    "EDGE_URL|$edge_scheme://$edge_host$edge_port_part" \
+    "PLAY_URL|$play" \
+    "INGEST_URL|$ingest" \
+    "HLS_PATH|$hls_path" \
+    "WEBRTC_PATH|$webrtc_path" \
+    "INGEST_HOSTNAME|$ingest_host" \
+    "SRT_PORT|$srt_port" \
+    "DISCORD_URL|$(site_const DISCORD_URL)" \
+    "GITHUB_URL|$(site_const GITHUB_URL)"; do
+    printf 's|%%%s%%|%s|g;' "${pair%%|*}" "${pair#*|}"
+  done
+}
+
 mkdir -p "$TARGET/.well-known"
 
 # root-level files
@@ -45,6 +108,7 @@ case "$TARGET" in
     ;;
   */website_docs/*)
     printf '\nSitemap: https://logbook.frameworks.network/sitemap-index.xml\n' >> "$TARGET/robots.txt"
+    DOCS_URL_TOKENS="$(docs_url_tokens)"
 
     # Full-content companion to llms.txt (docs site only): the whole docs corpus
     # in one fetch for AI agents, frontmatter stripped, one URL header per page.
@@ -72,8 +136,15 @@ case "$TARGET" in
           fm { next }
           !body && (/^[[:space:]]*$/ || /^import /) { next }
           { body=1; print }
-        ' "$doc" >> "$TARGET/llms-full.txt"
+        ' "$doc" | sed -e "$DOCS_URL_TOKENS" >> "$TARGET/llms-full.txt"
       done
+      # A placeholder added to astro.config.mjs but not to docs_url_tokens
+      # would ship raw; fail the build instead.
+      leftover="$(grep -oE '%[A-Z][A-Z_]*_(URL|HOST|HOSTNAME|PORT|PATH)%' "$TARGET/llms-full.txt" | sort -u | tr '\n' ' ')"
+      if [ -n "$leftover" ]; then
+        echo "error: llms-full.txt has unsubstituted placeholders: $leftover" >&2
+        exit 1
+      fi
     fi
     ;;
   */website_application/*)
