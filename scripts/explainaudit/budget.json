@@ -1521,6 +1521,18 @@
     "read_requests": 1,
     "rows_scanned": 1288
   },
+  "purser:CountHeldConfirmedDowngrades@declared": {
+    "reason": "Alert inventory over tenant_subscriptions, which holds one row per tenant, so the scan is bounded by tenant count rather than backlog. One RPC with the filter pushed to storage, same shape as ListDuePendingDowngradeTenantIDs.",
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 1,
+    "rows_scanned": 3000
+  },
+  "purser:CountHeldConfirmedDowngrades@distributed": {
+    "reason": "Alert inventory over tenant_subscriptions, which holds one row per tenant, so the scan is bounded by tenant count rather than backlog. One RPC with the filter pushed to storage, same shape as ListDuePendingDowngradeTenantIDs.",
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 1,
+    "rows_scanned": 3000
+  },
   "purser:CountMissingMeteringWindows@declared": {
     "flags": ["NESTED_LOOP_UNBATCHED", "READ_AMPLIFICATION", "SEQ_SCAN_LARGE", "SLOW"],
     "read_requests": 11,
@@ -1588,6 +1600,18 @@
     "read_requests": 9,
     "rows_scanned": 52598
   },
+  "purser:EnqueueUnconfirmedTierDowngrades@declared": {
+    "reason": "Service-wide discovery over tenant_subscriptions, which holds one row per tenant, so the scan is bounded by tenant count rather than backlog. One RPC with the filter pushed to storage, same shape as ListDuePendingDowngradeTenantIDs.",
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 1,
+    "rows_scanned": 3000
+  },
+  "purser:EnqueueUnconfirmedTierDowngrades@distributed": {
+    "reason": "Service-wide discovery over tenant_subscriptions, which holds one row per tenant, so the scan is bounded by tenant count rather than backlog. One RPC with the filter pushed to storage, same shape as ListDuePendingDowngradeTenantIDs.",
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 1,
+    "rows_scanned": 3000
+  },
   "purser:ExpireStaleCryptoWallets@declared": {
     "flags": ["SLOW"],
     "read_requests": 6,
@@ -1627,6 +1651,12 @@
     "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
     "read_requests": 1,
     "rows_scanned": 2363
+  },
+  "purser:GetTenantByMollieSubscription@distributed": {
+    "reason": "The fixture skews mollie_subscription_id so 475 rows share one value. A Mollie subscription belongs to one tenant, so production sorts about one row from idx_purser_tenant_subscriptions_mollie.",
+    "flags": ["SORT_FEEDS_LIMIT"],
+    "read_requests": 2,
+    "rows_scanned": 950
   },
   "purser:GetX402TaxSnapshot@declared": {
     "flags": ["INDEX_SCAN_AMPLIFICATION", "READ_AMPLIFICATION"],
