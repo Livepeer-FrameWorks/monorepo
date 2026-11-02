@@ -28,7 +28,7 @@ tests:
               severity: warning
             exp_annotations:
               summary: Tenant closure is awaiting synchronization
-              description: A closed tenant's Quartermaster teardown has failed more than once, or Commodore cannot read its closure queue from its database. Commodore retries every minute and logs each failure as "Finish tenant closure" with tenant_id and the Quartermaster error; frameworks admin tenants get <tenant> shows the closure as retrying with that error. Restore Commodore's connection to Quartermaster, or Commodore's database for read failures; the closure completes on the next retry. Access is already revoked locally, so users stay closed while this fires.
+              description: A closed tenant's Quartermaster teardown has failed more than once, or Commodore cannot read its closure queue from its database. Commodore retries every minute and logs each failure as "Finish tenant closure" with tenant_id and the Quartermaster error. frameworks cluster doctor --deep names the affected tenants; frameworks admin tenants get <tenant> shows the Quartermaster synchronization as failing, with its attempts and that error. Restore Commodore's connection to Quartermaster, or Commodore's database for read failures; the closure completes on the next retry. Access is already revoked locally, so users stay closed while this fires.
       - eval_time: 10m
         groupname: frameworks.rules
         alertname: CommodoreTenantAccountClosureStuck
@@ -71,7 +71,7 @@ tests:
               severity: warning
             exp_annotations:
               summary: Tenant closure is awaiting synchronization
-              description: A closed tenant's Quartermaster teardown has failed more than once, or Commodore cannot read its closure queue from its database. Commodore retries every minute and logs each failure as "Finish tenant closure" with tenant_id and the Quartermaster error; frameworks admin tenants get <tenant> shows the closure as retrying with that error. Restore Commodore's connection to Quartermaster, or Commodore's database for read failures; the closure completes on the next retry. Access is already revoked locally, so users stay closed while this fires.
+              description: A closed tenant's Quartermaster teardown has failed more than once, or Commodore cannot read its closure queue from its database. Commodore retries every minute and logs each failure as "Finish tenant closure" with tenant_id and the Quartermaster error. frameworks cluster doctor --deep names the affected tenants; frameworks admin tenants get <tenant> shows the Quartermaster synchronization as failing, with its attempts and that error. Restore Commodore's connection to Quartermaster, or Commodore's database for read failures; the closure completes on the next retry. Access is already revoked locally, so users stay closed while this fires.
       - eval_time: 19m
         groupname: frameworks.rules
         alertname: CommodoreTenantAccountClosureStuck
@@ -80,7 +80,7 @@ tests:
               severity: warning
             exp_annotations:
               summary: Tenant closure is awaiting synchronization
-              description: A closed tenant's Quartermaster teardown has failed more than once, or Commodore cannot read its closure queue from its database. Commodore retries every minute and logs each failure as "Finish tenant closure" with tenant_id and the Quartermaster error; frameworks admin tenants get <tenant> shows the closure as retrying with that error. Restore Commodore's connection to Quartermaster, or Commodore's database for read failures; the closure completes on the next retry. Access is already revoked locally, so users stay closed while this fires.
+              description: A closed tenant's Quartermaster teardown has failed more than once, or Commodore cannot read its closure queue from its database. Commodore retries every minute and logs each failure as "Finish tenant closure" with tenant_id and the Quartermaster error. frameworks cluster doctor --deep names the affected tenants; frameworks admin tenants get <tenant> shows the Quartermaster synchronization as failing, with its attempts and that error. Restore Commodore's connection to Quartermaster, or Commodore's database for read failures; the closure completes on the next retry. Access is already revoked locally, so users stay closed while this fires.
       - eval_time: 50m
         groupname: frameworks.rules
         alertname: CommodoreTenantAccountClosureStuck
@@ -163,7 +163,7 @@ tests:
               severity: warning
             exp_annotations:
               summary: Account session-stop delivery is awaiting a cell
-              description: "A revoked user, tenant or stream still has an ingest stop that a cell has not accepted, including backoff. Run frameworks cluster diagnose media-authority: its retrying refresh targets on lane ingest_revocation list the tenant and the last error, which names the cell; frameworks admin tenants get <tenant> lists that tenant's pending stops with their cells. Restore that cell, or upgrade its Foghorn if the error is Unimplemented; Commodore retries the stop until the cell accepts it. For a cell removed for good, frameworks admin clusters retire <cluster-id> --reason <reason> settles the stops owed to it. Tenant closure proceeds independently of stop delivery. This alert aggregates all cells: silencing it also hides stops pending on other cells."
+              description: "A revoked user, tenant or stream still has an ingest stop that a cell has not accepted, including backoff. frameworks cluster doctor --deep names the affected tenants. frameworks cluster diagnose media-authority lists the retrying refresh targets on lane ingest_revocation with the tenant and the last error, which names the cell; frameworks admin tenants get <tenant> lists that tenant's pending stops with their cells. Restore that cell, or upgrade its Foghorn if the error is Unimplemented; Commodore retries the stop until the cell accepts it. For a cell removed for good, frameworks admin clusters retire <cluster-id> --reason <reason> settles the stops owed to it. Tenant closure proceeds independently of stop delivery. This alert aggregates all cells: silencing it also hides stops pending on other cells."
       - eval_time: 15m
         groupname: frameworks.rules
         alertname: CommodoreAccountIngestRevocationStuck
