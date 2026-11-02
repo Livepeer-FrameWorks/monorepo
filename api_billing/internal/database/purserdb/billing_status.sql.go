@@ -165,7 +165,8 @@ SELECT
     COALESCE(og.waive_usage, false)::boolean AS grant_waive_usage,
     COALESCE(og.base_price, bt.base_price)::text AS effective_base_price,
     (SELECT grant_deadline.expires_at FROM purser.subscription_operator_grants grant_deadline
-     WHERE grant_deadline.subscription_id = ts.id) AS grant_expires_at
+     WHERE grant_deadline.subscription_id = ts.id
+       AND (grant_deadline.assigned_tier_id IS NOT NULL OR grant_deadline.expires_at > NOW())) AS grant_expires_at
 FROM purser.tenant_subscriptions ts
 JOIN purser.billing_tiers bt ON bt.id = ts.tier_id
 LEFT JOIN purser.subscription_operator_grants og
@@ -208,6 +209,10 @@ type GetTenantAdmissionStatusRow struct {
 	GrantExpiresAt        sql.NullTime   `db:"grant_expires_at" json:"grant_expires_at"`
 }
 
+// grant_expires_at bounds admission only for a grant that recorded its assigned
+// tier, which the expiry sweep must restore. A row without that assignment has
+// nothing to restore once expired: collection readiness alone decides, and the
+// sweep closing it cannot hold admission.
 func (q *Queries) GetTenantAdmissionStatus(ctx context.Context, arg GetTenantAdmissionStatusParams) (GetTenantAdmissionStatusRow, error) {
 	row := q.db.QueryRowContext(ctx, getTenantAdmissionStatus, arg.Currency, arg.TenantID)
 	var i GetTenantAdmissionStatusRow
@@ -257,7 +262,8 @@ SELECT
     COALESCE(og.waive_usage, false)::boolean AS grant_waive_usage,
     COALESCE(og.base_price, bt.base_price)::text AS effective_base_price,
     (SELECT grant_deadline.expires_at FROM purser.subscription_operator_grants grant_deadline
-     WHERE grant_deadline.subscription_id = ts.id) AS grant_expires_at
+     WHERE grant_deadline.subscription_id = ts.id
+       AND (grant_deadline.assigned_tier_id IS NOT NULL OR grant_deadline.expires_at > NOW())) AS grant_expires_at
 FROM purser.tenant_subscriptions ts
 JOIN purser.billing_tiers bt ON bt.id = ts.tier_id
 LEFT JOIN purser.subscription_operator_grants og
@@ -362,6 +368,7 @@ type GetTenantBillingStatusRow struct {
 	GrantExpiresAt        sql.NullTime   `db:"grant_expires_at" json:"grant_expires_at"`
 }
 
+// grant_expires_at follows GetTenantAdmissionStatus.
 func (q *Queries) GetTenantBillingStatus(ctx context.Context, arg GetTenantBillingStatusParams) (GetTenantBillingStatusRow, error) {
 	row := q.db.QueryRowContext(ctx, getTenantBillingStatus,
 		arg.Currency,

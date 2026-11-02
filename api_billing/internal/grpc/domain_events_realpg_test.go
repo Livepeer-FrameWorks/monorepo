@@ -252,15 +252,16 @@ func TestPurserDomainEventOutbox_RealPG(t *testing.T) { //nolint:funlen // One d
 		if _, err := createSubscription(t, tenantID); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := server.CancelSubscription(apiTokenCtx, &purserpb.CancelSubscriptionRequest{TenantId: tenantID}); err != nil {
+		email := "changed@example.com"
+		if _, err := server.UpdateSubscription(serviceTestContext(), &purserpb.UpdateSubscriptionRequest{TenantId: tenantID, BillingEmail: &email}); err != nil {
 			t.Fatal(err)
 		}
 		rows := purserDomainRows(t, db, tenantID)
 		if len(rows) != 2 || rows[0].aggregateID != rows[1].aggregateID || rows[1].eventType != "billing.subscription_updated" {
 			t.Fatalf("domain rows = %+v, want created then updated for one subscription", rows)
 		}
-		if legacy := purserLegacyEventIDs(t, db, tenantID, "subscription_canceled"); len(legacy) != 1 || legacy[0] != rows[1].eventID {
-			t.Fatalf("legacy subscription_canceled ids = %v, want %s", legacy, rows[1].eventID)
+		if legacy := purserLegacyEventIDs(t, db, tenantID, "subscription_updated"); len(legacy) != 1 || legacy[0] != rows[1].eventID {
+			t.Fatalf("legacy subscription_updated ids = %v, want %s", legacy, rows[1].eventID)
 		}
 
 		failing := &purserRecordingPublisher{failIDs: map[string]bool{rows[0].eventID: true}}

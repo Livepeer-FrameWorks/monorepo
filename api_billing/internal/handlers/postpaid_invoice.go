@@ -464,6 +464,12 @@ func PrepareProviderBillingBoundary(ctx context.Context, db *sql.DB, logger logg
 	return closing, nil
 }
 
+// prepareAcceptedProviderBoundary closes a phase whose paid provider change an
+// operator accepted on the usage recorded so far, without complete metering.
+func prepareAcceptedProviderBoundary(ctx context.Context, db *sql.DB, logger logging.Logger, svc *Service, tenantID string, at time.Time) (*PostpaidPhaseClose, error) {
+	return preparePostpaidPhaseClose(ctx, db, logger, svc, tenantID, at, false, false)
+}
+
 // PrepareFreeFallbackBoundary closes at most one stored monthly period. The
 // final partial period ends at cutoff; complete months keep separate allowances.
 func PrepareFreeFallbackBoundary(ctx context.Context, db *sql.DB, logger logging.Logger, svc *Service, tenantID string, cutoff time.Time) (*PostpaidPhaseClose, bool, error) {

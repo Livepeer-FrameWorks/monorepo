@@ -191,6 +191,10 @@ handles balances and credits. An obsolete fallback can be recovered with
 `grant revoke --tier <active-tier>` or an explicit `set-tier`; both close the
 expired grant at its deadline.
 
+A grant with no recorded assigned tier, which the sweep has nothing to restore
+for, stops applying at its deadline without denying the tenant. Collection
+readiness decides admission, including while its closing boundary is refused.
+
 An expired grant awaiting reconciliation must be ended with `grant revoke
 --tier` or `set-tier` before setting another grant. A rejected replacement
 leaves the original grant and billing phase unchanged. Cancelling a
@@ -236,7 +240,9 @@ confirmation. It cancels a request only after confirming it was not applied;
 otherwise it reconciles the accepted purchase. A Stripe purchase already applied
 by the provider still waits for complete usage metering before its local billing
 boundary can finish. Recovery does not bypass that requirement or start another
-provider purchase. Recovery retains the operator identity and reason, and reports the
+provider purchase, unless you pass `--waive-metering` on a purchase the provider
+has applied: the old phase then closes on the usage recorded so far, and the waiver
+is audited with your identity and reason. Recovery retains the operator identity and reason, and reports the
 actual durable state. Use `recovery list` for the purchase UUID and retry errors.
 
 A suspended tenant's session-stop request is queued with its suspension. Partial

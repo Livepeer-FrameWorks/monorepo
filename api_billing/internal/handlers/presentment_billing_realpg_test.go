@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -62,6 +63,7 @@ type recordedProviderRequest struct {
 	query          url.Values
 	form           url.Values
 	idempotencyKey string
+	body           []byte
 }
 
 type providerFixture struct {
@@ -73,7 +75,11 @@ type providerFixture struct {
 
 func (f *providerFixture) handle(w http.ResponseWriter, r *http.Request) {
 	_ = r.ParseForm()
-	request := recordedProviderRequest{method: r.Method, path: r.URL.Path, query: r.URL.Query(), form: r.PostForm, idempotencyKey: r.Header.Get("Idempotency-Key")}
+	var raw []byte
+	if r.Body != nil {
+		raw, _ = io.ReadAll(r.Body)
+	}
+	request := recordedProviderRequest{method: r.Method, path: r.URL.Path, query: r.URL.Query(), form: r.PostForm, idempotencyKey: r.Header.Get("Idempotency-Key"), body: raw}
 	f.mu.Lock()
 	f.requests = append(f.requests, request)
 	route := f.routes[r.Method+" "+r.URL.Path]

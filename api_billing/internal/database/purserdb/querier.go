@@ -48,6 +48,8 @@ type Querier interface {
 	// preserve the correction after processed queue retention. Root locking orders
 	// this with accrual creation; cumulative targets make replay exact.
 	ApplyCompensatedStripeInvoiceCredit(ctx context.Context, arg ApplyCompensatedStripeInvoiceCreditParams) error
+	// A live provider subscription must confirm the target first, so the local tier
+	// and the next provider charge cannot disagree.
 	ApplyPendingDowngradeTier(ctx context.Context, arg ApplyPendingDowngradeTierParams) (int64, error)
 	ApplyTierUpgradePeriod(ctx context.Context, arg ApplyTierUpgradePeriodParams) (int64, error)
 	AssignTenantSubscriptionTier(ctx context.Context, arg AssignTenantSubscriptionTierParams) (int64, error)
@@ -79,7 +81,7 @@ type Querier interface {
 	// reports no end event, so the date is set here.
 	CancelLocalMollieSubscription(ctx context.Context, arg CancelLocalMollieSubscriptionParams) error
 	CancelPurserInvoicedClusterSubscription(ctx context.Context, arg CancelPurserInvoicedClusterSubscriptionParams) (int64, error)
-	CancelTenantSubscriptions(ctx context.Context, tenantID string) (int64, error)
+	CancelTenantTierDowngrade(ctx context.Context, tenantID string) (int64, error)
 	CheckoutAlreadySettled(ctx context.Context, arg CheckoutAlreadySettledParams) (bool, error)
 	CheckoutReceiptBound(ctx context.Context, arg CheckoutReceiptBoundParams) (bool, error)
 	ClaimBillingEventOutboxCandidates(ctx context.Context, arg ClaimBillingEventOutboxCandidatesParams) ([]ClaimBillingEventOutboxCandidatesRow, error)
@@ -143,6 +145,9 @@ type Querier interface {
 	CompleteX402Mutation(ctx context.Context, arg CompleteX402MutationParams) (int64, error)
 	CompleteX402MutationResult(ctx context.Context, arg CompleteX402MutationResultParams) (int64, error)
 	ConfirmCryptoInvoicePayment(ctx context.Context, arg ConfirmCryptoInvoicePaymentParams) (ConfirmCryptoInvoicePaymentRow, error)
+	// The provider's paid term can already extend past a late confirmation; that
+	// term keeps its tier, so the effective time never precedes it.
+	ConfirmProviderTier(ctx context.Context, arg ConfirmProviderTierParams) error
 	ConfirmX402PaymentQuoteForNonce(ctx context.Context, arg ConfirmX402PaymentQuoteForNonceParams) error
 	ConfirmX402Settlement(ctx context.Context, arg ConfirmX402SettlementParams) error
 	ConfirmX402SettlementAttempt(ctx context.Context, arg ConfirmX402SettlementAttemptParams) error
@@ -196,6 +201,9 @@ type Querier interface {
 	EnqueueInvoiceEmail(ctx context.Context, arg EnqueueInvoiceEmailParams) error
 	EnqueueMediaAuthorityRefresh(ctx context.Context, arg EnqueueMediaAuthorityRefreshParams) (int64, error)
 	EnqueuePrepaidStatementEmail(ctx context.Context, arg EnqueuePrepaidStatementEmailParams) error
+	// One row per tenant: the worker reads the latest desired tier, so a re-point
+	// wakes the same step instead of queueing a stale target.
+	EnqueueProviderTierSync(ctx context.Context, tenantID string) error
 	EnqueueProviderWebhook(ctx context.Context, arg EnqueueProviderWebhookParams) error
 	// Provider acceptance is distinct from confirmed bank settlement.
 	EnqueueRefundSettlement(ctx context.Context, arg EnqueueRefundSettlementParams) error
@@ -203,6 +211,10 @@ type Querier interface {
 	EnqueueSuspendedTenantStop(ctx context.Context, tenantID string) error
 	EnqueueTenantBillingClosure(ctx context.Context, tenantID string) error
 	EnqueueTierUpgrade(ctx context.Context, arg EnqueueTierUpgradeParams) error
+	// Service-wide discovery gives every unconfirmed downgrade durable work. A move
+	// to Free has nothing to do until its provider-stop lead begins, which is what
+	// wakes it. Tenant filtering would strand those subscriptions.
+	EnqueueUnconfirmedTierDowngrades(ctx context.Context, freeStopLeadSeconds int64) error
 	// Service-wide discovery owns crash recovery and read-only historical delivery review.
 	EnqueueUnresolvedCheckoutRecovery(ctx context.Context) error
 	EnsureBillingCollectionBalance(ctx context.Context, arg EnsureBillingCollectionBalanceParams) error
@@ -271,7 +283,6 @@ type Querier interface {
 	// Missing or conflicting bindings cannot prove a cancelled collector ended.
 	GetBoundMollieSubscriptionCustomer(ctx context.Context, arg GetBoundMollieSubscriptionCustomerParams) (string, error)
 	GetCachedVATValidation(ctx context.Context, arg GetCachedVATValidationParams) (bool, error)
-	GetCancelableSubscriptionID(ctx context.Context, tenantID string) (uuid.UUID, error)
 	GetCanonicalPromotedSubscription(ctx context.Context, arg GetCanonicalPromotedSubscriptionParams) (GetCanonicalPromotedSubscriptionRow, error)
 	GetCanonicalSubscriptionTier(ctx context.Context, tenantID string) (GetCanonicalSubscriptionTierRow, error)
 	GetClusterOwnerLedgerState(ctx context.Context, ownerID string) (GetClusterOwnerLedgerStateRow, error)
@@ -411,6 +422,9 @@ type Querier interface {
 	// Whether a Stripe or Mollie subscription bills the tier's base fee on the
 	// provider's side for this subscription.
 	GetProviderSubscriptionState(ctx context.Context, tenantID string) (GetProviderSubscriptionStateRow, error)
+	// The tier the recurring provider subscription must charge next: a scheduled
+	// downgrade's target, otherwise the current tier.
+	GetProviderTierTarget(ctx context.Context, tenantID string) (GetProviderTierTargetRow, error)
 	// Local invoice coordinates can advance while native cancellation evidence is
 	// retained; the cancellation identity and deadline fence each prepared close.
 	GetRetainedProviderAssignment(ctx context.Context, tenantID string) (GetRetainedProviderAssignmentRow, error)
@@ -428,6 +442,7 @@ type Querier interface {
 	GetStripeInvoiceCardPayment(ctx context.Context, arg GetStripeInvoiceCardPaymentParams) (GetStripeInvoiceCardPaymentRow, error)
 	GetStripePaymentIntentForCharge(ctx context.Context, chargeID string) (string, error)
 	GetStripePaymentMappingByIntent(ctx context.Context, paymentIntentID sql.NullString) (GetStripePaymentMappingByIntentRow, error)
+	GetStripeRenewalTierFence(ctx context.Context, tenantID string) (GetStripeRenewalTierFenceRow, error)
 	GetStripeTierCheckoutConfig(ctx context.Context, arg GetStripeTierCheckoutConfigParams) (GetStripeTierCheckoutConfigRow, error)
 	// Subscription events preceding a paid price reset cannot restore its old tier or status.
 	GetStripeUpgradeBoundary(ctx context.Context, arg GetStripeUpgradeBoundaryParams) (GetStripeUpgradeBoundaryRow, error)
@@ -449,6 +464,10 @@ type Querier interface {
 	// The tier and billing model of the tenant's subscription, which an operator
 	// grant applies to.
 	GetSubscriptionTierForGrant(ctx context.Context, tenantID string) (GetSubscriptionTierForGrantRow, error)
+	// grant_expires_at bounds admission only for a grant that recorded its assigned
+	// tier, which the expiry sweep must restore. A row without that assignment has
+	// nothing to restore once expired: collection readiness alone decides, and the
+	// sweep closing it cannot hold admission.
 	GetTenantAdmissionStatus(ctx context.Context, arg GetTenantAdmissionStatusParams) (GetTenantAdmissionStatusRow, error)
 	GetTenantBillingClosure(ctx context.Context, tenantID string) (GetTenantBillingClosureRow, error)
 	GetTenantBillingDetails(ctx context.Context, tenantID string) (GetTenantBillingDetailsRow, error)
@@ -456,6 +475,7 @@ type Querier interface {
 	// subscription row is locked so the changed-field list matches the write.
 	GetTenantBillingDetailsForUpdate(ctx context.Context, tenantID string) (GetTenantBillingDetailsForUpdateRow, error)
 	GetTenantBillingEmail(ctx context.Context, tenantID string) (sql.NullString, error)
+	// grant_expires_at follows GetTenantAdmissionStatus.
 	GetTenantBillingStatus(ctx context.Context, arg GetTenantBillingStatusParams) (GetTenantBillingStatusRow, error)
 	GetTenantByMollieSubscription(ctx context.Context, mollieSubscriptionID sql.NullString) (string, error)
 	GetTenantByStripeCustomer(ctx context.Context, stripeCustomerID sql.NullString) (string, error)
@@ -1009,6 +1029,7 @@ type Querier interface {
 	UsageDocumentStartsEarlierInMonth(ctx context.Context, arg UsageDocumentStartsEarlierInMonthParams) (bool, error)
 	UsageReportExists(ctx context.Context, reportID string) (bool, error)
 	WaitFreeFallbackSettlement(ctx context.Context, arg WaitFreeFallbackSettlementParams) error
+	WaiveTierUpgradeMetering(ctx context.Context, arg WaiveTierUpgradeMeteringParams) (int64, error)
 	// A provider can reverse a chargeback after an earlier bank check completed.
 	// Authenticated provider-payment routing selects the existing scoped work.
 	WakeRefundSettlementOwner(ctx context.Context, arg WakeRefundSettlementOwnerParams) error

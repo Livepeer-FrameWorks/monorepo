@@ -182,6 +182,9 @@ func (s *Service) closeTenantBilling(ctx context.Context, tenantID string) error
 		if _, err := prepaid.CommitTx(ctx, tx); err != nil {
 			return err
 		}
+		if err := WriteOffCollectionCarryTx(ctx, tq, tenantID); err != nil {
+			return err
+		}
 		if err := tq.CancelClosedTenantClusterSubscriptions(ctx, purserdb.CancelClosedTenantClusterSubscriptionsParams{TenantID: tenantID, ClosedAt: closure.ClosedAt}); err != nil {
 			return err
 		}
@@ -203,6 +206,19 @@ func (s *Service) closeTenantBilling(ctx context.Context, tenantID string) error
 		return s.collectClosedTenantInvoices(ctx, tenantID)
 	}
 	return commitErr
+}
+
+// WriteOffCollectionCarryTx records the sub-minimum balance no later invoice can
+// collect, then clears it. Call in the transaction that commits the final invoice,
+// so the amount that invoice deferred is included.
+func WriteOffCollectionCarryTx(ctx context.Context, q *purserdb.Queries, tenantID string) error {
+	if _, err := q.RecordAccountClosureCollectionWriteoffs(ctx, tenantID); err != nil {
+		return fmt.Errorf("record collection balance writeoff: %w", err)
+	}
+	if _, err := q.ClearAccountClosureCollectionBalances(ctx, tenantID); err != nil {
+		return fmt.Errorf("clear written-off collection balance: %w", err)
+	}
+	return nil
 }
 
 // queueClosedTenantStripeSubscription records a late provider identity under the

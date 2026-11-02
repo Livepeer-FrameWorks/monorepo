@@ -2678,6 +2678,8 @@ func (jm *JobManager) chargeMollieOverage(ctx context.Context, tenantID, invoice
 // reconcile + cache invalidation, then clear the pending marker. If reconcile
 // fails after the tier flips, the tenant temporarily has extra cluster access
 // while already on the cheaper tier — preferable to losing paid entitlements.
+// The flip waits for a live provider subscription to confirm the target, so
+// the next provider charge and the local tier always agree.
 func (jm *JobManager) applyPendingDowngrade(ctx context.Context, tenantID string) {
 	queries := purserdb.New(jm.db)
 	pending, err := queries.GetPendingDowngrade(ctx, tenantID)
@@ -2735,8 +2737,10 @@ func (jm *JobManager) applyPendingDowngrade(ctx context.Context, tenantID string
 		return
 	}
 	if rows == 0 {
-		// Race: pending_tier_id changed since we read it. Next tick handles
-		// the new state.
+		// The pending target changed since the read, or a live provider has not
+		// confirmed it. Its durable provider step alerts through the inbox while
+		// stalled, and the paid tier stays until a later tick.
+		jm.logger.WithFields(logging.Fields{"tenant_id": tenantID, "pending_tier_id": stagedTarget}).Warn("Pending tier downgrade held; awaiting provider confirmation or a re-staged target")
 		return
 	}
 

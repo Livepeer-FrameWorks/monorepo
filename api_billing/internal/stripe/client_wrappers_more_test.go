@@ -90,43 +90,6 @@ func TestCancelSubscriptionImmediately(t *testing.T) {
 	}
 }
 
-func TestUpdateSubscription(t *testing.T) {
-	// Get then Update both hit the backend; the subscription needs at least one
-	// item for the price swap to target.
-	be := &subBackend{sub: &stripe.Subscription{
-		ID: "sub_1",
-		Items: &stripe.SubscriptionItemList{
-			Data: []*stripe.SubscriptionItem{{ID: "si_1"}},
-		},
-	}}
-	installBackend(t, be)
-
-	got, err := newStripeClient().UpdateSubscription(context.Background(), "sub_1", "price_new")
-	if err != nil {
-		t.Fatalf("UpdateSubscription: %v", err)
-	}
-	if got.ID != "sub_1" {
-		t.Fatalf("got %q, want sub_1", got.ID)
-	}
-	if be.calls < 2 {
-		t.Fatalf("expected a Get + Update (>=2 calls), got %d", be.calls)
-	}
-}
-
-func TestUpdateSubscriptionNoItems(t *testing.T) {
-	// Non-nil but empty item list exercises the intended "no items" guard.
-	// (A nil sub.Items would nil-deref at client.go:404 — real Stripe always
-	// returns a populated Items list, so that path is unguarded by design.)
-	installBackend(t, &subBackend{sub: &stripe.Subscription{
-		ID:    "sub_1",
-		Items: &stripe.SubscriptionItemList{Data: []*stripe.SubscriptionItem{}},
-	}})
-	_, err := newStripeClient().UpdateSubscription(context.Background(), "sub_1", "price_new")
-	if err == nil {
-		t.Fatal("subscription with no items should error")
-	}
-}
-
 func TestCreateBillingPortalSession(t *testing.T) {
 	installBackend(t, &subBackend{portal: &stripe.BillingPortalSession{URL: "https://portal.example"}})
 	sess, err := newStripeClient().CreateBillingPortalSession(context.Background(), "cus_1", "https://return")

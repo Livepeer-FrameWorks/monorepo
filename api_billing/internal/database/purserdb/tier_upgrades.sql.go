@@ -130,7 +130,8 @@ const getTierUpgrade = `-- name: GetTierUpgrade :one
 SELECT id::text, tenant_id::text, old_tier_id::text, tier_id::text, actor_id,
     old_period_start, old_period_end, requested_at, provider, collection_provider, customer_id,
     provider_subscription_id, stripe_price_id, old_base_cents, base_cents,
-    state, provider_receipt, recovery_requested_at, recovery_actor_id, recovery_reason
+    state, provider_receipt, recovery_requested_at, recovery_actor_id, recovery_reason,
+    metering_waived_at, metering_waiver_actor_id
 FROM purser.subscription_tier_upgrades
 WHERE tenant_id = $1::text::uuid AND id = $2::text::uuid
 FOR UPDATE
@@ -162,6 +163,8 @@ type GetTierUpgradeRow struct {
 	RecoveryRequestedAt    sql.NullTime    `db:"recovery_requested_at" json:"recovery_requested_at"`
 	RecoveryActorID        sql.NullString  `db:"recovery_actor_id" json:"recovery_actor_id"`
 	RecoveryReason         sql.NullString  `db:"recovery_reason" json:"recovery_reason"`
+	MeteringWaivedAt       sql.NullTime    `db:"metering_waived_at" json:"metering_waived_at"`
+	MeteringWaiverActorID  sql.NullString  `db:"metering_waiver_actor_id" json:"metering_waiver_actor_id"`
 }
 
 func (q *Queries) GetTierUpgrade(ctx context.Context, arg GetTierUpgradeParams) (GetTierUpgradeRow, error) {
@@ -188,6 +191,8 @@ func (q *Queries) GetTierUpgrade(ctx context.Context, arg GetTierUpgradeParams) 
 		&i.RecoveryRequestedAt,
 		&i.RecoveryActorID,
 		&i.RecoveryReason,
+		&i.MeteringWaivedAt,
+		&i.MeteringWaiverActorID,
 	)
 	return i, err
 }
@@ -389,4 +394,32 @@ type StageTierUpgradeParams struct {
 func (q *Queries) StageTierUpgrade(ctx context.Context, arg StageTierUpgradeParams) error {
 	_, err := q.db.ExecContext(ctx, stageTierUpgrade, arg.TierID, arg.RequestedAt, arg.TenantID)
 	return err
+}
+
+const waiveTierUpgradeMetering = `-- name: WaiveTierUpgradeMetering :execrows
+UPDATE purser.subscription_tier_upgrades
+SET metering_waived_at = NOW(), metering_waiver_actor_id = $1::text,
+    metering_waiver_reason = $2::text, updated_at = NOW()
+WHERE tenant_id = $3::text::uuid AND id = $4::text::uuid
+    AND state = 'provider_applied' AND metering_waived_at IS NULL
+`
+
+type WaiveTierUpgradeMeteringParams struct {
+	ActorID  string `db:"actor_id" json:"actor_id"`
+	Reason   string `db:"reason" json:"reason"`
+	TenantID string `db:"tenant_id" json:"tenant_id"`
+	ID       string `db:"id" json:"id"`
+}
+
+func (q *Queries) WaiveTierUpgradeMetering(ctx context.Context, arg WaiveTierUpgradeMeteringParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, waiveTierUpgradeMetering,
+		arg.ActorID,
+		arg.Reason,
+		arg.TenantID,
+		arg.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }

@@ -154,31 +154,6 @@ func TestSubscriptionLifecycleRepository_RealPG(t *testing.T) { //nolint:funlen 
 		t.Fatalf("updated subscription = %+v", updated)
 	}
 
-	if _, err := db.ExecContext(ctx, `
-		INSERT INTO purser.billing_collection_balances (tenant_id, currency, balance_cents)
-		VALUES ($1, 'EUR', 73)
-	`, tenantID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := server.CancelSubscription(ctx, &purserpb.CancelSubscriptionRequest{TenantId: tenantID}); err != nil {
-		t.Fatal(err)
-	}
-	var subscriptionStatus string
-	var balance, writeoff int64
-	var eventCount int
-	if err := db.QueryRowContext(ctx, `
-		SELECT ts.status, b.balance_cents,
-		       (SELECT amount_cents FROM purser.billing_collection_writeoffs WHERE tenant_id = $1),
-		       (SELECT COUNT(*) FROM purser.billing_event_outbox WHERE tenant_id = $1)
-		FROM purser.tenant_subscriptions ts
-		JOIN purser.billing_collection_balances b ON b.tenant_id = ts.tenant_id
-		WHERE ts.tenant_id = $1
-	`, tenantID).Scan(&subscriptionStatus, &balance, &writeoff, &eventCount); err != nil {
-		t.Fatal(err)
-	}
-	if subscriptionStatus != "cancelled" || balance != 0 || writeoff != 73 || eventCount != 3 {
-		t.Fatalf("cancel state = %q balance=%d writeoff=%d events=%d", subscriptionStatus, balance, writeoff, eventCount)
-	}
 }
 
 func assertDefaultSubscriptionPeriods(t *testing.T, db *sql.DB, tierID, model string) {

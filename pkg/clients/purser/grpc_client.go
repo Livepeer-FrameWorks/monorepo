@@ -284,14 +284,6 @@ func (c *GRPCClient) UpdateSubscription(ctx context.Context, req *purserpb.Updat
 	return c.subscription.UpdateSubscription(ctx, req)
 }
 
-// CancelSubscription cancels a subscription
-func (c *GRPCClient) CancelSubscription(ctx context.Context, tenantID string) error {
-	_, err := c.subscription.CancelSubscription(ctx, &purserpb.CancelSubscriptionRequest{
-		TenantId: tenantID,
-	})
-	return err
-}
-
 // ============================================================================
 // INVOICE OPERATIONS
 // ============================================================================

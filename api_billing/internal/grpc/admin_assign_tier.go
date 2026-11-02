@@ -406,6 +406,12 @@ func (s *PurserServer) adminAssignTierOnce(ctx context.Context, tenantID, tierNa
 			}); err != nil {
 				return txStatusErrorf(err, codes.Internal, "assign subscription tier: %v", err)
 			}
+			// The assignment replaced the downgrade the provider may already bill.
+			if pricing.PendingReason.String == "downgrade" && retainedNative && s.billing != nil {
+				if err = s.billing.RequestProviderTierSyncTx(ctx, tx, tenantID); err != nil {
+					return txStatusErrorf(err, codes.Internal, "queue provider tier change: %v", err)
+				}
+			}
 		}
 		if model == "prepaid" {
 			if _, err = queries.EnsureRuntimePrepaidBalance(ctx, purserdb.EnsureRuntimePrepaidBalanceParams{

@@ -53,7 +53,6 @@ service SubscriptionService {
   rpc GetSubscription(GetSubscriptionRequest) returns (GetSubscriptionResponse);
   rpc CreateSubscription(CreateSubscriptionRequest) returns (TenantSubscription);
   rpc UpdateSubscription(UpdateSubscriptionRequest) returns (TenantSubscription);
-  rpc CancelSubscription(CancelSubscriptionRequest) returns (google.protobuf.Empty);
 
   // ===== BILLING DETAILS MANAGEMENT =====
   // Get billing details for a tenant (company, VAT, address)
@@ -568,10 +567,6 @@ message UpdateSubscriptionRequest {
   map<string, string> entitlement_overrides = 12;
   bool clear_pricing_overrides = 13;
   bool clear_entitlement_overrides = 14;
-}
-
-message CancelSubscriptionRequest {
-  string tenant_id = 1;
 }
 
 // ============================================================================
@@ -2214,6 +2209,9 @@ message AdminRecoverTierUpgradeRequest {
   bool confirmed = 3;
   // Required on confirmation and retained with the first recovery request.
   string reason = 4;
+  // On confirmation, closes a provider-applied purchase on recorded usage
+  // instead of waiting for complete metering. Refused in any other state.
+  bool waive_metering = 5;
 }
 
 // AdminRecoverTierUpgradeResponse reports the durable purchase and recovery state.
@@ -2232,4 +2230,6 @@ message AdminRecoverTierUpgradeResponse {
   string reason = 6;
   // Human-readable preview or current reconciliation outcome.
   string detail = 7;
+  // Operator who waived complete metering, empty without a waiver.
+  string metering_waived_by = 8;
 }

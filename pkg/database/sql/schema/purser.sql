@@ -637,6 +637,12 @@ CREATE TABLE IF NOT EXISTS purser.tenant_subscriptions (
     pending_tier_id UUID REFERENCES purser.billing_tiers(id),
     pending_effective_at TIMESTAMPTZ,
     pending_reason VARCHAR(50),
+    -- The downgrade target the recurring provider subscription has confirmed.
+    -- A provider-billed downgrade flips tier_id only once this matches.
+    pending_provider_tier_id UUID,
+    -- When Purser last confirmed a tier on the provider subscription. Stripe
+    -- events at or before it cannot move tier_id.
+    provider_tier_changed_at TIMESTAMPTZ,
 
     -- ===== MOVE TO FREE =====
     -- Set when a provider subscription ends: a payment failure gets a grace
@@ -3654,6 +3660,10 @@ CREATE TABLE IF NOT EXISTS purser.subscription_tier_upgrades (
     recovery_requested_at TIMESTAMPTZ,
     recovery_actor_id TEXT,
     recovery_reason TEXT,
+    -- Set by an explicit operator waiver on a provider-applied purchase.
+    metering_waived_at TIMESTAMPTZ,
+    metering_waiver_actor_id TEXT,
+    metering_waiver_reason TEXT,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT chk_tier_upgrade_state CHECK (state IN ('requested','provider_applied','pricing_applied','completed','cancelled')),
     CONSTRAINT chk_tier_upgrade_provider CHECK (provider IN ('stripe','mollie','advance','invoice')),

@@ -66,3 +66,24 @@ func NextMonthlyDateBoundary(at time.Time) time.Time {
 	}
 	return boundary
 }
+
+// ProviderTierRequest names the recurring price a provider subscription must
+// charge from its next renewal. The current paid term is not repriced.
+type ProviderTierRequest struct {
+	TenantID       string
+	TierID         string
+	CustomerID     string
+	SubscriptionID string
+	PriceID        string
+	BaseCents      int64
+}
+
+// ProviderTierReceipt reports the provider's state after a tier change.
+type ProviderTierReceipt struct {
+	// PaidThrough is the end of the term already collected at the provider.
+	PaidThrough time.Time
+}
+
+// ErrProviderTierRefused means a subscription cannot be moved to the requested
+// tier by changing its recurring price.
+var ErrProviderTierRefused = errors.New("the payment provider subscription cannot move to this tier")

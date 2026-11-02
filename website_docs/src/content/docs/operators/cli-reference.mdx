@@ -2370,8 +2370,13 @@ Get its purchase UUID from `recovery list`. Recovery locates existing provider
 work; it cancels an unapplied request or resumes an applied purchase without
 starting another purchase. Stripe anchors the new month when it accepts the
 provider update; local reconciliation waits for usage metering through that
-actual anchor. Repair missing metering before retrying a stalled purchase. It records the first operator and reason and reports
-the durable state, including work that still needs provider or metering repair.
+actual anchor. Repair missing metering before retrying a stalled purchase. When
+metering cannot be repaired, `--waive-metering` closes the old phase of a purchase
+the provider has applied on the usage recorded so far, and is refused in any other
+state. A waiver records its operator and reason on the purchase and in a
+`billing.subscription_updated` event with `tier_upgrade_metering_waived`. The
+command records the first operator and reason and reports the durable state,
+including work that still needs provider or metering repair.
 The command requires a platform-operator JWT.
 
 #### frameworks admin billing recovery notice

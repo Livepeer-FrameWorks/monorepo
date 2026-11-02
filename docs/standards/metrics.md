@@ -609,7 +609,8 @@ Purser provider recovery exports `purser_provider_webhook_inbox_repeatedly_faile
 `purser_provider_webhook_inbox_read_failures_total` (counter, inventory read failures).
 The gauge retains its last good value on a failed read. Both have no labels.
 `PurserProviderWebhookInboxStuck` takes the maximum across replicas and covers
-provider activation or paid tier upgrades held by incomplete metering, expired checkout
+provider activation or paid tier upgrades held by incomplete metering, scheduled
+downgrades the provider has not confirmed, expired checkout
 cancellation, tenant billing closure, refunds, and repeated inventory read failures. A single failure
 is quiet; pending reservations and bank-transfer settlement waits under fourteen days
 are not failures. Failure and wait counts accumulate separately; switching between

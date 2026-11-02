@@ -406,6 +406,8 @@ func (s *Service) bindCheckoutReceipt(ctx context.Context, tenantID, intentID, p
 	if expired {
 		// A callback may bind a receipt created before durable expiry discovery.
 		// Acknowledgement requires an inbox owner, not only an attempted wake-up.
+		// This wake reconciles a terminal receipt before its deadline: such a
+		// receipt can no longer activate, so compensation touches no delivered service.
 		if err := q.EnqueueCheckoutReservationExpiry(ctx, purserdb.EnqueueCheckoutReservationExpiryParams{TenantID: tenantID, IntentID: intentID}); err != nil {
 			return false, err
 		}

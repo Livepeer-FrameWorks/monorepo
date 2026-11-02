@@ -97,13 +97,6 @@ INSERT INTO purser.subscription_entitlement_overrides (subscription_id, key, val
 VALUES (sqlc.arg(subscription_id), sqlc.arg(key), sqlc.arg(value)::jsonb)
 ON CONFLICT (subscription_id, key) DO UPDATE SET value = EXCLUDED.value;
 
--- name: GetCancelableSubscriptionID :one
-SELECT id
-FROM purser.tenant_subscriptions
-WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid AND status != 'cancelled'
-ORDER BY started_at DESC, id DESC
-LIMIT 1;
-
 -- name: RecordAccountClosureCollectionWriteoffs :execrows
 INSERT INTO purser.billing_collection_writeoffs (tenant_id, currency, amount_cents, reason)
 SELECT tenant_id, currency, balance_cents, 'account_closed'
@@ -114,11 +107,6 @@ WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid AND balance_cents > 0;
 UPDATE purser.billing_collection_balances
 SET balance_cents = 0, updated_at = NOW()
 WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid AND balance_cents > 0;
-
--- name: CancelTenantSubscriptions :execrows
-UPDATE purser.tenant_subscriptions
-SET status = 'cancelled', cancelled_at = NOW(), updated_at = NOW()
-WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid AND status != 'cancelled';
 
 -- name: GetDefaultBillingTier :one
 SELECT id, COALESCE(tier_level, 0)::integer AS tier_level, tier_name

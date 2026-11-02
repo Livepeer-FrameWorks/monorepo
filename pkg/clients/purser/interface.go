@@ -26,7 +26,6 @@ type Interface interface {
 	GetSubscription(ctx context.Context, tenantID string) (*purserpb.GetSubscriptionResponse, error)
 	CreateSubscription(ctx context.Context, req *purserpb.CreateSubscriptionRequest) (*purserpb.TenantSubscription, error)
 	UpdateSubscription(ctx context.Context, req *purserpb.UpdateSubscriptionRequest) (*purserpb.TenantSubscription, error)
-	CancelSubscription(ctx context.Context, tenantID string) error
 	GetInvoice(ctx context.Context, invoiceID string) (*purserpb.GetInvoiceResponse, error)
 	ListInvoices(ctx context.Context, tenantID string, status *string, pagination *commonpb.CursorPaginationRequest) (*purserpb.ListInvoicesResponse, error)
 	ListBillingDocuments(ctx context.Context, tenantID string) (*purserpb.ListBillingDocumentsResponse, error)

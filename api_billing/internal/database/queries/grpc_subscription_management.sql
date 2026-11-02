@@ -93,6 +93,7 @@ WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid;
 UPDATE purser.tenant_subscriptions
 SET pending_tier_id = sqlc.arg(tier_id)::text::uuid,
     pending_effective_at = sqlc.arg(effective_at), pending_reason = 'downgrade',
+    pending_provider_tier_id = NULL,
     billing_period_start = COALESCE(billing_period_start, sqlc.arg(period_start)),
     billing_period_end = COALESCE(billing_period_end, sqlc.arg(period_end)),
     next_billing_date = COALESCE(next_billing_date, sqlc.arg(period_end)),

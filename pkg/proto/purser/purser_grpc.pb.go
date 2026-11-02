@@ -413,7 +413,6 @@ const (
 	SubscriptionService_GetSubscription_FullMethodName      = "/purser.SubscriptionService/GetSubscription"
 	SubscriptionService_CreateSubscription_FullMethodName   = "/purser.SubscriptionService/CreateSubscription"
 	SubscriptionService_UpdateSubscription_FullMethodName   = "/purser.SubscriptionService/UpdateSubscription"
-	SubscriptionService_CancelSubscription_FullMethodName   = "/purser.SubscriptionService/CancelSubscription"
 	SubscriptionService_GetBillingDetails_FullMethodName    = "/purser.SubscriptionService/GetBillingDetails"
 	SubscriptionService_UpdateBillingDetails_FullMethodName = "/purser.SubscriptionService/UpdateBillingDetails"
 )
@@ -427,7 +426,6 @@ type SubscriptionServiceClient interface {
 	GetSubscription(ctx context.Context, in *GetSubscriptionRequest, opts ...grpc.CallOption) (*GetSubscriptionResponse, error)
 	CreateSubscription(ctx context.Context, in *CreateSubscriptionRequest, opts ...grpc.CallOption) (*TenantSubscription, error)
 	UpdateSubscription(ctx context.Context, in *UpdateSubscriptionRequest, opts ...grpc.CallOption) (*TenantSubscription, error)
-	CancelSubscription(ctx context.Context, in *CancelSubscriptionRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	// ===== BILLING DETAILS MANAGEMENT =====
 	// Get billing details for a tenant (company, VAT, address)
 	GetBillingDetails(ctx context.Context, in *GetBillingDetailsRequest, opts ...grpc.CallOption) (*BillingDetails, error)
@@ -473,16 +471,6 @@ func (c *subscriptionServiceClient) UpdateSubscription(ctx context.Context, in *
 	return out, nil
 }
 
-func (c *subscriptionServiceClient) CancelSubscription(ctx context.Context, in *CancelSubscriptionRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(emptypb.Empty)
-	err := c.cc.Invoke(ctx, SubscriptionService_CancelSubscription_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *subscriptionServiceClient) GetBillingDetails(ctx context.Context, in *GetBillingDetailsRequest, opts ...grpc.CallOption) (*BillingDetails, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(BillingDetails)
@@ -512,7 +500,6 @@ type SubscriptionServiceServer interface {
 	GetSubscription(context.Context, *GetSubscriptionRequest) (*GetSubscriptionResponse, error)
 	CreateSubscription(context.Context, *CreateSubscriptionRequest) (*TenantSubscription, error)
 	UpdateSubscription(context.Context, *UpdateSubscriptionRequest) (*TenantSubscription, error)
-	CancelSubscription(context.Context, *CancelSubscriptionRequest) (*emptypb.Empty, error)
 	// ===== BILLING DETAILS MANAGEMENT =====
 	// Get billing details for a tenant (company, VAT, address)
 	GetBillingDetails(context.Context, *GetBillingDetailsRequest) (*BillingDetails, error)
@@ -536,9 +523,6 @@ func (UnimplementedSubscriptionServiceServer) CreateSubscription(context.Context
 }
 func (UnimplementedSubscriptionServiceServer) UpdateSubscription(context.Context, *UpdateSubscriptionRequest) (*TenantSubscription, error) {
 	return nil, status.Error(codes.Unimplemented, "method UpdateSubscription not implemented")
-}
-func (UnimplementedSubscriptionServiceServer) CancelSubscription(context.Context, *CancelSubscriptionRequest) (*emptypb.Empty, error) {
-	return nil, status.Error(codes.Unimplemented, "method CancelSubscription not implemented")
 }
 func (UnimplementedSubscriptionServiceServer) GetBillingDetails(context.Context, *GetBillingDetailsRequest) (*BillingDetails, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetBillingDetails not implemented")
@@ -621,24 +605,6 @@ func _SubscriptionService_UpdateSubscription_Handler(srv interface{}, ctx contex
 	return interceptor(ctx, in, info, handler)
 }
 
-func _SubscriptionService_CancelSubscription_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(CancelSubscriptionRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(SubscriptionServiceServer).CancelSubscription(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: SubscriptionService_CancelSubscription_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(SubscriptionServiceServer).CancelSubscription(ctx, req.(*CancelSubscriptionRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _SubscriptionService_GetBillingDetails_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetBillingDetailsRequest)
 	if err := dec(in); err != nil {
@@ -693,10 +659,6 @@ var SubscriptionService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "UpdateSubscription",
 			Handler:    _SubscriptionService_UpdateSubscription_Handler,
-		},
-		{
-			MethodName: "CancelSubscription",
-			Handler:    _SubscriptionService_CancelSubscription_Handler,
 		},
 		{
 			MethodName: "GetBillingDetails",

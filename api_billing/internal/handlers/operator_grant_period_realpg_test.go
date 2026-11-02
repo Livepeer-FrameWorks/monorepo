@@ -60,6 +60,9 @@ func monthlyRejectsChangedPhase(t *testing.T, model string) {
 
 func TestStripeWebhookPreservesClosedGrantPhase_RealPG(t *testing.T) {
 	db := startPurserUsageRealPG(t)
+	for _, tc := range tierDowngradeProviderCases() {
+		t.Run(tc.name, tc.run)
+	}
 	testMollieInvoiceUTCDayBoundary(t)
 	testClosingPricingCondition(t)
 	testEstablishedStripeRefusalMustRetry(t)
@@ -632,8 +635,21 @@ type providerReservationCase struct {
 	run  func(*testing.T)
 }
 
-func providerReservationCases() []providerReservationCase {
+// tierDowngradeProviderCases run on both engines through the selected suites.
+func tierDowngradeProviderCases() []providerReservationCase {
 	return []providerReservationCase{
+		{"TierDowngradeReachesStripeBeforeRenewal", TestTierDowngradeReachesStripeBeforeRenewal_RealPG},
+		{"TierDowngradeReachesMollieBeforeRenewal", TestTierDowngradeReachesMollieBeforeRenewal_RealPG},
+		{"TierDowngradeRepointConvergesOnLatestTier", TestTierDowngradeRepointConvergesOnLatestTier_RealPG},
+		{"TierDowngradeProviderFailureHoldsAndRetries", TestTierDowngradeProviderFailureHoldsAndRetries_RealPG},
+		{"UnconfirmedDowngradeIsDiscoveredAndHeld", TestUnconfirmedDowngradeIsDiscoveredAndHeld_RealPG},
+		{"TenantClosureWritesOffCollectionCarry", TestTenantClosureWritesOffCollectionCarry_RealPG},
+		{"FencedStripeEventReportsTheLocalTier", TestFencedStripeEventReportsTheLocalTier_RealPG},
+	}
+}
+
+func providerReservationCases() []providerReservationCase {
+	return append(tierDowngradeProviderCases(), []providerReservationCase{
 		{"AdvanceActivationStartsOneCappedCalendarMonth", TestAdvanceActivationStartsOneCappedCalendarMonth_RealPG},
 		{"AdvanceSetupRefusesMidPeriodTierChange", TestAdvanceSetupRefusesMidPeriodTierChange_RealPG},
 		{"IneligibleCheckoutCompensates", TestIneligibleCheckoutCompensates_RealPG},
@@ -678,7 +694,7 @@ func providerReservationCases() []providerReservationCase {
 		{"CheckoutExpiryReleasesStagedReservation", testCheckoutExpiryReleasesStagedReservation},
 		{"CheckoutReservationsPreserveSettledReceipts", testCheckoutReservationsPreserveSettledReceipts},
 		{"CheckoutCompletionWaitsForBinding", testCheckoutCompletionWaitsForBinding},
-	}
+	}...)
 }
 
 func runProviderReservationCases(t *testing.T, first, last int) {
@@ -690,15 +706,15 @@ func runProviderReservationCases(t *testing.T, first, last int) {
 }
 
 func TestProviderReservationBilling_RealYugabyte(t *testing.T) {
-	runProviderReservationCases(t, 0, 15)
+	runProviderReservationCases(t, 0, 22)
 }
 
 func TestProviderReservationRecovery_RealYugabyte(t *testing.T) {
-	runProviderReservationCases(t, 15, 30)
+	runProviderReservationCases(t, 22, 37)
 }
 
 func TestProviderReservationDeadlines_RealYugabyte(t *testing.T) {
-	runProviderReservationCases(t, 30, len(providerReservationCases()))
+	runProviderReservationCases(t, 37, len(providerReservationCases()))
 }
 
 func testCheckoutCompletionWaitsForBinding(t *testing.T) {

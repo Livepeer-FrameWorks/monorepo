@@ -49,7 +49,6 @@ var apiTokenBillingScopes = map[string]string{
 	"/purser.MollieService/ListMandates":                           "billing:read",
 	"/purser.SubscriptionService/CreateSubscription":               "billing:write",
 	"/purser.SubscriptionService/UpdateSubscription":               "billing:write",
-	"/purser.SubscriptionService/CancelSubscription":               "billing:write",
 	"/purser.SubscriptionService/UpdateBillingDetails":             "billing:write",
 	"/purser.PaymentService/CreatePayment":                         "billing:write",
 	"/purser.ClusterPricingService/CreateClusterSubscription":      "infrastructure:write",

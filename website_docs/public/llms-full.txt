@@ -14529,8 +14529,15 @@ clips.
 Upgrading starts a fresh monthly billing period. Usage before the switch closes at the old rates,
 and the unused paid share of the old base fee is credited against the new month. This is a billing
 credit rather than a cash refund. An upgrade may briefly remain pending while payment or usage
-records are reconciled; retrying it does not start another purchase. Downgrades take effect at the
-end of the current paid period.
+records are reconciled; retrying it does not start another purchase.
+
+Downgrades take effect at the end of the current paid period, with no proration or refund. You keep
+the paid tier until then, and the next renewal charges the lower fee. Selecting your current tier
+cancels a scheduled downgrade. Choosing Free works the same way on a Stripe or Mollie subscription:
+you keep the paid period, the subscription is cancelled shortly before it would renew, and the tenant
+moves to Free when the paid period ends. You can change your mind until that cancellation, about three
+days before the period ends. After it, the move to Free stands, and you can choose a paid tier once it
+completes.
 
 **Overages (metered tiers):**
 
@@ -14674,8 +14681,8 @@ shown as carried forward with zero due on that period; they are not waived.
 The first later period that brings the accumulated balance to €5.00 or more
 includes the prior balance and collects the combined amount. Usage within the
 plan allowance remains zero-priced and adds nothing to the carry balance.
-Cancelling an account before the floor is reached records the remaining amount
-as an explicit account-closure write-off rather than requesting a tiny payment.
+Closing an account or moving to Free before the floor is reached records the
+remaining amount as an explicit write-off rather than requesting a tiny payment.
 
 Add the billing contact, legal name, address, and optional VAT/tax identifier in
 account settings before starting a paid provider setup. The identifier is stored
@@ -16387,7 +16394,7 @@ compositor.setLayerVisibility(sceneId, layerId, false);
 // Change opacity
 compositor.updateLayerTransform(sceneId, layerId, { opacity: 0.7 });
 
-// Reorder layers by layer ID
+// Reorder layers by layer ID, bottom to top
 compositor.reorderLayers(sceneId, ["layer-1", "layer-2", "layer-3"]);
 
 // Remove a layer
@@ -17550,7 +17557,7 @@ See [Advanced Features](/builders/ingest-advanced/) for audio mixing details.
 The compositor is **enabled by default** — multi-source layout control with scenes and layers:
 
 - 17 layout presets (solo, PiP, split, grid, featured, and more)
-- Layer ordering through `reorderLayers()` or the optional `LayerList` component, which the drop-in UI does not render
+- Layer ordering through `reorderLayers()` or the `LayerList` component, which the drop-in UI renders when you set `showProducerPanel` (`show-producer-panel` on the web component)
 - Scenes through the compositor API, with cuts, fades, and slides between them
 - GPU-accelerated rendering (WebGPU, WebGL, Canvas2D fallback)
 
@@ -17558,16 +17565,16 @@ See [Compositor](/builders/ingest-compositor/) for full details.
 
 ## States
 
-| State                    | Description                           |
-| ------------------------ | ------------------------------------- |
-| `idle`                   | Ready, no capture active              |
-| `requesting_permissions` | Waiting for camera/mic permission     |
-| `capturing`              | Media captured, not streaming         |
-| `connecting`             | Establishing WHIP connection          |
-| `streaming`              | Live and streaming                    |
-| `reconnecting`           | Connection lost, attempting reconnect |
-| `error`                  | Error occurred                        |
-| `destroyed`              | Cleanup complete                      |
+| State                    | Description                                                  |
+| ------------------------ | ------------------------------------------------------------ |
+| `idle`                   | Ready, no capture active                                     |
+| `requesting_permissions` | Waiting for camera/mic permission                            |
+| `capturing`              | Media captured, not streaming. A failed session returns here |
+| `connecting`             | Establishing WHIP connection                                 |
+| `streaming`              | Live and streaming                                           |
+| `reconnecting`           | Connection lost, attempting reconnect                        |
+| `error`                  | Error occurred                                               |
+| `destroyed`              | Cleanup complete                                             |
 
 ## Browser Support
 
@@ -25906,7 +25913,7 @@ None of these are available on FrameWorks today. Each row gives the roadmap stat
 | OTT service with subscriptions (SVOD)                                                                       | Not planned                                                                                                                                                                   |
 | TV playout: a timetable of files that runs as one channel, with EPG                                         | [Up next](/roadmap#scheduled-programming) as linear channels built from VOD assets. An EPG is not planned                                                                     |
 | Pre-recorded live streams with scheduling                                                                   | [Up next](/roadmap#scheduled-programming). Today, push a file with FFmpeg from a machine you control                                                                          |
-| Cloud Production: a browser switcher combining live streams, hosted videos, images, and web URLs into Flows | [Up next](/roadmap#composition-and-ssai) as StreamCrafter cloud production. Today, StreamCrafter mixes camera and screen sources in your own browser                          |
+| Cloud Production: a browser switcher combining live streams, hosted videos, images, and web URLs into Flows | [Up next](/roadmap#composition-and-ssai) as StreamCrafter cloud production. Today, StreamCrafter mixes cameras, screens, media files, logos, and text in your own browser     |
 | Live captions and translation                                                                               | Live transcription is [up next](/roadmap#live-ai-processing). Caption translation is not planned                                                                              |
 
 ### Alerts and webhooks
@@ -26059,7 +26066,7 @@ The statuses below come from the [roadmap](/roadmap), which shows relative order
 ### Up next
 
 - **[Team Accounts](/roadmap#team-accounts-and-permissions).** Lets several people share one account with roles, which agencies and event crews need.
-- **[Composition and SSAI](/roadmap#composition-and-ssai).** Brings StreamCrafter cloud production, including live switching, overlays and watermarks, in-stream ads, and backup inputs that take over when a primary source drops. Today, StreamCrafter mixes local camera and screen sources in your browser.
+- **[Composition and SSAI](/roadmap#composition-and-ssai).** Brings StreamCrafter cloud production, including live switching, overlays and watermarks, in-stream ads, and backup inputs that take over when a primary source drops. Today, StreamCrafter mixes local cameras, screens, media files, logos, and text in your browser.
 - **[Built-In Password and Geo Rules](/roadmap#built-in-password-and-geo-rules).** Turns password and country rules into switches on a stream, on every plan, so you no longer run a webhook endpoint for them.
 - **[Conferencing and Chat](/roadmap#conferencing-and-chat).** Adds remote guests and viewer chat, after Team Accounts and Composition.
 - **[Scheduled Programming](/roadmap#scheduled-programming).** Enables 24/7 playlist channels built from your VOD assets. A 24/7 live feed from your own encoder works today.
@@ -26275,8 +26282,8 @@ the webhook endpoint with the same care as the player itself. See
 
 ### Multi-server cluster
 
-Flussonic's cluster page advises building new clusters on its Catena product rather than on FMS
-. If you are planning a new cluster, weigh that route as well. Existing FMS clusters translate
+Flussonic's cluster page advises building new clusters on its Catena product rather than on FMS.
+If you are planning a new cluster, weigh that route as well. Existing FMS clusters translate
 as follows.
 
 | Flussonic                                                        | FrameWorks                                                                                                                                                   |
@@ -26310,7 +26317,7 @@ as follows.
 | NVENC through `hw=nvenc`, with `deviceid` GPU selection | Per-stream encoder or GPU selection is not planned. Local transcode slots are set with `max_transcodes`                                                                                 |
 | `hw=qsv`; Flussonic Coder hardware                      | Not planned. Transcoding runs through Livepeer Gateway or local processing. Up next: GPU-aware placement in the [Workload Cost Model](/roadmap#workload-cost-model)                     |
 | `deinterlace`                                           | Not planned. Test interlaced broadcast feeds first                                                                                                                                      |
-| Burned-in logo                                          | Up next: overlays in [Composition and SSAI](/roadmap#composition-and-ssai)                                                                                                              |
+| Burned-in logo                                          | In the browser with StreamCrafter overlays. On the server, up next in [Composition and SSAI](/roadmap#composition-and-ssai)                                                             |
 | `mosaic://` server-side mosaic                          | Server-side compositing is in the pipeline, listed as Up next under [Composition and SSAI](/roadmap#composition-and-ssai). StreamCrafter composes multiple sources in the browser today |
 
 ## What's up next, and what's not planned
@@ -31448,8 +31455,13 @@ Get its purchase UUID from `recovery list`. Recovery locates existing provider
 work; it cancels an unapplied request or resumes an applied purchase without
 starting another purchase. Stripe anchors the new month when it accepts the
 provider update; local reconciliation waits for usage metering through that
-actual anchor. Repair missing metering before retrying a stalled purchase. It records the first operator and reason and reports
-the durable state, including work that still needs provider or metering repair.
+actual anchor. Repair missing metering before retrying a stalled purchase. When
+metering cannot be repaired, `--waive-metering` closes the old phase of a purchase
+the provider has applied on the usage recorded so far, and is refused in any other
+state. A waiver records its operator and reason on the purchase and in a
+`billing.subscription_updated` event with `tier_upgrade_metering_waived`. The
+command records the first operator and reason and reports the durable state,
+including work that still needs provider or metering repair.
 The command requires a platform-operator JWT.
 
 #### frameworks admin billing recovery notice
@@ -41176,6 +41188,10 @@ handles balances and credits. An obsolete fallback can be recovered with
 `grant revoke --tier <active-tier>` or an explicit `set-tier`; both close the
 expired grant at its deadline.
 
+A grant with no recorded assigned tier, which the sweep has nothing to restore
+for, stops applying at its deadline without denying the tenant. Collection
+readiness decides admission, including while its closing boundary is refused.
+
 An expired grant awaiting reconciliation must be ended with `grant revoke
 --tier` or `set-tier` before setting another grant. A rejected replacement
 leaves the original grant and billing phase unchanged. Cancelling a
@@ -41221,7 +41237,9 @@ confirmation. It cancels a request only after confirming it was not applied;
 otherwise it reconciles the accepted purchase. A Stripe purchase already applied
 by the provider still waits for complete usage metering before its local billing
 boundary can finish. Recovery does not bypass that requirement or start another
-provider purchase. Recovery retains the operator identity and reason, and reports the
+provider purchase, unless you pass `--waive-metering` on a purchase the provider
+has applied: the old phase then closes on the usage recorded so far, and the waiver
+is audited with your identity and reason. Recovery retains the operator identity and reason, and reports the
 actual durable state. Use `recovery list` for the purchase UUID and retry errors.
 
 A suspended tenant's session-stop request is queued with its suspension. Partial

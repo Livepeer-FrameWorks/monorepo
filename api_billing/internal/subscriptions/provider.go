@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"frameworks/api_billing/internal/database/purserdb"
 
@@ -65,6 +66,8 @@ type ProviderResult struct {
 	PreviousMollieSubscriptionID string
 	// Status is the local status a StripeStatus change applied.
 	Status string
+	// TierID is the tenant's local tier after the change.
+	TierID string
 	// Refusal is a committed recovery decision; transaction callers must commit it.
 	Refusal error
 }
@@ -193,7 +196,7 @@ func transitionProviderTx(ctx context.Context, tx *sql.Tx, change ProviderChange
 		return ProviderResult{}, ErrTenantBillingClosed
 	}
 
-	result := ProviderResult{SubscriptionID: current.SubscriptionID, PreviousMollieSubscriptionID: current.MollieSubscriptionID.String}
+	result := ProviderResult{SubscriptionID: current.SubscriptionID, PreviousMollieSubscriptionID: current.MollieSubscriptionID.String, TierID: current.TierID}
 	if current.FreeFallbackProviderEndedAt.Valid && current.StripeSubscriptionID.String != "" &&
 		((change.Operation == StripeStatus && current.StripeSubscriptionID.String == change.StripeStatus.SubscriptionID) ||
 			((change.Operation == StripeRenewal || change.Operation == StripeCheckout) && current.StripeSubscriptionID.String == change.Stripe.SubscriptionID)) {
@@ -275,6 +278,15 @@ func transitionProviderTx(ctx context.Context, tx *sql.Tx, change ProviderChange
 	case StripeCheckout, StripePending:
 		targetID, provider, incomingID = change.Stripe.TierID, "stripe", change.Stripe.SubscriptionID
 	case StripeRenewal:
+		if current.StripeSubscriptionID.String == change.Stripe.SubscriptionID && change.Stripe.TierID != "" && change.Stripe.TierID != current.TierID {
+			fenced, fenceErr := stripeRenewalTierFenced(ctx, q, change.TenantID)
+			if fenceErr != nil {
+				return result, fenceErr
+			}
+			if fenced {
+				change.Stripe.TierID = ""
+			}
+		}
 		if current.StripeSubscriptionID.String != change.Stripe.SubscriptionID || change.Stripe.TierID != "" && change.Stripe.TierID != current.TierID {
 			targetID, provider, incomingID = change.Stripe.TierID, "stripe", change.Stripe.SubscriptionID
 		}
@@ -321,6 +333,9 @@ func transitionProviderTx(ctx context.Context, tx *sql.Tx, change ProviderChange
 		params := change.Stripe
 		params.TenantID = change.TenantID
 		result.Rows, err = q.ActivateTenantSubscriptionFromStripe(ctx, params)
+		if params.TierID != "" {
+			result.TierID = params.TierID
+		}
 	case MollieActivation:
 		params := change.Mollie
 		params.TenantID = change.TenantID
@@ -347,6 +362,29 @@ func transitionProviderTx(ctx context.Context, tx *sql.Tx, change ProviderChange
 		err = q.CompleteProviderCheckoutReservation(ctx, purserdb.CompleteProviderCheckoutReservationParams{TenantID: change.TenantID, IntentID: change.ReceiptIntentID})
 	}
 	return result, err
+}
+
+// providerEventClockTolerance covers skew between Stripe's event clock and Purser's.
+const providerEventClockTolerance = time.Minute
+
+// stripeRenewalTierFenced reports whether renewal metadata must leave the local
+// tier alone. A scheduled downgrade is applied locally at its effective time, so
+// metadata cannot move the tier while it is pending or while Purser is still
+// converging the provider. An event from before Purser's latest provider tier
+// write describes a superseded tier. An event of unknown age cannot prove otherwise.
+func stripeRenewalTierFenced(ctx context.Context, q *purserdb.Queries, tenantID string) (bool, error) {
+	fence, err := q.GetStripeRenewalTierFence(ctx, tenantID)
+	if err != nil {
+		return false, fmt.Errorf("read renewal tier fence: %w", err)
+	}
+	if fence.DowngradePending || fence.SyncUnfinished {
+		return true, nil
+	}
+	if !fence.ProviderTierChangedAt.Valid {
+		return false, nil
+	}
+	eventAt, known := ProviderCompletion(ctx)
+	return !known || !eventAt.After(fence.ProviderTierChangedAt.Time.Add(providerEventClockTolerance)), nil
 }
 
 // ErrCheckoutCompensationQueued means the transaction queued recovery for an unactivated purchase.

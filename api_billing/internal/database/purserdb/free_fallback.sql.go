@@ -284,14 +284,16 @@ SELECT GREATEST(free_fallback_at, billing_period_start AT TIME ZONE 'UTC')::time
                    AND prior.created_at >= funding.created_at AND prior.created_at < native.created_at
              )
            ORDER BY funding.created_at DESC LIMIT 1), '')::text AS mollie_initial_payment_id,
-       COALESCE((SELECT MAX(invoice.base_fee_period_end) FROM purser.billing_invoices invoice
+       -- A scheduled downgrade keeps the customer's tier through its effective time.
+       GREATEST(CASE WHEN pending_reason = 'downgrade' THEN pending_effective_at END,
+           COALESCE((SELECT MAX(invoice.base_fee_period_end) FROM purser.billing_invoices invoice
            WHERE invoice.tenant_id = subscription.tenant_id AND invoice.status = 'paid'
              AND invoice.document_kind = 'invoice' AND invoice.base_amount > 0
              AND invoice.usage_details#>>'{tier_info,tier_id}' = subscription.tier_id::text
              AND invoice.usage_details->'unused_share_returned' IS NULL
              AND invoice.amount <= COALESCE((SELECT SUM(payment.amount - COALESCE(payment.reversed_amount_cents, 0)::numeric / 100)
                  FROM purser.billing_payments payment WHERE payment.invoice_id = invoice.id AND payment.status = 'confirmed'
-                   AND payment.currency = invoice.currency), 0)), 'epoch'::timestamptz)::timestamptz AS paid_advance_until,
+                   AND payment.currency = invoice.currency), 0)), 'epoch'::timestamptz))::timestamptz AS paid_advance_until,
        EXISTS (SELECT 1 FROM purser.billing_invoices invoice JOIN purser.billing_payments payment ON payment.invoice_id = invoice.id
            WHERE invoice.tenant_id = subscription.tenant_id AND invoice.base_fee_period_end >= subscription.free_fallback_at
              AND payment.status = 'pending')::boolean AS advance_payment_pending,

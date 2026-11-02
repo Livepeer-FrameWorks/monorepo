@@ -573,9 +573,9 @@ func (s *Service) handleSubscriptionCheckoutCompleted(ctx context.Context, sessi
 // they still describe this checkout so a newer checkout or downgrade is not
 // erased by an older delivery. customer/subscription ids and period bounds are
 // COALESCEd so an event that omits them cannot wipe known values. Idempotent;
-// returns the number of tenant rows updated. Shared by the
+// returns the tenant rows updated and the resulting local tier. Shared by the
 // checkout.session.completed and customer.subscription.updated paths.
-func (s *Service) activateTenantSubscriptionFromStripe(ctx context.Context, exec purserdb.DBTX, tenantID, customerID, subscriptionID, tierID string, periodStart, periodEnd *time.Time, receiptID string) (int64, error) {
+func (s *Service) activateTenantSubscriptionFromStripe(ctx context.Context, exec purserdb.DBTX, tenantID, customerID, subscriptionID, tierID string, periodStart, periodEnd *time.Time, receiptID string) (subscriptions.ProviderResult, error) {
 	toNullTime := func(value *time.Time) sql.NullTime {
 		if value == nil {
 			return sql.NullTime{}
@@ -589,7 +589,7 @@ func (s *Service) activateTenantSubscriptionFromStripe(ctx context.Context, exec
 	if err == nil {
 		err = result.Refusal
 	}
-	return result.Rows, err
+	return result, err
 }
 
 // stageTenantSubscriptionPending binds the prospective provider subscription under

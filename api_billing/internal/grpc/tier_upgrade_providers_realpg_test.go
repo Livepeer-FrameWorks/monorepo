@@ -451,9 +451,7 @@ END $$`)
 				if readErr != nil {
 					t.Fatal(readErr)
 				}
-				if _, cancelErr := server.CancelSubscription(ctx, &purserpb.CancelSubscriptionRequest{TenantId: tenant}); cancelErr != nil {
-					t.Fatal(cancelErr)
-				}
+				exec(`UPDATE purser.tenant_subscriptions SET status='cancelled',cancelled_at=NOW() WHERE tenant_id=$1`, tenant)
 				exec(`INSERT INTO purser.metering_sources (source_id,region,active_from,required) VALUES ('cancel-upgrade-source','',$1,true)`, start)
 				exec(`INSERT INTO purser.metering_windows (source_id,period_start,period_end,complete)
 SELECT 'cancel-upgrade-source',w,w+INTERVAL '5 minutes',true FROM generate_series($1::timestamptz,$2::timestamptz,INTERVAL '5 minutes') w`, start.Truncate(5*time.Minute), time.Now().UTC().Truncate(5*time.Minute).Add(-5*time.Minute))

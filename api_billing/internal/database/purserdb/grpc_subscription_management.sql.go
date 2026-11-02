@@ -489,6 +489,7 @@ const scheduleTenantTierDowngrade = `-- name: ScheduleTenantTierDowngrade :exec
 UPDATE purser.tenant_subscriptions
 SET pending_tier_id = $1::text::uuid,
     pending_effective_at = $2, pending_reason = 'downgrade',
+    pending_provider_tier_id = NULL,
     billing_period_start = COALESCE(billing_period_start, $3),
     billing_period_end = COALESCE(billing_period_end, $4),
     next_billing_date = COALESCE(next_billing_date, $4),

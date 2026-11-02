@@ -104,8 +104,15 @@ clips.
 Upgrading starts a fresh monthly billing period. Usage before the switch closes at the old rates,
 and the unused paid share of the old base fee is credited against the new month. This is a billing
 credit rather than a cash refund. An upgrade may briefly remain pending while payment or usage
-records are reconciled; retrying it does not start another purchase. Downgrades take effect at the
-end of the current paid period.
+records are reconciled; retrying it does not start another purchase.
+
+Downgrades take effect at the end of the current paid period, with no proration or refund. You keep
+the paid tier until then, and the next renewal charges the lower fee. Selecting your current tier
+cancels a scheduled downgrade. Choosing Free works the same way on a Stripe or Mollie subscription:
+you keep the paid period, the subscription is cancelled shortly before it would renew, and the tenant
+moves to Free when the paid period ends. You can change your mind until that cancellation, about three
+days before the period ends. After it, the move to Free stands, and you can choose a paid tier once it
+completes.
 
 **Overages (metered tiers):**
 
@@ -249,8 +256,8 @@ shown as carried forward with zero due on that period; they are not waived.
 The first later period that brings the accumulated balance to €5.00 or more
 includes the prior balance and collects the combined amount. Usage within the
 plan allowance remains zero-priced and adds nothing to the carry balance.
-Cancelling an account before the floor is reached records the remaining amount
-as an explicit account-closure write-off rather than requesting a tiny payment.
+Closing an account or moving to Free before the floor is reached records the
+remaining amount as an explicit write-off rather than requesting a tiny payment.
 
 Add the billing contact, legal name, address, and optional VAT/tax identifier in
 account settings before starting a paid provider setup. The identifier is stored

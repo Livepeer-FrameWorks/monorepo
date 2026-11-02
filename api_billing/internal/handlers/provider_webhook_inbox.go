@@ -214,6 +214,21 @@ func (d *providerWebhookDispatcher) Dispatch(ctx context.Context, payload provid
 		}
 		return []string{"tier_upgrade"}, err
 	}
+	if payload.Provider == "tier_downgrade" {
+		var downgrade struct {
+			TenantID string `json:"tenant_id"`
+		}
+		if err := json.Unmarshal(payload.Body, &downgrade); err != nil {
+			return nil, err
+		}
+		if downgrade.TenantID == "" || payload.EventKey != "tier-downgrade:"+downgrade.TenantID {
+			return nil, errors.New("invalid internal tier downgrade record")
+		}
+		if err := d.service.ReconcileProviderTier(ctx, downgrade.TenantID); err != nil {
+			return []string{"tier_downgrade"}, err
+		}
+		return nil, nil
+	}
 	if payload.Provider == "tenant_closure" {
 		var closure struct {
 			TenantID string `json:"tenant_id"`
@@ -341,7 +356,10 @@ func (s *providerWebhookInboxStore) observePeriodically(ctx context.Context) {
 		discoverCtx, discoverCancel := context.WithTimeout(ctx, time.Second)
 		discoverErr := purserdb.New(s.db).EnqueueUnresolvedCheckoutRecovery(discoverCtx)
 		discoverCancel()
-		if discoverErr != nil {
+		downgradeCtx, downgradeCancel := context.WithTimeout(ctx, time.Second)
+		downgradeErr := purserdb.New(s.db).EnqueueUnconfirmedTierDowngrades(downgradeCtx, int64(FreeDowngradeStopLead/time.Second))
+		downgradeCancel()
+		if discoverErr != nil || downgradeErr != nil {
 			if s.metrics != nil && s.metrics.ProviderWebhookInboxReadFailures != nil {
 				s.metrics.ProviderWebhookInboxReadFailures.WithLabelValues().Inc()
 			}

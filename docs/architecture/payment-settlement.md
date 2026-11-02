@@ -116,9 +116,10 @@ current, collected, and closing cents in `billing_collection_entries`. The
 first later period that brings the balance to at least 500 cents adds the prior
 balance as a line item and collects the combined invoice exactly once.
 
-Cancelling the subscription explicitly writes off any remaining sub-floor
-balance to `billing_collection_writeoffs` with reason `account_closed` and then
-clears the carry in the same cancellation transaction. It is never silently
+Account closure and the move to Free each end the last collectable invoice. Both
+write off any remaining sub-floor balance, including what their final invoice
+deferred, to `billing_collection_writeoffs` with reason `account_closed` and clear
+the carry in the transaction that commits that invoice. It is never silently
 discarded or left as an unreachable customer debt.
 
 The balance update, audit entry, invoice header, line items, credit application,
@@ -179,6 +180,55 @@ old fee to its used share remains part of the closing boundary.
 Changing collection provider on the same paid advance tier preserves the current
 period and its paid invoice. A native provider subscription must use the tier
 change flow instead of creating a second checkout.
+
+### Scheduled downgrades on a provider subscription
+
+A downgrade leaves the paid term untouched: no proration, refund or credit. The
+provider must charge the lower fee at the next renewal, so `ChangeBillingTier`
+commits one `tier_downgrade` inbox step per tenant with the staged downgrade.
+Reissuing `ChangeBillingTier` re-points it; selecting the current tier cancels
+it. `admin billing set-tier` replaces it. Each wakes the same step, which reads
+the latest desired tier: the pending target, otherwise the current tier.
+
+The worker reads the provider outside the subscription lock and changes only
+what differs. Stripe replaces the subscription item's price with
+`proration_behavior=none` and writes `metadata.tier_id`, keeping the billing
+anchor. Mollie patches the amount and metadata, keeping `startDate`. A repeat is
+a no-op, so a lost response or a retry needs no idempotency key. The worker then
+relocks and records `pending_provider_tier_id` only if the desired tier and
+subscription still match; otherwise it wakes itself.
+
+Local and provider state cannot disagree silently:
+
+- `applyPendingDowngrade` flips `tier_id` only once the provider confirmed that
+  exact target. While it waits the tenant keeps the paid tier, and repeated
+  failures raise `PurserProviderWebhookInboxStuck`.
+- A late confirmation never shortens paid service: `pending_effective_at` moves
+  forward to the provider's paid-through date when a renewal already ran.
+- Stripe metadata cannot move `tier_id` while a downgrade is pending or its step
+  is unfinished, so the flip stays with the applier at the effective time. After
+  each confirmation `provider_tier_changed_at` fences later deliveries: an event
+  created up to one minute after it, or of unknown age, keeps the local tier.
+  Period and status fields still apply.
+- Discovery enqueues any staged downgrade with a live provider subscription and
+  no confirmation, so every such downgrade has an owner in the inbox.
+
+A paid target with no monthly Stripe price is refused, as is a no-fee tier other
+than Free.
+
+Free has no price to change, so that downgrade ends the subscription through the
+Free fallback. The subscription stays live until 72 hours before the effective
+time, because a Mollie cancellation cannot be undone; a re-point or cancel in that
+window changes nothing at the provider. Discovery then wakes the inbox step, which
+schedules the fallback. Its sweep commits the pricing fence, ends provider
+collection outside the lock with its own retries and `PurserFreeFallbackStuck`
+alert, and retains the term through `pending_effective_at`. Until the sweep's
+fence, a re-point or cancel withdraws the schedule and the subscription stays
+live. During the stop it is refused as reconciling. Once the provider confirms,
+the subscription is `pending_cancellation` and any further tier change is refused:
+the customer keeps the paid term, moves to Free at its end, and may buy a paid tier
+after that move. The lead leaves three days for retries; a stop still failing at
+the renewal is the alert's case, not a silent charge.
 
 ## End of a provider subscription
 

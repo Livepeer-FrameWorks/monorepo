@@ -1757,78 +1757,6 @@ func normalizeOverrideCurrency(currency string) string {
 	return strings.ToUpper(strings.TrimSpace(currency))
 }
 
-// CancelSubscription cancels a tenant's subscription
-func (s *PurserServer) CancelSubscription(ctx context.Context, req *purserpb.CancelSubscriptionRequest) (*emptypb.Empty, error) {
-	tenantID := req.GetTenantId()
-	if tenantID == "" {
-		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
-	}
-
-	userID := middleware.GetUserID(ctx)
-
-	stage, err := runRetryableTx(ctx, s.db, func(tx *sql.Tx) error {
-		queries := purserdb.New(tx)
-		subscriptionID, scanErr := queries.GetCancelableSubscriptionID(ctx, tenantID)
-		if scanErr != nil && !errors.Is(scanErr, sql.ErrNoRows) {
-			return txStatusErrorf(scanErr, codes.Internal, "lookup subscription: %v", scanErr)
-		}
-
-		// A sub-floor balance is intentionally not customer-payable. On account
-		// closure, record the waiver explicitly before clearing it so the amount
-		// cannot disappear from financial reconciliation or strand a cancelled
-		// tenant with an unreachable carry balance.
-		if _, err := queries.RecordAccountClosureCollectionWriteoffs(ctx, tenantID); err != nil {
-			return txStatusErrorf(err, codes.Internal, "record collection balance writeoff: %v", err)
-		}
-		if _, err := queries.ClearAccountClosureCollectionBalances(ctx, tenantID); err != nil {
-			return txStatusErrorf(err, codes.Internal, "clear written-off collection balance: %v", err)
-		}
-
-		rows, err := queries.CancelTenantSubscriptions(ctx, tenantID)
-		if err != nil {
-			return txStatusErrorf(err, codes.Internal, "failed to cancel subscription: %v", err)
-		}
-
-		if rows == 0 {
-			return status.Error(codes.NotFound, "subscription not found")
-		}
-
-		if subscriptionID != uuid.Nil {
-			subscriptionIDText := subscriptionID.String()
-			cancelledEvent, buildErr := billingevents.New(tenantID, subscriptionIDText, &internalv1.SubscriptionUpdated{
-				SubscriptionId: subscriptionIDText, Status: "cancelled", ChangedFields: []string{"status"},
-			}, s.domainActor(ctx))
-			if buildErr != nil {
-				return txStatusErrorf(buildErr, codes.Internal, "build subscription_updated: %v", buildErr)
-			}
-			if _, enqErr := s.EnqueueBillingEventTx(ctx, tx, eventSubscriptionCanceled, tenantID, userID, "subscription", subscriptionIDText, &ipcpb.BillingEvent{
-				SubscriptionId: subscriptionIDText,
-				Status:         "cancelled",
-			}, cancelledEvent); enqErr != nil {
-				return txStatusErrorf(enqErr, codes.Internal, "enqueue subscription_canceled: %v", enqErr)
-			}
-		}
-		return nil
-	})
-	switch {
-	case err == nil:
-	case stage == txStageBegin:
-		return nil, status.Errorf(codes.Internal, "begin tx: %v", err)
-	case stage == txStageCommit:
-		return nil, status.Errorf(codes.Internal, "commit subscription cancel: %v", err)
-	default:
-		return nil, err
-	}
-	if s.tierReconciler != nil {
-		if revokeErr := s.tierReconciler.RevokeDNSEntitlements(ctx, tenantID); revokeErr != nil {
-			s.logger.WithError(revokeErr).WithField("tenant_id", tenantID).
-				Warn("Subscription cancelled but DNS entitlement revocation will require sweep retry")
-		}
-	}
-
-	return &emptypb.Empty{}, nil
-}
-
 // ============================================================================
 // INVOICE SERVICE
 // ============================================================================
@@ -4506,7 +4434,6 @@ const (
 	eventPaymentFailed        = "payment_failed"
 	eventSubscriptionCreated  = "subscription_created"
 	eventSubscriptionUpdated  = "subscription_updated"
-	eventSubscriptionCanceled = "subscription_canceled"
 	eventInvoicePaid          = "invoice_paid"
 	eventInvoicePaymentFailed = "invoice_payment_failed"
 	eventTopupCreated         = "topup_created"
@@ -6076,7 +6003,8 @@ func (s *PurserServer) promoteToPaidOnce(ctx context.Context, req *purserpb.Prom
 // Accepted upgrades can remain pending. Downgrades stage
 // pending_tier_id/pending_effective_at and are applied by the billing-close
 // job after the current invoice clears — this avoids cutting paid
-// entitlements mid-period.
+// entitlements mid-period. A staged downgrade queues the durable provider step
+// that changes the next renewal; selecting the current tier cancels it.
 //
 // Prepaid → postpaid transitions belong on PromoteToPaid (which carries the
 // prepaid balance forward as credit). Returning to prepaid is not supported.
@@ -6098,12 +6026,16 @@ func (s *PurserServer) ChangeBillingTier(ctx context.Context, req *purserpb.Chan
 		outcome   int
 		effective time.Time
 		upgradeID string
+		// downgradeCancelled reports that selecting the current tier ended a staged downgrade.
+		downgradeCancelled bool
 	)
 	stage, err := runRetryableTx(ctx, s.db, func(tx *sql.Tx) error {
 		queries := purserdb.New(tx)
 		var err error
 		upgradeID = ""
-		if _, guardErr := subscriptions.LockChange(ctx, tx, tenantID, subscriptions.ChangePricing); guardErr != nil {
+		downgradeCancelled = false
+		locked, guardErr := subscriptions.LockChange(ctx, tx, tenantID, subscriptions.ChangePricing)
+		if guardErr != nil {
 			if errors.Is(guardErr, subscriptions.ErrPendingTierUpgrade) {
 				pending, pendingErr := queries.GetPendingTierUpgrade(ctx, tenantID)
 				if pendingErr != nil {
@@ -6178,6 +6110,40 @@ func (s *PurserServer) ChangeBillingTier(ctx context.Context, req *purserpb.Chan
 			return txStatusErrorf(periodErr, codes.Internal, "resolve billing period: %v", periodErr)
 		}
 
+		providerBilled := locked.Current.StripeSubscriptionID.String != "" || locked.Current.MollieSubscriptionID.String != ""
+		downgradeStaged := locked.Current.PendingReason.String == "downgrade"
+		if providerBilled && locked.Current.FreeFallbackProviderEndedAt.Valid && (downgradeStaged || targetTierID != current.TierID) {
+			return status.Error(codes.FailedPrecondition, "the provider subscription is already cancelled: the paid term runs to its end and the tenant then moves to Free; choose a new tier after that move")
+		}
+		releaseFreeStop := func() error {
+			if !providerBilled || !downgradeStaged {
+				return nil
+			}
+			if s.billing == nil {
+				return status.Error(codes.Unavailable, "billing transition service is unavailable")
+			}
+			if releaseErr := s.billing.ReleaseFreeDowngradeStopTx(ctx, tx, tenantID); releaseErr != nil {
+				return txStatusErrorf(releaseErr, codes.Internal, "withdraw move to Free: %v", releaseErr)
+			}
+			return nil
+		}
+		requestProviderSync := func() error {
+			if !providerBilled {
+				return nil
+			}
+			if s.billing == nil {
+				return status.Error(codes.Unavailable, "billing transition service is unavailable")
+			}
+			syncErr := s.billing.RequestProviderTierSyncTx(ctx, tx, tenantID)
+			if errors.Is(syncErr, billing.ErrProviderTierRefused) {
+				return status.Error(codes.FailedPrecondition, syncErr.Error())
+			}
+			if syncErr != nil {
+				return txStatusErrorf(syncErr, codes.Internal, "queue provider tier change: %v", syncErr)
+			}
+			return nil
+		}
+
 		if targetTierID == current.TierID {
 			outcome = tierChangeUnchanged
 			if periodUpdateErr := queries.BackfillTenantBillingPeriod(ctx, purserdb.BackfillTenantBillingPeriodParams{
@@ -6186,7 +6152,18 @@ func (s *PurserServer) ChangeBillingTier(ctx context.Context, req *purserpb.Chan
 			}); periodUpdateErr != nil {
 				return txStatusErrorf(periodUpdateErr, codes.Internal, "backfill billing period: %v", periodUpdateErr)
 			}
-			return nil
+			// Selecting the current tier keeps it, so a staged downgrade ends here.
+			if !downgradeStaged {
+				return nil
+			}
+			downgradeCancelled = true
+			if releaseErr := releaseFreeStop(); releaseErr != nil {
+				return releaseErr
+			}
+			if _, cancelErr := queries.CancelTenantTierDowngrade(ctx, tenantID); cancelErr != nil {
+				return txStatusErrorf(cancelErr, codes.Internal, "cancel scheduled downgrade: %v", cancelErr)
+			}
+			return requestProviderSync()
 		}
 
 		if target.TierLevel.Int32 >= current.TierLevel.Int32 {
@@ -6221,6 +6198,9 @@ func (s *PurserServer) ChangeBillingTier(ctx context.Context, req *purserpb.Chan
 			resolvedPeriodStart = billing.PreviousMonthlyAnniversary(effective)
 		}
 
+		if releaseErr := releaseFreeStop(); releaseErr != nil {
+			return releaseErr
+		}
 		if err := queries.ScheduleTenantTierDowngrade(ctx, purserdb.ScheduleTenantTierDowngradeParams{
 			TierID: targetTierID, EffectiveAt: sql.NullTime{Time: effective, Valid: true},
 			PeriodStart: sql.NullTime{Time: resolvedPeriodStart, Valid: true},
@@ -6228,7 +6208,7 @@ func (s *PurserServer) ChangeBillingTier(ctx context.Context, req *purserpb.Chan
 		}); err != nil {
 			return txStatusErrorf(err, codes.Internal, "schedule downgrade: %v", err)
 		}
-		return nil
+		return requestProviderSync()
 	})
 	switch {
 	case err == nil:
@@ -6253,9 +6233,13 @@ func (s *PurserServer) ChangeBillingTier(ctx context.Context, req *purserpb.Chan
 		if invErr := s.invalidateTenantCache(ctx, tenantID, "tier_changed"); invErr != nil {
 			s.logger.WithError(invErr).WithField("tenant_id", tenantID).Error("invalidate tenant cache for unchanged tier")
 		}
+		message := "Already on requested tier"
+		if downgradeCancelled {
+			message = "Scheduled downgrade cancelled"
+		}
 		return &purserpb.ChangeBillingTierResponse{
 			Success:            true,
-			Message:            "Already on requested tier",
+			Message:            message,
 			AppliedTierId:      current.TierID,
 			EligibleClusterIds: eligibleClusters,
 			PrimaryClusterId:   primaryCluster,

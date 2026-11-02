@@ -28,20 +28,6 @@ func (q *Queries) ActiveBillingTierExists(ctx context.Context, tierID string) (b
 	return exists, err
 }
 
-const cancelTenantSubscriptions = `-- name: CancelTenantSubscriptions :execrows
-UPDATE purser.tenant_subscriptions
-SET status = 'cancelled', cancelled_at = NOW(), updated_at = NOW()
-WHERE tenant_id = $1::text::uuid AND status != 'cancelled'
-`
-
-func (q *Queries) CancelTenantSubscriptions(ctx context.Context, tenantID string) (int64, error) {
-	result, err := q.db.ExecContext(ctx, cancelTenantSubscriptions, tenantID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
 const clearAccountClosureCollectionBalances = `-- name: ClearAccountClosureCollectionBalances :execrows
 UPDATE purser.billing_collection_balances
 SET balance_cents = 0, updated_at = NOW()
@@ -155,21 +141,6 @@ LIMIT 1
 
 func (q *Queries) GetActiveSubscriptionID(ctx context.Context, tenantID string) (uuid.UUID, error) {
 	row := q.db.QueryRowContext(ctx, getActiveSubscriptionID, tenantID)
-	var id uuid.UUID
-	err := row.Scan(&id)
-	return id, err
-}
-
-const getCancelableSubscriptionID = `-- name: GetCancelableSubscriptionID :one
-SELECT id
-FROM purser.tenant_subscriptions
-WHERE tenant_id = $1::text::uuid AND status != 'cancelled'
-ORDER BY started_at DESC, id DESC
-LIMIT 1
-`
-
-func (q *Queries) GetCancelableSubscriptionID(ctx context.Context, tenantID string) (uuid.UUID, error) {
-	row := q.db.QueryRowContext(ctx, getCancelableSubscriptionID, tenantID)
 	var id uuid.UUID
 	err := row.Scan(&id)
 	return id, err

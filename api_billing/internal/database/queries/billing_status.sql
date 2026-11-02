@@ -1,4 +1,8 @@
 -- name: GetTenantAdmissionStatus :one
+-- grant_expires_at bounds admission only for a grant that recorded its assigned
+-- tier, which the expiry sweep must restore. A row without that assignment has
+-- nothing to restore once expired: collection readiness alone decides, and the
+-- sweep closing it cannot hold admission.
 SELECT
     ts.billing_model,
     CASE WHEN EXISTS (SELECT 1 FROM purser.tenant_billing_closures closure WHERE closure.tenant_id = ts.tenant_id) THEN 'suspended' ELSE ts.status END::text AS subscription_status,
@@ -18,7 +22,8 @@ SELECT
     COALESCE(og.waive_usage, false)::boolean AS grant_waive_usage,
     COALESCE(og.base_price, bt.base_price)::text AS effective_base_price,
     (SELECT grant_deadline.expires_at FROM purser.subscription_operator_grants grant_deadline
-     WHERE grant_deadline.subscription_id = ts.id) AS grant_expires_at
+     WHERE grant_deadline.subscription_id = ts.id
+       AND (grant_deadline.assigned_tier_id IS NOT NULL OR grant_deadline.expires_at > NOW())) AS grant_expires_at
 FROM purser.tenant_subscriptions ts
 JOIN purser.billing_tiers bt ON bt.id = ts.tier_id
 LEFT JOIN purser.subscription_operator_grants og
@@ -38,6 +43,7 @@ ORDER BY ts.created_at DESC
 LIMIT 1;
 
 -- name: GetTenantBillingStatus :one
+-- grant_expires_at follows GetTenantAdmissionStatus.
 SELECT
     ts.billing_model,
     CASE WHEN EXISTS (SELECT 1 FROM purser.tenant_billing_closures closure WHERE closure.tenant_id = ts.tenant_id) THEN 'suspended' ELSE ts.status END::text AS subscription_status,
@@ -63,7 +69,8 @@ SELECT
     COALESCE(og.waive_usage, false)::boolean AS grant_waive_usage,
     COALESCE(og.base_price, bt.base_price)::text AS effective_base_price,
     (SELECT grant_deadline.expires_at FROM purser.subscription_operator_grants grant_deadline
-     WHERE grant_deadline.subscription_id = ts.id) AS grant_expires_at
+     WHERE grant_deadline.subscription_id = ts.id
+       AND (grant_deadline.assigned_tier_id IS NOT NULL OR grant_deadline.expires_at > NOW())) AS grant_expires_at
 FROM purser.tenant_subscriptions ts
 JOIN purser.billing_tiers bt ON bt.id = ts.tier_id
 LEFT JOIN purser.subscription_operator_grants og

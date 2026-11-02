@@ -175,7 +175,7 @@ groups:
           severity: warning
         annotations:
           summary: "Provider activation, tier upgrade or checkout recovery needs attention"
-          description: "Purser is retrying provider activation, a paid tier upgrade, suspended-stream stop, tenant billing closure or expired-checkout compensation, or cannot read that recovery queue. Run frameworks admin billing recovery list to inspect retry status and errors. Normal provider settlement waits are not failures; waits over fourteen days need investigation. Missing metering holds activation or an upgrade at its recorded billing boundary."
+          description: "Purser is retrying provider activation, a paid tier upgrade, a scheduled downgrade's provider price, suspended-stream stop, tenant billing closure or expired-checkout compensation, or cannot read that recovery queue. Run frameworks admin billing recovery list to inspect retry status and errors. Normal provider settlement waits are not failures; waits over fourteen days need investigation. Missing metering holds activation or an upgrade at its recorded billing boundary."
 
       - alert: PurserFreeFallbackStuck
         expr: max(purser_free_fallback_repeatedly_failed_items) > 0 or max(increase(purser_free_fallback_read_failures_total[2m])) > 1

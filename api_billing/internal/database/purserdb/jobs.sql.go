@@ -95,6 +95,10 @@ UPDATE purser.tenant_subscriptions
 SET tier_id = $1::text::uuid, updated_at = NOW()
 WHERE tenant_id = $2::text::uuid
   AND pending_tier_id = $1::text::uuid
+  AND (pending_reason IS DISTINCT FROM 'downgrade'
+       OR pending_provider_tier_id = pending_tier_id
+       OR free_fallback_provider_ended_at IS NOT NULL
+       OR (NULLIF(stripe_subscription_id, '') IS NULL AND NULLIF(mollie_subscription_id, '') IS NULL))
 `
 
 type ApplyPendingDowngradeTierParams struct {
@@ -102,6 +106,8 @@ type ApplyPendingDowngradeTierParams struct {
 	TenantID      string `db:"tenant_id" json:"tenant_id"`
 }
 
+// A live provider subscription must confirm the target first, so the local tier
+// and the next provider charge cannot disagree.
 func (q *Queries) ApplyPendingDowngradeTier(ctx context.Context, arg ApplyPendingDowngradeTierParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, applyPendingDowngradeTier, arg.PendingTierID, arg.TenantID)
 	if err != nil {
@@ -210,6 +216,7 @@ UPDATE purser.tenant_subscriptions
 SET pending_tier_id = NULL,
     pending_effective_at = NULL,
     pending_reason = NULL,
+    pending_provider_tier_id = NULL,
     updated_at = NOW()
 WHERE tenant_id = $1::text::uuid
   AND tier_id = $2::text::uuid

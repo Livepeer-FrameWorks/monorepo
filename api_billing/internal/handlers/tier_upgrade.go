@@ -225,7 +225,13 @@ func (s *Service) ProcessTierUpgrade(ctx context.Context, tenantID, id string) (
 	}
 	var closing *PostpaidPhaseClose
 	if row.State == "provider_applied" {
-		closing, err = PrepareProviderBillingBoundary(ctx, s.db, s.logger, s, tenantID, billingStart)
+		// A provider-applied purchase has no cancellation path, so an audited
+		// operator waiver is the only exit from a metering hold.
+		if row.MeteringWaivedAt.Valid {
+			closing, err = prepareAcceptedProviderBoundary(ctx, s.db, s.logger, s, tenantID, billingStart)
+		} else {
+			closing, err = PrepareProviderBillingBoundary(ctx, s.db, s.logger, s, tenantID, billingStart)
+		}
 		if err != nil {
 			return false, err
 		}

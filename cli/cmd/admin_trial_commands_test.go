@@ -112,7 +112,11 @@ func (s *trialCommandServer) AdminRecoverTierUpgrade(ctx context.Context, r *pur
 		s.recoveryCalls++
 		state = "cancelled"
 	}
-	return &purserpb.AdminRecoverTierUpgradeResponse{UpgradeId: r.GetUpgradeId(), State: state, Provider: "stripe", RequestedBy: "operator", Detail: "No new purchase started"}, nil
+	response := &purserpb.AdminRecoverTierUpgradeResponse{UpgradeId: r.GetUpgradeId(), State: state, Provider: "stripe", RequestedBy: "operator", Detail: "No new purchase started"}
+	if r.GetConfirmed() && r.GetWaiveMetering() {
+		response.MeteringWaivedBy = "operator"
+	}
+	return response, nil
 }
 
 func (s *trialCommandServer) AdminResendFreeFallbackNotice(ctx context.Context, r *purserpb.AdminResendFreeFallbackNoticeRequest) (*purserpb.AdminResendFreeFallbackNoticeResponse, error) {
@@ -200,6 +204,7 @@ func TestTrialAccountCommandsUseRealRPCs(t *testing.T) {
 		{"recover upgrade unconfirmed", []string{"admin", "billing", "recovery", "upgrade", "--tenant-id", id, "--upgrade-id", id, "--reason", "reconcile"}, "confirmation", true},
 		{"recover upgrade", []string{"admin", "billing", "recovery", "upgrade", "--tenant-id", id, "--upgrade-id", id, "--reason", "reconcile", "--yes"}, "Tier upgrade recovery: cancelled", false},
 		{"recover upgrade json", []string{"--output", "json", "admin", "billing", "recovery", "upgrade", "--tenant-id", id, "--upgrade-id", id, "--reason", "reconcile", "--yes"}, `"state": "cancelled"`, false},
+		{"recover upgrade waiving metering", []string{"admin", "billing", "recovery", "upgrade", "--tenant-id", id, "--upgrade-id", id, "--reason", "reconcile", "--waive-metering", "--yes"}, "Metering waived by operator", false},
 		{"recover upgrade interactive yes", []string{"admin", "billing", "recovery", "upgrade", "--tenant-id", id, "--upgrade-id", id, "--reason", "reconcile"}, "Tier upgrade recovery: cancelled", false},
 		{"notice unconfirmed", []string{"admin", "billing", "recovery", "notice", "--tenant-id", id, "--reason", "email repaired"}, "retry declined", true},
 		{"notice older server", []string{"admin", "billing", "recovery", "notice", "--tenant-id", id, "--reason", "email repaired", "--yes"}, "notification retry unavailable", true},

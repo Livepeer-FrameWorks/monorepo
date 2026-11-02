@@ -116,6 +116,7 @@ func TestProviderInboxClaimsOneBoundedDispatchPerLease(t *testing.T) {
 	metrics := &PurserMetrics{ProviderWebhookInboxFailures: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "test_worker_inbox_items"}, nil), ProviderWebhookInboxReadFailures: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "test_worker_inbox_read_failures_total"}, nil)}
 	m.ExpectQuery("ProviderWebhookInboxRepeatedFailures").WillReturnRows(sqlmock.NewRows([]string{"items"}).AddRow(2))
 	m.ExpectExec("EnqueueUnresolvedCheckoutRecovery").WillReturnResult(sqlmock.NewResult(0, 1))
+	m.ExpectExec("EnqueueUnconfirmedTierDowngrades").WillReturnResult(sqlmock.NewResult(0, 0))
 	m.ExpectBegin()
 
 	const inboxID = "00000000-0000-0000-0000-000000000001"

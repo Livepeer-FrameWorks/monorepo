@@ -8,7 +8,8 @@ WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
 SELECT id::text, tenant_id::text, old_tier_id::text, tier_id::text, actor_id,
     old_period_start, old_period_end, requested_at, provider, collection_provider, customer_id,
     provider_subscription_id, stripe_price_id, old_base_cents, base_cents,
-    state, provider_receipt, recovery_requested_at, recovery_actor_id, recovery_reason
+    state, provider_receipt, recovery_requested_at, recovery_actor_id, recovery_reason,
+    metering_waived_at, metering_waiver_actor_id
 FROM purser.subscription_tier_upgrades
 WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid AND id = sqlc.arg(id)::text::uuid
 FOR UPDATE;
@@ -106,6 +107,13 @@ SET recovery_requested_at = COALESCE(recovery_requested_at, NOW()),
     updated_at = NOW()
 WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid AND id = sqlc.arg(id)::text::uuid
     AND state NOT IN ('completed', 'cancelled') AND recovery_requested_at IS NULL;
+
+-- name: WaiveTierUpgradeMetering :execrows
+UPDATE purser.subscription_tier_upgrades
+SET metering_waived_at = NOW(), metering_waiver_actor_id = sqlc.arg(actor_id)::text,
+    metering_waiver_reason = sqlc.arg(reason)::text, updated_at = NOW()
+WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid AND id = sqlc.arg(id)::text::uuid
+    AND state = 'provider_applied' AND metering_waived_at IS NULL;
 
 -- name: HasPendingTierUpgrade :one
 SELECT EXISTS (

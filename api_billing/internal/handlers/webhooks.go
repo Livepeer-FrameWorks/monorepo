@@ -825,11 +825,12 @@ func (s *Service) handleStripeSubscriptionEvent(payload StripeWebhookPayload) er
 	txErr := database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
 		matched = true
 		appliedStatus := ourStatus
+		var localTier string
 		queries := purserdb.New(tx)
 		if ourStatus == "active" {
 			// Activation authority for an async tenant subscription: apply the
 			// purchased tier and clear staged checkout state once funds settle.
-			rows, actErr := s.activateTenantSubscriptionFromStripe(ctx, tx, tenantID, obj.CustomerID, obj.ID, obj.Metadata.TierID, periodStart, periodEnd, obj.Metadata.ReservationID)
+			activated, actErr := s.activateTenantSubscriptionFromStripe(ctx, tx, tenantID, obj.CustomerID, obj.ID, obj.Metadata.TierID, periodStart, periodEnd, obj.Metadata.ReservationID)
 			if errors.Is(actErr, subscriptions.ErrCheckoutCompensationQueued) {
 				matched = false
 				return nil
@@ -837,10 +838,11 @@ func (s *Service) handleStripeSubscriptionEvent(payload StripeWebhookPayload) er
 			if actErr != nil {
 				return actErr
 			}
-			if rows == 0 {
+			if activated.Rows == 0 {
 				matched = false
 				return nil
 			}
+			localTier = activated.TierID
 			if intentErr := queries.MarkStripeSubscriptionIntentSucceeded(ctx, purserdb.MarkStripeSubscriptionIntentSucceededParams{TenantID: tenantID, SubscriptionID: obj.ID}); intentErr != nil {
 				return fmt.Errorf("failed to mark subscription intent succeeded: %w", intentErr)
 			}
@@ -862,7 +864,7 @@ func (s *Service) handleStripeSubscriptionEvent(payload StripeWebhookPayload) er
 				matched = false
 				return nil
 			}
-			appliedStatus = statusResult.Status
+			appliedStatus, localTier = statusResult.Status, statusResult.TierID
 			// A subscription that reached a terminal failure (incomplete_expired /
 			// unpaid / canceled all map to "cancelled") without ever activating
 			// leaves staged stripe_checkout state behind; clear it so a failed async
@@ -884,7 +886,7 @@ func (s *Service) handleStripeSubscriptionEvent(payload StripeWebhookPayload) er
 			subscriptionID = obj.ID
 		}
 		updated, buildErr := billingevents.New(tenantID, subscriptionID, &internalv1.SubscriptionUpdated{
-			SubscriptionId: subscriptionID, TierId: obj.Metadata.TierID, Status: appliedStatus,
+			SubscriptionId: subscriptionID, TierId: localTier, Status: appliedStatus,
 			ChangedFields: []string{"status"},
 		}, events.Actor{})
 		if buildErr != nil {

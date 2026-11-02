@@ -55,7 +55,13 @@ func writeTierUpgradeRecovery(w io.Writer, r *purserpb.AdminRecoverTierUpgradeRe
 	if jsonOutput {
 		return writeProtoJSON(w, r)
 	}
-	_, err := fmt.Fprintf(w, "Tier upgrade recovery: %s (upgrade %s, operator %s)\n%s\n", r.GetState(), r.GetUpgradeId(), r.GetRequestedBy(), r.GetDetail())
+	if _, err := fmt.Fprintf(w, "Tier upgrade recovery: %s (upgrade %s, operator %s)\n%s\n", r.GetState(), r.GetUpgradeId(), r.GetRequestedBy(), r.GetDetail()); err != nil {
+		return err
+	}
+	if r.GetMeteringWaivedBy() == "" {
+		return nil
+	}
+	_, err := fmt.Fprintf(w, "Metering waived by %s\n", r.GetMeteringWaivedBy())
 	return err
 }
 
@@ -74,6 +80,7 @@ func newAdminTierUpgradeRecoveryCmd() *cobra.Command {
 	cmd.Flags().StringVar(&req.TenantId, "tenant-id", "", "owning tenant UUID (required)")
 	cmd.Flags().StringVar(&req.UpgradeId, "upgrade-id", "", "purchase UUID from recovery list (required)")
 	cmd.Flags().StringVar(&req.Reason, "reason", "", "operator reason retained with the request (required)")
+	cmd.Flags().BoolVar(&req.WaiveMetering, "waive-metering", false, "close a provider-applied purchase on recorded usage instead of waiting for complete metering")
 	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "confirm the displayed recovery without prompting")
 	return cmd
 }

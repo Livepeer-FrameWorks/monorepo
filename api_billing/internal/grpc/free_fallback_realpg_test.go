@@ -386,3 +386,33 @@ func (s *PurserServer) sweepFreeFallbacksOnce(ctx context.Context) {
 	s.sweepFreeFallbackMovesOnce(ctx)
 	s.sweepFreeFallbackNoticesOnce(ctx)
 }
+
+// The move to Free ends the only collector, so the final invoice's sub-minimum
+// amount is written off rather than stranded on a tier with nothing to collect.
+func TestMoveToFreeWritesOffCollectionCarry_RealPG(t *testing.T) {
+	db := startOperatorGrantDatabase(t)
+	tenant, _, _ := seedFallbackLifecycle(t, db)
+	if _, err := db.Exec(`UPDATE purser.tenant_subscriptions SET stripe_subscription_status='canceled',free_fallback_provider_ended_at=NOW(),free_fallback_reason=$2 WHERE tenant_id=$1`, tenant, subscriptions.FallbackPaymentFailed); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO purser.billing_collection_balances(tenant_id,currency,balance_cents) VALUES($1,'EUR',222)`, tenant); err != nil {
+		t.Fatal(err)
+	}
+	server := fallbackLifecycleServer(db, &fallbackLifecycleProvider{call: func(context.Context, billing.SubscriptionEndRequest) (billing.SubscriptionEndResult, error) {
+		return billing.SubscriptionEndResult{}, nil
+	}})
+	server.sweepFreeFallbackMovesOnce(t.Context())
+	var moved bool
+	var balance, written int64
+	var reason string
+	if err := db.QueryRow(`SELECT
+		(SELECT stripe_subscription_id IS NULL FROM purser.tenant_subscriptions WHERE tenant_id=$1),
+		(SELECT balance_cents FROM purser.billing_collection_balances WHERE tenant_id=$1 AND currency='EUR'),
+		(SELECT COALESCE(SUM(amount_cents),0)::bigint FROM purser.billing_collection_writeoffs WHERE tenant_id=$1),
+		COALESCE((SELECT MAX(reason) FROM purser.billing_collection_writeoffs WHERE tenant_id=$1),'')`, tenant).Scan(&moved, &balance, &written, &reason); err != nil {
+		t.Fatal(err)
+	}
+	if !moved || balance != 0 || written != 222 || reason != "account_closed" {
+		t.Fatalf("move to Free carry: moved=%t balance=%d written=%d reason=%q, want moved balance=0 written=222 reason=account_closed", moved, balance, written, reason)
+	}
+}

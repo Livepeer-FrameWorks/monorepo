@@ -463,42 +463,6 @@ func (c *Client) CancelSubscriptionImmediately(ctx context.Context, subscription
 	return sub, nil
 }
 
-// UpdateSubscription updates a subscription's price (tier change)
-func (c *Client) UpdateSubscription(ctx context.Context, subscriptionID, newPriceID string) (*stripe.Subscription, error) {
-	// First get the subscription to find the current item
-	sub, err := subscription.Get(subscriptionID, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get subscription for update: %w", err)
-	}
-
-	if len(sub.Items.Data) == 0 {
-		return nil, fmt.Errorf("subscription has no items")
-	}
-
-	// Update the subscription item with new price
-	params := &stripe.SubscriptionParams{
-		Items: []*stripe.SubscriptionItemsParams{
-			{
-				ID:    stripe.String(sub.Items.Data[0].ID),
-				Price: stripe.String(newPriceID),
-			},
-		},
-		ProrationBehavior: stripe.String("create_prorations"),
-	}
-
-	updatedSub, err := subscription.Update(subscriptionID, params)
-	if err != nil {
-		return nil, fmt.Errorf("failed to update subscription: %w", err)
-	}
-
-	c.logger.WithFields(map[string]any{
-		"subscription_id": subscriptionID,
-		"new_price_id":    newPriceID,
-	}).Info("Subscription updated")
-
-	return updatedSub, nil
-}
-
 // SubscriptionInfo contains extracted subscription details for database updates
 type SubscriptionInfo struct {
 	StripeCustomerID     string
