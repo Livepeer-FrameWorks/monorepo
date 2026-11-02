@@ -18,7 +18,14 @@ FrameWorks centers on **live streaming** — RTMP, E-RTMP, SRT, WHIP, and pull-i
 - **What stays:** HLS and MPEG-DASH delivery · MP4 progressive download · resumable / direct-to-S3 uploads · token-style playback access control · custom player branding · webhook-style callbacks for access decisions.
 - **What changes:** REST → GraphQL · API key → developer token (or wallet/x402 for agents) · iframe embed → `<fw-player>` Web Component or framework packages · processing-status webhooks → named-event webhooks with Standard Webhooks signatures (or the `tenantEvents` subscription) · Bunny signed URL tokens → ES256 JWT signing keys delivered via `?jwt=` · per-region replication knob → cluster placement.
 - **What you gain:** RTMP, E-RTMP, SRT, WHIP push ingest · pull-input from RTSP, SRT, RIST, HLS, DTSC, MPEG-TS · DVR with time-shift · clip API · multistream to Twitch, YouTube, Facebook, Kick, X, custom RTMP/SRT · LL-HLS, DASH, WHEP/WebRTC, MP4, WebSocket playback · sprite-sheet seek previews · provider-operated cross-cluster federation · managed hybrid edges · agent-first surface (MCP, wallet auth, x402) · Skipper.
-- **What's not yet at parity:** DRM (FairPlay/Widevine/PlayReady in development) · automatic chapter generation and transcription/caption auto-generation · view-level QoE across third-party players (per-asset retention/heatmaps ship for the FrameWorks player) · per-region replication knob · iframe-embed-as-a-product · official PHP/C#/Java SDKs (TypeScript, Go, and Python ship) · one-shot bulk library import · watermarking as a managed feature.
+- **What's up next:** DRM · generated captions through Live AI Processing · managed watermarking
+  through server-side composition.
+- **Available today, working differently:** view-level QoE ships for the FrameWorks player, while
+  QoE from third-party players is still ahead · cluster placement instead of a region replication
+  slider · `<fw-player>` and the framework packages instead of a managed iframe embed.
+- **Later, on the roadmap:** PHP, C#, and Java SDKs. TypeScript, Go, and Python ship.
+- **Not planned:** a one-shot library import · VOD metadata edits after upload · automatic
+  chapters and generated titles. See [what's up next](#whats-up-next-and-whats-not-planned).
 - **What FrameWorks does not replace:** Bunny CDN (general HTTP CDN), Bunny Edge Storage (general object / block storage), Bunny DNS, Bunny Optimizer (image), Magic Containers (edge compute), Bunny Shield (DDoS / WAF). Those are Bunny's broader edge platform — keep them. FrameWorks has adjacent infrastructure work on the [roadmap](/roadmap), but this migration guide is about moving the video workload.
 
 <Aside type="caution" title="Read before cutting over production traffic">
@@ -314,7 +321,7 @@ Bunny is the better choice for:
 - **Native iOS (Swift) and Android (Kotlin) SDKs** for app developers.
 - **Bundled adjacent products** — Storage, DNS, Optimizer, Shield, Magic Containers in one account.
 
-## What's up next, and what's not on the roadmap
+## What's up next, and what's not planned
 
 The statuses come from the [roadmap](/roadmap), which shows relative order, not dates. None of
 the up-next items are available today.
@@ -324,8 +331,7 @@ the up-next items are available today.
 - **[DRM](/roadmap#drm).** FairPlay, Widevine, and PlayReady are in development. Landing it
   unblocks the catalogs you protect with MediaCage today; until then, keep DRM titles on Bunny.
 - **[Live AI Processing](/roadmap#live-ai-processing).** Brings transcription on the media edge,
-  which unblocks generated captions in place of Transcribe AI. Automatic chapters and generated
-  titles build on the same layer.
+  which unblocks generated captions in place of Transcribe AI.
 - **[Composition and SSAI](/roadmap#composition-and-ssai).** Adds server-side logos, watermarks,
   and lower thirds, which unblocks watermarking as a managed feature. Today, a watermark needs a
   custom transcode profile on a dedicated or self-hosted cluster, or StreamCrafter's overlays in
@@ -347,13 +353,15 @@ the up-next items are available today.
   [SDKs](/builders/sdks) ship. For PHP, C#, and Java, use GraphQL codegen against the public
   schema and a Standard Webhooks library until generated SDKs land.
 
-### Not on the roadmap
+### Not planned
 
 - **Bulk library import.** `importVodAsset` covers `POST /fetch` one video at a time; there is no
   one-shot Bunny library importer. [Open an in-app ticket](%APP_URL%/support) for sizeable
   libraries so we can scope the move.
 - **VOD metadata edits.** Title and description are set on `createVodUpload`; there is no
   `updateVodAsset` mutation.
+- **Automatic chapters and generated titles.** Bunny generates these with its AI features;
+  FrameWorks has no equivalent planned.
 
 ## Beta and tricky bits
 

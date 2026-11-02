@@ -28,9 +28,15 @@ worth keeping during the cut-over.
   HLS / DTSC / MKV / TS-over-UDP) · 24/7 streams with no 12-hour disconnect · AV1 in delivery ·
   sprite-sheet seek previews (≈ Mux storyboard) · self-hosting and hybrid hosting · MCP, wallet
   auth, and x402 for agents · Skipper · experimental device-discovery productization.
-- **What's not yet at parity:** Mux Data-class QoE breadth — FrameWorks now has first-party view-level QoE (rebuffering, frame drops, startup, VOD retention) for its own player, but cross-player coverage and ad observability are still maturing · DRM · live auto-captions · productized custom-domain SKU · number of official server-side SDKs (Mux ships Node/Python/Ruby/Go/PHP/Elixir/
-  Java/.NET; FrameWorks ships TypeScript, Go, and Python) · built-in referrer/UA playback restrictions as a no-code policy · Master Access download. See [what is up next](#whats-up-next-and-whats-not-on-the-roadmap) before
-  cutting over production traffic.
+- **What's up next:** DRM · live auto-captions through Live AI Processing · built-in password
+  and geo rules on a stream.
+- **Available today, working differently:** view-level QoE ships for the FrameWorks player, while
+  QoE from third-party players is still ahead · custom domains follow the plan's entitlement ·
+  referrer and user-agent restrictions go through the webhook playback policy.
+- **Later, on the roadmap:** more server-side SDK languages. FrameWorks ships TypeScript, Go, and
+  Python; Mux also covers Ruby, PHP, Elixir, Java, and .NET.
+- **Not planned:** Master Access download · frame-accurate clip trimming. See
+  [what's up next](#whats-up-next-and-whats-not-planned) before cutting over production traffic.
 
 <Aside type="caution" title="Read before cutting over production traffic">
   Production-grade items still in motion: published billing rates, hybrid-edge runbooks, DRM, and
@@ -361,7 +367,7 @@ over once you trust the numbers.
   the dashboard, the docs (`⌘J`), or MCP.
 - **Player packages** for React, Svelte, Web Components, and vanilla JS.
 
-## What's up next, and what's not on the roadmap
+## What's up next, and what's not planned
 
 Mux ships several things FrameWorks doesn't have a one-for-one answer for yet. Check which of
 these you depend on before cutting over. The statuses come from the [roadmap](/roadmap), which
@@ -373,8 +379,7 @@ shows relative order, not dates. None of the up-next items are available today.
   unblocks premium catalogs that Mux protects with productized DRM today; until then, keep those
   titles on their current provider.
 - **[Live AI Processing](/roadmap#live-ai-processing).** Brings live transcription on the media
-  edge, which unblocks the live auto-captions Mux ships today. Caption tracks and their
-  lifecycle webhooks follow with it.
+  edge, which unblocks the live auto-captions Mux ships today.
 - **[Built-In Password and Geo Rules](/roadmap#built-in-password-and-geo-rules).** Turns
   password and country rules into switches on a stream. Referrer and user-agent restrictions
   still go through the [webhook playback policy](/builders/playback-access-control), which can
@@ -386,7 +391,7 @@ shows relative order, not dates. None of the up-next items are available today.
   reports rebuffering ratio, frame drops, time to first frame, rendition switches,
   exit-before-start, and per-asset VOD retention at `/analytics/qoe`. Mux Data's breadth is not
   matched yet: QoE from third-party players (Video.js, hls.js, Shaka, native HTML5, Roku,
-  Chromecast) and ad observability are still ahead. If your dashboards depend on those, weigh the
+  Chromecast) is still ahead, and ad observability is not covered. If your dashboards depend on those, weigh the
   gap before cutting over.
 - **Custom domains.** Platform subdomains and your own domains are tied to the plan's
   entitlement. A downgrade removes the served DNS and TLS state and keeps the requested name for
@@ -399,7 +404,7 @@ shows relative order, not dates. None of the up-next items are available today.
   packages. Mux also covers Ruby, PHP, Elixir, Java, and .NET; for those, use GraphQL codegen
   against the public schema until generated SDKs land.
 
-### Not on the roadmap
+### Not planned
 
 - **Master Access.** There is no downloadable copy of the original upload.
 - **Frame-accurate clip trimming.** Clips are GOP-aligned. Mux offers frame-accurate asset

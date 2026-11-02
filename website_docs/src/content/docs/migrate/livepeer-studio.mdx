@@ -16,9 +16,12 @@ Livepeer Studio is a hosted Livepeer gateway; FrameWorks is another gateway on t
 - **What stays:** RTMP and WHIP ingest, HLS and WebRTC playback, multistream targets, clips, recordings.
 - **What changes:** REST → GraphQL · API key → JWT or developer token · Studio webhooks → FrameWorks webhooks with Standard Webhooks signatures and [mapped event names](#real-time-events) (or the `tenantEvents` subscription) · playback access policies are recreated with FrameWorks signing keys or webhooks · `@livepeer/react` → `@livepeer-frameworks/player-*`.
 - **Capabilities to evaluate:** E-RTMP ingest (HEVC/AV1 contribution over RTMP) · SRT ingest · LL-HLS/DASH delivery · sprite-sheet seek previews · AV1 in the codec list · self-hosting / hybrid options · MCP, wallet auth, and x402 for agents · Skipper · experimental device-discovery productization.
-- **What's not yet at parity:** AI Pipelines and C2PA signing. TypeScript, Go, and Python
+- **What's up next:** Live AI Processing for detection, segmentation, and transcription on the
+  media edge.
+- **Not planned:** live video-to-video · C2PA signing · a whole-library importer · per-stream
+  transcode profiles · RTMP and FLV pull sources. TypeScript, Go, and Python
   [SDKs](/builders/sdks) ship. See
-  [the gap list](#whats-up-next-and-whats-not-on-the-roadmap) before planning a production cutover.
+  [what's up next](#whats-up-next-and-whats-not-planned) before planning a production cutover.
 
 <Aside type="caution" title="Read before cutting over production traffic">
   Production-grade items still in motion: published billing rates, hybrid-edge runbooks, DRM, and
@@ -338,7 +341,7 @@ Run a low-traffic test stream through both platforms in parallel for a day. Watc
 - **Skipper** — an in-product AI consultant for API discovery and diagnostics. Reach it from the dashboard, the docs (`⌘J`), or MCP.
 - **Player packages** for React, Svelte, Web Components, and vanilla JS.
 
-## What's up next, and what's not on the roadmap
+## What's up next, and what's not planned
 
 The statuses come from the [roadmap](/roadmap), which shows relative order, not dates. None of
 the up-next items are available today.
@@ -347,11 +350,11 @@ the up-next items are available today.
 
 - **[Live AI Processing](/roadmap#live-ai-processing).** Runs models such as YOLO detection and
   Parakeet transcription on the media edge, with heavy models deferred to Livepeer compute.
-  Landing it unblocks the workloads Studio's AI Pipelines covered, such as ASR, segmentation and
-  live video-to-video. Until then, keep AI workloads on [Daydream](https://daydream.live/) or your
+  Landing it unblocks the detection, segmentation and transcription workloads that Studio's AI
+  Pipelines covered. Live video-to-video is not part of it. Until then, keep AI workloads on [Daydream](https://daydream.live/) or your
   existing Livepeer surfaces.
 
-### Not on the roadmap
+### Not planned
 
 - **C2PA signing and creator-ID provenance on transcode** — not exposed as a public FrameWorks API
   today.
