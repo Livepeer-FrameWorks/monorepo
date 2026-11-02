@@ -2,139 +2,210 @@
   import { onMount, untrack } from "svelte";
   import { get } from "svelte/store";
   import { resolve } from "$app/paths";
+  import { page } from "$app/state";
+  import { replaceState } from "$app/navigation";
   import { fragment, GetStreamsConnectionStore, StreamCoreFieldsStore } from "$houdini";
   import { StreamCrafter } from "@livepeer-frameworks/streamcrafter-svelte";
-  import { getDocsSiteUrl } from "$lib/config";
+  import { getDocsSiteUrl, getMarketingSiteUrl } from "$lib/config";
   import { auth } from "$lib/stores/auth";
-  import { resolveIngestDestination } from "$lib/placement/ingest-api";
+  import { IngestResolutionError, resolveIngestDestination } from "$lib/placement/ingest-api";
   import { destinationHost, ingestProtocolUrl, type ResolvedIngest } from "$lib/placement/ingest";
+  import { resolveOperationalStreamId } from "$lib/route-ids";
   import { getIconComponent } from "$lib/iconUtils";
   import { Button } from "$lib/components/ui/button";
   import { Select, SelectTrigger, SelectContent, SelectItem } from "$lib/components/ui/select";
   import {
     Dialog,
     DialogContent,
+    DialogDescription,
+    DialogFooter,
     DialogHeader,
     DialogTitle,
-    DialogTrigger,
   } from "$lib/components/ui/dialog";
   import { Switch } from "$lib/components/ui/switch";
   import { Label } from "$lib/components/ui/label";
   import { toast } from "$lib/stores/toast.js";
   import { themeStore } from "$lib/stores/theme.svelte";
+  import { describeResolveFailure, describeStudioFailure, type GoLiveFailure } from "./failures";
+  import {
+    DEFAULT_STUDIO_SETTINGS,
+    RENDERER_LABELS,
+    loadStudioSettings,
+    saveStudioSettings,
+    type CompositorRenderer,
+    type StudioSettings,
+  } from "./studio-settings";
 
-  // Houdini stores
   const streamsStore = new GetStreamsConnectionStore();
   const streamFragmentStore = new StreamCoreFieldsStore();
 
-  // State
+  const docsSiteUrl = getDocsSiteUrl().replace(/\/$/, "");
+  const marketingSiteUrl = getMarketingSiteUrl().replace(/\/$/, "");
+
   let selectedStreamId = $state<string | null>(null);
   let isStreaming = $state(false);
   let connectionBusy = $state(false);
-  let preparing = $state(false);
-  let initialWhipUrl = $state<string | null>(null);
+  // The studio's controller is built once per signed-in user from the first
+  // destination found. Every connection then asks resolveConnectionDestination
+  // for the selected stream, so switching streams keeps sources and scenes.
+  let studioWhipUrl = $state<string | null>(null);
+  let studioIdentity = "";
+  let studioEpoch = $state(0);
+  let checking = $state(false);
   let destination = $state<ResolvedIngest | null>(null);
   let destinationTime = $state("");
-  let destinationError = $state("");
   let destinationEpoch = 0;
-  let error = $state<string | null>(null);
-  let advancedSettings = $state({
-    enableCompositor: true,
-    compositorRenderer: "auto" as "auto" | "webgl" | "webgpu" | "canvas2d",
-  });
+  let failure = $state<(GoLiveFailure & { source: "resolve" | "studio" }) | null>(null);
+  let lastResolveMessage = "";
+  let loadError = $state<string | null>(null);
+  let deepLinkNotice = $state<string | null>(null);
+  let settings = $state<StudioSettings>({ ...DEFAULT_STUDIO_SETTINGS });
+  let settingsDraft = $state<StudioSettings>({ ...DEFAULT_STUDIO_SETTINGS });
+  let settingsOpen = $state(false);
 
-  // Derived state
   let loading = $derived($streamsStore.fetching);
   let streams = $derived(
     $streamsStore.data?.streamsConnection?.edges
-      ?.map((e) => {
-        const node = get(fragment(e.node, streamFragmentStore));
-        return node;
-      })
+      ?.map((e) => get(fragment(e.node, streamFragmentStore)))
       .filter((stream) => stream?.ingestMode === "PUSH") ?? []
   );
   let selectedStream = $derived(streams.find((s) => s?.id === selectedStreamId) ?? null);
   const identity = $derived(
     $auth.isAuthenticated && $auth.user?.tenant_id ? `${$auth.user.tenant_id}:${$auth.user.id}` : ""
   );
+
   $effect(() => {
-    const binding = `${identity}:${selectedStream?.streamId ?? ""}:${selectedStream?.streamKey ?? ""}`;
+    const current = identity;
     untrack(() => {
-      if (binding) destinationEpoch++;
-      initialWhipUrl = null;
+      if (current !== studioIdentity) {
+        studioIdentity = current;
+        studioWhipUrl = null;
+      }
+    });
+  });
+
+  // Look the destination up as soon as a stream is selected, so the studio
+  // mounts without an extra step and key or capacity problems show early.
+  const destinationBinding = $derived(
+    identity && selectedStream?.streamId && selectedStream?.streamKey
+      ? `${identity}:${selectedStream.streamId}:${selectedStream.streamKey}`
+      : ""
+  );
+  $effect(() => {
+    const ready = destinationBinding !== "";
+    untrack(() => {
+      destinationEpoch++;
       destination = null;
       destinationTime = "";
-      destinationError = "";
-      preparing = false;
-      isStreaming = false;
-      connectionBusy = false;
+      failure = null;
+      if (ready) void checkDestination();
     });
   });
 
   onMount(async () => {
+    settings = loadStudioSettings(storage());
     await loadStreams();
   });
+
+  function storage(): Storage | undefined {
+    try {
+      return window.localStorage;
+    } catch {
+      return undefined;
+    }
+  }
+
+  function findStream(param: string) {
+    const operationalId = resolveOperationalStreamId({ routeParamId: param });
+    return (
+      streams.find(
+        (s) =>
+          s?.id === param ||
+          s?.streamId === param ||
+          (operationalId && s?.streamId === operationalId)
+      ) ?? null
+    );
+  }
 
   async function loadStreams() {
     try {
       await streamsStore.fetch();
-      // Auto-select first stream if available
-      if (!selectedStreamId && streams.length > 0) {
+      loadError = null;
+      const requested = page.url.searchParams.get("stream");
+      const match = requested ? findStream(requested) : null;
+      deepLinkNotice =
+        requested && !match
+          ? "The linked stream is not available here. Go Live lists streams that receive pushed video."
+          : null;
+      if (match) {
+        selectedStreamId = match.id;
+      } else if (!selectedStreamId && streams.length > 0) {
         selectedStreamId = streams[0]?.id ?? null;
       }
     } catch (err) {
       console.error("Failed to load streams:", err);
-      error = "Failed to load streams";
+      loadError = "Failed to load streams";
     }
   }
 
   function handleStreamSelect(value: string) {
     if (connectionBusy) return;
     selectedStreamId = value;
+    deepLinkNotice = null;
+    const stream = streams.find((s) => s?.id === value);
+    if (stream?.streamId) {
+      replaceState(resolve(`/go-live?stream=${encodeURIComponent(stream.streamId)}`), page.state);
+    }
   }
 
   async function resolveConnectionDestination(signal?: AbortSignal): Promise<string> {
     const epoch = destinationEpoch;
-    if (!identity || !selectedStream?.streamId || !selectedStream.streamKey)
+    const stream = selectedStream;
+    if (!identity || !stream?.streamId || !stream.streamKey)
       throw new Error("Select a stream first.");
     try {
       const result = await resolveIngestDestination(
-        selectedStream.streamId,
-        selectedStream.streamKey,
+        stream.streamId,
+        stream.streamKey,
         signal,
         "WHIP"
       );
       if (epoch !== destinationEpoch || signal?.aborted)
         throw new DOMException("Resolution cancelled", "AbortError");
       const url = ingestProtocolUrl(result.primary, "whip");
-      if (!url)
-        throw new Error("The selected destination does not advertise a valid WHIP endpoint.");
+      if (!url) throw new IngestResolutionError("No WHIP endpoint", "PROTOCOL_UNAVAILABLE");
       destination = result;
       destinationTime = new Date().toLocaleTimeString();
-      destinationError = "";
+      if (failure?.source === "resolve") failure = null;
       return url;
     } catch (error) {
-      if (epoch === destinationEpoch && !signal?.aborted) {
+      if (epoch === destinationEpoch && !signal?.aborted && !isAbort(error)) {
         destination = null;
         destinationTime = "";
-        destinationError =
-          "No WHIP destination was confirmed. Check stream access and capacity, then retry. A generic address will not be substituted.";
+        lastResolveMessage = error instanceof Error ? error.message : String(error);
+        failure = {
+          ...describeResolveFailure(error instanceof IngestResolutionError ? error.code : null),
+          source: "resolve",
+        };
       }
       throw error;
     }
   }
 
-  async function prepareConnection() {
-    if (preparing || connectionBusy) return;
+  function isAbort(error: unknown) {
+    return error instanceof DOMException && error.name === "AbortError";
+  }
+
+  async function checkDestination() {
     const epoch = destinationEpoch;
-    preparing = true;
+    checking = true;
     try {
       const url = await resolveConnectionDestination();
-      if (epoch === destinationEpoch && !initialWhipUrl) initialWhipUrl = url;
+      if (epoch === destinationEpoch && !studioWhipUrl) studioWhipUrl = url;
     } catch {
-      /* The scoped resolver displays the failure without credential-bearing details. */
+      // resolveConnectionDestination records what failed.
     } finally {
-      if (epoch === destinationEpoch) preparing = false;
+      if (epoch === destinationEpoch) checking = false;
     }
   }
 
@@ -145,26 +216,48 @@
     isStreaming = nextStreaming;
 
     if (!wasStreaming && nextStreaming) {
+      failure = null;
       toast.success("You are now live!");
     } else if (wasStreaming && !nextStreaming && state === "idle") {
       toast.info("Broadcast ended");
     }
   }
 
-  function handleError(_errorMsg: string) {
-    const message =
-      "Broadcast connection failed. Check the destination and device settings, then retry.";
-    toast.error(message);
-    error = message;
+  function handleError(message: string) {
+    if (failure?.source === "resolve" && message === lastResolveMessage) {
+      toast.error(failure.title);
+      return;
+    }
+    const described = describeStudioFailure(message);
+    failure = { ...described, source: "studio" };
+    toast.error(described.title);
   }
 
-  // Icons
-  const GlobeIcon = getIconComponent("Globe");
+  function openSettings() {
+    settingsDraft = { ...settings };
+    settingsOpen = true;
+  }
+
+  function applySettings() {
+    const changed =
+      settingsDraft.enableCompositor !== settings.enableCompositor ||
+      settingsDraft.compositorRenderer !== settings.compositorRenderer;
+    settings = { ...settingsDraft };
+    saveStudioSettings(storage(), settings);
+    settingsOpen = false;
+    if (changed) {
+      if (failure?.source === "studio") failure = null;
+      studioEpoch++;
+    }
+  }
+
+  const SignalIcon = getIconComponent("Signal");
   const VideoIcon = getIconComponent("Video");
   const RadioIcon = getIconComponent("Radio");
   const AlertCircleIcon = getIconComponent("AlertCircle");
   const PlusIcon = getIconComponent("Plus");
   const SettingsIcon = getIconComponent("Settings");
+  const CircleIcon = getIconComponent("Circle");
 </script>
 
 <svelte:head>
@@ -172,14 +265,15 @@
 </svelte:head>
 
 <div class="h-full flex flex-col">
-  <!-- Fixed Page Header -->
   <div class="px-4 sm:px-6 lg:px-8 py-4 border-b border-[hsl(var(--tn-fg-gutter)/0.3)] shrink-0">
     <div class="flex justify-between items-center">
       <div class="flex items-center gap-3">
-        <GlobeIcon class="w-5 h-5 text-primary" />
+        <SignalIcon class="w-5 h-5 text-primary" />
         <div>
           <h1 class="text-xl font-bold text-foreground">Go Live</h1>
-          <p class="text-sm text-muted-foreground">Stream directly from your browser with WebRTC</p>
+          <p class="text-sm text-muted-foreground">
+            Broadcast from your browser with StreamCrafter
+          </p>
         </div>
       </div>
       <div class="flex items-center gap-3">
@@ -193,7 +287,6 @@
     </div>
   </div>
 
-  <!-- Scrollable Content -->
   <div class="flex-1 overflow-y-auto flex flex-col relative">
     {#if loading}
       <div class="px-4 sm:px-6 lg:px-8 py-6">
@@ -201,12 +294,12 @@
           <div class="loading-spinner w-8 h-8"></div>
         </div>
       </div>
-    {:else if error && streams.length === 0}
+    {:else if loadError && streams.length === 0}
       <div class="px-4 sm:px-6 lg:px-8 py-6">
         <div class="text-center py-12">
           <AlertCircleIcon class="w-6 h-6 text-destructive mx-auto mb-4" />
           <h3 class="text-lg font-semibold text-destructive mb-2">Error Loading Streams</h3>
-          <p class="text-muted-foreground mb-6">{error}</p>
+          <p class="text-muted-foreground mb-6">{loadError}</p>
           <Button onclick={loadStreams}>Try Again</Button>
         </div>
       </div>
@@ -226,8 +319,7 @@
       </div>
     {:else}
       <div class="page-transition min-h-full flex flex-col">
-        <!-- Stream Selector & Settings -->
-        <div class="px-4 sm:px-6 lg:px-8 py-4 border-b border-border/30 bg-muted/10">
+        <div class="px-4 sm:px-6 lg:px-8 py-4 border-b border-border/30 bg-muted/10 space-y-3">
           <div class="flex flex-wrap items-center gap-4">
             <span class="text-sm font-medium text-foreground">Broadcast to:</span>
             <Select
@@ -236,7 +328,7 @@
               type="single"
               disabled={connectionBusy}
             >
-              <SelectTrigger class="min-w-[250px]">
+              <SelectTrigger class="min-w-[250px]" aria-label="Stream to broadcast to">
                 {selectedStream?.name ?? "Select a stream..."}
               </SelectTrigger>
               <SelectContent>
@@ -259,106 +351,102 @@
 
             <div class="flex-1"></div>
 
-            <!-- Advanced Settings Dialog -->
-            <Dialog>
-              <DialogTrigger>
-                {#snippet child({ props })}
-                  <Button variant="ghost" size="icon" disabled={connectionBusy} {...props}>
-                    <SettingsIcon class="w-5 h-5" />
-                  </Button>
-                {/snippet}
-              </DialogTrigger>
-              <DialogContent>
-                <DialogHeader>
-                  <DialogTitle>Advanced Settings</DialogTitle>
-                </DialogHeader>
-                <div class="grid gap-4 py-4">
-                  <div class="flex items-center justify-between space-x-2">
-                    <Label for="compositor-mode">Enable Compositor</Label>
-                    <Switch
-                      id="compositor-mode"
-                      checked={advancedSettings.enableCompositor}
-                      onCheckedChange={(v) => (advancedSettings.enableCompositor = v)}
-                    />
-                  </div>
-                  <div class="grid gap-2">
-                    <Label for="renderer-engine">Renderer Engine</Label>
-                    <Select
-                      value={advancedSettings.compositorRenderer}
-                      onValueChange={(v) =>
-                        (advancedSettings.compositorRenderer = v as
-                          | "auto"
-                          | "webgl"
-                          | "webgpu"
-                          | "canvas2d")}
-                      type="single"
-                    >
-                      <SelectTrigger id="renderer-engine">
-                        {advancedSettings.compositorRenderer}
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="auto">Auto</SelectItem>
-                        <SelectItem value="webgl">WebGL</SelectItem>
-                        <SelectItem value="webgpu">WebGPU</SelectItem>
-                        <SelectItem value="canvas2d">Canvas2D</SelectItem>
-                      </SelectContent>
-                    </Select>
-                    <p class="text-xs text-muted-foreground">
-                      Controls the rendering engine used for video processing. Auto is recommended.
-                    </p>
-                  </div>
-                </div>
-              </DialogContent>
-            </Dialog>
+            <Button
+              variant="ghost"
+              size="icon"
+              disabled={connectionBusy}
+              onclick={openSettings}
+              aria-label="Studio settings"
+            >
+              <SettingsIcon class="w-5 h-5" />
+            </Button>
           </div>
+
+          {#if selectedStream}
+            <div class="flex flex-wrap items-center gap-x-6 gap-y-1 text-xs text-muted-foreground">
+              <span class="flex items-center gap-1.5" data-testid="recording-status">
+                {#if selectedStream.record}
+                  <CircleIcon class="w-2 h-2 fill-current text-error" />
+                  Recording on: the broadcast is saved to your Library.
+                {:else}
+                  <CircleIcon class="w-2 h-2" />
+                  Recording off.
+                  <a
+                    href={resolve("/streams/[id]", { id: selectedStream.id })}
+                    class="text-primary hover:underline">Turn it on in stream settings</a
+                  >
+                {/if}
+              </span>
+              {#if destination}
+                <span class="break-all">
+                  Ingest node: {destinationHost(destination.primary)} · {destination.primary
+                    .region ?? "region unknown"} · checked {destinationTime}
+                </span>
+              {:else if checking}
+                <span>Finding an ingest node…</span>
+              {/if}
+            </div>
+          {/if}
+
+          {#if deepLinkNotice}
+            <p class="text-xs text-warning" role="status">{deepLinkNotice}</p>
+          {/if}
+
+          {#if failure && selectedStream}
+            <div
+              role="alert"
+              class="border-l-2 border-destructive bg-destructive/5 p-3 text-sm space-y-2"
+            >
+              <p class="font-semibold text-destructive">{failure.title}</p>
+              <p class="text-muted-foreground">{failure.detail}</p>
+              {#if failure.actions.length > 0}
+                <div class="flex flex-wrap gap-2">
+                  {#each failure.actions as action (action)}
+                    {#if action === "keys"}
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        href={resolve("/streams/[id]", { id: selectedStream.id })}
+                        >Open stream keys</Button
+                      >
+                    {:else if action === "billing"}
+                      <Button size="sm" variant="outline" href={resolve("/account/billing")}
+                        >Open billing</Button
+                      >
+                    {:else if action === "login"}
+                      <Button size="sm" variant="outline" href={resolve("/login")}>Sign in</Button>
+                    {:else if action === "settings"}
+                      <Button size="sm" variant="outline" onclick={openSettings}
+                        >Studio settings</Button
+                      >
+                    {:else if action === "retry"}
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={checking || connectionBusy}
+                        onclick={checkDestination}>Try again</Button
+                      >
+                    {/if}
+                  {/each}
+                </div>
+              {/if}
+            </div>
+          {/if}
         </div>
 
-        {#if selectedStream}
-          <section
-            class="px-4 sm:px-6 lg:px-8 py-4 border-b border-border space-y-2"
-            aria-label="Browser ingest destination"
-          >
-            <h2 class="text-sm font-semibold">Recommended destination</h2>
-            {#if destination}<p class="text-sm break-all">
-                {destinationHost(destination.primary)} · {destination.primary.region ??
-                  "Region unavailable"} · resolved {destinationTime}
-              </p>{/if}
-            <p class="text-xs text-muted-foreground">
-              Prepare a specific node before enabling capture. Placement is refreshed again for each
-              connection; preparation is advisory, not admission or a node reservation.
-            </p>
-            {#if destinationError}<p role="alert" class="text-sm text-destructive">
-                {destinationError}
-              </p>{/if}
-            <Button
-              class="min-h-11"
-              variant="outline"
-              disabled={preparing || connectionBusy || !identity}
-              onclick={prepareConnection}
-              >{preparing
-                ? "Resolving…"
-                : initialWhipUrl
-                  ? "Refresh next destination"
-                  : "Prepare connection"}</Button
-            >
-          </section>
-        {/if}
-
-        <!-- StreamCrafter Component -->
         <div class="flex-1 bg-black relative flex flex-col">
-          {#if selectedStream && initialWhipUrl && identity}
-            {#key `${identity}-${selectedStream.streamId}-${advancedSettings.enableCompositor}-${advancedSettings.compositorRenderer}`}
+          {#if selectedStream && studioWhipUrl && identity}
+            {#key `${identity}:${studioEpoch}`}
               <div class="w-full min-h-full flex flex-col">
                 <StreamCrafter
-                  whipUrl={initialWhipUrl}
+                  whipUrl={studioWhipUrl}
                   resolveWhipUrl={resolveConnectionDestination}
                   initialProfile="broadcast"
                   autoStartCamera={false}
                   showSettings={false}
-                  showProducerPanel={true}
                   theme={themeStore.playerTheme as import("@livepeer-frameworks/streamcrafter-core").FwThemePreset}
-                  enableCompositor={advancedSettings.enableCompositor}
-                  compositorConfig={{ renderer: advancedSettings.compositorRenderer }}
+                  enableCompositor={settings.enableCompositor}
+                  compositorConfig={{ renderer: settings.compositorRenderer }}
                   onStateChange={handleStateChange}
                   onError={handleError}
                   class="w-full flex-1"
@@ -366,61 +454,136 @@
               </div>
             {/key}
           {:else}
-            <div class="flex items-center justify-center h-full text-muted-foreground">
+            <div class="flex items-center justify-center h-full min-h-64 text-muted-foreground">
               <div class="text-center">
                 <VideoIcon class="w-12 h-12 mx-auto mb-4 opacity-50" />
                 <p>
-                  {selectedStream
-                    ? "Prepare a destination to enable the studio"
-                    : "Select a stream to start broadcasting"}
+                  {#if !selectedStream}
+                    Select a stream to start broadcasting
+                  {:else if checking}
+                    Opening the studio…
+                  {:else}
+                    The studio opens once an ingest node is found for this stream
+                  {/if}
                 </p>
               </div>
             </div>
           {/if}
         </div>
 
-        <!-- Help Section -->
         {#if selectedStream}
           <div class="px-4 sm:px-6 lg:px-8 py-4 border-t border-border/30 bg-muted/10">
             <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
               <div>
-                <h4 class="font-medium text-foreground mb-1">Sources & Mixing</h4>
+                <h4 class="font-medium text-foreground mb-1">Add sources</h4>
                 <p class="text-muted-foreground">
-                  Click the camera/mic icons to enable your devices. Grant browser permissions when
-                  prompted.
+                  Add Camera starts your camera and microphone. Share Screen picks a screen, window
+                  or tab. Add media file plays a video or audio file from your computer in the mix.
                 </p>
               </div>
               <div>
-                <h4 class="font-medium text-foreground mb-1">Content Ingest</h4>
+                <h4 class="font-medium text-foreground mb-1">Arrange the picture</h4>
                 <p class="text-muted-foreground">
-                  Share your screen, a window, or a browser tab. Great for presentations and
-                  tutorials.
+                  With two or more sources, pick a layout on the preview. The panel under the
+                  preview holds scenes, transitions, logos and text.
                 </p>
               </div>
               <div>
-                <h4 class="font-medium text-foreground mb-1">Start Streaming</h4>
+                <h4 class="font-medium text-foreground mb-1">Go live</h4>
                 <p class="text-muted-foreground">
-                  Click the Go Live button to start streaming. Your broadcast will be available
-                  immediately.
+                  Nothing is public until you click Go Live. Keep this tab open for the whole
+                  broadcast. Multistream destinations on the stream start and stop with it.
                 </p>
               </div>
             </div>
 
-            <div class="mt-4 pt-4 border-t border-border/30 text-sm text-muted-foreground">
-              <strong>Embed StreamCrafter:</strong> You can drop this component into your website
-              and even for non-FrameWorks media servers.
-              <!-- eslint-disable svelte/no-navigation-without-resolve -->
-              <a
-                href={`${getDocsSiteUrl()}/builders/ingest`}
-                target="_blank"
-                rel="noopener noreferrer"
-                class="text-primary hover:underline">Read the Docs</a
-              >
-              <!-- eslint-enable svelte/no-navigation-without-resolve -->
+            <!-- eslint-disable svelte/no-navigation-without-resolve -->
+            <div
+              class="mt-4 pt-4 border-t border-border/30 text-sm text-muted-foreground space-y-1"
+            >
+              <p>
+                New to the studio? The
+                <a
+                  href={`${docsSiteUrl}/builders/go-live-browser`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="text-primary hover:underline">Go Live guide</a
+                >
+                walks through a first broadcast. To add StreamCrafter to your own app, see the
+                <a
+                  href={`${docsSiteUrl}/builders/ingest`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="text-primary hover:underline">StreamCrafter SDK docs</a
+                >.
+              </p>
+              <p>
+                StreamCrafter is in beta and changes quickly. Cloud production and more studio
+                features are
+                <a
+                  href={`${marketingSiteUrl}/showcase#up-next`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="text-primary hover:underline">in the pipeline</a
+                >.
+              </p>
             </div>
+            <!-- eslint-enable svelte/no-navigation-without-resolve -->
           </div>
         {/if}
       </div>
     {/if}
   </div>
 </div>
+
+<Dialog bind:open={settingsOpen}>
+  <DialogContent>
+    <DialogHeader>
+      <DialogTitle>Studio settings</DialogTitle>
+      <DialogDescription>
+        Applying a change restarts the studio and clears its sources, scenes and overlays.
+      </DialogDescription>
+    </DialogHeader>
+    <div class="grid gap-4 py-4">
+      <div class="flex items-center justify-between space-x-2">
+        <div>
+          <Label for="compositor-mode">Compositor</Label>
+          <p class="text-xs text-muted-foreground">
+            Mixes several sources with layouts, scenes and overlays. Turn it off to send one source
+            at a time.
+          </p>
+        </div>
+        <Switch
+          id="compositor-mode"
+          checked={settingsDraft.enableCompositor}
+          onCheckedChange={(v) => (settingsDraft.enableCompositor = v)}
+        />
+      </div>
+      <div class="grid gap-2">
+        <Label for="renderer-engine">Renderer</Label>
+        <Select
+          value={settingsDraft.compositorRenderer}
+          onValueChange={(v) => (settingsDraft.compositorRenderer = v as CompositorRenderer)}
+          type="single"
+          disabled={!settingsDraft.enableCompositor}
+        >
+          <SelectTrigger id="renderer-engine">
+            {RENDERER_LABELS[settingsDraft.compositorRenderer]}
+          </SelectTrigger>
+          <SelectContent>
+            {#each Object.entries(RENDERER_LABELS) as [value, label] (value)}
+              <SelectItem {value}>{label}</SelectItem>
+            {/each}
+          </SelectContent>
+        </Select>
+        <p class="text-xs text-muted-foreground">
+          Auto picks the fastest renderer your browser supports.
+        </p>
+      </div>
+    </div>
+    <DialogFooter>
+      <Button variant="ghost" onclick={() => (settingsOpen = false)}>Cancel</Button>
+      <Button disabled={connectionBusy} onclick={applySettings}>Apply</Button>
+    </DialogFooter>
+  </DialogContent>
+</Dialog>
