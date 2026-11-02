@@ -100,8 +100,7 @@ func definiteCheckoutRejection(code string, cause error) bool {
 
 // checkoutRequestError maps only the journal's domain refusals to a precondition.
 func checkoutRequestError(err error) error {
-	if subscriptions.IsPricingRefusal(err) {
-		refusal, _ := pricingRefusalStatus(err)
+	if refusal, ok := pricingRefusalStatus(err); ok {
 		return refusal
 	}
 	code := codes.Internal
