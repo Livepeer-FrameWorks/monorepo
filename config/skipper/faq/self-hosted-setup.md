@@ -73,21 +73,26 @@ After enrollment, Foghorn updates Helmsman, MistServer and Caddy through the edg
 
 ### Ports
 
-The default edge template routes all traffic through Caddy on HTTPS:
+Caddy serves HTTPS and MistServer listens directly for the media protocols. The edge uses host networking on Linux; on macOS the container publishes the same ports.
 
-| Port    | Protocol | Notes                                            |
-| ------- | -------- | ------------------------------------------------ |
-| 443/tcp | HTTPS    | All ingest (WHIP) and playback (WHEP, HLS, DASH) |
-| 80/tcp  | HTTP     | Redirect to HTTPS                                |
+| Port      | Protocol     | Required | Notes                                         |
+| --------- | ------------ | -------- | --------------------------------------------- |
+| 443/tcp   | HTTPS        | Yes      | WHIP/WHEP signalling, HLS and DASH, via Caddy |
+| 80/tcp    | HTTP         | Yes      | Redirect to HTTPS                             |
+| 18203/udp | WebRTC media | Yes      | Media for WHIP ingest and WHEP playback       |
+| 4200/tcp  | DTSC         | Yes      | Stream replication between edges              |
+| 1935/tcp  | RTMP         | Optional | RTMP ingest and playback                      |
+| 8889/udp  | SRT          | Optional | SRT ingest and playback                       |
+| 5554/tcp  | RTSP         | Optional | RTSP ingest and playback                      |
 
-MistServer listens on 8080 internally; Caddy reverse-proxies to it. For direct RTMP (1935/tcp) or SRT (8889/udp) ingest, open those MistServer ports in the host firewall.
+MistServer's HTTP (8080) and API (4242), Helmsman and vmagent listen on loopback only. `frameworks edge preflight` checks the host before provisioning.
 
 ### Server requirements
 
 - Linux (Ubuntu 22.04+ recommended), or macOS in native mode
 - Docker and Docker Compose for container mode
 - Public IP address
-- Ports 80 and 443 open in firewall
+- Ports 80/tcp, 443/tcp, 4200/tcp and 18203/udp open in the firewall, plus 1935/tcp, 8889/udp or 5554/tcp for RTMP, SRT or RTSP
 - At least 2 CPU cores, 4GB RAM for a basic edge
 
 ## DNS and TLS
