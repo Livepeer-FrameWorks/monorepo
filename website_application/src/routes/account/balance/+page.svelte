@@ -15,6 +15,11 @@
   } from "$lib/utils/formatters";
   import { topupCurrency } from "$lib/utils/presentment-currency";
   import {
+    BALANCE_NOTICES,
+    BALANCE_RULES,
+    balanceNotice,
+  } from "$lib/components/PrepaidBalanceWidget.svelte";
+  import {
     GetPrepaidBalanceStore,
     GetBalanceTransactionsStore,
     GetBillingStatusStore,
@@ -74,6 +79,17 @@
   // A prepaid account is admitted on its balance; a postpaid account's balance
   // is credit its next invoice takes, so the spent-balance rule does not apply.
   let admittedOnBalance = $state(true);
+  let suspended = $state(false);
+  const notice = $derived(
+    balance
+      ? balanceNotice({
+          admittedOnBalance,
+          suspended,
+          availableBalanceCents: balance.availableBalanceCents,
+          isLowBalance: balance.isLowBalance,
+        })
+      : null
+  );
 
   // Top-up form state. LPT is hidden until a non-Chainlink price source ships.
   let topupAmount = $state(10);
@@ -199,6 +215,7 @@
 
       admittedOnBalance =
         billingResult.data?.billingStatus?.subscription?.billingModel !== "postpaid";
+      suspended = billingResult.data?.billingStatus?.billingStatus === "suspended";
       presentmentCurrency = topupCurrency(detailsResult?.data?.billingDetails);
       const configuredProviders = billingResult.data?.billingStatus?.setupProviders ?? [];
       availableCardProviders = configuredProviders
@@ -435,45 +452,25 @@
                   Your account is billed monthly. This balance is credit that your next invoice
                   takes.
                 </p>
-              {:else if balance.availableBalanceCents < -1000}
+              {:else if notice === "suspended" || notice === "spent"}
                 <div class="flex items-start gap-2 mt-3 text-destructive">
                   <AlertIcon class="w-4 h-4 shrink-0 mt-0.5" />
-                  <span class="text-sm"
-                    >Below -€10 the account is suspended and running streams stop. Top up to stream
-                    again.</span
-                  >
+                  <span class="text-sm">{BALANCE_NOTICES[notice]}</span>
                 </div>
-              {:else if balance.availableBalanceCents <= 0}
-                <div class="flex items-start gap-2 mt-3 text-destructive">
-                  <AlertIcon class="w-4 h-4 shrink-0 mt-0.5" />
-                  <span class="text-sm"
-                    >Balance spent. Running streams and their viewers continue, but new streams and
-                    new viewers are refused until you top up.</span
-                  >
-                </div>
-              {:else if balance.isLowBalance}
+              {:else if notice === "low"}
                 <div class="flex items-center gap-2 mt-3 text-warning">
                   <AlertIcon class="w-4 h-4" />
-                  <span class="text-sm">Low balance warning</span>
+                  <span class="text-sm">{BALANCE_NOTICES.low}</span>
                 </div>
               {/if}
               {#if admittedOnBalance}
                 <dl class="mt-4 space-y-1 text-xs text-muted-foreground">
-                  <div class="flex gap-2">
-                    <dt class="w-24 shrink-0 font-medium text-foreground">Above €0</dt>
-                    <dd>Streams, viewers and recordings run normally.</dd>
-                  </div>
-                  <div class="flex gap-2">
-                    <dt class="w-24 shrink-0 font-medium text-foreground">€0 or below</dt>
-                    <dd>
-                      Running streams and their viewers continue. New streams and new viewers are
-                      refused, and a viewer or encoder that disconnects cannot reconnect.
-                    </dd>
-                  </div>
-                  <div class="flex gap-2">
-                    <dt class="w-24 shrink-0 font-medium text-foreground">Below -€10</dt>
-                    <dd>The account is suspended and running streams stop.</dd>
-                  </div>
+                  {#each BALANCE_RULES as rule (rule.when)}
+                    <div class="flex gap-2">
+                      <dt class="w-28 shrink-0 font-medium text-foreground">{rule.when}</dt>
+                      <dd>{rule.effect}</dd>
+                    </div>
+                  {/each}
                 </dl>
               {/if}
               <p class="text-sm text-muted-foreground mt-4">

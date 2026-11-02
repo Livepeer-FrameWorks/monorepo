@@ -30,10 +30,19 @@ describe("prepaid balance widget", () => {
     expect(notice.textContent).toContain("-€10");
   });
 
-  it("says running streams stop below -€10", async () => {
+  it("states the suspension when Purser suspended the account", async () => {
     withAvailable(-1500);
-    render(PrepaidBalanceWidget, { billingModel: "prepaid" });
-    expect(await screen.findByText(/Below -€10 the account is suspended/)).toBeTruthy();
+    render(PrepaidBalanceWidget, { billingModel: "prepaid", suspended: true });
+    expect(await screen.findByText(/Your account is suspended/)).toBeTruthy();
+  });
+
+  it("does not call an account suspended on a reservation alone", async () => {
+    // Settled +€5 with €20 reserved: available is -€15, but Purser suspends
+    // on the settled balance, so the account is only refusing new sessions.
+    balance = { balanceCents: 500, reservedBalanceCents: 2000, availableBalanceCents: -1500 };
+    render(PrepaidBalanceWidget, { billingModel: "prepaid", suspended: false });
+    expect(await screen.findByText(/Balance spent/)).toBeTruthy();
+    expect(screen.queryByText(/suspended/)).toBeNull();
   });
 
   it("shows no spent-balance rule for a postpaid account's credit", async () => {
