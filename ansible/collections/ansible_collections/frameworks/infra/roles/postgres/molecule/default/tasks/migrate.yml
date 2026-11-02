@@ -1,0 +1,183 @@
+---
+# Drives the role's migrate tasks with items shaped like the ones `cluster migrate` sends
+# (cli/pkg/provisioner migrationItem): a transactional item, a concurrent index build, a rerun that
+# applies nothing, an edited applied item, a precheck refusal and a failing item. The role's pending
+# and applied facts persist across includes in one play, so each run starts from empty ones, as a
+# separate `cluster migrate` run does (migrate-run.yml).
+- name: Create the fixture application schema
+  become: true
+  become_user: postgres
+  community.postgresql.postgresql_query:
+    login_unix_socket: /var/run/postgresql
+    login_db: tenants
+    query: CREATE SCHEMA IF NOT EXISTS tenants AUTHORIZATION tenants
+  changed_when: false
+
+- name: Declare the fixture migration items
+  ansible.builtin.set_fact:
+    migrate_fixture_table:
+      db: tenants
+      owner: tenants
+      schema: tenants
+      version: v0.0.1
+      phase: expand
+      sequence: 1
+      filename: 001_fixture_table.sql
+      checksum: fixture-001
+      transactional: true
+      sql: CREATE TABLE IF NOT EXISTS tenants.migrate_fixture (id bigint PRIMARY KEY, label text NOT NULL);
+      statements:
+        - CREATE TABLE IF NOT EXISTS tenants.migrate_fixture (id bigint PRIMARY KEY, label text NOT NULL);
+      invalid_index_guards: []
+      precheck_path: ""
+      precheck_query: ""
+    migrate_fixture_index:
+      db: tenants
+      owner: tenants
+      schema: tenants
+      version: v0.0.1
+      phase: expand
+      sequence: 2
+      filename: 002_fixture_index.notx.sql
+      checksum: fixture-002
+      transactional: false
+      sql: CREATE INDEX CONCURRENTLY IF NOT EXISTS migrate_fixture_label_idx ON tenants.migrate_fixture (label);
+      statements:
+        - CREATE INDEX CONCURRENTLY IF NOT EXISTS migrate_fixture_label_idx ON tenants.migrate_fixture (label)
+      invalid_index_guards: [tenants.migrate_fixture_label_idx]
+      precheck_path: ""
+      precheck_query: ""
+    # Overrides of the table item: one its precheck rejects, one whose script fails after creating a table.
+    migrate_fixture_checked:
+      sequence: 3
+      filename: 003_fixture_checked.sql
+      checksum: fixture-003
+      statements:
+        - CREATE TABLE tenants.migrate_fixture_checked (id bigint);
+      precheck_path: v0.0.1/expand/003_fixture_checked.precheck.sql
+      precheck_query: >-
+        SELECT count(*) OVER () AS precheck_total, 'row ' || n AS precheck_row
+        FROM generate_series(1, 2) AS n
+    migrate_fixture_failing:
+      sequence: 4
+      filename: 004_fixture_fails.sql
+      checksum: fixture-004
+      statements:
+        - CREATE TABLE tenants.migrate_fixture_partial (id bigint); SELECT 1 / 0;
+
+- name: Apply the fixture items
+  ansible.builtin.include_tasks: migrate-run.yml
+  vars:
+    postgres_migrate_items: "{{ [migrate_fixture_table, migrate_fixture_index] }}"
+
+- name: Read the fixture ledger, table and index
+  become: true
+  become_user: postgres
+  community.postgresql.postgresql_query:
+    login_unix_socket: /var/run/postgresql
+    login_db: tenants
+    query:
+      - SELECT version, phase, seq, filename, checksum, transactional FROM _migrations ORDER BY seq
+      - SELECT to_regclass('tenants.migrate_fixture') IS NOT NULL AS table_exists
+      - >-
+        SELECT i.indisvalid AND i.indisready AS index_valid FROM pg_index i
+        WHERE i.indexrelid = to_regclass('tenants.migrate_fixture_label_idx')
+  register: migrate_fixture_state
+  changed_when: false
+
+- name: Assert both items applied and recorded
+  ansible.builtin.assert:
+    that:
+      - ledger | map(attribute='seq') | list == [1, 2]
+      - ledger | map(attribute='checksum') | list == ['fixture-001', 'fixture-002']
+      - ledger | map(attribute='transactional') | list == [true, false]
+      - migrate_fixture_state.query_all_results[1][0].table_exists
+      - migrate_fixture_state.query_all_results[2][0].index_valid
+    fail_msg: "{{ migrate_fixture_state.query_all_results }}"
+  vars:
+    ledger: "{{ migrate_fixture_state.query_all_results[0] }}"
+
+- name: Rerun the applied items
+  ansible.builtin.include_tasks: migrate-run.yml
+  vars:
+    postgres_migrate_items: "{{ [migrate_fixture_table, migrate_fixture_index] }}"
+
+- name: Assert the rerun found nothing pending
+  ansible.builtin.assert:
+    that: postgres_pending_migrate_items | default([]) | length == 0
+    fail_msg: "rerun selected {{ postgres_pending_migrate_items }}"
+
+- name: Apply an applied item whose checksum changed
+  block:
+    - name: Run migrate with the edited item
+      ansible.builtin.include_tasks: migrate-run.yml
+      vars:
+        postgres_migrate_items: "{{ [migrate_fixture_table | combine({'checksum': 'fixture-001-edited'})] }}"
+
+    - name: Fail when the edited item was accepted
+      ansible.builtin.set_fact:
+        migrate_fixture_edited_error: ""
+  rescue:
+    - name: Record the edited-item refusal
+      ansible.builtin.set_fact:
+        migrate_fixture_edited_error: "{{ ansible_failed_result.msg | default('') }}"
+
+- name: Assert an edited applied item is refused
+  ansible.builtin.assert:
+    that: "'Migration checksum mismatch for tenants/v0.0.1/expand/001_fixture_table.sql' in migrate_fixture_edited_error"
+    fail_msg: "edited item: {{ migrate_fixture_edited_error }}"
+
+- name: Apply an item its precheck rejects
+  block:
+    - name: Run migrate with the rejected item
+      ansible.builtin.include_tasks: migrate-run.yml
+      vars:
+        postgres_migrate_items: "{{ [migrate_fixture_table | combine(migrate_fixture_checked)] }}"
+
+    - name: Fail when the rejected item was applied
+      ansible.builtin.set_fact:
+        migrate_fixture_precheck_error: ""
+  rescue:
+    - name: Record the precheck refusal
+      ansible.builtin.set_fact:
+        migrate_fixture_precheck_error: "{{ ansible_failed_result.msg | default('') }}"
+
+- name: Apply an item whose statement fails
+  block:
+    - name: Run migrate with the failing item
+      ansible.builtin.include_tasks: migrate-run.yml
+      vars:
+        postgres_migrate_items: "{{ [migrate_fixture_table | combine(migrate_fixture_failing)] }}"
+
+    - name: Fail when the failing item was applied
+      ansible.builtin.set_fact:
+        migrate_fixture_failed_error: ""
+  rescue:
+    - name: Record the failed item
+      ansible.builtin.set_fact:
+        migrate_fixture_failed_error: "{{ ansible_failed_result.msg | default('') }}"
+
+- name: Read what the refused and failed items left
+  become: true
+  become_user: postgres
+  community.postgresql.postgresql_query:
+    login_unix_socket: /var/run/postgresql
+    login_db: tenants
+    query:
+      - SELECT seq FROM _migrations ORDER BY seq
+      - >-
+        SELECT to_regclass('tenants.migrate_fixture_checked') IS NULL
+           AND to_regclass('tenants.migrate_fixture_partial') IS NULL AS nothing_left
+  register: migrate_fixture_after_failures
+  changed_when: false
+
+- name: Assert the refused and failed items left neither ledger rows nor objects
+  ansible.builtin.assert:
+    that:
+      - "'its precheck v0.0.1/expand/003_fixture_checked.precheck.sql found 2 row(s)' in migrate_fixture_precheck_error"
+      - "'division by zero' in migrate_fixture_failed_error"
+      - migrate_fixture_after_failures.query_all_results[0] | map(attribute='seq') | list == [1, 2]
+      - migrate_fixture_after_failures.query_all_results[1][0].nothing_left
+    fail_msg: >-
+      precheck: {{ migrate_fixture_precheck_error }}; failure: {{ migrate_fixture_failed_error }};
+      state: {{ migrate_fixture_after_failures.query_all_results }}

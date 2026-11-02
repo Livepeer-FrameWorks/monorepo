@@ -52,6 +52,9 @@
       ansible.builtin.assert:
         that: dbs.query_result | map(attribute='datname') | list | sort == ['periscope', 'tenants']
 
+    - name: Apply, rerun and refuse fixture migrations
+      ansible.builtin.include_tasks: tasks/migrate.yml
+
     - name: Rerun role for idempotence
       ansible.builtin.include_role:
         name: frameworks.infra.postgres
