@@ -3,7 +3,9 @@
 // Validates that every GraphQL operation, MCP tool, webapp route, and docs page
 // referenced by the registry actually exists in the repo. Emits a flattened
 // JSON copy at website_application/src/lib/features/registry.json for the
-// webapp's /developer/features browser to consume.
+// webapp's /developer/features browser to consume, the docs capability pages,
+// the serverInfo feature list, and website_marketing/src/data/status.json
+// (see status.go) for the marketing site's status surfaces.
 //
 // Write the artifacts via `make generate-feature-registry`; verify them (non-mutating, CI-safe) via
 // `make verify-feature-registry` (runs this with -check).
@@ -97,6 +99,11 @@ type Feature struct {
 	Description      string                `yaml:"description,omitempty" json:"description,omitempty"`
 	Status           string                `yaml:"status" json:"status"`
 	GapReason        string                `yaml:"gap_reason,omitempty" json:"gap_reason,omitempty"`
+	Horizon          string                `yaml:"horizon,omitempty" json:"horizon,omitempty"`
+	Maturity         string                `yaml:"maturity,omitempty" json:"maturity,omitempty"`
+	Note             string                `yaml:"note,omitempty" json:"note,omitempty"`
+	Roadmap          string                `yaml:"roadmap,omitempty" json:"roadmap,omitempty"`
+	Showcase         *Showcase             `yaml:"showcase,omitempty" json:"-"`
 	RequiredSurfaces map[string]SurfaceReq `yaml:"required_surfaces" json:"required_surfaces"`
 	Configurability  *Configurability      `yaml:"configurability,omitempty" json:"configurability,omitempty"`
 	Surfaces         Surfaces              `yaml:"surfaces,omitempty" json:"surfaces"`
@@ -255,6 +262,12 @@ func main() {
 	}
 	v.validateRelations(&reg)
 	v.validateEnforcement(&reg)
+	sections, roadmapErr := loadRoadmapSections(repoRoot)
+	if roadmapErr != nil {
+		die("load roadmap sections: %v", roadmapErr)
+	}
+	v.validateStatusFields(&reg, sections, loadMarketingRoutes(repoRoot), loadMarketingFigures(repoRoot))
+	v.checkMarketingStatusConsumers(repoRoot)
 
 	// Cross-cutting check: any reachable GraphQL field must be wired to a
 	// real resolver. gqlgen can regenerate panic stubs when resolver method
@@ -285,6 +298,10 @@ func main() {
 		if err != nil {
 			die("format platform features: %v", err)
 		}
+		statusJSON, err := renderStatusJSON(productReg)
+		if err != nil {
+			die("marshal status json: %v", err)
+		}
 
 		// Every generated artifact and its expected bytes. --check compares these against disk directly
 		// (never git), so it is correct even when the working tree already carries the intended new state.
@@ -296,6 +313,7 @@ func main() {
 			{filepath.Join(repoRoot, "website_docs", "src", "content", "docs", "platform", "feature-matrix.mdx"), []byte(renderMatrixMDX(productReg))},
 			{filepath.Join(repoRoot, "website_docs", "src", "content", "docs", "platform", "platform-capabilities.mdx"), []byte(renderCapabilitiesMDX(reg))},
 			{filepath.Join(repoRoot, "pkg", "platformfeatures", "registry_gen.go"), featuresGo},
+			{filepath.Join(repoRoot, filepath.FromSlash(marketingStatusPath)), statusJSON},
 		}
 
 		if checkOnly {
@@ -391,7 +409,8 @@ func renderMatrixMDX(reg Registry) string {
 	b.WriteString("- **Agent-native operations** — the dashboard, GraphQL API, and MCP tools expose the same platform controls for humans, automation, and AI agents.\n\n")
 	b.WriteString("## Availability key\n\n")
 	b.WriteString("- **Available** — ready to use today; availability can still depend on account tier, deployment, and configuration.\n")
-	b.WriteString("- **Expanding** — the core capability is live; a specific surface or workflow is actively shipping.\n")
+	b.WriteString("- **Expanding** — the core capability is live; a specific surface or workflow is actively shipping. The row says what is not there yet.\n")
+	b.WriteString("- **(beta)** — usable today, with interfaces that will still change in breaking ways.\n")
 	b.WriteString("- **Planned** — not yet usable; included so the matrix shows the full capability scope. Sequencing and detail live on the [Roadmap](/roadmap).\n")
 	b.WriteString("- **Not available** — outside the supported product; listed so the scope boundary is explicit.\n\n")
 	b.WriteString("Rows marked *(foundation)* are platform building blocks whose value shows up through the product capabilities built on them.\n\n")
@@ -438,7 +457,7 @@ func renderMatrixMDX(reg Registry) string {
 			if f.Kind == "foundation" {
 				name += " *(foundation)*"
 			}
-			fmt.Fprintf(&b, "| %s | %s | %s | %s |\n", name, publicStatusLabel(f.Status), escapeMDXCell(surfaceSummary(f)), escapeMDXCell(compactWhitespace(description)))
+			fmt.Fprintf(&b, "| %s | %s | %s | %s |\n", name, availabilityCell(f), escapeMDXCell(surfaceSummary(f)), describeCell(f, description))
 		}
 		for _, f := range areas[area] {
 			row(f, false)
@@ -517,7 +536,7 @@ func renderCapabilitiesMDX(reg Registry) string {
 			if f.Audience == "platform" {
 				name += " *(platform)*"
 			}
-			fmt.Fprintf(&b, "| %s | %s | %s | %s |\n", name, publicStatusLabel(f.Status), escapeMDXCell(surfaceSummary(f)), escapeMDXCell(compactWhitespace(description)))
+			fmt.Fprintf(&b, "| %s | %s | %s | %s |\n", name, availabilityCell(f), escapeMDXCell(surfaceSummary(f)), describeCell(f, description))
 		}
 		for _, f := range areas[area] {
 			row(f, false)
@@ -559,6 +578,28 @@ func anchorSlug(s string) string {
 		}
 	}
 	return b.String()
+}
+
+// availabilityCell is the matrix availability label, marked for beta rows and
+// linked to the row's roadmap section when it has one.
+func availabilityCell(f Feature) string {
+	label := publicStatusLabel(f.Status)
+	if f.Maturity == "beta" {
+		label += " (beta)"
+	}
+	if f.Roadmap != "" {
+		return fmt.Sprintf("[%s](/roadmap#%s)", label, f.Roadmap)
+	}
+	return label
+}
+
+// describeCell is the escaped description followed by the row's public note.
+func describeCell(f Feature, description string) string {
+	cell := escapeMDXCell(compactWhitespace(description))
+	if note := strings.TrimSpace(f.Note); note != "" {
+		cell += " *" + escapeMDXCell(compactWhitespace(note)) + "*"
+	}
+	return cell
 }
 
 func publicStatusLabel(status string) string {

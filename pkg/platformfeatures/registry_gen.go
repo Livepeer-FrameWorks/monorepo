@@ -27,6 +27,7 @@ var shipped = []string{
 	"playback",
 	"playback-access-control",
 	"player-sdks",
+	"public-network-explorer",
 	"signing-keys",
 	"sovereign-self-host",
 	"stream-keys",
