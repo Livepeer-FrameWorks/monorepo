@@ -12,6 +12,7 @@ import (
 	"frameworks/api_gateway/internal/resolvers"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -97,6 +98,32 @@ type AccountBillingInfo struct {
 	DetailsComplete       bool   `json:"details_complete"`
 	LowBalanceWarning     bool   `json:"low_balance_warning"`
 	DrainRatePerHour      int64  `json:"drain_rate_cents_per_hour,omitempty"`
+	// Plan lifecycle: a scheduled plan change, a scheduled move to Free and a
+	// FrameWorks arrangement. Omitted when none applies.
+	PendingTier        string                     `json:"pending_tier,omitempty"`
+	PendingReason      string                     `json:"pending_reason,omitempty"`
+	PendingEffectiveAt *time.Time                 `json:"pending_effective_at,omitempty"`
+	PendingTierState   string                     `json:"pending_tier_state,omitempty"`
+	FreeFallback       *AccountFreeFallback       `json:"free_fallback,omitempty"`
+	BillingArrangement *AccountBillingArrangement `json:"billing_arrangement,omitempty"`
+	EffectiveBasePrice string                     `json:"effective_base_price_eur,omitempty"`
+}
+
+// AccountFreeFallback is a scheduled move to the Free plan.
+type AccountFreeFallback struct {
+	// Reason is payment_failed (grace period) or cancelled (runs to the paid end).
+	Reason string    `json:"reason"`
+	At     time.Time `json:"at"`
+	// Stage is scheduled, applying or moved.
+	Stage string `json:"stage"`
+}
+
+// AccountBillingArrangement is the terms of a FrameWorks arrangement in force.
+type AccountBillingArrangement struct {
+	BasePriceEUR string     `json:"base_price_eur,omitempty"`
+	WaiveUsage   bool       `json:"waive_usage"`
+	ExpiresAt    *time.Time `json:"expires_at,omitempty"`
+	FallbackTier string     `json:"fallback_tier,omitempty"`
 }
 
 // AccountRateLimitInfo contains rate limit info.
@@ -180,6 +207,12 @@ func handleAccountStatus(ctx context.Context, clients *clients.ServiceClients, r
 		}
 	}
 
+	if lifecycle, lifecycleErr := clients.Purser.GetBillingStatus(ctx, tenantID); lifecycleErr != nil {
+		logger.WithError(lifecycleErr).Debug("Failed to get billing lifecycle")
+	} else {
+		applyAccountLifecycle(&billingInfo, lifecycle)
+	}
+
 	// Get rate limit info from API
 	var rateLimits AccountRateLimitInfo
 	if userID != "" {
@@ -204,6 +237,33 @@ func handleAccountStatus(ctx context.Context, clients *clients.ServiceClients, r
 	}
 
 	return marshalResourceResult("account://status", status)
+}
+
+func applyAccountLifecycle(info *AccountBillingInfo, status *purserpb.BillingStatusResponse) {
+	if status == nil {
+		return
+	}
+	info.EffectiveBasePrice = status.GetEffectiveBasePrice()
+	if sub := status.GetSubscription(); sub.GetPendingTierId() != "" {
+		info.PendingTier = sub.GetPendingTierId()
+		info.PendingReason = sub.GetPendingReason()
+		info.PendingTierState = status.GetPendingTierState()
+		if sub.GetPendingEffectiveAt().IsValid() {
+			at := sub.GetPendingEffectiveAt().AsTime()
+			info.PendingEffectiveAt = &at
+		}
+	}
+	if fallback := status.GetFreeFallback(); fallback != nil && fallback.GetAt().IsValid() {
+		info.FreeFallback = &AccountFreeFallback{Reason: fallback.GetReason(), At: fallback.GetAt().AsTime(), Stage: fallback.GetStage()}
+	}
+	if grant := status.GetOperatorGrant(); grant != nil {
+		arrangement := &AccountBillingArrangement{BasePriceEUR: grant.GetBasePrice(), WaiveUsage: grant.GetWaiveUsage(), FallbackTier: grant.GetFallbackTierName()}
+		if grant.GetExpiresAt().IsValid() {
+			at := grant.GetExpiresAt().AsTime()
+			arrangement.ExpiresAt = &at
+		}
+		info.BillingArrangement = arrangement
+	}
 }
 
 func accountServerInfo(resolver *resolvers.Resolver) AccountServerInfo {

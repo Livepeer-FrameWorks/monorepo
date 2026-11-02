@@ -3,6 +3,7 @@ package preflight
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"frameworks/api_gateway/internal/clients/clientstest"
@@ -174,6 +175,43 @@ func TestGetBlockers(t *testing.T) {
 	c = checkerWith(clientstest.SolventPurser())
 	if bs, err := c.GetBlockers(ctxTenant("t1")); err != nil || len(bs) != 0 {
 		t.Fatalf("solvent → %v (%v), want none", bs, err)
+	}
+}
+
+// A suspended or closed account refuses new work whatever its balance or
+// collection setup, so the agent must see why instead of a top-up prompt.
+func TestGetBlockersReportsSuspendedAccounts(t *testing.T) {
+	for _, model := range []string{"prepaid", "postpaid"} {
+		c := checkerWith(&clientstest.FakePurser{
+			GetTenantAdmissionStatusFn: func(context.Context, string) (*purserpb.GetTenantAdmissionStatusResponse, error) {
+				return &purserpb.GetTenantAdmissionStatusResponse{BillingModel: model, IsSuspended: true, CollectionReady: true, AvailableBalanceCents: 5000}, nil
+			},
+		})
+		bs, err := c.GetBlockers(ctxTenant("t1"))
+		if err != nil || len(bs) != 1 || bs[0].Code != "ACCOUNT_SUSPENDED" {
+			t.Fatalf("%s suspended → %v (%v), want ACCOUNT_SUSPENDED", model, bs, err)
+		}
+	}
+}
+
+func TestInsufficientBalanceStatesTheSpentBalanceRule(t *testing.T) {
+	c := checkerWith(&clientstest.FakePurser{
+		GetTenantBillingStatusFn: prepaidBillingStatus,
+		GetPrepaidBalanceFn: func(context.Context, string) (*purserpb.PrepaidBalance, error) {
+			return &purserpb.PrepaidBalance{}, nil
+		},
+		GetPaymentRequirementsFn: func(context.Context, string, string) (*purserpb.PaymentRequirements, error) {
+			return &purserpb.PaymentRequirements{}, nil
+		},
+	})
+	b, err := c.CheckBalance(ctxTenant("t1"))
+	if err != nil || b == nil {
+		t.Fatalf("zero balance → (%v,%v)", b, err)
+	}
+	for _, want := range []string{"€0", "-€10", "continue"} {
+		if !strings.Contains(b.Message, want) {
+			t.Fatalf("blocker %q does not state %q", b.Message, want)
+		}
 	}
 }
 

@@ -369,7 +369,8 @@ func handleCapabilitiesPrompt() (*mcp.GetPromptResult, error) {
 	parts = append(parts, "For long-running jobs, monitor your balance:")
 	parts = append(parts, "- Read `billing://balance` to see your drain rate (cents per hour)")
 	parts = append(parts, "- If `estimated_hours_left` is low, top up proactively")
-	parts = append(parts, "- Streams will fail if balance depletes mid-session\n")
+	parts = append(parts, "- At €0 or below, running streams and their viewers continue, but new streams, new viewers and reconnects are refused")
+	parts = append(parts, "- Below -€10, running sessions stop. Top up to start new work again\n")
 
 	parts = append(parts, "## Getting Started")
 	parts = append(parts, "1. Read account://status to check your account state")

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"sort"
 	"testing"
+	"time"
 
 	"frameworks/api_gateway/internal/clients"
 	"frameworks/api_gateway/internal/clients/clientstest"
@@ -16,6 +17,7 @@ import (
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // accountTenantCtx is an interactive session of a tenant owner, which may
@@ -58,8 +60,60 @@ func (accountQuartermaster) ValidateTenant(context.Context, string, string) (*qu
 	return &quartermasterpb.ValidateTenantResponse{Valid: true, RateLimitPerMinute: 60}, nil
 }
 
+func noBillingLifecycle(context.Context, string) (*purserpb.BillingStatusResponse, error) {
+	return &purserpb.BillingStatusResponse{}, nil
+}
+
+// An agent deciding whether to change plans or top up must see the grace
+// period, the scheduled downgrade and the arrangement the dashboard shows.
+func TestAccountStatusReportsThePlanLifecycle(t *testing.T) {
+	moveAt := time.Date(2026, 11, 16, 0, 0, 0, 0, time.UTC)
+	expires := time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC)
+	base := "0.00"
+	purser := &clientstest.FakePurser{
+		GetTenantBillingStatusFn: func(context.Context, string) (*purserpb.GetTenantBillingStatusResponse, error) {
+			return &purserpb.GetTenantBillingStatusResponse{BillingModel: "postpaid", TierName: "developer", CollectionReady: true}, nil
+		},
+		GetBillingDetailsFn: func(context.Context, string) (*purserpb.BillingDetails, error) {
+			return &purserpb.BillingDetails{IsComplete: true}, nil
+		},
+		GetSubscriptionFn: func(context.Context, string) (*purserpb.GetSubscriptionResponse, error) {
+			return &purserpb.GetSubscriptionResponse{Subscription: &purserpb.TenantSubscription{TierId: "tier-dev"}}, nil
+		},
+		GetBillingTierFn: func(context.Context, string) (*purserpb.BillingTier, error) {
+			return &purserpb.BillingTier{Id: "tier-dev", Features: &purserpb.BillingFeatures{}}, nil
+		},
+		GetBillingStatusFn: func(context.Context, string) (*purserpb.BillingStatusResponse, error) {
+			pendingTier := "tier-free"
+			pendingReason := "downgrade"
+			return &purserpb.BillingStatusResponse{
+				EffectiveBasePrice: "0.00", PendingTierState: "scheduled",
+				Subscription:  &purserpb.TenantSubscription{PendingTierId: &pendingTier, PendingReason: &pendingReason, PendingEffectiveAt: timestamppb.New(moveAt)},
+				FreeFallback:  &purserpb.FreeFallbackStatus{Reason: "payment_failed", At: timestamppb.New(moveAt), Stage: "scheduled"},
+				OperatorGrant: &purserpb.OperatorBillingGrant{BasePrice: &base, WaiveUsage: true, ExpiresAt: timestamppb.New(expires), FallbackTierName: "developer"},
+			}, nil
+		},
+	}
+	serviceClients := clientstest.Clients(clientstest.WithPurser(purser))
+	result, err := handleAccountStatus(accountTenantCtx(), serviceClients, accountResolver(serviceClients), preflight.NewChecker(serviceClients, clientstest.DiscardLogger()), clientstest.DiscardLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	billing := decodeResource[AccountStatus](t, result.Contents[0].Text).Billing
+	if billing.PendingTier != "tier-free" || billing.PendingReason != "downgrade" || billing.PendingTierState != "scheduled" || billing.PendingEffectiveAt == nil || !billing.PendingEffectiveAt.Equal(moveAt) {
+		t.Fatalf("pending change = %+v", billing)
+	}
+	if billing.FreeFallback == nil || billing.FreeFallback.Reason != "payment_failed" || !billing.FreeFallback.At.Equal(moveAt) || billing.FreeFallback.Stage != "scheduled" {
+		t.Fatalf("free fallback = %+v", billing.FreeFallback)
+	}
+	if billing.BillingArrangement == nil || billing.BillingArrangement.BasePriceEUR != "0.00" || !billing.BillingArrangement.WaiveUsage || billing.BillingArrangement.ExpiresAt == nil || billing.BillingArrangement.FallbackTier != "developer" {
+		t.Fatalf("arrangement = %+v", billing.BillingArrangement)
+	}
+}
+
 func TestAccountStatusTreatsZeroBalanceAsRatedBlockerNotBrokenAccount(t *testing.T) {
 	purser := &clientstest.FakePurser{
+		GetBillingStatusFn: noBillingLifecycle,
 		GetTenantBillingStatusFn: func(context.Context, string) (*purserpb.GetTenantBillingStatusResponse, error) {
 			return &purserpb.GetTenantBillingStatusResponse{BillingModel: "prepaid"}, nil
 		},
@@ -102,6 +156,7 @@ func TestAccountStatusTreatsZeroBalanceAsRatedBlockerNotBrokenAccount(t *testing
 
 func TestAccountStatusAllowsFreeRatedPreflightWithoutProvider(t *testing.T) {
 	purser := &clientstest.FakePurser{
+		GetBillingStatusFn: noBillingLifecycle,
 		GetTenantBillingStatusFn: func(context.Context, string) (*purserpb.GetTenantBillingStatusResponse, error) {
 			return &purserpb.GetTenantBillingStatusResponse{BillingModel: "postpaid", TierName: "free"}, nil
 		},
@@ -136,6 +191,7 @@ func TestAccountStatusAllowsFreeRatedPreflightWithoutProvider(t *testing.T) {
 func TestAccountStatusReportsServerInfoAndEnforcedCapabilities(t *testing.T) {
 	maxDays := int32(30)
 	purser := &clientstest.FakePurser{
+		GetBillingStatusFn: noBillingLifecycle,
 		GetTenantBillingStatusFn: func(context.Context, string) (*purserpb.GetTenantBillingStatusResponse, error) {
 			return &purserpb.GetTenantBillingStatusResponse{BillingModel: "postpaid", TierName: "free", RecordingRetentionDays: maxDays}, nil
 		},
@@ -193,6 +249,7 @@ func TestAccountStatusReportsServerInfoAndEnforcedCapabilities(t *testing.T) {
 // filled with a default that would read as a closed gate.
 func TestAccountStatusNamesUnreadableCapabilitySectionsInsteadOfGuessing(t *testing.T) {
 	purser := &clientstest.FakePurser{
+		GetBillingStatusFn: noBillingLifecycle,
 		GetTenantBillingStatusFn: func(context.Context, string) (*purserpb.GetTenantBillingStatusResponse, error) {
 			return &purserpb.GetTenantBillingStatusResponse{BillingModel: "postpaid", TierName: "free"}, nil
 		},

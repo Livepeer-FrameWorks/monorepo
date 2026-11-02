@@ -127,6 +127,13 @@ func (c *Checker) CheckBalance(ctx context.Context) (*Blocker, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to get billing status: %w", err)
 	}
+	if billingStatus.GetIsSuspended() {
+		return &Blocker{
+			Code:       "ACCOUNT_SUSPENDED",
+			Message:    "The account is suspended or closed, so FrameWorks refuses new billable work.",
+			Resolution: "Read account://status for the plan state. A closed account cannot be reopened by an agent; contact FrameWorks support for a suspension.",
+		}, nil
+	}
 	if billingStatus.GetBillingModel() == "postpaid" {
 		if strings.EqualFold(billingStatus.GetTierName(), "free") || billingStatus.GetCollectionReady() {
 			return nil, nil
@@ -151,7 +158,7 @@ func (c *Checker) CheckBalance(ctx context.Context) (*Blocker, error) {
 	if balance.AvailableBalanceCents <= 0 {
 		blocker := &Blocker{
 			Code:       "INSUFFICIENT_BALANCE",
-			Message:    fmt.Sprintf("Available balance is %d cents (%d settled, %d reserved). Top up required to perform billable operations.", balance.AvailableBalanceCents, balance.BalanceCents, balance.ReservedBalanceCents),
+			Message:    fmt.Sprintf("Available balance is %d cents (%d settled, %d reserved). At €0 or below, running streams and their viewers continue but new streams, new viewers and reconnects are refused; below -€10 running sessions stop. Top up to run billable operations.", balance.AvailableBalanceCents, balance.BalanceCents, balance.ReservedBalanceCents),
 			Resolution: "Call topup_balance tool to add credits, OR pay via x402 (USDC on Base/Arbitrum)",
 			Tool:       "topup_balance",
 		}
