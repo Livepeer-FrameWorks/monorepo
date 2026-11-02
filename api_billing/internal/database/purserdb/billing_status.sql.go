@@ -245,25 +245,34 @@ SELECT
     (ts.free_fallback_provider_ended_at IS NOT NULL)::boolean AS provider_cancelled,
     (ts.free_fallback_provider_stopping OR ts.free_fallback_provider_ended_at IS NOT NULL)::boolean AS provider_stop_started,
     COALESCE(ts.pending_reason, '')::text AS pending_reason,
-    ts.pending_effective_at
+    ts.pending_effective_at,
+    COALESCE(pending.display_name, '')::text AS pending_tier_display_name,
+    COALESCE(fallback.display_name, '')::text AS fallback_tier_display_name,
+    -- ChangeBillingTier stages a downgrade for this time.
+    COALESCE(ts.stripe_current_period_end, ts.billing_period_end::timestamptz) AS downgrade_effective_at
 FROM purser.tenant_subscriptions ts
 JOIN purser.billing_tiers bt ON bt.id = ts.tier_id
+LEFT JOIN purser.billing_tiers pending ON pending.id = ts.pending_tier_id
 LEFT JOIN purser.subscription_operator_grants og
     ON og.subscription_id = ts.id AND (og.expires_at IS NULL OR og.expires_at > NOW())
+LEFT JOIN purser.billing_tiers fallback ON fallback.id = og.fallback_tier_id
 WHERE ts.tenant_id = $1::text::uuid AND ts.status != 'cancelled'
 ORDER BY ts.created_at DESC
 LIMIT 1
 `
 
 type GetTenantBillingLifecycleRow struct {
-	EffectiveBasePrice  string       `db:"effective_base_price" json:"effective_base_price"`
-	FreeFallbackAt      sql.NullTime `db:"free_fallback_at" json:"free_fallback_at"`
-	FreeFallbackReason  string       `db:"free_fallback_reason" json:"free_fallback_reason"`
-	FreeFallbackMoved   bool         `db:"free_fallback_moved" json:"free_fallback_moved"`
-	ProviderCancelled   bool         `db:"provider_cancelled" json:"provider_cancelled"`
-	ProviderStopStarted bool         `db:"provider_stop_started" json:"provider_stop_started"`
-	PendingReason       string       `db:"pending_reason" json:"pending_reason"`
-	PendingEffectiveAt  sql.NullTime `db:"pending_effective_at" json:"pending_effective_at"`
+	EffectiveBasePrice      string       `db:"effective_base_price" json:"effective_base_price"`
+	FreeFallbackAt          sql.NullTime `db:"free_fallback_at" json:"free_fallback_at"`
+	FreeFallbackReason      string       `db:"free_fallback_reason" json:"free_fallback_reason"`
+	FreeFallbackMoved       bool         `db:"free_fallback_moved" json:"free_fallback_moved"`
+	ProviderCancelled       bool         `db:"provider_cancelled" json:"provider_cancelled"`
+	ProviderStopStarted     bool         `db:"provider_stop_started" json:"provider_stop_started"`
+	PendingReason           string       `db:"pending_reason" json:"pending_reason"`
+	PendingEffectiveAt      sql.NullTime `db:"pending_effective_at" json:"pending_effective_at"`
+	PendingTierDisplayName  string       `db:"pending_tier_display_name" json:"pending_tier_display_name"`
+	FallbackTierDisplayName string       `db:"fallback_tier_display_name" json:"fallback_tier_display_name"`
+	DowngradeEffectiveAt    sql.NullTime `db:"downgrade_effective_at" json:"downgrade_effective_at"`
 }
 
 // The plan lifecycle a tenant sees on its billing page: the base fee after any
@@ -281,6 +290,9 @@ func (q *Queries) GetTenantBillingLifecycle(ctx context.Context, tenantID string
 		&i.ProviderStopStarted,
 		&i.PendingReason,
 		&i.PendingEffectiveAt,
+		&i.PendingTierDisplayName,
+		&i.FallbackTierDisplayName,
+		&i.DowngradeEffectiveAt,
 	)
 	return i, err
 }

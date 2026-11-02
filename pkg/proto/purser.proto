@@ -827,6 +827,14 @@ message BillingStatusResponse {
   // "final": the provider subscription is cancelled; the move cannot be undone.
   // "applying": the effective time passed; it applies with the closing invoice.
   string pending_tier_state = 18;
+  // When a downgrade chosen now takes effect: the end of the current period.
+  google.protobuf.Timestamp downgrade_effective_at = 19;
+  // For a Stripe- or Mollie-billed subscription: a move to Free taking effect
+  // at downgrade_effective_at can be undone until this time, when the
+  // provider subscription is stopped.
+  google.protobuf.Timestamp free_move_final_at = 20;
+  // Display name of subscription.pending_tier_id, when set.
+  string pending_tier_display_name = 21;
 }
 
 // A tenant's scheduled move to the Free tier.
@@ -1603,6 +1611,8 @@ message OperatorBillingGrant {
   string expiry_error = 12;
   // Consecutive failed expiry attempts for the current grant.
   int32 expiry_failures = 13;
+  // Display name of fallback_tier_name; set on the tenant's billing status.
+  string fallback_tier_display_name = 14;
 }
 
 message AdminSetBillingGrantRequest {

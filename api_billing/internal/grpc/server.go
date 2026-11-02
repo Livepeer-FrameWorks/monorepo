@@ -2938,19 +2938,38 @@ func tenantSafeOperatorGrant(grant *purserpb.OperatorBillingGrant) *purserpb.Ope
 }
 
 // applyBillingLifecycle states the scheduled move to Free and the progress of
-// a staged downgrade the way the tenant can act on them.
+// a staged downgrade the way the tenant can act on them. resp.CollectionProvider
+// must already be set.
 func applyBillingLifecycle(resp *purserpb.BillingStatusResponse, row purserdb.GetTenantBillingLifecycleRow, now time.Time) {
 	resp.EffectiveBasePrice = row.EffectiveBasePrice
+	resp.PendingTierDisplayName = row.PendingTierDisplayName
+	if resp.OperatorGrant != nil {
+		resp.OperatorGrant.FallbackTierDisplayName = row.FallbackTierDisplayName
+	}
+	if row.DowngradeEffectiveAt.Valid {
+		resp.DowngradeEffectiveAt = timestamppb.New(row.DowngradeEffectiveAt.Time)
+		if p := resp.GetCollectionProvider(); p == "stripe" || p == "mollie" {
+			resp.FreeMoveFinalAt = timestamppb.New(row.DowngradeEffectiveAt.Time.Add(-handlers.FreeDowngradeStopLead))
+		}
+	}
 	if row.FreeFallbackAt.Valid {
+		// A staged move to Free starts its fallback FreeDowngradeStopLead early
+		// to stop the provider; the tenant keeps the paid tier until the
+		// downgrade's effective time, as paid_advance_until does.
+		moveAt := row.FreeFallbackAt.Time
+		if row.PendingReason == "downgrade" && row.FreeFallbackReason == subscriptions.FallbackCancelled &&
+			row.PendingEffectiveAt.Valid && row.PendingEffectiveAt.Time.After(moveAt) {
+			moveAt = row.PendingEffectiveAt.Time
+		}
 		stage := "scheduled"
 		switch {
 		case row.FreeFallbackMoved:
 			stage = "moved"
-		case !row.FreeFallbackAt.Time.After(now):
+		case !moveAt.After(now):
 			stage = "applying"
 		}
 		resp.FreeFallback = &purserpb.FreeFallbackStatus{
-			Reason: row.FreeFallbackReason, At: timestamppb.New(row.FreeFallbackAt.Time),
+			Reason: row.FreeFallbackReason, At: timestamppb.New(moveAt),
 			Stage: stage, ProviderCancelled: row.ProviderCancelled,
 		}
 	}

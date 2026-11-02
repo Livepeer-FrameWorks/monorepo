@@ -155,11 +155,17 @@ SELECT
     (ts.free_fallback_provider_ended_at IS NOT NULL)::boolean AS provider_cancelled,
     (ts.free_fallback_provider_stopping OR ts.free_fallback_provider_ended_at IS NOT NULL)::boolean AS provider_stop_started,
     COALESCE(ts.pending_reason, '')::text AS pending_reason,
-    ts.pending_effective_at
+    ts.pending_effective_at,
+    COALESCE(pending.display_name, '')::text AS pending_tier_display_name,
+    COALESCE(fallback.display_name, '')::text AS fallback_tier_display_name,
+    -- ChangeBillingTier stages a downgrade for this time.
+    COALESCE(ts.stripe_current_period_end, ts.billing_period_end::timestamptz) AS downgrade_effective_at
 FROM purser.tenant_subscriptions ts
 JOIN purser.billing_tiers bt ON bt.id = ts.tier_id
+LEFT JOIN purser.billing_tiers pending ON pending.id = ts.pending_tier_id
 LEFT JOIN purser.subscription_operator_grants og
     ON og.subscription_id = ts.id AND (og.expires_at IS NULL OR og.expires_at > NOW())
+LEFT JOIN purser.billing_tiers fallback ON fallback.id = og.fallback_tier_id
 WHERE ts.tenant_id = sqlc.arg(tenant_id)::text::uuid AND ts.status != 'cancelled'
 ORDER BY ts.created_at DESC
 LIMIT 1;
