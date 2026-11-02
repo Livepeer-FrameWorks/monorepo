@@ -138,18 +138,19 @@ These warnings cover work Purser and Commodore retry on their own: provider reco
 moves to Free, grant expiry, tenant closure and account session stops. Each fires after five
 minutes. The queue alerts also fire when a service fails to read its queue more than once in two
 minutes; that points at the service's database rather than at a tenant. The metrics carry no
-tenant label, so every alert below names the command that lists the affected tenants. All commands
-need a platform-operator session. The procedures behind them are in
+tenant label, so every alert below names the command that lists the affected tenants.
+`frameworks cluster doctor --deep` checks the same conditions and names up to ten tenants per
+finding. All commands need a platform-operator session. The procedures behind them are in
 [Test and trial accounts](/operators/trial-accounts/#recovery-and-internals).
 
-| Alert                                   | Identify the tenant                                     | Resolve                                                                                   |
-| --------------------------------------- | ------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| `PurserProviderWebhookInboxStuck`       | `frameworks admin billing recovery list`                | `recovery checkout`, `recovery upgrade`, or repair the provider or metering it names      |
-| `PurserTierDowngradeHeld`               | `frameworks admin billing recovery list` (held section) | `frameworks admin billing recovery downgrade --tenant-id <tenant> --reason <reason>`      |
-| `PurserFreeFallbackStuck`               | `frameworks admin billing recovery list`                | restore provider access or metering, `recovery notice`, or cancel with `set-tier`         |
-| `PurserOperatorGrantExpiryStuck`        | `frameworks admin billing grant list --include-expired` | correct the billing or pricing error; retries run every five minutes                      |
-| `CommodoreTenantAccountClosureStuck`    | `frameworks admin tenants get <tenant>`                 | restore Commodore's connection to Quartermaster                                           |
-| `CommodoreAccountIngestRevocationStuck` | `frameworks admin tenants get <tenant>`                 | restore the cell, upgrade its Foghorn, or `frameworks admin clusters retire <cluster-id>` |
+| Alert                                   | Identify the tenant                                                              | Resolve                                                                                   |
+| --------------------------------------- | -------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `PurserProviderWebhookInboxStuck`       | `frameworks admin billing recovery list`                                         | `recovery checkout`, `recovery upgrade`, or repair the provider or metering it names      |
+| `PurserTierDowngradeHeld`               | `frameworks admin billing recovery list` (held section)                          | `frameworks admin billing recovery downgrade --tenant-id <tenant> --reason <reason>`      |
+| `PurserFreeFallbackStuck`               | `frameworks admin billing recovery list`                                         | restore provider access or metering, `recovery notice`, or cancel with `set-tier`         |
+| `PurserOperatorGrantExpiryStuck`        | `frameworks admin billing grant list --include-expired`                          | correct the billing or pricing error; retries run every five minutes                      |
+| `CommodoreTenantAccountClosureStuck`    | `frameworks cluster doctor --deep`, then `frameworks admin tenants get <tenant>` | restore Commodore's connection to Quartermaster                                           |
+| `CommodoreAccountIngestRevocationStuck` | `frameworks cluster doctor --deep`, then `frameworks admin tenants get <tenant>` | restore the cell, upgrade its Foghorn, or `frameworks admin clusters retire <cluster-id>` |
 
 ### Provider recovery
 
@@ -200,16 +201,16 @@ reported billing or pricing error; the retry runs automatically and other expiri
 ### Tenant closure
 
 `CommodoreTenantAccountClosureStuck` fires when a closed tenant's Quartermaster teardown failed more
-than once. Access is already revoked locally, so the account stays closed. `tenants get` shows the
-closure as `retrying` with the last error and next attempt, and Commodore logs each failure as
+than once. Access is already revoked locally, so the account stays closed. `cluster doctor --deep`
+names those tenants, and `tenants get` shows each closure as `retrying` with the last error and next attempt, and Commodore logs each failure as
 `Finish tenant closure` with `tenant_id`. Restore Commodore's connection to Quartermaster; Commodore
 retries every minute.
 
 ### Account session stops
 
 `CommodoreAccountIngestRevocationStuck` fires when a deactivated user's or closed tenant's ingest
-stop has not reached every cell that recorded the account's streams. `tenants get` lists each
-pending stop with its cells, the retired ones and the last error, and
+stop has not reached every cell that recorded the account's streams. `cluster doctor --deep` names
+the tenants with stops pending over five minutes, and `tenants get` lists each pending stop with its cells, the retired ones and the last error, and
 `frameworks cluster diagnose media-authority` shows the same rows on lane `ingest_revocation`.
 Restore the cell, or upgrade its Foghorn if the error is `Unimplemented`. For a cell removed for
 good, `frameworks admin clusters retire <cluster-id> --reason <reason>` settles the stops owed to
