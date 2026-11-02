@@ -296,7 +296,7 @@
                     <dt class="text-muted-foreground">Pending plan change</dt>
                     <dd>
                       {#if lifecycle.pendingTier}
-                        {lifecycle.pendingReason ?? "change"} to
+                        {(lifecycle.pendingReason ?? "change").toLowerCase().replaceAll("_", " ")} to
                         {lifecycle.pendingTier.displayName}
                         {formatDate(lifecycle.pendingEffectiveAt)}{lifecycle.pendingTierState
                           ? `, ${lifecycle.pendingTierState.toLowerCase()}`

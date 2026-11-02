@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy } from "svelte";
+  import { onMount, onDestroy, tick } from "svelte";
   import { SvelteMap } from "svelte/reactivity";
   import { get } from "svelte/store";
   import { base, resolve } from "$app/paths";
@@ -159,6 +159,12 @@
     const requestedInvoiceId = params.get("invoice");
     showPaymentReturnToast();
     await loadBillingData();
+    // The grace notice email links here; the banner renders only once the
+    // lifecycle has loaded, after the browser's own fragment scroll.
+    if (window.location.hash === "#update-payment") {
+      await tick();
+      document.getElementById("update-payment")?.scrollIntoView({ block: "start" });
+    }
     await handleSetupReturn(params);
     if (requestedInvoiceId && invoices.some((invoice) => invoice.id === requestedInvoiceId)) {
       expandedInvoiceId = requestedInvoiceId;
@@ -498,22 +504,13 @@
     tierDialog = tier;
   }
 
-  // The provider subscription is stopped this long before a move to Free.
-  const FREE_MOVE_FINAL_LEAD_MS = 72 * 60 * 60 * 1000;
-
   const tierDialogFacts = $derived.by(() => {
     const target = tierDialog;
     if (!target || !currentTier) return null;
     const currency = target.currency ?? currentTier.currency ?? "EUR";
     const isDowngrade = (target.tierLevel ?? 0) < (currentTier.tierLevel ?? 0);
-    const effectiveAt = billingStatus?.nextBillingDate ?? null;
-    const providerBilled =
-      billingStatus?.collectionProvider === "stripe" ||
-      billingStatus?.collectionProvider === "mollie";
-    const finalAt =
-      isDowngrade && isFreeTier(target) && providerBilled && effectiveAt
-        ? new Date(new Date(effectiveAt).getTime() - FREE_MOVE_FINAL_LEAD_MS).toISOString()
-        : null;
+    const effectiveAt = lifecycle?.downgradeEffectiveAt ?? null;
+    const finalAt = isDowngrade && isFreeTier(target) ? (lifecycle?.freeMoveFinalAt ?? null) : null;
     return {
       isDowngrade,
       toFree: isFreeTier(target),
@@ -795,8 +792,6 @@
         return "Suspended";
       case "cancelled":
         return "Cancelled";
-      case "trial":
-        return "Trial";
       case "none":
         return "No subscription";
       default:
@@ -820,8 +815,8 @@
   const isPrepaid = $derived(billingStatus?.subscription?.billingModel === "prepaid");
   const pendingTier = $derived(billingStatus?.subscription?.pendingTier ?? null);
   const pendingEffectiveAt = $derived(billingStatus?.subscription?.pendingEffectiveAt ?? null);
-  const pendingReason = $derived(billingStatus?.subscription?.pendingReason ?? null);
   const lifecycle = $derived($billingLifecycleStore.data?.billingLifecycle ?? null);
+  const pendingReason = $derived(lifecycle?.pendingReason ?? null);
   const pendingTierState = $derived(lifecycle?.pendingTierState ?? null);
   const arrangement = $derived(lifecycle?.operatorGrant ?? null);
   const freeFallback = $derived(lifecycle?.freeFallback ?? null);
@@ -843,12 +838,31 @@
       billingStatus?.collectionProvider === "stripe" &&
       freeFallback?.providerCancelled === false
   );
-  // A cancelled subscription runs out its paid term, and an applying move
-  // settles its final invoice: Purser refuses plan changes until the move.
+  // A move to Free the tenant chose with changeBillingTier; the plan stays
+  // until its effective date, and pendingTierState says whether it can be undone.
+  const stagedFreeMove = $derived(
+    pendingReason === "DOWNGRADE" &&
+      freeFallback?.reason === "CANCELLED" &&
+      freeFallback.stage !== "MOVED"
+  );
+  // Purser refuses plan changes once the payment subscription is cancelled
+  // or a move is settling its final invoice; until then a new choice replaces
+  // a staged downgrade.
   const planLocked = $derived(
-    freeFallback !== null &&
-      freeFallback.stage !== "MOVED" &&
-      (freeFallback.reason === "CANCELLED" || freeFallback.stage === "APPLYING")
+    pendingTierState === "FINAL" ||
+      pendingTierState === "APPLYING" ||
+      (freeFallback !== null &&
+        freeFallback.stage !== "MOVED" &&
+        (freeFallback.providerCancelled || freeFallback.stage === "APPLYING"))
+  );
+  const planChoiceNotice = $derived(
+    arrangement
+      ? "Your plan is arranged by FrameWorks. Contact us to change it."
+      : !planLocked
+        ? null
+        : pendingReason === "DOWNGRADE" && pendingTier
+          ? `Your plan changes to ${pendingTier.displayName}${pendingEffectiveAt ? ` on ${formatDate(pendingEffectiveAt)}` : ""}. Choose a new plan after the change.`
+          : `Your plan moves to Free${freeFallback ? ` on ${formatDate(freeFallback.at)}` : ""}. Choose a new plan after the move.`
   );
   const showPaymentSetup = $derived(
     isPrepaid || !billingStatus?.collectionReady || (paymentGrace && !graceFixInPortal)
@@ -928,6 +942,14 @@
                         ? "Update your card to keep the plan."
                         : "Set up payment again to keep the plan."}
                     </p>
+                  {:else if stagedFreeMove}
+                    <p class="font-semibold">Moving to Free on {formatDate(freeFallback.at)}</p>
+                    <p class="text-sm text-muted-foreground">
+                      Your {currentTier?.displayName ?? "current"} plan stays active until then. {pendingTierState ===
+                      "SCHEDULED"
+                        ? `Choose Keep ${currentTier?.displayName ?? "your plan"} below to stay on it.`
+                        : "Your payment subscription is cancelled, so this change can no longer be undone."}
+                    </p>
                   {:else}
                     <p class="font-semibold">Subscription cancelled</p>
                     <p class="text-sm text-muted-foreground">
@@ -978,8 +1000,8 @@
               {/if}
               {#if arrangement.expiresAt}
                 When it ends, the account
-                {arrangement.fallbackTierName
-                  ? `returns to the ${arrangement.fallbackTierName} plan`
+                {arrangement.fallbackTierDisplayName
+                  ? `returns to the ${arrangement.fallbackTierDisplayName} plan`
                   : `stays on ${currentTier?.displayName ?? "its plan"}`} at the standard price.
               {/if}
               <!-- eslint-disable svelte/no-navigation-without-resolve -->
@@ -1128,6 +1150,11 @@
                 </div>
               </div>
               <div class="slab-body--padded">
+                {#if planChoiceNotice}
+                  <p class="mb-4 text-sm text-muted-foreground" data-testid="plan-choice-notice">
+                    {planChoiceNotice}
+                  </p>
+                {/if}
                 <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
                   {#each availableTiers as tier (tier.id ?? tier.tierName ?? tier.displayName)}
                     <div
@@ -1177,10 +1204,10 @@
                           <div
                             class="mt-3 border border-warning/50 bg-warning/10 px-3 py-2 text-xs text-warning"
                           >
-                            {#if pendingReason === "tier_upgrade"}
+                            {#if pendingReason === "TIER_UPGRADE"}
                               Your upgrade to {pendingTier.displayName} is being completed. Retrying the
                               upgrade will not start another purchase.
-                            {:else if pendingReason === "stripe_checkout"}
+                            {:else if pendingReason === "STRIPE_CHECKOUT"}
                               Checkout for {pendingTier.displayName} is awaiting completion.
                             {:else if pendingTierState === "FINAL"}
                               Move to {pendingTier.displayName} confirmed for {formatDate(
@@ -1196,7 +1223,7 @@
                                 : "period end"}. You keep {tier.displayName} until then.
                             {/if}
                           </div>
-                          {#if pendingReason === "downgrade" && pendingTierState === "SCHEDULED" && !arrangement}
+                          {#if pendingReason === "DOWNGRADE" && pendingTierState === "SCHEDULED" && !arrangement}
                             <Button
                               class="w-full mt-3"
                               variant="outline"
@@ -1215,14 +1242,7 @@
                           variant={(tier.tierLevel ?? 0) > (currentTier?.tierLevel ?? 0)
                             ? "default"
                             : "outline"}
-                          disabled={changeTierLoadingId !== null ||
-                            arrangement !== null ||
-                            planLocked}
-                          title={arrangement
-                            ? "Your plan is arranged by FrameWorks. Contact us to change it."
-                            : planLocked
-                              ? "Your plan moves to Free first. Choose a new plan after the move."
-                              : undefined}
+                          disabled={changeTierLoadingId !== null || planChoiceNotice !== null}
                           onclick={() => chooseTier(tier)}
                         >
                           {#if changeTierLoadingId === tier.id}
@@ -1244,7 +1264,10 @@
           {/if}
 
           <!-- Prepaid Balance -->
-          <PrepaidBalanceWidget billingModel={billingStatus?.subscription?.billingModel} />
+          <PrepaidBalanceWidget
+            billingModel={billingStatus?.subscription?.billingModel}
+            suspended={billingStatus?.billingStatus === "suspended"}
+          />
 
           <!-- Provider-confirmed paid-plan setup -->
           {#if showPaymentSetup && $auth.user?.email}
