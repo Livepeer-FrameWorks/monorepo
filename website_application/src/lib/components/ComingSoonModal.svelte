@@ -4,7 +4,7 @@
   import { Badge } from "$lib/components/ui/badge";
   import { Button } from "$lib/components/ui/button";
   import { getIconComponent } from "../iconUtils";
-  import { getDocsSiteUrl } from "$lib/config";
+  import { getMarketingSiteUrl } from "$lib/config";
 
   interface Props {
     show?: boolean;
@@ -18,7 +18,7 @@
   let { show = $bindable(false), item = null }: Props = $props();
 
   const dispatch = createEventDispatcher();
-  const docsSiteUrl = getDocsSiteUrl().replace(/\/$/, "");
+  const upNextUrl = `${getMarketingSiteUrl().replace(/\/$/, "")}/showcase#up-next`;
 
   function close() {
     if (show) {
@@ -85,24 +85,25 @@
               In Development
             </h3>
             <p class="text-xs text-muted-foreground leading-relaxed">
-              This feature is part of our public roadmap. Follow our documentation for the latest
-              updates on implementation and timelines.
+              This feature is in the pipeline. The showcase lists what ships today and what comes
+              next.
             </p>
           </div>
 
           <div class="space-y-3">
             <h3 class="text-sm font-semibold text-foreground">What to expect</h3>
             <ul class="space-y-2 text-sm text-muted-foreground">
-              {#if item.name === "StreamCrafter"}
+              {#if item.name === "Cloud production"}
                 <li class="flex gap-2">
-                  <span class="text-primary">•</span> Mix and switch multiple live sources on the server,
-                  with picture-in-picture layouts.
+                  <span class="text-primary">•</span> Mix and switch live inputs on our servers instead
+                  of in your browser.
                 </li>
                 <li class="flex gap-2">
-                  <span class="text-primary">•</span> Visual editor for stream overlays and scenes.
+                  <span class="text-primary">•</span> Keep a backup input ready and fail over to it when
+                  the main input drops.
                 </li>
                 <li class="flex gap-2">
-                  <span class="text-primary">•</span> Compose on our processing nodes or on your own media
+                  <span class="text-primary">•</span> Run on our processing nodes or on your own media
                   node.
                 </li>
               {:else if item.name === "Devices"}
@@ -213,13 +214,13 @@
             Close
           </Button>
           <Button
-            href={docsSiteUrl}
+            href={upNextUrl}
             target="_blank"
             rel="noreferrer"
             variant="ghost"
             class="rounded-none h-12 flex-1 hover:bg-primary/10 text-primary hover:text-primary flex items-center justify-center gap-2"
           >
-            View Roadmap
+            See what's next
             <svg class="w-3 h-3 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24"
               ><path
                 stroke-linecap="round"

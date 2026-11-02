@@ -145,6 +145,20 @@ describe("navigation route hygiene", () => {
     ]);
   });
 
+  it("groups the browser studio and cloud production under StreamCrafter", () => {
+    const section = navigationConfig.streamcrafter;
+    expect(section.name).toBe("StreamCrafter");
+    expect(section.children?.goLive).toMatchObject({ href: "/go-live", active: true });
+    expect(section.children?.cloudProduction.active).toBe("soon");
+    expect(navigationConfig.content.children?.goLive).toBeUndefined();
+    const names = Object.values(navigationConfig).flatMap((s) =>
+      Object.values(s.children ?? {}).map((c) => c.name)
+    );
+    expect(names.filter((n) => n === "StreamCrafter")).toEqual([]);
+    expect(getRouteInfo("/go-live")?.parent).toBe("StreamCrafter");
+    expect(navigationConfig.globalNetwork.icon).not.toBe(section.children?.goLive.icon);
+  });
+
   it("includes hidden infrastructure routes in route metadata", () => {
     const routePaths = getAllRoutes().map((route) => route.path);
     expect(routePaths).toContain("/infrastructure/marketplace");

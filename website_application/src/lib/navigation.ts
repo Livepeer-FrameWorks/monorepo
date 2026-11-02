@@ -230,19 +230,27 @@ export const navigationConfig: Record<string, NavigationItem> = {
         active: true,
         description: "Clips, recordings, and VOD assets in one place",
       },
+    },
+  },
+
+  // StreamCrafter - browser studio today, server-side production in the pipeline
+  streamcrafter: {
+    name: "StreamCrafter",
+    icon: "Clapperboard",
+    children: {
       goLive: {
         name: "Go Live",
         href: "/go-live",
-        icon: "Globe",
+        icon: "Signal",
         active: true,
-        description: "Stream directly from your browser with WebRTC",
+        description: "Broadcast from your browser with scenes, overlays and media",
       },
-      composer: {
-        name: "StreamCrafter",
-        href: "/composer",
-        icon: "Clapperboard",
+      cloudProduction: {
+        name: "Cloud production",
+        href: "/streamcrafter/cloud",
+        icon: "Cloud",
         active: "soon",
-        description: "Mix and switch multiple live sources on the server",
+        description: "Mix, switch and back up live inputs on our servers",
       },
     },
   },
