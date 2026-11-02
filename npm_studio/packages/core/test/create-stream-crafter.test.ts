@@ -44,6 +44,8 @@ vi.mock("../src/core/IngestControllerV2", () => {
       this.switchVideoDevice = vi.fn().mockResolvedValue(undefined);
       this.switchAudioDevice = vi.fn().mockResolvedValue(undefined);
       this.setEncoderOverrides = vi.fn();
+      this.setAudioProcessing = vi.fn();
+      this.setAudioDucking = vi.fn();
       this.destroy = vi.fn();
       this.getSceneManager = vi.fn().mockReturnValue(null);
 
@@ -246,6 +248,18 @@ describe("createStreamCrafter", () => {
       studio.disableCompositor();
       const ctrl = getCtrl();
       expect(ctrl.disableCompositor).toHaveBeenCalled();
+      studio.destroy();
+    });
+
+    it("audio processing and ducking delegate to controller", () => {
+      const studio = createStreamCrafter({ whipUrl: "https://x.com/whip" });
+      studio.setAudioProcessing({ noiseGate: { enabled: true, threshold: -45 } });
+      studio.setAudioDucking(true);
+      const ctrl = getCtrl();
+      expect(ctrl.setAudioProcessing).toHaveBeenCalledWith({
+        noiseGate: { enabled: true, threshold: -45 },
+      });
+      expect(ctrl.setAudioDucking).toHaveBeenCalledWith(true);
       studio.destroy();
     });
   });

@@ -38,6 +38,7 @@
 
 import { IngestControllerV2 } from "../core/IngestControllerV2";
 import type { SceneManager } from "../core/SceneManager";
+import type { AudioProcessingConfig } from "../core/AudioMixer";
 import type {
   IngestControllerConfigV2,
   IngestState,
@@ -149,6 +150,11 @@ export interface StreamCrafterInstance {
   switchAudioDevice(deviceId: string): Promise<void>;
 
   setEncoderOverrides(overrides: EncoderOverrides): void;
+
+  /** Noise gate, EQ and de-esser on the mixed audio; kept until the mixer runs. */
+  setAudioProcessing(config: Omit<AudioProcessingConfig, "sidechain">): void;
+  /** Lower every other source while the first camera's microphone has signal. */
+  setAudioDucking(enabled: boolean): void;
 
   enableCompositor(config?: Partial<CompositorConfig>): Promise<void>;
   disableCompositor(): void;
@@ -393,6 +399,8 @@ export function createStreamCrafter(config: CreateStreamCrafterConfig): StreamCr
     switchAudioDevice: (id) => ctrl.switchAudioDevice(id),
 
     setEncoderOverrides: (overrides) => ctrl.setEncoderOverrides(overrides),
+    setAudioProcessing: (config) => ctrl.setAudioProcessing(config),
+    setAudioDucking: (enabled) => ctrl.setAudioDucking(enabled),
 
     enableCompositor: (config?) => ctrl.enableCompositor(config),
     disableCompositor: () => ctrl.disableCompositor(),
