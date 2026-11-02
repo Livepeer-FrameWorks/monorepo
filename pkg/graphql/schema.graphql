@@ -2100,7 +2100,11 @@ type Mutation {
   price, without cash refund or spendable balance. Provider or metering
   reconciliation can leave them pending.
   Enterprise purchases and moves to a higher tier with a lower base price require an operator arrangement.
-  Downgrades take effect at the current billing period end.
+  Downgrades take effect at the end of the current billing period. A Stripe or
+  Mollie subscription is repriced to the lower tier before it renews; a move to
+  Free cancels it instead, at billingLifecycle.freeMoveFinalAt. Choosing the
+  current tier cancels a downgrade while billingLifecycle.pendingTierState is
+  SCHEDULED.
   A refusal returns ValidationError whose code is one of PENDING_CHECKOUT,
   PENDING_FREE_FALLBACK, PENDING_UPGRADE, OUTSTANDING_GRANT, ACCOUNT_CLOSED,
   DOWNGRADE_HELD, PAID_TERM_ENDING, PROVIDER_SUBSCRIPTION_LIVE,
@@ -5503,8 +5507,9 @@ type TenantSubscription {
   # Payment
   paymentMethod: String
   billingModel: String!
-  # Scheduled tier change (typically a downgrade) staged via changeBillingTier,
-  # applied by the billing close job after the current period's invoice clears.
+  # Scheduled tier change (typically a downgrade) staged via changeBillingTier.
+  # A downgrade applies once the invoice closing its period is finalized and,
+  # for a Stripe or Mollie subscription, the provider charges the target tier.
   pendingTier: BillingTier
   pendingEffectiveAt: Time
   """
