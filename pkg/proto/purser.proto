@@ -815,7 +815,33 @@ message BillingStatusResponse {
   bool collection_ready = 12;             // Confirmed reusable postpaid collection setup
   string collection_provider = 13;        // stripe, mollie or operator when collection_ready
   repeated string setup_providers = 14;   // Fully configured providers available for postpaid setup
-  OperatorBillingGrant operator_grant = 15; // Operator arrangement in force, if any
+  // Operator arrangement in force, if any. Tenant-safe: reason, granted_by and
+  // expiry diagnostics are left empty.
+  OperatorBillingGrant operator_grant = 15;
+  // Monthly base fee in EUR after any operator arrangement, e.g. "0.00".
+  string effective_base_price = 16;
+  // Scheduled move to Free after a failed payment or a cancellation, if any.
+  FreeFallbackStatus free_fallback = 17;
+  // State of subscription.pending_tier_id when pending_reason is "downgrade":
+  // "scheduled": selecting the current tier cancels it.
+  // "final": the provider subscription is cancelled; the move cannot be undone.
+  // "applying": the effective time passed; it applies with the closing invoice.
+  string pending_tier_state = 18;
+}
+
+// A tenant's scheduled move to the Free tier.
+message FreeFallbackStatus {
+  // "payment_failed": the grace period after a failed renewal.
+  // "cancelled": the subscription was cancelled and runs to its paid end.
+  string reason = 1;
+  // When the move happens, or happened once stage is "moved".
+  google.protobuf.Timestamp at = 2;
+  // "scheduled": before the date; paying or subscribing again keeps the plan.
+  // "applying": the date passed and the final invoice is being settled.
+  // "moved": the tenant is on Free.
+  string stage = 3;
+  // The recurring provider subscription has been cancelled, so no renewal follows.
+  bool provider_cancelled = 4;
 }
 
 // Payment record

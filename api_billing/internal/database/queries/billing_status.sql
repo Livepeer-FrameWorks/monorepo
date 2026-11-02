@@ -143,6 +143,27 @@ WHERE ts.tenant_id = sqlc.arg(tenant_id)::text::uuid AND ts.status != 'cancelled
 ORDER BY ts.created_at DESC
 LIMIT 1;
 
+-- name: GetTenantBillingLifecycle :one
+-- The plan lifecycle a tenant sees on its billing page: the base fee after any
+-- grant in force, the scheduled move to Free, and how far a staged downgrade
+-- has progressed. A provider stop that started or finished makes a downgrade final.
+SELECT
+    COALESCE(og.base_price, bt.base_price)::text AS effective_base_price,
+    ts.free_fallback_at,
+    COALESCE(ts.free_fallback_reason, '')::text AS free_fallback_reason,
+    (ts.free_fallback_moved_at IS NOT NULL)::boolean AS free_fallback_moved,
+    (ts.free_fallback_provider_ended_at IS NOT NULL)::boolean AS provider_cancelled,
+    (ts.free_fallback_provider_stopping OR ts.free_fallback_provider_ended_at IS NOT NULL)::boolean AS provider_stop_started,
+    COALESCE(ts.pending_reason, '')::text AS pending_reason,
+    ts.pending_effective_at
+FROM purser.tenant_subscriptions ts
+JOIN purser.billing_tiers bt ON bt.id = ts.tier_id
+LEFT JOIN purser.subscription_operator_grants og
+    ON og.subscription_id = ts.id AND (og.expires_at IS NULL OR og.expires_at > NOW())
+WHERE ts.tenant_id = sqlc.arg(tenant_id)::text::uuid AND ts.status != 'cancelled'
+ORDER BY ts.created_at DESC
+LIMIT 1;
+
 -- name: GetStoragePricing :one
 SELECT
     COALESCE(tpr.included_quantity, 0)::double precision AS included_quantity,

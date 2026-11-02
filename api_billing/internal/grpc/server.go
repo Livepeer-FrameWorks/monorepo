@@ -2905,7 +2905,14 @@ func (s *PurserServer) GetBillingStatus(ctx context.Context, req *purserpb.GetBi
 	if grant, grantErr := s.loadOperatorGrant(ctx, tenantID); grantErr != nil {
 		return nil, grantErr
 	} else if grant.GetActive() {
-		resp.OperatorGrant = grant
+		resp.OperatorGrant = tenantSafeOperatorGrant(grant)
+	}
+	lifecycle, err := purserdb.New(s.db).GetTenantBillingLifecycle(ctx, tenantID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, status.Errorf(codes.Internal, "failed to get billing lifecycle: %v", err)
+	}
+	if err == nil {
+		applyBillingLifecycle(resp, lifecycle, time.Now())
 	}
 
 	if subscription.GetNextBillingDate() != nil {
@@ -2913,6 +2920,50 @@ func (s *PurserServer) GetBillingStatus(ctx context.Context, req *purserpb.GetBi
 	}
 
 	return resp, nil
+}
+
+// tenantSafeOperatorGrant keeps the terms a tenant is billed under and drops
+// operator bookkeeping: the free-text reason, who granted it and expiry retries.
+func tenantSafeOperatorGrant(grant *purserpb.OperatorBillingGrant) *purserpb.OperatorBillingGrant {
+	return &purserpb.OperatorBillingGrant{
+		SubscriptionId:   grant.GetSubscriptionId(),
+		BasePrice:        grant.BasePrice,
+		WaiveUsage:       grant.GetWaiveUsage(),
+		Collection:       grant.GetCollection(),
+		ExpiresAt:        grant.GetExpiresAt(),
+		GrantedAt:        grant.GetGrantedAt(),
+		Active:           grant.GetActive(),
+		FallbackTierName: grant.GetFallbackTierName(),
+	}
+}
+
+// applyBillingLifecycle states the scheduled move to Free and the progress of
+// a staged downgrade the way the tenant can act on them.
+func applyBillingLifecycle(resp *purserpb.BillingStatusResponse, row purserdb.GetTenantBillingLifecycleRow, now time.Time) {
+	resp.EffectiveBasePrice = row.EffectiveBasePrice
+	if row.FreeFallbackAt.Valid {
+		stage := "scheduled"
+		switch {
+		case row.FreeFallbackMoved:
+			stage = "moved"
+		case !row.FreeFallbackAt.Time.After(now):
+			stage = "applying"
+		}
+		resp.FreeFallback = &purserpb.FreeFallbackStatus{
+			Reason: row.FreeFallbackReason, At: timestamppb.New(row.FreeFallbackAt.Time),
+			Stage: stage, ProviderCancelled: row.ProviderCancelled,
+		}
+	}
+	if row.PendingReason == "downgrade" {
+		switch {
+		case row.ProviderStopStarted:
+			resp.PendingTierState = "final"
+		case row.PendingEffectiveAt.Valid && !row.PendingEffectiveAt.Time.After(now):
+			resp.PendingTierState = "applying"
+		default:
+			resp.PendingTierState = "scheduled"
+		}
+	}
 }
 
 func (s *PurserServer) getAvailablePostpaidProviders() []string {

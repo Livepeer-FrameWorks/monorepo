@@ -236,6 +236,55 @@ func (q *Queries) GetTenantAdmissionStatus(ctx context.Context, arg GetTenantAdm
 	return i, err
 }
 
+const getTenantBillingLifecycle = `-- name: GetTenantBillingLifecycle :one
+SELECT
+    COALESCE(og.base_price, bt.base_price)::text AS effective_base_price,
+    ts.free_fallback_at,
+    COALESCE(ts.free_fallback_reason, '')::text AS free_fallback_reason,
+    (ts.free_fallback_moved_at IS NOT NULL)::boolean AS free_fallback_moved,
+    (ts.free_fallback_provider_ended_at IS NOT NULL)::boolean AS provider_cancelled,
+    (ts.free_fallback_provider_stopping OR ts.free_fallback_provider_ended_at IS NOT NULL)::boolean AS provider_stop_started,
+    COALESCE(ts.pending_reason, '')::text AS pending_reason,
+    ts.pending_effective_at
+FROM purser.tenant_subscriptions ts
+JOIN purser.billing_tiers bt ON bt.id = ts.tier_id
+LEFT JOIN purser.subscription_operator_grants og
+    ON og.subscription_id = ts.id AND (og.expires_at IS NULL OR og.expires_at > NOW())
+WHERE ts.tenant_id = $1::text::uuid AND ts.status != 'cancelled'
+ORDER BY ts.created_at DESC
+LIMIT 1
+`
+
+type GetTenantBillingLifecycleRow struct {
+	EffectiveBasePrice  string       `db:"effective_base_price" json:"effective_base_price"`
+	FreeFallbackAt      sql.NullTime `db:"free_fallback_at" json:"free_fallback_at"`
+	FreeFallbackReason  string       `db:"free_fallback_reason" json:"free_fallback_reason"`
+	FreeFallbackMoved   bool         `db:"free_fallback_moved" json:"free_fallback_moved"`
+	ProviderCancelled   bool         `db:"provider_cancelled" json:"provider_cancelled"`
+	ProviderStopStarted bool         `db:"provider_stop_started" json:"provider_stop_started"`
+	PendingReason       string       `db:"pending_reason" json:"pending_reason"`
+	PendingEffectiveAt  sql.NullTime `db:"pending_effective_at" json:"pending_effective_at"`
+}
+
+// The plan lifecycle a tenant sees on its billing page: the base fee after any
+// grant in force, the scheduled move to Free, and how far a staged downgrade
+// has progressed. A provider stop that started or finished makes a downgrade final.
+func (q *Queries) GetTenantBillingLifecycle(ctx context.Context, tenantID string) (GetTenantBillingLifecycleRow, error) {
+	row := q.db.QueryRowContext(ctx, getTenantBillingLifecycle, tenantID)
+	var i GetTenantBillingLifecycleRow
+	err := row.Scan(
+		&i.EffectiveBasePrice,
+		&i.FreeFallbackAt,
+		&i.FreeFallbackReason,
+		&i.FreeFallbackMoved,
+		&i.ProviderCancelled,
+		&i.ProviderStopStarted,
+		&i.PendingReason,
+		&i.PendingEffectiveAt,
+	)
+	return i, err
+}
+
 const getTenantBillingStatus = `-- name: GetTenantBillingStatus :one
 SELECT
     ts.billing_model,

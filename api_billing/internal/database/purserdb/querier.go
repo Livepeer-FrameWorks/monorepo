@@ -478,6 +478,10 @@ type Querier interface {
 	// subscription row is locked so the changed-field list matches the write.
 	GetTenantBillingDetailsForUpdate(ctx context.Context, tenantID string) (GetTenantBillingDetailsForUpdateRow, error)
 	GetTenantBillingEmail(ctx context.Context, tenantID string) (sql.NullString, error)
+	// The plan lifecycle a tenant sees on its billing page: the base fee after any
+	// grant in force, the scheduled move to Free, and how far a staged downgrade
+	// has progressed. A provider stop that started or finished makes a downgrade final.
+	GetTenantBillingLifecycle(ctx context.Context, tenantID string) (GetTenantBillingLifecycleRow, error)
 	// grant_expires_at follows GetTenantAdmissionStatus.
 	GetTenantBillingStatus(ctx context.Context, arg GetTenantBillingStatusParams) (GetTenantBillingStatusRow, error)
 	GetTenantByMollieSubscription(ctx context.Context, mollieSubscriptionID sql.NullString) (string, error)

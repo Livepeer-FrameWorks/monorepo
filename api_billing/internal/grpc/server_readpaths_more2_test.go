@@ -268,6 +268,7 @@ func TestGetBillingStatusNoActiveSubscription(t *testing.T) {
 	// collection readiness and operator grant → no subscription, no grant
 	mock.ExpectQuery(`name: GetTenantAdmissionStatus`).WillReturnError(sqlmockNoRows())
 	mock.ExpectQuery(`name: GetSubscriptionOperatorGrant`).WillReturnError(sqlmockNoRows())
+	mock.ExpectQuery(`name: GetTenantBillingLifecycle`).WithArgs("tenant-1").WillReturnError(sqlmockNoRows())
 
 	resp, err := s.GetBillingStatus(context.Background(), &purserpb.GetBillingStatusRequest{TenantId: "tenant-1"})
 	if err != nil {
