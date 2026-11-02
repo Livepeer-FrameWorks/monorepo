@@ -1827,7 +1827,7 @@ https://logbook.frameworks.network/blog/showcase-what-ships-today
 
 An event team has a product launch in six weeks. They need a presenter on camera with slides beside them, the stream on their own site and on YouTube, and a recording afterwards. Later in the year, they would like to switch between remote guests from a control room. They open a video platform's website to find out which of those things they can do today. Most feature pages make that hard to answer, because a shipped feature and a planned one read the same.
 
-Ours had that problem too. We have replaced the guesswork with a [showcase page](https://frameworks.network/showcase) that sorts FrameWorks into three groups: shipping today, in the pipeline, and what follows on the roadmap.
+Ours had that problem too. We have replaced the guesswork with a [showcase page](https://frameworks.network/showcase) that sorts FrameWorks into three groups: on the platform today, coming next, and further down the road.
 
 ## What you can use today
 
@@ -1843,11 +1843,13 @@ StreamCrafter is the name for all of this: mixing in the browser today, and prod
 
 The browser studio is marked beta on the showcase page for a clear reason. You can go live with it today, and the SDK will change substantially as cloud production arrives. If you build it into your own application now, expect breaking changes. If you use it from the dashboard, those SDK changes are ours to absorb.
 
-## What is in the pipeline, and what isn't ready
+## What is coming next, and what isn't ready
 
-The second group is designed work that you can't use in production yet: StreamCrafter cloud production, teams and roles, SCTE-35 platform controls, live AI processing, DRM, and device discovery. Cloud production is the one the event team was asking about. It will mix and switch live sources on the server, so the show no longer depends on one presenter's computer.
+The second group is work that is next on the roadmap and that you can't use in production yet: StreamCrafter cloud production, teams and roles, guests and chat, rooms, server-side ad insertion, live AI processing, DRM, and device discovery. Cloud production is the one the event team was asking about. It will mix and switch live sources on the server, so the show no longer depends on one presenter's computer.
 
-Guests are in the third group, along with rooms and chat, server-side ad insertion, and live commerce. Guests come right after teams and server-side composition, because they depend on both. That means the event team's control room with remote guests isn't something we can offer today, and the page says that. We publish no dates for either group.
+Guests are in that group too. They come after teams and server-side composition, because they depend on both. That means the event team's control room with remote guests isn't something we can offer today, and the page says that.
+
+The third group, further down the road, is planned work that follows: SDKs in more languages, per-stream balances for paywalls and pay-per-view, and mobile apps. We publish no dates for either group.
 
 If you need something from these groups sooner, tell us. It changes what we build next.
 
@@ -1952,6 +1954,43 @@ Operators can find the setup details in [mesh networking](/operators/mesh-bootst
 
 
 ---
+# StreamCrafter Now Produces a Show, Not Just a Camera Feed
+https://logbook.frameworks.network/blog/streamcrafter-browser-production
+
+Until this release, going live from the FrameWorks dashboard meant one camera, an optional screen share and a layout picker. That works for a stand-up or a quick demo. It stops working when someone wants a title card before the show starts, a logo in the corner, a second camera, or a clip played in the middle. For those, people went back to OBS, and the browser studio was not the tool they produced the show in.
+
+StreamCrafter now has a producer panel. Scenes, transitions, layers, logos, lower thirds, media files and an audio chain run in the same browser tab that publishes the stream, and the panel is on whenever the studio's compositor runs.
+
+## A small show, start to finish
+
+Take a weekly community broadcast run by one person. Before going live, they build three scenes: a holding scene with the show's logo and a looping music bed, a main scene with their camera and a lower third with the guest's name, and a demo scene with a shared browser window and their camera in the corner.
+
+They rehearse in the preview, which nobody else sees. At the top of the hour they click Go Live on the holding scene, fade to the main scene, and switch to the demo scene and back with a slide or a cut. The `]` and `[` keys step through scenes, so the switch doesn't need the mouse. When the guest's segment ends, they edit the lower third's text, and the picture updates as they type.
+
+The audio section handles what usually needs a separate app: echo cancellation, noise suppression and automatic gain from the browser, then a noise gate, a de-esser, a three-band EQ and ducking, which lowers the music bed while the presenter's microphone has signal. While live, a pill next to the status badge grades the connection as good, unstable or poor from the packet loss and round-trip time the receiving server reports over the last stats interval, not from an average since the start.
+
+Once the stream reaches FrameWorks, it is an ordinary stream. Recording, clips, multistreaming to YouTube or Twitch, and playback work as they do for a stream from OBS or a hardware encoder.
+
+## Nothing to install, and little to download
+
+The whole studio loads as a page asset. We built the drop-in web component from this release's source: the component is 95 kB gzipped, and the three workers it starts for compositing, encoding and the WebRTC transform add 27 kB, for about 122 kB in total. Logos, images and media files stay in the browser; only the finished mix is sent.
+
+The same panel ships in the React, Svelte and web component packages, and it is on by default in each of them. An application that embeds StreamCrafter gets the producer tools without a flag, and turns the panel off only if it doesn't want them. Where the browser can't do something, such as playing a file into the stream or sharing a screen, the button is turned off and says why.
+
+The studio no longer records in the browser. FrameWorks records the stream on the server instead, so a recording no longer depends on the presenter's disk or on the tab staying open after the show.
+
+## What it doesn't do yet
+
+The mix runs on the presenter's computer. Every source adds load, and if the laptop or its upload fails, the show stops. For a long or high-stakes broadcast, a dedicated encoder is still the steadier choice, and the guide says so.
+
+StreamCrafter is in beta, and its SDK will change a lot. Cloud production, which mixes and switches live sources on our servers so the show no longer depends on one machine, is next on the roadmap, and remote guests build on it. If you embed the SDK in your own application now, expect breaking changes as that lands. If you use it from the dashboard, those changes are ours to absorb. This release already removed the browser recording methods and reversed the order of the layer reorder callback, so check the package changelogs before you upgrade.
+
+## Try it
+
+You can publish to any WHIP endpoint from [the stream test page](https://frameworks.network/stream-test) without an account, and play the result back on the same page. The [showcase page](https://frameworks.network/showcase) shows where StreamCrafter and cloud production stand, and the [Go Live guide](/builders/go-live-browser) walks through a first broadcast from the dashboard.
+
+
+---
 # Moving From Livepeer Studio: Webhooks, Playback Gates, and URL Import
 https://logbook.frameworks.network/blog/studio-parity
 
@@ -2023,7 +2062,7 @@ Webhook signing uses [Standard Webhooks](/builders/webhooks) rather than Studio'
 header, so a receiver needs a new verification step, which existing libraries cover. Retries run for
 about three days instead of one. There is no Task API, no per-stream transcode profiles, and no
 `creatorId` or `userTags` on streams yet. The
-[gap list](/migrate/livepeer-studio#whats-not-yet-at-parity-and-whats-coming) in the migration guide
+[gap list](/migrate/livepeer-studio#whats-up-next-and-whats-not-on-the-roadmap) in the migration guide
 tracks what is still missing, and the [playback access guide](/builders/playback-access-control)
 covers webhook policies and allowed origins.
 
@@ -2403,7 +2442,7 @@ query NetworkStatus {
 
 ## Public Livepeer observations
 
-Platform v0.3.12 adds `GET /v1/network/livepeer` on the Bridge API origin when network
+Platform v0.3.13 adds `GET /v1/network/livepeer` on the Bridge API origin when network
 observations are enabled. This REST endpoint powers the Livepeer tab at
 `/network?view=livepeer` and is available to external explorers and import jobs without
 an account, wallet signature or API key. Browser clients can fetch the public route
@@ -18643,14 +18682,17 @@ operator-facing error detail.
 
 ## Supported platforms
 
-| Platform    | Dashboard preset ingest URL                                            | Key source                  |
-| ----------- | ---------------------------------------------------------------------- | --------------------------- |
-| Twitch      | `rtmp://live.twitch.tv/app/`                                           | Creator Dashboard           |
-| YouTube     | `rtmp://a.rtmp.youtube.com/live2/`                                     | Live Control Room           |
-| Facebook    | `rtmps://live-api-s.facebook.com:443/rtmp/`                            | Live Producer               |
-| Kick        | `rtmps://fa723fc1b171.global-contribute.live-video.net/app/`           | Creator Dashboard           |
-| X (Twitter) | `rtmps://prod-ec-us-west-2.compose.broadcast.live-video.net:443/rtmp/` | Media Studio or Producer    |
-| Custom      | None; supply a complete `rtmp://`, `rtmps://`, or `srt://` URI         | The destination's dashboard |
+| Platform    | Dashboard preset ingest URL                                            | Where to find the stream key                                                                                       |
+| ----------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| Twitch      | `rtmp://live.twitch.tv/app/`                                           | [Creator Dashboard → Settings → Stream](https://dashboard.twitch.tv/settings/stream)                               |
+| YouTube     | `rtmp://a.rtmp.youtube.com/live2/`                                     | Live Control Room ([YouTube Help: live stream with an encoder](https://support.google.com/youtube/answer/2907883)) |
+| Facebook    | `rtmps://live-api-s.facebook.com:443/rtmp/`                            | Live Producer → Streaming software ([Facebook Help](https://www.facebook.com/help/587160588142067))                |
+| Kick        | `rtmps://fa723fc1b171.global-contribute.live-video.net/app/`           | [Creator Dashboard](https://dashboard.kick.com) → Channel → Stream URL & Key                                       |
+| X (Twitter) | `rtmps://prod-ec-us-west-2.compose.broadcast.live-video.net:443/rtmp/` | Media Studio Producer or Live Studio ([X Help](https://help.x.com/en/using-x/how-to-use-live-producer))            |
+| Custom      | None; supply a complete `rtmp://`, `rtmps://`, or `srt://` URI         | The destination's dashboard                                                                                        |
+
+Each platform shows the key next to its own server URL. Copy only the key into the dashboard
+preset. If a key leaks, reset it on the same page and update the target.
 
 In the dashboard, a platform preset fixes the ingest URL shown above and asks only for the stream
 key; FrameWorks stores the preset URL followed by the key. If the destination gives you a different
@@ -20005,6 +20047,29 @@ createPlayer({
   types like `ws/video/raw`, and only the protocols present in the `outputs` map are available to
   the scoring algorithm.
 </Aside>
+
+#### When the player polls the edge
+
+With `endpoints`, the player requests `json_<contentId>.js` from the primary edge once, before
+playback starts. The reply decides whether it polls stream state and opens the Mist metadata
+socket:
+
+| Reply from the edge                                       | What the player does                                                                                              |
+| --------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| Mist stream info                                          | Uses its sources and tracks, polls stream state, opens the metadata socket                                        |
+| A Mist status such as `Stream is offline`                 | Polls stream state and starts playback when the stream comes online                                               |
+| `Could not retrieve stream` (Mist does not know the name) | Plays the URL without polling and without a metadata socket                                                       |
+| HTTP 404, or a reply that is not Mist JSON                | Plays the URL as plain media without polling                                                                      |
+| A network error or another HTTP error                     | Plays the URL and repeats the lookup, waiting 1 s and doubling up to 30 s, until it gets one of the replies above |
+
+Set `baseUrl` whenever the edge runs MistServer. It tells the player where Mist answers, including
+a path prefix behind a proxy, and the player then keeps polling through network errors because the
+stream-state client reconnects on its own. Set `contentId` to the Mist stream name: a placeholder
+name gets the `Could not retrieve stream` reply, so the player shows no live status.
+
+To see which protocol, player and Mist status a URL ends up with, paste it into the
+[stream test](https://frameworks.network/stream-test). Its diagnostics panel shows the stream
+state the player polled and an event log.
 
 
 ---
@@ -24386,6 +24451,8 @@ This shows:
 
 For enrollment and heartbeat status, check the dashboard—your node should appear under **Infrastructure → Nodes** once enrolled.
 
+Until its first node enrolls, a new cluster shows **Waiting for first edge** on the **Infrastructure** overview and on its cluster page. Once an edge enrolls and reports in, the cluster shows its health instead.
+
 ## How Traffic Gets Routed
 
 Once enrolled, Foghorn (the load balancer) knows about your node. When a viewer requests a stream:
@@ -26183,17 +26250,46 @@ Bunny is the better choice for:
 - **Native iOS (Swift) and Android (Kotlin) SDKs** for app developers.
 - **Bundled adjacent products** — Storage, DNS, Optimizer, Shield, Magic Containers in one account.
 
-## What's not yet at parity, and what's coming
+## What's up next, and what's not on the roadmap
 
-- **DRM** (FairPlay / Widevine / PlayReady) — in development.
-- **Automatic chapter generation, transcription, caption auto-generation** — Live Transcription, StreamCrafter cloud production, and Video Analysis are on the [roadmap](/roadmap).
-- **Per-video heatmaps and retention curves** — per-asset watch-density and retention curves now ship for the FrameWorks player; broader cross-player view-level QoE is still on the [roadmap](/roadmap#view-level-qoe-analytics).
-- **Per-region replication knob** — FrameWorks uses cluster placement instead of a 1-of-N replication slider; if you used Bunny's 1–9 region replication, plan which cluster (or set of hybrid edges) to anchor your assets to.
-- **Managed iframe-embed-as-a-product** — `<fw-player>` is the closest replacement.
-- **Official PHP, C#, and Java SDKs** — the TypeScript, Go, and Python [SDKs](/builders/sdks) ship; for other languages, use GraphQL codegen against the public schema and a Standard Webhooks library.
-- **Bulk library import** — `importVodAsset` covers `POST /fetch` one video at a time, but there is no one-shot Bunny → FrameWorks library importer. [Open an in-app ticket](https://chartroom.frameworks.network/support) for sizeable libraries.
-- **Watermarking as a managed feature** — possible via custom transcode profiles on dedicated / self-hosted clusters, not as a tenant-level toggle.
-- **VOD asset metadata-edit mutation** — title and description are set on `createVodUpload`; there's no `updateVodAsset` today.
+The statuses come from the [roadmap](/roadmap), which shows relative order, not dates. None of
+the up-next items are available today.
+
+### Up next
+
+- **[DRM](/roadmap#drm).** FairPlay, Widevine, and PlayReady are in development. Landing it
+  unblocks the catalogs you protect with MediaCage today; until then, keep DRM titles on Bunny.
+- **[Live AI Processing](/roadmap#live-ai-processing).** Brings transcription on the media edge,
+  which unblocks generated captions in place of Transcribe AI. Automatic chapters and generated
+  titles build on the same layer.
+- **[Composition and SSAI](/roadmap#composition-and-ssai).** Adds server-side logos, watermarks,
+  and lower thirds, which unblocks watermarking as a managed feature. Today, a watermark needs a
+  custom transcode profile on a dedicated or self-hosted cluster, or StreamCrafter's overlays in
+  the browser for live streams.
+
+### Available today, working differently
+
+- **[View-level QoE analytics](/roadmap#view-level-qoe-analytics).** Per-asset watch density
+  and retention curves ship for the FrameWorks player. QoE from third-party players is still
+  ahead.
+- **Region replication.** FrameWorks places assets by cluster instead of a 1-of-N replication
+  slider. If you used Bunny's 1–9 region replication, plan which cluster, or which set of hybrid
+  edges, anchors your assets.
+- **Embeds.** `<fw-player>` and the framework packages replace the managed iframe embed.
+
+### Later, on the roadmap
+
+- **[More SDK languages](/roadmap#more-sdk-languages).** The TypeScript, Go, and Python
+  [SDKs](/builders/sdks) ship. For PHP, C#, and Java, use GraphQL codegen against the public
+  schema and a Standard Webhooks library until generated SDKs land.
+
+### Not on the roadmap
+
+- **Bulk library import.** `importVodAsset` covers `POST /fetch` one video at a time; there is no
+  one-shot Bunny library importer. [Open an in-app ticket](https://chartroom.frameworks.network/support) for sizeable
+  libraries so we can scope the move.
+- **VOD metadata edits.** Title and description are set on `createVodUpload`; there is no
+  `updateVodAsset` mutation.
 
 ## Beta and tricky bits
 
@@ -27281,7 +27377,7 @@ Livepeer Studio is a hosted Livepeer gateway; FrameWorks is another gateway on t
 - **Capabilities to evaluate:** E-RTMP ingest (HEVC/AV1 contribution over RTMP) · SRT ingest · LL-HLS/DASH delivery · sprite-sheet seek previews · AV1 in the codec list · self-hosting / hybrid options · MCP, wallet auth, and x402 for agents · Skipper · experimental device-discovery productization.
 - **What's not yet at parity:** AI Pipelines and C2PA signing. TypeScript, Go, and Python
   [SDKs](/builders/sdks) ship. See
-  [the gap list](#whats-not-yet-at-parity-and-whats-coming) before planning a production cutover.
+  [the gap list](#whats-up-next-and-whats-not-on-the-roadmap) before planning a production cutover.
 
 <Aside type="caution" title="Read before cutting over production traffic">
   Production-grade items still in motion: published billing rates, hybrid-edge runbooks, DRM, and
@@ -27601,15 +27697,21 @@ Run a low-traffic test stream through both platforms in parallel for a day. Watc
 - **Skipper** — an in-product AI consultant for API discovery and diagnostics. Reach it from the dashboard, the docs (`⌘J`), or MCP.
 - **Player packages** for React, Svelte, Web Components, and vanilla JS.
 
-## What's not yet at parity, and what's coming
+## What's up next, and what's not on the roadmap
 
-Current gaps to account for:
+The statuses come from the [roadmap](/roadmap), which shows relative order, not dates. None of
+the up-next items are available today.
 
-- **AI Pipelines** (text-to-image, image-to-video, ASR, live-video-to-video, segmentation) — not
-  exposed as a FrameWorks API today. The Livepeer team's productized AI offering is
-  [Daydream](https://daydream.live/) (real-time AI video, runs on the same Livepeer network);
-  keep AI workloads there or on existing managed Livepeer surfaces until FrameWorks exposes an
-  equivalent.
+### Up next
+
+- **[Live AI Processing](/roadmap#live-ai-processing).** Runs models such as YOLO detection and
+  Parakeet transcription on the media edge, with heavy models deferred to Livepeer compute.
+  Landing it unblocks the workloads Studio's AI Pipelines covered, such as ASR, segmentation and
+  live video-to-video. Until then, keep AI workloads on [Daydream](https://daydream.live/) or your
+  existing Livepeer surfaces.
+
+### Not on the roadmap
+
 - **C2PA signing and creator-ID provenance on transcode** — not exposed as a public FrameWorks API
   today.
 - **Derived thumbnail asset enforcement** — playback access control protects endpoint resolution
@@ -28023,7 +28125,7 @@ worth keeping during the cut-over.
   sprite-sheet seek previews (≈ Mux storyboard) · self-hosting and hybrid hosting · MCP, wallet
   auth, and x402 for agents · Skipper · experimental device-discovery productization.
 - **What's not yet at parity:** Mux Data-class QoE breadth — FrameWorks now has first-party view-level QoE (rebuffering, frame drops, startup, VOD retention) for its own player, but cross-player coverage and ad observability are still maturing · DRM · live auto-captions · productized custom-domain SKU · number of official server-side SDKs (Mux ships Node/Python/Ruby/Go/PHP/Elixir/
-  Java/.NET; FrameWorks ships TypeScript, Go, and Python) · built-in referrer/UA playback restrictions as a no-code policy · Master Access download. See [the gap list](#whats-not-yet-at-parity-and-whats-coming) before
+  Java/.NET; FrameWorks ships TypeScript, Go, and Python) · built-in referrer/UA playback restrictions as a no-code policy · Master Access download. See [what is up next](#whats-up-next-and-whats-not-on-the-roadmap) before
   cutting over production traffic.
 
 <Aside type="caution" title="Read before cutting over production traffic">
@@ -28355,41 +28457,49 @@ over once you trust the numbers.
   the dashboard, the docs (`⌘J`), or MCP.
 - **Player packages** for React, Svelte, Web Components, and vanilla JS.
 
-## What's not yet at parity, and what's coming
+## What's up next, and what's not on the roadmap
 
 Mux ships several things FrameWorks doesn't have a one-for-one answer for yet. Check which of
-these you depend on before cutting over.
+these you depend on before cutting over. The statuses come from the [roadmap](/roadmap), which
+shows relative order, not dates. None of the up-next items are available today.
 
-- **Mux Data-class view-level QoE analytics.** Mux Data is best-in-class here — view-level
-  traces, ad observability, and a player-agnostic SDK that spans Video.js, hls.js, Shaka,
-  native HTML5, Roku, Chromecast, and OTT surfaces. FrameWorks has closed a good chunk of
-  this: the FrameWorks player now reports view-level QoE — rebuffering ratio, frame drops,
-  startup time-to-first-frame, bitrate/rendition switches, exit-before-start, and per-asset
-  VOD retention/watch-density — surfaced in the dashboard at `/analytics/qoe`. What's still on
-  the [roadmap](/roadmap#view-level-qoe-analytics) is the breadth Mux Data has: QoE from
-  third-party / non-FrameWorks players and ad-specific observability. If your stack leans on
-  those today, weigh that gap before cutting over.
+### Up next
 
-- **DRM** — Widevine, PlayReady, and FairPlay are in development; not GA. Mux ships productized
-  DRM today.
-- **Live auto-captions / transcription** — on the roadmap, not shipping. Mux ships live
-  auto-captions today.
-- **Custom-domain availability depends on billing entitlement.** Mux offers productized
-  custom-domain delivery. FrameWorks materializes explicit platform-subdomain and BYO-domain
-  entitlements from the active subscription; downgrade tears down served DNS/TLS state while
-  retaining the requested name for later re-entitlement.
-- **Number of official server-side SDKs.** Mux ships official SDKs for Node, Python,
-  Ruby, Go, PHP, Elixir, Java, and .NET, all covering both Mux Video and Mux Data. FrameWorks
-  ships [SDKs](/builders/sdks) for TypeScript (Node and browsers), Go, and Python, plus the
-  player suite (`@livepeer-frameworks/player-*`); for Ruby, PHP, Elixir, Java, and .NET, use
-  GraphQL codegen against the public schema.
-- **Built-in referrer / user-agent playback restrictions.** Mux exposes them as a no-code
-  policy. The webhook playback policy can express the same rules, but it's not a toggle.
-- **Master Access** — the downloadable original of an asset.
-- **Frame-accurate clip trimming.** FrameWorks clips today are GOP-aligned; Mux offers both
-  asset-clips (frame-accurate) and instant clips (segment-level).
-- **Live captions / subtitle track lifecycle webhooks.** Tracked alongside the captions
-  feature.
+- **[DRM](/roadmap#drm).** Widevine, PlayReady, and FairPlay are in development. Landing it
+  unblocks premium catalogs that Mux protects with productized DRM today; until then, keep those
+  titles on their current provider.
+- **[Live AI Processing](/roadmap#live-ai-processing).** Brings live transcription on the media
+  edge, which unblocks the live auto-captions Mux ships today. Caption tracks and their
+  lifecycle webhooks follow with it.
+- **[Built-In Password and Geo Rules](/roadmap#built-in-password-and-geo-rules).** Turns
+  password and country rules into switches on a stream. Referrer and user-agent restrictions
+  still go through the [webhook playback policy](/builders/playback-access-control), which can
+  express them but is not a toggle.
+
+### Available today, working differently
+
+- **[View-level QoE analytics](/roadmap#view-level-qoe-analytics).** The FrameWorks player
+  reports rebuffering ratio, frame drops, time to first frame, rendition switches,
+  exit-before-start, and per-asset VOD retention at `/analytics/qoe`. Mux Data's breadth is not
+  matched yet: QoE from third-party players (Video.js, hls.js, Shaka, native HTML5, Roku,
+  Chromecast) and ad observability are still ahead. If your dashboards depend on those, weigh the
+  gap before cutting over.
+- **Custom domains.** Platform subdomains and your own domains are tied to the plan's
+  entitlement. A downgrade removes the served DNS and TLS state and keeps the requested name for
+  when the entitlement returns.
+
+### Later, on the roadmap
+
+- **[More SDK languages](/roadmap#more-sdk-languages).** FrameWorks ships
+  [SDKs](/builders/sdks) for TypeScript (Node and browsers), Go, and Python, plus the player
+  packages. Mux also covers Ruby, PHP, Elixir, Java, and .NET; for those, use GraphQL codegen
+  against the public schema until generated SDKs land.
+
+### Not on the roadmap
+
+- **Master Access.** There is no downloadable copy of the original upload.
+- **Frame-accurate clip trimming.** Clips are GOP-aligned. Mux offers frame-accurate asset
+  clips alongside segment-level instant clips.
 
 ## Beta and tricky bits
 
@@ -28562,6 +28672,94 @@ abandoned after 20 attempts (about two hours), recorded as
 `lookout_deliveries_total{result="failed"}` with its last error, and deleted after 30 days.
 Activity selection and enqueue outcomes are recorded in
 `lookout_operator_activity_events_total`.
+
+## Billing and account lifecycle
+
+These warnings cover work Purser and Commodore retry on their own: provider recovery, downgrades,
+moves to Free, grant expiry, tenant closure and account session stops. Each fires after five
+minutes. The queue alerts also fire when a service fails to read its queue more than once in two
+minutes; that points at the service's database rather than at a tenant. The metrics carry no
+tenant label, so every alert below names the command that lists the affected tenants.
+`frameworks cluster doctor --deep` checks the provider recovery, held downgrade, tenant closure and
+session stop conditions and names up to ten tenants per finding; it does not check moves to Free or
+grant expiry. All commands need a platform-operator session. The procedures behind them are in
+[Test and trial accounts](/operators/trial-accounts/#recovery-and-internals).
+
+| Alert                                   | Identify the tenant                                                              | Resolve                                                                                   |
+| --------------------------------------- | -------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `PurserProviderWebhookInboxStuck`       | `frameworks admin billing recovery list`                                         | `recovery checkout`, `recovery upgrade`, or repair the provider or metering it names      |
+| `PurserTierDowngradeHeld`               | `frameworks admin billing recovery list` (held section)                          | `frameworks admin billing recovery downgrade --tenant-id <tenant> --reason <reason>`      |
+| `PurserFreeFallbackStuck`               | `frameworks admin billing recovery list`                                         | restore provider access or metering, `recovery notice`, or cancel with `set-tier`         |
+| `PurserOperatorGrantExpiryStuck`        | `frameworks admin billing grant list --include-expired`                          | correct the billing or pricing error; retries run every five minutes                      |
+| `CommodoreTenantAccountClosureStuck`    | `frameworks cluster doctor --deep`, then `frameworks admin tenants get <tenant>` | restore Commodore's connection to Quartermaster, or to its database for read failures     |
+| `CommodoreAccountIngestRevocationStuck` | `frameworks cluster doctor --deep`, then `frameworks admin tenants get <tenant>` | restore the cell, upgrade its Foghorn, or `frameworks admin clusters retire <cluster-id>` |
+
+### Provider recovery
+
+`PurserProviderWebhookInboxStuck` fires when Purser keeps failing at provider activation, a paid
+tier upgrade, a scheduled downgrade's provider price, a suspended-stream stop, tenant billing
+closure or expired-checkout compensation, when a provider settlement has waited more than fourteen
+days, or when Purser cannot read that queue. `recovery list` shows each item with its provider,
+tenant, reservation, state, next attempt and last error. An abandoned checkout is recovered with
+`recovery checkout`, an accepted tier upgrade with `recovery upgrade`. A failed bank refund is
+repaired in the provider's console. Missing metering holds an activation or upgrade at its billing
+boundary until the metering is repaired. Normal settlement waits under fourteen days are not
+failures. See [Checkout reservations](/operators/trial-accounts/#checkout-reservations).
+
+### Held downgrades
+
+`PurserTierDowngradeHeld` fires when a downgrade the provider confirmed is still not applied
+locally past its effective time. The provider already charges the lower tier, and the customer's
+tier changes are refused. The held downgrades section of `recovery list` names each tenant, target
+tier, effective time and closing invoice. `recovery downgrade` previews what holds it: provider
+confirmation, a draft invoice whose metering is incomplete, a `manual_review` invoice waiting for
+cluster pricing, or a pricing refusal. Once nothing holds it, confirming applies it. See
+[Held downgrades](/operators/trial-accounts/#held-downgrades).
+
+### Moves to Free
+
+`PurserFreeFallbackStuck` carries a `stage` label:
+
+- `stage="move"`: provider cancellation, the final invoice or the tier change keeps failing, or a
+  bank settlement has waited over fourteen days. The `free_fallback` rows of `recovery list` name
+  the tenant and the last error. Restore provider access or the missing metering and Purser
+  retries, or cancel the fallback with `frameworks admin billing set-tier`.
+- `stage="notice"`: the grace or completed-move email keeps failing. Fix the tenant's
+  `billing_email`. After five failures the row shows `notice_abandoned`; requeue it with
+  `frameworks admin billing recovery notice --tenant-id <tenant> --reason <reason>`. Mail never
+  blocks the move.
+- no `stage`: Purser cannot read the queue from its database.
+
+See [Free fallback and cancellation](/operators/trial-accounts/#free-fallback-and-cancellation).
+
+### Grant expiry
+
+`PurserOperatorGrantExpiryStuck` fires when a grant past its deadline failed billing-boundary
+reconciliation more than once. `grant list --include-expired` shows each tenant with its expiry
+failures and last error, and `grant show --tenant-id <tenant>` shows one grant in full. Correct the
+reported billing or pricing error; the retry runs automatically and other expiries continue. See
+[Grant expiry](/operators/trial-accounts/#grant-expiry).
+
+### Tenant closure
+
+`CommodoreTenantAccountClosureStuck` fires when a closed tenant's Quartermaster teardown failed more
+than once. Access is already revoked locally, so the account stays closed. `cluster doctor --deep`
+names those tenants. `tenants get <tenant>` shows the Quartermaster synchronization as failing, with
+the attempt count, next attempt and last error (`closure_sync: retrying` in JSON). Commodore also
+logs each failure as `Finish tenant closure` with `tenant_id`. Restore Commodore's connection to
+Quartermaster; Commodore retries every minute.
+
+### Account session stops
+
+`CommodoreAccountIngestRevocationStuck` fires when a deactivated user's or closed tenant's ingest
+stop has not reached every cell that recorded the account's streams. `cluster doctor --deep` names
+the tenants with stops pending over five minutes. `tenants get <tenant>` lists each pending stop with
+its cells, the retired ones and the last error. `frameworks cluster diagnose media-authority` shows
+the same rows on lane `ingest_revocation`.
+Restore the cell, or upgrade its Foghorn if the error is `Unimplemented`. For a cell removed for
+good, `frameworks admin clusters retire <cluster-id> --reason <reason>` settles the stops owed to
+it. The alert aggregates all cells, so silencing it also hides stops pending on other cells. See
+[Session stops](/operators/trial-accounts/#session-stops).
 
 ## Verify
 
@@ -29262,8 +29460,10 @@ frameworks cluster backup create --to s3://ops-backups/frameworks --database pur
 
 - `--to` is a local directory or an `s3://bucket/prefix` URL. The backup goes into a new
   `frameworks-backup-<UTC time>` directory under it; the command prints the full path.
-- `--all` covers every database and the ClickHouse facts. Otherwise name databases with `--database`
-  (repeatable; `<instance>/<name>` for a named instance) and add `--clickhouse` for the facts.
+- `--all` covers every database and the ClickHouse facts. A database the manifest declares but the
+  server does not have yet is skipped and listed: the next release apply creates it from its
+  baseline. Otherwise name databases with `--database` (repeatable; `<instance>/<name>` for a named
+  instance) and add `--clickhouse` for the facts.
 - S3 destinations use the standard AWS configuration: `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`
   (or a profile), `AWS_REGION`, and `AWS_ENDPOINT_URL_S3` for an S3-compatible store such as Hetzner
   Object Storage or Cloudflare R2. A custom endpoint uses path-style requests.
@@ -29306,7 +29506,11 @@ run without a backup:
 - **Irreversible data migrations**: `frameworks cluster data-migrate run <service>.<id>`, except with
   `--dry-run`, which runs inside a read-only transaction. A data migration is irreversible when the
   release that declares it lists its service under `rollback_disabled`, when the service binary marks it
-  irreversible, or when the binary does not report the field.
+  irreversible, or when the binary does not report the field. `frameworks cluster release apply` applies
+  the same gate, `--dry-run` included, before it runs an earlier release's pending data migration.
+
+Without `--backup`, the refusal prints the `backup create` command for exactly the databases the
+operation changes, so the backup covers only what the gate checks.
 
 Pass the backup with `--backup <dir|s3-url>`. It is accepted only when:
 
@@ -29318,7 +29522,8 @@ Pass the backup with `--backup <dir|s3-url>`. It is accepted only when:
 The one-hour limit is fixed. Nothing is written to the database; the gate only reads.
 
 ```bash
-frameworks cluster backup create --to /var/backups/frameworks --all
+frameworks cluster migrate --phase contract --to-version v0.3.11 --dry-run   # prints the backup command
+frameworks cluster backup create --to /var/backups/frameworks --database purser --clickhouse
 frameworks cluster migrate --phase contract --to-version v0.3.11 --backup /var/backups/frameworks/frameworks-backup-20260919T101500Z --yes
 frameworks cluster data-migrate run purser.purser_eur_ledger_conversion_v0_3_11 --backup /var/backups/frameworks/frameworks-backup-20260919T101500Z
 ```
@@ -29590,6 +29795,41 @@ All `frameworks cluster *` subcommands share a persistent flag set for selecting
 
 Save defaults once with `frameworks setup` (interactive) or the non-interactive equivalents (`frameworks context create <name>` + `frameworks context set-gitops-*`). Explicit flags on a specific invocation always win over saved defaults.
 
+## Progress watchdog
+
+Long cluster steps have no total time limit. Each runs under a watchdog that cancels it only when
+no progress arrives for its stall window, so a step on a large fleet or a large database runs as
+long as it keeps moving, and a hung step still ends. Progress is every output line of the Ansible
+role the step runs (each task, loop item and recap line) plus the step's own milestones, such as a
+host, node or cell that finished. A stalled step fails with an error naming it, its window, how
+long it ran and the last progress seen:
+
+```text
+yugabyte finalize_upgrade through yb-1 stalled: no progress for 10m0s after running 42m10s; last progress: ...
+```
+
+Rerun the same command after fixing the cause; completed work is skipped.
+
+| Step                                                                                               | Stall window                        | Progress                                                                 |
+| -------------------------------------------------------------------------------------------------- | ----------------------------------- | ------------------------------------------------------------------------ |
+| Schema migrations (`cluster migrate`, the migration phases of `release apply`)                     | 30 minutes                          | role output and each finished preflight check                            |
+| Data migrations (`cluster data-migrate`, earlier releases' runs in `release apply`)                | 10 minutes                          | an output line; a run prints its totals after 10 seconds without one     |
+| Release reconciliation transitions                                                                 | 5 minutes                           | each scope's check, and its apply and verify                             |
+| Service upgrades (`cluster upgrade`, `release apply`)                                              | 10 minutes; Yugabyte 45, Foghorn 25 | role output and each host's provision and health cycle                   |
+| Yugabyte rolling restart (`cluster restart yugabyte`)                                              | 35 minutes                          | role output and each node that finished its roll                         |
+| Yugabyte `finalize_upgrade`                                                                        | 10 minutes                          | a `yb-admin` line, or another database's YSQL catalog migrations applied |
+| Foghorn rollout cell gate                                                                          | 15 minutes                          | a schema-1 tenant of the cell reaching schema-2 authority                |
+| Edge release target sync                                                                           | 10 minutes                          | the manifest fetch, the release publish and each cluster's target set    |
+| Provision role runs (provision, precheck, deploy, restart)                                         | 20 minutes                          | role output                                                              |
+| Initialize steps (Quartermaster bootstrap, tenant and system tenant resolution, mesh reachability) | 2 minutes                           | role output; Kafka topic init keeps retrying while more brokers register |
+| `cluster init`                                                                                     | 10 minutes                          | role output                                                              |
+| Redis upgrade                                                                                      | 10 minutes                          | role output                                                              |
+| `cluster os update`                                                                                | 10 minutes check, 60 minutes apply  | playbook output and each Yugabyte node that finished its roll            |
+
+A transactional migration statement is bounded by its own 15-minute `statement_timeout`, inside
+the 30-minute window. A `.notx.sql` item and a ClickHouse item, which have no statement timeout,
+run as asynchronous jobs whose poll lines keep reporting progress.
+
 ## Detection & Health Commands
 
 ### frameworks cluster detect
@@ -29649,8 +29889,10 @@ frameworks cluster doctor [flags]
   and be listed ALIVE by the masters; vanilla PostgreSQL must answer `SELECT 1`
   within one second
 - **Kafka KRaft quorum:** per Kafka cluster, a quorum leader, the manifest's voter
-  set, no voter more than 5 seconds behind, and no controller leadership loss in
-  the last hour (read from each controller's `controller.log`)
+  set, no voter more than 5 seconds behind, and no leaderless or unplanned
+  controller leadership loss in the last hour (read from each controller's
+  `controller.log`; a handover during the leader's own graceful shutdown is
+  planned and passes, see [`diagnose kafka`](#frameworks-cluster-diagnose-kafka))
 - **Host crashes:** unit failures, automatic restarts, core dumps, segfaults, and
   OOM kills in the last 24 hours on every host and edge
   (`cluster diagnose crashes` lists them)
@@ -29682,6 +29924,18 @@ With `--deep`, doctor additionally executes every enabled database-backed binary
 read-only schema capability pack against the live PostgreSQL/YugabyteDB and
 ClickHouse engines. PostgreSQL/YugabyteDB probes assume the prepared runtime role,
 so the check proves required objects and least-privilege grants together.
+
+Deep mode also reads account and billing recovery from the Commodore and Purser
+databases and fails on the conditions their alerts fire on: a tenant closure
+whose Quartermaster synchronization failed more than once, a session stop pending
+for over 5 minutes, a confirmed downgrade held past its effective time, a billing
+recovery item failing repeatedly or unresolved for over 14 days, and a prepaid
+tenant below the -€10 suspension threshold that was not suspended. Each
+finding names up to ten tenants and points at `frameworks admin tenants get`,
+`frameworks admin clusters retire` or `frameworks admin billing recovery list`.
+Closures still synchronizing, recovery items waiting normally, and prepaid
+tenants at or below €0 (running sessions continue, new ones are refused) are
+reported without failing the check.
 
 This is targeted binary-contract introspection, not a full physical-schema diff.
 Deep mode decrypts the shared env for authenticated service checks and ClickHouse
@@ -29921,6 +30175,10 @@ To discover existing cluster IDs after provisioning:
 ```bash
 frameworks admin clusters list
 ```
+
+On a platform cluster, `provision`, `upgrade`, `apply` and `diff` resolve the system tenant through
+Quartermaster. A saved system tenant ID is used only to recover from a transport failure, and a
+Livepeer gateway cluster always needs a successful Quartermaster lookup.
 
 ---
 
@@ -30682,6 +30940,19 @@ expand has been applied (including a `--dry-run` on such a cluster) it prints
 `post-expand report: not run (expand not applied)`. See
 [Running Cluster Upgrades](/operators/running-upgrades#post-expand-report).
 
+Before it changes anything, `release apply` checks that every earlier release is complete. A
+required data migration of an earlier release that is pending or failed, and that the installed
+service binary can run, does not refuse the release: the plan lists it as step 0 and the apply runs
+it first, in catalog order, through the service binary, and confirms it reads `completed`
+afterwards. An irreversible one needs `--backup`, the same gate as `data-migrate run`; the gate
+also applies under `--dry-run`, which runs the migration read-only. A failure stops the release
+before anything of the new release is applied and names the migration and the
+`data-migrate status` command. A missing postdeploy migration of an earlier release, or a data
+migration that is running, paused, unreadable or unknown to its binary, still refuses and names
+what to do first.
+
+Long steps are bounded by a [progress watchdog](#progress-watchdog), not a fixed deadline.
+
 **Flags:**
 
 - `--version string` - Target version (defaults to the cluster channel)
@@ -30690,6 +30961,7 @@ expand has been applied (including a `--dry-run` on such a cluster) it prints
 - `--skip-validation` - Skip health validation after each service upgrade
 - `--no-rollback` - Skip automatic rollback on a service health-check failure
 - `--complete-interrupted-baselines` - Reapply and verify baselines for inspected populated databases without migration provenance
+- `--backup string` - Backup directory or `s3://` URL taken within the last hour; required when an earlier release's pending required data migration is irreversible
 
 **Examples:**
 
@@ -30820,11 +31092,18 @@ their gzip-compressed output streams to the CLI and is written under a new
 `frameworks-backup-<UTC time>` directory below `--to`. The manifest is written last. Any failure
 fails the command, and a backup without a manifest is incomplete.
 
+`--all` skips a database the manifest declares but the server does not have yet: the next
+`release apply` creates it from its baseline, so it holds nothing to back up. The command lists
+each skipped database. A backup gate that refuses (contract migrations, irreversible data
+migrations, `release apply` running an earlier release's data migration) prints the
+`backup create` command for exactly the databases that operation changes, with one `--database`
+per database and `--clickhouse` when the billing facts are among them.
+
 **Flags:**
 
 - `--manifest string` - Cluster manifest file
 - `--to string` - Destination directory or `s3://bucket/prefix` (required)
-- `--all` - Every PostgreSQL/YugabyteDB database and the ClickHouse billing facts
+- `--all` - Every PostgreSQL/YugabyteDB database that exists on the server, and the ClickHouse billing facts
 - `--database string` - Database to back up: physical name, or `<instance>/<name>` for a named postgres instance (repeatable)
 - `--clickhouse` - The ClickHouse billing facts
 
@@ -31064,9 +31343,20 @@ when there is no leader, when the voter set differs from the manifest's
 controllers, or when a voter has not caught up with the leader for more than
 5 seconds (2.5 times the controllers' 2-second fetch timeout). It also counts,
 in every controller's `controller.log` and its rotations under the unit's
-`LOG_DIR` since `--since`, how often a controller gave up leadership with no
-successor; any such loss fails the check, and
-exceptionally slow controller events are reported alongside. `cluster doctor`
+`LOG_DIR` since `--since`, how often a controller gave up leadership, and sorts
+each loss three ways:
+
+- **leaderless**: no new leader followed within the controllers'
+  `controller.quorum.election.timeout.ms` (Kafka's 1000 ms default when unset).
+  This fails the check.
+- **unplanned**: a new leader followed, but the old leader was not shutting
+  down. This fails the check as well.
+- **planned**: the leader logged its graceful shutdown and handed leadership to
+  a successor within the election timeout, as a controller restart through
+  `release apply`, `cluster upgrade` or `cluster restart` does. This does not
+  fail the check.
+
+Exceptionally slow controller events are reported alongside. `cluster doctor`
 runs the same check per Kafka cluster over the last hour.
 
 The report covers topic listing, consumer groups, a committed-offset lag
@@ -31431,6 +31721,7 @@ permission. Local closure prevents concurrent user creation and activation;
 Quartermaster teardown retries after a temporary outage. The system tenant cannot
 be closed. The tenant must exist in Quartermaster. Type its name to confirm, or pass
 `--yes --tenant-name` with its exact current name. Use user deactivation for a reversible suspension.
+See [Close a tenant](/operators/trial-accounts/#close-a-tenant).
 
 ```bash
 frameworks admin tenants deactivate <UUID> --yes --tenant-name "Exact Tenant Name" --reason "Account closed"
@@ -31438,7 +31729,16 @@ frameworks admin tenants deactivate <UUID> --yes --tenant-name "Exact Tenant Nam
 
 #### frameworks admin tenants get
 
-Read a tenant directly by UUID, without paging through the tenant list.
+Read a tenant directly by UUID, without paging through the tenant list. The
+output adds Commodore's account state: `open`, or for a closed account whether
+Quartermaster synchronization is `pending`, `retrying` (with the last error and
+next attempt) or `synchronized`, and every session stop still owed to a cell with
+its cells, retired cells and last error. JSON output keeps the Quartermaster
+fields and adds `account_state`, or `account_state_error` when Commodore cannot
+be read. A tenant with more than 100 pending stops lists the oldest 100 and says
+so. When Commodore cannot be read, the command still prints the Quartermaster
+tenant and then exits non-zero. See [Session stops](/operators/trial-accounts/#session-stops) and
+[Account closure billing](/operators/trial-accounts/#account-closure-billing).
 
 ```bash
 frameworks admin tenants get <UUID> --output json
@@ -31448,7 +31748,8 @@ frameworks admin tenants get <UUID> --output json
 
 Read private operator account changes and their reasons. Requires a platform-operator JWT.
 Use `--limit` (1..500, default 100) and the returned `--before` cursor to page
-through the newest entries first. Reasons are escaped in text output.
+through the newest entries first. Reasons are escaped in text output. The first
+page starts with the same account state as `tenants get`.
 
 ```bash
 frameworks admin tenants history <UUID> --output json
@@ -31471,6 +31772,8 @@ List and manage clusters.
 - `migrate-artifacts` - Migrate artifact metadata from a source cluster for one tenant
 - `reassign-control-cell` - Move a tenant-private cluster to another Foghorn control cell (`--to`, `--timeout`)
 - `control-cell` - Show a tenant-private cluster's control cell, reassignment state, and edges not yet moved
+- `retire` - Record a cell removed for good so session stops owed to it settle (`--reason`, `--yes`)
+- `unretire` - Remove a cell's retirement record so its session stops wait for it again (`--reason`)
 
 ```bash
 # List all clusters (shows name and ID)
@@ -31525,7 +31828,27 @@ frameworks admin clusters migrate-artifacts \
 # its edges moving; reassigning back to the previous cell is the rollback
 frameworks admin clusters reassign-control-cell <cluster-id> --to <control-cell-id> --timeout 30m
 frameworks admin clusters control-cell <cluster-id>
+
+# Settle session stops owed to a cell that was removed for good
+frameworks admin clusters retire <cluster-id> --reason "Cell decommissioned"
+
+# Undo a retirement made by mistake
+frameworks admin clusters unretire <cluster-id> --reason "Retired the wrong cell"
 ```
+
+`retire` exists for `CommodoreAccountIngestRevocationStuck`. Account closure and
+user deactivation stop active ingest on every cell that recorded the account's
+streams, and a removed cell can never confirm that stop. After retirement, a stop
+that cannot reach the cell counts as delivered there; a stop still owed to another
+unreachable cell keeps waiting for it. Commodore refuses while Quartermaster
+cannot be read or any registered Foghorn of the cell answers, and a retired cell
+that comes back still receives its stops. Type the cluster ID to confirm, or pass
+`--yes`. Retirement changes nothing else about the cluster. `unretire` removes
+the record, for a cell retired by mistake or one returning to service; from then
+on a stop the cell does not confirm stays pending. Stops that settled while the
+cell was retired are not reopened.
+`frameworks admin tenants get` lists each pending stop with its cells and the
+retired ones. See [Session stops](/operators/trial-accounts/#session-stops).
 
 **Sample output:**
 
@@ -31727,7 +32050,10 @@ The unpaid share of an open advance-fee invoice is reduced to the amount earned.
 period starts at the change and the prepaid balance pays usage reported after it, including late reports for earlier usage. Each plan pays the base fee
 only for its own part of the period, also across several changes. Drafts hold no credit, so the
 balance stays visible while the postpaid period runs; an invoice takes only the credit it uses, up
-to its total, when it is finalized. A scheduled downgrade is cleared.
+to its total, when it is finalized. A scheduled downgrade is cleared. When the tenant keeps its
+Stripe or Mollie subscription through that, `set-tier` also queues the provider step that reprices
+the subscription to the assigned tier, so the provider charges what Purser now bills; its retries
+and errors appear as `tier_downgrade` work in `recovery list`.
 
 After the change Purser reconciles cluster access for the new tier and refreshes cached tenant
 limits, the same as a self-serve tier change, and records `billing.subscription_updated` with
@@ -31788,6 +32114,9 @@ A tenant that owes nothing (base fee 0 and usage waived) needs no collection set
 close the preceding phase, so each invoice uses the arrangement that applied during its interval.
 Renewing a deadline preserves the period, and an identical grant set is a no-op.
 
+[Test and trial accounts](/operators/trial-accounts/) covers giving, extending and ending a trial;
+[Grant expiry](/operators/trial-accounts/#grant-expiry) covers what happens at the deadline.
+
 #### frameworks admin billing grant list
 
 List operator grants and retained grant history. By default this shows current
@@ -31822,11 +32151,35 @@ prove the customer received no service: verify delivery before confirming
 recovery. Inventory and preview do not enqueue compensation. Active recovery
 replaces the review entry rather than duplicating it.
 
-`PurserTierDowngradeHeld` means a downgrade the provider confirmed is still unapplied
-26 hours after its effective time, usually because its closing invoice is held in
-manual review. The provider already charges the lower tier and the customer's tier
-changes are refused. Resolve the hold so the daily applier flips the tier, or apply it
-with an audited `admin billing set-tier`.
+On the first page, a "Held downgrades" section follows: every downgrade the provider
+confirmed that is still unapplied past the daily applier's grace, with its tenant,
+target tier, effective time, closing invoice and invoice status. These are what
+`PurserTierDowngradeHeld` alerts on. The provider already charges the lower tier and
+the customer's tier changes are refused. Inspect and apply one with
+[`recovery downgrade`](#frameworks-admin-billing-recovery-downgrade).
+
+#### frameworks admin billing recovery downgrade
+
+`frameworks admin billing recovery downgrade --tenant-id <UUID> --reason "Invoice reviewed"`
+previews the held downgrade (target tier, effective time, closing invoice and its
+status) and what holds it, then requires interactive `yes` or `--yes`:
+
+- `awaiting_provider`: the provider has not confirmed the target price; the
+  `tier_downgrade` step in `recovery list` shows its retries and last error.
+- `invoice_held`: the closing invoice is a draft (metering incomplete or rating failed)
+  or in `manual_review` (a cluster's pricing for the period is unresolved, logged as
+  "Invoice routed to manual_review"; configure it with `admin billing set-cluster-pricing`),
+  or no invoice closes the period yet.
+- `refused`: the invoice is final but the subscription refuses the tier change, with the
+  refusal named.
+- `due`: nothing holds it; the daily applier applies it on its next run.
+
+Confirming closes the tenant's billing period again with the same gates as the daily
+invoice job and runs the downgrade applier for that tenant. It reports `applied` when
+the tenant is on the target tier, or what still holds it. Your identity and reason are
+recorded on the billing audit event. A preview whose target changed before
+confirmation is refused; preview it again. Requires a platform-operator JWT.
+See [Held downgrades](/operators/trial-accounts/#held-downgrades).
 
 #### frameworks admin billing recovery checkout
 
@@ -31859,6 +32212,7 @@ Mollie first payment. It retains the payment without refund or new access,
 requires the same preview and confirmation, and records the operator and reason.
 Current checkouts and payments already owed a refund are refused. Older Purser
 servers return `Unimplemented`; the CLI does not fall back to refund recovery.
+See [Checkout reservations](/operators/trial-accounts/#checkout-reservations).
 
 #### frameworks admin billing recovery upgrade
 
@@ -31876,6 +32230,7 @@ state. A waiver records its operator and reason on the purchase and in a
 command records the first operator and reason and reports the durable state,
 including work that still needs provider or metering repair.
 The command requires a platform-operator JWT.
+See [Tier upgrades](/operators/trial-accounts/#tier-upgrades).
 
 #### frameworks admin billing recovery notice
 
@@ -31887,7 +32242,8 @@ email worker. It records the operator and reason on `billing.subscription_update
 without changing the tier, collection or payments. Confirmation is fenced to
 the displayed deadline and notice phase. Older servers return `Unimplemented`;
 the CLI never invokes checkout recovery as a fallback. Requires a
-platform-operator JWT.
+platform-operator JWT. See
+[Free fallback and cancellation](/operators/trial-accounts/#free-fallback-and-cancellation).
 
 #### frameworks admin billing grant set
 
@@ -32035,6 +32391,7 @@ Without `--password` or `--password-stdin`, the CLI prompts at a TTY with hidden
 Reversibly disable a user, their interactive sessions, API access and stream-key publishing. Tenant-owned media remains available.
 Requires a platform-operator session and a private audit reason.
 Use `--email`, or `--user-id` with `--tenant-id`. With `--email`, `--tenant-id` is optional.
+See [Suspend a user](/operators/trial-accounts/#suspend-a-user).
 
 ```bash
 frameworks admin users deactivate --email trial@example.com --reason "Trial paused"
@@ -38129,6 +38486,14 @@ first:
 | Processing input       | Memory-only by default for safe wrappers; doesn't compete for disk. |
 | Warm/aged cache        | Lowest                                                              | First to evict.                                         |
 
+Among the clip, DVR and VOD files cleanup may remove, Helmsman reclaims cold
+content first. Each candidate scores
+`(accesses + 1) × recency / (1 + age in days + size in GB)`, where recency is
+10 for content read in the last 24 hours, 2 for the last 7 days and 1 otherwise,
+and the lowest score is evicted first. Pressure cleanup and the storage manager
+use the same order, so recently and frequently played content outlasts old,
+large, unread files.
+
 Operationally: a single very large VOD or DVR chapter can never starve
 a live recording, but a sustained burst of cold VOD playback can
 exhaust edge disk and degrade to S3-direct (memory-only) until cleanup
@@ -38820,10 +39185,16 @@ The public Livepeer tab at `/network?view=livepeer` and `GET /v1/network/livepee
 with real gateway transcoding observations. Unknown coverage remains unknown; regional
 performance is shown separately. The platform-operator webapp can enable private
 correlation through the authenticated diagnostics route.
-The default FrameWorks tab shows infrastructure topology. Livepeer has Compare and Map
-modes with shared filters and independent worker, gateway-cluster and prober layers.
-Gateway map positions are cluster locations. Unknown prober/worker locations remain
-listed. Price and performance comparisons retain their units, region and profile.
+The default FrameWorks tab shows infrastructure topology. The Livepeer tab opens on a
+map: the toolbar sets the time window, history region and what the map shows
+(availability, observed errors or transcoding activity), and "Layers & filters" toggles
+the worker, gateway, prober and FrameWorks node layers. The side panel lists the
+observing regions and the orchestrator identities; choosing a region, orchestrator or
+prober site opens its detail with regional history, prices and measured performance.
+The view is kept in the URL, so a link reopens the same selection. Gateway map positions
+are cluster locations. Workers and probers without a known location stay listed. Prices
+and performance keep their units, region and output profile. When the platform runs no
+observer, the tab says the network view is not configured instead of offering a retry.
 
 This feature requires platform `v0.3.13` and CLI `v0.3.13` or later. Upgrade
 existing clusters with the release's ClickHouse expand migration and initialize
@@ -39497,6 +39868,14 @@ Guidelines for contributors:
 8. **Use `.notx.sql` only when PostgreSQL requires autocommit** - for example
    `CREATE INDEX CONCURRENTLY`; keep the file idempotent because the SQL and
    `_migrations` insert cannot be one database transaction in that mode
+9. **Add constraints `NOT VALID` in expand and validate them in postdeploy** -
+   an expand `ADD CONSTRAINT … NOT VALID` pairs by exact name with a
+   `VALIDATE CONSTRAINT` in the same release's postdeploy phase, so adding the
+   constraint never scans existing rows under a lock. A new column carries no
+   inline `CHECK` or `REFERENCES`; add a separately named `NOT VALID` constraint
+   instead. The validator refuses an unpaired constraint in either direction. The
+   one exception is a compatibility constraint that a contract migration of the
+   same release drops.
 
 Run the validator before opening a PR:
 
@@ -39882,8 +40261,8 @@ The release catalog embedded in the CLI is the authority for which upgrades are 
 - **Readiness.** Rollouts wait up to 150 seconds for each service to report ready on `/ready` (v0.3.11 and later) or `/health` (earlier releases). See [Health and readiness](/operators/running-upgrades/#health-and-readiness).
 - **Automatic rollback.** A release can disable automatic rollback for specific services when a restored previous binary could not pass the new health contract. The release plan lists these services.
 - **Required data migrations.** A release can require data migrations to finish before a later schema phase. `cluster release apply` checks them and stops at the postdeploy phase until they are complete. Run and verify them with `cluster data-migrate`, then rerun the release apply. See [Data migrations](/operators/running-upgrades/#data-migrations).
-- **Backups before destructive steps.** `cluster release apply` never requires a backup. Contract migrations (`cluster migrate --phase contract`) and irreversible data migrations (`cluster data-migrate run`) do: pass `--backup` with a [backup](/operators/backup-restore/) that started less than an hour earlier and whose migration ledgers still match. A data migration counts as irreversible when the release that declares it lists its service under `rollback_disabled`, or when the service binary marks it irreversible or does not say.
-- **Unfinished earlier releases.** Before changing anything, and under `--dry-run` too, `cluster release apply` reads the migration ledgers and data-migration state. It refuses when an earlier release's postdeploy migrations or required data migrations are not complete, and names the release to apply first. A release with no migrations leaves nothing unfinished, so it can be skipped.
+- **Backups before destructive steps.** Contract migrations (`cluster migrate --phase contract`) and irreversible data migrations (`cluster data-migrate run`, or an earlier release's run inside `cluster release apply`) need `--backup` with a [backup](/operators/backup-restore/) that started less than an hour earlier and whose migration ledgers still match. Without one, the refusal prints the `backup create` command for exactly the databases the step changes. `cluster release apply` needs a backup only for such an earlier-release data migration. A data migration counts as irreversible when the release that declares it lists its service under `rollback_disabled`, or when the service binary marks it irreversible or does not say.
+- **Unfinished earlier releases.** Before changing anything, and under `--dry-run` too, `cluster release apply` reads the migration ledgers and data-migration state. An earlier release's required data migration that is pending or failed is run by `release apply` itself, first, behind its backup gate, and the release stops and names it if it fails. A missing postdeploy migration of an earlier release, or a data migration that is running, paused, unreadable or unknown to its binary, refuses the release and names the release to apply first or the migration to resolve. A release with no migrations leaves nothing unfinished, so it can be skipped.
 
 <Aside type="caution" title="Skipping releases">
   Apply releases through `frameworks cluster release apply`, which checks the source version, the
@@ -39968,7 +40347,9 @@ channels and supported upgrade sources.
    skipped.
 
 4. If the release declares required data migrations, `release apply` stops at the postdeploy
-   phase until they are complete. Run and verify each one, then rerun `release apply`:
+   phase until they are complete. Required data migrations of earlier releases that are still
+   pending are different: `release apply` runs those itself before it changes anything (see
+   [Preflight](#preflight)). Run and verify each of this release's, then rerun `release apply`:
 
    ```bash
    frameworks cluster data-migrate list --to-version vX.Y.Z
@@ -40011,10 +40392,12 @@ channels and supported upgrade sources.
 
 8. After the rollback window closes, apply any deferred contract migrations. `release apply` prints
    the command but never runs it. Contract migrations need a backup that started less than an hour
-   earlier and still matches the migration ledgers:
+   earlier and still matches the migration ledgers. The dry run without `--backup` refuses and
+   prints the `backup create` command for exactly the databases the contract phase changes:
 
    ```bash
-   frameworks cluster backup create --to /var/backups/frameworks --all
+   frameworks cluster migrate --phase contract --to-version vX.Y.Z --dry-run
+   frameworks cluster backup create --to /var/backups/frameworks --database <name> ...   # as printed
    frameworks cluster migrate --phase contract --to-version vX.Y.Z --dry-run --backup <printed path>
    frameworks cluster migrate --phase contract --to-version vX.Y.Z --backup <printed path> --yes
    ```
@@ -40032,11 +40415,33 @@ Before the first change, and under `--dry-run` too, `release apply` refuses to s
 - the CLI is below the release's minimum CLI version;
 - a platform service replica runs a version below a declared minimum source version, or a version
   that is not a release version;
-- an earlier release is unfinished: its postdeploy migrations are missing from a PostgreSQL,
-  YugabyteDB, or ClickHouse ledger, or its required data migrations are incomplete. The error
-  names the release to apply first. Databases this release creates are exempt;
+- an earlier release is unfinished in a way `release apply` cannot finish itself: its postdeploy
+  migrations are missing from a PostgreSQL, YugabyteDB, or ClickHouse ledger, or one of its
+  required data migrations is running, paused, unreadable, or unknown to the installed service
+  binary. The error names the release to apply first or the migration to resolve. Databases this
+  release creates are exempt;
 - a planned artifact does not resolve for its host's deploy mode and architecture;
 - a required operator input is missing from a service's rendered environment.
+
+A required data migration of an earlier release that is pending or failed, and that the installed
+service binary registers, does not refuse the release. The plan lists it as step 0, and
+`release apply` runs it before stage 1 through the installed binary, in catalog order, then checks
+that its state reads `completed`. An irreversible one needs `--backup` on `release apply`, with a
+backup that started less than an hour earlier; when it is missing, the refusal prints the
+`backup create` command for the databases involved. The dry run applies the same backup gate and
+runs the migration read-only. A failed run stops the release before anything of the new release
+is applied and names the migration:
+
+```bash
+frameworks cluster data-migrate status <service>.<id>
+```
+
+Fix the cause and rerun `release apply`.
+
+Every long step, migrations and data migrations included, runs under a progress watchdog instead of
+a fixed deadline: it is cancelled only after its stall window passes with no output and no
+milestone, and the error names the step and its last progress. See
+[Progress watchdog](/operators/cli-reference/#progress-watchdog) for each step's window.
 
 ### Stages
 
@@ -40086,8 +40491,11 @@ plan` and `release apply --dry-run` list every step and, per host, the role task
    and its Livepeer health and keystore validation must pass before the next host starts. A dry
    run reports these steps without running them.
 4. **Postdeploy migrations.** These refuse to run until the release's required data migrations
-   are complete. The Purser billing reconcile follows, then Commodore reconciles accounts
-   only on releases that declare that capability; stream declarations are left alone.
+   are complete. The Purser billing reconcile follows, then, from v0.3.14 on, Commodore
+   reconciles the bootstrap `accounts` (`commodore bootstrap --accounts-only`): declared users are
+   created or updated, stream declarations are left alone, and existing passwords are never
+   rewritten. The rendered accounts and their secret references are validated before the release
+   changes anything. See [Account passwords](#account-passwords).
 
 After postdeploy, `release apply` checks that every replica of the auth services and the web app
 runs the release's version, since a readiness check cannot detect an older web app bundle. It
@@ -40108,14 +40516,14 @@ gate that does not pass stops the release with the resume hint. A rerun skips co
 gates every remaining change on a healthy service first. `release plan` and `release apply
 --dry-run` list the hosts; the dry-run shows each host's pending role changes.
 
-| Service                               | Order and gates                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| YugabyteDB                            | The engine first, when a node runs another engine than the release pins: every master, then every tserver, then finalize (below). Then masters: a changed master restarts only after the masters confirm it can go down, and every master must be alive with one leader before the next node. Then every tserver whose applied configuration differs restarts, each only after the masters confirm the node can go down, and the next only once the node serves YSQL, its tserver is alive, and no tablet is under-replicated or leaderless. |
-| ClickHouse                            | Node by node. Before and after each change, every node must reach Keeper and have no replica that is read-only, lost its Keeper session, is more than 30 s behind, or has parts to fetch.                                                                                                                                                                                                                                                                                                                                                    |
-| Kafka                                 | Per cluster, controllers then brokers. Before and after each change, read through another broker: a quorum leader, every controller within 100 records of it, and no under-replicated or unavailable partition.                                                                                                                                                                                                                                                                                                                              |
-| vmagent, vmalert, vmauth              | A changed scrape config, rule file, or auth config is validated with `-dryRun` and reloaded; a new binary or unit restarts the process.                                                                                                                                                                                                                                                                                                                                                                                                      |
-| Control-plane nginx and Caddy         | A changed config is tested (`nginx -t`, `caddy validate`) before the reload; a failed test keeps the running config.                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| Chatwoot, Listmonk, Metabase, Grafana | The compose project is rendered and brought up, which recreates only the containers whose configuration changed.                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| Service                               | Order and gates                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| YugabyteDB                            | The engine first, when a node runs another engine than the release pins: every master, then every tserver, then finalize (below). Then masters: a changed master restarts only after the masters confirm it can go down, and every master must be alive with one leader before the next node. Then every tserver whose applied configuration differs restarts, each only after the masters confirm the node can go down, and the next only once the node serves YSQL, its tserver is alive, and no tablet is under-replicated or leaderless.                                                           |
+| ClickHouse                            | Node by node. Before and after each change, every node must reach Keeper and have no replica that is read-only, lost its Keeper session, is more than 30 s behind, or has parts to fetch.                                                                                                                                                                                                                                                                                                                                                                                                              |
+| Kafka                                 | Per cluster, controllers then brokers. Before and after each change, read through another broker: a quorum leader, every controller within 100 records of it, and no under-replicated or unavailable partition. A changed `server.properties`, logging or JMX exporter config, or systemd unit restarts that unit. systemd stops each unit with SIGTERM to its own process, so restarting a controller on a host that also runs a broker leaves the broker running. A controller leader's handover during its own graceful shutdown is planned and does not fail the quorum check of `cluster doctor`. |
+| vmagent, vmalert, vmauth              | A changed scrape config, rule file, or auth config is validated with `-dryRun` and reloaded; a new binary or unit restarts the process.                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| Control-plane nginx and Caddy         | A changed config is tested (`nginx -t`, `caddy validate`) before the reload; a failed test keeps the running config.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| Chatwoot, Listmonk, Metabase, Grafana | The compose project is rendered and brought up, which recreates only the containers whose configuration changed.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 
 When the release pins a new YugabyteDB engine, `release apply` upgrades it before converging any
 Yugabyte configuration, the same way `frameworks cluster upgrade yugabyte` does. Each node still on
@@ -40133,6 +40541,20 @@ that pins an older engine than a node runs is refused. `release apply --dry-run`
 On the first release that carries a new Yugabyte flag or unit, every node's master and tserver
 restart once through these gates. Kafka brokers keep at most `log.retention.bytes` (2 GiB) per
 partition in addition to each topic's `retention.ms`.
+
+### Account passwords
+
+The accounts step creates a declared user with the password its `password_ref` resolves to and
+never changes the password of an existing user. To rotate one, update the secret with
+`gitops/scripts/sops-env.sh set <file> <KEY> <VALUE>`, set `reset_credentials: true` on that user
+in the bootstrap overlay, and run the accounts reconcile with the reset allowed:
+
+```bash
+frameworks cluster control-plane reconcile --domain accounts --bootstrap-reset-credentials
+```
+
+Without `--bootstrap-reset-credentials`, `reset_credentials` is ignored for the password and other
+profile changes still apply. Remove `reset_credentials` again after the rotation.
 
 ### Rollout order within a service
 
@@ -40348,7 +40770,10 @@ with each database's ledger and reports pending migrations and checksum drift. S
 
 A release can require data migrations to complete before a later phase. `release apply`,
 `cluster upgrade`, `cluster migrate --phase postdeploy|contract`, and `cluster provision` check
-them and refuse to continue; none of them runs one. Run them with `cluster data-migrate`:
+them and refuse to continue. The one exception is `release apply`, which runs the pending required
+data migrations of earlier releases itself before it changes anything (see [Preflight](#preflight));
+the target release's own migrations still stop it at postdeploy. Run them with
+`cluster data-migrate`:
 
 | Command                           | Purpose                                         |
 | --------------------------------- | ----------------------------------------------- |
@@ -41413,277 +41838,390 @@ The first observation for each signal type saves a baseline instead of posting �
 # Test and trial accounts
 https://logbook.frameworks.network/operators/trial-accounts
 
-Create a tenant through signup or bootstrap, then grant a trial as a platform
-operator:
+A trial is an operator billing arrangement (a grant) on an existing tenant. The tenant signs up
+normally, or you declare it in bootstrap, and a platform operator sets the arrangement. Every
+command on this page needs a platform-operator session. For the arrangement fields themselves, see
+[`admin billing grant`](/operators/cli-reference/#frameworks-admin-billing-grant).
+
+## Give a trial
 
 ```bash
 frameworks admin billing grant set --email trial@example.com --tier enterprise \
   --base-fee 0 --waive-usage --until 2026-12-31 --reason "Enterprise evaluation"
-frameworks admin billing grant list --expiring 7d
 frameworks admin billing grant show --email trial@example.com
+```
+
+- `--until` takes a date, which includes that UTC day, or an RFC3339 timestamp for an exact
+  deadline. Without it the grant lasts until you revoke it.
+- `--tier` assigns the tier in the same step. The tier the tenant had before is remembered as the
+  fallback restored when the grant ends; `--fallback-tier` names another active tier.
+- A tenant that owes nothing (base fee 0 and usage waived) needs no card. With a base fee or
+  billed usage and provider collection, rated work waits until the tenant adds a card.
+- Complete or recover a pending provider checkout before setting a grant. The refusal names the
+  checkout deadline; it is not a deadline for the grant. See
+  [Checkout reservations](#checkout-reservations).
+- An existing Stripe or Mollie subscription must be cancelled before a base-fee override.
+- An expired grant that is still awaiting reconciliation must be ended with `grant revoke --tier`
+  or `set-tier` before you set another one. A refused replacement leaves the original grant and
+  billing phase unchanged.
+
+## Extend or change a trial
+
+Run `grant set` again with the new deadline or terms. Renewing keeps the original fallback, also
+when `--tier` is omitted or unchanged, and keeps the current billing period open when only the
+deadline or nothing changes. Changed prices apply from the change on: closing documents keep the
+charges from before the grant and waive only the granted phase.
+
+`frameworks admin billing set-tier` changes the granted tier through a billing boundary. An
+explicit `set-tier` clears the remembered fallback, and the arrangement continues on the assigned
+tier until it ends. An unchanged `set-tier` request is refused while a grant is outstanding: end
+the grant first, or assign a different tier.
+
+To find trials that are about to end:
+
+```bash
+frameworks admin billing grant list --expiring 7d
+```
+
+## End a trial
+
+A trial ends at its deadline on its own, or early with a revoke:
+
+```bash
 frameworks admin billing grant revoke --email trial@example.com --reason "Evaluation complete"
 ```
 
-A date includes that UTC day; an RFC3339 timestamp names an exact deadline.
-`--fallback-tier` overrides the original tier restored when the grant ends.
-Renewing a grant preserves its original fallback, including when `--tier` is
-omitted or unchanged. An explicit `admin billing set-tier` clears that
-fallback and preserves the billing arrangement on the assigned tier until it
-ends.
+A minute sweep closes an expired grant and restores its fallback tier. What the tenant can do next
+depends on that tier:
 
-A minute sweep closes an expired grant and restores its fallback. A trial
-returning to zero-balance PAYG cannot ingest or play media until funded. A
-grant without fallback leaves the current tier in place; collection readiness
-continues to gate rated API work. Existing postpaid media admission is
-unchanged. The free tier requires no payment provider. Trial expiry blocks new
-ingest but does not proactively end an existing positive-balance publisher;
-prepaid suspension stops it once its balance becomes negative.
+- Back on zero-balance pay as you go, the tenant cannot start ingest or playback until it adds
+  funds. An already running publisher with a positive balance is not stopped; prepaid suspension
+  ends it once its balance becomes negative.
+- Without a recorded fallback, the current tier stays and collection readiness keeps deciding rated
+  API work. Existing postpaid media admission is unchanged.
+- Free requires no payment provider.
 
-Renewing a deadline or re-sending the same prices keeps the current billing
-period open. Tenants cannot change tier themselves while a grant is
-outstanding, and scheduled downgrades wait until it ends. An operator can use
-`set-tier` to change the granted tier through a billing boundary. Complete or
-reconcile any pending provider checkout before setting a grant. The refusal
-identifies the checkout deadline; it is not a deadline for the grant. A
-completed checkout keeps its reservation while payment settles, even after the
-checkout deadline. Inspect outstanding work and recover an abandoned checkout:
+If the recorded fallback tier was retired, `grant revoke --tier <active-tier>` chooses an active
+tier while closing the grant at its expiry boundary. Ended and replaced grants stay readable with
+`grant list --include-expired` for audit and historical pricing.
 
-```bash
-frameworks admin billing recovery list --tenant-id <uuid>
-frameworks admin billing recovery checkout --tenant-id <uuid> --reservation-id <uuid> --reason "Abandoned evaluation checkout"
-frameworks admin billing recovery list --tenant-id <uuid> --history
-```
+Signed media permission never outlasts the trial deadline, including on a media cell that is
+disconnected from the control plane. An early revoke reaches connected cells through authority
+refresh; a disconnected cell keeps already-issued permission until its signed expiry. Gateway
+billing caches refresh within about two minutes.
 
-Recovery displays the provider, state and checkout amount before asking for
-confirmation. Use `--yes` to confirm without prompting. It reports whether the
-checkout expired, the subscription activated, cancellation/refund
-reconciliation finished, or work remains pending. An accepted refund request
-can still await bank settlement. Refund work remains visible in `recovery list`
-until Stripe or Mollie confirms the returned amount; a failed bank return raises
-`PurserProviderWebhookInboxStuck`. Inspect the exact provider payment and repair
-the missing return in that provider's console. Settlement polling reads provider
-receipts. A confirmed failed Stripe refund re-enters the same capped compensation with a failure-bound idempotency key;
-pending refunds keep waiting without another request. For cluster purchases, only
-the initial unactivated purchase is returned; its corresponding operator credit
-is voided without reversing credit for delivered recurring service. Every request retains its operator identity,
-reason and outcome in history and emits audit events; a later request does not
-overwrite it.
+## What the customer sees
 
-Historical Mollie first payments are linked to local activation records during
-recovery after verifying the provider mandate. When recovery cannot prove delivery
-from local activation or an attached invoice, it records ambiguous delivery.
-Inspect the exact receipt and service history. A platform operator can then
-attest delivered service without refunding it:
+The billing page shows a "Plan arranged by FrameWorks" banner with the end date, the base fee,
+whether usage is waived, invoice collection, and the plan the account returns to when the
+arrangement ends. Usage stays metered and appears on each invoice at no charge when it is waived.
+Plan changes and checkouts are refused with the code `OUTSTANDING_GRANT` while the grant is in
+force, and the page tells the customer to contact FrameWorks instead. A scheduled downgrade waits
+until the grant ends. No email is sent when a grant ends, so tell the customer about the end date
+yourself. Customer-facing terms are in [Billing](/builders/billing/#trials-and-arrangements).
 
-```bash
-frameworks admin billing recovery checkout --tenant-id <uuid> --reservation-id <uuid> --retain-delivered --reason "Verified delivered service from historical records"
-```
+## Pause or close an account
 
-This action previews first and requires confirmation. It records the operator,
-reason and `delivered` outcome, retains the payment, and creates no subscription
-or access. It requires the recorded ambiguous-delivery state and refuses
-current checkout flows, previously retained receipts, and any payment already owed a
-refund or returned by the provider. It shares the compensation lock with the
-worker, so a concurrent refund cannot race the decision.
+### Suspend a user
 
-An on-time completed purchase is reconciled into its subscription when
-settlement succeeds. Failed settlement releases its reservation. An abandoned
-or unbound attempt can be recovered before its deadline, while a completed
-purchase still settling remains reserved. Failed recovery stays durable.
-Historical Mollie receipts without a unique funding link require local activation
-evidence before their initial collection can be treated as delivered service.
-Ambiguous history stays pending with the exact subscription and payment in its
-diagnostic; verify these in the provider console before reconciling them.
-Normal settlement waits back off from one minute to six hours and keep their
-reason visible; waits exceeding fourteen days raise
-`PurserProviderWebhookInboxStuck`.
-
-Grants change prices prospectively. Closing documents preserve charges before
-the grant and waive only the granted phase. Ended and replaced grants remain
-available with `grant list --include-expired` for audit and historical
-pricing. An existing Stripe or Mollie subscription must be cancelled before a
-base-fee override.
-
-Gateway billing caches may take about two minutes to refresh. Signed media
-permission is bounded by the trial deadline, including while a media cell is
-disconnected. Early revocation reaches connected cells through authority
-refresh; a disconnected cell retains already-issued permission until its
-signed expiry.
-
-For reversible user suspension:
+Deactivation is reversible:
 
 ```bash
 frameworks admin users deactivate --email trial@example.com --reason "Evaluation paused"
 frameworks admin users activate --email trial@example.com --reason "Evaluation resumed"
 ```
 
-Deactivation ends existing interactive sessions, API-token WebSockets, and
-stream-key publishing. Tenant-owned streams and VODs keep their playback
-availability. Activation requires a fresh interactive login; previously
-revoked sessions do not return. Connected cells receive stream-key revocation
-and an active-ingest stop through the durable refresh queue. Once received,
-they enforce it even while Commodore is unavailable. Unreachable cells retry
-and raise `CommodoreAccountIngestRevocationStuck`. A reactivation supersedes
-queued stops; a stop already in flight can end a newly connected publisher
-once. Reconnect after reactivation if that happens. Billing restrictions still
-apply to API work, ingest and playback.
+Deactivation ends the user's interactive sessions, API-token WebSockets and stream-key publishing.
+Tenant-owned streams and VODs stay playable. Activation requires a fresh interactive login; revoked
+sessions do not return. Billing restrictions still apply to API work, ingest and playback.
 
-`frameworks admin tenants deactivate <UUID> --yes --tenant-name "Exact Tenant
-Name" --reason "Account closed"` requires a matching Quartermaster tenant name.
-Omit both confirmation flags to type the name interactively; `--tenant-name`
-requires `--yes`. Closure permanently closes all users and queues a durable
-stop for their active ingest. Quartermaster teardown proceeds independently;
-unreachable cells retry and raise the `CommodoreAccountIngestRevocationStuck` alert. The alert
-continues until the cell is restored. Confirming that a cell is permanently
-offline does not clear it: no cluster-retirement command exists. This alert is aggregated and has no cell label: silencing it suppresses all
-account-ingest revocation stalls. Record permanent removals in the incident;
-restoring the cell is currently the only way to complete its stop obligation.
-Foghorn v0.3.13 returns Unimplemented for per-user stops during a rolling
-upgrade; those stops retry until its Foghorn is upgraded. Closure publishes
-tenant-inactive authority without authorizing data deletion. It cannot be reversed. Remove closed users from bootstrap declarations before the next release apply;
-otherwise validation refuses their reactivation. The local closure
-blocks new active users even if Quartermaster is temporarily unavailable.
+Connected cells receive the stream-key revocation and an active-ingest stop through Commodore's
+durable refresh queue, and enforce it even while Commodore is unavailable. Unreachable cells are
+retried and raise `CommodoreAccountIngestRevocationStuck`; see
+[Session stops](#session-stops). A reactivation supersedes queued stops, but a stop already in
+flight can end a newly connected publisher once; reconnect after reactivation if that happens.
 
-Purser consumes the permanent closure event and durably records its billing
-cutoff. It cancels established Stripe and Mollie subscriptions without refunding
-completed service, then finalizes the open billing phase at that cutoff. No
-later recurring invoice is started. Provider outages and incomplete metering
-keep the finalization pending; inspect `frameworks admin billing recovery list
---tenant-id <uuid>`. An outstanding grant first closes at the cutoff through
-the normal expiry worker. Late paid or settling cluster callbacks queue provider
-cancellation, including after final billing; they cannot restore access or
-finalize another billing document.
+Bridge closes API-token WebSockets on the revocation event. A Bridge replica that missed the event
+rechecks `ValidateAPIToken` every minute, which bounds the remaining socket access.
 
-Open cluster checkouts are expired so they cannot accept another purchase.
-Activated paid cluster subscriptions are cancelled without refunding or crediting their unused
-paid time. A paid tenant or cluster checkout that never activated is refunded
-only for its checkout payment or first invoice; recurring service payments are
-never part of checkout compensation.
-Normal subscription cancellation stops renewal at the paid-through date; permanent
-account closure ends access immediately. Failed or duplicate checkout recovery is
-a separate compensation action, not a refund policy for ordinary cancellation.
+### Close a tenant
 
-`PurserOperatorGrantExpiryStuck` exposes its last error and failed-attempt count through `grant show` and `grant list
---include-expired`. Commodore synchronization failures raise
-`CommodoreTenantAccountClosureStuck` independently of billing finalization.
+Closure is permanent:
 
-For an operator-owned account, declare a Quartermaster tenant, a Purser
-`customer_billing` row with `model: postpaid`, `tier: enterprise`, and
-`operator_grant: {base_fee: "0", waive_usage: true, reason: "Operator test
-account"}`, then declare its users in `accounts`. Put passwords in the normal
-SOPS secret references. Release apply reconciles accounts after Purser without
-resetting existing passwords. No grant expiry means the arrangement lasts
-until revoked. A live declaration owns the grant and logs any CLI arrangement
-it replaces. An expired declaration is inert and leaves later CLI grants
-alone. Remove a live declaration before a permanent CLI revocation.
+```bash
+frameworks admin tenants deactivate <UUID> --yes --tenant-name "Exact Tenant Name" \
+  --reason "Account closed"
+```
 
-Failed expiry reconciliation is recorded with five-minute backoff and alerted;
-later expiries continue. Correct the underlying billing or pricing error;
-retries run automatically.
+The tenant name must match Quartermaster's. Omit `--yes` and `--tenant-name` to type the name
+interactively; `--tenant-name` requires `--yes`. Closure:
 
-Bridge closes API-token WebSockets on the live revocation event. A replica
-that missed the event rechecks `ValidateAPIToken` every minute, bounding the
-remaining socket access.
+- closes every user and queues a durable stop for their active ingest;
+- publishes tenant-inactive authority, without authorizing data deletion;
+- blocks new active users locally, even while Quartermaster is unavailable;
+- ends the tenant in Quartermaster independently of the session stops; failures retry and raise
+  `CommodoreTenantAccountClosureStuck`;
+- stops billing, as described in [Account closure billing](#account-closure-billing).
 
-Release apply attempts pending grant expiry before reconciling a live billing
-declaration. Dry-run leaves pending expiries untouched and reports those
-tenants as deferred.
+Remove closed users from bootstrap declarations before the next release apply; otherwise
+validation refuses their reactivation. Read the private deactivation and closure reasons, and the
+account's closure and session-stop state, with:
 
-Read private deactivation and closure reasons with `frameworks admin tenants
-history <UUID>`. Only platform operators can read this audit.
+```bash
+frameworks admin tenants get <UUID>
+frameworks admin tenants history <UUID>
+```
 
-If bootstrap defers a tenant, healthy tenants commit and the command exits
-non-zero, stopping release apply before the accounts step. Fix the reported
-failure and re-run release apply. When expiry restored a different billing
-model, run `frameworks admin billing set-tier` with the declared tier,
-`--billing-model` and a reason before retrying, so the normal transition
-handles balances and credits. An obsolete fallback can be recovered with
-`grant revoke --tier <active-tier>` or an explicit `set-tier`; both close the
-expired grant at its deadline.
+## Declare a test account in bootstrap
 
-A grant with no recorded assigned tier, which the sweep has nothing to restore
-for, stops applying at its deadline without denying the tenant. Collection
-readiness decides admission, including while its closing boundary is refused.
+An operator-owned test account is declared in the cluster's GitOps bootstrap overlay
+(`clusters/<cluster>/bootstrap.yaml`): a Quartermaster tenant, its Purser billing with an
+`operator_grant`, and its users under `accounts`. Passwords come from SOPS secret references.
 
-An expired grant awaiting reconciliation must be ended with `grant revoke
---tier` or `set-tier` before setting another grant. A rejected replacement
-leaves the original grant and billing phase unchanged. Cancelling a
-subscription keeps its grant so recoverable provider states such as Stripe
-unpaid do not lose waived usage. Revoke or expiry on a cancelled subscription
-archives the grant at the cleanup time without changing tier or issuing a
-closing document. Revoke it before starting a new provider checkout. Renewal
-of the same established Stripe subscription may restore status and dates while
-retaining the grant; a new checkout or activation must end it first.
+```yaml
+quartermaster:
+  tenants:
+    - alias: frameworks-qa
+      name: FrameWorks QA
 
-Checkout reservations have a deadline and belong to one provider attempt.
-Failures before checkout creation and definite provider rejections release the
-reservation immediately. Ambiguous results remain reserved until the durable
-provider inbox reconciles them after the checkout deadline;
-`PurserProviderWebhookInboxStuck` covers provider outages or compensation
-failures. Historical receipts already installed as the tenant's subscription
-do not block grants. Other unresolved receipts are queued for recovery before
-they release their reservation. A provider activation awaiting complete usage
-metering keeps the first webhook receipt as its billing boundary. An open
-metering anomaly holds that activation; `PurserProviderWebhookInboxStuck`
-covers retries while the anomaly is resolved.
+accounts:
+  - kind: customer
+    tenant:
+      ref: quartermaster.tenants[frameworks-qa]
+    users:
+      - email: qa@example.com
+        role: owner
+        first_name: FrameWorks
+        last_name: QA
+        password_ref:
+          sops: ../../secrets/staging.env
+          key: QA_ACCOUNT_PASSWORD
 
-A timed-out create retries with its original parameters and idempotency key.
-Replay is limited to 23 hours for Stripe and 45 minutes for Mollie, and to the
-credential used for that request. Outside that window, recovery locates existing
-provider objects rather than creating another purchase. A prepared attempt that
-never reached provider submission can be closed even while the provider is down.
-If the provider has not supplied an amount, the preview says it is unknown.
+purser:
+  customer_billing:
+    - tenant:
+        ref: quartermaster.tenants[frameworks-qa]
+      model: postpaid
+      tier: enterprise
+      cluster_access: derived
+      operator_grant:
+        base_fee: "0"
+        waive_usage: true
+        reason: Internal QA account
+        # until: 2026-12-31   # optional; omit for an account that lasts until revoked
+```
 
-## Upgrade and recovery compatibility
+- Add the password to the SOPS file with `gitops/scripts/sops-env.sh set <file> <KEY> <VALUE>`.
+- An account entry carries no billing of its own; validation refuses one. Billing is declared once
+  per tenant in `purser.customer_billing`.
+- `operator_grant` takes the same fields as `grant set`: `base_fee`, `waive_usage`, `collection`
+  (`provider` or `invoice`), `until` and a required `reason`.
 
-A v0.3.13 Foghorn does not implement `TerminateStreamSessions`. Per-user stops
-remain queued until that cell is upgraded; they never fall back to stopping the
-whole tenant. New publishes are refused independently of this session-stop retry.
+`frameworks cluster release apply` runs the Purser bootstrap and then
+`commodore bootstrap --accounts-only`, so a declared account is created or updated on the next
+release apply. It never resets an existing password. `frameworks cluster control-plane reconcile`
+applies a changed declaration between releases.
 
-Platform-cluster `provision`, `upgrade`, `apply` and `diff` resolve the system
-tenant through Quartermaster. A saved ID is used only for supported transport
-recovery; Livepeer gateway clusters require a successful Quartermaster lookup.
+A live declaration owns the grant and logs any CLI arrangement it replaces. Reapplying an
+identical grant changes nothing. An expired declaration is inert and leaves later CLI grants alone.
+Remove a live declaration before a permanent CLI revoke, or the next release apply restores it.
 
-`frameworks admin billing recovery upgrade --tenant-id <uuid> --upgrade-id <uuid>
---reason "Reconcile purchase"` previews a pending tier upgrade before asking for
-confirmation. It cancels a request only after confirming it was not applied;
-otherwise it reconciles the accepted purchase. A Stripe purchase already applied
-by the provider still waits for complete usage metering before its local billing
-boundary can finish. Recovery does not bypass that requirement or start another
-provider purchase, unless you pass `--waive-metering` on a purchase the provider
-has applied: the old phase then closes on the usage recorded so far, and the waiver
-is audited with your identity and reason. Recovery retains the operator identity and reason, and reports the
-actual durable state. Use `recovery list` for the purchase UUID and retry errors.
+Release apply first tries to finish a pending grant expiry before it applies a live declaration;
+`--dry-run` leaves pending expiries untouched and reports those tenants as deferred. When a tenant
+is deferred, healthy tenants commit, the bootstrap exits non-zero and release apply stops before
+the accounts step. Fix the reported failure and rerun release apply. When expiry restored a
+different billing model, first run `frameworks admin billing set-tier` with the declared tier,
+`--billing-model` and a reason, so the normal transition handles balances and credits. An obsolete
+fallback can be recovered with `grant revoke --tier <active-tier>` or an explicit `set-tier`; both
+close the expired grant at its deadline.
 
-A suspended tenant's session-stop request is queued with its suspension. Partial
-cell failures and Commodore outages retry durably. Resumption is checked under
-the subscription lock before retrying, so a completed resumption clears the
-queued stop without ending a new stream.
+## Recovery and internals
 
-A scheduled automatic fallback can be inspected with
-`frameworks admin billing recovery list --tenant-id <UUID>`. An explicit
-`set-tier` abort restores invoicing and detaches only proven-ended native
-subscriptions after their paid term ends. Tier assignment and grant changes
-refuse while an ended subscription still has paid service time remaining.
-A cancelled tenant moves to Free when its paid term ends. An outstanding grant
-holds that move until the grant ends. Setting, renewing or ending a grant
-preserves the cancellation schedule even if the paid term has already ended;
-it never reactivates the cancelled paid subscription. An unchanged `set-tier`
-request refuses an outstanding grant: end it first, or make an explicit
-assignment to a different tier. Explicit assignment finalizes the
-ended provider-managed periods before detaching their identities, keeping each
-monthly allowance separate and excluding the base fee already collected.
-A live native subscription or a stop already in flight must
-finish reconciliation first; the command returns a precondition error.
+The sections below explain what Purser and Commodore retry on their own and what to run when an
+alert fires. [Alerting](/operators/alerting/#billing-and-account-lifecycle) lists each alert with
+the command that names the tenant.
 
-Fallback email delivery stops after five failures. The `notice_abandoned`
-recovery row retains the reason and delivery error, and leaves the automatic
-stuck alert. Correct `billing_email`, then run
-`frameworks admin billing recovery notice --tenant-id <UUID> --reason "Billing email repaired"`.
-The command previews the recipient and requires confirmation before requeuing
-the abandoned grace or completed-move notice. The billing audit records the
-operator and reason. It does not change the tier, restore collection or refund
-anything. Email failure never blocks the billing move.
+### Grant expiry
+
+A failed expiry reconciliation is recorded with a five-minute backoff and raises
+`PurserOperatorGrantExpiryStuck`; later expiries continue. `grant show` and
+`grant list --include-expired` show its last error and failed-attempt count. Correct the
+underlying billing or pricing error; the retry runs automatically.
+
+A grant with no recorded assigned tier has nothing for the sweep to restore. It stops applying at
+its deadline without denying the tenant, and collection readiness decides admission, including
+while its closing boundary is refused.
+
+Cancelling a subscription keeps its grant, so recoverable provider states such as Stripe `unpaid`
+do not lose waived usage. Revoking or expiring a grant on a cancelled subscription archives it at
+the cleanup time without changing the tier or issuing a closing document. Revoke it before
+starting a new provider checkout. A renewal of the same established Stripe subscription may restore
+status and dates and keep the grant; a new checkout or activation must end it first.
+
+### Checkout reservations
+
+A checkout reservation has a deadline and belongs to one provider attempt. A failure before the
+checkout is created, or a definite provider rejection, releases the reservation at once. An
+ambiguous result stays reserved until the durable provider inbox reconciles it after the deadline.
+A completed checkout keeps its reservation while payment settles, even past the deadline. Historical
+receipts already installed as the tenant's subscription do not block grants; other unresolved
+receipts are queued for recovery before they release their reservation.
+
+```bash
+frameworks admin billing recovery list --tenant-id <uuid>
+frameworks admin billing recovery checkout --tenant-id <uuid> --reservation-id <uuid> \
+  --reason "Abandoned evaluation checkout"
+frameworks admin billing recovery list --tenant-id <uuid> --history
+```
+
+Recovery shows the provider, state and checkout amount before it asks for confirmation; `--yes`
+confirms without a prompt. It reports whether the checkout expired, the subscription activated,
+cancellation and refund reconciliation finished, or work remains pending. Every request keeps its
+operator, reason and outcome in history and emits audit events; a later request does not
+overwrite it.
+
+An on-time completed purchase becomes its subscription when settlement succeeds, and a failed
+settlement releases its reservation. An abandoned or unbound attempt can be recovered before its
+deadline. Failed recovery stays durable. For cluster purchases only the initial unactivated purchase
+is returned; its operator credit is voided without reversing credit for delivered recurring
+service.
+
+A timed-out create is retried with its original parameters and idempotency key, for up to 23 hours
+on Stripe and 45 minutes on Mollie, and only with the credential that made the request. Outside
+that window recovery locates the existing provider objects instead of creating another purchase. A
+prepared attempt that never reached the provider can be closed while the provider is down. When the
+provider has not supplied an amount, the preview says it is unknown.
+
+### Refunds and historical Mollie payments
+
+An accepted refund request can still be waiting for bank settlement. Refund work stays in
+`recovery list` until Stripe or Mollie confirms the returned amount. Settlement polling reads
+provider receipts. A confirmed failed Stripe refund re-enters the same capped compensation with a
+failure-bound idempotency key; pending refunds keep waiting without another request. A failed bank
+return raises `PurserProviderWebhookInboxStuck`: inspect the exact provider payment and repair the
+return in that provider's console.
+
+Historical Mollie first payments are linked to local activation records during recovery after the
+provider mandate is verified. When recovery cannot prove delivery from local activation or an
+attached invoice, it records ambiguous delivery, with the exact subscription and payment in its
+diagnostic. Check the receipt and service history in the provider console. A platform operator can
+then attest delivered service without refunding it:
+
+```bash
+frameworks admin billing recovery checkout --tenant-id <uuid> --reservation-id <uuid> \
+  --retain-delivered --reason "Verified delivered service from historical records"
+```
+
+The attestation previews first and requires confirmation. It records the operator, reason and
+`delivered` outcome, keeps the payment, and creates no subscription or access. It needs the
+recorded ambiguous-delivery state, and refuses current checkouts, receipts already retained and
+any payment already owed a refund or returned by the provider. It shares the compensation lock with
+the worker, so a concurrent refund cannot race it.
+
+Normal settlement waits back off from one minute to six hours and keep their reason visible; a wait
+past fourteen days raises `PurserProviderWebhookInboxStuck`. A provider activation waiting for
+complete usage metering keeps the first webhook receipt as its billing boundary, and an open
+metering anomaly holds the activation until it is resolved.
+
+### Tier upgrades
+
+```bash
+frameworks admin billing recovery upgrade --tenant-id <uuid> --upgrade-id <uuid> \
+  --reason "Reconcile purchase"
+```
+
+The command previews a pending tier upgrade before it asks for confirmation. It cancels a request
+only after confirming the provider did not apply it; otherwise it reconciles the accepted purchase,
+and it never starts another purchase. A Stripe purchase the provider already applied still waits
+for complete usage metering before its local billing boundary can close. `--waive-metering` on such
+a purchase closes the old phase on the usage recorded so far, and is audited with your identity and
+reason. Get the purchase UUID and its retry errors from `recovery list`.
+
+### Held downgrades
+
+A downgrade the provider confirmed is held when its period's closing invoice is a draft or in
+manual review, or the subscription refuses the tier change. The customer's tier changes are refused
+while it is held, and `PurserTierDowngradeHeld` fires. `recovery list` names each held downgrade
+with its target tier, effective time and invoice, and the downgrade command shows what holds it:
+
+```bash
+frameworks admin billing recovery list
+frameworks admin billing recovery downgrade --tenant-id <uuid> --reason "Invoice reviewed"
+```
+
+Confirming closes the tenant's billing period again and applies the downgrade when nothing still
+holds it. A `manual_review` invoice waits for the cluster pricing it names; configure it with
+`admin billing set-cluster-pricing`, then run the command again.
+
+### Free fallback and cancellation
+
+A cancelled tenant moves to Free when its paid term ends, and a failed payment moves it to Free
+after its grace period. An outstanding grant holds that move until the grant ends. Setting,
+renewing or ending a grant keeps the cancellation schedule, also when the paid term has already
+ended, and never reactivates the cancelled paid subscription.
+
+`recovery list` shows a scheduled fallback with its move date, state and last error. An explicit
+`set-tier` cancels the fallback before provider cancellation starts, restores invoicing, and
+detaches only native subscriptions proven to have ended after their paid term. Tier assignment and
+grant changes are refused while an ended subscription still has paid time left. Explicit assignment
+finalizes the ended provider-managed periods before detaching their identities, so each monthly
+allowance stays separate and the base fee already collected is excluded. A live native subscription
+or a stop already in flight must finish reconciliation first; the command returns a precondition
+error.
+
+Fallback email delivery stops after five failures. The `notice_abandoned` row keeps the reason and
+delivery error and no longer counts toward `PurserFreeFallbackStuck`. Correct `billing_email`, then
+requeue the grace or completed-move notice:
+
+```bash
+frameworks admin billing recovery notice --tenant-id <uuid> --reason "Billing email repaired"
+```
+
+The command previews the recipient and requires confirmation. The billing audit records the
+operator and reason. It does not change the tier, restore collection or refund anything, and an
+email failure never blocks the billing move.
+
+### Suspended streams
+
+A suspended tenant's session-stop request is queued with its suspension. Partial cell failures and
+Commodore outages retry durably. Resumption is checked under the subscription lock before each
+retry, so a completed resumption clears the queued stop without ending a new stream.
+
+### Account closure billing
+
+Purser consumes the closure event and records the billing cutoff. It cancels established Stripe and
+Mollie subscriptions without refunding completed service and finalizes the open billing phase at the
+cutoff; no later recurring invoice starts. Provider outages and incomplete metering keep the
+finalization pending in `recovery list`. An outstanding grant first closes at the cutoff through the
+normal expiry worker. Late paid or settling cluster callbacks queue provider cancellation, also
+after final billing, and cannot restore access or finalize another billing document.
+
+Open cluster checkouts are expired so they cannot accept another purchase. Activated paid cluster
+subscriptions are cancelled without refunding or crediting their unused paid time. A paid tenant or
+cluster checkout that never activated is refunded only for its checkout payment or first invoice;
+recurring service payments are never part of checkout compensation. Normal cancellation stops
+renewal at the paid-through date, while permanent closure ends access immediately. Checkout
+recovery is a separate compensation action, not a refund policy for ordinary cancellation.
+
+### Session stops
+
+User deactivation and tenant closure stop active ingest on every cell that recorded the account's
+streams. A per-user stop never falls back to stopping the whole tenant, and new publishes are
+refused independently of the stop. A cell that cannot be reached is retried, including backoff,
+and `CommodoreAccountIngestRevocationStuck` fires; `frameworks admin tenants get <UUID>` lists each
+pending stop with its cells and last error. Restore the cell and the stop completes. A Foghorn that
+returns `Unimplemented` for per-user stops keeps them queued until it is upgraded.
+
+For a cell that was removed for good, record its retirement so the stops owed to it settle:
+
+```bash
+frameworks admin clusters retire <cluster-id> --reason "Cell decommissioned"
+```
+
+Commodore refuses while any registered Foghorn of the cell still answers. A stop still owed to
+another unreachable cell keeps waiting for that cell, and a retired cell that comes back still
+receives its stops. `frameworks admin clusters unretire <cluster-id> --reason <reason>` removes a retirement
+made by mistake; stops that already settled are not reopened.
 
 
 ---
