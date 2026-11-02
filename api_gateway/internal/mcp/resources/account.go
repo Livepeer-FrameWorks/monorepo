@@ -101,6 +101,7 @@ type AccountBillingInfo struct {
 	// Plan lifecycle: a scheduled plan change, a scheduled move to Free and a
 	// FrameWorks arrangement. Omitted when none applies.
 	PendingTier        string                     `json:"pending_tier,omitempty"`
+	PendingTierID      string                     `json:"pending_tier_id,omitempty"`
 	PendingReason      string                     `json:"pending_reason,omitempty"`
 	PendingEffectiveAt *time.Time                 `json:"pending_effective_at,omitempty"`
 	PendingTierState   string                     `json:"pending_tier_state,omitempty"`
@@ -123,7 +124,8 @@ type AccountBillingArrangement struct {
 	BasePriceEUR string     `json:"base_price_eur,omitempty"`
 	WaiveUsage   bool       `json:"waive_usage"`
 	ExpiresAt    *time.Time `json:"expires_at,omitempty"`
-	FallbackTier string     `json:"fallback_tier,omitempty"`
+	// FallbackTier is the display name of the plan the account returns to.
+	FallbackTier string `json:"fallback_tier,omitempty"`
 }
 
 // AccountRateLimitInfo contains rate limit info.
@@ -245,7 +247,8 @@ func applyAccountLifecycle(info *AccountBillingInfo, status *purserpb.BillingSta
 	}
 	info.EffectiveBasePrice = status.GetEffectiveBasePrice()
 	if sub := status.GetSubscription(); sub.GetPendingTierId() != "" {
-		info.PendingTier = sub.GetPendingTierId()
+		info.PendingTierID = sub.GetPendingTierId()
+		info.PendingTier = status.GetPendingTierDisplayName()
 		info.PendingReason = sub.GetPendingReason()
 		info.PendingTierState = status.GetPendingTierState()
 		if sub.GetPendingEffectiveAt().IsValid() {
@@ -257,7 +260,7 @@ func applyAccountLifecycle(info *AccountBillingInfo, status *purserpb.BillingSta
 		info.FreeFallback = &AccountFreeFallback{Reason: fallback.GetReason(), At: fallback.GetAt().AsTime(), Stage: fallback.GetStage()}
 	}
 	if grant := status.GetOperatorGrant(); grant != nil {
-		arrangement := &AccountBillingArrangement{BasePriceEUR: grant.GetBasePrice(), WaiveUsage: grant.GetWaiveUsage(), FallbackTier: grant.GetFallbackTierName()}
+		arrangement := &AccountBillingArrangement{BasePriceEUR: grant.GetBasePrice(), WaiveUsage: grant.GetWaiveUsage(), FallbackTier: grant.GetFallbackTierDisplayName()}
 		if grant.GetExpiresAt().IsValid() {
 			at := grant.GetExpiresAt().AsTime()
 			arrangement.ExpiresAt = &at

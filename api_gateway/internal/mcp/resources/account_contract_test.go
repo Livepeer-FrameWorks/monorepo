@@ -87,10 +87,10 @@ func TestAccountStatusReportsThePlanLifecycle(t *testing.T) {
 			pendingTier := "tier-free"
 			pendingReason := "downgrade"
 			return &purserpb.BillingStatusResponse{
-				EffectiveBasePrice: "0.00", PendingTierState: "scheduled",
+				EffectiveBasePrice: "0.00", PendingTierState: "scheduled", PendingTierDisplayName: "Free",
 				Subscription:  &purserpb.TenantSubscription{PendingTierId: &pendingTier, PendingReason: &pendingReason, PendingEffectiveAt: timestamppb.New(moveAt)},
 				FreeFallback:  &purserpb.FreeFallbackStatus{Reason: "payment_failed", At: timestamppb.New(moveAt), Stage: "scheduled"},
-				OperatorGrant: &purserpb.OperatorBillingGrant{BasePrice: &base, WaiveUsage: true, ExpiresAt: timestamppb.New(expires), FallbackTierName: "developer"},
+				OperatorGrant: &purserpb.OperatorBillingGrant{BasePrice: &base, WaiveUsage: true, ExpiresAt: timestamppb.New(expires), FallbackTierName: "developer", FallbackTierDisplayName: "Developer"},
 			}, nil
 		},
 	}
@@ -100,13 +100,13 @@ func TestAccountStatusReportsThePlanLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	billing := decodeResource[AccountStatus](t, result.Contents[0].Text).Billing
-	if billing.PendingTier != "tier-free" || billing.PendingReason != "downgrade" || billing.PendingTierState != "scheduled" || billing.PendingEffectiveAt == nil || !billing.PendingEffectiveAt.Equal(moveAt) {
+	if billing.PendingTier != "Free" || billing.PendingTierID != "tier-free" || billing.PendingReason != "downgrade" || billing.PendingTierState != "scheduled" || billing.PendingEffectiveAt == nil || !billing.PendingEffectiveAt.Equal(moveAt) {
 		t.Fatalf("pending change = %+v", billing)
 	}
 	if billing.FreeFallback == nil || billing.FreeFallback.Reason != "payment_failed" || !billing.FreeFallback.At.Equal(moveAt) || billing.FreeFallback.Stage != "scheduled" {
 		t.Fatalf("free fallback = %+v", billing.FreeFallback)
 	}
-	if billing.BillingArrangement == nil || billing.BillingArrangement.BasePriceEUR != "0.00" || !billing.BillingArrangement.WaiveUsage || billing.BillingArrangement.ExpiresAt == nil || billing.BillingArrangement.FallbackTier != "developer" {
+	if billing.BillingArrangement == nil || billing.BillingArrangement.BasePriceEUR != "0.00" || !billing.BillingArrangement.WaiveUsage || billing.BillingArrangement.ExpiresAt == nil || billing.BillingArrangement.FallbackTier != "Developer" {
 		t.Fatalf("arrangement = %+v", billing.BillingArrangement)
 	}
 }
