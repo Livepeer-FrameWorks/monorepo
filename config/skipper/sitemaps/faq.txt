@@ -2,5 +2,7 @@
 # These local markdown files are ingested through the same pipeline as
 # web-crawled pages — content hashing skips unchanged files.
 local:../faq/bitrate-recommendations.md
+local:../faq/cluster-discovery.md
 local:../faq/codec-compatibility.md
 local:../faq/protocol-selection.md
+local:../faq/self-hosted-setup.md

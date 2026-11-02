@@ -53,7 +53,7 @@ a stream activates peering with them.
 Create your own cluster for self-hosted edge nodes:
 
 - **Dashboard**: Infrastructure → My Network → "Create Private Cluster"
-- **MCP**: Use the `create_private_cluster` tool
+- **MCP**: Use the `create_edge_cluster` tool, and `create_enrollment_token` for more nodes later
 - **Result**: A new cluster + bootstrap token for edge enrollment
 
 The bootstrap token is shown once — save it securely. Use it with the CLI to provision edges:

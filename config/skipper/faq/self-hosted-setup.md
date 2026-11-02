@@ -32,20 +32,20 @@ New accounts start on `shared-community`. Activate self-hosting to join a `share
 The CLI handles the full provisioning pipeline in one command:
 
 ```bash
-frameworks edge provision \
+frameworks edge deploy \
   --enrollment-token enroll_xxx \
   --ssh ubuntu@my-edge.example.com
 ```
 
-The 7-step pipeline:
+`frameworks edge provision` runs the same pipeline with finer control, and takes `--manifest` for several nodes:
 
-1. **Preflight** — Validates SSH access, Docker, ports, DNS prerequisites
-2. **Tune** — Configures OS kernel parameters for media streaming
-3. **Register** — Calls `PreRegisterEdge` → gets assigned domain, node ID, TLS cert
-4. **Cert stage** — Writes wildcard TLS certificate for HTTPS
-5. **Install** — Generates and uploads `docker-compose.edge.yml`, `.edge.env`, `Caddyfile`
-6. **Start** — Runs `docker compose up -d`
-7. **Verify** — Checks container health and HTTPS readiness
+1. **Preflight** — Validates SSH access, ports, DNS and OS prerequisites (Docker in container mode, systemd or launchd in native mode)
+2. **Tune** — Configures OS kernel parameters for media streaming (optional)
+3. **Register** — The enrollment token pre-registers the node and assigns its domain and node ID
+4. **Config seed** — Foghorn delivers the TLS certificate, CA and site configuration over `ConfigSeed`
+5. **Install** — Renders the edge environment and either the single-container compose file or the native service units
+6. **Start** — Starts the edge stack
+7. **Verify** — Checks HTTPS readiness and that Helmsman's control stream to Foghorn is connected
 
 ### What the operator provides
 
@@ -67,7 +67,9 @@ Everything else is cluster-assigned automatically:
 | **Helmsman**   | Sidecar — connects to Foghorn (gRPC), reports health, receives stream routing commands |
 | **Caddy**      | Reverse proxy — TLS termination, HTTPS for all protocols                               |
 
-All three run as Docker containers via Docker Compose.
+In container mode all three run inside the single `frameworks-edge` container under s6. In native mode they run as systemd services on Linux or launchd services on macOS.
+
+After enrollment, Foghorn updates Helmsman, MistServer and Caddy through the edge's own rolling update. Re-run `frameworks edge provision` only when a new CLI renders the edge configuration differently; `--dry-run` shows the plan per node.
 
 ### Ports
 
@@ -78,12 +80,12 @@ The default edge template routes all traffic through Caddy on HTTPS:
 | 443/tcp | HTTPS    | All ingest (WHIP) and playback (WHEP, HLS, DASH) |
 | 80/tcp  | HTTP     | Redirect to HTTPS                                |
 
-MistServer listens on 8080 internally; Caddy reverse-proxies to it. No RTMP or SRT ports are exposed by default in the edge template. Operators who need RTMP (1935) or SRT (8889) can add port bindings to `docker-compose.edge.yml` for their MistServer container.
+MistServer listens on 8080 internally; Caddy reverse-proxies to it. For direct RTMP (1935/tcp) or SRT (8889/udp) ingest, open those MistServer ports in the host firewall.
 
 ### Server requirements
 
-- Linux (Ubuntu 22.04+ recommended)
-- Docker and Docker Compose
+- Linux (Ubuntu 22.04+ recommended), or macOS in native mode
+- Docker and Docker Compose for container mode
 - Public IP address
 - Ports 80 and 443 open in firewall
 - At least 2 CPU cores, 4GB RAM for a basic edge
