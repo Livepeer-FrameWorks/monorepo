@@ -188,7 +188,7 @@ const About = () => {
       tone: "cyan",
       description:
         "A drop-in app that auto-discovers IP cameras, VISCA PTZ controls, NDI sources, USB webcams, and HDMI inputs.",
-      status: "pipeline",
+      feature: "device-discovery-contribution-inputs",
       statusNote: "In the pipeline: in active development, not generally available yet.",
     },
     {
@@ -196,7 +196,7 @@ const About = () => {
       tone: "yellow",
       description:
         "In the pipeline: mix and switch multiple live sources on the server, with picture-in-picture, overlays, and scene changes.",
-      status: "pipeline",
+      feature: "composition",
       statusNote: "In the pipeline. Browser mixing is available today through StreamCrafter.",
     },
     {
@@ -204,7 +204,7 @@ const About = () => {
       tone: "orange",
       description:
         "In the pipeline: transcribe, analyze, automate, and transform streams in real time with AI.",
-      status: "pipeline",
+      feature: "live-ai",
       statusNote: "In the pipeline: in development with the MistServer team.",
     },
     {
@@ -212,7 +212,7 @@ const About = () => {
       tone: "violet",
       description:
         "FairPlay, Widevine, and PlayReady protection for premium and licensed content, built natively into MistServer.",
-      status: "pipeline",
+      feature: "drm",
       statusNote:
         "In development with the MistServer team; landing in our build ahead of upstream where it makes sense.",
     },
@@ -222,7 +222,7 @@ const About = () => {
     tone: item.tone,
     title: item.title,
     description: item.description,
-    meta: <StatusTag status={item.status} note={item.statusNote} />,
+    meta: <StatusTag feature={item.feature} />,
     hover: "subtle",
     stripe: true,
   }));

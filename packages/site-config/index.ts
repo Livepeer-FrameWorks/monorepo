@@ -59,7 +59,7 @@ export const MARKETING_ROUTES: MarketingRouteSeo[] = [
     path: "/showcase",
     title: "FrameWorks Showcase - What Ships Today and What Comes Next",
     description:
-      "What you can use on FrameWorks today, what is in the pipeline, and what is further out on the roadmap.",
+      "What ships on FrameWorks today, what is up next, and what is further out, led by the StreamCrafter browser studio.",
   },
   {
     id: "stream-test",

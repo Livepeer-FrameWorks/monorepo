@@ -196,7 +196,7 @@ const processingFeatureMatrix = [
     feature: "Live AI Processing",
     description:
       "In the pipeline: AI transcription, video analysis, automated highlights, and real-time V2V transformations.",
-    status: "pipeline",
+    statusId: "live-ai",
     statusNote: "In the pipeline: in development with the MistServer team.",
     tiers: {
       free: "In the pipeline",
@@ -208,7 +208,7 @@ const processingFeatureMatrix = [
   {
     feature: "StreamCrafter cloud production",
     description: "In the pipeline: mix and switch multiple live sources on the server.",
-    status: "pipeline",
+    statusId: "composition",
     statusNote: "In the pipeline. Browser mixing is available today through StreamCrafter.",
     tiers: {
       free: "In the pipeline",
@@ -454,9 +454,7 @@ const Pricing = () => {
         <div className="pricing-processing-feature">
           <span className="pricing-processing-feature__title">{entry.feature}</span>
           <p className="pricing-processing-feature__copy">{entry.description}</p>
-          {entry.status ? (
-            <StatusTag status={entry.status} note={entry.statusNote} className="mt-1" />
-          ) : null}
+          {entry.statusId ? <StatusTag feature={entry.statusId} className="mt-1" /> : null}
         </div>
       ),
       ...tierCells,

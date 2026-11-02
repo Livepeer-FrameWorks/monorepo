@@ -3,6 +3,13 @@ import { join } from "node:path";
 
 const clientDir = join(process.cwd(), "build", "client");
 
+// The showcase renders its group labels and lead item from the generated
+// status data.
+const statusData = JSON.parse(
+  readFileSync(join(process.cwd(), "src", "data", "status.json"), "utf8")
+);
+const showcaseTierLabels = statusData.tiers.map((tier) => tier.label);
+
 const routes = [
   [
     "index.html",
@@ -13,7 +20,13 @@ const routes = [
   ["analytics/index.html", "FrameWorks Analytics - Real-Time Streaming Telemetry"],
   ["pricing/index.html", "FrameWorks Pricing - Hosted, Hybrid, and Self-Hosted Video Cloud"],
   ["about/index.html", "About FrameWorks - Built by the Team Behind MistServer"],
-  ["showcase/index.html", "FrameWorks Showcase - What Ships Today and What Comes Next"],
+  [
+    "showcase/index.html",
+    "FrameWorks Showcase - What Ships Today and What Comes Next",
+    statusData.features.streamcrafter.showcase.title,
+    'href="/stream-test"',
+    ...showcaseTierLabels,
+  ],
   ["stream-test/index.html", "Stream Test - Try the FrameWorks Player and StreamCrafter"],
   ["contact/index.html", "Contact FrameWorks - Streaming Infrastructure Support"],
   [

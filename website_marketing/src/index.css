@@ -29,6 +29,7 @@
 @import "./styles/pages/landing.css";
 @import "./styles/pages/pricing.css";
 @import "./styles/pages/analytics.css";
+@import "./styles/pages/showcase.css";
 
 @layer base {
   :root {

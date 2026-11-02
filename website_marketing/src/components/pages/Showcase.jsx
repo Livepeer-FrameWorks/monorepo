@@ -1,157 +1,190 @@
+import { createElement } from "react";
 import { motion } from "framer-motion";
 import config from "../../config";
+import status from "@/data/status.json";
 import { Section, SectionContainer } from "@/components/ui/section";
 import StatusTag from "../shared/StatusTag";
+import * as figureKit from "@/components/marketing/figures";
 import {
   MarketingHero,
   MarketingBand,
   HeadlineStack,
   CTACluster,
-  MarketingFeatureWall,
-  MarketingFinalCTA,
   MarketingScrollProgress,
   MarketingCTAButton,
+  MarketingGridSplit,
+  IconList,
   SectionDivider,
+  StudioComposite,
 } from "@/components/marketing";
+import { featureOf, roadmapHref, showcaseLink, showcaseTiers } from "@/lib/featureStatus";
+import { docsLink, signupUrl } from "@/lib/siteLinks";
+import { contactPath } from "@/lib/contactTopics";
 
-const shippingToday = [
-  {
-    title: "Live video delivery",
-    tone: "green",
-    description:
-      "Ingest, protocol conversion, low-latency delivery, recording, and playback, on our own media server.",
-  },
-  {
-    title: "Multistreaming",
-    tone: "blue",
-    description: "Push a live stream to other platforms and destinations while it runs.",
-  },
-  {
-    title: "StreamCrafter browser studio",
-    tone: "purple",
-    description:
-      "Go live from a browser with multi-source mixing. The SDK will change a lot as cloud production arrives, so expect breaking changes.",
-    status: "beta",
-    statusNote: "Beta: usable today, and the SDK will evolve substantially.",
-  },
-  {
-    title: "Players and embeds",
-    tone: "cyan",
-    description: "Player SDKs with protocol selection and playback access control.",
-  },
-  {
-    title: "Recording, clips, and VOD",
-    tone: "orange",
-    description: "DVR recording, clipping, and on-demand assets with retention controls.",
-  },
-  {
-    title: "Your own edges",
-    tone: "yellow",
-    description: "Connect your own edge clusters, or run the full stack yourself.",
-  },
-  {
-    title: "Incidents and alerts",
-    tone: "red",
-    description: "Stream incidents and alerting, with outbound webhooks for your own tools.",
-  },
-  {
-    title: "Agent access",
-    tone: "violet",
-    description: "Let AI agents operate streams through the MCP server.",
-  },
-];
+const LEAD_ID = "streamcrafter";
+const CLOUD_PRODUCTION_ID = "composition";
 
-const inThePipeline = [
-  {
-    title: "StreamCrafter cloud production",
-    tone: "yellow",
-    description:
-      "Mix and switch multiple live sources on the server, with picture-in-picture, overlays, and scene changes.",
+// Group intros keyed by horizon; the group labels come from status.json.
+const TIER_COPY = {
+  now: {
+    title: "On the platform today",
+    subtitle:
+      "Available on the hosted platform and in the self-hosted release. A badge or note marks work that is in beta or still expanding.",
   },
-  {
-    title: "Teams and roles",
-    tone: "blue",
-    description: "Shared tenants with member roles, so producers and operators work together.",
+  next: {
+    title: "Designed and coming next",
+    subtitle:
+      "Next on the roadmap, in no fixed order and with no dates. Each entry links to its roadmap section.",
   },
-  {
-    title: "SCTE-35 cue markers",
-    tone: "green",
-    description: "Cues in the media engine today, with platform controls still to come.",
+  later: {
+    title: "Committed to, further down the road",
+    subtitle: "Planned work that follows the items above.",
   },
-  {
-    title: "Live AI processing",
-    tone: "orange",
-    description: "Transcribe, analyze, and transform streams in real time.",
-  },
-  {
-    title: "DRM content protection",
-    tone: "violet",
-    description: "FairPlay, Widevine, and PlayReady, built natively into MistServer.",
-  },
-  {
-    title: "Device discovery",
-    tone: "cyan",
-    description: "Find IP cameras, PTZ controls, NDI sources, webcams, and HDMI inputs.",
-  },
-];
+};
 
-const afterThat = [
-  {
-    title: "Guests and remote contribution",
-    tone: "purple",
-    description: "Invite guests into a show, mixed in the browser or on the server.",
-    statusNote: "Next on the roadmap, after teams and server-side composition. No date yet.",
-  },
-  {
-    title: "Rooms and chat",
-    tone: "blue",
-    description: "Rooms, presence, chat, and moderation built on the same stream.",
-  },
-  {
-    title: "Server-side ad insertion",
-    tone: "orange",
-    description: "Insert ads on the server, building on cue markers.",
-  },
-  {
-    title: "Live commerce",
-    tone: "green",
-    description: "Shopping and auctions synced to the live stream.",
-  },
-];
+// Renders the figures-kit drawing a status.json row names; an unknown name is
+// a build error rather than a silently missing diagram.
+const figureElement = (name) => {
+  if (!name) return null;
+  const component = figureKit[name];
+  if (!component) {
+    throw new Error(`status.json names figure "${name}", which the figures kit does not export`);
+  }
+  return createElement(component, { spot: true });
+};
 
-const toCards = (items, status, statusNote) =>
-  items.map((item) => ({
-    tone: item.tone,
-    title: item.title,
-    description: item.description,
-    meta:
-      item.status || status ? (
-        <StatusTag status={item.status ?? status} note={item.statusNote ?? statusNote} />
-      ) : undefined,
-    hover: "subtle",
-    stripe: true,
-  }));
+const FeatureAction = ({ link, className }) => {
+  const resolved = showcaseLink(link, config.docsUrl);
+  if (!resolved) return null;
+  return (
+    <MarketingCTAButton
+      intent="secondary"
+      label={resolved.label}
+      className={className}
+      {...(resolved.to ? { to: resolved.to } : { href: resolved.href })}
+    />
+  );
+};
+
+const Bullets = ({ items }) =>
+  items?.length ? (
+    <ul className="showcase-bullets">
+      {items.map((item) => (
+        <li key={item}>{item}</li>
+      ))}
+    </ul>
+  ) : null;
+
+// One shipping feature: copy on one side, its diagram (or its bullets when it
+// has no diagram) on the other. Diagram rows alternate sides; `flip` puts the
+// diagram first.
+const FeatureRow = ({ feature, flip }) => {
+  const { showcase } = feature;
+  const figure = figureElement(showcase.figure);
+  const media = figure ?? (showcase.bullets.length ? <Bullets items={showcase.bullets} /> : null);
+  const copy = (
+    <div className="showcase-row__copy">
+      <StatusTag feature={feature.id} />
+      <h3 className="showcase-row__title">{showcase.title}</h3>
+      <p className="showcase-row__summary">{showcase.summary}</p>
+      {figure ? <Bullets items={showcase.bullets} /> : null}
+      {feature.note ? <p className="showcase-row__note">{feature.note}</p> : null}
+      <FeatureAction link={showcase.link} className="showcase-row__action" />
+    </div>
+  );
+
+  return (
+    <article
+      id={feature.id}
+      className="showcase-row"
+      data-media={figure ? "figure" : media ? "bullets" : "none"}
+      data-flip={figure && flip ? "true" : "false"}
+    >
+      {copy}
+      {media ? <div className="showcase-row__media">{media}</div> : null}
+    </article>
+  );
+};
+
+// A planned feature: tag, title, summary and its roadmap entry.
+const PlannedCard = ({ feature }) => {
+  const { showcase } = feature;
+  const roadmap = roadmapHref(feature, config.docsUrl);
+  return (
+    <article id={feature.id} className="showcase-card">
+      <div className="showcase-card__body">
+        <StatusTag feature={feature.id} />
+        <h3 className="showcase-card__title">{showcase.title}</h3>
+        <p className="showcase-card__summary">{showcase.summary}</p>
+        <Bullets items={showcase.bullets} />
+      </div>
+      {roadmap ? (
+        <a className="showcase-card__link" href={roadmap}>
+          Roadmap entry <span aria-hidden="true">→</span>
+        </a>
+      ) : null}
+    </article>
+  );
+};
+
+const TierHeader = ({ tier }) => (
+  <HeadlineStack
+    eyebrow={tier.label}
+    title={TIER_COPY[tier.horizon]?.title}
+    subtitle={TIER_COPY[tier.horizon]?.subtitle}
+    align="left"
+    underlineAlign="start"
+  />
+);
+
+const reveal = {
+  initial: { opacity: 0, y: 24 },
+  whileInView: { opacity: 1, y: 0 },
+  viewport: { once: true, amount: 0.1 },
+  transition: { duration: 0.6 },
+};
 
 const Showcase = () => {
-  const groups = [
+  const tiers = showcaseTiers(status);
+  const [now, next, later] = tiers;
+  const lead = featureOf(status, LEAD_ID);
+  const cloudProduction = featureOf(status, CLOUD_PRODUCTION_ID);
+  const shippingRows = now.features.filter((feature) => feature.id !== LEAD_ID);
+  const figureRows = shippingRows
+    .filter((feature) => feature.showcase.figure)
+    .map((feature) => feature.id);
+
+  const launchOptions = [
     {
-      eyebrow: "Shipping today",
-      title: "Available now",
-      cards: toCards(shippingToday),
+      id: "hosted",
+      title: "Hosted",
+      description: "Sign up and stream on FrameWorks infrastructure. The Free plan needs no card.",
+      action: {
+        label: "Start Free",
+        href: signupUrl(config.appUrl, "showcase-launch-hosted"),
+        external: true,
+      },
     },
     {
-      eyebrow: "In the pipeline",
-      title: "Designed and coming next",
-      cards: toCards(
-        inThePipeline,
-        "pipeline",
-        "In the pipeline: designed work, not generally available yet."
-      ),
+      id: "browser",
+      title: "In your browser",
+      description: "Play an HLS, DASH, WHEP or MistServer stream, or go live with StreamCrafter.",
+      action: { label: "Open the stream test", to: "/stream-test" },
     },
     {
-      eyebrow: "After that",
-      title: "On the roadmap",
-      cards: toCards(afterThat, "pipeline", "On the roadmap: planned, with no date yet."),
+      id: "edge",
+      title: "Your own edge",
+      description: "Attach edge nodes you run to the hosted platform with the frameworks CLI.",
+      action: { label: "Bring your own edge", href: docsLink(config.docsUrl, "/hybrid/overview") },
+    },
+    {
+      id: "self-host",
+      title: "Self-hosted",
+      description: "Run the whole platform on your own hardware, deployed and upgraded by the CLI.",
+      action: {
+        label: "Self-hosting guide",
+        href: docsLink(config.docsUrl, "/operators/deployment"),
+      },
     },
   ];
 
@@ -161,33 +194,131 @@ const Showcase = () => {
         seed="/showcase"
         eyebrow="Showcase"
         title="What FrameWorks does today, and what comes next"
-        description="A plain view of what you can use now, what is in the pipeline, and what follows it."
+        description="A plain view of what you can use now, what is being built next, and what is further out. Statuses come from the same feature registry as the docs and the roadmap."
         align="center"
         surface="gradient"
         surfaceTone="accent"
         surfaceIntensity="raised"
+        primaryAction={{
+          label: "Start Free",
+          href: signupUrl(config.appUrl, "showcase-hero"),
+          external: true,
+          className: "cta-motion",
+        }}
+        secondaryAction={{
+          label: "Try StreamCrafter",
+          to: "/stream-test",
+          className: "cta-motion",
+          variant: "secondary",
+        }}
+        support={
+          <nav className="showcase-jump" aria-label="Showcase groups">
+            {tiers.map((tier) => (
+              <a key={tier.horizon} href={`#${tier.anchor}`} className="showcase-jump__link">
+                <span>{tier.label}</span>
+                <span className="showcase-jump__count">{tier.features.length}</span>
+              </a>
+            ))}
+          </nav>
+        }
       />
 
       <SectionDivider />
 
-      {groups.map((group) => (
-        <div key={group.eyebrow}>
-          <Section>
+      <Section id={now.anchor} className="bg-brand-surface">
+        <SectionContainer>
+          <motion.div {...reveal}>
+            <MarketingBand
+              preset="foundation"
+              tone="cool"
+              texturePattern="pinlines"
+              textureNoise="film"
+              contentClassName="showcase-lead"
+            >
+              <HeadlineStack
+                eyebrow={`${now.label} · ${lead.tag}`}
+                title={lead.showcase.title}
+                subtitle={lead.showcase.summary}
+                align="left"
+                underlineAlign="start"
+              />
+              <MarketingGridSplit align="stretch" stackAt="lg" seam ratio="narrow-wide">
+                <div id={lead.id} className="slab-zone">
+                  <div className="slab-zone__body showcase-lead__body">
+                    <IconList
+                      items={lead.showcase.bullets.map((bullet) => ({ title: bullet }))}
+                      variant="list"
+                      indicator="dot"
+                      headingLevel="h3"
+                    />
+                    {lead.note ? <p className="showcase-lead__note">{lead.note}</p> : null}
+                  </div>
+                  <div className="slab-zone__actions">
+                    <MarketingCTAButton intent="primary" to="/stream-test" label="Try it now" />
+                    <MarketingCTAButton
+                      intent="secondary"
+                      href={docsLink(config.docsUrl, "/builders/go-live-browser")}
+                      label="Go live guide"
+                    />
+                    <MarketingCTAButton
+                      intent="secondary"
+                      href={docsLink(config.docsUrl, "/builders/ingest")}
+                      label="SDK docs"
+                    />
+                  </div>
+                </div>
+                <div className="marketing-figure-cell">
+                  <StudioComposite />
+                </div>
+              </MarketingGridSplit>
+              <a className="showcase-lead__next" href={`#${cloudProduction.id}`}>
+                <StatusTag feature={cloudProduction.id} />
+                <span className="showcase-lead__next-copy">
+                  <strong>{cloudProduction.showcase.title}</strong>
+                  <span>{cloudProduction.showcase.summary}</span>
+                </span>
+                <span aria-hidden="true" className="showcase-lead__next-arrow">
+                  →
+                </span>
+              </a>
+            </MarketingBand>
+          </motion.div>
+        </SectionContainer>
+      </Section>
+
+      <SectionDivider />
+
+      <Section className="bg-brand-surface-muted">
+        <SectionContainer>
+          <MarketingBand preset="quiet" contentClassName="showcase-group">
+            <TierHeader tier={now} />
+            <div className="showcase-rows">
+              {shippingRows.map((feature) => (
+                <FeatureRow
+                  key={feature.id}
+                  feature={feature}
+                  flip={figureRows.indexOf(feature.id) % 2 === 0}
+                />
+              ))}
+            </div>
+          </MarketingBand>
+        </SectionContainer>
+      </Section>
+
+      <SectionDivider />
+
+      {[next, later].map((tier) => (
+        <div key={tier.horizon}>
+          <Section id={tier.anchor} className="bg-brand-surface">
             <SectionContainer>
-              <motion.div
-                initial={{ opacity: 0, y: 24 }}
-                whileInView={{ opacity: 1, y: 0 }}
-                viewport={{ once: true, amount: 0.2 }}
-                transition={{ duration: 0.6 }}
-              >
-                <MarketingBand preset="quiet">
-                  <HeadlineStack
-                    eyebrow={group.eyebrow}
-                    title={group.title}
-                    align="left"
-                    underlineAlign="start"
-                  />
-                  <MarketingFeatureWall items={group.cards} columns={3} stackAt="md" />
+              <motion.div {...reveal}>
+                <MarketingBand preset="quiet" contentClassName="showcase-group">
+                  <TierHeader tier={tier} />
+                  <div className="showcase-cards" data-count={tier.features.length}>
+                    {tier.features.map((feature) => (
+                      <PlannedCard key={feature.id} feature={feature} />
+                    ))}
+                  </div>
                 </MarketingBand>
               </motion.div>
             </SectionContainer>
@@ -196,43 +327,67 @@ const Showcase = () => {
         </div>
       ))}
 
-      <Section>
+      <Section className="bg-brand-surface-muted" id="launch">
         <SectionContainer>
-          <MarketingBand preset="quiet">
-            <HeadlineStack
-              eyebrow="Talk to the engineers"
-              title="Support from video engineers"
-              subtitle="You work directly with the people who have built MistServer for more than 15 years. That experience covers your whole pipeline, not just our part of it: encoders and contribution before FrameWorks, players and delivery after it. Reach out for trial usage, custom pricing, or a shared channel."
-              align="left"
-              underlineAlign="start"
-              actionsPlacement="inline"
-              actions={
-                <CTACluster align="end">
-                  <MarketingCTAButton
-                    intent="primary"
-                    to="/contact"
-                    label="Talk to the engineers"
-                  />
-                </CTACluster>
-              }
-            />
-          </MarketingBand>
+          <motion.div {...reveal}>
+            <MarketingBand preset="foundation" texturePattern="seams" textureNoise="film">
+              <HeadlineStack
+                eyebrow="Get started"
+                title="Launch FrameWorks your way"
+                subtitle="The same media engine and APIs in every option. Move between them without rebuilding."
+                align="left"
+                underlineAlign="start"
+              />
+              <div className="showcase-launch">
+                {launchOptions.map((option) => (
+                  <div key={option.id} className="slab-zone showcase-launch__option">
+                    <div className="slab-zone__body showcase-launch__body">
+                      <h3>{option.title}</h3>
+                      <p>{option.description}</p>
+                    </div>
+                    <div className="slab-zone__actions">
+                      <MarketingCTAButton
+                        intent={option.id === "hosted" ? "primary" : "secondary"}
+                        {...option.action}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </MarketingBand>
+          </motion.div>
         </SectionContainer>
       </Section>
 
       <SectionDivider />
 
       <Section>
-        <MarketingFinalCTA
-          eyebrow="Next steps"
-          title="Three ways to deploy"
-          description="Hosted, hybrid, or self-hosted. Video infrastructure that fits how you work."
-          variant="band"
-          primaryAction={{ label: "Start Free", href: config.appUrl, external: true }}
-          secondaryAction={[
-            { label: "See the full roadmap", href: `${config.docsUrl}/roadmap`, external: true },
-          ]}
-        />
+        <SectionContainer>
+          <MarketingBand preset="quiet">
+            <HeadlineStack
+              eyebrow="Talk to the engineers"
+              title="Tell us what you are building"
+              subtitle="You work directly with the people who have built MistServer for more than 15 years. That experience covers your whole pipeline, not just our part of it: encoders and contribution before FrameWorks, players and delivery after it. Ask about trial usage, custom pricing, or a shared channel."
+              align="left"
+              underlineAlign="start"
+              actionsPlacement="inline"
+              actions={
+                <CTACluster align="end" wrap>
+                  <MarketingCTAButton
+                    intent="primary"
+                    to={contactPath("engineering")}
+                    label="Talk to the engineers"
+                  />
+                  <MarketingCTAButton
+                    intent="secondary"
+                    href={docsLink(config.docsUrl, "/")}
+                    label="Read the docs"
+                  />
+                </CTACluster>
+              }
+            />
+          </MarketingBand>
+        </SectionContainer>
       </Section>
 
       <MarketingScrollProgress />

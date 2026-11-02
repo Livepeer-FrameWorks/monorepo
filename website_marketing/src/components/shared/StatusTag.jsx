@@ -1,24 +1,32 @@
-import InfoTooltip from "./InfoTooltip";
+import status from "@/data/status.json";
 import { Badge } from "@/components/ui/badge";
+import { featureOf, statusTone } from "@/lib/featureStatus";
 import { cn } from "@/lib/utils";
 
-const STATUS_COPY = {
-  beta: "Beta: usable today with guidance; expect breaking changes and capacity limits.",
-  pipeline: "Pipeline: in active development; not generally available yet.",
-};
+// Inline status badge for one registry feature, labelled Shipping, Beta, or a
+// tier tag from status.json. `withNote` prints the registry note under it, so
+// the caveat is readable without a hover.
+const StatusTag = ({ feature, withNote = false, className = "" }) => {
+  const entry = featureOf(status, feature);
+  const badge = (
+    <Badge
+      variant="outline"
+      tone={statusTone(entry)}
+      className="status-tag tracking-[0.18em] uppercase text-[0.65rem]"
+      data-horizon={entry.horizon}
+    >
+      {entry.tag}
+    </Badge>
+  );
 
-const StatusTag = ({ status = "beta", note, className = "" }) => {
-  if (!status) return null;
-
-  const label = status === "pipeline" ? "Pipeline" : "Beta";
-  const tooltip = note || STATUS_COPY[status] || STATUS_COPY.beta;
+  if (!withNote || !entry.note) {
+    return <span className={cn("inline-flex items-center", className)}>{badge}</span>;
+  }
 
   return (
-    <span className={cn("inline-flex items-center gap-1", className)}>
-      <Badge variant="outline" className="tracking-[0.18em] uppercase text-[0.65rem]">
-        {label}
-      </Badge>
-      <InfoTooltip position="top">{tooltip}</InfoTooltip>
+    <span className={cn("status-tag-block", className)}>
+      {badge}
+      <span className="status-tag-block__note">{entry.note}</span>
     </span>
   );
 };
