@@ -170,6 +170,11 @@ export interface IngestStats {
   connection: {
     /** Round-trip time in milliseconds */
     rtt: number;
+    /**
+     * Packets the receiver reported lost since the previous sample, as a share
+     * of the packets sent in that time, in percent
+     */
+    packetLossPct: number;
     state: RTCPeerConnectionState;
     iceState: RTCIceConnectionState;
   };

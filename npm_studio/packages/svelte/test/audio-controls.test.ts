@@ -60,7 +60,7 @@ describe("StudioConnectionHealth", () => {
   const stats = {
     video: { packetsSent: 1000, packetsLost: 30, bitrate: 2_000_000 },
     audio: { packetsSent: 0, packetsLost: 0, bitrate: 0 },
-    connection: { rtt: 40 },
+    connection: { rtt: 40, packetLossPct: 3 },
   } as unknown as IngestStats;
 
   it("grades the connection while live", () => {

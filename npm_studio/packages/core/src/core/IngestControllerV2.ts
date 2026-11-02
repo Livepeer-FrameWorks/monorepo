@@ -18,6 +18,7 @@ import { SceneManager } from "./SceneManager";
 import { EncoderManager, createMultiCodecEncoderConfig } from "./EncoderManager";
 import type { VideoCodecFamily } from "./CodecProfiles";
 import { BitrateAdaptation } from "./BitrateAdaptation";
+import { intervalLossPct } from "./connectionHealth";
 import { detectCapabilities, isRTCRtpScriptTransformSupported } from "./FeatureDetection";
 import { getVideoConstraints } from "./MediaConstraints";
 import type {
@@ -1606,6 +1607,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
       },
       connection: {
         rtt: 0,
+        packetLossPct: 0,
         state: this.whipClient.getPeerConnection()?.connectionState ?? "new",
         iceState: this.whipClient.getPeerConnection()?.iceConnectionState ?? "new",
       },
@@ -1614,6 +1616,8 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
 
     // Calculate bitrate from previous stats
     const prevStats = this.lastStats;
+    // The receiver's RTCP reports, the only place loss is known on the sending side.
+    let remoteRttSec = 0;
 
     report.forEach((stat) => {
       if (stat.type === "outbound-rtp") {
@@ -1640,6 +1644,19 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
             stats.audio.bitrate = Math.round((bytesDiff * 8) / timeDiff);
           }
         }
+      } else if (stat.type === "remote-inbound-rtp") {
+        const remote = stat as RTCStats & {
+          kind?: string;
+          packetsLost?: number;
+          roundTripTime?: number;
+        };
+        if (remote.kind === "video") {
+          stats.video.packetsLost = remote.packetsLost ?? 0;
+          remoteRttSec = remote.roundTripTime ?? remoteRttSec;
+        } else if (remote.kind === "audio") {
+          stats.audio.packetsLost = remote.packetsLost ?? 0;
+          if (!remoteRttSec) remoteRttSec = remote.roundTripTime ?? 0;
+        }
       } else if (
         stat.type === "candidate-pair" &&
         (stat as RTCIceCandidatePairStats).state === "succeeded"
@@ -1649,6 +1666,9 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
           ((stat as RTCIceCandidatePairStats).currentRoundTripTime ?? 0) * 1000;
       }
     });
+
+    if (!stats.connection.rtt) stats.connection.rtt = remoteRttSec * 1000;
+    stats.connection.packetLossPct = intervalLossPct(stats, prevStats);
 
     return stats;
   }

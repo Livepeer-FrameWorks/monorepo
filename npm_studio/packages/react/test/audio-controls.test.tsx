@@ -86,11 +86,11 @@ describe("StudioAudioControls", () => {
 });
 
 describe("StudioConnectionHealth", () => {
-  const stats = (lost: number, rtt: number) =>
+  const stats = (lossPct: number, rtt: number) =>
     ({
-      video: { packetsSent: 1000, packetsLost: lost, bitrate: 2_000_000 },
+      video: { packetsSent: 1000, packetsLost: 0, bitrate: 2_000_000 },
       audio: { packetsSent: 0, packetsLost: 0, bitrate: 0 },
-      connection: { rtt },
+      connection: { rtt, packetLossPct: lossPct },
     }) as unknown as IngestStats;
 
   it("grades the connection while live", () => {
@@ -102,10 +102,10 @@ describe("StudioConnectionHealth", () => {
   });
 
   it("warns about a poor connection and stays away when not live", () => {
-    const { rerender } = render(<StudioConnectionHealth stats={stats(100, 40)} isStreaming />);
+    const { rerender } = render(<StudioConnectionHealth stats={stats(10, 40)} isStreaming />);
     expect(screen.getByRole("status").textContent).toBe("Connection poor");
 
-    rerender(<StudioConnectionHealth stats={stats(100, 40)} isStreaming={false} />);
+    rerender(<StudioConnectionHealth stats={stats(10, 40)} isStreaming={false} />);
     expect(screen.queryByRole("status")).toBeNull();
   });
 });

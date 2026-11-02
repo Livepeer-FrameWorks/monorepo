@@ -312,7 +312,7 @@ describe("<fw-sc-connection-health>", () => {
       stats: {
         video: { packetsSent: 1000, packetsLost: 0, bitrate: 1_000_000 },
         audio: { packetsSent: 0, packetsLost: 0, bitrate: 0 },
-        connection: { rtt: 400 },
+        connection: { rtt: 400, packetLossPct: 0 },
       },
     });
     const pill = new FwScConnectionHealth();
