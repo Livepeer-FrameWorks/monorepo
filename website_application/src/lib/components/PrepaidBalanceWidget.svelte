@@ -9,6 +9,14 @@
   const AlertIcon = getIconComponent("AlertTriangle");
   const ArrowRightIcon = getIconComponent("ArrowRight");
 
+  // Only a prepaid account is admitted on its balance. A postpaid account's
+  // balance is credit taken by its next invoice, so the spent-balance rule
+  // does not apply to it.
+  let { billingModel }: { billingModel?: string | null } = $props();
+
+  // Purser refuses new sessions at €0 and stops running ones below -€10.
+  const SUSPEND_BELOW_CENTS = -1000;
+
   const balanceQuery = new GetPrepaidBalanceStore();
 
   let loading = $state(true);
@@ -44,7 +52,9 @@
   }
 
   const balanceDisplay = $derived(formatCents(availableBalanceCents, currency));
-  const isNegative = $derived(availableBalanceCents < 0);
+  const admittedOnBalance = $derived(billingModel !== "postpaid");
+  const isSuspended = $derived(admittedOnBalance && availableBalanceCents < SUSPEND_BELOW_CENTS);
+  const isSpent = $derived(admittedOnBalance && !isSuspended && availableBalanceCents <= 0);
 </script>
 
 <div class="slab">
@@ -67,8 +77,8 @@
         <div class="flex items-baseline gap-2">
           <span
             class="text-3xl font-bold tabular-nums"
-            class:text-destructive={isNegative}
-            class:text-foreground={!isNegative}
+            class:text-destructive={isSpent || isSuspended}
+            class:text-foreground={!isSpent && !isSuspended}
           >
             {balanceDisplay}
           </span>
@@ -79,24 +89,33 @@
           {formatCents(reservedBalanceCents, currency)} reserved in active usage
         </div>
 
-        {#if isLowBalance}
+        {#if isSuspended}
+          <div
+            class="flex items-start gap-2 p-2 bg-destructive/10 rounded-md border border-destructive/30"
+          >
+            <AlertIcon class="w-4 h-4 text-destructive shrink-0 mt-0.5" />
+            <span class="text-sm text-destructive">
+              Below -€10 the account is suspended and running streams stop. Top up to stream again.
+            </span>
+          </div>
+        {:else if isSpent}
+          <div
+            class="flex items-start gap-2 p-2 bg-destructive/10 rounded-md border border-destructive/30"
+          >
+            <AlertIcon class="w-4 h-4 text-destructive shrink-0 mt-0.5" />
+            <span class="text-sm text-destructive">
+              Balance spent. Running streams and their viewers continue, but new streams and new
+              viewers are refused, and a viewer or encoder that disconnects cannot reconnect. Below
+              -€10 running streams stop.
+            </span>
+          </div>
+        {:else if isLowBalance && admittedOnBalance}
           <div
             class="flex items-center gap-2 p-2 bg-warning/10 rounded-md border border-warning/30"
           >
             <AlertIcon class="w-4 h-4 text-warning shrink-0" />
             <span class="text-sm text-warning">
-              Low balance - top up to continue using services
-            </span>
-          </div>
-        {/if}
-
-        {#if isNegative}
-          <div
-            class="flex items-center gap-2 p-2 bg-destructive/10 rounded-md border border-destructive/30"
-          >
-            <AlertIcon class="w-4 h-4 text-destructive shrink-0" />
-            <span class="text-sm text-destructive">
-              Negative balance - new streams blocked until topped up
+              Low balance. At €0 new streams and new viewers are refused; top up before then.
             </span>
           </div>
         {/if}

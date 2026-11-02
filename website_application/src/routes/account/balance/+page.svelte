@@ -71,6 +71,9 @@
     }>
   >([]);
   let totalTransactions = $state(0);
+  // A prepaid account is admitted on its balance; a postpaid account's balance
+  // is credit its next invoice takes, so the spent-balance rule does not apply.
+  let admittedOnBalance = $state(true);
 
   // Top-up form state. LPT is hidden until a non-Chainlink price source ships.
   let topupAmount = $state(10);
@@ -194,6 +197,8 @@
         totalTransactions = txResult.data.balanceTransactionsConnection.totalCount;
       }
 
+      admittedOnBalance =
+        billingResult.data?.billingStatus?.subscription?.billingModel !== "postpaid";
       presentmentCurrency = topupCurrency(detailsResult?.data?.billingDetails);
       const configuredProviders = billingResult.data?.billingStatus?.setupProviders ?? [];
       availableCardProviders = configuredProviders
@@ -417,7 +422,7 @@
             {#if balance}
               <div
                 class="text-4xl font-bold tabular-nums"
-                class:text-destructive={balance.availableBalanceCents < 0}
+                class:text-destructive={admittedOnBalance && balance.availableBalanceCents <= 0}
               >
                 {formatCents(balance.availableBalanceCents, balance.currency)}
               </div>
@@ -425,11 +430,51 @@
                 {formatCents(balance.balanceCents, balance.currency)} settled ·
                 {formatCents(balance.reservedBalanceCents, balance.currency)} reserved in active usage
               </p>
-              {#if balance.isLowBalance}
+              {#if !admittedOnBalance}
+                <p class="text-sm text-muted-foreground mt-3">
+                  Your account is billed monthly. This balance is credit that your next invoice
+                  takes.
+                </p>
+              {:else if balance.availableBalanceCents < -1000}
+                <div class="flex items-start gap-2 mt-3 text-destructive">
+                  <AlertIcon class="w-4 h-4 shrink-0 mt-0.5" />
+                  <span class="text-sm"
+                    >Below -€10 the account is suspended and running streams stop. Top up to stream
+                    again.</span
+                  >
+                </div>
+              {:else if balance.availableBalanceCents <= 0}
+                <div class="flex items-start gap-2 mt-3 text-destructive">
+                  <AlertIcon class="w-4 h-4 shrink-0 mt-0.5" />
+                  <span class="text-sm"
+                    >Balance spent. Running streams and their viewers continue, but new streams and
+                    new viewers are refused until you top up.</span
+                  >
+                </div>
+              {:else if balance.isLowBalance}
                 <div class="flex items-center gap-2 mt-3 text-warning">
                   <AlertIcon class="w-4 h-4" />
                   <span class="text-sm">Low balance warning</span>
                 </div>
+              {/if}
+              {#if admittedOnBalance}
+                <dl class="mt-4 space-y-1 text-xs text-muted-foreground">
+                  <div class="flex gap-2">
+                    <dt class="w-24 shrink-0 font-medium text-foreground">Above €0</dt>
+                    <dd>Streams, viewers and recordings run normally.</dd>
+                  </div>
+                  <div class="flex gap-2">
+                    <dt class="w-24 shrink-0 font-medium text-foreground">€0 or below</dt>
+                    <dd>
+                      Running streams and their viewers continue. New streams and new viewers are
+                      refused, and a viewer or encoder that disconnects cannot reconnect.
+                    </dd>
+                  </div>
+                  <div class="flex gap-2">
+                    <dt class="w-24 shrink-0 font-medium text-foreground">Below -€10</dt>
+                    <dd>The account is suspended and running streams stop.</dd>
+                  </div>
+                </dl>
               {/if}
               <p class="text-sm text-muted-foreground mt-4">
                 Usage is itemized by meter; your current pricing determines which items are charged.
