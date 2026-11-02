@@ -16,12 +16,7 @@ const loadTester = async () => {
   return module.StreamTester;
 };
 
-const demoFixtures =
-  config.demoFixtures && config.demoFixtures.length > 0
-    ? config.demoFixtures
-    : [{ id: config.demoStreamName, label: "Demo" }];
-
-const samples = demoFixtures.flatMap((fixture) => [
+const samples = config.demoFixtures.flatMap((fixture) => [
   {
     id: fixture.id,
     label: `FrameWorks ${fixture.label.toLowerCase()} stream`,
@@ -78,7 +73,7 @@ const Tester = () => {
       samples={samples}
       initialSource={samples[0]?.source}
       links={links}
-      tlsHelpUrl={docsLink(config.docsUrl, "/operators/selfhosted-edge-rollout")}
+      tlsHelpUrl={docsLink(config.docsUrl, "/hybrid/overview")}
       whipHelpUrl={docsLink(config.docsUrl, "/builders/ingest#where-to-find-your-whip-url")}
     />
   );
@@ -90,7 +85,7 @@ const StreamTest = () => (
       seed="/stream-test"
       eyebrow="Stream test"
       title="Test a stream in your browser"
-      description="Play a FrameWorks playback ID, a MistServer stream or any HLS, DASH, MP4, WebM or WHEP URL, and see the protocol, bitrate, buffer, latency and tracks as it plays. Publish to a WHIP endpoint with StreamCrafter. Your URLs and stream keys stay in your browser."
+      description="Play a FrameWorks playback ID, a MistServer stream or any HLS, DASH, MP4, WebM or WHEP URL, and see the protocol, bitrate, buffer, latency and tracks as it plays. Publish to a WHIP endpoint with StreamCrafter. Nothing you enter is stored, and copied links never include a WHIP URL or stream key."
       align="center"
       surface="gradient"
       surfaceTone="accent"

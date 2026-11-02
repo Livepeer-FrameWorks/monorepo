@@ -24,7 +24,7 @@ export interface StreamTesterProps {
   storageKey?: string;
   /** Debug logging in the player and studio. */
   debug?: boolean;
-  /** Guide for serving MistServer over HTTPS, linked from mixed-content errors. */
+  /** Guide for serving MistServer over HTTPS, linked from the Mist HTTPS note and mixed-content errors. */
   tlsHelpUrl?: string;
   /** Guide that explains where a WHIP URL comes from. */
   whipHelpUrl?: string;

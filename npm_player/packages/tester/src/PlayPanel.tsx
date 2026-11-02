@@ -333,7 +333,7 @@ export function PlayPanel({
               <>
                 {" "}
                 <a href={tlsHelpUrl} target="_blank" rel="noreferrer">
-                  How FrameWorks edges handle TLS
+                  Run MistServer as a FrameWorks edge with HTTPS
                 </a>
               </>
             ) : null}
