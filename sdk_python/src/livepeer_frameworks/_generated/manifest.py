@@ -8,7 +8,7 @@ class OperationInfo(TypedDict):
     since: str
 
 
-SDK_VERSION: Final = "0.4.0"
+SDK_VERSION: Final = "0.4.1"
 SDK_LINE: Final = "0.4"
 MIN_SERVER_VERSION: Final = "v0.3.11"
 

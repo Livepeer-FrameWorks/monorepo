@@ -3,7 +3,7 @@
 package frameworks
 
 // SDKVersion is the version of this SDK.
-const SDKVersion = "0.4.0"
+const SDKVersion = "0.4.1"
 
 // SDKLine is the compatibility line of this SDK; under 0.x each minor version is its own line.
 const SDKLine = "0.4"

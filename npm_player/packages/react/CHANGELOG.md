@@ -1,5 +1,13 @@
 # @livepeer-frameworks/player-react
 
+## 0.6.4
+
+### Patch Changes
+
+- Updated dependencies [4721b31]
+- Updated dependencies [f8d56f2]
+  - @livepeer-frameworks/player-core@0.6.4
+
 ## 0.6.3
 
 ### Patch Changes

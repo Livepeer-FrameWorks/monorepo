@@ -1,5 +1,12 @@
 # @livepeer-frameworks/player-core
 
+## 0.6.4
+
+### Patch Changes
+
+- 4721b31: Pre-resolved endpoints on a host without MistServer no longer open Mist stream-state or metadata sockets. Set `baseUrl` to keep both on a known Mist edge.
+- f8d56f2: A pre-resolved endpoint on a Mist edge keeps polling stream state when Mist answers with an error such as "Stream is offline", so the player picks the stream up when it comes online.
+
 ## 0.6.3
 
 ### Patch Changes
