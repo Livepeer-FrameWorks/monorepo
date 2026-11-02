@@ -20,7 +20,7 @@ export const DEFAULT_STUDIO_SETTINGS: StudioSettings = {
 const STORAGE_KEY = "fw.goLive.studioSettings";
 
 function isRenderer(value: unknown): value is CompositorRenderer {
-  return typeof value === "string" && value in RENDERER_LABELS;
+  return typeof value === "string" && Object.hasOwn(RENDERER_LABELS, value);
 }
 
 /** Per-viewer studio preference. Storage can be blocked or empty; the defaults apply then. */

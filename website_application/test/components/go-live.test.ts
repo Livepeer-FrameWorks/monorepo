@@ -156,10 +156,25 @@ describe("Go Live page", () => {
       errors: [{ message: "permission denied", extensions: { code: "FORBIDDEN" } }],
     });
     render(GoLivePage);
-    expect(await screen.findByText("This stream's key was not accepted")).toBeTruthy();
+    expect(
+      await screen.findByText("This stream or account cannot broadcast right now")
+    ).toBeTruthy();
     const link = screen.getByText("Open stream keys").closest("a");
     expect(link?.getAttribute("href")).toBe("/streams/relay-a");
     expect(screen.queryByTestId("studio")).toBeNull();
+  });
+
+  it("links a spent prepaid balance to billing", async () => {
+    // Foghorn refuses a negative balance with gRPC FailedPrecondition, which
+    // the gateway presents as FAILED_PRECONDITION.
+    resolveFetch.mockResolvedValue({
+      data: null,
+      errors: [{ message: "payment required", extensions: { code: "FAILED_PRECONDITION" } }],
+    });
+    render(GoLivePage);
+    expect(await screen.findByText("Your prepaid balance is spent")).toBeTruthy();
+    const link = screen.getByText("Open billing").closest("a");
+    expect(link?.getAttribute("href")).toBe("/account/billing");
   });
 
   it("explains a blocked camera from the studio's error", async () => {

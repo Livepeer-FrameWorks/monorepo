@@ -12,7 +12,22 @@ describe("Go Live failure guidance", () => {
     expect(describeResolveFailure("UNAUTHORIZED").actions).toEqual(["login"]);
   });
 
+  it("covers account refusals under FORBIDDEN, with keys and billing", () => {
+    const failure = describeResolveFailure("FORBIDDEN");
+    expect(failure.title).toBe("This stream or account cannot broadcast right now");
+    expect(failure.actions).toEqual(["keys", "billing"]);
+  });
+
+  it("tells a duplicate ingest to stop the other encoder", () => {
+    const failure = describeResolveFailure("CONFLICT");
+    expect(failure.title).toMatch(/already receiving video from another encoder/);
+    expect(failure.detail).toMatch(/Stop the other encoder/);
+    expect(failure.actions).toEqual(["retry"]);
+  });
+
   it("sends a spent balance to billing", () => {
+    expect(describeResolveFailure("FAILED_PRECONDITION").actions).toEqual(["billing"]);
+    expect(describeResolveFailure("FAILED_PRECONDITION").detail).toMatch(/below -€10/);
     expect(describeResolveFailure("PAYMENT_REQUIRED").actions).toEqual(["billing"]);
     expect(describeStudioFailure("WHIP request failed: 402 Payment Required - ").actions).toEqual([
       "billing",
@@ -79,6 +94,8 @@ describe("Go Live studio settings", () => {
     expect(() => saveStudioSettings(throwing, DEFAULT_STUDIO_SETTINGS)).not.toThrow();
     const junk = memoryStorage();
     junk.setItem("fw.goLive.studioSettings", '{"compositorRenderer":"vulkan"}');
+    expect(loadStudioSettings(junk)).toEqual(DEFAULT_STUDIO_SETTINGS);
+    junk.setItem("fw.goLive.studioSettings", '{"compositorRenderer":"toString"}');
     expect(loadStudioSettings(junk)).toEqual(DEFAULT_STUDIO_SETTINGS);
   });
 });

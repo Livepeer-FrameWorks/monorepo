@@ -12,14 +12,11 @@ export interface GoLiveFailure {
   actions: GoLiveFailureAction[];
 }
 
-const ACCESS_CODES = new Set([
-  "FORBIDDEN",
-  "NOT_FOUND",
-  "STREAM_MISMATCH",
-  "NO_STREAM_KEY",
-  "VALIDATION_ERROR",
-]);
-const BALANCE_CODES = new Set(["PAYMENT_REQUIRED", "INSUFFICIENT_BALANCE"]);
+const KEY_CODES = new Set(["NOT_FOUND", "STREAM_MISMATCH", "NO_STREAM_KEY", "VALIDATION_ERROR"]);
+// Foghorn refuses a negative prepaid balance with gRPC FailedPrecondition,
+// presented as FAILED_PRECONDITION. The page lists only push streams, so the
+// non-push FailedPrecondition denial cannot reach this branch.
+const BALANCE_CODES = new Set(["FAILED_PRECONDITION", "PAYMENT_REQUIRED"]);
 const CAPACITY_CODES = new Set([
   "UNAVAILABLE",
   "NO_DESTINATION",
@@ -32,7 +29,7 @@ const CAPACITY_CODES = new Set([
 const balanceFailure: GoLiveFailure = {
   title: "Your prepaid balance is spent",
   detail:
-    "New broadcasts are refused at €0. Top up your balance, then go live again. Streams already running keep going.",
+    "New broadcasts are refused at €0. Top up your balance, then go live again. Streams already running keep going, and stop if the balance falls below -€10.",
   actions: ["billing"],
 };
 
@@ -58,14 +55,29 @@ export function describeResolveFailure(code: string | null | undefined): GoLiveF
       actions: ["login"],
     };
   }
-  if (code && ACCESS_CODES.has(code)) {
+  if (code === "FORBIDDEN") {
+    return {
+      title: "This stream or account cannot broadcast right now",
+      detail:
+        "The stream's key may be inactive, or the account may be suspended or not allowed on this cluster. Check the stream's keys and your billing, then try again.",
+      actions: ["keys", "billing"],
+    };
+  }
+  if (code === "CONFLICT") {
+    return {
+      title: "This stream is already receiving video from another encoder",
+      detail: "Stop the other encoder, then go live again.",
+      actions: ["retry"],
+    };
+  }
+  if (code && KEY_CODES.has(code)) {
     return {
       title: "This stream's key was not accepted",
       detail: "Open the stream, check that it has an active key, then try again.",
       actions: ["keys", "retry"],
     };
   }
-  if (code && (BALANCE_CODES.has(code) || code.includes("BALANCE"))) return balanceFailure;
+  if (code && BALANCE_CODES.has(code)) return balanceFailure;
   if (code && CAPACITY_CODES.has(code)) return unreachableFailure;
   return {
     title: "Go Live could not find an ingest node",
