@@ -435,7 +435,9 @@ billing transition, including status, balances, credits and closing documents.
 ## Section: `accounts`
 
 The account section is the cross-service coordination surface. Each entry references a
-tenant, attaches users to it, and declares billing for that tenant.
+tenant and attaches users to it. An account entry carries no billing: a customer tenant's
+billing is declared once in `purser.customer_billing`, and validation refuses an
+account `billing.model` other than `none`.
 
 ### `kind: system_operator`
 
@@ -450,7 +452,6 @@ accounts:
         first_name: Platform
         last_name: Ops
         password_ref: { sops: gitops/secrets/ops.env, key: OPS_PASSWORD }
-    billing: none
 ```
 
 Operator accounts skip Purser by design. Commodore reconciles the user; tenant
@@ -672,7 +673,6 @@ accounts:
       - email: ops@example.com
         role: owner
         password_ref: { flag: bootstrap-admin-password }
-    billing: none
 ```
 
 ### With overlay — extra customer tenant + private cluster
