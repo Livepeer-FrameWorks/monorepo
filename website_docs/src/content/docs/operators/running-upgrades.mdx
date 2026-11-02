@@ -73,7 +73,9 @@ channels and supported upgrade sources.
    skipped.
 
 4. If the release declares required data migrations, `release apply` stops at the postdeploy
-   phase until they are complete. Run and verify each one, then rerun `release apply`:
+   phase until they are complete. Required data migrations of earlier releases that are still
+   pending are different: `release apply` runs those itself before it changes anything (see
+   [Preflight](#preflight)). Run and verify each of this release's, then rerun `release apply`:
 
    ```bash
    frameworks cluster data-migrate list --to-version vX.Y.Z
@@ -116,10 +118,12 @@ channels and supported upgrade sources.
 
 8. After the rollback window closes, apply any deferred contract migrations. `release apply` prints
    the command but never runs it. Contract migrations need a backup that started less than an hour
-   earlier and still matches the migration ledgers:
+   earlier and still matches the migration ledgers. The dry run without `--backup` refuses and
+   prints the `backup create` command for exactly the databases the contract phase changes:
 
    ```bash
-   frameworks cluster backup create --to /var/backups/frameworks --all
+   frameworks cluster migrate --phase contract --to-version vX.Y.Z --dry-run
+   frameworks cluster backup create --to /var/backups/frameworks --database <name> ...   # as printed
    frameworks cluster migrate --phase contract --to-version vX.Y.Z --dry-run --backup <printed path>
    frameworks cluster migrate --phase contract --to-version vX.Y.Z --backup <printed path> --yes
    ```
@@ -137,11 +141,33 @@ Before the first change, and under `--dry-run` too, `release apply` refuses to s
 - the CLI is below the release's minimum CLI version;
 - a platform service replica runs a version below a declared minimum source version, or a version
   that is not a release version;
-- an earlier release is unfinished: its postdeploy migrations are missing from a PostgreSQL,
-  YugabyteDB, or ClickHouse ledger, or its required data migrations are incomplete. The error
-  names the release to apply first. Databases this release creates are exempt;
+- an earlier release is unfinished in a way `release apply` cannot finish itself: its postdeploy
+  migrations are missing from a PostgreSQL, YugabyteDB, or ClickHouse ledger, or one of its
+  required data migrations is running, paused, unreadable, or unknown to the installed service
+  binary. The error names the release to apply first or the migration to resolve. Databases this
+  release creates are exempt;
 - a planned artifact does not resolve for its host's deploy mode and architecture;
 - a required operator input is missing from a service's rendered environment.
+
+A required data migration of an earlier release that is pending or failed, and that the installed
+service binary registers, does not refuse the release. The plan lists it as step 0, and
+`release apply` runs it before stage 1 through the installed binary, in catalog order, then checks
+that its state reads `completed`. An irreversible one needs `--backup` on `release apply`, with a
+backup that started less than an hour earlier; when it is missing, the refusal prints the
+`backup create` command for the databases involved. The dry run applies the same backup gate and
+runs the migration read-only. A failed run stops the release before anything of the new release
+is applied and names the migration:
+
+```bash
+frameworks cluster data-migrate status <service>.<id>
+```
+
+Fix the cause and rerun `release apply`.
+
+Every long step, migrations and data migrations included, runs under a progress watchdog instead of
+a fixed deadline: it is cancelled only after its stall window passes with no output and no
+milestone, and the error names the step and its last progress. See
+[Progress watchdog](/operators/cli-reference/#progress-watchdog) for each step's window.
 
 ### Stages
 
@@ -191,8 +217,11 @@ plan` and `release apply --dry-run` list every step and, per host, the role task
    and its Livepeer health and keystore validation must pass before the next host starts. A dry
    run reports these steps without running them.
 4. **Postdeploy migrations.** These refuse to run until the release's required data migrations
-   are complete. The Purser billing reconcile follows, then Commodore reconciles accounts
-   only on releases that declare that capability; stream declarations are left alone.
+   are complete. The Purser billing reconcile follows, then, from v0.3.14 on, Commodore
+   reconciles the bootstrap `accounts` (`commodore bootstrap --accounts-only`): declared users are
+   created or updated, stream declarations are left alone, and existing passwords are never
+   rewritten. The rendered accounts and their secret references are validated before the release
+   changes anything. See [Account passwords](#account-passwords).
 
 After postdeploy, `release apply` checks that every replica of the auth services and the web app
 runs the release's version, since a readiness check cannot detect an older web app bundle. It
@@ -213,14 +242,14 @@ gate that does not pass stops the release with the resume hint. A rerun skips co
 gates every remaining change on a healthy service first. `release plan` and `release apply
 --dry-run` list the hosts; the dry-run shows each host's pending role changes.
 
-| Service                               | Order and gates                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| YugabyteDB                            | The engine first, when a node runs another engine than the release pins: every master, then every tserver, then finalize (below). Then masters: a changed master restarts only after the masters confirm it can go down, and every master must be alive with one leader before the next node. Then every tserver whose applied configuration differs restarts, each only after the masters confirm the node can go down, and the next only once the node serves YSQL, its tserver is alive, and no tablet is under-replicated or leaderless. |
-| ClickHouse                            | Node by node. Before and after each change, every node must reach Keeper and have no replica that is read-only, lost its Keeper session, is more than 30 s behind, or has parts to fetch.                                                                                                                                                                                                                                                                                                                                                    |
-| Kafka                                 | Per cluster, controllers then brokers. Before and after each change, read through another broker: a quorum leader, every controller within 100 records of it, and no under-replicated or unavailable partition.                                                                                                                                                                                                                                                                                                                              |
-| vmagent, vmalert, vmauth              | A changed scrape config, rule file, or auth config is validated with `-dryRun` and reloaded; a new binary or unit restarts the process.                                                                                                                                                                                                                                                                                                                                                                                                      |
-| Control-plane nginx and Caddy         | A changed config is tested (`nginx -t`, `caddy validate`) before the reload; a failed test keeps the running config.                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| Chatwoot, Listmonk, Metabase, Grafana | The compose project is rendered and brought up, which recreates only the containers whose configuration changed.                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| Service                               | Order and gates                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| YugabyteDB                            | The engine first, when a node runs another engine than the release pins: every master, then every tserver, then finalize (below). Then masters: a changed master restarts only after the masters confirm it can go down, and every master must be alive with one leader before the next node. Then every tserver whose applied configuration differs restarts, each only after the masters confirm the node can go down, and the next only once the node serves YSQL, its tserver is alive, and no tablet is under-replicated or leaderless.                                                           |
+| ClickHouse                            | Node by node. Before and after each change, every node must reach Keeper and have no replica that is read-only, lost its Keeper session, is more than 30 s behind, or has parts to fetch.                                                                                                                                                                                                                                                                                                                                                                                                              |
+| Kafka                                 | Per cluster, controllers then brokers. Before and after each change, read through another broker: a quorum leader, every controller within 100 records of it, and no under-replicated or unavailable partition. A changed `server.properties`, logging or JMX exporter config, or systemd unit restarts that unit. systemd stops each unit with SIGTERM to its own process, so restarting a controller on a host that also runs a broker leaves the broker running. A controller leader's handover during its own graceful shutdown is planned and does not fail the quorum check of `cluster doctor`. |
+| vmagent, vmalert, vmauth              | A changed scrape config, rule file, or auth config is validated with `-dryRun` and reloaded; a new binary or unit restarts the process.                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| Control-plane nginx and Caddy         | A changed config is tested (`nginx -t`, `caddy validate`) before the reload; a failed test keeps the running config.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| Chatwoot, Listmonk, Metabase, Grafana | The compose project is rendered and brought up, which recreates only the containers whose configuration changed.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 
 When the release pins a new YugabyteDB engine, `release apply` upgrades it before converging any
 Yugabyte configuration, the same way `frameworks cluster upgrade yugabyte` does. Each node still on
@@ -238,6 +267,20 @@ that pins an older engine than a node runs is refused. `release apply --dry-run`
 On the first release that carries a new Yugabyte flag or unit, every node's master and tserver
 restart once through these gates. Kafka brokers keep at most `log.retention.bytes` (2 GiB) per
 partition in addition to each topic's `retention.ms`.
+
+### Account passwords
+
+The accounts step creates a declared user with the password its `password_ref` resolves to and
+never changes the password of an existing user. To rotate one, update the secret with
+`gitops/scripts/sops-env.sh set <file> <KEY> <VALUE>`, set `reset_credentials: true` on that user
+in the bootstrap overlay, and run the accounts reconcile with the reset allowed:
+
+```bash
+frameworks cluster control-plane reconcile --domain accounts --bootstrap-reset-credentials
+```
+
+Without `--bootstrap-reset-credentials`, `reset_credentials` is ignored for the password and other
+profile changes still apply. Remove `reset_credentials` again after the rotation.
 
 ### Rollout order within a service
 
@@ -453,7 +496,10 @@ with each database's ledger and reports pending migrations and checksum drift. S
 
 A release can require data migrations to complete before a later phase. `release apply`,
 `cluster upgrade`, `cluster migrate --phase postdeploy|contract`, and `cluster provision` check
-them and refuse to continue; none of them runs one. Run them with `cluster data-migrate`:
+them and refuse to continue. The one exception is `release apply`, which runs the pending required
+data migrations of earlier releases itself before it changes anything (see [Preflight](#preflight));
+the target release's own migrations still stop it at postdeploy. Run them with
+`cluster data-migrate`:
 
 | Command                           | Purpose                                         |
 | --------------------------------- | ----------------------------------------------- |
