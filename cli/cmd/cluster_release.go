@@ -423,7 +423,7 @@ func runReleaseApply(cmd *cobra.Command, rc *resolvedCluster, opts releaseApplyO
 	if priorErr != nil {
 		return priorErr
 	}
-	if backupErr := requirePriorDataMigrationBackups(cmd.Context(), cmd, rc, sshPool, priorDataMigrations, opts.dryRun); backupErr != nil {
+	if backupErr := requirePriorDataMigrationBackups(cmd.Context(), cmd, rc, sshPool, priorDataMigrations); backupErr != nil {
 		return backupErr
 	}
 

@@ -364,10 +364,10 @@ func migrationKeyList(keys []provisioner.MigrationKey) string {
 
 // requirePriorDataMigrationBackups applies the backup gate of every earlier-release data migration `release apply`
 // will run, before it changes anything: an irreversible one needs --backup on `release apply`, exactly as on
-// `data-migrate run`. A dry run needs no backup, because each migration runs in a read-only transaction.
-func requirePriorDataMigrationBackups(ctx context.Context, cmd *cobra.Command, rc *resolvedCluster, sshPool *ssh.Pool, runs []priorDataMigration, dryRun bool) error {
+// `data-migrate run`. The gate also runs under --dry-run, so the dry run refuses where the real run would.
+func requirePriorDataMigrationBackups(ctx context.Context, cmd *cobra.Command, rc *resolvedCluster, sshPool *ssh.Pool, runs []priorDataMigration) error {
 	for _, run := range runs {
-		if err := requireDataMigrationBackup(ctx, cmd, rc, sshPool, run.service, run.id, dryRun); err != nil {
+		if err := requireDataMigrationBackup(ctx, cmd, rc, sshPool, run.service, run.id, false); err != nil {
 			return fmt.Errorf("[preflight] release apply runs the required data migration %s of release %s first, and its backup gate refused; pass --backup to release apply. Nothing was changed: %w", run.key(), run.release, err)
 		}
 	}

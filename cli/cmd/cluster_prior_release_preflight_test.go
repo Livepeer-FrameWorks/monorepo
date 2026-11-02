@@ -187,29 +187,33 @@ func TestReleaseApplyRunsPendingPriorDataMigrationFirst(t *testing.T) {
 func TestReleaseApplyDryRunPreviewsPendingPriorDataMigration(t *testing.T) {
 	h := &releaseApplyHarness{pendingDataID: harnessPendingDataMigration}
 	h.install(t)
-	stub := &stubPriorDataMigrationRun{h: h, irreversible: true}
+	stub := &stubPriorDataMigrationRun{h: h}
 	stub.install(t)
 	_, err := h.apply(t, true)
 	if !h.mutationCalled || !errors.Is(err, errHarnessStoppedAtMutation) {
-		t.Fatalf("err = %v; a dry run must preview the earlier data migration without a backup and continue", err)
+		t.Fatalf("err = %v; a dry run must preview the earlier data migration and continue", err)
 	}
 	if len(stub.runs) != 1 || !slices.Contains(stub.runs[0], "--dry-run") {
 		t.Fatalf("runs = %v; want one read-only run", stub.runs)
 	}
 }
 
+// The dry run refuses an irreversible earlier data migration without --backup exactly as the real run does, so a
+// green dry run means the real apply passes the same gate.
 func TestReleaseApplyGatesIrreversiblePriorDataMigrationOnBackup(t *testing.T) {
-	h := &releaseApplyHarness{pendingDataID: harnessPendingDataMigration}
-	h.install(t)
-	stub := &stubPriorDataMigrationRun{h: h, irreversible: true}
-	stub.install(t)
-	_, err := h.apply(t, false)
-	if h.mutationCalled || len(stub.runs) != 0 {
-		t.Fatalf("an irreversible earlier data migration ran or the release mutated without a backup (runs=%v, err=%v)", stub.runs, err)
-	}
-	if err == nil || !errors.Is(err, backup.ErrBackupRequired) || !strings.Contains(err.Error(), "commodore."+harnessPendingDataMigration) ||
-		!strings.Contains(err.Error(), "--database commodore") {
-		t.Fatalf("err = %v; want the backup gate refusal naming the migration and the database to back up", err)
+	for _, dryRun := range []bool{false, true} {
+		h := &releaseApplyHarness{pendingDataID: harnessPendingDataMigration}
+		h.install(t)
+		stub := &stubPriorDataMigrationRun{h: h, irreversible: true}
+		stub.install(t)
+		_, err := h.apply(t, dryRun)
+		if h.mutationCalled || len(stub.runs) != 0 {
+			t.Fatalf("dry-run=%v: an irreversible earlier data migration ran or the release mutated without a backup (runs=%v, err=%v)", dryRun, stub.runs, err)
+		}
+		if err == nil || !errors.Is(err, backup.ErrBackupRequired) || !strings.Contains(err.Error(), "commodore."+harnessPendingDataMigration) ||
+			!strings.Contains(err.Error(), "--database commodore") {
+			t.Fatalf("dry-run=%v: err = %v; want the backup gate refusal naming the migration and the database to back up", dryRun, err)
+		}
 	}
 }
 
