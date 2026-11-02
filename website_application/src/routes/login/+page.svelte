@@ -186,7 +186,8 @@
         <div class="flex items-center gap-3">
           <SvelteComponent class="w-5 h-5 text-tokyo-night-blue" />
           <span class="text-muted-foreground"
-            >In the pipeline: multi-stream compositing with PiP and overlays</span
+            >StreamCrafter browser studio with scenes, PiP and overlays (beta); cloud production in
+            the pipeline</span
           >
         </div>
         <div class="flex items-center gap-3">
