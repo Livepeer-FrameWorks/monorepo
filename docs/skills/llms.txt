@@ -5,9 +5,12 @@
 ## Product
 
 - [FrameWorks](https://frameworks.network/): Live streaming SaaS with customer-operated MistServer/Helmsman edge capacity attached to the FrameWorks-operated Foghorn, federation, storage, DNS/TLS, billing, analytics, and control plane.
-- [Pricing](https://frameworks.network/pricing): Beta pricing for free, supporter, production, pay-as-you-go, and enterprise streaming workloads.
-- [About](https://frameworks.network/about): Mission, architecture direction, and operating principles behind FrameWorks sovereign streaming infrastructure.
-- [Contact](https://frameworks.network/contact): Sales, deployment, community, and support entry points for operators evaluating FrameWorks.
+- [Showcase](https://frameworks.network/showcase): What ships today, what is up next, and what is further out, generated from the same feature registry as the docs feature matrix.
+- [Stream test](https://frameworks.network/stream-test): Play an HLS, DASH, WHEP, or MistServer stream in the browser, or publish to a WHIP endpoint with StreamCrafter.
+- [Network explorer](https://frameworks.network/network): Public map of FrameWorks infrastructure and the Livepeer orchestrators that transcode its streams, with regional prices and performance.
+- [Pricing](https://frameworks.network/pricing): Beta pricing for the hosted Free tier, Supporter, Developer, Production, pay-as-you-go, and Enterprise.
+- [About](https://frameworks.network/about): Mission, architecture, and history of FrameWorks and the MistServer team behind it.
+- [Contact](https://frameworks.network/contact): Reach the video engineers for projects, trial usage, custom pricing, or a shared Slack or WhatsApp channel.
 - [Documentation](https://logbook.frameworks.network/): Operator and builder docs for streams, self-hosting, routing, billing, agent access, and migration workflows.
 
 ## Docs
@@ -16,8 +19,11 @@
 - [Skill File](https://frameworks.network/SKILL.md): Agent quick-start guide
 - [Agent Overview](https://logbook.frameworks.network/agents/overview): Discovery, auth, and capabilities
 - [Skipper Video Consultant](https://logbook.frameworks.network/agents/skipper): RAG-grounded streaming expertise
-- [StreamCrafter](https://logbook.frameworks.network/builders/ingest): Browser publishing over WHIP from camera and screen share, with a client-side compositor and audio mixing. React, Svelte, Web Components, and vanilla packages
+- [Go live from your browser](https://logbook.frameworks.network/builders/go-live-browser): Stream from the dashboard with StreamCrafter, with your camera, screen share, and layouts in one browser tab and no encoder to install
+- [StreamCrafter](https://logbook.frameworks.network/builders/ingest): Browser publishing over WHIP from cameras, screen shares, and media files, with scenes, layers, overlays, transitions, and audio mixing. React, Svelte, Web Components, and vanilla packages. Beta: the SDK will change substantially as cloud production arrives
 - [Multistreaming](https://logbook.frameworks.network/builders/multistreaming): Native MistServer push from the origin node to Twitch, YouTube, Kick, Facebook, X, and custom RTMP, RTMPS, or SRT destinations, with per-destination status and errors
+- [Feature matrix](https://logbook.frameworks.network/platform/feature-matrix): Every platform feature with its status, generated from the feature registry
+- [Roadmap](https://logbook.frameworks.network/roadmap): Planned work by area, marked Now, Next, or Later
 
 ## Migrating
 
@@ -28,6 +34,8 @@ FrameWorks is an alternative to managed video APIs like Mux, Bunny Stream, and L
 - [Migrate from Livepeer Studio](https://logbook.frameworks.network/migrate/livepeer-studio): API shape and access-control differences
 - [Migrate from Bunny Stream](https://logbook.frameworks.network/migrate/bunny-stream): VOD carries over, live capabilities open up
 - [Migrate from MistServer](https://logbook.frameworks.network/migrate/mistserver): Add a control plane, or federate edge capacity
+- [Migrate from Castr](https://logbook.frameworks.network/migrate/castr): Live streams, destinations, embeds, and recordings, with what is up next
+- [Migrate from Flussonic](https://logbook.frameworks.network/migrate/flussonic): Keep your hardware as FrameWorks edges, self-host the full stack, or move to the hosted platform
 - [Migrate from any video API](https://logbook.frameworks.network/migrate/generic): The universal checklist
 
 ## API
