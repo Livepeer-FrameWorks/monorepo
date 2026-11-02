@@ -18,7 +18,7 @@ FrameWorks exposes an MCP (Model Context Protocol) server for AI agent integrati
 ## Endpoint
 
 ```
-%GATEWAY_URL%/mcp
+http://localhost:18000/mcp
 ```
 
 Discovery metadata: `/.well-known/mcp.json`
@@ -42,7 +42,7 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) o
 {
   "mcpServers": {
     "frameworks": {
-      "url": "%GATEWAY_URL%/mcp",
+      "url": "http://localhost:18000/mcp",
       "headers": {
         "Authorization": "Bearer YOUR_API_TOKEN"
       }
@@ -56,7 +56,7 @@ Restart Claude Desktop after saving.
 ### Claude Code CLI
 
 ```bash
-claude mcp add --transport http frameworks %GATEWAY_URL%/mcp
+claude mcp add --transport http frameworks http://localhost:18000/mcp
 ```
 
 ### Other Clients
@@ -201,13 +201,16 @@ Always read this first. Returns:
 does not make the account broken. `balance_cents` is the settled
 balance, `reserved_balance_cents` is already committed to active usage, and `available_balance_cents`
 is what remains spendable. Billable tool preflights use the available balance.
-At €0 or below, running streams and their viewers continue but new rated work,
-new streams and new viewers are refused; below -€10 the tenant is suspended and
-running sessions stop. A suspended or closed account reports the
-`ACCOUNT_SUSPENDED` blocker.
+At an available balance of €0 or below, running streams and their viewers
+continue but new rated work, new streams and new viewers are refused. When the
+settled balance falls below -€10 the tenant is suspended and running sessions
+stop. A suspended or closed account reports the `ACCOUNT_SUSPENDED` blocker, as
+does an account whose FrameWorks arrangement has ended until Purser moves it to
+its next plan.
 
-`billing` also carries the plan lifecycle when one applies: `pending_tier`,
-`pending_reason`, `pending_effective_at` and `pending_tier_state` (`scheduled`,
+`billing` also carries the plan lifecycle when one applies: `pending_tier` (the
+plan's name) and `pending_tier_id`, `pending_reason`, `pending_effective_at` and
+`pending_tier_state` (`scheduled`,
 `final` or `applying`) for a staged plan change; `free_fallback` (`reason`
 `payment_failed` or `cancelled`, `at`, and `stage` `scheduled`, `applying` or
 `moved`) for a move to Free; `billing_arrangement` for a FrameWorks arrangement
@@ -654,26 +657,26 @@ FrameWorks publishes metadata following the [Agent Skills](https://agentskills.i
 
 | URL                                                                                           | Standard     | Purpose                                                                 |
 | --------------------------------------------------------------------------------------------- | ------------ | ----------------------------------------------------------------------- |
-| [`/.well-known/mcp.json`](%GATEWAY_URL%/.well-known/mcp.json)                                 | MCP          | Server discovery: endpoint, transports, auth schemes, public operations |
-| [`/.well-known/did.json`](%GATEWAY_URL%/.well-known/did.json)                                 | W3C DID      | Decentralized identity and service endpoints                            |
-| [`/.well-known/oauth-protected-resource`](%GATEWAY_URL%/.well-known/oauth-protected-resource) | RFC 9728     | OAuth resource metadata with wallet and x402 extensions                 |
-| [`/.well-known/security.txt`](%GATEWAY_URL%/.well-known/security.txt)                         | RFC 9116     | Security contact and advisories                                         |
-| [`/skill.json`](%MARKETING_URL%/skill.json)                                                   | Agent Skills | Machine-readable skill metadata (name, auth, endpoints, keywords)       |
-| [`/SKILL.md`](%MARKETING_URL%/SKILL.md)                                                       | Agent Skills | Human/LLM-readable quick-start guide                                    |
-| [`/llms.txt`](%MARKETING_URL%/llms.txt)                                                       | Emerging     | LLM-friendly documentation index                                        |
+| [`/.well-known/mcp.json`](http://localhost:18000/.well-known/mcp.json)                                 | MCP          | Server discovery: endpoint, transports, auth schemes, public operations |
+| [`/.well-known/did.json`](http://localhost:18000/.well-known/did.json)                                 | W3C DID      | Decentralized identity and service endpoints                            |
+| [`/.well-known/oauth-protected-resource`](http://localhost:18000/.well-known/oauth-protected-resource) | RFC 9728     | OAuth resource metadata with wallet and x402 extensions                 |
+| [`/.well-known/security.txt`](http://localhost:18000/.well-known/security.txt)                         | RFC 9116     | Security contact and advisories                                         |
+| [`/skill.json`](https://frameworks.network/skill.json)                                                   | Agent Skills | Machine-readable skill metadata (name, auth, endpoints, keywords)       |
+| [`/SKILL.md`](https://frameworks.network/SKILL.md)                                                       | Agent Skills | Human/LLM-readable quick-start guide                                    |
+| [`/llms.txt`](https://frameworks.network/llms.txt)                                                       | Emerging     | LLM-friendly documentation index                                        |
 | `/robots.txt`                                                                                 | Standard     | Crawler directives (allows AI bots)                                     |
 
 ### skill.json
 
 The primary machine-readable entry point. Compatible with [OpenClaw](https://docs.openclaw.ai/tools/skills), Claude Code, Cursor, Gemini CLI, and other Agent Skills consumers.
 
-> **Live file:** [`%MARKETING_URL%/skill.json`](%MARKETING_URL%/skill.json)
+> **Live file:** [`https://frameworks.network/skill.json`](https://frameworks.network/skill.json)
 
 ### MCP Discovery
 
 Agents that speak MCP can use `/.well-known/mcp.json` directly for full server discovery — endpoint, transports, auth schemes, public operations, and capabilities.
 
-> **Live file:** [`%GATEWAY_URL%/.well-known/mcp.json`](%GATEWAY_URL%/.well-known/mcp.json)
+> **Live file:** [`http://localhost:18000/.well-known/mcp.json`](http://localhost:18000/.well-known/mcp.json)
 
 ### Local Skill Installation
 
@@ -682,18 +685,18 @@ Install as a local skill for coding agents:
 ```bash
 # Claude Code
 mkdir -p ~/.claude/skills/frameworks-network
-curl -o ~/.claude/skills/frameworks-network/SKILL.md %MARKETING_URL%/SKILL.md
+curl -o ~/.claude/skills/frameworks-network/SKILL.md https://frameworks.network/SKILL.md
 
 # OpenClaw (via ClawHub)
 clawhub install frameworks-network
 
 # OpenClaw (manual)
 mkdir -p ~/.openclaw/skills/frameworks-network
-curl -o ~/.openclaw/skills/frameworks-network/SKILL.md %MARKETING_URL%/SKILL.md
+curl -o ~/.openclaw/skills/frameworks-network/SKILL.md https://frameworks.network/SKILL.md
 
 # Gemini CLI / Cursor / other Agent Skills consumers
 mkdir -p ./skills/frameworks-network
-curl -o ./skills/frameworks-network/SKILL.md %MARKETING_URL%/SKILL.md
+curl -o ./skills/frameworks-network/SKILL.md https://frameworks.network/SKILL.md
 ```
 
 Once installed, the agent can activate the skill on demand to connect to and operate FrameWorks.
@@ -951,7 +954,7 @@ Call `update_billing_details` with the listed fields, then request fresh payment
 ```json
 {
   "code": "INSUFFICIENT_BALANCE",
-  "message": "Available balance is 0 cents (0 settled, 0 reserved). At €0 or below, running streams and their viewers continue but new streams, new viewers and reconnects are refused; below -€10 running sessions stop. Top up to run billable operations.",
+  "message": "Available balance is 0 cents (0 settled, 0 reserved). At €0 or below, running streams and their viewers continue but new streams, new viewers and reconnects are refused; once the settled balance is below -€10 running sessions stop. Top up to run billable operations.",
   "resolution": "Call topup_balance tool to add credits, OR pay via x402 (USDC on Base/Arbitrum)",
   "tool": "topup_balance",
   "x402_accepts": [
@@ -993,12 +996,14 @@ Prepaid usage deductions can move an account toward zero or negative balance. Mo
 | `estimated_hours_left`      | Time until the available balance is depleted |
 | `live_metrics`              | Current operational usage context            |
 
-| Available balance | Effect                                                                                                                                                     |
-| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Above €0          | Rated work runs normally                                                                                                                                   |
-| €0 or below       | Running streams and their viewers continue. New rated work, new streams and new viewers are refused, and a disconnected viewer or encoder cannot reconnect |
-| Below -€10        | The tenant is suspended and running streams and sessions stop                                                                                              |
+| Balance                       | Effect                                                                                                                                                     |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Available balance above €0    | Rated work runs normally                                                                                                                                   |
+| Available balance €0 or below | Running streams and their viewers continue. New rated work, new streams and new viewers are refused, and a disconnected viewer or encoder cannot reconnect |
+| Settled balance below -€10    | The tenant is suspended and running streams and sessions stop until a top-up brings it back                                                                |
 
+Refusal uses the available balance; suspension uses the settled balance, so
+usage still reserved by running sessions does not suspend an account on its own.
 The rest of the authenticated platform remains usable at €0. Top up proactively before long-running work.
 
 
@@ -1101,7 +1106,7 @@ Agents authenticate with an EVM wallet signature. First-time wallets are auto-pr
 ## How It Works
 
 1. Agent creates or loads an EVM wallet.
-2. Agent requests a challenge from `POST %GATEWAY_URL%/auth/wallet-challenge` or the public MCP tool `request_wallet_challenge` with its address and chain ID.
+2. Agent requests a challenge from `POST http://localhost:18000/auth/wallet-challenge` or the public MCP tool `request_wallet_challenge` with its address and chain ID.
 3. Agent signs the returned message verbatim using EIP-191 `personal_sign`.
 4. Agent exchanges it once through `POST /auth/wallet-login`, GraphQL `walletLogin`, or MCP wallet headers.
 5. Server atomically consumes the challenge and creates a prepaid tenant if this is a new wallet.
@@ -1138,7 +1143,7 @@ import { privateKeyToAccount } from "viem/accounts";
 const account = privateKeyToAccount("0x...");
 const client = createWalletClient({ account, transport: http() });
 
-const challenge = await fetch("%GATEWAY_URL%/auth/wallet-challenge", {
+const challenge = await fetch("http://localhost:18000/auth/wallet-challenge", {
   method: "POST",
   headers: { "content-type": "application/json" },
   body: JSON.stringify({ address: account.address, chain_id: 1 }),
@@ -1157,7 +1162,7 @@ import requests
 
 wallet = Account.from_key(os.environ["FRAMEWORKS_WALLET_PRIVKEY"])
 challenge = requests.post(
-    "%GATEWAY_URL%/auth/wallet-challenge",
+    "http://localhost:18000/auth/wallet-challenge",
     json={"address": wallet.address, "chain_id": 1},
 ).json()
 
@@ -1205,7 +1210,7 @@ If you prefer a traditional token flow:
 {
   "mcpServers": {
     "frameworks": {
-      "url": "%GATEWAY_URL%/mcp",
+      "url": "http://localhost:18000/mcp",
       "headers": {
         "Authorization": "Bearer YOUR_API_TOKEN"
       }
@@ -1822,7 +1827,7 @@ https://logbook.frameworks.network/blog/showcase-what-ships-today
 
 An event team has a product launch in six weeks. They need a presenter on camera with slides beside them, the stream on their own site and on YouTube, and a recording afterwards. Later in the year, they would like to switch between remote guests from a control room. They open a video platform's website to find out which of those things they can do today. Most feature pages make that hard to answer, because a shipped feature and a planned one read the same.
 
-Ours had that problem too. We have replaced the guesswork with a [showcase page](%MARKETING_URL%/showcase) that sorts FrameWorks into three groups: shipping today, in the pipeline, and what follows on the roadmap.
+Ours had that problem too. We have replaced the guesswork with a [showcase page](https://frameworks.network/showcase) that sorts FrameWorks into three groups: shipping today, in the pipeline, and what follows on the roadmap.
 
 ## What you can use today
 
@@ -1850,7 +1855,7 @@ If you need something from these groups sooner, tell us. It changes what we buil
 
 Whichever group your project falls into, you work directly with the video engineers who have built MistServer for more than 15 years. That help covers your whole media pipeline, including the encoders and contribution before FrameWorks and the players and delivery after it. If a trial needs more usage than a plan allows, or a project needs different pricing, ask.
 
-The [showcase page](%MARKETING_URL%/showcase) has the full list, and the [Go Live guide](/builders/go-live-browser) walks through a first broadcast from the browser.
+The [showcase page](https://frameworks.network/showcase) has the full list, and the [Go Live guide](/builders/go-live-browser) walks through a first broadcast from the browser.
 
 
 ---
@@ -2186,7 +2191,7 @@ The webapp's `/analytics`, `/analytics/audience`, `/analytics/usage`, and `/stre
 <Aside type="note">
   GraphQL analytics queries are tenant-scoped via the JWT — you don't need to pass a tenant ID, and
   you can't query across tenants. Bounded time ranges and pagination are enforced server-side; see
-  field definitions in the [GraphQL playground](%APP_URL%/developer/playground).
+  field definitions in the [GraphQL playground](https://chartroom.frameworks.network/developer/playground).
 </Aside>
 
 <Aside type="note" title="Cluster data is scoped by intent">
@@ -2520,7 +2525,7 @@ Agents call analytics through diagnostic tools rather than direct GraphQL — se
 
 ## Related
 
-- [GraphQL playground](%APP_URL%/developer/playground) — try these queries against your own tenant
+- [GraphQL playground](https://chartroom.frameworks.network/developer/playground) — try these queries against your own tenant
 - [Platform capabilities](/platform/feature-matrix) — where analytics is exposed
 
 
@@ -2540,13 +2545,13 @@ GraphQL API for stream management, key rotation, analytics, and all platform ope
 All API interactions are performed through a single GraphQL endpoint. This allows you to fetch exactly the data you need in a single request.
 
 ```
-%GATEWAY_URL%/graphql
+http://localhost:18000/graphql
 ```
 
 Subscriptions use WebSocket:
 
 ```
-%GATEWAY_WS_URL%
+ws://localhost:18000/graphql/ws
 ```
 
 All operations go through this single endpoint. Queries read data, mutations change it.
@@ -2939,7 +2944,7 @@ The examples below show the general pattern for calling the API from common lang
 **curl:**
 
 ```bash
-curl -X POST %GATEWAY_URL%/graphql \
+curl -X POST http://localhost:18000/graphql \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer YOUR_TOKEN" \
   -d '{"query": "{ streamsConnection(page: { first: 5 }) { edges { node { id name playbackId } } } }"}'
@@ -2950,7 +2955,7 @@ curl -X POST %GATEWAY_URL%/graphql \
 ```javascript
 import { GraphQLClient, gql } from "graphql-request";
 
-const client = new GraphQLClient("%GATEWAY_URL%/graphql", {
+const client = new GraphQLClient("http://localhost:18000/graphql", {
   headers: { Authorization: "Bearer YOUR_TOKEN" },
 });
 
@@ -2975,7 +2980,7 @@ const data = await client.request(gql`
 import httpx
 
 resp = httpx.post(
-    "%GATEWAY_URL%/graphql",
+    "http://localhost:18000/graphql",
     headers={"Authorization": "Bearer YOUR_TOKEN"},
     json={"query": "{ streamsConnection(page: { first: 5 }) { edges { node { id name playbackId } } } }"},
 )
@@ -2988,7 +2993,7 @@ print(resp.json()["data"])
 body, _ := json.Marshal(map[string]string{
     "query": `{ streamsConnection(page: { first: 5 }) { edges { node { id name playbackId } } } }`,
 })
-req, _ := http.NewRequest("POST", "%GATEWAY_URL%/graphql", bytes.NewReader(body))
+req, _ := http.NewRequest("POST", "http://localhost:18000/graphql", bytes.NewReader(body))
 req.Header.Set("Content-Type", "application/json")
 req.Header.Set("Authorization", "Bearer YOUR_TOKEN")
 resp, _ := http.DefaultClient.Do(req)
@@ -5703,6 +5708,7 @@ A billing arrangement FrameWorks set up for an account. Only the terms the accou
 - **collection**: `String!` — How invoices are collected: provider (Stripe or Mollie) or invoice (FrameWorks sends invoices to pay by bank transfer).
 - **expiresAt**: `Time` ([Time](/builders/api-schema/shared/#time)) — When the arrangement ends. Null runs until FrameWorks ends it.
 - **fallbackTierName**: `String` — Plan the account returns to when the arrangement ends, when it is not the current plan.
+- **fallbackTierDisplayName**: `String` — Display name of fallbackTierName.
 
 ## BillingDetails
 
@@ -5729,6 +5735,25 @@ Contractual and enforced properties of a billing tier. Usage limits are entitlem
 - **sla**: `Boolean!` — Whether SLA guarantees apply.
 - **processingCustomizable**: `Boolean!` — Whether the tenant may override the tier&#39;s processing profiles.
 
+## BillingLifecycle
+
+**object**
+
+A tenant&#39;s plan lifecycle, as its billing page shows it.
+
+- **billingStatus**: `String!` — Subscription status: active, past_due, pending_cancellation, suspended or none.
+- **collectionReady**: `Boolean!` — True only after a reusable postpaid provider subscription or mandate is confirmed.
+- **collectionProvider**: `String` — Confirmed postpaid collection provider, when ready.
+- **effectiveBasePrice**: `String!` — Monthly base fee in EUR this account pays after any arrangement, as a decimal string.
+- **operatorGrant**: `BillingArrangement` ([BillingArrangement](/builders/api-schema/billing-types/#billingarrangement)) — Billing arrangement FrameWorks set up for this account, such as a trial or a custom price, while it is in force.
+- **freeFallback**: `FreeFallback` ([FreeFallback](/builders/api-schema/billing-types/#freefallback)) — Scheduled move to the Free plan after a failed renewal payment or a cancellation.
+- **pendingTier**: `BillingTier` ([BillingTier](/builders/api-schema/billing-types/#billingtier)) — Plan the subscription changes to, when a change is scheduled or being confirmed.
+- **pendingEffectiveAt**: `Time` ([Time](/builders/api-schema/shared/#time)) — When a scheduled downgrade takes effect.
+- **pendingReason**: `PendingTierReason` ([PendingTierReason](/builders/api-schema/billing-types/#pendingtierreason)) — Why pendingTier is set.
+- **pendingTierState**: `PendingTierState` ([PendingTierState](/builders/api-schema/billing-types/#pendingtierstate)) — Progress of pendingTier while pendingReason is DOWNGRADE.
+- **downgradeEffectiveAt**: `Time` ([Time](/builders/api-schema/shared/#time)) — When a downgrade chosen now takes effect: the end of the current billing period.
+- **freeMoveFinalAt**: `Time` ([Time](/builders/api-schema/shared/#time)) — For a Stripe- or Mollie-billed subscription: a move to Free chosen now can be undone until this time, when the payment subscription is cancelled. Null when no payment subscription has to be cancelled.
+
 ## BillingStatus
 
 **object**
@@ -5747,10 +5772,6 @@ Contractual and enforced properties of a billing tier. Usage limits are entitlem
 - **currency**: `String!`
 - **liveUsage**: `LiveUsageSummary!` ([LiveUsageSummary](/builders/api-schema/billing-types/#liveusagesummary))
 - **invoicePreview**: `Invoice` ([Invoice](/builders/api-schema/billing-types/#invoice))
-- **operatorGrant**: `BillingArrangement` ([BillingArrangement](/builders/api-schema/billing-types/#billingarrangement)) — Billing arrangement FrameWorks set up for this account, such as a trial or a custom price, while it is in force.
-- **effectiveBasePrice**: `String!` — Monthly base fee in EUR this account pays after any arrangement, as a decimal string.
-- **freeFallback**: `FreeFallback` ([FreeFallback](/builders/api-schema/billing-types/#freefallback)) — Scheduled move to the Free plan after a failed renewal payment or a cancellation.
-- **pendingTierState**: `PendingTierState` ([PendingTierState](/builders/api-schema/billing-types/#pendingtierstate)) — Progress of subscription.pendingTier while subscription.pendingReason is downgrade.
 
 ## BillingTier
 
@@ -6241,6 +6262,16 @@ Payment processing status.
 - `CONFIRMED` — Payment successfully processed.
 - `FAILED` — Payment failed or declined.
 
+## PendingTierReason
+
+**enum**
+
+Why a subscription has a pending plan.
+
+- `DOWNGRADE` — A downgrade scheduled with changeBillingTier for the end of the period.
+- `TIER_UPGRADE` — A paid upgrade whose payment is being confirmed.
+- `STRIPE_CHECKOUT` — A Stripe checkout awaiting payment.
+
 ## PendingTierState
 
 **enum**
@@ -6366,7 +6397,7 @@ Stripe Checkout Session - redirect URL for hosted checkout.
 - **billingModel**: `String!`
 - **pendingTier**: `BillingTier` ([BillingTier](/builders/api-schema/billing-types/#billingtier))
 - **pendingEffectiveAt**: `Time` ([Time](/builders/api-schema/shared/#time))
-- **pendingReason**: `String` — Why pendingTier is set: downgrade (applies at pendingEffectiveAt; see BillingStatus.pendingTierState), tier_upgrade (a paid upgrade being confirmed) or stripe_checkout (a checkout awaiting payment).
+- **pendingReason**: `String` — Why pendingTier is set: downgrade (applies at pendingEffectiveAt; see BillingLifecycle.pendingTierState), tier_upgrade (a paid upgrade being confirmed) or stripe_checkout (a checkout awaiting payment).
 - **presentmentCurrency**: `Currency!` ([Currency](/builders/api-schema/billing-types/#currency)) — Currency the tenant is invoiced and charged in (EUR, USD, GBP), derived from the billing country. The prepaid ledger is always EUR.
 - **createdAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
 - **updatedAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
@@ -6514,6 +6545,22 @@ billingDetails: BillingDetails
 | Operation | TypeScript | Go | Python |
 | --- | --- | --- | --- |
 | GetBillingDetails | `GetBillingDetailsDocument` | `GetBillingDetails` | `get_billing_details` |
+
+### Query.billingLifecycle
+
+The current tenant&#39;s plan lifecycle: a FrameWorks arrangement, a scheduled move to Free and how far a scheduled plan change has progressed.
+
+```graphql
+billingLifecycle: BillingLifecycle
+```
+
+**Returns:** `BillingLifecycle` ([BillingLifecycle](/builders/api-schema/billing-types/#billinglifecycle))
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetBillingLifecycle | `GetBillingLifecycleDocument` | `GetBillingLifecycle` | `get_billing_lifecycle` |
 
 ### Query.billingStatus
 
@@ -7029,7 +7076,7 @@ updateBillingDetails(
 
 ## Types
 
-- [Billing and usage types](/builders/api-schema/billing-types/): [BalanceTransaction](/builders/api-schema/billing-types/#balancetransaction), [BalanceTransactionEdge](/builders/api-schema/billing-types/#balancetransactionedge), [BalanceTransactionsConnection](/builders/api-schema/billing-types/#balancetransactionsconnection), [BillingAddress](/builders/api-schema/billing-types/#billingaddress), [BillingAddressInput](/builders/api-schema/billing-types/#billingaddressinput), [BillingArrangement](/builders/api-schema/billing-types/#billingarrangement), [BillingDetails](/builders/api-schema/billing-types/#billingdetails), [BillingFeatures](/builders/api-schema/billing-types/#billingfeatures), [BillingStatus](/builders/api-schema/billing-types/#billingstatus), [BillingTier](/builders/api-schema/billing-types/#billingtier), [CardPaymentProvider](/builders/api-schema/billing-types/#cardpaymentprovider), [CardTopupResult](/builders/api-schema/billing-types/#cardtopupresult), [ChangeBillingTierPayload](/builders/api-schema/billing-types/#changebillingtierpayload), [ChangeBillingTierResult](/builders/api-schema/billing-types/#changebillingtierresult), [CostEntry](/builders/api-schema/billing-types/#costentry), [CountryMetrics](/builders/api-schema/billing-types/#countrymetrics), [CreateCardTopupInput](/builders/api-schema/billing-types/#createcardtopupinput), [CreateCryptoTopupInput](/builders/api-schema/billing-types/#createcryptotopupinput), [CreatePaymentInput](/builders/api-schema/billing-types/#createpaymentinput), [CreatePaymentResult](/builders/api-schema/billing-types/#createpaymentresult), [CryptoAsset](/builders/api-schema/billing-types/#cryptoasset), [CryptoTopupResult](/builders/api-schema/billing-types/#cryptotopupresult), [CryptoTopupStatus](/builders/api-schema/billing-types/#cryptotopupstatus), [Currency](/builders/api-schema/billing-types/#currency), [CurrencyConversion](/builders/api-schema/billing-types/#currencyconversion), [EntitlementEntry](/builders/api-schema/billing-types/#entitlemententry), [FreeFallback](/builders/api-schema/billing-types/#freefallback), [FreeFallbackReason](/builders/api-schema/billing-types/#freefallbackreason), [FreeFallbackStage](/builders/api-schema/billing-types/#freefallbackstage), [Invoice](/builders/api-schema/billing-types/#invoice), [InvoiceEdge](/builders/api-schema/billing-types/#invoiceedge), [InvoicePayment](/builders/api-schema/billing-types/#invoicepayment), [InvoicePaymentEdge](/builders/api-schema/billing-types/#invoicepaymentedge), [InvoicePaymentsConnection](/builders/api-schema/billing-types/#invoicepaymentsconnection), [InvoiceStatus](/builders/api-schema/billing-types/#invoicestatus), [InvoicesConnection](/builders/api-schema/billing-types/#invoicesconnection), [LineItem](/builders/api-schema/billing-types/#lineitem), [LiveUsageSummary](/builders/api-schema/billing-types/#liveusagesummary), [MollieFirstPayment](/builders/api-schema/billing-types/#molliefirstpayment), [MollieFirstPaymentResult](/builders/api-schema/billing-types/#molliefirstpaymentresult), [MollieMandate](/builders/api-schema/billing-types/#molliemandate), [MollieSubscription](/builders/api-schema/billing-types/#molliesubscription), [MollieSubscriptionResult](/builders/api-schema/billing-types/#molliesubscriptionresult), [Money](/builders/api-schema/billing-types/#money), [Payment](/builders/api-schema/billing-types/#payment), [PaymentMethod](/builders/api-schema/billing-types/#paymentmethod), [PaymentStatus](/builders/api-schema/billing-types/#paymentstatus), [PendingTierState](/builders/api-schema/billing-types/#pendingtierstate), [PrepaidBalance](/builders/api-schema/billing-types/#prepaidbalance), [PricingRule](/builders/api-schema/billing-types/#pricingrule), [PromoteToPaidPayload](/builders/api-schema/billing-types/#promotetopaidpayload), [PromoteToPaidResult](/builders/api-schema/billing-types/#promotetopaidresult), [StripeBillingPortalResult](/builders/api-schema/billing-types/#stripebillingportalresult), [StripeBillingPortalSession](/builders/api-schema/billing-types/#stripebillingportalsession), [StripeCheckoutResult](/builders/api-schema/billing-types/#stripecheckoutresult), [StripeCheckoutSession](/builders/api-schema/billing-types/#stripecheckoutsession), [SubmitX402PaymentResult](/builders/api-schema/billing-types/#submitx402paymentresult), [TenantSubscription](/builders/api-schema/billing-types/#tenantsubscription), [TenantUsage](/builders/api-schema/billing-types/#tenantusage), [UpdateBillingDetailsInput](/builders/api-schema/billing-types/#updatebillingdetailsinput), [UsageAggregate](/builders/api-schema/billing-types/#usageaggregate), [UsageEntry](/builders/api-schema/billing-types/#usageentry), [UsageRecord](/builders/api-schema/billing-types/#usagerecord), [UsageRecordEdge](/builders/api-schema/billing-types/#usagerecordedge), [UsageRecordsConnection](/builders/api-schema/billing-types/#usagerecordsconnection), [X402PaymentResult](/builders/api-schema/billing-types/#x402paymentresult)
+- [Billing and usage types](/builders/api-schema/billing-types/): [BalanceTransaction](/builders/api-schema/billing-types/#balancetransaction), [BalanceTransactionEdge](/builders/api-schema/billing-types/#balancetransactionedge), [BalanceTransactionsConnection](/builders/api-schema/billing-types/#balancetransactionsconnection), [BillingAddress](/builders/api-schema/billing-types/#billingaddress), [BillingAddressInput](/builders/api-schema/billing-types/#billingaddressinput), [BillingArrangement](/builders/api-schema/billing-types/#billingarrangement), [BillingDetails](/builders/api-schema/billing-types/#billingdetails), [BillingFeatures](/builders/api-schema/billing-types/#billingfeatures), [BillingLifecycle](/builders/api-schema/billing-types/#billinglifecycle), [BillingStatus](/builders/api-schema/billing-types/#billingstatus), [BillingTier](/builders/api-schema/billing-types/#billingtier), [CardPaymentProvider](/builders/api-schema/billing-types/#cardpaymentprovider), [CardTopupResult](/builders/api-schema/billing-types/#cardtopupresult), [ChangeBillingTierPayload](/builders/api-schema/billing-types/#changebillingtierpayload), [ChangeBillingTierResult](/builders/api-schema/billing-types/#changebillingtierresult), [CostEntry](/builders/api-schema/billing-types/#costentry), [CountryMetrics](/builders/api-schema/billing-types/#countrymetrics), [CreateCardTopupInput](/builders/api-schema/billing-types/#createcardtopupinput), [CreateCryptoTopupInput](/builders/api-schema/billing-types/#createcryptotopupinput), [CreatePaymentInput](/builders/api-schema/billing-types/#createpaymentinput), [CreatePaymentResult](/builders/api-schema/billing-types/#createpaymentresult), [CryptoAsset](/builders/api-schema/billing-types/#cryptoasset), [CryptoTopupResult](/builders/api-schema/billing-types/#cryptotopupresult), [CryptoTopupStatus](/builders/api-schema/billing-types/#cryptotopupstatus), [Currency](/builders/api-schema/billing-types/#currency), [CurrencyConversion](/builders/api-schema/billing-types/#currencyconversion), [EntitlementEntry](/builders/api-schema/billing-types/#entitlemententry), [FreeFallback](/builders/api-schema/billing-types/#freefallback), [FreeFallbackReason](/builders/api-schema/billing-types/#freefallbackreason), [FreeFallbackStage](/builders/api-schema/billing-types/#freefallbackstage), [Invoice](/builders/api-schema/billing-types/#invoice), [InvoiceEdge](/builders/api-schema/billing-types/#invoiceedge), [InvoicePayment](/builders/api-schema/billing-types/#invoicepayment), [InvoicePaymentEdge](/builders/api-schema/billing-types/#invoicepaymentedge), [InvoicePaymentsConnection](/builders/api-schema/billing-types/#invoicepaymentsconnection), [InvoiceStatus](/builders/api-schema/billing-types/#invoicestatus), [InvoicesConnection](/builders/api-schema/billing-types/#invoicesconnection), [LineItem](/builders/api-schema/billing-types/#lineitem), [LiveUsageSummary](/builders/api-schema/billing-types/#liveusagesummary), [MollieFirstPayment](/builders/api-schema/billing-types/#molliefirstpayment), [MollieFirstPaymentResult](/builders/api-schema/billing-types/#molliefirstpaymentresult), [MollieMandate](/builders/api-schema/billing-types/#molliemandate), [MollieSubscription](/builders/api-schema/billing-types/#molliesubscription), [MollieSubscriptionResult](/builders/api-schema/billing-types/#molliesubscriptionresult), [Money](/builders/api-schema/billing-types/#money), [Payment](/builders/api-schema/billing-types/#payment), [PaymentMethod](/builders/api-schema/billing-types/#paymentmethod), [PaymentStatus](/builders/api-schema/billing-types/#paymentstatus), [PendingTierReason](/builders/api-schema/billing-types/#pendingtierreason), [PendingTierState](/builders/api-schema/billing-types/#pendingtierstate), [PrepaidBalance](/builders/api-schema/billing-types/#prepaidbalance), [PricingRule](/builders/api-schema/billing-types/#pricingrule), [PromoteToPaidPayload](/builders/api-schema/billing-types/#promotetopaidpayload), [PromoteToPaidResult](/builders/api-schema/billing-types/#promotetopaidresult), [StripeBillingPortalResult](/builders/api-schema/billing-types/#stripebillingportalresult), [StripeBillingPortalSession](/builders/api-schema/billing-types/#stripebillingportalsession), [StripeCheckoutResult](/builders/api-schema/billing-types/#stripecheckoutresult), [StripeCheckoutSession](/builders/api-schema/billing-types/#stripecheckoutsession), [SubmitX402PaymentResult](/builders/api-schema/billing-types/#submitx402paymentresult), [TenantSubscription](/builders/api-schema/billing-types/#tenantsubscription), [TenantUsage](/builders/api-schema/billing-types/#tenantusage), [UpdateBillingDetailsInput](/builders/api-schema/billing-types/#updatebillingdetailsinput), [UsageAggregate](/builders/api-schema/billing-types/#usageaggregate), [UsageEntry](/builders/api-schema/billing-types/#usageentry), [UsageRecord](/builders/api-schema/billing-types/#usagerecord), [UsageRecordEdge](/builders/api-schema/billing-types/#usagerecordedge), [UsageRecordsConnection](/builders/api-schema/billing-types/#usagerecordsconnection), [X402PaymentResult](/builders/api-schema/billing-types/#x402paymentresult)
 
 
 ---
@@ -8873,7 +8920,7 @@ Generated from the public schema [`pkg/graphql/public/schema.public.graphql`](ht
 | [Webhooks](/builders/api-schema/webhooks/) | 5 | 9 | 0 | 24 |
 | [Incidents](/builders/api-schema/incidents/) | 2 | 3 | 0 | 7 |
 | [Account and tenant](/builders/api-schema/account/) | 1 | 5 | 0 | 14 |
-| [Billing and usage](/builders/api-schema/billing/) | 13 | 12 | 0 | 66 |
+| [Billing and usage](/builders/api-schema/billing/) | 14 | 12 | 0 | 68 |
 | [Clusters and infrastructure](/builders/api-schema/clusters/) | 25 | 16 | 0 | 58 |
 | [Platform](/builders/api-schema/platform/) | 4 | 0 | 0 | 11 |
 | [Skipper](/builders/api-schema/skipper/) | 5 | 3 | 0 | 6 |
@@ -14627,7 +14674,7 @@ V2V transformations, and server-side composition) is in the pipeline. These jobs
 meter-based billing path as delivered minutes and storage, with product-shaped meters added per job
 or marketplace offer.
 
-To talk about early access, [contact us](%MARKETING_URL%/contact). Standard live
+To talk about early access, [contact us](https://frameworks.network/contact). Standard live
 transcoding remains included in delivered-minute pricing.
 
 ## Billing Models
@@ -14638,13 +14685,13 @@ Load credits first, use resources as you go. Balance decreases as usage accrues.
 
 **Thresholds:**
 
-| Balance     | Effect                                                                    |
-| ----------- | ------------------------------------------------------------------------- |
-| Below €5    | Low balance warning                                                       |
-| €0 or below | New streams and new viewers blocked; running streams and viewers continue |
-| Below -€10  | Account suspended; streams terminated                                     |
+| Balance                       | Effect                                                                    |
+| ----------------------------- | ------------------------------------------------------------------------- |
+| Below €5                      | Low balance warning                                                       |
+| Available balance €0 or below | New streams and new viewers blocked; running streams and viewers continue |
+| Settled balance below -€10    | Account suspended; streams terminated                                     |
 
-At €0 or below, a viewer or encoder that disconnects counts as new and cannot reconnect until you top up.
+The available balance is the settled balance minus usage reserved by running sessions. At €0 or below, a viewer or encoder that disconnects counts as new and cannot reconnect until you top up. A top-up that brings the settled balance back lifts a suspension.
 
 ### Postpaid
 
@@ -14667,7 +14714,7 @@ mandate otherwise. The grace email links straight to it.
 ## Trials and arrangements
 
 A trial, a custom base fee or invoice billing is an arrangement FrameWorks sets up on your account.
-[Contact us](%MARKETING_URL%/contact) to ask for one. An arrangement can:
+[Contact us](https://frameworks.network/contact) to ask for one. An arrangement can:
 
 - replace the plan's monthly base fee, for example with €0 during a trial
 - waive usage charges, while usage is still metered and shown on each invoice at €0
@@ -15035,8 +15082,8 @@ A ready clip plays at the same URLs as any other content, or through the
 [player](/builders/playback) with its `playbackId`:
 
 ```
-%PLAY_URL%/play/{clipPlaybackId}/hls/index.m3u8
-%PLAY_URL%/play/{clipPlaybackId}.mp4
+http://localhost:18008/play/{clipPlaybackId}/hls/index.m3u8
+http://localhost:18008/play/{clipPlaybackId}.mp4
 ```
 
 For a custom player, `resolveViewerEndpoint(contentId: "<clip playback id>")` returns the edge
@@ -15099,10 +15146,10 @@ saved to your account.
 
 ```bash
 # The last 60 seconds of a live stream, as a download
-curl -L -o last-minute.mp4 "%PLAY_URL%/play/{playbackId}.mp4?startunix=-60&dl=1"
+curl -L -o last-minute.mp4 "http://localhost:18008/play/{playbackId}.mp4?startunix=-60&dl=1"
 
 # A fixed wall-clock range from the DVR window, delivered as fast as possible
-curl -L -o keynote.mkv "%PLAY_URL%/play/{dvrPlaybackId}.mkv?startunix=1706000000&stopunix=1706000060&rate=0"
+curl -L -o keynote.mkv "http://localhost:18008/play/{dvrPlaybackId}.mkv?startunix=1706000000&stopunix=1706000060&rate=0"
 ```
 
 `/play` validates these parameters and passes them on to the edge it redirects to. Other query
@@ -15300,7 +15347,7 @@ OBS is free and works on Windows, Mac, and Linux. [Download it here](https://obs
 1. In OBS Studio, navigate to **Settings**, then select the **Stream** tab.
 2. Configure the following:
    - **Service:** Custom
-   - **Server:** `%RTMP_URL%`
+   - **Server:** `rtmp://localhost:1935/live`
    - **Stream Key:** From your stream's **Stream Key** card in the dashboard
 
 FrameWorks accepts Enhanced RTMP (E-RTMP) on the same ingest endpoint. If your encoder exposes
@@ -15353,7 +15400,7 @@ ffmpeg -re -i input.mp4 \
   -c:v libx264 -preset veryfast -b:v 4500k -maxrate 4500k -bufsize 9000k \
   -g 60 -keyint_min 60 \
   -c:a aac -b:a 160k -ar 48000 \
-  -f flv "%RTMP_URL%/{stream-key}"
+  -f flv "rtmp://localhost:1935/live/{stream-key}"
 ```
 
 From a webcam:
@@ -15362,7 +15409,7 @@ From a webcam:
 ffmpeg -f v4l2 -i /dev/video0 -f alsa -i default \
   -c:v libx264 -preset ultrafast -b:v 2500k \
   -c:a aac -b:a 128k \
-  -f flv "%RTMP_URL%/{stream-key}"
+  -f flv "rtmp://localhost:1935/live/{stream-key}"
 ```
 
 ## SRT (Alternative Protocol)
@@ -15370,12 +15417,12 @@ ffmpeg -f v4l2 -i /dev/video0 -f alsa -i default \
 SRT (Secure Reliable Transport) offers improved performance over RTMP, especially on unstable or high-latency networks, by ensuring secure and reliable stream delivery. Use this URL format:
 
 ```
-srt://%INGEST_HOSTNAME%:%SRT_PORT%?streamid={stream-key}&latency=200&mode=caller
+srt://localhost:8889?streamid={stream-key}&latency=200&mode=caller
 ```
 
 In OBS: **Settings → Stream → Service → Custom**, then paste the SRT URL in Server.
 
-If you’re self‑hosting, make sure the SRT port is exposed on your ingest endpoint (default is `%SRT_PORT%`).
+If you’re self‑hosting, make sure the SRT port is exposed on your ingest endpoint (default is `8889`).
 
 **FFmpeg with SRT:**
 
@@ -15383,7 +15430,7 @@ If you’re self‑hosting, make sure the SRT port is exposed on your ingest end
 ffmpeg -re -i input.mp4 \
   -c:v libx264 -preset veryfast -b:v 4500k \
   -c:a aac -b:a 160k \
-  -f mpegts "srt://%INGEST_HOSTNAME%:%SRT_PORT%?streamid={stream-key}&latency=200&mode=caller"
+  -f mpegts "srt://localhost:8889?streamid={stream-key}&latency=200&mode=caller"
 ```
 
 ## WHIP (WebRTC)
@@ -15391,18 +15438,18 @@ ffmpeg -re -i input.mp4 \
 WHIP (WebRTC-HTTP Ingestion Protocol) provides a modern approach for browser-based ingestion, enabling real-time streaming with sub-second latency directly from your web browser or compatible software. The dashboard shows your specific WHIP URL on the stream details page.
 
 ```
-%INGEST_URL%/webrtc/{stream-key}
+http://localhost:8080/webrtc/{stream-key}
 ```
 
 If you’re self‑hosting behind a proxy, make sure the WHIP path is reachable on your ingest endpoint.
 
 ### Load-aware WHIP URL
 
-`%INGEST_URL%` is a geo-DNS name: it resolves to the nearest healthy ingest node, but does not
+`http://localhost:8080` is a geo-DNS name: it resolves to the nearest healthy ingest node, but does not
 account for how loaded that node is. Foghorn's ingest front door adds load awareness to WHIP:
 
 ```
-%PLAY_URL%/ingest/{stream-key}
+http://localhost:18008/ingest/{stream-key}
 ```
 
 Publishing a WHIP `POST` there returns a `307 Temporary Redirect` to the selected node's WHIP URL.
@@ -15414,10 +15461,10 @@ The same path answers `GET` with JSON, which is useful in setup scripts that nee
 URL for a protocol that cannot follow redirects:
 
 ```bash
-curl %PLAY_URL%/ingest/{stream-key}
+curl http://localhost:18008/ingest/{stream-key}
 ```
 
-RTMP and SRT have no redirect mechanism, so those protocols use either the geo-DNS `%INGEST_HOSTNAME%`
+RTMP and SRT have no redirect mechanism, so those protocols use either the geo-DNS `localhost`
 name above or the `rtmpUrl` / `srtUrl` from that JSON response.
 
 ## Choosing the Right Bitrate
@@ -16151,7 +16198,7 @@ For custom UIs that need to resolve a WHIP URL before initializing:
 import { IngestClient } from "@livepeer-frameworks/streamcrafter-core";
 
 const client = new IngestClient({
-  gatewayUrl: "%GATEWAY_URL%/graphql",
+  gatewayUrl: "http://localhost:18000/graphql",
   streamKey: "my-stream-key",
 });
 const endpoints = await client.resolve();
@@ -16661,7 +16708,7 @@ The `<StreamCrafter />` component is fully self-contained with video preview, co
 **Direct WHIP Mode:**
 
 ```tsx
-<StreamCrafter whipUrl="%INGEST_URL%/webrtc/stream-key" initialProfile="broadcast" />
+<StreamCrafter whipUrl="http://localhost:8080/webrtc/stream-key" initialProfile="broadcast" />
 ```
 
 **Gateway Resolution Mode:**
@@ -16673,7 +16720,7 @@ import "@livepeer-frameworks/streamcrafter-react/streamcrafter.css";
 function BroadcastPage() {
   return (
     <StreamCrafter
-      gatewayUrl="%GATEWAY_URL%/graphql"
+      gatewayUrl="http://localhost:18000/graphql"
       streamKey="<YOUR_STREAM_KEY>"
       initialProfile="broadcast"
       onStateChange={(state) => console.log(state)}
@@ -16691,6 +16738,7 @@ the dashboard DNS ingest URL or Foghorn's `/ingest/{streamKey}` front door inste
 | Prop                | Type                                         | Default       | Description                                                                |
 | ------------------- | -------------------------------------------- | ------------- | -------------------------------------------------------------------------- |
 | `whipUrl`           | `string`                                     | —             | Direct WHIP endpoint; takes priority over `gatewayUrl`                     |
+| `resolveWhipUrl`    | `(signal: AbortSignal) => Promise<string>`   | —             | Refresh the destination right before each connection                       |
 | `gatewayUrl`        | `string`                                     | —             | Gateway GraphQL endpoint, used with `streamKey`                            |
 | `streamKey`         | `string`                                     | —             | Stream key for gateway resolution                                          |
 | `initialProfile`    | `QualityProfile`                             | `"broadcast"` | Starting quality preset                                                    |
@@ -16717,7 +16765,7 @@ connection health pill are always part of the drop-in UI.
 
 ```tsx
 // Simple single-camera studio without the producer panel
-<StreamCrafter whipUrl="%INGEST_URL%/webrtc/stream-key" showProducerPanel={false} />
+<StreamCrafter whipUrl="http://localhost:8080/webrtc/stream-key" showProducerPanel={false} />
 ```
 
 The context menu's **Copy WHIP URL** copies the full URL, which contains the stream key. **Copy
@@ -16738,7 +16786,7 @@ import {
 } from "@livepeer-frameworks/streamcrafter-react";
 import "@livepeer-frameworks/streamcrafter-react/streamcrafter.css";
 
-const whipUrl = "%INGEST_URL%/webrtc/my-key";
+const whipUrl = "http://localhost:8080/webrtc/my-key";
 
 function CustomStudio() {
   return (
@@ -16824,7 +16872,7 @@ function FullyCustomBroadcaster() {
     qualityProfile,
     setQualityProfile,
   } = useStreamCrafterV2({
-    whipUrl: "%INGEST_URL%/webrtc/key",
+    whipUrl: "http://localhost:8080/webrtc/key",
     profile: "broadcast",
     reconnection: { enabled: true },
   });
@@ -16936,13 +16984,13 @@ The `<StreamCrafter />` component is fully self-contained.
   import "@livepeer-frameworks/streamcrafter-svelte/streamcrafter.css";
 </script>
 
-<StreamCrafter whipUrl="%INGEST_URL%/webrtc/stream-key" initialProfile="broadcast" />
+<StreamCrafter whipUrl="http://localhost:8080/webrtc/stream-key" initialProfile="broadcast" />
 ```
 
 **Gateway Resolution Mode:**
 
 ```svelte
-<StreamCrafter gatewayUrl="%GATEWAY_URL%/graphql" streamKey="abc-123" initialProfile="broadcast" />
+<StreamCrafter gatewayUrl="http://localhost:18000/graphql" streamKey="abc-123" initialProfile="broadcast" />
 ```
 
 Gateway resolution calls the public `resolveIngestEndpoint` GraphQL field from the publisher's
@@ -16981,7 +17029,7 @@ connection health pill are always part of the drop-in UI.
 
 ```svelte
 <!-- Simple single-camera studio without the producer panel -->
-<StreamCrafter whipUrl="%INGEST_URL%/webrtc/stream-key" showProducerPanel={false} />
+<StreamCrafter whipUrl="http://localhost:8080/webrtc/stream-key" showProducerPanel={false} />
 ```
 
 The context menu's **Copy WHIP URL** copies the full URL, which contains the stream key. **Copy
@@ -17003,7 +17051,7 @@ Pass a `children` snippet to replace the default UI with sub-components:
   } from "@livepeer-frameworks/streamcrafter-svelte";
   import "@livepeer-frameworks/streamcrafter-svelte/streamcrafter.css";
 
-  const whipUrl = "%INGEST_URL%/webrtc/my-key";
+  const whipUrl = "http://localhost:8080/webrtc/my-key";
 </script>
 
 <StreamCrafter {whipUrl}>
@@ -17029,7 +17077,7 @@ compositor, so `<StudioProducerPanel />` and `<StudioAudioControls />` need no p
 
 | Component                | Purpose                                                                        |
 | ------------------------ | ------------------------------------------------------------------------------ |
-| `StudioPreview`          | Video preview with live badge                                                  |
+| `StudioPreview`          | Video preview with optional compositor overlay and live badge                  |
 | `StudioMixer`            | Source list with volume sliders, mute, and remove buttons                      |
 | `StudioActionBar`        | Add Camera, Share Screen, Add Media File, Settings, and Go Live                |
 | `StudioSettings`         | Quality profile selector popup                                                 |
@@ -17060,7 +17108,7 @@ For complete UI control, use `createStreamCrafterContextV2`:
 
   onMount(() => {
     crafter.initialize({
-      whipUrl: "%INGEST_URL%/webrtc/key",
+      whipUrl: "http://localhost:8080/webrtc/key",
       profile: "broadcast",
       reconnection: { enabled: true },
     });
@@ -17163,7 +17211,7 @@ import "@livepeer-frameworks/streamcrafter-core/streamcrafter.css";
 
 const studio = createStreamCrafter({
   target: "#studio-container",
-  whipUrl: "%INGEST_URL%/webrtc/stream-key",
+  whipUrl: "http://localhost:8080/webrtc/stream-key",
   profile: "broadcast",
   debug: true,
 });
@@ -17196,7 +17244,7 @@ resolve a WHIP URL from a stream key through the Gateway's `resolveIngestEndpoin
 import { IngestClient, createStreamCrafter } from "@livepeer-frameworks/streamcrafter-core";
 
 const client = new IngestClient({
-  gatewayUrl: "%GATEWAY_URL%/graphql",
+  gatewayUrl: "http://localhost:18000/graphql",
   streamKey: "<YOUR_STREAM_KEY>",
 });
 const endpoints = await client.resolve();
@@ -17340,7 +17388,7 @@ elements:
 
 ```ts
 const studio = createStreamCrafter({
-  whipUrl: "%INGEST_URL%/webrtc/key",
+  whipUrl: "http://localhost:8080/webrtc/key",
   profile: "broadcast",
 });
 
@@ -17405,7 +17453,7 @@ Shadow DOM encapsulates all CSS — host page styles won't break controls.
 
 ```html
 <fw-streamcrafter
-  whip-url="%INGEST_URL%/webrtc/your-stream-key"
+  whip-url="http://localhost:8080/webrtc/your-stream-key"
   initial-profile="broadcast"
 ></fw-streamcrafter>
 ```
@@ -17414,7 +17462,7 @@ Shadow DOM encapsulates all CSS — host page styles won't break controls.
 
 ```html
 <fw-streamcrafter
-  gateway-url="%GATEWAY_URL%/graphql"
+  gateway-url="http://localhost:18000/graphql"
   stream-key="<YOUR_STREAM_KEY>"
   initial-profile="broadcast"
 ></fw-streamcrafter>
@@ -17450,7 +17498,7 @@ Set `controls="false"` to hide the built-in UI. The element still manages the st
 ```html
 <fw-streamcrafter
   id="studio"
-  whip-url="%INGEST_URL%/webrtc/key"
+  whip-url="http://localhost:8080/webrtc/key"
   controls="false"
 ></fw-streamcrafter>
 
@@ -17534,8 +17582,8 @@ suppression and auto gain. A standalone `<fw-sc-audio-controls>` leaves those ou
 ## Presentational Sub-Components
 
 `<fw-sc-volume>`, `<fw-sc-compositor>`, `<fw-sc-scene-switcher>`, `<fw-sc-layer-list>` and
-`<fw-sc-advanced>` are presentational. They do not bind to a studio: their `for` attribute is
-declared but not used. `<fw-sc-producer-panel>` wraps the scene switcher and layer list with the
+`<fw-sc-advanced>` are presentational and do not bind to a studio.
+`<fw-sc-producer-panel>` wraps the scene switcher and layer list with the
 wiring done. To use them on their own, feed them data through JS properties and act on their events
 or callback properties:
 
@@ -17590,13 +17638,13 @@ or callback properties:
 `onSceneSelect`, `onTransitionTo`, `onVisibilityToggle`, `onReorder`, `onTransformEdit` and
 `onRemove`.
 
-| Element                  | Purpose                                                           |
-| ------------------------ | ----------------------------------------------------------------- |
-| `<fw-sc-volume>`         | Volume slider with snap to 100%                                   |
-| `<fw-sc-compositor>`     | Layout and scaling mode selector overlay                          |
-| `<fw-sc-scene-switcher>` | Scene tiles with transition controls                              |
-| `<fw-sc-layer-list>`     | Layer list with visibility, order, opacity and removal            |
-| `<fw-sc-advanced>`       | Dev-mode panel (stats, WebCodecs, encoder, browser audio toggles) |
+| Element                  | Purpose                                                    |
+| ------------------------ | ---------------------------------------------------------- |
+| `<fw-sc-volume>`         | Volume slider with snap to 100%                            |
+| `<fw-sc-compositor>`     | Layout and scaling mode selector overlay                   |
+| `<fw-sc-scene-switcher>` | Scene tiles with transition controls                       |
+| `<fw-sc-layer-list>`     | Layer list with visibility, order, opacity and removal     |
+| `<fw-sc-advanced>`       | Dev-mode panel (stats, WebCodecs, encoder, capture format) |
 
 ## Attributes Reference
 
@@ -17620,7 +17668,9 @@ or callback properties:
 | `rtc-transform-worker-url` | `string`  | —             | RTC transform worker script, when not next to the IIFE bundle    |
 | `debug`                    | `boolean` | `false`       | Enable debug logging                                             |
 
-`compositorConfig`, `onStateChange` and `onError` are JS properties.
+`compositorConfig`, `resolveWhipUrl`, `onStateChange` and `onError` are JS properties.
+`resolveWhipUrl(signal)` returns the destination right before each connection. The `theme`
+property also takes an object of token overrides, as in the React and Svelte packages.
 
 ## Events
 
@@ -17645,7 +17695,7 @@ studio.addEventListener("fw-sc-state-change", (e) => {
 import "@livepeer-frameworks/streamcrafter-wc/define";
 import { ref } from "vue";
 
-const whipUrl = ref("%INGEST_URL%/webrtc/my-key");
+const whipUrl = ref("http://localhost:8080/webrtc/my-key");
 </script>
 ```
 
@@ -17717,7 +17767,7 @@ Not sure which package to use? See the [Integration Guide](/builders/integration
 Pass the WHIP endpoint shown in the dashboard:
 
 ```tsx
-<StreamCrafter whipUrl="%INGEST_URL%/webrtc/your-stream-key" initialProfile="broadcast" />
+<StreamCrafter whipUrl="http://localhost:8080/webrtc/your-stream-key" initialProfile="broadcast" />
 ```
 
 ### Gateway resolution mode
@@ -17729,7 +17779,7 @@ import { StreamCrafter } from "@livepeer-frameworks/streamcrafter-react";
 import "@livepeer-frameworks/streamcrafter-react/streamcrafter.css";
 
 <StreamCrafter
-  gatewayUrl="%GATEWAY_URL%/graphql"
+  gatewayUrl="http://localhost:18000/graphql"
   streamKey="<YOUR_STREAM_KEY>"
   initialProfile="broadcast"
 />;
@@ -17770,7 +17820,7 @@ picks up sound.
 Your WHIP ingest URL is shown in the FrameWorks dashboard under **Ingest URLs**:
 
 ```
-WHIP: %INGEST_URL%/webrtc/your-stream-key
+WHIP: http://localhost:8080/webrtc/your-stream-key
 ```
 
 FrameWorks uses MistServer's `/webrtc/{streamKey}` path for WHIP ingest. The dashboard URL points at
@@ -21235,9 +21285,9 @@ Your **Playback ID** is shown in the FrameWorks dashboard under **Playback Info*
 
 ```bash
 # Example URLs through Foghorn
-%PLAY_URL%/play/{playback-id}/hls/index.m3u8
-%PLAY_URL%/play/{playback-id}/whep
-%PLAY_URL%/play/{playback-id}.mp4
+http://localhost:18008/play/{playback-id}/hls/index.m3u8
+http://localhost:18008/play/{playback-id}/whep
+http://localhost:18008/play/{playback-id}.mp4
 ```
 
 `/play` only accepts `GET`. For WHEP, request `/play/{id}/whep` to get a 307 redirect to the edge's
@@ -21310,16 +21360,16 @@ request.
 
 ```bash
 # Play in VLC
-vlc %PLAY_URL%/play/abc123def/hls/index.m3u8
+vlc http://localhost:18008/play/abc123def/hls/index.m3u8
 
 # Embed in HTML (Safari, iOS)
-<video src="%PLAY_URL%/play/abc123def/hls/index.m3u8" controls></video>
+<video src="http://localhost:18008/play/abc123def/hls/index.m3u8" controls></video>
 
 # Record with ffmpeg
-ffmpeg -i %PLAY_URL%/play/abc123def/hls/index.m3u8 -c copy output.mp4
+ffmpeg -i http://localhost:18008/play/abc123def/hls/index.m3u8 -c copy output.mp4
 
 # Download the last 60 seconds as an MP4
-curl -L -o last-minute.mp4 "%PLAY_URL%/play/abc123def.mp4?startunix=-60&dl=1"
+curl -L -o last-minute.mp4 "http://localhost:18008/play/abc123def.mp4?startunix=-60&dl=1"
 ```
 
 `/play` passes a fixed set of query parameters on to the edge it redirects to: the time-range
@@ -21347,7 +21397,7 @@ are ready.
 ### JSON Response (Custom Players)
 
 ```bash
-curl %PLAY_URL%/play/{view-key}
+curl http://localhost:18008/play/{view-key}
 ```
 
 Returns the primary and fallback edge nodes with every output they expose. Field names are
@@ -21357,10 +21407,10 @@ camelCase, and each output URL points directly at the edge node's MistServer, no
 {
   "primary": {
     "nodeId": "edge-7",
-    "baseUrl": "%EDGE_URL%/",
+    "baseUrl": "http://localhost:8080/",
     "outputs": {
-      "HLS": {"protocol": "HLS", "url": "%EDGE_URL%/hls/{stream}/index.m3u8"},
-      "WHEP": {"protocol": "WHEP", "url": "%EDGE_URL%/webrtc/{stream}"}
+      "HLS": {"protocol": "HLS", "url": "http://localhost:8080/hls/{stream}/index.m3u8"},
+      "WHEP": {"protocol": "WHEP", "url": "http://localhost:8080/webrtc/{stream}"}
     }
   },
   "fallbacks": [...]
@@ -21413,7 +21463,7 @@ Gateway resolution returns the right Foghorn-backed edge endpoints for that view
 <video id="video" controls></video>
 <script>
   const video = document.getElementById("video");
-  const hlsUrl = "%PLAY_URL%/play/{playback-id}/hls/index.m3u8";
+  const hlsUrl = "http://localhost:18008/play/{playback-id}/hls/index.m3u8";
   if (Hls.isSupported()) {
     const hls = new Hls();
     hls.loadSource(hlsUrl);
@@ -21430,7 +21480,7 @@ Gateway resolution returns the right Foghorn-backed edge endpoints for that view
 <link href="https://vjs.zencdn.net/8.0.4/video-js.css" rel="stylesheet" />
 <script src="https://vjs.zencdn.net/8.0.4/video.min.js"></script>
 <video-js id="my-video" class="video-js" controls data-setup="{}">
-  <source src="%PLAY_URL%/play/{playback-id}/hls/index.m3u8" type="application/x-mpegURL" />
+  <source src="http://localhost:18008/play/{playback-id}/hls/index.m3u8" type="application/x-mpegURL" />
 </video-js>
 ```
 
@@ -21806,7 +21856,7 @@ flowchart LR
 
 ## 1. Create an Account
 
-Head to [%APP_URL%](%APP_URL%) and sign up with email and password or an EVM wallet.
+Head to [https://chartroom.frameworks.network](https://chartroom.frameworks.network) and sign up with email and password or an EVM wallet.
 
 ## 2. Create a Stream
 
@@ -21837,7 +21887,7 @@ Open OBS Studio (or your preferred streaming software). For the quickest setup, 
 
 1. Go to **Settings** → **Stream**.
 2. Set **Service:** `Custom`.
-3. For **Server:** Enter `%RTMP_URL%` (you can also copy the RTMP/E-RTMP URL from the **Ingest** tab).
+3. For **Server:** Enter `rtmp://localhost:1935/live` (you can also copy the RTMP/E-RTMP URL from the **Ingest** tab).
 4. For **Stream Key:** Paste the stream key you copied from your FrameWorks dashboard.
 
 Once configured, hit **Start Streaming** in OBS.
@@ -21995,9 +22045,9 @@ recording's chapters with `dvrChapters` to play a specific one.
 DVR playback URLs follow the same `/play/{playbackId}` pattern:
 
 ```
-HLS:    %PLAY_URL%/play/{dvrPlaybackId}/hls/index.m3u8
-DASH:   %PLAY_URL%/play/{dvrPlaybackId}/cmaf/index.mpd
-MP4:    %PLAY_URL%/play/{dvrPlaybackId}.mp4
+HLS:    http://localhost:18008/play/{dvrPlaybackId}/hls/index.m3u8
+DASH:   http://localhost:18008/play/{dvrPlaybackId}/cmaf/index.mpd
+MP4:    http://localhost:18008/play/{dvrPlaybackId}.mp4
 ```
 
 With the Player SDK, use `contentType="dvr"` for the live rewind window. The player enables seeking, skip, and speed controls within the active window:
@@ -22946,7 +22996,7 @@ can also declare managed local sources for loops, playlists, and site-local work
 Most builders start with push streams. Pull-input streams are useful for cameras, venue feeds, and
 upstream origins that cannot push into FrameWorks. See [Pull-input streams](/builders/pull-streams)
 for supported source schemes, private-source rules, and lifecycle visibility. Note that **RTMP and
-FLV-over-HTTP pull are not supported today** — [open a ticket](%APP_URL%/support) if you need them.
+FLV-over-HTTP pull are not supported today** — [open a ticket](https://chartroom.frameworks.network/support) if you need them.
 
 Experimental media-engine discovery exists locally today. On the
 [roadmap](/roadmap#device-discovery-and-contribution-inputs): packaging that into FrameWorks Edge,
@@ -23021,7 +23071,7 @@ live stream:
   segment archive.
 
 The live ring is configurable — private deployments often want a longer window — but every extra
-second costs cluster RAM, so the default stays tight. [Open an in-app ticket](%APP_URL%/support)
+second costs cluster RAM, so the default stays tight. [Open an in-app ticket](https://chartroom.frameworks.network/support)
 if your deployment needs a non-default size.
 
 Practical consequences:
@@ -23065,8 +23115,8 @@ import { Player } from "@livepeer-frameworks/player-react";
 ```
 
 ```bash
-%PLAY_URL%/play/<PLAYBACK_ID>/hls/index.m3u8
-%PLAY_URL%/play/<PLAYBACK_ID>/webrtc
+http://localhost:18008/play/<PLAYBACK_ID>/hls/index.m3u8
+http://localhost:18008/play/<PLAYBACK_ID>/webrtc
 ```
 
 See [Playback & Embedding](/builders/playback) for protocols, players, and custom source
@@ -23298,7 +23348,7 @@ The encoder can't reach our servers.
 
 **Check these first:**
 
-1. **RTMP/E-RTMP URL:** Verify it is exactly `%RTMP_URL%`.
+1. **RTMP/E-RTMP URL:** Verify it is exactly `rtmp://localhost:1935/live`.
 2. **Stream Key:** Ensure you've copied the active key from the **Stream Key** card on your dashboard.
 3. **Port 1935:** Some corporate or school networks block RTMP/E-RTMP. Try a different network (like a mobile hotspot) or use SRT.
 4. **Service Status:** Check our Discord community or **Support → Messages** for any ongoing maintenance or outages.
@@ -23490,9 +23540,9 @@ Something broke on our end.
 ## Still Stuck?
 
 1. **Search these docs** - Cmd/Ctrl+K opens search
-2. **Discord** - Other streamers might have hit the same issue: [%DISCORD_URL%](%DISCORD_URL%)
+2. **Discord** - Other streamers might have hit the same issue: [https://discord.gg/9J6haUjdAq](https://discord.gg/9J6haUjdAq)
 3. **Support** - Send us a message via the dashboard
-4. **GitHub** - [Open an issue](%GITHUB_URL%/issues) with your stream ID and timestamps
+4. **GitHub** - [Open an issue](https://github.com/livepeer-frameworks/monorepo/issues) with your stream ID and timestamps
 
 
 ---
@@ -24372,7 +24422,7 @@ rtmp://stream.yourdomain.com:1935/live/{stream-key}
 Or use the network's default ingest and let Foghorn route:
 
 ```
-%RTMP_URL%/{stream-key}
+rtmp://localhost:1935/live/{stream-key}
 ```
 
 Both work. Direct ingest means lower latency to your node; network ingest means Foghorn picks the best ingest point.
@@ -25963,7 +26013,7 @@ For everything else above, your Bunny account stays your Bunny account; FrameWor
 
 ### 1. Create a FrameWorks account
 
-Sign up at [%APP_URL%](%APP_URL%) — email + password, or sign in with an EVM wallet if you'd rather skip email entirely.
+Sign up at [https://chartroom.frameworks.network](https://chartroom.frameworks.network) — email + password, or sign in with an EVM wallet if you'd rather skip email entirely.
 
 ### 2. Decide your shape
 
@@ -25995,7 +26045,7 @@ mutation {
 
 PUT each part to its presigned URL, then call `completeVodUpload` with the returned ETags. Poll `vodUploadStatus` for the upload's state, or subscribe to `tenantEvents` with `types: ["upload.ready", "upload.failed"]` to learn when processing finishes.
 
-If the video is still reachable on Bunny, skip the upload and let FrameWorks pull it with `importVodAsset`, passing the video's public MP4 URL. The server must support HTTP range requests, and a URL without a `.mp4`, `.mov`, `.mkv`, `.webm`, or `.ts` extension needs `filename`. See [Import a video from a URL](/builders/recordings#import-a-video-from-a-url). The mutation imports one video per call; there is no one-shot import of a whole Bunny library. For a sizeable library, [open an in-app ticket](%APP_URL%/support) or message us in [Discord](%DISCORD_URL%) so we can scope the migration.
+If the video is still reachable on Bunny, skip the upload and let FrameWorks pull it with `importVodAsset`, passing the video's public MP4 URL. The server must support HTTP range requests, and a URL without a `.mp4`, `.mov`, `.mkv`, `.webm`, or `.ts` extension needs `filename`. See [Import a video from a URL](/builders/recordings#import-a-video-from-a-url). The mutation imports one video per call; there is no one-shot import of a whole Bunny library. For a sizeable library, [open an in-app ticket](https://chartroom.frameworks.network/support) or message us in [Discord](https://discord.gg/9J6haUjdAq) so we can scope the migration.
 
 ### 4. (Live customers) Repoint your encoder
 
@@ -26026,7 +26076,7 @@ If you were using Bunny's iframe embed:
 -   allowfullscreen>
 - </iframe>
 + <script src="https://cdn.jsdelivr.net/npm/@livepeer-frameworks/player-wc/dist/fw-player.iife.js"></script>
-+ <fw-player content-id="{playbackId}" content-type="vod" gateway-url="%GATEWAY_URL%/graphql"></fw-player>
++ <fw-player content-id="{playbackId}" content-type="vod" gateway-url="http://localhost:18000/graphql"></fw-player>
 ```
 
 The player also ships as:
@@ -26049,12 +26099,12 @@ Codegen against the schema gives you typed queries and mutations:
 
 ```bash
 pnpm dlx graphql-codegen \
-  --schema %GATEWAY_URL%/graphql \
+  --schema http://localhost:18000/graphql \
   --documents 'src/**/*.graphql' \
   --generates ./src/gql/generated.ts:typescript,typescript-operations
 ```
 
-The schema lives at [`pkg/graphql/schema.graphql`](https://github.com/Livepeer-FrameWorks/monorepo/blob/master/pkg/graphql/schema.graphql); the playground is at [`%GATEWAY_URL%/graphql/playground`](%GATEWAY_URL%/graphql/playground).
+The schema lives at [`pkg/graphql/schema.graphql`](https://github.com/Livepeer-FrameWorks/monorepo/blob/master/pkg/graphql/schema.graphql); the playground is at [`http://localhost:18000/graphql/playground`](http://localhost:18000/graphql/playground).
 
 ### 7. Translate access control
 
@@ -26117,7 +26167,7 @@ Run a low-traffic test through both platforms in parallel for a day. Watch the F
 - **Multistream targets** — Twitch, YouTube, Facebook, Kick, X, and custom RTMP/RTMPS/SRT — see [Multistreaming](/builders/multistreaming).
 - **Cross-cluster federation** — one viewer pool routed across clusters; the closer edge wins automatically.
 - **Managed hybrid edges** — run MistServer and Helmsman edge capacity on your hardware while FrameWorks operates Foghorn, federation, Livepeer, Chandler, storage, DNS/TLS, and the control plane.
-- **Agent-first surface** — MCP server at [`/.well-known/mcp.json`](%GATEWAY_URL%/.well-known/mcp.json), wallet auth (EIP-191), gasless USDC payments via x402 (EIP-3009). See [Agent Access](/agents/overview).
+- **Agent-first surface** — MCP server at [`/.well-known/mcp.json`](http://localhost:18000/.well-known/mcp.json), wallet auth (EIP-191), gasless USDC payments via x402 (EIP-3009). See [Agent Access](/agents/overview).
 - **Skipper** — an in-product AI consultant for API discovery and diagnostics. Reach it from the dashboard, the docs (`⌘J`), or MCP.
 - **Player packages** for React, Svelte, Web Components, and vanilla JS.
 
@@ -26141,7 +26191,7 @@ Bunny is the better choice for:
 - **Per-region replication knob** — FrameWorks uses cluster placement instead of a 1-of-N replication slider; if you used Bunny's 1–9 region replication, plan which cluster (or set of hybrid edges) to anchor your assets to.
 - **Managed iframe-embed-as-a-product** — `<fw-player>` is the closest replacement.
 - **Official PHP, C#, and Java SDKs** — the TypeScript, Go, and Python [SDKs](/builders/sdks) ship; for other languages, use GraphQL codegen against the public schema and a Standard Webhooks library.
-- **Bulk library import** — `importVodAsset` covers `POST /fetch` one video at a time, but there is no one-shot Bunny → FrameWorks library importer. [Open an in-app ticket](%APP_URL%/support) for sizeable libraries.
+- **Bulk library import** — `importVodAsset` covers `POST /fetch` one video at a time, but there is no one-shot Bunny → FrameWorks library importer. [Open an in-app ticket](https://chartroom.frameworks.network/support) for sizeable libraries.
 - **Watermarking as a managed feature** — possible via custom transcode profiles on dedicated / self-hosted clusters, not as a tenant-level toggle.
 - **VOD asset metadata-edit mutation** — title and description are set on `createVodUpload`; there's no `updateVodAsset` today.
 
@@ -26154,7 +26204,7 @@ Bunny is the better choice for:
 - **Marketplace primitives ship; the vetted public marketplace program is on the [roadmap](/roadmap).**
   Validate operator vetting, pricing, approval flow, and support boundaries before relying on
   third-party clusters for production traffic.
-- **GraphQL learning curve.** If you've never written a query, the [docs playground](%GATEWAY_URL%/graphql/playground) is the quickest way to inspect available fields. Skipper can also draft queries.
+- **GraphQL learning curve.** If you've never written a query, the [docs playground](http://localhost:18000/graphql/playground) is the quickest way to inspect available fields. Skipper can also draft queries.
 - **Subscriptions are connection-oriented.** Polling fallback is fine if a long-lived connection is awkward in your stack.
 - **The embed swap is not API-compatible.** `<iframe>` becomes `<fw-player>`; Player.js consumers can move to `@livepeer-frameworks/player-core`'s control API, but it's a port, not a drop-in.
 - **Per-region storage was a knob; now it's cluster placement.** We don't replicate to "5 of 9" zones the same way Bunny does.
@@ -26169,8 +26219,8 @@ Bunny is the better choice for:
 | **Skipper** (AI consultant) | Quick troubleshooting, API discovery, diagnostics, after-hours, non-human callers           | Dashboard `/skipper` · `⌘J` in docs · MCP at `/mcp`          |
 | **In-app ticketing**        | Account-specific issues, billing, anything tied to your tenant data, library-migration help | Dashboard `/support`                                         |
 | **Forum**                   | Long-form Q&A, recipes, searchable community knowledge                                      | [forum.frameworks.network](https://forum.frameworks.network) |
-| **Discord**                 | Real-time chat, casual questions                                                            | [Join](%DISCORD_URL%)                                        |
-| **GitHub**                  | Bugs, feature requests, deeper technical threads                                            | [Livepeer-FrameWorks/monorepo](%GITHUB_URL%)                 |
+| **Discord**                 | Real-time chat, casual questions                                                            | [Join](https://discord.gg/9J6haUjdAq)                                        |
+| **GitHub**                  | Bugs, feature requests, deeper technical threads                                            | [Livepeer-FrameWorks/monorepo](https://github.com/livepeer-frameworks/monorepo)                 |
 
 
 ---
@@ -26291,7 +26341,7 @@ Then sort each item into one of three groups: it moves, it changes shape, or it 
 
 ### 2. Create your account and first stream
 
-Sign up at [%APP_URL%](%APP_URL%). The Free tier covers 3 concurrent live streams and 200 concurrent viewers, which is enough to rehearse.
+Sign up at [https://chartroom.frameworks.network](https://chartroom.frameworks.network). The Free tier covers 3 concurrent live streams and 200 concurrent viewers, which is enough to rehearse.
 
 1. Open **Content → Streams** and click **Create Stream**.
 2. Give it a name.
@@ -26308,7 +26358,7 @@ Your encoder settings keep the same shape. Only the addresses change. Use the va
 **SRT.** Castr's format, `srt://cg.castr.io:9998?pkt_size=1316&streamid=#!::r=012345678,m=publish`, does not carry over. Replace the whole string:
 
 ```
-srt://%INGEST_HOSTNAME%:%SRT_PORT%?streamid={stream-key}&latency=200&mode=caller
+srt://localhost:8889?streamid={stream-key}&latency=200&mode=caller
 ```
 
 **RTMPS.** FrameWorks has no RTMPS listener. If your link has to be encrypted, move that encoder to SRT or WHIP. If it doesn't, plain RTMP works.
@@ -26360,7 +26410,7 @@ Save anything you want to keep from Castr's temporary recordings first, since th
 
 For each video, download it from the Content Library and upload it to **Library**. If your files also sit on your own storage, **Library → Import from URL** can fetch them, one video at a time, from a public URL on a server that supports range requests.
 
-FrameWorks content sits at account level, without Castr's library folders. Playback IDs are new, so embeds need updating. For a large library, [open an in-app ticket](%APP_URL%/support) and we'll scope it with you.
+FrameWorks content sits at account level, without Castr's library folders. Playback IDs are new, so embeds need updating. For a large library, [open an in-app ticket](https://chartroom.frameworks.network/support) and we'll scope it with you.
 
 ### 8. Run it in parallel
 
@@ -26469,8 +26519,8 @@ You work directly with the video engineers who have built MistServer for more th
 | **Skipper** (AI consultant) | Quick troubleshooting, API discovery, diagnostics, after-hours, non-human callers           | Dashboard `/skipper` · `⌘J` in docs · MCP at `/mcp`          |
 | **In-app ticketing**        | Account-specific issues, billing, anything tied to your tenant data, library-migration help | Dashboard `/support`                                         |
 | **Forum**                   | Long-form Q&A, recipes, searchable community knowledge                                      | [forum.frameworks.network](https://forum.frameworks.network) |
-| **Discord**                 | Real-time chat, casual questions                                                            | [Join](%DISCORD_URL%)                                        |
-| **GitHub**                  | Bugs, feature requests, deeper technical threads                                            | [Livepeer-FrameWorks/monorepo](%GITHUB_URL%)                 |
+| **Discord**                 | Real-time chat, casual questions                                                            | [Join](https://discord.gg/9J6haUjdAq)                                        |
+| **GitHub**                  | Bugs, feature requests, deeper technical threads                                            | [Livepeer-FrameWorks/monorepo](https://github.com/livepeer-frameworks/monorepo)                 |
 
 
 ---
@@ -26542,7 +26592,7 @@ of those workloads should stay where they are.
 
 ```bash
 ffmpeg -i "udp://239.0.0.1:1234" -c copy \
-  -f mpegts "srt://%INGEST_HOSTNAME%:%SRT_PORT%?streamid={stream-key}&latency=200&mode=caller"
+  -f mpegts "srt://localhost:8889?streamid={stream-key}&latency=200&mode=caller"
 ```
 
 On a full self-host, operator-declared managed streams run regardless of viewers, with file,
@@ -26904,7 +26954,7 @@ us your inventory from step 1 and we will tell you which streams fit and which s
 | **In-app ticketing** | Migration scoping, account-specific questions | Dashboard `/support`                                         |
 | **Skipper**          | API discovery, diagnostics, after-hours help  | Dashboard `/skipper`, `⌘J` in docs, MCP at `/mcp`            |
 | **Forum**            | Long-form Q&A                                 | [forum.frameworks.network](https://forum.frameworks.network) |
-| **Discord**          | Real-time discussion                          | [Join](%DISCORD_URL%)                                        |
+| **Discord**          | Real-time discussion                          | [Join](https://discord.gg/9J6haUjdAq)                                        |
 
 
 ---
@@ -26921,7 +26971,7 @@ map the source-specific differences with you.
 
 ## The seven moves
 
-1. **Account and first stream.** Sign up at [%APP_URL%](%APP_URL%) or wallet-sign in. Create a stream via the dashboard or `createStream(input)`. You get a `streamKey` (secret) and a `playbackId` (public).
+1. **Account and first stream.** Sign up at [https://chartroom.frameworks.network](https://chartroom.frameworks.network) or wallet-sign in. Create a stream via the dashboard or `createStream(input)`. You get a `streamKey` (secret) and a `playbackId` (public).
 2. **Repoint your encoder.** RTMP, E-RTMP, WHIP, and SRT are supported on the ingest side. There is no RTMPS ingest; use SRT or WHIP when the link must be encrypted. Your URL changes; the protocol doesn't.
 3. **Swap the player.** Use `@livepeer-frameworks/player-react`, `-svelte`, `-wc`, or `-core` depending on your stack. See [Player (Playback)](/builders/playback).
 4. **Rewire the API integration.** This is where most of the work is — see below.
@@ -26942,7 +26992,7 @@ Keep your current provider live while you test, so a problem on either side neve
 
 ### REST → GraphQL
 
-Most live-video platforms expose a resource-oriented REST API. FrameWorks is GraphQL-first: a single `/graphql` endpoint with queries, mutations, and subscriptions. The schema lives at [`pkg/graphql/schema.graphql`](https://github.com/Livepeer-FrameWorks/monorepo/blob/master/pkg/graphql/schema.graphql) and you can browse it interactively at [`%GATEWAY_URL%/graphql/playground`](%GATEWAY_URL%/graphql/playground).
+Most live-video platforms expose a resource-oriented REST API. FrameWorks is GraphQL-first: a single `/graphql` endpoint with queries, mutations, and subscriptions. The schema lives at [`pkg/graphql/schema.graphql`](https://github.com/Livepeer-FrameWorks/monorepo/blob/master/pkg/graphql/schema.graphql) and you can browse it interactively at [`http://localhost:18000/graphql/playground`](http://localhost:18000/graphql/playground).
 
 If you've never written a GraphQL client, use a codegen tool:
 
@@ -27050,7 +27100,7 @@ These gaps apply whatever the source platform:
 - RTMP and FLV-over-HTTP pull sources. Our MistServer build has no RTMP/FLV pull module —
   RTSP, SRT, RIST, HLS, DTSC, and MPEG-TS over UDP (incl. multicast) are all supported, but
   a `pull: { source: "rtmp://…" }` or `https://.../*.flv` upstream won't work. If RTMP pull is on
-  your critical path, [open a ticket](%APP_URL%/support) and we'll prioritize it.
+  your critical path, [open a ticket](https://chartroom.frameworks.network/support) and we'll prioritize it.
 - C2PA / creator-ID provenance signing on transcode. Not exposed as a public FrameWorks API today.
 - SDKs beyond TypeScript, Go, and Python. Those three [ship](/builders/sdks); for other languages,
   use GraphQL codegen against the public schema and a Standard Webhooks library.
@@ -27083,8 +27133,8 @@ point you at the closest existing path or scope a platform-specific guide.
 | **Skipper** (AI consultant) | Quick troubleshooting, API discovery, diagnostics, after-hours, non-human callers           | Dashboard `/skipper` · `⌘J` in docs · MCP at `/mcp`          |
 | **In-app ticketing**        | Account-specific issues, billing, anything tied to your tenant data, library-migration help | Dashboard `/support`                                         |
 | **Forum**                   | Long-form Q&A, recipes, searchable community knowledge                                      | [forum.frameworks.network](https://forum.frameworks.network) |
-| **Discord**                 | Real-time chat, casual questions                                                            | [Join](%DISCORD_URL%)                                        |
-| **GitHub**                  | Bugs, feature requests, deeper technical threads                                            | [Livepeer-FrameWorks/monorepo](%GITHUB_URL%)                 |
+| **Discord**                 | Real-time chat, casual questions                                                            | [Join](https://discord.gg/9J6haUjdAq)                                        |
+| **GitHub**                  | Bugs, feature requests, deeper technical threads                                            | [Livepeer-FrameWorks/monorepo](https://github.com/livepeer-frameworks/monorepo)                 |
 
 
 ---
@@ -27154,7 +27204,7 @@ Dedicated guides we intend to publish next. If you're coming from one of these t
 
 ### Don't see your platform?
 
-[Open a forum post](https://forum.frameworks.network), [drop into Discord](%DISCORD_URL%), file an
+[Open a forum post](https://forum.frameworks.network), [drop into Discord](https://discord.gg/9J6haUjdAq), file an
 in-app ticket from `/support`, or ask Skipper directly. Include the source platform, the APIs you
 use today, and the migration deadline so support can point you at the closest existing guide or
 scope the missing platform-specific steps.
@@ -27212,8 +27262,8 @@ A few things differ from most peers, so we surface them once here instead of rep
 | **Skipper** (AI consultant) | Quick troubleshooting, API discovery, diagnostics, after-hours, non-human callers           | Dashboard `/skipper` · `⌘J` in docs · MCP at `/mcp`          |
 | **In-app ticketing**        | Account-specific issues, billing, anything tied to your tenant data, library-migration help | Dashboard `/support`                                         |
 | **Forum**                   | Long-form Q&A, recipes, searchable community knowledge                                      | [forum.frameworks.network](https://forum.frameworks.network) |
-| **Discord**                 | Real-time chat, casual questions                                                            | [Join](%DISCORD_URL%)                                        |
-| **GitHub**                  | Bugs, feature requests, deeper technical threads                                            | [Livepeer-FrameWorks/monorepo](%GITHUB_URL%)                 |
+| **Discord**                 | Real-time chat, casual questions                                                            | [Join](https://discord.gg/9J6haUjdAq)                                        |
+| **GitHub**                  | Bugs, feature requests, deeper technical threads                                            | [Livepeer-FrameWorks/monorepo](https://github.com/livepeer-frameworks/monorepo)                 |
 
 
 ---
@@ -27363,7 +27413,7 @@ Delivery differences:
 
 ### 1. Create a FrameWorks account and a stream
 
-Sign up at [%APP_URL%](%APP_URL%) — email + password, or sign in with an EVM wallet if you'd rather skip email entirely. Then:
+Sign up at [https://chartroom.frameworks.network](https://chartroom.frameworks.network) — email + password, or sign in with an EVM wallet if you'd rather skip email entirely. Then:
 
 ```graphql
 mutation CreateStream {
@@ -27393,7 +27443,7 @@ If your existing integration uses the older `@livepeer/react` package:
 - import { Player } from "@livepeer/react";
 - <Player playbackId={playbackId} />
 + import { Player } from "@livepeer-frameworks/player-react";
-+ <Player contentType="live" contentId={playbackId} options={{ gatewayUrl: "%GATEWAY_URL%/graphql" }} />
++ <Player contentType="live" contentId={playbackId} options={{ gatewayUrl: "http://localhost:18000/graphql" }} />
 ```
 
 The player also ships as:
@@ -27417,12 +27467,12 @@ Codegen against the schema gives you typed queries:
 ```bash
 # example with graphql-codegen
 pnpm dlx graphql-codegen \
-  --schema %GATEWAY_URL%/graphql \
+  --schema http://localhost:18000/graphql \
   --documents 'src/**/*.graphql' \
   --generates ./src/gql/generated.ts:typescript,typescript-operations
 ```
 
-If you want to read the schema directly, it lives at [`pkg/graphql/schema.graphql`](https://github.com/Livepeer-FrameWorks/monorepo/blob/master/pkg/graphql/schema.graphql) on GitHub, and the playground is at [`%GATEWAY_URL%/graphql/playground`](%GATEWAY_URL%/graphql/playground).
+If you want to read the schema directly, it lives at [`pkg/graphql/schema.graphql`](https://github.com/Livepeer-FrameWorks/monorepo/blob/master/pkg/graphql/schema.graphql) on GitHub, and the playground is at [`http://localhost:18000/graphql/playground`](http://localhost:18000/graphql/playground).
 
 ### 5. Point your webhook receiver at FrameWorks
 
@@ -27505,7 +27555,7 @@ If you use Studio signing keys, `playbackPolicy: { type: "jwt" }`, `Livepeer-Jwt
   every browser request. Players without a browser (RTMP, SRT) send no origin and are denied unless
   the list includes `*`.
 
-Note that signing keys do not transfer between platforms — reissue on FrameWorks. Migration concierge available via [in-app ticket](%APP_URL%/support) if you have a large library of pre-signed JWTs to roll over.
+Note that signing keys do not transfer between platforms — reissue on FrameWorks. Migration concierge available via [in-app ticket](https://chartroom.frameworks.network/support) if you have a large library of pre-signed JWTs to roll over.
 
 ### 7. Re-attach multistream targets
 
@@ -27547,7 +27597,7 @@ Run a low-traffic test stream through both platforms in parallel for a day. Watc
 - **Sprite-sheet seek previews** — a 10×10 grid plus a WebVTT cue file, generated for every recording, ready for hover-scrub UIs.
 - **Managed hybrid edges.** Run MistServer and Helmsman edge capacity on your hardware while FrameWorks operates Foghorn, federation, Livepeer, Chandler, storage, DNS/TLS, and the control plane.
 - **Cross-cluster federation** — one viewer pool routed across clusters; the closer edge wins automatically.
-- **Agent-first surface.** MCP server at [`/.well-known/mcp.json`](%GATEWAY_URL%/.well-known/mcp.json), wallet auth (EIP-191), and gasless USDC payments via x402 (EIP-3009). See [Agent Access](/agents/overview).
+- **Agent-first surface.** MCP server at [`/.well-known/mcp.json`](http://localhost:18000/.well-known/mcp.json), wallet auth (EIP-191), and gasless USDC payments via x402 (EIP-3009). See [Agent Access](/agents/overview).
 - **Skipper** — an in-product AI consultant for API discovery and diagnostics. Reach it from the dashboard, the docs (`⌘J`), or MCP.
 - **Player packages** for React, Svelte, Web Components, and vanilla JS.
 
@@ -27567,14 +27617,14 @@ Current gaps to account for:
   boundary yet.
 - **Studio library importer** — `importVodAsset` imports one video per call from a public
   http(s) URL, such as a Studio asset's download URL, but there is no one-shot import of a whole
-  Studio library. `ipfs://` and `ar://` URLs are not accepted; pass a public gateway's https link. If you have a sizeable library, [open an in-app ticket](%APP_URL%/support) or
-  message us in [Discord](%DISCORD_URL%) so we can scope the migration.
+  Studio library. `ipfs://` and `ar://` URLs are not accepted; pass a public gateway's https link. If you have a sizeable library, [open an in-app ticket](https://chartroom.frameworks.network/support) or
+  message us in [Discord](https://discord.gg/9J6haUjdAq) so we can scope the migration.
 - **Creator metadata** — Studio's `creatorId` and `userTags` have no FrameWorks field yet; keep that
   mapping in your own records, keyed by stream ID or artifact ID.
 - **Per-stream transcode profiles** — FrameWorks uses a fixed rendition ladder per billing tier;
   Studio's `profiles[]` on a stream or asset has no equivalent yet.
 - **Picking one specific rendition per multistream target** — Studio lets you pick which rendition goes to each push target. On FrameWorks, each target's [`videoChoice`](/builders/multistreaming#video-track-choice) selects the original video or a processed rendition, and FrameWorks picks a compatible one.
-- **RTMP and FLV-over-HTTP pull sources** — our MistServer build has no RTMP/FLV pull module, so a `pull: { source: "rtmp://…" }` or a Studio-style `https://.../*.flv` upstream won't work. Everything else Mist documents (RTSP, SRT, RIST, HLS, DTSC, MPEG-TS over UDP including multicast) does. If RTMP pull is a critical requirement, [contact support](%APP_URL%/support) before planning your migration — there is no committed timeline yet.
+- **RTMP and FLV-over-HTTP pull sources** — our MistServer build has no RTMP/FLV pull module, so a `pull: { source: "rtmp://…" }` or a Studio-style `https://.../*.flv` upstream won't work. Everything else Mist documents (RTSP, SRT, RIST, HLS, DTSC, MPEG-TS over UDP including multicast) does. If RTMP pull is a critical requirement, [contact support](https://chartroom.frameworks.network/support) before planning your migration — there is no committed timeline yet.
 
 ## Beta and tricky bits
 
@@ -27586,7 +27636,7 @@ Current gaps to account for:
 - **Marketplace primitives ship; the vetted public marketplace program is on the [roadmap](/roadmap).**
   Validate operator vetting, pricing, approval flow, and support boundaries before relying on
   third-party clusters for production traffic.
-- **GraphQL learning curve.** If you've never written a query, the [docs playground](%GATEWAY_URL%/graphql/playground) is the quickest way to inspect available fields. Skipper can also draft queries.
+- **GraphQL learning curve.** If you've never written a query, the [docs playground](http://localhost:18000/graphql/playground) is the quickest way to inspect available fields. Skipper can also draft queries.
 - **Webhook bodies render 64-bit integers as strings.** `sizeBytes`, `durationMs`, and money amounts arrive as `"7340032"`, not `7340032`; parse them explicitly.
 - **The player swap is not API-compatible.** Props and theming differ — budget a few hours to walk through [Player (Playback)](/builders/playback) examples.
 - **Stream keys, playback IDs, and asset IDs are not transferable.** Reissue stream keys and update embeds.
@@ -27601,8 +27651,8 @@ Current gaps to account for:
 | **Skipper** (AI consultant) | Quick troubleshooting, API discovery, diagnostics, after-hours, non-human callers           | Dashboard `/skipper` · `⌘J` in docs · MCP at `/mcp`          |
 | **In-app ticketing**        | Account-specific issues, billing, anything tied to your tenant data, library-migration help | Dashboard `/support`                                         |
 | **Forum**                   | Long-form Q&A, recipes, searchable community knowledge                                      | [forum.frameworks.network](https://forum.frameworks.network) |
-| **Discord**                 | Real-time chat, casual questions                                                            | [Join](%DISCORD_URL%)                                        |
-| **GitHub**                  | Bugs, feature requests, deeper technical threads                                            | [Livepeer-FrameWorks/monorepo](%GITHUB_URL%)                 |
+| **Discord**                 | Real-time chat, casual questions                                                            | [Join](https://discord.gg/9J6haUjdAq)                                        |
+| **GitHub**                  | Bugs, feature requests, deeper technical threads                                            | [Livepeer-FrameWorks/monorepo](https://github.com/livepeer-frameworks/monorepo)                 |
 
 
 ---
@@ -27839,7 +27889,7 @@ See [Playback Access Control](/builders/playback-access-control).
 <Aside type="caution">
   If a MistServer feature you depend on is not in these tables - exec input, multiview, SCTE-35
   insertion, custom variables, JWT-on-ingest, or trigger scripts - treat that as a migration
-  blocker. Open an [in-app ticket](%APP_URL%/support), ask in [Discord](%DISCORD_URL%), or [stay on
+  blocker. Open an [in-app ticket](https://chartroom.frameworks.network/support), ask in [Discord](https://discord.gg/9J6haUjdAq), or [stay on
   raw MistServer](https://mistserver.com/) for that workload.
 </Aside>
 
@@ -27942,8 +27992,8 @@ Use this path when you want to stop running the media engine and accept the mana
 | **Skipper**              | API discovery, troubleshooting, diagnostics, after-hours help                                      | Dashboard `/skipper` - `⌘J` in docs - MCP at `/mcp`                                                                                                         |
 | **In-app ticketing**     | Account-specific questions, migration blockers, managed feature requests                           | Dashboard `/support`                                                                                                                                        |
 | **Forum**                | Long-form Q&A and searchable recipes                                                               | [forum.frameworks.network](https://forum.frameworks.network)                                                                                                |
-| **Discord**              | Real-time discussion and migration scoping                                                         | [Join](%DISCORD_URL%)                                                                                                                                       |
-| **GitHub**               | Bugs, feature requests, deeper technical reports                                                   | [Livepeer-FrameWorks/monorepo](%GITHUB_URL%)                                                                                                                |
+| **Discord**              | Real-time discussion and migration scoping                                                         | [Join](https://discord.gg/9J6haUjdAq)                                                                                                                                       |
+| **GitHub**               | Bugs, feature requests, deeper technical reports                                                   | [Livepeer-FrameWorks/monorepo](https://github.com/livepeer-frameworks/monorepo)                                                                                                                |
 | **MistServer community** | Raw MistServer configuration, standalone server workflows, and features FrameWorks does not expose | [mistserver.com](https://mistserver.com/) - [MistServer manual](https://docs.mistserver.org/) - [DDVTech/mistserver](https://github.com/DDVTech/mistserver) |
 
 
@@ -28080,7 +28130,7 @@ FrameWorks delivers the events below as [webhooks](/builders/webhooks) and over 
 | `video.upload.created` / `.asset_created` / `.errored` / `.cancelled`                  | `upload.created` / `upload.completed` / `upload.failed` / `upload.aborted`                            |
 | `video.live_stream.simulcast_target.starting` / `.broadcasting` / `.errored` / `.idle` | `multistream.status_changed`                                                                          |
 | `video.asset.track.*` (subtitles/captions ready)                                       | Live captions / transcription not GA on FrameWorks                                                    |
-| Mux CLI webhook forwarding for local dev                                               | Subscribe to `tenantEvents` on `%GATEWAY_WS_URL%` from your dev machine, or expose a public HTTPS URL |
+| Mux CLI webhook forwarding for local dev                                               | Subscribe to `tenantEvents` on `ws://localhost:18000/graphql/ws` from your dev machine, or expose a public HTTPS URL |
 
 Webhook endpoints must be public HTTPS URLs; FrameWorks refuses private and loopback addresses.
 For local development, subscribe to `tenantEvents` or use a tunnel that gives you a public URL.
@@ -28089,7 +28139,7 @@ For local development, subscribe to `tenantEvents` or use a tunnel that gives yo
 
 ### 1. Create a FrameWorks account and a stream
 
-Sign up at [%APP_URL%](%APP_URL%) — email + password, or sign in with an EVM wallet if you'd
+Sign up at [https://chartroom.frameworks.network](https://chartroom.frameworks.network) — email + password, or sign in with an EVM wallet if you'd
 rather skip email entirely. Then:
 
 ```graphql
@@ -28128,7 +28178,7 @@ If you were using `@mux/mux-player-react`:
 - import MuxPlayer from "@mux/mux-player-react";
 - <MuxPlayer playbackId={playbackId} streamType="on-demand" />
 + import { Player } from "@livepeer-frameworks/player-react";
-+ <Player contentType="vod" contentId={playbackId} options={{ gatewayUrl: "%GATEWAY_URL%/graphql" }} />
++ <Player contentType="vod" contentId={playbackId} options={{ gatewayUrl: "http://localhost:18000/graphql" }} />
 ```
 
 The player also ships as:
@@ -28155,7 +28205,7 @@ Codegen against the schema gives you typed queries:
 ```bash
 # example with graphql-codegen
 pnpm dlx graphql-codegen \
-  --schema %GATEWAY_URL%/graphql \
+  --schema http://localhost:18000/graphql \
   --documents 'src/**/*.graphql' \
   --generates ./src/gql/generated.ts:typescript,typescript-operations
 ```
@@ -28163,7 +28213,7 @@ pnpm dlx graphql-codegen \
 If you want to read the schema directly, it lives at
 [`pkg/graphql/schema.graphql`](https://github.com/Livepeer-FrameWorks/monorepo/blob/master/pkg/graphql/schema.graphql)
 on GitHub, and the playground is at
-[`%GATEWAY_URL%/graphql/playground`](%GATEWAY_URL%/graphql/playground).
+[`http://localhost:18000/graphql/playground`](http://localhost:18000/graphql/playground).
 
 Mux's REST shape is the closer of the two big migrations to translate (Studio's REST is more
 ad-hoc); most Mux endpoints have a one-to-one GraphQL operation in the
@@ -28237,7 +28287,7 @@ referrer/UA gating, FrameWorks ships an equivalent surface — see
   `Referer` and `User-Agent` headers and returns 200 to allow or 403 to deny.
 
 Signing keys do not transfer between platforms — reissue on FrameWorks. Migration concierge
-available via [in-app ticket](%APP_URL%/support) if you have a large library of pre-signed
+available via [in-app ticket](https://chartroom.frameworks.network/support) if you have a large library of pre-signed
 JWTs to roll over.
 
 ### 7. Re-attach simulcast targets
@@ -28299,7 +28349,7 @@ over once you trust the numbers.
 - **Cross-cluster federation** — one viewer pool routed across clusters; the closer edge
   wins automatically.
 - **Agent-first surface.** MCP server at
-  [`/.well-known/mcp.json`](%GATEWAY_URL%/.well-known/mcp.json), wallet auth (EIP-191), and
+  [`/.well-known/mcp.json`](http://localhost:18000/.well-known/mcp.json), wallet auth (EIP-191), and
   gasless USDC payments via x402 (EIP-3009). See [Agent Access](/agents/overview).
 - **Skipper** — an in-product AI consultant for API discovery and diagnostics. Reach it from
   the dashboard, the docs (`⌘J`), or MCP.
@@ -28360,7 +28410,7 @@ these you depend on before cutting over.
   as the auth boundary across HLS / LL-HLS / DASH / WHEP / MP4 — no per-asset-type token swap
   in your client.
 - **GraphQL learning curve.** If you've never written a query, the
-  [docs playground](%GATEWAY_URL%/graphql/playground) is the quickest way to inspect available
+  [docs playground](http://localhost:18000/graphql/playground) is the quickest way to inspect available
   fields. Skipper can also draft queries.
 - **Webhook bodies render 64-bit integers as strings.** `sizeBytes`, `durationMs`, and money
   amounts arrive as `"7340032"`, not `7340032`; parse them explicitly.
@@ -28380,8 +28430,8 @@ these you depend on before cutting over.
 | **Skipper** (AI consultant) | Quick troubleshooting, API discovery, diagnostics, after-hours, non-human callers           | Dashboard `/skipper` · `⌘J` in docs · MCP at `/mcp`          |
 | **In-app ticketing**        | Account-specific issues, billing, anything tied to your tenant data, library-migration help | Dashboard `/support`                                         |
 | **Forum**                   | Long-form Q&A, recipes, searchable community knowledge                                      | [forum.frameworks.network](https://forum.frameworks.network) |
-| **Discord**                 | Real-time chat, casual questions                                                            | [Join](%DISCORD_URL%)                                        |
-| **GitHub**                  | Bugs, feature requests, deeper technical threads                                            | [Livepeer-FrameWorks/monorepo](%GITHUB_URL%)                 |
+| **Discord**                 | Real-time chat, casual questions                                                            | [Join](https://discord.gg/9J6haUjdAq)                                        |
+| **GitHub**                  | Bugs, feature requests, deeper technical threads                                            | [Livepeer-FrameWorks/monorepo](https://github.com/livepeer-frameworks/monorepo)                 |
 
 
 ---
@@ -42257,7 +42307,7 @@ Product-facing sequencing lives on the [Roadmap](/roadmap); this inventory is re
 # Roadmap
 https://logbook.frameworks.network/roadmap
 
-The [Platform capabilities](/platform/feature-matrix) page is the source of truth for what you can use today. This roadmap groups the work ahead by the same product areas, so each section here lines up with a section of the capability matrix. For a shorter tour of the product, see the [showcase](%MARKETING_URL%/showcase).
+The [Platform capabilities](/platform/feature-matrix) page is the source of truth for what you can use today. This roadmap groups the work ahead by the same product areas, so each section here lines up with a section of the capability matrix. For a shorter tour of the product, see the [showcase](https://frameworks.network/showcase).
 
 <Aside type="note" title="How to read this page">
 

@@ -225,7 +225,7 @@ Call `update_billing_details` with the listed fields, then request fresh payment
 ```json
 {
   "code": "INSUFFICIENT_BALANCE",
-  "message": "Available balance is 0 cents (0 settled, 0 reserved). At €0 or below, running streams and their viewers continue but new streams, new viewers and reconnects are refused; below -€10 running sessions stop. Top up to run billable operations.",
+  "message": "Available balance is 0 cents (0 settled, 0 reserved). At €0 or below, running streams and their viewers continue but new streams, new viewers and reconnects are refused; once the settled balance is below -€10 running sessions stop. Top up to run billable operations.",
   "resolution": "Call topup_balance tool to add credits, OR pay via x402 (USDC on Base/Arbitrum)",
   "tool": "topup_balance",
   "x402_accepts": [
@@ -267,10 +267,12 @@ Prepaid usage deductions can move an account toward zero or negative balance. Mo
 | `estimated_hours_left`      | Time until the available balance is depleted |
 | `live_metrics`              | Current operational usage context            |
 
-| Available balance | Effect                                                                                                                                                     |
-| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Above €0          | Rated work runs normally                                                                                                                                   |
-| €0 or below       | Running streams and their viewers continue. New rated work, new streams and new viewers are refused, and a disconnected viewer or encoder cannot reconnect |
-| Below -€10        | The tenant is suspended and running streams and sessions stop                                                                                              |
+| Balance                       | Effect                                                                                                                                                     |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Available balance above €0    | Rated work runs normally                                                                                                                                   |
+| Available balance €0 or below | Running streams and their viewers continue. New rated work, new streams and new viewers are refused, and a disconnected viewer or encoder cannot reconnect |
+| Settled balance below -€10    | The tenant is suspended and running streams and sessions stop until a top-up brings it back                                                                |
 
+Refusal uses the available balance; suspension uses the settled balance, so
+usage still reserved by running sessions does not suspend an account on its own.
 The rest of the authenticated platform remains usable at €0. Top up proactively before long-running work.

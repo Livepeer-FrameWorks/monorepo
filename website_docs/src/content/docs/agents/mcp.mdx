@@ -201,13 +201,16 @@ Always read this first. Returns:
 does not make the account broken. `balance_cents` is the settled
 balance, `reserved_balance_cents` is already committed to active usage, and `available_balance_cents`
 is what remains spendable. Billable tool preflights use the available balance.
-At €0 or below, running streams and their viewers continue but new rated work,
-new streams and new viewers are refused; below -€10 the tenant is suspended and
-running sessions stop. A suspended or closed account reports the
-`ACCOUNT_SUSPENDED` blocker.
+At an available balance of €0 or below, running streams and their viewers
+continue but new rated work, new streams and new viewers are refused. When the
+settled balance falls below -€10 the tenant is suspended and running sessions
+stop. A suspended or closed account reports the `ACCOUNT_SUSPENDED` blocker, as
+does an account whose FrameWorks arrangement has ended until Purser moves it to
+its next plan.
 
-`billing` also carries the plan lifecycle when one applies: `pending_tier`,
-`pending_reason`, `pending_effective_at` and `pending_tier_state` (`scheduled`,
+`billing` also carries the plan lifecycle when one applies: `pending_tier` (the
+plan's name) and `pending_tier_id`, `pending_reason`, `pending_effective_at` and
+`pending_tier_state` (`scheduled`,
 `final` or `applying`) for a staged plan change; `free_fallback` (`reason`
 `payment_failed` or `cancelled`, `at`, and `stage` `scheduled`, `applying` or
 `moved`) for a move to Free; `billing_arrangement` for a FrameWorks arrangement
