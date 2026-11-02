@@ -2024,6 +2024,7 @@ permission. Local closure prevents concurrent user creation and activation;
 Quartermaster teardown retries after a temporary outage. The system tenant cannot
 be closed. The tenant must exist in Quartermaster. Type its name to confirm, or pass
 `--yes --tenant-name` with its exact current name. Use user deactivation for a reversible suspension.
+See [Close a tenant](/operators/trial-accounts/#close-a-tenant).
 
 ```bash
 frameworks admin tenants deactivate <UUID> --yes --tenant-name "Exact Tenant Name" --reason "Account closed"
@@ -2037,7 +2038,8 @@ Quartermaster synchronization is `pending`, `retrying` (with the last error and
 next attempt) or `synchronized`, and every session stop still owed to a cell with
 its cells, retired cells and last error. JSON output keeps the Quartermaster
 fields and adds `account_state`, or `account_state_error` when Commodore cannot
-be read.
+be read. See [Session stops](/operators/trial-accounts/#session-stops) and
+[Account closure billing](/operators/trial-accounts/#account-closure-billing).
 
 ```bash
 frameworks admin tenants get <UUID> --output json
@@ -2140,7 +2142,7 @@ cannot be read or any registered Foghorn of the cell answers, and a retired cell
 that comes back still receives its stops. Type the cluster ID to confirm, or pass
 `--yes`. Retirement is permanent and changes nothing else about the cluster.
 `frameworks admin tenants get` lists each pending stop with its cells and the
-retired ones.
+retired ones. See [Session stops](/operators/trial-accounts/#session-stops).
 
 **Sample output:**
 
@@ -2406,6 +2408,9 @@ A tenant that owes nothing (base fee 0 and usage waived) needs no collection set
 close the preceding phase, so each invoice uses the arrangement that applied during its interval.
 Renewing a deadline preserves the period, and an identical grant set is a no-op.
 
+[Test and trial accounts](/operators/trial-accounts/) covers giving, extending and ending a trial;
+[Grant expiry](/operators/trial-accounts/#grant-expiry) covers what happens at the deadline.
+
 #### frameworks admin billing grant list
 
 List operator grants and retained grant history. By default this shows current
@@ -2468,6 +2473,7 @@ invoice job and runs the downgrade applier for that tenant. It reports `applied`
 the tenant is on the target tier, or what still holds it. Your identity and reason are
 recorded on the billing audit event. A preview whose target changed before
 confirmation is refused; preview it again. Requires a platform-operator JWT.
+See [Held downgrades](/operators/trial-accounts/#held-downgrades).
 
 #### frameworks admin billing recovery checkout
 
@@ -2500,6 +2506,7 @@ Mollie first payment. It retains the payment without refund or new access,
 requires the same preview and confirmation, and records the operator and reason.
 Current checkouts and payments already owed a refund are refused. Older Purser
 servers return `Unimplemented`; the CLI does not fall back to refund recovery.
+See [Checkout reservations](/operators/trial-accounts/#checkout-reservations).
 
 #### frameworks admin billing recovery upgrade
 
@@ -2517,6 +2524,7 @@ state. A waiver records its operator and reason on the purchase and in a
 command records the first operator and reason and reports the durable state,
 including work that still needs provider or metering repair.
 The command requires a platform-operator JWT.
+See [Tier upgrades](/operators/trial-accounts/#tier-upgrades).
 
 #### frameworks admin billing recovery notice
 
@@ -2528,7 +2536,8 @@ email worker. It records the operator and reason on `billing.subscription_update
 without changing the tier, collection or payments. Confirmation is fenced to
 the displayed deadline and notice phase. Older servers return `Unimplemented`;
 the CLI never invokes checkout recovery as a fallback. Requires a
-platform-operator JWT.
+platform-operator JWT. See
+[Free fallback and cancellation](/operators/trial-accounts/#free-fallback-and-cancellation).
 
 #### frameworks admin billing grant set
 
@@ -2676,6 +2685,7 @@ Without `--password` or `--password-stdin`, the CLI prompts at a TTY with hidden
 Reversibly disable a user, their interactive sessions, API access and stream-key publishing. Tenant-owned media remains available.
 Requires a platform-operator session and a private audit reason.
 Use `--email`, or `--user-id` with `--tenant-id`. With `--email`, `--tenant-id` is optional.
+See [Suspend a user](/operators/trial-accounts/#suspend-a-user).
 
 ```bash
 frameworks admin users deactivate --email trial@example.com --reason "Trial paused"
