@@ -3316,11 +3316,11 @@ func (s *PurserServer) GetTenantUsage(ctx context.Context, req *purserpb.TenantU
 				protoLine.PricingLabel = pricingLabelFor(protoLine.PricingSource, clusterKind)
 			}
 			// Usage that rated to a real amount but was waived to €0 is stamped
-			// beta_free regardless of attribution, so platform/unattributed lines
-			// also surface the beta label and the preview matches the invoice.
+			// beta_free regardless of attribution, so the preview matches the
+			// invoice. The live label names who waived it.
 			if suffixed.GrossAmount.IsPositive() && suffixed.Amount.IsZero() {
 				protoLine.PricingSource = string(pricing.SourceBetaFree)
-				protoLine.PricingLabel = pricingLabelFor(protoLine.PricingSource, clusterKind)
+				protoLine.PricingLabel = pricing.WaiverLabel(appconfig.Runtime().WaiveUsageCharges)
 			}
 			resp.LineItems = append(resp.LineItems, protoLine)
 			amount, _ := suffixed.Amount.Float64()
@@ -8349,7 +8349,7 @@ func pricingLabelFor(pricingSource, clusterKind string) string {
 	case "included_subscription":
 		return "Included in subscription"
 	case "beta_free":
-		return "Usage is on us during beta"
+		return pricing.WaivedLineLabel
 	default:
 		return ""
 	}

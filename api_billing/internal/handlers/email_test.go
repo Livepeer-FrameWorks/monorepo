@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"frameworks/api_billing/internal/appconfig/appconfigtest"
+	"frameworks/api_billing/internal/pricing"
 )
 
 func TestIsConfigured_AllSet(t *testing.T) {
@@ -37,6 +38,25 @@ func TestIsConfigured_MissingFields(t *testing.T) {
 				t.Fatal("expected not configured")
 			}
 		})
+	}
+}
+
+// A grant that waives usage is not the beta waiver: the callout names who
+// waived the usage instead of always crediting the beta.
+func TestInvoiceCreatedWaiverCalloutNamesItsSource(t *testing.T) {
+	es := &EmailService{}
+	for _, platformWaiver := range []bool{false, true} {
+		body, err := es.renderTemplate("invoice_created", EmailData{
+			InvoiceID: "INV-WAIVED", Amount: 249, Currency: "EUR", DueDate: time.Date(2026, 11, 2, 0, 0, 0, 0, time.UTC),
+			UsageWaived: true, UsageWaiverLabel: pricing.WaiverLabel(platformWaiver), GrossMeteredAmount: 12.5,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		mentionsBeta := strings.Contains(body, "during beta")
+		if mentionsBeta != platformWaiver || !strings.Contains(body, pricing.WaiverLabel(platformWaiver)) {
+			t.Fatalf("platform waiver %v: callout mentions beta=%v, want the label %q", platformWaiver, mentionsBeta, pricing.WaiverLabel(platformWaiver))
+		}
 	}
 }
 

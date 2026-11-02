@@ -48,6 +48,20 @@ const (
 	SourceBetaFree PricingSource = "beta_free"
 )
 
+// WaivedLineLabel is the stored label of a beta_free line. Both the platform
+// waiver and an operator grant with waive_usage stamp beta_free, so a stored
+// line does not record which of them waived it.
+const WaivedLineLabel = "Usage charges waived"
+
+// WaiverLabel names who waived usage at rating time: the platform-wide
+// WAIVE_USAGE_CHARGES or the tenant's operator grant.
+func WaiverLabel(platformWaiver bool) string {
+	if platformWaiver {
+		return "Usage is on us during beta"
+	}
+	return "Usage waived under your FrameWorks arrangement"
+}
+
 // Model mirrors purser.cluster_pricing.pricing_model. Kept as a typed string
 // rather than reusing rating.Model since the two enums describe different
 // concepts (cluster pricing model vs rating math model).

@@ -436,9 +436,10 @@ func (jm *JobManager) rateInvoiceForTenant(
 				PlatformFeeCents:     platformFeeCents,
 				PriceVersionID:       versionCopy,
 			}
-			// A line that rated to a real amount but was waived to €0 by the beta
-			// waiver is stamped beta_free. Lines that were already €0 (within the
-			// included allowance, or included_subscription) keep their real source.
+			// A line that rated to a real amount but was waived to €0, by the
+			// platform waiver or a grant, is stamped beta_free. Lines that were
+			// already €0 (within the included allowance, or
+			// included_subscription) keep their real source.
 			if pl.GrossAmount.IsPositive() && pl.Amount.IsZero() {
 				pl.PricingSource = pricing.SourceBetaFree
 			}
@@ -821,7 +822,7 @@ func emailPricingLabel(pricingSource, clusterKind string) string {
 	case "included_subscription":
 		return "Included in subscription"
 	case "beta_free":
-		return "Usage is on us during beta"
+		return pricing.WaivedLineLabel
 	default:
 		return ""
 	}

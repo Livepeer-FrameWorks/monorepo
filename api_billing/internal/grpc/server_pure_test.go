@@ -142,7 +142,7 @@ func TestPricingLabelFor(t *testing.T) {
 		{"free_unmetered", "", "Free (no charge)"},
 		{"self_hosted", "", "Self-hosted (no charge)"},
 		{"included_subscription", "", "Included in subscription"},
-		{"beta_free", "", "Usage is on us during beta"},
+		{"beta_free", "", "Usage charges waived"},
 		{"unknown_source", "", ""},
 	}
 	for _, c := range cases {

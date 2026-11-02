@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"frameworks/api_billing/internal/appconfig"
+	"frameworks/api_billing/internal/pricing"
 	emailpkg "github.com/Livepeer-FrameWorks/monorepo/pkg/email"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 
@@ -43,10 +44,12 @@ type EmailData struct {
 	// ActionURL is the hosted or in-app page where the customer completes a
 	// required payment action.
 	ActionURL string
-	// UsageWaived is true when metered usage was waived to €0 during the
-	// billing beta while the subscription still charges. GrossMeteredAmount is
-	// the would-have-cost usage total shown in the waiver callout.
+	// UsageWaived is true when metered usage was waived to €0 while the
+	// subscription still charges. UsageWaiverLabel names who waived it.
+	// GrossMeteredAmount is the would-have-cost usage total shown in the
+	// waiver callout.
 	UsageWaived        bool
+	UsageWaiverLabel   string
 	GrossMeteredAmount float64
 	// LineItems is the cluster-attributed presentation source of truth for
 	// the invoice. Email renders only from this — usage_details is raw/debug
@@ -216,6 +219,7 @@ func (es *EmailService) SendInvoiceCreatedEmail(tenantEmail, tenantName, invoice
 		LineItems:          lineItems,
 		LineItemGroups:     groupEmailLineItems(lineItems),
 		UsageWaived:        grossMeteredAmount > 0 && meteredAmount == 0,
+		UsageWaiverLabel:   pricing.WaiverLabel(appconfig.Runtime().WaiveUsageCharges),
 		GrossMeteredAmount: grossMeteredAmount,
 		FX:                 fx,
 	}
