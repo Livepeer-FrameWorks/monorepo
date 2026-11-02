@@ -231,9 +231,9 @@ so the check proves required objects and least-privilege grants together.
 Deep mode also reads account and billing recovery from the Commodore and Purser
 databases and fails on the conditions their alerts fire on: a tenant closure
 whose Quartermaster synchronization failed more than once, a session stop pending
-for over 5 minutes, a confirmed downgrade held past its effective time, and a
-billing recovery item failing repeatedly or unresolved for over 14 days, and a
-prepaid tenant below the -€10 suspension threshold that was not suspended. Each
+for over 5 minutes, a confirmed downgrade held past its effective time, a billing
+recovery item failing repeatedly or unresolved for over 14 days, and a prepaid
+tenant below the -€10 suspension threshold that was not suspended. Each
 finding names up to ten tenants and points at `frameworks admin tenants get`,
 `frameworks admin clusters retire` or `frameworks admin billing recovery list`.
 Closures still synchronizing, recovery items waiting normally, and prepaid
@@ -2038,7 +2038,9 @@ Quartermaster synchronization is `pending`, `retrying` (with the last error and
 next attempt) or `synchronized`, and every session stop still owed to a cell with
 its cells, retired cells and last error. JSON output keeps the Quartermaster
 fields and adds `account_state`, or `account_state_error` when Commodore cannot
-be read. See [Session stops](/operators/trial-accounts/#session-stops) and
+be read. A tenant with more than 100 pending stops lists the oldest 100 and says
+so. When Commodore cannot be read, the command still prints the Quartermaster
+tenant and then exits non-zero. See [Session stops](/operators/trial-accounts/#session-stops) and
 [Account closure billing](/operators/trial-accounts/#account-closure-billing).
 
 ```bash
@@ -2073,7 +2075,8 @@ List and manage clusters.
 - `migrate-artifacts` - Migrate artifact metadata from a source cluster for one tenant
 - `reassign-control-cell` - Move a tenant-private cluster to another Foghorn control cell (`--to`, `--timeout`)
 - `control-cell` - Show a tenant-private cluster's control cell, reassignment state, and edges not yet moved
-- `retire` - Record a permanently removed cell so session stops owed to it settle (`--reason`, `--yes`)
+- `retire` - Record a cell removed for good so session stops owed to it settle (`--reason`, `--yes`)
+- `unretire` - Remove a cell's retirement record so its session stops wait for it again (`--reason`)
 
 ```bash
 # List all clusters (shows name and ID)
@@ -2131,6 +2134,9 @@ frameworks admin clusters control-cell <cluster-id>
 
 # Settle session stops owed to a cell that was removed for good
 frameworks admin clusters retire <cluster-id> --reason "Cell decommissioned"
+
+# Undo a retirement made by mistake
+frameworks admin clusters unretire <cluster-id> --reason "Retired the wrong cell"
 ```
 
 `retire` exists for `CommodoreAccountIngestRevocationStuck`. Account closure and
@@ -2140,7 +2146,10 @@ that cannot reach the cell counts as delivered there; a stop still owed to anoth
 unreachable cell keeps waiting for it. Commodore refuses while Quartermaster
 cannot be read or any registered Foghorn of the cell answers, and a retired cell
 that comes back still receives its stops. Type the cluster ID to confirm, or pass
-`--yes`. Retirement is permanent and changes nothing else about the cluster.
+`--yes`. Retirement changes nothing else about the cluster. `unretire` removes
+the record, for a cell retired by mistake or one returning to service; from then
+on a stop the cell does not confirm stays pending. Stops that settled while the
+cell was retired are not reopened.
 `frameworks admin tenants get` lists each pending stop with its cells and the
 retired ones. See [Session stops](/operators/trial-accounts/#session-stops).
 

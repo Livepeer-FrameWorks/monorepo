@@ -185,16 +185,22 @@ func newAdminTenantsGetCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
+		// An unreadable account state still prints the Quartermaster tenant,
+		// then exits non-zero so scripts can tell the read was incomplete.
 		state, stateErr := readTenantAccountState(cmd.Context(), id.String())
 		if output == "json" {
-			return writeTenantWithAccountStateJSON(cmd.OutOrStdout(), response, state, stateErr)
+			if err = writeTenantWithAccountStateJSON(cmd.OutOrStdout(), response, state, stateErr); err != nil {
+				return err
+			}
+		} else {
+			fmt.Fprintf(cmd.OutOrStdout(), "%s (%s)\n", response.GetTenant().GetName(), response.GetTenant().GetId())
+			if stateErr == nil {
+				writeTenantAccountState(cmd.OutOrStdout(), state)
+			}
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "%s (%s)\n", response.GetTenant().GetName(), response.GetTenant().GetId())
 		if stateErr != nil {
-			ux.Warn(cmd.OutOrStdout(), fmt.Sprintf("Closure state unavailable from Commodore: %v", stateErr))
-			return nil
+			return fmt.Errorf("closure state unavailable from Commodore: %w", stateErr)
 		}
-		writeTenantAccountState(cmd.OutOrStdout(), state)
 		return nil
 	}}
 }

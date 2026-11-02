@@ -977,6 +977,7 @@ func newAdminClustersCmd() *cobra.Command {
 	cmd.AddCommand(newAdminClustersReassignControlCellCmd())
 	cmd.AddCommand(newAdminClustersControlCellCmd())
 	cmd.AddCommand(newAdminClustersRetireCmd())
+	cmd.AddCommand(newAdminClustersUnretireCmd())
 	return cmd
 }
 

@@ -29,6 +29,8 @@ type trialCommandServer struct {
 	purserpb.UnimplementedPrepaidServiceServer
 	history           *commodorepb.AdminListAccountHistoryRequest
 	retired           *commodorepb.AdminRetireIngestCellRequest
+	unretired         *commodorepb.AdminUnretireIngestCellRequest
+	stateFailure      bool
 	tenant            string
 	failure           bool
 	jwt               string
@@ -53,7 +55,9 @@ func (s *trialCommandServer) AdminListAccountHistory(ctx context.Context, req *c
 	if s.failure {
 		return nil, status.Error(codes.Unavailable, "history unavailable")
 	}
-	return &commodorepb.AdminListAccountHistoryResponse{Entries: []*commodorepb.OperatorAccountAuditEntry{{Id: "audit-1", Action: "user_active:false", Reason: "line one\nline two", ActorUserId: "operator", TargetId: "departing-user", CreatedAt: timestamppb.New(time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC))}}, HasMore: true, AccountState: retryingAccountState(req.GetTenantId())}, nil
+	state := retryingAccountState(req.GetTenantId())
+	state.PendingIngestStopsTruncated = true
+	return &commodorepb.AdminListAccountHistoryResponse{Entries: []*commodorepb.OperatorAccountAuditEntry{{Id: "audit-1", Action: "user_active:false", Reason: "line one\nline two", ActorUserId: "operator", TargetId: "departing-user", CreatedAt: timestamppb.New(time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC))}}, HasMore: true, AccountState: state}, nil
 }
 
 func retryingAccountState(tenantID string) *commodorepb.TenantAccountState {
@@ -67,10 +71,19 @@ func retryingAccountState(tenantID string) *commodorepb.TenantAccountState {
 
 func (s *trialCommandServer) AdminGetTenantAccountState(ctx context.Context, req *commodorepb.AdminGetTenantAccountStateRequest) (*commodorepb.TenantAccountState, error) {
 	s.readJWT(ctx)
-	if s.failure {
+	if s.failure || s.stateFailure {
 		return nil, status.Error(codes.Unavailable, "account state unavailable")
 	}
 	return retryingAccountState(req.GetTenantId()), nil
+}
+
+func (s *trialCommandServer) AdminUnretireIngestCell(ctx context.Context, req *commodorepb.AdminUnretireIngestCellRequest) (*commodorepb.AdminUnretireIngestCellResponse, error) {
+	s.readJWT(ctx)
+	s.unretired = req
+	if req.GetClusterId() != "removed-cell" {
+		return &commodorepb.AdminUnretireIngestCellResponse{ClusterId: req.GetClusterId()}, nil
+	}
+	return &commodorepb.AdminUnretireIngestCellResponse{ClusterId: req.GetClusterId(), WasRetired: true, RetiredAt: timestamppb.New(time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC)), RetiredBy: "operator", RetirementReason: "decommissioned"}, nil
 }
 
 func (s *trialCommandServer) AdminRetireIngestCell(ctx context.Context, req *commodorepb.AdminRetireIngestCellRequest) (*commodorepb.AdminRetireIngestCellResponse, error) {
@@ -213,13 +226,19 @@ func TestTrialAccountCommandsUseRealRPCs(t *testing.T) {
 		{"lookup stop text", []string{"admin", "tenants", "get", id}, "cells=live-cell,removed-cell  retired=removed-cell", false},
 		{"lookup closure json", []string{"--output", "json", "admin", "tenants", "get", id}, `"closure_sync": "retrying"`, false},
 		{"history text", []string{"admin", "tenants", "history", id, "--limit", "7", "--before", "test-cursor"}, `line one\nline two`, false},
-		{"history closure text", []string{"admin", "tenants", "history", id}, "Pending session stops: 1", false},
+		{"history closure text", []string{"admin", "tenants", "history", id}, "Pending session stops: 1+ (showing the oldest 1)", false},
+		{"lookup degraded text", []string{"admin", "tenants", "get", id}, "closure state unavailable from Commodore", true},
+		{"lookup degraded json", []string{"--output", "json", "admin", "tenants", "get", id}, "closure state unavailable from Commodore", true},
 		{"history closure json", []string{"--output", "json", "admin", "tenants", "history", id}, `"closure_error": "quartermaster unavailable"`, false},
 		{"retire missing reason", []string{"admin", "clusters", "retire", "removed-cell", "--yes"}, "--reason is required", true},
 		{"retire mismatched confirmation", []string{"admin", "clusters", "retire", "removed-cell", "--reason", "decommissioned"}, "nothing was retired", true},
 		{"retire interactive", []string{"admin", "clusters", "retire", "removed-cell", "--reason", "decommissioned"}, "Cell removed-cell retired", false},
 		{"retire", []string{"admin", "clusters", "retire", "removed-cell", "--reason", "decommissioned", "--yes"}, "2 include this cell and retry now", false},
 		{"retire json", []string{"--output", "json", "admin", "clusters", "retire", "removed-cell", "--reason", "decommissioned", "--yes"}, `"pending_ingest_stops": 2`, false},
+		{"unretire missing reason", []string{"admin", "clusters", "unretire", "removed-cell"}, "--reason is required", true},
+		{"unretire", []string{"admin", "clusters", "unretire", "removed-cell", "--reason", "retired by mistake"}, "Retirement of cell removed-cell removed", false},
+		{"unretire not retired", []string{"admin", "clusters", "unretire", "other-cell", "--reason", "retired by mistake"}, "Cell other-cell was not retired; nothing changed", false},
+		{"unretire json", []string{"--output", "json", "admin", "clusters", "unretire", "removed-cell", "--reason", "retired by mistake"}, `"retirement_reason": "decommissioned"`, false},
 		{"history json", []string{"--output", "json", "admin", "tenants", "history", id}, `"actor_user_id": "operator"`, false},
 		{"recovery text", []string{"admin", "billing", "recovery", "list", "--limit", "7"}, "provider offline", false},
 		{"recovery json", []string{"--output", "json", "admin", "billing", "recovery", "list"}, `"reservation_id": "reservation"`, false},
@@ -251,7 +270,9 @@ func TestTrialAccountCommandsUseRealRPCs(t *testing.T) {
 		{"history error", []string{"admin", "tenants", "history", id}, "history unavailable", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			service.failure = tc.fail
+			degraded := strings.HasPrefix(tc.name, "lookup degraded")
+			service.failure = tc.fail && !degraded
+			service.stateFailure = degraded
 			service.retainUnsupported = (tc.name == "retain delivered older server" || tc.name == "notice older server")
 			service.recoveryOutcome = ""
 			if tc.name == "recover checkout pending" {
@@ -269,7 +290,7 @@ func TestTrialAccountCommandsUseRealRPCs(t *testing.T) {
 			if tc.name == "retire interactive" {
 				command.SetIn(strings.NewReader("removed-cell\n"))
 			}
-			service.retired = nil
+			service.retired, service.unretired = nil, nil
 			command.SetArgs(tc.args)
 			err := command.Execute()
 			if (tc.name == "recover checkout refuses unconfirmed" || tc.name == "recover upgrade unconfirmed" || tc.name == "retain delivered unconfirmed" || tc.name == "notice unconfirmed" || (tc.name == "retain delivered older server" || tc.name == "notice older server")) && service.recoveryCalls != callsBefore {
@@ -278,11 +299,24 @@ func TestTrialAccountCommandsUseRealRPCs(t *testing.T) {
 			if strings.HasPrefix(tc.name, "retire ") && tc.fail && service.retired != nil {
 				t.Fatalf("a refused retirement reached Commodore: %v", service.retired)
 			}
+			if strings.HasPrefix(tc.name, "unretire ") && tc.fail && service.unretired != nil {
+				t.Fatalf("a refused unretirement reached Commodore: %v", service.unretired)
+			}
 			if tc.fail {
 				if err == nil || !strings.Contains(err.Error(), tc.want) {
 					t.Fatalf("error=%v want %s", err, tc.want)
 				}
+				// A degraded read still prints the Quartermaster tenant.
+				if degraded && !strings.Contains(out.String(), "Trial tenant") {
+					t.Fatalf("degraded lookup dropped the tenant: %s", out.String())
+				}
+				if tc.name == "lookup degraded json" && !strings.Contains(out.String(), `"account_state_error"`) {
+					t.Fatalf("degraded JSON lacks account_state_error: %s", out.String())
+				}
 				return
+			}
+			if strings.HasPrefix(tc.name, "unretire") && (service.unretired.GetReason() != "retired by mistake") {
+				t.Fatalf("unretirement request=%v", service.unretired)
 			}
 			if strings.HasPrefix(tc.name, "retire") && (service.retired.GetClusterId() != "removed-cell" || service.retired.GetReason() != "decommissioned") {
 				t.Fatalf("retirement request=%v", service.retired)

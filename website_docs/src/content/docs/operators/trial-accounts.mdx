@@ -385,4 +385,5 @@ frameworks admin clusters retire <cluster-id> --reason "Cell decommissioned"
 
 Commodore refuses while any registered Foghorn of the cell still answers. A stop still owed to
 another unreachable cell keeps waiting for that cell, and a retired cell that comes back still
-receives its stops.
+receives its stops. `frameworks admin clusters unretire <cluster-id> --reason <reason>` removes a retirement
+made by mistake; stops that already settled are not reopened.
