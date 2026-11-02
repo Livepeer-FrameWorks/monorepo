@@ -12,15 +12,15 @@
     "build:react": "pnpm --filter @livepeer-frameworks/streamcrafter-react build",
     "build:svelte": "pnpm --filter @livepeer-frameworks/streamcrafter-svelte build",
     "build:wc": "pnpm --filter @livepeer-frameworks/streamcrafter-wc build",
-    "dev": "pnpm exec concurrently \"pnpm run build:core -- --watch\" \"pnpm run playground:dev\"",
+    "dev": "pnpm run playground:dev",
     "type-check": "pnpm --filter '@livepeer-frameworks/streamcrafter-*' type-check",
     "lint": "eslint .",
     "check": "pnpm type-check && pnpm lint",
     "test": "pnpm --filter '@livepeer-frameworks/streamcrafter-*' --if-present test",
     "test:coverage": "pnpm --filter '@livepeer-frameworks/streamcrafter-*' --if-present test:coverage",
     "format": "prettier --write 'packages/*/src/**'",
-    "playground:dev": "pnpm --filter playground run dev",
-    "playground:build": "pnpm --filter playground run build",
+    "playground:dev": "pnpm --filter @livepeer-frameworks/sdk-playground run dev",
+    "playground:build": "pnpm --filter @livepeer-frameworks/sdk-playground run build",
     "clean": "rm -rf packages/*/dist packages/*/.svelte-kit"
   },
   "devDependencies": {
