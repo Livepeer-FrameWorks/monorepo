@@ -5,6 +5,7 @@
   import { asset, resolve } from "$app/paths";
   import { isEmailVerificationRequired } from "$lib/auth/errors";
   import { safeReturnTo } from "$lib/auth/returnTo";
+  import { takeSessionEnd } from "$lib/houdini/session-end";
   import { auth } from "$lib/stores/auth";
   import { getMarketingSiteUrl } from "$lib/config";
   import { getIconComponent } from "$lib/iconUtils";
@@ -46,7 +47,22 @@
     }
   };
 
+  const DEACTIVATED_MESSAGE =
+    "This account is deactivated. Ask your workspace owner or FrameWorks support to restore access.";
+
+  // The gateway answers a deactivated user's sign-in with "account deactivated".
+  function loginErrorMessage(message: string): string {
+    return message.toLowerCase().includes("account deactivated") ? DEACTIVATED_MESSAGE : message;
+  }
+
   onMount(() => {
+    const ended = takeSessionEnd();
+    if (ended === "deactivated") {
+      error = DEACTIVATED_MESSAGE;
+    } else if (ended === "expired") {
+      error = "Your session ended. Sign in again to continue.";
+    }
+
     // Record when form was shown
     formShownAt = Date.now();
 
@@ -122,11 +138,11 @@
           goto(resolve(`/verify-email?email=${encodeURIComponent(email)}`));
           return;
         }
-        error = loginError;
+        error = loginErrorMessage(loginError);
       }
     } catch (_err) {
       console.error("Login error:", _err);
-      error = _err instanceof Error ? _err.message : "Login failed";
+      error = loginErrorMessage(_err instanceof Error ? _err.message : "Login failed");
     } finally {
       loading = false;
       // Reset bot protection for next attempt

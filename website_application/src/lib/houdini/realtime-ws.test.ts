@@ -2,12 +2,56 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 const refreshAuthSession = vi.fn();
 vi.mock("$lib/auth/refresh", () => ({ refreshAuthSession }));
+const endSession = vi.fn(async () => {});
+vi.mock("$lib/houdini/session-end", () => ({
+  ACCOUNT_DEACTIVATED_CLOSE_REASON: "account deactivated",
+  CLOSE_FORBIDDEN: 4403,
+  endSession,
+}));
 
 const { realtimeClientOptions } = await import("./realtime-ws");
+
+function closeEvent(code: number, reason: string) {
+  return { code, reason, wasClean: true } as CloseEvent;
+}
 
 afterEach(() => {
   vi.useRealTimers();
   refreshAuthSession.mockReset();
+  endSession.mockClear();
+});
+
+describe("realtime WebSocket session end", () => {
+  it("signs out without retrying when the gateway closes for a deactivated account", () => {
+    const options = realtimeClientOptions("wss://bridge.test/graphql/ws");
+    const close = closeEvent(4403, "account deactivated");
+    options.on!.closed!(close);
+    expect(options.shouldRetry!(close)).toBe(false);
+    expect(endSession).toHaveBeenCalledWith("deactivated");
+    expect(refreshAuthSession).not.toHaveBeenCalled();
+  });
+
+  it("stops retrying and signs out when a 4403 close is followed by a refused refresh", async () => {
+    refreshAuthSession.mockResolvedValue("unauthorized");
+    const options = realtimeClientOptions("wss://bridge.test/graphql/ws");
+    const close = closeEvent(4403, "credential revoked");
+    options.on!.closed!(close);
+    expect(options.shouldRetry!(close)).toBe(true);
+    await expect(options.retryWait!(0)).rejects.toThrow("session ended");
+    expect(endSession).toHaveBeenCalledWith("expired");
+    expect(options.shouldRetry!(new Error("session ended"))).toBe(false);
+  });
+
+  it("keeps reconnecting after a refused refresh that followed a network close", async () => {
+    vi.useFakeTimers();
+    refreshAuthSession.mockResolvedValue("unauthorized");
+    const options = realtimeClientOptions("wss://bridge.test/graphql/ws");
+    options.on!.closed!(closeEvent(1006, ""));
+    const waiting = options.retryWait!(0);
+    await vi.runAllTimersAsync();
+    await expect(waiting).resolves.toBeUndefined();
+    expect(endSession).not.toHaveBeenCalled();
+  });
 });
 
 describe("realtime WebSocket options", () => {

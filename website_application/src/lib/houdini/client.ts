@@ -4,6 +4,7 @@ import { createClient } from "graphql-ws";
 import { browser } from "$app/environment";
 import { refreshAuthSession } from "$lib/auth/refresh";
 import { realtimeClientOptions } from "$lib/houdini/realtime-ws";
+import { endSession } from "$lib/houdini/session-end";
 
 const GRAPHQL_HTTP_URL = import.meta.env.VITE_GRAPHQL_HTTP_URL ?? "";
 const GRAPHQL_WS_URL = import.meta.env.VITE_GRAPHQL_WS_URL ?? "";
@@ -56,8 +57,15 @@ async function graphQLFetch({ fetch, name, text, variables, session }: RequestHa
   }
 
   let response = await postGraphQL(fetch, name, text, variables, headers);
-  if (response.status === 401 && (await refreshAuthSession(fetch)) === "ok") {
-    response = await postGraphQL(fetch, name, text, variables, headers);
+  if (response.status === 401) {
+    const refreshed = await refreshAuthSession(fetch);
+    if (refreshed === "ok") {
+      response = await postGraphQL(fetch, name, text, variables, headers);
+    } else if (refreshed === "unauthorized") {
+      // The refresh token is dead too: sign the tab out instead of letting
+      // every query retry with it.
+      void endSession("expired");
+    }
   }
 
   const contentType = response.headers.get("content-type") ?? "";
