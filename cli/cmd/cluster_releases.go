@@ -19,6 +19,7 @@ import (
 	"frameworks/cli/pkg/gitops"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/remoteaccess"
+	"frameworks/cli/pkg/watchdog"
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -33,9 +34,12 @@ import (
 
 const (
 	edgeReleaseSyncRPCTimeout = 60 * time.Second
-	edgeReleaseSyncTimeout    = 10 * time.Minute
-	edgeReleaseSyncAttempts   = 6
-	edgeReleaseSyncBaseDelay  = 250 * time.Millisecond
+	// edgeReleaseSyncStallWindow bounds the edge release target sync by silence: the manifest fetch, the release
+	// publish and each cluster's target are progress, so a manifest with many clusters runs as long as each one is set.
+	// It covers the longest silent step, one cluster's retried SetClusterReleaseTarget.
+	edgeReleaseSyncStallWindow = 10 * time.Minute
+	edgeReleaseSyncAttempts    = 6
+	edgeReleaseSyncBaseDelay   = 250 * time.Millisecond
 )
 
 // edgeReleaseQMClient is the narrow Quartermaster surface the release-target
@@ -401,9 +405,14 @@ func syncClusterEdgeReleaseTargetPinned(cmd *cobra.Command, rc *resolvedCluster,
 	return syncEdgeReleaseTargetResolved(cmd, rc, channel, concreteVersion, concreteVersion, sharedEnv, false)
 }
 
-func syncEdgeReleaseTargetResolved(cmd *cobra.Command, rc *resolvedCluster, channel, fetchVersion, targetSelector string, sharedEnv map[string]string, keepPin bool) error {
-	operationCtx, operationCancel := context.WithTimeout(cmd.Context(), edgeReleaseSyncTimeout)
-	defer operationCancel()
+func syncEdgeReleaseTargetResolved(cmd *cobra.Command, rc *resolvedCluster, channel, fetchVersion, targetSelector string, sharedEnv map[string]string, keepPin bool) (err error) {
+	parent := cmd.Context()
+	if parent == nil {
+		parent = context.Background()
+	}
+	operationCtx, progress := watchdog.Start(parent, "edge release target sync", edgeReleaseSyncStallWindow)
+	defer progress.Stop()
+	defer func() { err = progress.Err(err) }()
 	originalContext := cmd.Context()
 	cmd.SetContext(operationCtx)
 	defer cmd.SetContext(originalContext)
@@ -411,6 +420,7 @@ func syncEdgeReleaseTargetResolved(cmd *cobra.Command, rc *resolvedCluster, chan
 	if err != nil {
 		return fmt.Errorf("fetch edge release manifest for target sync: %w", err)
 	}
+	progress.Report("fetched edge release manifest " + releaseManifest.PlatformVersion)
 	catalogChannel, err := edgeReleaseCatalogChannel(releaseManifest)
 	if err != nil {
 		return fmt.Errorf("resolve edge release catalog channel: %w", err)
@@ -430,6 +440,7 @@ func syncEdgeReleaseTargetResolved(cmd *cobra.Command, rc *resolvedCluster, chan
 	} else if err := ensureReleaseTargetExistsContext(operationCtx, qm, ctxCfg, catalogChannel, targetVersion); err != nil {
 		return err
 	}
+	progress.Report("edge release " + releaseManifest.PlatformVersion + " present in the catalog")
 
 	clusterIDs := rc.Manifest.AllClusterIDs()
 	versionsSet := map[string]struct{}{}
@@ -458,6 +469,7 @@ func syncEdgeReleaseTargetResolved(cmd *cobra.Command, rc *resolvedCluster, chan
 		if err != nil {
 			return fmt.Errorf("set edge release target for cluster %s: %w", clusterID, err)
 		}
+		progress.Report("edge release target set for cluster " + clusterID)
 		versionsSet[firstNonEmpty(clusterVersion, "latest")] = struct{}{}
 	}
 	versions := make([]string, 0, len(versionsSet))

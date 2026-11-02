@@ -11,6 +11,7 @@ import (
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/orchestrator"
 	"frameworks/cli/pkg/ssh"
+	"frameworks/cli/pkg/watchdog"
 )
 
 // A cell whose Foghorn replicas all enforce signed placement attests that to
@@ -21,8 +22,11 @@ import (
 // starts, waits until the cell it just upgraded holds no schema-1 tenant, so a
 // cell Commodore does not converge stops the rollout with one cell affected.
 const (
-	mediaCellGateTimeout  = 15 * time.Minute
-	mediaCellGateInterval = 10 * time.Second
+	// mediaCellGateStallWindow is how long a cell may go without one of its schema-1 tenants converging before the
+	// gate stops the rollout. A cell with many tenants waits as long as Commodore keeps publishing their schema-2
+	// authority.
+	mediaCellGateStallWindow = 15 * time.Minute
+	mediaCellGateInterval    = 10 * time.Second
 	// mediaCellAttestationSettle is how long a cell that does not yet attest
 	// enforcement is given to do so: Foghorn's replica liveness window (60 s),
 	// after which an upgraded cell's attestation reflects only its new
@@ -44,16 +48,19 @@ type mediaCellAuthority struct {
 type mediaCellGate struct {
 	out      io.Writer
 	read     func(ctx context.Context, cell string) (mediaCellAuthority, error)
-	timeout  time.Duration
+	stall    time.Duration
 	interval time.Duration
 	settle   time.Duration
 }
 
 // await returns once cell holds no schema-1 tenant and either attests
 // enforcement or has had the settle time since its upgrade finished without
-// attesting. It fails after the gate's timeout.
+// attesting. Each drop in the cell's schema-1 tenant count is progress, also
+// reported to the watchdog ctx carries; the gate fails once its stall window
+// passes without any.
 func (g *mediaCellGate) await(ctx context.Context, cell string, upgraded time.Time) error {
-	deadline := time.Now().Add(g.timeout)
+	lastProgress := time.Now()
+	fewestLegacy := int64(-1)
 	last := ""
 	report := func(status string) {
 		if status != last {
@@ -71,6 +78,13 @@ func (g *mediaCellGate) await(ctx context.Context, cell string, upgraded time.Ti
 			report("Commodore records no cell placement attestation; nothing to wait for")
 			return nil
 		case state.LegacyTenants > 0:
+			if fewestLegacy < 0 || state.LegacyTenants < fewestLegacy {
+				if fewestLegacy >= 0 {
+					lastProgress = time.Now()
+					watchdog.Reportf(ctx, "cell %s: %d schema-1 tenant(s) left", cell, state.LegacyTenants)
+				}
+				fewestLegacy = state.LegacyTenants
+			}
 			status = fmt.Sprintf("%d tenant authority(ies) still on schema 1; the cell refuses their streams until Commodore publishes schema 2", state.LegacyTenants)
 		case state.Ready:
 			report("attests placement enforcement and holds no schema-1 tenant")
@@ -82,11 +96,11 @@ func (g *mediaCellGate) await(ctx context.Context, cell string, upgraded time.Ti
 			status = "waiting for the cell's placement attestation to reach Commodore"
 		}
 		report(status)
-		if !time.Now().Before(deadline) {
+		if time.Since(lastProgress) >= g.stall {
 			if err != nil {
-				return fmt.Errorf("cell %s: media authority state could not be read within %s: %w; later cells were not upgraded; rerun once `frameworks cluster doctor` reads the Media authority convergence check", cell, g.timeout, err)
+				return fmt.Errorf("cell %s: media authority state could not be read for %s: %w; later cells were not upgraded; rerun once `frameworks cluster doctor` reads the Media authority convergence check", cell, g.stall, err)
 			}
-			return fmt.Errorf("cell %s: %s after %s; later cells were not upgraded. List the tenants with `frameworks cluster diagnose media-authority`, then rerun once the cell holds none", cell, status, g.timeout)
+			return fmt.Errorf("cell %s: %s, and none converged for %s; later cells were not upgraded. List the tenants with `frameworks cluster diagnose media-authority`, then rerun once the cell holds none", cell, status, g.stall)
 		}
 		timer := time.NewTimer(g.interval)
 		select {
@@ -155,7 +169,7 @@ func foghornReplicaCell(manifest *inventory.Manifest, serviceName, host string) 
 // `cluster doctor` uses for the Media authority convergence check.
 func newMediaCellGate(out io.Writer, rc *resolvedCluster, pool *ssh.Pool, sshKey string) *mediaCellGate {
 	return &mediaCellGate{
-		out: out, timeout: mediaCellGateTimeout, interval: mediaCellGateInterval, settle: mediaCellAttestationSettle,
+		out: out, stall: mediaCellGateStallWindow, interval: mediaCellGateInterval, settle: mediaCellAttestationSettle,
 		read: func(ctx context.Context, cell string) (mediaCellAuthority, error) {
 			return readMediaCellAuthority(ctx, rc, pool, sshKey, cell)
 		},

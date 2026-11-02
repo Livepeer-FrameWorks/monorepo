@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"frameworks/cli/pkg/inventory"
+	"frameworks/cli/pkg/watchdog"
 )
 
 // twoCellFoghornManifest runs one Foghorn service on two replicas in cell-a
@@ -58,7 +59,7 @@ func runGatedFoghornUpgrade(t *testing.T, states map[string][]mediaCellAuthority
 	var events []string
 	var mu sync.Mutex
 	reads := &cellReads{events: &events, states: states}
-	gate := &mediaCellGate{out: io.Discard, timeout: 100 * time.Millisecond, interval: time.Millisecond, settle: settle,
+	gate := &mediaCellGate{out: io.Discard, stall: 100 * time.Millisecond, interval: time.Millisecond, settle: settle,
 		read: func(ctx context.Context, cell string) (mediaCellAuthority, error) {
 			mu.Lock()
 			defer mu.Unlock()
@@ -151,5 +152,33 @@ func TestParseMediaCellAuthority(t *testing.T) {
 	}
 	if _, err := parseMediaCellAuthority(map[string]int64{"capabilities_table": 1}, "cell-a"); err == nil {
 		t.Fatal("a probe that stopped before the tenant count read as zero")
+	}
+}
+
+// A cell whose schema-1 tenants keep converging is waited for past the stall window: the window bounds silence, not
+// the whole wait, and each drop reaches the watchdog of the upgrade.
+func TestMediaCellGateWaitsWhileTenantsKeepConverging(t *testing.T) {
+	var states []mediaCellAuthority
+	for legacy := int64(12); legacy > 0; legacy-- {
+		states = append(states, mediaCellAuthority{Tracked: true, Ready: true, LegacyTenants: legacy})
+	}
+	states = append(states, mediaCellAuthority{Tracked: true, Ready: true})
+	gate := &mediaCellGate{out: io.Discard, stall: 40 * time.Millisecond, interval: 10 * time.Millisecond, settle: time.Hour,
+		read: func(context.Context, string) (mediaCellAuthority, error) {
+			state := states[0]
+			states = states[1:]
+			return state, nil
+		}}
+	ctx, progress := watchdog.Start(context.Background(), "upgrade foghorn", time.Hour)
+	defer progress.Stop()
+	started := time.Now()
+	if err := gate.await(ctx, "cell-a", started); err != nil {
+		t.Fatalf("a converging cell must not stop the rollout: %v", err)
+	}
+	if elapsed := time.Since(started); elapsed <= gate.stall {
+		t.Fatalf("the wait took %s, not longer than the %s stall window; the test does not exercise the window", elapsed, gate.stall)
+	}
+	if last, _ := progress.LastProgress(); last != "cell cell-a: 1 schema-1 tenant(s) left" {
+		t.Fatalf("last progress reported to the upgrade watchdog = %q", last)
 	}
 }

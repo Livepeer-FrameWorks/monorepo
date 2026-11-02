@@ -433,19 +433,105 @@ func (u *sshYugabyteUniverse) SafeToTakeDown(ctx context.Context, observer inven
 	return err
 }
 
-// yugabyteFinalizeTimeout bounds finalize_upgrade, which rewrites the YSQL catalog of every database.
-const yugabyteFinalizeTimeout = 10 * time.Minute
+const (
+	// yugabyteFinalizeStallWindow is how long finalize_upgrade may run without progress: an output line of yb-admin,
+	// or a change in the YSQL catalog migrations applied across the databases, which it upgrades one at a time.
+	yugabyteFinalizeStallWindow = 10 * time.Minute
+	// yugabyteFinalizeRPCDeadline is the deadline yb-admin requires for its finalize RPC. The stall window ends a
+	// finalize that stops progressing, so this lies past any run that keeps applying catalog migrations.
+	yugabyteFinalizeRPCDeadline = 24 * time.Hour
+)
 
-func (u *sshYugabyteUniverse) FinalizeUpgrade(ctx context.Context, observer inventory.Host) error {
-	command := fmt.Sprintf("--timeout_ms %d finalize_upgrade", yugabyteFinalizeTimeout.Milliseconds())
-	out, err := yugabyteNodeScriptWithin(ctx, u.pool, observer, fmt.Sprintf(yugabyteAdminScript, command), yugabyteFinalizeTimeout+time.Minute)
+// yugabyteCatalogProgressQuery lists the connectable databases; finalize_upgrade upgrades each one's YSQL catalog.
+const yugabyteCatalogProgressQuery = "SELECT datname FROM pg_catalog.pg_database WHERE datallowconn ORDER BY datname"
+
+func (u *sshYugabyteUniverse) FinalizeUpgrade(ctx context.Context, observer inventory.Host) (err error) {
+	ctx, progress := watchdog.Start(ctx, "yugabyte finalize_upgrade through "+observer.Name, yugabyteFinalizeStallWindow)
+	defer progress.Stop()
+	defer func() { err = progress.Err(err) }()
+	stopPolling := reportYugabyteProgressChanges(ctx, yugabyteRollPollInterval, func(pollCtx context.Context) (string, error) {
+		readCtx, cancel := context.WithTimeout(pollCtx, time.Minute)
+		defer cancel()
+		return u.catalogUpgradeProgress(readCtx, observer)
+	})
+	defer stopPolling()
+
+	command := fmt.Sprintf("--timeout_ms %d finalize_upgrade", yugabyteFinalizeRPCDeadline.Milliseconds())
+	var out strings.Builder
+	cfg := &fwssh.ConnectionConfig{Address: observer.ExternalIP, Port: 22, User: observer.User, HostName: observer.Name, Timeout: 30 * time.Second}
+	result, err := u.pool.RunStream(ctx, cfg, yugabyteAsRoot(fmt.Sprintf(yugabyteAdminScript, command)), nil, io.MultiWriter(&out, progress.Writer()))
 	if err != nil {
-		return fmt.Errorf("finalize upgrade: %w", err)
+		return fmt.Errorf("finalize upgrade: %s: %w", observer.Name, err)
 	}
-	if !strings.Contains(out, "Upgrade successfully finalized") {
-		return fmt.Errorf("finalize upgrade on %s did not report success: %s", observer.Name, strings.TrimSpace(out))
+	if result.ExitCode != 0 {
+		return fmt.Errorf("finalize upgrade: %s: exit %d: %s", observer.Name, result.ExitCode, strings.TrimSpace(result.Stderr+" "+out.String()))
+	}
+	if !strings.Contains(out.String(), "Upgrade successfully finalized") {
+		return fmt.Errorf("finalize upgrade on %s did not report success: %s", observer.Name, strings.TrimSpace(out.String()))
 	}
 	return nil
+}
+
+// catalogUpgradeProgress fingerprints the YSQL catalog migrations applied in every connectable database, through
+// host's local YSQL.
+func (u *sshYugabyteUniverse) catalogUpgradeProgress(ctx context.Context, host inventory.Host) (string, error) {
+	runner, err := u.pool.Get(&fwssh.ConnectionConfig{Address: host.ExternalIP, Port: 22, User: host.User, HostName: host.Name, Timeout: 30 * time.Second})
+	if err != nil {
+		return "", err
+	}
+	executor := &provisioner.SSHExecutor{Runner: runner, UseYugabyteTools: true}
+	conn := provisioner.ConnParams{Port: u.pg.EffectivePort(), User: "yugabyte", Database: "yugabyte"}
+	var databases []string
+	if err := executor.QueryRows(ctx, conn, yugabyteCatalogProgressQuery, nil, func(scan func(dest ...any) error) error {
+		var name string
+		if scanErr := scan(&name); scanErr != nil {
+			return scanErr
+		}
+		databases = append(databases, strings.TrimSpace(name))
+		return nil
+	}); err != nil {
+		return "", err
+	}
+	parts := make([]string, 0, len(databases))
+	for _, database := range databases {
+		conn.Database = database
+		var applied string
+		if err := executor.QueryRow(ctx, conn, "SELECT count(*)::text FROM pg_catalog.pg_yb_migration", nil, &applied); err != nil {
+			return "", err
+		}
+		parts = append(parts, database+"="+strings.TrimSpace(applied))
+	}
+	return strings.Join(parts, ","), nil
+}
+
+// reportYugabyteProgressChanges polls read every interval until stop and reports each changed reading to the
+// watchdog ctx carries. A failed read is not progress: the catalog is being rewritten while it runs.
+func reportYugabyteProgressChanges(ctx context.Context, interval time.Duration, read func(context.Context) (string, error)) (stop func()) {
+	pollCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		last, _ := read(pollCtx) //nolint:errcheck // an unreadable first state only means the next readable one counts
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-pollCtx.Done():
+				return
+			case <-ticker.C:
+			}
+			current, err := read(pollCtx)
+			if err != nil || current == last {
+				continue
+			}
+			last = current
+			watchdog.Reportf(ctx, "YSQL catalog migrations applied: %s", current)
+		}
+	}()
+	return func() {
+		cancel()
+		<-done
+	}
 }
 
 func (u *sshYugabyteUniverse) CatalogMigrations(ctx context.Context, host inventory.Host) ([]string, error) {

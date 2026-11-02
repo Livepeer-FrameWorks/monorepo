@@ -182,9 +182,12 @@ func runClusterFinalizeWithLabels(cmd *cobra.Command, rc *resolvedCluster, only 
 	}
 
 	if finalizeStepsContain(steps, clusterFinalizeStepControlPlane) {
-		resolveCtx, resolveCancel := context.WithTimeout(ctx, provisionInitializeTimeout)
-		systemTenantID, idErr := resolveSystemTenantIDViaQM(resolveCtx, manifest, runtimeData, raSession)
-		resolveCancel()
+		var systemTenantID string
+		idErr := runProvisionWatchedPhase(ctx, provisionInitializeStallWindow, "resolve system tenant", func(resolveCtx context.Context) error {
+			var resolveErr error
+			systemTenantID, resolveErr = resolveSystemTenantIDViaQM(resolveCtx, manifest, runtimeData, raSession)
+			return resolveErr
+		})
 		if idErr != nil {
 			return fmt.Errorf("resolve system tenant: %w", idErr)
 		}

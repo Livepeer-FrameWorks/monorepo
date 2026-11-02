@@ -340,10 +340,10 @@ func TestQuartermasterBootstrapUsesFreshContextForAliasResolution(t *testing.T) 
 	}
 
 	bootstrapCall := strings.Index(src, "runServiceBootstrap(bootstrapCtx")
-	systemCtx := strings.Index(src, "systemTenantCtx, systemTenantCancel := context.WithTimeout(ctx, provisionInitializeTimeout)")
+	systemCtx := strings.Index(src, `runProvisionWatchedPhase(ctx, provisionInitializeStallWindow, "resolve system tenant", func(systemTenantCtx context.Context) error {`)
 	resolveCall := strings.Index(src, "resolveSystemTenantIDViaQM(systemTenantCtx")
-	meshCtx := strings.Index(src, "meshVerifyCtx, meshVerifyCancel := context.WithTimeout(ctx, provisionInitializeTimeout)")
-	ownerCtx := strings.Index(src, "ownerResolveCtx, ownerResolveCancel := context.WithTimeout(ctx, provisionInitializeTimeout)")
+	meshCtx := strings.Index(src, `runProvisionWatchedPhase(ctx, provisionInitializeStallWindow, "quartermaster mesh reachability", func(meshVerifyCtx context.Context) error {`)
+	ownerCtx := strings.Index(src, `runProvisionWatchedPhase(ctx, provisionInitializeStallWindow, "resolve cluster owner tenants", func(ownerResolveCtx context.Context) error {`)
 	ownerCall := strings.Index(src, "resolveClusterOwnerTenantIDs(ownerResolveCtx")
 	if bootstrapCall < 0 || systemCtx < 0 || resolveCall < 0 || meshCtx < 0 || ownerCtx < 0 || ownerCall < 0 {
 		t.Fatalf("expected bootstrap call, fresh resolve context, and resolve call in cluster_provision.go")
@@ -3601,6 +3601,12 @@ func TestKafkaBrokerRegistrationLagDetection(t *testing.T) {
 	}
 	if isKafkaBrokerRegistrationLag(errors.New("some other kafka error")) {
 		t.Fatal("unexpected retry classification for unrelated error")
+	}
+	if n, ok := kafkaRegisteredBrokers(err); !ok || n != 2 {
+		t.Fatalf("registered brokers = %d, %v; want 2 so the retries end once registration stops growing", n, ok)
+	}
+	if _, ok := kafkaRegisteredBrokers(errors.New("some other kafka error")); ok {
+		t.Fatal("an unrelated error reported a broker count")
 	}
 }
 

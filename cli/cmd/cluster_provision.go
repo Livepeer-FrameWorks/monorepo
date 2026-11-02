@@ -813,9 +813,9 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, rc *resolvedClust
 		return err
 	}
 	if provisionNeedsExistingClusterOwners(plan) {
-		resolveCtx, resolveCancel := context.WithTimeout(ctx, provisionInitializeTimeout)
-		resolveErr := resolveExistingClusterOwners(resolveCtx, manifest, runtimeData, raSession)
-		resolveCancel()
+		resolveErr := runProvisionWatchedPhase(ctx, provisionInitializeStallWindow, "resolve cluster owner tenants", func(resolveCtx context.Context) error {
+			return resolveExistingClusterOwners(resolveCtx, manifest, runtimeData, raSession)
+		})
 		if resolveErr != nil {
 			return fmt.Errorf("resolve cluster owner tenants for livepeer-gateway: %w", resolveErr)
 		}
@@ -1002,19 +1002,17 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, rc *resolvedClust
 		}
 		if len(pendingQuartermasterTasks) > 0 && !remainingBatchesContainService(plan.Batches[batchNum+1:], "quartermaster") {
 			fmt.Fprintln(cmd.OutOrStdout(), "  Running Cluster Bootstrap (System Tenant)...")
-			bootstrapCtx, bootstrapCancel := context.WithTimeout(ctx, provisionInitializeTimeout)
-
 			bootstrapYAML, renderErr := renderBootstrapYAML(cmd, manifest, manifestDir, sharedEnv)
 			if renderErr != nil {
-				bootstrapCancel()
 				ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("Bootstrap render failed: %v", renderErr))
 				reportAutomaticRollbackSkipped(cmd.OutOrStdout(), "bootstrap render failed after services were provisioned")
 				return fmt.Errorf("bootstrap render failed: %w", renderErr)
 			}
 			runtimeData["bootstrap_desired_state"] = bootstrapYAML
 
-			if err := runServiceBootstrap(bootstrapCtx, cmd, manifest, sshPool, "quartermaster", bootstrapYAML, nil); err != nil {
-				bootstrapCancel()
+			if err := runProvisionWatchedPhase(ctx, provisionInitializeStallWindow, "quartermaster bootstrap", func(bootstrapCtx context.Context) error {
+				return runServiceBootstrap(bootstrapCtx, cmd, manifest, sshPool, "quartermaster", bootstrapYAML, nil)
+			}); err != nil {
 				ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("Bootstrap failed: %v", err))
 				diagCtx, diagCancel := context.WithTimeout(ctx, 12*time.Second)
 				captureQuartermasterDiagnostics(diagCtx, cmd.OutOrStdout(), manifest, sshPool)
@@ -1022,14 +1020,16 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, rc *resolvedClust
 				reportAutomaticRollbackSkipped(cmd.OutOrStdout(), "Quartermaster bootstrap failed after services were provisioned")
 				return fmt.Errorf("bootstrap failed: %w", err)
 			}
-			bootstrapCancel()
 
 			// Pull system_tenant_id from QM via gRPC; the readiness report and
 			// downstream bootstrap-admin user creation need it. Alias→UUID is
 			// QM-owned data and never read directly from the CLI.
-			systemTenantCtx, systemTenantCancel := context.WithTimeout(ctx, provisionInitializeTimeout)
-			systemTenantID, idErr := resolveSystemTenantIDViaQM(systemTenantCtx, manifest, runtimeData, raSession)
-			systemTenantCancel()
+			var systemTenantID string
+			idErr := runProvisionWatchedPhase(ctx, provisionInitializeStallWindow, "resolve system tenant", func(systemTenantCtx context.Context) error {
+				var resolveErr error
+				systemTenantID, resolveErr = resolveSystemTenantIDViaQM(systemTenantCtx, manifest, runtimeData, raSession)
+				return resolveErr
+			})
 			if idErr != nil {
 				ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("Resolve system tenant: %v", idErr))
 				reportAutomaticRollbackSkipped(cmd.OutOrStdout(), "control-plane data resolution failed")
@@ -1039,9 +1039,9 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, rc *resolvedClust
 			if qmAddr, addrErr := resolveServiceGRPCAddr(manifest, "quartermaster", defaultGRPCPort("quartermaster")); addrErr == nil {
 				runtimeData["quartermaster_grpc_addr"] = qmAddr
 			}
-			meshVerifyCtx, meshVerifyCancel := context.WithTimeout(ctx, provisionInitializeTimeout)
-			meshVerifyErr := verifyQuartermasterMeshReachability(meshVerifyCtx, cmd, manifest, sshPool)
-			meshVerifyCancel()
+			meshVerifyErr := runProvisionWatchedPhase(ctx, provisionInitializeStallWindow, "quartermaster mesh reachability", func(meshVerifyCtx context.Context) error {
+				return verifyQuartermasterMeshReachability(meshVerifyCtx, cmd, manifest, sshPool)
+			})
 			if meshVerifyErr != nil {
 				ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("Quartermaster mesh reachability failed: %v", meshVerifyErr))
 				fmt.Fprintln(cmd.OutOrStdout(), "  Services depend on quartermaster.internal for bootstrap and runtime discovery.")
@@ -1060,9 +1060,12 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, rc *resolvedClust
 			// entirely (Decklog rejects events with no tenant), so a silent
 			// warning would turn a configuration error into invisible data
 			// loss. Clusters without livepeer-gateway can degrade gracefully.
-			ownerResolveCtx, ownerResolveCancel := context.WithTimeout(ctx, provisionInitializeTimeout)
-			ownerMap, ownerErr := resolveClusterOwnerTenantIDs(ownerResolveCtx, manifest, runtimeData, raSession)
-			ownerResolveCancel()
+			var ownerMap map[string]string
+			ownerErr := runProvisionWatchedPhase(ctx, provisionInitializeStallWindow, "resolve cluster owner tenants", func(ownerResolveCtx context.Context) error {
+				var resolveErr error
+				ownerMap, resolveErr = resolveClusterOwnerTenantIDs(ownerResolveCtx, manifest, runtimeData, raSession)
+				return resolveErr
+			})
 			if ownerErr != nil {
 				if anyClusterRunsLivepeerGateway(manifest) {
 					ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("Resolve cluster owner tenants: %v", ownerErr))
@@ -1836,7 +1839,7 @@ func initializeDeferredKafka(ctx context.Context, cmd *cobra.Command, manifest *
 		}
 
 		fmt.Fprintf(cmd.OutOrStdout(), "  Initializing Kafka topics for %s on %s...\n", kafkaClusterAlias(manifest, &cluster), broker.Host)
-		if err := runProvisionPhase(ctx, provisionInitializeTimeout, "initialize", func(phaseCtx context.Context) error {
+		if err := runProvisionWatchedPhase(ctx, provisionInitializeStallWindow, "initialize", func(phaseCtx context.Context) error {
 			return initializeKafkaTopicsWithRetry(phaseCtx, cmd, prov, host, config)
 		}); err != nil {
 			return err
@@ -1847,8 +1850,12 @@ func initializeDeferredKafka(ctx context.Context, cmd *cobra.Command, manifest *
 	return nil
 }
 
+// initializeKafkaTopicsWithRetry retries topic init while the brokers register. Every attempt's role output counts as
+// watchdog progress, so the retries are bounded by registration itself: they stop once the registered broker count
+// has not grown for provisionInitializeStallWindow.
 func initializeKafkaTopicsWithRetry(ctx context.Context, cmd *cobra.Command, prov provisioner.Provisioner, host inventory.Host, config provisioner.ServiceConfig) error {
 	var lastErr error
+	registered, grewAt := -1, time.Now()
 	for attempt := 1; ; attempt++ {
 		err := prov.Initialize(ctx, host, config)
 		if err == nil {
@@ -1858,6 +1865,12 @@ func initializeKafkaTopicsWithRetry(ctx context.Context, cmd *cobra.Command, pro
 			return err
 		}
 		lastErr = err
+		if n, ok := kafkaRegisteredBrokers(err); ok && n > registered {
+			registered, grewAt = n, time.Now()
+		}
+		if time.Since(grewAt) >= provisionInitializeStallWindow {
+			return fmt.Errorf("no further Kafka broker registered for %s: %w", provisionInitializeStallWindow, lastErr)
+		}
 		fmt.Fprintf(cmd.OutOrStdout(), "    Kafka brokers still registering; retrying topic init (attempt %d)...\n", attempt)
 
 		timer := time.NewTimer(5 * time.Second)
@@ -1877,6 +1890,18 @@ func isKafkaBrokerRegistrationLag(err error) bool {
 	msg := err.Error()
 	return strings.Contains(msg, "InvalidReplicationFactorException") &&
 		strings.Contains(msg, "broker(s) are registered")
+}
+
+var kafkaRegisteredBrokersPattern = regexp.MustCompile(`only (\d+) broker\(s\) are registered`)
+
+// kafkaRegisteredBrokers reads the registered broker count from Kafka's InvalidReplicationFactorException message.
+func kafkaRegisteredBrokers(err error) (int, bool) {
+	match := kafkaRegisteredBrokersPattern.FindStringSubmatch(err.Error())
+	if match == nil {
+		return 0, false
+	}
+	n, convErr := strconv.Atoi(match[1])
+	return n, convErr == nil
 }
 
 func meshHostname(name string) string {
@@ -6317,12 +6342,13 @@ const (
 	// Fresh hosts may download large infrastructure archives from upstream
 	// mirrors in one silent task before Ansible can configure them.
 	provisionApplyStallWindow = 20 * time.Minute
-	// provisionInitializeStallWindow bounds silence in a role's init run.
+	// provisionInitializeStallWindow bounds silence in a role's init run and in
+	// each control-plane step of the initialize phase (Quartermaster bootstrap,
+	// tenant alias resolution, mesh reachability).
 	provisionInitializeStallWindow = 2 * time.Minute
 	provisionValidateTimeout       = 75 * time.Second
-	provisionInitializeTimeout     = 2 * time.Minute
 	// Quartermaster clients use WaitForReady. Allow a newly established
-	// port-forward to become ready without consuming the two-minute phase.
+	// port-forward to become ready within one initialize stall window.
 	quartermasterRPCTimeout = 30 * time.Second
 	nodeBaselineConcurrency = 8
 )

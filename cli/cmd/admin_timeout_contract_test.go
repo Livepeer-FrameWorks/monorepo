@@ -27,8 +27,8 @@ func TestAdminClientTimeoutsCoverOperationDeadlines(t *testing.T) {
 	if quartermasterRPCTimeout < 30*time.Second {
 		t.Fatalf("provisioning Quartermaster timeout %s is too short for a fresh port-forward", quartermasterRPCTimeout)
 	}
-	if quartermasterRPCTimeout >= provisionInitializeTimeout {
-		t.Fatalf("provisioning Quartermaster timeout %s must remain bounded by initialize phase %s", quartermasterRPCTimeout, provisionInitializeTimeout)
+	if quartermasterRPCTimeout >= provisionInitializeStallWindow {
+		t.Fatalf("provisioning Quartermaster timeout %s must fit inside one initialize stall window %s", quartermasterRPCTimeout, provisionInitializeStallWindow)
 	}
 	if clusterNodesQuartermasterClientTimeout < edgeReleaseSyncRPCTimeout {
 		t.Fatalf("cluster-nodes Quartermaster timeout %s truncates edge release deadline %s", clusterNodesQuartermasterClientTimeout, edgeReleaseSyncRPCTimeout)
@@ -43,7 +43,11 @@ func TestAdminClientTimeoutsCoverOperationDeadlines(t *testing.T) {
 	if foghornNodeConfig.Timeout != clusterNodesFoghornClientTimeout {
 		t.Fatalf("cluster-nodes Foghorn timeout = %s, want %s", foghornNodeConfig.Timeout, clusterNodesFoghornClientTimeout)
 	}
-	if edgeReleaseSyncTimeout <= edgeReleaseSyncRPCTimeout {
-		t.Fatalf("edge release operation timeout %s must cover multiple %s per-cluster RPC windows", edgeReleaseSyncTimeout, edgeReleaseSyncRPCTimeout)
+	retried := time.Duration(edgeReleaseSyncAttempts) * edgeReleaseSyncRPCTimeout
+	for attempt := 0; attempt < edgeReleaseSyncAttempts-1; attempt++ {
+		retried += edgeReleaseSyncBaseDelay << attempt
+	}
+	if edgeReleaseSyncStallWindow <= retried {
+		t.Fatalf("edge release stall window %s must cover one cluster's fully retried target RPC (%s)", edgeReleaseSyncStallWindow, retried)
 	}
 }

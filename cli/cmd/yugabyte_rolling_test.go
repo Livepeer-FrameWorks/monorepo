@@ -1302,3 +1302,39 @@ func TestYugabyteFinalizeUpgradeRefusesAnEngineWhoseCatalogSetIsRejected(t *test
 		t.Fatalf("finalized through %v despite a catalog set the engine rejects", universe.finalized)
 	}
 }
+
+// A finalize whose catalog migrations keep advancing outlives the stall window; one whose readings stop changing
+// stalls, so the window bounds silence rather than the whole finalize.
+func TestYugabyteFinalizeProgressKeepsTheWatchdogAliveWhileTheCatalogAdvances(t *testing.T) {
+	const window = 60 * time.Millisecond
+	var mu sync.Mutex
+	applied := 0
+	advancing := true
+	read := func(context.Context) (string, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if advancing {
+			applied++
+		}
+		return fmt.Sprintf("yugabyte=%d", applied), nil
+	}
+	ctx, w := watchdog.Start(context.Background(), "yugabyte finalize_upgrade", window)
+	defer w.Stop()
+	stop := reportYugabyteProgressChanges(ctx, 5*time.Millisecond, read)
+	time.Sleep(4 * window)
+	if ctx.Err() != nil {
+		t.Fatalf("finalize stalled while its catalog migrations advanced: %v", context.Cause(ctx))
+	}
+	mu.Lock()
+	advancing = false
+	mu.Unlock()
+	select {
+	case <-ctx.Done():
+	case <-time.After(10 * window):
+		t.Fatal("finalize did not stall once its catalog migrations stopped advancing")
+	}
+	stop()
+	if w.Stalled() == nil {
+		t.Fatalf("cancelled without a stall: %v", context.Cause(ctx))
+	}
+}

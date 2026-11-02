@@ -449,7 +449,7 @@ func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version st
 		stall += 2*yugabyteRollRecoveryTimeout + 5*time.Minute
 	}
 	if deployName == "foghorn" {
-		stall += mediaCellGateTimeout
+		stall += mediaCellGateStallWindow
 	}
 	ctx, progress := watchdog.Start(context.Background(), "upgrade "+serviceName, stall)
 	defer progress.Stop()
