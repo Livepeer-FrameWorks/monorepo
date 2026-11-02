@@ -104,6 +104,7 @@ func TestAccountRecoveryDoctorRealPG(t *testing.T) {
 		// The spent tenants sort after the others so the listing order is fixed.
 		spentTenant       = "55555555-5555-4555-8555-555555555555"
 		unsuspendedTenant = "66666666-6666-4666-8666-666666666666"
+		unbalancedTenant  = "77777777-7777-4777-8777-777777777777"
 	)
 	mustExec := func(db *sql.DB, query string, args ...any) {
 		t.Helper()
@@ -131,6 +132,7 @@ func TestAccountRecoveryDoctorRealPG(t *testing.T) {
 		t.Fatalf("a spent balance above -€10 judged a failed suspension: %q", outcome.result.Error)
 	}
 	mustExec(purser, `INSERT INTO purser.prepaid_balances (tenant_id, balance_cents, currency) VALUES ($1, -1500, 'EUR')`, unsuspendedTenant)
+	mustExec(purser, `INSERT INTO purser.tenant_subscriptions (tenant_id, tier_id, status, billing_model) VALUES ($1, $2, 'active', 'prepaid')`, unbalancedTenant, lowerTier)
 
 	outcome = doctorAccountRecovery(ctx, &resolvedCluster{Manifest: manifest}, pool, "")
 	if outcome.passed || outcome.result.Status != "unhealthy" {
@@ -141,14 +143,54 @@ func TestAccountRecoveryDoctorRealPG(t *testing.T) {
 		"1 session stop(s) pending",
 		"(" + closedTenant + ": 1 stops)",
 		"1 confirmed downgrade(s) held past their effective time (" + heldTenant,
-		"1 billing recovery item(s) failing repeatedly or unresolved over 14 days (" + heldTenant + ": 1 items)",
-		"1 prepaid tenant(s) below the -€10 suspension threshold but not suspended; their running sessions continue (" + unsuspendedTenant + ": 1500 cents owed, " + spentTenant + ": 400 cents owed)",
+		"1 billing recovery item(s) failing repeatedly or unresolved over 14 days (" + heldTenant + ": 1 item)",
+		"1 prepaid tenant(s) below the -€10 suspension threshold but not suspended; their running sessions continue (" + unsuspendedTenant + ": €15.00 owed)",
 	} {
 		if !strings.Contains(outcome.result.Error, want) {
 			t.Fatalf("doctor error %q missing %q", outcome.result.Error, want)
 		}
 	}
+	if strings.Contains(outcome.result.Error, spentTenant) {
+		t.Fatalf("a spent tenant above -€10 named as a failed suspension: %q", outcome.result.Error)
+	}
+	// A tenant with no balance row counts as €0 in both the count and the
+	// listing, so every counted tenant can be named.
+	report := evaluateAccountRecoveryDoctor([]string{"purser"}, map[string]map[string]string{"purser": readPurserRecoveryState(t, purser)})
+	if notes := strings.Join(report.notes, "; "); !strings.Contains(notes, "3 prepaid tenant(s) at or below €0") ||
+		!strings.Contains(notes, unsuspendedTenant+": €15.00 owed, "+spentTenant+": €4.00 owed, "+unbalancedTenant+": €0.00 owed") {
+		t.Fatalf("spent tenants note=%q", notes)
+	}
 	if strings.Contains(outcome.result.Error, "could not be checked") {
 		t.Fatalf("doctor misread the probe: %q", outcome.result.Error)
 	}
+}
+
+// readPurserRecoveryState runs the doctor's Purser SQL directly and returns
+// its key=value lines. The SQL makes the session read-only, so it runs last.
+func readPurserRecoveryState(t *testing.T, db *sql.DB) map[string]string {
+	t.Helper()
+	rows, err := db.Query(purserAccountRecoveryDoctorSQL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	state := map[string]string{}
+	for {
+		for rows.Next() {
+			var line string
+			if err := rows.Scan(&line); err != nil {
+				t.Fatal(err)
+			}
+			if key, value, ok := strings.Cut(line, "="); ok {
+				state[key] = value
+			}
+		}
+		if !rows.NextResultSet() {
+			break
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return state
 }

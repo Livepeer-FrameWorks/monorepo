@@ -39,18 +39,29 @@ SELECT 'ingest_stop_tenant:' || tenant_id::text || '=' || count(*) FROM commodor
   GROUP BY tenant_id ORDER BY count(*) DESC, tenant_id LIMIT 10;
 `
 
+// The Purser rules the doctor mirrors. TestAccountRecoveryDoctorMatchesServiceRules
+// ties each value to the service source it copies.
+const (
+	// Purser's HeldDowngradeGrace.
+	purserHeldDowngradeGraceHours = 26
+	// The unresolved age in Purser's ProviderWebhookInboxRepeatedFailures.
+	purserRecoveryUnresolvedDays = 14
+	// Purser's suspensionThresholdCents: a prepaid balance below it suspends.
+	purserSuspensionThresholdCents = -1000
+)
+
 // The Purser conditions are the inputs of PurserTierDowngradeHeld (Purser's
-// CountHeldConfirmedDowngrades with its 26h HeldDowngradeGrace) and
+// CountHeldConfirmedDowngrades with its HeldDowngradeGrace) and
 // PurserProviderWebhookInboxStuck (ProviderWebhookInboxRepeatedFailures).
-const purserAccountRecoveryDoctorSQL = `SET default_transaction_read_only = on;
+var purserAccountRecoveryDoctorSQL = fmt.Sprintf(`SET default_transaction_read_only = on;
 SET statement_timeout = '20s';
 SELECT 'held_downgrades=' || count(*) FROM purser.tenant_subscriptions
   WHERE pending_tier_id IS NOT NULL AND pending_reason = 'downgrade'
-    AND pending_provider_tier_id = pending_tier_id AND pending_effective_at < NOW() - INTERVAL '26 hours';
+    AND pending_provider_tier_id = pending_tier_id AND pending_effective_at < NOW() - INTERVAL '%[1]d hours';
 SELECT 'held_downgrade_tenant:' || tenant_id::text || '=' || EXTRACT(EPOCH FROM (NOW() - pending_effective_at))::bigint
   FROM purser.tenant_subscriptions
   WHERE pending_tier_id IS NOT NULL AND pending_reason = 'downgrade'
-    AND pending_provider_tier_id = pending_tier_id AND pending_effective_at < NOW() - INTERVAL '26 hours'
+    AND pending_provider_tier_id = pending_tier_id AND pending_effective_at < NOW() - INTERVAL '%[1]d hours'
   ORDER BY pending_effective_at, tenant_id LIMIT 10;
 SELECT 'recovery_open=' || count(*) FROM purser.provider_webhook_inbox WHERE status <> 'processed';
 WITH stuck AS (
@@ -58,7 +69,7 @@ WITH stuck AS (
   WHERE status IN ('pending', 'failed', 'processing') AND attempts > 1
   UNION
   SELECT id, headers FROM purser.provider_webhook_inbox
-  WHERE status IN ('pending', 'failed', 'processing') AND unresolved_since < NOW() - INTERVAL '14 days'
+  WHERE status IN ('pending', 'failed', 'processing') AND unresolved_since < NOW() - INTERVAL '%[2]d days'
 )
 SELECT 'recovery_stuck=' || count(*) FROM stuck;
 WITH stuck AS (
@@ -66,18 +77,20 @@ WITH stuck AS (
   WHERE status IN ('pending', 'failed', 'processing') AND attempts > 1
   UNION
   SELECT id, headers FROM purser.provider_webhook_inbox
-  WHERE status IN ('pending', 'failed', 'processing') AND unresolved_since < NOW() - INTERVAL '14 days'
+  WHERE status IN ('pending', 'failed', 'processing') AND unresolved_since < NOW() - INTERVAL '%[2]d days'
 )
 SELECT 'recovery_stuck_tenant:' || COALESCE(NULLIF(headers->>'tenant_id', ''), 'unbound') || '=' || count(*) FROM stuck
   GROUP BY 1 ORDER BY count(*) DESC, 1 LIMIT 10;
-` + purserSpendHoldDoctorSQL
+`, purserHeldDowngradeGraceHours, purserRecoveryUnresolvedDays) + purserSpendHoldDoctorSQL
 
-// purserSpendHoldDoctorSQL counts the tenants whose signed authority refuses
+// purserSpendHoldDoctorSQL reports the tenants whose signed authority refuses
 // new sessions for a spent balance: Commodore's prepaid_balance_unavailable
 // decision is a prepaid current subscription, not suspended or closed, whose
-// EUR balance (absent counts as zero) is at or below zero. Below the -€10
-// suspension threshold Purser suspends the tenant and running sessions stop.
-const purserSpendHoldDoctorSQL = `WITH current_subscription AS (
+// EUR balance (absent counts as zero) is at or below zero. Below the
+// suspension threshold Purser suspends the tenant and running sessions stop,
+// so a held tenant past it is a failed enforcement. Both listings read the
+// same held set as the counts.
+var purserSpendHoldDoctorSQL = fmt.Sprintf(`WITH current_subscription AS (
   SELECT DISTINCT ON (tenant_id) tenant_id, billing_model, status
   FROM purser.tenant_subscriptions WHERE status <> 'cancelled'
   ORDER BY tenant_id, created_at DESC
@@ -89,21 +102,17 @@ const purserSpendHoldDoctorSQL = `WITH current_subscription AS (
   WHERE current_subscription.billing_model = 'prepaid' AND current_subscription.status <> 'suspended'
     AND NOT EXISTS (SELECT 1 FROM purser.tenant_billing_closures closure WHERE closure.tenant_id = current_subscription.tenant_id)
     AND COALESCE(balance.balance_cents, 0) <= 0
+), listed AS (
+  (SELECT 'spend_held_tenant:' AS prefix, tenant_id, balance_cents FROM held
+    ORDER BY balance_cents, tenant_id LIMIT 10)
+  UNION ALL
+  (SELECT 'spend_below_limit_tenant:', tenant_id, balance_cents FROM held WHERE balance_cents < %[1]d
+    ORDER BY balance_cents, tenant_id LIMIT 10)
 )
-SELECT 'spend_held=' || count(*) || E'\nspend_held_below_limit=' || count(*) FILTER (WHERE balance_cents < -1000) FROM held;
-WITH current_subscription AS (
-  SELECT DISTINCT ON (tenant_id) tenant_id, billing_model, status
-  FROM purser.tenant_subscriptions WHERE status <> 'cancelled'
-  ORDER BY tenant_id, created_at DESC
-)
-SELECT 'spend_held_tenant:' || current_subscription.tenant_id::text || '=' || -balance.balance_cents
-FROM current_subscription
-JOIN purser.prepaid_balances balance ON balance.tenant_id = current_subscription.tenant_id AND balance.currency = 'EUR'
-WHERE current_subscription.billing_model = 'prepaid' AND current_subscription.status <> 'suspended'
-  AND NOT EXISTS (SELECT 1 FROM purser.tenant_billing_closures closure WHERE closure.tenant_id = current_subscription.tenant_id)
-  AND balance.balance_cents < 0
-ORDER BY balance.balance_cents, current_subscription.tenant_id LIMIT 10;
-`
+SELECT 'spend_held=' || (SELECT count(*) FROM held)
+UNION ALL SELECT 'spend_held_below_limit=' || (SELECT count(*) FROM held WHERE balance_cents < %[1]d)
+UNION ALL SELECT prefix || tenant_id::text || '=' || -balance_cents FROM listed;
+`, purserSuspensionThresholdCents)
 
 var (
 	commodoreAccountRecoveryDoctorKeys = []string{"closures_unsynced", "closures_failing", "ingest_stops_pending", "ingest_stops_oldest_seconds"}
@@ -244,13 +253,13 @@ func evaluateAccountRecoveryDoctor(expected []string, values map[string]map[stri
 			}
 			missing(commodoreAccountRecoveryDoctorKeys)
 			if n := count("closures_failing"); n > 0 {
-				report.problems = append(report.problems, fmt.Sprintf("commodore: %d tenant closure(s) failing Quartermaster synchronization (%s)", n, listedTenants(state, "closure_failing_tenant:", "failures")))
+				report.problems = append(report.problems, fmt.Sprintf("commodore: %d tenant closure(s) failing Quartermaster synchronization (%s)", n, listedTenants(state, "closure_failing_tenant:", countUnit("failure"))))
 				report.steps = append(report.steps, ux.NextStep{Cmd: "frameworks admin tenants get <tenant-id>", Why: "Show the closure's last synchronization error and next attempt."})
 			} else if n := count("closures_unsynced"); n > 0 {
 				report.notes = append(report.notes, fmt.Sprintf("commodore: %d closure(s) synchronizing", n))
 			}
 			if age := count("ingest_stops_oldest_seconds"); age > mediaAuthorityDoctorStuckSeconds {
-				report.problems = append(report.problems, fmt.Sprintf("commodore: %d session stop(s) pending, oldest %ds (%s)", count("ingest_stops_pending"), age, listedTenants(state, "ingest_stop_tenant:", "stops")))
+				report.problems = append(report.problems, fmt.Sprintf("commodore: %d session stop(s) pending, oldest %s (%s)", count("ingest_stops_pending"), doctorAge(age), listedTenants(state, "ingest_stop_tenant:", countUnit("stop"))))
 				report.steps = append(report.steps,
 					ux.NextStep{Cmd: "frameworks admin tenants get <tenant-id>", Why: "List each pending stop with the cells that have not confirmed it."},
 					ux.NextStep{Cmd: "frameworks admin clusters retire <cluster-id> --reason <reason>", Why: "Settle stops owed to a cell that was removed for good; restore any other cell."})
@@ -258,16 +267,17 @@ func evaluateAccountRecoveryDoctor(expected []string, values map[string]map[stri
 		case "purser":
 			missing(purserAccountRecoveryDoctorKeys)
 			if n := count("held_downgrades"); n > 0 {
-				report.problems = append(report.problems, fmt.Sprintf("purser: %d confirmed downgrade(s) held past their effective time (%s)", n, listedTenants(state, "held_downgrade_tenant:", "s past effective")))
+				report.problems = append(report.problems, fmt.Sprintf("purser: %d confirmed downgrade(s) held past their effective time (%s)", n, listedTenants(state, "held_downgrade_tenant:", func(seconds int64) string { return doctorAge(seconds) + " past effective" })))
 			}
 			if n := count("recovery_stuck"); n > 0 {
-				report.problems = append(report.problems, fmt.Sprintf("purser: %d billing recovery item(s) failing repeatedly or unresolved over 14 days (%s)", n, listedTenants(state, "recovery_stuck_tenant:", "items")))
+				report.problems = append(report.problems, fmt.Sprintf("purser: %d billing recovery item(s) failing repeatedly or unresolved over %d days (%s)", n, purserRecoveryUnresolvedDays, listedTenants(state, "recovery_stuck_tenant:", countUnit("item"))))
 			}
 			if n := count("spend_held_below_limit"); n > 0 {
-				report.problems = append(report.problems, fmt.Sprintf("purser: %d prepaid tenant(s) below the -€10 suspension threshold but not suspended; their running sessions continue (%s)", n, listedTenants(state, "spend_held_tenant:", "cents owed")))
+				report.problems = append(report.problems, fmt.Sprintf("purser: %d prepaid tenant(s) below the -%s suspension threshold but not suspended; their running sessions continue (%s)", n, wholeEuros(-purserSuspensionThresholdCents), listedTenants(state, "spend_below_limit_tenant:", owed)))
 				report.steps = append(report.steps, ux.NextStep{Cmd: "frameworks cluster logs purser", Why: "Find why threshold enforcement did not suspend the tenant."})
-			} else if n := count("spend_held"); n > 0 {
-				report.notes = append(report.notes, fmt.Sprintf("purser: %d prepaid tenant(s) at or below €0; running sessions continue, new ones are refused (%s)", n, listedTenants(state, "spend_held_tenant:", "cents owed")))
+			}
+			if n := count("spend_held"); n > 0 {
+				report.notes = append(report.notes, fmt.Sprintf("purser: %d prepaid tenant(s) at or below €0; running sessions continue, new ones are refused (%s)", n, listedTenants(state, "spend_held_tenant:", owed)))
 			}
 			if count("held_downgrades") > 0 || count("recovery_stuck") > 0 {
 				report.steps = append(report.steps, ux.NextStep{Cmd: "frameworks admin billing recovery list", Why: "Inspect held downgrades and recovery items with their errors and resolve them."})
@@ -282,9 +292,9 @@ func evaluateAccountRecoveryDoctor(expected []string, values map[string]map[stri
 	return report
 }
 
-// listedTenants renders "<id>: <n> <unit>" for up to accountRecoveryDoctorListed
+// listedTenants renders "<id>: <value>" for up to accountRecoveryDoctorListed
 // keys with prefix, largest first.
-func listedTenants(state map[string]string, prefix, unit string) string {
+func listedTenants(state map[string]string, prefix string, render func(int64) string) string {
 	type entry struct {
 		id string
 		n  int64
@@ -312,10 +322,40 @@ func listedTenants(state map[string]string, prefix, unit string) string {
 	}
 	parts := make([]string, 0, len(entries))
 	for _, e := range entries {
-		parts = append(parts, fmt.Sprintf("%s: %d %s", e.id, e.n, unit))
+		parts = append(parts, e.id+": "+render(e.n))
 	}
 	if len(parts) == 0 {
 		return "tenants not listed"
 	}
 	return strings.Join(parts, ", ")
+}
+
+// countUnit renders "1 <noun>" or "<n> <noun>s".
+func countUnit(noun string) func(int64) string {
+	return func(n int64) string {
+		if n == 1 {
+			return "1 " + noun
+		}
+		return fmt.Sprintf("%d %ss", n, noun)
+	}
+}
+
+// doctorAge renders whole seconds as a duration, in hours and minutes from
+// one hour up (26h0m).
+func doctorAge(seconds int64) string {
+	age := time.Duration(seconds) * time.Second
+	if age < time.Hour {
+		return age.String()
+	}
+	return fmt.Sprintf("%dh%dm", int64(age/time.Hour), int64(age%time.Hour/time.Minute))
+}
+
+// owed renders a non-negative amount owed in cents as euros.
+func owed(cents int64) string {
+	return fmt.Sprintf("€%d.%02d owed", cents/100, cents%100)
+}
+
+// wholeEuros renders a non-negative whole-euro amount given in cents.
+func wholeEuros(cents int64) string {
+	return fmt.Sprintf("€%d", cents/100)
 }

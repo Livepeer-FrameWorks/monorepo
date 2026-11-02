@@ -28,7 +28,7 @@ func TestAccountRecoveryDoctorPassesNormalWaits(t *testing.T) {
 	}
 	notes := strings.Join(report.notes, "; ")
 	if !strings.Contains(notes, "1 closure(s) synchronizing") || !strings.Contains(notes, "2 billing recovery item(s) waiting normally") ||
-		!strings.Contains(notes, "3 prepaid tenant(s) at or below €0; running sessions continue, new ones are refused (tenant-f: 450 cents owed)") {
+		!strings.Contains(notes, "3 prepaid tenant(s) at or below €0; running sessions continue, new ones are refused (tenant-f: €4.50 owed)") {
 		t.Fatalf("notes=%q", notes)
 	}
 }
@@ -57,19 +57,28 @@ spend_held=2
 spend_held_below_limit=1
 spend_held_tenant:tenant-g=1500
 spend_held_tenant:tenant-h=0
+spend_below_limit_tenant:tenant-g=1500
 `
 	report := evaluateAccountRecoveryDoctor([]string{"purser", "commodore"}, parseAccountRecoveryDoctorOutput(stuck))
 	problems := strings.Join(report.problems, "\n")
 	for _, want := range []string{
 		"2 tenant closure(s) failing Quartermaster synchronization (tenant-a: 7 failures, tenant-b: 3 failures)",
-		"4 session stop(s) pending, oldest 7200s (tenant-c: 3 stops)",
-		"1 confirmed downgrade(s) held past their effective time (tenant-d: 93600 s past effective)",
-		"2 billing recovery item(s) failing repeatedly or unresolved over 14 days (tenant-e: 1 items, unbound: 1 items)",
-		"1 prepaid tenant(s) below the -€10 suspension threshold but not suspended; their running sessions continue (tenant-g: 1500 cents owed, tenant-h: 0 cents owed)",
+		"4 session stop(s) pending, oldest 2h0m (tenant-c: 3 stops)",
+		"1 confirmed downgrade(s) held past their effective time (tenant-d: 26h0m past effective)",
+		"2 billing recovery item(s) failing repeatedly or unresolved over 14 days (tenant-e: 1 item, unbound: 1 item)",
+		"1 prepaid tenant(s) below the -€10 suspension threshold but not suspended; their running sessions continue (tenant-g: €15.00 owed)",
 	} {
 		if !strings.Contains(problems, want) {
 			t.Fatalf("problems %q missing %q", problems, want)
 		}
+	}
+	// A spent tenant above the threshold is only refused new sessions; it is
+	// never named as a failed suspension.
+	if strings.Contains(problems, "tenant-h") {
+		t.Fatalf("a tenant above the suspension threshold judged unsuspended: %q", problems)
+	}
+	if notes := strings.Join(report.notes, "\n"); !strings.Contains(notes, "2 prepaid tenant(s) at or below €0") || !strings.Contains(notes, "tenant-h: €0.00 owed") {
+		t.Fatalf("notes=%q", notes)
 	}
 	var commands []string
 	for _, step := range report.steps {
