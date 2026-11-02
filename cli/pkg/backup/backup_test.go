@@ -207,8 +207,15 @@ func TestRequireGateVerifiesFilesOfProtectedDatabases(t *testing.T) {
 	dir := t.TempDir()
 	writeTestBackup(t, LocalDir(dir), testNow.Add(-10*time.Minute))
 	req := GateRequest{Operation: "contract", LiveDigests: map[string]string{"postgres/purser": LedgerDigest(testLedger)}}
-	if _, err := RequireGate(context.Background(), "", req, testNow); !errors.Is(err, ErrBackupRequired) {
+	_, err := RequireGate(context.Background(), "", req, testNow)
+	if !errors.Is(err, ErrBackupRequired) {
 		t.Fatalf("empty path: %v", err)
+	}
+	if want := "`frameworks cluster backup create --to <backup-dir> --database purser`"; !strings.Contains(err.Error(), want) {
+		t.Fatalf("refusal must name exactly the protected database (%s): %v", want, err)
+	}
+	if strings.Contains(err.Error(), "--all") || strings.Contains(err.Error(), "s3") {
+		t.Fatalf("refusal must not suggest --all or S3: %v", err)
 	}
 	if _, err := RequireGate(context.Background(), dir, req, testNow); err != nil {
 		t.Fatalf("intact backup: %v", err)
@@ -218,6 +225,19 @@ func TestRequireGateVerifiesFilesOfProtectedDatabases(t *testing.T) {
 	}
 	if _, err := RequireGate(context.Background(), dir, req, testNow); err == nil || !strings.Contains(err.Error(), "post-data.sql.gz") {
 		t.Fatalf("damaged file of a protected database must refuse: %v", err)
+	}
+}
+
+func TestCreateCommandForCoversExactlyTheGatedDatabases(t *testing.T) {
+	got := CreateCommandFor(map[string]string{
+		"postgres/purser":      "a",
+		"clickhouse/periscope": "b",
+		"analytics/events":     "c",
+		"postgres/commodore":   "d",
+	})
+	want := "frameworks cluster backup create --to <backup-dir> --database analytics/events --database commodore --database purser --clickhouse"
+	if got != want {
+		t.Fatalf("CreateCommandFor = %q; want %q", got, want)
 	}
 }
 

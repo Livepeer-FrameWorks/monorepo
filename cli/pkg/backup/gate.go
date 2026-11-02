@@ -78,12 +78,38 @@ func recordedDigest(m *Manifest, key string) (string, bool) {
 	return "", false
 }
 
+// CreateCommandFor is the `backup create` command that covers exactly the databases keyed in digests: one --database
+// per PostgreSQL/YugabyteDB key and --clickhouse for a ClickHouse key.
+func CreateCommandFor(digests map[string]string) string {
+	keys := make([]string, 0, len(digests))
+	for key := range digests {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	parts := []string{"frameworks cluster backup create --to <backup-dir>"}
+	clickhouse := false
+	for _, key := range keys {
+		switch {
+		case strings.HasPrefix(key, "clickhouse/"):
+			clickhouse = true
+		case strings.HasPrefix(key, "postgres/"):
+			parts = append(parts, "--database "+strings.TrimPrefix(key, "postgres/"))
+		default:
+			parts = append(parts, "--database "+key)
+		}
+	}
+	if clickhouse {
+		parts = append(parts, "--clickhouse")
+	}
+	return strings.Join(parts, " ")
+}
+
 // RequireGate reads the backup at raw, verifies the files of the databases the operation changes, and applies
 // CheckGate. An empty raw path refuses with ErrBackupRequired.
 func RequireGate(ctx context.Context, raw string, req GateRequest, now time.Time) (*Manifest, error) {
 	if strings.TrimSpace(raw) == "" {
-		return nil, fmt.Errorf("%s: %w; take one with `frameworks cluster backup create --to <dir|s3-url> --all` and pass its path with --backup (it must be under %s old)",
-			req.Operation, ErrBackupRequired, MaxAge)
+		return nil, fmt.Errorf("%s: %w; take one with `%s` and pass the path it prints with --backup (it must be under %s old)",
+			req.Operation, ErrBackupRequired, CreateCommandFor(req.LiveDigests), MaxAge)
 	}
 	loc, err := ParseLocation(raw)
 	if err != nil {
