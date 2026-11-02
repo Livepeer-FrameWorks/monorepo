@@ -20,6 +20,7 @@
   import { createCompositorStore, type CompositorState } from "./stores/compositor";
   import { createIngestEndpointsStore, type IngestEndpointsState } from "./stores/ingestEndpoints";
   import CameraPicker from "./components/CameraPicker.svelte";
+  import MediaFileButton from "./components/MediaFileButton.svelte";
   import CompositorControls from "./components/CompositorControls.svelte";
   import StudioProducerPanel from "./components/StudioProducerPanel.svelte";
   import AdvancedPanel, { type AudioProcessingSettings } from "./components/AdvancedPanel.svelte";
@@ -941,6 +942,7 @@
         >
           <MonitorIcon size={18} />
         </button>
+        <MediaFileButton onAdd={(file) => crafter.addMediaFile(file)} disabled={!canAddSource} />
         <!-- Settings button in action bar -->
         <div style="position: relative">
           <button

@@ -64,7 +64,6 @@
     {#if context}
       <StudioMediaControls
         sources={context.sources}
-        addMediaFile={context.addMediaFile}
         playMediaSource={context.playMediaSource}
         pauseMediaSource={context.pauseMediaSource}
         setMediaSourceLoop={context.setMediaSourceLoop}

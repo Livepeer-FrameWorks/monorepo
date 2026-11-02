@@ -5,7 +5,7 @@ import { readable } from "svelte/store";
 import { createStudioTranslator, type MediaSource } from "@livepeer-frameworks/streamcrafter-core";
 import StreamCrafter from "../src/StreamCrafter.svelte";
 import StudioActionBar from "../src/components/StudioActionBar.svelte";
-import StudioMediaControls from "../src/components/StudioMediaControls.svelte";
+import MediaFileButton from "../src/components/MediaFileButton.svelte";
 import {
   installStudioBrowser,
   lastPeer,
@@ -312,15 +312,9 @@ describe("a browser that cannot do everything", () => {
   });
 
   describe("adding a media file", () => {
-    const controls = () =>
-      render(StudioMediaControls, {
-        props: {
-          sources: [],
-          addMediaFile: async () => {},
-          playMediaSource: () => {},
-          pauseMediaSource: () => {},
-          setMediaSourceLoop: () => {},
-        },
+    const button = () =>
+      render(MediaFileButton, {
+        props: { onAdd: async () => {} },
         context: new Map([
           ["fw-sc-translator", readable(createStudioTranslator({ locale: "en" }))],
         ]),
@@ -328,18 +322,19 @@ describe("a browser that cannot do everything", () => {
 
     it("is offered where the browser can play a file into the mix", async () => {
       browser = installStudioBrowser();
-      const { container } = controls();
+      button();
       await tick();
 
-      expect(container.querySelector('input[accept="video/*,audio/*"]')).toBeTruthy();
+      expect((screen.getByTitle("Add media file") as HTMLButtonElement).disabled).toBe(false);
     });
 
-    it("is replaced by a reason before a file is picked where it cannot", async () => {
+    it("is turned off with the reason where the browser cannot play a file into the mix", async () => {
       browser = installStudioBrowser({ mediaFile: false });
-      const { container } = controls();
+      button();
+      await tick();
 
-      expect(await screen.findByText(/can't play a media file into the stream/)).toBeTruthy();
-      expect(container.querySelector('input[accept="video/*,audio/*"]')).toBeNull();
+      const off = screen.getByTitle("This browser can't play a media file into the stream.");
+      expect((off as HTMLButtonElement).disabled).toBe(true);
     });
   });
 });

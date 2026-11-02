@@ -3,9 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { StreamCrafter } from "../src/components/StreamCrafter";
 import { StudioActionBar } from "../src/components/StudioActionBar";
-import { StudioProducerPanel } from "../src/components/StudioProducerPanel";
 import { StreamCrafterProvider } from "../src/context/StreamCrafterContext";
-import type { UseCompositorReturn } from "../src/hooks/useCompositor";
 import {
   installStudioBrowser,
   lastPeer,
@@ -347,42 +345,58 @@ describe("a browser that cannot do everything", () => {
   });
 
   describe("adding a media file", () => {
-    const panel = () =>
+    const addMediaFile = vi.fn(async () => {
+      throw new Error("unsupported codec");
+    });
+    const bar = () =>
       render(
-        <StudioProducerPanel
-          compositor={
+        <StreamCrafterProvider
+          value={
             {
-              isEnabled: true,
-              isInitialized: true,
-              scenes: [],
-              activeScene: null,
-              activeSceneId: null,
-              overlays: [],
-            } as unknown as UseCompositorReturn
+              state: "idle",
+              isCapturing: false,
+              isStreaming: false,
+              isReconnecting: false,
+              sources: [],
+              getCameraChoices: async () => [],
+              addMediaFile,
+            } as never
           }
-          sources={[]}
-          media={{
-            addMediaFile: async () => {},
-            playMediaSource: () => {},
-            pauseMediaSource: () => {},
-            setMediaSourceLoop: () => {},
-          }}
-        />
+        >
+          <StudioActionBar whipUrl={WHIP_URL} showSettingsButton={false} />
+        </StreamCrafterProvider>
       );
 
-    it("is offered where the browser can play a file into the mix", () => {
+    it("sits in the action bar next to Add Camera", () => {
       browser = installStudioBrowser();
-      const view = panel();
+      bar();
 
-      expect(view.container.querySelector('input[accept="video/*,audio/*"]')).toBeTruthy();
+      expect((screen.getByTitle("Add media file") as HTMLButtonElement).disabled).toBe(false);
     });
 
-    it("is replaced by a reason before a file is picked where it cannot", () => {
+    it("is turned off with the reason where the browser cannot play a file into the mix", () => {
       browser = installStudioBrowser({ mediaFile: false });
-      const view = panel();
+      bar();
 
-      expect(view.container.querySelector('input[accept="video/*,audio/*"]')).toBeNull();
-      expect(screen.getByText(/can't play a media file into the stream/)).toBeTruthy();
+      const button = screen.getByTitle(
+        "This browser can't play a media file into the stream."
+      ) as HTMLButtonElement;
+      expect(button.disabled).toBe(true);
+    });
+
+    it("says so when a file cannot be played", async () => {
+      browser = installStudioBrowser();
+      const view = bar();
+      const input = view.container.querySelector<HTMLInputElement>(
+        'input[accept="video/*,audio/*"]'
+      )!;
+
+      await act(async () => {
+        fireEvent.change(input, { target: { files: [new File(["x"], "clip.mkv")] } });
+      });
+
+      expect(addMediaFile).toHaveBeenCalledOnce();
+      expect(screen.getByRole("alert").textContent).toContain("could not be played");
     });
   });
 });

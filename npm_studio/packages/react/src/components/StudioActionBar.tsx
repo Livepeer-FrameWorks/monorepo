@@ -3,6 +3,7 @@ import { useStreamCrafterContext } from "../context/StreamCrafterContext";
 import { useStudioTranslate } from "../context/StudioI18nContext";
 import { useStudioSupport } from "../hooks/useStudioSupport";
 import { CameraPicker } from "./CameraPicker";
+import { MediaFileButton } from "./MediaFileButton";
 import { StudioSettings } from "./StudioSettings";
 
 const MonitorIcon = ({ size = 18 }: { size?: number }) => (
@@ -94,6 +95,7 @@ export const StudioActionBar: React.FC<StudioActionBarProps> = ({
       >
         <MonitorIcon size={18} />
       </button>
+      <MediaFileButton onAdd={ctx.addMediaFile} disabled={!canAddSource} />
       {showSettingsButton && <StudioSettings />}
       {!ctx.isStreaming && !ctx.isReconnecting ? (
         <button

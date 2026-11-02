@@ -34,6 +34,7 @@ export {
   type StudioMediaControlsProps,
 } from "./components/StudioMediaControls";
 export { CameraPicker, type CameraPickerProps } from "./components/CameraPicker";
+export { MediaFileButton, type MediaFileButtonProps } from "./components/MediaFileButton";
 export { CompositorControls, type CompositorControlsProps } from "./components/CompositorControls";
 
 // Hooks

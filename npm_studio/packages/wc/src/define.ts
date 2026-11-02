@@ -12,6 +12,7 @@ import { FwScProducerPanel } from "./components/fw-sc-producer-panel.js";
 import { FwScCameraPicker } from "./components/fw-sc-camera-picker.js";
 import { FwScOverlayControls } from "./components/fw-sc-overlay-controls.js";
 import { FwScMediaControls } from "./components/fw-sc-media-controls.js";
+import { FwScMediaButton } from "./components/fw-sc-media-button.js";
 import { FwScMeter } from "./components/fw-sc-meter.js";
 
 function safeDefine(name: string, ctor: CustomElementConstructor) {
@@ -30,4 +31,5 @@ safeDefine("fw-sc-producer-panel", FwScProducerPanel);
 safeDefine("fw-sc-camera-picker", FwScCameraPicker);
 safeDefine("fw-sc-overlay-controls", FwScOverlayControls);
 safeDefine("fw-sc-media-controls", FwScMediaControls);
+safeDefine("fw-sc-media-button", FwScMediaButton);
 safeDefine("fw-sc-meter", FwScMeter);

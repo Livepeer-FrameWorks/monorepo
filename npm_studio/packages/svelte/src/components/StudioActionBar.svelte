@@ -10,6 +10,7 @@
   } from "@livepeer-frameworks/streamcrafter-core";
   import MonitorIcon from "../icons/MonitorIcon.svelte";
   import CameraPicker from "./CameraPicker.svelte";
+  import MediaFileButton from "./MediaFileButton.svelte";
   import StudioSettings from "./StudioSettings.svelte";
 
   interface Props {
@@ -84,6 +85,10 @@
     >
       <MonitorIcon size={18} />
     </button>
+    <MediaFileButton
+      onAdd={(file) => pc?.addMediaFile(file) ?? Promise.reject(new Error("No studio"))}
+      disabled={!canAddSource}
+    />
     {#if showSettingsButton}
       <StudioSettings />
     {/if}

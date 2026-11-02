@@ -19,6 +19,7 @@ import { useStudioSupport } from "../hooks/useStudioSupport";
 import AdvancedPanel from "./AdvancedPanel";
 import { CompositorControls } from "./CompositorControls";
 import { CameraPicker } from "./CameraPicker";
+import { MediaFileButton } from "./MediaFileButton";
 import { StudioProducerPanel } from "./StudioProducerPanel";
 import { VolumeSlider } from "./VolumeSlider";
 import type { AudioProcessingSettings } from "./AdvancedPanel";
@@ -989,6 +990,7 @@ const StreamCrafterInner: React.FC<StreamCrafterProps> = ({
                   >
                     <MonitorIcon size={18} />
                   </button>
+                  <MediaFileButton onAdd={hookReturn.addMediaFile} disabled={!canAddSource} />
                   {/* Settings button in action bar */}
                   <div style={{ position: "relative" }}>
                     <button

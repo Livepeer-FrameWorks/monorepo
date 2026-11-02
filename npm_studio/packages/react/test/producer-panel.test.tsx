@@ -8,6 +8,7 @@ import type {
   StudioOverlay,
 } from "@livepeer-frameworks/streamcrafter-core";
 import { CameraPicker } from "../src/components/CameraPicker";
+import { MediaFileButton } from "../src/components/MediaFileButton";
 import { StudioProducerPanel } from "../src/components/StudioProducerPanel";
 import { StudioI18nProvider } from "../src/context/StudioI18nContext";
 import { useCompositor, type UseCompositorReturn } from "../src/hooks/useCompositor";
@@ -62,7 +63,6 @@ function fakeCompositor(overrides: Partial<UseCompositorReturn> = {}) {
 
 function fakeMedia() {
   return {
-    addMediaFile: vi.fn(async () => ({}) as MediaSource),
     playMediaSource: vi.fn(),
     pauseMediaSource: vi.fn(),
     setMediaSourceLoop: vi.fn(),
@@ -257,11 +257,9 @@ describe("StudioProducerPanel overlays and media", () => {
     expect(compositor.removeOverlay).toHaveBeenCalledWith("img-1");
   });
 
-  it("adds a picked media file and says the file stays open in this tab", async () => {
-    const media = fakeMedia();
-    const { container } = render(
-      <StudioProducerPanel compositor={fakeCompositor()} sources={[]} media={media} />
-    );
+  it("adds a picked media file from its button and says the file stays open in this tab", async () => {
+    const onAdd = vi.fn(async () => ({}));
+    const { container } = render(<MediaFileButton onAdd={onAdd} />);
     const file = new File(["x"], "clip.mp4", { type: "video/mp4" });
 
     await act(async () => {
@@ -269,9 +267,11 @@ describe("StudioProducerPanel overlays and media", () => {
         target: { files: [file] },
       });
     });
+    expect(onAdd).toHaveBeenCalledWith(file);
 
-    expect(media.addMediaFile).toHaveBeenCalledWith(file);
+    render(<StudioProducerPanel compositor={fakeCompositor()} sources={[]} media={fakeMedia()} />);
     expect(screen.getByText(/Keep this tab open/)).toBeTruthy();
+    expect(screen.queryByText("Add media file")).toBeNull();
   });
 
   it("pauses a playing file, plays a paused one and turns looping on", () => {

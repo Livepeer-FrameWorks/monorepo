@@ -1,8 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../src/components/fw-streamcrafter.js";
-import "../src/components/fw-sc-media-controls.js";
 import type { FwStreamCrafter } from "../src/components/fw-streamcrafter.js";
-import type { FwScMediaControls } from "../src/components/fw-sc-media-controls.js";
 import {
   installStudioBrowser,
   lastPeer,
@@ -314,26 +312,26 @@ describe("a browser that cannot do everything", () => {
   });
 
   describe("adding a media file", () => {
-    const section = async (el: FwStreamCrafter) => {
-      const controls = document.createElement("fw-sc-media-controls") as FwScMediaControls;
-      controls.studio = el;
-      document.body.appendChild(controls);
-      await controls.updateComplete;
-      return controls.shadowRoot!;
+    const mediaButton = async (el: FwStreamCrafter) => {
+      const button = root(el).querySelector("fw-sc-media-button")!;
+      await button.updateComplete;
+      return button.shadowRoot!.querySelector<HTMLButtonElement>("button")!;
     };
 
-    it("is offered where the browser can play a file into the mix", async () => {
+    it("sits in the action bar next to Add Camera", async () => {
       const { el } = await studio();
+      const button = await mediaButton(el);
 
-      expect((await section(el)).querySelector('input[accept="video/*,audio/*"]')).toBeTruthy();
+      expect(button.title).toBe("Add media file");
+      expect(button.disabled).toBe(false);
     });
 
-    it("is replaced by a reason before a file is picked where it cannot", async () => {
+    it("is turned off with the reason where the browser cannot play a file into the mix", async () => {
       const { el } = await studio({ mediaFile: false });
-      const host = await section(el);
+      const button = await mediaButton(el);
 
-      expect(host.querySelector('input[accept="video/*,audio/*"]')).toBeNull();
-      expect(host.textContent).toContain("can't play a media file into the stream");
+      expect(button.disabled).toBe(true);
+      expect(button.title).toContain("can't play a media file into the stream");
     });
   });
 });

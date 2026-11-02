@@ -24,6 +24,7 @@ import { IngestControllerHost } from "../controllers/ingest-controller-host.js";
 import { defaultTrueBoolean } from "../attribute-converters.js";
 import { STUDIO_UPDATE_EVENT } from "./studio-bound-element.js";
 import "./fw-sc-camera-picker.js";
+import "./fw-sc-media-button.js";
 import "./fw-sc-meter.js";
 import "./fw-sc-producer-panel.js";
 import {
@@ -828,6 +829,7 @@ export class FwStreamCrafter extends LitElement {
             >
               ${monitorIcon(18)}
             </button>
+            <fw-sc-media-button .studio=${this}></fw-sc-media-button>
 
             <div style="position:relative">
               <button

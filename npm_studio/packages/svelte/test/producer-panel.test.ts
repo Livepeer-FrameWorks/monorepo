@@ -11,6 +11,7 @@ import {
   type TransitionConfig,
 } from "@livepeer-frameworks/streamcrafter-core";
 import StudioProducerPanel from "../src/components/StudioProducerPanel.svelte";
+import MediaFileButton from "../src/components/MediaFileButton.svelte";
 import type { CompositorState, CompositorStore } from "../src/stores/compositor";
 
 // jsdom media elements cannot capture; the panel offers media files to those that can.
@@ -53,7 +54,6 @@ function fakeCompositor() {
 
 function fakeMedia() {
   return {
-    addMediaFile: vi.fn(async (_file: File) => ({})),
     playMediaSource: vi.fn(),
     pauseMediaSource: vi.fn(),
     setMediaSourceLoop: vi.fn(),
@@ -205,8 +205,16 @@ describe("StudioProducerPanel", () => {
     expect(compositor.removeOverlay).toHaveBeenCalledWith("img-1");
   });
 
-  it("adds a picked media file and says the file stays open in this tab", async () => {
-    const { media, container } = renderPanel();
+  it("lists media files without its own add button and says they stay open in this tab", () => {
+    const { container } = renderPanel();
+
+    expect(container.querySelector("input[accept='video/*,audio/*']")).toBeNull();
+    expect(screen.getByText(/Keep this tab open/)).toBeTruthy();
+  });
+
+  it("adds a picked media file from the action bar button", async () => {
+    const onAdd = vi.fn(async (_file: File) => ({}));
+    const { container } = render(MediaFileButton, { props: { onAdd } });
     const file = new File(["x"], "clip.mp4", { type: "video/mp4" });
 
     await pick(
@@ -214,14 +222,14 @@ describe("StudioProducerPanel", () => {
       file
     );
 
-    expect(media.addMediaFile).toHaveBeenCalledWith(file);
-    expect(screen.getByText(/Keep this tab open/)).toBeTruthy();
+    expect(onAdd).toHaveBeenCalledWith(file);
   });
 
   it("says so when a media file cannot play", async () => {
-    const media = fakeMedia();
-    media.addMediaFile.mockRejectedValue(new Error("unsupported"));
-    const { container } = renderPanel(composition(), fakeCompositor(), [], [], media);
+    const onAdd = vi.fn(async (_file: File) => {
+      throw new Error("unsupported");
+    });
+    const { container } = render(MediaFileButton, { props: { onAdd } });
 
     await pick(
       container.querySelector("input[accept='video/*,audio/*']") as HTMLInputElement,

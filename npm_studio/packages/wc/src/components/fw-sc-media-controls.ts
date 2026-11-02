@@ -1,19 +1,17 @@
 /**
  * <fw-sc-media-controls> — Local media files in the mix, with their playback
- * controls. Volume, mute and removal live with every other source in the mixer.
+ * controls. Files are added with <fw-sc-media-button>; volume, mute and removal
+ * live with every other source in the mixer.
  * Port of StudioMediaControls from streamcrafter-react.
  */
 import { html, css, nothing } from "lit";
-import { customElement, state } from "lit/decorators.js";
+import { customElement } from "lit/decorators.js";
 import { sharedStyles } from "../styles/shared-styles.js";
 import { utilityStyles } from "../styles/utility-styles.js";
 import { StudioBoundElement } from "./studio-bound-element.js";
-import { takeFile } from "./fw-sc-overlay-controls.js";
 
 @customElement("fw-sc-media-controls")
 export class FwScMediaControls extends StudioBoundElement {
-  @state() private _fileFailed = false;
-
   static styles = [
     sharedStyles,
     utilityStyles,
@@ -24,54 +22,16 @@ export class FwScMediaControls extends StudioBoundElement {
     `,
   ];
 
-  /** Adds a video or audio file to the mix; a file the browser cannot play is reported. */
-  async addFile(file: File) {
-    const studio = this.boundStudio;
-    if (!studio) return;
-    this._fileFailed = false;
-    try {
-      await studio.pc.addMediaFile(file);
-    } catch (error) {
-      console.error("Failed to add media file:", error);
-      this._fileFailed = true;
-    }
-  }
-
   protected render() {
     const studio = this.boundStudio;
     if (!studio) return nothing;
-    const support = studio.support;
     const files = studio.pc.s.sources.filter((source) => source.media);
 
     return html`
       <div class="fw-sc-producer-section">
         <div class="fw-sc-producer-section-header">
           <span class="fw-sc-producer-section-title">${this.t("media")}</span>
-          ${support.mediaFile
-            ? html`
-                <div class="fw-sc-producer-section-actions">
-                  <label class="fw-sc-producer-btn">
-                    ${this.t("addMediaFile")}
-                    <input
-                      class="fw-sc-producer-file"
-                      type="file"
-                      accept="video/*,audio/*"
-                      @change=${(event: Event) => {
-                        const file = takeFile(event);
-                        if (file) this.addFile(file);
-                      }}
-                    />
-                  </label>
-                </div>
-              `
-            : nothing}
         </div>
-        ${!support.mediaFile
-          ? html`<p class="fw-sc-producer-notice">${this.t("mediaFileUnsupported")}</p>`
-          : nothing}
-        ${this._fileFailed
-          ? html`<p class="fw-sc-producer-error" role="alert">${this.t("mediaFileError")}</p>`
-          : nothing}
         ${files.length === 0
           ? html`<p class="fw-sc-producer-empty">${this.t("noMedia")}</p>`
           : html`

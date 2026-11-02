@@ -4,6 +4,7 @@ import "../src/define.js";
 import { FwStreamCrafter } from "../src/components/fw-streamcrafter.js";
 import { FwScCameraPicker } from "../src/components/fw-sc-camera-picker.js";
 import { FwScMediaControls } from "../src/components/fw-sc-media-controls.js";
+import { FwScMediaButton } from "../src/components/fw-sc-media-button.js";
 import { FwScOverlayControls } from "../src/components/fw-sc-overlay-controls.js";
 import { FwScProducerPanel } from "../src/components/fw-sc-producer-panel.js";
 import { FwScMeter } from "../src/components/fw-sc-meter.js";
@@ -60,7 +61,7 @@ describe("<fw-sc-camera-picker>", () => {
 });
 
 describe("files the studio cannot use", () => {
-  it("are reported by the overlay and media controls", async () => {
+  it("are reported by the overlay controls and the media button", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     const scene = { id: "scene", layers: [] };
     const studio = fakeStudio(
@@ -79,7 +80,7 @@ describe("files the studio cannot use", () => {
     );
     const overlays = new FwScOverlayControls();
     overlays.studio = studio;
-    const media = new FwScMediaControls();
+    const media = new FwScMediaButton();
     media.studio = studio;
     document.body.append(overlays, media);
 
