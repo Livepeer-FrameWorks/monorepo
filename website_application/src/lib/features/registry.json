@@ -342,7 +342,7 @@
       "status": "shipped",
       "horizon": "now",
       "maturity": "beta",
-      "note": "Beta. The SDK will change substantially as cloud production arrives, so expect breaking changes between releases.",
+      "note": "The SDK will change substantially as cloud production arrives, so expect breaking changes between releases.",
       "roadmap": "streamcrafter-browser-studio",
       "required_surfaces": {
         "docs": {
@@ -1835,7 +1835,8 @@
       "kind": "product",
       "audience": "product",
       "description": "Incidents built from platform alert rules, scoped to platform operators or to the tenant that owns the alerting cluster, with acknowledge, assign, resolve, notes, operator email/Slack/Discord notifications, realtime tenant updates, and Skipper investigation of tenant incidents.",
-      "status": "shipped",
+      "status": "partial",
+      "gap_reason": "Incidents, alert rules, acknowledge/assign/resolve, notes, operator notifications, realtime tenant updates, and Skipper\ninvestigation ship across GraphQL, MCP, the dashboard, and docs. Alert coverage is still growing: edge reachability,\ncertificate, DNS, capacity, and per-stream causes are not raised as incidents yet.\n",
       "horizon": "now",
       "note": "Alert coverage is still expanding, with edge reachability, certificate, DNS, capacity, and per-stream causes to come.",
       "roadmap": "incidents-and-alerts",
@@ -1987,7 +1988,7 @@
         },
         "mcp": {
           "required": false,
-          "reason": "Public read-only page; agents read routing state through the analytics tools."
+          "reason": "Public read-only page; the same Livepeer data is the public REST endpoint GET /v1/network/livepeer."
         },
         "webapp": {
           "required": true

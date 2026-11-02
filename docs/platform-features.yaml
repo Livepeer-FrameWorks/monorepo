@@ -236,9 +236,7 @@ features:
           title: SCTE-35 cue markers
           summary: Ad and splice cues pass through the media engine on MPEG-TS input and output. Platform controls for cues are expanding.
           bullets:
-            - Read from MPEG-TS input and written to HTTP TS and TS-over-SRT outputs
-            - Cues sent as JSON metadata are inserted into those outputs
-          link: { label: MistServer migration guide, docs: migrate/mistserver.mdx }
+            - Cues in your MPEG-TS input are carried through to HTTP TS and TS-over-SRT outputs
         depends_on: [streams]
         required_surfaces:
           graphql: { required: true }
@@ -255,7 +253,7 @@ features:
     description: Browser-based live studio with WHIP/WebRTC ingest. It mixes several cameras, screen shares, and media files into scenes with stacked layers, logo and text overlays, picture-in-picture and split layouts, and cut, fade, or slide transitions. Ships as npm packages @livepeer-frameworks/streamcrafter-{core,react,svelte,wc} and powers the dashboard's Go Live page.
     status: shipped
     maturity: beta
-    note: Beta. The SDK will change substantially as cloud production arrives, so expect breaking changes between releases.
+    note: The SDK will change substantially as cloud production arrives, so expect breaking changes between releases.
     roadmap: streamcrafter-browser-studio
     showcase:
       order: 10
@@ -1009,7 +1007,7 @@ features:
     showcase:
       order: 70
       title: Analytics and viewer QoE
-      summary: See why each viewer connected to the edge they did, and what their playback was like, on every plan.
+      summary: See why each viewer connected to the edge they did, and what their playback was like.
       bullets:
         - Stream health, audience geography, and routing decisions in real time
         - Startup time, rebuffering, and frame drops per view from the FrameWorks player
@@ -1054,7 +1052,11 @@ features:
     name: Incidents and alerts
     area: analytics
     description: Incidents built from platform alert rules, scoped to platform operators or to the tenant that owns the alerting cluster, with acknowledge, assign, resolve, notes, operator email/Slack/Discord notifications, realtime tenant updates, and Skipper investigation of tenant incidents.
-    status: shipped
+    status: partial
+    gap_reason: |
+      Incidents, alert rules, acknowledge/assign/resolve, notes, operator notifications, realtime tenant updates, and Skipper
+      investigation ship across GraphQL, MCP, the dashboard, and docs. Alert coverage is still growing: edge reachability,
+      certificate, DNS, capacity, and per-stream causes are not raised as incidents yet.
     note: Alert coverage is still expanding, with edge reachability, certificate, DNS, capacity, and per-stream causes to come.
     roadmap: incidents-and-alerts
     showcase:
@@ -1150,7 +1152,7 @@ features:
       mcp:
         {
           required: false,
-          reason: "Public read-only page; agents read routing state through the analytics tools.",
+          reason: "Public read-only page; the same Livepeer data is the public REST endpoint GET /v1/network/livepeer.",
         }
       webapp: { required: true }
       docs: { required: true }

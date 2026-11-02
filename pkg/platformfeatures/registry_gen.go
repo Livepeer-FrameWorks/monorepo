@@ -18,7 +18,6 @@ var shipped = []string{
 	"enrollment-tokens",
 	"federation-network",
 	"graphql-playground",
-	"incidents-and-alerts",
 	"media-retention",
 	"multistream-targets",
 	"node-mode",

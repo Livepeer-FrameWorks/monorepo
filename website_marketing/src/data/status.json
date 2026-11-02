@@ -117,7 +117,7 @@
       },
       "showcase": {
         "title": "Analytics and viewer QoE",
-        "summary": "See why each viewer connected to the edge they did, and what their playback was like, on every plan.",
+        "summary": "See why each viewer connected to the edge they did, and what their playback was like.",
         "bullets": [
           "Stream health, audience geography, and routing decisions in real time",
           "Startup time, rebuffering, and frame drops per view from the FrameWorks player",
@@ -591,8 +591,8 @@
     "incidents-and-alerts": {
       "id": "incidents-and-alerts",
       "title": "Incidents and alerts",
-      "status": "shipped",
-      "availability": "Available",
+      "status": "partial",
+      "availability": "Expanding",
       "maturity": null,
       "horizon": "now",
       "tier": "Shipping today",
@@ -1105,15 +1105,10 @@
         "title": "SCTE-35 cue markers",
         "summary": "Ad and splice cues pass through the media engine on MPEG-TS input and output. Platform controls for cues are expanding.",
         "bullets": [
-          "Read from MPEG-TS input and written to HTTP TS and TS-over-SRT outputs",
-          "Cues sent as JSON metadata are inserted into those outputs"
+          "Cues in your MPEG-TS input are carried through to HTTP TS and TS-over-SRT outputs"
         ],
         "figure": null,
-        "link": {
-          "label": "MistServer migration guide",
-          "site": "docs",
-          "path": "/migrate/mistserver"
-        }
+        "link": null
       }
     },
     "sdk-languages": {
@@ -1269,7 +1264,7 @@
       "horizon": "now",
       "tier": "Shipping today",
       "tag": "Beta",
-      "note": "Beta. The SDK will change substantially as cloud production arrives, so expect breaking changes between releases.",
+      "note": "The SDK will change substantially as cloud production arrives, so expect breaking changes between releases.",
       "roadmap": {
         "anchor": "streamcrafter-browser-studio",
         "path": "/roadmap#streamcrafter-browser-studio"
