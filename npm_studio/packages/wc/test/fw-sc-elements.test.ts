@@ -370,3 +370,20 @@ describe("presentational elements", () => {
     }
   });
 });
+
+describe("<fw-sc-advanced>", () => {
+  it("leaves the browser processing toggles to the Audio section", async () => {
+    const studio = fakeStudio({});
+    const advanced = document.createElement("fw-sc-advanced") as HTMLElement & {
+      ic: unknown;
+      updateComplete: Promise<boolean>;
+    };
+    advanced.ic = studio.pc;
+    document.body.append(advanced);
+    await advanced.updateComplete;
+
+    const text = advanced.shadowRoot!.textContent ?? "";
+    expect(text).toContain("Sample Rate");
+    expect(text).not.toContain("Echo Cancellation");
+  });
+});

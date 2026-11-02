@@ -30,12 +30,6 @@
   } from "@livepeer-frameworks/streamcrafter-core";
   import VolumeSlider from "./VolumeSlider.svelte";
 
-  export interface AudioProcessingSettings {
-    echoCancellation: boolean;
-    noiseSuppression: boolean;
-    autoGainControl: boolean;
-  }
-
   // Encoder stats interface
   export interface EncoderStats {
     video: {
@@ -80,10 +74,6 @@
     audioMixingEnabled: boolean;
     /** Error */
     error: string | null;
-    /** Audio processing settings */
-    audioProcessing: AudioProcessingSettings;
-    /** Callback to change audio processing settings */
-    onAudioProcessingChange: (settings: Partial<AudioProcessingSettings>) => void;
     /** Compositor enabled */
     compositorEnabled?: boolean;
     /** Compositor renderer type */
@@ -172,8 +162,6 @@
     audioLevel,
     audioMixingEnabled,
     error,
-    audioProcessing,
-    onAudioProcessingChange,
     compositorEnabled = false,
     compositorRendererType = null,
     compositorStats = null,
@@ -222,25 +210,6 @@
       navigator.clipboard.writeText(whipUrl).catch(console.error);
     }
   }
-
-  // Audio processing toggles
-  let audioToggles = $derived([
-    {
-      key: "echoCancellation" as const,
-      label: t("echoCancellation"),
-      description: t("echoCancellationDesc"),
-    },
-    {
-      key: "noiseSuppression" as const,
-      label: t("noiseSuppression"),
-      description: t("noiseSuppressionDesc"),
-    },
-    {
-      key: "autoGainControl" as const,
-      label: t("autoGainControl"),
-      description: t("autoGainControlDesc"),
-    },
-  ]);
 </script>
 
 {#if isOpen}
@@ -360,33 +329,6 @@
             <span class="fw-dev-mode-section-header">{t("processing")}</span>
             <span class="fw-dev-mode-profile-tag">profile: {qualityProfile}</span>
           </div>
-          {#each audioToggles as toggle, idx (toggle.key)}
-            {@const isModified = audioProcessing[toggle.key] !== profileDefaults[toggle.key]}
-            <div class="fw-dev-mode-toggle-row {idx > 0 ? 'fw-dev-mode-toggle-row--bordered' : ''}">
-              <div class="fw-dev-mode-toggle-info">
-                <div class="fw-dev-mode-toggle-label">
-                  {toggle.label}
-                  {#if isModified}
-                    <span class="fw-dev-mode-modified-badge">{t("modified")}</span>
-                  {/if}
-                </div>
-                <div class="fw-dev-mode-toggle-desc">{toggle.description}</div>
-              </div>
-              <button
-                type="button"
-                class="fw-dev-mode-switch {audioProcessing[toggle.key]
-                  ? 'fw-dev-mode-switch--on'
-                  : ''}"
-                onclick={() =>
-                  onAudioProcessingChange({ [toggle.key]: !audioProcessing[toggle.key] })}
-                role="switch"
-                aria-checked={audioProcessing[toggle.key]}
-                aria-label={toggle.label}
-              >
-                <span class="fw-dev-mode-switch-thumb"></span>
-              </button>
-            </div>
-          {/each}
           <div class="fw-dev-mode-info-row">
             <span>{t("sampleRate")}</span>
             <span class="fw-dev-mode-mono">{profileDefaults.sampleRate} Hz</span>
@@ -1040,10 +982,6 @@
     align-items: center;
   }
 
-  .fw-dev-mode-toggle-row--bordered {
-    border-top: 1px solid hsl(var(--fw-sc-border) / 0.2);
-  }
-
   .fw-dev-mode-toggle-info {
     flex: 1;
     min-width: 0;
@@ -1061,16 +999,6 @@
     font-size: 10px;
     color: hsl(var(--fw-sc-text-faint));
     margin-top: 2px;
-  }
-
-  .fw-dev-mode-modified-badge {
-    font-size: 8px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: hsl(var(--fw-sc-warning));
-    background: hsl(var(--fw-sc-warning) / 0.2);
-    padding: 2px 4px;
   }
 
   .fw-dev-mode-switch {

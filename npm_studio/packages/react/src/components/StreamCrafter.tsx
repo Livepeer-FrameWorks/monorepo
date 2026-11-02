@@ -25,8 +25,8 @@ import { StudioAudioControls } from "./StudioAudioControls";
 import { StudioConnectionHealth } from "./StudioConnectionHealth";
 import { StudioProducerPanel } from "./StudioProducerPanel";
 import { VolumeSlider } from "./VolumeSlider";
-import type { AudioProcessingSettings } from "./AdvancedPanel";
 import type {
+  AudioProcessingSettings,
   IngestState,
   IngestStateContextV2,
   QualityProfile,
@@ -1057,8 +1057,6 @@ const StreamCrafterInner: React.FC<StreamCrafterProps> = ({
                   audioLevel={levels.level}
                   audioMixingEnabled={true}
                   error={error}
-                  audioProcessing={audioProcessing}
-                  onAudioProcessingChange={handleAudioProcessingChange}
                   compositorEnabled={compositor.isEnabled}
                   compositorRendererType={compositor.rendererType}
                   compositorStats={compositor.stats}

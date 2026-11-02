@@ -166,7 +166,7 @@ These are presentational: set their data through JS properties and handle their 
 | `<fw-sc-scene-switcher>` | Scene management with transitions (cut, fade, slide) |
 | `<fw-sc-layer-list>`     | Compositor layer ordering, visibility, opacity       |
 | `<fw-sc-volume>`         | Volume slider with snap-to-100% and boost mode       |
-| `<fw-sc-advanced>`       | Dev panel — audio processing, encoder stats, info    |
+| `<fw-sc-advanced>`       | Dev panel — encoder stats, capture format, info      |
 
 ## Notes
 

@@ -5,16 +5,13 @@
  */
 import { html, css, nothing } from "lit";
 import { customElement, property } from "lit/decorators.js";
-import type { AudioProcessingConfig } from "@livepeer-frameworks/streamcrafter-core";
+import type {
+  AudioProcessingConfig,
+  AudioProcessingSettings,
+} from "@livepeer-frameworks/streamcrafter-core";
 import { sharedStyles } from "../styles/shared-styles.js";
 import { utilityStyles } from "../styles/utility-styles.js";
 import { StudioBoundElement } from "./studio-bound-element.js";
-
-export interface BrowserAudioProcessing {
-  echoCancellation: boolean;
-  noiseSuppression: boolean;
-  autoGainControl: boolean;
-}
 
 const GATE_THRESHOLD_DEFAULT = -40;
 const BROWSER_KEYS = ["echoCancellation", "noiseSuppression", "autoGainControl"] as const;
@@ -24,7 +21,7 @@ type Processing = Omit<AudioProcessingConfig, "sidechain">;
 @customElement("fw-sc-audio-controls")
 export class FwScAudioControls extends StudioBoundElement {
   /** Browser processing of the microphones; set by the studio, which applies changes. */
-  @property({ attribute: false }) browserProcessing: BrowserAudioProcessing | null = null;
+  @property({ attribute: false }) browserProcessing: AudioProcessingSettings | null = null;
 
   static styles = [
     sharedStyles,
@@ -45,7 +42,7 @@ export class FwScAudioControls extends StudioBoundElement {
     this.requestUpdate();
   }
 
-  private _changeBrowser(settings: Partial<BrowserAudioProcessing>) {
+  private _changeBrowser(settings: Partial<AudioProcessingSettings>) {
     this.dispatchEvent(
       new CustomEvent("fw-audio-processing-change", {
         detail: { settings },

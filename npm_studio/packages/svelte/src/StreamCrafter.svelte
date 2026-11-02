@@ -26,7 +26,7 @@
   import StudioConnectionHealth from "./components/StudioConnectionHealth.svelte";
   import CompositorControls from "./components/CompositorControls.svelte";
   import StudioProducerPanel from "./components/StudioProducerPanel.svelte";
-  import AdvancedPanel, { type AudioProcessingSettings } from "./components/AdvancedPanel.svelte";
+  import AdvancedPanel from "./components/AdvancedPanel.svelte";
   import VolumeSlider from "./components/VolumeSlider.svelte";
 
   // Icons
@@ -41,6 +41,7 @@
   import ChevronsLeftIcon from "./icons/ChevronsLeftIcon.svelte";
 
   import type {
+    AudioProcessingSettings,
     QualityProfile,
     IngestState,
     IngestStateContextV2,
@@ -1026,8 +1027,6 @@
         audioLevel={audioLevels.level}
         audioMixingEnabled={true}
         error={crafterState.error}
-        {audioProcessing}
-        onAudioProcessingChange={handleAudioProcessingChange}
         compositorEnabled={compositorState.isEnabled}
         compositorRendererType={compositorState.rendererType}
         compositorStats={compositorState.stats}

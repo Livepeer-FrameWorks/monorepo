@@ -75,3 +75,27 @@ describe("StudioConnectionHealth", () => {
     expect(screen.queryByRole("status")).toBeNull();
   });
 });
+
+describe("AdvancedPanel", () => {
+  it("leaves the browser processing toggles to the Audio section", async () => {
+    const { default: AdvancedPanel } = await import("../src/components/AdvancedPanel.svelte");
+    render(AdvancedPanel, {
+      props: {
+        isOpen: true,
+        onClose: () => {},
+        state: "capturing",
+        qualityProfile: "broadcast",
+        sources: [],
+        stats: null,
+        masterVolume: 1,
+        onMasterVolumeChange: () => {},
+        audioLevel: 0,
+        audioMixingEnabled: true,
+        error: null,
+      } as never,
+    });
+
+    expect(screen.getByText("Sample Rate")).toBeTruthy();
+    expect(screen.queryByText("Echo Cancellation")).toBeNull();
+  });
+});

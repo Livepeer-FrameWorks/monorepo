@@ -7,10 +7,12 @@
  */
 
 import React, { useState } from "react";
-import { getAudioConstraints } from "@livepeer-frameworks/streamcrafter-core";
+import {
+  getAudioConstraints,
+  type AudioProcessingSettings,
+} from "@livepeer-frameworks/streamcrafter-core";
 import { useStudioTranslate } from "../context/StudioI18nContext";
 import { useStreamCrafterContext } from "../context/StreamCrafterContext";
-import type { AudioProcessingSettings } from "./AdvancedPanel";
 
 const GATE_THRESHOLD_DEFAULT = -40;
 

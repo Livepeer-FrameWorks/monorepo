@@ -54,13 +54,8 @@ import {
   type StudioTranslateFn,
   type StudioTranslationStrings,
   type StudioLocale,
+  type AudioProcessingSettings,
 } from "@livepeer-frameworks/streamcrafter-core";
-
-interface AudioProcessingSettings {
-  echoCancellation: boolean;
-  noiseSuppression: boolean;
-  autoGainControl: boolean;
-}
 
 function getStatusBadgeClass(state: IngestState, isReconnecting: boolean): string {
   if (state === "streaming") return "fw-sc-badge fw-sc-badge--live";
@@ -957,7 +952,6 @@ export class FwStreamCrafter extends LitElement {
               <fw-sc-advanced
                 .ic=${this.pc}
                 .whipUrl=${this._resolvedWhipUrl}
-                .audioProcessing=${this._audioProcessing}
                 .encoderOverrides=${this._encoderOverrides}
                 .compositorEnabled=${this.enableCompositor}
                 .compositorRendererType=${this._getCompositorRendererType()}
@@ -965,9 +959,6 @@ export class FwStreamCrafter extends LitElement {
                 .sceneCount=${this._getSceneCount()}
                 .layerCount=${this._getLayerCount()}
                 .t=${this._t}
-                @fw-audio-processing-change=${(
-                  event: CustomEvent<{ settings: Partial<AudioProcessingSettings> }>
-                ) => this._handleAudioProcessingChange(event)}
                 @fw-encoder-overrides-change=${(
                   event: CustomEvent<{ overrides: EncoderOverrides }>
                 ) => this._handleEncoderOverridesChange(event)}

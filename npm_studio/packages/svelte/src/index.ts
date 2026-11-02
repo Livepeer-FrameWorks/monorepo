@@ -26,10 +26,7 @@ export { default as StudioAudioControls } from "./components/StudioAudioControls
 export { default as StudioConnectionHealth } from "./components/StudioConnectionHealth.svelte";
 
 // Advanced Panel (dev mode sidebar)
-export {
-  default as AdvancedPanel,
-  type AudioProcessingSettings,
-} from "./components/AdvancedPanel.svelte";
+export { default as AdvancedPanel } from "./components/AdvancedPanel.svelte";
 
 // Context
 export { default as StreamCrafterProvider } from "./context/StreamCrafterProvider.svelte";
@@ -93,6 +90,7 @@ export {
 
 // Re-export types from core
 export type {
+  AudioProcessingSettings,
   IngestState,
   IngestStateContext,
   IngestStateContextV2,

@@ -23,12 +23,6 @@ import {
 
 type TabId = "audio" | "stats" | "info" | "compositor";
 
-export interface AudioProcessingSettings {
-  echoCancellation: boolean;
-  noiseSuppression: boolean;
-  autoGainControl: boolean;
-}
-
 interface SettingOption<T> {
   value: T;
   label: string;
@@ -90,11 +84,6 @@ function hasAnyDefinedValue(object?: Record<string, unknown>): boolean {
 export class FwScAdvanced extends LitElement {
   @property({ attribute: false }) ic!: IngestControllerHost;
   @property({ type: String, attribute: "whip-url" }) whipUrl = "";
-  @property({ attribute: false }) audioProcessing: AudioProcessingSettings = {
-    echoCancellation: true,
-    noiseSuppression: true,
-    autoGainControl: true,
-  };
   @property({ attribute: false }) encoderOverrides: EncoderOverrides = {};
   @property({ type: Boolean, attribute: "compositor-enabled" }) compositorEnabled = false;
   @property({ type: String, attribute: "compositor-renderer" })
@@ -314,15 +303,6 @@ export class FwScAdvanced extends LitElement {
         color: hsl(var(--fw-sc-text-faint));
         line-height: 1.5;
       }
-      .modified-badge {
-        font-size: 8px;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-        color: hsl(var(--fw-sc-warning));
-        background: hsl(var(--fw-sc-warning) / 0.2);
-        padding: 2px 4px;
-      }
     `,
   ];
 
@@ -412,29 +392,6 @@ export class FwScAdvanced extends LitElement {
           : "hsl(var(--fw-sc-text))";
 
     const profileDefaults = getAudioConstraints(s.qualityProfile);
-    const processing = {
-      echoCancellation: this.audioProcessing.echoCancellation,
-      noiseSuppression: this.audioProcessing.noiseSuppression,
-      autoGainControl: this.audioProcessing.autoGainControl,
-    };
-    const toggles = [
-      {
-        key: "echoCancellation" as const,
-        label: this.t("echoCancellation"),
-        description: this.t("echoCancellationDesc"),
-      },
-      {
-        key: "noiseSuppression" as const,
-        label: this.t("noiseSuppression"),
-        description: this.t("noiseSuppressionDesc"),
-      },
-      {
-        key: "autoGainControl" as const,
-        label: this.t("autoGainControl"),
-        description: this.t("autoGainControlDesc"),
-      },
-    ];
-
     return html`
       <div class="section">
         <div class="section-header">${this.t("masterVolume")}</div>
@@ -487,34 +444,6 @@ export class FwScAdvanced extends LitElement {
             profile: ${s.qualityProfile}
           </span>
         </div>
-        ${toggles.map(({ key, label, description }) => {
-          const isModified = processing[key] !== profileDefaults[key];
-          return html`
-            <div class="processing-row">
-              <div style="display:flex;flex-direction:column;gap:0;min-width:0;flex:1">
-                <div style="display:flex;align-items:center;gap:8px">
-                  <span class="processing-label">${label}</span>
-                  ${isModified
-                    ? html`<span class="modified-badge">${this.t("modified")}</span>`
-                    : nothing}
-                </div>
-                <div class="processing-desc">${description}</div>
-              </div>
-              <button
-                type="button"
-                role="switch"
-                aria-checked=${processing[key]}
-                class="toggle ${processing[key] ? "toggle--on" : "toggle--off"}"
-                @click=${() =>
-                  this._emitAudioProcessingChange({
-                    [key]: !processing[key],
-                  })}
-              >
-                <div class="toggle-knob"></div>
-              </button>
-            </div>
-          `;
-        })}
         <div class="row">
           <span class="row-label">${this.t("sampleRate")}</span>
           <span class="row-value">${profileDefaults.sampleRate} Hz</span>
@@ -1076,16 +1005,6 @@ export class FwScAdvanced extends LitElement {
   private _copyWhipUrl() {
     if (!this.whipUrl) return;
     navigator.clipboard.writeText(this.whipUrl).catch(console.error);
-  }
-
-  private _emitAudioProcessingChange(settings: Partial<AudioProcessingSettings>) {
-    this.dispatchEvent(
-      new CustomEvent("fw-audio-processing-change", {
-        detail: { settings },
-        bubbles: true,
-        composed: true,
-      })
-    );
   }
 
   private _emitEncoderOverridesChange(overrides: EncoderOverrides) {

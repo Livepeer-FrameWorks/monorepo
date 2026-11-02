@@ -152,6 +152,13 @@ export interface IngestControllerEvents {
   error: { error: string; recoverable: boolean };
 }
 
+/** The browser's own capture processing on the microphone track. */
+export interface AudioProcessingSettings {
+  echoCancellation: boolean;
+  noiseSuppression: boolean;
+  autoGainControl: boolean;
+}
+
 export interface IngestStats {
   video: {
     bytesSent: number;

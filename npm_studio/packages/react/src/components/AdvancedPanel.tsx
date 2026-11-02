@@ -31,12 +31,6 @@ import { useStudioTranslate } from "../context/StudioI18nContext";
 // Types
 // ============================================================================
 
-export interface AudioProcessingSettings {
-  echoCancellation: boolean;
-  noiseSuppression: boolean;
-  autoGainControl: boolean;
-}
-
 // Encoder stats interface
 export interface EncoderStats {
   video: {
@@ -81,10 +75,6 @@ export interface AdvancedPanelProps {
   audioMixingEnabled: boolean;
   /** Error */
   error: string | null;
-  /** Audio processing overrides (null = use profile defaults) */
-  audioProcessing: AudioProcessingSettings;
-  /** Callback to change audio processing settings */
-  onAudioProcessingChange: (settings: Partial<AudioProcessingSettings>) => void;
   /** Compositor enabled */
   compositorEnabled?: boolean;
   /** Compositor renderer type */
@@ -274,94 +264,16 @@ const AUDIO_BITRATE_OPTIONS: SettingSelectOption<number>[] = [
 ];
 
 // ============================================================================
-// Audio Processing Controls Component
+// Capture Format Component
 // ============================================================================
 
-interface AudioProcessingControlsProps {
-  profile: QualityProfile;
-  settings: AudioProcessingSettings;
-  onChange: (settings: Partial<AudioProcessingSettings>) => void;
-}
-
-const AudioProcessingControls: React.FC<AudioProcessingControlsProps> = ({
-  profile,
-  settings,
-  onChange,
-}) => {
+/** The microphone format the profile asks for; the Audio section sets the processing. */
+const CaptureFormat: React.FC<{ profile: QualityProfile }> = ({ profile }) => {
   const t = useStudioTranslate();
   const profileDefaults = getAudioConstraints(profile);
 
-  const toggles = [
-    {
-      key: "echoCancellation" as const,
-      label: t("echoCancellation"),
-      description: t("echoCancellationDesc"),
-      defaultValue: profileDefaults.echoCancellation,
-    },
-    {
-      key: "noiseSuppression" as const,
-      label: t("noiseSuppression"),
-      description: t("noiseSuppressionDesc"),
-      defaultValue: profileDefaults.noiseSuppression,
-    },
-    {
-      key: "autoGainControl" as const,
-      label: t("autoGainControl"),
-      description: t("autoGainControlDesc"),
-      defaultValue: profileDefaults.autoGainControl,
-    },
-  ];
-
   return (
     <div>
-      {toggles.map(({ key, label, description, defaultValue }, idx) => {
-        const isModified = settings[key] !== defaultValue;
-        return (
-          <div
-            key={key}
-            style={{
-              padding: "10px 12px",
-              borderTop: idx > 0 ? "1px solid hsl(var(--fw-sc-border) / 0.2)" : undefined,
-            }}
-          >
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                  <span style={{ color: "hsl(var(--fw-sc-text))", fontSize: "12px" }}>{label}</span>
-                  {isModified && (
-                    <span
-                      style={{
-                        fontSize: "8px",
-                        fontWeight: 600,
-                        textTransform: "uppercase",
-                        letterSpacing: "0.05em",
-                        color: "hsl(var(--fw-sc-warning))",
-                        background: "hsl(var(--fw-sc-warning) / 0.2)",
-                        padding: "2px 4px",
-                      }}
-                    >
-                      {t("modified")}
-                    </span>
-                  )}
-                </div>
-                <div
-                  style={{
-                    fontSize: "10px",
-                    color: "hsl(var(--fw-sc-text-faint))",
-                    marginTop: "2px",
-                  }}
-                >
-                  {description}
-                </div>
-              </div>
-              <ToggleSwitch
-                checked={settings[key]}
-                onChange={(checked) => onChange({ [key]: checked })}
-              />
-            </div>
-          </div>
-        );
-      })}
       <div
         style={{
           display: "flex",
@@ -420,8 +332,6 @@ const AdvancedPanel: React.FC<AdvancedPanelProps> = ({
   audioLevel,
   audioMixingEnabled,
   error,
-  audioProcessing,
-  onAudioProcessingChange,
   compositorEnabled = false,
   compositorRendererType,
   compositorStats,
@@ -694,11 +604,7 @@ const AdvancedPanel: React.FC<AdvancedPanelProps> = ({
                 profile: {qualityProfile}
               </span>
             </div>
-            <AudioProcessingControls
-              profile={qualityProfile}
-              settings={audioProcessing}
-              onChange={onAudioProcessingChange}
-            />
+            <CaptureFormat profile={qualityProfile} />
           </div>
         </div>
       )}

@@ -10,12 +10,12 @@
     createStudioTranslator,
     getAudioConstraints,
     type AudioProcessingConfig,
+    type AudioProcessingSettings,
     type IngestControllerV2,
     type MediaSource,
     type QualityProfile,
     type StudioTranslateFn,
   } from "@livepeer-frameworks/streamcrafter-core";
-  import type { AudioProcessingSettings } from "./AdvancedPanel.svelte";
 
   interface Props {
     /** Browser processing of the microphones; kept here when not given. */
