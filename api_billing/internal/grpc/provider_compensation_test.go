@@ -328,9 +328,7 @@ func TestCreateMollieSubscriptionRefusesOutstandingGrantBeforeProvider(t *testin
 			mock.ExpectQuery("ListRefusedMollieFundingIntents").WillReturnRows(sqlmock.NewRows([]string{"id"}))
 			mock.ExpectCommit()
 			_, callErr := server.CreateMollieSubscription(t.Context(), &purserpb.CreateMollieSubscriptionRequest{TenantId: "tenant-a", TierId: "11111111-1111-1111-1111-111111111111", MandateId: "mdt_123"})
-			if status.Code(callErr) != codes.FailedPrecondition || status.Convert(callErr).Message() != "end the outstanding operator billing grant before changing tier or billing model" {
-				t.Fatalf("grant signup = %v", callErr)
-			}
+			assertTenantRefusal(t, callErr, RefusalOutstandingGrant)
 			if unmet := mock.ExpectationsWereMet(); unmet != nil {
 				t.Fatal(unmet)
 			}
@@ -354,9 +352,7 @@ func TestStripeCheckoutRefusesOutstandingGrantBeforeProvider(t *testing.T) {
 			mock.ExpectQuery("HasPendingTierUpgrade").WillReturnRows(sqlmock.NewRows([]string{"pending"}).AddRow(false))
 			mock.ExpectRollback()
 			_, callErr := server.CreateCheckoutSession(t.Context(), &purserpb.CreateStripeCheckoutRequest{TenantId: "tenant-a", TierId: "11111111-1111-1111-1111-111111111111", SuccessUrl: "https://example.test/ok", CancelUrl: "https://example.test/cancel"})
-			if status.Code(callErr) != codes.FailedPrecondition || status.Convert(callErr).Message() != "end the outstanding operator billing grant before changing tier or billing model" {
-				t.Fatalf("grant signup = %v", callErr)
-			}
+			assertTenantRefusal(t, callErr, RefusalOutstandingGrant)
 			if unmet := mock.ExpectationsWereMet(); unmet != nil {
 				t.Fatal(unmet)
 			}

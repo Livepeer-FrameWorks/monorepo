@@ -18,8 +18,8 @@ import (
 // requireProviderCheckout checks the same locked policy used when the provider activates.
 func (s *PurserServer) requireProviderCheckout(ctx context.Context, tenantID string) error {
 	result, err := subscriptions.TransitionProvider(ctx, s.db, subscriptions.ProviderChange{TenantID: tenantID, Operation: subscriptions.ProviderCheckout})
-	if subscriptions.IsPricingRefusal(err) {
-		return checkoutPolicyStatus(codes.FailedPrecondition, err.Error(), err)
+	if refusal, ok := pricingRefusalStatus(err); ok {
+		return refusal
 	}
 	if err != nil {
 		return status.Errorf(codes.Internal, "check provider checkout: %v", err)
@@ -38,7 +38,7 @@ func (s *PurserServer) requireSettledOnFree(ctx context.Context, queries *purser
 		return status.Errorf(codes.Internal, "check outstanding invoices: %v", err)
 	}
 	if owes {
-		return status.Error(codes.FailedPrecondition, "settle your outstanding invoices before selecting a paid tier")
+		return billingRefusal(RefusalInvoicesOutstanding, "settle your outstanding invoices before selecting a paid tier")
 	}
 	return nil
 }
@@ -100,6 +100,10 @@ func definiteCheckoutRejection(code string, cause error) bool {
 
 // checkoutRequestError maps only the journal's domain refusals to a precondition.
 func checkoutRequestError(err error) error {
+	if subscriptions.IsPricingRefusal(err) {
+		refusal, _ := pricingRefusalStatus(err)
+		return refusal
+	}
 	code := codes.Internal
 	if errors.Is(err, subscriptions.ErrCheckoutExpired) || subscriptions.IsPricingRefusal(err) || errors.Is(err, subscriptions.ErrCheckoutRequestChanged) {
 		code = codes.FailedPrecondition

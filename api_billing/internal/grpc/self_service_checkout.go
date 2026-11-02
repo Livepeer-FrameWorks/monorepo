@@ -16,8 +16,8 @@ func (s *PurserServer) requireSelfServiceCheckout(ctx context.Context, tenantID,
 	if errors.Is(err, sql.ErrNoRows) {
 		return status.Error(codes.FailedPrecondition, "tenant subscription is missing; bootstrap it before checkout")
 	}
-	if subscriptions.IsPricingRefusal(err) {
-		return checkoutPolicyStatus(codes.FailedPrecondition, err.Error(), err)
+	if refusal, ok := pricingRefusalStatus(err); ok {
+		return refusal
 	}
 	if err != nil {
 		return status.Errorf(codes.Internal, "check self-service tier eligibility: %v", err)

@@ -56,9 +56,17 @@ func mollieActivationStatus(err error) error {
 	case errors.Is(err, subscriptions.ErrCheckoutExpired) && !subscriptions.IsDefinitiveMollieActivationRefusal(err):
 		message = "activation setup needs cleanup; retry activation afterwards using your retained first payment"
 	}
+	refusal, typed := classifyPricingRefusal(err)
+	if typed && !errors.Is(err, subscriptions.ErrCheckoutExpired) {
+		message = refusal.message
+	}
+	st := status.New(codes.FailedPrecondition, message)
+	if typed {
+		st = refusalStatus(refusal.reason, message)
+	}
 	if errors.Is(err, subscriptions.ErrCheckoutCompensationQueued) {
 		// The committed transition already owns funding compensation.
-		return status.Error(codes.FailedPrecondition, message)
+		return st.Err()
 	}
-	return checkoutPolicyStatus(codes.FailedPrecondition, message, err)
+	return &checkoutPolicyError{cause: err, status: st}
 }

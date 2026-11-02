@@ -4102,7 +4102,7 @@ func (s *PurserServer) CreateClusterSubscription(ctx context.Context, req *purse
 			return reserveErr
 		})
 		if errors.Is(intentErr, subscriptions.ErrTenantBillingClosed) {
-			return nil, status.Error(codes.FailedPrecondition, intentErr.Error())
+			return nil, tenantPricingRefusal(intentErr)
 		}
 		if intentErr != nil {
 			s.logger.WithError(intentErr).Error("Failed to record Stripe cluster checkout intent")
@@ -4191,7 +4191,7 @@ func (s *PurserServer) CreateClusterSubscription(ctx context.Context, req *purse
 			return persistErr
 		})
 		if errors.Is(err, subscriptions.ErrTenantBillingClosed) {
-			return nil, status.Error(codes.FailedPrecondition, err.Error())
+			return nil, tenantPricingRefusal(err)
 		}
 		if err != nil {
 			s.logger.WithError(err).WithField("session_id", sess.ID).Error("Failed to record cluster subscription checkout")
@@ -5874,7 +5874,7 @@ func (s *PurserServer) promoteToPaidOnce(ctx context.Context, req *purserpb.Prom
 		queries := purserdb.New(tx)
 		if _, guardErr := subscriptions.LockChange(ctx, tx, tenantID, subscriptions.ChangePricing); guardErr != nil {
 			if subscriptions.IsPricingRefusal(guardErr) {
-				return status.Error(codes.FailedPrecondition, guardErr.Error())
+				return tenantPricingRefusal(guardErr)
 			}
 			if errors.Is(guardErr, sql.ErrNoRows) {
 				return status.Error(codes.NotFound, "no subscription found for tenant")
@@ -5914,7 +5914,7 @@ func (s *PurserServer) promoteToPaidOnce(ctx context.Context, req *purserpb.Prom
 			return txStatusErrorf(eligibilityErr, codes.Internal, "load self-service promotion tier: %v", eligibilityErr)
 		}
 		if eligibilityErr = subscriptions.ValidateSelfServiceTier(eligibleTier); eligibilityErr != nil {
-			return status.Error(codes.FailedPrecondition, eligibilityErr.Error())
+			return tenantPricingRefusal(eligibilityErr)
 		}
 		if !strings.EqualFold(tier.TierName, "free") {
 			address := scanBillingAddress(subscription.BillingAddress)
@@ -6042,13 +6042,13 @@ func (s *PurserServer) ChangeBillingTier(ctx context.Context, req *purserpb.Chan
 					return txStatusErrorf(pendingErr, codes.Internal, "load accepted tier upgrade: %v", pendingErr)
 				}
 				if pending.TierID != targetTierID {
-					return status.Error(codes.FailedPrecondition, guardErr.Error())
+					return tenantPricingRefusal(guardErr)
 				}
 				upgradeID, outcome = pending.ID, tierChangeUpgrade
 				return nil
 			}
 			if subscriptions.IsPricingRefusal(guardErr) {
-				return status.Error(codes.FailedPrecondition, guardErr.Error())
+				return tenantPricingRefusal(guardErr)
 			}
 			if errors.Is(guardErr, sql.ErrNoRows) {
 				return status.Error(codes.NotFound, "no subscription found for tenant")
@@ -6074,7 +6074,7 @@ func (s *PurserServer) ChangeBillingTier(ctx context.Context, req *purserpb.Chan
 			return txStatusErrorf(err, codes.Internal, "load target tier: %v", err)
 		}
 		if eligibilityErr := subscriptions.ValidateSelfServiceTier(target); eligibilityErr != nil {
-			return status.Error(codes.FailedPrecondition, eligibilityErr.Error())
+			return tenantPricingRefusal(eligibilityErr)
 		}
 		if !strings.EqualFold(target.TierName, "free") {
 			if settleErr := s.requireSettledOnFree(ctx, queries, tenantID); settleErr != nil {
@@ -6100,7 +6100,7 @@ func (s *PurserServer) ChangeBillingTier(ctx context.Context, req *purserpb.Chan
 				GrantWaiveUsage: collection.GrantWaiveUsage, EffectiveBasePrice: collection.EffectiveBasePrice,
 			})
 			if !collectionReady {
-				return status.Error(codes.FailedPrecondition, "complete Stripe or Mollie subscription setup before selecting a paid tier")
+				return billingRefusal(RefusalCollectionSetup, "complete Stripe or Mollie subscription setup before selecting a paid tier")
 			}
 		}
 
@@ -6113,7 +6113,7 @@ func (s *PurserServer) ChangeBillingTier(ctx context.Context, req *purserpb.Chan
 		providerBilled := locked.Current.StripeSubscriptionID.String != "" || locked.Current.MollieSubscriptionID.String != ""
 		downgradeStaged := locked.Current.PendingReason.String == "downgrade"
 		if providerBilled && locked.Current.FreeFallbackProviderEndedAt.Valid && (downgradeStaged || targetTierID != current.TierID) {
-			return status.Error(codes.FailedPrecondition, "the provider subscription is already cancelled: the paid term runs to its end and the tenant then moves to Free; choose a new tier after that move")
+			return billingRefusal(RefusalPaidTermEnding, "your subscription is already cancelled: the paid term runs to its end and the account then moves to Free; choose a new plan after that move")
 		}
 		if providerBilled && downgradeStaged {
 			due, dueErr := queries.IsConfirmedDowngradeDue(ctx, tenantID)
@@ -6121,7 +6121,7 @@ func (s *PurserServer) ChangeBillingTier(ctx context.Context, req *purserpb.Chan
 				return txStatusErrorf(dueErr, codes.Internal, "read scheduled downgrade: %v", dueErr)
 			}
 			if due {
-				return status.Error(codes.FailedPrecondition, "the scheduled downgrade is being applied with the billing period that just closed; retry after it completes")
+				return billingRefusal(RefusalDowngradeHeld, "the scheduled downgrade is being applied with the billing period that just closed; retry after it completes")
 			}
 		}
 		releaseFreeStop := func() error {
@@ -6180,7 +6180,10 @@ func (s *PurserServer) ChangeBillingTier(ctx context.Context, req *purserpb.Chan
 				return status.Error(codes.Unavailable, "billing transition service is unavailable")
 			}
 			upgradeID, err = s.billing.StageTierUpgradeTx(ctx, tx, tenantID, targetTierID, resolvedPeriodStart, resolvedPeriodEnd)
-			if subscriptions.IsPricingRefusal(err) || errors.Is(err, subscriptions.ErrPendingCheckout) || errors.Is(err, billing.ErrTierUpgradeRejected) || errors.Is(err, sql.ErrNoRows) {
+			if subscriptions.IsPricingRefusal(err) || errors.Is(err, subscriptions.ErrPendingCheckout) {
+				return tenantPricingRefusal(err)
+			}
+			if errors.Is(err, billing.ErrTierUpgradeRejected) || errors.Is(err, sql.ErrNoRows) {
 				return status.Errorf(codes.FailedPrecondition, "start paid tier upgrade: %v", err)
 			}
 			if err != nil {
@@ -6568,7 +6571,7 @@ func (s *PurserServer) CreateCheckoutSession(ctx context.Context, req *purserpb.
 	})
 	if intentErr != nil {
 		if subscriptions.IsPricingRefusal(intentErr) || errors.Is(intentErr, subscriptions.ErrPendingCheckout) {
-			return nil, status.Error(codes.FailedPrecondition, intentErr.Error())
+			return nil, tenantPricingRefusal(intentErr)
 		}
 		s.logger.WithError(intentErr).Error("Failed to record Stripe tenant checkout intent")
 		return nil, status.Error(codes.Internal, "failed to record checkout intent")
@@ -6911,7 +6914,7 @@ func (s *PurserServer) CreateFirstPayment(ctx context.Context, req *purserpb.Cre
 		}
 		if subscriptions.IsPricingRefusal(intentErr) || errors.Is(intentErr, subscriptions.ErrPendingCheckout) ||
 			errors.Is(intentErr, subscriptions.ErrUnusedMollieFunding) {
-			return nil, status.Error(codes.FailedPrecondition, intentErr.Error())
+			return nil, tenantPricingRefusal(intentErr)
 		}
 		s.logger.WithError(intentErr).Error("Failed to record Mollie first-payment intent")
 		return nil, status.Error(codes.Internal, "failed to record first-payment intent")
