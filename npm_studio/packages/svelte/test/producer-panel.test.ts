@@ -239,6 +239,11 @@ describe("StudioProducerPanel", () => {
     );
 
     expect(await screen.findByText("This file could not be played in this browser.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Add media file" })).toBeTruthy();
+
+    await fireEvent.mouseDown(document.body);
+
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
   });
 
   it("pauses a playing file and plays a paused one", async () => {

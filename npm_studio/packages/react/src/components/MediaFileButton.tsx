@@ -6,7 +6,7 @@
  * disabled with the reason as its title.
  */
 
-import React, { useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useStudioTranslate } from "../context/StudioI18nContext";
 import { useStudioSupport } from "../hooks/useStudioSupport";
 
@@ -35,7 +35,26 @@ export function MediaFileButton({ onAdd, disabled = false }: MediaFileButtonProp
   const t = useStudioTranslate();
   const support = useStudioSupport();
   const inputRef = useRef<HTMLInputElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
   const [failed, setFailed] = useState(false);
+
+  // The error note closes like the camera menu: on a click elsewhere or Escape.
+  useEffect(() => {
+    if (!failed) return;
+    const handleOutsideClick = (e: MouseEvent) => {
+      if (!rootRef.current?.contains(e.target as Node)) setFailed(false);
+    };
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setFailed(false);
+    };
+    document.addEventListener("mousedown", handleOutsideClick);
+    document.addEventListener("keydown", handleEscape);
+    return () => {
+      document.removeEventListener("mousedown", handleOutsideClick);
+      document.removeEventListener("keydown", handleEscape);
+    };
+  }, [failed]);
+  const label = support.mediaFile ? t("addMediaFile") : t("mediaFileUnsupported");
 
   const handleChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -51,7 +70,7 @@ export function MediaFileButton({ onAdd, disabled = false }: MediaFileButtonProp
   };
 
   return (
-    <div className="fw-sc-camera-picker">
+    <div className="fw-sc-camera-picker" ref={rootRef}>
       <button
         type="button"
         className="fw-sc-action-secondary"
@@ -60,7 +79,8 @@ export function MediaFileButton({ onAdd, disabled = false }: MediaFileButtonProp
           inputRef.current?.click();
         }}
         disabled={disabled || !support.mediaFile}
-        title={support.mediaFile ? t("addMediaFile") : t("mediaFileUnsupported")}
+        title={label}
+        aria-label={label}
       >
         <FilmIcon size={18} />
       </button>

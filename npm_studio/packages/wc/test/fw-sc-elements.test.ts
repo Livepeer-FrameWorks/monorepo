@@ -93,6 +93,14 @@ describe("files the studio cannot use", () => {
 
     expect(overlays.shadowRoot?.querySelector('[role="alert"]')?.textContent).toBeTruthy();
     expect(media.shadowRoot?.querySelector('[role="alert"]')?.textContent).toBeTruthy();
+
+    document.body.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, composed: true }));
+    await media.updateComplete;
+
+    expect(media.shadowRoot?.querySelector('[role="alert"]')).toBeNull();
+    expect(media.shadowRoot?.querySelector("button")?.getAttribute("aria-label")).toBe(
+      media.shadowRoot?.querySelector("button")?.getAttribute("title")
+    );
   });
 });
 

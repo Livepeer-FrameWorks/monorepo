@@ -18,6 +18,7 @@ export class FwScMediaButton extends StudioBoundElement {
   @state() private _failed = false;
 
   @query("input[type=file]") private _input!: HTMLInputElement | null;
+  @query(".fw-sc-camera-picker") private _rootEl!: HTMLDivElement | null;
 
   static styles = [
     sharedStyles,
@@ -29,16 +30,46 @@ export class FwScMediaButton extends StudioBoundElement {
     `,
   ];
 
+  disconnectedCallback() {
+    this._listenForDismissal(false);
+    super.disconnectedCallback();
+  }
+
+  // The error note closes like the camera menu: on a click elsewhere or Escape.
+  private _handleDocumentMouseDown = (event: MouseEvent) => {
+    if (this._rootEl && event.composedPath().includes(this._rootEl)) return;
+    this._setFailed(false);
+  };
+
+  private _handleDocumentKeyDown = (event: KeyboardEvent) => {
+    if (event.key === "Escape") this._setFailed(false);
+  };
+
+  private _listenForDismissal(listen: boolean) {
+    if (listen) {
+      document.addEventListener("mousedown", this._handleDocumentMouseDown);
+      document.addEventListener("keydown", this._handleDocumentKeyDown);
+    } else {
+      document.removeEventListener("mousedown", this._handleDocumentMouseDown);
+      document.removeEventListener("keydown", this._handleDocumentKeyDown);
+    }
+  }
+
+  private _setFailed(failed: boolean) {
+    this._failed = failed;
+    this._listenForDismissal(failed);
+  }
+
   /** Adds a video or audio file to the mix; a file the browser cannot play is reported. */
   async addFile(file: File) {
     const studio = this.boundStudio;
     if (!studio) return;
-    this._failed = false;
+    this._setFailed(false);
     try {
       await studio.pc.addMediaFile(file);
     } catch (error) {
       console.error("Failed to add media file:", error);
-      this._failed = true;
+      this._setFailed(true);
     }
   }
 
@@ -46,15 +77,17 @@ export class FwScMediaButton extends StudioBoundElement {
     const studio = this.boundStudio;
     const supported = studio?.support.mediaFile ?? false;
     const canAdd = !!studio && supported && studio.pc.s.state !== "destroyed" && !this.disabled;
+    const label = supported ? this.t("addMediaFile") : this.t("mediaFileUnsupported");
     return html`
       <div class="fw-sc-camera-picker">
         <button
           type="button"
           class="fw-sc-action-secondary"
           ?disabled=${!canAdd}
-          title=${supported ? this.t("addMediaFile") : this.t("mediaFileUnsupported")}
+          title=${label}
+          aria-label=${label}
           @click=${() => {
-            this._failed = false;
+            this._setFailed(false);
             this._input?.click();
           }}
         >

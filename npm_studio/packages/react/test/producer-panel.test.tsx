@@ -274,6 +274,27 @@ describe("StudioProducerPanel overlays and media", () => {
     expect(screen.queryByText("Add media file")).toBeNull();
   });
 
+  it("names the media file button and closes its error on a click elsewhere", async () => {
+    const onAdd = vi.fn(async () => {
+      throw new Error("unsupported");
+    });
+    const { container } = render(<MediaFileButton onAdd={onAdd} />);
+
+    await act(async () => {
+      fireEvent.change(container.querySelector("input[accept='video/*,audio/*']")!, {
+        target: { files: [new File(["x"], "clip.xyz")] },
+      });
+    });
+    expect(screen.getByRole("alert").textContent).toBe(
+      "This file could not be played in this browser."
+    );
+    expect(screen.getByRole("button", { name: "Add media file" })).toBeTruthy();
+
+    fireEvent.mouseDown(document.body);
+
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   it("pauses a playing file, plays a paused one and turns looping on", () => {
     const media = fakeMedia();
     const { rerender } = render(

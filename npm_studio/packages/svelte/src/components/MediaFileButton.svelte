@@ -32,7 +32,26 @@
   });
 
   let inputEl = $state<HTMLInputElement>(undefined!);
+  let rootEl = $state<HTMLDivElement>();
   let failed = $state(false);
+  let label = $derived(support.mediaFile ? t("addMediaFile") : t("mediaFileUnsupported"));
+
+  // The error note closes like the camera menu: on a click elsewhere or Escape.
+  $effect(() => {
+    if (!failed) return;
+    const handleOutsideClick = (e: MouseEvent) => {
+      if (rootEl && !rootEl.contains(e.target as Node)) failed = false;
+    };
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === "Escape") failed = false;
+    };
+    document.addEventListener("mousedown", handleOutsideClick);
+    document.addEventListener("keydown", handleEscape);
+    return () => {
+      document.removeEventListener("mousedown", handleOutsideClick);
+      document.removeEventListener("keydown", handleEscape);
+    };
+  });
 
   async function handleChange(e: Event) {
     const input = e.target as HTMLInputElement;
@@ -49,7 +68,7 @@
   }
 </script>
 
-<div class="fw-sc-camera-picker">
+<div class="fw-sc-camera-picker" bind:this={rootEl}>
   <button
     type="button"
     class="fw-sc-action-secondary"
@@ -58,7 +77,8 @@
       inputEl?.click();
     }}
     disabled={disabled || !support.mediaFile}
-    title={support.mediaFile ? t("addMediaFile") : t("mediaFileUnsupported")}
+    title={label}
+    aria-label={label}
   >
     <FilmIcon size={18} />
   </button>
