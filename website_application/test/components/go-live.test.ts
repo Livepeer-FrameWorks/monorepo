@@ -92,8 +92,12 @@ beforeEach(() => {
   resolveFetch.mockImplementation(async ({ variables }: { variables: { streamKey: string } }) =>
     destinationFor(variables.streamKey)
   );
-  page.url = new URL("http://localhost/go-live");
+  setPageUrl("http://localhost/go-live");
 });
+
+function setPageUrl(href: string) {
+  (page as { url: URL }).url = new URL(href);
+}
 afterEach(() => cleanup());
 
 async function chooseStream(name: string) {
@@ -116,7 +120,7 @@ describe("Go Live page", () => {
   });
 
   it("selects the stream named by ?stream= and lists only pushed streams", async () => {
-    page.url = new URL(`http://localhost/go-live?stream=${streamB.streamId}`);
+    setPageUrl(`http://localhost/go-live?stream=${streamB.streamId}`);
     render(GoLivePage);
     await screen.findByTestId("studio");
     expect(studioProps.current.whipUrl).toBe("https://key-b.node.example/webrtc/key-b");
@@ -124,7 +128,7 @@ describe("Go Live page", () => {
   });
 
   it("explains an unusable ?stream= link", async () => {
-    page.url = new URL("http://localhost/go-live?stream=p");
+    setPageUrl("http://localhost/go-live?stream=p");
     render(GoLivePage);
     expect(await screen.findByText(/linked stream is not available here/)).toBeTruthy();
   });
