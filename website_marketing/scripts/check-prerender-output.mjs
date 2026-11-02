@@ -31,7 +31,6 @@ const routes = [
   ["contact/index.html", "Contact FrameWorks - Streaming Infrastructure Support"],
   [
     "network/index.html",
-    "Network explorer | FrameWorks",
     "Network explorer",
     'role="tablist"',
     'id="network-tab-frameworks"',
@@ -43,6 +42,8 @@ const routes = [
   ["aup/index.html", "FrameWorks Acceptable Use Policy"],
   // Snippet stops before "& Responsible" because the built title HTML-encodes the ampersand.
   ["security/index.html", "FrameWorks Security"],
+  // serve answers unknown paths with this page.
+  ["404.html", "Page not found", "This page does not exist", 'href="/showcase"'],
 ];
 
 const staticFiles = [
@@ -185,8 +186,10 @@ if (existsSync(sitemapPath)) {
   if (!sitemap.startsWith("<?xml")) {
     failures.push("build/client/sitemap.xml is not XML");
   }
-  if (!sitemap.includes("<loc>https://frameworks.network/pricing</loc>")) {
-    failures.push("build/client/sitemap.xml is missing the pricing route");
+  for (const path of ["pricing", "showcase", "stream-test", "network"]) {
+    if (!sitemap.includes(`<loc>https://frameworks.network/${path}</loc>`)) {
+      failures.push(`build/client/sitemap.xml is missing the ${path} route`);
+    }
   }
   if (sitemap.includes("<lastmod>")) {
     failures.push("build/client/sitemap.xml contains synthetic build-time lastmod values");

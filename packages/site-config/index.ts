@@ -76,6 +76,13 @@ export const MARKETING_ROUTES: MarketingRouteSeo[] = [
       "Contact the FrameWorks team for self-hosted streaming deployments, hosted load balancing, enterprise live video infrastructure, and community support.",
   },
   {
+    id: "network",
+    path: "/network",
+    title: "FrameWorks Network Explorer - Infrastructure and Livepeer Transcoding Map",
+    description:
+      "A live map of FrameWorks infrastructure and the Livepeer orchestrators that transcode its streams, with regional prices and measured transcoding performance.",
+  },
+  {
     id: "status",
     path: "/status",
     title: "FrameWorks Status - Live Streaming Network Health",

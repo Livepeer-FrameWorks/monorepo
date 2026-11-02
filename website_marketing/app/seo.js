@@ -11,6 +11,7 @@ import {
   MARKETING_SITE_URL,
   TWITTER_URL,
 } from "@frameworks/site-config";
+import { customerStoryPath } from "../src/lib/customerStories";
 
 const socialImagePath = "/og-card.png";
 const logoPath = "/frameworks-dark-logomark.png";
@@ -95,6 +96,21 @@ export function faqJsonLd(path, faqs) {
 
 export function baseMeta(routeId) {
   const route = routeSeo[routeId] ?? routeSeo.home;
+  const descriptors = routeMeta(route);
+
+  if (routeId === "home") {
+    descriptors.push(
+      { "script:ld+json": organizationJsonLd() },
+      { "script:ld+json": serviceJsonLd() },
+      { "script:ld+json": websiteJsonLd() }
+    );
+  }
+
+  return descriptors;
+}
+
+// Title, description, canonical, Open Graph and Twitter tags for one page.
+function routeMeta(route) {
   const url = routeUrl(route);
   const image = socialImageUrl();
 
@@ -116,33 +132,29 @@ export function baseMeta(routeId) {
     { name: "twitter:image", content: image },
   ];
 
-  if (routeId === "home") {
-    descriptors.push(
-      { "script:ld+json": organizationJsonLd() },
-      { "script:ld+json": serviceJsonLd() },
-      { "script:ld+json": websiteJsonLd() }
-    );
-  }
-
   return descriptors;
 }
 
+// Customer stories are unlisted: full page metadata for link previews, but
+// kept out of search indexes.
 export function customerStoryMeta(story) {
   const robots = { name: "robots", content: "noindex, nofollow" };
   if (!story) {
     return [{ title: BRAND_NAME }, robots];
   }
 
-  const title = `${story.customer} on ${BRAND_NAME}`;
   return [
-    { title },
-    { name: "description", content: story.summary },
-    { property: "og:site_name", content: BRAND_NAME },
-    { property: "og:title", content: title },
-    { property: "og:description", content: story.summary },
-    { property: "og:image", content: socialImageUrl() },
+    ...routeMeta({
+      path: customerStoryPath(story),
+      title: `${story.customer} on ${BRAND_NAME}`,
+      description: story.summary,
+    }),
     robots,
   ];
+}
+
+export function notFoundMeta() {
+  return [{ title: `Page not found | ${BRAND_NAME}` }, { name: "robots", content: "noindex" }];
 }
 
 export const discoveryLinks = {

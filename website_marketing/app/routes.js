@@ -16,4 +16,5 @@ export default [
   route("aup", "./routes/aup.jsx"),
   route("security", "./routes/security.jsx"),
   route("sitemap.xml", "./routes/sitemap.xml.js"),
+  route("*", "./routes/not-found.jsx"),
 ];
