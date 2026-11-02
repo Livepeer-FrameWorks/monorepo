@@ -1797,13 +1797,25 @@ state: string | null, /** Postal or ZIP code. */
 postalCode: string, /** ISO 3166-1 alpha-2 country code. */
 country: string } | null };
 
-export type BillingStatusDefaultFieldsFragment = { billingStatus: string, /** Invoice payment methods currently configured for this tenant. */
-paymentMethods: Array<PaymentMethod>, /** True only after a reusable postpaid provider subscription or mandate is confirmed. */
+/** A tenant's plan lifecycle, as its billing page shows it. */
+export type BillingLifecycleDefaultFieldsFragment = { /** Subscription status: active, past_due, pending_cancellation, suspended or none. */
+billingStatus: string, /** True only after a reusable postpaid provider subscription or mandate is confirmed. */
 collectionReady: boolean, /** Confirmed postpaid collection provider, when ready. */
-collectionProvider: string | null, /** Fully configured providers that can start postpaid setup. */
-setupProviders: Array<string>, nextBillingDate: string | null, trialEndsAt: string | null, outstandingAmount: number, currency: string, /** Monthly base fee in EUR this account pays after any arrangement, as a decimal string. */
-effectiveBasePrice: string, /** Progress of subscription.pendingTier while subscription.pendingReason is downgrade. */
-pendingTierState: PendingTierState | null, currentTier: { /** Unique tier identifier. */
+collectionProvider: string | null, /** Monthly base fee in EUR this account pays after any arrangement, as a decimal string. */
+effectiveBasePrice: string, /** When a scheduled downgrade takes effect. */
+pendingEffectiveAt: string | null, /** Why pendingTier is set: downgrade, tier_upgrade or stripe_checkout. */
+pendingReason: string | null, /** Progress of pendingTier while pendingReason is downgrade. */
+pendingTierState: PendingTierState | null, /** Billing arrangement FrameWorks set up for this account, such as a trial or a custom price, while it is in force. */
+operatorGrant: { /** Monthly base fee in EUR in place of the plan's, as a decimal string. Null keeps the plan's fee. */
+basePrice: string | null, /** Usage is metered and shown at zero cost. */
+waiveUsage: boolean, /** How invoices are collected: provider (Stripe or Mollie) or invoice (FrameWorks sends invoices to pay by bank transfer). */
+collection: string, /** When the arrangement ends. Null runs until FrameWorks ends it. */
+expiresAt: string | null, /** Plan the account returns to when the arrangement ends, when it is not the current plan. */
+fallbackTierName: string | null } | null, /** Scheduled move to the Free plan after a failed renewal payment or a cancellation. */
+freeFallback: { reason: FreeFallbackReason, /** When the move happens, or happened once stage is MOVED. */
+at: string, stage: FreeFallbackStage, /** The Stripe or Mollie subscription is cancelled, so no renewal follows. */
+providerCancelled: boolean } | null, /** Plan the subscription changes to, when a change is scheduled or being confirmed. */
+pendingTier: { /** Unique tier identifier. */
 id: string, /** Internal tier name (payg, free, supporter, developer, production, enterprise). */
 tierName: string, /** Numeric ordering of tiers; 0 = payg (prepaid), 1 = free, 5 = enterprise. Used to compare upgrade vs downgrade direction. */
 tierLevel: number, /** User-facing tier name. */
@@ -1821,7 +1833,31 @@ supportLevel: string, /** Whether SLA guarantees apply. */
 sla: boolean, /** Whether the tenant may override the tier's processing profiles. */
 processingCustomizable: boolean }, /** Priced behaviors per meter (rating engine input). */
 pricingRules: Array<{ meter: string, model: string, currency: string, includedQuantity: string, unitPrice: string, configJson: string }>, /** Non-billing grants (e.g. recording_retention_days). Values are JSON-encoded strings. */
-entitlements: Array<{ key: string, value: string }> } | null, subscription: { id: string, tenantId: string, tierId: string, status: string, billingEmail: string, startedAt: string, trialEndsAt: string | null, nextBillingDate: string | null, cancelledAt: string | null, paymentMethod: string | null, billingModel: string, pendingEffectiveAt: string | null, /** Why pendingTier is set: downgrade (applies at pendingEffectiveAt; see BillingStatus.pendingTierState), tier_upgrade (a paid upgrade being confirmed) or stripe_checkout (a checkout awaiting payment). */
+entitlements: Array<{ key: string, value: string }> } | null };
+
+export type BillingStatusDefaultFieldsFragment = { billingStatus: string, /** Invoice payment methods currently configured for this tenant. */
+paymentMethods: Array<PaymentMethod>, /** True only after a reusable postpaid provider subscription or mandate is confirmed. */
+collectionReady: boolean, /** Confirmed postpaid collection provider, when ready. */
+collectionProvider: string | null, /** Fully configured providers that can start postpaid setup. */
+setupProviders: Array<string>, nextBillingDate: string | null, trialEndsAt: string | null, outstandingAmount: number, currency: string, currentTier: { /** Unique tier identifier. */
+id: string, /** Internal tier name (payg, free, supporter, developer, production, enterprise). */
+tierName: string, /** Numeric ordering of tiers; 0 = payg (prepaid), 1 = free, 5 = enterprise. Used to compare upgrade vs downgrade direction. */
+tierLevel: number, /** User-facing tier name. */
+displayName: string, /** Tier description for marketing. */
+description: string | null, /** Base monthly price. */
+basePrice: number, /** Currency code (USD, EUR, etc.). */
+currency: string, /** Billing period (monthly, yearly). */
+billingPeriod: string, /** Support level included (community, email, priority, dedicated). */
+supportLevel: string | null, /** SLA guarantee level for enterprise tiers. */
+slaLevel: string | null, /** Whether usage metering is enabled for this tier. */
+meteringEnabled: boolean, /** Whether this is an enterprise tier with custom terms. */
+isEnterprise: boolean, /** Feature flags for this tier. */
+features: { /** Support level (community, email, priority, dedicated). */
+supportLevel: string, /** Whether SLA guarantees apply. */
+sla: boolean, /** Whether the tenant may override the tier's processing profiles. */
+processingCustomizable: boolean }, /** Priced behaviors per meter (rating engine input). */
+pricingRules: Array<{ meter: string, model: string, currency: string, includedQuantity: string, unitPrice: string, configJson: string }>, /** Non-billing grants (e.g. recording_retention_days). Values are JSON-encoded strings. */
+entitlements: Array<{ key: string, value: string }> } | null, subscription: { id: string, tenantId: string, tierId: string, status: string, billingEmail: string, startedAt: string, trialEndsAt: string | null, nextBillingDate: string | null, cancelledAt: string | null, paymentMethod: string | null, billingModel: string, pendingEffectiveAt: string | null, /** Why pendingTier is set: downgrade (applies at pendingEffectiveAt; see BillingLifecycle.pendingTierState), tier_upgrade (a paid upgrade being confirmed) or stripe_checkout (a checkout awaiting payment). */
 pendingReason: string | null, /** Currency the tenant is invoiced and charged in (EUR, USD, GBP), derived from the billing country. The prepaid ledger is always EUR. */
 presentmentCurrency: string, createdAt: string, updatedAt: string, customFeatures: { /** Support level (community, email, priority, dedicated). */
 supportLevel: string, /** Whether SLA guarantees apply. */
@@ -1860,16 +1896,7 @@ updatedAt: string, /** Billing period start date. */
 periodStart: string | null, /** Billing period end date. */
 periodEnd: string | null, /** Detailed usage breakdown (JSON). */
 usageDetails: unknown, /** Individual line items on the invoice. */
-lineItems: Array<{ lineKey: string, meter: string, description: string, quantity: string, includedQuantity: string, billableQuantity: string, unitPrice: string, total: string, currency: string, clusterId: string | null, clusterName: string | null, clusterKind: string | null, pricingSource: string, pricingLabel: string, unit: string, dimensions: unknown }> } | null, /** Billing arrangement FrameWorks set up for this account, such as a trial or a custom price, while it is in force. */
-operatorGrant: { /** Monthly base fee in EUR in place of the plan's, as a decimal string. Null keeps the plan's fee. */
-basePrice: string | null, /** Usage is metered and shown at zero cost. */
-waiveUsage: boolean, /** How invoices are collected: provider (Stripe or Mollie) or invoice (FrameWorks sends invoices to pay by bank transfer). */
-collection: string, /** When the arrangement ends. Null runs until FrameWorks ends it. */
-expiresAt: string | null, /** Plan the account returns to when the arrangement ends, when it is not the current plan. */
-fallbackTierName: string | null } | null, /** Scheduled move to the Free plan after a failed renewal payment or a cancellation. */
-freeFallback: { reason: FreeFallbackReason, /** When the move happens, or happened once stage is MOVED. */
-at: string, stage: FreeFallbackStage, /** The Stripe or Mollie subscription is cancelled, so no renewal follows. */
-providerCancelled: boolean } | null };
+lineItems: Array<{ lineKey: string, meter: string, description: string, quantity: string, includedQuantity: string, billableQuantity: string, unitPrice: string, total: string, currency: string, clusterId: string | null, clusterName: string | null, clusterKind: string | null, pricingSource: string, pricingLabel: string, unit: string, dimensions: unknown }> } | null };
 
 /** A subscription tier defining pricing rules, entitlements, and features. Tenants subscribe to a tier which determines their billing and capabilities. */
 export type BillingTierDefaultFieldsFragment = { /** Unique tier identifier. */
@@ -5772,18 +5799,29 @@ state: string | null, /** Postal or ZIP code. */
 postalCode: string, /** ISO 3166-1 alpha-2 country code. */
 country: string } | null } | null };
 
-export type GetBillingStatusQueryVariables = Exact<{ [key: string]: never; }>;
+export type GetBillingLifecycleQueryVariables = Exact<{ [key: string]: never; }>;
 
 
-/** Get the current billing status including subscription tier and usage. */
-export type GetBillingStatusQuery = { /** Get the current billing status including subscription tier and usage. */
-billingStatus: { billingStatus: string, /** Invoice payment methods currently configured for this tenant. */
-paymentMethods: Array<PaymentMethod>, /** True only after a reusable postpaid provider subscription or mandate is confirmed. */
+/** The current tenant's plan lifecycle: a FrameWorks arrangement, a scheduled move to Free and how far a scheduled plan change has progressed. */
+export type GetBillingLifecycleQuery = { /** The current tenant's plan lifecycle: a FrameWorks arrangement, a scheduled move to Free and how far a scheduled plan change has progressed. */
+billingLifecycle: { /** Subscription status: active, past_due, pending_cancellation, suspended or none. */
+billingStatus: string, /** True only after a reusable postpaid provider subscription or mandate is confirmed. */
 collectionReady: boolean, /** Confirmed postpaid collection provider, when ready. */
-collectionProvider: string | null, /** Fully configured providers that can start postpaid setup. */
-setupProviders: Array<string>, nextBillingDate: string | null, trialEndsAt: string | null, outstandingAmount: number, currency: string, /** Monthly base fee in EUR this account pays after any arrangement, as a decimal string. */
-effectiveBasePrice: string, /** Progress of subscription.pendingTier while subscription.pendingReason is downgrade. */
-pendingTierState: PendingTierState | null, currentTier: { /** Unique tier identifier. */
+collectionProvider: string | null, /** Monthly base fee in EUR this account pays after any arrangement, as a decimal string. */
+effectiveBasePrice: string, /** When a scheduled downgrade takes effect. */
+pendingEffectiveAt: string | null, /** Why pendingTier is set: downgrade, tier_upgrade or stripe_checkout. */
+pendingReason: string | null, /** Progress of pendingTier while pendingReason is downgrade. */
+pendingTierState: PendingTierState | null, /** Billing arrangement FrameWorks set up for this account, such as a trial or a custom price, while it is in force. */
+operatorGrant: { /** Monthly base fee in EUR in place of the plan's, as a decimal string. Null keeps the plan's fee. */
+basePrice: string | null, /** Usage is metered and shown at zero cost. */
+waiveUsage: boolean, /** How invoices are collected: provider (Stripe or Mollie) or invoice (FrameWorks sends invoices to pay by bank transfer). */
+collection: string, /** When the arrangement ends. Null runs until FrameWorks ends it. */
+expiresAt: string | null, /** Plan the account returns to when the arrangement ends, when it is not the current plan. */
+fallbackTierName: string | null } | null, /** Scheduled move to the Free plan after a failed renewal payment or a cancellation. */
+freeFallback: { reason: FreeFallbackReason, /** When the move happens, or happened once stage is MOVED. */
+at: string, stage: FreeFallbackStage, /** The Stripe or Mollie subscription is cancelled, so no renewal follows. */
+providerCancelled: boolean } | null, /** Plan the subscription changes to, when a change is scheduled or being confirmed. */
+pendingTier: { /** Unique tier identifier. */
 id: string, /** Internal tier name (payg, free, supporter, developer, production, enterprise). */
 tierName: string, /** Numeric ordering of tiers; 0 = payg (prepaid), 1 = free, 5 = enterprise. Used to compare upgrade vs downgrade direction. */
 tierLevel: number, /** User-facing tier name. */
@@ -5801,7 +5839,36 @@ supportLevel: string, /** Whether SLA guarantees apply. */
 sla: boolean, /** Whether the tenant may override the tier's processing profiles. */
 processingCustomizable: boolean }, /** Priced behaviors per meter (rating engine input). */
 pricingRules: Array<{ meter: string, model: string, currency: string, includedQuantity: string, unitPrice: string, configJson: string }>, /** Non-billing grants (e.g. recording_retention_days). Values are JSON-encoded strings. */
-entitlements: Array<{ key: string, value: string }> } | null, subscription: { id: string, tenantId: string, tierId: string, status: string, billingEmail: string, startedAt: string, trialEndsAt: string | null, nextBillingDate: string | null, cancelledAt: string | null, paymentMethod: string | null, billingModel: string, pendingEffectiveAt: string | null, /** Why pendingTier is set: downgrade (applies at pendingEffectiveAt; see BillingStatus.pendingTierState), tier_upgrade (a paid upgrade being confirmed) or stripe_checkout (a checkout awaiting payment). */
+entitlements: Array<{ key: string, value: string }> } | null } | null };
+
+export type GetBillingStatusQueryVariables = Exact<{ [key: string]: never; }>;
+
+
+/** Get the current billing status including subscription tier and usage. */
+export type GetBillingStatusQuery = { /** Get the current billing status including subscription tier and usage. */
+billingStatus: { billingStatus: string, /** Invoice payment methods currently configured for this tenant. */
+paymentMethods: Array<PaymentMethod>, /** True only after a reusable postpaid provider subscription or mandate is confirmed. */
+collectionReady: boolean, /** Confirmed postpaid collection provider, when ready. */
+collectionProvider: string | null, /** Fully configured providers that can start postpaid setup. */
+setupProviders: Array<string>, nextBillingDate: string | null, trialEndsAt: string | null, outstandingAmount: number, currency: string, currentTier: { /** Unique tier identifier. */
+id: string, /** Internal tier name (payg, free, supporter, developer, production, enterprise). */
+tierName: string, /** Numeric ordering of tiers; 0 = payg (prepaid), 1 = free, 5 = enterprise. Used to compare upgrade vs downgrade direction. */
+tierLevel: number, /** User-facing tier name. */
+displayName: string, /** Tier description for marketing. */
+description: string | null, /** Base monthly price. */
+basePrice: number, /** Currency code (USD, EUR, etc.). */
+currency: string, /** Billing period (monthly, yearly). */
+billingPeriod: string, /** Support level included (community, email, priority, dedicated). */
+supportLevel: string | null, /** SLA guarantee level for enterprise tiers. */
+slaLevel: string | null, /** Whether usage metering is enabled for this tier. */
+meteringEnabled: boolean, /** Whether this is an enterprise tier with custom terms. */
+isEnterprise: boolean, /** Feature flags for this tier. */
+features: { /** Support level (community, email, priority, dedicated). */
+supportLevel: string, /** Whether SLA guarantees apply. */
+sla: boolean, /** Whether the tenant may override the tier's processing profiles. */
+processingCustomizable: boolean }, /** Priced behaviors per meter (rating engine input). */
+pricingRules: Array<{ meter: string, model: string, currency: string, includedQuantity: string, unitPrice: string, configJson: string }>, /** Non-billing grants (e.g. recording_retention_days). Values are JSON-encoded strings. */
+entitlements: Array<{ key: string, value: string }> } | null, subscription: { id: string, tenantId: string, tierId: string, status: string, billingEmail: string, startedAt: string, trialEndsAt: string | null, nextBillingDate: string | null, cancelledAt: string | null, paymentMethod: string | null, billingModel: string, pendingEffectiveAt: string | null, /** Why pendingTier is set: downgrade (applies at pendingEffectiveAt; see BillingLifecycle.pendingTierState), tier_upgrade (a paid upgrade being confirmed) or stripe_checkout (a checkout awaiting payment). */
 pendingReason: string | null, /** Currency the tenant is invoiced and charged in (EUR, USD, GBP), derived from the billing country. The prepaid ledger is always EUR. */
 presentmentCurrency: string, createdAt: string, updatedAt: string, customFeatures: { /** Support level (community, email, priority, dedicated). */
 supportLevel: string, /** Whether SLA guarantees apply. */
@@ -5840,16 +5907,7 @@ updatedAt: string, /** Billing period start date. */
 periodStart: string | null, /** Billing period end date. */
 periodEnd: string | null, /** Detailed usage breakdown (JSON). */
 usageDetails: unknown, /** Individual line items on the invoice. */
-lineItems: Array<{ lineKey: string, meter: string, description: string, quantity: string, includedQuantity: string, billableQuantity: string, unitPrice: string, total: string, currency: string, clusterId: string | null, clusterName: string | null, clusterKind: string | null, pricingSource: string, pricingLabel: string, unit: string, dimensions: unknown }> } | null, /** Billing arrangement FrameWorks set up for this account, such as a trial or a custom price, while it is in force. */
-operatorGrant: { /** Monthly base fee in EUR in place of the plan's, as a decimal string. Null keeps the plan's fee. */
-basePrice: string | null, /** Usage is metered and shown at zero cost. */
-waiveUsage: boolean, /** How invoices are collected: provider (Stripe or Mollie) or invoice (FrameWorks sends invoices to pay by bank transfer). */
-collection: string, /** When the arrangement ends. Null runs until FrameWorks ends it. */
-expiresAt: string | null, /** Plan the account returns to when the arrangement ends, when it is not the current plan. */
-fallbackTierName: string | null } | null, /** Scheduled move to the Free plan after a failed renewal payment or a cancellation. */
-freeFallback: { reason: FreeFallbackReason, /** When the move happens, or happened once stage is MOVED. */
-at: string, stage: FreeFallbackStage, /** The Stripe or Mollie subscription is cancelled, so no renewal follows. */
-providerCancelled: boolean } | null } | null };
+lineItems: Array<{ lineKey: string, meter: string, description: string, quantity: string, includedQuantity: string, billableQuantity: string, unitPrice: string, total: string, currency: string, clusterId: string | null, clusterName: string | null, clusterKind: string | null, pricingSource: string, pricingLabel: string, unit: string, dimensions: unknown }> } | null } | null };
 
 export type GetBillingTiersQueryVariables = Exact<{ [key: string]: never; }>;
 
@@ -10777,6 +10835,62 @@ export const BillingDetailsDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDoc
   presentmentCurrency
 }
     `, {"fragmentName":"BillingDetailsDefaultFields"}) as unknown as TypedDocumentString<BillingDetailsDefaultFieldsFragment, unknown>;
+/** A tenant's plan lifecycle, as its billing page shows it. */
+export const BillingLifecycleDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
+    fragment BillingLifecycleDefaultFields on BillingLifecycle {
+  billingStatus
+  collectionReady
+  collectionProvider
+  effectiveBasePrice
+  operatorGrant {
+    basePrice
+    waiveUsage
+    collection
+    expiresAt
+    fallbackTierName
+  }
+  freeFallback {
+    reason
+    at
+    stage
+    providerCancelled
+  }
+  pendingTier {
+    id
+    tierName
+    tierLevel
+    displayName
+    description
+    basePrice
+    currency
+    billingPeriod
+    features {
+      supportLevel
+      sla
+      processingCustomizable
+    }
+    pricingRules {
+      meter
+      model
+      currency
+      includedQuantity
+      unitPrice
+      configJson
+    }
+    entitlements {
+      key
+      value
+    }
+    supportLevel
+    slaLevel
+    meteringEnabled
+    isEnterprise
+  }
+  pendingEffectiveAt
+  pendingReason
+  pendingTierState
+}
+    `, {"fragmentName":"BillingLifecycleDefaultFields"}) as unknown as TypedDocumentString<BillingLifecycleDefaultFieldsFragment, unknown>;
 export const BillingStatusDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
     fragment BillingStatusDefaultFields on BillingStatus {
   currentTier {
@@ -10977,21 +11091,6 @@ export const BillingStatusDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocu
       dimensions
     }
   }
-  operatorGrant {
-    basePrice
-    waiveUsage
-    collection
-    expiresAt
-    fallbackTierName
-  }
-  effectiveBasePrice
-  freeFallback {
-    reason
-    at
-    stage
-    providerCancelled
-  }
-  pendingTierState
 }
     `, {"fragmentName":"BillingStatusDefaultFields"}) as unknown as TypedDocumentString<BillingStatusDefaultFieldsFragment, unknown>;
 /** A subscription tier defining pricing rules, entitlements, and features. Tenants subscribe to a tier which determines their billing and capabilities. */
@@ -19551,6 +19650,66 @@ export const GetBillingDetailsDocument = /*#__PURE__*/ new TypedDocumentString(`
   updatedAt
   presentmentCurrency
 }`) as unknown as TypedDocumentString<GetBillingDetailsQuery, GetBillingDetailsQueryVariables>;
+/** The current tenant's plan lifecycle: a FrameWorks arrangement, a scheduled move to Free and how far a scheduled plan change has progressed. */
+export const GetBillingLifecycleDocument = /*#__PURE__*/ new TypedDocumentString(`
+    query GetBillingLifecycle {
+  billingLifecycle {
+    ...BillingLifecycleDefaultFields
+  }
+}
+    fragment BillingLifecycleDefaultFields on BillingLifecycle {
+  billingStatus
+  collectionReady
+  collectionProvider
+  effectiveBasePrice
+  operatorGrant {
+    basePrice
+    waiveUsage
+    collection
+    expiresAt
+    fallbackTierName
+  }
+  freeFallback {
+    reason
+    at
+    stage
+    providerCancelled
+  }
+  pendingTier {
+    id
+    tierName
+    tierLevel
+    displayName
+    description
+    basePrice
+    currency
+    billingPeriod
+    features {
+      supportLevel
+      sla
+      processingCustomizable
+    }
+    pricingRules {
+      meter
+      model
+      currency
+      includedQuantity
+      unitPrice
+      configJson
+    }
+    entitlements {
+      key
+      value
+    }
+    supportLevel
+    slaLevel
+    meteringEnabled
+    isEnterprise
+  }
+  pendingEffectiveAt
+  pendingReason
+  pendingTierState
+}`) as unknown as TypedDocumentString<GetBillingLifecycleQuery, GetBillingLifecycleQueryVariables>;
 /** Get the current billing status including subscription tier and usage. */
 export const GetBillingStatusDocument = /*#__PURE__*/ new TypedDocumentString(`
     query GetBillingStatus {
@@ -19757,21 +19916,6 @@ export const GetBillingStatusDocument = /*#__PURE__*/ new TypedDocumentString(`
       dimensions
     }
   }
-  operatorGrant {
-    basePrice
-    waiveUsage
-    collection
-    expiresAt
-    fallbackTierName
-  }
-  effectiveBasePrice
-  freeFallback {
-    reason
-    at
-    stage
-    providerCancelled
-  }
-  pendingTierState
 }`) as unknown as TypedDocumentString<GetBillingStatusQuery, GetBillingStatusQueryVariables>;
 /** List available billing tiers and their pricing. */
 export const GetBillingTiersDocument = /*#__PURE__*/ new TypedDocumentString(`

@@ -668,6 +668,52 @@ type BillingFeatures {
   processingCustomizable: Boolean!
 }
 
+"""
+A tenant's plan lifecycle, as its billing page shows it.
+"""
+type BillingLifecycle {
+  """
+  Subscription status: active, past_due, pending_cancellation, suspended or none.
+  """
+  billingStatus: String!
+  """
+  True only after a reusable postpaid provider subscription or mandate is confirmed.
+  """
+  collectionReady: Boolean!
+  """
+  Confirmed postpaid collection provider, when ready.
+  """
+  collectionProvider: String
+  """
+  Monthly base fee in EUR this account pays after any arrangement, as a decimal string.
+  """
+  effectiveBasePrice: String!
+  """
+  Billing arrangement FrameWorks set up for this account, such as a trial or a custom price, while it is in force.
+  """
+  operatorGrant: BillingArrangement
+  """
+  Scheduled move to the Free plan after a failed renewal payment or a cancellation.
+  """
+  freeFallback: FreeFallback
+  """
+  Plan the subscription changes to, when a change is scheduled or being confirmed.
+  """
+  pendingTier: BillingTier
+  """
+  When a scheduled downgrade takes effect.
+  """
+  pendingEffectiveAt: Time
+  """
+  Why pendingTier is set: downgrade, tier_upgrade or stripe_checkout.
+  """
+  pendingReason: String
+  """
+  Progress of pendingTier while pendingReason is downgrade.
+  """
+  pendingTierState: PendingTierState
+}
+
 type BillingStatus {
   currentTier: BillingTier
   subscription: TenantSubscription
@@ -698,22 +744,6 @@ type BillingStatus {
   currency: String!
   liveUsage: LiveUsageSummary!
   invoicePreview: Invoice
-  """
-  Billing arrangement FrameWorks set up for this account, such as a trial or a custom price, while it is in force.
-  """
-  operatorGrant: BillingArrangement
-  """
-  Monthly base fee in EUR this account pays after any arrangement, as a decimal string.
-  """
-  effectiveBasePrice: String!
-  """
-  Scheduled move to the Free plan after a failed renewal payment or a cancellation.
-  """
-  freeFallback: FreeFallback
-  """
-  Progress of subscription.pendingTier while subscription.pendingReason is downgrade.
-  """
-  pendingTierState: PendingTierState
 }
 
 """
@@ -6504,6 +6534,11 @@ type Query {
   """
   billingStatus: BillingStatus
   """
+  The current tenant's plan lifecycle: a FrameWorks arrangement, a scheduled
+  move to Free and how far a scheduled plan change has progressed.
+  """
+  billingLifecycle: BillingLifecycle
+  """
   List Mollie mandates for the current tenant.
   """
   mollieMandates: [MollieMandate!]!
@@ -8913,7 +8948,7 @@ type TenantSubscription {
   pendingEffectiveAt: Time
   """
   Why pendingTier is set: downgrade (applies at pendingEffectiveAt; see
-  BillingStatus.pendingTierState), tier_upgrade (a paid upgrade being
+  BillingLifecycle.pendingTierState), tier_upgrade (a paid upgrade being
   confirmed) or stripe_checkout (a checkout awaiting payment).
   """
   pendingReason: String

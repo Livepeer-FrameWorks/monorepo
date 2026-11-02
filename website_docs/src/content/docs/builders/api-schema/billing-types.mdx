@@ -102,6 +102,23 @@ Contractual and enforced properties of a billing tier. Usage limits are entitlem
 - **sla**: `Boolean!` — Whether SLA guarantees apply.
 - **processingCustomizable**: `Boolean!` — Whether the tenant may override the tier&#39;s processing profiles.
 
+## BillingLifecycle
+
+**object**
+
+A tenant&#39;s plan lifecycle, as its billing page shows it.
+
+- **billingStatus**: `String!` — Subscription status: active, past_due, pending_cancellation, suspended or none.
+- **collectionReady**: `Boolean!` — True only after a reusable postpaid provider subscription or mandate is confirmed.
+- **collectionProvider**: `String` — Confirmed postpaid collection provider, when ready.
+- **effectiveBasePrice**: `String!` — Monthly base fee in EUR this account pays after any arrangement, as a decimal string.
+- **operatorGrant**: `BillingArrangement` ([BillingArrangement](/builders/api-schema/billing-types/#billingarrangement)) — Billing arrangement FrameWorks set up for this account, such as a trial or a custom price, while it is in force.
+- **freeFallback**: `FreeFallback` ([FreeFallback](/builders/api-schema/billing-types/#freefallback)) — Scheduled move to the Free plan after a failed renewal payment or a cancellation.
+- **pendingTier**: `BillingTier` ([BillingTier](/builders/api-schema/billing-types/#billingtier)) — Plan the subscription changes to, when a change is scheduled or being confirmed.
+- **pendingEffectiveAt**: `Time` ([Time](/builders/api-schema/shared/#time)) — When a scheduled downgrade takes effect.
+- **pendingReason**: `String` — Why pendingTier is set: downgrade, tier_upgrade or stripe_checkout.
+- **pendingTierState**: `PendingTierState` ([PendingTierState](/builders/api-schema/billing-types/#pendingtierstate)) — Progress of pendingTier while pendingReason is downgrade.
+
 ## BillingStatus
 
 **object**
@@ -120,10 +137,6 @@ Contractual and enforced properties of a billing tier. Usage limits are entitlem
 - **currency**: `String!`
 - **liveUsage**: `LiveUsageSummary!` ([LiveUsageSummary](/builders/api-schema/billing-types/#liveusagesummary))
 - **invoicePreview**: `Invoice` ([Invoice](/builders/api-schema/billing-types/#invoice))
-- **operatorGrant**: `BillingArrangement` ([BillingArrangement](/builders/api-schema/billing-types/#billingarrangement)) — Billing arrangement FrameWorks set up for this account, such as a trial or a custom price, while it is in force.
-- **effectiveBasePrice**: `String!` — Monthly base fee in EUR this account pays after any arrangement, as a decimal string.
-- **freeFallback**: `FreeFallback` ([FreeFallback](/builders/api-schema/billing-types/#freefallback)) — Scheduled move to the Free plan after a failed renewal payment or a cancellation.
-- **pendingTierState**: `PendingTierState` ([PendingTierState](/builders/api-schema/billing-types/#pendingtierstate)) — Progress of subscription.pendingTier while subscription.pendingReason is downgrade.
 
 ## BillingTier
 
@@ -739,7 +752,7 @@ Stripe Checkout Session - redirect URL for hosted checkout.
 - **billingModel**: `String!`
 - **pendingTier**: `BillingTier` ([BillingTier](/builders/api-schema/billing-types/#billingtier))
 - **pendingEffectiveAt**: `Time` ([Time](/builders/api-schema/shared/#time))
-- **pendingReason**: `String` — Why pendingTier is set: downgrade (applies at pendingEffectiveAt; see BillingStatus.pendingTierState), tier_upgrade (a paid upgrade being confirmed) or stripe_checkout (a checkout awaiting payment).
+- **pendingReason**: `String` — Why pendingTier is set: downgrade (applies at pendingEffectiveAt; see BillingLifecycle.pendingTierState), tier_upgrade (a paid upgrade being confirmed) or stripe_checkout (a checkout awaiting payment).
 - **presentmentCurrency**: `Currency!` ([Currency](/builders/api-schema/billing-types/#currency)) — Currency the tenant is invoiced and charged in (EUR, USD, GBP), derived from the billing country. The prepaid ledger is always EUR.
 - **createdAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
 - **updatedAt**: `Time!` ([Time](/builders/api-schema/shared/#time))

@@ -34,14 +34,12 @@ query GetPlatformTenantBilling($id: ID!, $invoicesFirst: Int = 25, $timeRange: T
             stage
             providerCancelled
           }
-          pendingTierState
-          subscription {
-            pendingTier {
-              displayName
-            }
-            pendingEffectiveAt
-            pendingReason
+          pendingTier {
+            displayName
           }
+          pendingEffectiveAt
+          pendingReason
+          pendingTierState
         }
         invoices(page: { first: $invoicesFirst }) {
           edges {

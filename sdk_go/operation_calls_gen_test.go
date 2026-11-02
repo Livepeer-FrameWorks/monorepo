@@ -155,6 +155,9 @@ var operationCalls = map[string]operationCall{
 	"GetBillingDetails": {GetBillingDetails_Operation, func(ctx context.Context, c *Client, _ vars) (any, error) {
 		return GetBillingDetails(ctx, c)
 	}},
+	"GetBillingLifecycle": {GetBillingLifecycle_Operation, func(ctx context.Context, c *Client, _ vars) (any, error) {
+		return GetBillingLifecycle(ctx, c)
+	}},
 	"GetBillingStatus": {GetBillingStatus_Operation, func(ctx context.Context, c *Client, _ vars) (any, error) {
 		return GetBillingStatus(ctx, c)
 	}},

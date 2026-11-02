@@ -1805,6 +1805,72 @@
       }
     },
     {
+      "name": "GetBillingLifecycle",
+      "kind": "query",
+      "variables": {},
+      "response": {
+        "data": {
+          "billingLifecycle": {
+            "billingStatus": "text",
+            "collectionProvider": "text",
+            "collectionReady": true,
+            "effectiveBasePrice": "text",
+            "freeFallback": {
+              "at": "2026-09-19T14:03:27Z",
+              "providerCancelled": true,
+              "reason": "PAYMENT_FAILED",
+              "stage": "SCHEDULED"
+            },
+            "operatorGrant": {
+              "basePrice": "text",
+              "collection": "text",
+              "expiresAt": "2026-09-19T14:03:27Z",
+              "fallbackTierName": "text",
+              "waiveUsage": true
+            },
+            "pendingEffectiveAt": "2026-09-19T14:03:27Z",
+            "pendingReason": "text",
+            "pendingTier": {
+              "basePrice": 1.5,
+              "billingPeriod": "text",
+              "currency": "text",
+              "description": "text",
+              "displayName": "text",
+              "entitlements": [
+                {
+                  "key": "text",
+                  "value": "text"
+                }
+              ],
+              "features": {
+                "processingCustomizable": true,
+                "sla": true,
+                "supportLevel": "text"
+              },
+              "id": "id-1",
+              "isEnterprise": true,
+              "meteringEnabled": true,
+              "pricingRules": [
+                {
+                  "configJson": "text",
+                  "currency": "text",
+                  "includedQuantity": "text",
+                  "meter": "text",
+                  "model": "text",
+                  "unitPrice": "text"
+                }
+              ],
+              "slaLevel": "text",
+              "supportLevel": "text",
+              "tierLevel": 1,
+              "tierName": "text"
+            },
+            "pendingTierState": "SCHEDULED"
+          }
+        }
+      }
+    },
+    {
       "name": "GetBillingStatus",
       "kind": "query",
       "variables": {},
@@ -1849,13 +1915,6 @@
               "supportLevel": "text",
               "tierLevel": 1,
               "tierName": "text"
-            },
-            "effectiveBasePrice": "text",
-            "freeFallback": {
-              "at": "2026-09-19T14:03:27Z",
-              "providerCancelled": true,
-              "reason": "PAYMENT_FAILED",
-              "stage": "SCHEDULED"
             },
             "invoicePreview": {
               "amount": "12.50",
@@ -1956,18 +2015,10 @@
               "vodDeleted": 1
             },
             "nextBillingDate": "2026-09-19T14:03:27Z",
-            "operatorGrant": {
-              "basePrice": "text",
-              "collection": "text",
-              "expiresAt": "2026-09-19T14:03:27Z",
-              "fallbackTierName": "text",
-              "waiveUsage": true
-            },
             "outstandingAmount": 1.5,
             "paymentMethods": [
               "CARD"
             ],
-            "pendingTierState": "SCHEDULED",
             "recentPayments": [
               {
                 "amount": "12.50",

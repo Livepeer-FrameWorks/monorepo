@@ -642,6 +642,16 @@ models:
         resolver: true
       recentPayments:
         resolver: true
+  BillingLifecycle:
+    model:
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser.BillingStatusResponse
+    fields:
+      pendingTier:
+        resolver: true
+      pendingEffectiveAt:
+        resolver: true
+      pendingReason:
+        resolver: true
       pendingTierState:
         resolver: true
   BillingArrangement:

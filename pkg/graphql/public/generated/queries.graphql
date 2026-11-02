@@ -148,6 +148,12 @@ query GetBillingDetails {
   }
 }
 
+query GetBillingLifecycle {
+  billingLifecycle {
+    ...BillingLifecycleDefaultFields
+  }
+}
+
 query GetBillingStatus {
   billingStatus {
     ...BillingStatusDefaultFields

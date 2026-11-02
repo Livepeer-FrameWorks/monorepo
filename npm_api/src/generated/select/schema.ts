@@ -535,6 +535,32 @@ export interface BillingFeatures {
     __typename: 'BillingFeatures'
 }
 
+
+/** A tenant's plan lifecycle, as its billing page shows it. */
+export interface BillingLifecycle {
+    /** Subscription status: active, past_due, pending_cancellation, suspended or none. */
+    billingStatus: Scalars['String']
+    /** True only after a reusable postpaid provider subscription or mandate is confirmed. */
+    collectionReady: Scalars['Boolean']
+    /** Confirmed postpaid collection provider, when ready. */
+    collectionProvider: (Scalars['String'] | null)
+    /** Monthly base fee in EUR this account pays after any arrangement, as a decimal string. */
+    effectiveBasePrice: Scalars['String']
+    /** Billing arrangement FrameWorks set up for this account, such as a trial or a custom price, while it is in force. */
+    operatorGrant: (BillingArrangement | null)
+    /** Scheduled move to the Free plan after a failed renewal payment or a cancellation. */
+    freeFallback: (FreeFallback | null)
+    /** Plan the subscription changes to, when a change is scheduled or being confirmed. */
+    pendingTier: (BillingTier | null)
+    /** When a scheduled downgrade takes effect. */
+    pendingEffectiveAt: (Scalars['Time'] | null)
+    /** Why pendingTier is set: downgrade, tier_upgrade or stripe_checkout. */
+    pendingReason: (Scalars['String'] | null)
+    /** Progress of pendingTier while pendingReason is downgrade. */
+    pendingTierState: (PendingTierState | null)
+    __typename: 'BillingLifecycle'
+}
+
 export interface BillingStatus {
     currentTier: (BillingTier | null)
     subscription: (TenantSubscription | null)
@@ -555,14 +581,6 @@ export interface BillingStatus {
     currency: Scalars['String']
     liveUsage: LiveUsageSummary
     invoicePreview: (Invoice | null)
-    /** Billing arrangement FrameWorks set up for this account, such as a trial or a custom price, while it is in force. */
-    operatorGrant: (BillingArrangement | null)
-    /** Monthly base fee in EUR this account pays after any arrangement, as a decimal string. */
-    effectiveBasePrice: Scalars['String']
-    /** Scheduled move to the Free plan after a failed renewal payment or a cancellation. */
-    freeFallback: (FreeFallback | null)
-    /** Progress of subscription.pendingTier while subscription.pendingReason is downgrade. */
-    pendingTierState: (PendingTierState | null)
     __typename: 'BillingStatus'
 }
 
@@ -4254,6 +4272,11 @@ export interface Query {
     paymentsConnection: InvoicePaymentsConnection
     /** Get the current billing status including subscription tier and usage. */
     billingStatus: (BillingStatus | null)
+    /**
+     * The current tenant's plan lifecycle: a FrameWorks arrangement, a scheduled
+     * move to Free and how far a scheduled plan change has progressed.
+     */
+    billingLifecycle: (BillingLifecycle | null)
     /** List Mollie mandates for the current tenant. */
     mollieMandates: MollieMandate[]
     /**
@@ -5995,7 +6018,7 @@ export interface TenantSubscription {
     pendingEffectiveAt: (Scalars['Time'] | null)
     /**
      * Why pendingTier is set: downgrade (applies at pendingEffectiveAt; see
-     * BillingStatus.pendingTierState), tier_upgrade (a paid upgrade being
+     * BillingLifecycle.pendingTierState), tier_upgrade (a paid upgrade being
      * confirmed) or stripe_checkout (a checkout awaiting payment).
      */
     pendingReason: (Scalars['String'] | null)
@@ -7431,6 +7454,33 @@ export interface BillingFeaturesGenqlSelection{
     __scalar?: boolean | number
 }
 
+
+/** A tenant's plan lifecycle, as its billing page shows it. */
+export interface BillingLifecycleGenqlSelection{
+    /** Subscription status: active, past_due, pending_cancellation, suspended or none. */
+    billingStatus?: boolean | number
+    /** True only after a reusable postpaid provider subscription or mandate is confirmed. */
+    collectionReady?: boolean | number
+    /** Confirmed postpaid collection provider, when ready. */
+    collectionProvider?: boolean | number
+    /** Monthly base fee in EUR this account pays after any arrangement, as a decimal string. */
+    effectiveBasePrice?: boolean | number
+    /** Billing arrangement FrameWorks set up for this account, such as a trial or a custom price, while it is in force. */
+    operatorGrant?: BillingArrangementGenqlSelection
+    /** Scheduled move to the Free plan after a failed renewal payment or a cancellation. */
+    freeFallback?: FreeFallbackGenqlSelection
+    /** Plan the subscription changes to, when a change is scheduled or being confirmed. */
+    pendingTier?: BillingTierGenqlSelection
+    /** When a scheduled downgrade takes effect. */
+    pendingEffectiveAt?: boolean | number
+    /** Why pendingTier is set: downgrade, tier_upgrade or stripe_checkout. */
+    pendingReason?: boolean | number
+    /** Progress of pendingTier while pendingReason is downgrade. */
+    pendingTierState?: boolean | number
+    __typename?: boolean | number
+    __scalar?: boolean | number
+}
+
 export interface BillingStatusGenqlSelection{
     currentTier?: BillingTierGenqlSelection
     subscription?: TenantSubscriptionGenqlSelection
@@ -7451,14 +7501,6 @@ export interface BillingStatusGenqlSelection{
     currency?: boolean | number
     liveUsage?: LiveUsageSummaryGenqlSelection
     invoicePreview?: InvoiceGenqlSelection
-    /** Billing arrangement FrameWorks set up for this account, such as a trial or a custom price, while it is in force. */
-    operatorGrant?: BillingArrangementGenqlSelection
-    /** Monthly base fee in EUR this account pays after any arrangement, as a decimal string. */
-    effectiveBasePrice?: boolean | number
-    /** Scheduled move to the Free plan after a failed renewal payment or a cancellation. */
-    freeFallback?: FreeFallbackGenqlSelection
-    /** Progress of subscription.pendingTier while subscription.pendingReason is downgrade. */
-    pendingTierState?: boolean | number
     __typename?: boolean | number
     __scalar?: boolean | number
 }
@@ -12014,6 +12056,11 @@ export interface QueryGenqlSelection{
     paymentsConnection?: (InvoicePaymentsConnectionGenqlSelection & { __args?: {page?: (ConnectionInput | null), invoiceId?: (Scalars['ID'] | null), status?: (Scalars['String'] | null), method?: (Scalars['String'] | null)} })
     /** Get the current billing status including subscription tier and usage. */
     billingStatus?: BillingStatusGenqlSelection
+    /**
+     * The current tenant's plan lifecycle: a FrameWorks arrangement, a scheduled
+     * move to Free and how far a scheduled plan change has progressed.
+     */
+    billingLifecycle?: BillingLifecycleGenqlSelection
     /** List Mollie mandates for the current tenant. */
     mollieMandates?: MollieMandateGenqlSelection
     /**
@@ -14145,7 +14192,7 @@ export interface TenantSubscriptionGenqlSelection{
     pendingEffectiveAt?: boolean | number
     /**
      * Why pendingTier is set: downgrade (applies at pendingEffectiveAt; see
-     * BillingStatus.pendingTierState), tier_upgrade (a paid upgrade being
+     * BillingLifecycle.pendingTierState), tier_upgrade (a paid upgrade being
      * confirmed) or stripe_checkout (a checkout awaiting payment).
      */
     pendingReason?: boolean | number
@@ -15568,6 +15615,14 @@ export interface X402PaymentResultGenqlSelection{
     export const isBillingFeatures = (obj?: { __typename?: any } | null): obj is BillingFeatures => {
       if (!obj?.__typename) throw new Error('__typename is missing in "isBillingFeatures"')
       return BillingFeatures_possibleTypes.includes(obj.__typename)
+    }
+
+
+
+    const BillingLifecycle_possibleTypes: string[] = ['BillingLifecycle']
+    export const isBillingLifecycle = (obj?: { __typename?: any } | null): obj is BillingLifecycle => {
+      if (!obj?.__typename) throw new Error('__typename is missing in "isBillingLifecycle"')
+      return BillingLifecycle_possibleTypes.includes(obj.__typename)
     }
 
 

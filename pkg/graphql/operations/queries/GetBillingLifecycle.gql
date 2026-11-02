@@ -1,0 +1,31 @@
+# Fetch the plan lifecycle: the base fee paid after any FrameWorks arrangement,
+# the arrangement's terms, a scheduled move to Free and how far a scheduled
+# downgrade has progressed.
+query GetBillingLifecycle {
+  billingLifecycle {
+    billingStatus
+    collectionReady
+    collectionProvider
+    effectiveBasePrice
+    operatorGrant {
+      basePrice
+      waiveUsage
+      collection
+      expiresAt
+      fallbackTierName
+    }
+    freeFallback {
+      reason
+      at
+      stage
+      providerCancelled
+    }
+    pendingTier {
+      id
+      displayName
+    }
+    pendingEffectiveAt
+    pendingReason
+    pendingTierState
+  }
+}

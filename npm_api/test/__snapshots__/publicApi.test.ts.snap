@@ -258,10 +258,15 @@ exports[`public API > operation manifest 1`] = `
       "kind": "query",
       "since": "v0.3.11",
     },
-    "GetBillingStatus": {
-      "hash": "sha256:9902e5ffa91efc44acc3b8c72f8faf04cb9150df21959ef28b7089a666807f00",
+    "GetBillingLifecycle": {
+      "hash": "sha256:51d83725356447f372b847ca5563e4ae34b496e0526b2a1dab397a5d4617a0eb",
       "kind": "query",
       "since": "v0.3.14",
+    },
+    "GetBillingStatus": {
+      "hash": "sha256:27329e4d7b0bd37d5a0e3c433b99885206bed5d45d89ce413a9ec2f35e3dc0e5",
+      "kind": "query",
+      "since": "v0.3.11",
     },
     "GetBillingTiers": {
       "hash": "sha256:17ba741228ca449710608ec9bddc87cb14b6d1caaeefa748ebf93cd4f2a32c23",
@@ -1193,6 +1198,7 @@ exports[`public API > root entry exports 1`] = `
   "AvailableClusterDefaultFieldsFragmentDoc",
   "BalanceTransactionDefaultFieldsFragmentDoc",
   "BillingDetailsDefaultFieldsFragmentDoc",
+  "BillingLifecycleDefaultFieldsFragmentDoc",
   "BillingStatusDefaultFieldsFragmentDoc",
   "BillingTierDefaultFieldsFragmentDoc",
   "BootstrapEdgeDocument",
@@ -1275,6 +1281,7 @@ exports[`public API > root entry exports 1`] = `
   "GetArtifactStatesConnectionDocument",
   "GetBalanceTransactionsConnectionDocument",
   "GetBillingDetailsDocument",
+  "GetBillingLifecycleDocument",
   "GetBillingStatusDocument",
   "GetBillingTiersDocument",
   "GetBufferEventsConnectionDocument",
@@ -1727,6 +1734,7 @@ exports[`public API > select entry exports 1`] = `
   "isBillingDetails",
   "isBillingDetailsUpdated",
   "isBillingFeatures",
+  "isBillingLifecycle",
   "isBillingStatus",
   "isBillingTier",
   "isBootstrapEdgeResponse",

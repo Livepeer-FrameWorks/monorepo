@@ -6896,6 +6896,345 @@ func (v *BillingDetailsDefaultFieldsAddressBillingAddress) GetPostalCode() strin
 // GetCountry returns BillingDetailsDefaultFieldsAddressBillingAddress.Country, and is useful for accessing the field via an interface.
 func (v *BillingDetailsDefaultFieldsAddressBillingAddress) GetCountry() string { return v.Country }
 
+// BillingLifecycleDefaultFields includes the GraphQL fields of BillingLifecycle requested by the fragment BillingLifecycleDefaultFields.
+// The GraphQL type's documentation follows.
+//
+// A tenant's plan lifecycle, as its billing page shows it.
+type BillingLifecycleDefaultFields struct {
+	// Subscription status: active, past_due, pending_cancellation, suspended or none.
+	BillingStatus string `json:"billingStatus"`
+	// True only after a reusable postpaid provider subscription or mandate is confirmed.
+	CollectionReady bool `json:"collectionReady"`
+	// Confirmed postpaid collection provider, when ready.
+	CollectionProvider *string `json:"collectionProvider"`
+	// Monthly base fee in EUR this account pays after any arrangement, as a decimal string.
+	EffectiveBasePrice string `json:"effectiveBasePrice"`
+	// Billing arrangement FrameWorks set up for this account, such as a trial or a custom price, while it is in force.
+	OperatorGrant *BillingLifecycleDefaultFieldsOperatorGrantBillingArrangement `json:"operatorGrant"`
+	// Scheduled move to the Free plan after a failed renewal payment or a cancellation.
+	FreeFallback *BillingLifecycleDefaultFieldsFreeFallback `json:"freeFallback"`
+	// Plan the subscription changes to, when a change is scheduled or being confirmed.
+	PendingTier *BillingLifecycleDefaultFieldsPendingTierBillingTier `json:"pendingTier"`
+	// When a scheduled downgrade takes effect.
+	PendingEffectiveAt *time.Time `json:"pendingEffectiveAt"`
+	// Why pendingTier is set: downgrade, tier_upgrade or stripe_checkout.
+	PendingReason *string `json:"pendingReason"`
+	// Progress of pendingTier while pendingReason is downgrade.
+	PendingTierState *PendingTierState `json:"pendingTierState"`
+}
+
+// GetBillingStatus returns BillingLifecycleDefaultFields.BillingStatus, and is useful for accessing the field via an interface.
+func (v *BillingLifecycleDefaultFields) GetBillingStatus() string { return v.BillingStatus }
+
+// GetCollectionReady returns BillingLifecycleDefaultFields.CollectionReady, and is useful for accessing the field via an interface.
+func (v *BillingLifecycleDefaultFields) GetCollectionReady() bool { return v.CollectionReady }
+
+// GetCollectionProvider returns BillingLifecycleDefaultFields.CollectionProvider, and is useful for accessing the field via an interface.
+func (v *BillingLifecycleDefaultFields) GetCollectionProvider() *string { return v.CollectionProvider }
+
+// GetEffectiveBasePrice returns BillingLifecycleDefaultFields.EffectiveBasePrice, and is useful for accessing the field via an interface.
+func (v *BillingLifecycleDefaultFields) GetEffectiveBasePrice() string { return v.EffectiveBasePrice }
+
+// GetOperatorGrant returns BillingLifecycleDefaultFields.OperatorGrant, and is useful for accessing the field via an interface.
+func (v *BillingLifecycleDefaultFields) GetOperatorGrant() *BillingLifecycleDefaultFieldsOperatorGrantBillingArrangement {
+	return v.OperatorGrant
+}
+
+// GetFreeFallback returns BillingLifecycleDefaultFields.FreeFallback, and is useful for accessing the field via an interface.
+func (v *BillingLifecycleDefaultFields) GetFreeFallback() *BillingLifecycleDefaultFieldsFreeFallback {
+	return v.FreeFallback
+}
+
+// GetPendingTier returns BillingLifecycleDefaultFields.PendingTier, and is useful for accessing the field via an interface.
+func (v *BillingLifecycleDefaultFields) GetPendingTier() *BillingLifecycleDefaultFieldsPendingTierBillingTier {
+	return v.PendingTier
+}
+
+// GetPendingEffectiveAt returns BillingLifecycleDefaultFields.PendingEffectiveAt, and is useful for accessing the field via an interface.
+func (v *BillingLifecycleDefaultFields) GetPendingEffectiveAt() *time.Time {
+	return v.PendingEffectiveAt
+}
+
+// GetPendingReason returns BillingLifecycleDefaultFields.PendingReason, and is useful for accessing the field via an interface.
+func (v *BillingLifecycleDefaultFields) GetPendingReason() *string { return v.PendingReason }
+
+// GetPendingTierState returns BillingLifecycleDefaultFields.PendingTierState, and is useful for accessing the field via an interface.
+func (v *BillingLifecycleDefaultFields) GetPendingTierState() *PendingTierState {
+	return v.PendingTierState
+}
+
+// BillingLifecycleDefaultFieldsFreeFallback includes the requested fields of the GraphQL type FreeFallback.
+// The GraphQL type's documentation follows.
+//
+// A scheduled move to the Free plan.
+type BillingLifecycleDefaultFieldsFreeFallback struct {
+	Reason FreeFallbackReason `json:"reason"`
+	// When the move happens, or happened once stage is MOVED.
+	At    time.Time         `json:"at"`
+	Stage FreeFallbackStage `json:"stage"`
+	// The Stripe or Mollie subscription is cancelled, so no renewal follows.
+	ProviderCancelled bool `json:"providerCancelled"`
+}
+
+// GetReason returns BillingLifecycleDefaultFieldsFreeFallback.Reason, and is useful for accessing the field via an interface.
+func (v *BillingLifecycleDefaultFieldsFreeFallback) GetReason() FreeFallbackReason { return v.Reason }
+
+// GetAt returns BillingLifecycleDefaultFieldsFreeFallback.At, and is useful for accessing the field via an interface.
+func (v *BillingLifecycleDefaultFieldsFreeFallback) GetAt() time.Time { return v.At }
+
+// GetStage returns BillingLifecycleDefaultFieldsFreeFallback.Stage, and is useful for accessing the field via an interface.
+func (v *BillingLifecycleDefaultFieldsFreeFallback) GetStage() FreeFallbackStage { return v.Stage }
+
+// GetProviderCancelled returns BillingLifecycleDefaultFieldsFreeFallback.ProviderCancelled, and is useful for accessing the field via an interface.
+func (v *BillingLifecycleDefaultFieldsFreeFallback) GetProviderCancelled() bool {
+	return v.ProviderCancelled
+}
+
+// BillingLifecycleDefaultFieldsOperatorGrantBillingArrangement includes the requested fields of the GraphQL type BillingArrangement.
+// The GraphQL type's documentation follows.
+//
+// A billing arrangement FrameWorks set up for an account. Only the terms the
+// account is billed under are shown.
+type BillingLifecycleDefaultFieldsOperatorGrantBillingArrangement struct {
+	// Monthly base fee in EUR in place of the plan's, as a decimal string. Null keeps the plan's fee.
+	BasePrice *string `json:"basePrice"`
+	// Usage is metered and shown at zero cost.
+	WaiveUsage bool `json:"waiveUsage"`
+	// How invoices are collected: provider (Stripe or Mollie) or invoice (FrameWorks sends invoices to pay by bank transfer).
+	Collection string `json:"collection"`
+	// When the arrangement ends. Null runs until FrameWorks ends it.
+	ExpiresAt *time.Time `json:"expiresAt"`
+	// Plan the account returns to when the arrangement ends, when it is not the current plan.
+	FallbackTierName *string `json:"fallbackTierName"`
+}
+
+// GetBasePrice returns BillingLifecycleDefaultFieldsOperatorGrantBillingArrangement.BasePrice, and is useful for accessing the field via an interface.
+func (v *BillingLifecycleDefaultFieldsOperatorGrantBillingArrangement) GetBasePrice() *string {
+	return v.BasePrice
+}
+
+// GetWaiveUsage returns BillingLifecycleDefaultFieldsOperatorGrantBillingArrangement.WaiveUsage, and is useful for accessing the field via an interface.
+func (v *BillingLifecycleDefaultFieldsOperatorGrantBillingArrangement) GetWaiveUsage() bool {
+	return v.WaiveUsage
+}
+
+// GetCollection returns BillingLifecycleDefaultFieldsOperatorGrantBillingArrangement.Collection, and is useful for accessing the field via an interface.
+func (v *BillingLifecycleDefaultFieldsOperatorGrantBillingArrangement) GetCollection() string {
+	return v.Collection
+}
+
+// GetExpiresAt returns BillingLifecycleDefaultFieldsOperatorGrantBillingArrangement.ExpiresAt, and is useful for accessing the field via an interface.
+func (v *BillingLifecycleDefaultFieldsOperatorGrantBillingArrangement) GetExpiresAt() *time.Time {
+	return v.ExpiresAt
+}
+
+// GetFallbackTierName returns BillingLifecycleDefaultFieldsOperatorGrantBillingArrangement.FallbackTierName, and is useful for accessing the field via an interface.
+func (v *BillingLifecycleDefaultFieldsOperatorGrantBillingArrangement) GetFallbackTierName() *string {
+	return v.FallbackTierName
+}
+
+// BillingLifecycleDefaultFieldsPendingTierBillingTier includes the requested fields of the GraphQL type BillingTier.
+// The GraphQL type's documentation follows.
+//
+// A subscription tier defining pricing rules, entitlements, and features.
+// Tenants subscribe to a tier which determines their billing and capabilities.
+type BillingLifecycleDefaultFieldsPendingTierBillingTier struct {
+	// Unique tier identifier.
+	Id string `json:"id"`
+	// Internal tier name (payg, free, supporter, developer, production, enterprise).
+	TierName string `json:"tierName"`
+	// Numeric ordering of tiers; 0 = payg (prepaid), 1 = free, 5 = enterprise. Used to compare upgrade vs downgrade direction.
+	TierLevel int `json:"tierLevel"`
+	// User-facing tier name.
+	DisplayName string `json:"displayName"`
+	// Tier description for marketing.
+	Description *string `json:"description"`
+	// Base monthly price.
+	BasePrice float64 `json:"basePrice"`
+	// Currency code (USD, EUR, etc.).
+	Currency string `json:"currency"`
+	// Billing period (monthly, yearly).
+	BillingPeriod string `json:"billingPeriod"`
+	// Feature flags for this tier.
+	Features BillingLifecycleDefaultFieldsPendingTierBillingTierFeaturesBillingFeatures `json:"features"`
+	// Priced behaviors per meter (rating engine input).
+	PricingRules []BillingLifecycleDefaultFieldsPendingTierBillingTierPricingRulesPricingRule `json:"pricingRules"`
+	// Non-billing grants (e.g. recording_retention_days). Values are JSON-encoded strings.
+	Entitlements []BillingLifecycleDefaultFieldsPendingTierBillingTierEntitlementsEntitlementEntry `json:"entitlements"`
+	// Support level included (community, email, priority, dedicated).
+	SupportLevel *string `json:"supportLevel"`
+	// SLA guarantee level for enterprise tiers.
+	SlaLevel *string `json:"slaLevel"`
+	// Whether usage metering is enabled for this tier.
+	MeteringEnabled bool `json:"meteringEnabled"`
+	// Whether this is an enterprise tier with custom terms.
+	IsEnterprise bool `json:"isEnterprise"`
+}
+
+// GetId returns BillingLifecycleDefaultFieldsPendingTierBillingTier.Id, and is useful for accessing the field via an interface.
+func (v *BillingLifecycleDefaultFieldsPendingTierBillingTier) GetId() string { return v.Id }
+
+// GetTierName returns BillingLifecycleDefaultFieldsPendingTierBillingTier.TierName, and is useful for accessing the field via an interface.
+func (v *BillingLifecycleDefaultFieldsPendingTierBillingTier) GetTierName() string { return v.TierName }
+
+// GetTierLevel returns BillingLifecycleDefaultFieldsPendingTierBillingTier.TierLevel, and is useful for accessing the field via an interface.
+func (v *BillingLifecycleDefaultFieldsPendingTierBillingTier) GetTierLevel() int { return v.TierLevel }
+
+// GetDisplayName returns BillingLifecycleDefaultFieldsPendingTierBillingTier.DisplayName, and is useful for accessing the field via an interface.
+func (v *BillingLifecycleDefaultFieldsPendingTierBillingTier) GetDisplayName() string {
+	return v.DisplayName
+}
+
+// GetDescription returns BillingLifecycleDefaultFieldsPendingTierBillingTier.Description, and is useful for accessing the field via an interface.
+func (v *BillingLifecycleDefaultFieldsPendingTierBillingTier) GetDescription() *string {
+	return v.Description
+}
+
+// GetBasePrice returns BillingLifecycleDefaultFieldsPendingTierBillingTier.BasePrice, and is useful for accessing the field via an interface.
+func (v *BillingLifecycleDefaultFieldsPendingTierBillingTier) GetBasePrice() float64 {
+	return v.BasePrice
+}
+
+// GetCurrency returns BillingLifecycleDefaultFieldsPendingTierBillingTier.Currency, and is useful for accessing the field via an interface.
+func (v *BillingLifecycleDefaultFieldsPendingTierBillingTier) GetCurrency() string { return v.Currency }
+
+// GetBillingPeriod returns BillingLifecycleDefaultFieldsPendingTierBillingTier.BillingPeriod, and is useful for accessing the field via an interface.
+func (v *BillingLifecycleDefaultFieldsPendingTierBillingTier) GetBillingPeriod() string {
+	return v.BillingPeriod
+}
+
+// GetFeatures returns BillingLifecycleDefaultFieldsPendingTierBillingTier.Features, and is useful for accessing the field via an interface.
+func (v *BillingLifecycleDefaultFieldsPendingTierBillingTier) GetFeatures() BillingLifecycleDefaultFieldsPendingTierBillingTierFeaturesBillingFeatures {
+	return v.Features
+}
+
+// GetPricingRules returns BillingLifecycleDefaultFieldsPendingTierBillingTier.PricingRules, and is useful for accessing the field via an interface.
+func (v *BillingLifecycleDefaultFieldsPendingTierBillingTier) GetPricingRules() []BillingLifecycleDefaultFieldsPendingTierBillingTierPricingRulesPricingRule {
+	return v.PricingRules
+}
+
+// GetEntitlements returns BillingLifecycleDefaultFieldsPendingTierBillingTier.Entitlements, and is useful for accessing the field via an interface.
+func (v *BillingLifecycleDefaultFieldsPendingTierBillingTier) GetEntitlements() []BillingLifecycleDefaultFieldsPendingTierBillingTierEntitlementsEntitlementEntry {
+	return v.Entitlements
+}
+
+// GetSupportLevel returns BillingLifecycleDefaultFieldsPendingTierBillingTier.SupportLevel, and is useful for accessing the field via an interface.
+func (v *BillingLifecycleDefaultFieldsPendingTierBillingTier) GetSupportLevel() *string {
+	return v.SupportLevel
+}
+
+// GetSlaLevel returns BillingLifecycleDefaultFieldsPendingTierBillingTier.SlaLevel, and is useful for accessing the field via an interface.
+func (v *BillingLifecycleDefaultFieldsPendingTierBillingTier) GetSlaLevel() *string {
+	return v.SlaLevel
+}
+
+// GetMeteringEnabled returns BillingLifecycleDefaultFieldsPendingTierBillingTier.MeteringEnabled, and is useful for accessing the field via an interface.
+func (v *BillingLifecycleDefaultFieldsPendingTierBillingTier) GetMeteringEnabled() bool {
+	return v.MeteringEnabled
+}
+
+// GetIsEnterprise returns BillingLifecycleDefaultFieldsPendingTierBillingTier.IsEnterprise, and is useful for accessing the field via an interface.
+func (v *BillingLifecycleDefaultFieldsPendingTierBillingTier) GetIsEnterprise() bool {
+	return v.IsEnterprise
+}
+
+// BillingLifecycleDefaultFieldsPendingTierBillingTierEntitlementsEntitlementEntry includes the requested fields of the GraphQL type EntitlementEntry.
+// The GraphQL type's documentation follows.
+//
+// A key-value entitlement entry. Values are JSON-encoded for type flexibility.
+type BillingLifecycleDefaultFieldsPendingTierBillingTierEntitlementsEntitlementEntry struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
+// GetKey returns BillingLifecycleDefaultFieldsPendingTierBillingTierEntitlementsEntitlementEntry.Key, and is useful for accessing the field via an interface.
+func (v *BillingLifecycleDefaultFieldsPendingTierBillingTierEntitlementsEntitlementEntry) GetKey() string {
+	return v.Key
+}
+
+// GetValue returns BillingLifecycleDefaultFieldsPendingTierBillingTierEntitlementsEntitlementEntry.Value, and is useful for accessing the field via an interface.
+func (v *BillingLifecycleDefaultFieldsPendingTierBillingTierEntitlementsEntitlementEntry) GetValue() string {
+	return v.Value
+}
+
+// BillingLifecycleDefaultFieldsPendingTierBillingTierFeaturesBillingFeatures includes the requested fields of the GraphQL type BillingFeatures.
+// The GraphQL type's documentation follows.
+//
+// Contractual and enforced properties of a billing tier. Usage limits are
+// entitlements, not features.
+type BillingLifecycleDefaultFieldsPendingTierBillingTierFeaturesBillingFeatures struct {
+	// Support level (community, email, priority, dedicated).
+	SupportLevel string `json:"supportLevel"`
+	// Whether SLA guarantees apply.
+	Sla bool `json:"sla"`
+	// Whether the tenant may override the tier's processing profiles.
+	ProcessingCustomizable bool `json:"processingCustomizable"`
+}
+
+// GetSupportLevel returns BillingLifecycleDefaultFieldsPendingTierBillingTierFeaturesBillingFeatures.SupportLevel, and is useful for accessing the field via an interface.
+func (v *BillingLifecycleDefaultFieldsPendingTierBillingTierFeaturesBillingFeatures) GetSupportLevel() string {
+	return v.SupportLevel
+}
+
+// GetSla returns BillingLifecycleDefaultFieldsPendingTierBillingTierFeaturesBillingFeatures.Sla, and is useful for accessing the field via an interface.
+func (v *BillingLifecycleDefaultFieldsPendingTierBillingTierFeaturesBillingFeatures) GetSla() bool {
+	return v.Sla
+}
+
+// GetProcessingCustomizable returns BillingLifecycleDefaultFieldsPendingTierBillingTierFeaturesBillingFeatures.ProcessingCustomizable, and is useful for accessing the field via an interface.
+func (v *BillingLifecycleDefaultFieldsPendingTierBillingTierFeaturesBillingFeatures) GetProcessingCustomizable() bool {
+	return v.ProcessingCustomizable
+}
+
+// BillingLifecycleDefaultFieldsPendingTierBillingTierPricingRulesPricingRule includes the requested fields of the GraphQL type PricingRule.
+// The GraphQL type's documentation follows.
+//
+// A pricing rule: how a meter rates to money. Decimal fields are strings to preserve precision.
+type BillingLifecycleDefaultFieldsPendingTierBillingTierPricingRulesPricingRule struct {
+	// Canonical meter name (for example delivered_minutes, storage_gb_seconds_cold, media_seconds, or a marketplace-defined meter).
+	Meter string `json:"meter"`
+	// Pricing model (tiered_graduated, all_usage, dimensioned).
+	Model string `json:"model"`
+	// Currency (ISO 4217).
+	Currency string `json:"currency"`
+	// Free quantity included before billing kicks in.
+	IncludedQuantity string `json:"includedQuantity"`
+	// Price per unit (decimal as string).
+	UnitPrice string `json:"unitPrice"`
+	// Model-specific config (for example dimension selector rates); JSON-encoded.
+	ConfigJson string `json:"configJson"`
+}
+
+// GetMeter returns BillingLifecycleDefaultFieldsPendingTierBillingTierPricingRulesPricingRule.Meter, and is useful for accessing the field via an interface.
+func (v *BillingLifecycleDefaultFieldsPendingTierBillingTierPricingRulesPricingRule) GetMeter() string {
+	return v.Meter
+}
+
+// GetModel returns BillingLifecycleDefaultFieldsPendingTierBillingTierPricingRulesPricingRule.Model, and is useful for accessing the field via an interface.
+func (v *BillingLifecycleDefaultFieldsPendingTierBillingTierPricingRulesPricingRule) GetModel() string {
+	return v.Model
+}
+
+// GetCurrency returns BillingLifecycleDefaultFieldsPendingTierBillingTierPricingRulesPricingRule.Currency, and is useful for accessing the field via an interface.
+func (v *BillingLifecycleDefaultFieldsPendingTierBillingTierPricingRulesPricingRule) GetCurrency() string {
+	return v.Currency
+}
+
+// GetIncludedQuantity returns BillingLifecycleDefaultFieldsPendingTierBillingTierPricingRulesPricingRule.IncludedQuantity, and is useful for accessing the field via an interface.
+func (v *BillingLifecycleDefaultFieldsPendingTierBillingTierPricingRulesPricingRule) GetIncludedQuantity() string {
+	return v.IncludedQuantity
+}
+
+// GetUnitPrice returns BillingLifecycleDefaultFieldsPendingTierBillingTierPricingRulesPricingRule.UnitPrice, and is useful for accessing the field via an interface.
+func (v *BillingLifecycleDefaultFieldsPendingTierBillingTierPricingRulesPricingRule) GetUnitPrice() string {
+	return v.UnitPrice
+}
+
+// GetConfigJson returns BillingLifecycleDefaultFieldsPendingTierBillingTierPricingRulesPricingRule.ConfigJson, and is useful for accessing the field via an interface.
+func (v *BillingLifecycleDefaultFieldsPendingTierBillingTierPricingRulesPricingRule) GetConfigJson() string {
+	return v.ConfigJson
+}
+
 // BillingStatusDefaultFields includes the GraphQL fields of BillingStatus requested by the fragment BillingStatusDefaultFields.
 type BillingStatusDefaultFields struct {
 	CurrentTier   *BillingStatusDefaultFieldsCurrentTierBillingTier         `json:"currentTier"`
@@ -6917,14 +7256,6 @@ type BillingStatusDefaultFields struct {
 	Currency          string                                                   `json:"currency"`
 	LiveUsage         BillingStatusDefaultFieldsLiveUsageLiveUsageSummary      `json:"liveUsage"`
 	InvoicePreview    *BillingStatusDefaultFieldsInvoicePreviewInvoice         `json:"invoicePreview"`
-	// Billing arrangement FrameWorks set up for this account, such as a trial or a custom price, while it is in force.
-	OperatorGrant *BillingStatusDefaultFieldsOperatorGrantBillingArrangement `json:"operatorGrant"`
-	// Monthly base fee in EUR this account pays after any arrangement, as a decimal string.
-	EffectiveBasePrice string `json:"effectiveBasePrice"`
-	// Scheduled move to the Free plan after a failed renewal payment or a cancellation.
-	FreeFallback *BillingStatusDefaultFieldsFreeFallback `json:"freeFallback"`
-	// Progress of subscription.pendingTier while subscription.pendingReason is downgrade.
-	PendingTierState *PendingTierState `json:"pendingTierState"`
 }
 
 // GetCurrentTier returns BillingStatusDefaultFields.CurrentTier, and is useful for accessing the field via an interface.
@@ -6977,24 +7308,6 @@ func (v *BillingStatusDefaultFields) GetLiveUsage() BillingStatusDefaultFieldsLi
 // GetInvoicePreview returns BillingStatusDefaultFields.InvoicePreview, and is useful for accessing the field via an interface.
 func (v *BillingStatusDefaultFields) GetInvoicePreview() *BillingStatusDefaultFieldsInvoicePreviewInvoice {
 	return v.InvoicePreview
-}
-
-// GetOperatorGrant returns BillingStatusDefaultFields.OperatorGrant, and is useful for accessing the field via an interface.
-func (v *BillingStatusDefaultFields) GetOperatorGrant() *BillingStatusDefaultFieldsOperatorGrantBillingArrangement {
-	return v.OperatorGrant
-}
-
-// GetEffectiveBasePrice returns BillingStatusDefaultFields.EffectiveBasePrice, and is useful for accessing the field via an interface.
-func (v *BillingStatusDefaultFields) GetEffectiveBasePrice() string { return v.EffectiveBasePrice }
-
-// GetFreeFallback returns BillingStatusDefaultFields.FreeFallback, and is useful for accessing the field via an interface.
-func (v *BillingStatusDefaultFields) GetFreeFallback() *BillingStatusDefaultFieldsFreeFallback {
-	return v.FreeFallback
-}
-
-// GetPendingTierState returns BillingStatusDefaultFields.PendingTierState, and is useful for accessing the field via an interface.
-func (v *BillingStatusDefaultFields) GetPendingTierState() *PendingTierState {
-	return v.PendingTierState
 }
 
 // BillingStatusDefaultFieldsCurrentTierBillingTier includes the requested fields of the GraphQL type BillingTier.
@@ -7193,33 +7506,6 @@ func (v *BillingStatusDefaultFieldsCurrentTierBillingTierPricingRulesPricingRule
 // GetConfigJson returns BillingStatusDefaultFieldsCurrentTierBillingTierPricingRulesPricingRule.ConfigJson, and is useful for accessing the field via an interface.
 func (v *BillingStatusDefaultFieldsCurrentTierBillingTierPricingRulesPricingRule) GetConfigJson() string {
 	return v.ConfigJson
-}
-
-// BillingStatusDefaultFieldsFreeFallback includes the requested fields of the GraphQL type FreeFallback.
-// The GraphQL type's documentation follows.
-//
-// A scheduled move to the Free plan.
-type BillingStatusDefaultFieldsFreeFallback struct {
-	Reason FreeFallbackReason `json:"reason"`
-	// When the move happens, or happened once stage is MOVED.
-	At    time.Time         `json:"at"`
-	Stage FreeFallbackStage `json:"stage"`
-	// The Stripe or Mollie subscription is cancelled, so no renewal follows.
-	ProviderCancelled bool `json:"providerCancelled"`
-}
-
-// GetReason returns BillingStatusDefaultFieldsFreeFallback.Reason, and is useful for accessing the field via an interface.
-func (v *BillingStatusDefaultFieldsFreeFallback) GetReason() FreeFallbackReason { return v.Reason }
-
-// GetAt returns BillingStatusDefaultFieldsFreeFallback.At, and is useful for accessing the field via an interface.
-func (v *BillingStatusDefaultFieldsFreeFallback) GetAt() time.Time { return v.At }
-
-// GetStage returns BillingStatusDefaultFieldsFreeFallback.Stage, and is useful for accessing the field via an interface.
-func (v *BillingStatusDefaultFieldsFreeFallback) GetStage() FreeFallbackStage { return v.Stage }
-
-// GetProviderCancelled returns BillingStatusDefaultFieldsFreeFallback.ProviderCancelled, and is useful for accessing the field via an interface.
-func (v *BillingStatusDefaultFieldsFreeFallback) GetProviderCancelled() bool {
-	return v.ProviderCancelled
 }
 
 // BillingStatusDefaultFieldsInvoicePreviewInvoice includes the requested fields of the GraphQL type Invoice.
@@ -7769,49 +8055,6 @@ func (v *BillingStatusDefaultFieldsLiveUsageLiveUsageSummaryGeoBreakdownCountryM
 	return v.EgressGb
 }
 
-// BillingStatusDefaultFieldsOperatorGrantBillingArrangement includes the requested fields of the GraphQL type BillingArrangement.
-// The GraphQL type's documentation follows.
-//
-// A billing arrangement FrameWorks set up for an account. Only the terms the
-// account is billed under are shown.
-type BillingStatusDefaultFieldsOperatorGrantBillingArrangement struct {
-	// Monthly base fee in EUR in place of the plan's, as a decimal string. Null keeps the plan's fee.
-	BasePrice *string `json:"basePrice"`
-	// Usage is metered and shown at zero cost.
-	WaiveUsage bool `json:"waiveUsage"`
-	// How invoices are collected: provider (Stripe or Mollie) or invoice (FrameWorks sends invoices to pay by bank transfer).
-	Collection string `json:"collection"`
-	// When the arrangement ends. Null runs until FrameWorks ends it.
-	ExpiresAt *time.Time `json:"expiresAt"`
-	// Plan the account returns to when the arrangement ends, when it is not the current plan.
-	FallbackTierName *string `json:"fallbackTierName"`
-}
-
-// GetBasePrice returns BillingStatusDefaultFieldsOperatorGrantBillingArrangement.BasePrice, and is useful for accessing the field via an interface.
-func (v *BillingStatusDefaultFieldsOperatorGrantBillingArrangement) GetBasePrice() *string {
-	return v.BasePrice
-}
-
-// GetWaiveUsage returns BillingStatusDefaultFieldsOperatorGrantBillingArrangement.WaiveUsage, and is useful for accessing the field via an interface.
-func (v *BillingStatusDefaultFieldsOperatorGrantBillingArrangement) GetWaiveUsage() bool {
-	return v.WaiveUsage
-}
-
-// GetCollection returns BillingStatusDefaultFieldsOperatorGrantBillingArrangement.Collection, and is useful for accessing the field via an interface.
-func (v *BillingStatusDefaultFieldsOperatorGrantBillingArrangement) GetCollection() string {
-	return v.Collection
-}
-
-// GetExpiresAt returns BillingStatusDefaultFieldsOperatorGrantBillingArrangement.ExpiresAt, and is useful for accessing the field via an interface.
-func (v *BillingStatusDefaultFieldsOperatorGrantBillingArrangement) GetExpiresAt() *time.Time {
-	return v.ExpiresAt
-}
-
-// GetFallbackTierName returns BillingStatusDefaultFieldsOperatorGrantBillingArrangement.FallbackTierName, and is useful for accessing the field via an interface.
-func (v *BillingStatusDefaultFieldsOperatorGrantBillingArrangement) GetFallbackTierName() *string {
-	return v.FallbackTierName
-}
-
 // BillingStatusDefaultFieldsRecentPaymentsInvoicePayment includes the requested fields of the GraphQL type InvoicePayment.
 // The GraphQL type's documentation follows.
 //
@@ -7941,7 +8184,7 @@ type BillingStatusDefaultFieldsSubscriptionTenantSubscription struct {
 	PendingTier          *BillingStatusDefaultFieldsSubscriptionTenantSubscriptionPendingTierBillingTier                `json:"pendingTier"`
 	PendingEffectiveAt   *time.Time                                                                                     `json:"pendingEffectiveAt"`
 	// Why pendingTier is set: downgrade (applies at pendingEffectiveAt; see
-	// BillingStatus.pendingTierState), tier_upgrade (a paid upgrade being
+	// BillingLifecycle.pendingTierState), tier_upgrade (a paid upgrade being
 	// confirmed) or stripe_checkout (a checkout awaiting payment).
 	PendingReason *string `json:"pendingReason"`
 	// Currency the tenant is invoiced and charged in (EUR, USD, GBP), derived from the billing country. The prepaid ledger is always EUR.
@@ -31127,6 +31370,147 @@ func (v *GetBillingDetailsResponse) GetBillingDetails() *GetBillingDetailsBillin
 	return v.BillingDetails
 }
 
+// GetBillingLifecycleBillingLifecycle includes the requested fields of the GraphQL type BillingLifecycle.
+// The GraphQL type's documentation follows.
+//
+// A tenant's plan lifecycle, as its billing page shows it.
+type GetBillingLifecycleBillingLifecycle struct {
+	BillingLifecycleDefaultFields `json:"-"`
+}
+
+// GetBillingStatus returns GetBillingLifecycleBillingLifecycle.BillingStatus, and is useful for accessing the field via an interface.
+func (v *GetBillingLifecycleBillingLifecycle) GetBillingStatus() string {
+	return v.BillingLifecycleDefaultFields.BillingStatus
+}
+
+// GetCollectionReady returns GetBillingLifecycleBillingLifecycle.CollectionReady, and is useful for accessing the field via an interface.
+func (v *GetBillingLifecycleBillingLifecycle) GetCollectionReady() bool {
+	return v.BillingLifecycleDefaultFields.CollectionReady
+}
+
+// GetCollectionProvider returns GetBillingLifecycleBillingLifecycle.CollectionProvider, and is useful for accessing the field via an interface.
+func (v *GetBillingLifecycleBillingLifecycle) GetCollectionProvider() *string {
+	return v.BillingLifecycleDefaultFields.CollectionProvider
+}
+
+// GetEffectiveBasePrice returns GetBillingLifecycleBillingLifecycle.EffectiveBasePrice, and is useful for accessing the field via an interface.
+func (v *GetBillingLifecycleBillingLifecycle) GetEffectiveBasePrice() string {
+	return v.BillingLifecycleDefaultFields.EffectiveBasePrice
+}
+
+// GetOperatorGrant returns GetBillingLifecycleBillingLifecycle.OperatorGrant, and is useful for accessing the field via an interface.
+func (v *GetBillingLifecycleBillingLifecycle) GetOperatorGrant() *BillingLifecycleDefaultFieldsOperatorGrantBillingArrangement {
+	return v.BillingLifecycleDefaultFields.OperatorGrant
+}
+
+// GetFreeFallback returns GetBillingLifecycleBillingLifecycle.FreeFallback, and is useful for accessing the field via an interface.
+func (v *GetBillingLifecycleBillingLifecycle) GetFreeFallback() *BillingLifecycleDefaultFieldsFreeFallback {
+	return v.BillingLifecycleDefaultFields.FreeFallback
+}
+
+// GetPendingTier returns GetBillingLifecycleBillingLifecycle.PendingTier, and is useful for accessing the field via an interface.
+func (v *GetBillingLifecycleBillingLifecycle) GetPendingTier() *BillingLifecycleDefaultFieldsPendingTierBillingTier {
+	return v.BillingLifecycleDefaultFields.PendingTier
+}
+
+// GetPendingEffectiveAt returns GetBillingLifecycleBillingLifecycle.PendingEffectiveAt, and is useful for accessing the field via an interface.
+func (v *GetBillingLifecycleBillingLifecycle) GetPendingEffectiveAt() *time.Time {
+	return v.BillingLifecycleDefaultFields.PendingEffectiveAt
+}
+
+// GetPendingReason returns GetBillingLifecycleBillingLifecycle.PendingReason, and is useful for accessing the field via an interface.
+func (v *GetBillingLifecycleBillingLifecycle) GetPendingReason() *string {
+	return v.BillingLifecycleDefaultFields.PendingReason
+}
+
+// GetPendingTierState returns GetBillingLifecycleBillingLifecycle.PendingTierState, and is useful for accessing the field via an interface.
+func (v *GetBillingLifecycleBillingLifecycle) GetPendingTierState() *PendingTierState {
+	return v.BillingLifecycleDefaultFields.PendingTierState
+}
+
+func (v *GetBillingLifecycleBillingLifecycle) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*GetBillingLifecycleBillingLifecycle
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.GetBillingLifecycleBillingLifecycle = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.BillingLifecycleDefaultFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalGetBillingLifecycleBillingLifecycle struct {
+	BillingStatus string `json:"billingStatus"`
+
+	CollectionReady bool `json:"collectionReady"`
+
+	CollectionProvider *string `json:"collectionProvider"`
+
+	EffectiveBasePrice string `json:"effectiveBasePrice"`
+
+	OperatorGrant *BillingLifecycleDefaultFieldsOperatorGrantBillingArrangement `json:"operatorGrant"`
+
+	FreeFallback *BillingLifecycleDefaultFieldsFreeFallback `json:"freeFallback"`
+
+	PendingTier *BillingLifecycleDefaultFieldsPendingTierBillingTier `json:"pendingTier"`
+
+	PendingEffectiveAt *time.Time `json:"pendingEffectiveAt"`
+
+	PendingReason *string `json:"pendingReason"`
+
+	PendingTierState *PendingTierState `json:"pendingTierState"`
+}
+
+func (v *GetBillingLifecycleBillingLifecycle) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *GetBillingLifecycleBillingLifecycle) __premarshalJSON() (*__premarshalGetBillingLifecycleBillingLifecycle, error) {
+	var retval __premarshalGetBillingLifecycleBillingLifecycle
+
+	retval.BillingStatus = v.BillingLifecycleDefaultFields.BillingStatus
+	retval.CollectionReady = v.BillingLifecycleDefaultFields.CollectionReady
+	retval.CollectionProvider = v.BillingLifecycleDefaultFields.CollectionProvider
+	retval.EffectiveBasePrice = v.BillingLifecycleDefaultFields.EffectiveBasePrice
+	retval.OperatorGrant = v.BillingLifecycleDefaultFields.OperatorGrant
+	retval.FreeFallback = v.BillingLifecycleDefaultFields.FreeFallback
+	retval.PendingTier = v.BillingLifecycleDefaultFields.PendingTier
+	retval.PendingEffectiveAt = v.BillingLifecycleDefaultFields.PendingEffectiveAt
+	retval.PendingReason = v.BillingLifecycleDefaultFields.PendingReason
+	retval.PendingTierState = v.BillingLifecycleDefaultFields.PendingTierState
+	return &retval, nil
+}
+
+// GetBillingLifecycleResponse is returned by GetBillingLifecycle on success.
+type GetBillingLifecycleResponse struct {
+	// The current tenant's plan lifecycle: a FrameWorks arrangement, a scheduled
+	// move to Free and how far a scheduled plan change has progressed.
+	BillingLifecycle *GetBillingLifecycleBillingLifecycle `json:"billingLifecycle"`
+}
+
+// GetBillingLifecycle returns GetBillingLifecycleResponse.BillingLifecycle, and is useful for accessing the field via an interface.
+func (v *GetBillingLifecycleResponse) GetBillingLifecycle() *GetBillingLifecycleBillingLifecycle {
+	return v.BillingLifecycle
+}
+
 // GetBillingStatusBillingStatus includes the requested fields of the GraphQL type BillingStatus.
 type GetBillingStatusBillingStatus struct {
 	BillingStatusDefaultFields `json:"-"`
@@ -31202,26 +31586,6 @@ func (v *GetBillingStatusBillingStatus) GetInvoicePreview() *BillingStatusDefaul
 	return v.BillingStatusDefaultFields.InvoicePreview
 }
 
-// GetOperatorGrant returns GetBillingStatusBillingStatus.OperatorGrant, and is useful for accessing the field via an interface.
-func (v *GetBillingStatusBillingStatus) GetOperatorGrant() *BillingStatusDefaultFieldsOperatorGrantBillingArrangement {
-	return v.BillingStatusDefaultFields.OperatorGrant
-}
-
-// GetEffectiveBasePrice returns GetBillingStatusBillingStatus.EffectiveBasePrice, and is useful for accessing the field via an interface.
-func (v *GetBillingStatusBillingStatus) GetEffectiveBasePrice() string {
-	return v.BillingStatusDefaultFields.EffectiveBasePrice
-}
-
-// GetFreeFallback returns GetBillingStatusBillingStatus.FreeFallback, and is useful for accessing the field via an interface.
-func (v *GetBillingStatusBillingStatus) GetFreeFallback() *BillingStatusDefaultFieldsFreeFallback {
-	return v.BillingStatusDefaultFields.FreeFallback
-}
-
-// GetPendingTierState returns GetBillingStatusBillingStatus.PendingTierState, and is useful for accessing the field via an interface.
-func (v *GetBillingStatusBillingStatus) GetPendingTierState() *PendingTierState {
-	return v.BillingStatusDefaultFields.PendingTierState
-}
-
 func (v *GetBillingStatusBillingStatus) UnmarshalJSON(b []byte) error {
 
 	if string(b) == "null" {
@@ -31275,14 +31639,6 @@ type __premarshalGetBillingStatusBillingStatus struct {
 	LiveUsage BillingStatusDefaultFieldsLiveUsageLiveUsageSummary `json:"liveUsage"`
 
 	InvoicePreview *BillingStatusDefaultFieldsInvoicePreviewInvoice `json:"invoicePreview"`
-
-	OperatorGrant *BillingStatusDefaultFieldsOperatorGrantBillingArrangement `json:"operatorGrant"`
-
-	EffectiveBasePrice string `json:"effectiveBasePrice"`
-
-	FreeFallback *BillingStatusDefaultFieldsFreeFallback `json:"freeFallback"`
-
-	PendingTierState *PendingTierState `json:"pendingTierState"`
 }
 
 func (v *GetBillingStatusBillingStatus) MarshalJSON() ([]byte, error) {
@@ -31310,10 +31666,6 @@ func (v *GetBillingStatusBillingStatus) __premarshalJSON() (*__premarshalGetBill
 	retval.Currency = v.BillingStatusDefaultFields.Currency
 	retval.LiveUsage = v.BillingStatusDefaultFields.LiveUsage
 	retval.InvoicePreview = v.BillingStatusDefaultFields.InvoicePreview
-	retval.OperatorGrant = v.BillingStatusDefaultFields.OperatorGrant
-	retval.EffectiveBasePrice = v.BillingStatusDefaultFields.EffectiveBasePrice
-	retval.FreeFallback = v.BillingStatusDefaultFields.FreeFallback
-	retval.PendingTierState = v.BillingStatusDefaultFields.PendingTierState
 	return &retval, nil
 }
 
@@ -128981,6 +129333,93 @@ func GetBillingDetails(
 	return data_, err_
 }
 
+// The query executed by GetBillingLifecycle.
+const GetBillingLifecycle_Operation = `
+query GetBillingLifecycle {
+	billingLifecycle {
+		... BillingLifecycleDefaultFields
+	}
+}
+fragment BillingLifecycleDefaultFields on BillingLifecycle {
+	billingStatus
+	collectionReady
+	collectionProvider
+	effectiveBasePrice
+	operatorGrant {
+		basePrice
+		waiveUsage
+		collection
+		expiresAt
+		fallbackTierName
+	}
+	freeFallback {
+		reason
+		at
+		stage
+		providerCancelled
+	}
+	pendingTier {
+		id
+		tierName
+		tierLevel
+		displayName
+		description
+		basePrice
+		currency
+		billingPeriod
+		features {
+			supportLevel
+			sla
+			processingCustomizable
+		}
+		pricingRules {
+			meter
+			model
+			currency
+			includedQuantity
+			unitPrice
+			configJson
+		}
+		entitlements {
+			key
+			value
+		}
+		supportLevel
+		slaLevel
+		meteringEnabled
+		isEnterprise
+	}
+	pendingEffectiveAt
+	pendingReason
+	pendingTierState
+}
+`
+
+// GetBillingLifecycle executes the corresponding GraphQL operation.
+//
+// The current tenant's plan lifecycle: a FrameWorks arrangement, a scheduled
+// move to Free and how far a scheduled plan change has progressed.
+func GetBillingLifecycle(
+	ctx_ context.Context,
+	client_ graphql.Client,
+) (data_ *GetBillingLifecycleResponse, err_ error) {
+	req_ := &graphql.Request{
+		OpName: "GetBillingLifecycle",
+		Query:  GetBillingLifecycle_Operation,
+	}
+
+	data_ = &GetBillingLifecycleResponse{}
+	resp_ := &graphql.Response{Data: data_}
+
+	err_ = client_.MakeRequest(
+		ctx_,
+		req_,
+		resp_,
+	)
+
+	return data_, err_
+}
+
 // The query executed by GetBillingStatus.
 const GetBillingStatus_Operation = `
 query GetBillingStatus {
@@ -129187,21 +129626,6 @@ fragment BillingStatusDefaultFields on BillingStatus {
 			dimensions
 		}
 	}
-	operatorGrant {
-		basePrice
-		waiveUsage
-		collection
-		expiresAt
-		fallbackTierName
-	}
-	effectiveBasePrice
-	freeFallback {
-		reason
-		at
-		stage
-		providerCancelled
-	}
-	pendingTierState
 }
 `
 

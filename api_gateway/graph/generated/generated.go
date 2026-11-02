@@ -55,6 +55,7 @@ type ResolverRoot interface {
 	ArtifactState() ArtifactStateResolver
 	BillingArrangement() BillingArrangementResolver
 	BillingDetails() BillingDetailsResolver
+	BillingLifecycle() BillingLifecycleResolver
 	BillingStatus() BillingStatusResolver
 	BillingTier() BillingTierResolver
 	BootstrapToken() BootstrapTokenResolver
@@ -474,21 +475,30 @@ type ComplexityRoot struct {
 		SupportLevel           func(childComplexity int) int
 	}
 
+	BillingLifecycle struct {
+		BillingStatus      func(childComplexity int) int
+		CollectionProvider func(childComplexity int) int
+		CollectionReady    func(childComplexity int) int
+		EffectiveBasePrice func(childComplexity int) int
+		FreeFallback       func(childComplexity int) int
+		OperatorGrant      func(childComplexity int) int
+		PendingEffectiveAt func(childComplexity int) int
+		PendingReason      func(childComplexity int) int
+		PendingTier        func(childComplexity int) int
+		PendingTierState   func(childComplexity int) int
+	}
+
 	BillingStatus struct {
 		BillingStatus      func(childComplexity int) int
 		CollectionProvider func(childComplexity int) int
 		CollectionReady    func(childComplexity int) int
 		Currency           func(childComplexity int) int
 		CurrentTier        func(childComplexity int) int
-		EffectiveBasePrice func(childComplexity int) int
-		FreeFallback       func(childComplexity int) int
 		InvoicePreview     func(childComplexity int) int
 		LiveUsage          func(childComplexity int) int
 		NextBillingDate    func(childComplexity int) int
-		OperatorGrant      func(childComplexity int) int
 		OutstandingAmount  func(childComplexity int) int
 		PaymentMethods     func(childComplexity int) int
-		PendingTierState   func(childComplexity int) int
 		RecentPayments     func(childComplexity int) int
 		SetupProviders     func(childComplexity int) int
 		Subscription       func(childComplexity int) int
@@ -2637,6 +2647,7 @@ type ComplexityRoot struct {
 		Analytics                       func(childComplexity int) int
 		BalanceTransactionsConnection   func(childComplexity int, page *model.ConnectionInput, transactionType *string, timeRange *model.TimeRangeInput) int
 		BillingDetails                  func(childComplexity int) int
+		BillingLifecycle                func(childComplexity int) int
 		BillingStatus                   func(childComplexity int) int
 		BillingTiers                    func(childComplexity int) int
 		BootstrapTokensConnection       func(childComplexity int, page *model.ConnectionInput, kind *string) int
@@ -4449,6 +4460,12 @@ type BillingArrangementResolver interface {
 type BillingDetailsResolver interface {
 	UpdatedAt(ctx context.Context, obj *purserpb.BillingDetails) (*time.Time, error)
 }
+type BillingLifecycleResolver interface {
+	PendingTier(ctx context.Context, obj *purserpb.BillingStatusResponse) (*purserpb.BillingTier, error)
+	PendingEffectiveAt(ctx context.Context, obj *purserpb.BillingStatusResponse) (*time.Time, error)
+	PendingReason(ctx context.Context, obj *purserpb.BillingStatusResponse) (*string, error)
+	PendingTierState(ctx context.Context, obj *purserpb.BillingStatusResponse) (*model.PendingTierState, error)
+}
 type BillingStatusResolver interface {
 	CurrentTier(ctx context.Context, obj *purserpb.BillingStatusResponse) (*purserpb.BillingTier, error)
 
@@ -4460,8 +4477,6 @@ type BillingStatusResolver interface {
 
 	LiveUsage(ctx context.Context, obj *purserpb.BillingStatusResponse) (*periscopepb.LiveUsageSummary, error)
 	InvoicePreview(ctx context.Context, obj *purserpb.BillingStatusResponse) (*purserpb.Invoice, error)
-
-	PendingTierState(ctx context.Context, obj *purserpb.BillingStatusResponse) (*model.PendingTierState, error)
 }
 type BillingTierResolver interface {
 	Entitlements(ctx context.Context, obj *purserpb.BillingTier) ([]*model.EntitlementEntry, error)
@@ -5036,6 +5051,7 @@ type QueryResolver interface {
 	Payment(ctx context.Context, id string) (*purserpb.Payment, error)
 	PaymentsConnection(ctx context.Context, page *model.ConnectionInput, invoiceID *string, status *string, method *string) (*model.InvoicePaymentsConnection, error)
 	BillingStatus(ctx context.Context) (*purserpb.BillingStatusResponse, error)
+	BillingLifecycle(ctx context.Context) (*purserpb.BillingStatusResponse, error)
 	MollieMandates(ctx context.Context) ([]*purserpb.MollieMandate, error)
 	PrepaidBalance(ctx context.Context) (*model.PrepaidBalance, error)
 	BillingDetails(ctx context.Context) (*purserpb.BillingDetails, error)
@@ -6971,6 +6987,67 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.BillingFeatures.SupportLevel(childComplexity), true
 
+	case "BillingLifecycle.billingStatus":
+		if e.ComplexityRoot.BillingLifecycle.BillingStatus == nil {
+			break
+		}
+
+		return e.ComplexityRoot.BillingLifecycle.BillingStatus(childComplexity), true
+	case "BillingLifecycle.collectionProvider":
+		if e.ComplexityRoot.BillingLifecycle.CollectionProvider == nil {
+			break
+		}
+
+		return e.ComplexityRoot.BillingLifecycle.CollectionProvider(childComplexity), true
+	case "BillingLifecycle.collectionReady":
+		if e.ComplexityRoot.BillingLifecycle.CollectionReady == nil {
+			break
+		}
+
+		return e.ComplexityRoot.BillingLifecycle.CollectionReady(childComplexity), true
+	case "BillingLifecycle.effectiveBasePrice":
+		if e.ComplexityRoot.BillingLifecycle.EffectiveBasePrice == nil {
+			break
+		}
+
+		return e.ComplexityRoot.BillingLifecycle.EffectiveBasePrice(childComplexity), true
+	case "BillingLifecycle.freeFallback":
+		if e.ComplexityRoot.BillingLifecycle.FreeFallback == nil {
+			break
+		}
+
+		return e.ComplexityRoot.BillingLifecycle.FreeFallback(childComplexity), true
+	case "BillingLifecycle.operatorGrant":
+		if e.ComplexityRoot.BillingLifecycle.OperatorGrant == nil {
+			break
+		}
+
+		return e.ComplexityRoot.BillingLifecycle.OperatorGrant(childComplexity), true
+	case "BillingLifecycle.pendingEffectiveAt":
+		if e.ComplexityRoot.BillingLifecycle.PendingEffectiveAt == nil {
+			break
+		}
+
+		return e.ComplexityRoot.BillingLifecycle.PendingEffectiveAt(childComplexity), true
+	case "BillingLifecycle.pendingReason":
+		if e.ComplexityRoot.BillingLifecycle.PendingReason == nil {
+			break
+		}
+
+		return e.ComplexityRoot.BillingLifecycle.PendingReason(childComplexity), true
+	case "BillingLifecycle.pendingTier":
+		if e.ComplexityRoot.BillingLifecycle.PendingTier == nil {
+			break
+		}
+
+		return e.ComplexityRoot.BillingLifecycle.PendingTier(childComplexity), true
+	case "BillingLifecycle.pendingTierState":
+		if e.ComplexityRoot.BillingLifecycle.PendingTierState == nil {
+			break
+		}
+
+		return e.ComplexityRoot.BillingLifecycle.PendingTierState(childComplexity), true
+
 	case "BillingStatus.billingStatus":
 		if e.ComplexityRoot.BillingStatus.BillingStatus == nil {
 			break
@@ -7001,18 +7078,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.BillingStatus.CurrentTier(childComplexity), true
-	case "BillingStatus.effectiveBasePrice":
-		if e.ComplexityRoot.BillingStatus.EffectiveBasePrice == nil {
-			break
-		}
-
-		return e.ComplexityRoot.BillingStatus.EffectiveBasePrice(childComplexity), true
-	case "BillingStatus.freeFallback":
-		if e.ComplexityRoot.BillingStatus.FreeFallback == nil {
-			break
-		}
-
-		return e.ComplexityRoot.BillingStatus.FreeFallback(childComplexity), true
 	case "BillingStatus.invoicePreview":
 		if e.ComplexityRoot.BillingStatus.InvoicePreview == nil {
 			break
@@ -7031,12 +7096,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.BillingStatus.NextBillingDate(childComplexity), true
-	case "BillingStatus.operatorGrant":
-		if e.ComplexityRoot.BillingStatus.OperatorGrant == nil {
-			break
-		}
-
-		return e.ComplexityRoot.BillingStatus.OperatorGrant(childComplexity), true
 	case "BillingStatus.outstandingAmount":
 		if e.ComplexityRoot.BillingStatus.OutstandingAmount == nil {
 			break
@@ -7049,12 +7108,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.BillingStatus.PaymentMethods(childComplexity), true
-	case "BillingStatus.pendingTierState":
-		if e.ComplexityRoot.BillingStatus.PendingTierState == nil {
-			break
-		}
-
-		return e.ComplexityRoot.BillingStatus.PendingTierState(childComplexity), true
 	case "BillingStatus.recentPayments":
 		if e.ComplexityRoot.BillingStatus.RecentPayments == nil {
 			break
@@ -16872,6 +16925,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Query.BillingDetails(childComplexity), true
+	case "Query.billingLifecycle":
+		if e.ComplexityRoot.Query.BillingLifecycle == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Query.BillingLifecycle(childComplexity), true
 	case "Query.billingStatus":
 		if e.ComplexityRoot.Query.BillingStatus == nil {
 			break
@@ -24939,6 +24998,12 @@ type Query {
   billingStatus: BillingStatus
 
   """
+  The current tenant's plan lifecycle: a FrameWorks arrangement, a scheduled
+  move to Free and how far a scheduled plan change has progressed.
+  """
+  billingLifecycle: BillingLifecycle
+
+  """
   List Mollie mandates for the current tenant.
   """
   mollieMandates: [MollieMandate!]!
@@ -30184,7 +30249,7 @@ type TenantSubscription {
   pendingEffectiveAt: Time
   """
   Why pendingTier is set: downgrade (applies at pendingEffectiveAt; see
-  BillingStatus.pendingTierState), tier_upgrade (a paid upgrade being
+  BillingLifecycle.pendingTierState), tier_upgrade (a paid upgrade being
   confirmed) or stripe_checkout (a checkout awaiting payment).
   """
   pendingReason: String
@@ -30215,13 +30280,30 @@ type BillingStatus {
   currency: String!
   liveUsage: LiveUsageSummary! # Near-real-time usage (Periscope)
   invoicePreview: Invoice # Authoritative draft invoice (Purser)
-  "Billing arrangement FrameWorks set up for this account, such as a trial or a custom price, while it is in force."
-  operatorGrant: BillingArrangement
+}
+
+# Bound to purserpb.BillingStatusResponse
+"A tenant's plan lifecycle, as its billing page shows it."
+type BillingLifecycle {
+  "Subscription status: active, past_due, pending_cancellation, suspended or none."
+  billingStatus: String!
+  "True only after a reusable postpaid provider subscription or mandate is confirmed."
+  collectionReady: Boolean!
+  "Confirmed postpaid collection provider, when ready."
+  collectionProvider: String
   "Monthly base fee in EUR this account pays after any arrangement, as a decimal string."
   effectiveBasePrice: String!
+  "Billing arrangement FrameWorks set up for this account, such as a trial or a custom price, while it is in force."
+  operatorGrant: BillingArrangement
   "Scheduled move to the Free plan after a failed renewal payment or a cancellation."
   freeFallback: FreeFallback
-  "Progress of subscription.pendingTier while subscription.pendingReason is downgrade."
+  "Plan the subscription changes to, when a change is scheduled or being confirmed."
+  pendingTier: BillingTier
+  "When a scheduled downgrade takes effect."
+  pendingEffectiveAt: Time
+  "Why pendingTier is set: downgrade, tier_upgrade or stripe_checkout."
+  pendingReason: String
+  "Progress of pendingTier while pendingReason is downgrade."
   pendingTierState: PendingTierState
 }
 
@@ -33469,7 +33551,7 @@ type TenantAdminBilling {
   tenantId: ID!
   snapshot: TenantBillingSnapshot
   "Plan lifecycle as the tenant sees it: arrangement, scheduled move to Free and pending plan change. Null when the tenant has no subscription."
-  lifecycle: BillingStatus
+  lifecycle: BillingLifecycle
   invoices(page: ConnectionInput): InvoicesConnection!
   prepaidBalance: PrepaidBalance
   balanceTransactions(
@@ -45517,6 +45599,350 @@ func (ec *executionContext) fieldContext_BillingFeatures_processingCustomizable(
 	return fc, nil
 }
 
+func (ec *executionContext) _BillingLifecycle_billingStatus(ctx context.Context, field graphql.CollectedField, obj *purserpb.BillingStatusResponse) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_BillingLifecycle_billingStatus,
+		func(ctx context.Context) (any, error) {
+			return obj.BillingStatus, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_BillingLifecycle_billingStatus(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "BillingLifecycle",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _BillingLifecycle_collectionReady(ctx context.Context, field graphql.CollectedField, obj *purserpb.BillingStatusResponse) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_BillingLifecycle_collectionReady,
+		func(ctx context.Context) (any, error) {
+			return obj.CollectionReady, nil
+		},
+		nil,
+		ec.marshalNBoolean2bool,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_BillingLifecycle_collectionReady(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "BillingLifecycle",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _BillingLifecycle_collectionProvider(ctx context.Context, field graphql.CollectedField, obj *purserpb.BillingStatusResponse) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_BillingLifecycle_collectionProvider,
+		func(ctx context.Context) (any, error) {
+			return obj.CollectionProvider, nil
+		},
+		nil,
+		ec.marshalOString2string,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_BillingLifecycle_collectionProvider(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "BillingLifecycle",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _BillingLifecycle_effectiveBasePrice(ctx context.Context, field graphql.CollectedField, obj *purserpb.BillingStatusResponse) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_BillingLifecycle_effectiveBasePrice,
+		func(ctx context.Context) (any, error) {
+			return obj.EffectiveBasePrice, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_BillingLifecycle_effectiveBasePrice(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "BillingLifecycle",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _BillingLifecycle_operatorGrant(ctx context.Context, field graphql.CollectedField, obj *purserpb.BillingStatusResponse) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_BillingLifecycle_operatorGrant,
+		func(ctx context.Context) (any, error) {
+			return obj.OperatorGrant, nil
+		},
+		nil,
+		ec.marshalOBillingArrangement2ᚖgithubᚗcomᚋLivepeerᚑFrameWorksᚋmonorepoᚋpkgᚋprotoᚋpurserᚐOperatorBillingGrant,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_BillingLifecycle_operatorGrant(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "BillingLifecycle",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "basePrice":
+				return ec.fieldContext_BillingArrangement_basePrice(ctx, field)
+			case "waiveUsage":
+				return ec.fieldContext_BillingArrangement_waiveUsage(ctx, field)
+			case "collection":
+				return ec.fieldContext_BillingArrangement_collection(ctx, field)
+			case "expiresAt":
+				return ec.fieldContext_BillingArrangement_expiresAt(ctx, field)
+			case "fallbackTierName":
+				return ec.fieldContext_BillingArrangement_fallbackTierName(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type BillingArrangement", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _BillingLifecycle_freeFallback(ctx context.Context, field graphql.CollectedField, obj *purserpb.BillingStatusResponse) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_BillingLifecycle_freeFallback,
+		func(ctx context.Context) (any, error) {
+			return obj.FreeFallback, nil
+		},
+		nil,
+		ec.marshalOFreeFallback2ᚖgithubᚗcomᚋLivepeerᚑFrameWorksᚋmonorepoᚋpkgᚋprotoᚋpurserᚐFreeFallbackStatus,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_BillingLifecycle_freeFallback(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "BillingLifecycle",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "reason":
+				return ec.fieldContext_FreeFallback_reason(ctx, field)
+			case "at":
+				return ec.fieldContext_FreeFallback_at(ctx, field)
+			case "stage":
+				return ec.fieldContext_FreeFallback_stage(ctx, field)
+			case "providerCancelled":
+				return ec.fieldContext_FreeFallback_providerCancelled(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type FreeFallback", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _BillingLifecycle_pendingTier(ctx context.Context, field graphql.CollectedField, obj *purserpb.BillingStatusResponse) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_BillingLifecycle_pendingTier,
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.BillingLifecycle().PendingTier(ctx, obj)
+		},
+		nil,
+		ec.marshalOBillingTier2ᚖgithubᚗcomᚋLivepeerᚑFrameWorksᚋmonorepoᚋpkgᚋprotoᚋpurserᚐBillingTier,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_BillingLifecycle_pendingTier(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "BillingLifecycle",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "id":
+				return ec.fieldContext_BillingTier_id(ctx, field)
+			case "tierName":
+				return ec.fieldContext_BillingTier_tierName(ctx, field)
+			case "tierLevel":
+				return ec.fieldContext_BillingTier_tierLevel(ctx, field)
+			case "displayName":
+				return ec.fieldContext_BillingTier_displayName(ctx, field)
+			case "description":
+				return ec.fieldContext_BillingTier_description(ctx, field)
+			case "basePrice":
+				return ec.fieldContext_BillingTier_basePrice(ctx, field)
+			case "currency":
+				return ec.fieldContext_BillingTier_currency(ctx, field)
+			case "billingPeriod":
+				return ec.fieldContext_BillingTier_billingPeriod(ctx, field)
+			case "features":
+				return ec.fieldContext_BillingTier_features(ctx, field)
+			case "pricingRules":
+				return ec.fieldContext_BillingTier_pricingRules(ctx, field)
+			case "entitlements":
+				return ec.fieldContext_BillingTier_entitlements(ctx, field)
+			case "supportLevel":
+				return ec.fieldContext_BillingTier_supportLevel(ctx, field)
+			case "slaLevel":
+				return ec.fieldContext_BillingTier_slaLevel(ctx, field)
+			case "meteringEnabled":
+				return ec.fieldContext_BillingTier_meteringEnabled(ctx, field)
+			case "isEnterprise":
+				return ec.fieldContext_BillingTier_isEnterprise(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type BillingTier", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _BillingLifecycle_pendingEffectiveAt(ctx context.Context, field graphql.CollectedField, obj *purserpb.BillingStatusResponse) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_BillingLifecycle_pendingEffectiveAt,
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.BillingLifecycle().PendingEffectiveAt(ctx, obj)
+		},
+		nil,
+		ec.marshalOTime2ᚖtimeᚐTime,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_BillingLifecycle_pendingEffectiveAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "BillingLifecycle",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Time does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _BillingLifecycle_pendingReason(ctx context.Context, field graphql.CollectedField, obj *purserpb.BillingStatusResponse) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_BillingLifecycle_pendingReason,
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.BillingLifecycle().PendingReason(ctx, obj)
+		},
+		nil,
+		ec.marshalOString2ᚖstring,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_BillingLifecycle_pendingReason(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "BillingLifecycle",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _BillingLifecycle_pendingTierState(ctx context.Context, field graphql.CollectedField, obj *purserpb.BillingStatusResponse) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_BillingLifecycle_pendingTierState,
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.BillingLifecycle().PendingTierState(ctx, obj)
+		},
+		nil,
+		ec.marshalOPendingTierState2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐPendingTierState,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_BillingLifecycle_pendingTierState(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "BillingLifecycle",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type PendingTierState does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _BillingStatus_currentTier(ctx context.Context, field graphql.CollectedField, obj *purserpb.BillingStatusResponse) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -46146,144 +46572,6 @@ func (ec *executionContext) fieldContext_BillingStatus_invoicePreview(_ context.
 				return ec.fieldContext_Invoice_lineItems(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Invoice", field.Name)
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _BillingStatus_operatorGrant(ctx context.Context, field graphql.CollectedField, obj *purserpb.BillingStatusResponse) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		ec.fieldContext_BillingStatus_operatorGrant,
-		func(ctx context.Context) (any, error) {
-			return obj.OperatorGrant, nil
-		},
-		nil,
-		ec.marshalOBillingArrangement2ᚖgithubᚗcomᚋLivepeerᚑFrameWorksᚋmonorepoᚋpkgᚋprotoᚋpurserᚐOperatorBillingGrant,
-		true,
-		false,
-	)
-}
-
-func (ec *executionContext) fieldContext_BillingStatus_operatorGrant(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "BillingStatus",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			switch field.Name {
-			case "basePrice":
-				return ec.fieldContext_BillingArrangement_basePrice(ctx, field)
-			case "waiveUsage":
-				return ec.fieldContext_BillingArrangement_waiveUsage(ctx, field)
-			case "collection":
-				return ec.fieldContext_BillingArrangement_collection(ctx, field)
-			case "expiresAt":
-				return ec.fieldContext_BillingArrangement_expiresAt(ctx, field)
-			case "fallbackTierName":
-				return ec.fieldContext_BillingArrangement_fallbackTierName(ctx, field)
-			}
-			return nil, fmt.Errorf("no field named %q was found under type BillingArrangement", field.Name)
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _BillingStatus_effectiveBasePrice(ctx context.Context, field graphql.CollectedField, obj *purserpb.BillingStatusResponse) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		ec.fieldContext_BillingStatus_effectiveBasePrice,
-		func(ctx context.Context) (any, error) {
-			return obj.EffectiveBasePrice, nil
-		},
-		nil,
-		ec.marshalNString2string,
-		true,
-		true,
-	)
-}
-
-func (ec *executionContext) fieldContext_BillingStatus_effectiveBasePrice(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "BillingStatus",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type String does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _BillingStatus_freeFallback(ctx context.Context, field graphql.CollectedField, obj *purserpb.BillingStatusResponse) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		ec.fieldContext_BillingStatus_freeFallback,
-		func(ctx context.Context) (any, error) {
-			return obj.FreeFallback, nil
-		},
-		nil,
-		ec.marshalOFreeFallback2ᚖgithubᚗcomᚋLivepeerᚑFrameWorksᚋmonorepoᚋpkgᚋprotoᚋpurserᚐFreeFallbackStatus,
-		true,
-		false,
-	)
-}
-
-func (ec *executionContext) fieldContext_BillingStatus_freeFallback(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "BillingStatus",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			switch field.Name {
-			case "reason":
-				return ec.fieldContext_FreeFallback_reason(ctx, field)
-			case "at":
-				return ec.fieldContext_FreeFallback_at(ctx, field)
-			case "stage":
-				return ec.fieldContext_FreeFallback_stage(ctx, field)
-			case "providerCancelled":
-				return ec.fieldContext_FreeFallback_providerCancelled(ctx, field)
-			}
-			return nil, fmt.Errorf("no field named %q was found under type FreeFallback", field.Name)
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _BillingStatus_pendingTierState(ctx context.Context, field graphql.CollectedField, obj *purserpb.BillingStatusResponse) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		ec.fieldContext_BillingStatus_pendingTierState,
-		func(ctx context.Context) (any, error) {
-			return ec.Resolvers.BillingStatus().PendingTierState(ctx, obj)
-		},
-		nil,
-		ec.marshalOPendingTierState2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐPendingTierState,
-		true,
-		false,
-	)
-}
-
-func (ec *executionContext) fieldContext_BillingStatus_pendingTierState(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "BillingStatus",
-		Field:      field,
-		IsMethod:   true,
-		IsResolver: true,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type PendingTierState does not have child fields")
 		},
 	}
 	return fc, nil
@@ -96562,16 +96850,59 @@ func (ec *executionContext) fieldContext_Query_billingStatus(_ context.Context, 
 				return ec.fieldContext_BillingStatus_liveUsage(ctx, field)
 			case "invoicePreview":
 				return ec.fieldContext_BillingStatus_invoicePreview(ctx, field)
-			case "operatorGrant":
-				return ec.fieldContext_BillingStatus_operatorGrant(ctx, field)
-			case "effectiveBasePrice":
-				return ec.fieldContext_BillingStatus_effectiveBasePrice(ctx, field)
-			case "freeFallback":
-				return ec.fieldContext_BillingStatus_freeFallback(ctx, field)
-			case "pendingTierState":
-				return ec.fieldContext_BillingStatus_pendingTierState(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type BillingStatus", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_billingLifecycle(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Query_billingLifecycle,
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.Query().BillingLifecycle(ctx)
+		},
+		nil,
+		ec.marshalOBillingLifecycle2ᚖgithubᚗcomᚋLivepeerᚑFrameWorksᚋmonorepoᚋpkgᚋprotoᚋpurserᚐBillingStatusResponse,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_Query_billingLifecycle(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "billingStatus":
+				return ec.fieldContext_BillingLifecycle_billingStatus(ctx, field)
+			case "collectionReady":
+				return ec.fieldContext_BillingLifecycle_collectionReady(ctx, field)
+			case "collectionProvider":
+				return ec.fieldContext_BillingLifecycle_collectionProvider(ctx, field)
+			case "effectiveBasePrice":
+				return ec.fieldContext_BillingLifecycle_effectiveBasePrice(ctx, field)
+			case "operatorGrant":
+				return ec.fieldContext_BillingLifecycle_operatorGrant(ctx, field)
+			case "freeFallback":
+				return ec.fieldContext_BillingLifecycle_freeFallback(ctx, field)
+			case "pendingTier":
+				return ec.fieldContext_BillingLifecycle_pendingTier(ctx, field)
+			case "pendingEffectiveAt":
+				return ec.fieldContext_BillingLifecycle_pendingEffectiveAt(ctx, field)
+			case "pendingReason":
+				return ec.fieldContext_BillingLifecycle_pendingReason(ctx, field)
+			case "pendingTierState":
+				return ec.fieldContext_BillingLifecycle_pendingTierState(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type BillingLifecycle", field.Name)
 		},
 	}
 	return fc, nil
@@ -121870,7 +122201,7 @@ func (ec *executionContext) _TenantAdminBilling_lifecycle(ctx context.Context, f
 			return ec.Resolvers.TenantAdminBilling().Lifecycle(ctx, obj)
 		},
 		nil,
-		ec.marshalOBillingStatus2ᚖgithubᚗcomᚋLivepeerᚑFrameWorksᚋmonorepoᚋpkgᚋprotoᚋpurserᚐBillingStatusResponse,
+		ec.marshalOBillingLifecycle2ᚖgithubᚗcomᚋLivepeerᚑFrameWorksᚋmonorepoᚋpkgᚋprotoᚋpurserᚐBillingStatusResponse,
 		true,
 		false,
 	)
@@ -121884,44 +122215,28 @@ func (ec *executionContext) fieldContext_TenantAdminBilling_lifecycle(_ context.
 		IsResolver: true,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			switch field.Name {
-			case "currentTier":
-				return ec.fieldContext_BillingStatus_currentTier(ctx, field)
-			case "subscription":
-				return ec.fieldContext_BillingStatus_subscription(ctx, field)
 			case "billingStatus":
-				return ec.fieldContext_BillingStatus_billingStatus(ctx, field)
-			case "paymentMethods":
-				return ec.fieldContext_BillingStatus_paymentMethods(ctx, field)
+				return ec.fieldContext_BillingLifecycle_billingStatus(ctx, field)
 			case "collectionReady":
-				return ec.fieldContext_BillingStatus_collectionReady(ctx, field)
+				return ec.fieldContext_BillingLifecycle_collectionReady(ctx, field)
 			case "collectionProvider":
-				return ec.fieldContext_BillingStatus_collectionProvider(ctx, field)
-			case "setupProviders":
-				return ec.fieldContext_BillingStatus_setupProviders(ctx, field)
-			case "recentPayments":
-				return ec.fieldContext_BillingStatus_recentPayments(ctx, field)
-			case "nextBillingDate":
-				return ec.fieldContext_BillingStatus_nextBillingDate(ctx, field)
-			case "trialEndsAt":
-				return ec.fieldContext_BillingStatus_trialEndsAt(ctx, field)
-			case "outstandingAmount":
-				return ec.fieldContext_BillingStatus_outstandingAmount(ctx, field)
-			case "currency":
-				return ec.fieldContext_BillingStatus_currency(ctx, field)
-			case "liveUsage":
-				return ec.fieldContext_BillingStatus_liveUsage(ctx, field)
-			case "invoicePreview":
-				return ec.fieldContext_BillingStatus_invoicePreview(ctx, field)
-			case "operatorGrant":
-				return ec.fieldContext_BillingStatus_operatorGrant(ctx, field)
+				return ec.fieldContext_BillingLifecycle_collectionProvider(ctx, field)
 			case "effectiveBasePrice":
-				return ec.fieldContext_BillingStatus_effectiveBasePrice(ctx, field)
+				return ec.fieldContext_BillingLifecycle_effectiveBasePrice(ctx, field)
+			case "operatorGrant":
+				return ec.fieldContext_BillingLifecycle_operatorGrant(ctx, field)
 			case "freeFallback":
-				return ec.fieldContext_BillingStatus_freeFallback(ctx, field)
+				return ec.fieldContext_BillingLifecycle_freeFallback(ctx, field)
+			case "pendingTier":
+				return ec.fieldContext_BillingLifecycle_pendingTier(ctx, field)
+			case "pendingEffectiveAt":
+				return ec.fieldContext_BillingLifecycle_pendingEffectiveAt(ctx, field)
+			case "pendingReason":
+				return ec.fieldContext_BillingLifecycle_pendingReason(ctx, field)
 			case "pendingTierState":
-				return ec.fieldContext_BillingStatus_pendingTierState(ctx, field)
+				return ec.fieldContext_BillingLifecycle_pendingTierState(ctx, field)
 			}
-			return nil, fmt.Errorf("no field named %q was found under type BillingStatus", field.Name)
+			return nil, fmt.Errorf("no field named %q was found under type BillingLifecycle", field.Name)
 		},
 	}
 	return fc, nil
@@ -149928,6 +150243,193 @@ func (ec *executionContext) _BillingFeatures(ctx context.Context, sel ast.Select
 	return out
 }
 
+var billingLifecycleImplementors = []string{"BillingLifecycle"}
+
+func (ec *executionContext) _BillingLifecycle(ctx context.Context, sel ast.SelectionSet, obj *purserpb.BillingStatusResponse) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, billingLifecycleImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("BillingLifecycle")
+		case "billingStatus":
+			out.Values[i] = ec._BillingLifecycle_billingStatus(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "collectionReady":
+			out.Values[i] = ec._BillingLifecycle_collectionReady(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "collectionProvider":
+			out.Values[i] = ec._BillingLifecycle_collectionProvider(ctx, field, obj)
+		case "effectiveBasePrice":
+			out.Values[i] = ec._BillingLifecycle_effectiveBasePrice(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "operatorGrant":
+			out.Values[i] = ec._BillingLifecycle_operatorGrant(ctx, field, obj)
+		case "freeFallback":
+			out.Values[i] = ec._BillingLifecycle_freeFallback(ctx, field, obj)
+		case "pendingTier":
+			field := field
+
+			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._BillingLifecycle_pendingTier(ctx, field, obj)
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "pendingEffectiveAt":
+			field := field
+
+			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._BillingLifecycle_pendingEffectiveAt(ctx, field, obj)
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "pendingReason":
+			field := field
+
+			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._BillingLifecycle_pendingReason(ctx, field, obj)
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "pendingTierState":
+			field := field
+
+			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._BillingLifecycle_pendingTierState(ctx, field, obj)
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
 var billingStatusImplementors = []string{"BillingStatus"}
 
 func (ec *executionContext) _BillingStatus(ctx context.Context, sel ast.SelectionSet, obj *purserpb.BillingStatusResponse) graphql.Marshaler {
@@ -150185,48 +150687,6 @@ func (ec *executionContext) _BillingStatus(ctx context.Context, sel ast.Selectio
 					}
 				}()
 				res = ec._BillingStatus_invoicePreview(ctx, field, obj)
-				return res
-			}
-
-			if field.Deferrable != nil {
-				dfs, ok := deferred[field.Deferrable.Label]
-				di := 0
-				if ok {
-					dfs.AddField(field)
-					di = len(dfs.Values) - 1
-				} else {
-					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
-					deferred[field.Deferrable.Label] = dfs
-				}
-				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
-					return innerFunc(ctx, dfs)
-				})
-
-				// don't run the out.Concurrently() call below
-				out.Values[i] = graphql.Null
-				continue
-			}
-
-			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
-		case "operatorGrant":
-			out.Values[i] = ec._BillingStatus_operatorGrant(ctx, field, obj)
-		case "effectiveBasePrice":
-			out.Values[i] = ec._BillingStatus_effectiveBasePrice(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				atomic.AddUint32(&out.Invalids, 1)
-			}
-		case "freeFallback":
-			out.Values[i] = ec._BillingStatus_freeFallback(ctx, field, obj)
-		case "pendingTierState":
-			field := field
-
-			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
-				defer func() {
-					if r := recover(); r != nil {
-						ec.Error(ctx, ec.Recover(ctx, r))
-					}
-				}()
-				res = ec._BillingStatus_pendingTierState(ctx, field, obj)
 				return res
 			}
 
@@ -173753,6 +174213,25 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 					}
 				}()
 				res = ec._Query_billingStatus(ctx, field)
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "billingLifecycle":
+			field := field
+
+			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_billingLifecycle(ctx, field)
 				return res
 			}
 
@@ -202094,6 +202573,13 @@ func (ec *executionContext) unmarshalOBillingFeaturesInput2ᚖframeworksᚋapi_g
 	}
 	res, err := ec.unmarshalInputBillingFeaturesInput(ctx, v)
 	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalOBillingLifecycle2ᚖgithubᚗcomᚋLivepeerᚑFrameWorksᚋmonorepoᚋpkgᚋprotoᚋpurserᚐBillingStatusResponse(ctx context.Context, sel ast.SelectionSet, v *purserpb.BillingStatusResponse) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._BillingLifecycle(ctx, sel, v)
 }
 
 func (ec *executionContext) marshalOBillingStatus2ᚖgithubᚗcomᚋLivepeerᚑFrameWorksᚋmonorepoᚋpkgᚋprotoᚋpurserᚐBillingStatusResponse(ctx context.Context, sel ast.SelectionSet, v *purserpb.BillingStatusResponse) graphql.Marshaler {

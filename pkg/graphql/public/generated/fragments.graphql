@@ -382,6 +382,60 @@ fragment BillingDetailsDefaultFields on BillingDetails {
   presentmentCurrency
 }
 
+fragment BillingLifecycleDefaultFields on BillingLifecycle {
+  billingStatus
+  collectionReady
+  collectionProvider
+  effectiveBasePrice
+  operatorGrant {
+    basePrice
+    waiveUsage
+    collection
+    expiresAt
+    fallbackTierName
+  }
+  freeFallback {
+    reason
+    at
+    stage
+    providerCancelled
+  }
+  pendingTier {
+    id
+    tierName
+    tierLevel
+    displayName
+    description
+    basePrice
+    currency
+    billingPeriod
+    features {
+      supportLevel
+      sla
+      processingCustomizable
+    }
+    pricingRules {
+      meter
+      model
+      currency
+      includedQuantity
+      unitPrice
+      configJson
+    }
+    entitlements {
+      key
+      value
+    }
+    supportLevel
+    slaLevel
+    meteringEnabled
+    isEnterprise
+  }
+  pendingEffectiveAt
+  pendingReason
+  pendingTierState
+}
+
 fragment BillingStatusDefaultFields on BillingStatus {
   currentTier {
     id
@@ -581,21 +635,6 @@ fragment BillingStatusDefaultFields on BillingStatus {
       dimensions
     }
   }
-  operatorGrant {
-    basePrice
-    waiveUsage
-    collection
-    expiresAt
-    fallbackTierName
-  }
-  effectiveBasePrice
-  freeFallback {
-    reason
-    at
-    stage
-    providerCancelled
-  }
-  pendingTierState
 }
 
 fragment BillingTierDefaultFields on BillingTier {

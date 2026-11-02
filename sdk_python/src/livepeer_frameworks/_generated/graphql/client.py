@@ -62,6 +62,7 @@ from .get_artifact_node_copies import GetArtifactNodeCopies
 from .get_artifact_states_connection import GetArtifactStatesConnection
 from .get_balance_transactions_connection import GetBalanceTransactionsConnection
 from .get_billing_details import GetBillingDetails
+from .get_billing_lifecycle import GetBillingLifecycle
 from .get_billing_status import GetBillingStatus
 from .get_billing_tiers import GetBillingTiers
 from .get_buffer_events_connection import GetBufferEventsConnection
@@ -4013,6 +4014,80 @@ class GraphQLClient(BaseClient):
         data = self.get_data(response)
         return GetBillingDetails.model_validate(data)
 
+    def get_billing_lifecycle(self, **kwargs: Any) -> GetBillingLifecycle:
+        """The current tenant's plan lifecycle: a FrameWorks arrangement, a scheduled
+        move to Free and how far a scheduled plan change has progressed."""
+        query = gql("""
+            query GetBillingLifecycle {
+              billingLifecycle {
+                ...BillingLifecycleDefaultFields
+              }
+            }
+
+            fragment BillingLifecycleDefaultFields on BillingLifecycle {
+              billingStatus
+              collectionReady
+              collectionProvider
+              effectiveBasePrice
+              operatorGrant {
+                basePrice
+                waiveUsage
+                collection
+                expiresAt
+                fallbackTierName
+              }
+              freeFallback {
+                reason
+                at
+                stage
+                providerCancelled
+              }
+              pendingTier {
+                id
+                tierName
+                tierLevel
+                displayName
+                description
+                basePrice
+                currency
+                billingPeriod
+                features {
+                  supportLevel
+                  sla
+                  processingCustomizable
+                }
+                pricingRules {
+                  meter
+                  model
+                  currency
+                  includedQuantity
+                  unitPrice
+                  configJson
+                }
+                entitlements {
+                  key
+                  value
+                }
+                supportLevel
+                slaLevel
+                meteringEnabled
+                isEnterprise
+              }
+              pendingEffectiveAt
+              pendingReason
+              pendingTierState
+            }
+            """)
+        variables: dict[str, object] = {}
+        response = self.execute(
+            query=query,
+            operation_name="GetBillingLifecycle",
+            variables=variables,
+            **kwargs,
+        )
+        data = self.get_data(response)
+        return GetBillingLifecycle.model_validate(data)
+
     def get_billing_status(self, **kwargs: Any) -> GetBillingStatus:
         """Get the current billing status including subscription tier and usage."""
         query = gql("""
@@ -4221,21 +4296,6 @@ class GraphQLClient(BaseClient):
                   dimensions
                 }
               }
-              operatorGrant {
-                basePrice
-                waiveUsage
-                collection
-                expiresAt
-                fallbackTierName
-              }
-              effectiveBasePrice
-              freeFallback {
-                reason
-                at
-                stage
-                providerCancelled
-              }
-              pendingTierState
             }
             """)
         variables: dict[str, object] = {}

@@ -266,6 +266,16 @@ export const scalarFields = {
         "processingCustomizable",
         "__typename"
     ],
+    "BillingLifecycle": [
+        "billingStatus",
+        "collectionReady",
+        "collectionProvider",
+        "effectiveBasePrice",
+        "pendingEffectiveAt",
+        "pendingReason",
+        "pendingTierState",
+        "__typename"
+    ],
     "BillingStatus": [
         "billingStatus",
         "paymentMethods",
@@ -276,8 +286,6 @@ export const scalarFields = {
         "trialEndsAt",
         "outstandingAmount",
         "currency",
-        "effectiveBasePrice",
-        "pendingTierState",
         "__typename"
     ],
     "BillingTier": [

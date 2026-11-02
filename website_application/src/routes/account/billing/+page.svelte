@@ -7,6 +7,7 @@
   import {
     fragment,
     GetBillingStatusStore,
+    GetBillingLifecycleStore,
     GetBillingDetailsStore,
     GetBillingTiersStore,
     GetInvoicesStore,
@@ -42,6 +43,7 @@
 
   // Houdini stores
   const billingStatusStore = new GetBillingStatusStore();
+  const billingLifecycleStore = new GetBillingLifecycleStore();
   const billingDetailsStore = new GetBillingDetailsStore();
   const billingTiersStore = new GetBillingTiersStore();
   const invoicesStore = new GetInvoicesStore();
@@ -184,6 +186,7 @@
       // Load all billing data in parallel
       await Promise.all([
         billingStatusStore.fetch().catch(() => null),
+        billingLifecycleStore.fetch().catch(() => null),
         billingDetailsStore.fetch().catch(() => null),
         billingTiersStore.fetch().catch(() => null),
         invoicesStore.fetch().catch(() => null),
@@ -818,13 +821,14 @@
   const pendingTier = $derived(billingStatus?.subscription?.pendingTier ?? null);
   const pendingEffectiveAt = $derived(billingStatus?.subscription?.pendingEffectiveAt ?? null);
   const pendingReason = $derived(billingStatus?.subscription?.pendingReason ?? null);
-  const pendingTierState = $derived(billingStatus?.pendingTierState ?? null);
-  const arrangement = $derived(billingStatus?.operatorGrant ?? null);
-  const freeFallback = $derived(billingStatus?.freeFallback ?? null);
+  const lifecycle = $derived($billingLifecycleStore.data?.billingLifecycle ?? null);
+  const pendingTierState = $derived(lifecycle?.pendingTierState ?? null);
+  const arrangement = $derived(lifecycle?.operatorGrant ?? null);
+  const freeFallback = $derived(lifecycle?.freeFallback ?? null);
   // The base fee this account pays, after any FrameWorks arrangement.
   const currentMonthlyFee = $derived(
-    billingStatus?.effectiveBasePrice
-      ? moneyNumber(billingStatus.effectiveBasePrice)
+    lifecycle?.effectiveBasePrice
+      ? moneyNumber(lifecycle.effectiveBasePrice)
       : moneyNumber(currentTier?.basePrice)
   );
   const movingToFree = $derived(freeFallback !== null && freeFallback.stage !== "MOVED");

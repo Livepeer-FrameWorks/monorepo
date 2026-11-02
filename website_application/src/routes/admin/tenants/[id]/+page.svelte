@@ -295,12 +295,10 @@
                   <div>
                     <dt class="text-muted-foreground">Pending plan change</dt>
                     <dd>
-                      {#if lifecycle.subscription?.pendingTier}
-                        {lifecycle.subscription.pendingReason ?? "change"} to
-                        {lifecycle.subscription.pendingTier.displayName}
-                        {formatDate(
-                          lifecycle.subscription.pendingEffectiveAt
-                        )}{lifecycle.pendingTierState
+                      {#if lifecycle.pendingTier}
+                        {lifecycle.pendingReason ?? "change"} to
+                        {lifecycle.pendingTier.displayName}
+                        {formatDate(lifecycle.pendingEffectiveAt)}{lifecycle.pendingTierState
                           ? `, ${lifecycle.pendingTierState.toLowerCase()}`
                           : ""}
                       {:else}

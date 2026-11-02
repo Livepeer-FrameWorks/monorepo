@@ -613,6 +613,38 @@ func (r *billingDetailsResolver) UpdatedAt(ctx context.Context, obj *purserpb.Bi
 	return &t, nil
 }
 
+// PendingTier is the resolver for the pendingTier field.
+func (r *billingLifecycleResolver) PendingTier(ctx context.Context, obj *purserpb.BillingStatusResponse) (*purserpb.BillingTier, error) {
+	if obj.GetSubscription().GetPendingTierId() == "" {
+		return nil, nil
+	}
+	return r.Clients.Purser.GetBillingTier(ctx, obj.GetSubscription().GetPendingTierId())
+}
+
+// PendingEffectiveAt is the resolver for the pendingEffectiveAt field.
+func (r *billingLifecycleResolver) PendingEffectiveAt(ctx context.Context, obj *purserpb.BillingStatusResponse) (*time.Time, error) {
+	at := obj.GetSubscription().GetPendingEffectiveAt()
+	if at == nil || !at.IsValid() {
+		return nil, nil
+	}
+	t := at.AsTime()
+	return &t, nil
+}
+
+// PendingReason is the resolver for the pendingReason field.
+func (r *billingLifecycleResolver) PendingReason(ctx context.Context, obj *purserpb.BillingStatusResponse) (*string, error) {
+	if obj.GetSubscription().GetPendingReason() == "" {
+		return nil, nil
+	}
+	reason := obj.GetSubscription().GetPendingReason()
+	return &reason, nil
+}
+
+// PendingTierState is the resolver for the pendingTierState field.
+func (r *billingLifecycleResolver) PendingTierState(ctx context.Context, obj *purserpb.BillingStatusResponse) (*model.PendingTierState, error) {
+	return resolvers.PendingTierState(obj), nil
+}
+
 // CurrentTier is the resolver for the currentTier field.
 func (r *billingStatusResolver) CurrentTier(ctx context.Context, obj *purserpb.BillingStatusResponse) (*purserpb.BillingTier, error) {
 	return obj.Tier, nil
@@ -674,11 +706,6 @@ func (r *billingStatusResolver) LiveUsage(ctx context.Context, obj *purserpb.Bil
 // InvoicePreview is the resolver for the invoicePreview field.
 func (r *billingStatusResolver) InvoicePreview(ctx context.Context, obj *purserpb.BillingStatusResponse) (*purserpb.Invoice, error) {
 	return r.DoGetInvoicePreview(ctx)
-}
-
-// PendingTierState is the resolver for the pendingTierState field.
-func (r *billingStatusResolver) PendingTierState(ctx context.Context, obj *purserpb.BillingStatusResponse) (*model.PendingTierState, error) {
-	return resolvers.PendingTierState(obj), nil
 }
 
 // Entitlements is the resolver for the entitlements field.
@@ -3524,6 +3551,11 @@ func (r *queryResolver) PaymentsConnection(ctx context.Context, page *model.Conn
 
 // BillingStatus is the resolver for the billingStatus field.
 func (r *queryResolver) BillingStatus(ctx context.Context) (*purserpb.BillingStatusResponse, error) {
+	return r.DoGetBillingStatus(ctx)
+}
+
+// BillingLifecycle is the resolver for the billingLifecycle field.
+func (r *queryResolver) BillingLifecycle(ctx context.Context) (*purserpb.BillingStatusResponse, error) {
 	return r.DoGetBillingStatus(ctx)
 }
 
@@ -6710,6 +6742,11 @@ func (r *Resolver) BillingDetails() generated.BillingDetailsResolver {
 	return &billingDetailsResolver{r}
 }
 
+// BillingLifecycle returns generated.BillingLifecycleResolver implementation.
+func (r *Resolver) BillingLifecycle() generated.BillingLifecycleResolver {
+	return &billingLifecycleResolver{r}
+}
+
 // BillingStatus returns generated.BillingStatusResolver implementation.
 func (r *Resolver) BillingStatus() generated.BillingStatusResolver { return &billingStatusResolver{r} }
 
@@ -7172,6 +7209,7 @@ type artifactEventResolver struct{ *Resolver }
 type artifactStateResolver struct{ *Resolver }
 type billingArrangementResolver struct{ *Resolver }
 type billingDetailsResolver struct{ *Resolver }
+type billingLifecycleResolver struct{ *Resolver }
 type billingStatusResolver struct{ *Resolver }
 type billingTierResolver struct{ *Resolver }
 type bootstrapTokenResolver struct{ *Resolver }

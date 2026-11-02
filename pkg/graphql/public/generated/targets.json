@@ -49,6 +49,7 @@
     "GetArtifactStatesConnection": "query.analytics.lifecycle.artifactStatesConnection",
     "GetBalanceTransactionsConnection": "query.balanceTransactionsConnection",
     "GetBillingDetails": "query.billingDetails",
+    "GetBillingLifecycle": "query.billingLifecycle",
     "GetBillingStatus": "query.billingStatus",
     "GetBillingTiers": "query.billingTiers",
     "GetBufferEventsConnection": "query.analytics.lifecycle.bufferEventsConnection",

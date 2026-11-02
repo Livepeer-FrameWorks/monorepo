@@ -1167,6 +1167,40 @@ enum GQL {
   }
   """
 
+  static let GetBillingLifecycle = """
+  # Fetch the plan lifecycle: the base fee paid after any FrameWorks arrangement,
+  # the arrangement's terms, a scheduled move to Free and how far a scheduled
+  # downgrade has progressed.
+  query GetBillingLifecycle {
+    billingLifecycle {
+      billingStatus
+      collectionReady
+      collectionProvider
+      effectiveBasePrice
+      operatorGrant {
+        basePrice
+        waiveUsage
+        collection
+        expiresAt
+        fallbackTierName
+      }
+      freeFallback {
+        reason
+        at
+        stage
+        providerCancelled
+      }
+      pendingTier {
+        id
+        displayName
+      }
+      pendingEffectiveAt
+      pendingReason
+      pendingTierState
+    }
+  }
+  """
+
   static let GetBillingStatus = """
   # Fetch billing status, live usage, and the current invoice preview.
   query GetBillingStatus {
@@ -1199,21 +1233,6 @@ enum GQL {
       nextBillingDate
       trialEndsAt
       outstandingAmount
-      effectiveBasePrice
-      operatorGrant {
-        basePrice
-        waiveUsage
-        collection
-        expiresAt
-        fallbackTierName
-      }
-      freeFallback {
-        reason
-        at
-        stage
-        providerCancelled
-      }
-      pendingTierState
       currentTier {
         ...BillingTierFields
       }
@@ -2772,14 +2791,12 @@ enum GQL {
               stage
               providerCancelled
             }
-            pendingTierState
-            subscription {
-              pendingTier {
-                displayName
-              }
-              pendingEffectiveAt
-              pendingReason
+            pendingTier {
+              displayName
             }
+            pendingEffectiveAt
+            pendingReason
+            pendingTierState
           }
           invoices(page: { first: $invoicesFirst }) {
             edges {

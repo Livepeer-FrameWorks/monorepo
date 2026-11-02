@@ -1278,6 +1278,222 @@ class BillingDetailsDefaultAddress(BaseModel):
     "ISO 3166-1 alpha-2 country code."
 
 
+class BillingLifecycleDefault(BaseModel):
+    """A tenant's plan lifecycle, as its billing page shows it."""
+
+    billing_status: str = Field(
+        alias="billingStatus",
+        description="Subscription status: active, past_due, pending_cancellation, suspended or none.",
+    )
+    "Subscription status: active, past_due, pending_cancellation, suspended or none."
+    collection_ready: bool = Field(
+        alias="collectionReady",
+        description="True only after a reusable postpaid provider subscription or mandate is confirmed.",
+    )
+    "True only after a reusable postpaid provider subscription or mandate is confirmed."
+    collection_provider: Optional[str] = Field(
+        alias="collectionProvider",
+        description="Confirmed postpaid collection provider, when ready.",
+    )
+    "Confirmed postpaid collection provider, when ready."
+    effective_base_price: str = Field(
+        alias="effectiveBasePrice",
+        description="Monthly base fee in EUR this account pays after any arrangement, as a decimal string.",
+    )
+    "Monthly base fee in EUR this account pays after any arrangement, as a decimal string."
+    operator_grant: Optional["BillingLifecycleDefaultOperatorGrant"] = Field(
+        alias="operatorGrant",
+        description="Billing arrangement FrameWorks set up for this account, such as a trial or a custom price, while it is in force.",
+    )
+    "Billing arrangement FrameWorks set up for this account, such as a trial or a custom price, while it is in force."
+    free_fallback: Optional["BillingLifecycleDefaultFreeFallback"] = Field(
+        alias="freeFallback",
+        description="Scheduled move to the Free plan after a failed renewal payment or a cancellation.",
+    )
+    "Scheduled move to the Free plan after a failed renewal payment or a cancellation."
+    pending_tier: Optional["BillingLifecycleDefaultPendingTier"] = Field(
+        alias="pendingTier",
+        description="Plan the subscription changes to, when a change is scheduled or being confirmed.",
+    )
+    "Plan the subscription changes to, when a change is scheduled or being confirmed."
+    pending_effective_at: Optional[datetime] = Field(
+        alias="pendingEffectiveAt",
+        description="When a scheduled downgrade takes effect.",
+    )
+    "When a scheduled downgrade takes effect."
+    pending_reason: Optional[str] = Field(
+        alias="pendingReason",
+        description="Why pendingTier is set: downgrade, tier_upgrade or stripe_checkout.",
+    )
+    "Why pendingTier is set: downgrade, tier_upgrade or stripe_checkout."
+    pending_tier_state: Optional[PendingTierState] = Field(
+        alias="pendingTierState",
+        description="Progress of pendingTier while pendingReason is downgrade.",
+    )
+    "Progress of pendingTier while pendingReason is downgrade."
+
+
+class BillingLifecycleDefaultOperatorGrant(BaseModel):
+    """A billing arrangement FrameWorks set up for an account. Only the terms the
+    account is billed under are shown."""
+
+    base_price: Optional[str] = Field(
+        alias="basePrice",
+        description="Monthly base fee in EUR in place of the plan's, as a decimal string. Null keeps the plan's fee.",
+    )
+    "Monthly base fee in EUR in place of the plan's, as a decimal string. Null keeps the plan's fee."
+    waive_usage: bool = Field(
+        alias="waiveUsage", description="Usage is metered and shown at zero cost."
+    )
+    "Usage is metered and shown at zero cost."
+    collection: str = Field(
+        description="How invoices are collected: provider (Stripe or Mollie) or invoice (FrameWorks sends invoices to pay by bank transfer)."
+    )
+    "How invoices are collected: provider (Stripe or Mollie) or invoice (FrameWorks sends invoices to pay by bank transfer)."
+    expires_at: Optional[datetime] = Field(
+        alias="expiresAt",
+        description="When the arrangement ends. Null runs until FrameWorks ends it.",
+    )
+    "When the arrangement ends. Null runs until FrameWorks ends it."
+    fallback_tier_name: Optional[str] = Field(
+        alias="fallbackTierName",
+        description="Plan the account returns to when the arrangement ends, when it is not the current plan.",
+    )
+    "Plan the account returns to when the arrangement ends, when it is not the current plan."
+
+
+class BillingLifecycleDefaultFreeFallback(BaseModel):
+    """A scheduled move to the Free plan."""
+
+    reason: FreeFallbackReason
+    at: datetime = Field(
+        description="When the move happens, or happened once stage is MOVED."
+    )
+    "When the move happens, or happened once stage is MOVED."
+    stage: FreeFallbackStage
+    provider_cancelled: bool = Field(
+        alias="providerCancelled",
+        description="The Stripe or Mollie subscription is cancelled, so no renewal follows.",
+    )
+    "The Stripe or Mollie subscription is cancelled, so no renewal follows."
+
+
+class BillingLifecycleDefaultPendingTier(BaseModel):
+    """A subscription tier defining pricing rules, entitlements, and features.
+    Tenants subscribe to a tier which determines their billing and capabilities."""
+
+    id: str = Field(description="Unique tier identifier.")
+    "Unique tier identifier."
+    tier_name: str = Field(
+        alias="tierName",
+        description="Internal tier name (payg, free, supporter, developer, production, enterprise).",
+    )
+    "Internal tier name (payg, free, supporter, developer, production, enterprise)."
+    tier_level: int = Field(
+        alias="tierLevel",
+        description="Numeric ordering of tiers; 0 = payg (prepaid), 1 = free, 5 = enterprise. Used to compare upgrade vs downgrade direction.",
+    )
+    "Numeric ordering of tiers; 0 = payg (prepaid), 1 = free, 5 = enterprise. Used to compare upgrade vs downgrade direction."
+    display_name: str = Field(alias="displayName", description="User-facing tier name.")
+    "User-facing tier name."
+    description: Optional[str] = Field(description="Tier description for marketing.")
+    "Tier description for marketing."
+    base_price: float = Field(alias="basePrice", description="Base monthly price.")
+    "Base monthly price."
+    currency: str = Field(description="Currency code (USD, EUR, etc.).")
+    "Currency code (USD, EUR, etc.)."
+    billing_period: str = Field(
+        alias="billingPeriod", description="Billing period (monthly, yearly)."
+    )
+    "Billing period (monthly, yearly)."
+    features: "BillingLifecycleDefaultPendingTierFeatures" = Field(
+        description="Feature flags for this tier."
+    )
+    "Feature flags for this tier."
+    pricing_rules: list["BillingLifecycleDefaultPendingTierPricingRules"] = Field(
+        alias="pricingRules",
+        description="Priced behaviors per meter (rating engine input).",
+    )
+    "Priced behaviors per meter (rating engine input)."
+    entitlements: list["BillingLifecycleDefaultPendingTierEntitlements"] = Field(
+        description="Non-billing grants (e.g. recording_retention_days). Values are JSON-encoded strings."
+    )
+    "Non-billing grants (e.g. recording_retention_days). Values are JSON-encoded strings."
+    support_level: Optional[str] = Field(
+        alias="supportLevel",
+        description="Support level included (community, email, priority, dedicated).",
+    )
+    "Support level included (community, email, priority, dedicated)."
+    sla_level: Optional[str] = Field(
+        alias="slaLevel", description="SLA guarantee level for enterprise tiers."
+    )
+    "SLA guarantee level for enterprise tiers."
+    metering_enabled: bool = Field(
+        alias="meteringEnabled",
+        description="Whether usage metering is enabled for this tier.",
+    )
+    "Whether usage metering is enabled for this tier."
+    is_enterprise: bool = Field(
+        alias="isEnterprise",
+        description="Whether this is an enterprise tier with custom terms.",
+    )
+    "Whether this is an enterprise tier with custom terms."
+
+
+class BillingLifecycleDefaultPendingTierFeatures(BaseModel):
+    """Contractual and enforced properties of a billing tier. Usage limits are
+    entitlements, not features."""
+
+    support_level: str = Field(
+        alias="supportLevel",
+        description="Support level (community, email, priority, dedicated).",
+    )
+    "Support level (community, email, priority, dedicated)."
+    sla: bool = Field(description="Whether SLA guarantees apply.")
+    "Whether SLA guarantees apply."
+    processing_customizable: bool = Field(
+        alias="processingCustomizable",
+        description="Whether the tenant may override the tier's processing profiles.",
+    )
+    "Whether the tenant may override the tier's processing profiles."
+
+
+class BillingLifecycleDefaultPendingTierPricingRules(BaseModel):
+    """A pricing rule: how a meter rates to money. Decimal fields are strings to preserve precision."""
+
+    meter: str = Field(
+        description="Canonical meter name (for example delivered_minutes, storage_gb_seconds_cold, media_seconds, or a marketplace-defined meter)."
+    )
+    "Canonical meter name (for example delivered_minutes, storage_gb_seconds_cold, media_seconds, or a marketplace-defined meter)."
+    model: str = Field(
+        description="Pricing model (tiered_graduated, all_usage, dimensioned)."
+    )
+    "Pricing model (tiered_graduated, all_usage, dimensioned)."
+    currency: str = Field(description="Currency (ISO 4217).")
+    "Currency (ISO 4217)."
+    included_quantity: str = Field(
+        alias="includedQuantity",
+        description="Free quantity included before billing kicks in.",
+    )
+    "Free quantity included before billing kicks in."
+    unit_price: str = Field(
+        alias="unitPrice", description="Price per unit (decimal as string)."
+    )
+    "Price per unit (decimal as string)."
+    config_json: str = Field(
+        alias="configJson",
+        description="Model-specific config (for example dimension selector rates); JSON-encoded.",
+    )
+    "Model-specific config (for example dimension selector rates); JSON-encoded."
+
+
+class BillingLifecycleDefaultPendingTierEntitlements(BaseModel):
+    """A key-value entitlement entry. Values are JSON-encoded for type flexibility."""
+
+    key: str
+    value: str
+
+
 class BillingStatusDefault(BaseModel):
     current_tier: Optional["BillingStatusDefaultCurrentTier"] = Field(
         alias="currentTier"
@@ -1317,26 +1533,6 @@ class BillingStatusDefault(BaseModel):
     invoice_preview: Optional["BillingStatusDefaultInvoicePreview"] = Field(
         alias="invoicePreview"
     )
-    operator_grant: Optional["BillingStatusDefaultOperatorGrant"] = Field(
-        alias="operatorGrant",
-        description="Billing arrangement FrameWorks set up for this account, such as a trial or a custom price, while it is in force.",
-    )
-    "Billing arrangement FrameWorks set up for this account, such as a trial or a custom price, while it is in force."
-    effective_base_price: str = Field(
-        alias="effectiveBasePrice",
-        description="Monthly base fee in EUR this account pays after any arrangement, as a decimal string.",
-    )
-    "Monthly base fee in EUR this account pays after any arrangement, as a decimal string."
-    free_fallback: Optional["BillingStatusDefaultFreeFallback"] = Field(
-        alias="freeFallback",
-        description="Scheduled move to the Free plan after a failed renewal payment or a cancellation.",
-    )
-    "Scheduled move to the Free plan after a failed renewal payment or a cancellation."
-    pending_tier_state: Optional[PendingTierState] = Field(
-        alias="pendingTierState",
-        description="Progress of subscription.pendingTier while subscription.pendingReason is downgrade.",
-    )
-    "Progress of subscription.pendingTier while subscription.pendingReason is downgrade."
 
 
 class BillingStatusDefaultCurrentTier(BaseModel):
@@ -1482,9 +1678,9 @@ class BillingStatusDefaultSubscription(BaseModel):
     pending_effective_at: Optional[datetime] = Field(alias="pendingEffectiveAt")
     pending_reason: Optional[str] = Field(
         alias="pendingReason",
-        description="Why pendingTier is set: downgrade (applies at pendingEffectiveAt; see\nBillingStatus.pendingTierState), tier_upgrade (a paid upgrade being\nconfirmed) or stripe_checkout (a checkout awaiting payment).",
+        description="Why pendingTier is set: downgrade (applies at pendingEffectiveAt; see\nBillingLifecycle.pendingTierState), tier_upgrade (a paid upgrade being\nconfirmed) or stripe_checkout (a checkout awaiting payment).",
     )
-    "Why pendingTier is set: downgrade (applies at pendingEffectiveAt; see\nBillingStatus.pendingTierState), tier_upgrade (a paid upgrade being\nconfirmed) or stripe_checkout (a checkout awaiting payment)."
+    "Why pendingTier is set: downgrade (applies at pendingEffectiveAt; see\nBillingLifecycle.pendingTierState), tier_upgrade (a paid upgrade being\nconfirmed) or stripe_checkout (a checkout awaiting payment)."
     presentment_currency: Any = Field(
         alias="presentmentCurrency",
         description="Currency the tenant is invoiced and charged in (EUR, USD, GBP), derived from the billing country. The prepaid ledger is always EUR.",
@@ -1859,51 +2055,6 @@ class BillingStatusDefaultInvoicePreviewLineItems(BaseModel):
         description="Bounded pricing dimensions such as codec, rendition, backend, or model."
     )
     "Bounded pricing dimensions such as codec, rendition, backend, or model."
-
-
-class BillingStatusDefaultOperatorGrant(BaseModel):
-    """A billing arrangement FrameWorks set up for an account. Only the terms the
-    account is billed under are shown."""
-
-    base_price: Optional[str] = Field(
-        alias="basePrice",
-        description="Monthly base fee in EUR in place of the plan's, as a decimal string. Null keeps the plan's fee.",
-    )
-    "Monthly base fee in EUR in place of the plan's, as a decimal string. Null keeps the plan's fee."
-    waive_usage: bool = Field(
-        alias="waiveUsage", description="Usage is metered and shown at zero cost."
-    )
-    "Usage is metered and shown at zero cost."
-    collection: str = Field(
-        description="How invoices are collected: provider (Stripe or Mollie) or invoice (FrameWorks sends invoices to pay by bank transfer)."
-    )
-    "How invoices are collected: provider (Stripe or Mollie) or invoice (FrameWorks sends invoices to pay by bank transfer)."
-    expires_at: Optional[datetime] = Field(
-        alias="expiresAt",
-        description="When the arrangement ends. Null runs until FrameWorks ends it.",
-    )
-    "When the arrangement ends. Null runs until FrameWorks ends it."
-    fallback_tier_name: Optional[str] = Field(
-        alias="fallbackTierName",
-        description="Plan the account returns to when the arrangement ends, when it is not the current plan.",
-    )
-    "Plan the account returns to when the arrangement ends, when it is not the current plan."
-
-
-class BillingStatusDefaultFreeFallback(BaseModel):
-    """A scheduled move to the Free plan."""
-
-    reason: FreeFallbackReason
-    at: datetime = Field(
-        description="When the move happens, or happened once stage is MOVED."
-    )
-    "When the move happens, or happened once stage is MOVED."
-    stage: FreeFallbackStage
-    provider_cancelled: bool = Field(
-        alias="providerCancelled",
-        description="The Stripe or Mollie subscription is cancelled, so no renewal follows.",
-    )
-    "The Stripe or Mollie subscription is cancelled, so no renewal follows."
 
 
 class BillingTierDefault(BaseModel):
@@ -19259,6 +19410,7 @@ AuthError.model_rebuild()
 AvailableClusterDefault.model_rebuild()
 BalanceTransactionDefault.model_rebuild()
 BillingDetailsDefault.model_rebuild()
+BillingLifecycleDefault.model_rebuild()
 BillingStatusDefault.model_rebuild()
 BillingTierDefault.model_rebuild()
 BootstrapEdgeResponseDefault.model_rebuild()
