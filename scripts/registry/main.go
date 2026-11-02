@@ -267,7 +267,11 @@ func main() {
 		die("load roadmap sections: %v", roadmapErr)
 	}
 	v.validateStatusFields(&reg, sections, loadMarketingRoutes(repoRoot), loadMarketingFigures(repoRoot))
-	v.checkMarketingStatusConsumers(repoRoot)
+	// The marketing sources are not generator inputs, so their literals gate
+	// verification only and never block regenerating the artifacts.
+	if checkOnly {
+		v.checkMarketingStatusConsumers(repoRoot)
+	}
 
 	// Cross-cutting check: any reachable GraphQL field must be wired to a
 	// real resolver. gqlgen can regenerate panic stubs when resolver method

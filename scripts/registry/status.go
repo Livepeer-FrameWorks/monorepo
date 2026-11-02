@@ -421,18 +421,52 @@ func renderStatusJSON(reg Registry) ([]byte, error) {
 	return append(buf, '\n'), nil
 }
 
-// Marketing files that import status.json are its consumers. In them, a
-// status value or tier label written as a literal would drift from the
-// registry, so the check rejects it; files that do not import the data yet
-// are not checked.
+// statusConsumers are the marketing files that show feature status. Each must
+// import status.json and hold no status value or tier label of its own, so
+// dropping the import fails the check instead of exempting the file.
+var statusConsumers = []string{
+	"website_marketing/src/components/pages/About.jsx",
+	"website_marketing/src/components/pages/Pricing.jsx",
+	"website_marketing/src/components/pages/Showcase.jsx",
+	"website_marketing/src/components/pages/StreamJourney.jsx",
+	"website_marketing/src/components/shared/StatusTag.jsx",
+}
+
+// siteConfigPath holds the showcase meta description. It names the tiers in
+// prose and cannot read status.json, so only the retired tier names are
+// rejected there.
+const siteConfigPath = "packages/site-config/index.ts"
+
 var (
 	marketingStatusImportRe  = regexp.MustCompile(`data/status\.json["']`)
 	marketingStatusLiteralRe = regexp.MustCompile(`\bstatus\s*[:=]\s*\{?\s*["'](available|expanding|planned|now|next|later|beta|pipeline|shipped|partial|roadmap)["']`)
 	// The tier labels plus the retired names they replaced.
-	tierLabelLiterals = []string{"Shipping today", "Up next", "Further out", "In the pipeline", "After that", "On the roadmap"}
+	tierLabelLiterals   = []string{"Shipping today", "Up next", "Further out", "In the pipeline", "After that", "On the roadmap"}
+	retiredTierProseRe  = regexp.MustCompile(`(?i)\b(in the pipeline|on the roadmap)\b`)
+	tierLabelOpenQuotes = []string{`"`, `'`, "`", ">"}
 )
 
 func (v *validator) checkMarketingStatusConsumers(repoRoot string) {
+	consumers := make(map[string]bool, len(statusConsumers))
+	for _, rel := range statusConsumers {
+		path := filepath.Join(repoRoot, filepath.FromSlash(rel))
+		consumers[path] = true
+		data, err := os.ReadFile(path)
+		if err != nil {
+			v.errf("%s: status consumer is missing: %v", rel, err)
+			continue
+		}
+		for _, msg := range statusConsumerErrors(string(data)) {
+			v.errf("%s: %s", rel, msg)
+		}
+	}
+	if data, err := os.ReadFile(filepath.Join(repoRoot, filepath.FromSlash(siteConfigPath))); err == nil {
+		for _, m := range retiredTierProseRe.FindAllString(string(data), -1) {
+			v.errf("%s: retired tier name %q; describe the tiers as Shipping today, Up next and Further out", siteConfigPath, m)
+		}
+	} else {
+		v.errf("%s: %v", siteConfigPath, err)
+	}
 	root := filepath.Join(repoRoot, "website_marketing", "src")
 	walkErr := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -449,11 +483,14 @@ func (v *validator) checkMarketingStatusConsumers(repoRoot string) {
 		default:
 			return nil
 		}
+		if consumers[path] {
+			return nil
+		}
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return err
 		}
-		for _, msg := range marketingStatusLiteralErrors(string(data)) {
+		for _, msg := range tierLabelErrors(string(data)) {
 			v.errf("%s: %s", relativeOrAbs(repoRoot, path), msg)
 		}
 		return nil
@@ -463,19 +500,33 @@ func (v *validator) checkMarketingStatusConsumers(repoRoot string) {
 	}
 }
 
-// marketingStatusLiteralErrors reports literal status values and tier labels
-// in a source file that imports status.json.
-func marketingStatusLiteralErrors(src string) []string {
-	if !marketingStatusImportRe.MatchString(src) {
-		return nil
-	}
+// statusConsumerErrors reports a missing status.json import, literal status
+// values and literal tier labels in a status consumer.
+func statusConsumerErrors(src string) []string {
 	var out []string
-	for _, m := range marketingStatusLiteralRe.FindAllStringSubmatch(src, -1) {
-		out = append(out, fmt.Sprintf("literal status %q; read the status from status.json", m[1]))
+	if !marketingStatusImportRe.MatchString(src) {
+		out = append(out, "does not import data/status.json; read statuses and tier labels from it")
 	}
+	seen := map[string]bool{}
+	for _, m := range marketingStatusLiteralRe.FindAllStringSubmatch(src, -1) {
+		if !seen[m[1]] {
+			seen[m[1]] = true
+			out = append(out, fmt.Sprintf("literal status %q; read the status from status.json", m[1]))
+		}
+	}
+	return append(out, tierLabelErrors(src)...)
+}
+
+// tierLabelErrors reports tier labels written as literals: a string or JSX
+// text that is a label or starts with one ("In the pipeline: ...").
+func tierLabelErrors(src string) []string {
+	var out []string
 	for _, label := range tierLabelLiterals {
-		if strings.Contains(src, `"`+label+`"`) || strings.Contains(src, ">"+label+"<") {
-			out = append(out, fmt.Sprintf("literal tier label %q; use tiers[].label or features[id].tag from status.json", label))
+		for _, open := range tierLabelOpenQuotes {
+			if strings.Contains(src, open+label) {
+				out = append(out, fmt.Sprintf("literal tier label %q; use tiers[].label or features[id].tag from status.json", label))
+				break
+			}
 		}
 	}
 	return out

@@ -196,25 +196,78 @@ func TestRenderStatusJSONShape(t *testing.T) {
 	}
 }
 
-func TestMarketingStatusLiteralErrorsOnlyInConsumers(t *testing.T) {
+func TestStatusConsumerErrors(t *testing.T) {
 	literal := `const items = [{ label: "SCTE-35", status: "expanding" }];
-const group = { eyebrow: "In the pipeline" };`
-	if errs := marketingStatusLiteralErrors(literal); errs != nil {
-		t.Fatalf("file that does not import status.json was checked: %v", errs)
-	}
-	consumer := `import status from "@/data/status.json";
-` + literal
-	joined := strings.Join(marketingStatusLiteralErrors(consumer), "\n")
-	for _, want := range []string{`literal status "expanding"`, `literal tier label "In the pipeline"`} {
+const group = { eyebrow: "In the pipeline" };
+const note = "On the roadmap: planned, with no date yet.";`
+	joined := strings.Join(statusConsumerErrors(literal), "\n")
+	for _, want := range []string{"does not import data/status.json", `literal status "expanding"`, `literal tier label "In the pipeline"`, `literal tier label "On the roadmap"`} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("missing %q in:\n%s", want, joined)
 		}
 	}
+	withImport := strings.Join(statusConsumerErrors(`import status from "@/data/status.json";
+`+literal), "\n")
+	if strings.Contains(withImport, "does not import") || !strings.Contains(withImport, `literal status "expanding"`) {
+		t.Fatalf("an import must not exempt literals:\n%s", withImport)
+	}
 	clean := `import status from "../../data/status.json";
 const tag = status.features["scte35-cues"].tag;
 const heading = status.tiers[0].label;`
-	if errs := marketingStatusLiteralErrors(clean); len(errs) != 0 {
+	if errs := statusConsumerErrors(clean); len(errs) != 0 {
 		t.Fatalf("data-driven consumer rejected: %v", errs)
+	}
+}
+
+func TestCheckMarketingStatusConsumers(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel, body string) {
+		t.Helper()
+		p := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	clean := `import status from "@/data/status.json";
+export const tag = status.features.streams.tag;`
+	for _, rel := range statusConsumers {
+		write(rel, clean)
+	}
+	write(siteConfigPath, `description: "What ships today, what is up next, and what is further out.",`)
+	write("website_marketing/src/components/pages/LandingPage.jsx", `<p>Your account moves to Free after that.</p>`)
+
+	check := func() string {
+		v := &validator{repoRoot: root}
+		v.checkMarketingStatusConsumers(root)
+		return strings.Join(v.errors, "\n")
+	}
+	if got := check(); got != "" {
+		t.Fatalf("data-driven marketing sources rejected:\n%s", got)
+	}
+
+	write(statusConsumers[0], `export const label = "Pipeline";`)
+	write("website_marketing/src/components/pages/LandingPage.jsx", `<span>Shipping today</span>`)
+	write(siteConfigPath, `description: "What is in the pipeline, and what is further out on the roadmap.",`)
+	got := check()
+	for _, want := range []string{
+		statusConsumers[0] + ": does not import data/status.json",
+		`LandingPage.jsx: literal tier label "Shipping today"`,
+		siteConfigPath + `: retired tier name "in the pipeline"`,
+		siteConfigPath + `: retired tier name "on the roadmap"`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	}
+
+	if err := os.Remove(filepath.Join(root, filepath.FromSlash(statusConsumers[1]))); err != nil {
+		t.Fatal(err)
+	}
+	if got := check(); !strings.Contains(got, statusConsumers[1]+": status consumer is missing") {
+		t.Fatalf("a removed consumer was not reported:\n%s", got)
 	}
 }
 
