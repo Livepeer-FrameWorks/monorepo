@@ -1827,11 +1827,11 @@ https://logbook.frameworks.network/blog/showcase-what-ships-today
 
 An event team has a product launch in six weeks. They need a presenter on camera with slides beside them, the stream on their own site and on YouTube, and a recording afterwards. Later in the year, they would like to switch between remote guests from a control room. They open a video platform's website to find out which of those things they can do today. Most feature pages make that hard to answer, because a shipped feature and a planned one read the same.
 
-Ours had that problem too. We have replaced the guesswork with a [showcase page](https://frameworks.network/showcase) that sorts FrameWorks into three groups: on the platform today, coming next, and further down the road.
+Ours had that problem too. We have replaced the guesswork with a [showcase page](https://frameworks.network/showcase) that sorts FrameWorks into three groups: shipping today, up next, and further out.
 
 ## What you can use today
 
-The first group is what a customer can sign up for and use now: live delivery on our own media server, multistreaming, recording, clips, VOD, player SDKs, your own edge clusters, incidents and alerting, and access for AI agents through the MCP server.
+The first group, shipping today, is what a customer can sign up for and use now. It includes live delivery on our own media server, multistreaming, recording, clips, VOD, player SDKs, your own edge clusters, incidents and alerting, and access for AI agents through the MCP server.
 
 Take the event team. The presenter opens the Go Live page in the dashboard, adds a camera and shares the slide window, and chooses a picture-in-picture layout. The browser mixes those sources and publishes one stream to FrameWorks. From there it is an ordinary stream, so the embedded player, the YouTube destination, and the recording work the same way they do for a stream from OBS or a hardware encoder. Nobody on the team installs an encoder.
 
@@ -1843,13 +1843,13 @@ StreamCrafter is the name for all of this: mixing in the browser today, and prod
 
 The browser studio is marked beta on the showcase page for a clear reason. You can go live with it today, and the SDK will change substantially as cloud production arrives. If you build it into your own application now, expect breaking changes. If you use it from the dashboard, those SDK changes are ours to absorb.
 
-## What is coming next, and what isn't ready
+## What is up next, and what isn't ready
 
-The second group is work that is next on the roadmap and that you can't use in production yet: StreamCrafter cloud production, teams and roles, guests and chat, rooms, server-side ad insertion, live AI processing, DRM, and device discovery. Cloud production is the one the event team was asking about. It will mix and switch live sources on the server, so the show no longer depends on one presenter's computer.
+The second group, up next, is work that is next on the roadmap and that you can't use in production yet: StreamCrafter cloud production with server-side ad insertion, teams and roles, DRM, live AI processing, device discovery and contribution inputs, built-in password and geo rules for playback, scheduled recordings, remote guests, rooms and chat, and live commerce. Cloud production is the one the event team was asking about. It will mix and switch live sources on the server, so the show no longer depends on one presenter's computer.
 
 Guests are in that group too. They come after teams and server-side composition, because they depend on both. That means the event team's control room with remote guests isn't something we can offer today, and the page says that.
 
-The third group, further down the road, is planned work that follows: SDKs in more languages, per-stream balances for paywalls and pay-per-view, and mobile apps. We publish no dates for either group.
+The third group, further out, is planned work that follows: standalone object and block storage, per-stream balances for paywalls and pay-per-view, SDKs in more languages, and mobile apps with an integrated help center. We publish no dates for either group.
 
 If you need something from these groups sooner, tell us. It changes what we build next.
 
@@ -1954,7 +1954,7 @@ Operators can find the setup details in [mesh networking](/operators/mesh-bootst
 
 
 ---
-# StreamCrafter Now Produces a Show, Not Just a Camera Feed
+# StreamCrafter Adds a Producer Panel to Browser Broadcasts
 https://logbook.frameworks.network/blog/streamcrafter-browser-production
 
 Until this release, going live from the FrameWorks dashboard meant one camera, an optional screen share and a layout picker. That works for a stand-up or a quick demo. It stops working when someone wants a title card before the show starts, a logo in the corner, a second camera, or a clip played in the middle. For those, people went back to OBS, and the browser studio was not the tool they produced the show in.
@@ -1977,7 +1977,7 @@ The whole studio loads as a page asset. We built the drop-in web component from 
 
 The same panel ships in the React, Svelte and web component packages, and it is on by default in each of them. An application that embeds StreamCrafter gets the producer tools without a flag, and turns the panel off only if it doesn't want them. Where the browser can't do something, such as playing a file into the stream or sharing a screen, the button is turned off and says why.
 
-The studio no longer records in the browser. FrameWorks records the stream on the server instead, so a recording no longer depends on the presenter's disk or on the tab staying open after the show.
+The studio no longer records in the browser. Turn on recording for the stream and FrameWorks records it on the server, so a recording no longer depends on the presenter's disk or on the tab staying open after the show.
 
 ## What it doesn't do yet
 
@@ -2062,7 +2062,7 @@ Webhook signing uses [Standard Webhooks](/builders/webhooks) rather than Studio'
 header, so a receiver needs a new verification step, which existing libraries cover. Retries run for
 about three days instead of one. There is no Task API, no per-stream transcode profiles, and no
 `creatorId` or `userTags` on streams yet. The
-[gap list](/migrate/livepeer-studio#whats-up-next-and-whats-not-on-the-roadmap) in the migration guide
+[gap list](/migrate/livepeer-studio#whats-up-next-and-whats-not-planned) in the migration guide
 tracks what is still missing, and the [playback access guide](/builders/playback-access-control)
 covers webhook policies and allowed origins.
 
@@ -25954,7 +25954,14 @@ FrameWorks centers on **live streaming** — RTMP, E-RTMP, SRT, WHIP, and pull-i
 - **What stays:** HLS and MPEG-DASH delivery · MP4 progressive download · resumable / direct-to-S3 uploads · token-style playback access control · custom player branding · webhook-style callbacks for access decisions.
 - **What changes:** REST → GraphQL · API key → developer token (or wallet/x402 for agents) · iframe embed → `<fw-player>` Web Component or framework packages · processing-status webhooks → named-event webhooks with Standard Webhooks signatures (or the `tenantEvents` subscription) · Bunny signed URL tokens → ES256 JWT signing keys delivered via `?jwt=` · per-region replication knob → cluster placement.
 - **What you gain:** RTMP, E-RTMP, SRT, WHIP push ingest · pull-input from RTSP, SRT, RIST, HLS, DTSC, MPEG-TS · DVR with time-shift · clip API · multistream to Twitch, YouTube, Facebook, Kick, X, custom RTMP/SRT · LL-HLS, DASH, WHEP/WebRTC, MP4, WebSocket playback · sprite-sheet seek previews · provider-operated cross-cluster federation · managed hybrid edges · agent-first surface (MCP, wallet auth, x402) · Skipper.
-- **What's not yet at parity:** DRM (FairPlay/Widevine/PlayReady in development) · automatic chapter generation and transcription/caption auto-generation · view-level QoE across third-party players (per-asset retention/heatmaps ship for the FrameWorks player) · per-region replication knob · iframe-embed-as-a-product · official PHP/C#/Java SDKs (TypeScript, Go, and Python ship) · one-shot bulk library import · watermarking as a managed feature.
+- **What's up next:** DRM · generated captions through Live AI Processing · managed watermarking
+  through server-side composition.
+- **Available today, working differently:** view-level QoE ships for the FrameWorks player, while
+  QoE from third-party players is still ahead · cluster placement instead of a region replication
+  slider · `<fw-player>` and the framework packages instead of a managed iframe embed.
+- **Later, on the roadmap:** PHP, C#, and Java SDKs. TypeScript, Go, and Python ship.
+- **Not planned:** a one-shot library import · VOD metadata edits after upload · automatic
+  chapters and generated titles. See [what's up next](#whats-up-next-and-whats-not-planned).
 - **What FrameWorks does not replace:** Bunny CDN (general HTTP CDN), Bunny Edge Storage (general object / block storage), Bunny DNS, Bunny Optimizer (image), Magic Containers (edge compute), Bunny Shield (DDoS / WAF). Those are Bunny's broader edge platform — keep them. FrameWorks has adjacent infrastructure work on the [roadmap](/roadmap), but this migration guide is about moving the video workload.
 
 <Aside type="caution" title="Read before cutting over production traffic">
@@ -26250,7 +26257,7 @@ Bunny is the better choice for:
 - **Native iOS (Swift) and Android (Kotlin) SDKs** for app developers.
 - **Bundled adjacent products** — Storage, DNS, Optimizer, Shield, Magic Containers in one account.
 
-## What's up next, and what's not on the roadmap
+## What's up next, and what's not planned
 
 The statuses come from the [roadmap](/roadmap), which shows relative order, not dates. None of
 the up-next items are available today.
@@ -26260,8 +26267,7 @@ the up-next items are available today.
 - **[DRM](/roadmap#drm).** FairPlay, Widevine, and PlayReady are in development. Landing it
   unblocks the catalogs you protect with MediaCage today; until then, keep DRM titles on Bunny.
 - **[Live AI Processing](/roadmap#live-ai-processing).** Brings transcription on the media edge,
-  which unblocks generated captions in place of Transcribe AI. Automatic chapters and generated
-  titles build on the same layer.
+  which unblocks generated captions in place of Transcribe AI.
 - **[Composition and SSAI](/roadmap#composition-and-ssai).** Adds server-side logos, watermarks,
   and lower thirds, which unblocks watermarking as a managed feature. Today, a watermark needs a
   custom transcode profile on a dedicated or self-hosted cluster, or StreamCrafter's overlays in
@@ -26283,13 +26289,15 @@ the up-next items are available today.
   [SDKs](/builders/sdks) ship. For PHP, C#, and Java, use GraphQL codegen against the public
   schema and a Standard Webhooks library until generated SDKs land.
 
-### Not on the roadmap
+### Not planned
 
 - **Bulk library import.** `importVodAsset` covers `POST /fetch` one video at a time; there is no
   one-shot Bunny library importer. [Open an in-app ticket](https://chartroom.frameworks.network/support) for sizeable
   libraries so we can scope the move.
 - **VOD metadata edits.** Title and description are set on `createVodUpload`; there is no
   `updateVodAsset` mutation.
+- **Automatic chapters and generated titles.** Bunny generates these with its AI features;
+  FrameWorks has no equivalent planned.
 
 ## Beta and tricky bits
 
@@ -27375,9 +27383,12 @@ Livepeer Studio is a hosted Livepeer gateway; FrameWorks is another gateway on t
 - **What stays:** RTMP and WHIP ingest, HLS and WebRTC playback, multistream targets, clips, recordings.
 - **What changes:** REST → GraphQL · API key → JWT or developer token · Studio webhooks → FrameWorks webhooks with Standard Webhooks signatures and [mapped event names](#real-time-events) (or the `tenantEvents` subscription) · playback access policies are recreated with FrameWorks signing keys or webhooks · `@livepeer/react` → `@livepeer-frameworks/player-*`.
 - **Capabilities to evaluate:** E-RTMP ingest (HEVC/AV1 contribution over RTMP) · SRT ingest · LL-HLS/DASH delivery · sprite-sheet seek previews · AV1 in the codec list · self-hosting / hybrid options · MCP, wallet auth, and x402 for agents · Skipper · experimental device-discovery productization.
-- **What's not yet at parity:** AI Pipelines and C2PA signing. TypeScript, Go, and Python
+- **What's up next:** Live AI Processing for detection, segmentation, and transcription on the
+  media edge.
+- **Not planned:** live video-to-video · C2PA signing · a whole-library importer · per-stream
+  transcode profiles · RTMP and FLV pull sources. TypeScript, Go, and Python
   [SDKs](/builders/sdks) ship. See
-  [the gap list](#whats-up-next-and-whats-not-on-the-roadmap) before planning a production cutover.
+  [what's up next](#whats-up-next-and-whats-not-planned) before planning a production cutover.
 
 <Aside type="caution" title="Read before cutting over production traffic">
   Production-grade items still in motion: published billing rates, hybrid-edge runbooks, DRM, and
@@ -27697,7 +27708,7 @@ Run a low-traffic test stream through both platforms in parallel for a day. Watc
 - **Skipper** — an in-product AI consultant for API discovery and diagnostics. Reach it from the dashboard, the docs (`⌘J`), or MCP.
 - **Player packages** for React, Svelte, Web Components, and vanilla JS.
 
-## What's up next, and what's not on the roadmap
+## What's up next, and what's not planned
 
 The statuses come from the [roadmap](/roadmap), which shows relative order, not dates. None of
 the up-next items are available today.
@@ -27706,11 +27717,11 @@ the up-next items are available today.
 
 - **[Live AI Processing](/roadmap#live-ai-processing).** Runs models such as YOLO detection and
   Parakeet transcription on the media edge, with heavy models deferred to Livepeer compute.
-  Landing it unblocks the workloads Studio's AI Pipelines covered, such as ASR, segmentation and
-  live video-to-video. Until then, keep AI workloads on [Daydream](https://daydream.live/) or your
+  Landing it unblocks the detection, segmentation and transcription workloads that Studio's AI
+  Pipelines covered. Live video-to-video is not part of it. Until then, keep AI workloads on [Daydream](https://daydream.live/) or your
   existing Livepeer surfaces.
 
-### Not on the roadmap
+### Not planned
 
 - **C2PA signing and creator-ID provenance on transcode** — not exposed as a public FrameWorks API
   today.
@@ -28124,9 +28135,15 @@ worth keeping during the cut-over.
   HLS / DTSC / MKV / TS-over-UDP) · 24/7 streams with no 12-hour disconnect · AV1 in delivery ·
   sprite-sheet seek previews (≈ Mux storyboard) · self-hosting and hybrid hosting · MCP, wallet
   auth, and x402 for agents · Skipper · experimental device-discovery productization.
-- **What's not yet at parity:** Mux Data-class QoE breadth — FrameWorks now has first-party view-level QoE (rebuffering, frame drops, startup, VOD retention) for its own player, but cross-player coverage and ad observability are still maturing · DRM · live auto-captions · productized custom-domain SKU · number of official server-side SDKs (Mux ships Node/Python/Ruby/Go/PHP/Elixir/
-  Java/.NET; FrameWorks ships TypeScript, Go, and Python) · built-in referrer/UA playback restrictions as a no-code policy · Master Access download. See [what is up next](#whats-up-next-and-whats-not-on-the-roadmap) before
-  cutting over production traffic.
+- **What's up next:** DRM · live auto-captions through Live AI Processing · built-in password
+  and geo rules on a stream.
+- **Available today, working differently:** view-level QoE ships for the FrameWorks player, while
+  QoE from third-party players is still ahead · custom domains follow the plan's entitlement ·
+  referrer and user-agent restrictions go through the webhook playback policy.
+- **Later, on the roadmap:** more server-side SDK languages. FrameWorks ships TypeScript, Go, and
+  Python; Mux also covers Ruby, PHP, Elixir, Java, and .NET.
+- **Not planned:** Master Access download · frame-accurate clip trimming. See
+  [what's up next](#whats-up-next-and-whats-not-planned) before cutting over production traffic.
 
 <Aside type="caution" title="Read before cutting over production traffic">
   Production-grade items still in motion: published billing rates, hybrid-edge runbooks, DRM, and
@@ -28457,7 +28474,7 @@ over once you trust the numbers.
   the dashboard, the docs (`⌘J`), or MCP.
 - **Player packages** for React, Svelte, Web Components, and vanilla JS.
 
-## What's up next, and what's not on the roadmap
+## What's up next, and what's not planned
 
 Mux ships several things FrameWorks doesn't have a one-for-one answer for yet. Check which of
 these you depend on before cutting over. The statuses come from the [roadmap](/roadmap), which
@@ -28469,8 +28486,7 @@ shows relative order, not dates. None of the up-next items are available today.
   unblocks premium catalogs that Mux protects with productized DRM today; until then, keep those
   titles on their current provider.
 - **[Live AI Processing](/roadmap#live-ai-processing).** Brings live transcription on the media
-  edge, which unblocks the live auto-captions Mux ships today. Caption tracks and their
-  lifecycle webhooks follow with it.
+  edge, which unblocks the live auto-captions Mux ships today.
 - **[Built-In Password and Geo Rules](/roadmap#built-in-password-and-geo-rules).** Turns
   password and country rules into switches on a stream. Referrer and user-agent restrictions
   still go through the [webhook playback policy](/builders/playback-access-control), which can
@@ -28482,7 +28498,7 @@ shows relative order, not dates. None of the up-next items are available today.
   reports rebuffering ratio, frame drops, time to first frame, rendition switches,
   exit-before-start, and per-asset VOD retention at `/analytics/qoe`. Mux Data's breadth is not
   matched yet: QoE from third-party players (Video.js, hls.js, Shaka, native HTML5, Roku,
-  Chromecast) and ad observability are still ahead. If your dashboards depend on those, weigh the
+  Chromecast) is still ahead, and ad observability is not covered. If your dashboards depend on those, weigh the
   gap before cutting over.
 - **Custom domains.** Platform subdomains and your own domains are tied to the plan's
   entitlement. A downgrade removes the served DNS and TLS state and keeps the requested name for
@@ -28495,7 +28511,7 @@ shows relative order, not dates. None of the up-next items are available today.
   packages. Mux also covers Ruby, PHP, Elixir, Java, and .NET; for those, use GraphQL codegen
   against the public schema until generated SDKs land.
 
-### Not on the roadmap
+### Not planned
 
 - **Master Access.** There is no downloadable copy of the original upload.
 - **Frame-accurate clip trimming.** Clips are GOP-aligned. Mux offers frame-accurate asset
