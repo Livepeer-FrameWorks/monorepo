@@ -659,6 +659,9 @@ func tierDowngradeProviderCases() []providerReservationCase {
 		{"RepeatDowngradeRestoresTheCurrentPrice", TestRepeatDowngradeRestoresTheCurrentPrice_RealPG},
 		{"RepeatMollieDowngradeRestoresTheCurrentAmount", TestRepeatMollieDowngradeRestoresTheCurrentAmount_RealPG},
 		{"HeldConfirmedDowngradesAreCounted", TestHeldConfirmedDowngradesAreCounted_RealPG},
+		{"HeldConfirmedDowngradesAreListed", TestHeldConfirmedDowngradesAreListed_RealPG},
+		{"HeldDowngradeRecoveryFinalizesTheHeldInvoice", TestHeldDowngradeRecoveryFinalizesTheHeldInvoice_RealPG},
+		{"HeldDowngradeRecoveryReportsAPricingRefusal", TestHeldDowngradeRecoveryReportsAPricingRefusal_RealPG},
 	}
 }
 

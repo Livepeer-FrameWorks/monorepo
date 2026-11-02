@@ -68,6 +68,12 @@ func (s *PurserServer) AdminListCheckoutRecovery(ctx context.Context, r *purserp
 		}
 		out.Items = append(out.Items, item)
 	}
+	if r.GetOffset() == 0 {
+		out.HeldDowngrades, err = s.listHeldTierDowngrades(ctx, r.GetTenantId(), limit)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "read held downgrades: %v", err)
+		}
+	}
 	return out, nil
 }
 

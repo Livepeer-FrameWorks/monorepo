@@ -841,3 +841,8 @@ func (c *GRPCClient) AdminRetainDeliveredCheckout(ctx context.Context, r *purser
 func (c *GRPCClient) AdminRecoverTierUpgrade(ctx context.Context, r *purserpb.AdminRecoverTierUpgradeRequest) (*purserpb.AdminRecoverTierUpgradeResponse, error) {
 	return c.prepaid.AdminRecoverTierUpgrade(ctx, r)
 }
+
+// AdminRecoverTierDowngrade previews or releases one tenant's held downgrade.
+func (c *GRPCClient) AdminRecoverTierDowngrade(ctx context.Context, r *purserpb.AdminRecoverTierDowngradeRequest) (*purserpb.AdminRecoverTierDowngradeResponse, error) {
+	return c.prepaid.AdminRecoverTierDowngrade(ctx, r)
+}

@@ -2036,6 +2036,7 @@ const (
 	PrepaidService_AdminRecoverCheckout_FullMethodName          = "/purser.PrepaidService/AdminRecoverCheckout"
 	PrepaidService_AdminRetainDeliveredCheckout_FullMethodName  = "/purser.PrepaidService/AdminRetainDeliveredCheckout"
 	PrepaidService_AdminRecoverTierUpgrade_FullMethodName       = "/purser.PrepaidService/AdminRecoverTierUpgrade"
+	PrepaidService_AdminRecoverTierDowngrade_FullMethodName     = "/purser.PrepaidService/AdminRecoverTierDowngrade"
 	PrepaidService_AdminResendFreeFallbackNotice_FullMethodName = "/purser.PrepaidService/AdminResendFreeFallbackNotice"
 	PrepaidService_AdminSetBillingGrant_FullMethodName          = "/purser.PrepaidService/AdminSetBillingGrant"
 	PrepaidService_AdminGetBillingGrant_FullMethodName          = "/purser.PrepaidService/AdminGetBillingGrant"
@@ -2110,6 +2111,10 @@ type PrepaidServiceClient interface {
 	AdminRetainDeliveredCheckout(ctx context.Context, in *AdminRecoverCheckoutRequest, opts ...grpc.CallOption) (*AdminRecoverCheckoutResponse, error)
 	// Inspect a paid upgrade or cancel its unapplied request without starting a purchase.
 	AdminRecoverTierUpgrade(ctx context.Context, in *AdminRecoverTierUpgradeRequest, opts ...grpc.CallOption) (*AdminRecoverTierUpgradeResponse, error)
+	// Previews a downgrade past its effective time that has not applied; confirmed
+	// requests close the held period again and apply the downgrade when nothing
+	// still holds it. Platform operators only.
+	AdminRecoverTierDowngrade(ctx context.Context, in *AdminRecoverTierDowngradeRequest, opts ...grpc.CallOption) (*AdminRecoverTierDowngradeResponse, error)
 	// Requeues an abandoned fallback email without changing billing or recovering a purchase.
 	AdminResendFreeFallbackNotice(ctx context.Context, in *AdminResendFreeFallbackNoticeRequest, opts ...grpc.CallOption) (*AdminResendFreeFallbackNoticeResponse, error)
 	// Operator billing arrangement for one tenant: a base fee in place of the
@@ -2349,6 +2354,16 @@ func (c *prepaidServiceClient) AdminRecoverTierUpgrade(ctx context.Context, in *
 	return out, nil
 }
 
+func (c *prepaidServiceClient) AdminRecoverTierDowngrade(ctx context.Context, in *AdminRecoverTierDowngradeRequest, opts ...grpc.CallOption) (*AdminRecoverTierDowngradeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AdminRecoverTierDowngradeResponse)
+	err := c.cc.Invoke(ctx, PrepaidService_AdminRecoverTierDowngrade_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *prepaidServiceClient) AdminResendFreeFallbackNotice(ctx context.Context, in *AdminResendFreeFallbackNoticeRequest, opts ...grpc.CallOption) (*AdminResendFreeFallbackNoticeResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(AdminResendFreeFallbackNoticeResponse)
@@ -2484,6 +2499,10 @@ type PrepaidServiceServer interface {
 	AdminRetainDeliveredCheckout(context.Context, *AdminRecoverCheckoutRequest) (*AdminRecoverCheckoutResponse, error)
 	// Inspect a paid upgrade or cancel its unapplied request without starting a purchase.
 	AdminRecoverTierUpgrade(context.Context, *AdminRecoverTierUpgradeRequest) (*AdminRecoverTierUpgradeResponse, error)
+	// Previews a downgrade past its effective time that has not applied; confirmed
+	// requests close the held period again and apply the downgrade when nothing
+	// still holds it. Platform operators only.
+	AdminRecoverTierDowngrade(context.Context, *AdminRecoverTierDowngradeRequest) (*AdminRecoverTierDowngradeResponse, error)
 	// Requeues an abandoned fallback email without changing billing or recovering a purchase.
 	AdminResendFreeFallbackNotice(context.Context, *AdminResendFreeFallbackNoticeRequest) (*AdminResendFreeFallbackNoticeResponse, error)
 	// Operator billing arrangement for one tenant: a base fee in place of the
@@ -2575,6 +2594,9 @@ func (UnimplementedPrepaidServiceServer) AdminRetainDeliveredCheckout(context.Co
 }
 func (UnimplementedPrepaidServiceServer) AdminRecoverTierUpgrade(context.Context, *AdminRecoverTierUpgradeRequest) (*AdminRecoverTierUpgradeResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method AdminRecoverTierUpgrade not implemented")
+}
+func (UnimplementedPrepaidServiceServer) AdminRecoverTierDowngrade(context.Context, *AdminRecoverTierDowngradeRequest) (*AdminRecoverTierDowngradeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AdminRecoverTierDowngrade not implemented")
 }
 func (UnimplementedPrepaidServiceServer) AdminResendFreeFallbackNotice(context.Context, *AdminResendFreeFallbackNoticeRequest) (*AdminResendFreeFallbackNoticeResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method AdminResendFreeFallbackNotice not implemented")
@@ -2996,6 +3018,24 @@ func _PrepaidService_AdminRecoverTierUpgrade_Handler(srv interface{}, ctx contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PrepaidService_AdminRecoverTierDowngrade_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AdminRecoverTierDowngradeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PrepaidServiceServer).AdminRecoverTierDowngrade(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PrepaidService_AdminRecoverTierDowngrade_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PrepaidServiceServer).AdminRecoverTierDowngrade(ctx, req.(*AdminRecoverTierDowngradeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _PrepaidService_AdminResendFreeFallbackNotice_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(AdminResendFreeFallbackNoticeRequest)
 	if err := dec(in); err != nil {
@@ -3212,6 +3252,10 @@ var PrepaidService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "AdminRecoverTierUpgrade",
 			Handler:    _PrepaidService_AdminRecoverTierUpgrade_Handler,
+		},
+		{
+			MethodName: "AdminRecoverTierDowngrade",
+			Handler:    _PrepaidService_AdminRecoverTierDowngrade_Handler,
 		},
 		{
 			MethodName: "AdminResendFreeFallbackNotice",

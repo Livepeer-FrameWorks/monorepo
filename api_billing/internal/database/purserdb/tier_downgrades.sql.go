@@ -8,6 +8,7 @@ package purserdb
 import (
 	"context"
 	"database/sql"
+	"time"
 )
 
 const cancelTenantTierDowngrade = `-- name: CancelTenantTierDowngrade :execrows
@@ -211,6 +212,59 @@ func (q *Queries) GetStripeRenewalTierFence(ctx context.Context, tenantID string
 	return i, err
 }
 
+const getTierDowngradeHold = `-- name: GetTierDowngradeHold :one
+SELECT subscription.tenant_id::text AS tenant_id,
+       target.id::text AS target_tier_id,
+       target.tier_name::text AS target_tier_name,
+       subscription.pending_effective_at::timestamptz AS effective_at,
+       (subscription.pending_provider_tier_id IS NOT DISTINCT FROM subscription.pending_tier_id
+        OR (NULLIF(subscription.stripe_subscription_id, '') IS NULL
+            AND NULLIF(subscription.mollie_subscription_id, '') IS NULL))::boolean AS provider_confirmed,
+       COALESCE(closing.id::text, '')::text AS invoice_id,
+       COALESCE(closing.status, '')::text AS invoice_status
+FROM purser.tenant_subscriptions subscription
+JOIN purser.billing_tiers target ON target.id = subscription.pending_tier_id
+LEFT JOIN LATERAL (
+    SELECT invoice.id, invoice.status
+    FROM purser.billing_invoices invoice
+    WHERE invoice.tenant_id = subscription.tenant_id
+      AND invoice.period_end = subscription.pending_effective_at
+    ORDER BY (invoice.status IN ('draft', 'manual_review')), invoice.created_at DESC
+    LIMIT 1
+) closing ON TRUE
+WHERE subscription.tenant_id = $1::text::uuid
+  AND subscription.pending_reason = 'downgrade'
+  AND subscription.pending_effective_at <= NOW()
+`
+
+type GetTierDowngradeHoldRow struct {
+	TenantID          string    `db:"tenant_id" json:"tenant_id"`
+	TargetTierID      string    `db:"target_tier_id" json:"target_tier_id"`
+	TargetTierName    string    `db:"target_tier_name" json:"target_tier_name"`
+	EffectiveAt       time.Time `db:"effective_at" json:"effective_at"`
+	ProviderConfirmed bool      `db:"provider_confirmed" json:"provider_confirmed"`
+	InvoiceID         string    `db:"invoice_id" json:"invoice_id"`
+	InvoiceStatus     string    `db:"invoice_status" json:"invoice_status"`
+}
+
+// A downgrade past its effective time that has not applied, with the invoice
+// closing the period it waits on. A finalized invoice sorts first because the
+// applier runs once one exists.
+func (q *Queries) GetTierDowngradeHold(ctx context.Context, tenantID string) (GetTierDowngradeHoldRow, error) {
+	row := q.db.QueryRowContext(ctx, getTierDowngradeHold, tenantID)
+	var i GetTierDowngradeHoldRow
+	err := row.Scan(
+		&i.TenantID,
+		&i.TargetTierID,
+		&i.TargetTierName,
+		&i.EffectiveAt,
+		&i.ProviderConfirmed,
+		&i.InvoiceID,
+		&i.InvoiceStatus,
+	)
+	return i, err
+}
+
 const hasUnfinishedProviderTierSync = `-- name: HasUnfinishedProviderTierSync :one
 SELECT EXISTS (
     SELECT 1 FROM purser.provider_webhook_inbox inbox
@@ -244,4 +298,47 @@ func (q *Queries) IsConfirmedDowngradeDue(ctx context.Context, tenantID string) 
 	var due bool
 	err := row.Scan(&due)
 	return due, err
+}
+
+const listHeldTierDowngrades = `-- name: ListHeldTierDowngrades :many
+SELECT subscription.tenant_id::text AS tenant_id
+FROM purser.tenant_subscriptions subscription
+WHERE subscription.pending_tier_id IS NOT NULL
+  AND subscription.pending_reason = 'downgrade'
+  AND subscription.pending_provider_tier_id = subscription.pending_tier_id
+  AND subscription.pending_effective_at < NOW() - ($1::bigint * INTERVAL '1 second')
+  AND ($2::text = '' OR subscription.tenant_id = NULLIF($2::text, '')::uuid)
+ORDER BY subscription.pending_effective_at, subscription.tenant_id
+LIMIT $3::bigint
+`
+
+type ListHeldTierDowngradesParams struct {
+	GraceSeconds int64  `db:"grace_seconds" json:"grace_seconds"`
+	TenantID     string `db:"tenant_id" json:"tenant_id"`
+	RowLimit     int64  `db:"row_limit" json:"row_limit"`
+}
+
+// The rows CountHeldConfirmedDowngrades counts, so recovery list names each
+// tenant behind PurserTierDowngradeHeld.
+func (q *Queries) ListHeldTierDowngrades(ctx context.Context, arg ListHeldTierDowngradesParams) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listHeldTierDowngrades, arg.GraceSeconds, arg.TenantID, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var tenant_id string
+		if err := rows.Scan(&tenant_id); err != nil {
+			return nil, err
+		}
+		items = append(items, tenant_id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }

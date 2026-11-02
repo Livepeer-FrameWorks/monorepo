@@ -64,6 +64,9 @@ type Service struct {
 	// chargeTierUpgradeInvoice starts collection after the upgrade and its credit commit.
 	chargeTierUpgradeInvoice   func(context.Context, string, string, time.Time) error
 	stopSuspendedTenantStreams func(context.Context, string) error
+	// recoverHeldDowngrade is the JobManager's one-tenant period close and
+	// downgrade applier, set by NewJobManager.
+	recoverHeldDowngrade func(context.Context, string) error
 }
 
 // SetTenantEntitlementConverger wires the post-commit repair used by webhook

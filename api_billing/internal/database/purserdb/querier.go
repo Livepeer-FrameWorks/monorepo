@@ -494,6 +494,10 @@ type Querier interface {
 	GetTenantStripeSubscriptionID(ctx context.Context, tenantID string) (sql.NullString, error)
 	GetTenantSubscriptionTierID(ctx context.Context, tenantID string) (string, error)
 	GetTierByNameForOperatorAssignment(ctx context.Context, tierName string) (GetTierByNameForOperatorAssignmentRow, error)
+	// A downgrade past its effective time that has not applied, with the invoice
+	// closing the period it waits on. A finalized invoice sorts first because the
+	// applier runs once one exists.
+	GetTierDowngradeHold(ctx context.Context, tenantID string) (GetTierDowngradeHoldRow, error)
 	GetTierForBillingChange(ctx context.Context, tierID string) (GetTierForBillingChangeRow, error)
 	GetTierUpgrade(ctx context.Context, arg GetTierUpgradeParams) (GetTierUpgradeRow, error)
 	GetTierUpgradeInvoice(ctx context.Context, arg GetTierUpgradeInvoiceParams) (GetTierUpgradeInvoiceRow, error)
@@ -641,6 +645,9 @@ type Querier interface {
 	ListExpiredOperatorGrants(ctx context.Context) ([]ListExpiredOperatorGrantsRow, error)
 	ListExpiredUnsignedCryptoSweepBatches(ctx context.Context, network string) ([]string, error)
 	ListFreeFallbackNotices(ctx context.Context) ([]string, error)
+	// The rows CountHeldConfirmedDowngrades counts, so recovery list names each
+	// tenant behind PurserTierDowngradeHeld.
+	ListHeldTierDowngrades(ctx context.Context, arg ListHeldTierDowngradesParams) ([]string, error)
 	ListInvoiceEmailLineItems(ctx context.Context, arg ListInvoiceEmailLineItemsParams) ([]ListInvoiceEmailLineItemsRow, error)
 	ListInvoiceLineItemsForTenant(ctx context.Context, arg ListInvoiceLineItemsForTenantParams) ([]ListInvoiceLineItemsForTenantRow, error)
 	ListInvoiceLineKeys(ctx context.Context, arg ListInvoiceLineKeysParams) ([]string, error)

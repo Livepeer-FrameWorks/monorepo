@@ -88,6 +88,7 @@ var privilegedBillingMutationMethods = map[string]struct{}{
 	"/purser.PrepaidService/AdminRetainDeliveredCheckout":  {},
 	"/purser.PrepaidService/AdminListCheckoutRecovery":     {},
 	"/purser.PrepaidService/AdminRecoverTierUpgrade":       {},
+	"/purser.PrepaidService/AdminRecoverTierDowngrade":     {},
 	"/purser.PrepaidService/AdminResendFreeFallbackNotice": {},
 	"/purser.PrepaidService/AdminRecordInvoicePayment":     {},
 	// Read only, but it reads every tenant's invoices.

@@ -122,3 +122,43 @@ WHERE subscription.pending_tier_id IS NOT NULL
   AND subscription.pending_reason = 'downgrade'
   AND subscription.pending_provider_tier_id = subscription.pending_tier_id
   AND subscription.pending_effective_at < NOW() - (sqlc.arg(grace_seconds)::bigint * INTERVAL '1 second');
+
+-- name: ListHeldTierDowngrades :many
+-- The rows CountHeldConfirmedDowngrades counts, so recovery list names each
+-- tenant behind PurserTierDowngradeHeld.
+SELECT subscription.tenant_id::text AS tenant_id
+FROM purser.tenant_subscriptions subscription
+WHERE subscription.pending_tier_id IS NOT NULL
+  AND subscription.pending_reason = 'downgrade'
+  AND subscription.pending_provider_tier_id = subscription.pending_tier_id
+  AND subscription.pending_effective_at < NOW() - (sqlc.arg(grace_seconds)::bigint * INTERVAL '1 second')
+  AND (sqlc.arg(tenant_id)::text = '' OR subscription.tenant_id = NULLIF(sqlc.arg(tenant_id)::text, '')::uuid)
+ORDER BY subscription.pending_effective_at, subscription.tenant_id
+LIMIT sqlc.arg(row_limit)::bigint;
+
+-- name: GetTierDowngradeHold :one
+-- A downgrade past its effective time that has not applied, with the invoice
+-- closing the period it waits on. A finalized invoice sorts first because the
+-- applier runs once one exists.
+SELECT subscription.tenant_id::text AS tenant_id,
+       target.id::text AS target_tier_id,
+       target.tier_name::text AS target_tier_name,
+       subscription.pending_effective_at::timestamptz AS effective_at,
+       (subscription.pending_provider_tier_id IS NOT DISTINCT FROM subscription.pending_tier_id
+        OR (NULLIF(subscription.stripe_subscription_id, '') IS NULL
+            AND NULLIF(subscription.mollie_subscription_id, '') IS NULL))::boolean AS provider_confirmed,
+       COALESCE(closing.id::text, '')::text AS invoice_id,
+       COALESCE(closing.status, '')::text AS invoice_status
+FROM purser.tenant_subscriptions subscription
+JOIN purser.billing_tiers target ON target.id = subscription.pending_tier_id
+LEFT JOIN LATERAL (
+    SELECT invoice.id, invoice.status
+    FROM purser.billing_invoices invoice
+    WHERE invoice.tenant_id = subscription.tenant_id
+      AND invoice.period_end = subscription.pending_effective_at
+    ORDER BY (invoice.status IN ('draft', 'manual_review')), invoice.created_at DESC
+    LIMIT 1
+) closing ON TRUE
+WHERE subscription.tenant_id = sqlc.arg(tenant_id)::text::uuid
+  AND subscription.pending_reason = 'downgrade'
+  AND subscription.pending_effective_at <= NOW();

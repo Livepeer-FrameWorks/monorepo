@@ -1227,6 +1227,10 @@ service PrepaidService {
   rpc AdminRetainDeliveredCheckout(AdminRecoverCheckoutRequest) returns (AdminRecoverCheckoutResponse);
   // Inspect a paid upgrade or cancel its unapplied request without starting a purchase.
   rpc AdminRecoverTierUpgrade(AdminRecoverTierUpgradeRequest) returns (AdminRecoverTierUpgradeResponse);
+  // Previews a downgrade past its effective time that has not applied; confirmed
+  // requests close the held period again and apply the downgrade when nothing
+  // still holds it. Platform operators only.
+  rpc AdminRecoverTierDowngrade(AdminRecoverTierDowngradeRequest) returns (AdminRecoverTierDowngradeResponse);
   // Requeues an abandoned fallback email without changing billing or recovering a purchase.
   rpc AdminResendFreeFallbackNotice(AdminResendFreeFallbackNoticeRequest) returns (AdminResendFreeFallbackNoticeResponse);
 
@@ -2182,6 +2186,43 @@ message AdminListCheckoutRecoveryResponse {
   repeated CheckoutRecoveryItem items = 1;
   bool has_more = 2;
   repeated CheckoutRecoveryAudit entries = 3; // Operator requests when history=true.
+  // Provider-confirmed downgrades still unapplied past the daily applier grace,
+  // the set PurserTierDowngradeHeld alerts on. Listed on the first page only.
+  repeated HeldTierDowngrade held_downgrades = 4;
+}
+
+// HeldTierDowngrade identifies one downgrade the applier has not flipped.
+message HeldTierDowngrade {
+  string tenant_id = 1;
+  string target_tier_id = 2;
+  string target_tier_name = 3;
+  google.protobuf.Timestamp effective_at = 4;
+  // Invoice closing the period that ends at effective_at; empty when none is written.
+  string invoice_id = 5;
+  // draft and manual_review hold the downgrade; any other status means the
+  // subscription's pricing state holds it.
+  string invoice_status = 6;
+}
+
+// AdminRecoverTierDowngradeRequest selects one tenant's held downgrade.
+message AdminRecoverTierDowngradeRequest {
+  string tenant_id = 1;
+  // False previews; true closes the held period again and runs the applier.
+  bool confirmed = 2;
+  // Required on confirmation and recorded on the billing audit event.
+  string reason = 3;
+  // The preview's target tier, required on confirmation so a re-staged
+  // downgrade is previewed again.
+  string target_tier_id = 4;
+}
+
+// AdminRecoverTierDowngradeResponse reports the downgrade after the request.
+message AdminRecoverTierDowngradeResponse {
+  // held (preview), applied, invoice_held, awaiting_provider or refused.
+  string status = 1;
+  HeldTierDowngrade downgrade = 2;
+  // What holds the downgrade and how to release it, or the applied outcome.
+  string detail = 3;
 }
 
 // AdminRecoverCheckoutRequest selects the exact tenant-owned checkout to recover.

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"maps"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -896,5 +897,127 @@ func TestHeldConfirmedDowngradesAreCounted_RealPG(t *testing.T) {
 	(&providerWebhookInboxStore{db: db, metrics: metrics}).observeHeldDowngrades(t.Context())
 	if got := testutil.ToFloat64(metrics.TierDowngradesHeld.WithLabelValues()); got != 1 {
 		t.Fatalf("held confirmed downgrades = %v, want only the confirmed one past the grace", got)
+	}
+}
+
+// recovery list names the tenants the held-downgrade alert counts, with the
+// invoice each one waits on.
+func TestHeldConfirmedDowngradesAreListed_RealPG(t *testing.T) {
+	db := startProviderReservationDatabase(t)
+	ctx := t.Context()
+	now := time.Now().UTC().Truncate(time.Second)
+	base := newPhaseTenant(t, db, "postpaid", now.Add(-48*time.Hour), now.Add(time.Hour), 0)
+	target := insertTierChangeTier(t, db, "20")
+	seed := func(age time.Duration, confirmed bool) string {
+		t.Helper()
+		tenant := uuid.NewString()
+		mustExec(t, db, `INSERT INTO purser.tenant_subscriptions (tenant_id,tier_id,status,billing_model,billing_email,presentment_currency,pending_tier_id,pending_reason,pending_effective_at,pending_provider_tier_id,stripe_subscription_id)
+			VALUES ($1,$2,'active','postpaid','billing@example.com','EUR',$3::text::uuid,'downgrade',$4,CASE WHEN $5::boolean THEN $3::text::uuid END,'subscription')`, tenant, base.supporterID, target, now.Add(-age), confirmed)
+		return tenant
+	}
+	held := seed(HeldDowngradeGrace+time.Hour, true)
+	seed(HeldDowngradeGrace-time.Hour, true)
+	seed(HeldDowngradeGrace+time.Hour, false)
+	var effective time.Time
+	if err := db.QueryRowContext(ctx, `SELECT pending_effective_at FROM purser.tenant_subscriptions WHERE tenant_id=$1`, held).Scan(&effective); err != nil {
+		t.Fatal(err)
+	}
+	mustExec(t, db, `INSERT INTO purser.billing_invoices (tenant_id,status,currency,amount,period_start,period_end,due_date)
+		VALUES ($1,'manual_review','EUR',0,$2,$3,$3)`, held, effective.Add(-30*24*time.Hour), effective)
+	q := purserdb.New(db)
+	for _, filter := range []string{"", held} {
+		tenants, err := q.ListHeldTierDowngrades(ctx, purserdb.ListHeldTierDowngradesParams{GraceSeconds: int64(HeldDowngradeGrace / time.Second), TenantID: filter, RowLimit: 10})
+		if err != nil || len(tenants) != 1 || tenants[0] != held {
+			t.Fatalf("held downgrades (filter %q) = %v, %v, want only %s", filter, tenants, err, held)
+		}
+	}
+	hold, err := q.GetTierDowngradeHold(ctx, held)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hold.TargetTierID != target || hold.InvoiceStatus != "manual_review" || hold.InvoiceID == "" || !hold.ProviderConfirmed || !hold.EffectiveAt.Equal(effective) {
+		t.Fatalf("hold = %+v, want target %s with its manual_review invoice at %s", hold, target, effective)
+	}
+}
+
+// Once the cluster pricing behind a manual_review invoice is fixed, the
+// operator's request finalizes that invoice and applies the downgrade without
+// waiting for the next daily run.
+func TestHeldDowngradeRecoveryFinalizesTheHeldInvoice_RealPG(t *testing.T) {
+	db := startProviderReservationDatabase(t)
+	ctx := t.Context()
+	now := time.Now().UTC().Truncate(time.Second)
+	start, end := now.Add(-30*24*time.Hour), now.Add(-time.Hour)
+	tenant := newPhaseTenant(t, db, "postpaid", start, end, 0)
+	tenant.jobs.tierReconciler = &stubTierReconciler{}
+	wireAdvanceBilling(tenant.svc, tenant.jobs)
+	target := insertTierChangeTier(t, db, "20")
+	mustExec(t, db, `UPDATE purser.billing_tiers SET metering_enabled=false WHERE id IN ($1,$2)`, tenant.supporterID, target)
+	mustExec(t, db, `UPDATE purser.tenant_subscriptions SET pending_tier_id=$2,pending_reason='downgrade',pending_effective_at=$3 WHERE tenant_id=$1`, tenant.id, target, end)
+	mustExec(t, db, `INSERT INTO purser.billing_invoices (tenant_id,status,currency,amount,period_start,period_end,due_date)
+		VALUES ($1,'manual_review','EUR',0,$2,$3,$3)`, tenant.id, start, end)
+	preview, err := tenant.svc.TierDowngradeHold(ctx, tenant.id)
+	if err != nil || preview.Status != DowngradeRecoveryInvoiceHeld || !strings.Contains(preview.Detail, "manual review") {
+		t.Fatalf("preview = %+v, %v, want the manual_review invoice named", preview, err)
+	}
+	outcome, err := tenant.svc.RecoverHeldTierDowngrade(ctx, tenant.id)
+	if err != nil || outcome.Status != DowngradeRecoveryApplied {
+		t.Fatalf("recovery = %+v, %v, want applied", outcome, err)
+	}
+	var tier, pending, status string
+	if err = db.QueryRowContext(ctx, `SELECT s.tier_id::text, COALESCE(s.pending_tier_id::text,''),
+		(SELECT i.status FROM purser.billing_invoices i WHERE i.tenant_id=s.tenant_id AND i.period_end=$2 ORDER BY i.created_at DESC LIMIT 1)
+		FROM purser.tenant_subscriptions s WHERE s.tenant_id=$1`, tenant.id, end).Scan(&tier, &pending, &status); err != nil {
+		t.Fatal(err)
+	}
+	if tier != target || pending != "" || status == "manual_review" || status == "draft" {
+		t.Fatalf("after recovery: tier=%s pending=%q invoice=%s, want the target tier and a finalized invoice", tier, pending, status)
+	}
+}
+
+// A request cannot override a pricing state that refuses tier changes: it
+// reports that refusal and the tenant keeps its tier.
+func TestHeldDowngradeRecoveryReportsAPricingRefusal_RealPG(t *testing.T) {
+	db := startProviderReservationDatabase(t)
+	ctx := t.Context()
+	now := time.Now().UTC().Truncate(time.Second)
+	start, end := now.Add(-30*24*time.Hour), now.Add(-time.Hour)
+	tenant := newPhaseTenant(t, db, "postpaid", start, end, 0)
+	tenant.jobs.tierReconciler = &stubTierReconciler{}
+	wireAdvanceBilling(tenant.svc, tenant.jobs)
+	target := insertTierChangeTier(t, db, "20")
+	mustExec(t, db, `UPDATE purser.tenant_subscriptions SET pending_tier_id=$2,pending_reason='downgrade',pending_effective_at=$3 WHERE tenant_id=$1`, tenant.id, target, end)
+	mustExec(t, db, `INSERT INTO purser.billing_invoices (tenant_id,status,currency,amount,period_start,period_end,due_date,paid_at)
+		VALUES ($1,'paid','EUR',0,$2,$3,$3,NOW())`, tenant.id, start, end)
+	mustExec(t, db, `INSERT INTO purser.tenant_billing_closures(tenant_id,closed_at,source_event_id) VALUES($1,NOW(),'closed-fixture')`, tenant.id)
+	outcome, err := tenant.svc.RecoverHeldTierDowngrade(ctx, tenant.id)
+	if err != nil || outcome.Status != DowngradeRecoveryRefused || !strings.Contains(outcome.Detail, "closed") {
+		t.Fatalf("recovery = %+v, %v, want the account closure reported", outcome, err)
+	}
+	if tier, pending := (&downgradeProvider{tenant: tenant}).tier(t); tier != tenant.supporterID || pending != target {
+		t.Fatalf("refused recovery moved the tier: tier=%s pending=%s", tier, pending)
+	}
+}
+
+// The Makefile's PostgreSQL selection runs exactly the downgrade cases the
+// Yugabyte reservation matrix runs.
+func TestTierDowngradeSelectionParity(t *testing.T) {
+	selection := os.Getenv("FRAMEWORKS_TIER_DOWNGRADE_TESTS")
+	if selection == "" {
+		t.Fatal("selection parity requires the Makefile's canonical test list; run make verify-purser-tier-downgrade-test-selection")
+	}
+	selected := make(map[string]bool)
+	for _, name := range strings.Split(selection, "|") {
+		selected[name] = true
+	}
+	for _, tc := range tierDowngradeProviderCases() {
+		name := "Test" + tc.name + "_RealPG"
+		if !selected[name] {
+			t.Fatalf("Yugabyte downgrade case %s is missing from PURSER_TIER_DOWNGRADE_HANDLERS_REALPG_TESTS", name)
+		}
+		delete(selected, name)
+	}
+	if len(selected) != 0 {
+		t.Fatalf("Makefile downgrade cases are absent from tierDowngradeProviderCases: %v", selected)
 	}
 }

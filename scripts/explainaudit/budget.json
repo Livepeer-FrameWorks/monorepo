@@ -1533,6 +1533,18 @@
     "read_requests": 1,
     "rows_scanned": 3000
   },
+  "purser:ListHeldTierDowngrades@declared": {
+    "reason": "Operator listing of the CountHeldConfirmedDowngrades inventory: the same tenant_subscriptions predicate, bounded by tenant count and a row limit.",
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 1,
+    "rows_scanned": 3000
+  },
+  "purser:ListHeldTierDowngrades@distributed": {
+    "reason": "Operator listing of the CountHeldConfirmedDowngrades inventory: the same tenant_subscriptions predicate, bounded by tenant count and a row limit.",
+    "flags": ["READ_AMPLIFICATION", "SEQ_SCAN_LARGE"],
+    "read_requests": 1,
+    "rows_scanned": 3000
+  },
   "purser:CountMissingMeteringWindows@declared": {
     "flags": ["NESTED_LOOP_UNBATCHED", "READ_AMPLIFICATION", "SEQ_SCAN_LARGE", "SLOW"],
     "read_requests": 11,

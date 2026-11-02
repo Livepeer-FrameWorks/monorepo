@@ -495,6 +495,7 @@ func wireAdvanceBilling(billing *Service, jm *JobManager) {
 	billing.chargeAdvanceBaseFee = jm.ChargeAdvanceBaseFee
 	billing.chargeTierUpgradeInvoice = jm.chargeTierUpgradeInvoice
 	billing.stopSuspendedTenantStreams = jm.stopSuspendedTenantStreams
+	billing.recoverHeldDowngrade = jm.recoverHeldDowngrade
 }
 
 // Start begins all background jobs
@@ -2734,7 +2735,10 @@ func (jm *JobManager) applyPendingDowngrade(ctx context.Context, tenantID string
 		return WriteOffCollectionCarryTx(ctx, q, tenantID, CollectionWriteoffMovedToFree)
 	})
 	if subscriptions.IsPricingRefusal(err) {
-		jm.logger.WithError(err).WithField("tenant_id", tenantID).Debug("Pending downgrade held by its subscription pricing state")
+		jm.logger.WithError(err).WithFields(logging.Fields{
+			"tenant_id":       tenantID,
+			"pending_tier_id": stagedTarget,
+		}).Warn("Pending downgrade held by its subscription pricing state; resolve it, then run frameworks admin billing recovery downgrade")
 		return
 	}
 	if err != nil {
