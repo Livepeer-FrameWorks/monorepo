@@ -45,14 +45,17 @@ operator-facing error detail.
 
 ## Supported platforms
 
-| Platform    | Dashboard preset ingest URL                                            | Key source                  |
-| ----------- | ---------------------------------------------------------------------- | --------------------------- |
-| Twitch      | `rtmp://live.twitch.tv/app/`                                           | Creator Dashboard           |
-| YouTube     | `rtmp://a.rtmp.youtube.com/live2/`                                     | Live Control Room           |
-| Facebook    | `rtmps://live-api-s.facebook.com:443/rtmp/`                            | Live Producer               |
-| Kick        | `rtmps://fa723fc1b171.global-contribute.live-video.net/app/`           | Creator Dashboard           |
-| X (Twitter) | `rtmps://prod-ec-us-west-2.compose.broadcast.live-video.net:443/rtmp/` | Media Studio or Producer    |
-| Custom      | None; supply a complete `rtmp://`, `rtmps://`, or `srt://` URI         | The destination's dashboard |
+| Platform    | Dashboard preset ingest URL                                            | Where to find the stream key                                                                                       |
+| ----------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| Twitch      | `rtmp://live.twitch.tv/app/`                                           | [Creator Dashboard → Settings → Stream](https://dashboard.twitch.tv/settings/stream)                               |
+| YouTube     | `rtmp://a.rtmp.youtube.com/live2/`                                     | Live Control Room ([YouTube Help: live stream with an encoder](https://support.google.com/youtube/answer/2907883)) |
+| Facebook    | `rtmps://live-api-s.facebook.com:443/rtmp/`                            | Live Producer → Streaming software ([Facebook Help](https://www.facebook.com/help/587160588142067))                |
+| Kick        | `rtmps://fa723fc1b171.global-contribute.live-video.net/app/`           | [Creator Dashboard](https://dashboard.kick.com) → Channel → Stream URL & Key                                       |
+| X (Twitter) | `rtmps://prod-ec-us-west-2.compose.broadcast.live-video.net:443/rtmp/` | Media Studio Producer or Live Studio ([X Help](https://help.x.com/en/using-x/how-to-use-live-producer))            |
+| Custom      | None; supply a complete `rtmp://`, `rtmps://`, or `srt://` URI         | The destination's dashboard                                                                                        |
+
+Each platform shows the key next to its own server URL. Copy only the key into the dashboard
+preset. If a key leaks, reset it on the same page and update the target.
 
 In the dashboard, a platform preset fixes the ingest URL shown above and asks only for the stream
 key; FrameWorks stores the preset URL followed by the key. If the destination gives you a different
