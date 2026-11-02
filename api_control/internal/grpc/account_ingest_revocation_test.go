@@ -14,6 +14,7 @@ func TestAccountStopKeepsUnreachableHistoricalCellsPending(t *testing.T) {
 	}
 	defer db.Close()
 	mock.ExpectQuery("ListAccountIngestCells").WithArgs("tenant", "").WillReturnRows(sqlmock.NewRows([]string{"cell_id"}).AddRow("historical-cell"))
+	mock.ExpectQuery("retired_ingest_cells").WillReturnRows(sqlmock.NewRows([]string{"cell_id"}))
 	server := &CommodoreServer{db: db}
 	server.foghornDiscovery.Store("historical-cell", &foghornDiscoveryEntry{at: time.Now()})
 	if err = server.stopAccountIngest(t.Context(), "tenant", "", nil); err == nil {

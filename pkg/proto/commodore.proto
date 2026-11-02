@@ -1572,6 +1572,11 @@ service UserService {
   rpc AdminListAccountHistory(AdminListAccountHistoryRequest) returns (AdminListAccountHistoryResponse);
   // Closes local account access and synchronizes tenant inactivity. Requires a platform-operator JWT.
   rpc AdminDeactivateTenant(AdminDeactivateTenantRequest) returns (google.protobuf.Empty);
+  // Reads a tenant's closure synchronization and its pending session stops. Requires a platform-operator JWT.
+  rpc AdminGetTenantAccountState(AdminGetTenantAccountStateRequest) returns (TenantAccountState);
+  // Records a permanently removed cell so session stops that cannot reach it
+  // settle. Refused while the cell answers. Requires a platform-operator JWT.
+  rpc AdminRetireIngestCell(AdminRetireIngestCellRequest) returns (AdminRetireIngestCellResponse);
 }
 
 message AdminLookupUserByEmailRequest {
@@ -2746,4 +2751,61 @@ message AdminListAccountHistoryResponse {
   repeated OperatorAccountAuditEntry entries = 1;
   bool has_more = 2; // Older entries exist beyond this page.
   string next_cursor = 3; // Pass as before to read the next page.
+  // Current closure synchronization and pending session stops; first page only.
+  TenantAccountState account_state = 4;
+}
+
+message AdminGetTenantAccountStateRequest {
+  string tenant_id = 1; // Tenant UUID.
+}
+
+// TenantAccountState is a tenant's local account closure, its Quartermaster
+// synchronization, and the session stops still owed to cells.
+message TenantAccountState {
+  string tenant_id = 1;
+  // open (not closed), pending (closed, Quartermaster not yet confirmed),
+  // retrying (the last synchronization failed), or synchronized.
+  string closure_sync = 2;
+  google.protobuf.Timestamp closed_at = 3; // Unset while the account is open.
+  string closed_by = 4; // Platform operator user UUID that closed the account.
+  // When Quartermaster confirmed the tenant inactive.
+  google.protobuf.Timestamp quartermaster_closed_at = 5;
+  google.protobuf.Timestamp closure_attempted_at = 6; // Latest synchronization attempt.
+  google.protobuf.Timestamp closure_retry_after = 7; // Earliest retry after a failure.
+  string closure_error = 8; // Latest synchronization failure; empty after success.
+  int32 closure_failures = 9; // Failed synchronization attempts.
+  repeated PendingIngestStop pending_ingest_stops = 10;
+}
+
+// PendingIngestStop is a session stop that some recorded cell has not received.
+message PendingIngestStop {
+  string target_kind = 1; // tenant for account closure, live_stream for user deactivation.
+  string target_id = 2; // Tenant or stream UUID.
+  string status = 3; // pending or processing.
+  int32 attempts = 4; // Failed delivery rounds.
+  google.protobuf.Timestamp pending_since = 5;
+  google.protobuf.Timestamp next_attempt_at = 6;
+  string last_error = 7; // Latest delivery failure, naming the cells that failed.
+  repeated string cells = 8; // Recorded cells the stop is delivered to.
+  // The subset of cells an operator retired. Delivery to them settles when they
+  // cannot be reached.
+  repeated string retired_cells = 9;
+}
+
+// AdminRetireIngestCellRequest records one permanently removed cell.
+message AdminRetireIngestCellRequest {
+  string cluster_id = 1; // Cluster ID the cell was recorded under.
+  string reason = 2; // Required operator reason, kept with the retirement record.
+}
+
+// AdminRetireIngestCellResponse reports the retirement record and the stops it releases.
+message AdminRetireIngestCellResponse {
+  string cluster_id = 1;
+  google.protobuf.Timestamp retired_at = 2;
+  string retired_by = 3; // Platform operator user UUID.
+  string reason = 4;
+  bool already_retired = 5; // An earlier retirement record was kept unchanged.
+  // Pending session stops that include the cell; they retry now and settle
+  // unless another recorded cell still fails.
+  int32 pending_ingest_stops = 6;
 }

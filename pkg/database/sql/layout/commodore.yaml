@@ -25,6 +25,8 @@ colocated_tables:
   - commodore.media_authority_use_epoch
   # One lifecycle guard and closure retry state per tenant.
   - commodore.tenant_account_states
+  # Operator retirement records for permanently removed cells; a handful of rows.
+  - commodore.retired_ingest_cells
   - public._schema_baseline
 distributed_tables:
   # Append-only history grows with lifecycle actions and supports tenant-time keyset reads.

@@ -163,6 +163,11 @@ func (s *CommodoreServer) AdminListAccountHistory(ctx context.Context, req *comm
 	for _, row := range rows {
 		out.Entries = append(out.Entries, &commodorepb.OperatorAccountAuditEntry{Id: row.ID, ActorUserId: row.ActorUserID, TargetId: row.TargetID, Action: row.Action, Reason: row.Reason, CreatedAt: timestamppb.New(row.CreatedAt)})
 	}
+	if req.GetBefore() == "" {
+		if out.AccountState, err = s.tenantAccountState(ctx, tenant.String()); err != nil {
+			return nil, err
+		}
+	}
 	return out, nil
 }
 

@@ -2817,6 +2817,8 @@ const (
 	UserService_AdminSetUserActive_FullMethodName         = "/commodore.UserService/AdminSetUserActive"
 	UserService_AdminListAccountHistory_FullMethodName    = "/commodore.UserService/AdminListAccountHistory"
 	UserService_AdminDeactivateTenant_FullMethodName      = "/commodore.UserService/AdminDeactivateTenant"
+	UserService_AdminGetTenantAccountState_FullMethodName = "/commodore.UserService/AdminGetTenantAccountState"
+	UserService_AdminRetireIngestCell_FullMethodName      = "/commodore.UserService/AdminRetireIngestCell"
 )
 
 // UserServiceClient is the client API for UserService service.
@@ -2870,6 +2872,11 @@ type UserServiceClient interface {
 	AdminListAccountHistory(ctx context.Context, in *AdminListAccountHistoryRequest, opts ...grpc.CallOption) (*AdminListAccountHistoryResponse, error)
 	// Closes local account access and synchronizes tenant inactivity. Requires a platform-operator JWT.
 	AdminDeactivateTenant(ctx context.Context, in *AdminDeactivateTenantRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	// Reads a tenant's closure synchronization and its pending session stops. Requires a platform-operator JWT.
+	AdminGetTenantAccountState(ctx context.Context, in *AdminGetTenantAccountStateRequest, opts ...grpc.CallOption) (*TenantAccountState, error)
+	// Records a permanently removed cell so session stops that cannot reach it
+	// settle. Refused while the cell answers. Requires a platform-operator JWT.
+	AdminRetireIngestCell(ctx context.Context, in *AdminRetireIngestCellRequest, opts ...grpc.CallOption) (*AdminRetireIngestCellResponse, error)
 }
 
 type userServiceClient struct {
@@ -3160,6 +3167,26 @@ func (c *userServiceClient) AdminDeactivateTenant(ctx context.Context, in *Admin
 	return out, nil
 }
 
+func (c *userServiceClient) AdminGetTenantAccountState(ctx context.Context, in *AdminGetTenantAccountStateRequest, opts ...grpc.CallOption) (*TenantAccountState, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(TenantAccountState)
+	err := c.cc.Invoke(ctx, UserService_AdminGetTenantAccountState_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *userServiceClient) AdminRetireIngestCell(ctx context.Context, in *AdminRetireIngestCellRequest, opts ...grpc.CallOption) (*AdminRetireIngestCellResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AdminRetireIngestCellResponse)
+	err := c.cc.Invoke(ctx, UserService_AdminRetireIngestCell_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // UserServiceServer is the server API for UserService service.
 // All implementations must embed UnimplementedUserServiceServer
 // for forward compatibility.
@@ -3211,6 +3238,11 @@ type UserServiceServer interface {
 	AdminListAccountHistory(context.Context, *AdminListAccountHistoryRequest) (*AdminListAccountHistoryResponse, error)
 	// Closes local account access and synchronizes tenant inactivity. Requires a platform-operator JWT.
 	AdminDeactivateTenant(context.Context, *AdminDeactivateTenantRequest) (*emptypb.Empty, error)
+	// Reads a tenant's closure synchronization and its pending session stops. Requires a platform-operator JWT.
+	AdminGetTenantAccountState(context.Context, *AdminGetTenantAccountStateRequest) (*TenantAccountState, error)
+	// Records a permanently removed cell so session stops that cannot reach it
+	// settle. Refused while the cell answers. Requires a platform-operator JWT.
+	AdminRetireIngestCell(context.Context, *AdminRetireIngestCellRequest) (*AdminRetireIngestCellResponse, error)
 	mustEmbedUnimplementedUserServiceServer()
 }
 
@@ -3304,6 +3336,12 @@ func (UnimplementedUserServiceServer) AdminListAccountHistory(context.Context, *
 }
 func (UnimplementedUserServiceServer) AdminDeactivateTenant(context.Context, *AdminDeactivateTenantRequest) (*emptypb.Empty, error) {
 	return nil, status.Error(codes.Unimplemented, "method AdminDeactivateTenant not implemented")
+}
+func (UnimplementedUserServiceServer) AdminGetTenantAccountState(context.Context, *AdminGetTenantAccountStateRequest) (*TenantAccountState, error) {
+	return nil, status.Error(codes.Unimplemented, "method AdminGetTenantAccountState not implemented")
+}
+func (UnimplementedUserServiceServer) AdminRetireIngestCell(context.Context, *AdminRetireIngestCellRequest) (*AdminRetireIngestCellResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AdminRetireIngestCell not implemented")
 }
 func (UnimplementedUserServiceServer) mustEmbedUnimplementedUserServiceServer() {}
 func (UnimplementedUserServiceServer) testEmbeddedByValue()                     {}
@@ -3830,6 +3868,42 @@ func _UserService_AdminDeactivateTenant_Handler(srv interface{}, ctx context.Con
 	return interceptor(ctx, in, info, handler)
 }
 
+func _UserService_AdminGetTenantAccountState_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AdminGetTenantAccountStateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(UserServiceServer).AdminGetTenantAccountState(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: UserService_AdminGetTenantAccountState_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(UserServiceServer).AdminGetTenantAccountState(ctx, req.(*AdminGetTenantAccountStateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _UserService_AdminRetireIngestCell_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AdminRetireIngestCellRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(UserServiceServer).AdminRetireIngestCell(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: UserService_AdminRetireIngestCell_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(UserServiceServer).AdminRetireIngestCell(ctx, req.(*AdminRetireIngestCellRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // UserService_ServiceDesc is the grpc.ServiceDesc for UserService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -3948,6 +4022,14 @@ var UserService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "AdminDeactivateTenant",
 			Handler:    _UserService_AdminDeactivateTenant_Handler,
+		},
+		{
+			MethodName: "AdminGetTenantAccountState",
+			Handler:    _UserService_AdminGetTenantAccountState_Handler,
+		},
+		{
+			MethodName: "AdminRetireIngestCell",
+			Handler:    _UserService_AdminRetireIngestCell_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
