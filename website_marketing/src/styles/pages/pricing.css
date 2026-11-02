@@ -5,6 +5,16 @@
     flex-direction: column;
     gap: clamp(0.35rem, 0.6vw, 0.5rem);
   }
+  .pricing-processing-feature__link {
+    color: hsl(var(--accent));
+    font-size: 0.8rem;
+    font-weight: 600;
+  }
+  .pricing-processing-feature__link:hover,
+  .pricing-processing-feature__link:focus-visible {
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
   .pricing-processing-feature__title {
     font-weight: 600;
     color: hsl(var(--foreground));

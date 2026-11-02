@@ -1,4 +1,6 @@
 import { useId, useMemo, useState } from "react";
+import { Link } from "react-router";
+import { contactPath } from "@/lib/contactTopics";
 import InfoTooltip from "./InfoTooltip";
 import { cn } from "@/lib/utils";
 import { Slider } from "@/components/ui/slider";
@@ -439,7 +441,8 @@ const Calculator = ({ className }) => {
             {isEnterpriseVolume ? (
               <div className="pricing-calculator__enterprise-hint">
                 Over {formatCount(ENTERPRISE_MINUTES_THRESHOLD)} minutes a month.{" "}
-                <a href="/contact">Talk to us</a> about committed-volume rates.
+                <Link to={contactPath("pricing")}>Talk to the engineers</Link> about
+                committed-volume rates.
               </div>
             ) : null}
             <ul className="pricing-calculator__plans">

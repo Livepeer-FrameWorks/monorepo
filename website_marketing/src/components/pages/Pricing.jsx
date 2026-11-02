@@ -1,5 +1,10 @@
 import { motion } from "framer-motion";
+import { Link } from "react-router";
 import config from "../../config";
+import status from "@/data/status.json";
+import { featureOf, showcaseHref } from "@/lib/featureStatus";
+import { signupUrl } from "@/lib/siteLinks";
+import { contactPath } from "@/lib/contactTopics";
 import InfoTooltip from "../shared/InfoTooltip";
 import StatusTag from "../shared/StatusTag";
 import SovereigntyNote from "../shared/SovereigntyNote";
@@ -72,10 +77,11 @@ const freeTier = {
   price: "Free",
   period: "",
   description:
-    "Run the video and control-plane stack yourself. Free transcoding via the Livepeer network, free delivery from the shared bandwidth pool.",
+    "Stream on FrameWorks infrastructure, with free transcoding through the Livepeer network and free delivery from the shared bandwidth pool.",
   features: [
-    `Self-hosted video stack, ${compactMinutes(freeCatalog)} delivered min/mo, ${freeCatalog.limits.storageGiB} GB storage, ${freeCatalog.limits.maxConcurrentStreams} streams / ${freeCatalog.limits.maxConcurrentViewers} viewers, ${freeCatalog.limits.retentionDays}-day retention`,
+    `${compactMinutes(freeCatalog)} delivered min/mo, ${freeCatalog.limits.storageGiB} GB storage, ${freeCatalog.limits.maxConcurrentStreams} streams / ${freeCatalog.limits.maxConcurrentViewers} viewers, ${freeCatalog.limits.retentionDays}-day retention`,
     ...streamingFeatures,
+    "The same dashboard, APIs, and analytics as paid plans",
   ],
   limitations: [
     `${freeCatalog.limits.maxConcurrentStreams} streams, ${freeCatalog.limits.maxConcurrentViewers} viewers, and ${freeCatalog.limits.storageGiB} GB storage are hard limits at any load`,
@@ -83,8 +89,11 @@ const freeTier = {
   ],
   badge: "No Surprise Bills",
   ctaLabel: "Start Free",
-  ctaLink: config.appUrl,
+  ctaLink: signupUrl(config.appUrl, "pricing-free"),
 };
+
+const supportLine = "Business-hours support from our video engineers";
+const teamRbac = featureOf(status, "team-rbac");
 
 const paidTiers = [
   {
@@ -102,11 +111,12 @@ const paidTiers = [
       "Hosted load balancer",
       "Custom subdomain (*.frameworks.network)",
       "Transparent usage reporting",
+      supportLine,
     ],
     limitations: ["Suitable for ~100–300 concurrent viewers (adaptive)"],
     note: "Includes hosted LB + subdomain",
     ctaLabel: "Get Started",
-    ctaLink: config.appUrl,
+    ctaLink: signupUrl(config.appUrl, "pricing-supporter", { plan: "supporter" }),
   },
   {
     id: "developer",
@@ -115,19 +125,18 @@ const paidTiers = [
     price: developerPricing.price,
     period: "/month",
     dailyCost: developerPricing.dailyCost,
-    description: `${compactMinutes(catalogTier.developer)} delivered minutes, team features, and advanced analytics.`,
+    description: `${compactMinutes(catalogTier.developer)} delivered minutes, lower overage rates, and team features as they ship.`,
     features: [
       developerPricing.delivery,
       developerPricing.storage,
       ...streamingFeatures,
-      "Team collaboration features",
-      "Advanced analytics",
-      "Priority support",
+      `Team collaboration features (${teamRbac.tag.toLowerCase()})`,
+      supportLine,
     ],
     limitations: ["Suitable for ~500–1,000 concurrent viewers (adaptive)"],
-    note: "Priority support & analytics included",
+    note: "Lower overage rates than Supporter",
     ctaLabel: "Get Started",
-    ctaLink: config.appUrl,
+    ctaLink: signupUrl(config.appUrl, "pricing-developer", { plan: "developer" }),
   },
   {
     id: "production",
@@ -136,19 +145,18 @@ const paidTiers = [
     price: productionPricing.price,
     period: "/month",
     dailyCost: productionPricing.dailyCost,
-    description: `${compactMinutes(catalogTier.production)} delivered minutes, business-hours support, and dedicated capacity options.`,
+    description: `${compactMinutes(catalogTier.production)} delivered minutes, the lowest overage rates, and a dedicated processing allocation.`,
     features: [
       productionPricing.delivery,
       productionPricing.storage,
       ...streamingFeatures,
-      "Business-hours support, on-call by Enterprise agreement",
-      "Dedicated capacity options",
-      "Live dashboard",
+      "Dedicated processing allocation",
+      `${supportLine}, on-call by Enterprise agreement`,
     ],
     limitations: ["Suitable for ~2,000–5,000 concurrent viewers (adaptive)"],
-    note: "Reserved capacity available",
-    ctaLabel: "Talk to us",
-    ctaLink: "/contact",
+    note: "Reserved capacity through an Enterprise arrangement",
+    ctaLabel: "Talk to the engineers",
+    ctaLink: contactPath("pricing"),
   },
 ];
 
@@ -180,6 +188,26 @@ const payAsYouGo = {
   ],
 };
 
+const everyTier = (value) => ({
+  free: value,
+  supporter: value,
+  developer: value,
+  production: value,
+});
+
+// Rows for registry features take their title, summary and status from
+// status.json; planned rows link to their showcase entry.
+const statusRow = (id, cell, link) => {
+  const entry = featureOf(status, id);
+  return {
+    feature: entry.showcase?.title ?? entry.title,
+    description: entry.showcase?.summary ?? entry.note,
+    statusId: id,
+    link: link ?? { label: "On the showcase", to: showcaseHref(id) },
+    tiers: everyTier(cell),
+  };
+};
+
 const processingFeatureMatrix = [
   {
     feature: "Transcoding",
@@ -192,31 +220,9 @@ const processingFeatureMatrix = [
       production: "Dedicated processing allocation",
     },
   },
-  {
-    feature: "Live AI Processing",
-    description:
-      "In the pipeline: AI transcription, video analysis, automated highlights, and real-time V2V transformations.",
-    statusId: "live-ai",
-    statusNote: "In the pipeline: in development with the MistServer team.",
-    tiers: {
-      free: "In the pipeline",
-      supporter: "In the pipeline",
-      developer: "In the pipeline",
-      production: "In the pipeline",
-    },
-  },
-  {
-    feature: "StreamCrafter cloud production",
-    description: "In the pipeline: mix and switch multiple live sources on the server.",
-    statusId: "composition",
-    statusNote: "In the pipeline. Browser mixing is available today through StreamCrafter.",
-    tiers: {
-      free: "In the pipeline",
-      supporter: "In the pipeline",
-      developer: "In the pipeline",
-      production: "In the pipeline",
-    },
-  },
+  statusRow("streamcrafter", "Included", { label: "Try it in your browser", to: "/stream-test" }),
+  statusRow("live-ai", "Not yet available"),
+  statusRow("composition", "Not yet available"),
 ];
 
 const tierColumns = [
@@ -455,6 +461,11 @@ const Pricing = () => {
           <span className="pricing-processing-feature__title">{entry.feature}</span>
           <p className="pricing-processing-feature__copy">{entry.description}</p>
           {entry.statusId ? <StatusTag feature={entry.statusId} className="mt-1" /> : null}
+          {entry.link ? (
+            <Link to={entry.link.to} className="pricing-processing-feature__link">
+              {entry.link.label} <span aria-hidden="true">→</span>
+            </Link>
+          ) : null}
         </div>
       ),
       ...tierCells,
@@ -511,8 +522,8 @@ const Pricing = () => {
           >
             <HeadlineStack
               eyebrow="Free tier"
-              title="Start free with full self-hosting (control plane included)"
-              subtitle="Deploy FrameWorks on your own infrastructure and keep sovereignty over your video workloads."
+              title="Start free on the hosted platform"
+              subtitle="Stream on our infrastructure at no cost. Self-hosting the whole platform, control plane included, is free as well."
               align="left"
               underlineAlign="start"
             />
@@ -579,7 +590,11 @@ const Pricing = () => {
                       href={config.docsUrl}
                       label="Read the docs"
                     />
-                    <MarketingCTAButton intent="secondary" to="/contact" label="Talk to sales" />
+                    <MarketingCTAButton
+                      intent="secondary"
+                      to={contactPath("pricing")}
+                      label="Talk to the engineers"
+                    />
                   </CTACluster>
                 }
               />
@@ -604,7 +619,7 @@ const Pricing = () => {
           </motion.div>
         </SectionContainer>
 
-        <SectionContainer className="mt-6">
+        <SectionContainer id="pay-as-you-go" className="mt-6 scroll-mt-24">
           <motion.div
             initial={{ opacity: 0, y: 30 }}
             whileInView={{ opacity: 1, y: 0 }}
@@ -676,7 +691,11 @@ const Pricing = () => {
                 description={enterpriseTier.description}
                 actions={
                   <CTACluster align="start">
-                    <MarketingCTAButton intent="primary" to="/contact" label="Schedule call" />
+                    <MarketingCTAButton
+                      intent="primary"
+                      to={contactPath("pricing")}
+                      label="Talk to the engineers"
+                    />
                   </CTACluster>
                 }
                 className="mt-8"
@@ -738,7 +757,7 @@ const Pricing = () => {
               <HeadlineStack
                 eyebrow="Advanced processing"
                 title="Advanced processing capabilities"
-                subtitle="Run processing on FrameWorks edges for dedicated capacity, use Livepeer for low-cost capacity that is quick to scale, or process on your own edge with no FrameWorks processing charge. AI workloads and StreamCrafter cloud production are in the pipeline."
+                subtitle="Run processing on FrameWorks edges for dedicated capacity, use Livepeer for low-cost capacity that is quick to scale, or process on your own edge with no FrameWorks processing charge. The StreamCrafter browser studio works on every plan today; live AI and StreamCrafter cloud production are next on the roadmap."
                 align="left"
                 underlineAlign="start"
                 actionsPlacement="inline"
@@ -780,7 +799,11 @@ const Pricing = () => {
                 underlineAlign="start"
                 actionsPlacement="inline"
                 actions={
-                  <MarketingCTAButton intent="primary" to="/contact" label="Talk to our team" />
+                  <MarketingCTAButton
+                    intent="primary"
+                    to={contactPath("engineering")}
+                    label="Talk to the engineers"
+                  />
                 }
               />
               <MarketingGridSplit align="stretch" stackAt="lg" seam ratio="wide-narrow">
@@ -816,7 +839,14 @@ const Pricing = () => {
               underlineAlign="start"
               actionsPlacement="inline"
               actions={
-                <MarketingCTAButton intent="primary" to="/contact" label="Talk to the engineers" />
+                <CTACluster align="end" wrap>
+                  <MarketingCTAButton
+                    intent="primary"
+                    to={contactPath("trial")}
+                    label="Talk to the engineers"
+                  />
+                  <MarketingCTAButton intent="secondary" to="/showcase" label="See the showcase" />
+                </CTACluster>
               }
             />
           </MarketingBand>
@@ -869,11 +899,11 @@ const Pricing = () => {
           <MarketingFinalCTA
             eyebrow="Next steps"
             title="Two ways to start"
-            description="Launch the FrameWorks stack on your own hardware, or partner with us for managed deployments and advanced processing."
+            description="Start free on our hosted platform, or run the whole stack on your own hardware. The media engine and APIs are the same in both."
             variant="band"
             primaryAction={{
               label: "Start Free",
-              href: config.appUrl,
+              href: signupUrl(config.appUrl, "pricing-final"),
               external: true,
             }}
             secondaryAction={[
@@ -883,8 +913,8 @@ const Pricing = () => {
                 external: true,
               },
               {
-                label: "Talk to our team",
-                to: "/contact",
+                label: "Talk to the engineers",
+                to: contactPath("engineering"),
               },
             ]}
           />
