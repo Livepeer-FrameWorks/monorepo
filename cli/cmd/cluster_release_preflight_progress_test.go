@@ -43,7 +43,7 @@ func TestEnforcePriorReleasesCompleteReportsUnreadableState(t *testing.T) {
 		return datamigrate.LiveStatus{ID: id, Service: service, Status: datamigrate.StatusCompleted}
 	})
 	var out strings.Builder
-	err := enforcePriorReleasesComplete(context.Background(), &out, &resolvedCluster{Manifest: priorPreflightManifest()}, nil, "v0.3.11")
+	_, err := enforcePriorReleasesComplete(context.Background(), &out, &resolvedCluster{Manifest: priorPreflightManifest()}, nil, "v0.3.11")
 	if err == nil {
 		t.Fatal("an unreadable required data migration must still refuse")
 	}
@@ -70,7 +70,7 @@ func TestEnforcePriorReleasesCompleteReportsInterrupt(t *testing.T) {
 		return datamigrate.LiveStatus{ID: id, Service: service, FetchError: errors.New("ssh run: Process exited with status 255")}
 	})
 	var out strings.Builder
-	err := enforcePriorReleasesComplete(ctx, &out, &resolvedCluster{Manifest: priorPreflightManifest()}, nil, "v0.3.11")
+	_, err := enforcePriorReleasesComplete(ctx, &out, &resolvedCluster{Manifest: priorPreflightManifest()}, nil, "v0.3.11")
 	if err == nil || !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "interrupted") {
 		t.Fatalf("err = %v; want an interrupt carrying context.Canceled", err)
 	}
@@ -86,7 +86,7 @@ func TestEnforcePriorReleasesCompleteAnnouncesEachStateRead(t *testing.T) {
 		return datamigrate.LiveStatus{ID: id, Service: service, Status: datamigrate.StatusCompleted}
 	})
 	var out strings.Builder
-	if err := enforcePriorReleasesComplete(context.Background(), &out, &resolvedCluster{Manifest: priorPreflightManifest()}, nil, "v0.3.11"); err != nil {
+	if _, err := enforcePriorReleasesComplete(context.Background(), &out, &resolvedCluster{Manifest: priorPreflightManifest()}, nil, "v0.3.11"); err != nil {
 		t.Fatalf("enforcePriorReleasesComplete: %v", err)
 	}
 	for _, want := range []string{

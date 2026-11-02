@@ -358,6 +358,7 @@ func newClusterReleaseApplyCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&opts.skipValidation, "skip-validation", false, "Skip health validation after each service upgrade")
 	cmd.Flags().BoolVar(&opts.noRollback, "no-rollback", false, "Skip automatic rollback on a service health-check failure")
 	cmd.Flags().BoolVar(&opts.completeInterruptedBaselines, "complete-interrupted-baselines", false, "Reapply and verify baselines for populated databases without migration provenance")
+	cmd.Flags().String(backupFlag, "", "Backup (directory or s3:// URL) taken within the last hour; required when an earlier release's pending required data migration is irreversible")
 	cmd.Flags().Bool(unsafeCLIFloorFlag, false, "UNSAFE: let a non-concrete (dev/unversioned) CLI bypass the release's min_cli_version floor")
 	return cmd
 }
@@ -416,9 +417,14 @@ func runReleaseApply(cmd *cobra.Command, rc *resolvedCluster, opts releaseApplyO
 		return floorErr
 	}
 	// Every earlier release must be finished before this one mutates anything; the per-service gate would otherwise
-	// refuse only after host convergence and this release's expand migrations.
-	if priorErr := enforcePriorReleasesComplete(cmd.Context(), out, rc, sshPool, platformVersion); priorErr != nil {
+	// refuse only after host convergence and this release's expand migrations. Its pending required data migrations
+	// are the exception: this run executes them first, behind their backup gate.
+	priorDataMigrations, priorErr := enforcePriorReleasesComplete(cmd.Context(), out, rc, sshPool, platformVersion)
+	if priorErr != nil {
 		return priorErr
+	}
+	if backupErr := requirePriorDataMigrationBackups(cmd.Context(), cmd, rc, sshPool, priorDataMigrations, opts.dryRun); backupErr != nil {
+		return backupErr
 	}
 
 	// Every transition required by the release must exist in this CLI.
@@ -456,6 +462,9 @@ func runReleaseApply(cmd *cobra.Command, rc *resolvedCluster, opts releaseApplyO
 	hostSteps := planReleaseHostConvergence(plan, manifest)
 	pinnedDependencies := planReleasePinnedDependencies(plan)
 	ux.Heading(out, fmt.Sprintf("Release plan for %s (platform %s)", version, platformVersion))
+	if len(priorDataMigrations) > 0 {
+		fmt.Fprintf(out, "  0. required data migrations of earlier releases: %s\n", priorDataMigrationList(priorDataMigrations))
+	}
 	writeReleaseHostConvergencePlan(out, "1. pre-upgrade host convergence", manifest, hostSteps, releaseYugabyteEngine(gm))
 	fmt.Fprintln(out, releaseApplyServiceDatabasesStep)
 	fmt.Fprintln(out, "     · read-only Quartermaster report: nodes without an identity key, DNS grants the entitlement migration clears")
@@ -522,6 +531,13 @@ func runReleaseApply(cmd *cobra.Command, rc *resolvedCluster, opts releaseApplyO
 		if r := strings.TrimSpace(strings.ToLower(response)); r != "y" && r != "yes" {
 			fmt.Fprintln(out, "Cancelled")
 			return nil
+		}
+	}
+
+	if len(priorDataMigrations) > 0 {
+		ux.Subheading(out, "Required data migrations of earlier releases")
+		if runErr := runPriorDataMigrations(cmd.Context(), cmd, rc, sshPool, priorDataMigrations, opts.dryRun); runErr != nil {
+			return runErr
 		}
 	}
 
@@ -610,7 +626,7 @@ func runReleaseApply(cmd *cobra.Command, rc *resolvedCluster, opts releaseApplyO
 			return err
 		}
 	}
-	fmt.Fprintf(out, "  Contract migrations remain deferred. After the rollback window closes, take a fresh backup with `frameworks cluster backup create --to <backup-dir> --all`, then run `frameworks cluster migrate --phase contract --to-version %s --backup <completed-backup-path> --dry-run` and repeat with --yes in place of --dry-run.\n", platformVersion)
+	fmt.Fprintf(out, "  Contract migrations remain deferred. After the rollback window closes, run `frameworks cluster migrate --phase contract --to-version %s --dry-run`: its backup gate prints the `backup create` command for exactly the databases it changes. Take that backup, then repeat with --backup <completed-backup-path> --yes in place of --dry-run.\n", platformVersion)
 
 	if opts.dryRun {
 		ux.Success(out, "Dry-run complete: all gates and reconciliation Checks passed; nothing was mutated")

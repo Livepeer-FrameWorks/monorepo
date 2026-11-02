@@ -149,6 +149,11 @@ type resolvedCluster struct {
 	// migration in this set as applied. Only a dry-run sets it, so a real apply checks the ledger strictly.
 	dryRunExpandMigrations map[string]struct{}
 
+	// dryRunDataMigrations names, as <service>.<id>, the earlier releases' required data migrations a dry-run
+	// `release apply` ran read-only. The real apply runs and completes them before any upgrade, so later dry-run data
+	// migration gates do not count them. Only a dry run sets it.
+	dryRunDataMigrations map[string]struct{}
+
 	bootstrapYAMLOnce sync.Once
 	bootstrapYAML     []byte
 	bootstrapYAMLErr  error

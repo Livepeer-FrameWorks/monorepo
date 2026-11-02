@@ -454,6 +454,7 @@ func runUpgradePreDeployGate(
 				if err != nil {
 					return fmt.Errorf("[gate] check prior data migrations: %w", err)
 				}
+				blockers = withoutDryRunDataMigrations(blockers, rc)
 				if len(blockers) > 0 {
 					return dataMigrationRefusal(
 						fmt.Sprintf("[gate] prior data migrations required before deploying %s %s:", serviceName, targetPlatformVersion),

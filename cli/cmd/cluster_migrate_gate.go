@@ -50,6 +50,7 @@ func runPhaseDataMigrationGate(
 	if err != nil {
 		return fmt.Errorf("[gate] check %s data migrations: %w", phase, err)
 	}
+	blockers = withoutDryRunDataMigrations(blockers, rc)
 	if len(blockers) > 0 {
 		return dataMigrationRefusal(
 			fmt.Sprintf("[gate] %s blocked: required data migrations not completed:", phase),

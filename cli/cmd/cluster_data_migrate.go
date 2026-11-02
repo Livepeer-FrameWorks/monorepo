@@ -212,7 +212,7 @@ func newDMRunCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().String(backupFlag, "", "Backup (directory or s3:// URL) taken within the last hour; required for an irreversible migration")
-	cmd.Flags().IntVar(&batchSize, "batch-size", 1000, "Batch size hint")
+	cmd.Flags().IntVar(&batchSize, "batch-size", defaultDataMigrationBatchSize, "Batch size hint")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Run inside a read-only database transaction")
 	cmd.Flags().StringVar(&scopeKind, "scope-kind", "", "Scope partition kind")
 	cmd.Flags().StringVar(&scopeValue, "scope-value", "", "Scope partition value")
@@ -278,6 +278,9 @@ func newDMResumeCmd() *cobra.Command {
 		},
 	}
 }
+
+// defaultDataMigrationBatchSize is the batch size hint `data-migrate run` and `release apply` pass to the service binary.
+const defaultDataMigrationBatchSize = 1000
 
 // runDataMigrateRemoteFn invokes the service binary; tests substitute a recorder.
 var runDataMigrateRemoteFn = runDataMigrateRemote

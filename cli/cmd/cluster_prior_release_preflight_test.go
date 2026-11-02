@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"io"
+	"slices"
 	"strings"
 	"testing"
 
 	"frameworks/cli/internal/releases"
+	"frameworks/cli/pkg/backup"
 	"frameworks/cli/pkg/gitops"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/provisioner"
@@ -126,17 +128,123 @@ func TestReleaseApplyRefusesIncompletePriorReleaseBeforeFirstMutation(t *testing
 	}
 }
 
-func TestReleaseApplyRefusesIncompletePriorDataMigrationBeforeFirstMutation(t *testing.T) {
-	h := &releaseApplyHarness{pendingDataID: "commodore_pull_source_pins_to_stream_rules_v0_3_8"}
+const harnessPendingDataMigration = "commodore_pull_source_pins_to_stream_rules_v0_3_8"
+
+// stubPriorDataMigrationRun records each data-migrations run `release apply` sends and marks the migration completed
+// after a real (non-dry) run that runErr does not fail. irreversible decides the backup gate.
+type stubPriorDataMigrationRun struct {
+	h            *releaseApplyHarness
+	runs         [][]string
+	runErr       error
+	irreversible bool
+}
+
+func (s *stubPriorDataMigrationRun) install(t *testing.T) {
+	t.Helper()
+	origRun, origEntry, origDigests := runDataMigrateRemoteFn, remoteDataMigrationEntryFn, serviceDatabaseDigestsFn
+	t.Cleanup(func() {
+		runDataMigrateRemoteFn, remoteDataMigrationEntryFn, serviceDatabaseDigestsFn = origRun, origEntry, origDigests
+	})
+	runDataMigrateRemoteFn = func(_ *cobra.Command, _ *resolvedCluster, service string, args []string) error {
+		s.runs = append(s.runs, append([]string{service}, args...))
+		if s.runErr != nil {
+			return s.runErr
+		}
+		if !slices.Contains(args, "--dry-run") {
+			s.h.pendingDataID = ""
+		}
+		return nil
+	}
+	remoteDataMigrationEntryFn = func(_ context.Context, _ *resolvedCluster, _ *ssh.Pool, _, id string) (dataMigrationListEntry, bool, error) {
+		irreversible := s.irreversible
+		return dataMigrationListEntry{ID: id, Irreversible: &irreversible}, true, nil
+	}
+	serviceDatabaseDigestsFn = func(context.Context, *resolvedCluster, *ssh.Pool, string) (map[string]string, error) {
+		return map[string]string{"postgres/commodore": "digest"}, nil
+	}
+}
+
+func TestReleaseApplyRunsPendingPriorDataMigrationFirst(t *testing.T) {
+	h := &releaseApplyHarness{pendingDataID: harnessPendingDataMigration}
 	h.install(t)
-	for _, dryRun := range []bool{false, true} {
-		_, err := h.apply(t, dryRun)
-		if h.mutationCalled {
-			t.Fatalf("dry-run=%v: release apply reached the expand step before refusing the pending v0.3.8 data migration (err=%v)", dryRun, err)
+	stub := &stubPriorDataMigrationRun{h: h}
+	stub.install(t)
+	out, err := h.apply(t, false)
+	if !h.mutationCalled || !errors.Is(err, errHarnessStoppedAtMutation) {
+		t.Fatalf("err = %v, mutation reached = %v; a pending earlier-release data migration must be run, not refused\n%s", err, h.mutationCalled, out)
+	}
+	if len(stub.runs) != 1 || strings.Join(stub.runs[0], " ") != "commodore data-migrations run "+harnessPendingDataMigration+" --batch-size 1000" {
+		t.Fatalf("runs = %v; want one real run of %s", stub.runs, harnessPendingDataMigration)
+	}
+	if !strings.Contains(out, "0. required data migrations of earlier releases: commodore."+harnessPendingDataMigration+" (v0.3.8, pending)") {
+		t.Fatalf("the release plan does not list the earlier data migration:\n%s", out)
+	}
+	if strings.Index(out, "Required data migrations of earlier releases") > strings.Index(out, "Pre-upgrade host convergence") {
+		t.Fatalf("the earlier data migration did not run before host convergence:\n%s", out)
+	}
+}
+
+func TestReleaseApplyDryRunPreviewsPendingPriorDataMigration(t *testing.T) {
+	h := &releaseApplyHarness{pendingDataID: harnessPendingDataMigration}
+	h.install(t)
+	stub := &stubPriorDataMigrationRun{h: h, irreversible: true}
+	stub.install(t)
+	_, err := h.apply(t, true)
+	if !h.mutationCalled || !errors.Is(err, errHarnessStoppedAtMutation) {
+		t.Fatalf("err = %v; a dry run must preview the earlier data migration without a backup and continue", err)
+	}
+	if len(stub.runs) != 1 || !slices.Contains(stub.runs[0], "--dry-run") {
+		t.Fatalf("runs = %v; want one read-only run", stub.runs)
+	}
+}
+
+func TestReleaseApplyGatesIrreversiblePriorDataMigrationOnBackup(t *testing.T) {
+	h := &releaseApplyHarness{pendingDataID: harnessPendingDataMigration}
+	h.install(t)
+	stub := &stubPriorDataMigrationRun{h: h, irreversible: true}
+	stub.install(t)
+	_, err := h.apply(t, false)
+	if h.mutationCalled || len(stub.runs) != 0 {
+		t.Fatalf("an irreversible earlier data migration ran or the release mutated without a backup (runs=%v, err=%v)", stub.runs, err)
+	}
+	if err == nil || !errors.Is(err, backup.ErrBackupRequired) || !strings.Contains(err.Error(), "commodore."+harnessPendingDataMigration) ||
+		!strings.Contains(err.Error(), "--database commodore") {
+		t.Fatalf("err = %v; want the backup gate refusal naming the migration and the database to back up", err)
+	}
+}
+
+func TestReleaseApplyNamesTheFailedPriorDataMigration(t *testing.T) {
+	h := &releaseApplyHarness{pendingDataID: harnessPendingDataMigration}
+	h.install(t)
+	stub := &stubPriorDataMigrationRun{h: h, runErr: errors.New("commodore data-migrations exit 1")}
+	stub.install(t)
+	_, err := h.apply(t, false)
+	if h.mutationCalled {
+		t.Fatalf("release apply continued after the earlier data migration failed (err=%v)", err)
+	}
+	if err == nil || !strings.Contains(err.Error(), "required data migration commodore."+harnessPendingDataMigration+" of release v0.3.8 failed") ||
+		strings.Contains(err.Error(), "release apply --version v0.3.8") {
+		t.Fatalf("err = %v; want a failure naming the migration, not an instruction to apply v0.3.8", err)
+	}
+}
+
+func TestReleaseApplyRefusesPausedPriorDataMigrationWithItsRemedy(t *testing.T) {
+	h := &releaseApplyHarness{}
+	h.install(t)
+	priorDataMigrationSourceFn = func(*ssh.Pool, *inventory.Manifest) datamigrate.StateSource {
+		return func(_ context.Context, service, id string) datamigrate.LiveStatus {
+			if id == harnessPendingDataMigration {
+				return datamigrate.LiveStatus{ID: id, Service: service, Status: datamigrate.StatusPaused}
+			}
+			return datamigrate.LiveStatus{ID: id, Service: service, Status: datamigrate.StatusCompleted}
 		}
-		if err == nil || !strings.Contains(err.Error(), "commodore/commodore_pull_source_pins_to_stream_rules_v0_3_8") || !strings.Contains(err.Error(), "v0.3.8") {
-			t.Fatalf("dry-run=%v: err = %v; want a refusal naming the pending v0.3.8 data migration", dryRun, err)
-		}
+	}
+	_, err := h.apply(t, false)
+	if h.mutationCalled {
+		t.Fatal("release apply mutated with a paused earlier data migration")
+	}
+	if err == nil || !strings.Contains(err.Error(), "data-migrate resume commodore."+harnessPendingDataMigration) || strings.Contains(err.Error(), "release apply --version") {
+		t.Fatalf("err = %v; want a refusal naming the resume command and no release to apply", err)
 	}
 }
 
@@ -146,5 +254,19 @@ func TestReleaseApplyProceedsWhenPriorReleasesAreComplete(t *testing.T) {
 	_, err := h.apply(t, false)
 	if !h.mutationCalled || !errors.Is(err, errHarnessStoppedAtMutation) {
 		t.Fatalf("err = %v, mutation reached = %v; a cluster with every prior release complete must reach the expand step", err, h.mutationCalled)
+	}
+}
+
+func TestDryRunGatesSkipOnlyTheDataMigrationsTheDryRunRan(t *testing.T) {
+	ran := datamigrate.Blocker{Requirement: datamigrate.Requirement{Service: "purser", ID: "purser_eur_ledger_conversion_v0_3_11"}, Reason: "pending"}
+	other := datamigrate.Blocker{Requirement: datamigrate.Requirement{Service: "commodore", ID: harnessPendingDataMigration}, Reason: "pending"}
+	unreadable := datamigrate.Blocker{Requirement: ran.Requirement, Live: datamigrate.LiveStatus{FetchError: errors.New("ssh")}}
+	rc := &resolvedCluster{dryRunDataMigrations: map[string]struct{}{"purser.purser_eur_ledger_conversion_v0_3_11": {}}}
+	got := withoutDryRunDataMigrations([]datamigrate.Blocker{ran, other, unreadable}, rc)
+	if len(got) != 2 || got[0].Requirement.ID != harnessPendingDataMigration || !got[1].Unreadable() {
+		t.Fatalf("kept %+v; want the migration the dry run did not run and the unreadable state", got)
+	}
+	if got := withoutDryRunDataMigrations([]datamigrate.Blocker{ran}, nil); len(got) != 1 {
+		t.Fatal("a real run must keep every blocker")
 	}
 }
