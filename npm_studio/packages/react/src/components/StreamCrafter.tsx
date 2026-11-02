@@ -598,6 +598,10 @@ const StreamCrafterInner: React.FC<StreamCrafterProps> = ({
     autoEnable: enableCompositor,
     config: compositorConfig,
   });
+  const contextValue = useMemo(
+    () => ({ ...hookReturn, compositor: enableCompositor ? compositor : null }),
+    [hookReturn, compositor, enableCompositor]
+  );
 
   // Notify parent of state changes
   useEffect(() => {
@@ -759,7 +763,7 @@ const StreamCrafterInner: React.FC<StreamCrafterProps> = ({
   if (children) {
     return (
       <StudioI18nProvider locale={locale}>
-        <StreamCrafterProvider value={hookReturn}>
+        <StreamCrafterProvider value={contextValue}>
           <div
             className={cn("fw-sc-root", className)}
             data-theme={typeof theme === "string" && theme !== "default" ? theme : undefined}
@@ -774,7 +778,7 @@ const StreamCrafterInner: React.FC<StreamCrafterProps> = ({
 
   return (
     <StudioI18nProvider locale={locale}>
-      <StreamCrafterProvider value={hookReturn}>
+      <StreamCrafterProvider value={contextValue}>
         <ContextMenu>
           <ContextMenuTrigger asChild>
             <div

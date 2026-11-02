@@ -22,9 +22,17 @@ export { SceneSwitcher, type SceneSwitcherProps } from "./components/SceneSwitch
 export { LayerList, type LayerListProps } from "./components/LayerList";
 export {
   StudioProducerPanel,
-  type StudioMediaActions,
   type StudioProducerPanelProps,
 } from "./components/StudioProducerPanel";
+export {
+  StudioOverlayControls,
+  type StudioOverlayControlsProps,
+} from "./components/StudioOverlayControls";
+export {
+  StudioMediaControls,
+  type StudioMediaActions,
+  type StudioMediaControlsProps,
+} from "./components/StudioMediaControls";
 export { CameraPicker, type CameraPickerProps } from "./components/CameraPicker";
 export { CompositorControls, type CompositorControlsProps } from "./components/CompositorControls";
 
@@ -77,6 +85,7 @@ export {
   StreamCrafterProvider,
   useStreamCrafterContext,
   useStreamCrafterContextOptional,
+  type StreamCrafterContextValue,
   type StreamCrafterProviderProps,
 } from "./context/StreamCrafterContext";
 

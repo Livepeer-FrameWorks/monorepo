@@ -9,22 +9,32 @@ import {
   type UseStreamCrafterV2Options as UseStreamCrafterOptions,
   type UseStreamCrafterV2Return as UseStreamCrafterReturn,
 } from "../hooks/useStreamCrafterV2";
+import type { UseCompositorReturn } from "../hooks/useCompositor";
 
-const StreamCrafterContext = createContext<UseStreamCrafterReturn | null>(null);
+/**
+ * What composable children of `<StreamCrafter>` read: the capture and
+ * streaming state and actions, plus the compositor of that StreamCrafter.
+ */
+export interface StreamCrafterContextValue extends UseStreamCrafterReturn {
+  /** The StreamCrafter's compositor; null when it has none, as with `config` mode. */
+  compositor?: UseCompositorReturn | null;
+}
+
+const StreamCrafterContext = createContext<StreamCrafterContextValue | null>(null);
 
 export type StreamCrafterProviderProps = {
   children: ReactNode;
 } & (
   | { config: UseStreamCrafterOptions; value?: never }
-  | { value: UseStreamCrafterReturn; config?: never }
+  | { value: StreamCrafterContextValue; config?: never }
 );
 
 /**
  * Provides StreamCrafter state to child components.
  *
  * Two modes:
- * - `config` — creates a new hook instance internally
- * - `value` — wraps children with a pre-computed hook return (used by StreamCrafter component)
+ * - `config` — creates a new hook instance internally, without a compositor
+ * - `value` — wraps children with a pre-computed value (used by the StreamCrafter component)
  */
 export function StreamCrafterProvider({ children, config, value }: StreamCrafterProviderProps) {
   if (value !== undefined) {
@@ -46,7 +56,7 @@ function HookProvider({
   );
 }
 
-export function useStreamCrafterContext(): UseStreamCrafterReturn {
+export function useStreamCrafterContext(): StreamCrafterContextValue {
   const context = useContext(StreamCrafterContext);
   if (!context) {
     throw new Error("useStreamCrafterContext must be used within a StreamCrafterProvider");
@@ -55,6 +65,6 @@ export function useStreamCrafterContext(): UseStreamCrafterReturn {
 }
 
 /** Returns the context value or null if not inside a provider. */
-export function useStreamCrafterContextOptional(): UseStreamCrafterReturn | null {
+export function useStreamCrafterContextOptional(): StreamCrafterContextValue | null {
   return useContext(StreamCrafterContext);
 }

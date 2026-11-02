@@ -64,6 +64,8 @@ vi.mock("@livepeer-frameworks/streamcrafter-core", async (importOriginal) => {
 });
 
 import { StreamCrafter } from "../src/components/StreamCrafter";
+import { StudioProducerPanel } from "../src/components/StudioProducerPanel";
+import { StudioOverlayControls } from "../src/components/StudioOverlayControls";
 
 const WHIP_URL = "https://ingest.example/whip";
 
@@ -89,6 +91,18 @@ describe("StreamCrafter producer panel", () => {
     await new Promise((resolve) => setTimeout(resolve));
 
     expect(container.querySelector(".fw-sc-producer")).toBeNull();
+  });
+
+  it("gives composable children the compositor through context", async () => {
+    render(
+      <StreamCrafter whipUrl={WHIP_URL}>
+        <StudioProducerPanel />
+        <StudioOverlayControls />
+      </StreamCrafter>
+    );
+
+    expect(await screen.findByText("Default")).toBeTruthy();
+    expect(screen.getAllByText("Overlays")).toHaveLength(2);
   });
 
   it("stays away when the compositor is turned off", async () => {
