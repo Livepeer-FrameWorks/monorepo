@@ -23,7 +23,7 @@ tests:
               severity: warning
             exp_annotations:
               summary: A confirmed downgrade is held past its effective time
-              description: The provider already charges the lower tier, but the local tier has not flipped and the customer's tier changes are refused, usually because the period's closing invoice is held in manual review. Resolve the hold so the daily applier flips the tier, or apply it with frameworks admin billing set-tier.
+              description: "The provider already charges the lower tier, but the local tier has not flipped and the customer's tier changes are refused. Run frameworks admin billing recovery list: its held downgrades section names each tenant, target tier and closing invoice. frameworks admin billing recovery downgrade --tenant-id <tenant> --reason <reason> shows what holds it (provider confirmation, a draft or manual_review invoice, or a pricing refusal) and, once nothing does, applies it."
       - eval_time: 10m
         groupname: frameworks.rules
         alertname: PurserTierDowngradeHeld

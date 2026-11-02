@@ -28,7 +28,7 @@ tests:
               severity: warning
             exp_annotations:
               summary: Tenant closure is awaiting synchronization
-              description: Commodore is retrying a failed tenant closure or cannot read its recovery queue. Check Commodore logs.
+              description: A closed tenant's Quartermaster teardown has failed more than once, or Commodore cannot read its closure queue from its database. Commodore retries every minute and logs each failure as "Finish tenant closure" with tenant_id and the Quartermaster error. Restore Commodore's connection to Quartermaster, or Commodore's database for read failures; the closure completes on the next retry. Access is already revoked locally, so users stay closed while this fires.
       - eval_time: 10m
         groupname: frameworks.rules
         alertname: CommodoreTenantAccountClosureStuck
@@ -45,7 +45,7 @@ tests:
               severity: warning
             exp_annotations:
               summary: Operator grant expiry needs recovery
-              description: A grant failed billing-boundary reconciliation or Purser cannot read its expiry queue. Run frameworks admin billing grant list --include-expired and grant show --tenant-id <uuid> to inspect expiry failures and the last error. Other expiries continue.
+              description: "An operator grant past its deadline failed billing-boundary reconciliation more than once, or Purser cannot read its expiry queue. Run frameworks admin billing grant list --include-expired: it names each tenant with its failed attempts and last error, and grant show --tenant-id <tenant> shows one in full. Correct the billing or pricing error; retries run every five minutes. Other expiries continue."
       - eval_time: 10m
         groupname: frameworks.rules
         alertname: PurserOperatorGrantExpiryStuck
@@ -71,7 +71,7 @@ tests:
               severity: warning
             exp_annotations:
               summary: Tenant closure is awaiting synchronization
-              description: Commodore is retrying a failed tenant closure or cannot read its recovery queue. Check Commodore logs.
+              description: A closed tenant's Quartermaster teardown has failed more than once, or Commodore cannot read its closure queue from its database. Commodore retries every minute and logs each failure as "Finish tenant closure" with tenant_id and the Quartermaster error. Restore Commodore's connection to Quartermaster, or Commodore's database for read failures; the closure completes on the next retry. Access is already revoked locally, so users stay closed while this fires.
       - eval_time: 19m
         groupname: frameworks.rules
         alertname: CommodoreTenantAccountClosureStuck
@@ -80,7 +80,7 @@ tests:
               severity: warning
             exp_annotations:
               summary: Tenant closure is awaiting synchronization
-              description: Commodore is retrying a failed tenant closure or cannot read its recovery queue. Check Commodore logs.
+              description: A closed tenant's Quartermaster teardown has failed more than once, or Commodore cannot read its closure queue from its database. Commodore retries every minute and logs each failure as "Finish tenant closure" with tenant_id and the Quartermaster error. Restore Commodore's connection to Quartermaster, or Commodore's database for read failures; the closure completes on the next retry. Access is already revoked locally, so users stay closed while this fires.
       - eval_time: 50m
         groupname: frameworks.rules
         alertname: CommodoreTenantAccountClosureStuck
@@ -106,7 +106,7 @@ tests:
               severity: warning
             exp_annotations:
               summary: Operator grant expiry needs recovery
-              description: A grant failed billing-boundary reconciliation or Purser cannot read its expiry queue. Run frameworks admin billing grant list --include-expired and grant show --tenant-id <uuid> to inspect expiry failures and the last error. Other expiries continue.
+              description: "An operator grant past its deadline failed billing-boundary reconciliation more than once, or Purser cannot read its expiry queue. Run frameworks admin billing grant list --include-expired: it names each tenant with its failed attempts and last error, and grant show --tenant-id <tenant> shows one in full. Correct the billing or pricing error; retries run every five minutes. Other expiries continue."
       - eval_time: 19m
         groupname: frameworks.rules
         alertname: PurserOperatorGrantExpiryStuck
@@ -115,7 +115,7 @@ tests:
               severity: warning
             exp_annotations:
               summary: Operator grant expiry needs recovery
-              description: A grant failed billing-boundary reconciliation or Purser cannot read its expiry queue. Run frameworks admin billing grant list --include-expired and grant show --tenant-id <uuid> to inspect expiry failures and the last error. Other expiries continue.
+              description: "An operator grant past its deadline failed billing-boundary reconciliation more than once, or Purser cannot read its expiry queue. Run frameworks admin billing grant list --include-expired: it names each tenant with its failed attempts and last error, and grant show --tenant-id <tenant> shows one in full. Correct the billing or pricing error; retries run every five minutes. Other expiries continue."
       - eval_time: 50m
         groupname: frameworks.rules
         alertname: PurserOperatorGrantExpiryStuck
@@ -163,7 +163,7 @@ tests:
               severity: warning
             exp_annotations:
               summary: Account session-stop delivery is awaiting a cell
-              description: A locally revoked account still has session-stop delivery pending, including backoff. Tenant closure, when requested, proceeds independently of stop delivery. Restore the recorded cell to clear this obligation. Permanently removed cells have no retirement command; the alert continues until restored. Foghorn v0.3.13 returns Unimplemented for per-user stops during rollout; upgrade the recorded cell. This alert aggregates all cells, so silencing it suppresses other pending stops too. Record permanently removed cells in the incident; there is no per-cell silence.
+              description: "A revoked user, tenant or stream still has an ingest stop that a cell has not accepted, including backoff. Run frameworks cluster diagnose media-authority: its retrying refresh targets on lane ingest_revocation list the tenant and the last error, which names the cell. Restore that cell, or upgrade its Foghorn if the error is Unimplemented; Commodore retries the stop until the cell accepts it. Tenant closure proceeds independently of stop delivery. A permanently removed cell has no retirement command, so this alert stays firing until the cell returns. It aggregates all cells: silencing it also hides stops pending on other cells."
       - eval_time: 15m
         groupname: frameworks.rules
         alertname: CommodoreAccountIngestRevocationStuck

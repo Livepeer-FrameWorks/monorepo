@@ -157,7 +157,7 @@ groups:
           severity: warning
         annotations:
           summary: "Account session-stop delivery is awaiting a cell"
-          description: "A locally revoked account still has session-stop delivery pending, including backoff. Tenant closure, when requested, proceeds independently of stop delivery. Restore the recorded cell to clear this obligation. Permanently removed cells have no retirement command; the alert continues until restored. Foghorn v0.3.13 returns Unimplemented for per-user stops during rollout; upgrade the recorded cell. This alert aggregates all cells, so silencing it suppresses other pending stops too. Record permanently removed cells in the incident; there is no per-cell silence."
+          description: "A revoked user, tenant or stream still has an ingest stop that a cell has not accepted, including backoff. Run frameworks cluster diagnose media-authority: its retrying refresh targets on lane ingest_revocation list the tenant and the last error, which names the cell. Restore that cell, or upgrade its Foghorn if the error is Unimplemented; Commodore retries the stop until the cell accepts it. Tenant closure proceeds independently of stop delivery. A permanently removed cell has no retirement command, so this alert stays firing until the cell returns. It aggregates all cells: silencing it also hides stops pending on other cells."
 
       - alert: CommodoreTenantAccountClosureStuck
         expr: max(commodore_tenant_account_closure_repeatedly_failed_items) > 0 or max(increase(commodore_tenant_account_closure_read_failures_total[2m])) > 1
@@ -166,7 +166,7 @@ groups:
           severity: warning
         annotations:
           summary: "Tenant closure is awaiting synchronization"
-          description: "Commodore is retrying a failed tenant closure or cannot read its recovery queue. Check Commodore logs."
+          description: 'A closed tenant''s Quartermaster teardown has failed more than once, or Commodore cannot read its closure queue from its database. Commodore retries every minute and logs each failure as "Finish tenant closure" with tenant_id and the Quartermaster error. Restore Commodore''s connection to Quartermaster, or Commodore''s database for read failures; the closure completes on the next retry. Access is already revoked locally, so users stay closed while this fires.'
 
       - alert: PurserProviderWebhookInboxStuck
         expr: max(purser_provider_webhook_inbox_repeatedly_failed_items) > 0 or max(increase(purser_provider_webhook_inbox_read_failures_total[2m])) > 1
@@ -184,16 +184,16 @@ groups:
           severity: warning
         annotations:
           summary: "A confirmed downgrade is held past its effective time"
-          description: "The provider already charges the lower tier, but the local tier has not flipped and the customer's tier changes are refused, usually because the period's closing invoice is held in manual review. Resolve the hold so the daily applier flips the tier, or apply it with frameworks admin billing set-tier."
+          description: "The provider already charges the lower tier, but the local tier has not flipped and the customer's tier changes are refused. Run frameworks admin billing recovery list: its held downgrades section names each tenant, target tier and closing invoice. frameworks admin billing recovery downgrade --tenant-id <tenant> --reason <reason> shows what holds it (provider confirmation, a draft or manual_review invoice, or a pricing refusal) and, once nothing does, applies it."
 
       - alert: PurserFreeFallbackStuck
-        expr: max(purser_free_fallback_repeatedly_failed_items) > 0 or max(increase(purser_free_fallback_read_failures_total[2m])) > 1
+        expr: max by (stage) (purser_free_fallback_repeatedly_failed_items) > 0 or max(increase(purser_free_fallback_read_failures_total[2m])) > 1
         for: 5m
         labels:
           severity: warning
         annotations:
           summary: "Move to Free or its notification needs recovery"
-          description: "Purser is retrying provider cancellation, a final invoice, Free move or notification, a bank settlement has waited over fourteen days, or Purser cannot read that queue. Run frameworks admin billing recovery list --tenant-id <uuid> to inspect the failure. Restore required metering or provider access; for mail failures fix billing_email or use set-tier to cancel the fallback. Mail delivery stops after five failures and remains visible as notice_abandoned in recovery list; it does not block billing moves. Other tenants continue."
+          description: '{{ if eq $labels.stage "notice" }}A grace or completed-move email to a tenant keeps failing. Run frameworks admin billing recovery list; its free_fallback rows name the tenant and the delivery error. Fix the tenant''s billing_email; after five failures the row shows notice_abandoned and frameworks admin billing recovery notice --tenant-id <tenant> --reason <reason> sends it again. Mail failures never block the move itself.{{ else if eq $labels.stage "move" }}A move to Free keeps failing: provider cancellation, the final invoice or the tier change, or a bank settlement has waited over fourteen days. Run frameworks admin billing recovery list; its free_fallback rows name the tenant and the last error. Restore provider access or the missing metering and Purser retries, or cancel the fallback with frameworks admin billing set-tier.{{ else }}Purser cannot read its Free fallback queue from its database, so moves to Free and their emails are not being retried. Restore Purser''s database connection.{{ end }} Other tenants continue.'
 
       - alert: PurserOperatorGrantExpiryStuck
         expr: max(purser_operator_grant_expiry_repeatedly_failed_items) > 0 or max(increase(purser_operator_grant_expiry_read_failures_total[2m])) > 1
@@ -202,7 +202,7 @@ groups:
           severity: warning
         annotations:
           summary: "Operator grant expiry needs recovery"
-          description: "A grant failed billing-boundary reconciliation or Purser cannot read its expiry queue. Run frameworks admin billing grant list --include-expired and grant show --tenant-id <uuid> to inspect expiry failures and the last error. Other expiries continue."
+          description: "An operator grant past its deadline failed billing-boundary reconciliation more than once, or Purser cannot read its expiry queue. Run frameworks admin billing grant list --include-expired: it names each tenant with its failed attempts and last error, and grant show --tenant-id <tenant> shows one in full. Correct the billing or pricing error; retries run every five minutes. Other expiries continue."
 
       - alert: PurserMediaAuthorityRefreshWorkerDisabled
         expr: purser_media_authority_refresh_worker_ready == 0

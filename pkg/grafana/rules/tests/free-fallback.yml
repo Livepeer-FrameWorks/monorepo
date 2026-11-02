@@ -1,3 +1,5 @@
+# Each failing stage fires with its own label and remedy; a queue read failure
+# fires without one.
 rule_files:
   - ../frameworks.yml
 
@@ -21,9 +23,10 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: warning
+              stage: move
             exp_annotations:
               summary: Move to Free or its notification needs recovery
-              description: Purser is retrying provider cancellation, a final invoice, Free move or notification, a bank settlement has waited over fourteen days, or Purser cannot read that queue. Run frameworks admin billing recovery list --tenant-id <uuid> to inspect the failure. Restore required metering or provider access; for mail failures fix billing_email or use set-tier to cancel the fallback. Mail delivery stops after five failures and remains visible as notice_abandoned in recovery list; it does not block billing moves. Other tenants continue.
+              description: "A move to Free keeps failing: provider cancellation, the final invoice or the tier change, or a bank settlement has waited over fourteen days. Run frameworks admin billing recovery list; its free_fallback rows name the tenant and the last error. Restore provider access or the missing metering and Purser retries, or cancel the fallback with frameworks admin billing set-tier. Other tenants continue."
       - eval_time: 10m
         groupname: frameworks.rules
         alertname: PurserFreeFallbackStuck
@@ -32,6 +35,8 @@ tests:
     input_series:
       - series: purser_free_fallback_repeatedly_failed_items{instance="a",stage="notice"}
         values: "0 1x7 0x4"
+      - series: purser_free_fallback_repeatedly_failed_items{instance="a",stage="move"}
+        values: "0x12"
     alert_rule_test:
       - eval_time: 7m
         groupname: frameworks.rules
@@ -39,9 +44,10 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: warning
+              stage: notice
             exp_annotations:
               summary: Move to Free or its notification needs recovery
-              description: Purser is retrying provider cancellation, a final invoice, Free move or notification, a bank settlement has waited over fourteen days, or Purser cannot read that queue. Run frameworks admin billing recovery list --tenant-id <uuid> to inspect the failure. Restore required metering or provider access; for mail failures fix billing_email or use set-tier to cancel the fallback. Mail delivery stops after five failures and remains visible as notice_abandoned in recovery list; it does not block billing moves. Other tenants continue.
+              description: "A grace or completed-move email to a tenant keeps failing. Run frameworks admin billing recovery list; its free_fallback rows name the tenant and the delivery error. Fix the tenant's billing_email; after five failures the row shows notice_abandoned and frameworks admin billing recovery notice --tenant-id <tenant> --reason <reason> sends it again. Mail failures never block the move itself. Other tenants continue."
       - eval_time: 10m
         groupname: frameworks.rules
         alertname: PurserFreeFallbackStuck
@@ -67,7 +73,7 @@ tests:
               severity: warning
             exp_annotations:
               summary: Move to Free or its notification needs recovery
-              description: Purser is retrying provider cancellation, a final invoice, Free move or notification, a bank settlement has waited over fourteen days, or Purser cannot read that queue. Run frameworks admin billing recovery list --tenant-id <uuid> to inspect the failure. Restore required metering or provider access; for mail failures fix billing_email or use set-tier to cancel the fallback. Mail delivery stops after five failures and remains visible as notice_abandoned in recovery list; it does not block billing moves. Other tenants continue.
+              description: "Purser cannot read its Free fallback queue from its database, so moves to Free and their emails are not being retried. Restore Purser's database connection. Other tenants continue."
       - eval_time: 50m
         groupname: frameworks.rules
         alertname: PurserFreeFallbackStuck
