@@ -246,6 +246,23 @@ export interface StudioTranslationStrings {
   noMedia: string;
   mediaFileError: string;
   mediaTabNotice: string;
+
+  // Audio section
+  browserProcessing: string;
+  noiseGate: string;
+  noiseGateThreshold: string;
+  deEsser: string;
+  equalizer: string;
+  eqLow: string;
+  eqMid: string;
+  eqHigh: string;
+  ducking: string;
+
+  // Connection health
+  connectionGood: string;
+  connectionFair: string;
+  connectionPoor: string;
+  connectionDetails: string;
 }
 
 export type StudioLocale = "en" | "es" | "fr" | "de" | "nl";
@@ -505,6 +522,23 @@ export const DEFAULT_STUDIO_TRANSLATIONS: StudioTranslationStrings = {
   mediaFileError: "This file could not be played in this browser.",
   mediaTabNotice:
     "Files play from this tab and are not uploaded. Keep this tab open while a file is in the mix.",
+
+  // Audio section
+  browserProcessing: "Browser processing",
+  noiseGate: "Noise gate",
+  noiseGateThreshold: "Gate threshold",
+  deEsser: "De-esser",
+  equalizer: "EQ",
+  eqLow: "Low",
+  eqMid: "Mid",
+  eqHigh: "High",
+  ducking: "Lower other sources while the camera microphone picks up sound",
+
+  // Connection health
+  connectionGood: "Connection good",
+  connectionFair: "Connection unstable",
+  connectionPoor: "Connection poor",
+  connectionDetails: "{bitrate} kbps, {loss}% packet loss, {rtt} ms round trip",
 };
 
 // ============================================================================
@@ -616,6 +650,19 @@ const LOCALE_ES: StudioTranslationStrings = {
   mediaFileError: "Este archivo no se pudo reproducir en este navegador.",
   mediaTabNotice:
     "Los archivos se reproducen desde esta pestaña y no se suben. Mantén esta pestaña abierta mientras haya un archivo en la mezcla.",
+  browserProcessing: "Procesamiento del navegador",
+  noiseGate: "Puerta de ruido",
+  noiseGateThreshold: "Umbral de la puerta",
+  deEsser: "De-esser",
+  equalizer: "EQ",
+  eqLow: "Graves",
+  eqMid: "Medios",
+  eqHigh: "Agudos",
+  ducking: "Bajar las demás fuentes mientras el micrófono de la cámara capta sonido",
+  connectionGood: "Conexión buena",
+  connectionFair: "Conexión inestable",
+  connectionPoor: "Conexión mala",
+  connectionDetails: "{bitrate} kbps, {loss}% de pérdida de paquetes, {rtt} ms de ida y vuelta",
   browserCannotCapture:
     "Este navegador no puede capturar una cámara ni una pantalla aquí. Abre esta página por HTTPS en un navegador actual.",
   browserCannotPublish:
@@ -729,6 +776,19 @@ const LOCALE_FR: StudioTranslationStrings = {
   mediaFileError: "Ce fichier ne peut pas être lu dans ce navigateur.",
   mediaTabNotice:
     "Les fichiers sont lus depuis cet onglet et ne sont pas envoyés. Gardez cet onglet ouvert tant qu'un fichier est dans le mixage.",
+  browserProcessing: "Traitement du navigateur",
+  noiseGate: "Noise gate",
+  noiseGateThreshold: "Seuil du gate",
+  deEsser: "De-esser",
+  equalizer: "EQ",
+  eqLow: "Graves",
+  eqMid: "Médiums",
+  eqHigh: "Aigus",
+  ducking: "Baisser les autres sources quand le micro de la caméra capte du son",
+  connectionGood: "Connexion bonne",
+  connectionFair: "Connexion instable",
+  connectionPoor: "Connexion mauvaise",
+  connectionDetails: "{bitrate} kbps, {loss} % de perte de paquets, {rtt} ms aller-retour",
   browserCannotCapture:
     "Ce navigateur ne peut pas capturer une caméra ou un écran ici. Ouvrez cette page en HTTPS dans un navigateur récent.",
   browserCannotPublish:
@@ -842,6 +902,19 @@ const LOCALE_DE: StudioTranslationStrings = {
   mediaFileError: "Diese Datei kann in diesem Browser nicht abgespielt werden.",
   mediaTabNotice:
     "Dateien werden aus diesem Tab abgespielt und nicht hochgeladen. Lassen Sie diesen Tab geöffnet, solange eine Datei in der Mischung ist.",
+  browserProcessing: "Browser-Verarbeitung",
+  noiseGate: "Noise Gate",
+  noiseGateThreshold: "Gate-Schwelle",
+  deEsser: "De-Esser",
+  equalizer: "EQ",
+  eqLow: "Tiefen",
+  eqMid: "Mitten",
+  eqHigh: "Höhen",
+  ducking: "Andere Quellen absenken, solange das Kameramikrofon Ton aufnimmt",
+  connectionGood: "Verbindung gut",
+  connectionFair: "Verbindung instabil",
+  connectionPoor: "Verbindung schlecht",
+  connectionDetails: "{bitrate} kbps, {loss} % Paketverlust, {rtt} ms Umlaufzeit",
   browserCannotCapture:
     "Dieser Browser kann hier weder Kamera noch Bildschirm aufnehmen. Öffnen Sie diese Seite über HTTPS in einem aktuellen Browser.",
   browserCannotPublish:
@@ -955,6 +1028,19 @@ const LOCALE_NL: StudioTranslationStrings = {
   mediaFileError: "Dit bestand kan niet worden afgespeeld in deze browser.",
   mediaTabNotice:
     "Bestanden worden vanuit dit tabblad afgespeeld en niet geüpload. Houd dit tabblad open zolang er een bestand in de mix zit.",
+  browserProcessing: "Browserverwerking",
+  noiseGate: "Noise gate",
+  noiseGateThreshold: "Drempel van de gate",
+  deEsser: "De-esser",
+  equalizer: "EQ",
+  eqLow: "Laag",
+  eqMid: "Midden",
+  eqHigh: "Hoog",
+  ducking: "Andere bronnen zachter zetten zolang de cameramicrofoon geluid opvangt",
+  connectionGood: "Verbinding goed",
+  connectionFair: "Verbinding instabiel",
+  connectionPoor: "Verbinding slecht",
+  connectionDetails: "{bitrate} kbps, {loss}% pakketverlies, {rtt} ms heen en terug",
   browserCannotCapture:
     "Deze browser kan hier geen camera of scherm opnemen. Open deze pagina via HTTPS in een actuele browser.",
   browserCannotPublish:

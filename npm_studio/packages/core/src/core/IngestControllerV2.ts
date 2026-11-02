@@ -11,7 +11,7 @@ import { TypedEventEmitter } from "./EventEmitter";
 import { DeviceManager } from "./DeviceManager";
 import { ScreenCapture } from "./ScreenCapture";
 import { WhipClient } from "./WhipClient";
-import { AudioMixer } from "./AudioMixer";
+import { AudioMixer, type AudioProcessingConfig } from "./AudioMixer";
 import { ReconnectionManager } from "./ReconnectionManager";
 import { MediaFileSource } from "./MediaFileSource";
 import { SceneManager } from "./SceneManager";
@@ -80,6 +80,10 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
   // Adaptive bitrate
   private bitrateAdaptation: BitrateAdaptation | null = null;
 
+  // Audio processing chosen by the broadcaster, kept across mixer start-up
+  private audioProcessing: Omit<AudioProcessingConfig, "sidechain"> = {};
+  private duckingEnabled = false;
+
   // Lifecycle: listener cleanup
   private eventForwardingUnsubs: Array<() => void> = [];
   private whipClientUnsubs: Array<() => void> = [];
@@ -103,6 +107,10 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
 
     // Set up event forwarding
     this.setupEventForwarding();
+
+    // The ducker is wired to specific sources, so it follows them.
+    this.on("sourceAdded", () => this.refreshDucking());
+    this.on("sourceRemoved", () => this.refreshDucking());
 
     this.log("IngestControllerV2 initialized", {
       useWebCodecs: this.useWebCodecs,
@@ -372,6 +380,9 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
   private async ensureAudioMixer(): Promise<void> {
     if (this.config.audioMixing && this.audioMixer.getState() === null) {
       await this.audioMixer.initialize();
+      // The mixer drops processing settings made before it had an audio context.
+      this.audioMixer.setAudioProcessing(this.audioProcessing);
+      this.refreshDucking();
     }
   }
 
@@ -923,6 +934,55 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
   getMasterVolume(): number {
     if (!this.config.audioMixing) return 1;
     return this.audioMixer.getMasterVolume();
+  }
+
+  /**
+   * Noise gate, EQ and de-esser on the mixed audio. Settings merge into those
+   * already made, hold before capture starts, and apply once the mixer runs.
+   * Ducking is set with setAudioDucking().
+   */
+  setAudioProcessing(config: Omit<AudioProcessingConfig, "sidechain">): void {
+    if (!this.config.audioMixing) return;
+    const { sidechain: _sidechain, ...rest } = config as AudioProcessingConfig;
+    this.audioProcessing = { ...this.audioProcessing, ...rest };
+    this.audioMixer.setAudioProcessing(rest);
+  }
+
+  /** The noise gate, EQ and de-esser settings made so far. */
+  getAudioProcessing(): Omit<AudioProcessingConfig, "sidechain"> {
+    return { ...this.audioProcessing };
+  }
+
+  /**
+   * Lower every other source while the first camera's microphone has signal,
+   * for talking over music or a clip. Follows sources as they come and go.
+   */
+  setAudioDucking(enabled: boolean): void {
+    if (!this.config.audioMixing) return;
+    this.duckingEnabled = enabled;
+    this.refreshDucking();
+  }
+
+  isAudioDuckingEnabled(): boolean {
+    return this.duckingEnabled;
+  }
+
+  /** Wires the ducker to the current microphone and the other sources. */
+  private refreshDucking(): void {
+    if (!this.config.audioMixing || this.audioMixer.getState() === null) return;
+    this.audioMixer.setAudioProcessing({ sidechain: { enabled: false } });
+    if (!this.duckingEnabled) return;
+
+    const mixed = Array.from(this.sources.values()).filter((source) =>
+      this.audioMixer.hasSource(source.id)
+    );
+    const key = mixed.find((source) => source.type === "camera");
+    const targets = mixed.filter((source) => source !== key).map((source) => source.id);
+    if (!key || targets.length === 0) return;
+
+    this.audioMixer.setAudioProcessing({
+      sidechain: { enabled: true, keySourceId: key.id, targetSourceIds: targets },
+    });
   }
 
   /**
@@ -1580,7 +1640,9 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
         stat.type === "candidate-pair" &&
         (stat as RTCIceCandidatePairStats).state === "succeeded"
       ) {
-        stats.connection.rtt = (stat as RTCIceCandidatePairStats).currentRoundTripTime ?? 0;
+        // currentRoundTripTime is in seconds; IngestStats carries milliseconds.
+        stats.connection.rtt =
+          ((stat as RTCIceCandidatePairStats).currentRoundTripTime ?? 0) * 1000;
       }
     });
 

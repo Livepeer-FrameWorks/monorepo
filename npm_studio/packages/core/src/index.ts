@@ -12,6 +12,11 @@ export { DeviceManager } from "./core/DeviceManager";
 export { ScreenCapture } from "./core/ScreenCapture";
 export { WhipClient } from "./core/WhipClient";
 export { maskWhipUrl, formatStreamInfo } from "./core/whipUrlDisplay";
+export {
+  assessConnectionHealth,
+  type ConnectionHealth,
+  type ConnectionHealthLevel,
+} from "./core/connectionHealth";
 // Ingest controller exports
 export { IngestControllerV2 as IngestController } from "./core/IngestControllerV2";
 export { IngestControllerV2 } from "./core/IngestControllerV2"; // Named export for direct imports

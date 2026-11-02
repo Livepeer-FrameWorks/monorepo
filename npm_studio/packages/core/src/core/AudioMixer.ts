@@ -28,6 +28,7 @@ interface AudioSourceNode {
   id: string;
   sourceNode: MediaStreamAudioSourceNode;
   gainNode: GainNode;
+  duckNode: GainNode;
   panNode: StereoPannerNode;
   track: MediaStreamTrack;
   options: Required<AudioSourceOptions>;
@@ -161,13 +162,18 @@ export class AudioMixer extends TypedEventEmitter<AudioMixerEvents> {
       const gainNode = this.audioContext.createGain();
       gainNode.gain.value = options.muted ? 0 : (options.volume ?? 1.0);
 
+      // Ducking has its own gain, so it never overwrites the source's volume.
+      const duckNode = this.audioContext.createGain();
+      duckNode.gain.value = 1;
+
       // Create panner node for stereo positioning
       const panNode = this.audioContext.createStereoPanner();
       panNode.pan.value = options.pan ?? 0;
 
-      // Connect the chain: source -> gain -> pan -> master
+      // Connect the chain: source -> gain -> duck -> pan -> master
       sourceNode.connect(gainNode);
-      gainNode.connect(panNode);
+      gainNode.connect(duckNode);
+      duckNode.connect(panNode);
       panNode.connect(this.masterGain);
 
       // Store the source
@@ -175,6 +181,7 @@ export class AudioMixer extends TypedEventEmitter<AudioMixerEvents> {
         id,
         sourceNode,
         gainNode,
+        duckNode,
         panNode,
         track,
         options: {
@@ -209,7 +216,9 @@ export class AudioMixer extends TypedEventEmitter<AudioMixerEvents> {
       // Disconnect all nodes
       source.sourceNode.disconnect();
       source.gainNode.disconnect();
+      source.duckNode.disconnect();
       source.panNode.disconnect();
+      this.sidechainDucker?.removeTarget(id);
 
       this.sources.delete(id);
 
@@ -413,10 +422,18 @@ export class AudioMixer extends TypedEventEmitter<AudioMixerEvents> {
         for (const tId of targetIds) {
           const target = this.sources.get(tId);
           if (target) {
-            this.sidechainDucker.addTarget(tId, target.gainNode);
+            this.sidechainDucker.addTarget(tId, target.duckNode);
           }
         }
       } else if (!config.sidechain.enabled && this.sidechainDucker) {
+        const keySrc = this.sidechainKeySourceId
+          ? this.sources.get(this.sidechainKeySourceId)
+          : undefined;
+        try {
+          keySrc?.panNode.disconnect(this.sidechainDucker.keyInput);
+        } catch {
+          // The key source was rewired since; nothing is left to undo.
+        }
         this.sidechainDucker.destroy();
         this.sidechainDucker = null;
         this.sidechainKeySourceId = null;

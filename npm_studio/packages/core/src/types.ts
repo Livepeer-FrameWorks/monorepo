@@ -168,6 +168,7 @@ export interface IngestStats {
     bitrate: number;
   };
   connection: {
+    /** Round-trip time in milliseconds */
     rtt: number;
     state: RTCPeerConnectionState;
     iceState: RTCIceConnectionState;

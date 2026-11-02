@@ -86,10 +86,18 @@ export class SidechainDucker {
     }
   }
 
+  /** Stops ducking; targets ducked at that moment return to full level. */
   destroy(): void {
     this.levelTap.destroy();
     this._keyInput.disconnect();
     this._keyOutput.disconnect();
+    if (this.isDucking) {
+      const now = this.context.currentTime;
+      for (const gain of this.targets.values()) {
+        gain.gain.setTargetAtTime(1, now, this.release);
+      }
+      this.isDucking = false;
+    }
     this.targets.clear();
   }
 }
