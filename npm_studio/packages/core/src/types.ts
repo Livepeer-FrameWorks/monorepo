@@ -404,6 +404,7 @@ export interface IngestControllerConfigV2 extends IngestControllerConfig {
   resolveWhipUrl?: (signal: AbortSignal) => Promise<string>;
   whipUrls?: string[];
   reconnection?: Partial<ReconnectionConfig>;
+  /** Mix source audio through the Web Audio mixer (master volume, levels, processing). Default true. */
   audioMixing?: boolean;
   compositor?: Partial<CompositorConfig>;
   adaptiveBitrate?: boolean;

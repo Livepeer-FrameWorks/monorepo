@@ -87,7 +87,9 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
 
   constructor(config: IngestControllerConfigV2) {
     super();
-    this.config = config;
+    // Sources mix through the Web Audio mixer unless asked not to: master volume,
+    // levels and the audio processing chain all live there.
+    this.config = { ...config, audioMixing: config.audioMixing ?? true };
     this.currentProfile = config.profile || "broadcast";
     this.whipEndpoints = this.buildWhipEndpoints(config);
     this.deviceManager = new DeviceManager();
@@ -105,7 +107,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
     this.log("IngestControllerV2 initialized", {
       useWebCodecs: this.useWebCodecs,
       profile: this.currentProfile,
-      audioMixing: config.audioMixing ?? false,
+      audioMixing: this.config.audioMixing,
     });
   }
 
