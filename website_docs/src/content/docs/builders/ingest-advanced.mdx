@@ -56,15 +56,14 @@ override.
 
 ## Audio Mixing
 
-With audio mixing enabled, StreamCrafter mixes the audio of all active sources through the Web
-Audio API. The React, Svelte, and Web Component drop-in components enable it. `createStreamCrafter()`
-and the `useStreamCrafterV2` / `createStreamCrafterContextV2` controllers leave it off unless you
-pass `audioMixing: true`:
+StreamCrafter mixes the audio of all active sources through the Web Audio API. Audio mixing is on by
+default in every binding and in `createStreamCrafter()`. Pass `audioMixing: false` to skip the
+mixer; master volume, levels, media file audio and the processing below then do nothing.
 
 ```ts
 const studio = createStreamCrafter({
   whipUrl: "...",
-  audioMixing: true,
+  audioMixing: false, // only to opt out
 });
 ```
 
@@ -85,13 +84,36 @@ studio.setSourceMuted("camera-1", true);
 studio.masterVolume = 0.5; // 0 to 2; applies to the mixed output
 ```
 
-Master volume requires `audioMixing: true`. Without it, setting `masterVolume` does nothing and
-reading it returns `1`.
+With `audioMixing: false`, setting `masterVolume` does nothing and reading it returns `1`.
 
 ### Audio Processing
 
 The mixed output passes through a fixed compressor (threshold -24 dB, ratio 4:1) followed by a
 limiter at -1 dB to prevent clipping. Levels are not normalized by the number of sources.
+
+A noise gate, three-band EQ and de-esser can sit before the compressor. The drop-in studios set
+them from their Audio section; in code, use `setAudioProcessing()` on the controller or the
+vanilla instance. Settings merge into those already made, are kept when made before capture
+starts, and apply once the mixer runs.
+
+```ts
+studio.setAudioProcessing({
+  noiseGate: { enabled: true, threshold: -45 }, // dB below which the gate closes
+  eq: { enabled: true, low: 2, mid: 0, high: -3 }, // dB per band
+  deEsser: { enabled: true },
+});
+```
+
+Ducking lowers every other source while the first camera's microphone picks up sound, for talking
+over music or a clip. It follows sources as they are added and removed, and leaves each source's
+volume setting alone:
+
+```ts
+studio.setAudioDucking(true);
+```
+
+The browser's echo cancellation, noise suppression and auto gain apply per microphone track, set
+with `track.applyConstraints()`. The drop-in Audio section sets them on every source.
 
 ## Reconnection
 
@@ -316,3 +338,9 @@ Default hotkeys:
 | Add camera       | `c`           |
 | Add screen share | `s`           |
 | Toggle settings  | `,`           |
+| Next scene       | `]`           |
+| Previous scene   | `[`           |
+
+The `keyMap` option and the hotkeys above apply to `createStreamCrafter()`. The React, Svelte and
+Web Component drop-ins bind the scene keys `]` and `[` only, while the studio has focus, and leave
+a key typed into a field alone.

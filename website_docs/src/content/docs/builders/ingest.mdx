@@ -5,12 +5,18 @@ description: "Stream directly from your browser using camera, screen share, or b
 
 import { Aside, LinkCard, CardGrid } from "@astrojs/starlight/components";
 
-Browser-based broadcasting — camera, screen share, or both with audio mixing. No encoder software needed.
+Browser-based broadcasting: cameras, screen share, media files, scenes and overlays, mixed in the browser. No encoder software needed.
+
+<Aside type="caution" title="Beta: the SDK will change a lot">
+  StreamCrafter is in beta, and its packages are on 0.x. Expect breaking changes in minor releases
+  while cloud production and guests are built. Pin an exact version and read the package changelog
+  before you upgrade.
+</Aside>
 
 <Aside type="tip" title="When to use StreamCrafter vs OBS">
 
-Use StreamCrafter for browser-based streaming, screen shares, webcam broadcasts, and interactive apps.
-Use OBS or a hardware encoder for animated scene transitions, complex overlays, and fine control over encoding quality. StreamCrafter's drop-in UI has no scene switcher; scenes are available through the compositor API.
+Use StreamCrafter for browser-based streaming, screen shares, webcam broadcasts, and interactive apps. The drop-in studio switches scenes with cuts, fades and slides, puts logos and text over the picture, plays media files into the mix, and has a noise gate, de-esser, EQ and ducking for the audio.
+Use OBS or a hardware encoder for long or high-stakes broadcasts, for filters and effects StreamCrafter does not have, or on a computer that cannot spare the CPU for a mix in the browser.
 
 </Aside>
 
@@ -70,7 +76,27 @@ import "@livepeer-frameworks/streamcrafter-react/streamcrafter.css";
   IP.
 </Aside>
 
-The drop-in component includes video preview, camera/screen share controls, quality selection, Go Live button, source management, and auto-reconnection.
+The drop-in component includes video preview, Add Camera, Share Screen and Add Media File, quality selection, the Go Live button, the source mixer, the producer controls, the audio section, a connection health indicator while live, and auto-reconnection.
+
+## Producer Controls
+
+While the compositor runs, the drop-in studio shows a producer panel under the preview. It is on by
+default in every binding; turn it off with `showProducerPanel={false}` on React and Svelte, or
+`show-producer-panel="false"` on the web component.
+
+| Section  | What it does                                                                     |
+| -------- | -------------------------------------------------------------------------------- |
+| Scenes   | Create, delete and switch scenes with a cut, fade or slide of a chosen duration  |
+| Layers   | Show, hide, reorder and remove the layers of the active scene, and set opacity   |
+| Overlays | Add a logo image or text to the active scene, and set its position, size, colour |
+| Media    | Play, pause and loop the media files added with Add Media File                   |
+
+`]` and `[` switch to the next and previous scene while the studio has focus.
+
+The Audio section appears while the studio captures. It sets the browser's echo cancellation,
+noise suppression and auto gain for the microphones, and a noise gate, de-esser, three-band EQ and
+ducking on the mixed audio. Ducking lowers every other source while the first camera's microphone
+picks up sound.
 
 ## Where to Find Your WHIP URL
 
@@ -220,8 +246,9 @@ See [Advanced Features](/builders/ingest-advanced/) for audio mixing details.
 The compositor is **enabled by default** — multi-source layout control with scenes and layers:
 
 - 17 layout presets (solo, PiP, split, grid, featured, and more)
-- Layer ordering through `reorderLayers()` or the `LayerList` component, which the drop-in UI renders when you set `showProducerPanel` (`show-producer-panel` on the web component)
-- Scenes through the compositor API, with cuts, fades, and slides between them
+- Layer ordering through `reorderLayers()` or the `LayerList` component in the producer panel
+- Scenes from the producer panel or the compositor API, with cuts, fades, and slides between them
+- Logo and text overlays, and media files as sources
 - GPU-accelerated rendering (WebGPU, WebGL, Canvas2D fallback)
 
 See [Compositor](/builders/ingest-compositor/) for full details.

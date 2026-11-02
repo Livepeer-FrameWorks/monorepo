@@ -5,6 +5,12 @@ description: "Web Components integration for browser-based streaming with Stream
 
 import { Aside } from "@astrojs/starlight/components";
 
+<Aside type="caution" title="Beta: the SDK will change a lot">
+  StreamCrafter is in beta, and its packages are on 0.x. Expect breaking changes in minor releases
+  while cloud production and guests are built. Pin an exact version and read the package changelog
+  before you upgrade.
+</Aside>
+
 ## Installation
 
 **NPM:**
@@ -51,7 +57,24 @@ Gateway resolution calls the public `resolveIngestEndpoint` GraphQL field from t
 browser, so routing reflects the publisher's location. For backend or encoder-side publishing, use
 the dashboard DNS ingest URL or Foghorn's `/ingest/{streamKey}` front door instead.
 
-The element includes the same full UI as the React/Svelte versions: video preview, camera/screen controls, quality selection, and connection status.
+The element has the same UI as the React and Svelte drop-ins: video preview, Add Camera, Share
+Screen and Add Media File, quality selection, the source mixer, the producer panel, the Audio
+section, and a connection health pill while live.
+
+## Producer Controls
+
+The producer panel is on by default and appears once the compositor runs: scenes with their
+transition, the layers of the active scene, logo and text overlays, and the media files in the mix.
+`]` and `[` switch scenes while the studio has focus.
+
+```html
+<!-- Simple single-camera studio without the producer panel -->
+<fw-streamcrafter whip-url="..." show-producer-panel="false"></fw-streamcrafter>
+```
+
+`show-producer-panel` and `enable-compositor` are on unless the attribute says `"false"`. The
+context menu's **Copy WHIP URL** copies the full URL, which contains the stream key. **Copy Stream
+Info** masks the key.
 
 ## Headless Mode
 
@@ -104,24 +127,50 @@ studio.pc.on("stateChange", ({ state }) => console.log(state));
 ## Slot-based Composition
 
 With `controls="false"`, the element renders only its default slot, so slotted content replaces the
-built-in UI while the element still manages the connection. Slotted elements are not wired to the
-studio automatically; connect them through `.pc` as shown below.
+built-in UI while the element still manages the connection. The studio elements below bind to the
+`<fw-streamcrafter>` they sit in, or to the one whose id is in `for`:
 
 ```html
 <fw-streamcrafter id="studio" whip-url="..." controls="false">
-  <div class="my-controls">
-    <fw-sc-volume id="camera-volume"></fw-sc-volume>
-    <button id="go-live">Go Live</button>
+  <div class="my-layout">
+    <fw-sc-producer-panel></fw-sc-producer-panel>
+    <fw-sc-audio-controls></fw-sc-audio-controls>
+    <div class="my-actions">
+      <fw-sc-camera-picker></fw-sc-camera-picker>
+      <fw-sc-media-button></fw-sc-media-button>
+      <button id="go-live">Go Live</button>
+    </div>
   </div>
 </fw-streamcrafter>
+
+<!-- Outside the studio, bound by id -->
+<fw-sc-meter for="studio"></fw-sc-meter>
+<fw-sc-connection-health for="studio"></fw-sc-connection-health>
 ```
 
-## Standalone Sub-Components
+A bound element finds a studio that mounts after it and renders again whenever the studio does.
 
-The `fw-sc-*` sub-components are presentational. They do not find or bind to a
-`<fw-streamcrafter>` on their own: the `for` attribute is declared but not used, and nesting them
-inside the element does not connect them either. Feed them data through JS properties and act on
-their events or callback properties:
+| Element                     | Purpose                                                                        |
+| --------------------------- | ------------------------------------------------------------------------------ |
+| `<fw-sc-producer-panel>`    | Scenes, layers, overlays and media; renders nothing until the compositor runs  |
+| `<fw-sc-overlay-controls>`  | Logo and text overlays of the active scene                                     |
+| `<fw-sc-media-controls>`    | Play, pause and loop for media files in the mix                                |
+| `<fw-sc-camera-picker>`     | Add Camera, with a list when there is more than one camera or one is live      |
+| `<fw-sc-media-button>`      | Add Media File; turned off with the reason where the browser cannot play files |
+| `<fw-sc-audio-controls>`    | Noise gate, de-esser, EQ and ducking on the mixed audio                        |
+| `<fw-sc-meter>`             | Level meter of the mixed audio                                                 |
+| `<fw-sc-connection-health>` | Good, unstable or poor while live, with bitrate, loss and round trip           |
+
+Inside `<fw-streamcrafter>` the Audio section also sets the browser's echo cancellation, noise
+suppression and auto gain. A standalone `<fw-sc-audio-controls>` leaves those out.
+
+## Presentational Sub-Components
+
+`<fw-sc-volume>`, `<fw-sc-compositor>`, `<fw-sc-scene-switcher>`, `<fw-sc-layer-list>` and
+`<fw-sc-advanced>` are presentational. They do not bind to a studio: their `for` attribute is
+declared but not used. `<fw-sc-producer-panel>` wraps the scene switcher and layer list with the
+wiring done. To use them on their own, feed them data through JS properties and act on their events
+or callback properties:
 
 ```html
 <fw-streamcrafter id="studio" whip-url="..." controls="false"></fw-streamcrafter>
@@ -171,31 +220,40 @@ their events or callback properties:
 
 `<fw-sc-scene-switcher>` and `<fw-sc-layer-list>` follow the same pattern: set `scenes` /
 `activeSceneId` or `layers` / `sources`, and handle actions through callback properties such as
-`onSceneSelect`, `onTransitionTo`, `onVisibilityToggle`, and `onReorder`.
+`onSceneSelect`, `onTransitionTo`, `onVisibilityToggle`, `onReorder`, `onTransformEdit` and
+`onRemove`.
 
-### Sub-Component Reference
-
-| Element                  | Purpose                                                        |
-| ------------------------ | -------------------------------------------------------------- |
-| `<fw-sc-volume>`         | Volume slider with mute toggle                                 |
-| `<fw-sc-compositor>`     | Layout and scaling mode selector overlay                       |
-| `<fw-sc-scene-switcher>` | Scene list with transition controls                            |
-| `<fw-sc-layer-list>`     | Drag-to-reorder layer list with visibility toggles             |
-| `<fw-sc-advanced>`       | Advanced settings panel (WebCodecs, encoder, audio processing) |
+| Element                  | Purpose                                                           |
+| ------------------------ | ----------------------------------------------------------------- |
+| `<fw-sc-volume>`         | Volume slider with snap to 100%                                   |
+| `<fw-sc-compositor>`     | Layout and scaling mode selector overlay                          |
+| `<fw-sc-scene-switcher>` | Scene tiles with transition controls                              |
+| `<fw-sc-layer-list>`     | Layer list with visibility, order, opacity and removal            |
+| `<fw-sc-advanced>`       | Dev-mode panel (stats, WebCodecs, encoder, browser audio toggles) |
 
 ## Attributes Reference
 
-| Attribute           | Type      | Default       | Description                                                            |
-| ------------------- | --------- | ------------- | ---------------------------------------------------------------------- |
-| `whip-url`          | `string`  | —             | Direct WHIP ingest endpoint                                            |
-| `gateway-url`       | `string`  | —             | Gateway GraphQL endpoint for resolver-backed ingest environments       |
-| `stream-key`        | `string`  | —             | Stream key used with `gateway-url`                                     |
-| `initial-profile`   | `string`  | `"broadcast"` | Quality preset                                                         |
-| `controls`          | `string`  | `""`          | Set to `"false"` for headless mode                                     |
-| `theme`             | `string`  | `""`          | Theme preset name (empty uses the built-in default tokens)             |
-| `locale`            | `string`  | `"en"`        | UI language                                                            |
-| `enable-compositor` | `boolean` | `true`        | Enable compositor (set `el.enableCompositor = false` in JS to disable) |
-| `debug`             | `boolean` | `false`       | Enable debug logging                                                   |
+| Attribute                  | Type      | Default       | Description                                                      |
+| -------------------------- | --------- | ------------- | ---------------------------------------------------------------- |
+| `whip-url`                 | `string`  | —             | Direct WHIP ingest endpoint                                      |
+| `gateway-url`              | `string`  | —             | Gateway GraphQL endpoint for resolver-backed ingest environments |
+| `stream-key`               | `string`  | —             | Stream key used with `gateway-url`                               |
+| `initial-profile`          | `string`  | `"broadcast"` | Quality preset                                                   |
+| `auto-start-camera`        | `boolean` | `false`       | Start the camera once an endpoint is known                       |
+| `enable-compositor`        | `boolean` | `true`        | Run the compositor; `"false"` turns it off                       |
+| `show-producer-panel`      | `boolean` | `true`        | Producer panel while the compositor runs; `"false"` turns it off |
+| `show-settings`            | `boolean` | `false`       | Open the quality popup on mount                                  |
+| `dev-mode`                 | `boolean` | `false`       | Debug rows in the quality popup and the Advanced panel           |
+| `controls`                 | `string`  | `""`          | `"false"` renders only the default slot                          |
+| `theme`                    | `string`  | `""`          | Theme preset name (empty uses the built-in default tokens)       |
+| `locale`                   | `string`  | `"en"`        | UI language                                                      |
+| `class-name`               | `string`  | `""`          | Extra class on the root                                          |
+| `compositor-worker-url`    | `string`  | —             | Compositor worker script, when not next to the IIFE bundle       |
+| `encoder-worker-url`       | `string`  | —             | Encoder worker script, when not next to the IIFE bundle          |
+| `rtc-transform-worker-url` | `string`  | —             | RTC transform worker script, when not next to the IIFE bundle    |
+| `debug`                    | `boolean` | `false`       | Enable debug logging                                             |
+
+`compositorConfig`, `onStateChange` and `onError` are JS properties.
 
 ## Events
 

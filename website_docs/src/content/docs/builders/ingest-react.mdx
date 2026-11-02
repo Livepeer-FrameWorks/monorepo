@@ -5,6 +5,12 @@ description: "React integration for browser-based streaming with StreamCrafter."
 
 import { Aside } from "@astrojs/starlight/components";
 
+<Aside type="caution" title="Beta: the SDK will change a lot">
+  StreamCrafter is in beta, and its packages are on 0.x. Expect breaking changes in minor releases
+  while cloud production and guests are built. Pin an exact version and read the package changelog
+  before you upgrade.
+</Aside>
+
 ## Installation
 
 ```bash
@@ -49,6 +55,43 @@ Gateway resolution calls the public `resolveIngestEndpoint` GraphQL field from t
 browser, so routing reflects the publisher's location. For backend or encoder-side publishing, use
 the dashboard DNS ingest URL or Foghorn's `/ingest/{streamKey}` front door instead.
 
+### Props
+
+| Prop                | Type                                         | Default       | Description                                                                |
+| ------------------- | -------------------------------------------- | ------------- | -------------------------------------------------------------------------- |
+| `whipUrl`           | `string`                                     | —             | Direct WHIP endpoint; takes priority over `gatewayUrl`                     |
+| `gatewayUrl`        | `string`                                     | —             | Gateway GraphQL endpoint, used with `streamKey`                            |
+| `streamKey`         | `string`                                     | —             | Stream key for gateway resolution                                          |
+| `initialProfile`    | `QualityProfile`                             | `"broadcast"` | Starting quality preset                                                    |
+| `autoStartCamera`   | `boolean`                                    | `false`       | Start the camera once an endpoint is known                                 |
+| `enableCompositor`  | `boolean`                                    | `true`        | Run the compositor for layouts, scenes and overlays                        |
+| `compositorConfig`  | `{ renderer?, width?, height?, frameRate? }` | —             | Compositor renderer and output size                                        |
+| `showProducerPanel` | `boolean`                                    | `true`        | Scene, layer, overlay and media controls while the compositor runs         |
+| `showSettings`      | `boolean`                                    | `false`       | Open the quality popup on mount                                            |
+| `devMode`           | `boolean`                                    | `false`       | Debug rows in the quality popup and the Advanced panel in the context menu |
+| `debug`             | `boolean`                                    | `false`       | Debug logging                                                              |
+| `theme`             | `FwThemePreset \| StudioThemeOverrides`      | —             | Theme preset or token overrides                                            |
+| `locale`            | `StudioLocale`                               | `"en"`        | UI language                                                                |
+| `className`         | `string`                                     | —             | Extra class on the root                                                    |
+| `onStateChange`     | `(state, context?) => void`                  | —             | Lifecycle state changes                                                    |
+| `onError`           | `(error: string) => void`                    | —             | Errors                                                                     |
+| `children`          | `ReactNode`                                  | —             | Replaces the built-in UI with your own layout                              |
+
+## Producer Controls
+
+The producer panel is on by default and appears once the compositor runs: scenes with their
+transition, the layers of the active scene, logo and text overlays, and the media files in the mix.
+Add Media File sits in the action bar next to Add Camera. The Audio section and, while live, the
+connection health pill are always part of the drop-in UI.
+
+```tsx
+// Simple single-camera studio without the producer panel
+<StreamCrafter whipUrl="%INGEST_URL%/webrtc/stream-key" showProducerPanel={false} />
+```
+
+The context menu's **Copy WHIP URL** copies the full URL, which contains the stream key. **Copy
+Stream Info** masks the key.
+
 ## Composable Components
 
 Pass `children` to `<StreamCrafter>` to replace the default UI with your own layout using the provided sub-components:
@@ -64,9 +107,11 @@ import {
 } from "@livepeer-frameworks/streamcrafter-react";
 import "@livepeer-frameworks/streamcrafter-react/streamcrafter.css";
 
+const whipUrl = "%INGEST_URL%/webrtc/my-key";
+
 function CustomStudio() {
   return (
-    <StreamCrafter whipUrl="%INGEST_URL%/webrtc/my-key">
+    <StreamCrafter whipUrl={whipUrl}>
       <div className="my-layout">
         <StudioStatusBadge />
         <StudioPreview />
@@ -74,26 +119,55 @@ function CustomStudio() {
           <StudioMixer />
           <StudioSettings />
         </div>
-        <StudioActionBar />
+        <StudioActionBar whipUrl={whipUrl} showSettingsButton={false} />
       </div>
     </StreamCrafter>
   );
 }
 ```
 
-When `children` are provided, the built-in UI is entirely replaced. Sub-components auto-connect to the parent `<StreamCrafter>` via React context.
+`StudioActionBar` enables Go Live only when it is given the `whipUrl`.
+
+When `children` are provided, the built-in UI is entirely replaced. Sub-components connect to the
+parent `<StreamCrafter>` through React context, including its compositor, so the producer controls
+need no props:
+
+```tsx
+<StreamCrafter whipUrl={whipUrl}>
+  <StudioPreview />
+  <StudioProducerPanel />
+  <StudioAudioControls />
+  <StudioActionBar whipUrl={whipUrl} />
+</StreamCrafter>
+```
+
+`useStreamCrafterContext()` returns the hook state and actions plus `compositor`, the parent's
+`useCompositor` result, or `null` when `enableCompositor` is `false`. A `StreamCrafterProvider`
+created with `config` has no compositor.
 
 ### Sub-Component Reference
 
-| Component           | Purpose                                                       |
-| ------------------- | ------------------------------------------------------------- |
-| `StudioPreview`     | Video preview with optional compositor overlay and live badge |
-| `StudioMixer`       | Source list with volume sliders, mute, and remove buttons     |
-| `StudioActionBar`   | Camera, Screen Share, Settings, and Go Live buttons           |
-| `StudioSettings`    | Quality profile selector popup                                |
-| `StudioStatusBadge` | State badge (Idle, Capturing, Live, Connecting, etc.)         |
+| Component                | Purpose                                                                        |
+| ------------------------ | ------------------------------------------------------------------------------ |
+| `StudioPreview`          | Video preview with optional compositor overlay and live badge                  |
+| `StudioMixer`            | Source list with volume sliders, mute, and remove buttons                      |
+| `StudioActionBar`        | Add Camera, Share Screen, Add Media File, Settings, and Go Live                |
+| `StudioSettings`         | Quality profile selector popup                                                 |
+| `StudioStatusBadge`      | State badge (Idle, Capturing, Live, Connecting, etc.)                          |
+| `StudioConnectionHealth` | Good, unstable or poor while live, with bitrate, loss and round trip           |
+| `StudioProducerPanel`    | Scenes, layers, overlays and media; renders nothing until the compositor runs  |
+| `SceneSwitcher`          | Scene tiles with transition type and duration                                  |
+| `LayerList`              | Layers of a scene: visibility, order, opacity and removal                      |
+| `StudioOverlayControls`  | Logo and text overlays of the active scene                                     |
+| `StudioMediaControls`    | Play, pause and loop for media files in the mix                                |
+| `StudioAudioControls`    | Browser processing, noise gate, de-esser, EQ and ducking                       |
+| `CameraPicker`           | Add Camera, with a list when there is more than one camera or one is live      |
+| `MediaFileButton`        | Add Media File; turned off with the reason where the browser cannot play files |
+| `CompositorControls`     | Layout and scaling selector over the preview                                   |
 
-All sub-components accept optional prop overrides for any value they normally read from context.
+Components that read from context accept optional props that override those values.
+`SceneSwitcher`, `LayerList`, `CameraPicker`, `MediaFileButton` and `CompositorControls` take
+their data and callbacks as props.
 
 ## Custom UI with Hooks
 
@@ -154,24 +228,33 @@ function FullyCustomBroadcaster() {
 
 ### Hook Return Reference
 
-| Property                     | Type                                         | Description               |
-| ---------------------------- | -------------------------------------------- | ------------------------- |
-| `state`                      | `IngestState`                                | Current lifecycle state   |
-| `isStreaming`                | `boolean`                                    | Whether currently live    |
-| `isCapturing`                | `boolean`                                    | Whether media is captured |
-| `isReconnecting`             | `boolean`                                    | Whether reconnecting      |
-| `sources`                    | `MediaSource[]`                              | Active media sources      |
-| `mediaStream`                | `MediaStream \| null`                        | Combined output stream    |
-| `qualityProfile`             | `QualityProfile`                             | Current quality settings  |
-| `startCamera(opts?)`         | `() => Promise<MediaSource>`                 | Add camera source         |
-| `startScreenShare(opts?)`    | `() => Promise<MediaSource \| null>`         | Add screen share source   |
-| `startStreaming()`           | `() => Promise<void>`                        | Go live                   |
-| `stopStreaming()`            | `() => Promise<void>`                        | Stop streaming            |
-| `removeSource(id)`           | `(id: string) => void`                       | Remove a source           |
-| `setSourceVolume(id, vol)`   | `(id, number) => void`                       | Set source volume (0-2)   |
-| `setSourceMuted(id, muted)`  | `(id, boolean) => void`                      | Mute/unmute source        |
-| `setQualityProfile(profile)` | `(profile: QualityProfile) => Promise<void>` | Change quality profile    |
-| `getController()`            | `() => IngestControllerV2 \| null`           | Direct controller access  |
+| Property                     | Type                                         | Description                       |
+| ---------------------------- | -------------------------------------------- | --------------------------------- |
+| `state`                      | `IngestState`                                | Current lifecycle state           |
+| `isStreaming`                | `boolean`                                    | Whether currently live            |
+| `isCapturing`                | `boolean`                                    | Whether media is captured         |
+| `isReconnecting`             | `boolean`                                    | Whether reconnecting              |
+| `sources`                    | `MediaSource[]`                              | Active media sources              |
+| `mediaStream`                | `MediaStream \| null`                        | Combined output stream            |
+| `qualityProfile`             | `QualityProfile`                             | Current quality settings          |
+| `startCamera(opts?)`         | `() => Promise<MediaSource>`                 | Add camera source                 |
+| `startScreenShare(opts?)`    | `() => Promise<MediaSource \| null>`         | Add screen share source           |
+| `startStreaming()`           | `() => Promise<void>`                        | Go live                           |
+| `stopStreaming()`            | `() => Promise<void>`                        | Stop streaming                    |
+| `removeSource(id)`           | `(id: string) => void`                       | Remove a source                   |
+| `setSourceVolume(id, vol)`   | `(id, number) => void`                       | Set source volume (0-2)           |
+| `setSourceMuted(id, muted)`  | `(id, boolean) => void`                      | Mute/unmute source                |
+| `setQualityProfile(profile)` | `(profile: QualityProfile) => Promise<void>` | Change quality profile            |
+| `getCameraChoices()`         | `() => Promise<CameraChoice[]>`              | Cameras, with those in use marked |
+| `addMediaFile(file, opts?)`  | `(File, { loop? }) => Promise<MediaSource>`  | Play a local file into the mix    |
+| `playMediaSource(id)`        | `(id: string) => void`                       | Play a media file                 |
+| `pauseMediaSource(id)`       | `(id: string) => void`                       | Pause a media file                |
+| `setMediaSourceLoop(id, on)` | `(id, boolean) => void`                      | Loop a media file                 |
+| `getController()`            | `() => IngestControllerV2 \| null`           | Direct controller access          |
+
+The controller from `getController()` sets the noise gate, EQ and de-esser with
+`setAudioProcessing()` and ducking with `setAudioDucking()`; see
+[Advanced Features](/builders/ingest-advanced/#audio-processing).
 
 ## State Callbacks
 

@@ -5,6 +5,12 @@ description: "Vanilla JavaScript API for browser-based streaming with StreamCraf
 
 import { Aside } from "@astrojs/starlight/components";
 
+<Aside type="caution" title="Beta: the SDK will change a lot">
+  StreamCrafter is in beta, and its packages are on 0.x. Expect breaking changes in minor releases
+  while cloud production and guests are built. Pin an exact version and read the package changelog
+  before you upgrade.
+</Aside>
+
 ## Installation
 
 ```bash
@@ -31,7 +37,6 @@ const studio = createStreamCrafter({
   target: "#studio-container",
   whipUrl: "%INGEST_URL%/webrtc/stream-key",
   profile: "broadcast",
-  audioMixing: true,
   debug: true,
 });
 
@@ -70,7 +75,7 @@ const endpoints = await client.resolve();
 const whipUrl = endpoints.primary.whipUrl;
 if (!whipUrl) throw new Error("No WHIP endpoint resolved");
 
-const studio = createStreamCrafter({ whipUrl, audioMixing: true });
+const studio = createStreamCrafter({ whipUrl });
 ```
 
 Run the resolve in the publisher's browser so ingest routing uses the publisher's location. For
@@ -110,12 +115,14 @@ All queries are synchronous getters on the instance.
 | `masterVolume =`              | `set masterVolume(v)`                     | Set master volume         |
 | `theme =`                     | `set theme(t)`                            | Switch theme preset       |
 | `setEncoderOverrides(o)`      | `(overrides) => void`                     | Override encoder settings |
+| `setAudioProcessing(c)`       | `(config) => void`                        | Noise gate, EQ, de-esser  |
+| `setAudioDucking(on)`         | `(enabled: boolean) => void`              | Duck under the camera mic |
 | `enableCompositor(config?)`   | `(config?) => Promise<void>`              | Start the compositor      |
 | `disableCompositor()`         | `() => void`                              | Stop the compositor       |
 | `destroy()`                   | `() => void`                              | Cleanup and tear down     |
 
-`masterVolume` only takes effect when the instance was created with `audioMixing: true`. Without
-audio mixing, setting it does nothing and reading it returns `1`.
+`masterVolume`, `setAudioProcessing()` and `setAudioDucking()` work through the audio mixer, which
+is on by default. With `audioMixing: false` they do nothing and `masterVolume` reads `1`.
 
 ## Subscriptions — Events
 
@@ -184,7 +191,7 @@ const isLive = studio.reactiveState.get("streaming");
 | `resolveWhipUrl` | `(signal) => Promise<string>`           | —                                   | Resolve the destination before each connection; takes precedence over `whipUrl` |
 | `target`         | `string \| HTMLElement`                 | —                                   | Element that receives theme variables and keyboard shortcuts (renders no UI)    |
 | `profile`        | `QualityProfile`                        | `"broadcast"`                       | Quality preset name                                                             |
-| `audioMixing`    | `boolean`                               | `false`                             | Mix source audio through the Web Audio mixer (required for `masterVolume`)      |
+| `audioMixing`    | `boolean`                               | `true`                              | Mix source audio through the Web Audio mixer (needed for `masterVolume`)        |
 | `compositor`     | `Partial<CompositorConfig>`             | —                                   | Defaults applied when `enableCompositor()` is called                            |
 | `theme`          | `FwThemePreset \| StudioThemeOverrides` | `"default"`                         | Theme preset or token overrides                                                 |
 | `locale`         | `StudioLocale`                          | `"en"`                              | Language for `t()`                                                              |
