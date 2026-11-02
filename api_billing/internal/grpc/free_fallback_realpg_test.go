@@ -412,7 +412,7 @@ func TestMoveToFreeWritesOffCollectionCarry_RealPG(t *testing.T) {
 		COALESCE((SELECT MAX(reason) FROM purser.billing_collection_writeoffs WHERE tenant_id=$1),'')`, tenant).Scan(&moved, &balance, &written, &reason); err != nil {
 		t.Fatal(err)
 	}
-	if !moved || balance != 0 || written != 222 || reason != "account_closed" {
-		t.Fatalf("move to Free carry: moved=%t balance=%d written=%d reason=%q, want moved balance=0 written=222 reason=account_closed", moved, balance, written, reason)
+	if !moved || balance != 0 || written != 222 || reason != "moved_to_free" {
+		t.Fatalf("move to Free carry: moved=%t balance=%d written=%d reason=%q, want moved balance=0 written=222 reason=moved_to_free", moved, balance, written, reason)
 	}
 }

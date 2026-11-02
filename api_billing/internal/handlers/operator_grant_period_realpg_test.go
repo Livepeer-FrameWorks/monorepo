@@ -645,6 +645,16 @@ func tierDowngradeProviderCases() []providerReservationCase {
 		{"UnconfirmedDowngradeIsDiscoveredAndHeld", TestUnconfirmedDowngradeIsDiscoveredAndHeld_RealPG},
 		{"TenantClosureWritesOffCollectionCarry", TestTenantClosureWritesOffCollectionCarry_RealPG},
 		{"FencedStripeEventReportsTheLocalTier", TestFencedStripeEventReportsTheLocalTier_RealPG},
+		{"CancelledStageKeepsAReplacedPrice", TestCancelledStageKeepsAReplacedPrice_RealPG},
+		{"CancelledDowngradeRestoresTheOriginalPrice", TestCancelledDowngradeRestoresTheOriginalPrice_RealPG},
+		{"CancelledMollieDowngradeRestoresTheOriginalAmount", TestCancelledMollieDowngradeRestoresTheOriginalAmount_RealPG},
+		{"TierSyncRefusesANonMonthlyItem", TestTierSyncRefusesANonMonthlyItem_RealPG},
+		{"ProviderDisagreementWithoutARestoreAlerts", TestProviderDisagreementWithoutARestoreAlerts_RealPG},
+		{"TierMovedDuringTheProviderCallIsNotConfirmed", TestTierMovedDuringTheProviderCallIsNotConfirmed_RealPG},
+		{"StripeDeletedEventDuringTheStopKeepsTheSchedule", TestStripeDeletedEventDuringTheStopKeepsTheSchedule_RealPG},
+		{"SuspendedMollieSubscriptionTakesTheNewAmount", TestSuspendedMollieSubscriptionTakesTheNewAmount_RealPG},
+		{"UpgradeWaitsForAnUnfinishedProviderStep", TestUpgradeWaitsForAnUnfinishedProviderStep_RealPG},
+		{"AppliedFreeDowngradeWritesOffTheCarry", TestAppliedFreeDowngradeWritesOffTheCarry_RealPG},
 	}
 }
 
@@ -706,15 +716,16 @@ func runProviderReservationCases(t *testing.T, first, last int) {
 }
 
 func TestProviderReservationBilling_RealYugabyte(t *testing.T) {
-	runProviderReservationCases(t, 0, 22)
+	runProviderReservationCases(t, 0, len(providerReservationCases())/3)
 }
 
 func TestProviderReservationRecovery_RealYugabyte(t *testing.T) {
-	runProviderReservationCases(t, 22, 37)
+	third := len(providerReservationCases()) / 3
+	runProviderReservationCases(t, third, 2*third)
 }
 
 func TestProviderReservationDeadlines_RealYugabyte(t *testing.T) {
-	runProviderReservationCases(t, 37, len(providerReservationCases()))
+	runProviderReservationCases(t, 2*(len(providerReservationCases())/3), len(providerReservationCases()))
 }
 
 func testCheckoutCompletionWaitsForBinding(t *testing.T) {

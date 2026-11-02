@@ -122,7 +122,7 @@ CREATE TABLE IF NOT EXISTS purser.billing_collection_writeoffs (
     reason VARCHAR(32) NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT chk_billing_collection_writeoff_positive CHECK (amount_cents > 0),
-    CONSTRAINT chk_billing_collection_writeoff_reason CHECK (reason IN ('account_closed', 'operator_approved'))
+    CONSTRAINT chk_billing_collection_writeoff_reason CHECK (reason IN ('account_closed', 'moved_to_free', 'operator_approved'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_billing_collection_writeoffs_tenant_created

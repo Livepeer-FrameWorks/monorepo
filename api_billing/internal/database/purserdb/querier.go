@@ -96,9 +96,9 @@ type Querier interface {
 	ClaimWebhookEvent(ctx context.Context, arg ClaimWebhookEventParams) (ClaimWebhookEventRow, error)
 	ClaimX402Mutation(ctx context.Context, arg ClaimX402MutationParams) (int64, error)
 	ClaimX402PaymentQuote(ctx context.Context, arg ClaimX402PaymentQuoteParams) (int64, error)
-	ClearAccountClosureCollectionBalances(ctx context.Context, tenantID string) (int64, error)
 	ClearAppliedPendingDowngrade(ctx context.Context, arg ClearAppliedPendingDowngradeParams) error
 	ClearCancelledTierUpgrade(ctx context.Context, tenantID string) error
+	ClearCollectionBalances(ctx context.Context, tenantID string) (int64, error)
 	// Recovery has verified that cancelled prior collectors are no longer live.
 	// The caller holds the subscription lock and rechecks its inspection snapshot.
 	ClearEndedCheckoutSubscriptions(ctx context.Context, arg ClearEndedCheckoutSubscriptionsParams) error
@@ -505,6 +505,7 @@ type Querier interface {
 	// Authenticated provider callbacks have no tenant context until their payment
 	// reference is resolved. This platform-wide lookup only selects an existing owner.
 	HasRefundSettlementOwner(ctx context.Context, arg HasRefundSettlementOwnerParams) (bool, error)
+	HasUnfinishedProviderTierSync(ctx context.Context, tenantID string) (bool, error)
 	// Called under the subscription lock before reserving another first payment.
 	// A recorded mandate binds retained activation funding to this contract.
 	// Unbound delivery receipts are reconciled through historical recovery.
@@ -821,7 +822,7 @@ type Querier interface {
 	ReadPlacementSnapshotTime(ctx context.Context) (time.Time, error)
 	ReadPlacementSubscriptionContext(ctx context.Context, arg ReadPlacementSubscriptionContextParams) (ReadPlacementSubscriptionContextRow, error)
 	ReadPlacementUsageCoverage(ctx context.Context, arg ReadPlacementUsageCoverageParams) (ReadPlacementUsageCoverageRow, error)
-	RecordAccountClosureCollectionWriteoffs(ctx context.Context, tenantID string) (int64, error)
+	RecordCollectionWriteoffs(ctx context.Context, arg RecordCollectionWriteoffsParams) (int64, error)
 	RecordCryptoAccountingAnomaly(ctx context.Context, arg RecordCryptoAccountingAnomalyParams) error
 	// A cursor already past the finalized head is caught up: nothing finalized is
 	// left unscanned.

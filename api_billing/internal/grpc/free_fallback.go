@@ -191,7 +191,7 @@ func (s *PurserServer) moveTenantToFree(ctx context.Context, tenantID string) (r
 			return errFreeFallbackHeld
 		}
 		// Free has no later collectable invoice for a sub-minimum final amount.
-		if writeoffErr := handlers.WriteOffCollectionCarryTx(ctx, queries, tenantID); writeoffErr != nil {
+		if writeoffErr := handlers.WriteOffCollectionCarryTx(ctx, queries, tenantID, handlers.CollectionWriteoffMovedToFree); writeoffErr != nil {
 			return writeoffErr
 		}
 		updated, buildErr := billingevents.New(tenantID, locked.Current.SubscriptionID, &internalv1.SubscriptionUpdated{

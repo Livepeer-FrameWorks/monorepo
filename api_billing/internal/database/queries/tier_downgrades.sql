@@ -2,6 +2,7 @@
 -- The tier the recurring provider subscription must charge next: a scheduled
 -- downgrade's target, otherwise the current tier.
 SELECT target.id::text AS tier_id,
+       subscription.tier_id::text AS current_tier_id,
        (subscription.pending_reason IS NOT DISTINCT FROM 'downgrade')::boolean AS downgrade_pending,
        COALESCE(NULLIF(subscription.stripe_subscription_id, ''), '')::text AS stripe_subscription_id,
        COALESCE(NULLIF(subscription.mollie_subscription_id, ''), '')::text AS mollie_subscription_id,
@@ -12,7 +13,9 @@ SELECT target.id::text AS tier_id,
        COALESCE(target.currency, 'EUR')::text AS currency,
        (target.base_price = 0 AND COALESCE(target.is_default_postpaid, false))::boolean AS target_is_free,
        subscription.pending_effective_at,
+       (subscription.free_fallback_at IS NOT NULL)::boolean AS fallback_scheduled,
        (subscription.status = 'active' AND subscription.free_fallback_at IS NOT NULL
+        AND subscription.free_fallback_reason IS NOT DISTINCT FROM 'cancelled'
         AND subscription.free_fallback_provider_ended_at IS NULL)::boolean AS provider_stop_scheduled
 FROM purser.tenant_subscriptions subscription
 JOIN purser.billing_tiers target
@@ -78,6 +81,14 @@ UPDATE purser.tenant_subscriptions
 SET pending_tier_id = NULL, pending_effective_at = NULL, pending_reason = NULL,
     pending_provider_tier_id = NULL, updated_at = NOW()
 WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid AND pending_reason = 'downgrade';
+
+-- name: HasUnfinishedProviderTierSync :one
+SELECT EXISTS (
+    SELECT 1 FROM purser.provider_webhook_inbox inbox
+    WHERE inbox.provider = 'tier_downgrade'
+      AND inbox.event_key = 'tier-downgrade:' || sqlc.arg(tenant_id)::text
+      AND inbox.status <> 'processed'
+)::boolean AS unfinished;
 
 -- name: GetStripeRenewalTierFence :one
 SELECT (subscription.pending_reason IS NOT DISTINCT FROM 'downgrade')::boolean AS downgrade_pending,

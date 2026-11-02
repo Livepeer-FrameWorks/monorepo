@@ -284,8 +284,9 @@ SELECT GREATEST(free_fallback_at, billing_period_start AT TIME ZONE 'UTC')::time
                    AND prior.created_at >= funding.created_at AND prior.created_at < native.created_at
              )
            ORDER BY funding.created_at DESC LIMIT 1), '')::text AS mollie_initial_payment_id,
-       -- A scheduled downgrade keeps the customer's tier through its effective time.
-       GREATEST(CASE WHEN pending_reason = 'downgrade' THEN pending_effective_at END,
+       -- A voluntary downgrade keeps the customer's tier through its effective
+       -- time. An unpaid term ends with its payment-failure grace.
+       GREATEST(CASE WHEN pending_reason = 'downgrade' AND free_fallback_reason = 'cancelled' AND status <> 'past_due' THEN pending_effective_at END,
            COALESCE((SELECT MAX(invoice.base_fee_period_end) FROM purser.billing_invoices invoice
            WHERE invoice.tenant_id = subscription.tenant_id AND invoice.status = 'paid'
              AND invoice.document_kind = 'invoice' AND invoice.base_amount > 0

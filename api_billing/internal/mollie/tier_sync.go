@@ -16,9 +16,23 @@ import (
 	"github.com/shopspring/decimal"
 )
 
+// A scheduled downgrade's first write keeps the subscriber's own amount in the
+// subscription metadata, in the same PATCH, for a later cancellation. The tier
+// key scopes it: an amount recorded from another tier is stale.
+const (
+	restoreTierKey   = "billing_restore_tier_id"
+	restoreAmountKey = "billing_restore_amount"
+)
+
 // SyncSubscriptionTier changes the amount of later recurring payments and leaves
 // the paid schedule alone. The read decides, so a lost response retries as a
 // no-op; a fixed idempotency key could replay a stale target after a re-point.
+// Only canceled and completed subscriptions are terminal: a suspended one renews
+// again once its mandate recovers, so it takes the new amount too.
+//
+// With no downgrade pending, a subscription already on the tier is left alone,
+// so a subscriber on an amount the catalog replaced keeps it. Cancelling a
+// confirmed downgrade restores the recorded amount, not the catalog's.
 func (c *Client) SyncSubscriptionTier(ctx context.Context, request billing.ProviderTierRequest) (billing.ProviderTierReceipt, error) {
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
@@ -39,13 +53,32 @@ func (c *Client) SyncSubscriptionTier(ctx context.Context, request billing.Provi
 	if metadata["tenant_id"] != request.TenantID {
 		return billing.ProviderTierReceipt{}, errors.New("mollie subscription does not belong to the tenant")
 	}
-	if sub.Status != "active" && sub.Status != "pending" {
+	if sub.Status == "canceled" || sub.Status == "completed" {
 		return billing.ProviderTierReceipt{}, nil
 	}
-	amount := decimal.New(request.BaseCents, -2)
 	receipt := mollieTierReceipt(sub)
-	if mollieChargesAmount(sub, amount) && metadata["tier_id"] == request.TierID {
+	providerTier := metadata["tier_id"]
+	if !request.Downgrade && (providerTier == nil || providerTier == request.TierID) {
 		return receipt, nil
+	}
+	amount := decimal.New(request.BaseCents, -2)
+	if request.Downgrade && mollieChargesAmount(sub, amount) && providerTier == request.TierID {
+		return receipt, nil
+	}
+	recorded, hasRecorded := metadata[restoreAmountKey].(string)
+	if !request.Downgrade && metadata[restoreTierKey] == request.TierID && hasRecorded {
+		if amount, err = decimal.NewFromString(recorded); err != nil {
+			return billing.ProviderTierReceipt{}, fmt.Errorf("mollie recorded restore amount: %w", err)
+		}
+		delete(metadata, restoreTierKey)
+		delete(metadata, restoreAmountKey)
+	} else {
+		if request.BaseCents <= 0 {
+			return billing.ProviderTierReceipt{}, fmt.Errorf("%w: the tier has no monthly fee and the subscription recorded none to restore", billing.ErrProviderTierRefused)
+		}
+		if request.Downgrade && metadata[restoreTierKey] != request.CurrentTierID && sub.Amount != nil {
+			metadata[restoreTierKey], metadata[restoreAmountKey] = request.CurrentTierID, sub.Amount.Value
+		}
 	}
 	metadata["tier_id"] = request.TierID
 	body, err := json.Marshal(map[string]any{

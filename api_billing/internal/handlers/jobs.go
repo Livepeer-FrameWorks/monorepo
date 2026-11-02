@@ -2721,12 +2721,17 @@ func (jm *JobManager) applyPendingDowngrade(ctx context.Context, tenantID string
 		if _, guardErr := subscriptions.LockChange(ctx, tx, tenantID, subscriptions.ChangePricing); guardErr != nil {
 			return guardErr
 		}
+		q := purserdb.New(tx)
 		var applyErr error
-		rows, applyErr = purserdb.New(tx).ApplyPendingDowngradeTier(ctx, purserdb.ApplyPendingDowngradeTierParams{
+		rows, applyErr = q.ApplyPendingDowngradeTier(ctx, purserdb.ApplyPendingDowngradeTierParams{
 			PendingTierID: stagedTarget,
 			TenantID:      tenantID,
 		})
-		return applyErr
+		if applyErr != nil || rows == 0 || !strings.EqualFold(targetName, "free") {
+			return applyErr
+		}
+		// Free has no later collectable invoice for a sub-minimum balance.
+		return WriteOffCollectionCarryTx(ctx, q, tenantID, CollectionWriteoffMovedToFree)
 	})
 	if subscriptions.IsPricingRefusal(err) {
 		jm.logger.WithError(err).WithField("tenant_id", tenantID).Debug("Pending downgrade held by its subscription pricing state")

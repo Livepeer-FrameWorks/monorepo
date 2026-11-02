@@ -28,14 +28,14 @@ func (q *Queries) ActiveBillingTierExists(ctx context.Context, tierID string) (b
 	return exists, err
 }
 
-const clearAccountClosureCollectionBalances = `-- name: ClearAccountClosureCollectionBalances :execrows
+const clearCollectionBalances = `-- name: ClearCollectionBalances :execrows
 UPDATE purser.billing_collection_balances
 SET balance_cents = 0, updated_at = NOW()
 WHERE tenant_id = $1::text::uuid AND balance_cents > 0
 `
 
-func (q *Queries) ClearAccountClosureCollectionBalances(ctx context.Context, tenantID string) (int64, error) {
-	result, err := q.db.ExecContext(ctx, clearAccountClosureCollectionBalances, tenantID)
+func (q *Queries) ClearCollectionBalances(ctx context.Context, tenantID string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, clearCollectionBalances, tenantID)
 	if err != nil {
 		return 0, err
 	}
@@ -428,15 +428,20 @@ func (q *Queries) InsertTenantSubscription(ctx context.Context, arg InsertTenant
 	return err
 }
 
-const recordAccountClosureCollectionWriteoffs = `-- name: RecordAccountClosureCollectionWriteoffs :execrows
+const recordCollectionWriteoffs = `-- name: RecordCollectionWriteoffs :execrows
 INSERT INTO purser.billing_collection_writeoffs (tenant_id, currency, amount_cents, reason)
-SELECT tenant_id, currency, balance_cents, 'account_closed'
+SELECT tenant_id, currency, balance_cents, $1::text
 FROM purser.billing_collection_balances
-WHERE tenant_id = $1::text::uuid AND balance_cents > 0
+WHERE tenant_id = $2::text::uuid AND balance_cents > 0
 `
 
-func (q *Queries) RecordAccountClosureCollectionWriteoffs(ctx context.Context, tenantID string) (int64, error) {
-	result, err := q.db.ExecContext(ctx, recordAccountClosureCollectionWriteoffs, tenantID)
+type RecordCollectionWriteoffsParams struct {
+	Reason   string `db:"reason" json:"reason"`
+	TenantID string `db:"tenant_id" json:"tenant_id"`
+}
+
+func (q *Queries) RecordCollectionWriteoffs(ctx context.Context, arg RecordCollectionWriteoffsParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, recordCollectionWriteoffs, arg.Reason, arg.TenantID)
 	if err != nil {
 		return 0, err
 	}

@@ -38,6 +38,12 @@ func (s *stubTierReconciler) RevokeDNSEntitlements(_ context.Context, _ string) 
 	return nil
 }
 
+// expectFreeCarryWriteOff stubs the write-off a flip to Free commits with it.
+func expectFreeCarryWriteOff(mock sqlmock.Sqlmock) {
+	mock.ExpectExec(`INSERT INTO purser\.billing_collection_writeoffs`).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`UPDATE purser\.billing_collection_balances`).WillReturnResult(sqlmock.NewResult(0, 0))
+}
+
 func TestApplyPendingDowngrade_NotDue_NoOp(t *testing.T) {
 	mockDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	if err != nil {
@@ -123,6 +129,7 @@ func TestApplyPendingDowngrade_Happy_FlipsThenReconcilesThenClears(t *testing.T)
 	mock.ExpectExec(`UPDATE purser\.tenant_subscriptions\s+SET tier_id = \$1`).
 		WithArgs(pending, tenantID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	expectFreeCarryWriteOff(mock)
 	mock.ExpectCommit()
 	// Step 3: clear pending_* (Step 2 is the reconciler stub call).
 	mock.ExpectExec(`UPDATE purser\.tenant_subscriptions\s+SET pending_tier_id = NULL`).
@@ -173,6 +180,7 @@ func TestApplyPendingDowngrade_ReconcileFailLeavesPending(t *testing.T) {
 	mock.ExpectExec(`UPDATE purser\.tenant_subscriptions\s+SET tier_id = \$1`).
 		WithArgs(pending, tenantID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	expectFreeCarryWriteOff(mock)
 	mock.ExpectCommit()
 	// Step 3 must NOT run when reconcile fails — pending_* stays set so the
 	// next cron tick retries.
@@ -227,6 +235,7 @@ func TestApplyPendingDowngrade_CacheFailureStillClears(t *testing.T) {
 	mock.ExpectExec(`UPDATE purser\.tenant_subscriptions\s+SET tier_id = \$1`).
 		WithArgs(pending, tenantID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	expectFreeCarryWriteOff(mock)
 	mock.ExpectCommit()
 	// Step 3: clear pending_* (Step 2 is the reconciler stub call).
 	mock.ExpectExec(`UPDATE purser\.tenant_subscriptions\s+SET pending_tier_id = NULL`).

@@ -100,8 +100,13 @@ func (f *freeDowngrade) change(t *testing.T, tier string) (*purserpb.ChangeBilli
 func (f *freeDowngrade) approachRenewal(t *testing.T) time.Time {
 	t.Helper()
 	effective := time.Now().UTC().Add(24 * time.Hour).Truncate(time.Second)
-	f.exec(t, `UPDATE purser.tenant_subscriptions SET pending_effective_at=$2::timestamptz,billing_period_end=$2::timestamptz AT TIME ZONE 'UTC',next_billing_date=$2::timestamptz AT TIME ZONE 'UTC' WHERE tenant_id=$1`, f.tenant, effective)
+	f.approachRenewalAt(t, effective)
 	return effective
+}
+
+func (f *freeDowngrade) approachRenewalAt(t *testing.T, effective time.Time) {
+	t.Helper()
+	f.exec(t, `UPDATE purser.tenant_subscriptions SET pending_effective_at=$2::timestamptz,billing_period_end=$2::timestamptz AT TIME ZONE 'UTC',next_billing_date=$2::timestamptz AT TIME ZONE 'UTC' WHERE tenant_id=$1`, f.tenant, effective)
 }
 
 func (f *freeDowngrade) step(t *testing.T) {
@@ -237,5 +242,36 @@ func TestFreeDowngradeProviderFailureRetries_RealPG(t *testing.T) {
 				t.Fatalf("retry: calls=%d %+v, want the stop confirmed and the term retained until %s", len(f.calls), s, effective)
 			}
 		})
+	}
+}
+
+// A staged Free downgrade cannot turn an unpaid term into a retained one, and the
+// payment-failure fallback keeps its date, reason and recovery check.
+func TestFreeDowngradeLeavesAPaymentFailureFallback_RealPG(t *testing.T) {
+	f := newFreeDowngrade(t, "stripe")
+	grace := time.Now().UTC().Add(10 * 24 * time.Hour).Truncate(time.Second)
+	f.exec(t, `UPDATE purser.tenant_subscriptions SET status='past_due',free_fallback_at=$2,free_fallback_reason='payment_failed',free_fallback_notified_at=NOW() WHERE tenant_id=$1`, f.tenant, grace)
+	if _, err := f.change(t, f.free); err != nil {
+		t.Fatal(err)
+	}
+	f.approachRenewal(t)
+	if err := f.service.ReconcileProviderTier(t.Context(), f.tenant); err != nil {
+		t.Fatal(err)
+	}
+	var reason string
+	var at time.Time
+	if err := f.db.QueryRowContext(t.Context(), `SELECT free_fallback_reason,free_fallback_at FROM purser.tenant_subscriptions WHERE tenant_id=$1`, f.tenant).Scan(&reason, &at); err != nil {
+		t.Fatal(err)
+	}
+	if reason != "payment_failed" || !at.Equal(grace) {
+		t.Fatalf("Free step replaced the payment failure fallback: reason=%s at=%s, want payment_failed at %s", reason, at, grace)
+	}
+	f.exec(t, `UPDATE purser.tenant_subscriptions SET free_fallback_at=NOW()-INTERVAL '1 second' WHERE tenant_id=$1`, f.tenant)
+	f.server.sweepFreeFallbackMovesOnce(t.Context())
+	if len(f.calls) != 1 || !f.calls[0].AllowRecovery {
+		t.Fatalf("provider stop = %+v, want one with payment recovery allowed", f.calls)
+	}
+	if s := f.state(t); s.tier != f.free || s.status != "active" {
+		t.Fatalf("grace end with a staged Free downgrade: %+v, want the move now, not at the staged effective time", s)
 	}
 }

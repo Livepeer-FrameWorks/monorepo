@@ -70,8 +70,13 @@ func NextMonthlyDateBoundary(at time.Time) time.Time {
 // ProviderTierRequest names the recurring price a provider subscription must
 // charge from its next renewal. The current paid term is not repriced.
 type ProviderTierRequest struct {
-	TenantID       string
-	TierID         string
+	TenantID string
+	TierID   string
+	// CurrentTierID is the tenant's local tier, which a recorded restore belongs to.
+	CurrentTierID string
+	// Downgrade is set while a downgrade to TierID is pending. Otherwise the
+	// request returns the subscription to its local tier.
+	Downgrade      bool
 	CustomerID     string
 	SubscriptionID string
 	PriceID        string

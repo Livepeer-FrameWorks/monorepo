@@ -97,13 +97,13 @@ INSERT INTO purser.subscription_entitlement_overrides (subscription_id, key, val
 VALUES (sqlc.arg(subscription_id), sqlc.arg(key), sqlc.arg(value)::jsonb)
 ON CONFLICT (subscription_id, key) DO UPDATE SET value = EXCLUDED.value;
 
--- name: RecordAccountClosureCollectionWriteoffs :execrows
+-- name: RecordCollectionWriteoffs :execrows
 INSERT INTO purser.billing_collection_writeoffs (tenant_id, currency, amount_cents, reason)
-SELECT tenant_id, currency, balance_cents, 'account_closed'
+SELECT tenant_id, currency, balance_cents, sqlc.arg(reason)::text
 FROM purser.billing_collection_balances
 WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid AND balance_cents > 0;
 
--- name: ClearAccountClosureCollectionBalances :execrows
+-- name: ClearCollectionBalances :execrows
 UPDATE purser.billing_collection_balances
 SET balance_cents = 0, updated_at = NOW()
 WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid AND balance_cents > 0;

@@ -31,6 +31,15 @@ func (s *Service) StageTierUpgradeTx(ctx context.Context, tx *sql.Tx, tenantID, 
 	if current.Status != "active" || current.PendingReason.String != "" {
 		return "", fmt.Errorf("%w: an active subscription without a scheduled downgrade or cancellation is required", billing.ErrTierUpgradeRejected)
 	}
+	// The purchase credits and replaces the provider's price, so that price must
+	// have settled first.
+	unfinished, err := q.HasUnfinishedProviderTierSync(ctx, tenantID)
+	if err != nil {
+		return "", err
+	}
+	if unfinished {
+		return "", fmt.Errorf("%w: the provider subscription is still being updated for an earlier tier change; retry shortly", billing.ErrTierUpgradeRejected)
+	}
 	id, err := q.InsertTierUpgrade(ctx, purserdb.InsertTierUpgradeParams{ID: uuid.NewString(), TenantID: tenantID, TierID: tierID, ActorID: ctxkeys.GetUserID(ctx), PeriodStart: start, PeriodEnd: end})
 	if err != nil {
 		return "", err

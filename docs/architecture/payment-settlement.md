@@ -118,8 +118,9 @@ balance as a line item and collects the combined invoice exactly once.
 
 Account closure and the move to Free each end the last collectable invoice. Both
 write off any remaining sub-floor balance, including what their final invoice
-deferred, to `billing_collection_writeoffs` with reason `account_closed` and clear
-the carry in the transaction that commits that invoice. It is never silently
+deferred, to `billing_collection_writeoffs` with reason `account_closed` or
+`moved_to_free` and clear the carry in the transaction that commits that invoice
+or tier change, including a Purser-billed tenant's scheduled downgrade to Free. It is never silently
 discarded or left as an unreachable customer debt.
 
 The balance update, audit entry, invoice header, line items, credit application,
@@ -196,7 +197,18 @@ what differs. Stripe replaces the subscription item's price with
 anchor. Mollie patches the amount and metadata, keeping `startDate`. A repeat is
 a no-op, so a lost response or a retry needs no idempotency key. The worker then
 relocks and records `pending_provider_tier_id` only if the desired tier and
-subscription still match; otherwise it wakes itself.
+subscription still match; otherwise it wakes itself. A suspended Mollie subscription
+is patched too; only canceled and completed ones are terminal.
+
+The first write of a downgrade records the subscriber's own Stripe price or Mollie
+amount in provider metadata, in the same update, because that may differ from the
+current catalog fee. Cancelling restores exactly that value and clears it. A Stripe
+price archived meanwhile is re-created inline with its product, amount and interval.
+With no downgrade pending and the provider already on the tier there is no write at
+all. A tier the provider cannot return to, with nothing recorded, stays a failing
+inbox step: the alert fires and the unfinished step keeps metadata from moving the
+local tier. An upgrade is refused with a retry message while the step is unfinished,
+because it credits and replaces that same price.
 
 Local and provider state cannot disagree silently:
 
@@ -228,7 +240,11 @@ live. During the stop it is refused as reconciling. Once the provider confirms,
 the subscription is `pending_cancellation` and any further tier change is refused:
 the customer keeps the paid term, moves to Free at its end, and may buy a paid tier
 after that move. The lead leaves three days for retries; a stop still failing at
-the renewal is the alert's case, not a silent charge.
+the renewal is the alert's case, not a silent charge. A payment-failure fallback
+already scheduled is left alone: it keeps its grace date, reason and recovery check,
+and a past-due term is not retained through the staged effective time. The Stripe
+stop finds the paid term by the invoice line's subscription item, because a confirmed
+tier change moves that item to another price after the term was paid.
 
 ## End of a provider subscription
 

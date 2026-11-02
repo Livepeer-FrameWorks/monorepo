@@ -104,6 +104,7 @@ func (q *Queries) EnqueueUnconfirmedTierDowngrades(ctx context.Context, freeStop
 
 const getProviderTierTarget = `-- name: GetProviderTierTarget :one
 SELECT target.id::text AS tier_id,
+       subscription.tier_id::text AS current_tier_id,
        (subscription.pending_reason IS NOT DISTINCT FROM 'downgrade')::boolean AS downgrade_pending,
        COALESCE(NULLIF(subscription.stripe_subscription_id, ''), '')::text AS stripe_subscription_id,
        COALESCE(NULLIF(subscription.mollie_subscription_id, ''), '')::text AS mollie_subscription_id,
@@ -114,7 +115,9 @@ SELECT target.id::text AS tier_id,
        COALESCE(target.currency, 'EUR')::text AS currency,
        (target.base_price = 0 AND COALESCE(target.is_default_postpaid, false))::boolean AS target_is_free,
        subscription.pending_effective_at,
+       (subscription.free_fallback_at IS NOT NULL)::boolean AS fallback_scheduled,
        (subscription.status = 'active' AND subscription.free_fallback_at IS NOT NULL
+        AND subscription.free_fallback_reason IS NOT DISTINCT FROM 'cancelled'
         AND subscription.free_fallback_provider_ended_at IS NULL)::boolean AS provider_stop_scheduled
 FROM purser.tenant_subscriptions subscription
 JOIN purser.billing_tiers target
@@ -125,6 +128,7 @@ WHERE subscription.tenant_id = $1::text::uuid
 
 type GetProviderTierTargetRow struct {
 	TierID                string       `db:"tier_id" json:"tier_id"`
+	CurrentTierID         string       `db:"current_tier_id" json:"current_tier_id"`
 	DowngradePending      bool         `db:"downgrade_pending" json:"downgrade_pending"`
 	StripeSubscriptionID  string       `db:"stripe_subscription_id" json:"stripe_subscription_id"`
 	MollieSubscriptionID  string       `db:"mollie_subscription_id" json:"mollie_subscription_id"`
@@ -135,6 +139,7 @@ type GetProviderTierTargetRow struct {
 	Currency              string       `db:"currency" json:"currency"`
 	TargetIsFree          bool         `db:"target_is_free" json:"target_is_free"`
 	PendingEffectiveAt    sql.NullTime `db:"pending_effective_at" json:"pending_effective_at"`
+	FallbackScheduled     bool         `db:"fallback_scheduled" json:"fallback_scheduled"`
 	ProviderStopScheduled bool         `db:"provider_stop_scheduled" json:"provider_stop_scheduled"`
 }
 
@@ -145,6 +150,7 @@ func (q *Queries) GetProviderTierTarget(ctx context.Context, tenantID string) (G
 	var i GetProviderTierTargetRow
 	err := row.Scan(
 		&i.TierID,
+		&i.CurrentTierID,
 		&i.DowngradePending,
 		&i.StripeSubscriptionID,
 		&i.MollieSubscriptionID,
@@ -155,6 +161,7 @@ func (q *Queries) GetProviderTierTarget(ctx context.Context, tenantID string) (G
 		&i.Currency,
 		&i.TargetIsFree,
 		&i.PendingEffectiveAt,
+		&i.FallbackScheduled,
 		&i.ProviderStopScheduled,
 	)
 	return i, err
@@ -184,4 +191,20 @@ func (q *Queries) GetStripeRenewalTierFence(ctx context.Context, tenantID string
 	var i GetStripeRenewalTierFenceRow
 	err := row.Scan(&i.DowngradePending, &i.ProviderTierChangedAt, &i.SyncUnfinished)
 	return i, err
+}
+
+const hasUnfinishedProviderTierSync = `-- name: HasUnfinishedProviderTierSync :one
+SELECT EXISTS (
+    SELECT 1 FROM purser.provider_webhook_inbox inbox
+    WHERE inbox.provider = 'tier_downgrade'
+      AND inbox.event_key = 'tier-downgrade:' || $1::text
+      AND inbox.status <> 'processed'
+)::boolean AS unfinished
+`
+
+func (q *Queries) HasUnfinishedProviderTierSync(ctx context.Context, tenantID string) (bool, error) {
+	row := q.db.QueryRowContext(ctx, hasUnfinishedProviderTierSync, tenantID)
+	var unfinished bool
+	err := row.Scan(&unfinished)
+	return unfinished, err
 }

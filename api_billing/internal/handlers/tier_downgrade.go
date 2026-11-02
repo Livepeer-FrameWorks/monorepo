@@ -101,7 +101,8 @@ func (s *Service) ReconcileProviderTier(ctx context.Context, tenantID string) er
 			return read
 		}
 		act = false
-		if !target.PendingEffectiveAt.Valid || target.PendingEffectiveAt.Time.After(time.Now().Add(FreeDowngradeStopLead)) {
+		// A payment-failure fallback keeps its date, reason and recovery check.
+		if target.FallbackScheduled || !target.PendingEffectiveAt.Valid || target.PendingEffectiveAt.Time.After(time.Now().Add(FreeDowngradeStopLead)) {
 			return nil
 		}
 		// Backdated past clock skew, so the sweep's first read finds it due. The
@@ -114,19 +115,26 @@ func (s *Service) ReconcileProviderTier(ctx context.Context, tenantID string) er
 	if err != nil || !act {
 		return err
 	}
-	if refusal := s.providerTierRefusal(target); refusal != nil {
-		if target.DowngradePending {
+	if target.DowngradePending {
+		if refusal := s.providerTierRefusal(target); refusal != nil {
 			return refusal
 		}
-		s.logger.WithError(refusal).WithField("tenant_id", tenantID).Warn("Provider subscription keeps its price; the current tier has no recurring provider price")
-		return nil
 	}
-	request := billing.ProviderTierRequest{TenantID: tenantID, TierID: target.TierID, BaseCents: target.BaseCents}
+	// With no downgrade pending the provider decides from what it holds: a tier
+	// it cannot return to surfaces as a refusal, so the inbox retries and alerts
+	// and the unfinished row keeps metadata from moving the local tier.
+	request := billing.ProviderTierRequest{TenantID: tenantID, TierID: target.TierID, CurrentTierID: target.CurrentTierID, Downgrade: target.DowngradePending, BaseCents: target.BaseCents}
 	var receipt billing.ProviderTierReceipt
 	if target.StripeSubscriptionID != "" {
+		if s.stripeClient == nil {
+			return errors.New("stripe collection is not configured")
+		}
 		request.SubscriptionID, request.CustomerID, request.PriceID = target.StripeSubscriptionID, target.StripeCustomerID, target.StripePriceID
 		receipt, err = s.stripeClient.SyncSubscriptionTier(ctx, request)
 	} else {
+		if s.mollieClient == nil {
+			return errors.New("mollie collection is not configured")
+		}
 		request.SubscriptionID, request.CustomerID = target.MollieSubscriptionID, target.MollieCustomerID
 		receipt, err = s.mollieClient.SyncSubscriptionTier(ctx, request)
 	}

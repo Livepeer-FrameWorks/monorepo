@@ -97,7 +97,6 @@ WHERE tenant_id = $2::text::uuid
   AND pending_tier_id = $1::text::uuid
   AND (pending_reason IS DISTINCT FROM 'downgrade'
        OR pending_provider_tier_id = pending_tier_id
-       OR free_fallback_provider_ended_at IS NOT NULL
        OR (NULLIF(stripe_subscription_id, '') IS NULL AND NULLIF(mollie_subscription_id, '') IS NULL))
 `
 

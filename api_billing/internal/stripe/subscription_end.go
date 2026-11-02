@@ -55,9 +55,10 @@ func (c *Client) EndSubscriptionForFallback(ctx context.Context, request billing
 			}
 		}
 	}
-	prices := make(map[string]bool)
+	prices, items := make(map[string]bool), make(map[string]bool)
 	if sub.Items != nil {
 		for _, item := range sub.Items.Data {
+			items[item.ID] = true
 			if item.Price != nil {
 				prices[item.Price.ID] = true
 			}
@@ -89,7 +90,7 @@ func (c *Client) EndSubscriptionForFallback(ctx context.Context, request billing
 		if readErr != nil || !retained {
 			return result, readErr
 		}
-		result.PaidUntil, err = paidSubscriptionTermEnd(ctx, latest, prices)
+		result.PaidUntil, err = paidSubscriptionTermEnd(ctx, latest, request.SubscriptionID, prices, items)
 		return result, err
 	}
 	payments := &stripe.InvoicePaymentListParams{Invoice: stripe.String(latest.ID)}
@@ -119,8 +120,11 @@ func stripeObjectMissing(err error) bool {
 }
 
 // The invoice header describes its invoicing window; the paid base-fee line
-// names the service term it bought, including an advance-billed renewal.
-func paidSubscriptionTermEnd(ctx context.Context, latest *stripe.Invoice, prices map[string]bool) (time.Time, error) {
+// names the service term it bought, including an advance-billed renewal. A line
+// belongs to the subscription by its item, because a confirmed tier change moves
+// that item to another price after the term was paid; lines with no item
+// reference match by the item's current price.
+func paidSubscriptionTermEnd(ctx context.Context, latest *stripe.Invoice, subscriptionID string, prices, items map[string]bool) (time.Time, error) {
 	var until time.Time
 	lines := latest.Lines
 	if lines == nil || lines.HasMore {
@@ -136,7 +140,15 @@ func paidSubscriptionTermEnd(ctx context.Context, latest *stripe.Invoice, prices
 		}
 	}
 	for _, line := range lines.Data {
-		if line.Amount <= 0 || line.Period == nil || line.Pricing == nil || line.Pricing.PriceDetails == nil || line.Pricing.PriceDetails.Price == nil || !prices[line.Pricing.PriceDetails.Price.ID] {
+		if line.Amount <= 0 || line.Period == nil || line.Pricing == nil || line.Pricing.PriceDetails == nil || line.Pricing.PriceDetails.Price == nil {
+			continue
+		}
+		owned := prices[line.Pricing.PriceDetails.Price.ID]
+		if line.Parent != nil && line.Parent.SubscriptionItemDetails != nil {
+			parent := line.Parent.SubscriptionItemDetails
+			owned = parent.Subscription == subscriptionID && items[parent.SubscriptionItem] && !parent.Proration
+		}
+		if !owned {
 			continue
 		}
 		end := time.Unix(line.Period.End, 0).UTC()
