@@ -1,0 +1,132 @@
+---
+# Drives the role's migrate tasks with items shaped like the ones `cluster migrate` sends for
+# ClickHouse (cli/pkg/provisioner): two items, a rerun that applies nothing, an edited applied item
+# and a failing item.
+- name: Create the fixture database
+  ansible.builtin.command:
+    argv:
+      - clickhouse-client
+      - --host=127.0.0.1
+      - --port=9000
+      - -q
+      - CREATE DATABASE IF NOT EXISTS migrate_fixture
+  environment:
+    CLICKHOUSE_PASSWORD: "{{ clickhouse_default_password }}"
+  changed_when: false
+
+- name: Declare the fixture migration items
+  ansible.builtin.set_fact:
+    migrate_fixture_items:
+      - db: migrate_fixture
+        version: v0.0.1
+        phase: expand
+        sequence: 1
+        filename: 001_fixture_table.sql
+        checksum: 43f5bfb5683539ebaaee6a06036aff44bffda6d572a8614614a7b1961cb746da
+        sql: CREATE TABLE IF NOT EXISTS migrate_fixture.items (id UInt64) ENGINE = MergeTree ORDER BY id;
+      - db: migrate_fixture
+        version: v0.0.1
+        phase: expand
+        sequence: 2
+        filename: 002_fixture_column.sql
+        checksum: 721fc03bf49583444e86de000429b2527b5d7aa3f4a5cfc3cfb3cbc7c10951ce
+        sql: ALTER TABLE migrate_fixture.items ADD COLUMN IF NOT EXISTS label String;
+    migrate_fixture_failing:
+      db: migrate_fixture
+      version: v0.0.1
+      phase: expand
+      sequence: 3
+      filename: 003_fixture_fails.sql
+      checksum: a96776fff2856066ec8587f3e0526192e8857005327d97300a810cf1c0fa309b
+      sql: SELECT throwIf(1, 'migrate fixture failure');
+
+- name: Apply the fixture items
+  ansible.builtin.include_tasks: migrate-run.yml
+  vars:
+    clickhouse_migrate_items: "{{ migrate_fixture_items }}"
+
+- name: Read the fixture ledger and columns
+  ansible.builtin.command:
+    argv:
+      - clickhouse-client
+      - --host=127.0.0.1
+      - --port=9000
+      - -q
+      - >-
+        SELECT (SELECT groupArray(seq) FROM (SELECT seq FROM migrate_fixture._migrations FINAL ORDER BY seq)),
+               (SELECT count() FROM system.columns WHERE database = 'migrate_fixture' AND table = 'items')
+        FORMAT TSV
+  environment:
+    CLICKHOUSE_PASSWORD: "{{ clickhouse_default_password }}"
+  register: migrate_fixture_state
+  changed_when: false
+
+- name: Assert both items applied and recorded
+  ansible.builtin.assert:
+    that: migrate_fixture_state.stdout | trim == '[1,2]' ~ ('%c' | format(9)) ~ '2'
+    fail_msg: "ledger and column count: {{ migrate_fixture_state.stdout }}"
+
+- name: Rerun the applied items
+  ansible.builtin.include_tasks: migrate-run.yml
+  vars:
+    clickhouse_migrate_items: "{{ migrate_fixture_items }}"
+
+- name: Assert the rerun applied nothing
+  ansible.builtin.assert:
+    that: clickhouse_migrate_apply.results | default([]) | rejectattr('skipped', 'defined') | list | length == 0
+    fail_msg: "rerun applied {{ clickhouse_migrate_apply.results | default([]) | rejectattr('skipped', 'defined') | map(attribute='item.filename') | list }}"
+
+- name: Apply an applied item whose checksum changed
+  block:
+    - name: Run migrate with the edited item
+      ansible.builtin.include_tasks: migrate-run.yml
+      vars:
+        clickhouse_migrate_items:
+          - "{{ migrate_fixture_items[0] | combine({'checksum': '1fb9f4097256db2d7b1e13aff79cee44339891a31c556b9cf6093885773b3618'}) }}"
+
+    - name: Fail when the edited item was accepted
+      ansible.builtin.set_fact:
+        migrate_fixture_edited_error: ""
+  rescue:
+    - name: Record the edited-item refusal
+      ansible.builtin.set_fact:
+        migrate_fixture_edited_error: "{{ ansible_failed_result.msg | default('') }}"
+
+- name: Apply an item whose statement fails
+  block:
+    - name: Run migrate with the failing item
+      ansible.builtin.include_tasks: migrate-run.yml
+      vars:
+        clickhouse_migrate_items: "{{ [migrate_fixture_failing] }}"
+
+    - name: Fail when the failing item was applied
+      ansible.builtin.set_fact:
+        migrate_fixture_failed_error: ""
+  rescue:
+    - name: Record the failed item
+      ansible.builtin.set_fact:
+        migrate_fixture_failed_error: "{{ ansible_failed_result.msg | default('') }}"
+
+- name: Read the ledger after the refused and failed items
+  ansible.builtin.command:
+    argv:
+      - clickhouse-client
+      - --host=127.0.0.1
+      - --port=9000
+      - -q
+      - SELECT groupArray(seq) FROM (SELECT seq FROM migrate_fixture._migrations FINAL ORDER BY seq) FORMAT TSV
+  environment:
+    CLICKHOUSE_PASSWORD: "{{ clickhouse_default_password }}"
+  register: migrate_fixture_after_failures
+  changed_when: false
+
+- name: Assert the refused and failed items left no ledger rows
+  ansible.builtin.assert:
+    that:
+      - "'ClickHouse migration checksum mismatch for migrate_fixture/v0.0.1/expand/001_fixture_table.sql' in migrate_fixture_edited_error"
+      - "'003_fixture_fails.sql' in migrate_fixture_failed_error"
+      - "'migrate fixture failure' in migrate_fixture_failed_error"
+      - migrate_fixture_after_failures.stdout | trim == '[1,2]'
+    fail_msg: >-
+      edited: {{ migrate_fixture_edited_error }}; failure: {{ migrate_fixture_failed_error }};
+      ledger: {{ migrate_fixture_after_failures.stdout }}

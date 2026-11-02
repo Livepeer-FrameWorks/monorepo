@@ -111,3 +111,6 @@
           - '''<mysql_port remove="remove"/>'' in (clickhouse_compat_dropin.content | b64decode)'
           - '''<postgresql_port remove="remove"/>'' in (clickhouse_compat_dropin.content | b64decode)'
         fail_msg: "server PID {{ clickhouse_pid_before.stdout }} -> {{ clickhouse_pid_after.stdout }}; the protocol drop-in must not restart ClickHouse"
+
+    - name: Apply, rerun and refuse fixture migrations
+      ansible.builtin.include_tasks: tasks/migrate.yml
