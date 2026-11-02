@@ -69,6 +69,7 @@ type Store struct {
 	recovery          recoveryCoordinator
 	fetchOutcomes     *prometheus.CounterVec
 	managedStreamSets *prometheus.CounterVec
+	unavailableRows   unavailableManagedRows
 	runtimePeers      RuntimePeerResolver
 	servedCluster     func(clusterID string) bool
 	applyOutcomes     *prometheus.CounterVec

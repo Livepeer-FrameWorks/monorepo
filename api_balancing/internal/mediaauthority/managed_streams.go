@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
+	"time"
 
 	"frameworks/api_balancing/internal/database/foghorndb"
 	sharedauthority "github.com/Livepeer-FrameWorks/monorepo/pkg/mediaauthority"
@@ -37,6 +39,65 @@ func (s ManagedStreamSet) HoldsStream(streamName string) bool {
 		}
 	}
 	return false
+}
+
+// unavailableRowWarnInterval spaces the Warn for one managed-stream row that a
+// successful refetch left unreadable.
+const unavailableRowWarnInterval = 10 * time.Minute
+
+// unavailableManagedRows remembers the managed-stream rows the last desired-set
+// read could not use. A row is logged at Debug until a refetch of its authority
+// succeeds; if the row is still unusable after that, the cell cannot repair it
+// by asking again, and it is logged at Warn once per interval.
+type unavailableManagedRows struct {
+	mu   sync.Mutex
+	rows map[string]*unavailableManagedRow
+}
+
+type unavailableManagedRow struct {
+	refetched bool
+	warnedAt  time.Time
+}
+
+// note records authorityID as unavailable and reports whether this read
+// should be logged at Warn.
+func (u *unavailableManagedRows) note(authorityID string, now time.Time) bool {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if u.rows == nil {
+		u.rows = map[string]*unavailableManagedRow{}
+	}
+	row := u.rows[authorityID]
+	if row == nil {
+		u.rows[authorityID] = &unavailableManagedRow{}
+		return false
+	}
+	if !row.refetched || (!row.warnedAt.IsZero() && now.Sub(row.warnedAt) < unavailableRowWarnInterval) {
+		return false
+	}
+	row.warnedAt = now
+	return true
+}
+
+// refetched records that the control plane answered a refetch of authorityID.
+func (u *unavailableManagedRows) refetched(authorityID string) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if row := u.rows[authorityID]; row != nil {
+		row.refetched = true
+	}
+}
+
+// retain keeps only the rows in seen, the ones a read through every listed row
+// found unavailable.
+func (u *unavailableManagedRows) retain(seen map[string]struct{}) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	for authorityID := range u.rows {
+		if _, ok := seen[authorityID]; !ok {
+			delete(u.rows, authorityID)
+		}
+	}
 }
 
 type ManagedStreamPromotion string
@@ -90,15 +151,28 @@ func (s *Store) ManagedStreams(ctx context.Context, clusterID string) (result Ma
 		return result, fmt.Errorf("list local managed-stream authorities: %w", err)
 	}
 	if len(rows) == 0 {
+		s.unavailableRows.retain(nil)
 		return result, nil
 	}
 	result.Complete = true
+	unavailable := make(map[string]struct{})
 	rowUnavailable := func(authorityID string, cause error) {
 		result.Complete = false
+		unavailable[authorityID] = struct{}{}
+		warn := s.unavailableRows.note(authorityID, s.now().UTC())
 		if s.logger != nil {
-			s.logger.WithError(cause).WithField("authority_id", authorityID).Debug("Managed source authority unavailable; preserving other tenants and disabling retraction")
+			entry := s.logger.WithError(cause).WithField("authority_id", authorityID)
+			if warn {
+				entry.Warn("Managed source authority still unavailable after a successful refetch; preserving other tenants and disabling retraction")
+			} else {
+				entry.Debug("Managed source authority unavailable; preserving other tenants and disabling retraction")
+			}
 		}
-		s.refreshAsync(AuthorityLookup{AuthorityID: authorityID})
+		s.refreshAsyncThen(AuthorityLookup{AuthorityID: authorityID}, func(err error) {
+			if err == nil {
+				s.unavailableRows.refetched(authorityID)
+			}
+		})
 	}
 	for _, row := range rows {
 		if err := ctx.Err(); err != nil {
@@ -214,6 +288,7 @@ func (s *Store) ManagedStreams(ctx context.Context, clusterID string) (result Ma
 			DvrPolicy: tenant.Authority.GetDvrPolicy(), Allowances: tenant.Authority.GetAllowances(), TenantResourceLimits: clusterResourceLimits(tenant.Authority, clusterID),
 		}
 	}
+	s.unavailableRows.retain(unavailable)
 	return result, nil
 }
 

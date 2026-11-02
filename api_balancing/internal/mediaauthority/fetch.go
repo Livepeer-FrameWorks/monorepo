@@ -304,6 +304,13 @@ func (s *Store) fetch(ctx context.Context, lookup AuthorityLookup) (applied bool
 // getting here means it is overdue; the read that noticed goes ahead on what
 // the cell holds.
 func (s *Store) refreshAsync(lookup AuthorityLookup) bool {
+	return s.refreshAsyncThen(lookup, nil)
+}
+
+// refreshAsyncThen is refreshAsync that reports the fetch's error, nil when the
+// control plane answered, to done once a dispatched fetch ends. done is not
+// called when no fetch is dispatched.
+func (s *Store) refreshAsyncThen(lookup AuthorityLookup, done func(error)) bool {
 	if s == nil || s.fetcher == nil || lookup.empty() {
 		return false
 	}
@@ -323,7 +330,10 @@ func (s *Store) refreshAsync(lookup AuthorityLookup) bool {
 				s.fetcher.asyncActive--
 				s.fetcher.mu.Unlock()
 			}()
-			_, _ = s.Fetch(context.Background(), lookup) //nolint:errcheck // advisory: the authority the cell holds stays usable
+			_, err := s.Fetch(context.Background(), lookup)
+			if done != nil {
+				done(err)
+			}
 		}()
 	}
 	return installed
