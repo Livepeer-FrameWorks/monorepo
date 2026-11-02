@@ -28,7 +28,12 @@ or unit-only, and the external object-store end-to-end tier that sits outside it
   `origin_cluster_id`; there is no tenant-level storage destination. `ClusterResolver.ResolveOriginDurable` mints
   locally when this cell serves the origin and its backing is this cell's store, returns federation when the origin's
   storage belongs to another cell, and fails closed (`StorageUnavailable`) on an unknown origin — never falling back to
-  the caller's or this cell's cluster. Freeze accepts uploads only from nodes of the origin cluster; a VOD create or
+  the caller's or this cell's cluster. An origin cluster this cell serves that advertises no dedicated backing (a
+  private cluster with no bucket in its Quartermaster peer metadata) is stored in this cell's configured store, and the
+  same rule decides reads: federation `PrepareArtifact` and `MintStorageURLs` mint locally for it. An advertised
+  backing must match this cell's full `(bucket, endpoint, region, prefix)` tuple to count as local; any difference
+  keeps the artifact remote, and a cell with no object-store client is unavailable for it. Freeze accepts uploads
+  only from nodes of the origin cluster; a VOD create or
   import is stored on the cluster that accepted it and its processing job runs only on that cluster's nodes; a DVR's
   segments and parent row live in the recording cell's store. The tenant's official cluster remains a routing,
   viewer and billing concept only.
