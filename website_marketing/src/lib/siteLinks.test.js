@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { footerColumns, headerNav, isActiveLink, signupUrl } from "./siteLinks.js";
+import { footerColumns, headerNav, isActiveLink, signupUrl, walletLoginUrl } from "./siteLinks.js";
 
 const config = {
   docsUrl: "https://docs.example/",
@@ -64,4 +64,11 @@ test("signup links go to register with attribution and an optional plan", () => 
     signupUrl("https://app.example", "nav-try-now"),
     "https://app.example/register?utm_source=marketing&utm_content=nav-try-now"
   );
+});
+
+test("wallet CTA opens the app login with a billing return path", () => {
+  const url = new URL(walletLoginUrl("https://app.example/", "pricing-payg-wallet"));
+  assert.equal(url.pathname, "/login");
+  assert.equal(url.searchParams.get("return_to"), "/account/billing");
+  assert.equal(url.searchParams.get("utm_content"), "pricing-payg-wallet");
 });

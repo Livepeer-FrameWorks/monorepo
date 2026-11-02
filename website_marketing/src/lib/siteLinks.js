@@ -14,6 +14,17 @@ export function signupUrl(appUrl, cta, { plan } = {}) {
   return `${trimSlash(appUrl)}/register?${params.toString()}`;
 }
 
+// Wallet sign-in lives on the app's login page; return_to lands the visitor on
+// billing so a pay-as-you-go balance can be funded straight away.
+export function walletLoginUrl(appUrl, cta) {
+  const params = new URLSearchParams({
+    return_to: "/account/billing",
+    utm_source: "marketing",
+    utm_content: cta,
+  });
+  return `${trimSlash(appUrl)}/login?${params.toString()}`;
+}
+
 export function siteLinks({ docsUrl, githubUrl }) {
   return {
     home: { id: "home", label: "Home", to: "/" },

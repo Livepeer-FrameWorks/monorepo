@@ -3,8 +3,9 @@ import { Link } from "react-router";
 import config from "../../config";
 import status from "@/data/status.json";
 import { featureOf, showcaseHref } from "@/lib/featureStatus";
-import { signupUrl } from "@/lib/siteLinks";
+import { signupUrl, walletLoginUrl } from "@/lib/siteLinks";
 import { contactPath } from "@/lib/contactTopics";
+import { abrLine, multistreamLine } from "@/lib/planCopy";
 import InfoTooltip from "../shared/InfoTooltip";
 import StatusTag from "../shared/StatusTag";
 import SovereigntyNote from "../shared/SovereigntyNote";
@@ -66,10 +67,7 @@ const developerPricing = paidTierPricing(catalogTier.developer);
 const productionPricing = paidTierPricing(catalogTier.production);
 const freeCatalog = catalogTier.free;
 
-const streamingFeatures = [
-  "Adaptive bitrate included",
-  "Multistreaming with no destination cap: each enabled destination uses one viewer-capacity slot and counts toward delivered minutes",
-];
+const streamingFeatures = (tier) => [abrLine, multistreamLine(tier)];
 
 const freeTier = {
   id: "free",
@@ -80,7 +78,7 @@ const freeTier = {
     "Stream on FrameWorks infrastructure, with free transcoding through the Livepeer network and free delivery from the shared bandwidth pool.",
   features: [
     `${compactMinutes(freeCatalog)} delivered min/mo, ${freeCatalog.limits.storageGiB} GB storage, ${freeCatalog.limits.maxConcurrentStreams} streams / ${freeCatalog.limits.maxConcurrentViewers} viewers, ${freeCatalog.limits.retentionDays}-day retention`,
-    ...streamingFeatures,
+    ...streamingFeatures(freeCatalog),
     "The same dashboard, APIs, and analytics as paid plans",
   ],
   limitations: [
@@ -107,7 +105,7 @@ const paidTiers = [
     features: [
       supporterPricing.delivery,
       supporterPricing.storage,
-      ...streamingFeatures,
+      ...streamingFeatures(catalogTier.supporter),
       "Hosted load balancer",
       "Custom subdomain (*.frameworks.network)",
       "Transparent usage reporting",
@@ -129,7 +127,7 @@ const paidTiers = [
     features: [
       developerPricing.delivery,
       developerPricing.storage,
-      ...streamingFeatures,
+      ...streamingFeatures(catalogTier.developer),
       `Team collaboration features (${teamRbac.tag.toLowerCase()})`,
       supportLine,
     ],
@@ -149,7 +147,7 @@ const paidTiers = [
     features: [
       productionPricing.delivery,
       productionPricing.storage,
-      ...streamingFeatures,
+      ...streamingFeatures(catalogTier.production),
       "Dedicated processing allocation",
       `${supportLine}, on-call by Enterprise agreement`,
     ],
@@ -645,13 +643,13 @@ const Pricing = () => {
                   <CTACluster align="start">
                     <MarketingCTAButton
                       intent="primary"
-                      href={config.appUrl}
+                      href={walletLoginUrl(config.appUrl, "pricing-payg-wallet")}
                       label="Connect Wallet"
                       external
                     />
                     <MarketingCTAButton
                       intent="secondary"
-                      href={config.appUrl}
+                      href={signupUrl(config.appUrl, "pricing-payg-funds")}
                       label="Add Funds"
                       external
                     />

@@ -46,10 +46,12 @@ import status from "@/data/status.json";
 import { compactLabel, featureOf, statusKey, tierAnchor, tierOf } from "@/lib/featureStatus";
 import { docsLink, signupUrl } from "@/lib/siteLinks";
 import { contactPath } from "@/lib/contactTopics";
+import { multistreamLine } from "@/lib/planCopy";
 import StatusTag from "../shared/StatusTag";
 
 const paygCatalog = pricingCatalog.tiers.find((t) => t.id === "payg");
 const freeCatalog = pricingCatalog.tiers.find((t) => t.id === "free");
+const paidCatalog = pricingCatalog.tiers.find((t) => t.id === "supporter");
 const streamcrafter = featureOf(status, "streamcrafter");
 const cloudProduction = featureOf(status, "composition");
 const lowestPaidBase = Math.min(
@@ -407,14 +409,15 @@ const LandingPage = () => {
     `${freeCatalog.limits.storageGiB} GB storage with ${freeCatalog.limits.retentionDays}-day retention`,
     `${freeCatalog.limits.maxConcurrentStreams} streams and ${freeCatalog.limits.maxConcurrentViewers} viewers at a time`,
     "Adaptive bitrate through Livepeer transcoding",
-    "Multistreaming to other platforms",
+    multistreamLine(freeCatalog),
     "Dashboard with analytics included",
   ];
 
   const paidPlanHighlights = [
     "Hosted load balancer and a custom subdomain",
     "More included delivered minutes and lower overage rates",
-    "Adaptive bitrate and multistreaming on every plan",
+    "Adaptive bitrate on every plan",
+    multistreamLine(paidCatalog),
     "Support from the video engineers who build it",
   ];
 
@@ -926,7 +929,7 @@ const LandingPage = () => {
                     <MarketingCTAButton
                       intent="secondary"
                       to={`/showcase#${streamcrafter.id}`}
-                      label="Showcase"
+                      label="See the showcase"
                     />
                   </div>
                 </div>
