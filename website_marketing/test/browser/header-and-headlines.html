@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" />
+  <title>Header menu and headline layout regression</title>
+  <style>
+    body {
+      margin: 16px;
+      color: #c0caf5;
+      background: #1a1b26;
+      font: 14px system-ui;
+    }
+    iframe {
+      display: block;
+      border: 1px solid #3b4261;
+      background: #16161e;
+    }
+    output {
+      display: block;
+      margin-block: 16px;
+      white-space: pre-wrap;
+    }
+    [data-status="fail"] {
+      color: #f7768e;
+    }
+    [data-status="pass"] {
+      color: #9ece6a;
+    }
+  </style>
+  <h1>Header menu and headline layout regression</h1>
+  <p>
+    Use ?width=390 for the headline checks and ?width=1440 for the desktop Resources menu. Optional
+    ?path= picks the page (default /).
+  </p>
+  <output aria-live="polite">Waiting for the page…</output>
+  <iframe title="Marketing page under test" height="844"></iframe>
+  <script type="module">
+    const query = new URLSearchParams(location.search);
+    const width = [390, 768, 1440].includes(Number(query.get("width")))
+      ? Number(query.get("width"))
+      : 390;
+    const frame = document.querySelector("iframe");
+    frame.width = String(width);
+    frame.src = query.get("path")?.startsWith("/") ? query.get("path") : "/";
+    const nextFrame = () =>
+      new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+
+    frame.addEventListener("load", async () => {
+      const win = frame.contentWindow;
+      const doc = frame.contentDocument;
+      const report = document.querySelector("output");
+      const checks = [];
+      const check = (label, pass, detail) => checks.push({ label, pass, detail });
+      await doc.fonts.ready;
+      await nextFrame();
+
+      check(
+        "No page overflow",
+        doc.documentElement.scrollWidth <= win.innerWidth,
+        `${doc.documentElement.scrollWidth}px / ${win.innerWidth}px`
+      );
+
+      // A long inline action label must not widen the headline column past its
+      // frame on narrow screens, which would clip the title beside it.
+      for (const frameEl of doc.querySelectorAll(".headline-stack__frame")) {
+        const title = frameEl.querySelector(".headline-stack__title");
+        if (!title) continue;
+        check(
+          `Headline fits: ${title.textContent.trim().slice(0, 40)}`,
+          title.getBoundingClientRect().right <= frameEl.getBoundingClientRect().right + 1,
+          `${Math.round(title.getBoundingClientRect().width)}px in ${frameEl.clientWidth}px`
+        );
+      }
+
+      const trigger = doc.querySelector(".nav-menu > button");
+      if (width >= 1280 && trigger) {
+        const pointer = (type, target, init = {}) =>
+          target.dispatchEvent(
+            new win.PointerEvent(type, {
+              bubbles: true,
+              pointerType: "mouse",
+              isPrimary: true,
+              ...init,
+            })
+          );
+        pointer("pointerout", doc.body, { relatedTarget: trigger });
+        pointer("pointerover", trigger, { relatedTarget: doc.body });
+        await nextFrame();
+        check(
+          "Mouse hover opens Resources",
+          trigger.getAttribute("aria-expanded") === "true",
+          `aria-expanded=${trigger.getAttribute("aria-expanded")}`
+        );
+        pointer("pointerdown", trigger);
+        trigger.dispatchEvent(new win.MouseEvent("click", { bubbles: true }));
+        await nextFrame();
+        check(
+          "Mouse click after hover keeps Resources open",
+          trigger.getAttribute("aria-expanded") === "true",
+          `aria-expanded=${trigger.getAttribute("aria-expanded")}`
+        );
+        doc.dispatchEvent(new win.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+        await nextFrame();
+        check(
+          "Escape closes Resources",
+          trigger.getAttribute("aria-expanded") === "false",
+          `aria-expanded=${trigger.getAttribute("aria-expanded")}`
+        );
+        trigger.dispatchEvent(new win.MouseEvent("click", { bubbles: true }));
+        await nextFrame();
+        check(
+          "Keyboard click toggles Resources open",
+          trigger.getAttribute("aria-expanded") === "true",
+          `aria-expanded=${trigger.getAttribute("aria-expanded")}`
+        );
+      }
+
+      report.dataset.status = checks.every((c) => c.pass) ? "pass" : "fail";
+      report.textContent = checks
+        .map((c) => `${c.pass ? "PASS" : "FAIL"} ${c.label}: ${c.detail}`)
+        .join("\n");
+    });
+  </script>
+</html>

@@ -6,6 +6,7 @@ import BetaBadge from "./shared/BetaBadge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { headerNav, isActiveLink, signupUrl } from "@/lib/siteLinks";
+import { nextMenuOpen } from "@/lib/disclosureMenu";
 import { Sheet, SheetTrigger, SheetContent, SheetClose, SheetTitle } from "@/components/ui/sheet";
 
 const ExternalIcon = ({ className }) => (
@@ -41,14 +42,17 @@ const NavLink = ({ link, className, children, ...props }) => {
   );
 };
 
-// Disclosure menu for the Resources group: opens on click or hover, closes on
-// Escape, an outside click, or focus leaving the menu. The header keys it by
+// Disclosure menu for the Resources group: opens on click or mouse hover,
+// closes on Escape, an outside click, or focus leaving the menu. The header keys it by
 // path, so navigating remounts it closed.
 const ResourcesMenu = ({ menu, active, pathname, linkClasses }) => {
   const [open, setOpen] = useState(false);
   const rootRef = useRef(null);
   const buttonRef = useRef(null);
   const closeTimer = useRef(null);
+  // pointerType of the press that produced the next click; empty for a
+  // keyboard-activated click.
+  const pressPointer = useRef("");
   const panelId = useId();
 
   useEffect(() => {
@@ -72,21 +76,29 @@ const ResourcesMenu = ({ menu, active, pathname, linkClasses }) => {
 
   useEffect(() => () => window.clearTimeout(closeTimer.current), []);
 
-  const openNow = () => {
+  const apply = (action) => setOpen((value) => nextMenuOpen(value, action));
+  const onHover = (event) => {
     window.clearTimeout(closeTimer.current);
-    setOpen(true);
+    apply({ type: "hover", pointerType: event.pointerType });
   };
-  const closeSoon = () => {
+  const onLeave = (event) => {
+    const { pointerType } = event;
     window.clearTimeout(closeTimer.current);
-    closeTimer.current = window.setTimeout(() => setOpen(false), 120);
+    closeTimer.current = window.setTimeout(() => apply({ type: "leave", pointerType }), 120);
+  };
+  const onClick = () => {
+    window.clearTimeout(closeTimer.current);
+    const pointerType = pressPointer.current;
+    pressPointer.current = "";
+    apply({ type: "click", pointerType });
   };
 
   return (
     <div
       ref={rootRef}
       className="nav-menu"
-      onPointerEnter={(event) => event.pointerType === "mouse" && openNow()}
-      onPointerLeave={(event) => event.pointerType === "mouse" && closeSoon()}
+      onPointerEnter={onHover}
+      onPointerLeave={onLeave}
       onBlur={(event) => {
         if (!rootRef.current?.contains(event.relatedTarget)) setOpen(false);
       }}
@@ -97,7 +109,10 @@ const ResourcesMenu = ({ menu, active, pathname, linkClasses }) => {
         className={cn(linkClasses(active), "gap-1")}
         aria-expanded={open}
         aria-controls={panelId}
-        onClick={() => setOpen((value) => !value)}
+        onPointerDown={(event) => {
+          pressPointer.current = event.pointerType;
+        }}
+        onClick={onClick}
       >
         {menu.label}
         <ChevronDownIcon
