@@ -40,15 +40,56 @@
       register: kafka_server_log
       failed_when: not kafka_server_log.stat.exists
 
+    # A registered include_role never reports the included tasks' changes, so idempotence is read
+    # from the host: a rerun that rewrote a rendered file changes its mtime, and the restart it
+    # notifies (flushed below) changes the broker's MainPID.
+    - name: Read the broker's main PID before the rerun
+      ansible.builtin.command: systemctl show -p MainPID --value frameworks-kafka
+      register: kafka_combined_pid_before
+      changed_when: false
+
+    - name: Stat the rendered files before the rerun
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: kafka_combined_files_before
+      loop: "{{ kafka_combined_rendered }}"
+      vars:
+        kafka_combined_rendered: &kafka_combined_rendered
+          - /etc/systemd/system/frameworks-kafka.service
+          - /opt/kafka/config/frameworks-kafka.properties
+          - /opt/kafka/config/frameworks-kafka-log4j2.yaml
+
     - name: Rerun role (idempotence)
       ansible.builtin.include_role:
         name: frameworks.infra.kafka
-      register: idem
 
-    - name: Fail if second apply changed anything
+    - name: Run the restarts the rerun notified
+      ansible.builtin.meta: flush_handlers
+
+    - name: Read the broker's main PID after the rerun
+      ansible.builtin.command: systemctl show -p MainPID --value frameworks-kafka
+      register: kafka_combined_pid_after
+      changed_when: false
+
+    - name: Stat the rendered files after the rerun
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: kafka_combined_files_after
+      loop: *kafka_combined_rendered
+
+    - name: Fail if the rerun rewrote a file or restarted the broker
       ansible.builtin.assert:
-        that: idem is not changed
-        fail_msg: "kafka role not idempotent"
+        that:
+          - kafka_combined_pid_before.stdout | int > 0
+          - kafka_combined_pid_after.stdout == kafka_combined_pid_before.stdout
+          - >-
+            kafka_combined_files_before.results | map(attribute='stat.mtime') | list
+            == kafka_combined_files_after.results | map(attribute='stat.mtime') | list
+        fail_msg: >-
+          kafka role not idempotent: MainPID {{ kafka_combined_pid_before.stdout }} ->
+          {{ kafka_combined_pid_after.stdout }}; mtimes
+          {{ kafka_combined_files_before.results | map(attribute='stat.mtime') | list }} ->
+          {{ kafka_combined_files_after.results | map(attribute='stat.mtime') | list }}
 
 # Restarting the controller must leave the colocated broker's JVM running: each
 # unit stops with SIGTERM to its own process, while kafka-server-stop.sh would
@@ -115,6 +156,11 @@
       delay: 5
       until: kafka_quorum_status.rc == 0 and kafka_quorum_status.stdout is search('LeaderId:\s+1')
 
+    - name: Read the controller's main PID after its restart
+      ansible.builtin.command: systemctl show -p MainPID --value frameworks-kafka-controller
+      register: kafka_controller_pid_before
+      changed_when: false
+
     - name: Rerun the split roles (idempotence)
       ansible.builtin.include_role:
         name: frameworks.infra.kafka
@@ -127,16 +173,23 @@
         - { role: broker, id: 2, jmx: 9405 }
       loop_control:
         loop_var: kafka_split_item
-      register: kafka_split_idem
 
-    - name: Read the broker's main PID after the rerun
-      ansible.builtin.command: systemctl show -p MainPID --value frameworks-kafka
-      register: kafka_broker_pid_rerun
+    - name: Run the restarts the rerun notified
+      ansible.builtin.meta: flush_handlers
+
+    - name: Read the broker's and controller's main PIDs after the rerun
+      ansible.builtin.command: systemctl show -p MainPID --value {{ item }}
+      register: kafka_split_pids_rerun
       changed_when: false
+      loop: [frameworks-kafka, frameworks-kafka-controller]
 
-    - name: Assert the rerun restarted nothing
+    - name: Assert the rerun restarted neither unit
       ansible.builtin.assert:
         that:
-          - kafka_split_idem is not changed
-          - kafka_broker_pid_rerun.stdout == kafka_broker_pid_before.stdout
-        fail_msg: "kafka split roles not idempotent"
+          - kafka_controller_pid_before.stdout | int > 0
+          - kafka_split_pids_rerun.results[0].stdout == kafka_broker_pid_before.stdout
+          - kafka_split_pids_rerun.results[1].stdout == kafka_controller_pid_before.stdout
+        fail_msg: >-
+          kafka split roles not idempotent: broker {{ kafka_broker_pid_before.stdout }} ->
+          {{ kafka_split_pids_rerun.results[0].stdout }}, controller {{ kafka_controller_pid_before.stdout }} ->
+          {{ kafka_split_pids_rerun.results[1].stdout }}
