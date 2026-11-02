@@ -27,11 +27,26 @@ describe("FwStreamCrafter", () => {
     expect(typeof proto.destroy).toBe("function");
   });
 
-  it("offers the producer panel behind an attribute, off by default", () => {
-    expect(new FwStreamCrafter().showProducerPanel).toBe(false);
-    expect(source).toContain('attribute: "show-producer-panel"');
-    expect(source).toContain("<fw-sc-scene-switcher");
-    expect(source).toContain("<fw-sc-layer-list");
+  it("shows the producer panel and runs the compositor by default", () => {
+    const el = new FwStreamCrafter();
+    expect(el.showProducerPanel).toBe(true);
+    expect(el.enableCompositor).toBe(true);
+  });
+
+  it("turns the producer panel and the compositor off with a false attribute", async () => {
+    const el = document.createElement("fw-streamcrafter") as FwStreamCrafter;
+    el.setAttribute("show-producer-panel", "false");
+    el.setAttribute("enable-compositor", "false");
+    document.body.appendChild(el);
+    await el.updateComplete;
+
+    expect(el.showProducerPanel).toBe(false);
+    expect(el.enableCompositor).toBe(false);
+
+    el.setAttribute("show-producer-panel", "");
+    await el.updateComplete;
+    expect(el.showProducerPanel).toBe(true);
+    el.remove();
   });
 
   it("keeps Add Camera available with a camera live and offers the other cameras", async () => {

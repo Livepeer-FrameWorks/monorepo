@@ -21,6 +21,7 @@ import {
   eyeOffIcon,
 } from "../icons/index.js";
 import { IngestControllerHost } from "../controllers/ingest-controller-host.js";
+import { defaultTrueBoolean } from "../attribute-converters.js";
 import {
   IngestClient,
   type CameraChoice,
@@ -88,10 +89,12 @@ export class FwStreamCrafter extends LitElement {
     "broadcast";
   @property({ type: Boolean, attribute: "auto-start-camera" }) autoStartCamera = false;
   @property({ type: Boolean, attribute: "dev-mode" }) devMode = false;
-  @property({ type: Boolean, attribute: "show-producer-panel" }) showProducerPanel = false;
+  @property({ attribute: "show-producer-panel", converter: defaultTrueBoolean })
+  showProducerPanel = true;
   @property({ type: Boolean, attribute: "show-settings" }) showSettings = false;
   @property({ type: Boolean }) debug = false;
-  @property({ type: Boolean, attribute: "enable-compositor" }) enableCompositor = true;
+  @property({ attribute: "enable-compositor", converter: defaultTrueBoolean })
+  enableCompositor = true;
   @property({ type: String }) theme: FwThemePreset | "" = "";
   @property({ type: String, attribute: "class-name" }) className = "";
   @property({ attribute: false }) onStateChange?:

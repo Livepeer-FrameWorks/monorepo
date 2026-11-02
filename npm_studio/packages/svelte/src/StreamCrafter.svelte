@@ -78,7 +78,7 @@
     showSettings?: boolean;
     /** Enable dev mode UI */
     devMode?: boolean;
-    /** Show scene, transition and layer controls for producers */
+    /** Scene, transition, layer, overlay and media controls while the compositor runs. Default true. */
     showProducerPanel?: boolean;
     /** Enable debug logging */
     debug?: boolean;
@@ -109,7 +109,7 @@
     autoStartCamera = false,
     showSettings: initialShowSettings = false,
     devMode = false,
-    showProducerPanel = false,
+    showProducerPanel = true,
     debug = false,
     enableCompositor = true,
     compositorConfig = {},

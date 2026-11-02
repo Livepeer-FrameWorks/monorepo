@@ -67,8 +67,18 @@ describe("StreamCrafter producer panel", () => {
     vi.spyOn(console, "log").mockImplementation(() => {});
   });
 
-  it("is off by default", async () => {
-    const { container } = render(StreamCrafter, { whipUrl: "https://ingest.example/whip" });
+  it("is on by default once the compositor runs", async () => {
+    render(StreamCrafter, { whipUrl: "https://ingest.example/whip" });
+
+    expect(await screen.findByText("Scenes")).toBeTruthy();
+    expect(screen.getByText("Default")).toBeTruthy();
+  });
+
+  it("can be turned off", async () => {
+    const { container } = render(StreamCrafter, {
+      whipUrl: "https://ingest.example/whip",
+      showProducerPanel: false,
+    });
 
     await waitFor(() => expect(controllers[0]?.enableCompositor).toHaveBeenCalled());
     await new Promise((resolve) => setTimeout(resolve));
@@ -76,17 +86,9 @@ describe("StreamCrafter producer panel", () => {
     expect(container.querySelector(".fw-sc-producer")).toBeNull();
   });
 
-  it("renders once the compositor runs when asked for", async () => {
-    render(StreamCrafter, { whipUrl: "https://ingest.example/whip", showProducerPanel: true });
-
-    expect(await screen.findByText("Scenes")).toBeTruthy();
-    expect(screen.getByText("Default")).toBeTruthy();
-  });
-
   it("stays away when the compositor is turned off", async () => {
     const { container } = render(StreamCrafter, {
       whipUrl: "https://ingest.example/whip",
-      showProducerPanel: true,
       enableCompositor: false,
     });
 
@@ -104,7 +106,6 @@ describe("StreamCrafter producer panel", () => {
   it("moves the compositor onto the new controller when the endpoint changes", async () => {
     const { rerender } = render(StreamCrafter, {
       whipUrl: "https://ingest.example/first",
-      showProducerPanel: true,
     });
     await waitFor(() => expect(controllers[0]?.enableCompositor).toHaveBeenCalled());
 

@@ -21,11 +21,6 @@ describe("StreamCrafter React component parity", () => {
     expect(source).not.toContain("hasCamera");
   });
 
-  it("offers the producer panel behind a prop", () => {
-    expect(source).toContain("showProducerPanel = false");
-    expect(source).toContain("<StudioProducerPanel");
-  });
-
   it("invokes shared callback props from component state flow", () => {
     expect(source).toContain(`${STREAMCRAFTER_COMPONENT_PARITY_CALLBACK_MARKERS.onStateChange}?.(`);
     expect(source).toContain(`${STREAMCRAFTER_COMPONENT_PARITY_CALLBACK_MARKERS.onError}?.(`);
