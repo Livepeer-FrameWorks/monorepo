@@ -1,10 +1,16 @@
 import { motion } from "framer-motion";
+import { Link } from "react-router";
 import { Cable, Coins } from "lucide-react";
 import config from "../../config";
+import status from "@/data/status.json";
 import { ChartBarIcon, SparklesIcon, FilmIcon, GlobeAltIcon } from "@heroicons/react/24/outline";
 import { Section, SectionContainer } from "@/components/ui/section";
-import StatusTag from "../shared/StatusTag";
 import SovereigntyNote from "../shared/SovereigntyNote";
+import { featureOf, showcaseTiers } from "@/lib/featureStatus";
+import { signupUrl } from "@/lib/siteLinks";
+import { contactPath } from "@/lib/contactTopics";
+
+const streamcrafter = featureOf(status, "streamcrafter");
 import {
   MarketingHero,
   MarketingBand,
@@ -24,8 +30,6 @@ import {
 } from "@/components/marketing";
 
 const About = () => {
-  const docsBase = (config.docsUrl ?? "/docs").replace(/\/+$/, "");
-
   const team = [
     {
       name: "MistServer Team",
@@ -63,56 +67,51 @@ const About = () => {
     {
       year: "Sep 2025",
       title: "From media server to video cloud",
-      subtitle: "Amsterdam launch window (Sep 12–15)",
+      subtitle: "Shown at IBC 2025 in Amsterdam",
       icon: FilmIcon,
       badges: ["IBC 2025", "Live Demos"],
       summary:
-        "FrameWorks brings a multi-tenant control plane, routing, analytics, billing, and automation to the proven MistServer media layer.",
-      points: [
-        "IBC showcase highlights CDN + hosted processing pipelines with telemetry.",
-        "Sales-engineering loop; from demo interest into early deployments.",
-        "Partner roadmap aligned with MistServer + Livepeer field feedback captured during the conference.",
-      ],
+        "We showed FrameWorks at IBC: a multi-tenant control plane, routing, analytics, billing, and automation around the MistServer media layer.",
+      points: ["Live demos of hosted ingest, processing, and delivery with telemetry."],
     },
     {
       year: "2026",
-      title: "Public Beta Expansion",
-      subtitle: "Selfhosted operators",
+      title: "Public beta",
+      subtitle: "Hosted, hybrid, and self-hosted",
       icon: SparklesIcon,
-      badges: ["Beta Access", "Hybrid Workflows"],
-      summary: "Core platform is live with limited capacity and a semi-autonomous Media plane",
+      badges: ["Public Beta", "Hybrid Workflows"],
+      summary:
+        "The platform opened as a public beta on hosted regions, with customer-operated edges and full self-hosting from the same release.",
       points: [
-        "Operators onboard quickly through the CLI.",
-        "Advanced features start to roll out to round out platform featureset",
-        "Code hardening, unit testing, UX polish, and documentation depth.",
+        "Operators deployed and upgraded clusters with the frameworks CLI.",
+        "Multistreaming, DVR, clips, VOD, and the StreamCrafter browser studio shipped on the hosted platform.",
+        "Agents got access through the MCP server, with wallet sign-in and x402 payments.",
       ],
     },
     {
       year: "2026+",
-      title: "Scale and Expand",
-      subtitle: "Staffing + product velocity",
+      title: "More regions and deeper integrations",
+      subtitle: "Where we are headed",
       icon: ChartBarIcon,
-      badges: ["Hiring", "Global Footprint"],
+      badges: ["Regions", "Enterprise"],
       summary:
-        "Grow the core team, expand infrastructure regions, and deepen enterprise integrations.",
+        "A larger infrastructure footprint and closer integration with the systems our customers already run.",
       points: [
-        "Expand SRE and solutions engineering headcount to support multi-region customer rollouts.",
-        "Broaden advanced-processing orchestration and AI automation capabilities.",
-        "Acquire ASN and expand the network across various data centers.",
+        "More hosted regions on infrastructure we operate.",
+        "Processing and AI work scheduled across FrameWorks edges, Livepeer, and customer edges.",
       ],
     },
     {
       year: "Future",
-      title: "Federalized CDN Network",
+      title: "Federated CDN network",
       subtitle: "Long-term vision",
       icon: GlobeAltIcon,
-      badges: ["Federated", "Tokenized Incentives"],
-      summary:
-        "Deliver a federated CDN and marketplace so operators can exchange bandwidth & compute.",
+      badges: ["Federated", "Open Network"],
+      summary: "A federated CDN and marketplace where operators exchange bandwidth and compute.",
       points: [
-        "Ensure the network is open & accessible, and lessen our role as the central gatekeeper.",
-        "Expose FrameWorks policy engine so operators trade bandwidth and processing workloads securely.",
-        "Maintain public-domain licensing so any team can extend, self-host, and interoperate without friction.",
+        "An open network where FrameWorks is one operator among many, not the gatekeeper.",
+        "Operators trade bandwidth and processing through the FrameWorks policy engine.",
+        "Public-domain code, so any team can extend, self-host, and interoperate.",
       ],
     },
   ];
@@ -181,51 +180,6 @@ const About = () => {
       tone: "yellow",
     },
   ];
-
-  const pipelineFeatures = [
-    {
-      title: "Auto-Discovery App",
-      tone: "cyan",
-      description:
-        "A drop-in app that auto-discovers IP cameras, VISCA PTZ controls, NDI sources, USB webcams, and HDMI inputs.",
-      feature: "device-discovery-contribution-inputs",
-      statusNote: "In the pipeline: in active development, not generally available yet.",
-    },
-    {
-      title: "StreamCrafter Cloud Production",
-      tone: "yellow",
-      description:
-        "In the pipeline: mix and switch multiple live sources on the server, with picture-in-picture, overlays, and scene changes.",
-      feature: "composition",
-      statusNote: "In the pipeline. Browser mixing is available today through StreamCrafter.",
-    },
-    {
-      title: "Live AI Processing",
-      tone: "orange",
-      description:
-        "In the pipeline: transcribe, analyze, automate, and transform streams in real time with AI.",
-      feature: "live-ai",
-      statusNote: "In the pipeline: in development with the MistServer team.",
-    },
-    {
-      title: "DRM Content Protection",
-      tone: "violet",
-      description:
-        "FairPlay, Widevine, and PlayReady protection for premium and licensed content, built natively into MistServer.",
-      feature: "drm",
-      statusNote:
-        "In development with the MistServer team; landing in our build ahead of upstream where it makes sense.",
-    },
-  ];
-
-  const pipelineCards = pipelineFeatures.map((item) => ({
-    tone: item.tone,
-    title: item.title,
-    description: item.description,
-    meta: <StatusTag feature={item.feature} />,
-    hover: "subtle",
-    stripe: true,
-  }));
 
   const getTechInitial = (item) => {
     if (item?.initial) return item.initial;
@@ -383,10 +337,14 @@ const About = () => {
                   <MarketingCTAButton
                     intent="primary"
                     label="Start Free"
-                    href={config.appUrl}
+                    href={signupUrl(config.appUrl, "about-mission")}
                     external
                   />
-                  <MarketingCTAButton intent="secondary" label="Talk to Sales" to="/contact" />
+                  <MarketingCTAButton
+                    intent="secondary"
+                    label="Talk to the engineers"
+                    to={contactPath("engineering")}
+                  />
                 </CTACluster>
               </motion.div>
 
@@ -454,6 +412,15 @@ const About = () => {
                 align="left"
                 underlineAlign="start"
                 actionsPlacement="inline"
+                actions={
+                  <CTACluster align="end">
+                    <MarketingCTAButton
+                      intent="secondary"
+                      to="/network"
+                      label="Explore the network"
+                    />
+                  </CTACluster>
+                }
               />
               <MarketingFeatureWall
                 items={architectureProofs}
@@ -469,47 +436,7 @@ const About = () => {
 
       <SectionDivider />
 
-      <Section className="bg-brand-surface-muted">
-        <SectionContainer>
-          <motion.div
-            initial={{ opacity: 0, y: 30 }}
-            whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: true }}
-            transition={{ duration: 0.6 }}
-          >
-            <MarketingBand
-              preset="foundation"
-              tone="cool"
-              texturePattern="pinlines"
-              textureNoise="film"
-              textureBeam="soft"
-              textureMotion="drift"
-              textureStrength="soft"
-            >
-              <HeadlineStack
-                eyebrow="Pipeline"
-                title="Coming Soon"
-                align="left"
-                underlineAlign="start"
-                actionsPlacement="inline"
-                actions={
-                  <CTACluster align="end">
-                    <MarketingCTAButton
-                      intent="secondary"
-                      href={`${docsBase}/roadmap`}
-                      label="See the full roadmap"
-                      icon="book"
-                    />
-                  </CTACluster>
-                }
-              />
-              <MarketingFeatureWall items={pipelineCards} columns={3} stackAt="md" />
-            </MarketingBand>
-          </motion.div>
-        </SectionContainer>
-      </Section>
-
-      <Section className="bg-brand-surface-muted">
+      <Section className="bg-brand-surface">
         <SectionContainer>
           <motion.div
             initial={{ opacity: 0, y: 30 }}
@@ -579,7 +506,7 @@ const About = () => {
 
       <SectionDivider />
 
-      <Section className="bg-brand-surface">
+      <Section className="bg-brand-surface-muted">
         <SectionContainer>
           <motion.div
             initial={{ opacity: 0, y: 30 }}
@@ -597,6 +524,40 @@ const About = () => {
               items={timeline}
             />
           </motion.div>
+        </SectionContainer>
+      </Section>
+
+      <SectionDivider />
+
+      <Section id="showcase" className="bg-brand-surface">
+        <SectionContainer>
+          <MarketingBand preset="quiet">
+            <HeadlineStack
+              eyebrow="Showcase"
+              title="See what ships today, and what comes next"
+              subtitle={`The newest example is the ${streamcrafter.showcase.title}. ${streamcrafter.showcase.summary} The showcase lists everything on the platform today, what is being built next, and what is further out.`}
+              align="left"
+              underlineAlign="start"
+              actionsPlacement="inline"
+              actions={
+                <CTACluster align="end">
+                  <MarketingCTAButton intent="primary" to="/showcase" label="Open the showcase" />
+                </CTACluster>
+              }
+            />
+            <nav className="showcase-jump showcase-jump--start" aria-label="Showcase groups">
+              {showcaseTiers(status).map((tier) => (
+                <Link
+                  key={tier.horizon}
+                  to={`/showcase#${tier.anchor}`}
+                  className="showcase-jump__link"
+                >
+                  <span>{tier.label}</span>
+                  <span className="showcase-jump__count">{tier.features.length}</span>
+                </Link>
+              ))}
+            </nav>
+          </MarketingBand>
         </SectionContainer>
       </Section>
 
@@ -646,7 +607,7 @@ const About = () => {
             variant="band"
             primaryAction={{
               label: "Start Free",
-              href: config.appUrl,
+              href: signupUrl(config.appUrl, "about-final"),
               external: true,
             }}
             secondaryAction={[
@@ -656,8 +617,8 @@ const About = () => {
                 external: true,
               },
               {
-                label: "Talk to our team",
-                to: "/contact",
+                label: "Talk to the engineers",
+                to: contactPath("engineering"),
               },
             ]}
           />

@@ -9,6 +9,12 @@
   border: 1px solid var(--fx-seam-strong);
 }
 
+.showcase-jump--start {
+  justify-content: flex-start;
+  width: max-content;
+  max-width: 100%;
+}
+
 .showcase-jump__link {
   display: inline-flex;
   align-items: center;
