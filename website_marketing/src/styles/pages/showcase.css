@@ -45,6 +45,10 @@
   font-variant-numeric: tabular-nums;
 }
 
+.showcase-lead-anchor {
+  scroll-margin-top: 5rem;
+}
+
 .showcase-lead__body {
   display: flex;
   flex-direction: column;

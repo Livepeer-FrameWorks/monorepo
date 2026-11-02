@@ -32,12 +32,12 @@ const TIER_COPY = {
       "Available on the hosted platform and in the self-hosted release. A badge or note marks work that is in beta or still expanding.",
   },
   next: {
-    title: "Designed and coming next",
+    title: "Coming next",
     subtitle:
       "Next on the roadmap, in no fixed order and with no dates. Each entry links to its roadmap section.",
   },
   later: {
-    title: "Committed to, further down the road",
+    title: "Further down the road",
     subtitle: "Planned work that follows the items above.",
   },
 };
@@ -227,7 +227,7 @@ const Showcase = () => {
 
       <Section id={now.anchor} className="bg-brand-surface">
         <SectionContainer>
-          <motion.div {...reveal}>
+          <motion.div id={lead.id} className="showcase-lead-anchor" {...reveal}>
             <MarketingBand
               preset="foundation"
               tone="cool"
@@ -243,7 +243,7 @@ const Showcase = () => {
                 underlineAlign="start"
               />
               <MarketingGridSplit align="stretch" stackAt="lg" seam ratio="narrow-wide">
-                <div id={lead.id} className="slab-zone">
+                <div className="slab-zone">
                   <div className="slab-zone__body showcase-lead__body">
                     <IconList
                       items={lead.showcase.bullets.map((bullet) => ({ title: bullet }))}
