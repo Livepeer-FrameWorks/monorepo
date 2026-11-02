@@ -2,7 +2,7 @@
 # Drives the role's migrate tasks with items shaped like the ones `cluster migrate` sends for
 # YugabyteDB (cli/pkg/provisioner migrationItem, statements split one per entry): a transactional
 # item, a concurrent index build, a rerun that applies nothing, an edited applied item, a precheck
-# refusal and a failing item.
+# refusal, a failing item and its corrected rerun.
 - name: Create the fixture database, owner and schema
   ansible.builtin.shell: |
     set -eu
@@ -188,9 +188,40 @@
   ansible.builtin.assert:
     that:
       - migrate_fixture_precheck_error is search('its precheck v0.0.1/expand/003_fixture_checked.precheck.sql\s+found 2 row\(s\)')
-      - migrate_fixture_failed_error | length > 0
+      - "'migrate_fixture/v0.0.1/expand/004_fixture_fails.sql was not recorded: statement 2 of 2' in migrate_fixture_failed_error"
+      - "'SQLSTATE 22012: division by zero' in migrate_fixture_failed_error"
       - migrate_fixture_after_failures.query_all_results[0] | map(attribute='seq') | list == [1, 2]
       - migrate_fixture_after_failures.query_all_results[1][0].precheck_left_nothing
     fail_msg: >-
       precheck: {{ migrate_fixture_precheck_error }}; failure: {{ migrate_fixture_failed_error }};
       state: {{ migrate_fixture_after_failures.query_all_results }}
+
+- name: Apply the corrected failing item at the same sequence
+  ansible.builtin.include_tasks: migrate-run.yml
+  vars:
+    yugabyte_migrate_items: >-
+      {{ [migrate_fixture_table, migrate_fixture_index,
+          migrate_fixture_table | combine(migrate_fixture_failing)
+            | combine({'statements': [migrate_fixture_failing.statements[0], 'SELECT 1']})] }}
+
+- name: Read the ledger after the corrected item
+  community.postgresql.postgresql_query:
+    login_host: "{{ yugabyte_ysql_local_host }}"
+    login_port: "{{ yugabyte_ysql_port }}"
+    login_user: "{{ yugabyte_superuser_role }}"
+    login_password: "{{ yugabyte_superuser_password }}"
+    login_db: migrate_fixture
+    query:
+      - SELECT seq, filename FROM _migrations ORDER BY seq
+      - SELECT to_regclass('migrate_fixture.partial') IS NOT NULL AS partial_exists
+  register: migrate_fixture_after_rerun
+  changed_when: false
+
+- name: Assert the corrected item replayed its applied statement and was recorded
+  ansible.builtin.assert:
+    that:
+      - yugabyte_pending_migrate_items | map(attribute='filename') | list == ['004_fixture_fails.sql']
+      - migrate_fixture_after_rerun.query_all_results[0] | map(attribute='seq') | list == [1, 2, 4]
+      - migrate_fixture_after_rerun.query_all_results[0][2].filename == '004_fixture_fails.sql'
+      - migrate_fixture_after_rerun.query_all_results[1][0].partial_exists
+    fail_msg: "pending: {{ yugabyte_pending_migrate_items }}; state: {{ migrate_fixture_after_rerun.query_all_results }}"
