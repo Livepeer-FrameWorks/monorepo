@@ -173,6 +173,26 @@ expect "one allowlisted FAIL leaves the other failing" fails doctor "$work/docto
 printf '%s\t%s\n' '^Host crashes .*MistInBuffer' 'test reason' >>"$work/doctor-one.tsv"
 expect "every FAIL allowlisted passes" passes doctor "$work/doctor.log" "$work/doctor-one.tsv"
 
+# ---- doctor after a Kafka controller restart ----------------------------------
+# Staging eu-1, 2026-11-02: release apply stopped the leading controller, which
+# handed leadership to 102; the doctor before 16c94f67f counted the handover as
+# an unplanned leader change.
+now=1793628000
+printf 'ops@10.0.0.11\tframeworks-kafka-controller.service\t%s\n' "$((now - 900))" >"$work/kafka-restarts.tsv"
+cat >"$work/doctor-kafka-red.log" <<'LOG'
+[OK] Kafka Broker 1 (eu-west): Broker answers on 10.88.0.11:9092
+[FAIL] Kafka KRaft quorum (eu-west): controller 101 on regional-eu-1 lost leadership in 1 unplanned leader change(s) since 1 hour ago, each followed by a new leader
+LOG
+expect "a quorum FAIL after a controller restart in the window fails" fails kafka-restarts "$work/doctor-kafka-red.log" "$work/kafka-restarts.tsv" --now "$now" --window 3600
+expect "  ...naming the restarted controller" said 'after frameworks-kafka-controller.service on ops@10.0.0.11 at '
+cat >"$work/doctor-kafka-ok.log" <<'LOG'
+[OK] Kafka KRaft quorum (eu-west): leader 102, 3/3 voters, no leadership loss since 1 hour ago
+LOG
+expect "a passing quorum check after the restart passes" passes kafka-restarts "$work/doctor-kafka-ok.log" "$work/kafka-restarts.tsv" --now "$now" --window 3600
+expect "a restart without any quorum check in the doctor log fails" fails kafka-restarts "$work/doctor.log" "$work/kafka-restarts.tsv" --now "$now" --window 3600
+expect "a restart before the window leaves the check vacuous" passes kafka-restarts "$work/doctor-kafka-red.log" "$work/kafka-restarts.tsv" --now "$((now + 3600))" --window 3600
+expect "  ...and says so" said '^NOTE  no Kafka controller restarted'
+
 # ---- edge listeners -------------------------------------------------------------
 # /proc/net rows: wildcard RTMP 1935 and the stack's Helmsman 18007 listening;
 # an SRT UDP socket on 8888 bound to every interface (the staging finding); a

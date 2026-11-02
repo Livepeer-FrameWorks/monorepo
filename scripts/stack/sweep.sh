@@ -47,6 +47,30 @@ elif [ "$STACK_TARGET" = staging ]; then
     else
       rc=1
     fi
+    # A planned Kafka controller restart (release apply, cluster restart) hands
+    # leadership over; the doctor's quorum check reads the controller logs of
+    # the last hour (doctorKafkaQuorumWindow) and must pass after one.
+    restarts="$STACK_STATE_DIR/sweep-kafka-restarts.tsv"
+    : >"$restarts"
+    kafka_unreadable=0
+    while IFS='|' read -r target unit; do
+      [ -n "$target" ] || continue
+      if started=$(ssh -n -o BatchMode=yes "$target" \
+        "ts=\$(systemctl show -p ActiveEnterTimestamp --value $unit) && [ -n \"\$ts\" ] && date -d \"\$ts\" +%s" 2>/dev/null) &&
+        [ -n "$started" ]; then
+        printf '%s\t%s\t%s\n' "$target" "$unit" "$started" >>"$restarts"
+      else
+        echo "BLOCKED  sweep[doctor]: cannot read the start time of $unit on $target"
+        kafka_unreadable=1
+      fi
+    done < <(staging_targets kafka-controller 2>/dev/null)
+    if python3 "$here/sweep.py" kafka-restarts "$STACK_STATE_DIR/sweep-doctor.log" "$restarts" \
+      --now "$(date +%s)" --window 3600 | sed -E 's/^(NOTE|PASS|FAIL)  /\1  sweep[doctor]: /'; [ "${PIPESTATUS[0]}" = 0 ]; then
+      :
+    else
+      rc=1
+    fi
+    [ "$kafka_unreadable" = 1 ] && [ "$rc" = 0 ] && rc=2
   else
     echo 'BLOCKED  sweep[doctor]: staging needs bin/cli (make build-bin-cli), STACK_CLI_MANIFEST and STACK_CLI_CONTEXT'
     rc=2

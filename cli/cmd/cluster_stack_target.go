@@ -219,7 +219,11 @@ func buildStackTarget(m *inventory.Manifest, edges *inventory.EdgeManifest) (*st
 	if err != nil {
 		return nil, err
 	}
-	t.services = append(services, t.services...)
+	controllers, err := stackTargetKafkaControllerRows(m)
+	if err != nil {
+		return nil, err
+	}
+	t.services = append(append(services, controllers...), t.services...)
 
 	for _, db := range stackTargetDatabases {
 		cfg, ok := m.Services[db.service]
@@ -363,6 +367,28 @@ func stackTargetServiceRows(m *inventory.Manifest) ([]string, error) {
 				rows = append(rows, fmt.Sprintf("%s|%s|frameworks-%s.service", name, ssh, deploy))
 			}
 		}
+	}
+	return rows, nil
+}
+
+// stackTargetKafkaControllerRows maps every dedicated KRaft controller of every Kafka cluster as kafka-controller, so
+// the sweep can tell which controllers restarted inside the doctor's quorum window.
+func stackTargetKafkaControllerRows(m *inventory.Manifest) ([]string, error) {
+	kafka := m.Infrastructure.Kafka
+	if kafka == nil || !kafka.Enabled {
+		return nil, nil
+	}
+	controllers := slices.Clone(kafka.Controllers)
+	for _, regional := range kafka.Regional {
+		controllers = append(controllers, regional.Controllers...)
+	}
+	rows := make([]string, 0, len(controllers))
+	for _, ctrl := range controllers {
+		ssh, err := stackTargetSSH(m, ctrl.Host)
+		if err != nil {
+			return nil, fmt.Errorf("kafka controller %d: %w", ctrl.ID, err)
+		}
+		rows = append(rows, fmt.Sprintf("kafka-controller|%s|frameworks-kafka-controller.service", ssh))
 	}
 	return rows, nil
 }

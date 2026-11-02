@@ -125,6 +125,33 @@ func TestStackTargetServiceMapNamesEveryReplicaUnit(t *testing.T) {
 	}
 }
 
+func TestStackTargetServiceMapNamesEveryKafkaController(t *testing.T) {
+	m, edges := stackTargetTestManifest()
+	m.Infrastructure.Kafka = &inventory.KafkaConfig{
+		Enabled:     true,
+		Controllers: []inventory.KafkaController{{Host: "eu-1", ID: 101}, {Host: "eu-2", ID: 102}},
+		Regional:    []inventory.RegionalKafkaCluster{{RegionID: "us-east", Controllers: []inventory.KafkaController{{Host: "us-1", ID: 201}}}},
+	}
+	target, err := buildStackTarget(m, edges)
+	if err != nil {
+		t.Fatalf("buildStackTarget: %v", err)
+	}
+	var got []string
+	for _, row := range target.services {
+		if strings.HasPrefix(row, "kafka-controller|") {
+			got = append(got, row)
+		}
+	}
+	want := []string{
+		"kafka-controller|ops@10.0.0.17|frameworks-kafka-controller.service",
+		"kafka-controller|ops@10.0.0.18|frameworks-kafka-controller.service",
+		"kafka-controller|ops@10.0.0.20|frameworks-kafka-controller.service",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("kafka controller rows = %v, want %v", got, want)
+	}
+}
+
 func TestStackTargetAccessMapKeepsCredentialsOnHosts(t *testing.T) {
 	m, edges := stackTargetTestManifest()
 	target, err := buildStackTarget(m, edges)

@@ -16,8 +16,10 @@ properties of every entity the run created, whichever scenario created it:
              sidecars, relay caches under vod/, clips/, upload/, DVR trees)
   dvr        each recording's chapters cover the recorded range contiguously
              and none failed
-  doctor     the operator CLI's cluster doctor reports no unexplained FAIL
-  host       no container restarted or was OOM-killed, no core dump, no
+  doctor     the operator CLI's cluster doctor reports no unexplained FAIL; when
+             a Kafka controller restarted inside the doctor's quorum window,
+             every Kafka KRaft quorum check ran and passed
+  host      no container restarted or was OOM-killed, no core dump, no
              wildcard listener outside an edge's public set
 
 Subcommands:
@@ -27,6 +29,9 @@ Subcommands:
   analytics <file> stream completeness of {"events":[...],"finals":[...],"sessions":[...]}
   runtime <file>   runtime ledger of {"finals":[...],"runtime":{...},"processed_ms":N,"live":[...]}
   doctor <file>    FAIL lines of a doctor log not explained by the allowlist
+  kafka-restarts <file> <restarts> --now N --window S
+                   the doctor log's Kafka quorum checks after the controller
+                   restarts (target, unit, start epoch per TSV row) in the window
   renditions <file> owed renditions of {"processes":[...],"tracks":[...]}
   listeners <file> wildcard listeners of {"proc":{...},"public":{...},"owners":{...}}
   edge-listeners <container>  the same, read from a running stack edge container
@@ -235,6 +240,24 @@ def doctor_failures(text, allow):
         reason = next((r for rx, r in allow if re.search(rx, detail)), None)
         out.append((detail, reason))
     return out
+
+
+DOCTOR_KAFKA_QUORUM_RE = re.compile(r"^\s*\[(OK|WARN|FAIL)\]\s*(Kafka KRaft quorum.*?)\s*$")
+
+
+def kafka_restart_problems(text, restarts, now, window):
+    """Problems of the doctor's Kafka KRaft quorum checks when a controller
+    restarted inside the doctor's lookback window: a planned restart hands
+    leadership over, so every quorum check must have run and passed. restarts:
+    [(target, unit, started epoch)]. Returns (problems, restarted in window)."""
+    recent = [(t, u, s) for t, u, s in restarts if now - s <= window]
+    if not recent:
+        return [], []
+    checks = [m.groups() for m in map(DOCTOR_KAFKA_QUORUM_RE.match, text.splitlines()) if m]
+    names = ", ".join(f"{u} on {t} at {time.strftime('%H:%M:%SZ', time.gmtime(s))}" for t, u, s in recent)
+    if not checks:
+        return [f"{names} restarted in the doctor's window, but the doctor ran no Kafka KRaft quorum check"], recent
+    return [f"{detail} [{state}] after {names} restarted" for state, detail in checks if state != "OK"], recent
 
 
 def parse_proc_net(text, proto):
@@ -1085,6 +1108,11 @@ def main(argv):
     d = sub.add_parser("doctor")
     d.add_argument("file")
     d.add_argument("allow", nargs="?")
+    kr = sub.add_parser("kafka-restarts")
+    kr.add_argument("file")
+    kr.add_argument("restarts")
+    kr.add_argument("--now", type=int, required=True)
+    kr.add_argument("--window", type=int, required=True)
     rn = sub.add_parser("renditions")
     rn.add_argument("file")
     li = sub.add_parser("listeners")
@@ -1120,6 +1148,18 @@ def main(argv):
         for detail, reason in rows:
             print(f"ALLOW {detail} -- {reason}" if reason else f"FAIL  {detail}")
         return 1 if any(reason is None for _, reason in rows) else 0
+    elif o.cmd == "kafka-restarts":
+        restarts = []
+        for line in open(o.restarts):
+            fields = line.rstrip("\n").split("\t")
+            if len(fields) == 3 and fields[2].isdigit():
+                restarts.append((fields[0], fields[1], int(fields[2])))
+        problems, recent = kafka_restart_problems(open(o.file).read(), restarts, o.now, o.window)
+        if not recent:
+            print(f"NOTE  no Kafka controller restarted in the last {o.window}s")
+        elif not problems:
+            print(f"PASS  Kafka KRaft quorum passed after {len(recent)} controller restart(s) in the last {o.window}s")
+        problems = [f"FAIL  {p}" for p in problems]
     elif o.cmd == "renditions":
         doc = json.load(open(o.file))
         problems = rendition_violations(doc["processes"], doc["tracks"])
