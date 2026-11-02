@@ -155,4 +155,16 @@ describe("Player", () => {
       })
     );
   });
+
+  it("hands the PlayerController to a ref and clears it on unmount", () => {
+    const hook = makePlayerHook();
+    mocks.usePlayerController.mockReturnValue(hook);
+    const ref = vi.fn();
+
+    const { unmount } = render(<Player ref={ref} contentId="stream-1" contentType="live" />);
+    expect(ref).toHaveBeenLastCalledWith(hook.controller);
+
+    unmount();
+    expect(ref).toHaveBeenLastCalledWith(null);
+  });
 });

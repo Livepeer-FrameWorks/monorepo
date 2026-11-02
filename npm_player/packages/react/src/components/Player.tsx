@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect, useMemo } from "react";
+import React, { useState, useCallback, useEffect, useImperativeHandle, useMemo } from "react";
 import IdleScreen from "./IdleScreen";
 import LoadingPoster from "./LoadingPoster";
 import TitleOverlay from "./TitleOverlay";
@@ -24,6 +24,7 @@ import type {
   EndpointInfo,
   FwThemePreset,
   FwLocale,
+  PlayerController,
 } from "@livepeer-frameworks/player-core";
 import {
   ContextMenu,
@@ -36,15 +37,18 @@ import {
 /**
  * Inner player component that uses PlayerController via hook
  */
-const PlayerInner: React.FC<PlayerProps> = ({
-  contentId,
-  contentType,
-  thumbnailUrl = null,
-  options,
-  endpoints: propsEndpoints,
-  onStateChange,
-  children,
-}) => {
+const PlayerInner = React.forwardRef<PlayerController | null, PlayerProps>(function PlayerInner(
+  {
+    contentId,
+    contentType,
+    thumbnailUrl = null,
+    options,
+    endpoints: propsEndpoints,
+    onStateChange,
+    children,
+  },
+  ref
+) {
   // ============================================================================
   // UI-only State (stays in wrapper)
   // ============================================================================
@@ -131,6 +135,10 @@ const PlayerInner: React.FC<PlayerProps> = ({
     handleMouseMove,
     setDevModeOptions,
   } = playerHook;
+
+  useImperativeHandle<PlayerController | null, PlayerController | null>(ref, () => controller, [
+    controller,
+  ]);
 
   // Error fade-out transition: when error clears, animate out before removing
   useEffect(() => {
@@ -612,17 +620,18 @@ const PlayerInner: React.FC<PlayerProps> = ({
       </PlayerProvider>
     </I18nProvider>
   );
-};
+});
 
 /**
  * Main Player component.
  *
  * Note: PlayerProvider is available if you need to use context-based access
  * across multiple components. PlayerInner manages its own PlayerController
- * via usePlayerController hook.
+ * via usePlayerController hook. A `ref` receives that PlayerController once it
+ * exists, and null after it is destroyed.
  */
-const Player: React.FC<PlayerProps> = (props) => {
-  return <PlayerInner {...props} />;
-};
+const Player = React.forwardRef<PlayerController | null, PlayerProps>(function Player(props, ref) {
+  return <PlayerInner {...props} ref={ref} />;
+});
 
 export default Player;
