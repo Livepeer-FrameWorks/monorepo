@@ -9,6 +9,7 @@ mutation PromoteToPaid($tierId: ID!) {
     ... on ValidationError {
       message
       field
+      code
     }
     ... on AuthError {
       message

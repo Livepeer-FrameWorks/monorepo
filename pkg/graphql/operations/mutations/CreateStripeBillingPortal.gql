@@ -1,0 +1,21 @@
+# Open the Stripe customer portal to update the payment method of a Stripe subscription.
+mutation CreateStripeBillingPortal($returnUrl: String!) {
+  createStripeBillingPortal(returnUrl: $returnUrl) {
+    __typename
+    ... on StripeBillingPortalSession {
+      portalUrl
+    }
+    ... on ValidationError {
+      message
+      field
+      code
+    }
+    ... on NotFoundError {
+      message
+    }
+    ... on AuthError {
+      message
+      code
+    }
+  }
+}

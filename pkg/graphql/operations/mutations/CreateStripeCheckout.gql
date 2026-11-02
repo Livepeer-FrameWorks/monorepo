@@ -18,6 +18,7 @@ mutation CreateStripeCheckout(
     ... on ValidationError {
       message
       field
+      code
     }
     ... on NotFoundError {
       message

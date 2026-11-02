@@ -9,6 +9,7 @@ mutation CreateMollieFirstPayment($tierId: ID!, $method: String!, $redirectUrl: 
     ... on ValidationError {
       message
       field
+      code
     }
     ... on NotFoundError {
       message

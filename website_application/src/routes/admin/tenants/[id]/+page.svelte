@@ -229,11 +229,6 @@
                     {billing.snapshot.status}
                   </Badge>
                   <Badge variant="secondary">{billing.snapshot.billingModel}</Badge>
-                  {#if billing.snapshot.trialEndsAt}
-                    <Badge variant="secondary"
-                      >trial ends {formatDate(billing.snapshot.trialEndsAt)}</Badge
-                    >
-                  {/if}
                   <span class="text-sm text-muted-foreground">
                     Outstanding {formatMoney(
                       billing.snapshot.outstandingAmount,
@@ -245,6 +240,75 @@
                     )}
                   </span>
                 </div>
+              {/if}
+
+              {#if billing.lifecycle}
+                {@const lifecycle = billing.lifecycle}
+                <h4 class="mb-2 text-sm font-medium">Plan lifecycle</h4>
+                <dl class="mb-6 grid grid-cols-1 gap-x-6 gap-y-2 text-sm sm:grid-cols-2">
+                  <div>
+                    <dt class="text-muted-foreground">Base fee paid</dt>
+                    <dd>{formatMoney(Number(lifecycle.effectiveBasePrice), "EUR")} a month</dd>
+                  </div>
+                  <div>
+                    <dt class="text-muted-foreground">Collection</dt>
+                    <dd>
+                      {lifecycle.collectionReady
+                        ? (lifecycle.collectionProvider ?? "ready")
+                        : "not set up"}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt class="text-muted-foreground">Arrangement</dt>
+                    <dd>
+                      {#if lifecycle.operatorGrant}
+                        {lifecycle.operatorGrant.basePrice != null
+                          ? `base ${formatMoney(Number(lifecycle.operatorGrant.basePrice), "EUR")}`
+                          : "plan fee"}{lifecycle.operatorGrant.waiveUsage ? ", usage waived" : ""},
+                        {lifecycle.operatorGrant.collection}
+                        {lifecycle.operatorGrant.expiresAt
+                          ? `until ${formatDate(lifecycle.operatorGrant.expiresAt)}`
+                          : "with no end date"}{lifecycle.operatorGrant.fallbackTierName
+                          ? `, then ${lifecycle.operatorGrant.fallbackTierName}`
+                          : ""}
+                      {:else}
+                        none
+                      {/if}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt class="text-muted-foreground">Move to Free</dt>
+                    <dd>
+                      {#if lifecycle.freeFallback}
+                        {lifecycle.freeFallback.reason === "PAYMENT_FAILED"
+                          ? "payment failed"
+                          : "cancelled"}, {lifecycle.freeFallback.stage.toLowerCase()}
+                        {formatDate(lifecycle.freeFallback.at)}{lifecycle.freeFallback
+                          .providerCancelled
+                          ? ", provider subscription ended"
+                          : ""}
+                      {:else}
+                        none scheduled
+                      {/if}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt class="text-muted-foreground">Pending plan change</dt>
+                    <dd>
+                      {#if lifecycle.subscription?.pendingTier}
+                        {lifecycle.subscription.pendingReason ?? "change"} to
+                        {lifecycle.subscription.pendingTier.displayName}
+                        {formatDate(
+                          lifecycle.subscription.pendingEffectiveAt
+                        )}{lifecycle.pendingTierState
+                          ? `, ${lifecycle.pendingTierState.toLowerCase()}`
+                          : ""}
+                      {:else}
+                        none
+                      {/if}
+                    </dd>
+                  </div>
+                </dl>
               {/if}
 
               <h4 class="mb-2 text-sm font-medium">Invoices ({billing.invoices.totalCount})</h4>

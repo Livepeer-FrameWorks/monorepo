@@ -9,6 +9,7 @@ mutation CreateMollieSubscription($tierId: ID!, $mandateId: String!, $descriptio
     ... on ValidationError {
       message
       field
+      code
     }
     ... on NotFoundError {
       message

@@ -18,10 +18,20 @@
     CreateMollieSubscriptionStore,
     ChangeBillingTierStore,
     PromoteToPaidStore,
+    CreateStripeBillingPortalStore,
     BillingTierFieldsStore,
   } from "$houdini";
   import { toast } from "$lib/stores/toast.js";
   import { Button } from "$lib/components/ui/button";
+  import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogFooter,
+    DialogHeader,
+    DialogTitle,
+  } from "$lib/components/ui/dialog";
+  import { getMarketingSiteUrl } from "$lib/config";
   import { GridSeam } from "$lib/components/layout";
   import DashboardMetricCard from "$lib/components/shared/DashboardMetricCard.svelte";
   import EmptyState from "$lib/components/EmptyState.svelte";
@@ -43,6 +53,8 @@
   const mollieSubscriptionMutation = new CreateMollieSubscriptionStore();
   const changeTierMutation = new ChangeBillingTierStore();
   const promoteToPaidMutation = new PromoteToPaidStore();
+  const billingPortalMutation = new CreateStripeBillingPortalStore();
+  const contactURL = `${getMarketingSiteUrl().replace(/\/$/, "")}/contact`;
 
   // Fragment stores for unmasking nested data
   const tierFragmentStore = new BillingTierFieldsStore();
@@ -54,6 +66,18 @@
   let mollieFirstPaymentMethod = $state("creditcard");
   let changeTierLoadingId = $state<string | null>(null);
   let paymentLoadingInvoiceId = $state<string | null>(null);
+  let portalLoading = $state(false);
+  // Set when the Mollie return polled out before the mandate was confirmed.
+  let molliePendingTierId = $state<string | null>(null);
+  type TierChoice = {
+    id?: string | null;
+    tierName?: string | null;
+    displayName?: string | null;
+    tierLevel?: number | null;
+    basePrice?: number | null;
+    currency?: string | null;
+  };
+  let tierDialog = $state<TierChoice | null>(null);
   type BillingDocument = {
     id: string;
     kind:
@@ -309,6 +333,7 @@
     if (provider !== "mollie" || !tierId) return;
 
     setupLoadingProvider = "mollie";
+    molliePendingTierId = null;
     for (let attempt = 0; attempt < 15; attempt++) {
       await mollieMandatesStore.fetch({ policy: "NetworkOnly" }).catch(() => null);
       const mandate = $mollieMandatesStore.data?.mollieMandates.find(
@@ -334,8 +359,31 @@
       }
       await new Promise<void>((resolveDelay) => window.setTimeout(resolveDelay, 2000));
     }
-    toast.info("Mollie is still confirming the mandate. Reload this return URL to continue setup.");
+    molliePendingTierId = tierId;
     setupLoadingProvider = null;
+  }
+
+  async function openBillingPortal() {
+    portalLoading = true;
+    try {
+      const response = await billingPortalMutation.mutate({
+        returnUrl: `${window.location.origin}${resolve("/account/billing")}`,
+      });
+      const result = response.data?.createStripeBillingPortal;
+      if (result?.__typename === "StripeBillingPortalSession") {
+        window.location.href = result.portalUrl;
+        return;
+      }
+      toast.error(result && "message" in result ? result.message : "Could not open Stripe");
+    } catch {
+      toast.error("Could not open Stripe");
+    } finally {
+      portalLoading = false;
+    }
+  }
+
+  function showSection(id: string) {
+    document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
   async function startPostpaidSetup(provider: "stripe" | "mollie") {
@@ -419,13 +467,16 @@
     }
   }
 
-  async function handleChangeBillingTier(tier: {
-    id?: string | null;
-    displayName?: string | null;
-    tierLevel?: number | null;
-    basePrice?: number | null;
-    currency?: string | null;
-  }) {
+  // Purser stamps a line waived to €0, by the beta waiver or an arrangement, with this source.
+  const WAIVED_PRICING_SOURCE = "beta_free";
+
+  function isFreeTier(tier: TierChoice | null | undefined) {
+    return (tier?.tierName ?? "").toLowerCase() === "free";
+  }
+
+  // Opens the confirmation for a plan change, or sends a paid upgrade without
+  // collection to provider setup first.
+  function chooseTier(tier: TierChoice) {
     if (!tier.id) {
       toast.error("Billing tier unavailable");
       return;
@@ -437,46 +488,89 @@
     const isDowngrade = tier.tierLevel < currentTier.tierLevel;
     if (!isDowngrade && moneyNumber(tier.basePrice) > 0 && !billingStatus?.collectionReady) {
       selectedTierId = tier.id;
-      toast.info(
-        "Choose Stripe or Mollie below to confirm collection before activating this paid tier"
-      );
+      showSection("payment-setup");
+      toast.info("Set up Stripe or Mollie below before activating this paid plan");
       return;
     }
-    const confirmed = window.confirm(
-      isDowngrade
-        ? `Downgrade to ${tier.displayName ?? "this tier"} at the end of the current billing period?`
-        : `Upgrade to ${tier.displayName ?? "this tier"} and start a fresh month? The monthly catalog fee is ${formatCurrency(tier.basePrice, tier.currency ?? "EUR")}. Collection can occur immediately through your payment provider. A retained unused paid fee offsets only the replacement fee; it never becomes spendable balance or a cash refund. Usage from the old period is billed separately. The invoice shows the net amount and, for advance billing, conversion to your billing currency at the invoice exchange rate.`
-    );
-    if (!confirmed) return;
+    tierDialog = tier;
+  }
 
-    changeTierLoadingId = tier.id;
+  // The provider subscription is stopped this long before a move to Free.
+  const FREE_MOVE_FINAL_LEAD_MS = 72 * 60 * 60 * 1000;
+
+  const tierDialogFacts = $derived.by(() => {
+    const target = tierDialog;
+    if (!target || !currentTier) return null;
+    const currency = target.currency ?? currentTier.currency ?? "EUR";
+    const isDowngrade = (target.tierLevel ?? 0) < (currentTier.tierLevel ?? 0);
+    const effectiveAt = billingStatus?.nextBillingDate ?? null;
+    const providerBilled =
+      billingStatus?.collectionProvider === "stripe" ||
+      billingStatus?.collectionProvider === "mollie";
+    const finalAt =
+      isDowngrade && isFreeTier(target) && providerBilled && effectiveAt
+        ? new Date(new Date(effectiveAt).getTime() - FREE_MOVE_FINAL_LEAD_MS).toISOString()
+        : null;
+    return {
+      isDowngrade,
+      toFree: isFreeTier(target),
+      newFee: formatCurrency(target.basePrice, currency),
+      currentFee: formatCurrency(currentMonthlyFee, currentTier.currency ?? "EUR"),
+      effectiveAt,
+      finalAt,
+    };
+  });
+
+  async function confirmTierChange() {
+    const tier = tierDialog;
+    if (!tier?.id) return;
+    const isDowngrade = tierDialogFacts?.isDowngrade ?? false;
+    tierDialog = null;
+    await changeTier(tier.id, isDowngrade);
+  }
+
+  // Selecting the current plan while a downgrade is staged cancels it.
+  async function keepCurrentTier() {
+    if (!currentTier?.id) return;
+    await changeTier(currentTier.id, false);
+  }
+
+  async function changeTier(tierId: string, isDowngrade: boolean) {
+    changeTierLoadingId = tierId;
     try {
-      const result = await changeTierMutation.mutate({ tierId: tier.id });
+      const result = await changeTierMutation.mutate({ tierId });
       const data = result.data?.changeBillingTier;
       if (data?.__typename === "ChangeBillingTierPayload") {
         if (data.pendingTier) {
           const effective = data.effectiveAt ? formatDate(data.effectiveAt) : "period end";
           if (isDowngrade) {
-            toast.success(`Downgrade scheduled for ${effective}`);
-          } else {
-            toast.info(
-              data.message || "Upgrade accepted; payment and billing are being reconciled"
+            toast.success(
+              `Plan change to ${data.pendingTier.displayName} scheduled for ${effective}`
             );
+          } else {
+            toast.info(data.message || "Upgrade accepted; payment is being confirmed");
           }
         } else {
           toast.success(
-            data.message || `Upgraded to ${data.appliedTier?.displayName ?? "new tier"}`
+            data.message || `Now on ${data.appliedTier?.displayName ?? "the new plan"}`
           );
         }
         await loadBillingData();
         return;
       }
-      if (data && "message" in data) {
-        throw new Error(data.message);
+      if (data?.__typename === "ValidationError") {
+        if (data.code === "COLLECTION_SETUP_REQUIRED") {
+          selectedTierId = tierId;
+          showSection("payment-setup");
+        } else if (data.code === "INVOICES_OUTSTANDING") {
+          showSection("invoices");
+        }
+        toast.error(data.message);
+        return;
       }
-      throw new Error("Failed to change billing tier");
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to change billing tier");
+      toast.error(data && "message" in data ? data.message : "Could not change the plan");
+    } catch {
+      toast.error("Could not change the plan");
     } finally {
       changeTierLoadingId = null;
     }
@@ -667,21 +761,51 @@
     return out;
   }
 
-  // Trial days remaining
-  const trialDaysRemaining = $derived.by(() => {
-    if (!billingStatus?.trialEndsAt) return null;
-    const trialEnd = new Date(billingStatus.trialEndsAt);
-    const now = new Date();
-    const diffMs = trialEnd.getTime() - now.getTime();
-    if (diffMs <= 0) return 0;
-    return Math.ceil(diffMs / (1000 * 60 * 60 * 24));
-  });
+  function supportLabel(level: string | null | undefined) {
+    switch ((level ?? "").toLowerCase()) {
+      case "":
+        return null;
+      case "community":
+        return "Community support";
+      case "basic":
+        return "Email support";
+      case "priority":
+        return "Priority support";
+      case "business_hours":
+        return "Business-hours support";
+      case "dedicated":
+        return "Dedicated support";
+      default:
+        return `${level!.replaceAll("_", " ")} support`;
+    }
+  }
+
+  function statusLabel(status: string | null | undefined) {
+    switch ((status ?? "").toLowerCase()) {
+      case "active":
+        return "Active";
+      case "past_due":
+        return "Payment failed";
+      case "pending_cancellation":
+        return "Cancelled, active until period end";
+      case "suspended":
+        return "Suspended";
+      case "cancelled":
+        return "Cancelled";
+      case "trial":
+        return "Trial";
+      case "none":
+        return "No subscription";
+      default:
+        return status || "Active";
+    }
+  }
 
   // Icons
   const CreditCardIcon = getIconComponent("CreditCard");
   const CalendarIcon = getIconComponent("Calendar");
   const CheckCircleIcon = getIconComponent("CheckCircle");
-  const ShieldIcon = getIconComponent("Shield");
+  const AlertIcon = getIconComponent("AlertTriangle");
   const ReceiptIcon = getIconComponent("Receipt");
   const SparklesIcon = getIconComponent("Sparkles");
   const GaugeIcon = getIconComponent("Gauge");
@@ -694,6 +818,37 @@
   const pendingTier = $derived(billingStatus?.subscription?.pendingTier ?? null);
   const pendingEffectiveAt = $derived(billingStatus?.subscription?.pendingEffectiveAt ?? null);
   const pendingReason = $derived(billingStatus?.subscription?.pendingReason ?? null);
+  const pendingTierState = $derived(billingStatus?.pendingTierState ?? null);
+  const arrangement = $derived(billingStatus?.operatorGrant ?? null);
+  const freeFallback = $derived(billingStatus?.freeFallback ?? null);
+  // The base fee this account pays, after any FrameWorks arrangement.
+  const currentMonthlyFee = $derived(
+    billingStatus?.effectiveBasePrice
+      ? moneyNumber(billingStatus.effectiveBasePrice)
+      : moneyNumber(currentTier?.basePrice)
+  );
+  const movingToFree = $derived(freeFallback !== null && freeFallback.stage !== "MOVED");
+  // A failed renewal that the customer can still fix before the move date.
+  const paymentGrace = $derived(
+    freeFallback?.reason === "PAYMENT_FAILED" && freeFallback.stage === "SCHEDULED"
+  );
+  // Stripe still retries a past-due subscription: a new card in its portal
+  // pays it. A cancelled one, or a Mollie mandate, needs a new setup.
+  const graceFixInPortal = $derived(
+    paymentGrace &&
+      billingStatus?.collectionProvider === "stripe" &&
+      freeFallback?.providerCancelled === false
+  );
+  // A cancelled subscription runs out its paid term, and an applying move
+  // settles its final invoice: Purser refuses plan changes until the move.
+  const planLocked = $derived(
+    freeFallback !== null &&
+      freeFallback.stage !== "MOVED" &&
+      (freeFallback.reason === "CANCELLED" || freeFallback.stage === "APPLYING")
+  );
+  const showPaymentSetup = $derived(
+    isPrepaid || !billingStatus?.collectionReady || (paymentGrace && !graceFixInPortal)
+  );
 </script>
 
 <svelte:head>
@@ -730,30 +885,129 @@
       </div>
     {:else}
       <div class="page-transition">
-        <!-- Trial Countdown Banner (full-bleed) -->
-        {#if trialDaysRemaining !== null && trialDaysRemaining > 0}
+        <!-- Plan lifecycle banners (full-bleed) -->
+        {#if freeFallback}
           <div
-            class="bg-accent-purple/20 border-y border-accent-purple/50 px-4 sm:px-6 lg:px-8 py-4 mb-0"
+            id="update-payment"
+            class="border-y px-4 sm:px-6 lg:px-8 py-4 {paymentGrace
+              ? 'bg-warning/20 border-warning/50'
+              : 'bg-muted/20 border-border/50'}"
           >
-            <div class="flex items-center justify-between">
-              <div>
-                <p class="text-accent-purple font-semibold">Trial Period Active</p>
-                <p class="text-sm text-muted-foreground">
-                  Your trial ends on {formatDate(billingStatus?.trialEndsAt)} ({trialDaysRemaining} days
-                  remaining)
-                </p>
+            <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div class="flex items-start gap-2">
+                <AlertIcon
+                  class="w-4 h-4 mt-0.5 shrink-0 {paymentGrace
+                    ? 'text-warning'
+                    : 'text-muted-foreground'}"
+                />
+                <div>
+                  {#if freeFallback.stage === "MOVED"}
+                    <p class="font-semibold">
+                      Your account moved to Free on {formatDate(freeFallback.at)}
+                    </p>
+                    <p class="text-sm text-muted-foreground">
+                      A final invoice covers your usage up to the move. Settle any open invoice
+                      before choosing a paid plan again.
+                    </p>
+                  {:else if freeFallback.stage === "APPLYING"}
+                    <p class="font-semibold">Moving your account to Free</p>
+                    <p class="text-sm text-muted-foreground">
+                      The final invoice for your usage up to {formatDate(freeFallback.at)} is being settled.
+                      Your streams keep running within the Free plan's limits.
+                    </p>
+                  {:else if freeFallback.reason === "PAYMENT_FAILED"}
+                    <p class="font-semibold text-warning">Payment failed</p>
+                    <p class="text-sm text-muted-foreground">
+                      Your {currentTier?.displayName ?? "current"} plan stays active until {formatDate(
+                        freeFallback.at
+                      )}, then moves to Free. {graceFixInPortal
+                        ? "Update your card to keep the plan."
+                        : "Set up payment again to keep the plan."}
+                    </p>
+                  {:else}
+                    <p class="font-semibold">Subscription cancelled</p>
+                    <p class="text-sm text-muted-foreground">
+                      Your {currentTier?.displayName ?? "current"} plan stays active until {formatDate(
+                        freeFallback.at
+                      )}, then moves to Free. Choose a new plan after the move.
+                    </p>
+                  {/if}
+                </div>
               </div>
-              <div class="text-2xl font-bold text-accent-purple">
-                {trialDaysRemaining} days
-              </div>
+              {#if paymentGrace}
+                <div class="flex flex-wrap gap-2">
+                  {#if graceFixInPortal}
+                    <Button onclick={openBillingPortal} disabled={portalLoading}>
+                      {portalLoading ? "Opening Stripe..." : "Update payment method"}
+                    </Button>
+                  {:else}
+                    <Button onclick={() => showSection("payment-setup")}>Set up payment</Button>
+                  {/if}
+                  {#if billingStatus && billingStatus.outstandingAmount > 0}
+                    <Button variant="outline" onclick={() => showSection("invoices")}
+                      >Pay open invoice</Button
+                    >
+                  {/if}
+                </div>
+              {/if}
             </div>
           </div>
-        {:else if trialDaysRemaining === 0}
-          <div class="bg-warning/20 border-y border-warning/50 px-4 sm:px-6 lg:px-8 py-4 mb-0">
-            <p class="text-warning font-semibold">Trial Expired</p>
-            <p class="text-sm text-muted-foreground">
-              Your trial has ended. Please upgrade to continue using premium features.
+        {/if}
+        {#if arrangement}
+          <div
+            class="border-y border-accent-purple/50 bg-accent-purple/10 px-4 sm:px-6 lg:px-8 py-4"
+          >
+            <p class="font-semibold text-accent-purple">
+              {arrangement.expiresAt
+                ? `Plan arranged by FrameWorks until ${formatDate(arrangement.expiresAt)}`
+                : "Plan arranged by FrameWorks"}
             </p>
+            <p class="text-sm text-muted-foreground">
+              {#if arrangement.basePrice != null}
+                Base fee {formatCurrency(arrangement.basePrice, "EUR")} a month.
+              {/if}
+              {#if arrangement.waiveUsage}
+                Usage is metered and shown at no charge.
+              {/if}
+              {#if arrangement.collection === "invoice"}
+                FrameWorks sends invoices to pay by bank transfer.
+              {/if}
+              {#if arrangement.expiresAt}
+                When it ends, the account
+                {arrangement.fallbackTierName
+                  ? `returns to the ${arrangement.fallbackTierName} plan`
+                  : `stays on ${currentTier?.displayName ?? "its plan"}`} at the standard price.
+              {/if}
+              <!-- eslint-disable svelte/no-navigation-without-resolve -->
+              <a
+                href={contactURL}
+                class="text-primary hover:underline"
+                target="_blank"
+                rel="noopener">Contact us</a
+              >
+              <!-- eslint-enable svelte/no-navigation-without-resolve -->
+              to change it.
+            </p>
+          </div>
+        {/if}
+        {#if molliePendingTierId}
+          <div class="border-y border-info/50 bg-info/10 px-4 sm:px-6 lg:px-8 py-4">
+            <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <p class="text-sm">
+                Mollie is still confirming your first payment. Bank payments can take a few minutes.
+                Your paid plan starts once Mollie confirms it.
+              </p>
+              <Button
+                variant="outline"
+                disabled={setupLoadingProvider !== null}
+                onclick={() =>
+                  handleSetupReturn(
+                    new URLSearchParams({ setup: "mollie", tier: molliePendingTierId ?? "" })
+                  )}
+              >
+                {setupLoadingProvider === "mollie" ? "Checking..." : "Check again"}
+              </Button>
+            </div>
           </div>
         {/if}
 
@@ -775,44 +1029,39 @@
                 iconColor={billingStatus.billingStatus === "active"
                   ? "text-success"
                   : "text-warning"}
-                value={billingStatus.billingStatus || "Active"}
+                value={statusLabel(billingStatus.billingStatus)}
                 valueColor={getStatusColor(billingStatus.billingStatus)}
                 label="Status"
               />
             </div>
             <div>
+              {#if movingToFree && freeFallback}
+                <DashboardMetricCard
+                  icon={CalendarIcon}
+                  iconColor="text-warning"
+                  value={formatDate(freeFallback.at)}
+                  valueColor="text-warning"
+                  label="Moves to Free"
+                />
+              {:else}
+                <DashboardMetricCard
+                  icon={CalendarIcon}
+                  iconColor="text-info"
+                  value={formatDate(billingStatus.nextBillingDate)}
+                  valueColor="text-foreground"
+                  label="Next Billing"
+                />
+              {/if}
+            </div>
+            <div>
               <DashboardMetricCard
-                icon={CalendarIcon}
-                iconColor="text-info"
-                value={formatDate(billingStatus.nextBillingDate)}
+                icon={CreditCardIcon}
+                iconColor="text-muted-foreground"
+                value={formatCurrency(currentMonthlyFee, currentTier?.currency || "EUR")}
                 valueColor="text-foreground"
-                label="Next Billing"
+                label="Monthly Cost"
               />
             </div>
-            {#if currentTier?.slaLevel}
-              <div>
-                <DashboardMetricCard
-                  icon={ShieldIcon}
-                  iconColor="text-success"
-                  value={currentTier.slaLevel}
-                  valueColor="text-success"
-                  label="SLA Level"
-                />
-              </div>
-            {:else}
-              <div>
-                <DashboardMetricCard
-                  icon={CreditCardIcon}
-                  iconColor="text-muted-foreground"
-                  value={formatCurrency(
-                    currentTier?.basePrice || 0,
-                    currentTier?.currency || "EUR"
-                  )}
-                  valueColor="text-foreground"
-                  label="Monthly Cost"
-                />
-              </div>
-            {/if}
           </GridSeam>
 
           <!-- Outstanding Balance Alert -->
@@ -905,15 +1154,10 @@
                               <span class="text-success mr-2">✓</span> Custom processing profiles
                             </li>
                           {/if}
-                          {#if tier.features.sla}
-                            <li class="flex items-center">
-                              <span class="text-success mr-2">✓</span> SLA Guarantee
-                            </li>
-                          {/if}
-                          {#if tier.supportLevel}
+                          {#if supportLabel(tier.supportLevel)}
                             <li class="flex items-center">
                               <span class="text-info mr-2">●</span>
-                              {tier.supportLevel} Support
+                              {supportLabel(tier.supportLevel)}
                             </li>
                           {/if}
                         </ul>
@@ -934,12 +1178,32 @@
                               upgrade will not start another purchase.
                             {:else if pendingReason === "stripe_checkout"}
                               Checkout for {pendingTier.displayName} is awaiting completion.
+                            {:else if pendingTierState === "FINAL"}
+                              Move to {pendingTier.displayName} confirmed for {formatDate(
+                                pendingEffectiveAt
+                              )}. Your payment subscription is cancelled, so this change can no
+                              longer be undone.
+                            {:else if pendingTierState === "APPLYING"}
+                              Applying your change to {pendingTier.displayName} with the invoice that
+                              just closed.
                             {:else}
-                              Downgrading to {pendingTier.displayName} on {pendingEffectiveAt
+                              Moving to {pendingTier.displayName} on {pendingEffectiveAt
                                 ? formatDate(pendingEffectiveAt)
-                                : "period end"}
+                                : "period end"}. You keep {tier.displayName} until then.
                             {/if}
                           </div>
+                          {#if pendingReason === "downgrade" && pendingTierState === "SCHEDULED" && !arrangement}
+                            <Button
+                              class="w-full mt-3"
+                              variant="outline"
+                              disabled={changeTierLoadingId !== null}
+                              onclick={keepCurrentTier}
+                            >
+                              {changeTierLoadingId === tier.id
+                                ? "Updating..."
+                                : `Keep ${tier.displayName}`}
+                            </Button>
+                          {/if}
                         {/if}
                       {:else if !isPrepaid && (tier.tierLevel ?? 0) >= 1}
                         <Button
@@ -947,13 +1211,22 @@
                           variant={(tier.tierLevel ?? 0) > (currentTier?.tierLevel ?? 0)
                             ? "default"
                             : "outline"}
-                          disabled={changeTierLoadingId === tier.id}
-                          onclick={() => handleChangeBillingTier(tier)}
+                          disabled={changeTierLoadingId !== null ||
+                            arrangement !== null ||
+                            planLocked}
+                          title={arrangement
+                            ? "Your plan is arranged by FrameWorks. Contact us to change it."
+                            : planLocked
+                              ? "Your plan moves to Free first. Choose a new plan after the move."
+                              : undefined}
+                          onclick={() => chooseTier(tier)}
                         >
                           {#if changeTierLoadingId === tier.id}
                             Updating...
                           {:else if (tier.tierLevel ?? 0) > (currentTier?.tierLevel ?? 0)}
                             Upgrade
+                          {:else if isFreeTier(tier)}
+                            Move to Free
                           {:else}
                             Downgrade
                           {/if}
@@ -967,15 +1240,21 @@
           {/if}
 
           <!-- Prepaid Balance -->
-          <PrepaidBalanceWidget />
+          <PrepaidBalanceWidget billingModel={billingStatus?.subscription?.billingModel} />
 
           <!-- Provider-confirmed paid-plan setup -->
-          {#if (isPrepaid || !billingStatus?.collectionReady) && $auth.user?.email}
-            <div class="slab">
+          {#if showPaymentSetup && $auth.user?.email}
+            <div class="slab" id="payment-setup">
               <div class="slab-header">
                 <div class="flex items-center gap-2">
                   <ArrowUpIcon class="w-4 h-4 text-success" />
-                  <h3>{isPrepaid ? "Upgrade to Postpaid" : "Activate a Paid Plan"}</h3>
+                  <h3>
+                    {isPrepaid
+                      ? "Upgrade to Postpaid"
+                      : paymentGrace
+                        ? "Set Up Payment Again"
+                        : "Activate a Paid Plan"}
+                  </h3>
                 </div>
               </div>
               <div class="slab-body--padded">
@@ -999,7 +1278,9 @@
                 <p class="text-sm text-muted-foreground mb-4">
                   {isPrepaid
                     ? "You're currently on prepaid billing. Choose a provider and complete its hosted setup before monthly postpaid billing is activated."
-                    : "Your Free account does not need a payment method. To activate a paid tier, choose a provider and complete its hosted collection setup first."}
+                    : paymentGrace
+                      ? `Your last payment failed. Choose your plan and a provider to set up payment before ${formatDate(freeFallback?.at)}, and your plan continues.`
+                      : "Your Free account does not need a payment method. To activate a paid tier, choose a provider and complete its hosted collection setup first."}
                 </p>
                 {#if !billingDetails?.isComplete}
                   <div class="mb-4 border border-warning/50 bg-warning/10 p-3 text-sm">
@@ -1158,7 +1439,7 @@
 
           <!-- Recent Invoices Slab -->
           {#if invoices.length > 0}
-            <div class="slab col-span-full">
+            <div class="slab col-span-full" id="invoices">
               <div class="slab-header">
                 <div class="flex items-center gap-2">
                   <ReceiptIcon class="w-4 h-4 text-info" />
@@ -1318,7 +1599,7 @@
                                           )}</td
                                         >
                                         <td class="py-2 text-right font-mono font-semibold">
-                                          {#if moneyNumber(item.total) === 0 && item.pricingSource !== "beta_free"}
+                                          {#if moneyNumber(item.total) === 0 && item.pricingSource !== WAIVED_PRICING_SOURCE}
                                             <span
                                               class="px-2 py-0.5 text-[10px] font-medium rounded-full bg-emerald-50 text-emerald-700"
                                               >Included</span
@@ -1358,7 +1639,7 @@
                                 Metered usage would have cost {formatCurrency(
                                   invoice.grossMeteredAmount,
                                   invoice.currency
-                                )} — usage is on us during beta. Metered total: {formatCurrency(
+                                )}; usage charges were waived. Metered total: {formatCurrency(
                                   0,
                                   invoice.currency
                                 )}.
@@ -1464,3 +1745,106 @@
     {/if}
   </div>
 </div>
+
+<Dialog
+  open={tierDialog !== null}
+  onOpenChange={(value) => {
+    if (!value) tierDialog = null;
+  }}
+>
+  <DialogContent
+    class="max-w-lg rounded-none border-[hsl(var(--tn-fg-gutter)/0.3)] bg-background p-0 gap-0 overflow-hidden"
+  >
+    {#if tierDialog && tierDialogFacts}
+      <DialogHeader class="slab-header text-left space-y-1">
+        <DialogTitle class="uppercase tracking-wide text-sm font-semibold text-muted-foreground">
+          {tierDialogFacts.isDowngrade
+            ? tierDialogFacts.toFree
+              ? "Move to Free"
+              : `Move to ${tierDialog.displayName}`
+            : `Upgrade to ${tierDialog.displayName}`}
+        </DialogTitle>
+        <DialogDescription class="text-xs text-muted-foreground/70">
+          From {currentTier?.displayName} at {tierDialogFacts.currentFee} a month.
+        </DialogDescription>
+      </DialogHeader>
+      <div class="slab-body--padded">
+        <dl class="space-y-3 text-sm">
+          {#if tierDialogFacts.isDowngrade}
+            <div>
+              <dt class="font-medium">When</dt>
+              <dd class="text-muted-foreground">
+                {tierDialogFacts.effectiveAt
+                  ? formatDate(tierDialogFacts.effectiveAt)
+                  : "At the end of the current billing period"}. You keep {currentTier?.displayName} and
+                its limits until then.
+              </dd>
+            </div>
+            <div>
+              <dt class="font-medium">New monthly fee</dt>
+              <dd class="text-muted-foreground">{tierDialogFacts.newFee} from that date.</dd>
+            </div>
+            <div>
+              <dt class="font-medium">Changing your mind</dt>
+              <dd class="text-muted-foreground">
+                {#if tierDialogFacts.finalAt}
+                  Choose {currentTier?.displayName} again before {formatDate(
+                    tierDialogFacts.finalAt
+                  )}
+                  to keep it. After that your payment subscription is cancelled and the move is final.
+                {:else}
+                  Choose {currentTier?.displayName} again before the move to keep it.
+                {/if}
+              </dd>
+            </div>
+          {:else}
+            <div>
+              <dt class="font-medium">When</dt>
+              <dd class="text-muted-foreground">
+                Today. A new monthly billing period starts with the upgrade.
+              </dd>
+            </div>
+            <div>
+              <dt class="font-medium">New monthly fee</dt>
+              <dd class="text-muted-foreground">
+                {tierDialogFacts.newFee}, collected now through your payment provider.
+                {#if currentMonthlyFee > 0}
+                  The unused part of the {tierDialogFacts.currentFee} you already paid this period reduces
+                  it; it is never refunded as cash or added to your balance.
+                {/if}
+              </dd>
+            </div>
+            <div>
+              <dt class="font-medium">Usage so far</dt>
+              <dd class="text-muted-foreground">
+                Billed on its own invoice at {currentTier?.displayName} rates.
+              </dd>
+            </div>
+          {/if}
+        </dl>
+      </div>
+      <DialogFooter class="slab-actions slab-actions--row gap-0">
+        <Button
+          type="button"
+          variant="ghost"
+          class="rounded-none h-12 flex-1 border-r border-[hsl(var(--tn-fg-gutter)/0.3)] text-muted-foreground hover:text-foreground"
+          onclick={() => (tierDialog = null)}
+        >
+          Cancel
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          class="rounded-none h-12 flex-1 text-primary hover:text-primary/80"
+          onclick={confirmTierChange}
+        >
+          {tierDialogFacts.isDowngrade
+            ? tierDialogFacts.toFree
+              ? "Move to Free"
+              : "Schedule change"
+            : "Upgrade now"}
+        </Button>
+      </DialogFooter>
+    {/if}
+  </DialogContent>
+</Dialog>

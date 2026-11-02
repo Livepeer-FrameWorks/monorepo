@@ -5247,6 +5247,7 @@ enum GQL {
       ... on ValidationError {
         message
         field
+        code
       }
       ... on AuthError {
         message
@@ -5469,6 +5470,7 @@ enum GQL {
       ... on ValidationError {
         message
         field
+        code
       }
       ... on NotFoundError {
         message
@@ -5493,6 +5495,7 @@ enum GQL {
       ... on ValidationError {
         message
         field
+        code
       }
       ... on NotFoundError {
         message
@@ -5628,6 +5631,30 @@ enum GQL {
   }
   """
 
+  static let CreateStripeBillingPortal = """
+  # Open the Stripe customer portal to update the payment method of a Stripe subscription.
+  mutation CreateStripeBillingPortal($returnUrl: String!) {
+    createStripeBillingPortal(returnUrl: $returnUrl) {
+      __typename
+      ... on StripeBillingPortalSession {
+        portalUrl
+      }
+      ... on ValidationError {
+        message
+        field
+        code
+      }
+      ... on NotFoundError {
+        message
+      }
+      ... on AuthError {
+        message
+        code
+      }
+    }
+  }
+  """
+
   static let CreateStripeCheckout = """
   mutation CreateStripeCheckout(
     $tierId: ID!
@@ -5649,6 +5676,7 @@ enum GQL {
       ... on ValidationError {
         message
         field
+        code
       }
       ... on NotFoundError {
         message
@@ -6015,6 +6043,7 @@ enum GQL {
       ... on ValidationError {
         message
         field
+        code
       }
       ... on AuthError {
         message
