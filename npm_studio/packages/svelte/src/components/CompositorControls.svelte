@@ -20,7 +20,18 @@
     RendererStats,
     Layer,
   } from "@livepeer-frameworks/streamcrafter-core";
-  import { isLayoutAvailable } from "@livepeer-frameworks/streamcrafter-core";
+  import { getContext } from "svelte";
+  import { readable, type Readable } from "svelte/store";
+  import {
+    createStudioTranslator,
+    isLayoutAvailable,
+    type StudioTranslateFn,
+  } from "@livepeer-frameworks/streamcrafter-core";
+
+  const fallbackT = createStudioTranslator({ locale: "en" });
+  const translatorCtx =
+    getContext<Readable<StudioTranslateFn> | undefined>("fw-sc-translator") ?? readable(fallbackT);
+  let t = $derived($translatorCtx);
 
   interface Props {
     // State
@@ -147,7 +158,7 @@
     <div class="fw-sc-layout-bar">
       <!-- Layout section -->
       <div class="fw-sc-layout-section">
-        <span class="fw-sc-layout-label">Layout</span>
+        <span class="fw-sc-layout-label">{t("layout")}</span>
         <div class="fw-sc-layout-icons">
           {#each availableLayouts as preset (preset.mode)}
             {@const isActive = currentLayout?.mode === preset.mode}
@@ -272,7 +283,7 @@
 
       <!-- Display mode section -->
       <div class="fw-sc-layout-section">
-        <span class="fw-sc-layout-label">Display</span>
+        <span class="fw-sc-layout-label">{t("display")}</span>
         <div class="fw-sc-scaling-icons">
           {#each SCALING_MODES as sm (sm.mode)}
             {@const isActive = currentScalingMode === sm.mode}

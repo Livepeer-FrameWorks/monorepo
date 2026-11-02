@@ -22,6 +22,7 @@ import type {
   Layer,
 } from "@livepeer-frameworks/streamcrafter-core";
 import { isLayoutAvailable } from "@livepeer-frameworks/streamcrafter-core";
+import { useStudioTranslate } from "../context/StudioI18nContext";
 
 // ============================================================================
 // Custom Tooltip Component (instant, styled)
@@ -308,6 +309,7 @@ export function CompositorControls({
   showStats = true,
   className = "",
 }: CompositorControlsProps) {
+  const t = useStudioTranslate();
   const handleLayoutSelect = useCallback(
     (mode: LayoutMode, e?: React.MouseEvent) => {
       // If clicking the already-active layout, cycle source order
@@ -361,7 +363,7 @@ export function CompositorControls({
       <div className="fw-sc-layout-bar">
         {/* Layout section */}
         <div className="fw-sc-layout-section">
-          <span className="fw-sc-layout-label">Layout</span>
+          <span className="fw-sc-layout-label">{t("layout")}</span>
           <div className="fw-sc-layout-icons">
             {availableLayouts.map((preset) => {
               const isActive = currentLayout?.mode === preset.mode;
@@ -391,7 +393,7 @@ export function CompositorControls({
 
         {/* Display mode section */}
         <div className="fw-sc-layout-section">
-          <span className="fw-sc-layout-label">Display</span>
+          <span className="fw-sc-layout-label">{t("display")}</span>
           <div className="fw-sc-scaling-icons">
             {SCALING_MODES.map((sm) => {
               const isActive = currentScalingMode === sm.mode;

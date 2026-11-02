@@ -462,3 +462,23 @@ describe("useCompositor", () => {
     expect(result.current.scenes).toHaveLength(2);
   });
 });
+
+describe("CompositorControls", () => {
+  it("labels its sections in the studio locale", async () => {
+    const { CompositorControls } = await import("../src/components/CompositorControls");
+    render(
+      <StudioI18nProvider locale="fr">
+        <CompositorControls
+          isEnabled
+          isInitialized
+          rendererType="canvas2d"
+          stats={null}
+          sources={[]}
+          layers={[]}
+        />
+      </StudioI18nProvider>
+    );
+
+    expect(screen.getByText("Disposition")).toBeTruthy();
+  });
+});

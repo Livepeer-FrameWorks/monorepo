@@ -382,3 +382,23 @@ describe("StudioProducerPanel", () => {
     );
   });
 });
+
+describe("CompositorControls", () => {
+  it("labels its sections in the studio locale", async () => {
+    const { default: CompositorControls } =
+      await import("../src/components/CompositorControls.svelte");
+    render(CompositorControls, {
+      props: {
+        isEnabled: true,
+        isInitialized: true,
+        rendererType: "canvas2d",
+        stats: null,
+        sources: [],
+        layers: [],
+      },
+      context: new Map([["fw-sc-translator", readable(createStudioTranslator({ locale: "fr" }))]]),
+    });
+
+    expect(screen.getByText("Disposition")).toBeTruthy();
+  });
+});
