@@ -119,6 +119,11 @@ func (s kafkaQuorumStatus) problems(expectedVoters int) []string {
 // queue is stalled and logs the renouncement after raft already followed.
 // Only files written since the cutoff can hold lines in the window.
 //
+// A stopping leader logs RaftManager's "Beginning graceful shutdown", resigns
+// to a preferred successor and then renounces. A renouncement within the
+// election timeout after that line is a planned handover when a successor
+// followed; without one it is still leaderless.
+//
 // The election timeout is controller.quorum.election.timeout.ms from the
 // unit's server.properties (Kafka's 1000 ms default when unset). since is a
 // GNU date expression ("1 hour ago"); log4j stamps lines in host local time,
@@ -144,13 +149,15 @@ function ms(ts,   y, m, d, a, days) {
 }
 function num(s, re) { if (!match(s, re)) return -1; s = substr(s, RSTART, RLENGTH); gsub(/[^0-9]/, "", s); return s + 0 }
 function successor(epoch) { k++; sat[k] = ms(substr($0, 2, 23)); sepoch[k] = epoch }
+function planned(at,   i) { for (i = 1; i <= g; i++) if (gat[i] <= at && at <= gat[i] + timeout) return 1; return 0 }
 /Renouncing the leadership/ {
   if (substr($0, 2, 19) < cutoff) next
   r++
   if (/the leader is \(none\)/) { n++; rat[n] = ms(substr($0, 2, 23)); repoch[n] = num($0, "new epoch [0-9]+") }
-  else successor(num($0, "new epoch [0-9]+"))
+  else { h++; hat[h] = ms(substr($0, 2, 23)); successor(num($0, "new epoch [0-9]+")) }
   next
 }
+/\[RaftManager id=[0-9]+\] Beginning graceful shutdown/ { g++; gat[g] = ms(substr($0, 2, 23)); next }
 /Exceptionally slow controller event/ {
   if (substr($0, 2, 19) < cutoff) next
   s++; t = num($0, "took [0-9]+ ms"); if (t > maxslow) maxslow = t
@@ -168,18 +175,21 @@ END {
     found = 0
     for (j = 1; j <= k; j++) if (sepoch[j] >= repoch[i] && sat[j] <= rat[i] + timeout) { found = 1; break }
     if (!found) l++
+    else if (planned(rat[i])) p++
   }
-  printf "renounced=%%d leaderless=%%d slow=%%d max_slow_ms=%%d election_timeout_ms=%%d\n", r, l, s, maxslow, timeout
+  for (i = 1; i <= h; i++) if (planned(hat[i])) p++
+  printf "renounced=%%d leaderless=%%d planned=%%d slow=%%d max_slow_ms=%%d election_timeout_ms=%%d\n", r, l, p, s, maxslow, timeout
 }'`,
 		ssh.ShellQuote(unit), ssh.ShellQuote(since))
 }
 
 // kafkaControllerLogCounts is one controller's parsed kafkaControllerLogProbe
 // output. Renounced counts every leadership loss; Leaderless is the subset no
-// new leader followed within ElectionTimeoutMs.
+// new leader followed within ElectionTimeoutMs; Planned is the subset handed
+// to a successor during the leader's own graceful shutdown.
 type kafkaControllerLogCounts struct {
-	Renounced, Leaderless, Slow  int
-	MaxSlowMs, ElectionTimeoutMs int
+	Renounced, Leaderless, Planned, Slow int
+	MaxSlowMs, ElectionTimeoutMs         int
 }
 
 func parseKafkaControllerLogProbe(output string) (kafkaControllerLogCounts, error) {
@@ -187,6 +197,7 @@ func parseKafkaControllerLogProbe(output string) (kafkaControllerLogCounts, erro
 	fields := map[string]*int{
 		"renounced":           &counts.Renounced,
 		"leaderless":          &counts.Leaderless,
+		"planned":             &counts.Planned,
 		"slow":                &counts.Slow,
 		"max_slow_ms":         &counts.MaxSlowMs,
 		"election_timeout_ms": &counts.ElectionTimeoutMs,
@@ -307,7 +318,7 @@ func checkKafkaQuorum(ctx context.Context, manifest *inventory.Manifest, cluster
 			if counts.Leaderless > 0 {
 				problems = append(problems, fmt.Sprintf("controller %d on %s was left without a leader %d time(s) since %s: it gave up leadership and saw no new leader within the %d ms election timeout", ctrl.ID, ctrl.Host, counts.Leaderless, since, counts.ElectionTimeoutMs))
 			}
-			if handovers := counts.Renounced - counts.Leaderless; handovers > 0 {
+			if handovers := counts.Renounced - counts.Leaderless - counts.Planned; handovers > 0 {
 				problems = append(problems, fmt.Sprintf("controller %d on %s lost leadership in %d unplanned leader change(s) since %s, each followed by a new leader", ctrl.ID, ctrl.Host, handovers, since))
 			}
 			if counts.Slow > 0 {

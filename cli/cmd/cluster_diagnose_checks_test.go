@@ -126,7 +126,7 @@ func TestDiagnoseKafkaFailsOnControllerLeadershipLossInWindow(t *testing.T) {
 		case strings.Contains(command, "kafka-metadata-quorum"):
 			return "LeaderId: 100\nLeaderEpoch: 9\nMaxFollowerLagTimeMs: 0\nCurrentVoters: [100]\n", 0
 		case strings.Contains(command, "controller.log"):
-			return "renounced=35 leaderless=4 slow=198 max_slow_ms=10327 election_timeout_ms=5000\n", 0
+			return "renounced=35 leaderless=4 planned=0 slow=198 max_slow_ms=10327 election_timeout_ms=5000\n", 0
 		}
 		return "ok", 0
 	}
@@ -287,6 +287,47 @@ func TestKafkaControllerLogProbeReadsControllerLogInTheWindow(t *testing.T) {
 	result = runKafkaQuorumOnControllerLogs(t, "2026-10-22 19:30:00", map[string]string{"server.log": follower + "\n"})
 	if result.OK || !strings.Contains(result.Error, "controller log unreadable") {
 		t.Fatalf("probe succeeded without a controller.log: %+v", result)
+	}
+}
+
+// Staging eu-1, 2026-11-02: release apply stopped the leading controller. Its
+// RaftManager began a graceful shutdown, resigned in favour of 102 and
+// QuorumController logged the renouncement; 102 led 14 ms later. A planned
+// stop hands leadership over and is no unplanned leader change, but a stop
+// that leaves the quorum without a successor still is a leaderless quorum.
+func TestKafkaControllerLogProbeTreatsGracefulShutdownHandoverAsPlanned(t *testing.T) {
+	const (
+		shutdown = "[2026-11-02 13:11:41,822] INFO [RaftManager id=101] Beginning graceful shutdown (org.apache.kafka.raft.KafkaRaftClient)"
+		resigned = "[2026-11-02 13:11:41,825] INFO [RaftManager id=101] Completed transition to ResignedState(localId=101, epoch=1255, voters=[101, 102, 103], electionTimeoutMs=7170, unackedVoters=[102, 103], preferredSuccessors=[ReplicaKey(id=102, directoryId=Optional.empty)]) from Leader(localVoterNode=VoterNode(voterKey=ReplicaKey(id=101, directoryId=Optional.empty)), epoch=1255) (org.apache.kafka.raft.QuorumState)"
+		renounce = "[2026-11-02 13:11:41,834] WARN [QuorumController id=101] Renouncing the leadership due to a metadata log event. We were the leader at epoch 1255, but in the new epoch 1256, the leader is (none). Reverting to last stable offset 7268798. (org.apache.kafka.controller.QuorumController)"
+		newLead  = "[2026-11-02 13:11:41,843] INFO [QuorumController id=101] In the new epoch 1256, the leader is 102. (org.apache.kafka.controller.QuorumController)"
+		follower = "[2026-11-02 13:11:41,843] INFO [RaftManager id=101] Completed transition to FollowerState(fetchTimeoutMs=10000, epoch=1256, leader=102, leaderEndpoints=Endpoints(endpoints={}), voters=[101, 102, 103], highWatermark=Optional.empty, fetchingSnapshot=Optional.empty) from UnattachedState(epoch=1256, leaderId=OptionalInt.empty, votedKey=Optional.empty, voters=[101, 102, 103], electionTimeoutMs=7162, highWatermark=Optional.empty) (org.apache.kafka.raft.QuorumState)"
+	)
+	result := runKafkaQuorumOnControllerLogs(t, "2026-11-02 12:30:00", map[string]string{
+		"controller.log": renounce + "\n" + newLead + "\n",
+		"server.log":     shutdown + "\n" + resigned + "\n" + follower + "\n",
+	})
+	if strings.Contains(result.Error, "unplanned leader change") || strings.Contains(result.Error, "without a leader") {
+		t.Errorf("a graceful-shutdown handover with a successor counted as a disruption: %+v", result)
+	}
+
+	// The same stop with no successor in the election timeout is leaderless.
+	result = runKafkaQuorumOnControllerLogs(t, "2026-11-02 12:30:00", map[string]string{
+		"controller.log": renounce + "\n",
+		"server.log":     shutdown + "\n" + resigned + "\n",
+	})
+	if result.OK || !strings.Contains(result.Error, "controller 201 on k1 was left without a leader 1 time(s) since 1 hour ago") {
+		t.Errorf("a graceful shutdown without a successor must stay leaderless: %+v", result)
+	}
+
+	// A shutdown long before the renouncement does not excuse it.
+	const earlyShutdown = "[2026-11-02 13:00:00,000] INFO [RaftManager id=101] Beginning graceful shutdown (org.apache.kafka.raft.KafkaRaftClient)"
+	result = runKafkaQuorumOnControllerLogs(t, "2026-11-02 12:30:00", map[string]string{
+		"controller.log": renounce + "\n" + newLead + "\n",
+		"server.log":     earlyShutdown + "\n" + follower + "\n",
+	})
+	if result.OK || !strings.Contains(result.Error, "controller 201 on k1 lost leadership in 1 unplanned leader change(s) since 1 hour ago") {
+		t.Errorf("a renouncement outside a graceful shutdown must stay unplanned: %+v", result)
 	}
 }
 
