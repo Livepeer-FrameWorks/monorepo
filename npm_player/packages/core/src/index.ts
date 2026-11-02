@@ -37,7 +37,7 @@ export {
   globalPlayerManager as globalRegistry,
   getAvailablePlayerCapabilities,
 } from "./core/PlayerRegistry";
-export { GatewayClient } from "./core/GatewayClient";
+export { GatewayClient, DEFAULT_GATEWAY_URL } from "./core/GatewayClient";
 export type { ViewerProtocol } from "./core/ViewerProtocol";
 
 export { StreamStateClient } from "./core/StreamStateClient";

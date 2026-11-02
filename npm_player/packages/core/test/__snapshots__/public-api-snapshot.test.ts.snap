@@ -11,6 +11,7 @@ exports[`public API snapshot > keeps exported symbol surface stable 1`] = `
   "ChandlerAssetSource",
   "DEFAULT_BLUEPRINTS",
   "DEFAULT_BUFFER_WINDOW_MS",
+  "DEFAULT_GATEWAY_URL",
   "DEFAULT_KEY_MAP",
   "DEFAULT_STRUCTURE",
   "DEFAULT_TRACK_SCORES",
