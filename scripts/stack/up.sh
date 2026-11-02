@@ -160,9 +160,25 @@ log "3/7 demo, two-cell and stack fixtures"
 make --no-print-directory seed-demo-postgres >/dev/null
 psql_db quartermaster -q < pkg/database/sql/seeds/demo/postgres/two-cell/quartermaster.sql >/dev/null
 psql_db quartermaster -q < scripts/stack/seed.sql >/dev/null
-# Reuse one declared system-tenant operator across scenarios.
-stack_compose exec -T quartermaster /app/quartermaster bootstrap --file /dev/stdin < scripts/stack/bootstrap.yaml || fail "stack operator tenant bootstrap failed"
-stack_compose exec -T commodore /app/commodore bootstrap --accounts-only --file /dev/stdin < scripts/stack/bootstrap.yaml || fail "stack operator account bootstrap failed"
+# Reuse one declared system-tenant operator across scenarios. The fixture's
+# accounts run in release apply's order (Quartermaster, Purser, Commodore
+# --accounts-only) twice: the first pass creates the QA customer, its operator
+# grant and its wallet link, the second must change nothing.
+bootstrap_accounts_pass() { # bootstrap_accounts_pass <log>: one pass; its outputs in <log>
+  stack_compose exec -T quartermaster /app/quartermaster bootstrap --file /dev/stdin < scripts/stack/bootstrap.yaml >"$1" 2>&1 &&
+    stack_compose exec -T purser /app/purser bootstrap --file /dev/stdin < scripts/stack/bootstrap.yaml >>"$1" 2>&1 &&
+    stack_compose exec -T commodore /app/commodore bootstrap --accounts-only --file /dev/stdin < scripts/stack/bootstrap.yaml >>"$1" 2>&1
+}
+bootstrap_log="$(mktemp)"
+bootstrap_accounts_pass "$bootstrap_log" || fail "stack account bootstrap failed: $(tail -5 "$bootstrap_log")"
+grep -Eq '^commodore bootstrap accounts: created=[0-9]+ updated=[0-9]+ noop=[0-9]+$' "$bootstrap_log" ||
+  fail "stack account bootstrap printed no accounts result: $(tail -5 "$bootstrap_log")"
+bootstrap_accounts_pass "$bootstrap_log" || fail "second stack account bootstrap failed: $(tail -5 "$bootstrap_log")"
+for section in 'quartermaster bootstrap tenants' 'purser bootstrap customer_billing' 'commodore bootstrap accounts'; do
+  grep -Eq "^$section: created=0 updated=0 noop=[1-9][0-9]*\$" "$bootstrap_log" ||
+    fail "second stack account bootstrap changed $section: $(grep "^$section:" "$bootstrap_log")"
+done
+rm -f "$bootstrap_log"
 
 live_processes="$(awk '/processes_live: &standard_live/ { getline; sub(/^[[:space:]]+/, ""); print; exit }' api_billing/internal/bootstrap/catalog/billing_tiers.yaml)"
 [ -n "$live_processes" ] || fail "could not read standard_live from the billing tier catalog"

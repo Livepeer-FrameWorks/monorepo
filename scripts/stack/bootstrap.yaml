@@ -1,8 +1,12 @@
-# Disposable stack fixture, validated and reconciled by each up.sh run. Credentials are local-test data.
+# Disposable stack fixture, validated and reconciled twice by each up.sh run
+# (the second pass must change nothing). Credentials are local-test data.
 quartermaster:
   system_tenant:
     alias: frameworks
     name: FrameWorks
+  tenants:
+    - alias: stack-qa
+      name: Stack QA
 accounts:
   - kind: system_operator
     tenant: { ref: "quartermaster.system_tenant" }
@@ -11,3 +15,20 @@ accounts:
         password: stack-operator-password
         role: owner
         platform_operator: true
+  - kind: customer
+    tenant: { ref: "quartermaster.tenants[stack-qa]" }
+    users:
+      - email: qa@stack.test
+        password: stack-qa-password
+        role: owner
+        wallet: "0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf"
+purser:
+  customer_billing:
+    - tenant: { ref: "quartermaster.tenants[stack-qa]" }
+      model: postpaid
+      tier: developer
+      cluster_access: derived
+      operator_grant:
+        base_fee: "0"
+        waive_usage: true
+        reason: Stack QA account
