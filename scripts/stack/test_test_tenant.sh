@@ -23,6 +23,12 @@ cat >"$work/test.sh" <<'EOF'
 # tenant: test
 printf '%s|%s|%s|%s\n' "$STACK_TENANT_ID" "$STACK_API_TOKEN" "${STACK_SESSION_JAR:-}" "$STACK_STATE_DIR"
 EOF
+cat >"$work/qa.sh" <<'EOF'
+#!/usr/bin/env bash
+# staging: safe
+# tenant: qa
+printf '%s|%s|%s|%s|%s\n' "$STACK_TENANT_ID" "$STACK_API_TOKEN" "$STACK_DEMO_EMAIL" "$STACK_DEMO_PASSWORD" "$STACK_STATE_DIR"
+EOF
 cat >"$work/plain.sh" <<'EOF'
 #!/usr/bin/env bash
 # staging: safe
@@ -37,6 +43,8 @@ run_as() { # run_as <scenario> [test token]: the tenant, token, session jar and 
     . "$here/test-tenant.sh" || exit 1
     TEST_TENANT_ID=test-tenant TEST_API_TOKEN=${2-test-token}
     TEST_BLOCKED_REASON='no STACK_TEST_TENANT_WALLET_KEY in secrets/staging.env'
+    QA_TENANT_ID=qa-tenant QA_API_TOKEN=${3-qa-token} QA_EMAIL=qa@example.test QA_PASSWORD=qa-password
+    QA_BLOCKED_REASON='no QA_ACCOUNT_PASSWORD in secrets/staging.env'
     run_scenario_as_its_tenant "$work/$1"
   )
 }
@@ -53,6 +61,107 @@ unavailable_blocks() {
   [ "$rc" = 2 ] && [[ "$out" == BLOCKED*"no STACK_TEST_TENANT_WALLET_KEY"* ]]
 }
 expect "without the test tenant its scenarios are BLOCKED, never run as the run's tenant" unavailable_blocks
+test_runs_as_qa_tenant() {
+  [ "$(run_as qa.sh)" = "qa-tenant|qa-token|qa@example.test|qa-password|$work/state/qa-tenant" ]
+}
+expect "a scenario declared tenant: qa runs as the QA customer with its login, in its own state directory" test_runs_as_qa_tenant
+qa_unavailable_blocks() {
+  local out rc
+  out=$(run_as qa.sh test-token '')
+  rc=$?
+  [ "$rc" = 2 ] && [[ "$out" == BLOCKED*"no QA_ACCOUNT_PASSWORD"* ]]
+}
+expect "without the QA tenant its scenarios are BLOCKED, never run as the run's tenant" qa_unavailable_blocks
+safe_scenarios_declare_a_tenant() {
+  local f missing=''
+  for f in "$here"/scenarios/[0-9][0-9]-*.sh; do
+    grep -qx '# staging: safe' "$f" || continue
+    grep -q '^# tenant: ' "$f" || missing+=" $(basename "$f")"
+  done
+  [ -z "$missing" ] || { echo "staging-safe scenarios without a declared tenant:$missing" >&2; return 1; }
+}
+expect "every staging-safe scenario declares the tenant it runs as" safe_scenarios_declare_a_tenant
+
+# The QA declaration is read from the gitops overlay's accounts and
+# customer_billing rows for frameworks-qa, not from any other tenant's rows.
+cat >"$work/bootstrap.yaml" <<'EOF'
+quartermaster:
+  tenants:
+    - alias: frameworks-qa
+      name: FrameWorks QA
+    - alias: frameworks-stack-test
+      name: FrameWorks Stack Test
+
+accounts:
+  - kind: system_operator
+    tenant:
+      ref: quartermaster.system_tenant
+    users:
+      - email: staging@example.test
+        role: owner
+  - kind: customer
+    tenant:
+      ref: quartermaster.tenants[frameworks-qa]
+    users:
+      - email: qa@example.test
+        role: owner
+  - kind: customer
+    tenant:
+      ref: quartermaster.tenants[frameworks-stack-test]
+    users:
+      - email: stack-test@example.test
+        role: owner
+
+purser:
+  customer_billing:
+    - tenant:
+        ref: quartermaster.system_tenant
+      model: postpaid
+      tier: free
+    - tenant:
+        ref: quartermaster.tenants[frameworks-qa]
+      model: postpaid
+      tier: enterprise
+      operator_grant:
+        base_fee: "0"
+        waive_usage: true
+        reason: Internal QA account
+    - tenant:
+        ref: quartermaster.tenants[frameworks-stack-test]
+      model: postpaid
+      tier: developer
+      operator_grant:
+        base_fee: "5"
+        reason: Stack test tenant
+EOF
+declaration_read() {
+  (
+    # shellcheck source=scripts/stack/test-tenant.sh
+    . "$here/test-tenant.sh" || exit 1
+    [ "$(qa_tenant_declaration "$work/bootstrap.yaml")" = $'qa@example.test\tenterprise\t0\ttrue' ]
+  )
+}
+expect "the QA tenant's email, tier and grant come from its own gitops rows" declaration_read
+qa_check() { # qa_check <billing response>: qa_tenant_check's result against the fixture declaration
+  (
+    export STACK_STATE_DIR="$work/qacheck" QA_RESPONSE="$1"
+    mkdir -p "$STACK_STATE_DIR"
+    # shellcheck source=scripts/stack/test-tenant.sh
+    . "$here/test-tenant.sh" || exit 1
+    gql() { printf '%s' "$QA_RESPONSE"; }
+    QA_EMAIL=qa@example.test QA_API_TOKEN=qa-token
+    qa_tenant_check "$work/bootstrap.yaml" >/dev/null
+  )
+}
+qa_check_holds() {
+  qa_check '{"data":{"billingStatus":{"currentTier":{"tierName":"enterprise"}},"billingLifecycle":{"operatorGrant":{"basePrice":"0.00","waiveUsage":true}}}}'
+}
+expect "the sweep passes a QA tenant on its declared tier and grant" qa_check_holds
+qa_check_fails_on_drift() {
+  ! qa_check '{"data":{"billingStatus":{"currentTier":{"tierName":"developer"}},"billingLifecycle":{"operatorGrant":{"basePrice":"0.00","waiveUsage":true}}}}' &&
+    ! qa_check '{"data":{"billingStatus":{"currentTier":{"tierName":"enterprise"}},"billingLifecycle":{"operatorGrant":null}}}'
+}
+expect "the sweep fails a QA tenant whose tier or grant differs from its declaration" qa_check_fails_on_drift
 
 # Stubs: a signer that answers for any key, and a Bridge whose refresh refuses
 # a signed-out jar, whose wallet challenge and sign-in work, and whose password

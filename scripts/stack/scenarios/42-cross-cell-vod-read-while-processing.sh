@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # stack-scenario: default
 # staging: safe
+# tenant: qa
 # The other cell plays a VOD while its origin cell is still processing it, and
 # the same edge keeps playing it once processing has replaced the uploaded
 # source with its output in another container and storage has deleted the

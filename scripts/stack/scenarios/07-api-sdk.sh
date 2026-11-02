@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # stack-scenario: default
 # staging: safe
+# tenant: qa
 # Public API surface: the TS, Go and Python SDKs against the stack (queries,
 # mutations, tenantEvents with a bearer token and no Origin), key rotation and
 # API token webhooks, attemptHistory in the delivery list, and webhook

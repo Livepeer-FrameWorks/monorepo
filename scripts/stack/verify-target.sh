@@ -3,7 +3,9 @@
 # verify-stack. `frameworks cluster stack-target` describes the cluster from the
 # gitops manifest (endpoints, edges, service journals, database access); the run
 # logs in as the platform operator, mints a short-lived API token for its own
-# test streams, and revokes it on exit. Only scenarios declared "staging: safe"
+# test streams, and revokes it on exit. Scenarios declared "# tenant: qa" or
+# "# tenant: test" run as that declared tenant instead (test-tenant.sh). Only
+# scenarios declared "staging: safe"
 # run (scenarios/list.sh); this runner never provisions, restarts, drains or
 # tears anything down.
 #
@@ -121,6 +123,7 @@ cleanup_run() {
   local jwt code endpoint
   rm -rf "$sdk_venv"
   test_tenant_cleanup
+  qa_tenant_cleanup
   # After the sweep: what the scenarios created, while the run's token still works.
   if [ -n "$token_id" ]; then
     cleanup_run_objects "$STACK_API_TOKEN" | tee "$STACK_STATE_DIR/cleanup.log"
@@ -192,11 +195,19 @@ export STACK_TENANT_ID STACK_API_TOKEN
 echo "run API token $token_id for tenant $STACK_TENANT_ID"
 # Scenario objects a killed run left (its ledger died with it, so by name).
 cleanup_run_objects "$STACK_API_TOKEN" | sed 's/^cleanup:/recovering a killed run:/'
-# Scenarios declared "tenant: test" run as the wallet test tenant.
+# Scenarios declared "tenant: test" run as the wallet test tenant, those
+# declared "tenant: qa" as the QA customer.
 for path in "${scenarios[@]}"; do
   if scenario_needs_test_tenant "$path"; then
     test_tenant_login "$gitops/secrets/$cluster.env" "$cluster" ||
       echo "WARN: $TEST_BLOCKED_REASON; test tenant scenarios will report BLOCKED" >&2
+    break
+  fi
+done
+for path in "${scenarios[@]}"; do
+  if scenario_needs_qa_tenant "$path"; then
+    qa_tenant_login "$gitops/secrets/$cluster.env" "$gitops/clusters/$cluster/bootstrap.yaml" "$cluster" ||
+      echo "WARN: $QA_BLOCKED_REASON; QA tenant scenarios will report BLOCKED" >&2
     break
   fi
 done
@@ -311,6 +322,18 @@ if [ "${STACK_SWEEP:-1}" != 0 ]; then
     test_tenant_sweep "$sweep_since" "$sweep_windows"
     rc=$?
     label="sweep test tenant ($(($(date +%s) - sweep_started))s)"
+    case "$rc" in
+      0) summary+=("PASS     $label") ;;
+      2) summary+=("BLOCKED  $label"); blocked=1 ;;
+      *) summary+=("FAIL     $label"); failed=1 ;;
+    esac
+  fi
+  if [ -n "$QA_API_TOKEN" ]; then
+    printf '\n==== sweep (QA tenant) ====\n'
+    sweep_started=$(date +%s)
+    qa_tenant_sweep "$sweep_since" "$sweep_windows" "$gitops/clusters/$cluster/bootstrap.yaml"
+    rc=$?
+    label="sweep QA tenant ($(($(date +%s) - sweep_started))s)"
     case "$rc" in
       0) summary+=("PASS     $label") ;;
       2) summary+=("BLOCKED  $label"); blocked=1 ;;

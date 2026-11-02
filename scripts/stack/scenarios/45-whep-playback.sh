@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # stack-scenario: default
 # staging: safe
+# tenant: qa
 # A live stream plays over WebRTC with WHEP signalling from every edge. Each
 # cell's Foghorn redirects /play/<id>/whep to its edge's Mist WHEP endpoint; a
 # pion client (scripts/stack/whep) POSTs its offer there, connects ICE and

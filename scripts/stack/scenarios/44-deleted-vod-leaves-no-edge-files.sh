@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # stack-scenario: default
 # staging: safe
+# tenant: qa
 # A VOD processed in its origin cell and read through the other cell's edge is
 # deleted; afterwards no edge holds any file of it: not the origin edge's
 # canonical media, its .dtsh, or the upload/ relay cache processing read, and

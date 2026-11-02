@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # stack-scenario: default
 # staging: safe
+# tenant: qa
 # A default record:true stream, pushed past one DVR window and stopped:
 # chapters close, finalize faster than real time, freeze with an accepted
 # .dtsh, keep their id across the stop, announce recording.ready with the

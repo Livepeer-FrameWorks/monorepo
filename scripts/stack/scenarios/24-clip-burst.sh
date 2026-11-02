@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # stack-scenario: default
 # staging: safe
+# tenant: qa
 # Ten clips contend for the same live buffer and processing node. The source
 # stays live until each clip is ready and its thumbnail is published.
 . "$(dirname "$0")/../lib.sh"
