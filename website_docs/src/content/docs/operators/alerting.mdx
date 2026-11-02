@@ -132,6 +132,90 @@ abandoned after 20 attempts (about two hours), recorded as
 Activity selection and enqueue outcomes are recorded in
 `lookout_operator_activity_events_total`.
 
+## Billing and account lifecycle
+
+These warnings cover work Purser and Commodore retry on their own: provider recovery, downgrades,
+moves to Free, grant expiry, tenant closure and account session stops. Each fires after five
+minutes. The queue alerts also fire when a service fails to read its queue more than once in two
+minutes; that points at the service's database rather than at a tenant. The metrics carry no
+tenant label, so every alert below names the command that lists the affected tenants. All commands
+need a platform-operator session. The procedures behind them are in
+[Test and trial accounts](/operators/trial-accounts/#recovery-and-internals).
+
+| Alert                                   | Identify the tenant                                     | Resolve                                                                                   |
+| --------------------------------------- | ------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `PurserProviderWebhookInboxStuck`       | `frameworks admin billing recovery list`                | `recovery checkout`, `recovery upgrade`, or repair the provider or metering it names      |
+| `PurserTierDowngradeHeld`               | `frameworks admin billing recovery list` (held section) | `frameworks admin billing recovery downgrade --tenant-id <tenant> --reason <reason>`      |
+| `PurserFreeFallbackStuck`               | `frameworks admin billing recovery list`                | restore provider access or metering, `recovery notice`, or cancel with `set-tier`         |
+| `PurserOperatorGrantExpiryStuck`        | `frameworks admin billing grant list --include-expired` | correct the billing or pricing error; retries run every five minutes                      |
+| `CommodoreTenantAccountClosureStuck`    | `frameworks admin tenants get <tenant>`                 | restore Commodore's connection to Quartermaster                                           |
+| `CommodoreAccountIngestRevocationStuck` | `frameworks admin tenants get <tenant>`                 | restore the cell, upgrade its Foghorn, or `frameworks admin clusters retire <cluster-id>` |
+
+### Provider recovery
+
+`PurserProviderWebhookInboxStuck` fires when Purser keeps failing at provider activation, a paid
+tier upgrade, a scheduled downgrade's provider price, a suspended-stream stop, tenant billing
+closure or expired-checkout compensation, when a provider settlement has waited more than fourteen
+days, or when Purser cannot read that queue. `recovery list` shows each item with its provider,
+tenant, reservation, state, next attempt and last error. An abandoned checkout is recovered with
+`recovery checkout`, an accepted tier upgrade with `recovery upgrade`. A failed bank refund is
+repaired in the provider's console. Missing metering holds an activation or upgrade at its billing
+boundary until the metering is repaired. Normal settlement waits under fourteen days are not
+failures. See [Checkout reservations](/operators/trial-accounts/#checkout-reservations).
+
+### Held downgrades
+
+`PurserTierDowngradeHeld` fires when a downgrade the provider confirmed is still not applied
+locally past its effective time. The provider already charges the lower tier, and the customer's
+tier changes are refused. The held downgrades section of `recovery list` names each tenant, target
+tier, effective time and closing invoice. `recovery downgrade` previews what holds it: provider
+confirmation, a draft invoice whose metering is incomplete, a `manual_review` invoice waiting for
+cluster pricing, or a pricing refusal. Once nothing holds it, confirming applies it. See
+[Held downgrades](/operators/trial-accounts/#held-downgrades).
+
+### Moves to Free
+
+`PurserFreeFallbackStuck` carries a `stage` label:
+
+- `stage="move"`: provider cancellation, the final invoice or the tier change keeps failing, or a
+  bank settlement has waited over fourteen days. The `free_fallback` rows of `recovery list` name
+  the tenant and the last error. Restore provider access or the missing metering and Purser
+  retries, or cancel the fallback with `frameworks admin billing set-tier`.
+- `stage="notice"`: the grace or completed-move email keeps failing. Fix the tenant's
+  `billing_email`. After five failures the row shows `notice_abandoned`; requeue it with
+  `frameworks admin billing recovery notice --tenant-id <tenant> --reason <reason>`. Mail never
+  blocks the move.
+- no `stage`: Purser cannot read the queue from its database.
+
+See [Free fallback and cancellation](/operators/trial-accounts/#free-fallback-and-cancellation).
+
+### Grant expiry
+
+`PurserOperatorGrantExpiryStuck` fires when a grant past its deadline failed billing-boundary
+reconciliation more than once. `grant list --include-expired` shows each tenant with its expiry
+failures and last error, and `grant show --tenant-id <tenant>` shows one grant in full. Correct the
+reported billing or pricing error; the retry runs automatically and other expiries continue. See
+[Grant expiry](/operators/trial-accounts/#grant-expiry).
+
+### Tenant closure
+
+`CommodoreTenantAccountClosureStuck` fires when a closed tenant's Quartermaster teardown failed more
+than once. Access is already revoked locally, so the account stays closed. `tenants get` shows the
+closure as `retrying` with the last error and next attempt, and Commodore logs each failure as
+`Finish tenant closure` with `tenant_id`. Restore Commodore's connection to Quartermaster; Commodore
+retries every minute.
+
+### Account session stops
+
+`CommodoreAccountIngestRevocationStuck` fires when a deactivated user's or closed tenant's ingest
+stop has not reached every cell that recorded the account's streams. `tenants get` lists each
+pending stop with its cells, the retired ones and the last error, and
+`frameworks cluster diagnose media-authority` shows the same rows on lane `ingest_revocation`.
+Restore the cell, or upgrade its Foghorn if the error is `Unimplemented`. For a cell removed for
+good, `frameworks admin clusters retire <cluster-id> --reason <reason>` settles the stops owed to
+it. The alert aggregates all cells, so silencing it also hides stops pending on other cells. See
+[Session stops](/operators/trial-accounts/#session-stops).
+
 ## Verify
 
 ### Media authority access checks
