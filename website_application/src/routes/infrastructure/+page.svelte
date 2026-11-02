@@ -8,7 +8,10 @@
     GetInfrastructureOverviewStore,
     GetInfrastructureMetricsStore,
     GetServiceInstancesHealthStore,
+    GetNodesConnectionStore,
   } from "$houdini";
+  import { SvelteMap } from "svelte/reactivity";
+  import { clusterStatusLabel, isUnknownClusterStatus } from "$lib/infrastructure/cluster-status";
   import { toast } from "$lib/stores/toast.js";
   import LoadingCard from "$lib/components/LoadingCard.svelte";
   import SkeletonLoader from "$lib/components/SkeletonLoader.svelte";
@@ -53,6 +56,28 @@
   let clusters = $derived(
     $infrastructureStore.data?.clustersConnection?.edges?.map((e) => e.node) ?? []
   );
+
+  // Node counts for clusters whose health is still unknown, so a cluster with
+  // no edge enrolled yet reads as waiting for one.
+  const unknownClusterNodeCounts = new SvelteMap<string, number>();
+
+  async function loadUnknownClusterNodeCounts() {
+    const pending = clusters.filter((cluster) => isUnknownClusterStatus(cluster.healthStatus));
+    await Promise.all(
+      pending.map(async (cluster) => {
+        try {
+          const result = await new GetNodesConnectionStore().fetch({
+            variables: { clusterId: cluster.clusterId, first: 1 },
+            policy: "NetworkOnly",
+          });
+          const count = result.data?.nodesConnection?.totalCount;
+          if (typeof count === "number") unknownClusterNodeCounts.set(cluster.clusterId, count);
+        } catch {
+          // Without a count the raw status stays on the card.
+        }
+      })
+    );
+  }
 
   let serviceHealth = $derived(
     $serviceInstancesHealthStore.data?.analytics?.infra?.serviceInstancesHealth ?? []
@@ -165,6 +190,7 @@
           variables: { timeRange: timeRangeInput, first: metricsFirst, noCache: false },
         }),
         serviceInstancesHealthStore.fetch().catch(() => null),
+        loadUnknownClusterNodeCounts(),
       ]);
 
       if ($infrastructureStore.errors?.length) {
@@ -438,7 +464,10 @@
                             variant="outline"
                             class="text-xs uppercase {getStatusBadgeClass(cluster.healthStatus)}"
                           >
-                            {cluster.healthStatus}
+                            {clusterStatusLabel(
+                              cluster.healthStatus,
+                              unknownClusterNodeCounts.get(cluster.clusterId) ?? null
+                            )}
                           </Badge>
                         </div>
                       </div>

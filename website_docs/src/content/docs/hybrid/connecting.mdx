@@ -149,6 +149,8 @@ This shows:
 
 For enrollment and heartbeat status, check the dashboard—your node should appear under **Infrastructure → Nodes** once enrolled.
 
+Until its first node enrolls, a new cluster shows **Waiting for first edge** on the **Infrastructure** overview and on its cluster page. Once an edge enrolls and reports in, the cluster shows its health instead.
+
 ## How Traffic Gets Routed
 
 Once enrolled, Foghorn (the load balancer) knows about your node. When a viewer requests a stream:

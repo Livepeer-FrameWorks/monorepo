@@ -27,6 +27,7 @@
   import { Badge } from "$lib/components/ui/badge";
   import { Button } from "$lib/components/ui/button";
   import { getIconComponent } from "$lib/iconUtils";
+  import { clusterStatusLabel } from "$lib/infrastructure/cluster-status";
   import { resolveTimeRange, TIME_RANGE_OPTIONS } from "$lib/utils/time-range";
   import { hasInfrastructureOperatorRole } from "$lib/utils/infrastructure-access";
   import {
@@ -82,6 +83,9 @@
   let maskedNodes = $derived($nodesStore.data?.nodesConnection?.edges?.map((e) => e.node) ?? []);
   let nodes = $derived(maskedNodes.map((node) => get(fragment(node, nodeCoreStore))));
   let totalNodeCount = $derived($nodesStore.data?.nodesConnection?.totalCount ?? 0);
+  let loadedNodeCount = $derived(
+    $nodesStore.data?.nodesConnection ? $nodesStore.data.nodesConnection.totalCount : null
+  );
 
   function unmaskBootstrapToken(
     masked: { readonly " $fragments": { BootstrapTokenFields: object } } | null | undefined
@@ -482,7 +486,7 @@
                 variant="outline"
                 class="text-xs uppercase {getStatusBadgeClass(cluster.healthStatus)}"
               >
-                {cluster.healthStatus}
+                {clusterStatusLabel(cluster.healthStatus, loadedNodeCount)}
               </Badge>
             {/if}
           </div>
