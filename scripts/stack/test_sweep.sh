@@ -174,9 +174,8 @@ printf '%s\t%s\n' '^Host crashes .*MistInBuffer' 'test reason' >>"$work/doctor-o
 expect "every FAIL allowlisted passes" passes doctor "$work/doctor.log" "$work/doctor-one.tsv"
 
 # ---- doctor after a Kafka controller restart ----------------------------------
-# Staging eu-1, 2026-11-02: release apply stopped the leading controller, which
-# handed leadership to 102; the doctor before 16c94f67f counted the handover as
-# an unplanned leader change.
+# A planned controller restart that the doctor reports as an unplanned leader
+# change.
 now=1793628000
 printf 'ops@10.0.0.11\tframeworks-kafka-controller.service\t%s\n' "$((now - 900))" >"$work/kafka-restarts.tsv"
 cat >"$work/doctor-kafka-red.log" <<'LOG'

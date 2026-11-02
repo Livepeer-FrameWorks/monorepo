@@ -19,7 +19,7 @@ properties of every entity the run created, whichever scenario created it:
   doctor     the operator CLI's cluster doctor reports no unexplained FAIL; when
              a Kafka controller restarted inside the doctor's quorum window,
              every Kafka KRaft quorum check ran and passed
-  host      no container restarted or was OOM-killed, no core dump, no
+  host       no container restarted or was OOM-killed, no core dump, no
              wildcard listener outside an edge's public set
 
 Subcommands:
