@@ -133,7 +133,6 @@ export default defineConfig({
   plugins: [workerServePlugin(), webWorkerPlugin(), react()],
   resolve: {
     alias: {
-      "@": path.resolve(__dirname, "src"),
       // Player packages (npm_player/packages/*)
       // CSS: wrapper re-exports core, point to source for dev (no build step needed)
       "@livepeer-frameworks/player-react/player.css": path.resolve(
@@ -159,6 +158,11 @@ export default defineConfig({
       "@livepeer-frameworks/player-core": path.resolve(__dirname, "../packages/core/src"),
       "@livepeer-frameworks/player-react": path.resolve(__dirname, "../packages/react/src"),
       "@livepeer-frameworks/player-svelte": path.resolve(__dirname, "../packages/svelte/src"),
+      "@livepeer-frameworks/player-tester/tester.css": path.resolve(
+        __dirname,
+        "../packages/tester/src/tester.css"
+      ),
+      "@livepeer-frameworks/player-tester": path.resolve(__dirname, "../packages/tester/src"),
       // StreamCrafter packages (npm_studio/packages/*)
       "@livepeer-frameworks/streamcrafter-react/streamcrafter.css": path.resolve(
         __dirname,
@@ -212,6 +216,7 @@ export default defineConfig({
     exclude: [
       "@livepeer-frameworks/player-core",
       "@livepeer-frameworks/player-react",
+      "@livepeer-frameworks/player-tester",
       "@livepeer-frameworks/streamcrafter-core",
       "@livepeer-frameworks/streamcrafter-react",
     ],

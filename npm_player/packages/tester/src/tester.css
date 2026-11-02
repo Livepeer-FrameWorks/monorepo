@@ -1,0 +1,443 @@
+/*
+ * Stream tester styles. Colours follow the host page's shadcn-style HSL tokens
+ * (--background, --card, --foreground, --muted-foreground, --border, --primary,
+ * --destructive) and fall back to the FrameWorks dark palette.
+ */
+.fwt-root {
+  --fwt-bg: hsl(var(--background, 235 19% 13%));
+  --fwt-surface: hsl(var(--card, 229 24% 19%));
+  --fwt-fg: hsl(var(--foreground, 229 73% 86%));
+  --fwt-muted: hsl(var(--muted-foreground, 229 35% 75%));
+  --fwt-border: hsl(var(--border, 229 24% 31%));
+  --fwt-accent: hsl(var(--primary, 225 86% 70%));
+  --fwt-accent-fg: hsl(var(--primary-foreground, 235 19% 13%));
+  --fwt-danger: hsl(var(--destructive, 349 89% 72%));
+  --fwt-radius: var(--radius, 0.75rem);
+
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  color: var(--fwt-fg);
+  font-size: 0.875rem;
+  line-height: 1.4;
+}
+
+.fwt-root *,
+.fwt-root *::before,
+.fwt-root *::after {
+  box-sizing: border-box;
+}
+
+.fwt-root a {
+  color: var(--fwt-accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.fwt-root [hidden] {
+  display: none !important;
+}
+
+.fwt-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.fwt-toolbar__end {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.fwt-tabs {
+  display: inline-flex;
+  gap: 0.25rem;
+  border-bottom: 1px solid var(--fwt-border);
+}
+
+.fwt-tabs__tab {
+  appearance: none;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--fwt-muted);
+  font: inherit;
+  font-weight: 600;
+  padding: 0.5rem 1rem;
+  cursor: pointer;
+}
+
+.fwt-tabs__tab[aria-selected="true"] {
+  color: var(--fwt-fg);
+  border-bottom-color: var(--fwt-accent);
+}
+
+.fwt-tabs--small .fwt-tabs__tab {
+  padding: 0.35rem 0.75rem;
+  font-weight: 500;
+}
+
+.fwt-tabs__tab:focus-visible,
+.fwt-segmented__item:focus-visible,
+.fwt-button:focus-visible,
+.fwt-input:focus-visible,
+.fwt-select:focus-visible {
+  outline: 2px solid var(--fwt-accent);
+  outline-offset: 2px;
+}
+
+.fwt-play,
+.fwt-publish {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.fwt-panel {
+  background: var(--fwt-surface);
+  border: 1px solid var(--fwt-border);
+  border-radius: var(--fwt-radius);
+  padding: 1rem;
+  min-width: 0;
+}
+
+.fwt-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.fwt-panel__title {
+  margin: 0 0 0.75rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.fwt-panel__header .fwt-panel__title {
+  margin: 0;
+}
+
+.fwt-panel__subtitle {
+  margin: 1rem 0 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fwt-muted);
+}
+
+.fwt-source {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.fwt-source__top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.fwt-source__fields {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.75rem;
+}
+
+.fwt-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  min-width: 0;
+}
+
+.fwt-field--grow {
+  flex: 1 1 18rem;
+}
+
+.fwt-field--inline {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.fwt-label {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--fwt-muted);
+}
+
+.fwt-input,
+.fwt-select {
+  width: 100%;
+  min-height: 2.25rem;
+  padding: 0.4rem 0.65rem;
+  border: 1px solid var(--fwt-border);
+  border-radius: calc(var(--fwt-radius) * 0.6);
+  background: var(--fwt-bg);
+  color: var(--fwt-fg);
+  font: inherit;
+}
+
+.fwt-select {
+  width: auto;
+}
+
+.fwt-button {
+  appearance: none;
+  min-height: 2.25rem;
+  padding: 0.4rem 1rem;
+  border: 1px solid var(--fwt-accent);
+  border-radius: calc(var(--fwt-radius) * 0.6);
+  background: var(--fwt-accent);
+  color: var(--fwt-accent-fg);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.fwt-button:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.fwt-button--ghost {
+  border-color: var(--fwt-border);
+  background: transparent;
+  color: var(--fwt-fg);
+  font-weight: 500;
+}
+
+.fwt-segmented {
+  display: inline-flex;
+  padding: 0.2rem;
+  border: 1px solid var(--fwt-border);
+  border-radius: calc(var(--fwt-radius) * 0.6);
+  background: var(--fwt-bg);
+}
+
+.fwt-segmented__item {
+  appearance: none;
+  border: 0;
+  border-radius: calc(var(--fwt-radius) * 0.45);
+  background: transparent;
+  color: var(--fwt-muted);
+  font: inherit;
+  padding: 0.3rem 0.75rem;
+  cursor: pointer;
+}
+
+.fwt-segmented__item[aria-checked="true"] {
+  background: var(--fwt-surface);
+  color: var(--fwt-fg);
+  font-weight: 600;
+}
+
+.fwt-segmented--small {
+  align-self: flex-start;
+}
+
+.fwt-note,
+.fwt-muted {
+  margin: 0;
+  color: var(--fwt-muted);
+}
+
+.fwt-alert {
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  border-radius: calc(var(--fwt-radius) * 0.6);
+}
+
+.fwt-alert--error {
+  border: 1px solid var(--fwt-danger);
+  color: var(--fwt-danger);
+}
+
+.fwt-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1rem;
+}
+
+@media (min-width: 1024px) {
+  .fwt-workspace {
+    grid-template-columns: minmax(0, 1fr) 20rem;
+  }
+}
+
+.fwt-stage {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.fwt-media {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border-radius: var(--fwt-radius);
+  background: #000;
+}
+
+.fwt-stage__bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.fwt-details summary {
+  cursor: pointer;
+  color: var(--fwt-muted);
+}
+
+.fwt-details__body {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 0.5rem;
+}
+
+.fwt-overlay-message {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 1rem;
+  text-align: center;
+  color: hsl(0 0% 80%);
+}
+
+.fwt-mistplayer,
+.fwt-mistplayer__target {
+  width: 100%;
+  height: 100%;
+}
+
+.fwt-diagnostics {
+  max-height: 40rem;
+  overflow-y: auto;
+}
+
+.fwt-stats {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.3rem 0.75rem;
+  margin: 0;
+}
+
+.fwt-stat {
+  display: contents;
+}
+
+.fwt-stat dt {
+  color: var(--fwt-muted);
+}
+
+.fwt-stat dd {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.fwt-list {
+  margin: 0;
+  padding-left: 1rem;
+}
+
+.fwt-list__item--active {
+  font-weight: 600;
+}
+
+.fwt-log {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.75rem;
+}
+
+.fwt-log li {
+  padding: 0.15rem 0;
+  border-bottom: 1px solid var(--fwt-border);
+}
+
+.fwt-log li[data-tone="warn"] {
+  color: hsl(36 66% 64%);
+}
+
+.fwt-log li[data-tone="error"] {
+  color: var(--fwt-danger);
+}
+
+.fwt-log time {
+  color: var(--fwt-muted);
+}
+
+.fwt-studio {
+  position: relative;
+  min-height: 16rem;
+  overflow: hidden;
+  border-radius: var(--fwt-radius);
+  background: #000;
+}
+
+.fwt-copy-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.fwt-copy-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.fwt-copy-row__text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.fwt-mono {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.fwt-code {
+  margin: 0.75rem 0 0;
+  padding: 0.75rem;
+  overflow-x: auto;
+  border-radius: calc(var(--fwt-radius) * 0.6);
+  background: var(--fwt-bg);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8rem;
+}
+
+.fwt-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.25rem;
+}
