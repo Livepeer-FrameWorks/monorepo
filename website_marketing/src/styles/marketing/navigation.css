@@ -85,6 +85,78 @@
     transform: scaleX(1);
   }
 
+  .nav-menu {
+    position: relative;
+  }
+
+  .nav-menu__panel {
+    position: absolute;
+    top: calc(100% + 0.85rem);
+    left: 50%;
+    width: 18rem;
+    transform: translateX(-50%);
+    border: 1px solid hsl(var(--border) / 0.6);
+    background-color: color-mix(
+      in srgb,
+      hsl(var(--brand-surface-strong)) 96%,
+      rgba(var(--fx-rgb-12-14-24) / 0.96)
+    );
+    box-shadow: 0 22px 48px rgba(var(--fx-rgb-10-12-22) / 0.48);
+    backdrop-filter: blur(14px);
+  }
+
+  /* Bridges the gap between the trigger and the panel so a pointer moving
+     down into the panel does not leave the menu. */
+  .nav-menu__panel::before {
+    content: "";
+    position: absolute;
+    inset: -0.85rem 0 100% 0;
+  }
+
+  .nav-menu__panel[hidden] {
+    display: none;
+  }
+
+  .nav-menu__list {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .nav-menu__list > li + li {
+    border-top: 1px solid hsl(var(--border) / 0.4);
+  }
+
+  .nav-menu__item {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    padding: 0.75rem 1rem;
+    color: hsl(var(--foreground));
+    transition:
+      background-color 0.2s ease,
+      color 0.2s ease;
+  }
+
+  .nav-menu__item:hover,
+  .nav-menu__item:focus-visible,
+  .nav-menu__item.is-active {
+    background-color: hsl(var(--muted) / 0.35);
+    color: hsl(var(--accent));
+  }
+
+  .nav-menu__label {
+    display: inline-flex;
+    align-items: center;
+    font-size: 0.875rem;
+    font-weight: 600;
+  }
+
+  .nav-menu__description {
+    font-size: 0.78rem;
+    line-height: 1.4;
+    color: hsl(var(--muted-foreground));
+  }
+
   .beta-badge {
     border: 1px solid hsl(var(--accent) / 0.45);
     background: linear-gradient(

@@ -1,6 +1,7 @@
 import { Link } from "react-router";
 import config from "../config";
 import DiscordBadge from "./DiscordBadge";
+import { footerColumns } from "@/lib/siteLinks";
 
 const GithubIcon = (props) => (
   <svg viewBox="0 0 24 24" fill="currentColor" {...props}>
@@ -14,112 +15,38 @@ const XIcon = (props) => (
   </svg>
 );
 
+const linkClass = "text-sm text-muted-foreground transition-colors hover:text-foreground";
+
+const FooterLink = ({ link }) =>
+  link.to ? (
+    <Link to={link.to} className={linkClass}>
+      {link.label}
+    </Link>
+  ) : (
+    <a
+      href={link.href}
+      className={linkClass}
+      {...(link.external ? { target: "_blank", rel: "noopener noreferrer" } : {})}
+    >
+      {link.label}
+    </a>
+  );
+
 const Footer = () => {
   return (
     <footer className="mt-0 border-t border-border/60 bg-background/80">
       <div className="max-w-7xl mx-auto px-4 py-8 sm:px-6 lg:px-8">
-        <div className="mb-8 grid grid-cols-1 gap-8 md:grid-cols-4">
-          {/* Company */}
-          <div>
-            <h3 className="mb-3 text-sm font-semibold text-foreground">Company</h3>
-            <div className="flex flex-col gap-2">
-              <Link
-                to="/about"
-                className="text-sm text-muted-foreground transition-colors hover:text-foreground"
-              >
-                About
-              </Link>
-              <Link
-                to="/showcase"
-                className="text-sm text-muted-foreground transition-colors hover:text-foreground"
-              >
-                Showcase
-              </Link>
-              <Link
-                to="/stream-test"
-                className="text-sm text-muted-foreground transition-colors hover:text-foreground"
-              >
-                Stream test
-              </Link>
-              <Link
-                to="/contact"
-                className="text-sm text-muted-foreground transition-colors hover:text-foreground"
-              >
-                Contact
-              </Link>
+        <div className="mb-8 grid grid-cols-2 gap-8 md:grid-cols-4">
+          {footerColumns(config).map((column) => (
+            <div key={column.id}>
+              <h2 className="mb-3 text-sm font-semibold text-foreground">{column.title}</h2>
+              <div className="flex flex-col gap-2">
+                {column.links.map((link) => (
+                  <FooterLink key={link.id} link={link} />
+                ))}
+              </div>
             </div>
-          </div>
-
-          {/* Resources */}
-          <div>
-            <h3 className="mb-3 text-sm font-semibold text-foreground">Resources</h3>
-            <div className="flex flex-col gap-2">
-              <a
-                href={config.docsUrl}
-                className="text-sm text-muted-foreground transition-colors hover:text-foreground"
-              >
-                Documentation
-              </a>
-              <Link
-                to="/status"
-                className="text-sm text-muted-foreground transition-colors hover:text-foreground"
-              >
-                Status
-              </Link>
-              <a
-                href={`${config.docsUrl.replace(/\/+$/, "")}/roadmap`}
-                className="text-sm text-muted-foreground transition-colors hover:text-foreground"
-              >
-                Roadmap
-              </a>
-            </div>
-          </div>
-
-          {/* Product */}
-          <div>
-            <h3 className="mb-3 text-sm font-semibold text-foreground">Product</h3>
-            <div className="flex flex-col gap-2">
-              <Link
-                to="/pricing"
-                className="text-sm text-muted-foreground transition-colors hover:text-foreground"
-              >
-                Pricing
-              </Link>
-              <a
-                href={config.githubUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-sm text-muted-foreground transition-colors hover:text-foreground"
-              >
-                GitHub
-              </a>
-            </div>
-          </div>
-
-          {/* Legal */}
-          <div>
-            <h3 className="mb-3 text-sm font-semibold text-foreground">Legal</h3>
-            <div className="flex flex-col gap-2">
-              <Link
-                to="/privacy"
-                className="text-sm text-muted-foreground transition-colors hover:text-foreground"
-              >
-                Privacy
-              </Link>
-              <Link
-                to="/terms"
-                className="text-sm text-muted-foreground transition-colors hover:text-foreground"
-              >
-                Terms
-              </Link>
-              <Link
-                to="/aup"
-                className="text-sm text-muted-foreground transition-colors hover:text-foreground"
-              >
-                AUP
-              </Link>
-            </div>
-          </div>
+          ))}
         </div>
 
         <div className="flex flex-col items-center justify-between gap-4 border-t border-border/60 pt-8 md:flex-row">
