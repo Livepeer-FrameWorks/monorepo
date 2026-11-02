@@ -29,7 +29,7 @@ worth keeping during the cut-over.
   sprite-sheet seek previews (≈ Mux storyboard) · self-hosting and hybrid hosting · MCP, wallet
   auth, and x402 for agents · Skipper · experimental device-discovery productization.
 - **What's not yet at parity:** Mux Data-class QoE breadth — FrameWorks now has first-party view-level QoE (rebuffering, frame drops, startup, VOD retention) for its own player, but cross-player coverage and ad observability are still maturing · DRM · live auto-captions · productized custom-domain SKU · number of official server-side SDKs (Mux ships Node/Python/Ruby/Go/PHP/Elixir/
-  Java/.NET; FrameWorks ships TypeScript, Go, and Python) · built-in referrer/UA playback restrictions as a no-code policy · Master Access download. See [the gap list](#whats-not-yet-at-parity-and-whats-coming) before
+  Java/.NET; FrameWorks ships TypeScript, Go, and Python) · built-in referrer/UA playback restrictions as a no-code policy · Master Access download. See [what is up next](#whats-up-next-and-whats-not-on-the-roadmap) before
   cutting over production traffic.
 
 <Aside type="caution" title="Read before cutting over production traffic">
@@ -361,41 +361,49 @@ over once you trust the numbers.
   the dashboard, the docs (`⌘J`), or MCP.
 - **Player packages** for React, Svelte, Web Components, and vanilla JS.
 
-## What's not yet at parity, and what's coming
+## What's up next, and what's not on the roadmap
 
 Mux ships several things FrameWorks doesn't have a one-for-one answer for yet. Check which of
-these you depend on before cutting over.
+these you depend on before cutting over. The statuses come from the [roadmap](/roadmap), which
+shows relative order, not dates. None of the up-next items are available today.
 
-- **Mux Data-class view-level QoE analytics.** Mux Data is best-in-class here — view-level
-  traces, ad observability, and a player-agnostic SDK that spans Video.js, hls.js, Shaka,
-  native HTML5, Roku, Chromecast, and OTT surfaces. FrameWorks has closed a good chunk of
-  this: the FrameWorks player now reports view-level QoE — rebuffering ratio, frame drops,
-  startup time-to-first-frame, bitrate/rendition switches, exit-before-start, and per-asset
-  VOD retention/watch-density — surfaced in the dashboard at `/analytics/qoe`. What's still on
-  the [roadmap](/roadmap#view-level-qoe-analytics) is the breadth Mux Data has: QoE from
-  third-party / non-FrameWorks players and ad-specific observability. If your stack leans on
-  those today, weigh that gap before cutting over.
+### Up next
 
-- **DRM** — Widevine, PlayReady, and FairPlay are in development; not GA. Mux ships productized
-  DRM today.
-- **Live auto-captions / transcription** — on the roadmap, not shipping. Mux ships live
-  auto-captions today.
-- **Custom-domain availability depends on billing entitlement.** Mux offers productized
-  custom-domain delivery. FrameWorks materializes explicit platform-subdomain and BYO-domain
-  entitlements from the active subscription; downgrade tears down served DNS/TLS state while
-  retaining the requested name for later re-entitlement.
-- **Number of official server-side SDKs.** Mux ships official SDKs for Node, Python,
-  Ruby, Go, PHP, Elixir, Java, and .NET, all covering both Mux Video and Mux Data. FrameWorks
-  ships [SDKs](/builders/sdks) for TypeScript (Node and browsers), Go, and Python, plus the
-  player suite (`@livepeer-frameworks/player-*`); for Ruby, PHP, Elixir, Java, and .NET, use
-  GraphQL codegen against the public schema.
-- **Built-in referrer / user-agent playback restrictions.** Mux exposes them as a no-code
-  policy. The webhook playback policy can express the same rules, but it's not a toggle.
-- **Master Access** — the downloadable original of an asset.
-- **Frame-accurate clip trimming.** FrameWorks clips today are GOP-aligned; Mux offers both
-  asset-clips (frame-accurate) and instant clips (segment-level).
-- **Live captions / subtitle track lifecycle webhooks.** Tracked alongside the captions
-  feature.
+- **[DRM](/roadmap#drm).** Widevine, PlayReady, and FairPlay are in development. Landing it
+  unblocks premium catalogs that Mux protects with productized DRM today; until then, keep those
+  titles on their current provider.
+- **[Live AI Processing](/roadmap#live-ai-processing).** Brings live transcription on the media
+  edge, which unblocks the live auto-captions Mux ships today. Caption tracks and their
+  lifecycle webhooks follow with it.
+- **[Built-In Password and Geo Rules](/roadmap#built-in-password-and-geo-rules).** Turns
+  password and country rules into switches on a stream. Referrer and user-agent restrictions
+  still go through the [webhook playback policy](/builders/playback-access-control), which can
+  express them but is not a toggle.
+
+### Available today, working differently
+
+- **[View-level QoE analytics](/roadmap#view-level-qoe-analytics).** The FrameWorks player
+  reports rebuffering ratio, frame drops, time to first frame, rendition switches,
+  exit-before-start, and per-asset VOD retention at `/analytics/qoe`. Mux Data's breadth is not
+  matched yet: QoE from third-party players (Video.js, hls.js, Shaka, native HTML5, Roku,
+  Chromecast) and ad observability are still ahead. If your dashboards depend on those, weigh the
+  gap before cutting over.
+- **Custom domains.** Platform subdomains and your own domains are tied to the plan's
+  entitlement. A downgrade removes the served DNS and TLS state and keeps the requested name for
+  when the entitlement returns.
+
+### Later, on the roadmap
+
+- **[More SDK languages](/roadmap#more-sdk-languages).** FrameWorks ships
+  [SDKs](/builders/sdks) for TypeScript (Node and browsers), Go, and Python, plus the player
+  packages. Mux also covers Ruby, PHP, Elixir, Java, and .NET; for those, use GraphQL codegen
+  against the public schema until generated SDKs land.
+
+### Not on the roadmap
+
+- **Master Access.** There is no downloadable copy of the original upload.
+- **Frame-accurate clip trimming.** Clips are GOP-aligned. Mux offers frame-accurate asset
+  clips alongside segment-level instant clips.
 
 ## Beta and tricky bits
 

@@ -18,7 +18,7 @@ Livepeer Studio is a hosted Livepeer gateway; FrameWorks is another gateway on t
 - **Capabilities to evaluate:** E-RTMP ingest (HEVC/AV1 contribution over RTMP) · SRT ingest · LL-HLS/DASH delivery · sprite-sheet seek previews · AV1 in the codec list · self-hosting / hybrid options · MCP, wallet auth, and x402 for agents · Skipper · experimental device-discovery productization.
 - **What's not yet at parity:** AI Pipelines and C2PA signing. TypeScript, Go, and Python
   [SDKs](/builders/sdks) ship. See
-  [the gap list](#whats-not-yet-at-parity-and-whats-coming) before planning a production cutover.
+  [the gap list](#whats-up-next-and-whats-not-on-the-roadmap) before planning a production cutover.
 
 <Aside type="caution" title="Read before cutting over production traffic">
   Production-grade items still in motion: published billing rates, hybrid-edge runbooks, DRM, and
@@ -338,15 +338,21 @@ Run a low-traffic test stream through both platforms in parallel for a day. Watc
 - **Skipper** — an in-product AI consultant for API discovery and diagnostics. Reach it from the dashboard, the docs (`⌘J`), or MCP.
 - **Player packages** for React, Svelte, Web Components, and vanilla JS.
 
-## What's not yet at parity, and what's coming
+## What's up next, and what's not on the roadmap
 
-Current gaps to account for:
+The statuses come from the [roadmap](/roadmap), which shows relative order, not dates. None of
+the up-next items are available today.
 
-- **AI Pipelines** (text-to-image, image-to-video, ASR, live-video-to-video, segmentation) — not
-  exposed as a FrameWorks API today. The Livepeer team's productized AI offering is
-  [Daydream](https://daydream.live/) (real-time AI video, runs on the same Livepeer network);
-  keep AI workloads there or on existing managed Livepeer surfaces until FrameWorks exposes an
-  equivalent.
+### Up next
+
+- **[Live AI Processing](/roadmap#live-ai-processing).** Runs models such as YOLO detection and
+  Parakeet transcription on the media edge, with heavy models deferred to Livepeer compute.
+  Landing it unblocks the workloads Studio's AI Pipelines covered, such as ASR, segmentation and
+  live video-to-video. Until then, keep AI workloads on [Daydream](https://daydream.live/) or your
+  existing Livepeer surfaces.
+
+### Not on the roadmap
+
 - **C2PA signing and creator-ID provenance on transcode** — not exposed as a public FrameWorks API
   today.
 - **Derived thumbnail asset enforcement** — playback access control protects endpoint resolution

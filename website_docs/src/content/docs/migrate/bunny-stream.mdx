@@ -314,17 +314,46 @@ Bunny is the better choice for:
 - **Native iOS (Swift) and Android (Kotlin) SDKs** for app developers.
 - **Bundled adjacent products** — Storage, DNS, Optimizer, Shield, Magic Containers in one account.
 
-## What's not yet at parity, and what's coming
+## What's up next, and what's not on the roadmap
 
-- **DRM** (FairPlay / Widevine / PlayReady) — in development.
-- **Automatic chapter generation, transcription, caption auto-generation** — Live Transcription, StreamCrafter cloud production, and Video Analysis are on the [roadmap](/roadmap).
-- **Per-video heatmaps and retention curves** — per-asset watch-density and retention curves now ship for the FrameWorks player; broader cross-player view-level QoE is still on the [roadmap](/roadmap#view-level-qoe-analytics).
-- **Per-region replication knob** — FrameWorks uses cluster placement instead of a 1-of-N replication slider; if you used Bunny's 1–9 region replication, plan which cluster (or set of hybrid edges) to anchor your assets to.
-- **Managed iframe-embed-as-a-product** — `<fw-player>` is the closest replacement.
-- **Official PHP, C#, and Java SDKs** — the TypeScript, Go, and Python [SDKs](/builders/sdks) ship; for other languages, use GraphQL codegen against the public schema and a Standard Webhooks library.
-- **Bulk library import** — `importVodAsset` covers `POST /fetch` one video at a time, but there is no one-shot Bunny → FrameWorks library importer. [Open an in-app ticket](%APP_URL%/support) for sizeable libraries.
-- **Watermarking as a managed feature** — possible via custom transcode profiles on dedicated / self-hosted clusters, not as a tenant-level toggle.
-- **VOD asset metadata-edit mutation** — title and description are set on `createVodUpload`; there's no `updateVodAsset` today.
+The statuses come from the [roadmap](/roadmap), which shows relative order, not dates. None of
+the up-next items are available today.
+
+### Up next
+
+- **[DRM](/roadmap#drm).** FairPlay, Widevine, and PlayReady are in development. Landing it
+  unblocks the catalogs you protect with MediaCage today; until then, keep DRM titles on Bunny.
+- **[Live AI Processing](/roadmap#live-ai-processing).** Brings transcription on the media edge,
+  which unblocks generated captions in place of Transcribe AI. Automatic chapters and generated
+  titles build on the same layer.
+- **[Composition and SSAI](/roadmap#composition-and-ssai).** Adds server-side logos, watermarks,
+  and lower thirds, which unblocks watermarking as a managed feature. Today, a watermark needs a
+  custom transcode profile on a dedicated or self-hosted cluster, or StreamCrafter's overlays in
+  the browser for live streams.
+
+### Available today, working differently
+
+- **[View-level QoE analytics](/roadmap#view-level-qoe-analytics).** Per-asset watch density
+  and retention curves ship for the FrameWorks player. QoE from third-party players is still
+  ahead.
+- **Region replication.** FrameWorks places assets by cluster instead of a 1-of-N replication
+  slider. If you used Bunny's 1–9 region replication, plan which cluster, or which set of hybrid
+  edges, anchors your assets.
+- **Embeds.** `<fw-player>` and the framework packages replace the managed iframe embed.
+
+### Later, on the roadmap
+
+- **[More SDK languages](/roadmap#more-sdk-languages).** The TypeScript, Go, and Python
+  [SDKs](/builders/sdks) ship. For PHP, C#, and Java, use GraphQL codegen against the public
+  schema and a Standard Webhooks library until generated SDKs land.
+
+### Not on the roadmap
+
+- **Bulk library import.** `importVodAsset` covers `POST /fetch` one video at a time; there is no
+  one-shot Bunny library importer. [Open an in-app ticket](%APP_URL%/support) for sizeable
+  libraries so we can scope the move.
+- **VOD metadata edits.** Title and description are set on `createVodUpload`; there is no
+  `updateVodAsset` mutation.
 
 ## Beta and tricky bits
 
