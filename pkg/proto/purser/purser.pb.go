@@ -13921,10 +13921,13 @@ type AdminListCheckoutRecoveryResponse struct {
 	HasMore bool                     `protobuf:"varint,2,opt,name=has_more,json=hasMore,proto3" json:"has_more,omitempty"`
 	Entries []*CheckoutRecoveryAudit `protobuf:"bytes,3,rep,name=entries,proto3" json:"entries,omitempty"` // Operator requests when history=true.
 	// Provider-confirmed downgrades still unapplied past the daily applier grace,
-	// the set PurserTierDowngradeHeld alerts on. Listed on the first page only.
+	// the set PurserTierDowngradeHeld alerts on. Listed on the first page only,
+	// up to the page limit.
 	HeldDowngrades []*HeldTierDowngrade `protobuf:"bytes,4,rep,name=held_downgrades,json=heldDowngrades,proto3" json:"held_downgrades,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// More held downgrades exist than the page limit lists; narrow by tenant.
+	HeldDowngradesHasMore bool `protobuf:"varint,5,opt,name=held_downgrades_has_more,json=heldDowngradesHasMore,proto3" json:"held_downgrades_has_more,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *AdminListCheckoutRecoveryResponse) Reset() {
@@ -13983,6 +13986,13 @@ func (x *AdminListCheckoutRecoveryResponse) GetHeldDowngrades() []*HeldTierDowng
 		return x.HeldDowngrades
 	}
 	return nil
+}
+
+func (x *AdminListCheckoutRecoveryResponse) GetHeldDowngradesHasMore() bool {
+	if x != nil {
+		return x.HeldDowngradesHasMore
+	}
+	return false
 }
 
 // HeldTierDowngrade identifies one downgrade the applier has not flipped.
@@ -14149,7 +14159,9 @@ func (x *AdminRecoverTierDowngradeRequest) GetTargetTierId() string {
 // AdminRecoverTierDowngradeResponse reports the downgrade after the request.
 type AdminRecoverTierDowngradeResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// held (preview), applied, invoice_held, awaiting_provider or refused.
+	// A preview names what holds the downgrade: invoice_held, awaiting_provider,
+	// refused, or due when nothing holds it and the daily applier has not run.
+	// A confirmation reports applied, invoice_held, awaiting_provider or refused.
 	Status    string             `protobuf:"bytes,1,opt,name=status,proto3" json:"status,omitempty"`
 	Downgrade *HeldTierDowngrade `protobuf:"bytes,2,opt,name=downgrade,proto3" json:"downgrade,omitempty"`
 	// What holds the downgrade and how to release it, or the applied outcome.
@@ -16284,12 +16296,13 @@ const file_purser_proto_rawDesc = "" +
 	"\famount_cents\x18\v \x01(\x03R\vamountCents\x12\x1a\n" +
 	"\bcurrency\x18\f \x01(\tR\bcurrency\x12-\n" +
 	"\x12reservation_status\x18\r \x01(\tR\x11reservationStatus\x12!\n" +
-	"\famount_known\x18\x0e \x01(\bR\vamountKnown\"\xef\x01\n" +
+	"\famount_known\x18\x0e \x01(\bR\vamountKnown\"\xa8\x02\n" +
 	"!AdminListCheckoutRecoveryResponse\x122\n" +
 	"\x05items\x18\x01 \x03(\v2\x1c.purser.CheckoutRecoveryItemR\x05items\x12\x19\n" +
 	"\bhas_more\x18\x02 \x01(\bR\ahasMore\x127\n" +
 	"\aentries\x18\x03 \x03(\v2\x1d.purser.CheckoutRecoveryAuditR\aentries\x12B\n" +
-	"\x0fheld_downgrades\x18\x04 \x03(\v2\x19.purser.HeldTierDowngradeR\x0eheldDowngrades\"\x85\x02\n" +
+	"\x0fheld_downgrades\x18\x04 \x03(\v2\x19.purser.HeldTierDowngradeR\x0eheldDowngrades\x127\n" +
+	"\x18held_downgrades_has_more\x18\x05 \x01(\bR\x15heldDowngradesHasMore\"\x85\x02\n" +
 	"\x11HeldTierDowngrade\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12$\n" +
 	"\x0etarget_tier_id\x18\x02 \x01(\tR\ftargetTierId\x12(\n" +

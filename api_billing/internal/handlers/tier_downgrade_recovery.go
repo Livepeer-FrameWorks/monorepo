@@ -13,12 +13,15 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 )
 
-// Outcomes of an operator request to release a held downgrade.
+// What holds a downgrade past its effective time, and the outcomes of an
+// operator request to release it. DowngradeRecoveryDue is preview only: the
+// closing invoice is finalized and nothing refuses the tier change.
 const (
 	DowngradeRecoveryApplied          = "applied"
 	DowngradeRecoveryInvoiceHeld      = "invoice_held"
 	DowngradeRecoveryAwaitingProvider = "awaiting_provider"
 	DowngradeRecoveryRefused          = "refused"
+	DowngradeRecoveryDue              = "due"
 )
 
 // ErrNoTierDowngradeHold means the tenant has no downgrade past its effective time.
@@ -58,6 +61,11 @@ func (s *Service) RecoverHeldTierDowngrade(ctx context.Context, tenantID string)
 		return TierDowngradeRecovery{}, err
 	}
 	after, err := s.TierDowngradeHold(ctx, tenantID)
+	if err == nil && after.Status == DowngradeRecoveryDue {
+		// The applier ran and kept the downgrade without a pricing refusal.
+		after.Status = DowngradeRecoveryRefused
+		after.Detail = fmt.Sprintf("Invoice %s is %s, but the applier did not flip the tier; Purser logs why as \"Pending downgrade held\".", after.Hold.InvoiceID, after.Hold.InvoiceStatus)
+	}
 	if !errors.Is(err, ErrNoTierDowngradeHold) {
 		return after, err
 	}
@@ -95,11 +103,13 @@ func (s *Service) describeTierDowngradeHold(ctx context.Context, hold purserdb.G
 		if err != nil {
 			return TierDowngradeRecovery{}, err
 		}
-		out.Status = DowngradeRecoveryRefused
-		out.Detail = fmt.Sprintf("Invoice %s is %s, but the applier has not flipped the tier; Purser logs why as \"Pending downgrade held\".", hold.InvoiceID, hold.InvoiceStatus)
 		if refusal != "" {
+			out.Status = DowngradeRecoveryRefused
 			out.Detail = fmt.Sprintf("Invoice %s is %s, but the subscription refuses a tier change: %s.", hold.InvoiceID, hold.InvoiceStatus, refusal)
+			break
 		}
+		out.Status = DowngradeRecoveryDue
+		out.Detail = fmt.Sprintf("Invoice %s is %s and nothing refuses the tier change; the daily applier applies the downgrade on its next run, and confirming applies it now.", hold.InvoiceID, hold.InvoiceStatus)
 	}
 	return out, nil
 }
@@ -128,26 +138,22 @@ func (s *Service) tierChangeRefusal(ctx context.Context, tenantID string) (strin
 func (jm *JobManager) recoverHeldDowngrade(ctx context.Context, tenantID string) error {
 	now := time.Now()
 	queries := purserdb.New(jm.db)
-	due, err := queries.ListSubscriptionsDueForInvoice(ctx, now)
+	due, err := queries.GetSubscriptionDueForInvoice(ctx, purserdb.GetSubscriptionDueForInvoiceParams{TenantID: tenantID, Now: now})
+	switch {
+	case err == nil:
+		jm.finalizeSubscriptionPeriods(ctx, []purserdb.ListSubscriptionsDueForInvoiceRow{purserdb.ListSubscriptionsDueForInvoiceRow(due)}, now, time.Time{})
+	case !errors.Is(err, sql.ErrNoRows):
+		return fmt.Errorf("read subscription due for invoice: %w", err)
+	}
+	// The applier itself does not check the closing invoice; this gate does.
+	downgradeDue, err := queries.IsPendingDowngradeDueForTenant(ctx, purserdb.IsPendingDowngradeDueForTenantParams{
+		TenantID: tenantID, Now: sql.NullTime{Time: now, Valid: true},
+	})
 	if err != nil {
-		return fmt.Errorf("list subscriptions due for invoice: %w", err)
+		return fmt.Errorf("read due pending downgrade: %w", err)
 	}
-	for _, subscription := range due {
-		if subscription.TenantID == tenantID {
-			jm.finalizeSubscriptionPeriods(ctx, []purserdb.ListSubscriptionsDueForInvoiceRow{subscription}, now, time.Time{})
-			break
-		}
-	}
-	// The applier itself does not check the closing invoice; this list does.
-	dueDowngrades, err := queries.ListDuePendingDowngradeTenantIDs(ctx, sql.NullTime{Time: now, Valid: true})
-	if err != nil {
-		return fmt.Errorf("list due pending downgrades: %w", err)
-	}
-	for _, id := range dueDowngrades {
-		if id == tenantID {
-			jm.applyPendingDowngrade(ctx, tenantID)
-			break
-		}
+	if downgradeDue {
+		jm.applyPendingDowngrade(ctx, tenantID)
 	}
 	return nil
 }

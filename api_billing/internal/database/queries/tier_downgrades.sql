@@ -162,3 +162,64 @@ LEFT JOIN LATERAL (
 WHERE subscription.tenant_id = sqlc.arg(tenant_id)::text::uuid
   AND subscription.pending_reason = 'downgrade'
   AND subscription.pending_effective_at <= NOW();
+
+-- name: GetSubscriptionDueForInvoice :one
+-- ListSubscriptionsDueForInvoice for one tenant: the same predicates and
+-- columns, so an operator's downgrade recovery closes exactly the period the
+-- daily invoice job would close.
+SELECT ts.tenant_id::text AS tenant_id,
+       ts.billing_email,
+       ts.tier_id,
+       ts.status,
+       ts.billing_period_start,
+       ts.billing_period_end,
+       ts.mollie_next_payment_date,
+       ts.stripe_subscription_id,
+       ts.mollie_subscription_id,
+       ts.payment_method,
+       ts.stripe_customer_id,
+       ts.presentment_currency::text AS presentment_currency,
+       EXISTS (
+           SELECT 1 FROM purser.mollie_customers customer WHERE customer.tenant_id = ts.tenant_id
+       )::boolean AS has_mollie_customer,
+       bt.tier_name,
+       bt.display_name,
+       bt.billing_period,
+       ts.billing_model
+FROM purser.tenant_subscriptions ts
+JOIN purser.billing_tiers bt ON bt.id = ts.tier_id AND bt.is_active = TRUE
+WHERE ts.tenant_id = sqlc.arg(tenant_id)::text::uuid
+  AND ts.status = 'active' AND ts.pending_reason IS DISTINCT FROM 'tier_upgrade'
+  AND ((ts.mollie_next_payment_date IS NOT NULL
+            AND ts.mollie_next_payment_date <= (sqlc.arg(now)::timestamp)::date)
+    OR (ts.billing_period_end IS NOT NULL
+            AND ts.billing_period_end <= sqlc.arg(now)::timestamp)
+    OR (ts.billing_period_end IS NULL
+            AND (ts.next_billing_date IS NULL OR ts.next_billing_date <= sqlc.arg(now)::timestamp)))
+  AND NOT EXISTS (
+      SELECT 1 FROM purser.tenant_billing_closures closure WHERE closure.tenant_id = ts.tenant_id
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM purser.subscription_operator_grants grant_row
+      WHERE grant_row.subscription_id = ts.id
+        AND grant_row.expires_at <= sqlc.arg(now)::timestamptz
+  );
+
+-- name: IsPendingDowngradeDueForTenant :one
+-- ListDuePendingDowngradeTenantIDs for one tenant: the applier runs only once
+-- the invoice closing the downgrade's period is finalized.
+SELECT EXISTS (
+    SELECT 1
+    FROM purser.tenant_subscriptions subscription
+    WHERE subscription.tenant_id = sqlc.arg(tenant_id)::text::uuid
+      AND subscription.status = 'active'
+      AND subscription.pending_tier_id IS NOT NULL
+      AND subscription.pending_effective_at <= sqlc.arg(now)
+      AND EXISTS (
+          SELECT 1
+          FROM purser.billing_invoices invoice
+          WHERE invoice.tenant_id = subscription.tenant_id
+            AND invoice.period_end = subscription.pending_effective_at
+            AND invoice.status NOT IN ('draft', 'manual_review')
+      )
+)::boolean AS due;

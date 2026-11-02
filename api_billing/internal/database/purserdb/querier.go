@@ -449,6 +449,10 @@ type Querier interface {
 	GetStripeTierCheckoutConfig(ctx context.Context, arg GetStripeTierCheckoutConfigParams) (GetStripeTierCheckoutConfigRow, error)
 	// Subscription events preceding a paid price reset cannot restore its old tier or status.
 	GetStripeUpgradeBoundary(ctx context.Context, arg GetStripeUpgradeBoundaryParams) (GetStripeUpgradeBoundaryRow, error)
+	// ListSubscriptionsDueForInvoice for one tenant: the same predicates and
+	// columns, so an operator's downgrade recovery closes exactly the period the
+	// daily invoice job would close.
+	GetSubscriptionDueForInvoice(ctx context.Context, arg GetSubscriptionDueForInvoiceParams) (GetSubscriptionDueForInvoiceRow, error)
 	// The columns ListSubscriptionsDueForInvoice returns, for one tenant whose
 	// period is closed early.
 	GetSubscriptionForInvoice(ctx context.Context, tenantID string) (GetSubscriptionForInvoiceRow, error)
@@ -590,6 +594,9 @@ type Querier interface {
 	// The provider renews at the confirmed target from the effective time, while the
 	// local flip waits for that period's invoice. That term is paid at the target's fee.
 	IsConfirmedDowngradeDue(ctx context.Context, tenantID string) (bool, error)
+	// ListDuePendingDowngradeTenantIDs for one tenant: the applier runs only once
+	// the invoice closing the downgrade's period is finalized.
+	IsPendingDowngradeDueForTenant(ctx context.Context, arg IsPendingDowngradeDueForTenantParams) (bool, error)
 	// Whether any tier or cluster price records the Stripe price, so a sync
 	// only deactivates a price nothing records.
 	IsStripePriceRecorded(ctx context.Context, priceID string) (sql.NullBool, error)

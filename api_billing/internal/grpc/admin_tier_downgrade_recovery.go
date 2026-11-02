@@ -44,7 +44,7 @@ func (s *PurserServer) AdminRecoverTierDowngrade(ctx context.Context, r *purserp
 		return nil, tierDowngradeRecoveryStatus(err)
 	}
 	if !r.GetConfirmed() {
-		return &purserpb.AdminRecoverTierDowngradeResponse{Status: "held", Downgrade: heldTierDowngradeProto(preview.Hold), Detail: preview.Detail}, nil
+		return &purserpb.AdminRecoverTierDowngradeResponse{Status: preview.Status, Downgrade: heldTierDowngradeProto(preview.Hold), Detail: preview.Detail}, nil
 	}
 	if preview.Hold.TargetTierID != r.GetTargetTierId() {
 		return nil, status.Error(codes.FailedPrecondition, "the downgrade target changed after preview; preview it again")
@@ -83,15 +83,19 @@ func heldTierDowngradeProto(hold purserdb.GetTierDowngradeHoldRow) *purserpb.Hel
 	}
 }
 
-// listHeldTierDowngrades returns the downgrades PurserTierDowngradeHeld counts,
-// optionally for one tenant.
-func (s *PurserServer) listHeldTierDowngrades(ctx context.Context, tenantID string, limit int32) ([]*purserpb.HeldTierDowngrade, error) {
+// listHeldTierDowngrades returns up to limit of the downgrades
+// PurserTierDowngradeHeld counts, optionally for one tenant, and whether more exist.
+func (s *PurserServer) listHeldTierDowngrades(ctx context.Context, tenantID string, limit int32) ([]*purserpb.HeldTierDowngrade, bool, error) {
 	q := purserdb.New(s.db)
 	tenants, err := q.ListHeldTierDowngrades(ctx, purserdb.ListHeldTierDowngradesParams{
-		GraceSeconds: int64(handlers.HeldDowngradeGrace / time.Second), TenantID: tenantID, RowLimit: int64(limit),
+		GraceSeconds: int64(handlers.HeldDowngradeGrace / time.Second), TenantID: tenantID, RowLimit: int64(limit) + 1,
 	})
 	if err != nil {
-		return nil, err
+		return nil, false, err
+	}
+	hasMore := len(tenants) > int(limit)
+	if hasMore {
+		tenants = tenants[:limit]
 	}
 	out := make([]*purserpb.HeldTierDowngrade, 0, len(tenants))
 	for _, tenant := range tenants {
@@ -100,9 +104,9 @@ func (s *PurserServer) listHeldTierDowngrades(ctx context.Context, tenantID stri
 			continue
 		}
 		if holdErr != nil {
-			return nil, holdErr
+			return nil, false, holdErr
 		}
 		out = append(out, heldTierDowngradeProto(hold))
 	}
-	return out, nil
+	return out, hasMore, nil
 }

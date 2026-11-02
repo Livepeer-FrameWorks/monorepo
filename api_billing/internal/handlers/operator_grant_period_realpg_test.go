@@ -662,6 +662,8 @@ func tierDowngradeProviderCases() []providerReservationCase {
 		{"HeldConfirmedDowngradesAreListed", TestHeldConfirmedDowngradesAreListed_RealPG},
 		{"HeldDowngradeRecoveryFinalizesTheHeldInvoice", TestHeldDowngradeRecoveryFinalizesTheHeldInvoice_RealPG},
 		{"HeldDowngradeRecoveryReportsAPricingRefusal", TestHeldDowngradeRecoveryReportsAPricingRefusal_RealPG},
+		{"HeldDowngradeRecoveryKeepsAnUnresolvedManualReviewHold", TestHeldDowngradeRecoveryKeepsAnUnresolvedManualReviewHold_RealPG},
+		{"HeldDowngradeRecoveryUsesTheDailyJobGates", TestHeldDowngradeRecoveryUsesTheDailyJobGates_RealPG},
 	}
 }
 

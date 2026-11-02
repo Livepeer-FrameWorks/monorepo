@@ -940,9 +940,9 @@ func TestHeldConfirmedDowngradesAreListed_RealPG(t *testing.T) {
 	}
 }
 
-// Once the cluster pricing behind a manual_review invoice is fixed, the
-// operator's request finalizes that invoice and applies the downgrade without
-// waiting for the next daily run.
+// A manual_review invoice whose cause no longer applies is finalized by the
+// operator's request, which then applies the downgrade without waiting for the
+// next daily run.
 func TestHeldDowngradeRecoveryFinalizesTheHeldInvoice_RealPG(t *testing.T) {
 	db := startProviderReservationDatabase(t)
 	ctx := t.Context()
@@ -996,6 +996,148 @@ func TestHeldDowngradeRecoveryReportsAPricingRefusal_RealPG(t *testing.T) {
 	}
 	if tier, pending := (&downgradeProvider{tenant: tenant}).tier(t); tier != tenant.supporterID || pending != target {
 		t.Fatalf("refused recovery moved the tier: tier=%s pending=%s", tier, pending)
+	}
+}
+
+// While the cluster pricing behind a manual_review invoice is unresolved, the
+// operator's request re-rates the period, leaves the invoice held and keeps the
+// tier. Once that pricing is configured, the next request applies the downgrade.
+func TestHeldDowngradeRecoveryKeepsAnUnresolvedManualReviewHold_RealPG(t *testing.T) {
+	db := startProviderReservationDatabase(t)
+	ctx := t.Context()
+	now := time.Now().UTC().Truncate(time.Second)
+	start, end := now.Add(-30*24*time.Hour), now.Add(-time.Hour)
+	tenant := newPhaseTenant(t, db, "postpaid", start, end, 0)
+	cluster, owner := "held-downgrade-"+uuid.NewString(), uuid.NewString()
+	tenant.svc.qmClient = statementQuartermaster{marketplaceClusterResolver{clusterID: cluster, ownerTenantID: owner}}
+	tenant.jobs.tierReconciler = &stubTierReconciler{}
+	wireAdvanceBilling(tenant.svc, tenant.jobs)
+	target := insertTierChangeTier(t, db, "20")
+	mustExec(t, db, `UPDATE purser.billing_tiers SET metering_enabled=false WHERE id IN ($1,$2)`, tenant.supporterID, target)
+	mustExec(t, db, `UPDATE purser.tenant_subscriptions SET pending_tier_id=$2,pending_reason='downgrade',pending_effective_at=$3 WHERE tenant_id=$1`, tenant.id, target, end)
+	mustExec(t, db, `INSERT INTO purser.billing_invoices (tenant_id,status,currency,amount,period_start,period_end,due_date)
+		VALUES ($1,'manual_review','EUR',0,$2,$3,$3)`, tenant.id, start, end)
+	// Usage on a marketplace cluster with no pricing is what routes the period
+	// to manual review.
+	mustExec(t, db, `INSERT INTO purser.usage_records (tenant_id,cluster_id,usage_type,unit,dimensions,dimension_key,source_id,report_id,usage_value,usage_details,period_start,period_end,granularity,value_kind,created_at)
+		VALUES ($1,$2,'egress_gb','gibibyte','{}',$3,'periscope-default',$4,1,'{}',$5,$6,'minute_5','delta',$6)`,
+		tenant.id, cluster, strings.Repeat("d", 64), strings.Repeat("e", 64), start.Add(time.Hour), start.Add(time.Hour+5*time.Minute))
+	invoiceStatus := func() string {
+		t.Helper()
+		var status string
+		if err := db.QueryRowContext(ctx, `SELECT status FROM purser.billing_invoices WHERE tenant_id=$1 AND period_end=$2 ORDER BY created_at DESC LIMIT 1`, tenant.id, end).Scan(&status); err != nil {
+			t.Fatal(err)
+		}
+		return status
+	}
+
+	held, err := tenant.svc.RecoverHeldTierDowngrade(ctx, tenant.id)
+	if err != nil || held.Status != DowngradeRecoveryInvoiceHeld || !strings.Contains(held.Detail, "set-cluster-pricing") {
+		t.Fatalf("recovery with unresolved pricing = %+v, %v, want invoice_held naming set-cluster-pricing", held, err)
+	}
+	if tier, pending := (&downgradeProvider{tenant: tenant}).tier(t); tier != tenant.supporterID || pending != target {
+		t.Fatalf("recovery bypassed the manual_review hold: tier=%s pending=%s", tier, pending)
+	}
+	if status := invoiceStatus(); status != "manual_review" {
+		t.Fatalf("closing invoice = %s, want it still held in manual_review", status)
+	}
+
+	mustExec(t, db, `INSERT INTO purser.cluster_pricing_history (cluster_id,pricing_model,base_price,currency,effective_from) VALUES ($1,'monthly',30,'EUR',$2)`, cluster, start.Add(-24*time.Hour))
+	applied, err := tenant.svc.RecoverHeldTierDowngrade(ctx, tenant.id)
+	if err != nil || applied.Status != DowngradeRecoveryApplied {
+		t.Fatalf("recovery after the pricing was configured = %+v, %v, want applied", applied, err)
+	}
+	if tier, pending := (&downgradeProvider{tenant: tenant}).tier(t); tier != target || pending != "" {
+		t.Fatalf("after recovery: tier=%s pending=%q, want the target tier", tier, pending)
+	}
+	if status := invoiceStatus(); status == "manual_review" || status == "draft" {
+		t.Fatalf("closing invoice = %s, want it finalized", status)
+	}
+}
+
+// The one-tenant gates the operator's request uses admit a tenant exactly when
+// the daily job's fleet-wide statements list it.
+func TestHeldDowngradeRecoveryUsesTheDailyJobGates_RealPG(t *testing.T) {
+	db := startProviderReservationDatabase(t)
+	ctx := t.Context()
+	now := time.Now().UTC().Truncate(time.Second)
+	start, end := now.Add(-30*24*time.Hour), now.Add(-time.Hour)
+	q := purserdb.New(db)
+	type gateCase struct {
+		name                string
+		invoiceDue, applies bool
+		setup               func(*phaseTenant)
+	}
+	retired := insertTierChangeTier(t, db, "5")
+	mustExec(t, db, `UPDATE purser.billing_tiers SET is_active=false WHERE id=$1`, retired)
+	cases := []gateCase{
+		{"period ended", true, false, func(*phaseTenant) {}},
+		{"period open", false, false, func(p *phaseTenant) {
+			mustExec(t, db, `UPDATE purser.tenant_subscriptions SET billing_period_end=$2,next_billing_date=$2 WHERE tenant_id=$1`, p.id, now.Add(time.Hour))
+		}},
+		{"account closed", false, false, func(p *phaseTenant) {
+			mustExec(t, db, `INSERT INTO purser.tenant_billing_closures(tenant_id,closed_at,source_event_id) VALUES($1,NOW(),$2)`, p.id, "closed-"+p.id)
+		}},
+		{"expired grant", false, false, func(p *phaseTenant) {
+			mustExec(t, db, `INSERT INTO purser.subscription_operator_grants(subscription_id,base_price,waive_usage,collection,reason,assigned_tier_id,fallback_tier_id,granted_at,expires_at)
+				SELECT id,0,true,'provider','trial',tier_id,$2,NOW()-INTERVAL '2 days',NOW()-INTERVAL '1 hour' FROM purser.tenant_subscriptions WHERE tenant_id=$1`, p.id, p.paygID)
+		}},
+		{"upgrade pending", false, false, func(p *phaseTenant) {
+			mustExec(t, db, `UPDATE purser.tenant_subscriptions SET pending_tier_id=$2,pending_reason='tier_upgrade' WHERE tenant_id=$1`, p.id, p.paygID)
+		}},
+		{"retired tier", false, false, func(p *phaseTenant) {
+			mustExec(t, db, `UPDATE purser.tenant_subscriptions SET tier_id=$2 WHERE tenant_id=$1`, p.id, retired)
+		}},
+		{"downgrade with a finalized invoice", true, true, func(p *phaseTenant) {
+			mustExec(t, db, `UPDATE purser.tenant_subscriptions SET pending_tier_id=$2,pending_reason='downgrade',pending_effective_at=$3 WHERE tenant_id=$1`, p.id, p.paygID, end)
+			mustExec(t, db, `INSERT INTO purser.billing_invoices (tenant_id,status,currency,amount,period_start,period_end,due_date,paid_at) VALUES ($1,'paid','EUR',0,$2,$3,$3,NOW())`, p.id, start, end)
+		}},
+		{"downgrade with a manual_review invoice", true, false, func(p *phaseTenant) {
+			mustExec(t, db, `UPDATE purser.tenant_subscriptions SET pending_tier_id=$2,pending_reason='downgrade',pending_effective_at=$3 WHERE tenant_id=$1`, p.id, p.paygID, end)
+			mustExec(t, db, `INSERT INTO purser.billing_invoices (tenant_id,status,currency,amount,period_start,period_end,due_date) VALUES ($1,'manual_review','EUR',0,$2,$3,$3)`, p.id, start, end)
+		}},
+		{"suspended downgrade", false, false, func(p *phaseTenant) {
+			mustExec(t, db, `UPDATE purser.tenant_subscriptions SET status='suspended',pending_tier_id=$2,pending_reason='downgrade',pending_effective_at=$3 WHERE tenant_id=$1`, p.id, p.paygID, end)
+			mustExec(t, db, `INSERT INTO purser.billing_invoices (tenant_id,status,currency,amount,period_start,period_end,due_date,paid_at) VALUES ($1,'paid','EUR',0,$2,$3,$3,NOW())`, p.id, start, end)
+		}},
+	}
+	tenants := make([]*phaseTenant, len(cases))
+	for i, tc := range cases {
+		tenants[i] = newPhaseTenant(t, db, "postpaid", start, end, 0)
+		tc.setup(tenants[i])
+	}
+	fleetDue, err := q.ListSubscriptionsDueForInvoice(ctx, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fleetDowngrades, err := q.ListDuePendingDowngradeTenantIDs(ctx, sql.NullTime{Time: now, Valid: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inFleet := map[string]bool{}
+	for _, row := range fleetDue {
+		inFleet[row.TenantID] = true
+	}
+	inFleetDowngrades := map[string]bool{}
+	for _, id := range fleetDowngrades {
+		inFleetDowngrades[id] = true
+	}
+	for i, tc := range cases {
+		id := tenants[i].id
+		_, dueErr := q.GetSubscriptionDueForInvoice(ctx, purserdb.GetSubscriptionDueForInvoiceParams{TenantID: id, Now: now})
+		if dueErr != nil && !errors.Is(dueErr, sql.ErrNoRows) {
+			t.Fatal(dueErr)
+		}
+		applies, appliesErr := q.IsPendingDowngradeDueForTenant(ctx, purserdb.IsPendingDowngradeDueForTenantParams{TenantID: id, Now: sql.NullTime{Time: now, Valid: true}})
+		if appliesErr != nil {
+			t.Fatal(appliesErr)
+		}
+		if got := dueErr == nil; got != tc.invoiceDue || inFleet[id] != tc.invoiceDue {
+			t.Errorf("%s: due for invoice tenant=%v fleet=%v, want %v", tc.name, got, inFleet[id], tc.invoiceDue)
+		}
+		if applies != tc.applies || inFleetDowngrades[id] != tc.applies {
+			t.Errorf("%s: downgrade due tenant=%v fleet=%v, want %v", tc.name, applies, inFleetDowngrades[id], tc.applies)
+		}
 	}
 }
 

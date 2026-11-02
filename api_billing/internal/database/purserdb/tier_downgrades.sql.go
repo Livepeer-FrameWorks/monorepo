@@ -9,6 +9,8 @@ import (
 	"context"
 	"database/sql"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 const cancelTenantTierDowngrade = `-- name: CancelTenantTierDowngrade :execrows
@@ -212,6 +214,99 @@ func (q *Queries) GetStripeRenewalTierFence(ctx context.Context, tenantID string
 	return i, err
 }
 
+const getSubscriptionDueForInvoice = `-- name: GetSubscriptionDueForInvoice :one
+SELECT ts.tenant_id::text AS tenant_id,
+       ts.billing_email,
+       ts.tier_id,
+       ts.status,
+       ts.billing_period_start,
+       ts.billing_period_end,
+       ts.mollie_next_payment_date,
+       ts.stripe_subscription_id,
+       ts.mollie_subscription_id,
+       ts.payment_method,
+       ts.stripe_customer_id,
+       ts.presentment_currency::text AS presentment_currency,
+       EXISTS (
+           SELECT 1 FROM purser.mollie_customers customer WHERE customer.tenant_id = ts.tenant_id
+       )::boolean AS has_mollie_customer,
+       bt.tier_name,
+       bt.display_name,
+       bt.billing_period,
+       ts.billing_model
+FROM purser.tenant_subscriptions ts
+JOIN purser.billing_tiers bt ON bt.id = ts.tier_id AND bt.is_active = TRUE
+WHERE ts.tenant_id = $1::text::uuid
+  AND ts.status = 'active' AND ts.pending_reason IS DISTINCT FROM 'tier_upgrade'
+  AND ((ts.mollie_next_payment_date IS NOT NULL
+            AND ts.mollie_next_payment_date <= ($2::timestamp)::date)
+    OR (ts.billing_period_end IS NOT NULL
+            AND ts.billing_period_end <= $2::timestamp)
+    OR (ts.billing_period_end IS NULL
+            AND (ts.next_billing_date IS NULL OR ts.next_billing_date <= $2::timestamp)))
+  AND NOT EXISTS (
+      SELECT 1 FROM purser.tenant_billing_closures closure WHERE closure.tenant_id = ts.tenant_id
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM purser.subscription_operator_grants grant_row
+      WHERE grant_row.subscription_id = ts.id
+        AND grant_row.expires_at <= $2::timestamptz
+  )
+`
+
+type GetSubscriptionDueForInvoiceParams struct {
+	TenantID string    `db:"tenant_id" json:"tenant_id"`
+	Now      time.Time `db:"now" json:"now"`
+}
+
+type GetSubscriptionDueForInvoiceRow struct {
+	TenantID              string         `db:"tenant_id" json:"tenant_id"`
+	BillingEmail          sql.NullString `db:"billing_email" json:"billing_email"`
+	TierID                uuid.UUID      `db:"tier_id" json:"tier_id"`
+	Status                string         `db:"status" json:"status"`
+	BillingPeriodStart    sql.NullTime   `db:"billing_period_start" json:"billing_period_start"`
+	BillingPeriodEnd      sql.NullTime   `db:"billing_period_end" json:"billing_period_end"`
+	MollieNextPaymentDate sql.NullTime   `db:"mollie_next_payment_date" json:"mollie_next_payment_date"`
+	StripeSubscriptionID  sql.NullString `db:"stripe_subscription_id" json:"stripe_subscription_id"`
+	MollieSubscriptionID  sql.NullString `db:"mollie_subscription_id" json:"mollie_subscription_id"`
+	PaymentMethod         sql.NullString `db:"payment_method" json:"payment_method"`
+	StripeCustomerID      sql.NullString `db:"stripe_customer_id" json:"stripe_customer_id"`
+	PresentmentCurrency   string         `db:"presentment_currency" json:"presentment_currency"`
+	HasMollieCustomer     bool           `db:"has_mollie_customer" json:"has_mollie_customer"`
+	TierName              string         `db:"tier_name" json:"tier_name"`
+	DisplayName           string         `db:"display_name" json:"display_name"`
+	BillingPeriod         string         `db:"billing_period" json:"billing_period"`
+	BillingModel          string         `db:"billing_model" json:"billing_model"`
+}
+
+// ListSubscriptionsDueForInvoice for one tenant: the same predicates and
+// columns, so an operator's downgrade recovery closes exactly the period the
+// daily invoice job would close.
+func (q *Queries) GetSubscriptionDueForInvoice(ctx context.Context, arg GetSubscriptionDueForInvoiceParams) (GetSubscriptionDueForInvoiceRow, error) {
+	row := q.db.QueryRowContext(ctx, getSubscriptionDueForInvoice, arg.TenantID, arg.Now)
+	var i GetSubscriptionDueForInvoiceRow
+	err := row.Scan(
+		&i.TenantID,
+		&i.BillingEmail,
+		&i.TierID,
+		&i.Status,
+		&i.BillingPeriodStart,
+		&i.BillingPeriodEnd,
+		&i.MollieNextPaymentDate,
+		&i.StripeSubscriptionID,
+		&i.MollieSubscriptionID,
+		&i.PaymentMethod,
+		&i.StripeCustomerID,
+		&i.PresentmentCurrency,
+		&i.HasMollieCustomer,
+		&i.TierName,
+		&i.DisplayName,
+		&i.BillingPeriod,
+		&i.BillingModel,
+	)
+	return i, err
+}
+
 const getTierDowngradeHold = `-- name: GetTierDowngradeHold :one
 SELECT subscription.tenant_id::text AS tenant_id,
        target.id::text AS target_tier_id,
@@ -295,6 +390,38 @@ SELECT EXISTS (
 // local flip waits for that period's invoice. That term is paid at the target's fee.
 func (q *Queries) IsConfirmedDowngradeDue(ctx context.Context, tenantID string) (bool, error) {
 	row := q.db.QueryRowContext(ctx, isConfirmedDowngradeDue, tenantID)
+	var due bool
+	err := row.Scan(&due)
+	return due, err
+}
+
+const isPendingDowngradeDueForTenant = `-- name: IsPendingDowngradeDueForTenant :one
+SELECT EXISTS (
+    SELECT 1
+    FROM purser.tenant_subscriptions subscription
+    WHERE subscription.tenant_id = $1::text::uuid
+      AND subscription.status = 'active'
+      AND subscription.pending_tier_id IS NOT NULL
+      AND subscription.pending_effective_at <= $2
+      AND EXISTS (
+          SELECT 1
+          FROM purser.billing_invoices invoice
+          WHERE invoice.tenant_id = subscription.tenant_id
+            AND invoice.period_end = subscription.pending_effective_at
+            AND invoice.status NOT IN ('draft', 'manual_review')
+      )
+)::boolean AS due
+`
+
+type IsPendingDowngradeDueForTenantParams struct {
+	TenantID string       `db:"tenant_id" json:"tenant_id"`
+	Now      sql.NullTime `db:"now" json:"now"`
+}
+
+// ListDuePendingDowngradeTenantIDs for one tenant: the applier runs only once
+// the invoice closing the downgrade's period is finalized.
+func (q *Queries) IsPendingDowngradeDueForTenant(ctx context.Context, arg IsPendingDowngradeDueForTenantParams) (bool, error) {
+	row := q.db.QueryRowContext(ctx, isPendingDowngradeDueForTenant, arg.TenantID, arg.Now)
 	var due bool
 	err := row.Scan(&due)
 	return due, err
