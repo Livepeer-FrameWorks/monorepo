@@ -98,6 +98,41 @@ All `frameworks cluster *` subcommands share a persistent flag set for selecting
 
 Save defaults once with `frameworks setup` (interactive) or the non-interactive equivalents (`frameworks context create <name>` + `frameworks context set-gitops-*`). Explicit flags on a specific invocation always win over saved defaults.
 
+## Progress watchdog
+
+Long cluster steps have no total time limit. Each runs under a watchdog that cancels it only when
+no progress arrives for its stall window, so a step on a large fleet or a large database runs as
+long as it keeps moving, and a hung step still ends. Progress is every output line of the Ansible
+role the step runs (each task, loop item and recap line) plus the step's own milestones, such as a
+host, node or cell that finished. A stalled step fails with an error naming it, its window, how
+long it ran and the last progress seen:
+
+```text
+yugabyte finalize_upgrade through yb-1 stalled: no progress for 10m0s after running 42m10s; last progress: ...
+```
+
+Rerun the same command after fixing the cause; completed work is skipped.
+
+| Step                                                                                               | Stall window                        | Progress                                                                 |
+| -------------------------------------------------------------------------------------------------- | ----------------------------------- | ------------------------------------------------------------------------ |
+| Schema migrations (`cluster migrate`, the migration phases of `release apply`)                     | 30 minutes                          | role output and each finished preflight check                            |
+| Data migrations (`cluster data-migrate`, earlier releases' runs in `release apply`)                | 10 minutes                          | an output line; a run prints its totals after 10 seconds without one     |
+| Release reconciliation transitions                                                                 | 5 minutes                           | each scope's check, and its apply and verify                             |
+| Service upgrades (`cluster upgrade`, `release apply`)                                              | 10 minutes; Yugabyte 45, Foghorn 25 | role output and each host's provision and health cycle                   |
+| Yugabyte rolling restart (`cluster restart yugabyte`)                                              | 35 minutes                          | role output and each node that finished its roll                         |
+| Yugabyte `finalize_upgrade`                                                                        | 10 minutes                          | a `yb-admin` line, or another database's YSQL catalog migrations applied |
+| Foghorn rollout cell gate                                                                          | 15 minutes                          | a schema-1 tenant of the cell reaching schema-2 authority                |
+| Edge release target sync                                                                           | 10 minutes                          | the manifest fetch, the release publish and each cluster's target set    |
+| Provision role runs (provision, precheck, deploy, restart)                                         | 20 minutes                          | role output                                                              |
+| Initialize steps (Quartermaster bootstrap, tenant and system tenant resolution, mesh reachability) | 2 minutes                           | role output; Kafka topic init keeps retrying while more brokers register |
+| `cluster init`                                                                                     | 10 minutes                          | role output                                                              |
+| Redis upgrade                                                                                      | 10 minutes                          | role output                                                              |
+| `cluster os update`                                                                                | 10 minutes check, 60 minutes apply  | playbook output and each Yugabyte node that finished its roll            |
+
+A transactional migration statement is bounded by its own 15-minute `statement_timeout`, inside
+the 30-minute window. A `.notx.sql` item and a ClickHouse item, which have no statement timeout,
+run as asynchronous jobs whose poll lines keep reporting progress.
+
 ## Detection & Health Commands
 
 ### frameworks cluster detect
@@ -429,6 +464,10 @@ To discover existing cluster IDs after provisioning:
 ```bash
 frameworks admin clusters list
 ```
+
+On a platform cluster, `provision`, `upgrade`, `apply` and `diff` resolve the system tenant through
+Quartermaster. A saved system tenant ID is used only to recover from a transport failure, and a
+Livepeer gateway cluster always needs a successful Quartermaster lookup.
 
 ---
 
@@ -1190,6 +1229,19 @@ expand has been applied (including a `--dry-run` on such a cluster) it prints
 `post-expand report: not run (expand not applied)`. See
 [Running Cluster Upgrades](/operators/running-upgrades#post-expand-report).
 
+Before it changes anything, `release apply` checks that every earlier release is complete. A
+required data migration of an earlier release that is pending or failed, and that the installed
+service binary can run, does not refuse the release: the plan lists it as step 0 and the apply runs
+it first, in catalog order, through the service binary, and confirms it reads `completed`
+afterwards. An irreversible one needs `--backup`, the same gate as `data-migrate run`; the gate
+also applies under `--dry-run`, which runs the migration read-only. A failure stops the release
+before anything of the new release is applied and names the migration and the
+`data-migrate status` command. A missing postdeploy migration of an earlier release, or a data
+migration that is running, paused, unreadable or unknown to its binary, still refuses and names
+what to do first.
+
+Long steps are bounded by a [progress watchdog](#progress-watchdog), not a fixed deadline.
+
 **Flags:**
 
 - `--version string` - Target version (defaults to the cluster channel)
@@ -1198,6 +1250,7 @@ expand has been applied (including a `--dry-run` on such a cluster) it prints
 - `--skip-validation` - Skip health validation after each service upgrade
 - `--no-rollback` - Skip automatic rollback on a service health-check failure
 - `--complete-interrupted-baselines` - Reapply and verify baselines for inspected populated databases without migration provenance
+- `--backup string` - Backup directory or `s3://` URL taken within the last hour; required when an earlier release's pending required data migration is irreversible
 
 **Examples:**
 
@@ -2264,7 +2317,10 @@ The unpaid share of an open advance-fee invoice is reduced to the amount earned.
 period starts at the change and the prepaid balance pays usage reported after it, including late reports for earlier usage. Each plan pays the base fee
 only for its own part of the period, also across several changes. Drafts hold no credit, so the
 balance stays visible while the postpaid period runs; an invoice takes only the credit it uses, up
-to its total, when it is finalized. A scheduled downgrade is cleared.
+to its total, when it is finalized. A scheduled downgrade is cleared. When the tenant keeps its
+Stripe or Mollie subscription through that, `set-tier` also queues the provider step that reprices
+the subscription to the assigned tier, so the provider charges what Purser now bills; its retries
+and errors appear as `tier_downgrade` work in `recovery list`.
 
 After the change Purser reconciles cluster access for the new tier and refreshes cached tenant
 limits, the same as a self-serve tier change, and records `billing.subscription_updated` with
@@ -2359,11 +2415,34 @@ prove the customer received no service: verify delivery before confirming
 recovery. Inventory and preview do not enqueue compensation. Active recovery
 replaces the review entry rather than duplicating it.
 
-`PurserTierDowngradeHeld` means a downgrade the provider confirmed is still unapplied
-26 hours after its effective time, usually because its closing invoice is held in
-manual review. The provider already charges the lower tier and the customer's tier
-changes are refused. Resolve the hold so the daily applier flips the tier, or apply it
-with an audited `admin billing set-tier`.
+On the first page, a "Held downgrades" section follows: every downgrade the provider
+confirmed that is still unapplied past the daily applier's grace, with its tenant,
+target tier, effective time, closing invoice and invoice status. These are what
+`PurserTierDowngradeHeld` alerts on. The provider already charges the lower tier and
+the customer's tier changes are refused. Inspect and apply one with
+[`recovery downgrade`](#frameworks-admin-billing-recovery-downgrade).
+
+#### frameworks admin billing recovery downgrade
+
+`frameworks admin billing recovery downgrade --tenant-id <UUID> --reason "Invoice reviewed"`
+previews the held downgrade (target tier, effective time, closing invoice and its
+status) and what holds it, then requires interactive `yes` or `--yes`:
+
+- `awaiting_provider`: the provider has not confirmed the target price; the
+  `tier_downgrade` step in `recovery list` shows its retries and last error.
+- `invoice_held`: the closing invoice is a draft (metering incomplete or rating failed)
+  or in `manual_review` (a cluster's pricing for the period is unresolved, logged as
+  "Invoice routed to manual_review"; configure it with `admin billing set-cluster-pricing`),
+  or no invoice closes the period yet.
+- `refused`: the invoice is final but the subscription refuses the tier change, with the
+  refusal named.
+- `due`: nothing holds it; the daily applier applies it on its next run.
+
+Confirming closes the tenant's billing period again with the same gates as the daily
+invoice job and runs the downgrade applier for that tenant. It reports `applied` when
+the tenant is on the target tier, or what still holds it. Your identity and reason are
+recorded on the billing audit event. A preview whose target changed before
+confirmation is refused; preview it again. Requires a platform-operator JWT.
 
 #### frameworks admin billing recovery checkout
 
