@@ -2,13 +2,8 @@
   import { resolve } from "$app/paths";
   import { Button } from "$lib/components/ui/button";
   import { getIconComponent } from "$lib/iconUtils";
-  import {
-    getDocsSiteUrl,
-    getGithubUrl,
-    getGraphqlHttpUrl,
-    getMcpEndpoint,
-    getRtmpServerUrl,
-  } from "$lib/config";
+  import { getDocsSiteUrl, getGithubUrl, getGraphqlHttpUrl, getMcpEndpoint } from "$lib/config";
+  import { studioCodeExamples, studioFeatures } from "./studioSnippets";
   import playerCorePkg from "../../../../../npm_player/packages/core/package.json";
   import playerReactPkg from "../../../../../npm_player/packages/react/package.json";
   import playerSveltePkg from "../../../../../npm_player/packages/svelte/package.json";
@@ -33,7 +28,6 @@
   const docsBaseUrl = docsSiteUrl.replace(/\/$/, "");
   const githubBaseUrl = getGithubUrl().replace(/\/$/, "");
   const graphqlUrl = getGraphqlHttpUrl();
-  const rtmpUrl = getRtmpServerUrl();
   const mcpEndpoint = getMcpEndpoint();
 
   // SDK definitions
@@ -112,9 +106,9 @@ player.destroy();`,
   };
 
   const studioSdk = {
-    name: "Studio SDK",
+    name: "StreamCrafter SDK",
     description:
-      "Browser-based streaming with WebCodecs encoding. Stream directly from camera/microphone or screen share with real-time preview and scene management.",
+      "Browser studio that mixes cameras, screen share and media files with scenes, overlays and audio processing, and publishes over WHIP. Beta: the API will change a lot before 1.0, so pin an exact version.",
     icon: "Radio",
     packages: {
       core: "@livepeer-frameworks/streamcrafter-core",
@@ -129,69 +123,8 @@ player.destroy();`,
       wc: streamcrafterWcPkg.version,
       vanilla: streamcrafterCorePkg.version,
     },
-    features: [
-      "WebCodecs hardware encoding",
-      "WHIP ingest protocol",
-      "Camera, mic, and screen capture",
-      "Scene and layer management",
-      "Real-time audio mixing",
-      "Preview before going live",
-    ],
-    codeExamples: {
-      react: `import { StreamCrafter, Preview, Controls } from '@livepeer-frameworks/streamcrafter-react';
-${_imp} '@livepeer-frameworks/streamcrafter-react/streamcrafter.css';
-
-function Studio() {
-  return (
-    <StreamCrafter
-      streamKey="your-stream-key"
-      ingestUrl="${rtmpUrl}"
-    >
-      <Preview />
-      <Controls />
-    </StreamCrafter>
-  );
-}`,
-      svelte: `<script>
-  import { StreamCrafter, Preview, Controls } from '@livepeer-frameworks/streamcrafter-svelte';
-  ${_imp} '@livepeer-frameworks/streamcrafter-svelte/streamcrafter.css';
-<\/script>
-
-<StreamCrafter
-  streamKey="your-stream-key"
-  ingestUrl="${rtmpUrl}"
->
-  <Preview />
-  <Controls />
-</StreamCrafter>`,
-      wc: `<!-- IIFE via npm CDN — no bundler needed -->
-<!-- unpkg -->
-<script src="https://unpkg.com/@livepeer-frameworks/streamcrafter-wc/dist/fw-streamcrafter.iife.js"><\/script>
-<!-- or jsdelivr -->
-<script src="https://cdn.jsdelivr.net/npm/@livepeer-frameworks/streamcrafter-wc/dist/fw-streamcrafter.iife.js"><\/script>
-
-<fw-streamcrafter
-  gateway-url="${graphqlUrl}"
-  stream-key="your-stream-key"
-  initial-profile="broadcast"
-></fw-streamcrafter>`,
-      vanilla: `import { IngestController } from '@livepeer-frameworks/streamcrafter-core/vanilla';
-${_imp} '@livepeer-frameworks/streamcrafter-core/streamcrafter.css';
-
-const controller = new IngestController({
-  streamKey: 'your-stream-key',
-  ingestUrl: '${rtmpUrl}',
-});
-
-// Start camera
-await controller.addCameraSource();
-
-// Go live
-await controller.startStreaming();
-
-// Stop streaming
-await controller.stopStreaming();`,
-    },
+    features: studioFeatures,
+    codeExamples: studioCodeExamples(graphqlUrl),
     docsUrl: `${docsBaseUrl}/builders/ingest`,
     githubUrl: `${githubBaseUrl}/tree/master/npm_studio`,
   };
@@ -293,15 +226,14 @@ with FrameWorksClient("${graphqlUrl}", token=os.environ["FRAMEWORKS_API_TOKEN"])
     githubUrl: `${githubBaseUrl}/tree/master/npm_api`,
   };
 
-  const upcomingSdks = [
-    {
-      name: "CLI Tools",
-      description:
-        "Command-line tools for stream management, analytics, and deployment automation.",
-      icon: "Terminal",
-      status: "Coming Soon",
-    },
-  ];
+  const cli = {
+    name: "FrameWorks CLI",
+    description:
+      "Provisions, upgrades and inspects self-hosted clusters and edge nodes, for operators who run their own FrameWorks.",
+    install: "brew tap livepeer-frameworks/tap && brew install frameworks-cli",
+    docsUrl: `${docsBaseUrl}/operators/cli-reference`,
+    releasesUrl: `${githubBaseUrl}/releases`,
+  };
 
   function getFrameworkPackage(packages: PackageByFramework, framework: Framework): string {
     if (framework === "vanilla") {
@@ -334,34 +266,13 @@ with FrameWorksClient("${graphqlUrl}", token=os.environ["FRAMEWORKS_API_TOKEN"])
   const RadioIcon = getIconComponent("Radio");
   const Code2Icon = getIconComponent("Code2");
   const TerminalIcon = getIconComponent("Terminal");
-  const WebhookIcon = getIconComponent("Webhook");
   const BotIcon = getIconComponent("Bot");
   const CopyIcon = getIconComponent("Copy");
   const ExternalLinkIcon = getIconComponent("ExternalLink");
   const BookOpenIcon = getIconComponent("BookOpen");
   const GithubIcon = getIconComponent("Code");
   const CheckIcon = getIconComponent("Check");
-  const ClockIcon = getIconComponent("Clock");
   const ZapIcon = getIconComponent("Zap");
-
-  function getIconByName(name: string) {
-    switch (name) {
-      case "Play":
-        return PlayIcon;
-      case "Radio":
-        return RadioIcon;
-      case "Code2":
-        return Code2Icon;
-      case "Terminal":
-        return TerminalIcon;
-      case "Webhook":
-        return WebhookIcon;
-      case "Bot":
-        return BotIcon;
-      default:
-        return PackageIcon;
-    }
-  }
 </script>
 
 <svelte:head>
@@ -860,31 +771,53 @@ with FrameWorksClient("${graphqlUrl}", token=os.environ["FRAMEWORKS_API_TOKEN"])
           </div>
         </div>
 
-        <!-- Upcoming SDKs -->
+        <!-- CLI -->
         <div class="slab col-span-full">
           <div class="slab-header">
             <div class="flex items-center gap-2">
-              <ClockIcon class="w-4 h-4 text-warning" />
-              <h3>Coming Soon</h3>
+              <TerminalIcon class="w-4 h-4 text-primary" />
+              <h3>{cli.name}</h3>
+            </div>
+            <div class="flex items-center gap-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                href={cli.docsUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                class="gap-1"
+              >
+                <BookOpenIcon class="w-4 h-4" />
+                Docs
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                href={cli.releasesUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                class="gap-1"
+              >
+                <GithubIcon class="w-4 h-4" />
+                Releases
+              </Button>
             </div>
           </div>
-          <div class="slab-body--padded">
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-              {#each upcomingSdks as sdk (sdk.name)}
-                {@const Icon = getIconByName(sdk.icon)}
-                <div class="border border-border/50 rounded-lg p-4 bg-muted/20">
-                  <div class="flex items-center gap-3 mb-3">
-                    <div class="w-10 h-10 rounded-lg bg-muted/50 flex items-center justify-center">
-                      <Icon class="w-5 h-5 text-muted-foreground" />
-                    </div>
-                    <div>
-                      <h4 class="font-medium text-foreground">{sdk.name}</h4>
-                      <span class="text-xs text-warning">{sdk.status}</span>
-                    </div>
-                  </div>
-                  <p class="text-sm text-muted-foreground">{sdk.description}</p>
-                </div>
-              {/each}
+          <div class="slab-body--padded space-y-3">
+            <p class="text-sm text-muted-foreground">{cli.description}</p>
+            <div class="flex items-center gap-2">
+              <code
+                class="flex-1 text-sm bg-muted/50 border border-border/50 rounded-md px-3 py-2 font-mono text-foreground overflow-x-auto"
+                >{cli.install}</code
+              >
+              <Button
+                variant="ghost"
+                size="icon"
+                onclick={() => copyToClipboard(cli.install)}
+                title="Copy install command"
+              >
+                <CopyIcon class="w-4 h-4" />
+              </Button>
             </div>
           </div>
         </div>
