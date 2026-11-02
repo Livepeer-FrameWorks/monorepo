@@ -1577,6 +1577,9 @@ service UserService {
   // Records a permanently removed cell so session stops that cannot reach it
   // settle. Refused while the cell answers. Requires a platform-operator JWT.
   rpc AdminRetireIngestCell(AdminRetireIngestCellRequest) returns (AdminRetireIngestCellResponse);
+  // Removes a cell's retirement record, so stops it does not confirm stay
+  // pending again. Requires a platform-operator JWT.
+  rpc AdminUnretireIngestCell(AdminUnretireIngestCellRequest) returns (AdminUnretireIngestCellResponse);
 }
 
 message AdminLookupUserByEmailRequest {
@@ -2774,7 +2777,9 @@ message TenantAccountState {
   google.protobuf.Timestamp closure_retry_after = 7; // Earliest retry after a failure.
   string closure_error = 8; // Latest synchronization failure; empty after success.
   int32 closure_failures = 9; // Failed synchronization attempts.
-  repeated PendingIngestStop pending_ingest_stops = 10;
+  repeated PendingIngestStop pending_ingest_stops = 10; // Oldest first.
+  // More stops are pending than pending_ingest_stops lists.
+  bool pending_ingest_stops_truncated = 11;
 }
 
 // PendingIngestStop is a session stop that some recorded cell has not received.
@@ -2808,4 +2813,19 @@ message AdminRetireIngestCellResponse {
   // Pending session stops that include the cell; they retry now and settle
   // unless another recorded cell still fails.
   int32 pending_ingest_stops = 6;
+}
+
+// AdminUnretireIngestCellRequest removes one cell's retirement record.
+message AdminUnretireIngestCellRequest {
+  string cluster_id = 1;
+  string reason = 2; // Required operator reason, logged with the removal.
+}
+
+// AdminUnretireIngestCellResponse reports the retirement record that was removed.
+message AdminUnretireIngestCellResponse {
+  string cluster_id = 1;
+  bool was_retired = 2; // False when the cell had no retirement record.
+  google.protobuf.Timestamp retired_at = 3; // The removed record; unset when was_retired is false.
+  string retired_by = 4;
+  string retirement_reason = 5;
 }

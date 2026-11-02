@@ -1626,3 +1626,8 @@ func (c *GRPCClient) AdminGetTenantAccountState(ctx context.Context, tenantID st
 func (c *GRPCClient) AdminRetireIngestCell(ctx context.Context, req *commodorepb.AdminRetireIngestCellRequest) (*commodorepb.AdminRetireIngestCellResponse, error) {
 	return c.user.AdminRetireIngestCell(ctx, req)
 }
+
+// AdminUnretireIngestCell removes a cell's retirement record. Requires a platform-operator JWT.
+func (c *GRPCClient) AdminUnretireIngestCell(ctx context.Context, req *commodorepb.AdminUnretireIngestCellRequest) (*commodorepb.AdminUnretireIngestCellResponse, error) {
+	return c.user.AdminUnretireIngestCell(ctx, req)
+}

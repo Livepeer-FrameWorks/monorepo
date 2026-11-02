@@ -50,6 +50,7 @@ func TestOperatorAccountLifecycle_RealPG(t *testing.T) {
 	testAccountReactivationDuringCellResolution(t, db)
 	testAccountIngestRecipientIsolation(t, db)
 	testRetiredIngestCellSettlesStop(t, db)
+	testPendingStopCellsMatchIngestRecipients(t, db)
 	ctx := context.Background()
 	tenantID, userID := uuid.NewString(), uuid.NewString()
 	if _, writeErr := db.ExecContext(ctx, `INSERT INTO commodore.users(id,tenant_id,email,password_hash,is_active,verified) VALUES($1,$2,'trial@example.com','x',true,true)`, userID, tenantID); writeErr != nil {

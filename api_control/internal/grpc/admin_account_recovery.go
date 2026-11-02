@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -22,10 +21,9 @@ import (
 )
 
 const (
-	// Bounds the stops one tenant reports and one retirement re-examines. A
-	// tenant has one closure stop plus one per deactivated publisher.
+	// Bounds the stops one tenant reports. A tenant has one closure stop plus
+	// one per deactivated publisher.
 	pendingIngestStopsPerTenant = 100
-	pendingIngestStopsPerRetire = 1000
 	// Bounds the registry read and, separately, the concurrent Foghorn probes,
 	// so retirement answers within the CLI's 15s operator deadline.
 	retireIngestCellProbeWindow = 5 * time.Second
@@ -69,19 +67,14 @@ func (s *CommodoreServer) tenantAccountState(ctx context.Context, tenantID strin
 		out.ClosureRetryAfter = optionalTimestamp(closure.ClosureRetryAfter)
 		out.ClosureSync = closureSyncState(closure)
 	}
-	stops, err := queries.ListPendingIngestStops(ctx, tenantID, pendingIngestStopsPerTenant)
+	stops, err := queries.ListPendingIngestStops(ctx, tenantID, pendingIngestStopsPerTenant+1)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "read pending session stops: %v", err)
 	}
+	if len(stops) > pendingIngestStopsPerTenant {
+		stops, out.PendingIngestStopsTruncated = stops[:pendingIngestStopsPerTenant], true
+	}
 	for _, stop := range stops {
-		cells, cellErr := s.ingestStopCells(ctx, stop)
-		if cellErr != nil {
-			return nil, status.Errorf(codes.Internal, "read session stop cells: %v", cellErr)
-		}
-		retired, retiredErr := queries.ListRetiredIngestCells(ctx, cells)
-		if retiredErr != nil {
-			return nil, status.Errorf(codes.Internal, "read retired ingest cells: %v", retiredErr)
-		}
 		target := commodoredb.MediaAuthorityTarget{Key: stop.TargetKey, Kind: stop.TargetKind}
 		targetID := target.ObjectID()
 		if stop.TargetKind == commodoredb.MediaAuthorityTargetTenant {
@@ -90,7 +83,7 @@ func (s *CommodoreServer) tenantAccountState(ctx context.Context, tenantID strin
 		out.PendingIngestStops = append(out.PendingIngestStops, &commodorepb.PendingIngestStop{
 			TargetKind: stop.TargetKind, TargetId: targetID, Status: stop.Status, Attempts: stop.Attempts,
 			PendingSince: timestamppb.New(stop.PendingSince), NextAttemptAt: timestamppb.New(stop.NextAttemptAt),
-			LastError: stop.LastError, Cells: cells, RetiredCells: retired,
+			LastError: stop.LastError, Cells: stop.Cells, RetiredCells: stop.RetiredCells,
 		})
 	}
 	return out, nil
@@ -117,16 +110,6 @@ func optionalTimestamp(value sql.NullTime) *timestamppb.Timestamp {
 	return timestamppb.New(value.Time)
 }
 
-// ingestStopCells lists the cells the stop is delivered to, the same set
-// stopAccountIngest contacts.
-func (s *CommodoreServer) ingestStopCells(ctx context.Context, stop commodoredb.PendingIngestStopRow) ([]string, error) {
-	streamID := ""
-	if stop.TargetKind == commodoredb.MediaAuthorityTargetLiveStream {
-		streamID = commodoredb.MediaAuthorityTarget{Key: stop.TargetKey, Kind: stop.TargetKind}.ObjectID()
-	}
-	return commodoredb.New(s.db).ListAccountIngestCells(ctx, commodoredb.ListAccountIngestCellsParams{TenantID: stop.TenantID, StreamID: streamID})
-}
-
 // AdminRetireIngestCell records a permanently removed cell and retries the
 // pending session stops that include it. A cell that answers is refused: its
 // stops are delivered normally. Only platform-operator JWTs may call it.
@@ -150,28 +133,45 @@ func (s *CommodoreServer) AdminRetireIngestCell(ctx context.Context, req *commod
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "record cell retirement: %v", err)
 	}
-	stops, err := queries.ListPendingIngestStops(ctx, "", pendingIngestStopsPerRetire)
+	affected, _, err := queries.RetryIngestStopsForCell(ctx, cell)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "cell retired; read pending session stops: %v", err)
+		return nil, status.Errorf(codes.Internal, "cell retired and the record kept; schedule its session stops: %v", err)
 	}
-	var affected []string
-	for _, stop := range stops {
-		cells, cellErr := s.ingestStopCells(ctx, stop)
-		if cellErr != nil {
-			return nil, status.Errorf(codes.Internal, "cell retired; read session stop cells: %v", cellErr)
-		}
-		if slices.Contains(cells, cell) {
-			affected = append(affected, stop.TargetKey)
-		}
-	}
-	if _, err = queries.RetryIngestStopsNow(ctx, affected); err != nil {
-		return nil, status.Errorf(codes.Internal, "cell retired; schedule session stops: %v", err)
-	}
-	s.logger.WithFields(logging.Fields{"cell": cell, "retired_by": record.RetiredBy, "created": created, "pending_ingest_stops": len(affected)}).Warn("Ingest cell retired by operator")
+	s.logger.WithFields(logging.Fields{"cell": cell, "retired_by": record.RetiredBy, "created": created, "pending_ingest_stops": affected}).Warn("Ingest cell retired by operator")
 	return &commodorepb.AdminRetireIngestCellResponse{
 		ClusterId: record.CellID, RetiredAt: timestamppb.New(record.RetiredAt), RetiredBy: record.RetiredBy,
-		Reason: record.Reason, AlreadyRetired: !created, PendingIngestStops: int32(len(affected)),
+		Reason: record.Reason, AlreadyRetired: !created, PendingIngestStops: int32(affected),
 	}, nil
+}
+
+// AdminUnretireIngestCell removes a cell's retirement record, so a stop the
+// cell does not confirm stays pending again. Removing a missing record
+// succeeds with was_retired=false. Only platform-operator JWTs may call it.
+func (s *CommodoreServer) AdminUnretireIngestCell(ctx context.Context, req *commodorepb.AdminUnretireIngestCellRequest) (*commodorepb.AdminUnretireIngestCellResponse, error) {
+	if err := middleware.RequirePlatformOperatorJWT(ctx); err != nil {
+		return nil, err
+	}
+	cell := strings.TrimSpace(req.GetClusterId())
+	if cell == "" {
+		return nil, status.Error(codes.InvalidArgument, "cluster_id is required")
+	}
+	reason := strings.TrimSpace(req.GetReason())
+	if reason == "" {
+		return nil, status.Error(codes.InvalidArgument, "reason is required")
+	}
+	record, deleted, err := commodoredb.New(s.db).UnretireIngestCell(ctx, cell)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "remove cell retirement: %v", err)
+	}
+	out := &commodorepb.AdminUnretireIngestCellResponse{ClusterId: cell, WasRetired: deleted}
+	if deleted {
+		out.RetiredAt, out.RetiredBy, out.RetirementReason = timestamppb.New(record.RetiredAt), record.RetiredBy, record.Reason
+		s.logger.WithFields(logging.Fields{
+			"cell": cell, "unretired_by": middleware.GetUserID(ctx), "reason": reason,
+			"retired_by": record.RetiredBy, "retired_at": record.RetiredAt, "retirement_reason": record.Reason,
+		}).Warn("Ingest cell retirement removed by operator")
+	}
+	return out, nil
 }
 
 // refuseAnsweringIngestCell lets retirement proceed only when Quartermaster

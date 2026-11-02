@@ -216,20 +216,15 @@ func TestRetireIngestCellRetriesOnlyStopsThatIncludeTheCell(t *testing.T) {
 	registry := &retirementRegistry{}
 	server, _ := newRetirementServer(t, registry, db)
 	registry.instances = []*quartermasterpb.ServiceInstance{instanceAt(t, closedAddr(t))}
-	tenantA, tenantB, stream := uuid.NewString(), uuid.NewString(), uuid.NewString()
-	op := operatorContext(tenantA)
+	op := operatorContext(uuid.NewString())
 	retiredAt := time.Date(2026, 11, 2, 12, 0, 0, 0, time.UTC)
 	mock.ExpectQuery("INSERT INTO commodore.retired_ingest_cells").WithArgs("removed-cell", sqlmock.AnyArg(), "hardware returned").
 		WillReturnRows(sqlmock.NewRows([]string{"cell_id", "retired_by", "reason", "retired_at"}).AddRow("removed-cell", "operator", "hardware returned", retiredAt))
-	tenantKey := commodoredb.TenantMediaAuthorityTarget(tenantA).Key
-	streamKey := commodoredb.LiveStreamMediaAuthorityTarget(stream).Key
-	mock.ExpectQuery("lane = 'ingest_revocation'").WithArgs("", pendingIngestStopsPerRetire).
-		WillReturnRows(sqlmock.NewRows([]string{"target_key", "target_kind", "tenant_id", "status", "attempts", "pending_since", "next_attempt_at", "last_error"}).
-			AddRow(tenantKey, commodoredb.MediaAuthorityTargetTenant, tenantA, "pending", 4, retiredAt, retiredAt.Add(time.Hour), "stop ingest on cell removed-cell: unavailable").
-			AddRow(streamKey, commodoredb.MediaAuthorityTargetLiveStream, tenantB, "pending", 2, retiredAt, retiredAt.Add(time.Hour), "stop ingest on cell other-cell: unavailable"))
-	mock.ExpectQuery("ListAccountIngestCells").WithArgs(tenantA, "").WillReturnRows(sqlmock.NewRows([]string{"cell_id"}).AddRow("removed-cell").AddRow("live-cell"))
-	mock.ExpectQuery("ListAccountIngestCells").WithArgs(tenantB, stream).WillReturnRows(sqlmock.NewRows([]string{"cell_id"}).AddRow("other-cell"))
-	mock.ExpectExec("SET next_attempt_at = NOW").WithArgs(sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 1))
+	// One statement finds the stops delivered to the cell and reschedules
+	// them; the real-engine lifecycle test proves which stops it selects.
+	mock.ExpectQuery(`affected AS \(\s*SELECT DISTINCT target_key FROM cells WHERE cell_id = \$3::text`).
+		WithArgs("", commodoredb.LiveStreamMediaAuthorityTarget("").Key, "removed-cell").
+		WillReturnRows(sqlmock.NewRows([]string{"matched", "retried"}).AddRow(1, 1))
 	response, err := server.AdminRetireIngestCell(op, &commodorepb.AdminRetireIngestCellRequest{ClusterId: " removed-cell ", Reason: "hardware returned"})
 	if err != nil {
 		t.Fatal(err)
@@ -253,11 +248,9 @@ func TestTenantAccountStateReportsClosureSyncAndStops(t *testing.T) {
 	mock.ExpectQuery("FROM commodore.tenant_account_states").WithArgs(tenant).
 		WillReturnRows(sqlmock.NewRows([]string{"closed_at", "closed_by", "quartermaster_closed_at", "closure_attempted_at", "closure_retry_after", "closure_error", "closure_failures"}).
 			AddRow(closedAt, "operator", nil, closedAt.Add(time.Minute), closedAt.Add(2*time.Minute), "quartermaster unavailable", 3))
-	mock.ExpectQuery("lane = 'ingest_revocation'").WithArgs(tenant, pendingIngestStopsPerTenant).
-		WillReturnRows(sqlmock.NewRows([]string{"target_key", "target_kind", "tenant_id", "status", "attempts", "pending_since", "next_attempt_at", "last_error"}).
-			AddRow(commodoredb.TenantMediaAuthorityTarget(tenant).Key, commodoredb.MediaAuthorityTargetTenant, tenant, "pending", 3, closedAt, closedAt.Add(time.Hour), "stop ingest on cell removed-cell: unavailable"))
-	mock.ExpectQuery("ListAccountIngestCells").WithArgs(tenant, "").WillReturnRows(sqlmock.NewRows([]string{"cell_id"}).AddRow("live-cell").AddRow("removed-cell"))
-	mock.ExpectQuery("retired_ingest_cells").WillReturnRows(sqlmock.NewRows([]string{"cell_id"}).AddRow("removed-cell"))
+	mock.ExpectQuery("lane = 'ingest_revocation'").WithArgs(tenant, commodoredb.LiveStreamMediaAuthorityTarget("").Key, pendingIngestStopsPerTenant+1).
+		WillReturnRows(pendingStopRows().
+			AddRow(commodoredb.TenantMediaAuthorityTarget(tenant).Key, commodoredb.MediaAuthorityTargetTenant, tenant, "pending", 3, closedAt, closedAt.Add(time.Hour), "stop ingest on cell removed-cell: unavailable", "{live-cell,removed-cell}", "{removed-cell}"))
 	state, err := (&CommodoreServer{db: db}).AdminGetTenantAccountState(operatorContext(tenant), &commodorepb.AdminGetTenantAccountStateRequest{TenantId: strings.ToUpper(tenant)})
 	if err != nil {
 		t.Fatal(err)
@@ -266,6 +259,9 @@ func TestTenantAccountStateReportsClosureSyncAndStops(t *testing.T) {
 		t.Fatalf("closure state=%v", state)
 	}
 	stops := state.GetPendingIngestStops()
+	if state.GetPendingIngestStopsTruncated() {
+		t.Fatal("a complete stop list reported as truncated")
+	}
 	if len(stops) != 1 || stops[0].GetTargetId() != tenant || strings.Join(stops[0].GetCells(), ",") != "live-cell,removed-cell" || strings.Join(stops[0].GetRetiredCells(), ",") != "removed-cell" {
 		t.Fatalf("stops=%v", stops)
 	}
@@ -288,5 +284,71 @@ func TestClosureSyncState(t *testing.T) {
 		if got := closureSyncState(tc.state); got != tc.want {
 			t.Fatalf("state=%+v got %s want %s", tc.state, got, tc.want)
 		}
+	}
+}
+
+func pendingStopRows() *sqlmock.Rows {
+	return sqlmock.NewRows([]string{"target_key", "target_kind", "tenant_id", "status", "attempts", "pending_since", "next_attempt_at", "last_error", "cells", "retired_cells"})
+}
+
+func TestTenantAccountStateMarksTruncatedStopList(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	tenant := uuid.NewString()
+	at := time.Date(2026, 11, 1, 9, 0, 0, 0, time.UTC)
+	mock.ExpectQuery("FROM commodore.tenant_account_states").WithArgs(tenant).WillReturnError(sql.ErrNoRows)
+	rows := pendingStopRows()
+	for i := range pendingIngestStopsPerTenant + 1 {
+		rows.AddRow(commodoredb.LiveStreamMediaAuthorityTarget(uuid.NewString()).Key, commodoredb.MediaAuthorityTargetLiveStream, tenant, "pending", 1, at.Add(time.Duration(i)*time.Second), at.Add(time.Hour), "", "{offline-cell}", "{}")
+	}
+	mock.ExpectQuery("lane = 'ingest_revocation'").WithArgs(tenant, commodoredb.LiveStreamMediaAuthorityTarget("").Key, pendingIngestStopsPerTenant+1).WillReturnRows(rows)
+	state, err := (&CommodoreServer{db: db}).AdminGetTenantAccountState(operatorContext(tenant), &commodorepb.AdminGetTenantAccountStateRequest{TenantId: tenant})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.GetPendingIngestStops()) != pendingIngestStopsPerTenant || !state.GetPendingIngestStopsTruncated() || state.GetClosureSync() != closureSyncOpen {
+		t.Fatalf("stops=%d truncated=%v sync=%s", len(state.GetPendingIngestStops()), state.GetPendingIngestStopsTruncated(), state.GetClosureSync())
+	}
+}
+
+func TestUnretireIngestCellRemovesTheRecord(t *testing.T) {
+	s := &CommodoreServer{}
+	service := context.WithValue(context.Background(), ctxkeys.KeyAuthType, "service")
+	if _, err := s.AdminUnretireIngestCell(service, &commodorepb.AdminUnretireIngestCellRequest{ClusterId: "cell", Reason: "returned"}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("service credential unretired a cell: %v", err)
+	}
+	op := operatorContext(uuid.NewString())
+	for _, request := range []*commodorepb.AdminUnretireIngestCellRequest{{Reason: "returned"}, {ClusterId: "cell", Reason: " "}} {
+		if _, err := s.AdminUnretireIngestCell(op, request); status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("request=%v error=%v", request, err)
+		}
+	}
+
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	server := &CommodoreServer{db: db, logger: logging.NewLogger()}
+	retiredAt := time.Date(2026, 11, 2, 12, 0, 0, 0, time.UTC)
+	mock.ExpectQuery("DELETE FROM commodore.retired_ingest_cells").WithArgs("wrong-cell").
+		WillReturnRows(sqlmock.NewRows([]string{"cell_id", "retired_by", "reason", "retired_at"}).AddRow("wrong-cell", "operator", "typo", retiredAt))
+	response, err := server.AdminUnretireIngestCell(op, &commodorepb.AdminUnretireIngestCellRequest{ClusterId: " wrong-cell ", Reason: "retired the wrong cell"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !response.GetWasRetired() || response.GetClusterId() != "wrong-cell" || response.GetRetirementReason() != "typo" || !response.GetRetiredAt().AsTime().Equal(retiredAt) {
+		t.Fatalf("response=%v", response)
+	}
+	mock.ExpectQuery("DELETE FROM commodore.retired_ingest_cells").WithArgs("never-retired").WillReturnRows(sqlmock.NewRows([]string{"cell_id", "retired_by", "reason", "retired_at"}))
+	response, err = server.AdminUnretireIngestCell(op, &commodorepb.AdminUnretireIngestCellRequest{ClusterId: "never-retired", Reason: "check"})
+	if err != nil || response.GetWasRetired() || response.GetRetiredAt() != nil {
+		t.Fatalf("a cell without a record: response=%v err=%v", response, err)
+	}
+	if err = mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }
