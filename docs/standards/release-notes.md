@@ -69,7 +69,7 @@ Do not put `cluster migrate validate` in routine operator instructions. It valid
 
 #### Data migrations and contract migrations
 
-Service-owned data migrations are separate from schema migrations. `release apply` owns expand and postdeploy schema phases, but it does not execute `cluster data-migrate`; catalogued data migrations are explicit operator steps because they may scan or rewrite live service data in resumable batches.
+Service-owned data migrations are separate from schema migrations. `release apply` owns expand and postdeploy schema phases, but it does not run the target release's data migrations; those are explicit operator steps because they may scan or rewrite live service data in resumable batches. The exception is an earlier release's required data migration that is still pending or failed: `release apply` runs it first, behind its backup gate, and names it if it fails. When an earlier release's migration is irreversible, the note says that `release apply` then needs `--backup`.
 
 When the target release declares a data migration, include its exact dry-run, run, and verify commands after the target service binaries are live:
 
@@ -79,9 +79,10 @@ When the target release declares a data migration, include its exact dry-run, ru
 
 State the catalog gate. A migration required before `postdeploy` may intentionally make the first `release apply` stop at that gate; after `run` and `verify`, rerun the same `release apply --yes` command. A migration required only before `contract` runs after the normal release application and does not require a second `release apply`. Include it in the introducing release so operators complete the data conversion before a later destructive phase makes it urgent.
 
-Contract migrations are always outside `release apply`. When a release has contract migrations, name the rollback or observation window and append a separate, explicitly deferred block:
+Contract migrations are always outside `release apply`. When a release has contract migrations, name the rollback or observation window and append a separate, explicitly deferred block. The first dry run refuses without `--backup` and prints the `backup create` command for exactly the databases the phase changes; do not tell operators to back up `--all`:
 
-    frameworks cluster backup create --manifest <path> --to <backup-dir> --all
+    frameworks cluster migrate --manifest <path> --phase contract --to-version vX.Y.Z --dry-run
+    frameworks cluster backup create --manifest <path> --to <backup-dir> --database <name> ...   # as printed
     frameworks cluster migrate --manifest <path> --phase contract --to-version vX.Y.Z --backup <completed-backup-path> --dry-run
     frameworks cluster migrate --manifest <path> --phase contract --to-version vX.Y.Z --backup <completed-backup-path> --yes
 
