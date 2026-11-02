@@ -1,0 +1,173 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ReactiveControllerHost } from "lit";
+import "../src/define.js";
+import { FwStreamCrafter } from "../src/components/fw-streamcrafter.js";
+import { FwScCameraPicker } from "../src/components/fw-sc-camera-picker.js";
+import { FwScMediaControls } from "../src/components/fw-sc-media-controls.js";
+import { FwScOverlayControls } from "../src/components/fw-sc-overlay-controls.js";
+import { FwScProducerPanel } from "../src/components/fw-sc-producer-panel.js";
+import { FwScMeter } from "../src/components/fw-sc-meter.js";
+import { IngestControllerHost } from "../src/controllers/ingest-controller-host.js";
+import { STUDIO_UPDATE_EVENT } from "../src/components/studio-bound-element.js";
+
+afterEach(() => {
+  document.body.innerHTML = "";
+});
+
+function fakeStudio(pc: Record<string, unknown>, sceneManager: unknown = null) {
+  const studio = new FwStreamCrafter();
+  Object.assign(studio.pc, pc);
+  Object.defineProperty(studio, "sceneManager", { get: () => sceneManager });
+  return studio;
+}
+
+describe("<fw-sc-camera-picker>", () => {
+  it("lists the cameras with one live and starts the one picked", async () => {
+    const startCamera = vi.fn(async () => ({}));
+    const studio = fakeStudio({
+      startCamera,
+      getCameraChoices: async () => [
+        { deviceId: "front", label: "Front", inUse: true },
+        { deviceId: "rear", label: "Rear", inUse: false },
+      ],
+    });
+    studio.pc.s.sources = [{ type: "camera" }] as never;
+    const picker = new FwScCameraPicker();
+    picker.studio = studio;
+
+    await picker.toggle();
+    expect(picker.choices).toHaveLength(2);
+    expect(startCamera).not.toHaveBeenCalled();
+
+    picker.pick("rear");
+    expect(startCamera).toHaveBeenCalledWith({ videoDeviceId: "rear" });
+    expect(picker.choices).toBeNull();
+  });
+
+  it("starts the only camera straight away", async () => {
+    const startCamera = vi.fn(async () => ({}));
+    const studio = fakeStudio({
+      startCamera,
+      getCameraChoices: async () => [{ deviceId: "front", label: "Front", inUse: false }],
+    });
+    const picker = new FwScCameraPicker();
+    picker.studio = studio;
+
+    await picker.toggle();
+
+    expect(startCamera).toHaveBeenCalledWith({ videoDeviceId: "front" });
+  });
+});
+
+describe("files the studio cannot use", () => {
+  it("are reported by the overlay and media controls", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const scene = { id: "scene", layers: [] };
+    const studio = fakeStudio(
+      {
+        addMediaFile: async () => {
+          throw new Error("unsupported");
+        },
+      },
+      {
+        getActiveScene: () => scene,
+        getOverlays: () => [],
+        addImageOverlay: async () => {
+          throw new Error("bad image");
+        },
+      }
+    );
+    const overlays = new FwScOverlayControls();
+    overlays.studio = studio;
+    const media = new FwScMediaControls();
+    media.studio = studio;
+    document.body.append(overlays, media);
+
+    await overlays.addImage(new File(["x"], "logo.png"));
+    await media.addFile(new File(["x"], "clip.mp4"));
+    await overlays.updateComplete;
+    await media.updateComplete;
+
+    expect(overlays.shadowRoot?.querySelector('[role="alert"]')?.textContent).toBeTruthy();
+    expect(media.shadowRoot?.querySelector('[role="alert"]')?.textContent).toBeTruthy();
+  });
+});
+
+describe("sub-elements bound with for", () => {
+  it("find a studio that mounts after them and render with it", async () => {
+    const media = document.createElement("fw-sc-media-controls") as FwScMediaControls;
+    media.setAttribute("for", "studio");
+    document.body.append(media);
+    await media.updateComplete;
+    expect(media.shadowRoot?.querySelector(".fw-sc-producer-section")).toBeNull();
+
+    const studio = document.createElement("fw-streamcrafter") as FwStreamCrafter;
+    studio.id = "studio";
+    document.body.append(studio);
+    await studio.updateComplete;
+    await media.updateComplete;
+
+    expect(media.shadowRoot?.querySelector(".fw-sc-producer-section")).toBeTruthy();
+  });
+
+  it("ignore a studio with another id", async () => {
+    const panel = document.createElement("fw-sc-producer-panel") as FwScProducerPanel;
+    panel.setAttribute("for", "mine");
+    document.body.append(panel);
+    const other = document.createElement("fw-streamcrafter");
+    other.id = "other";
+    document.body.append(other);
+
+    const requestUpdate = vi.spyOn(panel, "requestUpdate");
+    other.dispatchEvent(new Event(STUDIO_UPDATE_EVENT, { bubbles: true, composed: true }));
+
+    expect(requestUpdate).not.toHaveBeenCalled();
+  });
+});
+
+describe("audio levels", () => {
+  function mixer() {
+    let handler: ((event: { level: number; peakLevel: number }) => void) | null = null;
+    return {
+      on: (_event: string, fn: typeof handler) => {
+        handler = fn;
+        return () => {
+          handler = null;
+        };
+      },
+      startLevelMonitoring: () => {},
+      stopLevelMonitoring: () => {},
+      emit: (level: number) => handler?.({ level, peakLevel: level }),
+    };
+  }
+
+  it("do not render the studio again", () => {
+    const host = document.createElement("div") as unknown as ReactiveControllerHost & HTMLElement;
+    const requestUpdate = vi.fn();
+    Object.assign(host, { addController: vi.fn(), requestUpdate });
+    const ic = new IngestControllerHost(host);
+    const audio = mixer();
+    Object.assign(ic, { controller: { getAudioMixer: () => audio } });
+
+    (ic as unknown as { startAudioLevelMonitoring(): void }).startAudioLevelMonitoring();
+    audio.emit(0.5);
+
+    expect(requestUpdate).not.toHaveBeenCalled();
+    expect(ic.s.audioLevel).toBe(0.5);
+  });
+
+  it("move the meter", async () => {
+    const audio = mixer();
+    const studio = fakeStudio({ getController: () => ({ getAudioMixer: () => audio }) });
+    const meter = new FwScMeter();
+    meter.studio = studio;
+    document.body.append(meter);
+    await meter.updateComplete;
+
+    audio.emit(0.25);
+    await meter.updateComplete;
+
+    const fill = meter.shadowRoot?.querySelector<HTMLElement>(".fw-sc-vu-meter-fill");
+    expect(fill?.getAttribute("style")).toContain("width:25%");
+  });
+});

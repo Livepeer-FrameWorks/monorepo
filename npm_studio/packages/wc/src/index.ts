@@ -8,6 +8,12 @@ export { FwScSceneSwitcher } from "./components/fw-sc-scene-switcher.js";
 export { FwScLayerList } from "./components/fw-sc-layer-list.js";
 export { FwScVolume } from "./components/fw-sc-volume.js";
 export { FwScAdvanced } from "./components/fw-sc-advanced.js";
+export { FwScProducerPanel } from "./components/fw-sc-producer-panel.js";
+export { FwScCameraPicker } from "./components/fw-sc-camera-picker.js";
+export { FwScOverlayControls } from "./components/fw-sc-overlay-controls.js";
+export { FwScMediaControls } from "./components/fw-sc-media-controls.js";
+export { FwScMeter } from "./components/fw-sc-meter.js";
+export { STUDIO_UPDATE_EVENT } from "./components/studio-bound-element.js";
 export { IngestControllerHost } from "./controllers/ingest-controller-host.js";
 export type {
   IngestControllerHostState,

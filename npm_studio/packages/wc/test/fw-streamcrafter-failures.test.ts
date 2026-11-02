@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../src/components/fw-streamcrafter.js";
+import "../src/components/fw-sc-media-controls.js";
 import type { FwStreamCrafter } from "../src/components/fw-streamcrafter.js";
+import type { FwScMediaControls } from "../src/components/fw-sc-media-controls.js";
 import {
   installStudioBrowser,
   lastPeer,
@@ -26,12 +28,14 @@ async function studio(options?: StudioBrowserOptions, props: Partial<FwStreamCra
   document.body.appendChild(el);
   element = el;
   await el.updateComplete;
+  await picker(el).updateComplete;
   return { ...browser, el };
 }
 
 const root = (el: FwStreamCrafter) => el.shadowRoot!;
+const picker = (el: FwStreamCrafter) => root(el).querySelector("fw-sc-camera-picker")!;
 const addCamera = (el: FwStreamCrafter) =>
-  root(el).querySelector<HTMLButtonElement>('[title="Add Camera"]')!;
+  picker(el).shadowRoot!.querySelector<HTMLButtonElement>('[title="Add Camera"]')!;
 const screenButton = (el: FwStreamCrafter) =>
   root(el).querySelector<HTMLButtonElement>(".fw-sc-actions > button")!;
 const goLive = (el: FwStreamCrafter) =>
@@ -200,7 +204,7 @@ describe("the camera list", () => {
     addCamera(el).click();
     await settle(el);
 
-    expect(root(el).querySelector('[role="alert"]')?.textContent?.trim()).toBe(
+    expect(picker(el).shadowRoot!.querySelector('[role="alert"]')?.textContent?.trim()).toBe(
       "Could not list the cameras"
     );
   });
@@ -218,7 +222,7 @@ describe("the camera list", () => {
     addCamera(el).click();
     await settle(el);
 
-    expect(root(el).querySelector('[role="alert"]')).toBeNull();
+    expect(picker(el).shadowRoot!.querySelector('[role="alert"]')).toBeNull();
   });
 });
 
@@ -310,15 +314,12 @@ describe("a browser that cannot do everything", () => {
   });
 
   describe("adding a media file", () => {
-    const section = (el: FwStreamCrafter) => {
-      const host = document.createElement("div");
-      const internals = el as unknown as {
-        _renderMediaSection(sources: never[]): unknown;
-      };
-      return import("lit").then(({ render }) => {
-        render(internals._renderMediaSection([]), host);
-        return host;
-      });
+    const section = async (el: FwStreamCrafter) => {
+      const controls = document.createElement("fw-sc-media-controls") as FwScMediaControls;
+      controls.studio = el;
+      document.body.appendChild(controls);
+      await controls.updateComplete;
+      return controls.shadowRoot!;
     };
 
     it("is offered where the browser can play a file into the mix", async () => {

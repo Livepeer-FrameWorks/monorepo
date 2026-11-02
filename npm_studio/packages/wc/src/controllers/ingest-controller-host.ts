@@ -261,8 +261,11 @@ export class IngestControllerHost implements ReactiveController {
     const audioMixer = this.controller.getAudioMixer();
     if (!audioMixer) return;
 
+    // Levels arrive at frame rate. They are kept for readers of `s` without
+    // rendering the host again; <fw-sc-meter> follows the mixer itself.
     const unsub = audioMixer.on("levelUpdate", (event: { level: number; peakLevel: number }) => {
-      this.update({ audioLevel: event.level, peakAudioLevel: event.peakLevel });
+      this.s.audioLevel = event.level;
+      this.s.peakAudioLevel = event.peakLevel;
     });
     audioMixer.startLevelMonitoring();
     this.audioLevelCleanup = () => {

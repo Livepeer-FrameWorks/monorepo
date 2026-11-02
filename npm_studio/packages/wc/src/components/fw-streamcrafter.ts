@@ -22,14 +22,16 @@ import {
 } from "../icons/index.js";
 import { IngestControllerHost } from "../controllers/ingest-controller-host.js";
 import { defaultTrueBoolean } from "../attribute-converters.js";
+import { STUDIO_UPDATE_EVENT } from "./studio-bound-element.js";
+import "./fw-sc-camera-picker.js";
+import "./fw-sc-meter.js";
+import "./fw-sc-producer-panel.js";
 import {
   IngestClient,
-  type CameraChoice,
   type CompositorConfig,
   detectStudioSupport,
   getAudioConstraints,
   isSourceVisibleInScene,
-  TEXT_OVERLAY_DEFAULTS,
   type EncoderOverrides,
   type IngestClientStatus,
   type IngestState,
@@ -39,17 +41,13 @@ import {
   type QualityProfile,
   type ReconnectionState,
   type FwThemePreset,
-  type StudioThemeOverrides,
+  type SceneManager,
+  type StudioSupport,
   applyStudioTheme,
-  applyStudioThemeOverrides,
   clearStudioTheme,
   createStudioTranslator,
-  nextStudioSceneName,
-  type Scene,
-  type StudioOverlay,
   type StudioTranslateFn,
   type StudioLocale,
-  type TransitionConfig,
 } from "@livepeer-frameworks/streamcrafter-core";
 
 interface AudioProcessingSettings {
@@ -106,7 +104,7 @@ export class FwStreamCrafter extends LitElement {
   @property({ type: String, attribute: "encoder-worker-url" }) encoderWorkerUrl = "";
   @property({ type: String, attribute: "rtc-transform-worker-url" }) rtcTransformWorkerUrl = "";
   @property({ type: String }) locale: StudioLocale = "en";
-  /** Set to "false" to hide built-in controls. Set to "stock" for minimal controls. */
+  /** Set to "false" to render only a slot for your own UI built from the fw-sc-* elements. */
   @property({ type: String }) controls: string = "";
 
   @state() private _showSettings = false;
@@ -118,21 +116,18 @@ export class FwStreamCrafter extends LitElement {
   @state() private _endpointError: string | null = null;
   @state() private _audioProcessing: AudioProcessingSettings;
   @state() private _encoderOverrides: EncoderOverrides = {};
-  @state() private _cameraChoices: CameraChoice[] | null = null;
-  @state() private _cameraListFailed = false;
   @state() private _compositorFailed = false;
-  @state() private _overlayImageFailed = false;
-  @state() private _mediaFileFailed = false;
 
   @query(".fw-sc-preview video") private _videoEl!: HTMLVideoElement | null;
   @query(".fw-sc-settings-popup") private _settingsPopupEl!: HTMLElement | null;
   @query(".fw-sc-action-secondary--settings") private _settingsButtonEl!: HTMLElement | null;
   @query(".fw-sc-context-menu") private _contextMenuEl!: HTMLElement | null;
-  @query(".fw-sc-camera-picker") private _cameraPickerEl!: HTMLElement | null;
 
   pc: IngestControllerHost;
   private _t: StudioTranslateFn = createStudioTranslator({ locale: "en" });
   private _support = detectStudioSupport();
+  private _boundSceneManager: SceneManager | null = null;
+  private _sceneManagerUnsubs: Array<() => void> = [];
   private _ingestClient: IngestClient | null = null;
   private _lastInitKey = "";
   private _dismissListenersAttached = false;
@@ -182,8 +177,25 @@ export class FwStreamCrafter extends LitElement {
     this.removeEventListener("fw-sc-state-change", this._handleStateChangeEvent);
     this.removeEventListener("fw-sc-error", this._handleErrorEvent);
     this._teardownDismissListeners();
+    this._bindSceneManager(null);
     this._destroyIngestClient();
     super.disconnectedCallback();
+  }
+
+  /** Translator for the current locale, shared with the fw-sc-* sub-elements. */
+  get t(): StudioTranslateFn {
+    return this._t;
+  }
+
+  /** What this browser can capture and publish. */
+  get support(): StudioSupport {
+    return this._support;
+  }
+
+  /** The compositor's scene manager while the compositor runs. */
+  get sceneManager(): SceneManager | null {
+    if (!this.enableCompositor) return null;
+    return this.pc.getController()?.getSceneManager() ?? null;
   }
 
   willUpdate(changed: Map<string, unknown>) {
@@ -210,12 +222,7 @@ export class FwStreamCrafter extends LitElement {
       this._syncCompositor();
     }
 
-    if (
-      changed.has("_showSettings") ||
-      changed.has("_contextMenu") ||
-      changed.has("_cameraChoices") ||
-      changed.has("_cameraListFailed")
-    ) {
+    if (changed.has("_showSettings") || changed.has("_contextMenu")) {
       this._syncDismissListeners();
     }
   }
@@ -223,6 +230,30 @@ export class FwStreamCrafter extends LitElement {
   updated(changed: Map<string, unknown>) {
     this._syncVideoPreview();
     if (changed.has("theme")) this._applyTheme();
+    this._bindSceneManager(this.sceneManager);
+    this.dispatchEvent(new Event(STUDIO_UPDATE_EVENT, { bubbles: true, composed: true }));
+  }
+
+  /** Renders again on scene and layer changes made through the scene manager by anyone. */
+  private _bindSceneManager(sceneManager: SceneManager | null) {
+    if (sceneManager === this._boundSceneManager) return;
+    this._sceneManagerUnsubs.forEach((unsubscribe) => unsubscribe());
+    this._sceneManagerUnsubs = [];
+    this._boundSceneManager = sceneManager;
+    if (!sceneManager) return;
+    const refresh = () => this.requestUpdate();
+    this._sceneManagerUnsubs = [
+      sceneManager.on("sceneCreated", refresh),
+      sceneManager.on("sceneDeleted", refresh),
+      sceneManager.on("sceneActivated", refresh),
+      sceneManager.on("layerAdded", refresh),
+      sceneManager.on("layerRemoved", refresh),
+      sceneManager.on("layerUpdated", refresh),
+      sceneManager.on("transitionStarted", refresh),
+      sceneManager.on("transitionCompleted", refresh),
+      sceneManager.on("layoutAnimationCompleted", refresh),
+      sceneManager.on("rendererChanged", refresh),
+    ];
   }
 
   private _applyTheme() {
@@ -445,24 +476,16 @@ export class FwStreamCrafter extends LitElement {
         this._contextMenu = null;
       }
     }
-
-    if (!this._eventHitsElement(event, this._cameraPickerEl)) {
-      this._cameraChoices = null;
-      this._cameraListFailed = false;
-    }
   };
 
   private _handleDocumentKeyDown = (event: KeyboardEvent) => {
     if (event.key !== "Escape") return;
     if (this._showSettings) this._showSettings = false;
     if (this._contextMenu) this._contextMenu = null;
-    this._cameraChoices = null;
-    this._cameraListFailed = false;
   };
 
   private _syncDismissListeners() {
-    const shouldAttach =
-      this._showSettings || !!this._contextMenu || !!this._cameraChoices || this._cameraListFailed;
+    const shouldAttach = this._showSettings || !!this._contextMenu;
     if (shouldAttach && !this._dismissListenersAttached) {
       document.addEventListener("mousedown", this._handleDocumentMouseDown);
       document.addEventListener("keydown", this._handleDocumentKeyDown);
@@ -751,22 +774,9 @@ export class FwStreamCrafter extends LitElement {
               : nothing}
           </div>
 
-          ${s.isCapturing
-            ? html`
-                <div class="fw-sc-vu-meter">
-                  <div
-                    class="fw-sc-vu-meter-fill"
-                    style="width:${Math.min(s.audioLevel * 100, 100)}%"
-                  ></div>
-                  <div
-                    class="fw-sc-vu-meter-peak"
-                    style="left:${Math.min(s.peakAudioLevel * 100, 100)}%"
-                  ></div>
-                </div>
-              `
-            : nothing}
+          ${s.isCapturing ? html`<fw-sc-meter .studio=${this}></fw-sc-meter>` : nothing}
           ${this.showProducerPanel && activeScene
-            ? this._renderProducerPanel(s.sources, activeScene)
+            ? html`<fw-sc-producer-panel .studio=${this}></fw-sc-producer-panel>`
             : nothing}
           ${browserNotices.map(
             (notice) => html`
@@ -808,7 +818,7 @@ export class FwStreamCrafter extends LitElement {
             : nothing}
 
           <div class="fw-sc-actions">
-            ${this._renderCameraPicker(canAddSource && support.camera)}
+            <fw-sc-camera-picker .studio=${this}></fw-sc-camera-picker>
             <button
               type="button"
               class="fw-sc-action-secondary"
@@ -939,378 +949,6 @@ export class FwStreamCrafter extends LitElement {
               ></fw-sc-advanced>
             `
           : nothing}
-      </div>
-    `;
-  }
-
-  private _renderProducerPanel(sources: MediaSource[], activeScene: Scene) {
-    const sceneManager = this.pc.getController()?.getSceneManager();
-    if (!sceneManager) return nothing;
-    const scenes = sceneManager.getAllScenes();
-
-    return html`
-      <section class="fw-sc-producer" aria-label=${this._t("composition")}>
-        <fw-sc-scene-switcher
-          .scenes=${scenes}
-          .activeSceneId=${activeScene.id}
-          .t=${this._t}
-          .onSceneSelect=${(sceneId: string) => {
-            sceneManager.setActiveScene(sceneId);
-            this.requestUpdate();
-          }}
-          .onSceneCreate=${() => {
-            sceneManager.createScene(nextStudioSceneName(scenes, this._t));
-            this.requestUpdate();
-          }}
-          .onSceneDelete=${(sceneId: string) => {
-            sceneManager.deleteScene(sceneId);
-            this.requestUpdate();
-          }}
-          .onTransitionTo=${async (sceneId: string, transition: TransitionConfig) => {
-            const finished = sceneManager.transitionTo(sceneId, transition);
-            this.requestUpdate();
-            await finished;
-          }}
-        ></fw-sc-scene-switcher>
-        <fw-sc-layer-list
-          .layers=${[...activeScene.layers]}
-          .sources=${sources}
-          .t=${this._t}
-          .onVisibilityToggle=${(layerId: string, visible: boolean) => {
-            sceneManager.setLayerVisibility(activeScene.id, layerId, visible);
-            this.requestUpdate();
-          }}
-          .onReorder=${(layerIds: string[]) => {
-            sceneManager.reorderLayers(activeScene.id, layerIds);
-            this.requestUpdate();
-          }}
-        ></fw-sc-layer-list>
-        ${this._renderOverlaySection(activeScene)} ${this._renderMediaSection(sources)}
-      </section>
-    `;
-  }
-
-  private async _handleAddCamera() {
-    this._cameraListFailed = false;
-    if (this._cameraChoices) {
-      this._cameraChoices = null;
-      return;
-    }
-    let choices: CameraChoice[];
-    try {
-      choices = await this.pc.getCameraChoices();
-    } catch (error) {
-      console.error("Failed to list cameras:", error);
-      this._cameraListFailed = true;
-      return;
-    }
-    const hasCamera = this.pc.s.sources.some((source: MediaSource) => source.type === "camera");
-    if (!hasCamera && choices.length <= 1) {
-      this._startCamera(choices[0]?.deviceId);
-      return;
-    }
-    this._cameraChoices = choices;
-  }
-
-  private _startCamera(videoDeviceId?: string) {
-    this._cameraChoices = null;
-    this.pc.startCamera(videoDeviceId ? { videoDeviceId } : undefined).catch(console.error);
-  }
-
-  private _renderCameraPicker(canAddSource: boolean) {
-    const choices = this._cameraChoices;
-    return html`
-      <div class="fw-sc-camera-picker">
-        <button
-          type="button"
-          class="fw-sc-action-secondary"
-          @click=${() => this._handleAddCamera()}
-          ?disabled=${!canAddSource}
-          title=${this._t("addCamera")}
-          aria-haspopup="menu"
-          aria-expanded=${choices !== null}
-        >
-          ${cameraIcon(18)}
-        </button>
-        ${this._cameraListFailed
-          ? html`
-              <div class="fw-sc-camera-menu" role="alert">
-                <div class="fw-sc-camera-menu-note">${this._t("cameraListError")}</div>
-              </div>
-            `
-          : nothing}
-        ${choices
-          ? html`
-              <div class="fw-sc-camera-menu" role="menu" aria-label=${this._t("chooseCamera")}>
-                <div class="fw-sc-camera-menu-title">${this._t("chooseCamera")}</div>
-                ${choices.map(
-                  (choice) => html`
-                    <button
-                      type="button"
-                      role="menuitem"
-                      class="fw-sc-context-menu-item"
-                      ?disabled=${choice.inUse}
-                      @click=${() => this._startCamera(choice.deviceId)}
-                    >
-                      <span>${choice.label}</span>
-                      ${choice.inUse
-                        ? html`<span class="fw-sc-camera-menu-note"
-                            >${this._t("cameraActive")}</span
-                          >`
-                        : nothing}
-                    </button>
-                  `
-                )}
-              </div>
-            `
-          : nothing}
-      </div>
-    `;
-  }
-
-  private _takeFile(event: Event): File | undefined {
-    const input = event.target as HTMLInputElement;
-    const file = input.files?.[0];
-    input.value = "";
-    return file;
-  }
-
-  private async _handleOverlayImage(event: Event, activeScene: Scene) {
-    const file = this._takeFile(event);
-    const sceneManager = this.pc.getController()?.getSceneManager();
-    if (!file || !sceneManager) return;
-
-    this._overlayImageFailed = false;
-    try {
-      await sceneManager.addImageOverlay(activeScene.id, file);
-    } catch (error) {
-      console.error("Failed to add image overlay:", error);
-      this._overlayImageFailed = true;
-    }
-    this.requestUpdate();
-  }
-
-  private async _handleMediaFile(event: Event) {
-    const file = this._takeFile(event);
-    if (!file) return;
-
-    this._mediaFileFailed = false;
-    try {
-      await this.pc.addMediaFile(file);
-    } catch (error) {
-      console.error("Failed to add media file:", error);
-      this._mediaFileFailed = true;
-    }
-  }
-
-  private _renderOverlayField(label: string, control: unknown) {
-    return html`<label class="fw-sc-overlay-field">${label} ${control}</label>`;
-  }
-
-  private _renderOverlayPercent(
-    overlay: StudioOverlay,
-    label: string,
-    field: "x" | "y" | "size",
-    min: number
-  ) {
-    return this._renderOverlayField(
-      label,
-      html`<input
-        type="range"
-        min=${min}
-        max="100"
-        .value=${String(Math.round(overlay[field] * 100))}
-        @input=${(event: Event) => {
-          const value = Number((event.target as HTMLInputElement).value) / 100;
-          this.pc
-            .getController()
-            ?.getSceneManager()
-            ?.setOverlayPlacement(overlay.sourceId, { [field]: value });
-          this.requestUpdate();
-        }}
-      />`
-    );
-  }
-
-  private _renderOverlay(overlay: StudioOverlay) {
-    const sceneManager = this.pc.getController()?.getSceneManager();
-    const text = overlay.text;
-    const updateText = (
-      config: Parameters<NonNullable<typeof sceneManager>["updateTextOverlay"]>[1]
-    ) => {
-      sceneManager?.updateTextOverlay(overlay.sourceId, config);
-      this.requestUpdate();
-    };
-
-    return html`
-      <div class="fw-sc-overlay-item">
-        <div class="fw-sc-overlay-header">
-          <span class="fw-sc-overlay-name">${overlay.label}</span>
-          <button
-            type="button"
-            class="fw-sc-icon-btn fw-sc-icon-btn--destructive"
-            title=${this._t("removeOverlay")}
-            @click=${() => {
-              sceneManager?.removeOverlay(overlay.sourceId);
-              this.requestUpdate();
-            }}
-          >
-            ${xIcon(14)}
-          </button>
-        </div>
-        ${text
-          ? html`
-              ${this._renderOverlayField(
-                this._t("overlayText"),
-                html`<textarea
-                  rows="2"
-                  .value=${text.text}
-                  @input=${(event: Event) =>
-                    updateText({ text: (event.target as HTMLTextAreaElement).value })}
-                ></textarea>`
-              )}
-              ${this._renderOverlayField(
-                this._t("overlayFontSize"),
-                html`<input
-                  type="range"
-                  min=${TEXT_OVERLAY_DEFAULTS.minFontSize}
-                  max=${TEXT_OVERLAY_DEFAULTS.maxFontSize}
-                  .value=${String(text.fontSize ?? TEXT_OVERLAY_DEFAULTS.fontSize)}
-                  @input=${(event: Event) =>
-                    updateText({ fontSize: Number((event.target as HTMLInputElement).value) })}
-                />`
-              )}
-              ${this._renderOverlayField(
-                this._t("overlayColor"),
-                html`<input
-                  type="color"
-                  .value=${text.color ?? TEXT_OVERLAY_DEFAULTS.color}
-                  @input=${(event: Event) =>
-                    updateText({ color: (event.target as HTMLInputElement).value })}
-                />`
-              )}
-            `
-          : this._renderOverlayPercent(overlay, this._t("overlaySize"), "size", 5)}
-        ${this._renderOverlayPercent(overlay, this._t("overlayPositionX"), "x", 0)}
-        ${this._renderOverlayPercent(overlay, this._t("overlayPositionY"), "y", 0)}
-      </div>
-    `;
-  }
-
-  private _renderOverlaySection(activeScene: Scene) {
-    const sceneManager = this.pc.getController()?.getSceneManager();
-    const overlays = sceneManager?.getOverlays(activeScene.id) ?? [];
-
-    return html`
-      <div class="fw-sc-producer-section">
-        <div class="fw-sc-producer-section-header">
-          <span class="fw-sc-producer-section-title">${this._t("overlays")}</span>
-          <div class="fw-sc-producer-section-actions">
-            <label class="fw-sc-producer-btn">
-              ${this._t("addLogo")}
-              <input
-                class="fw-sc-producer-file"
-                type="file"
-                accept="image/*"
-                @change=${(event: Event) => this._handleOverlayImage(event, activeScene)}
-              />
-            </label>
-            <button
-              type="button"
-              class="fw-sc-producer-btn"
-              @click=${() => {
-                sceneManager?.addTextOverlay(activeScene.id, {
-                  text: this._t("overlayDefaultText"),
-                });
-                this.requestUpdate();
-              }}
-            >
-              ${this._t("addText")}
-            </button>
-          </div>
-        </div>
-        ${this._overlayImageFailed
-          ? html`<p class="fw-sc-producer-error" role="alert">${this._t("overlayImageError")}</p>`
-          : nothing}
-        ${overlays.length === 0
-          ? html`<p class="fw-sc-producer-empty">${this._t("noOverlays")}</p>`
-          : html`
-              <div class="fw-sc-overlay-list">
-                ${overlays.map((overlay) => this._renderOverlay(overlay))}
-              </div>
-            `}
-        ${overlays.some((overlay) => overlay.kind === "image")
-          ? html`<p class="fw-sc-producer-notice">${this._t("overlayLocalNotice")}</p>`
-          : nothing}
-      </div>
-    `;
-  }
-
-  private _renderMediaSection(sources: MediaSource[]) {
-    const files = sources.filter((source) => source.media);
-
-    return html`
-      <div class="fw-sc-producer-section">
-        <div class="fw-sc-producer-section-header">
-          <span class="fw-sc-producer-section-title">${this._t("media")}</span>
-          ${this._support.mediaFile
-            ? html`
-                <div class="fw-sc-producer-section-actions">
-                  <label class="fw-sc-producer-btn">
-                    ${this._t("addMediaFile")}
-                    <input
-                      class="fw-sc-producer-file"
-                      type="file"
-                      accept="video/*,audio/*"
-                      @change=${(event: Event) => this._handleMediaFile(event)}
-                    />
-                  </label>
-                </div>
-              `
-            : nothing}
-        </div>
-        ${!this._support.mediaFile
-          ? html`<p class="fw-sc-producer-notice">${this._t("mediaFileUnsupported")}</p>`
-          : nothing}
-        ${this._mediaFileFailed
-          ? html`<p class="fw-sc-producer-error" role="alert">${this._t("mediaFileError")}</p>`
-          : nothing}
-        ${files.length === 0
-          ? html`<p class="fw-sc-producer-empty">${this._t("noMedia")}</p>`
-          : html`
-              <div class="fw-sc-media-list">
-                ${files.map(
-                  (source) => html`
-                    <div class="fw-sc-media-item">
-                      <span class="fw-sc-overlay-name">${source.label}</span>
-                      <button
-                        type="button"
-                        class="fw-sc-producer-btn"
-                        @click=${() =>
-                          source.media?.playing
-                            ? this.pc.pauseMediaSource(source.id)
-                            : this.pc.playMediaSource(source.id)}
-                      >
-                        ${source.media?.playing ? this._t("pauseMedia") : this._t("playMedia")}
-                      </button>
-                      <label class="fw-sc-media-loop">
-                        <input
-                          type="checkbox"
-                          .checked=${source.media?.loop ?? false}
-                          @change=${(event: Event) =>
-                            this.pc.setMediaSourceLoop(
-                              source.id,
-                              (event.target as HTMLInputElement).checked
-                            )}
-                        />
-                        ${this._t("loopMedia")}
-                      </label>
-                    </div>
-                  `
-                )}
-              </div>
-            `}
-        <p class="fw-sc-producer-notice">${this._t("mediaTabNotice")}</p>
       </div>
     `;
   }
