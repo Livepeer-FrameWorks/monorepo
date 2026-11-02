@@ -196,6 +196,14 @@ first:
 | Processing input       | Memory-only by default for safe wrappers; doesn't compete for disk. |
 | Warm/aged cache        | Lowest                                                              | First to evict.                                         |
 
+Among the clip, DVR and VOD files cleanup may remove, Helmsman reclaims cold
+content first. Each candidate scores
+`(accesses + 1) × recency / (1 + age in days + size in GB)`, where recency is
+10 for content read in the last 24 hours, 2 for the last 7 days and 1 otherwise,
+and the lowest score is evicted first. Pressure cleanup and the storage manager
+use the same order, so recently and frequently played content outlasts old,
+large, unread files.
+
 Operationally: a single very large VOD or DVR chapter can never starve
 a live recording, but a sustained burst of cold VOD playback can
 exhaust edge disk and degrade to S3-direct (memory-only) until cleanup
