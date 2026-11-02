@@ -88,8 +88,6 @@ function hasAnyDefinedValue(object?: Record<string, unknown>): boolean {
 
 @customElement("fw-sc-advanced")
 export class FwScAdvanced extends LitElement {
-  /** ID of a `<fw-streamcrafter>` to bind to (for standalone usage). */
-  @property({ type: String, attribute: "for" }) for: string = "";
   @property({ attribute: false }) ic!: IngestControllerHost;
   @property({ type: String, attribute: "whip-url" }) whipUrl = "";
   @property({ attribute: false }) audioProcessing: AudioProcessingSettings = {

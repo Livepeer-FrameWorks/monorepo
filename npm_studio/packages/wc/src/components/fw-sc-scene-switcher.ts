@@ -25,8 +25,6 @@ const DEFAULT_TRANSITION: TransitionConfig = {
 
 @customElement("fw-sc-scene-switcher")
 export class FwScSceneSwitcher extends LitElement {
-  /** ID of a `<fw-streamcrafter>` to bind to (for standalone usage). */
-  @property({ type: String, attribute: "for" }) for: string = "";
   @property({ attribute: false }) scenes: Scene[] = [];
   @property({ type: String, attribute: "active-scene-id" }) activeSceneId: string | null = null;
   @property({ type: Boolean, attribute: "show-transition-controls" }) showTransitionControls = true;

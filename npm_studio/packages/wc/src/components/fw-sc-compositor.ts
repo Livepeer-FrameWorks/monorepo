@@ -79,8 +79,6 @@ const SCALING_MODES: {
 
 @customElement("fw-sc-compositor")
 export class FwScCompositor extends LitElement {
-  /** ID of a `<fw-streamcrafter>` to bind to (for standalone usage). */
-  @property({ type: String, attribute: "for" }) for: string = "";
   @property({ type: Boolean, attribute: "is-enabled" }) isEnabled = false;
   @property({ type: Boolean, attribute: "is-initialized" }) isInitialized = false;
   @property({ type: String, attribute: "renderer-type" }) rendererType: RendererType | null = null;

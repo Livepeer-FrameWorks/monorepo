@@ -16,8 +16,6 @@ import {
 
 @customElement("fw-sc-layer-list")
 export class FwScLayerList extends LitElement {
-  /** ID of a `<fw-streamcrafter>` to bind to (for standalone usage). */
-  @property({ type: String, attribute: "for" }) for: string = "";
   @property({ attribute: false }) layers: Layer[] = [];
   @property({ attribute: false }) sources: MediaSource[] = [];
   @property({ type: String, attribute: "selected-layer-id" }) selectedLayerId: string | null = null;

@@ -325,3 +325,20 @@ describe("<fw-sc-connection-health>", () => {
     );
   });
 });
+
+describe("presentational elements", () => {
+  it("take no `for` attribute, since they do not bind to a studio", () => {
+    for (const tag of [
+      "fw-sc-volume",
+      "fw-sc-compositor",
+      "fw-sc-scene-switcher",
+      "fw-sc-layer-list",
+      "fw-sc-advanced",
+    ]) {
+      const ctor = customElements.get(tag) as unknown as {
+        elementProperties: Map<string, unknown>;
+      };
+      expect(ctor.elementProperties.has("for"), tag).toBe(false);
+    }
+  });
+});

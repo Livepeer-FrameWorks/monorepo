@@ -8,19 +8,11 @@ import { sharedStyles } from "../styles/shared-styles.js";
 
 @customElement("fw-sc-volume")
 export class FwScVolume extends LitElement {
-  /** ID of a `<fw-streamcrafter>` to bind to (for standalone usage). */
-  @property({ type: String, attribute: "for" }) for: string = "";
   @property({ type: Number }) value = 1;
   @property({ type: Number }) min = 0;
   @property({ type: Number }) max = 2;
   @property({ type: Number, attribute: "snap-threshold" }) snapThreshold = 0.05;
   @property({ type: Boolean }) compact = false;
-
-  /** Resolve the parent `<fw-streamcrafter>` element. */
-  resolveStudio(): HTMLElement | null {
-    if (this.for) return document.getElementById(this.for);
-    return this.closest("fw-streamcrafter");
-  }
 
   @state() private _isDragging = false;
   @state() private _popupPosition = 0;
