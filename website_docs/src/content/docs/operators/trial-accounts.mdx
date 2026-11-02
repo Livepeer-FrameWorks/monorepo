@@ -1,276 +1,388 @@
 ---
 title: "Test and trial accounts"
-description: "Grant temporary billing arrangements and revoke account access."
+description: "Give, extend and end trial arrangements, pause or close accounts, and declare operator test accounts in bootstrap."
 ---
 
-Create a tenant through signup or bootstrap, then grant a trial as a platform
-operator:
+A trial is an operator billing arrangement (a grant) on an existing tenant. The tenant signs up
+normally, or you declare it in bootstrap, and a platform operator sets the arrangement. Every
+command on this page needs a platform-operator session. For the arrangement fields themselves, see
+[`admin billing grant`](/operators/cli-reference/#frameworks-admin-billing-grant).
+
+## Give a trial
 
 ```bash
 frameworks admin billing grant set --email trial@example.com --tier enterprise \
   --base-fee 0 --waive-usage --until 2026-12-31 --reason "Enterprise evaluation"
-frameworks admin billing grant list --expiring 7d
 frameworks admin billing grant show --email trial@example.com
+```
+
+- `--until` takes a date, which includes that UTC day, or an RFC3339 timestamp for an exact
+  deadline. Without it the grant lasts until you revoke it.
+- `--tier` assigns the tier in the same step. The tier the tenant had before is remembered as the
+  fallback restored when the grant ends; `--fallback-tier` names another active tier.
+- A tenant that owes nothing (base fee 0 and usage waived) needs no card. With a base fee or
+  billed usage and provider collection, rated work waits until the tenant adds a card.
+- Complete or recover a pending provider checkout before setting a grant. The refusal names the
+  checkout deadline; it is not a deadline for the grant. See
+  [Checkout reservations](#checkout-reservations).
+- An existing Stripe or Mollie subscription must be cancelled before a base-fee override.
+- An expired grant that is still awaiting reconciliation must be ended with `grant revoke --tier`
+  or `set-tier` before you set another one. A refused replacement leaves the original grant and
+  billing phase unchanged.
+
+## Extend or change a trial
+
+Run `grant set` again with the new deadline or terms. Renewing keeps the original fallback, also
+when `--tier` is omitted or unchanged, and keeps the current billing period open when only the
+deadline or nothing changes. Changed prices apply from the change on: closing documents keep the
+charges from before the grant and waive only the granted phase.
+
+`frameworks admin billing set-tier` changes the granted tier through a billing boundary. An
+explicit `set-tier` clears the remembered fallback, and the arrangement continues on the assigned
+tier until it ends. An unchanged `set-tier` request is refused while a grant is outstanding: end
+the grant first, or assign a different tier.
+
+To find trials that are about to end:
+
+```bash
+frameworks admin billing grant list --expiring 7d
+```
+
+## End a trial
+
+A trial ends at its deadline on its own, or early with a revoke:
+
+```bash
 frameworks admin billing grant revoke --email trial@example.com --reason "Evaluation complete"
 ```
 
-A date includes that UTC day; an RFC3339 timestamp names an exact deadline.
-`--fallback-tier` overrides the original tier restored when the grant ends.
-Renewing a grant preserves its original fallback, including when `--tier` is
-omitted or unchanged. An explicit `admin billing set-tier` clears that
-fallback and preserves the billing arrangement on the assigned tier until it
-ends.
+A minute sweep closes an expired grant and restores its fallback tier. What the tenant can do next
+depends on that tier:
 
-A minute sweep closes an expired grant and restores its fallback. A trial
-returning to zero-balance PAYG cannot ingest or play media until funded. A
-grant without fallback leaves the current tier in place; collection readiness
-continues to gate rated API work. Existing postpaid media admission is
-unchanged. The free tier requires no payment provider. Trial expiry blocks new
-ingest but does not proactively end an existing positive-balance publisher;
-prepaid suspension stops it once its balance becomes negative.
+- Back on zero-balance pay as you go, the tenant cannot start ingest or playback until it adds
+  funds. An already running publisher with a positive balance is not stopped; prepaid suspension
+  ends it once its balance becomes negative.
+- Without a recorded fallback, the current tier stays and collection readiness keeps deciding rated
+  API work. Existing postpaid media admission is unchanged.
+- Free requires no payment provider.
 
-Renewing a deadline or re-sending the same prices keeps the current billing
-period open. Tenants cannot change tier themselves while a grant is
-outstanding, and scheduled downgrades wait until it ends. An operator can use
-`set-tier` to change the granted tier through a billing boundary. Complete or
-reconcile any pending provider checkout before setting a grant. The refusal
-identifies the checkout deadline; it is not a deadline for the grant. A
-completed checkout keeps its reservation while payment settles, even after the
-checkout deadline. Inspect outstanding work and recover an abandoned checkout:
+If the recorded fallback tier was retired, `grant revoke --tier <active-tier>` chooses an active
+tier while closing the grant at its expiry boundary. Ended and replaced grants stay readable with
+`grant list --include-expired` for audit and historical pricing.
 
-```bash
-frameworks admin billing recovery list --tenant-id <uuid>
-frameworks admin billing recovery checkout --tenant-id <uuid> --reservation-id <uuid> --reason "Abandoned evaluation checkout"
-frameworks admin billing recovery list --tenant-id <uuid> --history
-```
+Signed media permission never outlasts the trial deadline, including on a media cell that is
+disconnected from the control plane. An early revoke reaches connected cells through authority
+refresh; a disconnected cell keeps already-issued permission until its signed expiry. Gateway
+billing caches refresh within about two minutes.
 
-Recovery displays the provider, state and checkout amount before asking for
-confirmation. Use `--yes` to confirm without prompting. It reports whether the
-checkout expired, the subscription activated, cancellation/refund
-reconciliation finished, or work remains pending. An accepted refund request
-can still await bank settlement. Refund work remains visible in `recovery list`
-until Stripe or Mollie confirms the returned amount; a failed bank return raises
-`PurserProviderWebhookInboxStuck`. Inspect the exact provider payment and repair
-the missing return in that provider's console. Settlement polling reads provider
-receipts. A confirmed failed Stripe refund re-enters the same capped compensation with a failure-bound idempotency key;
-pending refunds keep waiting without another request. For cluster purchases, only
-the initial unactivated purchase is returned; its corresponding operator credit
-is voided without reversing credit for delivered recurring service. Every request retains its operator identity,
-reason and outcome in history and emits audit events; a later request does not
-overwrite it.
+## What the customer sees
 
-Historical Mollie first payments are linked to local activation records during
-recovery after verifying the provider mandate. When recovery cannot prove delivery
-from local activation or an attached invoice, it records ambiguous delivery.
-Inspect the exact receipt and service history. A platform operator can then
-attest delivered service without refunding it:
+The billing page shows a "Plan arranged by FrameWorks" banner with the end date, the base fee,
+whether usage is waived, invoice collection, and the plan the account returns to when the
+arrangement ends. Usage stays metered and appears on each invoice at no charge when it is waived.
+Plan changes and checkouts are refused with the code `OUTSTANDING_GRANT` while the grant is in
+force, and the page tells the customer to contact FrameWorks instead. A scheduled downgrade waits
+until the grant ends. No email is sent when a grant ends, so tell the customer about the end date
+yourself. Customer-facing terms are in [Billing](/builders/billing/#trials-and-arrangements).
 
-```bash
-frameworks admin billing recovery checkout --tenant-id <uuid> --reservation-id <uuid> --retain-delivered --reason "Verified delivered service from historical records"
-```
+## Pause or close an account
 
-This action previews first and requires confirmation. It records the operator,
-reason and `delivered` outcome, retains the payment, and creates no subscription
-or access. It requires the recorded ambiguous-delivery state and refuses
-current checkout flows, previously retained receipts, and any payment already owed a
-refund or returned by the provider. It shares the compensation lock with the
-worker, so a concurrent refund cannot race the decision.
+### Suspend a user
 
-An on-time completed purchase is reconciled into its subscription when
-settlement succeeds. Failed settlement releases its reservation. An abandoned
-or unbound attempt can be recovered before its deadline, while a completed
-purchase still settling remains reserved. Failed recovery stays durable.
-Historical Mollie receipts without a unique funding link require local activation
-evidence before their initial collection can be treated as delivered service.
-Ambiguous history stays pending with the exact subscription and payment in its
-diagnostic; verify these in the provider console before reconciling them.
-Normal settlement waits back off from one minute to six hours and keep their
-reason visible; waits exceeding fourteen days raise
-`PurserProviderWebhookInboxStuck`.
-
-Grants change prices prospectively. Closing documents preserve charges before
-the grant and waive only the granted phase. Ended and replaced grants remain
-available with `grant list --include-expired` for audit and historical
-pricing. An existing Stripe or Mollie subscription must be cancelled before a
-base-fee override.
-
-Gateway billing caches may take about two minutes to refresh. Signed media
-permission is bounded by the trial deadline, including while a media cell is
-disconnected. Early revocation reaches connected cells through authority
-refresh; a disconnected cell retains already-issued permission until its
-signed expiry.
-
-For reversible user suspension:
+Deactivation is reversible:
 
 ```bash
 frameworks admin users deactivate --email trial@example.com --reason "Evaluation paused"
 frameworks admin users activate --email trial@example.com --reason "Evaluation resumed"
 ```
 
-Deactivation ends existing interactive sessions, API-token WebSockets, and
-stream-key publishing. Tenant-owned streams and VODs keep their playback
-availability. Activation requires a fresh interactive login; previously
-revoked sessions do not return. Connected cells receive stream-key revocation
-and an active-ingest stop through the durable refresh queue. Once received,
-they enforce it even while Commodore is unavailable. Unreachable cells retry
-and raise `CommodoreAccountIngestRevocationStuck`. A reactivation supersedes
-queued stops; a stop already in flight can end a newly connected publisher
-once. Reconnect after reactivation if that happens. Billing restrictions still
-apply to API work, ingest and playback.
+Deactivation ends the user's interactive sessions, API-token WebSockets and stream-key publishing.
+Tenant-owned streams and VODs stay playable. Activation requires a fresh interactive login; revoked
+sessions do not return. Billing restrictions still apply to API work, ingest and playback.
 
-`frameworks admin tenants deactivate <UUID> --yes --tenant-name "Exact Tenant
-Name" --reason "Account closed"` requires a matching Quartermaster tenant name.
-Omit both confirmation flags to type the name interactively; `--tenant-name`
-requires `--yes`. Closure permanently closes all users and queues a durable
-stop for their active ingest. Quartermaster teardown proceeds independently;
-unreachable cells retry and raise the `CommodoreAccountIngestRevocationStuck` alert. The alert
-continues until the cell is restored. Confirming that a cell is permanently
-offline does not clear it: no cluster-retirement command exists. This alert is aggregated and has no cell label: silencing it suppresses all
-account-ingest revocation stalls. Record permanent removals in the incident;
-restoring the cell is currently the only way to complete its stop obligation.
-Foghorn v0.3.13 returns Unimplemented for per-user stops during a rolling
-upgrade; those stops retry until its Foghorn is upgraded. Closure publishes
-tenant-inactive authority without authorizing data deletion. It cannot be reversed. Remove closed users from bootstrap declarations before the next release apply;
-otherwise validation refuses their reactivation. The local closure
-blocks new active users even if Quartermaster is temporarily unavailable.
+Connected cells receive the stream-key revocation and an active-ingest stop through Commodore's
+durable refresh queue, and enforce it even while Commodore is unavailable. Unreachable cells are
+retried and raise `CommodoreAccountIngestRevocationStuck`; see
+[Session stops](#session-stops). A reactivation supersedes queued stops, but a stop already in
+flight can end a newly connected publisher once; reconnect after reactivation if that happens.
 
-Purser consumes the permanent closure event and durably records its billing
-cutoff. It cancels established Stripe and Mollie subscriptions without refunding
-completed service, then finalizes the open billing phase at that cutoff. No
-later recurring invoice is started. Provider outages and incomplete metering
-keep the finalization pending; inspect `frameworks admin billing recovery list
---tenant-id <uuid>`. An outstanding grant first closes at the cutoff through
-the normal expiry worker. Late paid or settling cluster callbacks queue provider
-cancellation, including after final billing; they cannot restore access or
-finalize another billing document.
+Bridge closes API-token WebSockets on the revocation event. A Bridge replica that missed the event
+rechecks `ValidateAPIToken` every minute, which bounds the remaining socket access.
 
-Open cluster checkouts are expired so they cannot accept another purchase.
-Activated paid cluster subscriptions are cancelled without refunding or crediting their unused
-paid time. A paid tenant or cluster checkout that never activated is refunded
-only for its checkout payment or first invoice; recurring service payments are
-never part of checkout compensation.
-Normal subscription cancellation stops renewal at the paid-through date; permanent
-account closure ends access immediately. Failed or duplicate checkout recovery is
-a separate compensation action, not a refund policy for ordinary cancellation.
+### Close a tenant
 
-`PurserOperatorGrantExpiryStuck` exposes its last error and failed-attempt count through `grant show` and `grant list
---include-expired`. Commodore synchronization failures raise
-`CommodoreTenantAccountClosureStuck` independently of billing finalization.
+Closure is permanent:
 
-For an operator-owned account, declare a Quartermaster tenant, a Purser
-`customer_billing` row with `model: postpaid`, `tier: enterprise`, and
-`operator_grant: {base_fee: "0", waive_usage: true, reason: "Operator test
-account"}`, then declare its users in `accounts`. Put passwords in the normal
-SOPS secret references. Release apply reconciles accounts after Purser without
-resetting existing passwords. No grant expiry means the arrangement lasts
-until revoked. A live declaration owns the grant and logs any CLI arrangement
-it replaces. An expired declaration is inert and leaves later CLI grants
-alone. Remove a live declaration before a permanent CLI revocation.
+```bash
+frameworks admin tenants deactivate <UUID> --yes --tenant-name "Exact Tenant Name" \
+  --reason "Account closed"
+```
 
-Failed expiry reconciliation is recorded with five-minute backoff and alerted;
-later expiries continue. Correct the underlying billing or pricing error;
-retries run automatically.
+The tenant name must match Quartermaster's. Omit `--yes` and `--tenant-name` to type the name
+interactively; `--tenant-name` requires `--yes`. Closure:
 
-Bridge closes API-token WebSockets on the live revocation event. A replica
-that missed the event rechecks `ValidateAPIToken` every minute, bounding the
-remaining socket access.
+- closes every user and queues a durable stop for their active ingest;
+- publishes tenant-inactive authority, without authorizing data deletion;
+- blocks new active users locally, even while Quartermaster is unavailable;
+- ends the tenant in Quartermaster independently of the session stops; failures retry and raise
+  `CommodoreTenantAccountClosureStuck`;
+- stops billing, as described in [Account closure billing](#account-closure-billing).
 
-Release apply attempts pending grant expiry before reconciling a live billing
-declaration. Dry-run leaves pending expiries untouched and reports those
-tenants as deferred.
+Remove closed users from bootstrap declarations before the next release apply; otherwise
+validation refuses their reactivation. Read the private deactivation and closure reasons, and the
+account's closure and session-stop state, with:
 
-Read private deactivation and closure reasons with `frameworks admin tenants
-history <UUID>`. Only platform operators can read this audit.
+```bash
+frameworks admin tenants get <UUID>
+frameworks admin tenants history <UUID>
+```
 
-If bootstrap defers a tenant, healthy tenants commit and the command exits
-non-zero, stopping release apply before the accounts step. Fix the reported
-failure and re-run release apply. When expiry restored a different billing
-model, run `frameworks admin billing set-tier` with the declared tier,
-`--billing-model` and a reason before retrying, so the normal transition
-handles balances and credits. An obsolete fallback can be recovered with
-`grant revoke --tier <active-tier>` or an explicit `set-tier`; both close the
-expired grant at its deadline.
+## Declare a test account in bootstrap
 
-A grant with no recorded assigned tier, which the sweep has nothing to restore
-for, stops applying at its deadline without denying the tenant. Collection
-readiness decides admission, including while its closing boundary is refused.
+An operator-owned test account is declared in the cluster's GitOps bootstrap overlay
+(`clusters/<cluster>/bootstrap.yaml`): a Quartermaster tenant, its Purser billing with an
+`operator_grant`, and its users under `accounts`. Passwords come from SOPS secret references.
 
-An expired grant awaiting reconciliation must be ended with `grant revoke
---tier` or `set-tier` before setting another grant. A rejected replacement
-leaves the original grant and billing phase unchanged. Cancelling a
-subscription keeps its grant so recoverable provider states such as Stripe
-unpaid do not lose waived usage. Revoke or expiry on a cancelled subscription
-archives the grant at the cleanup time without changing tier or issuing a
-closing document. Revoke it before starting a new provider checkout. Renewal
-of the same established Stripe subscription may restore status and dates while
-retaining the grant; a new checkout or activation must end it first.
+```yaml
+quartermaster:
+  tenants:
+    - alias: frameworks-qa
+      name: FrameWorks QA
 
-Checkout reservations have a deadline and belong to one provider attempt.
-Failures before checkout creation and definite provider rejections release the
-reservation immediately. Ambiguous results remain reserved until the durable
-provider inbox reconciles them after the checkout deadline;
-`PurserProviderWebhookInboxStuck` covers provider outages or compensation
-failures. Historical receipts already installed as the tenant's subscription
-do not block grants. Other unresolved receipts are queued for recovery before
-they release their reservation. A provider activation awaiting complete usage
-metering keeps the first webhook receipt as its billing boundary. An open
-metering anomaly holds that activation; `PurserProviderWebhookInboxStuck`
-covers retries while the anomaly is resolved.
+accounts:
+  - kind: customer
+    tenant:
+      ref: quartermaster.tenants[frameworks-qa]
+    users:
+      - email: qa@example.com
+        role: owner
+        first_name: FrameWorks
+        last_name: QA
+        password_ref:
+          sops: ../../secrets/staging.env
+          key: QA_ACCOUNT_PASSWORD
 
-A timed-out create retries with its original parameters and idempotency key.
-Replay is limited to 23 hours for Stripe and 45 minutes for Mollie, and to the
-credential used for that request. Outside that window, recovery locates existing
-provider objects rather than creating another purchase. A prepared attempt that
-never reached provider submission can be closed even while the provider is down.
-If the provider has not supplied an amount, the preview says it is unknown.
+purser:
+  customer_billing:
+    - tenant:
+        ref: quartermaster.tenants[frameworks-qa]
+      model: postpaid
+      tier: enterprise
+      cluster_access: derived
+      operator_grant:
+        base_fee: "0"
+        waive_usage: true
+        reason: Internal QA account
+        # until: 2026-12-31   # optional; omit for an account that lasts until revoked
+```
 
-## Upgrade and recovery compatibility
+- Add the password to the SOPS file with `gitops/scripts/sops-env.sh set <file> <KEY> <VALUE>`.
+- An account entry carries no billing of its own; validation refuses one. Billing is declared once
+  per tenant in `purser.customer_billing`.
+- `operator_grant` takes the same fields as `grant set`: `base_fee`, `waive_usage`, `collection`
+  (`provider` or `invoice`), `until` and a required `reason`.
 
-A v0.3.13 Foghorn does not implement `TerminateStreamSessions`. Per-user stops
-remain queued until that cell is upgraded; they never fall back to stopping the
-whole tenant. New publishes are refused independently of this session-stop retry.
+`frameworks cluster release apply` runs the Purser bootstrap and then
+`commodore bootstrap --accounts-only`, so a declared account is created or updated on the next
+release apply. It never resets an existing password. `frameworks cluster control-plane reconcile`
+applies a changed declaration between releases.
 
-Platform-cluster `provision`, `upgrade`, `apply` and `diff` resolve the system
-tenant through Quartermaster. A saved ID is used only for supported transport
-recovery; Livepeer gateway clusters require a successful Quartermaster lookup.
+A live declaration owns the grant and logs any CLI arrangement it replaces. Reapplying an
+identical grant changes nothing. An expired declaration is inert and leaves later CLI grants alone.
+Remove a live declaration before a permanent CLI revoke, or the next release apply restores it.
 
-`frameworks admin billing recovery upgrade --tenant-id <uuid> --upgrade-id <uuid>
---reason "Reconcile purchase"` previews a pending tier upgrade before asking for
-confirmation. It cancels a request only after confirming it was not applied;
-otherwise it reconciles the accepted purchase. A Stripe purchase already applied
-by the provider still waits for complete usage metering before its local billing
-boundary can finish. Recovery does not bypass that requirement or start another
-provider purchase, unless you pass `--waive-metering` on a purchase the provider
-has applied: the old phase then closes on the usage recorded so far, and the waiver
-is audited with your identity and reason. Recovery retains the operator identity and reason, and reports the
-actual durable state. Use `recovery list` for the purchase UUID and retry errors.
+Release apply first tries to finish a pending grant expiry before it applies a live declaration;
+`--dry-run` leaves pending expiries untouched and reports those tenants as deferred. When a tenant
+is deferred, healthy tenants commit, the bootstrap exits non-zero and release apply stops before
+the accounts step. Fix the reported failure and rerun release apply. When expiry restored a
+different billing model, first run `frameworks admin billing set-tier` with the declared tier,
+`--billing-model` and a reason, so the normal transition handles balances and credits. An obsolete
+fallback can be recovered with `grant revoke --tier <active-tier>` or an explicit `set-tier`; both
+close the expired grant at its deadline.
 
-A suspended tenant's session-stop request is queued with its suspension. Partial
-cell failures and Commodore outages retry durably. Resumption is checked under
-the subscription lock before retrying, so a completed resumption clears the
-queued stop without ending a new stream.
+## Recovery and internals
 
-A scheduled automatic fallback can be inspected with
-`frameworks admin billing recovery list --tenant-id <UUID>`. An explicit
-`set-tier` abort restores invoicing and detaches only proven-ended native
-subscriptions after their paid term ends. Tier assignment and grant changes
-refuse while an ended subscription still has paid service time remaining.
-A cancelled tenant moves to Free when its paid term ends. An outstanding grant
-holds that move until the grant ends. Setting, renewing or ending a grant
-preserves the cancellation schedule even if the paid term has already ended;
-it never reactivates the cancelled paid subscription. An unchanged `set-tier`
-request refuses an outstanding grant: end it first, or make an explicit
-assignment to a different tier. Explicit assignment finalizes the
-ended provider-managed periods before detaching their identities, keeping each
-monthly allowance separate and excluding the base fee already collected.
-A live native subscription or a stop already in flight must
-finish reconciliation first; the command returns a precondition error.
+The sections below explain what Purser and Commodore retry on their own and what to run when an
+alert fires. [Alerting](/operators/alerting/#billing-and-account-lifecycle) lists each alert with
+the command that names the tenant.
 
-Fallback email delivery stops after five failures. The `notice_abandoned`
-recovery row retains the reason and delivery error, and leaves the automatic
-stuck alert. Correct `billing_email`, then run
-`frameworks admin billing recovery notice --tenant-id <UUID> --reason "Billing email repaired"`.
-The command previews the recipient and requires confirmation before requeuing
-the abandoned grace or completed-move notice. The billing audit records the
-operator and reason. It does not change the tier, restore collection or refund
-anything. Email failure never blocks the billing move.
+### Grant expiry
+
+A failed expiry reconciliation is recorded with a five-minute backoff and raises
+`PurserOperatorGrantExpiryStuck`; later expiries continue. `grant show` and
+`grant list --include-expired` show its last error and failed-attempt count. Correct the
+underlying billing or pricing error; the retry runs automatically.
+
+A grant with no recorded assigned tier has nothing for the sweep to restore. It stops applying at
+its deadline without denying the tenant, and collection readiness decides admission, including
+while its closing boundary is refused.
+
+Cancelling a subscription keeps its grant, so recoverable provider states such as Stripe `unpaid`
+do not lose waived usage. Revoking or expiring a grant on a cancelled subscription archives it at
+the cleanup time without changing the tier or issuing a closing document. Revoke it before
+starting a new provider checkout. A renewal of the same established Stripe subscription may restore
+status and dates and keep the grant; a new checkout or activation must end it first.
+
+### Checkout reservations
+
+A checkout reservation has a deadline and belongs to one provider attempt. A failure before the
+checkout is created, or a definite provider rejection, releases the reservation at once. An
+ambiguous result stays reserved until the durable provider inbox reconciles it after the deadline.
+A completed checkout keeps its reservation while payment settles, even past the deadline. Historical
+receipts already installed as the tenant's subscription do not block grants; other unresolved
+receipts are queued for recovery before they release their reservation.
+
+```bash
+frameworks admin billing recovery list --tenant-id <uuid>
+frameworks admin billing recovery checkout --tenant-id <uuid> --reservation-id <uuid> \
+  --reason "Abandoned evaluation checkout"
+frameworks admin billing recovery list --tenant-id <uuid> --history
+```
+
+Recovery shows the provider, state and checkout amount before it asks for confirmation; `--yes`
+confirms without a prompt. It reports whether the checkout expired, the subscription activated,
+cancellation and refund reconciliation finished, or work remains pending. Every request keeps its
+operator, reason and outcome in history and emits audit events; a later request does not
+overwrite it.
+
+An on-time completed purchase becomes its subscription when settlement succeeds, and a failed
+settlement releases its reservation. An abandoned or unbound attempt can be recovered before its
+deadline. Failed recovery stays durable. For cluster purchases only the initial unactivated purchase
+is returned; its operator credit is voided without reversing credit for delivered recurring
+service.
+
+A timed-out create is retried with its original parameters and idempotency key, for up to 23 hours
+on Stripe and 45 minutes on Mollie, and only with the credential that made the request. Outside
+that window recovery locates the existing provider objects instead of creating another purchase. A
+prepared attempt that never reached the provider can be closed while the provider is down. When the
+provider has not supplied an amount, the preview says it is unknown.
+
+### Refunds and historical Mollie payments
+
+An accepted refund request can still be waiting for bank settlement. Refund work stays in
+`recovery list` until Stripe or Mollie confirms the returned amount. Settlement polling reads
+provider receipts. A confirmed failed Stripe refund re-enters the same capped compensation with a
+failure-bound idempotency key; pending refunds keep waiting without another request. A failed bank
+return raises `PurserProviderWebhookInboxStuck`: inspect the exact provider payment and repair the
+return in that provider's console.
+
+Historical Mollie first payments are linked to local activation records during recovery after the
+provider mandate is verified. When recovery cannot prove delivery from local activation or an
+attached invoice, it records ambiguous delivery, with the exact subscription and payment in its
+diagnostic. Check the receipt and service history in the provider console. A platform operator can
+then attest delivered service without refunding it:
+
+```bash
+frameworks admin billing recovery checkout --tenant-id <uuid> --reservation-id <uuid> \
+  --retain-delivered --reason "Verified delivered service from historical records"
+```
+
+The attestation previews first and requires confirmation. It records the operator, reason and
+`delivered` outcome, keeps the payment, and creates no subscription or access. It needs the
+recorded ambiguous-delivery state, and refuses current checkouts, receipts already retained and
+any payment already owed a refund or returned by the provider. It shares the compensation lock with
+the worker, so a concurrent refund cannot race it.
+
+Normal settlement waits back off from one minute to six hours and keep their reason visible; a wait
+past fourteen days raises `PurserProviderWebhookInboxStuck`. A provider activation waiting for
+complete usage metering keeps the first webhook receipt as its billing boundary, and an open
+metering anomaly holds the activation until it is resolved.
+
+### Tier upgrades
+
+```bash
+frameworks admin billing recovery upgrade --tenant-id <uuid> --upgrade-id <uuid> \
+  --reason "Reconcile purchase"
+```
+
+The command previews a pending tier upgrade before it asks for confirmation. It cancels a request
+only after confirming the provider did not apply it; otherwise it reconciles the accepted purchase,
+and it never starts another purchase. A Stripe purchase the provider already applied still waits
+for complete usage metering before its local billing boundary can close. `--waive-metering` on such
+a purchase closes the old phase on the usage recorded so far, and is audited with your identity and
+reason. Get the purchase UUID and its retry errors from `recovery list`.
+
+### Held downgrades
+
+A downgrade the provider confirmed is held when its period's closing invoice is a draft or in
+manual review, or the subscription refuses the tier change. The customer's tier changes are refused
+while it is held, and `PurserTierDowngradeHeld` fires. `recovery list` names each held downgrade
+with its target tier, effective time and invoice, and the downgrade command shows what holds it:
+
+```bash
+frameworks admin billing recovery list
+frameworks admin billing recovery downgrade --tenant-id <uuid> --reason "Invoice reviewed"
+```
+
+Confirming closes the tenant's billing period again and applies the downgrade when nothing still
+holds it. A `manual_review` invoice waits for the cluster pricing it names; configure it with
+`admin billing set-cluster-pricing`, then run the command again.
+
+### Free fallback and cancellation
+
+A cancelled tenant moves to Free when its paid term ends, and a failed payment moves it to Free
+after its grace period. An outstanding grant holds that move until the grant ends. Setting,
+renewing or ending a grant keeps the cancellation schedule, also when the paid term has already
+ended, and never reactivates the cancelled paid subscription.
+
+`recovery list` shows a scheduled fallback with its move date, state and last error. An explicit
+`set-tier` cancels the fallback before provider cancellation starts, restores invoicing, and
+detaches only native subscriptions proven to have ended after their paid term. Tier assignment and
+grant changes are refused while an ended subscription still has paid time left. Explicit assignment
+finalizes the ended provider-managed periods before detaching their identities, so each monthly
+allowance stays separate and the base fee already collected is excluded. A live native subscription
+or a stop already in flight must finish reconciliation first; the command returns a precondition
+error.
+
+Fallback email delivery stops after five failures. The `notice_abandoned` row keeps the reason and
+delivery error and no longer counts toward `PurserFreeFallbackStuck`. Correct `billing_email`, then
+requeue the grace or completed-move notice:
+
+```bash
+frameworks admin billing recovery notice --tenant-id <uuid> --reason "Billing email repaired"
+```
+
+The command previews the recipient and requires confirmation. The billing audit records the
+operator and reason. It does not change the tier, restore collection or refund anything, and an
+email failure never blocks the billing move.
+
+### Suspended streams
+
+A suspended tenant's session-stop request is queued with its suspension. Partial cell failures and
+Commodore outages retry durably. Resumption is checked under the subscription lock before each
+retry, so a completed resumption clears the queued stop without ending a new stream.
+
+### Account closure billing
+
+Purser consumes the closure event and records the billing cutoff. It cancels established Stripe and
+Mollie subscriptions without refunding completed service and finalizes the open billing phase at the
+cutoff; no later recurring invoice starts. Provider outages and incomplete metering keep the
+finalization pending in `recovery list`. An outstanding grant first closes at the cutoff through the
+normal expiry worker. Late paid or settling cluster callbacks queue provider cancellation, also
+after final billing, and cannot restore access or finalize another billing document.
+
+Open cluster checkouts are expired so they cannot accept another purchase. Activated paid cluster
+subscriptions are cancelled without refunding or crediting their unused paid time. A paid tenant or
+cluster checkout that never activated is refunded only for its checkout payment or first invoice;
+recurring service payments are never part of checkout compensation. Normal cancellation stops
+renewal at the paid-through date, while permanent closure ends access immediately. Checkout
+recovery is a separate compensation action, not a refund policy for ordinary cancellation.
+
+### Session stops
+
+User deactivation and tenant closure stop active ingest on every cell that recorded the account's
+streams. A per-user stop never falls back to stopping the whole tenant, and new publishes are
+refused independently of the stop. A cell that cannot be reached is retried, including backoff,
+and `CommodoreAccountIngestRevocationStuck` fires; `frameworks admin tenants get <UUID>` lists each
+pending stop with its cells and last error. Restore the cell and the stop completes. A Foghorn that
+returns `Unimplemented` for per-user stops keeps them queued until it is upgraded.
+
+For a cell that was removed for good, record its retirement so the stops owed to it settle:
+
+```bash
+frameworks admin clusters retire <cluster-id> --reason "Cell decommissioned"
+```
+
+Commodore refuses while any registered Foghorn of the cell still answers. A stop still owed to
+another unreachable cell keeps waiting for that cell, and a retired cell that comes back still
+receives its stops.
