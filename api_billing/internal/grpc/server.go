@@ -6115,6 +6115,15 @@ func (s *PurserServer) ChangeBillingTier(ctx context.Context, req *purserpb.Chan
 		if providerBilled && locked.Current.FreeFallbackProviderEndedAt.Valid && (downgradeStaged || targetTierID != current.TierID) {
 			return status.Error(codes.FailedPrecondition, "the provider subscription is already cancelled: the paid term runs to its end and the tenant then moves to Free; choose a new tier after that move")
 		}
+		if providerBilled && downgradeStaged {
+			due, dueErr := queries.IsConfirmedDowngradeDue(ctx, tenantID)
+			if dueErr != nil {
+				return txStatusErrorf(dueErr, codes.Internal, "read scheduled downgrade: %v", dueErr)
+			}
+			if due {
+				return status.Error(codes.FailedPrecondition, "the scheduled downgrade is being applied with the billing period that just closed; retry after it completes")
+			}
+		}
 		releaseFreeStop := func() error {
 			if !providerBilled || !downgradeStaged {
 				return nil

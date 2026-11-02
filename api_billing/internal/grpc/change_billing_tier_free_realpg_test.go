@@ -245,33 +245,103 @@ func TestFreeDowngradeProviderFailureRetries_RealPG(t *testing.T) {
 	}
 }
 
-// A staged Free downgrade cannot turn an unpaid term into a retained one, and the
-// payment-failure fallback keeps its date, reason and recovery check.
+// A staged Free downgrade cannot turn an unpaid term into a retained one, and an
+// existing fallback keeps its date, reason and recovery check. Reason and status
+// each withhold the staged effective time on their own.
 func TestFreeDowngradeLeavesAPaymentFailureFallback_RealPG(t *testing.T) {
+	for _, tc := range []struct {
+		name, status, reason string
+		recovery             bool
+	}{
+		{"past due payment failure", "past_due", "payment_failed", true},
+		{"active payment failure", "active", "payment_failed", true},
+		{"past due cancellation", "past_due", "cancelled", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFreeDowngrade(t, "stripe")
+			grace := time.Now().UTC().Add(10 * 24 * time.Hour).Truncate(time.Second)
+			if _, err := f.change(t, f.free); err != nil {
+				t.Fatal(err)
+			}
+			f.exec(t, `UPDATE purser.tenant_subscriptions SET status=$2,free_fallback_at=$3,free_fallback_reason=$4,free_fallback_notified_at=NOW() WHERE tenant_id=$1`, f.tenant, tc.status, grace, tc.reason)
+			f.approachRenewal(t)
+			if err := f.service.ReconcileProviderTier(t.Context(), f.tenant); err != nil {
+				t.Fatal(err)
+			}
+			var reason string
+			var at time.Time
+			if err := f.db.QueryRowContext(t.Context(), `SELECT free_fallback_reason,free_fallback_at FROM purser.tenant_subscriptions WHERE tenant_id=$1`, f.tenant).Scan(&reason, &at); err != nil {
+				t.Fatal(err)
+			}
+			if reason != tc.reason || !at.Equal(grace) {
+				t.Fatalf("Free step replaced the fallback: reason=%s at=%s, want %s at %s", reason, at, tc.reason, grace)
+			}
+			f.exec(t, `UPDATE purser.tenant_subscriptions SET free_fallback_at=NOW()-INTERVAL '1 second' WHERE tenant_id=$1`, f.tenant)
+			f.server.sweepFreeFallbackMovesOnce(t.Context())
+			if len(f.calls) != 1 || f.calls[0].AllowRecovery != tc.recovery {
+				t.Fatalf("provider stop = %+v, want one with recovery=%t", f.calls, tc.recovery)
+			}
+			if s := f.state(t); s.tier != f.free || s.status != "active" {
+				t.Fatalf("grace end with a staged Free downgrade: %+v, want the move now, not at the staged effective time", s)
+			}
+		})
+	}
+}
+
+// Re-pointing a staged Free downgrade withdraws only the move it scheduled. A
+// payment-failure fallback on an active subscription stays.
+func TestRepointKeepsAPaymentFailureFallback_RealPG(t *testing.T) {
 	f := newFreeDowngrade(t, "stripe")
 	grace := time.Now().UTC().Add(10 * 24 * time.Hour).Truncate(time.Second)
-	f.exec(t, `UPDATE purser.tenant_subscriptions SET status='past_due',free_fallback_at=$2,free_fallback_reason='payment_failed',free_fallback_notified_at=NOW() WHERE tenant_id=$1`, f.tenant, grace)
 	if _, err := f.change(t, f.free); err != nil {
 		t.Fatal(err)
 	}
-	f.approachRenewal(t)
-	if err := f.service.ReconcileProviderTier(t.Context(), f.tenant); err != nil {
+	f.exec(t, `UPDATE purser.tenant_subscriptions SET free_fallback_at=$2,free_fallback_reason='payment_failed',free_fallback_notified_at=NOW() WHERE tenant_id=$1`, f.tenant, grace)
+	if _, err := f.change(t, f.low); err != nil {
 		t.Fatal(err)
 	}
-	var reason string
-	var at time.Time
-	if err := f.db.QueryRowContext(t.Context(), `SELECT free_fallback_reason,free_fallback_at FROM purser.tenant_subscriptions WHERE tenant_id=$1`, f.tenant).Scan(&reason, &at); err != nil {
-		t.Fatal(err)
+	if s := f.state(t); !s.fallbackAt.Valid || !s.fallbackAt.Time.Equal(grace) || s.pending != f.low {
+		t.Fatalf("re-point to a paid tier: %+v, want the fallback kept at %s", s, grace)
 	}
-	if reason != "payment_failed" || !at.Equal(grace) {
-		t.Fatalf("Free step replaced the payment failure fallback: reason=%s at=%s, want payment_failed at %s", reason, at, grace)
-	}
-	f.exec(t, `UPDATE purser.tenant_subscriptions SET free_fallback_at=NOW()-INTERVAL '1 second' WHERE tenant_id=$1`, f.tenant)
-	f.server.sweepFreeFallbackMovesOnce(t.Context())
-	if len(f.calls) != 1 || !f.calls[0].AllowRecovery {
-		t.Fatalf("provider stop = %+v, want one with payment recovery allowed", f.calls)
-	}
-	if s := f.state(t); s.tier != f.free || s.status != "active" {
-		t.Fatalf("grace end with a staged Free downgrade: %+v, want the move now, not at the staged effective time", s)
+}
+
+// Once a confirmed downgrade is effective the provider has renewed at its fee, so
+// the customer cannot step back onto the old tier for that paid-at-lower term.
+func TestConfirmedDowngradePastItsEffectiveTimeRefusesChanges_RealPG(t *testing.T) {
+	for _, provider := range []string{"stripe", "mollie"} {
+		t.Run(provider, func(t *testing.T) {
+			f := newFreeDowngrade(t, provider)
+			stage := func(effective string, confirmed bool) {
+				t.Helper()
+				f.exec(t, `UPDATE purser.tenant_subscriptions SET pending_tier_id=$2,pending_reason='downgrade',
+					pending_provider_tier_id=CASE WHEN $3::boolean THEN $2::uuid END,pending_effective_at=NOW()+$4::interval WHERE tenant_id=$1`, f.tenant, f.low, confirmed, effective)
+			}
+			stage("-1 second", true)
+			for _, tier := range []string{f.paid, f.free} {
+				_, err := f.change(t, tier)
+				if status.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), "being applied") {
+					t.Fatalf("change to %s at effective+1s = %v, want a refusal to retry after", tier, err)
+				}
+			}
+			if s := f.state(t); s.pending != f.low || s.tier != f.paid {
+				t.Fatalf("refused change altered the downgrade: %+v", s)
+			}
+			// A held closing invoice keeps the refusal, and set-tier is the exit.
+			if _, err := f.server.AdminAssignTier(operatorAssignCtx(uuid.NewString()), &purserpb.AdminAssignTierRequest{TenantId: f.tenant, TierName: f.low, Reason: "closing invoice held"}); err != nil {
+				t.Fatalf("operator exit: %v", err)
+			}
+			if s := f.state(t); s.pending != "" || s.tier != f.low {
+				t.Fatalf("operator exit: %+v, want the downgrade applied", s)
+			}
+			f.exec(t, `UPDATE purser.tenant_subscriptions SET tier_id=$2 WHERE tenant_id=$1`, f.tenant, f.paid)
+			stage("1 hour", true)
+			if resp, err := f.change(t, f.paid); err != nil || resp.GetMessage() != "Scheduled downgrade cancelled" {
+				t.Fatalf("cancel before the effective time: %+v %v", resp, err)
+			}
+			stage("-1 second", false)
+			if resp, err := f.change(t, f.paid); err != nil || resp.GetMessage() != "Scheduled downgrade cancelled" {
+				t.Fatalf("cancel of an unconfirmed downgrade: %+v %v", resp, err)
+			}
+		})
 	}
 }

@@ -617,6 +617,14 @@ are not failures. Failure and wait counts accumulate separately; switching betwe
 waiting and failure never resets the unresolved age or repeated-failure count.
 Use `frameworks admin billing recovery list` for retry status and errors.
 
+`purser_tier_downgrades_held_items` (gauge, no labels) counts downgrades the provider
+confirmed that are still unapplied 26 hours after their effective time, past the daily
+applier cycle. It shares the 30-second inventory read and its failure counter, and
+retains its last good value on a failed read. `PurserTierDowngradeHeld` takes the maximum
+across replicas. Those customers are refused tier changes, usually because the closing
+invoice is held in manual review. Resolve the hold, or apply the tier with
+`frameworks admin billing set-tier`.
+
 ### Shared-package metrics
 
 A metric registered by a shared package carries the service as a `service` label instead of a name prefix, so one dashboard query covers every service.

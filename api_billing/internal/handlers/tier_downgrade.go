@@ -19,6 +19,10 @@ import (
 // live for a re-point until then, with the lead left for retries before renewal.
 const FreeDowngradeStopLead = 72 * time.Hour
 
+// HeldDowngradeGrace outlasts the daily applier cycle, so a confirmed downgrade
+// older than this is held rather than waiting for its next run.
+const HeldDowngradeGrace = 26 * time.Hour
+
 // ReleaseFreeDowngradeStopTx withdraws a move to Free whose provider stop has not
 // started, keeping the subscription live for the tier replacing the downgrade.
 func (s *Service) ReleaseFreeDowngradeStopTx(ctx context.Context, tx *sql.Tx, tenantID string) error {

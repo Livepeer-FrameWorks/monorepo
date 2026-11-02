@@ -132,8 +132,9 @@ func validateStripePaidMonthlyBase(
 	}
 	matches := 0
 	for _, line := range lines.Data {
-		if line.Pricing == nil || line.Pricing.PriceDetails == nil ||
-			line.Pricing.PriceDetails.Price == nil || line.Pricing.PriceDetails.Price.ID != item.Price.ID ||
+		// The item identifies the line: a restored price keeps its fee under a
+		// new price ID, so the amount below is what binds the two.
+		if line.Pricing == nil || line.Pricing.PriceDetails == nil || line.Pricing.PriceDetails.Price == nil ||
 			line.Parent == nil || line.Parent.SubscriptionItemDetails == nil {
 			continue
 		}

@@ -76,7 +76,9 @@ func (c *Client) SyncSubscriptionTier(ctx context.Context, request billing.Provi
 		if request.BaseCents <= 0 {
 			return billing.ProviderTierReceipt{}, fmt.Errorf("%w: the tier has no monthly fee and the subscription recorded none to restore", billing.ErrProviderTierRefused)
 		}
-		if request.Downgrade && metadata[restoreTierKey] != request.CurrentTierID && sub.Amount != nil {
+		// While the provider is on the local tier its amount is the one to keep,
+		// replacing a record an earlier applied downgrade left behind.
+		if request.Downgrade && (providerTier == request.CurrentTierID || metadata[restoreTierKey] != request.CurrentTierID) && sub.Amount != nil {
 			metadata[restoreTierKey], metadata[restoreAmountKey] = request.CurrentTierID, sub.Amount.Value
 		}
 	}

@@ -17,6 +17,9 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	internalv1 "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/internalv1"
+	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -605,6 +608,19 @@ func TestUpgradeWaitsForAnUnfinishedProviderStep_RealPG(t *testing.T) {
 	if !errors.Is(err, billing.ErrTierUpgradeRejected) || !strings.Contains(err.Error(), "retry") {
 		t.Fatalf("upgrade during an unfinished provider step = %v, want a retryable refusal", err)
 	}
+	if err = p.tenant.svc.ReconcileProviderTier(ctx, p.tenant.id); err != nil {
+		t.Fatal(err)
+	}
+	mustExec(t, p.tenant.db, `UPDATE purser.provider_webhook_inbox SET status='processed',processed_at=NOW() WHERE provider='tier_downgrade' AND headers->>'tenant_id'=$1`, p.tenant.id)
+	var upgrade string
+	err = database.WithRetryablePostgresTx(ctx, p.tenant.db, nil, func(tx *sql.Tx) error {
+		var stageErr error
+		upgrade, stageErr = p.tenant.svc.StageTierUpgradeTx(ctx, tx, p.tenant.id, higher, p.periods[0], p.periods[1])
+		return stageErr
+	})
+	if err != nil || upgrade == "" {
+		t.Fatalf("upgrade once the provider step finished = %q, %v, want it accepted", upgrade, err)
+	}
 }
 
 // A Purser-billed tenant moved to Free has no later collectable invoice either.
@@ -752,5 +768,133 @@ func TestFencedStripeEventReportsTheLocalTier_RealPG(t *testing.T) {
 	}
 	if event.GetTierId() != p.tenant.supporterID {
 		t.Fatalf("billing.subscription_updated tier = %s, want the local tier %s, not metadata %s", event.GetTierId(), p.tenant.supporterID, p.target)
+	}
+}
+
+// A flip to a paid tier leaves the carry for that tier's later invoices.
+func TestAppliedPaidDowngradeKeepsTheCarry_RealPG(t *testing.T) {
+	db := startProviderReservationDatabase(t)
+	now := time.Now().UTC()
+	tenant := newPhaseTenant(t, db, "postpaid", now.Add(-time.Hour), now.Add(time.Hour), 0)
+	tenant.jobs.tierReconciler = &stubTierReconciler{}
+	target := insertTierChangeTier(t, db, "20")
+	mustExec(t, db, `INSERT INTO purser.billing_collection_balances(tenant_id,currency,balance_cents) VALUES($1,'EUR',150)`, tenant.id)
+	mustExec(t, db, `UPDATE purser.tenant_subscriptions SET pending_tier_id=$2,pending_reason='downgrade',pending_effective_at=NOW()-INTERVAL '1 second' WHERE tenant_id=$1`, tenant.id, target)
+	tenant.jobs.applyPendingDowngrade(t.Context(), tenant.id)
+	var tier string
+	var balance, writeoffs int64
+	if err := db.QueryRowContext(t.Context(), `SELECT s.tier_id::text,b.balance_cents,(SELECT count(*) FROM purser.billing_collection_writeoffs w WHERE w.tenant_id=$1)
+		FROM purser.tenant_subscriptions s JOIN purser.billing_collection_balances b ON b.tenant_id=s.tenant_id WHERE s.tenant_id=$1`, tenant.id).Scan(&tier, &balance, &writeoffs); err != nil {
+		t.Fatal(err)
+	}
+	if tier != target || balance != 150 || writeoffs != 0 {
+		t.Fatalf("paid downgrade carry: tier=%s balance=%d writeoffs=%d, want the carry kept", tier, balance, writeoffs)
+	}
+}
+
+// An applied downgrade leaves its restore record behind, so a later downgrade from
+// the tier the subscriber returned to records the price they pay now.
+func TestRepeatDowngradeRestoresTheCurrentPrice_RealPG(t *testing.T) {
+	p := newStripeDowngrade(t, "20", "new-price", 2000)
+	ctx := t.Context()
+	p.useGrandfatheredPrice(true)
+	p.stage(t, p.target)
+	if err := p.tenant.svc.ReconcileProviderTier(ctx, p.tenant.id); err != nil {
+		t.Fatal(err)
+	}
+	p.reachEffectiveTime(t)
+	p.tenant.jobs.applyPendingDowngrade(ctx, p.tenant.id)
+	if tier, _ := p.tier(t); tier != p.target {
+		t.Fatalf("downgrade not applied: %s", tier)
+	}
+	mustExec(t, p.tenant.db, `UPDATE purser.tenant_subscriptions SET tier_id=$2 WHERE tenant_id=$1`, p.tenant.id, p.tenant.supporterID)
+	p.price, p.tierID = "upgraded-price", p.tenant.supporterID
+	p.stripe.route("GET", "/v1/prices/upgraded-price", func(recordedProviderRequest) (int, any) {
+		return 200, map[string]any{"id": "upgraded-price", "active": true, "currency": "eur", "unit_amount": 7900, "recurring": map[string]any{"interval": "month", "interval_count": 1}}
+	})
+	p.stage(t, p.target)
+	if err := p.tenant.svc.ReconcileProviderTier(ctx, p.tenant.id); err != nil {
+		t.Fatal(err)
+	}
+	p.cancelStaged(t)
+	if err := p.tenant.svc.ReconcileProviderTier(ctx, p.tenant.id); err != nil {
+		t.Fatal(err)
+	}
+	if p.price != "upgraded-price" {
+		t.Fatalf("restored price = %s, want the upgraded price the subscriber paid last", p.price)
+	}
+}
+
+func TestRepeatMollieDowngradeRestoresTheCurrentAmount_RealPG(t *testing.T) {
+	db := startProviderReservationDatabase(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	end := now.Add(15 * 24 * time.Hour)
+	tenant := newPhaseTenant(t, db, "postpaid", now.Add(-15*24*time.Hour), end, 0)
+	fixture, client := installMollieFixture(t)
+	tenant.svc.mollieClient = client
+	tenant.jobs.tierReconciler = &stubTierReconciler{}
+	target := insertTierChangeTier(t, db, "20")
+	mustExec(t, db, `INSERT INTO purser.mollie_customers(tenant_id,mollie_customer_id) VALUES($1,'customer')`, tenant.id)
+	mustExec(t, db, `UPDATE purser.tenant_subscriptions SET payment_method='mollie',mollie_subscription_id='subscription' WHERE tenant_id=$1`, tenant.id)
+	path := "/v2/customers/customer/subscriptions/subscription"
+	amount, metadata := "65.00", map[string]any{"tenant_id": tenant.id, "tier_id": tenant.supporterID}
+	resource := func() map[string]any {
+		return map[string]any{"id": "subscription", "status": "active", "metadata": metadata, "amount": map[string]string{"value": amount, "currency": "EUR"}, "nextPaymentDate": end.Format(time.DateOnly)}
+	}
+	fixture.route("GET", path, func(recordedProviderRequest) (int, any) { return 200, resource() })
+	fixture.route("PATCH", path, func(r recordedProviderRequest) (int, any) {
+		var body struct {
+			Amount   map[string]string `json:"amount"`
+			Metadata map[string]any    `json:"metadata"`
+		}
+		if err := json.Unmarshal(r.body, &body); err != nil {
+			t.Error(err)
+		}
+		amount, metadata = body.Amount["value"], body.Metadata
+		return 200, resource()
+	})
+	p := &downgradeProvider{tenant: tenant, target: target, periods: [2]time.Time{now.Add(-15 * 24 * time.Hour), end}, mollie: fixture}
+	p.stage(t, target)
+	if err := tenant.svc.ReconcileProviderTier(t.Context(), tenant.id); err != nil {
+		t.Fatal(err)
+	}
+	p.reachEffectiveTime(t)
+	tenant.jobs.applyPendingDowngrade(t.Context(), tenant.id)
+	mustExec(t, db, `UPDATE purser.tenant_subscriptions SET tier_id=$2 WHERE tenant_id=$1`, tenant.id, tenant.supporterID)
+	amount = "79.00"
+	metadata["tier_id"] = tenant.supporterID
+	p.stage(t, target)
+	if err := tenant.svc.ReconcileProviderTier(t.Context(), tenant.id); err != nil {
+		t.Fatal(err)
+	}
+	p.cancelStaged(t)
+	if err := tenant.svc.ReconcileProviderTier(t.Context(), tenant.id); err != nil {
+		t.Fatal(err)
+	}
+	if amount != "79.00" {
+		t.Fatalf("restored amount = %s, want the 79.00 the subscriber paid last", amount)
+	}
+}
+
+// A confirmed downgrade stuck past the daily applier is the only one that alerts:
+// its customer is refused and no other signal reaches an operator.
+func TestHeldConfirmedDowngradesAreCounted_RealPG(t *testing.T) {
+	db := startProviderReservationDatabase(t)
+	now := time.Now().UTC()
+	base := newPhaseTenant(t, db, "postpaid", now.Add(-48*time.Hour), now.Add(time.Hour), 0)
+	target := insertTierChangeTier(t, db, "20")
+	seed := func(reason string, age time.Duration, confirmed bool) {
+		t.Helper()
+		mustExec(t, db, `INSERT INTO purser.tenant_subscriptions (tenant_id,tier_id,status,billing_model,billing_email,presentment_currency,pending_tier_id,pending_reason,pending_effective_at,pending_provider_tier_id)
+			VALUES ($1,$2,'active','postpaid','billing@example.com','EUR',$3::text::uuid,$4,$5,CASE WHEN $6::boolean THEN $3::text::uuid END)`, uuid.NewString(), base.supporterID, target, reason, now.Add(-age), confirmed)
+	}
+	seed("downgrade", HeldDowngradeGrace+time.Hour, true)
+	seed("downgrade", HeldDowngradeGrace-time.Hour, true)
+	seed("downgrade", HeldDowngradeGrace+time.Hour, false)
+	seed("tier_upgrade", HeldDowngradeGrace+time.Hour, true)
+	metrics := &PurserMetrics{TierDowngradesHeld: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "test_held_downgrades"}, nil)}
+	(&providerWebhookInboxStore{db: db, metrics: metrics}).observeHeldDowngrades(t.Context())
+	if got := testutil.ToFloat64(metrics.TierDowngradesHeld.WithLabelValues()); got != 1 {
+		t.Fatalf("held confirmed downgrades = %v, want only the confirmed one past the grace", got)
 	}
 }

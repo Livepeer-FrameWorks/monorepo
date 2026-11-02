@@ -88,7 +88,9 @@ func (c *Client) SyncSubscriptionTier(ctx context.Context, request billing.Provi
 			return billing.ProviderTierReceipt{}, fmt.Errorf("%w: Stripe monthly price differs from the tier's EUR fee", billing.ErrProviderTierRefused)
 		}
 		change = &stripe.SubscriptionItemsParams{ID: stripe.String(item.ID), Price: stripe.String(request.PriceID)}
-		if request.Downgrade && sub.Metadata[restoreTierKey] != request.CurrentTierID {
+		// While the provider is on the local tier its price is the one to keep,
+		// replacing a record an earlier applied downgrade left behind.
+		if request.Downgrade && (providerTier == request.CurrentTierID || sub.Metadata[restoreTierKey] != request.CurrentTierID) {
 			params.AddMetadata(restoreTierKey, request.CurrentTierID)
 			params.AddMetadata(restorePriceKey, item.Price.ID)
 		}

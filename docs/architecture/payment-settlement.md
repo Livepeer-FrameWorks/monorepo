@@ -210,6 +210,14 @@ inbox step: the alert fires and the unfinished step keeps metadata from moving t
 local tier. An upgrade is refused with a retry message while the step is unfinished,
 because it credits and replaces that same price.
 
+Once a confirmed downgrade reaches `pending_effective_at` the provider renews at the
+target fee while the local flip waits for that period's invoice. `ChangeBillingTier`
+refuses a cancel or re-point in that window, so nobody gets a term at the old tier
+for the lower fee. While a held invoice keeps the flip waiting the customer stays
+refused, and `PurserTierDowngradeHeld` fires 26 hours after the effective time. The
+exits are resolving the hold, so the daily applier flips the tier, or
+`admin billing set-tier`.
+
 Local and provider state cannot disagree silently:
 
 - `applyPendingDowngrade` flips `tier_id` only once the provider confirmed that

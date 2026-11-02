@@ -1,0 +1,30 @@
+rule_files:
+  - ../frameworks.yml
+
+evaluation_interval: 1m
+
+tests:
+  - interval: 1m
+    input_series:
+      - series: purser_tier_downgrades_held_items{instance="a"}
+        values: "0 1x7 0x5"
+      - series: purser_tier_downgrades_held_items{instance="b"}
+        values: "0 1x7 0x5"
+    alert_rule_test:
+      - eval_time: 4m
+        groupname: frameworks.rules
+        alertname: PurserTierDowngradeHeld
+        exp_alerts: []
+      - eval_time: 7m
+        groupname: frameworks.rules
+        alertname: PurserTierDowngradeHeld
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: A confirmed downgrade is held past its effective time
+              description: The provider already charges the lower tier, but the local tier has not flipped and the customer's tier changes are refused, usually because the period's closing invoice is held in manual review. Resolve the hold so the daily applier flips the tier, or apply it with frameworks admin billing set-tier.
+      - eval_time: 10m
+        groupname: frameworks.rules
+        alertname: PurserTierDowngradeHeld
+        exp_alerts: []

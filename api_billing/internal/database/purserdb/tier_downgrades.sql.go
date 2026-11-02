@@ -51,6 +51,24 @@ func (q *Queries) ConfirmProviderTier(ctx context.Context, arg ConfirmProviderTi
 	return err
 }
 
+const countHeldConfirmedDowngrades = `-- name: CountHeldConfirmedDowngrades :one
+SELECT COUNT(*)::bigint AS items
+FROM purser.tenant_subscriptions subscription
+WHERE subscription.pending_tier_id IS NOT NULL
+  AND subscription.pending_reason = 'downgrade'
+  AND subscription.pending_provider_tier_id = subscription.pending_tier_id
+  AND subscription.pending_effective_at < NOW() - ($1::bigint * INTERVAL '1 second')
+`
+
+// Service-wide alert inventory; tenant filtering would hide a held downgrade.
+// These customers are refused tier changes until an operator resolves the hold.
+func (q *Queries) CountHeldConfirmedDowngrades(ctx context.Context, graceSeconds int64) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countHeldConfirmedDowngrades, graceSeconds)
+	var items int64
+	err := row.Scan(&items)
+	return items, err
+}
+
 const enqueueProviderTierSync = `-- name: EnqueueProviderTierSync :exec
 INSERT INTO purser.provider_webhook_inbox AS inbox (provider, event_key, headers, raw_payload)
 VALUES ('tier_downgrade', 'tier-downgrade:' || $1::text,
@@ -207,4 +225,23 @@ func (q *Queries) HasUnfinishedProviderTierSync(ctx context.Context, tenantID st
 	var unfinished bool
 	err := row.Scan(&unfinished)
 	return unfinished, err
+}
+
+const isConfirmedDowngradeDue = `-- name: IsConfirmedDowngradeDue :one
+SELECT EXISTS (
+    SELECT 1 FROM purser.tenant_subscriptions subscription
+    WHERE subscription.tenant_id = $1::text::uuid
+      AND subscription.pending_reason = 'downgrade'
+      AND subscription.pending_provider_tier_id = subscription.pending_tier_id
+      AND subscription.pending_effective_at <= NOW()
+)::boolean AS due
+`
+
+// The provider renews at the confirmed target from the effective time, while the
+// local flip waits for that period's invoice. That term is paid at the target's fee.
+func (q *Queries) IsConfirmedDowngradeDue(ctx context.Context, tenantID string) (bool, error) {
+	row := q.db.QueryRowContext(ctx, isConfirmedDowngradeDue, tenantID)
+	var due bool
+	err := row.Scan(&due)
+	return due, err
 }

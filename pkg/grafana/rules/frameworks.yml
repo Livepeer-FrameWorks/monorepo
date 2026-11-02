@@ -177,6 +177,15 @@ groups:
           summary: "Provider activation, tier upgrade or checkout recovery needs attention"
           description: "Purser is retrying provider activation, a paid tier upgrade, a scheduled downgrade's provider price, suspended-stream stop, tenant billing closure or expired-checkout compensation, or cannot read that recovery queue. Run frameworks admin billing recovery list to inspect retry status and errors. Normal provider settlement waits are not failures; waits over fourteen days need investigation. Missing metering holds activation or an upgrade at its recorded billing boundary."
 
+      - alert: PurserTierDowngradeHeld
+        expr: max(purser_tier_downgrades_held_items) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "A confirmed downgrade is held past its effective time"
+          description: "The provider already charges the lower tier, but the local tier has not flipped and the customer's tier changes are refused, usually because the period's closing invoice is held in manual review. Resolve the hold so the daily applier flips the tier, or apply it with frameworks admin billing set-tier."
+
       - alert: PurserFreeFallbackStuck
         expr: max(purser_free_fallback_repeatedly_failed_items) > 0 or max(increase(purser_free_fallback_read_failures_total[2m])) > 1
         for: 5m

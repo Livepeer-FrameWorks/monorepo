@@ -161,6 +161,9 @@ type Querier interface {
 	// Platform-wide operator recovery metric.
 	CountFailedOperatorGrantExpiries(ctx context.Context) (int64, error)
 	CountFinalizedInvoicesForPeriod(ctx context.Context, arg CountFinalizedInvoicesForPeriodParams) (int64, error)
+	// Service-wide alert inventory; tenant filtering would hide a held downgrade.
+	// These customers are refused tier changes until an operator resolves the hold.
+	CountHeldConfirmedDowngrades(ctx context.Context, graceSeconds int64) (int64, error)
 	CountInvoicePaymentsForTenant(ctx context.Context, arg CountInvoicePaymentsForTenantParams) (int64, error)
 	CountMarketplaceClusterPricings(ctx context.Context, tierLevel int32) (int64, error)
 	CountMissingMeteringWindows(ctx context.Context, arg CountMissingMeteringWindowsParams) (int64, error)
@@ -576,6 +579,9 @@ type Querier interface {
 	InsertUsageReportQuarantine(ctx context.Context, arg InsertUsageReportQuarantineParams) error
 	InsertUsageReportReceipt(ctx context.Context, arg InsertUsageReportReceiptParams) error
 	InsertX402ReversalCreditNote(ctx context.Context, arg InsertX402ReversalCreditNoteParams) error
+	// The provider renews at the confirmed target from the effective time, while the
+	// local flip waits for that period's invoice. That term is paid at the target's fee.
+	IsConfirmedDowngradeDue(ctx context.Context, tenantID string) (bool, error)
 	// Whether any tier or cluster price records the Stripe price, so a sync
 	// only deactivates a price nothing records.
 	IsStripePriceRecorded(ctx context.Context, priceID string) (sql.NullBool, error)

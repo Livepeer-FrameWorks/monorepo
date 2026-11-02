@@ -348,6 +348,23 @@ func (s *providerWebhookInboxStore) observeFailures(ctx context.Context) {
 	s.metrics.ProviderWebhookInboxFailures.WithLabelValues().Set(float64(count))
 }
 
+// observeHeldDowngrades retains the last good count if the inventory cannot be read.
+func (s *providerWebhookInboxStore) observeHeldDowngrades(ctx context.Context) {
+	if s.metrics == nil || s.metrics.TierDowngradesHeld == nil {
+		return
+	}
+	observeCtx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	count, err := purserdb.New(s.db).CountHeldConfirmedDowngrades(observeCtx, int64(HeldDowngradeGrace/time.Second))
+	if err != nil {
+		if s.metrics.ProviderWebhookInboxReadFailures != nil {
+			s.metrics.ProviderWebhookInboxReadFailures.WithLabelValues().Inc()
+		}
+		return
+	}
+	s.metrics.TierDowngradesHeld.WithLabelValues().Set(float64(count))
+}
+
 // observePeriodically keeps inventory reads off the callback claim/activation path.
 func (s *providerWebhookInboxStore) observePeriodically(ctx context.Context) {
 	ticker := time.NewTicker(30 * time.Second)
@@ -365,6 +382,7 @@ func (s *providerWebhookInboxStore) observePeriodically(ctx context.Context) {
 			}
 		}
 		s.observeFailures(ctx)
+		s.observeHeldDowngrades(ctx)
 		select {
 		case <-ctx.Done():
 			return

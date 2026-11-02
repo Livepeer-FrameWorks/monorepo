@@ -82,6 +82,17 @@ SET pending_tier_id = NULL, pending_effective_at = NULL, pending_reason = NULL,
     pending_provider_tier_id = NULL, updated_at = NOW()
 WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid AND pending_reason = 'downgrade';
 
+-- name: IsConfirmedDowngradeDue :one
+-- The provider renews at the confirmed target from the effective time, while the
+-- local flip waits for that period's invoice. That term is paid at the target's fee.
+SELECT EXISTS (
+    SELECT 1 FROM purser.tenant_subscriptions subscription
+    WHERE subscription.tenant_id = sqlc.arg(tenant_id)::text::uuid
+      AND subscription.pending_reason = 'downgrade'
+      AND subscription.pending_provider_tier_id = subscription.pending_tier_id
+      AND subscription.pending_effective_at <= NOW()
+)::boolean AS due;
+
 -- name: HasUnfinishedProviderTierSync :one
 SELECT EXISTS (
     SELECT 1 FROM purser.provider_webhook_inbox inbox
@@ -101,3 +112,13 @@ SELECT (subscription.pending_reason IS NOT DISTINCT FROM 'downgrade')::boolean A
        )::boolean AS sync_unfinished
 FROM purser.tenant_subscriptions subscription
 WHERE subscription.tenant_id = sqlc.arg(tenant_id)::text::uuid;
+
+-- name: CountHeldConfirmedDowngrades :one
+-- Service-wide alert inventory; tenant filtering would hide a held downgrade.
+-- These customers are refused tier changes until an operator resolves the hold.
+SELECT COUNT(*)::bigint AS items
+FROM purser.tenant_subscriptions subscription
+WHERE subscription.pending_tier_id IS NOT NULL
+  AND subscription.pending_reason = 'downgrade'
+  AND subscription.pending_provider_tier_id = subscription.pending_tier_id
+  AND subscription.pending_effective_at < NOW() - (sqlc.arg(grace_seconds)::bigint * INTERVAL '1 second');

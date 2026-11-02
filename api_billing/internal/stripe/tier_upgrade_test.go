@@ -221,8 +221,26 @@ func TestTierUpgradeStripeKeepsGrandfatheredPaidPrice(t *testing.T) {
 	}
 }
 
+// A price_data restore gives the item a new price ID for the same fee, while the
+// paid line still names the price it was bought on.
+func TestTierUpgradeStripeAcceptsARestoredInlinePrice(t *testing.T) {
+	start, end := time.Now().AddDate(0, 0, -15).Unix(), time.Now().AddDate(0, 0, 15).Unix()
+	line := &api.InvoiceLineItem{ID: "base", Amount: 2000, Currency: api.CurrencyEUR, Quantity: 1,
+		Pricing: &api.InvoiceLineItemPricing{PriceDetails: &api.InvoiceLineItemPricingPriceDetails{Price: &api.Price{ID: "archived"}}},
+		Parent:  &api.InvoiceLineItemParent{SubscriptionItemDetails: &api.InvoiceLineItemParentSubscriptionItemDetails{Subscription: "sub", SubscriptionItem: "item"}},
+		Period:  &api.Period{Start: start, End: end}}
+	b := &tierUpgradeBackend{basisLines: []*api.InvoiceLineItem{line}, current: &api.Subscription{ID: "sub", Customer: &api.Customer{ID: "customer"}, Status: api.SubscriptionStatusActive, Metadata: map[string]string{"tenant_id": "tenant"},
+		LatestInvoice: &api.Invoice{ID: "paid-old", Status: api.InvoiceStatusPaid, AmountPaid: 2000},
+		Items:         &api.SubscriptionItemList{Data: []*api.SubscriptionItem{{ID: "item", Quantity: 1, CurrentPeriodStart: start, CurrentPeriodEnd: end, Price: &api.Price{ID: "inline", UnitAmount: 2000, Currency: api.CurrencyEUR, Recurring: &api.PriceRecurring{Interval: api.PriceRecurringIntervalMonth, IntervalCount: 1}}}}}}}
+	installBackend(t, b)
+	_, err := newStripeClient().UpgradeMonthlySubscription(t.Context(), billing.TierUpgradeRequest{ID: "upgrade", TenantID: "tenant", CustomerID: "customer", SubscriptionID: "sub", PriceID: "new-price", OldBaseCents: 2000, BaseCents: 5000})
+	if errors.Is(err, billing.ErrTierUpgradeRejected) || b.updates != 1 {
+		t.Fatalf("restored inline price: updates=%d err=%v, want the upgrade accepted", b.updates, err)
+	}
+}
+
 func TestTierUpgradeStripeRequiresItsPaidBaseLine(t *testing.T) {
-	for _, mode := range []string{"wrong price", "wrong fee", "wrong period", "wrong item", "two base lines", "no base line"} {
+	for _, mode := range []string{"wrong fee", "wrong period", "wrong item", "two base lines", "no base line"} {
 		t.Run(mode, func(t *testing.T) {
 			start, end := time.Now().AddDate(0, 0, -15).Unix(), time.Now().AddDate(0, 0, 15).Unix()
 			line := &api.InvoiceLineItem{ID: "base", Amount: 2000, Currency: api.CurrencyEUR, Quantity: 1,
@@ -231,8 +249,6 @@ func TestTierUpgradeStripeRequiresItsPaidBaseLine(t *testing.T) {
 				Period:  &api.Period{Start: start, End: end}}
 			lines := []*api.InvoiceLineItem{line}
 			switch mode {
-			case "wrong price":
-				line.Pricing.PriceDetails.Price.ID = "unrelated"
 			case "wrong fee":
 				line.Amount = 1500
 			case "wrong period":

@@ -22,6 +22,7 @@ import (
 type PurserMetrics struct {
 	ProviderWebhookInboxFailures     *prometheus.GaugeVec
 	ProviderWebhookInboxReadFailures *prometheus.CounterVec
+	TierDowngradesHeld               *prometheus.GaugeVec
 	BillingCalculations              *prometheus.CounterVec
 	UsageRecords                     *prometheus.CounterVec
 	UsageQuarantine                  *prometheus.CounterVec // labels: usage_type, reason

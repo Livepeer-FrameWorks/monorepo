@@ -63,7 +63,15 @@ func (s *paidTermStripe) serve(t *testing.T, w http.ResponseWriter, r *http.Requ
 		unrelated := map[string]any{"id": "other", "amount": 1000, "currency": "eur", "quantity": 1,
 			"pricing": map[string]any{"price_details": map[string]any{"price": "unrelated"}},
 			"period":  map[string]any{"start": s.termStart.Unix(), "end": s.termEnd.AddDate(1, 0, 0).Unix()}}
-		body = map[string]any{"id": "paid-invoice", "object": "invoice", "status": "paid", "amount_paid": 5000, "lines": map[string]any{"object": "list", "data": []any{line, unrelated}}}
+		itemLine := func(id, subscription, item string, proration bool) map[string]any {
+			return map[string]any{"id": id, "amount": 1000, "currency": "eur", "quantity": 1,
+				"parent":  map[string]any{"type": "subscription_item_details", "subscription_item_details": map[string]any{"subscription": subscription, "subscription_item": item, "proration": proration}},
+				"pricing": map[string]any{"price_details": map[string]any{"price": "low-price"}},
+				"period":  map[string]any{"start": s.termStart.Unix(), "end": s.termEnd.AddDate(2, 0, 0).Unix()}}
+		}
+		body = map[string]any{"id": "paid-invoice", "object": "invoice", "status": "paid", "amount_paid": 5000, "lines": map[string]any{"object": "list", "data": []any{
+			line, unrelated, itemLine("proration", "subscription", "item", true), itemLine("foreign-subscription", "other", "item", false), itemLine("foreign-item", "subscription", "other-item", false),
+		}}}
 	case r.URL.Path == "/v1/invoice_payments":
 		body = map[string]any{"object": "list", "data": []any{map[string]any{"id": "payment", "payment": map[string]any{"type": "charge", "charge": "paid-charge"}}}}
 	case r.URL.Path == "/v1/charges/paid-charge":

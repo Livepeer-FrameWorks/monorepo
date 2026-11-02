@@ -31415,6 +31415,12 @@ prove the customer received no service: verify delivery before confirming
 recovery. Inventory and preview do not enqueue compensation. Active recovery
 replaces the review entry rather than duplicating it.
 
+`PurserTierDowngradeHeld` means a downgrade the provider confirmed is still unapplied
+26 hours after its effective time, usually because its closing invoice is held in
+manual review. The provider already charges the lower tier and the customer's tier
+changes are refused. Resolve the hold so the daily applier flips the tier, or apply it
+with an audited `admin billing set-tier`.
+
 #### frameworks admin billing recovery checkout
 
 `frameworks admin billing recovery checkout --tenant-id <UUID> --reservation-id <UUID> --reason "Abandoned checkout"`

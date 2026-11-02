@@ -655,6 +655,10 @@ func tierDowngradeProviderCases() []providerReservationCase {
 		{"SuspendedMollieSubscriptionTakesTheNewAmount", TestSuspendedMollieSubscriptionTakesTheNewAmount_RealPG},
 		{"UpgradeWaitsForAnUnfinishedProviderStep", TestUpgradeWaitsForAnUnfinishedProviderStep_RealPG},
 		{"AppliedFreeDowngradeWritesOffTheCarry", TestAppliedFreeDowngradeWritesOffTheCarry_RealPG},
+		{"AppliedPaidDowngradeKeepsTheCarry", TestAppliedPaidDowngradeKeepsTheCarry_RealPG},
+		{"RepeatDowngradeRestoresTheCurrentPrice", TestRepeatDowngradeRestoresTheCurrentPrice_RealPG},
+		{"RepeatMollieDowngradeRestoresTheCurrentAmount", TestRepeatMollieDowngradeRestoresTheCurrentAmount_RealPG},
+		{"HeldConfirmedDowngradesAreCounted", TestHeldConfirmedDowngradesAreCounted_RealPG},
 	}
 }
 
