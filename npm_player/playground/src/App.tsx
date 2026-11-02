@@ -1,26 +1,34 @@
 import { useEffect, useState } from "react";
-import { StreamTester } from "@livepeer-frameworks/player-tester";
-import { resolveTheme, type FwThemePreset } from "@livepeer-frameworks/player-core";
+import {
+  StreamTester,
+  readPlayerThemeTokens,
+  type PlayerThemeToken,
+} from "@livepeer-frameworks/player-tester";
+import type { FwThemePreset } from "@livepeer-frameworks/player-core";
 
 // Shell tokens recoloured from the player theme, so the page matches the player.
-const SHELL_TOKENS = [
-  ["surfaceDeep", "--background"],
-  ["surface", "--card"],
-  ["text", "--foreground"],
-  ["textMuted", "--muted-foreground"],
-  ["surfaceActive", "--border"],
-  ["accent", "--primary"],
-  ["danger", "--destructive"],
-] as const;
+const SHELL_TOKENS: Array<[PlayerThemeToken, string]> = [
+  ["--fw-surface-deep", "--background"],
+  ["--fw-surface", "--card"],
+  ["--fw-text", "--foreground"],
+  ["--fw-text-muted", "--muted-foreground"],
+  ["--fw-surface-active", "--border"],
+  ["--fw-accent", "--primary"],
+  ["--fw-on-accent", "--primary-foreground"],
+  ["--fw-danger", "--destructive"],
+];
 
+/** The default preset keeps the shell's own palette from index.css. */
 function applyShellTheme(preset: FwThemePreset) {
   const root = document.documentElement;
-  const overrides = preset === "default" ? null : resolveTheme(preset);
-  for (const [key, token] of SHELL_TOKENS) {
-    const value = overrides?.[key];
+  const theme = preset === "default" ? null : readPlayerThemeTokens(preset);
+  for (const [fwToken, token] of SHELL_TOKENS) {
+    const value = theme?.values[fwToken];
     if (value) root.style.setProperty(token, value);
     else root.style.removeProperty(token);
   }
+  if (theme) root.style.setProperty("color-scheme", theme.light ? "light" : "dark");
+  else root.style.removeProperty("color-scheme");
 }
 
 export default function App() {
