@@ -442,8 +442,28 @@ const (
 	yugabyteFinalizeRPCDeadline = 24 * time.Hour
 )
 
-// yugabyteCatalogProgressQuery lists the connectable databases; finalize_upgrade upgrades each one's YSQL catalog.
-const yugabyteCatalogProgressQuery = "SELECT datname FROM pg_catalog.pg_database WHERE datallowconn ORDER BY datname"
+// yugabyteCatalogProgressScript prints database=applied for every connectable database, the count of YSQL catalog
+// migrations finalize_upgrade has applied to it, in one node script per poll. finalize_upgrade upgrades the databases
+// one at a time. %d is the YSQL port.
+const yugabyteCatalogProgressScript = provisioner.YugabyteBinaryResolverShell + `
+set -eu
+ysqlsh="$(fw_yb_bin ysqlsh)"
+host="$(fw_ysql_host %[1]d)"
+q() { "$ysqlsh" -X -h "$host" -p %[1]d -U yugabyte -d "$1" -v ON_ERROR_STOP=1 -tA -c "$2"; }
+databases="$(q yugabyte "SELECT datname FROM pg_catalog.pg_database WHERE datallowconn ORDER BY datname")"
+while IFS= read -r database; do
+  [ -n "$database" ] || continue
+  applied="$(q "$database" "SELECT count(*) FROM pg_catalog.pg_yb_migration")"
+  printf '%%s=%%s\n' "$database" "$applied"
+done <<EOF
+$databases
+EOF
+`
+
+// yugabyteFinalizeKillScript stops the yb-admin finalize_upgrade a cancelled run leaves on its observer: closing the
+// SSH session does not signal it, and it would keep its RPC open beside the next run's. The bracket keeps the pattern
+// from matching this script's own command line.
+const yugabyteFinalizeKillScript = `pkill -f 'yb-admin.*[f]inalize_upgrade' || true`
 
 func (u *sshYugabyteUniverse) FinalizeUpgrade(ctx context.Context, observer inventory.Host) (err error) {
 	ctx, progress := watchdog.Start(ctx, "yugabyte finalize_upgrade through "+observer.Name, yugabyteFinalizeStallWindow)
@@ -461,6 +481,11 @@ func (u *sshYugabyteUniverse) FinalizeUpgrade(ctx context.Context, observer inve
 	cfg := &fwssh.ConnectionConfig{Address: observer.ExternalIP, Port: 22, User: observer.User, HostName: observer.Name, Timeout: 30 * time.Second}
 	result, err := u.pool.RunStream(ctx, cfg, yugabyteAsRoot(fmt.Sprintf(yugabyteAdminScript, command)), nil, io.MultiWriter(&out, progress.Writer()))
 	if err != nil {
+		if ctx.Err() != nil {
+			if _, killErr := yugabyteNodeScript(context.WithoutCancel(ctx), u.pool, observer, yugabyteFinalizeKillScript); killErr != nil {
+				err = fmt.Errorf("%w; stopping its yb-admin also failed, check for a finalize_upgrade still running on %s: %w", err, observer.Name, killErr)
+			}
+		}
 		return fmt.Errorf("finalize upgrade: %s: %w", observer.Name, err)
 	}
 	if result.ExitCode != 0 {
@@ -475,33 +500,23 @@ func (u *sshYugabyteUniverse) FinalizeUpgrade(ctx context.Context, observer inve
 // catalogUpgradeProgress fingerprints the YSQL catalog migrations applied in every connectable database, through
 // host's local YSQL.
 func (u *sshYugabyteUniverse) catalogUpgradeProgress(ctx context.Context, host inventory.Host) (string, error) {
-	runner, err := u.pool.Get(&fwssh.ConnectionConfig{Address: host.ExternalIP, Port: 22, User: host.User, HostName: host.Name, Timeout: 30 * time.Second})
+	out, err := yugabyteNodeScript(ctx, u.pool, host, fmt.Sprintf(yugabyteCatalogProgressScript, u.pg.EffectivePort()))
 	if err != nil {
 		return "", err
 	}
-	executor := &provisioner.SSHExecutor{Runner: runner, UseYugabyteTools: true}
-	conn := provisioner.ConnParams{Port: u.pg.EffectivePort(), User: "yugabyte", Database: "yugabyte"}
-	var databases []string
-	if err := executor.QueryRows(ctx, conn, yugabyteCatalogProgressQuery, nil, func(scan func(dest ...any) error) error {
-		var name string
-		if scanErr := scan(&name); scanErr != nil {
-			return scanErr
+	return yugabyteCatalogProgressFingerprint(out), nil
+}
+
+// yugabyteCatalogProgressFingerprint joins the database=applied lines of yugabyteCatalogProgressScript into one
+// comparable reading.
+func yugabyteCatalogProgressFingerprint(out string) string {
+	var parts []string
+	for _, line := range strings.Split(out, "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			parts = append(parts, line)
 		}
-		databases = append(databases, strings.TrimSpace(name))
-		return nil
-	}); err != nil {
-		return "", err
 	}
-	parts := make([]string, 0, len(databases))
-	for _, database := range databases {
-		conn.Database = database
-		var applied string
-		if err := executor.QueryRow(ctx, conn, "SELECT count(*)::text FROM pg_catalog.pg_yb_migration", nil, &applied); err != nil {
-			return "", err
-		}
-		parts = append(parts, database+"="+strings.TrimSpace(applied))
-	}
-	return strings.Join(parts, ","), nil
+	return strings.Join(parts, ",")
 }
 
 // reportYugabyteProgressChanges polls read every interval until stop and reports each changed reading to the

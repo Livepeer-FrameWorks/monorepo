@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -1336,5 +1337,49 @@ func TestYugabyteFinalizeProgressKeepsTheWatchdogAliveWhileTheCatalogAdvances(t 
 	stop()
 	if w.Stalled() == nil {
 		t.Fatalf("cancelled without a stall: %v", context.Cause(ctx))
+	}
+}
+
+// One node script reads every database's applied catalog migrations per poll; this runs it against a stub ysqlsh.
+func TestYugabyteCatalogProgressScriptReadsEveryDatabaseInOneScript(t *testing.T) {
+	bin := t.TempDir()
+	stub := `#!/bin/sh
+db='' sql=''
+while [ $# -gt 0 ]; do
+  case "$1" in -d) db=$2; shift ;; -c) sql=$2; shift ;; esac
+  shift
+done
+case "$sql" in
+  *pg_database*) printf 'app\nyugabyte\n' ;;
+  *pg_yb_migration*) [ "$db" = app ] && echo 12 || echo 30 ;;
+  *) exit 3 ;;
+esac
+`
+	if err := os.WriteFile(filepath.Join(bin, "ysqlsh"), []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("bash", "-c", fmt.Sprintf(yugabyteCatalogProgressScript, 5433))
+	cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"))
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("progress script: %v\n%s", err, out)
+	}
+	if got := yugabyteCatalogProgressFingerprint(string(out)); got != "app=12,yugabyte=30" {
+		t.Fatalf("progress = %q, want app=12,yugabyte=30", got)
+	}
+}
+
+// A cancelled finalize stops its remote yb-admin; the pattern must match that process and not the shell running it.
+func TestYugabyteFinalizeKillScriptMatchesOnlyTheFinalizeProcess(t *testing.T) {
+	pattern := regexp.MustCompile(`yb-admin.*[f]inalize_upgrade`)
+	admin := "/opt/yugabyte/current/bin/yb-admin --master_addresses 10.0.0.1:7100 " + fmt.Sprintf("--timeout_ms %d finalize_upgrade", yugabyteFinalizeRPCDeadline.Milliseconds())
+	if !pattern.MatchString(admin) {
+		t.Fatalf("kill pattern misses the finalize process %q", admin)
+	}
+	if pattern.MatchString("bash -c " + yugabyteFinalizeKillScript) {
+		t.Fatal("kill pattern matches the shell that runs it")
+	}
+	if !strings.Contains(yugabyteFinalizeKillScript, pattern.String()) {
+		t.Fatalf("kill script %q does not use the tested pattern", yugabyteFinalizeKillScript)
 	}
 }
