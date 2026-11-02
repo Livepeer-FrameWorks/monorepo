@@ -86,7 +86,7 @@ describe("FwScSceneSwitcher parity", () => {
     el.onSceneSelect = onSceneSelect;
     await el.updateComplete;
 
-    const items = el.shadowRoot?.querySelectorAll(".fw-sc-scene-item");
+    const items = el.shadowRoot?.querySelectorAll(".fw-sc-scene-select");
     const nextSceneItem = items?.[1] as HTMLElement | undefined;
     nextSceneItem?.click();
 
@@ -112,7 +112,7 @@ describe("FwScSceneSwitcher parity", () => {
     document.body.appendChild(el);
     await el.updateComplete;
 
-    const items = el.shadowRoot?.querySelectorAll(".fw-sc-scene-item");
+    const items = el.shadowRoot?.querySelectorAll(".fw-sc-scene-select");
     const nextSceneItem = items?.[1] as HTMLElement | undefined;
     nextSceneItem?.click();
     await el.updateComplete;

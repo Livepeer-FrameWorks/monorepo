@@ -123,29 +123,27 @@
         class="fw-sc-scene-item {scene.id === activeSceneId
           ? 'fw-sc-scene-item--active'
           : ''} {isTransitioning ? 'fw-sc-scene-item--transitioning' : ''}"
-        role="button"
-        tabindex="0"
-        aria-pressed={scene.id === activeSceneId}
-        onclick={() => handleSceneClick(scene.id)}
-        onkeydown={(e) => {
-          if (e.target !== e.currentTarget) return;
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            handleSceneClick(scene.id);
-          }
-        }}
       >
-        <span class="fw-sc-scene-name">{scene.name}</span>
-        <span class="fw-sc-scene-layer-count">
-          {scene.layers.length === 1
-            ? t("layerCountOne")
-            : t("layerCountMany", { count: scene.layers.length })}
-        </span>
+        <button
+          type="button"
+          class="fw-sc-scene-select"
+          aria-pressed={scene.id === activeSceneId}
+          onclick={() => handleSceneClick(scene.id)}
+        >
+          <span class="fw-sc-scene-name">{scene.name}</span>
+          <span class="fw-sc-scene-layer-count">
+            {scene.layers.length === 1
+              ? t("layerCountOne")
+              : t("layerCountMany", { count: scene.layers.length })}
+          </span>
+        </button>
         {#if onSceneDelete && scenes.length > 1 && scene.id !== activeSceneId}
           <button
             class="fw-sc-scene-delete"
             onclick={(e) => handleDeleteClick(e, scene.id)}
+            type="button"
             title={t("deleteScene")}
+            aria-label={t("deleteScene")}
           >
             ×
           </button>

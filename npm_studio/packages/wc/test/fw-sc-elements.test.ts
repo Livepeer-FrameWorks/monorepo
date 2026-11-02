@@ -209,10 +209,11 @@ describe("scenes from the keyboard", () => {
     await switcher.updateComplete;
     await layers.updateComplete;
 
-    const tiles = switcher.shadowRoot!.querySelectorAll<HTMLElement>(".fw-sc-scene-item");
-    expect(tiles[1].getAttribute("role")).toBe("button");
-    expect(tiles[1].tabIndex).toBe(0);
-    tiles[1].dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    const selects = switcher.shadowRoot!.querySelectorAll<HTMLButtonElement>(".fw-sc-scene-select");
+    expect(selects[1].tagName).toBe("BUTTON");
+    expect(selects[1].getAttribute("aria-pressed")).toBe("false");
+    expect(selects[1].querySelector("button")).toBeNull();
+    selects[1].click();
     expect(
       (studio.sceneManager as unknown as { transitionTo: ReturnType<typeof vi.fn> }).transitionTo
     ).toHaveBeenCalledWith("two", expect.anything());

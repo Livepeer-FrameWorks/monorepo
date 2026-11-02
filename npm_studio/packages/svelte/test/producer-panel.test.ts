@@ -369,4 +369,16 @@ describe("StudioProducerPanel", () => {
 
     expect(tile.style.backgroundColor).toBe("");
   });
+
+  it("selects a scene with a native button that holds no other control", () => {
+    renderPanel();
+    const select = screen.getByRole("button", { name: /Scene 2/ });
+
+    expect(select.tagName).toBe("BUTTON");
+    expect(select.getAttribute("aria-pressed")).toBe("false");
+    expect(select.querySelector("button")).toBeNull();
+    expect(screen.getByRole("button", { name: /Default/ }).getAttribute("aria-pressed")).toBe(
+      "true"
+    );
+  });
 });

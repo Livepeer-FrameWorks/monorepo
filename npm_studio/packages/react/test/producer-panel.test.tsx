@@ -385,16 +385,21 @@ describe("StudioProducerPanel", () => {
     expect(screen.getAllByTitle("Edit opacity")).toHaveLength(2);
   });
 
-  it("switches scenes from the keyboard", () => {
+  it("selects a scene with a native button that holds no other control", () => {
     const compositor = fakeCompositor();
     render(<StudioProducerPanel compositor={compositor} sources={[]} />);
-    const tile = screen.getByText("Scene 2").closest(".fw-sc-scene-item") as HTMLElement;
+    const select = screen.getByRole("button", { name: /Scene 2/ });
 
-    expect(tile.getAttribute("role")).toBe("button");
-    expect(tile.tabIndex).toBe(0);
-    fireEvent.keyDown(tile, { key: "Enter" });
+    // A native button, so Enter and Space work and nothing interactive is nested in it.
+    expect(select.tagName).toBe("BUTTON");
+    expect(select.getAttribute("aria-pressed")).toBe("false");
+    expect(select.querySelector("button")).toBeNull();
+    fireEvent.click(select);
 
     expect(compositor.transitionTo).toHaveBeenCalledWith("two", expect.anything());
+    expect(screen.getByRole("button", { name: /Default/ }).getAttribute("aria-pressed")).toBe(
+      "true"
+    );
   });
 
   it("counts layers in the studio locale", () => {

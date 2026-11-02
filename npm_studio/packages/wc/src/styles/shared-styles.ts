@@ -1857,18 +1857,15 @@ export const sharedStyles = css`
     overflow-x: auto;
   }
 
+  /* The tile holds the select button and, beside it, the delete button. */
   .fw-sc-scene-item {
     position: relative;
     display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    padding: 0.5rem 0.75rem;
     min-width: 100px;
     border: 1px solid hsl(var(--fw-sc-border) / 0.3);
     border-radius: 4px;
     background: hsl(var(--fw-sc-surface-raised));
     color: hsl(var(--fw-sc-text));
-    cursor: pointer;
     transition: all 0.15s;
   }
 
@@ -1876,7 +1873,23 @@ export const sharedStyles = css`
     border-color: hsl(var(--fw-sc-border) / 0.5);
   }
 
-  .fw-sc-scene-item:focus-visible {
+  .fw-sc-scene-select {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    align-items: flex-start;
+    margin: 0;
+    padding: 0.5rem 0.75rem;
+    border: none;
+    border-radius: inherit;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .fw-sc-scene-select:focus-visible {
     outline: 2px solid hsl(var(--fw-sc-accent));
     outline-offset: 2px;
   }
@@ -1921,7 +1934,8 @@ export const sharedStyles = css`
     transition: all 0.15s;
   }
 
-  .fw-sc-scene-item:hover .fw-sc-scene-delete {
+  .fw-sc-scene-item:hover .fw-sc-scene-delete,
+  .fw-sc-scene-delete:focus-visible {
     opacity: 1;
   }
 
