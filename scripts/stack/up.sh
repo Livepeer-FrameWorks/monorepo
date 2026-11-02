@@ -235,6 +235,11 @@ done
 # endpoints, API tokens) the scoped demo API token must not have.
 psql_db commodore -q -c "UPDATE commodore.users SET password_hash = crypt('$STACK_DEMO_PASSWORD', gen_salt('bf', 10)) WHERE email = '$STACK_DEMO_EMAIL'" >/dev/null ||
   fail "could not set the demo user's stack password"
+# The QA customer's declared wallet signs in headlessly as that user.
+qa_tenant_id="$(psql_db quartermaster -Atc "SELECT tenant_id FROM quartermaster.bootstrap_tenant_aliases WHERE alias = 'stack-qa'")"
+[ -n "$qa_tenant_id" ] || fail "the stack-qa tenant alias is not in Quartermaster"
+stack_compose run --rm --no-deps -T --entrypoint bash stack-runner /repo/scripts/stack/bootstrap-wallet-login.sh \
+  qa@stack.test "$qa_tenant_id" || fail "the bootstrap-declared wallet did not sign in as qa@stack.test"
 
 log "7/7 Livepeer gateways discoverable"
 log "6c/7 edge public URLs answering"

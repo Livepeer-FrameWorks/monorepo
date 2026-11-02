@@ -307,6 +307,40 @@ expect "the sweep checks the test tenant's ledger with its token, without a seco
 no_test_sweep_without_ledger() { [ -z "$(sweep_as_test_tenant test-token 0)" ]; }
 expect "no test tenant sweep when no test tenant scenario created anything" no_test_sweep_without_ledger
 
+# up.sh's headless sign-in of the bootstrap-declared QA wallet passes only when
+# Bridge returns the declared user in its tenant, and signs with the real
+# signer for the test key 0x...01.
+mkdir -p "$work/walletbin"
+cat >"$work/walletbin/curl" <<'EOF'
+#!/usr/bin/env bash
+out='' prev=''
+for a in "$@"; do
+  [ "$prev" = -o ] && out=$a
+  [ "$prev" = --data ] && echo "$a" >>"$FIXTURE_DIR/wallet-posts"
+  prev=$a
+done
+case " $* " in
+  *"/auth/wallet-challenge"*) echo '{"message":"sign in to the stack"}' ;;
+  *"/auth/wallet-login"*) printf '%s' "$WALLET_LOGIN_RESPONSE" >"$out"; printf 200 ;;
+esac
+EOF
+chmod +x "$work/walletbin/curl"
+bootstrap_wallet_login() { # bootstrap_wallet_login <login response>
+  rm -f "$work/wallet-posts"
+  PATH="$work/walletbin:$PATH" FIXTURE_DIR="$work" BRIDGE_URL=http://bridge.test WALLET_LOGIN_RESPONSE=$1 \
+    bash "$here/bootstrap-wallet-login.sh" qa@stack.test qa-tenant-id >/dev/null 2>&1
+}
+wallet_login_as_declared_user() {
+  bootstrap_wallet_login '{"user":{"email":"qa@stack.test","tenant_id":"qa-tenant-id"}}' &&
+    grep -q '"address":"0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf"' "$work/wallet-posts"
+}
+expect "the declared QA wallet signs in as qa@stack.test in its tenant" wallet_login_as_declared_user
+wallet_login_refuses_new_account() {
+  ! bootstrap_wallet_login '{"user":{"email":"","tenant_id":"new-wallet-tenant"}}' &&
+    ! bootstrap_wallet_login '{"user":{"email":"qa@stack.test","tenant_id":"other-tenant"}}'
+}
+expect "a wallet sign-in that lands in a new or other tenant fails the stack bring-up" wallet_login_refuses_new_account
+
 key_is_named_for_its_role() {
   grep -q 'STACK_TEST_TENANT_WALLET_KEY' "$here/test-tenant.sh" && ! grep -q 'STACK_PRICED_TENANT_WALLET_KEY' "$here/test-tenant.sh"
 }
