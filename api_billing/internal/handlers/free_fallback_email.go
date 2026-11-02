@@ -28,6 +28,18 @@ func freeFallbackTemplate(notice FreeFallbackNotice) (templateName, subject stri
 	}
 }
 
+// UpdatePaymentAnchor is the billing page section that offers the payment
+// action during a grace period.
+const UpdatePaymentAnchor = "update-payment"
+
+// freeFallbackActionURL sends a grace notice straight to the payment action.
+func freeFallbackActionURL(notice FreeFallbackNotice) string {
+	if notice.Moved {
+		return billingPageURL()
+	}
+	return billingPageURL() + "#" + UpdatePaymentAnchor
+}
+
 // SendFreeFallbackNotice sends the grace-period or move notice. An unconfigured
 // mail service reports an error so the notice stays queued until mail works.
 func (s *Service) SendFreeFallbackNotice(notice FreeFallbackNotice) error {
@@ -36,7 +48,7 @@ func (s *Service) SendFreeFallbackNotice(notice FreeFallbackNotice) error {
 	}
 	templateName, subject := freeFallbackTemplate(notice)
 	body, err := s.emailService.renderTemplate(templateName, EmailData{
-		TenantName: notice.TenantName, DueDate: notice.MoveAt, LoginURL: billingPageURL(),
+		TenantName: notice.TenantName, DueDate: notice.MoveAt, LoginURL: freeFallbackActionURL(notice),
 	})
 	if err != nil {
 		return fmt.Errorf("render %s: %w", templateName, err)

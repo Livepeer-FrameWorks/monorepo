@@ -9,6 +9,19 @@ import (
 	"frameworks/api_billing/internal/subscriptions"
 )
 
+// The grace notice's "Update payment" button lands on the billing page's
+// payment action, not the top of the page.
+func TestGraceNoticeLinksToThePaymentAction(t *testing.T) {
+	appconfigtest.Set(t, "WEBAPP_PUBLIC_URL", "https://app.example.test")
+	grace := freeFallbackActionURL(FreeFallbackNotice{Reason: subscriptions.FallbackPaymentFailed})
+	if grace != "https://app.example.test/account/billing#update-payment" {
+		t.Fatalf("grace notice links to %q", grace)
+	}
+	if moved := freeFallbackActionURL(FreeFallbackNotice{Reason: subscriptions.FallbackPaymentFailed, Moved: true}); moved != "https://app.example.test/account/billing" {
+		t.Fatalf("move notice links to %q", moved)
+	}
+}
+
 func TestFreeFallbackNoticesRender(t *testing.T) {
 	appconfigtest.Set(t, "WEBAPP_PUBLIC_URL", "https://app.example.test")
 	moveAt := time.Date(2026, 11, 13, 9, 0, 0, 0, time.UTC)
